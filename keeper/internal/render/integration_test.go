@@ -1,16 +1,16 @@
 //go:build integration
 
-// Integration-тесты render pipeline через testcontainers-go (hashicorp/vault
-// dev-режим). Покрывают единственную фазу с внешней зависимостью —
-// vault-resolve: `vault:`-ref в params задачи заменяется значением из Vault KV
-// до CEL-фазы. Остальные фазы (CEL-render, on:/where: резолв) — чистые,
-// проверены в unit-тестах.
+// Integration tests for the render pipeline via testcontainers-go
+// (hashicorp/vault dev mode). Covers the one phase with an external
+// dependency — vault-resolve: a `vault:` ref in a task's params is replaced
+// with the value from Vault KV before the CEL phase. Other phases (CEL
+// render, on:/where: resolve) are pure and covered by unit tests.
 //
-// Запуск:
+// Run:
 //
 //	cd keeper && SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1 go test -tags=integration -race -count=1 ./internal/render/...
 //
-// Паттерн TestMain → run() → контейнер per-package совпадает с
+// The TestMain → run() → per-package container pattern matches
 // keeper/internal/vault/integration_test.go.
 package render
 
@@ -86,9 +86,9 @@ func run(m *testing.M) int {
 	return m.Run()
 }
 
-// TestIntegration_VaultResolveInParams — `vault:`-ref в params задачи
-// заменяется значением из Vault KV до CEL-фазы; CEL-интерполяция вокруг
-// resolved-значения работает.
+// TestIntegration_VaultResolveInParams proves a `vault:` ref in a task's
+// params is replaced with the Vault KV value before the CEL phase; CEL
+// interpolation around the resolved value still works.
 func TestIntegration_VaultResolveInParams(t *testing.T) {
 	ctx := context.Background()
 	kv := integrationAPI.KVv2("secret")
@@ -110,9 +110,9 @@ func TestIntegration_VaultResolveInParams(t *testing.T) {
 				Module: &config.ModuleTask{
 					Module: "core.exec.run",
 					Params: map[string]any{
-						// Полевая форма ref: один ключ из секрета.
+						// Field-form ref: a single key from the secret.
 						"password": "vault:secret/db/creds#password",
-						// CEL-интерполяция остаётся независимой фазой.
+						// CEL interpolation stays an independent phase.
 						"label": "creds for ${ input.user }",
 					},
 				},
@@ -139,8 +139,8 @@ func TestIntegration_VaultResolveInParams(t *testing.T) {
 	}
 }
 
-// TestIntegration_VaultRefNotFound — ref на несуществующий путь → ошибка
-// (проброс vault.ErrVaultKVNotFound).
+// TestIntegration_VaultRefNotFound proves a ref to a nonexistent path yields
+// an error (propagated vault.ErrVaultKVNotFound).
 func TestIntegration_VaultRefNotFound(t *testing.T) {
 	ctx := context.Background()
 	engine, err := cel.New()

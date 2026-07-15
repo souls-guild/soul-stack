@@ -8,7 +8,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
 )
 
-// changedKeys — sugar для построения множества (sid, idx) CHANGED-задач.
+// changedKeys — sugar for building a set of (sid, idx) CHANGED-task keys.
 func changedKeys(pairs ...auditpg.ChangedTaskKey) map[auditpg.ChangedTaskKey]struct{} {
 	out := make(map[auditpg.ChangedTaskKey]struct{}, len(pairs))
 	for _, p := range pairs {
@@ -17,7 +17,7 @@ func changedKeys(pairs ...auditpg.ChangedTaskKey) map[auditpg.ChangedTaskKey]str
 	return out
 }
 
-// findByAddr ищет ChangedTask по register/id (для устойчивости к порядку).
+// findByAddr looks up a ChangedTask by register/id (order-independent).
 func findByAddr(tasks []ChangedTask, register, id string) (ChangedTask, bool) {
 	for _, t := range tasks {
 		if t.Register == register && t.ID == id {
@@ -27,9 +27,9 @@ func findByAddr(tasks []ChangedTask, register, id string) (ChangedTask, bool) {
 	return ChangedTask{}, false
 }
 
-// TestBuildChangedTasks_ChangedHostsByUniqueSID — базовый инвариант: N хостов
-// отметились CHANGED по адресу → ChangedHosts=N (уникальные sid). Таргет 3 хоста,
-// CHANGED на 2 → ChangedHosts=2, TotalHosts=3.
+// TestBuildChangedTasks_ChangedHostsByUniqueSID — basic invariant: N hosts
+// report CHANGED at an address → ChangedHosts=N (unique sids). Target 3 hosts,
+// CHANGED on 2 → ChangedHosts=2, TotalHosts=3.
 func TestBuildChangedTasks_ChangedHostsByUniqueSID(t *testing.T) {
 	tasks := []*render.RenderedTask{
 		{Index: 0, Name: "install", Register: "pkg", Module: "core.pkg.installed"},
@@ -57,27 +57,27 @@ func TestBuildChangedTasks_ChangedHostsByUniqueSID(t *testing.T) {
 	}
 }
 
-// TestBuildChangedTasks_LoopNoDoubleCount — КЛЮЧЕВОЙ тест (loop double-count):
-// одна исходная loop-задача развёрнута в K=3 RenderedTask (idx 0,1,2) с ОДНИМ
-// адресом (register="pkg"), таргет — M=2 хоста на каждый idx. CHANGED отметился
-// на обоих хостах по нескольким idx. Инвариант:
-//   - TotalHosts = M = 2 (union уникальных sid), НЕ M×K = 6;
-//   - ChangedHosts по уникальным sid (НЕ сумма по idx);
-//   - одна ChangedTask на адрес (loop-свёртка), idx = первый (репрезентативный).
+// TestBuildChangedTasks_LoopNoDoubleCount — KEY test (loop double-count):
+// one source loop task expands into K=3 RenderedTask (idx 0,1,2) sharing ONE
+// address (register="pkg"), targeting M=2 hosts per idx. CHANGED reported on
+// both hosts across several idx. Invariant:
+//   - TotalHosts = M = 2 (union of unique sids), NOT M×K = 6;
+//   - ChangedHosts by unique sid (NOT summed over idx);
+//   - one ChangedTask per address (loop fold), idx = first (representative).
 func TestBuildChangedTasks_LoopNoDoubleCount(t *testing.T) {
-	// loop из 3 итераций: один Register на всех, idx сквозные 0,1,2.
+	// 3-iteration loop: one Register shared, idx runs 0,1,2.
 	tasks := []*render.RenderedTask{
 		{Index: 0, Name: "install_each", Register: "pkg", Module: "core.pkg.installed"},
 		{Index: 1, Name: "install_each", Register: "pkg", Module: "core.pkg.installed"},
 		{Index: 2, Name: "install_each", Register: "pkg", Module: "core.pkg.installed"},
 	}
-	// Каждая итерация таргетит ОБА хоста (M=2).
+	// Each iteration targets BOTH hosts (M=2).
 	plans := []render.DispatchPlan{
 		{TaskIndex: 0, TargetSIDs: []string{"a.local", "b.local"}},
 		{TaskIndex: 1, TargetSIDs: []string{"a.local", "b.local"}},
 		{TaskIndex: 2, TargetSIDs: []string{"a.local", "b.local"}},
 	}
-	// CHANGED: a.local на idx 0 и 2; b.local на idx 1. По union sid это {a,b} = 2.
+	// CHANGED: a.local at idx 0,2; b.local at idx 1. Union of sids = {a,b} = 2.
 	keys := changedKeys(
 		auditpg.ChangedTaskKey{SID: "a.local", PlanIndex: 0},
 		auditpg.ChangedTaskKey{SID: "a.local", PlanIndex: 2},
@@ -99,14 +99,15 @@ func TestBuildChangedTasks_LoopNoDoubleCount(t *testing.T) {
 	}
 }
 
-// TestBuildChangedTasks_StagedPlanIndexCorrelation — T3 GUARD (свёртка-сторона):
-// под staged/per-host-where ГЛОБАЛЬНЫЙ RenderedTask.Index (= ChangedTaskKey.PlanIndex)
-// ≠ ЛОКАЛЬНОМУ task_idx. buildChangedTasks корелирует CHANGED по глобальному
-// Index — changed-ключ, построенный по глобальному plan_index (как теперь делает
-// SelectChangedTaskKeys), ДОЛЖЕН попадать; ключ по локальному task_idx — НЕТ.
+// TestBuildChangedTasks_StagedPlanIndexCorrelation — T3 GUARD (fold side):
+// under staged/per-host-where, the GLOBAL RenderedTask.Index (=
+// ChangedTaskKey.PlanIndex) ≠ the LOCAL task_idx. buildChangedTasks correlates
+// CHANGED by the global Index — a changed-key built from global plan_index
+// (as SelectChangedTaskKeys now does) MUST match; a key built from local
+// task_idx must NOT.
 //
-// Модель: задача глобального Index=5 (второй Passage, локальная позиция была бы 2),
-// таргет h.local. CHANGED-ключ корректный — {h.local, PlanIndex:5}.
+// Model: task with global Index=5 (second Passage, local position would be 2),
+// target h.local. Correct CHANGED-key — {h.local, PlanIndex:5}.
 func TestBuildChangedTasks_StagedPlanIndexCorrelation(t *testing.T) {
 	tasks := []*render.RenderedTask{
 		{Index: 5, Name: "restart_staged", Register: "rst", Module: "core.service.running"},
@@ -114,7 +115,7 @@ func TestBuildChangedTasks_StagedPlanIndexCorrelation(t *testing.T) {
 	plans := []render.DispatchPlan{
 		{TaskIndex: 5, TargetSIDs: []string{"h.local"}},
 	}
-	// Глобальный plan_index=5 (то, что отдаёт SelectChangedTaskKeys после T3).
+	// Global plan_index=5 (what SelectChangedTaskKeys returns post-T3).
 	keys := changedKeys(auditpg.ChangedTaskKey{SID: "h.local", PlanIndex: 5})
 
 	got := buildChangedTasks(tasks, plans, keys)
@@ -126,11 +127,12 @@ func TestBuildChangedTasks_StagedPlanIndexCorrelation(t *testing.T) {
 	}
 }
 
-// TestBuildChangedTasks_StagedLocalIdxMiscorrelates — РЕВЕРС-инвариант T3 GUARD:
-// если бы свёртка ключевалась по ЛОКАЛЬНОМУ task_idx (=2), changed-ключ {h.local,2}
-// НЕ совпал бы с глобальным Index=5 задачи → задача молча выпала бы из changed_tasks
-// (mismatch state_changes-whitelist + audit). Этот тест фиксирует, что такой ключ
-// действительно НЕ матчится — гарантия, что регресс на локальный индекс будет пойман.
+// TestBuildChangedTasks_StagedLocalIdxMiscorrelates — REVERSE invariant of the
+// T3 GUARD: if the fold keyed by LOCAL task_idx (=2), the changed-key
+// {h.local,2} would NOT match the task's global Index=5 → the task would
+// silently drop out of changed_tasks (mismatching state_changes whitelist +
+// audit). This test asserts that such a key indeed does NOT match — a
+// regression to local indexing would be caught.
 func TestBuildChangedTasks_StagedLocalIdxMiscorrelates(t *testing.T) {
 	tasks := []*render.RenderedTask{
 		{Index: 5, Name: "restart_staged", Register: "rst", Module: "core.service.running"},
@@ -138,7 +140,7 @@ func TestBuildChangedTasks_StagedLocalIdxMiscorrelates(t *testing.T) {
 	plans := []render.DispatchPlan{
 		{TaskIndex: 5, TargetSIDs: []string{"h.local"}},
 	}
-	// Ошибочный (локальный) ключ: task_idx=2 ≠ глобальному Index=5.
+	// Wrong (local) key: task_idx=2 ≠ global Index=5.
 	keys := changedKeys(auditpg.ChangedTaskKey{SID: "h.local", PlanIndex: 2})
 
 	got := buildChangedTasks(tasks, plans, keys)
@@ -147,8 +149,8 @@ func TestBuildChangedTasks_StagedLocalIdxMiscorrelates(t *testing.T) {
 	}
 }
 
-// TestBuildChangedTasks_NoChangesOmitted — таска без CHANGED ни на одном хосте
-// НЕ попадает в массив.
+// TestBuildChangedTasks_NoChangesOmitted — a task with no CHANGED host is
+// omitted from the result.
 func TestBuildChangedTasks_NoChangesOmitted(t *testing.T) {
 	tasks := []*render.RenderedTask{
 		{Index: 0, Name: "changed_one", Register: "a", Module: "core.file.present"},
@@ -158,7 +160,7 @@ func TestBuildChangedTasks_NoChangesOmitted(t *testing.T) {
 		{TaskIndex: 0, TargetSIDs: []string{"h.local"}},
 		{TaskIndex: 1, TargetSIDs: []string{"h.local"}},
 	}
-	// CHANGED только idx 0.
+	// CHANGED only at idx 0.
 	keys := changedKeys(auditpg.ChangedTaskKey{SID: "h.local", PlanIndex: 0})
 
 	got := buildChangedTasks(tasks, plans, keys)
@@ -173,14 +175,14 @@ func TestBuildChangedTasks_NoChangesOmitted(t *testing.T) {
 	}
 }
 
-// TestBuildChangedTasks_TotalFromDispatchPlan — TotalHosts берётся из
-// DispatchPlan.TargetSIDs (после on:/where:), НЕ из всего roster-а. where:
-// отфильтровал часть хостов → знаменатель = только таргет.
+// TestBuildChangedTasks_TotalFromDispatchPlan — TotalHosts comes from
+// DispatchPlan.TargetSIDs (post on:/where:), NOT the full roster. where:
+// filtered out some hosts → denominator = target only.
 func TestBuildChangedTasks_TotalFromDispatchPlan(t *testing.T) {
 	tasks := []*render.RenderedTask{
 		{Index: 0, Name: "on_replicas", Register: "r", Module: "core.service.running"},
 	}
-	// roster прогона мог быть {a,b,c,d}, но where: оставил {a,b} — план несёт 2.
+	// run roster could be {a,b,c,d}, but where: kept {a,b} — plan carries 2.
 	plans := []render.DispatchPlan{
 		{TaskIndex: 0, TargetSIDs: []string{"a.local", "b.local"}},
 	}
@@ -198,8 +200,8 @@ func TestBuildChangedTasks_TotalFromDispatchPlan(t *testing.T) {
 	}
 }
 
-// TestBuildChangedTasks_AddressIDFallback — задача без register, но с id:
-// адресуется по id (register∪id). ID попадает в ChangedTask, Register пуст.
+// TestBuildChangedTasks_AddressIDFallback — a task without register but with
+// id: addressed by id (register∪id). ID lands in ChangedTask, Register empty.
 func TestBuildChangedTasks_AddressIDFallback(t *testing.T) {
 	tasks := []*render.RenderedTask{
 		{Index: 0, Name: "restart", ID: "restart-web", Module: "core.service.running"},
@@ -218,9 +220,9 @@ func TestBuildChangedTasks_AddressIDFallback(t *testing.T) {
 	}
 }
 
-// TestBuildChangedTasks_UnaddressableIncluded — неадресуемая изменившаяся задача
-// (нет register и нет id) ВКЛЮЧАЕТСЯ в массив с пустым адресом (полнота «что
-// изменилось»). Решение T3: включаем все изменившиеся таски.
+// TestBuildChangedTasks_UnaddressableIncluded — an unaddressable changed task
+// (no register, no id) is INCLUDED with an empty address (completeness of
+// "what changed"). T3 decision: include all changed tasks.
 func TestBuildChangedTasks_UnaddressableIncluded(t *testing.T) {
 	tasks := []*render.RenderedTask{
 		{Index: 0, Name: "anon", Module: "core.exec.run"},
@@ -242,10 +244,10 @@ func TestBuildChangedTasks_UnaddressableIncluded(t *testing.T) {
 	}
 }
 
-// TestBuildChangedTasks_UnaddressableNotFolded — две РАЗНЫЕ неадресуемые задачи
-// (idx 0 и 1, у обеих нет register/id) НЕ схлопываются в одну запись: каждая
-// группируется по своему Index. Защита от ложной свёртки разных задач с пустым
-// адресом.
+// TestBuildChangedTasks_UnaddressableNotFolded — two DIFFERENT unaddressable
+// tasks (idx 0 and 1, neither has register/id) do NOT fold into one entry:
+// each groups by its own Index. Guards against false-folding distinct tasks
+// that share an empty address.
 func TestBuildChangedTasks_UnaddressableNotFolded(t *testing.T) {
 	tasks := []*render.RenderedTask{
 		{Index: 0, Name: "step_a", Module: "core.exec.run"},
@@ -271,10 +273,10 @@ func TestBuildChangedTasks_UnaddressableNotFolded(t *testing.T) {
 	}
 }
 
-// TestBuildChangedTasks_SecretHygiene — payload-форма changed_tasks несёт ТОЛЬКО
-// метаданные + counts; никаких register/params-ЗНАЧЕНИЙ. Проверяем форму
-// changedTasksPayload: ключи строго {idx,name,register,id,module,changed_hosts,
-// total_hosts}, без полей вроде register_data/params/value.
+// TestBuildChangedTasks_SecretHygiene — the changed_tasks payload carries ONLY
+// metadata + counts; no register/params VALUES. Verifies changedTasksPayload
+// shape: keys strictly {idx,name,register,id,module,changed_hosts,
+// total_hosts}, no fields like register_data/params/value.
 func TestBuildChangedTasks_SecretHygiene(t *testing.T) {
 	changed := []ChangedTask{
 		{Idx: 0, Name: "install", Register: "pkg", ID: "", Module: "core.pkg.installed", ChangedHosts: 1, TotalHosts: 2},
@@ -292,7 +294,7 @@ func TestBuildChangedTasks_SecretHygiene(t *testing.T) {
 			t.Errorf("changed_tasks payload leaked disallowed key %q (secret hygiene)", k)
 		}
 	}
-	// Counts и метаданные присутствуют.
+	// Counts and metadata present.
 	if payload[0]["changed_hosts"] != 1 || payload[0]["total_hosts"] != 2 {
 		t.Errorf("counts = %v/%v, want 1/2", payload[0]["changed_hosts"], payload[0]["total_hosts"])
 	}
@@ -301,14 +303,14 @@ func TestBuildChangedTasks_SecretHygiene(t *testing.T) {
 	}
 }
 
-// TestBuildChangedTasks_EmptyInputs — нет задач → nil; задачи есть, но ни одна
-// не CHANGED → пустой (не nil) результат на уровне эмиссии не требуется здесь,
-// buildChangedTasks возвращает nil-slice (changedTasksPayload даёт []).
+// TestBuildChangedTasks_EmptyInputs — no tasks → nil; tasks exist but none
+// CHANGED → empty (not nil) result isn't required at this level,
+// buildChangedTasks returns a nil slice (changedTasksPayload yields []).
 func TestBuildChangedTasks_EmptyInputs(t *testing.T) {
 	if got := buildChangedTasks(nil, nil, nil); got != nil {
 		t.Errorf("buildChangedTasks(nil...) = %+v, want nil", got)
 	}
-	// changedTasksPayload(nil) → пустой slice (не nil): payload несёт [].
+	// changedTasksPayload(nil) → empty slice (not nil): payload carries [].
 	if p := changedTasksPayload(nil); p == nil {
 		t.Error("changedTasksPayload(nil) = nil, want empty slice for JSON []")
 	} else if len(p) != 0 {

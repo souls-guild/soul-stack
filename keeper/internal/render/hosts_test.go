@@ -9,8 +9,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// hostWithRole — HostFacts со SID/coven/role + soulprint (network/os) для тестов
-// soulprint.hosts-проекции.
+// hostWithRole builds a HostFacts with SID/coven/role + soulprint (network/os)
+// for soulprint.hosts projection tests.
 func hostWithRole(sid, role string, coven []string, network, os map[string]any) *topology.HostFacts {
 	return &topology.HostFacts{
 		SID:       sid,
@@ -36,7 +36,7 @@ func hostsRunInput(manifest *config.ScenarioManifest) RenderInput {
 	}
 }
 
-// moduleScenario — сценарий из одной module-задачи с заданными params.
+// moduleScenario builds a scenario from a single module task with the given params.
 func moduleScenario(module string, params map[string]any) *config.ScenarioManifest {
 	return &config.ScenarioManifest{
 		Name: "create",
@@ -46,8 +46,8 @@ func moduleScenario(module string, params map[string]any) *config.ScenarioManife
 	}
 }
 
-// TestRender_SoulprintHosts_Projection — soulprint.hosts проецируется из in.Hosts
-// в scenario-проходе: размер списка = числу хостов прогона.
+// TestRender_SoulprintHosts_Projection — soulprint.hosts is projected from
+// in.Hosts in the scenario pass: list size equals the run's host count.
 func TestRender_SoulprintHosts_Projection(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := hostsRunInput(moduleScenario("core.exec.run", map[string]any{
@@ -62,8 +62,8 @@ func TestRender_SoulprintHosts_Projection(t *testing.T) {
 	}
 }
 
-// TestRender_SoulprintHostsWhere_FirstByIndex — фильтр + [0]: cross-host primary
-// discovery (declared-роль), первый элемент через [0].
+// TestRender_SoulprintHostsWhere_FirstByIndex — filter + [0]: cross-host
+// primary discovery (declared role), first element via [0].
 func TestRender_SoulprintHostsWhere_FirstByIndex(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := hostsRunInput(moduleScenario("core.exec.run", map[string]any{
@@ -93,15 +93,16 @@ func TestRender_SoulprintWhere_Synonym(t *testing.T) {
 	}
 }
 
-// TestRender_SoulprintHostsChoirs_CrossHost — soulprint.hosts[].choirs виден
-// cross-host (ADR-044, S-T4): фильтр по choir-членству среди хостов прогона.
+// TestRender_SoulprintHostsChoirs_CrossHost — soulprint.hosts[].choirs is
+// visible cross-host (ADR-044, S-T4): filters by choir membership among the
+// run's hosts.
 func TestRender_SoulprintHostsChoirs_CrossHost(t *testing.T) {
 	in := hostsRunInput(moduleScenario("core.exec.run", map[string]any{
 		"cmd": `count=${ size(soulprint.hosts.where("'voters' in choirs")) }`,
 	}))
 	in.Hosts[0].Choirs = []string{"primaries", "voters"}
 	in.Hosts[1].Choirs = []string{"voters"}
-	// in.Hosts[2] — без choir-членств.
+	// in.Hosts[2] — no choir memberships.
 
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	tasks, _, err := p.Render(context.Background(), in)
@@ -113,8 +114,9 @@ func TestRender_SoulprintHostsChoirs_CrossHost(t *testing.T) {
 	}
 }
 
-// TestRender_LoopOverSoulprintHostsWhere — loop.items над soulprint.hosts.where(...):
-// раскрывается в N задач по отфильтрованным хостам прогона (declared-роль).
+// TestRender_LoopOverSoulprintHostsWhere — loop.items over
+// soulprint.hosts.where(...): expands into N tasks over the run's filtered
+// hosts (declared role).
 func TestRender_LoopOverSoulprintHostsWhere(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "create",
@@ -159,8 +161,9 @@ func TestRender_LoopOverSoulprintHostsWhere(t *testing.T) {
 	}
 }
 
-// TestRender_DestinyIsolation_HostsForbidden — soulprint.hosts в destiny-проходе
-// → ошибка валидации (изоляция, orchestration.md §4.1), не тихий пустой list.
+// TestRender_DestinyIsolation_HostsForbidden — soulprint.hosts in a destiny
+// pass → validation error (isolation, orchestration.md §4.1), not a silent
+// empty list.
 func TestRender_DestinyIsolation_HostsForbidden(t *testing.T) {
 	d := &ResolvedDestiny{
 		Name:  "leaky",
@@ -190,8 +193,9 @@ func TestRender_DestinyIsolation_HostsForbidden(t *testing.T) {
 	}
 }
 
-// TestRender_DestinyIsolation_SelfStillWorks — soulprint.self в destiny остаётся
-// доступен (per-host факты — стабильный слой), изоляция касается только hosts.
+// TestRender_DestinyIsolation_SelfStillWorks — soulprint.self stays
+// available in a destiny (per-host facts are a stable layer); isolation
+// only concerns hosts.
 func TestRender_DestinyIsolation_SelfStillWorks(t *testing.T) {
 	d := &ResolvedDestiny{
 		Name:  "ok",
@@ -229,10 +233,11 @@ func TestRender_DestinyIsolation_SelfStillWorks(t *testing.T) {
 	}
 }
 
-// TestRender_DestinyIsolation_SelfArch — guard ослабления инварианта (ADR-009/010
-// amendment): destiny-CEL читает стабильный self-факт целевого хоста
-// soulprint.self.os.arch — синтетический arm64 подставляется в params destiny.
-// Симметрия с .tmpl render_context (ADR-012(d)): self-факты доступны и в CEL .yml.
+// TestRender_DestinyIsolation_SelfArch — guard for the invariant relaxation
+// (ADR-009/010 amendment): destiny CEL reads the target host's stable
+// self-fact soulprint.self.os.arch — a synthetic arm64 is substituted into
+// destiny params. Symmetric with .tmpl render_context (ADR-012(d)):
+// self-facts are available in CEL .yml too.
 func TestRender_DestinyIsolation_SelfArch(t *testing.T) {
 	d := &ResolvedDestiny{
 		Name:  "arch-aware",
@@ -271,9 +276,9 @@ func TestRender_DestinyIsolation_SelfArch(t *testing.T) {
 	}
 }
 
-// TestRender_DestinyIsolation_WhereForbidden — soulprint.where(...) в destiny-
-// проходе → ошибка изоляции (топология прогона остаётся scenario-only), зеркало
-// TestRender_DestinyIsolation_HostsForbidden для аксессора-синонима.
+// TestRender_DestinyIsolation_WhereForbidden — soulprint.where(...) in a
+// destiny pass → isolation error (run topology stays scenario-only), mirrors
+// TestRender_DestinyIsolation_HostsForbidden for the synonym accessor.
 func TestRender_DestinyIsolation_WhereForbidden(t *testing.T) {
 	d := &ResolvedDestiny{
 		Name:  "leaky-where",
@@ -303,8 +308,9 @@ func TestRender_DestinyIsolation_WhereForbidden(t *testing.T) {
 	}
 }
 
-// TestRender_ScenarioSelfArch — scenario-проход НЕ сломан ослаблением: тот же
-// self-факт soulprint.self.os.arch читается в module-задаче scenario напрямую.
+// TestRender_ScenarioSelfArch — the scenario pass isn't broken by the
+// relaxation: the same self-fact soulprint.self.os.arch reads directly in a
+// scenario module task.
 func TestRender_ScenarioSelfArch(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
@@ -328,10 +334,11 @@ func TestRender_ScenarioSelfArch(t *testing.T) {
 	}
 }
 
-// TestRender_ApplyDestiny_InputArchCompat — apply:input остаётся валидным каналом
-// после ослабления (обратная совместимость): scenario рендерит arch из
-// soulprint.self и пробрасывает его в destiny через apply:input; destiny читает
-// input.arch (а не soulprint.self напрямую) — старая идиома не ломается.
+// TestRender_ApplyDestiny_InputArchCompat — apply:input stays a valid
+// channel after the relaxation (backward compat): scenario renders arch from
+// soulprint.self and passes it into the destiny via apply:input; the
+// destiny reads input.arch (not soulprint.self directly) — the old idiom
+// isn't broken.
 func TestRender_ApplyDestiny_InputArchCompat(t *testing.T) {
 	d := &ResolvedDestiny{
 		Name:  "via-input",
@@ -350,7 +357,7 @@ func TestRender_ApplyDestiny_InputArchCompat(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 
 	in := RenderInput{
-		// scenario вычисляет arch из self целевого хоста и передаёт в destiny.
+		// scenario computes arch from the target host's self and passes it into the destiny.
 		Scenario:    applyScenario("via-input", map[string]any{"arch": "${ soulprint.self.os.arch }"}),
 		Input:       map[string]any{},
 		Incarnation: IncarnationMeta{Name: "prod"},
@@ -371,9 +378,9 @@ func TestRender_ApplyDestiny_InputArchCompat(t *testing.T) {
 	}
 }
 
-// TestRender_EmptyFilterIndex0_StepError — where никого не отобрал → [0] над
-// пустым списком → ошибка шага рендера (понятная, не паника). «primary не
-// найден» — это ошибка шага, а не тихий null.
+// TestRender_EmptyFilterIndex0_StepError — where selected no one → [0] over
+// an empty list → a render step error (clear, not a panic). "primary not
+// found" is a step error, not a silent null.
 func TestRender_EmptyFilterIndex0_StepError(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := hostsRunInput(moduleScenario("core.exec.run", map[string]any{
@@ -385,16 +392,17 @@ func TestRender_EmptyFilterIndex0_StepError(t *testing.T) {
 	}
 }
 
-// TestRender_HostMissingFactSection — qa: при отсутствии секции (network/os) в
-// Soulprint хоста render подставляет пустой map, поэтому обращение к полю даёт
-// «no such key» по самому полю (family/primary_ip), а не по секции (os/network).
-// Закрепляем фактическое поведение: понятная ошибка рендера, не паника.
+// TestRender_HostMissingFactSection — qa: when a host's Soulprint is missing
+// a section (network/os), render substitutes an empty map, so a field access
+// gives "no such key" on the field itself (family/primary_ip), not the
+// section (os/network). Pins down the actual behavior: a clear render error,
+// not a panic.
 func TestRender_HostMissingFactSection(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := hostsRunInput(moduleScenario("core.exec.run", map[string]any{
 		"cmd": `fam=${ soulprint.hosts.where("os.family == 'debian'").size() }`,
 	}))
-	// Хост без секции os: Soulprint без ключа os → soulprintSection вернёт {}.
+	// Host without an os section: Soulprint with no os key → soulprintSection returns {}.
 	in.Hosts = []*topology.HostFacts{
 		{SID: "x.example.com", Coven: []string{"prod"}, Role: "primary", Soulprint: map[string]any{}},
 	}

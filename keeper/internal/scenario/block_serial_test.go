@@ -10,11 +10,12 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// TestDispatch_BlockSerialWave (guard #3, integration-часть) — block.serial:1 на
-// 3 хостах катит ВЕСЬ блок одной волной по одному хосту: ApplyRequest каждого
-// хоста несёт ВСЕ потомки блока (groupByHost), а ширина волны = 1 → 3 волны по 1
-// (splitWaves). Это эмёрджентное «весь блок одной волной» (одинаковый
-// SerialWidth+TargetSIDs у всех потомков), без изменения контракта.
+// TestDispatch_BlockSerialWave (guard #3, integration part) proves
+// block.serial:1 on 3 hosts rolls the WHOLE block in one wave per host: each
+// host's ApplyRequest carries ALL of the block's children (groupByHost), and
+// wave width = 1 → 3 waves of 1 (splitWaves). This "whole block, one wave"
+// behavior is emergent (same SerialWidth+TargetSIDs on every child), no
+// contract change needed.
 func TestDispatch_BlockSerialWave(t *testing.T) {
 	engine, err := cel.New()
 	if err != nil {
@@ -52,7 +53,7 @@ func TestDispatch_BlockSerialWave(t *testing.T) {
 		t.Fatalf("len(tasks) = %d, want 2 (2 block children, fan-out)", len(tasks))
 	}
 
-	// ApplyRequest каждого хоста несёт ОБА потомка блока.
+	// Each host's ApplyRequest carries BOTH block children.
 	perHost := groupByHost(tasks, plans)
 	if len(perHost) != 3 {
 		t.Fatalf("hosts = %d, want 3", len(perHost))
@@ -63,7 +64,7 @@ func TestDispatch_BlockSerialWave(t *testing.T) {
 		}
 	}
 
-	// Ширина волны = 1 (унаследована block.serial всеми потомками) → 3 волны по 1.
+	// Wave width = 1 (inherited from block.serial by all children) → 3 waves of 1.
 	width := effectiveSerialWidth(plans)
 	if width != 1 {
 		t.Fatalf("effectiveSerialWidth = %d, want 1", width)
@@ -79,13 +80,13 @@ func TestDispatch_BlockSerialWave(t *testing.T) {
 	}
 }
 
-// TestDispatch_NestedBlockSerialMinWidth (QA-пробел #9) — 3-уровневая вложенность
-// block-in-block-in-block с убывающими serial (L1=3 / L2=2 / L3=1) на 6 хостах.
-// Каждый уровень несёт module-потомка → планы с width 3, 2, 1 одновременно.
-// effectiveSerialWidth берёт МИНИМАЛЬНОЕ положительное окно среди всех планов
-// Passage (fail-closed: самое узкое окно побеждает) → leaf width = 1, а splitWaves
-// катит 6 волн по 1 хосту. Доказывает, что вложенный serial:1 не теряется под более
-// широким внешним serial:3.
+// TestDispatch_NestedBlockSerialMinWidth (QA gap #9) covers 3-level nesting of
+// block-in-block-in-block with decreasing serial (L1=3 / L2=2 / L3=1) across 6
+// hosts. Each level carries a module child, so plans with widths 3, 2, and 1
+// coexist. effectiveSerialWidth takes the MINIMUM positive window across all
+// Passage plans (fail-closed: the narrowest window wins) → leaf width = 1, and
+// splitWaves rolls 6 waves of 1 host. Proves a nested serial:1 doesn't get
+// swallowed by a wider outer serial:3.
 func TestDispatch_NestedBlockSerialMinWidth(t *testing.T) {
 	engine, err := cel.New()
 	if err != nil {
@@ -136,7 +137,7 @@ func TestDispatch_NestedBlockSerialMinWidth(t *testing.T) {
 		t.Fatalf("len(tasks) = %d, want 3 (L1-step + L2-step + L3-step)", len(tasks))
 	}
 
-	// Среди планов присутствуют все три ширины (3 от L1, 2 от L2, 1 от L3).
+	// All three widths appear among the plans (3 from L1, 2 from L2, 1 from L3).
 	widths := map[int]bool{}
 	for _, pl := range plans {
 		widths[pl.SerialWidth] = true
@@ -147,7 +148,7 @@ func TestDispatch_NestedBlockSerialMinWidth(t *testing.T) {
 		}
 	}
 
-	// effectiveSerialWidth = минимальная положительная = 1 (узкое L3-окно побеждает).
+	// effectiveSerialWidth = minimum positive = 1 (the narrow L3 window wins).
 	width := effectiveSerialWidth(plans)
 	if width != 1 {
 		t.Fatalf("effectiveSerialWidth = %d, want 1 (min среди {3,2,1} — самое узкое окно)", width)

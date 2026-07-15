@@ -19,7 +19,7 @@ func sealTestEngine(t *testing.T) *cel.Engine {
 	return e
 }
 
-// secretInputNames извлекает secret:true-имена из scenario-схемы.
+// secretInputNames extracts secret:true names from the scenario schema.
 func TestSecretInputNames(t *testing.T) {
 	scn := &config.ScenarioManifest{Input: config.InputSchemaMap{
 		"password": {Type: "string", Secret: true},
@@ -35,17 +35,17 @@ func TestSecretInputNames(t *testing.T) {
 	}
 }
 
-// (a) secret-input значение в GENERIC-поле (content) → путь sealed.
-// (f) обычное generic-поле (несекретный input) → НЕ sealed (нет over-seal).
+// (a) a secret-input value in a GENERIC field (content) → path sealed.
+// (f) an ordinary generic field (non-secret input) → NOT sealed (no over-seal).
 func TestCollectSealed_SecretInputInGenericField(t *testing.T) {
 	e := sealTestEngine(t)
 	set := NewSealedSet()
 	sources := cel.SealSources{SecretInputs: map[string]bool{"admin_password": true}}
 
 	params := map[string]any{
-		"content": "requirepass ${ input.admin_password }", // (a) generic-поле, секрет
-		"port":    "${ input.port }",                       // (f) несекретный input
-		"label":   "static-config",                         // чистый литерал
+		"content": "requirepass ${ input.admin_password }", // (a) generic field, secret
+		"port":    "${ input.port }",                       // (f) non-secret input
+		"label":   "static-config",                         // pure literal
 	}
 	collectSealed(e, set, params, sources, "")
 
@@ -61,7 +61,7 @@ func TestCollectSealed_SecretInputInGenericField(t *testing.T) {
 	}
 }
 
-// (b) vault()-значение → путь sealed (без схемы — детектор ловит vault сам).
+// (b) a vault() value → path sealed (no schema needed — the detector catches vault itself).
 func TestCollectSealed_VaultValue(t *testing.T) {
 	e := sealTestEngine(t)
 	set := NewSealedSet()
@@ -81,7 +81,7 @@ func TestCollectSealed_VaultValue(t *testing.T) {
 	}
 }
 
-// (c) тернарник, читающий secret-input → путь sealed (whole-cell).
+// (c) a ternary reading a secret-input → path sealed (whole-cell).
 func TestCollectSealed_TernaryReadsSecret(t *testing.T) {
 	e := sealTestEngine(t)
 	set := NewSealedSet()
@@ -96,7 +96,7 @@ func TestCollectSealed_TernaryReadsSecret(t *testing.T) {
 	}
 }
 
-// (d) смешанное значение (literal + secret) → путь sealed (whole-value taint).
+// (d) a mixed value (literal + secret) → path sealed (whole-value taint).
 func TestCollectSealed_MixedLiteralSecret(t *testing.T) {
 	e := sealTestEngine(t)
 	set := NewSealedSet()
@@ -111,7 +111,7 @@ func TestCollectSealed_MixedLiteralSecret(t *testing.T) {
 	}
 }
 
-// Вложенность map/list — путь ведётся как renderValue (joinKey/joinIdx).
+// map/list nesting — the path is tracked the same way as renderValue (joinKey/joinIdx).
 func TestCollectSealed_NestedPaths(t *testing.T) {
 	e := sealTestEngine(t)
 	set := NewSealedSet()
@@ -134,11 +134,11 @@ func TestCollectSealed_NestedPaths(t *testing.T) {
 	}
 }
 
-// nil-Sealed → no-op (коллекция выключена, push/trial/Acolyte — БИТ-В-БИТ).
+// nil Sealed → no-op (collection disabled, push/trial/Acolyte — bit-for-bit).
 func TestCollectSealed_NilSetNoop(t *testing.T) {
 	e := sealTestEngine(t)
 	params := map[string]any{"x": "${ vault('secret/redis/admin#password') }"}
-	// не паникует при nil-set
+	// doesn't panic on a nil set
 	collectSealed(e, nil, params, cel.SealSources{}, "")
 	var nilSet *SealedSet
 	if nilSet.Paths() != nil {
@@ -146,34 +146,37 @@ func TestCollectSealed_NilSetNoop(t *testing.T) {
 	}
 }
 
-// Path-обход совпадает с renderValue (joinKey/joinIdx) — guard на расхождение,
-// которое сломало бы соответствие sealed-путей путям маскинга.
+// Path traversal matches renderValue (joinKey/joinIdx) — guards against a
+// drift that would break the correspondence between sealed paths and masking paths.
 func TestCollectSealed_PathConventionMatchesRenderValue(t *testing.T) {
 	e := sealTestEngine(t)
 	set := NewSealedSet()
 	sources := cel.SealSources{SecretInputs: map[string]bool{"s": true}}
 	params := map[string]any{"a": map[string]any{"b": []any{"${ input.s }"}}}
 	collectSealed(e, set, params, sources, "")
-	// renderValue для этого построил бы путь "a.b[0]".
+	// renderValue would build the path "a.b[0]" for this.
 	if !set.Paths()["a.b[0]"] {
 		t.Errorf("путь не a.b[0]: %v", set.Paths())
 	}
 }
 
-// PEM-content задачи destiny redis (core.file.present, content = vault(input.tls.<x>_ref))
-// помечается sealed vault-слоем в destiny-проходе. Guard на масккинг PEM (ADR-010 §7.4):
-// destiny-проход НЕ несёт secret-input-схему (scenarioSealSources даёт пустой набор),
-// поэтому единственное, что ловит sealed для PEM, — vault() В САМОЙ ячейке content
-// (collectSealed без схемы детектит vault). Если кто-то заменит content на уже-резолв-
-// ленный PEM через apply.input (`${ input.tls_cert }` без vault()) — этот тест упадёт:
-// destiny-input-secret-схема не пробрасывается, ячейка перестанет быть sealed, PEM
-// утёк бы в error_summary/state. Зеркало L0 tls-enabled-standalone (форма content там).
+// The PEM content of a redis destiny task (core.file.present, content =
+// vault(input.tls.<x>_ref)) gets marked sealed by the vault layer in the
+// destiny pass. Guards PEM masking (ADR-010 §7.4): the destiny pass carries NO
+// secret-input schema (scenarioSealSources returns an empty set), so the only
+// thing that catches sealed for PEM is vault() IN THE content CELL ITSELF
+// (collectSealed without a schema still detects vault). If someone replaces
+// content with an already-resolved PEM via apply.input (`${ input.tls_cert }`
+// without vault()) — this test fails: the destiny-input-secret schema isn't
+// passed through, the cell stops being sealed, and the PEM would leak into
+// error_summary/state. Mirrors L0 tls-enabled-standalone (same content shape there).
 func TestCollectSealed_RedisTLSPEMContentViaVault(t *testing.T) {
 	e := sealTestEngine(t)
 	set := NewSealedSet()
 
-	// Форма ячейки content PEM-задачи destiny redis (server.yml). sources БЕЗ схемы —
-	// как в destiny-проходе (destinyIn.Scenario без Input → secretInputNames пуст).
+	// Shape of the content cell for a redis destiny PEM task (server.yml).
+	// sources without a schema — as in the destiny pass (destinyIn.Scenario
+	// without Input → secretInputNames is empty).
 	params := map[string]any{
 		"path":    "/etc/redis/tls/redis.key",
 		"content": "${ vault(input.tls.key_ref) }",

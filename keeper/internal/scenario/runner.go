@@ -8,20 +8,22 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
 )
 
-// Start регистрирует прогон и спавнит run-goroutine, возвращаясь сразу (async).
+// Start registers a run and spawns the run-goroutine, returning immediately
+// (async).
 //
-// runCtx отсоединён от cancel/deadline request-ctx (context.WithoutCancel):
-// прогон переживает возврат HTTP-ответа 202, НО наследует values родителя —
-// прежде всего OTel SpanContext/baggage, чтобы span `scenario.run` сшивался
-// с request-span-ом (ADR-024). Отмена возможна через [Runner.Cancel] (по
-// applyID) или [Runner.Shutdown] (все активные). Per-scenario timeout здесь НЕ
-// навешивается — план ещё не распарсен; provision-aware effective run-timeout
-// ставит run() отдельным WithTimeout поверх runCtx (наследует cancel из active-map).
+// runCtx is detached from the request-ctx's cancel/deadline
+// (context.WithoutCancel): the run survives the HTTP 202 response return, BUT
+// inherits the parent's values — mainly OTel SpanContext/baggage, so the
+// `scenario.run` span stitches to the request span (ADR-024). Cancellation
+// works via [Runner.Cancel] (by applyID) or [Runner.Shutdown] (all active).
+// No per-scenario timeout is set here — the plan isn't parsed yet; the
+// provision-aware effective run-timeout is applied by run() as a separate
+// WithTimeout over runCtx (inherits cancel from the active-map).
 //
-// Возврат:
-//   - [ErrShuttingDown] — Runner останавливается.
-//   - [ErrAlreadyRunning] — applyID уже активен (дубль-вызов).
-//   - валидационная ошибка на пустые поля spec.
+// Returns:
+//   - [ErrShuttingDown] — Runner is shutting down.
+//   - [ErrAlreadyRunning] — applyID is already active (duplicate call).
+//   - a validation error for empty spec fields.
 func (r *Runner) Start(parent context.Context, spec RunSpec) error {
 	if spec.ApplyID == "" {
 		return fmt.Errorf("scenario: empty apply_id")
@@ -42,14 +44,16 @@ func (r *Runner) Start(parent context.Context, spec RunSpec) error {
 		r.mu.Unlock()
 		return ErrAlreadyRunning
 	}
-	// runCtx живёт независимо от request-ctx — прогон не должен умирать с
-	// возвратом 202. WithoutCancel: сохраняем trace-baggage (SpanContext
-	// родителя для сшивки трассы), не наследуем cancel/deadline request-а.
-	// cancel идёт в active-map — основа Cancel/Shutdown (рвёт родительский runCtx).
-	// Deadline (provision-aware effective run-timeout) НЕ навешивается здесь: план
-	// ещё не распарсен (provision-ли — неизвестно). Он переезжает в run() ПОСЛЕ
-	// ExpandIncludes отдельным WithTimeout поверх этого runCtx (под-контекст
-	// наследует отмену из active-map — Cancel/Shutdown продолжают работать).
+	// runCtx lives independently of the request-ctx — the run must not die
+	// when the 202 response returns. WithoutCancel: keep trace baggage
+	// (parent's SpanContext for trace stitching), don't inherit the request's
+	// cancel/deadline. cancel goes into the active-map — the basis for
+	// Cancel/Shutdown (tears down the parent runCtx). Deadline
+	// (provision-aware effective run-timeout) is NOT set here: the plan isn't
+	// parsed yet (whether it's a provision run is unknown). It's applied in
+	// run() AFTER ExpandIncludes as a separate WithTimeout over this runCtx
+	// (the sub-context inherits cancellation from the active-map — Cancel/
+	// Shutdown keep working).
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(parent))
 	r.active[spec.ApplyID] = cancel
 	r.wg.Add(1)
@@ -65,39 +69,42 @@ func (r *Runner) Start(parent context.Context, spec RunSpec) error {
 	return nil
 }
 
-// StartDestroy инициирует teardown incarnation: прогон scenario `destroy`
-// против её хостов в режиме [TerminalDestroy] (S-D2b). Тонкая обёртка над
-// [Runner.Start] — фиксирует ScenarioName=`destroy` и TerminalMode=Destroy,
-// остальное (async, lockRun-gate, dispatch, barrier) идёт общим путём run().
+// StartDestroy initiates incarnation teardown: runs scenario `destroy`
+// against its hosts in [TerminalDestroy] mode (S-D2b). A thin wrapper over
+// [Runner.Start] — sets ScenarioName=`destroy` and TerminalMode=Destroy; the
+// rest (async, lockRun gate, dispatch, barrier) goes through the common
+// run() path.
 //
-// Семантика финала (run.go): success teardown → incarnation остаётся в
-// `destroying` (state не трогается, ready НЕ коммитится; DELETE строки — S-D3);
-// провал teardown → `destroy_failed` (НЕ error_locked). Стартует только из
-// `destroying` (lockRun отвергает иной статус как ErrNotRunnable) — destroy уже
-// инициирован S-D1 и pre-check наличия scenario `destroy` (PrepareDestroy)
-// прошёл ДО перевода в destroying.
+// Finalization semantics (run.go): teardown success → incarnation stays in
+// `destroying` (state untouched, ready is NOT committed; row DELETE is
+// S-D3); teardown failure → `destroy_failed` (NOT error_locked). Only starts
+// from `destroying` (lockRun rejects any other status as ErrNotRunnable) —
+// destroy is already initiated by S-D1, and the scenario `destroy`
+// existence pre-check (PrepareDestroy) passed BEFORE the transition to
+// destroying.
 //
-// Caller (handler S-D4) делает Destroy() → StartDestroy(), передавая тот же
-// applyID, что в state_history-snapshot инициации. ScenarioName/Input в spec
-// игнорируются — StartDestroy выставляет их сам.
+// Caller (handler S-D4) does Destroy() → StartDestroy(), passing the same
+// applyID as in the initiation's state_history snapshot. ScenarioName/Input
+// in spec are ignored — StartDestroy sets them itself.
 //
-// Возврат — те же ошибки, что [Runner.Start] (ErrShuttingDown /
-// ErrAlreadyRunning / валидация пустых полей spec).
+// Returns the same errors as [Runner.Start] (ErrShuttingDown /
+// ErrAlreadyRunning / validation of empty spec fields).
 func (r *Runner) StartDestroy(parent context.Context, spec RunSpec) error {
 	spec.ScenarioName = DestroyScenarioName
 	spec.TerminalMode = TerminalDestroy
 	return r.Start(parent, spec)
 }
 
-// Cancel отменяет активный прогон по applyID НА ЭТОМ инстансе. Возвращает
-// true, если прогон был активен локально (cancel вызван), false — если такого
-// applyID нет в active-map (завершён, не запускался, либо run-goroutine живёт
-// на ДРУГОМ Keeper-инстансе — для cross-Keeper используйте [RequestCancel]).
+// Cancel cancels the active run for applyID ON THIS instance. Returns true if
+// the run was active locally (cancel invoked), false if applyID isn't in the
+// active-map (finished, never started, or the run-goroutine lives on ANOTHER
+// Keeper instance — use [RequestCancel] for cross-Keeper).
 //
-// Cancel лишь отменяет runCtx: dispatch-цикл прерывается, уже отправленным
-// Soul-ам Keeper НЕ шлёт CancelApply в pilot-е (best-effort cancel — слой
-// admin-API через Outbound.SendCancel, отдельно). Incarnation остаётся в
-// том статусе, в котором run.go зафиксирует прерванный прогон (error_locked).
+// Cancel only cancels runCtx: the dispatch loop breaks, but Keeper does NOT
+// send CancelApply to already-dispatched Souls in the pilot (best-effort
+// cancel — an admin-API layer via Outbound.SendCancel, separate). The
+// incarnation stays in whatever status run.go records for the interrupted
+// run (error_locked).
 func (r *Runner) Cancel(applyID string) bool {
 	r.mu.Lock()
 	cancel, ok := r.active[applyID]
@@ -109,45 +116,47 @@ func (r *Runner) Cancel(applyID string) bool {
 	return true
 }
 
-// RequestCancel — cluster-wide отмена прогона (G1): работает независимо от
-// того, на каком Keeper-инстансе живёт run-goroutine (ADR-002, stateless-
-// кластер). Точка входа для admin-API (HTTP/MCP Cancel).
+// RequestCancel is cluster-wide run cancellation (G1): works regardless of
+// which Keeper instance the run-goroutine lives on (ADR-002, stateless
+// cluster). Entry point for the admin API (HTTP/MCP Cancel).
 //
-// Два пути, оба идемпотентны:
-//   - PG-флаг (cross-Keeper): [applyrun.RequestCancel] ставит cancel_requested
-//     на все ещё-running строки прогона. Инстанс-владелец goroutine увидит флаг
-//     в barrier-поллинге (waitBarrier) на ближайшем тике и отменит прогон тем
-//     же путём, что локальный Cancel (abort → error_locked). Терминальный
-//     прогон не трогается (фильтр status='running') — Cancel завершённого =
-//     no-op.
-//   - локальный Cancel (быстрый путь): если goroutine здесь — [Runner.Cancel]
-//     отменяет runCtx немедленно, не дожидаясь барьерного тика. Если на другом
-//     инстансе — false, отмену довезёт флаг.
+// Two paths, both idempotent:
+//   - PG flag (cross-Keeper): [applyrun.RequestCancel] sets cancel_requested
+//     on all still-running rows of the run. The owning instance's goroutine
+//     sees the flag in barrier polling (waitBarrier) on the next tick and
+//     cancels the run the same way as a local Cancel (abort →
+//     error_locked). A terminal run is untouched (status='running' filter) —
+//     cancelling a finished run is a no-op.
+//   - local Cancel (fast path): if the goroutine is here — [Runner.Cancel]
+//     cancels runCtx immediately, without waiting for a barrier tick. If on
+//     another instance — false, the flag delivers the cancellation.
 //
-// Возврат:
-//   - found — прогон был активен (затронута хотя бы одна running-строка в PG
-//     ИЛИ локальный Cancel сработал). false → прогона нет либо он уже
-//     терминален (caller трактует как no-op / 404).
-//   - ошибка — только сбой PG-апдейта флага (локальный Cancel ошибок не даёт).
+// Returns:
+//   - found — the run was active (at least one running PG row was affected OR
+//     the local Cancel fired). false → no such run, or it's already terminal
+//     (caller treats it as no-op / 404).
+//   - error — only a PG flag-update failure (local Cancel never errors).
 func (r *Runner) RequestCancel(ctx context.Context, applyID string) (found bool, err error) {
 	if applyID == "" {
 		return false, fmt.Errorf("scenario: empty apply_id")
 	}
-	// Сперва PG-флаг — cluster-wide путь авторитетен (переживает cross-Keeper).
+	// PG flag first — the cluster-wide path is authoritative (survives
+	// cross-Keeper).
 	affected, perr := applyrun.RequestCancel(ctx, r.deps.DB, applyID)
 	if perr != nil {
 		return false, fmt.Errorf("scenario: request cancel: %w", perr)
 	}
-	// Локальный быстрый путь: если goroutine на этом инстансе — отменяем сразу,
-	// не дожидаясь, пока барьер вычитает только что выставленный флаг.
+	// Local fast path: if the goroutine is on this instance, cancel
+	// immediately instead of waiting for the barrier to pick up the
+	// just-set flag.
 	local := r.Cancel(applyID)
 	return affected > 0 || local, nil
 }
 
-// Shutdown останавливает приём новых прогонов и ждёт завершения активных
-// (graceful). Если ctx отменится раньше — отменяет все активные runCtx
-// (force) и ждёт их выхода без ограничения по времени (run-goroutine-ы
-// реагируют на cancel быстро — dispatch-цикл проверяет ctx).
+// Shutdown stops accepting new runs and waits for active ones to finish
+// (graceful). If ctx cancels first — cancels all active runCtx (force) and
+// waits for them to exit without a time limit (run-goroutines react to
+// cancel quickly — the dispatch loop checks ctx).
 func (r *Runner) Shutdown(ctx context.Context) error {
 	r.mu.Lock()
 	r.shuttingDown = true
@@ -164,8 +173,8 @@ func (r *Runner) Shutdown(ctx context.Context) error {
 		return nil
 	case <-ctx.Done():
 		r.cancelAll()
-		// Дожидаемся фактического выхода goroutine-ов: после cancelAll
-		// dispatch-цикл прерывается на ближайшей ctx-проверке.
+		// Wait for the goroutines to actually exit: after cancelAll the
+		// dispatch loop breaks on its next ctx check.
 		select {
 		case <-done:
 		case <-time.After(15 * time.Second):
@@ -175,15 +184,15 @@ func (r *Runner) Shutdown(ctx context.Context) error {
 	}
 }
 
-// unregister удаляет applyID из active-map (вызывается из run-goroutine при
-// завершении).
+// unregister removes applyID from the active-map (called by the
+// run-goroutine on completion).
 func (r *Runner) unregister(applyID string) {
 	r.mu.Lock()
 	delete(r.active, applyID)
 	r.mu.Unlock()
 }
 
-// cancelAll отменяет runCtx всех активных прогонов (force-shutdown).
+// cancelAll cancels runCtx for all active runs (force-shutdown).
 func (r *Runner) cancelAll() {
 	r.mu.Lock()
 	for _, cancel := range r.active {

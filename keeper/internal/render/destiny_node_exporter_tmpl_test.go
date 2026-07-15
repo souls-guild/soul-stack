@@ -10,23 +10,26 @@ import (
 	"github.com/souls-guild/soul-stack/shared/tmpl"
 )
 
-// nodeExporterTemplatesDir — каталог .tmpl destiny node-exporter относительно
-// этого пакета (keeper/internal/render). Тест живёт здесь, потому что именно
-// этот пакет владеет интеграцией с text/template-движком Soul-а (shared/tmpl)
-// и уже держит TestRenderToSoulExecute_* — общий путь рендера .tmpl.
+// nodeExporterTemplatesDir is the node-exporter destiny's .tmpl directory,
+// relative to this package (keeper/internal/render). The test lives here
+// because this package owns the integration with Soul's text/template engine
+// (shared/tmpl) and already hosts TestRenderToSoulExecute_* — the shared
+// .tmpl render path.
 const nodeExporterTemplatesDir = "../../../examples/destiny/node-exporter/templates"
 
-// TestNodeExporterTemplates_ParseAndRender — guard на инвариант «каждый .tmpl
-// destiny node-exporter реально ПАРСИТСЯ и РЕНДЕРИТСЯ под text/template strict».
+// TestNodeExporterTemplates_ParseAndRender guards the invariant that every
+// node-exporter destiny .tmpl actually PARSES and RENDERS under strict
+// text/template.
 //
-// Зачем: L0-trial этой destiny ассертит ПЛАН задач и гоняет только CEL-фазу, а
-// text/template-фазу для шаблонов не исполняет. Из-за этого литеральный `{{ }}`
-// в комментарии шаблона (Go text/template strict парсит его как пустое действие
-// → «missing value for command» на Parse) проскользнул мимо тестов и хард-фейлил
-// core.file.rendered на хосте. Тест прогоняет КАЖДЫЙ .tmpl через тот же движок,
-// что Soul (shared/tmpl.Engine, strict missingkey=error), с корнем контекста
-// §3.2 {vars,self,role,essence}. Падение на Parse/Execute ловит регресс «шаблон
-// не парсится/не рендерится» на уровне unit-теста, до E2E.
+// Why: this destiny's L0 trial asserts the task PLAN and only runs the CEL
+// phase — it never executes the text/template phase on the templates. A
+// literal `{{ }}` in a template comment (which Go text/template strict
+// parses as an empty action → "missing value for command" on Parse) slipped
+// past tests this way and hard-failed core.file.rendered on the host. This
+// test runs EVERY .tmpl through the same engine as Soul (shared/tmpl.Engine,
+// strict missingkey=error), with the §3.2 context root
+// {vars,self,role,essence}. A Parse/Execute failure catches a "template
+// doesn't parse/render" regression at the unit-test level, before E2E.
 func TestNodeExporterTemplates_ParseAndRender(t *testing.T) {
 	files, err := filepath.Glob(filepath.Join(nodeExporterTemplatesDir, "*.tmpl"))
 	if err != nil {
@@ -42,13 +45,14 @@ func TestNodeExporterTemplates_ParseAndRender(t *testing.T) {
 		t.Fatalf("tmpl.New: %v", err)
 	}
 
-	// Корень text/template-контекста core.file.rendered (templating.md §3.2,
-	// Вариант B): {vars, input, self, role, essence}. vars — destiny-локалы vars.yml
-	// (bin_dir/bin_path), доступны шаблону `.vars.<file_var>` НАПРЯМУЮ (без
-	// passthrough params.vars); input — operator-input прохода (user/group/listen/
-	// textfile_dir + прод-параметры демона), читаются шаблоном `.input.<name>`
-	// напрямую (Вариант B, ADR-010 §3.2 amendment). Шаблоны без input/vars (скрипты,
-	// таймеры) лишних ключей просто не читают.
+	// core.file.rendered's text/template context root (templating.md §3.2,
+	// Option B): {vars, input, self, role, essence}. vars are destiny locals
+	// from vars.yml (bin_dir/bin_path), read by the template as
+	// `.vars.<file_var>` DIRECTLY (no params.vars passthrough); input is the
+	// pass's operator input (user/group/listen/textfile_dir + daemon prod
+	// params), read by the template as `.input.<name>` directly (Option B,
+	// ADR-010 §3.2 amendment). Templates without input/vars (scripts, timers)
+	// simply don't read the extra keys.
 	root := nodeExporterRenderVars
 
 	for _, f := range files {
@@ -60,12 +64,12 @@ func TestNodeExporterTemplates_ParseAndRender(t *testing.T) {
 			}
 			out, err := engine.Render(string(body), root)
 			if err != nil {
-				// Именно сюда падал блокер с литеральным `{{ }}` в комментарии
-				// (ErrParse: «missing value for command»).
+				// This is exactly where the literal `{{ }}` in a comment blocker
+				// used to fail (ErrParse: "missing value for command").
 				t.Fatalf("text/template render %s упал: %v", name, err)
 			}
-			// Рендер не должен оставлять незакрытых маркеров действия — признак,
-			// что что-то не подставилось/проглочено.
+			// The render shouldn't leave unclosed action markers — a sign that
+			// something wasn't substituted/was swallowed.
 			if strings.Contains(out, "{{") || strings.Contains(out, "}}") {
 				t.Errorf("в рендере %s остались `{{`/`}}` — действие не выполнено:\n%s", name, out)
 			}
@@ -73,19 +77,21 @@ func TestNodeExporterTemplates_ParseAndRender(t *testing.T) {
 	}
 }
 
-// nodeExporterRenderVars — корень рендера для content-ассертов (Вариант B,
-// templating.md §3.2): {vars, input, self, role, essence}. vars — destiny-локалы
-// vars.yml (bin_dir/bin_path), доступные шаблону `.vars.<file_var>` НАПРЯМУЮ;
-// input — operator-input прохода (user/group/listen/textfile_dir + прод-параметры
-// демона), читаемый шаблоном `.input.<name>`. Один на оба теста (ParseAndRender
-// использует тот же набор).
+// nodeExporterRenderVars is the render root for content assertions (Option
+// B, templating.md §3.2): {vars, input, self, role, essence}. vars are
+// destiny locals from vars.yml (bin_dir/bin_path), read by the template as
+// `.vars.<file_var>` DIRECTLY; input is the pass's operator input
+// (user/group/listen/textfile_dir + daemon prod params), read by the
+// template as `.input.<name>`. Shared by both tests (ParseAndRender uses the
+// same set).
 var nodeExporterRenderVars = map[string]any{
-	// vars — суперсет file-vars и values, поднятых в params.vars ШАГАМИ destiny:
-	// основной unit (service.yml, Вариант B) НЕ поднимает params.vars вовсе —
-	// читает file-var `.vars.bin_path` напрямую; collector-шаги (collectors.yml —
-	// ВНЕ скоупа Варианта B) всё ещё пробрасывают user/textfile_dir/bin_dir через
-	// свои params.vars, поэтому collector-.tmpl читают `.vars.user`/`.vars.
-	// textfile_dir`. Синтетический корень даёт оба слоя.
+	// vars is a superset of file-vars and values that destiny STEPS lift into
+	// params.vars: the main unit (service.yml, Option B) doesn't lift
+	// params.vars at all — it reads file-var `.vars.bin_path` directly;
+	// collector steps (collectors.yml, OUT of Option B's scope) still pass
+	// user/textfile_dir/bin_dir through their own params.vars, so
+	// collector-.tmpl read `.vars.user`/`.vars.textfile_dir`. The synthetic
+	// root supplies both layers.
 	"vars": map[string]any{
 		"bin_dir":      "/usr/local/bin",
 		"bin_path":     "/usr/local/bin/node_exporter",
@@ -97,9 +103,9 @@ var nodeExporterRenderVars = map[string]any{
 		"group":        "node_exporter",
 		"listen":       "127.0.0.1:9100",
 		"textfile_dir": "/var/lib/node_exporter",
-		// Прод-параметры демона (node_exporter.service.tmpl §коммент): дефолты,
-		// при которых опц. флаги опускаются, а log.*/web.telemetry-path
-		// подставляются всегда.
+		// Daemon prod params (node_exporter.service.tmpl §comment): defaults
+		// under which optional flags are omitted, while log.*/
+		// web.telemetry-path are always substituted.
 		"gomaxprocs":              int64(0),
 		"disabled_collectors":     []any{},
 		"enabled_collectors":      []any{},
@@ -118,9 +124,10 @@ var nodeExporterRenderVars = map[string]any{
 	"essence": map[string]any{},
 }
 
-// renderNodeExporterTmpl рендерит один .tmpl destiny node-exporter через тот же
-// shared/tmpl.Engine, что и Soul (strict, missingkey=error), с vars-контекстом
-// выше. Падение Parse/Execute = провал теста (шаблон сломан).
+// renderNodeExporterTmpl renders one node-exporter destiny .tmpl through the
+// same shared/tmpl.Engine as Soul (strict, missingkey=error), with the vars
+// context above. A Parse/Execute failure means a test failure (broken
+// template).
 func renderNodeExporterTmpl(t *testing.T, name string) string {
 	t.Helper()
 	engine, err := tmpl.New()
@@ -138,27 +145,30 @@ func renderNodeExporterTmpl(t *testing.T, name string) string {
 	return out
 }
 
-// TestNodeExporterTemplates_HardeningContent — guard на СОДЕРЖИМОЕ отрендеренных
-// systemd-юнитов: проверяет, что критичные для функциональности и безопасности
-// директивы реально присутствуют в выводе. ParseAndRender выше ловит только
-// «шаблон не парсится» — регресс, удаливший hardening-строку (например
-// RestrictAddressFamilies, без которой node_exporter не слушает TCP, или User=
-// → демон под root), прошёл бы молча. Тест рендерит каждый юнит и ассертит
-// набор обязательных подстрок; удаление любой из них валит тест.
+// TestNodeExporterTemplates_HardeningContent guards the CONTENT of rendered
+// systemd units: checks that directives critical for functionality and
+// security are actually present in the output. ParseAndRender above only
+// catches "template doesn't parse" — a regression that removed a hardening
+// line (e.g. RestrictAddressFamilies, without which node_exporter won't
+// listen on TCP, or User=, leaving the daemon running as root) would pass
+// silently. This test renders each unit and asserts a set of required
+// substrings; removing any of them fails the test.
 //
-// Подстроки — не полная сверка файла (хрупка), а точечные инварианты: то, без
-// чего юнит функционально/секьюрно неверен. Источник набора — ТЗ §коллекторы и
-// прод-конвенция §3 (hardening), задокументированные в комментариях .tmpl.
+// The substrings aren't a full file diff (too brittle) but point invariants:
+// what the unit needs to be functionally/securely correct. The set's source
+// is the spec's §collectors and the §3 prod convention (hardening),
+// documented in the .tmpl comments.
 func TestNodeExporterTemplates_HardeningContent(t *testing.T) {
-	// Каждый кейс — один .tmpl и список подстрок, обязанных быть в рендере.
+	// Each case is one .tmpl plus the substrings required in its render.
 	cases := []struct {
 		file string
 		want []string
 	}{
 		{
-			// Основной демон: без RestrictAddressFamilies=AF_INET[6] node_exporter
-			// не слушает TCP; User=node_exporter (НЕ root); NoNewPrivileges; флаги
-			// listen-address и textfile.directory в ExecStart.
+			// Main daemon: without RestrictAddressFamilies=AF_INET[6]
+			// node_exporter won't listen on TCP; User=node_exporter (NOT root);
+			// NoNewPrivileges; listen-address and textfile.directory flags in
+			// ExecStart.
 			file: "node_exporter.service.tmpl",
 			want: []string{
 				"RestrictAddressFamilies=AF_INET AF_INET6",
@@ -166,14 +176,15 @@ func TestNodeExporterTemplates_HardeningContent(t *testing.T) {
 				"NoNewPrivileges=yes",
 				"--web.listen-address=",
 				"--collector.textfile.directory=",
-				// web.telemetry-path рендерится ВСЕГДА (дефолт непустой /metrics).
+				// web.telemetry-path always renders (default is non-empty /metrics).
 				"--web.telemetry-path=/metrics",
 			},
 		},
 		{
-			// smartmon .service: Condition (на VM не стартует), привилегированный
-			// (User=root, PrivateDevices=no, DeviceAllow/CapabilityBoundingSet
-			// непустые, PrivateNetwork=yes, ReadWritePaths с textfile-каталогом).
+			// smartmon .service: has a Condition (won't start on a VM), runs
+			// privileged (User=root, PrivateDevices=no, non-empty
+			// DeviceAllow/CapabilityBoundingSet, PrivateNetwork=yes,
+			// ReadWritePaths with the textfile directory).
 			file: "node-exporter-smartmon.service.tmpl",
 			want: []string{
 				"ConditionVirtualization=no",
@@ -186,12 +197,12 @@ func TestNodeExporterTemplates_HardeningContent(t *testing.T) {
 			},
 		},
 		{
-			// smartmon .timer несёт ту же Condition, что и .service.
+			// smartmon .timer carries the same Condition as .service.
 			file: "node-exporter-smartmon.timer.tmpl",
 			want: []string{"ConditionVirtualization=no"},
 		},
 		{
-			// nvme .service: Condition по /dev/nvme*, привилегированный sandbox.
+			// nvme .service: Condition on /dev/nvme*, privileged sandbox.
 			file: "node-exporter-nvme.service.tmpl",
 			want: []string{
 				"ConditionPathExistsGlob=/dev/nvme[0-9]*",
@@ -208,8 +219,8 @@ func TestNodeExporterTemplates_HardeningContent(t *testing.T) {
 			want: []string{"ConditionPathExistsGlob=/dev/nvme[0-9]*"},
 		},
 		{
-			// ipmi .service: Condition по /dev/ipmi0, привилегированный sandbox.
-			// ProtectKernelModules=no — драйвер ipmi подгружается лениво (ТЗ).
+			// ipmi .service: Condition on /dev/ipmi0, privileged sandbox.
+			// ProtectKernelModules=no — the ipmi driver loads lazily (spec).
 			file: "node-exporter-ipmitool.service.tmpl",
 			want: []string{
 				"ConditionPathExists=/dev/ipmi0",
@@ -240,11 +251,12 @@ func TestNodeExporterTemplates_HardeningContent(t *testing.T) {
 	}
 }
 
-// renderNodeExporterServiceWithVars рендерит основной node_exporter.service.tmpl
-// с подменой части .input (поверх дефолтного набора): нужен content-тестам,
-// варьирующим collector_options/web_telemetry_path. Вариант B: эти поля —
-// operator-input, шаблон читает их `.input.<name>`, поэтому overrides мёрджатся в
-// input-подмапу. Базовый набор — nodeExporterRenderVars.
+// renderNodeExporterServiceWithVars renders the main
+// node_exporter.service.tmpl with part of .input overridden (layered on the
+// default set): needed by content tests that vary
+// collector_options/web_telemetry_path. Option B: these fields are operator
+// input, the template reads them as `.input.<name>`, so overrides merge into
+// the input submap. Base set is nodeExporterRenderVars.
 func renderNodeExporterServiceWithVars(t *testing.T, overrides map[string]any) string {
 	t.Helper()
 	engine, err := tmpl.New()
@@ -277,17 +289,18 @@ func renderNodeExporterServiceWithVars(t *testing.T, overrides map[string]any) s
 	return out
 }
 
-// TestNodeExporterService_CollectorOptionsDeterministic — ★двойная проверка ТЗ:
-// двойной range по map<string,map<string,string>> collector_options в ExecStart
-// ДЕТЕРМИНИРОВАН (Go text/template range по map обходит ключи в ОТСОРТИРОВАННОМ
-// порядке — инвариант, на который опираются и users.acl.tmpl/redis). Тест задаёт
-// заведомо не-в-лексикографическом insertion-порядке набор коллекторов и опций и
-// требует, чтобы рендер выдавал флаги строго по возрастанию имён коллекторов, а
-// внутри коллектора — по возрастанию ключей опций. Прогон повторяется, чтобы
-// исключить случайное совпадение с порядком итерации одной хеш-таблицы.
+// TestNodeExporterService_CollectorOptionsDeterministic — ★spec double-check:
+// the nested range over map<string,map<string,string>> collector_options in
+// ExecStart is DETERMINISTIC (Go text/template's range over a map visits
+// keys in SORTED order — an invariant users.acl.tmpl/redis also rely on).
+// The test seeds collectors and options in a deliberately non-lexicographic
+// insertion order and requires the render to emit flags strictly ascending
+// by collector name, and within a collector, ascending by option key. The
+// run repeats to rule out a coincidental match with one hash-table
+// iteration order.
 func TestNodeExporterService_CollectorOptionsDeterministic(t *testing.T) {
-	// Insertion-порядок намеренно перемешан (systemd до cpu; внутри systemd
-	// unit-allowlist до enable-restart). Ожидаемый рендер — отсортированный.
+	// Insertion order is deliberately scrambled (systemd before cpu; inside
+	// systemd, unit-allowlist before enable-restart). Expected render is sorted.
 	collectorOptions := map[string]any{
 		"systemd": map[string]any{
 			"unit-include":            ".+\\.service",
@@ -298,16 +311,16 @@ func TestNodeExporterService_CollectorOptionsDeterministic(t *testing.T) {
 		},
 	}
 
-	// Ожидаемый порядок флагов: коллекторы cpu<systemd, внутри systemd ключи
-	// enable-restarts-metrics<unit-include (лексикографически).
+	// Expected flag order: collectors cpu<systemd, and within systemd, keys
+	// enable-restarts-metrics<unit-include (lexicographic).
 	wantOrder := []string{
 		"--collector.cpu.info=true",
 		"--collector.systemd.enable-restarts-metrics=true",
 		"--collector.systemd.unit-include=.+\\.service",
 	}
 
-	// Несколько прогонов: range по разным экземплярам map не должен менять
-	// порядок (если бы он зависел от итерации хеш-таблицы — расходился бы).
+	// Multiple runs: ranging over different map instances shouldn't change
+	// the order (if it depended on hash-table iteration, it would diverge).
 	for run := 0; run < 8; run++ {
 		out := renderNodeExporterServiceWithVars(t, map[string]any{"collector_options": collectorOptions})
 
@@ -323,10 +336,10 @@ func TestNodeExporterService_CollectorOptionsDeterministic(t *testing.T) {
 			prev = idx
 		}
 
-		// collector_options-флаги стоят ПОСЛЕ enabled/disabled-коллекторов и
-		// ПЕРЕД gomaxprocs (позиция блока в ExecStart, ТЗ §1c). gomaxprocs=0 →
-		// флага нет, поэтому проверяем относительно --log.format (предыдущий
-		// безусловный флаг) и отсутствия gomaxprocs.
+		// collector_options flags sit AFTER the enabled/disabled collectors
+		// and BEFORE gomaxprocs (block position in ExecStart, spec §1c).
+		// gomaxprocs=0 means no flag, so we check relative to --log.format
+		// (the preceding unconditional flag) and gomaxprocs's absence.
 		logIdx := strings.Index(out, "--log.format=")
 		firstOptIdx := strings.Index(out, "--collector.cpu.info=")
 		if firstOptIdx < logIdx {
@@ -335,11 +348,12 @@ func TestNodeExporterService_CollectorOptionsDeterministic(t *testing.T) {
 	}
 }
 
-// TestNodeExporterService_ExecStartBinPath — ★регресс на «убран последний
-// vars-passthrough»: ExecStart берёт путь бинаря из file-var `.vars.bin_path`
-// (vars.yml), а не из снятого passthrough `.vars.exporter_bin`. Путь обязан
-// остаться тем же (/usr/local/bin/node_exporter) — поведение ExecStart не
-// изменилось, изменился только канал доставки (file-var напрямую).
+// TestNodeExporterService_ExecStartBinPath — ★regression guard for "removed
+// the last vars passthrough": ExecStart takes the binary path from the
+// file-var `.vars.bin_path` (vars.yml), not the retired `.vars.exporter_bin`
+// passthrough. The path must stay the same (/usr/local/bin/node_exporter) —
+// ExecStart's behavior didn't change, only the delivery channel (file-var
+// directly).
 func TestNodeExporterService_ExecStartBinPath(t *testing.T) {
 	out := renderNodeExporterTmpl(t, "node_exporter.service.tmpl")
 	if !strings.Contains(out, "ExecStart=/usr/local/bin/node_exporter ") {
@@ -348,7 +362,7 @@ func TestNodeExporterService_ExecStartBinPath(t *testing.T) {
 }
 
 // TestNodeExporterService_TelemetryPathOverride — web_telemetry_path != /metrics
-// рендерится в ExecStart как --web.telemetry-path=<override> (флаг безусловный).
+// renders in ExecStart as --web.telemetry-path=<override> (unconditional flag).
 func TestNodeExporterService_TelemetryPathOverride(t *testing.T) {
 	out := renderNodeExporterServiceWithVars(t, map[string]any{"web_telemetry_path": "/node/metrics"})
 	if !strings.Contains(out, "--web.telemetry-path=/node/metrics") {

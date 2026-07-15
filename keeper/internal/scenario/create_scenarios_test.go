@@ -10,9 +10,10 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 )
 
-// fakeCreateLoader — мок [CreateScenarioLoader]: Load отдаёт артефакт с LocalDir,
-// указывающим на тестовый снапшот (где разложены scenario/<name>/main.yml). Без
-// git-стека — ResolveCreateScenarios сканирует LocalDir через artifact.ListScenarios.
+// fakeCreateLoader is a mock [CreateScenarioLoader]: Load returns an artifact
+// with LocalDir pointing at a test snapshot (where scenario/<name>/main.yml
+// files live). No git stack — ResolveCreateScenarios scans LocalDir via
+// artifact.ListScenarios.
 type fakeCreateLoader struct {
 	localDir string
 	loadErr  error
@@ -25,14 +26,14 @@ func (f *fakeCreateLoader) Load(_ context.Context, ref artifact.ServiceRef) (*ar
 	return &artifact.ServiceArtifact{Ref: ref, LocalDir: f.localDir}, nil
 }
 
-// ReadFile — для удовлетворения [CreatePlanLoader] (ResolveCreatePlan через
-// ValidateInput). В bare/required/nil-loader-кейсах НЕ вызывается; читает
-// scenario-main с диска снапшота, если до него дошло.
+// ReadFile satisfies [CreatePlanLoader] (ResolveCreatePlan via ValidateInput).
+// Not called in bare/required/nil-loader cases; reads the scenario main file
+// off the snapshot disk when execution reaches that point.
 func (f *fakeCreateLoader) ReadFile(_ *artifact.ServiceArtifact, file string) ([]byte, error) {
 	return os.ReadFile(filepath.Join(f.localDir, file))
 }
 
-// writeScenarioFile подкладывает scenario/<name>/main.yml в снапшот-каталог.
+// writeScenarioFile drops a scenario/<name>/main.yml into the snapshot directory.
 func writeScenarioFile(t *testing.T, root, name, body string) {
 	t.Helper()
 	dir := filepath.Join(root, "scenario", name)
@@ -44,9 +45,10 @@ func writeScenarioFile(t *testing.T, root, name, body string) {
 	}
 }
 
-// TestResolveCreateScenarios_OnlyFlagged — набор = РОВНО сценарии с `create: true`
-// (Фаза 2: union с дефолтным `create` убран). Имя `create` без флага НЕ годно;
-// `create` с флагом — годно как любой другой.
+// TestResolveCreateScenarios_OnlyFlagged proves the set is EXACTLY scenarios
+// with `create: true` (Phase 2: the union with default `create` is removed).
+// The name `create` without the flag is not eligible; with the flag it's
+// eligible like any other.
 func TestResolveCreateScenarios_OnlyFlagged(t *testing.T) {
 	root := t.TempDir()
 	writeScenarioFile(t, root, "create", "name: create\ncreate: true\ntasks: []\n")
@@ -70,12 +72,13 @@ func TestResolveCreateScenarios_OnlyFlagged(t *testing.T) {
 	}
 }
 
-// TestResolveCreateScenarios_CreateNotPrivileged — сценарий `create` БЕЗ
-// `create: true` НЕ попадает в набор (Фаза 2: имя `create` не привилегировано,
-// union убран). Регресс = back-compat-union вернулся.
+// TestResolveCreateScenarios_CreateNotPrivileged proves a `create` scenario
+// WITHOUT `create: true` doesn't land in the set (Phase 2: the name `create`
+// is not privileged, the union is removed). A regression here means the
+// back-compat union came back.
 func TestResolveCreateScenarios_CreateNotPrivileged(t *testing.T) {
 	root := t.TempDir()
-	writeScenarioFile(t, root, "create", "name: create\ntasks: []\n") // без флага
+	writeScenarioFile(t, root, "create", "name: create\ntasks: []\n") // no flag
 	writeScenarioFile(t, root, "restart", "name: restart\ntasks: []\n")
 
 	set, err := ResolveCreateScenarios(context.Background(), &fakeCreateLoader{localDir: root}, artifact.ServiceRef{Name: "svc"})
@@ -90,8 +93,9 @@ func TestResolveCreateScenarios_CreateNotPrivileged(t *testing.T) {
 	}
 }
 
-// TestResolveCreateScenarios_EmptyWhenNoFlags — сервис без единого `create: true`
-// → ПУСТОЙ набор (валидно: caller трактует как bare-инкарнацию).
+// TestResolveCreateScenarios_EmptyWhenNoFlags proves a service with no
+// `create: true` at all yields an EMPTY set (valid: caller treats it as a
+// bare incarnation).
 func TestResolveCreateScenarios_EmptyWhenNoFlags(t *testing.T) {
 	root := t.TempDir()
 	writeScenarioFile(t, root, "restart", "name: restart\ntasks: []\n")
@@ -106,8 +110,8 @@ func TestResolveCreateScenarios_EmptyWhenNoFlags(t *testing.T) {
 	}
 }
 
-// TestResolveCreateScenarios_LoadError — сбой загрузки снапшота пробрасывается
-// (handler → 500/502), набор не угадывается.
+// TestResolveCreateScenarios_LoadError proves a snapshot load failure
+// propagates (handler → 500/502) rather than the set being guessed.
 func TestResolveCreateScenarios_LoadError(t *testing.T) {
 	sentinel := errors.New("clone failed")
 	_, err := ResolveCreateScenarios(context.Background(), &fakeCreateLoader{loadErr: sentinel}, artifact.ServiceRef{Name: "svc"})
@@ -116,8 +120,9 @@ func TestResolveCreateScenarios_LoadError(t *testing.T) {
 	}
 }
 
-// TestValidateCreateScenarioChoice_EmptyHasScenarios_Required — пустой выбор при
-// НЕПУСТОМ наборе → ErrCreateScenarioRequired (handler → 422): выбор обязателен.
+// TestValidateCreateScenarioChoice_EmptyHasScenarios_Required proves an empty
+// choice against a NON-EMPTY set yields ErrCreateScenarioRequired (handler →
+// 422): a choice is mandatory.
 func TestValidateCreateScenarioChoice_EmptyHasScenarios_Required(t *testing.T) {
 	root := t.TempDir()
 	writeScenarioFile(t, root, "create", "name: create\ncreate: true\ntasks: []\n")
@@ -135,8 +140,9 @@ func TestValidateCreateScenarioChoice_EmptyHasScenarios_Required(t *testing.T) {
 	}
 }
 
-// TestValidateCreateScenarioChoice_EmptyNoScenarios_Bare — пустой выбор при
-// ПУСТОМ наборе → bare=true, name="" (caller создаёт bare-инкарнацию).
+// TestValidateCreateScenarioChoice_EmptyNoScenarios_Bare proves an empty
+// choice against an EMPTY set yields bare=true, name="" (caller creates a
+// bare incarnation).
 func TestValidateCreateScenarioChoice_EmptyNoScenarios_Bare(t *testing.T) {
 	root := t.TempDir()
 	writeScenarioFile(t, root, "restart", "name: restart\ntasks: []\n")
@@ -153,8 +159,8 @@ func TestValidateCreateScenarioChoice_EmptyNoScenarios_Bare(t *testing.T) {
 	}
 }
 
-// TestValidateCreateScenarioChoice_FlaggedOK — явный выбор сценария с `create: true`
-// проходит и возвращается как есть (bare=false).
+// TestValidateCreateScenarioChoice_FlaggedOK proves an explicit choice of a
+// scenario with `create: true` passes and is returned as-is (bare=false).
 func TestValidateCreateScenarioChoice_FlaggedOK(t *testing.T) {
 	root := t.TempDir()
 	writeScenarioFile(t, root, "create", "name: create\ncreate: true\ntasks: []\n")
@@ -172,8 +178,9 @@ func TestValidateCreateScenarioChoice_FlaggedOK(t *testing.T) {
 	}
 }
 
-// TestValidateCreateScenarioChoice_NotInSet — выбор сценария ВНЕ create-набора
-// (operational add_user) → ErrCreateScenarioNotEligible (handler → 422).
+// TestValidateCreateScenarioChoice_NotInSet proves choosing a scenario
+// OUTSIDE the create set (operational add_user) yields
+// ErrCreateScenarioNotEligible (handler → 422).
 func TestValidateCreateScenarioChoice_NotInSet(t *testing.T) {
 	root := t.TempDir()
 	writeScenarioFile(t, root, "create", "name: create\ncreate: true\ntasks: []\n")
@@ -185,13 +192,14 @@ func TestValidateCreateScenarioChoice_NotInSet(t *testing.T) {
 	}
 }
 
-// TestValidateCreateScenarioChoice_CreateWithoutFlag_NotEligible — явный выбор
-// `create`, который НЕ несёт `create: true` → ErrCreateScenarioNotEligible
-// (Фаза 2: имя `create` больше не привилегировано). Регресс = шорткат `chosen ==
-// CreateScenarioName → return` вернулся.
+// TestValidateCreateScenarioChoice_CreateWithoutFlag_NotEligible proves an
+// explicit choice of `create` that does NOT carry `create: true` yields
+// ErrCreateScenarioNotEligible (Phase 2: the name `create` is no longer
+// privileged). A regression here means the `chosen == CreateScenarioName →
+// return` shortcut came back.
 func TestValidateCreateScenarioChoice_CreateWithoutFlag_NotEligible(t *testing.T) {
 	root := t.TempDir()
-	writeScenarioFile(t, root, "create", "name: create\ntasks: []\n") // без флага
+	writeScenarioFile(t, root, "create", "name: create\ntasks: []\n") // no flag
 	writeScenarioFile(t, root, "create_cluster", "name: create_cluster\ncreate: true\ntasks: []\n")
 
 	_, _, err := ValidateCreateScenarioChoice(context.Background(), &fakeCreateLoader{localDir: root}, artifact.ServiceRef{Name: "svc"}, "create")
@@ -200,8 +208,9 @@ func TestValidateCreateScenarioChoice_CreateWithoutFlag_NotEligible(t *testing.T
 	}
 }
 
-// TestValidateCreateScenarioChoice_BadName — мусорное/невалидное имя сценария →
-// ErrCreateScenarioNotEligible (не лезем в резолв с traversal-именем).
+// TestValidateCreateScenarioChoice_BadName proves a garbage/invalid scenario
+// name yields ErrCreateScenarioNotEligible (never reach the resolve step with
+// a traversal name).
 func TestValidateCreateScenarioChoice_BadName(t *testing.T) {
 	root := t.TempDir()
 	writeScenarioFile(t, root, "create", "name: create\ncreate: true\ntasks: []\n")
@@ -212,10 +221,11 @@ func TestValidateCreateScenarioChoice_BadName(t *testing.T) {
 	}
 }
 
-// --- ResolveCreatePlan (R2: общий резолв REST CreateTyped + MCP create) -----
+// --- ResolveCreatePlan (R2: shared resolve for REST CreateTyped + MCP create) ---
 
-// recordingPreflighter — стаб AssertPreflighter: учитывает факт вызова (gotSpec) и
-// опц. возвращает preErr. Для проверки гейта PreflightAssert в ResolveCreatePlan.
+// recordingPreflighter is an AssertPreflighter stub: records whether it was
+// called (gotSpec) and optionally returns preErr. Used to check the
+// PreflightAssert gate in ResolveCreatePlan.
 type recordingPreflighter struct {
 	called  bool
 	gotSpec RunSpec
@@ -228,14 +238,15 @@ func (p *recordingPreflighter) PreflightAssert(_ context.Context, spec RunSpec) 
 	return p.preErr
 }
 
-// noPreflighter — НЕ реализует AssertPreflighter (нет метода PreflightAssert):
-// зеркало ScenarioStarter-фейка, при котором гейт no-op.
+// noPreflighter does NOT implement AssertPreflighter (no PreflightAssert
+// method): mirrors a ScenarioStarter fake, where the gate becomes a no-op.
 type noPreflighter struct{}
 
-// TestResolveCreatePlan_NilLoader_StubPlan — loader==nil (stub-режим REST): план =
-// `create` / не bare / auto_create=true (legacy-поведение без резолва набора),
-// PreflightAssert ВСЁ РАВНО зовётся (вне loader-ветки, как в исходных handler-ах) с
-// именем инкарнации и дефолтным `create`.
+// TestResolveCreatePlan_NilLoader_StubPlan covers loader==nil (REST stub
+// mode): plan = `create` / not bare / auto_create=true (legacy behavior, no
+// set resolve), and PreflightAssert is STILL called (outside the loader
+// branch, as in the original handlers) with the incarnation name and the
+// default `create`.
 func TestResolveCreatePlan_NilLoader_StubPlan(t *testing.T) {
 	pf := &recordingPreflighter{}
 	plan, err := ResolveCreatePlan(context.Background(), nil, pf, "redis-prod",
@@ -252,7 +263,7 @@ func TestResolveCreatePlan_NilLoader_StubPlan(t *testing.T) {
 	if !plan.AutoCreate {
 		t.Error("AutoCreate = false, want true (stub-дефолт)")
 	}
-	// PreflightAssert вызван с именем инкарнации и stub-сценарием `create`.
+	// PreflightAssert is called with the incarnation name and the stub `create` scenario.
 	if !pf.called {
 		t.Fatal("PreflightAssert НЕ вызван при nil-loader (регресс: исходный handler звал его вне loader-ветки)")
 	}
@@ -264,10 +275,11 @@ func TestResolveCreatePlan_NilLoader_StubPlan(t *testing.T) {
 	}
 }
 
-// TestResolveCreatePlan_AssertFails_Propagated — preflighter возвращает
-// ErrAssertFailed → ResolveCreatePlan пробрасывает её (caller маппит в 422), план
-// НЕ возвращается. nil-loader-путь (createScenario=`create`, autoCreate=true → гейт
-// активен), без ValidateInput-стека.
+// TestResolveCreatePlan_AssertFails_Propagated proves that when the
+// preflighter returns ErrAssertFailed, ResolveCreatePlan propagates it
+// (caller maps to 422) and returns no plan. nil-loader path
+// (createScenario=`create`, autoCreate=true → gate active), no ValidateInput
+// stack involved.
 func TestResolveCreatePlan_AssertFails_Propagated(t *testing.T) {
 	pf := &recordingPreflighter{preErr: ErrAssertFailed}
 	_, err := ResolveCreatePlan(context.Background(), nil, pf, "redis-prod",
@@ -277,9 +289,10 @@ func TestResolveCreatePlan_AssertFails_Propagated(t *testing.T) {
 	}
 }
 
-// TestResolveCreatePlan_NoPreflighter_NoOp — preflighter НЕ реализует
-// AssertPreflighter (ScenarioStarter-фейк) → гейт no-op, план возвращается без
-// ошибки. Регресс = type-assertion упал бы / panic.
+// TestResolveCreatePlan_NoPreflighter_NoOp proves that when the preflighter
+// does NOT implement AssertPreflighter (ScenarioStarter fake), the gate is a
+// no-op and the plan returns without error. A regression here would mean the
+// type assertion failed / panicked.
 func TestResolveCreatePlan_NoPreflighter_NoOp(t *testing.T) {
 	plan, err := ResolveCreatePlan(context.Background(), nil, noPreflighter{}, "redis-prod",
 		artifact.ServiceRef{Name: "redis", Ref: "v1"}, "", nil, "archon-alice")
@@ -291,13 +304,13 @@ func TestResolveCreatePlan_NoPreflighter_NoOp(t *testing.T) {
 	}
 }
 
-// TestResolveCreatePlan_Bare_NoPreflight — пустой набор (нет create:true) + пустой
-// выбор → bare-план (BareNoScenario=true), PreflightAssert НЕ зовётся (гейт
-// !bare). ValidateInput тоже пропущен (нет ReadFile-вызова — fakeCreateLoader без
-// ReadFile это подтверждает).
+// TestResolveCreatePlan_Bare_NoPreflight proves an empty set (no create:true)
+// plus an empty choice yields a bare plan (BareNoScenario=true),
+// PreflightAssert is NOT called (gate is !bare), and ValidateInput is also
+// skipped (no ReadFile call — confirmed by fakeCreateLoader having no ReadFile).
 func TestResolveCreatePlan_Bare_NoPreflight(t *testing.T) {
 	root := t.TempDir()
-	writeScenarioFile(t, root, "restart", "name: restart\ntasks: []\n") // нет create:true
+	writeScenarioFile(t, root, "restart", "name: restart\ntasks: []\n") // no create:true
 
 	pf := &recordingPreflighter{}
 	plan, err := ResolveCreatePlan(context.Background(), &fakeCreateLoader{localDir: root}, pf,
@@ -316,9 +329,10 @@ func TestResolveCreatePlan_Bare_NoPreflight(t *testing.T) {
 	}
 }
 
-// TestResolveCreatePlan_Required_Error — непустой набор (create:true) + пустой
-// выбор → ErrCreateScenarioRequired (паритет ValidateCreateScenarioChoice),
-// PreflightAssert НЕ зовётся (ошибка ДО гейта).
+// TestResolveCreatePlan_Required_Error proves a non-empty set (create:true)
+// plus an empty choice yields ErrCreateScenarioRequired (parity with
+// ValidateCreateScenarioChoice), and PreflightAssert is NOT called (the error
+// happens before the gate).
 func TestResolveCreatePlan_Required_Error(t *testing.T) {
 	root := t.TempDir()
 	writeScenarioFile(t, root, "create", "name: create\ncreate: true\ntasks: []\n")

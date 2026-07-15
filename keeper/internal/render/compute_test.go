@@ -9,12 +9,13 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// compute: — scenario-level вычисляемые vars (ADR-009 amendment 2026-06-23):
-// резолв ОДИН раз в рун-уровневом контексте (без soulprint), результат
-// `compute.<name>` виден в apply.input и в state_changes БИТ-В-БИТ (drift снят).
+// compute: — scenario-level computed vars (ADR-009 amendment 2026-06-23):
+// resolved ONCE in a run-level context (without soulprint), the result
+// `compute.<name>` is visible in apply.input and state_changes BIT-FOR-BIT (drift
+// eliminated).
 
-// resolveCompute: цепочка (compute ссылается на ранний compute) + рун-уровневый
-// контекст input/essence. Порядок объявления значим.
+// resolveCompute: a chain (compute references an earlier compute) plus a
+// run-level input/essence context. Declaration order matters.
 func TestResolveCompute_ChainAndContext(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "create",
@@ -49,9 +50,9 @@ func TestResolveCompute_ChainAndContext(t *testing.T) {
 	}
 }
 
-// ★ Барьер изоляции #2: compute-выражение, ссылающееся на soulprint.self,
-// падает с no-such-key — резолв-контекст compute рун-уровневый (без soulprint),
-// поэтому compute host-инвариантна и безопасна в state_changes.
+// ★ Isolation barrier #2: a compute expression referencing soulprint.self fails
+// with no-such-key — compute's resolve context is run-level (no soulprint), so
+// compute is host-invariant and safe in state_changes.
 func TestResolveCompute_BarrierSoulprint(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "create",
@@ -75,9 +76,9 @@ func TestResolveCompute_BarrierSoulprint(t *testing.T) {
 	}
 }
 
-// compute доступен в apply.input (через params/where рендер) И в state_changes,
-// одно и то же значение (drift-guard снят самим compute). Прогон через Render +
-// RenderStateOps на одном RenderInput.
+// compute is available in apply.input (through the params/where render) AND in
+// state_changes, the same value (the drift guard is eliminated by compute itself).
+// Run through Render + RenderStateOps on one RenderInput.
 func TestCompute_SameValueInTasksAndStateChanges(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "create",
@@ -135,10 +136,10 @@ func TestCompute_SameValueInTasksAndStateChanges(t *testing.T) {
 	}
 }
 
-// ★ Барьер изоляции #1: compute НЕ протекает в изолированный destiny-проход.
-// Структурный: destinyIn (destiny.go:99-107) НЕ несёт поле Compute, поэтому
-// resolveCompute для destiny-входа даёт nil — `compute.<name>` внутри destiny =
-// штатный no-such-key.
+// ★ Isolation barrier #1: compute does NOT leak into the isolated destiny pass.
+// Structural: destinyIn (destiny.go:99-107) carries no Compute field, so
+// resolveCompute for a destiny input yields nil — `compute.<name>` inside destiny
+// is a plain no-such-key.
 func TestCompute_NotLeakingIntoDestiny(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	destinyIn := RenderInput{
@@ -155,21 +156,22 @@ func TestCompute_NotLeakingIntoDestiny(t *testing.T) {
 	}
 }
 
-// ★ Барьер изоляции #1 (ПОЗИТИВНЫЙ, end-to-end): сценарий с НЕпустым compute: +
-// apply:destiny, чей destiny-шаг ссылается на ${ compute.x } — полный Render
-// падает no-such-key (destinyIn.Compute не пробрасывается, destiny.go:99-107).
-// Доказывает структурную изоляцию НА РЕАЛЬНОМ проходе (не только resolveCompute
-// в вакууме): родитель compute резолвит (apply.input компонует значение), а
-// внутри destiny `compute.*` недоступен — значение НЕ доезжает.
+// ★ Isolation barrier #1 (POSITIVE, end-to-end): a scenario with a NON-empty
+// compute: plus apply:destiny, whose destiny step references ${ compute.x } — a
+// full Render fails with no-such-key (destinyIn.Compute isn't forwarded,
+// destiny.go:99-107). Proves structural isolation on a REAL pass (not just
+// resolveCompute in a vacuum): the parent resolves compute (apply.input composes
+// the value), but inside destiny `compute.*` is unavailable — the value does NOT
+// reach it.
 func TestCompute_NotLeakingIntoDestiny_RenderThrough(t *testing.T) {
-	// destiny ссылается на compute.cfg, которого в изолированном env нет.
+	// destiny references compute.cfg, which doesn't exist in the isolated env.
 	leaky := flatDestiny()
 	leaky.Tasks[0].Module.Params["content"] = "${ compute.cfg }"
 	res := &stubDestinyResolver{resolved: leaky}
 
 	scenario := applyScenario("pilot-flat", map[string]any{"marker_file": "/m", "marker_payload": "p"})
-	// НЕпустой compute: на родителе — он резолвится в scenario-scope, но в destiny
-	// НЕ пробрасывается.
+	// A NON-empty compute: on the parent — it resolves in scenario-scope, but is
+	// NOT forwarded into destiny.
 	scenario.Compute = config.ComputeBlock{
 		{Name: "cfg", Value: "${ merge(essence.base, {}) }"},
 	}
@@ -188,16 +190,16 @@ func TestCompute_NotLeakingIntoDestiny_RenderThrough(t *testing.T) {
 	}
 }
 
-// ★ Forward-reference запрещён: compute[i] ссылается на compute[j], объявленный
-// ПОЗЖЕ → no-such-key (резолв строго в порядке объявления, acc копит только уже
-// вычисленное). Доказывает, что forward-ref не «подхватывает» позднее значение
-// тихо, а честно падает.
+// ★ Forward-reference forbidden: compute[i] references compute[j] declared LATER
+// → no-such-key (resolution follows declaration order strictly, acc only
+// accumulates what's already computed). Proves that a forward-ref doesn't
+// silently "pick up" the later value, but fails honestly.
 func TestResolveCompute_ForwardReferenceIsNoSuchKey(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "create",
 		Compute: config.ComputeBlock{
-			// early ссылается на late, объявленный ниже — на момент резолва early
-			// в acc его ещё нет.
+			// early references late, declared below — at the time early is resolved,
+			// it's not yet in acc.
 			{Name: "early", Value: "${ compute.late }"},
 			{Name: "late", Value: "ready"},
 		},
@@ -217,14 +219,14 @@ func TestResolveCompute_ForwardReferenceIsNoSuchKey(t *testing.T) {
 	}
 }
 
-// ★ Битый CEL внутри compute-выражения → ошибка обёрнута как render: compute.<name>:
-// (а не паника/тихий пропуск). Доказывает, что синтаксическая ошибка выражения
-// атрибутируется конкретной compute-записи.
+// ★ A broken CEL expression inside compute → the error is wrapped as
+// render: compute.<name>: (not a panic/silent skip). Proves the expression's
+// syntax error is attributed to the specific compute entry.
 func TestResolveCompute_BrokenCELWrapped(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "create",
 		Compute: config.ComputeBlock{
-			{Name: "bad", Value: "${ 1 + + }"}, // синтаксически невалидное CEL
+			{Name: "bad", Value: "${ 1 + + }"}, // syntactically invalid CEL
 		},
 	}
 	p := NewPipeline(nil, newEngine(t), nil, nil)

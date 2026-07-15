@@ -15,23 +15,23 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// noMatch — заглушка StateMatchFunc для тестов, не использующих match-предикат
-// (set-only / map-add по key). Вызов = тестовый баг (помечаем t.Fatal через
-// замыкание не получится — возвращаем ошибку, которую merge пробросит).
+// noMatch — stub StateMatchFunc for tests that don't exercise a match
+// predicate (set-only / map-add by key). A call means a test bug (we can't
+// t.Fatal through a closure, so we return an error that merge propagates).
 func noMatch(string, any, any) (bool, error) {
 	return false, errInvariant
 }
 
-// noOpEval — заглушка StateOpEvalFunc для тестов без modify/remove. Вызов =
-// тестовый баг (set/add не должны звать opEval).
+// noOpEval — stub StateOpEvalFunc for tests without modify/remove. A call
+// means a test bug (set/add must never invoke opEval).
 func noOpEval(string, map[string]any, map[string]any, bool) (any, error) {
 	return nil, errInvariant
 }
 
 var errInvariant = errors.New("matchEval/opEval не должен вызываться в этом тесте")
 
-// opEvalForTest строит реальный render.Pipeline.EvalStateOpExpr (CEL для
-// modify/remove match+patch с полным scenario-контекстом + биндингами элемента).
+// opEvalForTest builds a real render.Pipeline.EvalStateOpExpr (CEL for
+// modify/remove match+patch with the full scenario context + element bindings).
 func opEvalForTest(t *testing.T) render.StateOpEvalFunc {
 	t.Helper()
 	eng, err := cel.New()
@@ -48,7 +48,7 @@ func setOp(field string, val any) render.RenderedOp {
 func TestMergeStateChanges_EmptyNoop(t *testing.T) {
 	before := map[string]any{"users": []any{"alice"}, "count": float64(1)}
 
-	// Пустой ops → state не меняется (deep-copy).
+	// Empty ops → state unchanged (deep-copy).
 	after, err := mergeStateChanges(before, nil, nil, noMatch, noOpEval)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
@@ -60,7 +60,7 @@ func TestMergeStateChanges_EmptyNoop(t *testing.T) {
 		t.Errorf("count = %v", after["count"])
 	}
 
-	// Мутация копии не задевает оригинал (deep-copy, не ссылка).
+	// Mutating the copy doesn't touch the original (deep-copy, not a reference).
 	after["count"] = float64(99)
 	if before["count"] != float64(1) {
 		t.Errorf("before mutated through copy: %v", before["count"])
@@ -70,8 +70,8 @@ func TestMergeStateChanges_EmptyNoop(t *testing.T) {
 func TestMergeStateChanges_AppliesSets(t *testing.T) {
 	before := map[string]any{"existing": "keep", "count": float64(1)}
 	ops := []render.RenderedOp{
-		setOp("greeting_file", "/tmp/soul-stack-hello"), // новое поле
-		setOp("count", float64(42)),                     // перезапись существующего
+		setOp("greeting_file", "/tmp/soul-stack-hello"), // new field
+		setOp("count", float64(42)),                     // overwrite existing
 	}
 	after, err := mergeStateChanges(before, ops, nil, noMatch, noOpEval)
 	if err != nil {
@@ -87,7 +87,7 @@ func TestMergeStateChanges_AppliesSets(t *testing.T) {
 	if after["existing"] != "keep" {
 		t.Errorf("existing = %v, want keep (untouched fields preserved)", after["existing"])
 	}
-	// Оригинал не задет.
+	// Original untouched.
 	if before["count"] != float64(1) {
 		t.Errorf("before mutated: count = %v", before["count"])
 	}
@@ -108,7 +108,7 @@ func TestMergeStateChanges_NilBefore(t *testing.T) {
 		t.Errorf("after = %+v, want empty", after)
 	}
 
-	// nil before + непустой set → state из set-операции.
+	// nil before + non-empty set → state comes from the set op.
 	after, err = mergeStateChanges(nil, []render.RenderedOp{setOp("x", "y")}, nil, noMatch, noOpEval)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
@@ -118,11 +118,12 @@ func TestMergeStateChanges_NilBefore(t *testing.T) {
 	}
 }
 
-// --- Guard-тесты новой грамматики state_changes (add + on_conflict). Паттерн
-// тиражируется (modify/remove следующим батчем), цена ошибки умножается. ---
+// --- Guard tests for the new state_changes grammar (add + on_conflict). The
+// pattern is replicated (modify/remove in the next batch), so the cost of a mistake multiplies. ---
 
-// redisHostsSchema — state_schema redis-cluster (фрагмент: redis_hosts — array).
-// Источник материализации типа коллекции для add в отсутствующее поле.
+// redisHostsSchema — a redis-cluster state_schema fragment (redis_hosts is an
+// array). The source of collection-type materialization for add into a
+// missing field.
 var redisHostsSchema = map[string]any{
 	"type": "object",
 	"properties": map[string]any{
@@ -137,7 +138,7 @@ var redisHostsSchema = map[string]any{
 	},
 }
 
-// matchEvalForTest строит реальный render.Pipeline.EvalStateMatch (CEL elem/value).
+// matchEvalForTest builds a real render.Pipeline.EvalStateMatch (CEL elem/value).
 func matchEvalForTest(t *testing.T) render.StateMatchFunc {
 	t.Helper()
 	eng, err := cel.New()
@@ -157,9 +158,9 @@ func addRedisHost(sid, role string, onConflict config.OnConflict) render.Rendere
 	}
 }
 
-// TestMergeStateChanges_AddNewSID_Grows — add нового SID растит redis_hosts на 1
-// (★ закрытие латентного бага: старая appends-форма игнорировалась, redis_hosts
-// не рос).
+// TestMergeStateChanges_AddNewSID_Grows — add of a new SID grows redis_hosts
+// by 1 (★ closes a latent bug: the old appends form was ignored, redis_hosts
+// never grew).
 func TestMergeStateChanges_AddNewSID_Grows(t *testing.T) {
 	before := map[string]any{"redis_hosts": []any{
 		map[string]any{"sid": "host-a", "role": "primary"},
@@ -178,15 +179,15 @@ func TestMergeStateChanges_AddNewSID_Grows(t *testing.T) {
 	if newHost["sid"] != "host-b" || newHost["role"] != "replica" {
 		t.Errorf("новый элемент = %+v, want {sid:host-b, role:replica}", newHost)
 	}
-	// Оригинал не задет (deep-copy).
+	// Original untouched (deep-copy).
 	if len(before["redis_hosts"].([]any)) != 1 {
 		t.Errorf("before мутирован: redis_hosts len = %d", len(before["redis_hosts"].([]any)))
 	}
 }
 
-// TestMergeStateChanges_AddExistingSID_Idempotent — ★ ГЛАВНЫЙ ИНВАРИАНТ: add
-// существующего SID при on_conflict=skip (default) → NO-OP, длина не меняется
-// («добавляет если нет»). Идемпотентность повторного прогона add_replica.
+// TestMergeStateChanges_AddExistingSID_Idempotent — ★ MAIN INVARIANT: add of an
+// existing SID with on_conflict=skip (default) → NO-OP, length unchanged
+// ("add if absent"). Idempotency for a repeated add_replica run.
 func TestMergeStateChanges_AddExistingSID_Idempotent(t *testing.T) {
 	before := map[string]any{"redis_hosts": []any{
 		map[string]any{"sid": "host-a", "role": "primary"},
@@ -204,8 +205,8 @@ func TestMergeStateChanges_AddExistingSID_Idempotent(t *testing.T) {
 	}
 }
 
-// TestMergeStateChanges_AddExistingSID_ErrorBlocks — on_conflict=error на
-// существующем → ошибка (run.go переведёт в error_locked, state НЕ коммитнут).
+// TestMergeStateChanges_AddExistingSID_ErrorBlocks — on_conflict=error on an
+// existing element → error (run.go maps it to error_locked, state NOT committed).
 func TestMergeStateChanges_AddExistingSID_ErrorBlocks(t *testing.T) {
 	before := map[string]any{"redis_hosts": []any{
 		map[string]any{"sid": "host-b", "role": "replica"},
@@ -218,8 +219,8 @@ func TestMergeStateChanges_AddExistingSID_ErrorBlocks(t *testing.T) {
 	}
 }
 
-// TestMergeStateChanges_AddReplaceExisting — on_conflict=replace перезаписывает
-// существующий элемент новым value (длина не меняется).
+// TestMergeStateChanges_AddReplaceExisting — on_conflict=replace overwrites
+// the existing element with the new value (length unchanged).
 func TestMergeStateChanges_AddReplaceExisting(t *testing.T) {
 	before := map[string]any{"redis_hosts": []any{
 		map[string]any{"sid": "host-b", "role": "replica"},
@@ -239,10 +240,11 @@ func TestMergeStateChanges_AddReplaceExisting(t *testing.T) {
 	}
 }
 
-// TestMergeStateChanges_AddMaterializesFromSchema — add в ОТСУТСТВУЮЩЕЕ поле:
-// коллекция материализуется нужного типа из state_schema (redis_hosts: array → list).
+// TestMergeStateChanges_AddMaterializesFromSchema — add into a MISSING field:
+// the collection materializes with the right type from state_schema
+// (redis_hosts: array → list).
 func TestMergeStateChanges_AddMaterializesFromSchema(t *testing.T) {
-	before := map[string]any{"redis_version": "7.2"} // redis_hosts отсутствует
+	before := map[string]any{"redis_version": "7.2"} // redis_hosts absent
 	ops := []render.RenderedOp{addRedisHost("host-a", "primary", config.OnConflictSkip)}
 
 	after, err := mergeStateChanges(before, ops, redisHostsSchema, matchEvalForTest(t), noOpEval)
@@ -258,8 +260,8 @@ func TestMergeStateChanges_AddMaterializesFromSchema(t *testing.T) {
 	}
 }
 
-// TestMergeStateChanges_AddMapByKey — add в map-коллекцию по key (redis_users):
-// материализация object из schema, идемпотентность по key.
+// TestMergeStateChanges_AddMapByKey — add into a map collection by key
+// (redis_users): object materialization from schema, idempotency by key.
 func TestMergeStateChanges_AddMapByKey(t *testing.T) {
 	addUser := func(key string, oc config.OnConflict) render.RenderedOp {
 		return render.RenderedOp{
@@ -267,7 +269,7 @@ func TestMergeStateChanges_AddMapByKey(t *testing.T) {
 			Value: map[string]any{"acl": "+@read", "state": "on"}, OnConflict: oc,
 		}
 	}
-	before := map[string]any{} // redis_users отсутствует
+	before := map[string]any{} // redis_users absent
 
 	after, err := mergeStateChanges(before, []render.RenderedOp{addUser("alice", config.OnConflictSkip)}, redisHostsSchema, matchEvalForTest(t), noOpEval)
 	if err != nil {
@@ -281,7 +283,7 @@ func TestMergeStateChanges_AddMapByKey(t *testing.T) {
 		t.Fatal("ключ alice не добавлен")
 	}
 
-	// Повтор того же key (skip) → no-op (длина map не меняется).
+	// Repeating the same key (skip) → no-op (map length unchanged).
 	after2, err := mergeStateChanges(after, []render.RenderedOp{addUser("alice", config.OnConflictSkip)}, redisHostsSchema, matchEvalForTest(t), noOpEval)
 	if err != nil {
 		t.Fatalf("merge2: %v", err)
@@ -291,10 +293,10 @@ func TestMergeStateChanges_AddMapByKey(t *testing.T) {
 	}
 }
 
-// --- Guard-тесты modify/remove/expect (новые глаголы ADR-057). ---
+// --- Guard tests for modify/remove/expect (new verbs, ADR-057). ---
 
-// modifyHostsOp строит modify-операцию по redis_hosts (list of objects) с
-// предвычисленным Context (input/vars) для merge-time CEL.
+// modifyHostsOp builds a modify op on redis_hosts (list of objects) with a
+// precomputed Context (input/vars) for merge-time CEL.
 func modifyHostsOp(match string, patch map[string]any, ctx map[string]any, expect config.Expect) render.RenderedOp {
 	return render.RenderedOp{
 		Verb: config.VerbModify, Field: "redis_hosts",
@@ -302,8 +304,8 @@ func modifyHostsOp(match string, patch map[string]any, ctx map[string]any, expec
 	}
 }
 
-// TestMergeStateChanges_ModifyAllByPredicate — ★ modify ВСЕХ подходящих под
-// предикат (3 реплики role→standby) → все 3 изменены, primary цел.
+// TestMergeStateChanges_ModifyAllByPredicate — ★ modify of ALL elements
+// matching the predicate (3 replicas role→standby) → all 3 changed, primary untouched.
 func TestMergeStateChanges_ModifyAllByPredicate(t *testing.T) {
 	before := map[string]any{"redis_hosts": []any{
 		map[string]any{"sid": "host-a", "role": "primary"},
@@ -330,13 +332,13 @@ func TestMergeStateChanges_ModifyAllByPredicate(t *testing.T) {
 	if hosts[0].(map[string]any)["role"] != "primary" {
 		t.Errorf("primary задет: %+v (не подходил под предикат)", hosts[0])
 	}
-	// Оригинал не задет (deep-copy + per-element copy в applyPatch).
+	// Original untouched (deep-copy + per-element copy in applyPatch).
 	if before["redis_hosts"].([]any)[1].(map[string]any)["role"] != "replica" {
 		t.Errorf("before мутирован")
 	}
 }
 
-// TestMergeStateChanges_ModifyEmptyMatch_Noop — empty-match → no-op (не ошибка).
+// TestMergeStateChanges_ModifyEmptyMatch_Noop — empty match → no-op (not an error).
 func TestMergeStateChanges_ModifyEmptyMatch_Noop(t *testing.T) {
 	before := map[string]any{"redis_hosts": []any{
 		map[string]any{"sid": "host-a", "role": "primary"},
@@ -352,8 +354,8 @@ func TestMergeStateChanges_ModifyEmptyMatch_Noop(t *testing.T) {
 	}
 }
 
-// TestMergeStateChanges_ModifyNestedPatch — ★ patch точечного пути (config.x) →
-// вложенное поле обновлено, СОСЕДНИЕ поля записи целы (merge, не перезапись).
+// TestMergeStateChanges_ModifyNestedPatch — ★ a dotted-path patch (config.x) →
+// the nested field is updated, SIBLING fields stay intact (merge, not overwrite).
 func TestMergeStateChanges_ModifyNestedPatch(t *testing.T) {
 	before := map[string]any{"redis_hosts": []any{
 		map[string]any{
@@ -382,8 +384,8 @@ func TestMergeStateChanges_ModifyNestedPatch(t *testing.T) {
 	}
 }
 
-// TestMergeStateChanges_ModifyMapByKey — modify map-коллекции (redis_users):
-// match видит key/value, patch мержится в значение записи.
+// TestMergeStateChanges_ModifyMapByKey — modify of a map collection
+// (redis_users): match sees key/value, patch merges into the entry's value.
 func TestMergeStateChanges_ModifyMapByKey(t *testing.T) {
 	before := map[string]any{"redis_users": map[string]any{
 		"alice": map[string]any{"acl": "+@read", "state": "on"},
@@ -410,8 +412,8 @@ func TestMergeStateChanges_ModifyMapByKey(t *testing.T) {
 	}
 }
 
-// TestMergeStateChanges_RemoveAllByPredicate — remove всех подходящих; прочие
-// целы. remove empty-match → no-op.
+// TestMergeStateChanges_RemoveAllByPredicate — remove of all matches; others
+// untouched. remove with an empty match → no-op.
 func TestMergeStateChanges_RemoveAllByPredicate(t *testing.T) {
 	before := map[string]any{"redis_hosts": []any{
 		map[string]any{"sid": "host-a", "role": "primary"},
@@ -429,7 +431,7 @@ func TestMergeStateChanges_RemoveAllByPredicate(t *testing.T) {
 		t.Fatalf("★ remove реплик: осталось %+v, want [host-a]", hosts)
 	}
 
-	// empty-match (нет реплик) → no-op.
+	// empty match (no replicas) → no-op.
 	noop, err := mergeStateChanges(after, []render.RenderedOp{op}, redisHostsSchema, noMatch, opEvalForTest(t))
 	if err != nil {
 		t.Fatalf("★ remove empty-match должен быть no-op: %v", err)
@@ -439,7 +441,7 @@ func TestMergeStateChanges_RemoveAllByPredicate(t *testing.T) {
 	}
 }
 
-// TestMergeStateChanges_RemoveMapByKey — remove из map-коллекции по предикату key.
+// TestMergeStateChanges_RemoveMapByKey — remove from a map collection by a key predicate.
 func TestMergeStateChanges_RemoveMapByKey(t *testing.T) {
 	before := map[string]any{"redis_users": map[string]any{
 		"alice": map[string]any{"acl": "+@read"},
@@ -461,8 +463,8 @@ func TestMergeStateChanges_RemoveMapByKey(t *testing.T) {
 	}
 }
 
-// TestMergeStateChanges_ExpectOne — ★ expect: one зацепил 2 → ошибка (state НЕ
-// коммитнут); зацепил 1 → ок.
+// TestMergeStateChanges_ExpectOne — ★ expect: one matching 2 elements → error
+// (state NOT committed); matching 1 → ok.
 func TestMergeStateChanges_ExpectOne(t *testing.T) {
 	twoReplicas := map[string]any{"redis_hosts": []any{
 		map[string]any{"sid": "host-b", "role": "replica"},
@@ -473,7 +475,7 @@ func TestMergeStateChanges_ExpectOne(t *testing.T) {
 		t.Fatal("★ expect: one зацепил 2 — ожидали ошибку (error_locked, state не коммитнут)")
 	}
 
-	// Зацепил ровно один → ок.
+	// Matched exactly one → ok.
 	ctx := map[string]any{"input": map[string]any{"sid": "host-b"}}
 	one := render.RenderedOp{Verb: config.VerbRemove, Field: "redis_hosts", Match: "elem.sid == input.sid", Expect: config.ExpectOne, Context: ctx}
 	after, err := mergeStateChanges(twoReplicas, []render.RenderedOp{one}, redisHostsSchema, noMatch, opEvalForTest(t))
@@ -485,9 +487,9 @@ func TestMergeStateChanges_ExpectOne(t *testing.T) {
 	}
 }
 
-// TestForeachListAdd_GrowsByN — ★ foreach по list (add N) end-to-end через
-// render→merge: RenderStateOps раскрывает foreach в N add, mergeStateChanges
-// растит коллекцию на N. Идемпотентно по on_conflict (повтор не дублирует).
+// TestForeachListAdd_GrowsByN — ★ foreach over a list (add N) end-to-end via
+// render→merge: RenderStateOps expands foreach into N adds, mergeStateChanges
+// grows the collection by N. Idempotent via on_conflict (a repeat doesn't duplicate).
 func TestForeachListAdd_GrowsByN(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "add_replicas",
@@ -533,7 +535,7 @@ func TestForeachListAdd_GrowsByN(t *testing.T) {
 		t.Fatalf("★ redis_hosts len = %d, want 4 (r0 + 3 foreach-add)", len(hosts))
 	}
 
-	// Идемпотентность: повтор тех же ops → длина не растёт (on_conflict: skip).
+	// Idempotency: repeating the same ops → length doesn't grow (on_conflict: skip).
 	again, err := mergeStateChanges(after, ops, schema, p.EvalStateMatch, p.EvalStateOpExpr)
 	if err != nil {
 		t.Fatalf("merge2: %v", err)
@@ -543,9 +545,9 @@ func TestForeachListAdd_GrowsByN(t *testing.T) {
 	}
 }
 
-// TestForeachMapModify_PerEntryBinding — ★ foreach по map (modify N юзеров):
-// каждая запись пропатчена СВОИМ значением (биндинг change.key/change.value),
-// end-to-end render→merge.
+// TestForeachMapModify_PerEntryBinding — ★ foreach over a map (modify N
+// users): each entry is patched with ITS OWN value (change.key/change.value
+// binding), end-to-end render→merge.
 func TestForeachMapModify_PerEntryBinding(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "update_acl",
@@ -599,16 +601,17 @@ func TestForeachMapModify_PerEntryBinding(t *testing.T) {
 	if users["carol"].(map[string]any)["acl"] != "+@read" {
 		t.Errorf("carol задет (не во input.changes): %v", users["carol"])
 	}
-	// state-поле цело (patch только acl, merge не перезапись записи).
+	// state field intact (patch touches only acl, merge not overwrite).
 	if users["alice"].(map[string]any)["state"] != "on" {
 		t.Errorf("alice.state затёрт patch-ем: %v", users["alice"])
 	}
 }
 
-// stateMirrorFixture/stateMirrorOps/stateMirrorExpected — ★ общая фикстура для
-// анти-дрейф-сверки прод-merge (этот тест) и trial-merge (trial.TestMergeMirror_*
-// в diff_test.go). Обе стороны применяют ИДЕНТИЧНЫЙ вход к ИДЕНТИЧНОМУ ожиданию;
-// если тела mergeStateChanges разойдутся (дубль), один из тестов упадёт.
+// stateMirrorFixture/stateMirrorOps/stateMirrorExpected — ★ a shared fixture
+// for the anti-drift check between prod merge (this test) and trial merge
+// (trial.TestMergeMirror_* in diff_test.go). Both sides apply an IDENTICAL
+// input against an IDENTICAL expectation; if the mergeStateChanges bodies
+// (a duplicate) diverge, one of the two tests fails.
 func stateMirrorFixture() map[string]any {
 	return map[string]any{
 		"redis_version": "7.2",
@@ -621,16 +624,16 @@ func stateMirrorFixture() map[string]any {
 func stateMirrorOps() []render.RenderedOp {
 	return []render.RenderedOp{
 		{Verb: config.VerbSet, Field: "redis_version", Value: "7.4"},
-		addRedisHost("host-b", "replica", config.OnConflictSkip), // новый → растёт
-		addRedisHost("host-a", "primary", config.OnConflictSkip), // существующий → no-op
+		addRedisHost("host-b", "replica", config.OnConflictSkip), // new → grows
+		addRedisHost("host-a", "primary", config.OnConflictSkip), // existing → no-op
 	}
 }
 
-// stateMirrorExpectedJSON — канонический ожидаемый state_after (JSON для
-// детерминированной сверки независимо от порядка map-ключей).
+// stateMirrorExpectedJSON — the canonical expected state_after (JSON for a
+// deterministic comparison regardless of map key order).
 const stateMirrorExpectedJSON = `{"redis_version":"7.4","redis_hosts":[{"sid":"host-a","role":"primary"},{"sid":"host-b","role":"replica"}]}`
 
-// TestMergeStateChanges_MirrorProd — прод-сторона анти-дрейф-сверки.
+// TestMergeStateChanges_MirrorProd — the prod side of the anti-drift check.
 func TestMergeStateChanges_MirrorProd(t *testing.T) {
 	after, err := mergeStateChanges(stateMirrorFixture(), stateMirrorOps(), redisHostsSchema, matchEvalForTest(t), noOpEval)
 	if err != nil {
@@ -642,11 +645,12 @@ func TestMergeStateChanges_MirrorProd(t *testing.T) {
 	}
 }
 
-// verbsMirrorFixture/verbsMirrorOps/verbsMirrorExpectedJSON — ★ анти-дрейф-сверка
-// для НОВЫХ глаголов modify/remove (foreach раскрыт в render → в merge приходят
-// готовые add/modify/remove). Дублируется байт-в-байт в trial.TestMergeVerbsMirror_*
-// (diff_test.go): расхождение тел applyModifyOp/applyRemoveOp разведёт Trial с
-// продом. Контекст modify (input.*) предвычислен (как делает render-сторона).
+// verbsMirrorFixture/verbsMirrorOps/verbsMirrorExpectedJSON — ★ anti-drift
+// check for the NEW modify/remove verbs (foreach is expanded in render → merge
+// receives ready-made add/modify/remove). Duplicated byte-for-byte in
+// trial.TestMergeVerbsMirror_* (diff_test.go): a divergence between the
+// applyModifyOp/applyRemoveOp bodies would split Trial from prod. The modify
+// context (input.*) is precomputed (as the render side does).
 func verbsMirrorFixture() map[string]any {
 	return map[string]any{
 		"redis_users": map[string]any{
@@ -665,19 +669,19 @@ func verbsMirrorOps() []render.RenderedOp {
 	modifyCtx := map[string]any{"input": map[string]any{"username": "alice", "acl": "+@all"}}
 	removeCtx := map[string]any{"input": map[string]any{"sid": "host-c"}}
 	return []render.RenderedOp{
-		// modify map по key: alice.acl → +@all (state цел).
+		// modify map by key: alice.acl → +@all (state intact).
 		{Verb: config.VerbModify, Field: "redis_users", Match: "key == input.username",
 			Patch: map[string]any{"acl": "${ input.acl }"}, Context: modifyCtx},
-		// remove list по sid: host-c удалён (expect: one).
+		// remove list by sid: host-c removed (expect: one).
 		{Verb: config.VerbRemove, Field: "redis_hosts", Match: "elem.sid == input.sid",
 			Expect: config.ExpectOne, Context: removeCtx},
 	}
 }
 
-// verbsMirrorExpectedJSON — обязан совпадать с trial.verbsMirrorExpectedJSON.
+// verbsMirrorExpectedJSON — must match trial.verbsMirrorExpectedJSON.
 const verbsMirrorExpectedJSON = `{"redis_users":{"alice":{"acl":"+@all","state":"on"},"bob":{"acl":"+@read","state":"on"}},"redis_hosts":[{"sid":"host-a","role":"primary"},{"sid":"host-b","role":"replica"}]}`
 
-// TestMergeVerbsMirror_Prod — прод-сторона анти-дрейф-сверки новых глаголов.
+// TestMergeVerbsMirror_Prod — the prod side of the new-verbs anti-drift check.
 func TestMergeVerbsMirror_Prod(t *testing.T) {
 	after, err := mergeStateChanges(verbsMirrorFixture(), verbsMirrorOps(), redisHostsSchema, noMatch, opEvalForTest(t))
 	if err != nil {
@@ -689,17 +693,17 @@ func TestMergeVerbsMirror_Prod(t *testing.T) {
 	}
 }
 
-// --- Guard-тесты пробелов покрытия (ADR-057): композиция в блоке, scalar-list,
-// пустые коллекции, patch-clobber. ---
+// --- Guard tests for coverage gaps (ADR-057): composition within a block,
+// scalar lists, empty collections, patch clobber. ---
 
-// TestMergeStateChanges_Composition_SetThenAdd — ★ set создаёт коллекцию, add в
-// неё в ТОМ ЖЕ блоке видит промежуточный state (ops применяются по порядку к
-// промежуточному результату, ADR-057 §e). Детерминированный порядок.
+// TestMergeStateChanges_Composition_SetThenAdd — ★ set creates a collection,
+// and an add into it in the SAME block sees the intermediate state (ops apply
+// in order against the intermediate result, ADR-057 §e). Deterministic order.
 func TestMergeStateChanges_Composition_SetThenAdd(t *testing.T) {
-	before := map[string]any{} // redis_hosts отсутствует
+	before := map[string]any{} // redis_hosts absent
 	ops := []render.RenderedOp{
-		{Verb: config.VerbSet, Field: "redis_hosts", Value: []any{}}, // создаём пустой list
-		addRedisHost("host-a", "primary", config.OnConflictSkip),     // add видит созданный list
+		{Verb: config.VerbSet, Field: "redis_hosts", Value: []any{}}, // create an empty list
+		addRedisHost("host-a", "primary", config.OnConflictSkip),     // add sees the created list
 		addRedisHost("host-b", "replica", config.OnConflictSkip),
 	}
 	after, err := mergeStateChanges(before, ops, redisHostsSchema, matchEvalForTest(t), noOpEval)
@@ -715,9 +719,9 @@ func TestMergeStateChanges_Composition_SetThenAdd(t *testing.T) {
 	}
 }
 
-// TestMergeStateChanges_Composition_AddThenRemove — ★ add X → remove X по match в
-// одном блоке: элемента в итоге нет (remove видит результат add). Промежуточный
-// state виден последующей операции.
+// TestMergeStateChanges_Composition_AddThenRemove — ★ add X → remove X by match
+// within one block: the element ends up absent (remove sees add's result).
+// Intermediate state is visible to the following op.
 func TestMergeStateChanges_Composition_AddThenRemove(t *testing.T) {
 	before := map[string]any{"redis_hosts": []any{
 		map[string]any{"sid": "host-a", "role": "primary"},
@@ -737,9 +741,9 @@ func TestMergeStateChanges_Composition_AddThenRemove(t *testing.T) {
 	}
 }
 
-// TestMergeStateChanges_ScalarList_ModifyRemove — modify/remove над list of
-// scalars (elem=скаляр): remove работает по предикату над скаляром; modify
-// (точечный patch) даёт ПОНЯТНУЮ ошибку, не панику.
+// TestMergeStateChanges_ScalarList_ModifyRemove — modify/remove over a list
+// of scalars (elem=scalar): remove works by a predicate over the scalar;
+// modify (a dotted-path patch) produces a CLEAR error, not a panic.
 func TestMergeStateChanges_ScalarList_ModifyRemove(t *testing.T) {
 	scalarSchema := map[string]any{"type": "object", "properties": map[string]any{
 		"tags": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
@@ -748,7 +752,7 @@ func TestMergeStateChanges_ScalarList_ModifyRemove(t *testing.T) {
 		return map[string]any{"tags": []any{"a", "b", "c"}}
 	}
 
-	// remove над scalar-list по предикату elem — работает.
+	// remove over a scalar list by an elem predicate — works.
 	rm := render.RenderedOp{Verb: config.VerbRemove, Field: "tags", Match: "elem == 'b'", Context: map[string]any{}}
 	after, err := mergeStateChanges(before(), []render.RenderedOp{rm}, scalarSchema, noMatch, opEvalForTest(t))
 	if err != nil {
@@ -759,7 +763,7 @@ func TestMergeStateChanges_ScalarList_ModifyRemove(t *testing.T) {
 		t.Fatalf("★ remove scalar 'b': got %+v, want [a c]", tags)
 	}
 
-	// modify (точечный patch) над scalar-элементом — понятная ошибка, не паника.
+	// modify (dotted-path patch) over a scalar element — a clear error, not a panic.
 	mod := render.RenderedOp{Verb: config.VerbModify, Field: "tags", Match: "elem == 'a'",
 		Patch: map[string]any{"x": "${ 'y' }"}, Context: map[string]any{}}
 	if _, err := mergeStateChanges(before(), []render.RenderedOp{mod}, scalarSchema, noMatch, opEvalForTest(t)); err == nil {
@@ -767,11 +771,11 @@ func TestMergeStateChanges_ScalarList_ModifyRemove(t *testing.T) {
 	}
 }
 
-// TestMergeStateChanges_RemoveAll_EmptyNotNil — ★ remove ВСЕХ элементов даёт
-// ПУСТУЮ коллекцию ([]any{} / map{}), НЕ nil: следующий add должен видеть пустую
-// коллекцию и материализовать в неё, не упасть на nil.
+// TestMergeStateChanges_RemoveAll_EmptyNotNil — ★ removing ALL elements yields
+// an EMPTY collection ([]any{} / map{}), NOT nil: a following add must see
+// the empty collection and materialize into it, not crash on nil.
 func TestMergeStateChanges_RemoveAll_EmptyNotNil(t *testing.T) {
-	// list: remove всех → []any{} (не nil), затем add в неё растит на 1.
+	// list: remove-all → []any{} (not nil), then add into it grows by 1.
 	beforeList := map[string]any{"redis_hosts": []any{
 		map[string]any{"sid": "host-a", "role": "replica"},
 		map[string]any{"sid": "host-b", "role": "replica"},
@@ -792,7 +796,7 @@ func TestMergeStateChanges_RemoveAll_EmptyNotNil(t *testing.T) {
 		t.Fatalf("★ add после remove-всех: got %+v, want [host-c]", hosts)
 	}
 
-	// map: remove всех → map{} (не nil), add по key растит на 1.
+	// map: remove-all → map{} (not nil), add by key grows by 1.
 	beforeMap := map[string]any{"redis_users": map[string]any{
 		"alice": map[string]any{"acl": "+@read"},
 	}}
@@ -817,11 +821,11 @@ func TestMergeStateChanges_RemoveAll_EmptyNotNil(t *testing.T) {
 	}
 }
 
-// TestMergeStateChanges_PatchClobber_MissingVsExistingScalar — ★ QA observation:
-// patch вложенного пути config.maxmemory.
-//   - ОТСУТСТВУЮЩИЙ промежуточный путь (config нет) → материализуем map (ADR-057 §f);
-//   - СУЩЕСТВУЮЩИЙ не-map промежуточный узел (config="string") → ERROR, не молчаливый
-//     клоббер (потеря данных небезопасна).
+// TestMergeStateChanges_PatchClobber_MissingVsExistingScalar — ★ QA
+// observation: patching the nested path config.maxmemory.
+//   - MISSING intermediate path (no config) → materialize a map (ADR-057 §f);
+//   - EXISTING non-map intermediate node (config="string") → ERROR, not a
+//     silent clobber (data loss is unsafe).
 func TestMergeStateChanges_PatchClobber_MissingVsExistingScalar(t *testing.T) {
 	ctx := map[string]any{"input": map[string]any{"mem": "512mb"}}
 	patchOp := func() render.RenderedOp {
@@ -829,9 +833,9 @@ func TestMergeStateChanges_PatchClobber_MissingVsExistingScalar(t *testing.T) {
 			Match: "elem.sid == 'host-a'", Patch: map[string]any{"config.maxmemory": "${ input.mem }"}, Context: ctx}
 	}
 
-	// missing → материализуем config как map.
+	// missing → materialize config as a map.
 	beforeMissing := map[string]any{"redis_hosts": []any{
-		map[string]any{"sid": "host-a", "role": "primary"}, // config отсутствует
+		map[string]any{"sid": "host-a", "role": "primary"}, // config absent
 	}}
 	after, err := mergeStateChanges(beforeMissing, []render.RenderedOp{patchOp()}, redisHostsSchema, noMatch, opEvalForTest(t))
 	if err != nil {
@@ -842,7 +846,7 @@ func TestMergeStateChanges_PatchClobber_MissingVsExistingScalar(t *testing.T) {
 		t.Errorf("★ config.maxmemory = %v, want 512mb (config материализован)", cfg["maxmemory"])
 	}
 
-	// existing-scalar → ERROR (config — строка, спустить вложенный путь = клоббер).
+	// existing-scalar → ERROR (config is a string; descending the nested path = clobber).
 	beforeScalar := map[string]any{"redis_hosts": []any{
 		map[string]any{"sid": "host-a", "role": "primary", "config": "some-string-value"},
 	}}
@@ -851,9 +855,9 @@ func TestMergeStateChanges_PatchClobber_MissingVsExistingScalar(t *testing.T) {
 	}
 }
 
-// TestSetNestedPath_ProdNoSilentClobber — прод-сторона unit-guard setNestedPath
-// (зеркало trial.TestSetNestedPath_NoSilentClobber): missing создаётся, существующий
-// не-map → ошибка без мутации.
+// TestSetNestedPath_ProdNoSilentClobber — the prod side of the
+// setNestedPath unit guard (mirrors trial.TestSetNestedPath_NoSilentClobber):
+// missing gets created, an existing non-map → error without mutation.
 func TestSetNestedPath_ProdNoSilentClobber(t *testing.T) {
 	m := map[string]any{}
 	if err := setNestedPath(m, "config.maxmemory", "256mb"); err != nil {
@@ -871,15 +875,16 @@ func TestSetNestedPath_ProdNoSilentClobber(t *testing.T) {
 	}
 }
 
-// TestMergeStateChanges_AddConflictReason_NoSecretLeak — ★ BUG-3 (security): add в
-// map с key=зарезолвленный-секрет + on_conflict:error. Reason ошибки (уезжает в
-// incarnation.status_details.error немаскированным — audit.MaskSecrets ловит
-// `vault:`-ref, не plaintext-значение) НЕ должен содержать значение ключа: только
-// имя коллекции-поля. То же для list add-conflict (зарезолвленный value/elem).
+// TestMergeStateChanges_AddConflictReason_NoSecretLeak — ★ BUG-3 (security): add
+// into a map with key=a resolved secret + on_conflict:error. The error
+// reason (which ends up unmasked in incarnation.status_details.error —
+// audit.MaskSecrets only catches `vault:` refs, not plaintext values) must
+// NOT contain the key's value — only the collection field name. Same for a
+// list add-conflict (resolved value/elem).
 func TestMergeStateChanges_AddConflictReason_NoSecretLeak(t *testing.T) {
 	const secret = "s3cr3t-vault-resolved-value"
 
-	// map add-conflict: key уже зарезолвлен в секрет (как после render `${ vault(...) }`).
+	// map add-conflict: key is already resolved to a secret (as after render `${ vault(...) }`).
 	beforeMap := map[string]any{"redis_users": map[string]any{
 		secret: map[string]any{"acl": "+@read"},
 	}}
@@ -896,7 +901,7 @@ func TestMergeStateChanges_AddConflictReason_NoSecretLeak(t *testing.T) {
 		t.Errorf("reason должен называть поле redis_users: %q", err.Error())
 	}
 
-	// list add-conflict: value несёт секрет, элемент уже есть (deep-equal).
+	// list add-conflict: value carries a secret, the element already exists (deep-equal).
 	beforeList := map[string]any{"redis_hosts": []any{secret}}
 	listOp := render.RenderedOp{Verb: config.VerbAdd, Field: "redis_hosts",
 		Value: secret, OnConflict: config.OnConflictError}
@@ -912,7 +917,7 @@ func TestMergeStateChanges_AddConflictReason_NoSecretLeak(t *testing.T) {
 	}
 }
 
-// equalJSONState сравнивает два JSON-стейта семантически (порядок ключей не важен).
+// equalJSONState compares two JSON states semantically (key order doesn't matter).
 func equalJSONState(t *testing.T, a, b string) bool {
 	t.Helper()
 	var ma, mb map[string]any
@@ -928,16 +933,16 @@ func equalJSONState(t *testing.T, a, b string) bool {
 func TestBuildRegisterByHost_ResolvesNamesPerHost(t *testing.T) {
 	tasks := []*render.RenderedTask{
 		{Index: 0, Register: "probe_a"},
-		{Index: 1, Register: ""}, // задача без register: — её строки игнорируются
+		{Index: 1, Register: ""}, // task without register: — its rows are ignored
 		{Index: 2, Register: "probe_b"},
 	}
-	// Корреляция по глобальному PlanIndex (ADR-056 §S1 fix Variant B); N=1 →
-	// PlanIndex==TaskIdx (один Passage, локальный==глобальный индекс).
+	// Correlation by global PlanIndex (ADR-056 §S1 fix Variant B); N=1 →
+	// PlanIndex==TaskIdx (single Passage, local==global index).
 	rows := []applyrun.TaskRegister{
 		{ApplyID: "a", SID: "host-1", PlanIndex: 0, TaskIdx: 0, RegisterData: map[string]any{"stdout": "1a"}},
 		{ApplyID: "a", SID: "host-1", PlanIndex: 2, TaskIdx: 2, RegisterData: map[string]any{"stdout": "1b"}},
 		{ApplyID: "a", SID: "host-2", PlanIndex: 0, TaskIdx: 0, RegisterData: map[string]any{"stdout": "2a"}},
-		{ApplyID: "a", SID: "host-2", PlanIndex: 1, TaskIdx: 1, RegisterData: map[string]any{"stdout": "ignored"}}, // task без register:
+		{ApplyID: "a", SID: "host-2", PlanIndex: 1, TaskIdx: 1, RegisterData: map[string]any{"stdout": "ignored"}}, // task without register:
 	}
 
 	got := buildRegisterByHost(rows, tasks)
@@ -954,7 +959,7 @@ func TestBuildRegisterByHost_ResolvesNamesPerHost(t *testing.T) {
 	if v := got["host-2"]["probe_a"].(map[string]any)["stdout"]; v != "2a" {
 		t.Errorf("host-2.probe_a.stdout = %v, want 2a", v)
 	}
-	// task_idx=1 без register: не должен попасть.
+	// task_idx=1 without register: must not show up.
 	if _, ok := got["host-2"]["probe_b"]; ok {
 		t.Errorf("host-2.probe_b не должен существовать (task без register:)")
 	}
@@ -963,13 +968,14 @@ func TestBuildRegisterByHost_ResolvesNamesPerHost(t *testing.T) {
 	}
 }
 
-// Вариант B: register задачи с NoLog=true НЕ аккумулируется в per-host map —
-// его register-имя не попадает в nameByIdx, поэтому строка пропускается и
-// чувствительное значение не доходит до state-графа (orchestration.md §7).
+// Variant B: a task's register with NoLog=true is NOT accumulated into the
+// per-host map — its register name never lands in nameByIdx, so the row is
+// skipped and the sensitive value never reaches the state graph
+// (orchestration.md §7).
 func TestBuildRegisterByHost_NoLogTaskExcluded(t *testing.T) {
 	tasks := []*render.RenderedTask{
-		{Index: 0, Register: "plain"},                     // обычная — аккумулируется
-		{Index: 1, Register: "secret_probe", NoLog: true}, // no_log — НЕ аккумулируется
+		{Index: 0, Register: "plain"},                     // ordinary — accumulated
+		{Index: 1, Register: "secret_probe", NoLog: true}, // no_log — NOT accumulated
 	}
 	rows := []applyrun.TaskRegister{
 		{ApplyID: "a", SID: "host-1", PlanIndex: 0, TaskIdx: 0, RegisterData: map[string]any{"stdout": "ok"}},
@@ -978,11 +984,11 @@ func TestBuildRegisterByHost_NoLogTaskExcluded(t *testing.T) {
 
 	got := buildRegisterByHost(rows, tasks)
 
-	// Обычный register на месте (вариант B не ломает не-no_log задачи).
+	// Ordinary register is intact (variant B doesn't break non-no_log tasks).
 	if v := got["host-1"]["plain"].(map[string]any)["stdout"]; v != "ok" {
 		t.Errorf("host-1.plain.stdout = %v, want ok", v)
 	}
-	// no_log-register отсутствует → sets, ссылающийся на него, получит no-such-key.
+	// no_log register is absent → a set referencing it gets no-such-key.
 	if _, ok := got["host-1"]["secret_probe"]; ok {
 		t.Errorf("host-1.secret_probe не должен существовать (no_log-задача)")
 	}
@@ -998,31 +1004,34 @@ func TestBuildRegisterByHost_EmptyRows(t *testing.T) {
 	}
 }
 
-// TestBuildRegisterByHost_MultiTaskPassage0_NoCollision — ★ GUARD (ADR-056 §S1 fix
-// Variant B): латентный баг task_idx-коллизии.
+// TestBuildRegisterByHost_MultiTaskPassage0_NoCollision — ★ GUARD (ADR-056 §S1
+// fix Variant B): a latent task_idx collision bug.
 //
-// Plan: #0 probe-A `register: X` (Passage 0), #1 ещё одна задача (Passage 0, без
-// register), #2 действие `where: register.X` (Passage 1, register: Y). На проводе
-// Passage-0 ApplyRequest несёт #0,#1 (локальные idx 0,1); Passage-1 ApplyRequest
-// несёт #2 (локальный idx 0). Soul эмитит TaskEvent.task_idx ЛОКАЛЬНО:
+// Plan: #0 probe-A `register: X` (Passage 0), #1 another task (Passage 0, no
+// register), #2 an action `where: register.X` (Passage 1, register: Y). On
+// the wire, the Passage-0 ApplyRequest carries #0,#1 (local idx 0,1); the
+// Passage-1 ApplyRequest carries #2 (local idx 0). Soul emits
+// TaskEvent.task_idx LOCALLY:
 //   - probe-A (Passage 0) → task_idx 0, plan_index 0;
-//   - действие-Y (Passage 1) → task_idx 0 (!), plan_index 2.
+//   - action-Y (Passage 1) → task_idx 0 (!), plan_index 2.
 //
-// До фикса корреляция шла по task_idx → probe-X (task_idx 0) и действие-Y
-// (task_idx 0) делили ключ; ON CONFLICT затирал probe-X, а nameByIdx[t.Index]
-// (глобальный 0) vs rows.TaskIdx (локальный 0) случайно совпали бы на passage 0,
-// НО действие на passage 1 (task_idx 0) затёрло/перепутало бы имя. ASSERT после
-// фикса: probe X не затёрт И резолвится в правильное значение probe-A.
+// Before the fix, correlation went by task_idx → probe-X (task_idx 0) and
+// action-Y (task_idx 0) shared a key; ON CONFLICT clobbered probe-X, and
+// nameByIdx[t.Index] (global 0) vs rows.TaskIdx (local 0) would happen to
+// match on passage 0, BUT the passage-1 action (task_idx 0) would
+// clobber/mix up the name. ASSERT after the fix: probe X isn't clobbered AND
+// resolves to the correct probe-A value.
 func TestBuildRegisterByHost_MultiTaskPassage0_NoCollision(t *testing.T) {
 	tasks := []*render.RenderedTask{
 		{Index: 0, Register: "X", Passage: 0}, // probe-A, Passage 0
-		{Index: 1, Register: "", Passage: 0},  // ещё задача, Passage 0, без register
-		{Index: 2, Register: "Y", Passage: 1}, // действие, Passage 1
+		{Index: 1, Register: "", Passage: 0},  // another task, Passage 0, no register
+		{Index: 2, Register: "Y", Passage: 1}, // action, Passage 1
 	}
-	// Register-строки, как их пишет accumulateRegister: каждая несёт ГЛОБАЛЬНЫЙ
-	// plan_index (эхо TaskEvent.plan_index) + ЛОКАЛЬНЫЙ task_idx (эхо
-	// TaskEvent.task_idx). probe-X в Passage 0 на локальной 0; действие-Y в Passage
-	// 1 ТОЖЕ на локальной 0 (другой срез) — task_idx коллидирует, plan_index — нет.
+	// Register rows as accumulateRegister writes them: each carries a GLOBAL
+	// plan_index (echoing TaskEvent.plan_index) + a LOCAL task_idx (echoing
+	// TaskEvent.task_idx). probe-X in Passage 0 sits at local 0; action-Y in
+	// Passage 1 is ALSO at local 0 (a different slice) — task_idx collides,
+	// plan_index doesn't.
 	rows := []applyrun.TaskRegister{
 		{ApplyID: "a", SID: "host-1", PlanIndex: 0, TaskIdx: 0, Passage: 0, RegisterData: map[string]any{"stdout": "probe-A-value"}},
 		{ApplyID: "a", SID: "host-1", PlanIndex: 2, TaskIdx: 0, Passage: 1, RegisterData: map[string]any{"stdout": "action-Y-value"}},
@@ -1030,7 +1039,7 @@ func TestBuildRegisterByHost_MultiTaskPassage0_NoCollision(t *testing.T) {
 
 	got := buildRegisterByHost(rows, tasks)
 
-	// ★ probe-register X НЕ затёрт действием-Y (коллизия task_idx=0 не схлопнула их).
+	// ★ probe-register X is NOT clobbered by action-Y (the task_idx=0 collision didn't merge them).
 	x, ok := got["host-1"]["X"]
 	if !ok {
 		t.Fatalf("★ register X отсутствует — probe-register затёрт коллизией task_idx (баг)")
@@ -1038,7 +1047,7 @@ func TestBuildRegisterByHost_MultiTaskPassage0_NoCollision(t *testing.T) {
 	if v := x.(map[string]any)["stdout"]; v != "probe-A-value" {
 		t.Errorf("★ register X.stdout = %v, want probe-A-value (имя резолвится по глобальному plan_index)", v)
 	}
-	// Y резолвится в своё значение (plan_index 2 → Index 2 → имя Y).
+	// Y resolves to its own value (plan_index 2 → Index 2 → name Y).
 	if v := got["host-1"]["Y"].(map[string]any)["stdout"]; v != "action-Y-value" {
 		t.Errorf("register Y.stdout = %v, want action-Y-value", v)
 	}
@@ -1047,24 +1056,25 @@ func TestBuildRegisterByHost_MultiTaskPassage0_NoCollision(t *testing.T) {
 	}
 }
 
-// TestBuildRegisterByHost_PerHostDifferentWhere_NoMismatch — ★ GUARD (ADR-056 §S1
-// fix Variant B): per-host разный where: в одном Passage даёт register-задаче РАЗНЫЙ
-// ЛОКАЛЬНЫЙ task_idx на разных хостах, но корреляция по глобальному plan_index
-// резолвит обоих верно.
+// TestBuildRegisterByHost_PerHostDifferentWhere_NoMismatch — ★ GUARD (ADR-056
+// §S1 fix Variant B): a per-host different where: within one Passage gives
+// the register task a DIFFERENT LOCAL task_idx on different hosts, but
+// correlation by global plan_index resolves both correctly.
 //
-// Сценарий: Passage 0 несёт #0 (where: только host-A) + #1 probe `R` (оба хоста).
-// На host-A срез = [#0, #1] → probe R на локальной 1; на host-B срез = [#1] (т.к.
-// #0 отфильтрован where) → probe R на локальной 0. task_idx у R разный (1 vs 0),
-// plan_index одинаковый (1) на обоих. ASSERT: register R обоих резолвится в R.
+// Scenario: Passage 0 carries #0 (where: host-A only) + #1 probe `R` (both
+// hosts). On host-A the slice = [#0, #1] → probe R at local 1; on host-B the
+// slice = [#1] (since #0 is filtered by where) → probe R at local 0. R's
+// task_idx differs (1 vs 0), plan_index is the same (1) on both. ASSERT:
+// both hosts' register R resolves to R.
 func TestBuildRegisterByHost_PerHostDifferentWhere_NoMismatch(t *testing.T) {
 	tasks := []*render.RenderedTask{
-		{Index: 0, Register: "", Passage: 0},  // where: только host-A
-		{Index: 1, Register: "R", Passage: 0}, // probe — оба хоста
+		{Index: 0, Register: "", Passage: 0},  // where: host-A only
+		{Index: 1, Register: "R", Passage: 0}, // probe — both hosts
 	}
 	rows := []applyrun.TaskRegister{
-		// host-A: R на локальной 1 (срез [#0,#1]); plan_index 1.
+		// host-A: R at local 1 (slice [#0,#1]); plan_index 1.
 		{ApplyID: "a", SID: "host-A", PlanIndex: 1, TaskIdx: 1, Passage: 0, RegisterData: map[string]any{"stdout": "A-R"}},
-		// host-B: R на локальной 0 (срез [#1], #0 отфильтрован where); plan_index 1.
+		// host-B: R at local 0 (slice [#1], #0 filtered by where); plan_index 1.
 		{ApplyID: "a", SID: "host-B", PlanIndex: 1, TaskIdx: 0, Passage: 0, RegisterData: map[string]any{"stdout": "B-R"}},
 	}
 
@@ -1099,11 +1109,11 @@ func TestOSFamilyOf(t *testing.T) {
 		t.Errorf("osFamilyOf = %q, want debian", got)
 	}
 
-	// Нет фактов → "".
+	// No facts → "".
 	if got := osFamilyOf(&topology.HostFacts{}); got != "" {
 		t.Errorf("osFamilyOf(empty) = %q, want \"\"", got)
 	}
-	// os есть, family нет.
+	// os present, family absent.
 	h2 := &topology.HostFacts{Soulprint: map[string]any{"os": map[string]any{}}}
 	if got := osFamilyOf(h2); got != "" {
 		t.Errorf("osFamilyOf(no family) = %q", got)
@@ -1119,7 +1129,7 @@ func TestSpecEssence(t *testing.T) {
 		t.Errorf("specEssence = %+v", got)
 	}
 
-	// Нет spec.essence → nil.
+	// No spec.essence → nil.
 	if specEssence(&incarnation.Incarnation{}) != nil {
 		t.Errorf("specEssence(empty) != nil")
 	}
@@ -1135,31 +1145,36 @@ func TestStartedByPtr(t *testing.T) {
 	}
 }
 
-// TestKeeperRegisterBucket_FromRegisterByHost — ★ GUARD Слайса 1 (keeper→keeper
-// register-chaining, staged-render). Дыра, которую закрывает Слайс 1: keeper-задачи
-// копят register под синтетическим хостом KeeperTargetSID ("keeper") в per-host
-// таблицу прогона (accumulateKeeperRegister), buildRegisterByHost кладёт его в
-// RegisterByHost["keeper"], но keeperVars (render/dispatch.go) читает register
-// ТОЛЬКО из ПЛОСКОЙ in.Register. keeperRegisterBucket — мост: достаёт keeper-bucket
-// предыдущих Passage в плоскую форму, чтобы stage-loop run.go положил его в
-// renderIn.Register перед per-passage render-ом keeper-задач активного Passage.
+// TestKeeperRegisterBucket_FromRegisterByHost — ★ GUARD for Slice 1
+// (keeper→keeper register-chaining, staged-render). The gap Slice 1 closes:
+// keeper tasks accumulate register under the synthetic host KeeperTargetSID
+// ("keeper") in the run's per-host table (accumulateKeeperRegister),
+// buildRegisterByHost puts it in RegisterByHost["keeper"], but keeperVars
+// (render/dispatch.go) reads register ONLY from the FLAT in.Register.
+// keeperRegisterBucket is the bridge: it pulls the keeper bucket of previous
+// Passages into flat form, so the stage-loop in run.go can place it into
+// renderIn.Register before per-passage render of the active Passage's keeper
+// tasks.
 //
-// Сценарий guard-а воспроизводит вход stage-loop на P>0: register двух Passage в
-// per-host таблице — keeper-задача (под KeeperTargetSID) + host-задача (под обычным
-// SID). buildRegisterByHost резолвит обе по PlanIndex (как loadRegisterByHostUpToPassage),
-// keeperRegisterBucket выделяет ровно keeper-bucket. Это unit-форма guard-а Слайса 1;
-// end-to-end 2-passage цепочку (bootstrap.delivered видит register.provision.*)
-// проверяет guard Слайса 2 (per-passage keeper-dispatch).
+// The guard scenario replicates the stage-loop's input at P>0: register from
+// two Passages in the per-host table — a keeper task (under KeeperTargetSID)
+// + a host task (under a normal SID). buildRegisterByHost resolves both by
+// PlanIndex (as loadRegisterByHostUpToPassage does), and
+// keeperRegisterBucket extracts exactly the keeper bucket. This is the unit
+// form of the Slice 1 guard; the end-to-end 2-passage chain
+// (bootstrap.delivered sees register.provision.*) is covered by the Slice 2
+// guard (per-passage keeper-dispatch).
 func TestKeeperRegisterBucket_FromRegisterByHost(t *testing.T) {
-	// План: Passage 0 — keeper-задача (on: keeper, register: provision), Passage 1 —
-	// host-задача (register: probe). Index стабилен между Passage (тот же план).
+	// Plan: Passage 0 — a keeper task (on: keeper, register: provision),
+	// Passage 1 — a host task (register: probe). Index is stable across
+	// Passages (same plan).
 	tasks := []*render.RenderedTask{
-		{Index: 0, Register: "provision"}, // keeper-задача — копит под KeeperTargetSID
-		{Index: 1, Register: "probe"},     // host-задача — копит под обычным SID
+		{Index: 0, Register: "provision"}, // keeper task — accumulates under KeeperTargetSID
+		{Index: 1, Register: "probe"},     // host task — accumulates under a normal SID
 	}
-	// Register-строки прогона (как их вернёт SelectTaskRegistersByApplyIDUpToPassage):
-	// keeper-register под KeeperTargetSID + host-register под host-1, корреляция по
-	// глобальному PlanIndex.
+	// The run's register rows (as SelectTaskRegistersByApplyIDUpToPassage
+	// would return them): a keeper register under KeeperTargetSID + a host
+	// register under host-1, correlated by global PlanIndex.
 	rows := []applyrun.TaskRegister{
 		{ApplyID: "a", SID: render.KeeperTargetSID, PlanIndex: 0, TaskIdx: 0, RegisterData: map[string]any{"ip": "10.0.0.5"}},
 		{ApplyID: "a", SID: "host-1", PlanIndex: 1, TaskIdx: 1, RegisterData: map[string]any{"stdout": "master"}},
@@ -1171,8 +1186,8 @@ func TestKeeperRegisterBucket_FromRegisterByHost(t *testing.T) {
 	if bucket == nil {
 		t.Fatal("keeperRegisterBucket вернул nil — keeper-register предыдущего Passage потерян (дыра Слайса 1)")
 	}
-	// keeper-register доступен в плоской форме под именем provision → keeperVars
-	// увидит register.provision.* у keeper-задачи активного Passage.
+	// keeper register is available in flat form under the name provision →
+	// keeperVars will see register.provision.* on the active Passage's keeper task.
 	prov, ok := bucket["provision"].(map[string]any)
 	if !ok {
 		t.Fatalf("bucket[provision] = %T, want map (register keeper-задачи)", bucket["provision"])
@@ -1180,19 +1195,21 @@ func TestKeeperRegisterBucket_FromRegisterByHost(t *testing.T) {
 	if prov["ip"] != "10.0.0.5" {
 		t.Errorf("bucket[provision].ip = %v, want 10.0.0.5", prov["ip"])
 	}
-	// host-register (probe под host-1) в keeper-bucket НЕ попадает: проброс в плоскую
-	// Register несёт ТОЛЬКО keeper-задачи, host-bucket остаётся в RegisterByHost[sid]
-	// (host-путь читает его per-host, не из плоской Register).
+	// The host register (probe under host-1) does NOT end up in the keeper
+	// bucket: the flattening into Register carries ONLY keeper tasks, the
+	// host bucket stays in RegisterByHost[sid] (the host path reads it
+	// per-host, not from the flat Register).
 	if _, leaked := bucket["probe"]; leaked {
 		t.Error("bucket[probe] присутствует — host-register протёк в keeper-bucket")
 	}
 }
 
-// TestKeeperRegisterBucket_NoKeeperRegister_Nil — host-only Passage (нет keeper-
-// register): keeperRegisterBucket → nil, stage-loop плоскую Register НЕ трогает
-// (БИТ-В-БИТ: на P>0 без keeper-задач плоская Register остаётся пустой, как до
-// Слайса 1). Это гарантирует, что проброс не расширяет видимость host-задач, у
-// которых per-host карта пуста (fallback hostRegister остаётся прежним пустым).
+// TestKeeperRegisterBucket_NoKeeperRegister_Nil — a host-only Passage (no
+// keeper register): keeperRegisterBucket → nil, the stage-loop leaves the
+// flat Register UNTOUCHED (bit-for-bit: on P>0 with no keeper tasks, the flat
+// Register stays empty, as before Slice 1). This guarantees the flattening
+// doesn't widen visibility for host tasks whose per-host map is empty (the
+// fallback hostRegister stays empty as before).
 func TestKeeperRegisterBucket_NoKeeperRegister_Nil(t *testing.T) {
 	tasks := []*render.RenderedTask{{Index: 0, Register: "probe"}}
 	rows := []applyrun.TaskRegister{
@@ -1202,7 +1219,7 @@ func TestKeeperRegisterBucket_NoKeeperRegister_Nil(t *testing.T) {
 	if bucket := keeperRegisterBucket(reg); bucket != nil {
 		t.Errorf("keeperRegisterBucket = %v, want nil (нет register под KeeperTargetSID)", bucket)
 	}
-	// Пустая/nil карта → nil.
+	// Empty/nil map → nil.
 	if bucket := keeperRegisterBucket(nil); bucket != nil {
 		t.Errorf("keeperRegisterBucket(nil) = %v, want nil", bucket)
 	}

@@ -11,8 +11,8 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 )
 
-// newServiceArtifactAt оборачивает каталог снапшота в ServiceArtifact для
-// чтения через ServiceLoader.ReadFile (LocalDir — корень securejoin-резолва).
+// newServiceArtifactAt wraps a snapshot directory in a ServiceArtifact for
+// reading via ServiceLoader.ReadFile (LocalDir is the securejoin-resolve root).
 func newServiceArtifactAt(localDir string) *artifact.ServiceArtifact {
 	return &artifact.ServiceArtifact{
 		Ref:      artifact.ServiceRef{Name: "test-service"},
@@ -21,9 +21,9 @@ func newServiceArtifactAt(localDir string) *artifact.ServiceArtifact {
 	}
 }
 
-// TestScenarioIncludeResolver_LocalShadowsService — happy-path двухуровневого
-// резолва: локальный `scenario/<name>/<file>` перекрывает service-level
-// `scenario/<file>`; display-путь — локальный.
+// TestScenarioIncludeResolver_LocalShadowsService — happy path of two-level
+// resolution: the local `scenario/<name>/<file>` shadows the service-level
+// `scenario/<file>`; the display path is the local one.
 func TestScenarioIncludeResolver_LocalShadowsService(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "scenario", "deploy", "lib.yml"), "- include: local\n")
@@ -42,8 +42,8 @@ func TestScenarioIncludeResolver_LocalShadowsService(t *testing.T) {
 	}
 }
 
-// TestScenarioIncludeResolver_ServiceFallback — при отсутствии локального файла
-// (fs.ErrNotExist) фоллбэк на service-level; display-путь — service-level.
+// TestScenarioIncludeResolver_ServiceFallback — when the local file is absent
+// (fs.ErrNotExist), falls back to service-level; the display path is service-level.
 func TestScenarioIncludeResolver_ServiceFallback(t *testing.T) {
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "scenario", "lib.yml"), "- include: service\n")
@@ -58,21 +58,21 @@ func TestScenarioIncludeResolver_ServiceFallback(t *testing.T) {
 	}
 }
 
-// TestScenarioIncludeResolver_IOErrorNotMasked — критичное защитное поведение
-// (orchestration.md §6, include.go): фоллбэк на service-level срабатывает ТОЛЬКО
-// при fs.ErrNotExist. Прочая I/O-ошибка локального файла (permission denied)
-// должна вернуться сразу, НЕ маскироваться молчаливым выбором service-level-
-// файла. Регрессия = чтение НЕ того файла без единого сигнала автору.
+// TestScenarioIncludeResolver_IOErrorNotMasked — critical protective behavior
+// (orchestration.md §6, include.go): the service-level fallback triggers ONLY
+// on fs.ErrNotExist. Any other I/O error on the local file (permission denied)
+// must be returned immediately, NOT masked by silently picking the service-level
+// file. A regression here means reading the WRONG file with zero signal to the author.
 //
-// Воспроизведение: локальный файл существует, но chmod 000 (нечитаем); рядом
-// лежит валидный service-level файл-приманка. Ожидаем ошибку чтения, а НЕ
-// содержимое приманки.
+// Reproduction: the local file exists but is chmod 000 (unreadable); next to it
+// sits a valid service-level decoy file. We expect a read error, NOT
+// the decoy's content.
 func TestScenarioIncludeResolver_IOErrorNotMasked(t *testing.T) {
 	root := t.TempDir()
 	local := filepath.Join(root, "scenario", "deploy", "lib.yml")
 	mustWrite(t, local, "- include: local\n")
-	// Приманка: если фоллбэк ошибочно сработает на I/O-ошибке — резолвер
-	// молча вернёт ЭТОТ файл вместо ошибки.
+	// Decoy: if the fallback wrongly triggers on an I/O error, the resolver
+	// will silently return THIS file instead of an error.
 	mustWrite(t, filepath.Join(root, "scenario", "lib.yml"), "- include: service-bait\n")
 
 	if err := os.Chmod(local, 0o000); err != nil {
@@ -80,8 +80,8 @@ func TestScenarioIncludeResolver_IOErrorNotMasked(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(local, 0o644) })
 
-	// Под root (или иной обходящей права средой) chmod 000 не даёт permission
-	// denied — кейс невоспроизводим, пропускаем, но тест остаётся в коде.
+	// Under root (or another permission-bypassing environment) chmod 000 doesn't cause permission
+	// denied — the case is unreproducible, skip it, but keep the test in the code.
 	if _, err := os.ReadFile(local); err == nil {
 		t.Skip("chmod 000 не блокирует чтение под текущим uid (root?) — кейс невоспроизводим")
 	}

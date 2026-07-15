@@ -17,9 +17,9 @@ func TestRegisterRenderMetrics_RegistersFamilies(t *testing.T) {
 		t.Fatal("RegisterRenderMetrics returned nil")
 	}
 
-	// Histogram/Counter без первого Observe/Inc семейство в exposition не
-	// публикуют — наблюдаем по одному разу обоих исходов, затем сверяем
-	// присутствие семейств.
+	// A Histogram/Counter with no Observe/Inc yet doesn't publish its family in
+	// the exposition — observe both outcomes once, then check
+	// the families are present.
 	m.ObserveRender(5*time.Millisecond, nil)
 	m.ObserveRender(time.Millisecond, errors.New("boom"))
 
@@ -56,7 +56,7 @@ func TestRenderMetrics_ErrorsCounter(t *testing.T) {
 	reg := obs.NewRegistry()
 	m := RegisterRenderMetrics(reg)
 
-	// err == nil duration наблюдает, errors_total НЕ инкрементирует.
+	// err == nil observes duration, does NOT increment errors_total.
 	m.ObserveRender(time.Millisecond, nil)
 	m.ObserveRender(time.Millisecond, nil)
 	m.ObserveRender(time.Millisecond, errors.New("x"))
@@ -65,15 +65,15 @@ func TestRenderMetrics_ErrorsCounter(t *testing.T) {
 	if !strings.Contains(body, "keeper_render_errors_total 1") {
 		t.Errorf("errors_total should be 1; got=\n%s", body)
 	}
-	// Все три прохода попали в histogram (count=3).
+	// All three passes landed in the histogram (count=3).
 	if !strings.Contains(body, "keeper_render_duration_seconds_count 3") {
 		t.Errorf("duration count should be 3; got=\n%s", body)
 	}
 }
 
 func TestRenderMetrics_NilReceiver_NoOp(t *testing.T) {
-	// Pipeline может подниматься без obs-стека (unit-тесты, dev-сборка, Trial).
-	// Метод на nil-получателе — no-op без паники.
+	// Pipeline may come up without the obs stack (unit tests, dev build, Trial).
+	// The method on a nil receiver is a no-op, no panic.
 	var m *RenderMetrics
 	m.ObserveRender(time.Second, nil)
 	m.ObserveRender(time.Second, errors.New("x"))

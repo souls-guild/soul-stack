@@ -9,16 +9,17 @@ import (
 	"github.com/souls-guild/soul-stack/shared/tmpl"
 )
 
-// redisTemplatesDir — каталог .tmpl destiny redis относительно этого пакета.
-// Тест живёт здесь по той же причине, что destiny_node_exporter_tmpl_test.go:
-// пакет владеет интеграцией с text/template-движком Soul-а (shared/tmpl) и общим
-// путём рендера .tmpl. L0-trial этой destiny ассертит ПЛАН и гоняет только
-// CEL-фазу — text/template-фазу для шаблонов не исполняет, поэтому регресс
-// порядка строк users.acl на L0 не виден.
+// redisTemplatesDir is the redis destiny's .tmpl directory, relative to this
+// package. Lives here for the same reason as destiny_node_exporter_tmpl_test.go:
+// this package owns the text/template engine integration (shared/tmpl) and the
+// .tmpl render path. The destiny's L0 trial asserts the PLAN and runs only the
+// CEL phase, never text/template, so a users.acl line-order regression stays
+// invisible at L0.
 const redisTemplatesDir = "../../../examples/destiny/redis/templates"
 
-// renderRedisTmpl рендерит один .tmpl destiny redis через тот же shared/tmpl.Engine,
-// что и Soul (strict, missingkey=error). Падение Parse/Execute = провал теста.
+// renderRedisTmpl renders one redis destiny .tmpl through the same
+// shared/tmpl.Engine as Soul (strict, missingkey=error). A Parse/Execute
+// failure fails the test.
 func renderRedisTmpl(t *testing.T, name string, root map[string]any) string {
 	t.Helper()
 	engine, err := tmpl.New()
@@ -36,31 +37,32 @@ func renderRedisTmpl(t *testing.T, name string, root map[string]any) string {
 	return out
 }
 
-// TestRedisUsersAcl_DeterministicOrder — ПРЯМОЙ regress-guard на tiling-критичный
-// баг недетерминизма users.acl (QA 2026-06-22). Корень бага: ACL рендерился из
-// СПИСКА юзеров, а Go text/template range по list сохраняет порядок источника,
-// который для коллекции из CEL `.map(...)` над map наследует НЕДЕТЕРМИНИРОВАННУЮ
-// итерацию Go-map → строки users.acl в разном порядке между прогонами → ложный
-// change в core.file.rendered → лишний рестарт Redis (на rolling-restart флоте
-// каскадный).
+// TestRedisUsersAcl_DeterministicOrder is a direct regress-guard for a
+// tiling-critical users.acl nondeterminism bug (QA 2026-06-22). Root cause: ACL
+// rendered from a user LIST, and Go text/template range over a list preserves
+// source order — which for a collection built by CEL `.map(...)` over a map
+// inherits Go's nondeterministic map iteration. Result: users.acl lines differ
+// between runs → false change in core.file.rendered → spurious Redis restart
+// (cascading on a rolling-restart soul-set).
 //
-// Фикс: users.acl.tmpl range-ит по MAP (Go сортирует ключи). Тест рендерит
-// РЕАЛЬНЫЙ шаблон с именами, НАРУШАЮЩИМИ порядок вставки (zeta/alpha/mike), и
-// доказывает, что (а) строки идут в ОТСОРТИРОВАННОМ порядке имён, (б) результат
-// стабилен на N прогонах подряд. Возврат к list-рендеру завалит оба ассерта.
+// Fix: users.acl.tmpl ranges over a MAP (Go sorts keys). This test renders the
+// REAL template with names that violate insertion order (zeta/alpha/mike) and
+// proves (a) lines come out in sorted-name order, (b) output is stable across N
+// runs. Reverting to a list render fails both assertions.
 //
-// ★ РЕДИЗАЙН default_admin (2026-06-30): шаблон больше НЕ рендерит литеральную
-// строку default из .vars.password (requirepass убран) — он печатает `user default
-// off`, КОГДА оператор не объявил default в .vars.users (безопасный дефолт: при
-// заданном aclfile без default-строки Redis иначе поставил бы built-in default on
-// nopass). .vars.password больше не передаётся. Здесь .vars.users НЕ содержит
-// default → ждём `user default off` ПЕРВОЙ строкой, затем range по map.
+// default_admin redesign (2026-06-30): the template no longer renders a literal
+// default line from .vars.password (requirepass removed) — it prints `user
+// default off` when the operator did not declare `default` in .vars.users (safe
+// default: with an aclfile set but no default line, Redis would otherwise fall
+// back to built-in `default on nopass`). .vars.password is no longer passed.
+// Here .vars.users has no `default` key, so we expect `user default off` as the
+// first line, followed by the sorted map range.
 func TestRedisUsersAcl_DeterministicOrder(t *testing.T) {
-	// vars.users — MAP имя→{perms,state,password}, как его собирает scenario
-	// (merge(list(map)) над .map(...)). Имена специально не отсортированы и не в
-	// порядке, в котором Go-map их вернул бы итерацией. Системный default_admin
-	// приходит ТЕМ ЖЕ map-ом (range-ом, как остальные) — здесь моделируем его в
-	// наборе наряду с operator-extra zeta/alpha/mike.
+	// vars.users is a MAP name→{perms,state,password}, as assembled by scenario
+	// (merge(list(map)) over .map(...)). Names are deliberately out of insertion
+	// and Go-map-iteration order. The system default_admin arrives through the
+	// same map (ranged like everyone else) — modeled here alongside
+	// operator-extra zeta/alpha/mike.
 	root := map[string]any{
 		"vars": map[string]any{
 			"users": map[string]any{
@@ -77,8 +79,8 @@ func TestRedisUsersAcl_DeterministicOrder(t *testing.T) {
 	for i := 0; i < runs; i++ {
 		out := renderRedisTmpl(t, "users.acl.tmpl", root)
 
-		// default off ПЕРВОЙ строкой (литерал ДО range — default НЕ в map), затем
-		// юзеры map в ОТСОРТИРОВАННОМ порядке: alpha < default_admin < mike < zeta.
+		// default off comes first (literal before the range — default isn't in
+		// the map), then map users in sorted order: alpha < default_admin < mike < zeta.
 		lines := nonEmptyLines(out)
 		if len(lines) != 5 {
 			t.Fatalf("ожидалось 5 строк user (default off + 4 map), получено %d:\n%s", len(lines), out)
@@ -91,7 +93,7 @@ func TestRedisUsersAcl_DeterministicOrder(t *testing.T) {
 			}
 		}
 
-		// Стабильность между прогонами (детерминизм): каждый прогон идентичен.
+		// Stability across runs (determinism): every run must be identical.
 		if i == 0 {
 			first = out
 		} else if out != first {
@@ -99,7 +101,7 @@ func TestRedisUsersAcl_DeterministicOrder(t *testing.T) {
 		}
 	}
 
-	// Пароль пишется ХЕШЕМ (#<sha256>), plaintext в файл НЕ попадает.
+	// Password is written as a HASH (#<sha256>) — plaintext never hits the file.
 	if strings.Contains(first, "zeta-pass") || strings.Contains(first, "alpha-pass") ||
 		strings.Contains(first, "mike-pass") || strings.Contains(first, "admin-pass") {
 		t.Fatalf("plaintext-пароль протёк в users.acl:\n%s", first)
@@ -107,33 +109,35 @@ func TestRedisUsersAcl_DeterministicOrder(t *testing.T) {
 	if !strings.Contains(first, "#") {
 		t.Fatalf("в users.acl нет хеша пароля (#<sha256>):\n%s", first)
 	}
-	// Встроенный default — ВЫКЛЮЧЕН (`user default off`): redis больше не использует
-	// его (роль занял default_admin), но без явной off-строки при заданном aclfile он
-	// остался бы built-in `on nopass` → открытый безпарольный доступ под protected-mode.
+	// Built-in default is OFF (`user default off`): redis no longer uses it
+	// (default_admin took the role), but without an explicit off line, an
+	// aclfile with no default entry would fall back to built-in `on nopass` —
+	// open passwordless access under protected-mode.
 	if !strings.Contains(first, "user default off") {
 		t.Fatalf("встроенный default должен рендериться `user default off` (его в .vars.users нет):\n%s", first)
 	}
-	// default_admin — системный юзер полного доступа (~* &* +@all), несёт #<hash>.
+	// default_admin is the full-access system user (~* &* +@all), carries #<hash>.
 	if !strings.Contains(first, "user default_admin on #") || !strings.Contains(first, "~* &* +@all") {
 		t.Fatalf("default_admin должен нести #<hash> и полный доступ ~* &* +@all:\n%s", first)
 	}
 }
 
-// TestRedisConf_ClusterAnnounceIP_PerHost — ПРЯМОЙ regress-guard на tiling-баг
-// host-инвариантного cluster-announce-ip (qa 2026-06-22). Корень бага: announce-ip
-// протаскивался через apply.input.config (резолвится host-ИНВАРИАНТНО — на первом
-// по SID хосте, resolveApplyInput targeted[0]), поэтому ВСЕ ноды анонсировали IP
-// первой ноды → cluster-bus за NAT/в облаке сломан.
+// TestRedisConf_ClusterAnnounceIP_PerHost is a direct regress-guard for a
+// tiling bug with host-invariant cluster-announce-ip (QA 2026-06-22). Root
+// cause: announce-ip was threaded through apply.input.config, which resolves
+// host-INVARIANTLY (first host by SID, resolveApplyInput targeted[0]), so every
+// node announced the first node's IP — cluster-bus broken behind NAT/in cloud.
 //
-// Фикс: cluster-announce-ip убран из apply.input.config и рендерится в redis.conf.tmpl
-// из `{{ .self.network.primary_ip }}` (render_context.self ПЕР-ХОСТ, симметрично bind),
-// под гейтом `cluster-enabled`. Тест рендерит РЕАЛЬНЫЙ redis.conf.tmpl с РАЗНЫМ .self
-// для двух хостов и доказывает, что каждый получает СВОЙ primary_ip: host A → IP A,
-// host B → IP B (а не один на всех). Возврат announce-ip в config-map завалит тест:
-// config-map host-инвариантен, оба хоста получили бы один IP.
+// Fix: cluster-announce-ip moved out of apply.input.config and rendered in
+// redis.conf.tmpl from `{{ .self.network.primary_ip }}` (render_context.self is
+// PER-HOST, symmetric with bind), gated on `cluster-enabled`. This test renders
+// the REAL redis.conf.tmpl with a DIFFERENT .self per host and proves each gets
+// its OWN primary_ip: host A → IP A, host B → IP B. Reverting announce-ip to the
+// config map fails the test (config map is host-invariant, both hosts would get
+// one IP).
 func TestRedisConf_ClusterAnnounceIP_PerHost(t *testing.T) {
-	// HOST-ИНВАРИАНТНЫЙ cluster-config (то, что приходит из apply.input.config:
-	// одинаков для всех хостов). announce-ip здесь НЕТ — он per-host из .self.
+	// HOST-INVARIANT cluster-config (what apply.input.config delivers: same for
+	// all hosts). announce-ip is NOT here — it comes per-host from .self.
 	clusterConfig := map[string]any{
 		"cluster-enabled":      "yes",
 		"cluster-config-file":  "nodes.conf",
@@ -152,8 +156,8 @@ func TestRedisConf_ClusterAnnounceIP_PerHost(t *testing.T) {
 
 	for _, h := range hosts {
 		root := map[string]any{
-			// render_context.self ПЕР-ХОСТ: при настоящем dispatch каждый хост рендерит
-			// .tmpl со своим self; здесь моделируем это, подставляя self хоста h.
+			// render_context.self is PER-HOST: under real dispatch each host renders
+			// its .tmpl with its own self; here we model that by passing host h's self.
 			"self": map[string]any{
 				"network": map[string]any{"primary_ip": h.ip},
 			},
@@ -173,8 +177,8 @@ func TestRedisConf_ClusterAnnounceIP_PerHost(t *testing.T) {
 		if !strings.Contains(out, wantAnnounce) {
 			t.Fatalf("хост %s: нет своей announce-ip-строки %q:\n%s", h.sid, wantAnnounce, out)
 		}
-		// Чужой IP в announce-строке этого хоста быть НЕ должен (host-инвариантный
-		// баг вернулся бы именно так — фиксированный первый IP у всех).
+		// This host's announce line must not carry another host's IP (the
+		// host-invariant bug would show up exactly this way — one fixed IP for all).
 		for _, other := range hosts {
 			if other.ip == h.ip {
 				continue
@@ -183,17 +187,18 @@ func TestRedisConf_ClusterAnnounceIP_PerHost(t *testing.T) {
 				t.Fatalf("хост %s анонсирует ЧУЖОЙ IP %s — announce-ip host-инвариантен (баг вернулся):\n%s", h.sid, other.ip, out)
 			}
 		}
-		// bind берёт тот же per-host .self.network.primary_ip — симметрия сохранена.
+		// bind uses the same per-host .self.network.primary_ip — symmetry preserved.
 		if !strings.Contains(out, "bind "+h.ip+" 127.0.0.1") {
 			t.Fatalf("хост %s: bind не на своём primary_ip %s:\n%s", h.sid, h.ip, out)
 		}
 	}
 }
 
-// TestRedisConf_ClusterAnnounceIP_StandaloneOmitsLine — вне cluster-режима (config
-// без cluster-enabled) строки cluster-announce-ip в redis.conf нет: гейт
-// `{{ if (index .vars.config "cluster-enabled") }}` гасит её. Доказывает, что
-// standalone-рендер не получил cluster-директиву из-за per-host announce-фикса.
+// TestRedisConf_ClusterAnnounceIP_StandaloneOmitsLine proves that outside
+// cluster mode (config without cluster-enabled), redis.conf has no
+// cluster-announce-ip line — the `{{ if (index .vars.config "cluster-enabled") }}`
+// gate suppresses it, i.e. the per-host announce-ip fix didn't leak a cluster
+// directive into standalone renders.
 func TestRedisConf_ClusterAnnounceIP_StandaloneOmitsLine(t *testing.T) {
 	root := map[string]any{
 		"self": map[string]any{"network": map[string]any{"primary_ip": "10.0.0.7"}},
@@ -215,16 +220,17 @@ func TestRedisConf_ClusterAnnounceIP_StandaloneOmitsLine(t *testing.T) {
 	if strings.Contains(out, "cluster-announce-ip") {
 		t.Fatalf("standalone (без cluster-enabled): cluster-announce-ip не должен присутствовать:\n%s", out)
 	}
-	// bind по-прежнему рендерится из .self (per-host, режим-агностично).
+	// bind still renders from .self (per-host, mode-agnostic).
 	if !strings.Contains(out, "bind 10.0.0.7 127.0.0.1") {
 		t.Fatalf("standalone: bind не на primary_ip:\n%s", out)
 	}
 }
 
-// TestRedisUsersAcl_EmptyMapKeepsDefault — пустой map юзеров → users.acl содержит
-// РОВНО default-строку (а не пустой файл): default рендерится из vars.password вне
-// map. Пустой aclfile означал бы built-in default БЕЗ пароля → protected-mode рвёт
-// внешние коннекты (cluster-init/REPLICAOF) — guard ловит возврат к пустому файлу.
+// TestRedisUsersAcl_EmptyMapKeepsDefault proves an empty users map still
+// produces exactly the default line (not an empty file) — default renders from
+// vars.password outside the map. An empty aclfile would mean built-in default
+// with no password, breaking external connections (cluster-init/REPLICAOF)
+// under protected-mode; this guard catches a regression to an empty file.
 func TestRedisUsersAcl_EmptyMapKeepsDefault(t *testing.T) {
 	root := map[string]any{
 		"vars": map[string]any{"password": "main-requirepass", "users": map[string]any{}},
@@ -242,22 +248,22 @@ func TestRedisUsersAcl_EmptyMapKeepsDefault(t *testing.T) {
 	}
 }
 
-// TestSentinelConf_AnnounceIP_PerHost — ПРЯМОЙ regress-guard на tiling-баг
-// host-инвариантного sentinel announce-ip (brief «Sentinel-режим», аналог
-// cluster-announce-ip). Корень потенциального бага: если announce-ip протащить
-// через apply.input (резолвится host-ИНВАРИАНТНО на первом по SID хосте), ВСЕ
-// sentinel-ы анонсировали бы IP первой ноды → gossip за NAT/в облаке сломан.
+// TestSentinelConf_AnnounceIP_PerHost is a direct regress-guard for a tiling
+// bug with host-invariant sentinel announce-ip (mirrors cluster-announce-ip).
+// Root cause of the potential bug: threading announce-ip through apply.input
+// (host-INVARIANT resolve, first host by SID) would make every sentinel
+// announce the first node's IP — gossip broken behind NAT/in cloud.
 //
-// Фикс: `sentinel announce-ip` рендерится в sentinel.conf.tmpl из
-// `{{ .self.network.primary_ip }}` (render_context.self ПЕР-ХОСТ, симметрично
-// bind/cluster-announce-ip). Тест рендерит РЕАЛЬНЫЙ sentinel.conf.tmpl с РАЗНЫМ
-// .self для двух хостов: каждый обязан анонсировать СВОЙ primary_ip. monitor.ip
-// (master), наоборот, HOST-ИНВАРИАНТНЫЙ — один и тот же у обоих.
+// Fix: `sentinel announce-ip` renders in sentinel.conf.tmpl from
+// `{{ .self.network.primary_ip }}` (render_context.self is PER-HOST, symmetric
+// with bind/cluster-announce-ip). This test renders the REAL sentinel.conf.tmpl
+// with a DIFFERENT .self per host: each must announce its OWN primary_ip.
+// monitor.ip (master), by contrast, is HOST-INVARIANT — same for both.
 func TestSentinelConf_AnnounceIP_PerHost(t *testing.T) {
-	// HOST-ИНВАРИАНТНЫЕ vars монитора (одинаковы у всех хостов, как из apply.input).
+	// HOST-INVARIANT monitor vars (same for all hosts, as from apply.input).
 	monitorVars := map[string]any{
 		"master_name":     "mymaster",
-		"master_ip":       "10.0.0.1", // адрес master (один на кластер)
+		"master_ip":       "10.0.0.1", // master address (one per cluster)
 		"master_port":     "6379",
 		"quorum":          "2",
 		"auth_user":       "",
@@ -290,7 +296,7 @@ func TestSentinelConf_AnnounceIP_PerHost(t *testing.T) {
 		}
 		out := renderRedisTmpl(t, "sentinel.conf.tmpl", root)
 
-		// announce-ip — СВОЙ primary_ip этого хоста.
+		// announce-ip is this host's OWN primary_ip.
 		if !strings.Contains(out, "sentinel announce-ip "+h.ip) {
 			t.Fatalf("хост %s: нет своей announce-ip-строки %q:\n%s", h.sid, h.ip, out)
 		}
@@ -299,26 +305,26 @@ func TestSentinelConf_AnnounceIP_PerHost(t *testing.T) {
 				t.Fatalf("хост %s анонсирует ЧУЖОЙ IP %s — announce-ip host-инвариантен (баг):\n%s", h.sid, other.ip, out)
 			}
 		}
-		// monitor.ip (master) — HOST-ИНВАРИАНТНЫЙ: у обоих хостов один и тот же.
+		// monitor.ip (master) is HOST-INVARIANT: same for both hosts.
 		if !strings.Contains(out, "sentinel monitor mymaster 10.0.0.1 6379 2") {
 			t.Fatalf("хост %s: нет sentinel monitor master 10.0.0.1:\n%s", h.sid, out)
 		}
 	}
 }
 
-// TestSentinelUnit_ConfDirInReadWritePaths — ПРЯМОЙ regress-guard на дефект
-// «redis-sentinel не стартует под systemd-хардерингом» (LIVE 2026-06-28).
-// Корень: redis-sentinel ПЕРЕПИСЫВАЕТ свой sentinel.conf в рантайме (персист
-// топологии — master/replicas/epoch/known-sentinels), но юнит имел
-// ProtectSystem=strict + ReadWritePaths БЕЗ conf_dir → /etc только-чтение →
-// sentinel падал на старте («sentinel.conf is not writable: Read-only file
-// system», exit 1, рестарт-луп). Фикс: conf_dir добавлен в ReadWritePaths
-// redis-sentinel.service.tmpl. Тест рендерит РЕАЛЬНЫЙ юнит и доказывает, что
-// строка ReadWritePaths СОДЕРЖИТ conf_dir (фактический, а не хардкод /etc/redis —
-// проверяем под нестандартным conf_dir). Возврат шаблона к ReadWritePaths без
-// conf_dir завалит тест.
+// TestSentinelUnit_ConfDirInReadWritePaths is a direct regress-guard for
+// "redis-sentinel fails to start under systemd hardening" (LIVE 2026-06-28).
+// Root cause: redis-sentinel REWRITES its own sentinel.conf at runtime
+// (persisting topology — master/replicas/epoch/known-sentinels), but the unit
+// had ProtectSystem=strict + ReadWritePaths WITHOUT conf_dir → /etc read-only →
+// sentinel failed on start ("sentinel.conf is not writable: Read-only file
+// system", exit 1, restart loop). Fix: conf_dir added to ReadWritePaths in
+// redis-sentinel.service.tmpl. This test renders the REAL unit and proves the
+// ReadWritePaths line CONTAINS conf_dir (the actual value, not a hardcoded
+// /etc/redis — checked against a non-standard conf_dir). Reverting the template
+// to ReadWritePaths without conf_dir fails the test.
 func TestSentinelUnit_ConfDirInReadWritePaths(t *testing.T) {
-	const confDir = "/opt/redis-conf" // нестандартный conf_dir — должен попасть в RW дословно
+	const confDir = "/opt/redis-conf" // non-standard conf_dir — must land in RW verbatim
 	root := map[string]any{
 		"vars": map[string]any{
 			"sentinel_bin":  "/usr/bin",
@@ -338,7 +344,7 @@ func TestSentinelUnit_ConfDirInReadWritePaths(t *testing.T) {
 	if !strings.Contains(rwLine, confDir) {
 		t.Fatalf("ReadWritePaths sentinel-юнита не содержит conf_dir %q (sentinel не сможет переписать sentinel.conf):\n%s", confDir, rwLine)
 	}
-	// Остальные обязательные каталоги записи на месте (не вытеснили друг друга).
+	// Remaining required write dirs are still present (didn't crowd each other out).
 	for _, want := range []string{"/var/lib/redis", "/var/log/redis", "/var/run/redis"} {
 		if !strings.Contains(rwLine, want) {
 			t.Fatalf("ReadWritePaths sentinel-юнита не содержит %q:\n%s", want, rwLine)
@@ -346,18 +352,20 @@ func TestSentinelUnit_ConfDirInReadWritePaths(t *testing.T) {
 	}
 }
 
-// TestRedisServerHardening_ConfDirInReadWritePaths — ПРЯМОЙ regress-guard того же
-// класса для redis-server (аудит дефекта sentinel, 2026-06-28). day-2 сценарий
-// update_config делает CONFIG REWRITE (community.redis.config rewrite:true) —
-// redis-server переписывает redis.conf, чтобы персистить применённые директивы.
-// Hardening drop-in имел ProtectSystem=strict + ReadWritePaths БЕЗ conf_dir → при
-// первой реально изменившейся директиве CONFIG REWRITE упёрся бы в read-only /etc
-// (та же ошибка, что у sentinel, но проявляется на day-2, не на create). Фикс:
-// conf_dir добавлен в ReadWritePaths hardening.conf.tmpl (и провязан var-ом в
-// tasks/server.yml). Тест рендерит РЕАЛЬНЫЙ drop-in и доказывает наличие conf_dir в
-// ReadWritePaths. Возврат шаблона без conf_dir завалит тест.
+// TestRedisServerHardening_ConfDirInReadWritePaths is a direct regress-guard
+// of the same class for redis-server (audit of the sentinel defect,
+// 2026-06-28). The update_config operational scenario runs CONFIG REWRITE
+// (community.redis.config rewrite:true) — redis-server rewrites redis.conf to
+// persist applied directives. The hardening drop-in had ProtectSystem=strict +
+// ReadWritePaths WITHOUT conf_dir, so the first directive that actually
+// changed would hit CONFIG REWRITE against a read-only /etc (same bug class as
+// sentinel, but surfacing on an operational run, not create). Fix: conf_dir
+// added to ReadWritePaths in hardening.conf.tmpl (wired via a var in
+// tasks/server.yml). This test renders the REAL drop-in and proves conf_dir is
+// present in ReadWritePaths. Reverting the template without conf_dir fails the
+// test.
 func TestRedisServerHardening_ConfDirInReadWritePaths(t *testing.T) {
-	const confDir = "/opt/redis-conf" // нестандартный conf_dir — должен попасть в RW дословно
+	const confDir = "/opt/redis-conf" // non-standard conf_dir — must land in RW verbatim
 	root := map[string]any{
 		"vars": map[string]any{
 			"data_dir": "/var/lib/redis",
@@ -379,12 +387,12 @@ func TestRedisServerHardening_ConfDirInReadWritePaths(t *testing.T) {
 	}
 }
 
-// TestSentinelConf_DirectivesDeterministicOrder — стартовые директивы
-// sentinel_config range-ятся по MAP в ОТСОРТИРОВАННОМ порядке (детерминизм — нет
-// ложного change/рестарта), а при пустом auth_pass строки auth-pass нет (gate).
-// Прямой guard на детерминизм директив (аналог users.acl order-guard). Маскинг
-// здесь НЕ проверяется (это выходной слой Soul/Keeper, не render-фаза) — в файл
-// auth-pass пишется как есть (нужно для AUTH sentinel-а на master).
+// TestSentinelConf_DirectivesDeterministicOrder proves sentinel_config startup
+// directives range over a MAP in SORTED order (determinism — no false
+// change/restart), and that an empty auth_pass omits the auth-pass line (gate).
+// Direct guard on directive determinism (mirrors the users.acl order guard).
+// Masking is NOT checked here (that's the Soul/Keeper output layer, not the
+// render phase) — auth-pass is written as-is (needed for sentinel's AUTH to master).
 func TestSentinelConf_DirectivesDeterministicOrder(t *testing.T) {
 	root := map[string]any{
 		"self": map[string]any{"network": map[string]any{"primary_ip": "10.0.0.5"}},
@@ -400,7 +408,7 @@ func TestSentinelConf_DirectivesDeterministicOrder(t *testing.T) {
 			"port":        26379,
 			"run_dir":     "/var/run/redis",
 			"log_dir":     "/var/log/redis",
-			// Намеренно не отсортированы: range по MAP обязан отсортировать ключи.
+			// Deliberately unsorted: ranging over the MAP must sort the keys.
 			"sentinel_config": map[string]any{
 				"sentinel down-after-milliseconds mymaster": "12000",
 				"loglevel":                           "notice",
@@ -418,7 +426,7 @@ func TestSentinelConf_DirectivesDeterministicOrder(t *testing.T) {
 			t.Fatalf("прогон %d дал ИНОЙ вывод (недетерминизм директив):\n--- 0 ---\n%s\n--- %d ---\n%s", i, first, i, out)
 		}
 	}
-	// loglevel < sentinel down... < sentinel failover... — порядок sorted-ключей.
+	// loglevel < sentinel down... < sentinel failover... — sorted-key order.
 	iLog := strings.Index(first, "loglevel notice")
 	iDown := strings.Index(first, "down-after-milliseconds mymaster 12000")
 	iFail := strings.Index(first, "failover-timeout mymaster 70000")
@@ -428,18 +436,19 @@ func TestSentinelConf_DirectivesDeterministicOrder(t *testing.T) {
 	if !(iLog < iDown && iDown < iFail) {
 		t.Fatalf("директивы не в отсортированном порядке (loglevel<down<failover):\n%s", first)
 	}
-	// auth-pass пуст → строки auth-pass нет.
+	// Empty auth-pass → no auth-pass line.
 	if strings.Contains(first, "sentinel auth-pass") {
 		t.Fatalf("пустой auth_pass: строки auth-pass быть не должно:\n%s", first)
 	}
 }
 
-// TestSentinelConf_AuthRendered — ПОЗИТИВНЫЙ guard auth-блока: при НЕпустых
-// auth_user/auth_pass обе директивы `sentinel auth-user`/`sentinel auth-pass`
-// рендерятся с именем мониторимого master-а (симметрия с пустым случаем в
-// DirectivesDeterministicOrder, где обеих строк нет). Ловит регресс гейта
-// `{{- if .vars.auth_X }}` и потерю master_name в auth-строках. AUTH sentinel-а
-// на master требуется при requirepass — без этих строк failover молча сломается.
+// TestSentinelConf_AuthRendered is a positive guard on the auth block: with
+// non-empty auth_user/auth_pass, both `sentinel auth-user`/`sentinel
+// auth-pass` directives render with the monitored master's name (symmetric
+// with the empty case in DirectivesDeterministicOrder, where both lines are
+// absent). Catches a regression of the `{{- if .vars.auth_X }}` gate or a lost
+// master_name in the auth lines. Sentinel's AUTH to master is required under
+// requirepass — without these lines, failover breaks silently.
 func TestSentinelConf_AuthRendered(t *testing.T) {
 	root := map[string]any{
 		"self": map[string]any{"network": map[string]any{"primary_ip": "10.0.0.5"}},
@@ -460,40 +469,45 @@ func TestSentinelConf_AuthRendered(t *testing.T) {
 	}
 	out := renderRedisTmpl(t, "sentinel.conf.tmpl", root)
 
-	// auth-user — с именем мониторимого master-а.
+	// auth-user carries the monitored master's name.
 	if !strings.Contains(out, "sentinel auth-user mymaster sentinel-user") {
 		t.Fatalf("нет строки auth-user с master_name:\n%s", out)
 	}
-	// auth-pass — с именем мониторимого master-а.
+	// auth-pass carries the monitored master's name.
 	if !strings.Contains(out, "sentinel auth-pass mymaster s3cr3t-sentinel-pass") {
 		t.Fatalf("нет строки auth-pass с master_name:\n%s", out)
 	}
 }
 
-// TestRedisConf_MasterAuthPersisted — ПРЯМОЙ regress-guard на live-дефект «sentinel
-// restart падает: replica master_link_status:DOWN, masterauth пустой» (2026-06-30).
-// Корень: после default_admin-редизайна (requirepass убран → ACL default_admin)
-// репликация replica→master идёт под ACL-юзером (masterauth+masteruser). Плагин
-// community.redis.replica ставит их CONFIG SET-ом в рантайме, но CONFIG SET НЕ
-// персистится в redis.conf без CONFIG REWRITE → при рестарте (sentinel restart wave 2)
-// redis-server поднимается БЕЗ masterauth → replica не авторизуется у master → link
-// DOWN → replica-synced timeout. Фикс: sentinel deploy-body кладёт masteruser/masterauth
-// ОБЫЧНЫМИ директивами в config-map apply.input → redis.conf.tmpl печатает их range-ом
-// config (как любую директиву) → СТАТИЧЕСКИ в файле → переживают рестарт. Директивы
-// безвредны на текущем master (Redis применяет их, лишь когда узел становится репликой —
-// failover-safe: старый master, ставший репликой, уже несёт креды).
+// TestRedisConf_MasterAuthPersisted is a direct regress-guard for a live
+// defect: "sentinel restart fails: replica master_link_status:DOWN, masterauth
+// empty" (2026-06-30). Root cause: after the default_admin redesign
+// (requirepass removed → ACL default_admin), replica→master replication runs
+// under an ACL user (masterauth+masteruser). The community.redis.replica
+// plugin sets them via CONFIG SET at runtime, but CONFIG SET does NOT persist
+// to redis.conf without CONFIG REWRITE — so on restart (sentinel restart wave
+// 2) redis-server comes up WITHOUT masterauth → replica fails to authenticate
+// to master → link DOWN → replica-synced timeout. Fix: the sentinel
+// deploy-body writes masteruser/masterauth as ORDINARY directives in the
+// apply.input config map → redis.conf.tmpl prints them via the config range
+// (like any directive) → STATICALLY in the file → survives restart. The
+// directives are harmless on the current master (Redis only applies them once
+// a node becomes a replica — failover-safe: an old master turned replica
+// already carries the credentials).
 //
-// Тест рендерит РЕАЛЬНЫЙ redis.conf.tmpl с masteruser/masterauth КЛЮЧАМИ config и
-// доказывает: (а) обе директивы присутствуют с переданными значениями; (б) пароль НЕ
-// хешируется (masterauth — plaintext в redis.conf, как auth_pass в sentinel.conf:
-// AUTH требует исходный секрет, файл защищён mode 0640). Возврат scenario к рендеру без
-// masterauth в config завалит парный L0-guard (sentinel-create-1master-2replica).
+// This test renders the REAL redis.conf.tmpl with masteruser/masterauth config
+// KEYS and proves: (a) both directives are present with the given values; (b)
+// the password is NOT hashed (masterauth is plaintext in redis.conf, like
+// auth_pass in sentinel.conf — AUTH needs the raw secret, the file is
+// protected by mode 0640). Reverting scenario to render without masterauth in
+// config fails the paired L0 guard (sentinel-create-1master-2replica).
 func TestRedisConf_MasterAuthPersisted(t *testing.T) {
 	root := map[string]any{
 		"self": map[string]any{"network": map[string]any{"primary_ip": "10.0.0.2"}},
 		"vars": map[string]any{
-			// masteruser/masterauth — ОБЫЧНЫЕ директивы config (sentinel deploy-body кладёт
-			// их сюда vault()-в-ячейке). Шаблон range-ит config → печатает их как есть.
+			// masteruser/masterauth are ORDINARY config directives (the sentinel
+			// deploy-body places them here via vault()-in-cell). The template ranges
+			// over config and prints them as-is.
 			"config": map[string]any{
 				"maxmemory":  "256mb",
 				"masteruser": "default_admin",
@@ -508,9 +522,9 @@ func TestRedisConf_MasterAuthPersisted(t *testing.T) {
 	}
 	out := renderRedisTmpl(t, "redis.conf.tmpl", root)
 
-	// (а) masteruser default_admin + masterauth <pass> присутствуют ДИРЕКТИВАМИ (строка
-	// начинается с имени директивы — не подстрока в комментарии шаблона, где слово
-	// masterauth тоже встречается).
+	// (a) masteruser default_admin + masterauth <pass> are present as DIRECTIVES
+	// (line starts with the directive name — not a substring match inside a
+	// template comment, where the word masterauth also appears).
 	if !hasDirectiveLine(out, "masteruser default_admin") {
 		t.Fatalf("нет директивы masteruser default_admin (replica не выберет ACL-юзера у master при рестарте):\n%s", out)
 	}
@@ -519,24 +533,24 @@ func TestRedisConf_MasterAuthPersisted(t *testing.T) {
 	}
 }
 
-// sysctl drop-in /etc/sysctl.d/30-redis.conf больше НЕ рендерится шаблоном:
-// host-tuning extras перешли на core.sysctl.applied (модуль сам строит
-// детерминированный drop-in из map с sorted keys, ADR-015 amend). Шаблон
-// redis.sysctl.conf.tmpl удалён, sorted-детерминизм проверяется unit-тестом
-// модуля (soul/internal/coremod/sysctl/applied_test.go).
+// The /etc/sysctl.d/30-redis.conf drop-in is no longer rendered by a template:
+// host-tuning extras moved to core.sysctl.applied (the module builds a
+// deterministic drop-in from a sorted-keys map, ADR-015 amend).
+// redis.sysctl.conf.tmpl was removed; sorted-determinism is now covered by that
+// module's unit test (soul/internal/coremod/sysctl/applied_test.go).
 
-// TestRedisConf_Loadmodule_NoTrailingSpace — ПРЯМОЙ guard на чистоту директив
-// loadmodule (Redis-модули, Redis < 8). Корень потенциального бага (brief
-// «Модули-нюанс»): если loadmodule класть КЛЮЧОМ config-map, range шаблона
-// `{{$key}} {{$value}}` с пустым value печатает `loadmodule /path.so ` — хвостовой
-// пробел. Любая нестабильность хвоста (пробел/нет) → ложный change core.file.rendered
-// → лишний рестарт Redis.
+// TestRedisConf_Loadmodule_NoTrailingSpace is a direct guard on loadmodule
+// directive cleanliness (Redis modules, Redis < 8). Root cause of the
+// potential bug: if loadmodule were a config-map KEY, the template range
+// `{{$key}} {{$value}}` with an empty value would print `loadmodule /path.so `
+// — a trailing space. Any instability in that trailing space → false
+// core.file.rendered change → spurious Redis restart.
 //
-// Фикс: loadmodule вынесен в ОТДЕЛЬНУЮ секцию шаблона из списка .vars.loadmodules
-// (`loadmodule {{ . }}` — без хвостового value). Тест рендерит РЕАЛЬНЫЙ
-// redis.conf.tmpl и доказывает: (а) строки loadmodule БЕЗ хвостового пробела;
-// (б) порядок строк = порядок списка (детерминизм между прогонами); (в) пути
-// присутствуют целиком.
+// Fix: loadmodule moved to its own template section driven by the
+// .vars.loadmodules list (`loadmodule {{ . }}` — no trailing value). This test
+// renders the REAL redis.conf.tmpl and proves: (a) loadmodule lines have no
+// trailing space; (b) line order matches list order (deterministic across
+// runs); (c) paths are rendered in full.
 func TestRedisConf_Loadmodule_NoTrailingSpace(t *testing.T) {
 	loadmodules := []any{
 		"/var/lib/redis/modules/redisearch.so",
@@ -576,7 +590,7 @@ func TestRedisConf_Loadmodule_NoTrailingSpace(t *testing.T) {
 	if len(modLines) != 2 {
 		t.Fatalf("ожидалось 2 строки loadmodule, получено %d:\n%s", len(modLines), first)
 	}
-	// (а) Хвостового пробела нет — строка заканчивается ровно на .so.
+	// (a) No trailing space — the line ends exactly at .so.
 	for _, ln := range modLines {
 		if ln != strings.TrimRight(ln, " ") {
 			t.Fatalf("строка loadmodule с хвостовым пробелом: %q", ln)
@@ -585,7 +599,7 @@ func TestRedisConf_Loadmodule_NoTrailingSpace(t *testing.T) {
 			t.Fatalf("строка loadmodule не заканчивается на .so: %q", ln)
 		}
 	}
-	// (б) Порядок строк = порядок списка (детерминизм списка, а не итерации map).
+	// (b) Line order matches list order (list determinism, not map iteration).
 	want := []string{
 		"loadmodule /var/lib/redis/modules/redisearch.so",
 		"loadmodule /var/lib/redis/modules/rejson.so",
@@ -597,12 +611,13 @@ func TestRedisConf_Loadmodule_NoTrailingSpace(t *testing.T) {
 	}
 }
 
-// TestRedisConf_Loadmodule_EmptyAndAbsent — без модулей секции loadmodule в
-// redis.conf нет в обоих случаях: ключ loadmodules задан пустым списком (Redis 8+:
-// scenario передаёт []) И ключ вовсе отсутствует в .vars (`index .vars
-// "loadmodules"` на отсутствующем ключе возвращает nil без ошибки в strict-mode,
-// симметрично cluster-enabled-гейту). Прямой guard на version-gate-ветку (8+ → нет
-// loadmodule) и на back-compat рендер без modules-vars.
+// TestRedisConf_Loadmodule_EmptyAndAbsent proves the loadmodule section is
+// absent from redis.conf in both cases: the loadmodules key set to an empty
+// list (Redis 8+: scenario passes []) AND the key missing from .vars entirely
+// (`index .vars "loadmodules"` on a missing key returns nil without error in
+// strict mode, symmetric with the cluster-enabled gate). Direct guard on the
+// version-gate branch (8+ → no loadmodule) and on the back-compat render
+// without modules-vars.
 func TestRedisConf_Loadmodule_EmptyAndAbsent(t *testing.T) {
 	base := func(loadmodules any) map[string]any {
 		vars := map[string]any{
@@ -635,10 +650,11 @@ func TestRedisConf_Loadmodule_EmptyAndAbsent(t *testing.T) {
 	}
 }
 
-// TestSentinelConf_AclfileSecondFile — guard на ВТОРОЙ aclfile (system-ACL-users d2):
-// sentinel.conf обязан указывать aclfile = ${conf_dir}/sentinel-users.acl (ОТДЕЛЬНЫЙ
-// от users.acl redis-server). Путь следует conf_dir (директива B). Регресс «sentinel
-// без своего aclfile» или хардкод /etc/redis при override conf_dir = красный.
+// TestSentinelConf_AclfileSecondFile is a guard on the SECOND aclfile
+// (system-ACL-users d2): sentinel.conf must set aclfile =
+// ${conf_dir}/sentinel-users.acl (SEPARATE from redis-server's users.acl). The
+// path follows conf_dir (directive B). Fails if sentinel lacks its own aclfile
+// or hardcodes /etc/redis when conf_dir is overridden.
 func TestSentinelConf_AclfileSecondFile(t *testing.T) {
 	root := map[string]any{
 		"self": map[string]any{"network": map[string]any{"primary_ip": "10.0.0.5"}},
@@ -650,7 +666,7 @@ func TestSentinelConf_AclfileSecondFile(t *testing.T) {
 			"auth_user":       "",
 			"auth_pass":       "",
 			"data_dir":        "/var/lib/redis",
-			"conf_dir":        "/opt/redis-conf", // нестандартный conf_dir — aclfile обязан следовать
+			"conf_dir":        "/opt/redis-conf", // non-standard conf_dir — aclfile must follow it
 			"port":            26379,
 			"run_dir":         "/var/run/redis",
 			"log_dir":         "/var/log/redis",
@@ -661,17 +677,18 @@ func TestSentinelConf_AclfileSecondFile(t *testing.T) {
 	if !strings.Contains(out, "aclfile /opt/redis-conf/sentinel-users.acl") {
 		t.Fatalf("sentinel.conf: нет aclfile под conf_dir (sentinel-users.acl):\n%s", out)
 	}
-	// users.acl redis-server в sentinel.conf НЕ упоминается (это второй, отдельный файл).
+	// redis-server's users.acl must not be mentioned in sentinel.conf (separate file).
 	if strings.Contains(out, "/users.acl") {
 		t.Fatalf("sentinel.conf ссылается на users.acl redis-server — должен на свой sentinel-users.acl:\n%s", out)
 	}
 }
 
-// TestSentinelUsersAcl_DeterministicOrder — sentinel-users.acl.tmpl (ВТОРОЙ aclfile,
-// system-ACL-users d2) рендерит МАП системных юзеров sentinel-демона в ОТСОРТИРОВАННОМ
-// порядке (детерминизм — нет ложного change/рестарта sentinel-демона), хеширует пароль
-// (sha256, не plaintext). Тот же инвариант, что users.acl. Включает default-юзера
-// (у sentinel-демона он в aclfile, в отличие от redis-server requirepass).
+// TestSentinelUsersAcl_DeterministicOrder proves sentinel-users.acl.tmpl (the
+// SECOND aclfile, system-ACL-users d2) renders the sentinel daemon's system
+// user map in SORTED order (determinism — no false change/restart of the
+// sentinel daemon) and hashes the password (sha256, not plaintext). Same
+// invariant as users.acl. Includes the default user (for the sentinel daemon
+// it lives in the aclfile, unlike redis-server's requirepass).
 func TestSentinelUsersAcl_DeterministicOrder(t *testing.T) {
 	root := map[string]any{
 		"vars": map[string]any{
@@ -691,7 +708,7 @@ func TestSentinelUsersAcl_DeterministicOrder(t *testing.T) {
 		if len(lines) != 4 {
 			t.Fatalf("ожидалось 4 строки user, получено %d:\n%s", len(lines), out)
 		}
-		// Отсортировано: default < haproxy < monitoring < sentinel.
+		// Sorted: default < haproxy < monitoring < sentinel.
 		gotNames := []string{userName(lines[0]), userName(lines[1]), userName(lines[2]), userName(lines[3])}
 		want := []string{"default", "haproxy", "monitoring", "sentinel"}
 		for j := range want {
@@ -705,7 +722,7 @@ func TestSentinelUsersAcl_DeterministicOrder(t *testing.T) {
 			t.Fatalf("прогон %d дал ИНОЙ вывод (недетерминизм):\n%s", i, out)
 		}
 	}
-	// Пароль — ХЕШЕМ (#<sha256hex>), plaintext не утекает.
+	// Password is a HASH (#<sha256hex>) — plaintext must not leak.
 	if strings.Contains(first, "default-pass") || strings.Contains(first, "sentinel-pass") {
 		t.Fatalf("plaintext-пароль в sentinel-users.acl (должен быть sha256-хеш):\n%s", first)
 	}
@@ -714,12 +731,13 @@ func TestSentinelUsersAcl_DeterministicOrder(t *testing.T) {
 	}
 }
 
-// TestSentinelUsersAcl_EmptyMapValid — пустой map даёт валидный aclfile.
-// ★ РЕДИЗАЙН default_admin (2026-06-30): шаблон рендерит `user default off`, когда
-// в .vars.users нет ключа default (безопасный дефолт: при заданном aclfile без
-// default-строки sentinel-демон оставил бы built-in `default on nopass` → безпарольный
-// доступ к :26379). На пустом map default тем более отсутствует → ровно одна строка
-// `user default off`, прочих user-строк нет (системные приходят в непустой map).
+// TestSentinelUsersAcl_EmptyMapValid proves an empty map yields a valid
+// aclfile. default_admin redesign (2026-06-30): the template renders `user
+// default off` when .vars.users has no default key (safe default: with an
+// aclfile set but no default line, the sentinel daemon would otherwise fall
+// back to built-in `default on nopass` — passwordless access to :26379). An
+// empty map has no default a fortiori, so the only line is `user default off`
+// (system users only arrive via a non-empty map).
 func TestSentinelUsersAcl_EmptyMapValid(t *testing.T) {
 	root := map[string]any{"vars": map[string]any{"users": map[string]any{}}}
 	out := renderRedisTmpl(t, "sentinel-users.acl.tmpl", root)
@@ -729,8 +747,8 @@ func TestSentinelUsersAcl_EmptyMapValid(t *testing.T) {
 	}
 }
 
-// nonEmptyLines — непустые строки рендера (отбрасывает blank-строки от
-// {{- -}}-обрамления комментария шаблона).
+// nonEmptyLines returns the render's non-blank lines (drops blanks left by
+// {{- -}} trimming around template comments).
 func nonEmptyLines(s string) []string {
 	var out []string
 	for _, ln := range strings.Split(s, "\n") {
@@ -741,9 +759,9 @@ func nonEmptyLines(s string) []string {
 	return out
 }
 
-// readWritePathsLine — строка `ReadWritePaths=...` из отрендеренного systemd-юнита/
-// drop-in. Падает, если строки нет (ProtectSystem=strict без ReadWritePaths = весь /
-// только-чтение, прод-инцидент).
+// readWritePathsLine returns the `ReadWritePaths=...` line from a rendered
+// systemd unit/drop-in. Fails the test if absent (ProtectSystem=strict without
+// ReadWritePaths means all of / is read-only — a production incident).
 func readWritePathsLine(t *testing.T, out string) string {
 	t.Helper()
 	for _, ln := range strings.Split(out, "\n") {
@@ -755,10 +773,10 @@ func readWritePathsLine(t *testing.T, out string) string {
 	return ""
 }
 
-// hasDirectiveLine — есть ли в рендере СТРОКА-директива redis.conf с заданным
-// префиксом (после TrimSpace начинается с него). Отличает реальную директиву
-// (`masterauth <pass>`) от вхождения того же слова в комментарий шаблона (`# …
-// репликация masterauth …`), которое strings.Contains поймал бы ложно.
+// hasDirectiveLine reports whether the render has a redis.conf directive LINE
+// with the given prefix (starts with it after TrimSpace). Distinguishes a real
+// directive (`masterauth <pass>`) from the same word inside a template comment
+// (`# … replication masterauth …`), which strings.Contains would match falsely.
 func hasDirectiveLine(out, prefix string) bool {
 	for _, ln := range strings.Split(out, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(ln), prefix) {
@@ -768,7 +786,7 @@ func hasDirectiveLine(out, prefix string) bool {
 	return false
 }
 
-// userName — имя юзера из строки `user <name> <state> #<hash> <perms>`.
+// userName extracts the user name from a `user <name> <state> #<hash> <perms>` line.
 func userName(line string) string {
 	fields := strings.Fields(line)
 	if len(fields) < 2 || fields[0] != "user" {

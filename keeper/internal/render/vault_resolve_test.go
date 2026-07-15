@@ -9,8 +9,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// TestResolveVaultRefs_NoRefs — params без vault-refs проходят насквозь без
-// обращения к Vault (PM-decision 2, no-op). vc=nil безопасен.
+// TestResolveVaultRefs_NoRefs — params without vault refs pass through with no
+// Vault call (PM-decision 2, no-op). vc=nil is safe.
 func TestResolveVaultRefs_NoRefs(t *testing.T) {
 	params := map[string]any{
 		"cmd":    "echo hello",
@@ -30,7 +30,7 @@ func TestResolveVaultRefs_NoRefs(t *testing.T) {
 	}
 }
 
-// TestResolveVaultRefs_Empty — пустые/nil params → no-op.
+// TestResolveVaultRefs_Empty — empty/nil params → no-op.
 func TestResolveVaultRefs_Empty(t *testing.T) {
 	out, err := resolveVaultRefs(context.Background(), nil, nil)
 	if err != nil {
@@ -41,8 +41,8 @@ func TestResolveVaultRefs_Empty(t *testing.T) {
 	}
 }
 
-// TestReadVaultRef_InterpolationMarker — ${…} внутри vault-ref → ошибка
-// (vault-ref должен быть статической строкой, граница фаз ADR-010).
+// TestReadVaultRef_InterpolationMarker — ${…} inside a vault ref → error (a
+// vault ref must be a static string, phase boundary ADR-010).
 func TestReadVaultRef_InterpolationMarker(t *testing.T) {
 	_, err := readVaultRef(context.Background(), nil, "vault:secret/db/${ input.x }")
 	if err == nil {
@@ -53,7 +53,7 @@ func TestReadVaultRef_InterpolationMarker(t *testing.T) {
 	}
 }
 
-// TestReadVaultRef_NilClient — vault-ref при отсутствии Vault-client → ошибка.
+// TestReadVaultRef_NilClient — a vault ref with no Vault client → error.
 func TestReadVaultRef_NilClient(t *testing.T) {
 	_, err := readVaultRef(context.Background(), nil, "vault:secret/db/password")
 	if err == nil {
@@ -64,7 +64,7 @@ func TestReadVaultRef_NilClient(t *testing.T) {
 	}
 }
 
-// TestReadVaultRef_EmptyField — пустое имя поля после '#' → ошибка.
+// TestReadVaultRef_EmptyField — an empty field name after '#' → error.
 func TestReadVaultRef_EmptyField(t *testing.T) {
 	_, err := readVaultRef(context.Background(), nil, "vault:secret/db/creds#")
 	if err == nil {
@@ -72,8 +72,9 @@ func TestReadVaultRef_EmptyField(t *testing.T) {
 	}
 }
 
-// TestResolveVaultRefs_RefDetectedInNested — ref в глубине структуры обнаружен
-// (доходит до readVaultRef, который без client падает — подтверждает обход).
+// TestResolveVaultRefs_RefDetectedInNested — a ref nested deep in the structure
+// is detected (reaches readVaultRef, which fails without a client — confirms
+// the traversal).
 func TestResolveVaultRefs_RefDetectedInNested(t *testing.T) {
 	params := map[string]any{
 		"outer": map[string]any{
@@ -86,10 +87,11 @@ func TestResolveVaultRefs_RefDetectedInNested(t *testing.T) {
 	}
 }
 
-// resolveVaultStubKV — KVReader с РЕАЛИСТИЧНЫМ not-found (как keeper/internal/
-// vault: `vault: KV path not found: <plain path>`, путь БЕЗ vault:-префикса).
-// Отдельный от pipelineStubKV, который искусственно префиксит `vault:` к пути
-// (симуляция старого leak-а) и потому не годится для проверки actionable-текста.
+// resolveVaultStubKV — a KVReader with a REALISTIC not-found (like
+// keeper/internal/vault: `vault: KV path not found: <plain path>`, path WITHOUT
+// the vault: prefix). Separate from pipelineStubKV, which artificially prefixes
+// `vault:` to the path (simulating an old leak) and so isn't suitable for
+// checking actionable text.
 type resolveVaultStubKV struct{ secrets map[string]map[string]any }
 
 func (s resolveVaultStubKV) ReadKV(_ context.Context, path string) (map[string]any, error) {
@@ -100,9 +102,9 @@ func (s resolveVaultStubKV) ReadKV(_ context.Context, path string) (map[string]a
 	return data, nil
 }
 
-// TestReadVaultRef_MissingSecretActionable (NIM-73): not-found vault-ref в params
-// даёт actionable-ошибку — путь в ПЛОСКОЙ форме, переживает production-маскинг
-// status_details/error_summary (симметрия с shared/cel.callVault).
+// TestReadVaultRef_MissingSecretActionable (NIM-73): a not-found vault ref in
+// params gives an actionable error — the path in FLAT form, survives production
+// masking of status_details/error_summary (symmetric with shared/cel.callVault).
 func TestReadVaultRef_MissingSecretActionable(t *testing.T) {
 	kv := resolveVaultStubKV{secrets: map[string]map[string]any{}}
 	_, err := readVaultRef(context.Background(), kv, "vault:secret/redis/nosql/users/alice#password")
@@ -112,8 +114,9 @@ func TestReadVaultRef_MissingSecretActionable(t *testing.T) {
 	assertResolveVaultActionable(t, err.Error(), "secret/redis/nosql/users/alice")
 }
 
-// TestReadVaultRef_MissingFieldActionable (NIM-73): секрет есть, поля нет →
-// actionable путь+поле, переживает маскинг; значения других полей не утекают.
+// TestReadVaultRef_MissingFieldActionable (NIM-73): the secret exists, the
+// field doesn't → actionable path+field, survives masking; other fields' values
+// don't leak.
 func TestReadVaultRef_MissingFieldActionable(t *testing.T) {
 	kv := resolveVaultStubKV{secrets: map[string]map[string]any{
 		"secret/redis/admin": {"password": "TOP-SECRET-VALUE"},
@@ -131,9 +134,9 @@ func TestReadVaultRef_MissingFieldActionable(t *testing.T) {
 	}
 }
 
-// assertResolveVaultActionable: текст ошибки vault-ref (а) несёт путь в ПЛОСКОЙ
-// форме, (б) НЕ несёт vault:-ref-маркер, (в) переживает production-маскинг
-// (audit.MaskSecretsSealed) — не `***MASKED***`, путь остаётся виден.
+// assertResolveVaultActionable: the vault-ref error text (a) carries the path in
+// FLAT form, (b) does NOT carry the vault: ref marker, (c) survives production
+// masking (audit.MaskSecretsSealed) — not `***MASKED***`, the path stays visible.
 func assertResolveVaultActionable(t *testing.T, errText, path string) {
 	t.Helper()
 	if !strings.Contains(errText, path) {

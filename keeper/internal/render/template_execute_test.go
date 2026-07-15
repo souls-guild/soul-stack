@@ -14,21 +14,22 @@ import (
 	"github.com/souls-guild/soul-stack/shared/tmpl"
 )
 
-// TestRenderToSoulExecute_GoldenPath закрывает L0-gap (BUG-A): L0-Trial
-// ассертит ПЛАН задач, но не ИСПОЛНЯЕТ реальный Soul-render, поэтому drift корня
-// text/template-контекста (плоский vars vs §3.2 {vars,self,role,essence})
-// проскочил до E2E. Этот тест сшивает обе стороны: реальный keeper-render
-// (Pipeline.Render собирает render_context + injectTemplateContent доставляет
-// template_content) → исполнение через тот же движок, что у Soul
-// (shared/tmpl.Engine.Render) с render_context КОРНЕМ.
+// TestRenderToSoulExecute_GoldenPath closes L0-gap (BUG-A): L0-Trial asserts
+// the task PLAN but doesn't EXECUTE a real Soul-render, so drift in the
+// text/template context root (flat vars vs §3.2 {vars,self,role,essence})
+// slipped through to E2E. This test stitches both sides together: real
+// keeper-render (Pipeline.Render builds render_context + injectTemplateContent
+// delivers template_content) → execution through the same engine Soul uses
+// (shared/tmpl.Engine.Render) with render_context as ROOT.
 //
-// Шаблон СИНТЕТИЧЕСКИЙ (не из examples/): после перевода golden-path redis.conf
-// на socket-only ни одна standalone-destiny из examples/ не обращается к
-// `.self.network.primary_ip` из text/template-фазы (cluster-репликация резолвит
-// адрес в CEL-фазе, не в шаблоне). Чтобы регресс BUG-A («.self подставляется /
-// strict-mode на missing self») не потерялся, держим контрольный шаблон тут — он
-// обращается к `.self.network.primary_ip`, `.self.os.family` и `.vars.*`, ровно
-// то, что падало «map has no entry for key "self"» при плоском корне.
+// Template is SYNTHETIC (not from examples/): after migrating the golden-path
+// redis.conf to socket-only, no standalone destiny in examples/ touches
+// `.self.network.primary_ip` from the text/template phase (cluster
+// replication resolves the address in the CEL phase, not the template). To
+// keep the BUG-A regression (".self missing / strict-mode on missing self")
+// covered, this control template stays here — it touches
+// `.self.network.primary_ip`, `.self.os.family`, and `.vars.*`, exactly what
+// failed with `map has no entry for key "self"` on a flat root.
 func TestRenderToSoulExecute_GoldenPath(t *testing.T) {
 	const tmplPath = "templates/synthetic-self.conf.tmpl"
 	const tmplBody = "bind {{ .self.network.primary_ip }} 127.0.0.1\n" +
@@ -47,8 +48,8 @@ func TestRenderToSoulExecute_GoldenPath(t *testing.T) {
 					Params: map[string]any{
 						"path":     "/etc/redis/redis.conf",
 						"template": tmplPath,
-						// templating.md §6: автор поднимает значения шаблона в
-						// params.vars; шаблон читает .vars.<name>.
+						// templating.md §6: the author lifts template values into
+						// params.vars; the template reads .vars.<name>.
 						"vars": map[string]any{
 							"socket":    "/run/redis/redis.sock",
 							"password":  "${ input.password }",
@@ -91,7 +92,7 @@ func TestRenderToSoulExecute_GoldenPath(t *testing.T) {
 	}
 	fields := tasks[0].Params.GetFields()
 
-	// Keeper доставил literal template_content (а не путь).
+	// Keeper delivered literal template_content (not a path).
 	tc := fields[paramTemplateContent].GetStringValue()
 	if tc == "" {
 		t.Fatal("template_content пуст — Keeper не доставил содержимое .tmpl")
@@ -100,14 +101,14 @@ func TestRenderToSoulExecute_GoldenPath(t *testing.T) {
 		t.Error("template-путь должен быть удалён из params (Soul читает только template_content)")
 	}
 
-	// Keeper собрал render_context = корень §3.2 {vars,self,role,essence}.
+	// Keeper built render_context = §3.2 root {vars,self,role,essence}.
 	rcVal, ok := fields[paramRenderContext]
 	if !ok {
 		t.Fatal("render_context отсутствует в params — Keeper не собрал корень §3.2")
 	}
 	renderContext := rcVal.GetStructValue().AsMap()
 
-	// Исполняем тем же движком, что Soul (shared/tmpl), render_context КОРНЕМ.
+	// Execute with the same engine Soul uses (shared/tmpl), render_context as ROOT.
 	engine, err := tmpl.New()
 	if err != nil {
 		t.Fatalf("tmpl.New: %v", err)
@@ -117,14 +118,14 @@ func TestRenderToSoulExecute_GoldenPath(t *testing.T) {
 		t.Fatalf("soul-render упал (это и есть BUG-A, если падает на missing self): %v", err)
 	}
 
-	// .self.network.primary_ip подставился (раньше падал «no entry for key self»).
+	// .self.network.primary_ip substituted (used to fail "no entry for key self").
 	if !strings.Contains(out, "bind 10.0.0.7 127.0.0.1") {
 		t.Errorf(".self.network.primary_ip не подставлен:\n%s", out)
 	}
 	if !strings.Contains(out, "family debian") {
 		t.Errorf(".self.os.family не подставлен:\n%s", out)
 	}
-	// .vars.* подставились из CEL-rendered params.
+	// .vars.* substituted from CEL-rendered params.
 	if !strings.Contains(out, "unixsocket /run/redis/redis.sock") {
 		t.Errorf(".vars.socket не подставлен:\n%s", out)
 	}
@@ -136,14 +137,15 @@ func TestRenderToSoulExecute_GoldenPath(t *testing.T) {
 	}
 }
 
-// TestRenderToSoulExecute_CompositeSelfKeys_SnakeCase — прицельный регресс
-// E2E BUG-A: composite-ключи `.self.*` должны быть snake_case
-// (pkg_mgr/init_system/primary_ip), канон ADR-018 / templating.md §3.2 (единая
-// точка правды с CEL soulprint.self.<path>). Ключевое отличие от
-// GoldenPath: Soulprint-map строится из РЕАЛЬНОГО proto SoulprintFacts через тот
-// же путь, что keeper-handler (protojson UseProtoNames=true), а не вручную —
-// именно этот путь давал camelCase (pkgMgr/initSystem/primaryIp) и ронял шаблон
-// `{{ .self.os.pkg_mgr }}` с «map has no entry for key "pkg_mgr"».
+// TestRenderToSoulExecute_CompositeSelfKeys_SnakeCase — targeted regression
+// for E2E BUG-A: composite `.self.*` keys must be snake_case
+// (pkg_mgr/init_system/primary_ip), canon ADR-018 / templating.md §3.2 (single
+// source of truth shared with CEL soulprint.self.<path>). Key difference from
+// GoldenPath: the Soulprint map is built from a REAL proto SoulprintFacts via
+// the same path as the keeper handler (protojson UseProtoNames=true), not by
+// hand — that exact path used to produce camelCase (pkgMgr/initSystem/
+// primaryIp) and break the template `{{ .self.os.pkg_mgr }}` with
+// `map has no entry for key "pkg_mgr"`.
 func TestRenderToSoulExecute_CompositeSelfKeys_SnakeCase(t *testing.T) {
 	const tmplPath = "templates/self-composite.conf.tmpl"
 	const tmplBody = "pkg_mgr {{ .self.os.pkg_mgr }}\n" +
@@ -167,8 +169,8 @@ func TestRenderToSoulExecute_CompositeSelfKeys_SnakeCase(t *testing.T) {
 		},
 	}
 
-	// Soulprint строим из proto SoulprintFacts ровно как keeper-handler:
-	// protojson с UseProtoNames=true → snake_case JSONB → unmarshal в map.
+	// Build Soulprint from proto SoulprintFacts exactly like the keeper handler:
+	// protojson with UseProtoNames=true → snake_case JSONB → unmarshal into map.
 	facts := &keeperv1.SoulprintFacts{
 		Sid:      "app-1.example.com",
 		Hostname: "app-1",

@@ -1,9 +1,9 @@
 //go:build integration
 
-// Integration-тесты cutover-а исполнения apply на Acolyte (ADR-027, Phase
-// 1.4.2/1.4.3): ветвление dispatch-а (planned+recipe+Summons), RenderForHost
-// (per-host рендер по рецепту) и claim-execute (render→SendApply→running, no-op
-// success, render-error→failed). Reuse общего harness-а integration_test.go
+// Integration tests for apply-execution cutover on Acolyte (ADR-027, Phase
+// 1.4.2/1.4.3): dispatch branching (planned+recipe+Summons), RenderForHost
+// (per-host render from the recipe), and claim-execute (render→SendApply→running, no-op
+// success, render-error→failed). Reuses the shared harness of integration_test.go
 // (TestMain/seed*/noopServiceRepo/mockDispatcher).
 
 package scenario
@@ -26,8 +26,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/cel"
 )
 
-// countingSummons — стаб SummonsPublisher: считает публикации (best-effort путь
-// dispatchPlanned шлёт один Summons после всех Insert-ов).
+// countingSummons — a stub SummonsPublisher: counts publications (best-effort path
+// dispatchPlanned sends one Summons after all the Inserts).
 type countingSummons struct{ n atomic.Int64 }
 
 func (s *countingSummons) PublishSummons(context.Context) error {
@@ -35,9 +35,9 @@ func (s *countingSummons) PublishSummons(context.Context) error {
 	return nil
 }
 
-// newAcolyteRunner собирает Runner с AcolyteEnabled (новый путь dispatch-а) и
-// заданным Summons-публикатором. Outbound НЕ должен вызываться на dispatch-е
-// нового пути (его дёргает Acolyte при claim) — передаём fakeDispatcher.
+// newAcolyteRunner builds a Runner with AcolyteEnabled (the new dispatch path) and
+// the given Summons publisher. Outbound must NOT be called during dispatch on
+// the new path (Acolyte calls it on claim) — pass fakeDispatcher.
 func newAcolyteRunner(t *testing.T, summons SummonsPublisher) *Runner {
 	t.Helper()
 	engine, err := cel.New()
@@ -59,8 +59,8 @@ func newAcolyteRunner(t *testing.T, summons SummonsPublisher) *Runner {
 	})
 }
 
-// newClaimRunner собирает ClaimRunner поверх integrationPool с заданным
-// Outbound (mockDispatcher симулирует Soul через прямой UpdateStatus).
+// newClaimRunner builds a ClaimRunner over integrationPool with the given
+// Outbound (mockDispatcher simulates Soul via a direct UpdateStatus).
 func newClaimRunner(t *testing.T, disp ApplyDispatcher) *ClaimRunner {
 	t.Helper()
 	engine, err := cel.New()
@@ -82,9 +82,9 @@ func newClaimRunner(t *testing.T, disp ApplyDispatcher) *ClaimRunner {
 	})
 }
 
-// TestIntegration_DispatchPlanned_WritesPlannedAndSummons — новый путь: dispatch
-// пишет planned+recipe на все roster-хосты (Вариант Б), шлёт Summons, НЕ зовёт
-// SendApply. Acolyte (ClaimRunner) затем доводит задания → barrier → ready.
+// TestIntegration_DispatchPlanned_WritesPlannedAndSummons — new path: dispatch
+// writes planned+recipe for all roster hosts (Option B), sends Summons, does NOT call
+// SendApply. Acolyte (ClaimRunner) then drives the tasks → barrier → ready.
 func TestIntegration_DispatchPlanned_WritesPlannedAndSummons(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -108,10 +108,10 @@ func TestIntegration_DispatchPlanned_WritesPlannedAndSummons(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Дожидаемся появления planned-строк на ОБОИХ хостах (Вариант Б — все roster).
+	// Wait for planned rows to appear on BOTH hosts (Option B — whole roster).
 	waitForPlanned(t, applyID, 2)
 
-	// recipe несёт vault-ref КАК ЕСТЬ (инвариант A) на каждой строке.
+	// recipe carries the vault-ref AS-IS (invariant A) on every row.
 	for _, sid := range []string{"host-a.example.com", "host-b.example.com"} {
 		got, err := applyrun.SelectByApplyID(context.Background(), integrationPool, applyID, sid)
 		if err != nil {
@@ -129,7 +129,7 @@ func TestIntegration_DispatchPlanned_WritesPlannedAndSummons(t *testing.T) {
 		t.Errorf("PublishSummons вызван %d раз, want 1", summons.n.Load())
 	}
 
-	// Acolyte доводит оба planned → running → success (mockDispatcher симулирует Soul).
+	// Acolyte drives both planned → running → success (mockDispatcher simulates Soul).
 	disp := &mockDispatcher{t: t, result: applyrun.StatusSuccess}
 	cr := newClaimRunner(t, disp)
 	driveClaims(t, cr, applyID, 2)
@@ -143,9 +143,9 @@ func TestIntegration_DispatchPlanned_WritesPlannedAndSummons(t *testing.T) {
 	}
 }
 
-// TestIntegration_SerialGuard_FallsBackToOldPath — scenario с serial-задачей при
-// AcolyteEnabled идёт СТАРЫМ путём: dispatch сразу пишет running + SendApply,
-// planned-строк не появляется (распределённый serial — Phase 3).
+// TestIntegration_SerialGuard_FallsBackToOldPath — a scenario with a serial task under
+// AcolyteEnabled takes the OLD path: dispatch writes running + SendApply right away,
+// no planned rows appear (distributed serial is Phase 3).
 func TestIntegration_SerialGuard_FallsBackToOldPath(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -157,8 +157,8 @@ func TestIntegration_SerialGuard_FallsBackToOldPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cel.New: %v", err)
 	}
-	// AcolyteEnabled, но serial-guard должен загнать в старый путь → Outbound
-	// (mockDispatcher) вызывается напрямую на dispatch-е.
+	// AcolyteEnabled, but the serial guard must force the old path → Outbound
+	// (mockDispatcher) is called directly during dispatch.
 	disp := &mockDispatcher{t: t, result: applyrun.StatusSuccess}
 	r := NewRunner(Deps{
 		Loader:         artifact.NewServiceLoader(t.TempDir(), nil),
@@ -186,22 +186,22 @@ func TestIntegration_SerialGuard_FallsBackToOldPath(t *testing.T) {
 	}
 
 	waitRunDone(t, "noop-prod", applyID, incarnation.StatusReady)
-	// Старый путь: SendApply дёрнут напрямую (без Acolyte), строка прошла running.
+	// Old path: SendApply is called directly (no Acolyte), the row went through running.
 	if disp.calls != 1 {
 		t.Errorf("SendApply calls = %d, want 1 (старый путь serial-guard)", disp.calls)
 	}
-	// Старый inline-путь (dispatchWave) НЕ выставляет attempt — fencing-epoch там
-	// вырождается (нет Ward-claim/recovery), на проводе attempt=0 (= старый Keeper
-	// без fencing, ADR-027(g), S-P2.2). Это осознанно, не баг.
+	// The old inline path (dispatchWave) does NOT set attempt — fencing epoch
+	// degenerates there (no Ward-claim/recovery), on the wire attempt=0 (= old Keeper
+	// without fencing, ADR-027(g), S-P2.2). This is intentional, not a bug.
 	if disp.gotAttempt != 0 {
 		t.Errorf("ApplyRequest.Attempt = %d, want 0 (старый dispatchWave-путь не фенсит)", disp.gotAttempt)
 	}
 }
 
-// TestIntegration_RenderForHost_SingleHost — RenderForHost рендерит прогон по
-// рецепту (load→parse→essence→full-roster render) и фильтрует свой SID. На
-// roster-е из одного хоста full-roster == single-host; multi-host parity
-// проверяет TestIntegration_TargetingParity_AcolyteVsOldPath.
+// TestIntegration_RenderForHost_SingleHost — RenderForHost renders a run from a
+// recipe (load→parse→essence→full-roster render) and filters down to its own SID. On
+// a single-host roster, full-roster == single-host; multi-host parity is
+// checked by TestIntegration_TargetingParity_AcolyteVsOldPath.
 func TestIntegration_RenderForHost_SingleHost(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -236,15 +236,15 @@ func TestIntegration_RenderForHost_SingleHost(t *testing.T) {
 	if tasks[0].Module != "core.exec.run" {
 		t.Errorf("module = %q, want core.exec.run", tasks[0].Module)
 	}
-	// План таргетит именно этот SID.
+	// The plan targets exactly this SID.
 	host := groupByHost(tasks, plans)["host-a.example.com"]
 	if len(host) != 1 {
 		t.Errorf("host-a задачи = %d, want 1", len(host))
 	}
 }
 
-// TestIntegration_RenderForHost_HostNotInRoster — хост вне roster-а (disconnected
-// между dispatch и claim) → ошибка (рендерить не на чем).
+// TestIntegration_RenderForHost_HostNotInRoster — a host outside the roster (disconnected
+// between dispatch and claim) → error (nothing to render against).
 func TestIntegration_RenderForHost_HostNotInRoster(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -274,10 +274,10 @@ func TestIntegration_RenderForHost_HostNotInRoster(t *testing.T) {
 	}
 }
 
-// TestIntegration_Claim_HappyPath — claim одного planned-задания: render →
-// MarkDispatched (claimed→dispatched) → SendApply (через applyOnlyDispatcher).
-// Строка проходит claimed → dispatched, attempt 0→1. Отметка dispatched теперь
-// СТРОГО ПЕРЕД SendApply (ADR-027 amend S3).
+// TestIntegration_Claim_HappyPath — claiming a single planned task: render →
+// MarkDispatched (claimed→dispatched) → SendApply (via applyOnlyDispatcher).
+// The row goes claimed → dispatched, attempt 0→1. The dispatched mark now happens
+// STRICTLY BEFORE SendApply (ADR-027 amend S3).
 func TestIntegration_Claim_HappyPath(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -286,11 +286,11 @@ func TestIntegration_Claim_HappyPath(t *testing.T) {
 	gitURL := noopServiceRepo(t)
 	ctx := context.Background()
 
-	// Готовим planned-задание напрямую (InsertPlanned), минуя run-goroutine.
+	// Prepare a planned task directly (InsertPlanned), bypassing the run goroutine.
 	insertPlannedFixture(t, "01HCLAIMOK", "host-a.example.com", gitURL)
 
-	// applyOnlyDispatcher симулирует Soul, НО только считает SendApply и НЕ
-	// терминалит строку — так проверяем именно claimed→dispatched.
+	// applyOnlyDispatcher simulates Soul, BUT only counts SendApply and does NOT
+	// terminate the row — this way we check exactly claimed→dispatched.
 	disp := &applyOnlyDispatcher{}
 	cr := newClaimRunner(t, disp)
 	if err := cr.Claim(ctx); err != nil {
@@ -299,12 +299,12 @@ func TestIntegration_Claim_HappyPath(t *testing.T) {
 	if disp.calls.Load() != 1 {
 		t.Fatalf("SendApply calls = %d, want 1", disp.calls.Load())
 	}
-	// Fencing-проброс (ADR-027(g)): claim кладёт run.Attempt в
-	// ApplyRequest.Attempt. ClaimNext инкрементил 0→1, поэтому на проводе attempt=1.
+	// Fencing propagation (ADR-027(g)): claim puts run.Attempt into
+	// ApplyRequest.Attempt. ClaimNext incremented 0→1, so on the wire attempt=1.
 	if got := disp.lastAttempt.Load(); got != 1 {
 		t.Errorf("ApplyRequest.Attempt = %d, want 1 (claim пробрасывает run.Attempt)", got)
 	}
-	// SendApply увидел строку уже в dispatched — отметка строго ПЕРЕД send.
+	// SendApply saw the row already dispatched — the mark happens strictly BEFORE send.
 	if disp.statusAtSend != string(applyrun.StatusDispatched) {
 		t.Errorf("статус на момент SendApply = %q, want dispatched (MarkDispatched строго ДО send)", disp.statusAtSend)
 	}
@@ -321,9 +321,9 @@ func TestIntegration_Claim_HappyPath(t *testing.T) {
 	}
 }
 
-// TestIntegration_Claim_MarkDispatchedBeforeSend — порядок инварианта: на момент
-// вызова SendApply строка уже dispatched (отметка строго ДО send). Если бы
-// отметка шла после, dispatcher увидел бы claimed.
+// TestIntegration_Claim_MarkDispatchedBeforeSend — order invariant: by the time
+// SendApply is called, the row is already dispatched (the mark happens strictly BEFORE send). If the
+// mark happened after, the dispatcher would have seen claimed.
 func TestIntegration_Claim_MarkDispatchedBeforeSend(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -347,8 +347,8 @@ func TestIntegration_Claim_MarkDispatchedBeforeSend(t *testing.T) {
 	}
 }
 
-// TestIntegration_Claim_SendApplyFails_Failed — SendApply вернул ошибку (Keeper
-// жив, знает что доставка не удалась): задание терминалится failed с safe-summary.
+// TestIntegration_Claim_SendApplyFails_Failed — SendApply returned an error (Keeper
+// is alive, knows delivery failed): the task terminates failed with a safe summary.
 func TestIntegration_Claim_SendApplyFails_Failed(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -379,9 +379,9 @@ func TestIntegration_Claim_SendApplyFails_Failed(t *testing.T) {
 	}
 }
 
-// TestIntegration_Claim_NoOpHost — where: отфильтровал все задачи на хосте →
-// claim закрывает задание `no_match` без ApplyRequest (FINDING-01 (б): no-op
-// хост получает отдельный benign-терминал, не `success`).
+// TestIntegration_Claim_NoOpHost — where: filtered out all tasks on the host →
+// claim closes the task as `no_match` without an ApplyRequest (FINDING-01 (b): a no-op
+// host gets a separate benign terminal, not `success`).
 func TestIntegration_Claim_NoOpHost(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -409,8 +409,8 @@ func TestIntegration_Claim_NoOpHost(t *testing.T) {
 	}
 }
 
-// TestIntegration_Claim_RenderError_FailedMasked — несуществующий сценарий в
-// рецепте → render-ошибка → failed с masked-summary (без раскрытого секрета).
+// TestIntegration_Claim_RenderError_FailedMasked — a nonexistent scenario in
+// the recipe → render error → failed with a masked summary (no leaked secret).
 func TestIntegration_Claim_RenderError_FailedMasked(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -419,8 +419,8 @@ func TestIntegration_Claim_RenderError_FailedMasked(t *testing.T) {
 	gitURL := noopServiceRepo(t)
 	ctx := context.Background()
 
-	// Рецепт с input-секретом + ссылкой на НЕсуществующий сценарий → render
-	// упадёт; summary не должен утечь vault-ref.
+	// A recipe with an input secret + a reference to a NONEXISTENT scenario → render
+	// fails; the summary must not leak the vault-ref.
 	insertPlannedFixtureFull(t, "01HCLAIMERR", "host-a.example.com", &applyrun.Recipe{
 		ServiceRef:   artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
 		ScenarioName: "does_not_exist",
@@ -452,21 +452,21 @@ func TestIntegration_Claim_RenderError_FailedMasked(t *testing.T) {
 
 // --- helpers ----------------------------------------------------------
 
-// applyOnlyDispatcher — Outbound, который только считает SendApply и НЕ пишет
-// терминальный статус (в отличие от mockDispatcher): для проверки именно
-// claimed→dispatched, оставляя строку dispatched. Дополнительно фиксирует статус
-// строки на момент send (statusAtSend) — для проверки порядка «отметка ДО send».
+// applyOnlyDispatcher — an Outbound that only counts SendApply and does NOT write a
+// terminal status (unlike mockDispatcher): for checking exactly
+// claimed→dispatched, leaving the row dispatched. Also records the row's status
+// at send time (statusAtSend) — to check the "mark BEFORE send" ordering.
 type applyOnlyDispatcher struct {
 	calls        atomic.Int64
-	lastAttempt  atomic.Int32 // attempt последнего отправленного ApplyRequest (fencing-проброс)
-	statusAtSend string       // статус apply_runs-строки в момент входа в SendApply
+	lastAttempt  atomic.Int32 // attempt of the last sent ApplyRequest (fencing propagation)
+	statusAtSend string       // apply_runs row status at the moment SendApply is entered
 }
 
 func (d *applyOnlyDispatcher) SendApply(ctx context.Context, _ string, req *keeperv1.ApplyRequest) error {
 	d.calls.Add(1)
 	d.lastAttempt.Store(req.GetAttempt())
-	// Снимок статуса строки на входе в send: если MarkDispatched отработал ДО
-	// SendApply (инвариант S3), здесь увидим 'dispatched'.
+	// Snapshot of the row status on entering send: if MarkDispatched ran BEFORE
+	// SendApply (invariant S3), we'll see 'dispatched' here.
 	var status string
 	if err := integrationPool.QueryRow(ctx,
 		`SELECT status FROM apply_runs WHERE apply_id = $1`, req.GetApplyId()).Scan(&status); err == nil {
@@ -475,8 +475,8 @@ func (d *applyOnlyDispatcher) SendApply(ctx context.Context, _ string, req *keep
 	return nil
 }
 
-// failingDispatcher — Outbound, чей SendApply всегда возвращает ошибку: для
-// проверки терминала failed на провале доставки (claim после MarkDispatched).
+// failingDispatcher — an Outbound whose SendApply always returns an error: for
+// checking the failed terminal on delivery failure (claim after MarkDispatched).
 type failingDispatcher struct {
 	calls atomic.Int64
 }
@@ -492,7 +492,7 @@ type errSendApplyT string
 
 func (e errSendApplyT) Error() string { return string(e) }
 
-// waitForPlanned ждёт появления n planned-строк прогона applyID.
+// waitForPlanned waits for n planned rows of run applyID to appear.
 func waitForPlanned(t *testing.T, applyID string, n int) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -515,8 +515,8 @@ func waitForPlanned(t *testing.T, applyID string, n int) {
 	t.Fatalf("planned-строк %d не появилось за 10s для %s", n, applyID)
 }
 
-// driveClaims прокручивает ClaimRunner.Claim, пока не доведёт все n заданий до
-// running/терминала (mockDispatcher терминалит на SendApply).
+// driveClaims loops ClaimRunner.Claim until all n tasks reach
+// running/terminal (mockDispatcher terminates on SendApply).
 func driveClaims(t *testing.T, cr *ClaimRunner, applyID string, n int) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -543,7 +543,7 @@ func driveClaims(t *testing.T, cr *ClaimRunner, applyID string, n int) {
 	t.Fatalf("claims не доведены до терминала за 10s для %s", applyID)
 }
 
-// insertPlannedFixture пишет одно planned-задание с recipe на noop-сценарий.
+// insertPlannedFixture writes one planned task with a recipe for the noop scenario.
 func insertPlannedFixture(t *testing.T, applyID, sid, gitURL string) {
 	t.Helper()
 	insertPlannedFixtureFull(t, applyID, sid, &applyrun.Recipe{
@@ -562,9 +562,9 @@ func insertPlannedFixtureFull(t *testing.T, applyID, sid string, recipe *applyru
 	}
 }
 
-// serialGuardScenario — scenario/create с задачей, несущей serial: (serial-guard
-// гонит её в старый путь даже при AcolyteEnabled). Имя сценария — create
-// (writeServiceRepo пишет именно его).
+// serialGuardScenario — scenario/create with a task carrying serial: (the serial guard
+// forces it onto the old path even under AcolyteEnabled). The scenario name is create
+// (writeServiceRepo writes exactly that).
 const serialGuardScenario = `name: create
 description: serial-guard fixture
 state_changes: {}
@@ -578,8 +578,8 @@ tasks:
     changed_when: "false"
 `
 
-// whereFalseScenario — scenario/create с задачей where: false → ни один хост не
-// таргетится (claim делает no-op success).
+// whereFalseScenario — scenario/create with a task where: false → no host is
+// targeted (claim performs a no-op success).
 const whereFalseScenario = `name: create
 description: where-false fixture
 state_changes: {}

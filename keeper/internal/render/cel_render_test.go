@@ -8,7 +8,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/cel"
 )
 
-// stubKVRender — герметичный KVReader для render-тестов vault() в CEL-params.
+// stubKVRender — hermetic KVReader for render tests of vault() in CEL params.
 type stubKVRender struct {
 	secrets map[string]map[string]any
 }
@@ -17,11 +17,11 @@ func (s stubKVRender) ReadKV(_ context.Context, path string) (map[string]any, er
 	if d, ok := s.secrets[path]; ok {
 		return d, nil
 	}
-	return nil, context.Canceled // любой not-found-эрр; тест на success-путь
+	return nil, context.Canceled // any not-found error; test covers the success path
 }
 
-// vault() в CEL-params резолвится keeper-side: реальное значение секрета
-// попадает в Params (а не ref-строка). Engine собран с KVReader (WithVault).
+// vault() in CEL params resolves keeper-side: the actual secret value lands
+// in Params (not a ref string). Engine built with a KVReader (WithVault).
 func TestRenderParams_VaultKeeperSide(t *testing.T) {
 	kv := stubKVRender{secrets: map[string]map[string]any{
 		"secret/redis/admin": {"password": "s3cr3t"},
@@ -49,8 +49,8 @@ func TestRenderParams_VaultKeeperSide(t *testing.T) {
 	}
 }
 
-// TestRenderParams_NestedAndPassthrough — интерполяция в nested map/list,
-// non-string-значения проходят насквозь.
+// TestRenderParams_NestedAndPassthrough — interpolation in nested map/list;
+// non-string values pass through untouched.
 func TestRenderParams_NestedAndPassthrough(t *testing.T) {
 	e, err := cel.New()
 	if err != nil {
@@ -86,8 +86,8 @@ func TestRenderParams_NestedAndPassthrough(t *testing.T) {
 	}
 }
 
-// TestRenderParams_NativeTypeSingleBlock — одиночный ${expr} без обёртки даёт
-// нативный тип (число), не строку (templating.md §5(а)).
+// TestRenderParams_NativeTypeSingleBlock — a bare ${expr} with no wrapping
+// yields a native type (number), not a string (templating.md §5(a)).
 func TestRenderParams_NativeTypeSingleBlock(t *testing.T) {
 	e, err := cel.New()
 	if err != nil {
@@ -105,7 +105,7 @@ func TestRenderParams_NativeTypeSingleBlock(t *testing.T) {
 	}
 }
 
-// TestEvalWhere_EmptyTrue — пустой where: → true (нет фильтра).
+// TestEvalWhere_EmptyTrue — empty where: → true (no filter).
 func TestEvalWhere_EmptyTrue(t *testing.T) {
 	e, err := cel.New()
 	if err != nil {
@@ -117,7 +117,7 @@ func TestEvalWhere_EmptyTrue(t *testing.T) {
 	}
 }
 
-// TestEvalWhere_SoulprintSelf — where: читает soulprint.self.* хоста.
+// TestEvalWhere_SoulprintSelf — where: reads a host's soulprint.self.*.
 func TestEvalWhere_SoulprintSelf(t *testing.T) {
 	e, err := cel.New()
 	if err != nil {
@@ -133,8 +133,8 @@ func TestEvalWhere_SoulprintSelf(t *testing.T) {
 	}
 }
 
-// TestEvalWhere_SoulprintSelfChoirs — where: фильтрует по choir-членству хоста
-// (ADR-044, S-T4): `X in soulprint.self.choirs`.
+// TestEvalWhere_SoulprintSelfChoirs — where: filters by a host's choir
+// membership (ADR-044, S-T4): `X in soulprint.self.choirs`.
 func TestEvalWhere_SoulprintSelfChoirs(t *testing.T) {
 	e, err := cel.New()
 	if err != nil {
@@ -162,11 +162,11 @@ func TestEvalWhere_SoulprintSelfChoirs(t *testing.T) {
 	}
 }
 
-// TestEvalWhere_SoulprintSelfTraits — GUARD (ADR-060): where: таргетит по
-// operator-set traits хоста (registry-проекция soulprint.self.traits). Скаляр
-// `traits.namespace == 'dba-ns'` и список `'alice' in traits.owners` резолвятся
-// БЕЗ AST-rewrite (traits — обычное map-поле под self). Покрывает match +
-// исключение не-матча.
+// TestEvalWhere_SoulprintSelfTraits — GUARD (ADR-060): where: targets by a
+// host's operator-set traits (registry projection soulprint.self.traits).
+// Scalar `traits.namespace == 'dba-ns'` and list `'alice' in traits.owners`
+// both resolve WITHOUT AST rewrite (traits is a plain map field under self).
+// Covers a match and a non-match.
 func TestEvalWhere_SoulprintSelfTraits(t *testing.T) {
 	e, err := cel.New()
 	if err != nil {
@@ -188,8 +188,9 @@ func TestEvalWhere_SoulprintSelfTraits(t *testing.T) {
 			"owners":    []any{"carol"},
 		},
 	})
-	// Хост вообще без traits (nil map → пустой объект под self.traits): обращение
-	// к ключу даёт штатный no-such-key, предикат → false (не паника/ошибка).
+	// A host with no traits at all (nil map → empty object under
+	// self.traits): a key lookup is a plain no-such-key, predicate → false
+	// (not a panic/error).
 	noTraitsHost := soulprintSelfMap(&topology.HostFacts{SID: "bare.example.com"})
 
 	cases := []struct {
@@ -217,9 +218,9 @@ func TestEvalWhere_SoulprintSelfTraits(t *testing.T) {
 	}
 }
 
-// TestSoulprintSelfMap_Traits — GUARD (ADR-060): soulprint.self.traits всегда
-// присутствует (пустой map при nil) и несёт operator-set значения как есть
-// (scalar + list). Симметрия с hostFactsToMap проверяется ниже.
+// TestSoulprintSelfMap_Traits — GUARD (ADR-060): soulprint.self.traits is
+// always present (empty map when nil) and carries operator-set values as-is
+// (scalar + list). Symmetry with hostFactsToMap is checked below.
 func TestSoulprintSelfMap_Traits(t *testing.T) {
 	h := &topology.HostFacts{
 		SID: "db-1.example.com",
@@ -241,13 +242,13 @@ func TestSoulprintSelfMap_Traits(t *testing.T) {
 		t.Errorf("self.traits.owners = %v, want [alice bob]", traits["owners"])
 	}
 
-	// nil Traits → пустой map (не отсутствие ключа traits под self).
+	// nil Traits → empty map (not a missing traits key under self).
 	bare := soulprintSelfMap(&topology.HostFacts{SID: "bare.example.com"})
 	if m, ok := bare["traits"].(map[string]any); !ok || len(m) != 0 {
 		t.Errorf("self.traits for nil-traits host = %v, want empty map", bare["traits"])
 	}
 
-	// Симметрия: элемент soulprint.hosts несёт те же traits.
+	// Symmetry: a soulprint.hosts element carries the same traits.
 	elem := hostFactsToMap(h)
 	htraits, ok := elem["traits"].(map[string]any)
 	if !ok || htraits["namespace"] != "dba-ns" {
@@ -256,10 +257,10 @@ func TestSoulprintSelfMap_Traits(t *testing.T) {
 }
 
 // TestSoulprintSelfMap_TraitsRegistryWinsOverReported — GUARD (ADR-060):
-// анти-спуфинг. operator-set traits живут в registry (HostFacts.Traits); если
-// Soul-агент пришлёт reported-soulprint с ключом "traits", registry-проекция
-// ОБЯЗАНА его перекрыть — Soul не может подменить operator-traits (таргетинг по
-// ним = доверенное решение оператора). Симметрия с sid/covens-инвариантом
+// anti-spoofing. Operator-set traits live in the registry (HostFacts.Traits);
+// if a Soul agent reports soulprint with a "traits" key, the registry
+// projection MUST override it — Soul can't spoof operator traits (targeting
+// by them is a trusted operator decision). Mirrors the sid/covens invariant
 // (TestSoulprintSelfMap_RegistryWinsOverReported).
 func TestSoulprintSelfMap_TraitsRegistryWinsOverReported(t *testing.T) {
 	h := &topology.HostFacts{
@@ -280,15 +281,15 @@ func TestSoulprintSelfMap_TraitsRegistryWinsOverReported(t *testing.T) {
 	}
 }
 
-// TestSoulprintSelfMap_NullReportedFacts — BUG E2E #3: при NULL reported
-// soulprint (Soul-агент не репортит) soulprint.self.sid/.covens/.role всё равно
-// доступны из roster (registry-проекция, ADR-018).
+// TestSoulprintSelfMap_NullReportedFacts — BUG E2E #3: with NULL reported
+// soulprint (Soul agent hasn't reported), soulprint.self.sid/.covens/.role
+// are still available from the roster (registry projection, ADR-018).
 func TestSoulprintSelfMap_NullReportedFacts(t *testing.T) {
 	h := &topology.HostFacts{
 		SID:       "web-2.example.com",
 		Coven:     []string{"prod", "web"},
 		Role:      "replica",
-		Soulprint: nil, // Soul ещё не прислал SoulprintReport
+		Soulprint: nil, // Soul hasn't sent a SoulprintReport yet
 	}
 	self := soulprintSelfMap(h)
 
@@ -304,8 +305,8 @@ func TestSoulprintSelfMap_NullReportedFacts(t *testing.T) {
 	}
 }
 
-// TestSoulprintSelfMap_MergeReported — reported os/network доступны вместе с
-// registry sid/covens/role.
+// TestSoulprintSelfMap_MergeReported — reported os/network are available
+// alongside registry sid/covens/role.
 func TestSoulprintSelfMap_MergeReported(t *testing.T) {
 	h := &topology.HostFacts{
 		SID:   "web-1.example.com",
@@ -331,8 +332,8 @@ func TestSoulprintSelfMap_MergeReported(t *testing.T) {
 	}
 }
 
-// TestSoulprintSelfMap_RegistryWinsOverReported — если в reported-map затесался
-// sid/covens, побеждает roster (registry — источник истины, ADR-018).
+// TestSoulprintSelfMap_RegistryWinsOverReported — if sid/covens sneaks into
+// the reported map, the roster wins (registry is the source of truth, ADR-018).
 func TestSoulprintSelfMap_RegistryWinsOverReported(t *testing.T) {
 	h := &topology.HostFacts{
 		SID:   "authoritative.example.com",
@@ -353,8 +354,8 @@ func TestSoulprintSelfMap_RegistryWinsOverReported(t *testing.T) {
 	}
 }
 
-// TestSoulprintSelfMap_NoMutateRoster — soulprintSelfMap не портит host.Soulprint
-// roster-а (deep-copy верхнего уровня).
+// TestSoulprintSelfMap_NoMutateRoster — soulprintSelfMap doesn't corrupt the
+// roster's host.Soulprint (top-level deep copy).
 func TestSoulprintSelfMap_NoMutateRoster(t *testing.T) {
 	reported := map[string]any{"os": map[string]any{"family": "debian"}}
 	h := &topology.HostFacts{SID: "h.example.com", Coven: []string{"prod"}, Soulprint: reported}
@@ -369,8 +370,8 @@ func TestSoulprintSelfMap_NoMutateRoster(t *testing.T) {
 	}
 }
 
-// TestEvalWhere_AddReplicasNullFacts — регресс E2E #3: where из add_replicas
-// рендерится без «no such key: sid» при NULL reported facts.
+// TestEvalWhere_AddReplicasNullFacts — regression E2E #3: add_replicas'
+// where: renders without "no such key: sid" under NULL reported facts.
 func TestEvalWhere_AddReplicasNullFacts(t *testing.T) {
 	e, err := cel.New()
 	if err != nil {
@@ -391,8 +392,8 @@ func TestEvalWhere_AddReplicasNullFacts(t *testing.T) {
 	}
 }
 
-// TestSoulprintSelf_HostsSymmetry — self и элемент soulprint.hosts согласованы по
-// sid/covens/role/choirs.
+// TestSoulprintSelf_HostsSymmetry — self and a soulprint.hosts element agree
+// on sid/covens/role/choirs.
 func TestSoulprintSelf_HostsSymmetry(t *testing.T) {
 	h := &topology.HostFacts{
 		SID:    "web-1.example.com",

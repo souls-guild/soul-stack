@@ -17,14 +17,14 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// fakeDispatcher — no-op ApplyDispatcher для lifecycle-тестов.
+// fakeDispatcher is a no-op ApplyDispatcher for lifecycle tests.
 type fakeDispatcher struct{}
 
 func (fakeDispatcher) SendApply(context.Context, string, *keeperv1.ApplyRequest) error { return nil }
 
-// lazyPool строит *pgxpool.Pool без фактического коннекта (pgxpool ленив:
-// New не открывает соединений до первого запроса). Нужен лишь как non-nil
-// зависимость NewRunner — тесты ниже не доходят до запросов в БД.
+// lazyPool builds a *pgxpool.Pool without an actual connection (pgxpool is
+// lazy: New doesn't open connections until the first query). Needed only as a
+// non-nil NewRunner dependency — the tests below never reach a DB query.
 func lazyPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	pool, err := pgxpool.New(context.Background(),
@@ -58,7 +58,7 @@ func TestNewRunner_NilDepPanics(t *testing.T) {
 			t.Fatal("NewRunner с nil-зависимостью должен паниковать")
 		}
 	}()
-	NewRunner(Deps{}) // все nil
+	NewRunner(Deps{}) // all nil
 }
 
 func TestStart_Validation(t *testing.T) {
@@ -84,12 +84,12 @@ func TestStart_Validation(t *testing.T) {
 
 func TestStart_AfterShutdown_Refused(t *testing.T) {
 	r := newTestRunner(t)
-	// Shutdown без активных прогонов завершается сразу.
+	// Shutdown with no active runs completes immediately.
 	if err := r.Shutdown(context.Background()); err != nil {
 		t.Fatalf("Shutdown: %v", err)
 	}
-	// Валидный spec, но runner в shutting-down → ErrShuttingDown БЕЗ спавна
-	// goroutine (проверка раньше go func).
+	// Valid spec, but the runner is shutting down → ErrShuttingDown with NO
+	// goroutine spawned (checked before go func).
 	err := r.Start(context.Background(), RunSpec{
 		ApplyID: "a", IncarnationName: "i", ScenarioName: "create",
 	})
@@ -105,10 +105,11 @@ func TestCancel_UnknownApplyID(t *testing.T) {
 	}
 }
 
-// TestRequestCancel_EmptyApplyID — пустой apply_id отвергается ДО обращения к
-// БД и до локального Cancel: cluster-wide отмена не имеет смысла без apply_id.
-// Проверка раньше PG-вызова — иначе RequestCancel ушёл бы в lazyPool (нет
-// коннекта) и упал на сетевой ошибке вместо валидационной.
+// TestRequestCancel_EmptyApplyID — an empty apply_id is rejected BEFORE
+// touching the DB or the local Cancel: a cluster-wide cancel is meaningless
+// without an apply_id. Checked ahead of the PG call, or RequestCancel would
+// hit lazyPool (no connection) and fail with a network error instead of a
+// validation one.
 func TestRequestCancel_EmptyApplyID(t *testing.T) {
 	r := newTestRunner(t)
 	found, err := r.RequestCancel(context.Background(), "")
@@ -127,14 +128,14 @@ func TestShutdown_NoActiveRuns(t *testing.T) {
 	}
 }
 
-// TestAllKeeperTasks — условие bypass-а no_hosts-гейта (ADR-0061 §контекст):
-// все задачи keeper-side → true (provision-from-zero), любая host-задача / пустой
-// сценарий → false. keeper-side форма — скаляр `on: keeper`; host-формы — опущен
-// on: (nil) или список ковенов.
+// TestAllKeeperTasks — the bypass condition for the no_hosts gate (ADR-0061
+// §context): all tasks keeper-side → true (provision-from-zero), any host
+// task / empty scenario → false. keeper-side form is the scalar `on:
+// keeper`; host forms are an omitted on: (nil) or a list of covens.
 func TestAllKeeperTasks(t *testing.T) {
 	keeper := config.Task{On: "keeper"}
-	hostOmitted := config.Task{}                      // on: опущен → Soul-side (весь incarnation)
-	hostCoven := config.Task{On: []any{"redis-prod"}} // on: список ковенов → Soul-side
+	hostOmitted := config.Task{}                      // on: omitted → Soul-side (whole incarnation)
+	hostCoven := config.Task{On: []any{"redis-prod"}} // on: a list of covens → Soul-side
 
 	tests := []struct {
 		name  string
@@ -159,8 +160,9 @@ func TestAllKeeperTasks(t *testing.T) {
 	}
 }
 
-// TestFailureStatus_ByMode — терминал провала прогона по режиму финала (S-D2b):
-// обычный прогон → error_locked; teardown → destroy_failed (НЕ error_locked).
+// TestFailureStatus_ByMode — the failure terminal of a run by finalization
+// mode (S-D2b): a regular run → error_locked; teardown → destroy_failed (NOT
+// error_locked).
 func TestFailureStatus_ByMode(t *testing.T) {
 	if got := failureStatus(TerminalCommitState); got != incarnation.StatusErrorLocked {
 		t.Errorf("failureStatus(CommitState) = %q, want error_locked", got)
@@ -171,16 +173,17 @@ func TestFailureStatus_ByMode(t *testing.T) {
 }
 
 // TestStart_ConvergeAcceptedByGate — guard (amend ADR-031, 2026-06-10):
-// `converge` — operational-сценарий, запускаемый обычным run-ом. Старт-приёмка
-// [Runner.Start] / гейт [Runner.lockRun] (TerminalCommitState) НЕ дискриминируют
-// по имени сценария — converge проходит ровно тот же путь, что любой
-// operational-сценарий, и НЕ отвергается из ready как «спец-имя».
+// `converge` is an operational scenario run through the regular run path.
+// The start acceptance [Runner.Start] / gate [Runner.lockRun]
+// (TerminalCommitState) don't discriminate by scenario name — converge takes
+// exactly the same path as any operational scenario and isn't rejected from
+// ready as a "special name".
 //
-// Проверяем на shutdown-пути: после Shutdown Start возвращает ErrShuttingDown
-// (а НЕ валидационную ошибку имени) — значит converge принят приёмкой как
-// валидное имя, как `create`. Полный happy-path-старт из ready проверяется
-// docker-gated integration-флоу (gate status-driven: ready/drift → applying,
-// без сверки имени).
+// Checked on the shutdown path: after Shutdown, Start returns ErrShuttingDown
+// (NOT a name validation error) — meaning converge is accepted as a valid
+// name, same as `create`. The full happy-path start from ready is checked by
+// the docker-gated integration flow (status-driven gate: ready/drift →
+// applying, no name check).
 func TestStart_ConvergeAcceptedByGate(t *testing.T) {
 	r := newTestRunner(t)
 	if err := r.Shutdown(context.Background()); err != nil {
@@ -189,18 +192,18 @@ func TestStart_ConvergeAcceptedByGate(t *testing.T) {
 	err := r.Start(context.Background(), RunSpec{
 		ApplyID:         "a",
 		IncarnationName: "i",
-		ScenarioName:    ConvergeScenarioName, // operational run, не спец-имя
+		ScenarioName:    ConvergeScenarioName, // operational run, not a special name
 	})
 	if !errors.Is(err, ErrShuttingDown) {
 		t.Errorf("Start(converge) = %v, want ErrShuttingDown (имя converge принято приёмкой, не отвергнуто)", err)
 	}
 }
 
-// TestStartDestroy_RefusedAfterShutdown — StartDestroy форсит ScenarioName=
-// `destroy` (caller может оставить поле пустым) и проходит ту же приёмку, что
-// Start: после Shutdown отклоняется ErrShuttingDown БЕЗ спавна goroutine (и без
-// обращения к lazyPool-DB). Проверяет, что StartDestroy не падает на пустом
-// ScenarioName — он его проставляет сам.
+// TestStartDestroy_RefusedAfterShutdown — StartDestroy forces
+// ScenarioName=`destroy` (the caller may leave it empty) and goes through the
+// same acceptance as Start: after Shutdown it's rejected with ErrShuttingDown
+// with NO goroutine spawned (and no lazyPool DB access). Checks StartDestroy
+// doesn't fail on an empty ScenarioName — it sets it itself.
 func TestStartDestroy_RefusedAfterShutdown(t *testing.T) {
 	r := newTestRunner(t)
 	if err := r.Shutdown(context.Background()); err != nil {
@@ -209,7 +212,7 @@ func TestStartDestroy_RefusedAfterShutdown(t *testing.T) {
 	err := r.StartDestroy(context.Background(), RunSpec{
 		ApplyID:         "a",
 		IncarnationName: "i",
-		// ScenarioName намеренно пуст — StartDestroy обязан проставить `destroy`.
+		// ScenarioName intentionally empty — StartDestroy must set it itself.
 	})
 	if !errors.Is(err, ErrShuttingDown) {
 		t.Errorf("StartDestroy after Shutdown = %v, want ErrShuttingDown", err)

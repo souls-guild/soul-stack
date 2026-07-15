@@ -1,12 +1,12 @@
 //go:build integration
 
-// Integration-тесты scenario-runner-а (slice .g) через testcontainers PG +
-// local-fs git-репо service-noop + mock Outbound. RunResult Soul-а
-// симулируется внутри mock-dispatcher-а прямым apply_runs.UpdateStatus —
-// тем же путём, что events_runresult.go::correlateRunResult в проде.
+// Integration tests for the scenario runner (slice .g) via testcontainers PG +
+// a local-fs git repo service-noop + mock Outbound. Soul's RunResult is
+// simulated inside the mock dispatcher via a direct apply_runs.UpdateStatus —
+// the same path events_runresult.go::correlateRunResult uses in prod.
 //
-// Покрываются end-to-end: happy-path (1 task → 1 host → success → state
-// commit → ready) и fail-path (RunResult failed → barrier → error_locked).
+// Covers end-to-end: happy-path (1 task → 1 host → success → state commit →
+// ready) and fail-path (RunResult failed → barrier → error_locked).
 
 package scenario
 
@@ -46,9 +46,9 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// renderedExecCommand собирает отрендеренную argv-команду core.exec.run из
-// wire-params (`cmd` + `args`) в одну строку через пробел — для ассертов тестов,
-// которые проверяют итоговую команду целиком (например, "echo hi!").
+// renderedExecCommand joins the rendered core.exec.run argv command from
+// wire-params (`cmd` + `args`) into one space-separated string — for test
+// assertions that check the whole resulting command (e.g. "echo hi!").
 func renderedExecCommand(p *structpb.Struct) string {
 	if p == nil {
 		return ""
@@ -66,9 +66,9 @@ var integrationPool *pgxpool.Pool
 func TestMain(m *testing.M) { os.Exit(run(m)) }
 
 func run(m *testing.M) int {
-	// Тесты грузят service-репо по file://-URL (local-fs git), который в проде
-	// запрещён scheme-allowlist-ом (security review L2). Включаем dev/test-флаг
-	// на всё время прогона пакета — тот же приём, что в artifact_test.go.
+	// Tests load the service repo via a file:// URL (local-fs git), which in
+	// prod is blocked by the scheme allowlist (security review L2). Enable the
+	// dev/test flag for the whole package run — same trick as artifact_test.go.
 	os.Setenv("SOUL_STACK_ALLOW_FILE_REPOS", "1")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -152,9 +152,9 @@ func seedConnectedSoul(t *testing.T, sid string, covens []string) {
 	}
 }
 
-// noopServiceRepo создаёт local-fs git-репо service-noop с одним коммитом:
-// service.yml + scenario/create/main.yml (1 задача core.exec.run). Возвращает
-// file://-URL для artifact.ServiceLoader.
+// noopServiceRepo creates a local-fs git repo service-noop with one commit:
+// service.yml + scenario/create/main.yml (1 core.exec.run task). Returns a
+// file:// URL for artifact.ServiceLoader.
 func noopServiceRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -207,8 +207,9 @@ tasks:
 	return "file://" + dir
 }
 
-// mockDispatcher симулирует Soul: на SendApply сразу пишет терминальный
-// apply_runs-статус (как correlateRunResult в проде), завершая barrier.
+// mockDispatcher simulates Soul: on SendApply it immediately writes a
+// terminal apply_runs status (like correlateRunResult in prod), completing
+// the barrier.
 type mockDispatcher struct {
 	t          *testing.T
 	result     applyrun.Status
@@ -216,7 +217,7 @@ type mockDispatcher struct {
 	calls      int
 	gotApplyID string
 	gotTasks   int
-	gotAttempt int32 // attempt последнего ApplyRequest (старый dispatch-путь → 0)
+	gotAttempt int32 // attempt of the last ApplyRequest (old dispatch path → 0)
 }
 
 func (m *mockDispatcher) SendApply(ctx context.Context, sid string, req *keeperv1.ApplyRequest) error {
@@ -230,10 +231,10 @@ func (m *mockDispatcher) SendApply(ctx context.Context, sid string, req *keeperv
 	return nil
 }
 
-// waveDispatcher симулирует Soul для serial-волн: фиксирует ПОРЯДОК SendApply
-// (по SID) и пишет терминальный статус. failOn — SID, который завершается
-// failed (для проверки fail-stop: волна с этим хостом ломает barrier, следующие
-// волны не стартуют).
+// waveDispatcher simulates Soul for serial waves: records the ORDER of
+// SendApply calls (by SID) and writes a terminal status. failOn — the SID that
+// finishes failed (to test fail-stop: the wave with this host breaks the
+// barrier, later waves don't start).
 type waveDispatcher struct {
 	t      *testing.T
 	mu     sync.Mutex
@@ -272,11 +273,12 @@ func newRunner(t *testing.T, disp ApplyDispatcher, gitURL string) *Runner {
 	return newRunnerWithDestiny(t, disp, nil)
 }
 
-// newRunnerAcolyte собирает Runner с AcolyteEnabled=true и реальным Outbound
-// (disp симулирует Soul). Используется staged-тестом, доказывающим, что staged-
-// прогон идёт INLINE даже в work-queue-режиме (гейт run.go !staged, ADR-056 §S4):
-// dispatchPlanned (Acolyte-путь) для staged НЕ вызывается. KID/PollInterval как у
-// newAcolyteRunner. gitURL не используется (loader клонирует из ServiceRef.Git).
+// newRunnerAcolyte builds a Runner with AcolyteEnabled=true and a real
+// Outbound (disp simulates Soul). Used by the staged test that proves a
+// staged run goes INLINE even in work-queue mode (run.go gate !staged,
+// ADR-056 §S4): dispatchPlanned (the Acolyte path) is NOT called for staged.
+// KID/PollInterval mirror newAcolyteRunner. gitURL is unused (the loader
+// clones from ServiceRef.Git).
 func newRunnerAcolyte(t *testing.T, disp ApplyDispatcher, gitURL string) *Runner {
 	t.Helper()
 	engine, err := cel.New()
@@ -292,15 +294,15 @@ func newRunnerAcolyte(t *testing.T, disp ApplyDispatcher, gitURL string) *Runner
 		DB:             integrationPool,
 		AcolyteEnabled: true,
 		KID:            "keeper-acolyte-staged-test",
-		// Staged-гейт (ADR-056 §S5): тестовые хосты passage-capable (см. newRunnerWithDestiny).
+		// Staged gate (ADR-056 §S5): test hosts are passage-capable (see newRunnerWithDestiny).
 		PassageCap:   stubPassageCap{},
 		PollInterval: 20 * time.Millisecond,
 		RunTimeout:   20 * time.Second,
 	})
 }
 
-// newRunnerWithDestiny собирает Runner с опциональным DestinySource (для
-// apply:destiny). destinyTemplate пуст → Destiny=nil (apply:destiny не поддержан).
+// newRunnerWithDestiny builds a Runner with an optional DestinySource (for
+// apply:destiny). Empty destinyTemplate → Destiny=nil (apply:destiny unsupported).
 func newRunnerWithDestiny(t *testing.T, disp ApplyDispatcher, destinySrc *DestinySource) *Runner {
 	t.Helper()
 	engine, err := cel.New()
@@ -315,20 +317,21 @@ func newRunnerWithDestiny(t *testing.T, disp ApplyDispatcher, destinySrc *Destin
 		Outbound: disp,
 		Destiny:  destinySrc,
 		DB:       integrationPool,
-		// Staged-гейт (ADR-056 §S5): тестовые хосты «поддерживают passage» (lacking
-		// пуст) — иначе fail-closed reject отверг бы все staged-тесты. Forward-compat
-		// reject проверяется отдельным stub-ом в TestIntegration_StagedOldSoul_Rejected.
+		// Staged gate (ADR-056 §S5): test hosts "support passage" (lacking is
+		// empty) — otherwise the fail-closed reject would reject all staged
+		// tests. The forward-compat reject is verified by a separate stub in
+		// TestIntegration_StagedOldSoul_Rejected.
 		PassageCap:   stubPassageCap{},
 		PollInterval: 20 * time.Millisecond,
 		RunTimeout:   20 * time.Second,
 	})
 }
 
-// newRunnerWithAuditStaged — staged-вариант [newRunnerWithAudit] (реальные
-// auditpg.Writer/Reader как production daemon.go) + PassageCap=stubPassageCap{}
-// (оба хоста passage-aware, иначе S5-гейт отверг бы staged). Нужен cross-passage-
-// гейту (ADR-056 R3): он читает CHANGED/FAILED-факты предыдущих Passage из журнала
-// аудита через AuditReader.
+// newRunnerWithAuditStaged — staged variant of [newRunnerWithAudit] (real
+// auditpg.Writer/Reader like production daemon.go) + PassageCap=stubPassageCap{}
+// (both hosts passage-aware, otherwise the S5 gate would reject staged). Needed
+// for the cross-passage gate (ADR-056 R3): it reads CHANGED/FAILED facts of
+// earlier Passages from the audit log via AuditReader.
 func newRunnerWithAuditStaged(t *testing.T, disp ApplyDispatcher) *Runner {
 	t.Helper()
 	engine, err := cel.New()
@@ -350,9 +353,10 @@ func newRunnerWithAuditStaged(t *testing.T, disp ApplyDispatcher) *Runner {
 	})
 }
 
-// stubPassageCap — управляемая [PassageCapabilityChecker] для тестов. lacking —
-// список SID-ов, которые НЕ поддерживают passage (по умолчанию nil → все
-// поддерживают, как одноверсионный бета-флот). err — симуляция сбоя Redis.
+// stubPassageCap — a controllable [PassageCapabilityChecker] for tests.
+// lacking — SIDs that do NOT support passage (default nil → everyone
+// supports it, like a single-version beta fleet). err — simulates a Redis
+// failure.
 type stubPassageCap struct {
 	lacking []string
 	err     error
@@ -362,9 +366,10 @@ func (s stubPassageCap) SoulsLackingPassage(_ context.Context, _ []string) ([]st
 	return s.lacking, s.err
 }
 
-// newRunnerWithPassageCap — Runner с явным [PassageCapabilityChecker] (forward-
-// compat guard-тест ADR-056 §S5): cap=nil → fail-closed-ветка гейта; cap с
-// lacking → reject. Остальное как newRunnerWithDestiny (без Destiny).
+// newRunnerWithPassageCap — a Runner with an explicit [PassageCapabilityChecker]
+// (forward-compat guard test, ADR-056 §S5): cap=nil → the gate's fail-closed
+// branch; cap with lacking → reject. Otherwise like newRunnerWithDestiny
+// (without Destiny).
 func newRunnerWithPassageCap(t *testing.T, disp ApplyDispatcher, cap PassageCapabilityChecker) *Runner {
 	t.Helper()
 	engine, err := cel.New()
@@ -384,10 +389,11 @@ func newRunnerWithPassageCap(t *testing.T, disp ApplyDispatcher, cap PassageCapa
 	})
 }
 
-// waitRunDone ждёт фактического завершения прогона applyID (commit-снапшот в
-// state_history появляется только после терминала: и success, и error_locked
-// его пишут) и возвращает incarnation. Так тест не путает СИД-овый
-// «ready»-снапшот (стартовое значение seed-а) с пост-прогонным «ready».
+// waitRunDone waits for applyID's run to actually finish (the commit snapshot
+// in state_history appears only after a terminal: both success and
+// error_locked write it) and returns the incarnation. This keeps the test
+// from confusing the seeded "ready" state (the seed's starting value) with the
+// post-run "ready".
 func waitRunDone(t *testing.T, name, applyID string, want incarnation.Status) *incarnation.Incarnation {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -451,7 +457,7 @@ func TestIntegration_HappyPath(t *testing.T) {
 		t.Errorf("dispatched tasks = %d, want 1", disp.gotTasks)
 	}
 
-	// state_history snapshot прогона.
+	// state_history snapshot of the run.
 	hist, total, err := incarnation.HistorySelectByName(context.Background(), integrationPool,
 		"noop-prod", incarnation.HistoryFilter{ApplyID: applyID}, 0, 10)
 	if err != nil {
@@ -503,9 +509,10 @@ func TestIntegration_FailPath(t *testing.T) {
 	}
 }
 
-// hangDispatcher симулирует Soul, который ПРИНЯЛ ApplyRequest, но ещё не
-// прислал RunResult: apply_runs-строка остаётся running, barrier поллит. Так
-// run-goroutine «зависает» в barrier-е до отмены — нужно для проверки Cancel.
+// hangDispatcher simulates a Soul that ACCEPTED the ApplyRequest but hasn't
+// sent a RunResult yet: the apply_runs row stays running, the barrier keeps
+// polling. This makes the run goroutine "hang" in the barrier until
+// cancelled — needed to test Cancel.
 type hangDispatcher struct {
 	t     *testing.T
 	mu    sync.Mutex
@@ -516,15 +523,15 @@ func (d *hangDispatcher) SendApply(_ context.Context, _ string, _ *keeperv1.Appl
 	d.mu.Lock()
 	d.calls++
 	d.mu.Unlock()
-	// Терминал НЕ пишем — хост остаётся running, barrier ждёт.
+	// Terminal NOT written — host stays running, barrier keeps waiting.
 	return nil
 }
 
-// TestIntegration_CrossKeeperCancel_FlagInPG — cluster-wide Cancel (G1): флаг
-// ставит «другой инстанс» (тест пишет его напрямую через RequestCancel, минуя
-// Runner — имитация Keeper-B), а run-goroutine на ЭТОМ инстансе (Keeper-A)
-// видит его в barrier-поллинге и отменяет прогон → error_locked (то же
-// поведение, что локальный ctx-Cancel).
+// TestIntegration_CrossKeeperCancel_FlagInPG — cluster-wide Cancel (G1): the
+// flag is set by "another instance" (the test writes it directly via
+// RequestCancel, bypassing the Runner — simulating Keeper-B), and the
+// run-goroutine on THIS instance (Keeper-A) sees it during barrier polling
+// and cancels the run → error_locked (same behavior as a local ctx-Cancel).
 func TestIntegration_CrossKeeperCancel_FlagInPG(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -546,11 +553,11 @@ func TestIntegration_CrossKeeperCancel_FlagInPG(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Ждём, пока хост окажется dispatched (apply_runs-строка running) — иначе
-	// RequestCancel опередил бы Insert и не нашёл running-строк.
+	// Wait until the host is dispatched (apply_runs row running) — otherwise
+	// RequestCancel would race ahead of the Insert and find no running rows.
 	waitHostDispatched(t, applyID)
 
-	// «Другой Keeper»: ставит флаг напрямую в PG (без Runner на этом инстансе).
+	// "Another Keeper": sets the flag directly in PG (no Runner on this instance).
 	affected, err := applyrun.RequestCancel(context.Background(), integrationPool, applyID)
 	if err != nil {
 		t.Fatalf("RequestCancel: %v", err)
@@ -559,17 +566,17 @@ func TestIntegration_CrossKeeperCancel_FlagInPG(t *testing.T) {
 		t.Fatal("RequestCancel affected = 0, want >=1 (running-хост прогона)")
 	}
 
-	// run-goroutine видит флаг в barrier-поллинге и отменяет прогон.
+	// run-goroutine sees the flag during barrier polling and cancels the run.
 	inc := waitRunDone(t, "noop-prod", applyID, incarnation.StatusErrorLocked)
 	if inc.StatusDetails == nil || inc.StatusDetails["reason"] != "dispatch_failed" {
 		t.Errorf("status_details = %+v, want reason=dispatch_failed (отмена через barrier)", inc.StatusDetails)
 	}
 }
 
-// TestIntegration_LocalCancel_FastPath — локальный Cancel через
-// Runner.RequestCancel: run-goroutine живёт на ЭТОМ инстансе, отмена доходит
-// быстрым путём (ctx-Cancel), не дожидаясь барьерного тика. Тот же терминал
-// error_locked.
+// TestIntegration_LocalCancel_FastPath — local Cancel via
+// Runner.RequestCancel: the run-goroutine lives on THIS instance, so
+// cancellation takes the fast path (ctx-Cancel) instead of waiting for a
+// barrier tick. Same error_locked terminal.
 func TestIntegration_LocalCancel_FastPath(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -606,8 +613,8 @@ func TestIntegration_LocalCancel_FastPath(t *testing.T) {
 	}
 }
 
-// TestIntegration_RequestCancel_TerminalNoOp — Cancel уже завершённого прогона
-// (терминальный статус) — no-op: флаг не ставится, incarnation остаётся ready.
+// TestIntegration_RequestCancel_TerminalNoOp — Cancel on an already-finished
+// run (terminal status) is a no-op: no flag set, incarnation stays ready.
 func TestIntegration_RequestCancel_TerminalNoOp(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -628,11 +635,11 @@ func TestIntegration_RequestCancel_TerminalNoOp(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	// Прогон успешно завершился — incarnation ready, apply_runs success.
+	// Run finished successfully — incarnation ready, apply_runs success.
 	waitRunDone(t, "noop-prod", applyID, incarnation.StatusReady)
 
-	// Cancel завершённого прогона — no-op (found=false, нет running-строк, нет
-	// локальной goroutine).
+	// Cancel on a finished run is a no-op (found=false, no running rows, no
+	// local goroutine).
 	found, err := r.RequestCancel(context.Background(), applyID)
 	if err != nil {
 		t.Fatalf("RequestCancel: %v", err)
@@ -649,9 +656,9 @@ func TestIntegration_RequestCancel_TerminalNoOp(t *testing.T) {
 	}
 }
 
-// waitHostDispatched ждёт появления хотя бы одной running-строки прогона
-// (apply_runs Insert состоялся) — синхронизация перед RequestCancel, чтобы
-// флаг застал running-строку.
+// waitHostDispatched waits for at least one running row of the run to appear
+// (the apply_runs Insert happened) — synchronization before RequestCancel so
+// the flag catches a running row.
 func waitHostDispatched(t *testing.T, applyID string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -674,7 +681,7 @@ func TestIntegration_NoHosts_ErrorLocked(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "noop-prod")
-	// Ни одного connected-хоста.
+	// No connected hosts.
 	gitURL := noopServiceRepo(t)
 
 	disp := &mockDispatcher{t: t, result: applyrun.StatusSuccess}
@@ -695,9 +702,9 @@ func TestIntegration_NoHosts_ErrorLocked(t *testing.T) {
 		t.Errorf("reason = %v, want no_hosts", inc.StatusDetails["reason"])
 	}
 
-	// BAG-1: ранний abort (roster пуст) обязан оставить терминальную apply_runs-
-	// строку, иначе Voyage-awaiter висит вечно. Реальных хостов нет → ровно одна
-	// sentinel-строка (render.RunSentinelSID), status=failed, terminal.
+	// BAG-1: an early abort (empty roster) must leave a terminal apply_runs
+	// row, otherwise the Voyage awaiter hangs forever. No real hosts → exactly
+	// one sentinel row (render.RunSentinelSID), status=failed, terminal.
 	statuses, err := applyrun.SelectStatusesByApplyID(context.Background(), integrationPool, applyID)
 	if err != nil {
 		t.Fatalf("SelectStatusesByApplyID: %v", err)
@@ -716,9 +723,9 @@ func TestIntegration_NoHosts_ErrorLocked(t *testing.T) {
 	}
 }
 
-// registerServiceRepo создаёт service-репо со scenario, где probe-задача
-// (core.exec.run, register: probe) кормит state_changes.sets через
-// ${ register.probe.stdout } (слайс 2 полной грамматики state_changes).
+// registerServiceRepo creates a service repo with a scenario where a probe
+// task (core.exec.run, register: probe) feeds state_changes.sets via
+// ${ register.probe.stdout } (slice 2 of the full state_changes grammar).
 func registerServiceRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -771,10 +778,11 @@ tasks:
 	return "file://" + dir
 }
 
-// registerMockDispatcher симулирует Soul, выполнивший probe-задачу: на SendApply
-// пишет register-данные задачи (как accumulateRegister в проде на TaskEvent),
-// затем терминальный apply_runs-статус (как correlateRunResult). registerData —
-// payload register.probe для каждого хоста (sid → data).
+// registerMockDispatcher simulates a Soul that ran the probe task: on
+// SendApply it writes the task's register data (like accumulateRegister in
+// prod on TaskEvent), then a terminal apply_runs status (like
+// correlateRunResult). registerData — the register.probe payload per host
+// (sid → data).
 type registerMockDispatcher struct {
 	t            *testing.T
 	registerData map[string]map[string]any
@@ -797,10 +805,10 @@ func (m *registerMockDispatcher) SendApply(ctx context.Context, sid string, req 
 	return nil
 }
 
-// TestIntegration_RegisterInSets_CommitsToState — полный путь слайса 2:
-// probe-задача (register: probe) → register-данные накоплены в
-// apply_task_register → после барьера загружены per-host → state_changes.sets
-// ${ register.probe.stdout } отрендерен → значение в incarnation.state.
+// TestIntegration_RegisterInSets_CommitsToState — the full slice 2 path: probe
+// task (register: probe) → register data accumulated in apply_task_register →
+// loaded per-host after the barrier → state_changes.sets
+// ${ register.probe.stdout } rendered → value lands in incarnation.state.
 func TestIntegration_RegisterInSets_CommitsToState(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -833,8 +841,9 @@ func TestIntegration_RegisterInSets_CommitsToState(t *testing.T) {
 	}
 }
 
-// applyDestinyServiceRepo создаёт service-репо с scenario create, делегирующим
-// в destiny pilot-flat через apply:destiny. service.yml объявляет destiny[]-ref.
+// applyDestinyServiceRepo creates a service repo with a create scenario
+// delegating to the pilot-flat destiny via apply:destiny. service.yml
+// declares a destiny[] ref.
 func applyDestinyServiceRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -886,9 +895,9 @@ tasks:
 	return "file://" + dir
 }
 
-// pilotFlatDestinyRepo создаёт плоскую destiny pilot-flat в каталоге
-// <base>/pilot-flat (чтобы default_destiny_source-шаблон file://<base>/{name}
-// резолвился в этот репо). Возвращает шаблон URL.
+// pilotFlatDestinyRepo creates the flat pilot-flat destiny under
+// <base>/pilot-flat (so the default_destiny_source template
+// file://<base>/{name} resolves to this repo). Returns the template URL.
 func pilotFlatDestinyRepo(t *testing.T) string {
 	t.Helper()
 	base := t.TempDir()
@@ -950,10 +959,10 @@ input:
 	return "file://" + base + "/{name}"
 }
 
-// TestIntegration_ApplyDestiny — end-to-end слайс A: scenario create с
-// apply:destiny → DestinySource грузит destiny pilot-flat (file://) → render
-// раскрывает её две задачи → dispatch → success → state commit. Проверяет, что
-// диспатчер получил ровно две задачи destiny (apply раскрылся).
+// TestIntegration_ApplyDestiny — end-to-end slice A: a create scenario with
+// apply:destiny → DestinySource loads the pilot-flat destiny (file://) →
+// render expands its two tasks → dispatch → success → state commit. Verifies
+// the dispatcher received exactly the two destiny tasks (apply expanded).
 func TestIntegration_ApplyDestiny(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -987,8 +996,8 @@ func TestIntegration_ApplyDestiny(t *testing.T) {
 	}
 }
 
-// TestIntegration_ApplyDestiny_NoSource — apply:destiny при nil-DestinySource →
-// render_failed → error_locked (ErrUnsupportedDSL).
+// TestIntegration_ApplyDestiny_NoSource — apply:destiny with a nil
+// DestinySource → render_failed → error_locked (ErrUnsupportedDSL).
 func TestIntegration_ApplyDestiny_NoSource(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1018,11 +1027,12 @@ func TestIntegration_ApplyDestiny_NoSource(t *testing.T) {
 	}
 }
 
-// inputDefaultsServiceRepo создаёт service-репо, чей scenario create объявляет
-// scenario-level `input:` с ОДНИМ обязательным параметром (greeting, required) и
-// ОДНИМ с default (suffix). Обе переменные рендерятся в params задачи. Прод
-// (и L0) обязаны смёржить default непереданного suffix перед render — иначе
-// `${ input.suffix }` падает «no such key» (BUG 1).
+// inputDefaultsServiceRepo creates a service repo whose create scenario
+// declares a scenario-level `input:` with ONE required param (greeting,
+// required) and ONE with a default (suffix). Both vars are rendered into the
+// task params. Prod (and L0) must merge the default for an unpassed suffix
+// before render — otherwise `${ input.suffix }` fails with "no such key"
+// (BUG 1).
 func inputDefaultsServiceRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -1079,9 +1089,9 @@ tasks:
 	return "file://" + dir
 }
 
-// captureDispatcher симулирует Soul и СОХРАНЯЕТ params первой задачи первого
-// ApplyRequest (для проверки отрендеренной команды). Завершает barrier
-// success-статусом.
+// captureDispatcher simulates Soul and CAPTURES the params of the first task
+// of the first ApplyRequest (to check the rendered command). Completes the
+// barrier with a success status.
 type captureDispatcher struct {
 	t          *testing.T
 	calls      int
@@ -1099,10 +1109,11 @@ func (d *captureDispatcher) SendApply(ctx context.Context, sid string, req *keep
 	return nil
 }
 
-// TestIntegration_ScenarioInputDefaultsMerged — регрессия BUG 1: оператор подаёт
-// ТОЛЬКО обязательный input (greeting), непереданный suffix берётся из
-// scenario `input:`-default. Render проходит, команда — "echo hi!" (default "!"
-// смёржен). До фикса `${ input.suffix }` падал «no such key» → render_failed.
+// TestIntegration_ScenarioInputDefaultsMerged — regression for BUG 1: the
+// operator supplies ONLY the required input (greeting); the unpassed suffix
+// comes from the scenario `input:` default. Render succeeds, command is
+// "echo hi!" (default "!" merged in). Before the fix, `${ input.suffix }`
+// failed with "no such key" → render_failed.
 func TestIntegration_ScenarioInputDefaultsMerged(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1119,7 +1130,7 @@ func TestIntegration_ScenarioInputDefaultsMerged(t *testing.T) {
 		IncarnationName: "noop-prod",
 		ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
 		ScenarioName:    "create",
-		// ТОЛЬКО обязательный input: suffix должен подтянуться из default.
+		// ONLY the required input: suffix should come from the default.
 		Input: map[string]any{"greeting": "hi"},
 	}); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -1131,9 +1142,9 @@ func TestIntegration_ScenarioInputDefaultsMerged(t *testing.T) {
 	}
 }
 
-// TestIntegration_ScenarioInputRequiredMissing — обязательный scenario input не
-// передан и без default → input_invalid → error_locked (понятная ошибка, не
-// «no such key» в глубине CEL).
+// TestIntegration_ScenarioInputRequiredMissing — a required scenario input is
+// not passed and has no default → input_invalid → error_locked (a clear
+// error, not "no such key" buried in CEL).
 func TestIntegration_ScenarioInputRequiredMissing(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1150,7 +1161,7 @@ func TestIntegration_ScenarioInputRequiredMissing(t *testing.T) {
 		IncarnationName: "noop-prod",
 		ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
 		ScenarioName:    "create",
-		// greeting (required) НЕ передан.
+		// greeting (required) NOT passed.
 		Input: map[string]any{},
 	}); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -1168,7 +1179,7 @@ func TestIntegration_ScenarioInputRequiredMissing(t *testing.T) {
 func TestIntegration_AlreadyApplying_Rejected(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
-	// Incarnation уже в applying — lockRun должен отказать.
+	// Incarnation already applying — lockRun must refuse.
 	inc := &incarnation.Incarnation{
 		Name: "noop-prod", Service: "noop", ServiceVersion: "master",
 		StateSchemaVersion: 1, Status: incarnation.StatusApplying,
@@ -1191,8 +1202,8 @@ func TestIntegration_AlreadyApplying_Rejected(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Прогон отклоняется внутри run-goroutine (lockRun → ErrAlreadyRunning);
-	// статус остаётся applying, dispatch не происходит.
+	// The run is rejected inside the run-goroutine (lockRun → ErrAlreadyRunning);
+	// status stays applying, no dispatch happens.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if disp.calls > 0 {
@@ -1206,9 +1217,9 @@ func TestIntegration_AlreadyApplying_Rejected(t *testing.T) {
 	}
 }
 
-// TestIntegration_ErrorLocked_Rejected проверяет lock-gate (ADR-009): прогон
-// против error_locked-incarnation отклоняется под FOR UPDATE (lockRun →
-// ErrLocked), dispatch не происходит, статус остаётся error_locked.
+// TestIntegration_ErrorLocked_Rejected checks the lock gate (ADR-009): a run
+// against an error_locked incarnation is rejected under FOR UPDATE (lockRun →
+// ErrLocked), no dispatch happens, status stays error_locked.
 func TestIntegration_ErrorLocked_Rejected(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1234,8 +1245,8 @@ func TestIntegration_ErrorLocked_Rejected(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Прогон отклоняется внутри run-goroutine (lockRun → ErrLocked);
-	// статус остаётся error_locked, dispatch не происходит.
+	// The run is rejected inside the run-goroutine (lockRun → ErrLocked);
+	// status stays error_locked, no dispatch happens.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if disp.calls > 0 {
@@ -1249,12 +1260,12 @@ func TestIntegration_ErrorLocked_Rejected(t *testing.T) {
 	}
 }
 
-// TestIntegration_NonRunnableStatus_Rejected проверяет explicit allow-list
-// lockRun (fail-closed): прогон против инстанса в destroying ИЛИ
-// migration_failed отклоняется (lockRun → ErrNotRunnable), dispatch не
-// происходит, статус остаётся неизменным. Раньше эти статусы проваливались в
-// default-ветку и молча переводились в applying (латентный баг, вскрытый при
-// дизайне destroy).
+// TestIntegration_NonRunnableStatus_Rejected checks lockRun's explicit
+// allow-list (fail-closed): a run against an incarnation in destroying OR
+// migration_failed is rejected (lockRun → ErrNotRunnable), no dispatch
+// happens, status stays unchanged. These statuses used to fall through to the
+// default branch and get silently transitioned to applying (a latent bug
+// found while designing destroy).
 func TestIntegration_NonRunnableStatus_Rejected(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -1289,8 +1300,8 @@ func TestIntegration_NonRunnableStatus_Rejected(t *testing.T) {
 				t.Fatalf("Start: %v", err)
 			}
 
-			// Прогон отклоняется внутри run-goroutine (lockRun → ErrNotRunnable);
-			// статус остаётся прежним, dispatch не происходит.
+			// The run is rejected inside the run-goroutine (lockRun → ErrNotRunnable);
+			// status stays unchanged, no dispatch happens.
 			deadline := time.Now().Add(2 * time.Second)
 			for time.Now().Before(deadline) {
 				if disp.calls > 0 {
@@ -1306,9 +1317,9 @@ func TestIntegration_NonRunnableStatus_Rejected(t *testing.T) {
 	}
 }
 
-// serialServiceRepo создаёт service-репо со scenario `roll`, несущим serial:
-// заданной формы и непустой state_changes.sets — для проверки волнового
-// dispatch + единого barrier.
+// serialServiceRepo creates a service repo with a `roll` scenario carrying a
+// serial: of the given shape and a non-empty state_changes.sets — to test
+// wave dispatch + a single barrier.
 func serialServiceRepo(t *testing.T, serial string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -1361,11 +1372,11 @@ tasks:
 	return "file://" + dir
 }
 
-// TestIntegration_Serial_AllWavesCommitOnce — serial: 1 на 3 хостах: все три
-// хоста получают ApplyRequest (волны прокатились), state_changes коммитятся
-// РОВНО ОДИН раз после ВСЕХ волн (единый barrier, orchestration.md §7) — это
-// самый важный инвариант slice D. Проверяем: 3 SendApply, ровно 1
-// state_history-snapshot, incarnation.state.rolled закоммичен.
+// TestIntegration_Serial_AllWavesCommitOnce — serial: 1 across 3 hosts: all
+// three hosts get an ApplyRequest (waves rolled through), state_changes
+// commits EXACTLY ONCE after ALL waves (single barrier, orchestration.md §7) —
+// the most important invariant of slice D. Checks: 3 SendApply calls, exactly
+// 1 state_history snapshot, incarnation.state.rolled committed.
 func TestIntegration_Serial_AllWavesCommitOnce(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1391,7 +1402,7 @@ func TestIntegration_Serial_AllWavesCommitOnce(t *testing.T) {
 
 	inc := waitRunDone(t, "noop-prod", applyID, incarnation.StatusReady)
 
-	// Все 3 хоста получили ApplyRequest, в порядке SID (волны по 1, последовательно).
+	// All 3 hosts got an ApplyRequest, in SID order (waves of 1, sequential).
 	got := disp.dispatchedSIDs()
 	want := []string{"host-a.example.com", "host-b.example.com", "host-c.example.com"}
 	if len(got) != 3 {
@@ -1403,13 +1414,13 @@ func TestIntegration_Serial_AllWavesCommitOnce(t *testing.T) {
 		}
 	}
 
-	// state закоммичен (единый commit после всех волн).
+	// state committed (single commit after all waves).
 	if inc.State["rolled"] != "yes" {
 		t.Errorf("state.rolled = %v, want \"yes\"", inc.State["rolled"])
 	}
 
-	// КРИТИЧНО: ровно ОДИН state_history-snapshot — state коммитится единожды
-	// после всех волн, не по-волново (§7).
+	// CRITICAL: exactly ONE state_history snapshot — state commits once after
+	// all waves, not per-wave (§7).
 	_, total, err := incarnation.HistorySelectByName(context.Background(), integrationPool,
 		"noop-prod", incarnation.HistoryFilter{ApplyID: applyID}, 0, 10)
 	if err != nil {
@@ -1419,7 +1430,7 @@ func TestIntegration_Serial_AllWavesCommitOnce(t *testing.T) {
 		t.Errorf("state_history snapshots = %d, want 1 (единый commit, НЕ по-волново)", total)
 	}
 
-	// Все apply_runs success.
+	// All apply_runs success.
 	st, err := applyrun.SelectStatusesByApplyID(context.Background(), integrationPool, applyID)
 	if err != nil {
 		t.Fatalf("SelectStatusesByApplyID: %v", err)
@@ -1429,10 +1440,10 @@ func TestIntegration_Serial_AllWavesCommitOnce(t *testing.T) {
 	}
 }
 
-// TestIntegration_Serial_FailStop — serial: 1 на 3 хостах, первый хост (host-a)
-// завершается failed: rolling останавливается, последующие волны НЕ стартуют
-// (fail-stop, §2.2.1). Проверяем: ровно 1 SendApply (host-a), host-b/host-c НЕ
-// получили ApplyRequest, incarnation → error_locked, state НЕ закоммичен.
+// TestIntegration_Serial_FailStop — serial: 1 across 3 hosts, the first host
+// (host-a) finishes failed: rolling stops, later waves do NOT start
+// (fail-stop, §2.2.1). Checks: exactly 1 SendApply (host-a), host-b/host-c did
+// NOT get an ApplyRequest, incarnation → error_locked, state NOT committed.
 func TestIntegration_Serial_FailStop(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1458,13 +1469,13 @@ func TestIntegration_Serial_FailStop(t *testing.T) {
 
 	inc := waitRunDone(t, "noop-prod", applyID, incarnation.StatusErrorLocked)
 
-	// Только первая волна (host-a) стартовала; вторая/третья НЕ стартуют.
+	// Only the first wave (host-a) started; second/third do NOT start.
 	got := disp.dispatchedSIDs()
 	if len(got) != 1 || got[0] != "host-a.example.com" {
 		t.Errorf("dispatched = %v, want [host-a.example.com] (fail-stop: волны 2,3 не стартуют)", got)
 	}
 
-	// state НЕ закоммичен (rolled не появился) — §7: частичный коммит запрещён.
+	// state NOT committed (rolled didn't appear) — §7: partial commit is forbidden.
 	if inc.State["rolled"] == "yes" {
 		t.Errorf("state.rolled = yes — state НЕ должен коммититься при fail (§7)")
 	}
@@ -1473,8 +1484,8 @@ func TestIntegration_Serial_FailStop(t *testing.T) {
 	}
 }
 
-// TestIntegration_Serial_Percent — serial: "67%" на 3 хостах → ceil(3*0.67)=2 →
-// волны [2,1]: все 3 хоста проходят, state коммитится один раз.
+// TestIntegration_Serial_Percent — serial: "67%" across 3 hosts →
+// ceil(3*0.67)=2 → waves [2,1]: all 3 hosts go through, state commits once.
 func TestIntegration_Serial_Percent(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1507,10 +1518,10 @@ func TestIntegration_Serial_Percent(t *testing.T) {
 	}
 }
 
-// serialMultiTaskRepo создаёт service-репо со scenario `roll`, несущим ДВЕ
-// module-задачи с РАЗНОЙ serial:-шириной (serialA / serialB). Для проверки
-// per-RUN min-width: ширина волны прогона = минимальная положительная среди
-// задач (orchestration.md §2.2.1, effectiveSerialWidth), а не per-task.
+// serialMultiTaskRepo creates a service repo with a `roll` scenario carrying
+// TWO module tasks with DIFFERENT serial: widths (serialA / serialB). Tests
+// per-RUN min-width: the run's wave width is the minimum positive width among
+// the tasks (orchestration.md §2.2.1, effectiveSerialWidth), not per-task.
 func serialMultiTaskRepo(t *testing.T, serialA, serialB string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -1570,11 +1581,11 @@ tasks:
 	return "file://" + dir
 }
 
-// TestIntegration_Serial_Width2_FiveHosts — serial: 2 на 5 хостах → волны
-// [2,2,1] (orchestration.md §2.2.1). Все 5 хостов получают ApplyRequest в
-// порядке SID; state коммитится один раз после всех волн. Это end-to-end
-// проверка нарезки на волны (не только splitWaves-unit): dispatch + per-wave
-// barrier + единый state-commit.
+// TestIntegration_Serial_Width2_FiveHosts — serial: 2 across 5 hosts → waves
+// [2,2,1] (orchestration.md §2.2.1). All 5 hosts get an ApplyRequest in SID
+// order; state commits once after all waves. This is an end-to-end check of
+// wave slicing (not just the splitWaves unit): dispatch + per-wave barrier +
+// single state commit.
 func TestIntegration_Serial_Width2_FiveHosts(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1600,8 +1611,8 @@ func TestIntegration_Serial_Width2_FiveHosts(t *testing.T) {
 
 	inc := waitRunDone(t, "noop-prod", applyID, incarnation.StatusReady)
 
-	// Все 5 хостов получили ApplyRequest, в порядке SID (волны [2,2,1]
-	// последовательны, внутри волны — по SID).
+	// All 5 hosts got an ApplyRequest, in SID order (waves [2,2,1] sequential,
+	// sorted by SID within a wave).
 	got := disp.dispatchedSIDs()
 	want := []string{
 		"host-a.example.com", "host-b.example.com", "host-c.example.com",
@@ -1619,7 +1630,7 @@ func TestIntegration_Serial_Width2_FiveHosts(t *testing.T) {
 	if inc.State["rolled"] != "yes" {
 		t.Errorf("state.rolled = %v, want \"yes\"", inc.State["rolled"])
 	}
-	// Единый commit после всех волн (§7): ровно один state_history-snapshot.
+	// Single commit after all waves (§7): exactly one state_history snapshot.
 	_, total, err := incarnation.HistorySelectByName(context.Background(), integrationPool,
 		"noop-prod", incarnation.HistoryFilter{ApplyID: applyID}, 0, 10)
 	if err != nil {
@@ -1630,12 +1641,12 @@ func TestIntegration_Serial_Width2_FiveHosts(t *testing.T) {
 	}
 }
 
-// TestIntegration_Serial_FailStop_SecondWave — сильнейший тест fail-stop §7:
-// serial: 1 на 3 хостах, фейл на host-b (ВТОРАЯ волна). Первая волна (host-a)
-// успешна, вторая (host-b) падает → rolling останавливается → ТРЕТЬЯ волна
-// (host-c) НЕ стартует. Проверяем: ровно 2 SendApply (host-a, host-b — не 3),
-// state НЕ закоммичен, incarnation → error_locked. Это инвариант
-// «fail-stop ломает последующие волны» именно НЕ в первой волне.
+// TestIntegration_Serial_FailStop_SecondWave — the strongest fail-stop §7
+// test: serial: 1 across 3 hosts, failure on host-b (SECOND wave). First wave
+// (host-a) succeeds, second (host-b) fails → rolling stops → THIRD wave
+// (host-c) does NOT start. Checks: exactly 2 SendApply calls (host-a, host-b —
+// not 3), state NOT committed, incarnation → error_locked. This is the
+// "fail-stop breaks later waves" invariant specifically NOT on the first wave.
 func TestIntegration_Serial_FailStop_SecondWave(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1661,7 +1672,7 @@ func TestIntegration_Serial_FailStop_SecondWave(t *testing.T) {
 
 	inc := waitRunDone(t, "noop-prod", applyID, incarnation.StatusErrorLocked)
 
-	// Волна 1 (host-a) + волна 2 (host-b) стартовали; волна 3 (host-c) НЕТ.
+	// Wave 1 (host-a) + wave 2 (host-b) started; wave 3 (host-c) did NOT.
 	got := disp.dispatchedSIDs()
 	want := []string{"host-a.example.com", "host-b.example.com"}
 	if len(got) != 2 {
@@ -1673,7 +1684,7 @@ func TestIntegration_Serial_FailStop_SecondWave(t *testing.T) {
 		}
 	}
 
-	// state НЕ закоммичен (§7: частичный коммит запрещён).
+	// state NOT committed (§7: partial commit is forbidden).
 	if inc.State["rolled"] == "yes" {
 		t.Errorf("state.rolled = yes — state НЕ должен коммититься при fail во 2-й волне (§7)")
 	}
@@ -1682,11 +1693,12 @@ func TestIntegration_Serial_FailStop_SecondWave(t *testing.T) {
 	}
 }
 
-// cancelAfterFirstWaveDispatcher симулирует Soul для serial-волн: каждый хост
-// завершается success, но СРАЗУ после первого SendApply ставит cluster-wide
-// Cancel-флаг (как «другой Keeper»). Так per-wave barrier после первой волны
-// видит cancel_requested → cancel-ветка прерывает rolling, последующие волны НЕ
-// стартуют (симметрично fail-stop, но через отмену, не через failed-хост).
+// cancelAfterFirstWaveDispatcher simulates Soul for serial waves: every host
+// finishes success, but IMMEDIATELY after the first SendApply it sets the
+// cluster-wide Cancel flag (as "another Keeper" would). So the per-wave
+// barrier after the first wave sees cancel_requested → the cancel branch
+// interrupts rolling, later waves do NOT start (symmetric to fail-stop, but
+// via cancellation instead of a failed host).
 type cancelAfterFirstWaveDispatcher struct {
 	t       *testing.T
 	mu      sync.Mutex
@@ -1701,18 +1713,20 @@ func (d *cancelAfterFirstWaveDispatcher) SendApply(ctx context.Context, sid stri
 	d.mu.Unlock()
 
 	if first {
-		// «Другой Keeper» ставит флаг во время первой волны, ПОКА строка ещё
-		// running (RequestCancel фильтрует status='running'). Порядок строгий:
-		// сперва флаг, потом терминал — иначе success опередил бы RequestCancel
-		// и тот не нашёл бы running-строк (affected=0, флаг бы не встал).
+		// "Another Keeper" sets the flag during the first wave, WHILE the row
+		// is still running (RequestCancel filters status='running'). Strict
+		// order: flag first, then terminal — otherwise success would race ahead
+		// of RequestCancel, which would find no running rows (affected=0, flag
+		// never set).
 		if _, err := applyrun.RequestCancel(ctx, integrationPool, req.GetApplyId()); err != nil {
 			d.t.Errorf("cancelAfterFirstWaveDispatcher: RequestCancel: %v", err)
 		}
 	}
-	// Хост штатно отстреливается success — прогон должна остановить именно
-	// отмена, а не failed-хост (иначе тест дублировал бы fail-stop). Терминал
-	// проставляем после флага: barrier увидит cancel_requested на success-строке
-	// и прервёт rolling до старта следующей волны.
+	// The host finishes success normally — it's the cancellation that must
+	// stop the run, not a failed host (otherwise the test would duplicate
+	// fail-stop). Terminal is written after the flag: the barrier will see
+	// cancel_requested on a success row and interrupt rolling before the next
+	// wave starts.
 	if err := applyrun.UpdateStatus(ctx, integrationPool, req.GetApplyId(), sid, 0, applyrun.StatusSuccess, nil); err != nil {
 		d.t.Errorf("cancelAfterFirstWaveDispatcher: UpdateStatus: %v", err)
 	}
@@ -1727,16 +1741,18 @@ func (d *cancelAfterFirstWaveDispatcher) dispatchedSIDs() []string {
 	return out
 }
 
-// TestIntegration_Serial_CancelStopsNextWave — cluster-wide Cancel (G1) на
-// serial-прогоне: флаг ставится во время первой волны (host-a), per-wave
-// barrier видит cancel_requested и прерывает rolling → волны 2,3 (host-b,
-// host-c) НЕ стартуют. Это cancel-аналог fail-stop (§2.2.1): отмена ломает
-// последующие волны так же, как падение хоста. Наблюдаемо: ровно 1 SendApply,
-// incarnation → error_locked, state НЕ закоммичен.
+// TestIntegration_Serial_CancelStopsNextWave — cluster-wide Cancel (G1) on a
+// serial run: the flag is set during the first wave (host-a), the per-wave
+// barrier sees cancel_requested and interrupts rolling → waves 2,3 (host-b,
+// host-c) do NOT start. This is the cancel counterpart of fail-stop (§2.2.1):
+// cancellation breaks later waves the same way a host failure does.
+// Observable: exactly 1 SendApply, incarnation → error_locked, state NOT
+// committed.
 //
-// Отличие от [TestIntegration_CrossKeeperCancel_FlagInPG]: там одна волна и
-// проверяется сам факт прерывания barrier-а; здесь — что отмена НЕ даёт стартовать
-// следующей волне (serial × cancel взаимодействие).
+// Difference from [TestIntegration_CrossKeeperCancel_FlagInPG]: that test has
+// one wave and checks the barrier interruption itself; this one checks that
+// cancellation prevents the NEXT wave from starting (serial × cancel
+// interaction).
 func TestIntegration_Serial_CancelStopsNextWave(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1763,13 +1779,13 @@ func TestIntegration_Serial_CancelStopsNextWave(t *testing.T) {
 
 	inc := waitRunDone(t, "noop-prod", applyID, incarnation.StatusErrorLocked)
 
-	// Только первая волна (host-a) стартовала; волны 2,3 прерваны отменой.
+	// Only the first wave (host-a) started; waves 2,3 interrupted by cancel.
 	got := disp.dispatchedSIDs()
 	if len(got) != 1 || got[0] != "host-a.example.com" {
 		t.Errorf("dispatched = %v, want [host-a.example.com] (cancel останавливает волны 2,3)", got)
 	}
 
-	// state НЕ закоммичен — отмена = abort, как и fail-stop (§7).
+	// state NOT committed — cancel = abort, same as fail-stop (§7).
 	if inc.State["rolled"] == "yes" {
 		t.Errorf("state.rolled = yes — отменённый прогон НЕ должен коммитить state")
 	}
@@ -1778,11 +1794,12 @@ func TestIntegration_Serial_CancelStopsNextWave(t *testing.T) {
 	}
 }
 
-// TestIntegration_Serial_MinWidth_TwoTasks — per-RUN min-width (§2.2.1): scenario
-// с двумя задачами разной ширины (serial: 2 и serial: 1) на 5 хостах. Ширина
-// волны прогона = МИНИМАЛЬНАЯ положительная = 1 → волны [1,1,1,1,1], все 5
-// хостов диспатчатся по одному, в порядке SID. Подтверждает, что широкая задача
-// (serial: 2) НЕ задаёт окно — катится узкими волнами вместе с узкой.
+// TestIntegration_Serial_MinWidth_TwoTasks — per-RUN min-width (§2.2.1): a
+// scenario with two tasks of different widths (serial: 2 and serial: 1)
+// across 5 hosts. The run's wave width = the MINIMUM positive width = 1 →
+// waves [1,1,1,1,1], all 5 hosts dispatched one at a time, in SID order.
+// Confirms that the wider task (serial: 2) does NOT set the window — it rolls
+// in narrow waves alongside the narrow task.
 func TestIntegration_Serial_MinWidth_TwoTasks(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1808,8 +1825,9 @@ func TestIntegration_Serial_MinWidth_TwoTasks(t *testing.T) {
 
 	inc := waitRunDone(t, "noop-prod", applyID, incarnation.StatusReady)
 
-	// min-width = 1 → каждый хост отдельной волной, по SID. 5 хостов = 5 SendApply
-	// (один ApplyRequest на хост со ВСЕМИ его задачами — обе задачи едут вместе).
+	// min-width = 1 → each host its own wave, by SID. 5 hosts = 5 SendApply
+	// calls (one ApplyRequest per host with ALL its tasks — both tasks travel
+	// together).
 	got := disp.dispatchedSIDs()
 	want := []string{
 		"host-a.example.com", "host-b.example.com", "host-c.example.com",
@@ -1828,7 +1846,7 @@ func TestIntegration_Serial_MinWidth_TwoTasks(t *testing.T) {
 	}
 }
 
-// runOnceServiceRepo создаёт service-репо со scenario `once` (run_once: true).
+// runOnceServiceRepo creates a service repo with a `once` scenario (run_once: true).
 func runOnceServiceRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -1879,9 +1897,9 @@ tasks:
 	return "file://" + dir
 }
 
-// TestIntegration_RunOnce_SingleHost — run_once: true на 3 хостах → ApplyRequest
-// уходит ровно на ОДИН хост (первый по SID, host-a), остальные не получают
-// (orchestration.md §2.2.2). Прогон успешен.
+// TestIntegration_RunOnce_SingleHost — run_once: true across 3 hosts →
+// ApplyRequest goes to exactly ONE host (first by SID, host-a), others don't
+// get one (orchestration.md §2.2.2). Run succeeds.
 func TestIntegration_RunOnce_SingleHost(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1912,12 +1930,12 @@ func TestIntegration_RunOnce_SingleHost(t *testing.T) {
 	}
 }
 
-// --- security: observability masking (#1 второй канал + #6) -----------
+// --- security: observability masking (#1 secondary channel + #6) -----------
 
-// vaultParamServiceRepo — service-noop, у которого params команды несут
-// vault-ref-маркер. Render-пайплайн в тестах без vault-резолвера, поэтому
-// строка доходит до wire литералом — это нужный для теста кейс: проверяем,
-// что keeper НЕ маскирует wire-Params, а маскирует только наблюдаемую копию.
+// vaultParamServiceRepo — service-noop whose command params carry a
+// vault-ref marker. In tests the render pipeline has no vault resolver, so
+// the string reaches the wire as a literal — exactly the case this test
+// needs: verifies keeper does NOT mask wire Params, only the observable copy.
 func vaultParamServiceRepo(t *testing.T) string {
 	t.Helper()
 	return writeServiceRepo(t, `name: create
@@ -1933,9 +1951,9 @@ tasks:
 `)
 }
 
-// writeServiceRepo — общий конструктор local-fs git-репо service-noop с
-// заданным scenario/create/main.yml (вынесено из noopServiceRepo для
-// переиспользования секрет-фикстурой).
+// writeServiceRepo — shared constructor for a local-fs git repo service-noop
+// with a given scenario/create/main.yml (factored out of noopServiceRepo for
+// reuse by the secret fixture).
 func writeServiceRepo(t *testing.T, scenarioMain string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -1975,9 +1993,9 @@ state_schema:
 	return "file://" + dir
 }
 
-// secretWireDispatcher захватывает wire-Params (что реально ушло бы на Soul)
-// и возвращает ошибку, ЭХАЮЩУЮ vault-ref из payload — симулирует transport/
-// marshal-фейл, выносящий секрет в err.Error().
+// secretWireDispatcher captures wire-Params (what would actually go to Soul)
+// and returns an error ECHOING the payload's vault-ref — simulates a
+// transport/marshal failure that leaks the secret into err.Error().
 type secretWireDispatcher struct {
 	t          *testing.T
 	calls      int
@@ -1989,16 +2007,16 @@ func (d *secretWireDispatcher) SendApply(_ context.Context, _ string, req *keepe
 	if tasks := req.GetTasks(); len(tasks) > 0 {
 		d.wireParams = renderedExecCommand(tasks[0].GetParams())
 	}
-	// Эхо payload в ошибке (как делают некоторые transport/marshal-ошибки).
+	// Echo the payload in the error (as some transport/marshal errors do).
 	return fmt.Errorf("rpc transport: failed to send %s", d.wireParams)
 }
 
 // TestIntegration_SecretInParams_MaskedInObservability_NotOnWire — security #1/#6:
-//   - wire-ApplyRequest.Params несёт РЕАЛЬНОЕ значение (не сломано маскингом);
-//   - error_summary (apply_runs, читается наружу через barrier) НЕ содержит
-//     payload-эха — только safe-причина send_apply_failed;
-//   - status_details.error (GET incarnation, без маскинга на чтении) замаскирован,
-//     vault-ref не светится plaintext.
+//   - wire-ApplyRequest.Params carries the REAL value (not broken by masking);
+//   - error_summary (apply_runs, read externally via the barrier) contains NO
+//     payload echo — only the safe reason send_apply_failed;
+//   - status_details.error (GET incarnation, unmasked on read) is masked,
+//     the vault-ref doesn't leak plaintext.
 func TestIntegration_SecretInParams_MaskedInObservability_NotOnWire(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -2022,13 +2040,13 @@ func TestIntegration_SecretInParams_MaskedInObservability_NotOnWire(t *testing.T
 
 	inc := waitRunDone(t, "noop-prod", applyID, incarnation.StatusErrorLocked)
 
-	// 1. Wire НЕ тронут: реальное значение дошло до dispatcher-а.
+	// 1. Wire is untouched: the real value reached the dispatcher.
 	wantWire := "deploy --token=vault:secret/keeper/deploy-token"
 	if disp.wireParams != wantWire {
 		t.Errorf("wire params = %q, want %q (wire-Params не должны маскироваться)", disp.wireParams, wantWire)
 	}
 
-	// 2. error_summary без payload-эха.
+	// 2. error_summary has no payload echo.
 	st, err := applyrun.SelectStatusesByApplyID(context.Background(), integrationPool, applyID)
 	if err != nil {
 		t.Fatalf("SelectStatusesByApplyID: %v", err)
@@ -2043,11 +2061,11 @@ func TestIntegration_SecretInParams_MaskedInObservability_NotOnWire(t *testing.T
 		t.Errorf("error_summary leaks secret: %q", *st[0].ErrorSummary)
 	}
 
-	// 3. status_details.error (читается наружу через GET incarnation без
-	//    маскинга на чтении) НЕ светит секрет: ни payload-эхо send-фейла, ни
-	//    vault-ref. В этом сценарии error_summary уже safe (send_apply_failed),
-	//    поэтому транзитная barrier-ошибка тоже безопасна — главный инвариант
-	//    «secret не утёк в наблюдаемый канал».
+	// 3. status_details.error (read externally via GET incarnation, unmasked
+	//    on read) leaks NO secret: no send-failure payload echo, no vault-ref.
+	//    In this scenario error_summary is already safe (send_apply_failed), so
+	//    the transitive barrier error is safe too — the main invariant is "the
+	//    secret never leaks into an observable channel".
 	if inc.StatusDetails == nil {
 		t.Fatalf("status_details = nil, want error_locked detail")
 	}
@@ -2060,30 +2078,34 @@ func TestIntegration_SecretInParams_MaskedInObservability_NotOnWire(t *testing.T
 	}
 }
 
-// TestIntegration_StatusDetailsError_VaultRefMasked — security #6, прямой
-// канал: cause.Error() c vault-ref, попадающий в status_details минуя
-// error_summary-транзит, маскируется в lockIncarnation перед записью и при
-// чтении через incarnation не светит vault-путь plaintext.
+// TestIntegration_StatusDetailsError_VaultRefMasked — security #6, direct
+// channel: a cause.Error() carrying a vault-ref that reaches status_details
+// without going through error_summary transit is masked in lockIncarnation
+// before the write, and reading it back via incarnation never leaks the
+// vault path in plaintext.
 //
-// Путь: render-фаза падает ДО dispatch (apply:destiny без default_destiny_source
-// → ErrUnsupportedDSL). Подменяем причину на vault-несущую через scenario с
-// заведомо непарсящимся apply: — но детерминированный vault-ref в cause проще
-// получить, проверив сам механизм на уровне lockIncarnation: см. unit-тест
-// TestMaskSecrets_VaultRefSubstring (shared/audit) — он доказывает, что
-// MaskSecrets маскирует строку с vault-маркером в любой позиции, а
-// lockIncarnation прогоняет весь details через MaskSecrets перед записью.
+// Path: the render phase fails BEFORE dispatch (apply:destiny without
+// default_destiny_source → ErrUnsupportedDSL). We can't easily force a
+// vault-carrying cause through a deliberately unparseable apply: scenario —
+// getting a deterministic vault-ref into cause is easier to obtain by
+// verifying the mechanism itself at the lockIncarnation level: see the unit
+// test TestMaskSecrets_VaultRefSubstring (shared/audit), which proves
+// MaskSecrets masks a vault-marker substring at any position, and
+// lockIncarnation runs the whole details map through MaskSecrets before
+// writing.
 func TestIntegration_StatusDetailsError_VaultRefMasked(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "noop-prod")
 	seedConnectedSoul(t, "host-a.example.com", []string{"noop-prod"})
 
-	// Service-репо со scenario, ссылающимся на apply: destiny без
-	// default_destiny_source в Deps → render-фаза вернёт ErrUnsupportedDSL.
-	// Сам по себе он vault-ref не несёт; маскинг status_details на
-	// vault-содержащей строке доказан unit-тестом TestMaskSecrets_VaultRefSubstring
-	// + фактом MaskSecrets-прогона в lockIncarnation. Здесь подтверждаем, что
-	// status_details пишется через маскинг-путь (reason присутствует, секрета нет).
+	// Service repo with a scenario referencing apply: destiny without
+	// default_destiny_source in Deps → the render phase returns
+	// ErrUnsupportedDSL. It doesn't carry a vault-ref itself; masking of a
+	// vault-containing status_details string is proven by the unit test
+	// TestMaskSecrets_VaultRefSubstring + the fact that lockIncarnation runs
+	// MaskSecrets. Here we just confirm status_details is written through the
+	// masking path (reason present, no secret).
 	gitURL := writeServiceRepo(t, `name: create
 description: render-fail
 state_changes: {}
@@ -2122,17 +2144,18 @@ tasks:
 
 // --- keeper-side dispatch (`on: keeper`, ADR-017) ---------------------
 //
-// Покрытие S1 keeper-dispatch сквозь run()+PG. До этих тестов ни один
-// integration-прогон не нёс keeper-задачу (newRunner строит Runner с
-// KeeperModules==nil), поэтому keeper-dispatch путь (run.go шаг 5.5 →
-// dispatchKeeperTasks) гонялся только unit-ами над applyKeeperTask, минуя
-// apply_runs/incarnation-финал. fakeKeeperModule/fakeKeeperRegistry —
-// в keeper_dispatch_test.go (без build-тега, компилируются и здесь).
+// S1 keeper-dispatch coverage through run()+PG. Before these tests, no
+// integration run carried a keeper task (newRunner builds a Runner with
+// KeeperModules==nil), so the keeper-dispatch path (run.go step 5.5 →
+// dispatchKeeperTasks) was only exercised by unit tests over
+// applyKeeperTask, bypassing the apply_runs/incarnation finalization.
+// fakeKeeperModule/fakeKeeperRegistry live in keeper_dispatch_test.go (no
+// build tag, compiled here too).
 
-// newRunnerWithKeeper собирает Runner с keeper-side core-Registry (для задач
-// `on: keeper`). Остальное — как newRunner (mock-dispatcher, PG-пул, real
-// render). keepers==nil → задача `on: keeper` отвергается
-// (ErrKeeperModulesNotConfigured) — это путь QA-пробела (f).
+// newRunnerWithKeeper builds a Runner with a keeper-side core Registry (for
+// `on: keeper` tasks). Otherwise like newRunner (mock dispatcher, PG pool,
+// real render). keepers==nil → an `on: keeper` task is rejected
+// (ErrKeeperModulesNotConfigured) — this is the QA-gap (f) path.
 func newRunnerWithKeeper(t *testing.T, disp ApplyDispatcher, keepers KeeperModuleRegistry) *Runner {
 	t.Helper()
 	engine, err := cel.New()
@@ -2152,11 +2175,12 @@ func newRunnerWithKeeper(t *testing.T, disp ApplyDispatcher, keepers KeeperModul
 	})
 }
 
-// keeperServiceRepo создаёт service-репо со scenario create, несущим
-// keeperTasks keeper-side задач (`on: keeper`, модуль keeperModule) и ОДНУ
-// Soul-side echo-задачу в конце — Soul-side нужна, чтобы roster был непустым
-// (run.go шаг 3, иначе no_hosts отсекает прогон до keeper-dispatch). Каждая
-// keeper-задача несёт register: keeperN — для проверки accumulateKeeperRegister.
+// keeperServiceRepo creates a service repo with a create scenario carrying
+// keeperTasks keeper-side tasks (`on: keeper`, module keeperModule) and ONE
+// Soul-side echo task at the end — Soul-side is needed so the roster is
+// non-empty (run.go step 3, otherwise no_hosts cuts the run short before
+// keeper-dispatch). Each keeper task carries register: keeperN — to check
+// accumulateKeeperRegister.
 func keeperServiceRepo(t *testing.T, keeperModule string, keeperTasks int) string {
 	t.Helper()
 	var b strings.Builder
@@ -2186,7 +2210,7 @@ tasks:
 	return writeServiceRepo(t, b.String())
 }
 
-// mustStructAny — structpb из map без *testing.T (для конструкторов модулей).
+// mustStructAny — structpb from a map without *testing.T (for module constructors).
 func mustStructAny(m map[string]any) *structpb.Struct {
 	s, err := structpb.NewStruct(m)
 	if err != nil {
@@ -2195,11 +2219,12 @@ func mustStructAny(m map[string]any) *structpb.Struct {
 	return s
 }
 
-// TestIntegration_KeeperDispatch_Failed_ErrorLocked — QA-пробел (a), КРИТИЧНО:
-// keeper-side задача провалена (final.Failed=true) → incarnation error_locked;
-// apply_runs(sid="keeper") = failed с error_summary; host-fan-out НЕ стартовал
-// (SendApply не вызван); incarnation.state не закоммичен. Сквозь run()+PG —
-// первый integration-тест, гоняющий keeper-dispatch через реальную БД.
+// TestIntegration_KeeperDispatch_Failed_ErrorLocked — QA gap (a), CRITICAL: a
+// keeper-side task fails (final.Failed=true) → incarnation error_locked;
+// apply_runs(sid="keeper") = failed with error_summary; host-fan-out did NOT
+// start (SendApply not called); incarnation.state not committed. Through
+// run()+PG — the first integration test exercising keeper-dispatch against a
+// real DB.
 func TestIntegration_KeeperDispatch_Failed_ErrorLocked(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -2229,17 +2254,17 @@ func TestIntegration_KeeperDispatch_Failed_ErrorLocked(t *testing.T) {
 		t.Errorf("reason = %v, want keeper_dispatch_failed", inc.StatusDetails)
 	}
 
-	// host-fan-out НЕ стартовал — keeper-задача упала до dispatch-а хостам.
+	// host-fan-out did NOT start — the keeper task failed before dispatching to hosts.
 	if disp.calls != 0 {
 		t.Errorf("SendApply calls = %d, want 0 (keeper-задача упала до host-fan-out)", disp.calls)
 	}
 
-	// state НЕ закоммичен (остался state_before = пустой seed-state).
+	// state NOT committed (stayed at state_before = the empty seed state).
 	if len(inc.State) != 0 {
 		t.Errorf("incarnation.state = %v, want пустой (state_before, keeper-fail НЕ коммитит)", inc.State)
 	}
 
-	// apply_runs(sid="keeper") = failed с error_summary.
+	// apply_runs(sid="keeper") = failed with error_summary.
 	st, err := applyrun.SelectStatusesByApplyID(context.Background(), integrationPool, applyID)
 	if err != nil {
 		t.Fatalf("SelectStatusesByApplyID: %v", err)
@@ -2261,18 +2286,18 @@ func TestIntegration_KeeperDispatch_Failed_ErrorLocked(t *testing.T) {
 	}
 }
 
-// TestIntegration_KeeperDispatch_TwoTasks_OrderAndRegister — QA-пробел (c):
-// ДВЕ keeper-задачи в одном сценарии. Обе исполнены в порядке Index, обе
-// register-записи под sid="keeper" с разными task_idx (0 и 1). Прогон успешен,
-// host-fan-out стартовал (Soul-задача → 1 SendApply).
+// TestIntegration_KeeperDispatch_TwoTasks_OrderAndRegister — QA gap (c): TWO
+// keeper tasks in one scenario. Both execute in Index order, both register
+// entries land under sid="keeper" with different task_idx (0 and 1). Run
+// succeeds, host-fan-out started (Soul task → 1 SendApply).
 func TestIntegration_KeeperDispatch_TwoTasks_OrderAndRegister(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "noop-prod")
 	seedConnectedSoul(t, "host-a.example.com", []string{"noop-prod"})
 
-	// Модуль фиксирует порядок вызовов через общий счётчик: каждая задача шлёт
-	// свой output (call_order), чтобы register-записи различались наблюдаемо.
+	// The module records call order via a shared counter: each task sends its
+	// own output (call_order) so register entries differ observably.
 	mod := &orderedKeeperModule{}
 	keepers := fakeKeeperRegistry{"core.soul": mod}
 	gitURL := keeperServiceRepo(t, "core.soul.registered", 2)
@@ -2293,17 +2318,17 @@ func TestIntegration_KeeperDispatch_TwoTasks_OrderAndRegister(t *testing.T) {
 
 	waitRunDone(t, "noop-prod", applyID, incarnation.StatusReady)
 
-	// Обе keeper-задачи исполнены (модуль вызван дважды).
+	// Both keeper tasks executed (module called twice).
 	if got := mod.applyCount(); got != 2 {
 		t.Errorf("keeper module Apply вызван %d раз, want 2", got)
 	}
 
-	// host-fan-out стартовал: Soul-задача ушла одному хосту.
+	// host-fan-out started: the Soul task went to one host.
 	if disp.calls != 1 {
 		t.Errorf("SendApply calls = %d, want 1 (Soul echo на одном хосте)", disp.calls)
 	}
 
-	// Обе register-записи под sid="keeper" с разными task_idx (0,1).
+	// Both register entries under sid="keeper" with different task_idx (0,1).
 	regs, err := applyrun.SelectTaskRegistersByApplyID(context.Background(), integrationPool, applyID)
 	if err != nil {
 		t.Fatalf("SelectTaskRegistersByApplyID: %v", err)
@@ -2319,8 +2344,9 @@ func TestIntegration_KeeperDispatch_TwoTasks_OrderAndRegister(t *testing.T) {
 	}
 }
 
-// orderedKeeperModule — keeper-side модуль, считающий вызовы Apply (для проверки
-// «обе keeper-задачи исполнены»). Финал всегда success c output.call_order.
+// orderedKeeperModule — a keeper-side module that counts Apply calls (to
+// check "both keeper tasks executed"). Final is always success with
+// output.call_order.
 type orderedKeeperModule struct {
 	module.BaseModule
 	mu    sync.Mutex
@@ -2344,10 +2370,11 @@ func (m *orderedKeeperModule) applyCount() int {
 	return m.count
 }
 
-// TestIntegration_KeeperDispatch_FirstFailedAbortsSecond — QA-пробел (c),
-// abort-инвариант: ПЕРВАЯ из двух keeper-задач провалена → ВТОРАЯ не исполняется
-// (dispatchKeeperTasks возвращает ошибку на первой failed). Наблюдаемо: модуль
-// вызван ровно 1 раз, incarnation error_locked, host-fan-out не стартовал.
+// TestIntegration_KeeperDispatch_FirstFailedAbortsSecond — QA gap (c), abort
+// invariant: the FIRST of two keeper tasks fails → the SECOND does not run
+// (dispatchKeeperTasks returns an error on the first failure). Observable:
+// module called exactly once, incarnation error_locked, host-fan-out did not
+// start.
 func TestIntegration_KeeperDispatch_FirstFailedAbortsSecond(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -2384,8 +2411,8 @@ func TestIntegration_KeeperDispatch_FirstFailedAbortsSecond(t *testing.T) {
 	}
 }
 
-// countingFailModule — keeper-side модуль, отдающий failed-финал и считающий
-// вызовы Apply (для abort-инварианта «вторая задача не исполняется»).
+// countingFailModule — a keeper-side module that returns a failed final and
+// counts Apply calls (for the abort invariant "second task doesn't run").
 type countingFailModule struct {
 	module.BaseModule
 	mu    sync.Mutex
@@ -2405,10 +2432,11 @@ func (m *countingFailModule) applyCount() int {
 	return m.count
 }
 
-// TestIntegration_KeeperDispatch_NilRegistry_ErrorLocked — QA-пробел (f):
-// scenario несёт `on: keeper`-задачу, но Runner собран с KeeperModules==nil →
-// dispatchKeeperTasks возвращает ErrKeeperModulesNotConfigured →
-// keeper_dispatch_failed → error_locked. host-fan-out не стартовал.
+// TestIntegration_KeeperDispatch_NilRegistry_ErrorLocked — QA gap (f): the
+// scenario carries an `on: keeper` task, but the Runner is built with
+// KeeperModules==nil → dispatchKeeperTasks returns
+// ErrKeeperModulesNotConfigured → keeper_dispatch_failed → error_locked.
+// host-fan-out did not start.
 func TestIntegration_KeeperDispatch_NilRegistry_ErrorLocked(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -2440,9 +2468,9 @@ func TestIntegration_KeeperDispatch_NilRegistry_ErrorLocked(t *testing.T) {
 	}
 }
 
-// keeperOnlyServiceRepo создаёт service-репо со scenario create ТОЛЬКО из
-// keeper-задач (ни одной Soul-side задачи). Roster прогона будет резолвиться
-// run.go-шагом 3 независимо от состава задач.
+// keeperOnlyServiceRepo creates a service repo with a create scenario made
+// ONLY of keeper tasks (no Soul-side tasks at all). The run's roster will
+// still be resolved by run.go step 3 regardless of task composition.
 func keeperOnlyServiceRepo(t *testing.T, keeperModule string) string {
 	t.Helper()
 	return writeServiceRepo(t, fmt.Sprintf(`name: create
@@ -2459,23 +2487,26 @@ tasks:
 `, keeperModule))
 }
 
-// TestIntegration_KeeperOnly_NoHosts_RunsKeeperTasks — bypass no_hosts для
-// all-keeper provision-from-zero (ADR-0061 §контекст amend): keeper-only сценарий
-// (0 Soul-side задач, ВСЕ `on: keeper`) против incarnation БЕЗ connected-хостов
-// теперь ИСПОЛНЯЕТ keeper-задачу (chicken-egg: create-сценарий создаёт хосты С
-// НУЛЯ, поэтому пустой roster на старте законен). Гейт пропускается по СОСТАВУ
-// (allKeeperTasks), без флага. Инвертирует прежнюю фиксацию S1-ограничения
-// (...AbortsBeforeKeeper): раньше no_hosts отсекал прогон до keeper-dispatch.
+// TestIntegration_KeeperOnly_NoHosts_RunsKeeperTasks — bypasses no_hosts for
+// all-keeper provision-from-zero (ADR-0061 §context amend): a keeper-only
+// scenario (0 Soul-side tasks, ALL `on: keeper`) against an incarnation with
+// NO connected hosts now RUNS the keeper task (chicken-and-egg: a create
+// scenario provisions hosts FROM ZERO, so an empty roster at start is
+// legitimate). The gate is bypassed based on task COMPOSITION
+// (allKeeperTasks), no flag. Inverts the previous S1-limitation fixture
+// (...AbortsBeforeKeeper): no_hosts used to cut the run short before
+// keeper-dispatch.
 //
-// Наблюдаемо: keeper-модуль вызван (applyCount==1), прогон НЕ error_locked по
-// no_hosts, доходит до keeper-dispatch (шаг 5.5) и финализируется ready —
-// host-fan-out на пустом roster = no-op-success. Essence резолвится в keeper-
-// контексте (keeperEssenceInput, без host-представителя) — без паники на hosts[0].
+// Observable: keeper module called (applyCount==1), run is NOT error_locked
+// on no_hosts, reaches keeper-dispatch (step 5.5) and finalizes ready —
+// host-fan-out on an empty roster = no-op success. Essence resolves in the
+// keeper context (keeperEssenceInput, no host representative) — no panic on
+// hosts[0].
 func TestIntegration_KeeperOnly_NoHosts_RunsKeeperTasks(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "noop-prod")
-	// Ни одного connected-хоста — provision-from-zero стартует на пустом roster.
+	// No connected hosts — provision-from-zero starts on an empty roster.
 
 	mod := &orderedKeeperModule{}
 	keepers := fakeKeeperRegistry{"core.soul": mod}
@@ -2495,20 +2526,20 @@ func TestIntegration_KeeperOnly_NoHosts_RunsKeeperTasks(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Прогон НЕ падает в no_hosts — доходит до keeper-dispatch и завершается
-	// успешно (host-fan-out на пустом roster = no-op).
+	// The run does NOT fall into no_hosts — it reaches keeper-dispatch and
+	// finishes successfully (host-fan-out on an empty roster = no-op).
 	waitRunDone(t, "noop-prod", applyID, incarnation.StatusReady)
 
-	// Keeper-задача ИСПОЛНЕНА — гейт пропущен по составу (all-keeper).
+	// Keeper task EXECUTED — gate bypassed based on composition (all-keeper).
 	if got := mod.applyCount(); got != 1 {
 		t.Errorf("keeper module Apply вызван %d раз, want 1 (all-keeper bypass no_hosts на пустом roster)", got)
 	}
-	// host-fan-out не стартовал — Soul-задач нет, roster пуст.
+	// host-fan-out did not start — no Soul tasks, empty roster.
 	if disp.calls != 0 {
 		t.Errorf("SendApply calls = %d, want 0 (нет Soul-задач, пустой roster)", disp.calls)
 	}
 
-	// keeper apply_runs(sid="keeper") = success (НЕ sentinel no_hosts).
+	// keeper apply_runs(sid="keeper") = success (NOT the no_hosts sentinel).
 	st, err := applyrun.SelectStatusesByApplyID(context.Background(), integrationPool, applyID)
 	if err != nil {
 		t.Fatalf("SelectStatusesByApplyID: %v", err)
@@ -2530,12 +2561,12 @@ func TestIntegration_KeeperOnly_NoHosts_RunsKeeperTasks(t *testing.T) {
 	}
 }
 
-// mixedKeeperHostServiceRepo создаёт service-репо со scenario create из ОДНОЙ
-// keeper-задачи (`on: keeper`, БЕЗ refresh_soulprint) И ОДНОЙ Soul-side задачи
-// (core.exec.run). Состав смешанный → allKeeperTasks(false); refresh-эмиттера НЕТ
-// → HasRefreshEmitter(false). Ни один класс bypass не применяется → no_hosts-гейт
-// держится на пустом roster (РЕВЕРС-фикстура: ловит расширение bypass на mixed-
-// без-refresh).
+// mixedKeeperHostServiceRepo creates a service repo with a create scenario of
+// ONE keeper task (`on: keeper`, WITHOUT refresh_soulprint) AND ONE Soul-side
+// task (core.exec.run). Mixed composition → allKeeperTasks(false); no refresh
+// emitter → HasRefreshEmitter(false). Neither bypass class applies → the
+// no_hosts gate holds on an empty roster (REVERSE fixture: catches bypass
+// creeping onto mixed-without-refresh).
 func mixedKeeperHostServiceRepo(t *testing.T, keeperModule string) string {
 	t.Helper()
 	return writeServiceRepo(t, fmt.Sprintf(`name: create
@@ -2558,17 +2589,17 @@ tasks:
 `, keeperModule))
 }
 
-// TestIntegration_HostScenario_NoHosts_StillAborts — GUARD bypass-границы:
-// host-сценарий (несёт Soul-side задачу) против пустого roster по-прежнему падает
-// в no_hosts. allKeeperTasks(false) → bypass НЕ применяется. Защищает прежнее
-// поведение host-прогонов от регрессии (bypass не должен «протечь» на host-
-// сценарии).
+// TestIntegration_HostScenario_NoHosts_StillAborts — GUARD for the bypass
+// boundary: a host scenario (carries a Soul-side task) against an empty
+// roster still falls into no_hosts. allKeeperTasks(false) → bypass does NOT
+// apply. Protects existing host-run behavior from regressing (bypass must not
+// "leak" onto host scenarios).
 func TestIntegration_HostScenario_NoHosts_StillAborts(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "noop-prod")
-	// Ни одного connected-хоста.
-	gitURL := noopServiceRepo(t) // несёт Soul-side core.exec.run
+	// No connected hosts.
+	gitURL := noopServiceRepo(t) // carries a Soul-side core.exec.run
 
 	disp := &mockDispatcher{t: t, result: applyrun.StatusSuccess}
 	r := newRunner(t, disp, gitURL)
@@ -2593,18 +2624,20 @@ func TestIntegration_HostScenario_NoHosts_StillAborts(t *testing.T) {
 	}
 }
 
-// TestIntegration_MixedKeeperAndHost_NoHosts_StillAborts — ★ РЕВЕРС-GUARD (security,
-// нерасширенное поведение СОХРАНЕНО): смешанный сценарий (keeper-задача + Soul-задача)
-// БЕЗ refresh-эмиттера против пустого roster падает в no_hosts. allKeeperTasks(false)
-// (есть host-задача) И HasRefreshEmitter(false) (нет refresh_soulprint) → НИ ОДИН
-// класс bypass не применяется → гейт держится. Keeper-модуль НЕ исполнен (abort на
-// шаге 3, до keeper-dispatch). Защищает границу: bypass mixed-плана требует ИМЕННО
-// refresh-эмиттера; mixed без него остаётся за no_hosts (host-задача на пустом P0).
+// TestIntegration_MixedKeeperAndHost_NoHosts_StillAborts — ★ REVERSE GUARD
+// (security, unextended behavior PRESERVED): a mixed scenario (keeper task +
+// Soul task) WITHOUT a refresh emitter against an empty roster falls into
+// no_hosts. allKeeperTasks(false) (there's a host task) AND
+// HasRefreshEmitter(false) (no refresh_soulprint) → NEITHER bypass class
+// applies → the gate holds. The keeper module is NOT executed (abort at step
+// 3, before keeper-dispatch). Protects the boundary: bypassing a mixed plan
+// requires SPECIFICALLY a refresh emitter; mixed without one stays behind
+// no_hosts (host task on an empty P0).
 func TestIntegration_MixedKeeperAndHost_NoHosts_StillAborts(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "noop-prod")
-	// Ни одного connected-хоста.
+	// No connected hosts.
 
 	mod := &orderedKeeperModule{}
 	keepers := fakeKeeperRegistry{"core.soul": mod}
@@ -2628,7 +2661,7 @@ func TestIntegration_MixedKeeperAndHost_NoHosts_StillAborts(t *testing.T) {
 	if inc.StatusDetails["reason"] != "no_hosts" {
 		t.Errorf("reason = %v, want no_hosts (смешанный keeper+host → !allKeeperTasks)", inc.StatusDetails["reason"])
 	}
-	// Keeper-модуль НЕ исполнен — no_hosts отсёк прогон до keeper-dispatch (шаг 5.5).
+	// Keeper module NOT executed — no_hosts cut the run short before keeper-dispatch (step 5.5).
 	if got := mod.applyCount(); got != 0 {
 		t.Errorf("keeper module Apply вызван %d раз, want 0 (no_hosts до keeper-dispatch)", got)
 	}
@@ -2637,11 +2670,13 @@ func TestIntegration_MixedKeeperAndHost_NoHosts_StillAborts(t *testing.T) {
 	}
 }
 
-// mixedKeeperHostRefreshServiceRepo — mixed-план provision→роль с REFRESH-эмиттером:
-// keeper-задача core.soul.registered c `refresh_soulprint: true` (provision-passage)
-// + Soul-side host-задача (deploy-passage). HasRefreshEmitter(true) → план провиженит
-// roster mid-run → стартует на ПУСТОМ roster законно (host-задача стратифицируется в
-// Passage ПОСЛЕ refresh-границы, §S2/§S3). Целевая фикстура bypass-класса (б).
+// mixedKeeperHostRefreshServiceRepo — a mixed provision→role plan WITH a
+// REFRESH emitter: a core.soul.registered keeper task with
+// `refresh_soulprint: true` (provision passage) + a Soul-side host task
+// (deploy passage). HasRefreshEmitter(true) → the plan grows the roster
+// mid-run → legitimately starting on an EMPTY roster (the host task
+// stratifies into a Passage AFTER the refresh boundary, §S2/§S3). Target
+// fixture for bypass class (b).
 func mixedKeeperHostRefreshServiceRepo(t *testing.T) string {
 	t.Helper()
 	return writeServiceRepo(t, `name: create
@@ -2666,31 +2701,34 @@ tasks:
 `)
 }
 
-// TestIntegration_MixedKeeperAndHost_Refresh_RunsToDispatch — ★ GUARD bypass-класса
-// (б) (ADR-0061 amendment): смешанный provision→роль план С refresh-эмиттером
-// (core.soul.registered refresh_soulprint: true) против ПУСТОГО roster НЕ падает в
-// no_hosts — доходит до keeper-dispatch и исполняет provision-шаг. allKeeperTasks
-// false (есть host-задача), но HasRefreshEmitter true → пустой стартовый roster
-// законен (host-задача уезжает в Passage после refresh-границы, на re-resolved
-// roster). Инвертирует прежнюю фиксацию «mixed остаётся за no_hosts».
+// TestIntegration_MixedKeeperAndHost_Refresh_RunsToDispatch — ★ GUARD for
+// bypass class (b) (ADR-0061 amendment): a mixed provision→role plan WITH a
+// refresh emitter (core.soul.registered refresh_soulprint: true) against an
+// EMPTY roster does NOT fall into no_hosts — it reaches keeper-dispatch and
+// runs the provision step. allKeeperTasks false (there's a host task), but
+// HasRefreshEmitter true → an empty starting roster is legitimate (the host
+// task travels in a Passage after the refresh boundary, on the re-resolved
+// roster). Inverts the previous "mixed stays behind no_hosts" fixture.
 //
-// Наблюдаемо: keeper provision-модуль вызван (applyCount==1), НЕТ sentinel-строки
-// no_hosts, прогон финализируется ready (host-fan-out на пустом re-resolved roster
-// = no-op-success — VM в unit реально не онбордятся, live-снимок остаётся пустым).
+// Observable: the keeper provision module is called (applyCount==1), NO
+// no_hosts sentinel row, the run finalizes ready (host-fan-out on the empty
+// re-resolved roster = no-op success — VMs aren't really onboarded in the
+// unit test, the live snapshot stays empty).
 func TestIntegration_MixedKeeperAndHost_Refresh_RunsToDispatch(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "noop-prod")
-	// Ни одного connected-хоста — provision-from-zero стартует на пустом roster.
+	// No connected hosts — provision-from-zero starts on an empty roster.
 
 	mod := &orderedKeeperModule{}
 	keepers := fakeKeeperRegistry{"core.soul": mod}
 	gitURL := mixedKeeperHostRefreshServiceRepo(t)
 
 	disp := &mockDispatcher{t: t, result: applyrun.StatusSuccess}
-	// staged-Runner: refresh-граница даёт Count=2 → нужен passage-capability-чекер
-	// (stubPassageCap, ADR-056 §S5). Пустой стартовый roster → presence-гейт на
-	// пустом наборе SID = no-op (никто не lacking), staged-механика проходит.
+	// staged Runner: the refresh boundary yields Count=2 → needs a
+	// passage-capability checker (stubPassageCap, ADR-056 §S5). Empty starting
+	// roster → the presence gate on an empty SID set = no-op (nobody lacking),
+	// staged mechanics pass through.
 	r := newRunnerKeeperStaged(t, disp, keepers)
 
 	applyID := audit.NewULID()
@@ -2704,16 +2742,16 @@ func TestIntegration_MixedKeeperAndHost_Refresh_RunsToDispatch(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// НЕ no_hosts: прогон доходит до keeper-dispatch и завершается (host-deploy на
-	// пустом re-resolved roster = no-op).
+	// NOT no_hosts: the run reaches keeper-dispatch and finishes (host-deploy
+	// on the empty re-resolved roster = no-op).
 	waitRunDone(t, "noop-prod", applyID, incarnation.StatusReady)
 
-	// Provision keeper-задача ИСПОЛНЕНА — bypass пропустил пустой roster по refresh.
+	// Provision keeper task EXECUTED — bypass let the empty roster through via refresh.
 	if got := mod.applyCount(); got != 1 {
 		t.Errorf("keeper module Apply вызван %d раз, want 1 (mixed+refresh bypass no_hosts на пустом roster)", got)
 	}
 
-	// Нет sentinel-строки no_hosts — стартовый гейт пропущен.
+	// No no_hosts sentinel row — the starting gate was bypassed.
 	st, err := applyrun.SelectStatusesByApplyID(context.Background(), integrationPool, applyID)
 	if err != nil {
 		t.Fatalf("SelectStatusesByApplyID: %v", err)
@@ -2725,10 +2763,11 @@ func TestIntegration_MixedKeeperAndHost_Refresh_RunsToDispatch(t *testing.T) {
 	}
 }
 
-// seedCreateHistory вставляет state_history-snapshot упавшего `create`-сценария И
-// проставляет incarnation.created_scenario='create' — вместе дают scope=create в
-// [incarnation.UnlockForRerun]: gate требует created_scenario == последний упавший
-// сценарий (значение create-пути проставляет handler/MCP, Create персистит). state_before == state_after = `{}`.
+// seedCreateHistory inserts a state_history snapshot for a failed `create`
+// scenario AND sets incarnation.created_scenario='create' — together giving
+// scope=create in [incarnation.UnlockForRerun]: the gate requires
+// created_scenario == the last failed scenario (the create-path value is set
+// by the handler/MCP, Create persists it). state_before == state_after = `{}`.
 func seedCreateHistory(t *testing.T, name string) {
 	t.Helper()
 	_, err := integrationPool.Exec(context.Background(), `
@@ -2744,9 +2783,10 @@ VALUES ($1, $2, 'create', '{}'::jsonb, '{}'::jsonb, $1)`,
 	}
 }
 
-// waitIncarnationStatus поллит статус incarnation до достижения want (для rerun-
-// create-пути нельзя использовать waitRunDone: UnlockForRerun пишет state_history
-// с тем же applyID ДО завершения прогона, поэтому ждать надо именно по статусу).
+// waitIncarnationStatus polls the incarnation status until it reaches want
+// (waitRunDone can't be used for the rerun-create path: UnlockForRerun writes
+// state_history with the same applyID BEFORE the run finishes, so we must
+// wait on status specifically).
 func waitIncarnationStatus(t *testing.T, name string, want incarnation.Status) *incarnation.Incarnation {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -2764,13 +2804,14 @@ func waitIncarnationStatus(t *testing.T, name string, want incarnation.Status) *
 	return nil
 }
 
-// TestIntegration_FromLocked_RerunLast_DrivesRun — GUARD (блокер S2): rerun-
-// create из error_locked ДОВОДИТ до реального прогона. UnlockForRerun под FOR
-// UPDATE резервирует applying (минуя ready), затем Start{FromLocked:true} — и
-// lockRun обязан УВИДЕТЬ applying как валидный стартовый статус, а не отвергнуть
-// прогон. Без FromLocked-ветки прогон застревал бы в applying навсегда (lockRun
-// видел applying → ErrAlreadyRunning → отказ). Проверяем: dispatch состоялся,
-// инкарнация дошла до ready (не осталась в applying).
+// TestIntegration_FromLocked_RerunLast_DrivesRun — GUARD (S2 blocker): a
+// rerun-create from error_locked DRIVES a real run to completion.
+// UnlockForRerun under FOR UPDATE reserves applying (bypassing ready), then
+// Start{FromLocked:true} — and lockRun must SEE applying as a valid starting
+// status rather than reject the run. Without the FromLocked branch the run
+// would get stuck in applying forever (lockRun would see applying →
+// ErrAlreadyRunning → refusal). Checks: dispatch happened, the incarnation
+// reached ready (didn't stay in applying).
 func TestIntegration_FromLocked_RerunLast_DrivesRun(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -2781,7 +2822,7 @@ func TestIntegration_FromLocked_RerunLast_DrivesRun(t *testing.T) {
 	if err := incarnation.Create(context.Background(), integrationPool, inc); err != nil {
 		t.Fatalf("Create error_locked: %v", err)
 	}
-	seedCreateHistory(t, "noop-prod") // последний упавший сценарий = create (scope=create)
+	seedCreateHistory(t, "noop-prod") // last failed scenario = create (scope=create)
 	seedConnectedSoul(t, "host-a.example.com", []string{"noop-prod"})
 	gitURL := noopServiceRepo(t)
 
@@ -2789,8 +2830,8 @@ func TestIntegration_FromLocked_RerunLast_DrivesRun(t *testing.T) {
 	r := newRunner(t, disp, gitURL)
 
 	applyID := audit.NewULID()
-	// Unlock-часть rerun-last: error_locked → applying минуя ready (race-free),
-	// как в handler-е/MCP-tool-е.
+	// Unlock part of rerun-last: error_locked → applying bypassing ready
+	// (race-free), same as the handler/MCP tool.
 	if _, err := incarnation.UnlockForRerun(context.Background(), integrationPool,
 		"noop-prod", "rerun bootstrap verified", "archon-alice", audit.NewULID(), applyID); err != nil {
 		t.Fatalf("UnlockForRerun: %v", err)
@@ -2807,7 +2848,7 @@ func TestIntegration_FromLocked_RerunLast_DrivesRun(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Прогон доведён до конца: инкарнация в ready (НЕ застряла в applying).
+	// Run driven to completion: incarnation is ready (did NOT get stuck in applying).
 	waitIncarnationStatus(t, "noop-prod", incarnation.StatusReady)
 	if disp.calls != 1 {
 		t.Errorf("SendApply calls = %d, want 1 (прогон должен был стартовать)", disp.calls)
@@ -2818,14 +2859,15 @@ func TestIntegration_FromLocked_RerunLast_DrivesRun(t *testing.T) {
 }
 
 // TestIntegration_FromLocked_FailClosed_RejectsNonApplying — GUARD: FromLocked
-// fail-closed. lockRun при FromLocked НЕ транзитит статус повторно — обязан
-// увидеть applying. Если зарезервированная строка УШЛА из-под старта (статус не
-// applying, здесь — ready), прогон отклоняется (ErrNotRunnable), dispatch не
-// происходит, статус не трогается. Защита от исполнения по неконсистентному вызову.
+// is fail-closed. lockRun under FromLocked does NOT transition status again —
+// it must see applying. If the reserved row moved away before start (status
+// isn't applying, here — ready), the run is rejected (ErrNotRunnable), no
+// dispatch happens, status is untouched. Protects against running on an
+// inconsistent call.
 func TestIntegration_FromLocked_FailClosed_RejectsNonApplying(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
-	seedIncarnation(t, "noop-prod") // статус ready, НЕ applying
+	seedIncarnation(t, "noop-prod") // status ready, NOT applying
 	seedConnectedSoul(t, "host-a.example.com", []string{"noop-prod"})
 	gitURL := noopServiceRepo(t)
 
@@ -2843,8 +2885,8 @@ func TestIntegration_FromLocked_FailClosed_RejectsNonApplying(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Прогон отклоняется внутри run-goroutine (lockRun → ErrNotRunnable);
-	// статус остаётся ready, dispatch не происходит.
+	// The run is rejected inside the run-goroutine (lockRun → ErrNotRunnable);
+	// status stays ready, no dispatch happens.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if disp.calls > 0 {

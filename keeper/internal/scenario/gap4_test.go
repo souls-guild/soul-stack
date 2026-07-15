@@ -1,15 +1,15 @@
 //go:build integration
 
-// Integration-тесты GAP#4: закрытие пробелов покрытия scenario-run + unlock
-// по qa-находкам. Дополняют integration_test.go (тот же стенд: testcontainers
+// Integration tests for GAP#4: closing scenario-run + unlock coverage gaps
+// found in QA. Complements integration_test.go (same rig: testcontainers
 // PG, local-fs git service-noop, mock Outbound):
 //
-//  1. scenario-run против НЕПУСТОГО state — merge, а не перезапись (реальный
-//     DB round-trip incarnation.state).
-//  2. Цельный lifecycle одним тестом: create → error_locked → run (lock-gate
-//     отказ) → unlock → run снова → success.
-//  3. Concurrency lock-gate: параллельные прогоны против ОДНОЙ incarnation —
-//     ровно один стартует apply, остальные отбиваются (lockRun под FOR UPDATE).
+//  1. scenario-run against NON-EMPTY state — merge, not overwrite (real
+//     DB round-trip of incarnation.state).
+//  2. Full lifecycle in one test: create → error_locked → run (lock-gate
+//     rejection) → unlock → run again → success.
+//  3. Concurrency lock-gate: parallel runs against ONE incarnation —
+//     exactly one starts apply, the rest are rejected (lockRun under FOR UPDATE).
 
 package scenario
 
@@ -32,9 +32,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// seedIncarnationWithState создаёт ready-incarnation с заданным начальным
-// state (seedIncarnation из integration_test.go стартует от пустого state —
-// merge-into-existing им не покрывается).
+// seedIncarnationWithState creates a ready incarnation with the given initial
+// state (seedIncarnation in integration_test.go starts from empty state —
+// merge-into-existing isn't covered by it).
 func seedIncarnationWithState(t *testing.T, name string, state map[string]any) {
 	t.Helper()
 	inc := &incarnation.Incarnation{
@@ -47,9 +47,9 @@ func seedIncarnationWithState(t *testing.T, name string, state map[string]any) {
 	}
 }
 
-// setBServiceRepo — service-noop, чей scenario `bump` несёт state_changes.sets,
-// задающий ТОЛЬКО поле b (статический литерал). Остальные поля state не
-// упомянуты — merge должен их сохранить.
+// setBServiceRepo — service-noop whose `bump` scenario carries state_changes.sets
+// setting ONLY field b (a static literal). Other state fields aren't
+// mentioned — merge must preserve them.
 func setBServiceRepo(t *testing.T) string {
 	t.Helper()
 	return writeServiceRepoScenario(t, "bump", `name: bump
@@ -67,9 +67,9 @@ tasks:
 `)
 }
 
-// writeServiceRepoScenario — конструктор local-fs git-репо service-noop с
-// scenario/<name>/main.yml = scenarioMain (обобщение writeServiceRepo, который
-// жёстко пишет scenario/create/). Вынесено в этот файл, чтобы не трогать
+// writeServiceRepoScenario — a constructor for a local-fs git repo service-noop with
+// scenario/<name>/main.yml = scenarioMain (a generalization of writeServiceRepo, which
+// hard-codes scenario/create/). Factored into this file to avoid touching
 // integration_test.go.
 func writeServiceRepoScenario(t *testing.T, scenarioName, scenarioMain string) string {
 	t.Helper()
@@ -110,9 +110,9 @@ state_schema:
 	return "file://" + dir
 }
 
-// TestIntegration_RunMergesIntoExistingState — GAP#4 #1: incarnation со
-// state {a:1, b:2}; scenario bump задаёт ТОЛЬКО b. После прогона (реальный
-// DB round-trip): a сохранён (merge не перезаписал весь state), b обновлён на 20.
+// TestIntegration_RunMergesIntoExistingState — GAP#4 #1: incarnation with
+// state {a:1, b:2}; scenario bump sets ONLY b. After the run (real
+// DB round-trip): a is preserved (merge didn't overwrite the whole state), b is updated to 20.
 func TestIntegration_RunMergesIntoExistingState(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -136,17 +136,17 @@ func TestIntegration_RunMergesIntoExistingState(t *testing.T) {
 
 	inc := waitRunDone(t, "noop-prod", applyID, incarnation.StatusReady)
 
-	// a не упомянут в sets → должен сохраниться (JSON round-trip из JSONB → float64).
+	// a isn't mentioned in sets → must be preserved (JSON round-trip from JSONB → float64).
 	if inc.State["a"] != float64(1) {
 		t.Errorf("state.a = %v (%T), want 1 (merge должен сохранить непереписанные поля)", inc.State["a"], inc.State["a"])
 	}
-	// b упомянут в sets → перезаписан литералом "20".
+	// b is mentioned in sets → overwritten with the literal "20".
 	if inc.State["b"] != "20" {
 		t.Errorf("state.b = %v (%T), want \"20\" (sets обновил поле)", inc.State["b"], inc.State["b"])
 	}
 
-	// Реальный DB round-trip: читаем state ещё раз напрямую из БД, чтобы
-	// подтвердить, что merge закоммичен, а не виден лишь в in-memory снапшоте.
+	// Real DB round-trip: read state again directly from the DB to
+	// confirm the merge is committed, not just visible in the in-memory snapshot.
 	fromDB, err := incarnation.SelectByName(context.Background(), integrationPool, "noop-prod")
 	if err != nil {
 		t.Fatalf("SelectByName: %v", err)
@@ -158,7 +158,7 @@ func TestIntegration_RunMergesIntoExistingState(t *testing.T) {
 		t.Errorf("DB state.b = %v, want \"20\"", fromDB.State["b"])
 	}
 
-	// state_history snapshot: state_before несёт исходный b=2, state_after — b="20".
+	// state_history snapshot: state_before carries the original b=2, state_after — b="20".
 	hist, total, err := incarnation.HistorySelectByName(context.Background(), integrationPool,
 		"noop-prod", incarnation.HistoryFilter{ApplyID: applyID}, 0, 10)
 	if err != nil {
@@ -178,15 +178,15 @@ func TestIntegration_RunMergesIntoExistingState(t *testing.T) {
 	}
 }
 
-// TestIntegration_Lifecycle_LockUnlockRerun — GAP#4 #2: цельный жизненный цикл
-// одним тестом.
+// TestIntegration_Lifecycle_LockUnlockRerun — GAP#4 #2: a full lifecycle
+// in one test.
 //
 //	create (ready, state {seeded:true})
-//	  → прогон #1 fail на хосте → error_locked (state НЕ тронут)
-//	  → прогон #2 против error_locked → lock-gate отбивает (ErrLocked,
-//	    dispatch не происходит, статус остаётся error_locked) — это бэкенд 409
-//	  → Unlock(reason) → ready, status_details сброшены, state сохранён
-//	  → прогон #3 → проходит до success.
+//	  → run #1 fails on the host → error_locked (state NOT touched)
+//	  → run #2 against error_locked → lock-gate rejects it (ErrLocked,
+//	    dispatch doesn't happen, status stays error_locked) — this is the backend's 409
+//	  → Unlock(reason) → ready, status_details cleared, state preserved
+//	  → run #3 → goes through to success.
 func TestIntegration_Lifecycle_LockUnlockRerun(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -195,7 +195,7 @@ func TestIntegration_Lifecycle_LockUnlockRerun(t *testing.T) {
 	gitURL := noopServiceRepo(t)
 	ref := artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"}
 
-	// --- прогон #1: fail → error_locked --------------------------------
+	// --- run #1: fail → error_locked --------------------------------
 	summary := "module failed"
 	failDisp := &mockDispatcher{t: t, result: applyrun.StatusFailed, summary: &summary}
 	rFail := newRunner(t, failDisp, gitURL)
@@ -215,7 +215,7 @@ func TestIntegration_Lifecycle_LockUnlockRerun(t *testing.T) {
 		t.Errorf("state.seeded = %v, want true (fail не трогает state)", locked.State["seeded"])
 	}
 
-	// --- прогон #2: против error_locked → lock-gate отбивает (бэкенд 409) ---
+	// --- run #2: against error_locked → lock-gate rejects it (backend 409) ---
 	gateDisp := &mockDispatcher{t: t, result: applyrun.StatusSuccess}
 	rGate := newRunner(t, gateDisp, gitURL)
 	apply2 := audit.NewULID()
@@ -225,9 +225,9 @@ func TestIntegration_Lifecycle_LockUnlockRerun(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Start #2: %v", err)
 	}
-	// lockRun → ErrLocked внутри goroutine: dispatch не происходит, статус
-	// остаётся error_locked. Это та же проверка под FOR UPDATE, что handler
-	// отдаёт наружу как 409 incarnation-locked.
+	// lockRun → ErrLocked inside the goroutine: dispatch doesn't happen, status
+	// stays error_locked. This is the same check under FOR UPDATE that the handler
+	// surfaces as a 409 incarnation-locked.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if gateDisp.calls > 0 {
@@ -243,7 +243,7 @@ func TestIntegration_Lifecycle_LockUnlockRerun(t *testing.T) {
 		t.Errorf("после отбитого #2: status = %q, want error_locked", stillLocked.Status)
 	}
 
-	// --- unlock с reason → ready --------------------------------------
+	// --- unlock with reason → ready --------------------------------------
 	unlockRes, err := incarnation.Unlock(context.Background(), integrationPool,
 		"noop-prod", "triaged: host fixed manually", "archon-alice", audit.NewULID())
 	if err != nil {
@@ -266,7 +266,7 @@ func TestIntegration_Lifecycle_LockUnlockRerun(t *testing.T) {
 		t.Errorf("после unlock: state.seeded = %v, want true (unlock не трогает state)", unlocked.State["seeded"])
 	}
 
-	// --- прогон #3: ready снова → проходит до success ------------------
+	// --- run #3: ready again → goes through to success ------------------
 	okDisp := &mockDispatcher{t: t, result: applyrun.StatusSuccess}
 	rOK := newRunner(t, okDisp, gitURL)
 	apply3 := audit.NewULID()
@@ -288,10 +288,10 @@ func TestIntegration_Lifecycle_LockUnlockRerun(t *testing.T) {
 	}
 }
 
-// blockingDispatcher симулирует Soul, который держит apply открытым до сигнала
-// release (чтобы прогон-победитель удерживал incarnation в applying, пока
-// конкуренты пытаются стартовать). На SendApply считает вызовы, ждёт release,
-// затем пишет терминальный success-статус.
+// blockingDispatcher simulates Soul holding an apply open until the release
+// signal (so the winning run keeps the incarnation in applying while
+// competitors try to start). On SendApply it counts calls, waits for release,
+// then writes a terminal success status.
 type blockingDispatcher struct {
 	t       *testing.T
 	calls   atomic.Int32
@@ -311,15 +311,15 @@ func (d *blockingDispatcher) SendApply(ctx context.Context, sid string, req *kee
 	return nil
 }
 
-// TestIntegration_Concurrency_LockGate_RunVsRun — GAP#4 #3: N параллельных
-// прогонов (разные apply_id) против ОДНОЙ incarnation. lockRun под FOR UPDATE
-// сериализует run-vs-run: РОВНО ОДИН переводит incarnation в applying и доходит
-// до dispatch (SendApply), остальные на selectForUpdate видят applying →
-// ErrAlreadyRunning и отбиваются без dispatch.
+// TestIntegration_Concurrency_LockGate_RunVsRun — GAP#4 #3: N parallel
+// runs (different apply_id) against ONE incarnation. lockRun under FOR UPDATE
+// serializes run-vs-run: EXACTLY ONE moves the incarnation to applying and reaches
+// dispatch (SendApply), the rest see applying on selectForUpdate →
+// ErrAlreadyRunning and are rejected without dispatch.
 //
-// Прогоняется под go test -race. Победитель держится в applying через
-// blockingDispatcher, пока все конкуренты не отстрелялись на lock-gate; затем
-// release завершает прогон-победитель.
+// Run under go test -race. The winner is held in applying via
+// blockingDispatcher until all competitors have bounced off the lock-gate; then
+// release finishes the winning run.
 func TestIntegration_Concurrency_LockGate_RunVsRun(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -337,8 +337,8 @@ func TestIntegration_Concurrency_LockGate_RunVsRun(t *testing.T) {
 	for i := 0; i < racers; i++ {
 		go func() {
 			defer wg.Done()
-			// Разные apply_id: in-memory active-gate (по apply_id) НЕ участвует —
-			// сериализацию обеспечивает только lockRun под FOR UPDATE.
+			// Different apply_id: the in-memory active-gate (keyed by apply_id) is NOT involved —
+			// only lockRun under FOR UPDATE provides serialization.
 			if err := r.Start(context.Background(), RunSpec{
 				ApplyID: audit.NewULID(), IncarnationName: "noop-prod", ServiceRef: ref,
 				ScenarioName: "create", StartedByAID: "archon-alice",
@@ -349,9 +349,9 @@ func TestIntegration_Concurrency_LockGate_RunVsRun(t *testing.T) {
 	}
 	wg.Wait()
 
-	// Ждём, пока ровно один прогон дойдёт до SendApply (победитель залочил
-	// incarnation в applying и заблокировался на release). Остальные за это
-	// время должны отбиться на lock-gate.
+	// Wait until exactly one run reaches SendApply (the winner locked the
+	// incarnation into applying and blocked on release). The rest should
+	// bounce off the lock-gate during this time.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if disp.calls.Load() == 1 {
@@ -363,14 +363,14 @@ func TestIntegration_Concurrency_LockGate_RunVsRun(t *testing.T) {
 		t.Fatalf("SendApply calls = %d, want ровно 1 (lock-gate сериализует run-vs-run)", got)
 	}
 
-	// Даём проигравшим время убедиться, что они не дёрнут dispatch позже.
+	// Give the losers time to confirm they won't trigger dispatch later.
 	time.Sleep(300 * time.Millisecond)
 	if got := disp.calls.Load(); got != 1 {
 		t.Fatalf("SendApply calls = %d после паузы, want 1 (конкуренты не должны стартовать apply)", got)
 	}
 
-	// apply_runs: только победитель завёл running-row. Releaseим победителя и
-	// ждём, пока incarnation вернётся в ready (success-терминал прогона).
+	// apply_runs: only the winner created a running row. Release the winner and
+	// wait for the incarnation to return to ready (success terminal of the run).
 	close(disp.release)
 	waitStatus(t, "noop-prod", incarnation.StatusReady)
 
@@ -384,9 +384,9 @@ func TestIntegration_Concurrency_LockGate_RunVsRun(t *testing.T) {
 	}
 }
 
-// waitStatus поллит статус incarnation до достижения want (или timeout).
-// Отдельно от waitRunDone: в concurrency-тесте apply_id победителя заранее не
-// известен (генерится в каждой goroutine), поэтому ждём по статусу.
+// waitStatus polls incarnation status until it reaches want (or timeout).
+// Separate from waitRunDone: in the concurrency test the winner's apply_id isn't
+// known ahead of time (generated inside each goroutine), so we wait on status instead.
 func waitStatus(t *testing.T, name string, want incarnation.Status) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)

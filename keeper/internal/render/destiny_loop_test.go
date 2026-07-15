@@ -8,10 +8,10 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// loopDestiny — destiny с одной loop:-задачей по input.changes (зеркало
-// service/redis scenario update_acl → destiny update_acls). Каждый item
-// разворачивается в отдельную RenderedTask. input.changes передаётся через
-// apply.input родителя.
+// loopDestiny is a destiny with one loop: task over input.changes (mirrors
+// service/redis scenario update_acl → destiny update_acls). Each item expands
+// into a separate RenderedTask. input.changes is passed through the parent's
+// apply.input.
 func loopDestiny() *ResolvedDestiny {
 	return &ResolvedDestiny{
 		Name: "pilot-loop",
@@ -37,10 +37,10 @@ func loopDestiny() *ResolvedDestiny {
 	}
 }
 
-// TestRender_ApplyDestiny_Loop_Expands — loop ВНУТРИ destiny (слайс E снят):
-// одна loop-задача разворачивается в N RenderedTask по элементам input.changes,
-// биндинг item (<as>/<index_as>) корректен, индексы сквозные. Зеркало
-// scenario add_acl_user, но loop живёт в destiny-задаче.
+// TestRender_ApplyDestiny_Loop_Expands proves loop INSIDE a destiny (slice E
+// removed): one loop task expands into N RenderedTask per input.changes
+// element, item binding (<as>/<index_as>) is correct, indices are contiguous.
+// Mirrors scenario add_acl_user, but the loop lives in the destiny task.
 func TestRender_ApplyDestiny_Loop_Expands(t *testing.T) {
 	res := &stubDestinyResolver{resolved: loopDestiny()}
 	p := NewPipeline(nil, newEngine(t), nil, nil)
@@ -59,7 +59,7 @@ func TestRender_ApplyDestiny_Loop_Expands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	// object → 2 итерации, порядок алфавитный по ключам (alice, bob).
+	// object → 2 iterations, alphabetical order by key (alice, bob).
 	if len(tasks) != 2 || len(plans) != 2 {
 		t.Fatalf("len(tasks)=%d plans=%d, want 2/2 (loop в destiny развёрнут)", len(tasks), len(plans))
 	}
@@ -77,8 +77,9 @@ func TestRender_ApplyDestiny_Loop_Expands(t *testing.T) {
 	}
 }
 
-// TestRender_ApplyDestiny_Loop_MixedPlan — module-задача ДО loop:destiny и ПОСЛЕ:
-// сквозные индексы продолжаются через границу destiny-loop (как через apply:destiny).
+// TestRender_ApplyDestiny_Loop_MixedPlan proves a module task BEFORE loop:destiny
+// and AFTER: contiguous indices continue across the destiny-loop boundary (as
+// they do across apply:destiny).
 func TestRender_ApplyDestiny_Loop_MixedPlan(t *testing.T) {
 	res := &stubDestinyResolver{resolved: loopDestiny()}
 	scn := &config.ScenarioManifest{
@@ -105,7 +106,7 @@ func TestRender_ApplyDestiny_Loop_MixedPlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	// pre(0) + loop×3 (1,2,3) + post(4) = 5 задач, сквозные индексы.
+	// pre(0) + loop×3 (1,2,3) + post(4) = 5 tasks, contiguous indices.
 	if len(tasks) != 5 {
 		t.Fatalf("len(tasks) = %d, want 5 (pre + loop×3 + post)", len(tasks))
 	}
@@ -119,11 +120,11 @@ func TestRender_ApplyDestiny_Loop_MixedPlan(t *testing.T) {
 	}
 }
 
-// TestRender_ApplyDestiny_Loop_Isolation — РЕВЕРС-GUARD изоляции: loop:-items в
-// destiny ссылается на soulprint.hosts (scenario-only roster, недоступный
-// изолированному destiny) → ошибка изоляции (AllowHosts=false при
-// destinyIsolated). Ловит протечку изоляции, если loopInvariantVars перестанет
-// уважать destinyIsolated.
+// TestRender_ApplyDestiny_Loop_Isolation is a REVERSE-GUARD on isolation:
+// loop: items in a destiny reference soulprint.hosts (scenario-only roster,
+// unreachable from an isolated destiny) → isolation error (AllowHosts=false
+// under destinyIsolated). Catches an isolation leak if loopInvariantVars stops
+// honoring destinyIsolated.
 func TestRender_ApplyDestiny_Loop_Isolation(t *testing.T) {
 	leaky := loopDestiny()
 	leaky.Tasks[0].Loop.Items = `${ soulprint.hosts.where("role == 'master'") }`
@@ -145,10 +146,10 @@ func TestRender_ApplyDestiny_Loop_Isolation(t *testing.T) {
 	}
 }
 
-// TestRender_ApplyDestiny_Loop_RegisterIsolation — РЕВЕРС-GUARD: loop:-items в
-// destiny ссылается на register (scenario-scope, пуст в изолированном destiny) →
-// no-such-key. Register destiny пуст до barrier (изоляция ADR-009); cross-scope
-// register в loop.items не протекает.
+// TestRender_ApplyDestiny_Loop_RegisterIsolation is a REVERSE-GUARD: loop:
+// items in a destiny reference register (scenario-scope, empty in an isolated
+// destiny) → no-such-key. A destiny's register is empty before the barrier
+// (isolation, ADR-009); cross-scope register doesn't leak into loop.items.
 func TestRender_ApplyDestiny_Loop_RegisterIsolation(t *testing.T) {
 	leaky := loopDestiny()
 	leaky.Tasks[0].Loop.Items = "${ register.probe.stdout_lines }"
@@ -161,7 +162,7 @@ func TestRender_ApplyDestiny_Loop_RegisterIsolation(t *testing.T) {
 			map[string]any{"acl": "~a"},
 		}},
 		Incarnation: IncarnationMeta{Name: "svc"},
-		// scenario-scope register есть, но в destiny-env его быть не должно.
+		// scenario-scope register exists, but must not be visible in the destiny env.
 		Register: map[string]any{"probe": map[string]any{"stdout_lines": []any{"x"}}},
 		Hosts:    []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:  res,
@@ -172,15 +173,17 @@ func TestRender_ApplyDestiny_Loop_RegisterIsolation(t *testing.T) {
 	}
 }
 
-// TestRender_ApplyDestiny_Loop_OnChanges — onchanges на destiny-loop-задачу:
-// сквозные Index целы и register-имя резолвится в Index при наличии loop-fan-out
-// внутри destiny (наследуется через resolveOnChanges финальным проходом).
+// TestRender_ApplyDestiny_Loop_OnChanges proves onchanges on a destiny-loop
+// task: contiguous Index stays intact and the register name resolves to an
+// Index when there's loop fan-out inside a destiny (inherited via
+// resolveOnChanges' final pass).
 //
-// Семантика register+loop (общая со scenario, registerIndex.go): N итераций
-// несут ОДИН register → карта register-имя→Index оставляет последнюю итерацию.
-// onchanges на loop-register резолвится в Index последней итерации цикла. Это
-// существующее поведение renderLoopTask (не специфично для destiny); тест
-// закрепляет, что destiny-loop его НАСЛЕДУЕТ без сюрпризов, а Index целы.
+// register+loop semantics (shared with scenario, registerIndex.go): N
+// iterations share ONE register name → the register-name→Index map keeps the
+// last iteration. onchanges on a loop register resolves to the loop's last
+// iteration Index. This is existing renderLoopTask behavior (not
+// destiny-specific); this test confirms destiny-loop INHERITS it without
+// surprises and indices stay intact.
 func TestRender_ApplyDestiny_Loop_OnChanges(t *testing.T) {
 	d := loopDestiny()
 	d.Tasks[0].Register = "acl_patch"
@@ -215,8 +218,8 @@ func TestRender_ApplyDestiny_Loop_OnChanges(t *testing.T) {
 			t.Errorf("tasks[%d].Index = %d, want %d", i, rt.Index, i)
 		}
 	}
-	// onchanges register-имя acl_patch резолвится в Index ПОСЛЕДНЕЙ loop-итерации
-	// (registerIndex: один register → последний Index; общая со scenario семантика).
+	// onchanges register name acl_patch resolves to the Index of the LAST loop
+	// iteration (registerIndex: one register → last Index; semantics shared with scenario).
 	consumer := tasks[2]
 	if len(consumer.OnChangesIdx) != 1 {
 		t.Fatalf("OnChangesIdx = %v, want 1 (register loop-задачи → Index последней итерации)", consumer.OnChangesIdx)
@@ -226,11 +229,12 @@ func TestRender_ApplyDestiny_Loop_OnChanges(t *testing.T) {
 	}
 }
 
-// TestRender_ApplyDestiny_Loop_StaticWhenSkip — destiny-loop-задача с when:,
-// статически вычисляемым в false (input.action != ...), даёт N skip-placeholder
-// (паритет scenario static-when+loop): задачи в плане остаются (Params==nil), но
-// params НЕ рендерятся → битый/недоступный ${...} в params НЕ падает. Зеркало
-// scenario static-when placeholder-skip, но для loop в destiny.
+// TestRender_ApplyDestiny_Loop_StaticWhenSkip proves a destiny-loop task with
+// when: statically evaluating to false (input.action != ...) yields N
+// skip-placeholders (parity with scenario static-when+loop): tasks stay in the
+// plan (Params==nil), but params are NOT rendered — so a broken/unreachable
+// ${...} in params doesn't fail the render. Mirrors scenario's static-when
+// placeholder-skip, for a loop inside a destiny.
 func TestRender_ApplyDestiny_Loop_StaticWhenSkip(t *testing.T) {
 	d := &ResolvedDestiny{
 		Name: "pilot-loop-when",
@@ -241,11 +245,11 @@ func TestRender_ApplyDestiny_Loop_StaticWhenSkip(t *testing.T) {
 		Tasks: []config.Task{
 			{
 				Name: "Apply ACL patch (gated by action)",
-				When: "input.action == 'update_acls'", // static-false при action=create
+				When: "input.action == 'update_acls'", // static-false when action=create
 				Loop: &config.LoopSpec{Items: "${ input.changes }", As: "change", IndexAs: "username"},
 				Module: &config.ModuleTask{
 					Module: "core.cmd.shell",
-					// missing_var заведомо отсутствует — рендер params упал бы, если бы НЕ skip.
+					// missing_var is deliberately absent — rendering params would fail if not for the skip.
 					Params: map[string]any{"cmd": "redis-cli ACL SETUSER ${ username } ${ change.missing_var }"},
 				},
 			},
@@ -271,7 +275,7 @@ func TestRender_ApplyDestiny_Loop_StaticWhenSkip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v (static-when:false должен скипнуть params, а не падать на missing_var)", err)
 	}
-	// 2 итерации → 2 skip-placeholder, Params==nil (не рендерились).
+	// 2 iterations → 2 skip-placeholders, Params==nil (never rendered).
 	if len(tasks) != 2 {
 		t.Fatalf("len(tasks) = %d, want 2 (placeholder за каждую loop-итерацию)", len(tasks))
 	}

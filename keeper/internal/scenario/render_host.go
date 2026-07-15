@@ -16,48 +16,51 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// errHostDestroyed — заклеймленный хост в статусе `destroyed` (снят cloud-destroy
-// каскадом; единственный писатель `destroyed` — coremod/cloud.CascadeDestroy, явный
-// терминал, не прокси disconnect/revoke/reap). claim.execute → benign no_match, не
-// отказ (NIM-56). Предикат status-based, не привязан к «этому прогону».
+// errHostDestroyed: the claimed host is in `destroyed` status (removed by a
+// cloud-destroy cascade; the sole writer of `destroyed` is
+// coremod/cloud.CascadeDestroy, an explicit terminal state, not a proxy for
+// disconnect/revoke/reap). claim.execute treats it as a benign no_match, not a
+// failure (NIM-56). The predicate is status-based, not tied to "this run".
 var errHostDestroyed = errors.New("scenario: RenderForHost: хост снят cloud-destroy каскадом этого прогона")
 
-// RenderForHost воспроизводит Keeper-side render-конвейер прогона при claim
-// (ADR-027, Phase 1.4.3): по persisted-рецепту [applyrun.Recipe] и SID-у
-// заклеймленного хоста проходит ТОТ ЖЕ путь, что run-goroutine — load service →
+// RenderForHost reproduces the Keeper-side render pipeline for a run on claim
+// (ADR-027, Phase 1.4.3): given a persisted [applyrun.Recipe] and the claimed
+// host's SID, it follows the SAME path as the run-goroutine — load service →
 // parse scenario → ExpandIncludes → essence.Resolve → ResolveInputValuesVault
-// (СЕКРЕТЫ резолвятся ТУТ, в RAM) → Render (CEL+vault) — и рендерит ПОЛНЫЙ
-// roster прогона (как run-goroutine), а не один хост.
+// (SECRETS resolve HERE, in RAM) → Render (CEL+vault) — rendering the FULL
+// run roster (like the run-goroutine), not a single host.
 //
-// Стратегия Y (architect-решение): full-roster render устраняет диалект
-// per-host↔full-roster. При single-host render-е (in.Hosts=[host]) диалект
-// молча расходился со старым путём: applyRunOnce(targeted≤1) не резал run_once
-// (задача попадала на каждый хост вместо одного), soulprint.hosts/.where и
-// incarnation.host_count схлопывались до roster-а из одного хоста, cross-host
-// state_changes.sets теряли соседей. Список full-roster-зависимостей открытый,
-// поэтому не точечные guard-ы, а воспроизведение полного roster-а: Acolyte
-// рендерит РОВНО то же, что старый путь, и фильтрует свой SID через
-// groupByHost(tasks, plans)[sid] на стороне caller-а.
+// Strategy Y (architect decision): full-roster render avoids a
+// per-host/full-roster dialect. A single-host render (in.Hosts=[host]) would
+// silently diverge from the old path — run_once wouldn't dedupe (the task
+// would land on every host instead of one), soulprint.hosts/.where and
+// incarnation.host_count would collapse to a one-host roster, cross-host
+// state_changes.sets would lose neighbors. The set of full-roster dependencies
+// is open-ended, so instead of ad hoc guards, the Acolyte reproduces the full
+// roster EXACTLY like the old path and filters its own SID via
+// groupByHost(tasks, plans)[sid] on the caller side.
 //
-// Цена Y (ADR-027 Trade-offs): каждый из N claim-ов рендерит полный roster →
-// O(N²) per-host CEL + N×per-host vault-резолв на прогон vs O(N) старого пути.
-// Приемлемо в Phase 1 (единицы-десятки хостов); сотни хостов — кандидат на
-// оптимизацию.
+// Cost of Y (ADR-027 trade-offs): each of N claims renders the full roster —
+// O(N²) per-host CEL + N per-host vault resolves per run vs. O(N) on the old
+// path. Acceptable in Phase 1 (tens of hosts); hundreds of hosts is an
+// optimization candidate.
 //
-// loadHostFacts ДО full-roster render-а сохраняет single-SID-валидацию «хост
-// ещё в roster-е» (disconnected/revoked между dispatch и claim → ошибка):
-// roster грузится для render всё равно, проверка дешёвая и не теряется.
+// loadHostFacts runs BEFORE the full-roster render to preserve the
+// single-SID validation that the host is still in the roster (disconnected/
+// revoked between dispatch and claim → error): the roster loads for render
+// anyway, so the check is cheap and not lost.
 //
-// Инвариант A (ADR-027): recipe.Input несёт vault-ref СТРОКАМИ; секреты
-// раскрываются ResolveInputValuesVault В RAM (стек этого вызова), в рецепт/PG
-// не возвращаются. Инвариант A не меняется full-roster-ом: input-секреты —
-// scenario-level (резолвятся один раз, не per-host), full-roster НЕ увеличивает
-// секретный материал в RAM. Возвращаемые tasks/plans живут только в памяти
-// Acolyte-а до SendApply.
+// Invariant A (ADR-027): recipe.Input carries vault refs as STRINGS; secrets
+// are resolved by ResolveInputValuesVault IN RAM (this call's stack) and never
+// go back to the recipe/PG. Full-roster doesn't change invariant A: input
+// secrets are scenario-level (resolved once, not per-host), so full-roster
+// doesn't increase secret material in RAM. Returned tasks/plans live only in
+// the Acolyte's memory until SendApply.
 //
-// applyID — для audit-ctx резолва vault (от чьего имени и в каком прогоне читался
-// секрет; берётся из run-строки, симметрично run-goroutine-пути). Возврат:
-// плоский []RenderedTask всего прогона + []DispatchPlan (caller фильтрует по sid).
+// applyID feeds the vault-resolve audit context (whose identity, which run
+// read the secret; taken from the run row, symmetric with the run-goroutine
+// path). Returns the flat []RenderedTask for the whole run + []DispatchPlan
+// (caller filters by sid).
 func RenderForHost(ctx context.Context, deps Deps, recipe *applyrun.Recipe, incarnationName, applyID, sid string) ([]*render.RenderedTask, []render.DispatchPlan, error) {
 	if recipe == nil {
 		return nil, nil, fmt.Errorf("scenario: RenderForHost: nil recipe")
@@ -66,19 +69,19 @@ func RenderForHost(ctx context.Context, deps Deps, recipe *applyrun.Recipe, inca
 		return nil, nil, fmt.Errorf("scenario: RenderForHost: empty sid")
 	}
 
-	// 1. Service-артефакт (git-снапшот) + парсинг scenario/<name>/main.yml.
+	// 1. Service artifact (git snapshot) + parse scenario/<name>/main.yml.
 	art, err := deps.Loader.Load(ctx, recipe.ServiceRef)
 	if err != nil {
 		return nil, nil, fmt.Errorf("scenario: RenderForHost: load service: %w", err)
 	}
-	// Acolyte воспроизводит путь run-goroutine: upgrade-прогон грузит upgrade/<slug>/
-	// (recipe.FromUpgrade), обычный — scenario/<name>/ (ADR-0068).
+	// The Acolyte mirrors the run-goroutine path: an upgrade run loads
+	// upgrade/<slug>/ (recipe.FromUpgrade), a regular run loads scenario/<name>/ (ADR-0068).
 	scn, err := parseScenarioFromArtifact(deps.Loader, art, recipe.ScenarioName, recipe.FromUpgrade)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	// 2. Раскрытие include в плоский список — ДО render (как в run-goroutine).
+	// 2. Expand includes into a flat list — BEFORE render (as in the run-goroutine).
 	expanded, idiags := config.ExpandIncludes(scn.Tasks, scenarioIncludeResolver(deps.Loader, art, recipe.ScenarioName))
 	if diag.HasErrors(idiags) {
 		return nil, nil, fmt.Errorf("scenario: RenderForHost: раскрытие include в %s/%s: %s",
@@ -86,37 +89,38 @@ func RenderForHost(ctx context.Context, deps Deps, recipe *applyrun.Recipe, inca
 	}
 	scn.Tasks = expanded
 
-	// Синтез install-шагов из modules[] (ADR-065) — Acolyte обязан воспроизвести
-	// РОВНО план run-goroutine (те же задачи, те же plan_index), иначе синтез-шаг
-	// потерялся бы на claim-пути, а корреляция TaskEvent↔RenderedTask съехала бы.
+	// Synthesize install steps from modules[] (ADR-065) — the Acolyte must
+	// reproduce EXACTLY the run-goroutine's plan (same tasks, same plan_index),
+	// or the synthesized step would go missing on the claim path and the
+	// TaskEvent↔RenderedTask correlation would drift.
 	scn.Tasks, _ = config.SynthesizeModuleInstalls(scn.Tasks, art.Manifest.Modules)
 
-	// 3. Roster прогона (как run-goroutine): весь roster incarnation. SID-валидация
-	//    «хост ещё в roster-е» (disconnected/revoked между dispatch и claim →
-	//    ошибка) делается ТУТ, до full-roster render-а — roster грузится всё равно,
-	//    проверка дешёвая. render оперирует ПОЛНЫМ roster-ом (стратегия Y), Acolyte
-	//    фильтрует свой SID на выходе.
+	// 3. Run roster (as in the run-goroutine): the incarnation's whole roster.
+	//    The "host still in roster" SID validation (disconnected/revoked between
+	//    dispatch and claim → error) happens HERE, before the full-roster render
+	//    — the roster loads anyway, so the check is cheap. render operates on the
+	//    FULL roster (strategy Y); the Acolyte filters its own SID on output.
 	hosts, err := loadRosterWithHost(ctx, deps.Topology, deps.DB, incarnationName, sid)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	// 4. incarnation (для essence-override spec.essence + IncarnationMeta).
+	// 4. incarnation (for the spec.essence essence-override + IncarnationMeta).
 	inc, err := incarnation.SelectByName(ctx, deps.DB, incarnationName)
 	if err != nil {
 		return nil, nil, fmt.Errorf("scenario: RenderForHost: load incarnation %q: %w", incarnationName, err)
 	}
 
-	// 5. Essence (effective-слой). Представитель OS-family — первый хост roster-а,
-	//    симметрично run-goroutine (run.go шаг 4: hosts[0]); per-host essence —
-	//    расширение.
+	// 5. Essence (effective layer). The OS-family representative is the roster's
+	//    first host, symmetric with the run-goroutine (run.go step 4: hosts[0]);
+	//    per-host essence is a future extension.
 	essenceMap, err := deps.Essence.Resolve(essenceInput(art.LocalDir, inc, hosts[0]))
 	if err != nil {
 		return nil, nil, fmt.Errorf("scenario: RenderForHost: essence: %w", err)
 	}
 
-	// 6. Эффективный input: merge дефолтов/required + scoped-резолв vault-ref
-	//    (СЕКРЕТЫ резолвятся ТУТ, в RAM — инвариант A) + value-валидация.
+	// 6. Effective input: merge defaults/required + scoped vault-ref resolve
+	//    (SECRETS resolve HERE, in RAM — invariant A) + value validation.
 	resolver := buildInputVaultResolver(ctx, deps.Vault, deps.Audit, depsLogger(deps), inputVaultAuditCtx{
 		aid:         recipeAID(recipe),
 		incarnation: incarnationName,
@@ -137,13 +141,14 @@ func RenderForHost(ctx context.Context, deps Deps, recipe *applyrun.Recipe, inca
 			Service:        inc.Service,
 			ServiceVersion: inc.ServiceVersion,
 		},
-		Hosts: hosts, // ПОЛНЫЙ roster (стратегия Y) — caller фильтрует свой SID
-		// State — снимок incarnation.state для `incarnation.state.<path>` (ADR-009/010).
-		// Acolyte (failover-claim) обязан воспроизвести РОВНО те же params, что
-		// run-goroutine: state коммитится только ПОСЛЕ успешного apply прогона,
-		// поэтому inc.State, загруженный сейчас, == pre-run stateBefore прогона —
-		// read-only снимок идентичен исходному. Без него Acolyte отрендерил бы
-		// `incarnation.state.*` как no-such-key и разошёлся бы с оригиналом.
+		Hosts: hosts, // FULL roster (strategy Y) — caller filters its own SID
+		// State is the incarnation.state snapshot for `incarnation.state.<path>`
+		// (ADR-009/010). The Acolyte (failover-claim) must reproduce EXACTLY the
+		// same params as the run-goroutine: state commits only AFTER a
+		// successful apply run, so inc.State loaded now == the run's pre-run
+		// stateBefore — a read-only snapshot identical to the original. Without
+		// this, the Acolyte would render `incarnation.state.*` as no-such-key
+		// and diverge from the original.
 		State: inc.State,
 		Ctx:   ctx,
 		Templates: render.NewSnapshotTemplateReader(
@@ -161,16 +166,17 @@ func RenderForHost(ctx context.Context, deps Deps, recipe *applyrun.Recipe, inca
 	return tasks, plans, nil
 }
 
-// loadRosterWithHost резолвит ВЕСЬ roster incarnation (для full-roster render-а,
-// стратегия Y) и валидирует, что заклеймленный sid в нём присутствует. Хост,
-// выпавший из roster-а между dispatch-ем и claim-ом (disconnected / revoked), —
-// ошибка: рендерить задание не на чем. Валидация single-SID сохранена ДО
-// render-а (roster грузится всё равно — проверка дешёвая, потеря проверки
-// disconnected-хоста недопустима).
+// loadRosterWithHost resolves the incarnation's WHOLE roster (for the
+// full-roster render, strategy Y) and validates the claimed sid is in it. A
+// host that fell out of the roster between dispatch and claim
+// (disconnected/revoked) is an error — there's nothing to render the task
+// against. The single-SID validation stays before the render (the roster
+// loads anyway, so the check is cheap, and losing the disconnected-host check
+// is not acceptable).
 //
-// NIM-56: исключение — хост в статусе `destroyed` (снят cloud-destroy каскадом):
-// benign no_match, не отказ. Любое другое выпадение из roster-а
-// (disconnected/revoked/ErrSoulNotFound/read-fail) — generic-ошибка (fail-closed).
+// NIM-56: exception — a host in `destroyed` status (removed by a cloud-destroy
+// cascade) is a benign no_match, not a failure. Any other roster dropout
+// (disconnected/revoked/ErrSoulNotFound/read-fail) is a generic error (fail-closed).
 func loadRosterWithHost(ctx context.Context, topo *topology.Resolver, db keepersoul.ExecQueryRower, incarnationName, sid string) ([]*topology.HostFacts, error) {
 	hosts, err := topo.LoadIncarnationHosts(ctx, incarnationName)
 	if err != nil {
@@ -187,8 +193,8 @@ func loadRosterWithHost(ctx context.Context, topo *topology.Resolver, db keepers
 	return nil, fmt.Errorf("scenario: RenderForHost: хост %q не в roster-е incarnation %q (disconnected с момента dispatch-а)", sid, incarnationName)
 }
 
-// recipeAID разворачивает recipe.StartedByAID (*string) в "" при nil — форма
-// inputVaultAuditCtx.aid (пустой → archon_aid колонка NULL).
+// recipeAID unwraps recipe.StartedByAID (*string) to "" on nil — the shape
+// inputVaultAuditCtx.aid expects (empty → archon_aid column NULL).
 func recipeAID(r *applyrun.Recipe) string {
 	if r.StartedByAID == nil {
 		return ""
@@ -196,8 +202,8 @@ func recipeAID(r *applyrun.Recipe) string {
 	return *r.StartedByAID
 }
 
-// depsLogger отдаёт Deps.Logger либо discard-логгер при nil (Deps.Logger
-// опционален — NewRunner так же подставляет discard).
+// depsLogger returns Deps.Logger, or a discard logger when nil (Deps.Logger is
+// optional — NewRunner substitutes discard the same way).
 func depsLogger(deps Deps) *slog.Logger {
 	if deps.Logger == nil {
 		return slog.New(slog.DiscardHandler)

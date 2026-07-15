@@ -14,7 +14,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// newEngine — общий cel.Engine для unit-тестов.
+// newEngine — shared cel.Engine for unit tests.
 func newEngine(t *testing.T) *cel.Engine {
 	t.Helper()
 	e, err := cel.New()
@@ -28,9 +28,9 @@ func host(sid string, coven []string, soulprint map[string]any) *topology.HostFa
 	return &topology.HostFacts{SID: sid, Coven: coven, Soulprint: soulprint}
 }
 
-// TestRender_NoopScenario — обязательный тест ТЗ: рендер
-// examples/service/noop/scenario/create/main.yml → один RenderedTask с
-// core.exec.run и rendered command.
+// TestRender_NoopScenario — required spec test: renders
+// examples/service/noop/scenario/create/main.yml into a single RenderedTask with
+// core.exec.run and a rendered command.
 func TestRender_NoopScenario(t *testing.T) {
 	path := filepath.FromSlash("../../../examples/service/noop/scenario/create/main.yml")
 	manifest, _, diags, err := config.LoadScenarioManifest(path, config.ValidateOptions{})
@@ -76,7 +76,7 @@ func TestRender_NoopScenario(t *testing.T) {
 		t.Errorf("params.args = %v, want [hello]", gotArgs)
 	}
 
-	// on: опущен → весь incarnation (оба хоста), отсортированы по SID.
+	// on: omitted → whole incarnation (both hosts), sorted by SID.
 	if len(plans) != 1 {
 		t.Fatalf("len(plans) = %d, want 1", len(plans))
 	}
@@ -85,7 +85,7 @@ func TestRender_NoopScenario(t *testing.T) {
 	}
 }
 
-// TestRender_InterpolatesInput — `${ input.x }` в params рендерится из input.
+// TestRender_InterpolatesInput — `${ input.x }` in params renders from input.
 func TestRender_InterpolatesInput(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "echo",
@@ -112,9 +112,9 @@ func TestRender_InterpolatesInput(t *testing.T) {
 	}
 }
 
-// TestRender_PropagatesTimeout — config.Task.Timeout доезжает до
-// render.RenderedTask.Timeout (MAJOR #2: поле молча терялось на render-слое до
-// появления RenderedTask.Timeout; этот тест ловит регресс обрыва протяжки).
+// TestRender_PropagatesTimeout — config.Task.Timeout propagates to
+// render.RenderedTask.Timeout (MAJOR #2: the field was silently dropped at the render layer before
+// RenderedTask.Timeout existed; this test guards against that propagation regression).
 func TestRender_PropagatesTimeout(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "slow",
@@ -151,8 +151,8 @@ func TestRender_PropagatesTimeout(t *testing.T) {
 	}
 }
 
-// TestRender_WhereFiltersHosts — where: оставляет только подходящие хосты.
-// soulprint.self.os.family различает хосты; where: не делает params host-зависимыми.
+// TestRender_WhereFiltersHosts — where: keeps only matching hosts.
+// soulprint.self.os.family differentiates hosts; where: doesn't make params host-dependent.
 func TestRender_WhereFiltersHosts(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "patch",
@@ -182,7 +182,7 @@ func TestRender_WhereFiltersHosts(t *testing.T) {
 	}
 }
 
-// TestRender_OnCovenFilter — on: [coven] сужает roster по Coven-метке.
+// TestRender_OnCovenFilter — on: [coven] narrows the roster by coven label.
 func TestRender_OnCovenFilter(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "restart",
@@ -212,10 +212,10 @@ func TestRender_OnCovenFilter(t *testing.T) {
 	}
 }
 
-// TestRender_OnCovenFilter_MultiLabelAND — `on: [a, b]` = AND-пересечение
-// (ADR-040 amendment 2026-05-27; orchestration.md §3): хост попадает только если
-// несёт ВСЕ перечисленные метки. Регрессия security-инварианта: раньше OR-код
-// возвращал бы host{prod} И host{eu}, теперь — только host{prod, eu}.
+// TestRender_OnCovenFilter_MultiLabelAND — `on: [a, b]` = AND intersection
+// (ADR-040 amendment 2026-05-27; orchestration.md §3): a host matches only if it
+// carries ALL listed labels. Security-invariant regression guard: the old OR code
+// would have returned host{prod} AND host{eu}, now only host{prod, eu}.
 func TestRender_OnCovenFilter_MultiLabelAND(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "eu-prod-restart",
@@ -249,8 +249,8 @@ func TestRender_OnCovenFilter_MultiLabelAND(t *testing.T) {
 	}
 }
 
-// TestRender_OnCovenFilter_MultiLabelAND_NoMatch — два хоста, у каждого только
-// одна из меток фильтра. AND fail-closed: target пуст (раньше OR давал обоих).
+// TestRender_OnCovenFilter_MultiLabelAND_NoMatch — two hosts, each carrying only
+// one of the filter labels. AND fail-closed: target is empty (OR used to give both).
 func TestRender_OnCovenFilter_MultiLabelAND_NoMatch(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "db-cache-merge",
@@ -280,7 +280,7 @@ func TestRender_OnCovenFilter_MultiLabelAND_NoMatch(t *testing.T) {
 	}
 }
 
-// TestRender_OnIncarnationName — on: [${ incarnation.name }] = весь incarnation.
+// TestRender_OnIncarnationName — on: [${ incarnation.name }] = whole incarnation.
 func TestRender_OnIncarnationName(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "all",
@@ -310,9 +310,9 @@ func TestRender_OnIncarnationName(t *testing.T) {
 	}
 }
 
-// TestRender_HostVariantParams_Error — host-зависимые params в pilot → ошибка.
-// pipelineStubKV — герметичный KVReader для pipeline-тестов CEL vault().
-// Реализует и render.KVReader (vault-resolve), и cel.KVReader (CEL vault()).
+// TestRender_HostVariantParams_Error — host-dependent params in pilot → error.
+// pipelineStubKV — hermetic KVReader for pipeline tests of CEL vault().
+// Implements both render.KVReader (vault-resolve) and cel.KVReader (CEL vault()).
 type pipelineStubKV struct {
 	secrets map[string]map[string]any
 }
@@ -325,7 +325,7 @@ func (s *pipelineStubKV) ReadKV(_ context.Context, path string) (map[string]any,
 	return data, nil
 }
 
-// vaultEngine собирает cel.Engine с зарегистрированной функцией vault() поверх kv.
+// vaultEngine builds a cel.Engine with the vault() function registered over kv.
 func vaultEngine(t *testing.T, kv cel.KVReader) *cel.Engine {
 	t.Helper()
 	e, err := cel.New(cel.WithVault(kv))
@@ -335,10 +335,10 @@ func vaultEngine(t *testing.T, kv cel.KVReader) *cel.Engine {
 	return e
 }
 
-// TestRender_CELVaultResolvesRealValue — CEL vault() резолвится keeper-side в
-// РЕАЛЬНОЕ значение секрета в RenderedTask.Params (а не остаётся ref-строкой).
-// Закрывает qa-пробел: vault() покрыт на уровне cel.Engine, но не через
-// render.Pipeline (полный keeper-side pipeline).
+// TestRender_CELVaultResolvesRealValue — CEL vault() resolves keeper-side to the
+// REAL secret value in RenderedTask.Params (not left as a ref string).
+// Closes a QA gap: vault() was covered at the cel.Engine level but not through
+// render.Pipeline (the full keeper-side pipeline).
 func TestRender_CELVaultResolvesRealValue(t *testing.T) {
 	kv := &pipelineStubKV{secrets: map[string]map[string]any{
 		"secret/redis/admin": {"password": "real-s3cr3t", "user": "admin"},
@@ -348,11 +348,11 @@ func TestRender_CELVaultResolvesRealValue(t *testing.T) {
 		Tasks: []config.Task{
 			{
 				Name: "render redis.conf",
-				// core.exec.run, не core.file.rendered: тест про keeper-side vault()-
-				// резолв в params, без template-handoff (для rendered инъекция требует
-				// template/template_content — см. template_test.go). Секрет передаём
-				// через env: — легитимный input core.exec.run (OptStringMapParam),
-				// vault() резолвится keeper-side во вложенном значении map.
+				// core.exec.run, not core.file.rendered: this test is about keeper-side vault()
+				// resolution in params, without template handoff (rendered injection needs
+				// template/template_content — see template_test.go). Secret is passed
+				// via env: — a legit core.exec.run input (OptStringMapParam),
+				// vault() resolves keeper-side inside a nested map value.
 				Module: &config.ModuleTask{
 					Module: "core.exec.run",
 					Params: map[string]any{
@@ -382,12 +382,12 @@ func TestRender_CELVaultResolvesRealValue(t *testing.T) {
 	}
 }
 
-// TestRender_CELVaultMissingSecret_ActionablePath — missing-secret в CEL vault()
-// через pipeline (NIM-73) даёт actionable-ошибку: путь в ПЛОСКОЙ форме
-// (secret/…#password), которая переживает production-маскинг status_details/
-// error_summary. Оператор видит, ЧТО досеять, а не `***MASKED***`. Маскинг-слой
-// не тронут: реально резолвнутый секрет-ЗНАЧЕНИЕ по-прежнему маскируется (см.
-// TestRender_CELVaultResolvesRealValue выше).
+// TestRender_CELVaultMissingSecret_ActionablePath — a missing secret in CEL vault()
+// through the pipeline (NIM-73) gives an actionable error: the path in FLAT form
+// (secret/…#password), which survives production status_details/
+// error_summary masking. The operator sees WHAT to seed, not `***MASKED***`. The masking layer
+// is untouched: a resolved secret VALUE is still masked (see
+// TestRender_CELVaultResolvesRealValue above).
 func TestRender_CELVaultMissingSecret_ActionablePath(t *testing.T) {
 	kv := &pipelineStubKV{secrets: map[string]map[string]any{}}
 	manifest := &config.ScenarioManifest{
@@ -421,9 +421,9 @@ func TestRender_CELVaultMissingSecret_ActionablePath(t *testing.T) {
 	if strings.Contains(err.Error(), "vault:secret/redis/admin") {
 		t.Fatalf("текст ошибки несёт vault:-ref-форму (маскинг съест целиком): %q", err.Error())
 	}
-	// Тот же маскинг, что status_details/error_summary в lockIncarnation, с
-	// seal-набором, несущим реальную sealed-ячейку прогона (env.REDIS_PASSWORD).
-	// Ошибка идёт под ключом error → seal её не трогает, путь остаётся виден.
+	// Same masking as status_details/error_summary in lockIncarnation, with a
+	// seal set carrying the run's real sealed cell (env.REDIS_PASSWORD).
+	// The error is under the error key → seal doesn't touch it, the path stays visible.
 	masked := audit.MaskSecretsSealed(
 		map[string]any{"error": err.Error()},
 		audit.SealOpts{Sealed: map[string]bool{"env.REDIS_PASSWORD": true}},
@@ -462,10 +462,10 @@ func TestRender_HostVariantParams_Error(t *testing.T) {
 	}
 }
 
-// TestRender_FlowControlSoulprintMultiHost_Error — host-вариативный
-// flow-control-предикат (soulprint.self) на multi-host таргете → fail-closed
-// ошибка рендера (per-host dispatch отложен). Покрыты все три поля
-// when/changed_when/failed_when, чтобы зафиксировать единый guard.
+// TestRender_FlowControlSoulprintMultiHost_Error — a host-variant
+// flow-control predicate (soulprint.self) on a multi-host target → fail-closed
+// render error (per-host dispatch is deferred). Covers all three fields
+// when/changed_when/failed_when to pin down a single shared guard.
 func TestRender_FlowControlSoulprintMultiHost_Error(t *testing.T) {
 	multiHost := []*topology.HostFacts{
 		host("a.example.com", []string{"svc"}, map[string]any{"os": map[string]any{"family": "debian"}}),
@@ -507,9 +507,9 @@ func TestRender_FlowControlSoulprintMultiHost_Error(t *testing.T) {
 	}
 }
 
-// TestRender_FlowControlSoulprintSingleHost_OK — soulprint.self в when: на
-// single-host таргете допустим (flow_context.self корректен для единственного
-// хоста) — guard не срабатывает.
+// TestRender_FlowControlSoulprintSingleHost_OK — soulprint.self in when: on a
+// single-host target is allowed (flow_context.self is correct for the single
+// host) — guard doesn't trigger.
 func TestRender_FlowControlSoulprintSingleHost_OK(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "single",
@@ -536,9 +536,9 @@ func TestRender_FlowControlSoulprintSingleHost_OK(t *testing.T) {
 	}
 }
 
-// TestRender_FlowControlHostInvariantMultiHost_OK — host-инвариантный предикат
-// (register.*, без soulprint) на multi-host таргете проходит: один RenderedTask на
-// группу корректен.
+// TestRender_FlowControlHostInvariantMultiHost_OK — a host-invariant predicate
+// (register.*, no soulprint) on a multi-host target passes: one RenderedTask per
+// group is correct.
 func TestRender_FlowControlHostInvariantMultiHost_OK(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "invariant",
@@ -568,11 +568,11 @@ func TestRender_FlowControlHostInvariantMultiHost_OK(t *testing.T) {
 	}
 }
 
-// TestRender_FlowContextVarsLaundering_Error — закрытие дыры (review, major):
-// host-вариативный vars (`${ soulprint.self.os.family == 'debian' }`) + `when:
-// vars.is_debian` на multi-host. Текст предиката НЕ содержит soulprint → первый
-// regex-guard пропускает; ловит ВТОРОЙ контур — сверка flow_context-минус-self.
-// Сообщение явно про vars-laundering, не про прямой soulprint в предикате.
+// TestRender_FlowContextVarsLaundering_Error — closes a hole (review, major):
+// host-variant vars (`${ soulprint.self.os.family == 'debian' }`) + `when:
+// vars.is_debian` on multi-host. The predicate text does NOT contain soulprint → the first
+// regex guard lets it through; the SECOND guard catches it — the flow_context-minus-self check.
+// Message is specifically about vars laundering, not a direct soulprint in the predicate.
 func TestRender_FlowContextVarsLaundering_Error(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "laundering",
@@ -606,9 +606,9 @@ func TestRender_FlowContextVarsLaundering_Error(t *testing.T) {
 	}
 }
 
-// TestRender_FlowContextHostInvariantVars_OK — host-ИНВАРИАНТНЫЙ vars
-// (`${ input.x }`) + `when: vars.x` на multi-host проходит: flow_context одинаков
-// на всех хостах, второй контур не срабатывает (легитимный кейс не ломается).
+// TestRender_FlowContextHostInvariantVars_OK — host-INVARIANT vars
+// (`${ input.x }`) + `when: vars.x` on multi-host passes: flow_context is identical
+// across all hosts, the second guard doesn't trigger (legit case unbroken).
 func TestRender_FlowContextHostInvariantVars_OK(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "invariant-vars",
@@ -640,20 +640,20 @@ func TestRender_FlowContextHostInvariantVars_OK(t *testing.T) {
 	}
 }
 
-// TestRender_RenderedWithFlowControlHostInvariantVars_OK — QA-пробел: задача
-// core.file.rendered с when: + host-ИНВАРИАНТНЫМ vars на multi-host проходит.
-// Особая обработка params у rendered (render_context.self host-вариативен и кладётся
-// В PARAMS) НЕ должна тянуться во flow_context: flow_context.vars берётся из исходных
-// task-vars (host-инвариантных здесь), а render_context живёт отдельно в params и
-// исключён из обеих сверок (paramsHostInvariant + flowContextHostInvariant). Контроль,
-// что rendered не ломает второй контур fail-closed на легитимном кейсе.
+// TestRender_RenderedWithFlowControlHostInvariantVars_OK — QA gap: a
+// core.file.rendered task with when: + host-INVARIANT vars on multi-host passes.
+// Special params handling for rendered (render_context.self is host-variant and goes
+// INTO PARAMS) must NOT leak into flow_context: flow_context.vars comes from the original
+// task vars (host-invariant here), while render_context lives separately in params and
+// is excluded from both checks (paramsHostInvariant + flowContextHostInvariant). Verifies
+// rendered doesn't break the second fail-closed guard on a legit case.
 func TestRender_RenderedWithFlowControlHostInvariantVars_OK(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "rendered-invariant-vars",
 		Tasks: []config.Task{
 			{
 				Name: "cfg",
-				Vars: map[string]any{"enabled": "${ input.enabled }"}, // host-инвариантен
+				Vars: map[string]any{"enabled": "${ input.enabled }"}, // host-invariant
 				When: "vars.enabled",
 				Module: &config.ModuleTask{
 					Module: "core.file.rendered",
@@ -682,8 +682,8 @@ func TestRender_RenderedWithFlowControlHostInvariantVars_OK(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: rendered + host-инвариантный vars + when на multi-host должен проходить, got %v", err)
 	}
-	// flow_context.vars не должен включать render_context — иначе сверка упала бы
-	// на host-вариативном self. Раз Render прошёл, контур не сработал ложно.
+	// flow_context.vars must not include render_context — otherwise the check would fail
+	// on host-variant self. Since Render succeeded, the guard didn't false-trigger.
 	if tasks[0].When != "vars.enabled" {
 		t.Errorf("When = %q, want протянутый as-is предикат", tasks[0].When)
 	}
@@ -692,12 +692,12 @@ func TestRender_RenderedWithFlowControlHostInvariantVars_OK(t *testing.T) {
 	}
 }
 
-// TestRender_HostVariantVarsNoFlowControl_FailsOnParams — задача БЕЗ
-// flow-control-предиката, но с host-вариативным vars, протёкшим в params
-// (`args: [${ vars.x }]`, vars.x из soulprint.self). Гейт hasFlowControl ложен
-// → новая сверка flow_context НЕ активна; ошибка приходит от paramsHostInvariant
-// (host-зависимые params), не от второго контура. Проверяем, что гейт не
-// перехватил чужую ошибку — текст про params, а не про flow_context.
+// TestRender_HostVariantVarsNoFlowControl_FailsOnParams — a task WITHOUT a
+// flow-control predicate, but with host-variant vars leaking into params
+// (`args: [${ vars.x }]`, vars.x from soulprint.self). The hasFlowControl gate is false
+// → the new flow_context check is NOT active; the error comes from paramsHostInvariant
+// (host-dependent params), not the second guard. Verifies the gate didn't
+// intercept an unrelated error — the message is about params, not flow_context.
 func TestRender_HostVariantVarsNoFlowControl_FailsOnParams(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "novars-flowcontrol",
@@ -730,9 +730,9 @@ func TestRender_HostVariantVarsNoFlowControl_FailsOnParams(t *testing.T) {
 	}
 }
 
-// TestRender_FlowContextVarsLaunderingSingleHost_OK — single-host: host-вариативный
-// vars + when: vars.x проходит (flow_context.self корректен для единственного
-// хоста, golden-path single-host не сломан, сверки нет — len(renderHosts)==1).
+// TestRender_FlowContextVarsLaunderingSingleHost_OK — single-host: host-variant
+// vars + when: vars.x passes (flow_context.self is correct for the single
+// host, the single-host golden path is unbroken, no check runs — len(renderHosts)==1).
 func TestRender_FlowContextVarsLaunderingSingleHost_OK(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "single-laundering",
@@ -760,10 +760,10 @@ func TestRender_FlowContextVarsLaunderingSingleHost_OK(t *testing.T) {
 	}
 }
 
-// TestRender_FlowContextVarsLaunderingChangedWhen_Error — покрытие всех трёх
-// flow-control-ключей: host-вариативный vars протёк ТОЛЬКО в changed_when
-// (не when). Второй контур обязан сработать (гейт hasFlowControl смотрит на все
-// три поля).
+// TestRender_FlowContextVarsLaunderingChangedWhen_Error — covers all three
+// flow-control keys: host-variant vars leaks ONLY into changed_when
+// (not when). The second guard must trigger (hasFlowControl gate checks all
+// three fields).
 func TestRender_FlowContextVarsLaunderingChangedWhen_Error(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "laundering-changedwhen",
@@ -794,14 +794,14 @@ func TestRender_FlowContextVarsLaunderingChangedWhen_Error(t *testing.T) {
 	}
 }
 
-// TestRender_UnsupportedDSL — pilot-guard отвергает parallel.
-// block сюда больше НЕ входит (реализован, pilot C1 — render-time fan-out, см.
-// block_test.go); serial/run_once тоже реализованы (slice D); loop на
-// module-задаче реализован (slice E1) — позитивные тесты в loop_test.go, а loop
-// на apply отвергается там же (TestRenderLoop_OnApplyRejected).
+// TestRender_UnsupportedDSL — pilot guard rejects parallel.
+// block is no longer included here (implemented, pilot C1 — render-time fan-out, see
+// block_test.go); serial/run_once are also implemented (slice D); loop on a
+// module task is implemented (slice E1) — positive tests in loop_test.go, and loop
+// on apply is rejected there too (TestRenderLoop_OnApplyRejected).
 func TestRender_UnsupportedDSL(t *testing.T) {
 	cases := map[string]config.Task{
-		// apply: с nil-DestinyResolver (Destiny не сконфигурирован) → ErrUnsupportedDSL.
+		// apply: with nil DestinyResolver (Destiny not configured) → ErrUnsupportedDSL.
 		"apply":    {Name: "t", Apply: &config.ApplyTask{Destiny: "redis"}},
 		"parallel": {Name: "t", Module: &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{}}, Parallel: true},
 	}
@@ -821,9 +821,9 @@ func TestRender_UnsupportedDSL(t *testing.T) {
 	}
 }
 
-// TestRender_UnexpandedInclude — include должен раскрываться ДО render
-// (config.ExpandIncludes); дошедший до render нераскрытым → ErrUnexpandedInclude
-// (баг раскрытия, не «вне pilot-объёма»).
+// TestRender_UnexpandedInclude — include must be expanded BEFORE render
+// (config.ExpandIncludes); reaching render unexpanded → ErrUnexpandedInclude
+// (an expansion bug, not "outside pilot scope").
 func TestRender_UnexpandedInclude(t *testing.T) {
 	task := config.Task{Name: "t", Include: &config.IncludeTask{Include: "x.yml"}}
 	p := NewPipeline(nil, newEngine(t), nil, nil)
@@ -838,9 +838,9 @@ func TestRender_UnexpandedInclude(t *testing.T) {
 	}
 }
 
-// TestRender_OnKeeper_KeeperTarget — on: keeper рендерится в keeper-контексте
-// (без per-host soulprint) и даёт единичный keeper-target c Keeper=true. params
-// читают input/incarnation; soulprint в keeper-задаче недоступен.
+// TestRender_OnKeeper_KeeperTarget — on: keeper renders in keeper context
+// (no per-host soulprint) and yields a single keeper target with Keeper=true. params
+// read input/incarnation; soulprint is unavailable in a keeper task.
 func TestRender_OnKeeper_KeeperTarget(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "k",
@@ -880,8 +880,8 @@ func TestRender_OnKeeper_KeeperTarget(t *testing.T) {
 	}
 }
 
-// TestRender_OnKeeper_SoulprintUnavailable — soulprint.self в params keeper-
-// задачи недоступен (хостов нет): CEL даёт ошибку no-such-key, не молчит.
+// TestRender_OnKeeper_SoulprintUnavailable — soulprint.self in a keeper task's
+// params is unavailable (no hosts): CEL raises a no-such-key error, doesn't stay silent.
 func TestRender_OnKeeper_SoulprintUnavailable(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "k",
@@ -902,9 +902,9 @@ func TestRender_OnKeeper_SoulprintUnavailable(t *testing.T) {
 	}
 }
 
-// TestRender_OnKeeper_StateReadable — keeper-side задача читает incarnation.state.<path>
-// в params: pre-run снимок (RenderInput.State) симметрично Soul-side. Разблокирует
-// core.cloud.destroyed (on: keeper) от чтения incarnation.state.provisioned_*.
+// TestRender_OnKeeper_StateReadable — a keeper-side task reads incarnation.state.<path>
+// in params: pre-run snapshot (RenderInput.State), symmetric with Soul-side. Unblocks
+// core.cloud.destroyed (on: keeper) reading incarnation.state.provisioned_*.
 func TestRender_OnKeeper_StateReadable(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "k",
@@ -934,9 +934,9 @@ func TestRender_OnKeeper_StateReadable(t *testing.T) {
 	}
 }
 
-// TestRender_OnKeeper_StateNilNoSuchKey — без RenderInput.State обращение к
-// incarnation.state.<path> в params keeper-задачи — штатный no-such-key (push/trial
-// back-compat), не молчаливый пустой результат. Симметрично Soul-side nil-State.
+// TestRender_OnKeeper_StateNilNoSuchKey — without RenderInput.State, accessing
+// incarnation.state.<path> in a keeper task's params is a regular no-such-key (push/trial
+// back-compat), not a silent empty result. Symmetric with Soul-side nil State.
 func TestRender_OnKeeper_StateNilNoSuchKey(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "k",
@@ -957,8 +957,8 @@ func TestRender_OnKeeper_StateNilNoSuchKey(t *testing.T) {
 	}
 }
 
-// TestRender_WhereExcludesAll — where: отфильтровал всех → пустой DispatchPlan,
-// но RenderedTask присутствует.
+// TestRender_WhereExcludesAll — where: filtered out everyone → empty DispatchPlan,
+// but RenderedTask is still present.
 func TestRender_WhereExcludesAll(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "none",
@@ -984,7 +984,7 @@ func TestRender_WhereExcludesAll(t *testing.T) {
 	}
 }
 
-// TestRender_WhereNonBool_Error — where: с не-bool результатом → ошибка.
+// TestRender_WhereNonBool_Error — where: with a non-bool result → error.
 func TestRender_WhereNonBool_Error(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "bad",
@@ -1005,7 +1005,7 @@ func TestRender_WhereNonBool_Error(t *testing.T) {
 	}
 }
 
-// TestRenderStateChanges_Literal — литерал в sets присваивается как есть.
+// TestRenderStateChanges_Literal — a literal in sets is assigned as-is.
 func TestRenderStateChanges_Literal(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "create",
@@ -1028,7 +1028,7 @@ func TestRenderStateChanges_Literal(t *testing.T) {
 	}
 }
 
-// TestRenderStateChanges_FromInput — sets берёт значение из input.* через CEL.
+// TestRenderStateChanges_FromInput — sets takes a value from input.* via CEL.
 func TestRenderStateChanges_FromInput(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "create",
@@ -1052,8 +1052,8 @@ func TestRenderStateChanges_FromInput(t *testing.T) {
 	}
 }
 
-// TestRenderStateChanges_LastWins — per-host значение (soulprint.self) сворачивается
-// last-wins по сортировке SID: побеждает хост с лексикографически последним SID.
+// TestRenderStateChanges_LastWins — a per-host value (soulprint.self) collapses
+// last-wins by SID sort order: the host with the lexicographically last SID wins.
 func TestRenderStateChanges_LastWins(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "create",
@@ -1065,7 +1065,7 @@ func TestRenderStateChanges_LastWins(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Incarnation: IncarnationMeta{Name: "svc"},
-		// Передаём в неотсортированном порядке — свёртка обязана сортировать сама.
+		// Passed in unsorted order — the fold must sort it itself.
 		Hosts: []*topology.HostFacts{
 			host("b.example.com", []string{"svc"}, map[string]any{"hostname": "beta"}),
 			host("a.example.com", []string{"svc"}, map[string]any{"hostname": "alpha"}),
@@ -1076,13 +1076,13 @@ func TestRenderStateChanges_LastWins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderStateChanges: %v", err)
 	}
-	// c.example.com — последний по SID → gamma.
+	// c.example.com — last by SID → gamma.
 	if got["leader"] != "gamma" {
 		t.Errorf("leader = %v, want gamma (last SID wins)", got["leader"])
 	}
 }
 
-// TestRenderStateChanges_Empty — nil StateChanges и пустой sets → пустой map.
+// TestRenderStateChanges_Empty — nil StateChanges and empty sets → empty map.
 func TestRenderStateChanges_Empty(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	base := RenderInput{
@@ -1109,10 +1109,10 @@ func TestRenderStateChanges_Empty(t *testing.T) {
 	}
 }
 
-// TestRenderStateChanges_RegisterFromHost — register.* в sets читается из
-// per-host RegisterByHost (слайс 2), НЕ из глобального RenderInput.Register
-// (тот — cross-task chaining фазы Render, в sets не виден). Положительный путь:
-// probe-задача дала register.probe.stdout → попадает в sets.
+// TestRenderStateChanges_RegisterFromHost — register.* in sets is read from
+// per-host RegisterByHost (slice 2), NOT from the global RenderInput.Register
+// (that's cross-task chaining in the Render phase, invisible to sets). Positive path:
+// a probe task produced register.probe.stdout → it lands in sets.
 func TestRenderStateChanges_RegisterFromHost(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "create",
@@ -1138,11 +1138,11 @@ func TestRenderStateChanges_RegisterFromHost(t *testing.T) {
 	}
 }
 
-// TestRenderStateChanges_GlobalRegisterNotLeaked — глобальный
-// RenderInput.Register (фаза Render) НЕ виден в sets: sets читает только
-// RegisterByHost[sid]. При пустом RegisterByHost обращение к register.* даёт
-// детерминированную eval-ошибку ("no such key"), несмотря на заполненный
-// глобальный Register.
+// TestRenderStateChanges_GlobalRegisterNotLeaked — the global
+// RenderInput.Register (the Render phase) is NOT visible in sets: sets only reads
+// RegisterByHost[sid]. With empty RegisterByHost, accessing register.* gives a
+// deterministic eval error ("no such key"), regardless of a populated
+// global Register.
 func TestRenderStateChanges_GlobalRegisterNotLeaked(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "create",
@@ -1166,9 +1166,9 @@ func TestRenderStateChanges_GlobalRegisterNotLeaked(t *testing.T) {
 	}
 }
 
-// TestRenderStateChanges_RegisterLastWinsCrossHost — last-wins свёртка sets с
-// register: при разных register-значениях по хостам в state попадает значение
-// хоста с лексикографически последним SID.
+// TestRenderStateChanges_RegisterLastWinsCrossHost — last-wins fold for sets with
+// register: when register values differ across hosts, the value from the
+// host with the lexicographically last SID lands in state.
 func TestRenderStateChanges_RegisterLastWinsCrossHost(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "create",
@@ -1198,7 +1198,7 @@ func TestRenderStateChanges_RegisterLastWinsCrossHost(t *testing.T) {
 	}
 }
 
-// TestRender_HostCountInCEL — incarnation.host_count = число targeted-хостов.
+// TestRender_HostCountInCEL — incarnation.host_count = number of targeted hosts.
 func TestRender_HostCountInCEL(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "count",
@@ -1225,8 +1225,8 @@ func TestRender_HostCountInCEL(t *testing.T) {
 	}
 }
 
-// TestRender_RunOnce_PicksFirstBySID — run_once: true → задача уходит ровно на
-// один хост, детерминированно первый по SID, при N>1 хостов в таргете
+// TestRender_RunOnce_PicksFirstBySID — run_once: true → the task goes to exactly
+// one host, deterministically the first by SID, when N>1 hosts are targeted
 // (orchestration.md §2.2.2).
 func TestRender_RunOnce_PicksFirstBySID(t *testing.T) {
 	manifest := &config.ScenarioManifest{
@@ -1239,7 +1239,7 @@ func TestRender_RunOnce_PicksFirstBySID(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Incarnation: IncarnationMeta{Name: "svc"},
-		// Неотсортированный roster — резолв обязан выбрать первый по SID сам.
+		// Unsorted roster — resolution must pick the first by SID itself.
 		Hosts: []*topology.HostFacts{
 			host("c.example.com", []string{"svc"}, nil),
 			host("a.example.com", []string{"svc"}, nil),
@@ -1258,9 +1258,9 @@ func TestRender_RunOnce_PicksFirstBySID(t *testing.T) {
 	}
 }
 
-// TestRender_RunOnce_ZeroHosts — run_once: при пустом таргете (where: отфильтровал
-// всех) не паникует и даёт пустой DispatchPlan (общая семантика §5, без своей
-// политики пустого таргета).
+// TestRender_RunOnce_ZeroHosts — run_once: with an empty target (where: filtered
+// everyone out) doesn't panic and gives an empty DispatchPlan (general §5 semantics,
+// with no policy of its own for an empty target).
 func TestRender_RunOnce_ZeroHosts(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "once-empty",
@@ -1286,10 +1286,10 @@ func TestRender_RunOnce_ZeroHosts(t *testing.T) {
 	}
 }
 
-// TestRender_Serial_WidthInPlan — serial: N и "<N>%" вычисляются в SerialWidth
-// плана против числа таргетов (orchestration.md §2.2.1). Сам нарезка на волны —
-// scenario-dispatch (см. scenario/dispatch_test.go); здесь проверяем только
-// корректность вычисленной ширины.
+// TestRender_Serial_WidthInPlan — serial: N and "<N>%" compute the plan's SerialWidth
+// against the target count (orchestration.md §2.2.1). Wave slicing itself is
+// scenario-dispatch (see scenario/dispatch_test.go); here we only check that
+// the computed width is correct.
 func TestRender_Serial_WidthInPlan(t *testing.T) {
 	hosts := []*topology.HostFacts{
 		host("a", []string{"svc"}, nil),
@@ -1334,8 +1334,8 @@ func TestRender_Serial_WidthInPlan(t *testing.T) {
 	}
 }
 
-// TestSerialWidth — чистая функция вычисления ширины волны: int/percent/nil-формы,
-// округление вверх процента, минимум 1.
+// TestSerialWidth — pure wave-width computation function: int/percent/nil forms,
+// round-up percent, minimum 1.
 func TestSerialWidth(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -1365,11 +1365,11 @@ func TestSerialWidth(t *testing.T) {
 	}
 }
 
-// TestRender_Serial_PercentAfterWhere — процент serial: считается от числа
-// хостов ПОСЛЕ where-фильтра, не от всего roster-а (orchestration.md §2.2.1):
-// roster 4 хоста, where: оставляет 2 (по стабильному soulprint-факту), serial:
-// "50%" → ceil(2*50/100)=1, а не ceil(4*50/100)=2. TargetSIDs тоже = 2 (where
-// сужает таргет, serial — только ширину волны).
+// TestRender_Serial_PercentAfterWhere — serial: percent is computed from the host
+// count AFTER the where filter, not the whole roster (orchestration.md §2.2.1):
+// roster of 4 hosts, where: leaves 2 (by a stable soulprint fact), serial:
+// "50%" → ceil(2*50/100)=1, not ceil(4*50/100)=2. TargetSIDs is also 2 (where
+// narrows the target, serial only affects wave width).
 func TestRender_Serial_PercentAfterWhere(t *testing.T) {
 	hosts := []*topology.HostFacts{
 		host("a", []string{"svc"}, map[string]any{"os": map[string]any{"family": "debian"}}),
@@ -1402,7 +1402,7 @@ func TestRender_Serial_PercentAfterWhere(t *testing.T) {
 	}
 }
 
-// TestApplyRunOnce — резка таргета до первого по SID хоста.
+// TestApplyRunOnce — slices the target down to the first host by SID.
 func TestApplyRunOnce(t *testing.T) {
 	mk := func(sids ...string) []*topology.HostFacts {
 		out := make([]*topology.HostFacts, len(sids))

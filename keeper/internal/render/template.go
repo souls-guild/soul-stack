@@ -8,83 +8,86 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// isNotExist распознаёт «файла нет» сквозь обёртки securejoin-ридера (он
-// оборачивает os.ReadFile через %w). Только это условие триггерит фоллбэк
-// scenario-local→service-level; прочие I/O-ошибки не маскируются.
+// isNotExist recognizes "file not found" through the securejoin reader's
+// wrapping (it wraps os.ReadFile via %w). Only this condition triggers the
+// scenario-local→service-level fallback; other I/O errors are never masked.
 func isNotExist(err error) bool {
 	return errors.Is(err, os.ErrNotExist)
 }
 
-// moduleFileRendered — адрес шага, для которого Keeper доставляет literal
-// template-content (A1, ADR-012(d)). Только у него params.template (путь)
-// заменяется на params.template_content (содержимое).
+// moduleFileRendered — the step address for which Keeper delivers literal
+// template content (A1, ADR-012(d)). Only for it does params.template (path)
+// get replaced with params.template_content (content).
 const moduleFileRendered = "core.file.rendered"
 
-// paramTemplate / paramTemplateContent — ключи params шага core.file.rendered.
-// template — путь к `.tmpl` (вход автора scenario/destiny); template_content —
-// literal-содержимое, которое Keeper кладёт после чтения файла, а Soul рендерит
-// сам (rendered.go читает именно template_content).
+// paramTemplate / paramTemplateContent — params keys of the core.file.rendered
+// step. template — path to a `.tmpl` (author input in scenario/destiny);
+// template_content — literal content that Keeper injects after reading the
+// file, which Soul then renders itself (rendered.go reads template_content).
 const (
 	paramTemplate        = "template"
 	paramTemplateContent = "template_content"
 )
 
-// paramRenderContext — ключ params, под которым Keeper доставляет собранный
-// per-host корень text/template-контекста core.file.rendered: {vars, self, role,
-// essence} (templating.md §3.2). Soul читает его и передаёт КОРНЕМ в
-// text/template (rendered.go). Без proto-изменений (A1, ADR-012(d)) — едет
-// внутри RenderedTask.params.
+// paramRenderContext — the params key under which Keeper delivers the
+// assembled per-host root of the core.file.rendered text/template context:
+// {vars, self, role, essence} (templating.md §3.2). Soul reads it and passes it
+// as the ROOT to text/template (rendered.go). No proto changes needed (A1,
+// ADR-012(d)) — it rides inside RenderedTask.params.
 const paramRenderContext = "render_context"
 
-// paramVars — авторский ключ params шага core.file.rendered: значения, которые
-// автор поднимает для шаблона (templating.md §6, `params.vars`). Keeper его
-// CEL-рендерит, переносит под render_context.vars (§3.2-корень) и УДАЛЯЕТ из
-// params — Soul читает корень только из render_context.
+// paramVars — the author-facing params key of the core.file.rendered step:
+// values the author surfaces for the template (templating.md §6,
+// `params.vars`). Keeper CEL-renders it, moves it under render_context.vars
+// (the §3.2 root) and DELETES it from params — Soul reads the root only from
+// render_context.
 const paramVars = "vars"
 
-// TemplateReader читает literal-содержимое `.tmpl`-файла из снапшота артефакта по
-// relative-path (как он записан в `params.template`, например
-// `templates/redis.conf.tmpl`). Реализация обязана защищать от traversal
-// (`../`/абсолютный путь/симлинк наружу) и резолвить двухуровнево
-// scenario-local→service-level там, где это требует ADR-009.
+// TemplateReader reads the literal content of a `.tmpl` file from an artifact
+// snapshot by relative path (as recorded in `params.template`, e.g.
+// `templates/redis.conf.tmpl`). Implementations must guard against traversal
+// (`../`/absolute path/symlink escape) and resolve two-tier
+// scenario-local→service-level where ADR-009 requires it.
 //
-// Симметрично [DestinyResolver]: узкий per-run интерфейс, прод-реализация —
-// snapshot-backed (см. [SnapshotTemplateReader]), герметичный Trial L0 — fixture-
-// backed reader поверх локального дерева кейса.
+// Symmetric to [DestinyResolver]: a narrow per-run interface, with a
+// snapshot-backed prod implementation (see [SnapshotTemplateReader]) and a
+// hermetic Trial L0 fixture-backed reader over a local case tree.
 type TemplateReader interface {
 	Read(relPath string) ([]byte, error)
 }
 
-// snapshotReadFunc читает файл из снапшота по relative-path с securejoin-защитой.
-// Точечная инъекция artifact.readSnapshotFile (она неэкспортирована) без
-// затягивания зависимости render→artifact: caller (run.go) передаёт замыкание.
+// snapshotReadFunc reads a file from a snapshot by relative path with
+// securejoin protection. A targeted injection point for
+// artifact.readSnapshotFile (unexported) that avoids pulling a render→artifact
+// dependency: the caller (run.go) passes a closure.
 type snapshotReadFunc func(relPath string) ([]byte, error)
 
-// SnapshotTemplateReader — прод-реализация [TemplateReader] поверх материализо-
-// ванного снапшота. Двухуровневый резолв (ADR-009, orchestration.md §6): сначала
-// scenario-local `scenario/<name>/<relPath>`, затем service-level `<relPath>` —
-// ближний полностью перекрывает дальний (shadowing, без merge).
+// SnapshotTemplateReader — prod implementation of [TemplateReader] over a
+// materialized snapshot. Two-tier resolve (ADR-009, orchestration.md §6):
+// scenario-local `scenario/<name>/<relPath>` first, then service-level
+// `<relPath>` — the nearer tier fully shadows the farther one (no merge).
 //
-// scenarioPrefix задаёт scenario-local-каталог (`scenario/<name>`); пустой —
-// одноуровневый резолв (destiny-проход: `.tmpl` лежат прямо под корнем снапшота
-// destiny, scenario-local-слоя у destiny нет). read — securejoin-backed чтение
-// из снапшота (защита от traversal на каждом уровне).
+// scenarioPrefix sets the scenario-local directory (`scenario/<name>`); empty
+// means a single-tier resolve (destiny pass: `.tmpl` files sit right under the
+// destiny snapshot root, destiny has no scenario-local tier). read is a
+// securejoin-backed read from the snapshot (traversal guarded at every tier).
 type SnapshotTemplateReader struct {
 	read           snapshotReadFunc
 	scenarioPrefix string
 }
 
-// NewSnapshotTemplateReader строит ридер поверх снапшота. read обязателен
-// (securejoin-backed чтение из конкретного снапшота). scenarioPrefix — каталог
-// scenario-local-слоя (`scenario/<name>`); "" → одноуровневый резолв.
+// NewSnapshotTemplateReader builds a reader over a snapshot. read is required
+// (securejoin-backed read from the specific snapshot). scenarioPrefix is the
+// scenario-local tier directory (`scenario/<name>`); "" → single-tier resolve.
 func NewSnapshotTemplateReader(read snapshotReadFunc, scenarioPrefix string) *SnapshotTemplateReader {
 	return &SnapshotTemplateReader{read: read, scenarioPrefix: scenarioPrefix}
 }
 
-// Read резолвит relPath двухуровнево. На каждом уровне путь читается через
-// securejoin-backed read (traversal заклампен снапшот-ридером). Отсутствие файла
-// на scenario-local-уровне → фоллбэк на service-level; отсутствие на обоих →
-// ошибка not-found. I/O-ошибку (не «нет файла») на любом уровне НЕ маскируем.
+// Read resolves relPath in two tiers. At each tier the path is read via
+// securejoin-backed read (traversal clamped by the snapshot reader). Missing
+// file at the scenario-local tier → fallback to service-level; missing at both
+// → a not-found error. An I/O error (not "file missing") at any tier is never
+// masked.
 func (r *SnapshotTemplateReader) Read(relPath string) ([]byte, error) {
 	if r.scenarioPrefix != "" {
 		local := r.scenarioPrefix + "/" + relPath
@@ -103,23 +106,24 @@ func (r *SnapshotTemplateReader) Read(relPath string) ([]byte, error) {
 	return data, nil
 }
 
-// injectTemplateContent для шага core.file.rendered заменяет в уже CEL-rendered
-// params путь `template` на literal-содержимое `template_content` (A1,
-// ADR-012(d)). text/template здесь НЕ исполняется — рендер на Soul (rendered.go).
+// injectTemplateContent, for a core.file.rendered step, replaces the
+// `template` path with literal `template_content` in already CEL-rendered
+// params (A1, ADR-012(d)). text/template is NOT executed here — rendering
+// happens on Soul (rendered.go).
 //
-// preloaded — содержимое, уже прочитанное caller-ом (renderTaskIter →
-// resolveTemplateUsesInput) при детекте `.input`-обращения, чтобы файл не читался
-// дважды. Непустое preloaded → используется как есть (reader не трогается).
-// Пустое preloaded (inline-шаблон, либо не-rendered модуль) → fallback на чтение
-// через reader по params.template, как раньше.
+// preloaded — content already read by the caller (renderTaskIter →
+// resolveTemplateUsesInput) upon detecting a `.input` reference, so the file
+// isn't read twice. Non-empty preloaded → used as-is (reader untouched). Empty
+// preloaded (inline template, or a non-rendered module) → falls back to
+// reading via reader from params.template, as before.
 //
-// Прочие модули проходят насквозь (rt.Params не трогаются, "" RawTemplate).
-// reader=nil для core.file.rendered с params.template и без preloaded — ошибка
-// handoff (Keeper не настроен доставлять содержимое; именно этот пробел был
-// прод-блокером golden-path).
+// Other modules pass through untouched (rt.Params left alone, "" RawTemplate).
+// reader=nil for core.file.rendered with params.template and no preloaded is a
+// handoff error (Keeper isn't configured to deliver content; this exact gap
+// used to block the golden path in prod).
 //
-// params.template обязан быть строкой-путём (после CEL-фазы; non-string —
-// ошибка). После инъекции ключ template удаляется — Soul-у путь не нужен.
+// params.template must be a path string (after the CEL phase; non-string is an
+// error). After injection the template key is removed — Soul doesn't need the path.
 func injectTemplateContent(rt *RenderedTask, reader TemplateReader, preloaded string) error {
 	if rt.Module != moduleFileRendered {
 		return nil
@@ -130,7 +134,7 @@ func injectTemplateContent(rt *RenderedTask, reader TemplateReader, preloaded st
 	fields := rt.Params.GetFields()
 	tv, ok := fields[paramTemplate]
 	if !ok {
-		// template_content уже задан напрямую (inline-шаблон без файла) — пропускаем.
+		// template_content is already set directly (inline template, no file) — skip.
 		if _, has := fields[paramTemplateContent]; has {
 			rt.RawTemplate = preloaded
 			return nil

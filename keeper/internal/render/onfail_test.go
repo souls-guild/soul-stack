@@ -8,8 +8,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// onFailScenario — scenario из двух задач: источник с register: migration и
-// rescue-обработчик с onfail: [migration].
+// onFailScenario is a two-task scenario: a source with register: migration
+// and a rescue handler with onfail: [migration].
 func onFailScenario(onfail []string) *config.ScenarioManifest {
 	return &config.ScenarioManifest{
 		Name: "redis",
@@ -28,8 +28,8 @@ func onFailScenario(onfail []string) *config.ScenarioManifest {
 	}
 }
 
-// TestRender_OnFail_ResolvesNameToIndex — config.Task.OnFail (register-имя)
-// резолвится в render.RenderedTask.OnFailIdx (task-индекс источника, Variant A).
+// TestRender_OnFail_ResolvesNameToIndex — config.Task.OnFail (register name)
+// resolves into render.RenderedTask.OnFailIdx (source task index, Variant A).
 func TestRender_OnFail_ResolvesNameToIndex(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	tasks, _, err := p.Render(context.Background(), onChangesRenderInput(onFailScenario([]string{"migration"})))
@@ -48,8 +48,8 @@ func TestRender_OnFail_ResolvesNameToIndex(t *testing.T) {
 	}
 }
 
-// TestRender_OnFail_Empty — без onfail: OnFailIdx nil у обеих задач
-// (не-onfail-задачи, gating не применяется).
+// TestRender_OnFail_Empty — without onfail: OnFailIdx is nil for both tasks
+// (not onfail tasks, gating doesn't apply).
 func TestRender_OnFail_Empty(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	tasks, _, err := p.Render(context.Background(), onChangesRenderInput(onFailScenario(nil)))
@@ -63,8 +63,9 @@ func TestRender_OnFail_Empty(t *testing.T) {
 	}
 }
 
-// TestRender_OnFail_UnknownRegister — onfail ссылается на несуществующий register
-// → ошибка рендера (строгий вариант, ловит опечатку register-id; зеркало onchanges).
+// TestRender_OnFail_UnknownRegister — onfail references a nonexistent
+// register → render error (strict variant, catches a typo'd register id;
+// mirrors onchanges).
 func TestRender_OnFail_UnknownRegister(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	_, _, err := p.Render(context.Background(), onChangesRenderInput(onFailScenario([]string{"typo_migration"})))
@@ -76,8 +77,8 @@ func TestRender_OnFail_UnknownRegister(t *testing.T) {
 	}
 }
 
-// TestRender_OnFail_MultiSource — несколько register-имён резолвятся в несколько
-// индексов (any-семантика gating-а — на Soul-е).
+// TestRender_OnFail_MultiSource — multiple register names resolve into
+// multiple indexes (any-semantics gating is on the Soul side).
 func TestRender_OnFail_MultiSource(t *testing.T) {
 	m := &config.ScenarioManifest{
 		Name: "multi",
@@ -98,9 +99,10 @@ func TestRender_OnFail_MultiSource(t *testing.T) {
 	}
 }
 
-// TestRender_OnFailAndOnChanges_Independent — задача с onchanges И onfail на разные
-// источники: оба резолва независимы (require:[migration] + onfail:[migration] —
-// типовая связка, destiny/tasks.md §8).
+// TestRender_OnFailAndOnChanges_Independent — a task with onchanges AND
+// onfail on different sources: both resolves are independent
+// (require:[migration] + onfail:[migration] is a typical pairing,
+// destiny/tasks.md §8).
 func TestRender_OnFailAndOnChanges_Independent(t *testing.T) {
 	m := &config.ScenarioManifest{
 		Name: "mix",

@@ -18,8 +18,8 @@ func TestDestinySource_ResolveURL(t *testing.T) {
 	}
 }
 
-// TestDestinySource_ResolveURL_GitOverride — per-entry git override берётся как
-// есть, шаблон default_destiny_source игнорируется.
+// TestDestinySource_ResolveURL_GitOverride — a per-entry git override is used
+// as-is, the default_destiny_source template is ignored.
 func TestDestinySource_ResolveURL_GitOverride(t *testing.T) {
 	s := NewDestinySource(nil, fixedTemplateSource("file:///tmp/keeper-dev/destiny/{name}"))
 	got, err := s.resolveURL("pilot-flat", "git@github.com:custom/destiny-special.git")
@@ -31,8 +31,8 @@ func TestDestinySource_ResolveURL_GitOverride(t *testing.T) {
 	}
 }
 
-// TestDestinySource_ResolveURL_GitOverrideEmptyTemplate — override работает даже
-// когда default_destiny_source не задан (name-only зависимостей нет).
+// TestDestinySource_ResolveURL_GitOverrideEmptyTemplate — override works even
+// when default_destiny_source isn't set (no name-only dependencies).
 func TestDestinySource_ResolveURL_GitOverrideEmptyTemplate(t *testing.T) {
 	s := NewDestinySource(nil, fixedTemplateSource(""))
 	got, err := s.resolveURL("pilot-flat", "https://git.example/destiny-special.git")
@@ -51,8 +51,9 @@ func TestDestinySource_ResolveURL_EmptyTemplate(t *testing.T) {
 	}
 }
 
-// TestDestinySource_ResolveURL_NilSource — nil-источник шаблона трактуется как
-// пустой шаблон (без панки): name-only зависимость без git-override → ошибка.
+// TestDestinySource_ResolveURL_NilSource — a nil template source is treated as
+// an empty template (no panic): a name-only dependency with no git override →
+// error.
 func TestDestinySource_ResolveURL_NilSource(t *testing.T) {
 	s := NewDestinySource(nil, nil)
 	if _, err := s.resolveURL("x", ""); err == nil {
@@ -67,16 +68,16 @@ func TestDestinySource_ResolveURL_NoPlaceholder(t *testing.T) {
 	}
 }
 
-// mutableTemplateSource — [DestinyTemplateSource], значение которого можно
-// поменять между резолвами (модель hot-reload скаляра keeper_settings).
+// mutableTemplateSource — a [DestinyTemplateSource] whose value can change
+// between resolves (models hot-reload of a keeper_settings scalar).
 type mutableTemplateSource struct{ v string }
 
 func (s *mutableTemplateSource) DefaultDestinySource() string { return s.v }
 
-// TestDestinySource_ResolveURL_Lazy — шаблон читается ЛЕНИВО на каждый резолв:
-// изменение источника после конструктора видно сразу (контракт hot-reload C2,
-// ADR-029). Если бы конструктор копировал строку, второй резолв вернул бы
-// старый URL.
+// TestDestinySource_ResolveURL_Lazy — the template is read LAZILY on every
+// resolve: a source change after construction is visible immediately
+// (hot-reload contract C2, ADR-029). If the constructor copied the string, the
+// second resolve would return the stale URL.
 func TestDestinySource_ResolveURL_Lazy(t *testing.T) {
 	src := &mutableTemplateSource{v: "file:///old/{name}"}
 	s := NewDestinySource(nil, src)
@@ -99,8 +100,8 @@ func TestDestinySource_ResolveURL_Lazy(t *testing.T) {
 	}
 }
 
-// TestDestinyResolver_RefFromManifest — resolverFor берёт ref из service.yml::
-// destiny[]; destiny вне списка отвергается до загрузки.
+// TestDestinyResolver_RefFromManifest — resolverFor takes ref from
+// service.yml::destiny[]; a destiny outside the list is rejected before loading.
 func TestDestinyResolver_RefFromManifest(t *testing.T) {
 	src := NewDestinySource(nil, fixedTemplateSource("file:///tmp/destiny/{name}"))
 	manifest := &config.ServiceManifest{
@@ -114,15 +115,16 @@ func TestDestinyResolver_RefFromManifest(t *testing.T) {
 	if got := r.deps["pilot-flat"].Ref; got != "v1.0.0" {
 		t.Errorf("ref = %q, want v1.0.0", got)
 	}
-	// destiny вне service.yml::destiny[] → ошибка резолва без обращения к loader.
+	// destiny outside service.yml::destiny[] → resolve error without touching the loader.
 	_, err := r.Resolve(t.Context(), "ghost")
 	if err == nil || !strings.Contains(err.Error(), "не объявлена") {
 		t.Fatalf("Resolve(ghost) err = %v, want 'не объявлена'", err)
 	}
 }
 
-// TestDestinyResolver_GitOverrideFromManifest — per-entry git из service.yml::
-// destiny[] пробрасывается в resolveURL и побеждает default_destiny_source.
+// TestDestinyResolver_GitOverrideFromManifest — per-entry git from
+// service.yml::destiny[] is forwarded to resolveURL and wins over
+// default_destiny_source.
 func TestDestinyResolver_GitOverrideFromManifest(t *testing.T) {
 	src := NewDestinySource(nil, fixedTemplateSource("file:///tmp/destiny/{name}"))
 	manifest := &config.ServiceManifest{

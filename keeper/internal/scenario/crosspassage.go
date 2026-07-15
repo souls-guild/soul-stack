@@ -1,53 +1,58 @@
 package scenario
 
-// Cross-passage requisite-gating ([ADR-056](../../../docs/adr/0056-staged-render-passage.md),
-// R3 — финальный слайс класса global-vs-local). Keeper-side резолв onchanges/onfail-
-// связи, чей источник лежит в БОЛЕЕ РАННЕМ Passage, чем потребитель.
+// Cross-passage requisite gating ([ADR-056](../../../docs/adr/0056-staged-render-passage.md),
+// R3 — final slice of the global-vs-local class). Keeper-side resolution of
+// onchanges/onfail links whose source lives in an EARLIER Passage than the consumer.
 //
-// Зачем keeper-side. requisites (`onchanges:`/`onfail:`) — НЕ passage-определяющие
-// (в граф Stratify не входят, passage.go). Если consumer уехал в Passage>0 другой
-// register-зависимостью (`where: register.X` от probe), а источник его requisite
-// остался в Passage 0, они едут РАЗНЫМИ ApplyRequest-ами. Soul gating ОДНОГО Passage
-// видит только свой registerByIdx — результат источника другого Passage ему недоступен
-// (ToProtoTasks кодирует его sentinel-ом -1 = «не спасает»). Поэтому requisite-связь
-// между Passage обязан резолвить Keeper по накопленным per-host CHANGED/FAILED-фактам
-// (R1+R2 эту связь чинили только в пределах одного Passage / отвергали cross-passage).
+// Why keeper-side. requisites (`onchanges:`/`onfail:`) are NOT passage-defining
+// (excluded from the Stratify graph, passage.go). If a consumer moved to
+// Passage>0 via a different register dependency (`where: register.X` from a
+// probe), while its requisite's source stayed in Passage 0, they travel in
+// DIFFERENT ApplyRequests. Soul's gating for ONE Passage only sees its own
+// registerByIdx — another Passage's source result is unavailable to it
+// (ToProtoTasks encodes it with sentinel -1 = "doesn't satisfy"). So
+// cross-passage requisite links must be resolved by Keeper from accumulated
+// per-host CHANGED/FAILED facts (R1+R2 only handled this within a single
+// Passage / rejected cross-passage).
 //
-// CHANGED-set-семантика (★). Источник onchanges считается «спас» ТОЛЬКО при CHANGED.
-// skipped-источник (когда сам он отфильтрован where: / не сработал по своему requisite)
-// = НЕ changed — и onchanges по нему НЕ срабатывает. Опираемся на множество
-// auditpg.SelectChangedTaskKeys (статус CHANGED), а НЕ на «строка register есть»
-// (register пишется и для ok/skipped probe). onfail — зеркально по FAILED∪TIMED_OUT.
+// CHANGED-set semantics (★). An onchanges source counts as "satisfied" ONLY on
+// CHANGED. A skipped source (filtered by its own where: / its own requisite
+// didn't fire) is NOT changed — onchanges through it does NOT fire. We rely on
+// the auditpg.SelectChangedTaskKeys set (status CHANGED), NOT on "a register
+// row exists" (register is written for ok/skipped probes too). onfail mirrors
+// this over FAILED∪TIMED_OUT.
 //
-// Per-host. CHANGED/FAILED — факт КОНКРЕТНОГО хоста (источник changed на host-a, ok на
-// host-b). Поэтому решение «consumer выполняется / исключён» и rewrite его wire-
-// requisite принимается per-(sid).
+// Per-host. CHANGED/FAILED is a fact of a SPECIFIC host (source changed on
+// host-a, ok on host-b). So the "consumer runs / excluded" decision and the
+// wire-requisite rewrite are made per-(sid).
 
 import (
 	"github.com/souls-guild/soul-stack/keeper/internal/auditpg"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
 )
 
-// crossPassageGate несёт всё необходимое для per-host резолва cross-passage
-// requisite-ов ОДНОГО Passage перед его dispatch-ем. Чистые данные (без PG/ctx):
-// stage-loop run.go загружает CHANGED/FAILED-факты предыдущих Passage один раз и
-// прокидывает сюда. nil-gate (N=1-прогон / Passage 0) → applyGate no-op.
+// crossPassageGate holds everything needed for per-host resolution of
+// cross-passage requisites for ONE Passage before its dispatch. Pure data (no
+// PG/ctx): run.go's stage loop loads previous Passages' CHANGED/FAILED facts
+// once and threads them in here. nil gate (N=1 run / Passage 0) → applyGate
+// is a no-op.
 type crossPassageGate struct {
-	// passageByIndex — global RenderedTask.Index → его Passage по ВСЕМУ плану
-	// прогона (включая источники, которых нет в текущем Passage-срезе). Нужен,
-	// чтобы отличить cross-passage источник (его Passage < Passage потребителя) от
-	// same-passage (R1-remap его чинит на Soul-е, keeper НЕ трогает).
+	// passageByIndex — global RenderedTask.Index → its Passage across the
+	// WHOLE run plan (including sources not in the current Passage slice).
+	// Needed to tell a cross-passage source (its Passage < consumer's Passage)
+	// apart from same-passage (R1-remap fixes it on Soul, keeper leaves it
+	// alone).
 	passageByIndex map[int]int
 
-	// changed / failed — per-(sid, planIndex) факты CHANGED / (FAILED∪TIMED_OUT),
-	// накопленные за Passage < текущего (auditpg). planIndex = global Index.
+	// changed / failed — per-(sid, planIndex) CHANGED / (FAILED∪TIMED_OUT) facts,
+	// accumulated over Passages < current (auditpg). planIndex = global Index.
 	changed map[auditpg.ChangedTaskKey]struct{}
 	failed  map[auditpg.ChangedTaskKey]struct{}
 }
 
-// newCrossPassageGate собирает gate для dispatch-а Passage p. passage — общий план
-// прогона (Stratify-результат), tasks — ВЕСЬ резолвнутый план (все Passage; нужен
-// для passageByIndex источников). changed/failed — CHANGED/FAILED-факты Passage < p.
+// newCrossPassageGate assembles the gate for dispatching Passage p. tasks is
+// the WHOLE resolved plan (all Passages; needed for sources' passageByIndex).
+// changed/failed are CHANGED/FAILED facts from Passages < p.
 func newCrossPassageGate(tasks []*render.RenderedTask, changed, failed map[auditpg.ChangedTaskKey]struct{}) *crossPassageGate {
 	idx := make(map[int]int, len(tasks))
 	for _, t := range tasks {
@@ -56,20 +61,20 @@ func newCrossPassageGate(tasks []*render.RenderedTask, changed, failed map[audit
 	return &crossPassageGate{passageByIndex: idx, changed: changed, failed: failed}
 }
 
-// applyGate переписывает per-host срез Passage по cross-passage requisite-ам:
+// applyGate rewrites a Passage's per-host slice by cross-passage requisites:
 //
-//   - onchanges: ЛЮБОЙ cross-passage источник CHANGED на хосте → requisite
-//     УДОВЛЕТВОРЁН (OR-семантика) → cross-passage source-idx убираются с wire
-//     (consumer выполняется; same-passage onchanges, если есть, остаются → Soul
-//     гейтит по ним). Если НИ ОДИН cross-passage источник не changed И нет
-//     same-passage onchanges-источника → consumer ИСКЛЮЧАЕТСЯ из среза хоста
-//     (onchanges не сработал — не выполняется). Если cross не changed, но есть
-//     same-passage onchanges — consumer остаётся, cross-idx убраны, Soul гейтит
-//     по same-passage (R1-remap).
-//   - onfail: зеркально по FAILED∪TIMED_OUT (rescue).
+//   - onchanges: ANY cross-passage source CHANGED on the host → requisite
+//     SATISFIED (OR semantics) → cross-passage source idx are removed from
+//     the wire (consumer runs; same-passage onchanges, if any, remain → Soul
+//     gates on them). If NO cross-passage source changed AND there's no
+//     same-passage onchanges source → consumer is EXCLUDED from the host
+//     slice (onchanges didn't fire — doesn't run). If cross didn't fire but
+//     there's same-passage onchanges — consumer stays, cross idx removed,
+//     Soul gates by same-passage (R1-remap).
+//   - onfail: mirrors this over FAILED∪TIMED_OUT (rescue).
 //
-// nil-gate (N=1 / Passage 0) → возврат perHost как есть (zero-cost). Задачи без
-// cross-passage requisite-ов НЕ клонируются (общий указатель переиспользуется).
+// nil gate (N=1 / Passage 0) → returns perHost as-is (zero-cost). Tasks
+// without cross-passage requisites are NOT cloned (shared pointer reused).
 func (g *crossPassageGate) applyGate(perHost map[string][]*render.RenderedTask, consumerPassage int) map[string][]*render.RenderedTask {
 	if g == nil {
 		return perHost
@@ -83,10 +88,11 @@ func (g *crossPassageGate) applyGate(perHost map[string][]*render.RenderedTask, 
 				kept = append(kept, task)
 			}
 		}
-		// Хост, у которого ВСЕ задачи Passage исключены cross-passage-гейтом
-		// (например единственный consumer, чей onchanges не сработал), из среза
-		// выпадает целиком — apply_runs-строка/ApplyRequest ему НЕ создаётся (как
-		// where:, отфильтровавший все задачи на хосте). barrier его не ждёт.
+		// A host where ALL of the Passage's tasks are excluded by the
+		// cross-passage gate (e.g. the only consumer, whose onchanges didn't
+		// fire) drops out of the slice entirely — no apply_runs row/ApplyRequest
+		// is created for it (like where: filtering out all of a host's tasks).
+		// The barrier doesn't wait on it.
 		if len(kept) > 0 {
 			out[sid] = kept
 		}
@@ -94,70 +100,73 @@ func (g *crossPassageGate) applyGate(perHost map[string][]*render.RenderedTask, 
 	return out
 }
 
-// resolveTask решает судьбу одной consumer-задачи на одном хосте. Возвращает
-// (возможно клонированную с переписанными requisite-idx) задачу и флаг включения
-// в срез хоста. Задача без cross-passage requisite-ов возвращается КАК ЕСТЬ
-// (include=true, без клонирования) — keeper её не трогает.
+// resolveTask decides the fate of one consumer task on one host. Returns
+// (possibly cloned, with rewritten requisite idx) the task and whether to
+// include it in the host slice. A task without cross-passage requisites is
+// returned AS-IS (include=true, no clone) — keeper doesn't touch it.
 func (g *crossPassageGate) resolveTask(t *render.RenderedTask, sid string, consumerPassage int) (*render.RenderedTask, bool) {
 	onchangesCross, onchangesSame := g.splitRequisite(t.OnChangesIdx, consumerPassage)
 	onfailCross, onfailSame := g.splitRequisite(t.OnFailIdx, consumerPassage)
 
-	// Нет cross-passage requisite-ов вообще → keeper не трогает (R1-remap на Soul-е).
+	// No cross-passage requisites at all → keeper doesn't touch it (R1-remap on Soul).
 	if len(onchangesCross) == 0 && len(onfailCross) == 0 {
 		return t, true
 	}
 
-	// Per-requisite-вид резолвим OR cross-части и решаем, какие idx останутся на wire.
-	// nextOnchanges/nextOnfail — wire-idx после резолва; include — оставить ли consumer.
+	// Per requisite kind we resolve the OR of the cross part and decide which
+	// idx stay on the wire. nextOnchanges/nextOnfail are post-resolve wire idx;
+	// include says whether to keep the consumer.
 	nextOnchanges, includeOnchanges := g.resolveKind(g.changed, sid, onchangesCross, onchangesSame)
 	nextOnfail, includeOnfail := g.resolveKind(g.failed, sid, onfailCross, onfailSame)
 
-	// Связка requisite-видов — AND (как у Soul: несколько requisite-ов должны
-	// удовлетвориться вместе). Если onchanges-вид исключил consumer ЛИБО onfail-вид
-	// исключил — задача не выполняется на хосте.
+	// Requisite kinds combine via AND (like Soul: multiple requisites must all
+	// be satisfied together). If the onchanges kind excludes the consumer OR
+	// the onfail kind excludes it — the task doesn't run on this host.
 	if !includeOnchanges || !includeOnfail {
 		return nil, false
 	}
 
-	// Consumer выполняется. Клонируем (*RenderedTask общий между хостами — per-host
-	// решение, нельзя мутировать) и кладём переписанные wire-idx.
+	// Consumer runs. Clone it (*RenderedTask is shared across hosts — a
+	// per-host decision can't mutate it) and set the rewritten wire idx.
 	clone := *t
 	clone.OnChangesIdx = nextOnchanges
 	clone.OnFailIdx = nextOnfail
 	return &clone, true
 }
 
-// resolveKind резолвит ОДИН вид requisite (onchanges по changed-set / onfail по
-// failed-set) для одного хоста. cross — source-idx в более раннем Passage, same —
-// в том же (Soul гейтит сам). Возвращает wire-idx после резолва и флаг включения:
+// resolveKind resolves ONE requisite kind (onchanges over the changed set /
+// onfail over the failed set) for one host. cross is source idx in an earlier
+// Passage, same is in the same one (Soul gates it itself). Returns post-resolve
+// wire idx and the include flag:
 //
-//   - cross пуст → keeper этот вид не трогает, same остаётся как есть (include=true).
-//   - ЛЮБОЙ cross-источник в set (changed/failed) → OR УДОВЛЕТВОРЁН keeper-side →
-//     ВЕСЬ requisite снимается с wire (cross+same), consumer выполняется безусловно
-//     по этому виду (нельзя оставлять same: Soul пере-гейтит по нему и мог бы ложно
-//     skip-нуть, хотя cross уже спас).
-//   - НИ ОДИН cross не в set, но есть same → cross-idx убираем, same оставляем →
-//     Soul гейтит по same-passage части (R1-remap).
-//   - НИ ОДИН cross не в set И нет same → requisite не удовлетворён → consumer
-//     исключается (include=false).
+//   - cross empty → keeper leaves this kind alone, same stays as-is (include=true).
+//   - ANY cross source is in the set (changed/failed) → OR SATISFIED keeper-side →
+//     the WHOLE requisite is stripped from the wire (cross+same), consumer runs
+//     unconditionally for this kind (same can't be left in: Soul would re-gate on
+//     it and could falsely skip, even though cross already satisfied it).
+//   - NO cross is in the set, but same exists → strip cross idx, keep same →
+//     Soul gates on the same-passage part (R1-remap).
+//   - NO cross is in the set AND no same → requisite not satisfied → consumer
+//     excluded (include=false).
 func (g *crossPassageGate) resolveKind(set map[auditpg.ChangedTaskKey]struct{}, sid string, cross, same []int) (wire []int, include bool) {
 	if len(cross) == 0 {
 		return same, true
 	}
 	if g.anyKey(set, sid, cross) {
-		return nil, true // OR удовлетворён cross-частью → безусловно (снять весь requisite)
+		return nil, true // OR satisfied by the cross part → unconditional (strip the whole requisite)
 	}
 	if len(same) > 0 {
-		return same, true // cross не спас, но есть same → Soul гейтит по same
+		return same, true // cross didn't satisfy it, but same exists → Soul gates by same
 	}
-	return nil, false // cross не спас и нет same → не выполняется
+	return nil, false // cross didn't satisfy it and no same → doesn't run
 }
 
-// splitRequisite делит requisite source-idx на cross-passage (источник в более
-// раннем Passage, чем consumerPassage) и same-passage (R1-remap чинит сам). idx
-// неизвестного источника (нет в passageByIndex) трактуется как same-passage —
-// его cross-ref-валидатор/Stratify уже отсеяли бы офлайн; здесь — безопасный
-// no-op (keeper не выдумывает cross-passage из висячего idx).
+// splitRequisite splits requisite source idx into cross-passage (source in an
+// earlier Passage than consumerPassage) and same-passage (R1-remap fixes it
+// itself). An idx with an unknown source (not in passageByIndex) is treated as
+// same-passage — the cross-ref validator/Stratify would already have caught it
+// offline; here it's a safe no-op (keeper doesn't invent cross-passage from a
+// dangling idx).
 func (g *crossPassageGate) splitRequisite(idxs []int, consumerPassage int) (cross, same []int) {
 	for _, srcIdx := range idxs {
 		if p, ok := g.passageByIndex[srcIdx]; ok && p < consumerPassage {
@@ -169,8 +178,9 @@ func (g *crossPassageGate) splitRequisite(idxs []int, consumerPassage int) (cros
 	return cross, same
 }
 
-// anyKey — OR по cross-passage источникам: хоть один (sid, srcIdx) в множестве
-// фактов (changed / failed). srcIdx — global plan_index (= auditpg ключ).
+// anyKey — OR across cross-passage sources: is at least one (sid, srcIdx) in
+// the facts set (changed / failed). srcIdx is the global plan_index (=
+// auditpg key).
 func (g *crossPassageGate) anyKey(set map[auditpg.ChangedTaskKey]struct{}, sid string, srcIdxs []int) bool {
 	for _, srcIdx := range srcIdxs {
 		if _, ok := set[auditpg.ChangedTaskKey{SID: sid, PlanIndex: srcIdx}]; ok {

@@ -23,10 +23,10 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// run — тело run-goroutine: полный прогон одного scenario от резолва
-// incarnation до commit-а incarnation.state. Все ошибки логируются и (где это
-// меняет state) переводят incarnation в error_locked; наружу run ничего не
-// возвращает (caller — goroutine).
+// run is the run-goroutine body: a full scenario pass from incarnation
+// resolution to committing incarnation.state. Errors are logged and (when
+// they change state) move the incarnation to error_locked; run returns
+// nothing to the caller (a goroutine).
 func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	log := r.logger.With(
 		slog.String("apply_id", spec.ApplyID),
@@ -34,10 +34,10 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		slog.String("scenario", spec.ScenarioName),
 	)
 
-	// In-process span на весь прогон scenario. incarnation/scenario name —
-	// атрибуты для фильтрации трейса (в metric-labels их нельзя — cardinality,
-	// ADR-024 §2.2); секретов не несут. apply_id — корреляция с RunResult /
-	// audit. При OTel disabled tracer no-op — Start/End бесплатны.
+	// In-process span for the whole scenario run. incarnation/scenario name are
+	// trace attributes for filtering (can't be metric labels — cardinality,
+	// ADR-024 §2.2); carry no secrets. apply_id correlates with RunResult/
+	// audit. OTel disabled → tracer is no-op, Start/End are free.
 	ctx, span := tracer.Start(ctx, "scenario.run",
 		trace.WithAttributes(
 			attribute.String("incarnation", spec.IncarnationName),
@@ -46,9 +46,9 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		),
 	)
 
-	// Метрика прогона фиксируется один раз на любом выходе. result/duration
-	// заполняются по ходу: locked-выход не наполняет histogram (duration=0,
-	// прогон не стартовал); ok/failed — наполняют от старта до терминала.
+	// Run metric recorded once on any exit. result/duration fill in along the
+	// way: a locked exit skips the histogram (duration=0, run never started);
+	// ok/failed record start-to-terminal duration.
 	started := time.Now()
 	result := runResultFailed
 	defer func() {
@@ -63,10 +63,9 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		span.End()
 	}()
 
-	// 1. Резолв incarnation + проверка статуса, перевод в applying. После
-	//    этого любой ранний выход обязан зафиксировать терминальный статус
-	//    (lockRun уже выставил applying — incarnation нельзя оставить
-	//    «висящей»).
+	// 1. Resolve incarnation + check status, move to applying. From here any
+	//    early exit must record a terminal status — lockRun already set
+	//    applying, the incarnation can't be left hanging.
 	inc, err := r.lockRun(ctx, spec)
 	if err != nil {
 		if errors.Is(err, ErrAlreadyRunning) {
@@ -90,40 +89,42 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	}
 	stateBefore := inc.State
 
-	// Терминальный статус провала зависит от режима финала (S-D2b):
-	//   - TerminalCommitState → error_locked (обычный прогон, state не меняем);
-	//   - TerminalDestroy      → destroy_failed (teardown упал; НЕ error_locked,
-	//     из destroy_failed оператор повторяет destroy / анлочит в ready).
-	// state не меняется в обоих случаях (last known-good).
+	// Failure terminal status depends on the finalization mode (S-D2b):
+	//   - TerminalCommitState → error_locked (normal run, state untouched);
+	//   - TerminalDestroy      → destroy_failed (teardown failed; NOT
+	//     error_locked — from destroy_failed the operator retries destroy or
+	//     unlocks to ready).
+	// state stays untouched in both cases (last known-good).
 	failStatus := failureStatus(spec.TerminalMode)
 
-	// tasks/plans объявлены ДО abort, чтобы провальное incarnation.run_completed
-	// (ADR-052 §k) видело ЧАСТИЧНОЕ состояние при ПОЗДНЕМ abort (dispatch_failed/
-	// register_load_failed/…: render уже наполнил их, changed_tasks несёт что
-	// успело CHANGED). На РАННЕМ abort (до render) остаются nil → buildChangedTasks
-	// вернёт пусто. Заполняются присваиванием в render-точке (шаг 5), не `:=`.
+	// tasks/plans are declared BEFORE abort so a failed incarnation.run_completed
+	// (ADR-052 §k) sees PARTIAL state on a LATE abort (dispatch_failed/
+	// register_load_failed/…: render already populated them, changed_tasks
+	// carries whatever reached CHANGED). On an EARLY abort (before render) they
+	// stay nil → buildChangedTasks returns empty. Populated by assignment at the
+	// render point (step 5), not `:=`.
 	var (
 		tasks []*render.RenderedTask
 		plans []render.DispatchPlan
 	)
 
-	// seal / sealed-paths ([ADR-010] §7.4): аккумулятор путей ячеек params, чьё
-	// CEL-выражение читало secret-источник (secret-input/vault()/транзит). Render
-	// (шаг 5) наполняет его per-task; abort/lockIncarnation используют sealed.Paths()
-	// для seal-aware маскинга наблюдаемых каналов (audit.MaskSecretsSealed) поверх
-	// vault+regex. Указатель шарится между passages staged-render-а (пути
-	// накапливаются по всем Passage прогона). Объявлен ДО abort — abort может
-	// сработать до Render (sealed пуст → деградация к vault+regex, БИТ-В-БИТ).
+	// seal / sealed-paths ([ADR-010] §7.4): accumulates params-cell paths whose
+	// CEL expression read a secret source (secret-input/vault()/transit). Render
+	// (step 5) fills it in per-task; abort/lockIncarnation use sealed.Paths() for
+	// seal-aware masking of observable channels (audit.MaskSecretsSealed) on top
+	// of vault+regex. The pointer is shared across staged-render passages (paths
+	// accumulate over the whole run). Declared BEFORE abort — abort can fire
+	// before Render (sealed empty → degrades to vault+regex, bit-for-bit).
 	sealed := render.NewSealedSet()
 
-	// С этого момента провал прогона = failStatus (state не меняем).
-	// result остаётся runResultFailed на любом abort-выходе ниже; ok
-	// выставляется только при успешном финале.
+	// From here, a run failure means failStatus (state untouched). result stays
+	// runResultFailed on any abort exit below; ok is set only on a successful
+	// finish.
 	abort := func(reason string, cause error) {
-		// cause может нести vault:secret/-ref из render/dispatch-ошибки. Тот же
-		// маскинг, что и для status_details в lockIncarnation, применяем к обоим
-		// наблюдаемым каналам: OTel-трейс (span exception) и slog (лог-файл) —
-		// нельзя оставлять асимметрию с маскированным DB-status_details.
+		// cause may carry a vault:secret/-ref from a render/dispatch error. Apply
+		// the same masking as status_details in lockIncarnation to both observable
+		// channels — OTel trace (span exception) and slog — to avoid an asymmetry
+		// with the masked DB status_details.
 		maskedCause := errors.New(maskErrText(cause, sealed.Paths()))
 		span.RecordError(maskedCause)
 		log.Error("scenario: прогон провален — incarnation заблокирована",
@@ -131,41 +132,43 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			slog.String("terminal_status", string(failStatus)),
 			slog.String("error", maskErrText(cause, sealed.Paths())))
 		finalized := r.lockIncarnation(ctx, spec, stateBefore, failStatus, reason, cause, sealed.Paths(), log)
-		// BAG-1: гарантируем терминальную строку apply_runs прогона. Ранний abort
-		// (no_hosts и пр.) случается ДО dispatch-фазы — НИ ОДНОЙ строки apply_runs
-		// ещё нет, а Voyage-awaiter поллит их до терминала ВСЕХ строк и при пустом
-		// наборе вечно ждёт. error_locked — статус incarnation, не apply_runs;
-		// awaiter его не видит. ensureTerminalApplyRun закрывает прогон в
-		// терминальном статусе провала (терминалит недотерминальные при позднем
-		// abort либо вставляет sentinel при пустом наборе) — barrier/awaiter
-		// получают терминал. Статус зависит от причины: оператор-инициированный
-		// Cancel → cancelled, всё прочее (включая timeout/Shutdown) → failed.
-		// keepRunning: при операторском Cancel (errCancelRequested) running-apply
-		// на ЖИВОМ хосте оставляем нетронутым — дойдёт честный RunResult. При
-		// timeout/dead-host/ctx.Err RunResult НЕ придёт (хост завис), а reaper
-		// running не подбирает (сужен до claimed, ADR-027) — поэтому running
-		// форс-фейлим, иначе apply_run висит вечно (BAG-1 recovery).
+		// BAG-1: guarantee a terminal apply_runs row for the run. An early abort
+		// (no_hosts etc.) happens BEFORE dispatch — no apply_runs row exists yet,
+		// and the Voyage-awaiter polls for all rows to reach terminal, waiting
+		// forever on an empty set. error_locked is an incarnation status, not
+		// apply_runs; the awaiter doesn't see it. ensureTerminalApplyRun closes the
+		// run with a failure terminal status (terminalizes non-terminal rows on a
+		// late abort, or inserts a sentinel on an empty set) so the barrier/awaiter
+		// get a terminal. Status depends on cause: operator-initiated Cancel →
+		// cancelled, everything else (including timeout/Shutdown) → failed.
+		// keepRunning: on operator Cancel (errCancelRequested) leave a running
+		// apply on a LIVE host untouched — an honest RunResult will arrive. On
+		// timeout/dead-host/ctx.Err no RunResult will arrive (host is stuck) and
+		// the reaper doesn't pick up running (narrowed to claimed, ADR-027), so we
+		// force-fail running rows, otherwise apply_run hangs forever (BAG-1
+		// recovery).
 		keepRunning := errors.Is(cause, errCancelRequested)
 		r.ensureTerminalApplyRun(ctx, spec, reason, failureTerminalStatus(cause), keepRunning, log)
 
-		// Терминальное событие провала прогона (T4-фундамент, ADR-052 §k):
-		// incarnation.run_completed (status=failed) с частичным/пустым changed_tasks,
-		// симметрично success-ветке run(). Гейт:
-		//   - TerminalDestroy НЕ эмитит (у destroy свой терминал — destroy_completed/
-		//     destroy_failed через writeDestroyFailedAudit, см. lockIncarnation);
-		//   - SINGLE-WINNER: эмитим ТОЛЬКО когда наш lockIncarnation реально записал
-		//     терминал (finalized). При ErrAlreadyFinalized (recovery-проигравший)
-		//     событие отдаёт инстанс-победитель — не задвоить событие на прогон.
-		// На раннем abort (до render) tasks/plans=nil → changed_tasks пуст; на позднем
-		// — частичный (что успело CHANGED). status="failed" единым значением
-		// (error_locked → failed, под-статусы не плодим). Best-effort: не валит
-		// обработку провала (detached-ctx внутри emitRunCompleted).
+		// Terminal run-failure event (T4 foundation, ADR-052 §k):
+		// incarnation.run_completed (status=failed) with partial/empty
+		// changed_tasks, symmetric to the success branch of run(). Gate:
+		//   - TerminalDestroy does NOT emit (destroy has its own terminal —
+		//     destroy_completed/destroy_failed via writeDestroyFailedAudit, see
+		//     lockIncarnation);
+		//   - SINGLE-WINNER: emit ONLY when our lockIncarnation actually recorded
+		//     the terminal (finalized). On ErrAlreadyFinalized (recovery loser) the
+		//     winning instance emits the event — avoid duplicating it per run.
+		// On an early abort (before render) tasks/plans=nil → changed_tasks empty;
+		// on a late abort — partial (whatever reached CHANGED). status="failed" is
+		// a single value (error_locked → failed, no sub-statuses). Best-effort:
+		// doesn't fail failure handling (detached ctx inside emitRunCompleted).
 		if spec.TerminalMode != TerminalDestroy && finalized {
 			r.emitRunCompleted(ctx, spec, runCompletedStatusFailed, tasks, plans, log)
 		}
 	}
 
-	// 2. Загрузка service-артефакта (один git-снапшот на прогон) + парсинг
+	// 2. Load the service artifact (one git snapshot per run) + parse
 	//    scenario/<name>/main.yml.
 	art, err := r.deps.Loader.Load(ctx, spec.ServiceRef)
 	if err != nil {
@@ -178,10 +181,10 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		return
 	}
 
-	// Раскрытие include в плоский список задач — ДО render (orchestration.md §6,
-	// двухуровневый резолв scenario-локально → service-level, циклы детектируются
-	// по resolved-пути). Render плоский список уже умеет; include-узлов в его
-	// входе после этого не остаётся.
+	// Expand include into a flat task list — BEFORE render (orchestration.md §6,
+	// two-level resolve scenario-local → service-level, cycles detected by
+	// resolved path). Render already handles a flat list; no include nodes
+	// remain in its input after this.
 	expanded, idiags := config.ExpandIncludes(scn.Tasks, scenarioIncludeResolver(r.deps.Loader, art, spec.ScenarioName))
 	if diag.HasErrors(idiags) {
 		abort("scenario_load_failed", fmt.Errorf("scenario: раскрытие include в %s/%s: %s", spec.ScenarioName, scenarioMainFile, firstError(idiags)))
@@ -189,72 +192,79 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	}
 	scn.Tasks = expanded
 
-	// Синтез install-шагов core.module.installed из service.yml::modules[]
-	// (ADR-065): ПОСЛЕ ExpandIncludes (потребители в ветках видны), ДО Stratify
-	// (синтез-шаг — roster-задача, стратифицируется как её потребитель).
+	// Synthesize core.module.installed install steps from service.yml::modules[]
+	// (ADR-065): AFTER ExpandIncludes (consumers in branches are visible), BEFORE
+	// Stratify (a synthesized step is a roster task, stratified like its
+	// consumer).
 	if synthed, names := config.SynthesizeModuleInstalls(scn.Tasks, art.Manifest.Modules); len(names) > 0 {
 		scn.Tasks = synthed
 		log.Info("scenario: синтезированы install-шаги модулей из manifest.modules[] (ADR-065)",
 			slog.Any("modules", names))
 	}
 
-	// 2.5. Provision-aware effective run-timeout (ADR-0061). Deadline переехал сюда из
-	//      Start (runner.go) — план распарсен, видно, provision-ли это. Обычный прогон
-	//      держит defaultRunTimeout (5m) — защита от вечного barrier ЦЕЛА. Прогон с
-	//      refresh-эмиттером (provision-from-zero: cloud-create + онбординг `await_online`
-	//      до ceiling-а + деплой роли) легитимно длится дольше: base = ceiling барьера
-	//      онбординга (ResolvedMaxAwaitTimeout) + deployBudget. БЕЗ этого defaultRunTimeout
-	//      обрывал бы provision-прогон на 5-й минуте — раньше joinWait (6m) и await_timeout
-	//      (до 30m). WithTimeout навешивается ПОВЕРХ runCtx (WithCancel из Start): под-
-	//      контекст наследует отмену из active-map, поэтому Cancel/Shutdown по-прежнему
-	//      рвут прогон. defer cancel — на любом return run() (включая ранний abort ниже).
+	// 2.5. Provision-aware effective run-timeout (ADR-0061). Deadline moved here
+	//      from Start (runner.go) — the plan is parsed, so we know if this is a
+	//      provision run. A normal run keeps defaultRunTimeout (5m) — the
+	//      protection against a stuck barrier stays intact. A run with a refresh
+	//      emitter (provision-from-zero: cloud-create + `await_online` onboarding
+	//      up to its ceiling + role deploy) legitimately runs longer: base =
+	//      onboarding barrier ceiling (ResolvedMaxAwaitTimeout) + deployBudget.
+	//      Without this, defaultRunTimeout would cut a provision run off at
+	//      minute 5 — before joinWait (6m) and await_timeout (up to 30m).
+	//      WithTimeout wraps runCtx (WithCancel from Start): the sub-context
+	//      still inherits cancellation from the active-map, so Cancel/Shutdown
+	//      still abort the run. defer cancel covers any return from run()
+	//      (including the early aborts below).
 	ctx, cancel := context.WithTimeout(ctx, r.effectiveRunTimeout(scn.Tasks))
 	defer cancel()
 
-	// 3. Резолв хостов прогона (roster по Coven-метке incarnation). Вынесен в
-	//    resolveRoster — он вызывается ПОВТОРНО в stage-loop на refresh-границах
-	//    (mid-run re-resolve, ADR-0061 §S3): после успешного `refresh_soulprint:
-	//    true`-шага созданные+онбордившиеся хосты входят в roster следующего Passage.
+	// 3. Resolve run hosts (roster by the incarnation's Coven label). Factored
+	//    into resolveRoster because it's called AGAIN in the stage-loop at
+	//    refresh boundaries (mid-run re-resolve, ADR-0061 §S3): after a
+	//    successful `refresh_soulprint: true` step, newly created+onboarded
+	//    hosts enter the next Passage's roster.
 	hosts, err := r.resolveRoster(ctx, spec.IncarnationName)
 	if err != nil {
 		abort("topology_failed", err)
 		return
 	}
-	// no_hosts-гейт — fail-closed по умолчанию (S1-ограничение, ADR-0061): прогон
-	// требует connected-хостов, пустой roster → error_locked. ДВА КЛАССА bypass для
-	// provision-from-zero (ADR-0061 amendments):
+	// no_hosts gate — fail-closed by default (S1 restriction, ADR-0061): a run
+	// requires connected hosts, empty roster → error_locked. TWO bypass CLASSES
+	// for provision-from-zero (ADR-0061 amendments):
 	//
-	//   (а) all-keeper (allKeeperTasks): ВСЕ задачи `on: keeper` — keeper-only
-	//       сценарий (core.cloud.created создаёт VM С НУЛЯ), хостов на старте нет
-	//       по определению.
-	//   (б) mixed с refresh-эмиттером (HasRefreshEmitter): план несёт refresh-
-	//       эмиттер (core.soul.registered с refresh_soulprint: true) → roster пере-
-	//       резолвится mid-run (ADR-0061 §S2/§S3). Пустой стартовый roster законен:
-	//       host-задачи деплоя стратифицируются в Passage ПОСЛЕ refresh-границы и
-	//       видят уже пере-резолвленный live-снимок (онбордившиеся VM), а не пустой
-	//       P0. Это и есть staged provision→роль одним прогоном.
+	//   (a) all-keeper (allKeeperTasks): ALL tasks are `on: keeper` — a
+	//       keeper-only scenario (core.cloud.created creates a VM FROM SCRATCH),
+	//       no hosts exist at start by definition.
+	//   (b) mixed with a refresh emitter (HasRefreshEmitter): the plan carries a
+	//       refresh emitter (core.soul.registered with refresh_soulprint: true)
+	//       → roster is re-resolved mid-run (ADR-0061 §S2/§S3). An empty
+	//       starting roster is legitimate: host deploy tasks stratify into a
+	//       Passage AFTER the refresh boundary and see the re-resolved live
+	//       snapshot (onboarded VMs), not an empty P0. This is staged
+	//       provision→role in one run.
 	//
-	// chicken-egg обоих классов: «run требует хостов, run их и создаёт». БЕЗ обоих
-	// признаков — пустой roster есть no_hosts БИТ-В-БИТ (нерасширенное поведение).
-	// Считаем по scn.Tasks ПОСЛЕ ExpandIncludes — плоский top-level список, тот же,
-	// что видит Render и Stratify.
+	// chicken-egg for both classes: "run needs hosts, run creates them". WITHOUT
+	// either signal, an empty roster is no_hosts bit-for-bit (unextended
+	// behavior). Computed over scn.Tasks AFTER ExpandIncludes — the same flat
+	// top-level list Render and Stratify see.
 	provisionsRoster := config.HasRefreshEmitter(scn.Tasks)
 	if len(hosts) == 0 && !allKeeperTasks(scn.Tasks) && !provisionsRoster {
 		abort("no_hosts", fmt.Errorf("incarnation %q не имеет connected-хостов", spec.IncarnationName))
 		return
 	}
 
-	// 4. Essence (effective-слой). render.Pipeline пробрасывает её в CEL как
-	//    `essence.<path>` (slice E2). Берём OS-family первого хоста как
-	//    представителя (per-host essence — расширение).
+	// 4. Essence (effective layer). render.Pipeline exposes it to CEL as
+	//    `essence.<path>` (slice E2). Uses the first host's OS family as the
+	//    representative (per-host essence is an extension).
 	//
-	//    keeper-контекст (пустой roster, provision-from-zero): host-представителя
-	//    нет, hosts[0] паникнул бы. Резолвим essence БЕЗ per-host overlay-я —
-	//    default-слой + Coven-overlay инкарнации (корневая Coven-метка = inc.Name,
-	//    ADR-008) + spec.essence-override. OS-family overlay пропускается (OSFamily
-	//    пуст) — симметрично renderKeeperTask, который рендерит keeper-задачи без
-	//    per-host soulprint. После онбординга созданных VM последующие Passage
-	//    получают per-host essence обычным путём (mid-run re-resolve, ADR-0061 §S3).
+	//    keeper context (empty roster, provision-from-zero): no representative
+	//    host exists, hosts[0] would panic. Resolve essence WITHOUT a per-host
+	//    overlay — default layer + the incarnation's Coven overlay (root Coven
+	//    label = inc.Name, ADR-008) + spec.essence override. OS-family overlay is
+	//    skipped (OSFamily empty), symmetric to renderKeeperTask, which renders
+	//    keeper tasks without a per-host soulprint. After onboarding the created
+	//    VMs, later Passages get per-host essence the normal way (mid-run
+	//    re-resolve, ADR-0061 §S3).
 	essenceIn := keeperEssenceInput(art.LocalDir, inc)
 	if len(hosts) > 0 {
 		essenceIn = essenceInput(art.LocalDir, inc, hosts[0])
@@ -265,14 +275,15 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		return
 	}
 
-	// 4.5. Эффективный input: применяем scenario `input:`-схему к переданным
-	//      оператором значениям. Порядок: merge дефолтов + required →
-	//      scoped-резолв `vault:`-ref input → value-валидация (pattern/enum
-	//      проверяются на УЖЕ резолвнутом значении, docs/input.md §«vault_scope»).
-	//      Резолв vault-ref — ОДИН раз здесь (render читает input N раз уже
-	//      резолвнутым). Без merge непереданные параметры с default: остаются
-	//      отсутствующими, и CEL `${ input.<def> }` падает «no such key».
-	//      Vault=nil (unit/L0) → input-vault-refs не резолвятся.
+	// 4.5. Effective input: apply the scenario `input:` schema to operator-
+	//      supplied values. Order: merge defaults + required →
+	//      scoped-resolve `vault:`-ref input → value validation (pattern/enum
+	//      checked against the ALREADY resolved value, docs/input.md
+	//      §"vault_scope"). vault-ref resolve happens ONCE here (render reads
+	//      input N times, already resolved). Without the merge, params not
+	//      passed but carrying default: stay absent, and CEL `${ input.<def> }`
+	//      fails with "no such key". Vault=nil (unit/L0) → input vault-refs
+	//      aren't resolved.
 	resolver := r.newInputVaultResolver(ctx, inputVaultAuditCtx{
 		aid:         spec.StartedByAID,
 		incarnation: spec.IncarnationName,
@@ -285,9 +296,10 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	}
 
 	// 5. Render: vault-resolve → CEL → on/where → []RenderedTask + []DispatchPlan.
-	//    Destiny-резолвер — per-run: знает destiny[]-refs ЭТОГО service-снапшота
-	//    (art.Manifest.Destiny[]) + default_destiny_source. nil-Destiny в Deps →
-	//    apply:destiny отвергается render-фазой (ErrUnsupportedDSL).
+	//    The destiny resolver is per-run: knows THIS service snapshot's
+	//    destiny[] refs (art.Manifest.Destiny[]) + default_destiny_source.
+	//    nil Destiny in Deps → apply:destiny is rejected by the render phase
+	//    (ErrUnsupportedDSL).
 	renderIn := render.RenderInput{
 		Scenario: scn,
 		Essence:  essenceMap,
@@ -298,40 +310,43 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			ServiceVersion: inc.ServiceVersion,
 		},
 		Hosts: hosts,
-		// State — read-only снимок incarnation.state на момент row-lock прогона
-		// (stateBefore захвачен под FOR UPDATE). Доступен в scenario-render CEL как
-		// `incarnation.state.<path>` (ADR-009/010, Вариант A). ОДНА точка: renderIn
-		// переиспользуется на всех passages staged-render-а, поэтому снимок
-		// инвариантен (P0 ≡ P1+ = pre-run state, НЕ накапливается между passages).
+		// State — a read-only snapshot of incarnation.state at the run's row-lock
+		// (stateBefore captured under FOR UPDATE). Exposed to scenario-render CEL
+		// as `incarnation.state.<path>` (ADR-009/010, Option A). ONE snapshot:
+		// renderIn is reused across all staged-render passages, so it stays
+		// invariant (P0 ≡ P1+ = pre-run state, does NOT accumulate across
+		// passages).
 		State: stateBefore,
-		Ctx:   ctx, // vault() (RenderStateChanges не идёт через Render → ctx нужен явно)
-		// Templates: ридер .tmpl снапшота сервиса для core.file.rendered.
-		// Двухуровневый резолв scenario-local→service-level (ADR-009): чтение
-		// через artifact.ReadSnapshotFile поверх art.LocalDir (securejoin-защита).
+		Ctx:   ctx, // vault() (RenderStateChanges doesn't go through Render → ctx needed explicitly)
+		// Templates: reader for the service snapshot's .tmpl files, used by
+		// core.file.rendered. Two-level resolve scenario-local→service-level
+		// (ADR-009): reads via artifact.ReadSnapshotFile over art.LocalDir
+		// (securejoin-protected).
 		Templates: render.NewSnapshotTemplateReader(
 			func(rel string) ([]byte, error) { return artifact.ReadSnapshotFile(art.LocalDir, rel) },
 			scenarioTemplatePrefix(spec.ScenarioName),
 		),
-		// seal (ADR-010 §7.4): Render наполняет sealed путями ячеек params, чьё
-		// выражение читало secret-источник. Используется abort/lockIncarnation для
-		// seal-aware маскинга. Указатель шарится между passages (накопление).
+		// seal (ADR-010 §7.4): Render fills sealed with params-cell paths whose
+		// expression read a secret source. Used by abort/lockIncarnation for
+		// seal-aware masking. Pointer shared across passages (accumulates).
 		Sealed: sealed,
 	}
 	if r.deps.Destiny != nil {
 		renderIn.Destiny = r.deps.Destiny.resolverFor(art.Manifest)
 	}
 
-	// 4.9. Стратификация прогона по register-зависимости (staged-render, ADR-056
-	//      §б) — ДО первого Render: задача, читающая register.X в where:/apply:
-	//      input:/params:/vars:, попадает в Passage строго ПОСЛЕ probe-шага,
-	//      эмитящего register: X. Stratify работает над тем же плоским top-level
-	//      списком scn.Tasks (после ExpandIncludes), что и Render. N=1 (нет register-
-	//      зависимостей) → Passage{Count:1, все passage 0} → поведение БИТ-В-БИТ.
-	//      Цикл / висячая register-ссылка → errStratify → render_failed (явный
-	//      отказ, не silent-wrong-target). Делаем ДО Render, потому что для staged
-	//      первый Render обязан знать TaskPassage/ActivePassage=0 — иначе он
-	//      эагерно отрендерил бы register-зависимый where будущего Passage по
-	//      пустому register и упал (это исходный drift).
+	// 4.9. Stratify the run by register dependency (staged-render, ADR-056 §b) —
+	//      BEFORE the first Render: a task reading register.X in
+	//      where:/apply:input:/params:/vars: lands in a Passage strictly AFTER
+	//      the probe step that emits register: X. Stratify works over the same
+	//      flat top-level scn.Tasks (post-ExpandIncludes) as Render. N=1 (no
+	//      register dependencies) → Passage{Count:1, all passage 0} → bit-for-bit
+	//      behavior. A cycle / dangling register ref → errStratify →
+	//      render_failed (explicit rejection, not silent-wrong-target). Done
+	//      BEFORE Render because for staged runs the first Render must know
+	//      TaskPassage/ActivePassage=0 — otherwise it would eagerly render a
+	//      future Passage's register-dependent where against an empty register
+	//      and fail (the original drift).
 	passage, perr := render.Stratify(scn.Tasks)
 	if perr != nil {
 		abort("render_failed", fmt.Errorf("scenario: стратификация passage %s/%s: %w", spec.IncarnationName, spec.ScenarioName, perr))
@@ -339,23 +354,26 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	}
 	staged := passage.Count > 1
 
-	// 4.91. Roster-refresh границы (ADR-0061 §S2/§S3). refreshBoundaries[P] — нужен
-	//       ли re-resolve roster ПЕРЕД render-ом Passage P (в Passage P-1 завершился
-	//       успешный `refresh_soulprint: true`-шаг → онбордившиеся хосты вошли в
-	//       souls+coven → live-снимок roster изменился). out[0]=false (up-front roster).
-	//       Без refresh-эмиттера все false → re-resolve не выполняется (БИТ-В-БИТ).
-	//       RefreshBoundaries — чистая функция над тем же scn.Tasks и passage:
-	//       границы стоят перед каждым Passage, следующим за Passage с refresh-эмиттером.
+	// 4.91. Roster-refresh boundaries (ADR-0061 §S2/§S3). refreshBoundaries[P] —
+	//       whether roster needs a re-resolve BEFORE rendering Passage P (Passage
+	//       P-1 finished a successful `refresh_soulprint: true` step → onboarded
+	//       hosts entered souls+coven → the live roster snapshot changed).
+	//       out[0]=false (up-front roster). Without a refresh emitter, all false
+	//       → no re-resolve happens (bit-for-bit). RefreshBoundaries is a pure
+	//       function over the same scn.Tasks and passage: boundaries sit before
+	//       every Passage that follows a Passage with a refresh emitter.
 	refreshBoundaries := config.RefreshBoundaries(scn.Tasks, passage)
 
-	// 4.92. Within-block register-зависимость — KEEPER-SIDE FAIL-CLOSED страховка
-	//       (ADR-056, §«Риски — silent-wrong-target»). Потомок block:, читающий
-	//       register СОСЕДНЕГО потомка ТОГО ЖЕ блока, не ловится Stratify (внутри-
-	//       блочное ребро не пересекает границу top-level задач — block атомарен по
-	//       Passage). peer-register становится доступен Soul-side только ПОСЛЕ probe,
-	//       но where/when/params потребителя резолвятся Keeper-side ДО dispatch → where
-	//       отберёт хосты по устаревшему/внешнему register МОЛЧА. soul-lint обязан
-	//       поймать это офлайн; здесь — рантайм-страховка (отказ, не silent-wrong-target).
+	// 4.92. Within-block register dependency — KEEPER-SIDE FAIL-CLOSED safety net
+	//       (ADR-056, §"Risks — silent-wrong-target"). A block: child reading the
+	//       register of a SIBLING child in the SAME block isn't caught by
+	//       Stratify (an intra-block edge doesn't cross the top-level task
+	//       boundary — a block is atomic per Passage). The peer register becomes
+	//       available Soul-side only AFTER probe, but the consumer's
+	//       where/when/params resolve Keeper-side BEFORE dispatch → where would
+	//       silently select hosts by a stale/external register. soul-lint must
+	//       catch this offline; here it's a runtime safety net (reject, not
+	//       silent-wrong-target).
 	if info, bad := config.WithinBlockRegisterDependency(scn.Tasks); bad {
 		abort(config.CodeWithinBlockRegisterDependency, fmt.Errorf(
 			"scenario %s/%s: задача %q внутри block: читает register %q, эмитнутый соседней %q ТОГО ЖЕ блока — невозможно на render (block атомарен, peer-register доступен только Soul-side ПОСЛЕ probe, а where/when/params резолвятся Keeper-side ДО dispatch); вынесите probe на top-level (разные Passage)",
@@ -363,17 +381,20 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		return
 	}
 
-	// 4.925. Cross-passage when-gating — KEEPER-SIDE FAIL-CLOSED страховка (ADR-056:85
-	//        amend, FC-5). Задача гейтит `when:`/`changed_when:`/`failed_when:` по
-	//        register, эмитнутому в БОЛЕЕ РАННЕМ Passage. flow-control = Soul-side
-	//        per-task gating (ADR-012(d)), видит только register СВОЕГО Passage;
-	//        cross-passage register ему недоступен (другой ApplyRequest) → `no such
-	//        key` молча → задача FAILED. После narrow-fix flow-control сам Passage НЕ
-	//        расщепляет, но probe мог уехать в ранний Passage по ДРУГОЙ причине (иная
-	//        задача с `where: register.X`). where: это умеет (Keeper пере-рендерит с
-	//        накопленным register), when: — нет. soul-lint ловит офлайн; здесь —
-	//        рантайм-страховка (отказ, не молчаливый no-such-key-фейл). Гейт строго
-	//        staged (N=1 → один Passage, cross-passage невозможен).
+	// 4.925. Cross-passage when-gating — KEEPER-SIDE FAIL-CLOSED safety net
+	//        (ADR-056:85 amend, FC-5). A task gates `when:`/`changed_when:`/
+	//        `failed_when:` by a register emitted in an EARLIER Passage.
+	//        flow-control is Soul-side per-task gating (ADR-012(d)), which only
+	//        sees its OWN Passage's register; a cross-passage register is
+	//        unavailable to it (a different ApplyRequest) → silent `no such key`
+	//        → task FAILED. After the narrow-fix, flow-control itself doesn't
+	//        split a Passage, but a probe may have landed in an earlier Passage
+	//        for a DIFFERENT reason (another task with `where: register.X`).
+	//        where: handles this (Keeper re-renders with accumulated register),
+	//        when: doesn't. soul-lint catches this offline; here it's a runtime
+	//        safety net (reject, not a silent no-such-key failure). Gate applies
+	//        strictly to staged runs (N=1 → one Passage, cross-passage
+	//        impossible).
 	if info, bad := config.CrossPassageWhenGating(scn.Tasks, passage); bad {
 		abort(config.CodeCrossPassageWhenGating, fmt.Errorf(
 			"scenario %s/%s: задача %q гейтит %s: по register %q из другого Passage (consumer passage %d, источник passage %d) — Soul-side gating видит только свой Passage, cross-passage register недоступен → no such key; используйте where: для cross-task register-таргетинга или register.self для same-task gating (ADR-056:85)",
@@ -381,33 +402,37 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		return
 	}
 
-	// 4.95. serial + staged (N>1) — 2D serial×passage РЕАЛИЗОВАН (ADR-056 §S4 amend,
-	//       S-2D1). Рестрикт `serial_staged_unsupported` СНЯТ. Оси serial (волны
-	//       ХОСТОВ) и Passage (стратификация ЗАДАЧ) ортогональны и теперь крутятся
-	//       совместно: Passage-цикл ниже исполняет каждый Passage по порядку, а
-	//       dispatchPassage внутри бьёт хосты на serial-волны из задач ИМЕННО ЭТОГО
-	//       Passage (effectiveSerialWidth на tasksForPassage-срезе → per-Passage
-	//       width, НЕ per-RUN). Probe-Passage без serial едет одной волной, даже когда
-	//       последующий Passage несёт serial:1 (никакого silent-wrong-width). serial+
-	//       staged идёт тем же inline-путём, что serial БЕЗ staged, поэтому наследует
-	//       crash-recovery-лимит staged-inline (ADR-056 §S4: Acolyte-reclaim не
-	//       покрывает staged-inline) — это не новая регрессия.
+	// 4.95. serial + staged (N>1) — 2D serial×passage IMPLEMENTED (ADR-056 §S4
+	//       amend, S-2D1). The `serial_staged_unsupported` restriction is
+	//       LIFTED. The serial (HOST waves) and Passage (TASK stratification)
+	//       axes are orthogonal and now run together: the Passage loop below
+	//       runs each Passage in order, and dispatchPassage internally splits
+	//       hosts into serial waves from THIS Passage's tasks
+	//       (effectiveSerialWidth on the tasksForPassage slice → per-Passage
+	//       width, NOT per-run). A probe Passage without serial runs as one wave
+	//       even when a later Passage carries serial:1 (no silent-wrong-width).
+	//       serial+staged takes the same inline path as serial without staged,
+	//       so it inherits the staged-inline crash-recovery limit (ADR-056 §S4:
+	//       Acolyte-reclaim doesn't cover staged-inline) — not a new regression.
 
-	// 4.955. Cross-passage requisite — KEEPER-SIDE GATING (ADR-056 R3). onchanges/
-	//        onfail-источник в БОЛЕЕ РАННЕМ Passage, чем потребитель, едет отдельным
-	//        ApplyRequest → Soul gating одного Passage не видит результат источника
-	//        другого Passage (R1-remap чинит ТОЛЬКО same-passage). Поэтому связь
-	//        резолвит Keeper per-host по накопленным CHANGED/FAILED-фактам предыдущих
-	//        Passage (crosspassage.go): cross-passage onchanges OR по CHANGED, onfail
-	//        зеркально по FAILED∪TIMED_OUT. R2-reject СНЯТ — cross-passage поддержан.
+	// 4.955. Cross-passage requisite — KEEPER-SIDE GATING (ADR-056 R3). An
+	//        onchanges/onfail source in an EARLIER Passage than its consumer
+	//        travels in a separate ApplyRequest → single-Passage Soul gating
+	//        can't see another Passage's source result (R1-remap fixes ONLY
+	//        same-passage). So Keeper resolves the link per-host from
+	//        accumulated CHANGED/FAILED facts of previous Passages
+	//        (crosspassage.go): cross-passage onchanges is OR over CHANGED,
+	//        onfail mirrors it over FAILED∪TIMED_OUT. R2-reject is LIFTED —
+	//        cross-passage is supported.
 	//
-	//        Источник CHANGED/FAILED-фактов — журнал аудита (AuditReader). Без него
-	//        keeper не может определить, спас ли cross-passage источник → fail-closed
-	//        reject (симметрия nil passageCap §S5): угадывать «не changed» = молчаливо
-	//        не выполнить реально-нужный consumer / не запустить rescue. Гейт строго
-	//        staged (N=1 → один Passage, cross-passage невозможен). Детектор
-	//        CrossPassageRequisite переиспользуется для проверки наличия cross-passage
-	//        связи (есть → нужен reader).
+	//        Source of CHANGED/FAILED facts is the audit log (AuditReader).
+	//        Without it, keeper can't tell whether the cross-passage source fired
+	//        → fail-closed reject (symmetric to nil passageCap §S5): guessing
+	//        "not changed" would silently skip a genuinely-needed consumer / not
+	//        run a rescue. Gate applies strictly to staged runs (N=1 → one
+	//        Passage, cross-passage impossible). The CrossPassageRequisite
+	//        detector is reused to check whether a cross-passage link exists (if
+	//        so, a reader is required).
 	if staged && r.deps.AuditReader == nil {
 		if info, bad := config.CrossPassageRequisite(scn.Tasks, passage); bad {
 			abort("cross_passage_requisite_unsupported", fmt.Errorf(
@@ -417,19 +442,21 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		}
 	}
 
-	// 4.96. Forward-compat staged-гейт (ADR-056 §S5). Staged-прогон шлёт N
-	//       ApplyRequest на хост (по Passage); barrier каждого Passage ждёт его
-	//       терминал — RunResult с echo passage. Soul, не умеющий эхать passage
-	//       (старый бинарь без passage-capability), под N>1 вернёт RunResult с
-	//       passage=0 на все Passage → barrier Passage 1+ ждал бы терминал, которого
-	//       нет → ЗАВИСАНИЕ в applying. Поэтому ДО dispatch проверяем, что КАЖДЫЙ
-	//       online-хост прогона анонсировал passage-capability. Любой неподдержи-
-	//       вающий → fail-closed abort `soul_passage_unsupported` (не hang, не
-	//       молчаливое одно-проходное исполнение, которое вернуло бы исходный drift).
-	//       N=1-прогон (staged==false) гейт НЕ проходит — он шлёт один passage=0,
-	//       совместим со старым Soul БИТ-В-БИТ. Чекер nil (нет Redis / unit) →
-	//       отвергаем staged целиком: без presence-источника нельзя подтвердить
-	//       поддержку, а слать N>1 вслепую — тот же риск зависания.
+	// 4.96. Forward-compat staged gate (ADR-056 §S5). A staged run sends N
+	//       ApplyRequests per host (one per Passage); each Passage's barrier
+	//       waits for its terminal — a RunResult echoing the passage. A Soul that
+	//       can't echo passage (old binary, no passage capability) would return
+	//       RunResult with passage=0 for every Passage under N>1 → the barrier
+	//       for Passage 1+ would wait for a terminal that never arrives → STUCK
+	//       in applying. So before dispatch we verify EVERY online host in the
+	//       run has announced passage capability. Any host that doesn't →
+	//       fail-closed abort `soul_passage_unsupported` (not a hang, not a
+	//       silent single-pass execution that would reintroduce the original
+	//       drift). An N=1 run (staged==false) skips this gate — it sends a
+	//       single passage=0, compatible with old Souls bit-for-bit. A nil
+	//       checker (no Redis / unit) → reject staged entirely: without a
+	//       presence source we can't confirm support, and sending N>1 blind
+	//       carries the same hang risk.
 	if staged {
 		sids := make([]string, len(hosts))
 		for i, h := range hosts {
@@ -457,8 +484,8 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	}
 
 	if staged {
-		// Первый Render staged-прогона рендерит Passage 0 полноценно, будущие
-		// Passage — placeholder-ами (ActivePassage=0, register ещё пуст).
+		// The first Render of a staged run fully renders Passage 0; future
+		// Passages get placeholders (ActivePassage=0, register still empty).
 		renderIn.TaskPassage = passage.TaskPassage
 		renderIn.ActivePassage = 0
 	}
@@ -469,42 +496,46 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		return
 	}
 
-	// 6. Dispatch: ветвление пути (ADR-027, Phase 1.4.2) × staged-render (ADR-056).
+	// 6. Dispatch: path branching (ADR-027, Phase 1.4.2) × staged-render (ADR-056).
 	//
-	// Keeper-side задачи (`on: keeper`, docs/keeper/modules.md) исполняются ЛОКАЛЬНО
-	// на этом инстансе через keeper-side core-Registry — СТРОГО ДО host-dispatch-а
-	// СВОЕГО Passage (keeper-шаги идут первыми: provision/coven-bind → apply на
-	// хостах). Они пишут свою apply_runs-строку (sid=render.KeeperTargetSID, passage)
-	// + register, которые barrier и loadRegisterByHost видят наравне с host-строками.
-	// Первая упавшая keeper-задача → abort (host-dispatch этого Passage не стартует).
-	// dispatchKeeperTasks теперь зовётся PER-Passage (Слайс 2): для staged-пути —
-	// внутри stage-loop на ПЕРЕ-рендеренных при ActivePassage=p tasks (keeper-задача
-	// Passage>0 на render шага 5 — placeholder без Params, диспатчить её можно только
-	// после её Passage стал активным); для Acolyte-пути — единственный Passage 0
-	// (Acolyte исключает staged).
+	// Keeper-side tasks (`on: keeper`, docs/keeper/modules.md) run LOCALLY on
+	// this instance via the keeper-side core Registry — STRICTLY BEFORE their
+	// Passage's host-dispatch (keeper steps go first: provision/coven-bind →
+	// apply on hosts). They write their own apply_runs row
+	// (sid=render.KeeperTargetSID, passage) + register, which the barrier and
+	// loadRegisterByHost see alongside host rows. The first failing keeper task
+	// → abort (this Passage's host-dispatch never starts). dispatchKeeperTasks
+	// is now called PER-Passage (Slice 2): for the staged path, inside the
+	// stage-loop on tasks RE-rendered at ActivePassage=p (a Passage>0
+	// keeper task at step-5 render is a placeholder with no Params — it can
+	// only be dispatched once its Passage becomes active); for the Acolyte
+	// path, just Passage 0 (Acolyte excludes staged).
 	//
-	//   - staged (Passage.Count>1): СТАРЫЙ путь (inline) — stage-loop ниже. Acolyte
-	//     рендерит per-host при claim ОДИН раз (не per-Passage) — staged на Acolyte
-	//     отложен в S4 (ADR-056 §S4). Поэтому при Count>1 идём inline даже при
-	//     AcolyteEnabled.
-	//   - serial-guard: scenario с любой задачей `serial:` (после ExpandIncludes)
-	//     → СТАРЫЙ путь (inline render+SendApply+per-wave barrier), даже при
-	//     AcolyteEnabled. Распределённый serial — Phase 3.
-	//   - иначе AcolyteEnabled → НОВЫЙ путь (dispatchPlanned): planned-задания на
-	//     все roster-хосты + Summons; render/SendApply делает Acolyte при claim.
-	//   - иначе → старый путь (прямой Insert(running)+SendApply).
+	//   - staged (Passage.Count>1): OLD path (inline) — stage-loop below.
+	//     Acolyte renders per-host at claim time ONCE (not per-Passage) — staged
+	//     on Acolyte is deferred to S4 (ADR-056 §S4). So at Count>1 we go inline
+	//     even with AcolyteEnabled.
+	//   - serial-guard: a scenario with any `serial:` task (post-ExpandIncludes)
+	//     → OLD path (inline render+SendApply+per-wave barrier), even with
+	//     AcolyteEnabled. Distributed serial is Phase 3.
+	//   - otherwise AcolyteEnabled → NEW path (dispatchPlanned): planned jobs for
+	//     all roster hosts + Summons; render/SendApply is done by Acolyte at
+	//     claim time.
+	//   - otherwise → old path (direct Insert(running)+SendApply).
 	//
-	// Render выше (шаги 4.5/5) выполняется в ОБОИХ путях: run-goroutine держит
-	// tasks/renderIn для post-barrier register-load + state_changes-commit
-	// (KEY-инвариант: barrier+commit остаются в run-goroutine в Phase 1). state
-	// коммитится строго ПОСЛЕ барьера ПОСЛЕДНЕГО Passage — единый commit, не
-	// по-волново и не по-Passage (§7 / ADR-056 §г).
+	// Render above (steps 4.5/5) runs on BOTH paths: the run-goroutine keeps
+	// tasks/renderIn for post-barrier register-load + state_changes commit
+	// (KEY invariant: barrier+commit stay in the run-goroutine in Phase 1).
+	// state commits strictly AFTER the LAST Passage's barrier — a single commit,
+	// not per-wave or per-Passage (§7 / ADR-056 §d).
 	if r.acolyteEnabled && !hasSerialTask(scn) && !staged {
-		// Acolyte-путь — non-staged (Acolyte исключает staged): keeper-задачи все в
-		// Passage 0, render шага 5 (ActivePassage=0) уже отрендерил их полноценно.
-		// Исполняем их ДО planned-fan-out-а host-задач — keeper-fail → abort, planned
-		// не пишется. КeeperRegister здесь пуст (P0, цепочки нет): host-fallback цел.
-		// NIM-37 (H1): персист плана Passage 0 (все задачи non-staged в нём) до dispatch.
+		// Acolyte path — non-staged (Acolyte excludes staged): all keeper tasks
+		// are in Passage 0, step-5 render (ActivePassage=0) already fully
+		// rendered them. Run them BEFORE the host tasks' planned fan-out —
+		// keeper-fail → abort, planned never gets written. KeeperRegister is
+		// empty here (P0, no chaining): host-fallback intact.
+		// NIM-37 (H1): persist the Passage 0 plan (all non-staged tasks are in
+		// it) before dispatch.
 		r.persistRunPlan(ctx, spec, tasks, 0, sealed.Paths(), log)
 		if err := r.dispatchKeeperTasks(ctx, spec, log, 0, tasks, plans); err != nil {
 			abort("keeper_dispatch_failed", err)
@@ -515,32 +546,36 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			return
 		}
 	} else {
-		// Passage-loop (ADR-056 §в): для каждого Passage P по порядку —
-		//   render(задачи P, RegisterByHost = накоплено из Passage < P) →
-		//   dispatch(задачи P) → barrier(P) → сбор register(P).
-		// На P=0 переиспользуем render шага 5 (для staged он уже с ActivePassage=0;
-		// для Count==1 — обычный render, БИТ-В-БИТ). P>0 (только staged): повторный
-		// Render с per-host register Passage < P. state-commit — ОДИН раз после
-		// последнего Passage (шаги 7-8), НЕ по-Passage (ADR-056 §г).
+		// Passage loop (ADR-056 §c): for each Passage P in order —
+		//   render(tasks in P, RegisterByHost = accumulated from Passage < P) →
+		//   dispatch(tasks in P) → barrier(P) → collect register(P).
+		// At P=0 we reuse the step-5 render (for staged it's already
+		// ActivePassage=0; for Count==1, a normal render, bit-for-bit). P>0
+		// (staged only): re-render with per-host register from Passage < P.
+		// state-commit happens ONCE after the last Passage (steps 7-8), NOT
+		// per-Passage (ADR-056 §d).
 		passageTasks, passagePlans := tasks, plans
 		for p := 0; p < passage.Count; p++ {
 			if p > 0 {
-				// Mid-run re-resolve roster (ADR-0061 §S3) на refresh-границе: в
-				// Passage P-1 завершился успешный `refresh_soulprint: true`-шаг → его
-				// барьер сошёлся (созданные+онбордившиеся хосты записаны в souls+coven)
-				// → пере-резолвим roster ПЕРЕД render-ом Passage P. Семантика re-resolve —
-				// СВЕЖИЙ LIVE-СНИМОК roster incarnation на refresh-границе (resolveRoster →
-				// LoadIncarnationHosts → filterAlive): отражает ТЕКУЩИЙ online-набор. Он
-				// растёт по мере онбординга провиженных хостов (созданные VM поднялись →
-				// видны), но это НЕ монотонная операция: хост, ушедший offline к границе
-				// (упал lease / status≠connected), из live-снимка ИСКЛЮЧАЕТСЯ — таргетинг
-				// идёт на реально-online набор (на offline-хост роль катить не надо).
-				// Обновлённый renderIn.Hosts прокидывается в повторный Render → soulprint.hosts
-				// и on:[incarnation.name]-таргетинг Passage P видят актуальный набор
-				// (resolveTargets/soulprint.hosts строятся из in.Hosts). Roster СТАБИЛЕН в
-				// пределах Passage: re-resolve только на границах, per-Passage детерминизм
-				// (волны/run_once/assert неизменны внутри Passage). Re-resolve fail → abort
-				// (не молча на старом roster).
+				// Mid-run roster re-resolve (ADR-0061 §S3) at a refresh boundary:
+				// Passage P-1 finished a successful `refresh_soulprint: true` step →
+				// its barrier converged (created+onboarded hosts are written to
+				// souls+coven) → re-resolve roster BEFORE rendering Passage P.
+				// re-resolve semantics: a FRESH LIVE SNAPSHOT of the incarnation's
+				// roster at the refresh boundary (resolveRoster → LoadIncarnationHosts
+				// → filterAlive), reflecting the CURRENT online set. It grows as
+				// provisioned hosts onboard (created VMs come up → become visible),
+				// but this is NOT monotonic: a host that went offline by the boundary
+				// (lease expired / status≠connected) is EXCLUDED from the live
+				// snapshot — targeting goes to the actually-online set (no point
+				// rolling a role onto an offline host). The updated renderIn.Hosts
+				// feeds the re-render → soulprint.hosts and Passage P's
+				// on:[incarnation.name] targeting see the current set
+				// (resolveTargets/soulprint.hosts are built from in.Hosts). Roster is
+				// STABLE within a Passage: re-resolve only happens at boundaries,
+				// preserving per-Passage determinism (waves/run_once/assert stay
+				// fixed within a Passage). Re-resolve failure → abort (not silently
+				// falling back to the old roster).
 				if refreshBoundaries[p] {
 					grown, rerr := r.resolveRoster(ctx, spec.IncarnationName)
 					if rerr != nil {
@@ -553,31 +588,34 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 						slog.Int("passage", p), slog.Int("roster_size", len(grown)), slog.Int("prev_roster_size", prevSize))
 				}
 
-				// Staged-прогон, P>0: повторный Render с накопленным per-host register
-				// Passage < P. Задачи будущих Passage (> P) эмитятся placeholder-ами
-				// (register не готов, ADR-056 §в.1); активный Passage P и предыдущие —
-				// резолвятся полноценно (where: register.* теперь видит реальный факт).
-				// loadRegisterByHostUpToPassage резолвит task_idx→register-name по УЖЕ
-				// имеющимся tasks (Index стабилен между Passage — тот же план).
+				// Staged run, P>0: re-render with per-host register accumulated from
+				// Passage < P. Tasks in future Passages (> P) are emitted as
+				// placeholders (register not ready, ADR-056 §c.1); the active
+				// Passage P and earlier ones are fully resolved (where: register.*
+				// now sees the real fact). loadRegisterByHostUpToPassage resolves
+				// task_idx→register-name from the ALREADY-available tasks (Index is
+				// stable across Passages — same plan).
 				reg, lerr := r.loadRegisterByHostUpToPassage(ctx, spec.ApplyID, p, tasks)
 				if lerr != nil {
 					abort("register_load_failed", lerr)
 					return
 				}
 				renderIn.RegisterByHost = reg
-				// keeper→keeper register-chaining (staged-render): keeper-задачи копят
-				// register под синтетическим хостом KeeperTargetSID, а keeperVars
-				// (render/dispatch.go) читает его из ИЗОЛИРОВАННОГО канала
-				// renderIn.KeeperRegister (per-host карта keeper-контексту недоступна — у
-				// keeper-задачи нет хоста). Переливаем keeper-bucket предыдущих Passage из
-				// RegisterByHost в KeeperRegister, чтобы keeper-задача активного Passage
-				// видела `register.<prev>.*` keeper-задач прошлых Passage (например
-				// core.bootstrap.delivered читает register от core.cloud.created). Канал
-				// ОТДЕЛЁН от плоской renderIn.Register намеренно (host-fallback guard,
-				// hostRegister остаётся на Register): host-задача смешанного Passage с пустым
-				// per-host bucket НЕ прочитает keeper-register. Потребляется per-passage
-				// keeper-dispatch (этот же Passage, ниже). nil-bucket → KeeperRegister
-				// сбрасываем (host-only Passage: keeper-контекст пуст, БИТ-В-БИТ).
+				// keeper→keeper register-chaining (staged-render): keeper tasks
+				// accumulate register under the synthetic host KeeperTargetSID, and
+				// keeperVars (render/dispatch.go) reads it from the ISOLATED
+				// renderIn.KeeperRegister channel (a per-host map isn't available to
+				// keeper context — a keeper task has no host). We copy the previous
+				// Passages' keeper bucket from RegisterByHost into KeeperRegister so
+				// the active Passage's keeper task sees `register.<prev>.*` from
+				// earlier Passages' keeper tasks (e.g. core.bootstrap.delivered reads
+				// register from core.cloud.created). This channel is deliberately
+				// SEPARATE from the flat renderIn.Register (host-fallback guard,
+				// hostRegister stays on Register): a mixed-Passage host task with an
+				// empty per-host bucket must NOT read keeper-register. Consumed by
+				// the per-passage keeper-dispatch (same Passage, below). nil bucket →
+				// reset KeeperRegister (host-only Passage: keeper context is empty,
+				// bit-for-bit).
 				renderIn.KeeperRegister = keeperRegisterBucket(reg)
 				renderIn.TaskPassage = passage.TaskPassage
 				renderIn.ActivePassage = p
@@ -587,42 +625,45 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 					return
 				}
 				passageTasks, passagePlans = pt, pp
-				// Держим резолвнутые tasks/plans для register-резолва следующего Passage
-				// и финальной свёртки changed_tasks (Index стабилен между Passage).
+				// Keep the resolved tasks/plans for the next Passage's register resolve
+				// and the final changed_tasks aggregation (Index stable across Passages).
 				tasks, plans = pt, pp
 			}
 
-			// NIM-37 (H1): персист плана ИМЕННО этого Passage из его активного render
-			// (passageTasks: p=0 — render шага 5, p>0 — пере-render при ActivePassage=p).
-			// Фильтр t.Passage==p внутри выкидывает placeholder-ы будущих Passage (их
-			// сжатые индексы разошлись бы с раскрытым исполнением). ДО dispatch, best-
-			// effort. Идемпотентно+непересекающиеся passage-срезы → накопление, не затир.
+			// NIM-37 (H1): persist THIS Passage's plan from its active render
+			// (passageTasks: p=0 → step-5 render, p>0 → re-render at
+			// ActivePassage=p). The t.Passage==p filter drops placeholders of
+			// future Passages (their compacted indices would diverge from actual
+			// execution). Runs before dispatch, best-effort. Idempotent +
+			// non-overlapping passage slices → accumulates, doesn't overwrite.
 			r.persistRunPlan(ctx, spec, passageTasks, p, sealed.Paths(), log)
 
-			// Keeper-side задачи ЭТОГО Passage (Слайс 2): исполняются на ПЕРЕ-
-			// рендеренных при ActivePassage=p tasks (passageTasks), СТРОГО ДО host-
-			// dispatch-а этого Passage. На render шага 5 / p>0-re-render keeper-задача
-			// Passage p несёт полноценные Params (placeholder-gate pipeline.go её на
-			// СВОЁМ активном Passage НЕ глушит) — keeperTasksOf отфильтрует ровно
-			// keeper-задачи passage p. keeper→keeper register-chaining: keeper-задача
-			// Passage p видит register keeper-задач Passage<p через renderIn.KeeperRegister
-			// (перелив выше). keeper-FAIL → abort (return) ДО dispatchPassage p: host-
-			// dispatch этого Passage не стартует. Ordering ↔ refresh-границы: keeper-
-			// dispatch p отрабатывает ДО начала итерации p+1, где re-resolve читает его
-			// эффект (core.soul.registered{refresh_soulprint} пишет souls+coven). Passage
-			// без keeper-задач → no-op (host-only Passage). N=1 → один вызов passage 0,
-			// поведение как pre-loop вызов до Слайса 2 (БИТ-В-БИТ).
+			// Keeper-side tasks for THIS Passage (Slice 2): run on tasks RE-rendered
+			// at ActivePassage=p (passageTasks), STRICTLY BEFORE this Passage's
+			// host-dispatch. At step-5 render / p>0 re-render, a Passage p keeper
+			// task carries full Params (pipeline.go's placeholder-gate doesn't mute
+			// it on its OWN active Passage) — keeperTasksOf filters exactly passage
+			// p's keeper tasks. keeper→keeper register-chaining: a Passage p keeper
+			// task sees register from Passage<p keeper tasks via
+			// renderIn.KeeperRegister (copied above). keeper FAIL → abort (return)
+			// BEFORE dispatchPassage p: this Passage's host-dispatch never starts.
+			// Ordering vs. refresh boundaries: keeper-dispatch p completes BEFORE
+			// iteration p+1 begins, where re-resolve reads its effect
+			// (core.soul.registered{refresh_soulprint} writes souls+coven). A
+			// Passage with no keeper tasks is a no-op (host-only Passage). N=1 →
+			// one call for passage 0, same behavior as the pre-loop call before
+			// Slice 2 (bit-for-bit).
 			if err := r.dispatchKeeperTasks(ctx, spec, log, p, passageTasks, passagePlans); err != nil {
 				abort("keeper_dispatch_failed", err)
 				return
 			}
 
 			pTasks, pPlans := tasksForPassage(passageTasks, passagePlans, p)
-			// Cross-passage requisite-gate Passage p (ADR-056 R3): для p>0 загружаем
-			// CHANGED/FAILED-факты Passage < p (из журнала аудита) и резолвим per-host
-			// onchanges/onfail-связи, чей источник в более раннем Passage. p==0 →
-			// gate=nil (нет более раннего Passage). Полный план (tasks) — для
-			// passageByIndex источников, которых нет в Passage-p-срезе.
+			// Cross-passage requisite gate for Passage p (ADR-056 R3): for p>0, load
+			// CHANGED/FAILED facts from Passage < p (from the audit log) and resolve
+			// per-host onchanges/onfail links whose source is an earlier Passage.
+			// p==0 → gate=nil (no earlier Passage). The full plan (tasks) is used
+			// for passageByIndex sources not present in the Passage-p slice.
 			var gate *crossPassageGate
 			if p > 0 && r.deps.AuditReader != nil {
 				changed, ferr := r.deps.AuditReader.SelectChangedTaskKeys(ctx, spec.ApplyID)
@@ -644,20 +685,22 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		}
 	}
 
-	// 6.5. Teardown-финал (TerminalMode=TerminalDestroy, S-D2b): barrier прошёл
-	//      на ВСЕХ хостах incarnation → teardown scenario `destroy` успешен.
-	//      НЕ коммитим ready и НЕ трогаем incarnation.state (destroy не правит
-	//      state-граф; teardown работает с хостами, не с jsonb): incarnation
-	//      остаётся в `destroying`. Шаги 7-8 (register-load + state_changes-
-	//      commit) — путь обычного прогона, для destroy не выполняются.
-	//      result=runResultOK фиксирует успешный teardown для метрик/трейса.
+	// 6.5. Teardown finalization (TerminalMode=TerminalDestroy, S-D2b): the
+	//      barrier passed on ALL of the incarnation's hosts → the `destroy`
+	//      teardown scenario succeeded. We do NOT commit ready and do NOT touch
+	//      incarnation.state (destroy doesn't edit the state graph; teardown
+	//      works with hosts, not jsonb): the incarnation stays `destroying`.
+	//      Steps 7-8 (register-load + state_changes commit) are the normal-run
+	//      path and don't run for destroy. result=runResultOK records a
+	//      successful teardown for metrics/trace.
 	if spec.TerminalMode == TerminalDestroy {
-		// In-process span на teardown-финал (снос строки incarnation после
-		// успешного teardown на хостах). Дочерний к scenario.run — даёт отдельную
-		// длительность archive+DELETE-tx в трейсе (отличить «teardown на хостах»
-		// от «снос строки в БД»). Атрибуты БЕЗ секретов: incarnation/scenario name
-		// уже несёт родитель; здесь — только число хостов/задач (cardinality-safe
-		// числа, не label-ы). При OTel disabled tracer no-op — Start/End бесплатны.
+		// In-process span for teardown finalization (dropping the incarnation row
+		// after successful host teardown). Child of scenario.run — gives the
+		// archive+DELETE tx its own duration in the trace (distinguishing "host
+		// teardown" from "DB row removal"). No secrets in attributes:
+		// incarnation/scenario name are already on the parent; here only
+		// host/task counts (cardinality-safe numbers, not labels). OTel disabled
+		// → tracer is no-op, Start/End are free.
 		dctx, dcancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer dcancel()
 		dctx, dspan := tracer.Start(dctx, "scenario.destroy_teardown",
@@ -667,22 +710,23 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			),
 		)
 		defer dspan.End()
-		// S-D3: teardown прошёл на всех хостах → физический снос строки.
-		// Archive (incarnation_archive / state_history_archive, миграция 039) +
+		// S-D3: teardown passed on every host → physically drop the row. Archive
+		// (incarnation_archive / state_history_archive, migration 039) +
 		// single-winner DELETE WHERE status='destroying' + audit
-		// destroy_completed — одна tx внутри DeleteAfterTeardown (каскад V3
-		// снесёт live state_history / apply_runs / register; архив записан ДО
-		// DELETE). result=runResultOK фиксирует успех для метрик даже если
-		// DELETE дал no-op (Deleted=false — кто-то уже снёс строку): teardown
-		// сам по себе успешен. Detached-ctx: исходный ctx мог быть отменён
-		// (Shutdown/timeout), но снести строку после успешного teardown надо.
+		// destroy_completed — one tx inside DeleteAfterTeardown (the V3 cascade
+		// drops live state_history / apply_runs / register; the archive is
+		// written BEFORE DELETE). result=runResultOK records success for metrics
+		// even if DELETE was a no-op (Deleted=false — someone already dropped
+		// the row): teardown itself succeeded. Detached ctx: the original ctx
+		// may have been cancelled (Shutdown/timeout), but the row still needs
+		// dropping after a successful teardown.
 		res, derr := incarnation.DeleteAfterTeardown(dctx, r.deps.DB, r.deps.Audit, spec.IncarnationName, destroyForce(inc), log)
 		if derr != nil {
-			// DELETE/archive провалился уже после успешного teardown на хостах:
-			// хосты снесены, но строка не удалена. error-выход НЕ переводит в
-			// destroy_failed (failureStatus сработал бы только через abort до
-			// этой точки) — оставляем destroying для триажа, оператор повторит
-			// destroy. result остаётся runResultFailed (defer зафиксирует).
+			// DELETE/archive failed after a successful host teardown: hosts are
+			// gone but the row wasn't removed. This error exit does NOT move to
+			// destroy_failed (failureStatus would only fire via abort before this
+			// point) — leave it destroying for triage, the operator retries
+			// destroy. result stays runResultFailed (recorded by defer).
 			dspan.RecordError(derr)
 			dspan.SetStatus(codes.Error, "teardown_delete_failed")
 			span.RecordError(derr)
@@ -697,11 +741,12 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		return
 	}
 
-	// 7. После барьера — загрузка register-данных задач прогона (накопленных
-	//    из TaskEvent-ов в apply_task_register) и резолв в per-host register-map
-	//    (sid → register-name → payload) по mapping task_idx→register-name из
-	//    tasks. Это даёт `sets: ${ register.<task>.<поле> }` доступ к register
-	//    (слайс 2 полной грамматики, orchestration.md §7.1).
+	// 7. After the barrier — load run-task register data (accumulated from
+	//    TaskEvents in apply_task_register) and resolve it into a per-host
+	//    register map (sid → register-name → payload) via the task_idx→
+	//    register-name mapping from tasks. Gives `sets: ${ register.<task>.
+	//    <field> }` access to register (slice 2 of the full grammar,
+	//    orchestration.md §7.1).
 	registerByHost, err := r.loadRegisterByHost(ctx, spec.ApplyID, tasks)
 	if err != nil {
 		abort("register_load_failed", err)
@@ -709,12 +754,12 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	}
 	renderIn.RegisterByHost = registerByHost
 
-	// 8. Все задачи success на всех хостах → рендер state_changes
-	//    (Keeper-side CEL, last-wins cross-host) и commit в incarnation.state.
-	//    Рендер — строго ПОСЛЕ барьера (orchestration.md §7): значения
-	//    фиксируются по факту успешного apply, не до него. RenderStateOps —
-	//    упорядоченный список set+add-операций (новая list-форма); merge применяет
-	//    их к stateBefore по порядку (set-overwrite / идемпотентный add).
+	// 8. All tasks succeeded on all hosts → render state_changes (Keeper-side
+	//    CEL, last-wins cross-host) and commit into incarnation.state. Render
+	//    happens strictly AFTER the barrier (orchestration.md §7): values are
+	//    fixed by the fact of a successful apply, not before it. RenderStateOps
+	//    is an ordered list of set+add operations (the new list form); merge
+	//    applies them to stateBefore in order (set-overwrite / idempotent add).
 	renderedOps, err := r.deps.Render.RenderStateOps(renderIn)
 	if err != nil {
 		abort("state_changes_render_failed", err)
@@ -722,68 +767,75 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	}
 	stateAfter, err := mergeStateChanges(stateBefore, renderedOps, art.Manifest.StateSchema, r.deps.Render.EvalStateMatch, r.deps.Render.EvalStateOpExpr)
 	if err != nil {
-		// Фейл применения операции (on_conflict: error / неконсистентная коллекция /
-		// match-предикат упал) — error_locked, state НЕ коммитнут (stateAfter не
-		// дошёл до commitSuccess). orchestration.md §7: фейл свёртки = блокировка.
+		// A failed operation apply (on_conflict: error / inconsistent collection /
+		// match predicate failed) → error_locked, state is NOT committed
+		// (stateAfter never reaches commitSuccess). orchestration.md §7: a failed
+		// merge means locking.
 		abort("state_changes_apply_failed", err)
 		return
 	}
 	if err := r.commitSuccess(ctx, spec, stateBefore, stateAfter); err != nil {
-		// Single-winner (ADR-027(j) W1): incarnation уже выведена из applying
-		// другим коммиттером (recovery-перехват / параллельный финал) — НЕ
-		// провал. Не abort-им (не затираем чужой терминал error_locked-ом),
-		// прогон сам по себе успешен на хостах. result=runResultOK.
+		// Single-winner (ADR-027(j) W1): the incarnation was already moved out
+		// of applying by another committer (recovery takeover / parallel
+		// finish) — NOT a failure. We don't abort (don't overwrite someone
+		// else's terminal with error_locked); the run itself succeeded on
+		// hosts. result=runResultOK.
 		if errors.Is(err, incarnation.ErrAlreadyFinalized) {
 			result = runResultOK
 			log.Info("scenario: state-commit пропущен — incarnation уже финализирована другим коммиттером",
 				slog.Int("tasks", len(tasks)), slog.Int("hosts", len(hosts)))
-			// Проигравший коммит НЕ эмитит incarnation.run_completed (return до
-			// emitRunCompleted ниже): событие отдаёт инстанс-победитель (чей
-			// commitSuccess прошёл) — сознательная защита от дублей события на прогон.
+			// The losing commit does NOT emit incarnation.run_completed (returns
+			// before emitRunCompleted below): the winning instance (whose
+			// commitSuccess succeeded) emits it — deliberate protection against
+			// duplicate events per run.
 			return
 		}
-		// Commit провалился уже после успешного apply на хостах — хосты в
-		// нужном состоянии, но БД не синхронизирована. error_locked для
-		// триажа (state не трогаем — UpdateStateFromRun в commitSuccess
-		// атомарна, при фейле транзакция откатилась).
+		// Commit failed after a successful apply on hosts — hosts are in the
+		// right state, but the DB is out of sync. error_locked for triage
+		// (state untouched — UpdateStateFromRun in commitSuccess is atomic, the
+		// transaction rolled back on failure).
 		abort("state_commit_failed", err)
 		return
 	}
 	result = runResultOK
 	log.Info("scenario: прогон завершён успешно", slog.Int("tasks", len(tasks)), slog.Int("hosts", len(hosts)))
 
-	// Терминальное событие per-incarnation итога прогона (T3, ADR-052 §k):
-	// incarnation.run_completed (status=success) с per-task changed_tasks.
-	// Эмитится на успешном финале обычного прогона (TerminalDestroy финализируется
-	// выше своим путём — destroy_completed/destroy_failed; provals — через abort).
-	// Best-effort: не валит уже-успешный прогон (result=runResultOK зафиксирован).
+	// Terminal per-incarnation run-outcome event (T3, ADR-052 §k):
+	// incarnation.run_completed (status=success) with per-task changed_tasks.
+	// Emitted on a normal run's successful finish (TerminalDestroy finalizes
+	// above via its own path — destroy_completed/destroy_failed; failures go
+	// through abort). Best-effort: doesn't fail an already-successful run
+	// (result=runResultOK already recorded).
 	r.emitRunCompleted(ctx, spec, runCompletedStatusSuccess, tasks, plans, log)
 }
 
-// resolveRoster резолвит roster хостов прогона по корневой Coven-метке
-// incarnation (online-souls + soulprint + declared/Choir-роль). Вынесено из run()
-// шага 3, потому что вызывается ПОВТОРНО в stage-loop на refresh-границах
-// (mid-run re-resolve, ADR-0061 §S3): один и тот же путь резолва даёт up-front
-// roster и пере-резолвленный roster между Passage. Источник истины presence —
-// Redis SID-lease (фаза 2 Resolver), та же, что у барьера онбординга `await_online`
-// — поэтому re-resolve видит ровно тех, кого барьер refresh-шага дождался online.
+// resolveRoster resolves the run's host roster by the incarnation's root Coven
+// label (online souls + soulprint + declared/Choir role). Factored out of
+// run() step 3 because it's called AGAIN in the stage-loop at refresh
+// boundaries (mid-run re-resolve, ADR-0061 §S3): the same resolve path
+// produces both the up-front roster and the re-resolved roster between
+// Passages. The presence source of truth is the Redis SID lease (Resolver
+// phase 2), the same one the `await_online` onboarding barrier uses — so
+// re-resolve sees exactly who the refresh step's barrier waited online for.
 func (r *Runner) resolveRoster(ctx context.Context, incarnationName string) ([]*topology.HostFacts, error) {
 	return r.deps.Topology.LoadIncarnationHosts(ctx, incarnationName)
 }
 
-// allKeeperTasks сообщает, состоит ли сценарий ЦЕЛИКОМ из keeper-side задач
-// (каждая `on: keeper`, render.IsKeeperTask). Это ПЕРВЫЙ класс bypass-а no_hosts-
-// гейта для provision-from-zero (ADR-0061 amendment): all-keeper create-сценарий
-// (core.cloud.created создаёт VM С НУЛЯ) законно стартует на пустом roster.
+// allKeeperTasks reports whether the scenario consists ENTIRELY of keeper-side
+// tasks (each `on: keeper`, render.IsKeeperTask). This is the FIRST bypass
+// class for the no_hosts gate in provision-from-zero (ADR-0061 amendment): an
+// all-keeper create scenario (core.cloud.created creates a VM FROM SCRATCH)
+// legitimately starts on an empty roster.
 //
-// ALL, не ANY: смешанный keeper+host прогон ЭТОТ предикат НЕ проходит. Но bypass
-// смешанного provision→роль обеспечивает ВТОРОЙ класс — config.HasRefreshEmitter
-// (план с refresh-эмиттером, см. no_hosts-гейт выше): host-задача стратифицируется
-// в Passage после refresh-границы и видит пере-резолвленный roster, а не пустой P0.
-// Смешанный план БЕЗ refresh-эмиттера по-прежнему держит no_hosts (host-задача на
-// пустом P0 корректна как no_hosts). Пустой сценарий (len==0) → false: «нет задач»
-// не повод bypass-ить гейт. Считаем по tasks ПОСЛЕ ExpandIncludes (плоский top-
-// level список, тот же, что видит Render).
+// ALL, not ANY: a mixed keeper+host run does NOT pass this predicate. But the
+// SECOND bypass class covers mixed provision→role — config.HasRefreshEmitter
+// (a plan with a refresh emitter, see the no_hosts gate above): the host task
+// stratifies into a Passage after the refresh boundary and sees the
+// re-resolved roster, not an empty P0. A mixed plan WITHOUT a refresh emitter
+// still hits no_hosts (a host task on an empty P0 is correctly no_hosts). An
+// empty scenario (len==0) → false: "no tasks" isn't a reason to bypass the
+// gate. Computed over tasks AFTER ExpandIncludes (the flat top-level list
+// Render also sees).
 func allKeeperTasks(tasks []config.Task) bool {
 	if len(tasks) == 0 {
 		return false
@@ -796,19 +848,21 @@ func allKeeperTasks(tasks []config.Task) bool {
 	return true
 }
 
-// effectiveRunTimeout возвращает потолок длительности прогона по плану задач
-// (ADR-0061, provision-aware). База — runTimeout (Deps.RunTimeout / defaultRunTimeout,
-// 5m). Если план несёт refresh-эмиттер ([config.HasRefreshEmitter] — provision-from-
-// zero: create VM + онбординг `await_online` + деплой роли), потолок поднимается до
-// ceiling-а барьера онбординга (ResolvedMaxAwaitTimeout) + deployBudget, но только
-// если он БОЛЬШЕ базы (max, не replace): оператор, поднявший RunTimeout выше eff для
-// своих нужд, не урезается. Без refresh-эмиттера — ровно база (вечный barrier
-// обрывается как раньше).
+// effectiveRunTimeout returns the run-duration ceiling for a task plan
+// (ADR-0061, provision-aware). Base is runTimeout (Deps.RunTimeout /
+// defaultRunTimeout, 5m). If the plan carries a refresh emitter
+// ([config.HasRefreshEmitter] — provision-from-zero: create VM + `await_online`
+// onboarding + role deploy), the ceiling rises to the onboarding barrier's
+// ceiling (ResolvedMaxAwaitTimeout) + deployBudget, but only if that's GREATER
+// than base (max, not replace): an operator who raised RunTimeout above eff
+// for their own needs isn't cut down. Without a refresh emitter — exactly base
+// (a stuck barrier is cut off as before).
 //
-// ceiling берётся через hot-reload-aware maxAwaitTimeoutFn (тот же snapshot keeper.yml::
-// max_await_timeout, что видит барьер онбординга в coremod) — eff согласован с реальным
-// ceiling-ом `await_online`. nil-fn (unit/L0 без config.Store) → [config.DefaultMaxAwaitTimeout]
-// (30m): provision-прогон всё равно получает расширенный потолок, просто без override-а.
+// ceiling comes from the hot-reload-aware maxAwaitTimeoutFn (the same
+// keeper.yml::max_await_timeout snapshot the onboarding barrier in coremod
+// sees) — eff stays consistent with the real `await_online` ceiling. nil fn
+// (unit/L0 without config.Store) → [config.DefaultMaxAwaitTimeout] (30m): a
+// provision run still gets the extended ceiling, just without the override.
 func (r *Runner) effectiveRunTimeout(tasks []config.Task) time.Duration {
 	base := r.runTimeout
 	if !config.HasRefreshEmitter(tasks) {
@@ -824,29 +878,31 @@ func (r *Runner) effectiveRunTimeout(tasks []config.Task) time.Duration {
 	return base
 }
 
-// lockRun резолвит incarnation, проверяет статус под FOR UPDATE и переводит её
-// в рабочий статус прогона. Gate — explicit allow-list (fail-closed): набор
-// допустимых стартовых статусов зависит от режима финала (S-D2b). Новый статус,
-// добавленный в enum позже, по умолчанию ОТКЛОНЯЕТ прогон, а не молча разрешает.
+// lockRun resolves the incarnation, checks its status under FOR UPDATE, and
+// moves it to the run's working status. The gate is an explicit allow-list
+// (fail-closed): the set of valid starting statuses depends on the
+// finalization mode (S-D2b). A new status added to the enum later REJECTS a
+// run by default rather than silently allowing it.
 //
-// TerminalCommitState (обычный прогон): стартует ТОЛЬКО из ready → переводит в
-// applying. Отказы (специфичные sentinel-ы — для понятного лога/result наверху):
-//   - applying       → [ErrAlreadyRunning] (другой прогон в работе — на pilot
-//     отказ, не очередь);
-//   - error_locked   → [ErrLocked] (прогон отклоняется до явного unlock, ADR-009;
-//     retry из error_locked НЕ разрешён);
-//   - всё остальное (destroying / migration_failed / любой будущий статус) →
+// TerminalCommitState (normal run): starts ONLY from ready → moves to
+// applying. Rejections (specific sentinels for clear logging/result above):
+//   - applying     → [ErrAlreadyRunning] (another run in progress — a pilot
+//     rejects, doesn't queue);
+//   - error_locked → [ErrLocked] (run rejected until an explicit unlock,
+//     ADR-009; retry from error_locked is NOT allowed);
+//   - everything else (destroying / migration_failed / any future status) →
 //     [ErrNotRunnable].
 //
-// TerminalDestroy (teardown scenario `destroy`): стартует ТОЛЬКО из destroying
-// (S-D1 уже перевёл туда в Destroy-транзакции) и статус НЕ меняет — incarnation
-// остаётся в destroying на всё время teardown-а (concurrent run/upgrade видят
-// destroying и отклоняются их собственными gate-ами; провал teardown → лишь
-// destroy_failed). Любой иной статус → [ErrNotRunnable]: teardown запускается
-// только по уже инициированному destroy, не из произвольного состояния.
+// TerminalDestroy (the `destroy` teardown scenario): starts ONLY from
+// destroying (S-D1 already moved it there in the Destroy transaction) and
+// does NOT change status — the incarnation stays destroying for the whole
+// teardown (a concurrent run/upgrade sees destroying and is rejected by its
+// own gate; a failed teardown → just destroy_failed). Any other status →
+// [ErrNotRunnable]: teardown only starts from an already-initiated destroy,
+// not from an arbitrary state.
 //
-// Все проверки под одним FOR UPDATE — авторитет gate-а в транзакции, не только
-// в HTTP-handler-е (TOCTOU-safe).
+// All checks happen under one FOR UPDATE — the gate's authority is in the
+// transaction, not just the HTTP handler (TOCTOU-safe).
 func (r *Runner) lockRun(ctx context.Context, spec RunSpec) (*incarnation.Incarnation, error) {
 	var inc *incarnation.Incarnation
 	err := pgx.BeginFunc(ctx, r.deps.DB, func(tx pgx.Tx) error {
@@ -855,8 +911,8 @@ func (r *Runner) lockRun(ctx context.Context, spec RunSpec) (*incarnation.Incarn
 			return serr
 		}
 		if spec.TerminalMode == TerminalDestroy {
-			// Teardown стартует строго из destroying; статус НЕ трогаем
-			// (остаётся destroying на всё время прогона).
+			// Teardown starts strictly from destroying; status is left UNTOUCHED
+			// (stays destroying for the whole run).
 			if got.Status != incarnation.StatusDestroying {
 				return fmt.Errorf("%w: %s", ErrNotRunnable, got.Status)
 			}
@@ -864,22 +920,23 @@ func (r *Runner) lockRun(ctx context.Context, spec RunSpec) (*incarnation.Incarn
 			return nil
 		}
 		if spec.FromLocked {
-			// rerun-last: UnlockForRerun под FOR UPDATE уже перевёл
-			// error_locked→applying минуя ready (race-free). Статус НЕ транзитим
-			// повторно — обязаны УВИДЕТЬ applying, иначе старт отклоняется
-			// (fail-closed): любой иной статус означает, что зарезервированная
-			// строка ушла из-под нас (чужой перехват / неконсистентный вызов).
+			// rerun-last: UnlockForRerun already transitioned error_locked→applying
+			// under FOR UPDATE, bypassing ready (race-free). We do NOT transition
+			// status again — we must SEE applying, otherwise the start is rejected
+			// (fail-closed): any other status means the reserved row slipped out
+			// from under us (someone else's takeover / an inconsistent call).
 			if got.Status != incarnation.StatusApplying {
 				return fmt.Errorf("%w: %s (rerun expected applying)", ErrNotRunnable, got.Status)
 			}
-			// Запись epoch applying-флага на уже-applying-строку (ADR-027 amend
-			// (m-S1)): UnlockForRerun транзитит error_locked→applying БЕЗ epoch,
-			// поэтому без этого дописывания rerun-last-applying оставался бы с
-			// NULL-epoch и не попадал под reconcile_orphan_applying — краш владельца
-			// mid-rerun-last давал orphan навсегда. lockApplyingWithEpoch WHERE
-			// name=$1 (без status-guard) идемпотентно перезаписывает epoch, статус
-			// остаётся applying. Остаточное микроокно UnlockForRerun-tx↔эта tx
-			// деградирует в тот же NULL-epoch known-gap (не хуже текущего).
+			// Write the applying epoch flag onto an already-applying row (ADR-027
+			// amend (m-S1)): UnlockForRerun transitions error_locked→applying
+			// WITHOUT an epoch, so without this write a rerun-last-applying row
+			// would be left with a NULL epoch and wouldn't be caught by
+			// reconcile_orphan_applying — an owner crash mid-rerun-last would orphan
+			// it forever. lockApplyingWithEpoch WHERE name=$1 (no status guard)
+			// idempotently overwrites the epoch, status stays applying. The
+			// residual micro-window between the UnlockForRerun tx and this tx
+			// degrades to the same NULL-epoch known gap (no worse than today).
 			if uerr := lockApplyingWithEpoch(ctx, tx, spec.IncarnationName, spec.ApplyID, r.kid, 0); uerr != nil {
 				return uerr
 			}
@@ -888,25 +945,27 @@ func (r *Runner) lockRun(ctx context.Context, spec RunSpec) (*incarnation.Incarn
 		}
 		switch got.Status {
 		case incarnation.StatusReady, incarnation.StatusDrift:
-			// ready — нормальный старт; drift — информационный статус Scry
-			// (ADR-031): remediation drift-а = обычный apply, который при
-			// успехе вернёт incarnation в ready через commitSuccess. Тот же
-			// applying-перевод и тот же gate, как из ready — drift НЕ блокирует.
+			// ready is the normal start; drift is Scry's informational status
+			// (ADR-031): remediating drift is just a normal apply, which on
+			// success returns the incarnation to ready via commitSuccess. Same
+			// applying transition and same gate as from ready — drift does NOT
+			// block.
 		case incarnation.StatusApplying:
 			return ErrAlreadyRunning
 		case incarnation.StatusErrorLocked:
 			return ErrLocked
 		default:
-			// destroying / migration_failed / любой будущий статус.
+			// destroying / migration_failed / any future status.
 			return fmt.Errorf("%w: %s", ErrNotRunnable, got.Status)
 		}
-		// Перевод в applying + запись epoch applying-флага ОДНИМ UPDATE/одной tx
-		// (ADR-027 amend (m-S1)): apply_id прогона + attempt (echo начального
-		// apply_runs.attempt=0, строки apply_runs ещё нет) + KID этого инстанса
-		// (тот же источник, что lease-holder) + applying_since=NOW(). Reaper-правило
-		// reconcile_orphan_applying по этому epoch различает живой прогон от
-		// осиротевшего lock-а мёртвого владельца. Атомарность с status='applying'
-		// исключает окно applying-без-epoch при крахе до commit.
+		// Transition to applying + write the applying epoch flag in ONE
+		// UPDATE/one tx (ADR-027 amend (m-S1)): the run's apply_id + attempt
+		// (echoes the initial apply_runs.attempt=0, no apply_runs row exists yet)
+		// + this instance's KID (same source as the lease-holder) +
+		// applying_since=NOW(). The reconcile_orphan_applying reaper rule uses
+		// this epoch to tell a live run apart from an orphaned lock left by a
+		// dead owner. Atomicity with status='applying' rules out an
+		// applying-without-epoch window on a crash before commit.
 		if uerr := lockApplyingWithEpoch(ctx, tx, spec.IncarnationName, spec.ApplyID, r.kid, 0); uerr != nil {
 			return uerr
 		}
@@ -919,15 +978,16 @@ func (r *Runner) lockRun(ctx context.Context, spec RunSpec) (*incarnation.Incarn
 	return inc, nil
 }
 
-// parseScenario читает scenario/<scenarioName>/main.yml из уже
-// материализованного снапшота сервиса и парсит его нормативным
-// config-парсером (diagnostics уровня error → ошибка загрузки).
+// parseScenario reads scenario/<scenarioName>/main.yml from an already
+// materialized service snapshot and parses it with the normative config
+// parser (error-level diagnostics → a load error).
 func (r *Runner) parseScenario(art *artifact.ServiceArtifact, scenarioName string, fromUpgrade bool) (*config.ScenarioManifest, error) {
 	return parseScenarioFromArtifact(r.deps.Loader, art, scenarioName, fromUpgrade)
 }
 
-// scenarioRelPath строит rel-путь главного YAML сценария в снапшоте сервиса:
-// upgrade/<name>/main.yml при fromUpgrade (ADR-0068), иначе scenario/<name>/main.yml.
+// scenarioRelPath builds the scenario's main YAML rel-path in the service
+// snapshot: upgrade/<name>/main.yml when fromUpgrade (ADR-0068), otherwise
+// scenario/<name>/main.yml.
 func scenarioRelPath(scenarioName string, fromUpgrade bool) string {
 	format := scenarioMainFile
 	if fromUpgrade {
@@ -936,18 +996,20 @@ func scenarioRelPath(scenarioName string, fromUpgrade bool) string {
 	return fmt.Sprintf(format, scenarioName)
 }
 
-// parseScenarioFromArtifact — package-level форма [Runner.parseScenario]:
-// читает и парсит scenario/<scenarioName>/main.yml из снапшота сервиса.
-// Вынесена из метода, чтобы переиспользоваться Acolyte-путём ([RenderForHost])
-// без подъёма Runner-а. Поведение идентично — чистый read+parse без side-эффектов.
+// parseScenarioFromArtifact is the package-level form of
+// [Runner.parseScenario]: reads and parses scenario/<scenarioName>/main.yml
+// from a service snapshot. Factored out of the method so the Acolyte path
+// ([RenderForHost]) can reuse it without a Runner. Behavior is identical —
+// pure read+parse, no side effects.
 func parseScenarioFromArtifact(loader *artifact.ServiceLoader, art *artifact.ServiceArtifact, scenarioName string, fromUpgrade bool) (*config.ScenarioManifest, error) {
 	rel := scenarioRelPath(scenarioName, fromUpgrade)
 	data, err := loader.ReadFile(art, rel)
 	if err != nil {
 		return nil, fmt.Errorf("scenario: read %s: %w", rel, err)
 	}
-	// Резолв $type на загрузке: render-pipeline и value-валидация ниже работают
-	// с самодостаточной input-схемой (см. artifact.LoadScenarioManifestResolved).
+	// Resolve $type at load time: the render pipeline and value validation
+	// below work with a self-contained input schema (see
+	// artifact.LoadScenarioManifestResolved).
 	scn, _, diags, err := artifact.LoadScenarioManifestResolved(art, rel, data)
 	if err != nil {
 		return nil, fmt.Errorf("scenario: parse %s: %w", rel, err)
@@ -958,10 +1020,11 @@ func parseScenarioFromArtifact(loader *artifact.ServiceLoader, art *artifact.Ser
 	return scn, nil
 }
 
-// failureStatus возвращает терминальный статус провала прогона по режиму
-// финала (S-D2b): обычный прогон → error_locked; teardown (TerminalDestroy) →
-// destroy_failed. destroy_failed — НЕ error_locked: семантика снятия разная
-// (из destroy_failed оператор повторяет destroy / анлочит в ready, S-D2a).
+// failureStatus returns the run-failure terminal status by finalization mode
+// (S-D2b): normal run → error_locked; teardown (TerminalDestroy) →
+// destroy_failed. destroy_failed is NOT error_locked: the recovery semantics
+// differ (from destroy_failed the operator retries destroy or unlocks to
+// ready, S-D2a).
 func failureStatus(mode TerminalMode) incarnation.Status {
 	if mode == TerminalDestroy {
 		return incarnation.StatusDestroyFailed
@@ -969,23 +1032,24 @@ func failureStatus(mode TerminalMode) incarnation.Status {
 	return incarnation.StatusErrorLocked
 }
 
-// lockIncarnation переводит incarnation в failStatus (error_locked для обычного
-// прогона / destroy_failed для teardown) со status_details (state не меняется —
-// храним last known-good). Ошибки самого write-а только логируются: incarnation
-// останется в applying, что триаж заметит.
+// lockIncarnation moves the incarnation to failStatus (error_locked for a
+// normal run / destroy_failed for teardown) with status_details (state stays
+// unchanged — we keep last known-good). Write errors are only logged: the
+// incarnation stays in applying, which triage will notice.
 //
-// Возвращает finalized — true ТОЛЬКО когда ЭТОТ инстанс реально записал терминал
-// (UpdateStateFromRun прошёл). false при single-winner-проигрыше
-// (ErrAlreadyFinalized: строку уже вывел из applying другой коммиттер — recovery-
-// перехват / параллельный финал) ЛИБО при ошибке записи. Сигнал нужен abort()-у,
-// чтобы провальное incarnation.run_completed эмитил ровно один инстанс-победитель
-// (не задвоить событие при recovery-перехвате, симметрично success-ветке, где
-// проигравший commit возвращается до emitRunCompleted).
+// Returns finalized — true ONLY when THIS instance actually recorded the
+// terminal (UpdateStateFromRun succeeded). false on a single-winner loss
+// (ErrAlreadyFinalized: another committer already moved the row out of
+// applying — recovery takeover / parallel finish) OR on a write error. abort()
+// needs this signal so a failed incarnation.run_completed is emitted by
+// exactly one winning instance (no duplicate event on a recovery takeover,
+// symmetric to the success branch, where the losing commit returns before
+// emitRunCompleted).
 func (r *Runner) lockIncarnation(ctx context.Context, spec RunSpec, stateBefore map[string]any, failStatus incarnation.Status, reason string, cause error, sealedPaths map[string]bool, log *slog.Logger) (finalized bool) {
-	// commit пишем под detached-ctx: исходный ctx мог быть отменён
-	// (Cancel/Shutdown/timeout), но зафиксировать error_locked надо в любом
-	// случае. WithoutCancel: сохраняем trace-baggage, не наследуем cancel
-	// teardown-пути. 5s-cap — защита от зависшего PG на отмене.
+	// Commit under a detached ctx: the original ctx may have been cancelled
+	// (Cancel/Shutdown/timeout), but error_locked must be recorded regardless.
+	// WithoutCancel: keeps trace baggage, doesn't inherit the teardown path's
+	// cancel. 5s cap guards against PG hanging on cancellation.
 	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	details := map[string]any{
@@ -995,13 +1059,13 @@ func (r *Runner) lockIncarnation(ctx context.Context, spec RunSpec, stateBefore 
 	if cause != nil {
 		details["error"] = cause.Error()
 	}
-	// status_details читается наружу через GET incarnation без маскинга, а
-	// cause.Error() может транзитом нести зарезолвленный секрет / vault-ref из
-	// Params (например в render/dispatch-ошибке). Маскируем перед записью —
-	// observability-only, на wire (ApplyRequest.Params) это не влияет. seal-aware
-	// (ADR-010 §7.4): vault+regex слои + sealed-пути этого прогона + regex-аларм
-	// (DefaultSealHooks). sealedPaths пуст (abort до Render) → деградация к
-	// vault+regex БИТ-В-БИТ.
+	// status_details is read externally via GET incarnation without masking,
+	// and cause.Error() may carry a resolved secret / vault-ref in transit from
+	// Params (e.g. in a render/dispatch error). Mask before writing —
+	// observability-only, doesn't affect the wire (ApplyRequest.Params).
+	// seal-aware (ADR-010 §7.4): vault+regex layers + this run's sealed paths +
+	// regex alarm (DefaultSealHooks). sealedPaths empty (abort before Render) →
+	// degrades to vault+regex bit-for-bit.
 	details = audit.MaskSecretsSealed(details, audit.SealOpts{
 		Sealed:        sealedPaths,
 		RegexFallback: audit.DefaultSealHooks.RegexFallback,
@@ -1012,17 +1076,18 @@ func (r *Runner) lockIncarnation(ctx context.Context, spec RunSpec, stateBefore 
 		return incarnation.UpdateStateFromRun(
 			wctx, tx,
 			spec.IncarnationName, spec.ScenarioName, spec.ApplyID,
-			stateBefore, stateBefore, // state не меняем при фейле
+			stateBefore, stateBefore, // state untouched on failure
 			failStatus, details,
 			startedByPtr(spec.StartedByAID),
 			historyID,
 		)
 	})
 	if err != nil {
-		// Single-winner (ADR-027(j) W1): строку уже вывел из applying/destroying
-		// другой коммиттер (recovery-перехват) — терминал зафиксирован им, не
-		// нами. Это НЕ «осталась в applying» и НЕ ошибка записи: логируем как
-		// no-op и не пишем destroy_failed audit (терминал уже не наш).
+		// Single-winner (ADR-027(j) W1): another committer already moved the row
+		// out of applying/destroying (recovery takeover) — the terminal was
+		// recorded by them, not us. This is NEITHER "stuck in applying" NOR a
+		// write error: log it as a no-op and skip the destroy_failed audit (the
+		// terminal isn't ours anymore).
 		if errors.Is(err, incarnation.ErrAlreadyFinalized) {
 			log.Info("scenario: терминальный статус провала пропущен — incarnation уже финализирована другим коммиттером",
 				slog.String("terminal_status", string(failStatus)))
@@ -1034,49 +1099,53 @@ func (r *Runner) lockIncarnation(ctx context.Context, spec RunSpec, stateBefore 
 		return false
 	}
 
-	// Терминал destroy-провала фиксируется явным audit-событием (S-D3):
-	// destroy_failed теперь имеет своё имя в каталоге, не только status_details +
-	// slog. Пишется ТОЛЬКО для teardown-режима (обычный прогон → error_locked,
-	// своё событие incarnation.locked — отдельная подсистема). reason уже
-	// замаскирован выше (details прошли MaskSecrets). Фейл audit не валит — статус
-	// destroy_failed уже закоммичен, теряем только trail.
+	// A destroy-failure terminal gets an explicit audit event (S-D3):
+	// destroy_failed now has its own name in the catalog, not just
+	// status_details + slog. Written ONLY for teardown mode (a normal run →
+	// error_locked has its own incarnation.locked event — a separate
+	// subsystem). reason is already masked above (details went through
+	// MaskSecrets). A failed audit write doesn't fail the call — destroy_failed
+	// is already committed, we only lose the trail.
 	if failStatus == incarnation.StatusDestroyFailed {
 		r.writeDestroyFailedAudit(wctx, spec, reason, details, log)
 	}
 	return true
 }
 
-// ensureTerminalApplyRun гарантирует, что у прогона `spec.ApplyID` есть хотя бы
-// одна ТЕРМИНАЛЬНАЯ строка apply_runs после abort (BAG-1). Два случая:
+// ensureTerminalApplyRun guarantees run `spec.ApplyID` has at least one
+// TERMINAL apply_runs row after an abort (BAG-1). Two cases:
 //
-//   - строки УЖЕ есть (поздний abort: dispatch успел вставить planned/claimed/
-//     dispatched, ЛИБО keeper-dispatch Passage>0 упал ПОСЛЕ успешного host-dispatch
-//     раннего Passage — Слайс 2: keeper-dispatch теперь ВНУТРИ stage-loop) —
-//     терминалим КАЖДУЮ недотерминальную в `terminal` через [applyrun.UpdateStatus]
-//     (он single-winner: уже-терминальные строки не трогаются, ADR-027(j)). running-
-//     строки НЕ трогаем: apply уже ушёл на хост, честный терминал придёт с него
-//     (RunResult). keeper-строка упавшего Passage уже в failed (dispatchKeeperTasks
-//     записал её ДО возврата ошибки), host-строки раннего Passage остаются success.
-//     Не вставляем sentinel — реальные строки есть;
-//   - строк НЕТ (ранний abort: no_hosts / scenario_load_failed / topology_failed
-//     / essence_failed / input_invalid / render_failed, а также keeper_dispatch_failed
-//     на Passage 0 — keeper-задачи первого Passage идут ДО любого host-dispatch) —
-//     вставляем ОДНУ sentinel-строку [render.RunSentinelSID] со status=`terminal` и
-//     error_summary=reason.
+//   - rows ALREADY exist (late abort: dispatch got as far as inserting
+//     planned/claimed/dispatched, OR Passage>0 keeper-dispatch failed AFTER a
+//     successful earlier Passage's host-dispatch — Slice 2: keeper-dispatch is
+//     now INSIDE the stage-loop) — terminalize EVERY non-terminal row to
+//     `terminal` via [applyrun.UpdateStatus] (single-winner: already-terminal
+//     rows are left alone, ADR-027(j)). running rows are left ALONE: the apply
+//     already reached the host, an honest terminal will arrive from it
+//     (RunResult). The failed Passage's keeper row is already failed
+//     (dispatchKeeperTasks wrote it BEFORE returning the error), earlier
+//     Passages' host rows stay success. No sentinel inserted — real rows
+//     exist;
+//   - NO rows exist (early abort: no_hosts / scenario_load_failed /
+//     topology_failed / essence_failed / input_invalid / render_failed, and
+//     also keeper_dispatch_failed on Passage 0 — the first Passage's keeper
+//     tasks run BEFORE any host-dispatch) — insert ONE sentinel row
+//     [render.RunSentinelSID] with status=`terminal` and error_summary=reason.
 //
-// `terminal` — терминальный статус провала (см. [failureTerminalStatus]):
-// cancelled при операторском Cancel, иначе failed.
+// `terminal` is the failure terminal status (see [failureTerminalStatus]):
+// cancelled on operator Cancel, otherwise failed.
 //
-// Источник истины reason — abort-reason (no_hosts и пр.). Ошибки записи только
-// логируются (warn): incarnation уже переведена в error_locked, потеря barrier-
-// строки — деградация наблюдаемости, не повод валить goroutine. Detached-ctx —
-// исходный ctx мог быть отменён (Shutdown/timeout), как в [lockIncarnation].
+// reason's source of truth is the abort reason (no_hosts etc.). Write errors
+// are only logged (warn): the incarnation is already error_locked, losing a
+// barrier row degrades observability, not a reason to fail the goroutine.
+// Detached ctx — the original ctx may have been cancelled (Shutdown/timeout),
+// as in [lockIncarnation].
 
-// failureTerminalStatus переводит причину abort-а в терминальный статус
-// apply_runs прогона. Различие СТРОГО по [errCancelRequested] — sentinel-у
-// оператор-инициированного cluster-wide Cancel (G1): только он даёт cancelled.
-// context.Canceled/DeadlineExceeded (RunTimeout, Shutdown-abort) идут через
-// ctx.Err() и НЕ матчатся — это честный provider-провал, остаётся failed.
+// failureTerminalStatus maps an abort cause to the run's apply_runs terminal
+// status. Distinguished STRICTLY by [errCancelRequested] — the sentinel for
+// an operator-initiated cluster-wide Cancel (G1): only that gives cancelled.
+// context.Canceled/DeadlineExceeded (RunTimeout, Shutdown-abort) go through
+// ctx.Err() and do NOT match — an honest provider failure, stays failed.
 func failureTerminalStatus(cause error) applyrun.Status {
 	if errors.Is(cause, errCancelRequested) {
 		return applyrun.StatusCancelled
@@ -1097,9 +1166,10 @@ func (r *Runner) ensureTerminalApplyRun(ctx context.Context, spec RunSpec, reaso
 
 	summary := reason
 	if len(statuses) == 0 {
-		// Ранний abort: ни одного хоста, ни одной строки. Sentinel закрывает
-		// прогон терминалом, чтобы Voyage-awaiter не ждал вечно. reason — текст
-		// причины abort-а (не несёт секретов; render/dispatch-cause сюда не идёт).
+		// Early abort: no hosts, no rows. The sentinel closes the run with a
+		// terminal so the Voyage-awaiter doesn't wait forever. reason is the
+		// abort-cause text (carries no secrets; render/dispatch cause doesn't
+		// flow here).
 		run := applyrun.ApplyRun{
 			ApplyID:         spec.ApplyID,
 			SID:             render.RunSentinelSID,
@@ -1116,24 +1186,24 @@ func (r *Runner) ensureTerminalApplyRun(ctx context.Context, spec RunSpec, reaso
 		return
 	}
 
-	// Поздний abort: терминалим недотерминальные строки реальных хостов в
-	// terminal (cancelled при операторском Cancel, иначе failed).
-	// running-строки различаем ПО ПРИЧИНЕ (keepRunning):
-	//   - operator-Cancel (keepRunning): apply ушёл на ЖИВОЙ хост — НЕ трогаем,
-	//     дойдёт честный RunResult (honest reporting).
-	//   - timeout/dead-host/ctx.Err (!keepRunning): RunResult НЕ придёт, reaper
-	//     running не подбирает — форс-фейлим (BAG-1 recovery).
+	// Late abort: terminalize real hosts' non-terminal rows to terminal
+	// (cancelled on operator Cancel, otherwise failed). running rows are
+	// handled differently BY CAUSE (keepRunning):
+	//   - operator Cancel (keepRunning): the apply reached a LIVE host — leave
+	//     it, an honest RunResult will arrive (honest reporting).
+	//   - timeout/dead-host/ctx.Err (!keepRunning): no RunResult will arrive,
+	//     the reaper doesn't pick up running — force-fail (BAG-1 recovery).
 	for _, st := range statuses {
 		switch st.Status {
 		case applyrun.StatusPlanned, applyrun.StatusClaimed, applyrun.StatusDispatched:
-			// недотерминальные, apply ещё не на хосте — закрываем в terminal
+			// non-terminal, apply hasn't reached the host yet — close to terminal
 		case applyrun.StatusRunning:
 			if keepRunning {
-				continue // operator-Cancel: дойдёт честный RunResult
+				continue // operator-Cancel: an honest RunResult will arrive
 			}
-			// timeout/dead-host: RunResult не придёт — форс-фейлим
+			// timeout/dead-host: no RunResult will arrive — force-fail
 		default:
-			continue // уже терминальна
+			continue // already terminal
 		}
 		if uerr := applyrun.UpdateStatus(wctx, r.deps.DB, spec.ApplyID, st.SID, st.Passage, terminal, &summary); uerr != nil {
 			log.Warn("scenario: терминализация строки apply_runs провалена",
@@ -1142,11 +1212,12 @@ func (r *Runner) ensureTerminalApplyRun(ctx context.Context, spec RunSpec, reaso
 	}
 }
 
-// writeDestroyFailedAudit пишет audit-event incarnation.destroy_failed после
-// перевода incarnation в destroy_failed (провал teardown-а, S-D3). source=
-// keeper_internal (write-path — scenario-runner, archon_aid колонка NULL),
-// correlation_id = apply_id. reason берётся из уже маскированного status_details
-// (cause мог транзитом нести vault-ref). w == nil → trail не пишется.
+// writeDestroyFailedAudit writes an incarnation.destroy_failed audit event
+// after moving the incarnation to destroy_failed (teardown failure, S-D3).
+// source=keeper_internal (write path is the scenario-runner, archon_aid
+// column NULL), correlation_id = apply_id. reason comes from the already-
+// masked status_details (cause may have carried a vault-ref in transit).
+// Nil Audit → no trail written.
 func (r *Runner) writeDestroyFailedAudit(ctx context.Context, spec RunSpec, reason string, details map[string]any, log *slog.Logger) {
 	if r.deps.Audit == nil {
 		return
@@ -1156,8 +1227,8 @@ func (r *Runner) writeDestroyFailedAudit(ctx context.Context, spec RunSpec, reas
 		"apply_id": spec.ApplyID,
 		"reason":   reason,
 	}
-	// Маскированный текст причины (если есть) — из status_details, не из
-	// сырого cause: details уже прошли MaskSecrets выше.
+	// The masked reason text (if any) comes from status_details, not the raw
+	// cause: details already went through MaskSecrets above.
 	if errText, ok := details["error"].(string); ok && errText != "" {
 		payload["error"] = errText
 	}
@@ -1173,11 +1244,11 @@ func (r *Runner) writeDestroyFailedAudit(ctx context.Context, spec RunSpec, reas
 	}
 }
 
-// destroyForce извлекает намерение force из status_details incarnation (S-D1
-// положил туда `force` при переводе в destroying). Отсутствие ключа / не-bool →
-// false (консервативный дефолт: трактуем как teardown-destroy). Значение идёт
-// только в audit-payload destroy_completed — фактическое поведение teardown-а
-// уже отработано выше.
+// destroyForce extracts the force intent from the incarnation's
+// status_details (S-D1 put `force` there when transitioning to destroying).
+// A missing key / non-bool → false (conservative default: treat as
+// teardown-destroy). The value only feeds the destroy_completed audit payload
+// — actual teardown behavior already happened above.
 func destroyForce(inc *incarnation.Incarnation) bool {
 	if inc == nil || inc.StatusDetails == nil {
 		return false
@@ -1186,9 +1257,9 @@ func destroyForce(inc *incarnation.Incarnation) bool {
 	return f
 }
 
-// commitSuccess фиксирует успешный прогон: state_changes коммитятся в
-// incarnation.state, статус → ready, snapshot в state_history. Одна
-// PG-транзакция (FOR UPDATE внутри UpdateStateFromRun).
+// commitSuccess records a successful run: state_changes are committed into
+// incarnation.state, status → ready, a snapshot goes to state_history. One PG
+// transaction (FOR UPDATE inside UpdateStateFromRun).
 func (r *Runner) commitSuccess(ctx context.Context, spec RunSpec, stateBefore, stateAfter map[string]any) error {
 	historyID := audit.NewULID()
 	return pgx.BeginFunc(ctx, r.deps.DB, func(tx pgx.Tx) error {
@@ -1203,51 +1274,56 @@ func (r *Runner) commitSuccess(ctx context.Context, spec RunSpec, stateBefore, s
 	})
 }
 
-// run_completed-статусы payload-а incarnation.run_completed (ADR-052 §k). Единое
-// событие на любой терминал обычного прогона; исход выносится в payload.status
-// (паттерн task.executed/run.completed — фильтрация по полю, не по разбегу
-// event_type). error_locked сворачивается в "failed" (под-статусы не плодим).
+// run_completed status values for the incarnation.run_completed payload
+// (ADR-052 §k). One event for any normal-run terminal; the outcome goes into
+// payload.status (task.executed/run.completed pattern — filter by field, not
+// by event_type sprawl). error_locked collapses into "failed" (no
+// sub-statuses).
 const (
 	runCompletedStatusSuccess = "success"
 	runCompletedStatusFailed  = "failed"
 )
 
-// emitRunCompleted пишет audit-событие incarnation.run_completed на терминале
-// обычного прогона (T3/T4-фундамент, ADR-052 §k): per-incarnation итог
-// scenario-run с массивом changed_tasks и status ∈ {success, failed}.
-// source=keeper_internal (write-path — scenario-runner, archon_aid колонка NULL),
-// correlation_id = apply_id. Одно событие на инкарнацию-прогон, НЕ per-host.
+// emitRunCompleted writes the incarnation.run_completed audit event at a
+// normal run's terminal (T3/T4 foundation, ADR-052 §k): the per-incarnation
+// scenario-run outcome with a changed_tasks array and status ∈ {success,
+// failed}. source=keeper_internal (write path is the scenario-runner,
+// archon_aid column NULL), correlation_id = apply_id. One event per
+// incarnation-run, NOT per-host.
 //
-// Вызывается из ДВУХ точек: success-ветка run() (после commitSuccess) с
-// status=success И abort() (после терминализации провала, только когда наш
-// lockIncarnation реально записал терминал) с status=failed. TerminalDestroy в
-// обе точки не приходит — у destroy свой терминал (destroy_completed/_failed).
+// Called from TWO places: run()'s success branch (after commitSuccess) with
+// status=success, AND abort() (after terminalizing a failure, only when our
+// lockIncarnation actually recorded the terminal) with status=failed.
+// TerminalDestroy never reaches either — destroy has its own terminal
+// (destroy_completed/_failed).
 //
-// changed_tasks собирается из АГРЕГАТА журнала аудита (task.executed+CHANGED,
-// AuditReader) — read-only по адресным полям (sid, task_idx); метаданные задач —
-// из in-memory tasks (секрет-гигиена). Свёртка по адресу register∪id (loop-
-// итерации одного адреса — одна запись, union уникальных sid). На провале
-// tasks/plans могут быть nil (ранний abort до render) → buildChangedTasks(nil,…)
-// возвращает nil (тест TestBuildChangedTasks_EmptyInputs), либо частичными
-// (поздний abort) → changed_tasks несёт то, что успело CHANGED до падения.
-// Audit/AuditReader nil → деградация: при nil AuditReader событие пишется без
-// changed_tasks (только факт терминала), при nil Audit — не пишется вовсе.
+// changed_tasks is built from the audit log AGGREGATE (task.executed+CHANGED,
+// AuditReader) — read-only over address fields (sid, task_idx); task metadata
+// comes from in-memory tasks (secret hygiene). Folded by register∪id address
+// (loop iterations of one address → one record, union of unique sids). On
+// failure, tasks/plans may be nil (early abort before render) →
+// buildChangedTasks(nil,…) returns nil (see TestBuildChangedTasks_EmptyInputs),
+// or partial (late abort) → changed_tasks carries whatever reached CHANGED
+// before failing. Nil Audit/AuditReader degrade: nil AuditReader → event
+// written without changed_tasks (just the terminal fact); nil Audit → not
+// written at all.
 //
-// cadence_id кладётся в payload ТОЛЬКО при spec.CadenceID != nil (дочерний Voyage
-// расписания, T4b) — ручной прогон ключ не несёт (консервативно, как drift-
-// payload), чтобы постоянное Tiding-правило с cadence-селектором ловило именно
-// результаты прогонов расписания.
+// cadence_id goes into the payload ONLY when spec.CadenceID != nil (a
+// scheduled Voyage's child run, T4b) — a manual run carries no such key
+// (conservative, like the drift payload), so a standing Tiding rule with a
+// cadence selector catches exactly scheduled-run results.
 //
-// voyage_id кладётся в payload ТОЛЬКО при spec.VoyageID != nil (прогон через
-// Voyage, ADR-052 amend §k) — прямые пути (create/rerun/destroy) минуют Voyage
-// и ключ не несут (симметрия с cadence_id). Нужен Voyage detail для visibility-
-// фетча per-incarnation run-событий вояжа: событие per-incarnation несёт
-// correlation_id=apply_id, а страница вояжа фильтрует по voyage_id в payload.
+// voyage_id goes into the payload ONLY when spec.VoyageID != nil (a run
+// through a Voyage, ADR-052 amend §k) — direct paths (create/rerun/destroy)
+// bypass Voyage and carry no such key (symmetric to cadence_id). Needed by
+// the Voyage detail page's visibility fetch of per-incarnation run events:
+// the event carries correlation_id=apply_id, and the voyage page filters by
+// voyage_id in the payload.
 //
-// Detached-ctx: исходный ctx мог быть на грани таймаута/отменён (timeout/Cancel/
-// Shutdown на провале), но зафиксировать терминал прогона надо. Все ошибки только
-// логируются (warn) — прогон уже терминал-ил, потеря события = деградация
-// наблюдаемости.
+// Detached ctx: the original ctx may be near timeout/cancelled
+// (timeout/Cancel/Shutdown on failure), but the run's terminal must still be
+// recorded. All errors are only logged (warn) — the run already reached
+// terminal, losing the event just degrades observability.
 func (r *Runner) emitRunCompleted(ctx context.Context, spec RunSpec, status string, tasks []*render.RenderedTask, plans []render.DispatchPlan, log *slog.Logger) {
 	if r.deps.Audit == nil {
 		return
@@ -1259,8 +1335,8 @@ func (r *Runner) emitRunCompleted(ctx context.Context, spec RunSpec, status stri
 	if r.deps.AuditReader != nil {
 		keys, err := r.deps.AuditReader.SelectChangedTaskKeys(wctx, spec.ApplyID)
 		if err != nil {
-			// Чтение агрегата провалено — пишем событие без changed_tasks, не теряя
-			// сам факт терминала. Свёртка best-effort.
+			// Reading the aggregate failed — write the event without changed_tasks,
+			// without losing the terminal fact itself. Best-effort aggregation.
 			log.Warn("scenario: чтение changed-агрегата для incarnation.run_completed провалено — событие без changed_tasks",
 				slog.Any("error", err))
 		} else {
@@ -1294,21 +1370,22 @@ func (r *Runner) emitRunCompleted(ctx context.Context, spec RunSpec, status stri
 	}
 }
 
-// persistRunPlan сохраняет host-инвариантный план задач АКТИВНОГО Passage прогона
-// (apply_run_plan, NIM-37) для read-эндпоинта /tasks: строка на plan_index с
-// name/module/no_log/passage + masked params (S1b). Вызывается ПО-PASSAGE из его
-// активного render; фильтр t.Passage != activePassage выкидывает placeholder-ы
-// будущих Passage (staged-render, ADR-056 §в.1), чьи сжатые индексы разъехались бы
-// с реальным раскрытым исполнением (H1). Идемпотентно (insertRunPlanSQL = ON
-// CONFLICT DO UPDATE), passage-срезы не пересекаются по plan_index. name/module/
-// no_log — НЕ секрет (адрес/тип задачи), маскинг не нужен; params ЖЕ могут нести
-// секрет → maskRunPlanParams (seal-aware маскинг + фильтр транспорта) на write-path.
-// sealedPaths — sealed-пути прогона (sealed.Paths()) для того же seal-aware маскера,
-// что status_details/error_summary.
+// persistRunPlan saves the run's ACTIVE Passage's host-invariant task plan
+// (apply_run_plan, NIM-37) for the /tasks read endpoint: one row per
+// plan_index with name/module/no_log/passage + masked params (S1b). Called
+// PER-PASSAGE from its active render; the t.Passage != activePassage filter
+// drops future Passages' placeholders (staged-render, ADR-056 §c.1), whose
+// compacted indices would diverge from actual execution (H1). Idempotent
+// (insertRunPlanSQL = ON CONFLICT DO UPDATE), passage slices don't overlap by
+// plan_index. name/module/no_log are NOT secret (task address/type), no
+// masking needed; params CAN carry a secret → maskRunPlanParams (seal-aware
+// masking + transport filter) on the write path. sealedPaths is the run's
+// sealed paths (sealed.Paths()) for the same seal-aware masker as
+// status_details/error_summary.
 //
-// Best-effort: r.deps.DB=nil (unit без PG) или ошибка записи только логируются —
-// потеря плана деградирует наблюдаемость /tasks, но не корректность прогона
-// (симметрично accumulateRegister/emitRunCompleted).
+// Best-effort: r.deps.DB=nil (unit without PG) or a write error are only
+// logged — losing the plan degrades /tasks observability, not run
+// correctness (symmetric to accumulateRegister/emitRunCompleted).
 func (r *Runner) persistRunPlan(ctx context.Context, spec RunSpec, tasks []*render.RenderedTask, activePassage int, sealedPaths map[string]bool, log *slog.Logger) {
 	if r.deps.DB == nil || len(tasks) == 0 {
 		return
@@ -1334,24 +1411,26 @@ func (r *Runner) persistRunPlan(ctx context.Context, spec RunSpec, tasks []*rend
 	}
 }
 
-// paramTemplateContent / paramRenderContext — транспортные ключи params шага
-// core.file.rendered (зеркало render/template.go): template_content — прочитанное
-// Keeper-ом содержимое файла для Soul-side render, render_context — собранный
-// per-host корень text/template. Оба НЕ operator-facing «входные данные» задачи →
-// выкидываются из params перед персистом в apply_run_plan (NIM-37 S1b).
+// paramTemplateContent / paramRenderContext are transport keys in
+// core.file.rendered's params (mirrors render/template.go): template_content
+// is the file content Keeper read for Soul-side render, render_context is
+// the assembled per-host text/template root. Neither is operator-facing task
+// "input" → both are stripped from params before persisting to
+// apply_run_plan (NIM-37 S1b).
 const (
 	paramTemplateContent = "template_content"
 	paramRenderContext   = "render_context"
 )
 
-// maskRunPlanParams готовит params задачи к персисту в apply_run_plan (NIM-37 S1b):
-// protobuf Struct → map, выкидывает транспортные ключи (template_content/
-// render_context), прогоняет остаток через seal-aware маскинг (тот же
-// audit.MaskSecretsSealed, что status_details/error_summary: sealed-пути прогона +
-// vault-ref + regex-last-resort с алармом) — ВТОРОЙ барьер поверх того, что params
-// уже отрендерены. no_log-задача / нет Params / пустой остаток → nil (jsonb NULL,
-// симметрия с подавлением register_data для no_log). Ошибка marshal → nil (best-
-// effort: наблюдаемость params деградирует, персист плана не валится).
+// maskRunPlanParams prepares a task's params for persisting to
+// apply_run_plan (NIM-37 S1b): protobuf Struct → map, strips transport keys
+// (template_content/render_context), runs the rest through seal-aware masking
+// (the same audit.MaskSecretsSealed as status_details/error_summary:
+// run sealed paths + vault-ref + regex-last-resort with an alarm) — a SECOND
+// barrier on top of already-rendered params. A no_log task / no Params /
+// empty remainder → nil (jsonb NULL, symmetric to suppressing register_data
+// for no_log). A marshal error → nil (best-effort: params observability
+// degrades, plan persist doesn't fail).
 func maskRunPlanParams(t *render.RenderedTask, sealedPaths map[string]bool) []byte {
 	if t == nil || t.NoLog || t.Params == nil {
 		return nil
@@ -1374,11 +1453,12 @@ func maskRunPlanParams(t *render.RenderedTask, sealedPaths map[string]bool) []by
 	return b
 }
 
-// changedTasksPayload конвертирует []ChangedTask в JSON-payload-форму события
-// (snake_case-ключи). Отдельная функция — чтобы wire-форма payload не
-// размазалась по коду эмиссии. Несёт ТОЛЬКО метаданные + counts (секрет-гигиена
-// T3): register/params-значений нет. Пустой/nil вход → пустой slice (не nil),
-// чтобы JSONB-payload нёс `"changed_tasks": []`, а не отсутствие ключа.
+// changedTasksPayload converts []ChangedTask to the event's JSON payload form
+// (snake_case keys). A separate function so the wire payload shape doesn't
+// smear across the emission code. Carries ONLY metadata + counts (secret
+// hygiene, T3): no register/params values. Empty/nil input → empty slice
+// (not nil), so the JSONB payload carries `"changed_tasks": []` rather than a
+// missing key.
 func changedTasksPayload(changed []ChangedTask) []map[string]any {
 	out := make([]map[string]any, 0, len(changed))
 	for _, c := range changed {
@@ -1395,8 +1475,8 @@ func changedTasksPayload(changed []ChangedTask) []map[string]any {
 	return out
 }
 
-// startedByPtr превращает StartedByAID в *string (пустая строка → nil, чтобы
-// FK started_by_aid писался NULL для прогонов без identity Архонта).
+// startedByPtr turns StartedByAID into a *string (empty string → nil, so the
+// started_by_aid FK is written NULL for runs without an Archon identity).
 func startedByPtr(aid string) *string {
 	if aid == "" {
 		return nil
@@ -1404,15 +1484,16 @@ func startedByPtr(aid string) *string {
 	return &aid
 }
 
-// maskErrText возвращает текст ошибки, прогнанный через seal-aware маскинг:
-// render/dispatch-ошибка может нести vault:secret/-ref (наводку на секрет-
-// локацию). Тот же фильтр, что для status_details, применяется и к slog-каналу
-// (лог-файл — наблюдаемый канал). sealedPaths — пути sealed-ячеек прогона
-// ([ADR-010] §7.4): здесь под единым ключом `error` они почти всегда no-op
-// (свободный текст ошибки несёт путь/выражение, не значение по sealed-пути), но
-// маскинг идёт тем же MaskSecretsSealed для симметрии со status_details и чтобы
-// regex-аларм (DefaultSealHooks) фиксировал sensitive-by-name в тексте. nil →
-// пустая строка.
+// maskErrText returns error text run through seal-aware masking: a
+// render/dispatch error may carry a vault:secret/-ref (a pointer to a secret
+// location). The same filter used for status_details is applied to the slog
+// channel too (the log file is an observable channel). sealedPaths is the
+// run's sealed-cell paths ([ADR-010] §7.4): here, under the single `error`
+// key, they're almost always a no-op (free-text error carries a path/
+// expression, not a value at a sealed path), but masking still goes through
+// the same MaskSecretsSealed for symmetry with status_details and so the
+// regex alarm (DefaultSealHooks) catches sensitive-by-name text. nil → empty
+// string.
 func maskErrText(err error, sealedPaths map[string]bool) string {
 	if err == nil {
 		return ""
@@ -1428,8 +1509,8 @@ func maskErrText(err error, sealedPaths map[string]bool) string {
 	return err.Error()
 }
 
-// firstError возвращает сообщение первой error-диагностики (для краткого
-// отчёта об ошибке парсинга scenario).
+// firstError returns the first error-level diagnostic's message (for a short
+// scenario-parse error report).
 func firstError(diags []diag.Diagnostic) string {
 	for i := range diags {
 		if diags[i].Level == diag.LevelError {

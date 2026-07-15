@@ -10,8 +10,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// TestResolveTaskVars_Empty — пустой/nil task-vars не трогает base (поле Vars
-// остаётся nil → штатный no-such-key на vars.<key>).
+// TestResolveTaskVars_Empty proves an empty/nil task-vars leaves base untouched
+// (the Vars field stays nil → normal no-such-key on vars.<key>).
 func TestResolveTaskVars_Empty(t *testing.T) {
 	e := newEngine(t)
 	base := cel.Vars{Input: map[string]any{"x": "v"}}
@@ -33,8 +33,8 @@ func TestResolveTaskVars_Empty(t *testing.T) {
 	}
 }
 
-// TestResolveTaskVars_FromInput — vars-значение ссылается на input, результат
-// доступен как vars.<key>.
+// TestResolveTaskVars_FromInput proves a vars value referencing input is
+// available as vars.<key>.
 func TestResolveTaskVars_FromInput(t *testing.T) {
 	e := newEngine(t)
 	base := cel.Vars{Input: map[string]any{"host": "10.0.0.1"}}
@@ -48,8 +48,8 @@ func TestResolveTaskVars_FromInput(t *testing.T) {
 	}
 }
 
-// TestResolveTaskVars_NonStringPassthrough — non-string vars-значения проходят
-// литералом (CEL трогает только строки, симметрично params).
+// TestResolveTaskVars_NonStringPassthrough proves non-string vars values pass
+// through as literals (CEL only touches strings, symmetric with params).
 func TestResolveTaskVars_NonStringPassthrough(t *testing.T) {
 	e := newEngine(t)
 	got, err := resolveTaskVars(e, nil, map[string]any{
@@ -67,8 +67,8 @@ func TestResolveTaskVars_NonStringPassthrough(t *testing.T) {
 	}
 }
 
-// TestResolveTaskVars_NativeTypeSingleBlock — одиночный ${expr} даёт нативный тип
-// (число), не строку (templating.md §5(а)), как и в params.
+// TestResolveTaskVars_NativeTypeSingleBlock proves a lone ${expr} yields a
+// native type (number), not a string (templating.md §5(a)), same as in params.
 func TestResolveTaskVars_NativeTypeSingleBlock(t *testing.T) {
 	e := newEngine(t)
 	base := cel.Vars{Input: map[string]any{"n": int64(5)}}
@@ -82,15 +82,16 @@ func TestResolveTaskVars_NativeTypeSingleBlock(t *testing.T) {
 	}
 }
 
-// TestResolveTaskVars_VarToVar — task-var ссылается на ДРУГОЙ task-var того же
-// слоя (var→var внутри слоя РАЗРЕШЁН, eager-topological); порядок объявления
-// безразличен (topоsort). Guard-тест инварианта var→var (кейс #1, task-слой).
+// TestResolveTaskVars_VarToVar proves a task-var can reference ANOTHER
+// task-var in the same layer (var→var within a layer is ALLOWED,
+// eager-topological); declaration order doesn't matter (toposort). Guard test
+// for the var→var invariant (case #1, task layer).
 func TestResolveTaskVars_VarToVar(t *testing.T) {
 	e := newEngine(t)
 	base := cel.Vars{Input: map[string]any{"host": "h"}}
 
 	got, err := resolveTaskVars(e, nil, map[string]any{
-		"b": "${ vars.a }-x", // объявлен РАНЬШЕ a — порядок не важен
+		"b": "${ vars.a }-x", // declared BEFORE a — order doesn't matter
 		"a": "${ input.host }",
 	}, base)
 	if err != nil {
@@ -104,16 +105,17 @@ func TestResolveTaskVars_VarToVar(t *testing.T) {
 	}
 }
 
-// TestResolveTaskVars_CannotSeeFileVar — межслойная изоляция: task-var НЕ видит
-// file-var (`${ vars.<file_var> }` → ErrVarUnknownRef, file-vars не в task-слое).
-// Guard-тест инварианта изоляции (кейс #8, task→file).
+// TestResolveTaskVars_CannotSeeFileVar proves cross-layer isolation: a
+// task-var cannot see a file-var (`${ vars.<file_var> }` → ErrVarUnknownRef,
+// file-vars aren't in the task layer). Guard test for the isolation invariant
+// (case #8, task→file).
 func TestResolveTaskVars_CannotSeeFileVar(t *testing.T) {
 	e := newEngine(t)
 	base := cel.Vars{Input: map[string]any{"host": "h"}}
 
 	_, err := resolveTaskVars(e,
-		map[string]any{"fv": "FILE"},                   // file-vars (резолвлены)
-		map[string]any{"tv": "${ vars.fv }-from-task"}, // task-var ссылается на file-var
+		map[string]any{"fv": "FILE"},                   // file-vars (resolved)
+		map[string]any{"tv": "${ vars.fv }-from-task"}, // task-var references a file-var
 		base)
 	if err == nil {
 		t.Fatal("resolveTaskVars: task-var не должен видеть file-var (межслойная изоляция)")
@@ -123,8 +125,8 @@ func TestResolveTaskVars_CannotSeeFileVar(t *testing.T) {
 	}
 }
 
-// TestResolveTaskVars_Cycle — цикл task-var→task-var → ErrVarCycle с трассой.
-// Guard-тест (кейс #2/#4 на task-слое).
+// TestResolveTaskVars_Cycle proves a task-var→task-var cycle yields
+// ErrVarCycle with a trace. Guard test (case #2/#4 on the task layer).
 func TestResolveTaskVars_Cycle(t *testing.T) {
 	e := newEngine(t)
 	_, err := resolveTaskVars(e, nil, map[string]any{
@@ -136,8 +138,8 @@ func TestResolveTaskVars_Cycle(t *testing.T) {
 	}
 }
 
-// TestResolveTaskVars_FromSoulprintSelf — vars может ссылаться на soulprint.self
-// (destiny/tasks.md §9), резолвится per-host.
+// TestResolveTaskVars_FromSoulprintSelf proves vars can reference
+// soulprint.self (destiny/tasks.md §9), resolved per-host.
 func TestResolveTaskVars_FromSoulprintSelf(t *testing.T) {
 	e := newEngine(t)
 	base := cel.Vars{SoulprintSelf: map[string]any{"os": map[string]any{"family": "debian"}}}
@@ -151,8 +153,8 @@ func TestResolveTaskVars_FromSoulprintSelf(t *testing.T) {
 	}
 }
 
-// TestRender_VarsInParams — end-to-end: task-level vars: { addr: ${ input.host } }
-// + params ${ vars.addr } → params резолвятся через vars.
+// TestRender_VarsInParams is an end-to-end check: task-level vars: { addr:
+// ${ input.host } } + params ${ vars.addr } → params resolve through vars.
 func TestRender_VarsInParams(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "connect",
@@ -183,8 +185,8 @@ func TestRender_VarsInParams(t *testing.T) {
 	}
 }
 
-// TestRender_VarsOverridesViaInterpolation — vars-значение упрощает длинное
-// выражение, params его переиспользует несколько раз.
+// TestRender_VarsReusedAcrossParams proves a vars value simplifying a long
+// expression can be reused by params multiple times.
 func TestRender_VarsReusedAcrossParams(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "redis",
@@ -222,8 +224,8 @@ func TestRender_VarsReusedAcrossParams(t *testing.T) {
 	}
 }
 
-// TestRender_VarsInWhere — vars: видны в where: (голая vars.<key> в
-// expression-key), фильтруют хосты.
+// TestRender_VarsInWhere proves vars: is visible inside where: (bare
+// vars.<key> in an expression-key), filtering hosts.
 func TestRender_VarsInWhere(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "target",
@@ -258,9 +260,9 @@ func TestRender_VarsInWhere(t *testing.T) {
 	}
 }
 
-// TestRender_NoVars_NotBroken — отсутствие vars: не ломает рендер, при этом
-// ссылка на vars.<key> в params без объявленных vars → ошибка no-such-key
-// (штатно, как любой неизвестный контекст).
+// TestRender_NoVars_NotBroken proves the absence of vars: doesn't break the
+// render, while a vars.<key> reference in params without declared vars yields
+// a no-such-key error (normal, like any unknown context).
 func TestRender_NoVars_NotBroken(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "plain",
@@ -287,9 +289,10 @@ func TestRender_NoVars_NotBroken(t *testing.T) {
 	}
 }
 
-// TestRender_VarsPerLoopIteration — task-level vars: пересчитываются на каждой
-// loop-итерации и могут ссылаться на loop-переменную <as> (destiny/tasks.md §12,
-// open Q «Композиция с loop:» — фиксируем «да, пересчитываются»).
+// TestRender_VarsPerLoopIteration proves task-level vars: are recomputed on
+// each loop iteration and can reference the loop variable <as>
+// (destiny/tasks.md §12, open Q "composition with loop:" — settled as "yes,
+// recomputed").
 func TestRender_VarsPerLoopIteration(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "loop-vars",

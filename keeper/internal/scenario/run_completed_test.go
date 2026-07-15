@@ -10,7 +10,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// fakeChangedReader — ChangedTaskReader: отдаёт фикс-множества CHANGED/FAILED-ключей.
+// fakeChangedReader — a ChangedTaskReader: returns fixed sets of CHANGED/FAILED keys.
 type fakeChangedReader struct {
 	keys       map[auditpg.ChangedTaskKey]struct{}
 	failedKeys map[auditpg.ChangedTaskKey]struct{}
@@ -40,9 +40,9 @@ func runCompletedSpec() RunSpec {
 	}
 }
 
-// TestEmitRunCompleted_SingleEventWithChangedTasks — событие эмитится РОВНО один
-// раз (per-incarnation, не per-host), source=keeper_internal, correlation=apply_id,
-// payload несёт changed_tasks свёрнутые по адресу.
+// TestEmitRunCompleted_SingleEventWithChangedTasks — the event is emitted EXACTLY once
+// (per-incarnation, not per-host), source=keeper_internal, correlation=apply_id,
+// payload carries changed_tasks folded by address.
 func TestEmitRunCompleted_SingleEventWithChangedTasks(t *testing.T) {
 	aw := &fakeAuditWriter{}
 	ar := &fakeChangedReader{keys: changedKeys(
@@ -96,7 +96,7 @@ func TestEmitRunCompleted_SingleEventWithChangedTasks(t *testing.T) {
 }
 
 // TestEmitRunCompleted_NilAuditReaderNoChangedTasks — AuditReader=nil:
-// событие пишется БЕЗ changed_tasks (пустой массив), факт терминала не теряется.
+// the event is written WITHOUT changed_tasks (empty array), the terminal fact isn't lost.
 func TestEmitRunCompleted_NilAuditReaderNoChangedTasks(t *testing.T) {
 	aw := &fakeAuditWriter{}
 	r := runCompletedRunner(aw, nil)
@@ -118,21 +118,21 @@ func TestEmitRunCompleted_NilAuditReaderNoChangedTasks(t *testing.T) {
 	}
 }
 
-// TestEmitRunCompleted_NilAuditNoEvent — Audit=nil: событие не пишется вовсе
-// (unit-сборка без аудита), вызов не паникует.
+// TestEmitRunCompleted_NilAuditNoEvent — Audit=nil: no event is written at all
+// (unit build without audit), the call doesn't panic.
 func TestEmitRunCompleted_NilAuditNoEvent(t *testing.T) {
 	r := runCompletedRunner(nil, &fakeChangedReader{})
-	// Не должно паниковать и ничего не писать.
+	// Must not panic and must write nothing.
 	r.emitRunCompleted(context.Background(), runCompletedSpec(), runCompletedStatusSuccess, nil, nil, slog.New(slog.DiscardHandler))
 }
 
-// TestEmitRunCompleted_FailedLateAbortPartialChangedTasks — провал с ПОЗДНИМ
-// abort (tasks/plans есть, render успел): status=failed, changed_tasks несёт
-// ЧАСТИЧНОЕ изменившееся (что успело CHANGED до падения). Та же форма payload,
-// что и на успехе.
+// TestEmitRunCompleted_FailedLateAbortPartialChangedTasks — a failure with a LATE
+// abort (tasks/plans exist, render made progress): status=failed, changed_tasks carries
+// the PARTIAL set of changes (whatever went CHANGED before the failure). Same payload shape
+// as on success.
 func TestEmitRunCompleted_FailedLateAbortPartialChangedTasks(t *testing.T) {
 	aw := &fakeAuditWriter{}
-	// CHANGED только на одном из двух таргет-хостов (частичный прогресс до падения).
+	// CHANGED on only one of the two target hosts (partial progress before the failure).
 	ar := &fakeChangedReader{keys: changedKeys(
 		auditpg.ChangedTaskKey{SID: "a.local", PlanIndex: 0},
 	)}
@@ -169,15 +169,15 @@ func TestEmitRunCompleted_FailedLateAbortPartialChangedTasks(t *testing.T) {
 	}
 }
 
-// TestEmitRunCompleted_FailedEarlyAbortEmptyChangedTasks — провал с РАННИМ abort
-// (tasks=nil/plans=nil: no_hosts/scenario_load_failed/… до render): status=failed,
-// changed_tasks пуст, вызов НЕ паникует на nil-входе (buildChangedTasks(nil,…)
-// возвращает nil).
+// TestEmitRunCompleted_FailedEarlyAbortEmptyChangedTasks — a failure with an EARLY
+// abort (tasks=nil/plans=nil: no_hosts/scenario_load_failed/… before render): status=failed,
+// changed_tasks is empty, the call does NOT panic on nil input (buildChangedTasks(nil,…)
+// returns nil).
 func TestEmitRunCompleted_FailedEarlyAbortEmptyChangedTasks(t *testing.T) {
 	aw := &fakeAuditWriter{}
 	r := runCompletedRunner(aw, &fakeChangedReader{})
 
-	// Ранний abort: ни tasks, ни plans (render не дошёл) — не должно паниковать.
+	// Early abort: neither tasks nor plans (render never ran) — must not panic.
 	r.emitRunCompleted(context.Background(), runCompletedSpec(), runCompletedStatusFailed, nil, nil, slog.New(slog.DiscardHandler))
 
 	if len(aw.events) != 1 {
@@ -196,7 +196,7 @@ func TestEmitRunCompleted_FailedEarlyAbortEmptyChangedTasks(t *testing.T) {
 }
 
 // TestEmitRunCompleted_CadenceIDPresentWhenSet — spec.CadenceID != nil → payload
-// несёт cadence_id (дочерний Voyage расписания, T4b).
+// carries cadence_id (a scheduled Voyage child, T4b).
 func TestEmitRunCompleted_CadenceIDPresentWhenSet(t *testing.T) {
 	aw := &fakeAuditWriter{}
 	r := runCompletedRunner(aw, nil)
@@ -215,8 +215,8 @@ func TestEmitRunCompleted_CadenceIDPresentWhenSet(t *testing.T) {
 	}
 }
 
-// TestEmitRunCompleted_CadenceIDAbsentWhenNil — spec.CadenceID == nil (ручной
-// прогон) → ключ cadence_id ОТСУТСТВУЕТ в payload (консервативно, как drift-
+// TestEmitRunCompleted_CadenceIDAbsentWhenNil — spec.CadenceID == nil (a manual
+// run) → the cadence_id key is ABSENT from payload (conservatively, like the drift
 // payload).
 func TestEmitRunCompleted_CadenceIDAbsentWhenNil(t *testing.T) {
 	aw := &fakeAuditWriter{}
@@ -233,8 +233,8 @@ func TestEmitRunCompleted_CadenceIDAbsentWhenNil(t *testing.T) {
 	}
 }
 
-// TestEmitRunCompleted_VoyageIDPresentWhenSet — spec.VoyageID != nil (прогон через
-// Voyage) → payload несёт voyage_id на УСПЕХЕ (ADR-052 amend §k, visibility-фетч
+// TestEmitRunCompleted_VoyageIDPresentWhenSet — spec.VoyageID != nil (a run via
+// Voyage) → payload carries voyage_id on SUCCESS (ADR-052 amend §k, visibility fetch of
 // Voyage detail).
 func TestEmitRunCompleted_VoyageIDPresentWhenSet(t *testing.T) {
 	aw := &fakeAuditWriter{}
@@ -254,9 +254,9 @@ func TestEmitRunCompleted_VoyageIDPresentWhenSet(t *testing.T) {
 	}
 }
 
-// TestEmitRunCompleted_VoyageIDPresentOnFailed — voyage_id попадает в payload и на
-// ПРОВАЛЬНОМ терминале (abort-ветка идёт через ту же emitRunCompleted): Voyage
-// detail должен видеть и провалившиеся per-incarnation прогоны вояжа.
+// TestEmitRunCompleted_VoyageIDPresentOnFailed — voyage_id lands in payload on the
+// FAILED terminal too (the abort branch goes through the same emitRunCompleted): Voyage
+// detail must see failed per-incarnation runs of the voyage too.
 func TestEmitRunCompleted_VoyageIDPresentOnFailed(t *testing.T) {
 	aw := &fakeAuditWriter{}
 	r := runCompletedRunner(aw, nil)
@@ -278,11 +278,11 @@ func TestEmitRunCompleted_VoyageIDPresentOnFailed(t *testing.T) {
 	}
 }
 
-// TestWriteDestroyFailedAudit_CorrelationIDIsApplyID — guard: destroy_failed-
-// событие несёт correlation_id = apply_id (как run_completed), а не только
-// payload.apply_id. Без correlation_id колонки событие не находится keyset-
-// фильтром по correlation_id (только JSONB-сканом payload->>'apply_id'); этот
-// guard ловит регресс пропуска CorrelationID в writeDestroyFailedAudit.
+// TestWriteDestroyFailedAudit_CorrelationIDIsApplyID — guard: the destroy_failed
+// event carries correlation_id = apply_id (like run_completed), not just
+// payload.apply_id. Without the correlation_id column, the event isn't found by the keyset
+// filter on correlation_id (only via a JSONB scan of payload->>'apply_id'); this
+// guard catches a regression where CorrelationID is dropped in writeDestroyFailedAudit.
 func TestWriteDestroyFailedAudit_CorrelationIDIsApplyID(t *testing.T) {
 	aw := &fakeAuditWriter{}
 	r := runCompletedRunner(aw, nil)
@@ -311,9 +311,9 @@ func TestWriteDestroyFailedAudit_CorrelationIDIsApplyID(t *testing.T) {
 	}
 }
 
-// TestEmitRunCompleted_VoyageIDAbsentWhenNil — spec.VoyageID == nil (прямой путь
-// create/rerun/destroy, минующий Voyage) → ключ voyage_id ОТСУТСТВУЕТ в payload
-// (симметрия с cadence_id).
+// TestEmitRunCompleted_VoyageIDAbsentWhenNil — spec.VoyageID == nil (the direct
+// create/rerun/destroy path, bypassing Voyage) → the voyage_id key is ABSENT from payload
+// (symmetric with cadence_id).
 func TestEmitRunCompleted_VoyageIDAbsentWhenNil(t *testing.T) {
 	aw := &fakeAuditWriter{}
 	r := runCompletedRunner(aw, nil)

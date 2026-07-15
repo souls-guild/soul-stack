@@ -5,38 +5,39 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/serviceregistry"
 )
 
-// ServiceCatalog — источник записей реестра Service-ов по имени. Реализуется
-// runtime-снимком [serviceregistry.Holder] (Resolve читает текущий atomic-снимок
-// из БД, ADR-029). Объявлен интерфейсом, чтобы [ServiceRegistry] тестировался без
-// Postgres-а (fake-каталог).
+// ServiceCatalog — the source of Service registry entries by name. Implemented by
+// a runtime snapshot [serviceregistry.Holder] (Resolve reads the current atomic
+// snapshot from the DB, ADR-029). Declared as an interface so [ServiceRegistry]
+// can be tested without Postgres (fake catalog).
 //
-// Геттер СИНХРОННЫЙ (без ctx/error) — это контракт горячего пути: отсутствие
-// Service-а = нормальный false, не сбой; снимок читается lock-free.
+// The getter is SYNCHRONOUS (no ctx/error) — this is the hot-path contract: a
+// missing Service is a normal false, not a failure; the snapshot is read
+// lock-free.
 type ServiceCatalog interface {
 	Resolve(name string) (serviceregistry.ServiceEntry, bool)
 }
 
-// ServiceRegistry резолвит git-координаты service-репо по имени сервиса. Реестр
-// перенесён в Postgres (`service_registry`, ADR-029: version = git ref); записи
-// читаются из runtime-снимка [ServiceCatalog] (serviceregistry.Holder), а не из
-// статического keeper.yml. Safe for concurrent use — снимок lock-free.
+// ServiceRegistry resolves a service repo's git coordinates by service name. The
+// registry moved into Postgres (`service_registry`, ADR-029: version = git ref);
+// entries are read from a runtime [ServiceCatalog] snapshot (serviceregistry.Holder),
+// not from a static keeper.yml. Safe for concurrent use — the snapshot is lock-free.
 //
-// Реализует handlers.ServiceResolver (метод Resolve). Hot-reload реестра
-// прозрачен: Holder свопает снимок по TTL-poll-у / pub/sub-инвалидации, Resolve
-// видит свежие записи без пересборки ServiceRegistry.
+// Implements handlers.ServiceResolver (method Resolve). Registry hot-reload is
+// transparent: Holder swaps the snapshot on a TTL poll / pub/sub invalidation,
+// Resolve sees fresh entries without rebuilding ServiceRegistry.
 type ServiceRegistry struct {
 	catalog ServiceCatalog
 }
 
-// NewServiceRegistry оборачивает источник-каталог (serviceregistry.Holder).
+// NewServiceRegistry wraps a catalog source (serviceregistry.Holder).
 func NewServiceRegistry(catalog ServiceCatalog) *ServiceRegistry {
 	return &ServiceRegistry{catalog: catalog}
 }
 
-// Resolve возвращает ServiceRef сервиса service и true, если он есть в текущем
-// снимке реестра; иначе zero-value и false. Маппинг ServiceEntry→ServiceRef
-// берёт только git-координаты (Name/Git/Ref); audit-метаданные снимка для
-// загрузки артефакта не нужны.
+// Resolve returns the ServiceRef for service and true if it's present in the
+// registry's current snapshot; otherwise a zero-value and false. The
+// ServiceEntry→ServiceRef mapping takes only the git coordinates (Name/Git/Ref);
+// the snapshot's audit metadata isn't needed for artifact loading.
 func (r *ServiceRegistry) Resolve(service string) (artifact.ServiceRef, bool) {
 	e, ok := r.catalog.Resolve(service)
 	if !ok {

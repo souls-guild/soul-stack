@@ -10,21 +10,23 @@ import (
 	"github.com/souls-guild/soul-stack/shared/tmpl"
 )
 
-// TestRenderContext_PerHostSelf_Dispatch — ПРЯМОЙ regress-guard на CORE-баг
-// per-host render_context.self (architect-traced, частичное закрытие open Q №25).
+// TestRenderContext_PerHostSelf_Dispatch — a DIRECT regression guard for the
+// CORE bug in per-host render_context.self (architect-traced, partially closes
+// open Q #25).
 //
-// Корень бага: per-host цикл renderTaskIter правильно собирал render_context
-// КАЖДОГО хоста, но в rt.Params уезжал лишь первый по SID; один *RenderedTask
-// (указатель) диспатчился КАЖДОМУ хосту (groupByHost/claim), поэтому
-// self-вариативный шаблон (`{{ .self.network.primary_ip }}`) на ВСЕХ хостах тихо
-// рендерился фактами ПЕРВОГО хоста (а render_context был исключён из
-// host-инвариантной сверки → fail-closed не срабатывал).
+// Bug root cause: the per-host loop renderTaskIter correctly built each host's
+// render_context, but only the first-by-SID one ended up in rt.Params; a single
+// *RenderedTask (pointer) was dispatched to EVERY host (groupByHost/claim), so a
+// self-varying template (`{{ .self.network.primary_ip }}`) silently rendered
+// with the FIRST host's facts on ALL hosts (and render_context was excluded from
+// the host-invariance check → fail-closed never triggered).
 //
-// Фикс (Вариант A): renderTaskIter материализует render_context каждого хоста в
+// Fix (Variant A): renderTaskIter materializes each host's render_context into
 // RenderedTask.RenderContextBySID[SID]; ToProtoTasksForHost(tasks, sid)
-// подставляет per-host вариант в ApplyRequest.tasks конкретного SID. Тест на 3
-// хостах с РАЗНЫМИ primary_ip доказывает, что каждый из 3 wire-RenderedTask несёт
-// СВОЙ IP (не первого) — в самом render_context И в реальном Soul-рендере.
+// substitutes the per-host variant into a specific SID's ApplyRequest.tasks. A
+// test with 3 hosts with DIFFERENT primary_ip proves each of the 3 wire
+// RenderedTasks carries ITS OWN IP (not the first's) — both in render_context
+// itself AND in the real Soul render.
 func TestRenderContext_PerHostSelf_Dispatch(t *testing.T) {
 	const tmplPath = "templates/iface.conf.tmpl"
 	const tmplBody = "primary_ip {{ .self.network.primary_ip }}\n"
@@ -49,8 +51,9 @@ func TestRenderContext_PerHostSelf_Dispatch(t *testing.T) {
 		sid string
 		ip  string
 	}
-	// Намеренно НЕ в лексикографическом порядке: первый по SID (db-1) — не первый
-	// в списке. Баг подставил бы всем IP первого ПО SID хоста (db-1 → 10.0.0.99).
+	// Intentionally NOT in lexicographic order: the first by SID (db-1) is not
+	// first in the list. The bug would substitute the IP of the first-by-SID host
+	// (db-1 → 10.0.0.99) everywhere.
 	hosts := []hostCase{
 		{sid: "web-2.example.com", ip: "10.0.0.2"},
 		{sid: "web-1.example.com", ip: "10.0.0.1"},
@@ -81,7 +84,7 @@ func TestRenderContext_PerHostSelf_Dispatch(t *testing.T) {
 	}
 	rt := tasks[0]
 
-	// (1) Per-host материализация: RenderContextBySID несёт СВОЙ IP каждого SID.
+	// (1) Per-host materialization: RenderContextBySID carries EACH SID's OWN IP.
 	if len(rt.RenderContextBySID) != len(hosts) {
 		t.Fatalf("RenderContextBySID размер = %d, want %d (по числу хостов)", len(rt.RenderContextBySID), len(hosts))
 	}
@@ -95,9 +98,9 @@ func TestRenderContext_PerHostSelf_Dispatch(t *testing.T) {
 		}
 	}
 
-	// (2) Wire-форма per-SID: ToProtoTasksForHost(sid) кладёт в render_context
-	//     params ИМЕННО IP этого хоста (а не первого по SID). Это то, что реально
-	//     едет в ApplyRequest.tasks конкретному Soul-у.
+	// (2) Per-SID wire form: ToProtoTasksForHost(sid) puts EXACTLY this host's IP
+	//     into render_context params (not the first-by-SID one). This is what
+	//     actually goes into a specific Soul's ApplyRequest.tasks.
 	engine, err := tmpl.New()
 	if err != nil {
 		t.Fatalf("tmpl.New: %v", err)
@@ -111,8 +114,8 @@ func TestRenderContext_PerHostSelf_Dispatch(t *testing.T) {
 		if got := selfPrimaryIP(rc); got != h.ip {
 			t.Fatalf("хост %s: wire render_context.self.network.primary_ip = %q, want %q (баг подставил бы первый по SID)", h.sid, got, h.ip)
 		}
-		// Реальный Soul-рендер шаблона с этим render_context: строка обязана нести
-		// СВОЙ IP и НЕ нести чужие.
+		// The real Soul render of the template with this render_context: the
+		// string must carry ITS OWN IP and NOT anyone else's.
 		out, rerr := engine.Render(wire[0].GetParams().GetFields()[paramTemplateContent].GetStringValue(), rc)
 		if rerr != nil {
 			t.Fatalf("хост %s: soul-render упал: %v", h.sid, rerr)
@@ -130,22 +133,23 @@ func TestRenderContext_PerHostSelf_Dispatch(t *testing.T) {
 		}
 	}
 
-	// (3) t.Params (golden-path) НЕ мутирован overlay-ем: остаётся render_context
-	//     первого ПО SID хоста (db-1 → 10.0.0.99). Иначе один *RenderedTask,
-	//     диспатчимый нескольким SID, протёк бы между хостами.
+	// (3) t.Params (golden path) is NOT mutated by the overlay: it stays the
+	//     render_context of the first-by-SID host (db-1 → 10.0.0.99). Otherwise a
+	//     single *RenderedTask dispatched to multiple SIDs would leak between
+	//     hosts.
 	if got := selfPrimaryIP(rt.Params.GetFields()[paramRenderContext].GetStructValue().AsMap()); got != "10.0.0.99" {
 		t.Fatalf("t.Params.render_context.self.primary_ip = %q, want 10.0.0.99 (первый по SID, golden-path) — overlay не должен мутировать Params", got)
 	}
 
-	// План таргетит все 3 хоста (sanity: per-host карта согласована с dispatch).
+	// The plan targets all 3 hosts (sanity: the per-host map agrees with dispatch).
 	if len(plans) != 1 || len(plans[0].TargetSIDs) != len(hosts) {
 		t.Fatalf("DispatchPlan: want 1 план на %d SID, got %d план(ов)", len(hosts), len(plans))
 	}
 }
 
-// TestRenderContext_PerHostSelf_SingleHostGoldenPath — N=1: RenderContextBySID НЕ
-// заполняется (overlay не нужен), render_context едет в Params как раньше
-// (бит-в-бит). Гарантирует, что фикс не раздувает single-host путь.
+// TestRenderContext_PerHostSelf_SingleHostGoldenPath — N=1: RenderContextBySID
+// is NOT populated (no overlay needed), render_context travels in Params as
+// before (bit-for-bit). Guarantees the fix doesn't bloat the single-host path.
 func TestRenderContext_PerHostSelf_SingleHostGoldenPath(t *testing.T) {
 	const tmplPath = "templates/iface.conf.tmpl"
 	manifest := &config.ScenarioManifest{
@@ -180,8 +184,8 @@ func TestRenderContext_PerHostSelf_SingleHostGoldenPath(t *testing.T) {
 	if tasks[0].RenderContextBySID != nil {
 		t.Fatalf("N=1: RenderContextBySID должен быть nil (overlay не нужен), got %#v", tasks[0].RenderContextBySID)
 	}
-	// Params несёт render_context этого единственного хоста; ToProtoTasks (без SID)
-	// едет как есть.
+	// Params carries this single host's render_context; ToProtoTasks (without
+	// SID) passes through as-is.
 	wire := ToProtoTasks(tasks)
 	rc := wire[0].GetParams().GetFields()[paramRenderContext].GetStructValue().AsMap()
 	if got := selfPrimaryIP(rc); got != "10.0.0.7" {
@@ -189,8 +193,8 @@ func TestRenderContext_PerHostSelf_SingleHostGoldenPath(t *testing.T) {
 	}
 }
 
-// selfPrimaryIP достаёт render_context.self.network.primary_ip из AsMap()-формы
-// (string при отсутствии — пустая, тест сравнит с ожиданием).
+// selfPrimaryIP extracts render_context.self.network.primary_ip from the
+// AsMap() form (empty string if absent — the test compares against expected).
 func selfPrimaryIP(rc map[string]any) string {
 	self, _ := rc["self"].(map[string]any)
 	network, _ := self["network"].(map[string]any)

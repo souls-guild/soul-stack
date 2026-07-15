@@ -10,19 +10,18 @@ import (
 	"github.com/souls-guild/soul-stack/shared/cel"
 )
 
-// renderParams — фаза CEL-render одной задачи на одном хосте ([ADR-010]).
-// Рекурсивно обходит params, в каждой строковой ячейке вычисляет
-// `${ … }`-интерполяцию через cel.Engine. Non-string значения проходят
-// насквозь.
+// renderParams runs the CEL-render phase for one task on one host ([ADR-010]).
+// Recursively walks params, evaluating `${ … }` interpolation via cel.Engine in
+// every string cell. Non-string values pass through untouched.
 //
-// Per-host: vars.SoulprintSelf — факты именно хоста host, поэтому одна и та же
-// задача на разных хостах может дать разные params (например, `${
-// soulprint.self.os.family }`). Caller вызывает renderParams для каждого
-// targeted-хоста (см. dispatch).
+// Per-host: vars.SoulprintSelf holds facts for this specific host, so the same
+// task can render different params on different hosts (e.g. `${
+// soulprint.self.os.family }`). Caller invokes renderParams per targeted host
+// (see dispatch).
 //
-// Результат — `*structpb.Struct` (прямая стыковка с proto RenderedTask.params).
-// Возможные ошибки cel.Engine ([ErrCompile]/[ErrEval]/[ErrUnsupported])
-// пробрасываются с контекстом ключа.
+// Result is *structpb.Struct (direct fit for proto RenderedTask.params).
+// cel.Engine errors ([ErrCompile]/[ErrEval]/[ErrUnsupported]) are wrapped with
+// key context.
 func renderParams(engine *cel.Engine, params map[string]any, vars cel.Vars) (*structpb.Struct, error) {
 	rendered, err := renderValue(engine, params, vars, "")
 	if err != nil {
@@ -36,9 +35,8 @@ func renderParams(engine *cel.Engine, params map[string]any, vars cel.Vars) (*st
 	return st, nil
 }
 
-// renderValue рекурсивно рендерит произвольное YAML-значение. path —
-// человекочитаемый путь до ячейки (для диагностики, например `acl` или
-// `users[0].name`).
+// renderValue recursively renders an arbitrary YAML value. path is a
+// human-readable cell path for diagnostics (e.g. `acl` or `users[0].name`).
 func renderValue(engine *cel.Engine, v any, vars cel.Vars, path string) (any, error) {
 	switch t := v.(type) {
 	case map[string]any:
@@ -72,10 +70,10 @@ func renderValue(engine *cel.Engine, v any, vars cel.Vars, path string) (any, er
 	}
 }
 
-// evalBoolExpr вычисляет top-level bool-предикат ([ADR-010]: вся строка = CEL)
-// и приводит результат к bool. kind — человекочитаемая метка ключа («where»/
-// «loop.when») для сообщений об ошибке. Пустой expr → true (нет предиката).
-// Не-bool результат → ошибка: предикат обязан возвращать булево.
+// evalBoolExpr evaluates a top-level bool predicate ([ADR-010]: whole string =
+// CEL) and coerces the result to bool. kind is a human-readable key label
+// ("where"/"loop.when") for error messages. Empty expr → true (no predicate).
+// Non-bool result → error: predicate must return a boolean.
 func evalBoolExpr(engine *cel.Engine, kind, expr string, vars cel.Vars) (bool, error) {
 	if expr == "" {
 		return true, nil
@@ -91,23 +89,25 @@ func evalBoolExpr(engine *cel.Engine, kind, expr string, vars cel.Vars) (bool, e
 	return b, nil
 }
 
-// evalWhere вычисляет per-host предикат `where:` (orchestration.md §4).
+// evalWhere evaluates the per-host `where:` predicate (orchestration.md §4).
 func evalWhere(engine *cel.Engine, where string, vars cel.Vars) (bool, error) {
 	return evalBoolExpr(engine, "where", where, vars)
 }
 
-// resolveTaskVars собирает финальный слой `vars.*` одной задачи на одном хосте:
-// БАЗА — резолвленные destiny-локалы `vars.yml` (fileVars), ПОВЕРХ — task-level
-// `vars:` (taskVars). Вариант A (vars.md): одноимённый task-var перетирает
-// file-var. В scenario-проходе fileVars пуст (vars.yml — destiny-сущность),
-// поведение scenario-задач БИТ-В-БИТ как до фичи. Оба пусты → base без изменений.
+// resolveTaskVars builds the final `vars.*` layer for one task on one host:
+// BASE is resolved destiny locals `vars.yml` (fileVars), OVERLAID with
+// task-level `vars:` (taskVars). Variant A (vars.md): a same-named task-var
+// shadows a file-var. In the scenario pass fileVars is empty (vars.yml is a
+// destiny concept), so scenario-task behavior is bit-for-bit unchanged. Both
+// empty → base returned unchanged.
 //
-// КРИТИЧНО (межслойная изоляция): taskVars резолвятся resolveVarLayer-ом с ПУСТЫМ
-// base.Vars на старте — task-var видит ТОЛЬКО task-var своего слоя (var→var внутри
-// слоя, eager-topological), но НЕ file-var. file-vars НЕ кладутся в base.Vars ДО
-// резолва task-vars сознательно: иначе `${ vars.<file_var> }` в task-var
-// резолвился бы вместо ErrVarUnknownRef, нарушив границу. Цикл task-var→task-var →
-// ErrVarCycle (зеркало resolveDestinyVars).
+// CRITICAL (cross-layer isolation): taskVars are resolved by resolveVarLayer
+// with an EMPTY base.Vars at start — a task-var sees ONLY task-vars in its own
+// layer (var→var within layer, eager-topological), never file-vars. file-vars
+// are deliberately NOT put into base.Vars before task-vars resolve: otherwise
+// `${ vars.<file_var> }` inside a task-var would resolve instead of raising
+// ErrVarUnknownRef, breaking the boundary. task-var→task-var cycle →
+// ErrVarCycle (mirrors resolveDestinyVars).
 func resolveTaskVars(engine *cel.Engine, fileVars, taskVars map[string]any, base cel.Vars) (cel.Vars, error) {
 	if len(fileVars) == 0 && len(taskVars) == 0 {
 		return base, nil
@@ -117,20 +117,20 @@ func resolveTaskVars(engine *cel.Engine, fileVars, taskVars map[string]any, base
 		return cel.Vars{}, err
 	}
 	resolved := make(map[string]any, len(fileVars)+len(resolvedTask))
-	for key, val := range fileVars { // база: file-vars уже резолвлены (без CEL)
+	for key, val := range fileVars { // base: file-vars already resolved (no CEL)
 		resolved[key] = val
 	}
-	for key, val := range resolvedTask { // override: task-var перетирает file-var
+	for key, val := range resolvedTask { // override: task-var shadows file-var
 		resolved[key] = val
 	}
 	base.Vars = resolved
 	return base, nil
 }
 
-// fileVarsForHost возвращает резолвленные destiny-локалы `vars.yml` для хоста host
-// (база слоя `vars.*`, Вариант A). Источник — in.DestinyVarsResolved, заполненный
-// renderApplyDestiny per-host. nil host (синтетический пустой контекст) → ключ "".
-// nil-карта (scenario-проход / destiny без vars.yml) → nil (база пуста).
+// fileVarsForHost returns resolved destiny locals `vars.yml` for host (base of
+// the `vars.*` layer, Variant A). Source is in.DestinyVarsResolved, filled
+// per-host by renderApplyDestiny. nil host (synthetic empty context) → key "".
+// nil map (scenario pass / destiny without vars.yml) → nil (empty base).
 func fileVarsForHost(in RenderInput, host *topology.HostFacts) map[string]any {
 	if in.DestinyVarsResolved == nil {
 		return nil
@@ -142,18 +142,19 @@ func fileVarsForHost(in RenderInput, host *topology.HostFacts) map[string]any {
 	return in.DestinyVarsResolved[sid]
 }
 
-// incarnationVars строит incarnation-map для CEL-контекста: name/service/
-// service_version из IncarnationMeta + host_count (число targeted-хостов,
-// scenario-предикаты используют его — add_user/main.yml).
+// incarnationVars builds the incarnation map for the CEL context: name/service/
+// service_version from IncarnationMeta + host_count (number of targeted hosts,
+// used by scenario predicates — add_user/main.yml).
 //
-// state — read-only снимок incarnation.state на момент захвата row-lock прогона
-// ([ADR-009]/[ADR-010]): scenario-render-контекст видит pre-run state как
-// `incarnation.state.<path>` в params/where/apply-input И в state_changes
-// (stateChangesVars зовёт ту же функцию). Снимок ИНВАРИАНТЕН на все passages
-// staged-render-а (RenderInput.State фиксируется один раз stateBefore под FOR
-// UPDATE, не накапливается между passages — в отличие от register). nil-State →
-// ключ не кладётся: `incarnation.state.<x>` даёт штатный no-such-key (push/trial
-// без State, backward-compat), не compile-ошибку (`incarnation` — DynType).
+// state is a read-only snapshot of incarnation.state at the run's row-lock
+// capture ([ADR-009]/[ADR-010]): scenario render context sees pre-run state as
+// `incarnation.state.<path>` in params/where/apply-input AND in state_changes
+// (stateChangesVars calls the same function). The snapshot is INVARIANT across
+// all staged-render passages (RenderInput.State is captured once as
+// stateBefore under FOR UPDATE, not accumulated between passages — unlike
+// register). nil State → key omitted: `incarnation.state.<x>` yields a normal
+// no-such-key (push/trial without State, backward-compat), not a compile error
+// (`incarnation` is DynType).
 func incarnationVars(in RenderInput, hostCount int) map[string]any {
 	m := map[string]any{
 		"name":            in.Incarnation.Name,
@@ -167,14 +168,15 @@ func incarnationVars(in RenderInput, hostCount int) map[string]any {
 	return m
 }
 
-// hostVars строит cel.Vars для конкретного хоста: общий контекст прогона
-// (input/register/incarnation/essence) + soulprint.self именно этого хоста.
-// Essence host-инвариантна (effective-слой incarnation), но кладётся в каждый
-// per-host контекст — она доступна везде, где input.
+// hostVars builds cel.Vars for a specific host: the common run context
+// (input/register/incarnation/essence) + soulprint.self for this host.
+// Essence is host-invariant (incarnation's effective layer) but is placed in
+// every per-host context — available wherever input is.
 //
-// soulprint.hosts (+ .where) проецируется из in.Hosts ТОЛЬКО в scenario-проходе
-// (in.destinyIsolated==false). В destiny-проходе host-аксессор отсекается:
-// AllowHosts=false → обращение к soulprint.hosts — ошибка изоляции на compile.
+// soulprint.hosts (+ .where) is projected from in.Hosts ONLY in the scenario
+// pass (in.destinyIsolated==false). In the destiny pass the host accessor is
+// cut off: AllowHosts=false → referencing soulprint.hosts is a compile-time
+// isolation error.
 func hostVars(in RenderInput, host *topology.HostFacts, hostCount int) cel.Vars {
 	return cel.Vars{
 		Input:          in.Input,
@@ -189,17 +191,19 @@ func hostVars(in RenderInput, host *topology.HostFacts, hostCount int) cel.Vars 
 	}
 }
 
-// hostRegister выбирает register-контекст для CEL-рендера задач конкретного
-// хоста. Staged-render (ADR-056 §в.1): render Passage N подставляет register
-// ПРЕДЫДУЩИХ Passage per-host — `register.<probe>.*` в `where:`/`apply:input:`/
-// `params:`/`vars:` резолвится фактом, собранным этим хостом (probe роли вернул
-// 'master' на одном хосте, 'slave' на другом). Источник — in.RegisterByHost[sid]
-// (накопленный барьерами предыдущих Passage, прокинутый stage-loop-ом run.go).
+// hostRegister selects the register context for CEL-rendering a specific
+// host's tasks. Staged render (ADR-056 §c.1): rendering Passage N substitutes
+// the PREVIOUS Passages' per-host register — `register.<probe>.*` in
+// `where:`/`apply:input:`/`params:`/`vars:` resolves to the fact this host
+// collected (a role probe returned 'master' on one host, 'slave' on another).
+// Source is in.RegisterByHost[sid] (accumulated by previous Passage barriers,
+// threaded through by run.go's stage loop).
 //
-// Backward-compat: если per-host карта для хоста пуста (первый Passage, N=1-
-// прогон, либо не-staged путь) — возвращается flat in.Register (в пилоте пуст).
-// Так N=1-прогон видит register=пусто как до staged-render (БИТ-В-БИТ), а
-// keeper-side/destiny-проходы (свои register-контексты) не затрагиваются.
+// Backward-compat: if the per-host map is empty for this host (first Passage,
+// N=1 run, or a non-staged path), flat in.Register is returned (empty in the
+// pilot). So an N=1 run sees register=empty exactly as before staged-render
+// (bit-for-bit), and keeper-side/destiny passes (their own register contexts)
+// are unaffected.
 func hostRegister(in RenderInput, host *topology.HostFacts) map[string]any {
 	if host != nil {
 		if reg := in.RegisterByHost[host.SID]; len(reg) > 0 {
@@ -209,30 +213,34 @@ func hostRegister(in RenderInput, host *topology.HostFacts) map[string]any {
 	return in.Register
 }
 
-// buildRenderContext собирает per-host корень text/template-контекста шага
-// core.file.rendered (templating.md §3.2): `{ vars, self, role, essence }` +
-// УСЛОВНО `input`. Soul передаёт его КОРНЕМ в text/template (rendered.go).
+// buildRenderContext builds the per-host root of the text/template context for
+// the core.file.rendered step (templating.md §3.2): `{ vars, self, role,
+// essence }` + CONDITIONALLY `input`. Soul passes it as the ROOT to
+// text/template (rendered.go).
 //
-//   - self — та же soulprintSelfMap, что в CEL-фазе (ADR-018: soulprint.self.<p>
-//     в CEL ≡ .self.<p> в шаблоне). role — declared-роль хоста (может быть "").
-//   - vars — file-vars (база, fileVars) + params.vars шага (override) — зеркало
-//     resolveTaskVars в CEL-фазе (Вариант A vars.md), под ключ vars, НЕ плоско.
-//     fileVars точечны (referencedFileVars: только ключи, что шаблон читает как
-//     `.vars.<key>`) — шаблон без `.vars.<file_var>` лишних не получает, его
-//     `.vars` БИТ-В-БИТ как до фичи. scenario-проход → fileVars пуст.
-//   - input — operator-input прохода (Вариант B, ADR-010 §3.2): кладётся ТОЛЬКО
-//     при injectInput (шаблон реально читает `.input.*`, детект по AST). vars-only
-//     шаблоны input НЕ получают → их render_context БИТ-В-БИТ как до Варианта B.
-//     injectInput && nil-Input → пустой map (`.input.*` упадёт strict-mode, что
-//     корректно).
+//   - self is the same soulprintSelfMap as in the CEL phase (ADR-018:
+//     soulprint.self.<p> in CEL ≡ .self.<p> in the template). role is the
+//     host's declared role (may be "").
+//   - vars is file-vars (base, fileVars) + the step's params.vars (override) —
+//     mirrors resolveTaskVars in the CEL phase (Variant A, vars.md), nested
+//     under key vars, not flattened. fileVars is scoped (referencedFileVars:
+//     only keys the template reads as `.vars.<key>`) — a template without
+//     `.vars.<file_var>` gets no extras, so its `.vars` stays bit-for-bit as
+//     before the feature. scenario pass → fileVars empty.
+//   - input is the pass's operator-input (Variant B, ADR-010 §3.2): placed
+//     ONLY when injectInput (the template actually reads `.input.*`, detected
+//     via AST). vars-only templates get no input → their render_context stays
+//     bit-for-bit as before Variant B. injectInput && nil Input → empty map
+//     (`.input.*` fails strict-mode, which is correct).
 //
-// ★Security (seal S-1, ADR-010 §7.4): без passthrough vars сырого `${ input.secret }`
-// в params больше нет → collectSealed его не видит. Провенанс восстанавливает
-// caller (renderTaskIter → sealRenderContextInput) ДЕКЛАРАТИВНО по схеме, под тем
-// же injectInput-гейтом.
+// Security (seal S-1, ADR-010 §7.4): without vars passthrough, raw
+// `${ input.secret }` no longer reaches params → collectSealed never sees it.
+// Provenance is reconstructed by the caller (renderTaskIter →
+// sealRenderContextInput) DECLARATIVELY from the schema, under the same
+// injectInput gate.
 func buildRenderContext(in RenderInput, host *topology.HostFacts, fileVars, paramsVars map[string]any, injectInput bool) map[string]any {
-	// orEmptyMap нормализует nil (mergeVars отдаёт nil при обоих пустых) — `.vars`
-	// всегда присутствует ключом, шаблон с `.vars.*` падает осмысленно, не panic.
+	// orEmptyMap normalizes nil (mergeVars returns nil when both are empty) —
+	// `.vars` is always present as a key, so `.vars.*` fails meaningfully, not panics.
 	rc := map[string]any{
 		"vars":    orEmptyMap(mergeVars(fileVars, paramsVars)),
 		"self":    soulprintSelfMap(host),
@@ -245,26 +253,28 @@ func buildRenderContext(in RenderInput, host *topology.HostFacts, fileVars, para
 	return rc
 }
 
-// flowContextSelfKey — ключ host-вариативной секции flow_context (per-host
-// soulprint.self). Вычитается из host-инвариантной сверки flow_context
-// (flowContextHostInvariant): self host-вариантен по природе и закрыт отдельным
-// regex-guard на текст предиката, а не сверкой снапшота.
+// flowContextSelfKey is the key of flow_context's host-variant section
+// (per-host soulprint.self). Excluded from the host-invariant flow_context
+// check (flowContextHostInvariant): self is inherently host-variant and is
+// covered by a separate regex guard on the predicate text, not snapshot
+// comparison.
 const flowContextSelfKey = "self"
 
-// buildFlowContext собирает литеральный per-host снапшот не-register части
-// CEL-контекста flow-control-предикатов (when:/changed_when:/failed_when:,
-// ADR-012(d)): `{ input, vars, essence, incarnation, self }`. Это ровно тот
-// контекст, что доступен рендеру params данного хоста (vars cel.Vars), МИНУС
-// soulprint.hosts (cross-host scenario-only — Soul его не имеет) и loop
-// (loop-переменные в flow_context не кладутся; их семантика — render-time fan-out,
-// не runtime-предикат). `self` = soulprintSelfMap(host) — та же проекция, что
-// soulprint.self в CEL-фазе. register.* в flow_context НЕ кладётся — его Soul
-// строит сам из результатов предыдущих задач.
+// buildFlowContext builds a literal per-host snapshot of the non-register part
+// of the CEL context for flow-control predicates (when:/changed_when:/
+// failed_when:, ADR-012(d)): `{ input, vars, essence, incarnation, self }`.
+// This is exactly the context available when rendering this host's params
+// (vars cel.Vars), MINUS soulprint.hosts (cross-host, scenario-only — Soul
+// doesn't have it) and loop (loop variables aren't placed in flow_context;
+// their semantics are render-time fan-out, not a runtime predicate). `self` =
+// soulprintSelfMap(host), the same projection as soulprint.self in the CEL
+// phase. register.* is NOT placed in flow_context — Soul builds it itself from
+// previous tasks' results.
 //
-// vars — task-level `vars:` уже CEL-резолвленные (vars.Vars); nil → пустой map.
-// MVP: контекст ПОЛНЫЙ, без static-pruning (Soul получает весь снапшот, даже
-// если предикат ссылается лишь на часть). Возврат — *structpb.Struct (прямая
-// стыковка с proto RenderedTask.flow_context).
+// vars is task-level `vars:`, already CEL-resolved (vars.Vars); nil → empty
+// map. MVP: the context is FULL, no static pruning (Soul gets the whole
+// snapshot even if the predicate references only part of it). Returns
+// *structpb.Struct (direct fit for proto RenderedTask.flow_context).
 func buildFlowContext(in RenderInput, host *topology.HostFacts, vars cel.Vars, hostCount int) (*structpb.Struct, error) {
 	fc := map[string]any{
 		"input":            orEmptyMap(vars.Input),
@@ -280,10 +290,10 @@ func buildFlowContext(in RenderInput, host *topology.HostFacts, vars cel.Vars, h
 	return st, nil
 }
 
-// orEmptyMap — nil map → пустой (structpb.NewStruct не принимает nil-вложенность
-// единообразно; пустой map даёт штатный no-such-key на Soul-е, не панику).
-// Локальный дубль неэкспортированного shared/cel.orEmpty — экспортировать его
-// ради одной cel-функции не стоит (узкая helper-семантика, разные пакеты).
+// orEmptyMap turns a nil map into empty (structpb.NewStruct doesn't accept nil
+// nesting uniformly; an empty map yields a normal no-such-key on Soul, not a
+// panic). Local duplicate of unexported shared/cel.orEmpty — not worth
+// exporting for one caller (narrow helper, different packages).
 func orEmptyMap(m map[string]any) map[string]any {
 	if m == nil {
 		return map[string]any{}
@@ -291,22 +301,23 @@ func orEmptyMap(m map[string]any) map[string]any {
 	return m
 }
 
-// soulprintSelfMap строит soulprint.self для хоста: merge reported-фактов
-// (os/network/kernel/cpu/memory — когда Soul их прислал) и авторитетных
-// registry-данных roster (HostFacts).
+// soulprintSelfMap builds soulprint.self for a host: merges reported facts
+// (os/network/kernel/cpu/memory, when Soul sent them) with authoritative
+// roster registry data (HostFacts).
 //
-// sid/covens — Keeper-registry-проекция (ADR-018, soulprint.md «Граница
-// Soulprint ↔ souls-registry»): источник истины — registry, не Soul. Поэтому
-// они кладутся ВСЕГДА (даже при NULL reported facts: authority sid — mTLS peer
-// cert, не collected-факт) и ПЕРЕЗАПИСЫВАЮТ одноимённые reported-ключи, если те
-// случайно затесались. role — declared-роль из spec (может быть ""). choirs —
-// имена Choir-ов хоста (ADR-044, S-T4); registry-проекция, как covens. traits —
-// operator-set key-value метки (ADR-060); registry-проекция, как covens/choirs.
+// sid/covens are a Keeper-registry projection (ADR-018, soulprint.md
+// "Soulprint ↔ souls-registry boundary"): source of truth is the registry, not
+// Soul. So they are ALWAYS placed (even with NULL reported facts: sid's
+// authority is the mTLS peer cert, not a collected fact) and OVERWRITE
+// same-named reported keys if any collide. role is the declared role from spec
+// (may be ""). choirs are the host's Choir names (ADR-044, S-T4); a registry
+// projection like covens. traits are operator-set key-value labels (ADR-060);
+// a registry projection like covens/choirs.
 //
-// Симметрия с hostFactsToMap (soulprint.hosts): self и элемент hosts дают
-// согласованные sid/covens/role/choirs/traits. host.Soulprint не мутируется — строится
-// новый верхнеуровневый map (значения подсекций reported шарятся read-only,
-// render их не меняет).
+// Symmetric with hostFactsToMap (soulprint.hosts): self and a hosts element
+// give consistent sid/covens/role/choirs/traits. host.Soulprint is not
+// mutated — a new top-level map is built (reported subsection values are
+// shared read-only; render doesn't change them).
 func soulprintSelfMap(host *topology.HostFacts) map[string]any {
 	self := make(map[string]any, len(host.Soulprint)+5)
 	for k, v := range host.Soulprint {
@@ -316,16 +327,16 @@ func soulprintSelfMap(host *topology.HostFacts) map[string]any {
 	self["covens"] = covensList(host.Coven)
 	self["role"] = host.Role
 	self["choirs"] = covensList(host.Choirs)
-	// traits — operator-set key-value метки (ADR-060), registry-проекция как
-	// covens/choirs (перекрывает одноимённый reported-ключ). Всегда кладётся
-	// (пустой map при nil): `soulprint.self.traits.<key>` даёт штатный
-	// no-such-key, не отсутствие самого traits.
+	// traits are operator-set key-value labels (ADR-060), a registry projection
+	// like covens/choirs (overrides a same-named reported key). Always placed
+	// (empty map if nil): `soulprint.self.traits.<key>` yields a normal
+	// no-such-key, not a missing traits itself.
 	self["traits"] = orEmptyMap(host.Traits)
 	return self
 }
 
-// covensList копирует registry-список строк (covens/choirs) в []any (cel читает
-// list как []any), не делясь backing-массивом с roster.
+// covensList copies a registry string list (covens/choirs) into []any (cel
+// reads a list as []any), without sharing the backing array with the roster.
 func covensList(items []string) []any {
 	out := make([]any, len(items))
 	for i, c := range items {
@@ -334,11 +345,12 @@ func covensList(items []string) []any {
 	return out
 }
 
-// soulprintHosts проецирует in.Hosts в []map для cel-аксессора soulprint.hosts:
-// стабильный слой (sid/role/covens/choirs/network/os, orchestration.md §4.1).
-// network/os берутся из last-reported Soulprint-map хоста; covens/role/choirs —
-// registry-данные (HostFacts.Coven/Role/Choirs). В destiny-проходе НЕ
-// проецируется (nil) — там аксессор отсекается изоляцией.
+// soulprintHosts projects in.Hosts into []map for the cel accessor
+// soulprint.hosts: the stable layer (sid/role/covens/choirs/network/os,
+// orchestration.md §4.1). network/os come from the host's last-reported
+// Soulprint map; covens/role/choirs are registry data (HostFacts.Coven/Role/
+// Choirs). Not projected in the destiny pass (nil) — the accessor is cut off
+// there by isolation.
 func soulprintHosts(in RenderInput) []map[string]any {
 	if in.destinyIsolated || len(in.Hosts) == 0 {
 		return nil
@@ -350,25 +362,26 @@ func soulprintHosts(in RenderInput) []map[string]any {
 	return out
 }
 
-// hostFactsToMap строит элемент soulprint.hosts из HostFacts: стабильные поля.
-// covens/choirs — копии срезов (cel читает как list); traits — operator-set
-// key-value map (ADR-060, registry-проекция); network/os — подмапы Soulprint
-// (отсутствуют → пустой map, обращение к полю даёт штатный no-such-key).
+// hostFactsToMap builds a soulprint.hosts element from HostFacts: stable
+// fields. covens/choirs are slice copies (cel reads them as list); traits is
+// an operator-set key-value map (ADR-060, registry projection); network/os are
+// Soulprint submaps (missing → empty map, field access yields a normal
+// no-such-key).
 func hostFactsToMap(h *topology.HostFacts) map[string]any {
 	return map[string]any{
 		"sid":     h.SID,
 		"role":    h.Role,
 		"covens":  covensList(h.Coven),
 		"choirs":  covensList(h.Choirs),
-		"traits":  orEmptyMap(h.Traits), // operator-set key-value (ADR-060), как covens/choirs
+		"traits":  orEmptyMap(h.Traits), // operator-set key-value (ADR-060), like covens/choirs
 		"network": soulprintSection(h.Soulprint, "network"),
 		"os":      soulprintSection(h.Soulprint, "os"),
 	}
 }
 
-// soulprintSection извлекает подсекцию (network/os) из Soulprint-map хоста.
-// Отсутствие/неверный тип → пустой map (обращение к полю → штатный no-such-key,
-// не паника).
+// soulprintSection extracts a subsection (network/os) from a host's Soulprint
+// map. Missing/wrong type → empty map (field access → normal no-such-key, not
+// a panic).
 func soulprintSection(soulprint map[string]any, key string) map[string]any {
 	if soulprint == nil {
 		return map[string]any{}
@@ -379,24 +392,24 @@ func soulprintSection(soulprint map[string]any, key string) map[string]any {
 	return map[string]any{}
 }
 
-// hostLoopVars — hostVars + переменные текущей `loop:`-итерации (`<as>`/
-// `<index_as>`, destiny/tasks.md §7). loop=nil → эквивалент hostVars (без
-// loop-переменных). Используется renderLoopTask: итерация рендерит params в
-// контексте конкретного хоста с активной loop-переменной.
+// hostLoopVars is hostVars + the current `loop:` iteration's variables (`<as>`/
+// `<index_as>`, destiny/tasks.md §7). loop=nil → equivalent to hostVars (no
+// loop variables). Used by renderLoopTask: each iteration renders params in a
+// specific host's context with the active loop variable.
 func hostLoopVars(in RenderInput, host *topology.HostFacts, hostCount int, loop map[string]any) cel.Vars {
 	v := hostVars(in, host, hostCount)
 	v.Loop = loop
 	return v
 }
 
-// stateChangesVars строит cel.Vars для рендера state_changes.sets на хосте host
-// (orchestration.md §7.1). Контекст — input/incarnation/soulprint.self плюс
-// Register этого хоста (слайс 2 полной грамматики): register-данные probe-задач
-// прогона, накопленные после барьера и резолвнутые по register-имени
-// (in.RegisterByHost[host.SID]) поверх run-level подложки register keeper-side
-// задач (bucket KeeperTargetSID, host-wins — ADR-056 amendment 2026-07-02).
-// nil-register у хоста без keeper-подложки → `register.*` в sets даст
-// eval-ошибку "no such key", как и раньше.
+// stateChangesVars builds cel.Vars for rendering state_changes.sets on host
+// (orchestration.md §7.1). Context is input/incarnation/soulprint.self plus
+// this host's Register (grammar slice 2): probe-task register data
+// accumulated after the barrier and resolved by register name
+// (in.RegisterByHost[host.SID]) over the run-level backing of keeper-side task
+// register (bucket KeeperTargetSID, host-wins — ADR-056 amendment
+// 2026-07-02). nil register for a host with no keeper backing → `register.*`
+// in sets yields an eval "no such key" error, same as before.
 func stateChangesVars(in RenderInput, host *topology.HostFacts) cel.Vars {
 	reg := in.RegisterByHost[host.SID]
 	if keeperReg := in.RegisterByHost[KeeperTargetSID]; len(keeperReg) > 0 {
@@ -404,7 +417,7 @@ func stateChangesVars(in RenderInput, host *topology.HostFacts) cel.Vars {
 		for k, v := range keeperReg {
 			merged[k] = v
 		}
-		for k, v := range reg { // host-wins при коллизии
+		for k, v := range reg { // host-wins on collision
 			merged[k] = v
 		}
 		reg = merged
@@ -420,8 +433,8 @@ func stateChangesVars(in RenderInput, host *topology.HostFacts) cel.Vars {
 	}
 }
 
-// sortedHostsBySID возвращает копию hosts, отсортированную лексикографически по
-// SID (детерминизм last-wins-свёртки state_changes.sets, orchestration.md §7.1).
+// sortedHostsBySID returns a copy of hosts sorted lexicographically by SID
+// (determinism for state_changes.sets' last-wins fold, orchestration.md §7.1).
 func sortedHostsBySID(hosts []*topology.HostFacts) []*topology.HostFacts {
 	out := make([]*topology.HostFacts, len(hosts))
 	copy(out, hosts)

@@ -9,8 +9,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// onChangesScenario — scenario из двух задач: источник с register: redis_conf и
-// потребитель с onchanges: [redis_conf].
+// onChangesScenario — a two-task scenario: a source with register: redis_conf
+// and a consumer with onchanges: [redis_conf].
 func onChangesScenario(onchanges []string) *config.ScenarioManifest {
 	return &config.ScenarioManifest{
 		Name: "redis",
@@ -37,8 +37,9 @@ func onChangesRenderInput(m *config.ScenarioManifest) RenderInput {
 	}
 }
 
-// TestRender_OnChanges_ResolvesNameToIndex — config.Task.OnChanges (register-имя)
-// резолвится в render.RenderedTask.OnChangesIdx (task-индекс источника, Variant A).
+// TestRender_OnChanges_ResolvesNameToIndex — config.Task.OnChanges (register
+// name) resolves into render.RenderedTask.OnChangesIdx (source task index,
+// Variant A).
 func TestRender_OnChanges_ResolvesNameToIndex(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	tasks, _, err := p.Render(context.Background(), onChangesRenderInput(onChangesScenario([]string{"redis_conf"})))
@@ -57,8 +58,8 @@ func TestRender_OnChanges_ResolvesNameToIndex(t *testing.T) {
 	}
 }
 
-// TestRender_OnChanges_Empty — без onchanges: OnChangesIdx nil у обеих задач
-// (безусловный запуск, поведение без gating).
+// TestRender_OnChanges_Empty — without onchanges: OnChangesIdx is nil for both
+// tasks (unconditional run, no-gating behavior).
 func TestRender_OnChanges_Empty(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	tasks, _, err := p.Render(context.Background(), onChangesRenderInput(onChangesScenario(nil)))
@@ -72,8 +73,8 @@ func TestRender_OnChanges_Empty(t *testing.T) {
 	}
 }
 
-// TestRender_OnChanges_UnknownRegister — onchanges ссылается на несуществующий
-// register → ошибка рендера (строгий вариант, ловит опечатку register-id).
+// TestRender_OnChanges_UnknownRegister — onchanges references a nonexistent
+// register → render error (strict variant, catches a register-id typo).
 func TestRender_OnChanges_UnknownRegister(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	_, _, err := p.Render(context.Background(), onChangesRenderInput(onChangesScenario([]string{"typo_conf"})))
@@ -85,8 +86,8 @@ func TestRender_OnChanges_UnknownRegister(t *testing.T) {
 	}
 }
 
-// TestRender_OnChanges_MultiSource — несколько register-имён резолвятся в
-// несколько индексов (any-семантика gating-а — на Soul-е).
+// TestRender_OnChanges_MultiSource — multiple register names resolve into
+// multiple indices (any-semantics gating happens on Soul).
 func TestRender_OnChanges_MultiSource(t *testing.T) {
 	m := &config.ScenarioManifest{
 		Name: "multi",

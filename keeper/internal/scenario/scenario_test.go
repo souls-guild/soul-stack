@@ -2,8 +2,8 @@ package scenario
 
 import "testing"
 
-// TestValidScenarioName_Positive — каноническая snake_case-форма имени
-// scenario, резолвящегося в путь `scenario/<name>/main.yml`.
+// TestValidScenarioName_Positive — canonical snake_case scenario name that
+// resolves to path `scenario/<name>/main.yml`.
 func TestValidScenarioName_Positive(t *testing.T) {
 	for _, name := range []string{"create", "add_acl_user", "update_config"} {
 		if !ValidScenarioName(name) {
@@ -12,15 +12,16 @@ func TestValidScenarioName_Positive(t *testing.T) {
 	}
 }
 
-// TestValidScenarioName_Negative — path-traversal guard: имя валидируется
-// ДО резолва пути, отсекая `/`, `..`, верхний регистр, точку и пустую строку.
+// TestValidScenarioName_Negative — path-traversal guard: the name is
+// validated BEFORE path resolution, rejecting `/`, `..`, uppercase, dots,
+// and the empty string.
 func TestValidScenarioName_Negative(t *testing.T) {
 	for _, name := range []string{
 		"../etc",   // path-traversal
-		"Create",   // верхний регистр
-		"add.user", // точка
-		"a/b",      // слэш
-		"",         // пусто
+		"Create",   // uppercase
+		"add.user", // dot
+		"a/b",      // slash
+		"",         // empty
 	} {
 		if ValidScenarioName(name) {
 			t.Errorf("ValidScenarioName(%q) = true, want false", name)
@@ -28,10 +29,10 @@ func TestValidScenarioName_Negative(t *testing.T) {
 	}
 }
 
-// TestLifecycleScenarioNames — каноническая константа-каталог содержит ровно
-// два lifecycle-имени (create / destroy) и согласована с per-name константами.
-// Защита от тихого дрейфа набора (DTO-разметка kind и спец-обработка прогона
-// зависят от него).
+// TestLifecycleScenarioNames — the canonical catalog constant holds exactly
+// two lifecycle names (create / destroy) and stays consistent with the
+// per-name constants. Guards against silent drift, since DTO kind tagging
+// and run special-casing both depend on this set.
 func TestLifecycleScenarioNames(t *testing.T) {
 	want := map[string]bool{
 		CreateScenarioName:  true,
@@ -50,10 +51,11 @@ func TestLifecycleScenarioNames(t *testing.T) {
 	}
 }
 
-// TestIsRunnableScenario — канон признака runnable (ADR-042 «тупой фронт»):
-// create=true (bootstrap-run), destroy=false (удаление — спец-флоу DELETE, не
-// run), converge/любой operational=true. Защита от дрейфа разметки каталога
-// scenario, по которой UI фильтрует Run-форму.
+// TestIsRunnableScenario — canon for the runnable flag (ADR-042 "dumb
+// frontend"): create=true (bootstrap run), destroy=false (deletion is a
+// special DELETE flow, not a run), converge/any operational=true. Guards
+// against drift in the scenario catalog tagging the UI uses to filter the
+// Run form.
 func TestIsRunnableScenario(t *testing.T) {
 	want := map[string]bool{
 		CreateScenarioName:   true,
@@ -70,9 +72,10 @@ func TestIsRunnableScenario(t *testing.T) {
 }
 
 // TestConvergeIsOperational — guard (amend ADR-031, 2026-06-10): `converge`
-// выведен из lifecycle-набора и трактуется как operational scenario-kind
-// (Apply-reconcile через обычный run + dry-run target check-drift). Регресс-
-// защита от возврата converge в LifecycleScenarioNames.
+// was removed from the lifecycle set and is treated as an operational
+// scenario kind (apply-reconcile via a normal run + dry-run check-drift
+// target). Regression guard against converge sneaking back into
+// LifecycleScenarioNames.
 func TestConvergeIsOperational(t *testing.T) {
 	if IsLifecycleScenario(ConvergeScenarioName) {
 		t.Errorf("IsLifecycleScenario(%q) = true, want false (converge — operational, amend ADR-031)", ConvergeScenarioName)
@@ -82,10 +85,10 @@ func TestConvergeIsOperational(t *testing.T) {
 	}
 }
 
-// TestScenarioRelPath — выбор канала загрузки главного YAML сценария (ADR-0068 §3):
-// fromUpgrade=true → upgrade/<name>/main.yml (второй канал), false → scenario/<name>/
-// main.yml (сегодняшнее поведение по умолчанию). Guard на переключатель, который
-// parseScenarioFromArtifact отдаёт в loader.ReadFile.
+// TestScenarioRelPath — selects the load channel for the scenario's main
+// YAML (ADR-0068 §3): fromUpgrade=true → upgrade/<name>/main.yml (second
+// channel), false → scenario/<name>/main.yml (default behavior). Guards the
+// switch that parseScenarioFromArtifact passes to loader.ReadFile.
 func TestScenarioRelPath(t *testing.T) {
 	tests := []struct {
 		name        string

@@ -5,33 +5,36 @@ import (
 	"fmt"
 )
 
-// ErrOnChangesUnknownRegister — `onchanges:` ссылается на register-имя, которого
-// нет среди register'ов задач прогона. Строгий вариант (ошибка, не warn): пустой
-// onchanges-источник по опечатке молча превратил бы gating в «никогда не
-// changed» → задача всегда пропускалась бы, маскируя баг автора scenario.
+// ErrOnChangesUnknownRegister — `onchanges:` references a register name that
+// doesn't exist among the run's task registers. Strict variant (error, not
+// warn): a typo'd empty onchanges source would silently turn gating into
+// "never changed" → the task would always be skipped, masking the scenario
+// author's bug.
 var ErrOnChangesUnknownRegister = errors.New("render: onchanges ссылается на несуществующий register")
 
-// ErrOnFailUnknownRegister — `onfail:` ссылается на register-имя, которого нет
-// среди register'ов задач прогона. Зеркало ErrOnChangesUnknownRegister: пустой
-// onfail-источник по опечатке молча превратил бы rescue-gating в «никогда не
-// failed» → onfail-задача всегда пропускалась бы, маскируя баг автора scenario.
+// ErrOnFailUnknownRegister — `onfail:` references a register name that
+// doesn't exist among the run's task registers. Mirrors
+// ErrOnChangesUnknownRegister: a typo'd empty onfail source would silently
+// turn rescue gating into "never failed" → the onfail task would always be
+// skipped, masking the scenario author's bug.
 var ErrOnFailUnknownRegister = errors.New("render: onfail ссылается на несуществующий register")
 
-// resolveOnChanges превращает register-имена `onchanges:` (RenderedTask.
-// onChangesNames) в task-индексы (RenderedTask.OnChangesIdx) по всему плану
-// прогона (Variant A: резолв на Keeper-е, Soul оперирует индексами). Вызывается
-// финальным проходом [Pipeline.Render], когда план собран целиком и все
-// Index/Register известны (apply:destiny/loop дают сквозные индексы).
+// resolveOnChanges turns `onchanges:` register names (RenderedTask.
+// onChangesNames) into task indexes (RenderedTask.OnChangesIdx) across the
+// whole run plan (Variant A: resolved on Keeper, Soul operates on indexes).
+// Called by [Pipeline.Render]'s final pass, once the plan is fully assembled
+// and all Index/Register values are known (apply:destiny/loop produce
+// contiguous indexes).
 //
-// Карта register-имя → Index строится по всем задачам плана; самоссылку
-// (`onchanges: [self]` на задаче с `register: self`) НЕ исключаем особым кодом —
-// она резолвится в собственный Index, а Soul gating на собственный (ещё не
-// выполненный) register даст changed==false → скип. Это согласовано с порядком
-// «requisites проверяются до запуска задачи».
+// The register-name → Index map is built over all plan tasks; a self-
+// reference (`onchanges: [self]` on a task with `register: self`) isn't
+// special-cased — it resolves to its own Index, and Soul gating on its own
+// (not-yet-executed) register yields changed==false → skip. This matches the
+// "requisites are checked before the task runs" ordering.
 //
-// Неизвестное имя → [ErrOnChangesUnknownRegister] (строгий вариант, ловит
-// опечатку register-id). Пустой onChangesNames → OnChangesIdx остаётся nil
-// (безусловный запуск).
+// Unknown name → [ErrOnChangesUnknownRegister] (strict variant, catches a
+// typo'd register id). Empty onChangesNames → OnChangesIdx stays nil
+// (unconditional run).
 func resolveOnChanges(tasks []*RenderedTask) error {
 	byRegister := registerIndex(tasks)
 	for _, t := range tasks {
@@ -47,13 +50,14 @@ func resolveOnChanges(tasks []*RenderedTask) error {
 	return nil
 }
 
-// resolveOnFail превращает register-имена `onfail:` (RenderedTask.onFailNames) в
-// task-индексы (RenderedTask.OnFailIdx) по всему плану прогона. Полное зеркало
-// resolveOnChanges (Variant A): разница только в семантике gating на Soul-е —
-// onfail срабатывает по register.failed источника (rescue), а не register.changed.
+// resolveOnFail turns `onfail:` register names (RenderedTask.onFailNames)
+// into task indexes (RenderedTask.OnFailIdx) across the whole run plan. Full
+// mirror of resolveOnChanges (Variant A): the only difference is Soul-side
+// gating semantics — onfail fires on the source's register.failed (rescue),
+// not register.changed.
 //
-// Неизвестное имя → [ErrOnFailUnknownRegister]. Пустой onFailNames → OnFailIdx
-// остаётся nil (не-onfail-задача, gating не применяется).
+// Unknown name → [ErrOnFailUnknownRegister]. Empty onFailNames → OnFailIdx
+// stays nil (not an onfail task, gating doesn't apply).
 func resolveOnFail(tasks []*RenderedTask) error {
 	byRegister := registerIndex(tasks)
 	for _, t := range tasks {
@@ -69,8 +73,9 @@ func resolveOnFail(tasks []*RenderedTask) error {
 	return nil
 }
 
-// registerIndex строит карту register-имя → Index по всем задачам плана.
-// Задачи без register: в карту не попадают (адресуются только своим idx).
+// registerIndex builds a register-name → Index map over all plan tasks.
+// Tasks without register: are excluded from the map (addressed only by their
+// own idx).
 func registerIndex(tasks []*RenderedTask) map[string]int {
 	byRegister := make(map[string]int, len(tasks))
 	for _, t := range tasks {
@@ -81,10 +86,10 @@ func registerIndex(tasks []*RenderedTask) map[string]int {
 	return byRegister
 }
 
-// resolveRegisterNames резолвит список register-имён requisite-а в task-индексы по
-// карте byRegister. Неизвестное имя → обёрнутая sentinel-ошибка unknownErr с
-// координатами (имя задачи, kind requisite-а, само имя). kind — "onchanges"/"onfail"
-// для текста ошибки.
+// resolveRegisterNames resolves a requisite's list of register names into
+// task indexes via the byRegister map. Unknown name → wrapped sentinel error
+// unknownErr with coordinates (task name, requisite kind, the name itself).
+// kind is "onchanges"/"onfail" for the error text.
 func resolveRegisterNames(byRegister map[string]int, names []string, taskName, kind string, unknownErr error) ([]int, error) {
 	idxs := make([]int, 0, len(names))
 	for _, name := range names {

@@ -8,9 +8,10 @@ import (
 	"github.com/souls-guild/soul-stack/shared/cel"
 )
 
-// TestIncarnationVars_StateProjected — RenderInput.State проецируется в CEL как
-// `incarnation.state` (Вариант A, ADR-009/010). incarnationVars кладёт ключ
-// `state` ← in.State, чтобы scenario-render видел read-only снимок incarnation.state.
+// TestIncarnationVars_StateProjected proves RenderInput.State projects into
+// CEL as `incarnation.state` (Variant A, ADR-009/010). incarnationVars sets the
+// `state` key from in.State, so scenario-render sees a read-only snapshot of
+// incarnation.state.
 func TestIncarnationVars_StateProjected(t *testing.T) {
 	state := map[string]any{"redis_users": map[string]any{"alice": map[string]any{"acl": "+@all"}}}
 	in := RenderInput{
@@ -26,9 +27,9 @@ func TestIncarnationVars_StateProjected(t *testing.T) {
 	}
 }
 
-// TestIncarnationVars_NilStateNoKey — nil-State не кладёт ключ `state`
-// (backward-compat: push/trial без State видят incarnation.state.x как
-// no-such-key, не compile-error — incarnation DynType).
+// TestIncarnationVars_NilStateNoKey proves a nil State sets no `state` key
+// (backward-compat: push/trial without State see incarnation.state.x as
+// no-such-key, not a compile error — incarnation is DynType).
 func TestIncarnationVars_NilStateNoKey(t *testing.T) {
 	in := RenderInput{Incarnation: IncarnationMeta{Name: "x"}}
 	got := incarnationVars(in, 1)
@@ -37,9 +38,10 @@ func TestIncarnationVars_NilStateNoKey(t *testing.T) {
 	}
 }
 
-// TestRenderState_ReadOnly — ★ read-only инвариант: рендер params/where,
-// читающих incarnation.state.*, НЕ мутирует RenderInput.State (CEL читает, не
-// пишет — нет пути мутации state через CEL). Снимок до и после eval идентичен.
+// TestRenderState_ReadOnly proves the ★ read-only invariant: rendering
+// params/where that read incarnation.state.* does NOT mutate
+// RenderInput.State (CEL reads, never writes — there's no mutation path for
+// state via CEL). The snapshot before and after eval is identical.
 func TestRenderState_ReadOnly(t *testing.T) {
 	e, err := cel.New()
 	if err != nil {
@@ -57,11 +59,11 @@ func TestRenderState_ReadOnly(t *testing.T) {
 	host := &topology.HostFacts{SID: "redis-0.example.com", Coven: []string{"redis"}}
 	vars := hostVars(in, host, 1)
 
-	// where читает incarnation.state.count.
+	// where reads incarnation.state.count.
 	if _, err := evalWhere(e, "incarnation.state.count > 0", vars); err != nil {
 		t.Fatalf("evalWhere incarnation.state: %v", err)
 	}
-	// params интерполируют incarnation.state.redis_users (current-for-diff).
+	// params interpolate incarnation.state.redis_users (current-for-diff).
 	params := map[string]any{
 		"current": "${ incarnation.state.redis_users }",
 		"new":     "${ input.new_acl }",
@@ -79,11 +81,12 @@ func TestRenderState_ReadOnly(t *testing.T) {
 	}
 }
 
-// TestRenderState_StagedSnapshotInvariant — ★ staged-snapshot: на staged-прогоне
-// (renderIn переиспользуется на P0 и P1+) incarnation.state.* идентичен в обоих
-// passages — это pre-run stateBefore, а НЕ промежуточный результат state_changes.
-// Симулируем staged-render: тот же RenderInput.State, разный ActivePassage; eval
-// incarnation.state.* должен дать один и тот же результат.
+// TestRenderState_StagedSnapshotInvariant proves the ★ staged-snapshot
+// invariant: on a staged run (renderIn reused across P0 and P1+),
+// incarnation.state.* is identical in both passages — it's the pre-run
+// stateBefore, NOT an intermediate state_changes result. Simulates a staged
+// render: same RenderInput.State, different ActivePassage; eval of
+// incarnation.state.* must give the same result both times.
 func TestRenderState_StagedSnapshotInvariant(t *testing.T) {
 	e, err := cel.New()
 	if err != nil {
@@ -113,17 +116,18 @@ func TestRenderState_StagedSnapshotInvariant(t *testing.T) {
 	if !reflect.DeepEqual(p0, p1) {
 		t.Fatalf("★ incarnation.state разошёлся между passages: P0=%v P1=%v (снимок обязан быть инвариантен)", p0, p1)
 	}
-	// Снимок == исходный pre-run state (не накопление между passages).
+	// Snapshot == the original pre-run state (no accumulation across passages).
 	want := map[string]any{"alice": map[string]any{"acl": "+@read"}}
 	if !reflect.DeepEqual(p0, want) {
 		t.Fatalf("incarnation.state.redis_users = %v, want pre-run %v", p0, want)
 	}
 }
 
-// TestRenderState_BackwardCompatNoState — backward-compat: без RenderInput.State
-// (nil) обращение incarnation.state.x не падает compile-error, а даёт штатный
-// no-such-key (incarnation — DynType). where с incarnation.state.x должен
-// вернуть eval-ошибку «no such key», НЕ compile-ошибку.
+// TestRenderState_BackwardCompatNoState proves backward-compat: without
+// RenderInput.State (nil), accessing incarnation.state.x doesn't fail with a
+// compile error, but yields the normal no-such-key (incarnation is DynType). A
+// where clause with incarnation.state.x must return an eval error "no such
+// key", NOT a compile error.
 func TestRenderState_BackwardCompatNoState(t *testing.T) {
 	e, err := cel.New()
 	if err != nil {
@@ -133,8 +137,8 @@ func TestRenderState_BackwardCompatNoState(t *testing.T) {
 	host := &topology.HostFacts{SID: "redis-0.example.com", Coven: []string{"redis"}}
 	vars := hostVars(in, host, 1)
 
-	// has() guard на отсутствующий state — корректный no-such-key путь (false),
-	// без State это не compile-error.
+	// has() guard on a missing state — the correct no-such-key path (false),
+	// not a compile error, even without State.
 	out, err := e.EvalExpression("has(incarnation.state) && size(incarnation.state.redis_users) > 0", vars)
 	if err != nil {
 		t.Fatalf("backward-compat has(incarnation.state): %v (должно резолвиться без State)", err)
@@ -144,9 +148,10 @@ func TestRenderState_BackwardCompatNoState(t *testing.T) {
 	}
 }
 
-// TestRenderState_StateChangesSeesState — incarnation.state доступен и в
-// state_changes-контексте: stateChangesVars зовёт тот же incarnationVars, поэтому
-// одна точка правки (Вариант A) даёт incarnation.state и в sets/modify-патчах.
+// TestRenderState_StateChangesSeesState proves incarnation.state is also
+// available in the state_changes context: stateChangesVars calls the same
+// incarnationVars, so a single edit point (Variant A) gives incarnation.state
+// in sets/modify patches too.
 func TestRenderState_StateChangesSeesState(t *testing.T) {
 	state := map[string]any{"redis_users": map[string]any{"alice": map[string]any{"acl": "+@read"}}}
 	in := RenderInput{

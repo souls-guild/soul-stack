@@ -1,7 +1,7 @@
 //go:build integration
 
-// Integration-тесты check-drift (ADR-031 Slice B). Использует тот же noop-service-
-// репо + testcontainers PG, что и прочие scenario-тесты.
+// Integration tests for check-drift (ADR-031 Slice B). Uses the same
+// noop-service repo + testcontainers PG as the other scenario tests.
 
 package scenario
 
@@ -27,13 +27,13 @@ import (
 	"github.com/souls-guild/soul-stack/shared/cel"
 )
 
-// noopServiceRepoWithConverge — расширение noopServiceRepo: тот же service.yml,
-// scenario/create/main.yml + scenario/converge/main.yml. converge несёт одну
-// core.file-задачу для маркер-файла (минимальный валидный converge для теста).
+// noopServiceRepoWithConverge extends noopServiceRepo: same service.yml,
+// scenario/create/main.yml + scenario/converge/main.yml. converge carries one
+// core.file task for a marker file (minimal valid converge for the test).
 //
-// extraFiles: дополнительные файлы (rel→content), записываются в репо до
-// commit-а — для тестов, где converge надо ЗАМЕНИТЬ на свою форму (например
-// невалидный YAML, отсутствие converge).
+// extraFiles: additional files (rel→content), written into the repo before
+// commit — for tests that need to REPLACE converge with a custom form (e.g.
+// invalid YAML, missing converge).
 func noopServiceRepoWithConverge(t *testing.T, extraFiles map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -100,8 +100,9 @@ tasks:
 	return "file://" + dir
 }
 
-// newDriftRunner собирает Runner с AcolyteEnabled — обязательное условие
-// CheckDrift (inline-путь не пробрасывает DryRun, см. checkdrift.go).
+// newDriftRunner assembles a Runner with AcolyteEnabled — a required
+// condition for CheckDrift (the inline path doesn't propagate DryRun, see
+// checkdrift.go).
 func newDriftRunner(t *testing.T) *Runner {
 	t.Helper()
 	engine, err := cel.New()
@@ -122,10 +123,11 @@ func newDriftRunner(t *testing.T) *Runner {
 	})
 }
 
-// finalizeHostsAsCheckDriftAcolyte эмулирует работу Acolyte: переводит planned-
-// строки прогона в `success` с зашитым register_data per task_idx — нужно для
-// сборки DriftReport (assembleDriftReport читает apply_task_register).
-// changedByTaskIdx — set task_idx с changed=true; остальные → changed=false.
+// finalizeHostsAsCheckDriftAcolyte emulates the Acolyte's work: transitions
+// the run's planned rows to `success` with register_data baked in per
+// task_idx — needed to assemble the DriftReport (assembleDriftReport reads
+// apply_task_register). changedByTaskIdx is the set of task_idx with
+// changed=true; the rest → changed=false.
 func finalizeHostsAsCheckDriftAcolyte(t *testing.T, applyID string, sids []string, taskCount int, changedByTaskIdx map[int]bool) {
 	t.Helper()
 	ctx := context.Background()
@@ -152,16 +154,17 @@ func finalizeHostsAsCheckDriftAcolyte(t *testing.T, applyID string, sids []strin
 	}
 }
 
-// finalizeHostsAsUnsupported — эмуляция Soul, у которого `plan.unsupported`-
-// task (community-модуль без PlanReadSafe): apply_runs.status=failed +
-// error_summary с маркером кода `plan.unsupported`.
+// finalizeHostsAsUnsupported emulates a Soul with a `plan.unsupported` task
+// (community module without PlanReadSafe): apply_runs.status=failed +
+// error_summary carrying the `plan.unsupported` code marker.
 func finalizeHostsAsUnsupported(t *testing.T, applyID, sid string, taskIdx int) {
 	t.Helper()
 	summary := fmt.Sprintf("task %d core.custom.example: plan.unsupported", taskIdx)
-	// failure-таск тоже несёт apply_task_register со skipped/failed-фактами;
-	// но для unsupported-классификации hand-classifier-у достаточно
-	// error_summary. Эмулируем минимум: пишем failure через RecordTaskFailure.
-	// N=1 unsupported-сценарий: локальный task_idx == глобальный plan_index.
+	// A failure task also carries apply_task_register with skipped/failed
+	// facts, but for unsupported classification the hand-classifier only
+	// needs error_summary. Emulate the minimum: write failure via
+	// RecordTaskFailure. N=1 unsupported scenario: local task_idx == global
+	// plan_index.
 	if err := applyrun.RecordTaskFailure(context.Background(), integrationPool, applyID, sid, 0, taskIdx, taskIdx, summary); err != nil {
 		t.Fatalf("RecordTaskFailure: %v", err)
 	}
@@ -170,10 +173,10 @@ func finalizeHostsAsUnsupported(t *testing.T, applyID, sid string, taskIdx int) 
 	}
 }
 
-// runCheckDriftInBackground запускает CheckDrift в горутине и возвращает chan с
-// результатом — тест должен сначала запустить, потом эмулировать Acolyte
-// (finalize), потом дождаться канала. Иначе CheckDrift зависает в barrier до
-// runTimeout.
+// runCheckDriftInBackground starts CheckDrift in a goroutine and returns a
+// result channel — the test must start it first, then emulate the Acolyte
+// (finalize), then wait on the channel. Otherwise CheckDrift hangs in the
+// barrier until runTimeout.
 func runCheckDriftInBackground(t *testing.T, r *Runner, spec CheckDriftSpec) <-chan struct {
 	report *DriftReport
 	err    error
@@ -190,7 +193,7 @@ func runCheckDriftInBackground(t *testing.T, r *Runner, spec CheckDriftSpec) <-c
 			err    error
 		}{report, err}
 	}()
-	// дать CheckDrift время сделать render+InsertPlanned (~200ms — render+PG-IO)
+	// give CheckDrift time to do render+InsertPlanned (~200ms — render+PG-IO)
 	time.Sleep(200 * time.Millisecond)
 	return out
 }
@@ -209,8 +212,8 @@ func waitDriftResult(t *testing.T, ch <-chan struct {
 	}
 }
 
-// TestIntegration_CheckDrift_HappyPath_Clean — два хоста, оба apply_runs success
-// с register changed=false → DriftReport clean.
+// TestIntegration_CheckDrift_HappyPath_Clean — two hosts, both apply_runs
+// success with register changed=false → DriftReport clean.
 func TestIntegration_CheckDrift_HappyPath_Clean(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -229,7 +232,7 @@ func TestIntegration_CheckDrift_HappyPath_Clean(t *testing.T) {
 	})
 	finalizeHostsAsCheckDriftAcolyte(t, applyID,
 		[]string{"host-a.example.com", "host-b.example.com"},
-		1, // converge несёт 1 task
+		1, // converge carries 1 task
 		map[int]bool{ /* all false */ })
 
 	report, err := waitDriftResult(t, ch)
@@ -251,9 +254,9 @@ func TestIntegration_CheckDrift_HappyPath_Clean(t *testing.T) {
 		}
 	}
 
-	// incarnation.status НЕ становится drift (нет расхождений), и MarkDriftStatus
-	// явно дёрнут API-handler-ом — здесь проверяем сам поток. Просто убеждаемся
-	// что строка осталась в ready.
+	// incarnation.status does NOT become drift (no discrepancies), and
+	// MarkDriftStatus is explicitly invoked by the API handler — here we
+	// check the flow itself. Just confirm the row stayed in ready.
 	inc, err := incarnation.SelectByName(context.Background(), integrationPool, "noop-prod")
 	if err != nil {
 		t.Fatalf("SelectByName: %v", err)
@@ -263,7 +266,8 @@ func TestIntegration_CheckDrift_HappyPath_Clean(t *testing.T) {
 	}
 }
 
-// TestIntegration_CheckDrift_Drifted — host-a register changed=true → drifted.
+// TestIntegration_CheckDrift_Drifted — host-a register changed=true →
+// drifted.
 func TestIntegration_CheckDrift_Drifted(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -280,7 +284,7 @@ func TestIntegration_CheckDrift_Drifted(t *testing.T) {
 		ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
 		StartedByAID:    "archon-alice",
 	})
-	// host-a — drift на task 0; host-b — clean
+	// host-a — drift on task 0; host-b — clean
 	finalizeHostsAsCheckDriftAcolyte(t, applyID,
 		[]string{"host-a.example.com"}, 1, map[int]bool{0: true})
 	finalizeHostsAsCheckDriftAcolyte(t, applyID,
@@ -306,8 +310,8 @@ func TestIntegration_CheckDrift_Drifted(t *testing.T) {
 	}
 }
 
-// TestIntegration_CheckDrift_Unsupported — Soul возвращает FAILED с
-// plan.unsupported → DriftStatusUnsupported (не failed).
+// TestIntegration_CheckDrift_Unsupported — Soul returns FAILED with
+// plan.unsupported → DriftStatusUnsupported (not failed).
 func TestIntegration_CheckDrift_Unsupported(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -337,14 +341,14 @@ func TestIntegration_CheckDrift_Unsupported(t *testing.T) {
 	}
 }
 
-// TestIntegration_CheckDrift_ConvergeMissing — сервис без scenario/converge/
-// → ErrConvergeMissing.
+// TestIntegration_CheckDrift_ConvergeMissing — service without
+// scenario/converge/ → ErrConvergeMissing.
 func TestIntegration_CheckDrift_ConvergeMissing(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "noop-prod")
 	seedConnectedSoul(t, "host-a.example.com", []string{"noop-prod"})
-	gitURL := noopServiceRepo(t) // БЕЗ converge
+	gitURL := noopServiceRepo(t) // WITHOUT converge
 
 	r := newDriftRunner(t)
 	_, err := r.CheckDrift(context.Background(), CheckDriftSpec{
@@ -358,8 +362,9 @@ func TestIntegration_CheckDrift_ConvergeMissing(t *testing.T) {
 	}
 }
 
-// TestIntegration_CheckDrift_AcolyteRequired — runner без AcolyteEnabled
-// отказывается делать check-drift (inline-путь не пробрасывает dry_run).
+// TestIntegration_CheckDrift_AcolyteRequired — a runner without
+// AcolyteEnabled refuses to check-drift (the inline path doesn't propagate
+// dry_run).
 func TestIntegration_CheckDrift_AcolyteRequired(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -379,8 +384,9 @@ func TestIntegration_CheckDrift_AcolyteRequired(t *testing.T) {
 	}
 }
 
-// mockSuccessDispatcher — простой stub-Outbound для CheckDrift_AcolyteRequired:
-// сам тест не должен дойти до SendApply (отказ ранее), достаточно non-nil.
+// mockSuccessDispatcher is a simple stub Outbound for
+// CheckDrift_AcolyteRequired: the test itself should never reach SendApply
+// (rejected earlier), non-nil is enough.
 func mockSuccessDispatcher(t *testing.T) ApplyDispatcher {
 	t.Helper()
 	return fakeDispatcher{}

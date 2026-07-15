@@ -8,42 +8,44 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// renderBlockTask разворачивает block-задачу (pilot C1, destiny/tasks.md §6.5,
-// orchestration.md §2.2.1) в плоский слой RenderedTask на render-фазе — по образцу
-// renderApplyDestiny/renderLoopTask. block — НЕ wire-сущность: контракт
-// (proto/DispatchPlan/Soul) не меняется. «Весь блок одной волной» эмёрджентно:
-// все потомки несут одинаковые SerialWidth+TargetSIDs (унаследованы от block) и
-// один Passage (stampPassage клеймит весь fan-out — block атомарен по Passage,
-// ADR-056; Stratify учитывает это).
+// renderBlockTask expands a block-task (pilot C1, destiny/tasks.md §6.5,
+// orchestration.md §2.2.1) into a flat layer of RenderedTask at the render phase —
+// following the renderApplyDestiny/renderLoopTask pattern. block is NOT a wire
+// entity: the contract (proto/DispatchPlan/Soul) doesn't change. "The whole block
+// as one wave" is emergent: all descendants carry the same SerialWidth+TargetSIDs
+// (inherited from block) and one Passage (stampPassage stamps the entire fan-out —
+// block is atomic per Passage, ADR-056; Stratify accounts for this).
 //
-// Наследование (mergeBlockInheritance) — каждому потомку:
-//   - when: AND-merge `(<block.when>) && (<child.when>)` (один из пустых → берётся
-//     другой). Предикаты протягиваются КАК CEL-строки (Soul вычисляет, ADR-012(d)).
-//   - where: AND-merge с child.where (тот же закон; резолвится Keeper-side на потомке).
-//   - vars: block.vars база, child.vars поверх (child перебивает одноимённые).
-//   - onchanges/onfail: union block+child имён → потомок.
+// Inheritance (mergeBlockInheritance) — for each descendant:
+//   - when: AND-merge `(<block.when>) && (<child.when>)` (if one is empty → take
+//     the other). Predicates are carried as CEL strings (Soul evaluates, ADR-012(d)).
+//   - where: AND-merge with child.where (same rule; resolved Keeper-side on the descendant).
+//   - vars: block.vars is the base, child.vars overrides (child wins on same names).
+//   - onchanges/onfail: union of block+child names → descendant.
 //
-// width вычисляется ОДИН раз из block.Serial против числа targeted-хостов и
-// наследуется всеми потомками (SerialWidth в каждый DispatchPlan). targeted —
-// хосты block-задачи (после on:/where:/run_once: родителя, резолв в Render ДО
-// ветки). idx сквозной: потомки получают монотонные Index без дыр.
+// width is computed ONCE from block.Serial against the number of targeted hosts
+// and inherited by all descendants (SerialWidth in every DispatchPlan). targeted
+// is the block-task's hosts (after the parent's on:/where:/run_once:, resolved in
+// Render before branching). idx is threaded through: descendants get monotonic
+// Index values with no gaps.
 //
-// Виды потомков:
-//   - вложенный block: → рекурсивный renderBlockTask (наследование каскадом);
-//   - apply: → renderApplyDestiny (унаследованный width);
+// Descendant kinds:
+//   - nested block: → recursive renderBlockTask (cascading inheritance);
+//   - apply: → renderApplyDestiny (inherited width);
 //   - module: → renderTask;
-//   - loop: на потомке → ОТВЕРГАЕТСЯ (вне pilot C1, понятная ошибка);
-//   - parallel:/include: на потомке → ОТВЕРГАЕТСЯ (guardPilotBlockChild).
+//   - loop: on a descendant → REJECTED (outside pilot C1 scope, clear error);
+//   - parallel:/include: on a descendant → REJECTED (guardPilotBlockChild).
 //
-// Static-when-false потомок: emitStaticWhenSkip в начале цикла эмитит
-// placeholder(ы) ДО guard/render — симметрично top-level Render-циклу (неактивная
-// ветка с unsupported-DSL не блокирует активную). Block-level static-when:false НЕ
-// гасится emitStaticWhenSkip (она пропускает block-задачу): static-false block
-// доходит сюда, mergeBlockInheritance вливает block.when в КАЖДОГО потомка через
-// AND, static-when каждого потомка становится false, и каждый child эмитит СВОЙ
-// skip-placeholder с register/requisites через walkBlockChildren. Так register
-// потомков static-false block виден снаружи (flat-register-scope инвариантен
-// относительно static-skip — паттерн loopStaticSkip).
+// Static-when-false descendant: emitStaticWhenSkip at the top of the loop emits
+// placeholder(s) BEFORE guard/render — symmetric with the top-level Render loop
+// (an inactive branch with unsupported DSL doesn't block the active one).
+// Block-level static-when:false is NOT swallowed by emitStaticWhenSkip (it skips
+// the block-task itself): a static-false block reaches here, mergeBlockInheritance
+// merges block.when into EVERY descendant via AND, each descendant's static-when
+// becomes false, and each child emits ITS OWN skip-placeholder with
+// register/requisites via walkBlockChildren. This keeps register of a static-false
+// block's descendants visible from outside (flat-register-scope is invariant under
+// static-skip — the loopStaticSkip pattern).
 func (p *Pipeline) renderBlockTask(
 	ctx context.Context,
 	in RenderInput,
@@ -53,57 +55,62 @@ func (p *Pipeline) renderBlockTask(
 ) ([]*RenderedTask, []DispatchPlan, error) {
 	width := serialWidth(blockTask.Serial, len(targeted))
 
-	// childTarget: потомок резолвит свой on:/where:/run_once: против хостов блока
-	// (scenario-оркестрация внутри block разрешена — orchestration.md §2.2.2);
-	// блок СУЖАЕТ roster потомка.
+	// childTarget: a descendant resolves its own on:/where:/run_once: against the
+	// block's hosts (scenario orchestration inside a block is allowed —
+	// orchestration.md §2.2.2); the block NARROWS the descendant's roster.
 	childTarget := func(child config.Task) ([]*topology.HostFacts, error) {
 		return p.blockChildTargets(in, child, targeted)
 	}
-	// childRecurse: вложенный block → рекурсия того же renderBlockTask.
+	// childRecurse: a nested block → recursion into the same renderBlockTask.
 	childRecurse := func(child config.Task, idx int, childTargeted []*topology.HostFacts) ([]*RenderedTask, []DispatchPlan, error) {
 		return p.renderBlockTask(ctx, in, child, idx, childTargeted)
 	}
 	return p.walkBlockChildren(ctx, in, blockTask, startIndex, width, guardPilotBlockChild, childTarget, childRecurse)
 }
 
-// blockChildGuard — проверка вида потомка block-а перед рендером. scenario-слой
-// (renderBlockTask) подставляет guardPilotBlockChild (разрешает apply/scenario-
-// оркестрацию потомка); destiny-слой (renderDestinyBlock) — guardDestinyBlockChild
-// (отвергает scenario-ключи). idx — позиция потомка для диагностики, blockName —
-// имя контейнера.
+// blockChildGuard — checks a block descendant's kind before rendering. The
+// scenario layer (renderBlockTask) supplies guardPilotBlockChild (allows
+// apply/scenario orchestration on the descendant); the destiny layer
+// (renderDestinyBlock) supplies guardDestinyBlockChild (rejects scenario keys).
+// idx is the descendant's position for diagnostics, blockName is the container's
+// name.
 type blockChildGuard func(child config.Task, idx int, blockName string) error
 
-// blockChildTargeter резолвит roster потомка block-а. scenario-слой сужает roster
-// по on:/where:/run_once: потомка; destiny-слой наследует roster блока ЦЕЛИКОМ
-// (block в destiny НЕ несёт оркестрацию — отвергнута guard-ом).
+// blockChildTargeter resolves a block descendant's roster. The scenario layer
+// narrows the roster by the descendant's on:/where:/run_once:; the destiny layer
+// inherits the block's roster WHOLESALE (block in destiny carries no orchestration
+// — rejected by the guard).
 type blockChildTargeter func(child config.Task) ([]*topology.HostFacts, error)
 
-// blockChildRecurser рендерит ВЛОЖЕННЫЙ block-потомок (child.Block != nil). Каждый
-// слой подставляет свою рекурсию (renderBlockTask / renderDestinyBlock), чтобы
-// наследование каскадом не разъехалось между слоями.
+// blockChildRecurser renders a NESTED block descendant (child.Block != nil). Each
+// layer supplies its own recursion (renderBlockTask / renderDestinyBlock) so
+// cascading inheritance doesn't drift between layers.
 type blockChildRecurser func(child config.Task, idx int, childTargeted []*topology.HostFacts) ([]*RenderedTask, []DispatchPlan, error)
 
-// walkBlockChildren — ЕДИНЫЙ обход потомков block-а для обоих слоёв (scenario и
-// destiny). Source-of-truth порядка обработки потомка, чтобы наследование block
-// не разъехалось между renderBlockTask и renderDestinyBlock (drift-риск major):
+// walkBlockChildren — the SINGLE traversal of a block's descendants for both
+// layers (scenario and destiny). Source of truth for descendant processing order,
+// so block inheritance doesn't drift between renderBlockTask and
+// renderDestinyBlock (major drift risk):
 //
-//	mergeBlockInheritance(blockTask, child)   — влить when/where/vars/requisites
-//	→ emitStaticWhenSkip(child)               — AND-when мог стать static-false
-//	→ guard(child)                            — граница ключей слоя (callback)
-//	→ render: вложенный block (recurse) / apply / module
+//	mergeBlockInheritance(blockTask, child)   — merge in when/where/vars/requisites
+//	→ emitStaticWhenSkip(child)               — the AND-when may have become static-false
+//	→ guard(child)                            — layer's key boundary (callback)
+//	→ render: nested block (recurse) / apply / module
 //
-// Слоевая разница вынесена в три callback-а:
-//   - guard: какие виды/ключи потомка допустимы (scenario vs destiny-граница);
-//   - target: как резолвится roster потомка (сужение on/where vs наследование);
-//   - recurse: чем рендерится вложенный block (рекурсия того же слоя).
+// The per-layer difference is factored into three callbacks:
+//   - guard: which descendant kinds/keys are allowed (scenario vs destiny boundary);
+//   - target: how the descendant's roster is resolved (on/where narrowing vs inheritance);
+//   - recurse: how a nested block is rendered (recursion within the same layer).
 //
-// width — ширина волны контейнера (serial: блока для scenario / serial: apply-
-// задачи для destiny): протягивается в каждый DispatchPlan потомка (block НЕ несёт
-// свой serial у потомков — наследует ширину контейнера). idx сквозной.
+// width — the container's wave width (serial: of the block for scenario / serial:
+// of the apply-task for destiny): threaded into every descendant's DispatchPlan
+// (block doesn't carry its own serial for descendants — it inherits the
+// container's width). idx is threaded through.
 //
-// apply-потомок: renderApplyDestiny ВСЕГДА разрешён только когда guard его пропустил
-// (destiny-guard отвергает apply на потомке — вложенный apply в destiny запрещён,
-// guardDestinyTask); поэтому ветка child.Apply достижима лишь в scenario-слое.
+// apply-descendant: renderApplyDestiny is only ever reachable once the guard has
+// let it through (the destiny guard rejects apply on a descendant — nested apply
+// in destiny is forbidden, guardDestinyTask); so the child.Apply branch is only
+// reachable in the scenario layer.
 func (p *Pipeline) walkBlockChildren(
 	ctx context.Context,
 	in RenderInput,
@@ -120,10 +127,11 @@ func (p *Pipeline) walkBlockChildren(
 	for i := range blockTask.Block.Block {
 		child := mergeBlockInheritance(blockTask, blockTask.Block.Block[i])
 
-		// Static-when-false потомок: placeholder(ы) ДО guard/render (как top-level
-		// Render-цикл). idx двигается на число эмитнутых placeholder-ов. Static-when
-		// унаследованного when статичен ровно тогда, когда статичны оба слагаемых
-		// (block.when + child.when) — isStaticWhen проверяет AND-строку целиком.
+		// Static-when-false descendant: placeholder(s) BEFORE guard/render (like the
+		// top-level Render loop). idx advances by the number of emitted placeholders.
+		// The inherited when's static-when is static exactly when both operands
+		// (block.when + child.when) are static — isStaticWhen checks the whole
+		// AND-string.
 		if skipped, serr := p.emitStaticWhenSkip(ctx, in, child, &tasks, &plans, &idx); serr != nil {
 			return nil, nil, serr
 		} else if skipped {
@@ -134,10 +142,11 @@ func (p *Pipeline) walkBlockChildren(
 			return nil, nil, gerr
 		}
 
-		// Вложенный block: рекурсия — наследование каскадом (внешний предикат уже
-		// влит в child через mergeBlockInheritance, теперь child раздаёт его своим
-		// потомкам). serial НЕ наследуется в child (mergeBlockInheritance его не
-		// трогает): вложенный block без serial: едет своей шириной (0 = одной волной).
+		// Nested block: recursion — cascading inheritance (the outer predicate is
+		// already merged into child via mergeBlockInheritance, now child passes it
+		// down to its own descendants). serial is NOT inherited into child
+		// (mergeBlockInheritance doesn't touch it): a nested block without serial:
+		// rides its own width (0 = one wave).
 		if child.Block != nil {
 			childTargeted, terr := target(child)
 			if terr != nil {
@@ -158,11 +167,12 @@ func (p *Pipeline) walkBlockChildren(
 			return nil, nil, terr
 		}
 
-		// apply-потомок: изолированный render-проход destiny с унаследованным width.
-		// Достижимо только в scenario-слое (destiny-guard отвергает apply на потомке).
-		// child.Register материализуется терминальной core.noop.run агрегата (Вариант B,
-		// renderApplyDestiny) — applier-register block-потомка адресуем извне как
-		// register.<child>.* (orchestration.md §2.1.1).
+		// apply-descendant: an isolated destiny render pass with inherited width.
+		// Only reachable in the scenario layer (the destiny guard rejects apply on a
+		// descendant). child.Register materializes via the aggregate's terminal
+		// core.noop.run (Variant B, renderApplyDestiny) — a block-descendant's
+		// applier-register is addressable from outside as register.<child>.*
+		// (orchestration.md §2.1.1).
 		if child.Apply != nil {
 			dt, dp, derr := p.renderApplyDestiny(ctx, in, child.Apply, idx, childTargeted, width, child.Register)
 			if derr != nil {
@@ -174,7 +184,7 @@ func (p *Pipeline) walkBlockChildren(
 			continue
 		}
 
-		// module-потомок.
+		// module-descendant.
 		rt, rerr := p.renderTask(ctx, in, child, idx, childTargeted)
 		if rerr != nil {
 			return nil, nil, rerr
@@ -190,16 +200,18 @@ func (p *Pipeline) walkBlockChildren(
 	return tasks, plans, nil
 }
 
-// blockChildTargets резолвит таргет block-потомка: on:/where: child (уже несущего
-// унаследованный where через mergeBlockInheritance) против хостов блока. on: на
-// потомке внутри block в пилоте не используется типично, но резолвится тем же
-// resolveTargets (как в scenario-цикле); затем run_once: потомка (нечастый кейс,
-// но грамматика разрешает — orchestration.md §2.2.2).
+// blockChildTargets resolves a block descendant's target: child's on:/where:
+// (already carrying inherited where via mergeBlockInheritance) against the
+// block's hosts. on: on a descendant inside a block isn't typically used in the
+// pilot, but resolves through the same resolveTargets (as in the scenario loop);
+// then the descendant's run_once: (an uncommon case, but the grammar allows it —
+// orchestration.md §2.2.2).
 //
-// КРИТИЧНО (изоляция таргета): резолв идёт против хостов БЛОКА (targeted —
-// результат on:/where:/run_once: block-задачи в Render), НЕ против всего roster-а:
-// where: потомка сужает уже отобранное блоком множество, симметрично двухфазному
-// резолву on:→where: (orchestration.md §4).
+// CRITICAL (target isolation): resolution runs against the BLOCK's hosts
+// (targeted — the result of the block-task's on:/where:/run_once: in Render), NOT
+// against the whole roster: the descendant's where: narrows the set already
+// selected by the block, symmetric to the two-phase on:→where: resolution
+// (orchestration.md §4).
 func (p *Pipeline) blockChildTargets(in RenderInput, child config.Task, targeted []*topology.HostFacts) ([]*topology.HostFacts, error) {
 	scoped := in
 	scoped.Hosts = targeted
@@ -210,12 +222,13 @@ func (p *Pipeline) blockChildTargets(in RenderInput, child config.Task, targeted
 	return applyRunOnce(childTargeted, child.RunOnce), nil
 }
 
-// mergeBlockInheritance строит потомка block-а с влитым наследованием от
-// контейнера (destiny/tasks.md §6.5). НЕ мутирует исходные структуры — возвращает
-// копию child с переписанными When/Where/Vars/OnChanges/OnFail. Остальные поля
-// (Module/Apply/Block/Loop/Register/params/serial/run_once/…) — как в исходном
-// потомке: serial НЕ наследуется потомком (ширина волны раздаётся через DispatchPlan
-// в renderBlockTask, а не через поле задачи).
+// mergeBlockInheritance builds a block descendant with inheritance from the
+// container merged in (destiny/tasks.md §6.5). Does NOT mutate the source
+// structs — returns a copy of child with When/Where/Vars/OnChanges/OnFail
+// rewritten. Other fields (Module/Apply/Block/Loop/Register/params/serial/run_once/…)
+// stay as in the source descendant: serial is NOT inherited by the descendant
+// (wave width is distributed via DispatchPlan in renderBlockTask, not through a
+// task field).
 func mergeBlockInheritance(blockTask config.Task, child config.Task) config.Task {
 	out := child
 	out.When = andMergePredicate(blockTask.When, child.When)
@@ -226,10 +239,10 @@ func mergeBlockInheritance(blockTask config.Task, child config.Task) config.Task
 	return out
 }
 
-// andMergePredicate соединяет два CEL-предиката (when:/where:) по AND с
-// сохранением скобок-приоритета: `(<outer>) && (<inner>)`. Пустой один → берётся
-// другой как есть (без обёртки); оба пусты → "". Это закон destiny/tasks.md §6.5
-// «внутренний when комбинируется с внешним по AND».
+// andMergePredicate joins two CEL predicates (when:/where:) by AND, preserving
+// priority via parens: `(<outer>) && (<inner>)`. If one is empty → the other is
+// taken as-is (unwrapped); both empty → "". This is the destiny/tasks.md §6.5 rule
+// "inner when combines with outer by AND".
 func andMergePredicate(outer, inner string) string {
 	switch {
 	case outer == "" && inner == "":
@@ -243,9 +256,9 @@ func andMergePredicate(outer, inner string) string {
 	}
 }
 
-// mergeVars сливает block.vars (база) и child.vars (поверх): child перебивает
-// одноимённые ключи (destiny/tasks.md §9, более локальный scope побеждает). Оба
-// пусты → nil. Не мутирует входные карты.
+// mergeVars merges block.vars (base) and child.vars (overlay): child overrides
+// same-named keys (destiny/tasks.md §9, the more local scope wins). Both empty →
+// nil. Doesn't mutate the input maps.
 func mergeVars(base, override map[string]any) map[string]any {
 	if len(base) == 0 && len(override) == 0 {
 		return nil
@@ -260,8 +273,8 @@ func mergeVars(base, override map[string]any) map[string]any {
 	return out
 }
 
-// unionNames объединяет два списка requisite-имён (onchanges/onfail) без
-// дубликатов, сохраняя порядок «block-имена, затем child-имена». Оба пусты → nil.
+// unionNames merges two lists of requisite names (onchanges/onfail) without
+// duplicates, preserving "block names, then child names" order. Both empty → nil.
 func unionNames(blockNames, childNames []string) []string {
 	if len(blockNames) == 0 && len(childNames) == 0 {
 		return nil
@@ -278,18 +291,20 @@ func unionNames(blockNames, childNames []string) []string {
 	return out
 }
 
-// guardPilotBlockChild отвергает виды потомков block-а вне pilot C1 явной
-// [ErrUnsupportedDSL]. Поддержаны: module:, apply:, вложенный block: (рекурсия в
-// renderBlockTask проверяет их раньше — сюда block-потомок не доходит). Вне pilot:
-//   - loop: на потомке (render-time fan-out внутри block отложен);
-//   - parallel: на потомке (parallel в block — слайс позже);
-//   - include: (должен раскрываться ДО render — ErrUnexpandedInclude);
-//   - пустая задача (нет дискриминатора).
+// guardPilotBlockChild rejects block descendant kinds outside pilot C1 scope with
+// an explicit [ErrUnsupportedDSL]. Supported: module:, apply:, nested block:
+// (renderBlockTask's recursion checks these earlier — a block descendant never
+// reaches here). Outside the pilot:
+//   - loop: on a descendant (render-time fan-out inside a block is deferred);
+//   - parallel: on a descendant (parallel in a block — a later slice);
+//   - include: (must expand BEFORE render — ErrUnexpandedInclude);
+//   - an empty task (no discriminator).
 //
-// block-потомок (child.Block != nil) сюда не попадает — renderBlockTask ветвит на
-// рекурсию ДО guard. parallel/loop НА САМОМ block-е (не потомке) отвергает
-// config-валидатор (parallel_on_block_invalid / loop валидация) и guardPilotDSL
-// (parallel) на top-level.
+// A block descendant (child.Block != nil) never reaches here — renderBlockTask
+// branches into recursion BEFORE the guard. parallel/loop on the block ITSELF
+// (not the descendant) is rejected by the config validator
+// (parallel_on_block_invalid / loop validation) and by guardPilotDSL (parallel) at
+// the top level.
 func guardPilotBlockChild(child config.Task, idx int, blockName string) error {
 	switch {
 	case child.Loop != nil:

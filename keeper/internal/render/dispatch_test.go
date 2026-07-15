@@ -9,18 +9,20 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// TestResolveTargetsRootCovenNoSpecialCasing фиксирует ПОВЕДЕНИЕ резолва `on:`
-// после удаления спец-ветки drop корневой метки в resolveCovenList: корневая
-// Coven-метка `${ incarnation.name }` НЕ имеет особой обработки и проходит через
-// общий filterByCovens наравне с прочими метками.
+// TestResolveTargetsRootCovenNoSpecialCasing pins down the `on:` resolve
+// BEHAVIOR after removing the special-case branch that dropped the root label
+// in resolveCovenList: the root Coven label `${ incarnation.name }` has no
+// special handling and flows through the common filterByCovens like any other
+// label.
 //
-// Roster-инвариант (ADR-008, rosterSQL `WHERE $1 = ANY(coven)`): КАЖДЫЙ хост
-// roster-а несёт корневую метку. Поэтому фильтрация по `incarnation.name` —
-// no-op (= весь incarnation), а добавление второй метки сужает scope обычным
-// AND-пересечением. Тест ловит регресс, если кто-то вернёт спец-обработку
-// корневой метки (тогда кейс `[incarnation.name, baremetal]` начнёт включать
-// non-baremetal хосты) или сломает roster-инвариант (тогда `[incarnation.name]`
-// перестанет возвращать всех).
+// Roster invariant (ADR-008, rosterSQL `WHERE $1 = ANY(coven)`): EVERY host in
+// the roster carries the root label. So filtering by `incarnation.name` is a
+// no-op (= the whole incarnation), and adding a second label narrows scope via
+// ordinary AND-intersection. This test catches a regression if someone
+// reintroduces special-casing for the root label (then
+// `[incarnation.name, baremetal]` would start including non-baremetal hosts)
+// or breaks the roster invariant (then `[incarnation.name]` would stop
+// returning everyone).
 func TestResolveTargetsRootCovenNoSpecialCasing(t *testing.T) {
 	engine, err := cel.New()
 	if err != nil {
@@ -28,8 +30,8 @@ func TestResolveTargetsRootCovenNoSpecialCasing(t *testing.T) {
 	}
 
 	const incName = "svc-prod"
-	// Roster-инвариант: у всех хостов есть корневая метка incName; часть несёт
-	// ещё и baremetal.
+	// Roster invariant: every host carries the root label incName; some also
+	// carry baremetal.
 	in := RenderInput{
 		Incarnation: IncarnationMeta{Name: incName},
 		Hosts: []*topology.HostFacts{
@@ -79,9 +81,9 @@ func TestResolveTargetsRootCovenNoSpecialCasing(t *testing.T) {
 	}
 }
 
-// TestResolveCovenListRootCovenRetained фиксирует, что корневая метка остаётся в
-// списке резолва (а не отбрасывается): прямая проверка снятия спец-обработки на
-// уровне resolveCovenList.
+// TestResolveCovenListRootCovenRetained pins down that the root label stays in
+// the resolved list (not dropped): a direct check that the special-casing was
+// removed at the resolveCovenList level.
 func TestResolveCovenListRootCovenRetained(t *testing.T) {
 	engine, err := cel.New()
 	if err != nil {

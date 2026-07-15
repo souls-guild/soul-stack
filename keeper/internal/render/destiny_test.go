@@ -9,7 +9,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// stubDestinyResolver — in-memory резолвер для unit-тестов apply:destiny.
+// stubDestinyResolver is an in-memory resolver for apply:destiny unit tests.
 type stubDestinyResolver struct {
 	resolved *ResolvedDestiny
 	err      error
@@ -24,7 +24,7 @@ func (s *stubDestinyResolver) Resolve(_ context.Context, name string) (*Resolved
 	return s.resolved, nil
 }
 
-// flatDestiny — плоская тест-destiny из двух module-задач, читающих свой input.
+// flatDestiny is a flat test destiny made of two module tasks that read their own input.
 func flatDestiny() *ResolvedDestiny {
 	return &ResolvedDestiny{
 		Name: "pilot-flat",
@@ -57,7 +57,7 @@ func flatDestiny() *ResolvedDestiny {
 	}
 }
 
-// applyScenario — сценарий с одной apply:destiny-задачей.
+// applyScenario is a scenario with a single apply:destiny task.
 func applyScenario(destiny string, applyInput map[string]any) *config.ScenarioManifest {
 	return &config.ScenarioManifest{
 		Name: "create",
@@ -70,8 +70,8 @@ func applyScenario(destiny string, applyInput map[string]any) *config.ScenarioMa
 	}
 }
 
-// TestRender_ApplyDestiny_Expands — apply:destiny раскрывается в задачи destiny
-// со сквозными индексами; apply.input резолвит params; default добирается.
+// TestRender_ApplyDestiny_Expands — apply:destiny expands into destiny tasks
+// with plan-wide indexes; apply.input resolves params; defaults are filled in.
 func TestRender_ApplyDestiny_Expands(t *testing.T) {
 	res := &stubDestinyResolver{resolved: flatDestiny()}
 	p := NewPipeline(nil, newEngine(t), nil, nil)
@@ -115,20 +115,20 @@ func TestRender_ApplyDestiny_Expands(t *testing.T) {
 	}
 }
 
-// TestRender_ApplyDestiny_Isolation — destiny НЕ видит scenario-scope: ссылка на
-// scenario-input, не проброшенный через apply.input, падает (no such key), а не
-// тихо подхватывает значение родителя.
+// TestRender_ApplyDestiny_Isolation — destiny does NOT see the scenario scope:
+// a reference to scenario input not passed through apply.input fails (no such
+// key) rather than silently picking up the parent's value.
 func TestRender_ApplyDestiny_Isolation(t *testing.T) {
 	leaky := flatDestiny()
-	// Задача destiny ссылается на input.secret_from_scenario, которого НЕТ в
-	// apply.input — в изолированном env его быть не должно.
+	// The destiny task references input.secret_from_scenario, which is NOT in
+	// apply.input — it must not be present in the isolated env.
 	leaky.Tasks[0].Module.Params["content"] = "${ input.secret_from_scenario }"
 	res := &stubDestinyResolver{resolved: leaky}
 
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario: applyScenario("pilot-flat", map[string]any{"marker_file": "/m", "marker_payload": "p"}),
-		// scenario-scope содержит secret_from_scenario — destiny НЕ должна его увидеть.
+		// scenario scope contains secret_from_scenario — destiny must NOT see it.
 		Input:       map[string]any{"secret_from_scenario": "LEAK"},
 		Incarnation: IncarnationMeta{Name: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
@@ -141,13 +141,14 @@ func TestRender_ApplyDestiny_Isolation(t *testing.T) {
 	}
 }
 
-// TestRender_ApplyDestiny_StateIsolation — destiny НЕ видит incarnation.state:
-// Вариант A (incarnation.state в scenario-render) не протёк в destiny-проход.
-// State кладётся в RenderInput (не в IncarnationMeta), а renderApplyDestiny
-// копирует только parentIn.Incarnation (meta) и НЕ пробрасывает State → у destiny
-// `incarnation.state` пуст. Задача destiny, читающая incarnation.state.x в
-// non-optional форме, падает eval-ошибкой (no such key) — изоляция, как для
-// scenario-input (orchestration.md §4.1: state — только через apply.input).
+// TestRender_ApplyDestiny_StateIsolation — destiny does NOT see
+// incarnation.state: Variant A (incarnation.state in scenario-render) doesn't
+// leak into the destiny pass. State lives in RenderInput (not IncarnationMeta),
+// and renderApplyDestiny copies only parentIn.Incarnation (meta) and does NOT
+// pass State through → destiny's `incarnation.state` is empty. A destiny task
+// reading incarnation.state.x in non-optional form fails with an eval error
+// (no such key) — isolation, same as for scenario-input (orchestration.md
+// §4.1: state only via apply.input).
 func TestRender_ApplyDestiny_StateIsolation(t *testing.T) {
 	leaky := flatDestiny()
 	leaky.Tasks[0].Module.Params["content"] = "${ incarnation.state.redis_users }"
@@ -157,7 +158,7 @@ func TestRender_ApplyDestiny_StateIsolation(t *testing.T) {
 	in := RenderInput{
 		Scenario:    applyScenario("pilot-flat", map[string]any{"marker_file": "/m", "marker_payload": "p"}),
 		Incarnation: IncarnationMeta{Name: "svc"},
-		// scenario-scope несёт state — destiny НЕ должна его увидеть.
+		// scenario scope carries state — destiny must NOT see it.
 		State:   map[string]any{"redis_users": map[string]any{"alice": "x"}},
 		Hosts:   []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny: res,
@@ -169,13 +170,13 @@ func TestRender_ApplyDestiny_StateIsolation(t *testing.T) {
 	}
 }
 
-// TestRender_ApplyDestiny_MissingRequired — обязательный input destiny не передан
-// через apply.input и без default → ошибка контракта.
+// TestRender_ApplyDestiny_MissingRequired — a required destiny input isn't
+// passed via apply.input and has no default → contract error.
 func TestRender_ApplyDestiny_MissingRequired(t *testing.T) {
 	res := &stubDestinyResolver{resolved: flatDestiny()}
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
-		// marker_payload (required, без default) не передан.
+		// marker_payload (required, no default) isn't passed.
 		Scenario:    applyScenario("pilot-flat", map[string]any{"marker_file": "/m"}),
 		Incarnation: IncarnationMeta{Name: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
@@ -187,7 +188,7 @@ func TestRender_ApplyDestiny_MissingRequired(t *testing.T) {
 	}
 }
 
-// TestRender_ApplyDestiny_NilResolver — apply:destiny без резолвера → ErrUnsupportedDSL.
+// TestRender_ApplyDestiny_NilResolver — apply:destiny without a resolver → ErrUnsupportedDSL.
 func TestRender_ApplyDestiny_NilResolver(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
@@ -203,9 +204,9 @@ func TestRender_ApplyDestiny_NilResolver(t *testing.T) {
 }
 
 // TestRender_ApplyDestiny_UnexpandedInclude — within-destiny include
-// раскрывается до render (в загрузчике/fixture-резолвере). Если резолвер отдал
-// ResolvedDestiny с нераскрытым include — render ловит его как ErrUnexpandedInclude
-// (баг раскрытия, не «вне pilot»).
+// expansion happens before render (in the loader/fixture resolver). If a
+// resolver returns a ResolvedDestiny with an unexpanded include, render
+// catches it as ErrUnexpandedInclude (an expansion bug, not "outside pilot").
 func TestRender_ApplyDestiny_UnexpandedInclude(t *testing.T) {
 	nested := flatDestiny()
 	nested.Tasks = append(nested.Tasks, config.Task{
@@ -226,11 +227,11 @@ func TestRender_ApplyDestiny_UnexpandedInclude(t *testing.T) {
 	}
 }
 
-// TestRender_ApplyDestiny_RejectsSerial — задача внутри destiny не может нести
-// scenario-only оркестрационный ключ serial: (guardDestinyTask, destiny.go).
-// serial: scenario-уровня наследуется destiny через параметр renderApplyDestiny,
-// не через поле destiny-задачи → собственный serial: на destiny-задаче →
-// ErrUnsupportedDSL.
+// TestRender_ApplyDestiny_RejectsSerial — a task inside destiny can't carry
+// the scenario-only orchestration key serial: (guardDestinyTask, destiny.go).
+// A scenario-level serial: is inherited by destiny through the
+// renderApplyDestiny parameter, not through a destiny task field → a
+// destiny task's own serial: → ErrUnsupportedDSL.
 func TestRender_ApplyDestiny_RejectsSerial(t *testing.T) {
 	d := flatDestiny()
 	d.Tasks[0].Serial = 1
@@ -248,8 +249,8 @@ func TestRender_ApplyDestiny_RejectsSerial(t *testing.T) {
 	}
 }
 
-// TestRender_ApplyDestiny_RejectsRunOnce — симметрично serial: задача внутри
-// destiny не может нести run_once: (guardDestinyTask, destiny.go) → ErrUnsupportedDSL.
+// TestRender_ApplyDestiny_RejectsRunOnce — mirrors serial:: a task inside
+// destiny can't carry run_once: (guardDestinyTask, destiny.go) → ErrUnsupportedDSL.
 func TestRender_ApplyDestiny_RejectsRunOnce(t *testing.T) {
 	d := flatDestiny()
 	d.Tasks[1].RunOnce = true
@@ -267,7 +268,7 @@ func TestRender_ApplyDestiny_RejectsRunOnce(t *testing.T) {
 	}
 }
 
-// TestRender_ApplyDestiny_ResolverError — ошибка резолвера пробрасывается.
+// TestRender_ApplyDestiny_ResolverError — a resolver error is propagated.
 func TestRender_ApplyDestiny_ResolverError(t *testing.T) {
 	res := &stubDestinyResolver{err: errors.New("not found in registry")}
 	p := NewPipeline(nil, newEngine(t), nil, nil)
@@ -283,8 +284,8 @@ func TestRender_ApplyDestiny_ResolverError(t *testing.T) {
 	}
 }
 
-// TestRender_ApplyDestiny_MixedPlan — scenario с module-задачей ДО apply:destiny:
-// сквозные индексы продолжаются через границу apply.
+// TestRender_ApplyDestiny_MixedPlan — a scenario with a module task BEFORE
+// apply:destiny: plan-wide indexes continue across the apply boundary.
 func TestRender_ApplyDestiny_MixedPlan(t *testing.T) {
 	res := &stubDestinyResolver{resolved: flatDestiny()}
 	scn := &config.ScenarioManifest{
@@ -306,7 +307,7 @@ func TestRender_ApplyDestiny_MixedPlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	// pre(0) + destiny(1,2) + post(3) = 4 задачи со сквозными индексами.
+	// pre(0) + destiny(1,2) + post(3) = 4 tasks with plan-wide indexes.
 	if len(tasks) != 4 {
 		t.Fatalf("len(tasks) = %d, want 4", len(tasks))
 	}
@@ -321,13 +322,13 @@ func TestRender_ApplyDestiny_MixedPlan(t *testing.T) {
 	}
 }
 
-// TestRender_ApplyDestiny_RejectsNestedApply — вложенный apply: внутри destiny
-// (apply:destiny → задача destiny сама несёт apply:) → ErrUnsupportedDSL
-// (guardDestinyTask, case task.Apply != nil). apply:destiny — одноуровневая
-// раскладка (V2, ADR-009); рекурсивная вложенность apply вне пилот-объёма.
-// Существующие destiny-guard-тесты покрывают serial/run_once/include внутри
-// destiny (loop теперь ПОДДЕРЖАН — слайс E снят), но НЕ вложенный apply —
-// единственную оставшуюся ветку guardDestinyTask без теста.
+// TestRender_ApplyDestiny_RejectsNestedApply — a nested apply: inside destiny
+// (apply:destiny → the destiny task itself carries apply:) → ErrUnsupportedDSL
+// (guardDestinyTask, case task.Apply != nil). apply:destiny is a single-level
+// expansion (V2, ADR-009); recursive apply nesting is outside pilot scope.
+// Existing destiny-guard tests cover serial/run_once/include inside destiny
+// (loop is now SUPPORTED — slice E dropped), but not nested apply — the one
+// remaining branch of guardDestinyTask without a test.
 func TestRender_ApplyDestiny_RejectsNestedApply(t *testing.T) {
 	d := flatDestiny()
 	d.Tasks = append(d.Tasks, config.Task{
@@ -348,5 +349,5 @@ func TestRender_ApplyDestiny_RejectsNestedApply(t *testing.T) {
 	}
 }
 
-// block: внутри destiny теперь ПОДДЕРЖАН (ADR-009 amendment 2026-06-24) —
-// guard-тесты механизма в destiny_block_test.go.
+// block: inside destiny is now SUPPORTED (ADR-009 amendment 2026-06-24) —
+// mechanism guard tests are in destiny_block_test.go.

@@ -9,16 +9,19 @@ import (
 	"github.com/souls-guild/soul-stack/shared/tmpl"
 )
 
-// dragonflyTemplatesDir — каталог .tmpl destiny dragonfly относительно этого пакета.
-// L0-trial этой destiny ассертит ПЛАН и гоняет только CEL-фазу — text/template-фазу
-// (рендер flagfile/units) НЕ исполняет. Эти L1-тесты закрывают text/template-фазу:
-// доказывают, что flagfile несёт КОРРЕКТНЫЕ DF-флаги (--flag=value, absl), а не
-// redis.conf-директивы. Регресс формы flagfile (дефис вместо underscore, redis-style
-// `port 6379` вместо `--port=6379`) на L0 не виден — ловится здесь.
+// dragonflyTemplatesDir is the dragonfly destiny .tmpl directory relative to
+// this package. The destiny's L0 trial asserts the PLAN and runs only the CEL
+// phase — it does NOT execute the text/template phase (flagfile/unit
+// rendering). These L1 tests cover the text/template phase: they prove the
+// flagfile carries CORRECT DF flags (--flag=value, absl), not redis.conf
+// directives. A flagfile form regression (hyphen instead of underscore,
+// redis-style `port 6379` instead of `--port=6379`) is invisible at L0 —
+// caught here.
 const dragonflyTemplatesDir = "../../../examples/destiny/dragonfly/templates"
 
-// renderDragonflyTmpl рендерит один .tmpl destiny dragonfly через тот же shared/tmpl.Engine,
-// что и Soul (strict, missingkey=error). Падение Parse/Execute = провал теста.
+// renderDragonflyTmpl renders one dragonfly destiny .tmpl through the same
+// shared/tmpl.Engine as Soul (strict, missingkey=error). A Parse/Execute
+// failure fails the test.
 func renderDragonflyTmpl(t *testing.T, name string, root map[string]any) string {
 	t.Helper()
 	engine, err := tmpl.New()
@@ -36,17 +39,19 @@ func renderDragonflyTmpl(t *testing.T, name string, root map[string]any) string 
 	return out
 }
 
-// TestDragonflyFlagfile_AbslFlagForm — guard на ФОРМУ flagfile DragonFly (absl-флаги
-// --flag=value, НЕ redis.conf). Корень риска: DragonFly читает flagfile (key=value с
-// двойным дефисом и знаком `=`), а НЕ redis.conf-синтаксис (`directive value`). Регресс
-// «отрендерили redis.conf вместо flagfile» (нет `--`, нет `=`, дефис в имени флага)
-// сделал бы DF неспособным распарсить конфиг → отказ старта на хосте, невидимый на L0.
+// TestDragonflyFlagfile_AbslFlagForm guards the FORM of the DragonFly
+// flagfile (absl flags --flag=value, NOT redis.conf). Root risk: DragonFly
+// reads a flagfile (key=value with a double hyphen and `=`), NOT redis.conf
+// syntax (`directive value`). A "rendered redis.conf instead of flagfile"
+// regression (no `--`, no `=`, hyphen in the flag name) would leave DF unable
+// to parse the config → start failure on the host, invisible at L0.
 //
-// Тест рендерит РЕАЛЬНЫЙ dragonfly.flags.tmpl с контекстом, который собирает scenario
-// (vars + .self), и доказывает: (а) базовые директивы в absl-форме --<flag>=<value>;
-// (б) host-layout (--dir/--aclfile/--pidfile/--log_dir) выводится из переданных каталогов;
-// (в) merged config range-ится в --<key>=<value> с DF-флагами (underscore); (г) bind —
-// из .self.network.primary_ip (per-host).
+// The test renders the REAL dragonfly.flags.tmpl with the context the
+// scenario assembles (vars + .self) and proves: (a) base directives in absl
+// form --<flag>=<value>; (b) host layout (--dir/--aclfile/--pidfile/--log_dir)
+// derives from the passed directories; (c) merged config ranges into
+// --<key>=<value> with DF flags (underscore); (d) bind comes from
+// .self.network.primary_ip (per-host).
 func TestDragonflyFlagfile_AbslFlagForm(t *testing.T) {
 	root := map[string]any{
 		"vars": map[string]any{
@@ -55,13 +60,17 @@ func TestDragonflyFlagfile_AbslFlagForm(t *testing.T) {
 			"port":     6379,
 			"run_dir":  "/var/run/dragonfly",
 			"log_dir":  "/var/log/dragonfly",
-			// merged config от scenario — DF-флаги (underscore-форма). TLS-блок здесь:
-			// доказывает, что bool-флаг tls рендерится как --tls=true (валидно для absl).
-			// ★ РЕДИЗАЙН default_admin: masteruser/masterauth — ОБЫЧНЫЕ ключи config (scenario
-			// кладёт их через vault()-в-ячейке); flagfile range-ит их как любую директиву.
-			// ★ maxmemory_policy НЕ кладём: у DF нет такого флага (absl FATAL на неизвестном).
-			// ★ tls_port НЕ кладём: у DF нет tls_port — TLS встаёт на основной --port
-			// (TestDragonflyFlagfile_TLSOnMainPort гейтит отсутствие --tls_port).
+			// merged config from the scenario — DF flags (underscore form).
+			// TLS block here proves the bool flag tls renders as --tls=true
+			// (valid for absl).
+			// ★ default_admin REDESIGN: masteruser/masterauth are ORDINARY
+			// config keys (scenario sets them via vault()-in-cell); the
+			// flagfile ranges over them like any directive.
+			// ★ maxmemory_policy is NOT set: DF has no such flag (absl FATAL
+			// on unknown).
+			// ★ tls_port is NOT set: DF has no tls_port — TLS goes on the
+			// main --port (TestDragonflyFlagfile_TLSOnMainPort gates the
+			// absence of --tls_port).
 			"config": map[string]any{
 				"maxmemory":     "256mb",
 				"maxclients":    10000,
@@ -78,11 +87,13 @@ func TestDragonflyFlagfile_AbslFlagForm(t *testing.T) {
 
 	out := renderDragonflyFlagfileNormalized(t, root)
 
-	// (а) базовые директивы — absl-форма --<flag>=<value>, host-layout из каталогов.
+	// (a) base directives — absl form --<flag>=<value>, host layout from
+	// directories.
 	mustContainLine(t, out, "--bind=10.0.0.1")
 	mustContainLine(t, out, "--port=6379")
-	// unixsocket — локальный listener (DF при --bind=primary_ip НЕ слушает 127.0.0.1;
-	// локальные вызовы плагина идут через сокет). Путь выводится из run_dir.
+	// unixsocket is a local listener (DF with --bind=primary_ip does NOT
+	// listen on 127.0.0.1; local plugin calls go through the socket). Path
+	// derives from run_dir.
 	mustContainLine(t, out, "--unixsocket=/var/run/dragonfly/dragonfly.sock")
 	mustContainLine(t, out, "--dir=/var/lib/dragonfly")
 	mustContainLine(t, out, "--dbfilename=dump")
@@ -90,15 +101,17 @@ func TestDragonflyFlagfile_AbslFlagForm(t *testing.T) {
 	mustContainLine(t, out, "--pidfile=/var/run/dragonfly/dragonfly.pid")
 	mustContainLine(t, out, "--log_dir=/var/log/dragonfly")
 
-	// ★ РЕДИЗАЙН default_admin: requirepass УБРАН из flagfile — аутентификация под ACL-юзером
-	// default_admin (users.acl). Guard на регресс возврата requirepass (снова открыл бы
-	// главный пароль вместо ACL-модели).
+	// ★ default_admin REDESIGN: requirepass is REMOVED from the flagfile —
+	// auth is under the ACL user default_admin (users.acl). Guards against a
+	// regression reintroducing requirepass (which would reopen the master
+	// password instead of the ACL model).
 	if strings.Contains(out, "--requirepass") {
 		t.Fatalf("flagfile содержит --requirepass: редизайн default_admin убрал его (аутентификация под ACL default_admin). Рендер:\n%s", out)
 	}
 
-	// (в) merged config — --<key>=<value> с DF-флагами (underscore). bool tls=true.
-	// masteruser/masterauth (replica→master AUTH под default_admin) — обычные ключи config.
+	// (c) merged config — --<key>=<value> with DF flags (underscore). bool
+	// tls=true. masteruser/masterauth (replica→master AUTH under
+	// default_admin) are ordinary config keys.
 	mustContainLine(t, out, "--maxmemory=256mb")
 	mustContainLine(t, out, "--maxclients=10000")
 	mustContainLine(t, out, "--tls=true")
@@ -106,8 +119,9 @@ func TestDragonflyFlagfile_AbslFlagForm(t *testing.T) {
 	mustContainLine(t, out, "--masteruser=default_admin")
 	mustContainLine(t, out, "--masterauth=df-admin-secret")
 
-	// НЕ redis.conf: ни одной строки без ведущего `--` (кроме пустых) — каждая
-	// непустая строка обязана быть absl-флагом. Ловит регресс «redis.conf-синтаксис».
+	// NOT redis.conf: no line lacking a leading `--` (except blanks) — every
+	// non-empty line must be an absl flag. Catches a "redis.conf syntax"
+	// regression.
 	for _, line := range strings.Split(out, "\n") {
 		ln := strings.TrimSpace(line)
 		if ln == "" {
@@ -119,13 +133,15 @@ func TestDragonflyFlagfile_AbslFlagForm(t *testing.T) {
 	}
 }
 
-// TestDragonflyFlagfile_TLSOnMainPort — guard: TLS DragonFly встаёт на ОСНОВНОЙ --port,
-// БЕЗ отдельного tls_port. Корень риска: у DragonFly НЕТ флага tls_port (разведка src:
-// facade/dragonfly_listener.cc ABSL_FLAG(bool, tls, ...) переводит ОСНОВНОЙ listener в TLS,
-// tls_helpers.cc несёт tls_cert_file/tls_key_file/tls_ca_cert_file; tls_port отсутствует).
-// Регресс «вернули tls_port в config» → absl FATAL на неизвестном флаге → DF не стартует,
-// невидимо на L0. Тест рендерит TLS-блок БЕЗ tls_port и доказывает: --tls=true +
-// --tls_cert_file присутствуют, --unixsocket присутствует, а строки --tls_port НЕТ.
+// TestDragonflyFlagfile_TLSOnMainPort guards that DragonFly TLS goes on the
+// MAIN --port, WITHOUT a separate tls_port. Root risk: DragonFly has NO
+// tls_port flag (source recon: facade/dragonfly_listener.cc ABSL_FLAG(bool,
+// tls, ...) switches the MAIN listener to TLS; tls_helpers.cc carries
+// tls_cert_file/tls_key_file/tls_ca_cert_file; tls_port doesn't exist). A
+// "brought tls_port back into config" regression → absl FATAL on an unknown
+// flag → DF fails to start, invisible at L0. The test renders a TLS block
+// WITHOUT tls_port and proves: --tls=true + --tls_cert_file are present,
+// --unixsocket is present, and there's no --tls_port line.
 func TestDragonflyFlagfile_TLSOnMainPort(t *testing.T) {
 	root := map[string]any{
 		"vars": map[string]any{
@@ -134,7 +150,7 @@ func TestDragonflyFlagfile_TLSOnMainPort(t *testing.T) {
 			"port":     6379,
 			"run_dir":  "/var/run/dragonfly",
 			"log_dir":  "/var/log/dragonfly",
-			// TLS-блок в DF-форме БЕЗ tls_port (TLS на основном --port).
+			// TLS block in DF form WITHOUT tls_port (TLS on the main --port).
 			"config": map[string]any{
 				"tls":              "true",
 				"tls_cert_file":    "/etc/dragonfly/tls/dragonfly.crt",
@@ -156,17 +172,19 @@ func TestDragonflyFlagfile_TLSOnMainPort(t *testing.T) {
 	mustContainLine(t, out, "--tls_ca_cert_file=/etc/dragonfly/tls/ca.crt")
 	mustContainLine(t, out, "--unixsocket=/var/run/dragonfly/dragonfly.sock")
 
-	// ★ АНТИ-GUARD: ни одной строки с --tls_port. У DragonFly нет такого флага — его
-	// присутствие = absl FATAL на старте. Ловит регресс возврата tls_port в df_config.
+	// ★ ANTI-GUARD: no line with --tls_port. DragonFly has no such flag — its
+	// presence is an absl FATAL at start. Catches a regression reintroducing
+	// tls_port into df_config.
 	if strings.Contains(out, "--tls_port") {
 		t.Fatalf("flagfile содержит --tls_port: у DragonFly нет такого флага (TLS встаёт на основной --port). Рендер:\n%s", out)
 	}
 }
 
-// TestDragonflyFlagfile_HostLayoutOverride — guard директивы B (override conf_dir/data_dir
-// доезжает до flagfile). Регресс «--dir/--aclfile хардкодят /var/lib/dragonfly,/etc/dragonfly
-// игнорируя override» сломал бы кастомный storage-layout оператора (snapshot в чужой
-// каталог → отказ записи под systemd).
+// TestDragonflyFlagfile_HostLayoutOverride guards directive B (conf_dir/
+// data_dir override reaches the flagfile). A "--dir/--aclfile hardcode
+// /var/lib/dragonfly,/etc/dragonfly ignoring override" regression would break
+// an operator's custom storage layout (snapshot writes to the wrong
+// directory → write failure under systemd).
 func TestDragonflyFlagfile_HostLayoutOverride(t *testing.T) {
 	root := map[string]any{
 		"vars": map[string]any{
@@ -186,10 +204,11 @@ func TestDragonflyFlagfile_HostLayoutOverride(t *testing.T) {
 	mustContainLine(t, out, "--aclfile=/opt/df/conf/users.acl")
 }
 
-// TestDragonflyServiceUnit_TypeSimpleAndExecStart — guard юнита DragonFly (binary).
-// DragonFly — foreground БЕЗ sd_notify → Type=simple (НЕ notify как redis). ExecStart —
-// --flagfile-форма из bin_dir/conf_dir. Регресс Type=notify подвесил бы старт (systemd
-// ждал бы READY-нотификацию, которой DF не шлёт).
+// TestDragonflyServiceUnit_TypeSimpleAndExecStart guards the DragonFly
+// (binary) unit. DragonFly runs foreground WITHOUT sd_notify → Type=simple
+// (NOT notify like redis). ExecStart uses the --flagfile form from
+// bin_dir/conf_dir. A Type=notify regression would hang the start (systemd
+// would wait for a READY notification DF never sends).
 func TestDragonflyServiceUnit_TypeSimpleAndExecStart(t *testing.T) {
 	root := map[string]any{
 		"vars": map[string]any{
@@ -212,16 +231,17 @@ func TestDragonflyServiceUnit_TypeSimpleAndExecStart(t *testing.T) {
 	}
 }
 
-// renderDragonflyFlagfileNormalized рендерит dragonfly.flags.tmpl и нормализует
-// возможные хвостовые пробелы/строки. Вынесено: оба flagfile-теста читают тот же шаблон.
+// renderDragonflyFlagfileNormalized renders dragonfly.flags.tmpl and
+// normalizes trailing whitespace/lines. Factored out: both flagfile tests
+// read the same template.
 func renderDragonflyFlagfileNormalized(t *testing.T, root map[string]any) string {
 	t.Helper()
 	return renderDragonflyTmpl(t, "dragonfly.flags.tmpl", root)
 }
 
-// mustContainLine падает, если среди строк out нет точного (после trim) совпадения с want.
-// Сверка по ЦЕЛОЙ строке (не подстроке): `--port=6379` не должен пройти за счёт
-// `--tls_port=6379` и т.п.
+// mustContainLine fails if none of out's lines exactly match want (after
+// trim). Compares by WHOLE line (not substring): `--port=6379` must not pass
+// due to `--tls_port=6379` etc.
 func mustContainLine(t *testing.T, out, want string) {
 	t.Helper()
 	for _, line := range strings.Split(out, "\n") {

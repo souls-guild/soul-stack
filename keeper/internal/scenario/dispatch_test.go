@@ -86,7 +86,7 @@ func TestGroupByHost(t *testing.T) {
 	if len(got["host-b"]) != 2 {
 		t.Errorf("host-b tasks = %d, want 2", len(got["host-b"]))
 	}
-	// Порядок задач внутри хоста — по порядку plans (= scenario.tasks[]).
+	// Task order within a host follows plans order (= scenario.tasks[]).
 	if got["host-b"][0].Name != "t0" || got["host-b"][1].Name != "t1" {
 		t.Errorf("host-b order = %v, want [t0 t1]", []string{got["host-b"][0].Name, got["host-b"][1].Name})
 	}
@@ -117,9 +117,10 @@ func TestSortedSIDs(t *testing.T) {
 	}
 }
 
-// Тесты конвертера render→proto (TestToProtoTasks / TestToProtoTasks_OnChangesIdx
-// / TestInt32Slice) переехали в keeper/internal/render/prototask_test.go вместе с
-// самим конвертером (render.ToProtoTasks).
+// Tests for the render→proto converter (TestToProtoTasks /
+// TestToProtoTasks_OnChangesIdx / TestInt32Slice) moved to
+// keeper/internal/render/prototask_test.go along with the converter itself
+// (render.ToProtoTasks).
 
 func TestEffectiveSerialWidth(t *testing.T) {
 	tests := []struct {
@@ -141,34 +142,37 @@ func TestEffectiveSerialWidth(t *testing.T) {
 	}
 }
 
-// TestUnit_EffectiveSerialWidth_PerPassageSlice — ★ РЕВЕРС-GUARD per-passage width
-// (ADR-056 §serial, min-width per-Passage). dispatchPassage зовёт effectiveSerialWidth
-// на срезе ОДНОГО Passage (tasksForPassage-фильтрованные plans), НЕ на полном прогоне.
-// Реверс (per-RUN min-width): probe Passage 0 БЕЗ serial поехал бы волнами по 1 из-за
-// serial:1 задачи Passage 1 (silent destructive throttle). Тест доказывает, что width
-// каждого Passage = min среди задач ИМЕННО ЭТОГО Passage.
+// TestUnit_EffectiveSerialWidth_PerPassageSlice — ★ REVERSAL GUARD for
+// per-passage width (ADR-056 §serial, min-width per Passage). dispatchPassage
+// calls effectiveSerialWidth on the slice of ONE Passage (tasksForPassage-
+// filtered plans), NOT on the whole run. Reversal (per-RUN min-width): the
+// Passage 0 probe WITHOUT serial would go out in waves of 1 because of the
+// Passage 1 serial:1 task (silent destructive throttle). The test proves width
+// for each Passage = min among that Passage's own tasks.
 func TestUnit_EffectiveSerialWidth_PerPassageSlice(t *testing.T) {
-	// 3 задачи: Passage 0 — probe (#0, без serial); Passage 1 — два действия (#1
-	// serial:1, #2 serial:3). Полный прогон (per-RUN) дал бы min=1 для probe тоже.
+	// 3 tasks: Passage 0 — probe (#0, no serial); Passage 1 — two actions (#1
+	// serial:1, #2 serial:3). A full-run (per-RUN) computation would give min=1
+	// for the probe too.
 	tasks := []*render.RenderedTask{
 		{Index: 0, Passage: 0},
 		{Index: 1, Passage: 1},
 		{Index: 2, Passage: 1},
 	}
 	plans := []render.DispatchPlan{
-		{TaskIndex: 0, SerialWidth: 0}, // probe Passage 0 — без serial
-		{TaskIndex: 1, SerialWidth: 1}, // действие Passage 1 — serial:1
-		{TaskIndex: 2, SerialWidth: 3}, // действие Passage 1 — serial:3
+		{TaskIndex: 0, SerialWidth: 0}, // probe Passage 0 — no serial
+		{TaskIndex: 1, SerialWidth: 1}, // action Passage 1 — serial:1
+		{TaskIndex: 2, SerialWidth: 3}, // action Passage 1 — serial:3
 	}
 
-	// Passage 0: только probe (#0, serial 0) → width 0 (одна волна на всех).
-	// Реверс per-RUN взял бы min(0,1,3 положит.)=1 → probe поехал бы по 1 хосту.
+	// Passage 0: only the probe (#0, serial 0) → width 0 (one wave for everyone).
+	// Per-RUN reversal would take min(0,1,3 positive)=1 → the probe would go out
+	// one host at a time.
 	_, p0Plans := tasksForPassage(tasks, plans, 0)
 	if w := effectiveSerialWidth(p0Plans); w != 0 {
 		t.Fatalf("★ Passage 0 effectiveSerialWidth = %d, want 0 (probe БЕЗ serial — per-RUN min-width просочился бы из Passage 1 serial:1 → throttle)", w)
 	}
 
-	// Passage 1: действия #1(1) и #2(3) → min положит. = 1.
+	// Passage 1: actions #1(1) and #2(3) → min positive = 1.
 	_, p1Plans := tasksForPassage(tasks, plans, 1)
 	if w := effectiveSerialWidth(p1Plans); w != 1 {
 		t.Fatalf("Passage 1 effectiveSerialWidth = %d, want 1 (min среди serial:1 и serial:3)", w)
@@ -272,24 +276,26 @@ func TestFailureReason(t *testing.T) {
 			want: "cancelled",
 		},
 		{
-			// GUARD (ADR-056 §S1 fix Variant B): под staged/per-host-where
-			// локальный TaskIdx ≠ глобальный FailedPlanIndex. no_log-карта
-			// построена по глобальному RenderedTask.Index. Резолв ОБЯЗАН идти по
-			// FailedPlanIndex: задача с глобальным idx=5 — no_log, её stderr нёс
-			// пароль; локальный idx=1 в no_log-карте отсутствует. РЕВЕРС (резолв
-			// по TaskIdx=1) → noLog[1]=false → пароль из ErrorSummary утёк бы в
-			// operator-facing причину. Security-relevant.
+			// GUARD (ADR-056 §S1 fix Variant B): under staged/per-host-where the
+			// local TaskIdx != the global FailedPlanIndex. The no_log map is
+			// built from the global RenderedTask.Index. Resolution MUST go by
+			// FailedPlanIndex: the task at global idx=5 is no_log, its stderr
+			// carried a password; local idx=1 is absent from the no_log map.
+			// REVERSAL (resolving by TaskIdx=1) → noLog[1]=false → the password
+			// from ErrorSummary would leak into the operator-facing reason.
+			// Security-relevant.
 			name:  "staged: no_log резолвится по глобальному plan_index, не локальному task_idx",
 			hs:    applyrun.HostStatus{Status: applyrun.StatusFailed, TaskIdx: intp(1), FailedPlanIndex: intp(5), ErrorSummary: strp("task 5 core.exec.run: secret-password-in-stderr")},
 			noLog: map[int]bool{5: true},
 			want:  "task 5: (no_log task failed)",
 		},
 		{
-			// Симметрично: глобальный idx=5 — обычная задача (не no_log), хотя
-			// локальный idx=2 коллизионно совпал с no_log-индексом другой задачи
-			// другого Passage. Резолв по FailedPlanIndex(5) → noLog[5]=false →
-			// message виден. Реверс (по TaskIdx=2) ложно подавил бы причину
-			// обычной задачи.
+			// Symmetric case: global idx=5 is an ordinary task (not no_log),
+			// even though local idx=2 happens to collide with the no_log index
+			// of another task in another Passage. Resolving by
+			// FailedPlanIndex(5) → noLog[5]=false → message is visible.
+			// Reversal (by TaskIdx=2) would falsely suppress an ordinary
+			// task's reason.
 			name:  "staged: обычная задача не подавляется из-за коллизии локального task_idx",
 			hs:    applyrun.HostStatus{Status: applyrun.StatusFailed, TaskIdx: intp(2), FailedPlanIndex: intp(5), ErrorSummary: strp("task 5 core.pkg.installed: boom")},
 			noLog: map[int]bool{2: true},
@@ -336,30 +342,31 @@ func TestClassify(t *testing.T) {
 			wantHosts: 1, wantFail: true,
 		},
 		{
-			// orphaned (Soul-reconcile, ADR-027(g)) — терминальный не-успех:
-			// барьер засчитывает как фейл хоста (incarnation → error_locked).
+			// orphaned (Soul-reconcile, ADR-027(g)) — a terminal non-success:
+			// the barrier counts it as a host failure (incarnation →
+			// error_locked).
 			name:      "orphaned → fail-closed",
 			statuses:  []applyrun.HostStatus{{SID: "a", Status: applyrun.StatusSuccess}, {SID: "b", Status: applyrun.StatusOrphaned}},
 			wantHosts: 2, wantFail: true,
 		},
 		{
-			// no_match (FINDING-01 вариант (б)) — benign-терминал, как success:
-			// целевые success + нецелевые no_match → done, НЕ fail (incarnation
-			// идёт в ready, не error_locked).
+			// no_match (FINDING-01 variant (b)) — a benign terminal, like
+			// success: targeted success + untargeted no_match → done, NOT fail
+			// (incarnation goes to ready, not error_locked).
 			name:      "success + no_match → done (benign)",
 			statuses:  []applyrun.HostStatus{{SID: "a", Status: applyrun.StatusSuccess}, {SID: "b", Status: applyrun.StatusNoMatch}},
 			wantHosts: 2, wantDone: true,
 		},
 		{
-			// Все хосты нецелевые (on: не совпал ни с одним): все no_match → done,
-			// прогон benign-успешен no-op-ом, incarnation → ready.
+			// All hosts untargeted (on: matched none): all no_match → done, the
+			// run is benignly successful as a no-op, incarnation → ready.
 			name:      "all no_match → done (benign)",
 			statuses:  []applyrun.HostStatus{{SID: "a", Status: applyrun.StatusNoMatch}, {SID: "b", Status: applyrun.StatusNoMatch}},
 			wantHosts: 2, wantDone: true,
 		},
 		{
-			// no_match НЕ маскирует реальный фейл целевого хоста: failed ломает
-			// прогон даже рядом с benign no_match.
+			// no_match does NOT mask a real target-host failure: failed breaks
+			// the run even alongside a benign no_match.
 			name:      "no_match + failed → fail-closed",
 			statuses:  []applyrun.HostStatus{{SID: "a", Status: applyrun.StatusNoMatch}, {SID: "b", Status: applyrun.StatusFailed, ErrorSummary: strp("boom")}},
 			wantHosts: 2, wantFail: true,
@@ -375,11 +382,11 @@ func TestClassify(t *testing.T) {
 			wantHosts: 2, wantDone: false,
 		},
 		{
-			// keeper-target (on: keeper) исключён из host-barrier-счёта: его
-			// success-строка пишется ДО barrier-а, wantHosts = только реальные
-			// хосты. Один хост ещё running → barrier НЕ должен объявлять done
-			// (раньше keeper-строка раздувала terminal и done был бы true →
-			// silent success).
+			// keeper-target (on: keeper) is excluded from the host-barrier
+			// count: its success row is written BEFORE the barrier, wantHosts =
+			// real hosts only. One host still running → the barrier must NOT
+			// declare done (previously the keeper row inflated the terminal
+			// count and done would be true → silent success).
 			name: "keeper success + один host running → не done",
 			statuses: []applyrun.HostStatus{
 				{SID: render.KeeperTargetSID, Status: applyrun.StatusSuccess},
@@ -389,7 +396,7 @@ func TestClassify(t *testing.T) {
 			wantHosts: 2, wantDone: false,
 		},
 		{
-			// Все реальные хосты терминальны (+ keeper success, не считается) →
+			// All real hosts are terminal (+ keeper success, doesn't count) →
 			// done.
 			name: "keeper success + все host success → done",
 			statuses: []applyrun.HostStatus{
@@ -431,8 +438,8 @@ func TestCancelRequested(t *testing.T) {
 			want:     false,
 		},
 		{
-			// RequestCancel ставит флаг на все running-строки, но barrier-у
-			// достаточно увидеть его на любой (cluster-wide Cancel, G1).
+			// RequestCancel sets the flag on all running rows, but the barrier
+			// only needs to see it on any one (cluster-wide Cancel, G1).
 			name:     "одна строка помечена → отмена",
 			statuses: []applyrun.HostStatus{{SID: "a"}, {SID: "b", CancelRequested: true}},
 			want:     true,

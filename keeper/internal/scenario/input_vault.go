@@ -1,16 +1,18 @@
 package scenario
 
-// Scoped-резолв `vault:`-ref в operator-input (docs/input.md → «vault_scope»).
+// Scoped resolution of `vault:` refs in operator input (docs/input.md →
+// "vault_scope").
 //
-// Это ОТДЕЛЬНЫЙ от авторского (`vault:`/`${vault()}` в task params) ограниченный
-// канал. Авторский канал — доверенный (автор сервиса), резолвится render-фазой
-// (keeper/internal/render). Input-канал — оператор-ввод, поэтому резолв скоупится
-// по `vault_scope` поля + hard deny-list (форк C), а каждый резолв (ok/denied)
-// аудируется (security-сигнал).
+// This is a channel SEPARATE from the authoring one (`vault:`/`${vault()}` in
+// task params). The authoring channel is trusted (service author), resolved
+// in the render phase (keeper/internal/render). The input channel is
+// operator-supplied, so resolution is scoped by the field's `vault_scope` +
+// a hard deny-list (fork C), and every resolution (ok/denied) is audited
+// (security signal).
 //
-// Логика проверки одного ref: есть vault_scope? нет → reject; путь матчит scope?
-// нет → reject; путь в deny-list? да → reject; иначе ReadKV. Проверка scope/deny
-// — чистая (shared/config), здесь добавляется чтение KV + audit.
+// Per-ref check: has vault_scope? no → reject; path matches scope? no →
+// reject; path in deny-list? yes → reject; else ReadKV. Scope/deny checks are
+// pure (shared/config); this file adds the KV read + audit.
 
 import (
 	"context"
@@ -24,69 +26,73 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// InputVaultReader — узкое подмножество keeper/internal/vault.Client: чтение KV.
-// Тот же общий клиент, что резолвит авторские refs и читает signing-key.
+// InputVaultReader is a narrow subset of keeper/internal/vault.Client: KV
+// reads only. Same shared client that resolves authoring refs and reads the
+// signing key.
 type InputVaultReader interface {
 	ReadKV(ctx context.Context, path string) (map[string]any, error)
 }
 
-// inputVaultAuditCtx — неизменный контекст прогона для audit-event-а резолва:
-// кто (aid), куда (incarnation/scenario). Поле и путь добавляются на месте.
+// inputVaultAuditCtx is the run's fixed context for the resolution audit
+// event: who (aid), where (incarnation/scenario). Field and path are added
+// inline.
 type inputVaultAuditCtx struct {
 	aid         string
 	incarnation string
 	scenario    string
 }
 
-// ошибки резолва input-vault-ref. Сообщения НЕ несут резолвнутый секрет; путь —
-// не секрет (логируется), но в operator-facing-ошибку кладём только причину.
+// Errors for input-vault-ref resolution. Messages never carry the resolved
+// secret; the path is not secret (it's logged), but the operator-facing
+// error only carries the reason.
 var (
 	errInputVaultNoScope = errors.New("значение vault:-ref в input запрещено: поле без vault_scope (default-deny)")
 	errInputVaultOutOf   = errors.New("значение vault:-ref в input вне разрешённого vault_scope")
 	errInputVaultDenied  = errors.New("значение vault:-ref в input ведёт к запрещённому пути (deny-list)")
 )
 
-// newInputVaultResolver собирает config.InputVaultResolver для одного прогона.
-// resolve вызывается из config.ResolveInputValuesVault на каждом string+`vault:`
-// значении. vc может быть nil — тогда фабрика возвращает nil (input-vault-refs
-// не поддержаны; default-deny отработает раньше в ResolveInputValues, который
-// не резолвит refs). extraDeny — config-расширение system-floor.
+// newInputVaultResolver builds a config.InputVaultResolver for one run.
+// resolve is called from config.ResolveInputValuesVault on every string
+// value with a `vault:` prefix. vc may be nil — then the factory returns nil
+// (input-vault-refs unsupported; default-deny already ran earlier in
+// ResolveInputValues, which doesn't resolve refs). extraDeny is a
+// config-level extension of the system floor.
 func (r *Runner) newInputVaultResolver(ctx context.Context, ac inputVaultAuditCtx, extraDeny []string) config.InputVaultResolver {
 	return buildInputVaultResolver(ctx, r.deps.Vault, r.deps.Audit, r.logger, ac, extraDeny)
 }
 
-// buildInputVaultResolver — package-level форма [Runner.newInputVaultResolver]:
-// собирает config.InputVaultResolver из явных vault-reader / audit-writer /
-// logger. Вынесена, чтобы Acolyte-путь ([RenderForHost]) воспроизводил тот же
-// scoped-резолв input-vault-ref без подъёма Runner-а. Поведение идентично
-// старому методу (метод теперь делегирует сюда). vc == nil → nil (refs не
-// резолвятся).
+// buildInputVaultResolver is the package-level form of
+// [Runner.newInputVaultResolver]: builds a config.InputVaultResolver from
+// explicit vault-reader / audit-writer / logger. Factored out so the Acolyte
+// path ([RenderForHost]) reproduces the same scoped input-vault-ref
+// resolution without standing up a Runner. Behavior is identical to the old
+// method (which now delegates here). vc == nil → nil (refs aren't resolved).
 func buildInputVaultResolver(ctx context.Context, vc InputVaultReader, w audit.Writer, log *slog.Logger, ac inputVaultAuditCtx, extraDeny []string) config.InputVaultResolver {
 	if vc == nil {
 		return nil
 	}
 	return func(name string, s *config.InputSchema, raw string) (any, error) {
-		// 1. поле без vault_scope, но со значением vault: → default-deny.
+		// 1. field without vault_scope, but with a vault: value → default-deny.
 		if s.VaultScope == "" {
 			auditInputVault(ctx, w, ac, name, "", "denied", "no_scope", log)
 			return nil, fmt.Errorf("input %q: %w", name, errInputVaultNoScope)
 		}
 
-		// Разбор ref в logical-path (без vault:-префикса и #field-суффикса).
+		// Parse ref into a logical path (strip vault: prefix and #field suffix).
 		logical, field, perr := parseInputVaultRef(raw)
 		if perr != nil {
 			auditInputVault(ctx, w, ac, name, "", "denied", "parse_error", log)
 			return nil, fmt.Errorf("input %q: %w", name, perr)
 		}
 
-		// 2. scope-match.
+		// 2. scope match.
 		if !config.MatchesVaultScope(s.VaultScope, logical) {
 			auditInputVault(ctx, w, ac, name, logical, "denied", "out_of_scope", log)
 			return nil, fmt.Errorf("input %q: %w", name, errInputVaultOutOf)
 		}
 
-		// 3. hard deny-list (ПОСЛЕ scope, безусловно: страховка от ошибки
-		//    автора в vault_scope).
+		// 3. hard deny-list (AFTER scope, unconditionally: a safety net
+		//    against an author error in vault_scope).
 		if config.DeniedByVaultFloor(logical, extraDeny) {
 			auditInputVault(ctx, w, ac, name, logical, "denied", "deny_list", log)
 			return nil, fmt.Errorf("input %q: %w", name, errInputVaultDenied)
@@ -96,8 +102,8 @@ func buildInputVaultResolver(ctx context.Context, vc InputVaultReader, w audit.W
 		data, err := vc.ReadKV(ctx, logical)
 		if err != nil {
 			auditInputVault(ctx, w, ac, name, logical, "denied", "read_error", log)
-			// Ошибку Vault пробрасываем без значения секрета (ReadKV их и не
-			// несёт — только путь/sentinel).
+			// The Vault error is propagated without a secret value (ReadKV
+			// doesn't carry one anyway — only path/sentinel).
 			return nil, fmt.Errorf("input %q: чтение vault-ref: %w", name, err)
 		}
 
@@ -112,10 +118,11 @@ func buildInputVaultResolver(ctx context.Context, vc InputVaultReader, w audit.W
 	}
 }
 
-// parseInputVaultRef разбирает `vault:<mount>/<path>[#<field>]` в logical-path и
-// опц. field. Та же форма, что у авторских refs (render.readVaultRef), но без
-// импорта render-пакета — input-канал самостоятелен. `${…}`-маркер запрещён
-// (статическая строка, как в авторском канале).
+// parseInputVaultRef parses `vault:<mount>/<path>[#<field>]` into a logical
+// path and an optional field. Same form as authoring refs
+// (render.readVaultRef), but without importing the render package — the
+// input channel is self-contained. The `${…}` marker is forbidden (static
+// string, like in the authoring channel).
 func parseInputVaultRef(ref string) (logical, field string, err error) {
 	body := ref
 	if i := strings.LastIndexByte(ref, '#'); i >= 0 {
@@ -131,9 +138,10 @@ func parseInputVaultRef(ref string) (logical, field string, err error) {
 	return logical, field, nil
 }
 
-// selectVaultField извлекает поле из KV-секрета. Без field — отдаём весь map
-// (downstream-валидация ожидает string для secret-поля, но решение «весь map»
-// оставляем потребителю: на практике secret-поля используют #field).
+// selectVaultField extracts a field from a KV secret. Without field, returns
+// the whole map (downstream validation expects a string for a secret field,
+// but the "whole map" case is left to the consumer — in practice secret
+// fields use #field).
 func selectVaultField(data map[string]any, field string) (any, error) {
 	if field == "" {
 		return data, nil
@@ -145,12 +153,14 @@ func selectVaultField(data map[string]any, field string) (any, error) {
 	return v, nil
 }
 
-// auditInputVault пишет audit-event резолва input-vault-ref. path — НЕ секрет
-// (логируется), значение секрета НЕ кладётся. denied тоже аудируется
-// (security-сигнал). aid инициатора — в payload (write-path keeper-internal,
-// archon_aid колонка = NULL по source-таксономии ADR-022). audit-фейл не валит
-// прогон, только логируется: блокировать резолв из-за audit-write нельзя, но и
-// молча терять security-trail нельзя. w == nil → trail не пишется (unit/L0).
+// auditInputVault writes the audit event for an input-vault-ref resolution.
+// path is NOT secret (it's logged), the secret value is never included.
+// denied is audited too (security signal). The initiator's aid goes in the
+// payload (keeper-internal write path, archon_aid column = NULL per the
+// ADR-022 source taxonomy). An audit failure doesn't fail the run, only logs
+// — resolution can't be blocked by an audit-write failure, but the security
+// trail can't be silently dropped either. w == nil → no trail written
+// (unit/L0).
 func auditInputVault(ctx context.Context, w audit.Writer, ac inputVaultAuditCtx, field, path, result, reason string, log *slog.Logger) {
 	if w == nil {
 		return

@@ -1,15 +1,15 @@
 //go:build integration
 
-// Integration-guard сквозного пути «keeper-side задача (on: keeper) → task.executed
-// → свёртка changed_tasks» (ADR-052 §k, фикс выпадения keeper-задач из
-// run_completed). До фикса dispatchKeeperTasks не эмитил task.executed — changed-
-// keeper-задача молча отсутствовала в SelectChangedTaskKeys, task:-подписка на неё
-// была мёртвой.
+// Integration guard for the end-to-end path "keeper-side task (on: keeper) →
+// task.executed → changed_tasks fold" (ADR-052 §k, fix for keeper tasks
+// dropping out of run_completed). Before the fix, dispatchKeeperTasks never
+// emitted task.executed — a changed keeper task was silently absent from
+// SelectChangedTaskKeys, and a task:-subscription on it was dead.
 //
-// Прогоняется dispatchKeeperTasks с реальным PG (apply_runs Insert/UpdateStatus) +
-// реальным auditpg.Writer; результат читается обратно реальным auditpg.Reader.
-// SelectChangedTaskKeys и проверяется через buildChangedTasks (changed_hosts/
-// total_hosts), как это делает emitRunCompleted.
+// Runs dispatchKeeperTasks with a real PG (apply_runs Insert/UpdateStatus) +
+// a real auditpg.Writer; the result is read back with a real auditpg.Reader.
+// SelectChangedTaskKeys, then verified via buildChangedTasks (changed_hosts/
+// total_hosts), the same way emitRunCompleted does.
 
 package scenario
 
@@ -23,9 +23,9 @@ import (
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 )
 
-// keeperDispatchRunner собирает Runner напрямую (минуя NewRunner-валидацию
-// Loader/Topology/… — для прицельного теста dispatchKeeperTasks они не нужны) с
-// реальным PG + auditpg.Writer/Reader и keeper-Registry-заглушкой.
+// keeperDispatchRunner builds a Runner directly (bypassing NewRunner's
+// Loader/Topology/… validation — not needed for a targeted dispatchKeeperTasks
+// test) with a real PG + auditpg.Writer/Reader and a keeper-Registry stub.
 func keeperDispatchRunner(reg fakeKeeperRegistry) *Runner {
 	return &Runner{
 		deps: Deps{
@@ -37,10 +37,11 @@ func keeperDispatchRunner(reg fakeKeeperRegistry) *Runner {
 	}
 }
 
-// TestIntegration_KeeperChangedTask_FoldsIntoChangedTasks — КЛЮЧЕВОЙ кейс бага:
-// keeper-задача БЕЗ register, но с id: (типичный provision_vm) с changed=true
-// эмитит task.executed (sid=keeper, CHANGED), который SelectChangedTaskKeys видит,
-// и buildChangedTasks сворачивает в одну ChangedTask с changed_hosts=1/total_hosts=1.
+// TestIntegration_KeeperChangedTask_FoldsIntoChangedTasks — the KEY bug case: a
+// keeper task WITHOUT register but WITH id: (a typical provision_vm) with
+// changed=true emits task.executed (sid=keeper, CHANGED), which
+// SelectChangedTaskKeys sees, and buildChangedTasks folds into one ChangedTask
+// with changed_hosts=1/total_hosts=1.
 func TestIntegration_KeeperChangedTask_FoldsIntoChangedTasks(t *testing.T) {
 	resetAll(t)
 	seedIncarnation(t, "redis-prod")
@@ -81,11 +82,11 @@ func TestIntegration_KeeperChangedTask_FoldsIntoChangedTasks(t *testing.T) {
 	}
 }
 
-// TestIntegration_KeeperFailedTask_NotInChangedTasks — failed keeper-задача пишет
-// task.executed status=TASK_STATUS_FAILED (НЕ CHANGED) → НЕ попадает в свёртку
-// changed (ChangedHosts=0, задача отсутствует в результате). dispatchKeeperTasks
-// возвращает ошибку (первая упавшая keeper-задача → abort), но событие уже
-// записано до return.
+// TestIntegration_KeeperFailedTask_NotInChangedTasks — a failed keeper task
+// writes task.executed status=TASK_STATUS_FAILED (NOT CHANGED) → does NOT go
+// into the changed fold (ChangedHosts=0, the task is absent from the result).
+// dispatchKeeperTasks returns an error (the first failing keeper task →
+// abort), but the event is already recorded before the return.
 func TestIntegration_KeeperFailedTask_NotInChangedTasks(t *testing.T) {
 	resetAll(t)
 	seedIncarnation(t, "redis-prod")

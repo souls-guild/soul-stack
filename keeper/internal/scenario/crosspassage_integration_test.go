@@ -1,20 +1,21 @@
 //go:build integration
 
-// Cross-passage requisite-gating guard-тесты (ADR-056 R3, бывший R2-reject).
-// Источник onchanges/onfail (register A) лежит в БОЛЕЕ РАННЕМ Passage, чем
-// потребитель (consumer уехал в Passage>0 register-зависимостью where:register.X
-// от probe). Soul gating одного Passage результат A не видит → связь резолвит
-// Keeper per-host по накопленным CHANGED/FAILED-фактам предыдущих Passage
-// (auditpg.SelectChangedTaskKeys / SelectFailedTaskKeys), crosspassage.go.
+// Cross-passage requisite-gating guard tests (ADR-056 R3, formerly
+// R2-reject). The onchanges/onfail source (register A) lives in an EARLIER
+// Passage than the consumer (which moved to Passage>0 via a register
+// dependency where:register.X on the probe). Single-Passage Soul gating
+// can't see result A → Keeper resolves the link per-host from accumulated
+// CHANGED/FAILED facts of previous Passages (auditpg.SelectChangedTaskKeys /
+// SelectFailedTaskKeys), crosspassage.go.
 //
-// CHANGED-set-семантика (★): источник «спас» onchanges ТОЛЬКО при CHANGED.
-// skipped/ok-источник = НЕ changed (register-строка существует, но в CHANGED-set
-// его нет). Дисп. ниже пишет task.executed-аудит ровно тем путём, что Soul-handler
-// (events_taskevent.go::handleTaskEvent → BuildTaskExecutedPayload), чтобы гейт
-// читал реальный CHANGED/FAILED-факт.
+// CHANGED-set semantics (★): a source only "satisfies" onchanges when CHANGED.
+// A skipped/ok source is NOT changed (the register row exists, but it's not
+// in the CHANGED set). The dispatcher below writes task.executed audit
+// exactly the way the Soul handler does (events_taskevent.go::handleTaskEvent
+// → BuildTaskExecutedPayload), so the gate reads a real CHANGED/FAILED fact.
 //
-// R2-reject СНЯТ: cross-passage больше НЕ отвергается (бывший
-// TestIntegration_CrossPassageRequisite_Rejected → FIRES/SKIPS ниже).
+// R2-reject is LIFTED: cross-passage is no longer rejected (formerly
+// TestIntegration_CrossPassageRequisite_Rejected → FIRES/SKIPS below).
 
 package scenario
 
@@ -37,14 +38,15 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// crossPassageServiceRepo создаёт service-репо с cross-passage onchanges-сценарием:
+// crossPassageServiceRepo builds a service repo with a cross-passage
+// onchanges scenario:
 //
 //	#0 Probe role     → Passage 0, register: role (per-host primary/replica)
 //	#1 Apply config   → Passage 0, register: cfg  (per-host changed/ok)
 //	#2 Restart        → Passage 1, where: register.role=='primary' + onchanges:[cfg]
 //
-// #2 уехал в Passage 1 register-зависимостью where:register.role (probe #0), но его
-// onchanges-источник cfg (#1) остался в Passage 0 → cross-passage onchanges.
+// #2 moved to Passage 1 via a register dependency where:register.role (probe
+// #0), but its onchanges source cfg (#1) stayed in Passage 0 → cross-passage onchanges.
 func crossPassageServiceRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -107,18 +109,20 @@ func commitRepo(t *testing.T, repo *git.Repository) {
 	}
 }
 
-// crossPassageDispatcher симулирует Soul под cross-passage-прогоном. В Passage 0:
-//   - probe `role` — пишет register (per-host roleBySID) для where:-резолва;
-//   - source `cfg` — пишет register И эмитит task.executed-аудит со статусом
-//     CHANGED (cfgChangedOn[sid]=true) либо OK (иначе) — ровно тем путём, что Soul-
-//     handler, чтобы cross-passage-гейт прочитал реальный CHANGED-факт.
+// crossPassageDispatcher simulates Soul under a cross-passage run. In Passage 0:
+//   - probe `role` — writes a register (per-host roleBySID) for where: resolution;
+//   - source `cfg` — writes a register AND emits task.executed audit with
+//     status CHANGED (cfgChangedOn[sid]=true) or OK (otherwise) — exactly the
+//     way the Soul handler does, so the cross-passage gate reads a real
+//     CHANGED fact.
 //
-// Passage>0 — фиксирует targeting + захватывает onchanges_idx consumer-задач (для
-// проверки, что keeper убрал cross-passage idx с wire). Терминалит строки success.
+// Passage>0 — records targeting + captures consumer tasks' onchanges_idx (to
+// verify keeper stripped the cross-passage idx off the wire). Terminates
+// rows as success.
 type crossPassageDispatcher struct {
 	t            *testing.T
 	roleBySID    map[string]string
-	cfgChangedOn map[string]bool // sid → cfg завершился CHANGED (иначе OK)
+	cfgChangedOn map[string]bool // sid → cfg finished CHANGED (otherwise OK)
 
 	mu                sync.Mutex
 	targetedByPassage map[int][]string
@@ -147,11 +151,11 @@ func (d *crossPassageDispatcher) SendApply(ctx context.Context, sid string, req 
 	d.mu.Unlock()
 
 	if passage == 0 {
-		// probe role — register для where:-резолва.
+		// probe role — register for where: resolution.
 		if localIdx, planIdx := emitterIndices(req, "role"); localIdx >= 0 {
 			d.upsert(ctx, applyID, sid, planIdx, localIdx, map[string]any{"stdout": d.roleBySID[sid], "changed": false, "failed": false})
 		}
-		// source cfg — register + task.executed-аудит со статусом CHANGED/OK.
+		// source cfg — register + task.executed audit with status CHANGED/OK.
 		if localIdx, planIdx := emitterIndices(req, "cfg"); localIdx >= 0 {
 			changed := d.cfgChangedOn[sid]
 			d.upsert(ctx, applyID, sid, planIdx, localIdx, map[string]any{"stdout": "cfg", "changed": changed, "failed": false})
@@ -177,10 +181,11 @@ func (d *crossPassageDispatcher) upsert(ctx context.Context, applyID, sid string
 	}
 }
 
-// emitTaskExecuted пишет task.executed-аудит ровно тем путём, что Soul-handler
-// (events_taskevent.go::handleTaskEvent): correlation_id=apply_id, payload через
-// BuildTaskExecutedPayload (несёт plan_index/status/passage) — cross-passage-гейт
-// читает его через SelectChangedTaskKeys/SelectFailedTaskKeys.
+// emitTaskExecuted writes task.executed audit exactly the way the Soul
+// handler does (events_taskevent.go::handleTaskEvent): correlation_id=apply_id,
+// payload via BuildTaskExecutedPayload (carries plan_index/status/passage) —
+// the cross-passage gate reads it via
+// SelectChangedTaskKeys/SelectFailedTaskKeys.
 func (d *crossPassageDispatcher) emitTaskExecuted(ctx context.Context, applyID, sid string, planIdx, localIdx, passage int, status keeperv1.TaskStatus) {
 	payload := audit.BuildTaskExecutedPayload(audit.TaskExecutedInput{
 		SID: sid, ApplyID: applyID, TaskIdx: localIdx, PlanIndex: planIdx,
@@ -215,10 +220,11 @@ func (d *crossPassageDispatcher) onchanges(sid, taskName string) ([]int32, bool)
 	return idx, ok
 }
 
-// TestIntegration_CrossPassageOnChanges_Fires — ★ R3 FIRES. cfg CHANGED в Passage 0
-// на обоих primary-хостах → consumer restart (onchanges:[cfg] cross-passage, Passage
-// 1) ВЫПОЛНЯЕТСЯ на хостах, где cfg changed И where:role=='primary'. Keeper резолвил
-// cross-passage onchanges → restart на wire с пустым onchanges_idx (безусловно).
+// TestIntegration_CrossPassageOnChanges_Fires — ★ R3 FIRES. cfg CHANGED in
+// Passage 0 on both primary hosts → consumer restart (onchanges:[cfg]
+// cross-passage, Passage 1) RUNS on hosts where cfg changed AND
+// where:role=='primary'. Keeper resolved cross-passage onchanges → restart
+// goes on the wire with empty onchanges_idx (unconditional).
 func TestIntegration_CrossPassageOnChanges_Fires(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -229,7 +235,7 @@ func TestIntegration_CrossPassageOnChanges_Fires(t *testing.T) {
 
 	disp := newCrossPassageDispatcher(t,
 		map[string]string{"host-a.example.com": "primary", "host-b.example.com": "primary"},
-		map[string]bool{"host-a.example.com": true, "host-b.example.com": true}) // cfg changed на обоих
+		map[string]bool{"host-a.example.com": true, "host-b.example.com": true}) // cfg changed on both
 	r := newRunnerWithAuditStaged(t, disp)
 
 	applyID := audit.NewULID()
@@ -244,13 +250,14 @@ func TestIntegration_CrossPassageOnChanges_Fires(t *testing.T) {
 	}
 	waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
 
-	// ★ Passage 1: restart УШЁЛ на оба primary-хоста (cfg changed → onchanges сработал).
+	// ★ Passage 1: restart WENT OUT to both primary hosts (cfg changed → onchanges fired).
 	p1 := disp.targets(1)
 	if len(p1) != 2 {
 		t.Fatalf("★ Passage 1 targets = %v, want оба хоста (cfg changed cross-passage → onchanges FIRES)", p1)
 	}
-	// onchanges_idx restart на wire ПУСТ: keeper резолвил cross-passage → убрал idx,
-	// Soul выполняет безусловно (нет same-passage onchanges-источников).
+	// restart's onchanges_idx on the wire is EMPTY: keeper resolved
+	// cross-passage → stripped the idx, Soul runs unconditionally (no
+	// same-passage onchanges sources).
 	for _, sid := range p1 {
 		idx, ok := disp.onchanges(sid, "Restart on primary after config change")
 		if !ok {
@@ -263,10 +270,10 @@ func TestIntegration_CrossPassageOnChanges_Fires(t *testing.T) {
 	}
 }
 
-// TestIntegration_CrossPassageOnChanges_Skips — ★ R3 SKIPS. cfg НЕ changed (OK) в
-// Passage 0 → consumer restart (onchanges:[cfg] cross-passage) ИСКЛЮЧАЕТСЯ из
-// Passage 1 на этих хостах (onchanges не сработал, нет same-passage источника).
-// Не мисфайрит обратно: restart НЕ выполняется.
+// TestIntegration_CrossPassageOnChanges_Skips — ★ R3 SKIPS. cfg NOT changed (OK)
+// in Passage 0 → consumer restart (onchanges:[cfg] cross-passage) is EXCLUDED
+// from Passage 1 on those hosts (onchanges didn't fire, no same-passage
+// source). Doesn't misfire the other way: restart does NOT run.
 func TestIntegration_CrossPassageOnChanges_Skips(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -277,7 +284,7 @@ func TestIntegration_CrossPassageOnChanges_Skips(t *testing.T) {
 
 	disp := newCrossPassageDispatcher(t,
 		map[string]string{"host-a.example.com": "primary", "host-b.example.com": "primary"},
-		map[string]bool{}) // cfg OK на обоих (не changed)
+		map[string]bool{}) // cfg OK on both (not changed)
 	r := newRunnerWithAuditStaged(t, disp)
 
 	applyID := audit.NewULID()
@@ -292,16 +299,17 @@ func TestIntegration_CrossPassageOnChanges_Skips(t *testing.T) {
 	}
 	waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
 
-	// ★ Passage 1: restart НЕ ушёл НИ ОДНОМУ хосту (cfg не changed → onchanges не
-	// сработал → consumer исключён). Не мисфайрит.
+	// ★ Passage 1: restart went out to NO host (cfg not changed → onchanges
+	// didn't fire → consumer excluded). Doesn't misfire.
 	if p1 := disp.targets(1); len(p1) != 0 {
 		t.Fatalf("★ Passage 1 targets = %v, want [] (cfg НЕ changed cross-passage → onchanges SKIPS)", p1)
 	}
 }
 
 // TestIntegration_CrossPassageOnChanges_PerHostDivergent — ★ R3 PER-HOST. cfg
-// CHANGED на host-a, OK на host-b (оба primary по probe). restart (onchanges:[cfg]
-// cross-passage) выполняется ТОЛЬКО на host-a. Per-host резолв cross-passage факта.
+// CHANGED on host-a, OK on host-b (both primary per probe). restart
+// (onchanges:[cfg] cross-passage) runs ONLY on host-a. Per-host resolution
+// of the cross-passage fact.
 func TestIntegration_CrossPassageOnChanges_PerHostDivergent(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -312,7 +320,7 @@ func TestIntegration_CrossPassageOnChanges_PerHostDivergent(t *testing.T) {
 
 	disp := newCrossPassageDispatcher(t,
 		map[string]string{"host-a.example.com": "primary", "host-b.example.com": "primary"},
-		map[string]bool{"host-a.example.com": true}) // cfg changed ТОЛЬКО на host-a
+		map[string]bool{"host-a.example.com": true}) // cfg changed ONLY on host-a
 	r := newRunnerWithAuditStaged(t, disp)
 
 	applyID := audit.NewULID()
@@ -327,18 +335,19 @@ func TestIntegration_CrossPassageOnChanges_PerHostDivergent(t *testing.T) {
 	}
 	waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
 
-	// ★ Passage 1: restart ТОЛЬКО на host-a (cfg changed только там).
+	// ★ Passage 1: restart ONLY on host-a (cfg changed only there).
 	p1 := disp.targets(1)
 	if len(p1) != 1 || p1[0] != "host-a.example.com" {
 		t.Fatalf("★ Passage 1 targets = %v, want [host-a.example.com] (cfg changed только на host-a → per-host)", p1)
 	}
 }
 
-// TestIntegration_CrossPassageOnChanges_WhereAndChanged — composите: cfg changed на
-// обоих, но where:role=='primary' пропускает только host-a (host-b replica). restart
-// уходит ТОЛЬКО на host-a: where отфильтровал host-b в Passage 1 ДО гейта, на host-a
-// cross-passage onchanges сработал. Доказывает, что cross-passage-гейт работает
-// поверх where-таргетинга, не вместо него.
+// TestIntegration_CrossPassageOnChanges_WhereAndChanged — composite: cfg
+// changed on both, but where:role=='primary' passes only host-a (host-b is
+// replica). restart goes out ONLY to host-a: where filtered out host-b in
+// Passage 1 BEFORE the gate, and on host-a cross-passage onchanges fired.
+// Proves the cross-passage gate layers on top of where targeting, not
+// instead of it.
 func TestIntegration_CrossPassageOnChanges_WhereAndChanged(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -349,7 +358,7 @@ func TestIntegration_CrossPassageOnChanges_WhereAndChanged(t *testing.T) {
 
 	disp := newCrossPassageDispatcher(t,
 		map[string]string{"host-a.example.com": "primary", "host-b.example.com": "replica"},
-		map[string]bool{"host-a.example.com": true, "host-b.example.com": true}) // cfg changed на обоих
+		map[string]bool{"host-a.example.com": true, "host-b.example.com": true}) // cfg changed on both
 	r := newRunnerWithAuditStaged(t, disp)
 
 	applyID := audit.NewULID()
@@ -364,7 +373,7 @@ func TestIntegration_CrossPassageOnChanges_WhereAndChanged(t *testing.T) {
 	}
 	waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
 
-	// ★ host-b отфильтрован where (replica) ДО гейта; host-a прошёл where И cfg changed.
+	// ★ host-b filtered out by where (replica) BEFORE the gate; host-a passed where AND cfg changed.
 	p1 := disp.targets(1)
 	if len(p1) != 1 || p1[0] != "host-a.example.com" {
 		t.Fatalf("★ Passage 1 targets = %v, want [host-a.example.com] (where:primary + cfg changed)", p1)

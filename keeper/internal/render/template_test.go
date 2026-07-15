@@ -11,7 +11,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 )
 
-// fakeReader — in-memory TemplateReader для unit-тестов инъекции.
+// fakeReader is an in-memory TemplateReader for injection unit tests.
 type fakeReader struct {
 	files map[string][]byte
 }
@@ -31,7 +31,7 @@ func renderedTask(module string, params map[string]any) *RenderedTask {
 	return &RenderedTask{Name: "t", Module: module, Params: st}
 }
 
-// core.file.rendered: template (путь) → template_content (содержимое), путь удалён.
+// core.file.rendered: template (path) → template_content (contents), path removed.
 func TestInjectTemplateContent_PathToContent(t *testing.T) {
 	rt := renderedTask(moduleFileRendered, map[string]any{
 		"path":     "/etc/redis/redis.conf",
@@ -56,13 +56,13 @@ func TestInjectTemplateContent_PathToContent(t *testing.T) {
 	if rt.RawTemplate != got {
 		t.Errorf("RawTemplate = %q, want = template_content %q", rt.RawTemplate, got)
 	}
-	// Прочие ключи не тронуты.
+	// Other keys untouched.
 	if fields["path"].GetStringValue() != "/etc/redis/redis.conf" {
 		t.Error("path не должен меняться")
 	}
 }
 
-// Прочий модуль — passthrough: params не трогаются, RawTemplate пуст.
+// Any other module — passthrough: params untouched, RawTemplate empty.
 func TestInjectTemplateContent_OtherModulePassthrough(t *testing.T) {
 	rt := renderedTask("core.file.present", map[string]any{
 		"path":    "/etc/x",
@@ -79,8 +79,8 @@ func TestInjectTemplateContent_OtherModulePassthrough(t *testing.T) {
 	}
 }
 
-// nil-reader при core.file.rendered с template-путём — ошибка handoff
-// (именно этот пробел был прод-блокером golden-path).
+// A nil reader with core.file.rendered and a template path is a handoff
+// error (this exact gap was a prod blocker for the golden path).
 func TestInjectTemplateContent_NilReaderIsError(t *testing.T) {
 	rt := renderedTask(moduleFileRendered, map[string]any{
 		"path":     "/etc/x",
@@ -95,7 +95,7 @@ func TestInjectTemplateContent_NilReaderIsError(t *testing.T) {
 	}
 }
 
-// inline template_content без template-пути — пропускаем (reader не дёргается).
+// inline template_content without a template path — skip (reader isn't invoked).
 func TestInjectTemplateContent_InlineContentKept(t *testing.T) {
 	rt := renderedTask(moduleFileRendered, map[string]any{
 		"path":             "/etc/x",
@@ -109,7 +109,7 @@ func TestInjectTemplateContent_InlineContentKept(t *testing.T) {
 	}
 }
 
-// Ни template, ни template_content — ошибка.
+// Neither template nor template_content — error.
 func TestInjectTemplateContent_MissingBoth(t *testing.T) {
 	rt := renderedTask(moduleFileRendered, map[string]any{"path": "/etc/x"})
 	if err := injectTemplateContent(rt, fakeReader{}, ""); err == nil {
@@ -117,7 +117,7 @@ func TestInjectTemplateContent_MissingBoth(t *testing.T) {
 	}
 }
 
-// non-string template — ошибка (после CEL-фазы путь обязан быть строкой).
+// non-string template — error (after the CEL phase the path must be a string).
 func TestInjectTemplateContent_NonStringTemplate(t *testing.T) {
 	rt := renderedTask(moduleFileRendered, map[string]any{
 		"path":     "/etc/x",
@@ -128,7 +128,7 @@ func TestInjectTemplateContent_NonStringTemplate(t *testing.T) {
 	}
 }
 
-// Двухуровневый резолв: scenario-local перекрывает service-level (shadowing).
+// Two-level resolve: scenario-local overrides service-level (shadowing).
 func TestSnapshotTemplateReader_TwoLevelShadowing(t *testing.T) {
 	reader := NewSnapshotTemplateReader(
 		fakeReader{files: map[string][]byte{
@@ -146,7 +146,7 @@ func TestSnapshotTemplateReader_TwoLevelShadowing(t *testing.T) {
 	}
 }
 
-// Двухуровневый резолв: нет scenario-local → фоллбэк на service-level.
+// Two-level resolve: no scenario-local → falls back to service-level.
 func TestSnapshotTemplateReader_FallbackToService(t *testing.T) {
 	reader := NewSnapshotTemplateReader(
 		fakeReader{files: map[string][]byte{
@@ -163,7 +163,7 @@ func TestSnapshotTemplateReader_FallbackToService(t *testing.T) {
 	}
 }
 
-// Одноуровневый резолв (destiny-проход: пустой prefix).
+// Single-level resolve (destiny pass: empty prefix).
 func TestSnapshotTemplateReader_SingleLevelDestiny(t *testing.T) {
 	reader := NewSnapshotTemplateReader(
 		fakeReader{files: map[string][]byte{
@@ -180,11 +180,11 @@ func TestSnapshotTemplateReader_SingleLevelDestiny(t *testing.T) {
 	}
 }
 
-// Traversal-safety: ридер поверх реального securejoin-снапшота (artifact.
-// ReadSnapshotFile) отвергает выход за пределы корня снапшота через `../`.
+// Traversal safety: a reader on top of a real securejoin snapshot (artifact.
+// ReadSnapshotFile) rejects escaping the snapshot root via `../`.
 func TestSnapshotTemplateReader_TraversalRejected(t *testing.T) {
 	root := t.TempDir()
-	// Секрет ВНЕ снапшота (на уровень выше root).
+	// A secret OUTSIDE the snapshot (one level above root).
 	parent := filepath.Dir(root)
 	secret := filepath.Join(parent, "outside-secret.txt")
 	if err := os.WriteFile(secret, []byte("TOPSECRET"), 0o600); err != nil {
@@ -204,14 +204,14 @@ func TestSnapshotTemplateReader_TraversalRejected(t *testing.T) {
 		"",
 	)
 
-	// Легитимный путь читается.
+	// A legitimate path is read.
 	if data, err := reader.Read("templates/ok.tmpl"); err != nil || string(data) != "OK" {
 		t.Fatalf("легитимный путь: data=%q err=%v", data, err)
 	}
 
-	// `../` за пределы снапшота — securejoin клампит, наружу не выпускает: либо
-	// not-found (клампленный путь не существует внутри root), либо ошибка. Главное —
-	// содержимое внешнего секрета НЕ возвращается.
+	// `../` outside the snapshot — securejoin clamps it, never lets it escape:
+	// either not-found (the clamped path doesn't exist inside root) or an error.
+	// What matters — the outside secret's contents are NOT returned.
 	data, err := reader.Read("../" + filepath.Base(secret))
 	if err == nil && string(data) == "TOPSECRET" {
 		t.Fatal("traversal через ../ вернул внешний секрет — securejoin не сработал")

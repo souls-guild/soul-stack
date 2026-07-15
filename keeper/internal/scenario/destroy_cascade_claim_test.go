@@ -1,10 +1,11 @@
 //go:build integration
 
-// NIM-56 регресс на destroy_failed: claim снесённого СВОИМ destroy-каскадом
-// хоста — benign-терминал no_match, а не failed. Discriminator — `souls.status`
-// ('destroyed' ⇒ benign; любой другой выпад из roster-а ⇒ fail-closed отказ).
-// Инфраструктура (TestMain/PG, seed*, newClaimRunner, insertPlannedFixture,
-// applyOnlyDispatcher) общая с integration_test.go / cutover_test.go.
+// NIM-56 regression on destroy_failed: claiming a host removed by ITS OWN
+// destroy cascade is a benign no_match terminal, not failed. Discriminator is
+// `souls.status` ('destroyed' ⇒ benign; any other drop from the roster ⇒
+// fail-closed failure). Infrastructure (TestMain/PG, seed*, newClaimRunner,
+// insertPlannedFixture, applyOnlyDispatcher) is shared with
+// integration_test.go / cutover_test.go.
 
 package scenario
 
@@ -16,16 +17,17 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// TestIntegration_Claim_DestroyCascade_BenignNoMatch — cloud-destroy каскад
-// (core.cloud.destroyed) метит `souls→destroyed` ДО host-fan-out; Acolyte затем
-// клеймит planned-строку снесённого хоста. RenderForHost не находит его в
-// connected-roster-е → без фикса это dispatch_failed → терминал destroy_failed.
-// Фикс: хост со `status=='destroyed'` (единственный писатель — CascadeDestroy) —
-// benign no_match. Реальный disconnect остаётся failed (fail-closed).
+// TestIntegration_Claim_DestroyCascade_BenignNoMatch — a cloud-destroy cascade
+// (core.cloud.destroyed) marks `souls→destroyed` BEFORE host-fan-out; Acolyte
+// then claims the removed host's planned row. RenderForHost doesn't find it in
+// the connected roster → without the fix that's dispatch_failed → terminal
+// destroy_failed. Fix: a host with `status=='destroyed'` (sole writer is
+// CascadeDestroy) is benign no_match. A real disconnect stays failed
+// (fail-closed).
 func TestIntegration_Claim_DestroyCascade_BenignNoMatch(t *testing.T) {
 	ctx := context.Background()
 
-	// Позитив: хост снят СВОИМ destroy-каскадом → no_match, ApplyRequest не уходит.
+	// Positive: host removed by ITS OWN destroy cascade → no_match, ApplyRequest not sent.
 	t.Run("destroyed_benign_no_match", func(t *testing.T) {
 		resetAll(t)
 		seedOperator(t, "archon-alice")
@@ -35,7 +37,7 @@ func TestIntegration_Claim_DestroyCascade_BenignNoMatch(t *testing.T) {
 
 		applyID := audit.NewULID()
 		insertPlannedFixture(t, applyID, "host-a.example.com", gitURL)
-		// Эмуляция CascadeDestroy: хост снят своим destroy-каскадом прогона.
+		// Emulates CascadeDestroy: host removed by the run's own destroy cascade.
 		mustSetSoulStatus(t, "host-a.example.com", "destroyed")
 
 		disp := &applyOnlyDispatcher{}
@@ -55,7 +57,7 @@ func TestIntegration_Claim_DestroyCascade_BenignNoMatch(t *testing.T) {
 		}
 	})
 
-	// Негатив (fail-closed): реальный disconnect (не destroyed) → остаётся failed.
+	// Negative (fail-closed): a real disconnect (not destroyed) → stays failed.
 	t.Run("disconnected_fail_closed", func(t *testing.T) {
 		resetAll(t)
 		seedOperator(t, "archon-alice")
@@ -65,7 +67,7 @@ func TestIntegration_Claim_DestroyCascade_BenignNoMatch(t *testing.T) {
 
 		applyID := audit.NewULID()
 		insertPlannedFixture(t, applyID, "host-a.example.com", gitURL)
-		// disconnected между dispatch и claim — НЕ destroy-каскад: отказ сохраняется.
+		// disconnected between dispatch and claim — NOT a destroy cascade: the failure holds.
 		mustSetSoulStatus(t, "host-a.example.com", "disconnected")
 
 		disp := &applyOnlyDispatcher{}
@@ -86,9 +88,9 @@ func TestIntegration_Claim_DestroyCascade_BenignNoMatch(t *testing.T) {
 	})
 }
 
-// mustSetSoulStatus переводит souls.status напрямую (эмуляция каскадного writer-а
-// без прогона core.cloud.*). Ровно то состояние, что CascadeDestroy оставляет в
-// реестре перед host-fan-out-ом (destroyed) либо reaper (disconnected).
+// mustSetSoulStatus sets souls.status directly (emulates the cascade writer
+// without running core.cloud.*). Exactly the state CascadeDestroy leaves in
+// the registry before host-fan-out (destroyed) or reaper leaves (disconnected).
 func mustSetSoulStatus(t *testing.T, sid, status string) {
 	t.Helper()
 	if _, err := integrationPool.Exec(context.Background(),

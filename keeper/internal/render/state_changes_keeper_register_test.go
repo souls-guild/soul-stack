@@ -6,11 +6,12 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
 )
 
-// TestStateChangesVars_KeeperRegisterVisible — ★ GUARD live-бага provisioned_vm_ids
-// (ADR-056 amendment 2026-07-02). register keeper-side задач (on: keeper) живёт в
-// bucket RegisterByHost[KeeperTargetSID]; state_changes-scope обязан видеть его как
-// run-level подложку — иначе `${ register.<keeper-задача>.* }` в sets → "no such
-// key" → error_locked ПОСЛЕ успешного деплоя.
+// TestStateChangesVars_KeeperRegisterVisible — ★ GUARD for the live
+// provisioned_vm_ids bug (ADR-056 amendment 2026-07-02). register of keeper-side
+// tasks (on: keeper) lives in the bucket RegisterByHost[KeeperTargetSID];
+// state_changes-scope must see it as a run-level underlay — otherwise
+// `${ register.<keeper-task>.* }` in sets → "no such key" → error_locked AFTER a
+// successful deploy.
 func TestStateChangesVars_KeeperRegisterVisible(t *testing.T) {
 	host := &topology.HostFacts{SID: "host-a.example.com"}
 	in := RenderInput{
@@ -29,9 +30,9 @@ func TestStateChangesVars_KeeperRegisterVisible(t *testing.T) {
 	}
 }
 
-// TestStateChangesVars_HostWinsOnCollision — при коллизии register-имени per-host
-// ключ хоста ПОБЕЖДАЕТ keeper-подложку (host-wins; коллизии невозможны валидатором
-// дублей register, страховка формальная).
+// TestStateChangesVars_HostWinsOnCollision — on a register-name collision, the
+// per-host key WINS over the keeper underlay (host-wins; collisions are actually
+// impossible due to the register-duplicate validator, this is a formal safety net).
 func TestStateChangesVars_HostWinsOnCollision(t *testing.T) {
 	host := &topology.HostFacts{SID: "host-a.example.com"}
 	in := RenderInput{
@@ -48,9 +49,10 @@ func TestStateChangesVars_HostWinsOnCollision(t *testing.T) {
 	}
 }
 
-// TestStateChangesVars_NoKeeperBucket_BitForBit — back-compat: без keeper-bucket
-// Register — ровно per-host bucket (та же карта, без merge-копии); хост без
-// bucket-а → nil (как раньше: `register.*` в sets → штатный "no such key").
+// TestStateChangesVars_NoKeeperBucket_BitForBit — back-compat: without a
+// keeper-bucket, Register is exactly the per-host bucket (the same map, no
+// merge-copy); a host without a bucket → nil (as before: `register.*` in sets →
+// plain "no such key").
 func TestStateChangesVars_NoKeeperBucket_BitForBit(t *testing.T) {
 	host := &topology.HostFacts{SID: "host-a.example.com"}
 	bucket := map[string]any{"probe": map[string]any{"stdout": "master"}}
@@ -62,7 +64,7 @@ func TestStateChangesVars_NoKeeperBucket_BitForBit(t *testing.T) {
 	if len(vars.Register) != len(bucket) {
 		t.Fatalf("stateChangesVars.Register = %v, want ровно per-host bucket %v", vars.Register, bucket)
 	}
-	// Та же карта, не копия: мутация bucket-а видна через vars (нет лишней аллокации).
+	// Same map, not a copy: mutating bucket is visible through vars (no extra allocation).
 	bucket["late"] = true
 	if _, ok := vars.Register["late"]; !ok {
 		t.Errorf("stateChangesVars.Register — копия per-host bucket-а, want та же карта (бит-в-бит без keeper-подложки)")

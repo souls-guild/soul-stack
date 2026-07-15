@@ -5,25 +5,27 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// seal / sealed-paths ([ADR-010] §7.4) — render-time provenance/taint. Pipeline
-// помечает путь ячейки params SEALED, когда её СЫРОЕ (до vault-resolve+CEL)
-// значение — строка с `${ … }`-выражением, читающим secret-источник: secret-
-// input активной схемы прохода, vault(), транзитивно sealed vars/compute.
-// Детекцию по AST делает [cel.Engine.DetectSealed] (shared/cel/seal.go).
+// seal / sealed-paths ([ADR-010] §7.4) — render-time provenance/taint. The
+// pipeline marks a params cell path SEALED when its RAW (pre vault-resolve+CEL)
+// value is a string with a `${ … }` expression reading a secret source: a
+// secret input of the active pass schema, vault(), or transitively sealed
+// vars/compute. Detection is AST-based, via [cel.Engine.DetectSealed]
+// (shared/cel/seal.go).
 //
-// SealedSet аккумулирует найденные пути (dot/idx-форма, БИТ-В-БИТ как
-// renderValue path) ЗА ОДИН Render-прогон. Caller (scenario.run) создаёт его,
-// кладёт в [RenderInput.Sealed] и после Render использует пути для seal-aware
-// маскинга (audit.MaskSecretsSealed) на write-точках (error_summary/status_details).
-// nil → коллекция выключена (push/trial/Acolyte без seal-нужды — БИТ-В-БИТ).
+// SealedSet accumulates the found paths (dot/idx form, matching renderValue
+// path EXACTLY) for a SINGLE Render pass. The caller (scenario.run) creates it,
+// puts it in [RenderInput.Sealed], and after Render uses the paths for
+// seal-aware masking (audit.MaskSecretsSealed) at write points
+// (error_summary/status_details). nil → collection disabled (push/trial/Acolyte
+// have no seal need).
 type SealedSet struct {
 	paths map[string]bool
 }
 
-// NewSealedSet — пустой аккумулятор sealed-путей одного Render-прогона.
+// NewSealedSet — an empty accumulator of sealed paths for one Render pass.
 func NewSealedSet() *SealedSet { return &SealedSet{paths: map[string]bool{}} }
 
-// add помечает путь sealed. nil-получатель — no-op (коллекция выключена).
+// add marks a path sealed. nil receiver — no-op (collection disabled).
 func (s *SealedSet) add(path string) {
 	if s == nil {
 		return
@@ -31,8 +33,8 @@ func (s *SealedSet) add(path string) {
 	s.paths[path] = true
 }
 
-// Paths возвращает набор sealed-путей для audit.MaskSecretsSealed (map копируется
-// — caller не мутирует внутреннее состояние). nil-получатель → nil.
+// Paths returns the sealed-path set for audit.MaskSecretsSealed (the map is
+// copied — the caller can't mutate internal state). nil receiver → nil.
 func (s *SealedSet) Paths() map[string]bool {
 	if s == nil || len(s.paths) == 0 {
 		return nil
@@ -44,20 +46,22 @@ func (s *SealedSet) Paths() map[string]bool {
 	return out
 }
 
-// scenarioSealSources строит [cel.SealSources] для scenario-прохода: secret-input
-// активной scenario-схемы. vars/compute транзитивность в пилоте не вычисляется
-// предварительно (vars резолвятся per-task; secret-провенанс через vars ловится
-// тем, что само значение vars прошло DetectSealed — это расширение). nil-схема →
-// пустой набор (детектор ловит только vault()).
+// scenarioSealSources builds [cel.SealSources] for a scenario pass: the
+// secret-input set of the active scenario schema. vars/compute transitivity
+// isn't precomputed in the pilot (vars resolve per-task; secret provenance via
+// vars is still caught because the vars value itself goes through
+// DetectSealed — an extension of this). nil schema → empty set (the detector
+// only catches vault()).
 func scenarioSealSources(in RenderInput) cel.SealSources {
 	return cel.SealSources{SecretInputs: secretInputNames(in.Scenario)}
 }
 
-// secretInputNames — имена input-параметров, объявленных secret:true в схеме
-// прохода (scenario.Input / destiny.Input — обе config.InputSchemaMap), а также
-// поля с непустым vault_scope (он по контракту config-валидатора применим только
-// к secret:true, но проверяем явно — defense-in-depth, имя секрета не должно
-// зависеть от инварианта чужого валидатора). nil → пустой набор.
+// secretInputNames — names of input parameters declared secret:true in the
+// pass schema (scenario.Input / destiny.Input — both config.InputSchemaMap),
+// plus fields with a non-empty vault_scope (by config-validator contract that's
+// only applicable to secret:true, but we check explicitly — defense in depth,
+// a secret's name shouldn't depend on another validator's invariant). nil →
+// empty set.
 func secretInputNames(scn *config.ScenarioManifest) map[string]bool {
 	if scn == nil || len(scn.Input) == 0 {
 		return nil
@@ -71,27 +75,31 @@ func secretInputNames(scn *config.ScenarioManifest) map[string]bool {
 	return out
 }
 
-// renderContextInputPrefix — префикс пути ячейки render_context.input.<field>
-// (Вариант B, ADR-010 §7.4 S-1). render_context живёт в params под ключом
-// render_context (paramRenderContext), input — подсекция корня §3.2; путь ячейки
-// конкретного input-поля для seal-маскинга — render_context.input.<field>.
+// renderContextInputPrefix — the cell-path prefix for
+// render_context.input.<field> (Variant B, ADR-010 §7.4 S-1). render_context
+// lives in params under the render_context key (paramRenderContext), input is
+// a subsection of the §3.2 root; the cell path of a given input field for
+// seal masking is render_context.input.<field>.
 const renderContextInputPrefix = paramRenderContext + ".input."
 
-// sealRenderContextInput помечает sealed пути render_context.input.<secret> для
-// каждого secret-input активной схемы прохода (ADR-010 §7.4, механизм S-1,
-// Вариант B). Закрывает seal-разрыв от отказа от passthrough `params.vars`: сырого
-// `${ input.secret }` в params больше нет → collectSealed/DetectSealed его не
-// ловит, и провенанс восстанавливается ДЕКЛАРАТИВНО — ПО СХЕМЕ (список secret-имён),
-// не по присутствию выражения.
+// sealRenderContextInput marks sealed paths render_context.input.<secret> for
+// every secret-input of the active pass schema (ADR-010 §7.4, mechanism S-1,
+// Variant B). Closes the seal gap left by dropping the `params.vars`
+// passthrough: a raw `${ input.secret }` no longer appears in params →
+// collectSealed/DetectSealed can't catch it, so provenance is restored
+// DECLARATIVELY — BY SCHEMA (the list of secret names), not by expression
+// presence.
 //
-// ★УСЛОВНО (injectInput): caller зовёт ТОЛЬКО когда render_context.input реально
-// инъектится (тот же гейт, что buildRenderContext). Иначе секрет в params не
-// попадает, и seal-пути под него лишь плодили бы мёртвые записи на несуществующую
-// ячейку — гейт держит seal-набор в синхроне с реальным составом render_context.
+// ★CONDITIONAL (injectInput): the caller must call this ONLY when
+// render_context.input is actually injected (the same gate as
+// buildRenderContext). Otherwise the secret never lands in params, and its
+// seal paths would just produce dead entries for a nonexistent cell — the gate
+// keeps the seal set in sync with the real render_context contents.
 //
-// Источник списка — secretInputNames(in.Scenario): destiny-проход в пилоте схему
-// destiny-input не пробрасывает (набор пуст — vault()-провенанс destiny ловится
-// без схемы). set nil → no-op. Вызывается per-task один раз (путь host-инвариантен).
+// The list's source is secretInputNames(in.Scenario): in the pilot, a destiny
+// pass doesn't propagate the destiny-input schema (set is empty — destiny's
+// vault() provenance is caught without a schema). set nil → no-op. Called once
+// per task (the path is host-invariant).
 func sealRenderContextInput(set *SealedSet, in RenderInput) {
 	if set == nil {
 		return
@@ -101,11 +109,11 @@ func sealRenderContextInput(set *SealedSet, in RenderInput) {
 	}
 }
 
-// collectSealed обходит СЫРЫЕ params (до vault-resolve+CEL) тем же path-обходом,
-// что renderValue, и помечает в set путь каждой строковой ячейки, чьё `${ … }`-
-// выражение читает secret-источник (engine.DetectSealed). set nil → no-op.
-// Вызывается per-task ОДИН раз (не per-host): провенанс ячейки host-инвариантен
-// (secret-источник один и тот же на всех хостах).
+// collectSealed walks RAW params (pre vault-resolve+CEL) with the same path
+// walk as renderValue, and marks in set the path of every string cell whose
+// `${ … }` expression reads a secret source (engine.DetectSealed). set nil →
+// no-op. Called once per task (not per host): a cell's provenance is
+// host-invariant (the secret source is the same on every host).
 func collectSealed(engine *cel.Engine, set *SealedSet, params map[string]any, sources cel.SealSources, base string) {
 	if set == nil {
 		return

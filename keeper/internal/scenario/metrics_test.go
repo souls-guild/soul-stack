@@ -20,8 +20,9 @@ func TestRegisterScenarioMetrics_RegistersFamilies(t *testing.T) {
 		t.Fatal("RegisterScenarioMetrics returned nil")
 	}
 
-	// CounterVec без первого WithLabelValues sample не публикует, histogram —
-	// публикует сразу (count=0). Дёрнем по одному sample и проверим families.
+	// CounterVec doesn't publish without a first WithLabelValues sample;
+	// histogram publishes immediately (count=0). Pull one sample each and check
+	// families.
 	m.ObserveRun(runResultOK, 1.0)
 	families, err := reg.Gatherer().Gather()
 	if err != nil {
@@ -73,9 +74,10 @@ func TestScenarioMetrics_RunsByResult(t *testing.T) {
 	}
 }
 
-// TestScenarioMetrics_DurationOnlyForStartedRuns — locked-прогон не стартовал,
-// его длительность в histogram не попадает (duration=0 → не наблюдается). ok и
-// failed (duration>0) — наблюдаются. Проверяем _count histogram-а = 2, не 3.
+// TestScenarioMetrics_DurationOnlyForStartedRuns — a locked run never started,
+// its duration doesn't go into the histogram (duration=0 → not observed). ok
+// and failed (duration>0) are observed. We check the histogram's _count = 2,
+// not 3.
 func TestScenarioMetrics_DurationOnlyForStartedRuns(t *testing.T) {
 	reg := obs.NewRegistry()
 	m := RegisterScenarioMetrics(reg)
@@ -91,17 +93,17 @@ func TestScenarioMetrics_DurationOnlyForStartedRuns(t *testing.T) {
 }
 
 func TestScenarioMetrics_NilReceiver_NoOp(t *testing.T) {
-	// Runner может подниматься без obs-стека (unit-тесты, dev-сборка). Метод на
-	// nil-получателе — no-op без паники.
+	// Runner can start up without the obs stack (unit tests, dev build). The
+	// method on a nil receiver is a no-op, no panic.
 	var m *ScenarioMetrics
 	m.ObserveRun(runResultOK, 1.0)
 	m.ObserveRun(runResultLocked, 0)
 }
 
-// TestRun_Span_Created проверяет, что прогон порождает span scenario.run с
-// атрибутами incarnation/scenario/apply_id и инкрементит runs_total. Прогон
-// падает на резолве incarnation (lazyPool без коннекта) — это failed-исход,
-// span обязан создаться в любом случае (он оборачивает весь run).
+// TestRun_Span_Created checks that a run produces a scenario.run span with
+// incarnation/scenario/apply_id attributes and increments runs_total. The run
+// fails at incarnation resolution (lazyPool with no connection) — a failed
+// outcome, but the span must be created regardless (it wraps the whole run).
 func TestRun_Span_Created(t *testing.T) {
 	rec := tracetest.NewSpanRecorder()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
@@ -145,16 +147,16 @@ func TestRun_Span_Created(t *testing.T) {
 		t.Errorf("span attr apply_id = %q", attrs["apply_id"])
 	}
 
-	// Прогон провалился на резолве incarnation (нет коннекта) → failed.
+	// The run failed at incarnation resolution (no connection) → failed.
 	body := obstest.Scrape(t, reg.Gatherer())
 	if !strings.Contains(body, `keeper_scenario_runs_total{result="failed"} 1`) {
 		t.Errorf("expected one failed run from aborted run; got=\n%s", body)
 	}
 }
 
-// TestRun_NoTracer_NoPanic — при no-op глобальном провайдере (OTel disabled)
-// прогон не падает, span бесплатен. Метрики выключены (nil Metrics) — тоже
-// no-op. Симулирует production без observability.
+// TestRun_NoTracer_NoPanic — with a no-op global provider (OTel disabled) the
+// run doesn't fail, the span is free. Metrics are off (nil Metrics) — also a
+// no-op. Simulates production without observability.
 func TestRun_NoTracer_NoPanic(t *testing.T) {
 	r := newTestRunner(t) // Deps.Metrics == nil
 	r.run(context.Background(), RunSpec{

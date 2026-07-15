@@ -7,19 +7,22 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// Conditional-include group-drop ВНУТРИ apply:destiny (ADR-009 amendment, паритет
-// со scenario-путём). renderApplyDestiny зеркалит scenario-цикл (pipeline.go): задачи,
-// раскрытые из include под статическим `when:`, несут carry-through
-// Task.IncludeWhen/IncludeGroupID. include-when вычисляется ОДИН раз на группу в
-// ИЗОЛИРОВАННОМ destiny-env (input = резолвнутый apply.input + schema-defaults, НЕ
-// scenario-scope) и при false дропает ВСЕ задачи группы РЕАЛЬНО — без эмита
-// RenderedTask и без idx++. Кеш includeGroupKeep — per-проход, раздельный от scenario.
+// Conditional-include group-drop INSIDE apply:destiny (ADR-009 amendment,
+// parity with the scenario path). renderApplyDestiny mirrors the scenario loop
+// (pipeline.go): tasks expanded from an include under a static `when:` carry
+// through Task.IncludeWhen/IncludeGroupID. include-when is evaluated ONCE per
+// group in an ISOLATED destiny env (input = resolved apply.input +
+// schema-defaults, NOT scenario-scope) and on false drops ALL tasks of the
+// group FOR REAL — no RenderedTask emitted, no idx++. The includeGroupKeep
+// cache is per-pass, separate from scenario.
 //
-// Тесты строят carry-through-поля напрямую (через includeGroup из
-// include_group_drop_test.go) — фокус на render-инварианте group-drop в destiny.
+// Tests build carry-through fields directly (via includeGroup from
+// include_group_drop_test.go) — the focus is the render invariant of
+// group-drop in destiny.
 
-// applyDestinyScenario оборачивает destiny с conditional-include в scenario с одной
-// apply:destiny-задачей, прокидывая applyInput в destiny-input.
+// applyDestinyScenario wraps a destiny with a conditional-include in a
+// scenario with a single apply:destiny task, forwarding applyInput into
+// destiny-input.
 func applyDestinyScenario(destiny string, applyInput map[string]any) *config.ScenarioManifest {
 	return &config.ScenarioManifest{
 		Name: "create",
@@ -29,11 +32,12 @@ func applyDestinyScenario(destiny string, applyInput map[string]any) *config.Sce
 	}
 }
 
-// TestDestinyIncludeGroupDrop_WhenFalse_TasksAbsent — ★ дроп условной include-группы
-// внутри destiny при non-matching input: задачи группы физически ОТСУТСТВУЮТ в плане
-// (реальный дроп), индексы хвоста сквозные без дыр. include-when ссылается на
-// input.topology — резолвится против destiny-input (apply.input), НЕ против scenario-
-// input, и НЕ падает no-such-key (input.topology передан в apply.input).
+// TestDestinyIncludeGroupDrop_WhenFalse_TasksAbsent — ★ dropping a conditional
+// include group inside destiny on non-matching input: the group's tasks are
+// physically ABSENT from the plan (a real drop), tail indices stay continuous
+// with no gaps. include-when references input.topology — resolved against
+// destiny-input (apply.input), NOT scenario-input, and must NOT fail
+// no-such-key (input.topology is passed via apply.input).
 func TestDestinyIncludeGroupDrop_WhenFalse_TasksAbsent(t *testing.T) {
 	var dtasks []config.Task
 	dtasks = append(dtasks, cmdTask("head", "head"))
@@ -76,9 +80,9 @@ func TestDestinyIncludeGroupDrop_WhenFalse_TasksAbsent(t *testing.T) {
 	}
 }
 
-// TestDestinyIncludeGroupDrop_WhenTrue_TasksPresent — keep при matching input: задачи
-// группы присутствуют и рендерятся обычным путём (carry-through-поля на рендер не
-// влияют), индексы сквозные.
+// TestDestinyIncludeGroupDrop_WhenTrue_TasksPresent — keep on matching input:
+// the group's tasks are present and render the normal way (carry-through
+// fields don't affect rendering), indices stay continuous.
 func TestDestinyIncludeGroupDrop_WhenTrue_TasksPresent(t *testing.T) {
 	var dtasks []config.Task
 	dtasks = append(dtasks, cmdTask("head", "head"))
@@ -125,18 +129,19 @@ func TestDestinyIncludeGroupDrop_WhenTrue_TasksPresent(t *testing.T) {
 	}
 }
 
-// TestDestinyIncludeGroupDrop_Nested — ★ паритет со scenario: nested conditional-include
-// в destiny. Внешняя группа keep, внутренняя (другой group-id) drop — внешние задачи
-// остаются, внутренние исчезают. include-when каждой группы вычисляется в изолированном
-// destiny-env; кеши групп раздельны по IncludeGroupID.
+// TestDestinyIncludeGroupDrop_Nested — ★ parity with scenario: nested
+// conditional-include in destiny. Outer group keeps, inner (a different
+// group-id) drops — outer tasks remain, inner ones vanish. Each group's
+// include-when is evaluated in an isolated destiny env; group caches are kept
+// separate by IncludeGroupID.
 func TestDestinyIncludeGroupDrop_Nested(t *testing.T) {
 	var dtasks []config.Task
 	dtasks = append(dtasks, cmdTask("head", "head"))
-	// Внешняя группа (id=1) — keep при tls=='on'.
+	// Outer group (id=1) — keep when tls=='on'.
 	dtasks = append(dtasks, includeGroup("input.tls == 'on'", 1,
 		cmdTask("outer-a", "oa"),
 	)...)
-	// Вложенная группа (id=2) — drop при ha=='off' (другой group-id, своё условие).
+	// Nested group (id=2) — drop when ha=='off' (a different group-id, its own condition).
 	dtasks = append(dtasks, includeGroup("input.ha == 'on'", 2,
 		cmdTask("inner-a", "ia"),
 		cmdTask("inner-b", "ib"),
@@ -163,7 +168,7 @@ func TestDestinyIncludeGroupDrop_Nested(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	// head + outer-a(keep) + tail = 3; inner-группа (ha=off) дропнута.
+	// head + outer-a(keep) + tail = 3; the inner group (ha=off) is dropped.
 	if len(tasks) != 3 {
 		t.Fatalf("len(tasks)=%d, want 3 (head + outer-a + tail; inner-группа дропнута)", len(tasks))
 	}
@@ -185,10 +190,11 @@ func TestDestinyIncludeGroupDrop_Nested(t *testing.T) {
 	}
 }
 
-// TestDestinyIncludeGroupDrop_IsolatedEnv — ★ include-when резолвится против
-// ИЗОЛИРОВАННОГО destiny-input (apply.input + defaults), НЕ против scenario-scope.
-// scenario-input несёт topology=='sentinel', но в apply.input передан standalone →
-// группа ДОЛЖНА дропнуться (если бы include-when смотрел parentIn, она бы осталась).
+// TestDestinyIncludeGroupDrop_IsolatedEnv — ★ include-when resolves against
+// ISOLATED destiny-input (apply.input + defaults), NOT scenario-scope.
+// scenario-input carries topology=='sentinel', but apply.input passes
+// standalone → the group MUST drop (if include-when looked at parentIn, it
+// would stay).
 func TestDestinyIncludeGroupDrop_IsolatedEnv(t *testing.T) {
 	var dtasks []config.Task
 	dtasks = append(dtasks, includeGroup("input.topology == 'sentinel'", 1,
@@ -202,9 +208,9 @@ func TestDestinyIncludeGroupDrop_IsolatedEnv(t *testing.T) {
 	}}
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
-		// apply.input.topology = literal standalone (НЕ из scenario-input).
+		// apply.input.topology = literal standalone (NOT from scenario-input).
 		Scenario: applyDestinyScenario("iso-destiny", map[string]any{"topology": "standalone"}),
-		// scenario-scope несёт topology=sentinel — destiny НЕ должна его увидеть.
+		// scenario-scope carries topology=sentinel — destiny must NOT see it.
 		Input:       map[string]any{"topology": "sentinel"},
 		Incarnation: IncarnationMeta{Name: "svc"},
 		Hosts:       singleHost(),

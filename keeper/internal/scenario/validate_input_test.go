@@ -10,8 +10,8 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 )
 
-// fakeInputLoader — мок [InputScenarioLoader]: Load возвращает пустой артефакт,
-// ReadFile отдаёт заранее заданный YAML (или ошибку). Без git-стека.
+// fakeInputLoader is a mock [InputScenarioLoader]: Load returns an empty
+// artifact, ReadFile returns a preset YAML (or an error). No git stack.
 type fakeInputLoader struct {
 	yaml    string
 	loadErr error
@@ -32,8 +32,9 @@ func (f *fakeInputLoader) ReadFile(_ *artifact.ServiceArtifact, _ string) ([]byt
 	return []byte(f.yaml), nil
 }
 
-// scenarioWithRequiredInput — scenario `create` с одним required-полем `name`
-// (type=string, без default) и одним опциональным `replicas` (с default).
+// scenarioWithRequiredInput is scenario `create` with one required field
+// `name` (type=string, no default) and one optional `replicas` (with
+// default).
 const scenarioWithRequiredInput = `name: create
 description: test scenario
 state_changes: {}
@@ -54,7 +55,7 @@ tasks:
 
 func TestValidateInput_RequiredMissing_ErrInputInvalid(t *testing.T) {
 	loader := &fakeInputLoader{yaml: scenarioWithRequiredInput}
-	// input БЕЗ required-поля `name` (воспроизведение бага "ba").
+	// input WITHOUT the required field `name` (reproduces the "ba" bug).
 	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create", map[string]any{})
 	if err == nil {
 		t.Fatal("ожидалась ошибка для отсутствующего required-поля, got nil")
@@ -66,7 +67,7 @@ func TestValidateInput_RequiredMissing_ErrInputInvalid(t *testing.T) {
 
 func TestValidateInput_RequiredMissing_NilInput(t *testing.T) {
 	loader := &fakeInputLoader{yaml: scenarioWithRequiredInput}
-	// nil input (поле отсутствует в JSON вовсе) — тот же отказ, что и `{}`.
+	// nil input (field absent from JSON entirely) — same rejection as `{}`.
 	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create", nil)
 	if !errors.Is(err, ErrInputInvalid) {
 		t.Fatalf("nil input: ожидался ErrInputInvalid, got %v", err)
@@ -83,7 +84,7 @@ func TestValidateInput_RequiredProvided_OK(t *testing.T) {
 }
 
 func TestValidateInput_DefaultPresent_OK(t *testing.T) {
-	// `replicas` имеет default → отсутствие в provided допустимо; `name` передан.
+	// `replicas` has a default → absence in provided is fine; `name` is passed.
 	loader := &fakeInputLoader{yaml: scenarioWithRequiredInput}
 	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
 		map[string]any{"name": "alice"})
@@ -94,7 +95,7 @@ func TestValidateInput_DefaultPresent_OK(t *testing.T) {
 
 func TestValidateInput_TypeMismatch_ErrInputInvalid(t *testing.T) {
 	loader := &fakeInputLoader{yaml: scenarioWithRequiredInput}
-	// `replicas` объявлен integer; передаём строку → type-mismatch.
+	// `replicas` is declared integer; we pass a string → type mismatch.
 	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
 		map[string]any{"name": "alice", "replicas": "not-int"})
 	if !errors.Is(err, ErrInputInvalid) {
@@ -104,8 +105,9 @@ func TestValidateInput_TypeMismatch_ErrInputInvalid(t *testing.T) {
 
 func TestValidateInput_EmptyStringForRequired_ErrInputInvalid(t *testing.T) {
 	loader := &fakeInputLoader{yaml: scenarioWithRequiredInput}
-	// Пустая строка для required type=string без allow_empty трактуется как
-	// «не передано» (docs/input.md §«Пустые строки») → required-нарушение.
+	// Empty string for a required type=string without allow_empty is
+	// treated as "not provided" (docs/input.md §"Empty strings") →
+	// required violation.
 	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
 		map[string]any{"name": ""})
 	if !errors.Is(err, ErrInputInvalid) {
@@ -114,8 +116,8 @@ func TestValidateInput_EmptyStringForRequired_ErrInputInvalid(t *testing.T) {
 }
 
 func TestValidateInput_NoSchema_OK(t *testing.T) {
-	// Scenario без `input:` блока (как у "ba", если create не имеет required) —
-	// любой provided проходит; nil-схема не отвергает.
+	// Scenario without an `input:` block (like "ba" if create has no
+	// required) — any provided passes; a nil schema doesn't reject.
 	const noInput = `name: create
 state_changes: {}
 tasks:
@@ -140,7 +142,7 @@ func TestValidateInput_NilLoader_ConfigError(t *testing.T) {
 	if err == nil {
 		t.Fatal("nil loader должен давать config-ошибку")
 	}
-	// НЕ ErrInputInvalid (это сбой конфигурации, не валидации) → handler даёт 500.
+	// NOT ErrInputInvalid (this is a config failure, not validation) → handler returns 500.
 	if errors.Is(err, ErrInputInvalid) {
 		t.Fatalf("nil loader не должен маппиться в ErrInputInvalid: %v", err)
 	}
@@ -157,8 +159,9 @@ func TestValidateInput_LoadError_Propagated(t *testing.T) {
 	}
 }
 
-// scenarioWithValidate — scenario с top-level `validate:`-секцией (кросс-полевой
-// инвариант «port обязателен, если tls выключен») + ассимметричный assert-таск.
+// scenarioWithValidate is a scenario with a top-level `validate:` section
+// (cross-field invariant "port is required if tls is off") + an asymmetric
+// assert task.
 const scenarioWithValidate = `name: create
 input:
   tls:
@@ -178,12 +181,12 @@ tasks:
     changed_when: "false"
 `
 
-// TestValidateInput_ValidateRuleFalse_ErrValidateFailed — правило-false на
-// request-пути → ErrValidateFailed (handler → 422 validation_failed) ДО коммита,
-// НЕ error_locked. Отдельный sentinel от ErrInputInvalid.
+// TestValidateInput_ValidateRuleFalse_ErrValidateFailed: a false rule on the
+// request path → ErrValidateFailed (handler → 422 validation_failed) BEFORE
+// commit, NOT error_locked. A separate sentinel from ErrInputInvalid.
 func TestValidateInput_ValidateRuleFalse_ErrValidateFailed(t *testing.T) {
 	loader := &fakeInputLoader{yaml: scenarioWithValidate}
-	// tls=false (default), port=0 (default) → правило false.
+	// tls=false (default), port=0 (default) → rule is false.
 	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create", map[string]any{})
 	if err == nil {
 		t.Fatal("ожидалась ошибка для нарушенного validate-правила, got nil")
@@ -196,16 +199,16 @@ func TestValidateInput_ValidateRuleFalse_ErrValidateFailed(t *testing.T) {
 	}
 }
 
-// TestValidateInput_ValidateRuleTrue_OK — правило-true → проходит.
+// TestValidateInput_ValidateRuleTrue_OK: a true rule → passes.
 func TestValidateInput_ValidateRuleTrue_OK(t *testing.T) {
 	loader := &fakeInputLoader{yaml: scenarioWithValidate}
-	// port>0 покрывает инвариант.
+	// port>0 satisfies the invariant.
 	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
 		map[string]any{"port": 6379})
 	if err != nil {
 		t.Fatalf("валидный input (port>0): %v", err)
 	}
-	// tls=true тоже покрывает (кросс-полевой OR).
+	// tls=true also satisfies it (cross-field OR).
 	err = ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
 		map[string]any{"tls": true})
 	if err != nil {
@@ -213,8 +216,8 @@ func TestValidateInput_ValidateRuleTrue_OK(t *testing.T) {
 	}
 }
 
-// TestValidateInput_MultipleRules_FirstFalseMessage — несколько правил: первый
-// false выигрывает, его message попадает в ошибку (короткое замыкание).
+// TestValidateInput_MultipleRules_FirstFalseMessage: multiple rules — the
+// first false one wins, its message ends up in the error (short-circuit).
 func TestValidateInput_MultipleRules_FirstFalseMessage(t *testing.T) {
 	const multi = `name: create
 input:
@@ -229,7 +232,7 @@ validate:
 tasks: []
 `
 	loader := &fakeInputLoader{yaml: multi}
-	// port=0 валит первое; второе (port<65536) истинно — но первый выигрывает.
+	// port=0 fails the first; the second (port<65536) is true — but the first wins.
 	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create", map[string]any{})
 	if !errors.Is(err, ErrValidateFailed) {
 		t.Fatalf("ожидался ErrValidateFailed: %v", err)
@@ -242,9 +245,9 @@ tasks: []
 	}
 }
 
-// TestValidateInput_ValidateAfterSchema — schema-провал (type-mismatch) бьёт
-// РАНЬШЕ validate-правила: validate `that` рассчитан на корректные типы. port=
-// строка → ErrInputInvalid (НЕ ErrValidateFailed).
+// TestValidateInput_ValidateAfterSchema: a schema failure (type mismatch)
+// hits BEFORE the validate rule — validate `that` assumes correct types.
+// port=string → ErrInputInvalid (NOT ErrValidateFailed).
 func TestValidateInput_ValidateAfterSchema(t *testing.T) {
 	loader := &fakeInputLoader{yaml: scenarioWithValidate}
 	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",

@@ -10,8 +10,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// fakeVaultReader — InputVaultReader: отдаёт фикс-секрет, регистрирует
-// прочитанные пути (чтобы проверить, что reject НЕ доходит до ReadKV).
+// fakeVaultReader — an InputVaultReader: returns a fixed secret, records
+// the paths read (to verify that a reject does NOT reach ReadKV).
 type fakeVaultReader struct {
 	data map[string]map[string]any
 	read []string
@@ -25,7 +25,7 @@ func (f *fakeVaultReader) ReadKV(_ context.Context, path string) (map[string]any
 	return nil, errors.New("not found")
 }
 
-// fakeAuditWriter — собирает записанные events.
+// fakeAuditWriter — collects written events.
 type fakeAuditWriter struct {
 	events []*audit.Event
 }
@@ -42,7 +42,7 @@ func vaultTestRunner(vc InputVaultReader, aw audit.Writer, deny []string) *Runne
 	}
 }
 
-// scopedSecret — InputSchema secret-поля с заданным vault_scope.
+// scopedSecret — an InputSchema secret field with the given vault_scope.
 func scopedSecret(scope string) *config.InputSchema {
 	return &config.InputSchema{Type: "string", Secret: true, VaultScope: scope}
 }
@@ -51,8 +51,8 @@ func ac() inputVaultAuditCtx {
 	return inputVaultAuditCtx{aid: "archon-alice", incarnation: "redis-prod", scenario: "create"}
 }
 
-// TestInputVaultResolver_InScopeReads — ref в scope резолвится в значение поля,
-// audit пишет result=ok с path+field, без значения секрета.
+// TestInputVaultResolver_InScopeReads — a ref in scope resolves to the field value,
+// audit writes result=ok with path+field, without the secret value.
 func TestInputVaultResolver_InScopeReads(t *testing.T) {
 	vc := &fakeVaultReader{data: map[string]map[string]any{
 		"secret/services/redis/prod": {"password": "s3cr3t-resolved-32ch"},
@@ -70,7 +70,7 @@ func TestInputVaultResolver_InScopeReads(t *testing.T) {
 		t.Fatalf("got=%v", got)
 	}
 	requireAudit(t, aw, "ok", "secret/services/redis/prod", "redis_password")
-	// значение секрета не должно попасть в payload.
+	// The secret value must not end up in the payload.
 	for _, e := range aw.events {
 		for k, v := range e.Payload {
 			if s, ok := v.(string); ok && s == "s3cr3t-resolved-32ch" {
@@ -80,8 +80,8 @@ func TestInputVaultResolver_InScopeReads(t *testing.T) {
 	}
 }
 
-// TestInputVaultResolver_NoScopeRejected — поле без vault_scope → reject
-// (default-deny), ReadKV не вызывается, audit denied/no_scope.
+// TestInputVaultResolver_NoScopeRejected — a field without vault_scope → reject
+// (default-deny), ReadKV isn't called, audit denied/no_scope.
 func TestInputVaultResolver_NoScopeRejected(t *testing.T) {
 	vc := &fakeVaultReader{}
 	aw := &fakeAuditWriter{}
@@ -99,7 +99,7 @@ func TestInputVaultResolver_NoScopeRejected(t *testing.T) {
 	requireAuditReason(t, aw, "denied", "no_scope")
 }
 
-// TestInputVaultResolver_OutOfScopeRejected — ref вне scope → reject, без ReadKV.
+// TestInputVaultResolver_OutOfScopeRejected — a ref outside scope → reject, no ReadKV.
 func TestInputVaultResolver_OutOfScopeRejected(t *testing.T) {
 	vc := &fakeVaultReader{}
 	aw := &fakeAuditWriter{}
@@ -117,17 +117,17 @@ func TestInputVaultResolver_OutOfScopeRejected(t *testing.T) {
 	requireAuditReason(t, aw, "denied", "out_of_scope")
 }
 
-// TestInputVaultResolver_DenyListRejected — ref в scope, но в hard deny-list
-// (secret/keeper/*) → reject, без ReadKV, audit denied/deny_list.
+// TestInputVaultResolver_DenyListRejected — a ref in scope, but on the hard deny-list
+// (secret/keeper/*) → reject, no ReadKV, audit denied/deny_list.
 //
-// Покрывает обходы deny-list через ненормализованный путь (security-regression):
-// `secret//keeper/x` (двойной слэш), `secret/keeper/../keeper/x` и
-// `secret/./keeper/x` (dot-сегменты) при ошибочно широком scope `secret/*`. До
-// фикса ParseRef все три обходили DeniedByVaultFloor (HasPrefix не матчил), а
-// ReadKV сводил путь к реальному запрещённому `secret/keeper/...`. Теперь ref
-// нормализуется в ParseRef: `//` схлопывается → ловится deny-list-ом (denied/
-// deny_list), `.`/`..` отвергаются раньше → denied/parse_error. В обоих случаях
-// ReadKV НЕ вызывается.
+// Covers deny-list bypasses via a non-normalized path (security regression):
+// `secret//keeper/x` (double slash), `secret/keeper/../keeper/x`, and
+// `secret/./keeper/x` (dot segments) under an accidentally broad scope `secret/*`. Before
+// the ParseRef fix, all three bypassed DeniedByVaultFloor (HasPrefix didn't match), and
+// ReadKV would resolve the path down to the actually forbidden `secret/keeper/...`. Now the ref
+// is normalized in ParseRef: `//` collapses → caught by the deny-list (denied/
+// deny_list), `.`/`..` are rejected earlier → denied/parse_error. In both cases
+// ReadKV is NOT called.
 func TestInputVaultResolver_DenyListRejected(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -135,9 +135,9 @@ func TestInputVaultResolver_DenyListRejected(t *testing.T) {
 		wantReason string
 	}{
 		{"plain", "vault:secret/keeper/jwt-signing-key#key", "deny_list"},
-		// `//` нормализуется в `/` → попадает под deny-list.
+		// `//` normalizes to `/` → falls under the deny-list.
 		{"double_slash", "vault:secret//keeper/jwt-signing-key#key", "deny_list"},
-		// `..`/`.`-сегменты отвергаются ParseRef-ом ДО deny-check.
+		// `..`/`.` segments are rejected by ParseRef BEFORE the deny-check.
 		{"dot_dot", "vault:secret/keeper/../keeper/jwt-signing-key#key", "parse_error"},
 		{"single_dot", "vault:secret/./keeper/jwt-signing-key#key", "parse_error"},
 	}
@@ -148,7 +148,7 @@ func TestInputVaultResolver_DenyListRejected(t *testing.T) {
 			r := vaultTestRunner(vc, aw, nil)
 			resolve := r.newInputVaultResolver(context.Background(), ac(), nil)
 
-			// scope ошибочно широкий (secret/*) — защита только на deny-list/ParseRef.
+			// scope is accidentally broad (secret/*) — protection relies only on deny-list/ParseRef.
 			_, err := resolve("bad", scopedSecret("secret/*"), c.ref)
 			if err == nil {
 				t.Fatalf("ожидался reject для %q", c.ref)
@@ -161,7 +161,7 @@ func TestInputVaultResolver_DenyListRejected(t *testing.T) {
 	}
 }
 
-// TestInputVaultResolver_ConfigDenyExtends — config-расширение deny-list работает.
+// TestInputVaultResolver_ConfigDenyExtends — config-extension of the deny-list works.
 func TestInputVaultResolver_ConfigDenyExtends(t *testing.T) {
 	vc := &fakeVaultReader{data: map[string]map[string]any{
 		"secret/team/x": {"k": "v"},
@@ -177,8 +177,8 @@ func TestInputVaultResolver_ConfigDenyExtends(t *testing.T) {
 	requireAuditReason(t, aw, "denied", "deny_list")
 }
 
-// TestInputVaultResolver_NilVault — фабрика с nil-Vault возвращает nil-резолвер
-// (input-vault-refs не поддержаны).
+// TestInputVaultResolver_NilVault — the factory with a nil Vault returns a nil resolver
+// (input-vault-refs aren't supported).
 func TestInputVaultResolver_NilVault(t *testing.T) {
 	r := vaultTestRunner(nil, &fakeAuditWriter{}, nil)
 	if got := r.newInputVaultResolver(context.Background(), ac(), nil); got != nil {

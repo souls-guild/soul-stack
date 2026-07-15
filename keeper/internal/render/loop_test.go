@@ -10,7 +10,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// loopTask строит module-задачу с loop: для render-тестов.
+// loopTask builds a module task with loop: for render tests.
 func loopTask(loop *config.LoopSpec, params map[string]any) config.Task {
 	return config.Task{
 		Name:   "loop task",
@@ -19,14 +19,14 @@ func loopTask(loop *config.LoopSpec, params map[string]any) config.Task {
 	}
 }
 
-// cmdOf достаёт params.command из RenderedTask.
+// cmdOf extracts params.command from a RenderedTask.
 func cmdOf(t *testing.T, rt *RenderedTask) string {
 	t.Helper()
 	return rt.Params.GetFields()["cmd"].GetStringValue()
 }
 
-// TestRenderLoop_OverInputArray — loop по input-массиву → N задач с item,
-// сквозные индексы.
+// TestRenderLoop_OverInputArray — loop over an input array → N tasks with item,
+// continuous indices.
 func TestRenderLoop_OverInputArray(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "x",
@@ -66,8 +66,8 @@ func TestRenderLoop_OverInputArray(t *testing.T) {
 	}
 }
 
-// TestRenderLoop_ContinuousIndex — задача до loop + loop + задача после: индексы
-// сквозные.
+// TestRenderLoop_ContinuousIndex — task before loop + loop + task after:
+// indices stay continuous.
 func TestRenderLoop_ContinuousIndex(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "x",
@@ -102,8 +102,8 @@ func TestRenderLoop_ContinuousIndex(t *testing.T) {
 	}
 }
 
-// TestRenderLoop_OverObject — object: as=значение, index_as=ключ, порядок
-// алфавитный по ключам.
+// TestRenderLoop_OverObject — object: as=value, index_as=key, iteration order
+// is alphabetical by key.
 func TestRenderLoop_OverObject(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "x",
@@ -115,7 +115,7 @@ func TestRenderLoop_OverObject(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario: manifest,
-		// Намеренно не в алфавитном порядке: bob, alice.
+		// Intentionally not alphabetical: bob, alice.
 		Input:       map[string]any{"acl": map[string]any{"bob": "ro", "alice": "rw"}},
 		Incarnation: IncarnationMeta{Name: "svc"},
 		Hosts:       []*topology.HostFacts{host("h", []string{"svc"}, nil)},
@@ -127,7 +127,7 @@ func TestRenderLoop_OverObject(t *testing.T) {
 	if len(tasks) != 2 {
 		t.Fatalf("len(tasks) = %d, want 2", len(tasks))
 	}
-	// Алфавитный порядок ключей: alice, bob.
+	// Alphabetical key order: alice, bob.
 	if got := cmdOf(t, tasks[0]); got != "set alice rw" {
 		t.Errorf("tasks[0] = %q, want 'set alice rw'", got)
 	}
@@ -136,7 +136,7 @@ func TestRenderLoop_OverObject(t *testing.T) {
 	}
 }
 
-// TestRenderLoop_IndexAsArray — index_as для массива — 0-based индекс.
+// TestRenderLoop_IndexAsArray — index_as for an array is a 0-based index.
 func TestRenderLoop_IndexAsArray(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "x",
@@ -167,7 +167,7 @@ func TestRenderLoop_IndexAsArray(t *testing.T) {
 	}
 }
 
-// TestRenderLoop_WhenFilters — when: фильтрует элементы.
+// TestRenderLoop_WhenFilters — when: filters elements.
 func TestRenderLoop_WhenFilters(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "x",
@@ -199,10 +199,11 @@ func TestRenderLoop_WhenFilters(t *testing.T) {
 	}
 }
 
-// TestRenderLoop_WhenBySoulprintRejected — when: со ссылкой на soulprint →
-// понятная ошибка. loop (items+when) host-инвариантен в пилоте; host-вариативный
-// предикат по soulprint конкретного хоста не поддержан (per-host loop-фильтрация
-// отложена), а НЕ молчаливо решается по первому хосту (баг 2).
+// TestRenderLoop_WhenBySoulprintRejected — when: referencing soulprint → a
+// clear error. loop (items+when) is host-invariant in the pilot; a
+// host-varying predicate on a specific host's soulprint isn't supported
+// (per-host loop filtering is deferred), and must NOT be silently resolved
+// against the first host (bug 2).
 func TestRenderLoop_WhenBySoulprintRejected(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "x",
@@ -230,8 +231,8 @@ func TestRenderLoop_WhenBySoulprintRejected(t *testing.T) {
 	}
 }
 
-// TestRenderLoop_WhenFiltersAll — when: отсеивает ВСЕ элементы → 0 задач без
-// паники (валидный no-op, как пустой items).
+// TestRenderLoop_WhenFiltersAll — when: filters out ALL elements → 0 tasks, no
+// panic (a valid no-op, same as empty items).
 func TestRenderLoop_WhenFiltersAll(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "x",
@@ -259,8 +260,8 @@ func TestRenderLoop_WhenFiltersAll(t *testing.T) {
 	}
 }
 
-// TestRenderLoop_WhenNonBool — when: возвращает не-bool → понятная ошибка
-// (предикат обязан возвращать булево).
+// TestRenderLoop_WhenNonBool — when: returns non-bool → a clear error (the
+// predicate must return a boolean).
 func TestRenderLoop_WhenNonBool(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "x",
@@ -287,9 +288,10 @@ func TestRenderLoop_WhenNonBool(t *testing.T) {
 	}
 }
 
-// TestRenderLoop_WithRunOnce — loop + run_once: вместе: run_once режет таргет до
-// одного хоста (по SID), весь loop прокатывается на нём (итерации на единственном
-// хосте). Разрешено: оси run_once (таргет) и loop (итерации) ортогональны.
+// TestRenderLoop_WithRunOnce — loop + run_once together: run_once trims the
+// target to a single host (by SID), the whole loop runs on it (iterations on
+// that one host). Allowed: the run_once (target) and loop (iteration) axes are
+// orthogonal.
 func TestRenderLoop_WithRunOnce(t *testing.T) {
 	task := loopTask(&config.LoopSpec{Items: "${ input.xs }", As: "x"}, map[string]any{"cmd": "do ${ x }"})
 	task.RunOnce = true
@@ -309,7 +311,7 @@ func TestRenderLoop_WithRunOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	// 3 итерации, каждая на единственном хосте (первый по SID — h1).
+	// 3 iterations, each on the single host (first by SID — h1).
 	if len(tasks) != 3 || len(plans) != 3 {
 		t.Fatalf("len(tasks)=%d len(plans)=%d, want 3,3", len(tasks), len(plans))
 	}
@@ -323,16 +325,16 @@ func TestRenderLoop_WithRunOnce(t *testing.T) {
 	}
 }
 
-// TestRenderLoop_InDestinyExpands — loop: на задаче внутри destiny РАЗВОРАЧИВАЕТСЯ
-// (слайс E снят, guardDestinyTask больше не режет loop): одна loop-задача destiny
-// даёт N RenderedTask со сквозными индексами, продолжающими предыдущие задачи
-// destiny. items берётся из destiny-input (передан через apply.input). Расширенное
-// покрытие destiny-loop — destiny_loop_test.go; здесь — минимальная регрессия
-// рядом с loop-механикой.
+// TestRenderLoop_InDestinyExpands — loop: a task inside a destiny EXPANDS
+// (slice E lifted, guardDestinyTask no longer cuts loop): one destiny loop task
+// yields N RenderedTask with continuous indices carrying on from earlier
+// destiny tasks. items comes from destiny-input (passed via apply.input).
+// Broader destiny-loop coverage lives in destiny_loop_test.go; this is a
+// minimal regression alongside the loop mechanics.
 func TestRenderLoop_InDestinyExpands(t *testing.T) {
 	d := flatDestiny()
-	// destiny-input получает xs (массив items) через apply.input; вторая задача
-	// destiny размножается loop-ом по нему.
+	// destiny-input receives xs (an item array) via apply.input; the destiny's
+	// second task fans out via loop over it.
 	d.Input["xs"] = &config.InputSchema{Type: "array", Required: true}
 	d.Tasks[1].Loop = &config.LoopSpec{Items: "${ input.xs }", As: "x"}
 	d.Tasks[1].Module.Params["cmd"] = "echo ${ x }"
@@ -349,7 +351,7 @@ func TestRenderLoop_InDestinyExpands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	// task0 (marker, Index 0) + loop×3 (Index 1,2,3) = 4 задачи, сквозные индексы.
+	// task0 (marker, Index 0) + loop×3 (Index 1,2,3) = 4 tasks, continuous indices.
 	if len(tasks) != 4 {
 		t.Fatalf("len(tasks) = %d, want 4 (marker + loop×3 в destiny)", len(tasks))
 	}
@@ -363,7 +365,7 @@ func TestRenderLoop_InDestinyExpands(t *testing.T) {
 	}
 }
 
-// TestRenderLoop_DefaultAs — as: опущен → переменная item.
+// TestRenderLoop_DefaultAs — as: omitted → variable defaults to item.
 func TestRenderLoop_DefaultAs(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "x",
@@ -388,8 +390,8 @@ func TestRenderLoop_DefaultAs(t *testing.T) {
 	}
 }
 
-// TestRenderLoop_WithWhere — loop катится на КАЖДОМ отфильтрованном where:-хосте;
-// per-iteration host-инвариантность сохраняется (params одинаковы на хостах).
+// TestRenderLoop_WithWhere — loop runs on EVERY host passing where:; per-
+// iteration host invariance still holds (params match across hosts).
 func TestRenderLoop_WithWhere(t *testing.T) {
 	task := loopTask(&config.LoopSpec{Items: "${ input.xs }", As: "x"}, map[string]any{"cmd": "do ${ x }"})
 	task.Where = "soulprint.self.os.family == 'debian'"
@@ -410,7 +412,7 @@ func TestRenderLoop_WithWhere(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	// 2 итерации (a, b); каждая таргетит только debian-хосты (deb1, deb2).
+	// 2 iterations (a, b); each targets only the debian hosts (deb1, deb2).
 	if len(tasks) != 2 || len(plans) != 2 {
 		t.Fatalf("len(tasks)=%d len(plans)=%d, want 2,2", len(tasks), len(plans))
 	}
@@ -421,8 +423,8 @@ func TestRenderLoop_WithWhere(t *testing.T) {
 	}
 }
 
-// TestRenderLoop_WithSerial — loop под serial: прокатывается целиком на каждом
-// хосте волны; SerialWidth наследуется всеми итерациями (оси ортогональны).
+// TestRenderLoop_WithSerial — loop under serial: runs in full on each host of
+// a wave; SerialWidth is inherited by every iteration (orthogonal axes).
 func TestRenderLoop_WithSerial(t *testing.T) {
 	task := loopTask(&config.LoopSpec{Items: "${ input.xs }", As: "x"}, map[string]any{"cmd": "do ${ x }"})
 	task.Serial = 1
@@ -455,12 +457,13 @@ func TestRenderLoop_WithSerial(t *testing.T) {
 	}
 }
 
-// TestRenderLoop_PerIterationHostInvariant — host-зависимые params ВНУТРИ
-// итерации (разные хосты дают разный результат) → ошибка host-инвариантности,
-// проверка применяется по-итерационно.
+// TestRenderLoop_PerIterationHostInvariant — host-dependent params WITHIN an
+// iteration (different hosts yield different results) → host-invariance
+// error; the check applies per iteration.
 func TestRenderLoop_PerIterationHostInvariant(t *testing.T) {
-	// params зависит и от loop-переменной, и от soulprint хоста: на разных
-	// хостах одна итерация даёт разные params — нарушение host-инвариантности.
+	// params depends on both the loop variable and the host's soulprint: on
+	// different hosts, one iteration yields different params — a host-invariance
+	// violation.
 	task := loopTask(&config.LoopSpec{Items: "${ input.xs }", As: "x"},
 		map[string]any{"cmd": "do ${ x } on ${ soulprint.self.os.family }"})
 	manifest := &config.ScenarioManifest{Name: "x", Tasks: []config.Task{task}}
@@ -481,8 +484,8 @@ func TestRenderLoop_PerIterationHostInvariant(t *testing.T) {
 	}
 }
 
-// TestRenderLoop_PerIterationDifferentParamsOK — разные params ПО ОСИ ИТЕРАЦИЙ
-// (но host-инвариантные внутри каждой) — норма, не ошибка.
+// TestRenderLoop_PerIterationDifferentParamsOK — different params ACROSS
+// iterations (but host-invariant within each) is normal, not an error.
 func TestRenderLoop_PerIterationDifferentParamsOK(t *testing.T) {
 	task := loopTask(&config.LoopSpec{Items: "${ input.xs }", As: "x"},
 		map[string]any{"cmd": "do ${ x }"})
@@ -507,7 +510,7 @@ func TestRenderLoop_PerIterationDifferentParamsOK(t *testing.T) {
 	}
 }
 
-// TestRenderLoop_EmptyItems — пустой items → 0 задач (валидный no-op).
+// TestRenderLoop_EmptyItems — empty items → 0 tasks (a valid no-op).
 func TestRenderLoop_EmptyItems(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "x",
@@ -532,8 +535,8 @@ func TestRenderLoop_EmptyItems(t *testing.T) {
 	}
 }
 
-// TestRenderLoop_NonCollectionItems — items, не разрешившийся в array/object →
-// ошибка.
+// TestRenderLoop_NonCollectionItems — items that doesn't resolve to an
+// array/object → error.
 func TestRenderLoop_NonCollectionItems(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "x",
@@ -554,25 +557,26 @@ func TestRenderLoop_NonCollectionItems(t *testing.T) {
 	}
 }
 
-// whenLoopTask строит module-задачу с loop: + статическим when: для
-// static-when-skip-тестов.
+// whenLoopTask builds a module task with loop: + a static when: for the
+// static-when-skip tests.
 func whenLoopTask(when string, loop *config.LoopSpec, params map[string]any) config.Task {
 	t := loopTask(loop, params)
 	t.When = when
 	return t
 }
 
-// TestRenderLoop_StaticWhenSkip_UnresolvableItems — ★ баговый кейс (ordering
-// static-when ↔ loop.items): loop-задача со статически-false when: и items на
-// ОТСУТСТВУЮЩИЙ input-ключ. static-when предшествует loop-fan-out (инвариант
-// architect): задача скипается ЦЕЛИКОМ ДО resolveLoopItems, поэтому absent-ключ
-// в items НЕ должен ронять Render. Резолв items здесь падает (нет input.users) →
-// 1 skip-placeholder (Params==nil, When протянут, FlowContext≠nil, Index сквозной).
+// TestRenderLoop_StaticWhenSkip_UnresolvableItems — ★ bug case (ordering of
+// static-when vs loop.items): a loop task with a statically-false when: and
+// items pointing at a MISSING input key. static-when precedes loop fan-out
+// (architect invariant): the task is skipped ENTIRELY BEFORE resolveLoopItems,
+// so an absent key in items must NOT crash Render. Resolving items here would
+// fail (no input.users) → 1 skip placeholder (Params==nil, When carried
+// through, FlowContext≠nil, Index continuous).
 func TestRenderLoop_StaticWhenSkip_UnresolvableItems(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "x",
 		Tasks: []config.Task{whenLoopTask(
-			"input.action == 'apply'", // static-false при action=update_acls
+			"input.action == 'apply'", // static-false when action=update_acls
 			&config.LoopSpec{Items: "${ input.users }", As: "user"},
 			map[string]any{"cmd": "useradd ${ user.name }"},
 		)},
@@ -580,7 +584,7 @@ func TestRenderLoop_StaticWhenSkip_UnresolvableItems(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Input:       map[string]any{"action": "update_acls"}, // users НЕ передан
+		Input:       map[string]any{"action": "update_acls"}, // users not passed
 		Incarnation: IncarnationMeta{Name: "svc"},
 		Hosts:       []*topology.HostFacts{host("h", []string{"svc"}, nil)},
 	}
@@ -609,8 +613,9 @@ func TestRenderLoop_StaticWhenSkip_UnresolvableItems(t *testing.T) {
 	}
 }
 
-// TestRenderLoop_StaticWhenSkip_UnresolvableItems_ContinuousIndex — нерезолвимый
-// static-skip loop в середине плана: index сквозной (1 placeholder, не N).
+// TestRenderLoop_StaticWhenSkip_UnresolvableItems_ContinuousIndex — an
+// unresolvable static-skip loop mid-plan: index stays continuous (1
+// placeholder, not N).
 func TestRenderLoop_StaticWhenSkip_UnresolvableItems_ContinuousIndex(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "x",
@@ -633,7 +638,7 @@ func TestRenderLoop_StaticWhenSkip_UnresolvableItems_ContinuousIndex(t *testing.
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	// before(0) + skip-placeholder(1) + after(2) = 3 задачи.
+	// before(0) + skip-placeholder(1) + after(2) = 3 tasks.
 	if len(tasks) != 3 {
 		t.Fatalf("len(tasks) = %d, want 3 (before + 1 placeholder + after)", len(tasks))
 	}
@@ -650,13 +655,14 @@ func TestRenderLoop_StaticWhenSkip_UnresolvableItems_ContinuousIndex(t *testing.
 	}
 }
 
-// TestRenderLoop_StaticTrueWhen_FansOut — реверс на классификацию: static-TRUE
-// when: + loop → обычный fan-out N реальных задач (активную ветку не скипаем).
+// TestRenderLoop_StaticTrueWhen_FansOut — classification reverse case:
+// static-TRUE when: + loop → normal fan-out into N real tasks (an active
+// branch is never skipped).
 func TestRenderLoop_StaticTrueWhen_FansOut(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "x",
 		Tasks: []config.Task{whenLoopTask(
-			"input.action == 'apply'", // static-TRUE при action=apply
+			"input.action == 'apply'", // static-TRUE when action=apply
 			&config.LoopSpec{Items: "${ input.users }", As: "user"},
 			map[string]any{"cmd": "useradd ${ user.name }"},
 		)},
@@ -688,10 +694,10 @@ func TestRenderLoop_StaticTrueWhen_FansOut(t *testing.T) {
 	}
 }
 
-// TestRenderLoop_MixedWhen_NotStaticSkipped — реверс на классификацию: mixed-when
-// (input + register) НЕ статический → items резолвится, fan-out обычный (register-
-// зависимый when протягивается строкой, вычисляется Soul-side). При резолвимом
-// items static-skip-ветка НЕ должна срабатывать.
+// TestRenderLoop_MixedWhen_NotStaticSkipped — classification reverse case:
+// mixed-when (input + register) is NOT static → items resolves, fan-out is
+// normal (register-dependent when is carried as a string, evaluated
+// Soul-side). With resolvable items, the static-skip branch must NOT trigger.
 func TestRenderLoop_MixedWhen_NotStaticSkipped(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "x",
@@ -714,7 +720,7 @@ func TestRenderLoop_MixedWhen_NotStaticSkipped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	// register-зависимый when → НЕ static-skip: items резолвится, fan-out по нему.
+	// register-dependent when → NOT static-skip: items resolves, fan-out over it.
 	if len(tasks) != 1 {
 		t.Fatalf("len(tasks) = %d, want 1 (mixed-when не статический, fan-out по items)", len(tasks))
 	}
@@ -726,9 +732,9 @@ func TestRenderLoop_MixedWhen_NotStaticSkipped(t *testing.T) {
 	}
 }
 
-// TestRenderLoop_StaticWhenSkip_ConsistentAcrossPassages — static-false loop
-// (нерезолвимый items) даёт одинаковый результат при повторном рендере (passage
-// активируется заново). Один input-снимок → один и тот же 1-placeholder skip.
+// TestRenderLoop_StaticWhenSkip_ConsistentAcrossPassages — a static-false loop
+// (unresolvable items) gives the same result on re-render (passage activates
+// again). One input snapshot → the same 1-placeholder skip every time.
 func TestRenderLoop_StaticWhenSkip_ConsistentAcrossPassages(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "x",
@@ -764,14 +770,15 @@ func TestRenderLoop_StaticWhenSkip_ConsistentAcrossPassages(t *testing.T) {
 	}
 }
 
-// TestRenderLoop_StaticWhenSkip_PreservesOnChanges — guard: static-false loop-
-// задача с onchanges: → skip-placeholder сохраняет requisite-имена (loopSkipPlaceholder
-// протягивает onChangesNames симметрично staticSkipPlaceholder) → финальный
-// resolveOnChanges мапит их в OnChangesIdx. Без протяжки имена терялись бы на
-// placeholder и OnChangesIdx остался бы nil — латентная потеря requisites.
+// TestRenderLoop_StaticWhenSkip_PreservesOnChanges — guard: a static-false loop
+// task with onchanges: → the skip placeholder preserves the requisite names
+// (loopSkipPlaceholder carries onChangesNames symmetrically to
+// staticSkipPlaceholder) → the final resolveOnChanges maps them into
+// OnChangesIdx. Without carrying them, names would be lost at the placeholder
+// and OnChangesIdx would stay nil — a latent loss of requisites.
 func TestRenderLoop_StaticWhenSkip_PreservesOnChanges(t *testing.T) {
 	loopT := whenLoopTask(
-		"input.action == 'apply'", // static-false при action=update_acls
+		"input.action == 'apply'", // static-false when action=update_acls
 		&config.LoopSpec{Items: "${ input.users }", As: "user"},
 		map[string]any{"cmd": "useradd ${ user.name }"},
 	)
@@ -791,7 +798,7 @@ func TestRenderLoop_StaticWhenSkip_PreservesOnChanges(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Input:       map[string]any{"action": "update_acls"}, // users НЕ передан → static-skip ДО resolveLoopItems
+		Input:       map[string]any{"action": "update_acls"}, // users NOT passed → static-skip BEFORE resolveLoopItems
 		Incarnation: IncarnationMeta{Name: "svc"},
 		Hosts:       []*topology.HostFacts{host("h", []string{"svc"}, nil)},
 	}
@@ -799,7 +806,7 @@ func TestRenderLoop_StaticWhenSkip_PreservesOnChanges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	// probe(0) + 1 skip-placeholder(1) = 2 задачи.
+	// probe(0) + 1 skip-placeholder(1) = 2 tasks.
 	if len(tasks) != 2 {
 		t.Fatalf("len(tasks) = %d, want 2 (probe + 1 placeholder)", len(tasks))
 	}
@@ -812,8 +819,8 @@ func TestRenderLoop_StaticWhenSkip_PreservesOnChanges(t *testing.T) {
 	}
 }
 
-// TestRenderLoop_OnApplyRejected — loop на apply-задаче по-прежнему вне pilot
-// (guardPilotDSL отвергает с ErrUnsupportedDSL).
+// TestRenderLoop_OnApplyRejected — loop on an apply task is still out of pilot
+// scope (guardPilotDSL rejects with ErrUnsupportedDSL).
 func TestRenderLoop_OnApplyRejected(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "x",

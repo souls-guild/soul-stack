@@ -9,12 +9,12 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// moduleTask — короткий хелпер: module-задача с пустыми params.
+// moduleTask is a short helper: a module task with empty params.
 func moduleTask(name, module string) config.Task {
 	return config.Task{Name: name, Module: &config.ModuleTask{Module: module, Params: map[string]any{}}}
 }
 
-// renderBlock — общий прогон Render над одним block-сценарием на заданных хостах.
+// renderBlock runs Render over a single block scenario on the given hosts.
 func renderBlock(t *testing.T, task config.Task, hosts []*topology.HostFacts, input ...map[string]any) ([]*RenderedTask, []DispatchPlan) {
 	t.Helper()
 	var in0 map[string]any
@@ -35,10 +35,10 @@ func renderBlock(t *testing.T, task config.Task, hosts []*topology.HostFacts, in
 	return tasks, plans
 }
 
-// TestRenderBlock_WhenInheritance (guard #1) — block.when + child.when даёт
-// AND-merge `(<block.when>) && (<child.when>)` в RenderedTask.When каждого
-// потомка. Block.when протягивается КАК CEL-строка (Soul вычисляет), поэтому
-// проверяем текст предиката, а не исход.
+// TestRenderBlock_WhenInheritance (guard #1) — block.when + child.when
+// AND-merges into `(<block.when>) && (<child.when>)` in each child's
+// RenderedTask.When. block.when is carried AS a CEL string (Soul evaluates
+// it), so we check the predicate text, not the outcome.
 func TestRenderBlock_WhenInheritance(t *testing.T) {
 	task := config.Task{
 		Name: "grp",
@@ -59,16 +59,16 @@ func TestRenderBlock_WhenInheritance(t *testing.T) {
 	if got, want := tasks[0].When, "(input.action == 'apply') && (register.x.changed)"; got != want {
 		t.Errorf("child[0].When = %q, want %q", got, want)
 	}
-	// Потомок без своего when: наследует чистый block.when.
+	// A child without its own when inherits plain block.when.
 	if got, want := tasks[1].When, "input.action == 'apply'"; got != want {
 		t.Errorf("child[1].When = %q, want %q", got, want)
 	}
 }
 
-// TestRenderBlock_WhereInheritance (guard #2) — block.where применяется ко всем
-// потомкам: каждый получает одинаковый TargetSIDs (резолв where: на потомке с
-// унаследованным предикатом). where: по стабильному soulprint.self.sid (без
-// register — не требует staged probe).
+// TestRenderBlock_WhereInheritance (guard #2) — block.where applies to all
+// children: each gets the same TargetSIDs (where: resolved on the child with
+// the inherited predicate). where: uses stable soulprint.self.sid (no
+// register — no staged probe required).
 func TestRenderBlock_WhereInheritance(t *testing.T) {
 	hosts := []*topology.HostFacts{
 		host("a.example.com", []string{"svc"}, map[string]any{"sid": "a.example.com"}),
@@ -93,9 +93,9 @@ func TestRenderBlock_WhereInheritance(t *testing.T) {
 	}
 }
 
-// TestRenderBlock_WhereAndMerge — block.where AND child.where: оба сужают таргет
-// (пересечение). На двух хостах block.where отбирает оба, child.where сужает до
-// одного.
+// TestRenderBlock_WhereAndMerge — block.where AND child.where: both narrow the
+// target (intersection). Of two hosts, block.where selects both, child.where
+// narrows to one.
 func TestRenderBlock_WhereAndMerge(t *testing.T) {
 	hosts := []*topology.HostFacts{
 		host("a.example.com", []string{"svc"}, map[string]any{"sid": "a.example.com"}),
@@ -105,7 +105,7 @@ func TestRenderBlock_WhereAndMerge(t *testing.T) {
 	inner.Where = "soulprint.self.sid == 'a.example.com'"
 	task := config.Task{
 		Name:  "grp",
-		Where: "soulprint.self.sid != 'c.example.com'", // оба хоста проходят
+		Where: "soulprint.self.sid != 'c.example.com'", // both hosts pass
 		Block: &config.BlockTask{Block: []config.Task{inner}},
 	}
 	_, plans := renderBlock(t, task, hosts)
@@ -117,10 +117,11 @@ func TestRenderBlock_WhereAndMerge(t *testing.T) {
 	}
 }
 
-// TestRenderBlock_SerialInheritance (guard #3, render-часть) — block.serial: 1 на
-// 3 хостах → каждый потомок несёт SerialWidth=1 в DispatchPlan. Integration-часть
-// (splitWaves+groupByHost: ApplyRequest хоста несёт ВСЕ потомки блока, 3 волны по
-// 1) проверяется в scenario-пакете (TestDispatch_BlockSerialWave).
+// TestRenderBlock_SerialInheritance (guard #3, render part) — block.serial: 1
+// on 3 hosts → each child carries SerialWidth=1 in DispatchPlan. The
+// integration part (splitWaves+groupByHost: a host's ApplyRequest carries ALL
+// block children, 3 waves of 1) is checked in the scenario package
+// (TestDispatch_BlockSerialWave).
 func TestRenderBlock_SerialInheritance(t *testing.T) {
 	hosts := []*topology.HostFacts{
 		host("a.example.com", []string{"svc"}, nil),
@@ -149,8 +150,9 @@ func TestRenderBlock_SerialInheritance(t *testing.T) {
 	}
 }
 
-// TestRenderBlock_RequisitesInheritance (guard #4) — block.onchanges: протягивается
-// на каждый потомок; resolveOnChanges резолвит register-имя в Index источника.
+// TestRenderBlock_RequisitesInheritance (guard #4) — block.onchanges carries
+// through to each child; resolveOnChanges resolves the register name to the
+// source's Index.
 func TestRenderBlock_RequisitesInheritance(t *testing.T) {
 	probe := moduleTask("probe", "core.exec.run")
 	probe.Register = "cfg"
@@ -182,8 +184,8 @@ func TestRenderBlock_RequisitesInheritance(t *testing.T) {
 	}
 }
 
-// TestRenderBlock_RequisitesUnion — block.onchanges + child.onchanges объединяются
-// в потомке (union имён → union индексов после резолва).
+// TestRenderBlock_RequisitesUnion — block.onchanges + child.onchanges union in
+// the child (union of names → union of indices after resolve).
 func TestRenderBlock_RequisitesUnion(t *testing.T) {
 	probeA := moduleTask("probeA", "core.exec.run")
 	probeA.Register = "a_reg"
@@ -206,7 +208,7 @@ func TestRenderBlock_RequisitesUnion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	// inner — индекс 2; источники a_reg=0, b_reg=1 → OnChangesIdx содержит оба.
+	// inner is index 2; sources a_reg=0, b_reg=1 → OnChangesIdx contains both.
 	got := tasks[2].OnChangesIdx
 	if len(got) != 2 {
 		t.Fatalf("inner.OnChangesIdx = %v, want union of 2 (block a_reg + child b_reg)", got)
@@ -217,9 +219,9 @@ func TestRenderBlock_RequisitesUnion(t *testing.T) {
 	}
 }
 
-// TestRenderBlock_NestedRecursion (guard #5) — block-в-block разворачивается,
-// Index сквозной, наследование каскадом (внешний when + внутренний block-when +
-// лист when → тройной AND).
+// TestRenderBlock_NestedRecursion (guard #5) — block-in-block expands with a
+// threaded Index, inheritance cascades (outer when + inner block-when + leaf
+// when → triple AND).
 func TestRenderBlock_NestedRecursion(t *testing.T) {
 	leaf := moduleTask("leaf", "core.exec.run")
 	leaf.When = "input.c"
@@ -247,22 +249,22 @@ func TestRenderBlock_NestedRecursion(t *testing.T) {
 	if got, want := tasks[0].When, "input.a"; got != want {
 		t.Errorf("sibling.When = %q, want %q", got, want)
 	}
-	// leaf: outer.when && inner.when && leaf.when (каскад; вложенный merge
-	// оборачивает уже-merged внешний предикат в свои скобки).
+	// leaf: outer.when && inner.when && leaf.when (cascade; the nested merge
+	// wraps the already-merged outer predicate in its own parens).
 	if got, want := tasks[1].When, "((input.a) && (input.b)) && (input.c)"; got != want {
 		t.Errorf("leaf.When = %q, want %q (каскад outer&&inner&&leaf)", got, want)
 	}
 }
 
-// TestRenderBlock_StaticSkipPerChild (guard #6) — block-level статический when:false
-// раскрывается в per-потомок skip-placeholder-ы (НЕ один за весь блок): block.when
-// вливается в каждого потомка через AND, static-when каждого становится false, и
-// каждый child эмитит СВОЙ placeholder. Index последующих задач не съезжает (число
-// placeholder-ов == число потомков).
+// TestRenderBlock_StaticSkipPerChild (guard #6) — a block-level static
+// when:false expands into per-child skip placeholders (NOT one for the whole
+// block): block.when is ANDed into each child, each child's static-when
+// becomes false, and each child emits its OWN placeholder. Index of
+// subsequent tasks doesn't shift (placeholder count == child count).
 func TestRenderBlock_StaticSkipPerChild(t *testing.T) {
 	grp := config.Task{
 		Name: "grp",
-		When: "input.action == 'apply'", // статический, false при другом action
+		When: "input.action == 'apply'", // static, false for any other action
 		Block: &config.BlockTask{Block: []config.Task{
 			moduleTask("inner1", "core.exec.run"),
 			moduleTask("inner2", "core.exec.run"),
@@ -281,7 +283,7 @@ func TestRenderBlock_StaticSkipPerChild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	// 3 per-потомок placeholder + 1 задача after = 4.
+	// 3 per-child placeholders + 1 after task = 4.
 	if len(tasks) != 4 {
 		t.Fatalf("len(tasks) = %d, want 4 (3 per-child placeholder + after)", len(tasks))
 	}
@@ -289,13 +291,13 @@ func TestRenderBlock_StaticSkipPerChild(t *testing.T) {
 		if tasks[i].Params != nil {
 			t.Errorf("placeholder[%d] Params = %v, want nil (skip)", i, tasks[i].Params)
 		}
-		// Унаследованный block.when вылит в каждого потомка (AND с пустым child.when
-		// → чистый block.when).
+		// Inherited block.when is ANDed into each child (AND with empty
+		// child.when → plain block.when).
 		if got, want := tasks[i].When, "input.action == 'apply'"; got != want {
 			t.Errorf("placeholder[%d].When = %q, want %q (унаследованный block.when)", i, got, want)
 		}
 	}
-	// after не съехал: Index 3.
+	// after didn't shift: Index 3.
 	if tasks[3].Index != 3 || tasks[3].Module != "core.exec.run" {
 		t.Errorf("after = {Index:%d Module:%q}, want {3 core.exec.run}", tasks[3].Index, tasks[3].Module)
 	}
@@ -309,20 +311,21 @@ func TestRenderBlock_StaticSkipPerChild(t *testing.T) {
 	}
 }
 
-// TestRenderBlock_StaticSkipPreservesRegister (guard #6b, кейс #10) — static-false
-// scenario-block с register-несущим потомком: register потомка виден СНАРУЖИ через
-// skip-placeholder, onchanges-задача снаружи резолвит его в OnChangesIdx, render НЕ
-// падает ErrOnChangesUnknownRegister. Это и есть исправляемый латентный дефект.
+// TestRenderBlock_StaticSkipPreservesRegister (guard #6b, case #10) — a
+// static-false scenario block with a register-carrying child: the child's
+// register is visible FROM OUTSIDE via the skip placeholder, an outside
+// onchanges task resolves it in OnChangesIdx, render does NOT fail with
+// ErrOnChangesUnknownRegister. This is the latent defect being fixed.
 func TestRenderBlock_StaticSkipPreservesRegister(t *testing.T) {
 	probe := moduleTask("probe", "core.exec.run")
 	probe.Register = "cfg_changed"
 	grp := config.Task{
 		Name:  "grp",
-		When:  "input.action == 'apply'", // статический, false при diagnose
+		When:  "input.action == 'apply'", // static, false for diagnose
 		Block: &config.BlockTask{Block: []config.Task{probe}},
 	}
 	restart := moduleTask("restart", "core.service.restarted")
-	restart.OnChanges = []string{"cfg_changed"} // ссылка на register потомка static-false block
+	restart.OnChanges = []string{"cfg_changed"} // reference to a static-false block child's register
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{grp, restart}},
@@ -348,9 +351,10 @@ func TestRenderBlock_StaticSkipPreservesRegister(t *testing.T) {
 	}
 }
 
-// TestRenderBlock_StaticSkipNested (guard #6c) — вложенный static-false block:
-// каскад AND-merge гасит каждого листового потомка через свой placeholder, register
-// листа виден снаружи. Проверяет, что фикс работает по всей глубине вложенности.
+// TestRenderBlock_StaticSkipNested (guard #6c) — nested static-false block: the
+// AND-merge cascade suppresses each leaf child via its own placeholder, the
+// leaf's register is visible from outside. Checks the fix holds at any nesting
+// depth.
 func TestRenderBlock_StaticSkipNested(t *testing.T) {
 	leaf := moduleTask("leaf", "core.exec.run")
 	leaf.Register = "leaf_reg"
@@ -360,7 +364,7 @@ func TestRenderBlock_StaticSkipNested(t *testing.T) {
 	}
 	grp := config.Task{
 		Name:  "grp",
-		When:  "input.action == 'apply'", // статический, false при diagnose
+		When:  "input.action == 'apply'", // static, false for diagnose
 		Block: &config.BlockTask{Block: []config.Task{inner}},
 	}
 	restart := moduleTask("restart", "core.service.restarted")
@@ -382,7 +386,7 @@ func TestRenderBlock_StaticSkipNested(t *testing.T) {
 	if tasks[0].Register != "leaf_reg" {
 		t.Errorf("tasks[0].Register = %q, want leaf_reg (register листа виден через каскад)", tasks[0].Register)
 	}
-	// Каскад AND: внешний block.when влит в inner, затем в leaf — обёрнут в скобки.
+	// AND cascade: outer block.when is merged into inner, then into leaf — wrapped in parens.
 	if got, want := tasks[0].When, "input.action == 'apply'"; got != want {
 		t.Errorf("leaf placeholder.When = %q, want %q (каскад AND с пустыми child.when → чистый block.when)", got, want)
 	}
@@ -391,31 +395,32 @@ func TestRenderBlock_StaticSkipNested(t *testing.T) {
 	}
 }
 
-// TestRenderBlock_StaticFalseBlockDynamicChildOperand (флаг #10-review) — block со
-// static-false when: + потомок с СОБСТВЕННЫМ ДИНАМИЧЕСКИМ операндом
-// (when: register.cfg.changed). AND-merge даёт `(input.action == 'apply') &&
-// (register.cfg.changed)` — register-ссылка делает строку НЕ статической
-// (isStaticWhen → false из-за ExtractRegisterRefs), поэтому потомок НЕ гасится
-// static-skip-ом, а РЕНДЕРИТСЯ (Params != nil): динамический операнд переводит
-// обработку обратно в рендер. Закрепляет инвариант «динамический операнд потомка
-// бьёт static-false родителя»: register потомка сохранён и виден снаружи (onchanges
-// снаружи резолвится), params отрендерены, AND-предикат протянут as-is на Soul
-// (Soul вычислит весь AND, в т.ч. ложный block.when — потомок реально не исполнится,
-// но РЕШЕНИЕ принимает Soul, а не render-time skip). Контраст с
-// TestRenderBlock_StaticSkipPreservesRegister (там child.when пуст → AND = чистый
-// static-false → skip-placeholder).
+// TestRenderBlock_StaticFalseBlockDynamicChildOperand (flag #10-review) — a
+// block with static-false when: + a child with its OWN DYNAMIC operand
+// (when: register.cfg.changed). The AND-merge gives `(input.action ==
+// 'apply') && (register.cfg.changed)` — the register reference makes the
+// string NOT static (isStaticWhen → false via ExtractRegisterRefs), so the
+// child is NOT suppressed by static-skip and IS RENDERED (Params != nil): a
+// dynamic operand routes processing back into render. Locks in the invariant
+// "a child's dynamic operand beats the parent's static-false": the child's
+// register is preserved and visible from outside (onchanges resolves it),
+// params are rendered, and the AND predicate is passed as-is to Soul (Soul
+// evaluates the whole AND, including the false block.when — the child won't
+// actually run, but Soul decides, not a render-time skip). Contrast with
+// TestRenderBlock_StaticSkipPreservesRegister (there child.when is empty →
+// AND = plain static-false → skip placeholder).
 func TestRenderBlock_StaticFalseBlockDynamicChildOperand(t *testing.T) {
 	child := moduleTask("reload", "core.service.restarted")
 	child.Register = "reloaded"
-	child.When = "register.cfg.changed" // динамический операнд потомка
+	child.When = "register.cfg.changed" // child's own dynamic operand
 	child.Module.Params = map[string]any{"name": "${ input.unit }"}
 	grp := config.Task{
 		Name:  "grp",
-		When:  "input.action == 'apply'", // static-false при diagnose
+		When:  "input.action == 'apply'", // static-false for diagnose
 		Block: &config.BlockTask{Block: []config.Task{child}},
 	}
 	consumer := moduleTask("consumer", "core.exec.run")
-	consumer.OnChanges = []string{"reloaded"} // ссылка на register потомка снаружи
+	consumer.OnChanges = []string{"reloaded"} // reference to the child's register from outside
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{grp, consumer}},
@@ -430,18 +435,18 @@ func TestRenderBlock_StaticFalseBlockDynamicChildOperand(t *testing.T) {
 	if len(tasks) != 2 {
 		t.Fatalf("len(tasks) = %d, want 2 (отрендеренный потомок + consumer)", len(tasks))
 	}
-	// ★ Ключевой инвариант: потомок РЕНДЕРИТСЯ (НЕ placeholder), т.к. AND-merge не статичен.
+	// ★ Key invariant: the child IS RENDERED (not a placeholder) because the AND-merge isn't static.
 	if tasks[0].Params == nil {
 		t.Fatal("tasks[0].Params == nil — динамический операнд должен переводить обработку в РЕНДЕР, а не static-skip")
 	}
 	if got := tasks[0].Params.GetFields()["name"].GetStringValue(); got != "redis-server" {
 		t.Errorf("tasks[0].name = %q, want redis-server (params отрендерены обычным путём)", got)
 	}
-	// AND-предикат протянут as-is — Soul вычислит весь AND (вкл. ложный block.when).
+	// The AND predicate passes through as-is — Soul evaluates the whole AND (incl. the false block.when).
 	if got, want := tasks[0].When, "(input.action == 'apply') && (register.cfg.changed)"; got != want {
 		t.Errorf("tasks[0].When = %q, want %q (AND-merge протянут as-is на Soul)", got, want)
 	}
-	// register потомка сохранён и виден снаружи: consumer резолвит его в OnChangesIdx.
+	// The child's register is preserved and visible from outside: consumer resolves it in OnChangesIdx.
 	if tasks[0].Register != "reloaded" {
 		t.Errorf("tasks[0].Register = %q, want reloaded (register не теряется при рендере)", tasks[0].Register)
 	}
@@ -450,8 +455,8 @@ func TestRenderBlock_StaticFalseBlockDynamicChildOperand(t *testing.T) {
 	}
 }
 
-// TestRenderBlock_IndexIntegrity (guard #7) — fan-out блока + последующая задача
-// дают сквозные монотонные Index без дыр.
+// TestRenderBlock_IndexIntegrity (guard #7) — block fan-out + a subsequent
+// task give a threaded, monotonic Index with no gaps.
 func TestRenderBlock_IndexIntegrity(t *testing.T) {
 	before := moduleTask("before", "core.exec.run")
 	grp := config.Task{
@@ -485,8 +490,8 @@ func TestRenderBlock_IndexIntegrity(t *testing.T) {
 	}
 }
 
-// TestRenderBlock_VarsInheritance — block.vars база, child.vars поверх; потомок
-// видит merged vars (через params-интерполяцию).
+// TestRenderBlock_VarsInheritance — block.vars is the base, child.vars layers
+// on top; the child sees merged vars (via params interpolation).
 func TestRenderBlock_VarsInheritance(t *testing.T) {
 	inner := config.Task{
 		Name: "inner",
@@ -511,8 +516,8 @@ func TestRenderBlock_VarsInheritance(t *testing.T) {
 	}
 }
 
-// TestRenderBlock_ApplyChild — apply-потомок в block разворачивается через
-// renderApplyDestiny, наследует width. fixture-резолвер destiny.
+// TestRenderBlock_ApplyChild — an apply child in a block expands via
+// renderApplyDestiny and inherits width. Uses a fixture destiny resolver.
 func TestRenderBlock_ApplyChild(t *testing.T) {
 	res := &ResolvedDestiny{
 		Name:  "d",
@@ -550,7 +555,7 @@ func TestRenderBlock_ApplyChild(t *testing.T) {
 	}
 }
 
-// TestRenderBlock_LoopChildRejected — loop-потомок в block отвергается (вне pilot).
+// TestRenderBlock_LoopChildRejected — a loop child in a block is rejected (out of pilot scope).
 func TestRenderBlock_LoopChildRejected(t *testing.T) {
 	inner := moduleTask("inner", "core.exec.run")
 	inner.Loop = &config.LoopSpec{Items: "${ input.xs }"}
@@ -570,10 +575,11 @@ func TestRenderBlock_LoopChildRejected(t *testing.T) {
 	}
 }
 
-// TestRenderBlock_IncludeChildRejected (QA-пробел #10a) — include-потомок block
-// отвергается до render (must быть раскрыт ExpandIncludes раньше). Грамматика
-// допускает include в block-теле, но pilot C1 within-block include не поддержан
-// (docs/destiny/tasks.md §6.5) — guardPilotBlockChild валит ErrUnexpandedInclude.
+// TestRenderBlock_IncludeChildRejected (QA gap #10a) — an include child in a
+// block is rejected before render (must be expanded by ExpandIncludes
+// earlier). The grammar allows include inside a block body, but pilot C1
+// doesn't support within-block include (docs/destiny/tasks.md §6.5) —
+// guardPilotBlockChild raises ErrUnexpandedInclude.
 func TestRenderBlock_IncludeChildRejected(t *testing.T) {
 	inner := config.Task{Name: "inc", Include: &config.IncludeTask{Include: "sub.yml"}}
 	task := config.Task{
@@ -592,8 +598,9 @@ func TestRenderBlock_IncludeChildRejected(t *testing.T) {
 	}
 }
 
-// TestRenderBlock_ParallelChildRejected (QA-пробел #10b) — parallel-потомок block
-// отвергается (parallel целиком отложен пост-pilot, docs/destiny/tasks.md §6.5).
+// TestRenderBlock_ParallelChildRejected (QA gap #10b) — a parallel child in a
+// block is rejected (parallel as a whole is deferred post-pilot,
+// docs/destiny/tasks.md §6.5).
 func TestRenderBlock_ParallelChildRejected(t *testing.T) {
 	inner := moduleTask("inner", "core.exec.run")
 	inner.Parallel = true
@@ -613,10 +620,11 @@ func TestRenderBlock_ParallelChildRejected(t *testing.T) {
 	}
 }
 
-// TestRenderBlock_RunOnceOnBlock (QA-пробел #7) — ★ run_once: true НА block-задаче
-// режет таргет до ОДНОГО хоста (первого по SID) ДО fan-out → ВСЕ потомки блока едут
-// на ОДНОМ И ТОМ ЖЕ хосте. Критично для разрушительного блока (failover): «ровно
-// один хост получает весь блок», а не каждый потомок резолвит run_once независимо.
+// TestRenderBlock_RunOnceOnBlock (QA gap #7) — ★ run_once: true ON a block task
+// narrows the target to ONE host (first by SID) BEFORE fan-out → ALL block
+// children run on the SAME host. Critical for a destructive block (failover):
+// "exactly one host gets the whole block", not each child resolving run_once
+// independently.
 func TestRenderBlock_RunOnceOnBlock(t *testing.T) {
 	hosts := []*topology.HostFacts{
 		host("c.example.com", []string{"svc"}, nil),
@@ -646,10 +654,10 @@ func TestRenderBlock_RunOnceOnBlock(t *testing.T) {
 	}
 }
 
-// TestRenderBlock_EmptyBlock (QA-пробел #8) — пустой block (block: []) → 0
-// RenderedTask, render проходит без ошибки (намеренное поведение: пустая группа —
-// no-op, не падение). Фиксируем как контракт, чтобы регресс не превратил это в panic
-// (нулевой fan-out) или ложную ошибку.
+// TestRenderBlock_EmptyBlock (QA gap #8) — an empty block (block: []) → 0
+// RenderedTask, render succeeds (intentional: an empty group is a no-op, not
+// a failure). Pinned as a contract so a regression doesn't turn this into a
+// panic (zero fan-out) or a spurious error.
 func TestRenderBlock_EmptyBlock(t *testing.T) {
 	task := config.Task{
 		Name:  "empty-grp",
@@ -666,7 +674,7 @@ func TestRenderBlock_EmptyBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render пустого block: %v (ожидался no-op, не ошибка)", err)
 	}
-	// 0 задач за пустой блок + 1 after = 1; after не съехал по Index.
+	// 0 tasks for the empty block + 1 after = 1; after's Index didn't shift.
 	if len(tasks) != 1 {
 		t.Fatalf("len(tasks) = %d, want 1 (пустой block даёт 0 задач + after)", len(tasks))
 	}
@@ -678,7 +686,7 @@ func TestRenderBlock_EmptyBlock(t *testing.T) {
 	}
 }
 
-// staticResolver — фикстурный DestinyResolver для block-apply теста.
+// staticResolver is a fixture DestinyResolver for the block-apply test.
 type staticResolver struct{ res *ResolvedDestiny }
 
 func (s staticResolver) Resolve(_ context.Context, name string) (*ResolvedDestiny, error) {

@@ -1,15 +1,16 @@
 //go:build integration
 
-// Guard-набор Слайса 2 (keeper-side dispatch per-Passage, ADR-056). До Слайса 2
-// dispatchKeeperTasks звался ОДИН раз ДО stage-loop на tasks первого render
-// (ActivePassage=0), где keeper-задачи Passage>0 — placeholder-ы без Params → не
-// диспатчились. Слайс 2 перенёс вызов ВНУТРЬ stage-loop, per-Passage, на ПЕРЕ-
-// рендеренных при ActivePassage=p tasks.
+// Guard suite for Slice 2 (keeper-side dispatch per-Passage, ADR-056). Before
+// Slice 2, dispatchKeeperTasks was called ONCE before the stage-loop, on the first
+// render's tasks (ActivePassage=0), where keeper-tasks for Passage>0 were
+// paramless placeholders that never got dispatched. Slice 2 moved the call INSIDE
+// the stage-loop, per-Passage, on tasks re-rendered at ActivePassage=p.
 //
-// Прогоны идут сквозь run()+PG (Start → waitRunDone) с keeper-Registry-заглушкой,
-// реальным auditpg и stubPassageCap (staged-гейт ADR-056 §S5 требует passage-aware
-// хостов; для all-keeper roster пуст, но при nil passageCap гейт fail-closed-
-// отвергает staged — прод всегда с Redis, поэтому stub отражает прод).
+// Runs go through run()+PG (Start → waitRunDone) with a keeper-Registry stub, real
+// auditpg, and stubPassageCap (the staged gate in ADR-056 §S5 requires
+// passage-aware hosts; roster is empty for all-keeper, but a nil passageCap makes
+// the fail-closed gate reject staged — prod always runs with Redis, so the stub
+// mirrors prod).
 
 package scenario
 
@@ -31,24 +32,24 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// Guard-ы Слайса 2 переиспользуют newRunnerKeeperStaged (keeper-Registry +
-// stubPassageCap) из midrun_reresolve_integration_test.go — то же сочетание
-// «keeper-задача + staged-стратификация».
+// Slice 2 guards reuse newRunnerKeeperStaged (keeper-Registry + stubPassageCap)
+// from midrun_reresolve_integration_test.go — same "keeper-task + staged
+// stratification" combo.
 
-// capturingKeeperModule — keeper-side core-модуль, ЗАХВАТЫВАЮЩИЙ полученные Params
-// (для доказательства keeper→keeper register-chaining: задача Passage 1 должна
-// увидеть в Params значение, отрендеренное из register.<prev>.* keeper-задачи
-// Passage 0) и эхающий заранее заданный output. failOnState — state-суффикс, на
-// котором модуль возвращает failed (для keeper-fail-теста).
+// capturingKeeperModule — keeper-side core module that CAPTURES the received
+// Params (to prove keeper→keeper register-chaining: a Passage 1 task must see in
+// Params a value rendered from register.<prev>.* of a Passage 0 keeper-task) and
+// echoes a preset output. failOnState is the state suffix on which the module
+// returns failed (for the keeper-fail test).
 type capturingKeeperModule struct {
 	module.BaseModule
 	mu          sync.Mutex
-	output      map[string]any            // output, эхаемый в ApplyEvent (на success)
-	failOnState string                    // state-суффикс адреса, на котором вернуть failed
-	echoParams  []string                  // ключи полученных Params, протягиваемые в output (транзитивная цепочка)
-	gotParams   map[string]any            // Params последнего Apply (по state)
-	gotStates   []string                  // порядок исполненных state-ов
-	gotByState  map[string]map[string]any // Params per-state (для multi-passage цепочек с одним модулем)
+	output      map[string]any            // output echoed in ApplyEvent (on success)
+	failOnState string                    // state suffix on which to return failed
+	echoParams  []string                  // keys of received Params forwarded into output (transitive chain)
+	gotParams   map[string]any            // Params of the last Apply (by state)
+	gotStates   []string                  // order of executed states
+	gotByState  map[string]map[string]any // Params per state (for multi-passage chains sharing one module)
 }
 
 func (m *capturingKeeperModule) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
@@ -64,9 +65,10 @@ func (m *capturingKeeperModule) Apply(req *pluginv1.ApplyRequest, stream grpc.Se
 		m.gotByState[req.GetState()] = params
 	}
 	fail := req.GetState() == m.failOnState
-	// out: статический output + протянутые из Params ключи (echoParams). Протяжка
-	// нужна для транзитивных цепочек (P2 видит значение register P0, прошедшее
-	// через P1 → P1 кладёт полученный из register.P0.* params-ключ в свой output).
+	// out: static output plus keys forwarded from Params (echoParams). Forwarding
+	// is needed for transitive chains (P2 sees the register P0 value that passed
+	// through P1 → P1 puts the params key it got from register.P0.* into its own
+	// output).
 	out := map[string]any{}
 	for k, v := range m.output {
 		out[k] = v
@@ -88,9 +90,9 @@ func (m *capturingKeeperModule) Apply(req *pluginv1.ApplyRequest, stream grpc.Se
 	return stream.Send(ev)
 }
 
-// paramsForState возвращает Params, полученные модулём на конкретном state
-// (для цепочек, где один модуль исполняется в нескольких Passage под разными
-// state — например core.cloud.created на P0 и core.cloud.updated на P1).
+// paramsForState returns the Params the module received at a specific state (for
+// chains where one module executes across multiple Passages under different
+// states — e.g. core.cloud.created at P0 and core.cloud.updated at P1).
 func (m *capturingKeeperModule) paramsForState(state string) map[string]any {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -109,14 +111,14 @@ func (m *capturingKeeperModule) states() []string {
 	return append([]string(nil), m.gotStates...)
 }
 
-// keeperChainServiceRepo — 2-Passage all-keeper цепочка (ADR-056, Слайс 2):
+// keeperChainServiceRepo — 2-Passage all-keeper chain (ADR-056, Slice 2):
 //
 //	#0 provision (core.cloud.created, register: provision) → Passage 0
-//	#1 deliver   (core.bootstrap.delivered, params читает register.provision.ip) → Passage 1
+//	#1 deliver   (core.bootstrap.delivered, params reads register.provision.ip) → Passage 1
 //
-// Stratify разводит по Passage (deliver читает register provision в params).
-// all-keeper → no_hosts bypass. Это end-to-end доказательство keeper→keeper
-// register-chaining: deliver видит ip, эмитнутый provision Passage 0.
+// Stratify splits by Passage (deliver reads register provision in params).
+// all-keeper → no_hosts bypass. This is an end-to-end proof of keeper→keeper
+// register-chaining: deliver sees the ip emitted by provision at Passage 0.
 func keeperChainServiceRepo(t *testing.T) string {
 	t.Helper()
 	return writeServiceRepo(t, `name: create
@@ -137,21 +139,21 @@ tasks:
 `)
 }
 
-// keeperChain3ServiceRepo — 3-Passage all-keeper цепочка (ADR-056, Слайс 2),
-// ★ зеркало целевого live-потока create redis-кластера (provision→deliver→register):
+// keeperChain3ServiceRepo — 3-Passage all-keeper chain (ADR-056, Slice 2),
+// ★ mirrors the target live flow for creating a redis cluster (provision→deliver→register):
 //
 //	#0 provision (core.bootstrap.created,   register: provision, output ip)          → Passage 0
 //	#1 deliver   (core.bootstrap.delivered, params target_ip=register.provision.ip,
-//	             register: deliver, echoParams проброс target_ip в output)            → Passage 1
+//	             register: deliver, echoParams forwards target_ip into output)        → Passage 1
 //	#2 finalize  (core.bootstrap.finalized, params origin=register.deliver.target_ip) → Passage 2
 //
-// Все звенья — base core.bootstrap (НЕ в coremanifest → params не валидируются
-// scenario-load-ом, register-выражения проходят свободно), различаются state-ом —
-// один capturingKeeperModule обслуживает все три, paramsForState(state) различает
-// per-Passage Params. Каждое звено читает register ПРЕДЫДУЩЕГО → Stratify разводит
-// на 3 Passage. Транзитивность: значение provision.ip (P0) протягивается через
-// deliver (P1 кладёт полученный target_ip в свой register-output) и доходит до
-// finalize (P2) как origin. all-keeper → no_hosts bypass.
+// All links are base core.bootstrap (NOT in coremanifest → params aren't validated
+// by scenario-load, register expressions pass freely), distinguished by state — one
+// capturingKeeperModule serves all three, paramsForState(state) separates
+// per-Passage Params. Each link reads the PREVIOUS link's register → Stratify
+// splits into 3 Passages. Transitivity: the provision.ip value (P0) is forwarded
+// through deliver (P1 puts the target_ip it received into its own register-output)
+// and reaches finalize (P2) as origin. all-keeper → no_hosts bypass.
 func keeperChain3ServiceRepo(t *testing.T) string {
 	t.Helper()
 	return writeServiceRepo(t, `name: create
@@ -178,27 +180,27 @@ tasks:
 `)
 }
 
-// TestIntegration_KeeperChain_3Passage_TransitiveRegister — ★ №1 (КРИТИЧНЫЙ,
-// целевой live-поток create redis-кластера). 3-звенная keeper-цепочка
-// cloud.created(P0)→bootstrap.delivered(P1)→vault.kv-read(P2), каждое звено
-// читает register предыдущего. ASSERT:
-//   - три apply_runs(apply_id, keeper, passage) для passage 0/1/2, ВСЕ success;
-//   - Params последней (P2) содержит значение, протянутое ТРАНЗИТИВНО от register
-//     ПЕРВОЙ (P0): provision.ip → deliver.target_ip (P1 проброс) → finalize.origin (P2);
-//   - host-fan-out не было (all-keeper).
+// TestIntegration_KeeperChain_3Passage_TransitiveRegister — ★ #1 (CRITICAL,
+// target live flow for creating a redis cluster). 3-link keeper chain
+// bootstrap.created(P0)→bootstrap.delivered(P1)→bootstrap.finalized(P2), each link
+// reads the previous one's register. ASSERT:
+//   - three apply_runs(apply_id, keeper, passage) rows for passage 0/1/2, ALL success;
+//   - Params of the last one (P2) contains a value forwarded TRANSITIVELY from the
+//     FIRST register (P0): provision.ip → deliver.target_ip (P1 forward) → finalize.origin (P2);
+//   - no host-fan-out happened (all-keeper).
 //
-// Расширяет 2-Passage-кейс до 3 Passage — guard на то, что register-chaining
-// keeper→keeper держит цепочку длиннее одного звена (transitive accumulation).
+// Extends the 2-Passage case to 3 Passages — a guard that keeper→keeper
+// register-chaining holds across more than one link (transitive accumulation).
 func TestIntegration_KeeperChain_3Passage_TransitiveRegister(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "noop-prod")
-	// Хостов НЕ сидим: all-keeper → no_hosts bypass (provision-from-zero).
+	// No hosts seeded: all-keeper → no_hosts bypass (provision-from-zero).
 
-	// Один модуль core.bootstrap обслуживает все три state (created/delivered/finalized):
-	// эхает ip в каждом register-output; echoParams протягивает target_ip из params
-	// в output (P1 кладёт полученный из register.provision.ip target_ip в свой
-	// register-output → finalize прочитает register.deliver.target_ip).
+	// One core.bootstrap module serves all three states (created/delivered/finalized):
+	// echoes ip in every register-output; echoParams forwards target_ip from params
+	// into output (P1 puts the target_ip it got from register.provision.ip into its
+	// own register-output → finalize reads register.deliver.target_ip).
 	bootstrap := &capturingKeeperModule{
 		output:     map[string]any{"ip": "10.0.0.7"},
 		echoParams: []string{"target_ip"},
@@ -222,30 +224,30 @@ func TestIntegration_KeeperChain_3Passage_TransitiveRegister(t *testing.T) {
 
 	waitRunDone(t, "noop-prod", applyID, incarnation.StatusReady)
 
-	// Все три keeper-state исполнены (по одному разу, в своём Passage), в порядке цепочки.
+	// All three keeper states executed (once each, in their own Passage), in chain order.
 	if got := bootstrap.states(); len(got) != 3 || got[0] != "created" || got[1] != "delivered" || got[2] != "finalized" {
 		t.Errorf("bootstrap states = %v, want [created delivered finalized]", got)
 	}
 
-	// Промежуточное звено (P1, state delivered) получило ip от P0 (register.provision.ip).
+	// The middle link (P1, state delivered) got ip from P0 (register.provision.ip).
 	if got := bootstrap.paramsForState("delivered"); got == nil || got["target_ip"] != "10.0.0.7" {
 		t.Fatalf("P1 (delivered) Params.target_ip = %v, want '10.0.0.7' (register.provision.ip P0 не прокинут)", got["target_ip"])
 	}
 
-	// ★ ТРАНЗИТИВНАЯ протяжка: finalize (P2, state finalized) получил origin == ip
-	// ПЕРВОЙ задачи (P0), прошедшее через deliver (P1). register-chaining держит
-	// цепочку длиннее одного звена.
+	// ★ TRANSITIVE forwarding: finalize (P2, state finalized) got origin == ip of
+	// the FIRST task (P0), passed through deliver (P1). register-chaining holds
+	// across more than one link.
 	got := bootstrap.paramsForState("finalized")
 	if got == nil || got["origin"] != "10.0.0.7" {
 		t.Fatalf("★ P2 (finalized) Params.origin = %v, want '10.0.0.7' — значение register ПЕРВОЙ задачи (P0) НЕ протянуто транзитивно через P1 до P2 (keeper→keeper chaining оборвался на 2-м звене)", got["origin"])
 	}
 
-	// host-fan-out не было (all-keeper).
+	// No host-fan-out happened (all-keeper).
 	if disp.calls != 0 {
 		t.Errorf("SendApply calls = %d, want 0 (all-keeper)", disp.calls)
 	}
 
-	// apply_runs = ровно 3 keeper-строки (apply_id, keeper, 0/1/2), все success. Ни одной host-строки.
+	// apply_runs = exactly 3 keeper rows (apply_id, keeper, 0/1/2), all success. No host rows.
 	statuses, err := applyrun.SelectStatusesByApplyID(context.Background(), integrationPool, applyID)
 	if err != nil {
 		t.Fatalf("SelectStatusesByApplyID: %v", err)
@@ -268,15 +270,15 @@ func TestIntegration_KeeperChain_3Passage_TransitiveRegister(t *testing.T) {
 	}
 }
 
-// TestIntegration_KeeperChain_Rerun_NoPKConflict — ★ №5 (day-2 rerun). Два
-// последовательных прогона одной staged keeper-цепочки с РАЗНЫМИ apply_id.
+// TestIntegration_KeeperChain_Rerun_NoPKConflict — ★ #5 (operational rerun). Two
+// consecutive runs of the same staged keeper chain with DIFFERENT apply_id values.
 // ASSERT:
-//   - второй прогон НЕ ловит PK-конфликт на apply_runs(apply_id, keeper, passage)
-//     (тройной PK миграции 078 различает прогоны по apply_id) — цепочка
-//     ПЕРЕИСПОЛНЯЕТСЯ целиком (оба Passage заново);
-//   - apply_runs-строки прогона #1 (apply_id_1) НЕ затёрты строками #2 — каждый
-//     прогон несёт собственный набор keeper-строк под своим apply_id;
-//   - register-chaining работает на ОБОИХ прогонах (deliver получил ip на #2 тоже).
+//   - the second run does NOT hit a PK conflict on apply_runs(apply_id, keeper, passage)
+//     (migration 078's triple PK distinguishes runs by apply_id) — the chain
+//     RE-EXECUTES in full (both Passages again);
+//   - run #1's apply_runs rows (apply_id_1) are NOT overwritten by run #2's rows —
+//     each run carries its own set of keeper rows under its own apply_id;
+//   - register-chaining works on BOTH runs (deliver got ip on #2 too).
 func TestIntegration_KeeperChain_Rerun_NoPKConflict(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -307,7 +309,7 @@ func TestIntegration_KeeperChain_Rerun_NoPKConflict(t *testing.T) {
 		waitRunDone(t, "noop-prod", applyID, incarnation.StatusReady)
 	}
 
-	// keeperPassages — keeper-строки конкретного прогона (по apply_id), все success.
+	// keeperPassages — keeper rows of a specific run (by apply_id), all success.
 	keeperPassages := func(applyID string) map[int]applyrun.Status {
 		t.Helper()
 		statuses, err := applyrun.SelectStatusesByApplyID(context.Background(), integrationPool, applyID)
@@ -331,26 +333,26 @@ func TestIntegration_KeeperChain_Rerun_NoPKConflict(t *testing.T) {
 		t.Fatalf("прогон #1 keeper passages = %v, want {0:success,1:success}", got)
 	}
 
-	// Второй прогон — другой apply_id. Если бы Passage не входил в PK или прогон не
-	// различался по apply_id, второй Insert(running) на (apply_id, keeper, passage)
-	// упал бы дубликатом → keeper_dispatch_failed → error_locked (waitRunDone в run()
-	// не дождался бы Ready).
+	// The second run uses a different apply_id. If Passage weren't part of the PK,
+	// or runs weren't distinguished by apply_id, the second Insert(running) on
+	// (apply_id, keeper, passage) would fail as a duplicate → keeper_dispatch_failed
+	// → error_locked (waitRunDone in run() would never reach Ready).
 	applyID2 := audit.NewULID()
 	run(applyID2)
 	if got := keeperPassages(applyID2); len(got) != 2 || got[0] != applyrun.StatusSuccess || got[1] != applyrun.StatusSuccess {
 		t.Fatalf("★ прогон #2 keeper passages = %v, want {0:success,1:success} (rerun staged keeper-цепочки переисполнился без PK-конфликта)", got)
 	}
 
-	// ★ Строки прогона #1 НЕ затёрты прогоном #2 — каждый apply_id несёт свой набор.
+	// ★ Run #1's rows are NOT overwritten by run #2 — each apply_id carries its own set.
 	if got := keeperPassages(applyID1); len(got) != 2 {
 		t.Fatalf("★ прогон #1 keeper passages ПОСЛЕ rerun = %v, want по-прежнему {0,1} (строки #1 затёрты прогоном #2 — apply_id не изолирует)", got)
 	}
 
-	// register-chaining отработал на ВТОРОМ прогоне тоже (deliver видит ip).
+	// register-chaining worked on the SECOND run too (deliver sees ip).
 	if got := bootstrap.params(); got == nil || got["target_ip"] != "10.0.0.7" {
 		t.Errorf("после rerun bootstrap.delivered Params.target_ip = %v, want '10.0.0.7'", got["target_ip"])
 	}
-	// Каждое звено исполнено по 2 раза (два прогона).
+	// Each link executed twice (two runs).
 	if got := cloud.states(); len(got) != 2 {
 		t.Errorf("cloud states = %v, want 2 исполнения (два прогона)", got)
 	}
@@ -359,17 +361,18 @@ func TestIntegration_KeeperChain_Rerun_NoPKConflict(t *testing.T) {
 	}
 }
 
-// keeperForwardAccumServiceRepo — №2 forward-accumulation: P2 читает register от
-// P0 И P1 ОДНОВРЕМЕННО. Все звенья — base core.bootstrap (свободные params),
-// различаются state.
+// keeperForwardAccumServiceRepo — #2 forward-accumulation: P2 reads register from
+// BOTH P0 AND P1 at once. All links are base core.bootstrap (free-form params),
+// distinguished by state.
 //
 //	#0 provision (core.bootstrap.created,   register: provision, output ip+token)    → Passage 0
-//	#1 deliver   (core.bootstrap.delivered, register: deliver,   output ip+token)    → Passage 1 (читает register.provision.ip)
+//	#1 deliver   (core.bootstrap.delivered, register: deliver,   output ip+token)    → Passage 1 (reads register.provision.ip)
 //	#2 finalize  (core.bootstrap.finalized, params from_p0=register.provision.ip
 //	                                              + from_p1=register.deliver.token)   → Passage 2
 //
-// finalize (P2) читает register ДВУХ предыдущих Passage сразу — register-bucket
-// keeperVars на P2 несёт accumulated provision (P0) И deliver (P1).
+// finalize (P2) reads register of the two previous Passages at once — the
+// register bucket in keeperVars at P2 carries accumulated provision (P0) AND
+// deliver (P1).
 func keeperForwardAccumServiceRepo(t *testing.T) string {
 	t.Helper()
 	return writeServiceRepo(t, `name: create
@@ -397,19 +400,20 @@ tasks:
 `)
 }
 
-// TestIntegration_KeeperChain_ForwardAccumulation — №2: keeper-задача Passage 2
-// читает register ОБОИХ предыдущих Passage (P0 provision И P1 deliver) в одном
-// рендере. ASSERT: finalize (P2) получил from_p0 == ip (register P0) И from_p1 ==
-// token (register P1) — KeeperRegister-bucket на P2 несёт накопленный register всех
-// прошлых Passage (loadRegisterByHostUpToPassage(P2) = register Passage<2), не только
-// непосредственно предыдущего.
+// TestIntegration_KeeperChain_ForwardAccumulation — #2: a Passage 2 keeper-task
+// reads register of BOTH previous Passages (P0 provision AND P1 deliver) in one
+// render. ASSERT: finalize (P2) got from_p0 == ip (register P0) AND from_p1 ==
+// token (register P1) — the KeeperRegister bucket at P2 carries the accumulated
+// register of all past Passages (loadRegisterByHostUpToPassage(P2) = register of
+// Passage<2), not just the immediately preceding one.
 func TestIntegration_KeeperChain_ForwardAccumulation(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "noop-prod")
 
-	// Каждый register-output несёт И ip, И token (output общий на модуль) — P0
-	// register provision.ip и P1 register deliver.token оба доступны финализатору.
+	// Each register-output carries BOTH ip AND token (output is shared per module) —
+	// P0's register provision.ip and P1's register deliver.token are both available
+	// to the finalizer.
 	bootstrap := &capturingKeeperModule{output: map[string]any{"ip": "10.0.0.7", "token": "tok-abc"}}
 	keepers := fakeKeeperRegistry{"core.bootstrap": bootstrap}
 	gitURL := keeperForwardAccumServiceRepo(t)
@@ -442,18 +446,19 @@ func TestIntegration_KeeperChain_ForwardAccumulation(t *testing.T) {
 	}
 }
 
-// TestIntegration_KeeperChain_FailPassage2_EarlyPassagesSucceed — №3: keeper-fail
-// на ПОСЛЕДНЕМ звене 3-Passage цепочки (P2), после двух успешных Passage. ASSERT:
-// incarnation ERROR_LOCKED (reason keeper_dispatch_failed); keeper apply_runs:
-// passage 0 = success, passage 1 = success, passage 2 = failed; state НЕ закоммичен
-// (commit только после ПОСЛЕДНЕГО Passage). Доказывает, что abort на самом позднем
-// keeper-Passage не теряет терминалы ранних успешных Passage.
+// TestIntegration_KeeperChain_FailPassage2_EarlyPassagesSucceed — #3: keeper-fail
+// on the LAST link of a 3-Passage chain (P2), after two successful Passages.
+// ASSERT: incarnation ERROR_LOCKED (reason keeper_dispatch_failed); keeper
+// apply_runs: passage 0 = success, passage 1 = success, passage 2 = failed; state
+// is NOT committed (commit only after the LAST Passage). Proves that aborting on
+// the latest keeper-Passage doesn't lose the terminals of earlier successful
+// Passages.
 func TestIntegration_KeeperChain_FailPassage2_EarlyPassagesSucceed(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "noop-prod")
 
-	// Единый core.bootstrap, падающий на ПОСЛЕДНЕМ state (finalized = P2).
+	// A single core.bootstrap that fails on the LAST state (finalized = P2).
 	bootstrap := &capturingKeeperModule{
 		output:      map[string]any{"ip": "10.0.0.7"},
 		echoParams:  []string{"target_ip"},
@@ -484,7 +489,7 @@ func TestIntegration_KeeperChain_FailPassage2_EarlyPassagesSucceed(t *testing.T)
 		t.Errorf("incarnation.state = %v, want пустой (фейл до финального commit)", inc.State)
 	}
 
-	// Ранние Passage отработали (P0 created, P1 delivered), P2 finalized упал до конца.
+	// Early Passages completed (P0 created, P1 delivered), P2 finalized failed at the end.
 	if got := bootstrap.states(); len(got) != 3 || got[0] != "created" || got[1] != "delivered" || got[2] != "finalized" {
 		t.Errorf("bootstrap states = %v, want [created delivered finalized] (ранние Passage успели, P2 дошёл до Apply и упал)", got)
 	}
@@ -509,16 +514,16 @@ func TestIntegration_KeeperChain_FailPassage2_EarlyPassagesSucceed(t *testing.T)
 	}
 }
 
-// crossChannelServiceRepo — keeper-задача Passage 1, читающая HOST-register
-// (НЕ keeper-register) в params. Структура:
+// crossChannelServiceRepo — a Passage 1 keeper-task reading a HOST register (NOT
+// a keeper register) in params. Structure:
 //
-//	#0 host probe (core.exec.run, register: hostprobe) → Passage 0 (host-задача)
-//	#1 keeper read (core.vault.kv-read, params data=register.hostprobe.stdout) → Passage 1
+//	#0 host probe (core.exec.run, register: hostprobe) → Passage 0 (host task)
+//	#1 keeper read (core.bootstrap.read, params data=register.hostprobe.stdout) → Passage 1
 //
-// keeper-задача читает register.hostprobe.* — это HOST-register, эмитнутый
-// host-задачей Passage 0. Он живёт в RegisterByHost[<hostSID>], а keeperVars
-// видит ТОЛЬКО KeeperRegister (keeper-bucket). Значит на render Passage 1
-// keeper-задача получит no-such-key → render_failed → error_locked.
+// The keeper-task reads register.hostprobe.* — a HOST register emitted by the
+// Passage 0 host task. It lives in RegisterByHost[<hostSID>], while keeperVars
+// sees ONLY KeeperRegister (the keeper bucket). So at Passage 1 render the
+// keeper-task gets no-such-key → render_failed → error_locked.
 func crossChannelServiceRepo(t *testing.T) string {
 	t.Helper()
 	return writeServiceRepo(t, `name: create
@@ -540,18 +545,20 @@ tasks:
 `)
 }
 
-// TestIntegration_KeeperChain_CrossChannel_FailClosed — ★ №6 (БЕЗОПАСНОСТЬ
-// ДАННЫХ, fail-closed). keeper-задача (Passage 1) пытается прочитать HOST-register
-// (register.hostprobe.*, эмитнутый host-задачей Passage 0) в params. host-register
-// живёт в per-host RegisterByHost[<hostSID>]; keeperVars читает ТОЛЬКО изолированный
-// KeeperRegister-канал (keeper-bucket). ASSERT: keeper-задача НЕ видит host-register
-// → CEL no-such-key → render_failed → incarnation ERROR_LOCKED; keeper-задача (P1)
-// НЕ исполнена (vault.Apply не вызван — фейл на render ДО dispatch).
+// TestIntegration_KeeperChain_CrossChannel_FailClosed — ★ #6 (DATA SAFETY,
+// fail-closed). A keeper-task (Passage 1) tries to read a HOST register
+// (register.hostprobe.*, emitted by the Passage 0 host task) in params. The host
+// register lives in per-host RegisterByHost[<hostSID>]; keeperVars reads ONLY the
+// isolated KeeperRegister channel (keeper bucket). ASSERT: the keeper-task does
+// NOT see the host register → CEL no-such-key → render_failed → incarnation
+// ERROR_LOCKED; the keeper-task (P1) is NOT executed (bootstrap.Apply is not
+// called — fails at render, before dispatch).
 //
-// Guard на изоляцию каналов: если кто-то «починит» host-fallback так, что
-// host-register протечёт в keeperVars (keeperVars увидит register.hostprobe), этот
-// тест ПОКРАСНЕЕТ — прогон дойдёт до Ready вместо error_locked. Зеркало unit-теста
-// TestKeeperRegisterChannel_Isolated (render-пакет), но через полный run()+PG.
+// Guard on channel isolation: if someone "fixes" the host-fallback so the host
+// register leaks into keeperVars (keeperVars would see register.hostprobe), this
+// test goes RED — the run reaches Ready instead of error_locked. Mirrors the unit
+// test TestKeeperRegisterChannel_Isolated (render package), but through a full
+// run()+PG.
 func TestIntegration_KeeperChain_CrossChannel_FailClosed(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -562,8 +569,8 @@ func TestIntegration_KeeperChain_CrossChannel_FailClosed(t *testing.T) {
 	keepers := fakeKeeperRegistry{"core.bootstrap": bootstrap}
 	gitURL := crossChannelServiceRepo(t)
 
-	// host probe (Passage 0) терминалится success — Passage 0 сходится, прогон
-	// доходит до re-render Passage 1, где keeper-задача и падает на render.
+	// host probe (Passage 0) terminates success — Passage 0 converges, the run
+	// reaches the Passage 1 re-render, where the keeper-task fails at render.
 	disp := &mockDispatcher{t: t, result: applyrun.StatusSuccess}
 	r := newRunnerKeeperStaged(t, disp, keepers)
 
@@ -579,31 +586,33 @@ func TestIntegration_KeeperChain_CrossChannel_FailClosed(t *testing.T) {
 	}
 
 	inc := waitRunDone(t, "noop-prod", applyID, incarnation.StatusErrorLocked)
-	// render_failed — keeper-задача не смогла отрендерить params (host-register не
-	// виден в keeperVars). Reason должен быть render_failed (не keeper_dispatch_failed:
-	// фейл на render ДО исполнения модуля).
+	// render_failed — the keeper-task couldn't render params (host-register isn't
+	// visible in keeperVars). Reason must be render_failed (not
+	// keeper_dispatch_failed: the failure happens at render, before module execution).
 	if inc.StatusDetails == nil || inc.StatusDetails["reason"] != "render_failed" {
 		t.Errorf("reason = %v, want render_failed (host-register не виден keeper-задаче на render Passage 1)", inc.StatusDetails)
 	}
 
-	// ★ keeper-задача НЕ исполнена — фейл на render ДО dispatch модуля. Если бы
-	// host-register протёк в keeperVars, render прошёл бы и bootstrap.Apply вызвался.
+	// ★ The keeper-task is NOT executed — failure at render, before module dispatch.
+	// If the host register had leaked into keeperVars, render would have passed and
+	// bootstrap.Apply would have been called.
 	if got := bootstrap.states(); len(got) != 0 {
 		t.Fatalf("★ keeper-модуль states = %v, want пусто — keeper-задача читает HOST-register, должна упасть на render (no-such-key) ДО исполнения; непустой states ⇒ host-register протёк в keeperVars (канал НЕ изолирован)", got)
 	}
 }
 
-// TestIntegration_KeeperChain_2Passage_RegisterChained — ★ END-TO-END ДОКАЗАТЕЛЬСТВО
-// ЭПИКА (Слайс 2). 2-Passage all-keeper цепочка: cloud.created (Passage 0) эмитит
-// register provision{ip}, bootstrap.delivered (Passage 1) читает register.provision.ip
-// в params. ASSERT: ОБА keeper-Passage исполнены, deliver получил Params.target_ip ==
-// ip от provision (register прокинут end-to-end), apply_runs = 2 keeper-строки
-// (apply_id, keeper, 0) и (apply_id, keeper, 1), incarnation READY.
+// TestIntegration_KeeperChain_2Passage_RegisterChained — ★ END-TO-END PROOF OF THE
+// EPIC (Slice 2). 2-Passage all-keeper chain: cloud.created (Passage 0) emits
+// register provision{ip}, bootstrap.delivered (Passage 1) reads
+// register.provision.ip in params. ASSERT: BOTH keeper-Passages executed, deliver
+// got Params.target_ip == ip from provision (register forwarded end-to-end),
+// apply_runs = 2 keeper rows (apply_id, keeper, 0) and (apply_id, keeper, 1),
+// incarnation READY.
 func TestIntegration_KeeperChain_2Passage_RegisterChained(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "noop-prod")
-	// Хостов НЕ сидим: all-keeper → no_hosts bypass (provision-from-zero).
+	// No hosts seeded: all-keeper → no_hosts bypass (provision-from-zero).
 
 	cloud := &capturingKeeperModule{output: map[string]any{"ip": "10.0.0.7"}}
 	bootstrap := &capturingKeeperModule{output: map[string]any{"delivered": true}}
@@ -629,7 +638,7 @@ func TestIntegration_KeeperChain_2Passage_RegisterChained(t *testing.T) {
 
 	waitRunDone(t, "noop-prod", applyID, incarnation.StatusReady)
 
-	// Оба keeper-state исполнены.
+	// Both keeper states executed.
 	if got := cloud.states(); len(got) != 1 || got[0] != "created" {
 		t.Errorf("cloud states = %v, want [created]", got)
 	}
@@ -637,19 +646,19 @@ func TestIntegration_KeeperChain_2Passage_RegisterChained(t *testing.T) {
 		t.Errorf("bootstrap states = %v, want [delivered]", got)
 	}
 
-	// ★ register прокинут end-to-end: deliver получил target_ip == ip от provision.
+	// ★ register forwarded end-to-end: deliver got target_ip == ip from provision.
 	got := bootstrap.params()
 	if got == nil || got["target_ip"] != "10.0.0.7" {
 		t.Fatalf("★ bootstrap.delivered Params.target_ip = %v, want '10.0.0.7' (register.provision.ip Passage 0 НЕ прокинут в keeper-задачу Passage 1)", got["target_ip"])
 	}
 
-	// host-fan-out не было (all-keeper).
+	// No host-fan-out happened (all-keeper).
 	if disp.calls != 0 {
 		t.Errorf("SendApply calls = %d, want 0 (all-keeper, host-fan-out нет)", disp.calls)
 	}
 
-	// apply_runs = ровно 2 keeper-строки (apply_id, keeper, 0) и (apply_id, keeper, 1),
-	// обе success. Ни одной host-строки.
+	// apply_runs = exactly 2 keeper rows (apply_id, keeper, 0) and (apply_id, keeper, 1),
+	// both success. No host rows.
 	statuses, err := applyrun.SelectStatusesByApplyID(context.Background(), integrationPool, applyID)
 	if err != nil {
 		t.Fatalf("SelectStatusesByApplyID: %v", err)
@@ -672,21 +681,21 @@ func TestIntegration_KeeperChain_2Passage_RegisterChained(t *testing.T) {
 	}
 }
 
-// TestIntegration_KeeperChain_FailPassage1_ErrorLocked — ★ keeper-FAIL на Passage>0
-// (Слайс 2). cloud.created (Passage 0) успешен → host-dispatch Passage 0 (none) →
+// TestIntegration_KeeperChain_FailPassage1_ErrorLocked — ★ keeper-FAIL on Passage>0
+// (Slice 2). cloud.created (Passage 0) succeeds → Passage 0 host-dispatch (none) →
 // barrier 0 → bootstrap.delivered (Passage 1) FAILED. ASSERT: incarnation
-// ERROR_LOCKED, reason keeper_dispatch_failed, state НЕ закоммичен; apply_runs:
-// keeper passage 0 = success (отработал ДО фейла), keeper passage 1 = failed;
-// никакого host-dispatch (all-keeper). Доказывает abort на Passage>0 ПОСЛЕ
-// успешного раннего Passage + наблюдаемость (error_locked корректен, state last-
-// known-good).
+// ERROR_LOCKED, reason keeper_dispatch_failed, state NOT committed; apply_runs:
+// keeper passage 0 = success (ran before the failure), keeper passage 1 = failed;
+// no host-dispatch at all (all-keeper). Proves abort on Passage>0 AFTER a
+// successful earlier Passage plus observability (error_locked is correct, state is
+// last-known-good).
 func TestIntegration_KeeperChain_FailPassage1_ErrorLocked(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "noop-prod")
 
 	cloud := &capturingKeeperModule{output: map[string]any{"ip": "10.0.0.7"}}
-	// bootstrap.delivered падает (failOnState="delivered").
+	// bootstrap.delivered fails (failOnState="delivered").
 	bootstrap := &capturingKeeperModule{failOnState: "delivered"}
 	keepers := fakeKeeperRegistry{
 		"core.cloud":     cloud,
@@ -712,17 +721,17 @@ func TestIntegration_KeeperChain_FailPassage1_ErrorLocked(t *testing.T) {
 	if inc.StatusDetails == nil || inc.StatusDetails["reason"] != "keeper_dispatch_failed" {
 		t.Errorf("reason = %v, want keeper_dispatch_failed (keeper-fail Passage 1)", inc.StatusDetails)
 	}
-	// state НЕ закоммичен (commit только после ПОСЛЕДНЕГО Passage; фейл Passage 1 до него).
+	// state is NOT committed (commit only after the LAST Passage; Passage 1 fails before that).
 	if len(inc.State) != 0 {
 		t.Errorf("incarnation.state = %v, want пустой (keeper-fail Passage 1 НЕ коммитит state)", inc.State)
 	}
 
-	// Passage 0 keeper-задача успела (cloud исполнен), Passage 1 — упала до конца.
+	// Passage 0's keeper-task completed (cloud executed), Passage 1 failed before finishing.
 	if got := cloud.states(); len(got) != 1 {
 		t.Errorf("cloud states = %v, want [created] (Passage 0 успел до фейла Passage 1)", got)
 	}
 
-	// apply_runs: keeper passage 0 = success, keeper passage 1 = failed. Никаких host-строк.
+	// apply_runs: keeper passage 0 = success, keeper passage 1 = failed. No host rows.
 	statuses, err := applyrun.SelectStatusesByApplyID(context.Background(), integrationPool, applyID)
 	if err != nil {
 		t.Fatalf("SelectStatusesByApplyID: %v", err)
@@ -743,10 +752,10 @@ func TestIntegration_KeeperChain_FailPassage1_ErrorLocked(t *testing.T) {
 	}
 }
 
-// mixedKeeperHostPassage0Repo — keeper-задача + host-задача В ОДНОМ Passage 0
-// (mixed keeper-passage-0 + host-passage-0). Нет register-зависимости между ними →
-// Stratify даёт обоим Passage 0 (N=1). host-задача делает roster непустым (no_hosts
-// не отсекает; keeper-задача исполняется первой, host-fan-out — следом).
+// mixedKeeperHostPassage0Repo — a keeper-task plus a host-task in ONE Passage 0
+// (mixed keeper-passage-0 + host-passage-0). No register dependency between them →
+// Stratify gives both Passage 0 (N=1). The host-task makes the roster non-empty
+// (no_hosts doesn't kick in; the keeper-task executes first, host-fan-out follows).
 func mixedKeeperHostPassage0Repo(t *testing.T) string {
 	t.Helper()
 	return writeServiceRepo(t, `name: create
@@ -768,12 +777,13 @@ tasks:
 `)
 }
 
-// TestIntegration_MixedKeeperHostPassage0 — ★ MIXED keeper+host Passage 0 (Слайс 2).
-// keeper-задача (core.vault.kv-read, on: keeper) + host-задача (core.exec.run) В
-// ОДНОМ Passage 0 (нет register-зависимости → N=1). ASSERT: keeper-задача исполнена
-// ДО host-dispatch (host-fan-out стартовал — 1 SendApply), barrier Passage 0 НЕ
-// раздулся keeper-строкой (classify скипает keeper-target → не зависает на «лишнем»
-// терминале), incarnation READY. apply_runs: keeper passage 0 + host passage 0.
+// TestIntegration_MixedKeeperHostPassage0 — ★ MIXED keeper+host Passage 0 (Slice 2).
+// A keeper-task (core.vault.kv-read, on: keeper) plus a host-task (core.exec.run)
+// in ONE Passage 0 (no register dependency → N=1). ASSERT: the keeper-task
+// executes BEFORE host-dispatch (host-fan-out started — 1 SendApply), the Passage
+// 0 barrier is NOT inflated by the keeper row (classify skips the keeper-target →
+// doesn't hang waiting on an "extra" terminal), incarnation READY. apply_runs:
+// keeper passage 0 + host passage 0.
 func TestIntegration_MixedKeeperHostPassage0(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -798,17 +808,17 @@ func TestIntegration_MixedKeeperHostPassage0(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Прогон НЕ виснет (если бы classify считал keeper-строку host-терминалом и
-	// раздул terminal, либо наоборот ждал бы keeper-строку как хоста — barrier
-	// завис бы до RunTimeout, waitRunDone упал бы). READY = barrier сошёлся ровно
-	// по host-строкам Passage 0.
+	// The run does NOT hang (if classify treated the keeper row as a host terminal
+	// and inflated the terminal count, or conversely waited on the keeper row as a
+	// host — the barrier would hang until RunTimeout and waitRunDone would fail).
+	// READY = the barrier converged exactly on Passage 0's host rows.
 	waitRunDone(t, "noop-prod", applyID, incarnation.StatusReady)
 
-	// keeper-задача исполнена.
+	// keeper-task executed.
 	if got := vault.states(); len(got) != 1 || got[0] != "kv-read" {
 		t.Errorf("vault states = %v, want [kv-read]", got)
 	}
-	// host-fan-out стартовал (host-задача ушла одному хосту).
+	// host-fan-out started (the host-task went out to one host).
 	if disp.calls != 1 {
 		t.Errorf("SendApply calls = %d, want 1 (host echo на одном хосте)", disp.calls)
 	}
@@ -838,13 +848,13 @@ func TestIntegration_MixedKeeperHostPassage0(t *testing.T) {
 	}
 }
 
-// --- Слайс-2 unit-guard над Stratify keeper-цепочки (без PG) -----------------
+// --- Slice-2 unit guard over Stratify for keeper chains (no PG) -----------------
 
-// TestStratify_KeeperChain_TwoPassages — keeper→keeper цепочка стратифицируется по
-// register-зависимости в params: provision (register: provision) → Passage 0,
-// deliver (params читает register.provision) → Passage 1. Доказывает, что Stratify
-// видит register-ребро через params keeper-задачи (у keeper-задач нет where:, ребро
-// идёт ИМЕННО через params) — фундамент per-passage keeper-dispatch.
+// TestStratify_KeeperChain_TwoPassages — a keeper→keeper chain stratifies by the
+// register dependency in params: provision (register: provision) → Passage 0,
+// deliver (params reads register.provision) → Passage 1. Proves that Stratify sees
+// the register edge through a keeper-task's params (keeper-tasks have no where:,
+// the edge goes THROUGH params) — the foundation of per-passage keeper-dispatch.
 func TestStratify_KeeperChain_TwoPassages(t *testing.T) {
 	scn, _, diags, err := config.LoadScenarioManifestFromBytes("main.yml", []byte(`name: create
 description: keeper chain stratify

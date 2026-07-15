@@ -11,16 +11,17 @@ import (
 	"github.com/souls-guild/soul-stack/shared/tmpl"
 )
 
-// TestRenderContext_InputRootPresent — Вариант B (ADR-010 §3.2 amendment):
-// render_context корня §3.2 несёт ключ `input` (резолвнутый operator-input)
-// рядом с vars/self/role/essence. Шаблон читает `.input.<name>` напрямую, без
-// passthrough `params.vars`. Заодно back-compat: `.vars.*` (поднятые автором в
-// params.vars) НЕ сломаны — оба канала сосуществуют.
+// TestRenderContext_InputRootPresent — Variant B (ADR-010 §3.2 amendment): the
+// §3.2 root render_context carries an `input` key (resolved operator input)
+// alongside vars/self/role/essence. A template reads `.input.<name>`
+// directly, without passthrough via `params.vars`. Also checks back-compat:
+// `.vars.*` (author-raised via params.vars) isn't broken — both channels
+// coexist.
 func TestRenderContext_InputRootPresent(t *testing.T) {
 	const tmplPath = "templates/ctx.conf.tmpl"
 	const tmplBody = "listen {{ .input.listen }}\n" +
 		"level {{ .input.log_level }}\n" +
-		"socket {{ .vars.socket }}\n" + // back-compat: явный params.vars-канал жив
+		"socket {{ .vars.socket }}\n" + // back-compat: explicit params.vars channel is alive
 		"family {{ .self.os.family }}\n"
 
 	manifest := &config.ScenarioManifest{
@@ -33,7 +34,7 @@ func TestRenderContext_InputRootPresent(t *testing.T) {
 					Params: map[string]any{
 						"path":     "/etc/app/app.conf",
 						"template": tmplPath,
-						// Только один поднятый vars (back-compat), остальное — через .input.
+						// Only one raised var (back-compat), everything else via .input.
 						"vars": map[string]any{"socket": "/run/app.sock"},
 					},
 				},
@@ -70,12 +71,12 @@ func TestRenderContext_InputRootPresent(t *testing.T) {
 	if inputSec["listen"] != "0.0.0.0:9100" || inputSec["log_level"] != "info" {
 		t.Errorf("render_context.input неполон: %#v", inputSec)
 	}
-	// back-compat: vars-канал на месте.
+	// back-compat: the vars channel is intact.
 	if vs, _ := rc["vars"].(map[string]any); vs["socket"] != "/run/app.sock" {
 		t.Errorf("render_context.vars (back-compat) потерян: %#v", rc["vars"])
 	}
 
-	// Исполняем тем же движком, что Soul, render_context КОРНЕМ.
+	// Render with the same engine Soul uses, render_context AS ROOT.
 	engine, err := tmpl.New()
 	if err != nil {
 		t.Fatalf("tmpl.New: %v", err)
@@ -91,9 +92,9 @@ func TestRenderContext_InputRootPresent(t *testing.T) {
 	}
 }
 
-// TestRenderContext_BuildRenderContext_EmptyInput — buildRenderContext с
-// injectInput=true и nil Input кладёт пустой map (не паникует, strict-mode на
-// `.input.X` корректен).
+// TestRenderContext_BuildRenderContext_EmptyInput — buildRenderContext with
+// injectInput=true and nil Input produces an empty map (no panic, strict mode
+// on `.input.X` works correctly).
 func TestRenderContext_BuildRenderContext_EmptyInput(t *testing.T) {
 	rc := buildRenderContext(RenderInput{}, &topology.HostFacts{}, nil, nil, true)
 	if _, ok := rc["input"].(map[string]any); !ok {
@@ -101,10 +102,10 @@ func TestRenderContext_BuildRenderContext_EmptyInput(t *testing.T) {
 	}
 }
 
-// TestRenderContext_BuildRenderContext_InputOmitted — ★условная инъекция (Вариант
-// B): injectInput=false → ключа `input` в render_context НЕТ (шаблоны на одних
-// `.vars` сохраняют до-Вариант-B-вид {vars,self,role,essence}, deep-equal-фикстуры
-// стабильны). vars/self/role/essence остаются всегда.
+// TestRenderContext_BuildRenderContext_InputOmitted — ★conditional injection
+// (Variant B): injectInput=false → no `input` key in render_context (templates
+// using only `.vars` keep the pre-Variant-B shape {vars,self,role,essence},
+// deep-equal fixtures stay stable). vars/self/role/essence are always present.
 func TestRenderContext_BuildRenderContext_InputOmitted(t *testing.T) {
 	rc := buildRenderContext(
 		RenderInput{Input: map[string]any{"secret": "x"}},
@@ -119,14 +120,14 @@ func TestRenderContext_BuildRenderContext_InputOmitted(t *testing.T) {
 	}
 }
 
-// TestRenderContext_VarsOnlyTemplate_NoInput — ★end-to-end условной инъекции
-// через Render: шаблон читает ТОЛЬКО `.vars.*` → render_context НЕ содержит
-// `input` (даже если в проходе есть operator-input). Это гарантия, что
-// redis-подобные шаблоны (vars-only) не получают раздутый render_context и их
-// deep-equal-фикстуры остаются зелёными.
+// TestRenderContext_VarsOnlyTemplate_NoInput — ★end-to-end conditional
+// injection through Render: a template reading ONLY `.vars.*` → render_context
+// carries no `input` (even if operator input is present in the run). This
+// guarantees redis-like templates (vars-only) don't get a bloated
+// render_context and their deep-equal fixtures stay green.
 func TestRenderContext_VarsOnlyTemplate_NoInput(t *testing.T) {
 	const tmplPath = "templates/vars-only.conf.tmpl"
-	// Тело несёт `.input` ТОЛЬКО в комментарии (как redis.conf.tmpl) — не обращение.
+	// The body mentions `.input` ONLY in a comment (like redis.conf.tmpl) — not an actual reference.
 	const tmplBody = "# apply.input резолвится host-инвариантно, см. .input контракт\n" +
 		"port {{ .vars.port }}\n"
 
@@ -171,16 +172,17 @@ func TestRenderContext_VarsOnlyTemplate_NoInput(t *testing.T) {
 	}
 }
 
-// TestSealS1_SecretInputSealedAndMasked — ★КЛЮЧЕВОЙ security guard-тест (ADR-010
-// §7.4, механизм S-1, Вариант B). Доказывает закрытие seal-разрыва: при
-// core.file.rendered с secret:true input-полем
+// TestSealS1_SecretInputSealedAndMasked — ★KEY security guard test (ADR-010
+// §7.4, mechanism S-1, Variant B). Proves the seal gap is closed: for
+// core.file.rendered with a secret:true input field,
 //
-//	(1) путь render_context.input.<secret> ПОМЕЧЕН sealed (in.Sealed);
-//	(2) значение секрета по этому пути ЗАМАСКИРОВАНО в observable-выводе
-//	    (status_details-подобный payload), plaintext НЕ утекает.
+//	(1) the path render_context.input.<secret> IS MARKED sealed (in.Sealed);
+//	(2) the secret value at that path IS MASKED in observable output
+//	    (a status_details-like payload), no plaintext leaks.
 //
-// Без декларативного S-1 (sealRenderContextInput) путь не был бы sealed —
-// passthrough vars удалён, collectSealed по сырым params секрет уже не видит.
+// Without the declarative S-1 (sealRenderContextInput) the path wouldn't be
+// sealed — the vars passthrough is gone, so collectSealed over raw params no
+// longer sees the secret.
 func TestSealS1_SecretInputSealedAndMasked(t *testing.T) {
 	const tmplPath = "templates/secret.conf.tmpl"
 	const secretVal = "s3cr3t-PLAINTEXT"
@@ -224,8 +226,8 @@ func TestSealS1_SecretInputSealedAndMasked(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 
-	// (1) путь render_context.input.admin_password помечен sealed; несекретный
-	// listen — НЕ sealed (без over-seal).
+	// (1) render_context.input.admin_password is marked sealed; the
+	// non-secret listen is NOT sealed (no over-seal).
 	paths := sealed.Paths()
 	const secretPath = "render_context.input.admin_password"
 	if !paths[secretPath] {
@@ -235,16 +237,16 @@ func TestSealS1_SecretInputSealedAndMasked(t *testing.T) {
 		t.Errorf("over-seal: несекретный listen помечен sealed: %v", paths)
 	}
 
-	// Секрет действительно доехал в render_context.input (для Soul он реальный — это
-	// корректно, wire-канал не маскируется), но именно поэтому observable-каналы
-	// обязаны его прятать по sealed-пути.
+	// The secret genuinely reaches render_context.input (correct — Soul needs
+	// the real value, the wire channel isn't masked), which is exactly why
+	// observable channels must hide it via the sealed path.
 	rc := tasks[0].Params.GetFields()[paramRenderContext].GetStructValue().AsMap()
 	if got, _ := rc["input"].(map[string]any); got["admin_password"] != secretVal {
 		t.Fatalf("предусловие теста нарушено: секрет не доехал в render_context.input: %#v", got)
 	}
 
-	// (2) маскинг observable-payload по sealed-пути: значение секрета заменено,
-	// plaintext отсутствует.
+	// (2) masking the observable payload via the sealed path: the secret
+	// value is replaced, no plaintext remains.
 	payload := map[string]any{"render_context": map[string]any{"input": map[string]any{
 		"admin_password": secretVal,
 		"listen":         "0.0.0.0:9100",
@@ -258,8 +260,9 @@ func TestSealS1_SecretInputSealedAndMasked(t *testing.T) {
 		t.Errorf("несекретный listen ошибочно замаскирован: %#v", maskedInput["listen"])
 	}
 
-	// Защита от утечки через свободный текст ошибки/деталей: тот же sealed-набор
-	// прячет секрет и в строковом канале по пути render_context.input.admin_password.
+	// Protection against leaking through free-text error/detail strings: the
+	// same sealed set also hides the secret in the string channel at path
+	// render_context.input.admin_password.
 	strPayload := map[string]any{secretPath: secretVal}
 	maskedStr := audit.MaskSecretsSealed(strPayload, audit.SealOpts{Sealed: paths})
 	if maskedStr[secretPath] == secretVal {
@@ -267,15 +270,16 @@ func TestSealS1_SecretInputSealedAndMasked(t *testing.T) {
 	}
 }
 
-// TestSealS1_VarsOnlyTemplate_NoSeal — ★условный seal-гейт (Вариант B): при
-// vars-only шаблоне (не читает `.input`) render_context.input НЕ инъектится →
-// seal-путь render_context.input.<secret> НЕ метится, даже если в схеме есть
-// secret-input. Так seal-набор синхронен реальному составу render_context (нет
-// мёртвых sealed-путей на несуществующую ячейку), и секрет физически не
-// попадает в render_context.input (его там нет).
+// TestSealS1_VarsOnlyTemplate_NoSeal — ★conditional seal gate (Variant B): for
+// a vars-only template (doesn't read `.input`), render_context.input is not
+// injected → the seal path render_context.input.<secret> isn't marked, even
+// if the schema has a secret input. This keeps the sealed set in sync with
+// render_context's actual shape (no dead sealed paths for a nonexistent
+// slot), and the secret physically never reaches render_context.input (it
+// isn't there).
 func TestSealS1_VarsOnlyTemplate_NoSeal(t *testing.T) {
 	const tmplPath = "templates/vars-only-secret.conf.tmpl"
-	const tmplBody = "port {{ .vars.port }}\n" // не читает .input
+	const tmplBody = "port {{ .vars.port }}\n" // doesn't read .input
 
 	manifest := &config.ScenarioManifest{
 		Name: "vars-only-secret",
@@ -322,9 +326,9 @@ func TestSealS1_VarsOnlyTemplate_NoSeal(t *testing.T) {
 	}
 }
 
-// TestSealS1_VaultScopeInputSealed — поле с vault_scope (по контракту требует
-// secret:true) тоже попадает в sealed render_context.input.<field>. Проверяем,
-// что секрет с scoped-vault не утекает в observable.
+// TestSealS1_VaultScopeInputSealed — a field with vault_scope (the contract
+// requires secret:true) also lands in sealed render_context.input.<field>.
+// Checks that a scoped-vault secret doesn't leak into observable output.
 func TestSealS1_VaultScopeInputSealed(t *testing.T) {
 	set := NewSealedSet()
 	in := RenderInput{Scenario: &config.ScenarioManifest{Input: config.InputSchemaMap{
@@ -341,16 +345,16 @@ func TestSealS1_VaultScopeInputSealed(t *testing.T) {
 	}
 }
 
-// TestSealS1_NilSetNoop — nil-Sealed (push/trial/Acolyte) → no-op, не паникует.
+// TestSealS1_NilSetNoop — nil Sealed (push/trial/Acolyte) → no-op, no panic.
 func TestSealS1_NilSetNoop(t *testing.T) {
 	sealRenderContextInput(nil, RenderInput{Scenario: &config.ScenarioManifest{
 		Input: config.InputSchemaMap{"pw": {Type: "string", Secret: true}},
 	}})
 }
 
-// TestSecretInputNames_VaultScope — secretInputNames собирает и secret:true, и
-// поля с vault_scope (defense-in-depth: имя секрета не зависит от инварианта
-// чужого валидатора, что vault_scope ⇒ secret).
+// TestSecretInputNames_VaultScope — secretInputNames collects both secret:true
+// and vault_scope fields (defense-in-depth: the secret name set doesn't rely
+// on another validator's invariant that vault_scope ⇒ secret).
 func TestSecretInputNames_VaultScope(t *testing.T) {
 	scn := &config.ScenarioManifest{Input: config.InputSchemaMap{
 		"a": {Type: "string", Secret: true},

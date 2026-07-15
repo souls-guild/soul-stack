@@ -1,15 +1,15 @@
 //go:build integration
 
-// Integration-тесты teardown-режима прогона (S-D2b): scenario `destroy` через
-// TerminalMode=TerminalDestroy. Проверяют ветвление финала run():
+// Integration tests for the teardown run mode (S-D2b): scenario `destroy` via
+// TerminalMode=TerminalDestroy. Verify run()'s final branching:
 //
-//   - success teardown → incarnation остаётся в `destroying` (НЕ ready), state
-//     не тронут, ready НЕ коммитится (физический снос строки — S-D3);
-//   - провал teardown (хост упал, barrier fail-closed) → `destroy_failed`
-//     (НЕ error_locked), status_details несёт причину;
-//   - lockRun-gate teardown: стартует только из `destroying`.
+//   - success teardown → incarnation stays in `destroying` (NOT ready), state is
+//     untouched, ready is NOT committed (physical row removal — S-D3);
+//   - teardown failure (a host fails, barrier fail-closed) → `destroy_failed`
+//     (NOT error_locked), status_details carries the reason;
+//   - lockRun gate for teardown: only starts from `destroying`.
 //
-// Инфраструктура (testcontainers PG, mock Outbound, local-fs git) общая с
+// Infrastructure (testcontainers PG, mock Outbound, local-fs git) is shared with
 // integration_test.go.
 
 package scenario
@@ -31,9 +31,10 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// seedDestroyingIncarnation создаёт incarnation сразу в статусе `destroying`
-// (как после S-D1 Destroy) с непустым state — чтобы тест проверил, что teardown
-// НЕ трогает state-граф. Coven-метка = name (roster по incarnation.name).
+// seedDestroyingIncarnation creates an incarnation directly in `destroying` status
+// (as after S-D1 Destroy) with a non-empty state — so the test can verify that
+// teardown does NOT touch the state graph. Coven label = name (roster by
+// incarnation.name).
 func seedDestroyingIncarnation(t *testing.T, name string, state map[string]any) {
 	t.Helper()
 	inc := &incarnation.Incarnation{
@@ -46,8 +47,8 @@ func seedDestroyingIncarnation(t *testing.T, name string, state map[string]any) 
 	}
 }
 
-// destroyServiceRepo создаёт local-fs git-репо service-noop со scenario
-// `destroy` (один core.exec.run-шаг teardown-а). file://-URL для loader-а.
+// destroyServiceRepo creates a local-fs git repo for the service-noop with a
+// `destroy` scenario (one core.exec.run teardown step). file:// URL for the loader.
 func destroyServiceRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -97,11 +98,11 @@ tasks:
 	return "file://" + dir
 }
 
-// waitStatusInc поллит статус incarnation до достижения want (или таймаута) и
-// возвращает строку для последующих assert-ов (state / status_details). В
-// отличие от waitStatus (gap4_test.go) возвращает incarnation; в отличие от
-// waitRunDone не требует state_history-snapshot-а — teardown-success в S-D2b НЕ
-// пишет snapshot (state не коммитится), статус остаётся destroying.
+// waitStatusInc polls incarnation status until it reaches want (or times out) and
+// returns the row for follow-up asserts (state / status_details). Unlike
+// waitStatus (gap4_test.go) it returns the incarnation; unlike waitRunDone it
+// doesn't require a state_history snapshot — teardown-success in S-D2b does NOT
+// write a snapshot (state isn't committed), status stays destroying.
 func waitStatusInc(t *testing.T, name string, want incarnation.Status) *incarnation.Incarnation {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -119,11 +120,12 @@ func waitStatusInc(t *testing.T, name string, want incarnation.Status) *incarnat
 	return nil
 }
 
-// TestIntegration_Destroy_Teardown_Success — teardown прошёл на всех хостах →
-// S-D3 физический снос: после успешного barrier-а DeleteAfterTeardown архивирует
-// и DELETE-ит строку incarnation одной tx; каскад V3 сносит live state_history /
-// apply_runs / register. Поэтому наблюдаемый терминал успеха — ОТСУТСТВИЕ строки
-// incarnation (а не «остаётся в destroying» — то была пред-S-D3 семантика).
+// TestIntegration_Destroy_Teardown_Success — teardown succeeded on all hosts →
+// S-D3 physical removal: after a successful barrier, DeleteAfterTeardown archives
+// and DELETEs the incarnation row in one tx; the V3 cascade removes live
+// state_history / apply_runs / register. So the observable success terminal is the
+// ABSENCE of the incarnation row (not "stays in destroying" — that was the
+// pre-S-D3 semantics).
 func TestIntegration_Destroy_Teardown_Success(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -145,15 +147,15 @@ func TestIntegration_Destroy_Teardown_Success(t *testing.T) {
 		t.Fatalf("StartDestroy: %v", err)
 	}
 
-	// Терминал успеха teardown — строка incarnation физически снесена (S-D3).
+	// teardown success terminal — the incarnation row is physically removed (S-D3).
 	waitIncarnationGone(t, "noop-prod")
 
-	// dispatch состоялся ровно один раз (один хост teardown).
+	// dispatch happened exactly once (one host teardown).
 	if disp.calls != 1 {
 		t.Errorf("SendApply calls = %d, want 1 (один хост teardown)", disp.calls)
 	}
 
-	// Каскад V3: apply_runs прогона снесены вместе со строкой incarnation.
+	// V3 cascade: the run's apply_runs are removed along with the incarnation row.
 	st, serr := applyrun.SelectStatusesByApplyID(context.Background(), integrationPool, applyID)
 	if serr != nil {
 		t.Fatalf("SelectStatusesByApplyID: %v", serr)
@@ -163,9 +165,9 @@ func TestIntegration_Destroy_Teardown_Success(t *testing.T) {
 	}
 }
 
-// waitIncarnationGone поллит, пока строка incarnation физически не исчезнет
-// (S-D3 success: DeleteAfterTeardown в run-goroutine после barrier-а). До
-// удаления SelectByName отдаёт строку; после — ErrIncarnationNotFound.
+// waitIncarnationGone polls until the incarnation row physically disappears
+// (S-D3 success: DeleteAfterTeardown in the run goroutine after the barrier).
+// Before removal SelectByName returns the row; after — ErrIncarnationNotFound.
 func waitIncarnationGone(t *testing.T, name string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -182,9 +184,9 @@ func waitIncarnationGone(t *testing.T, name string) {
 	t.Fatalf("incarnation %s не снесена за 10s (teardown-success должен удалить строку)", name)
 }
 
-// TestIntegration_Destroy_Teardown_Fail — хост упал (RunResult failed) →
-// barrier fail-closed → incarnation в `destroy_failed` (НЕ error_locked),
-// status_details несёт причину. state не тронут.
+// TestIntegration_Destroy_Teardown_Fail — a host failed (RunResult failed) →
+// barrier fail-closed → incarnation goes to `destroy_failed` (NOT error_locked),
+// status_details carries the reason. state is untouched.
 func TestIntegration_Destroy_Teardown_Fail(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -206,7 +208,7 @@ func TestIntegration_Destroy_Teardown_Fail(t *testing.T) {
 		t.Fatalf("StartDestroy: %v", err)
 	}
 
-	// Провал teardown переводит в destroy_failed (НЕ error_locked).
+	// A teardown failure transitions to destroy_failed (NOT error_locked).
 	inc := waitStatusInc(t, "noop-prod", incarnation.StatusDestroyFailed)
 	if inc.Status == incarnation.StatusErrorLocked {
 		t.Fatal("status = error_locked — провал teardown должен давать destroy_failed, НЕ error_locked")
@@ -214,12 +216,12 @@ func TestIntegration_Destroy_Teardown_Fail(t *testing.T) {
 	if inc.StatusDetails == nil || inc.StatusDetails["reason"] != "dispatch_failed" {
 		t.Errorf("status_details = %+v, want reason=dispatch_failed", inc.StatusDetails)
 	}
-	// state не тронут при фейле (last known-good).
+	// state is untouched on failure (last known-good).
 	if inc.State["leader"] != "host-a" {
 		t.Errorf("state.leader = %v, want host-a (state не меняется при фейле)", inc.State["leader"])
 	}
 
-	// Провал пишет state_history-snapshot (zero-diff, фиксирует факт прогона).
+	// A failure writes a state_history snapshot (zero-diff, records the fact of the run).
 	hist, total, herr := incarnation.HistorySelectByName(context.Background(), integrationPool,
 		"noop-prod", incarnation.HistoryFilter{ApplyID: applyID}, 0, 10)
 	if herr != nil {
@@ -233,13 +235,13 @@ func TestIntegration_Destroy_Teardown_Fail(t *testing.T) {
 	}
 }
 
-// TestIntegration_Destroy_Teardown_RejectsNonDestroying — teardown стартует
-// строго из `destroying`: incarnation в ready → StartDestroy отвергается
-// lockRun-gate-ом (ErrNotRunnable), статус не меняется, dispatch не происходит.
+// TestIntegration_Destroy_Teardown_RejectsNonDestroying — teardown starts strictly
+// from `destroying`: an incarnation in ready → StartDestroy is rejected by the
+// lockRun gate (ErrNotRunnable), status doesn't change, no dispatch happens.
 func TestIntegration_Destroy_Teardown_RejectsNonDestroying(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
-	seedIncarnation(t, "noop-prod") // ready, не destroying
+	seedIncarnation(t, "noop-prod") // ready, not destroying
 	seedConnectedSoul(t, "host-a.example.com", []string{"noop-prod"})
 	gitURL := destroyServiceRepo(t)
 
@@ -255,8 +257,8 @@ func TestIntegration_Destroy_Teardown_RejectsNonDestroying(t *testing.T) {
 		t.Fatalf("StartDestroy: %v", err)
 	}
 
-	// Прогон отклоняется внутри run-goroutine (lockRun → ErrNotRunnable);
-	// статус остаётся ready, dispatch не происходит.
+	// The run is rejected inside the run goroutine (lockRun → ErrNotRunnable);
+	// status stays ready, no dispatch happens.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if disp.calls > 0 {

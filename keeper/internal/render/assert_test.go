@@ -10,8 +10,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// assertTask строит assert-задачу (ADR-009 amendment 2026-06-23) с предикатом по
-// размеру roster-а — тот же инвариант, что cluster size-guard в redis create.
+// assertTask builds an assert task (ADR-009 amendment 2026-06-23) with a
+// roster-size predicate — the same invariant as the cluster size-guard in
+// redis create.
 func assertTask(when, pred, message string) config.Task {
 	return config.Task{
 		Name:   "topology guard",
@@ -20,9 +21,10 @@ func assertTask(when, pred, message string) config.Task {
 	}
 }
 
-// TestAssert_PassEmitsNoTask — assert-предикат true → render проходит, задача в
-// план НЕ эмитится (assert — проверка, не задача): план остаётся пустым, индекс не
-// растёт. Рядом обычная module-задача проверяет, что её Index не съезжает под assert.
+// TestAssert_PassEmitsNoTask — assert predicate true → render succeeds, no
+// task is emitted into the plan (assert is a check, not a task): the plan
+// stays empty for it, the index doesn't advance. A regular module task next
+// to it checks that its Index doesn't shift under the assert.
 func TestAssert_PassEmitsNoTask(t *testing.T) {
 	manifest := &config.ScenarioManifest{Name: "svc", Tasks: []config.Task{
 		assertTask("", "size(soulprint.hosts) == 3", "want 3 hosts"),
@@ -56,9 +58,10 @@ func TestAssert_PassEmitsNoTask(t *testing.T) {
 	}
 }
 
-// TestAssert_FailAbortsRenderWithMessage — assert-предикат false → render
-// ОБРЫВАЕТСЯ ErrAssertFailed (ни одной задачи не возвращается, прогон не стартует),
-// ошибка несёт авторский message + индекс/текст непрошедшего предиката.
+// TestAssert_FailAbortsRenderWithMessage — assert predicate false → render
+// ABORTS with ErrAssertFailed (no tasks returned, the run never starts); the
+// error carries the author's message + the index/text of the failed
+// predicate.
 func TestAssert_FailAbortsRenderWithMessage(t *testing.T) {
 	manifest := &config.ScenarioManifest{Name: "svc", Tasks: []config.Task{
 		assertTask("", "size(soulprint.hosts) == 3", "topology mismatch: want 3 hosts"),
@@ -71,7 +74,7 @@ func TestAssert_FailAbortsRenderWithMessage(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Incarnation: IncarnationMeta{Name: "svc"},
-		Hosts: []*topology.HostFacts{ // 2 хоста против ожидаемых 3 → assert false.
+		Hosts: []*topology.HostFacts{ // 2 hosts against the expected 3 → assert false.
 			host("a.example.com", []string{"svc"}, nil),
 			host("b.example.com", []string{"svc"}, nil),
 		},
@@ -94,8 +97,8 @@ func TestAssert_FailAbortsRenderWithMessage(t *testing.T) {
 	}
 }
 
-// TestAssert_DefaultMessageOnEmpty — message опущен → ошибка несёт дефолт по имени
-// задачи (а не пустую строку).
+// TestAssert_DefaultMessageOnEmpty — message omitted → error carries a
+// default built from the task name (not an empty string).
 func TestAssert_DefaultMessageOnEmpty(t *testing.T) {
 	manifest := &config.ScenarioManifest{Name: "svc", Tasks: []config.Task{
 		assertTask("", "size(soulprint.hosts) == 5", ""),
@@ -115,13 +118,14 @@ func TestAssert_DefaultMessageOnEmpty(t *testing.T) {
 	}
 }
 
-// TestAssert_StaticWhenFalseSkips — assert гейтится `when:`: статически-false when
-// (input-only предикат, неактивный режим) → assert НЕ вычисляется, render проходит,
-// даже если предикат that[] был бы false. Зеркало cluster-assert на standalone-прогоне.
+// TestAssert_StaticWhenFalseSkips — assert is gated by `when:`: a
+// statically-false when (input-only predicate, inactive mode) → assert is NOT
+// evaluated, render succeeds even if that[] would have been false. Mirrors
+// the cluster-assert on a standalone run.
 func TestAssert_StaticWhenFalseSkips(t *testing.T) {
 	manifest := &config.ScenarioManifest{Name: "svc", Tasks: []config.Task{
-		// when: режим != cluster → assert неактивен; that[] вычислился бы в false
-		// (1 хост != 99), но до него дело не доходит.
+		// when: mode != cluster → assert inactive; that[] would evaluate to
+		// false (1 host != 99), but it's never reached.
 		assertTask("input.redis_type == 'cluster'", "size(soulprint.hosts) == 99", "never reached"),
 	}}
 	p := NewPipeline(nil, newEngine(t), nil, nil)
@@ -140,8 +144,8 @@ func TestAssert_StaticWhenFalseSkips(t *testing.T) {
 	}
 }
 
-// TestAssert_StaticWhenTrueEvaluates — обратный контроль: статически-true when →
-// assert вычисляется; false-предикат на активном режиме обрывает render.
+// TestAssert_StaticWhenTrueEvaluates — reverse check: a statically-true when →
+// assert is evaluated; a false predicate on an active mode aborts render.
 func TestAssert_StaticWhenTrueEvaluates(t *testing.T) {
 	manifest := &config.ScenarioManifest{Name: "svc", Tasks: []config.Task{
 		assertTask("input.redis_type == 'cluster'", "size(soulprint.hosts) == 99", "topology mismatch"),
@@ -162,17 +166,17 @@ func TestAssert_StaticWhenTrueEvaluates(t *testing.T) {
 	}
 }
 
-// TestEvalAsserts_SameSourceAsRender — REUSE-ИНВАРИАНТ (ADR-009 amendment,
-// двухточечная eval): pre-flight (EvalAsserts) и render-ветка (Render →
-// evalAssertTask) вычисляют assert ОДНИМ источником (evalAssertTask), без
-// диалекта. Тест прогоняет ОДИН и тот же input через обе точки и сверяет, что
-// вердикт совпадает (оба проходят / оба роняют с тем же message и тем же
-// ErrAssertFailed). Расхождение = диалект (баг).
+// TestEvalAsserts_SameSourceAsRender — REUSE INVARIANT (ADR-009 amendment,
+// two-point eval): pre-flight (EvalAsserts) and the render branch (Render →
+// evalAssertTask) evaluate asserts from ONE source (evalAssertTask), with no
+// dialect drift. The test runs the SAME input through both points and checks
+// the verdict matches (both pass / both fail with the same message and the
+// same ErrAssertFailed). A mismatch means dialect drift (a bug).
 func TestEvalAsserts_SameSourceAsRender(t *testing.T) {
 	cases := []struct {
 		name      string
 		predicate string
-		hosts     int // число хостов roster-а
+		hosts     int // roster host count
 	}{
 		{"pass_3_hosts", "size(soulprint.hosts) == 3", 3},
 		{"fail_2_vs_3", "size(soulprint.hosts) == 3", 2},
@@ -199,7 +203,7 @@ func TestEvalAsserts_SameSourceAsRender(t *testing.T) {
 			pPre := NewPipeline(nil, newEngine(t), nil, nil)
 			preErr := pPre.EvalAsserts(context.Background(), in)
 
-			// Оба либо nil, либо оба ErrAssertFailed — вердикт обязан совпасть.
+			// Either both nil or both ErrAssertFailed — the verdict must match.
 			if (renderErr == nil) != (preErr == nil) {
 				t.Fatalf("вердикт расходится: render=%v, EvalAsserts=%v (диалект)", renderErr, preErr)
 			}
@@ -215,9 +219,9 @@ func TestEvalAsserts_SameSourceAsRender(t *testing.T) {
 	}
 }
 
-// TestEvalAsserts_NoAssertNoOp — сценарий без assert-задач → EvalAsserts no-op
-// (nil), даже с module-задачами в плане: pre-flight не должен ломать сценарии без
-// assert (большинство).
+// TestEvalAsserts_NoAssertNoOp — a scenario with no assert tasks → EvalAsserts
+// is a no-op (nil), even with module tasks in the plan: pre-flight must not
+// break scenarios without asserts (the majority).
 func TestEvalAsserts_NoAssertNoOp(t *testing.T) {
 	manifest := &config.ScenarioManifest{Name: "svc", Tasks: []config.Task{
 		{Name: "install", Module: &config.ModuleTask{Module: "core.pkg.installed", Params: map[string]any{"name": "redis-server"}}},
@@ -233,9 +237,9 @@ func TestEvalAsserts_NoAssertNoOp(t *testing.T) {
 	}
 }
 
-// TestEvalAsserts_StaticWhenFalseSkips — when-гейт соблюдён в pre-flight тоже:
-// статически-false when → assert не вычисляется (зеркало render-ветки и
-// TestAssert_StaticWhenFalseSkips).
+// TestEvalAsserts_StaticWhenFalseSkips — the when gate holds in pre-flight
+// too: a statically-false when → assert is not evaluated (mirrors the render
+// branch and TestAssert_StaticWhenFalseSkips).
 func TestEvalAsserts_StaticWhenFalseSkips(t *testing.T) {
 	manifest := &config.ScenarioManifest{Name: "svc", Tasks: []config.Task{
 		assertTask("input.redis_type == 'cluster'", "size(soulprint.hosts) == 99", "never reached"),
@@ -252,12 +256,13 @@ func TestEvalAsserts_StaticWhenFalseSkips(t *testing.T) {
 	}
 }
 
-// assertInIncludeGroup строит assert-задачу, какой её оставляет config.ExpandIncludes
-// для conditionally-included файла: IncludeWhen/IncludeGroupID проставлены (group-drop-
-// несущая форма), собственного when у assert нет. Предикат намеренно ссылается на ключ,
-// которого нет на несовпадающем режиме (input.shards отсутствует у sentinel) — чтобы
-// отличить «assert дропнут группой» (ожидаемо) от «assert вычислен и упал CEL
-// no-such-key» (баг live-vs-trial).
+// assertInIncludeGroup builds an assert task the way config.ExpandIncludes
+// leaves it for a conditionally-included file: IncludeWhen/IncludeGroupID are
+// set (the group-drop-carrying form), the assert has no when of its own. The
+// predicate deliberately references a key absent under the non-matching mode
+// (input.shards is missing for sentinel) — to distinguish "assert dropped
+// with its group" (expected) from "assert evaluated and hit a CEL
+// no-such-key" (a live-vs-trial bug).
 func assertInIncludeGroup(includeWhen, pred string) config.Task {
 	return config.Task{
 		Name:           "cluster roster guard",
@@ -267,25 +272,27 @@ func assertInIncludeGroup(includeWhen, pred string) config.Task {
 	}
 }
 
-// TestEvalAsserts_IncludeGroupDropSkipsAssert — ГАРД на live-vs-trial расхождение:
-// assert из conditionally-included файла (redis cluster.yml, `include: cluster.yml
-// when: input.redis_type=='cluster'`) НЕ должен вычисляться pre-flight-ом на
-// несовпадающем режиме. До фикса EvalAsserts игнорировал group-drop и звал
-// evalAssertTask для cluster-assert на sentinel-прогоне → CEL «no such key: shards».
-// Render/Trial эту группу дропают; pre-flight обязан вести себя так же.
+// TestEvalAsserts_IncludeGroupDropSkipsAssert — GUARD against a live-vs-trial
+// mismatch: an assert from a conditionally-included file (redis cluster.yml,
+// `include: cluster.yml when: input.redis_type=='cluster'`) must NOT be
+// evaluated by pre-flight on a non-matching mode. Before the fix, EvalAsserts
+// ignored group-drop and called evalAssertTask for the cluster-assert on a
+// sentinel run → CEL "no such key: shards". Render/Trial drop that group;
+// pre-flight must behave the same way.
 func TestEvalAsserts_IncludeGroupDropSkipsAssert(t *testing.T) {
 	manifest := &config.ScenarioManifest{Name: "redis", Tasks: []config.Task{
 		assertInIncludeGroup(
 			"input.redis_type == 'cluster'",
-			// Зеркало cluster.yml size-guard: ссылается на input.shards, которого нет
-			// у sentinel-input → если бы assert вычислялся, упал бы no-such-key.
+			// Mirrors the cluster.yml size-guard: references input.shards,
+			// absent from sentinel input → if the assert were evaluated it
+			// would hit no-such-key.
 			"size(soulprint.hosts) == input.shards * (input.replicas + 1)",
 		),
 	}}
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Input:       map[string]any{"redis_type": "sentinel"}, // НЕТ shards/replicas.
+		Input:       map[string]any{"redis_type": "sentinel"}, // NO shards/replicas.
 		Incarnation: IncarnationMeta{Name: "redis"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"redis"}, nil)},
 	}
@@ -294,10 +301,11 @@ func TestEvalAsserts_IncludeGroupDropSkipsAssert(t *testing.T) {
 	}
 }
 
-// TestEvalAsserts_IncludeGroupKeepEvaluatesAssert — обратный контроль: на СОВПАДАЮЩЕМ
-// режиме (cluster) include-группа НЕ дропается, cluster-assert вычисляется. Roster (1
-// хост) не сходится с топологией (shards=3, replicas=1 → ожидается 6) → assert падает
-// ErrAssertFailed. Доказывает, что group-drop не «проглатывает» assert на активном режиме.
+// TestEvalAsserts_IncludeGroupKeepEvaluatesAssert — reverse check: on a
+// MATCHING mode (cluster) the include group is NOT dropped, the cluster
+// assert is evaluated. The roster (1 host) doesn't match the topology
+// (shards=3, replicas=1 → expects 6) → assert fails with ErrAssertFailed.
+// Proves group-drop doesn't "swallow" an assert on an active mode.
 func TestEvalAsserts_IncludeGroupKeepEvaluatesAssert(t *testing.T) {
 	manifest := &config.ScenarioManifest{Name: "redis", Tasks: []config.Task{
 		assertInIncludeGroup(
@@ -321,24 +329,27 @@ func TestEvalAsserts_IncludeGroupKeepEvaluatesAssert(t *testing.T) {
 	}
 }
 
-// clusterSizeGuardWhen — провижн-гейт size-asserts деплой-веток redis (ADR-061
-// amendment 2026-06-29, create/cluster.yml + sentinel.yml + migrate_cluster/cluster.yml):
-// инверсия include-when provision-тела. STATIC (чистый input, без register.*/
-// soulprint.self → isStaticWhen) → pre-flight вычислит его сам.
+// clusterSizeGuardWhen is the provision gate for redis deploy-branch
+// size-asserts (ADR-061 amendment 2026-06-29, create/cluster.yml +
+// sentinel.yml + migrate_cluster/cluster.yml): the inverse of the
+// provision body's include-when. STATIC (pure input, no register.*/
+// soulprint.self → isStaticWhen) → pre-flight evaluates it itself.
 const clusterSizeGuardWhen = "!(has(input.provision) && input.provision.enabled)"
 
-// clusterSizeGuardPred — зеркало cluster size-guard create/cluster.yml (без
-// cluster_topology-ветки, она для предиката-гейта неважна): roster обязан быть ровно
-// shards*(1+replicas).
+// clusterSizeGuardPred mirrors the cluster size-guard in create/cluster.yml
+// (minus the cluster_topology branch, irrelevant to the gate predicate):
+// the roster must be exactly shards*(1+replicas).
 const clusterSizeGuardPred = "size(soulprint.hosts) == int(input.shards) * (1 + int(input.replicas_per_master))"
 
-// TestEvalAsserts_ProvisionGateSkipsSizeGuard — ПРЯМОЙ РЕПРО разблокированного блокера
-// (ADR-061 amendment 2026-06-29): create redis cluster С provision.enabled=true при
-// ПУСТОМ roster-е (souls ещё не созданы — VM поднимутся позже шагами redis-provision.yml:
-// core.cloud.created→await_online→refresh_soulprint) НЕ должен падать pre-flight size-
-// guard-ом. Гейт `when: !provision.enabled` СТАТИЧЕН и при provision вычисляется в false
-// → assert placeholder-skip (НЕ ErrAssertFailed). До фикса size(soulprint.hosts)==N
-// падал на пустом roster-е ДО того, как кластер вообще существует (422 на create).
+// TestEvalAsserts_ProvisionGateSkipsSizeGuard — DIRECT REPRO of the unblocked
+// blocker (ADR-061 amendment 2026-06-29): creating a redis cluster WITH
+// provision.enabled=true on an EMPTY roster (souls not created yet — VMs come
+// up later via redis-provision.yml steps: core.cloud.created→await_online→
+// refresh_soulprint) must not fail the pre-flight size guard. The
+// `when: !provision.enabled` gate is STATIC and evaluates to false under
+// provision → assert placeholder-skip (NOT ErrAssertFailed). Before the fix,
+// size(soulprint.hosts)==N failed on an empty roster BEFORE the cluster even
+// existed (422 on create).
 func TestEvalAsserts_ProvisionGateSkipsSizeGuard(t *testing.T) {
 	manifest := &config.ScenarioManifest{Name: "redis", Tasks: []config.Task{
 		assertTask(clusterSizeGuardWhen, clusterSizeGuardPred, "roster size mismatch"),
@@ -353,18 +364,19 @@ func TestEvalAsserts_ProvisionGateSkipsSizeGuard(t *testing.T) {
 			"provision":           map[string]any{"enabled": true},
 		},
 		Incarnation: IncarnationMeta{Name: "redis"},
-		Hosts:       nil, // ПУСТОЙ roster — VM ещё не созданы (provision поднимет их позже).
+		Hosts:       nil, // EMPTY roster — VMs not created yet (provision brings them up later).
 	}
 	if err := p.EvalAsserts(context.Background(), in); err != nil {
 		t.Fatalf("EvalAsserts: при provision.enabled size-guard должен быть пропущен (when:false), got %v", err)
 	}
 }
 
-// TestEvalAsserts_NoProvisionStillEnforcesSizeGuard — РЕВЕРС-КОНТРОЛЬ: provision опущен
-// (штатный путь по существующему roster-у) + roster не сходится с топологией
-// (shards=3,replicas=1 → ожидается 6, дан 1 хост) → size-guard АКТИВЕН и падает
-// ErrAssertFailed. Доказывает, что провижн-гейт НЕ ослабил проверку для НЕ-provision
-// прогонов (when=!(has(provision)&&...)=true → assert вычисляется как раньше).
+// TestEvalAsserts_NoProvisionStillEnforcesSizeGuard — REVERSE CHECK: provision
+// omitted (the normal path over an existing roster) + roster doesn't match
+// the topology (shards=3,replicas=1 → expects 6, given 1 host) → size-guard
+// is ACTIVE and fails with ErrAssertFailed. Proves the provision gate didn't
+// weaken the check for non-provision runs (when=!(has(provision)&&...)=true →
+// assert evaluates as before).
 func TestEvalAsserts_NoProvisionStillEnforcesSizeGuard(t *testing.T) {
 	manifest := &config.ScenarioManifest{Name: "redis", Tasks: []config.Task{
 		assertTask(clusterSizeGuardWhen, clusterSizeGuardPred, "roster size mismatch"),
@@ -376,7 +388,7 @@ func TestEvalAsserts_NoProvisionStillEnforcesSizeGuard(t *testing.T) {
 			"redis_type":          "cluster",
 			"shards":              3,
 			"replicas_per_master": 1,
-			// provision НЕ задан → has(input.provision) false → when=true → assert активен.
+			// provision NOT set → has(input.provision) false → when=true → assert active.
 		},
 		Incarnation: IncarnationMeta{Name: "redis"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"redis"}, nil)}, // 1 != 6.

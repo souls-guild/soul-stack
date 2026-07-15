@@ -22,23 +22,23 @@ import (
 	"github.com/souls-guild/soul-stack/shared/tmpl"
 )
 
-// tracer для in-process span-а render-пайплайна (ADR-024 §4). Берёт глобальный
-// TracerProvider, поднятый [obs.SetupOTel] в cmd/keeper; при OTel disabled
-// провайдер no-op — span бесплатен, код не ветвится.
+// tracer for the render-pipeline in-process span (ADR-024 §4). Uses the
+// global TracerProvider set up by [obs.SetupOTel] in cmd/keeper; when OTel is
+// disabled the provider is no-op — span is free, no branching needed.
 var tracer = otel.Tracer("keeper/render")
 
-// KVReader — узкое подмножество keeper/internal/vault.Client, нужное
-// vault-resolve-фазе pipeline (`vault:`-refs в params). *vault.Client
-// удовлетворяет интерфейсу как есть; сужение позволяет герметичный прогон
-// раннера Trial ([ADR-023]) с fixture-backed reader-ом без поднятия Vault.
-// Симметрично keeper/internal/coremod/vault.VaultReader.
+// KVReader is the narrow subset of keeper/internal/vault.Client needed by
+// the pipeline's vault-resolve phase (`vault:` refs in params). *vault.Client
+// satisfies it as-is; the narrow interface lets the Trial runner ([ADR-023])
+// run hermetically against a fixture-backed reader without a live Vault.
+// Mirrors keeper/internal/coremod/vault.VaultReader.
 type KVReader interface {
 	ReadKV(ctx context.Context, path string) (map[string]any, error)
 }
 
-// Pipeline оркестрирует Keeper-side фазы рендера scenario ([ADR-010]).
-// Потокобезопасен: cel.Engine и KVReader держат собственные внутренние
-// блокировки/пулы, Pipeline собственного изменяемого состояния не имеет.
+// Pipeline orchestrates the Keeper-side scenario render phases ([ADR-010]).
+// Thread-safe: cel.Engine and KVReader hold their own internal locks/pools,
+// Pipeline itself carries no mutable state.
 type Pipeline struct {
 	vault   KVReader
 	cel     *cel.Engine
@@ -46,16 +46,17 @@ type Pipeline struct {
 	metrics *RenderMetrics
 }
 
-// NewPipeline конструирует Pipeline. engine обязателен. vc допускает nil
-// (scenario без vault-refs — vault-resolve no-op; ref при nil-reader →
-// ошибка в фазе vault-resolve). logger допускает nil (диагностика подавляется).
-// metrics допускает nil (keeper_render_*-метрики выключены — nil-safe методы
-// [RenderMetrics] no-op; так поднимаются unit-тесты, dev-сборка, Trial).
+// NewPipeline constructs a Pipeline. engine is required. vc may be nil (a
+// scenario with no vault-refs makes vault-resolve a no-op; a ref against a
+// nil reader errors during vault-resolve). logger may be nil (diagnostics
+// suppressed). metrics may be nil (keeper_render_* metrics disabled — nil-safe
+// [RenderMetrics] methods no-op; used by unit tests, dev builds, Trial).
 //
-// Резолвер destiny (apply:destiny) передаётся per-Render через
-// [RenderInput.Destiny] (не поле Pipeline) — Pipeline неизменяем и шарится между
-// конкурентными прогонами, а резолвер per-run (несёт destiny[]-refs конкретного
-// service-снапшота). RenderInput.Destiny=nil → apply:destiny → [ErrUnsupportedDSL].
+// The destiny resolver (apply:destiny) is passed per-Render via
+// [RenderInput.Destiny], not as a Pipeline field — Pipeline is immutable and
+// shared across concurrent runs, while the resolver is per-run (carries a
+// specific service snapshot's destiny[] refs). RenderInput.Destiny=nil →
+// apply:destiny fails with [ErrUnsupportedDSL].
 func NewPipeline(vc KVReader, engine *cel.Engine, logger *slog.Logger, metrics *RenderMetrics) *Pipeline {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
@@ -63,43 +64,45 @@ func NewPipeline(vc KVReader, engine *cel.Engine, logger *slog.Logger, metrics *
 	return &Pipeline{vault: vc, cel: engine, logger: logger, metrics: metrics}
 }
 
-// Render прогоняет scenario через фазы vault-resolve → CEL-render → резолв
-// `on:`/`where:` и возвращает плоский список отрендеренных задач + план
-// диспатча (task → хосты).
+// Render runs a scenario through vault-resolve → CEL-render → `on:`/`where:`
+// resolution and returns the flat list of rendered tasks plus the dispatch
+// plan (task → hosts).
 //
-// Pilot-объём DSL: поддержаны module-задачи (включая `core.file.rendered`),
-// `apply: destiny` (изолированный render-проход, V2 ADR-009), serial:/run_once:
-// (slice D), loop: (E1) и block: (C1) — все раскрываются render-time fan-out-ом
-// в плоский слой, а также `on: keeper` (renderKeeperTask). Вне pilot-объёма
-// остаётся parallel: → [ErrUnsupportedDSL]; нераскрытый include: → [ErrUnexpandedInclude].
+// Pilot DSL scope: module tasks (including `core.file.rendered`), `apply:
+// destiny` (isolated render pass, V2 ADR-009), serial:/run_once: (slice D),
+// loop: (E1) and block: (C1) — all expand via render-time fan-out into the
+// flat layer — plus `on: keeper` (renderKeeperTask). Outside pilot scope:
+// parallel: → [ErrUnsupportedDSL]; unexpanded include: → [ErrUnexpandedInclude].
 //
-// Index/TaskIndex — сквозной индекс по итоговому плану: scenario-задачи и
-// вклеенные destiny-задачи нумеруются единым монотонным счётчиком (связь
-// RenderedTask↔DispatchPlan↔TaskEvent.task_idx). Без apply:destiny индекс
-// совпадает с позицией в scenario.tasks[].
+// Index/TaskIndex is a cross-cutting index over the final plan: scenario
+// tasks and spliced-in destiny tasks share one monotonic counter (links
+// RenderedTask↔DispatchPlan↔TaskEvent.task_idx). Without apply:destiny the
+// index matches the position in scenario.tasks[].
 //
-// CEL-рендер params — per-host (soulprint.self хоста). В pilot params обязаны
-// быть host-инвариантны: если задача даёт разные params на разных targeted-
-// хостах, это host-зависимый рендер, который контракт «один RenderedTask на
-// task» не выражает (per-host ApplyRequest — слой orchestrator-а .g) → ошибка.
+// CEL-rendered params are per-host (soulprint.self of the host). In pilot,
+// params must be host-invariant: a task producing different params on
+// different targeted hosts is host-dependent render, which the "one
+// RenderedTask per task" contract can't express (per-host ApplyRequest is an
+// orchestrator-layer concern) → error.
 func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTask, _ []DispatchPlan, err error) {
 	if in.Scenario == nil {
 		return nil, nil, fmt.Errorf("render: scenario manifest is nil")
 	}
 
-	// keeper_render_*-метрики (ADR-024): длительность всего прохода + counter
-	// ошибок. Наблюдение в defer по named-return err — симметрично span-у ниже,
-	// одно измерение на проход. nil metrics → no-op. nil-scenario выше отсекается
-	// ДО старта замера: это структурный отказ caller-а, не «рендер выполнялся».
+	// keeper_render_* metrics (ADR-024): full-pass duration + error counter,
+	// observed in defer via named-return err (mirrors the span below) — one
+	// measurement per pass. nil metrics → no-op. nil-scenario is rejected above
+	// before the timer starts: that's a caller error, not "render ran".
 	start := time.Now()
 	defer func() { p.metrics.ObserveRender(time.Since(start), err) }()
 
-	// In-process span на render-пайплайн (vault-resolve → CEL → on/where) —
-	// child от scenario.run (ADR-024 §4): самая тяжёлая Keeper-side фаза прогона,
-	// внутри scenario.run-span-а ранее не различалась. incarnation/scenario name —
-	// доменные идентификаторы для фильтрации трейса (в metric-labels запрещены
-	// §2.2); секретов (params / vault-значения) в атрибуты НЕ кладём. При OTel
-	// disabled tracer no-op — Start/End бесплатны.
+	// In-process span for the render pipeline (vault-resolve → CEL →
+	// on/where), child of scenario.run (ADR-024 §4): the heaviest Keeper-side
+	// phase of a run, previously indistinguishable inside the scenario.run
+	// span. incarnation/scenario name are domain identifiers for trace
+	// filtering (forbidden in metric labels, §2.2); secrets (params/vault
+	// values) are never put in attributes. Tracer is no-op when OTel is
+	// disabled — Start/End are free.
 	ctx, span := tracer.Start(ctx, "render.pipeline",
 		trace.WithAttributes(
 			attribute.String("incarnation", in.Incarnation.Name),
@@ -115,16 +118,18 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 		span.End()
 	}()
 
-	// per-render-pass vault()-memo: повторный vault(тот-же-путь) в этом проходе
-	// (per-host × day-2 redis ACL/sentinel — десятки одинаковых чтений) берётся из
-	// кеша, Vault не бьётся снова. Scope — ровно этот Render-вызов (одна
-	// инкарнация): кеш живёт в ctx, не на Engine (тот шарится между прогонами).
+	// per-render-pass vault() memo: repeated vault(same-path) calls in this
+	// pass (per-host × operational redis ACL/sentinel scenarios — dozens of
+	// identical reads) hit the cache instead of re-querying Vault. Scoped to
+	// exactly this Render call (one incarnation): the cache lives in ctx, not
+	// on Engine (which is shared across runs).
 	ctx = cel.WithVaultMemo(ctx)
-	in.Ctx = ctx // прокинуть в CEL vault() (отмена/таймаут ReadKV + memo)
+	in.Ctx = ctx // propagate to CEL vault() (ReadKV cancel/timeout + memo)
 
-	// compute: резолвится ОДИН раз на прогон (рун-уровневый контекст без soulprint,
-	// барьер host-инвариантности) ДО рендера задач — результат `compute.<name>`
-	// виден в apply.input/where/params всех хостов через hostVars (ADR-009).
+	// compute: resolved ONCE per run (run-level context, no soulprint — a
+	// host-invariance barrier) before task rendering — the `compute.<name>`
+	// result is visible in apply.input/where/params of every host via hostVars
+	// (ADR-009).
 	computed, cerr := p.resolveCompute(in)
 	if cerr != nil {
 		return nil, nil, cerr
@@ -135,35 +140,36 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 	plans := make([]DispatchPlan, 0, len(in.Scenario.Tasks))
 	idx := 0
 
-	// includeGroupKeep кеширует решение по условному include (group-drop): id группы
-	// (Task.IncludeGroupID, проставлен ExpandIncludes) → keep/drop. Вычисляется ОДИН
-	// раз на группу (include-when host-инвариантен — static input./essence./
-	// incarnation./vars.), все задачи группы используют тот же исход. nil-исход для
-	// безусловных задач (IncludeGroupID==0) сюда не попадает.
+	// includeGroupKeep caches the conditional-include (group-drop) decision:
+	// group id (Task.IncludeGroupID, set by ExpandIncludes) → keep/drop.
+	// Computed once per group (include-when is host-invariant — static
+	// input./essence./incarnation./vars.), all tasks in the group share the
+	// outcome. Unconditional tasks (IncludeGroupID==0) never hit this map.
 	includeGroupKeep := map[int]bool{}
 
-	// passageStart фиксирует, с какого RenderedTask начинается текущая top-level
-	// задача — чтобы заклеймить весь её выход (включая apply:destiny/loop-потомков)
-	// passage-индексом originating-задачи (staged-render, ADR-056). Стампинг делаем
-	// в конце каждой итерации (stampPassage), а не точечно: один проход, любые
-	// expansion-ветки покрыты автоматически.
+	// passageStart marks where the current top-level task's RenderedTask
+	// output begins, so its whole output (including apply:destiny/loop
+	// descendants) can be stamped with the originating task's passage index
+	// (staged-render, ADR-056). Stamping happens once at the end of each
+	// iteration (stampPassage) rather than at each branch — one pass covers
+	// every expansion path automatically.
 	for i := range in.Scenario.Tasks {
 		task := in.Scenario.Tasks[i]
 
 		passage := taskPassageAt(in.TaskPassage, i)
 		passageStart := len(tasks)
 
-		// Conditional-include group-drop (ADR-009 amendment) — ДО emitStaticWhenSkip.
-		// Задача несёт IncludeGroupID!=0 (проставлен config.ExpandIncludes): её include
-		// раскрыт под статическим `when:`. Вычисляем include-when ОДИН раз на группу
-		// (кеш по IncludeGroupID) тем же isStaticWhen/evalStaticWhen, что и static-when-
-		// skip. include-when false → РЕАЛЬНЫЙ дроп: continue БЕЗ эмита RenderedTask и БЕЗ
-		// idx++ (индекс не резервируется, задача физически исчезает из плана). Это
-		// ОТЛИЧАЕТСЯ от emitStaticWhenSkip (placeholder с idx++): дискриминатор —
-		// IncludeGroupID. true → задача рендерится обычным путём (carry-through поля
-		// дальше не влияют). Безопасность: cross-file register дропнутой группы уже
-		// lint-запрещён (per-file validateTaskRefs + ErrUnexpandedInclude), поэтому
-		// внешний onchanges на её register невозможен → resolveOnChanges не падает
+		// Conditional-include group-drop (ADR-009 amendment) — before
+		// emitStaticWhenSkip. IncludeGroupID!=0 (set by config.ExpandIncludes)
+		// means this task's include was expanded under a static `when:`.
+		// include-when is computed once per group (cached by IncludeGroupID) via
+		// the same isStaticWhen/evalStaticWhen as static-when-skip. false → real
+		// drop: continue without emitting a RenderedTask and without idx++
+		// (index isn't reserved, the task disappears from the plan entirely) —
+		// unlike emitStaticWhenSkip's placeholder-with-idx++. true → renders
+		// normally. Safe: cross-file register of a dropped group is already
+		// lint-forbidden (per-file validateTaskRefs + ErrUnexpandedInclude), so
+		// an external onchanges can't reference it → resolveOnChanges never hits
 		// ErrOnChangesUnknownRegister.
 		if task.IncludeGroupID != 0 {
 			keep, ok := includeGroupKeep[task.IncludeGroupID]
@@ -176,22 +182,24 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 				includeGroupKeep[task.IncludeGroupID] = keep
 			}
 			if !keep {
-				continue // group-drop: ни RenderedTask, ни idx — реальное исключение.
+				continue // group-drop: no RenderedTask, no idx — a real exclusion.
 			}
 		}
 
-		// assert-задача (ADR-009 amendment 2026-06-23) — keeper-side render-time
-		// precondition. Обрабатывается ДО emitStaticWhenSkip/guardPilotDSL: assert НЕ
-		// emit RenderedTask (это проверка, не задача), поэтому НЕЛЬЗЯ дать
-		// emitStaticWhenSkip эмитить под неё placeholder. evalAssertTask сам соблюдает
-		// `when:`-гейт (static-when-false → assert не вычисляется), а на провале
-		// предиката возвращает ErrAssertFailed (render обрывается, idx не растёт).
-		// idx/tasks/plans НЕ меняются — задачи после assert сдвигаются на её позицию.
+		// assert task (ADR-009 amendment 2026-06-23) — keeper-side render-time
+		// precondition. Handled before emitStaticWhenSkip/guardPilotDSL: an
+		// assert never emits a RenderedTask (it's a check, not a task), so
+		// emitStaticWhenSkip must not emit a placeholder for it. evalAssertTask
+		// itself honors the `when:` gate (static-when-false → assert not
+		// evaluated) and returns ErrAssertFailed on predicate failure (render
+		// aborts, idx doesn't advance). idx/tasks/plans are untouched — tasks
+		// after the assert shift to its position.
 		//
-		// RUN-LEVEL «один раз»: в staged-render Render зовётся per-Passage с растущим
-		// ActivePassage; assert вычисляем ТОЛЬКО когда его Passage активен (иначе
-		// повтор на каждом Passage). Не-staged (TaskPassage==nil: Trial/Acolyte/
-		// CheckDrift) → passage всегда 0 == ActivePassage 0 → один проход, БИТ-В-БИТ.
+		// RUN-LEVEL "once": in staged-render, Render is called per-Passage with
+		// a growing ActivePassage; the assert is evaluated only when its own
+		// Passage is active (otherwise it'd repeat every Passage). Non-staged
+		// (TaskPassage==nil: Trial/Acolyte/CheckDrift) → passage is always 0 ==
+		// ActivePassage 0 → single pass, bit-for-bit unchanged.
 		if IsAssertTask(task) {
 			if in.TaskPassage == nil || passage == in.ActivePassage {
 				if err := p.evalAssertTask(in, task); err != nil {
@@ -201,14 +209,16 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 			continue
 		}
 
-		// Static-when ПРЕДШЕСТВУЕТ guardPilotDSL (ADR-012(d), расширение static-when-
-		// инварианта): статически-false `when:` → задача gated off → скипается ДО
-		// ЛЮБОЙ eager-обработки, включая DSL-guard. Неактивная ветка с unsupported-DSL
-		// (`parallel:`/`block:`) не блокирует активную — её DSL отвергается ТОЛЬКО при
-		// активации (per-action валидация). Это не маскировка: задача физически не
-		// исполняется (parallel: никогда не достигается). isStaticWhen/staticWhenSkips
-		// register-/soulprint-независимы и строят flow_context из input/vars/essence/
-		// incarnation/self — НЕ из DSL-полей, поэтому вызов ДО guard безопасен.
+		// Static-when precedes guardPilotDSL (ADR-012(d), extending the
+		// static-when invariant): a statically-false `when:` gates the task
+		// off and skips it before any eager processing, including the DSL
+		// guard. An inactive branch with unsupported DSL (`parallel:`/`block:`)
+		// doesn't block the active one — its DSL is rejected only on
+		// activation (per-action validation). Not masking a bug: the task is
+		// physically never executed (parallel: is never reached).
+		// isStaticWhen/staticWhenSkips are register-/soulprint-independent and
+		// build flow_context from input/vars/essence/incarnation/self, not DSL
+		// fields, so calling them before the guard is safe.
 		if skipped, serr := p.emitStaticWhenSkip(ctx, in, task, &tasks, &plans, &idx); serr != nil {
 			return nil, nil, serr
 		} else if skipped {
@@ -220,12 +230,14 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 			return nil, nil, err
 		}
 
-		// Будущий Passage (staged-render, ADR-056 §в.1): register ещё не собран —
-		// НЕ резолвим register-зависимые where:/params: (упали бы на пустом
-		// register — это и есть исходный drift). Эмитим placeholder ради сквозной
-		// index-нумерации; orchestrator его в активном Passage не диспатчит. Когда
-		// его Passage станет активным, повторный Render резолвит полноценно.
-		// Гейт строго staged (TaskPassage задан): не-staged caller сюда не входит.
+		// Future passage (staged-render, ADR-056 §c.1): register isn't
+		// collected yet, so register-dependent where:/params: aren't resolved
+		// (they'd fail on an empty register — that's the drift this guards
+		// against). Emit a placeholder to keep the index contiguous; the
+		// orchestrator won't dispatch it in the active passage. Once its
+		// passage becomes active, a repeat Render resolves it fully. Gated
+		// strictly to staged mode (TaskPassage set) — non-staged callers never
+		// reach this branch.
 		if in.TaskPassage != nil && passage > in.ActivePassage {
 			rt := &RenderedTask{Index: idx, Name: task.Name, Register: task.Register, ID: task.ID, Passage: passage}
 			if task.Module != nil {
@@ -237,12 +249,12 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 			continue
 		}
 
-		// keeper-side задача (`on: keeper`, docs/keeper/modules.md): хостов нет —
-		// рендерим params в keeper-контексте (без per-host soulprint) и выдаём
-		// единичный keeper-target. Исполняется локально на keeper-инстансе
-		// (scenario-runner), не диспатчится Soul-у. apply:/loop: на keeper-задаче
-		// в пилоте не поддержаны (guardPilotDSL пропускает apply, поэтому проверяем
-		// здесь явно).
+		// keeper-side task (`on: keeper`, docs/keeper/modules.md): no hosts —
+		// render params in the keeper context (no per-host soulprint) and emit
+		// a single keeper target. Executes locally on the keeper instance
+		// (scenario-runner), never dispatched to a Soul. apply:/loop: on a
+		// keeper task aren't supported in pilot (guardPilotDSL lets apply
+		// through, so check explicitly here).
 		if IsKeeperTask(task) {
 			rt, derr := p.renderKeeperTask(ctx, in, task, idx)
 			if derr != nil {
@@ -264,14 +276,15 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 			return nil, nil, err
 		}
 
-		// run_once: режет таргет до одного хоста (первого по SID) ДО рендера
-		// params и формирования плана — orchestration.md §2.2.2.
+		// run_once: trims the target to one host (first by SID) before
+		// rendering params and building the plan — orchestration.md §2.2.2.
 		targeted = applyRunOnce(targeted, task.RunOnce)
 
-		// apply: destiny — изолированный render-проход destiny (V2). Её задачи
-		// вклеиваются в общий план со сквозными индексами; одна apply-задача
-		// разворачивается в N destiny-задач. run_once родителя уже применён к
-		// targeted; serial: на apply-задаче распространяется на её destiny-задачи.
+		// apply: destiny — isolated destiny render pass (V2). Its tasks are
+		// spliced into the overall plan with contiguous indices; one apply
+		// task expands into N destiny tasks. The parent's run_once is already
+		// applied to targeted; serial: on the apply task propagates to its
+		// destiny tasks.
 		if task.Apply != nil {
 			width := serialWidth(task.Serial, len(targeted))
 			dt, dp, derr := p.renderApplyDestiny(ctx, in, task.Apply, idx, targeted, width, task.Register)
@@ -285,11 +298,12 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 			continue
 		}
 
-		// loop: на module-задаче (slice E1) — render-time fan-out: одна задача
-		// раскрывается в N RenderedTask по элементам items, со сквозными
-		// индексами (симметрично apply:destiny). loop размножается ПОСЛЕ резолва
-		// таргета (on→where→run_once), внутри каждого targeted-хоста; serial:
-		// наследуется всеми итерациями (оси ортогональны, orchestration.md §2.2).
+		// loop: on a module task (slice E1) — render-time fan-out: one task
+		// expands into N RenderedTask entries over items, with contiguous
+		// indices (mirrors apply:destiny). Loop expansion happens after target
+		// resolution (on→where→run_once), within each targeted host; serial:
+		// is inherited by every iteration (orthogonal axes, orchestration.md
+		// §2.2).
 		if task.Loop != nil {
 			lt, lp, lerr := p.renderLoopTask(ctx, in, task, idx, targeted)
 			if lerr != nil {
@@ -302,15 +316,17 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 			continue
 		}
 
-		// block: (pilot C1) — render-time fan-out в плоский слой RenderedTask, как
-		// loop/apply:destiny. targeted уже резолвлен по block.on/block.where +
-		// run_once (выше) — потомки наследуют on/where/run_once бесплатно. width из
-		// block.serial раздаётся всем потомкам. stampPassage клеймит весь fan-out
-		// одним Passage (block атомарен по Passage, ADR-056). Static-when-false
-		// block НЕ гасится emitStaticWhenSkip (она пропускает block-задачу) — он
-		// заходит сюда, walkBlockChildren вольёт block.when в каждого потомка через
-		// AND и каждый child эмитит СВОЙ skip-placeholder с register/requisites
-		// (flat-register-scope цел при skip — иначе register потомков терялся бы).
+		// block: (pilot C1) — render-time fan-out into the flat RenderedTask
+		// layer, like loop/apply:destiny. targeted is already resolved against
+		// block.on/block.where + run_once (above) — descendants inherit
+		// on/where/run_once for free. width from block.serial is handed to
+		// every descendant. stampPassage stamps the whole fan-out with one
+		// Passage (block is atomic per Passage, ADR-056). A static-when-false
+		// block isn't gated by emitStaticWhenSkip (it skips block tasks) — it
+		// falls through here instead: walkBlockChildren ANDs block.when into
+		// every descendant, and each child emits its own skip placeholder with
+		// register/requisites (keeps flat-register-scope intact on skip —
+		// otherwise descendant registers would be lost).
 		if task.Block != nil {
 			bt, bp, berr := p.renderBlockTask(ctx, in, task, idx, targeted)
 			if berr != nil {
@@ -338,10 +354,10 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 		stampPassage(tasks, passageStart, passage)
 	}
 
-	// Резолв `onchanges:`/`onfail:` register-имён в task-индексы (Variant A) —
-	// финальным проходом, когда весь план собран: при apply:destiny/loop Index
-	// сквозные и раньше резолва ещё не известны (renderTaskIter рендерит до того,
-	// как появятся последующие задачи-источники).
+	// Resolve `onchanges:`/`onfail:` register names to task indices (Variant
+	// A) as a final pass once the whole plan is built: with apply:destiny/loop
+	// the Index is contiguous but unknown earlier (renderTaskIter renders
+	// before later source tasks exist).
 	if err := resolveOnChanges(tasks); err != nil {
 		return nil, nil, err
 	}
@@ -352,30 +368,35 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 	return tasks, plans, nil
 }
 
-// renderTask рендерит params одной module-задачи (после vault-resolve + CEL) и
-// собирает RenderedTask. Тонкая обёртка над renderTaskIter без loop-переменных.
+// renderTask renders params for a single module task (after vault-resolve +
+// CEL) and builds a RenderedTask. Thin wrapper over renderTaskIter with no
+// loop variables.
 func (p *Pipeline) renderTask(ctx context.Context, in RenderInput, task config.Task, idx int, targeted []*topology.HostFacts) (*RenderedTask, error) {
 	return p.renderTaskIter(ctx, in, task, idx, targeted, nil)
 }
 
-// renderTaskIter рендерит params одной module-задачи (или одной `loop:`-итерации)
-// per-host (после vault-resolve + CEL) и собирает RenderedTask. params рендерятся
-// per-host и сверяются на host-инвариантность (pilot-ограничение, см. Render).
+// renderTaskIter renders params for a single module task (or a single
+// `loop:` iteration) per host (after vault-resolve + CEL) and builds a
+// RenderedTask. params are rendered per host and checked for host-invariance
+// (pilot restriction, see Render).
 //
-// loopVars — переменные текущей итерации (`<as>`/`<index_as>`); nil для задачи
-// без loop:. host-инвариантность проверяется ПО-ИТЕРАЦИОННО: для фиксированных
-// loopVars params обязаны совпадать на всех targeted-хостах. По оси ИТЕРАЦИЙ
-// loop легитимно порождает разные params (caller renderLoopTask вызывает
-// renderTaskIter с разными loopVars) — это не нарушение инварианта.
+// loopVars holds the current iteration's variables (`<as>`/`<index_as>`);
+// nil for a task without loop:. Host-invariance is checked per-iteration: for
+// fixed loopVars, params must match across all targeted hosts. Across the
+// iteration axis, loop legitimately produces different params (caller
+// renderLoopTask calls renderTaskIter with different loopVars per iteration)
+// — that's not an invariant violation.
 //
-// Пустой targeted (where: отфильтровал всех) — задача всё равно появляется в
-// списке (с пустым DispatchPlan); params рендерятся в контексте без soulprint,
-// чтобы RenderedTask был полноценным, а orchestrator сам пропустил диспатч.
+// Empty targeted (where: filtered everyone out) still produces a task in the
+// list (with an empty DispatchPlan); params render in a context without
+// soulprint so the RenderedTask is complete and the orchestrator simply
+// skips dispatch.
 func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task config.Task, idx int, targeted []*topology.HostFacts, loopVars map[string]any) (*RenderedTask, error) {
-	// Guard fail-closed: host-вариативный flow-control-предикат (soulprint.self) на
-	// multi-host таргете молча решился бы по фактам первого хоста для всех (dispatch
-	// раздаёт один RenderedTask с flow_context первого хоста). Режем ДО построения
-	// flow_context — симметрично reLoopWhenSoulprint (loop.go).
+	// Fail-closed guard: a host-variant flow-control predicate
+	// (soulprint.self) on a multi-host target would silently resolve using
+	// the first host's facts for everyone (dispatch hands out one
+	// RenderedTask carrying the first host's flow_context). Reject before
+	// building flow_context — mirrors reLoopWhenSoulprint (loop.go).
 	if err := guardFlowControlHostInvariant(task, targeted); err != nil {
 		return nil, err
 	}
@@ -388,10 +409,10 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		ID:       task.ID,
 		NoLog:    task.NoLog,
 		Timeout:  task.Timeout,
-		// flow-control CEL-строки (ADR-012(d)) протягиваются КАК ЕСТЬ — Keeper их
-		// НЕ вычисляет (зависят от register.* предыдущих задач, известных только
-		// Soul-у). Host-инвариантны (текст предиката один на задачу); Soul
-		// вычисляет per-host.
+		// flow-control CEL strings (ADR-012(d)) pass through as-is — Keeper
+		// never evaluates them (they depend on register.* from prior tasks,
+		// known only to Soul). Host-invariant (one predicate text per task);
+		// Soul evaluates per host.
 		When:           task.When,
 		ChangedWhen:    task.ChangedWhen,
 		FailedWhen:     task.FailedWhen,
@@ -399,32 +420,36 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		onFailNames:    task.OnFail,
 	}
 
-	// retry: (destiny/tasks.md §9) — энфорс Soul-side; Keeper протягивает поля как
-	// есть. nil Retry → одна попытка (zero-value RetryCount=0, until/delay пусты).
+	// retry: (destiny/tasks.md §9) is enforced Soul-side; Keeper just passes
+	// the fields through. nil Retry → one attempt (zero-value RetryCount=0,
+	// until/delay empty).
 	if task.Retry != nil {
 		rt.RetryCount = task.Retry.Count
 		rt.RetryDelay = task.Retry.Delay
 		rt.Until = task.Retry.Until
 	}
 
-	// Хосты для CEL-рендера: targeted, либо — если where: отфильтровал всех —
-	// один синтетический пустой контекст (params без soulprint-зависимости).
+	// Hosts for CEL render: targeted, or — if where: filtered everyone out —
+	// one synthetic empty context (params with no soulprint dependency).
 	renderHosts := targeted
 	if len(renderHosts) == 0 {
 		renderHosts = []*topology.HostFacts{{}}
 	}
 
-	// Static-when placeholder-skip (ADR-012(d), Вариант b): при register-/soulprint-
-	// независимом when:, вычислившемся в false на Keeper-е, params НЕ рендерятся —
-	// задача всё равно станет SKIPPED на Soul-е (он вычислит тот же when по тому же
-	// flow_context). Это лечит multi-action destiny: задачи неактивной ветки
-	// (`when: input.action == 'apply'` при другом action) читают optional-input,
-	// которого нет → no-such-key → render_failed эжер-рендера. Skip собирает ТОЛЬКО
-	// flow_context (Soul читает его для evalWhen — сборка из input/vars/essence/
-	// incarnation/self, НЕ из падающих params, безопасна) и оставляет полноценный
-	// RenderedTask (Index/Passage/Register/When/requisites сохранены, params пусты).
-	// Решение детерминировано (static-when host-инвариантен) — берётся на первом
-	// хосте, fc остальных собирается ради валидности snapshot-а.
+	// Static-when placeholder-skip (ADR-012(d), Variant b): when a register-/
+	// soulprint-independent when: evaluates false on Keeper, params aren't
+	// rendered — the task still ends up SKIPPED on Soul (it evaluates the
+	// same when against the same flow_context). This fixes multi-action
+	// destinies: tasks on an inactive branch (`when: input.action ==
+	// 'apply'` under a different action) that read an optional input which
+	// isn't present would otherwise hit no-such-key → render_failed during
+	// eager render. The skip collects only flow_context (Soul reads it for
+	// evalWhen — built from input/vars/essence/incarnation/self, never from
+	// the failing params — so it's safe) and leaves a complete RenderedTask
+	// (Index/Passage/Register/When/requisites kept, params empty). The
+	// decision is deterministic (static-when is host-invariant) — taken on
+	// the first host; fc for the rest is still built to keep their snapshot
+	// valid.
 	if skip, serr := p.staticWhenSkips(in, task, renderHosts, len(targeted), loopVars); serr != nil {
 		return nil, serr
 	} else if skip != nil {
@@ -437,19 +462,21 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		return nil, fmt.Errorf("render: task %q: %w", task.Name, err)
 	}
 
-	// seal / sealed-paths ([ADR-010] §7.4): пометить пути ячеек params, чьё СЫРОЕ
-	// `${ … }`-значение читает secret-источник (secret-input/vault()). Обход СЫРЫХ
-	// params (task.Module.Params, ДО resolveVaultRefs+CEL) — единственный, где
-	// видны исходные выражения. Per-task (host-инвариантно), nil-Sealed → no-op.
+	// seal / sealed-paths ([ADR-010] §7.4): mark params cell paths whose raw
+	// `${ … }` value reads a secret source (secret-input/vault()). Walking
+	// raw params (task.Module.Params, before resolveVaultRefs+CEL) is the
+	// only place the original expressions are visible. Per-task
+	// (host-invariant), nil Sealed → no-op.
 	collectSealed(p.cel, in.Sealed, task.Module.Params, scenarioSealSources(in), "")
 
 	isRendered := task.Module.Module == moduleFileRendered
 
-	// core.file.rendered: ДО per-host цикла читаем содержимое шаблона ОДИН раз и
-	// детектим, ссылается ли он на корневое `.input.*` (tmpl.UsesRootField по AST,
-	// не string-search — упоминание `.input` в комментарии тела не считается).
-	// Путь шаблона host-инвариантен (пилот-контракт), поэтому содержимое и флаг —
-	// тоже. content переиспользуется injectTemplateContent ниже (не читаем дважды).
+	// core.file.rendered: before the per-host loop, read the template
+	// content once and detect whether it references the root `.input.*`
+	// (tmpl.UsesRootField via AST, not string search — mentioning `.input`
+	// inside a body comment doesn't count). The template path is
+	// host-invariant (pilot contract), so content and the flag are too.
+	// content is reused by injectTemplateContent below (no double read).
 	var templateContent string
 	var injectInput bool
 	var fileVarKeys map[string]bool
@@ -461,18 +488,20 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		templateContent = content
 		injectInput = uses
 
-		// Точечная инъекция file-vars (vars.yml): какие `.vars.<key>` шаблон реально
-		// читает (AST) — см. buildRenderContext/referencedFileVars. Host-инвариантно
-		// (путь шаблона один), считаем один раз ДО per-host цикла.
+		// Targeted file-vars (vars.yml) injection: which `.vars.<key>` the
+		// template actually reads (AST) — see buildRenderContext/
+		// referencedFileVars. Host-invariant (one template path), computed
+		// once before the per-host loop.
 		keys, kerr := templateVarSubKeys(templateContent)
 		if kerr != nil {
 			return nil, fmt.Errorf("render: task %q: %w", task.Name, kerr)
 		}
 		fileVarKeys = keys
 
-		// seal S-1 (ADR-010 §7.4, Вариант B): помечаем sealed пути render_context.
-		// input.<secret> по схеме, под тем же injectInput-гейтом, что и инъекция
-		// самого input (детали — sealRenderContextInput/buildRenderContext §Security).
+		// seal S-1 (ADR-010 §7.4, Variant B): mark sealed paths of
+		// render_context.input.<secret> per schema, gated the same as the
+		// input injection itself (see sealRenderContextInput/
+		// buildRenderContext §Security).
 		if injectInput {
 			sealRenderContextInput(in.Sealed, in)
 		}
@@ -489,21 +518,24 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		if err != nil {
 			return nil, fmt.Errorf("render: task %q (host %s): %w", task.Name, h.SID, err)
 		}
-		// core.file.rendered: собираем per-host render_context (buildRenderContext)
-		// и кладём в params рядом с template_content. Плоский ключ params.vars
-		// удаляем — Soul читает корень ТОЛЬКО из render_context (§3.2/§6).
-		// render_context host-вариативен (self per-host) — исключён из
-		// host-инвариантной сверки ниже; rt.Params несёт значение первого хоста.
+		// core.file.rendered: build the per-host render_context
+		// (buildRenderContext) and place it in params alongside
+		// template_content. The flat params.vars key is removed — Soul reads
+		// the root only from render_context (§3.2/§6). render_context is
+		// host-variant (self per host) — excluded from the host-invariance
+		// check below; rt.Params carries the first host's value.
 		//
-		// ★ Частичное закрытие open Q №25 (ТОЛЬКО render_context.self): собранный
-		// render_context КАЖДОГО хоста материализуем в rt.RenderContextBySID[SID].
-		// Без этого все хосты получили бы render_context первого по SID (один
-		// *RenderedTask диспатчится всем — groupByHost/claim), и self-вариативный
-		// шаблон (`{{ .self.network.primary_ip }}`) тихо рендерился бы фактами
-		// первого хоста. ToProtoTasksForHost подставит per-host вариант поверх
-		// Params при сборке ApplyRequest конкретного SID. Карту заполняем только при
-		// multi-host (N=1: render_context первого == единственного, overlay не нужен,
-		// поведение бит-в-бит). Полный per-host dispatch (Вариант B) — отдельный ADR.
+		// Partial fix for open Q #25 (render_context.self only): each host's
+		// render_context is materialized into rt.RenderContextBySID[SID].
+		// Without this, every host would get the first host's render_context
+		// (one *RenderedTask is dispatched to all — groupByHost/claim),
+		// silently rendering a self-variant template (`{{
+		// .self.network.primary_ip }}`) with the first host's facts.
+		// ToProtoTasksForHost overlays the per-host variant onto Params when
+		// building a given SID's ApplyRequest. The map is only populated for
+		// multi-host (N=1: first host's render_context == the only one, no
+		// overlay needed, behavior unchanged). Full per-host dispatch
+		// (Variant B) is a separate ADR.
 		if isRendered {
 			paramsVars := extractParamsVars(st)
 			delete(st.Fields, paramVars)
@@ -518,16 +550,18 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 				rt.RenderContextBySID[h.SID] = st.Fields[paramRenderContext].GetStructValue()
 			}
 		}
-		// flow_context (ADR-012(d)): per-host снапшот {input,vars,essence,
-		// incarnation,self} для Soul-side flow-control-предикатов. Собирается из той
-		// же vars, что и params (минус soulprint.hosts/loop, см. buildFlowContext).
-		// Host-вариативен (self per-host) — как render_context, исключён из
-		// host-инвариантной сверки; rt несёт значение первого хоста (golden-path).
+		// flow_context (ADR-012(d)): per-host snapshot {input,vars,essence,
+		// incarnation,self} for Soul-side flow-control predicates. Built from
+		// the same vars as params (minus soulprint.hosts/loop, see
+		// buildFlowContext). Host-variant (self per host) — like
+		// render_context, excluded from the host-invariance check; rt carries
+		// the first host's value (golden path).
 		//
-		// На hi>0 fc пересобирается ТОЛЬКО ради ошибки построения (валидность
-		// snapshot-а этого хоста); wire-значение rt.FlowContext берётся от первого
-		// хоста (hi==0). Это НЕ забытый per-host dispatch — host-вариативность
-		// flow-control на multi-host уже отсечена guardFlowControlHostInvariant.
+		// For hi>0, fc is rebuilt only to surface build errors (validating
+		// this host's snapshot); the wire value rt.FlowContext comes from the
+		// first host (hi==0). Not a forgotten per-host dispatch — host-variant
+		// flow-control on multi-host is already rejected by
+		// guardFlowControlHostInvariant.
 		fc, err := buildFlowContext(in, h, vars, len(targeted))
 		if err != nil {
 			return nil, fmt.Errorf("render: task %q (host %s): %w", task.Name, h.SID, err)
@@ -544,22 +578,23 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 				"render: task %q даёт host-зависимые params (%s vs %s) — host-вариативность params вне pilot-объёма (per-host ApplyRequest — слой orchestrator-а)",
 				task.Name, firstSID, h.SID)
 		}
-		// Второй контур fail-closed: host-вариативный flow_context (vars,
-		// производный от soulprint.self, протёкший в flow_context.vars). Текст
-		// предиката тогда не содержит soulprint (например, `when: vars.is_debian`),
-		// и regex-guard (guardFlowControlHostInvariant) его НЕ ловит — обход через
-		// task-level vars. Здесь сверяем собранный flow_context-МИНУС-self между
-		// хостами (self host-вариантен по природе и закрыт текстовым guard).
+		// Second fail-closed layer: host-variant flow_context (vars derived
+		// from soulprint.self, leaking into flow_context.vars). The predicate
+		// text then contains no "soulprint" (e.g. `when: vars.is_debian`), so
+		// the regex guard (guardFlowControlHostInvariant) misses it — a
+		// task-level vars bypass. Here we diff the collected flow_context
+		// MINUS self across hosts (self is host-variant by nature and already
+		// covered by the text guard).
 		//
-		// ГЕЙТ: сверка активна ТОЛЬКО при наличии хоть одного непустого
-		// flow-control-предиката. Без предиката Soul flow_context не читает — его
-		// вариативность безразлична; легитимная задача с host-вариативным vars-в-
-		// params (без when) должна падать на СВОЁМ paramsHostInvariant выше, не на
-		// этой сверке.
+		// GATE: this check only runs when at least one flow-control predicate
+		// is non-empty. Without a predicate, Soul never reads flow_context —
+		// its variance doesn't matter; a legitimate task with host-variant
+		// vars-in-params (no when) should fail on paramsHostInvariant above,
+		// not here.
 		//
-		// Оба контура (regex по тексту + сверка снапшота) — ВРЕМЕННЫЙ fail-closed
-		// до per-host dispatch (open Q №25); при его реализации снимаются
-		// согласованно.
+		// Both layers (text regex + snapshot diff) are a temporary
+		// fail-closed measure until per-host dispatch (open Q #25) lands;
+		// they'll be removed together when it does.
 		if hasFlowControl(task) && !flowContextHostInvariant(rt.FlowContext, fc) {
 			return nil, fmt.Errorf(
 				"render: task %q: host-вариативный flow_context (vars, производный от soulprint.self) на multi-host таргете (%s vs %s) — fail-closed; per-host dispatch отложен (отдельный ADR)",
@@ -567,10 +602,11 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		}
 	}
 
-	// core.file.rendered: после CEL-фазы заменяем params.template (путь) на
-	// literal template_content (Keeper читает .tmpl, A1/ADR-012(d)). text/template
-	// не исполняется — рендер на Soul. Содержимое уже прочитано до per-host цикла
-	// (resolveTemplateUsesInput) — переиспользуем, не читаем файл повторно.
+	// core.file.rendered: after the CEL phase, replace params.template (a
+	// path) with the literal template_content (Keeper reads the .tmpl,
+	// A1/ADR-012(d)). text/template is not executed here — rendering happens
+	// on Soul. Content was already read before the per-host loop
+	// (resolveTemplateUsesInput) — reused, not read again.
 	if err := injectTemplateContent(rt, in.Templates, templateContent); err != nil {
 		return nil, err
 	}
@@ -578,23 +614,26 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 	return rt, nil
 }
 
-// staticWhenSkips решает, пропускать ли рендер params задачи по статическому when:
-// (ADR-012(d), Вариант b placeholder-skip). Возвращает:
-//   - (fc, nil) — задачу СКИПАЕМ: when статический (register-/soulprint-независимый)
-//     и вычислился в false. fc — flow_context первого хоста (его Soul читает для
-//     собственного evalWhen → подтвердит when:false → SKIPPED, как сейчас);
-//   - (nil, nil) — НЕ скипаем: when не статический (register/soulprint/пустой) ИЛИ
-//     статический-но-true. Обычный путь с рендером params.
-//   - (nil, err) — ошибка сборки flow_context либо eval статического предиката
-//     (битый when — Keeper падает так же, как упал бы Soul; см. evalStaticWhen).
+// staticWhenSkips decides whether to skip rendering a task's params based on
+// a static when: (ADR-012(d), Variant b placeholder-skip). Returns:
+//   - (fc, nil) — SKIP the task: when is static (register-/soulprint-
+//     independent) and evaluated false. fc is the first host's flow_context
+//     (Soul reads it for its own evalWhen → confirms when:false → SKIPPED,
+//     as today);
+//   - (nil, nil) — don't skip: when is non-static (register/soulprint/empty)
+//     or static-but-true. Normal path, params get rendered.
+//   - (nil, err) — error building flow_context or evaluating the static
+//     predicate (a broken when — Keeper fails the same way Soul would; see
+//     evalStaticWhen).
 //
-// Решение детерминировано: static-when host-инвариантен по построению (не зависит
-// от soulprint.self/register — единственных host-вариативных слоёв), поэтому
-// вычисляется на ПЕРВОМ хосте. flow_context остальных хостов всё равно собирается
-// (валидность snapshot-а каждого хоста — как и в основном цикле renderTaskIter), но
-// в исход static-when не входит. Так skip консистентен по хостам и по Passage:
-// один input/state-снимок прогона даёт один и тот же false на всех хостах и при
-// повторном рендере следующего Passage.
+// The decision is deterministic: static-when is host-invariant by
+// construction (doesn't depend on soulprint.self/register, the only
+// host-variant layers), so it's evaluated on the first host. flow_context
+// for the remaining hosts is still built (to validate each host's snapshot,
+// as in renderTaskIter's main loop), but doesn't affect the static-when
+// outcome. This keeps the skip consistent across hosts and across Passages:
+// one input/state snapshot of the run yields the same false on every host
+// and on a repeat render of the next Passage.
 func (p *Pipeline) staticWhenSkips(
 	in RenderInput,
 	task config.Task,
@@ -627,26 +666,29 @@ func (p *Pipeline) staticWhenSkips(
 		return nil, fmt.Errorf("render: task %q: static-when %q: %w", task.Name, task.When, err)
 	}
 	if pass {
-		return nil, nil // when:true — задача активна, рендерим params обычным путём.
+		return nil, nil // when:true — task is active, render params normally.
 	}
 	return firstFC, nil
 }
 
-// evalIncludeWhen вычисляет include-when условного include (conditional-include
-// group-drop, ADR-009 amendment) — keeper-side, ОДИН раз на группу. include-when
-// статичен по контракту (config.ExpandIncludes отверг бы динамический как
-// include_when_dynamic_unsupported, isStaticWhen его здесь подтверждает defense-in-
-// depth), поэтому вычисляется тем же flow-control-движком и тем же flow_context, что
-// static-when-skip — host-инвариантно, на ПЕРВОМ хосте roster-а.
+// evalIncludeWhen evaluates the include-when of a conditional include
+// (conditional-include group-drop, ADR-009 amendment) — keeper-side, once
+// per group. include-when is static by contract (config.ExpandIncludes
+// would reject a dynamic one as include_when_dynamic_unsupported,
+// isStaticWhen reconfirms it here as defense-in-depth), so it's evaluated
+// with the same flow-control engine and flow_context as static-when-skip —
+// host-invariant, on the roster's first host.
 //
-// Возвращает keep: true → группа остаётся (задачи рендерятся обычным путём); false →
-// группа дропается (caller делает continue без эмита/idx++). Пустой include-when сюда
-// не приходит (IncludeGroupID!=0 ⇔ непустой when, ExpandIncludes). Ошибка eval (битый
-// предикат / no-such-key на отсутствующем input) пробрасывается caller-у — Keeper
-// падает render_failed так же, как упал бы на нём static-when.
+// Returns keep: true → the group stays (tasks render normally); false → the
+// group is dropped (caller continues without emitting/idx++). An empty
+// include-when never reaches here (IncludeGroupID!=0 ⇔ non-empty when, per
+// ExpandIncludes). An eval error (broken predicate / no-such-key on a
+// missing input) propagates to the caller — Keeper fails with render_failed
+// the same way Soul would on a static-when.
 func (p *Pipeline) evalIncludeWhen(in RenderInput, when string) (bool, error) {
-	// defense-in-depth: ExpandIncludes уже гарантировал статичность; если сюда дошёл
-	// не-static include-when (баг раскрытия) — fail-closed, не молча keep.
+	// defense-in-depth: ExpandIncludes already guaranteed staticity; if a
+	// non-static include-when reaches here (an expansion bug) — fail-closed,
+	// don't silently keep.
 	if !isStaticWhen(when) {
 		return false, fmt.Errorf("render: include-when %q не статичен (register/soulprint) — group-drop требует статического предиката (ADR-009 amendment)", when)
 	}
@@ -670,29 +712,35 @@ func (p *Pipeline) evalIncludeWhen(in RenderInput, when string) (bool, error) {
 	return keep, nil
 }
 
-// emitStaticWhenSkip — ранний static-when placeholder-skip, выполняемый в НАЧАЛЕ
-// итерации обхода задач, ДО guardPilotDSL/guardDestinyTask (ADR-012(d), расширение
-// static-when-инварианта). Если `when:` статический (register-/soulprint-независим)
-// и вычислился в false — задача gated off: эмитим skip-placeholder(ы), мутируя
-// tasks/plans/idx через указатели, и возвращаем skipped=true. Caller делает
-// `continue` БЕЗ guard и БЕЗ рендера — поэтому unsupported-DSL (`parallel:`/`block:`)
-// в неактивной ветке не отвергается (он недостижим — задача не исполняется).
+// emitStaticWhenSkip is an early static-when placeholder-skip, run at the
+// START of the task-iteration loop, before guardPilotDSL/guardDestinyTask
+// (ADR-012(d), extending the static-when invariant). If `when:` is static
+// (register-/soulprint-independent) and evaluates false, the task is gated
+// off: emit skip placeholder(s), mutating tasks/plans/idx through pointers,
+// and return skipped=true. The caller does `continue` without the guard and
+// without rendering — so unsupported DSL (`parallel:`/`block:`) on an
+// inactive branch is never rejected (it's unreachable — the task never
+// executes).
 //
-// Возвращает:
-//   - (false, nil) — НЕ static-skip: when не статический ИЛИ статический-но-true.
-//     Caller идёт обычным путём (guard → resolveTargets → render);
-//   - (true, nil) — задача скипнута, placeholder(ы) уже добавлены;
-//   - (false, err) — ошибка сборки flow_context/eval статического предиката.
+// Returns:
+//   - (false, nil) — not a static-skip: when is non-static or
+//     static-but-true. Caller takes the normal path (guard →
+//     resolveTargets → render);
+//   - (true, nil) — task skipped, placeholder(s) already appended;
+//   - (false, err) — error building flow_context / evaluating the static
+//     predicate.
 //
-// flow_context строится из in.Hosts (синтетический пустой хост при пустом roster):
-// static-when host-инвариантен (не зависит от soulprint.self), исход одинаков на
-// всех хостах; `self` в placeholder-flow_context Soul читает лишь как данные для
-// собственного evalWhen, который тот же предикат тоже признает false → SKIPPED.
+// flow_context is built from in.Hosts (a synthetic empty host when the
+// roster is empty): static-when is host-invariant (doesn't depend on
+// soulprint.self), the outcome is the same on every host; Soul reads `self`
+// in the placeholder flow_context only as data for its own evalWhen, which
+// evaluates the same predicate to false too → SKIPPED.
 //
-// loop-задача (task.Loop != nil): N/1 skip-placeholder через loopStaticSkip —
-// паритет Index с активной веткой (резолвимый items → N, нерезолвимый → 1). Это
-// ловит loop ДО renderLoopTask — единственный путь static-skip для loop (внутри
-// renderLoopTask static-when-гейта больше нет). Не-loop задача → один placeholder.
+// loop task (task.Loop != nil): N/1 skip placeholders via loopStaticSkip —
+// keeps Index parity with the active branch (resolvable items → N,
+// unresolvable → 1). This catches loop before renderLoopTask — the only
+// static-skip path for loop (renderLoopTask itself no longer has a
+// static-when gate). Non-loop task → one placeholder.
 func (p *Pipeline) emitStaticWhenSkip(
 	ctx context.Context,
 	in RenderInput,
@@ -705,16 +753,18 @@ func (p *Pipeline) emitStaticWhenSkip(
 		return false, nil
 	}
 
-	// block-задача со static-false when: НЕ гасится здесь одним placeholder-ом
-	// (иначе ветка renderBlockTask/renderDestinyBlock не отработает, потомки не
-	// материализуются, и их register теряется — resolveOnChanges снаружи падает
-	// ErrOnChangesUnknownRegister). Отдаём её ветке block: mergeBlockInheritance
-	// вольёт block.when в КАЖДОГО потомка через AND, static-when каждого потомка
-	// станет false, и каждый child сам пройдёт через emitStaticWhenSkip внутри
-	// walkBlockChildren, эмитнув placeholder со СВОИМ Register/requisites/ID
-	// (паттерн loopStaticSkip — block раскрывается per-потомок, не одним
-	// placeholder-ом). flat-register-scope цел и при skip. Сам block register не
-	// несёт (запрещён валидатором) — на block-узле терять нечего.
+	// A block task with a static-false when: is NOT gated here with a single
+	// placeholder (otherwise the renderBlockTask/renderDestinyBlock branch
+	// never runs, descendants never materialize, and their register is lost
+	// — resolveOnChanges fails downstream with ErrOnChangesUnknownRegister).
+	// Instead defer to the block: branch — mergeBlockInheritance ANDs
+	// block.when into every descendant, each descendant's static-when
+	// becomes false, and each child goes through emitStaticWhenSkip inside
+	// walkBlockChildren, emitting its own placeholder with its own
+	// Register/requisites/ID (the loopStaticSkip pattern — block expands
+	// per-descendant, not as one placeholder). flat-register-scope stays
+	// intact on skip. The block node itself carries no register (forbidden
+	// by the validator) — nothing to lose there.
 	if task.Block != nil {
 		return false, nil
 	}
@@ -728,7 +778,7 @@ func (p *Pipeline) emitStaticWhenSkip(
 		return false, err
 	}
 	if skip == nil {
-		return false, nil // static-true → активна, обычный путь.
+		return false, nil // static-true → active, normal path.
 	}
 
 	if task.Loop != nil {
@@ -752,10 +802,11 @@ func (p *Pipeline) emitStaticWhenSkip(
 	return true, nil
 }
 
-// staticSkipPlaceholder строит один skip-placeholder для задачи с статически-false
-// when: (Params=nil — рендер пропущен; flow_context первого хоста; протянутые
-// When/ID/Register/requisites). Module берётся при наличии module-задачи (block/
-// parallel-без-module → пустой Module — placeholder валиден, исполнения не будет).
+// staticSkipPlaceholder builds one skip placeholder for a task with a
+// statically-false when: (Params=nil — render skipped; first host's
+// flow_context; When/ID/Register/requisites passed through). Module is set
+// when a module task is present (block/parallel-without-module → empty
+// Module — placeholder is still valid, just never executed).
 func (p *Pipeline) staticSkipPlaceholder(task config.Task, idx int, skip *structpb.Struct) *RenderedTask {
 	rt := &RenderedTask{
 		Index:          idx,
@@ -777,55 +828,63 @@ func (p *Pipeline) staticSkipPlaceholder(task config.Task, idx int, skip *struct
 	return rt
 }
 
-// EvalAsserts вычисляет ТОЛЬКО assert-задачи scenario (ADR-009 amendment
-// 2026-06-23, двухточечная eval) — без эмита RenderedTask и без vault-resolve/
-// dispatch/on-where. Переиспользуется pre-flight-гейтом create-прогона
-// (request-путь, ДО коммита incarnation — keeper/internal/scenario.PreflightAssert):
-// тот же source-of-truth вычисления предиката, что и render-ветка ([Render] →
-// [evalAssertTask]), без диалекта.
+// EvalAsserts evaluates ONLY the scenario's assert tasks (ADR-009 amendment
+// 2026-06-23, two-point eval) — no RenderedTask emission, no vault-resolve/
+// dispatch/on-where. Reused by the create-run pre-flight gate (request path,
+// before the incarnation is committed —
+// keeper/internal/scenario.PreflightAssert): same source of truth for
+// predicate evaluation as the render branch ([Render] → [evalAssertTask]),
+// no separate dialect.
 //
-// Контракт совпадает с assert-веткой Render бит-в-бит: проходит scenario.Tasks по
-// порядку, применяет conditional-include group-drop (Task.IncludeGroupID/IncludeWhen,
-// проставлены config.ExpandIncludes) ДО assert-проверки — как [Render]: assert из
-// дропнутой include-группы НЕ вычисляется (cluster.yml-assert на sentinel-прогоне
-// исключён из плана, а не падает CEL no-such-key). Для каждой оставшейся
-// [IsAssertTask]-задачи зовёт общий [evalAssertTask] (тот же when:-гейт, тот же
-// run-level CEL-контекст с soulprint.hosts). Первый false → [ErrAssertFailed]
-// (обрыв, текст = message + индекс/текст предиката). Не-assert задачи пропускаются
-// (pre-flight не рендерит их — это делает Render на старте прогона). Все assert true
-// / scenario без assert → nil (большинство сценариев — no-op, как и требует пилот).
+// The contract matches Render's assert branch bit-for-bit: walks
+// scenario.Tasks in order, applies conditional-include group-drop
+// (Task.IncludeGroupID/IncludeWhen, set by config.ExpandIncludes) before the
+// assert check — like [Render]: an assert from a dropped include group is
+// never evaluated (a cluster.yml assert on a sentinel run is excluded from
+// the plan rather than failing on CEL no-such-key). For each remaining
+// [IsAssertTask] task it calls the shared [evalAssertTask] (same when: gate,
+// same run-level CEL context with soulprint.hosts). First false →
+// [ErrAssertFailed] (abort, text = message + failing predicate index/text).
+// Non-assert tasks are skipped (pre-flight doesn't render them — Render does
+// that at run start). All asserts true / scenario with no asserts → nil
+// (most scenarios are a no-op here, as pilot requires).
 //
-// NOT staged: pre-flight всегда не-staged (один проход, TaskPassage=nil), assert —
-// run-level «один раз на прогон» по построению; passage-фильтр Render-а здесь не
-// нужен (он защищает от повтора assert на каждом Passage staged-прохода, чего в
-// pre-flight нет). nil-Scenario → ошибка (структурный отказ caller-а, как в Render).
+// NOT staged: pre-flight is always non-staged (single pass, TaskPassage=nil);
+// assert is run-level "once per run" by construction, so Render's
+// passage-filter isn't needed here (it guards against re-running the assert
+// on every Passage of a staged pass, which doesn't apply to pre-flight).
+// nil Scenario → error (a caller error, as in Render).
 func (p *Pipeline) EvalAsserts(ctx context.Context, in RenderInput) error {
 	if in.Scenario == nil {
 		return fmt.Errorf("render: scenario manifest is nil")
 	}
-	ctx = cel.WithVaultMemo(ctx) // per-pass vault()-memo (assert pre-flight — отдельный pass)
-	in.Ctx = ctx                 // assert.that[] может звать vault() — прокинуть отмену/таймаут + memo
-	// compute: доступен в assert.that[] так же, как в params/where (один резолв,
-	// рун-уровневый контекст без soulprint). Идемпотентно с Render/RenderStateOps.
+	ctx = cel.WithVaultMemo(ctx) // per-pass vault() memo (assert pre-flight is its own pass)
+	in.Ctx = ctx                 // assert.that[] may call vault() — propagate cancel/timeout + memo
+	// compute: available in assert.that[] the same as in params/where (one
+	// resolve, run-level context, no soulprint). Idempotent with
+	// Render/RenderStateOps.
 	computed, cerr := p.resolveCompute(in)
 	if cerr != nil {
 		return cerr
 	}
 	in.Compute = computed
 
-	// includeGroupKeep — кеш решения по условному include (group-drop), ЗЕРКАЛО
-	// [Render]: id группы (Task.IncludeGroupID, проставлен ExpandIncludes) → keep/drop,
-	// вычисляется один раз на группу. Без него assert из conditionally-included файла
-	// (cluster.yml под `when: input.redis_type=='cluster'`) вычислялся бы и на
-	// несовпадающем режиме (sentinel-прогон → CEL no-such-key: shards), тогда как
-	// Render/Trial эту группу дропают ДО assert. Single-source-of-truth восстановлен:
-	// pre-flight применяет include-when к asserts так же, как run-render.
+	// includeGroupKeep — conditional-include (group-drop) decision cache,
+	// mirroring [Render]: group id (Task.IncludeGroupID, set by
+	// ExpandIncludes) → keep/drop, computed once per group. Without it, an
+	// assert from a conditionally-included file (cluster.yml under `when:
+	// input.redis_type=='cluster'`) would evaluate even under a mismatched
+	// mode (a sentinel run → CEL no-such-key: shards), whereas Render/Trial
+	// drop that group before the assert. This restores a single source of
+	// truth: pre-flight applies include-when to asserts the same way
+	// run-render does.
 	includeGroupKeep := map[int]bool{}
 	for i := range in.Scenario.Tasks {
 		task := in.Scenario.Tasks[i]
 
-		// Conditional-include group-drop — ДО IsAssertTask, как в [Render]: include-when
-		// группы false → задача физически исключена из плана, её assert НЕ вычисляется.
+		// Conditional-include group-drop — before IsAssertTask, as in
+		// [Render]: a false group include-when physically excludes the task
+		// from the plan, its assert is never evaluated.
 		if task.IncludeGroupID != 0 {
 			keep, ok := includeGroupKeep[task.IncludeGroupID]
 			if !ok {
@@ -851,27 +910,30 @@ func (p *Pipeline) EvalAsserts(ctx context.Context, in RenderInput) error {
 	return nil
 }
 
-// evalAssertTask вычисляет assert-задачу (ADR-009 amendment 2026-06-23) —
-// keeper-side render-time precondition прогона. RUN-LEVEL (один раз, не per-host):
-// проверяет инвариант топологии прогона, а не per-host-предикат.
+// evalAssertTask evaluates an assert task (ADR-009 amendment 2026-06-23) — a
+// keeper-side render-time precondition of the run. RUN-LEVEL (once, not per
+// host): checks a topology invariant of the run, not a per-host predicate.
 //
-// Гейт `when:` соблюдён: если when статический (register-/soulprint-независимый,
-// isStaticWhen) и вычислился в false — assert НЕ вычисляется (placeholder-skip
-// неактивной ветки, как у обычной задачи: cluster-assert на standalone-прогоне
-// молчит). when пустой или статически-true → assert вычисляется. Non-static when
-// (register/soulprint-зависимый) на assert вне pilot-объёма — assert run-level и
-// register-карта неполна; такой when трактуется как «активен» (предикаты всё равно
-// вычисляются), вырожденный кейс не валим, но в пилоте он не используется.
+// The `when:` gate is honored: if when is static (register-/soulprint-
+// independent, isStaticWhen) and evaluates false, the assert isn't evaluated
+// (inactive-branch placeholder-skip, same as a regular task: a cluster
+// assert stays quiet on a standalone run). Empty or statically-true when →
+// assert evaluates. A non-static when (register-/soulprint-dependent) on an
+// assert is outside pilot scope — assert is run-level and the register map
+// is incomplete; such a when is treated as "active" (predicates evaluate
+// anyway) — we don't fail this degenerate case, it's just unused in pilot.
 //
-// Предикаты `that[]` вычисляются в ПОЛНОМ scenario-CEL-контексте, включая
-// soulprint.hosts (AllowHosts=!destinyIsolated — как evalWhere/resolveTargets):
-// run-level контекст строится hostVars-ом по ПЕРВОМУ хосту roster-а (self здесь
-// не используется предикатами топологии; size(soulprint.hosts) host-инвариантен).
-// Первый false → ErrAssertFailed (render обрывается ДО dispatch): текст = message
-// (или дефолт) + индекс/текст непрошедшего предиката. Все true → nil (assert
-// «исчезает» из плана, RenderedTask не эмитится — это делает caller через continue).
+// `that[]` predicates evaluate in the FULL scenario CEL context, including
+// soulprint.hosts (AllowHosts=!destinyIsolated, as in
+// evalWhere/resolveTargets): the run-level context is built by hostVars over
+// the roster's first host (self isn't used by topology predicates here;
+// size(soulprint.hosts) is host-invariant). First false →
+// ErrAssertFailed (render aborts before dispatch): text = message (or
+// default) + failing predicate's index/text. All true → nil (the assert
+// "disappears" from the plan, no RenderedTask emitted — caller does that via
+// continue).
 func (p *Pipeline) evalAssertTask(in RenderInput, task config.Task) error {
-	// Гейт when: статически-false → assert не вычисляется (неактивный режим).
+	// when: gate — statically-false → assert not evaluated (inactive mode).
 	if isStaticWhen(task.When) {
 		renderHosts := in.Hosts
 		if len(renderHosts) == 0 {
@@ -886,14 +948,15 @@ func (p *Pipeline) evalAssertTask(in RenderInput, task config.Task) error {
 			return fmt.Errorf("render: assert %q: static-when %q: %w", task.Name, task.When, err)
 		}
 		if !pass {
-			return nil // when:false — assert неактивен (placeholder-skip-семантика).
+			return nil // when:false — assert inactive (placeholder-skip semantics).
 		}
 	}
 
-	// Run-level контекст: первый хост roster-а (или синтетический пустой при пустом
-	// roster). soulprint.hosts проецируется из in.Hosts (AllowHosts=true в scenario-
-	// проходе), size(soulprint.hosts) host-инвариантен — выбор первого хоста для self
-	// на результат топологических предикатов не влияет.
+	// Run-level context: roster's first host (or a synthetic empty one when
+	// the roster is empty). soulprint.hosts projects from in.Hosts
+	// (AllowHosts=true in the scenario pass); size(soulprint.hosts) is
+	// host-invariant — the choice of first host for self doesn't affect
+	// topology predicate results.
 	host := &topology.HostFacts{}
 	if len(in.Hosts) > 0 {
 		host = in.Hosts[0]
@@ -916,8 +979,8 @@ func (p *Pipeline) evalAssertTask(in RenderInput, task config.Task) error {
 	return nil
 }
 
-// assertMessage — человекочитаемое сообщение провала assert: авторский message
-// или дефолт по имени задачи (если message опущен).
+// assertMessage builds a human-readable assert-failure message: the
+// author's message, or a name-based default when message is omitted.
 func assertMessage(task config.Task) string {
 	if task.Assert != nil && task.Assert.Message != "" {
 		return task.Assert.Message
@@ -928,19 +991,21 @@ func assertMessage(task config.Task) string {
 	return "assert-предикат не прошёл"
 }
 
-// renderKeeperTask рендерит keeper-side задачу (`on: keeper`, docs/keeper/
-// modules.md): params вычисляются ОДИН раз в keeper-контексте (keeperVars — без
-// per-host soulprint), потому что хостов нет — шаг исполняется на самом keeper-
-// инстансе. host-инвариантной сверки нет (single keeper-target).
+// renderKeeperTask renders a keeper-side task (`on: keeper`, docs/keeper/
+// modules.md): params are computed once in the keeper context (keeperVars —
+// no per-host soulprint), since there are no hosts — the step runs on the
+// keeper instance itself. No host-invariance check (single keeper target).
 //
-// Пилот: keeper-задача — module-only (apply:/loop:/block: на ней отвергнуты выше
-// guardPilotDSL/здесь). core.file.rendered keeper-side не бывает (это Soul-side
-// модуль), поэтому render_context/template_content НЕ собираются. flow_context не
-// строится: keeper-задача исполняется scenario-runner-ом локально, который
-// flow-control-предикаты (when/changed_when/failed_when) пока не вычисляет —
-// поля протягиваются как CEL-строки для симметрии RenderedTask, но keeper-исполнитель
-// MVP их игнорирует (как Soul до их интеграции). register: протягивается —
-// keeper-исполнитель аккумулирует register этой задачи под KeeperTargetSID.
+// Pilot: a keeper task is module-only (apply:/loop:/block: on it are
+// rejected above by guardPilotDSL/here). core.file.rendered never appears
+// keeper-side (it's a Soul-side module), so render_context/template_content
+// aren't collected. flow_context isn't built either: a keeper task runs
+// locally in the scenario-runner, which doesn't evaluate flow-control
+// predicates (when/changed_when/failed_when) yet — the fields are passed
+// through as CEL strings for RenderedTask symmetry, but the MVP keeper
+// executor ignores them (like Soul did before integrating them). register:
+// is passed through — the keeper executor accumulates this task's register
+// under KeeperTargetSID.
 func (p *Pipeline) renderKeeperTask(ctx context.Context, in RenderInput, task config.Task, idx int) (*RenderedTask, error) {
 	if task.Apply != nil {
 		return nil, fmt.Errorf("%w: apply: на keeper-side задаче (task[%d] %q)", ErrUnsupportedDSL, idx, task.Name)
@@ -954,13 +1019,15 @@ func (p *Pipeline) renderKeeperTask(ctx context.Context, in RenderInput, task co
 		return nil, fmt.Errorf("render: keeper task %q: %w", task.Name, err)
 	}
 
-	// seal / sealed-paths ([ADR-010] §7.4): keeper-side задача (core.vault.kv-read
-	// и пр.) тоже может нести `${ vault(...) }`/`${ input.<secret> }` в params.
+	// seal / sealed-paths ([ADR-010] §7.4): a keeper-side task
+	// (core.vault.kv-read and similar) can also carry `${ vault(...) }`/`${
+	// input.<secret> }` in params.
 	collectSealed(p.cel, in.Sealed, task.Module.Params, scenarioSealSources(in), "")
 
 	vars := keeperVars(in)
-	// keeper-side задача — не destiny-проход (destiny-tasks все Soul-side в пилоте);
-	// file-vars базы нет (DestinyVarsResolved nil вне renderApplyDestiny).
+	// keeper-side task — not a destiny pass (destiny tasks are all Soul-side
+	// in pilot); no file-vars base (DestinyVarsResolved is nil outside
+	// renderApplyDestiny).
 	vars, err = resolveTaskVars(p.cel, nil, task.Vars, vars)
 	if err != nil {
 		return nil, fmt.Errorf("render: keeper task %q: %w", task.Name, err)
@@ -993,19 +1060,21 @@ func (p *Pipeline) renderKeeperTask(ctx context.Context, in RenderInput, task co
 	return rt, nil
 }
 
-// reFlowControlSoulprint ловит ссылку на soulprint в любом flow-control-предикате
-// (when/changed_when/failed_when). Стиль и форма — как reLoopWhenSoulprint
-// (loop.go): один regex по границе слова, fail-closed на multi-host.
+// reFlowControlSoulprint catches a soulprint reference in any flow-control
+// predicate (when/changed_when/failed_when). Style mirrors
+// reLoopWhenSoulprint (loop.go): one word-boundary regex, fail-closed on
+// multi-host.
 var reFlowControlSoulprint = regexp.MustCompile(`\bsoulprint\b`)
 
-// flowControlEngine — общий Soul-side flow-control-движок ([cel.NewFlowControl],
-// ADR-012(d)) для Keeper-side static-when placeholder-skip. КРИТИЧНО: это та же
-// sandbox-песочница, что Soul использует для evalWhen (applyrunner.go) — не
-// full Keeper-env. Гарантия бит-в-бит эквивалентности static-when-false на Keeper
-// и when-false на Soul (один и тот же env, один и тот же flow_context). Движок
-// потокобезопасен (compile-cache под RWMutex) и переиспользуется всеми прогонами;
-// собирается лениво один раз (паттерн rbac/soulprint, statepredicate) — конструктор
-// от рантайма не зависит, но строить его в init() — платить на каждый импорт.
+// flowControlEngine is the shared Soul-side flow-control engine
+// ([cel.NewFlowControl], ADR-012(d)) used for Keeper-side static-when
+// placeholder-skip. CRITICAL: this is the same sandbox Soul uses for
+// evalWhen (applyrunner.go), not the full Keeper env — guarantees
+// static-when-false on Keeper is bit-for-bit equivalent to when-false on
+// Soul (same env, same flow_context). Thread-safe (compile-cache under
+// RWMutex) and shared across all runs; built lazily once (rbac/soulprint,
+// statepredicate pattern) — the constructor doesn't depend on runtime
+// state, but building it in init() would cost every import.
 var (
 	flowControlEngineOnce sync.Once
 	flowControlEngineInst *cel.Engine
@@ -1019,28 +1088,31 @@ func flowControlEngine() (*cel.Engine, error) {
 	return flowControlEngineInst, flowControlEngineErr
 }
 
-// isStaticWhen сообщает, можно ли вычислить предикат when: Keeper-side ДО рендера
-// params (placeholder-skip, ADR-012(d), Вариант b). Статическим считается непустой
-// when, который НЕ зависит от register.* (результатов предыдущих задач, известных
-// только Soul-у) и НЕ зависит от soulprint (host-вариативного слоя). Такой предикат
-// детерминирован на Keeper-е из flow_context (input/vars/essence/incarnation), и
-// его false-исход одинаков на всех хостах прогона.
+// isStaticWhen reports whether a when: predicate can be evaluated
+// Keeper-side before rendering params (placeholder-skip, ADR-012(d), Variant
+// b). Static means a non-empty when that depends on neither register.*
+// (prior tasks' results, known only to Soul) nor soulprint (the host-variant
+// layer). Such a predicate is deterministic on Keeper from flow_context
+// (input/vars/essence/incarnation), and its false outcome is the same on
+// every host of the run.
 //
-// Переиспользует канонические парсеры (без дубля regex):
-//   - config.ExtractRegisterRefs (shared/config/task_refs.go) — register-ссылки;
-//     любая register.<name> (кроме register.self, которой во when по семантике нет
-//     для gating) делает when register-зависимым → НЕ статический;
-//   - reFlowControlSoulprint (guardFlowControlHostInvariant) — soulprint host-
-//     вариативен (soulprint.self), исключаем из «статического».
+// Reuses the canonical parsers (no regex duplication):
+//   - config.ExtractRegisterRefs (shared/config/task_refs.go) — register
+//     refs; any register.<name> (except register.self, which has no gating
+//     semantics in when) makes when register-dependent → not static;
+//   - reFlowControlSoulprint (guardFlowControlHostInvariant) — soulprint is
+//     host-variant (soulprint.self), excluded from "static".
 //
-// Пустой when → false (нет предиката — нечего вычислять Keeper-side; задача
-// безусловна, идёт обычным путём с рендером params). Смешанный when
-// (register+input) → НЕ статический (есть register-ссылка) — остаётся Soul-side.
+// Empty when → false (no predicate — nothing for Keeper to evaluate; the
+// task is unconditional, goes through the normal params-render path). A
+// mixed when (register+input) → not static (has a register ref) — stays
+// Soul-side.
 func isStaticWhen(when string) bool {
-	// Допущение: register-зависимость детектится только по точечной форме
-	// register.<name> (ExtractRegisterRefs). Bracket-форма register["x"] во when вне
-	// поддержки — симметрично checkPredicateRefs в config-валидаторе. Для when это
-	// латентно (probe-register всегда точечный).
+	// Assumption: register dependence is only detected via dot form
+	// register.<name> (ExtractRegisterRefs). Bracket form register["x"] in
+	// when is unsupported — mirrors checkPredicateRefs in the config
+	// validator. Latent for when in practice (probe-register is always dot
+	// form).
 	if when == "" {
 		return false
 	}
@@ -1053,32 +1125,37 @@ func isStaticWhen(when string) bool {
 	return true
 }
 
-// evalStaticWhen вычисляет статический when: Keeper-side через тот же flow-control-
-// движок и тот же flow_context, что поедут на Soul (evalWhen). Возвращает результат
-// предиката. Вызывается ТОЛЬКО для when, прошедшего isStaticWhen (register-/
-// soulprint-независимый) — register в активации пуст, и его пустота не влияет на
-// исход. Бит-в-бит эквивалентно Soul-side evalWhen (один env, один flow_context).
+// evalStaticWhen evaluates a static when: Keeper-side, through the same
+// flow-control engine and the same flow_context that would go to Soul
+// (evalWhen). Returns the predicate result. Called ONLY for when that
+// passed isStaticWhen (register-/soulprint-independent) — register is empty
+// in the activation, and its emptiness doesn't affect the outcome.
+// Bit-for-bit equivalent to Soul-side evalWhen (same env, same
+// flow_context).
 //
-// Ошибка eval (например, no-such-key на отсутствующем input) пробрасывается caller-у:
-// Keeper падает с render_failed на битом статическом предикате так же, как Soul упал
-// бы на нём в evalWhen — расхождения поведения нет, ошибка автора видна раньше.
+// An eval error (e.g. no-such-key on a missing input) propagates to the
+// caller: Keeper fails with render_failed on a broken static predicate the
+// same way Soul would fail in evalWhen — no behavior divergence, the
+// author's error just surfaces earlier.
 func evalStaticWhen(when string, fc *structpb.Struct) (bool, error) {
 	engine, err := flowControlEngine()
 	if err != nil {
 		return false, fmt.Errorf("static-when: сборка flow-control-движка: %w", err)
 	}
-	// Активация — flowControlVars Soul-side формы (flow_context + пустой register).
-	// register-карта пуста: isStaticWhen уже гарантировал отсутствие register.* в
-	// when, поэтому пустота register на исход не влияет (симметрия с Soul, где
-	// register для register-независимого when тоже не читается).
+	// Activation uses the Soul-side flowControlVars shape (flow_context +
+	// empty register). The register map is empty: isStaticWhen already
+	// guaranteed no register.* in when, so register's emptiness doesn't
+	// affect the outcome (mirrors Soul, where register isn't read for a
+	// register-independent when either).
 	return engine.EvalPredicate(when, flowControlVarsFromStruct(fc, nil))
 }
 
-// flowControlVarsFromStruct распаковывает flow_context-снапшот в cel.Vars Soul-side
-// формы — точное зеркало soul/internal/runtime.flowControlVars (applyrunner.go),
-// чтобы static-when на Keeper биндился ТЕМИ ЖЕ именами, что evalWhen на Soul.
-// register передаётся отдельно (nil для static-when — register-независимый предикат).
-// nil/отсутствующие секции → пустые map (штатный CEL no-such-key, не паника).
+// flowControlVarsFromStruct unpacks a flow_context snapshot into cel.Vars in
+// the Soul-side shape — an exact mirror of
+// soul/internal/runtime.flowControlVars (applyrunner.go), so static-when on
+// Keeper binds the SAME names as evalWhen on Soul. register is passed
+// separately (nil for static-when — a register-independent predicate).
+// nil/missing sections → empty maps (a normal CEL no-such-key, not a panic).
 func flowControlVarsFromStruct(flowCtx *structpb.Struct, register map[string]any) cel.Vars {
 	fc := map[string]any{}
 	if flowCtx != nil {
@@ -1097,32 +1174,33 @@ func flowControlVarsFromStruct(flowCtx *structpb.Struct, register map[string]any
 		Incarnation:   flowSection("incarnation"),
 		SoulprintSelf: flowSection(flowContextSelfKey),
 		Register:      register,
-		// AllowHosts намеренно false: NewFlowControl форсит изоляцию soulprint.hosts.
+		// AllowHosts intentionally false: NewFlowControl enforces soulprint.hosts isolation.
 	}
 }
 
-// guardFlowControlHostInvariant отвергает host-вариативный flow-control-предикат
-// (when/changed_when/failed_when со ссылкой на soulprint.self) на multi-host
-// таргете. dispatch-модель pilot раздаёт ОДИН RenderedTask (с flow_context первого
-// хоста) на всю targeted-группу — поэтому такой предикат молча вычислился бы по
-// фактам первого хоста для ВСЕХ хостов. Fail-closed: вместо тихого неверного
-// результата — явная ошибка о горизонте pilot.
-//
-// Single-host (len==1): flow_context.self корректен для единственного хоста →
-// soulprint.self в предикате допустим (golden-path redis single-host). Multi-host
-// с host-ИНВАРИАНТНЫМ предикатом (register.*/input.*/essence.*/incarnation.*) →
-// OK: один на всю группу — корректно.
-//
-// Обобщён сразу на три поля: changed_when/failed_when тиражируются следующим
-// slice, ошибка паттерна не должна размножиться.
-// hasFlowControl сообщает, задан ли у задачи хоть один непустой flow-control-
-// предикат (when/changed_when/failed_when). Гейт второго контура fail-closed
-// (flowContextHostInvariant): без предиката Soul flow_context не читает, его
-// host-вариативность безразлична.
+// hasFlowControl reports whether the task has at least one non-empty
+// flow-control predicate (when/changed_when/failed_when). Gates the second
+// fail-closed layer (flowContextHostInvariant): without a predicate, Soul
+// never reads flow_context, so its host-variance doesn't matter.
 func hasFlowControl(task config.Task) bool {
 	return task.When != "" || task.ChangedWhen != "" || task.FailedWhen != ""
 }
 
+// guardFlowControlHostInvariant rejects a host-variant flow-control
+// predicate (when/changed_when/failed_when referencing soulprint.self) on a
+// multi-host target. The pilot dispatch model hands out ONE RenderedTask
+// (carrying the first host's flow_context) to the whole targeted group —
+// such a predicate would silently evaluate against the first host's facts
+// for everyone. Fail-closed: an explicit error about the pilot boundary
+// instead of a silently wrong result.
+//
+// Single-host (len==1): flow_context.self is correct for the one host →
+// soulprint.self in the predicate is fine (golden-path redis single-host).
+// Multi-host with a host-INVARIANT predicate (register.*/input.*/essence.*/
+// incarnation.*) → OK, one predicate for the whole group is correct.
+//
+// Generalized to all three fields at once: changed_when/failed_when will
+// follow the same pattern next slice, this bug shouldn't get to repeat.
 func guardFlowControlHostInvariant(task config.Task, targeted []*topology.HostFacts) error {
 	if len(targeted) <= 1 {
 		return nil
@@ -1141,21 +1219,23 @@ func guardFlowControlHostInvariant(task config.Task, targeted []*topology.HostFa
 	return nil
 }
 
-// paramsHostInvariant сверяет params двух хостов на host-инвариантность,
-// ИСКЛЮЧАЯ per-host-ожидаемые ключи core.file.rendered: template_content (его
-// инжектит injectTemplateContent один раз после цикла) и render_context (он
-// per-host по построению — несёт self конкретного хоста, templating.md §3.2).
-// Для прочих ключей — точная proto-сверка (pilot-ограничение «один RenderedTask
-// на task», см. Render): self-зависимый ШАБЛОН легитимен (его контекст уезжает
-// в per-host render_context — материализован в RenderedTask.RenderContextBySID,
-// подставляется ToProtoTasksForHost per-SID), self-зависимые ПРОЧИЕ params — нет.
+// paramsHostInvariant diffs two hosts' params for host-invariance,
+// EXCLUDING the per-host-by-design core.file.rendered keys: template_content
+// (injected once after the loop by injectTemplateContent) and
+// render_context (per-host by construction — carries a specific host's
+// self, templating.md §3.2). For every other key it's an exact proto diff
+// (pilot restriction "one RenderedTask per task", see Render): a
+// self-dependent TEMPLATE is legitimate (its context goes into per-host
+// render_context, materialized in RenderedTask.RenderContextBySID and
+// overlaid per-SID by ToProtoTasksForHost) — self-dependent OTHER params are
+// not.
 func paramsHostInvariant(a, b *structpb.Struct) bool {
 	return proto.Equal(stripPerHostKeys(a), stripPerHostKeys(b))
 }
 
-// stripPerHostKeys возвращает поверхностную копию struct без per-host-ключей
-// (template_content/render_context). Исходный struct не мутируется (Fields-map
-// шарит значения read-only — для proto.Equal этого достаточно).
+// stripPerHostKeys returns a shallow copy of struct without the per-host
+// keys (template_content/render_context). The source struct isn't mutated
+// (the Fields map shares values read-only — sufficient for proto.Equal).
 func stripPerHostKeys(s *structpb.Struct) *structpb.Struct {
 	if s == nil || s.Fields == nil {
 		return s
@@ -1170,27 +1250,30 @@ func stripPerHostKeys(s *structpb.Struct) *structpb.Struct {
 	return out
 }
 
-// flowContextHostInvariant сверяет flow_context двух хостов на host-инвариантность
-// ВТОРЫМ контуром fail-closed (первый — guardFlowControlHostInvariant по тексту
-// предиката). proto-сверка снапшотов с вычетом ТОЛЬКО ключа `self`.
+// flowContextHostInvariant diffs two hosts' flow_context as the SECOND
+// fail-closed layer (the first is guardFlowControlHostInvariant, on
+// predicate text). A proto diff of the snapshots with only the `self` key
+// subtracted.
 //
-// flow_context = {input, vars, essence, incarnation, self} (buildFlowContext).
-// input/essence/incarnation host-ИНВАРИАНТНЫ по построению (общий контекст
-// прогона); self host-ВАРИАНТЕН ВСЕГДА (per-host факты) и закрыт отдельным
-// regex-guard на текст предиката — поэтому вычитается из сверки. Остаётся vars:
-// task-level `vars:` МОГУТ быть host-вариантны (если значение производно от
-// soulprint.self), и тогда текст предиката `vars.<key>` НЕ содержит soulprint —
-// regex-guard его не ловит. Этот контур ловит именно vars-laundering.
+// flow_context = {input, vars, essence, incarnation, self}
+// (buildFlowContext). input/essence/incarnation are host-INVARIANT by
+// construction (shared run context); self is ALWAYS host-VARIANT (per-host
+// facts) and already covered by the predicate-text regex guard, so it's
+// excluded here. That leaves vars: task-level `vars:` CAN be host-variant
+// (when a value derives from soulprint.self), and then the predicate text
+// `vars.<key>` contains no "soulprint" — the regex guard misses it. This
+// layer catches exactly that vars-laundering case.
 //
-// Инвариант: register в flow_context НЕ кладётся (Soul строит его сам из
-// результатов предыдущих задач, см. buildFlowContext); если в будущем добавят —
-// его тоже вычитать из сверки (host-вариативен по природе, как self).
+// Invariant: register is never placed in flow_context (Soul builds it
+// itself from prior tasks' results, see buildFlowContext); if that changes,
+// it should also be excluded here (host-variant by nature, like self).
 func flowContextHostInvariant(a, b *structpb.Struct) bool {
 	return proto.Equal(stripSelfKey(a), stripSelfKey(b))
 }
 
-// stripSelfKey возвращает поверхностную копию struct без ключа `self` (по образцу
-// stripPerHostKeys, но вырезает ровно один ключ). Исходный struct не мутируется.
+// stripSelfKey returns a shallow copy of struct without the `self` key
+// (mirrors stripPerHostKeys, but cuts exactly one key). Source struct isn't
+// mutated.
 func stripSelfKey(s *structpb.Struct) *structpb.Struct {
 	if s == nil || s.Fields == nil {
 		return s
@@ -1205,10 +1288,11 @@ func stripSelfKey(s *structpb.Struct) *structpb.Struct {
 	return out
 }
 
-// extractParamsVars достаёт CEL-rendered значение params.vars как map[string]any
-// для render_context.vars (templating.md §3.2/§6). Отсутствует/не-объект → nil
-// (buildRenderContext подставит пустой map). Источник — структура, уже
-// прошедшая renderParams, поэтому это просто чтение поля.
+// extractParamsVars pulls the CEL-rendered params.vars value as
+// map[string]any for render_context.vars (templating.md §3.2/§6).
+// Missing/non-object → nil (buildRenderContext substitutes an empty map).
+// Source has already been through renderParams, so this is just a field
+// read.
 func extractParamsVars(st *structpb.Struct) map[string]any {
 	if st == nil || st.Fields == nil {
 		return nil
@@ -1224,17 +1308,18 @@ func extractParamsVars(st *structpb.Struct) map[string]any {
 	return sv.StructValue.AsMap()
 }
 
-// templateInputField — корневое поле render_context-контекста, инъекция которого
-// условна (Вариант B, ADR-010 §3.2): `input` кладётся только в шаблоны, реально
-// читающие `.input.*`.
+// templateInputField is the root render_context field whose injection is
+// conditional (Variant B, ADR-010 §3.2): `input` is placed only for
+// templates that actually read `.input.*`.
 const templateInputField = "input"
 
-// usesFieldEngine — ленивый text/template-Engine для детекции обращения шаблона к
-// корневому полю (tmpl.UsesRootField). Тот же allowlist FuncMap, что Soul-side
-// рендер (rendered.go) — парсер знает легальные функции, не падает на их вызове.
-// Stateless/потокобезопасен, собирается один раз (паттерн flowControlEngine):
-// конструктор от рантайма не зависит, но строить FuncMap на каждый rendered-task
-// — лишняя работа в render-горячем пути.
+// usesFieldEngine is a lazily-built text/template Engine for detecting
+// whether a template references a root field (tmpl.UsesRootField). Same
+// allowlisted FuncMap as the Soul-side renderer (rendered.go) — the parser
+// knows the legal functions, doesn't choke on calls to them.
+// Stateless/thread-safe, built once (flowControlEngine pattern): the
+// constructor doesn't depend on runtime state, but rebuilding the FuncMap
+// per rendered task would be wasted work in the render hot path.
 var (
 	usesFieldEngineOnce sync.Once
 	usesFieldEngineInst *tmpl.Engine
@@ -1248,26 +1333,28 @@ func usesFieldEngine() (*tmpl.Engine, error) {
 	return usesFieldEngineInst, usesFieldEngineErr
 }
 
-// resolveTemplateUsesInput читает содержимое .tmpl шага core.file.rendered ОДИН
-// раз (host-инвариантный путь) и сообщает, инъектить ли в render_context корневой
-// `input` (Вариант B, ADR-010 §3.2): true ⇔ шаблон реально читает `.input.*`
-// (детект по AST tmpl.UsesRootField — упоминание `.input` в литеральном тексте/
-// комментарии тела НЕ считается). Содержимое возвращается caller-у, чтобы
-// injectTemplateContent не читал файл повторно.
+// resolveTemplateUsesInput reads a core.file.rendered step's .tmpl content
+// once (host-invariant path) and reports whether to inject the root `input`
+// into render_context (Variant B, ADR-010 §3.2): true iff the template
+// actually reads `.input.*` (AST detection via tmpl.UsesRootField —
+// mentioning `.input` in literal text or a body comment doesn't count).
+// Content is returned to the caller so injectTemplateContent doesn't read
+// the file again.
 //
-// Путь берётся из resolved params (после vault-resolve, ДО CEL). В пилоте он —
-// строковый литерал; на случай `${ … }`-выражения резолвится через CEL на
-// keeper-контексте (без soulprint) — путь шаблона host-инвариантен по
-// пилот-контракту, поэтому keeper-контекст достаточен. inline-шаблон без файла
-// (params.template_content задан напрямую, params.template отсутствует) → читать
-// нечего: content="" , detect по уже-имеющемуся template_content.
+// The path comes from resolved params (after vault-resolve, before CEL). In
+// pilot it's a string literal; for a `${ … }` expression it's resolved via
+// CEL in the keeper context (no soulprint) — the template path is
+// host-invariant per the pilot contract, so the keeper context suffices. An
+// inline template with no file (params.template_content set directly,
+// params.template absent) → nothing to read: content="", detection falls
+// back to the existing template_content.
 //
-// reader=nil при наличии params.template — ошибка handoff (как в
-// injectTemplateContent): Keeper не настроен доставлять содержимое.
+// reader=nil while params.template is set is a handoff error (as in
+// injectTemplateContent): Keeper isn't configured to deliver the content.
 func (p *Pipeline) resolveTemplateUsesInput(in RenderInput, resolved map[string]any) (string, bool, error) {
 	tv, hasPath := resolved[paramTemplate]
 	if !hasPath {
-		// inline template_content (без файла): детектим прямо по нему.
+		// inline template_content (no file): detect directly on it.
 		cv, hasContent := resolved[paramTemplateContent]
 		content, _ := cv.(string)
 		if !hasContent || content == "" {
@@ -1279,7 +1366,7 @@ func (p *Pipeline) resolveTemplateUsesInput(in RenderInput, resolved map[string]
 
 	rel, ok := tv.(string)
 	if !ok || rel == "" {
-		// non-string/`${}`-путь: резолвим через CEL на keeper-контексте.
+		// non-string/`${}` path: resolve via CEL in the keeper context.
 		st, err := renderParams(p.cel, map[string]any{paramTemplate: tv}, keeperVars(in))
 		if err != nil {
 			return "", false, fmt.Errorf("резолв пути шаблона: %w", err)
@@ -1302,15 +1389,16 @@ func (p *Pipeline) resolveTemplateUsesInput(in RenderInput, resolved map[string]
 	return content, uses, derr
 }
 
-// templateVarField — корневое поле render_context, под которым едут производные
-// значения шаблона (`.vars.<name>`): сюда точечно подкладываются file-vars vars.yml,
-// чей ключ шаблон реально читает.
+// templateVarField is the root render_context field carrying
+// template-derived values (`.vars.<name>`): the file-vars from vars.yml
+// whose keys the template actually reads are placed here selectively.
 const templateVarField = "vars"
 
-// templateVarSubKeys возвращает множество подключей `.vars.<key>`, которые шаблон
-// реально читает (AST, tmpl.RootFieldSubKeys) — основа точечной инъекции file-vars
-// в render_context.vars. Пустой content (inline без файла/не-rendered) → пустой
-// набор. Битый шаблон → ошибка (caller падает render_failed как Soul на рендере).
+// templateVarSubKeys returns the set of `.vars.<key>` subkeys the template
+// actually reads (AST, tmpl.RootFieldSubKeys) — the basis for selective
+// file-vars injection into render_context.vars. Empty content (inline with
+// no file / not core.file.rendered) → empty set. A broken template → error
+// (caller fails render_failed like Soul would on render).
 func templateVarSubKeys(content string) (map[string]bool, error) {
 	if content == "" {
 		return nil, nil
@@ -1322,12 +1410,13 @@ func templateVarSubKeys(content string) (map[string]bool, error) {
 	return engine.RootFieldSubKeys(content, templateVarField)
 }
 
-// referencedFileVars отбирает из резолвленных destiny-локалов (vars.yml) только те,
-// чей ключ шаблон реально читает как `.vars.<key>` (keys). Так в render_context.vars
-// попадают РОВНО нужные file-vars, а не весь vars.yml: node-exporter получает
-// bin_path, redis (читает task-var-ключи, не file-vars) — ничего лишнего. Пустые
-// fileVars/keys → nil (buildRenderContext подставит пустой `.vars`-слой). НЕ мутирует
-// вход.
+// referencedFileVars filters the resolved destiny locals (vars.yml) down to
+// just the keys the template actually reads as `.vars.<key>` (keys). This
+// way render_context.vars gets EXACTLY the needed file-vars, not the whole
+// vars.yml: node-exporter gets bin_path, redis (reads task-var keys, not
+// file-vars) gets nothing extra. Empty fileVars/keys → nil
+// (buildRenderContext substitutes an empty `.vars` layer). Doesn't mutate
+// its input.
 func referencedFileVars(fileVars map[string]any, keys map[string]bool) map[string]any {
 	if len(fileVars) == 0 || len(keys) == 0 {
 		return nil
@@ -1341,9 +1430,9 @@ func referencedFileVars(fileVars map[string]any, keys map[string]bool) map[strin
 	return out
 }
 
-// usesInputField детектит обращение шаблона к корневому `.input` через AST
-// (tmpl.UsesRootField). Битый шаблон → ошибка (caller падает render_failed так
-// же, как упал бы Soul на рендере).
+// usesInputField detects whether a template references the root `.input`
+// via AST (tmpl.UsesRootField). A broken template → error (caller fails
+// render_failed the same way Soul would on render).
 func usesInputField(content string) (bool, error) {
 	engine, err := usesFieldEngine()
 	if err != nil {
@@ -1352,8 +1441,9 @@ func usesInputField(content string) (bool, error) {
 	return engine.UsesRootField(content, templateInputField)
 }
 
-// setRenderContext кладёт собранный render-context в params под ключ
-// render_context (structpb-конвертация {vars,self,role,essence}; input условно).
+// setRenderContext places the assembled render-context into params under
+// the render_context key (structpb conversion of {vars,self,role,essence};
+// input is conditional).
 func setRenderContext(st *structpb.Struct, rc map[string]any) error {
 	rcStruct, err := structpb.NewStruct(rc)
 	if err != nil {
@@ -1366,17 +1456,18 @@ func setRenderContext(st *structpb.Struct, rc map[string]any) error {
 	return nil
 }
 
-// RenderStateChanges рендерит `state_changes` сценария в map field→value для
-// коммита set-операций (orchestration.md §7.1). Совместимость: возвращает ту же
-// плоскую map, что и раньше — проекцию ТОЛЬКО set-операций (старой map-формы
-// `sets:` и новой list-формы `- set:`). add-операции в эту проекцию НЕ входят:
-// они требуют упорядоченного применения к промежуточному state (см.
-// [Pipeline.RenderStateOps] / scenario.mergeStateChanges). Сохранена ради
-// trial-ассерта `assert.state_changes` (поле→значение) и существующих
-// state-merge unit-тестов.
+// RenderStateChanges renders a scenario's `state_changes` into a
+// field→value map for committing set operations (orchestration.md §7.1).
+// Compatibility: returns the same flat map as before — a projection of ONLY
+// the set operations (both the old map form `sets:` and the new list form
+// `- set:`). add operations aren't in this projection: they need ordered
+// application against intermediate state (see [Pipeline.RenderStateOps] /
+// scenario.mergeStateChanges). Kept for the trial assertion
+// `assert.state_changes` (field→value) and existing state-merge unit tests.
 //
-// Реализована поверх RenderStateOps: рендерит весь упорядоченный список, затем
-// проецирует set-операции в map (последняя по порядку перезаписывает раннюю).
+// Implemented on top of RenderStateOps: renders the whole ordered list, then
+// projects the set operations into a map (later entries overwrite earlier
+// ones on the same field).
 func (p *Pipeline) RenderStateChanges(in RenderInput) (map[string]any, error) {
 	ops, err := p.RenderStateOps(in)
 	if err != nil {
@@ -1391,27 +1482,31 @@ func (p *Pipeline) RenderStateChanges(in RenderInput) (map[string]any, error) {
 	return out, nil
 }
 
-// RenderStateOps рендерит упорядоченный список операций `state_changes` сценария
-// (orchestration.md §7, новая list-форма) в []RenderedOp с уже вычисленными
-// Keeper-side значениями. Вызывается после барьера (run.go), отдельно от Render.
+// RenderStateOps renders a scenario's ordered `state_changes` operation
+// list (orchestration.md §7, the new list form) into []RenderedOp with
+// Keeper-side values already computed. Called after the barrier (run.go),
+// separately from Render.
 //
-// Контекст CEL — input/incarnation/soulprint.self + register этого хоста (слайс
-// 2: register probe-задач прогона, in.RegisterByHost[sid]); vars/essence/state/
-// soulprint.hosts — future полной грамматики, в пилоте недоступны.
+// CEL context: input/incarnation/soulprint.self + this host's register
+// (slice 2: register from the run's probe tasks, in.RegisterByHost[sid]);
+// vars/essence/state/soulprint.hosts belong to the future full grammar, not
+// available in pilot.
 //
-// Cross-host свёртка — last-wins по сортировке SID: Value (и для map-add — Key)
-// каждой операции вычисляются на каждом хосте по порядку SID, поздний
-// перезаписывает раннего (детерминизм, output.md). Match-предикат list-дедупа
-// НЕ вычисляется здесь — он протягивается как строка и применяется merge-ом
-// per-existing-элемент (зависит от каждого элемента state, не от хоста).
+// Cross-host folding is last-wins by SID order: each operation's Value
+// (and, for map-add, Key) is evaluated on every host in SID order, the
+// later one overwrites the earlier (determinism, output.md). The
+// list-dedup match predicate is NOT evaluated here — it's passed through as
+// a string and applied at merge time per existing element (depends on each
+// state element, not on the host).
 //
-// Две формы StateChanges:
-//   - list-форма (IsList): операции из sc.Ops в порядке объявления;
-//   - map-форма (DEPRECATED): sc.Sets → set-операции (порядок недетерминирован,
-//     но set-семантика field-overwrite от порядка не зависит — last-wins на поле).
+// Two StateChanges forms:
+//   - list form (IsList): operations from sc.Ops in declaration order;
+//   - map form (DEPRECATED): sc.Sets → set operations (order is
+//     nondeterministic, but set field-overwrite semantics don't depend on
+//     order — last-wins per field).
 //
-// nil/пустой блок → nil. Пустой in.Hosts → nil (некому вычислять; caller run.go
-// уже отверг прогон без хостов).
+// nil/empty block → nil. Empty in.Hosts → nil (nothing to evaluate against;
+// caller run.go already rejects a run with no hosts).
 func (p *Pipeline) RenderStateOps(in RenderInput) ([]RenderedOp, error) {
 	if in.Scenario == nil {
 		return nil, fmt.Errorf("render: scenario manifest is nil")
@@ -1426,11 +1521,12 @@ func (p *Pipeline) RenderStateOps(in RenderInput) ([]RenderedOp, error) {
 		return nil, nil
 	}
 
-	// compute: резолвится так же, как в Render (один раз, рун-уровневый контекст без
-	// soulprint) — RenderStateOps зовётся отдельно после барьера (run.go) с тем же
-	// RenderInput, но без предыдущего Render-прохода. Идемпотентно: если caller уже
-	// заполнил in.Compute, resolveCompute вернёт его как есть. Так `compute.<name>`
-	// в state_changes даёт ТО ЖЕ значение, что в apply.input (drift-guard снят compute).
+	// compute: resolved the same way as in Render (once, run-level context,
+	// no soulprint) — RenderStateOps is called separately after the barrier
+	// (run.go) with the same RenderInput but no preceding Render pass.
+	// Idempotent: if the caller already populated in.Compute, resolveCompute
+	// returns it unchanged. So `compute.<name>` in state_changes gets the
+	// SAME value as in apply.input (compute removes that drift risk).
 	computed, cerr := p.resolveCompute(in)
 	if cerr != nil {
 		return nil, cerr
@@ -1443,10 +1539,10 @@ func (p *Pipeline) RenderStateOps(in RenderInput) ([]RenderedOp, error) {
 	return p.renderStateOpsLegacy(in, hosts, sc.Sets)
 }
 
-// renderStateOpsLegacy рендерит старую map-форму `sets:` в set-операции. Каждое
-// поле — CEL-выражение, last-wins cross-host. Имена полей детерминированно
-// сортируются для стабильного порядка операций (set-семантика от порядка не
-// зависит, но детерминизм важен для логов/сверки).
+// renderStateOpsLegacy renders the old map form `sets:` into set operations.
+// Each field is a CEL expression, last-wins across hosts. Field names are
+// sorted deterministically for a stable operation order (set semantics
+// don't depend on order, but determinism matters for logs/diffing).
 func (p *Pipeline) renderStateOpsLegacy(in RenderInput, hosts []*topology.HostFacts, sets map[string]string) ([]RenderedOp, error) {
 	if len(sets) == 0 {
 		return nil, nil
@@ -1465,25 +1561,27 @@ func (p *Pipeline) renderStateOpsLegacy(in RenderInput, hosts []*topology.HostFa
 			if err != nil {
 				return nil, fmt.Errorf("render: state_changes.sets.%s (host %s): %w", field, h.SID, err)
 			}
-			val = v // last-wins по SID
+			val = v // last-wins by SID
 		}
 		out = append(out, RenderedOp{Verb: config.VerbSet, Field: field, Value: val})
 	}
 	return out, nil
 }
 
-// renderStateOpsList рендерит новую list-форму: каждую операцию по порядку.
+// renderStateOpsList renders the new list form: each operation in order.
 //
-//   - set/add: Value (произвольное YAML с CEL-ячейками) и map-add Key рендерятся
-//     per-host last-wins; Match list-дедупа протягивается строкой (merge-time);
-//   - modify/remove: Match/Patch протягиваются КАК ЕСТЬ (вычисляются merge-time
-//     per-element — зависят от каждого элемента state). К RenderedOp прикладывается
-//     per-RUN снимок scenario-контекста (Context, last-wins по SID) — он нужен
-//     merge-time, т.к. match `key == input.username` / patch `${ input.acl }`
-//     видят полный sets-контекст (ADR-057 §b);
-//   - foreach: render-time fan-out — итерируем по элементам CEL-коллекции,
-//     каждую вложенную do-операцию рендерим с активным биндингом `as`-имени.
-//     Раскрывается в N RenderedOp (по числу элементов × числу do-операций).
+//   - set/add: Value (arbitrary YAML with CEL cells) and map-add Key render
+//     per-host last-wins; the list-dedup Match is passed through as a
+//     string (merge-time);
+//   - modify/remove: Match/Patch pass through AS-IS (evaluated merge-time
+//     per element — they depend on each state element). A per-run snapshot
+//     of the scenario context (Context, last-wins by SID) is attached to
+//     the RenderedOp — needed merge-time because match `key ==
+//     input.username` / patch `${ input.acl }` need the full sets context
+//     (ADR-057 §b);
+//   - foreach: render-time fan-out — iterate the CEL collection's elements,
+//     render each nested do operation with the `as` name bound. Expands
+//     into N RenderedOp entries (element count × do-operation count).
 func (p *Pipeline) renderStateOpsList(in RenderInput, hosts []*topology.HostFacts, ops []config.StateChange) ([]RenderedOp, error) {
 	out := make([]RenderedOp, 0, len(ops))
 	for i := range ops {
@@ -1505,15 +1603,17 @@ func (p *Pipeline) renderStateOpsList(in RenderInput, hosts []*topology.HostFact
 	return out, nil
 }
 
-// renderOneStateOp рендерит ОДНУ не-foreach операцию (set/add/modify/remove).
-// loopBind — биндинг текущей foreach-итерации (`as`-имя → элемент), nil вне
-// foreach; он подмешивается в CEL-контекст всех ячеек value/key/patch/match.
+// renderOneStateOp renders ONE non-foreach operation (set/add/modify/remove).
+// loopBind is the current foreach iteration's binding (`as` name → element),
+// nil outside foreach; it's mixed into the CEL context of every
+// value/key/patch/match cell.
 func (p *Pipeline) renderOneStateOp(in RenderInput, hosts []*topology.HostFacts, op config.StateChange, idx int, loopBind map[string]any) (RenderedOp, error) {
 	ro := RenderedOp{Verb: op.Verb, Field: op.Field, Match: op.Match, OnConflict: op.OnConflict, Expect: op.Expect}
 
-	// modify/remove: Match/Patch вычисляются merge-time per-element. Здесь —
-	// только снимок per-RUN scenario-контекста (last-wins по SID) + подстановка
-	// foreach-биндинга в Patch-строки (он render-time, see renderForeach).
+	// modify/remove: Match/Patch are evaluated merge-time per element. Here
+	// we only take a per-run scenario-context snapshot (last-wins by SID) —
+	// the foreach binding substitution into Patch strings is render-time,
+	// see renderForeach.
 	if op.Verb == config.VerbModify || op.Verb == config.VerbRemove {
 		ctx := p.stateContextSnapshot(in, hosts, loopBind)
 		ro.Context = ctx
@@ -1524,13 +1624,14 @@ func (p *Pipeline) renderOneStateOp(in RenderInput, hosts []*topology.HostFacts,
 			}
 			ro.Patch = patch
 		}
-		// foreach-биндинг в match/patch резолвится merge-time через Context
-		// (loopBind влит в snapshot), match/patch остаются строками. Match с
-		// `as`-именем (например `elem.sid == replica`) увидит replica из Context.
+		// foreach binding in match/patch is resolved merge-time via Context
+		// (loopBind is folded into the snapshot), match/patch stay strings. A
+		// match using an `as` name (e.g. `elem.sid == replica`) sees replica
+		// from Context.
 		return ro, nil
 	}
 
-	// set/add: Value (рекурсивный CEL) + map-add Key — per-host last-wins.
+	// set/add: Value (recursive CEL) + map-add Key — per-host last-wins.
 	var val any
 	var key string
 	for _, h := range hosts {
@@ -1540,7 +1641,7 @@ func (p *Pipeline) renderOneStateOp(in RenderInput, hosts []*topology.HostFacts,
 		if err != nil {
 			return RenderedOp{}, fmt.Errorf("render: state_changes[%d] %s %q (host %s): %w", idx, op.Verb, op.Field, h.SID, err)
 		}
-		val = v // last-wins по SID
+		val = v // last-wins by SID
 		if op.Key != "" {
 			kv, kerr := p.cel.EvalInterpolation(op.Key, vars)
 			if kerr != nil {
@@ -1551,37 +1652,40 @@ func (p *Pipeline) renderOneStateOp(in RenderInput, hosts []*topology.HostFacts,
 	}
 	ro.Value = val
 	ro.Key = key
-	// add внутри foreach: match-предикат list-дедупа может ссылаться на `as`-имя
-	// (ADR-057 пример add_replicas: `match: "elem == sid"`). Чистый add-match
-	// (EvalStateMatch) видит только elem/value; чтобы `sid` резолвился merge-time,
-	// прикладываем foreach-биндинг как Context — merge берёт context-aware
-	// вычислитель, если Context != nil (findListMatch). Вне foreach Context=nil →
-	// прежний чистый add-match elem/value.
+	// add inside foreach: the list-dedup match predicate may reference the
+	// `as` name (ADR-057 add_replicas example: `match: "elem == sid"`). A
+	// pure add-match (EvalStateMatch) only sees elem/value; to resolve `sid`
+	// merge-time, attach the foreach binding as Context — merge picks the
+	// context-aware evaluator when Context != nil (findListMatch). Outside
+	// foreach, Context=nil → the original pure add-match elem/value.
 	if op.Verb == config.VerbAdd && len(loopBind) > 0 {
 		ro.Context = loopBind
 	}
 	return ro, nil
 }
 
-// renderForeach раскрывает foreach в render-фазе: вычисляет CEL-коллекцию op.In,
-// итерирует по элементам (list → as=элемент; map → as=объект-запись с .key/.value),
-// и для каждого элемента рендерит все do-операции с активным биндингом as-имени.
-// Раскрывается в N×M RenderedOp (N элементов × M do-операций).
+// renderForeach expands a foreach at render time: evaluates the CEL
+// collection op.In, iterates its elements (list → as=element; map →
+// as=key/value record), and renders every do operation for each element
+// with the as-name bound. Expands into N×M RenderedOp (N elements × M do
+// operations).
 //
-// ★ Форма биндинга (ADR-057 §3, ЗАФИКСИРОВАНА):
-//   - foreach по LIST → `as`=ЭЛЕМЕНТ как есть. Для list of scalars `${replica}`
-//     даёт скаляр; для list of objects `${replica.sid}` — поле объекта.
-//   - foreach по MAP → `as`=ОБЪЕКТ-ЗАПИСЬ {key, value}: `${change.key}` —
-//     ключ записи, `${change.value.acl}` — поле значения. Это симметрично
-//     register-карте (sid→payload) и migration-DSL foreach по map.
+// Binding shape (ADR-057 §3, FIXED):
+//   - foreach over a LIST → `as`=the element as-is. For a list of scalars,
+//     `${replica}` yields the scalar; for a list of objects,
+//     `${replica.sid}` reads an object field.
+//   - foreach over a MAP → `as`={key, value} record: `${change.key}` is the
+//     record's key, `${change.value.acl}` a field of the value. Mirrors the
+//     register map (sid→payload) and the migration-DSL foreach over a map.
 //
-// Коллекция op.In вычисляется ОДИН раз (host-инвариантна в пилоте: foreach по
-// input.*/vars.* — общий контекст прогона; foreach по soulprint.self.* был бы
-// host-вариативен и здесь не поддержан — снимок последнего хоста по SID, как и
-// прочая last-wins-свёртка). nestedBind — биндинг внешнего foreach (вложенность
-// грамматикой запрещена, но параметр для симметрии).
+// The op.In collection is evaluated ONCE (host-invariant in pilot: foreach
+// over input.*/vars.* is shared run context; foreach over
+// soulprint.self.* would be host-variant and isn't supported here — falls
+// back to the last host's snapshot by SID, same as the rest of the
+// last-wins folding). nestedBind is the outer foreach's binding (nesting is
+// grammar-forbidden, but the parameter exists for symmetry).
 func (p *Pipeline) renderForeach(in RenderInput, hosts []*topology.HostFacts, op config.StateChange, idx int, nestedBind map[string]any) ([]RenderedOp, error) {
-	// Коллекция вычисляется в контексте последнего хоста по SID (last-wins).
+	// The collection is evaluated in the last host's context by SID (last-wins).
 	last := hosts[len(hosts)-1]
 	vars := stateChangesVars(in, last)
 	vars.Loop = mergeLoop(vars.Loop, nestedBind)
@@ -1610,10 +1714,11 @@ func (p *Pipeline) renderForeach(in RenderInput, hosts []*topology.HostFacts, op
 	return out, nil
 }
 
-// foreachBindings строит per-iteration биндинги `as`-имени из вычисленной
-// коллекции. ★ list → as=элемент; map → as={key, value}-запись (ADR-057 §3).
-// Порядок map-итерации детерминирован (сортировка ключей) — воспроизводимость
-// state-коммита. Не list/не map (скаляр/nil) → ошибка: foreach требует коллекцию.
+// foreachBindings builds per-iteration `as`-name bindings from the
+// evaluated collection. list → as=element; map → as={key, value} record
+// (ADR-057 §3). Map iteration order is deterministic (sorted keys) for
+// reproducible state commits. Not list/not map (scalar/nil) → error:
+// foreach requires a collection.
 func foreachBindings(asName string, coll any) ([]map[string]any, error) {
 	switch c := coll.(type) {
 	case []any:
@@ -1630,7 +1735,7 @@ func foreachBindings(asName string, coll any) ([]map[string]any, error) {
 		sort.Strings(keys)
 		out := make([]map[string]any, 0, len(c))
 		for _, k := range keys {
-			// as=объект-запись: .key (строка) + .value (значение записи).
+			// as=key/value record: .key (string) + .value (the entry's value).
 			out = append(out, map[string]any{asName: map[string]any{"key": k, "value": c[k]}})
 		}
 		return out, nil
@@ -1639,9 +1744,9 @@ func foreachBindings(asName string, coll any) ([]map[string]any, error) {
 	}
 }
 
-// patchMapFromAny приводит произвольное YAML-значение patch к map[string]any
-// (путь-в-элементе → CEL/литерал). nil → пустой map (no-op merge). Не-map → ошибка
-// (config-валидатор уже отверг, defense in depth).
+// patchMapFromAny coerces an arbitrary YAML patch value into map[string]any
+// (element path → CEL/literal). nil → empty map (no-op merge). Non-map →
+// error (the config validator already rejects this, defense in depth).
 func patchMapFromAny(v any) (map[string]any, error) {
 	if v == nil {
 		return map[string]any{}, nil
@@ -1653,11 +1758,12 @@ func patchMapFromAny(v any) (map[string]any, error) {
 	return m, nil
 }
 
-// stateContextSnapshot строит per-RUN снимок scenario-контекста (last-wins по
-// SID) как плоскую map для merge-time вычисления modify/remove match/patch.
-// Содержит input/register/incarnation/self/essence/vars + влитый foreach-биндинг
-// (loopBind). Берётся контекст ПОСЛЕДНЕГО хоста по SID — register/self
-// host-вариативны, last-wins (output.md, симметрично set/add).
+// stateContextSnapshot builds a per-run scenario-context snapshot
+// (last-wins by SID) as a flat map for merge-time evaluation of
+// modify/remove match/patch. Contains input/register/incarnation/self/
+// essence/vars plus the folded-in foreach binding (loopBind). Uses the last
+// host's context by SID — register/self are host-variant, last-wins
+// (output.md, mirrors set/add).
 func (p *Pipeline) stateContextSnapshot(in RenderInput, hosts []*topology.HostFacts, loopBind map[string]any) map[string]any {
 	last := hosts[len(hosts)-1]
 	vars := stateChangesVars(in, last)
@@ -1682,8 +1788,9 @@ func (p *Pipeline) stateContextSnapshot(in RenderInput, hosts []*topology.HostFa
 	return ctx
 }
 
-// mergeLoop сливает два loop-биндинга (внешний + текущий) в новую map. Текущий
-// (b) перекрывает внешний (a) при коллизии имён. nil-аргументы безопасны.
+// mergeLoop merges two loop bindings (outer + current) into a new map. The
+// current one (b) wins over the outer (a) on name collisions. nil arguments
+// are safe.
 func mergeLoop(a, b map[string]any) map[string]any {
 	if len(a) == 0 && len(b) == 0 {
 		return nil
@@ -1698,33 +1805,35 @@ func mergeLoop(a, b map[string]any) map[string]any {
 	return out
 }
 
-// EvalStateMatch вычисляет match-предикат идентичности list-элемента `add`-
-// операции (orchestration.md §7, new list-форма). Биндинги: `elem` —
-// существующий элемент коллекции, `value` — добавляемый (уже отрендеренный).
-// Оба кладутся как top-level CEL-имена (через Vars.Loop — тот же механизм
-// loop-переменных). Прочий scenario-контекст (input/register/…) в match НЕ
-// доступен: идентичность — чистая функция от elem+value (как migration-CEL —
-// чистая функция от state, ADR-019). Пустой predicate сюда не приходит (merge
-// при пустом match сравнивает элементы deep-equal-ом без CEL).
+// EvalStateMatch evaluates the identity match predicate for a list element
+// of an `add` operation (orchestration.md §7, new list form). Bindings:
+// `elem` is the existing collection element, `value` the one being added
+// (already rendered). Both are top-level CEL names (via Vars.Loop, the same
+// mechanism as loop variables). No other scenario context
+// (input/register/…) is available in match: identity is a pure function of
+// elem+value (like migration-CEL is a pure function of state, ADR-019). An
+// empty predicate never reaches here (merge with an empty match compares
+// elements deep-equal, no CEL).
 //
-// Результат обязан быть bool (evalBoolExpr). Вызывается merge-ом per-existing-
-// элемент — этот метод stateless относительно Pipeline (cel.Engine потокобезопасен).
+// The result must be bool (evalBoolExpr). Called by merge per existing
+// element — stateless with respect to Pipeline (cel.Engine is thread-safe).
 func (p *Pipeline) EvalStateMatch(predicate string, elem, value any) (bool, error) {
 	vars := cel.Vars{Loop: map[string]any{"elem": elem, "value": value}}
 	return evalBoolExpr(p.cel, "state_changes.add.match", predicate, vars)
 }
 
-// EvalStateOpExpr — merge-time вычислитель CEL для modify/remove (см.
-// [StateOpEvalFunc]). В отличие от EvalStateMatch (изолированный elem/value для
-// add-дедупа), здесь expr видит ПОЛНЫЙ scenario-контекст прогона (ctx — снимок
-// input/register/incarnation/soulprint.self/essence/vars, собранный
-// stateContextSnapshot) ПЛЮС биндинги текущего элемента (binds — elem/key/value).
-// boolOut=true → match-предикат (EvalExpression→bool); boolOut=false →
-// patch-значение (EvalInterpolation→native). Так modify-match `key ==
-// input.username` видит и key (элемент), и input.* (контекст).
+// EvalStateOpExpr is the merge-time CEL evaluator for modify/remove (see
+// [StateOpEvalFunc]). Unlike EvalStateMatch (isolated elem/value for
+// add-dedup), expr here sees the FULL scenario run context (ctx — a
+// snapshot of input/register/incarnation/soulprint.self/essence/vars, built
+// by stateContextSnapshot) PLUS the current element's bindings (binds —
+// elem/key/value). boolOut=true → match predicate
+// (EvalExpression→bool); boolOut=false → patch value
+// (EvalInterpolation→native). So a modify-match `key == input.username`
+// sees both key (the element) and input.* (context).
 //
-// Вызывается merge-ом (scenario/trial) per-matched-элемент; stateless
-// относительно Pipeline (cel.Engine потокобезопасен).
+// Called by merge (scenario/trial) per matched element; stateless with
+// respect to Pipeline (cel.Engine is thread-safe).
 func (p *Pipeline) EvalStateOpExpr(expr string, ctx, binds map[string]any, boolOut bool) (any, error) {
 	vars := stateOpVars(ctx)
 	vars.Loop = mergeLoop(vars.Loop, binds)
@@ -1734,10 +1843,11 @@ func (p *Pipeline) EvalStateOpExpr(expr string, ctx, binds map[string]any, boolO
 	return p.cel.EvalInterpolation(expr, vars)
 }
 
-// stateOpVars распаковывает плоский ctx-снимок (stateContextSnapshot) обратно в
-// cel.Vars для merge-time-вычисления modify/remove. Симметрично stateChangesVars,
-// но источник — уже собранный per-RUN snapshot (хост-резолв сделан на render-
-// стороне), а не топология. soulprint.self достаётся из вложенного soulprint-map.
+// stateOpVars unpacks a flat ctx snapshot (stateContextSnapshot) back into
+// cel.Vars for merge-time evaluation of modify/remove. Mirrors
+// stateChangesVars, but the source is an already-built per-run snapshot
+// (host resolution happened render-side), not topology. soulprint.self
+// comes from the nested soulprint map.
 func stateOpVars(ctx map[string]any) cel.Vars {
 	asMap := func(k string) map[string]any {
 		m, _ := ctx[k].(map[string]any)
@@ -1756,7 +1866,7 @@ func stateOpVars(ctx map[string]any) cel.Vars {
 			v.SoulprintSelf = self
 		}
 	}
-	// foreach-биндинг (as-имя) лежит в ctx как top-level ключ — переносим в Loop.
+	// foreach binding (as-name) sits in ctx as a top-level key — move it into Loop.
 	loop := map[string]any{}
 	for k, val := range ctx {
 		switch k {
@@ -1771,32 +1881,35 @@ func stateOpVars(ctx map[string]any) cel.Vars {
 	return v
 }
 
-// guardPilotDSL отвергает task-ключи вне pilot-объёма явной [ErrUnsupportedDSL],
-// а не silent-skip-ом. config-валидатор уже гарантирует структурную
-// корректность; здесь — граница реализации pilot-а.
+// guardPilotDSL rejects task keys outside pilot scope with an explicit
+// [ErrUnsupportedDSL] instead of a silent skip. The config validator
+// already guarantees structural correctness; this is the pilot's
+// implementation boundary.
 //
-// apply: destiny здесь НЕ отвергается — он раскрывается изолированным
-// render-проходом (renderApplyDestiny, V2). include: тоже НЕ отвергается как
-// «вне pilot» — он раскрывается ДО render (config.ExpandIncludes); если всё же
-// дошёл до render нераскрытым — это ErrUnexpandedInclude (баг раскрытия).
-// serial:/run_once: тоже НЕ отвергаются (slice D): run_once режет таргет в
-// resolveTargets, serial вычисляет ширину волны в DispatchPlan.
+// apply: destiny is NOT rejected here — it expands via an isolated render
+// pass (renderApplyDestiny, V2). include: is also not rejected as
+// "out of pilot scope" — it's expanded before render (config.ExpandIncludes);
+// if it still reaches render unexpanded, that's ErrUnexpandedInclude (an
+// expansion bug). serial:/run_once: aren't rejected either (slice D):
+// run_once trims the target in resolveTargets, serial computes wave width
+// in DispatchPlan.
 //
-// loop: на MODULE-задаче (slice E1) НЕ отвергается — он раскрывается в
-// render-фазе (renderLoopTask: одна задача → N RenderedTask по элементам
-// items). loop: на include/apply/block по-прежнему вне pilot-объёма (config-
-// валидатор отвергает loop на не-module-задаче раньше; здесь — defense in depth
-// для apply+loop, дошедшего до render).
+// loop: on a MODULE task (slice E1) isn't rejected — it expands in the
+// render phase (renderLoopTask: one task → N RenderedTask over items).
+// loop: on include/apply/block remains outside pilot scope (the config
+// validator already rejects loop on a non-module task earlier; this is
+// defense in depth for apply+loop that reached render).
 //
-// block: (pilot C1) здесь НЕ отвергается — он раскрывается render-time fan-out-ом
-// (renderBlockTask, как loop/apply:destiny). parallel: на block по-прежнему вне
-// pilot (case task.Parallel выше ловит блок с parallel:true до block-accept).
-// guard оставлен для parallel:, нераскрытого include: и пустых задач.
+// block: (pilot C1) isn't rejected here — it expands via render-time
+// fan-out (renderBlockTask, like loop/apply:destiny). parallel: on block is
+// still out of pilot scope (the task.Parallel case above catches a block
+// with parallel:true before the block-accept case). The guard remains for
+// parallel:, unexpanded include:, and empty tasks.
 func guardPilotDSL(task config.Task, idx int) error {
 	switch {
 	case task.Apply != nil:
-		// module == nil допустим для apply-задачи (discriminator — apply).
-		// loop: на apply отложен (slice E.later) — отвергаем явно.
+		// module == nil is fine for an apply task (discriminator is apply).
+		// loop: on apply is deferred (slice E.later) — reject explicitly.
 		if task.Loop != nil {
 			return fmt.Errorf("%w: loop: на apply-задаче (task[%d] %q)", ErrUnsupportedDSL, idx, task.Name)
 		}
@@ -1806,10 +1919,11 @@ func guardPilotDSL(task config.Task, idx int) error {
 	case task.Parallel:
 		return fmt.Errorf("%w: parallel: (task[%d] %q)", ErrUnsupportedDSL, idx, task.Name)
 	case task.Block != nil:
-		// block-задача валидна (pilot C1); module == nil допустим (discriminator —
-		// block). loop: на block по-прежнему вне pilot — config-валидатор отвергает
-		// loop на не-module-задаче раньше (defense in depth здесь не требуется,
-		// renderBlockTask на block.Loop не смотрит).
+		// A block task is valid (pilot C1); module == nil is fine
+		// (discriminator is block). loop: on block is still out of pilot
+		// scope — the config validator already rejects loop on a non-module
+		// task earlier (no defense-in-depth needed here, renderBlockTask
+		// never looks at block.Loop).
 		return nil
 	case task.Module == nil:
 		return fmt.Errorf("%w: task[%d] %q не является module-задачей", ErrUnsupportedDSL, idx, task.Name)
@@ -1817,11 +1931,12 @@ func guardPilotDSL(task config.Task, idx int) error {
 	return nil
 }
 
-// taskPassageAt возвращает passage-индекс top-level задачи i из плана
-// стратификации (RenderInput.TaskPassage). nil-план либо i вне диапазона → 0
-// (N=1 / не-staged caller: Trial / Acolyte RenderForHost / CheckDrift) —
-// поведение БИТ-В-БИТ как до staged-render. Index-out-of-range трактуем как 0
-// fail-safe: лишний Passage-0 безопаснее паники на рассинхроне длины.
+// taskPassageAt returns top-level task i's passage index from the
+// stratification plan (RenderInput.TaskPassage). nil plan or i out of range
+// → 0 (N=1 / non-staged caller: Trial / Acolyte RenderForHost / CheckDrift)
+// — behavior is bit-for-bit unchanged from before staged-render. Treating
+// out-of-range as 0 is fail-safe: an extra Passage-0 is safer than
+// panicking on a length mismatch.
 func taskPassageAt(plan []int, i int) int {
 	if i < 0 || i >= len(plan) {
 		return 0
@@ -1829,19 +1944,20 @@ func taskPassageAt(plan []int, i int) int {
 	return plan[i]
 }
 
-// stampPassage проставляет passage всем RenderedTask, добавленным текущей
-// top-level задачей (tasks[from:]). Один вызов в конце каждой итерации Render
-// клеймит и apply:destiny/loop-потомков (block — атомарная единица Passage,
-// ADR-056), не размазывая стампинг по веткам.
+// stampPassage sets passage on every RenderedTask added by the current
+// top-level task (tasks[from:]). One call at the end of each Render
+// iteration stamps apply:destiny/loop descendants too (block is an atomic
+// Passage unit, ADR-056), instead of spreading the stamping across
+// branches.
 func stampPassage(tasks []*RenderedTask, from, passage int) {
 	if passage == 0 {
-		return // zero-value уже стоит — не трогаем (fast-path N=1).
+		return // zero-value is already set — leave it (fast path N=1).
 	}
 	for i := from; i < len(tasks); i++ {
 		tasks[i].Passage = passage
 	}
 }
 
-// compile-time проверка, что *structpb.Struct — proto.Message (используется в
-// proto.Equal). Если структура поменяется, поломка вылезет тут, а не в рантайме.
+// compile-time check that *structpb.Struct implements proto.Message (used
+// by proto.Equal). If the type changes, this breaks here, not at runtime.
 var _ proto.Message = (*structpb.Struct)(nil)

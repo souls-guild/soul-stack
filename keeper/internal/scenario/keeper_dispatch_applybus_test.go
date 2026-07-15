@@ -1,9 +1,9 @@
 package scenario
 
-// Guard-инварианты ADR-068 §A2 (keeper-side task.executed → applybus): keeper-side
-// прогресс `on: keeper` виден на operator-SSE СИММЕТРИЧНО Soul-side
-// (grpc/events_taskevent.go), БЕЗ утечки секретов. Тесты — white-box unit (real
-// applybus.NewBus + subscriber), без PG/сети.
+// Guard invariants for ADR-068 §A2 (keeper-side task.executed → applybus): keeper-side
+// `on: keeper` progress is visible on the operator SSE SYMMETRICALLY to Soul-side
+// (grpc/events_taskevent.go), WITHOUT leaking secrets. Tests are white-box unit
+// (real applybus.NewBus + subscriber), no PG/network.
 
 import (
 	"context"
@@ -15,12 +15,12 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
 )
 
-// forbiddenSSEKeys — поля, которые НИКОГДА не должны попасть в keeper-side SSE-frame
-// (секрет-гигиена ADR-068 §A2): vault-резолвленный output/register/stderr.
+// forbiddenSSEKeys — fields that must NEVER reach a keeper-side SSE frame
+// (secret hygiene, ADR-068 §A2): vault-resolved output/register/stderr.
 var forbiddenSSEKeys = []string{"output", "register_data", "register", "message"}
 
-// publishAndCapture подписывается на шину, публикует keeper-side task.executed и
-// возвращает доставленное событие (или валит тест на таймауте).
+// publishAndCapture subscribes to the bus, publishes a keeper-side
+// task.executed event, and returns the delivered event (or fails the test on timeout).
 func publishAndCapture(t *testing.T, applyID string, passage int, rt *render.RenderedTask, changed, failed bool) applybus.Event {
 	t.Helper()
 	bus := applybus.NewBus(slog.New(slog.DiscardHandler))
@@ -40,9 +40,9 @@ func publishAndCapture(t *testing.T, applyID string, passage int, rt *render.Ren
 	}
 }
 
-// TestPublishKeeperTaskExecuted_ChangedSymmetry — guard (2): changed keeper-задача
-// публикуется с sid="keeper" и формой payload, симметричной Soul-side (тот же набор
-// ключей и литерал статуса).
+// TestPublishKeeperTaskExecuted_ChangedSymmetry — guard (2): a changed keeper
+// task is published with sid="keeper" and a payload shape symmetric to
+// Soul-side (same key set and status literal).
 func TestPublishKeeperTaskExecuted_ChangedSymmetry(t *testing.T) {
 	rt := &render.RenderedTask{Index: 2, Module: "core.cloud.provisioned"}
 	ev := publishAndCapture(t, "01APPLYCHANGED0000000000000", 0, rt, true, false)
@@ -54,25 +54,25 @@ func TestPublishKeeperTaskExecuted_ChangedSymmetry(t *testing.T) {
 	if !ok {
 		t.Fatalf("payload тип %T, want map[string]any", ev.Payload)
 	}
-	// sid=keeper — синтетический адрес keeper-target-а (render.KeeperTargetSID).
+	// sid=keeper — synthetic address of the keeper target (render.KeeperTargetSID).
 	if got := p["sid"]; got != render.KeeperTargetSID {
 		t.Errorf("sid = %v, want %q", got, render.KeeperTargetSID)
 	}
-	// task_idx / passage — int32 (паритет типов с Soul-side proto-getter-ами).
+	// task_idx / passage — int32 (type parity with Soul-side proto getters).
 	if got := p["task_idx"]; got != int32(2) {
 		t.Errorf("task_idx = %#v, want int32(2)", got)
 	}
 	if got := p["passage"]; got != int32(0) {
 		t.Errorf("passage = %#v, want int32(0)", got)
 	}
-	// task_status — тот же литерал, что Soul-side (ev.GetStatus().String()).
+	// task_status — same literal as Soul-side (ev.GetStatus().String()).
 	if got := p["task_status"]; got != "TASK_STATUS_CHANGED" {
 		t.Errorf("task_status = %v, want TASK_STATUS_CHANGED", got)
 	}
 	if got := p["kind"]; got != string(applybus.KindTaskExecuted) {
 		t.Errorf("kind-поле = %v, want %q", got, applybus.KindTaskExecuted)
 	}
-	// Ровно тот набор ключей, что Soul-side для не-упавшей задачи (без error).
+	// Exactly the key set Soul-side uses for a non-failed task (no error).
 	wantKeys := map[string]bool{"apply_id": true, "kind": true, "sid": true, "task_idx": true, "task_status": true, "passage": true}
 	for k := range p {
 		if !wantKeys[k] {
@@ -85,8 +85,9 @@ func TestPublishKeeperTaskExecuted_ChangedSymmetry(t *testing.T) {
 	assertNoSecretKeys(t, p)
 }
 
-// TestPublishKeeperTaskExecuted_FailedSecretHygiene — guard (3): упавшая keeper-задача
-// несёт ТОЛЬКО error{code,module} (без message/output/register) — секрет-гигиена.
+// TestPublishKeeperTaskExecuted_FailedSecretHygiene — guard (3): a failed
+// keeper task carries ONLY error{code,module} (no message/output/register) —
+// secret hygiene.
 func TestPublishKeeperTaskExecuted_FailedSecretHygiene(t *testing.T) {
 	rt := &render.RenderedTask{Index: 1, Module: "core.vault.kv-read"}
 	ev := publishAndCapture(t, "01APPLYFAILED00000000000000", 3, rt, false, true)
@@ -99,7 +100,7 @@ func TestPublishKeeperTaskExecuted_FailedSecretHygiene(t *testing.T) {
 	if !ok {
 		t.Fatalf("error тип %T, want map[string]any", p["error"])
 	}
-	// error несёт ТОЛЬКО code+module (без message = stderr).
+	// error carries ONLY code+module (no message = stderr).
 	if errObj["module"] != "core.vault.kv-read" {
 		t.Errorf("error.module = %v, want core.vault.kv-read", errObj["module"])
 	}
@@ -112,8 +113,8 @@ func TestPublishKeeperTaskExecuted_FailedSecretHygiene(t *testing.T) {
 	assertNoSecretKeys(t, p)
 }
 
-// TestPublishKeeperTaskExecuted_NoLogSuppressed — guard: no_log-задача несёт маркер
-// suppressed без register/output.
+// TestPublishKeeperTaskExecuted_NoLogSuppressed — guard: a no_log task carries
+// a suppressed marker without register/output.
 func TestPublishKeeperTaskExecuted_NoLogSuppressed(t *testing.T) {
 	rt := &render.RenderedTask{Index: 0, Module: "core.soul.registered", NoLog: true}
 	ev := publishAndCapture(t, "01APPLYNOLOG000000000000000", 0, rt, true, false)
@@ -125,11 +126,11 @@ func TestPublishKeeperTaskExecuted_NoLogSuppressed(t *testing.T) {
 	assertNoSecretKeys(t, p)
 }
 
-// TestPublishKeeperTaskExecuted_NilBusNoop — guard: ApplyBus=nil → no-op без паники
-// (single-Keeper dev / unit без SSE), как Soul-side.
+// TestPublishKeeperTaskExecuted_NilBusNoop — guard: ApplyBus=nil → no-op
+// without panicking (single-Keeper dev / unit without SSE), like Soul-side.
 func TestPublishKeeperTaskExecuted_NilBusNoop(t *testing.T) {
 	r := &Runner{deps: Deps{ApplyBus: nil}}
-	// Не должно паниковать.
+	// Must not panic.
 	r.publishKeeperTaskExecuted("01APPLYNIL0000000000000000", 0, &render.RenderedTask{Index: 0, Module: "core.cloud.provisioned"}, true, false)
 }
 

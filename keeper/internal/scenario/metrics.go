@@ -7,55 +7,56 @@ import (
 	"github.com/souls-guild/soul-stack/shared/obs"
 )
 
-// tracer для in-process span-ов scenario-runner-а. Берёт глобальный
-// TracerProvider, поднятый [obs.SetupOTel] в main; при OTel disabled
-// провайдер no-op — span-ы бесплатны и код не ветвится (ADR-024 §1.2).
+// tracer for in-process spans of the scenario runner. Uses the global
+// TracerProvider set up by [obs.SetupOTel] in main; when OTel is disabled the
+// provider is no-op — spans are free and the code doesn't branch (ADR-024 §1.2).
 var tracer = otel.Tracer("keeper/scenario")
 
-// ScenarioMetrics — набор Prometheus-collector-ов scenario-runner-а
-// (Keeper-side прогон scenario, ADR-009). Регистрируется отдельным helper-ом
-// поверх компонент-агностичного [obs.Registry] — тем же паттерном, что
-// [grpc.RegisterGRPCMetrics] (пилот ADR-024 §4.0): registry-core не знает про
-// конкретные метрики, а keeper_scenario_*-метрики — частность runner-а.
+// ScenarioMetrics — Prometheus collectors for the scenario runner
+// (Keeper-side scenario run, ADR-009). Registered by a dedicated helper on
+// top of the component-agnostic [obs.Registry] — same pattern as
+// [grpc.RegisterGRPCMetrics] (pilot, ADR-024 §4.0): the registry core doesn't
+// know about concrete metrics, keeper_scenario_* metrics are the runner's own.
 //
-// Метрики живут здесь (keeper/internal/scenario), а не в shared/obs, потому
-// что привязаны к keeper-внутренней run-goroutine и не переиспользуются
-// Soul-ом (ADR-011: shared/ — действительно поперечный код).
+// Metrics live here (keeper/internal/scenario) rather than shared/obs because
+// they're tied to the keeper-internal run goroutine and not reused by Soul
+// (ADR-011: shared/ is for truly cross-cutting code).
 //
-// Имена — Prometheus convention (snake_case, _total для counter, _seconds для
-// histogram длительности; ADR-024 §2.1). Labels — closed enum (result),
-// cardinality-safe (ADR-024 §2.2): incarnation/scenario name в labels НЕ
-// кладём — это blow-up по числу инкарнаций/сценариев, их разрез — в trace
-// (span scenario.run несёт их атрибутами).
+// Names follow Prometheus convention (snake_case, _total for counters,
+// _seconds for duration histograms; ADR-024 §2.1). Labels are a closed enum
+// (result), cardinality-safe (ADR-024 §2.2): incarnation/scenario name is NOT
+// a label — that would blow up cardinality by incarnation/scenario count;
+// that breakdown belongs in traces (the scenario.run span carries them as
+// attributes).
 type ScenarioMetrics struct {
-	// runsTotal — счётчик завершённых прогонов scenario, разрезанный по
-	// терминальному результату (`ok` — state закоммичен; `failed` — прогон
-	// провалился и incarnation переведена в error_locked; `locked` — прогон
-	// отклонён до старта, т.к. incarnation уже applying/error_locked).
+	// runsTotal — count of finished scenario runs, split by terminal result
+	// (`ok` — state committed; `failed` — run failed, incarnation moved to
+	// error_locked; `locked` — run rejected before start because the
+	// incarnation was already applying/error_locked).
 	runsTotal *prometheus.CounterVec
 
-	// runDuration — длительность прогона scenario в секундах (от старта
-	// run-goroutine до терминала). Histogram отвечает на «сколько длятся
-	// прогоны»; разрез по результату не нужен — для p99 хватает общей серии,
-	// доменная детализация уходит в trace.
+	// runDuration — scenario run duration in seconds (from run-goroutine
+	// start to terminal). Answers "how long do runs take"; no split by result
+	// needed — the overall series is enough for p99, domain detail goes to trace.
 	runDuration prometheus.Histogram
 }
 
-// Результаты для keeper_scenario_runs_total. Closed enum в 3 значения,
-// отражает терминальные исходы run-goroutine (run.go): commit / abort / отказ
-// gate-а до старта.
+// Results for keeper_scenario_runs_total. Closed 3-value enum reflecting
+// run-goroutine terminal outcomes (run.go): commit / abort / gate rejection
+// before start.
 const (
 	runResultOK     = "ok"
 	runResultFailed = "failed"
 	runResultLocked = "locked"
 )
 
-// RegisterScenarioMetrics создаёт keeper_scenario_*-collectors и регистрирует
-// их в [obs.Registry]. Возвращает дескриптор для wire-up через [Deps.Metrics].
+// RegisterScenarioMetrics creates the keeper_scenario_* collectors and
+// registers them in [obs.Registry]. Returns the handle for wiring via
+// [Deps.Metrics].
 //
-// MustRegister: дубликат-регистрация — programmer error (вызвали дважды на
-// одном Registry); падать сразу удобнее, чем носить ленивую инициализацию
-// (паттерн идентичен [grpc.RegisterGRPCMetrics]).
+// MustRegister: duplicate registration is a programmer error (called twice on
+// the same Registry); failing fast is simpler than lazy init (same pattern as
+// [grpc.RegisterGRPCMetrics]).
 func RegisterScenarioMetrics(reg *obs.Registry) *ScenarioMetrics {
 	m := &ScenarioMetrics{
 		runsTotal: prometheus.NewCounterVec(
@@ -75,13 +76,12 @@ func RegisterScenarioMetrics(reg *obs.Registry) *ScenarioMetrics {
 	return m
 }
 
-// ObserveRun фиксирует терминал прогона: инкрементирует runs_total по
-// результату и (при duration > 0) кладёт длительность в histogram.
-// nil-получатель — no-op: runner может подниматься без observability
-// (unit-тесты, dev-сборка).
+// ObserveRun records a run's terminal: increments runs_total by result and
+// (when duration > 0) records the duration in the histogram. nil receiver is
+// a no-op: the runner may run without observability (unit tests, dev builds).
 //
-// duration <= 0 (прогон отклонён до старта, locked) histogram не наполняет —
-// длительность измеряется только для реально стартовавших прогонов.
+// duration <= 0 (run rejected before start, locked) doesn't feed the
+// histogram — duration is only measured for runs that actually started.
 func (m *ScenarioMetrics) ObserveRun(result string, durationSeconds float64) {
 	if m == nil {
 		return

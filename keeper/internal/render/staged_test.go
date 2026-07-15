@@ -9,10 +9,10 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// stagedScenario — минимальная staged-фикстура (ADR-056, S3): passage 0 — probe
-// роли (register: role), passage 1 — действие, таргетящееся `where: register.role
-// == 'master'`. Воспроизводит каноническую идиому probe→where (orchestration.md
-// §4-5 / ADR-008 волатильная роль).
+// stagedScenario is a minimal staged fixture (ADR-056, S3): passage 0 probes
+// the role (register: role), passage 1 acts, targeting `where:
+// register.role == 'master'`. Reproduces the canonical probe→where idiom
+// (orchestration.md §4-5 / ADR-008 volatile role).
 const stagedScenario = `
 name: staged
 description: probe role then act on master
@@ -45,10 +45,10 @@ func loadStagedManifest(t *testing.T, src string) *config.ScenarioManifest {
 	return m
 }
 
-// TestRender_StagedPassageStamp — Render клеймит RenderedTask.Passage из
-// RenderInput.TaskPassage (результат Stratify). probe → Passage 0, потребитель
-// register.role → Passage 1 (staged-render, ADR-056 §б): probe и потребитель НЕ
-// в одном Passage.
+// TestRender_StagedPassageStamp — Render stamps RenderedTask.Passage from
+// RenderInput.TaskPassage (Stratify's result). probe → Passage 0, the
+// register.role consumer → Passage 1 (staged render, ADR-056 §b): probe and
+// consumer are NOT in the same Passage.
 func TestRender_StagedPassageStamp(t *testing.T) {
 	m := loadStagedManifest(t, stagedScenario)
 	plan, err := Stratify(m.Tasks)
@@ -85,11 +85,12 @@ func TestRender_StagedPassageStamp(t *testing.T) {
 	}
 }
 
-// TestRender_StagedWhereResolvesPerHostRegister — СЕРДЦЕ staged-render на
-// render-тире (ADR-056 §в.1): Passage 1 рендерится с per-host register Passage 0
-// (in.RegisterByHost), и `where: register.role.stdout == 'master'` таргетит
-// ТОЛЬКО master-хост. Доказывает, что drift закрыт на уровне резолва where:
-// (раньше register был пуст → where отбирал 0 хостов).
+// TestRender_StagedWhereResolvesPerHostRegister is the HEART of staged
+// render on the render tier (ADR-056 §c.1): Passage 1 renders with Passage
+// 0's per-host register (in.RegisterByHost), and `where:
+// register.role.stdout == 'master'` targets ONLY the master host. Proves the
+// drift is closed at the where: resolve level (previously register was empty
+// → where selected 0 hosts).
 func TestRender_StagedWhereResolvesPerHostRegister(t *testing.T) {
 	m := loadStagedManifest(t, stagedScenario)
 	plan, err := Stratify(m.Tasks)
@@ -107,10 +108,11 @@ func TestRender_StagedWhereResolvesPerHostRegister(t *testing.T) {
 			host("b.example.com", []string{"redis-prod"}, nil),
 		},
 		TaskPassage: plan.TaskPassage,
-		// Stage-loop рендерит Passage 1 с ActivePassage=1: его where: резолвится.
+		// The stage loop renders Passage 1 with ActivePassage=1: its where:
+		// gets resolved.
 		ActivePassage: 1,
-		// Per-host register, накопленный барьером Passage 0: хост a — master,
-		// хост b — slave (как probe вернул per-host).
+		// Per-host register accumulated by Passage 0's barrier: host a is
+		// master, host b is slave (as probe returned per-host).
 		RegisterByHost: map[string]map[string]any{
 			"a.example.com": {"role": map[string]any{"stdout": "master"}},
 			"b.example.com": {"role": map[string]any{"stdout": "slave"}},
@@ -121,7 +123,7 @@ func TestRender_StagedWhereResolvesPerHostRegister(t *testing.T) {
 		t.Fatalf("Render: %v", err)
 	}
 
-	// Passage-1 задача (Index 1) обязана таргетить ТОЛЬКО master-хост.
+	// The Passage-1 task (Index 1) must target ONLY the master host.
 	var consumer *DispatchPlan
 	for i := range plans {
 		if plans[i].TaskIndex == 1 {
@@ -136,15 +138,17 @@ func TestRender_StagedWhereResolvesPerHostRegister(t *testing.T) {
 	}
 }
 
-// TestRender_NoStratifyPlanIsPassage0 — backward-compat: без RenderInput.TaskPassage
-// (nil) все RenderedTask несут Passage 0 (N=1 / не-staged caller: Trial / Acolyte
-// RenderForHost / CheckDrift). Гарантирует, что не-staged caller получает прежнее
-// поведение (БИТ-В-БИТ — стамп Passage не активируется).
+// TestRender_NoStratifyPlanIsPassage0 — backward compat: without
+// RenderInput.TaskPassage (nil) every RenderedTask carries Passage 0 (N=1 /
+// non-staged caller: Trial / Acolyte RenderForHost / CheckDrift). Guarantees a
+// non-staged caller gets the previous behavior (BIT-FOR-BIT — Passage
+// stamping isn't activated).
 func TestRender_NoStratifyPlanIsPassage0(t *testing.T) {
-	// N=1-сценарий (без register-зависимостей): не-staged caller рендерит как до
-	// staged-render. register-зависимый where тут отсутствует — иначе пустой
-	// register у первого прохода был бы ошибкой (это и есть исходный drift,
-	// закрываемый staged-loop-ом, а не render-фазой без register).
+	// N=1 scenario (no register dependencies): a non-staged caller renders as
+	// before staged render. There's no register-dependent where here —
+	// otherwise an empty register on the first pass would be an error (that's
+	// exactly the original drift closed by the staged loop, not by the
+	// render phase without register).
 	const plain = `
 name: plain
 description: two independent tasks
@@ -165,7 +169,7 @@ tasks:
 		Input:       map[string]any{},
 		Incarnation: IncarnationMeta{Name: "redis-prod", Service: "redis"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"redis-prod"}, nil)},
-		// TaskPassage не задан (nil): не-staged caller.
+		// TaskPassage isn't set (nil): non-staged caller.
 	}
 	tasks, _, err := p.Render(context.Background(), in)
 	if err != nil {

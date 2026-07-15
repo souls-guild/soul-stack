@@ -10,48 +10,51 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// destinyNamePlaceholder — маркер в `default_destiny_source`, заменяемый именем
-// destiny при резолве git-URL (keeper_settings::default_destiny_source).
+// destinyNamePlaceholder — marker in `default_destiny_source`, replaced by the
+// destiny name when resolving the git URL (keeper_settings::default_destiny_source).
 const destinyNamePlaceholder = "{name}"
 
-// DestinyTemplateSource — источник шаблона URL `default_destiny_source`.
-// Реализуется runtime-снимком [serviceregistry.Holder] (DefaultDestinySource
-// читает скаляр keeper_settings, ADR-029). Объявлен интерфейсом, чтобы
-// [DestinySource] тестировался без БД (fixed-шаблон) и чтобы шаблон читался
-// ЛЕНИВО (на каждый резолв из текущего снимка), а не фиксировался копией в
-// конструкторе — иначе hot-reload скаляра не доезжал бы до резолва.
+// DestinyTemplateSource — source of the `default_destiny_source` URL template.
+// Implemented by a runtime snapshot [serviceregistry.Holder]
+// (DefaultDestinySource reads the keeper_settings scalar, ADR-029). Declared as
+// an interface so [DestinySource] can be tested without a DB (fixed template)
+// and so the template is read LAZILY (from the current snapshot on every
+// resolve) rather than fixed as a copy in the constructor — otherwise a
+// hot-reload of the scalar wouldn't reach resolution.
 type DestinyTemplateSource interface {
 	DefaultDestinySource() string
 }
 
-// fixedTemplateSource — [DestinyTemplateSource] с константным шаблоном (тесты).
+// fixedTemplateSource — [DestinyTemplateSource] with a constant template (tests).
 type fixedTemplateSource string
 
 func (s fixedTemplateSource) DefaultDestinySource() string { return string(s) }
 
-// DestinySource резолвит git-координаты destiny-репо по имени. ref — из
-// `service.yml → destiny[]` по имени (ADR-007: version = git ref). git-URL —
-// по гибридному правилу: per-entry `destiny[].git` override (прямой URL) имеет
-// приоритет, иначе имя подставляется в шаблон `default_destiny_source`
-// (читается ЛЕНИВО из snapshot-источника). Safe for concurrent use.
+// DestinySource resolves the git coordinates of a destiny repo by name. ref
+// comes from `service.yml → destiny[]` by name (ADR-007: version = git ref).
+// The git URL follows a hybrid rule: a per-entry `destiny[].git` override
+// (direct URL) takes priority, otherwise the name is substituted into the
+// `default_destiny_source` template (read LAZILY from the snapshot source).
+// Safe for concurrent use.
 type DestinySource struct {
 	loader   *artifact.DestinyLoader
 	template DestinyTemplateSource
 }
 
-// NewDestinySource собирает источник destiny из загрузчика и snapshot-источника
-// шаблона URL `default_destiny_source`. Шаблон читается лениво на каждый резолв
-// (см. resolveURL) — hot-reload скаляра keeper_settings прозрачен. Пустой шаблон
-// допустим: name-only зависимости тогда не резолвятся, но destiny с per-entry
-// `git` override работают без шаблона.
+// NewDestinySource builds a destiny source from the loader and the
+// `default_destiny_source` URL template snapshot source. The template is read
+// lazily on every resolve (see resolveURL) — hot-reload of the keeper_settings
+// scalar is transparent. An empty template is allowed: name-only dependencies
+// then don't resolve, but destinies with a per-entry `git` override work
+// without a template.
 func NewDestinySource(loader *artifact.DestinyLoader, template DestinyTemplateSource) *DestinySource {
 	return &DestinySource{loader: loader, template: template}
 }
 
-// resolveURL выводит git-URL destiny по гибридному правилу: per-entry override
-// `git` имеет приоритет (прямой URL без шаблона), иначе name подставляется в
-// шаблон `default_destiny_source`. `gitOverride` — значение `destiny[].git` из
-// service.yml (пустое = override не задан).
+// resolveURL derives the destiny git URL by the hybrid rule: the per-entry
+// `git` override takes priority (direct URL, no template), otherwise name is
+// substituted into the `default_destiny_source` template. `gitOverride` is the
+// `destiny[].git` value from service.yml (empty = override not set).
 func (s *DestinySource) resolveURL(name, gitOverride string) (string, error) {
 	if gitOverride != "" {
 		return gitOverride, nil
@@ -69,10 +72,10 @@ func (s *DestinySource) resolveURL(name, gitOverride string) (string, error) {
 	return strings.ReplaceAll(template, destinyNamePlaceholder, name), nil
 }
 
-// resolverFor строит per-run [render.DestinyResolver] из destiny[]-зависимостей
-// конкретного service-снапшота. ref/git берутся из manifest.Destiny[] по имени;
-// destiny, не объявленная в service.yml::destiny[], отвергается (apply:destiny
-// может ссылаться только на декларированную зависимость, ADR-007).
+// resolverFor builds a per-run [render.DestinyResolver] from the destiny[]
+// dependencies of a specific service snapshot. ref/git come from
+// manifest.Destiny[] by name; a destiny not declared in service.yml::destiny[]
+// is rejected (apply:destiny can only reference a declared dependency, ADR-007).
 func (s *DestinySource) resolverFor(manifest *config.ServiceManifest) *destinyResolver {
 	deps := make(map[string]config.DependencyRef, len(manifest.Destiny))
 	for _, dep := range manifest.Destiny {
@@ -81,17 +84,17 @@ func (s *DestinySource) resolverFor(manifest *config.ServiceManifest) *destinyRe
 	return &destinyResolver{source: s, deps: deps}
 }
 
-// destinyResolver — per-run реализация [render.DestinyResolver]: знает
-// destiny[]-зависимости текущего service-снапшота (ref + опц. git-override) и
-// грузит destiny-артефакт через DestinyLoader.
+// destinyResolver — per-run implementation of [render.DestinyResolver]: knows
+// the destiny[] dependencies of the current service snapshot (ref + optional
+// git override) and loads the destiny artifact via DestinyLoader.
 type destinyResolver struct {
 	source *DestinySource
 	deps   map[string]config.DependencyRef
 }
 
-// Resolve грузит destiny по имени: ref из service.yml::destiny[], git-URL по
-// гибридному правилу (per-entry git override → default_destiny_source + name).
-// Возвращает распарсенные задачи + input-схему.
+// Resolve loads a destiny by name: ref from service.yml::destiny[], git URL by
+// the hybrid rule (per-entry git override → default_destiny_source + name).
+// Returns the parsed tasks + input schema.
 func (r *destinyResolver) Resolve(ctx context.Context, name string) (*render.ResolvedDestiny, error) {
 	dep, ok := r.deps[name]
 	if !ok {
@@ -105,8 +108,9 @@ func (r *destinyResolver) Resolve(ctx context.Context, name string) (*render.Res
 	if err != nil {
 		return nil, fmt.Errorf("scenario: load destiny %q: %w", name, err)
 	}
-	// .tmpl destiny живут в ЕЁ снапшоте (art.LocalDir), не в снапшоте сервиса.
-	// Одноуровневый резолв (scenario-local-слоя у destiny нет): пустой prefix.
+	// .tmpl files of a destiny live in ITS OWN snapshot (art.LocalDir), not the
+	// service snapshot. Single-level resolve (destiny has no scenario-local
+	// layer): empty prefix.
 	localDir := art.LocalDir
 	templates := render.NewSnapshotTemplateReader(
 		func(rel string) ([]byte, error) { return artifact.ReadSnapshotFile(localDir, rel) },
@@ -116,7 +120,7 @@ func (r *destinyResolver) Resolve(ctx context.Context, name string) (*render.Res
 		Name:      art.Manifest.Name,
 		Tasks:     art.Tasks,
 		Input:     art.Manifest.Input,
-		Vars:      art.Vars, // destiny-локалы vars.yml (docs/destiny/vars.md), raw
+		Vars:      art.Vars, // destiny-local vars.yml (docs/destiny/vars.md), raw
 		Templates: templates,
 	}, nil
 }

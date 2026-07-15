@@ -13,8 +13,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// newTimeoutRunner — Runner с заданными runTimeout / maxAwaitTimeoutFn для
-// проверки effectiveRunTimeout без подъёма БД (resolver — чистая функция плана).
+// newTimeoutRunner builds a Runner with the given runTimeout /
+// maxAwaitTimeoutFn to test effectiveRunTimeout without a DB (the resolver
+// is a pure function of the plan).
 func newTimeoutRunner(t *testing.T, runTimeout time.Duration, ceilingFn func() time.Duration) *Runner {
 	t.Helper()
 	engine, err := cel.New()
@@ -33,9 +34,10 @@ func newTimeoutRunner(t *testing.T, runTimeout time.Duration, ceilingFn func() t
 	})
 }
 
-// refreshEmitterTask — provision-from-zero маркер: keeper-задача
-// `core.soul.registered` с refresh_soulprint:true (тот же признак, что распознаёт
-// config.HasRefreshEmitter и стратификатор refresh-границы, ADR-0061).
+// refreshEmitterTask is the provision-from-zero marker: a keeper task
+// `core.soul.registered` with refresh_soulprint:true (the same signal
+// recognized by config.HasRefreshEmitter and the refresh-boundary
+// stratifier, ADR-0061).
 func refreshEmitterTask() config.Task {
 	return config.Task{
 		On: "keeper",
@@ -46,7 +48,7 @@ func refreshEmitterTask() config.Task {
 	}
 }
 
-// hostTask — обычная host-задача (не provision): Soul-side, без refresh-эмиттера.
+// hostTask is a plain host task (not provision): Soul-side, no refresh emitter.
 func hostTask() config.Task {
 	return config.Task{
 		Module: &config.ModuleTask{
@@ -56,12 +58,13 @@ func hostTask() config.Task {
 	}
 }
 
-// TestEffectiveRunTimeout_ProvisionExtends — РЕЗОЛВЕР-UNIT (главный guard этого
-// бага). План с refresh-эмиттером поднимает потолок до ceiling+deployBudget,
-// обычный план держит базу. Без расширения provision-прогон обрывался бы на
-// defaultRunTimeout (5m), раньше joinWait (15m) и await_timeout (до 30m).
+// TestEffectiveRunTimeout_ProvisionExtends is the RESOLVER UNIT test (the
+// main guard for this bug). A plan with a refresh emitter raises the ceiling
+// to ceiling+deployBudget; a regular plan keeps the base. Without the
+// extension, a provision run would time out at defaultRunTimeout (5m),
+// before joinWait (15m) and await_timeout (up to 30m).
 func TestEffectiveRunTimeout_ProvisionExtends(t *testing.T) {
-	const ceiling = 30 * time.Minute // как config.DefaultMaxAwaitTimeout
+	const ceiling = 30 * time.Minute // same as config.DefaultMaxAwaitTimeout
 	ceilingFn := func() time.Duration { return ceiling }
 
 	tests := []struct {
@@ -71,28 +74,28 @@ func TestEffectiveRunTimeout_ProvisionExtends(t *testing.T) {
 		want  time.Duration
 	}{
 		{
-			// provision-план: eff = 30m + 10m = 40m > base 5m → расширение.
+			// provision plan: eff = 30m + 10m = 40m > base 5m → extension.
 			name:  "provision поднимает потолок до ceiling+deployBudget",
 			base:  defaultRunTimeout,
 			tasks: []config.Task{refreshEmitterTask(), hostTask()},
 			want:  ceiling + deployBudget,
 		},
 		{
-			// non-provision: ровно база (вечный barrier по-прежнему обрывается).
+			// non-provision: exactly the base (the eternal barrier still fires).
 			name:  "non-provision держит базу",
 			base:  defaultRunTimeout,
 			tasks: []config.Task{hostTask(), hostTask()},
 			want:  defaultRunTimeout,
 		},
 		{
-			// max, не replace: оператор поднял base выше eff (50m > 40m) — НЕ урезаем.
+			// max, not replace: the operator raised base above eff (50m > 40m) — we do NOT clamp it down.
 			name:  "base выше eff не урезается (max-семантика)",
 			base:  50 * time.Minute,
 			tasks: []config.Task{refreshEmitterTask()},
 			want:  50 * time.Minute,
 		},
 		{
-			// пустой план — не provision, база.
+			// empty plan — not provision, base.
 			name:  "пустой план — база",
 			base:  defaultRunTimeout,
 			tasks: nil,
@@ -109,10 +112,10 @@ func TestEffectiveRunTimeout_ProvisionExtends(t *testing.T) {
 	}
 }
 
-// TestEffectiveRunTimeout_NilCeilingFnFallsBack — без config.Store (unit/L0)
-// maxAwaitTimeoutFn==nil: ceiling берётся из config.DefaultMaxAwaitTimeout,
-// provision-прогон всё равно получает расширенный потолок (просто без
-// hot-reload-override-а оператора).
+// TestEffectiveRunTimeout_NilCeilingFnFallsBack — without config.Store
+// (unit/L0), maxAwaitTimeoutFn==nil: the ceiling comes from
+// config.DefaultMaxAwaitTimeout, and a provision run still gets the
+// extended ceiling (just without the operator's hot-reload override).
 func TestEffectiveRunTimeout_NilCeilingFnFallsBack(t *testing.T) {
 	r := newTimeoutRunner(t, defaultRunTimeout, nil) // ceilingFn == nil
 	got := r.effectiveRunTimeout([]config.Task{refreshEmitterTask()})
@@ -122,9 +125,10 @@ func TestEffectiveRunTimeout_NilCeilingFnFallsBack(t *testing.T) {
 	}
 }
 
-// TestEffectiveRunTimeout_HotReloadCeiling — maxAwaitTimeoutFn читается на КАЖДОМ
-// резолве (hot-reload): оператор поднял keeper.yml::max_await_timeout → следующий
-// provision-прогон видит новый ceiling без рестарта.
+// TestEffectiveRunTimeout_HotReloadCeiling — maxAwaitTimeoutFn is read on
+// EVERY resolve (hot-reload): the operator raises
+// keeper.yml::max_await_timeout → the next provision run sees the new
+// ceiling with no restart.
 func TestEffectiveRunTimeout_HotReloadCeiling(t *testing.T) {
 	ceiling := 30 * time.Minute
 	r := newTimeoutRunner(t, defaultRunTimeout, func() time.Duration { return ceiling })
@@ -132,18 +136,19 @@ func TestEffectiveRunTimeout_HotReloadCeiling(t *testing.T) {
 	if got := r.effectiveRunTimeout([]config.Task{refreshEmitterTask()}); got != ceiling+deployBudget {
 		t.Fatalf("до reload: %s, want %s", got, ceiling+deployBudget)
 	}
-	ceiling = 60 * time.Minute // оператор переопределил снапшот keeper.yml
+	ceiling = 60 * time.Minute // operator overrode the keeper.yml snapshot
 	if got := r.effectiveRunTimeout([]config.Task{refreshEmitterTask()}); got != ceiling+deployBudget {
 		t.Errorf("после reload: %s, want %s (новый ceiling подхвачен)", got, ceiling+deployBudget)
 	}
 }
 
-// TestProvisionTimeoutExceedsJoinWait — СТАТИЧЕСКИЙ ГАРД-ИНВАРИАНТ (ADR-0061):
-// provision-aware effective run-timeout (минимум ceiling+deployBudget при дефолтном
-// ceiling-е) обязан СТРОГО превышать дефолтный joinWait Teleport-join. Иначе
-// настройка «мертва»: барьер онбординга `await_online` / join-retry упрутся в обрыв
-// прогона раньше, чем дождутся хоста (исходный баг). Ловит будущее увеличение
-// joinWait / уменьшение бюджетов, делающее provision-прогон снова недостижимым.
+// TestProvisionTimeoutExceedsJoinWait is a STATIC GUARD INVARIANT (ADR-0061):
+// the provision-aware effective run-timeout (minimum ceiling+deployBudget at
+// the default ceiling) MUST STRICTLY exceed Teleport-join's default
+// joinWait. Otherwise the setting is "dead": the onboarding barrier
+// (`await_online` / join-retry) would hit the run timeout before the host
+// ever joins (the original bug). Catches a future joinWait increase /
+// budget decrease that would make a provision run unreachable again.
 func TestProvisionTimeoutExceedsJoinWait(t *testing.T) {
 	provisionFloor := config.DefaultMaxAwaitTimeout + deployBudget
 	if provisionFloor <= bootstrap.DefaultJoinWaitTimeout {

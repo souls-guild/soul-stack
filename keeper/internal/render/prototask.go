@@ -6,59 +6,61 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// ToProtoTasks конвертирует render-план ([]*RenderedTask) в wire-форму
-// ApplyRequest.tasks ([]*keeperv1.RenderedTask). Index (глобальный сквозной
-// индекс задачи по всему плану прогона, включая все Passage) едет в proto-поле
-// plan_index — это стабильный ключ register-корреляции на Keeper-е (Soul эхает
-// его в TaskEvent.plan_index, ADR-056 §S1 fix Variant B). Позиция же задачи в
-// ApplyRequest.tasks[] (= TaskEvent.task_idx) ЛОКАЛЬНА для passage/host — на неё
-// register-резолв опираться НЕ может. Register идёт (Soul строит registerByName
-// для flow-control-предикатов, ADR-012(d)).
+// ToProtoTasks converts a render plan ([]*RenderedTask) into the
+// ApplyRequest.tasks wire form ([]*keeperv1.RenderedTask). Index (the global
+// index of a task across the whole run plan, including all Passages) goes
+// into the proto field plan_index — the stable register-correlation key on
+// Keeper (Soul echoes it back in TaskEvent.plan_index, ADR-056 §S1 fix Variant
+// B). A task's position in ApplyRequest.tasks[] (= TaskEvent.task_idx) is
+// LOCAL to passage/host — register resolution can NOT rely on it (Soul builds
+// registerByName for flow-control predicates, ADR-012(d)).
 //
-// When/ChangedWhen/FailedWhen — flow-control CEL-строки, протягиваются как есть
-// (Soul вычисляет, ADR-012(d): when — этот slice; changed_when/failed_when —
-// следующий). FlowContext — per-host снапшот не-register CEL-контекста.
-// Until/RetryCount/RetryDelay — DSL-ядро retry: (destiny/tasks.md §9),
-// retry-петля энфорсится Soul-side (applyrunner.runTaskWithRetry); until — CEL-
-// строка как есть.
+// When/ChangedWhen/FailedWhen — flow-control CEL strings, passed through as-is
+// (Soul evaluates them, ADR-012(d): when applies to this slice;
+// changed_when/failed_when to the next). FlowContext is a per-host snapshot of
+// the non-register CEL context. Until/RetryCount/RetryDelay are the DSL retry
+// core (destiny/tasks.md §9), the retry loop is enforced Soul-side
+// (applyrunner.runTaskWithRetry); until is a CEL string as-is.
 //
-// Единственный конвертер render→proto: и scenario-orchestrator (dispatch), и
-// trial-L2 (l2_run) зовут его, чтобы при добавлении поля в RenderedTask
-// wire-форма не разъехалась двумя копиями.
+// The single render→proto converter: both the scenario-orchestrator
+// (dispatch) and trial-L2 (l2_run) call it, so adding a RenderedTask field
+// can't drift into two copies of the wire form.
 //
-// ★ onchanges/onfail-индексы РЕМАПЯТСЯ global→local (ADR-056 amend). На Keeper-е
-// resolveOnChanges/resolveOnFail резолвят register-имена requisite-ов в ГЛОБАЛЬНЫЙ
-// RenderedTask.Index (сквозной по всему плану прогона). Но Soul ключует
-// registerByIdx ЛОКАЛЬНОЙ позицией задачи в ApplyRequest.tasks[] (applyrunner.go),
-// а этот срез — per-host (groupByHost: только задачи, прошедшие where: на хосте)
-// и/или per-Passage подмножество плана. Поэтому глобальный Index источника НЕ
-// совпадает с его локальной позицией в срезе, и лукап registerByIdx[onchanges_idx]
-// промахивался бы → onchanges-задача молча SKIPPED, onfail-rescue молча НЕ
-// запускался бы. remapRequisites переводит каждый global-Index в локальную позицию
-// по ВХОДНОМУ срезу `tasks` (позиция = локальный индекс, ровно как Soul). N=1 без
-// where (Index==localPos для всех) → remap=identity, поведение БИТ-В-БИТ.
+// ★ onchanges/onfail indexes are REMAPPED global→local (ADR-056 amend). On
+// Keeper, resolveOnChanges/resolveOnFail resolve requisite register names into
+// the GLOBAL RenderedTask.Index (spanning the whole run plan). But Soul keys
+// registerByIdx by a task's LOCAL position in ApplyRequest.tasks[]
+// (applyrunner.go), and that slice is per-host (groupByHost: only tasks that
+// passed where: on the host) and/or a per-Passage subset of the plan. So a
+// source's global Index doesn't match its local position in the slice, and
+// the registerByIdx[onchanges_idx] lookup would miss → an onchanges task
+// silently SKIPPED, an onfail-rescue silently NOT triggered. remapRequisites
+// translates each global Index into a local position against the INPUT slice
+// `tasks` (position = local index, exactly like Soul). N=1 without where
+// (Index==localPos for all) → remap=identity, bit-for-bit behavior.
 //
-// Тонкая обёртка над [ToProtoTasksForHost] с пустым sid (golden-path: params едут
-// как есть, render_context первого по SID хоста). Вызывается там, где per-host
-// материализация render_context не нужна или невозможна (trial L2 single-host,
-// push fan-out одним протосрезом, тесты конвертера).
+// A thin wrapper over [ToProtoTasksForHost] with an empty sid (golden path:
+// params pass through as-is, render_context of the first-by-SID host). Called
+// where per-host render_context materialization isn't needed or possible
+// (trial L2 single-host, push fan-out as one proto slice, converter tests).
 func ToProtoTasks(tasks []*RenderedTask) []*keeperv1.RenderedTask {
 	return ToProtoTasksForHost(tasks, "")
 }
 
-// ToProtoTasksForHost — основной конвертер render→proto для конкретного хоста.
-// Идентичен golden-path, но для self-вариативной core.file.rendered подставляет
-// per-host render_context (RenderedTask.RenderContextBySID[sid]) поверх Params:
-// иначе все хосты получили бы render_context первого по SID, и self-вариативный
-// шаблон (`{{ .self.network.primary_ip }}`) рендерился бы фактами первого хоста
-// (CORE-баг, частичное закрытие open Q №25). sid=="" ИЛИ отсутствие SID-ключа ИЛИ
-// host-инвариантный render_context (карта nil — заполняется лишь при multi-host) →
-// overlay не делается, Params едут как есть (бит-в-бит со старым поведением).
+// ToProtoTasksForHost is the main render→proto converter for a specific host.
+// Identical to the golden path, but for self-variant core.file.rendered it
+// overlays per-host render_context (RenderedTask.RenderContextBySID[sid]) onto
+// Params: otherwise every host would get the first-by-SID host's
+// render_context, and a self-variant template (`{{ .self.network.primary_ip }}`)
+// would render with the first host's facts (CORE bug, partial closure of open
+// Q #25). sid=="" OR no SID key OR host-invariant render_context (nil map —
+// only populated for multi-host) → no overlay, Params pass through as-is
+// (bit-for-bit with prior behavior).
 //
-// Overlay безопасен по данным: t.Params НЕ мутируется — собирается новый
-// *structpb.Struct с теми же Fields, заменяется ровно ключ render_context
-// (см. paramsForHost). Один и тот же *RenderedTask остаётся переиспользуем для
-// других SID (groupByHost кладёт один указатель в perHost каждого хоста).
+// The overlay is data-safe: t.Params is NOT mutated — a new *structpb.Struct
+// is assembled with the same Fields, only the render_context key is replaced
+// (see paramsForHost). The same *RenderedTask remains reusable for other SIDs
+// (groupByHost puts one pointer into perHost for each host).
 func ToProtoTasksForHost(tasks []*RenderedTask, sid string) []*keeperv1.RenderedTask {
 	globalToLocal := localIndexMap(tasks)
 	out := make([]*keeperv1.RenderedTask, 0, len(tasks))
@@ -71,12 +73,12 @@ func ToProtoTasksForHost(tasks []*RenderedTask, sid string) []*keeperv1.Rendered
 			Timeout:      t.Timeout,
 			OnchangesIdx: remapRequisites(t.OnChangesIdx, globalToLocal),
 			OnfailIdx:    remapRequisites(t.OnFailIdx, globalToLocal),
-			// AggregateOf несёт ГЛОБАЛЬНЫЕ Index дочерних destiny-задач applier-а
-			// (материализация applier-register, Вариант B) — ремапим global→local
-			// той же remapRequisites, что onchanges/onfail: Soul агрегирует по
-			// ЛОКАЛЬНОЙ позиции в registerByIdx (applyrunner). Дочерняя задача,
-			// отфильтрованная where: на этом хосте / уехавшая в другой Passage,
-			// кодируется sentinel-ом (-1) → её вклад в OR нулевой (changed=false).
+			// AggregateOf carries the GLOBAL Index of the applier's child destiny
+			// tasks (applier-register materialization, Variant B) — remap global→local
+			// with the same remapRequisites as onchanges/onfail: Soul aggregates by
+			// LOCAL position in registerByIdx (applyrunner). A child task filtered out
+			// by where: on this host / that landed in another Passage is encoded as
+			// the sentinel (-1) → its contribution to the OR is zero (changed=false).
 			AggregateOf: remapRequisites(t.AggregateOf, globalToLocal),
 			When:        t.When,
 			ChangedWhen: t.ChangedWhen,
@@ -86,23 +88,24 @@ func ToProtoTasksForHost(tasks []*RenderedTask, sid string) []*keeperv1.Rendered
 			Until:       t.Until,
 			RetryCount:  int32(t.RetryCount),
 			RetryDelay:  t.RetryDelay,
-			// PlanIndex — глобальный сквозной индекс задачи (по всем Passage),
-			// ключ register-корреляции на Keeper-е (ADR-056 §S1 fix Variant B). Soul
-			// эхает его в TaskEvent.plan_index. Индексы малы и неотрицательны → int32-
-			// сужение безопасно.
+			// PlanIndex is the task's global index (across all Passages), the
+			// register-correlation key on Keeper (ADR-056 §S1 fix Variant B). Soul
+			// echoes it back in TaskEvent.plan_index. Indexes are small and
+			// non-negative → the int32 narrowing is safe.
 			PlanIndex: int32(t.Index),
 		})
 	}
 	return out
 }
 
-// paramsForHost отдаёт wire-params задачи для конкретного sid. Golden-path
-// (sid=="" / нет per-host render_context для этого SID) → t.Params как есть.
-// Иначе — НОВЫЙ *structpb.Struct с теми же Fields, где ключ render_context заменён
-// на per-host вариант t.RenderContextBySID[sid] (overlay одного ключа). t.Params
-// не мутируется: один и тот же *RenderedTask диспатчится нескольким SID, общая
-// Params обязана остаться неизменной (значения прочих Fields шарятся read-only —
-// для wire-маршалинга достаточно).
+// paramsForHost returns a task's wire params for a specific sid. Golden path
+// (sid=="" / no per-host render_context for this SID) → t.Params as-is.
+// Otherwise — a NEW *structpb.Struct with the same Fields, where the
+// render_context key is replaced by the per-host variant
+// t.RenderContextBySID[sid] (single-key overlay). t.Params isn't mutated: the
+// same *RenderedTask dispatches to multiple SIDs, so the shared Params must
+// stay unchanged (other Fields' values are shared read-only — sufficient for
+// wire marshaling).
 func paramsForHost(t *RenderedTask, sid string) *structpb.Struct {
 	if sid == "" || t.RenderContextBySID == nil {
 		return t.Params
@@ -119,11 +122,11 @@ func paramsForHost(t *RenderedTask, sid string) *structpb.Struct {
 	return &structpb.Struct{Fields: fields}
 }
 
-// localIndexMap строит карту глобальный RenderedTask.Index → локальная позиция в
-// срезе (0-based, порядок = порядок tasks). Срез — то, что реально едет в
-// ApplyRequest.tasks[] на конкретный хост/Passage, поэтому позиция в нём — ровно
-// тот ключ, которым Soul индексирует registerByIdx (applyrunner.go). Карта нужна
-// для remap onchanges/onfail-индексов из global в local.
+// localIndexMap builds a map from global RenderedTask.Index to local position
+// in the slice (0-based, order = tasks order). The slice is what actually
+// goes into ApplyRequest.tasks[] for a specific host/Passage, so its position
+// is exactly the key Soul uses to index registerByIdx (applyrunner.go). The
+// map is used to remap onchanges/onfail indexes from global to local.
 func localIndexMap(tasks []*RenderedTask) map[int]int32 {
 	m := make(map[int]int32, len(tasks))
 	for pos, t := range tasks {
@@ -132,20 +135,22 @@ func localIndexMap(tasks []*RenderedTask) map[int]int32 {
 	return m
 }
 
-// outOfRangeRequisite — sentinel-индекс onchanges/onfail-источника, ОТСУТСТВУЮЩЕГО
-// во входном срезе ToProtoTasks (источник в другом Passage ЛИБО отфильтрован where:
-// на этом хосте). Soul трактует registerByIdx[neg]=nil → changed/failed=false
-// (applyrunner.go skipOnChanges/skipOnFail: отсутствующий источник «не спасает» от
-// skip / «не активирует» onfail). Кодируем отсутствие явным sentinel-ом, а НЕ
-// выкидыванием элемента: выкидывание сместило бы остальные индексы и сломало бы
-// AND-семантику нескольких источников (хотя бы один changed → выполнить).
+// outOfRangeRequisite is the sentinel index for an onchanges/onfail source
+// ABSENT from ToProtoTasks's input slice (source in another Passage OR
+// filtered out by where: on this host). Soul treats registerByIdx[neg]=nil →
+// changed/failed=false (applyrunner.go skipOnChanges/skipOnFail: an absent
+// source doesn't "save" from skip / doesn't "trigger" onfail). Absence is
+// encoded as an explicit sentinel rather than dropping the element: dropping
+// would shift the remaining indexes and break the AND semantics of multiple
+// sources (at least one changed → run).
 const outOfRangeRequisite int32 = -1
 
-// remapRequisites переводит onchanges/onfail-индексы из глобального
-// RenderedTask.Index в локальную позицию по карте globalToLocal (см. localIndexMap).
-// Источник, отсутствующий в карте (cross-passage / отфильтрован where:), кодируется
-// outOfRangeRequisite — Soul трактует его как changed/failed=false (см. константу).
-// nil/пусто → nil (безусловный запуск / не-onfail-задача, поле omitempty).
+// remapRequisites translates onchanges/onfail indexes from the global
+// RenderedTask.Index into a local position via the globalToLocal map (see
+// localIndexMap). A source missing from the map (cross-passage / filtered by
+// where:) is encoded as outOfRangeRequisite — Soul treats it as
+// changed/failed=false (see the constant). nil/empty → nil (unconditional run
+// / not an onfail task, omitempty field).
 func remapRequisites(globalIdx []int, globalToLocal map[int]int32) []int32 {
 	if len(globalIdx) == 0 {
 		return nil

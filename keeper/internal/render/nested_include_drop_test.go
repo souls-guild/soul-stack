@@ -9,17 +9,19 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// Каскадный дроп вложенного условного include (ADR-009 amendment, фикс «вложенный
-// conditional-include не каскадит дроп»). Проверяется на ПРОД-пути
-// config.ExpandIncludes → Render: эффективный include-when вложенной группы =
-// конъюнкция предков `(outer) && (inner)`, поэтому ложный outer гасит вложенную
-// группу при ЛЮБОМ inner. Тесты гоняют 2×2-матрицу (outer×inner) и ассертят
-// ДЛИНУ плана: дропнутые задачи физически отсутствуют (не placeholder), что
-// Trial-матчер task_absent на длине не различает.
+// Cascading drop of a nested conditional include (ADR-009 amendment, fix for
+// "nested conditional-include doesn't cascade the drop"). Verified on the PROD
+// path config.ExpandIncludes → Render: the effective include-when of a nested
+// group is the conjunction of ancestors `(outer) && (inner)`, so a false outer
+// suppresses the nested group regardless of inner. Tests run a 2×2 matrix
+// (outer×inner) and assert plan LENGTH: dropped tasks are physically absent
+// (not a placeholder), which the Trial task_absent matcher can't distinguish
+// by length alone.
 
-// mapIncludeResolver — config.IncludeResolver поверх in-memory map имя→YAML
-// (display-путь = имя файла). Зеркалит helper из shared/config-тестов, но живёт
-// здесь: render-тест честно прогоняет прод-фазу ExpandIncludes своим резолвером.
+// mapIncludeResolver — a config.IncludeResolver over an in-memory name→YAML map
+// (display path = file name). Mirrors a helper from the shared/config tests but
+// lives here: the render test genuinely runs the prod ExpandIncludes phase with
+// its own resolver.
 func mapIncludeResolver(files map[string]string) config.IncludeResolver {
 	return func(name string) ([]byte, string, error) {
 		data, ok := files[name]
@@ -30,8 +32,9 @@ func mapIncludeResolver(files map[string]string) config.IncludeResolver {
 	}
 }
 
-// nestedIncludeFixture — main с условным outer-include, внутри outer — условный
-// inner-include с inner-task. Это структура из репорта бага.
+// nestedIncludeFixture — a main with a conditional outer-include, and inside
+// outer a conditional inner-include with an inner-task. Mirrors the structure
+// from the bug report.
 func nestedIncludeFixture() (rootSrc string, files map[string]string) {
 	rootSrc = `
 - include: outer.yml
@@ -50,9 +53,9 @@ func nestedIncludeFixture() (rootSrc string, files map[string]string) {
 	return rootSrc, files
 }
 
-// expandNestedFixture парсит main-задачи тем же task-парсером, что scenario-loader,
-// прогоняет config.ExpandIncludes (прод-фаза) и возвращает плоский список —
-// готовый для Render.
+// expandNestedFixture parses the main tasks with the same task parser as the
+// scenario loader, runs config.ExpandIncludes (the prod phase), and returns a
+// flat list ready for Render.
 func expandNestedFixture(t *testing.T) []config.Task {
 	t.Helper()
 	rootSrc, files := nestedIncludeFixture()
@@ -67,24 +70,24 @@ func expandNestedFixture(t *testing.T) []config.Task {
 	return expanded
 }
 
-// TestNestedConditionalInclude_DropMatrix — ★ матрица вложенного include 2×2 на
-// прод-пути ExpandIncludes→Render. Ключевой кейс бага: outer='no', inner='yes' →
-// inner-task ОБЯЗАН отсутствовать (каскадный дроп), хотя его собственный inner-when
-// истинен. Ассерт — на ДЛИНЕ плана и составе имён (физическое отсутствие, не
+// TestNestedConditionalInclude_DropMatrix — ★ a 2×2 nested-include matrix on
+// the prod ExpandIncludes→Render path. Key bug case: outer='no', inner='yes' →
+// inner-task MUST be absent (cascading drop), even though its own inner-when
+// is true. Asserts plan LENGTH and the set of names (physical absence, not a
 // placeholder).
 func TestNestedConditionalInclude_DropMatrix(t *testing.T) {
 	expanded := expandNestedFixture(t)
 
 	cases := []struct {
 		outer, inner string
-		wantNames    []string // ровно эти задачи в плане (порядок), len = матрица дропа
+		wantNames    []string // exactly these tasks in the plan (order), len = drop matrix
 	}{
-		// outer=no → пусто при ЛЮБОМ inner (каскад).
+		// outer=no → empty regardless of inner (cascade).
 		{"no", "no", nil},
 		{"no", "yes", nil},
-		// outer=yes,inner=no → только outer-direct.
+		// outer=yes,inner=no → only outer-direct.
 		{"yes", "no", []string{"outer-direct"}},
-		// outer=yes,inner=yes → обе.
+		// outer=yes,inner=yes → both.
 		{"yes", "yes", []string{"outer-direct", "inner-task"}},
 	}
 
@@ -101,7 +104,7 @@ func TestNestedConditionalInclude_DropMatrix(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Render: %v", err)
 			}
-			// ★ len-ассерт: дропнутые задачи физически отсутствуют (не placeholder).
+			// ★ len assertion: dropped tasks are physically absent (not a placeholder).
 			if len(tasks) != len(tc.wantNames) {
 				gotNames := make([]string, len(tasks))
 				for i, rt := range tasks {
@@ -121,7 +124,7 @@ func TestNestedConditionalInclude_DropMatrix(t *testing.T) {
 					t.Errorf("tasks[%d].Index = %d, want %d (сквозная нумерация без дыр)", i, tasks[i].Index, i)
 				}
 			}
-			// Жёсткая гарантия отсутствия дропнутой inner-task в негативных кейсах.
+			// Hard guarantee the dropped inner-task is absent in the negative cases.
 			for _, rt := range tasks {
 				if rt.Name == "inner-task" && tc.inner == "no" {
 					t.Errorf("inner-task присутствует при inner=no — должна быть дропнута")

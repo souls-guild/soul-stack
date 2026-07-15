@@ -1,9 +1,10 @@
 package scenario
 
-// ★ Секрет-критичные guard-тесты подготовки params к персисту в apply_run_plan
-// (maskRunPlanParams, NIM-37 S1b): seal-aware маскинг значений (тот же механизм,
-// что status_details/error_summary), фильтр транспортных ключей, подавление на
-// no_log. Утечка plaintext-секрета в apply_run_plan.params здесь ловится ДО БД.
+// ★ Secret-critical guard tests for preparing params before persisting to
+// apply_run_plan (maskRunPlanParams, NIM-37 S1b): seal-aware value masking
+// (the same mechanism as status_details/error_summary), transport-key
+// filtering, no_log suppression. A plaintext secret leak into
+// apply_run_plan.params is caught here, before the DB.
 
 import (
 	"bytes"
@@ -36,7 +37,7 @@ func decodeRunPlanParams(t *testing.T, raw []byte) map[string]any {
 	return m
 }
 
-// TestMaskRunPlanParams_PlainKept — обычные (не секретные) params сохраняются как есть.
+// TestMaskRunPlanParams_PlainKept — regular (non-secret) params are kept as-is.
 func TestMaskRunPlanParams_PlainKept(t *testing.T) {
 	task := &render.RenderedTask{
 		Name:   "install",
@@ -49,9 +50,9 @@ func TestMaskRunPlanParams_PlainKept(t *testing.T) {
 	}
 }
 
-// TestMaskRunPlanParams_SealedSecretMasked ★ — значение по sealed-пути прогона
-// замаскировано (не уходит plaintext в apply_run_plan). Тот же seal-aware механизм
-// (SealOpts.Sealed), что применяется к status_details/error_summary.
+// TestMaskRunPlanParams_SealedSecretMasked ★ — a value on a run's sealed
+// path is masked (no plaintext reaches apply_run_plan). Same seal-aware
+// mechanism (SealOpts.Sealed) applied to status_details/error_summary.
 func TestMaskRunPlanParams_SealedSecretMasked(t *testing.T) {
 	const secret = "s3cr3t-pw-value"
 	task := &render.RenderedTask{
@@ -59,7 +60,7 @@ func TestMaskRunPlanParams_SealedSecretMasked(t *testing.T) {
 		Module: "core.exec.run",
 		Params: mustParamsStruct(t, map[string]any{"command": "redis-cli", "password": secret}),
 	}
-	// password помечен sealed на render-фазе (CEL читал secret-источник).
+	// password is marked sealed at the render phase (CEL read a secret source).
 	raw := maskRunPlanParams(task, map[string]bool{"password": true})
 
 	if bytes.Contains(raw, []byte(secret)) {
@@ -74,9 +75,10 @@ func TestMaskRunPlanParams_SealedSecretMasked(t *testing.T) {
 	}
 }
 
-// TestMaskRunPlanParams_VaultRefAndSensitiveKey ★ — значение-vault-ref и sensitive-
-// by-name ключ маскируются даже БЕЗ sealed-набора (слои vault + regex-last-resort):
-// второй барьер на случай, если seal-провенанс не пометил ячейку.
+// TestMaskRunPlanParams_VaultRefAndSensitiveKey ★ — a vault-ref value and a
+// sensitive-by-name key are masked even WITHOUT the sealed set (vault +
+// regex-last-resort layers): a second barrier for when seal provenance
+// didn't mark the cell.
 func TestMaskRunPlanParams_VaultRefAndSensitiveKey(t *testing.T) {
 	task := &render.RenderedTask{
 		Module: "core.exec.run",
@@ -98,9 +100,9 @@ func TestMaskRunPlanParams_VaultRefAndSensitiveKey(t *testing.T) {
 	}
 }
 
-// TestMaskRunPlanParams_TransportFiltered — транспортные ключи core.file.rendered
-// (template_content/render_context) выкинуты (не operator-facing вход), operator-
-// ключи сохранены.
+// TestMaskRunPlanParams_TransportFiltered — core.file.rendered's transport
+// keys (template_content/render_context) are dropped (not operator-facing
+// input), operator keys are kept.
 func TestMaskRunPlanParams_TransportFiltered(t *testing.T) {
 	task := &render.RenderedTask{
 		Module: "core.file.rendered",
@@ -122,8 +124,8 @@ func TestMaskRunPlanParams_TransportFiltered(t *testing.T) {
 	}
 }
 
-// TestMaskRunPlanParams_NoLogNil — no_log-задача → nil (params не хранятся,
-// симметрия с подавлением register_data).
+// TestMaskRunPlanParams_NoLogNil — a no_log task → nil (params aren't
+// stored, symmetric with register_data suppression).
 func TestMaskRunPlanParams_NoLogNil(t *testing.T) {
 	task := &render.RenderedTask{
 		NoLog:  true,
@@ -135,8 +137,9 @@ func TestMaskRunPlanParams_NoLogNil(t *testing.T) {
 	}
 }
 
-// TestMaskRunPlanParams_NilAndEmptyRemainder — nil Params, и «только транспорт»
-// (пустой остаток после фильтра) → nil (jsonb NULL, omitempty на wire).
+// TestMaskRunPlanParams_NilAndEmptyRemainder — nil Params, and
+// "transport-only" (empty remainder after the filter) → nil (jsonb NULL,
+// omitempty on the wire).
 func TestMaskRunPlanParams_NilAndEmptyRemainder(t *testing.T) {
 	if raw := maskRunPlanParams(&render.RenderedTask{Module: "core.exec.run"}, nil); raw != nil {
 		t.Errorf("nil Params → %s, want nil", raw)
@@ -150,8 +153,9 @@ func TestMaskRunPlanParams_NilAndEmptyRemainder(t *testing.T) {
 	}
 }
 
-// TestMaskRunPlanParams_NestedSealedMasked ★ — sealed-путь во вложенной структуре
-// (acl[].password) маскируется по обобщённой idx-форме, соседние значения целы.
+// TestMaskRunPlanParams_NestedSealedMasked ★ — a sealed path inside a nested
+// structure (acl[].password) is masked via the generalized idx form,
+// neighboring values stay intact.
 func TestMaskRunPlanParams_NestedSealedMasked(t *testing.T) {
 	const secret = "nested-secret"
 	task := &render.RenderedTask{

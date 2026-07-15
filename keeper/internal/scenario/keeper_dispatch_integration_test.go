@@ -15,18 +15,20 @@ import (
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 )
 
-// L0 integration-тест реального dispatch-пути: applyKeeperTask разбирает
-// author-адрес `core.cloud.created` / `core.choir.present` через
-// config.SplitModuleAddr, делает Lookup по base-ключу настоящего coremod.Default
-// Registry и вызывает Apply настоящего модуля с резолвленным state. Ловит
-// регрессию contract-фикса (qa-blocker): до фикса keeper выводил wire-state из
-// ПОСЛЕДНЕГО сегмента + Lookup по ПОЛНОМУ адресу — multi-state модули
-// (cloud created/destroyed, choir present/absent) были недостижимы.
+// L0 integration test of the real dispatch path: applyKeeperTask parses the
+// author address `core.cloud.created` / `core.choir.present` via
+// config.SplitModuleAddr, does a Lookup by base key on the real
+// coremod.Default Registry, and calls Apply on the real module with the
+// resolved state. Catches a regression of the contract fix (qa-blocker):
+// before the fix, keeper derived the wire state from the LAST segment +
+// Lookup by the FULL address — multi-state modules (cloud created/destroyed,
+// choir present/absent) were unreachable.
 //
-// PG не поднимается: cloud-зависимости (Resolver/Host/Souls/Tokens), soul-Store
-// и choir-Store — fake; проверяется именно резолв адреса → правильный модуль →
-// правильный state, а НЕ полное side-effect-поведение модулей (оно покрыто
-// пакетными _test.go cloud/choir/soul).
+// PG is not started: cloud dependencies (Resolver/Host/Souls/Tokens),
+// soul-Store and choir-Store are fake; this verifies exactly the address
+// resolution → correct module → correct state, NOT the modules' full
+// side-effect behavior (covered by the package _test.go files for
+// cloud/choir/soul).
 
 // --- fake soul-Store (coremod.Deps.SoulStore) ---------------------------------
 
@@ -43,7 +45,7 @@ func (fakeSoulStore) SoulsWithSoulprint(_ context.Context, _ []string) (map[stri
 	return map[string]struct{}{}, nil
 }
 
-// --- fake cloud-зависимости (happy-path created без PG) -----------------------
+// --- fake cloud dependencies (happy-path created, no PG) ---------------------
 
 type fakeResolver struct{}
 
@@ -135,9 +137,10 @@ func TestApplyKeeperTask_RealCloud_CreatedResolves(t *testing.T) {
 	}
 }
 
-// core.cloud.provisioned — старая (ошибочная) форма: base core.cloud найден,
-// но state "provisioned" модулю неизвестен → failed-event «unknown state».
-// Закрепляет, что author-форма теперь именно created/destroyed, а не provisioned.
+// core.cloud.provisioned is the old (incorrect) form: base core.cloud is
+// found, but the module doesn't know state "provisioned" → failed event
+// "unknown state". Confirms the author form is now created/destroyed, not
+// provisioned.
 func TestApplyKeeperTask_RealCloud_BadStateFails(t *testing.T) {
 	r := &Runner{keeperModules: realKeeperRegistry()}
 	rt := &render.RenderedTask{Index: 0, Module: "core.cloud.provisioned", Params: mustStructI(t, map[string]any{"provider": "fake"})}

@@ -13,34 +13,36 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// defaultLoopVar — имя loop-переменной по умолчанию (destiny/tasks.md §7,
-// `as:` опущен).
+// defaultLoopVar is the default loop variable name (destiny/tasks.md §7,
+// when `as:` is omitted).
 const defaultLoopVar = "item"
 
-// renderLoopTask раскрывает `loop:` на module-задаче в render-фазе (slice E1):
-// одна задача → N RenderedTask по элементам items, со сквозными индексами
-// (симметрично renderApplyDestiny). В отличие от config-splice include
-// (раскрывается ДО render), loop раскрывается ИМЕННО здесь — items это
-// CEL/template-выражение (`${ input.users }` / `${ vars.x }`), а CEL живёт
-// только в render-фазе.
+// renderLoopTask expands `loop:` on a module task in the render phase (slice
+// E1): one task → N RenderedTasks over the items elements, with contiguous
+// indexes (symmetric with renderApplyDestiny). Unlike config-splice include
+// (expanded BEFORE render), loop is expanded HERE — items is a CEL/template
+// expression (`${ input.users }` / `${ vars.x }`), and CEL only runs in the
+// render phase.
 //
-// Порядок (orchestration.md §2.2):
-//  1. items резолвится один раз на прогон (host-инвариантный источник
-//     input/vars; soulprint в контексте нет — items не должен зависеть от хоста).
-//  2. array → as=элемент, index_as=0-based индекс; object → as=значение,
-//     index_as=ключ, порядок итерации алфавитный по ключам (destiny/tasks.md §7).
-//  3. when: — per-item truthy-фильтр в том же host-инвариантном контексте
-//     (фильтр по содержимому элемента, без soulprint); отфильтрованная итерация
-//     не порождает RenderedTask. Ссылка на soulprint в when: → ошибка
-//     (host-вариативный when отложен вместе с per-host loop-фильтрацией).
-//  4. каждая оставшаяся итерация рендерится renderTaskIter с loop-переменными;
-//     host-инвариантность проверяется ПО-ИТЕРАЦИОННО (см. renderTaskIter).
+// Order (orchestration.md §2.2):
+//  1. items is resolved once per run (host-invariant context of input/vars;
+//     no soulprint — items must not depend on the host).
+//  2. array → as=element, index_as=0-based index; object → as=value,
+//     index_as=key, iteration order is alphabetical by key
+//     (destiny/tasks.md §7).
+//  3. when: is a per-item truthy filter in the same host-invariant context
+//     (filters by element content, no soulprint); a filtered-out iteration
+//     produces no RenderedTask. A soulprint reference in when: is an error
+//     (host-variant when is deferred along with per-host loop filtering).
+//  4. each remaining iteration is rendered by renderTaskIter with loop
+//     variables; host-invariance is checked PER-ITERATION (see
+//     renderTaskIter).
 //
-// targeted — хосты задачи (после on:/where:/run_once: родителя); loop катится
-// на каждом targeted-хосте (volna serial: ортогональна оси итераций — весь loop
-// прокатывается на каждом хосте волны). SerialWidth наследуется всеми
-// итерациями. Пустой результат (items пуст / when: отфильтровал всё) → 0 задач
-// (валидный no-op).
+// targeted is the task's hosts (after parent on:/where:/run_once:); loop runs
+// on every targeted host (serial waves are orthogonal to the iteration axis —
+// the whole loop runs on each host of a wave). SerialWidth is inherited by
+// all iterations. Empty result (items empty / when: filtered everything out)
+// → 0 tasks (valid no-op).
 func (p *Pipeline) renderLoopTask(
 	ctx context.Context,
 	in RenderInput,
@@ -53,13 +55,14 @@ func (p *Pipeline) renderLoopTask(
 		asName = defaultLoopVar
 	}
 
-	// Static-when-false loop-задача сюда НЕ доходит: оба call-site (scenario-цикл
-	// pipeline.go, destiny.go) предваряются emitStaticWhenSkip, который для
-	// статически-false loop эмитит N/1 skip-placeholder через loopStaticSkip и
-	// делает continue ДО renderLoopTask. Поэтому здесь static-when уже гарантированно
-	// активен (true) или отсутствует — повторный static-when-гейт был бы недостижим
-	// и лишь дублировал per-host staticWhenSkips. renderLoopTask видит только
-	// fan-out активной ветки.
+	// A static-when-false loop task never reaches here: both call sites
+	// (scenario loop in pipeline.go, destiny.go) call emitStaticWhenSkip
+	// first, which emits an N/1 skip-placeholder via loopStaticSkip for a
+	// statically-false loop and continues BEFORE renderLoopTask. So by here
+	// static-when is guaranteed active (true) or absent — a repeated
+	// static-when gate would be unreachable and just duplicate per-host
+	// staticWhenSkips. renderLoopTask only sees the fan-out of the active
+	// branch.
 	iters, err := resolveLoopItems(p.cel, in, task.Loop, asName)
 	if err != nil {
 		return nil, nil, fmt.Errorf("render: task %q loop: %w", task.Name, err)
@@ -93,21 +96,24 @@ func (p *Pipeline) renderLoopTask(
 	return tasks, plans, nil
 }
 
-// loopStaticSkip эмитит skip-placeholder(ы) для loop-задачи со статически-false
-// when: (решение «резолвим→N / нерезолвим→1», architect):
+// loopStaticSkip emits skip-placeholder(s) for a loop task with a
+// statically-false when: (architect decision "resolves→N / doesn't
+// resolve→1"):
 //
-//   - items РЕЗОЛВИТСЯ (host-инвариантный контекст) → N skip-placeholder по
-//     итерациям со сквозными Index — ПАРИТЕТ с per-iter skip из renderTaskIter,
-//     который раньше получался естественно (когда items резолвился, цикл крутил
-//     renderTaskIter, каждый скипал params). Не схлопываем N→1, чтобы план/Index
-//     совпадали с активной веткой (детерминизм по Passage).
-//   - items НЕ резолвится (no-such-key/non-collection — типично absent optional-
-//     input в неактивной ветке) → НЕ падаем (это и есть исходный баг), эмитим
-//     ОДИН skip-placeholder за всю задачу. Soul вычислит тот же when:false по
-//     flow_context → SKIPPED; loop при skipped-задаче не раскрывается.
+//   - items RESOLVES (host-invariant context) → N skip-placeholders over the
+//     iterations with contiguous Index — PARITY with the per-iter skip from
+//     renderTaskIter that used to happen naturally (when items resolved, the
+//     loop ran renderTaskIter, each one skipping params). We don't collapse
+//     N→1 so the plan/Index matches the active branch (Passage determinism).
+//   - items does NOT resolve (no-such-key/non-collection — typically an
+//     absent optional input on an inactive branch) → don't fail (that was
+//     the original bug), emit ONE skip-placeholder for the whole task. Soul
+//     computes the same when:false from flow_context → SKIPPED; loop doesn't
+//     expand on a skipped task.
 //
-// Все placeholder несут flow_context первого хоста (skip), Params=nil, When/ID/
-// Register/Passage протянуты — как scenario static-when placeholder-skip.
+// All placeholders carry the first host's flow_context (skip), Params=nil,
+// When/ID/Register/Passage are carried through — same as the scenario
+// static-when placeholder-skip.
 func (p *Pipeline) loopStaticSkip(
 	in RenderInput,
 	task config.Task,
@@ -118,7 +124,7 @@ func (p *Pipeline) loopStaticSkip(
 ) ([]*RenderedTask, []DispatchPlan, error) {
 	iters, err := resolveLoopItems(p.cel, in, task.Loop, asName)
 	if err != nil {
-		// Нерезолвимый items в скипнутой задаче — НЕ ошибка: эмитим один placeholder.
+		// Unresolvable items in a skipped task is NOT an error: emit one placeholder.
 		rt := p.loopSkipPlaceholder(task, startIndex, skip)
 		return []*RenderedTask{rt}, []DispatchPlan{{TaskIndex: startIndex}}, nil
 	}
@@ -134,15 +140,17 @@ func (p *Pipeline) loopStaticSkip(
 	return tasks, plans, nil
 }
 
-// loopSkipPlaceholder строит один skip-placeholder loop-итерации: Params=nil
-// (рендер пропущен), flow_context первого хоста, протянутые When/ID/Register +
-// onchanges/onfail-имена — напрямую, не заходя в renderTaskIter (один источник
-// Index/Passage; Passage стампится stampPassage в caller-е Render).
+// loopSkipPlaceholder builds one skip-placeholder for a loop iteration:
+// Params=nil (render skipped), first host's flow_context, When/ID/Register +
+// onchanges/onfail names carried through directly, bypassing renderTaskIter
+// (single source of Index/Passage; Passage is stamped by stampPassage in
+// Render's caller).
 //
-// onChangesNames/onFailNames протягиваются симметрично staticSkipPlaceholder
-// (pipeline.go): без них requisite-имена static-false loop-задачи потерялись бы
-// на skip-placeholder, и финальный resolveOnChanges/resolveOnFail не нашёл бы
-// источники — латентная потеря requisites у loop-задачи с onchanges:/onfail:.
+// onChangesNames/onFailNames are carried through symmetrically with
+// staticSkipPlaceholder (pipeline.go): without this, requisite names of a
+// static-false loop task would be lost on the skip-placeholder, and the
+// final resolveOnChanges/resolveOnFail wouldn't find their sources — a
+// latent requisite loss for a loop task with onchanges:/onfail:.
 func (p *Pipeline) loopSkipPlaceholder(task config.Task, idx int, skip *structpb.Struct) *RenderedTask {
 	return &RenderedTask{
 		Index:          idx,
@@ -161,14 +169,14 @@ func (p *Pipeline) loopSkipPlaceholder(task config.Task, idx int, skip *structpb
 	}
 }
 
-// resolveLoopItems вычисляет items и раскладывает в упорядоченный список
-// loop-контекстов (`map[<as>]=элемент` + опционально `map[<index_as>]=индекс/
-// ключ`). items резолвится один раз на прогон в host-инвариантном контексте
-// (input/register/incarnation; без soulprint — items не зависит от хоста).
+// resolveLoopItems evaluates items and lays it out as an ordered list of loop
+// contexts (`map[<as>]=element` + optionally `map[<index_as>]=index/key`).
+// items is resolved once per run in a host-invariant context (input/register/
+// incarnation; no soulprint — items must not depend on the host).
 //
-// array → as=элемент, index_as=0-based; object → as=значение, index_as=ключ,
-// порядок алфавитный по ключам (destiny/tasks.md §7). Скаляр/строка (например,
-// items, не разрешившийся в коллекцию) → ошибка: loop требует array/object.
+// array → as=element, index_as=0-based; object → as=value, index_as=key,
+// alphabetical order by key (destiny/tasks.md §7). Scalar/string (e.g. items
+// that didn't resolve to a collection) → error: loop requires array/object.
 func resolveLoopItems(engine *cel.Engine, in RenderInput, loop *config.LoopSpec, asName string) ([]map[string]any, error) {
 	resolved, err := renderValue(engine, loop.Items, loopInvariantVars(in, nil), "loop.items")
 	if err != nil {
@@ -207,18 +215,20 @@ func resolveLoopItems(engine *cel.Engine, in RenderInput, loop *config.LoopSpec,
 	}
 }
 
-// loopInvariantVars — host-инвариантный контекст оси loop: input/register/
-// incarnation/essence + переменные текущей итерации (`<as>`/`<index_as>`), БЕЗ
-// soulprint.self. items и when: резолвятся именно в нём — все host-инвариантны в
-// пилоте (симметрично resolveCovenList: on: тоже резолвится не per-host).
-// essence host-инвариантна, поэтому доступна в items/when (`items:
-// ${ essence.users }`). loopVars=nil для самого items (loop-переменных ещё нет).
+// loopInvariantVars is the host-invariant context for the loop axis: input/
+// register/incarnation/essence + current iteration variables (`<as>`/
+// `<index_as>`), WITHOUT soulprint.self. items and when: resolve in exactly
+// this context — all host-invariant in the pilot (symmetric with
+// resolveCovenList: on: also resolves not per-host). essence is
+// host-invariant, so it's available in items/when (`items:
+// ${ essence.users }`). loopVars=nil for items itself (no loop variables yet).
 //
-// soulprint.hosts (+ .where) ДОСТУПЕН: это host-инвариантный roster прогона (не
-// per-host факты), легитимный источник items (`items: ${ soulprint.hosts.where(
-// "role == 'replica'") }`). soulprint.self в loop по-прежнему недоступен —
-// per-host loop отложен; в loop.when ссылка на любой soulprint режется отдельным
-// guard-ом (reLoopWhenSoulprint) ДО построения этого контекста.
+// soulprint.hosts (+ .where) IS available: it's the run's host-invariant
+// roster (not per-host facts), a legitimate items source (`items:
+// ${ soulprint.hosts.where("role == 'replica'") }`). soulprint.self is still
+// unavailable in loop — per-host loop is deferred; a soulprint reference in
+// loop.when is rejected by a separate guard (reLoopWhenSoulprint) BEFORE this
+// context is built.
 func loopInvariantVars(in RenderInput, loopVars map[string]any) cel.Vars {
 	return cel.Vars{
 		Input:          in.Input,
@@ -231,21 +241,22 @@ func loopInvariantVars(in RenderInput, loopVars map[string]any) cel.Vars {
 	}
 }
 
-// reLoopWhenSoulprint ловит ссылку на soulprint в loop.when. when: в пилоте
-// host-инвариантен (вычисляется один раз на прогон, как items), поэтому
-// host-вариативный предикат по soulprint конкретного хоста не поддержан —
-// per-host loop-фильтрация отложена (soulprint.hosts / E3).
+// reLoopWhenSoulprint catches a soulprint reference in loop.when. when: is
+// host-invariant in the pilot (evaluated once per run, like items), so a
+// host-variant predicate over a specific host's soulprint isn't supported —
+// per-host loop filtering is deferred (soulprint.hosts / E3).
 var reLoopWhenSoulprint = regexp.MustCompile(`\bsoulprint\b`)
 
-// evalLoopWhen вычисляет per-item фильтр loop.when в host-инвариантном
-// контексте — том же, что и items (input/register/incarnation + loop-
-// переменные, без soulprint). Пустой when → true (нет фильтра).
+// evalLoopWhen evaluates the per-item loop.when filter in the same
+// host-invariant context as items (input/register/incarnation + loop
+// variables, no soulprint). Empty when → true (no filter).
 //
-// when: задуман как фильтр по СОДЕРЖИМОМУ элемента (`item.enabled`), не как
-// per-host предикат. Ссылка на soulprint → понятная ошибка (host-вариативный
-// when в loop не поддержан в пилоте), а не молчаливое решение по первому хосту:
-// это симметрично guard-у host-инвариантности params (см. renderTaskIter).
-// Не-bool результат → ошибка (when: обязан возвращать булево, как where:).
+// when: is meant as a filter over the element's CONTENT (`item.enabled`),
+// not a per-host predicate. A soulprint reference → a clear error
+// (host-variant when in loop isn't supported in the pilot), rather than
+// silently deciding based on the first host: symmetric with the
+// host-invariance guard for params (see renderTaskIter). Non-bool result →
+// error (when: must return a boolean, like where:).
 func evalLoopWhen(engine *cel.Engine, in RenderInput, when string, loopVars map[string]any) (bool, error) {
 	if when == "" {
 		return true, nil

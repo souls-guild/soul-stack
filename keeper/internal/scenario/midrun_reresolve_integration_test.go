@@ -1,17 +1,18 @@
 //go:build integration
 
-// Mid-run re-resolve roster — живое доказательство S3 (ADR-0061). Целевой инвариант:
-// после успеха `core.soul.registered`-шага с `refresh_soulprint: true` (Passage 0)
-// scenario-runner ПЕРЕ-резолвит roster ПЕРЕД следующим Passage, и созданные+
-// онбордившиеся хосты становятся видны Passage-1-задачам через soulprint.hosts /
-// on:[incarnation.name]. Рост roster эмулируется callback-ом keeper-модуля: он
-// seed-ит новый connected-soul ВО ВРЕМЯ keeper-dispatch (Passage 0), как онбординг
-// поднял бы новую VM. Re-resolve перед Passage 1 читает выросший SQL-roster
-// (Topology=NewResolver(pool, nil) → SQL-presence по status='connected').
+// Mid-run re-resolve roster — live proof of S3 (ADR-0061). Target invariant:
+// after a `core.soul.registered` step with `refresh_soulprint: true` succeeds
+// (Passage 0), scenario-runner RE-resolves the roster BEFORE the next Passage,
+// and newly created+onboarded hosts become visible to Passage-1 tasks via
+// soulprint.hosts / on:[incarnation.name]. Roster growth is emulated by a
+// keeper-module callback: it seeds a new connected soul WHILE keeper-dispatch
+// runs (Passage 0), as onboarding would bring up a new VM. Re-resolve before
+// Passage 1 reads the grown SQL roster (Topology=NewResolver(pool, nil) →
+// SQL presence by status='connected').
 //
-// ★ S3-инвариант: в пределах Passage 0 roster неизменен (re-resolve только на
-// refresh-границе); Passage 1 видит выросший набор. assert-топология после refresh
-// тоже видит рост (ADR-0061 §детерминизм).
+// ★ S3 invariant: within Passage 0 the roster is unchanged (re-resolve happens
+// only at the refresh boundary); Passage 1 sees the grown set. Assert topology
+// after refresh also sees the growth (ADR-0061 §determinism).
 
 package scenario
 
@@ -37,10 +38,11 @@ import (
 	"github.com/souls-guild/soul-stack/shared/cel"
 )
 
-// seedingKeeperModule — keeper-side core-модуль `core.soul`, который при Apply
-// вызывает onApply (seed нового хоста = эмуляция онбординга созданной VM), затем
-// отдаёт success-output с echo refreshed (как реальный registered.go). Симулирует
-// мост provision→онбординг: к моменту барьера Passage 0 новый хост уже в souls.
+// seedingKeeperModule — keeper-side core module `core.soul` that, on Apply,
+// calls onApply (seeds a new host = emulates onboarding a created VM), then
+// returns a success output echoing refreshed (like the real registered.go).
+// Simulates the provision→onboarding bridge: by the Passage 0 barrier, the new
+// host is already in souls.
 type seedingKeeperModule struct {
 	module.BaseModule
 	onApply func()
@@ -54,10 +56,10 @@ func (m *seedingKeeperModule) Apply(req *pluginv1.ApplyRequest, stream grpc.Serv
 	return stream.Send(&pluginv1.ApplyEvent{Changed: true, Output: out})
 }
 
-// rosterTargetDispatcher — лёгкий Soul-симулятор для re-resolve-тестов: на каждый
-// SendApply фиксирует (passage → SID) и терминалит apply_runs-строку success (как
-// correlateRunResult). Без register-логики — Passage 1 этих фикстур register не
-// читает (таргетинг по roster, не по probe).
+// rosterTargetDispatcher is a lightweight Soul simulator for re-resolve tests:
+// on every SendApply it records (passage → SID) and terminates the apply_runs
+// row as success (like correlateRunResult). No register logic — these fixtures'
+// Passage 1 doesn't read register (targeting is by roster, not by probe).
 type rosterTargetDispatcher struct {
 	t  *testing.T
 	mu sync.Mutex
@@ -86,10 +88,11 @@ func (d *rosterTargetDispatcher) targets(passage int) []string {
 	return out
 }
 
-// newRunnerKeeperStaged собирает Runner с keeper-side Registry И stubPassageCap
-// (staged-гейт S5 требует passage-capability). Сочетание, которого нет в готовых
-// конструкторах: re-resolve-тесты несут И keeper-задачу (refresh-эмиттер), И
-// staged-стратификацию (Count=2 по refresh-границе).
+// newRunnerKeeperStaged builds a Runner with a keeper-side Registry AND
+// stubPassageCap (the staged gate S5 requires passage-capability). A combination
+// not covered by existing constructors: re-resolve tests carry BOTH a keeper
+// task (refresh emitter) AND staged stratification (Count=2 at the refresh
+// boundary).
 func newRunnerKeeperStaged(t *testing.T, disp ApplyDispatcher, keepers KeeperModuleRegistry) *Runner {
 	t.Helper()
 	engine, err := cel.New()
@@ -110,10 +113,11 @@ func newRunnerKeeperStaged(t *testing.T, disp ApplyDispatcher, keepers KeeperMod
 	})
 }
 
-// refreshServiceRepo — service-repo со scenario `grow`: Passage 0 — keeper-шаг
-// core.soul.registered с refresh_soulprint:true (register: roster); Passage 1 —
-// soul-задача core.exec.run на on:[incarnation.name] (роль на весь выросший roster).
-// S2 загоняет Passage-1-задачу строго ПОСЛЕ refresh-шага (refresh-граница).
+// refreshServiceRepo — a service repo with scenario `grow`: Passage 0 is the
+// keeper step core.soul.registered with refresh_soulprint:true (register:
+// roster); Passage 1 is a soul task core.exec.run on on:[incarnation.name] (a
+// role applied to the whole grown roster). S2 forces the Passage-1 task strictly
+// AFTER the refresh step (refresh boundary).
 func refreshServiceRepo(t *testing.T) string {
 	t.Helper()
 	return writeServiceRepo(t, `name: grow
@@ -139,19 +143,20 @@ tasks:
 }
 
 // TestIntegration_MidRunReResolve_GrownRosterVisibleNextPassage — ★ S3 PROOF
-// (ADR-0061). Стартовый roster — host-a (1 хост). Refresh-шаг (Passage 0) seed-ит
-// host-c (эмуляция онбординга созданной VM). ASSERT: Passage 1 (on:[incarnation.name])
-// затаргетился на ОБА хоста (host-a + host-c) — re-resolve перед Passage 1 увидел
-// выросший roster. Passage 0 (keeper-шаг) хостов не таргетит (on: keeper). В пределах
-// Passage 0 roster был host-a (host-c появился только перед Passage 1).
+// (ADR-0061). Starting roster is host-a (1 host). The refresh step (Passage 0)
+// seeds host-c (emulates onboarding a created VM). ASSERT: Passage 1
+// (on:[incarnation.name]) targeted BOTH hosts (host-a + host-c) — re-resolve
+// before Passage 1 saw the grown roster. Passage 0 (keeper step) targets no
+// hosts (on: keeper). Within Passage 0 the roster was host-a (host-c appeared
+// only before Passage 1).
 func TestIntegration_MidRunReResolve_GrownRosterVisibleNextPassage(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "redis-prod")
 	seedConnectedSoul(t, "host-a.example.com", []string{"redis-prod"})
 
-	// keeper-модуль seed-ит host-c при Apply (= онбординг создал новую VM, она
-	// online к барьеру Passage 0). re-resolve перед Passage 1 её увидит.
+	// keeper module seeds host-c on Apply (= onboarding created a new VM, online
+	// by the Passage 0 barrier). Re-resolve before Passage 1 will see it.
 	var seedOnce sync.Once
 	mod := &seedingKeeperModule{onApply: func() {
 		seedOnce.Do(func() {
@@ -176,7 +181,7 @@ func TestIntegration_MidRunReResolve_GrownRosterVisibleNextPassage(t *testing.T)
 
 	waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
 
-	// ★ Passage 1 (роль) затаргетился на ОБА хоста — re-resolve увидел host-c.
+	// ★ Passage 1 (the role) targeted BOTH hosts — re-resolve saw host-c.
 	p1 := disp.targets(1)
 	gotSet := map[string]bool{}
 	for _, sid := range p1 {
@@ -186,9 +191,9 @@ func TestIntegration_MidRunReResolve_GrownRosterVisibleNextPassage(t *testing.T)
 		t.Fatalf("★ Passage 1 targets = %v, want оба [host-a host-c] — re-resolve НЕ увидел выросший roster (host-c онбордился на refresh-границе)", p1)
 	}
 
-	// apply_runs: host-a + host-c обе имеют Passage-1 строку success. keeper-строка
-	// (sid=keeper, passage 0) — refresh-шаг. host-c НЕ имеет Passage-0 строки
-	// (он появился только перед Passage 1 — в Passage 0 его не было в roster).
+	// apply_runs: host-a + host-c both have a Passage-1 success row. The keeper
+	// row (sid=keeper, passage 0) is the refresh step. host-c has NO Passage-0
+	// row (it appeared only before Passage 1 — it wasn't in the Passage 0 roster).
 	got := passagesBySID(t, applyID, applyrun.StatusSuccess)
 	if len(got["host-c.example.com"]) != 1 || got["host-c.example.com"][0] != 1 {
 		t.Errorf("host-c passages = %v, want [1] (появился на refresh-границе, в Passage 0 его НЕ было)", got["host-c.example.com"])
@@ -204,11 +209,12 @@ func TestIntegration_MidRunReResolve_GrownRosterVisibleNextPassage(t *testing.T)
 	}
 }
 
-// TestIntegration_MidRunReResolve_NoGrowthSameRoster — КОНТРОЛЬ: refresh-шаг есть,
-// но новых хостов онбординг не дал (live-снимок не изменился). re-resolve
-// выполняется, но возвращает тот же набор — Passage 1 таргетит исходный roster,
-// прогон успешен. Доказывает, что re-resolve на refresh-границе безопасен и при
-// отсутствии изменений (live-снимок неизменного online-набора = тот же roster).
+// TestIntegration_MidRunReResolve_NoGrowthSameRoster — CONTROL: a refresh step
+// exists, but onboarding produced no new hosts (the live snapshot didn't
+// change). Re-resolve runs but returns the same set — Passage 1 targets the
+// original roster, and the run succeeds. Proves that re-resolve at the refresh
+// boundary is safe even without changes (a live snapshot of an unchanged
+// online set = the same roster).
 func TestIntegration_MidRunReResolve_NoGrowthSameRoster(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -216,7 +222,7 @@ func TestIntegration_MidRunReResolve_NoGrowthSameRoster(t *testing.T) {
 	seedConnectedSoul(t, "host-a.example.com", []string{"redis-prod"})
 	seedConnectedSoul(t, "host-b.example.com", []string{"redis-prod"})
 
-	// refresh-шаг ничего не seed-ит (онбординг не добавил хостов).
+	// the refresh step seeds nothing (onboarding added no hosts).
 	mod := &seedingKeeperModule{onApply: func() {}}
 	keepers := fakeKeeperRegistry{"core.soul": mod}
 
@@ -242,11 +248,12 @@ func TestIntegration_MidRunReResolve_NoGrowthSameRoster(t *testing.T) {
 	}
 }
 
-// TestIntegration_MidRunReResolve_AssertSeesGrownRoster — ★ assert-топология ПОСЛЕ
-// refresh видит выросший roster (ADR-0061 §детерминизм). Scenario: refresh-шаг
-// (seed host-c) → assert size(soulprint.hosts) == 2. assert вычисляется Keeper-side
-// на render Passage 1 ПОСЛЕ re-resolve — обязан увидеть выросший набор (2 хоста).
-// Если бы re-resolve не сработал, assert упал бы (1 хост) → error_locked.
+// TestIntegration_MidRunReResolve_AssertSeesGrownRoster — ★ assert topology
+// AFTER refresh sees the grown roster (ADR-0061 §determinism). Scenario:
+// refresh step (seed host-c) → assert size(soulprint.hosts) == 2. assert is
+// evaluated Keeper-side while rendering Passage 1 AFTER re-resolve — it must see
+// the grown set (2 hosts). If re-resolve hadn't worked, assert would fail (1
+// host) → error_locked.
 func TestIntegration_MidRunReResolve_AssertSeesGrownRoster(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -294,24 +301,25 @@ tasks:
 		t.Fatalf("Start: %v", err)
 	}
 
-	// assert прошёл (2 хоста после re-resolve) → прогон успешен. Если бы re-resolve
-	// не сработал, assert увидел бы 1 хост → false → error_locked.
+	// assert passed (2 hosts after re-resolve) → run succeeded. If re-resolve
+	// hadn't worked, assert would have seen 1 host → false → error_locked.
 	waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
 }
 
-// TestIntegration_MidRunReResolve_OfflineHostExcludedNextPassage — ★ КОНТРАКТ
-// live-snapshot (ADR-0061 §S3): re-resolve на refresh-границе — НЕ монотонный рост,
-// а СВЕЖИЙ live-снимок текущего online-набора. P0-roster хост, ушедший OFFLINE к
-// refresh-границе, ИСКЛЮЧАЕТСЯ из P1-roster — таргетинг идёт на реально-online набор
-// (на offline-хост роль катить не надо). Документирует ПРАВИЛЬНУЮ семантику (не
-// регресс): зеркало GrownRosterVisibleNextPassage, но в обратную сторону (хост ушёл,
-// а не пришёл).
+// TestIntegration_MidRunReResolve_OfflineHostExcludedNextPassage — ★ live-snapshot
+// CONTRACT (ADR-0061 §S3): re-resolve at the refresh boundary is NOT a
+// monotonic growth, but a FRESH live snapshot of the current online set. A
+// P0-roster host that goes OFFLINE by the refresh boundary is EXCLUDED from the
+// P1 roster — targeting follows the actually-online set (no point rolling a
+// role onto an offline host). Documents the CORRECT semantics (not a
+// regression): mirrors GrownRosterVisibleNextPassage, but in reverse (a host
+// leaves rather than arrives).
 //
-// Seed: host-a + host-b online в P0. refresh-шаг (Passage 0) переводит host-b в
-// status=disconnected (эмуляция: к refresh-границе host-b упал — потерял EventStream/
-// lease). re-resolve перед Passage 1 читает live-снимок (filterAlive → status-снимок,
-// lease==nil в unit-резолвере) → видит только host-a. ASSERT: Passage 1 затаргетился
-// ТОЛЬКО на host-a; host-b в P1 НЕ попал.
+// Seed: host-a + host-b online in P0. The refresh step (Passage 0) moves host-b
+// to status=disconnected (emulating: host-b went down by the refresh boundary —
+// lost its EventStream/lease). Re-resolve before Passage 1 reads a live snapshot
+// (filterAlive → status snapshot, lease==nil in the unit resolver) → sees only
+// host-a. ASSERT: Passage 1 targeted ONLY host-a; host-b did NOT make it into P1.
 func TestIntegration_MidRunReResolve_OfflineHostExcludedNextPassage(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -319,9 +327,9 @@ func TestIntegration_MidRunReResolve_OfflineHostExcludedNextPassage(t *testing.T
 	seedConnectedSoul(t, "host-a.example.com", []string{"redis-prod"})
 	seedConnectedSoul(t, "host-b.example.com", []string{"redis-prod"})
 
-	// refresh-шаг роняет host-b offline ВО ВРЕМЯ keeper-dispatch Passage 0 (до
-	// re-resolve на границе Passage 1). re-resolve читает live-снимок → host-b
-	// больше не online → исключён из P1-roster.
+	// the refresh step drops host-b offline WHILE keeper-dispatch Passage 0 runs
+	// (before re-resolve at the Passage 1 boundary). re-resolve reads a live
+	// snapshot → host-b is no longer online → excluded from the P1 roster.
 	var dropOnce sync.Once
 	mod := &seedingKeeperModule{onApply: func() {
 		dropOnce.Do(func() {
@@ -349,20 +357,21 @@ func TestIntegration_MidRunReResolve_OfflineHostExcludedNextPassage(t *testing.T
 
 	waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
 
-	// ★ Passage 1 (роль) затаргетился ТОЛЬКО на host-a — live-снимок re-resolve
-	// исключил ушедший offline host-b (НЕ монотонный рост: набор может УМЕНЬШИТЬСЯ).
+	// ★ Passage 1 (the role) targeted ONLY host-a — the re-resolve live snapshot
+	// excluded the departed offline host-b (NOT a monotonic growth: the set can
+	// SHRINK).
 	p1 := disp.targets(1)
 	if len(p1) != 1 || p1[0] != "host-a.example.com" {
 		t.Fatalf("★ Passage 1 targets = %v, want [host-a] — live-снимок re-resolve обязан ИСКЛЮЧИТЬ ушедший offline host-b (ADR-0061 §S3: re-resolve = live-snapshot, не монотонный рост)", p1)
 	}
 }
 
-// newRunnerKeeperStagedTimeout — как [newRunnerKeeperStaged], но с управляемыми
-// RunTimeout (микро-база) и MaxAwaitTimeoutFn (управляемый ceiling). Нужен
-// timeout-guard-у ниже: микро-база делает обрыв детерминированным за секунды,
-// ceilingFn задаёт provision-eff так, чтобы он надёжно превышал блокировку
-// keeper-мока (без 30m-дефолта prod-ceiling-а тест был бы либо медленным, либо
-// недетерминированным).
+// newRunnerKeeperStagedTimeout — like [newRunnerKeeperStaged], but with a
+// controllable RunTimeout (micro-base) and MaxAwaitTimeoutFn (controllable
+// ceiling). Needed by the timeout guard below: the micro-base makes the abort
+// deterministic within seconds, and ceilingFn sets provision-eff so it reliably
+// exceeds the keeper-mock's blocking time (without the prod ceiling's 30m
+// default, the test would be either slow or nondeterministic).
 func newRunnerKeeperStagedTimeout(t *testing.T, disp ApplyDispatcher, keepers KeeperModuleRegistry, base time.Duration, ceiling time.Duration) *Runner {
 	t.Helper()
 	engine, err := cel.New()
@@ -384,27 +393,30 @@ func newRunnerKeeperStagedTimeout(t *testing.T, disp ApplyDispatcher, keepers Ke
 	})
 }
 
-// TestIntegration_ProvisionRun_NotCutByBaseTimeout — ★ MAIN GUARD этого бага
-// (provision-aware run-timeout, ADR-0061). РЕГРЕСС-ЛОВУШКА: refresh-эмиттер-прогон
-// (provision-from-zero) с МИКРО-базой run-timeout (100ms) НЕ обрывается, когда
-// keeper-шаг блокирует дольше базы (250ms). Доказывает, что run() навешивает на
-// прогон provision-aware effectiveRunTimeout (ceiling+deployBudget), а НЕ сырой
-// runTimeout. ДО фикса defaultRunTimeout навешивался в Start на весь прогон → этот
-// keeper-шаг превысил бы базу → abort (error_locked) на середине онбординга — ровно
-// live-баг (joinWait/await_online недостижимы под 5m-runCtx).
+// TestIntegration_ProvisionRun_NotCutByBaseTimeout — ★ MAIN GUARD for this bug
+// (provision-aware run-timeout, ADR-0061). REGRESSION TRAP: a refresh-emitter run
+// (provision-from-zero) with a MICRO-base run-timeout (100ms) does NOT abort when
+// the keeper step blocks longer than the base (250ms). Proves that run() applies
+// a provision-aware effectiveRunTimeout (ceiling+deployBudget) to the run, NOT the
+// raw runTimeout. BEFORE the fix, defaultRunTimeout was applied in Start to the
+// whole run → this keeper step would exceed the base → abort (error_locked)
+// mid-onboarding — exactly the live bug (joinWait/await_online unreachable under
+// a 5m runCtx).
 //
-// ceilingFn=()→1s → eff = 1s + deployBudget(10m) ≫ блокировки 250ms: прогон доживает
-// и доходит до Ready. Negative-half («non-provision режется по base») покрыт
-// существующими TestIntegration_NoClaim_BarrierTimeout / TestIntegration_FromLocked_*
-// (короткий RunTimeout, план без refresh-эмиттера → eff=base → честный timeout).
+// ceilingFn=()→1s → eff = 1s + deployBudget(10m) ≫ the 250ms block: the run
+// survives and reaches Ready. The negative half ("non-provision is cut by base")
+// is covered by the existing TestIntegration_NoClaim_BarrierTimeout /
+// TestIntegration_FromLocked_* (short RunTimeout, plan without a refresh emitter
+// → eff=base → honest timeout).
 func TestIntegration_ProvisionRun_NotCutByBaseTimeout(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "redis-prod")
 	seedConnectedSoul(t, "host-a.example.com", []string{"redis-prod"})
 
-	// keeper-шаг (refresh-эмиттер) блокирует 250ms — дольше микро-базы 100ms. Под
-	// сырым runTimeout прогон оборвался бы здесь; под provision-eff (1s+10m) доживёт.
+	// the keeper step (refresh emitter) blocks 250ms — longer than the 100ms
+	// micro-base. Under the raw runTimeout the run would abort here; under
+	// provision-eff (1s+10m) it survives.
 	mod := &seedingKeeperModule{onApply: func() {
 		time.Sleep(250 * time.Millisecond)
 	}}
@@ -424,6 +436,6 @@ func TestIntegration_ProvisionRun_NotCutByBaseTimeout(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Доходит до Ready (не оборвался по микро-базе) — provision-eff применён.
+	// Reaches Ready (didn't abort on the micro-base) — provision-eff applied.
 	waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
 }

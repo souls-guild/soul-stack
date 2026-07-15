@@ -1,13 +1,14 @@
 //go:build integration
 
-// ★ Parity-guard live-бага provisioned_vm_ids (ADR-056 amendment 2026-07-02).
-// Класс, который L0-harness МАСКИРОВАЛ (trial/harness.go broadcast-ит register
-// всем хостам): register keeper-side задачи копится под синтетическим SID
-// "keeper" (accumulateKeeperRegister), а stateChangesVars до фикса читал только
-// per-host bucket хоста → `${ register.provision.* }` в state_changes.sets →
-// "no such key" → error_locked ПОСЛЕ полностью успешного деплоя. Тест идёт
-// live-путём: run()+PG, реальные accumulateKeeperRegister/loadRegisterByHost/
-// RenderStateOps — никакого mock-register-broadcast-а.
+// ★ Parity guard for the live provisioned_vm_ids bug (ADR-056 amendment
+// 2026-07-02). A class of bug the L0 harness MASKED (trial/harness.go
+// broadcasts register to all hosts): a keeper-side task's register
+// accumulates under the synthetic SID "keeper" (accumulateKeeperRegister),
+// while stateChangesVars, before the fix, read only the host's per-host
+// bucket → `${ register.provision.* }` in state_changes.sets → "no such key"
+// → error_locked AFTER a fully successful deploy. The test goes through the
+// live path: run()+PG, real accumulateKeeperRegister/loadRegisterByHost/
+// RenderStateOps — no mock register broadcast.
 
 package scenario
 
@@ -21,9 +22,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// keeperRegisterStateChangesRepo — зеркало live create redis-prov: keeper-задача
-// (on: keeper, register: provision) + host-задача, state_changes.sets читает
-// register keeper-задачи.
+// keeperRegisterStateChangesRepo mirrors the live create redis-prov: a
+// keeper task (on: keeper, register: provision) + a host task,
+// state_changes.sets reads the keeper task's register.
 func keeperRegisterStateChangesRepo(t *testing.T) string {
 	t.Helper()
 	return writeServiceRepo(t, `name: create
@@ -47,10 +48,10 @@ tasks:
 `)
 }
 
-// TestIntegration_KeeperRegisterInSets_CommitsToState — прогон завершается Ready
-// (НЕ error_locked), значение register keeper-задачи коммитится в incarnation.state.
-// Per-host register хостов при этом отдельно проверяет
-// TestIntegration_RegisterInSets_CommitsToState (host-probe класс).
+// TestIntegration_KeeperRegisterInSets_CommitsToState — the run finishes
+// Ready (NOT error_locked), the keeper task's register value commits into
+// incarnation.state. Per-host register for hosts is separately covered by
+// TestIntegration_RegisterInSets_CommitsToState (the host-probe class).
 func TestIntegration_KeeperRegisterInSets_CommitsToState(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -75,8 +76,8 @@ func TestIntegration_KeeperRegisterInSets_CommitsToState(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// До фикса: деплой success, но state_changes-render падает "no such key:
-	// provision" → error_locked (waitRunDone зафейлит статус-ассерт).
+	// Before the fix: deploy success, but state_changes render fails "no such
+	// key: provision" → error_locked (waitRunDone fails the status assert).
 	inc := waitRunDone(t, "noop-prod", applyID, incarnation.StatusReady)
 	if inc.State["provisioned_ip"] != "10.0.0.7" {
 		t.Errorf("incarnation.state.provisioned_ip = %v, want \"10.0.0.7\" (из register.provision.ip keeper-задачи)", inc.State["provisioned_ip"])

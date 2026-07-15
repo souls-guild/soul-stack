@@ -1,11 +1,12 @@
 //go:build integration
 
-// Integration gap-тесты cutover-а на стратегию Y (ADR-027, Phase 1 cutover):
-// full-roster render при claim + groupByHost-фильтр SID-а. Доказывают, что Y
-// закрыл BUG-1 (run_once на ВСЕ хосты вместо одного) и BUG-2 (soulprint.hosts
-// видит roster из одного хоста), а также minor-фиксы Cancel-в-planned-окне и
-// barrier-timeout planned-хоста без claim. Reuse harness-а integration_test.go +
-// cutover_test.go (TestMain/seed*/newAcolyteRunner/newClaimRunner/driveClaims/...).
+// Integration gap tests for the Strategy Y cutover (ADR-027, Phase 1
+// cutover): full-roster render at claim + groupByHost SID filter. Proves Y
+// closed BUG-1 (run_once on ALL hosts instead of one) and BUG-2
+// (soulprint.hosts sees a single-host roster), plus the minor fixes for
+// Cancel-in-planned-window and barrier-timeout of an unclaimed planned host.
+// Reuses the harness from integration_test.go + cutover_test.go
+// (TestMain/seed*/newAcolyteRunner/newClaimRunner/driveClaims/...).
 
 package scenario
 
@@ -26,10 +27,10 @@ import (
 	"github.com/souls-guild/soul-stack/shared/cel"
 )
 
-// perHostCountDispatcher симулирует Soul и фиксирует ЧИСЛО задач каждого
-// ApplyRequest по SID (sid → tasks) + порядок SID-ов. Завершает barrier
-// success-статусом (как mockDispatcher). Конкурентно-безопасен (Acolyte-пул
-// дёргает SendApply из нескольких воркеров).
+// perHostCountDispatcher simulates a Soul and records the NUMBER of tasks in
+// each ApplyRequest by SID (sid → tasks) + the order of SIDs. Completes the
+// barrier with success status (like mockDispatcher). Concurrency-safe (the
+// Acolyte pool calls SendApply from multiple workers).
 type perHostCountDispatcher struct {
 	t      *testing.T
 	mu     sync.Mutex
@@ -60,9 +61,10 @@ func (d *perHostCountDispatcher) snapshot() map[string]int {
 	return out
 }
 
-// newAcolyteRunnerWith — newAcolyteRunner с заданным Outbound (а не fakeDispatcher).
-// Нужен parity-тесту: старый путь зовёт SendApply на dispatch-е, но новый путь
-// его НЕ зовёт (claim делает Acolyte) — Outbound тут безвреден, передаём counting.
+// newAcolyteRunnerWith is newAcolyteRunner with a given Outbound (instead of
+// fakeDispatcher). Needed by the parity test: the old path calls SendApply at
+// dispatch, but the new path does NOT (the Acolyte does it at claim) —
+// Outbound is harmless here, we pass a counting one.
 func newAcolyteRunnerWith(t *testing.T, summons SummonsPublisher, disp ApplyDispatcher) *Runner {
 	t.Helper()
 	engine, err := cel.New()
@@ -84,9 +86,10 @@ func newAcolyteRunnerWith(t *testing.T, summons SummonsPublisher, disp ApplyDisp
 	})
 }
 
-// runOnceScenario — scenario/create с run_once-задачей (исполняется на ОДНОМ
-// хосте) + обычной задачей (на всех). До Y single-host render обходил
-// applyRunOnce (len(targeted)≤1) → run_once-задача попадала на каждый хост.
+// runOnceScenario is scenario/create with a run_once task (executes on ONE
+// host) + an ordinary task (on all hosts). Before Y, single-host render
+// bypassed applyRunOnce (len(targeted)≤1) → the run_once task ran on every
+// host.
 const runOnceScenario = `name: create
 description: run_once + per-host fixture
 state_changes: {}
@@ -106,9 +109,9 @@ tasks:
     changed_when: "false"
 `
 
-// soulprintHostsScenario — scenario/create, params которой ссылаются на
-// soulprint.hosts.size() (число хостов roster-а прогона). До Y single-host render
-// схлопывал размер до 1 на каждом хосте.
+// soulprintHostsScenario is scenario/create whose params reference
+// soulprint.hosts.size() (number of hosts in the run's roster). Before Y,
+// single-host render collapsed the size to 1 on every host.
 const soulprintHostsScenario = `name: create
 description: soulprint.hosts.size fixture
 state_changes: {}
@@ -120,8 +123,9 @@ tasks:
     changed_when: "false"
 `
 
-// perHostWhereScenario — scenario/create с задачей where: по SID. Пропускает на
-// host-a, режет на host-b в одном прогоне (per-host резолв where в RenderForHost).
+// perHostWhereScenario is scenario/create with a where: task keyed on SID.
+// Passes on host-a, filtered out on host-b in the same run (per-host where
+// resolution in RenderForHost).
 const perHostWhereScenario = `name: create
 description: per-host where fixture
 state_changes: {}
@@ -135,9 +139,9 @@ tasks:
     changed_when: "false"
 `
 
-// driveAcolyteRun стартует Runner в новом пути и доводит все planned-задания
-// Acolyte-ом до терминала, возвращая incarnation. n — ожидаемое число
-// planned-хостов.
+// driveAcolyteRun starts a Runner on the new path and drives all planned
+// assignments through the Acolyte to a terminal, returning the incarnation.
+// n is the expected number of planned hosts.
 func driveAcolyteRun(t *testing.T, r *Runner, spec RunSpec, disp ApplyDispatcher, nHosts int) *incarnation.Incarnation {
 	t.Helper()
 	if err := r.Start(context.Background(), spec); err != nil {
@@ -149,11 +153,12 @@ func driveAcolyteRun(t *testing.T, r *Runner, spec RunSpec, disp ApplyDispatcher
 	return waitRunDone(t, spec.IncarnationName, spec.ApplyID, incarnation.StatusReady)
 }
 
-// TestIntegration_TargetingParity_AcolyteVsOldPath — КЛЮЧЕВОЙ gap-тест: набор
-// задач на хост в НОВОМ пути (Acolyte full-roster render + groupByHost) ==
-// старый путь, для scenario с run_once И soulprint.hosts. Доказывает, что Y
-// закрыл BUG-1 и BUG-2: single-host render давал бы run_once на оба хоста и
-// soulprint.hosts.size()==1 — full-roster даёт идентичную старому пути картину.
+// TestIntegration_TargetingParity_AcolyteVsOldPath is the KEY gap test: the
+// per-host task set on the NEW path (Acolyte full-roster render +
+// groupByHost) == the old path, for a scenario with run_once AND
+// soulprint.hosts. Proves Y closed BUG-1 and BUG-2: single-host render would
+// give run_once on both hosts and soulprint.hosts.size()==1 — full-roster
+// gives a picture identical to the old path.
 func TestIntegration_TargetingParity_AcolyteVsOldPath(t *testing.T) {
 	const parityScenario = `name: create
 description: run_once + soulprint.hosts parity fixture
@@ -174,7 +179,7 @@ tasks:
     changed_when: "false"
 `
 
-	// --- старый путь (run-goroutine, прямой render всего roster-а) ---
+	// --- old path (run-goroutine, direct render of the whole roster) ---
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "noop-prod")
@@ -197,13 +202,13 @@ tasks:
 	waitRunDone(t, "noop-prod", oldApplyID, incarnation.StatusReady)
 	oldCounts := oldDisp.snapshot()
 
-	// --- новый путь (Acolyte full-roster render + groupByHost) ---
+	// --- new path (Acolyte full-roster render + groupByHost) ---
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "noop-prod")
 	seedConnectedSoul(t, "host-a.example.com", []string{"noop-prod"})
 	seedConnectedSoul(t, "host-b.example.com", []string{"noop-prod"})
-	// gitURL переиспользуем — тот же снапшот сервиса.
+	// gitURL is reused — same service snapshot.
 
 	newDisp := newPerHostCountDispatcher(t)
 	r := newAcolyteRunnerWith(t, &countingSummons{}, fakeDispatcher{})
@@ -216,8 +221,8 @@ tasks:
 	}, newDisp, 2)
 	newCounts := newDisp.snapshot()
 
-	// Parity: одинаковый набор задач на каждый хост.
-	// Старый путь: host-a (run_once-первый по SID) → 2 задачи; host-b → 1 (только roster-size).
+	// Parity: identical task set per host.
+	// Old path: host-a (run_once picks the first by SID) → 2 tasks; host-b → 1 (roster-size only).
 	if oldCounts["host-a.example.com"] != 2 {
 		t.Errorf("old-path host-a tasks = %d, want 2 (run_once-первый + roster-size)", oldCounts["host-a.example.com"])
 	}
@@ -235,9 +240,10 @@ tasks:
 	}
 }
 
-// TestIntegration_RunOnce_SingleHostUnderAcolyte — BUG-1 регрессия: run_once при
-// acolytes>0 и roster≥2 исполняется на ОДНОМ хосте (первом по SID), не на всех.
-// До Y single-host render возвращал run_once-задачу на каждый хост.
+// TestIntegration_RunOnce_SingleHostUnderAcolyte is a BUG-1 regression:
+// run_once with acolytes>0 and roster≥2 executes on ONE host (first by SID),
+// not all. Before Y, single-host render returned the run_once task for every
+// host.
 func TestIntegration_RunOnce_SingleHostUnderAcolyte(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -257,7 +263,7 @@ func TestIntegration_RunOnce_SingleHostUnderAcolyte(t *testing.T) {
 	}, disp, 2)
 
 	counts := disp.snapshot()
-	// host-a (первый по SID): run_once-задача + общая = 2. host-b: только общая = 1.
+	// host-a (first by SID): run_once task + shared = 2. host-b: shared only = 1.
 	if counts["host-a.example.com"] != 2 {
 		t.Errorf("host-a tasks = %d, want 2 (run_once-первый + общая)", counts["host-a.example.com"])
 	}
@@ -266,10 +272,10 @@ func TestIntegration_RunOnce_SingleHostUnderAcolyte(t *testing.T) {
 	}
 }
 
-// TestIntegration_SoulprintHosts_FullRosterUnderAcolyte — BUG-2 регрессия:
-// soulprint.hosts под новым путём видит ПОЛНЫЙ roster. Доказательство —
-// soulprint.hosts.size() рендерится в "2" на двухhost-овом roster-е (а не в "1",
-// как было бы при single-host render-е).
+// TestIntegration_SoulprintHosts_FullRosterUnderAcolyte is a BUG-2
+// regression: soulprint.hosts under the new path sees the FULL roster.
+// Proof: soulprint.hosts.size() renders as "2" on a two-host roster (not "1",
+// which single-host render would have produced).
 func TestIntegration_SoulprintHosts_FullRosterUnderAcolyte(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -278,7 +284,7 @@ func TestIntegration_SoulprintHosts_FullRosterUnderAcolyte(t *testing.T) {
 	seedConnectedSoul(t, "host-b.example.com", []string{"noop-prod"})
 	gitURL := writeServiceRepo(t, soulprintHostsScenario)
 
-	// Захват отрендеренной команды per-SID: должно быть "echo 2" на обоих хостах.
+	// Captures the rendered command per SID: should be "echo 2" on both hosts.
 	disp := newPerHostCommandDispatcher(t)
 	r := newAcolyteRunnerWith(t, &countingSummons{}, fakeDispatcher{})
 	driveAcolyteRun(t, r, RunSpec{
@@ -297,9 +303,10 @@ func TestIntegration_SoulprintHosts_FullRosterUnderAcolyte(t *testing.T) {
 	}
 }
 
-// TestIntegration_PerHostWhere_TwoHosts — per-host where в новом пути: задача с
-// where по SID пропускается на host-a, режется на host-b в одном прогоне.
-// host-b → no-op no_match (нет задач, FINDING-01 (б)), host-a → 1 задача.
+// TestIntegration_PerHostWhere_TwoHosts tests per-host where on the new path:
+// a task with where keyed on SID passes on host-a, is filtered out on
+// host-b, in a single run. host-b → no-op no_match (no tasks, FINDING-01
+// (b)), host-a → 1 task.
 func TestIntegration_PerHostWhere_TwoHosts(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -323,11 +330,11 @@ func TestIntegration_PerHostWhere_TwoHosts(t *testing.T) {
 	if counts["host-a.example.com"] != 1 {
 		t.Errorf("host-a tasks = %d, want 1 (where пропустил)", counts["host-a.example.com"])
 	}
-	// host-b: where срезал всё → no-op success, SendApply не звался.
+	// host-b: where filtered everything out → no-op success, SendApply wasn't called.
 	if _, ok := counts["host-b.example.com"]; ok {
 		t.Errorf("host-b получил SendApply, want no-op success (where срезал всё)")
 	}
-	// Но строка host-b обязана быть success (барьер её засчитал no-op-ом).
+	// But the host-b row must be success (the barrier counted it as a no-op).
 	st, err := applyrun.SelectStatusesByApplyID(context.Background(), integrationPool, applyID)
 	if err != nil {
 		t.Fatalf("SelectStatusesByApplyID: %v", err)
@@ -341,11 +348,12 @@ func TestIntegration_PerHostWhere_TwoHosts(t *testing.T) {
 	}
 }
 
-// TestIntegration_CancelInPlannedWindow_Cancels — minor-фикс (а): Cancel,
-// поставленный в planned-окне (между dispatch-ем и claim-ом), реально отменяет.
-// RequestCancel теперь бьёт по planned/claimed; Acolyte при claim видит флаг до
-// SendApply и переводит задание в cancelled (apply на Soul НЕ уходит). Прогон →
-// error_locked (барьер засчитал cancelled как не-success).
+// TestIntegration_CancelInPlannedWindow_Cancels is minor-fix (a): a Cancel
+// set during the planned window (between dispatch and claim) actually
+// cancels. RequestCancel now hits planned/claimed rows; the Acolyte sees the
+// flag at claim time before SendApply and moves the assignment to cancelled
+// (apply is NOT sent to the Soul). Run → error_locked (barrier counted
+// cancelled as non-success).
 func TestIntegration_CancelInPlannedWindow_Cancels(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -365,7 +373,7 @@ func TestIntegration_CancelInPlannedWindow_Cancels(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Дожидаемся planned-строки и СТАВИМ Cancel ДО claim-а (planned-окно).
+	// Wait for the planned row and SET Cancel BEFORE claim (planned window).
 	waitForPlanned(t, applyID, 1)
 	affected, err := applyrun.RequestCancel(context.Background(), integrationPool, applyID)
 	if err != nil {
@@ -375,7 +383,7 @@ func TestIntegration_CancelInPlannedWindow_Cancels(t *testing.T) {
 		t.Fatal("RequestCancel affected = 0, want >=1 (planned-строка) — фильтр не покрыл planned")
 	}
 
-	// Acolyte клеймит planned, видит cancel_requested до SendApply → cancelled.
+	// Acolyte claims planned, sees cancel_requested before SendApply → cancelled.
 	disp := &applyOnlyDispatcher{}
 	cr := newClaimRunner(t, disp)
 	driveClaims(t, cr, applyID, 1)
@@ -390,14 +398,14 @@ func TestIntegration_CancelInPlannedWindow_Cancels(t *testing.T) {
 	if got.Status != applyrun.StatusCancelled {
 		t.Errorf("status = %q, want cancelled (Cancel в planned-окне)", got.Status)
 	}
-	// Прогон отменён → incarnation error_locked (барьер увидел не-success терминал).
+	// Run cancelled → incarnation error_locked (barrier saw a non-success terminal).
 	waitRunDone(t, "noop-prod", applyID, incarnation.StatusErrorLocked)
 }
 
-// TestIntegration_NoClaim_BarrierTimeout — planned-хост, которого НИКТО не
-// клеймит (Acolyte-пул не запущен), не виснет навсегда: barrier завершается по
-// короткому RunTimeout → error_locked (timeout). Так dispatch нового пути не
-// блокирует прогон навечно при отсутствии живого Acolyte.
+// TestIntegration_NoClaim_BarrierTimeout: a planned host that NOBODY claims
+// (Acolyte pool not running) doesn't hang forever — the barrier completes on
+// a short RunTimeout → error_locked (timeout). This keeps the new dispatch
+// path from blocking a run forever when no Acolyte is alive.
 func TestIntegration_NoClaim_BarrierTimeout(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -405,8 +413,8 @@ func TestIntegration_NoClaim_BarrierTimeout(t *testing.T) {
 	seedConnectedSoul(t, "host-a.example.com", []string{"noop-prod"})
 	gitURL := noopServiceRepo(t)
 
-	// Короткий RunTimeout: barrier завершится по нему (ClaimRunner НЕ запускаем —
-	// planned-задание никто не подхватит).
+	// Short RunTimeout: the barrier will complete on it (ClaimRunner is NOT
+	// started — nobody picks up the planned assignment).
 	engine, err := cel.New()
 	if err != nil {
 		t.Fatalf("cel.New: %v", err)
@@ -436,15 +444,16 @@ func TestIntegration_NoClaim_BarrierTimeout(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Никакого claim-а: planned-задание висит, barrier упрётся в RunTimeout.
+	// No claim at all: the planned assignment sits idle, the barrier hits RunTimeout.
 	inc := waitRunDone(t, "noop-prod", applyID, incarnation.StatusErrorLocked)
 	if inc.StatusDetails == nil || inc.StatusDetails["reason"] != "dispatch_failed" {
 		t.Errorf("status_details = %+v, want reason=dispatch_failed (barrier timeout)", inc.StatusDetails)
 	}
 }
 
-// perHostCommandDispatcher — как perHostCountDispatcher, но фиксирует
-// отрендеренную команду первой задачи per-SID (для проверки soulprint.hosts.size()).
+// perHostCommandDispatcher is like perHostCountDispatcher, but records the
+// rendered command of the first task per SID (to verify
+// soulprint.hosts.size()).
 type perHostCommandDispatcher struct {
 	t    *testing.T
 	mu   sync.Mutex

@@ -12,13 +12,14 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 )
 
-// TestIntegration_LockApplyingWithEpoch_Atomic — guard на инвариант ADR-027 amend
-// (m-S1) задача (a): перевод incarnation в applying ОДНИМ UPDATE/одной tx
-// выставляет ВСЕ 4 epoch-колонки. После транзита нет пути «applying без epoch»:
-// status='applying' И applying_apply_id/applying_attempt/applying_by_kid/
-// applying_since все НЕпустые в ОДНОЙ строке. Это закрывает окно, при котором
-// reconcile_orphan_applying принял бы строку за legacy-NULL (и не реклеймнул бы
-// осиротевший lock).
+// TestIntegration_LockApplyingWithEpoch_Atomic — guard on the ADR-027 amend
+// (m-S1) task (a) invariant: transitioning an incarnation to applying via ONE
+// UPDATE/one tx sets ALL 4 epoch columns. After the transition there's no
+// "applying without epoch" path: status='applying' AND
+// applying_apply_id/applying_attempt/applying_by_kid/applying_since are all
+// non-null in ONE row. This closes the window where
+// reconcile_orphan_applying would mistake the row for legacy-NULL and fail to
+// reclaim an orphaned lock.
 func TestIntegration_LockApplyingWithEpoch_Atomic(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -40,7 +41,7 @@ func TestIntegration_LockApplyingWithEpoch_Atomic(t *testing.T) {
 		gotApply *string
 		gotAtt   *int
 		gotKID   *string
-		gotSince *string // TIMESTAMPTZ → text-cast, важна лишь НЕ-null-ность
+		gotSince *string // TIMESTAMPTZ → text-cast, only non-null-ness matters
 	)
 	const q = `
 SELECT status, applying_apply_id, applying_attempt, applying_by_kid,
@@ -55,7 +56,7 @@ FROM incarnation WHERE name = $1`
 	if status != "applying" {
 		t.Errorf("status = %q, want applying", status)
 	}
-	// Все 4 epoch-колонки непустые в одной строке — нет окна applying-без-epoch.
+	// All 4 epoch columns non-null in one row — no applying-without-epoch window.
 	if gotApply == nil || *gotApply != applyID {
 		t.Errorf("applying_apply_id = %v, want %q (epoch не записан атомарно)", gotApply, applyID)
 	}
@@ -70,13 +71,14 @@ FROM incarnation WHERE name = $1`
 	}
 }
 
-// TestIntegration_LockApplyingWithEpoch_FromLocked — guard на инвариант ADR-027
-// amend (m-S1) FromLocked: rerun-last-старт пишет epoch на уже-applying-строку.
-// UnlockForRerun транзитит error_locked→applying БЕЗ epoch (NULL-колонки);
-// lockRun{FromLocked:true} обязан дописать applying_apply_id/applying_attempt/
-// applying_by_kid/applying_since тем же lockApplyingWithEpoch (parity с обычным
-// lockRun). Без этого rerun-last-applying оставался бы NULL-epoch → не попадал
-// под reconcile_orphan_applying → краш владельца mid-rerun-last = orphan навсегда.
+// TestIntegration_LockApplyingWithEpoch_FromLocked — guard on the ADR-027
+// amend (m-S1) FromLocked invariant: a rerun-last start writes the epoch onto
+// an already-applying row. UnlockForRerun transitions error_locked→applying
+// WITHOUT an epoch (NULL columns); lockRun{FromLocked:true} must fill in
+// applying_apply_id/applying_attempt/applying_by_kid/applying_since via the
+// same lockApplyingWithEpoch (parity with a regular lockRun). Without this,
+// a rerun-last-applying row would stay NULL-epoch → missed by
+// reconcile_orphan_applying → owner crash mid-rerun-last = orphaned forever.
 func TestIntegration_LockApplyingWithEpoch_FromLocked(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -86,8 +88,8 @@ func TestIntegration_LockApplyingWithEpoch_FromLocked(t *testing.T) {
 		kid     = "keeper-rerun-owner-01"
 	)
 	seedOperator(t, "archon-alice")
-	// Строка стартует из error_locked + последний упавший сценарий = create
-	// (scope=create gate в UnlockForRerun).
+	// The row starts from error_locked + the last failed scenario = create
+	// (scope=create gate in UnlockForRerun).
 	inc := &incarnation.Incarnation{
 		Name: name, Service: "noop", ServiceVersion: "master",
 		StateSchemaVersion: 1, Status: incarnation.StatusErrorLocked,
@@ -97,15 +99,16 @@ func TestIntegration_LockApplyingWithEpoch_FromLocked(t *testing.T) {
 	}
 	seedCreateHistory(t, name)
 
-	// Unlock-часть rerun-last: error_locked→applying минуя ready (race-free),
-	// БЕЗ epoch — applying_* остаются NULL после этого шага.
+	// The unlock part of rerun-last: error_locked→applying bypassing ready
+	// (race-free), WITHOUT an epoch — applying_* stays NULL after this step.
 	if _, err := incarnation.UnlockForRerun(ctx, integrationPool,
 		name, "rerun bootstrap verified", "archon-alice", applyID, applyID); err != nil {
 		t.Fatalf("UnlockForRerun: %v", err)
 	}
 
-	// Минимальный Runner с заданным KID — FromLocked-ветка lockRun использует
-	// только DB + r.kid (до render/dispatch не доходит, возвращает после epoch-записи).
+	// A minimal Runner with a given KID — the FromLocked branch of lockRun
+	// only uses DB + r.kid (never reaches render/dispatch, returns right
+	// after writing the epoch).
 	r := &Runner{deps: Deps{DB: integrationPool}, kid: kid}
 	got, err := r.lockRun(ctx, RunSpec{
 		ApplyID:         applyID,
@@ -139,12 +142,12 @@ FROM incarnation WHERE name = $1`
 		t.Fatalf("read back: %v", err)
 	}
 
-	// Статус остаётся applying (повторный set идемпотентен), epoch дописан.
+	// Status stays applying (a repeat set is idempotent), the epoch is filled in.
 	if status != "applying" {
 		t.Errorf("status = %q, want applying (FromLocked не должен ломать статус)", status)
 	}
-	// Parity с обычным lockRun: все 4 epoch-колонки непустые — rerun-last-applying
-	// попадает под reconcile_orphan_applying.
+	// Parity with a regular lockRun: all 4 epoch columns non-null —
+	// rerun-last-applying is covered by reconcile_orphan_applying.
 	if gotApply == nil || *gotApply != applyID {
 		t.Errorf("applying_apply_id = %v, want %q (epoch не записан на FromLocked-пути)", gotApply, applyID)
 	}
@@ -159,9 +162,10 @@ FROM incarnation WHERE name = $1`
 	}
 }
 
-// TestIntegration_LockApplyingWithEpoch_RollbackLeavesNoEpoch — атомарность с
-// другой стороны: если tx откатилась (имитация краха ДО commit), строка остаётся
-// в исходном статусе БЕЗ epoch — нет «полу-записанного» applying-флага.
+// TestIntegration_LockApplyingWithEpoch_RollbackLeavesNoEpoch — atomicity from
+// the other side: if the tx rolls back (simulating a crash BEFORE commit),
+// the row stays in its original status WITHOUT an epoch — no
+// "half-written" applying flag.
 func TestIntegration_LockApplyingWithEpoch_RollbackLeavesNoEpoch(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -176,7 +180,7 @@ func TestIntegration_LockApplyingWithEpoch_RollbackLeavesNoEpoch(t *testing.T) {
 		_ = tx.Rollback(ctx)
 		t.Fatalf("lockApplyingWithEpoch: %v", err)
 	}
-	// Крах до commit — откат всего UPDATE (и status, и epoch).
+	// A crash before commit — the whole UPDATE rolls back (both status and epoch).
 	if err := tx.Rollback(ctx); err != nil {
 		t.Fatalf("Rollback: %v", err)
 	}

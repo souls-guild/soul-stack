@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-// warnCapture — slog.Handler, копящий записи уровня WARN+ для проверки
-// multi-keeper-guard-а (footgun acolytes=0). Под mutex — guard зовётся из
-// dispatch-цикла, тесты последовательны, но handler держим конкурент-safe.
+// warnCapture is a slog.Handler collecting WARN+ records to check the
+// multi-keeper guard (footgun acolytes=0). Under mutex — the guard is called
+// from the dispatch loop, tests are sequential, but we keep the handler concurrency-safe.
 type warnCapture struct {
 	mu      sync.Mutex
 	records []slog.Record
@@ -34,7 +34,7 @@ func (h *warnCapture) warnCount() int {
 	return len(h.records)
 }
 
-// attr возвращает значение атрибута последней WARN-записи по ключу.
+// lastAttr returns the value of an attribute on the last WARN record, by key.
 func (h *warnCapture) lastAttr(key string) (string, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -54,7 +54,7 @@ func (h *warnCapture) lastAttr(key string) (string, bool) {
 	return out, found
 }
 
-// stubLeaseOwner — управляемая реализация [LeaseOwnerChecker] для теста guard-а.
+// stubLeaseOwner is a controllable [LeaseOwnerChecker] implementation for testing the guard.
 type stubLeaseOwner struct {
 	kid string
 	ok  bool

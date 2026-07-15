@@ -1,9 +1,10 @@
 //go:build integration
 
-// Integration-guard синтеза install-шагов core.module.installed из
-// service.yml::modules[] (ADR-065, NIM-8): прогон с modules[] несёт в
-// ApplyRequest синтез-RenderedTask с params {name, ref} ПЕРЕД потребителем;
-// явный шаг оператора (takeover) дубля не даёт; drift-план симметричен.
+// Integration guard for synthesizing core.module.installed install steps
+// from service.yml::modules[] (ADR-065, NIM-8): a run with modules[] carries
+// a synthesized RenderedTask with params {name, ref} in the ApplyRequest
+// BEFORE the consumer; an explicit operator step (takeover) suppresses the
+// duplicate; the drift plan is symmetric.
 
 package scenario
 
@@ -25,9 +26,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// moduleServiceRepo — local-fs git-репо сервиса с modules[] в манифесте:
-// service.yml (community.echo v1.2.0) + scenario/create/main.yml из mainTasks
-// + опц. converge.
+// moduleServiceRepo is a local-fs git repo of a service with modules[] in the
+// manifest: service.yml (community.echo v1.2.0) + scenario/create/main.yml
+// from mainTasks + optional converge.
 func moduleServiceRepo(t *testing.T, mainTasks string, extraFiles map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -74,8 +75,8 @@ modules:
 	return "file://" + dir
 }
 
-// taskCaptureDispatcher — mockDispatcher, дополнительно снимающий полный
-// список RenderedTask отправленного ApplyRequest.
+// taskCaptureDispatcher is a mockDispatcher that additionally captures the
+// full list of RenderedTasks from the sent ApplyRequest.
 type taskCaptureDispatcher struct {
 	t      *testing.T
 	mu     sync.Mutex
@@ -99,7 +100,7 @@ func (d *taskCaptureDispatcher) captured() []*keeperv1.RenderedTask {
 	return d.tasks
 }
 
-// installIndexes — индексы задач core.module.installed в плане.
+// installIndexes returns the indexes of core.module.installed tasks in the plan.
 func installIndexes(tasks []*keeperv1.RenderedTask) []int {
 	var out []int
 	for i, rt := range tasks {
@@ -110,9 +111,10 @@ func installIndexes(tasks []*keeperv1.RenderedTask) []int {
 	return out
 }
 
-// TestIntegration_ModuleInstallSynthesis — прогон сценария БЕЗ явного
-// install-шага: ApplyRequest несёт синтез-RenderedTask core.module.installed с
-// params {name: community.echo, ref: v1.2.0} ПЕРЕД потребителем.
+// TestIntegration_ModuleInstallSynthesis runs a scenario WITHOUT an explicit
+// install step: the ApplyRequest carries a synthesized
+// core.module.installed RenderedTask with params
+// {name: community.echo, ref: v1.2.0} BEFORE the consumer.
 func TestIntegration_ModuleInstallSynthesis(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -162,9 +164,9 @@ tasks:
 	}
 }
 
-// TestIntegration_ModuleInstallTakeover_NoDuplicate — явный install-шаг с
-// литеральным params.name подавляет синтез: в плане РОВНО ОДИН
-// core.module.installed (операторский, без ref).
+// TestIntegration_ModuleInstallTakeover_NoDuplicate: an explicit install step
+// with a literal params.name suppresses synthesis — the plan has EXACTLY ONE
+// core.module.installed (the operator's, without ref).
 func TestIntegration_ModuleInstallTakeover_NoDuplicate(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -211,11 +213,12 @@ tasks:
 	}
 }
 
-// TestIntegration_RenderForHost_SynthesisParity — guard claim-пути (ADR-027):
-// RenderForHost по persisted-рецепту обязан воспроизвести РОВНО план
-// run-goroutine, включая синтез-install из modules[] (ADR-065). Без синтеза в
-// RenderForHost Acolyte-хост молча не получил бы install-шаг, а корреляция
-// TaskEvent↔RenderedTask (plan_index) съехала бы.
+// TestIntegration_RenderForHost_SynthesisParity guards the claim path
+// (ADR-027): RenderForHost from a persisted recipe must reproduce EXACTLY
+// the run-goroutine's plan, including install synthesis from modules[]
+// (ADR-065). Without synthesis in RenderForHost, an Acolyte host would
+// silently miss the install step, and the TaskEvent↔RenderedTask
+// (plan_index) correlation would drift.
 func TestIntegration_RenderForHost_SynthesisParity(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -230,7 +233,7 @@ tasks:
       message: hello
 `, nil)
 
-	// Эталон — dispatched-план run-пути (тот же service-снапшот).
+	// Reference: the dispatched plan of the run path (same service snapshot).
 	disp := &taskCaptureDispatcher{t: t, result: applyrun.StatusSuccess}
 	r := newRunner(t, disp, gitURL)
 	applyID := audit.NewULID()
@@ -249,7 +252,7 @@ tasks:
 		t.Fatalf("run-путь dispatched tasks = %d, want 2", len(dispatched))
 	}
 
-	// Claim-путь: воспроизведение плана Acolyte-ом по рецепту.
+	// Claim path: the Acolyte reproduces the plan from the recipe.
 	tasks, _, err := RenderForHost(context.Background(), r.deps, &applyrun.Recipe{
 		ServiceRef:   artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
 		ScenarioName: "create",
@@ -271,7 +274,7 @@ tasks:
 		t.Errorf("claim install params.ref = %q, want v1.2.0", got)
 	}
 
-	// Parity: последовательность модулей claim-плана ≡ dispatched-плану run-пути.
+	// Parity: the claim plan's module sequence ≡ the run path's dispatched plan.
 	for i := range tasks {
 		if tasks[i].Module != dispatched[i].GetModule() {
 			t.Errorf("plan parity: task[%d] claim=%q run=%q — планы Acolyte↔run разошлись", i, tasks[i].Module, dispatched[i].GetModule())
@@ -279,9 +282,10 @@ tasks:
 	}
 }
 
-// TestIntegration_CheckDrift_SynthesizedInstallInPlan — drift-план симметричен
-// apply-плану: converge с потребителем community.echo → DriftReport несёт
-// task с module core.module.installed (синтез из modules[]).
+// TestIntegration_CheckDrift_SynthesizedInstallInPlan: the drift plan is
+// symmetric with the apply plan — converge with the community.echo consumer
+// → DriftReport carries a task with module core.module.installed (synthesized
+// from modules[]).
 func TestIntegration_CheckDrift_SynthesizedInstallInPlan(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -313,7 +317,7 @@ tasks:
 		ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
 		StartedByAID:    "archon-alice",
 	})
-	// drift-план = синтез-install (plan_index 0) + converge-потребитель (1).
+	// drift plan = synthesized install (plan_index 0) + converge consumer (1).
 	finalizeDriftHostWithPlanIndexes(t, applyID, "host-a.example.com", 2)
 
 	report, err := waitDriftResult(t, ch)
@@ -335,9 +339,9 @@ tasks:
 	}
 }
 
-// finalizeDriftHostWithPlanIndexes — эмуляция Acolyte для drift-прогона из
-// taskCount задач: register на КАЖДЫЙ plan_index (N=1 passage: локальный
-// task_idx == глобальному) + терминал success.
+// finalizeDriftHostWithPlanIndexes emulates the Acolyte for a drift run of
+// taskCount tasks: register on EVERY plan_index (N=1 passage: local
+// task_idx == global) + a success terminal.
 func finalizeDriftHostWithPlanIndexes(t *testing.T, applyID, sid string, taskCount int) {
 	t.Helper()
 	ctx := context.Background()
@@ -359,11 +363,12 @@ func finalizeDriftHostWithPlanIndexes(t *testing.T, applyID, sid string, taskCou
 	}
 }
 
-// TestIntegration_RenderForHost_FromUpgradeLoadsUpgradeDir — GUARD render-пути
-// (ADR-0068): Acolyte по recipe.FromUpgrade=true рендерит upgrade/<slug>/main.yml,
-// а НЕ scenario/<slug>/. Оба каталога несут сценарий с одним именем, но разными
-// модулями-потребителями → однозначно видно, из какого прочитан план. Ловит
-// регресс render_host.go (проведение recipe.FromUpgrade в parseScenarioFromArtifact).
+// TestIntegration_RenderForHost_FromUpgradeLoadsUpgradeDir GUARDS the render
+// path (ADR-0068): with recipe.FromUpgrade=true, the Acolyte renders
+// upgrade/<slug>/main.yml, NOT scenario/<slug>/. Both dirs carry a scenario
+// with the same name but different consumer modules → the plan's source is
+// unambiguous. Catches a regression in render_host.go (threading
+// recipe.FromUpgrade through parseScenarioFromArtifact).
 func TestIntegration_RenderForHost_FromUpgradeLoadsUpgradeDir(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")

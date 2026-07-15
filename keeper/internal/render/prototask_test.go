@@ -25,16 +25,17 @@ func TestToProtoTasks(t *testing.T) {
 	if !pt.GetNoLog() {
 		t.Errorf("no_log not propagated")
 	}
-	// timeout: должен дойти до wire-формы (ловит регресс обрыва протяжки —
-	// MAJOR #2: поле молча отбрасывалось до появления RenderedTask.Timeout).
+	// timeout: must reach the wire form (catches a threading regression —
+	// MAJOR #2: the field was silently dropped before RenderedTask.Timeout).
 	if pt.GetTimeout() != "30s" {
 		t.Errorf("timeout = %q, want 30s (протяжка config.Task → render → proto оборвана)", pt.GetTimeout())
 	}
 }
 
-// TestToProtoTasks_OnChangesIdx — render.OnChangesIdx ([]int) доезжает до wire
-// proto onchanges_idx ([]int32). Ловит регресс обрыва протяжки gating-индексов
-// (без неё restart-flap не лечится: Soul не получит индексы, выполнит всегда).
+// TestToProtoTasks_OnChangesIdx — render.OnChangesIdx ([]int) reaches the wire
+// proto onchanges_idx ([]int32). Catches a threading regression of the gating
+// indices (without it restart-flap isn't fixed: Soul won't get the indices and
+// will always run).
 func TestToProtoTasks_OnChangesIdx(t *testing.T) {
 	tasks := []*RenderedTask{
 		{Index: 0, Name: "redis_conf", Module: "core.file.present"},
@@ -51,13 +52,14 @@ func TestToProtoTasks_OnChangesIdx(t *testing.T) {
 }
 
 // TestToProtoTasks_RemapOnChangesGlobalToLocal — ★ R1 REMAP (ADR-056 amend).
-// Срез, где Index ≠ локальная позиция (задача-источник Index=2 на локальной поз.1
-// из-за отфильтрованной where: Index=1): onchanges_idx источника РЕМАПИТСЯ global→
-// local. Реверс (без remap) → onchanges_idx==2 (глобальный), Soul ключует
-// registerByIdx[2]=nil → restart молча SKIPPED. Тест ловит этот реверс.
+// A slice where Index ≠ local position (source task Index=2 at local pos.1
+// because where: filtered out Index=1): the source's onchanges_idx is REMAPPED
+// global→local. A reversion (no remap) → onchanges_idx==2 (global), Soul keys
+// registerByIdx[2]=nil → restart silently SKIPPED. This test catches that
+// reversion.
 func TestToProtoTasks_RemapOnChangesGlobalToLocal(t *testing.T) {
-	// Локальный per-host срез: Index 1 отфильтрован where: → в срез не попал.
-	// Локальные позиции: [0]=Index0, [1]=Index2, [2]=Index3.
+	// Local per-host slice: Index 1 filtered out by where: → didn't make the slice.
+	// Local positions: [0]=Index0, [1]=Index2, [2]=Index3.
 	tasks := []*RenderedTask{
 		{Index: 0, Name: "config-change", Module: "core.file.present", Register: "cfg"},
 		{Index: 2, Name: "other-change", Module: "core.file.present", Register: "other"},
@@ -70,9 +72,9 @@ func TestToProtoTasks_RemapOnChangesGlobalToLocal(t *testing.T) {
 	}
 }
 
-// TestToProtoTasks_RemapOnFailGlobalToLocal — onfail-зеркало remap-теста: onfail_idx
-// источника РЕМАПИТСЯ global→local тем же конвертером. Реверс → onfail_idx==2 →
-// onfail-rescue молча НЕ запускается.
+// TestToProtoTasks_RemapOnFailGlobalToLocal — onfail mirror of the remap test:
+// the source's onfail_idx is REMAPPED global→local by the same converter. A
+// reversion → onfail_idx==2 → onfail-rescue silently does NOT run.
 func TestToProtoTasks_RemapOnFailGlobalToLocal(t *testing.T) {
 	tasks := []*RenderedTask{
 		{Index: 0, Name: "deploy", Module: "core.exec.run", Register: "deploy"},
@@ -86,14 +88,14 @@ func TestToProtoTasks_RemapOnFailGlobalToLocal(t *testing.T) {
 	}
 }
 
-// TestToProtoTasks_RemapMissingSourceSentinel — источник onchanges/onfail
-// ОТСУТСТВУЕТ во входном срезе (cross-passage ИЛИ отфильтрован where: на этом
-// хосте) → кодируется sentinel-ом outOfRangeRequisite (-1), а НЕ выкидывается.
-// Soul трактует registerByIdx[-1]=nil → changed/failed=false. Выкидывание сместило
-// бы остальные индексы и сломало бы AND-семантику нескольких источников.
+// TestToProtoTasks_RemapMissingSourceSentinel — an onchanges/onfail source is
+// ABSENT from the input slice (cross-passage OR filtered by where: on this
+// host) → encoded with sentinel outOfRangeRequisite (-1), NOT dropped. Soul
+// treats registerByIdx[-1]=nil → changed/failed=false. Dropping it would shift
+// the remaining indices and break the AND semantics of multiple sources.
 func TestToProtoTasks_RemapMissingSourceSentinel(t *testing.T) {
-	// Срез несёт consumer, но НЕ несёт источник Index=5 (отфильтрован/cross-passage).
-	// onchanges:[0,5] — первый источник в срезе (локальная 0), второй отсутствует.
+	// The slice carries the consumer but NOT the source Index=5 (filtered/cross-passage).
+	// onchanges:[0,5] — the first source is in the slice (local 0), the second is absent.
 	tasks := []*RenderedTask{
 		{Index: 0, Name: "present", Module: "core.file.present", Register: "present"},
 		{Index: 3, Name: "restart", Module: "core.service.restarted", OnChangesIdx: []int{0, 5}},
@@ -111,10 +113,10 @@ func TestToProtoTasks_RemapMissingSourceSentinel(t *testing.T) {
 	}
 }
 
-// TestToProtoTasks_RemapIdentityBackwardCompat — ★ BACKWARD-COMPAT: N=1 без where
-// (срез = полный план, Index==localPos для всех) → remap=identity, onchanges_idx
-// БИТ-В-БИТ совпадает с глобальным Index. Гарантирует, что remap НЕ ломает
-// не-staged / без-where прогон.
+// TestToProtoTasks_RemapIdentityBackwardCompat — ★ BACKWARD-COMPAT: N=1 without
+// where (slice = full plan, Index==localPos for all) → remap=identity,
+// onchanges_idx matches the global Index BIT-FOR-BIT. Guarantees remap doesn't
+// break a non-staged / where-less run.
 func TestToProtoTasks_RemapIdentityBackwardCompat(t *testing.T) {
 	tasks := []*RenderedTask{
 		{Index: 0, Name: "a", Module: "core.file.present", Register: "a"},

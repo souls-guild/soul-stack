@@ -6,26 +6,27 @@ import (
 	"github.com/souls-guild/soul-stack/shared/cel"
 )
 
-// resolveCompute вычисляет scenario-level `compute:`-блок (ADR-009 amendment
-// 2026-06-23) ОДИН раз на прогон и возвращает map имя→значение для
-// [RenderInput.Compute]. Каждая запись резолвится в порядке объявления; ранее
-// вычисленный compute виден следующему как `compute.<name>` (накопление в acc).
+// resolveCompute evaluates the scenario-level `compute:` block (ADR-009
+// amendment 2026-06-23) once per run, returning name→value for
+// [RenderInput.Compute]. Entries resolve in declaration order; an
+// already-computed value is visible to later ones as `compute.<name>`
+// (accumulated in acc).
 //
-// ★ Барьер изоляции #2 (host-инвариантность compute):
-// резолв-контекст — РУН-УРОВНЕВЫЙ (input/register/incarnation/essence + state из
-// incarnationVars), БЕЗ soulprint.self и БЕЗ soulprint.hosts (AllowHosts=false).
-// Ссылка на soulprint.* в compute-выражении → CEL no-such-key (структурный барьер,
-// не текстовый guard): compute по построению не зависит от per-host фактов, поэтому
-// одно и то же значение корректно уходит и в apply.input (резолв на targeted[0]),
-// и в state_changes (per-run, не per-host) — drift между ними исключён.
+// ★ Isolation barrier #2 (compute is host-invariant): the resolve context is
+// run-level only (input/register/incarnation/essence + state from
+// incarnationVars) — no soulprint.self or soulprint.hosts (AllowHosts=false).
+// A soulprint.* reference in a compute expression hits CEL no-such-key (a
+// structural barrier, not a text guard): compute is host-independent by
+// construction, so the same value safely feeds both apply.input (resolved on
+// targeted[0]) and state_changes (per-run, not per-host) without drift.
 //
-// Резолвится один раз: входной in.Compute (если уже посчитан caller-ом/предыдущим
-// проходом) возвращается как есть — идемпотентность для повторных вызовов в
-// staged-render-е. Пустой/отсутствующий блок → nil (`compute.<name>` =
-// штатный no-such-key, backward-compat бит-в-бит).
+// Resolved once: an already-computed in.Compute (from a caller or previous
+// pass) is returned as-is — idempotent across repeated calls in staged
+// render. Empty/absent block → nil (`compute.<name>` is a plain
+// no-such-key, backward-compat bit-for-bit).
 //
-// non-string значение записи (число/bool/коллекция) проходит литералом — CEL-фаза
-// трогает только строки (симметрично resolveTaskVars/renderValue).
+// Non-string values (number/bool/collection) pass through as literals — the
+// CEL phase only touches strings (mirrors resolveTaskVars/renderValue).
 func (p *Pipeline) resolveCompute(in RenderInput) (map[string]any, error) {
 	if in.Compute != nil {
 		return in.Compute, nil
@@ -36,8 +37,8 @@ func (p *Pipeline) resolveCompute(in RenderInput) (map[string]any, error) {
 	}
 
 	acc := make(map[string]any, len(block))
-	// База резолва: рун-уровневый контекст без soulprint. Compute копится в acc и
-	// подкладывается на каждой итерации → compute[i] видит compute[j<i].
+	// Run-level context, no soulprint. Compute accumulates in acc and is
+	// re-attached each iteration → compute[i] sees compute[j<i].
 	base := cel.Vars{
 		Input:       in.Input,
 		Register:    in.Register,
@@ -48,7 +49,7 @@ func (p *Pipeline) resolveCompute(in RenderInput) (map[string]any, error) {
 	for _, cv := range block {
 		s, ok := cv.Value.(string)
 		if !ok {
-			acc[cv.Name] = cv.Value // литерал — насквозь
+			acc[cv.Name] = cv.Value // literal — passes through
 			continue
 		}
 		base.Compute = acc

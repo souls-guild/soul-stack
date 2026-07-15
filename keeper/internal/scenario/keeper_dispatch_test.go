@@ -18,8 +18,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// fakeKeeperModule — keeper-side core-модуль-заглушка: отдаёт заранее заданный
-// финальный ApplyEvent (changed/failed/output). nil eventsErr → штатный stream.
+// fakeKeeperModule is a keeper-side core-module stub: returns a pre-set
+// final ApplyEvent (changed/failed/output). nil eventsErr → normal stream.
 type fakeKeeperModule struct {
 	module.BaseModule
 	final    *pluginv1.ApplyEvent
@@ -38,7 +38,7 @@ func (m *fakeKeeperModule) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerS
 	return nil
 }
 
-// fakeKeeperRegistry — KeeperModuleRegistry поверх map.
+// fakeKeeperRegistry is a KeeperModuleRegistry backed by a map.
 type fakeKeeperRegistry map[string]module.SoulModule
 
 func (r fakeKeeperRegistry) Lookup(name string) (module.SoulModule, bool) {
@@ -56,10 +56,10 @@ func mustStruct(t *testing.T, m map[string]any) *structpb.Struct {
 }
 
 func TestKeeperTasksOf(t *testing.T) {
-	// Passage 0: две keeper-задачи (idx 0,2) + одна host (idx 1). Passage 1: одна
-	// keeper-задача (idx 3) — стратифицирована позже (например core.bootstrap.delivered
-	// читает register core.cloud.created). keeperTasksOf(passage) отбирает keeper-
-	// задачи ИМЕННО запрошенного Passage.
+	// Passage 0: two keeper tasks (idx 0,2) + one host task (idx 1). Passage 1:
+	// one keeper task (idx 3) — stratified later (e.g. core.bootstrap.delivered
+	// reads register core.cloud.created). keeperTasksOf(passage) selects
+	// keeper tasks for EXACTLY the requested Passage.
 	tasks := []*render.RenderedTask{
 		{Index: 0, Module: "core.cloud.created", Passage: 0},
 		{Index: 1, Module: "core.exec.run", Passage: 0},
@@ -86,7 +86,7 @@ func TestKeeperTasksOf(t *testing.T) {
 		t.Fatalf("keeperTasksOf(1) = %v, want ровно [idx 3] (keeper-задача Passage 1)", got1)
 	}
 
-	// Passage без keeper-задач → пусто (host-only Passage / вне диапазона).
+	// A Passage with no keeper tasks → empty (host-only Passage / out of range).
 	if got := keeperTasksOf(tasks, plans, 2); len(got) != 0 {
 		t.Fatalf("keeperTasksOf(2) = %v, want пусто", got)
 	}
@@ -145,12 +145,13 @@ func TestApplyKeeperTask_ApplyError(t *testing.T) {
 	}
 }
 
-// TestApplyKeeperTask_NoFinalEvent — модуль вернул nil без единого ApplyEvent
-// (final==nil, applyErr==nil): отсутствие финала = аномалия контракта (как
-// Soul-side), applyKeeperTask → failed с message "no final event"
-// (keeper_dispatch.go ветка last==nil). Закрывает QA-пробел №4.
+// TestApplyKeeperTask_NoFinalEvent — the module returned nil without ever
+// sending an ApplyEvent (final==nil, applyErr==nil): a missing final event is
+// a contract anomaly (same as Soul-side); applyKeeperTask → failed with
+// message "no final event" (keeper_dispatch.go's last==nil branch). Closes
+// QA gap #4.
 func TestApplyKeeperTask_NoFinalEvent(t *testing.T) {
-	mod := &fakeKeeperModule{} // final=nil, applyErr=nil → Apply ничего не шлёт
+	mod := &fakeKeeperModule{} // final=nil, applyErr=nil → Apply sends nothing
 	r := &Runner{keeperModules: fakeKeeperRegistry{"core.soul": mod}}
 
 	_, failed, output, msg := r.applyKeeperTask(context.Background(), &render.RenderedTask{Module: "core.soul.registered"})
@@ -165,30 +166,31 @@ func TestApplyKeeperTask_NoFinalEvent(t *testing.T) {
 	}
 }
 
-// TestSyncTraitsOnRegistered_Gating — bind-хук релокации Trait (ADR-060 amend
-// R1) фильтрует точку врезки: ТОЛЬКО успешный core.soul.registered триггерит
-// проекцию. Для прочих модулей / пустого incName / nil-DB — no-op без обращения
-// к БД (Runner без Deps.DB не паникует). Полная проекция доказана в integration
+// TestSyncTraitsOnRegistered_Gating — the Trait relocation bind hook
+// (ADR-060 amend R1) filters its injection point: ONLY a successful
+// core.soul.registered triggers the projection. For other modules / empty
+// incName / nil DB — a no-op with no DB access (a Runner without Deps.DB
+// doesn't panic). The full projection is proven in integration
 // (incarnation/traits_integration_test.go).
 func TestSyncTraitsOnRegistered_Gating(t *testing.T) {
 	r := &Runner{} // Deps.DB == nil
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	// Не registered-модуль → ранний выход по адресу (DB не нужна).
+	// Not a registered module → early exit by address (no DB needed).
 	r.syncTraitsOnRegistered(context.Background(), "redis-prod",
 		&render.RenderedTask{Module: "core.vault.kv-read"}, log)
 	r.syncTraitsOnRegistered(context.Background(), "redis-prod",
 		&render.RenderedTask{Module: "core.cloud.provisioned"}, log)
 
-	// registered, но incName пуст (прямой keeper-test без инкарнации) → no-op.
+	// registered, but incName is empty (direct keeper test without an incarnation) → no-op.
 	r.syncTraitsOnRegistered(context.Background(), "",
 		&render.RenderedTask{Module: "core.soul.registered"}, log)
 
-	// registered + incName, но Deps.DB == nil → no-op (не паникует, не лезет в БД).
+	// registered + incName, but Deps.DB == nil → no-op (doesn't panic, doesn't touch the DB).
 	r.syncTraitsOnRegistered(context.Background(), "redis-prod",
 		&render.RenderedTask{Module: "core.soul.registered"}, log)
 
-	// Бракованный адрес модуля → ранний выход (SplitModuleAddr !ok).
+	// Malformed module address → early exit (SplitModuleAddr !ok).
 	r.syncTraitsOnRegistered(context.Background(), "redis-prod",
 		&render.RenderedTask{Module: "bogus"}, log)
 }
@@ -204,10 +206,11 @@ func TestComposeKeeperFailure(t *testing.T) {
 	}
 }
 
-// TestKeeperTaskStatus_Mapping — маппинг исхода keeper-задачи в keeperv1-enum:
-// changed→CHANGED, failed→FAILED (failed имеет приоритет над changed),
-// иначе→OK. Свёртка changed (auditpg) фильтрует по строке "TASK_STATUS_CHANGED",
-// рассинхрон молча обнулил бы её для keeper-задач.
+// TestKeeperTaskStatus_Mapping — maps a keeper task outcome to the keeperv1
+// enum: changed→CHANGED, failed→FAILED (failed takes priority over changed),
+// else→OK. The changed fold (auditpg) filters on the literal string
+// "TASK_STATUS_CHANGED"; a mismatch would silently zero it out for keeper
+// tasks.
 func TestKeeperTaskStatus_Mapping(t *testing.T) {
 	cases := []struct {
 		changed, failed bool
@@ -215,7 +218,7 @@ func TestKeeperTaskStatus_Mapping(t *testing.T) {
 	}{
 		{changed: true, failed: false, want: "TASK_STATUS_CHANGED"},
 		{changed: false, failed: true, want: "TASK_STATUS_FAILED"},
-		{changed: true, failed: true, want: "TASK_STATUS_FAILED"}, // failed побеждает
+		{changed: true, failed: true, want: "TASK_STATUS_FAILED"}, // failed wins
 		{changed: false, failed: false, want: "TASK_STATUS_OK"},
 	}
 	for _, c := range cases {
@@ -225,17 +228,19 @@ func TestKeeperTaskStatus_Mapping(t *testing.T) {
 	}
 }
 
-// TestEmitKeeperTaskExecuted_ChangedEmits — keeper-задача с changed → task.executed
-// эмитится с sid=KeeperTargetSID ("keeper"), status=TASK_STATUS_CHANGED,
-// correlation_id=apply_id, source=keeper_internal. Это адрес, по которому свёртка
-// changed_tasks (auditpg) и task:-подписка Tiding видят keeper-side задачи.
+// TestEmitKeeperTaskExecuted_ChangedEmits — a keeper task with changed →
+// task.executed is emitted with sid=KeeperTargetSID ("keeper"),
+// status=TASK_STATUS_CHANGED, correlation_id=apply_id,
+// source=keeper_internal. This is the address the changed_tasks fold
+// (auditpg) and Tiding's task: subscription use to see keeper-side tasks.
 func TestEmitKeeperTaskExecuted_ChangedEmits(t *testing.T) {
 	aw := &fakeAuditWriter{}
 	r := &Runner{deps: Deps{Audit: aw}}
 	rt := &render.RenderedTask{Index: 2, Name: "provision", Register: "vm", Module: "core.cloud.created"}
 
-	// passage 1 — keeper-задача стратифицирована (Слайс 2): payload эхает passage
-	// для триажа per-Passage; корреляция changed_tasks НЕ меняется (по sid/plan_index).
+	// passage 1 — the keeper task is stratified (Slice 2): the payload echoes
+	// passage for per-Passage triage; changed_tasks correlation is unaffected
+	// (keyed by sid/plan_index).
 	r.emitKeeperTaskExecuted(context.Background(), "apply-k1", 1 /*passage*/, rt, true /*changed*/, false /*failed*/, "", slog.New(slog.DiscardHandler))
 
 	if len(aw.events) != 1 {
@@ -265,9 +270,10 @@ func TestEmitKeeperTaskExecuted_ChangedEmits(t *testing.T) {
 	}
 }
 
-// TestEmitKeeperTaskExecuted_FailedStatus — failed keeper-задача → task.executed
-// status=TASK_STATUS_FAILED (НЕ CHANGED): такая задача НЕ попадёт в changed_tasks.
-// error.message присутствует для не-no_log (маскинг — на write-path auditpg).
+// TestEmitKeeperTaskExecuted_FailedStatus — a failed keeper task →
+// task.executed status=TASK_STATUS_FAILED (NOT CHANGED): such a task will
+// NOT land in changed_tasks. error.message is present for non-no_log
+// (masking happens on auditpg's write path).
 func TestEmitKeeperTaskExecuted_FailedStatus(t *testing.T) {
 	aw := &fakeAuditWriter{}
 	r := &Runner{deps: Deps{Audit: aw}}
@@ -294,19 +300,19 @@ func TestEmitKeeperTaskExecuted_FailedStatus(t *testing.T) {
 	}
 }
 
-// TestEmitKeeperTaskExecuted_SecretHygiene — payload task.executed keeper-задачи
-// НЕ содержит register_data/output (keeper-задачи могут нести vault-резолвленный
-// output). no_log failed-задача НЕ утекает message — подавляется маркером
-// suppressed:"no_log".
+// TestEmitKeeperTaskExecuted_SecretHygiene — a keeper task's task.executed
+// payload does NOT contain register_data/output (keeper tasks may carry a
+// vault-resolved output). A no_log failed task does NOT leak message — it's
+// suppressed with the suppressed:"no_log" marker.
 func TestEmitKeeperTaskExecuted_SecretHygiene(t *testing.T) {
 	aw := &fakeAuditWriter{}
 	r := &Runner{deps: Deps{Audit: aw}}
 
-	// changed keeper-задача с register: — register_data всё равно НЕ в payload.
+	// a changed keeper task with register: — register_data still stays out of the payload.
 	rtChanged := &render.RenderedTask{Index: 0, Register: "secret_out", Module: "core.vault.kv-read"}
 	r.emitKeeperTaskExecuted(context.Background(), "apply-k3", 0 /*passage*/, rtChanged, true, false, "", slog.New(slog.DiscardHandler))
 
-	// no_log failed keeper-задача — message подавлен.
+	// no_log failed keeper task — message is suppressed.
 	rtNoLog := &render.RenderedTask{Index: 1, Module: "core.vault.kv-read", NoLog: true}
 	r.emitKeeperTaskExecuted(context.Background(), "apply-k3", 0 /*passage*/, rtNoLog, false, true, "vault:secret/db plaintext", slog.New(slog.DiscardHandler))
 
@@ -333,19 +339,20 @@ func TestEmitKeeperTaskExecuted_SecretHygiene(t *testing.T) {
 	}
 }
 
-// TestEmitKeeperTaskExecuted_NilAuditNoOp — Audit=nil (unit-сборка без аудита) →
-// эмиссия no-op, не паникует.
+// TestEmitKeeperTaskExecuted_NilAuditNoOp — Audit=nil (unit build without
+// audit) → emission is a no-op, doesn't panic.
 func TestEmitKeeperTaskExecuted_NilAuditNoOp(t *testing.T) {
 	r := &Runner{deps: Deps{Audit: nil}}
 	r.emitKeeperTaskExecuted(context.Background(), "apply-k4", 0, /*passage*/
 		&render.RenderedTask{Index: 0, Module: "core.cloud.created"}, true, false, "", slog.New(slog.DiscardHandler))
 }
 
-// TestKeeperTaskExecuted_NoRegisterButIDFoldsToChangedTask — КЛЮЧЕВОЙ кейс бага:
-// keeper-задача БЕЗ register, но с id: (типичный provision_vm) изменилась →
-// task.executed (sid=keeper, CHANGED) эмитится И эта пара (sid, task_idx) через
-// свёртку changed_tasks даёт changed_hosts=1, total_hosts=1. До фикса keeper-
-// dispatch не эмитил task.executed → задача молча выпадала из run_completed.
+// TestKeeperTaskExecuted_NoRegisterButIDFoldsToChangedTask — the KEY bug
+// case: a keeper task WITHOUT register but WITH id: (a typical
+// provision_vm) changed → task.executed (sid=keeper, CHANGED) is emitted,
+// and that (sid, task_idx) pair folds through changed_tasks into
+// changed_hosts=1, total_hosts=1. Before the fix, keeper dispatch never
+// emitted task.executed → the task silently dropped out of run_completed.
 func TestKeeperTaskExecuted_NoRegisterButIDFoldsToChangedTask(t *testing.T) {
 	aw := &fakeAuditWriter{}
 	r := &Runner{deps: Deps{Audit: aw}}
@@ -360,8 +367,9 @@ func TestKeeperTaskExecuted_NoRegisterButIDFoldsToChangedTask(t *testing.T) {
 		t.Fatalf("status = %v, want TASK_STATUS_CHANGED", aw.events[0].Payload["status"])
 	}
 
-	// Свёртка: ключ (keeper, idx=0) из журнала + DispatchPlan keeper-target →
-	// одна ChangedTask с адресом по id, changed_hosts=1, total_hosts=1.
+	// Fold: the (keeper, idx=0) key from the journal + a DispatchPlan
+	// keeper-target → one ChangedTask addressed by id, changed_hosts=1,
+	// total_hosts=1.
 	tasks := []*render.RenderedTask{rt}
 	plans := []render.DispatchPlan{
 		{TaskIndex: 0, Keeper: true, TargetSIDs: []string{render.KeeperTargetSID}},

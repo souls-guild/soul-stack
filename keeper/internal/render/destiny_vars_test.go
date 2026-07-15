@@ -12,8 +12,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/tmpl"
 )
 
-// destinyWithFileVars — плоская destiny из одной module-задачи, читающей
-// `${ vars.<x> }` (file-level destiny-локалы), плюс заданные file-vars (raw).
+// destinyWithFileVars — a flat destiny with one module-task reading
+// `${ vars.<x> }` (file-level destiny locals), plus the given file-vars (raw).
 func destinyWithFileVars(fileVars map[string]any, taskParams map[string]any) *ResolvedDestiny {
 	return &ResolvedDestiny{
 		Name: "pilot-vars",
@@ -30,8 +30,8 @@ func destinyWithFileVars(fileVars map[string]any, taskParams map[string]any) *Re
 	}
 }
 
-// TestDestinyFileVars_InParams — file-level vars.yml резолвится и доступен как
-// `${ vars.<x> }` в params destiny-задачи.
+// TestDestinyFileVars_InParams — file-level vars.yml resolves and is available as
+// `${ vars.<x> }` in a destiny-task's params.
 func TestDestinyFileVars_InParams(t *testing.T) {
 	res := &stubDestinyResolver{resolved: destinyWithFileVars(
 		map[string]any{"unit": "redis-server"},
@@ -53,8 +53,8 @@ func TestDestinyFileVars_InParams(t *testing.T) {
 	}
 }
 
-// TestDestinyFileVars_FromInputAndSelf — vars.yml-значение резолвится над
-// input.* (destiny-input) и soulprint.self.*; CEL-доступ к ним разрешён.
+// TestDestinyFileVars_FromInputAndSelf — a vars.yml value resolves over input.*
+// (destiny input) and soulprint.self.*; CEL access to them is allowed.
 func TestDestinyFileVars_FromInputAndSelf(t *testing.T) {
 	res := &stubDestinyResolver{resolved: destinyWithFileVars(
 		map[string]any{
@@ -81,8 +81,8 @@ func TestDestinyFileVars_FromInputAndSelf(t *testing.T) {
 	}
 }
 
-// TestDestinyFileVars_RegisterIsolation — vars.yml-значение не видит register.*
-// (на момент резолва vars задач ещё не было; изоляция destiny-scope) → ошибка.
+// TestDestinyFileVars_RegisterIsolation — a vars.yml value doesn't see register.*
+// (at vars-resolve time no tasks have run yet; destiny-scope isolation) → error.
 func TestDestinyFileVars_RegisterIsolation(t *testing.T) {
 	res := &stubDestinyResolver{resolved: destinyWithFileVars(
 		map[string]any{"x": "${ register.probe.stdout }"},
@@ -101,9 +101,9 @@ func TestDestinyFileVars_RegisterIsolation(t *testing.T) {
 	}
 }
 
-// TestDestinyFileVars_HostsIsolation — var→var НЕ ослабляет изоляцию (кейс #6):
-// file-var, ссылающийся на soulprint.hosts (cross-host scenario-only аксессор),
-// по-прежнему отвергается на compile (AllowHosts=false в destiny-проходе).
+// TestDestinyFileVars_HostsIsolation — var→var does NOT weaken isolation (case #6):
+// a file-var referencing soulprint.hosts (a cross-host scenario-only accessor) is
+// still rejected at compile (AllowHosts=false in the destiny pass).
 func TestDestinyFileVars_HostsIsolation(t *testing.T) {
 	res := &stubDestinyResolver{resolved: destinyWithFileVars(
 		map[string]any{"x": "${ soulprint.hosts.size() }"},
@@ -122,18 +122,18 @@ func TestDestinyFileVars_HostsIsolation(t *testing.T) {
 	}
 }
 
-// TestDestinyFileVars_OverrideWithInLayerRef — кейс #9: одноимённые file/task vars
-// (Вариант-A override) + ссылка ВНУТРИ task-слоя цела. file-var `unit` перетёрт
-// task-var `unit`, а task-var `svc` ссылается на task-var `unit` (внутрислоевой
-// var→var). params видит task-значения.
+// TestDestinyFileVars_OverrideWithInLayerRef — case #9: same-named file/task vars
+// (Variant-A override) plus an intra-task-layer reference stays intact. file-var
+// `unit` is overridden by task-var `unit`, and task-var `svc` references task-var
+// `unit` (same-layer var→var). params sees the task values.
 func TestDestinyFileVars_OverrideWithInLayerRef(t *testing.T) {
 	resolved := destinyWithFileVars(
-		map[string]any{"unit": "redis-FILE"}, // file-level — будет перетёрт
+		map[string]any{"unit": "redis-FILE"}, // file-level — will be overridden
 		map[string]any{"cmd": "${ vars.svc }"},
 	)
 	resolved.Tasks[0].Vars = map[string]any{
 		"unit": "redis-TASK",         // override file-var
-		"svc":  "${ vars.unit }-svc", // ссылка на task-var того же слоя
+		"svc":  "${ vars.unit }-svc", // reference to a task-var in the same layer
 	}
 	res := &stubDestinyResolver{resolved: resolved}
 	p := NewPipeline(nil, newEngine(t), nil, nil)
@@ -152,8 +152,8 @@ func TestDestinyFileVars_OverrideWithInLayerRef(t *testing.T) {
 	}
 }
 
-// TestDestinyFileVars_EssenceIsolation — vars.yml-значение не видит essence.*
-// (essence — концепция уровня service, в destiny её нет вовсе) → ошибка.
+// TestDestinyFileVars_EssenceIsolation — a vars.yml value doesn't see essence.*
+// (essence is a service-level concept, absent entirely in destiny) → error.
 func TestDestinyFileVars_EssenceIsolation(t *testing.T) {
 	res := &stubDestinyResolver{resolved: destinyWithFileVars(
 		map[string]any{"x": "${ essence.maxmemory }"},
@@ -163,7 +163,7 @@ func TestDestinyFileVars_EssenceIsolation(t *testing.T) {
 	in := RenderInput{
 		Scenario:    applyScenario("pilot-vars", map[string]any{}),
 		Incarnation: IncarnationMeta{Name: "svc"},
-		// scenario несёт essence — destiny НЕ должна его увидеть даже в vars.yml.
+		// scenario carries essence — destiny must NOT see it even in vars.yml.
 		Essence: map[string]any{"maxmemory": "256mb"},
 		Hosts:   []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny: res,
@@ -174,9 +174,9 @@ func TestDestinyFileVars_EssenceIsolation(t *testing.T) {
 	}
 }
 
-// TestDestinyFileVars_VarToVar — file-var ссылается на другой file-var того же
-// слоя (`${ vars.<other> }` РАЗРЕШЕНО, eager-topological); зеркало
-// TestResolveTaskVars_VarToVar (кейс #1, file-слой). ИСХОДНЫЙ кейс фичи:
+// TestDestinyFileVars_VarToVar — a file-var references another file-var of the
+// same layer (`${ vars.<other> }` is ALLOWED, eager-topological); mirrors
+// TestResolveTaskVars_VarToVar (case #1, file layer). The ORIGINAL feature case:
 // root_group: "${ vars.root_owner }".
 func TestDestinyFileVars_VarToVar(t *testing.T) {
 	res := &stubDestinyResolver{resolved: destinyWithFileVars(
@@ -202,8 +202,8 @@ func TestDestinyFileVars_VarToVar(t *testing.T) {
 	}
 }
 
-// TestDestinyFileVars_TransitiveChain — транзитивная цепочка a→b→c того же слоя
-// (кейс #2): c вычисляется первым, b видит c, a видит b.
+// TestDestinyFileVars_TransitiveChain — a transitive chain a→b→c of the same
+// layer (case #2): c is computed first, b sees c, a sees b.
 func TestDestinyFileVars_TransitiveChain(t *testing.T) {
 	got, err := resolveVarLayer(newEngine(t), map[string]any{
 		"a": "${ vars.b }/a",
@@ -218,7 +218,7 @@ func TestDestinyFileVars_TransitiveChain(t *testing.T) {
 	}
 }
 
-// TestDestinyFileVars_Cycle — цикл a→b→c→a (кейс #3) → ErrVarCycle с трассой.
+// TestDestinyFileVars_Cycle — a cycle a→b→c→a (case #3) → ErrVarCycle with a trace.
 func TestDestinyFileVars_Cycle(t *testing.T) {
 	_, err := resolveVarLayer(newEngine(t), map[string]any{
 		"a": "${ vars.b }",
@@ -228,14 +228,14 @@ func TestDestinyFileVars_Cycle(t *testing.T) {
 	if err == nil || !errors.Is(err, ErrVarCycle) {
 		t.Fatalf("resolveVarLayer: ожидался ErrVarCycle, получено: %v", err)
 	}
-	// Трасса замкнута: содержит стартовый узел дважды (a → … → a).
+	// The trace is closed: it contains the starting node twice (a → … → a).
 	if !strings.Contains(err.Error(), "a → b → c → a") {
 		t.Errorf("err = %v, want трассу 'a → b → c → a'", err)
 	}
 }
 
-// TestDestinyFileVars_SelfReference — самоссылка a→a (кейс #4) → ErrVarCycle
-// (частный случай цикла, трасса 'a → a').
+// TestDestinyFileVars_SelfReference — a self-reference a→a (case #4) → ErrVarCycle
+// (a special case of a cycle, trace 'a → a').
 func TestDestinyFileVars_SelfReference(t *testing.T) {
 	_, err := resolveVarLayer(newEngine(t), map[string]any{
 		"a": "${ vars.a }-loop",
@@ -248,16 +248,16 @@ func TestDestinyFileVars_SelfReference(t *testing.T) {
 	}
 }
 
-// TestDestinyFileVars_UnusedBrokenRef — НЕИСПОЛЬЗУЕМЫЙ var ссылается на
-// несуществующий vars.z (кейс #5): EAGER-маркер — резолв слоя падает
-// ErrVarUnknownRef, даже если ссылающийся var нигде не читается params-ом.
+// TestDestinyFileVars_UnusedBrokenRef — an UNUSED var references nonexistent
+// vars.z (case #5): EAGER marker — layer resolution fails with ErrVarUnknownRef,
+// even if the referencing var is never read by params.
 func TestDestinyFileVars_UnusedBrokenRef(t *testing.T) {
 	res := &stubDestinyResolver{resolved: destinyWithFileVars(
 		map[string]any{
 			"used":   "redis-server",
-			"broken": "${ vars.z }", // z не существует; broken никто не читает
+			"broken": "${ vars.z }", // z doesn't exist; broken is never read
 		},
-		map[string]any{"cmd": "echo ${ vars.used }"}, // params читает только used
+		map[string]any{"cmd": "echo ${ vars.used }"}, // params only reads used
 	)}
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
@@ -275,8 +275,9 @@ func TestDestinyFileVars_UnusedBrokenRef(t *testing.T) {
 	}
 }
 
-// TestDestinyFileVars_OrderIndependent — порядок ключей в file-слое безразличен
-// (кейс #7): два варианта raw с разным порядком объявления дают равный результат.
+// TestDestinyFileVars_OrderIndependent — key order in the file layer doesn't
+// matter (case #7): two raw variants with different declaration order give an
+// equal result.
 func TestDestinyFileVars_OrderIndependent(t *testing.T) {
 	e := newEngine(t)
 	v1, err := resolveVarLayer(e, map[string]any{
@@ -305,15 +306,15 @@ func TestDestinyFileVars_OrderIndependent(t *testing.T) {
 	}
 }
 
-// TestDestinyFileVars_TaskOverridesFile — Вариант A: task-level vars:
-// переопределяет одноимённый file-level var того же destiny (детерминированный
-// исход — побеждает task).
+// TestDestinyFileVars_TaskOverridesFile — Variant A: task-level vars: overrides a
+// same-named file-level var of the same destiny (deterministic outcome — task
+// wins).
 func TestDestinyFileVars_TaskOverridesFile(t *testing.T) {
 	resolved := destinyWithFileVars(
 		map[string]any{"unit": "redis-server"}, // file-level
 		map[string]any{"cmd": "echo ${ vars.unit }"},
 	)
-	// task-level vars: на той же задаче с тем же именем — должен победить.
+	// task-level vars: on the same task with the same name — must win.
 	resolved.Tasks[0].Vars = map[string]any{"unit": "redis-staging"}
 	res := &stubDestinyResolver{resolved: resolved}
 
@@ -333,8 +334,8 @@ func TestDestinyFileVars_TaskOverridesFile(t *testing.T) {
 	}
 }
 
-// TestDestinyFileVars_TaskAndFileCoexist — несовпадающие имена сосуществуют:
-// file-var и task-var обоих видны в params одной задачи.
+// TestDestinyFileVars_TaskAndFileCoexist — non-matching names coexist: both the
+// file-var and the task-var are visible in one task's params.
 func TestDestinyFileVars_TaskAndFileCoexist(t *testing.T) {
 	resolved := destinyWithFileVars(
 		map[string]any{"unit": "redis-server"},
@@ -359,16 +360,17 @@ func TestDestinyFileVars_TaskAndFileCoexist(t *testing.T) {
 	}
 }
 
-// TestDestinyFileVars_ScenarioVarsDoNotLeak — destiny НЕ видит scenario-level
-// `vars:` (только через apply: input:). scenario task-vars `leak` на apply-задаче
-// в destiny-проходе → no-such-key; долетает только то, что проброшено в apply.input.
+// TestDestinyFileVars_ScenarioVarsDoNotLeak — destiny does NOT see scenario-level
+// `vars:` (only through apply: input:). scenario task-vars `leak` on the
+// apply-task → no-such-key in the destiny pass; only what's forwarded through
+// apply.input gets through.
 func TestDestinyFileVars_ScenarioVarsDoNotLeak(t *testing.T) {
 	res := &stubDestinyResolver{resolved: destinyWithFileVars(
-		nil, // file-vars нет — проверяем, что scenario-vars не подменяют их
+		nil, // no file-vars — checking that scenario-vars don't substitute for them
 		map[string]any{"cmd": "echo ${ vars.leak }"},
 	)}
 	p := NewPipeline(nil, newEngine(t), nil, nil)
-	// applyScenario с scenario task-vars `leak` на самой apply-задаче.
+	// applyScenario with scenario task-vars `leak` on the apply-task itself.
 	scn := &config.ScenarioManifest{
 		Name: "create",
 		Tasks: []config.Task{
@@ -391,9 +393,9 @@ func TestDestinyFileVars_ScenarioVarsDoNotLeak(t *testing.T) {
 	}
 }
 
-// TestDestinyFileVars_OnlyViaApplyInput — единственный легальный мост из scenario
-// в destiny — apply: input:. scenario.input пробрасывается в destiny-input, а
-// vars.yml destiny резолвится над этим input.
+// TestDestinyFileVars_OnlyViaApplyInput — the only legal bridge from scenario into
+// destiny is apply: input:. scenario.input is forwarded into destiny-input, and
+// the destiny's vars.yml resolves over that input.
 func TestDestinyFileVars_OnlyViaApplyInput(t *testing.T) {
 	res := &stubDestinyResolver{resolved: destinyWithFileVars(
 		map[string]any{"acl": "/acl/${ input.user }"},
@@ -405,7 +407,7 @@ func TestDestinyFileVars_OnlyViaApplyInput(t *testing.T) {
 		Tasks: []config.Task{
 			{
 				Name: "Apply destiny",
-				// мост: scenario.input.who → destiny input.user.
+				// bridge: scenario.input.who → destiny input.user.
 				Apply: &config.ApplyTask{Destiny: "pilot-vars", Input: map[string]any{"user": "${ input.who }"}},
 			},
 		},
@@ -426,12 +428,12 @@ func TestDestinyFileVars_OnlyViaApplyInput(t *testing.T) {
 	}
 }
 
-// TestDestinyFileVars_InRenderedTemplateContext — file-level vars.yml доступен
-// шаблону core.file.rendered как `.vars.<file_var>` НАПРЯМУЮ, без passthrough
-// через params.vars задачи (симметрия Варианта A: render_context.vars = file-vars
-// база + task-level params.vars override). Это ровно node-exporter-кейс: шаблон
-// читает `.vars.bin_path`, где bin_path — file-var (vars.yml), а в params.vars
-// задачи ЕГО НЕТ.
+// TestDestinyFileVars_InRenderedTemplateContext — file-level vars.yml is available
+// to the core.file.rendered template as `.vars.<file_var>` DIRECTLY, without a
+// passthrough via the task's params.vars (symmetric with Variant A:
+// render_context.vars = file-vars base + task-level params.vars override). This is
+// exactly the node-exporter case: the template reads `.vars.bin_path`, where
+// bin_path is a file-var (vars.yml), and the task's params.vars does NOT have it.
 func TestDestinyFileVars_InRenderedTemplateContext(t *testing.T) {
 	const tmplPath = "templates/unit.tmpl"
 	const tmplBody = "ExecStart={{ .vars.bin_path }}\n"
@@ -451,7 +453,7 @@ func TestDestinyFileVars_InRenderedTemplateContext(t *testing.T) {
 					Params: map[string]any{
 						"path":     "/etc/systemd/system/node_exporter.service",
 						"template": tmplPath,
-						// НЕТ params.vars: file-var bin_path должен дойти НАПРЯМУЮ.
+						// NO params.vars: file-var bin_path must arrive DIRECTLY.
 					},
 				},
 			},
@@ -476,7 +478,7 @@ func TestDestinyFileVars_InRenderedTemplateContext(t *testing.T) {
 		t.Fatalf("render_context.vars.bin_path = %#v, want /usr/local/bin/node_exporter (file-var НАПРЯМУЮ в .vars)", vars["bin_path"])
 	}
 
-	// Исполняем тем же движком, что Soul, render_context КОРНЕМ.
+	// Execute with the same engine as Soul, render_context as the ROOT.
 	engine, err := tmpl.New()
 	if err != nil {
 		t.Fatalf("tmpl.New: %v", err)
@@ -490,10 +492,10 @@ func TestDestinyFileVars_InRenderedTemplateContext(t *testing.T) {
 	}
 }
 
-// TestDestinyFileVars_TaskVarsOverrideFileInRenderContext — в render_context.vars
-// действует та же Вариант-A семантика, что в CEL-фазе: одноимённый task-level
-// params.vars перетирает file-var. Гарантирует, что слияние file→task под `.vars`
-// детерминировано (побеждает task), а не теряет один из слоёв.
+// TestDestinyFileVars_TaskVarsOverrideFileInRenderContext — render_context.vars
+// follows the same Variant-A semantics as the CEL phase: a same-named task-level
+// params.vars overrides the file-var. Guarantees that the file→task merge under
+// `.vars` is deterministic (task wins), not dropping either layer.
 func TestDestinyFileVars_TaskVarsOverrideFileInRenderContext(t *testing.T) {
 	const tmplPath = "templates/unit.tmpl"
 	const tmplBody = "bin {{ .vars.bin_path }}\nextra {{ .vars.extra }}\n"
@@ -513,7 +515,7 @@ func TestDestinyFileVars_TaskVarsOverrideFileInRenderContext(t *testing.T) {
 					Params: map[string]any{
 						"path":     "/etc/x.service",
 						"template": tmplPath,
-						// task-var bin_path перетирает file-var; extra остаётся file-var.
+						// task-var bin_path overrides the file-var; extra stays a file-var.
 						"vars": map[string]any{"bin_path": "/from/task"},
 					},
 				},
@@ -541,15 +543,15 @@ func TestDestinyFileVars_TaskVarsOverrideFileInRenderContext(t *testing.T) {
 	}
 }
 
-// TestDestinyFileVars_PerHost — vars.yml ссылается на soulprint.self → резолвится
-// per-host; разные хосты дают разные значения (DestinyVarsResolved по SID).
+// TestDestinyFileVars_PerHost — vars.yml references soulprint.self → resolves
+// per-host; different hosts give different values (DestinyVarsResolved by SID).
 func TestDestinyFileVars_PerHost(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 
-	// Прямой вызов renderApplyDestiny через Render: destiny-задача host-инвариантна
-	// в пилоте, поэтому params с per-host soulprint.self упали бы на сверке. Чтобы
-	// проверить именно per-host резолв vars, держим params host-инвариантными, а
-	// per-host проверяем через resolveDestinyVars напрямую.
+	// A direct call to renderApplyDestiny via Render: a destiny-task is
+	// host-invariant in the pilot, so params with per-host soulprint.self would fail
+	// verification. To check per-host vars resolution specifically, we keep params
+	// host-invariant and check per-host via resolveDestinyVars directly.
 	destinyIn := RenderInput{
 		Scenario:        &config.ScenarioManifest{Name: "pilot-vars"},
 		Input:           map[string]any{},
@@ -573,10 +575,11 @@ func TestDestinyFileVars_PerHost(t *testing.T) {
 	}
 }
 
-// TestDestinyFileVars_StagedInvariant — file-vars инвариантны по Passage:
-// резолвятся над input+self+incarnation БЕЗ register, поэтому ActivePassage на них
-// не влияет. Сверяем резолв при ActivePassage 0 и 1 — идентичен (ADR-056: вход
-// destiny-прохода инвариантен на passages, file-vars тем более).
+// TestDestinyFileVars_StagedInvariant — file-vars are invariant across Passages:
+// they resolve over input+self+incarnation WITHOUT register, so ActivePassage
+// doesn't affect them. We compare resolution at ActivePassage 0 and 1 — identical
+// (ADR-056: the destiny pass's input is invariant across passages, file-vars even
+// more so).
 func TestDestinyFileVars_StagedInvariant(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	hosts := []*topology.HostFacts{host("a", []string{"svc"}, map[string]any{

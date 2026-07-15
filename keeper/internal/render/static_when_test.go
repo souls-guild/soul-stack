@@ -10,10 +10,12 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// optionalInputApplyTask — задача неактивной ветки multi-action destiny: params
-// читают optional-input (`${ input.maxmemory }`), который при текущем action не
-// передан, а `when: input.action == 'apply'` режет её. Eager-рендер params упал бы
-// на no-such-key; static-when placeholder-skip их пропускает (ADR-012(d), Var b).
+// optionalInputApplyTask is a task on an inactive branch of a multi-action
+// destiny: its params read an optional input (`${ input.maxmemory }`) that
+// isn't passed under the current action, gated by
+// `when: input.action == 'apply'`. Eager param rendering would fail on
+// no-such-key; the static-when placeholder skip avoids it (ADR-012(d),
+// Variant b).
 func optionalInputApplyTask() config.Task {
 	return config.Task{
 		Name:   "apply-config",
@@ -22,15 +24,16 @@ func optionalInputApplyTask() config.Task {
 	}
 }
 
-// TestStaticWhenFalse_SkipsParamRender — ★ ключевой кейс ТЗ: задача с optional-input
-// в params + `when: input.action=='apply'` при action!=apply → Render НЕ падает
-// (params пропущены, no-such-key на `${ input.maxmemory }` не достигается).
+// TestStaticWhenFalse_SkipsParamRender — ★ key spec case: a task with an
+// optional-input in params + `when: input.action=='apply'`, at
+// action!=apply → Render does NOT fail (params are skipped, no-such-key on
+// `${ input.maxmemory }` is never reached).
 func TestStaticWhenFalse_SkipsParamRender(t *testing.T) {
 	manifest := &config.ScenarioManifest{Name: "multi-action", Tasks: []config.Task{optionalInputApplyTask()}}
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Input:       map[string]any{"action": "update_acls"}, // НЕ apply → maxmemory не передан
+		Input:       map[string]any{"action": "update_acls"}, // not apply → maxmemory isn't passed
 		Incarnation: IncarnationMeta{Name: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 	}
@@ -56,8 +59,8 @@ func TestStaticWhenFalse_SkipsParamRender(t *testing.T) {
 	}
 }
 
-// TestStaticWhenTrue_RendersParams — контроль обратного: тот же предикат при
-// action==apply → static-when:true → НЕ skip, params рендерятся обычным путём.
+// TestStaticWhenTrue_RendersParams — reverse control: same predicate at
+// action==apply → static-when:true → no skip, params render the normal way.
 func TestStaticWhenTrue_RendersParams(t *testing.T) {
 	manifest := &config.ScenarioManifest{Name: "multi-action", Tasks: []config.Task{optionalInputApplyTask()}}
 	p := NewPipeline(nil, newEngine(t), nil, nil)
@@ -77,17 +80,18 @@ func TestStaticWhenTrue_RendersParams(t *testing.T) {
 	}
 }
 
-// TestStaticSkip_OnChangesIndicesIntact — задача-источник onchanges static-skipped:
-// её Index/remap целы, потребитель onchanges трактует «не changed» (источник в
-// registerByIdx с changed=false ⇒ потребитель пропустится, что корректно). Здесь
-// проверяем render-инвариант: skip НЕ ломает сквозную нумерацию и резолв onchanges.
+// TestStaticSkip_OnChangesIndicesIntact — the onchanges source task is
+// static-skipped: its Index/remap stay intact, and the onchanges consumer
+// reads "not changed" (source in registerByIdx with changed=false ⇒ consumer
+// correctly skips). Verifies the render invariant: skip doesn't break
+// contiguous numbering or onchanges resolution.
 func TestStaticSkip_OnChangesIndicesIntact(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "onchanges-skip",
 		Tasks: []config.Task{
 			{
 				Name:     "src",
-				When:     "input.action == 'apply'", // static-false при update_acls
+				When:     "input.action == 'apply'", // static-false at update_acls
 				Register: "src",
 				Module:   &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{"cmd": "touch ${ input.path }"}},
 			},
@@ -118,7 +122,7 @@ func TestStaticSkip_OnChangesIndicesIntact(t *testing.T) {
 	if tasks[0].Params != nil {
 		t.Error("источник static-skipped → Params должны быть nil")
 	}
-	// onchanges резолвлен в Index источника (0): потребитель ссылается на src.
+	// onchanges resolved to the source's Index (0): the consumer references src.
 	if len(tasks[1].OnChangesIdx) != 1 || tasks[1].OnChangesIdx[0] != 0 {
 		t.Errorf("OnChangesIdx = %v, want [0] (резолв register-имени в Index источника цел)", tasks[1].OnChangesIdx)
 	}
@@ -127,10 +131,11 @@ func TestStaticSkip_OnChangesIndicesIntact(t *testing.T) {
 	}
 }
 
-// TestStaticSkip_ConsistentAcrossPassages — static-when даёт ОДИНАКОВЫЙ skip в
-// Passage 0 и Passage 1 при одном input/state-снимке (ADR-056: State инвариантен по
-// passages, static-when register-/soulprint-независим ⇒ детерминирован). Один и тот
-// же RenderInput, рендеренный как разные ActivePassage, скипает одинаково.
+// TestStaticSkip_ConsistentAcrossPassages — static-when gives the SAME skip
+// in Passage 0 and Passage 1 for the same input/state snapshot (ADR-056:
+// State is passage-invariant, static-when is register-/soulprint-independent
+// ⇒ deterministic). The same RenderInput, rendered as different
+// ActivePassage, skips identically.
 func TestStaticSkip_ConsistentAcrossPassages(t *testing.T) {
 	task := optionalInputApplyTask()
 	manifest := &config.ScenarioManifest{Name: "passages", Tasks: []config.Task{task}}
@@ -151,7 +156,7 @@ func TestStaticSkip_ConsistentAcrossPassages(t *testing.T) {
 	}
 
 	in1 := base
-	in1.ActivePassage = 0 // та же активная стадия — повторный рендер того же снимка
+	in1.ActivePassage = 0 // same active stage — re-render of the same snapshot
 	t1, _, err := p.Render(context.Background(), in1)
 	if err != nil {
 		t.Fatalf("Render P0 (повтор): %v", err)
@@ -166,10 +171,10 @@ func TestStaticSkip_ConsistentAcrossPassages(t *testing.T) {
 	}
 }
 
-// TestStaticSkipEqualsSoulSkip — ★ static-when-false на Keeper == when-false на
-// Soul. Keeper скипнул (Params==nil) ровно тогда, когда Soul-side evalWhen по тому
-// же flow_context (NewFlowControl, та же sandbox) вернул false. Бит-в-бит гарантия
-// (ADR-012(d)): один env, один flow_context.
+// TestStaticSkipEqualsSoulSkip — ★ static-when-false on Keeper == when-false
+// on Soul. Keeper skips (Params==nil) exactly when Soul-side evalWhen over
+// the same flow_context (NewFlowControl, same sandbox) returns false.
+// Bit-for-bit guarantee (ADR-012(d)): one env, one flow_context.
 func TestStaticSkipEqualsSoulSkip(t *testing.T) {
 	task := optionalInputApplyTask()
 	manifest := &config.ScenarioManifest{Name: "equiv", Tasks: []config.Task{task}}
@@ -186,8 +191,8 @@ func TestStaticSkipEqualsSoulSkip(t *testing.T) {
 	}
 	keeperSkipped := tasks[0].Params == nil
 
-	// Soul-side воспроизведение evalWhen: тот же flow-control-движок + flow_context
-	// из RenderedTask (то, что реально поедет на Soul).
+	// Soul-side replay of evalWhen: the same flow-control engine + flow_context
+	// from RenderedTask (what actually ships to Soul).
 	soulEngine, err := cel.NewFlowControl()
 	if err != nil {
 		t.Fatalf("NewFlowControl: %v", err)
@@ -206,9 +211,9 @@ func TestStaticSkipEqualsSoulSkip(t *testing.T) {
 	}
 }
 
-// TestRegisterWhen_StaysSoulSide — `when: register.X` НЕ static-skipped: register
-// известен только Soul-у, предикат остаётся Soul-side, params рендерятся прежним
-// путём (Keeper его не вычисляет).
+// TestRegisterWhen_StaysSoulSide — `when: register.X` is NOT static-skipped:
+// register is known only to Soul, the predicate stays Soul-side, params
+// render the usual way (Keeper never evaluates it).
 func TestRegisterWhen_StaysSoulSide(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "register-when",
@@ -242,11 +247,12 @@ func TestRegisterWhen_StaysSoulSide(t *testing.T) {
 	}
 }
 
-// TestMixedWhen_NotStatic — ★ реверс: `when: input.a && register.b` смешан
-// (есть register) → НЕ статический → прежний путь (params рендерятся). Если бы
-// детектор ошибочно посчитал его статическим, он попытался бы вычислить
-// register-зависимый предикат на Keeper-е (register пуст) и/или скипнуть по неполному
-// контексту. isStaticWhen обязан вернуть false из-за register-ссылки.
+// TestMixedWhen_NotStatic — ★ reverse case: `when: input.a && register.b` is
+// mixed (has register) → NOT static → usual path (params render). If the
+// detector mistakenly classified it as static, it would try to evaluate a
+// register-dependent predicate on Keeper (register empty) and/or skip on an
+// incomplete context. isStaticWhen must return false because of the
+// register reference.
 func TestMixedWhen_NotStatic(t *testing.T) {
 	if isStaticWhen("input.a && register.b.changed") {
 		t.Fatal("isStaticWhen(input.a && register.b) = true, want false (register-зависимый)")
@@ -280,19 +286,21 @@ func TestMixedWhen_NotStatic(t *testing.T) {
 	}
 }
 
-// TestStaticWhenFalse_UnsupportedDSL_PrecedesGuard — ★ 12-й слой: задача неактивной
-// ветки с unsupported-DSL (`parallel: true`) + статически-false when: → static-when
-// ПРЕДШЕСТВУЕТ guardPilotDSL: задача gated off и скипается ДО guard, не отвергаясь
-// ErrUnsupportedDSL. Активная ветка (другая задача) рендерится. Реверс: до фикса
-// guardPilotDSL отвергал parallel: даже в неактивной ветке и ронял весь Render.
+// TestStaticWhenFalse_UnsupportedDSL_PrecedesGuard — ★ layer 12: a task on an
+// inactive branch with unsupported DSL (`parallel: true`) + a
+// statically-false when: → static-when PRECEDES guardPilotDSL: the task is
+// gated off and skipped BEFORE the guard runs, instead of being rejected
+// with ErrUnsupportedDSL. The active branch (another task) still renders.
+// Reverse: before the fix, guardPilotDSL rejected parallel: even on an
+// inactive branch and failed the whole Render.
 func TestStaticWhenFalse_UnsupportedDSL_PrecedesGuard(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "multi-action-parallel",
 		Tasks: []config.Task{
 			{
 				Name:     "diagnose (parallel, gated off)",
-				When:     "input.action == 'diagnose'", // static-false при action=update_acls
-				Parallel: true,                         // unsupported-DSL — guard отверг бы его ДО фикса
+				When:     "input.action == 'diagnose'", // static-false at action=update_acls
+				Parallel: true,                         // unsupported DSL — the guard would have rejected it BEFORE the fix
 				Module:   &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{"cmd": "redis-cli ping"}},
 			},
 			{
@@ -316,7 +324,7 @@ func TestStaticWhenFalse_UnsupportedDSL_PrecedesGuard(t *testing.T) {
 	if len(tasks) != 2 || len(plans) != 2 {
 		t.Fatalf("len(tasks)=%d len(plans)=%d, want 2,2 (skip-placeholder + активная)", len(tasks), len(plans))
 	}
-	// Задача 0 — gated-off parallel: skip-placeholder, params не рендерились.
+	// Task 0 — gated-off parallel: skip placeholder, params weren't rendered.
 	if tasks[0].Params != nil {
 		t.Errorf("tasks[0].Params != nil — gated-off parallel должен быть skip-placeholder")
 	}
@@ -326,7 +334,7 @@ func TestStaticWhenFalse_UnsupportedDSL_PrecedesGuard(t *testing.T) {
 	if tasks[0].FlowContext == nil {
 		t.Error("tasks[0].FlowContext == nil — Soul нужен flow_context для собственного evalWhen → SKIPPED")
 	}
-	// Задача 1 — активная: рендерится обычным путём.
+	// Task 1 — active: renders the normal way.
 	if tasks[1].Params == nil {
 		t.Fatal("tasks[1].Params == nil — активная update_acls должна отрендериться")
 	}
@@ -335,17 +343,18 @@ func TestStaticWhenFalse_UnsupportedDSL_PrecedesGuard(t *testing.T) {
 	}
 }
 
-// TestStaticWhenTrue_UnsupportedDSL_StillRejected — реверс на over-skip: тот же
-// parallel: + when: при action==diagnose → static-TRUE → задача АКТИВНА → guard
-// ОТВЕРГАЕТ ErrUnsupportedDSL. Per-action валидация: unsupported-DSL отвергается
-// ровно при активации ветки, не маскируется.
+// TestStaticWhenTrue_UnsupportedDSL_StillRejected — reverse check on
+// over-skip: the same parallel: + when: at action==diagnose → static-TRUE →
+// task is ACTIVE → guard REJECTS with ErrUnsupportedDSL. Per-action
+// validation: unsupported DSL is rejected exactly when its branch activates,
+// never masked.
 func TestStaticWhenTrue_UnsupportedDSL_StillRejected(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "active-parallel",
 		Tasks: []config.Task{
 			{
 				Name:     "diagnose (parallel, ACTIVE)",
-				When:     "input.action == 'diagnose'", // static-TRUE при action=diagnose
+				When:     "input.action == 'diagnose'", // static-TRUE at action=diagnose
 				Parallel: true,
 				Module:   &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{"cmd": "redis-cli ping"}},
 			},
@@ -364,17 +373,18 @@ func TestStaticWhenTrue_UnsupportedDSL_StillRejected(t *testing.T) {
 	}
 }
 
-// TestNonStaticWhen_UnsupportedDSL_StillRejected — не-static when: (`register.x`)
-// + parallel: → задача НЕ статически-false (register известен только Soul-у),
-// минует ранний static-skip → guard отвергает ErrUnsupportedDSL прежним путём.
-// Гарантия, что ранний skip не ослабляет guard для register-/mixed-веток.
+// TestNonStaticWhen_UnsupportedDSL_StillRejected — a non-static when:
+// (`register.x`) + parallel: → the task isn't statically-false (register is
+// known only to Soul), bypasses the early static-skip → the guard rejects
+// with ErrUnsupportedDSL the usual way. Guarantees the early skip doesn't
+// weaken the guard for register-/mixed-when branches.
 func TestNonStaticWhen_UnsupportedDSL_StillRejected(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "register-parallel",
 		Tasks: []config.Task{
 			{
 				Name:     "parallel gated by register",
-				When:     "register.probe.changed", // не статический → Soul-side
+				When:     "register.probe.changed", // not static → Soul-side
 				Parallel: true,
 				Module:   &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{"cmd": "redis-cli ping"}},
 			},
@@ -393,11 +403,11 @@ func TestNonStaticWhen_UnsupportedDSL_StillRejected(t *testing.T) {
 	}
 }
 
-// TestStaticWhenFalse_UnsupportedDSL_PrecedesGuard_Destiny — тот же инвариант в
-// destiny-render-проходе (apply:destiny): gated-off parallel-задача destiny
-// неактивной ветки минует guardDestinyTask, активная задача destiny рендерится.
-// Зеркало диагностики redis-destiny (manage.yml update_acls активна, diagnostic.yml
-// diagnose gated off с parallel:).
+// TestStaticWhenFalse_UnsupportedDSL_PrecedesGuard_Destiny — same invariant
+// in the destiny render pass (apply:destiny): a gated-off parallel task on
+// an inactive destiny branch bypasses guardDestinyTask, the active destiny
+// task renders. Mirrors the redis-destiny diagnostics (manage.yml
+// update_acls active, diagnostic.yml diagnose gated off with parallel:).
 func TestStaticWhenFalse_UnsupportedDSL_PrecedesGuard_Destiny(t *testing.T) {
 	d := &ResolvedDestiny{
 		Name: "multi-action",
@@ -408,7 +418,7 @@ func TestStaticWhenFalse_UnsupportedDSL_PrecedesGuard_Destiny(t *testing.T) {
 		Tasks: []config.Task{
 			{
 				Name:     "diagnose (parallel, gated off)",
-				When:     "input.action == 'diagnose'", // static-false при action=update_acls
+				When:     "input.action == 'diagnose'", // static-false at action=update_acls
 				Parallel: true,
 				Module:   &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{"cmd": "redis-cli ping"}},
 			},
@@ -449,8 +459,9 @@ func TestStaticWhenFalse_UnsupportedDSL_PrecedesGuard_Destiny(t *testing.T) {
 	}
 }
 
-// TestStaticWhenTrue_UnsupportedDSL_StillRejected_Destiny — реверс destiny:
-// активная parallel-задача destiny отвергается guardDestinyTask per-action.
+// TestStaticWhenTrue_UnsupportedDSL_StillRejected_Destiny — destiny reverse
+// case: an active parallel destiny task is rejected by guardDestinyTask
+// per-action.
 func TestStaticWhenTrue_UnsupportedDSL_StillRejected_Destiny(t *testing.T) {
 	d := &ResolvedDestiny{
 		Name:  "active",
@@ -479,20 +490,20 @@ func TestStaticWhenTrue_UnsupportedDSL_StillRejected_Destiny(t *testing.T) {
 	}
 }
 
-// TestIsStaticWhen_Classification — таблица классификатора: какие when статичны.
+// TestIsStaticWhen_Classification — classifier table: which when predicates are static.
 func TestIsStaticWhen_Classification(t *testing.T) {
 	cases := []struct {
 		when string
 		want bool
 	}{
-		{"", false},                       // пусто — нечего вычислять Keeper-side
-		{"input.action == 'apply'", true}, // только input — статичен
-		{"essence.enabled && incarnation.name != ''", true}, // essence+incarnation — статичен
-		{"vars.flag", true},                             // vars — статичен (host-инвариантность ловит второй контур)
+		{"", false},                       // empty — nothing to evaluate Keeper-side
+		{"input.action == 'apply'", true}, // input only — static
+		{"essence.enabled && incarnation.name != ''", true}, // essence+incarnation — static
+		{"vars.flag", true},                             // vars — static (host invariance caught by a second layer)
 		{"register.probe.changed", false},               // register — Soul-side
-		{"input.a && register.b.ok", false},             // смешанный с register — Soul-side
-		{"soulprint.self.os.family == 'debian'", false}, // soulprint — host-вариативен
-		{"input.a && soulprint.self.x", false},          // смешанный с soulprint — host-вариативен
+		{"input.a && register.b.ok", false},             // mixed with register — Soul-side
+		{"soulprint.self.os.family == 'debian'", false}, // soulprint — host-variant
+		{"input.a && soulprint.self.x", false},          // mixed with soulprint — host-variant
 	}
 	for _, c := range cases {
 		if got := isStaticWhen(c.when); got != c.want {

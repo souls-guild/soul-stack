@@ -10,17 +10,18 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// scenarioIncludeResolver строит [config.IncludeResolver] с двухуровневым
-// резолвом scenario-include (orchestration.md §6): сначала локально в
-// `scenario/<name>/<file>`, затем service-level fallback `scenario/<file>`.
-// Fallback делает движок, автор пишет только имя файла; `../` запрещён ещё на
-// фазе валидации (scenario_task.go reIncludeFile). securejoin внутри
-// [artifact.ServiceLoader.ReadFile] клампит выход за пределы снапшота.
+// scenarioIncludeResolver builds a [config.IncludeResolver] with a two-tier
+// scenario-include resolve (orchestration.md §6): local
+// `scenario/<name>/<file>` first, then service-level fallback
+// `scenario/<file>`. The engine does the fallback, the author only writes the
+// file name; `../` is already rejected at the validation phase
+// (scenario_task.go reIncludeFile). securejoin inside
+// [artifact.ServiceLoader.ReadFile] clamps any escape from the snapshot.
 //
-// Коллизия имён — shadowing: локальный файл полностью перекрывает service-level
-// (§6, без merge). display-путь — resolved-путь внутри снапшота: он же
-// печатается в диагностике и служит ключом cycle-detection (два разных
-// resolved-пути = два разных источника).
+// Name collisions are shadowing: the local file fully overrides service-level
+// (§6, no merge). The display path is the resolved path inside the snapshot:
+// it's printed in diagnostics and serves as the cycle-detection key (two
+// different resolved paths = two different sources).
 func scenarioIncludeResolver(loader *artifact.ServiceLoader, art *artifact.ServiceArtifact, scenarioName string) config.IncludeResolver {
 	localDir := path.Join("scenario", scenarioName)
 	serviceDir := "scenario"
@@ -30,8 +31,8 @@ func scenarioIncludeResolver(loader *artifact.ServiceLoader, art *artifact.Servi
 		if err == nil {
 			return data, local, nil
 		}
-		// На service-level фоллбэкаем ТОЛЬКО при отсутствии локального файла;
-		// I/O-ошибку (permission denied, битый симлинк) маскировать нельзя.
+		// Fall back to service-level ONLY when the local file is absent; an
+		// I/O error (permission denied, broken symlink) must never be masked.
 		if !errors.Is(err, fs.ErrNotExist) {
 			return nil, "", fmt.Errorf("include %q: чтение локально (%s): %w", name, local, err)
 		}

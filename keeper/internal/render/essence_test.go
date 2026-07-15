@@ -9,9 +9,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// TestRender_InterpolatesEssence — `${ essence.* }` в params рендерится из
-// RenderInput.Essence (slice E2 passthrough). Доказывает, что essence доходит
-// до per-host CEL-фазы через весь конвейер Render.
+// TestRender_InterpolatesEssence — `${ essence.* }` in params renders from
+// RenderInput.Essence (slice E2 passthrough). Proves essence reaches the
+// per-host CEL phase through the whole Render pipeline.
 func TestRender_InterpolatesEssence(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "cfg",
@@ -38,7 +38,7 @@ func TestRender_InterpolatesEssence(t *testing.T) {
 	}
 }
 
-// TestRender_EssenceInWhere — essence доступна в expression-key where:.
+// TestRender_EssenceInWhere — essence is available in the expression-key where:.
 func TestRender_EssenceInWhere(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "gated",
@@ -76,8 +76,8 @@ func TestRender_EssenceInWhere(t *testing.T) {
 	}
 }
 
-// TestRender_LoopOverEssence — `items: ${ essence.users }` раскрывается по
-// essence (host-инвариантный источник оси loop).
+// TestRender_LoopOverEssence — `items: ${ essence.users }` expands over essence
+// (a host-invariant source for the loop axis).
 func TestRender_LoopOverEssence(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "x",
@@ -108,8 +108,8 @@ func TestRender_LoopOverEssence(t *testing.T) {
 	}
 }
 
-// TestRender_EmptyEssenceNoLeak — отсутствие Essence в RenderInput не ломает
-// прогон, который essence не трогает (нет паники, нет leak в env).
+// TestRender_EmptyEssenceNoLeak — a missing Essence in RenderInput doesn't
+// break a run that doesn't touch essence (no panic, no leak into env).
 func TestRender_EmptyEssenceNoLeak(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "plain",
@@ -132,11 +132,11 @@ func TestRender_EmptyEssenceNoLeak(t *testing.T) {
 	}
 }
 
-// TestRender_ApplyDestiny_EssenceNotLeaked — изоляция destiny (slice A):
-// destiny НЕ видит essence напрямую. Несмотря на непустой Essence в scenario-
-// scope, ссылка `${ essence.* }` внутри destiny-задачи даёт eval-ошибку
-// (no-such-key), т.к. renderApplyDestiny строит destiny-RenderInput с пустым
-// Essence.
+// TestRender_ApplyDestiny_EssenceNotLeaked — destiny isolation (slice A):
+// destiny does NOT see essence directly. Despite a non-empty Essence in
+// scenario scope, a `${ essence.* }` reference inside a destiny task gives an
+// eval error (no-such-key), because renderApplyDestiny builds the destiny
+// RenderInput with an empty Essence.
 func TestRender_ApplyDestiny_EssenceNotLeaked(t *testing.T) {
 	leaky := &ResolvedDestiny{
 		Name: "leaky",
@@ -164,9 +164,10 @@ func TestRender_ApplyDestiny_EssenceNotLeaked(t *testing.T) {
 	}
 }
 
-// TestRender_ApplyDestiny_EssenceViaInput — корректный путь essence в destiny:
-// через apply: input:. essence резолвится в scenario-env (parent), значение
-// проброшено в input destiny, который видит только результат.
+// TestRender_ApplyDestiny_EssenceViaInput — the correct path for essence into
+// destiny: via apply: input:. essence resolves in the scenario env (parent),
+// and the value is passed through into destiny's input, which sees only the
+// result.
 func TestRender_ApplyDestiny_EssenceViaInput(t *testing.T) {
 	dst := &ResolvedDestiny{
 		Name:  "via-input",

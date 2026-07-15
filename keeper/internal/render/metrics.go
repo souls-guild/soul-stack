@@ -8,47 +8,47 @@ import (
 	"github.com/souls-guild/soul-stack/shared/obs"
 )
 
-// RenderMetrics — набор Prometheus-collector-ов render-пайплайна Keeper-а
-// (CEL+text/template-рендер scenario, ADR-010). Регистрируется отдельным
-// helper-ом поверх компонент-агностичного [obs.Registry] — тем же паттерном,
-// что [grpc.RegisterGRPCMetrics] / [scenario.RegisterScenarioMetrics] (ADR-024
-// §4.0): registry-core не знает про конкретные метрики, а keeper_render_*-
-// метрики — частность render-фасада Keeper-а.
+// RenderMetrics — Prometheus collectors for Keeper's render pipeline
+// (CEL+text/template scenario rendering, ADR-010). Registered by a separate
+// helper on top of the component-agnostic [obs.Registry] — the same pattern as
+// [grpc.RegisterGRPCMetrics] / [scenario.RegisterScenarioMetrics] (ADR-024
+// §4.0): registry-core doesn't know about specific metrics, and
+// keeper_render_* metrics are a Keeper render-facade specific.
 //
-// Метрики живут здесь (keeper/internal/render), а не в shared/obs, потому что
-// привязаны к keeper-внутреннему [Pipeline] и не переиспользуются Soul-ом
-// (ADR-011: shared/ — действительно поперечный код; рендер — Keeper-side по
-// ADR-012(d), Soul cel-go/sprig не тянет).
+// Metrics live here (keeper/internal/render), not in shared/obs, because
+// they're tied to Keeper's internal [Pipeline] and aren't reused by Soul
+// (ADR-011: shared/ is genuinely cross-cutting code; render is Keeper-side per
+// ADR-012(d), Soul doesn't pull in cel-go/sprig).
 //
-// Имена — Prometheus convention (snake_case, _total для counter, _seconds для
-// histogram длительности; ADR-024 §2.1). Labels — без секретов и без
-// высокой кардинальности (ADR-024 §2.2): incarnation/scenario name НЕ кладём в
-// label (blow-up по числу инкарнаций/сценариев) — их разрез идёт в trace
-// (span render.pipeline несёт их атрибутами, pipeline.go). Params / vault-
-// значения в метрики не попадают вовсе.
+// Names follow Prometheus convention (snake_case, _total for counters,
+// _seconds for duration histograms; ADR-024 §2.1). Labels carry no secrets and
+// no high cardinality (ADR-024 §2.2): incarnation/scenario name is NOT put in
+// a label (blow-up by incarnation/scenario count) — that breakdown goes to
+// trace instead (the render.pipeline span carries them as attributes,
+// pipeline.go). Params / vault values never reach metrics at all.
 type RenderMetrics struct {
-	// duration — длительность одного прохода [Pipeline.Render] в секундах
-	// (vault-resolve → CEL-render → резолв on/where → сборка плана). Это
-	// самая тяжёлая Keeper-side фаза прогона (тот же горизонт, что у span-а
-	// render.pipeline). Histogram отвечает на «сколько длится рендер»; разрез
-	// по результату не нужен — для p99 хватает общей серии, ошибка считается
-	// отдельным counter-ом.
+	// duration — how long one [Pipeline.Render] pass takes, in seconds
+	// (vault-resolve → CEL-render → on/where resolve → plan assembly). This is
+	// the heaviest Keeper-side phase of a run (same scope as the
+	// render.pipeline span). The histogram answers "how long does render
+	// take"; no breakdown by outcome needed — the overall series covers p99,
+	// errors are counted separately.
 	duration prometheus.Histogram
 
-	// errorsTotal — счётчик неуспешных проходов [Pipeline.Render] (любой не-nil
-	// error: ErrUnsupportedDSL / vault-resolve-fail / CEL-fail / host-инвариант-
-	// fail). Без label-а причины: детализация уходит в trace/log (span
-	// render.pipeline ставит codes.Error), counter держим для алерта на
-	// rate ошибок рендера без знания histogram-а.
+	// errorsTotal — count of failed [Pipeline.Render] passes (any non-nil
+	// error: ErrUnsupportedDSL / vault-resolve failure / CEL failure /
+	// host-invariant failure). No reason label: detail goes to trace/log (the
+	// render.pipeline span sets codes.Error); this counter is for alerting on
+	// render error rate without needing the histogram.
 	errorsTotal prometheus.Counter
 }
 
-// RegisterRenderMetrics создаёт keeper_render_*-collectors и регистрирует их в
-// [obs.Registry]. Возвращает дескриптор для wire-up через [NewPipeline].
+// RegisterRenderMetrics creates the keeper_render_* collectors and registers
+// them in [obs.Registry]. Returns a handle for wiring up via [NewPipeline].
 //
-// MustRegister: дубликат-регистрация — programmer error (вызвали дважды на
-// одном Registry); падать сразу удобнее, чем носить ленивую инициализацию
-// (паттерн идентичен [grpc.RegisterGRPCMetrics]).
+// MustRegister: duplicate registration is a programmer error (called twice on
+// the same Registry); failing fast is simpler than carrying lazy init
+// (identical pattern to [grpc.RegisterGRPCMetrics]).
 func RegisterRenderMetrics(reg *obs.Registry) *RenderMetrics {
 	m := &RenderMetrics{
 		duration: prometheus.NewHistogram(prometheus.HistogramOpts{
@@ -65,10 +65,10 @@ func RegisterRenderMetrics(reg *obs.Registry) *RenderMetrics {
 	return m
 }
 
-// ObserveRender фиксирует завершение одного прохода [Pipeline.Render]:
-// наблюдает длительность и, при err != nil, инкрементирует счётчик ошибок.
-// nil-получатель — no-op: Pipeline может подниматься без observability
-// (unit-тесты, dev-сборка, герметичный Trial).
+// ObserveRender records the completion of one [Pipeline.Render] pass:
+// observes duration and, if err != nil, increments the error counter.
+// nil receiver is a no-op: Pipeline can come up without observability
+// (unit tests, dev builds, hermetic Trial).
 func (m *RenderMetrics) ObserveRender(dur time.Duration, err error) {
 	if m == nil {
 		return

@@ -1,19 +1,21 @@
 //go:build integration
 
-// 2D serial×passage guard-тесты (ADR-056 §S4 amend, S-2D1). Рестрикт
-// `serial_staged_unsupported` снят: staged-прогон, несущий `serial:`, исполняется
-// Passage-циклом, где dispatchPassage бьёт хосты на serial-волны из задач ИМЕННО
-// ЭТОГО Passage (per-passage width, НЕ per-RUN). Здесь доказывается:
-//   - rolling per-passage (probe — одна волна, serial:1 действие — N волн по 1);
-//   - ★ probe Passage 0 БЕЗ serial едет ОДНОЙ волной даже при serial:1 в Passage 1
-//     (реверс на per-passage width: per-RUN min-width дал бы probe-throttle);
-//   - fail-stop в волне Passage P → следующая волна и Passage P+1 не стартуют;
-//   - register всех волн Passage P собран ДО старта Passage P+1.
+// 2D serial×passage guard tests (ADR-056 §S4 amend, S-2D1). The
+// `serial_staged_unsupported` restriction is lifted: a staged run carrying
+// `serial:` executes through the Passage loop, where dispatchPassage splits
+// hosts into serial waves using only THIS Passage's tasks (per-passage
+// width, NOT per-RUN). Proven here:
+//   - rolling per-passage (probe is one wave, a serial:1 action is N waves of 1);
+//   - ★ probe Passage 0 WITHOUT serial rides in ONE wave even when Passage 1
+//     carries serial:1 (reverses per-RUN min-width, which would throttle the probe);
+//   - fail-stop in a Passage P wave → the next wave and Passage P+1 don't start;
+//   - register from all of Passage P's waves is collected BEFORE Passage P+1 starts.
 //
-// Soul симулируется serialStagedDispatcher-ом тем же контрактом, что stagedDispatcher
-// (per-(apply_id, sid, passage) терминал + per-host register по plan_index), плюс он
-// фиксирует ПОРЯДОК SendApply per-passage — это и есть наблюдаемая последовательность
-// serial-волн (внутри волны SendApply идут подряд, между волнами стоит per-wave barrier).
+// Soul is simulated by serialStagedDispatcher under the same contract as
+// stagedDispatcher (per-(apply_id, sid, passage) terminal + per-host register
+// by plan_index), plus it records the ORDER of SendApply per passage — the
+// observable sequence of serial waves (SendApply calls run back-to-back
+// within a wave, with a per-wave barrier between waves).
 
 package scenario
 
@@ -35,10 +37,11 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// serialStagedServiceRepo — restart-идиома serial+staged: Passage 0 probe role
-// (register: role, БЕЗ serial — реверс-точка), Passage 1 serial:1 действие
-// `where: register.role.stdout == 'slave'` (зависит от probe Passage 0).
-// Stratify → TaskPassage [0,1], Count=2. serial:1 несёт ТОЛЬКО Passage-1 задача.
+// serialStagedServiceRepo — the serial+staged restart idiom: Passage 0 probes
+// role (register: role, NO serial — the reversal point), Passage 1 runs a
+// serial:1 action `where: register.role.stdout == 'slave'` (depends on the
+// Passage 0 probe). Stratify → TaskPassage [0,1], Count=2. Only the
+// Passage-1 task carries serial:1.
 func serialStagedServiceRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -94,18 +97,21 @@ tasks:
 	return "file://" + dir
 }
 
-// serialStagedDispatcher симулирует Soul под serial+staged-прогоном:
-//   - Passage 0 (probe `role`): пишет per-host register `role` (по plan_index, как
-//     Soul эхает в TaskEvent) и терминалит строку passage 0.
-//   - Passage>0: терминалит строку этого Passage.
+// serialStagedDispatcher simulates Soul under a serial+staged run:
+//   - Passage 0 (probe `role`): writes a per-host register `role` (by
+//     plan_index, echoing what Soul puts in TaskEvent) and terminates the
+//     passage-0 row.
+//   - Passage>0: terminates that Passage's row.
 //
-// КЛЮЧЕВОЕ: фиксирует ПОРЯДОК SendApply как []sendEvent{passage, sid}. В serial-пути
-// dispatchWave вызывает SendApply подряд внутри волны, а per-wave barrier стоит
-// МЕЖДУ волнами — поэтому последовательность событий отражает порядок волн Passage.
+// KEY: records the ORDER of SendApply as []sendEvent{passage, sid}. On the
+// serial path, dispatchWave calls SendApply back-to-back within a wave, with
+// a per-wave barrier BETWEEN waves — so the event sequence reflects the
+// Passage wave order.
 //
-// failOn — sid, который завершается FAILED (для fail-stop): волна с этим хостом
-// ломает barrier, следующая волна и следующий Passage НЕ стартуют. register для
-// него не пишется в Passage>0 (действие упало).
+// failOn — the sid that finishes FAILED (for fail-stop testing): the wave
+// containing this host breaks the barrier, so the next wave and the next
+// Passage don't start. No register is written for it on Passage>0 (the
+// action failed).
 type serialStagedDispatcher struct {
 	t         *testing.T
 	roleBySID map[string]string
@@ -156,8 +162,8 @@ func (d *serialStagedDispatcher) SendApply(ctx context.Context, sid string, req 
 	return nil
 }
 
-// passageEvents возвращает SID-ы SendApply ЭТОГО Passage в порядке вызовов (= порядок
-// serial-волн). Для serial:1 это последовательность хостов по одному.
+// passageEvents returns the SIDs of THIS Passage's SendApply calls in call
+// order (= serial wave order). For serial:1 this is a one-host-at-a-time sequence.
 func (d *serialStagedDispatcher) passageEvents(passage int) []string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -170,9 +176,9 @@ func (d *serialStagedDispatcher) passageEvents(passage int) []string {
 	return out
 }
 
-// firstPassageEvent возвращает индекс первого события Passage p в общей
-// последовательности SendApply (-1 если не было). Нужен для ASSERT «Passage P+1
-// стартует строго ПОСЛЕ всех событий Passage P».
+// firstPassageEvent returns the index of Passage p's first event in the
+// overall SendApply sequence (-1 if none). Used to assert "Passage P+1
+// starts strictly AFTER all of Passage P's events."
 func (d *serialStagedDispatcher) firstPassageEvent(passage int) int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -196,16 +202,17 @@ func (d *serialStagedDispatcher) lastPassageEvent(passage int) int {
 	return last
 }
 
-// TestIntegration_SerialStaged_RollingPerPassage — ★ 2D serial×passage (ADR-056
-// §S4 amend). restart-идиома: Passage 0 probe role (ОДНА волна на всех хостах),
-// Passage 1 serial:1 действие where role==slave (N волн по 1 хосту, строго
-// последовательно). ASSERT: порядок волн + терминальность (READY) + Passage 1
-// после полного Passage 0.
+// TestIntegration_SerialStaged_RollingPerPassage — ★ 2D serial×passage
+// (ADR-056 §S4 amend). Restart idiom: Passage 0 probes role (ONE wave across
+// all hosts), Passage 1 runs a serial:1 action where role==slave (N waves of
+// 1 host each, strictly sequential). ASSERT: wave order + terminality
+// (READY) + Passage 1 starts after all of Passage 0.
 //
-// Три хоста, ВСЕ slave → Passage-1 действие таргетит всех троих, serial:1 катит
-// их по одному (3 волны). Если бы рестрикт остался — прогон отвергся бы ДО dispatch
-// (reason serial_staged_unsupported). Если бы per-passage не работал — probe Passage 0
-// поехал бы волнами по 1 (см. ProbeNotThrottled).
+// Three hosts, ALL slave → the Passage-1 action targets all three, serial:1
+// rolls them one at a time (3 waves). If the old restriction were still in
+// place, the run would be rejected before dispatch (reason
+// serial_staged_unsupported). If per-passage didn't work, probe Passage 0
+// would ride in waves of 1 too (see ProbeNotThrottled).
 func TestIntegration_SerialStaged_RollingPerPassage(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -233,17 +240,17 @@ func TestIntegration_SerialStaged_RollingPerPassage(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Оба Passage прошли барьеры (probe-волна + 3 serial-волны действия) → ready.
+	// Both Passages cleared their barriers (probe wave + 3 serial waves of the action) → ready.
 	waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
 
-	// Passage 0 (probe, БЕЗ serial): ОДНА волна — все три хоста (порядок по SID).
+	// Passage 0 (probe, NO serial): ONE wave — all three hosts (ordered by SID).
 	p0 := disp.passageEvents(0)
 	if len(p0) != 3 {
 		t.Fatalf("Passage 0 events = %v, want 3 хоста в одной волне (probe без serial)", p0)
 	}
 
-	// Passage 1 (serial:1): три хоста ПОСЛЕДОВАТЕЛЬНО (3 волны по 1). Порядок по SID
-	// (sortedSIDs + splitWaves(width=1)).
+	// Passage 1 (serial:1): three hosts SEQUENTIALLY (3 waves of 1). Ordered by
+	// SID (sortedSIDs + splitWaves(width=1)).
 	p1 := disp.passageEvents(1)
 	wantP1 := []string{"host-a.example.com", "host-b.example.com", "host-c.example.com"}
 	if len(p1) != 3 {
@@ -255,13 +262,14 @@ func TestIntegration_SerialStaged_RollingPerPassage(t *testing.T) {
 		}
 	}
 
-	// ★ Терминальность + порядок: Passage 1 стартует строго ПОСЛЕ всех событий
-	// Passage 0 (probe-волна полностью прошла барьер до первой serial-волны действия).
+	// ★ Terminality + ordering: Passage 1 starts strictly AFTER all of Passage
+	// 0's events (the probe wave fully cleared its barrier before the
+	// action's first serial wave).
 	if first1, last0 := disp.firstPassageEvent(1), disp.lastPassageEvent(0); first1 <= last0 {
 		t.Fatalf("★ Passage 1 первый SendApply (idx %d) НЕ после последнего события Passage 0 (idx %d) — barrier Passage 0 не дождался полной волны", first1, last0)
 	}
 
-	// apply_runs: у каждого хоста passage 0 + passage 1, все success.
+	// apply_runs: every host has passage 0 + passage 1, all success.
 	got := passagesBySID(t, applyID, applyrun.StatusSuccess)
 	for _, sid := range wantP1 {
 		if len(got[sid]) != 2 {
@@ -270,16 +278,17 @@ func TestIntegration_SerialStaged_RollingPerPassage(t *testing.T) {
 	}
 }
 
-// TestIntegration_SerialStaged_ProbeNotThrottled — ★ РЕВЕРС на per-passage width
-// (ADR-056 §serial, min-width per-Passage). probe Passage 0 БЕЗ serial едет ОДНОЙ
-// волной даже когда Passage 1 несёт serial:1. Если per-RUN min-width вернётся
-// (effectiveSerialWidth по ВСЕМ задачам прогона), probe-волна Passage 0 раздробится
-// на 3 последовательные волны по 1 хосту (silent destructive throttle) → тест падает.
+// TestIntegration_SerialStaged_ProbeNotThrottled — ★ reversal on per-passage
+// width (ADR-056 §serial, min-width per-Passage). Probe Passage 0 without
+// serial rides in ONE wave even when Passage 1 carries serial:1. If per-RUN
+// min-width ever came back (effectiveSerialWidth over ALL of the run's
+// tasks), the Passage 0 probe wave would fragment into 3 sequential waves of
+// 1 host (a silent destructive throttle) → this test would fail.
 //
-// ASSERT: все 3 хоста probe Passage 0 диспатчатся ОДНИМ блоком БЕЗ перемежающихся
-// событий Passage 1 (один barrier на весь probe, не три). Контраст с serial:1
-// действием Passage 1 (3 отдельных волны) доказывает, что throttle применился
-// ТОЛЬКО к Passage 1, а не просочился в Passage 0.
+// ASSERT: all 3 Passage-0 probe hosts dispatch as ONE block with no Passage
+// 1 events interleaved (one barrier for the whole probe, not three).
+// Contrasted with Passage 1's serial:1 action (3 separate waves), this
+// proves the throttle applied ONLY to Passage 1 and didn't leak into Passage 0.
 func TestIntegration_SerialStaged_ProbeNotThrottled(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -309,36 +318,38 @@ func TestIntegration_SerialStaged_ProbeNotThrottled(t *testing.T) {
 
 	waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
 
-	// ★ Probe Passage 0 — ОДНА волна (3 хоста), затем Passage 1. В общей
-	// последовательности SendApply ВСЕ три события Passage 0 идут НЕПРЕРЫВНО ПЕРЕД
-	// первым событием Passage 1: width Passage 0 = 0 (одна волна). Per-RUN min-width
-	// раздробил бы probe на 3 волны по 1 — но даже тогда события Passage 0 были бы
-	// смежны; поэтому решающий ASSERT — что probe ушёл ОДНОЙ волной (один barrier),
-	// что наблюдаемо через splitWaves: при width=0 dispatchWave шлёт все 3 подряд
-	// БЕЗ barrier между ними, при width=1 — barrier (и накопление register) между
-	// каждым. Проверяем это через число serial-волн Passage 0 = 1 (effectiveSerialWidth
-	// на per-passage срезе = 0).
+	// ★ Probe Passage 0 is ONE wave (3 hosts), then Passage 1. In the overall
+	// SendApply sequence, all three Passage 0 events run CONTIGUOUSLY BEFORE
+	// the first Passage 1 event: Passage 0's width = 0 (one wave). Per-RUN
+	// min-width would fragment the probe into 3 waves of 1 — but even then
+	// Passage 0's events would stay adjacent; so the decisive assert is that
+	// the probe went out as ONE wave (one barrier), observable via
+	// splitWaves: at width=0 dispatchWave sends all 3 back-to-back with no
+	// barrier between them, at width=1 there's a barrier (and register
+	// accumulation) between each. We check this via the number of Passage 0
+	// serial waves = 1 (effectiveSerialWidth on the per-passage slice = 0).
 	last0 := disp.lastPassageEvent(0)
 	first1 := disp.firstPassageEvent(1)
 	if first1 <= last0 {
 		t.Fatalf("★ probe Passage 0 (последнее событие idx %d) пересёкся с Passage 1 (первое idx %d) — barrier некорректен", last0, first1)
 	}
 
-	// Решающий реверс-ASSERT: width Passage 0 = 0 проверяется на чистой функции
-	// (TestUnit_EffectiveSerialWidth_PerPassageSlice), а здесь end-to-end доказываем
-	// поведенческое следствие: probe-волна Passage 0 единая. Если бы per-RUN min-width
-	// (=1) применился к Passage 0, dispatchPassage поставил бы per-wave barrier ПОСЛЕ
-	// КАЖДОГО probe-хоста, и register каждого probe-хоста копился бы по-волново —
-	// поведение тождественно serial:1. Мы утверждаем НЕ-throttle: probe Passage 0
-	// едет одной волной (см. dispatchPassage: splitWaves(sids, 0) → одна волна).
-	// Косвенный, но достаточный сигнал — все probe-события смежны и предшествуют
-	// Passage 1 (выше), плюс число хостов Passage 0 = 3 в одной группе.
+	// The decisive reversal assert (width Passage 0 = 0) is checked on a pure
+	// function (TestUnit_EffectiveSerialWidth_PerPassageSlice); here we prove
+	// the end-to-end behavioral consequence: the Passage 0 probe wave is
+	// singular. If per-RUN min-width (=1) applied to Passage 0,
+	// dispatchPassage would place a per-wave barrier AFTER EACH probe host,
+	// accumulating register per wave — behaviorally identical to serial:1. We
+	// assert NO throttle: Passage 0 probe rides one wave (see
+	// dispatchPassage: splitWaves(sids, 0) → one wave). An indirect but
+	// sufficient signal: all probe events are adjacent and precede Passage 1
+	// (above), plus Passage 0's host count = 3 in one group.
 	p0 := disp.passageEvents(0)
 	if len(p0) != 3 {
 		t.Fatalf("★ Passage 0 events = %v, want 3 хоста (probe одной волной, per-passage width=0)", p0)
 	}
 
-	// apply_runs: все хосты passage 0 + passage 1 success.
+	// apply_runs: all hosts have passage 0 + passage 1 success.
 	got := passagesBySID(t, applyID, applyrun.StatusSuccess)
 	for _, sid := range []string{"host-a.example.com", "host-b.example.com", "host-c.example.com"} {
 		if len(got[sid]) != 2 {
@@ -347,11 +358,12 @@ func TestIntegration_SerialStaged_ProbeNotThrottled(t *testing.T) {
 	}
 }
 
-// TestIntegration_SerialStaged_FailStopInWave — ★ FAIL-STOP в serial-волне Passage P
-// (ADR-056 §2.2.1 + §г). Падение хоста в волне Passage 1 → следующая волна НЕ
-// стартует, Passage 2 не достигается (его и нет — N=2), incarnation → ERROR_LOCKED,
-// state НЕ коммитнут (last known-good). Три хоста slave, serial:1 на Passage 1;
-// host-b (вторая волна по SID) падает → host-c (третья волна) НЕ диспатчится.
+// TestIntegration_SerialStaged_FailStopInWave — ★ FAIL-STOP in a Passage P
+// serial wave (ADR-056 §2.2.1 + §g). A host failing in a Passage 1 wave →
+// the next wave doesn't start, Passage 2 is never reached (there is none —
+// N=2), incarnation → ERROR_LOCKED, state is NOT committed (last
+// known-good). Three slave hosts, serial:1 on Passage 1; host-b (second wave
+// by SID) fails → host-c (third wave) is never dispatched.
 func TestIntegration_SerialStaged_FailStopInWave(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -366,10 +378,10 @@ func TestIntegration_SerialStaged_FailStopInWave(t *testing.T) {
 		"host-b.example.com": "slave",
 		"host-c.example.com": "slave",
 	})
-	disp.failOn = "host-b.example.com" // вторая serial-волна Passage 1 падает
+	disp.failOn = "host-b.example.com" // second Passage-1 serial wave fails
 	r := newRunner(t, disp, gitURL)
 
-	// state до прогона — snapshot для проверки «не коммитнут».
+	// state before the run — a snapshot to verify "not committed".
 	incBefore, err := incarnation.SelectByName(context.Background(), integrationPool, "redis-prod")
 	if err != nil {
 		t.Fatalf("SelectByName before: %v", err)
@@ -391,8 +403,8 @@ func TestIntegration_SerialStaged_FailStopInWave(t *testing.T) {
 		t.Errorf("reason = %v, want dispatch_failed (serial-волна fail-stop)", inc.StatusDetails["reason"])
 	}
 
-	// ★ Passage 1: host-a (волна 1) + host-b (волна 2, упал) диспатчены; host-c
-	// (волна 3) НЕ диспатчен — fail-stop остановил rolling.
+	// ★ Passage 1: host-a (wave 1) + host-b (wave 2, failed) dispatched; host-c
+	// (wave 3) was NOT dispatched — fail-stop halted the rolling restart.
 	p1 := disp.passageEvents(1)
 	wantDispatched := []string{"host-a.example.com", "host-b.example.com"}
 	if len(p1) != 2 {
@@ -407,21 +419,23 @@ func TestIntegration_SerialStaged_FailStopInWave(t *testing.T) {
 		t.Fatalf("★ host-c получил Passage-1 ApplyRequest (%v) — следующая волна стартовала после fail-stop", got)
 	}
 
-	// ★ state НЕ коммитнут (last known-good): incarnation.state не изменился.
+	// ★ state NOT committed (last known-good): incarnation.state is unchanged.
 	if len(inc.State) != len(incBefore.State) {
 		t.Errorf("★ state изменён при fail-stop: before=%v after=%v (commit обязан быть пропущен)", incBefore.State, inc.State)
 	}
 }
 
-// TestIntegration_SerialStaged_RegisterAcrossWaves — register всех волн Passage P
-// собран ДО старта Passage P+1 (ADR-056 §в.3 + 2D). probe Passage 0 (register: role)
-// едет одной волной, его register накапливается, и Passage 1 (serial:1, where по
-// register.role) резолвится по ПОЛНОМУ register Passage 0 на каждой волне.
+// TestIntegration_SerialStaged_RegisterAcrossWaves — register from all of
+// Passage P's waves is collected BEFORE Passage P+1 starts (ADR-056 §v.3 +
+// 2D). The Passage 0 probe (register: role) rides one wave, its register
+// accumulates, and Passage 1 (serial:1, where on register.role) resolves
+// against Passage 0's FULL register on every wave.
 //
-// Расклад: host-a master, host-b/host-c slave. Passage 1 where role==slave →
-// таргетит ТОЛЬКО host-b/host-c (master исключён). serial:1 катит двух slave по
-// одному. ASSERT: Passage 1 затаргетил ровно {host-b, host-c} (register.role
-// Passage 0 резолвнулся для ВСЕХ хостов до старта Passage 1), порядок по SID.
+// Setup: host-a master, host-b/host-c slave. Passage 1's where role==slave
+// targets ONLY host-b/host-c (master excluded). serial:1 rolls the two
+// slaves one at a time. ASSERT: Passage 1 targeted exactly {host-b, host-c}
+// (register.role from Passage 0 resolved for ALL hosts before Passage 1
+// started), ordered by SID.
 func TestIntegration_SerialStaged_RegisterAcrossWaves(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -432,7 +446,7 @@ func TestIntegration_SerialStaged_RegisterAcrossWaves(t *testing.T) {
 	gitURL := serialStagedServiceRepo(t)
 
 	disp := newSerialStagedDispatcher(t, map[string]string{
-		"host-a.example.com": "master", // исключён из Passage 1 (where role==slave)
+		"host-a.example.com": "master", // excluded from Passage 1 (where role==slave)
 		"host-b.example.com": "slave",
 		"host-c.example.com": "slave",
 	})
@@ -451,14 +465,15 @@ func TestIntegration_SerialStaged_RegisterAcrossWaves(t *testing.T) {
 
 	waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
 
-	// Passage 0: все три хоста (probe без where).
+	// Passage 0: all three hosts (probe has no where).
 	if p0 := disp.passageEvents(0); len(p0) != 3 {
 		t.Errorf("Passage 0 events = %v, want 3 хоста", p0)
 	}
 
-	// ★ Passage 1: ТОЛЬКО slave-хосты {host-b, host-c}, по одному (serial:1). where:
-	// register.role резолвнулся по register ОБОИХ slave-хостов, собранному волной
-	// Passage 0 — register всех хостов Passage 0 готов ДО Passage 1.
+	// ★ Passage 1: ONLY the slave hosts {host-b, host-c}, one at a time
+	// (serial:1). where: register.role resolved against BOTH slave hosts'
+	// register, collected by the Passage 0 wave — Passage 0's register for
+	// every host is ready BEFORE Passage 1.
 	p1 := disp.passageEvents(1)
 	want := []string{"host-b.example.com", "host-c.example.com"}
 	if len(p1) != 2 {
@@ -473,8 +488,8 @@ func TestIntegration_SerialStaged_RegisterAcrossWaves(t *testing.T) {
 		t.Fatalf("★ host-a (master) получил Passage-1 ApplyRequest (%v) — where role==slave не резолвнулся по register Passage 0", p1)
 	}
 
-	// apply_runs: host-a — только passage 0 (probe; Passage 1 его не таргетил);
-	// host-b/host-c — passage 0 + passage 1.
+	// apply_runs: host-a — only passage 0 (probe; Passage 1 didn't target
+	// it); host-b/host-c — passage 0 + passage 1.
 	got := passagesBySID(t, applyID, applyrun.StatusSuccess)
 	if len(got["host-a.example.com"]) != 1 || got["host-a.example.com"][0] != 0 {
 		t.Errorf("host-a passages = %v, want [0] (master не таргетился Passage 1)", got["host-a.example.com"])
@@ -486,7 +501,7 @@ func TestIntegration_SerialStaged_RegisterAcrossWaves(t *testing.T) {
 	}
 }
 
-// contains — есть ли s в xs (хелпер ассертов «хост НЕ получил ApplyRequest»).
+// contains reports whether s is in xs (helper for "host did NOT receive an ApplyRequest" assertions).
 func contains(xs []string, s string) bool {
 	for _, x := range xs {
 		if x == s {

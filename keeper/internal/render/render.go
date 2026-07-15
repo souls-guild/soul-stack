@@ -1,31 +1,32 @@
-// Package render — Keeper-side render pipeline scenario-runner-а (architect-recon
-// slice .f). Оркестрирует фазы ADR-010 над одним прогоном scenario:
+// Package render — Keeper-side render pipeline for the scenario runner
+// (architect-recon slice .f). Orchestrates ADR-010 phases over one scenario run:
 //
-//	vault-resolve → input-validation → CEL-render → выдача []RenderedTask + []DispatchPlan
+//	vault-resolve → input-validation → CEL-render → produces []RenderedTask + []DispatchPlan
 //
-// text/template-render для `.tmpl`-файлов здесь НЕ выполняется: по ADR-012(d) он
-// делается Soul-side в `core.file.rendered`. Pipeline лишь переносит literal
-// template-content + CEL-rendered vars в params задачи (RawTemplate-поле),
-// фактический text/template-проход — на хосте.
+// text/template-render for `.tmpl` files is NOT done here: per ADR-012(d) it
+// happens Soul-side in `core.file.rendered`. Pipeline only carries literal
+// template-content + CEL-rendered vars into task params (RawTemplate field);
+// the actual text/template pass runs on the host.
 //
-// Pipeline переиспользует pilot-пакеты: vault-resolve через
-// `keeper/internal/vault.Client`, CEL-фазу через `shared/cel.Engine`, резолв
-// хостов (`on:`/`where:`) через roster из `keeper/internal/topology`.
+// Pipeline reuses pilot packages: vault-resolve via
+// `keeper/internal/vault.Client`, the CEL phase via `shared/cel.Engine`, host
+// resolution (`on:`/`where:`) via the roster from `keeper/internal/topology`.
 //
-// Pilot-объём DSL: sequential tasks + per-host fan-out + `apply: destiny`
-// (изолированный render-проход destiny, V2 ADR-009 — destiny рендерится со своим
-// input-scope, задачи вклеиваются в общий план) + `serial:`/`run_once:`
-// (orchestration.md §2.2: run_once режет таргет до первого хоста по SID,
-// serial вычисляет ширину волны в DispatchPlan — волновой dispatch делает
-// scenario-orchestrator). `block:` (C1) и `loop:` (E1) реализованы — разворачиваются
-// в render-фазе в плоский список RenderedTask (renderBlockTask / renderLoopTask).
-// `include:` раскрывается ДО render (config.ExpandIncludes на loader-слое), render
-// получает плоский список; нераскрытый include: → [ErrUnexpandedInclude]. Из исходной
-// тройки вне pilot-объёма остаётся только `parallel:` → [ErrUnsupportedDSL] (явная
-// ошибка, не silent-skip).
+// Pilot DSL scope: sequential tasks + per-host fan-out + `apply: destiny`
+// (isolated destiny render pass, V2 ADR-009 — destiny renders with its own
+// input-scope, tasks merge into the shared plan) + `serial:`/`run_once:`
+// (orchestration.md §2.2: run_once trims the target to the first host by SID,
+// serial computes wave width in DispatchPlan — wave dispatch is done by the
+// scenario-orchestrator). `block:` (C1) and `loop:` (E1) are implemented —
+// expanded in the render phase into a flat RenderedTask list (renderBlockTask /
+// renderLoopTask). `include:` is expanded BEFORE render (config.ExpandIncludes
+// at the loader layer), render gets a flat list; an unexpanded include: →
+// [ErrUnexpandedInclude]. Of the original trio, only `parallel:` remains
+// outside pilot scope → [ErrUnsupportedDSL] (explicit error, not a silent
+// skip).
 //
-// [ADR-010]: docs/adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов
-// [ADR-012]: docs/adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add
+// [ADR-010]: docs/adr/0010-templating.md
+// [ADR-012]: docs/adr/0012-keeper-soul-grpc.md
 package render
 
 import (
@@ -38,99 +39,105 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// ErrUnsupportedDSL — scenario использует DSL-конструкцию вне pilot-объёма
-// (в scenario-слое — `parallel:`). Это не ошибка автора scenario, а граница
-// реализации pilot-а: caller отличает «не поддержано в pilot» от «scenario сломан»
-// (симметрично cel.ErrUnsupported). serial:/run_once: больше сюда НЕ входят — они
-// реализованы (slice D); block: (C1) и loop: (E1) — тоже реализованы и сюда НЕ
-// входят (renderBlockTask / renderLoopTask). include: сюда НЕ входит — он раскрывается до render
-// (config.ExpandIncludes), см. ErrUnexpandedInclude. on: keeper больше сюда НЕ
-// входит — keeper-side задачи рендерятся в keeper-контексте (см. resolveOn /
-// renderKeeperTask).
+// ErrUnsupportedDSL — scenario uses a DSL construct outside pilot scope (in the
+// scenario layer — `parallel:`). Not a scenario-author error but a pilot
+// implementation boundary: the caller distinguishes "unsupported in pilot" from
+// "scenario broken" (symmetric to cel.ErrUnsupported). serial:/run_once: are no
+// longer in scope — implemented (slice D); block: (C1) and loop: (E1) are also
+// implemented and excluded (renderBlockTask / renderLoopTask). include: is
+// excluded — it's expanded before render (config.ExpandIncludes), see
+// ErrUnexpandedInclude. on: keeper is excluded — keeper-side tasks render in
+// the keeper context (see resolveOn / renderKeeperTask).
 var ErrUnsupportedDSL = errors.New("render: DSL-конструкция вне pilot-объёма")
 
-// KeeperTargetSID — синтетический «хост»-таргет keeper-side задачи (`on: keeper`,
-// docs/keeper/modules.md). У keeper-side шага хостов нет: он исполняется на самом
-// keeper-инстансе. Чтобы вписать его в общую модель «один apply_runs-row на
-// (apply_id, sid)» и cross-host barrier (orchestration.md §7), keeper-задача
-// получает единый стабильный target-SID. Совпадает с литералом `on: keeper`
-// (docs/naming-rules.md): apply_runs-строка прогона с sid="keeper" — это
-// keeper-локальное исполнение, не Soul. souls.sid = FQDN, поэтому коллизии с
-// реальным хостом нет (composite PK (apply_id, sid)).
+// KeeperTargetSID — synthetic "host" target for a keeper-side task (`on: keeper`,
+// docs/keeper/modules.md). A keeper-side step has no hosts: it runs on the
+// keeper instance itself. To fit the shared "one apply_runs row per
+// (apply_id, sid)" model and the cross-host barrier (orchestration.md §7), a
+// keeper task gets a single stable target-SID. Matches the `on: keeper` literal
+// (docs/naming-rules.md): an apply_runs row with sid="keeper" is keeper-local
+// execution, not a Soul. souls.sid = FQDN, so there's no collision with a real
+// host (composite PK (apply_id, sid)).
 const KeeperTargetSID = "keeper"
 
-// RunSentinelSID — run-level terminal-маркер для apply_runs, когда scenario-run
-// абортнут ДО dispatch-фазы и реальных хостов нет (BAG-1, ADR-043/027/009).
-// Ранний abort (no_hosts / scenario_load_failed / topology_failed /
-// essence_failed / input_invalid / render_failed / keeper_dispatch_failed) не
-// успевает вставить НИ ОДНОЙ строки apply_runs: dispatch ещё не стартовал.
-// Voyage-awaiter (PgIncarnationAwaiter.pollOutcome) поллит до терминала ВСЕХ
-// строк прогона и при пустом наборе вечно ждёт → Voyage зависает. Чтобы у
-// каждого прогона была гарантированная терминальная строка даже при пустом
-// roster-е, abort-путь вставляет одну sentinel-строку apply_runs с этим SID и
-// status=failed. НЕ путать с [KeeperTargetSID] (`on: keeper`, keeper-side
-// исполнение реальной задачи): RunSentinelSID — НЕ исполнитель, а плейсхолдер
-// «прогон закрыт без единого хоста». Не-FQDN-форма (`__run__`) гарантирует
-// отсутствие коллизии с реальным souls.sid=FQDN (composite PK (apply_id, sid)).
+// RunSentinelSID — run-level terminal marker for apply_runs when a scenario run
+// aborts BEFORE the dispatch phase and there are no real hosts (BAG-1,
+// ADR-043/027/009). An early abort (no_hosts / scenario_load_failed /
+// topology_failed / essence_failed / input_invalid / render_failed /
+// keeper_dispatch_failed) never manages to insert a single apply_runs row:
+// dispatch hasn't started yet. The Voyage awaiter
+// (PgIncarnationAwaiter.pollOutcome) polls until all run rows reach terminal
+// state and waits forever on an empty set → Voyage hangs. To guarantee every
+// run has a terminal row even with an empty roster, the abort path inserts one
+// sentinel apply_runs row with this SID and status=failed. Not to be confused
+// with [KeeperTargetSID] (`on: keeper`, keeper-side execution of a real task):
+// RunSentinelSID is NOT an executor, just a placeholder for "run closed without
+// a single host". The non-FQDN form (`__run__`) guarantees no collision with a
+// real souls.sid=FQDN (composite PK (apply_id, sid)).
 const RunSentinelSID = "__run__"
 
-// ErrUnexpandedInclude — render встретил include-задачу. include раскрывается в
-// плоский список ДО render (config.ExpandIncludes на loader-слое); его наличие
-// здесь — программная ошибка (раскрытие не вызвано), не граница pilot-а. Отдельный
-// sentinel от ErrUnsupportedDSL: include поддержан, просто должен прийти раскрытым.
+// ErrUnexpandedInclude — render encountered an include task. include is
+// expanded into a flat list BEFORE render (config.ExpandIncludes at the loader
+// layer); its presence here is a programming error (expansion wasn't called),
+// not a pilot boundary. A separate sentinel from ErrUnsupportedDSL: include IS
+// supported, it just must arrive already expanded.
 var ErrUnexpandedInclude = errors.New("render: include-задача дошла до render нераскрытой")
 
-// ErrAssertFailed — assert-задача (ADR-009 amendment 2026-06-23) не прошла:
-// хотя бы один предикат `that[]` вычислился в false на render-фазе. Render
-// обрывается ДО dispatch — ни одной задачи на Soul не уходит, прогон не стартует
-// («fail на этапе модели»). Это НЕ баг автора рендера и НЕ граница pilot-а, а
-// объявленная DSL-семантика: caller (scenario.run / trial) отличает провал
-// инварианта от внутренней ошибки и сообщает оператору message + текст предиката.
+// ErrAssertFailed — an assert task (ADR-009 amendment 2026-06-23) failed: at
+// least one `that[]` predicate evaluated to false during the render phase.
+// Render aborts BEFORE dispatch — no task reaches a Soul, the run never starts
+// ("fail at model stage"). Not a render-author bug and not a pilot boundary but
+// declared DSL semantics: the caller (scenario.run / trial) distinguishes an
+// invariant failure from an internal error and reports the operator the
+// message + predicate text.
 var ErrAssertFailed = errors.New("render: assert не прошёл")
 
-// IncarnationMeta — фактологические поля incarnation, доступные в CEL как
-// `incarnation.<path>` ([ADR-010]). Pipeline разворачивает их в map для
-// cel.Vars.Incarnation; host_count подставляется автоматически из числа
-// targeted-хостов (используется в scenario-предикатах вида
-// `size(register.x) < incarnation.host_count`, см. add_user/main.yml).
+// IncarnationMeta — factual incarnation fields available in CEL as
+// `incarnation.<path>` ([ADR-010]). Pipeline expands them into a map for
+// cel.Vars.Incarnation; host_count is auto-filled from the number of targeted
+// hosts (used in scenario predicates like
+// `size(register.x) < incarnation.host_count`, see add_user/main.yml).
 type IncarnationMeta struct {
 	Name           string
 	Service        string
 	ServiceVersion string
 }
 
-// RenderInput — вход одного прогона render pipeline.
+// RenderInput — input for one render pipeline run.
 //
-// Essence — effective-слой essence incarnation (host-инвариантный), доступен в
-// CEL как `essence.<path>` во всех scenario-vars (params/where/when/loop items).
-// В destiny-проходе (renderApplyDestiny) НЕ пробрасывается — destiny видит
-// essence только через apply: input: (изоляция, slice A). Register —
-// register-context от уже выполненных задач (register-name → payload),
-// предоставляется orchestrator-ом (.g) при per-task-рендере; в pilot пуст
-// (cross-task chaining внутри Render — future).
+// Essence — the effective essence layer of the incarnation (host-invariant),
+// available in CEL as `essence.<path>` in all scenario vars (params/where/when/
+// loop items). NOT forwarded in the destiny pass (renderApplyDestiny) — destiny
+// sees essence only via apply: input: (isolation, slice A). Register —
+// register-context from already-executed tasks (register-name → payload),
+// supplied by the orchestrator (.g) during per-task render; empty in pilot
+// (cross-task chaining within Render is future work).
 //
-// RegisterByHost — per-host register-context, накопленный из TaskEvent-ов
-// прогона ПОСЛЕ барьера (sid → register-name → payload). Используется только
-// [Pipeline.RenderStateChanges] (`sets: ${ register.<task>.<поле> }`, слайс 2);
-// фаза Render его не читает (там register — cross-task chaining, future).
-// Пустой/nil — прогон без register: задач (sets без register-ссылок).
+// RegisterByHost — per-host register-context accumulated from the run's
+// TaskEvents AFTER the barrier (sid → register-name → payload). Used only by
+// [Pipeline.RenderStateChanges] (`sets: ${ register.<task>.<field> }`, slice 2);
+// the Render phase doesn't read it (there register is cross-task chaining,
+// future work). Empty/nil — a run with no register: tasks (sets with no
+// register references).
 //
-// Hosts — roster прогона (resolved topology.Resolver-ом): connected-souls
-// incarnation с last-reported soulprint. Pipeline сам применяет per-task
-// `on:`/`where:` поверх этого roster-а (см. dispatch.go).
+// Hosts — the run's roster (resolved by topology.Resolver): connected souls of
+// the incarnation with last-reported soulprint. Pipeline applies per-task
+// `on:`/`where:` over this roster itself (see dispatch.go).
 //
-// Destiny — резолвер destiny для apply:destiny-задач (per-run: несёт destiny[]-
-// refs текущего service-снапшота). nil → apply:destiny → [ErrUnsupportedDSL].
-// В destiny-проходе (renderApplyDestiny) НЕ пробрасывается — destiny не делает
-// вложенный apply:destiny в пилоте (guardDestinyTask его отвергает).
+// Destiny — destiny resolver for apply:destiny tasks (per-run: carries the
+// destiny[] refs of the current service snapshot). nil → apply:destiny →
+// [ErrUnsupportedDSL]. NOT forwarded in the destiny pass (renderApplyDestiny) —
+// destiny doesn't do a nested apply:destiny in the pilot (guardDestinyTask
+// rejects it).
 //
-// Templates — ридер `.tmpl`-файлов снапшота сервиса для шага
-// `core.file.rendered` (двухуровневый резолв scenario-local→service-level,
-// ADR-009). Pipeline читает через него literal-содержимое шаблона и кладёт его в
-// `params.template_content` (text/template здесь НЕ исполняется — это Soul-side).
-// nil → задача core.file.rendered с ссылкой на шаблон → ошибка (handoff не
-// настроен). В destiny-проходе (renderApplyDestiny) подменяется ридером снапшота
-// destiny — её `.tmpl` живут в её собственном снапшоте, не в снапшоте сервиса.
+// Templates — reader for the service snapshot's `.tmpl` files for the
+// `core.file.rendered` step (two-level resolve scenario-local→service-level,
+// ADR-009). Pipeline reads the literal template content through it and puts it
+// into `params.template_content` (text/template is NOT executed here — that's
+// Soul-side). nil → a core.file.rendered task referencing a template → error
+// (handoff not configured). In the destiny pass (renderApplyDestiny), swapped
+// for the destiny snapshot reader — its `.tmpl` files live in its own snapshot,
+// not the service snapshot.
 type RenderInput struct {
 	Scenario       *config.ScenarioManifest
 	Essence        map[string]any
@@ -142,118 +149,127 @@ type RenderInput struct {
 	Destiny        DestinyResolver
 	Templates      TemplateReader
 
-	// State — снимок incarnation.state на момент захвата row-lock прогона
-	// (run.go: stateBefore = inc.State под FOR UPDATE). Read-only: проецируется в
-	// CEL как `incarnation.state.<path>` (incarnationVars), доступен в
-	// params/where/apply-input И в state_changes-контексте; eval НЕ мутирует его
-	// (CEL читает, не пишет — Вариант A, ADR-009/010). ИНВАРИАНТ на все passages
-	// staged-render-а: renderIn переиспользуется на P>0 с тем же State, поэтому
-	// `incarnation.state.*` идентичен на P0 и P1+ (= pre-run stateBefore, НЕ
-	// промежуточный результат state_changes). nil → ключ `state` не объявляется
-	// (push/trial без State: `incarnation.state.x` = no-such-key, backward-compat).
+	// State — snapshot of incarnation.state at the moment the run's row-lock is
+	// acquired (run.go: stateBefore = inc.State under FOR UPDATE). Read-only:
+	// projected into CEL as `incarnation.state.<path>` (incarnationVars),
+	// available in params/where/apply-input AND in the state_changes context;
+	// eval does NOT mutate it (CEL reads, doesn't write — Variant A,
+	// ADR-009/010). INVARIANT across all staged-render passages: renderIn is
+	// reused on P>0 with the same State, so `incarnation.state.*` is identical
+	// on P0 and P1+ (= pre-run stateBefore, NOT an intermediate state_changes
+	// result). nil → the `state` key isn't declared (push/trial without State:
+	// `incarnation.state.x` = no-such-key, backward-compat).
 	State map[string]any
 
-	// Ctx — request-scoped контекст прогона, прокидываемый в CEL-функцию vault()
-	// ([ADR-017]) для отмены/таймаута ReadKV. Устанавливается [Pipeline.Render]
-	// из своего ctx-аргумента и [Pipeline.RenderStateChanges]-caller-ом (run.go);
-	// дочерний destiny-проход (renderApplyDestiny) наследует. nil ⇒ vault()
-	// читает с context.Background() (cel.Vars.Ctx-семантика).
+	// Ctx — request-scoped run context, threaded into the CEL vault() function
+	// ([ADR-017]) for ReadKV cancellation/timeout. Set by [Pipeline.Render] from
+	// its ctx argument and by the [Pipeline.RenderStateChanges] caller (run.go);
+	// inherited by the child destiny pass (renderApplyDestiny). nil ⇒ vault()
+	// reads with context.Background() (cel.Vars.Ctx semantics).
 	Ctx context.Context
 
-	// DestinyVarsResolved — резолвленные destiny-локалы `vars.yml` (Вариант A,
-	// docs/destiny/vars.md), per-host: sid → имя→значение. Заполняется ОДИН раз на
-	// destiny-проход (renderApplyDestiny резолвит vars.yml над destiny-env
-	// input+soulprint.self+incarnation, изолированно от scenario register/essence и
-	// без видимости vars друг друга), затем используется как БАЗОВЫЙ слой `vars.*`
-	// при рендере каждой destiny-задачи (resolveTaskVars мерджит task-level `vars:`
-	// поверх него — task переопределяет одноимённый file-vars). Инвариантен по
-	// задачам прохода (резолвится не per-task). nil/пустой для хоста → база `vars.*`
-	// пуста (scenario-проход: file-vars не участвуют). Ключ — SID хоста;
-	// синтетический пустой хост (where: отфильтровал всех) → ключ "".
+	// DestinyVarsResolved — resolved destiny-local `vars.yml` values (Variant A,
+	// docs/destiny/vars.md), per host: sid → name→value. Filled ONCE per destiny
+	// pass (renderApplyDestiny resolves vars.yml over destiny-env
+	// input+soulprint.self+incarnation, isolated from scenario register/essence
+	// and without visibility between vars), then used as the BASE `vars.*` layer
+	// when rendering each destiny task (resolveTaskVars merges task-level
+	// `vars:` on top — task overrides same-named file-vars). Invariant across
+	// the pass's tasks (resolved not per-task). nil/empty for a host → base
+	// `vars.*` is empty (scenario pass: file-vars don't participate). Key is the
+	// host SID; a synthetic empty host (where: filtered out everyone) → key "".
 	DestinyVarsResolved map[string]map[string]any
 
-	// Compute — резолвленные scenario-level `compute:`-переменные (ADR-009
-	// amendment 2026-06-23): имя→значение, вычисленные ОДИН раз на прогон в
-	// рун-уровневом контексте (input/register/incarnation/essence — БЕЗ soulprint,
-	// структурный барьер host-инвариантности). Заполняется [Pipeline.resolveCompute]
-	// в начале [Pipeline.Render] и [Pipeline.RenderStateOps]; кладётся в каждый
-	// per-host контекст (hostVars) и в state_changes-контекст (stateChangesVars) как
-	// `compute.<name>`. В изолированном destiny-проходе (renderApplyDestiny) НЕ
-	// пробрасывается — destiny видит результат compute только через apply.input
-	// (ADR-009 V2). nil ⇒ `compute.<name>` = штатный no-such-key (scenario без
-	// compute:, backward-compat бит-в-бит).
+	// Compute — resolved scenario-level `compute:` variables (ADR-009 amendment
+	// 2026-06-23): name→value, computed ONCE per run in the run-level context
+	// (input/register/incarnation/essence — WITHOUT soulprint, a structural
+	// host-invariance barrier). Filled by [Pipeline.resolveCompute] at the start
+	// of [Pipeline.Render] and [Pipeline.RenderStateOps]; placed into every
+	// per-host context (hostVars) and into the state_changes context
+	// (stateChangesVars) as `compute.<name>`. NOT forwarded in the isolated
+	// destiny pass (renderApplyDestiny) — destiny sees the compute result only
+	// via apply.input (ADR-009 V2). nil ⇒ `compute.<name>` is a plain
+	// no-such-key (scenario without compute:, bit-for-bit backward-compat).
 	Compute map[string]any
 
-	// destinyIsolated помечает изолированный destiny-проход (renderApplyDestiny).
-	// Неэкспортируемое: внешние caller-ы (scenario-runner, trial) всегда дают
-	// scenario-проход (zero-value false → soulprint.hosts доступен и проецируется
-	// из Hosts). В destiny-проходе renderApplyDestiny ставит true: soulprint.hosts
-	// в destiny — ошибка изоляции (orchestration.md §4.1), проекция не пробрасывается.
+	// destinyIsolated marks the isolated destiny pass (renderApplyDestiny).
+	// Unexported: external callers (scenario-runner, trial) always run a
+	// scenario pass (zero-value false → soulprint.hosts is available and
+	// projected from Hosts). In the destiny pass, renderApplyDestiny sets true:
+	// soulprint.hosts in destiny is an isolation violation (orchestration.md
+	// §4.1), the projection isn't forwarded.
 	destinyIsolated bool
 
-	// TaskPassage — passage-индекс (0-based) каждой top-level задачи плана прогона
-	// (staged-render, ADR-056; результат [Stratify]). Render клеймит им каждую
-	// порождённую [RenderedTask] (и её apply:destiny/loop-потомков) по
-	// originating-задаче — orchestrator (run.go) фильтрует dispatch/barrier по
-	// RenderedTask.Passage. nil → все задачи в Passage 0 (N=1 / не-staged caller:
-	// Trial, Acolyte RenderForHost, CheckDrift) — поведение БИТ-В-БИТ. Длина обязана
-	// совпадать с числом top-level задач после ExpandIncludes (caller гарантирует:
-	// Stratify работает над тем же списком).
+	// TaskPassage — passage index (0-based) of each top-level task in the run
+	// plan (staged-render, ADR-056; result of [Stratify]). Render stamps it onto
+	// every emitted [RenderedTask] (and its apply:destiny/loop descendants) from
+	// the originating task — the orchestrator (run.go) filters dispatch/barrier
+	// by RenderedTask.Passage. nil → all tasks in Passage 0 (N=1 / non-staged
+	// callers: Trial, Acolyte RenderForHost, CheckDrift) — bit-for-bit behavior.
+	// Length must match the number of top-level tasks after ExpandIncludes
+	// (caller guarantees Stratify runs over the same list).
 	TaskPassage []int
 
-	// ActivePassage — индекс Passage, который stage-loop рендерит и диспатчит
-	// СЕЙЧАС (staged-render, ADR-056 §в.1). Задачи будущих Passage (TaskPassage[i] >
-	// ActivePassage) ещё не имеют собранного register — их `where:`/`params:`,
-	// читающие register, НЕ резолвятся: Render эмитит для них placeholder
-	// RenderedTask (корректный Index/Passage, params/таргет не вычислены) только
-	// ради сквозной index-нумерации; orchestrator их в этом Passage не диспатчит
-	// (фильтр по Passage). Когда их Passage станет активным, повторный Render с
-	// накопленным register резолвит их полноценно. nil-TaskPassage → ActivePassage
-	// игнорируется (не-staged: все задачи Passage 0 рендерятся как сейчас, БИТ-В-БИТ).
+	// ActivePassage — the Passage index the stage-loop is rendering and
+	// dispatching RIGHT NOW (staged-render, ADR-056 §c.1). Tasks in future
+	// Passages (TaskPassage[i] > ActivePassage) don't have an accumulated
+	// register yet — their `where:`/`params:` that read register are NOT
+	// resolved: Render emits a placeholder RenderedTask for them (correct
+	// Index/Passage, params/target not computed) purely to keep index numbering
+	// contiguous; the orchestrator doesn't dispatch them in this Passage
+	// (filtered by Passage). Once their Passage becomes active, a repeat Render
+	// with the accumulated register resolves them fully. nil TaskPassage →
+	// ActivePassage is ignored (non-staged: all tasks render in Passage 0 as
+	// before, bit-for-bit).
 	ActivePassage int
 
-	// Sealed — аккумулятор sealed-путей render-прогона (seal / sealed-paths,
-	// [ADR-010] §7.4). Render помечает в нём путь ячейки params, чьё СЫРОЕ
-	// `${ … }`-значение читает secret-источник (secret-input/vault()/транзитивно
-	// vars). Caller (scenario.run) создаёт [NewSealedSet], кладёт сюда и после
-	// Render использует Sealed.Paths() для seal-aware маскинга наблюдаемых каналов
-	// (audit.MaskSecretsSealed). nil ⇒ коллекция выключена (push/trial/Acolyte/
-	// CheckDrift — seal не нужен, поведение БИТ-В-БИТ). Указатель шарится между
-	// passages staged-render-а: пути накапливаются по всем Passage одного прогона.
+	// Sealed — accumulator of sealed paths for the render run (seal /
+	// sealed-paths, [ADR-010] §7.4). Render marks the path of any params cell
+	// whose RAW `${ … }` value reads a secret source (secret-input/vault()/
+	// transitively vars). The caller (scenario.run) creates [NewSealedSet], puts
+	// it here, and after Render uses Sealed.Paths() for seal-aware masking of
+	// observable channels (audit.MaskSecretsSealed). nil ⇒ collection is off
+	// (push/trial/Acolyte/CheckDrift — seal not needed, bit-for-bit behavior).
+	// The pointer is shared across staged-render passages: paths accumulate
+	// across all Passages of one run.
 	Sealed *SealedSet
 
-	// KeeperRegister — плоский register-bucket keeper-side задач ПРЕДЫДУЩИХ Passage
-	// (keeper→keeper register-chaining staged-render, ADR-056). Канал ИЗОЛИРОВАН от
-	// host-register намеренно: keeper-задача активного Passage видит `register.<prev>.*`
-	// keeper-задач прошлых Passage (например core.bootstrap.delivered читает register
-	// от core.cloud.created) — его читает ТОЛЬКО [keeperVars]. Host-задачи через него
-	// register НЕ получают: host-fallback ([hostRegister]) остаётся на плоской
-	// [RenderInput.Register], чтобы host случайно не прочитал keeper-register при
-	// пустом per-host bucket в смешанном Passage. stage-loop (run.go) переливает сюда
-	// keeperRegisterBucket(RegisterByHost) перед per-passage render-ом активного Passage.
-	// nil/пусто (P0, N=1, не-staged, host-only Passage) → keeperVars деградирует к
-	// плоской Register (backward-compat: trial/push/прочие, выставляющие только
-	// Register, видят register тем же путём, БИТ-В-БИТ).
+	// KeeperRegister — flat register bucket for keeper-side tasks of PREVIOUS
+	// Passages (keeper→keeper register-chaining, staged-render, ADR-056).
+	// Deliberately ISOLATED from host-register: a keeper task in the active
+	// Passage sees `register.<prev>.*` of keeper tasks from past Passages (e.g.
+	// core.bootstrap.delivered reads register from core.cloud.created) — read
+	// ONLY by [keeperVars]. Host tasks don't get register through it: the
+	// host-fallback ([hostRegister]) stays on the flat [RenderInput.Register] so
+	// a host doesn't accidentally read keeper-register when its per-host bucket
+	// is empty in a mixed Passage. The stage-loop (run.go) pours
+	// keeperRegisterBucket(RegisterByHost) in here before per-passage render of
+	// the active Passage. nil/empty (P0, N=1, non-staged, host-only Passage) →
+	// keeperVars degrades to the flat Register (backward-compat: trial/push/
+	// others that only set Register see register the same way, bit-for-bit).
 	KeeperRegister map[string]any
 }
 
-// RenderedTask — задача после Keeper-side CEL-рендера, промежуточное
-// представление перед сборкой `proto/keeper/v1.ApplyRequest`.
+// RenderedTask — a task after the Keeper-side CEL render, an intermediate
+// representation before assembling `proto/keeper/v1.ApplyRequest`.
 //
-// Отличие от proto-типа `keeperv1.RenderedTask`: тут есть Index (позиция в
-// scenario.tasks[], связывает с DispatchPlan и TaskEvent.task_idx) и Register
-// (имя register-результата для chaining-а), которых нет в wire-контракте —
-// orchestrator (.g) использует их при per-host-диспатче и не кладёт в proto.
+// Differs from the proto type `keeperv1.RenderedTask`: this one has Index
+// (position in scenario.tasks[], links to DispatchPlan and TaskEvent.task_idx)
+// and Register (register-result name for chaining), which aren't in the wire
+// contract — the orchestrator (.g) uses them for per-host dispatch and doesn't
+// put them in proto.
 //
-// Params — CEL-rendered, уже в форме `*structpb.Struct` (прямая стыковка с
-// proto). Для шага `core.file.rendered` params несут literal `template_content`
-// (содержимое прочитанного `.tmpl`, A1-вариант ADR-012(d): без proto-изменений),
-// ключ `template` (путь) из params удалён — Soul-у он не нужен.
+// Params — CEL-rendered, already in `*structpb.Struct` form (direct fit for
+// proto). For the `core.file.rendered` step, params carry the literal
+// `template_content` (the read `.tmpl` content, ADR-012(d) variant A1: no proto
+// changes); the `template` key (path) is removed from params — the Soul
+// doesn't need it.
 //
-// RawTemplate — literal-содержимое `.tmpl` для `core.file.rendered` после
-// CEL-фазы, до text/template-прохода (Soul-side); "" для прочих модулей. Дублирует
-// `params.template_content` как типизированное поле для orchestrator-/диагностики;
-// authoritative для wire — именно `params.template_content` (A1).
+// RawTemplate — literal `.tmpl` content for `core.file.rendered` after the CEL
+// phase, before the text/template pass (Soul-side); "" for other modules.
+// Duplicates `params.template_content` as a typed field for
+// orchestrator/diagnostics; the wire authority is `params.template_content`
+// (A1).
 type RenderedTask struct {
 	Index    int
 	Name     string
@@ -261,168 +277,178 @@ type RenderedTask struct {
 	Params   *structpb.Struct
 	Register string
 
-	// Passage — passage-индекс (0-based) staged-render (ADR-056), унаследованный
-	// от originating top-level задачи через RenderInput.TaskPassage. orchestrator
-	// (run.go stage-loop) диспатчит и барьерит задачи строго по Passage:
-	// ApplyRequest несёт только задачи одного Passage, его barrier ждёт терминалы
-	// строк (apply_id, sid, passage=N). 0 = единственный Passage (N=1 / не-staged)
-	// — БИТ-В-БИТ как до staged-render. apply:destiny/loop-потомки наследуют
-	// Passage родителя (block — атомарная единица Passage, ADR-056).
+	// Passage — passage index (0-based) for staged-render (ADR-056), inherited
+	// from the originating top-level task via RenderInput.TaskPassage. The
+	// orchestrator (run.go stage-loop) dispatches and barriers tasks strictly by
+	// Passage: an ApplyRequest carries only tasks of one Passage, its barrier
+	// waits for terminal rows (apply_id, sid, passage=N). 0 = the only Passage
+	// (N=1 / non-staged) — bit-for-bit as before staged-render.
+	// apply:destiny/loop descendants inherit the parent's Passage (block is an
+	// atomic Passage unit, ADR-056).
 	Passage int
-	// ID — стабильный адрес задачи из DSL-ядра `id:` (config.Task.ID, T1):
-	// альтернатива register для адресации задачи без захвата register-результата
-	// (register∪id, T1 запрещает оба сразу). Orchestrator-only, как Index — в
-	// wire-контракт (keeperv1.RenderedTask) НЕ идёт: Soul адресует задачи по
-	// task_idx, id нужен только Keeper-side свёртке per-task-итога (changed_tasks,
-	// T3). Протягивается из config.Task.ID наравне с Register.
+	// ID — stable task address from the DSL core `id:` (config.Task.ID, T1): an
+	// alternative to register for addressing a task without capturing a
+	// register result (register∪id, T1 forbids both at once). Orchestrator-only,
+	// like Index — NOT part of the wire contract (keeperv1.RenderedTask): Soul
+	// addresses tasks by task_idx, id is only needed for the Keeper-side
+	// per-task result fold (changed_tasks, T3). Threaded from config.Task.ID
+	// alongside Register.
 	ID    string
 	NoLog bool
-	// Timeout — per-task жёсткий лимит на одну попытку Apply (DSL-ядро timeout:,
-	// destiny/tasks.md §9), convention `duration` Soul Stack (Go-duration "30s"
-	// ИЛИ суффикс `<N>d`); "" = нет per-task лимита. Формат валидируется при
-	// ПАРСЕ destiny/scenario (config-валидатор); render только протягивает
-	// config.Task.Timeout в proto keeperv1.RenderedTask.Timeout без изменения
-	// формы и без повторной проверки (string-консистентность с Task.Timeout/RetrySpec.Delay).
+	// Timeout — per-task hard limit for one Apply attempt (DSL core timeout:,
+	// destiny/tasks.md §9), Soul Stack `duration` convention (Go duration "30s"
+	// OR `<N>d` suffix); "" = no per-task limit. Format is validated at
+	// destiny/scenario PARSE time (config validator); render only threads
+	// config.Task.Timeout into proto keeperv1.RenderedTask.Timeout unchanged and
+	// unvalidated (string-consistent with Task.Timeout/RetrySpec.Delay).
 	Timeout     string
 	RawTemplate string
 
-	// When/ChangedWhen/FailedWhen — flow-control CEL-предикаты (ADR-012(d)),
-	// протягиваются КАК CEL-СТРОКИ (не вычисляются Keeper-ом): они зависят от
-	// register.* — результатов предыдущих задач, известных только Soul-у во время
-	// прогона. Soul вычисляет их sandboxed-движком shared/cel.NewFlowControl.
-	// When — gating ДО Apply (пусто = безусловно); ChangedWhen/FailedWhen —
-	// override changed/failed ПОСЛЕ Apply (Soul вычисляет в applyrunner.runTask).
-	// Источник — config.Task.When/ChangedWhen/FailedWhen (CEL-строки как есть из
-	// распарсенного task). → proto keeperv1.RenderedTask.
+	// When/ChangedWhen/FailedWhen — flow-control CEL predicates (ADR-012(d)),
+	// threaded through AS CEL STRINGS (not evaluated by Keeper): they depend on
+	// register.* — results of previous tasks, known only to the Soul during the
+	// run. Soul evaluates them with the sandboxed shared/cel.NewFlowControl
+	// engine. When gates BEFORE Apply (empty = unconditional); ChangedWhen/
+	// FailedWhen override changed/failed AFTER Apply (Soul evaluates in
+	// applyrunner.runTask). Source — config.Task.When/ChangedWhen/FailedWhen (CEL
+	// strings as-is from the parsed task). → proto keeperv1.RenderedTask.
 	When        string
 	ChangedWhen string
 	FailedWhen  string
 
-	// Until/RetryCount/RetryDelay — DSL-ядро retry: (destiny/tasks.md §9),
-	// протягиваются Keeper-ом КАК ЕСТЬ — энфорс retry-петли Soul-side
-	// (applyrunner.runTaskWithRetry). Until — CEL-предикат выхода из петли
-	// (тот же sandboxed-движок, что failed_when; вычисляется на Soul после каждой
-	// попытки). RetryCount — максимум попыток включая первую (0/1 = одна попытка).
-	// RetryDelay — пауза между попытками, convention `duration` (string как
-	// Timeout, без повторной проверки — формат провалидирован validateRetryField
-	// при парсе). Источник — config.Task.Retry (nil → все zero-value = одна попытка).
+	// Until/RetryCount/RetryDelay — DSL core retry: (destiny/tasks.md §9),
+	// threaded through by Keeper AS-IS — the retry loop is enforced Soul-side
+	// (applyrunner.runTaskWithRetry). Until — CEL predicate for exiting the loop
+	// (same sandboxed engine as failed_when; evaluated on the Soul after each
+	// attempt). RetryCount — max attempts including the first (0/1 = one
+	// attempt). RetryDelay — pause between attempts, `duration` convention
+	// (string like Timeout, not revalidated — format validated by
+	// validateRetryField at parse time). Source — config.Task.Retry (nil → all
+	// zero-value = one attempt).
 	Until      string
 	RetryCount int
 	RetryDelay string
 
-	// FlowContext — литеральный per-host снапшот НЕ-register части CEL-контекста
-	// flow-control-предикатов: { input, vars, essence, incarnation, self }. То же,
-	// что строится для рендера params (hostVars), МИНУС soulprint.hosts и loop. Soul
-	// читает его как ДАННЫЕ (биндит soulprint.self ← flow_context.self), внешнего
-	// доступа не делает. Host-вариативен (self per-host) — исключён из per-host-
-	// сверки host-инвариантности params (см. paramsHostInvariant). → proto
-	// keeperv1.RenderedTask.FlowContext.
+	// FlowContext — a literal per-host snapshot of the non-register part of the
+	// flow-control predicates' CEL context: { input, vars, essence, incarnation,
+	// self }. Same as what's built for rendering params (hostVars), MINUS
+	// soulprint.hosts and loop. Soul reads it as DATA (binds soulprint.self ←
+	// flow_context.self), doesn't do external lookups. Host-variant (self
+	// per-host) — excluded from the per-host params host-invariance check (see
+	// paramsHostInvariant). → proto keeperv1.RenderedTask.FlowContext.
 	FlowContext *structpb.Struct
 
-	// OnChangesIdx — индексы задач-источников DSL-ядра `onchanges:`
-	// (destiny/tasks.md §8) после резолва register-имён в Index по всему плану
-	// прогона (resolveOnChanges, Variant A). nil/пусто = безусловный запуск;
-	// иначе задача исполняется на Soul-е только если хотя бы у одного источника
-	// register.changed == true. config.Task.OnChanges (имена) → этот slice
-	// (индексы) → proto keeperv1.RenderedTask.OnchangesIdx.
+	// OnChangesIdx — indices of source tasks for the DSL core `onchanges:`
+	// (destiny/tasks.md §8) after resolving register names to Index across the
+	// whole run plan (resolveOnChanges, Variant A). nil/empty = unconditional
+	// run; otherwise the task executes on the Soul only if at least one source
+	// has register.changed == true. config.Task.OnChanges (names) → this slice
+	// (indices) → proto keeperv1.RenderedTask.OnchangesIdx.
 	OnChangesIdx []int
 
-	// onChangesNames — register-имена `onchanges:` исходной задачи, протянутые
-	// renderTaskIter до финального резолв-прохода [Pipeline.Render] →
-	// resolveOnChanges. Неэкспортируемое: имена живут только внутри одного
-	// прогона render до превращения в OnChangesIdx; orchestrator/dispatch видят
-	// только индексы (wire-форма). После resolveOnChanges не используется.
+	// onChangesNames — register names of the source task's `onchanges:`,
+	// threaded by renderTaskIter through to the final resolve pass
+	// [Pipeline.Render] → resolveOnChanges. Unexported: names live only within
+	// one render run before turning into OnChangesIdx; orchestrator/dispatch
+	// only see indices (wire form). Unused after resolveOnChanges.
 	onChangesNames []string
 
-	// OnFailIdx — индексы задач-источников DSL-ядра `onfail:` (destiny/tasks.md §8)
-	// после резолва register-имён в Index по всему плану прогона (resolveOnFail,
-	// Variant A — зеркало OnChangesIdx). nil/пусто = не-onfail-задача (gating не
-	// применяется); иначе задача исполняется на Soul-е только если хотя бы у одного
-	// источника register.failed == true (rescue-семантика). config.Task.OnFail
-	// (имена) → этот slice (индексы) → proto keeperv1.RenderedTask.OnfailIdx.
+	// OnFailIdx — indices of source tasks for the DSL core `onfail:`
+	// (destiny/tasks.md §8) after resolving register names to Index across the
+	// whole run plan (resolveOnFail, Variant A — mirrors OnChangesIdx). nil/empty
+	// = not an onfail task (no gating applied); otherwise the task executes on
+	// the Soul only if at least one source has register.failed == true (rescue
+	// semantics). config.Task.OnFail (names) → this slice (indices) → proto
+	// keeperv1.RenderedTask.OnfailIdx.
 	OnFailIdx []int
 
-	// onFailNames — register-имена `onfail:` исходной задачи, зеркало
-	// onChangesNames: протягиваются renderTaskIter до резолв-прохода
-	// resolveOnFail, после превращения в OnFailIdx не используются.
+	// onFailNames — register names of the source task's `onfail:`, mirrors
+	// onChangesNames: threaded by renderTaskIter through to the resolveOnFail
+	// pass, unused after turning into OnFailIdx.
 	onFailNames []string
 
-	// AggregateOf — ГЛОБАЛЬНЫЕ сквозные Index ВСЕХ дочерних destiny-задач одной
-	// applier-задачи (`apply:`+`register:`), сводный итог которой несёт ЭТА
-	// синтетическая терминальная `core.noop.run` (orchestration.md §2.1.1,
-	// материализация applier-register, Вариант B). Эмитится renderApplyDestiny ПОСЛЕ
-	// дочерних задач, только если у applier был непустой register: Register этой
-	// задачи = register applier-а, поэтому внешний `onchanges:[<applier>]` /
-	// `when: register.<applier>.changed` резолвится в её Index (registerIndex
-	// подхватывает автоматически — onchanges.go не трогается).
+	// AggregateOf — GLOBAL cross-cutting Index of ALL child destiny tasks of one
+	// applier task (`apply:`+`register:`), whose rolled-up result THIS synthetic
+	// terminal `core.noop.run` carries (orchestration.md §2.1.1, applier-register
+	// materialization, Variant B). Emitted by renderApplyDestiny AFTER the child
+	// tasks, only if the applier had a non-empty register: this task's Register
+	// = the applier's register, so an external `onchanges:[<applier>]` /
+	// `when: register.<applier>.changed` resolves to its Index (registerIndex
+	// picks it up automatically — onchanges.go isn't touched).
 	//
-	// Soul (applyrunner.aggregateRegisterData) строит register_data этой
-	// задачи НЕ из её ApplyEvent (noop тривиально changed=false), а как
-	// `changed=OR(registerByIdx[i].changed)`, аналогично failed/timed_out по этим
-	// индексам. Index'ы РЕМАПЯТСЯ global→local при сборке proto (ToProtoTasks/
-	// remapRequisites), как OnChangesIdx — они адресуют локальную позицию в срезе
-	// ApplyRequest.tasks[]. nil/пусто = задача не агрегирует. → proto
-	// keeperv1.RenderedTask.AggregateOf. Хранятся как []int (global Index, зеркало
-	// OnChangesIdx) — remapRequisites переводит в []int32-local при сборке proto.
+	// Soul (applyrunner.aggregateRegisterData) builds this task's register_data
+	// NOT from its own ApplyEvent (noop trivially changed=false) but as
+	// `changed=OR(registerByIdx[i].changed)`, likewise failed/timed_out over
+	// these indices. Indices are REMAPPED global→local when assembling proto
+	// (ToProtoTasks/remapRequisites), like OnChangesIdx — they address the local
+	// position in the ApplyRequest.tasks[] slice. nil/empty = task doesn't
+	// aggregate. → proto keeperv1.RenderedTask.AggregateOf. Stored as []int
+	// (global Index, mirrors OnChangesIdx) — remapRequisites converts to
+	// []int32-local when assembling proto.
 	AggregateOf []int
 
-	// RenderContextBySID — per-host вариант params.render_context для self-
-	// вариативной задачи core.file.rendered: SID хоста → его собранный
-	// render_context (buildRenderContext, templating.md §3.2). Заполняется ТОЛЬКО
-	// для core.file.rendered и ТОЛЬКО когда render_context реально различается
-	// между таргет-хостами (self per-host, например `{{ .self.network.primary_ip }}`).
+	// RenderContextBySID — per-host variant of params.render_context for a
+	// self-variant core.file.rendered task: host SID → its assembled
+	// render_context (buildRenderContext, templating.md §3.2). Filled ONLY for
+	// core.file.rendered and ONLY when render_context actually differs between
+	// target hosts (self per-host, e.g. `{{ .self.network.primary_ip }}`).
 	//
-	// Зачем поле, а не один render_context в Params: per-host цикл renderTaskIter
-	// собирает корректный render_context каждого хоста, но в Params едет лишь
-	// первый по SID (golden-path / N=1 бит-в-бит). Один `*RenderedTask` (указатель)
-	// диспатчится КАЖДОМУ хосту (groupByHost/dispatchWave, claim Acolyte), поэтому
-	// без per-host материализации все хосты получили бы render_context первого —
-	// self-вариативный шаблон тихо рендерился бы фактами первого хоста (CORE-баг).
+	// Why a separate field instead of one render_context in Params: the
+	// per-host renderTaskIter loop builds the correct render_context for each
+	// host, but only the first by SID goes into Params (golden-path / N=1
+	// bit-for-bit). One `*RenderedTask` (pointer) is dispatched to EVERY host
+	// (groupByHost/dispatchWave, claim Acolyte), so without per-host
+	// materialization every host would get the first host's render_context — a
+	// self-variant template would silently render with the first host's facts
+	// (CORE bug).
 	//
-	// ToProtoTasksForHost(tasks, sid) при сборке ApplyRequest для конкретного SID
-	// подставляет его вариант поверх Params (overlay одного ключа render_context).
-	// nil / пустой map / отсутствие SID-ключа → берётся render_context из Params
-	// (golden-path). ПРОЧИЕ params остаются под host-инвариантной сверкой
-	// (paramsHostInvariant) — fail-closed для обычных host-вариативных params цел.
+	// ToProtoTasksForHost(tasks, sid), when assembling the ApplyRequest for a
+	// specific SID, overlays its variant on top of Params (single-key overlay of
+	// render_context). nil / empty map / missing SID key → render_context comes
+	// from Params (golden-path). ALL OTHER params stay under the host-invariance
+	// check (paramsHostInvariant) — fail-closed for ordinary host-variant params
+	// targets.
 	//
-	// Частичное закрытие open Q №25 (ТОЛЬКО render_context.self); полный per-host
-	// dispatch произвольных params (Вариант B) отложен под отдельный ADR.
+	// Partial closure of open Q #25 (render_context.self ONLY); full per-host
+	// dispatch of arbitrary params (Variant B) is deferred to a separate ADR.
 	RenderContextBySID map[string]*structpb.Struct
 }
 
-// RenderedOp — одна операция `state_changes` после Keeper-side CEL-рендера
-// (значение/ключ/match уже вычислены, cross-host last-wins-свёртка применена).
-// Упорядоченный список этих операций возвращает [Pipeline.RenderStateOps];
-// применяет их к incarnation.state — scenario.mergeStateChanges / trial-зеркало
-// (orchestration.md §7, новая list-форма грамматики state_changes).
+// RenderedOp — one `state_changes` operation after the Keeper-side CEL render
+// (value/key/match already computed, cross-host last-wins fold applied). An
+// ordered list of these operations is returned by [Pipeline.RenderStateOps];
+// scenario.mergeStateChanges / the trial mirror apply them to incarnation.state
+// (orchestration.md §7, the new list-form state_changes grammar).
 //
-// Verb различает применение:
-//   - VerbSet — перезапись Field значением Value;
-//   - VerbAdd — идемпотентное добавление Value в коллекцию Field (map: по Key;
-//     list: дедуп по Match-предикату). OnConflict (skip|replace|error) — политика
-//     при совпадении идентичности;
-//   - VerbModify — патч ВСЕХ элементов Field, подходящих под Match. Patch —
-//     map путь-в-элементе → CEL/литерал, протягивается КАК ШАБЛОН (не вычислен):
-//     merge вычисляет его per-matched-элемент через [StateOpEvalFunc] (биндинги
-//     elem/key/value + scenario-контекст Context);
-//   - VerbRemove — удалить ВСЕ элементы Field, подходящие под Match.
+// Verb distinguishes how it applies:
+//   - VerbSet — overwrite Field with Value;
+//   - VerbAdd — idempotently add Value into the Field collection (map: by Key;
+//     list: dedup by the Match predicate). OnConflict (skip|replace|error) —
+//     policy for an identity collision;
+//   - VerbModify — patch ALL elements of Field matching Match. Patch — a map of
+//     path-in-element → CEL/literal, threaded through AS A TEMPLATE (not
+//     evaluated): merge computes it per matched element via [StateOpEvalFunc]
+//     (elem/key/value bindings + the scenario Context);
+//   - VerbRemove — delete ALL elements of Field matching Match.
 //
-// foreach в RenderedOp не попадает — он раскрыт в render-фазе в N RenderedOp
-// (по элементам коллекции, биндинг as-имени уже подставлен в Value/Patch/Match).
+// foreach never reaches RenderedOp — it's expanded in the render phase into N
+// RenderedOp (per collection element, with the as-name binding already
+// substituted into Value/Patch/Match).
 //
-// Match/Patch протягиваются КАК СТРОКА/ШАБЛОН: merge вычисляет их per-element
-// (Keeper заранее не вычисляет — зависят от каждого элемента state). Value (а
-// для map — Key) уже cross-host-свёрнуты last-wins по SID.
+// Match/Patch are threaded through AS A STRING/TEMPLATE: merge evaluates them
+// per element (Keeper doesn't evaluate them ahead of time — they depend on each
+// state element). Value (and, for map, Key) are already cross-host folded
+// last-wins by SID.
 //
-// Context — per-RUN снимок scenario-контекста (input/register/incarnation/
-// soulprint.self/essence/vars), last-wins по SID (output.md). Нужен merge-time
-// для вычисления modify-Match/Patch и remove-Match, которые видят полный
-// sets-контекст поверх биндингов элемента (ADR-057 §b). Для set/add — nil
-// (их Value/Key уже вычислены на render-стороне; add-Match — чистая функция
-// elem+value, см. [StateMatchFunc]).
+// Context — a per-RUN snapshot of the scenario context (input/register/
+// incarnation/soulprint.self/essence/vars), last-wins by SID (output.md).
+// Needed at merge time to evaluate modify-Match/Patch and remove-Match, which
+// see the full sets context on top of the element bindings (ADR-057 §b). nil
+// for set/add (their Value/Key are already computed render-side; add-Match is a
+// pure function of elem+value, see [StateMatchFunc]).
 //
-// Expect — опц. ассерт кратности match для modify/remove (ADR-057 §c). ""/any —
-// без ассерта.
+// Expect — optional match-cardinality assert for modify/remove (ADR-057 §c).
+// ""/any = no assert.
 type RenderedOp struct {
 	Verb       config.StateVerb
 	Field      string
@@ -436,46 +462,47 @@ type RenderedOp struct {
 	Context map[string]any
 }
 
-// StateMatchFunc — вычислитель match-предиката идентичности list-элемента add-
-// операции (см. [Pipeline.EvalStateMatch]). Передаётся в merge (scenario/trial),
-// чтобы тот не держал собственный cel.Engine: предикат `elem.sid == value.sid`
-// вычисляется per-existing-элемент против биндингов elem (существующий) / value
-// (добавляемый). Возврат — bool «идентичны».
+// StateMatchFunc — evaluator for the identity match predicate of a list
+// element in an add operation (see [Pipeline.EvalStateMatch]). Passed into
+// merge (scenario/trial) so it doesn't hold its own cel.Engine: the predicate
+// `elem.sid == value.sid` is evaluated per existing element against elem
+// (existing) / value (being added) bindings. Returns a bool "are identical".
 type StateMatchFunc func(predicate string, elem, value any) (bool, error)
 
-// StateOpEvalFunc — вычислитель CEL для modify/remove merge-time (см.
-// [Pipeline.EvalStateOpExpr]). В отличие от [StateMatchFunc] (изолированный
-// elem/value для add-дедупа), здесь предикат/значение видит ПОЛНЫЙ scenario-
-// контекст прогона (ctx — снимок input/register/incarnation/soulprint.self/
-// essence/vars) ПЛЮС биндинги текущего элемента коллекции (binds — elem/key/
-// value). Используется per-matched-элемент: match-предикат → bool (boolOut=true),
-// patch-значение → any (boolOut=false). Так modify-match `key == input.username`
-// видит и key (элемент), и input.* (контекст).
+// StateOpEvalFunc — CEL evaluator for modify/remove at merge time (see
+// [Pipeline.EvalStateOpExpr]). Unlike [StateMatchFunc] (isolated elem/value for
+// add dedup), here the predicate/value sees the FULL run-scenario context (ctx
+// — a snapshot of input/register/incarnation/soulprint.self/essence/vars) PLUS
+// the current collection element's bindings (binds — elem/key/value). Used per
+// matched element: match predicate → bool (boolOut=true), patch value → any
+// (boolOut=false). This way a modify-match `key == input.username` sees both
+// key (the element) and input.* (the context).
 type StateOpEvalFunc func(expr string, ctx, binds map[string]any, boolOut bool) (any, error)
 
-// DispatchPlan — на какие хосты идёт задача после резолва `on:`+`where:`.
-// TaskIndex ссылается на RenderedTask.Index. TargetSIDs — отсортированный по
-// SID slice (детерминизм прогона, scenario/orchestration.md). Пустой TargetSIDs
-// — задача не таргетит ни одного хоста (where: отфильтровал всех); это не
-// ошибка, orchestrator пропускает такую задачу.
+// DispatchPlan — which hosts a task targets after resolving `on:`+`where:`.
+// TaskIndex refers to RenderedTask.Index. TargetSIDs — a slice sorted by SID
+// (run determinism, scenario/orchestration.md). Empty TargetSIDs — the task
+// targets no hosts (where: filtered out everyone); not an error, the
+// orchestrator skips such a task.
 //
-// SerialWidth — ширина волны `serial:` (orchestration.md §2.2.1): число хостов в
-// волне (≤N), уже вычисленное из `serial: N | "<N>%"` против числа таргетов
-// (процент — округление вверх, минимум 1). 0 = `serial:` не задан (вся ширина
-// таргета в одной волне). RunOnce уже применён к TargetSIDs (срез до одного
-// хоста, см. resolveTargets), поэтому отдельного флага run_once: в плане нет —
-// он выражается единичным TargetSIDs. serial: и run_once: взаимоисключающи
-// (config-валидатор), поэтому SerialWidth>0 и len(TargetSIDs)==1-от-run_once не
-// пересекаются.
+// SerialWidth — the `serial:` wave width (orchestration.md §2.2.1): number of
+// hosts per wave (≤N), already computed from `serial: N | "<N>%"` against the
+// target count (percent rounds up, minimum 1). 0 = `serial:` not set (whole
+// target width in one wave). RunOnce is already applied to TargetSIDs (trimmed
+// to one host, see resolveTargets), so there's no separate run_once: flag in
+// the plan — it's expressed as a single-element TargetSIDs. serial: and
+// run_once: are mutually exclusive (config validator), so SerialWidth>0 and
+// len(TargetSIDs)==1-from-run_once never overlap.
 type DispatchPlan struct {
 	TaskIndex   int
 	TargetSIDs  []string
 	SerialWidth int
 
-	// Keeper помечает keeper-side задачу (`on: keeper`, docs/keeper/modules.md):
-	// исполняется ЛОКАЛЬНО на keeper-инстансе через keeper-side core-Registry, НЕ
-	// диспатчится Soul-у. TargetSIDs у такого плана = [KeeperTargetSID] (единичный
-	// синтетический target — keeper-инстанс). scenario-runner ветвит исполнение по
-	// этому флагу (run.go::dispatchKeeperTasks). false → обычная Soul-side задача.
+	// Keeper marks a keeper-side task (`on: keeper`, docs/keeper/modules.md):
+	// executed LOCALLY on the keeper instance via the keeper-side core Registry,
+	// NOT dispatched to a Soul. TargetSIDs for such a plan = [KeeperTargetSID]
+	// (single synthetic target — the keeper instance). scenario-runner branches
+	// execution on this flag (run.go::dispatchKeeperTasks). false → ordinary
+	// Soul-side task.
 	Keeper bool
 }

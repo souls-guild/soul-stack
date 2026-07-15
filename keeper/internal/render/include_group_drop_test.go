@@ -8,20 +8,20 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// Conditional-include group-drop (ADR-009 amendment): задачи, раскрытые из include
-// под статическим `when:`, несут carry-through Task.IncludeWhen/IncludeGroupID
-// (проставляет config.ExpandIncludes). Render вычисляет include-when ОДИН раз на
-// группу и при false дропает ВСЕ её задачи РЕАЛЬНО — без эмита RenderedTask и без
-// idx++ (индекс не резервируется). Это отличается от static-when placeholder-skip
-// (emitStaticWhenSkip эмитит placeholder с idx++); дискриминатор — IncludeGroupID.
+// Conditional-include group-drop (ADR-009 amendment): tasks expanded from an include
+// under a static `when:` carry through Task.IncludeWhen/IncludeGroupID
+// (set by config.ExpandIncludes). Render evaluates include-when ONCE per
+// group and on false drops ALL its tasks FOR REAL — no RenderedTask emitted and no
+// idx++ (the index isn't reserved). This differs from static-when placeholder-skip
+// (emitStaticWhenSkip emits a placeholder with idx++); the discriminator is IncludeGroupID.
 //
-// Тесты строят carry-through-поля напрямую (ExpandIncludes — отдельная фаза, её
-// собственные тесты — shared/config/include_expand_test.go), фокусируясь на
-// render-инварианте group-drop.
+// Tests build the carry-through fields directly (ExpandIncludes is a separate phase with
+// its own tests — shared/config/include_expand_test.go), focusing on
+// the render-side group-drop invariant.
 
-// includeGroup помечает задачи как члены одной условной include-группы (один
-// include-when, один group-id) — то, что ExpandIncludes проставил бы при
-// раскрытии `- include: f.yml\n  when: <when>`.
+// includeGroup marks tasks as members of one conditional include group (one
+// include-when, one group-id) — what ExpandIncludes would set when
+// expanding `- include: f.yml\n  when: <when>`.
 func includeGroup(when string, groupID int, tasks ...config.Task) []config.Task {
 	for i := range tasks {
 		tasks[i].IncludeWhen = when
@@ -38,10 +38,10 @@ func singleHost() []*topology.HostFacts {
 	return []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)}
 }
 
-// TestIncludeGroupDrop_WhenFalse_TasksAbsent — ★ include-when:false → задачи группы
-// ОТСУТСТВУЮТ в плане (реальный дроп), а индексы хвоста сквозные БЕЗ дыр: задача
-// после дропнутой группы получает idx, который занимала бы первая дропнутая (индекс
-// не зарезервирован).
+// TestIncludeGroupDrop_WhenFalse_TasksAbsent — ★ include-when:false → the group's tasks
+// are ABSENT from the plan (a real drop), and the tail's indices are contiguous with NO gaps: the task
+// after the dropped group gets the idx the first dropped task would have occupied (the index
+// isn't reserved).
 func TestIncludeGroupDrop_WhenFalse_TasksAbsent(t *testing.T) {
 	var all []config.Task
 	all = append(all, cmdTask("head", "head"))
@@ -55,7 +55,7 @@ func TestIncludeGroupDrop_WhenFalse_TasksAbsent(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Input:       map[string]any{"topology": "standalone"}, // != cluster → группа дропается
+		Input:       map[string]any{"topology": "standalone"}, // != cluster → group is dropped
 		Incarnation: IncarnationMeta{Name: "svc"},
 		Hosts:       singleHost(),
 	}
@@ -74,7 +74,7 @@ func TestIncludeGroupDrop_WhenFalse_TasksAbsent(t *testing.T) {
 			t.Fatalf("задача %q дропнутой группы присутствует в плане", rt.Name)
 		}
 	}
-	// Индексы сквозные без дыр: head=0, tail=1 (НЕ tail=3 с дырами 1,2).
+	// Indices are contiguous with no gaps: head=0, tail=1 (NOT tail=3 with gaps at 1,2).
 	if tasks[0].Index != 0 || tasks[1].Index != 1 {
 		t.Errorf("Index = %d,%d, want 0,1 (сквозные без дыр — дроп не резервирует idx)", tasks[0].Index, tasks[1].Index)
 	}
@@ -86,8 +86,8 @@ func TestIncludeGroupDrop_WhenFalse_TasksAbsent(t *testing.T) {
 	}
 }
 
-// TestIncludeGroupDrop_WhenTrue_TasksPresent — include-when:true → задачи группы
-// присутствуют и рендерятся обычным путём (carry-through-поля на рендер не влияют).
+// TestIncludeGroupDrop_WhenTrue_TasksPresent — include-when:true → the group's tasks
+// are present and render the normal way (the carry-through fields don't affect rendering).
 func TestIncludeGroupDrop_WhenTrue_TasksPresent(t *testing.T) {
 	var all []config.Task
 	all = append(all, cmdTask("head", "head"))
@@ -101,7 +101,7 @@ func TestIncludeGroupDrop_WhenTrue_TasksPresent(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Input:       map[string]any{"topology": "cluster"}, // == cluster → группа остаётся
+		Input:       map[string]any{"topology": "cluster"}, // == cluster → group stays
 		Incarnation: IncarnationMeta{Name: "svc"},
 		Hosts:       singleHost(),
 	}
@@ -121,7 +121,7 @@ func TestIncludeGroupDrop_WhenTrue_TasksPresent(t *testing.T) {
 			t.Errorf("tasks[%d].Index = %d, want %d (сквозная нумерация)", i, tasks[i].Index, i)
 		}
 	}
-	// Группа рендерится полноценно (Params непусты — обычный путь, не placeholder).
+	// The group renders fully (Params non-empty — normal path, not a placeholder).
 	if tasks[1].Params == nil {
 		t.Error("cluster-a.Params == nil — include-when:true должен рендерить группу обычным путём")
 	}
@@ -130,9 +130,9 @@ func TestIncludeGroupDrop_WhenTrue_TasksPresent(t *testing.T) {
 	}
 }
 
-// TestIncludeGroupDrop_StaticInputWhen — типовой кейс: `when: input.X == 'cluster'`
-// на include. Один и тот же план под двумя input даёт keep/drop. Симметрия с
-// when:false/when:true выше, но фокус — что статический input.*-предикат работает.
+// TestIncludeGroupDrop_StaticInputWhen — the typical case: `when: input.X == 'cluster'`
+// on an include. The same plan under two different inputs gives keep/drop. Symmetric with
+// when:false/when:true above, but the focus is that a static input.* predicate works.
 func TestIncludeGroupDrop_StaticInputWhen(t *testing.T) {
 	build := func() *config.ScenarioManifest {
 		var all []config.Task
@@ -167,12 +167,12 @@ func TestIncludeGroupDrop_StaticInputWhen(t *testing.T) {
 	}
 }
 
-// TestIncludeGroupDrop_OnChangesWithinGroupSafe — ★ НЕГАТИВ-инвариант: внутри
-// дропнутой группы есть emitter (register:) + consumer (onchanges:). При дропе ОБА
-// исчезают вместе → resolveOnChanges НЕ падает ErrOnChangesUnknownRegister (нет
-// dangling-ссылки). Это и есть аргумент безопасности group-drop: register дропнутой
-// группы недоступен снаружи, потому что cross-file register-ссылка уже lint-запрещена
-// офлайн (per-file validateTaskRefs — доказано отдельно в shared/config-тесте
+// TestIncludeGroupDrop_OnChangesWithinGroupSafe — ★ NEGATIVE invariant: inside
+// the dropped group there's an emitter (register:) + consumer (onchanges:). On drop BOTH
+// disappear together → resolveOnChanges does NOT fail with ErrOnChangesUnknownRegister (no
+// dangling reference). This is exactly the safety argument for group-drop: a dropped group's
+// register isn't reachable from outside, because a cross-file register reference is already lint-forbidden
+// offline (per-file validateTaskRefs — proven separately in the shared/config test
 // TestConditionalInclude_CrossFileRegisterRejectedOffline).
 func TestIncludeGroupDrop_OnChangesWithinGroupSafe(t *testing.T) {
 	emitter := config.Task{
@@ -182,7 +182,7 @@ func TestIncludeGroupDrop_OnChangesWithinGroupSafe(t *testing.T) {
 	}
 	consumer := config.Task{
 		Name:      "react",
-		OnChanges: []string{"probe_done"}, // ссылка на register СОСЕДА по группе
+		OnChanges: []string{"probe_done"}, // reference to a register of a group SIBLING
 		Module:    &config.ModuleTask{Module: "core.cmd.shell", Params: map[string]any{"cmd": "react"}},
 	}
 	var all []config.Task
@@ -193,7 +193,7 @@ func TestIncludeGroupDrop_OnChangesWithinGroupSafe(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Input:       map[string]any{"topology": "standalone"}, // дроп группы
+		Input:       map[string]any{"topology": "standalone"}, // group drop
 		Incarnation: IncarnationMeta{Name: "svc"},
 		Hosts:       singleHost(),
 	}
@@ -206,15 +206,15 @@ func TestIncludeGroupDrop_OnChangesWithinGroupSafe(t *testing.T) {
 	}
 }
 
-// TestIncludeGroupDrop_CoexistsWithBlockPlaceholderSkip — ★ сосуществование двух
-// механизмов в ОДНОМ плане: block со static-false when: (placeholder-skip, idx
-// резервируется, потомки эмитят skip-placeholder) + условный include с when:false
-// (group-drop, idx НЕ резервируется). Дискриминатор IncludeGroupID разводит их строго:
-// block-потомок остаётся placeholder-ом, include-группа исчезает.
+// TestIncludeGroupDrop_CoexistsWithBlockPlaceholderSkip — ★ coexistence of two
+// mechanisms in ONE plan: a block with static-false when: (placeholder-skip, idx
+// is reserved, children emit a skip placeholder) + a conditional include with when:false
+// (group-drop, idx is NOT reserved). The IncludeGroupID discriminator separates them strictly:
+// the block child stays a placeholder, the include group disappears.
 func TestIncludeGroupDrop_CoexistsWithBlockPlaceholderSkip(t *testing.T) {
 	blockTask := config.Task{
 		Name: "gated-block",
-		When: "input.action == 'apply'", // static-false при action=update → block-placeholder-skip
+		When: "input.action == 'apply'", // static-false when action=update → block-placeholder-skip
 		Block: &config.BlockTask{Block: []config.Task{
 			cmdTask("block-child", "bc"),
 		}},
@@ -239,7 +239,7 @@ func TestIncludeGroupDrop_CoexistsWithBlockPlaceholderSkip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	// head + block-child(placeholder) + tail = 3; include-группа дропнута (исчезла).
+	// head + block-child(placeholder) + tail = 3; the include group is dropped (gone).
 	if len(tasks) != 3 {
 		t.Fatalf("len(tasks) = %d, want 3 (head + block-child-placeholder + tail; inc-группа дропнута)", len(tasks))
 	}
@@ -260,7 +260,7 @@ func TestIncludeGroupDrop_CoexistsWithBlockPlaceholderSkip(t *testing.T) {
 	if bc.FlowContext == nil {
 		t.Error("block-child.FlowContext == nil — placeholder несёт flow_context для Soul-side evalWhen")
 	}
-	// tail после дропа группы — индекс сквозной (после head=0, block-child=1 → tail=2).
+	// tail after the group drop — index is contiguous (after head=0, block-child=1 → tail=2).
 	tail := names["tail"]
 	if tail == nil || tail.Index != 2 {
 		t.Errorf("tail.Index = %v, want 2 (block-placeholder резервирует idx, include-drop — нет)", tail)

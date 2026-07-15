@@ -8,15 +8,16 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// Материализация applier-register (orchestration.md §2.1.1, Вариант B): applier-
-// задача (`apply:`+`register:`) после своих дочерних destiny-задач эмитит
-// синтетическую ТЕРМИНАЛЬНУЮ core.noop.run с Register=applier-register и
-// AggregateOf=индексы всех дочерних. Тесты ниже — keeper-side половина инварианта
-// (терминал эмитится / onchanges резолвится / passage-стратификация); Soul-side
-// агрегат changed/failed/timed_out — soul/internal/runtime.
+// Applier-register materialization (orchestration.md §2.1.1, Variant B): an
+// applier task (`apply:`+`register:`) emits a synthetic TERMINAL
+// core.noop.run after its child destiny tasks, with Register=applier-register
+// and AggregateOf=indices of all children. Tests below cover the keeper-side
+// half of the invariant (terminal emitted / onchanges resolves / passage
+// stratification); the Soul-side changed/failed/timed_out aggregation lives
+// in soul/internal/runtime.
 
-// applierRegisterScenario — сценарий с одной apply:destiny-задачей с register: и
-// внешним потребителем, который реагирует onchanges:[<applier>].
+// applierRegisterScenario — a scenario with one apply:destiny task carrying
+// register:, plus an external consumer reacting via onchanges:[<applier>].
 func applierRegisterScenario(destiny, register string) *config.ScenarioManifest {
 	return &config.ScenarioManifest{
 		Name: "create",
@@ -38,10 +39,11 @@ func applierRegisterScenario(destiny, register string) *config.ScenarioManifest 
 	}
 }
 
-// TestRender_ApplierRegister_TerminalEmitted — applier с register: эмитит
-// терминальную core.noop.run ПОСЛЕ дочерних destiny-задач, с Register=applier-
-// register и AggregateOf=индексы всех дочерних. Без register: терминал не эмитится
-// (impact на сквозной Index: +1 только за applier С register).
+// TestRender_ApplierRegister_TerminalEmitted — an applier with register:
+// emits a terminal core.noop.run AFTER its child destiny tasks, with
+// Register=applier-register and AggregateOf=indices of all children. Without
+// register:, no terminal is emitted (only an applier WITH register bumps the
+// running Index by 1).
 func TestRender_ApplierRegister_TerminalEmitted(t *testing.T) {
 	res := &stubDestinyResolver{resolved: flatDestiny()}
 	p := NewPipeline(nil, newEngine(t), nil, nil)
@@ -52,7 +54,7 @@ func TestRender_ApplierRegister_TerminalEmitted(t *testing.T) {
 		Destiny:     res,
 	}
 
-	// applyScenario НЕ несёт register: → 2 дочерних, без терминала (БИТ-В-БИТ).
+	// applyScenario carries NO register: → 2 children, no terminal (bit-for-bit).
 	tasks, _, err := p.Render(context.Background(), in)
 	if err != nil {
 		t.Fatalf("Render (no register): %v", err)
@@ -61,7 +63,7 @@ func TestRender_ApplierRegister_TerminalEmitted(t *testing.T) {
 		t.Fatalf("applier без register: len(tasks)=%d, want 2 (терминал НЕ эмитится)", len(tasks))
 	}
 
-	// Тот же applier С register: → 2 дочерних + 1 терминал.
+	// Same applier WITH register: → 2 children + 1 terminal.
 	in.Scenario.Tasks[0].Register = "redis_destiny"
 	tasks, plans, err := p.Render(context.Background(), in)
 	if err != nil {
@@ -88,9 +90,10 @@ func TestRender_ApplierRegister_TerminalEmitted(t *testing.T) {
 	}
 }
 
-// TestRender_ApplierRegister_OnChangesResolves — ★ guard (b): внешний
-// onchanges:[<applier>] РЕЗОЛВИТСЯ в Index терминальной core.noop.run (раньше
-// падало ErrOnChangesUnknownRegister — register applier-а не был в registerIndex).
+// TestRender_ApplierRegister_OnChangesResolves — ★ guard (b): an external
+// onchanges:[<applier>] RESOLVES to the Index of the terminal core.noop.run
+// (previously failed with ErrOnChangesUnknownRegister — the applier's
+// register wasn't in registerIndex).
 func TestRender_ApplierRegister_OnChangesResolves(t *testing.T) {
 	res := &stubDestinyResolver{resolved: flatDestiny()}
 	p := NewPipeline(nil, newEngine(t), nil, nil)
@@ -105,7 +108,7 @@ func TestRender_ApplierRegister_OnChangesResolves(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v (раньше ErrOnChangesUnknownRegister — register applier-а не материализовался)", err)
 	}
-	// 2 дочерних (0,1) + терминал (2) + потребитель (3).
+	// 2 children (0,1) + terminal (2) + consumer (3).
 	if len(tasks) != 4 {
 		t.Fatalf("len(tasks)=%d, want 4 (2 дочерних + терминал + потребитель)", len(tasks))
 	}
@@ -113,17 +116,18 @@ func TestRender_ApplierRegister_OnChangesResolves(t *testing.T) {
 	if consumer.Module != "core.service.restarted" {
 		t.Fatalf("потребитель[3] module = %q, want core.service.restarted", consumer.Module)
 	}
-	// onchanges:[redis_destiny] обязан резолвиться в Index терминала (2), НЕ в
-	// дочерние и НЕ в несуществующий register.
+	// onchanges:[redis_destiny] must resolve to the terminal's Index (2), NOT
+	// to a child or to a nonexistent register.
 	if len(consumer.OnChangesIdx) != 1 || consumer.OnChangesIdx[0] != 2 {
 		t.Fatalf("потребитель OnChangesIdx = %v, want [2] (Index терминала core.noop.run)", consumer.OnChangesIdx)
 	}
 }
 
-// TestRender_ApplierRegister_PassageStratification — ★ guard (d): потребитель
-// applier-register уезжает в Passage+1 относительно applier. register applier-а —
-// passage-определяющий эмиттер (taskEmittedRegisters → t.Register), потребитель
-// читает register.<applier> в where: → Stratify разводит их по Passage.
+// TestRender_ApplierRegister_PassageStratification — ★ guard (d): a consumer of
+// the applier-register lands in Passage+1 relative to the applier. The
+// applier's register is a passage-determining emitter (taskEmittedRegisters →
+// t.Register); a consumer reading register.<applier> in where: gets split
+// into the next Passage by Stratify.
 func TestRender_ApplierRegister_PassageStratification(t *testing.T) {
 	tasks := []config.Task{
 		{
@@ -132,8 +136,8 @@ func TestRender_ApplierRegister_PassageStratification(t *testing.T) {
 			Apply:    &config.ApplyTask{Destiny: "pilot-flat"},
 		},
 		{
-			// where: читает register.redis_destiny — passage-определяющий источник
-			// → потребитель обязан уехать в Passage ПОСЛЕ applier.
+			// where: reads register.redis_destiny — a passage-determining source
+			// → the consumer must land in the Passage AFTER the applier.
 			Name:  "Conditional restart",
 			Where: "register.redis_destiny.changed",
 			Module: &config.ModuleTask{
@@ -157,14 +161,14 @@ func TestRender_ApplierRegister_PassageStratification(t *testing.T) {
 	}
 }
 
-// TestToProtoTasks_AggregateOfRemap — AggregateOf (глобальные Index дочерних)
-// РЕМАПИТСЯ global→local при сборке ApplyRequest, как onchanges/onfail: Soul
-// агрегирует по локальной позиции в registerByIdx. Отсутствующий источник →
-// sentinel (-1, нулевой вклад в OR).
+// TestToProtoTasks_AggregateOfRemap — AggregateOf (global child Index
+// values) is REMAPPED global→local when building an ApplyRequest, like
+// onchanges/onfail: Soul aggregates by local position in registerByIdx. A
+// missing source maps to a sentinel (-1, contributes nothing to the OR).
 func TestToProtoTasks_AggregateOfRemap(t *testing.T) {
-	// Локальный срез: Index 1 отфильтрован where: → не попал. Локальные позиции:
-	// [0]=Index0, [1]=Index2(терминал). AggregateOf терминала = [0,1] (global): 0
-	// присутствует (локальная 0), 1 отсутствует → sentinel.
+	// Local slice: Index 1 was filtered out by where: → absent. Local
+	// positions: [0]=Index0, [1]=Index2 (terminal). Terminal's AggregateOf =
+	// [0,1] (global): 0 is present (local 0), 1 is absent → sentinel.
 	tasks := []*RenderedTask{
 		{Index: 0, Name: "child0", Module: "core.file.present"},
 		{Index: 2, Name: "applier-register r", Module: "core.noop.run", Register: "r", AggregateOf: []int{0, 1}},

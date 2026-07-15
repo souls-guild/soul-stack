@@ -1,17 +1,17 @@
 //go:build integration
 
-// 2-passage contract proof для staged-render (ADR-056, S3). Минимальный staged-
-// сценарий probe→where на контракт-тире: Passage 0 — probe роли (register: role),
-// эмитящий per-host факт ('master' на одном хосте, 'slave' на другом); Passage 1 —
-// действие `where: register.role.stdout == 'master'`. ASSERT: Passage-1
-// ApplyRequest уходит ТОЛЬКО на master-хост (where резолвнулся register-ом из
-// Passage 0). Это доказывает staged-render end-to-end на контракт-тире —
-// закрытие drift-а «register в where всегда пуст» (ADR-056 §Контекст).
+// 2-passage contract proof for staged-render (ADR-056, S3). Minimal staged
+// probe→where scenario on the contract tier: Passage 0 — probe role (register:
+// role), emitting a per-host fact ('master' on one host, 'slave' on the other);
+// Passage 1 — action `where: register.role.stdout == 'master'`. ASSERT: the
+// Passage-1 ApplyRequest goes ONLY to the master host (where resolved via the
+// Passage 0 register). Proves staged-render end-to-end on the contract tier —
+// closes the "register in where is always empty" drift (ADR-056 §Context).
 //
-// Полный live redis-cluster (cloud/vault-scope) — НЕ здесь (S4/S5). Soul
-// симулируется stagedDispatcher-ом (тем же путём, что mockDispatcher: SendApply →
-// per-task register + терминальный apply_runs-статус, как accumulateRegister/
-// correlateRunResult в проде).
+// Full live redis-cluster (cloud/vault-scope) is NOT covered here (S4/S5). Soul
+// is simulated by stagedDispatcher (same path as mockDispatcher: SendApply →
+// per-task register + terminal apply_runs status, mirroring
+// accumulateRegister/correlateRunResult in prod).
 
 package scenario
 
@@ -34,8 +34,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// stagedServiceRepo создаёт service-репо со staged-сценарием `failover`:
-// Passage 0 — probe роли (register: role), Passage 1 — действие на master.
+// stagedServiceRepo creates a service repo with a staged `failover` scenario:
+// Passage 0 — probe role (register: role), Passage 1 — action on master.
 func stagedServiceRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -90,39 +90,40 @@ tasks:
 	return "file://" + dir
 }
 
-// stagedDispatcher симулирует Soul под staged-прогоном (контракт-тир L3a):
-//   - Passage 0 (probe): для каждого хоста пишет register `role` с per-host
-//     stdout (roleBySID) под (apply_id, sid, passage=0) — как accumulateRegister
-//     на TaskEvent.register_data в проде; затем терминалит строку passage=0
-//     success — как correlateRunResult на RunResult.passage=0.
-//   - Passage>0 (действие): терминалит строку этого Passage success И фиксирует
-//     SID-ы, на которые пришёл Passage-N ApplyRequest (targetedByPassage) — это
-//     и есть доказательство targeting-а.
+// stagedDispatcher simulates Soul under a staged run (contract tier L3a):
+//   - Passage 0 (probe): for each host, writes register `role` with per-host
+//     stdout (roleBySID) under (apply_id, sid, passage=0) — mirrors
+//     accumulateRegister on TaskEvent.register_data in prod; then terminates the
+//     passage=0 row as success — mirrors correlateRunResult on RunResult.passage=0.
+//   - Passage>0 (action): terminates this passage's row as success AND records
+//     which SIDs received the Passage-N ApplyRequest (targetedByPassage) — the
+//     proof of targeting.
 //
-// passage берётся из req.Passage (эхо ApplyRequest.passage) — тем же контрактом,
-// что Soul эхает passage в TaskEvent/RunResult.
+// passage comes from req.Passage (echoed ApplyRequest.passage) — same contract
+// Soul uses to echo passage in TaskEvent/RunResult.
 //
-// failPassage0On — SID-ы, на которых probe (passage 0) завершается FAILED (вместо
-// success): probe-fail терминалит строку passage-0 этого хоста в `failed` (как
-// RunResult.status=FAILED в проде). barrier passage-0 fail-closed валит ВЕСЬ
-// прогон → passage-1 не диспатчится. Для них register НЕ пишется (probe упал).
+// failPassage0On — SIDs where probe (passage 0) ends FAILED instead of success:
+// terminates that host's passage-0 row as `failed` (mirrors RunResult.status=
+// FAILED in prod). The passage-0 barrier is fail-closed and aborts the ENTIRE
+// run → passage-1 is never dispatched. No register is written for these hosts
+// (probe failed).
 type stagedDispatcher struct {
 	t              *testing.T
-	roleBySID      map[string]string // sid → probe-stdout (per-host probe-результат)
-	failPassage0On map[string]bool   // sid → probe (passage 0) завершается FAILED
+	roleBySID      map[string]string // sid → probe stdout (per-host probe result)
+	failPassage0On map[string]bool   // sid → probe (passage 0) ends FAILED
 
 	mu                sync.Mutex
-	targetedByPassage map[int][]string // passage → SID-ы, получившие ApplyRequest
-	// dispatchedPlan — все (passage, plan_index, name) из req.Tasks[] каждого
-	// ApplyRequest = ровно то, что Soul эхнул бы в TaskEvent.plan_index → audit
-	// task.executed. Ground-truth «реально исполненного плана» для guard-а H1
-	// (NIM-37): сверяется с apply_run_plan (persistRunPlan). Дедуп по plan_index
-	// делает reader (dispatchedPlanByIndex) — passage-1 диспатчится на N хостов.
+	targetedByPassage map[int][]string // passage → SIDs that received an ApplyRequest
+	// dispatchedPlan — every (passage, plan_index, name) from req.Tasks[] of each
+	// ApplyRequest = exactly what Soul would echo in TaskEvent.plan_index → audit
+	// task.executed. Ground truth for guard H1 (NIM-37): checked against
+	// apply_run_plan (persistRunPlan). dispatchedPlanByIndex dedups by plan_index
+	// — passage-1 dispatches to N hosts.
 	dispatchedPlan []dispatchedTask
 }
 
-// dispatchedTask — одна отрендеренная задача, реально ушедшая в ApplyRequest
-// (эхо plan_index/name активного render'а Passage).
+// dispatchedTask — one rendered task actually sent in an ApplyRequest (echoed
+// plan_index/name of the passage's active render).
 type dispatchedTask struct {
 	passage   int
 	planIndex int
@@ -133,8 +134,8 @@ func newStagedDispatcher(t *testing.T, roleBySID map[string]string) *stagedDispa
 	return &stagedDispatcher{t: t, roleBySID: roleBySID, targetedByPassage: map[int][]string{}}
 }
 
-// dispatchedPlanByIndex сворачивает dispatchedPlan в plan_index → (passage, name),
-// дедуплицируя одинаковые задачи, ушедшие на несколько хостов одного Passage.
+// dispatchedPlanByIndex collapses dispatchedPlan into plan_index → (passage,
+// name), deduping tasks sent to multiple hosts within the same passage.
 func (d *stagedDispatcher) dispatchedPlanByIndex() map[int]dispatchedTask {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -145,13 +146,13 @@ func (d *stagedDispatcher) dispatchedPlanByIndex() map[int]dispatchedTask {
 	return out
 }
 
-// emitterIndices воспроизводит контракт Soul-а (ADR-056 §S1 fix Variant B): для
-// register-задачи с именем register находит её ЛОКАЛЬНУЮ позицию в req.Tasks[]
-// (= TaskEvent.task_idx, локален для Passage/host) и её ГЛОБАЛЬНЫЙ plan_index
-// (= req.Tasks[i].plan_index, эхо TaskEvent.plan_index). Симулирует ровно то, что
-// делает sendTaskEvent на Soul-е: task_idx = idx цикла, plan_index = task.GetPlanIndex().
-// register-корреляция на Keeper-е ключуется по plan_index — поэтому harness обязан
-// различать локальный и глобальный индексы (иначе он, как раньше, маскировал бы баг).
+// emitterIndices mirrors the Soul contract (ADR-056 §S1 fix Variant B): for the
+// register task named register, finds its LOCAL position in req.Tasks[]
+// (= TaskEvent.task_idx, local to this passage/host) and its GLOBAL plan_index
+// (= req.Tasks[i].plan_index, echoing TaskEvent.plan_index). Mirrors exactly what
+// sendTaskEvent does on Soul: task_idx = loop idx, plan_index = task.GetPlanIndex().
+// Register correlation on Keeper keys on plan_index — so the harness must
+// distinguish local vs global indices, or it would mask the bug like before.
 func emitterIndices(req *keeperv1.ApplyRequest, register string) (localIdx, planIdx int) {
 	for i, task := range req.GetTasks() {
 		if task.GetRegister() == register {
@@ -177,8 +178,8 @@ func (d *stagedDispatcher) SendApply(ctx context.Context, sid string, req *keepe
 	d.mu.Unlock()
 
 	if passage == 0 && d.failPassage0On[sid] {
-		// probe упал на этом хосте: терминалим passage-0 строку в failed (как
-		// RunResult.status=FAILED). register НЕ пишем — probe не дал факта.
+		// probe failed on this host: terminate the passage-0 row as failed
+		// (mirrors RunResult.status=FAILED). No register — probe produced no fact.
 		summary := "probe failed"
 		if err := applyrun.UpdateStatus(ctx, integrationPool, applyID, sid, 0, applyrun.StatusFailed, &summary); err != nil {
 			d.t.Errorf("stagedDispatcher: UpdateStatus(%s, passage=0, failed): %v", sid, err)
@@ -187,10 +188,10 @@ func (d *stagedDispatcher) SendApply(ctx context.Context, sid string, req *keepe
 	}
 
 	if passage == 0 {
-		// probe-задача `role`. task_idx — ЛОКАЛЬНАЯ позиция в req.Tasks[] (как Soul
-		// эмитит TaskEvent.task_idx), plan_index — ГЛОБАЛЬНЫЙ эхо req.Tasks[i].plan_index
-		// (как Soul эхает TaskEvent.plan_index, ADR-056 §S1 fix Variant B). Register
-		// ключуется по plan_index — это и есть исправленный путь корреляции.
+		// probe task `role`. task_idx is the LOCAL position in req.Tasks[] (as
+		// Soul emits TaskEvent.task_idx), plan_index is the GLOBAL echo of
+		// req.Tasks[i].plan_index (as Soul echoes TaskEvent.plan_index, ADR-056
+		// §S1 fix Variant B). Register keys on plan_index — the fixed path.
 		role := d.roleBySID[sid]
 		localIdx, planIdx := emitterIndices(req, "role")
 		if err := applyrun.UpsertTaskRegister(ctx, integrationPool, &applyrun.TaskRegister{
@@ -219,10 +220,11 @@ func (d *stagedDispatcher) targets(passage int) []string {
 }
 
 // TestIntegration_2Passage_WhereTargetsOnlyMaster — ★ 2-PASSAGE PROOF (ADR-056, S3).
-// Два хоста: host-a — master, host-b — slave (per-host probe в Passage 0). Passage
-// 1 несёт `where: register.role.stdout == 'master'`. ASSERT: Passage-1 ApplyRequest
-// затаргетился ТОЛЬКО на host-a (master) — where резолвнулся register-ом из
-// Passage 0 end-to-end через stage-loop (render→dispatch→barrier→register→render).
+// Two hosts: host-a master, host-b slave (per-host probe in Passage 0). Passage 1
+// carries `where: register.role.stdout == 'master'`. ASSERT: the Passage-1
+// ApplyRequest targets ONLY host-a (master) — where resolved via the Passage 0
+// register end-to-end through the stage loop (render→dispatch→barrier→register→
+// render).
 func TestIntegration_2Passage_WhereTargetsOnlyMaster(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -248,24 +250,24 @@ func TestIntegration_2Passage_WhereTargetsOnlyMaster(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Прогон успешен (оба Passage прошли барьеры, state-commit → ready).
+	// Run succeeds (both passages cleared their barriers, state-commit → ready).
 	waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
 
-	// Passage 0 (probe): ApplyRequest на ОБА хоста (probe без where → весь roster).
+	// Passage 0 (probe): ApplyRequest to BOTH hosts (probe has no where → whole roster).
 	p0 := disp.targets(0)
 	if len(p0) != 2 {
 		t.Errorf("Passage 0 targets = %v, want оба хоста", p0)
 	}
 
-	// ★ Passage 1 (действие): ApplyRequest ТОЛЬКО на master-хост. where:
-	// register.role.stdout == 'master' резолвнулся per-host register-ом Passage 0.
+	// ★ Passage 1 (action): ApplyRequest ONLY to the master host. where:
+	// register.role.stdout == 'master' resolved via the Passage 0 per-host register.
 	p1 := disp.targets(1)
 	if len(p1) != 1 || p1[0] != "host-a.example.com" {
 		t.Fatalf("★ Passage 1 targets = %v, want [host-a.example.com] (only master) — staged where не резолвнулся register-ом Passage 0", p1)
 	}
 
 	// apply_runs: per-host × per-passage. host-a: passage 0 + passage 1 (master).
-	// host-b: passage 0 ТОЛЬКО (slave — Passage 1 на него не таргетился, строки нет).
+	// host-b: passage 0 ONLY (slave — Passage 1 never targeted it, no row).
 	statuses, err := applyrun.SelectStatusesByApplyID(context.Background(), integrationPool, applyID)
 	if err != nil {
 		t.Fatalf("SelectStatusesByApplyID: %v", err)
@@ -285,12 +287,13 @@ func TestIntegration_2Passage_WhereTargetsOnlyMaster(t *testing.T) {
 	}
 }
 
-// stagedExpandingServiceRepo — staged-сценарий, где задача Passage 1 РАСКРЫВАЕТСЯ
-// (loop с 2 items) в N>1 RenderedTask с реальными plan_index. На render шага 5
-// (ActivePassage=0) она — ОДИН сжатый placeholder (индекс 1); на пере-рендере
-// Passage 1 (ActivePassage=1) — 2 задачи (индексы 1,2). Ровно кейс H1 (NIM-37):
-// персист плана обязан снять passage-1 из ЕГО активного render, а не из placeholder-а
-// шага 5. where: register.role делает задачу register-зависимой → Passage 1 (Stratify).
+// stagedExpandingServiceRepo — staged scenario where the Passage 1 task EXPANDS
+// (loop over 2 items) into N>1 RenderedTask with real plan_index values. At the
+// step-5 render (ActivePassage=0) it's ONE collapsed placeholder (index 1); on
+// the Passage 1 re-render (ActivePassage=1) it's 2 tasks (indices 1,2). Exactly
+// case H1 (NIM-37): plan persistence must pull passage-1 from ITS active render,
+// not the step-5 placeholder. where: register.role makes the task
+// register-dependent → Passage 1 (Stratify).
 func stagedExpandingServiceRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -349,13 +352,14 @@ tasks:
 }
 
 // TestIntegration_StagedExpandingPassage_RunPlanMatchesExecution — ★ GUARD H1
-// (NIM-37): при staged-прогоне, где задача Passage 1 раскрывается (loop 2 items),
-// persistRunPlan обязан снять apply_run_plan passage-1 из ЕГО активного render
-// (реальные plan_index 1,2), а НЕ из сжатого placeholder-а render шага 5 (один
-// индекс 1). ИНВАРИАНТ: множество plan_index в apply_run_plan (+name/passage) ==
-// множество plan_index, реально ушедшее в ApplyRequest (эхо TaskEvent.plan_index →
-// audit task.executed). Без фикса passage-1 персистится placeholder-ом (index 1),
-// apply_run_plan теряет index 2 → ассерт падает.
+// (NIM-37): in a staged run where the Passage 1 task expands (loop over 2
+// items), persistRunPlan must pull apply_run_plan passage-1 from ITS active
+// render (real plan_index 1,2), NOT the collapsed step-5 render placeholder
+// (single index 1). INVARIANT: the set of plan_index in apply_run_plan
+// (+name/passage) == the set of plan_index actually sent in an ApplyRequest
+// (echoed TaskEvent.plan_index → audit task.executed). Without the fix,
+// passage-1 persists as the placeholder (index 1) and apply_run_plan loses
+// index 2 → the assertion fails.
 func TestIntegration_StagedExpandingPassage_RunPlanMatchesExecution(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -382,16 +386,16 @@ func TestIntegration_StagedExpandingPassage_RunPlanMatchesExecution(t *testing.T
 	}
 	waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
 
-	// Ground-truth: что реально ушло в ApplyRequest (эхо plan_index активного
-	// render'а каждого Passage) = что Soul записал бы в audit task.executed.
-	// probe idx0 (P0) + loop idx1,2 (P1) = 3 уникальных plan_index.
+	// Ground truth: what actually went out in ApplyRequests (echoed plan_index of
+	// each passage's active render) = what Soul would record in audit
+	// task.executed. probe idx0 (P0) + loop idx1,2 (P1) = 3 unique plan_index.
 	exec := disp.dispatchedPlanByIndex()
 	if len(exec) != 3 {
 		t.Fatalf("dispatched plan_index set = %v, want 3 (probe idx0 + loop idx1,2 раскрытого Passage 1)", exec)
 	}
 
-	// apply_run_plan (persistRunPlan) обязан совпасть с исполнением по множеству
-	// plan_index и по name/passage на каждый индекс.
+	// apply_run_plan (persistRunPlan) must match execution both in the set of
+	// plan_index and in name/passage for each index.
 	plan, err := applyrun.SelectRunPlanByApplyID(context.Background(), integrationPool, applyID)
 	if err != nil {
 		t.Fatalf("SelectRunPlanByApplyID: %v", err)
@@ -423,11 +427,10 @@ func TestIntegration_StagedExpandingPassage_RunPlanMatchesExecution(t *testing.T
 	}
 }
 
-// passagesBySID собирает apply_runs прогона в (sid → отсортированные passage-ы) +
-// проверяет, что каждая строка терминальна с ожидаемым статусом wantStatus.
-// Используется guard-тестами для ассерта «какие хосты получили apply_runs-строку
-// какого Passage» (targeting-доказательство на стороне БД, симметрично
-// disp.targets() на стороне dispatch-а).
+// passagesBySID collects a run's apply_runs into (sid → sorted passages) and
+// checks that every row is terminal with the expected wantStatus. Used by guard
+// tests to assert "which hosts got an apply_runs row for which passage" —
+// targeting proof on the DB side, symmetric to disp.targets() on the dispatch side.
 func passagesBySID(t *testing.T, applyID string, wantStatus applyrun.Status) map[string][]int {
 	t.Helper()
 	statuses, err := applyrun.SelectStatusesByApplyID(context.Background(), integrationPool, applyID)
@@ -444,13 +447,13 @@ func passagesBySID(t *testing.T, applyID string, wantStatus applyrun.Status) map
 	return got
 }
 
-// TestIntegration_StagedAllSlave_NoOpReady — ★ TARGETING-ИНВАРИАНТ (ADR-056).
-// Оба хоста — slave (probe в Passage 0 отдаёт role='slave' обоим). Passage 1
-// несёт `where: register.role.stdout == 'master'` → НИ ОДИН хост не проходит
-// фильтр. ASSERT: Passage-1 ApplyRequest НЕ ушёл НИ ОДНОМУ хосту (пустой
-// destructive-таргет), barrier Passage-1 НЕ запускается и НЕ виснет
+// TestIntegration_StagedAllSlave_NoOpReady — ★ TARGETING INVARIANT (ADR-056).
+// Both hosts are slave (Passage 0 probe gives role='slave' on both). Passage 1
+// carries `where: register.role.stdout == 'master'` → NO host passes the
+// filter. ASSERT: the Passage-1 ApplyRequest is sent to NO host (empty
+// destructive target), the Passage-1 barrier does NOT start and does NOT hang
 // (dispatchPassage: len(perHost)==0 → no-op return nil), incarnation → READY.
-// Пустой destructive-таргет — безопасный no-op, не hang и не error.
+// An empty destructive target is a safe no-op, not a hang and not an error.
 func TestIntegration_StagedAllSlave_NoOpReady(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -476,23 +479,23 @@ func TestIntegration_StagedAllSlave_NoOpReady(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Пустой destructive-таргет Passage 1 — НЕ hang: barrier Passage-1 не
-	// запускается (no-op), прогон доходит до commitSuccess → ready (если бы
-	// barrier Passage-1 зависал на пустом наборе, waitRunDone упал бы по timeout).
+	// An empty Passage 1 destructive target does NOT hang: the Passage-1 barrier
+	// never starts (no-op), the run reaches commitSuccess → ready (if the
+	// Passage-1 barrier hung on an empty set, waitRunDone would time out).
 	waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
 
-	// Passage 0 (probe): оба хоста (probe без where → весь roster).
+	// Passage 0 (probe): both hosts (probe has no where → whole roster).
 	if p0 := disp.targets(0); len(p0) != 2 {
 		t.Errorf("Passage 0 targets = %v, want оба хоста", p0)
 	}
 
-	// ★ Passage 1: НИ ОДНОГО ApplyRequest (все slave → where=false на каждом).
+	// ★ Passage 1: NO ApplyRequest at all (all slave → where=false on each).
 	if p1 := disp.targets(1); len(p1) != 0 {
 		t.Fatalf("★ Passage 1 targets = %v, want [] (all-slave: destructive-таргет пуст, no-op)", p1)
 	}
 
-	// apply_runs: у обоих хостов ТОЛЬКО passage 0 (Passage-1 строки нет — на него
-	// никто не таргетился). Все строки success.
+	// apply_runs: both hosts have ONLY passage 0 (no Passage-1 row — nobody was
+	// targeted). All rows success.
 	got := passagesBySID(t, applyID, applyrun.StatusSuccess)
 	for _, sid := range []string{"host-a.example.com", "host-b.example.com"} {
 		if len(got[sid]) != 1 || got[sid][0] != 0 {
@@ -501,11 +504,11 @@ func TestIntegration_StagedAllSlave_NoOpReady(t *testing.T) {
 	}
 }
 
-// TestIntegration_StagedProbeFail_FailStop — ★ LIFECYCLE-ИНВАРИАНТ (ADR-056 §г).
-// probe (Passage 0) завершается FAILED на хосте. ASSERT: barrier Passage-0
-// fail-closed валит прогон ДО stage-loop-перехода на Passage 1 →
-// Passage-1 ApplyRequest НЕ отправлен НИ ОДНОМУ хосту → incarnation →
-// ERROR_LOCKED. Провал probe-шага НЕ диспатчит зависимый Passage по неполному
+// TestIntegration_StagedProbeFail_FailStop — ★ LIFECYCLE INVARIANT (ADR-056 §d).
+// probe (Passage 0) ends FAILED on a host. ASSERT: the Passage-0 barrier is
+// fail-closed and aborts the run BEFORE the stage loop advances to Passage 1 →
+// the Passage-1 ApplyRequest is sent to NO host → incarnation → ERROR_LOCKED.
+// A failed probe step must not dispatch a dependent passage on an incomplete
 // register.
 func TestIntegration_StagedProbeFail_FailStop(t *testing.T) {
 	resetAll(t)
@@ -515,7 +518,7 @@ func TestIntegration_StagedProbeFail_FailStop(t *testing.T) {
 	gitURL := stagedServiceRepo(t)
 
 	disp := newStagedDispatcher(t, map[string]string{
-		"host-a.example.com": "master", // role не важен — probe упадёт раньше register
+		"host-a.example.com": "master", // role doesn't matter — probe fails before register
 	})
 	disp.failPassage0On = map[string]bool{"host-a.example.com": true}
 	r := newRunner(t, disp, gitURL)
@@ -536,8 +539,8 @@ func TestIntegration_StagedProbeFail_FailStop(t *testing.T) {
 		t.Errorf("reason = %v, want dispatch_failed (barrier Passage-0 fail-stop)", inc.StatusDetails["reason"])
 	}
 
-	// Passage 0 затаргетился (probe ушёл), Passage 1 — НЕТ (stage-loop оборвался
-	// на barrier Passage-0).
+	// Passage 0 was targeted (probe went out), Passage 1 — NOT (the stage loop
+	// broke off at the Passage-0 barrier).
 	if p0 := disp.targets(0); len(p0) != 1 {
 		t.Errorf("Passage 0 targets = %v, want [host-a.example.com]", p0)
 	}
@@ -545,7 +548,7 @@ func TestIntegration_StagedProbeFail_FailStop(t *testing.T) {
 		t.Fatalf("★ Passage 1 targets = %v, want [] (probe-fail остановил прогон до Passage 1)", p1)
 	}
 
-	// apply_runs: единственная строка passage 0 = failed (Passage-1 строки нет).
+	// apply_runs: the only row is passage 0 = failed (no Passage-1 row).
 	statuses, err := applyrun.SelectStatusesByApplyID(context.Background(), integrationPool, applyID)
 	if err != nil {
 		t.Fatalf("SelectStatusesByApplyID: %v", err)
@@ -558,10 +561,10 @@ func TestIntegration_StagedProbeFail_FailStop(t *testing.T) {
 	}
 }
 
-// TestIntegration_StagedAllMaster — оба хоста role='master' → Passage 1 проходит
-// where на ОБОИХ → оба success → ready. Контрольный «всё совпало» к all-slave:
-// доказывает, что пустой Passage-1 в all-slave — следствие where-фильтра, а не
-// поломки staged-loop-а вообще.
+// TestIntegration_StagedAllMaster — both hosts role='master' → Passage 1 passes
+// where on BOTH → both succeed → ready. Control case mirroring all-slave: proves
+// that the empty Passage-1 in all-slave is a consequence of the where filter,
+// not a broken staged loop in general.
 func TestIntegration_StagedAllMaster(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -592,13 +595,13 @@ func TestIntegration_StagedAllMaster(t *testing.T) {
 	if p0 := disp.targets(0); len(p0) != 2 {
 		t.Errorf("Passage 0 targets = %v, want оба хоста", p0)
 	}
-	// ★ Passage 1: ОБА хоста (where master истинен на каждом).
+	// ★ Passage 1: BOTH hosts (where master is true on each).
 	p1 := disp.targets(1)
 	if len(p1) != 2 {
 		t.Fatalf("★ Passage 1 targets = %v, want оба хоста (all-master)", p1)
 	}
 
-	// apply_runs: у обоих хостов passage 0 + passage 1, все success.
+	// apply_runs: both hosts have passage 0 + passage 1, all success.
 	got := passagesBySID(t, applyID, applyrun.StatusSuccess)
 	for _, sid := range []string{"host-a.example.com", "host-b.example.com"} {
 		if len(got[sid]) != 2 {
@@ -607,11 +610,11 @@ func TestIntegration_StagedAllMaster(t *testing.T) {
 	}
 }
 
-// TestIntegration_StagedPartialProbeFail_FailClosed — probe упал на ОДНОМ из двух
-// хостов (host-b), на другом (host-a) дал role='master'. ASSERT: barrier
-// Passage-0 fail-closed валит ВЕСЬ прогон (НЕ «диспатчить Passage 1 по
-// частичному register на выжившего host-a») → Passage-1 ApplyRequest НЕ
-// отправлен никому → incarnation → ERROR_LOCKED.
+// TestIntegration_StagedPartialProbeFail_FailClosed — probe fails on ONE of two
+// hosts (host-b), the other (host-a) gives role='master'. ASSERT: the Passage-0
+// barrier is fail-closed and aborts the ENTIRE run (NOT "dispatch Passage 1 to
+// surviving host-a on a partial register") → the Passage-1 ApplyRequest is sent
+// to nobody → incarnation → ERROR_LOCKED.
 func TestIntegration_StagedPartialProbeFail_FailClosed(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -621,10 +624,10 @@ func TestIntegration_StagedPartialProbeFail_FailClosed(t *testing.T) {
 	gitURL := stagedServiceRepo(t)
 
 	disp := newStagedDispatcher(t, map[string]string{
-		"host-a.example.com": "master", // probe ОК — дал бы master
+		"host-a.example.com": "master", // probe OK — would give master
 		"host-b.example.com": "master",
 	})
-	disp.failPassage0On = map[string]bool{"host-b.example.com": true} // probe упал на host-b
+	disp.failPassage0On = map[string]bool{"host-b.example.com": true} // probe fails on host-b
 	r := newRunner(t, disp, gitURL)
 
 	applyID := audit.NewULID()
@@ -643,8 +646,8 @@ func TestIntegration_StagedPartialProbeFail_FailClosed(t *testing.T) {
 		t.Errorf("reason = %v, want dispatch_failed (частичный probe-fail валит весь прогон)", inc.StatusDetails["reason"])
 	}
 
-	// Passage 0 ушёл на оба хоста; ★ Passage 1 — никому (fail-closed: выживший
-	// host-a НЕ получает Passage-1 по частичному register).
+	// Passage 0 went to both hosts; ★ Passage 1 — to nobody (fail-closed:
+	// surviving host-a does NOT get Passage-1 on a partial register).
 	if p0 := disp.targets(0); len(p0) != 2 {
 		t.Errorf("Passage 0 targets = %v, want оба хоста", p0)
 	}
@@ -655,18 +658,19 @@ func TestIntegration_StagedPartialProbeFail_FailClosed(t *testing.T) {
 
 // --- 3-Passage (restart re-probe) ----------------------------------------
 
-// staged3PassageServiceRepo создаёт service-репо с 3-Passage сценарием `restart`,
-// воспроизводящим каноническую restart re-probe идиому (ADR-056 §«restart re-probe»):
+// staged3PassageServiceRepo creates a service repo with a 3-passage `restart`
+// scenario reproducing the canonical restart re-probe idiom (ADR-056 §"restart
+// re-probe"):
 //
 //	#0 probe role               → Passage 0 (register: role)
-//	#1 act where role==master   → Passage 1 (читает register.role — после probe)
-//	#2 re-probe role_after       → Passage 1 (program-order ребро: эмиттер ПОСЛЕ #1)
-//	#3 act where role_after==... → Passage 2 (читает register.role_after — после re-probe)
+//	#1 act where role==master   → Passage 1 (reads register.role — after probe)
+//	#2 re-probe role_after      → Passage 1 (program-order edge: emitter AFTER #1)
+//	#3 act where role_after==... → Passage 2 (reads register.role_after — after re-probe)
 //
-// Stratify даёт TaskPassage [0,1,1,2], Count=3 (две probe-границы). Passage-2
-// задача (#3) таргетится ИСКЛЮЧИТЕЛЬНО по register.role_after (re-probe Passage 1),
-// а НЕ по первому probe register.role (Passage 0) — это и доказывает program-order
-// ребро S2 + N-loop для N=3.
+// Stratify yields TaskPassage [0,1,1,2], Count=3 (two probe boundaries). The
+// Passage-2 task (#3) targets EXCLUSIVELY on register.role_after (Passage 1
+// re-probe), NOT on the first probe's register.role (Passage 0) — this is what
+// proves the program-order edge S2 + N-loop for N=3.
 func staged3PassageServiceRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -732,22 +736,24 @@ tasks:
 	return "file://" + dir
 }
 
-// staged3Dispatcher симулирует Soul под 3-Passage restart-прогоном (контракт-тир).
-// Эмиттеры register заданы как (passage, глобальный plan_index) → per-host stdout:
-//   - probe `role`        — passage 0, plan_index 0 (roleP0BySID);
-//   - re-probe `role_after`— passage 1, plan_index 2 / ЛОКАЛЬНЫЙ task_idx 1 (roleP1BySID).
+// staged3Dispatcher simulates Soul under a 3-passage restart run (contract
+// tier). Register emitters are given as (passage, global plan_index) → per-host
+// stdout:
+//   - probe `role`         — passage 0, plan_index 0 (roleP0BySID);
+//   - re-probe `role_after` — passage 1, plan_index 2 / LOCAL task_idx 1 (roleP1BySID).
 //
-// Индексы берутся из req.Tasks[] через emitterIndices (как Soul эхает их в
-// TaskEvent), а НЕ хардкодятся — иначе harness замаскировал бы баг task_idx-коллизии.
+// Indices come from req.Tasks[] via emitterIndices (as Soul echoes them in
+// TaskEvent), never hardcoded — otherwise the harness would mask a
+// task_idx-collision bug.
 //
-// КЛЮЧЕВОЕ для доказательства: roleP1BySID отличается от roleP0BySID — после
-// failover master меняется. Если бы Passage-2 задача (#3) таргетилась по СТАРОМУ
-// register.role (probe Passage 0), она ушла бы на host-a; она обязана уйти на
-// host-b (master по re-probe). targetedByPassage фиксирует факт targeting-а.
+// KEY to the proof: roleP1BySID differs from roleP0BySID — master changes after
+// failover. If the Passage-2 task (#3) targeted on the OLD register.role (probe
+// Passage 0), it would go to host-a; it must go to host-b (master per re-probe).
+// targetedByPassage records the targeting fact.
 type staged3Dispatcher struct {
 	t           *testing.T
-	roleP0BySID map[string]string // sid → probe-stdout (passage 0, task_idx 0)
-	roleP1BySID map[string]string // sid → re-probe-stdout (passage 1, task_idx 2)
+	roleP0BySID map[string]string // sid → probe stdout (passage 0, task_idx 0)
+	roleP1BySID map[string]string // sid → re-probe stdout (passage 1, task_idx 2)
 
 	mu                sync.Mutex
 	targetedByPassage map[int][]string
@@ -767,8 +773,8 @@ func (d *staged3Dispatcher) SendApply(ctx context.Context, sid string, req *keep
 
 	switch passage {
 	case 0:
-		// probe `role` — глобальный plan_index 0, локальный task_idx 0 (один шаг
-		// в Passage 0). Ключ корреляции — plan_index (ADR-056 §S1 fix Variant B).
+		// probe `role` — global plan_index 0, local task_idx 0 (a single step in
+		// Passage 0). Correlation key is plan_index (ADR-056 §S1 fix Variant B).
 		localIdx, planIdx := emitterIndices(req, "role")
 		if err := applyrun.UpsertTaskRegister(ctx, integrationPool, &applyrun.TaskRegister{
 			ApplyID: applyID, SID: sid, PlanIndex: planIdx, TaskIdx: localIdx,
@@ -778,11 +784,11 @@ func (d *staged3Dispatcher) SendApply(ctx context.Context, sid string, req *keep
 			d.t.Errorf("staged3Dispatcher: UpsertTaskRegister role (%s): %v", sid, err)
 		}
 	case 1:
-		// re-probe `role_after` — ГЛОБАЛЬНЫЙ plan_index 2 (#2 в полном плане), но
-		// ЛОКАЛЬНЫЙ task_idx 1 (Passage 1 несёт #1 failover на локальной 0 + #2
-		// re-probe на локальной 1). Раньше harness писал TaskIdx:2 (глобальный под
-		// именем локального) — это и маскировало баг. Теперь register ключуется по
-		// глобальному plan_index, а локальный task_idx ≠ глобальному — реальный путь.
+		// re-probe `role_after` — GLOBAL plan_index 2 (#2 in the full plan), but
+		// LOCAL task_idx 1 (Passage 1 carries #1 failover at local 0 + #2 re-probe
+		// at local 1). The harness used to write TaskIdx:2 (global masquerading as
+		// local) — that's what hid the bug. Now register keys on the global
+		// plan_index, with local task_idx ≠ global — the real path.
 		localIdx, planIdx := emitterIndices(req, "role_after")
 		if err := applyrun.UpsertTaskRegister(ctx, integrationPool, &applyrun.TaskRegister{
 			ApplyID: applyID, SID: sid, PlanIndex: planIdx, TaskIdx: localIdx,
@@ -808,15 +814,15 @@ func (d *staged3Dispatcher) targets(passage int) []string {
 }
 
 // TestIntegration_Staged3Passage_ReprobeRetargets — ★ 3-PASSAGE PROOF (ADR-056 §S4).
-// Доказывает program-order ребро S2 + N-loop для N=3 на restart re-probe идиоме.
+// Proves the program-order edge S2 + N-loop for N=3 on the restart re-probe idiom.
 //
-// Расклад: до failover host-a — master, host-b — slave (probe Passage 0). ПОСЛЕ
-// failover (Passage 1 действие) роли меняются — re-probe Passage 1 отдаёт host-a
-// slave, host-b master. Passage-2 задача `where: register.role_after.stdout ==
-// 'master'` обязана таргетиться по СВЕЖЕМУ re-probe → ТОЛЬКО host-b. Если бы
-// program-order ребро не работало и re-probe оказался в Passage 0 (или Passage-2
-// where резолвился по первому probe), задача ушла бы на host-a (СТАРЫЙ master) —
-// тест это поймает.
+// Setup: before failover host-a is master, host-b is slave (Passage 0 probe).
+// AFTER failover (Passage 1 action) roles swap — the Passage 1 re-probe gives
+// host-a slave, host-b master. The Passage-2 task `where:
+// register.role_after.stdout == 'master'` must target on the FRESH re-probe →
+// ONLY host-b. If the program-order edge were broken and the re-probe ended up
+// in Passage 0 (or Passage-2 where resolved against the first probe), the task
+// would go to host-a (the OLD master) — the test catches that.
 func TestIntegration_Staged3Passage_ReprobeRetargets(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -830,7 +836,7 @@ func TestIntegration_Staged3Passage_ReprobeRetargets(t *testing.T) {
 			"host-a.example.com": "master",
 			"host-b.example.com": "slave",
 		},
-		map[string]string{ // re-probe Passage 1: ПОСЛЕ failover host-b master
+		map[string]string{ // re-probe Passage 1: AFTER failover, host-b master
 			"host-a.example.com": "slave",
 			"host-b.example.com": "master",
 		},
@@ -848,31 +854,33 @@ func TestIntegration_Staged3Passage_ReprobeRetargets(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Три Passage (две probe-границы) прошли барьеры → ready.
+	// All three passages (two probe boundaries) cleared their barriers → ready.
 	waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
 
-	// Passage 0 (probe): оба хоста (probe без where).
+	// Passage 0 (probe): both hosts (probe has no where).
 	if p0 := disp.targets(0); len(p0) != 2 {
 		t.Errorf("Passage 0 targets = %v, want оба хоста", p0)
 	}
-	// Passage 1 (failover where role==master ПЛЮС re-probe без where): re-probe
-	// таргетит весь roster, поэтому ОБА хоста получают Passage-1 ApplyRequest
-	// (re-probe #2 идёт на всех; failover #1 — только на старый master host-a).
+	// Passage 1 (failover where role==master PLUS re-probe with no where):
+	// re-probe targets the whole roster, so BOTH hosts get a Passage-1
+	// ApplyRequest (re-probe #2 goes to everyone; failover #1 — only to the old
+	// master host-a).
 	if p1 := disp.targets(1); len(p1) != 2 {
 		t.Errorf("Passage 1 targets = %v, want оба хоста (re-probe без where → весь roster)", p1)
 	}
 
-	// ★ Passage 2 (act where role_after==master): ТОЛЬКО host-b — НОВЫЙ master по
-	// СВЕЖЕМУ re-probe Passage 1. Старый probe Passage 0 дал бы host-a — если тест
-	// видит host-a, program-order ребро/re-probe-таргетинг СЛОМАН.
+	// ★ Passage 2 (act where role_after==master): ONLY host-b — the NEW master
+	// per the FRESH Passage 1 re-probe. The old Passage 0 probe would give
+	// host-a — if the test sees host-a, the program-order edge/re-probe
+	// targeting is BROKEN.
 	p2 := disp.targets(2)
 	if len(p2) != 1 || p2[0] != "host-b.example.com" {
 		t.Fatalf("★ Passage 2 targets = %v, want [host-b.example.com] (НОВЫЙ master по re-probe Passage 1) — re-probe retargeting сломан: targeting пошёл по СТАРОМУ probe Passage 0", p2)
 	}
 
-	// apply_runs: host-a — passage 0,1 (probe + failover-action + re-probe; failover
-	// и re-probe оба Passage 1, одна строка на passage); host-b — passage 0,1,2
-	// (probe + re-probe + new-master-action). Все success.
+	// apply_runs: host-a — passage 0,1 (probe + failover-action + re-probe; both
+	// failover and re-probe are Passage 1, one row per passage); host-b —
+	// passage 0,1,2 (probe + re-probe + new-master-action). All success.
 	got := passagesBySID(t, applyID, applyrun.StatusSuccess)
 	if len(got["host-a.example.com"]) != 2 {
 		t.Errorf("host-a passages = %v, want [0 1] (probe + failover/re-probe, не таргетился Passage 2)", got["host-a.example.com"])
@@ -883,14 +891,15 @@ func TestIntegration_Staged3Passage_ReprobeRetargets(t *testing.T) {
 }
 
 // TestIntegration_StagedOldSoul_Rejected — ★ FORWARD-COMPAT GUARD (ADR-056 §S5).
-// Staged-сценарий (probe→where, N>1 Passage) шлёт N ApplyRequest на хост; barrier
-// каждого Passage ждёт RunResult с echo passage. Soul без passage-capability
-// (старый бинарь) вернул бы passage=0 на все Passage → barrier Passage 1 ждал бы
-// терминал, которого нет → ЗАВИСАНИЕ в applying. Гейт run.go ОБЯЗАН отвергнуть
-// прогон ДО dispatch, если ХОТЬ ОДИН таргет-хост не анонсировал passage. ASSERT:
-// incarnation → ERROR_LOCKED, reason = soul_passage_unsupported, НИ ОДНОГО
-// ApplyRequest (отказ fail-closed ДО dispatch, не hang). Симметрия с
-// StagedNilPassageCap_FailClosed (тоже fail-closed ДО dispatch).
+// A staged scenario (probe→where, N>1 passages) sends N ApplyRequests to a host;
+// each passage's barrier waits for a RunResult echoing that passage. A Soul
+// without passage capability (old binary) would return passage=0 for every
+// passage → the Passage 1 barrier would wait for a terminal that never comes →
+// HANG in applying. The run.go gate MUST reject the run BEFORE dispatch if EVEN
+// ONE target host didn't announce passage support. ASSERT: incarnation →
+// ERROR_LOCKED, reason = soul_passage_unsupported, NO ApplyRequest at all
+// (fail-closed rejection BEFORE dispatch, not a hang). Symmetric to
+// StagedNilPassageCap_FailClosed (also fail-closed before dispatch).
 func TestIntegration_StagedOldSoul_Rejected(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -903,7 +912,7 @@ func TestIntegration_StagedOldSoul_Rejected(t *testing.T) {
 		"host-a.example.com": "master",
 		"host-b.example.com": "slave",
 	})
-	// host-b — «старый» Soul без passage-capability (не эхает passage).
+	// host-b is an "old" Soul without passage capability (doesn't echo passage).
 	r := newRunnerWithPassageCap(t, disp, stubPassageCap{lacking: []string{"host-b.example.com"}})
 
 	applyID := audit.NewULID()
@@ -922,18 +931,18 @@ func TestIntegration_StagedOldSoul_Rejected(t *testing.T) {
 		t.Fatalf("reason = %v, want soul_passage_unsupported (старый Soul под staged отвергнут ДО dispatch)", inc.StatusDetails["reason"])
 	}
 
-	// ★ Отказ ДО dispatch: НИ ОДНОГО ApplyRequest (даже probe Passage 0 не ушёл) —
-	// не hang, не silent одно-проходное исполнение.
+	// ★ Rejected BEFORE dispatch: NO ApplyRequest at all (not even the Passage 0
+	// probe went out) — not a hang, not a silent single-pass execution.
 	if p0 := disp.targets(0); len(p0) != 0 {
 		t.Fatalf("★ Passage 0 targets = %v, want [] (старый Soul под staged отвергнут ДО любого dispatch)", p0)
 	}
 }
 
-// TestIntegration_StagedNilPassageCap_FailClosed — ★ FAIL-CLOSED без Redis (ADR-056
-// §S5). passageCap=nil (нет presence-источника capability) → staged-прогон НЕ
-// угадывает поддержку, отвергается целиком: слать N>1 вслепую = тот же риск
-// зависания. N=1-прогоны гейт не проходят (см. остальные тесты). ASSERT:
-// ERROR_LOCKED, reason = soul_passage_unsupported, ни одного ApplyRequest.
+// TestIntegration_StagedNilPassageCap_FailClosed — ★ FAIL-CLOSED without Redis
+// (ADR-056 §S5). passageCap=nil (no presence source for capability) → a staged
+// run does NOT guess support, it's rejected outright: sending N>1 blind carries
+// the same hang risk. N=1 runs don't hit this gate (see other tests). ASSERT:
+// ERROR_LOCKED, reason = soul_passage_unsupported, no ApplyRequest at all.
 func TestIntegration_StagedNilPassageCap_FailClosed(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -946,7 +955,7 @@ func TestIntegration_StagedNilPassageCap_FailClosed(t *testing.T) {
 		"host-a.example.com": "master",
 		"host-b.example.com": "slave",
 	})
-	r := newRunnerWithPassageCap(t, disp, nil) // нет Redis-чекера.
+	r := newRunnerWithPassageCap(t, disp, nil) // no Redis checker.
 
 	applyID := audit.NewULID()
 	if err := r.Start(context.Background(), RunSpec{
@@ -968,13 +977,14 @@ func TestIntegration_StagedNilPassageCap_FailClosed(t *testing.T) {
 	}
 }
 
-// TestIntegration_RunOnceStaged — run_once+staged СОВМЕСТИМЫ (ADR-056 §S4): run_once
-// режет таргет Passage-задачи до первого по SID из РЕЗОЛВНУТОГО (свежим register)
-// таргета ЭТОГО Passage. Сценарий: probe role (p0) → run_once-act where role==master
-// (p1). ОБА хоста master → where пропускает обоих → run_once срезает до первого по
-// SID (host-a). ASSERT: Passage-1 ApplyRequest ТОЛЬКО на host-a (первый по SID из
-// master-таргета), НЕ на оба. Доказывает, что run_once применяется к таргету,
-// резолвнутому per-host register Passage 0 (а не к первому хосту roster вслепую).
+// TestIntegration_RunOnceStaged — run_once+staged are COMPATIBLE (ADR-056 §S4):
+// run_once trims a passage task's target to the first-by-SID host from THIS
+// passage's RESOLVED target (fresh register). Scenario: probe role (p0) →
+// run_once-act where role==master (p1). BOTH hosts are master → where passes
+// both → run_once trims to the first by SID (host-a). ASSERT: the Passage-1
+// ApplyRequest goes ONLY to host-a (first by SID from the master target), not
+// both. Proves run_once applies to the target resolved by the Passage 0
+// per-host register (not blindly to the first roster host).
 func TestIntegration_RunOnceStaged(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1036,7 +1046,7 @@ tasks:
 
 	disp := newStagedDispatcher(t, map[string]string{
 		"host-a.example.com": "master",
-		"host-b.example.com": "master", // ОБА master — where пропустит обоих
+		"host-b.example.com": "master", // BOTH master — where passes both
 	})
 	r := newRunner(t, disp, gitURL)
 
@@ -1056,22 +1066,24 @@ tasks:
 	if p0 := disp.targets(0); len(p0) != 2 {
 		t.Errorf("Passage 0 targets = %v, want оба хоста", p0)
 	}
-	// ★ Passage 1: ТОЛЬКО host-a — run_once срезал master-таргет {host-a,host-b}
-	// до первого по SID. Это доказывает, что run_once применился к РЕЗОЛВНУТОМУ
-	// where-таргету Passage 1 (оба master), а не к слепому первому хосту roster.
+	// ★ Passage 1: ONLY host-a — run_once trimmed the master target
+	// {host-a,host-b} to the first by SID. Proves run_once applied to the
+	// RESOLVED Passage 1 where target (both master), not blindly to the first
+	// roster host.
 	p1 := disp.targets(1)
 	if len(p1) != 1 || p1[0] != "host-a.example.com" {
 		t.Fatalf("★ Passage 1 targets = %v, want [host-a.example.com] (run_once → первый по SID из master-таргета)", p1)
 	}
 }
 
-// TestIntegration_StagedInlineNotAcolyteClaim — ★ staged идёт INLINE при
-// AcolyteEnabled (ADR-056 §S4 ЛИМИТ). run.go:308 гейт `!staged` исключает staged-
-// прогон из Acolyte-пути (dispatchPlanned): staged-render крутится inline даже когда
-// инстанс в work-queue-режиме. Доказательство: ни одной planned/claimed строки
-// apply_runs (Acolyte-путь пишет planned на КАЖДЫЙ roster-хост ДО claim); все
-// строки сразу терминальны (inline Insert(running)→SendApply→success), passage
-// корректно проставлен. Per-passage Acolyte-claim отложен (follow-up).
+// TestIntegration_StagedInlineNotAcolyteClaim — ★ staged runs INLINE even under
+// AcolyteEnabled (ADR-056 §S4 LIMITATION). The run.go:308 `!staged` gate
+// excludes staged runs from the Acolyte path (dispatchPlanned): staged-render
+// always runs inline, even when the instance is in work-queue mode. Proof: zero
+// planned/claimed apply_runs rows (the Acolyte path writes planned to EVERY
+// roster host BEFORE claim); all rows are terminal immediately (inline
+// Insert(running)→SendApply→success), passage set correctly. Per-passage
+// Acolyte claim is deferred (follow-up).
 func TestIntegration_StagedInlineNotAcolyteClaim(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1084,7 +1096,7 @@ func TestIntegration_StagedInlineNotAcolyteClaim(t *testing.T) {
 		"host-a.example.com": "master",
 		"host-b.example.com": "slave",
 	})
-	// AcolyteEnabled=true: НО staged-прогон обязан идти inline (гейт !staged).
+	// AcolyteEnabled=true: BUT a staged run must still go inline (gate !staged).
 	r := newRunnerAcolyte(t, disp, gitURL)
 
 	applyID := audit.NewULID()
@@ -1100,8 +1112,8 @@ func TestIntegration_StagedInlineNotAcolyteClaim(t *testing.T) {
 
 	waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
 
-	// Inline-путь сразу диспатчит SendApply (НЕ пишет planned для Acolyte-claim):
-	// Passage 0 ушёл на оба хоста, Passage 1 — на master.
+	// The inline path dispatches SendApply immediately (does NOT write planned
+	// for Acolyte claim): Passage 0 went to both hosts, Passage 1 — to master.
 	if p0 := disp.targets(0); len(p0) != 2 {
 		t.Errorf("Passage 0 targets = %v, want оба хоста (inline SendApply, не Acolyte planned)", p0)
 	}
@@ -1109,9 +1121,9 @@ func TestIntegration_StagedInlineNotAcolyteClaim(t *testing.T) {
 		t.Errorf("Passage 1 targets = %v, want [host-a.example.com] (inline)", p1)
 	}
 
-	// ★ Ни одной planned/claimed строки: staged НЕ пошёл Acolyte-путём
-	// (dispatchPlanned написал бы planned на КАЖДЫЙ roster-хост). Все строки
-	// сразу терминальны success (inline Insert(running)→success).
+	// ★ Zero planned/claimed rows: staged did NOT take the Acolyte path
+	// (dispatchPlanned would have written planned to EVERY roster host). All
+	// rows are terminal success immediately (inline Insert(running)→success).
 	statuses, err := applyrun.SelectStatusesByApplyID(context.Background(), integrationPool, applyID)
 	if err != nil {
 		t.Fatalf("SelectStatusesByApplyID: %v", err)
@@ -1126,11 +1138,11 @@ func TestIntegration_StagedInlineNotAcolyteClaim(t *testing.T) {
 	}
 }
 
-// TestIntegration_StagedEmptyRegister — устойчивость сравнения: probe отдаёт
-// ПУСТОЙ stdout одному хосту и whitespace другому → `where: ... == 'master'`
-// ложно на обоих → оба исключены из Passage 1 (Passage-1 ApplyRequest никому) →
-// incarnation READY (no-op, как all-slave). Доказывает, что пустой/whitespace
-// register не «протекает» в master-таргет.
+// TestIntegration_StagedEmptyRegister — comparison robustness: probe gives EMPTY
+// stdout to one host and whitespace to the other → `where: ... == 'master'` is
+// false on both → both excluded from Passage 1 (Passage-1 ApplyRequest to
+// nobody) → incarnation READY (no-op, like all-slave). Proves an empty/whitespace
+// register doesn't "leak" into the master target.
 func TestIntegration_StagedEmptyRegister(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1140,7 +1152,7 @@ func TestIntegration_StagedEmptyRegister(t *testing.T) {
 	gitURL := stagedServiceRepo(t)
 
 	disp := newStagedDispatcher(t, map[string]string{
-		"host-a.example.com": "",    // пустой stdout
+		"host-a.example.com": "",    // empty stdout
 		"host-b.example.com": "   ", // whitespace
 	})
 	r := newRunner(t, disp, gitURL)
@@ -1161,7 +1173,7 @@ func TestIntegration_StagedEmptyRegister(t *testing.T) {
 	if p0 := disp.targets(0); len(p0) != 2 {
 		t.Errorf("Passage 0 targets = %v, want оба хоста", p0)
 	}
-	// ★ Passage 1: НИ ОДНОГО (empty/whitespace stdout != 'master').
+	// ★ Passage 1: NONE (empty/whitespace stdout != 'master').
 	if p1 := disp.targets(1); len(p1) != 0 {
 		t.Fatalf("★ Passage 1 targets = %v, want [] (empty/whitespace register не == 'master')", p1)
 	}
@@ -1174,17 +1186,17 @@ func TestIntegration_StagedEmptyRegister(t *testing.T) {
 	}
 }
 
-// multiTaskPassage0ServiceRepo — сценарий, где Passage 0 несёт ДВЕ задачи (probe
-// `X` + ещё одна задача без register-зависимости), а Passage 1 читает register.X
-// в where. Воспроизводит латентный баг task_idx-коллизии (ADR-056 §S1):
+// multiTaskPassage0ServiceRepo — scenario where Passage 0 carries TWO tasks
+// (probe `X` + another task with no register dependency), and Passage 1 reads
+// register.X in where. Reproduces a latent task_idx-collision bug (ADR-056 §S1):
 //
-//	#0 probe X        → Passage 0, register: X, локальный task_idx 0
-//	#1 noop step      → Passage 0, без register, локальный task_idx 1
-//	#2 act where X    → Passage 1, локальный task_idx 0 (!) — коллизия с #0 по task_idx
+//	#0 probe X        → Passage 0, register: X, local task_idx 0
+//	#1 noop step      → Passage 0, no register, local task_idx 1
+//	#2 act where X    → Passage 1, local task_idx 0 (!) — collides with #0 on task_idx
 //
-// Если бы register ключевался по локальному task_idx, probe-X (Passage0/idx0) и
-// действие (Passage1/idx0) делили бы ключ. Корреляция по глобальному plan_index
-// разводит их (X — plan_index 0, действие — plan_index 2).
+// If register keyed on local task_idx, probe-X (Passage0/idx0) and the action
+// (Passage1/idx0) would share a key. Correlating on the global plan_index keeps
+// them apart (X — plan_index 0, action — plan_index 2).
 func multiTaskPassage0ServiceRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -1246,12 +1258,13 @@ tasks:
 	return "file://" + dir
 }
 
-// multiTaskDispatcher симулирует Soul для multi-task-Passage-0 кейса: пишет
-// register `role` (Passage 0, локальный idx 0) И register `action` (Passage 1,
-// локальный idx 0). Под СТАРЫМ PK (apply_id, sid, task_idx) обе строки делили бы
-// ключ (host-a, 0) → ON CONFLICT затёр бы probe-role действием (баг). Под новым
-// PK (apply_id, sid, plan_index) они сосуществуют (plan_index 0 и 2). Индексы
-// берутся из req.Tasks[] (emitterIndices), как Soul эхает их в TaskEvent.
+// multiTaskDispatcher simulates Soul for the multi-task-Passage-0 case: writes
+// register `role` (Passage 0, local idx 0) AND register `action` (Passage 1,
+// local idx 0). Under the OLD PK (apply_id, sid, task_idx) both rows would share
+// a key (host-a, 0) → ON CONFLICT would clobber probe-role with action (the
+// bug). Under the new PK (apply_id, sid, plan_index) they coexist (plan_index 0
+// and 2). Indices come from req.Tasks[] (emitterIndices), as Soul echoes them in
+// TaskEvent.
 type multiTaskDispatcher struct {
 	t         *testing.T
 	roleBySID map[string]string
@@ -1278,9 +1291,9 @@ func (d *multiTaskDispatcher) SendApply(ctx context.Context, sid string, req *ke
 			d.t.Errorf("multiTaskDispatcher: UpsertTaskRegister role (%s): %v", sid, err)
 		}
 	case 1:
-		// action — ГЛОБАЛЬНЫЙ plan_index 2, но ЛОКАЛЬНЫЙ task_idx 0 (#2 — первый и
-		// единственный шаг среза Passage 1). task_idx коллидирует с probe role
-		// (тоже локальный 0 в Passage 0); plan_index — нет.
+		// action — GLOBAL plan_index 2, but LOCAL task_idx 0 (#2 is the first and
+		// only step in the Passage 1 slice). task_idx collides with probe role
+		// (also local 0 in Passage 0); plan_index does not.
 		localIdx, planIdx := emitterIndices(req, "action")
 		if err := applyrun.UpsertTaskRegister(ctx, integrationPool, &applyrun.TaskRegister{
 			ApplyID: applyID, SID: sid, PlanIndex: planIdx, TaskIdx: localIdx, Passage: 1,
@@ -1304,16 +1317,18 @@ func (d *multiTaskDispatcher) targets(passage int) []string {
 }
 
 // TestIntegration_MultiTaskPassage0_RegisterNotClobbered — ★ GUARD (ADR-056 §S1
-// fix Variant B), интеграция: Passage 0 несёт ДВЕ задачи (probe role + noop),
-// Passage 1 несёт действие с register `action`. probe role (Passage0/локальный
-// idx 0) и действие (Passage1/локальный idx 0) коллидируют по task_idx — под
-// старым PK (apply_id, sid, task_idx) ON CONFLICT затёр бы probe-register
-// действием; корреляция по глобальному plan_index разводит их (0 и 2).
+// fix Variant B), integration: Passage 0 carries TWO tasks (probe role + noop),
+// Passage 1 carries an action with register `action`. probe role
+// (Passage0/local idx 0) and the action (Passage1/local idx 0) collide on
+// task_idx — under the old PK (apply_id, sid, task_idx) ON CONFLICT would
+// clobber the probe register with the action; correlating on the global
+// plan_index keeps them apart (0 and 2).
 //
-// ASSERT: (1) probe-register role НЕ затёрт (строка plan_index 0 несёт probe-
-// значение, не 'promoted'); (2) Passage-1 затаргетился ТОЛЬКО на master (where
-// резолвнулся правильным значением probe). Доказывает фикс end-to-end через
-// stage-loop с двумя задачами в Passage 0 и register-задачей в Passage 1.
+// ASSERT: (1) the probe register role is NOT clobbered (the plan_index 0 row
+// carries the probe value, not 'promoted'); (2) Passage-1 targeted ONLY master
+// (where resolved to the correct probe value). Proves the fix end-to-end
+// through the stage loop with two tasks in Passage 0 and a register task in
+// Passage 1.
 func TestIntegration_MultiTaskPassage0_RegisterNotClobbered(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1345,9 +1360,9 @@ func TestIntegration_MultiTaskPassage0_RegisterNotClobbered(t *testing.T) {
 
 	waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
 
-	// (1) ★ probe-register role НЕ затёрт действием Passage 1. Глобальный
-	// plan_index probe role = 0 (первый шаг плана); проверяем, что строка с этим
-	// plan_index несёт probe-значение, а не значение действия.
+	// (1) ★ the probe register role is NOT clobbered by the Passage 1 action.
+	// The global plan_index of probe role = 0 (first plan step); check that the
+	// row with this plan_index carries the probe value, not the action's.
 	regs, err := applyrun.SelectTaskRegistersByApplyID(context.Background(), integrationPool, applyID)
 	if err != nil {
 		t.Fatalf("SelectTaskRegistersByApplyID: %v", err)
@@ -1365,23 +1380,24 @@ func TestIntegration_MultiTaskPassage0_RegisterNotClobbered(t *testing.T) {
 		t.Fatalf("★ probe-register (plan_index 0) host-a отсутствует — затёрт коллизией task_idx (баг)")
 	}
 
-	// (2) ★ Passage 1 — ТОЛЬКО master (where резолвнулся непустым probe-register).
+	// (2) ★ Passage 1 — ONLY master (where resolved via the non-clobbered probe register).
 	p1 := disp.targets(1)
 	if len(p1) != 1 || p1[0] != "host-a.example.com" {
 		t.Fatalf("★ Passage 1 targets = %v, want [host-a.example.com] — register.role не резолвнулся (probe затёрт?)", p1)
 	}
 }
 
-// perHostWhereServiceRepo — сценарий, где per-host where внутри Passage 0 даёт
-// register-задаче РАЗНЫЙ локальный task_idx на разных хостах:
+// perHostWhereServiceRepo — scenario where a per-host where inside Passage 0
+// gives the register task a DIFFERENT local task_idx on different hosts:
 //
-//	#0 master-only step  → Passage 0, where: только master-хост
-//	#1 probe role_after  → Passage 0, register: role_after (оба хоста)
+//	#0 master-only step  → Passage 0, where: master host only
+//	#1 probe role_after  → Passage 0, register: role_after (both hosts)
 //	#2 act where after   → Passage 1, where: register.role_after
 //
-// На master-хосте срез Passage 0 = [#0,#1] → probe role_after на локальной 1;
-// на не-master срез = [#1] (#0 отфильтрован where) → probe role_after на локальной
-// 0. task_idx у probe разный (1 vs 0), глобальный plan_index одинаковый (1).
+// On the master host the Passage 0 slice = [#0,#1] → probe role_after at local
+// 1; on non-master the slice = [#1] (#0 filtered out by where) → probe
+// role_after at local 0. probe's task_idx differs (1 vs 0), global plan_index
+// is the same (1).
 func perHostWhereServiceRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -1405,12 +1421,12 @@ state_schema:
   type: object
   properties: {}
 `)
-	// Passage 0 несёт #0 (host-A-only prep, where по СТАБИЛЬНОМУ факту
-	// soulprint.self.covens — coven 'box-a' только у host-a) + #1 (probe role, оба
-	// хоста). where #0 опирается на coven-членство (registry-факт, не register) →
-	// оба в Passage 0, но #0 фильтруется per-host. Срез host-a = [#0,#1] (probe на
-	// локальной 1); срез host-b = [#1] (probe на локальной 0). #2 (Passage 1)
-	// читает register role probe.
+	// Passage 0 carries #0 (host-A-only prep, where on the STABLE fact
+	// soulprint.self.covens — coven 'box-a' only on host-a) + #1 (probe role,
+	// both hosts). where #0 relies on coven membership (a registry fact, not a
+	// register) → both are in Passage 0, but #0 is filtered per-host. host-a
+	// slice = [#0,#1] (probe at local 1); host-b slice = [#1] (probe at local 0).
+	// #2 (Passage 1) reads the probe's register role.
 	write("scenario/failover/main.yml", `name: failover
 description: box-a-only prep (p0) + probe role (p0, both) → act where role (p1)
 state_changes: {}
@@ -1449,22 +1465,23 @@ tasks:
 }
 
 // TestIntegration_PerHostDifferentWhere_RegisterResolves — ★ GUARD (ADR-056 §S1
-// fix Variant B), интеграция: per-host where внутри Passage 0 даёт probe-задаче
-// `role` РАЗНЫЙ локальный task_idx на двух хостах (host-a срез [#0,#1] → idx 1;
-// host-b срез [#1] → idx 0), но глобальный plan_index одинаков (1). Корреляция по
-// plan_index резолвит register обоих верно → Passage 1 (`where: register.role ==
-// 'master'`) таргетится корректно.
+// fix Variant B), integration: a per-host where inside Passage 0 gives the probe
+// task `role` a DIFFERENT local task_idx on the two hosts (host-a slice [#0,#1]
+// → idx 1; host-b slice [#1] → idx 0), but the global plan_index is the same
+// (1). Correlating on plan_index resolves the register correctly on both →
+// Passage 1 (`where: register.role == 'master'`) targets correctly.
 //
-// host-a — master (+coven box-a → проходит per-host where #0), host-b — slave.
-// ASSERT: Passage 1 → ТОЛЬКО host-a. Если бы корреляция шла по task_idx (host-a
-// idx 1, host-b idx 0), register одного из хостов не резолвнулся бы в `role` →
-// неверный таргетинг.
+// host-a is master (+coven box-a → passes per-host where #0), host-b is slave.
+// ASSERT: Passage 1 → ONLY host-a. If correlation went by task_idx (host-a
+// idx 1, host-b idx 0), one host's register would fail to resolve to `role` →
+// wrong targeting.
 func TestIntegration_PerHostDifferentWhere_RegisterResolves(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "redis-prod")
-	// coven box-a только у host-a → per-host where #0 ('box-a' in covens) проходит
-	// лишь на host-a, давая probe role разный локальный task_idx на двух хостах.
+	// coven box-a is only on host-a → per-host where #0 ('box-a' in covens)
+	// passes only on host-a, giving the probe role a different local task_idx on
+	// the two hosts.
 	seedConnectedSoul(t, "host-a.example.com", []string{"redis-prod", "box-a"})
 	seedConnectedSoul(t, "host-b.example.com", []string{"redis-prod"})
 	gitURL := perHostWhereServiceRepo(t)
@@ -1488,8 +1505,8 @@ func TestIntegration_PerHostDifferentWhere_RegisterResolves(t *testing.T) {
 
 	waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
 
-	// register role обоих хостов несёт plan_index 1 (глобальный), хоть локальный
-	// task_idx разный (host-a 1, host-b 0). Оба резолвятся в имя `role`.
+	// register role on both hosts carries plan_index 1 (global), even though the
+	// local task_idx differs (host-a 1, host-b 0). Both resolve to name `role`.
 	regs, err := applyrun.SelectTaskRegistersByApplyID(context.Background(), integrationPool, applyID)
 	if err != nil {
 		t.Fatalf("SelectTaskRegistersByApplyID: %v", err)
@@ -1500,8 +1517,8 @@ func TestIntegration_PerHostDifferentWhere_RegisterResolves(t *testing.T) {
 			taskIdxBySID[reg.SID] = reg.TaskIdx
 		}
 	}
-	// host-a probe role на локальной 1 (срез [#0,#1]); host-b на локальной 0 (#0
-	// отфильтрован per-host where). Разный task_idx — суть кейса.
+	// host-a probe role at local 1 (slice [#0,#1]); host-b at local 0 (#0
+	// filtered out by per-host where). The differing task_idx is the point.
 	if taskIdxBySID["host-a.example.com"] != 1 {
 		t.Errorf("host-a probe role task_idx = %d, want 1 (срез [#0,#1])", taskIdxBySID["host-a.example.com"])
 	}
@@ -1509,8 +1526,8 @@ func TestIntegration_PerHostDifferentWhere_RegisterResolves(t *testing.T) {
 		t.Errorf("host-b probe role task_idx = %d, want 0 (срез [#1], #0 отфильтрован)", taskIdxBySID["host-b.example.com"])
 	}
 
-	// ★ Passage 1 → ТОЛЬКО master, несмотря на разный per-host локальный task_idx
-	// probe-задачи: register резолвится по глобальному plan_index.
+	// ★ Passage 1 → ONLY master, despite the probe task's differing per-host
+	// local task_idx: register resolves via the global plan_index.
 	p1 := disp.targets(1)
 	if len(p1) != 1 || p1[0] != "host-a.example.com" {
 		t.Fatalf("★ Passage 1 targets = %v, want [host-a.example.com] — register.role не резолвнулся при разном per-host task_idx", p1)

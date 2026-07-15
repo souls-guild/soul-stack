@@ -10,12 +10,12 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 )
 
-// dirInputLoader — [InputScenarioLoader] поверх РЕАЛЬНОГО каталога снапшота на
-// диске. В отличие от fakeInputLoader (in-memory один YAML), здесь нужен
-// настоящий LocalDir: $type-резолв читает сиблинг types.yml из снапшота
-// (artifact.LoadScenarioManifestResolved → readSnapshotFile по art.LocalDir), а
-// не через ReadFile. ReadFile тоже идёт по диску, чтобы main.yml и types.yml
-// читались из одного дерева.
+// dirInputLoader — [InputScenarioLoader] over a REAL snapshot directory on
+// disk. Unlike fakeInputLoader (a single in-memory YAML), this needs a real
+// LocalDir: $type resolution reads a sibling types.yml from the snapshot
+// (artifact.LoadScenarioManifestResolved → readSnapshotFile via art.LocalDir),
+// not through ReadFile. ReadFile also goes through disk, so main.yml and
+// types.yml are read from the same tree.
 type dirInputLoader struct{ root string }
 
 func (l *dirInputLoader) Load(_ context.Context, ref artifact.ServiceRef) (*artifact.ServiceArtifact, error) {
@@ -26,8 +26,8 @@ func (l *dirInputLoader) ReadFile(_ *artifact.ServiceArtifact, file string) ([]b
 	return artifact.ReadSnapshotFile(l.root, file)
 }
 
-// writeServiceWithTypes материализует на диске минимальный снапшот сервиса:
-// scenario/create/main.yml + types.yml в корне. Возвращает root снапшота.
+// writeServiceWithTypes materializes a minimal service snapshot on disk:
+// scenario/create/main.yml + types.yml at the root. Returns the snapshot root.
 func writeServiceWithTypes(t *testing.T, mainYAML, typesYAML string) string {
 	t.Helper()
 	root := t.TempDir()
@@ -46,9 +46,9 @@ func writeServiceWithTypes(t *testing.T, mainYAML, typesYAML string) string {
 	return root
 }
 
-// typesAclUser — каталог типов с AclUser: object с required-полем `name`
-// (required-список на object-узле) и опц. `read_only`. Форма провалидируется
-// ТОЛЬКО после резолва $type на runtime-пути.
+// typesAclUser — a type catalog with AclUser: object with required field `name`
+// (a required list on the object node) and optional `read_only`. The shape is
+// validated ONLY after $type resolution on the runtime path.
 const typesAclUser = `types:
   AclUser:
     type: object
@@ -60,9 +60,10 @@ const typesAclUser = `types:
         type: boolean
 `
 
-// scenarioUsersOfType — input.users = array of $type:AclUser. Узел items несёт
-// ссылку на тип; до резолва его Type пуст → ResolveInputValues пропустил бы
-// submitted-элемент БЕЗ проверки формы (это и есть дыра MAJOR).
+// scenarioUsersOfType — input.users = array of $type:AclUser. The items node
+// carries a type reference; before resolution its Type is empty →
+// ResolveInputValues would pass a submitted element WITHOUT shape validation
+// (this is the MAJOR hole).
 const scenarioUsersOfType = `name: create
 input:
   users:
@@ -72,11 +73,11 @@ input:
 tasks: []
 `
 
-// TestValidateInput_TypeRef_NonObjectElement_Rejected — ГЛАВНЫЙ guard MAJOR:
-// submitted-элемент массива $type:AclUser, который НЕ object (строка), на
-// RUNTIME-пути ValidateInput → ResolveInputValues ОТКЛОНЯЕТСЯ. Доказывает, что
-// $type резолвится на загрузке (без резолва узел имел бы пустой Type и значение
-// прошло бы молча).
+// TestValidateInput_TypeRef_NonObjectElement_Rejected — the MAIN MAJOR guard: a
+// submitted $type:AclUser array element that is NOT an object (a string) is
+// REJECTED on the RUNTIME path ValidateInput → ResolveInputValues. Proves that
+// $type is resolved at load time (without resolution the node would have an
+// empty Type and the value would pass silently).
 func TestValidateInput_TypeRef_NonObjectElement_Rejected(t *testing.T) {
 	root := writeServiceWithTypes(t, scenarioUsersOfType, typesAclUser)
 	loader := &dirInputLoader{root: root}
@@ -91,9 +92,10 @@ func TestValidateInput_TypeRef_NonObjectElement_Rejected(t *testing.T) {
 	}
 }
 
-// TestValidateInput_TypeRef_MissingRequired_Rejected — элемент-object без
-// required-поля `name` типа AclUser → отклоняется. Доказывает энфорсинг
-// required-полей ВНУТРИ резолвнутого типа (а не только type-match верхнего узла).
+// TestValidateInput_TypeRef_MissingRequired_Rejected — an object element
+// missing AclUser's required field `name` is rejected. Proves enforcement of
+// required fields INSIDE the resolved type (not just a type-match on the top
+// node).
 func TestValidateInput_TypeRef_MissingRequired_Rejected(t *testing.T) {
 	root := writeServiceWithTypes(t, scenarioUsersOfType, typesAclUser)
 	loader := &dirInputLoader{root: root}
@@ -108,9 +110,9 @@ func TestValidateInput_TypeRef_MissingRequired_Rejected(t *testing.T) {
 	}
 }
 
-// TestValidateInput_TypeRef_ValidElement_OK — корректный AclUser (object с name)
-// проходит. Замыкает guard: резолв НЕ ломает валидный ввод, энфорсинг работает в
-// обе стороны (отклоняет битое, принимает правильное).
+// TestValidateInput_TypeRef_ValidElement_OK — a valid AclUser (object with
+// name) passes. Closes the guard: resolution does NOT break valid input,
+// enforcement works both ways (rejects broken, accepts correct).
 func TestValidateInput_TypeRef_ValidElement_OK(t *testing.T) {
 	root := writeServiceWithTypes(t, scenarioUsersOfType, typesAclUser)
 	loader := &dirInputLoader{root: root}
@@ -122,9 +124,10 @@ func TestValidateInput_TypeRef_ValidElement_OK(t *testing.T) {
 	}
 }
 
-// TestValidateInput_TypeRef_StandaloneField_NonObject_Rejected — $type как
-// САМОСТОЯТЕЛЬНОЕ поле (не под items): submitted non-object отклоняется. Покрывает
-// вторую форму ссылки (`<param>: { $type: T }`), симметрично array-of-type.
+// TestValidateInput_TypeRef_StandaloneField_NonObject_Rejected — $type as a
+// STANDALONE field (not under items): a submitted non-object is rejected.
+// Covers the second reference form (`<param>: { $type: T }`), symmetric to
+// array-of-type.
 func TestValidateInput_TypeRef_StandaloneField_NonObject_Rejected(t *testing.T) {
 	const scn = `name: create
 input:
@@ -145,11 +148,11 @@ tasks: []
 	}
 }
 
-// typesAclUserPerms — каталог с AclUser, несущим pattern на perms (token-shape-
-// фильтр Redis-ACL, examples/service/redis/types.yml). pattern проверяется на
-// RUNTIME-пути ValidateInput → ResolveInputValues → validateValueAt для каждого
-// элемента массива users. Источник pattern — types.yml сервиса redis; здесь
-// продублирован 1:1 как канон guard-теста.
+// typesAclUserPerms — a catalog with AclUser carrying a pattern on perms
+// (token-shape filter for Redis ACL, examples/service/redis/types.yml). The
+// pattern is checked on the RUNTIME path ValidateInput → ResolveInputValues →
+// validateValueAt for each element of the users array. Source of the pattern is
+// the redis service's types.yml; duplicated 1:1 here as the guard test's canon.
 const typesAclUserPerms = `types:
   AclUser:
     type: object
@@ -167,11 +170,12 @@ const typesAclUserPerms = `types:
         enum: [on, off]
 `
 
-// TestValidateInput_AclUserPerms_GarbageRejected — token-shape pattern на
-// AclUser.perms отшивает мусор/инъекции на RUNTIME-пути ValidateInput. Каждый
-// кейс — операторский input.users с одним элементом; perms — не-Redis-ACL-строка.
-// Доказывает, что pattern энфорсится на элементах массива $type:AclUser (прод-путь
-// резолва $type → ResolveInputValues → validateValueAt), а не только в lint.
+// TestValidateInput_AclUserPerms_GarbageRejected — the token-shape pattern on
+// AclUser.perms rejects garbage/injections on the RUNTIME path ValidateInput.
+// Each case is an operator input.users with one element; perms is a
+// non-Redis-ACL string. Proves the pattern is enforced on $type:AclUser array
+// elements (the prod path $type resolution → ResolveInputValues →
+// validateValueAt), not only in lint.
 func TestValidateInput_AclUserPerms_GarbageRejected(t *testing.T) {
 	root := writeServiceWithTypes(t, scenarioUsersOfType, typesAclUserPerms)
 	loader := &dirInputLoader{root: root}
@@ -200,10 +204,11 @@ func TestValidateInput_AclUserPerms_GarbageRejected(t *testing.T) {
 	}
 }
 
-// TestValidateInput_AclUserPerms_ValidAccepted — валидные Redis-ACL-строки
-// ПРОХОДЯТ pattern: точечные права, широкие (allkeys +@all) и РЕАЛЬНЫЕ системные
-// строки из essence (replica/monitoring/sentinel/haproxy, с дефисными сабкомандами
-// типа sentinel|is-master-down-by-addr). Замыкает guard — pattern не ложно-режет.
+// TestValidateInput_AclUserPerms_ValidAccepted — valid Redis ACL strings PASS
+// the pattern: point permissions, broad ones (allkeys +@all), and REAL system
+// strings from essence (replica/monitoring/sentinel/haproxy, with hyphenated
+// subcommands like sentinel|is-master-down-by-addr). Closes the guard — the
+// pattern doesn't false-reject.
 func TestValidateInput_AclUserPerms_ValidAccepted(t *testing.T) {
 	root := writeServiceWithTypes(t, scenarioUsersOfType, typesAclUserPerms)
 	loader := &dirInputLoader{root: root}
@@ -212,14 +217,15 @@ func TestValidateInput_AclUserPerms_ValidAccepted(t *testing.T) {
 		"~app:* +@read +@write -@dangerous",
 		"~* +@all",
 		"allkeys +@all",
-		"+psync +replconf +ping", // системный replica
-		"-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs",   // системный monitoring
-		"allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill", // системный sentinel
-		"-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info",                            // системный haproxy
-		"allchannels -@all +auth +sentinel|is-master-down-by-addr +sentinel|get-master-addr-by-name +sentinel|myid",                         // дефисные сабкоманды
-		// NB: пустая строка pattern-ом разрешена (бесправный off-юзер), но perms в
-		// required:[name,perms] → пустая отвергается required-логикой ДО pattern.
-		// Бесправный юзер выражается токеном `off`, не пустой строкой.
+		"+psync +replconf +ping", // system replica
+		"-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs",   // system monitoring
+		"allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill", // system sentinel
+		"-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info",                            // system haproxy
+		"allchannels -@all +auth +sentinel|is-master-down-by-addr +sentinel|get-master-addr-by-name +sentinel|myid",                         // hyphenated subcommands
+		// NB: pattern allows an empty string (a permissionless off-user), but perms
+		// in required:[name,perms] → empty is rejected by required logic BEFORE
+		// pattern. A permissionless user is expressed via the `off` token, not an
+		// empty string.
 		"off",
 	}
 	for _, perms := range valid {
@@ -231,10 +237,11 @@ func TestValidateInput_AclUserPerms_ValidAccepted(t *testing.T) {
 	}
 }
 
-// scenarioRequiredTypeField — самостоятельное поле `user: {$type: AclUser}` с
-// field-level `required: true`. После $type-резолва узел несёт форму типа
-// (object + RequiredProps) И перенесённый overlay-ссылкой Required=true
-// (applyRefOverlay, ADR-062). Омит `user` обязан упасть на requireInputValues.
+// scenarioRequiredTypeField — a standalone field `user: {$type: AclUser}` with
+// field-level `required: true`. After $type resolution the node carries the
+// type's shape (object + RequiredProps) AND the overlaid Required=true carried
+// over by reference (applyRefOverlay, ADR-062). Omitting `user` must fail on
+// requireInputValues.
 const scenarioRequiredTypeField = `name: create
 input:
   user:
@@ -243,8 +250,8 @@ input:
 tasks: []
 `
 
-// scenarioOptionalTypeField — тот же $type:AclUser-узел БЕЗ required. Омит
-// `user` проходит: required не выставлен, default нет → отсутствие легально.
+// scenarioOptionalTypeField — the same $type:AclUser node WITHOUT required.
+// Omitting `user` passes: required isn't set, no default → absence is legal.
 const scenarioOptionalTypeField = `name: create
 input:
   user:
@@ -252,18 +259,19 @@ input:
 tasks: []
 `
 
-// TestValidateInput_TypeRef_RequiredField_Omitted_Rejected — регресс-гард
-// backend-энфорсмента required на $type-резолвнутом object-узле (NIM-72):
-// омитнутое поле `user` с `required: true` даёт ErrInputInvalid на RUNTIME-пути
-// ValidateInput → ResolveInputValues → requireInputValues. Откат энфорсмента
-// (чтение s.Required на пострезолвном узле, input_value.go) молча пропустил бы
-// создание инкарнации без обязательного поля — этот тест ловит откат.
+// TestValidateInput_TypeRef_RequiredField_Omitted_Rejected — regression guard
+// for backend enforcement of required on a $type-resolved object node (NIM-72):
+// an omitted `user` field with `required: true` gives ErrInputInvalid on the
+// RUNTIME path ValidateInput → ResolveInputValues → requireInputValues. A
+// rollback of the enforcement (reading s.Required on the post-resolution node,
+// input_value.go) would silently allow creating an incarnation without a
+// required field — this test catches that regression.
 func TestValidateInput_TypeRef_RequiredField_Omitted_Rejected(t *testing.T) {
 	root := writeServiceWithTypes(t, scenarioRequiredTypeField, typesAclUserPerms)
 	loader := &dirInputLoader{root: root}
 
 	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
-		map[string]any{}) // user омитнут
+		map[string]any{}) // user omitted
 	if err == nil {
 		t.Fatal("required $type:AclUser-поле без значения должно быть отклонено, got nil (энфорсмент required снят?)")
 	}
@@ -272,16 +280,16 @@ func TestValidateInput_TypeRef_RequiredField_Omitted_Rejected(t *testing.T) {
 	}
 }
 
-// TestValidateInput_TypeRef_OptionalField_Omitted_OK — парный кейс: тот же
-// $type:AclUser-узел БЕЗ required, омитнутый, ПРОХОДИТ. Замыкает гард — энфорсмент
-// не ложно-режет опциональные type-поля (required срабатывает ровно от Required=true,
-// не от одного лишь наличия RequiredProps резолвнутого типа).
+// TestValidateInput_TypeRef_OptionalField_Omitted_OK — the paired case: the
+// same $type:AclUser node WITHOUT required, omitted, PASSES. Closes the guard —
+// enforcement doesn't false-reject optional type fields (required fires exactly
+// from Required=true, not merely from the resolved type having RequiredProps).
 func TestValidateInput_TypeRef_OptionalField_Omitted_OK(t *testing.T) {
 	root := writeServiceWithTypes(t, scenarioOptionalTypeField, typesAclUserPerms)
 	loader := &dirInputLoader{root: root}
 
 	err := ValidateInput(context.Background(), loader, artifact.ServiceRef{Name: "svc"}, "create",
-		map[string]any{}) // user омитнут — легально для опционального поля
+		map[string]any{}) // user omitted — legal for an optional field
 	if err != nil {
 		t.Fatalf("опциональное $type:AclUser-поле без значения должно проходить, got %v", err)
 	}

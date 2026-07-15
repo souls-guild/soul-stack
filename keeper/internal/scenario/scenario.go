@@ -1,26 +1,26 @@
-// Package scenario — главный orchestrator прогона scenario на Keeper-стороне
-// (architect-recon slice .g). Замыкает scenario-runner: связывает git-artifact
-// loader, topology-резолвер, essence-pipeline, render-pipeline, gRPC-Outbound и
-// incarnation/applyrun-CRUD в один async-прогон.
+// Package scenario is the top-level orchestrator for scenario runs on the
+// Keeper side (architect-recon slice .g). It wires together the git-artifact
+// loader, topology resolver, essence pipeline, render pipeline, gRPC
+// outbound, and incarnation/applyrun CRUD into one async run.
 //
-// Жизненный цикл прогона (см. [Runner.Start] → run-goroutine в run.go):
+// Run lifecycle (see [Runner.Start] → run-goroutine in run.go):
 //
 //	SelectByName → status=applying → Load(service) → ParseScenario →
 //	LoadIncarnationHosts → Resolve(essence) → Render → dispatch(per-task
 //	cross-host barrier) → UpdateStateFromRun(commit | error_locked)
 //
-// Pilot-объём DSL (PM-decision): sequential tasks + per-host fan-out + apply:
-// destiny + include (раскрывается ДО render в config.ExpandIncludes) +
-// serial/run_once (slice D: run_once режет таргет в render, serial катит хосты
-// волнами в dispatch). block/loop/parallel — вне pilot, гарантирует
-// render.Pipeline (ErrUnsupportedDSL). Cross-host barrier (orchestration.md §7):
-// state_changes коммитятся один раз после завершения ВСЕХ волн/задач на ВСЕХ
-// хостах прогона, никогда по-волново.
+// Pilot DSL scope (PM decision): sequential tasks + per-host fan-out +
+// apply:destiny + include (expanded before render via config.ExpandIncludes)
+// + serial/run_once (slice D: run_once narrows the target at render time,
+// serial rolls hosts in waves at dispatch time). block/loop/parallel are out
+// of pilot scope — render.Pipeline rejects them (ErrUnsupportedDSL).
+// Cross-host barrier (orchestration.md §7): state_changes commit once after
+// ALL waves/tasks on ALL hosts of the run finish, never per-wave.
 //
-// RunResult-collection — Вариант A (poll apply_runs.status, PM-decision):
-// proще cluster-coordination, poll БД работает в кластере (subscribe — только
-// local). Поллится [applyrun.SelectStatusesByApplyID] до терминала всех SID-ов
-// либо до per-scenario timeout-а.
+// RunResult collection uses Variant A (poll apply_runs.status, PM decision):
+// simpler cluster coordination — DB polling works across the cluster
+// (subscribe is local-only). Polls [applyrun.SelectStatusesByApplyID] until
+// all SIDs reach a terminal state or the per-scenario timeout fires.
 package scenario
 
 import (
@@ -44,176 +44,183 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// scenarioMainFile — точка входа сценария в service-репо (orchestration.md §1):
-// `scenario/<name>/main.yml`.
+// scenarioMainFile is the scenario entry point in the service repo
+// (orchestration.md §1): `scenario/<name>/main.yml`.
 const scenarioMainFile = "scenario/%s/main.yml"
 
-// upgradeMainFile — точка входа upgrade-сценария (ADR-0068 §3): второй канал
-// загрузки Runner-ом рядом со scenario/. Выбор пути — по [RunSpec.FromUpgrade]
-// (scenarioRelPath); формат симметричен scenarioMainFile.
+// upgradeMainFile is the upgrade-scenario entry point (ADR-0068 §3): a second
+// load channel alongside scenario/, selected via [RunSpec.FromUpgrade]
+// (scenarioRelPath); format mirrors scenarioMainFile.
 const upgradeMainFile = "upgrade/%s/main.yml"
 
-// CreateScenarioName — имя bootstrap-сценария, который incarnation.Create
-// (REST + MCP) прогоняет первым при появлении новой incarnation. Lifecycle-kind
-// (см. [LifecycleScenarioNames]).
+// CreateScenarioName is the bootstrap scenario name that incarnation.Create
+// (REST + MCP) runs first for a new incarnation. Lifecycle-kind (see
+// [LifecycleScenarioNames]).
 const CreateScenarioName = "create"
 
-// DestroyScenarioName — имя teardown-сценария в снапшоте сервиса, который
-// [Runner.StartDestroy] прогоняет в режиме [TerminalDestroy] (S-D2b). Совпадает
-// по значению с incarnation.destroyScenarioName / destroyScenarioLabel, но это
-// разные роли (имя файла сценария vs метка перехода в state_history); держим
-// отдельную константу, чтобы смена одной не утянула другую молча. Lifecycle-kind
-// (см. [LifecycleScenarioNames]).
+// DestroyScenarioName is the teardown scenario name in the service snapshot
+// that [Runner.StartDestroy] runs in [TerminalDestroy] mode (S-D2b). Same
+// value as incarnation.destroyScenarioName / destroyScenarioLabel but a
+// different role (scenario filename vs. state_history transition label) —
+// kept as a separate constant so changing one doesn't silently drag the
+// other. Lifecycle-kind (see [LifecycleScenarioNames]).
 const DestroyScenarioName = "destroy"
 
-// LifecycleScenarioNames — каноническая конвенция keeper: набор имён сценариев,
-// которые keeper трактует как specialized scenario-kind соответствующей фазы
-// жизненного цикла. create → bootstrap новой incarnation; destroy → teardown
-// (TerminalDestroy). Все прочие сценарии — operational (свободные операции над
-// state), запускаемые обычным run-ом. Единственный источник правды для DTO-поля
-// [artifact.Scenario.Kind]: имя ∈ набор → lifecycle, иначе operational.
-// Императивные проверки имени по keeper-у ссылаются на per-name константы
-// (CreateScenarioName / DestroyScenarioName), а не на строковые литералы.
+// LifecycleScenarioNames is the canonical keeper convention: scenario names
+// treated as a specialized scenario-kind for the corresponding lifecycle
+// phase. create → bootstrap a new incarnation; destroy → teardown
+// (TerminalDestroy). All other scenarios are operational (free-form state
+// operations) run via a normal run. Single source of truth for the DTO field
+// [artifact.Scenario.Kind]: name ∈ set → lifecycle, else operational.
+// Imperative name checks across keeper reference the per-name constants
+// (CreateScenarioName / DestroyScenarioName), not string literals.
 //
-// `converge` в набор НЕ входит (amend ADR-031, 2026-06-10): это operational-
-// сценарий — запускается обычным run-ом (Apply-reconcile) И служит dry-run
-// target-ом check-drift. Drift-контур грузит scenario/converge/main.yml по
-// константе имени [ConvergeScenarioName] (auto-discover), не через членство в
-// этом наборе, поэтому вывод converge из набора его не задевает.
+// `converge` is NOT in this set (amend ADR-031, 2026-06-10): it's an
+// operational scenario — runs via a normal run (Apply-reconcile) AND serves
+// as the dry-run target for check-drift. The drift path loads
+// scenario/converge/main.yml via the [ConvergeScenarioName] constant
+// (auto-discover), not via set membership, so converge staying out of this
+// set doesn't affect it.
 var LifecycleScenarioNames = map[string]struct{}{
 	CreateScenarioName:  {},
 	DestroyScenarioName: {},
 }
 
-// IsLifecycleScenario сообщает, входит ли имя сценария в [LifecycleScenarioNames]
-// (lifecycle-kind). Используется при разметке [artifact.Scenario.Kind] в
-// listing-handler-е.
+// IsLifecycleScenario reports whether name is in [LifecycleScenarioNames]
+// (lifecycle-kind). Used to tag [artifact.Scenario.Kind] in the listing
+// handler.
 func IsLifecycleScenario(name string) bool {
 	_, ok := LifecycleScenarioNames[name]
 	return ok
 }
 
-// IsRunnableScenario сообщает, можно ли запустить сценарий оператором из
-// Run-формы (ADR-042 «тупой фронт»: UI читает признак из каталога, не зашивает
-// список имён). Канон: lifecycle-create=true (bootstrap новой incarnation),
-// lifecycle-destroy=false (удаление — спец-флоу DELETE /v1/incarnations/{name},
-// не run), operational=true (свободная операция над state). Размечает
-// [artifact.Scenario.Runnable] в listing-handler-е.
+// IsRunnableScenario reports whether an operator can run this scenario from
+// the Run form (ADR-042 "dumb frontend": UI reads the flag from the catalog,
+// doesn't hardcode names). Canon: lifecycle-create=true (bootstrap a new
+// incarnation), lifecycle-destroy=false (deletion is the DELETE
+// /v1/incarnations/{name} flow, not a run), operational=true (free-form state
+// operation). Tags [artifact.Scenario.Runnable] in the listing handler.
 func IsRunnableScenario(name string) bool {
 	return name != DestroyScenarioName
 }
 
-// scenarioTemplatePrefix — каталог scenario-local-слоя двухуровневого резолва
-// ресурсов (orchestration.md §6): `scenario/<name>`. render.TemplateReader ищет
-// `.tmpl` сначала тут (scenario-local), затем на service-level. name уже прошёл
-// валидацию ScenarioNamePattern (traversal/мусор отсечены до резолва пути).
+// scenarioTemplatePrefix is the scenario-local layer directory of the
+// two-level resource resolve (orchestration.md §6): `scenario/<name>`.
+// render.TemplateReader looks for `.tmpl` here first (scenario-local), then
+// at service level. name has already passed ScenarioNamePattern validation
+// (traversal/garbage rejected before path resolve).
 func scenarioTemplatePrefix(name string) string {
 	return "scenario/" + name
 }
 
-// ScenarioNamePattern — каноническая форма имени scenario: snake_case
-// (`create`, `add_user`, `update_acl`), та же грамматика, что register/loop/
-// input-идентификаторы (shared/config). Отличается от incarnation kebab-case;
-// валидация имени до резолва пути `scenario/<name>/main.yml` отсекает path-
-// traversal (`/`, `..`) и мусор.
+// ScenarioNamePattern is the canonical scenario name form: snake_case
+// (`create`, `add_user`, `update_acl`), same grammar as register/loop/input
+// identifiers (shared/config). Differs from incarnation kebab-case; name
+// validation before resolving `scenario/<name>/main.yml` rejects path
+// traversal (`/`, `..`) and garbage.
 const ScenarioNamePattern = `^[a-z][a-z0-9_]*$`
 
 var scenarioNameRe = regexp.MustCompile(ScenarioNamePattern)
 
-// ValidScenarioName проверяет соответствие имени scenario [ScenarioNamePattern].
+// ValidScenarioName checks whether name matches [ScenarioNamePattern].
 func ValidScenarioName(name string) bool { return scenarioNameRe.MatchString(name) }
 
-// defaultPollInterval — период опроса apply_runs.status в cross-host barrier
-// fan-in (PM-decision: 200ms). Оптимизация (subscribe/event-driven) — позже.
+// defaultPollInterval is the apply_runs.status polling period for the
+// cross-host barrier fan-in (PM decision: 200ms). Optimization
+// (subscribe/event-driven) is deferred.
 const defaultPollInterval = 200 * time.Millisecond
 
-// defaultRunTimeout — потолок длительности одного прогона scenario. Защита от
-// «вечного barrier» (Soul завис, RunResult не пришёл). По истечении —
-// abort + error_locked (PM-decision: 5min).
+// defaultRunTimeout is the ceiling on a single scenario run's duration.
+// Guards against an "eternal barrier" (Soul hung, no RunResult). On expiry:
+// abort + error_locked (PM decision: 5min).
 const defaultRunTimeout = 5 * time.Minute
 
-// deployBudget — добавка к ceiling-у онбординга для provision-from-zero-прогона
-// (ADR-0061): effective run-timeout такого прогона = ResolvedMaxAwaitTimeout (потолок
-// барьера `await_online`) + deployBudget. Покрывает стадию ПОСЛЕ онбординга — деплой
-// роли на онбордившиеся хосты (apply redis и т.п.) в Passage за refresh-границей.
-// Внутренняя const, НЕ config-ключ: ручка `run_timeout` отложена отдельно, здесь
-// фиксируем щедрый запас (deploy редко превышает единицы минут). Effective timeout
-// применяется ТОЛЬКО к плану с refresh-эмиттером ([config.HasRefreshEmitter]); обычный
-// прогон держит defaultRunTimeout (вечный barrier по-прежнему обрывается).
+// deployBudget is added to the onboarding ceiling for a provision-from-zero
+// run (ADR-0061): effective run-timeout = ResolvedMaxAwaitTimeout (the
+// `await_online` barrier ceiling) + deployBudget. Covers the stage AFTER
+// onboarding — deploying the role to newly onboarded hosts (apply redis etc.)
+// in the Passage past the refresh boundary. Internal const, not a config key
+// (the `run_timeout` knob is deferred separately); this is just a generous
+// margin (deploy rarely exceeds a few minutes). Effective timeout applies
+// ONLY to a plan with a refresh emitter ([config.HasRefreshEmitter]); a
+// normal run keeps defaultRunTimeout (eternal barrier still aborts).
 const deployBudget = 10 * time.Minute
 
-// Sentinel-ошибки [Runner.Start].
+// Sentinel errors for [Runner.Start].
 var (
-	// ErrAlreadyRunning — для applyID уже зарегистрирован активный прогон,
-	// либо incarnation в статусе applying (PM-decision: на pilot — отказ,
-	// не очередь).
+	// ErrAlreadyRunning — applyID already has an active run registered, or the
+	// incarnation is in status applying (PM decision: pilot rejects, doesn't
+	// queue).
 	ErrAlreadyRunning = errors.New("scenario: run already in progress")
-	// ErrShuttingDown — Runner в процессе Shutdown, новые прогоны не
-	// принимаются.
+	// ErrShuttingDown — Runner is shutting down, new runs are not accepted.
 	ErrShuttingDown = errors.New("scenario: runner is shutting down")
-	// ErrLocked — incarnation в статусе error_locked: следующий прогон
-	// отклоняется до явного unlock (ADR-009, «Атомарность и error_locked»).
-	// Проверка под тем же FOR UPDATE, что и перевод в applying — авторитет
-	// gate-а в транзакции, не только в HTTP-handler-е (TOCTOU-safe).
+	// ErrLocked — incarnation is in status error_locked: the next run is
+	// rejected until an explicit unlock (ADR-009, "Atomicity and
+	// error_locked"). Checked under the same FOR UPDATE as the transition to
+	// applying — the gate is authoritative in the transaction, not just the
+	// HTTP handler (TOCTOU-safe).
 	ErrLocked = errors.New("scenario: incarnation is error_locked")
 
-	// ErrNotRunnable — статус incarnation не входит в allow-list прогона
-	// (всё, кроме ready/applying/error_locked: destroying — идёт teardown;
-	// migration_failed — залочена провалившейся миграцией, нужен unlock/upgrade;
-	// любой будущий статус). lockRun — explicit allow-list (fail-closed):
-	// новый статус по умолчанию ОТВЕРГАЕТСЯ, а не молча разрешается. Отдельный
-	// от ErrLocked, чтобы лог и result отличали «оператор должен сделать unlock
-	// error_locked» от «инстанс в нелётном статусе».
+	// ErrNotRunnable — incarnation status is outside the run allow-list
+	// (anything but ready/applying/error_locked: destroying is mid-teardown;
+	// migration_failed is locked by a failed migration, needs unlock/upgrade;
+	// any future status). lockRun uses an explicit allow-list (fail-closed): a
+	// new status is REJECTED by default, not silently allowed. Separate from
+	// ErrLocked so logs/results distinguish "operator must unlock
+	// error_locked" from "instance is in a non-flyable status".
 	ErrNotRunnable = errors.New("scenario: incarnation status does not permit a run")
 
-	// ErrKeeperModulesNotConfigured — scenario несёт задачу с `on: keeper`, но
-	// keeper-side core-Registry не сконфигурирован (Deps.KeeperModules == nil).
-	// Программная ошибка wire-up-а либо тестовая сборка без keeper-side модулей;
-	// прогон уходит в error_locked (reason: keeper_dispatch_failed).
+	// ErrKeeperModulesNotConfigured — scenario carries an `on: keeper` task but
+	// the keeper-side core Registry isn't configured (Deps.KeeperModules ==
+	// nil). A wire-up bug or a test build without keeper-side modules; the run
+	// goes to error_locked (reason: keeper_dispatch_failed).
 	ErrKeeperModulesNotConfigured = errors.New("scenario: keeper-side module registry is not configured")
 
-	// errCancelRequested — внутренний sentinel barrier-а (G1): прогон отменён
-	// через cluster-wide Cancel-флаг (apply_runs.cancel_requested, миграция
-	// 024). Выставить флаг мог любой Keeper-инстанс; run-goroutine-владелец
-	// прерывает барьер и уходит в abort (error_locked) — то же поведение, что
-	// при локальном ctx-Cancel. Не экспортируется: наружу прогон виден через
-	// статус incarnation, не через эту ошибку.
+	// errCancelRequested — internal barrier sentinel (G1): run was cancelled
+	// via the cluster-wide cancel flag (apply_runs.cancel_requested, migration
+	// 024). Any Keeper instance may have set the flag; the owning
+	// run-goroutine breaks the barrier and aborts (error_locked) — same
+	// behavior as a local ctx cancel. Not exported: externally the run is
+	// visible via incarnation status, not this error.
 	errCancelRequested = errors.New("scenario: cluster-wide cancel requested")
 )
 
-// TerminalMode — режим финала прогона scenario (S-D2b): определяет, что
-// run-goroutine делает на успешном завершении teardown-/apply-цикла и как
-// фиксирует провал. Нулевое значение [TerminalCommitState] = обычный прогон —
-// существующие вызовы (Create / scenario-run) не меняют поведения.
+// TerminalMode is the finalization mode of a scenario run (S-D2b): decides
+// what the run-goroutine does on successful completion of the
+// teardown/apply cycle and how it records failure. Zero value
+// [TerminalCommitState] = normal run — existing callers (Create /
+// scenario-run) keep current behavior.
 type TerminalMode int
 
 const (
-	// TerminalCommitState — обычный прогон (apply/upgrade): success коммитит
-	// state_changes в incarnation.state + статус ready; провал → error_locked.
-	// Дефолт (zero value): все существующие прогоны идут этим путём.
+	// TerminalCommitState — normal run (apply/upgrade): success commits
+	// state_changes into incarnation.state + status ready; failure →
+	// error_locked. Default (zero value): all existing runs take this path.
 	TerminalCommitState TerminalMode = iota
 
-	// TerminalDestroy — teardown-прогон (scenario `destroy`, S-D2b): success
-	// НЕ коммитит state и НЕ переводит в ready — incarnation остаётся в
-	// `destroying`, физический снос строки делает S-D3. Провал teardown
-	// (хост упал, barrier fail-closed) → статус `destroy_failed` (НЕ
-	// error_locked): из него оператор повторяет destroy или анлочит в ready
-	// (S-D2a дал Unlock destroy_failed→ready).
+	// TerminalDestroy — teardown run (scenario `destroy`, S-D2b): success does
+	// NOT commit state and does NOT transition to ready — the incarnation
+	// stays in `destroying`; the physical row delete is done by S-D3. Teardown
+	// failure (host down, barrier fail-closed) → status `destroy_failed` (NOT
+	// error_locked): from there the operator retries destroy or unlocks to
+	// ready (S-D2a added Unlock destroy_failed→ready).
 	TerminalDestroy
 )
 
-// RunSpec — параметры одного прогона scenario, передаются API-handler-ом в
-// [Runner.Start].
+// RunSpec holds the parameters of one scenario run, passed by the API
+// handler to [Runner.Start].
 //
-// ApplyID — ULID прогона (уже сгенерирован caller-ом, идёт в apply_runs /
-// state_history / RunResult-correlation). ServiceRef — git-координаты
-// service-репо (caller резолвит из реестра сервисов по incarnation.service,
-// ADR-029).
-// Input — `incarnation.spec.input` оператора. StartedByAID — инициатор (AID
-// Архонта из Operator API; пустая строка → NULL в apply_runs).
+// ApplyID is the run's ULID (already generated by the caller; flows into
+// apply_runs / state_history / RunResult correlation). ServiceRef is the
+// service repo's git coordinates (caller resolves from the service registry
+// by incarnation.service, ADR-029).
+// Input is the operator's `incarnation.spec.input`. StartedByAID is the
+// initiator (Archon AID from the Operator API; empty string → NULL in
+// apply_runs).
 //
-// TerminalMode — режим финала (S-D2b): нулевое значение [TerminalCommitState]
-// = обычный прогон; [TerminalDestroy] — teardown scenario `destroy`.
+// TerminalMode is the finalization mode (S-D2b): zero value
+// [TerminalCommitState] = normal run; [TerminalDestroy] = teardown scenario
+// `destroy`.
 type RunSpec struct {
 	ApplyID         string
 	IncarnationName string
@@ -223,272 +230,290 @@ type RunSpec struct {
 	StartedByAID    string
 	TerminalMode    TerminalMode
 
-	// FromLocked — старт прогона по уже зарезервированному статусу applying
-	// (rerun-last: incarnation.UnlockForRerun под FOR UPDATE перевёл
-	// error_locked→applying минуя ready, race-free). lockRun при FromLocked НЕ
-	// транзитит статус повторно — обязан увидеть applying, иначе старт отклоняется
-	// (fail-closed). Нулевое значение = обычный старт.
+	// FromLocked — run starts from an already-reserved applying status
+	// (rerun-last: incarnation.UnlockForRerun under FOR UPDATE moved
+	// error_locked→applying bypassing ready, race-free). lockRun with
+	// FromLocked does NOT transition status again — it must observe applying,
+	// otherwise the start is rejected (fail-closed). Zero value = normal
+	// start.
 	FromLocked bool
 
-	// FromUpgrade — грузить upgrade/<name>/main.yml вместо scenario/ (ADR-0068):
-	// второй канал авто-дискавери для version-к-версии upgrade-сценариев. Нулевое
-	// значение = обычный scenario/-путь (сегодняшнее поведение). Found-ветвь
-	// автозапуска (кто ставит флаг) — Slice 2.
+	// FromUpgrade — load upgrade/<name>/main.yml instead of scenario/
+	// (ADR-0068): second auto-discover channel for version-to-version upgrade
+	// scenarios. Zero value = normal scenario/ path (today's behavior). The
+	// auto-start found-branch (who sets this flag) is Slice 2.
 	FromUpgrade bool
 
-	// CadenceID — back-link на Cadence-расписание, породившее этот прогон
-	// (ADR-046 §2, T4b-фундамент). nil ⇒ ручной прогон (оператор/Voyage без
-	// расписания); populated ⇒ дочерний Voyage расписания. Проброс из
-	// voyages.cadence_id (BuildVoyage → VoyageWorker → ScenarioSpawner). Несётся
-	// в payload терминального события incarnation.run_completed ТОЛЬКО когда
-	// != nil (ручной прогон ключ cadence_id не несёт — консервативно, как
-	// drift-payload), чтобы постоянное Tiding-правило с cadence-селектором ловило
-	// результаты прогонов расписания.
+	// CadenceID — back-link to the Cadence schedule that spawned this run
+	// (ADR-046 §2, T4b foundation). nil ⇒ manual run (operator/Voyage without
+	// a schedule); populated ⇒ a schedule's child Voyage. Threaded from
+	// voyages.cadence_id (BuildVoyage → VoyageWorker → ScenarioSpawner).
+	// Carried in the incarnation.run_completed terminal event payload ONLY
+	// when != nil (manual runs omit the cadence_id key — conservative, same as
+	// the drift payload), so a standing Tiding rule with a cadence selector
+	// catches schedule run results.
 	CadenceID *string
 
-	// VoyageID — back-link на породивший прогон Voyage (voyages.voyage_id,
-	// ADR-043). Проброс из VoyageWorker через ScenarioSpawner.SpawnScenarioRun
-	// (production-spawner кладёт его сюда). nil ⇒ прогон НЕ через Voyage: прямые
-	// пути scenario `create` (auto_create) / rerun-last / destroy и их
-	// MCP-аналоги вызывают Runner напрямую, минуя voyage-orchestrator. Несётся
-	// в payload терминального события incarnation.run_completed ТОЛЬКО когда
-	// != nil (симметрия с CadenceID) — для visibility-фетча per-incarnation
-	// run-событий вояжа на Voyage detail (ADR-052 amend §k: событие per-
-	// incarnation с correlation_id=apply_id, а страница вояжа фильтрует по
-	// voyage_id в payload).
+	// VoyageID — back-link to the Voyage that spawned this run
+	// (voyages.voyage_id, ADR-043). Threaded from VoyageWorker through
+	// ScenarioSpawner.SpawnScenarioRun (the production spawner sets it). nil ⇒
+	// run is NOT via a Voyage: direct paths — scenario `create` (auto_create) /
+	// rerun-last / destroy and their MCP equivalents call Runner directly,
+	// bypassing the voyage orchestrator. Carried in the
+	// incarnation.run_completed terminal event payload ONLY when != nil
+	// (symmetric with CadenceID) — for the Voyage detail page's
+	// per-incarnation run-event visibility fetch (ADR-052 amend §k: the event
+	// is per-incarnation with correlation_id=apply_id, and the voyage page
+	// filters by voyage_id in the payload).
 	VoyageID *string
 }
 
-// ApplyDispatcher — узкая поверхность gRPC-Outbound, нужная orchestrator-у:
-// отправка `ApplyRequest` одному Soul-у. Интерфейс (а не *grpc.Outbound) —
-// для unit-тестов runner-а без подъёма EventStream / StreamManager.
+// ApplyDispatcher is the narrow gRPC-outbound surface the orchestrator needs:
+// send an `ApplyRequest` to one Soul. An interface (not *grpc.Outbound) so
+// the runner is unit-testable without standing up EventStream/StreamManager.
 //
-// Реализуется [grpc.Outbound] (метод SendApply с той же сигнатурой).
+// Implemented by [grpc.Outbound] (SendApply method, same signature).
 type ApplyDispatcher interface {
 	SendApply(ctx context.Context, sid string, req *keeperv1.ApplyRequest) error
 }
 
-// SummonsPublisher — узкая поверхность Redis-публикации Summons-сигнала
-// (ADR-027(a)): «появились planned-задания, проверьте очередь». Интерфейс (а не
-// прямой импорт keeper/internal/redis) держит scenario-runner независимым от
-// Redis-клиента — тот же приём, что [acolyte.SummonsSubscriber]. nil → dispatch
-// нового пути не шлёт Summons, planned-задания подхватит poll-fallback Acolyte
-// (best-effort, ADR-027(a)).
+// SummonsPublisher is the narrow Redis-publish surface for the Summons
+// signal (ADR-027(a)): "planned tasks appeared, check the queue". An
+// interface (not a direct keeper/internal/redis import) keeps scenario-runner
+// independent of the Redis client — same approach as
+// [acolyte.SummonsSubscriber]. nil → the new dispatch path sends no Summons;
+// planned tasks are picked up by Acolyte's poll-fallback (best-effort,
+// ADR-027(a)).
 //
-// Реализуется тонкой обёрткой над [redis.PublishSummons] при wire-up-е (1.4.4).
+// Implemented by a thin wrapper over [redis.PublishSummons] at wire-up
+// (1.4.4).
 type SummonsPublisher interface {
 	PublishSummons(ctx context.Context) error
 }
 
-// LeaseOwnerChecker — узкая поверхность Redis-чтения владельца SID-lease:
-// «какой Keeper-инстанс держит EventStream к данному Soul-у». Интерфейс (а не
-// прямой импорт keeper/internal/redis) держит scenario-runner независимым от
-// Redis-клиента — тот же приём, что [SummonsPublisher].
+// LeaseOwnerChecker is the narrow Redis-read surface for the SID-lease owner:
+// "which Keeper instance holds the EventStream to this Soul". An interface
+// (not a direct keeper/internal/redis import) keeps scenario-runner
+// independent of the Redis client — same approach as [SummonsPublisher].
 //
-// Нужен ТОЛЬКО multi-keeper-guard-у run-goroutine-пути (acolytes=0,
-// [Runner.dispatchWave]): перед SendApply сверяет владельца lease с собственным
-// KID и при расхождении печатает WARN (footgun «прогон зависнет в applying» —
-// RunResult уйдёт владельцу стрима на другом инстансе). При acolytes>0 (work-
-// queue ADR-027) этой проблемы нет, guard не вызывается.
+// Needed ONLY by the run-goroutine path's multi-keeper guard (acolytes=0,
+// [Runner.dispatchWave]): before SendApply it checks the lease owner against
+// its own KID and logs a WARN on mismatch (footgun: "run hangs in applying" —
+// the RunResult would go to the stream owner on another instance). With
+// acolytes>0 (work-queue, ADR-027) this problem doesn't exist and the guard
+// isn't invoked.
 //
-// ok=false — lease-ключа нет (Soul ни у кого на стриме); ошибка — сетевой сбой
-// (guard деградирует молча, warn не печатается). nil → guard выключен (нет
-// Redis / unit-тест без координации).
+// ok=false — no lease key (Soul isn't on anyone's stream); error — network
+// failure (guard degrades silently, no WARN). nil → guard disabled (no Redis
+// / unit test without coordination).
 //
-// Реализуется тонкой обёрткой над [redis.SoulLeaseOwner] при wire-up-е.
+// Implemented by a thin wrapper over [redis.SoulLeaseOwner] at wire-up.
 type LeaseOwnerChecker interface {
 	SoulLeaseOwner(ctx context.Context, sid string) (kid string, ok bool, err error)
 }
 
-// PassageCapabilityChecker — узкая поверхность Redis-проверки «какие SID-ы НЕ
-// анонсировали passage-capability» (ADR-056 §S5 forward-compat). Интерфейс (а не
-// прямой импорт keeper/internal/redis) держит scenario-runner независимым от
-// Redis-клиента — тот же приём, что [LeaseOwnerChecker] / [SummonsPublisher].
+// PassageCapabilityChecker is the narrow Redis-check surface for "which SIDs
+// have NOT announced passage capability" (ADR-056 §S5 forward-compat). An
+// interface (not a direct keeper/internal/redis import) keeps scenario-runner
+// independent of the Redis client — same approach as [LeaseOwnerChecker] /
+// [SummonsPublisher].
 //
-// Нужен ТОЛЬКО staged-гейту run.go: ДО dispatch-а сценария, стратифицированного в
-// N>1 Passage, проверяет, что КАЖДЫЙ таргет-хост умеет эхать ApplyRequest.passage.
-// Хост без capability → прогон отвергается (soul_passage_unsupported, fail-closed):
-// иначе barrier следующего Passage ждал бы терминал, которого старый бинарь не
-// пришлёт (зависание в applying).
+// Needed ONLY by run.go's staged gate: BEFORE dispatching a scenario
+// stratified into N>1 Passages, it verifies EVERY target host can echo
+// ApplyRequest.passage. A host lacking the capability → run rejected
+// (soul_passage_unsupported, fail-closed): otherwise the next Passage's
+// barrier would wait for a terminal state an old binary never sends (hangs
+// in applying).
 //
-// Возвращает подмножество переданных SID-ов БЕЗ capability (пустой/nil → все
-// поддерживают). Ошибка — сетевой сбой Redis: staged-гейт обязан отвергнуть
-// прогон (а не угадать поддержку), поэтому ошибка проброшена наверх.
+// Returns the subset of passed SIDs LACKING the capability (empty/nil → all
+// support it). Error — Redis network failure: the staged gate must reject the
+// run (rather than guess support), so the error propagates up.
 //
-// nil в Deps → гейт деградирует fail-closed: staged-прогон без чекера (нет Redis /
-// unit-тест) отвергается целиком (нельзя подтвердить поддержку — нельзя слать N>1).
-// Реализуется тонкой обёрткой над [redis.SoulsLackingCapability] при wire-up-е.
+// nil in Deps → the gate degrades fail-closed: a staged run without a checker
+// (no Redis / unit test) is rejected outright (can't confirm support, can't
+// send N>1). Implemented by a thin wrapper over
+// [redis.SoulsLackingCapability] at wire-up.
 type PassageCapabilityChecker interface {
 	SoulsLackingPassage(ctx context.Context, sids []string) ([]string, error)
 }
 
-// KeeperModuleRegistry — узкая поверхность keeper-side core-Registry
-// (keeper/internal/coremod), нужная scenario-runner-у для локального исполнения
-// задач с `on: keeper` (ADR-017, docs/keeper/modules.md). Интерфейс (а не прямой
-// *coremod.Registry) держит scenario-пакет тестируемым без сборки всех keeper-side
-// модулей и их dep-ов (PG / Vault / PluginHost) — fake реализует один Lookup.
+// KeeperModuleRegistry is the narrow keeper-side core Registry surface
+// (keeper/internal/coremod) scenario-runner needs for local execution of
+// `on: keeper` tasks (ADR-017, docs/keeper/modules.md). An interface (not a
+// direct *coremod.Registry) keeps the scenario package testable without
+// building all keeper-side modules and their deps (PG / Vault / PluginHost) —
+// a fake implements just Lookup.
 //
-// Реализуется [coremod.Registry] (метод Lookup с той же сигнатурой). nil в Deps →
-// задача с `on: keeper` отвергается ([ErrKeeperModulesNotConfigured]).
+// Implemented by [coremod.Registry] (Lookup method, same signature). nil in
+// Deps → `on: keeper` tasks are rejected ([ErrKeeperModulesNotConfigured]).
 type KeeperModuleRegistry interface {
 	Lookup(name string) (module.SoulModule, bool)
 }
 
-// ChangedTaskReader — узкая поверхность read-доступа к журналу аудита: множества
-// (sid, plan_index) задач прогона, терминал-ивших со статусом CHANGED (T3,
-// свёртка changed_tasks) либо FAILED/TIMED_OUT (ADR-056 R3, cross-passage
-// onfail-rescue-gating). Источник — `task.executed`-события (events_taskevent.go),
-// НЕ отдельная таблица. Интерфейс (а не прямой *auditpg.Reader) держит scenario-
-// пакет тестируемым без PG — fake реализует два метода.
+// ChangedTaskReader is the narrow read-access surface to the audit log: sets
+// of (sid, plan_index) run tasks that terminated CHANGED (T3, changed_tasks
+// rollup) or FAILED/TIMED_OUT (ADR-056 R3, cross-passage onfail-rescue
+// gating). Backed by `task.executed` events (events_taskevent.go), not a
+// separate table. An interface (not a direct *auditpg.Reader) keeps the
+// scenario package testable without PG — a fake implements the two methods.
 //
-// Реализуется [auditpg.Reader] (методы SelectChangedTaskKeys / SelectFailedTaskKeys
-// с той же сигнатурой). nil → терминальное событие incarnation.run_completed
-// эмитится без changed_tasks (свёртка пропускается, финал прогона не валится);
-// cross-passage onchanges/onfail-gating (R3) деградирует fail-closed —
-// staged-прогон с cross-passage requisite отвергается (см. run.go).
+// Implemented by [auditpg.Reader] (SelectChangedTaskKeys /
+// SelectFailedTaskKeys methods, same signature). nil → the
+// incarnation.run_completed terminal event is emitted without changed_tasks
+// (rollup skipped, run finalization doesn't fail); cross-passage
+// onchanges/onfail gating (R3) degrades fail-closed — a staged run with a
+// cross-passage requisite is rejected (see run.go).
 type ChangedTaskReader interface {
 	SelectChangedTaskKeys(ctx context.Context, applyID string) (map[auditpg.ChangedTaskKey]struct{}, error)
 	SelectFailedTaskKeys(ctx context.Context, applyID string) (map[auditpg.ChangedTaskKey]struct{}, error)
 }
 
-// Deps — конструкторские зависимости [Runner]. Обязательны все, кроме Logger
-// (nil → discard) и Destiny (nil → apply:destiny не поддержан, ErrUnsupportedDSL).
+// Deps holds [Runner]'s constructor dependencies. All required except Logger
+// (nil → discard) and Destiny (nil → apply:destiny unsupported,
+// ErrUnsupportedDSL).
 type Deps struct {
 	Loader   *artifact.ServiceLoader
 	Topology *topology.Resolver
 	Essence  *essence.Resolver
 	Render   *render.Pipeline
 	Outbound ApplyDispatcher
-	// Destiny — источник destiny-артефактов для apply:destiny (default_destiny_
-	// source + DestinyLoader). nil → apply:destiny в scenario отвергается на
-	// render-фазе (ErrUnsupportedDSL).
+	// Destiny — source of destiny artifacts for apply:destiny
+	// (default_destiny_source + DestinyLoader). nil → apply:destiny in a
+	// scenario is rejected at render phase (ErrUnsupportedDSL).
 	Destiny *DestinySource
-	// KeeperModules — keeper-side core-Registry (ADR-017): задачи с `on: keeper`
+	// KeeperModules — keeper-side core Registry (ADR-017): `on: keeper` tasks
 	// (`core.soul.registered`, `core.cloud.provisioned`, `core.vault.kv-read`)
-	// исполняются локально на инстансе через него. nil → задача с `on: keeper`
-	// отвергается на dispatch-фазе ([ErrKeeperModulesNotConfigured]); чисто
-	// Soul-side прогон работает без неё.
+	// execute locally on the instance through it. nil → `on: keeper` tasks
+	// are rejected at dispatch phase ([ErrKeeperModulesNotConfigured]); a
+	// pure Soul-side run works without it.
 	KeeperModules KeeperModuleRegistry
-	// DB — пул для incarnation + applyrun CRUD (одна Postgres, ADR-005).
+	// DB — pool for incarnation + applyrun CRUD (single Postgres, ADR-005).
 	DB     *pgxpool.Pool
 	Logger *slog.Logger
 
-	// Vault — общий keeper-vault-клиент для scoped-резолва `vault:`-ref в
-	// operator-input (docs/input.md → «vault_scope»). nil → input-vault-refs не
-	// резолвятся (поле со значением `vault:` отвергается на input-фазе как
-	// строка, не проходя ReadKV). Тот же клиент, что у render-pipeline.
+	// Vault — shared keeper-vault client for scoped resolve of `vault:` refs
+	// in operator input (docs/input.md → "vault_scope"). nil → input vault
+	// refs are not resolved (a field with a `vault:` value is rejected at
+	// input phase as a plain string, never reaching ReadKV). Same client as
+	// the render pipeline.
 	Vault InputVaultReader
-	// Audit — write-path для security-trail резолва input-vault-ref
-	// (`input.vault_resolved`, ok/denied) и терминального события прогона
-	// (`incarnation.run_completed`, T3). nil → trail не пишется (резолв работает,
-	// но без аудита — допустимо для unit-тестов).
+	// Audit — write path for the security trail of input-vault-ref resolve
+	// (`input.vault_resolved`, ok/denied) and the run's terminal event
+	// (`incarnation.run_completed`, T3). nil → trail isn't written (resolve
+	// still works, just without audit — fine for unit tests).
 	Audit audit.Writer
 
-	// ApplyBus — pub/sub-шина apply-событий (ADR-068 §A2): keeper-side task.executed
-	// публикуется сюда СИММЕТРИЧНО Soul-side (grpc/events_taskevent.go), чтобы
-	// `on: keeper`-задачи были видны на operator-SSE. nil → keeper-side события в SSE
-	// не идут (audit-путь работает как прежде). Та же шина, что у grpc-handler-ов.
+	// ApplyBus — pub/sub bus for apply events (ADR-068 §A2): keeper-side
+	// task.executed is published here SYMMETRICALLY with Soul-side
+	// (grpc/events_taskevent.go), so `on: keeper` tasks are visible on the
+	// operator SSE. nil → keeper-side events don't reach SSE (audit path
+	// still works as before). Same bus as the grpc handlers.
 	ApplyBus *applybus.EventBus
-	// AuditReader — read-доступ к журналу аудита для свёртки per-task changed
-	// (T3): множество (sid, task_idx) CHANGED-задач прогона. nil → терминальное
-	// событие incarnation.run_completed эмитится без changed_tasks (свёртка
-	// пропускается). Тот же pool/Reader, что у Operator API (auditpg.NewReader).
+	// AuditReader — read access to the audit log for the per-task changed
+	// rollup (T3): the set of (sid, task_idx) CHANGED tasks in the run. nil →
+	// the incarnation.run_completed terminal event is emitted without
+	// changed_tasks (rollup skipped). Same pool/Reader as the Operator API
+	// (auditpg.NewReader).
 	AuditReader ChangedTaskReader
 
-	// InputDenyPaths — config-расширение system-floor hard deny-list
-	// (keeper.yml → vault.input_deny_paths). Дополняет [config.VaultInputFloor],
-	// не выключает его.
+	// InputDenyPaths — config extension to the system-floor hard deny-list
+	// (keeper.yml → vault.input_deny_paths). Adds to
+	// [config.VaultInputFloor], doesn't replace it.
 	InputDenyPaths []string
 
-	// Metrics — keeper_scenario_*-collectors (ADR-024). nil → метрики прогона
-	// выключены (nil-safe методы [ScenarioMetrics] — no-op). Должен быть тем же
-	// дескриптором, что регистрируется в main на общий metricsReg.
+	// Metrics — keeper_scenario_* collectors (ADR-024). nil → run metrics
+	// disabled (nil-safe [ScenarioMetrics] methods are no-ops). Must be the
+	// same descriptor registered in main on the shared metricsReg.
 	Metrics *ScenarioMetrics
 
-	// AcolyteEnabled — cutover-флаг исполнения apply (ADR-027, Phase 1.4.2):
-	// true → dispatch пишет planned-задания + Summons (новый путь, исполняет
-	// Acolyte-пул), false → прямой Insert(running)+SendApply (старый путь).
-	// Заполняется из cfg.Acolytes>0 при wire-up-е (1.4.4). serial-guard
-	// (run.go::run) всё равно загоняет scenario с `serial:`-задачами в старый
-	// путь — распределённый serial — Phase 3.
+	// AcolyteEnabled — apply-execution cutover flag (ADR-027, Phase 1.4.2):
+	// true → dispatch writes planned tasks + Summons (new path, executed by
+	// the Acolyte pool); false → direct Insert(running)+SendApply (old path).
+	// Set from cfg.Acolytes>0 at wire-up (1.4.4). The serial guard
+	// (run.go::run) still forces scenarios with `serial:` tasks onto the old
+	// path — distributed serial is Phase 3.
 	AcolyteEnabled bool
 
-	// KID — идентификатор Keeper-инстанса (origin Summons-сигнала, ADR-027(a)).
-	// Нужен новому пути dispatch-а для [SummonsPublisher]. Заполняется при
-	// wire-up-е (1.4.4); пустой → AcolyteEnabled-путь Summons не шлёт (poll-
-	// fallback подхватит).
+	// KID — Keeper instance identifier (Summons signal origin, ADR-027(a)).
+	// Needed by the new dispatch path for [SummonsPublisher]. Set at wire-up
+	// (1.4.4); empty → the AcolyteEnabled path sends no Summons (poll-fallback
+	// picks it up).
 	KID string
 
-	// Summons — публикатор Summons-сигнала planned-заданий (ADR-027(a)). nil →
-	// dispatch нового пути Summons не шлёт (best-effort, poll-fallback Acolyte
-	// подхватит). Заполняется при wire-up-е (1.4.4).
+	// Summons — publisher of the planned-tasks Summons signal (ADR-027(a)).
+	// nil → the new dispatch path sends no Summons (best-effort, Acolyte's
+	// poll-fallback picks it up). Set at wire-up (1.4.4).
 	Summons SummonsPublisher
 
-	// LeaseOwner — чекер владельца SID-lease для multi-keeper-guard-а
-	// run-goroutine-пути (acolytes=0). nil → guard выключен (нет Redis / unit-
-	// тест). Заполняется при wire-up-е только при живом Redis: на чужом KID-
-	// владельце [Runner.dispatchWave] печатает WARN о возможном зависании прогона
-	// в applying (single-keeper-only footgun дефолта acolytes=0).
+	// LeaseOwner — SID-lease owner checker for the run-goroutine path's
+	// multi-keeper guard (acolytes=0). nil → guard disabled (no Redis / unit
+	// test). Set at wire-up only with live Redis: on a foreign KID owner,
+	// [Runner.dispatchWave] logs a WARN about a possible run hang in applying
+	// (single-keeper-only footgun of the acolytes=0 default).
 	LeaseOwner LeaseOwnerChecker
 
-	// PassageCap — чекер passage-capability таргет-хостов для staged-гейта run.go
-	// (ADR-056 §S5). nil → staged-прогон (N>1 Passage) отвергается целиком
-	// (fail-closed: без Redis нельзя подтвердить поддержку). Заполняется при
-	// wire-up-е тонкой обёрткой над redis.SoulsLackingCapability.
+	// PassageCap — passage-capability checker for target hosts, used by
+	// run.go's staged gate (ADR-056 §S5). nil → a staged run (N>1 Passage) is
+	// rejected outright (fail-closed: can't confirm support without Redis).
+	// Set at wire-up with a thin wrapper over redis.SoulsLackingCapability.
 	PassageCap PassageCapabilityChecker
 
-	// PollInterval / RunTimeout — переопределение дефолтов (для тестов).
-	// Нулевое значение → дефолт.
+	// PollInterval / RunTimeout — override the defaults (for tests). Zero
+	// value → default.
 	PollInterval time.Duration
 	RunTimeout   time.Duration
 
-	// MaxAwaitTimeoutFn — hot-reload-aware источник ceiling-а барьера онбординга
-	// `await_online` ([config.KeeperConfig.ResolvedMaxAwaitTimeout], ADR-0061): база
-	// provision-aware effective run-timeout (ceiling + deployBudget) для прогона с
-	// refresh-эмиттером. Замыкание (а не значение) — чтобы оператор-override keeper.yml::
-	// max_await_timeout подхватывался следующим прогоном без рестарта, тем же приёмом,
-	// что MaxAwaitTimeout у coremod (daemon.go). nil → effective timeout считается от
-	// [config.DefaultMaxAwaitTimeout] (30m) — unit-тест/L0 без config.Store; provision-
-	// прогон всё равно получает расширенный потолок, просто без hot-reload-override-а.
+	// MaxAwaitTimeoutFn — hot-reload-aware source for the `await_online`
+	// onboarding barrier ceiling ([config.KeeperConfig.ResolvedMaxAwaitTimeout],
+	// ADR-0061): base for the provision-aware effective run-timeout (ceiling +
+	// deployBudget) for a run with a refresh emitter. A closure (not a value)
+	// so an operator override of keeper.yml::max_await_timeout is picked up by
+	// the next run without a restart — same approach as coremod's
+	// MaxAwaitTimeout (daemon.go). nil → effective timeout falls back to
+	// [config.DefaultMaxAwaitTimeout] (30m) — unit test/L0 without
+	// config.Store; a provision run still gets the extended ceiling, just
+	// without the hot-reload override.
 	MaxAwaitTimeoutFn func() time.Duration
 }
 
-// Runner — singleton-orchestrator прогонов scenario. Инжектится в API-handler
-// (incarnation.Create) и в будущий `/scenarios/{scenario}`-endpoint.
+// Runner is the singleton orchestrator of scenario runs. Injected into the
+// API handler (incarnation.Create) and the future `/scenarios/{scenario}`
+// endpoint.
 //
-// active хранит cancel-функции активных прогонов по applyID — для
-// [Runner.Cancel] и graceful [Runner.Shutdown]. wg считает живые
-// run-goroutine-ы. shuttingDown закрывает приём новых прогонов.
+// active holds cancel functions for active runs keyed by applyID — used by
+// [Runner.Cancel] and graceful [Runner.Shutdown]. wg tracks live
+// run-goroutines. shuttingDown closes off new runs.
 type Runner struct {
 	deps         Deps
 	logger       *slog.Logger
 	pollInterval time.Duration
 	runTimeout   time.Duration
 
-	// maxAwaitTimeoutFn — hot-reload-aware ceiling барьера онбординга (копия
-	// Deps.MaxAwaitTimeoutFn), база provision-aware effective run-timeout (run.go::
-	// effectiveRunTimeout). nil → fallback на [config.DefaultMaxAwaitTimeout].
+	// maxAwaitTimeoutFn — hot-reload-aware onboarding barrier ceiling (copy of
+	// Deps.MaxAwaitTimeoutFn), base for the provision-aware effective
+	// run-timeout (run.go::effectiveRunTimeout). nil → falls back to
+	// [config.DefaultMaxAwaitTimeout].
 	maxAwaitTimeoutFn func() time.Duration
 
-	// acolyteEnabled / kid — cutover-флаг и origin-KID нового пути dispatch-а
-	// (ADR-027, Phase 1.4.2): копии Deps.AcolyteEnabled / Deps.KID, читаются в
-	// run.go::run при ветвлении пути dispatch-а.
+	// acolyteEnabled / kid — cutover flag and origin KID for the new dispatch
+	// path (ADR-027, Phase 1.4.2): copies of Deps.AcolyteEnabled / Deps.KID,
+	// read in run.go::run when branching the dispatch path.
 	acolyteEnabled bool
 	kid            string
 
-	// leaseOwner — чекер владельца SID-lease (копия Deps.LeaseOwner) для
-	// multi-keeper-guard-а старого пути dispatch-а (acolytes=0, dispatch.go).
-	// nil → guard выключен.
+	// leaseOwner — SID-lease owner checker (copy of Deps.LeaseOwner) for the
+	// old dispatch path's multi-keeper guard (acolytes=0, dispatch.go). nil →
+	// guard disabled.
 	leaseOwner LeaseOwnerChecker
 
-	// passageCap — чекер passage-capability таргет-хостов (копия Deps.PassageCap)
-	// для staged-гейта run.go (ADR-056 §S5). nil → staged-прогон отвергается
-	// fail-closed.
+	// passageCap — passage-capability checker for target hosts (copy of
+	// Deps.PassageCap) for run.go's staged gate (ADR-056 §S5). nil → staged
+	// run is rejected fail-closed.
 	passageCap PassageCapabilityChecker
 
-	// keeperModules — keeper-side core-Registry (копия Deps.KeeperModules) для
-	// локального исполнения задач `on: keeper` (run.go::dispatchKeeperTasks).
-	// nil → задача с `on: keeper` отвергается ([ErrKeeperModulesNotConfigured]).
+	// keeperModules — keeper-side core Registry (copy of Deps.KeeperModules)
+	// for local execution of `on: keeper` tasks (run.go::dispatchKeeperTasks).
+	// nil → `on: keeper` tasks are rejected ([ErrKeeperModulesNotConfigured]).
 	keeperModules KeeperModuleRegistry
 
 	mu           sync.Mutex
@@ -497,8 +522,8 @@ type Runner struct {
 	shuttingDown bool
 }
 
-// NewRunner собирает Runner. Паникует на nil обязательных зависимостях —
-// это программная ошибка wire-up-а (main), не runtime-условие.
+// NewRunner assembles a Runner. Panics on nil required dependencies — a
+// wire-up bug (main), not a runtime condition.
 func NewRunner(deps Deps) *Runner {
 	if deps.Loader == nil || deps.Topology == nil || deps.Essence == nil ||
 		deps.Render == nil || deps.Outbound == nil || deps.DB == nil {

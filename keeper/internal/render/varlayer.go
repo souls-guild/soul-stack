@@ -8,52 +8,54 @@ import (
 	"github.com/souls-guild/soul-stack/shared/cel"
 )
 
-// ErrVarUnknownRef — var-значение ссылается через `${ vars.<X> }` на имя <X>,
-// которого нет в ТОМ ЖЕ слое (file-level или task-level). EAGER-маркер: ошибка
-// поднимается на этапе построения графа зависимостей слоя, даже если сам
-// ссылающийся var нигде потом не используется. Раннее падение лучше тихого
-// no-such-key в неиспользуемой ветке: битая перекрёстная ссылка — это опечатка
-// автора, а не валидный «отложенный» var. Текст несёт var_unknown_ref как
-// стабильный маркер (trial expect_render_error / grep по логам).
+// ErrVarUnknownRef — a var value references, via `${ vars.<X> }`, a name <X> that
+// doesn't exist in the SAME layer (file-level or task-level). EAGER marker: the
+// error is raised while building the layer's dependency graph, even if the
+// referencing var is never used afterward. Failing early beats a silent
+// no-such-key in an unused branch: a broken cross-reference is an author typo, not
+// a valid "deferred" var. The message carries var_unknown_ref as a stable marker
+// (expect_render_error trials / log grep).
 var ErrVarUnknownRef = errors.New("render: var_unknown_ref")
 
-// ErrVarCycle — циклическая зависимость var→var внутри одного слоя
-// (a → b → … → a). Текст ошибки несёт ТРАССУ цикла (`a → b → c → a`) для
-// диагностики автору. Цикл неразрешим топосортом (Kahn): после удаления всех
-// узлов с нулевой входящей степенью в acc остаются только узлы цикла.
+// ErrVarCycle — a cyclic var→var dependency within one layer (a → b → … → a). The
+// error message carries the cycle TRACE (`a → b → c → a`) for the author to
+// debug. A cycle is unresolvable by topological sort (Kahn): after removing all
+// zero-in-degree nodes, only cycle nodes remain in acc.
 var ErrVarCycle = errors.New("render: var_cycle")
 
-// resolveVarLayer резолвит ОДИН слой переменных `vars.*` (file-level vars.yml ЛИБО
-// task-level `vars:`) с поддержкой ссылок var→var ВНУТРИ слоя (eager-topological).
-// Зеркало resolveCompute (compute.go): резолв в топопорядке зависимостей с
-// накоплением результата в base.Vars, чтобы var, объявленный позже, видел ранее
-// вычисленный var того же слоя.
+// resolveVarLayer resolves ONE layer of `vars.*` variables (either file-level
+// vars.yml OR task-level `vars:`) with support for var→var references WITHIN the
+// layer (eager-topological). Mirrors resolveCompute (compute.go): resolves in
+// dependency topological order, accumulating the result into base.Vars, so a var
+// declared later can see an earlier-computed var of the same layer.
 //
-// Граф зависимостей строится через engine.VarRefs на каждом строковом значении
-// (AST-обход, не regex): `${ vars.X }` → ребро текущий-var → X. Ссылка на имя,
-// отсутствующее в raw → [ErrVarUnknownRef] (eager, даже для неиспользуемого var).
-// Цикл → [ErrVarCycle] с трассой. non-string значения — литералы насквозь (CEL
-// трогает только строки, симметрично renderValue/resolveCompute); ребёр не дают.
+// The dependency graph is built via engine.VarRefs on each string value (AST
+// walk, not regex): `${ vars.X }` → edge current-var → X. A reference to a name
+// absent from raw → [ErrVarUnknownRef] (eager, even for an unused var). A cycle →
+// [ErrVarCycle] with a trace. Non-string values pass through as literals (CEL only
+// touches strings, symmetric with renderValue/resolveCompute); they contribute no
+// edges.
 //
-// ИЗОЛЯЦИЯ (КРИТИЧНО): var→var разрешён ТОЛЬКО внутри своего слоя. base несёт
-// контекст резолва (input/soulprint.self/incarnation для file-vars; см. caller-ов),
-// а base.Vars на старте слоя ОБЯЗАН быть пуст — иначе ссылка `vars.<X>` на чужой
-// слой (file-var из task-слоя и наоборот) резолвилась бы вместо ошибки изоляции.
-// Активация CEL получает только ключ `vars` (накопитель этого слоя); restricted-env
-// (register/soulprint.hosts) НЕ ослабляется — он определяется самим base, который
-// caller строит изолированным.
+// ISOLATION (CRITICAL): var→var is allowed ONLY within its own layer. base
+// carries the resolve context (input/soulprint.self/incarnation for file-vars;
+// see the callers), and base.Vars MUST be empty at the start of the layer —
+// otherwise a `vars.<X>` reference into a foreign layer (a file-var from the
+// task layer or vice versa) would resolve instead of failing with an isolation
+// error. CEL activation only gets the `vars` key (this layer's accumulator); the
+// restricted env (register/soulprint.hosts) is NOT relaxed — it's determined by
+// base itself, which the caller builds isolated.
 func resolveVarLayer(engine *cel.Engine, raw map[string]any, base cel.Vars) (map[string]any, error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}
 
-	// deps[name] — имена того же слоя, на которые ссылается значение name (рёбра
-	// name → dep). Несуществующая ссылка → eager ErrVarUnknownRef.
+	// deps[name] — names in the same layer that name's value references (edges
+	// name → dep). A reference to a nonexistent name → eager ErrVarUnknownRef.
 	deps := make(map[string][]string, len(raw))
 	for name, val := range raw {
 		s, ok := val.(string)
 		if !ok {
-			continue // литерал — рёбер не даёт
+			continue // literal — contributes no edges
 		}
 		refs, err := engine.VarRefs(s)
 		if err != nil {
@@ -73,12 +75,12 @@ func resolveVarLayer(engine *cel.Engine, raw map[string]any, base cel.Vars) (map
 	}
 
 	acc := make(map[string]any, len(raw))
-	base.Vars = acc // накопитель слоя; var в топопорядке видит ранее вычисленные
+	base.Vars = acc // this layer's accumulator; a var in topo order sees earlier-computed ones
 	for _, name := range order {
 		val := raw[name]
 		s, ok := val.(string)
 		if !ok {
-			acc[name] = val // литерал — насквозь
+			acc[name] = val // literal — passes through
 			continue
 		}
 		r, err := engine.EvalInterpolation(s, base)
@@ -90,21 +92,21 @@ func resolveVarLayer(engine *cel.Engine, raw map[string]any, base cel.Vars) (map
 	return acc, nil
 }
 
-// topoSort упорядочивает имена слоя так, что каждое имя идёт ПОСЛЕ имён, на которые
-// оно ссылается (deps[name]) — порядок резолва, при котором ссылающийся var видит
-// уже вычисленные зависимости. Алгоритм — Kahn по входящей степени; узлы с равной
-// степенью берутся в лексикографическом порядке для детерминизма (порядок ключей в
-// YAML безразличен — кейс #7).
+// topoSort orders layer names so each name comes AFTER the names it references
+// (deps[name]) — a resolve order where a referencing var sees already-computed
+// dependencies. The algorithm is Kahn's by in-degree; nodes with equal degree are
+// taken in lexicographic order for determinism (YAML key order doesn't matter —
+// case #7).
 //
-// Возврат cycle != nil, если граф не ацикличен: cycle — трасса одного цикла
-// (`a → b → c → a`, замкнутая повтором стартового узла) для ErrVarCycle. Самоссылка
-// (a→a) — частный случай цикла, трасса `a → a`.
+// Returns cycle != nil if the graph isn't acyclic: cycle is the trace of one
+// cycle (`a → b → c → a`, closed by repeating the starting node) for ErrVarCycle.
+// A self-reference (a→a) is a special case of a cycle, trace `a → a`.
 func topoSort(raw map[string]any, deps map[string][]string) (order []string, cycle []string) {
-	// remaining[name] — число его ИСХОДЯЩИХ неразрешённых зависимостей: узел готов к
-	// резолву, когда все его deps уже в order (Kahn по исходящей степени).
+	// remaining[name] — the count of its OUTGOING unresolved dependencies: a node
+	// is ready to resolve once all its deps are already in order (Kahn by out-degree).
 	remaining := make(map[string]int, len(raw))
-	// dependents[dep] — кто ссылается на dep (обратные рёбра), чтобы при готовности
-	// dep уменьшать счётчик зависящих.
+	// dependents[dep] — who references dep (reverse edges), so that once dep is
+	// ready we can decrement its dependents' counters.
 	dependents := make(map[string][]string, len(raw))
 	names := make([]string, 0, len(raw))
 	for name := range raw {
@@ -115,9 +117,9 @@ func topoSort(raw map[string]any, deps map[string][]string) (order []string, cyc
 		}
 	}
 
-	// Очередь готовых узлов (remaining==0), извлекаем лексикографически наименьший —
-	// детерминизм при равной готовности. Малые слои (единицы-десятки vars) → линейный
-	// поиск минимума дешевле кучи и проще.
+	// Queue of ready nodes (remaining==0), we pull the lexicographically smallest —
+	// determinism when equally ready. Small layers (units to tens of vars) → a
+	// linear minimum search is cheaper and simpler than a heap.
 	resolved := make(map[string]bool, len(raw))
 	for len(order) < len(raw) {
 		next := ""
@@ -130,7 +132,7 @@ func topoSort(raw map[string]any, deps map[string][]string) (order []string, cyc
 			}
 		}
 		if next == "" {
-			// Готовых узлов нет, но не все разрешены → остаток образует цикл.
+			// No ready nodes, but not everything is resolved → the remainder forms a cycle.
 			return nil, traceCycle(names, deps, resolved)
 		}
 		resolved[next] = true
@@ -142,13 +144,13 @@ func topoSort(raw map[string]any, deps map[string][]string) (order []string, cyc
 	return order, nil
 }
 
-// traceCycle строит человекочитаемую трассу одного цикла среди ещё не разрешённых
-// узлов (resolved[x]==false). Идёт по рёбрам deps от первого неразрешённого узла,
-// пока не встретит уже посещённый в этом обходе — отрезок от его первого появления
-// до повтора и есть цикл (замкнутый повтором стартового элемента).
+// traceCycle builds a human-readable trace of one cycle among the still-unresolved
+// nodes (resolved[x]==false). Walks deps edges from the first unresolved node
+// until hitting one already visited in this walk — the segment from its first
+// appearance to the repeat is the cycle (closed by repeating the starting element).
 func traceCycle(names []string, deps map[string][]string, resolved map[string]bool) []string {
-	// Стартуем с лексикографически наименьшего неразрешённого узла — детерминизм
-	// трассы (кейс #7: порядок YAML не должен влиять на текст ошибки).
+	// Start from the lexicographically smallest unresolved node — trace determinism
+	// (case #7: YAML order must not affect the error text).
 	start := ""
 	for _, n := range names {
 		if !resolved[n] {
@@ -162,12 +164,12 @@ func traceCycle(names []string, deps map[string][]string, resolved map[string]bo
 	cur := start
 	for {
 		if i, seen := pos[cur]; seen {
-			return append(path[i:], cur) // замыкаем повтором
+			return append(path[i:], cur) // close by repeating
 		}
 		pos[cur] = len(path)
 		path = append(path, cur)
-		// Следующий узел цикла — первая неразрешённая зависимость (детерминированно
-		// наименьшая среди deps, ведущих обратно в цикл).
+		// The next cycle node is the first unresolved dependency (deterministically
+		// the smallest among deps leading back into the cycle).
 		nextHop := ""
 		for _, d := range deps[cur] {
 			if resolved[d] {
@@ -178,7 +180,7 @@ func traceCycle(names []string, deps map[string][]string, resolved map[string]bo
 			}
 		}
 		if nextHop == "" {
-			return path // защита: deps закончились (не должно случиться для цикла)
+			return path // safety: ran out of deps (shouldn't happen for a cycle)
 		}
 		cur = nextHop
 	}

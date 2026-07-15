@@ -6,7 +6,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/serviceregistry"
 )
 
-// fakeCatalog — in-memory [ServiceCatalog] для тестов (без Postgres-снимка).
+// fakeCatalog — an in-memory [ServiceCatalog] for tests (no Postgres snapshot).
 type fakeCatalog map[string]serviceregistry.ServiceEntry
 
 func (c fakeCatalog) Resolve(name string) (serviceregistry.ServiceEntry, bool) {

@@ -1,21 +1,21 @@
 //go:build integration
 
-// Integration-guard-ы терминального события incarnation.run_completed на ПРОВАЛЕ
-// прогона (T4-фундамент, ADR-052 §k). Проверяют ветвление abort()-пути run():
+// Integration guards for the incarnation.run_completed terminal event on run
+// FAILURE (T4 foundation, ADR-052 §k). Verify the abort() branch of run():
 //
-//   - поздний abort (dispatch_failed: tasks/plans уже отрендерены) → событие
-//     status=failed с частичным changed_tasks;
-//   - ранний abort (no_hosts: render не дошёл, tasks/plans nil) → событие
-//     status=failed с пустым changed_tasks (не паникует);
-//   - TerminalDestroy-провал (teardown упал) → НЕ эмитит run_completed (свой
-//     терминал destroy_failed);
-//   - single-winner-сигнал lockIncarnation (finalized) на уже-финализированной
-//     incarnation.
+//   - late abort (dispatch_failed: tasks/plans already rendered) → event
+//     status=failed with partial changed_tasks;
+//   - early abort (no_hosts: render never reached, tasks/plans nil) → event
+//     status=failed with empty changed_tasks (no panic);
+//   - TerminalDestroy failure (teardown failed) → does NOT emit run_completed
+//     (its own destroy_failed terminal);
+//   - single-winner signal from lockIncarnation (finalized) on an
+//     already-finalized incarnation.
 //
-// Инфраструктура (testcontainers PG, mock Outbound, local-fs git) общая с
-// integration_test.go. Runner собирается с реальным auditpg.Writer/Reader (в
-// отличие от newRunner, который Audit не подключает) — событие действительно
-// долетает в audit_log.
+// Infrastructure (testcontainers PG, mock Outbound, local-fs git) shared with
+// integration_test.go. Runner is built with a real auditpg.Writer/Reader
+// (unlike newRunner, which doesn't wire up Audit) — the event actually reaches
+// audit_log.
 
 package scenario
 
@@ -36,8 +36,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/cel"
 )
 
-// newRunnerWithAudit собирает Runner с реальным auditpg.Writer/Reader — иначе
-// emitRunCompleted (Audit==nil) молча no-op-ит и событие в audit_log не долетает.
+// newRunnerWithAudit builds a Runner with a real auditpg.Writer/Reader —
+// otherwise emitRunCompleted (Audit==nil) silently no-ops and the event never
+// reaches audit_log.
 func newRunnerWithAudit(t *testing.T, disp ApplyDispatcher) *Runner {
 	t.Helper()
 	engine, err := cel.New()
@@ -58,8 +59,8 @@ func newRunnerWithAudit(t *testing.T, disp ApplyDispatcher) *Runner {
 	})
 }
 
-// runCompletedEvents читает из audit_log все incarnation.run_completed-события
-// прогона applyID (correlation_id = apply_id) и возвращает их payload-ы.
+// runCompletedEvents reads all incarnation.run_completed events for run applyID
+// (correlation_id = apply_id) from audit_log and returns their payloads.
 func runCompletedEvents(t *testing.T, applyID string) []map[string]any {
 	t.Helper()
 	rows, err := integrationPool.Query(context.Background(),
@@ -85,10 +86,11 @@ func runCompletedEvents(t *testing.T, applyID string) []map[string]any {
 	return out
 }
 
-// waitRunCompletedEvents поллит до появления ровно одного incarnation.run_completed
-// события прогона applyID и возвращает его payload. Событие в abort()/success-ветке
-// пишется под detached-ctx ПОСЛЕ финализации статуса incarnation, поэтому ждать
-// статус (waitRunDone) недостаточно — нужно дождаться самой записи в audit_log.
+// waitRunCompletedEvents polls until exactly one incarnation.run_completed
+// event for run applyID appears and returns its payload. The event in the
+// abort()/success branch is written under a detached ctx AFTER the incarnation
+// status is finalized, so waiting on status (waitRunDone) isn't enough — we
+// need to wait for the actual audit_log write.
 func waitRunCompletedEvents(t *testing.T, applyID string) map[string]any {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -105,11 +107,11 @@ func waitRunCompletedEvents(t *testing.T, applyID string) map[string]any {
 	return nil
 }
 
-// TestIntegration_RunCompletedFailed_LateAbort — поздний abort (dispatch_failed:
-// SendApply вернул терминал failed после render) → incarnation.run_completed
-// status=failed эмитится ровно один раз, changed_tasks — частичный (тут изменений
-// нет, changed_when:false, поэтому пустой, но СОБЫТИЕ есть). Симметрия с
-// TestIntegration_FailPath, дополненная проверкой события.
+// TestIntegration_RunCompletedFailed_LateAbort — late abort (dispatch_failed:
+// SendApply returned a failed terminal after render) → incarnation.run_completed
+// status=failed is emitted exactly once, changed_tasks is partial (no changes
+// here, changed_when:false, so it's empty, but the EVENT exists). Mirrors
+// TestIntegration_FailPath, with an added event check.
 func TestIntegration_RunCompletedFailed_LateAbort(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -145,14 +147,14 @@ func TestIntegration_RunCompletedFailed_LateAbort(t *testing.T) {
 	}
 }
 
-// TestIntegration_RunCompletedFailed_EarlyAbort — ранний abort (no_hosts: render
-// не дошёл, tasks/plans nil) → событие status=failed с пустым changed_tasks, без
-// паники на nil-входе buildChangedTasks.
+// TestIntegration_RunCompletedFailed_EarlyAbort — early abort (no_hosts: render
+// never reached, tasks/plans nil) → event status=failed with empty
+// changed_tasks, no panic on buildChangedTasks' nil input.
 func TestIntegration_RunCompletedFailed_EarlyAbort(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "noop-prod")
-	// Ни одного connected-хоста → no_hosts (abort до render).
+	// No connected hosts → no_hosts (abort before render).
 	gitURL := noopServiceRepo(t)
 
 	disp := &mockDispatcher{t: t, result: applyrun.StatusSuccess}
@@ -186,8 +188,8 @@ func TestIntegration_RunCompletedFailed_EarlyAbort(t *testing.T) {
 	}
 }
 
-// TestIntegration_RunCompletedFailed_CadenceIDPresent — прогон с CadenceID != nil
-// (имитация дочернего Voyage расписания) → провальное событие несёт cadence_id.
+// TestIntegration_RunCompletedFailed_CadenceIDPresent — a run with CadenceID != nil
+// (simulating a Voyage-schedule child run) → the failure event carries cadence_id.
 func TestIntegration_RunCompletedFailed_CadenceIDPresent(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -209,7 +211,7 @@ func TestIntegration_RunCompletedFailed_CadenceIDPresent(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// no_hosts → failed-терминал; нас интересует cadence_id в payload.
+	// no_hosts → failed terminal; we care about cadence_id in the payload.
 	waitRunDone(t, "noop-prod", applyID, incarnation.StatusErrorLocked)
 
 	ev := waitRunCompletedEvents(t, applyID)
@@ -218,11 +220,12 @@ func TestIntegration_RunCompletedFailed_CadenceIDPresent(t *testing.T) {
 	}
 }
 
-// TestIntegration_RunCompleted_VoyageIDPresent — прогон с VoyageID != nil
-// (имитация спавна через Voyage-orchestrator) → событие incarnation.run_completed
-// несёт voyage_id в payload (ADR-052 amend §k, visibility-фетч Voyage detail).
-// Проверяем сквозь реальный run() (failed-путь, симметрично CadenceID-тесту) и
-// что то же событие находится фильтром по payload->>'voyage_id' (Voyage detail).
+// TestIntegration_RunCompleted_VoyageIDPresent — a run with VoyageID != nil
+// (simulating a spawn via the Voyage orchestrator) → the incarnation.run_completed
+// event carries voyage_id in the payload (ADR-052 amend §k, Voyage detail
+// visibility fetch). Verified through a real run() (failed path, mirrors the
+// CadenceID test) and that the same event is found by filtering on
+// payload->>'voyage_id' (Voyage detail).
 func TestIntegration_RunCompleted_VoyageIDPresent(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -244,7 +247,7 @@ func TestIntegration_RunCompleted_VoyageIDPresent(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// no_hosts → failed-терминал; нас интересует voyage_id в payload.
+	// no_hosts → failed terminal; we care about voyage_id in the payload.
 	waitRunDone(t, "noop-prod", applyID, incarnation.StatusErrorLocked)
 
 	ev := waitRunCompletedEvents(t, applyID)
@@ -255,8 +258,9 @@ func TestIntegration_RunCompleted_VoyageIDPresent(t *testing.T) {
 		t.Errorf("voyage без cadence не должен нести cadence_id, got %v", ev["cadence_id"])
 	}
 
-	// Voyage detail фетчит run-события вояжа фильтром payload->>'voyage_id'
-	// (correlation_id у per-incarnation события = apply_id, не voyage_id).
+	// Voyage detail fetches the voyage's run events by filtering on
+	// payload->>'voyage_id' (correlation_id on a per-incarnation event =
+	// apply_id, not voyage_id).
 	var byVoyage int
 	if err := integrationPool.QueryRow(context.Background(),
 		`SELECT count(*) FROM audit_log WHERE event_type = $1 AND payload->>'voyage_id' = $2`,
@@ -268,9 +272,9 @@ func TestIntegration_RunCompleted_VoyageIDPresent(t *testing.T) {
 	}
 }
 
-// TestIntegration_DestroyFailed_NoRunCompleted — провал teardown (TerminalDestroy)
-// уходит в свой терминал destroy_failed и НЕ эмитит incarnation.run_completed
-// (гейт TerminalMode != TerminalDestroy в abort).
+// TestIntegration_DestroyFailed_NoRunCompleted — a teardown failure
+// (TerminalDestroy) goes to its own destroy_failed terminal and does NOT emit
+// incarnation.run_completed (the TerminalMode != TerminalDestroy gate in abort).
 func TestIntegration_DestroyFailed_NoRunCompleted(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -294,10 +298,10 @@ func TestIntegration_DestroyFailed_NoRunCompleted(t *testing.T) {
 
 	waitStatusInc(t, "noop-prod", incarnation.StatusDestroyFailed)
 
-	// destroy_failed-событие — терминал destroy, должно появиться. Фильтр по
-	// correlation_id штатно (writeDestroyFailedAudit ставит correlation_id=apply_id,
-	// как run_completed). Поллим до него — событие пишется под detached-ctx после
-	// смены статуса.
+	// destroy_failed event — the destroy terminal, must appear. Filtering by
+	// correlation_id is standard (writeDestroyFailedAudit sets
+	// correlation_id=apply_id, like run_completed). Poll until it shows up — the
+	// event is written under a detached ctx after the status change.
 	deadline := time.Now().Add(10 * time.Second)
 	var destroyFailed int
 	for time.Now().Before(deadline) {
@@ -315,24 +319,26 @@ func TestIntegration_DestroyFailed_NoRunCompleted(t *testing.T) {
 		t.Errorf("destroy_failed events = %d, want 1 (свой терминал destroy)", destroyFailed)
 	}
 
-	// run_completed для destroy-провала НЕ эмитится (гейт TerminalDestroy в abort).
-	// destroy_failed уже записан выше → если бы run_completed эмитился, он бы тоже
-	// успел; проверяем после его появления.
+	// run_completed is NOT emitted for a destroy failure (the TerminalDestroy
+	// gate in abort). destroy_failed is already recorded above → if
+	// run_completed were emitted, it would have shown up too; we check after
+	// its appearance.
 	if evs := runCompletedEvents(t, applyID); len(evs) != 0 {
 		t.Errorf("run_completed events = %d, want 0 (destroy-провал эмитит destroy_failed, НЕ run_completed)", len(evs))
 	}
 }
 
-// TestIntegration_LockIncarnation_SingleWinnerSignal — single-winner-сигнал
-// lockIncarnation: на incarnation, которую ДРУГОЙ коммиттер уже вывел из applying
-// (UpdateStateFromRun → ErrAlreadyFinalized), lockIncarnation возвращает
-// finalized=false. abort() при finalized=false НЕ эмитит провальное событие
-// (защита от дубля при recovery-перехвате). Тут проверяется сам сигнал — гейт
-// `&& finalized` в abort читается явно и покрыт этим инвариантом.
+// TestIntegration_LockIncarnation_SingleWinnerSignal — the single-winner signal
+// from lockIncarnation: on an incarnation that ANOTHER committer has already
+// moved out of applying (UpdateStateFromRun → ErrAlreadyFinalized),
+// lockIncarnation returns finalized=false. abort() with finalized=false does
+// NOT emit a failure event (protects against a duplicate on a recovery
+// takeover). This tests the signal itself — the `&& finalized` gate in abort is
+// read explicitly and covered by this invariant.
 func TestIntegration_LockIncarnation_SingleWinnerSignal(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
-	// incarnation в applying — состояние, из которого lockIncarnation финализирует.
+	// incarnation in applying — the state lockIncarnation finalizes from.
 	inc := &incarnation.Incarnation{
 		Name: "noop-prod", Service: "noop", ServiceVersion: "master",
 		StateSchemaVersion: 1, Status: incarnation.StatusApplying,
@@ -345,14 +351,14 @@ func TestIntegration_LockIncarnation_SingleWinnerSignal(t *testing.T) {
 	log := slog.New(slog.DiscardHandler)
 	spec := RunSpec{ApplyID: audit.NewULID(), IncarnationName: "noop-prod", ScenarioName: "create", StartedByAID: "archon-alice"}
 
-	// Первый коммиттер (наш) — реально финализирует applying → error_locked.
+	// First committer (us) — actually finalizes applying → error_locked.
 	if finalized := r.lockIncarnation(context.Background(), spec, nil, incarnation.StatusErrorLocked, "dispatch_failed", nil, nil, log); !finalized {
 		t.Fatalf("первый lockIncarnation: finalized=false, want true (реальный финализатор)")
 	}
 
-	// Второй вызов (имитация recovery-проигравшего: incarnation уже не в applying)
-	// → ErrAlreadyFinalized внутри → finalized=false: провальное событие отдаёт
-	// победитель, не этот инстанс.
+	// Second call (simulating a recovery loser: incarnation is no longer in
+	// applying) → ErrAlreadyFinalized internally → finalized=false: the failure
+	// event is emitted by the winner, not this instance.
 	spec2 := RunSpec{ApplyID: audit.NewULID(), IncarnationName: "noop-prod", ScenarioName: "create", StartedByAID: "archon-alice"}
 	if finalized := r.lockIncarnation(context.Background(), spec2, nil, incarnation.StatusErrorLocked, "dispatch_failed", nil, nil, log); finalized {
 		t.Errorf("второй lockIncarnation на уже-финализированной incarnation: finalized=true, want false (single-winner-проигравший)")

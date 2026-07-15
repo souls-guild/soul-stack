@@ -7,9 +7,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// TestRenderStateOps_ForeachList_FanOut — ★ foreach по LIST раскрывается в N
-// RenderedOp (по одной add-операции на элемент); биндинг `as` → элемент списка
-// доступен в value/match (`${ sid }` / `elem == sid`).
+// TestRenderStateOps_ForeachList_FanOut — ★ foreach over a LIST expands into N
+// RenderedOps (one add per element); the `as` binding makes the list element
+// available in value/match (`${ sid }` / `elem == sid`).
 func TestRenderStateOps_ForeachList_FanOut(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "add_replicas",
@@ -52,10 +52,10 @@ func TestRenderStateOps_ForeachList_FanOut(t *testing.T) {
 	}
 }
 
-// TestRenderStateOps_ForeachMap_KeyValueBinding — ★ foreach по MAP: `as`=объект-
-// запись {key, value}. Каждая итерация даёт modify-операцию; в её Context биндинг
-// `change` несёт .key (имя пользователя) и .value (объект с acl). Порядок
-// детерминирован (сортировка ключей map).
+// TestRenderStateOps_ForeachMap_KeyValueBinding — ★ foreach over a MAP: `as`
+// is a {key, value} record. Each iteration produces a modify op; its Context
+// binding `change` carries .key (the username) and .value (the object with
+// acl). Order is deterministic (map keys sorted).
 func TestRenderStateOps_ForeachMap_KeyValueBinding(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "update_acl",
@@ -88,13 +88,13 @@ func TestRenderStateOps_ForeachMap_KeyValueBinding(t *testing.T) {
 	if len(ops) != 2 {
 		t.Fatalf("★ ops = %d, want 2 (foreach по 2 записям map → 2 modify)", len(ops))
 	}
-	// Порядок детерминирован: alice < bob.
+	// Order is deterministic: alice < bob.
 	for i, wantKey := range []string{"alice", "bob"} {
 		op := ops[i]
 		if op.Verb != config.VerbModify || op.Field != "redis_users" {
 			t.Fatalf("ops[%d] = %+v, want modify redis_users", i, op)
 		}
-		// Биндинг change.* лёг в Context (merge-time резолвит .key/.value).
+		// The change.* binding lands in Context (merge-time resolves .key/.value).
 		change, ok := op.Context["change"].(map[string]any)
 		if !ok {
 			t.Fatalf("ops[%d].Context[change] = %T, want map {key,value}", i, op.Context["change"])
@@ -110,7 +110,8 @@ func TestRenderStateOps_ForeachMap_KeyValueBinding(t *testing.T) {
 }
 
 // TestEvalStateOpExpr_MatchSeesContextAndBinding — modify-match `key ==
-// input.username` видит и биндинг элемента (key), и scenario-контекст (input.*).
+// input.username` sees both the element binding (key) and the scenario
+// context (input.*).
 func TestEvalStateOpExpr_MatchSeesContextAndBinding(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	ctx := map[string]any{"input": map[string]any{"username": "alice"}}
@@ -128,7 +129,7 @@ func TestEvalStateOpExpr_MatchSeesContextAndBinding(t *testing.T) {
 		t.Errorf("match (key=bob) = %v, want false", res2)
 	}
 
-	// patch-значение (boolOut=false) — interpolation, native-тип.
+	// patch value (boolOut=false) — interpolation, native type.
 	val, err := p.EvalStateOpExpr("${ input.username }", ctx, nil, false)
 	if err != nil {
 		t.Fatalf("EvalStateOpExpr patch: %v", err)
@@ -138,7 +139,7 @@ func TestEvalStateOpExpr_MatchSeesContextAndBinding(t *testing.T) {
 	}
 }
 
-// TestForeachBindings_ListVsMap — форма биндинга: list → элемент; map → {key,value}.
+// TestForeachBindings_ListVsMap — binding shape: list → element; map → {key,value}.
 func TestForeachBindings_ListVsMap(t *testing.T) {
 	listB, err := foreachBindings("sid", []any{"a", "b"})
 	if err != nil {
@@ -152,7 +153,7 @@ func TestForeachBindings_ListVsMap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("map: %v", err)
 	}
-	// Детерминированный порядок: alice < bob.
+	// Deterministic order: alice < bob.
 	first := mapB[0]["change"].(map[string]any)
 	if first["key"] != "alice" {
 		t.Errorf("map биндинг[0].key = %v, want alice (сортировка ключей)", first["key"])
@@ -161,7 +162,7 @@ func TestForeachBindings_ListVsMap(t *testing.T) {
 		t.Errorf("map биндинг[0].value.acl = %v, want y", first["value"])
 	}
 
-	// Скаляр/nil → ошибка (foreach требует коллекцию).
+	// Scalar/nil → error (foreach requires a collection).
 	if _, err := foreachBindings("x", "scalar"); err == nil {
 		t.Error("foreach по скаляру должен дать ошибку")
 	}

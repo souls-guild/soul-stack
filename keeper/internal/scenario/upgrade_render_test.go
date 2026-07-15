@@ -8,11 +8,12 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 )
 
-// TestParseScenarioFromArtifact_FromUpgradeSelectsUpgradeDir — точка, куда
-// recipe.FromUpgrade проводится в RenderForHost (render_host.go): fromUpgrade=true
-// грузит upgrade/<slug>/main.yml, false — scenario/<slug>/main.yml (ADR-0068).
-// Оба каталога несут сценарий с ОДНИМ именем, но разным description — так тест
-// однозначно определяет, какой файл прочитан.
+// TestParseScenarioFromArtifact_FromUpgradeSelectsUpgradeDir covers where
+// recipe.FromUpgrade is threaded through RenderForHost (render_host.go):
+// fromUpgrade=true loads upgrade/<slug>/main.yml, false loads
+// scenario/<slug>/main.yml (ADR-0068). Both dirs hold a scenario with the
+// same name but a different description, so the test can tell which file
+// was actually read.
 func TestParseScenarioFromArtifact_FromUpgradeSelectsUpgradeDir(t *testing.T) {
 	dir := t.TempDir()
 	write := func(rel, content string) {

@@ -6,18 +6,21 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
 )
 
-// TestKeeperRegisterChannel_Isolated — ★ HOST-FALLBACK GUARD Слайса 2 (handoff-флаг
-// от review Слайса 1). keeper→keeper register-chaining льёт register keeper-задач
-// предыдущих Passage в ИЗОЛИРОВАННЫЙ канал RenderInput.KeeperRegister. Инвариант:
-//   - keeperVars видит KeeperRegister (keeper-задача активного Passage читает
-//     register.<prev>.* keeper-задач прошлых Passage);
-//   - hostRegister при ПУСТОМ per-host bucket НЕ видит KeeperRegister, остаётся на
-//     плоской in.Register — host-задача смешанного Passage НЕ прочитает keeper-
-//     register случайно через fallback (иначе host получил бы register.provision.*
-//     keeper-задачи, к которому не обращался).
+// TestKeeperRegisterChannel_Isolated — ★ HOST-FALLBACK GUARD for Slice 2
+// (handoff flag from the Slice 1 review). keeper→keeper register chaining
+// pours previous Passages' keeper-task registers into an ISOLATED
+// RenderInput.KeeperRegister channel. Invariant:
+//   - keeperVars sees KeeperRegister (a keeper task in the active Passage
+//     reads register.<prev>.* from keeper tasks of past Passages);
+//   - hostRegister with an EMPTY per-host bucket does NOT see KeeperRegister,
+//     stays on the flat in.Register — a host task in a mixed Passage must
+//     NOT accidentally read the keeper register via fallback (otherwise a
+//     host would get register.provision.* from a keeper task it never
+//     referenced).
 //
-// До разделения каналов (Слайс 1 лил keeper-bucket в плоскую Register, которую
-// читают ОБА — keeperVars и host-fallback) этот тест поймал бы утечку.
+// Before the channels were split (Slice 1 poured the keeper bucket into the
+// flat Register, read by BOTH keeperVars and host-fallback), this test would
+// have caught the leak.
 func TestKeeperRegisterChannel_Isolated(t *testing.T) {
 	keeperReg := map[string]any{
 		"provision": map[string]any{"ip": "10.0.0.7", "changed": true},
@@ -31,7 +34,7 @@ func TestKeeperRegisterChannel_Isolated(t *testing.T) {
 		KeeperRegister: keeperReg,
 	}
 
-	// keeper-задача видит KeeperRegister (НЕ плоскую Register).
+	// A keeper task sees KeeperRegister (NOT the flat Register).
 	kv := keeperVars(in)
 	if _, ok := kv.Register["provision"]; !ok {
 		t.Errorf("keeperVars.Register = %v, want содержащее keeper-register 'provision'", kv.Register)
@@ -40,8 +43,8 @@ func TestKeeperRegisterChannel_Isolated(t *testing.T) {
 		t.Errorf("keeperVars.Register протёк host-register 'hostprobe' — канал не изолирован: %v", kv.Register)
 	}
 
-	// host-задача с ПУСТЫМ per-host bucket → fallback на плоскую Register, НЕ на
-	// KeeperRegister. keeper-register к ней не протекает.
+	// A host task with an EMPTY per-host bucket → falls back to the flat
+	// Register, NOT to KeeperRegister. The keeper register doesn't leak to it.
 	host := &topology.HostFacts{SID: "host-a.example.com"}
 	hr := hostRegister(in, host)
 	if _, ok := hr["provision"]; ok {
@@ -52,9 +55,9 @@ func TestKeeperRegisterChannel_Isolated(t *testing.T) {
 	}
 }
 
-// TestKeeperRegisterChannel_PerHostBucketWins — host-задача со СВОИМ per-host
-// bucket берёт его (а не KeeperRegister и не плоскую Register): keeper-канал не
-// перебивает реальный per-host register хоста.
+// TestKeeperRegisterChannel_PerHostBucketWins — a host task with its OWN
+// per-host bucket takes that (not KeeperRegister, not the flat Register): the
+// keeper channel doesn't override the host's real per-host register.
 func TestKeeperRegisterChannel_PerHostBucketWins(t *testing.T) {
 	host := &topology.HostFacts{SID: "host-a.example.com"}
 	in := RenderInput{
@@ -73,10 +76,10 @@ func TestKeeperRegisterChannel_PerHostBucketWins(t *testing.T) {
 	}
 }
 
-// TestKeeperVars_FallbackToFlatRegister — backward-compat: KeeperRegister пуст
-// (P0 / N=1 / не-staged / host-only Passage) → keeperVars деградирует к плоской
-// Register (trial/push/прочие caller-ы, выставляющие только Register, видят
-// register тем же путём БИТ-В-БИТ).
+// TestKeeperVars_FallbackToFlatRegister — backward-compat: KeeperRegister
+// empty (P0 / N=1 / not staged / host-only Passage) → keeperVars degrades to
+// the flat Register (trial/push/other callers that only set Register see the
+// register the same way, BIT-FOR-BIT).
 func TestKeeperVars_FallbackToFlatRegister(t *testing.T) {
 	in := RenderInput{
 		Register: map[string]any{"prev": map[string]any{"out": "x"}},

@@ -1,16 +1,16 @@
 //go:build integration
 
-// Integration-тесты на [Runner.ensureTerminalApplyRun] — обработка running-строк
-// ПО ПРИЧИНЕ abort-а (keepRunning). Закрывают регрессию: при operator-Cancel
-// running оставляем нетронутым (живой хост, дойдёт честный RunResult), при
-// timeout/dead-host force-фейлим (RunResult не придёт, reaper running не
-// подбирает — ADR-027 сужен до claimed → иначе apply_run висит вечно, BAG-1
-// recovery). Матрица:
+// Integration tests for [Runner.ensureTerminalApplyRun] — handling running
+// rows BECAUSE OF an abort (keepRunning). Close a regression: on
+// operator-Cancel, running is left untouched (live host, an honest RunResult
+// will arrive); on timeout/dead-host, force-fail (RunResult never arrives, the
+// reaper doesn't pick up running — ADR-027 narrowed to claimed → otherwise
+// apply_run hangs forever, BAG-1 recovery). Matrix:
 //   - errCancelRequested (keepRunning=true): planned/claimed/dispatched →
-//     cancelled; running → НЕ трогать.
-//   - timeout/ctx/прочее (keepRunning=false): planned/claimed/dispatched →
+//     cancelled; running → do NOT touch.
+//   - timeout/ctx/other (keepRunning=false): planned/claimed/dispatched →
 //     failed; running → failed (force-fail).
-// Reuse harness-а integration_test.go (TestMain/integrationPool/resetAll/seed*).
+// Reuses the integration_test.go harness (TestMain/integrationPool/resetAll/seed*).
 
 package scenario
 
@@ -23,9 +23,10 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// seedApplyRunRow вставляет строку apply_runs в произвольном (в т.ч. running)
-// статусе для прямого теста терминализации. applyrun.Insert не валидирует статус
-// на «недотерминальность», что и нужно — фиксируем running до вызова метода.
+// seedApplyRunRow inserts an apply_runs row in an arbitrary (including
+// running) status for a direct terminalization test. applyrun.Insert doesn't
+// validate the status as "non-terminal", which is exactly what we need — we
+// fix running before calling the method.
 func seedApplyRunRow(t *testing.T, applyID, sid string, status applyrun.Status) {
 	t.Helper()
 	run := applyrun.ApplyRun{
@@ -54,10 +55,11 @@ func statusByApplyID(t *testing.T, applyID string) map[string]applyrun.Status {
 	return out
 }
 
-// TestIntegration_EnsureTerminal_TimeoutForceFailsRunning — регрессия (architect-
-// совет): non-cancel abort (timeout/dead-host) force-фейлит running-строку, не
-// оставляя её висеть вечно. Симметрично NoClaim_BarrierTimeout, но с running-
-// строкой в момент терминализации. Все недотерминальные → failed.
+// TestIntegration_EnsureTerminal_TimeoutForceFailsRunning — a regression
+// (architect advice): a non-cancel abort (timeout/dead-host) force-fails a
+// running row instead of leaving it hanging forever. Mirrors
+// NoClaim_BarrierTimeout but with a running row at terminalization time. All
+// non-terminal rows → failed.
 func TestIntegration_EnsureTerminal_TimeoutForceFailsRunning(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -72,7 +74,7 @@ func TestIntegration_EnsureTerminal_TimeoutForceFailsRunning(t *testing.T) {
 	r := &Runner{deps: Deps{DB: integrationPool}}
 	spec := RunSpec{ApplyID: applyID, IncarnationName: "noop-prod", ScenarioName: "create", StartedByAID: "archon-alice"}
 
-	// keepRunning=false (timeout): force-fail в т.ч. running.
+	// keepRunning=false (timeout): force-fail including running.
 	r.ensureTerminalApplyRun(context.Background(), spec, "run_timeout", applyrun.StatusFailed, false, slog.Default())
 
 	got := statusByApplyID(t, applyID)
@@ -85,16 +87,17 @@ func TestIntegration_EnsureTerminal_TimeoutForceFailsRunning(t *testing.T) {
 	if got["host-claimed.example.com"] != applyrun.StatusFailed {
 		t.Errorf("claimed host = %q, want failed", got["host-claimed.example.com"])
 	}
-	// success — уже терминальна, не трогаем.
+	// success — already terminal, don't touch.
 	if got["host-success.example.com"] != applyrun.StatusSuccess {
 		t.Errorf("success host = %q, want success (терминал не перезаписываем)", got["host-success.example.com"])
 	}
 }
 
-// TestIntegration_EnsureTerminal_CancelKeepsRunning — operator-Cancel: running на
-// ЖИВОМ хосте НЕ трогаем (honest reporting, дойдёт RunResult), недотерминальные
-// (planned/claimed/dispatched) → cancelled. Проверяет cancel→cancelled путь
-// ИМЕННО через ensureTerminalApplyRun (а не старый Acolyte-claim-путь).
+// TestIntegration_EnsureTerminal_CancelKeepsRunning — operator-Cancel: running
+// on a LIVE host is NOT touched (honest reporting, RunResult will arrive),
+// non-terminal rows (planned/claimed/dispatched) → cancelled. Verifies the
+// cancel→cancelled path goes THROUGH ensureTerminalApplyRun (not the old
+// Acolyte-claim path).
 func TestIntegration_EnsureTerminal_CancelKeepsRunning(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -122,15 +125,15 @@ func TestIntegration_EnsureTerminal_CancelKeepsRunning(t *testing.T) {
 	if got["host-claimed.example.com"] != applyrun.StatusCancelled {
 		t.Errorf("claimed host = %q, want cancelled (operator-Cancel)", got["host-claimed.example.com"])
 	}
-	// success — уже терминальна, cancel её не перезаписывает (симметрично timeout-тесту).
+	// success — already terminal, cancel doesn't overwrite it (mirrors the timeout test).
 	if got["host-success.example.com"] != applyrun.StatusSuccess {
 		t.Errorf("success host = %q, want success (терминал не перезаписываем при cancel)", got["host-success.example.com"])
 	}
 }
 
-// TestUnit_FailureTerminalStatus — sentinel-граница: errCancelRequested →
-// cancelled, всё прочее (ctx.Err/RunTimeout/произвольный provider-fail) → failed.
-// Тот же sentinel, по которому считается keepRunning в abort-е.
+// TestUnit_FailureTerminalStatus — sentinel boundary: errCancelRequested →
+// cancelled, everything else (ctx.Err/RunTimeout/an arbitrary provider fail) →
+// failed. The same sentinel used to determine keepRunning in abort.
 func TestUnit_FailureTerminalStatus(t *testing.T) {
 	if got := failureTerminalStatus(errCancelRequested); got != applyrun.StatusCancelled {
 		t.Errorf("errCancelRequested → %q, want cancelled", got)
