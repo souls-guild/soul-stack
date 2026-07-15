@@ -8,8 +8,8 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac/rbactest"
 )
 
-// incWithCovens — incFn, отдающий incarnation с заданными covens (для
-// RBAC-scope-проверки: эффективный scope = covens ∪ {name}). Status=ready,
+// incWithCovens — an incFn that returns an incarnation with the given covens
+// (for the RBAC scope check: effective scope = covens ∪ {name}). Status=ready,
 // service=redis.
 func incWithCovens(covens []string) func(string) (*incarnation.Incarnation, error) {
 	return func(name string) (*incarnation.Incarnation, error) {
@@ -23,8 +23,8 @@ func incWithCovens(covens []string) func(string) (*incarnation.Incarnation, erro
 	}
 }
 
-// scopedRBAC — роль с одним scoped permission (например
-// `incarnation.run on coven=dev`), привязанная к archon-alice.
+// scopedRBAC — a role with a single scoped permission (e.g.
+// `incarnation.run on coven=dev`), bound to archon-alice.
 func scopedRBAC(perm string) *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -33,7 +33,7 @@ func scopedRBAC(perm string) *rbactest.Config {
 	}
 }
 
-// wildcardRBAC — `*` (cluster-admin), матчит любой scope.
+// wildcardRBAC — `*` (cluster-admin), matches any scope.
 func wildcardRBAC() *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -42,10 +42,10 @@ func wildcardRBAC() *rbactest.Config {
 	}
 }
 
-// expectForbidden / expectAllowed — общие ассерты для scope-кейсов: проверяют
-// MCP-error-канал, не бизнес-результат (бизнес-успех проверяют per-tool
-// success-тесты). allowed = НЕ forbidden (может быть успех ИЛИ иная бизнес-
-// ошибка, но НЕ RBAC-deny).
+// expectForbidden / expectAllowed — shared assertions for scope cases: they
+// check the MCP error channel, not the business result (business success is
+// checked by the per-tool success tests). allowed = NOT forbidden (may be
+// success OR some other business error, but NOT an RBAC deny).
 func expectForbidden(t *testing.T, resp jsonRPCResponse, tool string) {
 	t.Helper()
 	if resp.Error == nil {
@@ -65,11 +65,12 @@ func expectNotForbidden(t *testing.T, resp jsonRPCResponse, tool string) {
 	}
 }
 
-// TestToolsCall_IncarnationScope_DevCannotTouchProd — оператор со scope
-// `incarnation.<action> on coven=dev` НЕ может run/upgrade/destroy/get/history/
-// unlock prod-incarnation (covens=[prod]) через MCP. Зеркало REST negative-
-// теста TestRequirePermissionMulti_Negative_DevCannotTouchProd: без OR-Check
-// по covens ∪ {name} под-привилегированный оператор обходил бы REST-защиту.
+// TestToolsCall_IncarnationScope_DevCannotTouchProd — an operator with scope
+// `incarnation.<action> on coven=dev` CANNOT run/upgrade/destroy/get/history/
+// unlock a prod incarnation (covens=[prod]) via MCP. Mirrors the REST negative
+// test TestRequirePermissionMulti_Negative_DevCannotTouchProd: without the
+// OR-check over covens ∪ {name}, an under-privileged operator would bypass
+// the REST protection.
 func TestToolsCall_IncarnationScope_DevCannotTouchProd(t *testing.T) {
 	prod := incWithCovens([]string{"prod"})
 
@@ -114,8 +115,8 @@ func TestToolsCall_IncarnationScope_DevCannotTouchProd(t *testing.T) {
 	})
 
 	t.Run("unlock", func(t *testing.T) {
-		// unlock-FOR-UPDATE-select вернёт ту же prod-строку, но RBAC-probe
-		// отказывает ДО BeginTx.
+		// the unlock FOR-UPDATE select would return the same prod row, but the
+		// RBAC probe denies BEFORE BeginTx.
 		pool := &fakePool{
 			incFn:    incWithCovens([]string{"prod"}),
 			beginErr: errFakeUnexpected{sql: "BeginTx must not run when scope denies"},
@@ -127,8 +128,9 @@ func TestToolsCall_IncarnationScope_DevCannotTouchProd(t *testing.T) {
 	})
 }
 
-// TestToolsCall_IncarnationScope_MatchingCovenPasses — позитив: scope coven=prod
-// матчит prod-incarnation (covens=[prod]) → НЕ forbidden (run проходит RBAC).
+// TestToolsCall_IncarnationScope_MatchingCovenPasses — positive case: scope
+// coven=prod matches the prod incarnation (covens=[prod]) → NOT forbidden
+// (run passes RBAC).
 func TestToolsCall_IncarnationScope_MatchingCovenPasses(t *testing.T) {
 	prod := incWithCovens([]string{"prod"})
 	h, _ := newTestHandlerFull(t, &fakePool{incFn: prod}, scopedRBAC("incarnation.run on coven=prod"),
@@ -141,9 +143,9 @@ func TestToolsCall_IncarnationScope_MatchingCovenPasses(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationScope_NameAsCovenPasses — scope coven=<name> матчит
-// через корневую Coven-метку (covens ∪ {name}, ADR-008): даже если declared
-// covens пуст, имя incarnation работает как coven-метка.
+// TestToolsCall_IncarnationScope_NameAsCovenPasses — scope coven=<name>
+// matches through the root Coven label (covens ∪ {name}, ADR-008): even when
+// declared covens is empty, the incarnation name works as a coven label.
 func TestToolsCall_IncarnationScope_NameAsCovenPasses(t *testing.T) {
 	noCovens := incWithCovens(nil)
 	h, _ := newTestHandlerFull(t, &fakePool{incFn: noCovens}, scopedRBAC("incarnation.run on coven=redis-prod"),
@@ -156,9 +158,9 @@ func TestToolsCall_IncarnationScope_NameAsCovenPasses(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationScope_BarePermissionPasses — bare (non-scoped)
-// permission матчит любую incarnation независимо от covens (паритет REST
-// no-regression-теста).
+// TestToolsCall_IncarnationScope_BarePermissionPasses — a bare (non-scoped)
+// permission matches any incarnation regardless of covens (parity with the
+// REST no-regression test).
 func TestToolsCall_IncarnationScope_BarePermissionPasses(t *testing.T) {
 	prod := incWithCovens([]string{"prod"})
 	h, _ := newTestHandlerFull(t, &fakePool{incFn: prod}, scopedRBAC("incarnation.run"),
@@ -171,8 +173,8 @@ func TestToolsCall_IncarnationScope_BarePermissionPasses(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationScope_WildcardPasses — `*` (cluster-admin) матчит
-// любую incarnation (паритет REST wildcard-no-regression).
+// TestToolsCall_IncarnationScope_WildcardPasses — `*` (cluster-admin) matches
+// any incarnation (parity with the REST wildcard-no-regression test).
 func TestToolsCall_IncarnationScope_WildcardPasses(t *testing.T) {
 	prod := incWithCovens([]string{"prod"})
 	h, _ := newTestHandlerFull(t, &fakePool{incFn: prod}, wildcardRBAC(),

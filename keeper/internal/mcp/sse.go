@@ -17,47 +17,47 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// SSE-параметры. Heartbeat-comment отправляется чтобы proxy/load-balancer
-// не закрывал соединение по idle-timeout-у (типично 30–60 с). Comment-line
-// `:keepalive\n\n` — стандартный SSE-приём, не материализуется как event-data
-// на клиенте.
+// SSE params. The heartbeat comment keeps proxy/load-balancers from closing
+// the connection on idle-timeout (typically 30-60s). The `:keepalive\n\n`
+// comment-line is a standard SSE trick — it never materializes as event-data
+// on the client.
 const (
 	sseHeartbeatInterval = 30 * time.Second
 	sseQueryApplyID      = "apply_id"
 
-	// sseMaxLifetime — жёсткий потолок жизни одного SSE-стрима (M4: защита
-	// от FD/goroutine-утечки на «зависших» клиентах, которые держат
-	// соединение, но не читают). По истечении стрим закрывается; клиент
-	// переподключается (SSE auto-reconnect). 30 мин с запасом покрывают
-	// типичный apply-прогон.
+	// sseMaxLifetime — hard ceiling on a single SSE stream's lifetime (M4:
+	// guards against FD/goroutine leaks from clients that hold the
+	// connection open without reading). Stream closes on expiry; client
+	// reconnects (SSE auto-reconnect). 30 min comfortably covers a typical
+	// apply run.
 	sseMaxLifetime = 30 * time.Minute
 
-	// sseMaxConnsGlobal / sseMaxConnsPerAID — лимиты одновременных стримов
-	// (M4). Global защищает FD/goroutine-бюджет инстанса; per-AID — от
-	// одного Архонта, открывающего сотни стримов. Превышение → HTTP 429.
+	// sseMaxConnsGlobal / sseMaxConnsPerAID — concurrent-stream limits (M4).
+	// Global protects the instance's FD/goroutine budget; per-AID guards
+	// against one Archon opening hundreds of streams. Over limit → HTTP 429.
 	sseMaxConnsGlobal = 256
 	sseMaxConnsPerAID = 16
 )
 
-// applyAccessStore — узкая поверхность над applyrun-CRUD, нужная SSE-handler-у
-// для RBAC-проверки подписки (M1). Прод-реализация — [applyAccessPG] поверх
-// pgxpool.Pool; unit-тесты подставляют fake.
+// applyAccessStore — narrow surface over applyrun-CRUD needed by the SSE
+// handler for subscription RBAC checks (M1). Production impl is
+// [applyAccessPG] over pgxpool.Pool; unit tests supply a fake.
 type applyAccessStore interface {
-	// Access резолвит apply_id → владелец прогона + incarnation. Возвращает
-	// applyrun.ErrApplyRunNotFound, если прогона нет.
+	// Access resolves apply_id → run owner + incarnation. Returns
+	// applyrun.ErrApplyRunNotFound if the run doesn't exist.
 	Access(ctx context.Context, applyID string) (*applyrun.Access, error)
 }
 
-// sseDeps — узкие зависимости SSE-handler-а. Bus берётся отдельно от
-// HandlerDeps (для tools/call), чтобы EventBus не тянулся в unit-тесты
-// JSON-RPC-стороны.
+// sseDeps — narrow SSE handler dependencies. Bus is kept separate from
+// HandlerDeps (used by tools/call) so EventBus doesn't leak into JSON-RPC-side
+// unit tests.
 //
-// Access и RBAC обеспечивают RBAC-проверку подписки (M1): подписаться на
-// apply_id может только инициатор прогона (started_by_aid) или Архонт с
-// `incarnation.get` на соответствующей incarnation. Если Access == nil —
-// подписка отклоняется (fail-closed): без access-store нельзя резолвить
-// владельца прогона, а fail-open открыл бы чужой стрим. Прод всегда
-// прокидывает Access.
+// Access and RBAC implement subscription RBAC checks (M1): only the run's
+// initiator (started_by_aid) or an Archon with `incarnation.get` on the
+// corresponding incarnation may subscribe to an apply_id. If Access == nil,
+// the subscription is denied (fail-closed): without an access-store the
+// run's owner can't be resolved, and fail-open would expose another user's
+// stream. Production always wires up Access.
 type sseDeps struct {
 	JWTVerifier *jwt.Verifier
 	Bus         *applybus.EventBus
@@ -67,9 +67,9 @@ type sseDeps struct {
 	Logger      *slog.Logger
 }
 
-// sseConnLimiter — счётчик активных SSE-стримов: глобальный + per-AID (M4).
-// Потокобезопасен. Acquire резервирует слот (или возвращает false при
-// превышении), Release освобождает.
+// sseConnLimiter — active SSE stream counter: global + per-AID (M4).
+// Thread-safe. Acquire reserves a slot (or returns false when over limit),
+// Release frees it.
 type sseConnLimiter struct {
 	mu        sync.Mutex
 	maxGlobal int
@@ -78,8 +78,8 @@ type sseConnLimiter struct {
 	perAID    map[string]int
 }
 
-// newSSEConnLimiter собирает limiter. maxGlobal/maxPerAID <= 0 трактуется
-// как «лимит выключен» по соответствующей оси.
+// newSSEConnLimiter builds a limiter. maxGlobal/maxPerAID <= 0 means the
+// limit is disabled on that axis.
 func newSSEConnLimiter(maxGlobal, maxPerAID int) *sseConnLimiter {
 	return &sseConnLimiter{
 		maxGlobal: maxGlobal,
@@ -88,8 +88,8 @@ func newSSEConnLimiter(maxGlobal, maxPerAID int) *sseConnLimiter {
 	}
 }
 
-// Acquire резервирует слот под aid. Возвращает false, если превышен
-// глобальный или per-AID лимит (caller отдаёт 429, слот НЕ занят).
+// Acquire reserves a slot for aid. Returns false if the global or per-AID
+// limit is exceeded (caller returns 429, slot is NOT taken).
 func (l *sseConnLimiter) Acquire(aid string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -104,8 +104,8 @@ func (l *sseConnLimiter) Acquire(aid string) bool {
 	return true
 }
 
-// Release освобождает слот aid. Идемпотентность не гарантируется — caller
-// вызывает Release ровно один раз на успешный Acquire (через defer).
+// Release frees aid's slot. Not idempotent — caller must call Release
+// exactly once per successful Acquire (via defer).
 func (l *sseConnLimiter) Release(aid string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -119,29 +119,29 @@ func (l *sseConnLimiter) Release(aid string) {
 	}
 }
 
-// buildSSEHandler — `GET /mcp/events?apply_id=<ULID>`. JWT-auth идентичен
+// buildSSEHandler — `GET /mcp/events?apply_id=<ULID>`. JWT-auth identical to
 // `POST /mcp`: scheme-insensitive Bearer.
 //
-// Контракт ответа:
+// Response contract:
 //
 //   - Content-Type: text/event-stream
-//   - Cache-Control: no-cache, X-Accel-Buffering: no — отключаем буферизацию
-//     reverse-proxy (nginx) и кеширование браузера.
-//   - Каждое событие из bus → `event: <kind>\ndata: <json>\nid: <apply_id>\n\n`.
-//   - Heartbeat каждые 30 с — `:keepalive\n\n`.
+//   - Cache-Control: no-cache, X-Accel-Buffering: no — disables reverse-proxy
+//     (nginx) buffering and browser caching.
+//   - Each bus event → `event: <kind>\ndata: <json>\nid: <apply_id>\n\n`.
+//   - Heartbeat every 30s — `:keepalive\n\n`.
 //
-// На auth-ошибку отдаём HTTP 401 / 400 / 403 / 429 c JSON-error-body (не
-// SSE-формат) — клиент ещё не подписался, нет смысла открывать stream только
-// чтобы сразу закрыть.
+// Auth errors return HTTP 401 / 400 / 403 / 429 with a JSON error body (not
+// SSE format) — the client hasn't subscribed yet, no point opening a stream
+// just to close it immediately.
 //
-// RBAC (M1): подписка на apply_id разрешена только инициатору прогона
-// (apply_runs.started_by_aid == JWT.sub) либо Архонту с `incarnation.get`
-// на соответствующей incarnation. Несуществующий apply_id → 403 (anti-enum:
-// неотличимо от отказа доступа — ULID угадываем).
+// RBAC (M1): subscribing to an apply_id is allowed only for the run's
+// initiator (apply_runs.started_by_aid == JWT.sub) or an Archon with
+// `incarnation.get` on the corresponding incarnation. Nonexistent apply_id →
+// 403 (anti-enum: indistinguishable from access denial — ULIDs are
+// guessable).
 //
-// Resource-limits (M4): глобальный + per-AID лимит одновременных стримов
-// (429 при превышении) и жёсткий max-lifetime потолок (стрим закрывается,
-// клиент переподключается).
+// Resource limits (M4): global + per-AID concurrent-stream limit (429 over
+// limit) and a hard max-lifetime ceiling (stream closes, client reconnects).
 func buildSSEHandler(deps sseDeps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -170,16 +170,16 @@ func buildSSEHandler(deps sseDeps) http.HandlerFunc {
 			return
 		}
 
-		// RBAC-проверка подписки (M1). Выполняется ДО Acquire/headers —
-		// отказ возвращается как обычный JSON-error, стрим не открывается.
+		// Subscription RBAC check (M1). Runs BEFORE Acquire/headers — a
+		// denial returns as a plain JSON error, stream never opens.
 		if !authorizeSSE(r.Context(), deps, claims.Subject, applyID) {
 			writeJSONError(w, http.StatusForbidden,
 				"forbidden: no access to this apply_id")
 			return
 		}
 
-		// Connection-limit (M4). Acquire после RBAC — слот занимаем только
-		// для авторизованных подписок. Release строго через defer.
+		// Connection limit (M4). Acquire runs after RBAC — only authorized
+		// subscriptions take a slot. Release strictly via defer.
 		if deps.Limiter != nil {
 			if !deps.Limiter.Acquire(claims.Subject) {
 				writeJSONError(w, http.StatusTooManyRequests,
@@ -191,10 +191,10 @@ func buildSSEHandler(deps sseDeps) http.HandlerFunc {
 
 		flusher, ok := w.(http.Flusher)
 		if !ok {
-			// Сервер настроен на http.Server без flush-капабилити —
-			// это конфигурационный bug (HTTP/1.1 в Go-stdlib даёт Flusher
-			// поверх response-writer-а по умолчанию). Возвращаем 500, чтобы
-			// клиент не висел в ожидании.
+			// Server configured with an http.Server lacking flush capability —
+			// this is a config bug (Go stdlib HTTP/1.1 provides Flusher over
+			// the response writer by default). Return 500 so the client
+			// doesn't hang waiting.
 			deps.Logger.Error("mcp/sse: ResponseWriter does not implement http.Flusher")
 			writeJSONError(w, http.StatusInternalServerError, "streaming unsupported")
 			return
@@ -203,26 +203,26 @@ func buildSSEHandler(deps sseDeps) http.HandlerFunc {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
-		// Nginx/Apache reverse-proxy уважают этот header и не буферизуют.
+		// Nginx/Apache reverse proxies honor this header and skip buffering.
 		w.Header().Set("X-Accel-Buffering", "no")
 
-		// SSE — long-lived stream; глобальный http.Server WriteTimeout
-		// (60s) разорвал бы соединение. Снимаем deadline для этого
-		// одного запроса. http.NewResponseController появился в Go 1.20.
+		// SSE is a long-lived stream; the global http.Server WriteTimeout
+		// (60s) would kill the connection. Clear the deadline for this one
+		// request. http.NewResponseController was added in Go 1.20.
 		rc := http.NewResponseController(w)
 		if err := rc.SetWriteDeadline(time.Time{}); err != nil {
-			// stdlib http.Server поддерживает SetWriteDeadline — если
-			// контроллер вернул ошибку, это нестандартный middleware
-			// в стеке. Логируем и продолжаем: события всё равно пойдут,
-			// но клиента отрубит по WriteTimeout-у.
+			// stdlib http.Server supports SetWriteDeadline — an error from
+			// the controller means a non-standard middleware is in the
+			// stack. Log and continue: events still flow, but the client
+			// gets cut off by WriteTimeout.
 			deps.Logger.Warn("mcp/sse: SetWriteDeadline failed", slog.Any("error", err))
 		}
 
 		w.WriteHeader(http.StatusOK)
 		flusher.Flush()
 
-		// Max-lifetime потолок (M4): производный ctx, который отменяется по
-		// истечении sseMaxLifetime ИЛИ при отключении клиента (r.Context()).
+		// Max-lifetime ceiling (M4): derived ctx cancelled on sseMaxLifetime
+		// expiry OR client disconnect (r.Context()).
 		ctx, cancel := context.WithTimeout(r.Context(), sseMaxLifetime)
 		defer cancel()
 
@@ -251,9 +251,9 @@ func buildSSEHandler(deps sseDeps) http.HandlerFunc {
 				flusher.Flush()
 			case ev, ok := <-ch:
 				if !ok {
-					// Bus закрыл канал — обычно одновременно с ctx.Done()
-					// (наша же goroutine). Дополнительный return на случай
-					// гонки.
+					// Bus closed the channel — usually concurrent with
+					// ctx.Done() (our own goroutine). Extra return in case
+					// of a race.
 					return
 				}
 				if err := writeSSEEvent(w, ev); err != nil {
@@ -270,19 +270,21 @@ func buildSSEHandler(deps sseDeps) http.HandlerFunc {
 	}
 }
 
-// authorizeSSE — RBAC-проверка подписки на apply_id (M1).
+// authorizeSSE — subscription RBAC check for apply_id (M1).
 //
-// Правила:
-//   - Access == nil → deny (fail-closed): без access-store невозможно
-//     резолвить владельца/incarnation прогона, поэтому проверку нельзя
-//     выполнить и подписка отклоняется. Прод всегда прокидывает Access.
-//   - apply_id не найден → deny (anti-enum: неотличимо от отказа доступа).
-//   - started_by_aid == sub → allow (инициатор всегда видит свой прогон).
-//   - иначе → allow только при `incarnation.get` permission на incarnation
-//     прогона (RBAC == nil → deny, кроме случая владельца выше).
+// Rules:
+//   - Access == nil → deny (fail-closed): without an access-store the run's
+//     owner/incarnation can't be resolved, so the check can't run and the
+//     subscription is denied. Production always wires up Access.
+//   - apply_id not found → deny (anti-enum: indistinguishable from access
+//     denial).
+//   - started_by_aid == sub → allow (the initiator always sees their own
+//     run).
+//   - otherwise → allow only with `incarnation.get` permission on the run's
+//     incarnation (RBAC == nil → deny, except for the owner case above).
 //
-// На любой инфраструктурной ошибке (PG недоступен) — deny (fail-closed):
-// безопаснее отказать в подписке, чем открыть чужой стрим.
+// Any infrastructure error (PG unavailable) → deny (fail-closed): safer to
+// refuse the subscription than expose another user's stream.
 func authorizeSSE(ctx context.Context, deps sseDeps, sub, applyID string) bool {
 	if deps.Access == nil {
 		deps.Logger.Warn("mcp/sse: apply access-store not configured (deny)",
@@ -312,18 +314,18 @@ func authorizeSSE(ctx context.Context, deps sseDeps, sub, applyID string) bool {
 	return err == nil
 }
 
-// writeSSEEvent сериализует одно apply-событие в SSE-frame:
+// writeSSEEvent serializes one apply event into an SSE frame:
 //
 //	event: <kind>
 //	id:    <apply_id>
 //	data:  <json payload>
-//	<пустая строка>
+//	<blank line>
 //
-// Payload прогоняется через [audit.MaskSecrets] перед сериализацией (H1):
-// register-output / state_changes могут нести секреты (`bootstrap_token` и
-// т.п.), которые иначе утекли бы в SSE-frame в открытом виде. Payload пишется
-// как одна JSON-строка (json.Marshal не оставляет \n внутри результата,
-// требование SSE «без многострочных data» выполняется автоматически).
+// Payload runs through [audit.MaskSecrets] before serialization (H1):
+// register-output / state_changes can carry secrets (`bootstrap_token` etc.)
+// that would otherwise leak into the SSE frame in the clear. Payload is
+// written as a single JSON string (json.Marshal never leaves \n inside the
+// result, so SSE's "no multiline data" requirement holds automatically).
 func writeSSEEvent(w http.ResponseWriter, ev applybus.Event) error {
 	masked := maskSSEPayload(ev.Payload)
 	payloadJSON, err := json.Marshal(masked)
@@ -338,19 +340,19 @@ func writeSSEEvent(w http.ResponseWriter, ev applybus.Event) error {
 	return nil
 }
 
-// maskSSEPayload приводит payload к masked-форме (H1). Payload приходит в
-// двух формах:
+// maskSSEPayload converts payload to its masked form (H1). Payload arrives
+// in two shapes:
 //
-//   - map[string]any — local-publish (events_taskevent.go / events_runresult.go);
-//     маскируется напрямую через [audit.MaskSecrets].
+//   - map[string]any — local publish (events_taskevent.go / events_runresult.go);
+//     masked directly via [audit.MaskSecrets].
 //   - json.RawMessage / []byte — cross-Keeper cluster-bridge (applybus
-//     forward); сначала декодируем в map[string]any, маскируем, потом
-//     отдаём как map (json.Marshal в writeSSEEvent сериализует обратно).
-//     Если payload — не-object JSON (массив/скаляр) или decode упал —
-//     возвращаем исходное значение (маскировать нечего по ключам; vault-ref
-//     в скаляре — крайне маловероятный edge для SSE-payload-контракта).
+//     forward); decoded into map[string]any first, masked, then returned as
+//     a map (writeSSEEvent's json.Marshal re-serializes it).
+//     If payload is non-object JSON (array/scalar) or decode fails, return
+//     it unchanged (nothing to mask by key; a vault-ref in a scalar is an
+//     extremely unlikely edge case for the SSE payload contract).
 //
-// Любой другой тип возвращается как есть (контракт payload-а — object).
+// Any other type is returned as-is (the payload contract is an object).
 func maskSSEPayload(payload any) any {
 	switch p := payload.(type) {
 	case nil:
@@ -366,9 +368,9 @@ func maskSSEPayload(payload any) any {
 	}
 }
 
-// maskRawJSON декодирует raw-JSON-object, маскирует и возвращает map. На
-// non-object JSON или ошибке декода возвращает исходный raw (caller
-// сериализует его как есть).
+// maskRawJSON decodes a raw JSON object, masks it, and returns a map. On
+// non-object JSON or a decode error, returns the original raw bytes (caller
+// serializes it as-is).
 func maskRawJSON(raw []byte) any {
 	var m map[string]any
 	if err := json.Unmarshal(raw, &m); err != nil {
@@ -377,8 +379,8 @@ func maskRawJSON(raw []byte) any {
 	return audit.MaskSecrets(m)
 }
 
-// Payload-контракт SSE-канала — snake_case-ключи, единый набор для всех
-// EventKind:
+// SSE-channel payload contract — snake_case keys, one set shared across all
+// EventKind values:
 //
 //   - apply.started     → {apply_id, kind, at}
 //   - task.executed     → + {sid, task_idx, task_status, error?: {code,message,module}}
@@ -386,8 +388,8 @@ func maskRawJSON(raw []byte) any {
 //   - apply.failed      → + {sid, run_status}
 //   - apply.cancelled   → + {sid, run_status}
 //
-// Структура — `map[string]any` (а не typed-struct), потому что publisher-ы
-// живут в пакете `keeper/internal/grpc` и тянуть typed-struct оттуда
-// потребовало бы либо обратного import-а из mcp в grpc, либо третьего
-// пакета. Контракт фиксируется в docs/keeper/mcp-tools.md (отдельный slice
-// документации), а не Go-типом.
+// Structure is `map[string]any` (not a typed struct) because publishers live
+// in the `keeper/internal/grpc` package, and pulling in a typed struct from
+// there would require either a reverse import from mcp into grpc, or a third
+// package. The contract is pinned in docs/keeper/mcp-tools.md (a separate
+// documentation slice), not by a Go type.

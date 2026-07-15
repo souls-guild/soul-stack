@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 )
 
-// toolDeclaration — MCP-spec форма tool-objectа, возвращаемая в
-// `tools/list`. Поля по docs/keeper/mcp-tools.md → § Формат tool
-// declaration. inputSchema / outputSchema — JSON Schema draft 2020-12
-// (произвольный JSON; держим как json.RawMessage, чтобы статические
-// схемы остались константами и не пересобирались на каждый list).
+// toolDeclaration — MCP-spec tool-object form returned by `tools/list`.
+// Fields per docs/keeper/mcp-tools.md → § Tool declaration format.
+// inputSchema/outputSchema are JSON Schema draft 2020-12, stored as
+// json.RawMessage so static schemas stay constants instead of being
+// re-marshaled on every list.
 type toolDeclaration struct {
 	Name         string          `json:"name"`
 	Description  string          `json:"description"`
@@ -16,10 +16,10 @@ type toolDeclaration struct {
 	OutputSchema json.RawMessage `json:"outputSchema,omitempty"`
 }
 
-// toolStatus — метка реализации tool-а в текущем slice-е.
-// Используется только tool-handler-ом для решения, вызывать ли реальный
-// service или возвращать `not implemented`-error (M0.7.a — заглушки для
-// 13 incarnation/soul/push/cloud-tools).
+// toolStatus — implementation marker for a tool in the current slice.
+// Used only by the tool handler to decide whether to call the real
+// service or return a `not implemented` error (M0.7.a stubs for 13
+// incarnation/soul/push/cloud tools).
 type toolStatus int
 
 const (
@@ -27,25 +27,24 @@ const (
 	toolStatusStub
 )
 
-// toolEntry — внутренняя запись каталога: declaration для tools/list +
-// признак реализованности для tools/call dispatch-а.
+// toolEntry — catalog entry: declaration for tools/list plus the
+// implementation flag for tools/call dispatch.
 type toolEntry struct {
 	decl   toolDeclaration
 	status toolStatus
 }
 
-// catalogManifest — статический манифест tool-ов (актуальное число под
-// контролем детерминированного TestCatalog_TotalCount, чтобы комментарий
-// не устаревал при добавлении tool-ов).
+// catalogManifest — static tool manifest (current count enforced by
+// TestCatalog_TotalCount so this comment can't go stale).
 //
-// Декларации синхронизируются с docs/keeper/mcp-tools.md (1:1 input/output
-// schema). При расхождении — `mcp-tools.md` источник правды.
+// Declarations stay 1:1 with docs/keeper/mcp-tools.md input/output
+// schemas; mcp-tools.md is the source of truth on divergence.
 //
-// `description` — короткое (1–2 предложения) объяснение для LLM-агента, что
-// делает tool. Полная семантика, async-сборка, error codes — в operator-api.md
-// (cross-link из mcp-tools.md).
+// `description` is a short (1-2 sentence) explanation for the LLM agent of
+// what the tool does. Full semantics, async shape, and error codes live in
+// operator-api.md (cross-linked from mcp-tools.md).
 var catalogManifest = []toolEntry{
-	// --- Operator (3) — реализованы в M0.7.a ---
+	// --- Operator (3) — implemented in M0.7.a ---
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
@@ -74,12 +73,12 @@ var catalogManifest = []toolEntry{
 		},
 	},
 
-	// --- Role (6) — RBAC-CRUD, реализованы в Slice 2b ---
+	// --- Role (6) — RBAC CRUD, implemented in Slice 2b ---
 	//
-	// 1:1 с permission (Вариант A): keeper.role.<action> ↔ role.<action>.
-	// Бизнес-логика (builtin-граница, self-lockout) — в rbac.Service; tool —
-	// транспорт. Все tools диспатчатся только при непустом RBACRoles (опц.
-	// поле HandlerDeps); иначе call-метод вернёт «role management not configured».
+	// 1:1 with permission (Variant A): keeper.role.<action> ↔ role.<action>.
+	// Business logic (builtin boundary, self-lockout) lives in rbac.Service;
+	// tool is transport only. All tools dispatch only when RBACRoles is set
+	// (optional HandlerDeps field); otherwise returns "role management not configured".
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
@@ -137,11 +136,11 @@ var catalogManifest = []toolEntry{
 
 	// --- Synod (8) — ADR-049 ---
 	//
-	// Группы архонов (Архон → Synod → Роли). 1:1 keeper.synod.<action> ↔
-	// permission synod.<action>. Бизнес-логика (builtin-граница, least-privilege
-	// subset на add-operator/grant-role, self-lockout на delete/remove-operator/
-	// revoke-role) — в rbac.Service; tool — транспорт. Диспатчатся только при
-	// непустом RBACRoles.
+	// Archon groups (Archon → Synod → Roles). 1:1 keeper.synod.<action> ↔
+	// permission synod.<action>. Business logic (builtin boundary,
+	// least-privilege subset on add-operator/grant-role, self-lockout on
+	// delete/remove-operator/revoke-role) lives in rbac.Service; tool is
+	// transport only. Dispatches only when RBACRoles is set.
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
@@ -217,11 +216,12 @@ var catalogManifest = []toolEntry{
 
 	// --- Incarnation (11) ---
 	//
-	// Все 11 tools (create/run/get/list/history/unlock/rerun-last/upgrade/destroy/check-drift/traits-set)
-	// Implemented: dispatch-ветки заведены, тела — паритет REST
-	// IncarnationHandler. destroy подключён в S-D4 (DELETE /v1/incarnations/{name}).
-	// check-drift подключён в ADR-031 Slice B (Scry on-demand-пилот). traits-set —
-	// ADR-060 amend R1 (PUT /v1/incarnations/{name}/traits, релокация per-soul).
+	// All 11 tools (create/run/get/list/history/unlock/rerun-last/upgrade/
+	// destroy/check-drift/traits-set) implemented: dispatch branches wired,
+	// bodies at parity with REST IncarnationHandler. destroy wired in S-D4
+	// (DELETE /v1/incarnations/{name}). check-drift wired in ADR-031 Slice B
+	// (Scry on-demand pilot). traits-set — ADR-060 amend R1 (PUT
+	// /v1/incarnations/{name}/traits, relocated from per-soul).
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
@@ -323,8 +323,8 @@ var catalogManifest = []toolEntry{
 	},
 
 	// --- Soul (6) — create + issue-token + coven-assign + traits-assign +
-	// ssh-target.update implemented (паритет REST POST /v1/souls + issue-token +
-	// coven + traits + ssh-target); list остаётся stub (ждёт M2). ---
+	// ssh-target.update implemented (parity with REST POST /v1/souls +
+	// issue-token + coven + traits + ssh-target); list stays a stub (awaits M2). ---
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
@@ -380,13 +380,13 @@ var catalogManifest = []toolEntry{
 		},
 	},
 
-	// --- Plugin (3) — Sigil allow-list, реализованы в S4b ---
+	// --- Plugin (3) — Sigil allow-list, implemented in S4b ---
 	//
-	// 1:1 с permission (keeper.plugin.<action> ↔ plugin.<action>) и REST
-	// POST/GET/DELETE /v1/plugins/sigils*. Бизнес-логика (чтение слота кеша,
-	// подпись, CRUD реестра) — в sigil.Service; tool — транспорт. Все три
-	// диспатчатся только при непустом SigilSvc (опц. поле HandlerDeps); иначе
-	// call-метод вернёт «sigil is not configured».
+	// 1:1 with permission (keeper.plugin.<action> ↔ plugin.<action>) and
+	// REST POST/GET/DELETE /v1/plugins/sigils*. Business logic (cache-slot
+	// read, signing, registry CRUD) lives in sigil.Service; tool is
+	// transport only. All three dispatch only when SigilSvc is set (optional
+	// HandlerDeps field); otherwise returns "sigil is not configured".
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
@@ -415,13 +415,14 @@ var catalogManifest = []toolEntry{
 		},
 	},
 
-	// --- Sigil-key (4) — ротация ключей подписи Sigil, реализованы в R3-S7 ---
+	// --- Sigil-key (4) — Sigil signing-key rotation, implemented in R3-S7 ---
 	//
-	// keeper.sigil.key.<verb> ↔ permission sigil.key-<verb> ↔ REST /v1/sigil/keys*.
-	// Бизнес-логика (key-gen + Vault-write + CRUD реестра + publish anchors-changed)
-	// — в sigil.KeyService; tool — транспорт. Все четыре диспатчатся только при
-	// непустом SigilKeySvc (опц. поле HandlerDeps); иначе call-метод вернёт «sigil
-	// is not configured». БЕЗОПАСНОСТЬ: приватник НИКОГДА не в output.
+	// keeper.sigil.key.<verb> ↔ permission sigil.key-<verb> ↔ REST
+	// /v1/sigil/keys*. Business logic (key-gen + Vault write + registry CRUD
+	// + publish anchors-changed) lives in sigil.KeyService; tool is
+	// transport only. All four dispatch only when SigilKeySvc is set
+	// (optional HandlerDeps field); otherwise returns "sigil is not
+	// configured". SECURITY: the private key is NEVER included in output.
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
@@ -459,13 +460,14 @@ var catalogManifest = []toolEntry{
 		},
 	},
 
-	// --- Service (4) — реестр Service-ов, реализованы в S3 ---
+	// --- Service (4) — Service registry, implemented in S3 ---
 	//
-	// 1:1 с permission (keeper.service.<action> ↔ service.<action>) и REST
-	// POST/GET/PATCH/DELETE /v1/services*. Бизнес-логика (валидация name/git/ref/
-	// refresh, invalidate-хук) — в serviceregistry.Service; tool — транспорт.
-	// Все четыре диспатчатся только при непустом ServiceSvc (опц. поле
-	// HandlerDeps); иначе call-метод вернёт «service registry is not configured».
+	// 1:1 with permission (keeper.service.<action> ↔ service.<action>) and
+	// REST POST/GET/PATCH/DELETE /v1/services*. Business logic (name/git/ref/
+	// refresh validation, invalidate hook) lives in serviceregistry.Service;
+	// tool is transport only. All four dispatch only when ServiceSvc is set
+	// (optional HandlerDeps field); otherwise returns "service registry is
+	// not configured".
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
@@ -503,14 +505,14 @@ var catalogManifest = []toolEntry{
 		},
 	},
 
-	// --- Augur (6) — реестры Omen / Rite, реализованы (ADR-025) ---
+	// --- Augur (6) — Omen/Rite registries, implemented (ADR-025) ---
 	//
-	// 4-сегментный tool-name keeper.augur.<resource>.<action> ↔ 2-сегментная
-	// permission <resource>.<action> (omen.create / rite.list / …). Бизнес-логика
-	// (валидация name/source_type/auth_ref, XOR-субъект, allow-shape, token-поля)
-	// — в augur.Service; tool — транспорт. Все шесть диспатчатся только при
-	// непустом AugurSvc (опц. поле HandlerDeps); иначе call-метод вернёт «augur
-	// registry is not configured».
+	// 4-segment tool-name keeper.augur.<resource>.<action> ↔ 2-segment
+	// permission <resource>.<action> (omen.create / rite.list / …). Business
+	// logic (name/source_type/auth_ref validation, XOR subject, allow shape,
+	// token fields) lives in augur.Service; tool is transport only. All six
+	// dispatch only when AugurSvc is set (optional HandlerDeps field);
+	// otherwise returns "augur registry is not configured".
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
@@ -566,14 +568,15 @@ var catalogManifest = []toolEntry{
 		},
 	},
 
-	// --- Oracle (6) — реестры Vigil / Decree, реализованы (ADR-030 beacons) ---
+	// --- Oracle (6) — Vigil/Decree registries, implemented (ADR-030 beacons) ---
 	//
-	// 4-сегментный tool-name keeper.oracle.<resource>.<action> ↔ 2-сегментная
-	// permission <resource>.<action> (vigil.create / decree.list / …). Бизнес-
-	// логика (валидация name/interval/check/субъект для Vigil; name/on_beacon/
-	// incarnation/scenario/субъект/where-CEL для Decree) — в oracle.Service; tool
-	// — транспорт. Все шесть диспатчатся только при непустом OracleSvc (опц. поле
-	// HandlerDeps); иначе call-метод вернёт «oracle registry is not configured».
+	// 4-segment tool-name keeper.oracle.<resource>.<action> ↔ 2-segment
+	// permission <resource>.<action> (vigil.create / decree.list / …).
+	// Business logic (name/interval/check/subject validation for Vigil;
+	// name/on_beacon/incarnation/scenario/subject/where-CEL for Decree) lives
+	// in oracle.Service; tool is transport only. All six dispatch only when
+	// OracleSvc is set (optional HandlerDeps field); otherwise returns
+	// "oracle registry is not configured".
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
@@ -631,13 +634,14 @@ var catalogManifest = []toolEntry{
 
 	// --- Errand (4) — pull-ad-hoc exec ADR-033, slice E4 + cancel slice E5 ---
 	//
-	// 1:1 с REST POST /v1/souls/{sid}/exec + GET /v1/errands{,/{errand_id}} +
-	// DELETE /v1/errands/{errand_id} и permission (errand.run — селектор
-	// host=<sid>; errand.list — NoSelector; errand.cancel — NoSelector).
-	// Бизнес-логика (validate, INSERT, send/wait, mask+cap, async-escalation,
-	// cancel-signal, audit) — в errand.Dispatcher / Store; tool — транспорт. Все
-	// диспатчатся только при непустых ErrandDispatcher/ErrandStore (опц. поля
-	// HandlerDeps); иначе call-метод вернёт «errand orchestrator is not configured».
+	// 1:1 with REST POST /v1/souls/{sid}/exec + GET
+	// /v1/errands{,/{errand_id}} + DELETE /v1/errands/{errand_id} and
+	// permission (errand.run — selector host=<sid>; errand.list —
+	// NoSelector; errand.cancel — NoSelector). Business logic (validate,
+	// INSERT, send/wait, mask+cap, async escalation, cancel signal, audit)
+	// lives in errand.Dispatcher/Store; tool is transport only. Dispatches
+	// only when ErrandDispatcher/ErrandStore are set (optional HandlerDeps
+	// fields); otherwise returns "errand orchestrator is not configured".
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
@@ -675,10 +679,10 @@ var catalogManifest = []toolEntry{
 		},
 	},
 
-	// --- Voyage (4) — унифицированный батчевый прогон (ADR-043, S5). Диспатчатся
-	// только при непустых Voyage-deps (VoyageDB + резолверы); иначе call-метод
-	// вернёт «voyage orchestrator is not configured». RBAC-by-kind (scenario→
-	// incarnation.run / command→errand.run) делает сам handler.
+	// --- Voyage (4) — unified batch run (ADR-043, S5). Dispatches only when
+	// Voyage deps are set (VoyageDB + resolvers); otherwise returns "voyage
+	// orchestrator is not configured". RBAC-by-kind (scenario→incarnation.run
+	// / command→errand.run) is done by the handler itself.
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
@@ -716,8 +720,8 @@ var catalogManifest = []toolEntry{
 		},
 	},
 
-	// --- Push (2) — keeper.push.apply реализован (Variant C orchestrator,
-	// docs/keeper/push.md); keeper.push.cleanup остаётся stub (отдельный slice).
+	// --- Push (2) — keeper.push.apply implemented (Variant C orchestrator,
+	// docs/keeper/push.md); keeper.push.cleanup stays a stub (separate slice).
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
@@ -737,13 +741,14 @@ var catalogManifest = []toolEntry{
 		},
 	},
 
-	// --- Cloud Provider (4) — operator-facing CRUD реестра providers (ADR-017) ---
+	// --- Cloud Provider (4) — operator-facing CRUD for providers registry (ADR-017) ---
 	//
-	// keeper.provider.<verb> ↔ permission provider.<verb> ↔ REST POST/GET/DELETE
-	// /v1/providers*. Бизнес-логика — provider.Service; tool — транспорт.
-	// Диспатчатся только при непустом ProviderSvc; иначе «provider registry is
-	// not configured». БЕЗ update (Provider иммутабелен). credentials_ref
-	// отдаётся как vault-путь, секрет НЕ резолвится.
+	// keeper.provider.<verb> ↔ permission provider.<verb> ↔ REST
+	// POST/GET/DELETE /v1/providers*. Business logic lives in
+	// provider.Service; tool is transport only. Dispatches only when
+	// ProviderSvc is set; otherwise "provider registry is not configured".
+	// NO update (Provider is immutable). credentials_ref is returned as a
+	// vault path; the secret is never resolved.
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
@@ -781,10 +786,11 @@ var catalogManifest = []toolEntry{
 		},
 	},
 
-	// --- Cloud Profile (4) — operator-facing CRUD реестра profiles (ADR-017) ---
+	// --- Cloud Profile (4) — operator-facing CRUD for profiles registry (ADR-017) ---
 	//
-	// keeper.profile.<verb> ↔ permission profile.<verb> ↔ REST POST/GET/DELETE
-	// /v1/profiles*. БЕЗ update. VALUE params в audit НЕ кладутся (только ключи).
+	// keeper.profile.<verb> ↔ permission profile.<verb> ↔ REST
+	// POST/GET/DELETE /v1/profiles*. NO update. Param VALUES are never
+	// written to audit (keys only).
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
@@ -822,15 +828,15 @@ var catalogManifest = []toolEntry{
 		},
 	},
 
-	// --- Push-Provider (5) — CRUD реестра, реализованы в S7-2 ---
+	// --- Push-Provider (5) — registry CRUD, implemented in S7-2 ---
 	//
 	// keeper.push-provider.<verb> ↔ permission push-provider.<verb> ↔ REST
-	// POST/GET/PUT/DELETE /v1/push-providers*. Бизнес-логика (валидация
-	// sensitive-params как vault-refs, Redis invalidate-publish) — в
-	// pushprovider.Service; tool — транспорт. Все пять диспатчатся только при
-	// непустом PushProviderSvc (опц. поле HandlerDeps); иначе call-метод
-	// возвращает internal-error «push-provider registry is not configured»
-	// (паттерн ServiceSvc/AugurSvc).
+	// POST/GET/PUT/DELETE /v1/push-providers*. Business logic (sensitive
+	// params validated as vault-refs, Redis invalidate-publish) lives in
+	// pushprovider.Service; tool is transport only. All five dispatch only
+	// when PushProviderSvc is set (optional HandlerDeps field); otherwise
+	// returns internal-error "push-provider registry is not configured"
+	// (same pattern as ServiceSvc/AugurSvc).
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
@@ -877,13 +883,14 @@ var catalogManifest = []toolEntry{
 		},
 	},
 
-	// --- Herald (5) — CRUD реестра каналов уведомлений (ADR-052, S4) ---
+	// --- Herald (5) — notification-channel registry CRUD (ADR-052, S4) ---
 	//
-	// keeper.herald.<verb> ↔ permission herald.<verb> ↔ REST POST/GET/PUT/DELETE
-	// /v1/heralds*. Бизнес-логика (валидация config/secret_ref + SSRF-контур +
-	// инвалидация dispatcher-кэша) — в herald.Service; tool — транспорт. Все пять
-	// диспатчатся только при непустом HeraldSvc (опц. поле HandlerDeps); иначе
-	// call-метод возвращает internal-error «herald registry is not configured».
+	// keeper.herald.<verb> ↔ permission herald.<verb> ↔ REST
+	// POST/GET/PUT/DELETE /v1/heralds*. Business logic (config/secret_ref
+	// validation + SSRF guard + dispatcher-cache invalidation) lives in
+	// herald.Service; tool is transport only. All five dispatch only when
+	// HeraldSvc is set (optional HandlerDeps field); otherwise returns
+	// internal-error "herald registry is not configured".
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
@@ -930,11 +937,12 @@ var catalogManifest = []toolEntry{
 		},
 	},
 
-	// --- Tiding (5) — CRUD реестра правил подписки (ADR-052, S4) ---
+	// --- Tiding (5) — subscription-rule registry CRUD (ADR-052, S4) ---
 	//
-	// keeper.tiding.<verb> ↔ permission tiding.<verb> ↔ REST POST/GET/PUT/DELETE
-	// /v1/tidings*. event_types — area-glob в scope прогонов; herald — FK на
-	// существующий Herald. Те же HeraldSvc / nil-guard, что herald-tools.
+	// keeper.tiding.<verb> ↔ permission tiding.<verb> ↔ REST
+	// POST/GET/PUT/DELETE /v1/tidings*. event_types is an area-glob within
+	// the run scope; herald is an FK to an existing Herald. Same HeraldSvc /
+	// nil-guard as herald-tools.
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
@@ -982,8 +990,8 @@ var catalogManifest = []toolEntry{
 	},
 }
 
-// toolByName — линейный поиск по каталогу. Возвращает ok=false если name
-// не зарегистрировано.
+// toolByName — linear catalog lookup. Returns ok=false if name is not
+// registered.
 func toolByName(name string) (toolEntry, bool) {
 	for _, e := range catalogManifest {
 		if e.decl.Name == name {
@@ -993,10 +1001,10 @@ func toolByName(name string) (toolEntry, bool) {
 	return toolEntry{}, false
 }
 
-// listAllTools — упорядоченный snapshot всех tool-declarations для
-// `tools/list`. Порядок — declaration-order из catalogManifest (operator
-// → role → incarnation → soul → plugin → service → augur → oracle → push → cloud),
-// соответствует docs/keeper/mcp-tools.md.
+// listAllTools — ordered snapshot of all tool declarations for
+// `tools/list`. Order follows catalogManifest declaration order (operator
+// → role → incarnation → soul → plugin → service → augur → oracle → push →
+// cloud), matching docs/keeper/mcp-tools.md.
 func listAllTools() []toolDeclaration {
 	out := make([]toolDeclaration, len(catalogManifest))
 	for i, e := range catalogManifest {
@@ -1005,11 +1013,11 @@ func listAllTools() []toolDeclaration {
 	return out
 }
 
-// --- JSON Schema-литералы для tool-declarations ---
+// --- JSON Schema literals for tool declarations ---
 //
-// Каждая схема — JSON Schema draft 2020-12, additionalProperties=false,
-// required-поля заданы явно. Хранятся как json.RawMessage, чтобы пакет
-// мог отдавать их в tools/list без re-marshal-а на каждый запрос.
+// Each schema is JSON Schema draft 2020-12, additionalProperties=false,
+// with required fields listed explicitly. Stored as json.RawMessage so
+// the package can serve them in tools/list without re-marshaling per request.
 
 var (
 	schemaEmptyObject = json.RawMessage(`{
@@ -1360,9 +1368,9 @@ var (
 "name":{"type":"string"},
 "allow_destroy":{"type":"boolean"}}}`)
 
-	// check-drift: input override опционален (auto-from-state по конвенции
-	// имени). Сами имена/типы override-параметров определяет converge-схема
-	// сервиса, поэтому здесь — свободная map (additionalProperties не запрещаем).
+	// check-drift: input override is optional (auto-from-state by naming
+	// convention). Override param names/types are defined by the service's
+	// converge schema, so this stays a free-form map (additionalProperties allowed).
 	schemaIncarnationCheckDriftInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
@@ -1372,8 +1380,8 @@ var (
 "name":{"type":"string","description":"Имя incarnation."},
 "input":{"type":"object","description":"Override converge-параметров; перекрывает auto-from-state по конвенции имени."}}}`)
 
-	// DriftReport (ADR-031 Slice B): per-host агрегат task-результатов + summary.
-	// Schema симметрична scenario.DriftReport (Go-тип в keeper/internal/scenario/checkdrift.go).
+	// DriftReport (ADR-031 Slice B): per-host aggregate of task results + summary.
+	// Schema mirrors scenario.DriftReport (Go type in keeper/internal/scenario/checkdrift.go).
 	schemaIncarnationCheckDriftOutput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
@@ -1404,9 +1412,9 @@ var (
 "hosts_unsupported":{"type":"integer","minimum":0},
 "hosts_failed":{"type":"integer","minimum":0}}}}}`)
 
-	// traits-set: целостная замена incarnation.traits (ADR-060). 'traits' —
-	// полный набор ключ→(scalar|list of scalars); пустой/опущен = очистить.
-	// Форма значения симметрична soul.traits-assign (запрет nested).
+	// traits-set: wholesale replacement of incarnation.traits (ADR-060).
+	// 'traits' is the full key→(scalar|list of scalars) set; empty/omitted
+	// clears it. Value shape mirrors soul.traits-assign (no nesting).
 	schemaIncarnationTraitsSetInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
@@ -1470,17 +1478,17 @@ var (
 "bootstrap_token":{"type":"string","description":"Выпускается один раз; клиент обязан сохранить."},
 "expires_at":{"type":"string","format":"date-time"}}}`)
 
-	// selector — подмножество словаря таргетинга soul.* (all/sids/coven/
-	// incarnation/status), симметрично REST POST /v1/souls/coven. Свободный
-	// CEL-предикат сознательно НЕ поддержан (ломает доказуемость scope-
-	// проверки). Минимум один критерий обязателен (all=true ИЛИ один из
-	// sids/coven/incarnation/status) — runtime-проверка в service-слое
-	// (ErrBulkEmptySelector → validation-failed).
+	// selector is a subset of the soul.* targeting vocabulary (all/sids/coven/
+	// incarnation/status), mirroring REST POST /v1/souls/coven. A free-form
+	// CEL predicate is deliberately unsupported (it would break provable
+	// scope checks). At least one criterion is required (all=true or one of
+	// sids/coven/incarnation/status) — enforced at runtime in the service
+	// layer (ErrBulkEmptySelector → validation-failed).
 	//
-	// `label` ↔ `labels` — XOR по mode: append/remove → label, replace →
-	// labels[]. JSON Schema не выражает XOR-условие через if/then на mode
-	// (валидатор клиента в произвольной реализации) — основная проверка
-	// делается в handler/MCP (422 на нарушение).
+	// `label` ↔ `labels` is XOR by mode: append/remove → label, replace →
+	// labels[]. JSON Schema can't express the XOR via if/then on mode
+	// (client validator implementation varies), so the real check happens in
+	// handler/MCP (422 on violation).
 	schemaSoulCovenAssignInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
@@ -1512,13 +1520,14 @@ var (
 "status":{"type":"string","enum":["completed","partial"]},
 "dry_run":{"type":"boolean"}}}`)
 
-	// trait-value — scalar (string/number/bool) или list of scalars (depth ≤ 1,
-	// ADR-060). JSON Schema выражает «scalar | list<scalar>» через oneOf;
-	// вложенные объекты/массивы отвергаются доменом (ValidTraitValue) — основная
-	// проверка в handler/MCP (422). `traits` ↔ `keys` — XOR по mode: merge/replace
-	// → traits (map), remove → keys[] (имена). selector — то же подмножество, что
-	// у coven-assign. Минимум один критерий селектора обязателен (runtime-проверка
-	// ErrBulkEmptySelector → validation-failed).
+	// trait-value is scalar (string/number/bool) or list of scalars (depth ≤
+	// 1, ADR-060). JSON Schema expresses "scalar | list<scalar>" via oneOf;
+	// nested objects/arrays are rejected by the domain (ValidTraitValue) —
+	// the real check happens in handler/MCP (422). `traits` ↔ `keys` is XOR
+	// by mode: merge/replace → traits (map), remove → keys[] (names).
+	// selector is the same subset as coven-assign. At least one selector
+	// criterion is required (runtime check ErrBulkEmptySelector →
+	// validation-failed).
 	schemaSoulTraitsAssignInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
@@ -1800,10 +1809,10 @@ var (
 "created_by_aid":{"type":"string"},
 "created_at":{"type":"string","format":"date-time"}}}}}}`)
 
-	// allow — свободный объект на уровне JSON Schema: его форма зависит от
-	// source_type Omen-а (vault {paths?,policies?} / prometheus {queries} / elk
-	// {indices}), и эту привязку без триггера декларативно не выразить —
-	// runtime-валидация делает augur.ValidateAllow (augur.md §4.2).
+	// allow is free-form at the JSON Schema level: its shape depends on the
+	// Omen's source_type (vault {paths?,policies?} / prometheus {queries} /
+	// elk {indices}), which can't be expressed declaratively without a
+	// trigger — runtime validation is augur.ValidateAllow (augur.md §4.2).
 	schemaRiteCreateInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
@@ -1875,9 +1884,10 @@ var (
 
 	// --- Oracle (Vigil / Decree, ADR-030 beacons) ---
 	//
-	// params (Vigil) / action_input (Decree) — свободные объекты на уровне JSON
-	// Schema: их форма зависит от check / scenario, без триггера декларативно не
-	// выразить (typed-payload отложен, ADR-030); runtime-валидация — service-слой.
+	// params (Vigil) / action_input (Decree) are free-form at the JSON
+	// Schema level: shape depends on check / scenario and can't be expressed
+	// declaratively without a trigger (typed payload deferred, ADR-030);
+	// runtime validation is in the service layer.
 	schemaOraclePaginatedInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
@@ -2070,8 +2080,8 @@ var (
 
 	// --- Errand (ADR-033) ---
 	//
-	// schemaErrandRow — base-форма строки errands (используется как
-	// schemaErrandGetOutput напрямую и как элемент schemaErrandListOutput.items).
+	// schemaErrandRow — base shape of an errands row (used directly as
+	// schemaErrandGetOutput and as an element of schemaErrandListOutput.items).
 	schemaErrandRow = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
@@ -2156,9 +2166,9 @@ var (
 "properties":{
 "errand_id":{"type":"string"}}}`)
 
-	// schemaErrandCancelInput / Output — keeper.errand.cancel (ADR-033 slice E5).
-	// Input — единственное поле errand_id (как у get); output — ack-объект,
-	// зеркальный 204-эквивалент REST DELETE.
+	// schemaErrandCancelInput / Output — keeper.errand.cancel (ADR-033 slice
+	// E5). Input is a single errand_id field (like get); output is an ack
+	// object mirroring the REST DELETE 204 equivalent.
 	schemaErrandCancelInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
@@ -2176,7 +2186,7 @@ var (
 "errand_id":{"type":"string"},
 "cancelled":{"type":"boolean"}}}`)
 
-	// --- Voyage (ADR-043, S5) — input/output schemas. RBAC-by-kind в handler-е.
+	// --- Voyage (ADR-043, S5) — input/output schemas. RBAC-by-kind is in the handler.
 	schemaVoyageStartInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
@@ -2285,8 +2295,8 @@ var (
 "created_at":{"type":"string","format":"date-time"},
 "created_by_aid":{"type":"string"}}}`)
 
-	// Cloud Provider/Profile — read/delete (by-name) и list (paged) input-schemas
-	// (ADR-017). name-pattern symmetric с provider/profile.NamePattern (kebab 1..63).
+	// Cloud Provider/Profile — read/delete (by-name) and list (paged) input
+	// schemas (ADR-017). name pattern mirrors provider/profile.NamePattern (kebab 1..63).
 	schemaProviderByNameInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
@@ -2320,7 +2330,7 @@ var (
 "offset":{"type":"integer","minimum":0},
 "limit":{"type":"integer","minimum":1,"description":"Размер страницы (дефолт 100)."}}}`)
 
-	// Push-Provider (S7-2) — input/output schemas. name-pattern symmetric с
+	// Push-Provider (S7-2) — input/output schemas. name pattern mirrors
 	// pushprovider.NamePattern (`^[a-z][a-z0-9-]{0,62}$` — env-var-name-safe).
 	schemaPushProviderCreateInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
@@ -2370,7 +2380,7 @@ var (
 "created_by_aid":{"type":"string"},
 "updated_by_aid":{"type":["string","null"]}}}`)
 
-	// Herald/Tiding (ADR-052, S4). 1:1 с REST-схемами openapi.yaml.
+	// Herald/Tiding (ADR-052, S4). 1:1 with REST schemas in openapi.yaml.
 	schemaHeraldCreateInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",

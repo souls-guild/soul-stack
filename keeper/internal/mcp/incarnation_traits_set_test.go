@@ -12,8 +12,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// MCP-tool keeper.incarnation.traits-set (ADR-060 amend R1) — паритет REST
-// PUT /v1/incarnations/{name}/traits. Релокация per-soul → per-incarnation.
+// MCP tool keeper.incarnation.traits-set (ADR-060 amend R1) — REST parity
+// with PUT /v1/incarnations/{name}/traits. Relocated per-soul → per-incarnation.
 
 func traitsSetRBAC() *rbactest.Config {
 	return &rbactest.Config{
@@ -23,8 +23,9 @@ func traitsSetRBAC() *rbactest.Config {
 	}
 }
 
-// incForTraits — incFn, отдающий ready-incarnation с заданными traits/covens (для
-// full-row FOR UPDATE-select UpdateTraits + scope-резолва).
+// incForTraits is an incFn returning a ready incarnation with the given
+// traits/covens (for the full-row FOR UPDATE select in UpdateTraits + scope
+// resolution).
 func incForTraits(traits map[string]any) func(string) (*incarnation.Incarnation, error) {
 	return func(name string) (*incarnation.Incarnation, error) {
 		now := time.Now().UTC()
@@ -101,7 +102,7 @@ func TestIncarnationTraitsSet_Success(t *testing.T) {
 }
 
 func TestIncarnationTraitsSet_InvalidValue(t *testing.T) {
-	// nested-значение trait отбивается доменом ДО мутации.
+	// A nested trait value is rejected by the domain BEFORE mutation.
 	pool := &fakePool{
 		incFn:    incForTraits(nil),
 		beginErr: errFakeUnexpected{sql: "BeginTx must not be called on invalid trait value"},
@@ -134,7 +135,7 @@ func TestIncarnationTraitsSet_NotFound(t *testing.T) {
 }
 
 func TestIncarnationTraitsSet_RBACForbidden(t *testing.T) {
-	// Оператор без incarnation.traits-set → deny ДО мутации (BeginTx запрещён).
+	// Operator without incarnation.traits-set → deny BEFORE mutation (BeginTx forbidden).
 	pool := &fakePool{
 		incFn:    incForTraits(nil),
 		beginErr: errFakeUnexpected{sql: "BeginTx must not be called when RBAC denies"},

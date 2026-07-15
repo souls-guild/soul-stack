@@ -20,8 +20,8 @@ func unlockerRBAC() *rbactest.Config {
 	}
 }
 
-// incWithStatus — backing incFn, отдающий inc в заданном статусе (для FOR
-// UPDATE-select unlock-а).
+// incWithStatus — a backing incFn that returns an inc in the given status
+// (for the unlock FOR UPDATE select).
 func incWithStatus(status incarnation.Status) func(string) (*incarnation.Incarnation, error) {
 	return func(name string) (*incarnation.Incarnation, error) {
 		now := time.Now().UTC()

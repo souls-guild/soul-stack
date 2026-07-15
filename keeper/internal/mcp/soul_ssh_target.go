@@ -12,13 +12,14 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// keeper.soul.ssh-target.update — паритет REST PUT /v1/souls/{sid}/ssh-target
-// (SoulHandler.UpdateSshTarget, ADR-032 amendment 2026-05-26, S7-1). MCP-tool —
-// 3-сегментный (`keeper.soul.ssh-target.update`), permission — 2-сегментная
-// (`soul.ssh-target-update`); паттерн `keeper.sigil.key.<verb>` ↔
-// `sigil.key-<verb>` (см. catalog.go).
+// keeper.soul.ssh-target.update — parity with REST PUT
+// /v1/souls/{sid}/ssh-target (SoulHandler.UpdateSshTarget, ADR-032
+// amendment 2026-05-26, S7-1). MCP tool name is 3-segment
+// (`keeper.soul.ssh-target.update`), permission is 2-segment
+// (`soul.ssh-target-update`); same pattern as `keeper.sigil.key.<verb>` ↔
+// `sigil.key-<verb>` (see catalog.go).
 //
-// Логика та же, что REST: валидация поля → soul.UpdateSshTarget → audit.
+// Same logic as REST: field validation → soul.UpdateSshTarget → audit.
 
 type soulSshTargetArgs struct {
 	SID         string `json:"sid"`
@@ -73,15 +74,15 @@ func (h *Handler) callSoulSshTargetUpdate(ctx context.Context, claims *jwt.Claim
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
 			"field 'soul_path' must be an absolute Unix path (start with '/')")
 	}
-	// P2 W-1: optional `ssh_provider` — kebab-case kebab-имя плагина (см.
-	// push_providers.name regex). Пустая строка трактуется как «не задано».
+	// P2 W-1: optional `ssh_provider` — kebab-case plugin name (see the
+	// push_providers.name regex). An empty string means "not set".
 	if a.SSHProvider != "" && !pushprovider.ValidName(a.SSHProvider) {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
 			"field 'ssh_provider' must match "+pushprovider.NamePattern)
 	}
 
-	// RBAC-check — `soul.ssh-target-update` с селектором `host=<sid>` (REST:
-	// SoulSIDSelector). Симметрично keeper.soul.issue-token.
+	// RBAC check — `soul.ssh-target-update` with selector `host=<sid>` (REST:
+	// SoulSIDSelector). Mirrors keeper.soul.issue-token.
 	if err := h.deps.RBAC.Check(claims.Subject, "soul", "ssh-target-update", map[string]string{"host": a.SID}); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission soul.ssh-target-update")

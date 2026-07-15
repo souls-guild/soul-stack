@@ -18,9 +18,10 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// augurFakePool — узкий fake под [augur.ServicePool] для augur-tools-тестов.
-// Покрывает ТРАНСПОРТ (RBAC-проверка / маппинг sentinel→MCP-code / output /
-// audit); бизнес-инварианты augur.Service покрыты augur/integration_test.go.
+// augurFakePool — narrow fake for [augur.ServicePool] used by augur-tools
+// tests. Covers TRANSPORT (RBAC check / sentinel→MCP-code mapping / output /
+// audit); augur.Service business invariants are covered by
+// augur/integration_test.go.
 type augurFakePool struct {
 	omenInsertErr  error
 	omenGetRow     []any
@@ -204,7 +205,7 @@ func newAugurToolHandler(t *testing.T, rbacCfg *rbactest.Config, pool *augurFake
 	return h, rec
 }
 
-// augurAdminCfg — RBAC, дающий archon-alice все omen.*/rite.*-permissions.
+// augurAdminCfg — RBAC granting archon-alice all omen.*/rite.*-permissions.
 func augurAdminCfg() *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -266,7 +267,7 @@ func TestAugurTools_NilGuard(t *testing.T) {
 // --- tests: RBAC enforcement ---
 
 func TestAugurTools_RBACForbidden(t *testing.T) {
-	// archon-alice без omen/rite-permissions (пустой RBAC → deny all).
+	// archon-alice without omen/rite-permissions (empty RBAC → deny all).
 	h, _ := newAugurToolHandler(t, nil, &augurFakePool{})
 	cases := []struct {
 		tool string
@@ -453,7 +454,7 @@ func TestAugurRiteCreate_Success(t *testing.T) {
 	}
 	assertPayload(t, rec.events[0].Payload, "omen", "vault-prod")
 	assertPayload(t, rec.events[0].Payload, "subject", "coven=web")
-	// allow-list НЕ в payload (augur.md §8).
+	// allow-list is NOT in the payload (augur.md §8).
 	if _, ok := rec.events[0].Payload["allow"]; ok {
 		t.Errorf("allow-list попал в audit-payload: %v", rec.events[0].Payload)
 	}

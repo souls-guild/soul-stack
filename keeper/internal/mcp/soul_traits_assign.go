@@ -14,22 +14,23 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// keeper.soul.traits-assign — паритет REST POST /v1/souls/traits
-// (SoulHandler.AssignTraitsTyped, ADR-060). Массово merge/replace/remove
-// operator-set trait-меток (jsonb-колонка `souls.traits`) на хостах под
-// selector ∩ coven-scope оператора.
+// keeper.soul.traits-assign — parity with REST POST /v1/souls/traits
+// (SoulHandler.AssignTraitsTyped, ADR-060). Bulk merge/replace/remove of
+// operator-set trait labels (jsonb column `souls.traits`) on hosts under
+// selector ∩ operator coven-scope.
 //
-// Логика scope-intersection переиспользует тот же service-слой, что REST
+// The scope-intersection logic reuses the same service layer as REST
 // (soul.BulkAssignTraits / soul.BulkReplaceTraits / soul.CountBulkMatched +
-// soul.BulkScope из PurviewResolver), без дубля бизнес-логики и без хождения
-// через HTTP-handler.
+// soul.BulkScope from PurviewResolver) — no business-logic duplication, no
+// detour through the HTTP handler.
 //
-// БЕЗОПАСНОСТЬ. Least-privilege держится ОДНИМ гейтом (a) — целевые хосты ⊆
-// coven-scope оператора (предикат `coven && ARRAY[scope]` в BulkAssignTraits/
-// CountBulkMatched). trait-КЛЮЧ НЕ является RBAC-измерением scope (в отличие от
-// Coven-метки), поэтому гейта (b) на ключи нет; permission-проверка — bare
-// `RBAC.Check(soul, traits-assign, nil)` (эквивалент REST-middleware NoSelector).
-// Без неё MCP стал бы обходом REST-защиты (у MCP нет chi-middleware).
+// SECURITY. Least-privilege is held by a SINGLE gate (a) — target hosts ⊆
+// operator's coven-scope (predicate `coven && ARRAY[scope]` in
+// BulkAssignTraits/CountBulkMatched). A trait KEY is NOT an RBAC scope
+// dimension (unlike a Coven label), so there's no gate (b) on keys;
+// permission check is bare `RBAC.Check(soul, traits-assign, nil)`
+// (equivalent to REST middleware NoSelector). Without it, MCP would bypass
+// REST's protection (MCP has no chi middleware).
 
 type soulTraitsAssignArgs struct {
 	Mode     string                   `json:"mode,omitempty"`
@@ -47,9 +48,10 @@ type soulTraitsAssignSelector struct {
 	Status      string   `json:"status,omitempty"`
 }
 
-// soulTraitsAssignOutput — паритет REST soulTraitsAssignResponse. keys[] — набор
-// затронутых trait-ключей; trait-значения НЕ эхуются (секрет-гигиена). json-теги
-// нужны для UnmarshalJSON (тесты декодят tool-output обратной операцией).
+// soulTraitsAssignOutput — parity with REST soulTraitsAssignResponse. keys[]
+// is the set of affected trait keys; trait values are NOT echoed back
+// (secret hygiene). json tags are needed for UnmarshalJSON (tests decode
+// the tool output).
 type soulTraitsAssignOutput struct {
 	Mode    string   `json:"mode"`
 	Keys    []string `json:"keys"`
@@ -62,9 +64,10 @@ type soulTraitsAssignOutput struct {
 func (h *Handler) callSoulTraitsAssign(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.soul.traits-assign"
 
-	// DEPRECATED (ADR-060 amend R1): per-soul trait-write перенесён на
-	// per-incarnation (keeper.incarnation.traits-set). Per-soul write перетирается
-	// проекцией incarnation.traits. Tool сохранён forward-compat; вызов сигналим.
+	// DEPRECATED (ADR-060 amend R1): per-soul trait-write moved to
+	// per-incarnation (keeper.incarnation.traits-set). Per-soul writes get
+	// overwritten by the incarnation.traits projection. Tool kept for
+	// forward-compat; the call is logged as a signal.
 	h.deps.Logger.Warn("mcp: soul.traits-assign DEPRECATED per-soul trait-write (ADR-060) — используйте keeper.incarnation.traits-set",
 		slog.String("by_aid", claims.Subject))
 
@@ -86,14 +89,14 @@ func (h *Handler) callSoulTraitsAssign(ctx context.Context, claims *jwt.Claims, 
 
 	mode := soul.TraitMode(a.Mode)
 	if mode == "" {
-		mode = soul.TraitMerge // дефолт (паритет REST).
+		mode = soul.TraitMerge // default (parity with REST).
 	}
 	if !soul.ValidTraitMode(mode) {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
 			"field 'mode' must be one of: merge, replace, remove")
 	}
 
-	// XOR traits↔keys по mode + format/значение-валидация (паритет REST handler).
+	// XOR traits↔keys by mode + format/value validation (parity with REST handler).
 	switch mode {
 	case soul.TraitMerge, soul.TraitReplace:
 		if len(a.Keys) > 0 {
@@ -146,13 +149,15 @@ func (h *Handler) callSoulTraitsAssign(ctx context.Context, claims *jwt.Claims, 
 			"selector 'incarnation' must match "+incarnation.NamePattern)
 	}
 
-	// Permission-слой = existence-gate (паритет REST RequireAction(soul,
-	// traits-assign)): «держит ли оператор право в ЛЮБОМ scope-измерении».
-	// Селекторный RBAC.Check(nil) здесь НЕ годится — он отрезал бы coven-scoped
-	// оператора (его `coven=dev`-permission не сматчила бы запрос без coven-
-	// контекста), хотя тот ВПРАВЕ менять traits на dev-хостах. trait-ключ не
-	// scope-измерение → гейта (b) нет; least-privilege держит ОДИН гейт (a)
-	// ниже (BulkScope сужает целевые хосты). pv тут же — источник этого scope.
+	// Permission layer = existence-gate (parity with REST
+	// RequireAction(soul, traits-assign)): "does the operator hold the
+	// permission in ANY scope dimension". A selector-scoped RBAC.Check(nil)
+	// doesn't work here — it would reject a coven-scoped operator (their
+	// `coven=dev` permission wouldn't match a request without coven context)
+	// even though they ARE allowed to change traits on dev hosts. A trait key
+	// isn't a scope dimension → no gate (b); least-privilege is held by the
+	// SINGLE gate (a) below (BulkScope narrows the target hosts). pv is the
+	// source of that scope.
 	pv := h.deps.PurviewResolver.ResolvePurview(claims.Subject, "soul", "traits-assign")
 	if !holdsTraitsAssign(pv) {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
@@ -185,8 +190,9 @@ func (h *Handler) callSoulTraitsAssign(ctx context.Context, claims *jwt.Claims, 
 		rep, err = soul.BulkAssignTraits(ctx, h.deps.SoulDB, sel, scope, mode, a.Traits, a.Keys)
 	}
 	if err != nil {
-		// partial: часть чанков закоммичена — отдаём результат (не error),
-		// чтобы оператор видел сделанное (паритет REST: 200 + status:partial).
+		// partial: some chunks were committed — return the result (not an
+		// error) so the operator sees what happened (parity with REST: 200 +
+		// status:partial).
 		if rep.Status == soul.BulkPartial {
 			h.deps.Logger.Warn("mcp: soul.traits-assign partial",
 				slog.String("mode", a.Mode),
@@ -204,11 +210,12 @@ func (h *Handler) callSoulTraitsAssign(ctx context.Context, claims *jwt.Claims, 
 	return h.toolResult(req.ID, buildTraitsAssignOutput(a, mode, rep, false))
 }
 
-// holdsTraitsAssign — existence-gate по [rbac.Purview]: оператор держит
-// soul.traits-assign, если право есть в любом scope-измерении (unrestricted либо
-// непустой coven/regex/soulprint/state) и не Deny (ревокнут / explicit-deny).
-// Эквивалент REST `RequireAction.HoldsAction` без расширения MCP-интерфейса
-// PermissionChecker: тот же Purview, что даёт scope гейта (a).
+// holdsTraitsAssign — existence-gate over [rbac.Purview]: the operator holds
+// soul.traits-assign if the permission exists in any scope dimension
+// (unrestricted, or a non-empty coven/regex/soulprint/state) and isn't Deny
+// (revoked / explicit-deny). Equivalent to REST `RequireAction.HoldsAction`
+// without extending the MCP PermissionChecker interface: same Purview that
+// supplies gate (a)'s scope.
 func holdsTraitsAssign(pv rbac.Purview) bool {
 	if pv.Deny {
 		return false
@@ -220,7 +227,7 @@ func holdsTraitsAssign(pv rbac.Purview) bool {
 		len(pv.SoulprintExprs) > 0 || len(pv.StateExprs) > 0
 }
 
-// buildTraitsAssignOutput собирает паритетный REST-у output.
+// buildTraitsAssignOutput builds the output, matching REST.
 func buildTraitsAssignOutput(a soulTraitsAssignArgs, mode soul.TraitMode, rep soul.Report, dryRun bool) soulTraitsAssignOutput {
 	out := soulTraitsAssignOutput{
 		Mode:    string(mode),
@@ -235,9 +242,10 @@ func buildTraitsAssignOutput(a soulTraitsAssignArgs, mode soul.TraitMode, rep so
 	return out
 }
 
-// bulkTraitsError маппит ошибки bulk-слоя в MCP-error (паритет REST writeBulkError /
-// bulkAssignError). ErrBulkEmptySelector / валидационные ошибки → validation-failed;
-// прочее → internal-error с логом (oracle-attack-защита).
+// bulkTraitsError maps bulk-layer errors to an MCP error (parity with REST
+// writeBulkError / bulkAssignError). ErrBulkEmptySelector / validation
+// errors → validation-failed; everything else → internal-error with a log
+// (oracle-attack protection).
 func (h *Handler) bulkTraitsError(id json.RawMessage, toolName string, err error) jsonRPCResponse {
 	switch {
 	case errors.Is(err, soul.ErrBulkEmptySelector):
@@ -249,9 +257,10 @@ func (h *Handler) bulkTraitsError(id json.RawMessage, toolName string, err error
 	}
 }
 
-// auditTraitsAssign пишет audit-event soul.traits-changed. Payload симметричен
-// REST (buildTraitsAssignReply), но `source` = "mcp" — MCP-канал отделён для
-// granular trail. keys — затронутые trait-ключи; trait-значения НЕ кладутся.
+// auditTraitsAssign writes the soul.traits-changed audit event. Payload
+// mirrors REST (buildTraitsAssignReply), but `source` = "mcp" — the MCP
+// channel is tracked separately for a granular trail. keys are the
+// affected trait keys; trait values are NOT included.
 func (h *Handler) auditTraitsAssign(aid string, a soulTraitsAssignArgs, mode soul.TraitMode, scope soul.BulkScope, rep soul.Report, dryRun bool) {
 	payload := map[string]any{
 		"mode":          string(mode),
@@ -267,8 +276,8 @@ func (h *Handler) auditTraitsAssign(aid string, a soulTraitsAssignArgs, mode sou
 	h.writeAudit(audit.EventSoulTraitsChanged, aid, payload)
 }
 
-// mcpAffectedTraitKeys — отсортированный набор затронутых trait-ключей (merge/replace —
-// ключи map-а; remove — список keys). nil → []string{} для устойчивого JSON.
+// mcpAffectedTraitKeys — sorted set of affected trait keys (merge/replace:
+// the map's keys; remove: the keys list). nil → []string{} for stable JSON.
 func mcpAffectedTraitKeys(mode soul.TraitMode, traits map[string]any, keys []string) []string {
 	var out []string
 	if mode == soul.TraitRemove {
@@ -286,8 +295,8 @@ func mcpAffectedTraitKeys(mode soul.TraitMode, traits map[string]any, keys []str
 	return out
 }
 
-// normalizeMCPTraitsSelector — нормализованная форма селектора для audit-payload
-// (паритет normalizeMCPCovenSelector).
+// normalizeMCPTraitsSelector — normalized selector form for the audit
+// payload (parity with normalizeMCPCovenSelector).
 func normalizeMCPTraitsSelector(s soulTraitsAssignSelector) map[string]any {
 	out := map[string]any{"all": s.All}
 	if len(s.SIDs) > 0 {

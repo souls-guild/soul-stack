@@ -12,28 +12,30 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// keeper.incarnation.traits-set — паритет REST PUT /v1/incarnations/{name}/traits
-// (IncarnationHandler.SetTraitsTyped, ADR-060 amend R1). Целостно ЗАМЕНЯЕТ
-// operator-set trait-метки инкарнации (`incarnation.traits` — источник истины) →
-// персист одной tx FOR UPDATE → материализованная проекция в `souls.traits`
-// хостов-членов ([incarnation.SyncTraitsToHosts]). Перенос operator-facing
-// trait-управления с per-soul (keeper.soul.traits-assign, deprecated) на
-// per-incarnation.
+// keeper.incarnation.traits-set — parity with REST PUT
+// /v1/incarnations/{name}/traits (IncarnationHandler.SetTraitsTyped, ADR-060
+// amend R1). Wholesale REPLACES the incarnation's operator-set trait labels
+// (`incarnation.traits` is the source of truth) → persisted in one FOR
+// UPDATE tx → materialized projection into member hosts' `souls.traits`
+// ([incarnation.SyncTraitsToHosts]). Moves operator-facing trait management
+// from per-soul (keeper.soul.traits-assign, deprecated) to per-incarnation.
 //
-// БЕЗОПАСНОСТЬ. RBAC — body-scoped OR-Check по coven/service-scope incarnation
-// (covens ∪ {name}, зеркало REST IncarnationScopeSelector + permission
-// incarnation.traits-set). Без неё MCP стал бы обходом REST-защиты (у MCP нет
-// chi-middleware). scope резолвится отдельным probe-SelectByName (тот же холодный
-// RBAC-round-trip, что REST). trait-КЛЮЧ НЕ scope-измерение — гейта на ключи нет.
+// SECURITY. RBAC — body-scoped OR-Check over the incarnation's coven/service
+// scope (covens ∪ {name}, mirrors REST IncarnationScopeSelector + permission
+// incarnation.traits-set). Without it MCP would bypass REST protection (MCP
+// has no chi middleware). scope is resolved via a separate probe-SelectByName
+// (same cold RBAC round-trip as REST). trait KEYS are not a scope dimension
+// — no gate on keys.
 
 type incarnationTraitsSetArgs struct {
 	Name   string         `json:"name"`
 	Traits map[string]any `json:"traits,omitempty"`
 }
 
-// incarnationTraitsSetOutput — output keeper.incarnation.traits-set. trait-ЗНАЧЕНИЯ
-// в output НЕ эхуются (секрет-гигиена, симметрия с audit): фиксируем факт замены и
-// набор ключей. Полный state — через keeper.incarnation.get.
+// incarnationTraitsSetOutput — output of keeper.incarnation.traits-set.
+// trait VALUES are never echoed in output (secret hygiene, mirrors audit):
+// we record only that the replacement happened and which keys. Full state
+// via keeper.incarnation.get.
 type incarnationTraitsSetOutput struct {
 	Incarnation string   `json:"incarnation"`
 	Keys        []string `json:"keys"`
@@ -56,15 +58,16 @@ func (h *Handler) callIncarnationTraitsSet(ctx context.Context, claims *jwt.Clai
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
 			"field 'name' must match "+incarnation.NamePattern)
 	}
-	// Формат/значение trait (запрет nested) — паритет REST SetTraitsTyped.
+	// trait format/value (no nesting) — parity with REST SetTraitsTyped.
 	if err := soul.ValidateTraitDelta(a.Traits); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, err.Error())
 	}
 
-	// RBAC OR-Check по coven/service-scope incarnation (covens ∪ {name}) —
-	// зеркало REST middleware. UpdateTraits сам делает FOR UPDATE-select внутри,
-	// поэтому scope резолвим отдельным probe-SelectByName (паттерн unlock/destroy).
-	// Битый probe → fail-closed (scoped deny, bare/`*` pass → UpdateTraits вернёт
+	// RBAC OR-Check over the incarnation's coven/service scope (covens ∪
+	// {name}) — mirrors REST middleware. UpdateTraits does its own FOR
+	// UPDATE select internally, so scope is resolved via a separate
+	// probe-SelectByName (unlock/destroy pattern). A failed probe →
+	// fail-closed (scoped deny, bare/`*` pass through → UpdateTraits returns
 	// 404/500).
 	inc, probeErr := incarnation.SelectByName(ctx, h.deps.IncarnationDB, a.Name)
 	if probeErr != nil {
@@ -91,16 +94,17 @@ func (h *Handler) callIncarnationTraitsSet(ctx context.Context, claims *jwt.Clai
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "update incarnation traits failed")
 	}
 
-	// Sync-hook (ADR-060 amend R1): incarnation.traits → souls.traits хостов-членов.
-	// Best-effort (лог, не валим tool): incarnation.traits уже записан, проекция
-	// до-сойдётся при следующем bind/sync.
+	// Sync hook (ADR-060 amend R1): incarnation.traits → member hosts'
+	// souls.traits. Best-effort (log, don't fail the tool): incarnation.traits
+	// is already written, the projection will catch up on the next bind/sync.
 	if serr := incarnation.SyncTraitsToHosts(ctx, h.deps.IncarnationDB, a.Name, res.Incarnation.Traits); serr != nil {
 		h.deps.Logger.Warn("mcp: incarnation.traits-set sync traits → souls провален (best-effort)",
 			slog.String("name", a.Name), slog.Any("error", serr))
 	}
 
-	// audit: EventIncarnationTraitsChanged {name, old_keys, new_keys}, source=mcp
-	// (writeAudit). trait-ЗНАЧЕНИЯ не кладутся — паритет REST (секрет-гигиена).
+	// audit: EventIncarnationTraitsChanged {name, old_keys, new_keys},
+	// source=mcp (writeAudit). trait VALUES are not included — parity with
+	// REST (secret hygiene).
 	h.writeAudit(audit.EventIncarnationTraitsChanged, claims.Subject, map[string]any{
 		"name":     a.Name,
 		"old_keys": res.OldKeys,

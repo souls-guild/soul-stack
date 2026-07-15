@@ -12,14 +12,16 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// keeper.provider.<verb> — паритет REST POST/GET/DELETE /v1/providers*
-// (ProviderHandler, ADR-017, Cloud CRUD). Тонкая MCP-обёртка над тем же
-// provider.Service, что REST. Permission-маппинг 1:1 (keeper.provider.<verb> ↔
-// provider.<verb>), селектор — NoSelector. БЕЗ update (Provider иммутабелен).
+// keeper.provider.<verb> — parity with REST POST/GET/DELETE /v1/providers*
+// (ProviderHandler, ADR-017, Cloud CRUD). A thin MCP wrapper over the same
+// provider.Service as REST. Permission mapping is 1:1 (keeper.provider.<verb>
+// ↔ provider.<verb>), selector — NoSelector. NO update (Provider is
+// immutable).
 //
-// Секрет-гигиена: credentials_ref отдаётся как ПУТЬ (vault:<path>), не резолвится.
+// Secret hygiene: credentials_ref is returned as a PATH (vault:<path>), never
+// resolved.
 
-// providerViewOut — JSON-форма output-а (та же, что HTTP-handler).
+// providerViewOut — JSON shape of the output (same as the HTTP handler).
 type providerViewOut struct {
 	Name           string    `json:"name"`
 	Type           string    `json:"type"`
@@ -45,8 +47,9 @@ type providerCreateArgs struct {
 	Type           string `json:"type"`
 	Region         string `json:"region"`
 	CredentialsRef string `json:"credentials_ref"`
-	// Credentials — опц. plaintext cloud-credentials (dual-mode, ADR-064); XOR с
-	// credentials_ref. keeper пишет их в Vault, plaintext не персистится.
+	// Credentials — optional plaintext cloud-credentials (dual-mode, ADR-064);
+	// XOR with credentials_ref. keeper writes them to Vault, plaintext is never
+	// persisted.
 	Credentials map[string]any `json:"credentials"`
 }
 
@@ -73,8 +76,9 @@ func (h *Handler) callProviderCreate(ctx context.Context, claims *jwt.Claims, re
 	if a.Region == "" {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'region' is required")
 	}
-	// credentials_ref / credentials — dual-mode XOR (ADR-064); формат/XOR/plaintext-
-	// disabled валидирует сервис (provider.IsValidationError → validation-failed).
+	// credentials_ref / credentials — dual-mode XOR (ADR-064); the service
+	// validates format/XOR/plaintext-disabled (provider.IsValidationError →
+	// validation-failed).
 	if err := h.deps.RBAC.Check(claims.Subject, "provider", "create", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden, "operator lacks required permission provider.create")
 	}
@@ -98,8 +102,8 @@ func (h *Handler) callProviderCreate(ctx context.Context, claims *jwt.Claims, re
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "create provider failed")
 	}
 
-	// Audit: credentials_ref пишется как ПУТЬ (не секрет); plaintext_ingested —
-	// маркер записи credentials keeper-ом (ADR-064), без plaintext.
+	// Audit: credentials_ref is written as a PATH (not secret); plaintext_ingested
+	// marks that keeper wrote credentials (ADR-064), without the plaintext.
 	auditPayload := map[string]any{
 		"name":            p.Name,
 		"type":            p.Type,

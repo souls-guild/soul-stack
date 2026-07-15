@@ -13,15 +13,17 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac/rbactest"
 )
 
-// incRow — pgx.Row для scanIncarnation: 16 колонок (name, service,
+// incRow — pgx.Row for scanIncarnation: 17 columns (name, service,
 // service_version, state_schema_version, spec, state, status, status_details,
 // created_by_aid, created_at, updated_at, covens, traits, last_drift_check_at,
-// last_drift_summary, created_scenario). spec/state/status_details/traits/
-// last_drift_summary сериализуются в JSONB-bytes — ровно как читает
-// scanIncarnation из реального pool-а (db.QueryRow(selectByNameSQL)). covens —
-// text[], scanIncarnation читает её в *[]string (env-RBAC, миграция 046);
-// last_drift_* — ADR-031 Slice C, миграция 050; created_scenario — механизм
-// нескольких create-сценариев (TEXT NOT NULL DEFAULT 'create'), миграция 089.
+// last_drift_summary, created_scenario, applying_apply_id). spec/state/
+// status_details/traits/last_drift_summary are serialized as JSONB bytes —
+// exactly how scanIncarnation reads them from a real pool
+// (db.QueryRow(selectByNameSQL)). covens is text[], scanIncarnation reads it
+// into *[]string (env-RBAC, migration 046); last_drift_* — ADR-031 Slice C,
+// migration 050; created_scenario — multiple create-scenarios mechanism
+// (TEXT NOT NULL DEFAULT 'create'), migration 089; applying_apply_id —
+// ADR-068 §A1.
 type incRow struct{ vals []any }
 
 func newIncRow(inc *incarnation.Incarnation) incRow {
@@ -40,8 +42,8 @@ func newIncRow(inc *incarnation.Incarnation) incRow {
 	if inc.LastDriftSummary != nil {
 		driftSummary, _ = json.Marshal(inc.LastDriftSummary)
 	}
-	// created_scenario — NULLABLE *string (миграции 089+090): nil = bare-инкарнация
-	// (NULL). Передаём указатель как есть — scan вернёт nil при NULL.
+	// created_scenario — NULLABLE *string (migrations 089+090): nil = bare
+	// incarnation (NULL). Pass the pointer as-is — scan returns nil on NULL.
 	return incRow{vals: []any{
 		inc.Name,
 		inc.Service,
@@ -59,7 +61,7 @@ func newIncRow(inc *incarnation.Incarnation) incRow {
 		inc.LastDriftCheckAt,
 		driftSummary,
 		inc.CreatedScenario,
-		inc.ApplyingApplyID, // ADR-068 §A1: non-null пока applying, nil на терминале
+		inc.ApplyingApplyID, // ADR-068 §A1: non-null while applying, nil once terminal
 	}}
 }
 
@@ -99,9 +101,10 @@ func (r incRow) Scan(dest ...any) error {
 	return nil
 }
 
-// callGet — прогон keeper.incarnation.get через реальный Dispatch (tools/call).
-// Эталон для тиража: helper-ы (incarnationRBACContext, mapIncarnationErrorToMCP,
-// MaskSecrets) проверяются через настоящий dispatch-путь, не в вакууме.
+// callGet runs keeper.incarnation.get through the real Dispatch (tools/call).
+// Reference for the rollout: helpers (incarnationRBACContext,
+// mapIncarnationErrorToMCP, MaskSecrets) are verified through the real
+// dispatch path, not in isolation.
 func callGet(t *testing.T, h *Handler, aid, name string) jsonRPCResponse {
 	t.Helper()
 	params, _ := json.Marshal(toolsCallParams{
@@ -116,7 +119,7 @@ func callGet(t *testing.T, h *Handler, aid, name string) jsonRPCResponse {
 	return resp
 }
 
-// getterRBAC — RBAC, дающий archon-alice permission incarnation.get.
+// getterRBAC — RBAC granting archon-alice the incarnation.get permission.
 func getterRBAC() *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -179,7 +182,7 @@ func TestToolsCall_IncarnationGet_Success(t *testing.T) {
 	if out.State["leader"] != "redis-01" {
 		t.Errorf("State.leader = %v", out.State["leader"])
 	}
-	// reads НЕ аудируются (паритет с REST Get — без audit-payload).
+	// reads are NOT audited (parity with REST Get — no audit payload).
 	if len(rec.events) != 0 {
 		t.Errorf("get must not write audit events, got %d", len(rec.events))
 	}
@@ -204,15 +207,15 @@ func TestToolsCall_IncarnationGet_NotFound(t *testing.T) {
 }
 
 func TestToolsCall_IncarnationGet_RBACForbidden(t *testing.T) {
-	// RBAC пуст → deny. SelectByName РЕЗОЛВИТ scope (covens ∪ {name}) для
-	// OR-Check (зеркало REST middleware), затем enforcer отказывает →
-	// forbidden. Проверяем, что отказ доходит в реальном dispatch-пути.
+	// RBAC empty → deny. SelectByName RESOLVES scope (covens ∪ {name}) for
+	// the OR-Check (mirrors REST middleware), then the enforcer denies →
+	// forbidden. Verifies the denial reaches through the real dispatch path.
 	pool := &fakePool{
 		incFn: func(name string) (*incarnation.Incarnation, error) {
 			return &incarnation.Incarnation{Name: name, Status: incarnation.StatusReady}, nil
 		},
 	}
-	h, _, _ := newTestHandler(t, pool, nil) // пустой RBAC → deny
+	h, _, _ := newTestHandler(t, pool, nil) // empty RBAC → deny
 
 	resp := callGet(t, h, "archon-alice", "redis-prod")
 	if resp.Error == nil {
@@ -226,7 +229,7 @@ func TestToolsCall_IncarnationGet_RBACForbidden(t *testing.T) {
 
 func TestToolsCall_IncarnationGet_InvalidName(t *testing.T) {
 	h, _, _ := newTestHandler(t, &fakePool{}, getterRBAC())
-	// `Bad_Name` нарушает NamePattern → validation-failed ДО RBAC/SelectByName.
+	// `Bad_Name` violates NamePattern → validation-failed BEFORE RBAC/SelectByName.
 	resp := callGet(t, h, "archon-alice", "Bad_Name")
 	if resp.Error == nil {
 		t.Fatal("expected error")
@@ -237,9 +240,9 @@ func TestToolsCall_IncarnationGet_InvalidName(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationGet_SecretsMasked — критичный тест: spec/state с
-// sensitive-key и vault-ref значениями уходят в MCP-вывод замаскированными
-// (паритет с REST DTO-маскингом, defense-in-depth вариант D).
+// TestToolsCall_IncarnationGet_SecretsMasked — critical test: spec/state with
+// sensitive-key and vault-ref values must come out masked in the MCP output
+// (parity with REST DTO masking, defense-in-depth variant D).
 func TestToolsCall_IncarnationGet_SecretsMasked(t *testing.T) {
 	const masked = "***MASKED***"
 	pool := &fakePool{
@@ -249,8 +252,8 @@ func TestToolsCall_IncarnationGet_SecretsMasked(t *testing.T) {
 				Service:            "redis",
 				ServiceVersion:     "v1",
 				StateSchemaVersion: 1,
-				// `password` — sensitive-key; `tls_cert` — обычный ключ, но
-				// значение содержит vault:secret/-маркер.
+				// `password` is a sensitive-key; `tls_cert` is a regular key but
+				// its value contains a vault:secret/ marker.
 				Spec: map[string]any{
 					"password": "hunter2",
 					"replicas": float64(1),
@@ -293,8 +296,8 @@ func TestToolsCall_IncarnationGet_SecretsMasked(t *testing.T) {
 		t.Errorf("state.leader = %v, must remain unmasked", out.State["leader"])
 	}
 
-	// Двойная страховка: ни в structuredContent, ни в content[0].text не должно
-	// быть raw-секрета (text дублирует JSON для legacy-клиентов).
+	// Double-check: neither structuredContent nor content[0].text should
+	// contain the raw secret (text duplicates JSON for legacy clients).
 	rawOut := string(res.StructuredContent)
 	if contains(rawOut, "hunter2") || contains(rawOut, "vault:secret/redis/tls") {
 		t.Errorf("raw secret leaked into structuredContent: %s", rawOut)

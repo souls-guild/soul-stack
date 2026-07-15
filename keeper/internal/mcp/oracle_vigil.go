@@ -11,14 +11,14 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// oracleNotConfigured — public-detail nil-guard-а oracle-tools. OracleSvc — опц.
-// поле HandlerDeps (production-wire-up передаёт тот же *oracle.Service, что REST):
-// при nil oracle-tools диспатчатся, но возвращают internal-error «не
-// сконфигурировано» (паттерн AugurSvc/ServiceSvc).
+// oracleNotConfigured — public-detail of oracle-tools' nil-guard. OracleSvc is
+// an optional HandlerDeps field (production wire-up passes the same
+// *oracle.Service as REST): when nil, oracle-tools dispatch but return
+// internal-error "not configured" (same pattern as AugurSvc/ServiceSvc).
 const oracleNotConfigured = "oracle registry is not configured"
 
-// vigilView — output-проекция Vigil-а для oracle-tools (schemaVigilView). 1:1 с
-// REST vigilResponse / [oracle.Vigil].
+// vigilView — output projection of a Vigil for oracle-tools (schemaVigilView).
+// 1:1 with REST vigilResponse / [oracle.Vigil].
 type vigilView struct {
 	Name         string          `json:"name"`
 	Coven        []string        `json:"coven,omitempty"`
@@ -51,8 +51,8 @@ func toVigilView(v *oracle.Vigil) vigilView {
 	}
 }
 
-// vigilCreateArgs — arguments tool-а keeper.oracle.vigil.create. subject — XOR
-// coven/sid; enabled опц. (опущено → true).
+// vigilCreateArgs — arguments for the keeper.oracle.vigil.create tool.
+// subject is XOR coven/sid; enabled is optional (omitted → true).
 type vigilCreateArgs struct {
 	Name     string          `json:"name"`
 	Coven    []string        `json:"coven"`
@@ -63,12 +63,12 @@ type vigilCreateArgs struct {
 	Enabled  *bool           `json:"enabled"`
 }
 
-// callOracleVigilCreate — mutating-tool keeper.oracle.vigil.create. Транспорт
-// поверх [oracle.Service.CreateVigil]: вся валидация (name / interval / check /
-// XOR-субъект) — в Service; tool маппит sentinel-ы в MCP-коды и пишет audit
-// vigil.created.
+// callOracleVigilCreate — mutating-tool keeper.oracle.vigil.create. A
+// transport layer over [oracle.Service.CreateVigil]: all validation (name /
+// interval / check / XOR-subject) lives in Service; the tool maps sentinels
+// to MCP codes and writes the vigil.created audit event.
 //
-// RBAC — vigil.create без селектора (rbac.md §Oracle: NoSelector).
+// RBAC — vigil.create without a selector (rbac.md §Oracle: NoSelector).
 func (h *Handler) callOracleVigilCreate(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.oracle.vigil.create"
 
@@ -76,9 +76,9 @@ func (h *Handler) callOracleVigilCreate(ctx context.Context, claims *jwt.Claims,
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, oracleNotConfigured)
 	}
 
-	// RBAC ДО unmarshal/валидации (least-disclosure): неавторизованный оператор
-	// не получает validation-feedback по телу. Контекст nil — право не зависит
-	// от тела запроса.
+	// RBAC BEFORE unmarshal/validation (least-disclosure): an unauthorized
+	// operator gets no validation feedback about the body. Context is nil —
+	// the permission doesn't depend on the request body.
 	if err := h.deps.RBAC.Check(claims.Subject, "vigil", "create", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission vigil.create")
@@ -119,8 +119,8 @@ func (h *Handler) callOracleVigilCreate(ctx context.Context, claims *jwt.Claims,
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	// Audit — параллельно REST-handler-у: payload {name, check, interval,
-	// subject, created_by_aid}. params в payload НЕ кладётся.
+	// Audit — mirrors the REST handler: payload {name, check, interval,
+	// subject, created_by_aid}. params is NOT included in the payload.
 	h.writeAudit(audit.EventVigilCreated, callerAID, map[string]any{
 		"name":           v.Name,
 		"check":          v.CheckAddr,
@@ -132,21 +132,21 @@ func (h *Handler) callOracleVigilCreate(ctx context.Context, claims *jwt.Claims,
 	return h.toolResult(req.ID, toVigilView(v))
 }
 
-// vigilListOutput — output keeper.oracle.vigil.list: реестр Vigil-ов под
-// `vigils` (паритет REST GET /v1/vigils items).
+// vigilListOutput — output of keeper.oracle.vigil.list: registry of Vigils
+// under `vigils` (parity with REST GET /v1/vigils items).
 type vigilListOutput struct {
 	Vigils []vigilView `json:"vigils"`
 	Total  int         `json:"total"`
 }
 
-// vigilListArgs — arguments keeper.oracle.vigil.list (опц. offset/limit).
+// vigilListArgs — arguments for keeper.oracle.vigil.list (optional offset/limit).
 type vigilListArgs struct {
 	Offset *int `json:"offset"`
 	Limit  *int `json:"limit"`
 }
 
-// callOracleVigilList — read-tool keeper.oracle.vigil.list (read-only, не
-// аудируется). RBAC — vigil.list без селектора.
+// callOracleVigilList — read-tool keeper.oracle.vigil.list (read-only, not
+// audited). RBAC — vigil.list without a selector.
 func (h *Handler) callOracleVigilList(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.oracle.vigil.list"
 
@@ -172,8 +172,8 @@ func (h *Handler) callOracleVigilList(ctx context.Context, claims *jwt.Claims, r
 	if a.Limit != nil {
 		limit = *a.Limit
 	}
-	// Upper-limit на limit (security-fix паритет omen.list): неограниченный
-	// limit — DoS-вектор (один запрос материализует весь реестр).
+	// Upper limit on limit (security-fix parity with omen.list): an unbounded
+	// limit is a DoS vector (one request would materialize the whole registry).
 	if offset < 0 || limit < 1 || limit > listMaxLimit {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
 			"offset must be >= 0 and limit must be between 1 and 1000")
@@ -199,7 +199,7 @@ type vigilDeleteArgs struct {
 }
 
 // callOracleVigilDelete — mutating-tool keeper.oracle.vigil.delete. RBAC —
-// vigil.delete без селектора.
+// vigil.delete without a selector.
 func (h *Handler) callOracleVigilDelete(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.oracle.vigil.delete"
 
@@ -235,10 +235,10 @@ func (h *Handler) callOracleVigilDelete(ctx context.Context, claims *jwt.Claims,
 		"name": a.Name,
 	})
 
-	// REST возвращает 204 No Content; MCP-эквивалент — пустой output-объект.
+	// REST returns 204 No Content; the MCP equivalent is an empty output object.
 	return h.toolResult(req.ID, struct{}{})
 }
 
-// vigilSubjectView — человекочитаемая форма субъекта Vigil-а для audit-payload
-// (`coven=<v1,v2>` / `sid=<v>`). XOR гарантирован валидацией.
+// vigilSubjectView — human-readable form of a Vigil's subject for the audit
+// payload (`coven=<v1,v2>` / `sid=<v>`). XOR is guaranteed by validation.
 func vigilSubjectView(v *oracle.Vigil) string { return oracleSubjectLabel(v.Coven, v.SID) }

@@ -18,21 +18,22 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// voyageNotConfigured — public-detail nil-guard-а voyage-tool-ов. Зависимости
-// (VoyageDB/VoyageScenarioResolver/VoyageCommandResolver) — опц. поля
-// HandlerDeps; при nil любого tool диспатчится, но возвращает internal-error
-// (паттерн errandRunNotConfigured).
+// voyageNotConfigured — public-detail nil-guard for voyage-tools.
+// Dependencies (VoyageDB/VoyageScenarioResolver/VoyageCommandResolver) are
+// optional HandlerDeps fields; when any is nil the tool still dispatches but
+// returns internal-error (errandRunNotConfigured pattern).
 const voyageNotConfigured = "voyage orchestrator is not configured"
 
-// ensureVoyageHandler — ленивая сборка [handlers.VoyageHandler] поверх existing
-// HandlerDeps. MCP-tool-ы переиспользуют HTTP-handler-логику целиком (validate/
-// resolve/RBAC-by-kind/insert/audit одинаковые между HTTP и MCP) через in-memory
-// httptest-инфраструктуру — дешевле, чем дублировать резолв + RBAC второй раз.
+// ensureVoyageHandler — lazily builds a [handlers.VoyageHandler] on top of
+// the existing HandlerDeps. MCP tools reuse the HTTP-handler logic wholesale
+// (validate/resolve/RBAC-by-kind/insert/audit are identical between HTTP and
+// MCP) via in-memory httptest infrastructure — cheaper than duplicating
+// resolve + RBAC a second time.
 //
-// enforcer=h.deps.RBAC (тот же, что REST) — RBAC-by-kind guard живёт ВНУТРИ
-// VoyageHandler.Create/Cancel, поэтому MCP-вызов получает ту же fail-closed
-// проверку без дубля (в отличие от errand_run, где pre-check дублируется).
-// IncarnationDB — per-incarnation scope-check scenario-create-а.
+// enforcer=h.deps.RBAC (same as REST) — the RBAC-by-kind guard lives INSIDE
+// VoyageHandler.Create/Cancel, so the MCP call gets the same fail-closed
+// check without duplication (unlike errand_run, where the pre-check is
+// duplicated). IncarnationDB — per-incarnation scope-check for scenario-create.
 func (h *Handler) ensureVoyageHandler() *handlers.VoyageHandler {
 	if h.deps.VoyageDB == nil || h.deps.VoyageScenarioResolver == nil ||
 		h.deps.VoyageCommandResolver == nil {
@@ -44,11 +45,11 @@ func (h *Handler) ensureVoyageHandler() *handlers.VoyageHandler {
 		h.deps.VoyageCommandResolver,
 		h.deps.IncarnationDB,
 		h.deps.RBAC,
-		h.deps.PurviewResolver, // scoper: target ∩ Purview command-пути (ADR-047 S4); тот же rbac.Holder, что REST
+		h.deps.PurviewResolver, // scoper: target ∩ Purview command-paths (ADR-047 S4); same rbac.Holder as REST
 		h.deps.AuditWriter,
-		// tidingInvalidator: тот же *herald.Service, что REST (single source of
-		// truth) — после commit voyage-tx с ephemeral-notify сбрасывает TTL-снимок
-		// dispatcher-а (ADR-052(g) race-fix). nil → no-op.
+		// tidingInvalidator: the same *herald.Service as REST (single source of
+		// truth) — after committing a voyage tx with ephemeral-notify, resets the
+		// dispatcher's TTL snapshot (ADR-052(g) race-fix). nil → no-op.
 		h.deps.HeraldSvc,
 		h.deps.VoyageMaxScope,
 		h.deps.VoyageMaxBatchSize,
@@ -56,8 +57,9 @@ func (h *Handler) ensureVoyageHandler() *handlers.VoyageHandler {
 	)
 }
 
-// callVoyageStart — keeper.voyage.start (POST /v1/voyages). RBAC-by-kind делает
-// сам handler (kind виден только из тела); MCP-путь pre-check НЕ дублирует.
+// callVoyageStart — keeper.voyage.start (POST /v1/voyages). RBAC-by-kind is
+// done by the handler itself (kind is only visible from the body); the MCP
+// path does NOT duplicate the pre-check.
 func (h *Handler) callVoyageStart(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.voyage.start"
 	hh := h.ensureVoyageHandler()
@@ -68,8 +70,8 @@ func (h *Handler) callVoyageStart(ctx context.Context, claims *jwt.Claims, req j
 	if len(body) == 0 {
 		body = []byte("{}")
 	}
-	// Source=MCP проставляется в ctx (parity callIncarnationRun); REST-handler
-	// Voyage.Create читает его через middleware.ScenarioInvocationSource.
+	// Source=MCP is set in ctx (parity callIncarnationRun); the REST handler
+	// Voyage.Create reads it via middleware.ScenarioInvocationSource.
 	ctx = middleware.WithScenarioInvocationSource(ctx, audit.SourceMCP)
 	rec, status := h.invokeVoyageHandler(ctx, claims, hh.Create, "/v1/voyages", http.MethodPost, "", body)
 	if status >= 400 {
@@ -81,8 +83,8 @@ func (h *Handler) callVoyageStart(ctx context.Context, claims *jwt.Claims, req j
 }
 
 // callVoyageList — keeper.voyage.list (GET /v1/voyages). RBAC incarnation.history
-// (parity REST router-gate). MCP-путь pre-check-ит её сам (router-middleware
-// обходится).
+// (parity REST router-gate). The MCP path pre-checks it itself (bypassing
+// the router-middleware).
 func (h *Handler) callVoyageList(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.voyage.list"
 	hh := h.ensureVoyageHandler()
@@ -131,8 +133,9 @@ func (h *Handler) callVoyageGet(ctx context.Context, claims *jwt.Claims, req jso
 	return h.toolResult(req.ID, parsed)
 }
 
-// callVoyageCancel — keeper.voyage.cancel (DELETE /v1/voyages/{id}). RBAC-by-kind
-// делает сам handler (kind из загруженной строки); MCP-путь pre-check НЕ дублирует.
+// callVoyageCancel — keeper.voyage.cancel (DELETE /v1/voyages/{id}).
+// RBAC-by-kind is done by the handler itself (kind comes from the loaded
+// row); the MCP path does NOT duplicate the pre-check.
 func (h *Handler) callVoyageCancel(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.voyage.cancel"
 	hh := h.ensureVoyageHandler()
@@ -143,7 +146,7 @@ func (h *Handler) callVoyageCancel(ctx context.Context, claims *jwt.Claims, req 
 	if perr != "" {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, perr)
 	}
-	// Source=MCP в ctx — REST-handler Voyage.Cancel читает его при emitCancelled.
+	// Source=MCP in ctx — the REST handler Voyage.Cancel reads it at emitCancelled.
 	ctx = middleware.WithScenarioInvocationSource(ctx, audit.SourceMCP)
 	rec, status := h.invokeVoyageHandler(ctx, claims, hh.Cancel, "/v1/voyages/"+id, http.MethodDelete, id, nil)
 	if status >= 400 {
@@ -156,7 +159,7 @@ func (h *Handler) callVoyageCancel(ctx context.Context, claims *jwt.Claims, req 
 
 // --- helpers ---
 
-// voyageIDFromArgs декодирует {voyage_id} из MCP-arguments.
+// voyageIDFromArgs decodes {voyage_id} from MCP arguments.
 func voyageIDFromArgs(args json.RawMessage) (string, string) {
 	if len(args) == 0 {
 		return "", "field 'voyage_id' is required"
@@ -173,8 +176,8 @@ func voyageIDFromArgs(args json.RawMessage) (string, string) {
 	return a.VoyageID, ""
 }
 
-// voyageQueryFromArgs строит query-string для GET /v1/voyages из MCP arguments
-// (kind/status[]/offset/limit).
+// voyageQueryFromArgs builds the query string for GET /v1/voyages from MCP
+// arguments (kind/status[]/offset/limit).
 func voyageQueryFromArgs(args json.RawMessage) string {
 	if len(args) == 0 {
 		return ""
@@ -204,8 +207,8 @@ func voyageQueryFromArgs(args json.RawMessage) string {
 	return strings.Join(parts, "&")
 }
 
-// invokeVoyageHandler — общий wrapper httptest.Request + Recorder + claims-ctx +
-// path-{id} (parity invokeErrandRunHandler).
+// invokeVoyageHandler — a shared wrapper around httptest.Request + Recorder +
+// claims-ctx + path-{id} (parity invokeErrandRunHandler).
 func (h *Handler) invokeVoyageHandler(
 	ctx context.Context, claims *jwt.Claims,
 	handlerFn func(http.ResponseWriter, *http.Request),
@@ -236,8 +239,9 @@ func (h *Handler) invokeVoyageHandler(
 	return rec, rec.Code
 }
 
-// toolFromVoyageProblem конвертирует problem+json HTTP-handler-а в MCP-tool-error
-// (parity toolFromProblem; 409 voyage_*_terminal / running_cancel → not-cancellable).
+// toolFromVoyageProblem converts an HTTP-handler problem+json into an
+// MCP-tool-error (parity toolFromProblem; 409 voyage_*_terminal /
+// running_cancel → not-cancellable).
 func (h *Handler) toolFromVoyageProblem(id json.RawMessage, toolName string, rec *httptest.ResponseRecorder, status int) jsonRPCResponse {
 	body := rec.Body.Bytes()
 	var p struct {

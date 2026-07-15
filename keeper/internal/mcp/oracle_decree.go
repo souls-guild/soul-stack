@@ -11,8 +11,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// decreeView — output-проекция Decree-а для oracle-tools (schemaDecreeView).
-// 1:1 с REST decreeResponse / [oracle.Decree].
+// decreeView — output projection of a Decree for oracle-tools (schemaDecreeView).
+// 1:1 with REST decreeResponse / [oracle.Decree].
 type decreeView struct {
 	Name            string          `json:"name"`
 	OnBeacon        string          `json:"on_beacon"`
@@ -51,9 +51,9 @@ func toDecreeView(d *oracle.Decree) decreeView {
 	}
 }
 
-// decreeCreateArgs — arguments tool-а keeper.oracle.decree.create. subject —
-// XOR coven/sid; where — опц. CEL-предикат (compile-проверяется в Service);
-// enabled опц. (опущено → true).
+// decreeCreateArgs — arguments for keeper.oracle.decree.create. subject is
+// XOR coven/sid; where is an optional CEL predicate (compile-checked in
+// Service); enabled is optional (omitted → true).
 type decreeCreateArgs struct {
 	Name            string          `json:"name"`
 	OnBeacon        string          `json:"on_beacon"`
@@ -67,13 +67,13 @@ type decreeCreateArgs struct {
 	Enabled         *bool           `json:"enabled"`
 }
 
-// callOracleDecreeCreate — mutating-tool keeper.oracle.decree.create. Транспорт
-// поверх [oracle.Service.CreateDecree]: вся валидация (name / on_beacon /
-// incarnation_name / action_scenario / XOR-субъект / where-CEL compile-check /
-// cooldown) — в Service; tool маппит sentinel-ы в MCP-коды и пишет audit
-// decree.created.
+// callOracleDecreeCreate — mutating-tool keeper.oracle.decree.create.
+// Transport over [oracle.Service.CreateDecree]: all validation (name /
+// on_beacon / incarnation_name / action_scenario / XOR-subject / where-CEL
+// compile-check / cooldown) lives in Service; the tool maps sentinels to
+// MCP codes and writes the decree.created audit event.
 //
-// RBAC — decree.create без селектора (rbac.md §Oracle: NoSelector).
+// RBAC — decree.create has no selector (rbac.md §Oracle: NoSelector).
 func (h *Handler) callOracleDecreeCreate(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.oracle.decree.create"
 
@@ -81,9 +81,9 @@ func (h *Handler) callOracleDecreeCreate(ctx context.Context, claims *jwt.Claims
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, oracleNotConfigured)
 	}
 
-	// RBAC ДО unmarshal/валидации (least-disclosure): неавторизованный оператор
-	// не получает validation-feedback по телу. Контекст nil — право не зависит
-	// от тела запроса.
+	// RBAC BEFORE unmarshal/validation (least-disclosure): an unauthorized
+	// operator gets no validation feedback about the body. nil context —
+	// the permission doesn't depend on the request body.
 	if err := h.deps.RBAC.Check(claims.Subject, "decree", "create", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission decree.create")
@@ -127,9 +127,9 @@ func (h *Handler) callOracleDecreeCreate(ctx context.Context, claims *jwt.Claims
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	// Audit — параллельно REST-handler-у: payload {name, on_beacon, incarnation,
-	// action_scenario, subject, created_by_aid}. where-CEL и action_input в
-	// payload НЕ кладутся (action_input может транзитом нести vault-ref).
+	// Audit mirrors the REST handler: payload {name, on_beacon, incarnation,
+	// action_scenario, subject, created_by_aid}. where-CEL and action_input
+	// are NOT put in the payload (action_input may carry a vault-ref in transit).
 	h.writeAudit(audit.EventDecreeCreated, callerAID, map[string]any{
 		"name":            d.Name,
 		"on_beacon":       d.OnBeacon,
@@ -142,21 +142,21 @@ func (h *Handler) callOracleDecreeCreate(ctx context.Context, claims *jwt.Claims
 	return h.toolResult(req.ID, toDecreeView(d))
 }
 
-// decreeListOutput — output keeper.oracle.decree.list: реестр Decree-ов под
-// `decrees` (паритет REST GET /v1/decrees items).
+// decreeListOutput — output of keeper.oracle.decree.list: registry of
+// Decrees under `decrees` (parity with REST GET /v1/decrees items).
 type decreeListOutput struct {
 	Decrees []decreeView `json:"decrees"`
 	Total   int          `json:"total"`
 }
 
-// decreeListArgs — arguments keeper.oracle.decree.list (опц. offset/limit).
+// decreeListArgs — arguments for keeper.oracle.decree.list (optional offset/limit).
 type decreeListArgs struct {
 	Offset *int `json:"offset"`
 	Limit  *int `json:"limit"`
 }
 
-// callOracleDecreeList — read-tool keeper.oracle.decree.list (read-only, не
-// аудируется). RBAC — decree.list без селектора.
+// callOracleDecreeList — read-tool keeper.oracle.decree.list (read-only, not
+// audited). RBAC — decree.list has no selector.
 func (h *Handler) callOracleDecreeList(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.oracle.decree.list"
 
@@ -182,8 +182,9 @@ func (h *Handler) callOracleDecreeList(ctx context.Context, claims *jwt.Claims, 
 	if a.Limit != nil {
 		limit = *a.Limit
 	}
-	// Upper-limit на limit (security-fix паритет omen.list): неограниченный
-	// limit — DoS-вектор (один запрос материализует весь реестр).
+	// Upper bound on limit (security-fix, parity with omen.list): an
+	// unbounded limit is a DoS vector (one request could materialize the
+	// entire registry).
 	if offset < 0 || limit < 1 || limit > listMaxLimit {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
 			"offset must be >= 0 and limit must be between 1 and 1000")
@@ -203,13 +204,14 @@ func (h *Handler) callOracleDecreeList(ctx context.Context, claims *jwt.Claims, 
 	return h.toolResult(req.ID, out)
 }
 
-// decreeDeleteArgs — arguments keeper.oracle.decree.delete.
+// decreeDeleteArgs — arguments for keeper.oracle.decree.delete.
 type decreeDeleteArgs struct {
 	Name string `json:"name"`
 }
 
-// callOracleDecreeDelete — mutating-tool keeper.oracle.decree.delete. Каскадно
-// чистит cooldown-state (oracle_fires). RBAC — decree.delete без селектора.
+// callOracleDecreeDelete — mutating-tool keeper.oracle.decree.delete.
+// Cascades cleanup of cooldown-state (oracle_fires). RBAC — decree.delete
+// has no selector.
 func (h *Handler) callOracleDecreeDelete(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.oracle.decree.delete"
 
@@ -245,18 +247,18 @@ func (h *Handler) callOracleDecreeDelete(ctx context.Context, claims *jwt.Claims
 		"name": a.Name,
 	})
 
-	// REST возвращает 204 No Content; MCP-эквивалент — пустой output-объект.
+	// REST returns 204 No Content; MCP equivalent is an empty output object.
 	return h.toolResult(req.ID, struct{}{})
 }
 
-// decreeSubjectView — человекочитаемая форма субъекта Decree-а для audit-payload
-// (`coven=<v1,v2>` / `sid=<v>`). XOR гарантирован валидацией.
+// decreeSubjectView — human-readable form of a Decree's subject for the
+// audit payload (`coven=<v1,v2>` / `sid=<v>`). XOR is guaranteed by validation.
 func decreeSubjectView(d *oracle.Decree) string {
 	return oracleSubjectLabel(d.SubjectCoven, d.SubjectSID)
 }
 
-// oracleSubjectLabel — общий форматтер субъекта (coven-список XOR sid) для
-// audit-payload Vigil / Decree (параллель REST handlers.subjectLabel).
+// oracleSubjectLabel — shared subject formatter (coven-list XOR sid) for the
+// Vigil / Decree audit payload (parallels REST handlers.subjectLabel).
 func oracleSubjectLabel(coven []string, sid *string) string {
 	if len(coven) > 0 {
 		s := "coven="

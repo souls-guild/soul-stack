@@ -1,9 +1,9 @@
 //go:build integration
 
-// Integration-тест MCP-сервера: реальный PG + Vault через testcontainers-go,
-// listener на ephemeral port, end-to-end JSON-RPC через HTTP.
+// Integration test for the MCP server: real PG + Vault via testcontainers-go,
+// listener on ephemeral port, end-to-end JSON-RPC over HTTP.
 //
-// Запуск:
+// Run:
 //
 //	cd keeper && SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1 \
 //	    go test -tags=integration -race -count=1 ./internal/mcp/...
@@ -147,9 +147,9 @@ func startMCPServer(t *testing.T, rbacCfg *rbactest.Config) (baseURL string, shu
 	if err != nil {
 		t.Fatalf("NewEnforcer: %v", err)
 	}
-	// RBAC-CRUD-фасад против тест-PG-пула — иначе role-tools диспатчатся, но
-	// возвращают «role management is not configured» (gap 1). Симметрично REST
-	// startServer, который прокидывает Deps.RBACSvc.
+	// RBAC CRUD facade against the test PG pool — otherwise role-tools dispatch
+	// but return "role management is not configured" (gap 1). Mirrors REST
+	// startServer, which wires Deps.RBACSvc.
 	rbacSvc, err := rbac.NewService(rbac.ServiceDeps{
 		Pool:   integrationPool,
 		Logger: slog.New(slog.NewJSONHandler(io.Discard, nil)),
@@ -240,11 +240,11 @@ func truncateOperators(t *testing.T) {
 	}
 }
 
-// truncateRBAC чистит RBAC-таблицы (роли / permissions / membership) до
-// чистого состояния для role.*-tool-integration-тестов. Вызывается ПОСЛЕ
-// truncateOperators (тот через CASCADE сносит лишь membership, ссылающийся на
-// operators; builtin cluster-admin из seed-миграции 027 переживает CASCADE).
-// CASCADE на rbac_roles снимает permissions + membership (ON DELETE CASCADE).
+// truncateRBAC resets RBAC tables (roles / permissions / membership) to a
+// clean state for role.*-tool integration tests. Called AFTER
+// truncateOperators (its CASCADE only removes membership referencing
+// operators; the builtin cluster-admin from seed migration 027 survives it).
+// CASCADE on rbac_roles removes permissions + membership (ON DELETE CASCADE).
 func truncateRBAC(t *testing.T) {
 	t.Helper()
 	if _, err := integrationPool.Exec(context.Background(),
@@ -253,8 +253,9 @@ func truncateRBAC(t *testing.T) {
 	}
 }
 
-// seedRole создаёт роль с набором permissions напрямую в БД (минуя tool) —
-// нужен тестам Delete/Update/Grant/Revoke и self-lockout-кейсам.
+// seedRole creates a role with a set of permissions directly in the DB
+// (bypassing the tool) — needed by Delete/Update/Grant/Revoke and
+// self-lockout test cases.
 func seedRole(t *testing.T, name string, builtin bool, permissions ...string) {
 	t.Helper()
 	ctx := context.Background()
@@ -270,7 +271,7 @@ func seedRole(t *testing.T, name string, builtin bool, permissions ...string) {
 	}
 }
 
-// seedRoleMember привязывает AID к роли напрямую в БД (granted_by_aid NULL).
+// seedRoleMember attaches an AID to a role directly in the DB (granted_by_aid NULL).
 func seedRoleMember(t *testing.T, roleName, aid string) {
 	t.Helper()
 	if _, err := integrationPool.Exec(context.Background(),
@@ -279,13 +280,14 @@ func seedRoleMember(t *testing.T, roleName, aid string) {
 	}
 }
 
-// seedClusterAdmin выдаёт caller-у membership builtin-роли cluster-admin (`*`)
-// в rbac_*-таблицах БД (модель-C). Config-RBAC enforcer (rbacAllRoleAdmin) лишь
-// пропускает caller-а через permission-gate; сам rbac.Service делает subset-check
-// (least-privilege) по РЕАЛЬНОЙ membership из rbac_role_operators. Без membership
-// caller держит 0 эффективных permissions → subset-check отказывает в create/
-// grant вместо ожидаемого доменного исхода. truncateRBAC сносит роли — ре-сидим
-// cluster-admin с `*` идемпотентно.
+// seedClusterAdmin grants the caller membership in the builtin cluster-admin
+// role (`*`) in the rbac_* DB tables (model C). The config-RBAC enforcer
+// (rbacAllRoleAdmin) only lets the caller through the permission gate;
+// rbac.Service itself does a subset-check (least-privilege) against REAL
+// membership in rbac_role_operators. Without membership the caller holds 0
+// effective permissions → subset-check rejects create/grant instead of the
+// expected domain outcome. truncateRBAC wipes roles, so we re-seed
+// cluster-admin with `*` idempotently.
 func seedClusterAdmin(t *testing.T, aid string) {
 	t.Helper()
 	ctx := context.Background()
@@ -322,7 +324,7 @@ func seedOperator(t *testing.T, aid, parent string) {
 	}
 }
 
-// doRPC отправляет JSON-RPC request и декодирует response.
+// doRPC sends a JSON-RPC request and decodes the response.
 func doRPC(t *testing.T, baseURL, token string, payload any) jsonRPCResponse {
 	t.Helper()
 	body, err := json.Marshal(payload)
@@ -344,11 +346,10 @@ func doRPC(t *testing.T, baseURL, token string, payload any) jsonRPCResponse {
 	return out
 }
 
-// doRawHTTP — низкоуровневый POST /mcp без JSON-RPC-декодирования.
-// Используется для тестов, проверяющих HTTP-уровень: 204 на notification,
-// 413 / 400 на превышение лимита, и т.п. authHeader — целиком (например,
-// `Bearer xyz`, `bearer xyz`, `XBearer broken`); пустая строка = без
-// Authorization-header-а.
+// doRawHTTP is a low-level POST /mcp without JSON-RPC decoding. Used for
+// tests checking the HTTP layer: 204 on notification, 413 / 400 on
+// over-limit, etc. authHeader is the full header value (e.g. `Bearer xyz`,
+// `bearer xyz`, `XBearer broken`); empty string = no Authorization header.
 func doRawHTTP(t *testing.T, url, authHeader string, body []byte) (status int, raw []byte) {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
@@ -383,10 +384,10 @@ func TestIntegration_NoAuth_Unauthenticated(t *testing.T) {
 	}
 }
 
-// TestIntegration_ToolsList_All — tools/list возвращает РОВНО столько tool-ов,
-// сколько объявлено в catalogManifest (single source of truth). Ожидаемое число
-// берётся динамически (len(catalogManifest)), не литералом — иначе тест дрейфует
-// при каждом добавлении tool-а в манифест.
+// TestIntegration_ToolsList_All — tools/list returns EXACTLY as many tools as
+// declared in catalogManifest (single source of truth). The expected count is
+// taken dynamically (len(catalogManifest)), not a literal — otherwise the
+// test drifts every time a tool is added to the manifest.
 func TestIntegration_ToolsList_All(t *testing.T) {
 	base, stop := startMCPServer(t, nil)
 	defer stop()
@@ -446,7 +447,7 @@ func TestIntegration_OperatorCreate_E2E(t *testing.T) {
 		t.Error("JWT empty")
 	}
 
-	// БД: оператор реально создан.
+	// DB: the operator was actually created.
 	op, err := operator.SelectByAID(context.Background(), integrationPool, "archon-bob")
 	if err != nil {
 		t.Fatalf("SelectByAID: %v", err)
@@ -455,7 +456,7 @@ func TestIntegration_OperatorCreate_E2E(t *testing.T) {
 		t.Errorf("CreatedByAID = %v", op.CreatedByAID)
 	}
 
-	// audit_log получил event operator.created с source='mcp' (ADR-022(b)).
+	// audit_log received event operator.created with source='mcp' (ADR-022(b)).
 	var count int
 	row := integrationPool.QueryRow(context.Background(),
 		`SELECT COUNT(*) FROM audit_log WHERE event_type='operator.created' AND source=$1`,
@@ -471,7 +472,7 @@ func TestIntegration_OperatorCreate_E2E(t *testing.T) {
 func TestIntegration_OperatorCreate_RBACForbidden(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-alice", "")
-	// RBAC: alice не имеет permission `operator.create`.
+	// RBAC: alice lacks permission `operator.create`.
 	base, stop := startMCPServer(t, &rbactest.Config{
 		Roles: []rbactest.Role{
 			{Name: "reader", Operators: []string{"archon-alice"}, Permissions: []string{"soul.list"}},
@@ -492,7 +493,7 @@ func TestIntegration_OperatorCreate_RBACForbidden(t *testing.T) {
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
-	// data.code должен быть forbidden.
+	// data.code must be forbidden.
 	rawData, _ := json.Marshal(resp.Error.Data)
 	var data mcpToolError
 	if err := json.Unmarshal(rawData, &data); err != nil {
@@ -569,10 +570,10 @@ func TestIntegration_StubToolReturnsNotImplemented(t *testing.T) {
 	defer stop()
 	token := newToken(t, "archon-alice", []string{"ops"})
 
-	// incarnation-tools все toolStatusImplemented (тираж C7 + destroy S-D4) — с
-	// nil deps в harness они отдали бы internal-error, а не not-implemented.
-	// push.apply теперь реализован (Variant C orchestrator) — берём реально-stub
-	// tool из manifest.go (toolStatusStub): push.cleanup.
+	// incarnation-tools are all toolStatusImplemented (rollout C7 + destroy S-D4)
+	// — with nil deps in the harness they'd return internal-error, not
+	// not-implemented. push.apply is now implemented (Variant C orchestrator), so
+	// we use an actual stub tool from manifest.go (toolStatusStub): push.cleanup.
 	resp := doRPC(t, base, token, map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
 		"params": map[string]any{
@@ -595,8 +596,9 @@ func TestIntegration_StubToolReturnsNotImplemented(t *testing.T) {
 	}
 }
 
-// TestIntegration_Notification_204 — notification (request без id) на
-// HTTP-уровне даёт 204 No Content и пустое тело, по spec JSON-RPC 2.0 §4.1.
+// TestIntegration_Notification_204 — a notification (request without id) at
+// the HTTP level yields 204 No Content with an empty body, per JSON-RPC 2.0
+// spec §4.1.
 func TestIntegration_Notification_204(t *testing.T) {
 	base, stop := startMCPServer(t, nil)
 	defer stop()
@@ -615,8 +617,8 @@ func TestIntegration_Notification_204(t *testing.T) {
 	}
 }
 
-// TestIntegration_Notification_IDNull — id: null равносильно отсутствию
-// id (JSON-RPC §4.1 в комбинации с MCP-spec) → 204.
+// TestIntegration_Notification_IDNull — id: null is equivalent to a missing
+// id (JSON-RPC §4.1 combined with the MCP spec) → 204.
 func TestIntegration_Notification_IDNull(t *testing.T) {
 	base, stop := startMCPServer(t, nil)
 	defer stop()
@@ -633,8 +635,9 @@ func TestIntegration_Notification_IDNull(t *testing.T) {
 	}
 }
 
-// TestIntegration_Batch_Rejected — batch JSON-RPC (массив) явно отвергается
-// в MVP с понятным сообщением, чтобы клиент сразу видел отказ.
+// TestIntegration_Batch_Rejected — batch JSON-RPC (array) is explicitly
+// rejected in MVP with a clear message, so the client sees the refusal
+// immediately.
 func TestIntegration_Batch_Rejected(t *testing.T) {
 	base, stop := startMCPServer(t, nil)
 	defer stop()
@@ -657,23 +660,23 @@ func TestIntegration_Batch_Rejected(t *testing.T) {
 	}
 }
 
-// TestIntegration_BodyTooLarge — body >1 MiB режется MaxBytesReader, и
-// парсер JSON-RPC возвращает ParseError.
+// TestIntegration_BodyTooLarge — a body >1 MiB is cut off by MaxBytesReader,
+// and the JSON-RPC parser returns ParseError.
 func TestIntegration_BodyTooLarge(t *testing.T) {
 	base, stop := startMCPServer(t, nil)
 	defer stop()
 	token := newToken(t, "archon-alice", []string{"cluster-admin"})
 
-	// Превышаем mcpMaxBodyBytes (1 MiB) — заполняем `params` мусором.
+	// Exceed mcpMaxBodyBytes (1 MiB) — fill `params` with junk.
 	big := make([]byte, mcpMaxBodyBytes+128)
 	for i := range big {
 		big[i] = 'x'
 	}
 	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"junk":"` + string(big) + `"}}`)
 	status, raw := doRawHTTP(t, base+"/mcp", "Bearer "+token, body)
-	// MaxBytesReader даёт читателю ошибку; обрабатывается либо как ParseError
-	// (если первые байты прочлись и затем оборвалось), либо 400-уровень.
-	// Главное — НЕ 200/success и НЕ panic.
+	// MaxBytesReader gives the reader an error; handled either as ParseError
+	// (if the first bytes were read then it cut off) or at the 400 level.
+	// The key invariant: NOT 200/success and NOT a panic.
 	if status == http.StatusNoContent {
 		t.Fatalf("status = 204, want non-success; body=%s", raw)
 	}
@@ -692,7 +695,7 @@ func TestIntegration_BodyTooLarge(t *testing.T) {
 	}
 }
 
-// TestIntegration_EmptyBody — POST с пустым телом → JSON-RPC InvalidRequest.
+// TestIntegration_EmptyBody — POST with an empty body → JSON-RPC InvalidRequest.
 func TestIntegration_EmptyBody(t *testing.T) {
 	base, stop := startMCPServer(t, nil)
 	defer stop()
@@ -711,8 +714,8 @@ func TestIntegration_EmptyBody(t *testing.T) {
 	}
 }
 
-// TestIntegration_BearerCaseInsensitive — RFC 6750 §2.1: scheme сравнивается
-// case-insensitive. `bearer <token>` и `BEARER <token>` должны проходить.
+// TestIntegration_BearerCaseInsensitive — RFC 6750 §2.1: the scheme comparison
+// is case-insensitive. `bearer <token>` and `BEARER <token>` must both pass.
 func TestIntegration_BearerCaseInsensitive(t *testing.T) {
 	base, stop := startMCPServer(t, nil)
 	defer stop()
@@ -739,8 +742,8 @@ func TestIntegration_BearerCaseInsensitive(t *testing.T) {
 	}
 }
 
-// TestIntegration_IDVariants_Echo — id может быть number / string / 0,
-// каждый возвращается в response как есть (echo).
+// TestIntegration_IDVariants_Echo — id can be number / string / 0, each is
+// echoed back in the response as-is.
 func TestIntegration_IDVariants_Echo(t *testing.T) {
 	base, stop := startMCPServer(t, nil)
 	defer stop()
@@ -776,9 +779,9 @@ func TestIntegration_IDVariants_Echo(t *testing.T) {
 	}
 }
 
-// TestIntegration_ToolsCall_ArgumentsWrongType — `arguments` обязан быть
-// JSON-объектом; string / number / null отдаются с MCP-error
-// malformed-request (strictUnmarshal) или validation-failed (если empty).
+// TestIntegration_ToolsCall_ArgumentsWrongType — `arguments` must be a
+// JSON object; string / number / null yield MCP-error malformed-request
+// (strictUnmarshal) or validation-failed (if empty).
 func TestIntegration_ToolsCall_ArgumentsWrongType(t *testing.T) {
 	truncateOperators(t)
 	seedOperator(t, "archon-alice", "")
@@ -834,14 +837,14 @@ func TestIntegration_ToolsCall_ArgumentsWrongType(t *testing.T) {
 
 // ============================ role.* tools (RBAC Slice 2b) — integration ============================
 //
-// Полный E2E role.*-tool через реальный PG: harness прокидывает rbac.Service
-// (startMCPServer выше), tool-вызовы идут через JSON-RPC tools/call. Проверяем,
-// что транспорт+Service+таблицы согласованы — паритет с REST role-integration
-// (api/integration_test.go § /v1/roles).
+// Full E2E role.*-tool coverage against a real PG: the harness wires
+// rbac.Service (startMCPServer above), tool calls go through JSON-RPC
+// tools/call. Verifies transport+Service+tables are consistent — parity with
+// REST role-integration (api/integration_test.go § /v1/roles).
 
-// callRoleToolOK — tools/call с пустой ролью alice→all-role-permissions через
-// enforcer (rbacAllRoleAdmin). Возвращает jsonRPCResponse. Сам RBAC-config
-// проверяется отдельными forbidden-тестами; здесь enforcer заведомо разрешает.
+// rbacAllRoleAdmin — RBAC config granting alice all role.* permissions via
+// the enforcer, so role.* tools/call tests aren't blocked by RBAC. The
+// config itself is exercised separately by the forbidden-tests below.
 func rbacAllRoleAdmin() *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -853,8 +856,8 @@ func rbacAllRoleAdmin() *rbactest.Config {
 	}
 }
 
-// callRoleTool — tools/call по имени tool-а с inline-arguments, возвращает
-// декодированный JSON-RPC response.
+// callRoleTool — tools/call by tool name with inline arguments, returns the
+// decoded JSON-RPC response.
 func callRoleTool(t *testing.T, base, token, tool string, args map[string]any) jsonRPCResponse {
 	t.Helper()
 	return doRPC(t, base, token, map[string]any{
@@ -863,7 +866,7 @@ func callRoleTool(t *testing.T, base, token, tool string, args map[string]any) j
 	})
 }
 
-// mcpErrCode извлекает data.code из error-ответа tools/call.
+// mcpErrCode extracts data.code from a tools/call error response.
 func mcpErrCode(t *testing.T, resp jsonRPCResponse) string {
 	t.Helper()
 	if resp.Error == nil {
@@ -877,7 +880,7 @@ func mcpErrCode(t *testing.T, resp jsonRPCResponse) string {
 	return data.Code
 }
 
-// rbacRoleCount / rbacPermCount / rbacMemberCount — point-пробы rbac_*-таблиц.
+// rbacRoleCount / rbacPermCount / rbacMemberCount — point probes of the rbac_* tables.
 func rbacRoleCount(t *testing.T, name string) int64 {
 	t.Helper()
 	var n int64
@@ -908,9 +911,9 @@ func rbacMemberCount(t *testing.T, name, aid string) int64 {
 	return n
 }
 
-// TestIntegration_RoleTool_HappyCycle — полный цикл через реальный PG:
-// create → list → grant-operator → revoke-operator → delete, с проверкой
-// rbac_*-таблиц после каждого шага.
+// TestIntegration_RoleTool_HappyCycle — full cycle against a real PG:
+// create → list → grant-operator → revoke-operator → delete, checking the
+// rbac_* tables after each step.
 func TestIntegration_RoleTool_HappyCycle(t *testing.T) {
 	truncateOperators(t)
 	truncateRBAC(t)
@@ -945,7 +948,7 @@ func TestIntegration_RoleTool_HappyCycle(t *testing.T) {
 		t.Errorf("created_by_aid = %v, want archon-alice", createdBy)
 	}
 
-	// list — роль видна с развёрнутыми permissions.
+	// list — role is visible with expanded permissions.
 	resp = callRoleTool(t, base, token, "keeper.role.list", map[string]any{})
 	if resp.Error != nil {
 		t.Fatalf("list: %+v", resp.Error)
@@ -971,7 +974,7 @@ func TestIntegration_RoleTool_HappyCycle(t *testing.T) {
 		t.Errorf("ops permissions in list = %v, want 2", opsView.Permissions)
 	}
 
-	// grant-operator → membership-строка с granted_by_aid=caller.
+	// grant-operator → membership row with granted_by_aid=caller.
 	resp = callRoleTool(t, base, token, "keeper.role.grant-operator", map[string]any{
 		"role": "ops", "aid": "archon-bob",
 	})
@@ -991,7 +994,7 @@ func TestIntegration_RoleTool_HappyCycle(t *testing.T) {
 		t.Errorf("granted_by_aid = %v, want archon-alice", grantedBy)
 	}
 
-	// revoke-operator → membership снят.
+	// revoke-operator → membership removed.
 	resp = callRoleTool(t, base, token, "keeper.role.revoke-operator", map[string]any{
 		"role": "ops", "aid": "archon-bob",
 	})
@@ -1002,7 +1005,7 @@ func TestIntegration_RoleTool_HappyCycle(t *testing.T) {
 		t.Errorf("membership still present after revoke")
 	}
 
-	// delete → роль снесена каскадом.
+	// delete → role removed by cascade.
 	resp = callRoleTool(t, base, token, "keeper.role.delete", map[string]any{"name": "ops"})
 	if resp.Error != nil {
 		t.Fatalf("delete: %+v", resp.Error)
@@ -1015,8 +1018,8 @@ func TestIntegration_RoleTool_HappyCycle(t *testing.T) {
 	}
 }
 
-// TestIntegration_RoleTool_UpdatePermissions — replace-семантика через реальный
-// PG: старый набор снят, новый материализован.
+// TestIntegration_RoleTool_UpdatePermissions — replace semantics against a
+// real PG: the old set is removed, the new one materialized.
 func TestIntegration_RoleTool_UpdatePermissions(t *testing.T) {
 	truncateOperators(t)
 	truncateRBAC(t)
@@ -1051,16 +1054,16 @@ func TestIntegration_RoleTool_UpdatePermissions(t *testing.T) {
 	}
 }
 
-// TestIntegration_RoleTool_SelfLockout — каждая из трёх lockout-мутаций над
-// последним `*`-путём (alice через единственную wildcard-роль) даёт
-// would-lock-out-cluster через реальный tool-вызов; БД остаётся нетронутой
-// (tx откатилась). Паритет с rbac-self-lockout-матрицей (gap 1 + gap 4).
+// TestIntegration_RoleTool_SelfLockout — each of the three lockout mutations
+// on the last `*` path (alice via the sole wildcard role) yields
+// would-lock-out-cluster via a real tool call; the DB stays untouched (tx
+// rolled back). Parity with the rbac-self-lockout matrix (gap 1 + gap 4).
 func TestIntegration_RoleTool_SelfLockout(t *testing.T) {
 	base, stop := startMCPServer(t, rbacAllRoleAdmin())
 	defer stop()
 	token := newToken(t, "archon-alice", []string{"role-admin"})
 
-	// setup — единственный путь к `*`: alice через wildcard-role.
+	// setup — the sole path to `*`: alice via wildcard-role.
 	setup := func() {
 		truncateOperators(t)
 		truncateRBAC(t)
@@ -1088,7 +1091,7 @@ func TestIntegration_RoleTool_SelfLockout(t *testing.T) {
 		if code := mcpErrCode(t, resp); code != mcpCodeWouldLockOutCluster {
 			t.Errorf("code = %q, want would-lock-out-cluster", code)
 		}
-		// `*` остался — tx откатилась.
+		// `*` remained — tx rolled back.
 		var n int64
 		if err := integrationPool.QueryRow(context.Background(),
 			`SELECT COUNT(*) FROM rbac_role_permissions WHERE role_name='wildcard-role' AND permission='*'`).
@@ -1114,8 +1117,8 @@ func TestIntegration_RoleTool_SelfLockout(t *testing.T) {
 	})
 }
 
-// TestIntegration_RoleTool_ErrorMapping — sentinel-ошибки rbac.Service через
-// реальный tool-вызов маппятся в стабильные data.code (паритет REST problem-type).
+// TestIntegration_RoleTool_ErrorMapping — rbac.Service sentinel errors, via a
+// real tool call, map to stable data.code values (parity with REST problem-type).
 func TestIntegration_RoleTool_ErrorMapping(t *testing.T) {
 	base, stop := startMCPServer(t, rbacAllRoleAdmin())
 	defer stop()
@@ -1199,9 +1202,9 @@ func TestIntegration_RoleTool_ErrorMapping(t *testing.T) {
 	})
 }
 
-// TestIntegration_RoleTool_403_AllOperations — оператор без role.<action>-
-// permission получает forbidden на КАЖДОЙ из шести role-операций (gap 2,
-// MCP-поверхность). RBAC-config даёт лишь soul.list → любой role.* → deny.
+// TestIntegration_RoleTool_403_AllOperations — an operator without the
+// role.<action> permission gets forbidden on EACH of the six role operations
+// (gap 2, MCP surface). RBAC config grants only soul.list → any role.* → deny.
 func TestIntegration_RoleTool_403_AllOperations(t *testing.T) {
 	truncateOperators(t)
 	truncateRBAC(t)

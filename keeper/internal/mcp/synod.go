@@ -1,9 +1,9 @@
 // Synod-MCP-tools (ADR-049): keeper.synod.<action> ↔ permission synod.<action>
-// (1:1, Вариант A — паттерн role-tools). Бизнес-логика (builtin-граница,
-// self-lockout, least-privilege subset) — в [rbac.Service]; tool — транспорт:
-// RBAC-Check ДО unmarshal (least-disclosure), декод args, маппинг sentinel-ов
-// в MCP-коды, audit параллельно HTTP-handler-у. Все tools диспатчатся только при
-// непустом RBACRoles (тот же *rbac.Service, что у role-tools).
+// (1:1, Variant A — role-tools pattern). Business logic (builtin boundary,
+// self-lockout, least-privilege subset) lives in [rbac.Service]; the tool is
+// transport: RBAC-Check BEFORE unmarshal (least-disclosure), decode args, map
+// sentinels to MCP codes, audit mirroring the HTTP handler. All tools
+// dispatch only when RBACRoles is non-nil (same *rbac.Service as role-tools).
 package mcp
 
 import (
@@ -17,12 +17,13 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// synodManagementNotConfigured — public-detail nil-guard-а synod-tools (RBACRoles
-// nil: сборка без RBAC-CRUD-фасада допустима, паттерн roleManagementNotConfigured).
+// synodManagementNotConfigured — public detail of the synod-tools nil-guard
+// (RBACRoles nil: a build without the RBAC-CRUD facade is valid, same
+// pattern as roleManagementNotConfigured).
 const synodManagementNotConfigured = "synod management is not configured"
 
-// synodCreateArgs — keeper.synod.create (schemaSynodCreateInput): name обязателен,
-// description опционален.
+// synodCreateArgs — keeper.synod.create (schemaSynodCreateInput): name is
+// required, description is optional.
 type synodCreateArgs struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
@@ -68,7 +69,7 @@ func (h *Handler) callSynodCreate(ctx context.Context, claims *jwt.Claims, req j
 	return h.toolResult(req.ID, struct{}{})
 }
 
-// synodDeleteArgs — keeper.synod.delete: только name.
+// synodDeleteArgs — keeper.synod.delete: name only.
 type synodDeleteArgs struct {
 	Name string `json:"name"`
 }
@@ -104,16 +105,17 @@ func (h *Handler) callSynodDelete(ctx context.Context, claims *jwt.Claims, req j
 }
 
 // synodUpdateArgs — keeper.synod.update (schemaSynodUpdateInput): name +
-// description обязательны. Меняется ТОЛЬКО description; name (PK) immutable
-// (ADR-049 amend).
+// description are required. ONLY description changes; name (PK) is
+// immutable (ADR-049 amend).
 type synodUpdateArgs struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 }
 
-// callSynodUpdate — mutating-tool keeper.synod.update. Транспорт поверх
-// [rbac.Service.UpdateSynodDescription]: builtin РАЗРЕШЁН, без subset/self-
-// lockout (description прав не выдаёт). RBAC ДО unmarshal (least-disclosure).
+// callSynodUpdate — mutating-tool keeper.synod.update. Transport over
+// [rbac.Service.UpdateSynodDescription]: builtin is ALLOWED, no subset/self-
+// lockout check (description grants no permissions). RBAC BEFORE unmarshal
+// (least-disclosure).
 func (h *Handler) callSynodUpdate(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.synod.update"
 	if h.deps.RBACRoles == nil {
@@ -152,7 +154,7 @@ func (h *Handler) callSynodUpdate(ctx context.Context, claims *jwt.Claims, req j
 	return h.toolResult(req.ID, struct{}{})
 }
 
-// synodView — output-проекция группы для keeper.synod.list (schemaSynodListOutput).
+// synodView — output projection of a group for keeper.synod.list (schemaSynodListOutput).
 type synodView struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
@@ -202,7 +204,7 @@ func (h *Handler) callSynodList(ctx context.Context, claims *jwt.Claims, req jso
 	return h.toolResult(req.ID, out)
 }
 
-// synodAddOperatorArgs — keeper.synod.add-operator: synod + aid обязательны.
+// synodAddOperatorArgs — keeper.synod.add-operator: synod + aid are required.
 type synodAddOperatorArgs struct {
 	Synod string `json:"synod"`
 	AID   string `json:"aid"`
@@ -250,7 +252,7 @@ func (h *Handler) callSynodAddOperator(ctx context.Context, claims *jwt.Claims, 
 	return h.toolResult(req.ID, struct{}{})
 }
 
-// synodRemoveOperatorArgs — keeper.synod.remove-operator: synod + aid обязательны.
+// synodRemoveOperatorArgs — keeper.synod.remove-operator: synod + aid are required.
 type synodRemoveOperatorArgs struct {
 	Synod string `json:"synod"`
 	AID   string `json:"aid"`
@@ -298,7 +300,7 @@ func (h *Handler) callSynodRemoveOperator(ctx context.Context, claims *jwt.Claim
 	return h.toolResult(req.ID, struct{}{})
 }
 
-// synodGrantRoleArgs — keeper.synod.grant-role: synod + role обязательны.
+// synodGrantRoleArgs — keeper.synod.grant-role: synod + role are required.
 type synodGrantRoleArgs struct {
 	Synod string `json:"synod"`
 	Role  string `json:"role"`
@@ -343,7 +345,7 @@ func (h *Handler) callSynodGrantRole(ctx context.Context, claims *jwt.Claims, re
 	return h.toolResult(req.ID, struct{}{})
 }
 
-// synodRevokeRoleArgs — keeper.synod.revoke-role: synod + role обязательны.
+// synodRevokeRoleArgs — keeper.synod.revoke-role: synod + role are required.
 type synodRevokeRoleArgs struct {
 	Synod string `json:"synod"`
 	Role  string `json:"role"`

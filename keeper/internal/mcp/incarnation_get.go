@@ -11,20 +11,20 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// incarnationGetArgs — arguments tool-а keeper.incarnation.get
-// (schemaIncarnationGetInput: единственное required-поле `name`).
+// incarnationGetArgs — arguments for keeper.incarnation.get
+// (schemaIncarnationGetInput: the only required field is `name`).
 type incarnationGetArgs struct {
 	Name string `json:"name"`
 }
 
-// incarnationGetOutput — output keeper.incarnation.get. Симметричен REST
-// IncarnationGetReply (handlers.incarnationDTO): тот же snake_case-набор полей
-// и та же семантика nullable (status_details / created_by_aid отдаются `null`
-// при отсутствии, не пропускаются).
+// incarnationGetOutput — output of keeper.incarnation.get. Mirrors REST
+// IncarnationGetReply (handlers.incarnationDTO): same snake_case field set
+// and the same nullable semantics (status_details / created_by_aid are
+// emitted as `null` when absent, not omitted).
 //
-// СЕКРЕТЫ: spec / state наполняются ИСКЛЮЧИТЕЛЬНО через [audit.MaskSecrets]
-// (см. callIncarnationGet) — defense-in-depth, паритет с REST toDTO. MCP-вывод
-// оператору не светит ни sensitive-key-значения, ни vault-ref-ы.
+// SECRETS: spec / state are populated EXCLUSIVELY via [audit.MaskSecrets]
+// (see callIncarnationGet) — defense-in-depth, parity with REST toDTO. The
+// MCP output never exposes sensitive-key values or vault-refs to the operator.
 type incarnationGetOutput struct {
 	Name               string         `json:"name"`
 	Service            string         `json:"service"`
@@ -38,25 +38,26 @@ type incarnationGetOutput struct {
 	CreatedAt          time.Time      `json:"created_at"`
 	UpdatedAt          time.Time      `json:"updated_at"`
 
-	// ADR-031 Slice C: см. handlers.incarnationDTO. LastDriftSummary — typed
-	// (counts + scanned_at), wire-форма та же, что у REST (общий json-контракт
+	// ADR-031 Slice C: see handlers.incarnationDTO. LastDriftSummary is typed
+	// (counts + scanned_at), same wire form as REST (shared json contract
 	// incarnation.DriftScanSummary).
 	LastDriftCheckAt *time.Time                    `json:"last_drift_check_at,omitempty"`
 	LastDriftSummary *incarnation.DriftScanSummary `json:"last_drift_summary,omitempty"`
 }
 
-// callIncarnationGet — read-tool keeper.incarnation.get. Эталон тиража
-// incarnation read-tool-ов (list / history): порядок шагов —
+// callIncarnationGet — read-tool keeper.incarnation.get. Reference
+// implementation for the incarnation read-tools rollout (list / history):
+// step order —
 //
 //  1. strictUnmarshal arguments (DisallowUnknownFields).
-//  2. валидация name по [incarnation.ValidName] (паритет с REST path-name).
+//  2. validate name via [incarnation.ValidName] (parity with REST path-name).
 //  3. RBAC.Check(subject, "incarnation", "get", incarnationRBACContext(name))
-//     — name-bound селектор, тот же, что REST [handlers.IncarnationNameSelector].
-//  4. SelectByName → ошибки маппятся [mapIncarnationErrorToMCP]
-//     (NotFound → not-found и т.д.).
-//  5. построение output с маскингом spec/state через [audit.MaskSecrets].
+//     — name-bound selector, same as REST [handlers.IncarnationNameSelector].
+//  4. SelectByName → errors mapped via [mapIncarnationErrorToMCP]
+//     (NotFound → not-found etc.).
+//  5. build output, masking spec/state via [audit.MaskSecrets].
 //
-// reads НЕ аудируются (симметрия с REST Get — без audit-payload).
+// reads are NOT audited (symmetry with REST Get — no audit payload).
 func (h *Handler) callIncarnationGet(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.incarnation.get"
 
@@ -77,7 +78,7 @@ func (h *Handler) callIncarnationGet(ctx context.Context, claims *jwt.Claims, re
 
 	inc, err := incarnation.SelectByName(ctx, h.deps.IncarnationDB, a.Name)
 	if err != nil {
-		// Fail-closed RBAC при ненайденной/сбойной incarnation (паритет REST).
+		// Fail-closed RBAC when the incarnation is missing/errored (REST parity).
 		if scopeErr := h.checkIncarnationScope(claims, "get", a.Name, "", nil); scopeErr != nil {
 			return h.toolError(req.ID, toolName, mcpCodeForbidden,
 				"operator lacks required permission incarnation.get")
@@ -93,8 +94,8 @@ func (h *Handler) callIncarnationGet(ctx context.Context, claims *jwt.Claims, re
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	// RBAC OR-Check по coven/service-scope incarnation (covens ∪ {name}) —
-	// зеркало REST middleware, scope из inc.Service / inc.Covens.
+	// RBAC OR-Check over the incarnation's coven/service scope (covens ∪
+	// {name}) — mirrors REST middleware, scope from inc.Service / inc.Covens.
 	if err := h.checkIncarnationScope(claims, "get", inc.Name, inc.Service, inc.Covens); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission incarnation.get")

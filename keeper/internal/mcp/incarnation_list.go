@@ -10,13 +10,14 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// incarnationListArgs — arguments tool-а keeper.incarnation.list
-// (schemaIncarnationListInput): все поля опциональны. service / status —
-// фильтры (паритет REST query-params), offset / limit — pagination.
+// incarnationListArgs — arguments for keeper.incarnation.list
+// (schemaIncarnationListInput): all fields optional. service / status are
+// filters (parity with REST query params), offset / limit are pagination.
 //
-// offset / limit — указатели: отличить «оператор не передал» (→ дефолты
-// 0 / 50, как REST [sharedapi.ParsePage]) от явного нуля. strictUnmarshal
-// отвергает unknown-поля; типы integer валидируются JSON-decoder-ом.
+// offset / limit are pointers: distinguishes "operator didn't pass it" (→
+// defaults 0 / 50, like REST [sharedapi.ParsePage]) from an explicit zero.
+// strictUnmarshal rejects unknown fields; integer types are validated by
+// the JSON decoder.
 type incarnationListArgs struct {
 	Service string `json:"service"`
 	Status  string `json:"status"`
@@ -24,17 +25,17 @@ type incarnationListArgs struct {
 	Limit   *int   `json:"limit"`
 }
 
-// listDefaultLimit / listMaxLimit — дефолт и потолок pagination, паритет с
-// REST [sharedapi.ParsePage] (offset≥0, 1≤limit≤1000, дефолт 50). MCP-tool
-// принимает page-params напрямую (без url.Values), поэтому валидация — здесь.
+// listDefaultLimit / listMaxLimit — pagination default and ceiling, parity
+// with REST [sharedapi.ParsePage] (offset≥0, 1≤limit≤1000, default 50). The
+// MCP tool takes page params directly (no url.Values), so validation lives here.
 const (
 	listDefaultLimit = 50
 	listMaxLimit     = 1000
 )
 
-// incarnationListOutput — output keeper.incarnation.list. Симметричен REST
-// PagedResponse[incarnationDTO]: items + offset/limit/total. Каждый элемент —
-// тот же masked-DTO, что keeper.incarnation.get.
+// incarnationListOutput — output of keeper.incarnation.list. Mirrors REST
+// PagedResponse[incarnationDTO]: items + offset/limit/total. Each element is
+// the same masked DTO as keeper.incarnation.get.
 type incarnationListOutput struct {
 	Items  []incarnationGetOutput `json:"items"`
 	Offset int                    `json:"offset"`
@@ -42,12 +43,12 @@ type incarnationListOutput struct {
 	Total  int                    `json:"total"`
 }
 
-// callIncarnationList — read-tool keeper.incarnation.list. Паритет REST
-// IncarnationHandler.List: фильтр service/status + pagination → SelectAll →
-// массив masked-DTO.
+// callIncarnationList — read tool keeper.incarnation.list. Parity with REST
+// IncarnationHandler.List: service/status filter + pagination → SelectAll →
+// array of masked DTOs.
 //
-// RBAC-context — nil (list без таргетинга по имени, incarnationRBACContext("")
-// = nil, паритет с REST NoSelector). reads НЕ аудируются.
+// RBAC-context — nil (list has no name targeting, incarnationRBACContext("")
+// = nil, parity with REST NoSelector). Reads are not audited.
 func (h *Handler) callIncarnationList(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.incarnation.list"
 
@@ -90,9 +91,9 @@ func (h *Handler) callIncarnationList(ctx context.Context, claims *jwt.Claims, r
 			"operator lacks required permission incarnation.list")
 	}
 
-	// scope Unrestricted: MCP incarnation.list пока не применяет per-operator
-	// scoped-видимость (ADR-047 S3b-3 покрыл HTTP-List/Get; MCP — отдельный
-	// follow-up sweep). Поведение идентично прежнему (без scope-фильтра).
+	// scope Unrestricted: MCP incarnation.list doesn't yet apply per-operator
+	// scoped visibility (ADR-047 S3b-3 covered HTTP List/Get; MCP is a
+	// separate follow-up sweep). Behavior is unchanged (no scope filter).
 	items, total, err := incarnation.SelectAll(ctx, h.deps.IncarnationDB, filter, incarnation.ListScope{Unrestricted: true}, offset, limit)
 	if err != nil {
 		code, detail := mapIncarnationErrorToMCP(err)

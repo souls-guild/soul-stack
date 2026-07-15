@@ -10,22 +10,22 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// roleUpdateArgs — arguments tool-а keeper.role.update (schemaRoleUpdateInput):
-// name + permissions обязательны. permissions — новый набор (replace-семантика).
-// default_scope (ADR-047 S1) опционален: ключ ОТСУТСТВУЕТ → scope не трогается;
-// присутствует (включая null) → заменяет (null снимает scope).
+// roleUpdateArgs — arguments for keeper.role.update (schemaRoleUpdateInput):
+// name + permissions are required. permissions is the new set (replace
+// semantics). default_scope (ADR-047 S1) is optional: key ABSENT → scope
+// untouched; present (including null) → replaces it (null clears scope).
 type roleUpdateArgs struct {
 	Name         string   `json:"name"`
 	Permissions  []string `json:"permissions"`
 	DefaultScope *string  `json:"default_scope"`
 }
 
-// callRoleUpdate — mutating-tool keeper.role.update. Транспорт поверх
-// [rbac.Service.UpdateRolePermissions] (replace-семантика): builtin-граница,
-// валидация permissions и self-lockout (снятие последнего `*`) — в Service;
-// tool маппит sentinel-ы в MCP-коды.
+// callRoleUpdate — mutating tool keeper.role.update. Transport over
+// [rbac.Service.UpdateRolePermissions] (replace semantics): the builtin
+// boundary, permissions validation, and self-lockout (removing the last `*`)
+// live in Service; the tool maps sentinels to MCP codes.
 //
-// RBAC — role.update без селектора (nil-context).
+// RBAC — role.update without a selector (nil-context).
 func (h *Handler) callRoleUpdate(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.role.update"
 
@@ -33,9 +33,9 @@ func (h *Handler) callRoleUpdate(ctx context.Context, claims *jwt.Claims, req js
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, roleManagementNotConfigured)
 	}
 
-	// RBAC ДО unmarshal/валидации (least-disclosure): неавторизованный оператор
-	// не получает validation-feedback по телу. Контекст nil — право не зависит
-	// от тела запроса.
+	// RBAC BEFORE unmarshal/validation (least-disclosure): an unauthorized
+	// operator gets no validation feedback about the body. Context nil — the
+	// permission doesn't depend on the request body.
 	if err := h.deps.RBAC.Check(claims.Subject, "role", "update", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission role.update")
@@ -52,8 +52,9 @@ func (h *Handler) callRoleUpdate(ctx context.Context, claims *jwt.Claims, req js
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
 	}
 
-	// presence ключа default_scope в сырых args: omitted (не трогать scope)
-	// vs explicit (заменить, в т.ч. null → снять). *string не различает.
+	// presence of the default_scope key in raw args: omitted (leave scope
+	// alone) vs explicit (replace, including null → clear). *string alone
+	// can't distinguish these.
 	hasScope := rawArgHasKey(args, "default_scope")
 
 	err := h.deps.RBACRoles.UpdateRolePermissions(ctx, rbac.UpdateRolePermissionsInput{
@@ -75,8 +76,8 @@ func (h *Handler) callRoleUpdate(ctx context.Context, claims *jwt.Claims, req js
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	// Audit — параллельно HTTP-handler-у (изменение авторизации, ADR-022):
-	// payload {name, permissions} (новый набор). permission-строки не секрет.
+	// Audit — parallels the HTTP handler (authorization change, ADR-022):
+	// payload {name, permissions} (new set). Permission strings aren't secret.
 	h.writeAudit(audit.EventRolePermissionsUpdated, claims.Subject, map[string]any{
 		"name":        a.Name,
 		"permissions": a.Permissions,

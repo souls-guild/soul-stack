@@ -10,15 +10,16 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/pushorch"
 )
 
-// pushNotConfigured — public-detail nil-guard-а push-tool-ов. PushRun — опц.
-// поле HandlerDeps (production-wire-up передаёт *pushorch.PushRun только при
-// поднятом SshDispatcher): при nil tool диспатчится, но возвращает
-// internal-error «не сконфигурировано» (паттерн RBACRoles/SigilSvc).
+// pushNotConfigured — public-detail nil-guard for push-tools. PushRun is an
+// optional HandlerDeps field (production wire-up passes *pushorch.PushRun
+// only when SshDispatcher is up): when nil, the tool still dispatches but
+// returns internal-error "not configured" (RBACRoles/SigilSvc pattern).
 const pushNotConfigured = "push orchestrator is not configured"
 
-// pushApplyArgs — arguments tool-а keeper.push.apply (schemaPushApplyInput):
-// inventory + destiny обязательны, остальное опционально. cleanup_stale_versions
-// маппится в request.CleanupStale (короткое имя в pushorch.ApplyRequest).
+// pushApplyArgs — arguments for keeper.push.apply (schemaPushApplyInput):
+// inventory + destiny are required, the rest is optional.
+// cleanup_stale_versions maps to request.CleanupStale (short name in
+// pushorch.ApplyRequest).
 type pushApplyArgs struct {
 	Inventory            []string       `json:"inventory"`
 	Destiny              string         `json:"destiny"`
@@ -27,16 +28,16 @@ type pushApplyArgs struct {
 	CleanupStaleVersions bool           `json:"cleanup_stale_versions,omitempty"`
 }
 
-// callPushApply — mutating-tool keeper.push.apply. Транспорт поверх
-// [pushorch.PushRun.Apply]: вся бизнес-логика (parse destiny, Insert(pending),
-// async-execute) — в orchestrator-е; tool декодирует input, проверяет
-// permission, маппит sentinel-ы в MCP-коды. Audit (push.applied) пишется
-// orchestrator-ом — здесь дубль не нужен.
+// callPushApply — mutating tool keeper.push.apply. Transport over
+// [pushorch.PushRun.Apply]: all business logic (parse destiny, Insert(pending),
+// async-execute) lives in the orchestrator; the tool decodes input, checks
+// permission, maps sentinels to MCP codes. Audit (push.applied) is written
+// by the orchestrator — no duplicate needed here.
 //
-// RBAC — push.apply без селектора (push не имеет таргетинга по
-// incarnation/coven в MVP — селекторы service/coven/incarnation/host из
-// closed enum не покрывают push.* в текущем slice). Контекст nil — право не
-// зависит от тела запроса.
+// RBAC — push.apply without a selector (push has no targeting by
+// incarnation/coven in MVP — the service/coven/incarnation/host selectors
+// from the closed enum don't cover push.* in the current slice). Context
+// nil — the permission doesn't depend on the request body.
 func (h *Handler) callPushApply(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.push.apply"
 
@@ -44,9 +45,9 @@ func (h *Handler) callPushApply(ctx context.Context, claims *jwt.Claims, req jso
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, pushNotConfigured)
 	}
 
-	// RBAC ДО unmarshal/валидации (least-disclosure): неавторизованный
-	// оператор не получает validation-feedback по телу. Контекст nil — право
-	// не зависит от тела запроса.
+	// RBAC BEFORE unmarshal/validation (least-disclosure): an unauthorized
+	// operator gets no validation feedback about the body. Context nil — the
+	// permission doesn't depend on the request body.
 	if err := h.deps.RBAC.Check(claims.Subject, "push", "apply", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission push.apply")
@@ -87,8 +88,8 @@ func (h *Handler) callPushApply(ctx context.Context, claims *jwt.Claims, req jso
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "push apply failed")
 	}
 
-	// schemaApplyIDOutput → `{ "_apply_id": "<ULID>" }`. Тег JSON _apply_id —
-	// контракт schemaApplyIDOutput (см. manifest.go).
+	// schemaApplyIDOutput → `{ "_apply_id": "<ULID>" }`. The JSON tag _apply_id
+	// is the schemaApplyIDOutput contract (see manifest.go).
 	return h.toolResult(req.ID, struct {
 		ApplyID string `json:"_apply_id"`
 	}{ApplyID: applyID})

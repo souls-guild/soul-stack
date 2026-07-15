@@ -14,13 +14,13 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// keeper.soul.create — паритет REST POST /v1/souls (SoulHandler.Create).
+// keeper.soul.create — parity with REST POST /v1/souls (SoulHandler.Create).
 //
-// Логика онбординга (souls-row + bootstrap-токен атомарно одной транзакцией)
-// живёт в REST-handler-е, а не в переиспользуемом сервисе; здесь она
-// воспроизводится над тем же [handlers.SoulPool] и теми же функциями
-// soul.* / bootstraptoken.* (single source of truth по DB-границе, без новой
-// абстракции — паритет, не новьё).
+// The onboarding logic (souls row + bootstrap token atomically in one
+// transaction) lives in the REST handler, not in a reusable service; it's
+// reproduced here over the same [handlers.SoulPool] and the same
+// soul.* / bootstraptoken.* functions (single source of truth at the DB
+// boundary, no new abstraction — parity, not novelty).
 
 type soulCreateArgs struct {
 	SID       string   `json:"sid"`
@@ -29,9 +29,9 @@ type soulCreateArgs struct {
 	Note      string   `json:"note,omitempty"`
 }
 
-// soulCreateOutput — паритет REST SoulCreateReply. bootstrap_token /
-// expires_at присутствуют только для transport=agent. json-тег `expires_at`
-// (не token_expires_at) синхронен REST и openapi.yaml — REST↔MCP не разъезжаются.
+// soulCreateOutput — parity with REST SoulCreateReply. bootstrap_token /
+// expires_at are present only for transport=agent. The json tag `expires_at`
+// (not token_expires_at) matches REST and openapi.yaml — REST↔MCP stay in sync.
 type soulCreateOutput struct {
 	SID            string   `json:"sid"`
 	Transport      string   `json:"transport"`
@@ -50,9 +50,10 @@ func (h *Handler) callSoulCreate(ctx context.Context, claims *jwt.Claims, req js
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "soul DB is not configured")
 	}
 
-	// RBAC ДО unmarshal/валидации (least-disclosure): неавторизованный оператор
-	// не получает validation-feedback по телу. `soul.create` без селектора
-	// (REST: NoSelector) — право не зависит от тела запроса.
+	// RBAC BEFORE unmarshal/validation (least-disclosure): an unauthorized
+	// operator gets no validation feedback about the body. `soul.create` has no
+	// selector (REST: NoSelector) — the permission doesn't depend on the
+	// request body.
 	if err := h.deps.RBAC.Check(claims.Subject, "soul", "create", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission soul.create")
@@ -94,7 +95,7 @@ func (h *Handler) callSoulCreate(ctx context.Context, claims *jwt.Claims, req js
 		Note:         a.Note,
 	}
 
-	// ssh-хост: только souls-row, без bootstrap-токена.
+	// ssh host: souls row only, no bootstrap token.
 	issueToken := transport == soul.TransportAgent
 
 	tx, err := h.deps.SoulDB.BeginTx(ctx, pgx.TxOptions{})
@@ -158,8 +159,8 @@ func (h *Handler) callSoulCreate(ctx context.Context, claims *jwt.Claims, req js
 	}
 	committed = true
 
-	// Audit — паритет REST: payload {sid, transport, covens, created_by_aid,
-	// token_issued}. Сам bootstrap-токен (sensitive) не пишем.
+	// Audit — parity with REST: payload {sid, transport, covens, created_by_aid,
+	// token_issued}. The bootstrap token itself (sensitive) isn't written.
 	h.writeAudit(audit.EventSoulCreated, creator, map[string]any{
 		"sid":            s.SID,
 		"transport":      string(s.Transport),
@@ -171,9 +172,9 @@ func (h *Handler) callSoulCreate(ctx context.Context, claims *jwt.Claims, req js
 	return h.toolResult(req.ID, out)
 }
 
-// parseSoulTransport маппит JSON-строку transport в [soul.Transport].
-// Возвращает ok=false на пустую/неизвестную строку (паритет
-// handlers.parseTransport — последний приватен для пакета handlers).
+// parseSoulTransport maps the JSON transport string to [soul.Transport].
+// Returns ok=false for an empty/unknown string (parity with
+// handlers.parseTransport, which is private to package handlers).
 func parseSoulTransport(v string) (soul.Transport, bool) {
 	switch soul.Transport(v) {
 	case soul.TransportAgent:
@@ -185,9 +186,9 @@ func parseSoulTransport(v string) (soul.Transport, bool) {
 	}
 }
 
-// coalesceCoven нормализует nil-slice в пустой — для JSON `[]` вместо `null`
-// (covens объявлен non-nullable, паритет handlers.coalesceCoven, приватного
-// для пакета handlers).
+// coalesceCoven normalizes a nil slice to empty — for JSON `[]` instead of
+// `null` (covens is declared non-nullable, parity with handlers.coalesceCoven,
+// which is private to package handlers).
 func coalesceCoven(c []string) []string {
 	if c == nil {
 		return []string{}

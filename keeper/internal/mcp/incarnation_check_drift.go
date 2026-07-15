@@ -12,22 +12,23 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// incarnationCheckDriftArgs — arguments tool-а keeper.incarnation.check-drift
-// (schemaIncarnationCheckDriftInput): name обязателен, input — opt-override
-// converge-параметров.
+// incarnationCheckDriftArgs — arguments for keeper.incarnation.check-drift
+// (schemaIncarnationCheckDriftInput): name is required, input is an
+// opt-override of converge parameters.
 type incarnationCheckDriftArgs struct {
 	Name  string         `json:"name"`
 	Input map[string]any `json:"input,omitempty"`
 }
 
-// callIncarnationCheckDrift — sync-tool keeper.incarnation.check-drift (ADR-031
-// Slice B). Паритет REST IncarnationHandler.CheckDrift: резолв incarnation →
-// scope-проверка → резолв service → drift.CheckDrift → MarkDriftStatus → audit
-// → 200 + DriftReport.
+// callIncarnationCheckDrift — sync tool keeper.incarnation.check-drift (ADR-031
+// Slice B). Parity with REST IncarnationHandler.CheckDrift: resolve
+// incarnation → scope check → resolve service → drift.CheckDrift →
+// MarkDriftStatus → audit → 200 + DriftReport.
 //
-// RBAC OR-Check по coven/service-scope incarnation (covens ∪ {name}) —
-// зеркало REST middleware (handlers.IncarnationCovenContexts). Fail-closed на
-// ненайденной incarnation (scoped → deny до 404, паритет REST Run/Destroy).
+// RBAC OR-Check on incarnation coven/service-scope (covens ∪ {name}) —
+// mirrors the REST middleware (handlers.IncarnationCovenContexts).
+// Fail-closed on a not-found incarnation (scoped → deny before 404, parity
+// with REST Run/Destroy).
 //
 // audit: EventIncarnationDriftChecked {name, scenario, apply_id, drift_summary},
 // source=mcp. archon_aid — claims.Subject.
@@ -56,8 +57,8 @@ func (h *Handler) callIncarnationCheckDrift(ctx context.Context, claims *jwt.Cla
 
 	inc, err := incarnation.SelectByName(ctx, h.deps.IncarnationDB, a.Name)
 	if err != nil {
-		// Fail-closed RBAC при ненайденной/сбойной incarnation (паритет REST):
-		// scoped оператор получает Forbidden до 404, bare/`*` — 404.
+		// Fail-closed RBAC on a not-found/failed incarnation (parity with REST):
+		// a scoped operator gets Forbidden before 404, bare/`*` gets 404.
 		if scopeErr := h.checkIncarnationScope(claims, "check-drift", a.Name, "", nil); scopeErr != nil {
 			return h.toolError(req.ID, toolName, mcpCodeForbidden,
 				"operator lacks required permission incarnation.check-drift")

@@ -11,15 +11,16 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// augurNotConfigured — public-detail nil-guard-а augur-tools. AugurSvc — опц.
-// поле HandlerDeps (production-wire-up передаёт тот же *augur.Service, что REST):
-// при nil augur-tools диспатчатся, но возвращают internal-error «не
-// сконфигурировано» (паттерн RBACRoles/SigilSvc/ServiceSvc).
+// augurNotConfigured — public detail of the augur-tools nil guard. AugurSvc
+// is an optional HandlerDeps field (production wiring passes the same
+// *augur.Service as REST): when nil, augur-tools still dispatch but return
+// an internal-error "not configured" (same pattern as RBACRoles/SigilSvc/ServiceSvc).
 const augurNotConfigured = "augur registry is not configured"
 
-// omenView — output-проекция Omen-а для augur-tools (schemaOmenView). 1:1 с REST
-// omenResponse / [augur.Omen]: name + source_type/endpoint/auth_ref + audit-
-// метаданные. Master-credential в записи отсутствует (auth_ref — vault-ref).
+// omenView — output projection of an Omen for augur-tools (schemaOmenView).
+// 1:1 with REST omenResponse / [augur.Omen]: name + source_type/endpoint/
+// auth_ref + audit metadata. No master credential in the record (auth_ref
+// is a vault-ref).
 type omenView struct {
 	Name         string  `json:"name"`
 	SourceType   string  `json:"source_type"`
@@ -40,7 +41,7 @@ func toOmenView(o *augur.Omen) omenView {
 	}
 }
 
-// omenCreateArgs — arguments tool-а keeper.augur.omen.create.
+// omenCreateArgs — arguments for keeper.augur.omen.create.
 type omenCreateArgs struct {
 	Name       string `json:"name"`
 	SourceType string `json:"source_type"`
@@ -48,12 +49,12 @@ type omenCreateArgs struct {
 	AuthRef    string `json:"auth_ref"`
 }
 
-// callAugurOmenCreate — mutating-tool keeper.augur.omen.create. Транспорт поверх
-// [augur.Service.CreateOmen]: вся валидация (name / source_type / endpoint /
-// auth_ref) — в Service; tool маппит sentinel-ы в MCP-коды и пишет audit
-// omen.created.
+// callAugurOmenCreate — mutating tool keeper.augur.omen.create. Transport
+// over [augur.Service.CreateOmen]: all validation (name / source_type /
+// endpoint / auth_ref) lives in Service; tool maps sentinels to MCP codes
+// and writes the omen.created audit event.
 //
-// RBAC — omen.create без селектора (rbac.md §Augur: NoSelector).
+// RBAC — omen.create with no selector (rbac.md §Augur: NoSelector).
 func (h *Handler) callAugurOmenCreate(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.augur.omen.create"
 
@@ -61,9 +62,9 @@ func (h *Handler) callAugurOmenCreate(ctx context.Context, claims *jwt.Claims, r
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, augurNotConfigured)
 	}
 
-	// RBAC ДО unmarshal/валидации (least-disclosure): неавторизованный оператор
-	// не получает validation-feedback по телу. Контекст nil — право не зависит
-	// от тела запроса.
+	// RBAC BEFORE unmarshal/validation (least-disclosure): an unauthorized
+	// operator gets no validation feedback about the body. Context nil — the
+	// permission doesn't depend on the request body.
 	if err := h.deps.RBAC.Check(claims.Subject, "omen", "create", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission omen.create")
@@ -96,9 +97,9 @@ func (h *Handler) callAugurOmenCreate(ctx context.Context, claims *jwt.Claims, r
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	// Audit — параллельно REST-handler-у: payload {name, source_type, endpoint,
-	// auth_ref, created_by_aid}. endpoint / auth_ref не секрет (master-cred в
-	// записи отсутствует, augur.md §8).
+	// Audit — parallels the REST handler: payload {name, source_type,
+	// endpoint, auth_ref, created_by_aid}. endpoint/auth_ref aren't secrets
+	// (no master cred in the record, augur.md §8).
 	h.writeAudit(audit.EventOmenCreated, callerAID, map[string]any{
 		"name":           o.Name,
 		"source_type":    string(o.SourceType),
@@ -110,21 +111,21 @@ func (h *Handler) callAugurOmenCreate(ctx context.Context, claims *jwt.Claims, r
 	return h.toolResult(req.ID, toOmenView(o))
 }
 
-// omenListOutput — output keeper.augur.omen.list: реестр Omen-ов под `omens`
-// (паритет REST GET /v1/augur/omens items).
+// omenListOutput — output of keeper.augur.omen.list: the Omen registry
+// under `omens` (parity with REST GET /v1/augur/omens items).
 type omenListOutput struct {
 	Omens []omenView `json:"omens"`
 	Total int        `json:"total"`
 }
 
-// omenListArgs — arguments keeper.augur.omen.list (опц. offset/limit).
+// omenListArgs — arguments for keeper.augur.omen.list (optional offset/limit).
 type omenListArgs struct {
 	Offset *int `json:"offset"`
 	Limit  *int `json:"limit"`
 }
 
-// callAugurOmenList — read-tool keeper.augur.omen.list (read-only, не
-// аудируется). RBAC — omen.list без селектора.
+// callAugurOmenList — read tool keeper.augur.omen.list (read-only, not
+// audited). RBAC — omen.list with no selector.
 func (h *Handler) callAugurOmenList(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.augur.omen.list"
 
@@ -132,9 +133,9 @@ func (h *Handler) callAugurOmenList(ctx context.Context, claims *jwt.Claims, req
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, augurNotConfigured)
 	}
 
-	// RBAC ДО unmarshal/валидации (least-disclosure): неавторизованный оператор
-	// не получает validation-feedback по телу. Контекст nil — право не зависит
-	// от тела запроса.
+	// RBAC BEFORE unmarshal/validation (least-disclosure): an unauthorized
+	// operator gets no validation feedback about the body. Context nil — the
+	// permission doesn't depend on the request body.
 	if err := h.deps.RBAC.Check(claims.Subject, "omen", "list", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission omen.list")
@@ -172,13 +173,13 @@ func (h *Handler) callAugurOmenList(ctx context.Context, claims *jwt.Claims, req
 	return h.toolResult(req.ID, out)
 }
 
-// omenDeleteArgs — arguments keeper.augur.omen.delete.
+// omenDeleteArgs — arguments for keeper.augur.omen.delete.
 type omenDeleteArgs struct {
 	Name string `json:"name"`
 }
 
-// callAugurOmenDelete — mutating-tool keeper.augur.omen.delete. Каскадно
-// удаляет связанные Rite-ы. RBAC — omen.delete без селектора.
+// callAugurOmenDelete — mutating tool keeper.augur.omen.delete. Cascades to
+// delete associated Rites. RBAC — omen.delete with no selector.
 func (h *Handler) callAugurOmenDelete(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.augur.omen.delete"
 
@@ -186,9 +187,9 @@ func (h *Handler) callAugurOmenDelete(ctx context.Context, claims *jwt.Claims, r
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, augurNotConfigured)
 	}
 
-	// RBAC ДО unmarshal/валидации (least-disclosure): неавторизованный оператор
-	// не получает validation-feedback по телу. Контекст nil — право не зависит
-	// от тела запроса.
+	// RBAC BEFORE unmarshal/validation (least-disclosure): an unauthorized
+	// operator gets no validation feedback about the body. Context nil — the
+	// permission doesn't depend on the request body.
 	if err := h.deps.RBAC.Check(claims.Subject, "omen", "delete", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission omen.delete")
@@ -213,11 +214,11 @@ func (h *Handler) callAugurOmenDelete(ctx context.Context, claims *jwt.Claims, r
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	// Audit — параллельно REST-handler-у: payload {name}.
+	// Audit — parallels the REST handler: payload {name}.
 	h.writeAudit(audit.EventOmenRevoked, claims.Subject, map[string]any{
 		"name": a.Name,
 	})
 
-	// REST возвращает 204 No Content; MCP-эквивалент — пустой output-объект.
+	// REST returns 204 No Content; the MCP equivalent is an empty output object.
 	return h.toolResult(req.ID, struct{}{})
 }

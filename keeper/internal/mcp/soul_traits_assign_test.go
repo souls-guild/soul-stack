@@ -8,9 +8,10 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// MCP-tool keeper.soul.traits-assign (ADR-060) — паритет REST POST /v1/souls/traits.
-// Переиспользует covenBulkFakePool (тот же SQL: COUNT(*) FROM souls + WITH chunk …
-// UPDATE souls) и harness newCovenAssignHandler из soul_coven_assign_test.go.
+// MCP-tool keeper.soul.traits-assign (ADR-060) — parity with REST POST
+// /v1/souls/traits. Reuses covenBulkFakePool (same SQL: COUNT(*) FROM souls
+// + WITH chunk … UPDATE souls) and harness newCovenAssignHandler from
+// soul_coven_assign_test.go.
 
 // traitsAssignAdminCfg — bare grant soul.traits-assign (unrestricted scope).
 func traitsAssignAdminCfg() *rbactest.Config {
@@ -23,8 +24,8 @@ func traitsAssignAdminCfg() *rbactest.Config {
 	}
 }
 
-// traitsAssignDevScopedCfg — оператор, ограниченный coven=dev: вправе менять
-// traits только хостов в dev (гейт a). trait-ключ не scope-измерение.
+// traitsAssignDevScopedCfg — operator restricted to coven=dev: may only
+// change traits on dev hosts (gate a). trait-key is not a scope dimension.
 func traitsAssignDevScopedCfg() *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -99,14 +100,14 @@ func TestSoulTraitsAssign_MergeSuccess(t *testing.T) {
 	if ev.Source != audit.SourceMCP {
 		t.Errorf("audit source = %q, want mcp", ev.Source)
 	}
-	// trait-ЗНАЧЕНИЯ в audit НЕ кладутся.
+	// trait VALUES are NOT put in the audit payload.
 	raw, _ := json.Marshal(ev.Payload)
 	if containsSubstrMCP(string(raw), `"dba"`) {
 		t.Errorf("audit payload содержит trait-значение: %s", raw)
 	}
 }
 
-// TestSoulTraitsAssign_DefaultMode_Merge — mode опущен → merge.
+// TestSoulTraitsAssign_DefaultMode_Merge — mode omitted → merge.
 func TestSoulTraitsAssign_DefaultMode_Merge(t *testing.T) {
 	pool := &covenBulkFakePool{matched: 1, changed: 1}
 	h, _ := newCovenAssignHandler(t, traitsAssignAdminCfg(), pool)
@@ -227,8 +228,8 @@ func TestSoulTraitsAssign_UnknownArg(t *testing.T) {
 
 // --- RBAC / scope (security) ---
 
-// TestSoulTraitsAssign_RBACForbidden — оператор без soul.traits-assign → deny
-// на permission-слое, DB не трогается, audit не пишется.
+// TestSoulTraitsAssign_RBACForbidden — operator without soul.traits-assign →
+// deny at the permission layer, DB untouched, no audit written.
 func TestSoulTraitsAssign_RBACForbidden(t *testing.T) {
 	h, rec := newCovenAssignHandler(t, nil, &covenBulkFakePool{
 		countErr: errFakeUnexpected{sql: "traits-assign must NOT query when RBAC denies"},
@@ -247,10 +248,10 @@ func TestSoulTraitsAssign_RBACForbidden(t *testing.T) {
 }
 
 // TestSoulTraitsAssign_ScopedOperator_ScopeApplied — GUARD least-privilege
-// (гейт a): coven-scoped (dev) оператор проходит permission (trait-ключ не
-// scope-измерение, гейта b нет), но service-слой получает coven-scope=[dev]
-// (scope_applied=true в audit, scope-массив в COUNT-args). Без этого bulk был
-// бы обходом least-privilege.
+// (gate a): a coven-scoped (dev) operator passes the permission check
+// (trait-key is not a scope dimension, no gate b), but the service layer
+// still receives coven-scope=[dev] (scope_applied=true in audit, scope array
+// in COUNT-args). Without this, bulk would bypass least-privilege.
 func TestSoulTraitsAssign_ScopedOperator_ScopeApplied(t *testing.T) {
 	pool := &covenBulkFakePool{matched: 2, changed: 2}
 	h, rec := newCovenAssignHandler(t, traitsAssignDevScopedCfg(), pool)
@@ -269,7 +270,7 @@ func TestSoulTraitsAssign_ScopedOperator_ScopeApplied(t *testing.T) {
 	if ev.Payload["scope_applied"] != true {
 		t.Errorf("audit scope_applied = %v, want true (restricted dev-op)", ev.Payload["scope_applied"])
 	}
-	// scope-предикат (coven && ARRAY[dev]) уехал в COUNT-args.
+	// scope predicate (coven && ARRAY[dev]) made it into COUNT-args.
 	foundScope := false
 	for _, a := range pool.gotCountArgs {
 		if arr, ok := a.([]string); ok && len(arr) == 1 && arr[0] == "dev" {

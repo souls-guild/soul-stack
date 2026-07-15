@@ -14,22 +14,23 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// keeper.soul.issue-token — паритет REST POST /v1/souls/{sid}/issue-token
-// (SoulHandler.IssueToken). Повторная выписка bootstrap-токена для
-// существующей Soul (transport=agent). force=true истекает активный токен и
-// выписывает новый (в REST это `?force=true` query-param).
+// keeper.soul.issue-token — parity with REST POST /v1/souls/{sid}/issue-token
+// (SoulHandler.IssueToken). Re-issues a bootstrap token for an existing Soul
+// (transport=agent). force=true expires the active token and issues a new one
+// (in REST this is the `?force=true` query param).
 //
-// Логика (select soul → проверка transport → опц. expire active → insert)
-// воспроизводится над тем же [handlers.SoulPool] и функциями
-// soul.* / bootstraptoken.* — паритет по DB-границе, без новой абстракции.
+// The logic (select soul → check transport → optionally expire active →
+// insert) is reproduced over the same [handlers.SoulPool] and
+// soul.* / bootstraptoken.* functions — parity at the DB boundary, no new
+// abstraction.
 
 type soulIssueTokenArgs struct {
 	SID   string `json:"sid"`
 	Force bool   `json:"force,omitempty"`
 }
 
-// soulIssueTokenOutput — паритет REST SoulIssueTokenReply. json-тег
-// `expires_at` (не token_expires_at) синхронен REST и openapi.yaml.
+// soulIssueTokenOutput — parity with REST SoulIssueTokenReply. The json tag
+// `expires_at` (not token_expires_at) matches REST and openapi.yaml.
 type soulIssueTokenOutput struct {
 	SID            string `json:"sid"`
 	BootstrapToken string `json:"bootstrap_token"`
@@ -58,8 +59,8 @@ func (h *Handler) callSoulIssueToken(ctx context.Context, claims *jwt.Claims, re
 			"field 'sid' must match "+soul.SIDPattern)
 	}
 
-	// RBAC-check — `soul.issue-token` с селектором `host=<sid>` (REST:
-	// SoulSIDSelector). RBAC может ограничить ре-выписку по конкретному хосту.
+	// RBAC check — `soul.issue-token` with selector `host=<sid>` (REST:
+	// SoulSIDSelector). RBAC can restrict re-issuance to a specific host.
 	if err := h.deps.RBAC.Check(claims.Subject, "soul", "issue-token", map[string]string{"host": a.SID}); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission soul.issue-token")
@@ -127,8 +128,9 @@ func (h *Handler) callSoulIssueToken(ctx context.Context, claims *jwt.Claims, re
 	}
 	committed = true
 
-	// Audit — паритет REST: non-sensitive факты под именами без `token`-substring
-	// (audit secret-mask редактирует любой ключ с `token`). Сам токен не пишем.
+	// Audit — parity with REST: non-sensitive facts under names without a
+	// `token` substring (the audit secret-mask redacts any key containing
+	// `token`). The token itself isn't written.
 	h.writeAudit(audit.EventSoulTokenIssued, creator, map[string]any{
 		"sid":              a.SID,
 		"force":            a.Force,

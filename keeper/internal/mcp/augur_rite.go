@@ -11,8 +11,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// riteView — output-проекция Rite-а для augur-tools (schemaRiteView). 1:1 с REST
-// riteResponse / [augur.Rite].
+// riteView — output projection of a Rite for augur-tools (schemaRiteView).
+// 1:1 with REST riteResponse / [augur.Rite].
 type riteView struct {
 	ID           int64           `json:"id"`
 	Omen         string          `json:"omen"`
@@ -41,8 +41,8 @@ func toRiteView(r *augur.Rite) riteView {
 	}
 }
 
-// riteCreateArgs — arguments tool-а keeper.augur.rite.create. subject — XOR
-// coven/sid; allow — сырой JSONB (форма зависит от source_type Omen-а).
+// riteCreateArgs — arguments for keeper.augur.rite.create. subject is XOR
+// coven/sid; allow is raw JSONB (shape depends on the Omen's source_type).
 type riteCreateArgs struct {
 	Omen         string          `json:"omen"`
 	Coven        *string         `json:"coven"`
@@ -53,12 +53,12 @@ type riteCreateArgs struct {
 	TokenNumUses *int            `json:"token_num_uses"`
 }
 
-// callAugurRiteCreate — mutating-tool keeper.augur.rite.create. Транспорт поверх
-// [augur.Service.CreateRite]: вся валидация (XOR-субъект, allow-shape по
-// source_type, token-поля) — в Service; tool маппит sentinel-ы в MCP-коды и
-// пишет audit rite.created.
+// callAugurRiteCreate — mutating tool keeper.augur.rite.create. A transport
+// over [augur.Service.CreateRite]: all validation (XOR subject, allow shape
+// by source_type, token fields) lives in Service; the tool maps sentinels
+// to MCP codes and writes the rite.created audit event.
 //
-// RBAC — rite.create без селектора (rbac.md §Augur: NoSelector).
+// RBAC — rite.create with no selector (rbac.md §Augur: NoSelector).
 func (h *Handler) callAugurRiteCreate(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.augur.rite.create"
 
@@ -66,9 +66,9 @@ func (h *Handler) callAugurRiteCreate(ctx context.Context, claims *jwt.Claims, r
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, augurNotConfigured)
 	}
 
-	// RBAC ДО unmarshal/валидации (least-disclosure): неавторизованный оператор
-	// не получает validation-feedback по телу. Контекст nil — право не зависит
-	// от тела запроса.
+	// RBAC BEFORE unmarshal/validation (least-disclosure): an unauthorized
+	// operator gets no validation feedback about the body. Context nil — the
+	// permission doesn't depend on the request body.
 	if err := h.deps.RBAC.Check(claims.Subject, "rite", "create", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission rite.create")
@@ -104,8 +104,8 @@ func (h *Handler) callAugurRiteCreate(ctx context.Context, claims *jwt.Claims, r
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	// Audit — параллельно REST-handler-у: payload {id, omen, subject, delegate,
-	// created_by_aid}. allow-list НЕ кладётся (augur.md §8).
+	// Audit — mirrors the REST handler: payload {id, omen, subject, delegate,
+	// created_by_aid}. The allow-list is NOT included (augur.md §8).
 	h.writeAudit(audit.EventRiteCreated, callerAID, map[string]any{
 		"id":             rite.ID,
 		"omen":           rite.Omen,
@@ -117,20 +117,20 @@ func (h *Handler) callAugurRiteCreate(ctx context.Context, claims *jwt.Claims, r
 	return h.toolResult(req.ID, toRiteView(rite))
 }
 
-// riteListOutput — output keeper.augur.rite.list: Rite-ы одного Omen-а под
-// `rites` (паритет REST GET /v1/augur/rites?omen= items).
+// riteListOutput — output of keeper.augur.rite.list: one Omen's Rites under
+// `rites` (parity with REST GET /v1/augur/rites?omen= items).
 type riteListOutput struct {
 	Rites []riteView `json:"rites"`
 }
 
-// riteListArgs — arguments keeper.augur.rite.list. omen обязателен (фильтр
-// by-omen, augur.md §6 — list-all без omen-скоупа отложен).
+// riteListArgs — arguments for keeper.augur.rite.list. omen is required
+// (by-omen filter; augur.md §6 — list-all without an omen scope is deferred).
 type riteListArgs struct {
 	Omen string `json:"omen"`
 }
 
-// callAugurRiteList — read-tool keeper.augur.rite.list (read-only, не
-// аудируется). RBAC — rite.list без селектора.
+// callAugurRiteList — read-only tool keeper.augur.rite.list (not audited).
+// RBAC — rite.list with no selector.
 func (h *Handler) callAugurRiteList(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.augur.rite.list"
 
@@ -138,9 +138,9 @@ func (h *Handler) callAugurRiteList(ctx context.Context, claims *jwt.Claims, req
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, augurNotConfigured)
 	}
 
-	// RBAC ДО unmarshal/валидации (least-disclosure): неавторизованный оператор
-	// не получает validation-feedback по телу. Контекст nil — право не зависит
-	// от тела запроса.
+	// RBAC BEFORE unmarshal/validation (least-disclosure): an unauthorized
+	// operator gets no validation feedback about the body. Context nil — the
+	// permission doesn't depend on the request body.
 	if err := h.deps.RBAC.Check(claims.Subject, "rite", "list", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission rite.list")
@@ -170,13 +170,13 @@ func (h *Handler) callAugurRiteList(ctx context.Context, claims *jwt.Claims, req
 	return h.toolResult(req.ID, out)
 }
 
-// riteDeleteArgs — arguments keeper.augur.rite.delete.
+// riteDeleteArgs — arguments for keeper.augur.rite.delete.
 type riteDeleteArgs struct {
 	ID int64 `json:"id"`
 }
 
-// callAugurRiteDelete — mutating-tool keeper.augur.rite.delete. RBAC —
-// rite.delete без селектора.
+// callAugurRiteDelete — mutating tool keeper.augur.rite.delete. RBAC —
+// rite.delete with no selector.
 func (h *Handler) callAugurRiteDelete(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.augur.rite.delete"
 
@@ -184,9 +184,9 @@ func (h *Handler) callAugurRiteDelete(ctx context.Context, claims *jwt.Claims, r
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, augurNotConfigured)
 	}
 
-	// RBAC ДО unmarshal/валидации (least-disclosure): неавторизованный оператор
-	// не получает validation-feedback по телу. Контекст nil — право не зависит
-	// от тела запроса.
+	// RBAC BEFORE unmarshal/validation (least-disclosure): an unauthorized
+	// operator gets no validation feedback about the body. Context nil — the
+	// permission doesn't depend on the request body.
 	if err := h.deps.RBAC.Check(claims.Subject, "rite", "delete", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission rite.delete")
@@ -211,7 +211,7 @@ func (h *Handler) callAugurRiteDelete(ctx context.Context, claims *jwt.Claims, r
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	// Audit — параллельно REST-handler-у: payload {id}.
+	// Audit — mirrors the REST handler: payload {id}.
 	h.writeAudit(audit.EventRiteRevoked, claims.Subject, map[string]any{
 		"id": a.ID,
 	})
@@ -219,8 +219,8 @@ func (h *Handler) callAugurRiteDelete(ctx context.Context, claims *jwt.Claims, r
 	return h.toolResult(req.ID, struct{}{})
 }
 
-// riteSubjectView — человекочитаемая форма субъекта Rite-а для audit-payload
-// (`coven=<v>` / `sid=<v>`). XOR гарантирован валидацией.
+// riteSubjectView — human-readable form of a Rite's subject for the audit
+// payload (`coven=<v>` / `sid=<v>`). XOR is guaranteed by validation.
 func riteSubjectView(r *augur.Rite) string {
 	if r.Coven != nil && *r.Coven != "" {
 		return "coven=" + *r.Coven

@@ -12,14 +12,14 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 )
 
-// errandNotConfigured — public-detail nil-guard-а errand-tool-ов.
-// ErrandDispatcher/ErrandStore — опц. поля HandlerDeps; при nil tool
-// диспатчится, но возвращает internal-error (паттерн pushNotConfigured).
+// errandNotConfigured — public-detail nil-guard for errand-tools.
+// ErrandDispatcher/ErrandStore are optional HandlerDeps fields; when nil the
+// tool still dispatches but returns internal-error (pushNotConfigured pattern).
 const errandNotConfigured = "errand orchestrator is not configured"
 
-// errandRunArgs — arguments tool-а keeper.soul.errand.run (schemaErrandRunInput).
-// 1:1 с JSON body POST /v1/souls/{sid}/exec + явный sid в args (в HTTP он
-// в path-param, тут — поле объекта).
+// errandRunArgs — arguments for keeper.soul.errand.run (schemaErrandRunInput).
+// 1:1 with the JSON body of POST /v1/souls/{sid}/exec + an explicit sid in
+// args (in HTTP it's a path-param, here it's an object field).
 type errandRunArgs struct {
 	SID            string         `json:"sid"`
 	Module         string         `json:"module"`
@@ -28,10 +28,10 @@ type errandRunArgs struct {
 	DryRun         bool           `json:"dry_run,omitempty"`
 }
 
-// errandRunOutput — структурный output keeper.soul.errand.run. Зеркало
-// errandResultResponse handler-а (поля snake_case, паритет REST 200/202).
-// Async=true → status="running" + только errand_id; вызов вернёт его как
-// async-полезный результат, оператор дожимает через keeper.errand.get.
+// errandRunOutput — structured output of keeper.soul.errand.run. Mirrors the
+// handler's errandResultResponse (snake_case fields, parity with REST
+// 200/202). Async=true → status="running" + errand_id only; the call returns
+// it as the async payload, the operator follows up via keeper.errand.get.
 type errandRunOutput struct {
 	ErrandID        string         `json:"errand_id"`
 	SID             string         `json:"sid"`
@@ -48,12 +48,12 @@ type errandRunOutput struct {
 	Output          map[string]any `json:"output,omitempty"`
 }
 
-// callSoulErrandRun — mutating-tool keeper.soul.errand.run. Транспорт поверх
-// [errand.Dispatcher.Dispatch]: вся бизнес-логика (validate, INSERT, send,
-// wait-loop, async-escalation, audit) — в dispatcher-е; tool декодирует input,
-// проверяет permission, маппит sentinel-ы в MCP-коды.
+// callSoulErrandRun — mutating tool keeper.soul.errand.run. Transport over
+// [errand.Dispatcher.Dispatch]: all business logic (validate, INSERT, send,
+// wait-loop, async-escalation, audit) lives in the dispatcher; the tool
+// decodes input, checks permission, maps sentinels to MCP codes.
 //
-// RBAC — errand.run с селектором `host=<sid>` (rbac.md §Errand), симметрично
+// RBAC — errand.run with selector `host=<sid>` (rbac.md §Errand), mirrors
 // REST middleware.RequirePermission(errand, run, ErrandSIDSelector).
 func (h *Handler) callSoulErrandRun(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.soul.errand.run"
@@ -80,7 +80,7 @@ func (h *Handler) callSoulErrandRun(ctx context.Context, claims *jwt.Claims, req
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'module' is required")
 	}
 
-	// RBAC: errand.run, селектор host=<sid> (rbac.md §Errand).
+	// RBAC: errand.run, selector host=<sid> (rbac.md §Errand).
 	if err := h.deps.RBAC.Check(claims.Subject, "errand", "run", map[string]string{"host": a.SID}); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission errand.run")
@@ -125,9 +125,9 @@ type errandListArgs struct {
 	Limit        int    `json:"limit,omitempty"`
 }
 
-// errandRow — JSON-форма строки errand-а для list/get output (зеркало
-// errandResultResponse handler-а). finished_at — pointer, чтобы для running
-// серьёзно отсутствовать в output (omitempty).
+// errandRow — JSON form of an errand row for list/get output (mirrors the
+// handler's errandResultResponse). finished_at is a pointer so it can be
+// properly absent from the output for running errands (omitempty).
 type errandRow struct {
 	ErrandID        string         `json:"errand_id"`
 	SID             string         `json:"sid"`
@@ -146,8 +146,8 @@ type errandRow struct {
 	FinishedAt      string         `json:"finished_at,omitempty"`
 }
 
-// errandListOutput — paged-list output keeper.errand.list. Поля 1:1 со
-// schemaPaginatedListOutput.
+// errandListOutput — paged-list output for keeper.errand.list. Fields 1:1
+// with schemaPaginatedListOutput.
 type errandListOutput struct {
 	Items  []errandRow `json:"items"`
 	Offset int         `json:"offset"`
@@ -155,8 +155,8 @@ type errandListOutput struct {
 	Total  int         `json:"total"`
 }
 
-// callErrandList — read-only tool keeper.errand.list. Транспорт над
-// [errand.Store.List]. Pagination clamp совпадает с api.ParsePage default
+// callErrandList — read-only tool keeper.errand.list. Transport over
+// [errand.Store.List]. Pagination clamp matches api.ParsePage default
 // limit=50, max=1000.
 func (h *Handler) callErrandList(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.errand.list"
@@ -173,9 +173,9 @@ func (h *Handler) callErrandList(ctx context.Context, claims *jwt.Claims, req js
 		}
 	}
 
-	// RBAC: errand.list без селектора (NoSelector). Per-row фильтр по host/
-	// coven — отдельный slice (см. handlers/errand.go::List), здесь дублировать
-	// нет смысла (read-only).
+	// RBAC: errand.list without a selector (NoSelector). Per-row filtering by
+	// host/coven is a separate slice (see handlers/errand.go::List); no point
+	// duplicating it here (read-only).
 	if err := h.deps.RBAC.Check(claims.Subject, "errand", "list", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission errand.list")
@@ -231,9 +231,9 @@ type errandGetArgs struct {
 	ErrandID string `json:"errand_id"`
 }
 
-// callErrandGet — read-only tool keeper.errand.get. Транспорт над
-// [errand.Store.Get]. Для running-строки возвращает status="running" без
-// stdout/exit_code (паритет REST 202).
+// callErrandGet — read-only tool keeper.errand.get. Transport over
+// [errand.Store.Get]. For a running row returns status="running" without
+// stdout/exit_code (parity with REST 202).
 func (h *Handler) callErrandGet(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.errand.get"
 
@@ -253,7 +253,7 @@ func (h *Handler) callErrandGet(ctx context.Context, claims *jwt.Claims, req jso
 			"field 'errand_id' is required")
 	}
 
-	// RBAC: errand.list (read-permission покрывает и get, и list — rbac.md §Errand).
+	// RBAC: errand.list (the read permission covers both get and list — rbac.md §Errand).
 	if err := h.deps.RBAC.Check(claims.Subject, "errand", "list", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission errand.list")
@@ -280,12 +280,12 @@ type errandCancelArgs struct {
 }
 
 // callErrandCancel — mutating tool keeper.errand.cancel (ADR-033 slice E5).
-// Транспорт поверх [errand.Dispatcher.Cancel]: бизнес-логика (lookup,
-// terminal-check, send cancel local/remote, audit) — в dispatcher-е.
+// Transport over [errand.Dispatcher.Cancel]: business logic (lookup,
+// terminal-check, send cancel local/remote, audit) lives in the dispatcher.
 //
-// RBAC — errand.cancel без селектора (NoSelector): SID известен только после
-// lookup-а строки errand-а, что несовместимо с pre-check-ом. Симметрично
-// REST DELETE /v1/errands/{errand_id}.
+// RBAC — errand.cancel without a selector (NoSelector): the SID is only
+// known after looking up the errand row, which is incompatible with a
+// pre-check. Mirrors REST DELETE /v1/errands/{errand_id}.
 func (h *Handler) callErrandCancel(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.errand.cancel"
 
@@ -317,15 +317,15 @@ func (h *Handler) callErrandCancel(ctx context.Context, claims *jwt.Claims, req 
 		return h.mapErrandCancelError(req.ID, toolName, a.ErrandID, err)
 	}
 
-	// 204-эквивалент в JSON-RPC: возвращаем минимальный ack-объект, чтобы у tool
-	// был structured output (схема — schemaErrandCancelOutput).
+	// 204 equivalent in JSON-RPC: return a minimal ack object so the tool has
+	// structured output (schema — schemaErrandCancelOutput).
 	return h.toolResult(req.ID, map[string]any{
 		"errand_id": a.ErrandID,
 		"cancelled": true,
 	})
 }
 
-// mapErrandCancelError маппит sentinel-ы errand.Dispatcher.Cancel в MCP-tool-error.
+// mapErrandCancelError maps errand.Dispatcher.Cancel sentinels to an MCP tool error.
 func (h *Handler) mapErrandCancelError(id json.RawMessage, toolName, errandID string, err error) jsonRPCResponse {
 	switch {
 	case errors.Is(err, errand.ErrEmptyErrandID):
@@ -348,8 +348,8 @@ func (h *Handler) mapErrandCancelError(id json.RawMessage, toolName, errandID st
 	}
 }
 
-// mapErrandDispatchError маппит sentinel-ы dispatcher-а в MCP-tool-error.
-// Симметрично handlers/errand.go::writeDispatchError.
+// mapErrandDispatchError maps dispatcher sentinels to an MCP tool error.
+// Mirrors handlers/errand.go::writeDispatchError.
 func (h *Handler) mapErrandDispatchError(id json.RawMessage, toolName string, err error) jsonRPCResponse {
 	switch {
 	case errors.Is(err, errand.ErrSIDEmpty):
@@ -368,8 +368,8 @@ func (h *Handler) mapErrandDispatchError(id json.RawMessage, toolName string, er
 	}
 }
 
-// rowToMCP — конвертация errand.Row → errandRow (MCP JSON-форма).
-// Параллель handlers/errand.go::rowToResponse — JSON-теги те же, типы те же.
+// rowToMCP converts errand.Row → errandRow (MCP JSON form). Parallels
+// handlers/errand.go::rowToResponse — same JSON tags, same types.
 func rowToMCP(row *errand.Row) errandRow {
 	out := errandRow{
 		ErrandID:        row.ErrandID,
@@ -393,9 +393,9 @@ func rowToMCP(row *errand.Row) errandRow {
 	return out
 }
 
-// validErrandStatusForMCP — closed enum для query-фильтра. Совпадает с
-// validErrandStatus handler-а (handlers/errand.go) — отдельная копия, чтобы
-// MCP-пакет не зависел от api/handlers (паттерн остальных tool-ов).
+// validErrandStatusForMCP — closed enum for the query filter. Matches the
+// handler's validErrandStatus (handlers/errand.go) — a separate copy so the
+// MCP package doesn't depend on api/handlers (pattern shared by other tools).
 func validErrandStatusForMCP(s string) bool {
 	switch errand.Status(s) {
 	case errand.StatusRunning, errand.StatusSuccess, errand.StatusFailed,
@@ -405,9 +405,9 @@ func validErrandStatusForMCP(s string) bool {
 	return false
 }
 
-// clampErrandPage — clamp offset/limit под schemaPaginatedListOutput
-// (limit ∈ [1, 1000], default 50; offset ≥ 0, default 0). Минимальный
-// helper без зависимости от shared/api.ParsePage (она парсит url.Values).
+// clampErrandPage clamps offset/limit per schemaPaginatedListOutput
+// (limit ∈ [1, 1000], default 50; offset ≥ 0, default 0). A minimal helper
+// with no dependency on shared/api.ParsePage (which parses url.Values).
 func clampErrandPage(offset, limit int) (int, int) {
 	if offset < 0 {
 		offset = 0

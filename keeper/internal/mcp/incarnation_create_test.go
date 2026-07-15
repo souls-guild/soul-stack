@@ -11,10 +11,11 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// mcpStarterAssert — ScenarioStarter, ДОПОЛНИТЕЛЬНО реализующий assertPreflighter
-// (PreflightAssert). Под duck-typing-гейт create-tool-а: assertErr задаёт исход
-// pre-flight-а (scenario.ErrAssertFailed → 422 assert_failed; nil → проходит).
-// preflightCalls фиксирует факт вызова гейта, calls — реального scenario-start.
+// mcpStarterAssert is a ScenarioStarter that also implements assertPreflighter
+// (PreflightAssert), for the create-tool's duck-typing gate: assertErr sets
+// the pre-flight outcome (scenario.ErrAssertFailed → 422 assert_failed; nil →
+// pass). preflightCalls counts gate invocations, calls counts actual
+// scenario starts.
 type mcpStarterAssert struct {
 	assertErr      error
 	preflightCalls int
@@ -33,9 +34,9 @@ func (f *mcpStarterAssert) Start(_ context.Context, spec scenario.RunSpec) error
 	return nil
 }
 
-// scenarioMCPValidateRule — scenario `create` с top-level `validate:`-правилом,
-// провально для любого input (that: false). Гонит ValidateInput в ветку
-// ErrValidateFailed (DSL wave 2), отдельную от ErrInputInvalid.
+// scenarioMCPValidateRule is a `create` scenario with a top-level `validate:`
+// rule that fails for any input (that: false). Drives ValidateInput into the
+// ErrValidateFailed branch (DSL wave 2), distinct from ErrInputInvalid.
 const scenarioMCPValidateRule = `name: create
 state_changes: {}
 input:
@@ -53,9 +54,9 @@ tasks:
     changed_when: "false"
 `
 
-// TestToolsCall_IncarnationCreate_TraitsProjectedToSpec — top-level `traits` на
-// MCP-create доезжает до spec.traits jsonb-арга INSERT-а (источник истины
-// incarnation.traits, проецируемый в souls.traits). Паритет REST
+// TestToolsCall_IncarnationCreate_TraitsProjectedToSpec — top-level `traits`
+// on MCP-create reaches the spec.traits jsonb INSERT arg (source of truth
+// incarnation.traits, projected to souls.traits). REST parity with
 // TestIncarnation_Create_TraitsProjectedToSpec.
 func TestToolsCall_IncarnationCreate_TraitsProjectedToSpec(t *testing.T) {
 	pool := &fakePool{incInsertFn: func(_, _ string) error { return nil }}
@@ -85,7 +86,7 @@ func TestToolsCall_IncarnationCreate_TraitsProjectedToSpec(t *testing.T) {
 	if traits["team"] != "dba" {
 		t.Errorf("spec.traits.team = %v, want dba", traits["team"])
 	}
-	// traits-колонка ($11) тоже несёт набор (TraitsFromSpec → inc.Traits).
+	// traits column ($11) also carries the set (TraitsFromSpec → inc.Traits).
 	traitsBytes, ok := pool.insertIncArgs[10].([]byte)
 	if !ok {
 		t.Fatalf("insertIncArgs[10] traits = %T, want []byte", pool.insertIncArgs[10])
@@ -99,9 +100,10 @@ func TestToolsCall_IncarnationCreate_TraitsProjectedToSpec(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationCreate_TraitsProjectedToSouls — проекция
-// incarnation.traits → souls.traits хостов-членов ВЫЗВАНА на create (SyncTraitsToHosts
-// → CountBulkMatched бьёт по souls). Моделируем 2 члена → проекция исполняется.
+// TestToolsCall_IncarnationCreate_TraitsProjectedToSouls — the
+// incarnation.traits → souls.traits projection to member hosts is invoked on
+// create (SyncTraitsToHosts → CountBulkMatched hits souls). Mocks 2 members
+// so the projection runs.
 func TestToolsCall_IncarnationCreate_TraitsProjectedToSouls(t *testing.T) {
 	pool := &fakePool{
 		incInsertFn:     func(_, _ string) error { return nil },
@@ -112,15 +114,16 @@ func TestToolsCall_IncarnationCreate_TraitsProjectedToSouls(t *testing.T) {
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
 		`{"name":"redis-prod","service":"redis","traits":{"team":"dba"}}`)
-	// Проекция best-effort: даже если souls-bulk не до конца моделирован,
-	// create обязан остаться успешным (инвариант: sync-сбой не валит create).
+	// Projection is best-effort: even with an incompletely mocked souls-bulk,
+	// create must still succeed (invariant: a sync failure must not fail create).
 	if resp.Error != nil {
 		t.Fatalf("create must succeed despite projection: %+v", resp.Error)
 	}
 }
 
-// TestToolsCall_IncarnationCreate_NoTraits_NoSpecKey — без `traits` ключа spec.traits
-// нет (отличимо для CEL от «заданы пустыми»). Паритет REST.
+// TestToolsCall_IncarnationCreate_NoTraits_NoSpecKey — without a `traits`
+// key, spec.traits is absent (distinguishable in CEL from "set empty"). REST
+// parity.
 func TestToolsCall_IncarnationCreate_NoTraits_NoSpecKey(t *testing.T) {
 	pool := &fakePool{incInsertFn: func(_, _ string) error { return nil }}
 	h, _ := newTestHandlerFull(t, pool, creatorRBAC(), &mcpStarter{}, &mcpResolver{ok: true}, nil)
@@ -138,8 +141,9 @@ func TestToolsCall_IncarnationCreate_NoTraits_NoSpecKey(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationCreate_InvalidTraitValue_422 — nested trait-значение
-// отбивается доменом (TraitsFromSpec → ValidateTraitDelta) ДО insert. Паритет REST.
+// TestToolsCall_IncarnationCreate_InvalidTraitValue_422 — a nested trait
+// value is rejected by the domain (TraitsFromSpec → ValidateTraitDelta)
+// before insert. REST parity.
 func TestToolsCall_IncarnationCreate_InvalidTraitValue_422(t *testing.T) {
 	pool := &fakePool{incInsertFn: func(_, _ string) error {
 		t.Error("Create must NOT insert on invalid trait value")
@@ -164,10 +168,11 @@ func TestToolsCall_IncarnationCreate_InvalidTraitValue_422(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationCreate_ValidateRuleFails_422 — top-level `validate:`-
-// правило сценария create не сходится на смерженном input → validation-failed
-// (scenario.ErrValidateFailed), ОТДЕЛЬНО от input_invalid. scenario НЕ
-// запускается, audit не пишется. Паритет REST validation_failed-ветки CreateTyped.
+// TestToolsCall_IncarnationCreate_ValidateRuleFails_422 — the create
+// scenario's top-level `validate:` rule failing on the merged input produces
+// validation-failed (scenario.ErrValidateFailed), distinct from
+// input_invalid. scenario does not start, audit is not written. REST parity
+// with CreateTyped's validation_failed branch.
 func TestToolsCall_IncarnationCreate_ValidateRuleFails_422(t *testing.T) {
 	pool := &fakePool{incInsertFn: func(_, _ string) error {
 		t.Error("Create must NOT insert when validate rule fails")
@@ -193,10 +198,11 @@ func TestToolsCall_IncarnationCreate_ValidateRuleFails_422(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationCreate_AssertFails_422 — pre-flight assert-гейт
-// (форма A): assert-предикат сценария create не сошёлся → validation-failed
-// СИНХРОННО, БЕЗ insert / scenario-start / audit. Паритет REST assert_failed-
-// ветки CreateTyped (отказ на этапе модели, не postfactum error_locked).
+// TestToolsCall_IncarnationCreate_AssertFails_422 — pre-flight assert gate
+// (form A): a failing create-scenario assert predicate produces
+// validation-failed SYNCHRONOUSLY, with no insert / scenario-start / audit.
+// REST parity with CreateTyped's assert_failed branch (rejected at model
+// stage, not postfactum error_locked).
 func TestToolsCall_IncarnationCreate_AssertFails_422(t *testing.T) {
 	pool := &fakePool{incInsertFn: func(_, _ string) error {
 		t.Error("Create must NOT insert when pre-flight assert fails")
@@ -227,9 +233,9 @@ func TestToolsCall_IncarnationCreate_AssertFails_422(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationCreate_AssertPasses_Inserts — assert сошёлся → create
-// проходит: pre-flight вызван, scenario стартует ровно один раз. Гарантирует, что
-// гейт не ложно-режет happy path.
+// TestToolsCall_IncarnationCreate_AssertPasses_Inserts — a passing assert
+// lets create through: pre-flight is called, scenario starts exactly once.
+// Guards against the gate false-failing the happy path.
 func TestToolsCall_IncarnationCreate_AssertPasses_Inserts(t *testing.T) {
 	pool := &fakePool{incInsertFn: func(_, _ string) error { return nil }}
 	starter := &mcpStarterAssert{assertErr: nil}
@@ -248,13 +254,14 @@ func TestToolsCall_IncarnationCreate_AssertPasses_Inserts(t *testing.T) {
 	}
 }
 
-// --- create_scenario (механизм нескольких create-сценариев, Вариант A) ---
+// --- create_scenario (multiple create-scenarios mechanism, Variant A) ---
 
-// TestToolsCall_IncarnationCreate_CreateScenarioInvalidName — синтаксически битое
-// имя create_scenario (traversal/мусор) отбивается до резолва набора как
-// validation-failed (ErrCreateScenarioNotEligible), insert НЕ выполняется. Гейт
-// валиден только при наличии loader-а. strictUnmarshal сперва не режет (поле
-// объявлено), отбой даёт ValidateCreateScenarioChoice.
+// TestToolsCall_IncarnationCreate_CreateScenarioInvalidName — a
+// syntactically malformed create_scenario name (traversal/garbage) is
+// rejected before set resolution as validation-failed
+// (ErrCreateScenarioNotEligible); insert does not run. The gate only applies
+// when a loader is present. strictUnmarshal doesn't reject it first (the
+// field is declared) — ValidateCreateScenarioChoice does.
 func TestToolsCall_IncarnationCreate_CreateScenarioInvalidName(t *testing.T) {
 	pool := &fakePool{incInsertFn: func(_, _ string) error {
 		t.Error("Create must NOT insert on invalid create_scenario")
@@ -280,10 +287,11 @@ func TestToolsCall_IncarnationCreate_CreateScenarioInvalidName(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationCreate_CreateScenarioNotEligible — валидное по форме,
-// но НЕ входящее в create-набор сервиса имя (нет `create: true`, в снапшоте
-// отсутствует) → validation-failed, insert НЕ выполняется. Защита от bootstrap-а
-// инкарнации произвольным (например day-2) сценарием.
+// TestToolsCall_IncarnationCreate_CreateScenarioNotEligible — a well-formed
+// name that is NOT in the service's create set (missing `create: true`,
+// absent from the snapshot) produces validation-failed; insert does not run.
+// Guards against bootstrapping an incarnation with an arbitrary operational
+// scenario.
 func TestToolsCall_IncarnationCreate_CreateScenarioNotEligible(t *testing.T) {
 	pool := &fakePool{incInsertFn: func(_, _ string) error {
 		t.Error("Create must NOT insert on non-eligible create_scenario")
@@ -309,9 +317,10 @@ func TestToolsCall_IncarnationCreate_CreateScenarioNotEligible(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationCreate_ExplicitCreate — явный create_scenario=create
-// (помечен create:true на диске) → прогон стартует ИМЕННО `create`, имя
-// сохраняется в incarnation.created_scenario ($12). Контраст к bare/required.
+// TestToolsCall_IncarnationCreate_ExplicitCreate — an explicit
+// create_scenario=create (marked create:true on disk) starts EXACTLY
+// `create`, with the name saved to incarnation.created_scenario ($12).
+// Contrast to bare/required.
 func TestToolsCall_IncarnationCreate_ExplicitCreate(t *testing.T) {
 	pool := &fakePool{incInsertFn: func(_, _ string) error { return nil }}
 	starter := &mcpStarter{}
@@ -326,7 +335,7 @@ func TestToolsCall_IncarnationCreate_ExplicitCreate(t *testing.T) {
 	if starter.gotSpec.ScenarioName != "create" {
 		t.Errorf("RunSpec.ScenarioName = %q, want create", starter.gotSpec.ScenarioName)
 	}
-	// created_scenario-колонка ($12) = create.
+	// created_scenario column ($12) = create.
 	if len(pool.insertIncArgs) < 12 {
 		t.Fatalf("insertIncArgs len = %d, want ≥12", len(pool.insertIncArgs))
 	}
@@ -335,10 +344,11 @@ func TestToolsCall_IncarnationCreate_ExplicitCreate(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationCreate_EmptyChoice_HasScenarios_Required — опущенный
-// create_scenario при НЕПУСТОМ create-наборе → validation-failed
-// (create_scenario_required, Фаза 2): incarnation НЕ создаётся, прогон НЕ
-// стартует. Регресс = вернулся back-compat-дефолт `create`.
+// TestToolsCall_IncarnationCreate_EmptyChoice_HasScenarios_Required — an
+// omitted create_scenario with a NON-EMPTY create set produces
+// validation-failed (create_scenario_required, Phase 2): the incarnation is
+// NOT created, no run starts. A regression would mean the back-compat
+// default `create` came back.
 func TestToolsCall_IncarnationCreate_EmptyChoice_HasScenarios_Required(t *testing.T) {
 	pool := &fakePool{incInsertFn: func(_, _ string) error {
 		t.Error("Create must NOT insert when create_scenario required")
@@ -364,9 +374,10 @@ func TestToolsCall_IncarnationCreate_EmptyChoice_HasScenarios_Required(t *testin
 	}
 }
 
-// TestToolsCall_IncarnationCreate_BareNoScenario — сервис БЕЗ create-сценариев
-// (пустой снапшот) + опущенный create_scenario → bare-инкарнация: создаётся
-// (insert), прогон НЕ стартует, apply_id отсутствует, created_scenario col = NULL.
+// TestToolsCall_IncarnationCreate_BareNoScenario — a service with NO create
+// scenarios (empty snapshot) plus an omitted create_scenario yields a bare
+// incarnation: it is created (insert), no run starts, apply_id is absent,
+// created_scenario col = NULL.
 func TestToolsCall_IncarnationCreate_BareNoScenario(t *testing.T) {
 	inserted := 0
 	pool := &fakePool{incInsertFn: func(_, _ string) error { inserted++; return nil }}
@@ -379,7 +390,7 @@ func TestToolsCall_IncarnationCreate_BareNoScenario(t *testing.T) {
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
-	// Инкарнация создана БЕЗ прогона.
+	// Incarnation created WITHOUT a run.
 	if inserted != 1 {
 		t.Errorf("insert calls = %d, want 1 (bare создаётся)", inserted)
 	}
@@ -393,7 +404,7 @@ func TestToolsCall_IncarnationCreate_BareNoScenario(t *testing.T) {
 	if pool.insertIncArgs[11] != nil {
 		t.Errorf("created_scenario col = %v, want nil (NULL для bare)", pool.insertIncArgs[11])
 	}
-	// apply_id отсутствует в выводе (omitempty).
+	// apply_id absent from output (omitempty).
 	var res toolsCallResult
 	_ = json.Unmarshal(resp.Result, &res)
 	var out incarnationCreateOutput
@@ -430,14 +441,14 @@ func TestToolsCall_IncarnationCreate_Success(t *testing.T) {
 	if out.Incarnation != "redis-prod" {
 		t.Errorf("incarnation = %q", out.Incarnation)
 	}
-	// auto_create по умолчанию true (манифест без lifecycle-блока) → apply_id есть.
+	// auto_create defaults to true (manifest without a lifecycle block) → apply_id is set.
 	if out.ApplyID == nil {
 		t.Fatalf("_apply_id is nil (auto_create=true expected)")
 	}
 	if !audit.IsValidULID(*out.ApplyID) {
 		t.Errorf("_apply_id not a ULID: %q", *out.ApplyID)
 	}
-	// scenario `create` запущен с тем же apply_id и input.
+	// scenario `create` started with the same apply_id and input.
 	if starter.calls != 1 {
 		t.Fatalf("scenario start calls = %d, want 1", starter.calls)
 	}
@@ -501,7 +512,7 @@ func TestToolsCall_IncarnationCreate_RBACForbidden(t *testing.T) {
 }
 
 func TestToolsCall_IncarnationCreate_RunnerNotConfigured(t *testing.T) {
-	// runner/registry nil → internal-error (паритет REST 500 без runner-а).
+	// runner/registry nil → internal-error (REST parity, 500 with no runner).
 	h, _ := newTestHandlerFull(t, &fakePool{}, creatorRBAC(), nil, nil, nil)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
 		`{"name":"redis-prod","service":"redis"}`)
@@ -553,10 +564,11 @@ func TestToolsCall_IncarnationCreate_InvalidCoven(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationCreate_ScopeDeniesForeignCoven — оператор со scope
-// `incarnation.create on coven=dev` НЕ может создать incarnation с covens=[prod]
-// (least-privilege, паритет REST IncarnationCreateScopeSelector). Deny ДО
-// insert: fail-closed, ни вставки, ни scenario-start, ни audit.
+// TestToolsCall_IncarnationCreate_ScopeDeniesForeignCoven — an operator
+// scoped to `incarnation.create on coven=dev` CANNOT create an incarnation
+// with covens=[prod] (least-privilege, REST parity with
+// IncarnationCreateScopeSelector). Deny happens before insert: fail-closed,
+// no insert, no scenario-start, no audit.
 func TestToolsCall_IncarnationCreate_ScopeDeniesForeignCoven(t *testing.T) {
 	pool := &fakePool{incInsertFn: func(_, _ string) error {
 		t.Error("Create must NOT run when create-scope denies")
@@ -581,8 +593,8 @@ func TestToolsCall_IncarnationCreate_ScopeDeniesForeignCoven(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationCreate_ScopeAllowsMatchingCoven — тот же оператор
-// (scope coven=dev) МОЖЕТ создать incarnation с covens=[dev].
+// TestToolsCall_IncarnationCreate_ScopeAllowsMatchingCoven — the same
+// operator (scope coven=dev) CAN create an incarnation with covens=[dev].
 func TestToolsCall_IncarnationCreate_ScopeAllowsMatchingCoven(t *testing.T) {
 	pool := &fakePool{incInsertFn: func(_, _ string) error { return nil }}
 	starter := &mcpStarter{}
@@ -599,7 +611,7 @@ func TestToolsCall_IncarnationCreate_ScopeAllowsMatchingCoven(t *testing.T) {
 }
 
 // TestToolsCall_IncarnationCreate_WildcardAnyCoven — `*` (cluster-admin)
-// создаёт incarnation с любыми covens (no-regression).
+// creates an incarnation with any covens (no-regression).
 func TestToolsCall_IncarnationCreate_WildcardAnyCoven(t *testing.T) {
 	pool := &fakePool{incInsertFn: func(_, _ string) error { return nil }}
 	starter := &mcpStarter{}
@@ -615,7 +627,7 @@ func TestToolsCall_IncarnationCreate_WildcardAnyCoven(t *testing.T) {
 	}
 }
 
-// scenarioMCPRequiredInput — scenario `create` с required-полем `name`.
+// scenarioMCPRequiredInput is a `create` scenario with a required field `name`.
 const scenarioMCPRequiredInput = `name: create
 state_changes: {}
 input:
@@ -630,9 +642,9 @@ tasks:
     changed_when: "false"
 `
 
-// TestToolsCall_IncarnationCreate_RequiredInputMissing — MCP-паритет REST:
-// create без required-поля отвергается sync (validation-failed), scenario НЕ
-// запускается, audit не пишется.
+// TestToolsCall_IncarnationCreate_RequiredInputMissing — MCP parity with
+// REST: create without a required field is rejected synchronously
+// (validation-failed), scenario does not start, audit is not written.
 func TestToolsCall_IncarnationCreate_RequiredInputMissing(t *testing.T) {
 	pool := &fakePool{incInsertFn: func(_, _ string) error {
 		t.Error("Create must NOT insert when input invalid")
@@ -658,8 +670,8 @@ func TestToolsCall_IncarnationCreate_RequiredInputMissing(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationCreate_RequiredInputProvided — required передан →
-// проходит, scenario запускается.
+// TestToolsCall_IncarnationCreate_RequiredInputProvided — a provided
+// required field passes and the scenario starts.
 func TestToolsCall_IncarnationCreate_RequiredInputProvided(t *testing.T) {
 	pool := &fakePool{incInsertFn: func(_, _ string) error { return nil }}
 	starter := &mcpStarter{}

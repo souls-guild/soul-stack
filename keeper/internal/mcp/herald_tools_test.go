@@ -17,13 +17,14 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// heraldFakePool — узкий fake под [herald.ExecQueryRower] для herald/tiding-tools-
-// тестов. Покрывает ТРАНСПОРТ (RBAC / маппинг sentinel→MCP-code / output / audit /
-// инвалидация); бизнес-инварианты herald.Service покрыты herald/integration_test.go.
+// heraldFakePool — narrow fake for [herald.ExecQueryRower] used by
+// herald/tiding-tools tests. Covers TRANSPORT (RBAC / sentinel→MCP-code
+// mapping / output / audit / invalidation); herald.Service business
+// invariants are covered by herald/integration_test.go.
 type heraldFakePool struct {
-	insertErr error // ошибка INSERT (nil → timestamps)
-	getRow    []any // SELECT-строка по name; nil → ErrNoRows
-	updateTag int64 // RowsAffected у UPDATE/DELETE
+	insertErr error // INSERT error (nil → timestamps)
+	getRow    []any // SELECT row by name; nil → ErrNoRows
+	updateTag int64 // RowsAffected for UPDATE/DELETE
 }
 
 func (p *heraldFakePool) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
@@ -107,7 +108,7 @@ func (*hEmptyRows) Values() ([]any, error)                       { return nil, n
 func (*hEmptyRows) RawValues() [][]byte                          { return nil }
 func (*hEmptyRows) Conn() *pgx.Conn                              { return nil }
 
-// fakeInvalidator — счётчик вызовов InvalidateRules (guard инвалидации на CRUD).
+// fakeInvalidator — counts InvalidateRules calls (guards CRUD invalidation).
 type fakeInvalidator struct{ calls int }
 
 func (f *fakeInvalidator) InvalidateRules() { f.calls++ }
@@ -147,7 +148,7 @@ func newHeraldToolHandler(t *testing.T, rbacCfg *rbactest.Config, pool *heraldFa
 	return h, rec
 }
 
-// heraldAdminCfg — RBAC, дающий archon-alice все herald.*/tiding.*-permissions.
+// heraldAdminCfg — RBAC granting archon-alice all herald.*/tiding.*-permissions.
 func heraldAdminCfg() *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -207,7 +208,7 @@ func TestHeraldTools_NilGuard(t *testing.T) {
 // --- RBAC enforcement ---
 
 func TestHeraldTools_RBACForbidden(t *testing.T) {
-	// archon-alice без herald/tiding-permissions (пустой RBAC → deny all).
+	// archon-alice without herald/tiding-permissions (empty RBAC → deny all).
 	h, _ := newHeraldToolHandler(t, nil, &heraldFakePool{}, nil)
 	cases := []struct{ tool, args string }{
 		{"keeper.herald.create", `{"name":"x","type":"webhook","config":{"url":"https://x/y"}}`},
@@ -227,7 +228,7 @@ func TestHeraldTools_RBACForbidden(t *testing.T) {
 	}
 }
 
-// --- success + audit + инвалидация ---
+// --- success + audit + invalidation ---
 
 func TestHeraldCreate_Success_AuditAndInvalidate(t *testing.T) {
 	inv := &fakeInvalidator{}
@@ -271,7 +272,7 @@ func TestHeraldRead_NotFound404(t *testing.T) {
 
 func TestHeraldCreate_BadConfig_Validation422(t *testing.T) {
 	h, _ := newHeraldToolHandler(t, heraldAdminCfg(), &heraldFakePool{}, &fakeInvalidator{})
-	// http:// + приватный IP без opt-out → SSRF-guard → validation-failed.
+	// http:// + private IP without opt-out → SSRF-guard → validation-failed.
 	resp := callTool(t, h, "archon-alice", "keeper.herald.create",
 		`{"name":"insecure","type":"webhook","config":{"url":"http://10.0.0.1/h"}}`)
 	if resp.Error == nil {

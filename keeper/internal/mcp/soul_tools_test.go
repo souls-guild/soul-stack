@@ -21,38 +21,39 @@ import (
 
 // --- soul fake pool ---
 //
-// Узкий fake под [handlers.SoulPool]: гоняет именно те SQL-запросы, что нужны
-// soul-tools-ам (Insert souls / Insert bootstrap_tokens / SelectBySID / Expire
-// active). Бизнес-инварианты CRUD-слоя (souls/bootstraptoken) покрыты
-// integration-тестами соответствующих пакетов; здесь проверяется ТРАНСПОРТ —
-// что tool правильно зовёт CRUD, маппит ошибки и кодирует output (симметрично
-// roleFakePool).
+// Narrow fake for [handlers.SoulPool]: handles exactly the SQL queries the
+// soul-tools need (Insert souls / Insert bootstrap_tokens / SelectBySID /
+// Expire active). Business invariants of the CRUD layer (souls/bootstraptoken)
+// are covered by that package's integration tests; this checks TRANSPORT —
+// that the tool calls CRUD correctly, maps errors, and encodes output
+// (symmetric to roleFakePool).
 
 type soulFakePool struct {
-	// soulInsertErr — ошибка, которую вернёт INSERT INTO souls (через RETURNING-
-	// scan). Позволяет инжектить sentinel-ы soul.* (duplicate / creator-not-found)
-	// или сырую pg-ошибку.
+	// soulInsertErr — error returned by INSERT INTO souls (via RETURNING
+	// scan). Lets tests inject soul.* sentinels (duplicate / creator-not-found)
+	// or a raw pg error.
 	soulInsertErr error
 
-	// selectSoul — что вернёт SELECT … FROM souls WHERE sid (issue-token-флоу).
-	// selectErr приоритетнее: nil-soul + selectErr → not-found / прочее.
+	// selectSoul — what SELECT … FROM souls WHERE sid returns (issue-token
+	// flow). selectErr takes priority: nil-soul + selectErr → not-found / other.
 	selectSoul *soul.Soul
 	selectErr  error
 
-	// tokenInsertErr — ошибка INSERT INTO bootstrap_tokens (RETURNING-scan).
-	// bootstraptoken.ErrTokenActiveExists → активный токен без force.
+	// tokenInsertErr — error from INSERT INTO bootstrap_tokens (RETURNING
+	// scan). bootstraptoken.ErrTokenActiveExists → an active token without force.
 	tokenInsertErr error
 
-	// expireExpired — что вернёт UPDATE bootstrap_tokens … RETURNING token_id
-	// (ExpireActiveBySID): true → активный токен был и инвалидирован
-	// (expired_previous=true); false → активного не было (pgx.ErrNoRows-ветка).
+	// expireExpired — what UPDATE bootstrap_tokens … RETURNING token_id
+	// (ExpireActiveBySID) returns: true → an active token existed and was
+	// invalidated (expired_previous=true); false → none was active
+	// (pgx.ErrNoRows branch).
 	expireExpired bool
 
-	// beginErr — ошибка BeginTx (сбой открытия транзакции до любых записей).
+	// beginErr — BeginTx error (transaction failed to open before any writes).
 	beginErr error
 
-	// commitErr — ошибка Commit (запись прошла, фиксация сорвалась). Проброс в
-	// soulFakeTx.Commit при создании транзакции.
+	// commitErr — Commit error (write succeeded, commit failed). Propagated
+	// to soulFakeTx.Commit when the transaction is created.
 	commitErr error
 }
 
@@ -80,7 +81,7 @@ func (p *soulFakePool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row
 		}
 		return soulSelectRow{s: p.selectSoul}
 	case strings.Contains(sql, "UPDATE bootstrap_tokens") && strings.Contains(sql, "RETURNING token_id"):
-		// ExpireActiveBySID: строка есть → expired; нет строки → ErrNoRows.
+		// ExpireActiveBySID: row exists → expired; no row → ErrNoRows.
 		if p.expireExpired {
 			return staticRow{values: []any{"expired-token-uuid"}}
 		}
@@ -129,8 +130,8 @@ func (t *soulFakeTx) Prepare(_ context.Context, _, _ string) (*pgconn.StatementD
 }
 func (t *soulFakeTx) Conn() *pgx.Conn { return nil }
 
-// soulSelectRow — pgx.Row для SELECT … FROM souls WHERE sid (scanSoul читает
-// 11 колонок: sid, transport, status, coven, traits, registered_at,
+// soulSelectRow — pgx.Row for SELECT … FROM souls WHERE sid (scanSoul reads
+// 11 columns: sid, transport, status, coven, traits, registered_at,
 // last_seen_at, last_seen_by_kid, created_by_aid, requested_at, note).
 type soulSelectRow struct{ s *soul.Soul }
 
@@ -139,7 +140,7 @@ func (r soulSelectRow) Scan(dest ...any) error {
 	*dest[1].(*string) = string(r.s.Transport)
 	*dest[2].(*string) = string(r.s.Status)
 	*dest[3].(*[]string) = r.s.Coven
-	// traits jsonb (ADR-060): nil Traits → nil-bytes (scanSoul → пустой map).
+	// traits jsonb (ADR-060): nil Traits → nil bytes (scanSoul → empty map).
 	if len(r.s.Traits) > 0 {
 		b, err := json.Marshal(r.s.Traits)
 		if err != nil {
@@ -160,8 +161,8 @@ func (r soulSelectRow) Scan(dest ...any) error {
 
 // --- harness ---
 
-// newSoulHandler собирает Handler с SoulDB=soulFakePool. soulPool=nil → SoulDB
-// остаётся nil (для проверки nil-guard).
+// newSoulHandler builds a Handler with SoulDB=soulFakePool. soulPool=nil →
+// SoulDB stays nil (for nil-guard tests).
 func newSoulHandler(t *testing.T, rbacCfg *rbactest.Config, soulPool *soulFakePool) (*Handler, *recordingAudit) {
 	t.Helper()
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
@@ -200,8 +201,8 @@ func newSoulHandler(t *testing.T, rbacCfg *rbactest.Config, soulPool *soulFakePo
 	return h, rec
 }
 
-// soulAdminCfg — конфиг RBAC, дающий archon-alice soul.create + soul.issue-token
-// без селекторных ограничений (full grant).
+// soulAdminCfg — RBAC config granting archon-alice soul.create +
+// soul.issue-token with no selector restrictions (full grant).
 func soulAdminCfg() *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -212,7 +213,7 @@ func soulAdminCfg() *rbactest.Config {
 	}
 }
 
-// agentSoul / sshSoul — backing-строки для issue-token-флоу (SelectBySID).
+// agentSoul / sshSoul — backing rows for the issue-token flow (SelectBySID).
 func agentSoul() *soul.Soul {
 	return &soul.Soul{SID: "web-01.example.com", Transport: soul.TransportAgent, Status: soul.StatusPending}
 }
@@ -283,14 +284,14 @@ func TestSoulCreate_Success(t *testing.T) {
 	if out.CreatedByAID != "archon-alice" {
 		t.Errorf("created_by_aid = %q", out.CreatedByAID)
 	}
-	// transport=agent → bootstrap-токен сгенерирован и возвращён клиенту.
+	// transport=agent → bootstrap token generated and returned to the client.
 	if out.BootstrapToken == "" {
 		t.Error("bootstrap_token empty for transport=agent")
 	}
-	// guard: raw wire-ключ срока истечения — `expires_at` (не legacy
-	// `token_expires_at`). Типизированный декод маппит по тегу и регрессию
-	// переименования тега бы проглотил, поэтому проверяем сырой JSON-объект
-	// (вернуть тег `token_expires_at` в soulCreateOutput → красный).
+	// guard: the raw wire key for expiry is `expires_at` (not the legacy
+	// `token_expires_at`). Typed decode maps by tag and would silently
+	// swallow a tag-rename regression, so check the raw JSON object instead
+	// (bringing back the `token_expires_at` tag in soulCreateOutput → red).
 	raw := decodeSoulCreateRaw(t, resp)
 	if _, ok := raw["expires_at"]; !ok {
 		t.Errorf("raw-ключ expires_at отсутствует в structured output")
@@ -313,7 +314,7 @@ func TestSoulCreate_Success(t *testing.T) {
 }
 
 func TestSoulCreate_SSHNoToken(t *testing.T) {
-	// transport=ssh: только souls-row, без bootstrap-токена (паритет REST
+	// transport=ssh: souls row only, no bootstrap token (REST parity:
 	// issueToken := transport == agent). Audit token_issued=false.
 	h, rec := newSoulHandler(t, soulAdminCfg(), &soulFakePool{})
 	resp := callTool(t, h, "archon-alice", "keeper.soul.create",
@@ -335,8 +336,9 @@ func TestSoulCreate_SSHNoToken(t *testing.T) {
 }
 
 func TestSoulCreate_RBACForbidden(t *testing.T) {
-	// archon-alice без soul.*-permissions (пустой RBAC → deny all): вставка не
-	// выполняется (Exec/QueryRow паникнули бы на unexpected SQL, но RBAC раньше).
+	// archon-alice has no soul.* permissions (empty RBAC → deny all): the
+	// insert never runs (Exec/QueryRow would panic on unexpected SQL, but
+	// RBAC fires first).
 	h, rec := newSoulHandler(t, nil, &soulFakePool{
 		soulInsertErr: errFakeUnexpected{sql: "soul.create must NOT insert when RBAC denies"},
 	})
@@ -383,8 +385,9 @@ func TestSoulCreate_InvalidSID(t *testing.T) {
 }
 
 func TestSoulCreate_EmptySID(t *testing.T) {
-	// sid:"" — отдельная ветка от invalid-pattern: пустое поле ловится первым
-	// guard-ом (field 'sid' is required), не доходит до ValidSID.
+	// sid:"" — separate branch from invalid-pattern: the empty field is
+	// caught by the first guard (field 'sid' is required), never reaches
+	// ValidSID.
 	h, rec := newSoulHandler(t, soulAdminCfg(), &soulFakePool{})
 	resp := callTool(t, h, "archon-alice", "keeper.soul.create",
 		`{"sid":"","transport":"agent"}`)
@@ -400,8 +403,8 @@ func TestSoulCreate_EmptySID(t *testing.T) {
 }
 
 func TestSoulCreate_InvalidCoven(t *testing.T) {
-	// covens с невалидной меткой → ветка ValidCoven в soul_create.go →
-	// validation-failed (до RBAC-check и до любой DB-записи).
+	// covens with an invalid label → the ValidCoven branch in soul_create.go
+	// → validation-failed (before the RBAC check and before any DB write).
 	h, rec := newSoulHandler(t, soulAdminCfg(), &soulFakePool{})
 	resp := callTool(t, h, "archon-alice", "keeper.soul.create",
 		`{"sid":"web-01.example.com","transport":"agent","covens":["BAD COVEN"]}`)
@@ -417,9 +420,10 @@ func TestSoulCreate_InvalidCoven(t *testing.T) {
 }
 
 func TestSoulCreate_CreatorAIDNotFound(t *testing.T) {
-	// soul.Insert → FK-violation по souls_created_by_aid_fk →
-	// ErrSoulCreatorNotFound → mapSoulErrorToMCP → validation-failed (REST-паритет
-	// TypeValidationFailed: AID создателя отсутствует в реестре operators).
+	// soul.Insert → FK violation on souls_created_by_aid_fk →
+	// ErrSoulCreatorNotFound → mapSoulErrorToMCP → validation-failed (REST
+	// parity TypeValidationFailed: creator AID missing from the operators
+	// registry).
 	pool := &soulFakePool{soulInsertErr: soul.ErrSoulCreatorNotFound}
 	h, rec := newSoulHandler(t, soulAdminCfg(), pool)
 	resp := callTool(t, h, "archon-alice", "keeper.soul.create",
@@ -436,7 +440,7 @@ func TestSoulCreate_CreatorAIDNotFound(t *testing.T) {
 }
 
 func TestSoulCreate_BeginTxFail(t *testing.T) {
-	// BeginTx сорвался → internal-error; запись не начиналась, audit пуст.
+	// BeginTx fails → internal-error; write never started, audit empty.
 	pool := &soulFakePool{beginErr: errors.New("begin tx failed")}
 	h, rec := newSoulHandler(t, soulAdminCfg(), pool)
 	resp := callTool(t, h, "archon-alice", "keeper.soul.create",
@@ -452,10 +456,11 @@ func TestSoulCreate_BeginTxFail(t *testing.T) {
 	}
 }
 
-// TestSoulCreate_CommitFailNoTokenLeak — security-инвариант: при сбое Commit
-// транзакция откатывается, и bootstrap-токен (сгенерированный до Commit) НЕ
-// возвращается клиенту. Иначе клиент получил бы валидный по виду токен, которого
-// нет в БД (или, наоборот, утёкший секрет несуществующей записи).
+// TestSoulCreate_CommitFailNoTokenLeak — security invariant: if Commit fails,
+// the transaction rolls back, and the bootstrap token (generated before
+// Commit) is NOT returned to the client. Otherwise the client would get a
+// token that looks valid but isn't in the DB — a leaked secret for a
+// nonexistent record.
 func TestSoulCreate_CommitFailNoTokenLeak(t *testing.T) {
 	pool := &soulFakePool{commitErr: errors.New("commit failed")}
 	h, rec := newSoulHandler(t, soulAdminCfg(), pool)
@@ -467,8 +472,9 @@ func TestSoulCreate_CommitFailNoTokenLeak(t *testing.T) {
 	if data := mustToolErrorData(t, resp.Error.Data); data.Code != mcpCodeInternalError {
 		t.Errorf("code = %q, want internal-error", data.Code)
 	}
-	// Токен сгенерирован до Commit, но клиенту вернулась ошибка, а не output —
-	// у error-ответа нет Result, значит токен не утёк. Проверяем явно.
+	// Token is generated before Commit, but the client got an error
+	// response, not output — an error response has no Result, so the token
+	// didn't leak. Check explicitly.
 	if resp.Result != nil {
 		t.Fatalf("commit-fail must return error only, got result: %s", resp.Result)
 	}
@@ -518,8 +524,8 @@ func TestSoulIssueToken_Success(t *testing.T) {
 }
 
 func TestSoulIssueToken_ForceExpiresPrevious(t *testing.T) {
-	// force=true + активный токен был → ExpireActiveBySID returns expired=true →
-	// audit expired_previous=true, новый токен выписан.
+	// force=true + an active token existed → ExpireActiveBySID returns
+	// expired=true → audit expired_previous=true, new token issued.
 	pool := &soulFakePool{selectSoul: agentSoul(), expireExpired: true}
 	h, rec := newSoulHandler(t, soulAdminCfg(), pool)
 	resp := callTool(t, h, "archon-alice", "keeper.soul.issue-token",
@@ -543,8 +549,8 @@ func TestSoulIssueToken_ForceExpiresPrevious(t *testing.T) {
 }
 
 func TestSoulIssueToken_ActiveWithoutForce(t *testing.T) {
-	// Без force: INSERT bootstrap_tokens → partial-unique → ErrTokenActiveExists
-	// → bootstrap-token-active.
+	// Without force: INSERT bootstrap_tokens → partial-unique →
+	// ErrTokenActiveExists → bootstrap-token-active.
 	pool := &soulFakePool{
 		selectSoul:     agentSoul(),
 		tokenInsertErr: &pgconn.PgError{Code: "23505", ConstraintName: "bootstrap_tokens_active_by_sid_idx"},
@@ -592,12 +598,12 @@ func TestSoulIssueToken_SSHReject(t *testing.T) {
 	}
 }
 
-// TestSoulIssueToken_RBACDeniesWithHostSelector — КЛЮЧЕВОЙ security-кейс
-// (review): RBAC должен проверяться с селектором {"host": sid}, а не nil.
-// Оператор имеет soul.issue-token ТОЛЬКО для host=allowed.example.com; запрос
-// на host=denied.example.com должен быть отклонён, а на allowed — пройти.
-// Это доказывает, что Check вызывается именно с host-селектором (при nil-
-// контексте per-host-grant отклонил бы оба, либо bare-grant пропустил бы оба).
+// TestSoulIssueToken_RBACDeniesWithHostSelector — KEY security case (review):
+// RBAC must be checked with selector {"host": sid}, not nil. The operator
+// has soul.issue-token ONLY for host=allowed.example.com; a request for
+// host=denied.example.com must be denied, and one for allowed must pass.
+// This proves Check is called with the host selector (with a nil context, a
+// per-host grant would deny both, or a bare grant would allow both).
 func TestSoulIssueToken_RBACDeniesWithHostSelector(t *testing.T) {
 	cfg := &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -609,7 +615,7 @@ func TestSoulIssueToken_RBACDeniesWithHostSelector(t *testing.T) {
 		},
 	}
 
-	// denied host → forbidden, токен НЕ выписывается.
+	// denied host → forbidden, token NOT issued.
 	deniedPool := &soulFakePool{selectSoul: &soul.Soul{
 		SID: "denied.example.com", Transport: soul.TransportAgent, Status: soul.StatusPending,
 	}}
@@ -626,9 +632,10 @@ func TestSoulIssueToken_RBACDeniesWithHostSelector(t *testing.T) {
 		t.Error("denied issue-token must not write audit")
 	}
 
-	// allowed host → success: тот же permission-grant пропускает host-match.
-	// Если бы Check звался с nil-контекстом, host-bound grant НЕ матчился бы и
-	// этот кейс тоже упал бы в forbidden — он подтверждает host=<sid> селектор.
+	// allowed host → success: the same permission grant passes the host
+	// match. If Check were called with a nil context, the host-bound grant
+	// wouldn't match and this case would also fall into forbidden — it
+	// confirms the host=<sid> selector.
 	allowedPool := &soulFakePool{selectSoul: &soul.Soul{
 		SID: "allowed.example.com", Transport: soul.TransportAgent, Status: soul.StatusPending,
 	}}
@@ -655,9 +662,9 @@ func decodeSoulCreateOutput(t *testing.T, resp jsonRPCResponse) soulCreateOutput
 	return out
 }
 
-// decodeSoulCreateRaw декодит structured output в нетипизированный map —
-// для guard-ов по сырому wire-ключу (типизированный decode маппит по json-тегу
-// и переименование тега бы спрятал).
+// decodeSoulCreateRaw decodes structured output into an untyped map — for
+// guards on the raw wire key (typed decode maps by json tag and would hide
+// a tag rename).
 func decodeSoulCreateRaw(t *testing.T, resp jsonRPCResponse) map[string]any {
 	t.Helper()
 	var res toolsCallResult
@@ -684,9 +691,10 @@ func decodeSoulIssueTokenOutput(t *testing.T, resp jsonRPCResponse) soulIssueTok
 	return out
 }
 
-// assertNoTokenInAudit — security-инвариант (review): plain bootstrap-токен
-// (секрет) НЕ должен попасть в записанный audit-payload ни под одним ключом.
-// Сериализуем весь payload в JSON и проверяем отсутствие подстроки токена.
+// assertNoTokenInAudit — security invariant (review): the plain bootstrap
+// token (a secret) must NOT end up in the recorded audit payload under any
+// key. Serialize the whole payload to JSON and check the token substring is
+// absent.
 func assertNoTokenInAudit(t *testing.T, rec *recordingAudit, token string) {
 	t.Helper()
 	if token == "" {
@@ -703,11 +711,12 @@ func assertNoTokenInAudit(t *testing.T, rec *recordingAudit, token string) {
 	}
 }
 
-// assertNoTokenNamedKey — issue-token-специфичный инвариант: payload не должен
-// нести ни одного ключа с `token`-substring. audit secret-mask (security-fix
-// H1) редактирует любой такой ключ в `***MASKED***`, поэтому production-handler
-// сознательно выбирает имена без него (`expired_previous` вместо token_id и
-// т.п.); тест охраняет это решение от регрессии.
+// assertNoTokenNamedKey — issue-token-specific invariant: the payload must
+// not carry any key with a `token` substring. The audit secret-mask
+// (security fix H1) redacts any such key to `***MASKED***`, so the
+// production handler deliberately picks names without it
+// (`expired_previous` instead of token_id, etc.); this test guards that
+// decision against regression.
 func assertNoTokenNamedKey(t *testing.T, ev *audit.Event) {
 	t.Helper()
 	for k := range ev.Payload {

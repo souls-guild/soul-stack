@@ -20,19 +20,19 @@ import (
 
 // --- bulk fake pool ---
 //
-// Узкий fake под bulk coven-assign: COUNT(*) FROM souls (Matched/dry_run) и
-// CTE-чанк (WITH chunk … UPDATE souls). Бизнес-инварианты bulk-слоя (keyset,
-// idempotent-отсев, partial) покрыты unit-тестами soul-пакета; здесь
-// проверяется ТРАНСПОРТ MCP-tool-а: scope-проверка, маппинг ошибок, audit.
+// Narrow fake for bulk coven-assign: COUNT(*) FROM souls (Matched/dry_run) and
+// the CTE chunk (WITH chunk … UPDATE souls). Bulk-layer business invariants
+// (keyset, idempotent skip, partial) are covered by soul-package unit tests;
+// this covers the MCP-tool TRANSPORT: scope check, error mapping, audit.
 
 type covenBulkFakePool struct {
-	matched int // что вернёт COUNT(*).
-	changed int // RETURNING-строки в первом (и единственном) чанке.
+	matched int // what COUNT(*) will return.
+	changed int // RETURNING rows in the first (and only) chunk.
 
-	countErr error // ошибка COUNT (до любых записей).
-	chunkErr error // ошибка чанк-UPDATE.
+	countErr error // COUNT error (before any writes).
+	chunkErr error // chunk-UPDATE error.
 
-	// gotCountWhere / gotChunkSQL — записанные SQL для проверки scope-предиката.
+	// gotCountWhere / gotChunkSQL — recorded SQL for checking the scope predicate.
 	gotCountArgs []any
 	gotChunkArgs []any
 }
@@ -54,8 +54,8 @@ func (p *covenBulkFakePool) QueryRow(_ context.Context, sql string, args ...any)
 		if p.chunkErr != nil {
 			return errRow{err: p.chunkErr}
 		}
-		// scanned, changed, maxSID. scanned < bulkChunkSize → последний чанк
-		// (итерация завершится после одного round-trip-а).
+		// scanned, changed, maxSID. scanned < bulkChunkSize → last chunk
+		// (iteration finishes after a single round-trip).
 		return covenChunkRow{scanned: p.matched, changed: int64(p.changed)}
 	}
 	return errRow{err: errFakeUnexpected{sql: sql}}
@@ -113,7 +113,7 @@ type covenChunkRow struct {
 func (r covenChunkRow) Scan(dest ...any) error {
 	*dest[0].(*int) = r.scanned
 	*dest[1].(*int64) = r.changed
-	// maxSID: пусто — итерация по-любому завершится (scanned < bulkChunkSize).
+	// maxSID: empty — the iteration finishes anyway (scanned < bulkChunkSize).
 	*dest[2].(**string) = nil
 	return nil
 }
@@ -146,8 +146,8 @@ func newCovenAssignHandler(t *testing.T, rbacCfg *rbactest.Config, pool *covenBu
 		AuditWriter:   rec,
 		Logger:        logger,
 		IncarnationDB: &fakePool{},
-		// enf реализует и Check, и ResolvePurview — single source of truth для
-		// обоих гейтов (как production rbac.Holder).
+		// enf implements both Check and ResolvePurview — single source of truth
+		// for both gates (like production rbac.Holder).
 		PurviewResolver: enf,
 	}
 	if pool != nil {
@@ -161,8 +161,8 @@ func newCovenAssignHandler(t *testing.T, rbacCfg *rbactest.Config, pool *covenBu
 	return h, rec
 }
 
-// covenAssignAdminCfg — оператор без селекторных ограничений (bare grant,
-// unrestricted scope).
+// covenAssignAdminCfg — an operator with no selector restrictions (bare
+// grant, unrestricted scope).
 func covenAssignAdminCfg() *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -173,8 +173,8 @@ func covenAssignAdminCfg() *rbactest.Config {
 	}
 }
 
-// covenAssignDevScopedCfg — оператор, ограниченный coven=dev: вправе менять
-// метки только хостов в dev и навешивать только метку dev.
+// covenAssignDevScopedCfg — an operator restricted to coven=dev: may only
+// change labels on hosts in dev and only attach the dev label.
 func covenAssignDevScopedCfg() *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -219,7 +219,7 @@ func TestSoulCovenAssign_NilSoulDB(t *testing.T) {
 }
 
 func TestSoulCovenAssign_NilScoper(t *testing.T) {
-	// PurviewResolver не сконфигурирован → internal-error (паритет REST nil scoper → 500).
+	// PurviewResolver not configured → internal-error (parity with REST nil scoper → 500).
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	enf, err := rbactest.NewEnforcer(covenAssignAdminCfg())
 	if err != nil {
@@ -234,7 +234,7 @@ func TestSoulCovenAssign_NilScoper(t *testing.T) {
 	h, err := NewHandler(HandlerDeps{
 		OperatorSvc: opSvc, RBAC: enf, AuditWriter: &recordingAudit{}, Logger: logger,
 		IncarnationDB: &fakePool{}, SoulDB: &covenBulkFakePool{},
-		// PurviewResolver намеренно nil.
+		// PurviewResolver intentionally nil.
 	})
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
@@ -310,7 +310,7 @@ func TestSoulCovenAssign_RemoveSuccess(t *testing.T) {
 }
 
 func TestSoulCovenAssign_DryRun(t *testing.T) {
-	// dry_run: COUNT(*) only, без UPDATE. changed=0, chunk-SQL не зовётся.
+	// dry_run: COUNT(*) only, no UPDATE. changed=0, chunk-SQL is not called.
 	pool := &covenBulkFakePool{
 		matched:  7,
 		chunkErr: errFakeUnexpected{sql: "dry_run must NOT run chunk UPDATE"},
@@ -354,7 +354,7 @@ func TestSoulCovenAssign_InvalidLabel(t *testing.T) {
 }
 
 func TestSoulCovenAssign_EmptySelector(t *testing.T) {
-	// all=false и пусто всё остальное → ErrBulkEmptySelector → validation-failed.
+	// all=false and everything else empty → ErrBulkEmptySelector → validation-failed.
 	h, _ := newCovenAssignHandler(t, covenAssignAdminCfg(), &covenBulkFakePool{})
 	resp := callTool(t, h, "archon-alice", "keeper.soul.coven-assign",
 		`{"mode":"append","label":"prod","selector":{}}`)
@@ -390,7 +390,7 @@ func TestSoulCovenAssign_UnknownArg(t *testing.T) {
 // --- tests: RBAC / scope (security) ---
 
 func TestSoulCovenAssign_RBACForbidden(t *testing.T) {
-	// archon-alice без soul.coven-assign → deny на RBAC.Check, DB не трогается.
+	// archon-alice without soul.coven-assign → deny on RBAC.Check, DB untouched.
 	h, rec := newCovenAssignHandler(t, nil, &covenBulkFakePool{
 		countErr: errFakeUnexpected{sql: "coven-assign must NOT query when RBAC denies"},
 	})
@@ -407,10 +407,11 @@ func TestSoulCovenAssign_RBACForbidden(t *testing.T) {
 	}
 }
 
-// TestSoulCovenAssign_ScopedOperatorCannotAssignProdLabel — КЛЮЧЕВОЙ
-// security-кейс (ТЗ): coven-scoped (dev) оператор НЕ может через MCP навесить
-// метку prod. Гейт (b) permission-слой: RBAC.Check с {coven: "prod"} не
-// матчит selector `coven=dev` → forbidden, ДО любого DB-запроса.
+// TestSoulCovenAssign_ScopedOperatorCannotAssignProdLabel — the KEY security
+// case (spec): a coven-scoped (dev) operator must NOT be able to attach the
+// prod label via MCP. Gate (b), permission layer: RBAC.Check with
+// {coven: "prod"} doesn't match selector `coven=dev` → forbidden, BEFORE any
+// DB query.
 func TestSoulCovenAssign_ScopedOperatorCannotAssignProdLabel(t *testing.T) {
 	pool := &covenBulkFakePool{
 		countErr: errFakeUnexpected{sql: "out-of-scope label must NOT query"},
@@ -429,11 +430,12 @@ func TestSoulCovenAssign_ScopedOperatorCannotAssignProdLabel(t *testing.T) {
 	}
 }
 
-// TestSoulCovenAssign_ScopedOperatorTargetsOutOfScopeHosts — гейт (a):
-// dev-оператор навешивает свою метку dev, но targeting не ограничивает scope —
-// service-слой режет целевые хосты до coven-scope (predicate coven && ARRAY[dev]).
-// Permission-гейт (b) проходит (label=dev ∈ scope); проверяем, что scope
-// доезжает до service-слоя (scope_applied=true в audit) и операция не падает.
+// TestSoulCovenAssign_ScopedOperatorTargetsOutOfScopeHosts — gate (a): a
+// dev-operator attaches its own dev label, but targeting doesn't restrict
+// scope by itself — the service layer trims target hosts to coven-scope
+// (predicate coven && ARRAY[dev]). Permission gate (b) passes (label=dev ∈
+// scope); verifies scope reaches the service layer (scope_applied=true in
+// audit) and the operation doesn't fail.
 func TestSoulCovenAssign_ScopedOperatorOwnLabelPasses(t *testing.T) {
 	pool := &covenBulkFakePool{matched: 2, changed: 2}
 	h, rec := newCovenAssignHandler(t, covenAssignDevScopedCfg(), pool)
@@ -446,7 +448,7 @@ func TestSoulCovenAssign_ScopedOperatorOwnLabelPasses(t *testing.T) {
 	if out.Matched != 2 || out.Changed != 2 {
 		t.Errorf("matched/changed = %d/%d, want 2/2", out.Matched, out.Changed)
 	}
-	// archon-dev, не archon-alice → requireSingleAudit (hardcode alice) не годится.
+	// archon-dev, not archon-alice → requireSingleAudit (hardcodes alice) doesn't fit.
 	if len(rec.events) != 1 {
 		t.Fatalf("audit events = %d, want 1", len(rec.events))
 	}
@@ -460,16 +462,18 @@ func TestSoulCovenAssign_ScopedOperatorOwnLabelPasses(t *testing.T) {
 	if ev.Payload["scope_applied"] != true {
 		t.Errorf("audit scope_applied = %v, want true (restricted dev-op)", ev.Payload["scope_applied"])
 	}
-	// scope-предикат уехал в COUNT-аргументы (coven && ARRAY[dev] → последний arg
-	// — []string{"dev"}); подтверждает, что service-слой получил ненулевой scope.
+	// the scope predicate made it into the COUNT args (coven && ARRAY[dev] →
+	// the last arg is []string{"dev"}); confirms the service layer received a
+	// non-empty scope.
 	if len(pool.gotCountArgs) == 0 {
 		t.Fatal("COUNT received no args; scope predicate not applied")
 	}
 }
 
-// TestSoulCovenAssign_RemoveOutOfScopeLabelRejectedByCheck — даже remove
-// out-of-scope метки отсекается permission-гейтом (Check с {coven:label}).
-// REST симметрично: SoulCovenLabelSelector ставит {coven:label} для любого mode.
+// TestSoulCovenAssign_RemoveOutOfScopeLabelRejectedByCheck — even a remove of
+// an out-of-scope label is cut off by the permission gate (Check with
+// {coven:label}). REST mirrors this: SoulCovenLabelSelector sets
+// {coven:label} for any mode.
 func TestSoulCovenAssign_RemoveOutOfScopeLabelRejected(t *testing.T) {
 	pool := &covenBulkFakePool{
 		countErr: errFakeUnexpected{sql: "out-of-scope remove must NOT query"},
@@ -513,10 +517,10 @@ func requireValidationFailed(t *testing.T, resp jsonRPCResponse) {
 	}
 }
 
-// --- mode=replace MCP (3 кейса: успех, label-out-of-scope, host-out-of-scope) ---
+// --- mode=replace MCP (3 cases: success, label-out-of-scope, host-out-of-scope) ---
 
-// TestSoulCovenAssign_Replace_Success — admin (unrestricted) делает replace,
-// тело содержит labels (не label), ответ содержит labels.
+// TestSoulCovenAssign_Replace_Success — admin (unrestricted) does a replace,
+// the body contains labels (not label), the response contains labels.
 func TestSoulCovenAssign_Replace_Success(t *testing.T) {
 	pool := &covenBulkFakePool{matched: 2, changed: 2}
 	h, rec := newCovenAssignHandler(t, covenAssignAdminCfg(), pool)
@@ -548,9 +552,9 @@ func TestSoulCovenAssign_Replace_Success(t *testing.T) {
 	}
 }
 
-// TestSoulCovenAssign_Replace_LabelOutOfScopeRejected — гейт (b) на replace:
-// набор `[dev, prod]` с scope=dev → forbidden ДО любого DB-запроса (RBAC.Check
-// последовательно вернёт deny на `prod`).
+// TestSoulCovenAssign_Replace_LabelOutOfScopeRejected — gate (b) on replace:
+// the set `[dev, prod]` with scope=dev → forbidden BEFORE any DB query
+// (RBAC.Check will sequentially return deny on `prod`).
 func TestSoulCovenAssign_Replace_LabelOutOfScopeRejected(t *testing.T) {
 	pool := &covenBulkFakePool{
 		countErr: errFakeUnexpected{sql: "out-of-scope replace must NOT query"},
@@ -569,10 +573,10 @@ func TestSoulCovenAssign_Replace_LabelOutOfScopeRejected(t *testing.T) {
 	}
 }
 
-// TestSoulCovenAssign_Replace_HostOutOfScope — dev-оператор делает replace
-// `[dev]` под все хосты; scope (a) ограничит фактический UPDATE до dev-хостов.
-// Здесь fake matched=0 (как симулируем «нет dev-хостов в БД»), но ключевое —
-// что service-слой получил scope-args (covens=[dev]).
+// TestSoulCovenAssign_Replace_HostOutOfScope — a dev-operator does a replace
+// `[dev]` against all hosts; scope (a) restricts the actual UPDATE to
+// dev-hosts. Here fake matched=0 (simulating "no dev-hosts in the DB"), but
+// the key point is that the service layer received scope-args (covens=[dev]).
 func TestSoulCovenAssign_Replace_HostOutOfScope_ScopeApplied(t *testing.T) {
 	pool := &covenBulkFakePool{matched: 0, changed: 0}
 	h, rec := newCovenAssignHandler(t, covenAssignDevScopedCfg(), pool)
@@ -591,7 +595,7 @@ func TestSoulCovenAssign_Replace_HostOutOfScope_ScopeApplied(t *testing.T) {
 	if rec.events[0].Payload["scope_applied"] != true {
 		t.Errorf("audit scope_applied = %v, want true (restricted dev-op)", rec.events[0].Payload["scope_applied"])
 	}
-	// scope-предикат уехал в COUNT-args.
+	// the scope predicate made it into the COUNT args.
 	if len(pool.gotCountArgs) == 0 {
 		t.Fatal("COUNT received no args; scope predicate not applied for replace")
 	}
@@ -613,10 +617,10 @@ func TestSoulCovenAssign_Append_RejectsLabelsField(t *testing.T) {
 	requireValidationFailed(t, resp)
 }
 
-// --- selector.incarnation MCP (3 кейса: матч, no-match, scope-intersection) ---
+// --- selector.incarnation MCP (3 cases: match, no-match, scope-intersection) ---
 
-// TestSoulCovenAssign_Incarnation_Match — incarnation-селектор доходит до
-// service-слоя, args содержат имя incarnation.
+// TestSoulCovenAssign_Incarnation_Match — the incarnation selector reaches the
+// service layer, args contain the incarnation name.
 func TestSoulCovenAssign_Incarnation_Match(t *testing.T) {
 	pool := &covenBulkFakePool{matched: 2, changed: 2}
 	h, _ := newCovenAssignHandler(t, covenAssignAdminCfg(), pool)
@@ -640,8 +644,8 @@ func TestSoulCovenAssign_Incarnation_Match(t *testing.T) {
 	}
 }
 
-// TestSoulCovenAssign_Incarnation_NoMatch — incarnation без матча → 0/0,
-// chunk-UPDATE не зовётся.
+// TestSoulCovenAssign_Incarnation_NoMatch — incarnation without a match →
+// 0/0, chunk-UPDATE is not called.
 func TestSoulCovenAssign_Incarnation_NoMatch(t *testing.T) {
 	pool := &covenBulkFakePool{
 		matched:  0,
@@ -660,7 +664,7 @@ func TestSoulCovenAssign_Incarnation_NoMatch(t *testing.T) {
 }
 
 // TestSoulCovenAssign_Incarnation_ScopeIntersection — incarnation + dev-scope:
-// в COUNT-args дойдут И incarnation, И scope-массив.
+// COUNT-args will contain BOTH the incarnation AND the scope array.
 func TestSoulCovenAssign_Incarnation_ScopeIntersection(t *testing.T) {
 	pool := &covenBulkFakePool{matched: 1, changed: 1}
 	h, _ := newCovenAssignHandler(t, covenAssignDevScopedCfg(), pool)
@@ -684,8 +688,8 @@ func TestSoulCovenAssign_Incarnation_ScopeIntersection(t *testing.T) {
 	}
 }
 
-// TestSoulCovenAssign_Incarnation_InvalidName — невалидное имя incarnation →
-// validation-failed ДО БД.
+// TestSoulCovenAssign_Incarnation_InvalidName — an invalid incarnation name →
+// validation-failed BEFORE the DB.
 func TestSoulCovenAssign_Incarnation_InvalidName(t *testing.T) {
 	pool := &covenBulkFakePool{
 		countErr: errFakeUnexpected{sql: "invalid incarnation must NOT query"},

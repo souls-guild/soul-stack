@@ -21,29 +21,29 @@ import (
 
 // --- rbac fake pool ---
 //
-// Узкий fake под [rbac.ServicePool]: гоняет именно те SQL-запросы, что нужны
-// role-tools (ListRoles read-path + mutating-tx). Бизнес-инварианты rbac.Service
-// (builtin/self-lockout под FOR UPDATE) покрыты integration-тестами пакета rbac;
-// здесь проверяется ТРАНСПОРТ — что tool правильно зовёт Service, маппит ошибки
-// и кодирует output.
+// A narrow fake for [rbac.ServicePool]: runs exactly the SQL queries needed by
+// the role tools (ListRoles read path + mutating tx). Business invariants of
+// rbac.Service (builtin/self-lockout under FOR UPDATE) are covered by the rbac
+// package's integration tests; here we test the TRANSPORT — that the tool
+// calls Service correctly, maps errors, and encodes the output.
 
 type roleFakePool struct {
-	// views — backing для ListRoles (selectRoleViewsSQL + permissions + operators).
+	// views — backing for ListRoles (selectRoleViewsSQL + permissions + operators).
 	views []rbac.RoleView
 
-	// lockBuiltin — что вернёт SELECT builtin … FOR UPDATE (delete/update/grant
-	// lock роли). lockMissing=true → роль не найдена (ErrRoleNotFound).
+	// lockBuiltin — what SELECT builtin … FOR UPDATE returns (delete/update/grant
+	// role lock). lockMissing=true → role not found (ErrRoleNotFound).
 	lockBuiltin bool
 	lockMissing bool
 
-	// execErr — ошибка, которую вернёт первый мутирующий Exec (INSERT/DELETE).
-	// Позволяет инжектить pg-ошибки (23505/23503) для проверки sentinel→MCP.
+	// execErr — the error returned by the first mutating Exec (INSERT/DELETE).
+	// Lets tests inject pg errors (23505/23503) to verify the sentinel→MCP mapping.
 	execErr error
 
-	// callerPerms — эффективные permissions caller-а (subset-check
-	// SELECT rp.permission … JOIN). nil → дефолт `["*"]` (caller=cluster-admin),
-	// чтобы транспорт-тесты проходили least-privilege-гейт. callerPermsExplicit
-	// отличает «не задано» (дефолт `*`) от «задано пустым» (caller без прав).
+	// callerPerms — the caller's effective permissions (subset check
+	// SELECT rp.permission … JOIN). nil → defaults to `["*"]` (caller=cluster-admin),
+	// so transport tests pass the least-privilege gate. callerPermsExplicit
+	// distinguishes "not set" (default `*`) from "set empty" (caller with no rights).
 	callerPerms         []string
 	callerPermsExplicit bool
 }
@@ -54,17 +54,17 @@ func (p *roleFakePool) Exec(_ context.Context, sql string, _ ...any) (pgconn.Com
 			strings.HasPrefix(strings.TrimSpace(sql), "DELETE")) {
 		return pgconn.CommandTag{}, p.execErr
 	}
-	// Успешный no-op: одна затронутая строка (DELETE role/membership → not 0).
+	// Successful no-op: one affected row (DELETE role/membership → not 0).
 	return pgconn.NewCommandTag("OK 1"), nil
 }
 
 func (p *roleFakePool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
 	switch {
 	case strings.Contains(sql, "SELECT rp.permission"):
-		// caller-perms (subset-check): дефолт `["*"]` (caller=cluster-admin),
-		// если тест не задал набор явно. Маркер `rp.permission` уникален —
-		// проверяется ПЕРЕД rbac_role_operators-кейсами (caller-perms-запрос
-		// тоже джойнит rbac_role_operators).
+		// caller-perms (subset check): defaults to `["*"]` (caller=cluster-admin)
+		// if the test hasn't set an explicit set. The `rp.permission` marker is
+		// unique — checked BEFORE the rbac_role_operators cases (the caller-perms
+		// query also joins rbac_role_operators).
 		if p.callerPermsExplicit {
 			return &roleRows{single: p.callerPerms}, nil
 		}
@@ -72,22 +72,22 @@ func (p *roleFakePool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows,
 	case strings.Contains(sql, "FROM rbac_roles WHERE name") && strings.Contains(sql, "FOR UPDATE"):
 		// lockRole: SELECT builtin … FOR UPDATE.
 		if p.lockMissing {
-			return &roleRows{}, nil // пустой → ErrRoleNotFound
+			return &roleRows{}, nil // empty → ErrRoleNotFound
 		}
 		return &roleRows{builtin: []bool{p.lockBuiltin}}, nil
 	case strings.Contains(sql, "FROM rbac_role_operators") && strings.Contains(sql, "FOR UPDATE"):
-		// lockRoleOperator / self-lockout probe: возвращаем строку (membership есть).
+		// lockRoleOperator / self-lockout probe: return a row (membership exists).
 		return &roleRows{single: []string{"archon-keeper"}}, nil
 	case strings.Contains(sql, "SELECT name, description, builtin, default_scope FROM rbac_roles"):
 		return &roleViewRows{views: p.views}, nil
 	case strings.Contains(sql, "FROM rbac_role_permissions WHERE role_name"):
-		// rolePermissions(name) — без `*` (мутации не триггерят self-lockout).
+		// rolePermissions(name) — without `*` (mutations don't trigger self-lockout).
 		return &roleRows{}, nil
 	case strings.Contains(sql, "FROM rbac_role_permissions"):
-		// selectRolePermissionsSQL (list) — отдаём из views.
+		// selectRolePermissionsSQL (list) — served from views.
 		return &rolePermRows{views: p.views}, nil
 	case strings.Contains(sql, "FROM rbac_role_operators"):
-		// selectRoleOperatorsSQL (list) — отдаём из views.
+		// selectRoleOperatorsSQL (list) — served from views.
 		return &roleOpRows{views: p.views}, nil
 	}
 	return &roleRows{}, nil
@@ -136,7 +136,7 @@ type roleErrRow struct{}
 
 func (roleErrRow) Scan(_ ...any) error { return pgx.ErrNoRows }
 
-// roleRows — bool-/string-однострочный результат (lockRole builtin / membership).
+// roleRows — bool/string single-row result (lockRole builtin / membership).
 type roleRows struct {
 	builtin []bool
 	single  []string
@@ -190,7 +190,7 @@ func (r *roleViewRows) Scan(dest ...any) error {
 	*dest[0].(*string) = v.Name
 	*dest[1].(*string) = v.Description
 	*dest[2].(*bool) = v.Builtin
-	// default_scope nullable (ADR-047 S1): пустая строка → NULL (*string=nil).
+	// default_scope nullable (ADR-047 S1): empty string → NULL (*string=nil).
 	scopeDest := dest[3].(**string)
 	if v.DefaultScope != "" {
 		s := v.DefaultScope
@@ -208,7 +208,7 @@ func (r *roleViewRows) Values() ([]any, error)                       { return ni
 func (r *roleViewRows) RawValues() [][]byte                          { return nil }
 func (r *roleViewRows) Conn() *pgx.Conn                              { return nil }
 
-// rolePermRows / roleOpRows — (role_name, permission|aid) для list-сборки.
+// rolePermRows / roleOpRows — (role_name, permission|aid) for assembling the list.
 type rolePermRows struct {
 	views []rbac.RoleView
 	pairs [][2]string
@@ -289,16 +289,16 @@ func (r *roleOpRows) Conn() *pgx.Conn                              { return nil 
 
 // --- harness ---
 
-// newRoleHandler собирает Handler с реальным rbac.Service над roleFakePool.
-// rolePool=nil → RBACRoles остаётся nil (для проверки nil-guard).
+// newRoleHandler assembles a Handler with a real rbac.Service over
+// roleFakePool. rolePool=nil → RBACRoles stays nil (for the nil-guard check).
 func newRoleHandler(t *testing.T, rbacCfg *rbactest.Config, rolePool *roleFakePool) *Handler {
 	t.Helper()
 	h, _ := newRoleHandlerRec(t, rbacCfg, rolePool)
 	return h
 }
 
-// newRoleHandlerRec — как newRoleHandler, но возвращает ещё и recordingAudit,
-// чтобы success-тесты могли проверить эмиссию audit-event-а (ADR-022).
+// newRoleHandlerRec — like newRoleHandler, but also returns recordingAudit so
+// success tests can verify the audit-event emission (ADR-022).
 func newRoleHandlerRec(t *testing.T, rbacCfg *rbactest.Config, rolePool *roleFakePool) (*Handler, *recordingAudit) {
 	t.Helper()
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
@@ -341,7 +341,7 @@ func newRoleHandlerRec(t *testing.T, rbacCfg *rbactest.Config, rolePool *roleFak
 	return h, rec
 }
 
-// roleAdminCfg — конфиг RBAC, дающий archon-alice все role.*-permissions.
+// roleAdminCfg — an RBAC config granting archon-alice all role.* permissions.
 func roleAdminCfg() *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -376,11 +376,11 @@ func TestRoleTools_InManifest(t *testing.T) {
 	}
 }
 
-// TestCatalog_TotalCount — каталог должен содержать ровно 90 tool (72 + 5
-// keeper.herald.* + 5 keeper.tiding.* по ADR-052 S4 + keeper.soul.traits-assign
-// по ADR-060 + 6 Cloud-CRUD: provider/profile read/list/delete по ADR-017
-// — provider.create/profile.create уже были stub-ами, теперь implemented +
-// keeper.incarnation.traits-set по ADR-060 amend R1, релокация per-soul →
+// TestCatalog_TotalCount — the catalog must contain exactly 90 tools (72 + 5
+// keeper.herald.* + 5 keeper.tiding.* per ADR-052 S4 + keeper.soul.traits-assign
+// per ADR-060 + 6 Cloud-CRUD: provider/profile read/list/delete per ADR-017
+// — provider.create/profile.create used to be stubs, now implemented +
+// keeper.incarnation.traits-set per ADR-060 amend R1, relocated per-soul →
 // per-incarnation).
 func TestCatalog_TotalCount(t *testing.T) {
 	if n := len(listAllTools()); n != 90 {
@@ -420,7 +420,7 @@ func TestRoleTools_NilGuard(t *testing.T) {
 // --- tests: RBAC ---
 
 func TestRoleTools_RBACForbidden(t *testing.T) {
-	// archon-alice без role.*-permissions (пустой RBAC → deny all).
+	// archon-alice without role.* permissions (empty RBAC → deny all).
 	h := newRoleHandler(t, nil, &roleFakePool{})
 	resp := callTool(t, h, "archon-alice", "keeper.role.create",
 		`{"name":"ops","permissions":["incarnation.get"]}`)
@@ -489,7 +489,7 @@ func TestRoleList_Success(t *testing.T) {
 	if len(out.Roles) != 2 {
 		t.Fatalf("roles = %d, want 2", len(out.Roles))
 	}
-	// non-nil-слайс для роли без operators (JSON [] вместо null).
+	// non-nil slice for a role without operators (JSON [] instead of null).
 	for _, r := range out.Roles {
 		if r.Name == "ops" {
 			if r.Operators == nil {
@@ -538,8 +538,8 @@ func TestRoleCreate_AlreadyExists(t *testing.T) {
 }
 
 func TestRoleCreate_BadPermission(t *testing.T) {
-	// Битый permission ловится в Service ДО tx (ParsePermission) →
-	// validation-failed, raw-префикс "rbac: " не течёт наружу.
+	// A malformed permission is caught in Service BEFORE the tx (ParsePermission)
+	// → validation-failed; the raw "rbac: " prefix doesn't leak out.
 	h := newRoleHandler(t, roleAdminCfg(), &roleFakePool{})
 	resp := callTool(t, h, "archon-alice", "keeper.role.create",
 		`{"name":"ops","permissions":["keeper.incarnation.get"]}`)
@@ -588,7 +588,7 @@ func TestRoleDelete_Success(t *testing.T) {
 }
 
 func TestRoleGrantOperator_OperatorNotFound(t *testing.T) {
-	// lockRole ok (роль есть), INSERT membership → 23503 → ErrOperatorNotFound.
+	// lockRole ok (role exists), INSERT membership → 23503 → ErrOperatorNotFound.
 	pool := &roleFakePool{execErr: &pgconn.PgError{Code: "23503", ConstraintName: "rbac_role_operators_aid_fk"}}
 	h := newRoleHandler(t, roleAdminCfg(), pool)
 	resp := callTool(t, h, "archon-alice", "keeper.role.grant-operator",
@@ -630,7 +630,7 @@ func TestRoleRevokeOperator_Success(t *testing.T) {
 	}
 }
 
-// TestRoleUpdate_Success — audit role.permissions-updated с новым набором.
+// TestRoleUpdate_Success — audit role.permissions-updated with the new set.
 func TestRoleUpdate_Success(t *testing.T) {
 	h, rec := newRoleHandlerRec(t, roleAdminCfg(), &roleFakePool{})
 	resp := callTool(t, h, "archon-alice", "keeper.role.update",
@@ -649,9 +649,9 @@ func TestRoleUpdate_Success(t *testing.T) {
 
 // --- least-privilege subset-check (ErrPermissionNotHeld → forbidden) ---
 
-// role.create с правом вне набора caller-а → forbidden. caller имеет role.*
-// (проходит RBAC.Check на саму операцию), но в наборе нет `*` — создать роль
-// с `*` нельзя (subset-check).
+// role.create with a permission outside the caller's set → forbidden. The
+// caller has role.* (passes RBAC.Check on the operation itself), but `*`
+// isn't in the set — creating a role with `*` isn't allowed (subset check).
 func TestRoleCreate_PermissionNotHeld_Forbidden(t *testing.T) {
 	pool := &roleFakePool{callerPermsExplicit: true, callerPerms: []string{"role.create"}}
 	h := newRoleHandler(t, roleAdminCfg(), pool)
@@ -665,9 +665,9 @@ func TestRoleCreate_PermissionNotHeld_Forbidden(t *testing.T) {
 	}
 }
 
-// role.update: добавление чужого права → forbidden. Старый набор роли пуст
-// (rolePermissions(name) → пусто в fake), добавляется operator.create вне
-// набора caller-а.
+// role.update: adding a permission the caller doesn't hold → forbidden. The
+// role's old set is empty (rolePermissions(name) → empty in the fake), and
+// operator.create outside the caller's set is being added.
 func TestRoleUpdate_PermissionNotHeld_Forbidden(t *testing.T) {
 	pool := &roleFakePool{callerPermsExplicit: true, callerPerms: []string{"role.update"}}
 	h := newRoleHandler(t, roleAdminCfg(), pool)
@@ -681,8 +681,9 @@ func TestRoleUpdate_PermissionNotHeld_Forbidden(t *testing.T) {
 	}
 }
 
-// requireSingleAudit проверяет, что записано ровно одно audit-событие с
-// нужным EventType и source=mcp, и возвращает его для inspect-а payload-а.
+// requireSingleAudit verifies that exactly one audit event with the expected
+// EventType and source=mcp was recorded, and returns it for inspecting the
+// payload.
 func requireSingleAudit(t *testing.T, rec *recordingAudit, wantType string) *audit.Event {
 	t.Helper()
 	if len(rec.events) != 1 {
@@ -702,5 +703,5 @@ func requireSingleAudit(t *testing.T, rec *recordingAudit, wantType string) *aud
 }
 
 // claims-helper / callTool / mustToolErrorData / fakeIssuer / recordingAudit
-// определены в handler_test.go (один пакет).
+// are defined in handler_test.go (same package).
 var _ = keeperjwt.Claims{}

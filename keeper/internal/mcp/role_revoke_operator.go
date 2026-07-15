@@ -11,20 +11,20 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// roleRevokeOperatorArgs — arguments tool-а keeper.role.revoke-operator
-// (schemaRoleRevokeOperatorInput): role + aid обязательны.
+// roleRevokeOperatorArgs — arguments for the keeper.role.revoke-operator tool
+// (schemaRoleRevokeOperatorInput): role + aid are required.
 type roleRevokeOperatorArgs struct {
 	Role string `json:"role"`
 	AID  string `json:"aid"`
 }
 
-// callRoleRevokeOperator — mutating-tool keeper.role.revoke-operator.
-// Транспорт поверх [rbac.Service.RevokeOperator]: снятие membership-строки
-// (role, aid). self-lockout-проверка (снятие последнего админа с `*`) — в
-// Service под FOR UPDATE; tool маппит ErrRoleOperatorNotFound в not-found,
-// ErrWouldLockOutCluster в would-lock-out-cluster.
+// callRoleRevokeOperator — mutating-tool keeper.role.revoke-operator. A
+// transport layer over [rbac.Service.RevokeOperator]: removes the membership
+// row (role, aid). The self-lockout check (removing the last admin with `*`)
+// lives in Service under FOR UPDATE; the tool maps ErrRoleOperatorNotFound to
+// not-found, ErrWouldLockOutCluster to would-lock-out-cluster.
 //
-// RBAC — role.revoke-operator без селектора (nil-context).
+// RBAC — role.revoke-operator without a selector (nil-context).
 func (h *Handler) callRoleRevokeOperator(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.role.revoke-operator"
 
@@ -32,9 +32,9 @@ func (h *Handler) callRoleRevokeOperator(ctx context.Context, claims *jwt.Claims
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, roleManagementNotConfigured)
 	}
 
-	// RBAC ДО unmarshal/валидации (least-disclosure): неавторизованный оператор
-	// не получает validation-feedback по телу. Контекст nil — право не зависит
-	// от тела запроса.
+	// RBAC BEFORE unmarshal/validation (least-disclosure): an unauthorized
+	// operator gets no validation feedback about the body. Context is nil —
+	// the permission doesn't depend on the request body.
 	if err := h.deps.RBAC.Check(claims.Subject, "role", "revoke-operator", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission role.revoke-operator")
@@ -75,13 +75,13 @@ func (h *Handler) callRoleRevokeOperator(ctx context.Context, claims *jwt.Claims
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	// Audit — параллельно HTTP-handler-у (изменение авторизации, ADR-022):
-	// payload {name, aid}. AID-ы не секрет.
+	// Audit — mirrors the HTTP handler (authorization change, ADR-022):
+	// payload {name, aid}. AIDs aren't secret.
 	h.writeAudit(audit.EventRoleOperatorRevoked, claims.Subject, map[string]any{
 		"name": a.Role,
 		"aid":  a.AID,
 	})
 
-	// HTTP-эквивалент — 204 No Content; MCP — пустой output-объект.
+	// HTTP equivalent — 204 No Content; MCP — empty output object.
 	return h.toolResult(req.ID, struct{}{})
 }

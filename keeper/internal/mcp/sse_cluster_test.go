@@ -1,10 +1,10 @@
 //go:build integration
 
-// Cluster-mode SSE-routing integration: два EventBus-инстанса с разными
-// KID, общий Redis. Publish на Bus-A должен дойти до SSE-подписчика на
-// Bus-B через `apply:<applyID>` pub/sub (ADR-006(c), M2.6).
+// Cluster-mode SSE-routing integration: two EventBus instances with
+// different KIDs sharing one Redis. A publish on Bus-A must reach the
+// SSE subscriber on Bus-B via `apply:<applyID>` pub/sub (ADR-006(c), M2.6).
 //
-// Запуск:
+// Run:
 //
 //	cd keeper && SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1 \
 //	    go test -tags=integration -race -count=1 ./internal/mcp/...
@@ -39,10 +39,10 @@ const (
 	clusterRedisImage = "redis:7-alpine"
 )
 
-// startRedisContainer поднимает одноразовый Redis-контейнер для одного
-// теста. Возвращает addr (host:port) и shutdown-функцию. Контейнер
-// держится с TestMain-life-cycle общего PG/Vault — добавлять Redis в
-// общий TestMain имело бы смысл, если бы тестов > 1; пока единичный.
+// startRedisContainer spins up a one-off Redis container for a single
+// test. Returns addr (host:port) and a shutdown function. Kept outside the
+// shared TestMain life-cycle for PG/Vault — adding Redis there would make
+// sense with >1 test using it; for now there's just one.
 func startRedisContainer(t *testing.T) (addr string, shutdown func()) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -82,9 +82,9 @@ func startRedisContainer(t *testing.T) (addr string, shutdown func()) {
 	return addr, shutdown
 }
 
-// startMCPServerWithCustomBus поднимает MCP-listener с заранее собранной
-// шиной (cluster-mode). Симметрично [startMCPServerWithBus], но bus
-// строится в caller-е, чтобы передать Redis-клиент и KID.
+// startMCPServerWithCustomBus starts an MCP listener with a pre-built bus
+// (cluster-mode). Mirrors [startMCPServerWithBus], but the bus is built by
+// the caller so it can pass in a Redis client and KID.
 func startMCPServerWithCustomBus(t *testing.T, bus *applybus.EventBus) (baseURL string, shutdown func()) {
 	t.Helper()
 	verifier, err := keeperjwt.NewVerifier([]byte(integrationSigningKey), integrationIssuer)
@@ -158,10 +158,11 @@ func startMCPServerWithCustomBus(t *testing.T, bus *applybus.EventBus) (baseURL 
 	return baseURL, shutdown
 }
 
-// TestIntegration_SSE_ClusterMode_EndToEnd — два EventBus-инстанса с
-// разными KID на одном Redis. Publish на Bus-A должен прийти SSE-клиенту
-// Keeper-B (cross-Keeper routing). И наоборот local-publish на Bus-B
-// доходит local-SSE-клиенту (без удвоения от собственного Redis-echo).
+// TestIntegration_SSE_ClusterMode_EndToEnd — two EventBus instances with
+// different KIDs on one Redis. A publish on Bus-A must reach the SSE
+// client on Keeper-B (cross-Keeper routing). Conversely, a local publish on
+// Bus-B reaches its local SSE client (without doubling via its own
+// Redis echo).
 func TestIntegration_SSE_ClusterMode_EndToEnd(t *testing.T) {
 	redisAddr, shutdownRedis := startRedisContainer(t)
 	defer shutdownRedis()
@@ -184,16 +185,16 @@ func TestIntegration_SSE_ClusterMode_EndToEnd(t *testing.T) {
 	busA := applybus.NewBusWithRedis(lg, cA, "keeper-A")
 	busB := applybus.NewBusWithRedis(lg, cB, "keeper-B")
 
-	// Поднимаем второй MCP-listener (Keeper-B) c SSE поверх busB.
+	// Start a second MCP listener (Keeper-B) with SSE on top of busB.
 	baseB, stopB := startMCPServerWithCustomBus(t, busB)
 	defer stopB()
 
 	token := newToken(t, "archon-alice", []string{"cluster-admin"})
 	applyID := "01J0CLUSTER0000000000000XYZ"
-	// SSE-подписка авторизуется как владелец прогона (started_by_aid == sub).
+	// The SSE subscription authorizes as the run's owner (started_by_aid == sub).
 	seedApplyRunForSSE(t, applyID, "archon-alice")
 
-	// SSE-подписчик на Keeper-B.
+	// SSE subscriber on Keeper-B.
 	req, err := http.NewRequestWithContext(ctxClient, http.MethodGet,
 		baseB+"/mcp/events?apply_id="+applyID, nil)
 	if err != nil {
@@ -209,10 +210,10 @@ func TestIntegration_SSE_ClusterMode_EndToEnd(t *testing.T) {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
 
-	// Ждём пока local-subscribe (busB.Subscribers) и Redis-bridge.Ready
-	// зарегистрировались. На startMCPServerWithCustomBus + Subscribe это
-	// синхронно дожидается Ready в applybus, но мы не контролируем
-	// HTTP-handler-ctx-side — проверяем через busB.Subscribers.
+	// Wait for local-subscribe (busB.Subscribers) and Redis-bridge.Ready to
+	// register. startMCPServerWithCustomBus + Subscribe synchronously waits
+	// for Ready inside applybus, but we don't control the HTTP-handler-ctx
+	// side — check via busB.Subscribers instead.
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if busB.Subscribers(applyID) >= 1 {
@@ -224,12 +225,12 @@ func TestIntegration_SSE_ClusterMode_EndToEnd(t *testing.T) {
 		t.Fatal("SSE handler on Keeper-B did not subscribe within 3s")
 	}
 
-	// Дополнительный sleep — Redis-bridge может ещё не пропинговать
-	// первое сообщение. Subscribe в applybus дожидается Ready, но
-	// между Ready и handle-в-Keeper-A может быть пара миллисекунд.
+	// Extra sleep — the Redis bridge may not have flushed the first message
+	// yet. Subscribe in applybus waits for Ready, but there can be a couple
+	// milliseconds between Ready and the handler on Keeper-A.
 	time.Sleep(100 * time.Millisecond)
 
-	// Publish на Keeper-A — событие должно прийти SSE-клиенту через
+	// Publish on Keeper-A — the event must reach the SSE client via
 	// Redis pub/sub.
 	busA.Publish(applybus.Event{
 		ApplyID: applyID,
@@ -255,8 +256,8 @@ func TestIntegration_SSE_ClusterMode_EndToEnd(t *testing.T) {
 		t.Errorf("frame missing payload data: %q", frame)
 	}
 
-	// Self-publish на Keeper-B — должно прийти ровно один раз
-	// (local-доставка), не дублироваться от Redis-echo (self-filter).
+	// Self-publish on Keeper-B — must arrive exactly once (local delivery),
+	// not duplicated by the Redis echo (self-filter).
 	busB.Publish(applybus.Event{
 		ApplyID: applyID,
 		Kind:    applybus.KindApplyCompleted,
@@ -276,9 +277,9 @@ func TestIntegration_SSE_ClusterMode_EndToEnd(t *testing.T) {
 		t.Errorf("self frame = %q, want event: apply.completed", frame2)
 	}
 
-	// Дополнительный draft: ещё одного apply.completed быть не должно
-	// (если бы self-filter не работал, второй раз пришёл бы echo от
-	// Redis-bridge-а).
+	// Extra check: no additional apply.completed should arrive (if the
+	// self-filter were broken, a second copy would arrive as an echo from
+	// the Redis bridge).
 	deadline = time.Now().Add(500 * time.Millisecond)
 	type readRes struct {
 		frame string
@@ -291,12 +292,12 @@ func TestIntegration_SSE_ClusterMode_EndToEnd(t *testing.T) {
 	}()
 	select {
 	case r := <-extraCh:
-		// Допустимо: heartbeat (`:keepalive`) или таймаут (io.EOF). НЕ
-		// допустимо: ещё один data-frame.
+		// Acceptable: heartbeat (`:keepalive`) or timeout (io.EOF). NOT
+		// acceptable: another data frame.
 		if r.err == nil && strings.Contains(r.frame, "event:") {
 			t.Errorf("unexpected duplicate frame after self-publish: %q", r.frame)
 		}
 	case <-time.After(time.Until(deadline) + 200*time.Millisecond):
-		// OK — ничего лишнего не пришло.
+		// OK — nothing extra arrived.
 	}
 }

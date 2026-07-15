@@ -11,20 +11,20 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// roleGrantOperatorArgs — arguments tool-а keeper.role.grant-operator
-// (schemaRoleGrantOperatorInput): role + aid обязательны.
+// roleGrantOperatorArgs — arguments for keeper.role.grant-operator
+// (schemaRoleGrantOperatorInput): role + aid are required.
 type roleGrantOperatorArgs struct {
 	Role string `json:"role"`
 	AID  string `json:"aid"`
 }
 
-// callRoleGrantOperator — mutating-tool keeper.role.grant-operator. Транспорт
-// поверх [rbac.Service.GrantOperator]: привязка AID к роли (идемпотентна).
-// CallerAID берётся из claims (granted_by_aid). Существование роли/AID —
-// в Service (lock роли + FK на aid); tool маппит ErrRoleNotFound/
-// ErrOperatorNotFound в not-found.
+// callRoleGrantOperator — mutating-tool keeper.role.grant-operator. Transport
+// over [rbac.Service.GrantOperator]: binds an AID to a role (idempotent).
+// CallerAID comes from claims (granted_by_aid). Role/AID existence is
+// checked in Service (role lock + FK on aid); the tool maps
+// ErrRoleNotFound/ErrOperatorNotFound to not-found.
 //
-// RBAC — role.grant-operator без селектора (nil-context).
+// RBAC — role.grant-operator has no selector (nil-context).
 func (h *Handler) callRoleGrantOperator(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.role.grant-operator"
 
@@ -32,9 +32,9 @@ func (h *Handler) callRoleGrantOperator(ctx context.Context, claims *jwt.Claims,
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, roleManagementNotConfigured)
 	}
 
-	// RBAC ДО unmarshal/валидации (least-disclosure): неавторизованный оператор
-	// не получает validation-feedback по телу. Контекст nil — право не зависит
-	// от тела запроса.
+	// RBAC BEFORE unmarshal/validation (least-disclosure): an unauthorized
+	// operator gets no validation feedback about the body. nil context —
+	// the permission doesn't depend on the request body.
 	if err := h.deps.RBAC.Check(claims.Subject, "role", "grant-operator", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission role.grant-operator")
@@ -77,8 +77,8 @@ func (h *Handler) callRoleGrantOperator(ctx context.Context, claims *jwt.Claims,
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	// Audit — параллельно HTTP-handler-у (изменение авторизации, ADR-022):
-	// payload {name, aid, granted_by_aid}. AID-ы не секрет.
+	// Audit mirrors the HTTP handler (authorization change, ADR-022):
+	// payload {name, aid, granted_by_aid}. AIDs aren't secret.
 	h.writeAudit(audit.EventRoleOperatorGranted, claims.Subject, map[string]any{
 		"name":           a.Role,
 		"aid":            a.AID,

@@ -18,13 +18,14 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/sigil"
 )
 
-// MCP-граница sigil.key.*-tools (R3-S7): проверяется ТРАНСПОРТ — диспетч,
-// permission-проверка, маппинг sentinel-ов, audit, паритет с REST. Бизнес-логика
-// (key-gen, Vault-write, CRUD) — пакет sigil; здесь только MCP-граница.
+// MCP boundary for the sigil.key.*-tools (R3-S7): tests cover the
+// TRANSPORT — dispatch, permission checks, sentinel mapping, audit, parity
+// with REST. Business logic (key-gen, Vault write, CRUD) lives in the
+// sigil package; this file only covers the MCP boundary.
 
 const skValidKeyID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
-// --- fakes под sigil.KeyService ---
+// --- fakes for sigil.KeyService ---
 
 type skVault struct{ err error }
 
@@ -74,8 +75,8 @@ func (r skInsertRow) Scan(dest ...any) error {
 	return nil
 }
 
-// newSigilKeyHandler собирает Handler с SigilKeySvc над fake pool/vault.
-// withKeySvc=false → SigilKeySvc остаётся nil (для nil-guard).
+// newSigilKeyHandler builds a Handler with SigilKeySvc over a fake pool/vault.
+// withKeySvc=false → SigilKeySvc stays nil (for the nil-guard test).
 func newSigilKeyHandler(t *testing.T, rbacCfg *rbactest.Config, withKeySvc bool) (*Handler, *recordingAudit) {
 	t.Helper()
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
@@ -121,7 +122,7 @@ func newSigilKeyHandler(t *testing.T, rbacCfg *rbactest.Config, withKeySvc bool)
 	return h, rec
 }
 
-// sigilKeyAdminCfg — RBAC, дающий archon-alice все sigil.key-*-permissions.
+// sigilKeyAdminCfg — RBAC config granting archon-alice all sigil.key-*-permissions.
 func sigilKeyAdminCfg() *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -171,7 +172,7 @@ func TestSigilKeyTools_NilGuard(t *testing.T) {
 }
 
 func TestSigilKeyTools_RBACForbidden(t *testing.T) {
-	// archon-alice без sigil.key-*-permissions (пустой RBAC → deny all).
+	// archon-alice has no sigil.key-*-permissions (empty RBAC → deny all).
 	h, rec := newSigilKeyHandler(t, nil, true)
 	resp := callTool(t, h, "archon-alice", "keeper.sigil.key.introduce", `{"make_primary":true}`)
 	if resp.Error == nil {
@@ -205,12 +206,12 @@ func TestSigilKeyIntroduce_Success_NoPrivateKey(t *testing.T) {
 	if !strings.Contains(out.PubkeyPEM, "BEGIN PUBLIC KEY") {
 		t.Errorf("pubkey_pem не SPKI: %q", out.PubkeyPEM)
 	}
-	// SECURITY: ни одно поле output-а не содержит приватник.
+	// SECURITY: no output field contains the private key.
 	raw, _ := json.Marshal(out)
 	if strings.Contains(string(raw), "PRIVATE KEY") {
 		t.Errorf("private key leaked into output: %s", raw)
 	}
-	// Audit sigil.key-introduced записан с key_id, без приватника.
+	// Audit sigil.key-introduced is recorded with key_id, without the private key.
 	if len(rec.events) != 1 {
 		t.Fatalf("audit events = %d, want 1", len(rec.events))
 	}

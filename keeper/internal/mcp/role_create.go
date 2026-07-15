@@ -10,16 +10,17 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// roleManagementNotConfigured — public-detail nil-guard-а role-tools.
-// RBACRoles — опц. поле HandlerDeps (Slice 1.5 прокидывает его, но сборка
-// без RBAC-CRUD-фасада допустима): при nil role-tools диспатчатся, но
-// возвращают internal-error «не сконфигурировано» (симметрично incarnation-
-// deps-guard-ам ScenarioRunner/ServiceRegistry).
+// roleManagementNotConfigured — public-detail of the nil-guard for
+// role-tools. RBACRoles is an optional HandlerDeps field (Slice 1.5 wires it,
+// but a build without the RBAC-CRUD facade is still valid): when nil,
+// role-tools dispatch but return internal-error "not configured" (symmetric
+// with the incarnation deps-guards ScenarioRunner/ServiceRegistry).
 const roleManagementNotConfigured = "role management is not configured"
 
-// roleCreateArgs — arguments tool-а keeper.role.create (schemaRoleCreateInput):
-// name + permissions обязательны, description опционален. permissions —
-// permission-строки '<resource>.<action>' (валидируются в rbac.Service).
+// roleCreateArgs — arguments for the keeper.role.create tool
+// (schemaRoleCreateInput): name + permissions are required, description is
+// optional. permissions are '<resource>.<action>' permission strings
+// (validated in rbac.Service).
 type roleCreateArgs struct {
 	Name         string   `json:"name"`
 	Description  string   `json:"description"`
@@ -27,13 +28,14 @@ type roleCreateArgs struct {
 	DefaultScope *string  `json:"default_scope,omitempty"`
 }
 
-// callRoleCreate — mutating-tool keeper.role.create. Транспорт поверх
-// [rbac.Service.CreateRole]: вся бизнес-валидация (формат name, ParsePermission,
-// UNIQUE-граница) — в Service; tool декодирует input, проверяет permission,
-// маппит sentinel-ы в MCP-коды.
+// callRoleCreate — mutating-tool keeper.role.create. A transport layer over
+// [rbac.Service.CreateRole]: all business validation (name format,
+// ParsePermission, the UNIQUE constraint) lives in Service; the tool decodes
+// input, checks permission, and maps sentinels to MCP codes.
 //
-// RBAC — role.create без селектора (role-permissions селекторов не имеют,
-// closed enum service/coven/incarnation/host их не покрывает → nil-context).
+// RBAC — role.create without a selector (role-permissions have no selectors;
+// the closed enum service/coven/incarnation/host doesn't cover them →
+// nil-context).
 func (h *Handler) callRoleCreate(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.role.create"
 
@@ -41,9 +43,9 @@ func (h *Handler) callRoleCreate(ctx context.Context, claims *jwt.Claims, req js
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, roleManagementNotConfigured)
 	}
 
-	// RBAC ДО unmarshal/валидации (least-disclosure): неавторизованный оператор
-	// не получает validation-feedback по телу. Контекст nil — право не зависит
-	// от тела запроса.
+	// RBAC BEFORE unmarshal/validation (least-disclosure): an unauthorized
+	// operator gets no validation feedback about the body. Context is nil —
+	// the permission doesn't depend on the request body.
 	if err := h.deps.RBAC.Check(claims.Subject, "role", "create", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission role.create")
@@ -79,8 +81,8 @@ func (h *Handler) callRoleCreate(ctx context.Context, claims *jwt.Claims, req js
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	// Audit — параллельно HTTP-handler-у (изменение авторизации, ADR-022):
-	// payload {name, permissions, created_by_aid}. permission-строки не секрет.
+	// Audit — mirrors the HTTP handler (authorization change, ADR-022):
+	// payload {name, permissions, created_by_aid}. permission strings aren't secret.
 	h.writeAudit(audit.EventRoleCreated, claims.Subject, map[string]any{
 		"name":           a.Name,
 		"permissions":    a.Permissions,

@@ -10,24 +10,25 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// sigilNotConfigured — public-detail nil-guard-а plugin-tools. SigilSvc — опц.
-// поле HandlerDeps (production-wire-up передаёт *sigil.Service ТОЛЬКО при
-// заданном sigil.signing_key_ref): при nil plugin-tools диспатчатся, но
-// возвращают internal-error «не сконфигурировано» (симметрично RBACRoles-guard-у
-// role-tools).
+// sigilNotConfigured — public detail for the plugin-tools nil-guard. SigilSvc
+// is an optional HandlerDeps field (production wire-up passes *sigil.Service
+// ONLY when sigil.signing_key_ref is set): with nil, plugin-tools still
+// dispatch but return internal-error "not configured" (mirrors the
+// role-tools RBACRoles guard).
 const sigilNotConfigured = "sigil is not configured"
 
-// pluginAllowArgs — arguments tool-а keeper.plugin.allow (schemaPluginAllowInput):
-// namespace + name + ref обязательны. Тройка валидируется reSigilSegment
-// (closed-charset, как path-сегменты REST DELETE).
+// pluginAllowArgs — arguments for keeper.plugin.allow (schemaPluginAllowInput):
+// namespace + name + ref are required. The triple is validated by
+// reSigilSegment (closed charset, like REST DELETE path segments).
 type pluginAllowArgs struct {
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
 	Ref       string `json:"ref"`
 }
 
-// pluginAllowOutput — output keeper.plugin.allow: эхо тройки + sha256
-// допущенного бинаря (паритет 201-ответа REST POST /v1/plugins/sigils).
+// pluginAllowOutput — output of keeper.plugin.allow: echoes the triple +
+// sha256 of the allowed binary (parity with REST POST /v1/plugins/sigils
+// 201 response).
 type pluginAllowOutput struct {
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
@@ -35,12 +36,14 @@ type pluginAllowOutput struct {
 	SHA256    string `json:"sha256"`
 }
 
-// callPluginAllow — mutating-tool keeper.plugin.allow. Транспорт поверх
-// [sigil.Service.Allow]: чтение слота кеша, подпись, вставка записи — в Service;
-// tool декодирует input, валидирует тройку, проверяет permission, маппит
-// sentinel-ы в MCP-коды и пишет audit plugin.allowed.
+// callPluginAllow — mutating tool keeper.plugin.allow. A transport over
+// [sigil.Service.Allow]: reading the cache slot, signing, inserting the
+// record all live in Service; the tool decodes input, validates the triple,
+// checks the permission, maps sentinels to MCP codes, and writes the
+// plugin.allowed audit event.
 //
-// RBAC — plugin.allow без селектора (rbac.md: NoSelector, как operator.*/role.*).
+// RBAC — plugin.allow with no selector (rbac.md: NoSelector, like
+// operator.*/role.*).
 func (h *Handler) callPluginAllow(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.plugin.allow"
 
@@ -48,9 +51,9 @@ func (h *Handler) callPluginAllow(ctx context.Context, claims *jwt.Claims, req j
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, sigilNotConfigured)
 	}
 
-	// RBAC ДО unmarshal/валидации (least-disclosure): неавторизованный оператор
-	// не получает validation-feedback по телу. Контекст nil — право не зависит
-	// от тела запроса.
+	// RBAC BEFORE unmarshal/validation (least-disclosure): an unauthorized
+	// operator gets no validation feedback about the body. Context nil — the
+	// permission doesn't depend on the request body.
 	if err := h.deps.RBAC.Check(claims.Subject, "plugin", "allow", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission plugin.allow")
@@ -87,9 +90,9 @@ func (h *Handler) callPluginAllow(ctx context.Context, claims *jwt.Claims, req j
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	// Audit — параллельно REST-handler-у (supply-chain-контроль, ADR-022):
+	// Audit — mirrors the REST handler (supply-chain control, ADR-022):
 	// payload {namespace, name, ref, sha256, allowed_by_aid}. signature/manifest
-	// (крипто-материал / крупный JSONB) НЕ пишем — как REST.
+	// (crypto material / large JSONB) are NOT written — same as REST.
 	h.writeAudit(audit.EventPluginAllowed, claims.Subject, map[string]any{
 		"namespace":      a.Namespace,
 		"name":           a.Name,

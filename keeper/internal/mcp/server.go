@@ -17,18 +17,18 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// ServerDeps — wire-up зависимости MCP HTTP-listener-а.
+// ServerDeps — wire-up dependencies for the MCP HTTP listener.
 //
-// JWTVerifier обязателен — без него невозможно гарантировать identity
-// caller-а. Bus обязателен — без него SSE-маршрут `/mcp/events` не сможет
-// доставлять события (в unit-тестах без публикации это не мешает: bus
-// корректно работает без publisher-ов). Все остальные deps приходят в
-// [HandlerDeps] (внутреннему диспетчеру MCP-методов).
+// JWTVerifier is required — without it caller identity can't be
+// guaranteed. Bus is required — without it the SSE route `/mcp/events`
+// can't deliver events (harmless in unit tests without a publisher: the
+// bus works fine with none). All other deps go to [HandlerDeps] (the
+// internal MCP-method dispatcher).
 //
-// ApplyAccess и RBAC включают RBAC-проверку SSE-подписки (M1): подписаться
-// на apply_id может только инициатор прогона или Архонт с `incarnation.get`.
-// ApplyAccess == nil → RBAC-проверка SSE отключена (single-node dev без
-// apply_runs); в production main обязан прокинуть [ApplyAccessPG].
+// ApplyAccess and RBAC gate SSE-subscription RBAC (M1): only the run's
+// initiator or an Archon with `incarnation.get` may subscribe to an
+// apply_id. ApplyAccess == nil disables SSE RBAC checking (single-node dev
+// without apply_runs); production main must supply [ApplyAccessPG].
 type ServerDeps struct {
 	JWTVerifier *jwt.Verifier
 	Handler     *Handler
@@ -38,11 +38,11 @@ type ServerDeps struct {
 	Logger      *slog.Logger
 }
 
-// Server — обёртка над http.Server для MCP listener-а. Слушает
-// `listen.mcp.addr` (отдельный port от Operator API); auth и dispatch
-// делает встроенный handler.
+// Server — wraps http.Server for the MCP listener. Listens on
+// `listen.mcp.addr` (separate port from Operator API); auth and dispatch
+// are done by the embedded handler.
 //
-// Mu защищает поле addr, обновляемое в Start при `:0`-bind-е (для тестов).
+// Mu guards addr, updated in Start on a `:0` bind (for tests).
 type Server struct {
 	srv        *http.Server
 	configAddr string
@@ -52,9 +52,8 @@ type Server struct {
 	logger *slog.Logger
 }
 
-// Лимиты MCP-listener-а. Тематически совпадают с Operator API
-// (16 KiB headers, 1 MiB body), значения скопированы намеренно — это
-// единый класс HTTP-фасадов Keeper-а.
+// MCP-listener limits. Intentionally mirror Operator API (16 KiB headers,
+// 1 MiB body) — both are the same class of Keeper HTTP facade.
 const (
 	mcpMaxHeaderBytes = 16 * 1024
 	mcpMaxBodyBytes   = 1 << 20 // 1 MiB
@@ -65,19 +64,19 @@ const (
 	mcpIdleTimeout       = 120 * time.Second
 )
 
-// NewServer собирает MCP HTTP-сервер. cfg.Addr — обязателен (без него
-// конфиг считается mis-configured: блок listen.mcp заявлен, но без addr).
+// NewServer builds the MCP HTTP server. cfg.Addr is required (without it
+// the config is mis-configured: listen.mcp block declared but no addr).
 //
-// Сервер регистрирует два маршрута:
+// The server registers two routes:
 //
-//   - `POST /mcp`        — JSON-RPC 2.0 поверх HTTP (tools/list, tools/call,
+//   - `POST /mcp`        — JSON-RPC 2.0 over HTTP (tools/list, tools/call,
 //     initialize). Auth — JWT Bearer.
-//   - `GET /mcp/events`  — SSE-stream apply-событий по `?apply_id=<ULID>`
-//     (M0.7.c). Auth — тот же JWT Bearer.
+//   - `GET /mcp/events`  — SSE stream of apply events via `?apply_id=<ULID>`
+//     (M0.7.c). Auth — same JWT Bearer.
 //
-// Любой другой URL/метод → 404 JSON {error: "not found"}. /healthz и /metrics
-// MCP listener НЕ предоставляет — health/metrics живут на отдельных
-// listener-ах (см. operator-api.md → Health/Meta).
+// Any other URL/method → 404 JSON {error: "not found"}. The MCP listener
+// does NOT serve /healthz or /metrics — health/metrics live on separate
+// listeners (see operator-api.md → Health/Meta).
 func NewServer(cfg config.KeeperListenSimple, deps ServerDeps) (*Server, error) {
 	if cfg.Addr == "" {
 		return nil, errors.New("mcp: listen.mcp.addr is empty")
@@ -125,8 +124,8 @@ func NewServer(cfg config.KeeperListenSimple, deps ServerDeps) (*Server, error) 
 	}, nil
 }
 
-// Start — блокирующий запуск listener-а. На ctx.Done() делает graceful
-// shutdown (10s). Симметрично api.Server.Start.
+// Start — blocking listener startup. Does a graceful shutdown (10s) on
+// ctx.Done(). Mirrors api.Server.Start.
 func (s *Server) Start(ctx context.Context) error {
 	ln, err := net.Listen("tcp", s.configAddr)
 	if err != nil {
@@ -166,15 +165,15 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 }
 
-// Addr возвращает фактический bind-адрес. После Start — actual port
-// (для тестов с `:0`).
+// Addr returns the actual bind address. After Start — the actual port
+// (for tests using `:0`).
 func (s *Server) Addr() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.addr
 }
 
-// Shutdown — graceful с 10s grace.
+// Shutdown — graceful with a 10s grace period.
 func (s *Server) Shutdown(ctx context.Context) error {
 	shutCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -185,17 +184,17 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// buildMCPHandler возвращает http.HandlerFunc для `POST /mcp`.
+// buildMCPHandler returns the http.HandlerFunc for `POST /mcp`.
 // Pipeline:
-//  1. Method check: только POST.
-//  2. Body limit: 1 MiB через http.MaxBytesReader.
-//  3. JWT verify: Bearer-token из Authorization header (тот же [jwt.Verifier],
-//     что Operator API).
+//  1. Method check: POST only.
+//  2. Body limit: 1 MiB via http.MaxBytesReader.
+//  3. JWT verify: Bearer token from the Authorization header (same
+//     [jwt.Verifier] as Operator API).
 //  4. JSON-RPC parse → Handler.Dispatch → JSON-RPC response.
 //
-// Любая ошибка auth → JSON-RPC error code -32600 (Invalid Request) с
-// `data.code: "unauthenticated"`. Это сознательное отклонение от HTTP-style
-// 401: MCP-клиент работает с JSON-RPC-уровнем, не с HTTP status code.
+// Any auth error → JSON-RPC error code -32600 (Invalid Request) with
+// `data.code: "unauthenticated"`. This deliberately departs from HTTP-style
+// 401: the MCP client operates at the JSON-RPC level, not HTTP status codes.
 func buildMCPHandler(deps ServerDeps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -222,9 +221,9 @@ func buildMCPHandler(deps ServerDeps) http.HandlerFunc {
 			return
 		}
 
-		// Парсим body как JSON-RPC request. Batch-запросы (массив) — out
-		// of scope MVP (MCP-spec 2025-06 разрешает их, но MCP-клиенты
-		// обычно шлют по одному; добавим в M0.7.x при реальной потребности).
+		// Parse body as a JSON-RPC request. Batch requests (array) are out
+		// of scope for MVP (MCP-spec 2025-06 allows them, but MCP clients
+		// usually send one at a time; add in M0.7.x if actually needed).
 		raw, err := io.ReadAll(r.Body)
 		if err != nil {
 			writeRPCErrorHTTP(w, http.StatusOK, json.RawMessage("null"),
@@ -252,8 +251,8 @@ func buildMCPHandler(deps ServerDeps) http.HandlerFunc {
 
 		resp, isNotification := deps.Handler.Dispatch(r.Context(), claims, req)
 		if isNotification {
-			// JSON-RPC §4.1: для notification сервер не отвечает.
-			// HTTP-аналог — 204 No Content.
+			// JSON-RPC §4.1: the server doesn't respond to a notification.
+			// HTTP equivalent — 204 No Content.
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -266,30 +265,30 @@ func buildMCPHandler(deps ServerDeps) http.HandlerFunc {
 	}
 }
 
-// buildNotFoundHandler — для всех путей кроме `/mcp` отдаёт простой 404.
-// MCP-spec не описывает иной URL-структуры в рамках Streamable HTTP, так
-// что попадание сюда — клиентская ошибка пути. `/mcp` сюда не попадает
-// (его перехватывает [buildMCPHandler] выше через ServeMux); под `/`
-// попадают `/mcp/<suffix>`, `/healthz` и любые другие URL.
+// buildNotFoundHandler — plain 404 for every path except `/mcp`. The
+// MCP spec doesn't define any other URL structure for Streamable HTTP,
+// so landing here is a client path error. `/mcp` never reaches this
+// (intercepted by [buildMCPHandler] above via ServeMux); `/` catches
+// `/mcp/<suffix>`, `/healthz`, and any other URL.
 func buildNotFoundHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		writeJSONError(w, http.StatusNotFound, "no such endpoint")
 	}
 }
 
-// writeJSONError пишет короткий JSON {error: "<msg>"} с указанным HTTP-кодом.
-// Используется до того, как мы поняли, что это JSON-RPC request (auth-fail,
-// bad method, …). После авторизации все ошибки уходят как JSON-RPC error
-// поверх HTTP 200 (см. writeRPCErrorHTTP).
+// writeJSONError writes a short JSON {error: "<msg>"} with the given HTTP
+// code. Used before we know it's a JSON-RPC request (auth failure, bad
+// method, …). After auth, all errors go out as JSON-RPC errors over HTTP
+// 200 (see writeRPCErrorHTTP).
 func writeJSONError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_, _ = w.Write([]byte(`{"error":` + jsonString(msg) + `}`))
 }
 
-// writeRPCErrorHTTP сериализует JSON-RPC error-response и пишет его в
-// HTTP-ответ. status обычно 200 — это контракт JSON-RPC поверх HTTP:
-// «слой ошибки — JSON-RPC, не HTTP».
+// writeRPCErrorHTTP serializes a JSON-RPC error response and writes it to
+// the HTTP response. status is usually 200 — the JSON-RPC-over-HTTP
+// contract: errors live at the JSON-RPC layer, not HTTP.
 func writeRPCErrorHTTP(w http.ResponseWriter, status int, id json.RawMessage, code int, message string, data any) {
 	resp := newRPCError(id, code, message, data)
 	w.Header().Set("Content-Type", "application/json")
@@ -297,8 +296,8 @@ func writeRPCErrorHTTP(w http.ResponseWriter, status int, id json.RawMessage, co
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-// isJSONArray — true, если первый non-whitespace байт `[`. Используется
-// для отказа от batch-запросов (M0.7.a).
+// isJSONArray — true if the first non-whitespace byte is `[`. Used to
+// reject batch requests (M0.7.a).
 func isJSONArray(raw []byte) bool {
 	for _, b := range raw {
 		switch b {
@@ -313,9 +312,9 @@ func isJSONArray(raw []byte) bool {
 	return false
 }
 
-// jsonString — простой JSON-string-encode для коротких error-message-ей в
-// writeJSONError. Не пытаемся быть универсальными (отдельный пакет json
-// для этого), но эскейпим базовые символы.
+// jsonString — a minimal JSON string-encode for short error messages in
+// writeJSONError. Not meant to be general-purpose (that's what
+// encoding/json is for), just escapes the basics.
 func jsonString(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)

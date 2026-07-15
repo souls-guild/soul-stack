@@ -21,10 +21,11 @@ import (
 
 // --- sigil fakes ---
 //
-// Узкие fake под [sigil.Store] / [sigil.SlotReader]: проверяется ТРАНСПОРТ —
-// что plugin-tool правильно зовёт sigil.Service, маппит sentinel-ы в MCP-коды и
-// пишет audit. Бизнес-инварианты Sigil (подпись, single-slot lookup, CRUD)
-// покрыты unit/integration-тестами пакета sigil; здесь только MCP-граница.
+// Narrow fakes for [sigil.Store] / [sigil.SlotReader]: verifies TRANSPORT —
+// that the plugin-tool correctly calls sigil.Service, maps sentinels to MCP
+// codes, and writes audit. Sigil business invariants (signing, single-slot
+// lookup, CRUD) are covered by the sigil package's unit/integration tests;
+// this file covers only the MCP boundary.
 
 type fakeSigilStore struct {
 	inserted   *sigil.Sigil
@@ -68,19 +69,19 @@ func (s fakeSigilSlots) SlotCommitSHA(_, _ string) (string, error) {
 	if s.commitErr != nil {
 		return "", s.commitErr
 	}
-	// Дефолт: успешный слот несёт синтетический commit_sha (A1-S4 — current-
-	// target). Пустой commit оставляем только при явном задании.
+	// Default: a successful slot carries a synthetic commit_sha (A1-S4 —
+	// current-target). Empty commit only when explicitly set.
 	if s.commit == "" && s.slot != nil {
 		return "0123456789abcdef0123456789abcdef01234567", nil
 	}
 	return s.commit, nil
 }
 
-// fixtureSHA256 — валидный 64-hex digest бинаря для Allow-флоу (Signer.Sign
-// требует ровно 64 lower-hex символа).
+// fixtureSHA256 — valid 64-hex digest of the binary for the Allow flow
+// (Signer.Sign requires exactly 64 lower-hex characters).
 var fixtureSHA256 = hex.EncodeToString(func() []byte { d := sha256.Sum256([]byte("cloud-binary")); return d[:] }())
 
-// sigilSlotFixture — валидный слот кеша (бинарь + manifest) для Allow-флоу.
+// sigilSlotFixture — valid cache slot (binary + manifest) for the Allow flow.
 func sigilSlotFixture() *pluginhost.SlotContents {
 	return &pluginhost.SlotContents{
 		BinaryPath:    "/cache/cloud-hetzner/soul-cloud-hetzner",
@@ -91,8 +92,8 @@ func sigilSlotFixture() *pluginhost.SlotContents {
 
 // --- harness ---
 
-// newSigilHandler собирает Handler с SigilSvc над fakeSigilStore/fakeSigilSlots.
-// store=nil → SigilSvc остаётся nil (для проверки nil-guard).
+// newSigilHandler builds a Handler with SigilSvc over fakeSigilStore/fakeSigilSlots.
+// store=nil → SigilSvc stays nil (for nil-guard tests).
 func newSigilHandler(t *testing.T, rbacCfg *rbactest.Config, store sigil.Store, slots sigil.SlotReader) (*Handler, *recordingAudit) {
 	t.Helper()
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
@@ -139,7 +140,7 @@ func newSigilHandler(t *testing.T, rbacCfg *rbactest.Config, store sigil.Store, 
 	return h, rec
 }
 
-// sigilAdminCfg — конфиг RBAC, дающий archon-alice все plugin.*-permissions.
+// sigilAdminCfg — RBAC config granting archon-alice all plugin.*-permissions.
 func sigilAdminCfg() *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -194,8 +195,8 @@ func TestPluginTools_NilGuard(t *testing.T) {
 // --- tests: RBAC ---
 
 func TestPluginTools_RBACForbidden(t *testing.T) {
-	// archon-alice без plugin.*-permissions (пустой RBAC → deny all): мутации не
-	// выполняются (RBAC раньше), audit пуст.
+	// archon-alice without plugin.*-permissions (empty RBAC → deny all):
+	// mutations don't run (RBAC happens first), audit stays empty.
 	h, rec := newSigilHandler(t, nil, &fakeSigilStore{}, fakeSigilSlots{slot: sigilSlotFixture()})
 	resp := callTool(t, h, "archon-alice", "keeper.plugin.allow",
 		`{"namespace":"cloud","name":"hetzner","ref":"v1.0.0"}`)
@@ -276,7 +277,7 @@ func TestPluginAllow_Success(t *testing.T) {
 	if ev.Payload["allowed_by_aid"] != "archon-alice" {
 		t.Errorf("audit allowed_by_aid = %v", ev.Payload["allowed_by_aid"])
 	}
-	// signature/manifest (крипто-материал / крупный JSONB) НЕ должны попасть в audit.
+	// signature/manifest (crypto material / large JSONB) must NOT reach audit.
 	if _, ok := ev.Payload["signature"]; ok {
 		t.Error("audit payload leaks 'signature'")
 	}
@@ -356,7 +357,7 @@ func TestPluginList_Success(t *testing.T) {
 	store := &fakeSigilStore{listResult: []*sigil.Sigil{
 		{Namespace: "cloud", Name: "hetzner", Ref: "v1.0.0", SHA256: "abc",
 			AllowedByAID: "archon-alice", AllowedAt: now,
-			// signature/manifest присутствуют в записи, но List их не отдаёт.
+			// signature/manifest are present in the record, but List doesn't return them.
 			Signature: []byte("sig"), Manifest: []byte(`{"k":"v"}`)},
 	}}
 	h, _ := newSigilHandler(t, sigilAdminCfg(), store, fakeSigilSlots{})
@@ -379,13 +380,13 @@ func TestPluginList_Success(t *testing.T) {
 	if s.Namespace != "cloud" || s.Name != "hetzner" || s.Ref != "v1.0.0" || s.SHA256 != "abc" {
 		t.Errorf("sigil = %+v", s)
 	}
-	// signature/manifest НЕ должны попасть в JSON-вывод (проверяем по сырому JSON).
+	// signature/manifest must NOT appear in the JSON output (checked against raw JSON).
 	if got := string(res.StructuredContent); strings.Contains(got, "signature") || strings.Contains(got, "manifest") || strings.Contains(got, "\"sig\"") {
 		t.Errorf("list output leaks signature/manifest: %s", got)
 	}
 }
 
-// TestPluginList_EmptyNonNil — пустой реестр сериализуется как [], не null.
+// TestPluginList_EmptyNonNil — an empty registry serializes as [], not null.
 func TestPluginList_EmptyNonNil(t *testing.T) {
 	h, _ := newSigilHandler(t, sigilAdminCfg(), &fakeSigilStore{listResult: nil}, fakeSigilSlots{})
 	resp := callTool(t, h, "archon-alice", "keeper.plugin.list", `{}`)

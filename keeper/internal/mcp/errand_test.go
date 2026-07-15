@@ -6,20 +6,22 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac/rbactest"
 )
 
-// Errand-tools требуют конкретные [*errand.Dispatcher] / [*errand.Store]
-// (на pgxpool.Pool), поэтому полный happy-path покрывается интеграционными
-// тестами errand/dispatcher_test.go и api/handlers/errand_test.go. На уровне
-// MCP unit-теста покрываем:
+// Errand-tools require concrete [*errand.Dispatcher] / [*errand.Store]
+// (over pgxpool.Pool), so the full happy path is covered by the
+// errand/dispatcher_test.go and api/handlers/errand_test.go integration
+// tests. At the MCP unit-test level we cover:
 //
 //   1. NilGuard — ErrandDispatcher / ErrandStore == nil → internal-error
-//      (паттерн RoleTools_NilGuard).
-//   2. Catalog — три tool-name присутствуют в манифесте (TestDispatch_ToolsList_HasAllTools).
+//      (RoleTools_NilGuard pattern).
+//   2. Catalog — three tool names present in the manifest
+//      (TestDispatch_ToolsList_HasAllTools).
 //
-// Sync/async успехи, маппинг sentinel-ов, RBAC-deny → покрывается интеграциями.
+// Sync/async success paths, sentinel mapping, RBAC-deny are covered by
+// the integration tests.
 
-// errandAdminCfg — RBAC-конфиг с полным набором errand-permissions для
-// caller-а archon-alice. Используется в nil-guard-тесте, чтобы RBAC.Check
-// (если бы дошло до него) не блокировал tool.
+// errandAdminCfg — RBAC config granting caller archon-alice the full set of
+// errand permissions. Used in the nil-guard test so RBAC.Check (if reached)
+// doesn't block the tool.
 func errandAdminCfg() *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -33,8 +35,8 @@ func errandAdminCfg() *rbactest.Config {
 }
 
 func TestErrandTools_NilGuard(t *testing.T) {
-	// newTestHandler не выставляет ErrandDispatcher/ErrandStore → ожидаем
-	// internal-error «errand orchestrator is not configured».
+	// newTestHandler doesn't set ErrandDispatcher/ErrandStore → expect
+	// internal-error "errand orchestrator is not configured".
 	h, _, _ := newTestHandler(t, &fakePool{}, errandAdminCfg())
 	cases := []struct {
 		tool string

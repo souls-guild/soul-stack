@@ -45,17 +45,17 @@ func sseTestToken(t *testing.T, aid string) string {
 	return tok
 }
 
-// allowAllAccess — applyAccessStore, разрешающий подписку любому Архонту:
-// возвращает Access без конкретного владельца, а incarnation покрывается
-// allowAllRBAC. Используется в delivery/masking-тестах, где авторизация не
-// в фокусе (RBAC-семантика проверяется отдельными TestSSE_RBAC_*).
+// allowAllAccess — an applyAccessStore that allows any Archon to subscribe:
+// returns an Access with no specific owner, with the incarnation covered by
+// allowAllRBAC. Used in delivery/masking tests where authorization isn't the
+// focus (RBAC semantics are checked by the separate TestSSE_RBAC_* tests).
 type allowAllAccess struct{}
 
 func (allowAllAccess) Access(_ context.Context, _ string) (*applyrun.Access, error) {
 	return &applyrun.Access{IncarnationName: "test-inc"}, nil
 }
 
-// allowAllRBAC — PermissionChecker, разрешающий любую проверку.
+// allowAllRBAC — a PermissionChecker that allows any check.
 type allowAllRBAC struct{}
 
 func (allowAllRBAC) Check(_, _, _ string, _ map[string]string) error { return nil }
@@ -165,7 +165,7 @@ func TestSSE_EventDelivery(t *testing.T) {
 		t.Errorf("Content-Type = %q, want text/event-stream", got)
 	}
 
-	// Ждём пока subscriber появится в шине.
+	// Wait until the subscriber shows up on the bus.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if bus.Subscribers(applyID) >= 1 {
@@ -204,7 +204,7 @@ func TestSSE_EventDelivery(t *testing.T) {
 	}
 
 	cancel()
-	// После отмены ctx subscriber должен исчезнуть из bus-а.
+	// After ctx is canceled, the subscriber must disappear from the bus.
 	deadline = time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if bus.Subscribers(applyID) == 0 {
@@ -217,7 +217,7 @@ func TestSSE_EventDelivery(t *testing.T) {
 	}
 }
 
-// fakeAccess — in-memory applyAccessStore для unit-тестов RBAC.
+// fakeAccess — in-memory applyAccessStore for RBAC unit tests.
 type fakeAccess struct {
 	byID map[string]*applyrun.Access
 }
@@ -230,8 +230,8 @@ func (f fakeAccess) Access(_ context.Context, applyID string) (*applyrun.Access,
 	return acc, nil
 }
 
-// fakeRBAC — PermissionChecker-stub: allow только заданному (aid,
-// incarnation)-набору на (incarnation, get).
+// fakeRBAC — a PermissionChecker stub: allows only a given (aid,
+// incarnation) set on (incarnation, get).
 type fakeRBAC struct {
 	allow map[string]string // aid → incarnation
 }
@@ -298,7 +298,7 @@ func TestSSE_RBAC_NonOwnerDenied(t *testing.T) {
 	access := fakeAccess{byID: map[string]*applyrun.Access{
 		"A1": {IncarnationName: "web", StartedByAID: ptr("archon-owner")},
 	}}
-	// fakeRBAC без allow → не-владелец без incarnation.get → 403.
+	// fakeRBAC with no allow set → a non-owner without incarnation.get → 403.
 	srv := sseRBACServer(t, bus, access, fakeRBAC{})
 	defer srv.Close()
 
@@ -339,7 +339,7 @@ func TestSSE_RBAC_NotFoundForbidden(t *testing.T) {
 	srv := sseRBACServer(t, bus, access, fakeRBAC{})
 	defer srv.Close()
 
-	// Несуществующий apply_id → 403 (anti-enum), не 404.
+	// A nonexistent apply_id → 403 (anti-enum), not 404.
 	resp := sseGet(t, srv, "archon-x", "GHOST")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
@@ -348,8 +348,9 @@ func TestSSE_RBAC_NotFoundForbidden(t *testing.T) {
 }
 
 func TestSSE_RBAC_NilAccessDenied(t *testing.T) {
-	// Access == nil → fail-closed: без access-store нельзя резолвить владельца
-	// прогона, подписка отклоняется (403) даже для аутентифицированного Архонта.
+	// Access == nil → fail-closed: without an access store the run's owner
+	// can't be resolved, the subscription is rejected (403) even for an
+	// authenticated Archon.
 	bus := applybus.NewBus(slog.Default())
 	srv := sseRBACServer(t, bus, nil, nil)
 	defer srv.Close()
@@ -451,18 +452,19 @@ func TestSSE_PayloadMasked(t *testing.T) {
 	if !strings.Contains(frame, maskedValueInData()) {
 		t.Errorf("frame missing masked marker: %q", frame)
 	}
-	// Несекретные поля сохраняются.
+	// Non-secret fields are preserved.
 	if !strings.Contains(frame, "eu") {
 		t.Errorf("non-secret field 'region' lost: %q", frame)
 	}
 	cancel()
 }
 
-// TestSSE_TaskExecutedFailedFrameClean — end-to-end write-path для упавшей
-// задачи (BUG-3 floor). publishTaskExecuted (grpc-слой) не кладёт сырой stderr
-// в task.executed-payload; этот тест фиксирует, что итоговый SSE-frame несёт
-// только code/module без тела сообщения. Payload собран в той же форме, что
-// публикует publishTaskExecuted (см. events_taskevent.go).
+// TestSSE_TaskExecutedFailedFrameClean — end-to-end write path for a failed
+// task (BUG-3 floor). publishTaskExecuted (the gRPC layer) doesn't put raw
+// stderr into the task.executed payload; this test asserts that the resulting
+// SSE frame carries only code/module, no message body. The payload is
+// assembled in the same shape publishTaskExecuted publishes (see
+// events_taskevent.go).
 func TestSSE_TaskExecutedFailedFrameClean(t *testing.T) {
 	bus := applybus.NewBus(slog.Default())
 	srv := sseRBACServer(t, bus, allowAllAccess{}, allowAllRBAC{})
@@ -526,16 +528,16 @@ func TestSSE_TaskExecutedFailedFrameClean(t *testing.T) {
 	cancel()
 }
 
-// maskedValueInData возвращает masked-маркер в том виде, как он попадает в
-// JSON-data SSE-frame (через json.Marshal значения).
+// maskedValueInData returns the masked marker in the same form it lands in
+// the SSE frame's JSON data (via json.Marshal of the value).
 func maskedValueInData() string {
 	b, _ := json.Marshal("***MASKED***")
 	return string(b)
 }
 
-// readSSEFrame читает один SSE-frame (события или heartbeat-comment) до
-// двойного \n. Heartbeat-comment (`:keepalive\n\n`) и event-frame
-// (`event:...\ndata:...\n\n`) одинаково оканчиваются `\n\n`.
+// readSSEFrame reads a single SSE frame (event or heartbeat comment) up to
+// the double \n. A heartbeat comment (`:keepalive\n\n`) and an event frame
+// (`event:...\ndata:...\n\n`) both end with `\n\n`.
 func readSSEFrame(rd *bufio.Reader, timeout time.Duration) (string, error) {
 	type res struct {
 		s   string
@@ -559,8 +561,7 @@ func readSSEFrame(rd *bufio.Reader, timeout time.Duration) (string, error) {
 	}()
 	select {
 	case r := <-ch:
-		// Пропускаем heartbeat-comment-frame-ы — caller ожидает реальный
-		// event.
+		// Skip heartbeat-comment frames — the caller expects a real event.
 		if strings.HasPrefix(r.s, ":") {
 			return readSSEFrame(rd, timeout)
 		}
@@ -571,9 +572,9 @@ func readSSEFrame(rd *bufio.Reader, timeout time.Duration) (string, error) {
 }
 
 func TestSSE_HeartbeatCommentFormat(t *testing.T) {
-	// Heartbeat в production ходит каждые 30 с — в unit-тесте мы не ждём;
-	// проверяем только сам формат комментария, чтобы при изменении
-	// случайно не сломать SSE-RFC.
+	// In production the heartbeat fires every 30s — the unit test doesn't wait
+	// for it; we only check the comment format itself, so a future change
+	// doesn't accidentally break the SSE RFC.
 	if !strings.HasPrefix(":keepalive\n\n", ":") {
 		t.Fatal("heartbeat must start with ':' (SSE comment)")
 	}

@@ -16,8 +16,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// mcpDrift — мок [handlers.DriftChecker]: фиксирует spec + число вызовов и
-// возвращает заранее заготовленный DriftReport / ошибку.
+// mcpDrift is a mock [handlers.DriftChecker]: records the spec + call count
+// and returns a preset DriftReport / error.
 type mcpDrift struct {
 	gotSpec  scenario.CheckDriftSpec
 	calls    int
@@ -49,7 +49,7 @@ func driftRBAC() *rbactest.Config {
 	}
 }
 
-// newTestHandlerDrift собирает Handler с drift-стеком (drift + registry).
+// newTestHandlerDrift builds a Handler with the drift stack (drift + registry).
 func newTestHandlerDrift(t *testing.T, pool *fakePool, rbacCfg *rbactest.Config, drift handlers.DriftChecker) (*Handler, *recordingAudit) {
 	t.Helper()
 	enf, err := rbactest.NewEnforcer(rbacCfg)
@@ -99,9 +99,9 @@ func sampleDriftReport() *scenario.DriftReport {
 	}
 }
 
-// TestToolsCall_IncarnationCheckDrift_Success — happy-path: возвращается
-// DriftReport, MarkDriftStatus вызван с hasDrift=true (есть drifted-хост),
-// audit пишется с correlation_id=apply_id.
+// TestToolsCall_IncarnationCheckDrift_Success — happy path: a DriftReport is
+// returned, MarkDriftStatus is called with hasDrift=true (a drifted host
+// exists), audit is written with correlation_id=apply_id.
 func TestToolsCall_IncarnationCheckDrift_Success(t *testing.T) {
 	pool := &fakePool{incFn: incWithStatus(incarnation.StatusReady)}
 	drift := &mcpDrift{report: sampleDriftReport()}
@@ -137,8 +137,8 @@ func TestToolsCall_IncarnationCheckDrift_Success(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationCheckDrift_ConvergeMissing — Runner вернул
-// ErrConvergeMissing → 422 validation-failed, не internal-error.
+// TestToolsCall_IncarnationCheckDrift_ConvergeMissing — Runner returning
+// ErrConvergeMissing produces 422 validation-failed, not internal-error.
 func TestToolsCall_IncarnationCheckDrift_ConvergeMissing(t *testing.T) {
 	pool := &fakePool{incFn: incWithStatus(incarnation.StatusReady)}
 	drift := &mcpDrift{err: scenario.ErrConvergeMissing}
@@ -155,12 +155,12 @@ func TestToolsCall_IncarnationCheckDrift_ConvergeMissing(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationCheckDrift_InputMissing — drift-input не резолвится
-// → validation-failed.
+// TestToolsCall_IncarnationCheckDrift_InputMissing — drift input that fails
+// to resolve → validation-failed.
 func TestToolsCall_IncarnationCheckDrift_InputMissing(t *testing.T) {
 	pool := &fakePool{incFn: incWithStatus(incarnation.StatusReady)}
 	drift := &mcpDrift{err: errors.New("scenario: required: foo")}
-	// Возвращаем ErrDriftInputMissing напрямую через wrap.
+	// Return ErrDriftInputMissing directly via wrap.
 	drift.err = scenario.ErrDriftInputMissing
 	h, _ := newTestHandlerDrift(t, pool, driftRBAC(), drift)
 
@@ -175,9 +175,9 @@ func TestToolsCall_IncarnationCheckDrift_InputMissing(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationCheckDrift_ScopeDeniesProd — оператор со scope
-// `incarnation.check-drift on coven=dev` НЕ может проверить prod-incarnation
-// (covens=[prod]) — паритет destroy/run scope-теста.
+// TestToolsCall_IncarnationCheckDrift_ScopeDeniesProd — an operator scoped to
+// `incarnation.check-drift on coven=dev` CANNOT check a prod-incarnation
+// (covens=[prod]) — parity with the destroy/run scope test.
 func TestToolsCall_IncarnationCheckDrift_ScopeDeniesProd(t *testing.T) {
 	prod := incWithCovens([]string{"prod"})
 	drift := &mcpDrift{}
@@ -192,8 +192,8 @@ func TestToolsCall_IncarnationCheckDrift_ScopeDeniesProd(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationCheckDrift_ScopeMatchingCovenPasses — scope coven=prod
-// матчит prod-incarnation (covens=[prod]).
+// TestToolsCall_IncarnationCheckDrift_ScopeMatchingCovenPasses — scope
+// coven=prod matches a prod-incarnation (covens=[prod]).
 func TestToolsCall_IncarnationCheckDrift_ScopeMatchingCovenPasses(t *testing.T) {
 	prod := incWithCovens([]string{"prod"})
 	drift := &mcpDrift{report: sampleDriftReport()}

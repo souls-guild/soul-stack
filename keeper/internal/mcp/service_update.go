@@ -10,9 +10,10 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// serviceUpdateArgs — arguments tool-а keeper.service.update
-// (schemaServiceUpdateInput): name + git + ref обязательны (replace-семантика
-// mutable-полей), refresh опционален. name — ключ записи, не меняется.
+// serviceUpdateArgs — arguments for keeper.service.update
+// (schemaServiceUpdateInput): name + git + ref are required (replace
+// semantics for mutable fields), refresh is optional. name is the record key
+// and doesn't change.
 type serviceUpdateArgs struct {
 	Name    string  `json:"name"`
 	Git     string  `json:"git"`
@@ -20,12 +21,12 @@ type serviceUpdateArgs struct {
 	Refresh *string `json:"refresh"`
 }
 
-// callServiceUpdate — mutating-tool keeper.service.update. Транспорт поверх
-// [serviceregistry.Service.UpdateService] (replace-семантика git/ref/refresh):
-// валидация и invalidate-хук — в Service; tool маппит sentinel-ы в MCP-коды и
-// пишет audit service.updated.
+// callServiceUpdate — mutating tool keeper.service.update. Transport over
+// [serviceregistry.Service.UpdateService] (replace semantics for
+// git/ref/refresh): validation and the invalidate hook live in Service; the
+// tool maps sentinels to MCP codes and writes audit service.updated.
 //
-// RBAC — service.update без селектора (rbac.md: NoSelector).
+// RBAC — service.update without a selector (rbac.md: NoSelector).
 func (h *Handler) callServiceUpdate(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.service.update"
 
@@ -33,9 +34,9 @@ func (h *Handler) callServiceUpdate(ctx context.Context, claims *jwt.Claims, req
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, serviceRegistryNotConfigured)
 	}
 
-	// RBAC ДО unmarshal/валидации (least-disclosure): неавторизованный оператор
-	// не получает validation-feedback по телу. Контекст nil — право не зависит
-	// от тела запроса.
+	// RBAC BEFORE unmarshal/validation (least-disclosure): an unauthorized
+	// operator gets no validation feedback about the body. Context nil — the
+	// permission doesn't depend on the request body.
 	if err := h.deps.RBAC.Check(claims.Subject, "service", "update", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission service.update")
@@ -72,8 +73,8 @@ func (h *Handler) callServiceUpdate(ctx context.Context, claims *jwt.Claims, req
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	// Audit — параллельно REST-handler-у: payload {name, git, ref}. git-URL не
-	// секрет.
+	// Audit — parallels the REST handler: payload {name, git, ref}. The git
+	// URL isn't a secret.
 	h.writeAudit(audit.EventServiceUpdated, callerAID, map[string]any{
 		"name": entry.Name,
 		"git":  entry.Git,

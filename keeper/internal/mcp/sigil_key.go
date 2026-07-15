@@ -11,21 +11,23 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// MCP-tools ротации trust-anchor-ключей подписи Sigil (ADR-026(h), R3-S7) —
-// паритет REST /v1/sigil/keys*. Транспорт поверх [sigil.KeyService]; tool
-// валидирует input, проверяет permission, маппит sentinel-ы и пишет audit.
+// MCP tools for Sigil signing trust-anchor key rotation (ADR-026(h), R3-S7)
+// — parity with REST /v1/sigil/keys*. Transport over [sigil.KeyService];
+// each tool validates input, checks permission, maps sentinels, and writes
+// audit.
 //
-// 3-сегментный tool-name keeper.sigil.key.<verb> ↔ 2-сегментная permission
-// sigil.key-<verb> (RBAC-грамматика — ровно <resource>.<action>).
+// 3-segment tool name keeper.sigil.key.<verb> ↔ 2-segment permission
+// sigil.key-<verb> (RBAC grammar is exactly <resource>.<action>).
 //
-// БЕЗОПАСНОСТЬ: приватник НИКОГДА не в output (KeyService его не возвращает) и
-// не в логах (логируем только key_id / by_aid).
+// SECURITY: the private key is NEVER in output (KeyService never returns
+// it) and never in logs (only key_id / by_aid are logged).
 
-// sigilKeyNotConfigured — public-detail nil-guard-а sigil.key-tools (SigilKeySvc
-// nil при выключенном Sigil; симметрично sigilNotConfigured plugin-tools).
+// sigilKeyNotConfigured is the public detail for the sigil.key-tools
+// nil-guard (SigilKeySvc is nil when Sigil is disabled; mirrors
+// sigilNotConfigured in the plugin tools).
 const sigilKeyNotConfigured = "sigil is not configured"
 
-// reSigilKeyIDMCP — формат key_id (64 нижних hex-символа), 1:1 с REST reSigilKeyID.
+// reSigilKeyIDMCP — key_id format (64 lowercase hex chars), 1:1 with REST reSigilKeyID.
 var reSigilKeyIDMCP = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // sigilKeyIntroduceArgs — arguments keeper.sigil.key.introduce.
@@ -33,8 +35,8 @@ type sigilKeyIntroduceArgs struct {
 	MakePrimary bool `json:"make_primary"`
 }
 
-// sigilKeyIntroduceOutput — output keeper.sigil.key.introduce. БЕЗ приватника
-// (паритет 201 REST POST /v1/sigil/keys).
+// sigilKeyIntroduceOutput — output of keeper.sigil.key.introduce. No
+// private key included (parity with REST 201 POST /v1/sigil/keys).
 type sigilKeyIntroduceOutput struct {
 	KeyID        string    `json:"key_id"`
 	PubkeyPEM    string    `json:"pubkey_pem"`
@@ -74,8 +76,8 @@ func (h *Handler) callSigilKeyIntroduce(ctx context.Context, claims *jwt.Claims,
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	// Audit — паритет REST: payload {key_id, is_primary, introduced_by_aid}.
-	// Приватник (в Vault) НЕ пишется.
+	// Audit — parity with REST: payload {key_id, is_primary, introduced_by_aid}.
+	// The private key (in Vault) is NOT written.
 	h.writeAudit(audit.EventSigilKeyIntroduced, claims.Subject, map[string]any{
 		"key_id":            res.KeyID,
 		"is_primary":        res.IsPrimary,
@@ -91,7 +93,7 @@ func (h *Handler) callSigilKeyIntroduce(ctx context.Context, claims *jwt.Claims,
 	})
 }
 
-// sigilKeyListItem — одна запись output-а keeper.sigil.key.list.
+// sigilKeyListItem — one entry in the keeper.sigil.key.list output.
 type sigilKeyListItem struct {
 	KeyID        string    `json:"key_id"`
 	IsPrimary    bool      `json:"is_primary"`
@@ -104,7 +106,7 @@ type sigilKeyListOutput struct {
 	Keys []sigilKeyListItem `json:"keys"`
 }
 
-// callSigilKeyList — read-only tool keeper.sigil.key.list. Без audit.
+// callSigilKeyList — read-only tool keeper.sigil.key.list. No audit.
 func (h *Handler) callSigilKeyList(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, _ json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.sigil.key.list"
 
@@ -134,7 +136,7 @@ func (h *Handler) callSigilKeyList(ctx context.Context, claims *jwt.Claims, req 
 	return h.toolResult(req.ID, sigilKeyListOutput{Keys: items})
 }
 
-// sigilKeyIDArgs — arguments tool-ов set-primary / retire (общий: только key_id).
+// sigilKeyIDArgs — arguments shared by the set-primary / retire tools (just key_id).
 type sigilKeyIDArgs struct {
 	KeyID string `json:"key_id"`
 }
@@ -147,8 +149,9 @@ func (h *Handler) callSigilKeySetPrimary(ctx context.Context, claims *jwt.Claims
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, sigilKeyNotConfigured)
 	}
 
-	// RBAC ДО unmarshal/regex-валидации (паритет introduce/list и REST-middleware):
-	// факт валидности key_id не утекает оператору без права key-set-primary.
+	// RBAC BEFORE unmarshal/regex validation (parity with introduce/list and
+	// REST middleware): key_id validity must not leak to an operator
+	// without key-set-primary permission.
 	if err := h.deps.RBAC.Check(claims.Subject, "sigil", "key-set-primary", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission sigil.key-set-primary")
@@ -190,8 +193,9 @@ func (h *Handler) callSigilKeyRetire(ctx context.Context, claims *jwt.Claims, re
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, sigilKeyNotConfigured)
 	}
 
-	// RBAC ДО unmarshal/regex-валидации (паритет introduce/list и REST-middleware):
-	// факт валидности key_id не утекает оператору без права key-retire.
+	// RBAC BEFORE unmarshal/regex validation (parity with introduce/list and
+	// REST middleware): key_id validity must not leak to an operator
+	// without key-retire permission.
 	if err := h.deps.RBAC.Check(claims.Subject, "sigil", "key-retire", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission sigil.key-retire")

@@ -37,50 +37,50 @@ type fakePool struct {
 	revokeFn func(aid, reason string) error
 	activeFn func() ([]string, error)
 
-	// incFn — резолв incarnation по имени (SelectByName + existence-probe +
-	// FOR UPDATE-select). nil → QueryRow по `FROM incarnation` отдаёт
-	// pgx.ErrNoRows (→ not-found). FOR UPDATE-вариант (unlock/upgrade) читает
-	// state/status/version из того же inc.
+	// incFn — resolves incarnation by name (SelectByName + existence-probe +
+	// FOR UPDATE-select). nil → QueryRow on `FROM incarnation` returns
+	// pgx.ErrNoRows (→ not-found). FOR UPDATE variant (unlock/upgrade) reads
+	// state/status/version from the same inc.
 	incFn func(name string) (*incarnation.Incarnation, error)
 
-	// incListFn — backing для keeper.incarnation.list (SelectAll). Возвращает
-	// страницу + total. nil → пустой список, total=0.
+	// incListFn — backing for keeper.incarnation.list (SelectAll). Returns a
+	// page + total. nil → empty list, total=0.
 	incListFn func(filter incarnation.ListFilter) ([]*incarnation.Incarnation, int)
 
-	// historyFn — backing для keeper.incarnation.history (HistorySelectByName).
-	// nil → пустой список, total=0.
+	// historyFn — backing for keeper.incarnation.history (HistorySelectByName).
+	// nil → empty list, total=0.
 	historyFn func(name string, filter incarnation.HistoryFilter) ([]*incarnation.HistoryEntry, int)
 
-	// incInsertFn — backing для keeper.incarnation.create (Create insertSQL).
-	// nil → INSERT успешен (created_at/updated_at = zero). Возврат ошибки —
-	// эмуляция UNIQUE / FK / прочих сбоев.
+	// incInsertFn — backing for keeper.incarnation.create (Create insertSQL).
+	// nil → INSERT succeeds (created_at/updated_at = zero). Returning an error
+	// emulates UNIQUE / FK / other failures.
 	incInsertFn func(name, service string) error
 
-	// insertIncArgs — захваченные args INSERT INTO incarnation (создаётся
-	// create-tool-ом): [0]=name … [4]=spec(jsonb []byte) … [10]=traits(jsonb).
-	// Позволяет тесту проверить прокидку spec.traits на create-пути (ADR-060
-	// amend R1, паритет REST insertArgs).
+	// insertIncArgs — captured args of INSERT INTO incarnation (issued by the
+	// create tool): [0]=name … [4]=spec(jsonb []byte) … [10]=traits(jsonb).
+	// Lets a test assert spec.traits propagation on the create path (ADR-060
+	// amend R1, parity with REST insertArgs).
 	insertIncArgs []any
 
-	// lastScenarioFn — backing для rerun-last probe `SELECT scenario, apply_id FROM
+	// lastScenarioFn — backing for the rerun-last probe `SELECT scenario, apply_id FROM
 	// state_history … ORDER BY history_id DESC LIMIT 1` (UnlockForRerun last-run).
-	// nil → отдаём имя создавшего сценария из incFn-строки (дефолт `create`) —
-	// create-путь (последний упавший = created).
+	// nil → returns the creating scenario's name from the incFn row (default
+	// `create`) — create path (last failed = created).
 	lastScenarioFn func(name string) (string, error)
 
-	// recipeFn — backing для rerun-last day-2 recipe probe `SELECT recipe FROM
+	// recipeFn — backing for the rerun-last day-2 recipe probe `SELECT recipe FROM
 	// apply_runs WHERE apply_id = $1 AND recipe IS NOT NULL LIMIT 1`. nil →
-	// ErrNoRows (fail-closed). Задать для day-2 happy-path (recipe-jsonb с input).
+	// ErrNoRows (fail-closed). Set for the day-2 happy path (recipe-jsonb with input).
 	recipeFn func(applyID string) ([]byte, error)
 
-	// soulBulkCountFn — backing для souls-bulk-проекции traits (SyncTraitsToHosts
-	// → CountBulkMatched: `SELECT COUNT(*) FROM souls …`). nil → 0 (0 хостов-членов,
-	// sync-hook no-op — как обычно на create до онбординга). Ненулевое → столько
-	// «членов», и тест может проверить, что проекция была вызвана.
+	// soulBulkCountFn — backing for the souls-bulk traits projection (SyncTraitsToHosts
+	// → CountBulkMatched: `SELECT COUNT(*) FROM souls …`). nil → 0 (0 member hosts,
+	// sync-hook no-op — the usual case on create before onboarding). Nonzero → that
+	// many "members", letting a test assert the projection was invoked.
 	soulBulkCountFn func() int
 
-	// deleteTag — RowsAffected для single-winner `DELETE FROM incarnation`
-	// (destroy force-путь, DeleteAfterTeardown). zero-value → "DELETE 1".
+	// deleteTag — RowsAffected for the single-winner `DELETE FROM incarnation`
+	// (destroy force path, DeleteAfterTeardown). zero-value → "DELETE 1".
 	deleteTag pgconn.CommandTag
 
 	beginErr error
@@ -114,9 +114,9 @@ func (f *fakePool) Exec(_ context.Context, sql string, args ...any) (pgconn.Comm
 		}
 		return pgconn.NewCommandTag("UPDATE 1"), nil
 	}
-	// destroy force-DELETE (DeleteAfterTeardown): archive-INSERT-ы + single-
-	// winner DELETE FROM incarnation. deleteTag задаёт RowsAffected DELETE-а
-	// (zero-value → "DELETE 1" = строка снесена; "DELETE 0" → no-op).
+	// destroy force-DELETE (DeleteAfterTeardown): archive INSERTs + single-
+	// winner DELETE FROM incarnation. deleteTag sets the DELETE's RowsAffected
+	// (zero-value → "DELETE 1" = row removed; "DELETE 0" → no-op).
 	if contains(sql, "DELETE FROM incarnation") {
 		if f.deleteTag.String() == "" {
 			return pgconn.NewCommandTag("DELETE 1"), nil
@@ -126,9 +126,9 @@ func (f *fakePool) Exec(_ context.Context, sql string, args ...any) (pgconn.Comm
 	if contains(sql, "INSERT INTO incarnation_archive") || contains(sql, "INSERT INTO state_history_archive") {
 		return pgconn.NewCommandTag("INSERT 0 1"), nil
 	}
-	// incarnation-mutations (unlock state_history-insert / status-update,
-	// upgrade tx-write-ы, destroy state_history-insert). Эмулируем как успешный
-	// no-op — фейлы инжектятся через incFn / beginErr, не через Exec.
+	// incarnation mutations (unlock state_history insert / status update,
+	// upgrade tx writes, destroy state_history insert). Emulated as a successful
+	// no-op — failures are injected via incFn / beginErr, not Exec.
 	if contains(sql, "INSERT INTO state_history") || contains(sql, "UPDATE incarnation") {
 		return pgconn.NewCommandTag("OK 1"), nil
 	}
@@ -148,9 +148,9 @@ func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row 
 		}
 		return staticRow{values: []any{time.Time{}, time.Time{}}}
 	}
-	// SELECT COUNT(*) FROM souls … (SyncTraitsToHosts → CountBulkMatched). Без
-	// этой ветки souls-bulk-count упал бы в errFakeUnexpected и sync-hook (best-
-	// effort) лишь логировал бы warning; ветка делает проекцию наблюдаемой.
+	// SELECT COUNT(*) FROM souls … (SyncTraitsToHosts → CountBulkMatched). Without
+	// this branch souls-bulk-count would hit errFakeUnexpected and the best-effort
+	// sync-hook would just log a warning; this branch makes the projection observable.
 	if contains(sql, "COUNT(*) FROM souls") {
 		n := 0
 		if f.soulBulkCountFn != nil {
@@ -158,7 +158,7 @@ func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row 
 		}
 		return countRow{n: n}
 	}
-	// COUNT(*) FROM incarnation (list total) — без name-arg.
+	// COUNT(*) FROM incarnation (list total) — no name arg.
 	if contains(sql, "COUNT(*) FROM incarnation") {
 		_, total := f.listItems(incarnation.ListFilter{})
 		return countRow{n: total}
@@ -170,14 +170,15 @@ func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row 
 		return countRow{n: total}
 	}
 	// UPDATE incarnation … RETURNING updated_at (UpdateHosts/UpdateTraits day-2
-	// мутации): отдаём свежий updated_at на Scan(*time.Time). Идёт ДО общего
-	// `FROM incarnation`-матча (тот предикат стоит и в WHERE этого UPDATE).
+	// mutations): returns a fresh updated_at on Scan(*time.Time). Checked BEFORE
+	// the general `FROM incarnation` match (that predicate is also in this
+	// UPDATE's WHERE).
 	if contains(sql, "UPDATE incarnation") && contains(sql, "RETURNING updated_at") {
 		return staticRow{values: []any{time.Now().UTC()}}
 	}
-	// FOR UPDATE-select из incarnation. ПОЛНАЯ строка (UpdateTraits:
-	// `covens, traits` в проекции → scanIncarnation) → newIncRow. rerun-last
-	// (state, status, created_scenario) → rerunForUpdateRow. Частичная
+	// FOR UPDATE-select on incarnation. FULL row (UpdateTraits:
+	// `covens, traits` in the projection → scanIncarnation) → newIncRow. rerun-last
+	// (state, status, created_scenario) → rerunForUpdateRow. Partial
 	// (unlock: state,status / upgrade: state,state_schema_version,status) →
 	// forUpdateIncRow. args[0] = name.
 	if contains(sql, "FROM incarnation") && contains(sql, "FOR UPDATE") {
@@ -197,7 +198,8 @@ func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row 
 		return forUpdateIncRow{inc: inc, withVersion: contains(sql, "state_schema_version")}
 	}
 	// rerun-last last-run probe: SELECT scenario, apply_id FROM state_history …
-	// LIMIT 1. Идёт ДО общего `FROM state_history`/COUNT (тот требует COUNT-токен).
+	// LIMIT 1. Checked BEFORE the general `FROM state_history`/COUNT (that one
+	// requires a COUNT token).
 	if contains(sql, "SELECT scenario") && contains(sql, "FROM state_history") {
 		name := args[0].(string)
 		const dummyApplyID = "01HFAILEDRUN00000000000000"
@@ -208,8 +210,8 @@ func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row 
 			}
 			return staticRow{values: []any{s, dummyApplyID}}
 		}
-		// Дефолт: «последний упавший = создавший». created_scenario строки берём
-		// из incFn (если задан), иначе канонический `create`.
+		// Default: "last failed = creator". created_scenario is taken from the
+		// incFn row (if set), else the canonical `create`.
 		last := "create"
 		if f.incFn != nil {
 			if inc, err := f.incFn(name); err == nil && inc.CreatedScenario != nil {
@@ -229,7 +231,7 @@ func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row 
 		}
 		return errRow{err: pgx.ErrNoRows}
 	}
-	// SelectByName / existence-probe (полная строка incarnation).
+	// SelectByName / existence-probe (full incarnation row).
 	if contains(sql, "FROM incarnation") {
 		if f.incFn == nil {
 			return errRow{err: pgx.ErrNoRows}
@@ -288,18 +290,18 @@ func (f *fakePool) Query(_ context.Context, sql string, args ...any) (pgx.Rows, 
 		}
 		return &historyRows{rows: rows}, nil
 	}
-	// Synod-ветка self-lockout-ядра (ADR-049(f), эпик Synod S2):
-	// LockEffectiveClusterAdmins шлёт второй locking-запрос по synod_operators.
-	// mcp-сценарии групповых админов не моделируют — пусто; их покрывают rbac
-	// integration-guard-тесты. Проверяется ПЕРЕД прямой веткой.
+	// Synod branch of the self-lockout core (ADR-049(f), Synod S2 epic):
+	// LockEffectiveClusterAdmins sends a second locking query against
+	// synod_operators. mcp scenarios don't model group admins — empty; covered
+	// by rbac integration-guard tests instead. Checked BEFORE the direct branch.
 	if contains(sql, "FROM synod_operators") {
 		return &stringRows{}, nil
 	}
-	// Slice 3: operator.revoke lockout-probe идёт через
+	// Slice 3: operator.revoke's lockout-probe goes through
 	// rbac.LockEffectiveClusterAdmins — SELECT ro.aid FROM rbac_role_operators
-	// JOIN … FOR UPDATE OF ro,rp,o. activeFn возвращает уже-эффективный набор
-	// активных `*`-admin-ов из БД (admin-set целиком из БД, без пересечения
-	// с in-memory снимком).
+	// JOIN … FOR UPDATE OF ro,rp,o. activeFn returns the already-effective set
+	// of active `*`-admins from the DB (the full admin set from the DB, no
+	// intersection with the in-memory snapshot).
 	if contains(sql, "FROM rbac_role_operators") {
 		var admins []string
 		if f.activeFn != nil {
@@ -358,8 +360,8 @@ type errRow struct{ err error }
 
 func (r errRow) Scan(_ ...any) error { return r.err }
 
-// listItems / historyItems — общие backing-аксессоры, чтобы COUNT- и
-// list-варианты SQL отдавали согласованные total/items из одного источника.
+// listItems / historyItems — shared backing accessors so the COUNT- and
+// list-variant SQL return consistent total/items from a single source.
 func (f *fakePool) listItems(filter incarnation.ListFilter) ([]*incarnation.Incarnation, int) {
 	if f.incListFn == nil {
 		return nil, 0
@@ -374,7 +376,7 @@ func (f *fakePool) historyItems(name string, filter incarnation.HistoryFilter) (
 	return f.historyFn(name, filter)
 }
 
-// countRow — pgx.Row для SELECT COUNT(*) (Scan в *int).
+// countRow — pgx.Row for SELECT COUNT(*) (Scan into *int).
 type countRow struct{ n int }
 
 func (r countRow) Scan(dest ...any) error {
@@ -385,7 +387,7 @@ func (r countRow) Scan(dest ...any) error {
 	return fmt.Errorf("countRow.Scan: unexpected dest type %T", dest[0])
 }
 
-// forUpdateIncRow — pgx.Row для FOR UPDATE-select-ов incarnation.
+// forUpdateIncRow — pgx.Row for incarnation FOR UPDATE-selects.
 // unlock: Scan(state []byte, status string). upgrade: Scan(state []byte,
 // state_schema_version int, status string) — withVersion=true.
 type forUpdateIncRow struct {
@@ -418,9 +420,9 @@ func (r forUpdateIncRow) Scan(dest ...any) error {
 	return nil
 }
 
-// rerunForUpdateRow — pgx.Row для UnlockForRerun FOR UPDATE-select-а
+// rerunForUpdateRow — pgx.Row for UnlockForRerun's FOR UPDATE-select
 // `SELECT state, status, created_scenario, spec`. Scan(state []byte, status string,
-// created_scenario *string — NULL=bare, spec []byte для проброса spec.input, B1).
+// created_scenario *string — NULL=bare, spec []byte to propagate spec.input, B1).
 type rerunForUpdateRow struct{ inc *incarnation.Incarnation }
 
 func (r rerunForUpdateRow) Scan(dest ...any) error {
@@ -434,10 +436,10 @@ func (r rerunForUpdateRow) Scan(dest ...any) error {
 	}
 	*dest[0].(*[]byte) = state
 	*dest[1].(*string) = string(r.inc.Status)
-	// created_scenario NULLABLE → **string (NULL=bare-инкарнация).
+	// created_scenario NULLABLE → **string (NULL=bare incarnation).
 	*dest[2].(**string) = r.inc.CreatedScenario
-	// spec jsonb (B1): сериализуем inc.Spec; nil → `{}` (incarnation.InputFromSpec
-	// извлечёт spec.input при наличии).
+	// spec jsonb (B1): serializes inc.Spec; nil → `{}` (incarnation.InputFromSpec
+	// extracts spec.input when present).
 	spec := []byte("{}")
 	if r.inc.Spec != nil {
 		b, _ := json.Marshal(r.inc.Spec)
@@ -447,7 +449,7 @@ func (r rerunForUpdateRow) Scan(dest ...any) error {
 	return nil
 }
 
-// incRows — pgx.Rows над срезом incRow (list items).
+// incRows — pgx.Rows over a slice of incRow (list items).
 type incRows struct {
 	rows []incRow
 	idx  int
@@ -469,8 +471,8 @@ func (r *incRows) Values() ([]any, error)                       { return nil, ni
 func (r *incRows) RawValues() [][]byte                          { return nil }
 func (r *incRows) Conn() *pgx.Conn                              { return nil }
 
-// historyRow — pgx.Row для одной state_history-записи (scanHistoryEntry читает
-// 7 колонок: history_id, scenario, state_before, state_after, changed_by_aid,
+// historyRow — pgx.Row for a single state_history record (scanHistoryEntry reads
+// 7 columns: history_id, scenario, state_before, state_after, changed_by_aid,
 // apply_id, at).
 type historyRow struct{ vals []any }
 
@@ -511,7 +513,7 @@ func (r historyRow) Scan(dest ...any) error {
 	return nil
 }
 
-// historyRows — pgx.Rows над срезом historyRow.
+// historyRows — pgx.Rows over a slice of historyRow.
 type historyRows struct {
 	rows []historyRow
 	idx  int
@@ -605,7 +607,7 @@ func (r *recordingAudit) Write(_ context.Context, ev *audit.Event) error {
 	return nil
 }
 
-// contains — substring без strings (избегаем зависимости в тестовом fake-е).
+// contains — substring check without strings (avoids a dependency in the test fake).
 func contains(haystack, needle string) bool {
 	return len(haystack) >= len(needle) && indexOf(haystack, needle) >= 0
 }
@@ -661,8 +663,8 @@ func newTestHandler(t *testing.T, pool *fakePool, rbacCfg *rbactest.Config) (*Ha
 
 // --- incarnation-deps fakes (create/run/upgrade) ---
 
-// mcpStarter — мок [handlers.ScenarioStarter]. Зеркалит REST fakeStarter:
-// фиксирует spec + число вызовов, инжектит ошибку.
+// mcpStarter — mock of [handlers.ScenarioStarter]. Mirrors the REST fakeStarter:
+// captures spec + call count, injects an error.
 type mcpStarter struct {
 	gotSpec scenario.RunSpec
 	calls   int
@@ -675,14 +677,14 @@ func (f *mcpStarter) Start(_ context.Context, spec scenario.RunSpec) error {
 	return f.err
 }
 
-// mcpResolver — мок [handlers.ServiceResolver]. ok=false → not-registered.
+// mcpResolver — mock of [handlers.ServiceResolver]. ok=false → not-registered.
 type mcpResolver struct{ ok bool }
 
 func (f *mcpResolver) Resolve(service string) (artifact.ServiceRef, bool) {
 	return artifact.ServiceRef{Name: service, Ref: "v1"}, f.ok
 }
 
-// mcpLoader — мок [handlers.ServiceSnapshotLoader]. Зеркалит REST fakeLoader.
+// mcpLoader — mock of [handlers.ServiceSnapshotLoader]. Mirrors the REST fakeLoader.
 type mcpLoader struct {
 	targetSchema int
 	loadErr      error
@@ -690,19 +692,19 @@ type mcpLoader struct {
 	chainErr     error
 
 	// destroy pre-check (ReadFile): hasDestroyScenario=true → scenario `destroy`
-	// «есть» в снапшоте; false → os.ErrNotExist. readErr перекрывает (I/O-сбой).
+	// "exists" in the snapshot; false → os.ErrNotExist. readErr overrides (I/O failure).
 	hasDestroyScenario bool
 	readErr            error
 
-	// scenarioYAML — для sync input-валидации (scenario.ValidateInput):
-	// непустое → ReadFile отдаёт этот YAML как scenario/<name>/main.yml.
+	// scenarioYAML — for sync input validation (scenario.ValidateInput):
+	// non-empty → ReadFile returns this YAML as scenario/<name>/main.yml.
 	scenarioYAML string
 
-	// localDir — корень снапшота на диске (Фаза 2). Непустое → Load проставляет
-	// LocalDir (ResolveCreateScenarios сканирует его), ReadFile читает с диска
-	// (path-aware), перекрывая scenarioYAML/hasDestroyScenario. Нужно механизму
-	// нескольких create-сценариев: create-сценарий обязан лежать на диске с
-	// `create: true`, иначе набор пуст → bare-инкарнация.
+	// localDir — snapshot root on disk (Phase 2). Non-empty → Load sets LocalDir
+	// (ResolveCreateScenarios scans it), ReadFile reads from disk (path-aware),
+	// taking precedence over scenarioYAML/hasDestroyScenario. Needed for the
+	// multi create-scenario mechanism: a create scenario must live on disk with
+	// `create: true`, else the set is empty → bare incarnation.
 	localDir string
 }
 
@@ -728,8 +730,8 @@ func (f *mcpLoader) ListUpgrades(_ *artifact.ServiceArtifact) ([]artifact.Scenar
 	return nil, nil
 }
 
-// ReadFile — для destroy PrepareDestroy pre-check (наличие scenario `destroy`) и
-// sync input-валидации. localDir (если задан) — path-aware чтение с диска.
+// ReadFile — for the destroy PrepareDestroy pre-check (scenario `destroy`
+// presence) and sync input validation. localDir (if set) → path-aware disk read.
 func (f *mcpLoader) ReadFile(_ *artifact.ServiceArtifact, file string) ([]byte, error) {
 	if f.readErr != nil {
 		return nil, f.readErr
@@ -746,11 +748,11 @@ func (f *mcpLoader) ReadFile(_ *artifact.ServiceArtifact, file string) ([]byte, 
 	return nil, os.ErrNotExist
 }
 
-// mcpCreateSnapshot пишет scenario/create/main.yml (yaml) в temp-корень и
-// возвращает его (для mcpLoader.localDir). Фаза 2: ResolveCreateScenarios сканирует
-// localDir, поэтому create-сценарий обязан лежать на диске. Если yaml не несёт
-// `create: true` — префиксуем флагом (попадание в create-набор), сохраняя имя
-// строки `create`. t.TempDir авто-чистится.
+// mcpCreateSnapshot writes scenario/create/main.yml (yaml) under a temp root and
+// returns it (for mcpLoader.localDir). Phase 2: ResolveCreateScenarios scans
+// localDir, so the create scenario must live on disk. If yaml lacks
+// `create: true`, prefix the flag (to land in the create set) while keeping the
+// `create` name. t.TempDir auto-cleans.
 func mcpCreateSnapshot(t *testing.T, yaml string) string {
 	t.Helper()
 	root := t.TempDir()
@@ -767,9 +769,9 @@ func mcpCreateSnapshot(t *testing.T, yaml string) string {
 	return root
 }
 
-// mcpEmptyCreateSnapshot пишет снапшот БЕЗ единого create-сценария (только
-// operational restart) и возвращает корень. Для bare-инкарнации: набор
-// create-сценариев пуст → создание без прогона.
+// mcpEmptyCreateSnapshot writes a snapshot with no create scenario at all (only
+// an operational restart) and returns the root. For bare incarnations: an empty
+// create-scenario set → creation without a run.
 func mcpEmptyCreateSnapshot(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -783,9 +785,9 @@ func mcpEmptyCreateSnapshot(t *testing.T) string {
 	return root
 }
 
-// newTestHandlerFull — как newTestHandler, но прокидывает incarnation-deps
-// (runner / registry / loader) для create/run/upgrade-tools. nil-deps →
-// tool отвечает not-configured (паритет REST 500).
+// newTestHandlerFull — like newTestHandler, but wires incarnation deps
+// (runner / registry / loader) for the create/run/upgrade tools. nil deps →
+// tool responds not-configured (parity with REST 500).
 func newTestHandlerFull(t *testing.T, pool *fakePool, rbacCfg *rbactest.Config, runner handlers.ScenarioStarter, registry handlers.ServiceResolver, loader handlers.ServiceSnapshotLoader) (*Handler, *recordingAudit) {
 	t.Helper()
 	enf, err := rbactest.NewEnforcer(rbacCfg)
@@ -819,7 +821,7 @@ func newTestHandlerFull(t *testing.T, pool *fakePool, rbacCfg *rbactest.Config, 
 	return h, rec
 }
 
-// callTool — общий прогон любого incarnation-tool через реальный Dispatch.
+// callTool — generic runner for any incarnation tool through the real Dispatch.
 func callTool(t *testing.T, h *Handler, aid, tool, argsJSON string) jsonRPCResponse {
 	t.Helper()
 	params, _ := json.Marshal(toolsCallParams{
@@ -866,11 +868,11 @@ func TestNewHandler_RequiresIncarnationDB(t *testing.T) {
 		AuditWriter: &recordingAudit{},
 		Logger:      slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	}
-	// Без IncarnationDB → ошибка.
+	// No IncarnationDB → error.
 	if _, err := NewHandler(base); err == nil {
 		t.Fatal("NewHandler must reject nil IncarnationDB")
 	}
-	// С IncarnationDB → ok.
+	// With IncarnationDB → ok.
 	base.IncarnationDB = &fakePool{}
 	if _, err := NewHandler(base); err != nil {
 		t.Fatalf("NewHandler with IncarnationDB: %v", err)
@@ -921,7 +923,7 @@ func TestDispatch_ToolsList_HasAllTools(t *testing.T) {
 	if len(res.Tools) != 90 {
 		t.Errorf("tool count = %d, want 90", len(res.Tools))
 	}
-	// Имена должны быть стабильны (spec — mcp-tools.md).
+	// Names must stay stable (spec — mcp-tools.md).
 	names := map[string]bool{}
 	for _, t := range res.Tools {
 		names[t.Name] = true
@@ -1045,8 +1047,8 @@ func TestToolsCall_OperatorCreate_Success(t *testing.T) {
 	if rec.events[0].ArchonAID != "archon-alice" {
 		t.Errorf("ArchonAID = %q", rec.events[0].ArchonAID)
 	}
-	// ADR-022(b): MCP-handler пишет audit-event с Source=mcp (не api),
-	// иначе теряется granular trail.
+	// ADR-022(b): the MCP handler writes audit events with Source=mcp (not api),
+	// otherwise the granular trail is lost.
 	if rec.events[0].Source != audit.SourceMCP {
 		t.Errorf("Source = %q, want %q", rec.events[0].Source, audit.SourceMCP)
 	}
@@ -1271,9 +1273,10 @@ func TestToolsCall_OperatorIssueToken_Revoked(t *testing.T) {
 
 func TestToolsCall_StubToolReturnsNotImplemented(t *testing.T) {
 	h, _, _ := newTestHandler(t, &fakePool{}, nil)
-	// keeper.push.cleanup остаётся stub (toolStatusStub) — ждёт SshDispatcher
-	// Cleanup-wire-up-а (отдельный slice). Берём как репрезентативный stub-tool
-	// (push.apply реализован в Variant C orchestrator slice; cloud-tools тоже stub).
+	// keeper.push.cleanup remains a stub (toolStatusStub) — awaiting the
+	// SshDispatcher Cleanup wire-up (separate slice). Used as a representative
+	// stub tool (push.apply is implemented in the Variant C orchestrator slice;
+	// cloud-tools are also stubs).
 	params, _ := json.Marshal(toolsCallParams{
 		Name:      "keeper.push.cleanup",
 		Arguments: json.RawMessage(`{"inventory":["web-01"]}`),
@@ -1322,17 +1325,16 @@ func TestDispatch_BadJSONRPCVersion(t *testing.T) {
 	}
 }
 
-// TestDispatch_AllImplementedToolsDispatchable — каждый tool со
-// status=Implemented в catalogManifest должен быть достижим из tools/call
-// (диспетчер switch в handleToolsCall возвращает что-то отличное от
-// «tool declared implemented but dispatch missing»). Это страхует
-// switch-диспатчер от потерянных веток при добавлении новых implemented
-// tools.
+// TestDispatch_AllImplementedToolsDispatchable — every tool with
+// status=Implemented in catalogManifest must be reachable from tools/call
+// (the switch dispatcher in handleToolsCall must return something other than
+// "tool declared implemented but dispatch missing"). Guards the switch
+// dispatcher against lost branches when new implemented tools are added.
 func TestDispatch_AllImplementedToolsDispatchable(t *testing.T) {
 	h, _, _ := newTestHandler(t, &fakePool{}, &rbactest.Config{
 		Roles: []rbactest.Role{
-			// валидное permission не нужно — RBAC сработает раньше, но
-			// нам важно не свалиться на «dispatch missing».
+			// a valid permission isn't needed — RBAC fires first, but what
+			// matters here is not falling into "dispatch missing".
 		},
 	})
 	for _, entry := range catalogManifest {
@@ -1350,7 +1352,7 @@ func TestDispatch_AllImplementedToolsDispatchable(t *testing.T) {
 			}
 			resp, _ := h.Dispatch(context.Background(), claims("archon-alice"), req)
 			if resp.Error == nil {
-				return // success-ветка тоже OK (значит dispatch отработал)
+				return // success branch is fine too (means dispatch worked)
 			}
 			data := mustToolErrorData(t, resp.Error.Data)
 			if resp.Error.Message == "tool declared implemented but dispatch missing" {
@@ -1363,9 +1365,9 @@ func TestDispatch_AllImplementedToolsDispatchable(t *testing.T) {
 	}
 }
 
-// mustToolErrorData декодирует error.Data в mcpToolError. JSON-RPC сериализация
-// any → map[string]any при unmarshal, поэтому делаем re-marshal через json
-// для приведения к typed struct.
+// mustToolErrorData decodes error.Data into mcpToolError. JSON-RPC unmarshal
+// turns any → map[string]any, so we re-marshal through json to coerce it into
+// a typed struct.
 func mustToolErrorData(t *testing.T, data any) mcpToolError {
 	t.Helper()
 	raw, err := json.Marshal(data)

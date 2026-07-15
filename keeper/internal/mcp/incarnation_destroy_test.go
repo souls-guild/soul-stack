@@ -19,8 +19,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// mcpDestroyer — мок [handlers.DestroyStarter]: фиксирует teardown-spec + число
-// вызовов StartDestroy.
+// mcpDestroyer — mock of [handlers.DestroyStarter]: captures the teardown
+// spec + the number of StartDestroy calls.
 type mcpDestroyer struct {
 	gotSpec scenario.RunSpec
 	calls   int
@@ -41,9 +41,9 @@ func destroyerRBAC() *rbactest.Config {
 	}
 }
 
-// newTestHandlerDestroy собирает Handler с полным destroy-стеком (destroyer +
-// registry + loader). hasScenario управляет наличием scenario `destroy` в
-// снапшоте (mcpLoader.ReadFile).
+// newTestHandlerDestroy assembles a Handler with the full destroy stack
+// (destroyer + registry + loader). hasScenario controls whether scenario
+// `destroy` is present in the snapshot (mcpLoader.ReadFile).
 func newTestHandlerDestroy(t *testing.T, pool *fakePool, rbacCfg *rbactest.Config, destroyer handlers.DestroyStarter, hasScenario bool) (*Handler, *recordingAudit) {
 	t.Helper()
 	enf, err := rbactest.NewEnforcer(rbacCfg)
@@ -77,7 +77,7 @@ func newTestHandlerDestroy(t *testing.T, pool *fakePool, rbacCfg *rbactest.Confi
 	return h, rec
 }
 
-// --- teardown-путь (allow_destroy=false, scenario есть) ---------------
+// --- teardown path (allow_destroy=false, scenario present) ---------------
 
 func TestToolsCall_IncarnationDestroy_Teardown_Success(t *testing.T) {
 	pool := &fakePool{incFn: incWithStatus(incarnation.StatusReady)}
@@ -101,7 +101,7 @@ func TestToolsCall_IncarnationDestroy_Teardown_Success(t *testing.T) {
 	if destroyer.calls != 1 || destroyer.gotSpec.ApplyID != out.ApplyID {
 		t.Errorf("teardown spec mismatch: %+v (calls=%d)", destroyer.gotSpec, destroyer.calls)
 	}
-	// Teardown катится развёрнутой версией сервиса.
+	// Teardown runs against the deployed service version.
 	if destroyer.gotSpec.ServiceRef.Ref != "v1" {
 		t.Errorf("teardown ServiceRef.Ref = %q, want v1", destroyer.gotSpec.ServiceRef.Ref)
 	}
@@ -118,7 +118,7 @@ func TestToolsCall_IncarnationDestroy_Teardown_Success(t *testing.T) {
 	}
 }
 
-// --- 422: allow_destroy=false и нет scenario ---------------------------
+// --- 422: allow_destroy=false and no scenario ---------------------------
 
 func TestToolsCall_IncarnationDestroy_NoScenario_NoForce(t *testing.T) {
 	pool := &fakePool{incFn: incWithStatus(incarnation.StatusReady)}
@@ -141,7 +141,7 @@ func TestToolsCall_IncarnationDestroy_NoScenario_NoForce(t *testing.T) {
 	}
 }
 
-// --- force-путь (allow_destroy=true, без scenario) → DELETE -----------
+// --- force path (allow_destroy=true, no scenario) → DELETE -----------
 
 func TestToolsCall_IncarnationDestroy_Force_Delete(t *testing.T) {
 	pool := &fakePool{incFn: incWithStatus(incarnation.StatusReady)}
@@ -168,7 +168,7 @@ func TestToolsCall_IncarnationDestroy_Force_Delete(t *testing.T) {
 	}
 }
 
-// --- force-DELETE no-op (RowsAffected==0) → success, без completed ----
+// --- force-DELETE no-op (RowsAffected==0) → success, no completed ----
 
 func TestToolsCall_IncarnationDestroy_Force_DeleteNoOp(t *testing.T) {
 	pool := &fakePool{
@@ -187,7 +187,7 @@ func TestToolsCall_IncarnationDestroy_Force_DeleteNoOp(t *testing.T) {
 	}
 }
 
-// --- 409: статус не допускает destroy (applying) ----------------------
+// --- 409: status doesn't allow destroy (applying) ----------------------
 
 func TestToolsCall_IncarnationDestroy_NotDestroyable(t *testing.T) {
 	pool := &fakePool{incFn: incWithStatus(incarnation.StatusApplying)}
@@ -207,7 +207,7 @@ func TestToolsCall_IncarnationDestroy_NotDestroyable(t *testing.T) {
 	}
 }
 
-// --- 404: incarnation не существует ------------------------------------
+// --- 404: incarnation doesn't exist ------------------------------------
 
 func TestToolsCall_IncarnationDestroy_NotFound(t *testing.T) {
 	pool := &fakePool{incFn: func(string) (*incarnation.Incarnation, error) { return nil, pgx.ErrNoRows }}
@@ -226,9 +226,9 @@ func TestToolsCall_IncarnationDestroy_NotFound(t *testing.T) {
 // --- RBAC forbidden ---------------------------------------------------
 
 func TestToolsCall_IncarnationDestroy_RBACForbidden(t *testing.T) {
-	// RBAC пуст → deny. SelectByName РЕЗОЛВИТ scope (covens ∪ {name}) для
-	// OR-Check (зеркало REST middleware), затем enforcer отказывает → forbidden.
-	// teardown/audit при отказе НЕ стартуют.
+	// RBAC is empty → deny. SelectByName RESOLVES scope (covens ∪ {name}) for
+	// the OR-check (mirrors the REST middleware), then the enforcer denies →
+	// forbidden. teardown/audit do NOT start on denial.
 	pool := &fakePool{incFn: incWithStatus(incarnation.StatusReady)}
 	destroyer := &mcpDestroyer{}
 	h, rec := newTestHandlerDestroy(t, pool, nil, destroyer, true)
@@ -246,7 +246,7 @@ func TestToolsCall_IncarnationDestroy_RBACForbidden(t *testing.T) {
 	}
 }
 
-// --- validation: allow_destroy отсутствует ----------------------------
+// --- validation: allow_destroy missing ----------------------------
 
 func TestToolsCall_IncarnationDestroy_MissingAllowDestroy(t *testing.T) {
 	pool := &fakePool{incFn: incWithStatus(incarnation.StatusReady)}
@@ -262,11 +262,11 @@ func TestToolsCall_IncarnationDestroy_MissingAllowDestroy(t *testing.T) {
 	}
 }
 
-// --- 500: destroy не сконфигурирован ----------------------------------
+// --- 500: destroy not configured ----------------------------------
 
 func TestToolsCall_IncarnationDestroy_NotConfigured(t *testing.T) {
 	pool := &fakePool{incFn: incWithStatus(incarnation.StatusReady)}
-	// ScenarioDestroyer не прокинут (newTestHandlerFull без destroyer).
+	// ScenarioDestroyer is not wired (newTestHandlerFull without a destroyer).
 	h, _ := newTestHandlerFull(t, pool, destroyerRBAC(), nil, &mcpResolver{ok: true}, &mcpLoader{hasDestroyScenario: true})
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.destroy",

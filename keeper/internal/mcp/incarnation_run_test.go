@@ -58,7 +58,7 @@ func TestToolsCall_IncarnationRun_Success(t *testing.T) {
 }
 
 func TestToolsCall_IncarnationRun_ErrorLocked(t *testing.T) {
-	// error_locked → быстрый probe-отказ incarnation-locked до запуска прогона.
+	// error_locked → fast probe rejection incarnation-locked before the run starts.
 	pool := &fakePool{incFn: incWithStatus(incarnation.StatusErrorLocked)}
 	starter := &mcpStarter{}
 	h, rec := newTestHandlerFull(t, pool, runnerRBAC(), starter, &mcpResolver{ok: true}, nil)
@@ -92,8 +92,8 @@ func TestToolsCall_IncarnationRun_NotFound(t *testing.T) {
 }
 
 func TestToolsCall_IncarnationRun_RBACForbidden(t *testing.T) {
-	// RBAC пуст → deny. SelectByName РЕЗОЛВИТ scope (covens ∪ {name}) для
-	// OR-Check (зеркало REST middleware), затем enforcer отказывает → forbidden.
+	// RBAC empty → deny. SelectByName RESOLVES scope (covens ∪ {name}) for the
+	// OR-Check (mirrors REST middleware), then the enforcer denies → forbidden.
 	pool := &fakePool{incFn: incWithStatus(incarnation.StatusReady)}
 	h, rec := newTestHandlerFull(t, pool, nil, &mcpStarter{}, &mcpResolver{ok: true}, nil)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.run",

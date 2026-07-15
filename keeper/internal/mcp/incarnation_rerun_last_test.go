@@ -1,11 +1,11 @@
 package mcp
 
-// Guard-тесты MCP-tool-а keeper.incarnation.rerun-last (паритет REST
-// IncarnationHandler.RerunLastTyped, incarnation_rerun_test.go): снятие
-// error_locked + перезапуск последнего упавшего сценария одним действием.
-// Покрывают happy-path create/day-2 (202 + apply_id + scenario + audit),
-// RBAC-scope-deny по чужому coven, статус-гейт, fail-closed recipe-null и
-// валидацию аргументов.
+// Guard tests for the keeper.incarnation.rerun-last MCP tool (REST parity
+// with IncarnationHandler.RerunLastTyped, incarnation_rerun_test.go): lifting
+// error_locked + restarting the last failed scenario in one action. Covers
+// the create/day-2 happy path (202 + apply_id + scenario + audit), RBAC
+// scope-deny on a foreign coven, the status gate, fail-closed recipe-null,
+// and argument validation.
 
 import (
 	"encoding/json"
@@ -17,8 +17,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// rerunRBAC — роль с permission incarnation.rerun-last (1:1 с tool-ом),
-// привязанная к archon-alice.
+// rerunRBAC — role with permission incarnation.rerun-last (1:1 with the
+// tool), bound to archon-alice.
 func rerunRBAC() *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -27,8 +27,8 @@ func rerunRBAC() *rbactest.Config {
 	}
 }
 
-// incLocked — incFn, отдающий error_locked-инкарнацию с заданными covens и
-// создавшим сценарием. createdScenario "" → NULL (bare-инкарнация). service=redis.
+// incLocked — incFn returning an error_locked incarnation with given covens
+// and creating scenario. createdScenario "" → NULL (bare incarnation). service=redis.
 func incLocked(covens []string, createdScenario string) func(string) (*incarnation.Incarnation, error) {
 	return func(name string) (*incarnation.Incarnation, error) {
 		now := time.Now().UTC()
@@ -46,11 +46,11 @@ func incLocked(covens []string, createdScenario string) func(string) (*incarnati
 	}
 }
 
-// TestToolsCall_IncarnationRerunLast_Success — happy-path create: из error_locked
-// снимается блок и стартует ровно один scenario `create` (created_scenario) с
-// общим apply_id; ответ {_apply_id, incarnation, scenario}; audit
-// incarnation.rerun_last (source=mcp, correlation_id=apply_id) с reason +
-// previous_status + scenario.
+// TestToolsCall_IncarnationRerunLast_Success — happy-path create: lifts the
+// error_locked block and starts exactly one `create` scenario
+// (created_scenario) with a shared apply_id; response {_apply_id,
+// incarnation, scenario}; audit incarnation.rerun_last (source=mcp,
+// correlation_id=apply_id) with reason + previous_status + scenario.
 func TestToolsCall_IncarnationRerunLast_Success(t *testing.T) {
 	pool := &fakePool{incFn: incLocked(nil, "create")}
 	starter := &mcpStarter{}
@@ -119,8 +119,9 @@ func TestToolsCall_IncarnationRerunLast_Success(t *testing.T) {
 	}
 }
 
-// incLockedSpec — incFn error_locked-инкарнации с заданным spec (проверка проброса
-// spec.input в RunSpec.Input на create-пути). created_scenario="create", service=redis.
+// incLockedSpec — incFn for an error_locked incarnation with a given spec
+// (checks that spec.input propagates into RunSpec.Input on the create path).
+// created_scenario="create", service=redis.
 func incLockedSpec(spec map[string]any) func(string) (*incarnation.Incarnation, error) {
 	return func(name string) (*incarnation.Incarnation, error) {
 		now := time.Now().UTC()
@@ -135,14 +136,14 @@ func incLockedSpec(spec map[string]any) func(string) (*incarnation.Incarnation, 
 	}
 }
 
-// TestToolsCall_IncarnationRerunLast_ReusesStoredInput — create-путь GUARD (паритет
-// REST TestRerunLast_ReusesStoredInput_202): rerun-last инкарнации с сохранённым
-// в spec.input оператор-input → input проброшен в RunSpec.Input перезапускаемого
-// bootstrap-прогона (НЕ nil, НЕ дефолты).
+// TestToolsCall_IncarnationRerunLast_ReusesStoredInput — create-path GUARD
+// (REST parity with TestRerunLast_ReusesStoredInput_202): rerun-last on an
+// incarnation with operator input stored in spec.input → input propagates
+// into RunSpec.Input for the restarted bootstrap run (NOT nil, NOT defaults).
 func TestToolsCall_IncarnationRerunLast_ReusesStoredInput(t *testing.T) {
 	spec := map[string]any{"input": map[string]any{
 		"version":         "8.6.1",
-		"shards":          float64(3), // jsonb-число
+		"shards":          float64(3), // jsonb number
 		"connection_mode": "cluster",
 	}}
 	pool := &fakePool{incFn: incLockedSpec(spec)}
@@ -172,8 +173,9 @@ func TestToolsCall_IncarnationRerunLast_ReusesStoredInput(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationRerunLast_NoStoredInput_NilInput — create-путь контраст:
-// инкарнация без spec.input → RunSpec.Input nil, прогон стартует штатно.
+// TestToolsCall_IncarnationRerunLast_NoStoredInput_NilInput — create-path
+// contrast: an incarnation without spec.input → RunSpec.Input nil, run
+// starts normally.
 func TestToolsCall_IncarnationRerunLast_NoStoredInput_NilInput(t *testing.T) {
 	pool := &fakePool{incFn: incLocked(nil, "create")} // Spec=nil → spec=`{}`
 	starter := &mcpStarter{}
@@ -192,13 +194,13 @@ func TestToolsCall_IncarnationRerunLast_NoStoredInput_NilInput(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationRerunLast_Day2ReusesRecipeInput — day-2 happy-path
-// (паритет REST TestRerunLast_Day2_ReusesRecipeInput_202): последний упавший —
-// add_user (≠ created `create`), его input берётся из recipe apply_run → 202,
-// RunSpec.ScenarioName=="add_user", Input из recipe (не spec.input), scenario в
-// reply/audit == add_user.
+// TestToolsCall_IncarnationRerunLast_Day2ReusesRecipeInput — day-2 happy path
+// (REST parity with TestRerunLast_Day2_ReusesRecipeInput_202): the last
+// failure was add_user (≠ created `create`), its input comes from the
+// recipe apply_run → 202, RunSpec.ScenarioName=="add_user", Input from the
+// recipe (not spec.input), scenario in reply/audit == add_user.
 func TestToolsCall_IncarnationRerunLast_Day2ReusesRecipeInput(t *testing.T) {
-	spec := map[string]any{"input": map[string]any{"version": "8.6.1"}} // НЕ должен просочиться
+	spec := map[string]any{"input": map[string]any{"version": "8.6.1"}} // must NOT leak through
 	pool := &fakePool{
 		incFn:          incLockedSpec(spec),
 		lastScenarioFn: func(string) (string, error) { return "add_user", nil },
@@ -238,15 +240,16 @@ func TestToolsCall_IncarnationRerunLast_Day2ReusesRecipeInput(t *testing.T) {
 	if rec.events[0].Payload["scenario"] != "add_user" {
 		t.Errorf("audit scenario = %v, want add_user", rec.events[0].Payload["scenario"])
 	}
-	// day-2 recipe без from_upgrade → RunSpec.FromUpgrade=false.
+	// day-2 recipe without from_upgrade → RunSpec.FromUpgrade=false.
 	if starter.gotSpec.FromUpgrade {
 		t.Error("RunSpec.FromUpgrade = true, want false (recipe без from_upgrade)")
 	}
 }
 
-// TestToolsCall_IncarnationRerunLast_Day2FromUpgrade — MAJOR-guard (ADR-0068,
-// паритет REST): MCP rerun-last прогона с recipe.from_upgrade=true пробрасывает
-// FromUpgrade=true в RunSpec → перезапуск из upgrade/<slug>/, а не scenario/.
+// TestToolsCall_IncarnationRerunLast_Day2FromUpgrade — MAJOR guard (ADR-0068,
+// REST parity): MCP rerun-last on a run with recipe.from_upgrade=true
+// propagates FromUpgrade=true into RunSpec → restart from upgrade/<slug>/,
+// not scenario/.
 func TestToolsCall_IncarnationRerunLast_Day2FromUpgrade(t *testing.T) {
 	pool := &fakePool{
 		incFn:          incLockedSpec(map[string]any{}),
@@ -274,9 +277,10 @@ func TestToolsCall_IncarnationRerunLast_Day2FromUpgrade(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationRerunLast_Day2BareIncarnation — bare-инкарнация
-// (created_scenario IS NULL) залочена day-2 → rerun-last применим через recipe-путь
-// (было: 409). ScenarioName из last-run, Input из recipe.
+// TestToolsCall_IncarnationRerunLast_Day2BareIncarnation — a bare incarnation
+// (created_scenario IS NULL) locked at day-2 → rerun-last works via the
+// recipe path (previously: 409). ScenarioName from the last run, Input from
+// the recipe.
 func TestToolsCall_IncarnationRerunLast_Day2BareIncarnation(t *testing.T) {
 	pool := &fakePool{
 		incFn:          incLocked(nil, ""), // created_scenario = NULL
@@ -304,15 +308,16 @@ func TestToolsCall_IncarnationRerunLast_Day2BareIncarnation(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationRerunLast_Day2RecipeUnavailable — day-2, но recipe нет
-// (recipe IS NULL / apply_run вычищен → ErrNoRows): fail-closed rerun-input-
-// unavailable (отдельный код от incarnation-locked, симметрия REST
-// TypeRerunInputUnavailable), прогон НЕ стартует, audit НЕ пишется.
+// TestToolsCall_IncarnationRerunLast_Day2RecipeUnavailable — day-2, but no
+// recipe (recipe IS NULL / apply_run purged → ErrNoRows): fail-closed
+// rerun-input-unavailable (a distinct code from incarnation-locked,
+// symmetric with REST TypeRerunInputUnavailable), run does NOT start, audit
+// is NOT written.
 func TestToolsCall_IncarnationRerunLast_Day2RecipeUnavailable(t *testing.T) {
 	pool := &fakePool{
 		incFn:          incLocked(nil, "create"),
 		lastScenarioFn: func(string) (string, error) { return "add_user", nil },
-		// recipeFn nil → recipe-probe вернёт ErrNoRows (fail-closed).
+		// recipeFn nil → recipe-probe returns ErrNoRows (fail-closed).
 	}
 	starter := &mcpStarter{}
 	h, rec := newTestHandlerFull(t, pool, rerunRBAC(), starter, &mcpResolver{ok: true}, nil)
@@ -333,9 +338,10 @@ func TestToolsCall_IncarnationRerunLast_Day2RecipeUnavailable(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationRerunLast_ScopeDeniesForeignCoven — оператор со scope
-// `incarnation.rerun-last on coven=dev` НЕ может rerun-нуть prod-инкарнацию
-// (covens=[prod]) через MCP. Deny ДО unlock/start: ни прогона, ни audit.
+// TestToolsCall_IncarnationRerunLast_ScopeDeniesForeignCoven — an operator
+// with scope `incarnation.rerun-last on coven=dev` cannot rerun a prod
+// incarnation (covens=[prod]) via MCP. Deny happens BEFORE unlock/start: no
+// run, no audit.
 func TestToolsCall_IncarnationRerunLast_ScopeDeniesForeignCoven(t *testing.T) {
 	pool := &fakePool{
 		incFn:    incLocked([]string{"prod"}, "create"),
@@ -356,8 +362,9 @@ func TestToolsCall_IncarnationRerunLast_ScopeDeniesForeignCoven(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationRerunLast_ScopeAllowsMatchingCoven — тот же оператор
-// (scope coven=prod) МОЖЕТ rerun prod-инкарнацию: НЕ forbidden, прогон стартует.
+// TestToolsCall_IncarnationRerunLast_ScopeAllowsMatchingCoven — the same
+// operator (scope coven=prod) CAN rerun a prod incarnation: NOT forbidden,
+// run starts.
 func TestToolsCall_IncarnationRerunLast_ScopeAllowsMatchingCoven(t *testing.T) {
 	pool := &fakePool{incFn: incLocked([]string{"prod"}, "create")}
 	starter := &mcpStarter{}
@@ -375,8 +382,8 @@ func TestToolsCall_IncarnationRerunLast_ScopeAllowsMatchingCoven(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationRerunLast_NotErrorLocked — из ready/applying rerun
-// отклонён (incarnation-locked), прогон НЕ стартует.
+// TestToolsCall_IncarnationRerunLast_NotErrorLocked — rerun from ready/applying
+// is rejected (incarnation-locked), the run does NOT start.
 func TestToolsCall_IncarnationRerunLast_NotErrorLocked(t *testing.T) {
 	for _, status := range []incarnation.Status{incarnation.StatusReady, incarnation.StatusApplying} {
 		t.Run(string(status), func(t *testing.T) {
@@ -411,9 +418,9 @@ func TestToolsCall_IncarnationRerunLast_NotErrorLocked(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationRerunLast_NotFound — несуществующая инкарнация → 404.
+// TestToolsCall_IncarnationRerunLast_NotFound — a nonexistent incarnation → 404.
 func TestToolsCall_IncarnationRerunLast_NotFound(t *testing.T) {
-	pool := &fakePool{} // incFn nil → SelectByName отдаёт pgx.ErrNoRows
+	pool := &fakePool{} // incFn nil → SelectByName returns pgx.ErrNoRows
 	starter := &mcpStarter{}
 	h, _ := newTestHandlerFull(t, pool, rerunRBAC(), starter, &mcpResolver{ok: true}, nil)
 
@@ -430,7 +437,7 @@ func TestToolsCall_IncarnationRerunLast_NotFound(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationRerunLast_EmptyReason — пустой reason → validation-failed.
+// TestToolsCall_IncarnationRerunLast_EmptyReason — empty reason → validation-failed.
 func TestToolsCall_IncarnationRerunLast_EmptyReason(t *testing.T) {
 	pool := &fakePool{incFn: incLocked(nil, "create")}
 	starter := &mcpStarter{}
@@ -449,8 +456,8 @@ func TestToolsCall_IncarnationRerunLast_EmptyReason(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationRerunLast_RunnerNotConfigured — runner/registry nil →
-// internal-error (rerun перезапускает scenario).
+// TestToolsCall_IncarnationRerunLast_RunnerNotConfigured — runner/registry
+// nil → internal-error (rerun restarts the scenario).
 func TestToolsCall_IncarnationRerunLast_RunnerNotConfigured(t *testing.T) {
 	h, _ := newTestHandlerFull(t, &fakePool{}, rerunRBAC(), nil, nil, nil)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.rerun-last",

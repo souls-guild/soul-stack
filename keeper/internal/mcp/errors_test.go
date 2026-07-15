@@ -37,8 +37,8 @@ func TestMapIncarnationErrorToMCP(t *testing.T) {
 		{"build-evaluator", incarnation.ErrBuildEvaluator, mcpCodeInternalError},
 		{"rbac-denied", rbac.ErrPermissionDenied, mcpCodeForbidden},
 		{"unknown", errors.New("boom"), mcpCodeInternalError},
-		// Обёрнутые %w-ошибки (PrepareUpgrade оборачивает sentinel-ы) тоже
-		// должны распознаваться через errors.Is.
+		// Wrapped %w errors (PrepareUpgrade wraps sentinels) must also be
+		// recognized via errors.Is.
 		{"wrapped-noop", fmt.Errorf("%w: v2", incarnation.ErrUpgradeNoop), mcpCodeValidationFailed},
 		{"wrapped-downgrade", fmt.Errorf("%w: v1", incarnation.ErrDowngradeViaRef), mcpCodeIncarnationLocked},
 		{"wrapped-load", fmt.Errorf("%w: git boom", incarnation.ErrLoadTargetSnapshot), mcpCodeInternalError},
@@ -52,7 +52,7 @@ func TestMapIncarnationErrorToMCP(t *testing.T) {
 			if tc.err != nil && detail == "" {
 				t.Errorf("detail is empty for %v", tc.err)
 			}
-			// Public-detail не должен протекать internal-pkg-префиксом.
+			// Public detail must not leak the internal package prefix.
 			if len(detail) >= 13 && detail[:13] == "incarnation: " {
 				t.Errorf("detail leaks internal prefix: %q", detail)
 			}
@@ -60,16 +60,16 @@ func TestMapIncarnationErrorToMCP(t *testing.T) {
 	}
 }
 
-// mcpToolsDocPath — путь к нормативной таблице § Errors относительно
-// директории пакета (keeper/internal/mcp). docs/ — корень репо, вне
-// keeper-модуля, но это файловая система, не go-import.
+// mcpToolsDocPath — path to the normative § Errors table relative to the
+// package directory (keeper/internal/mcp). docs/ is the repo root, outside
+// the keeper module, but this is a filesystem path, not a go import.
 const mcpToolsDocPath = "../../../docs/keeper/mcp-tools.md"
 
-// TestReservedMCPCodes_PresentInDocs — инвариант code↔doc: каждый
-// зарезервированный URN-suffix из [reservedMCPCodes] обязан присутствовать в
-// таблице § Errors docs/keeper/mcp-tools.md. Ловит drift «код объявлен в Go,
-// но в доках забыт» (и обратное — при ревью видно расхождение). Заодно делает
-// reservedMCPCodes реально потребляемой переменной.
+// TestReservedMCPCodes_PresentInDocs — code↔doc invariant: every reserved
+// URN suffix in [reservedMCPCodes] must appear in the docs/keeper/mcp-tools.md
+// § Errors table. Catches drift ("code declared in Go but missing from
+// docs", and the reverse is visible on review). Also keeps reservedMCPCodes
+// actually consumed.
 func TestReservedMCPCodes_PresentInDocs(t *testing.T) {
 	raw, err := os.ReadFile(mcpToolsDocPath)
 	if err != nil {
@@ -77,9 +77,9 @@ func TestReservedMCPCodes_PresentInDocs(t *testing.T) {
 	}
 	doc := string(raw)
 	for _, code := range reservedMCPCodes {
-		// Коды в доке записаны в backtick-обёртке (`migration-failed`) в
-		// таблице § Errors — ищем именно эту форму, чтобы не словить
-		// случайное вхождение подстроки в прозе.
+		// Codes in the docs are backtick-wrapped (`migration-failed`) in the
+		// § Errors table — look for exactly that form to avoid matching a
+		// stray substring in prose.
 		if !strings.Contains(doc, "`"+code+"`") {
 			t.Errorf("reserved MCP code %q not documented in %s § Errors", code, mcpToolsDocPath)
 		}
@@ -102,13 +102,13 @@ func TestMapRoleErrorToMCP(t *testing.T) {
 		{"invalid-name", rbac.ErrInvalidRoleName, mcpCodeValidationFailed},
 		{"rbac-denied", rbac.ErrPermissionDenied, mcpCodeForbidden},
 		{"unknown", errors.New("boom"), mcpCodeInternalError},
-		// Обёрнутые %w-ошибки (CreateRole/DeleteRole оборачивают sentinel-ы)
-		// распознаются через errors.Is.
+		// Wrapped %w errors (CreateRole/DeleteRole wrap sentinels) are
+		// recognized via errors.Is.
 		{"wrapped-exists", fmt.Errorf("%w (constraint x): pg", rbac.ErrRoleAlreadyExists), mcpCodeRoleExists},
 		{"wrapped-name", fmt.Errorf("%w: %q must match", rbac.ErrInvalidRoleName, "Bad"), mcpCodeValidationFailed},
 		{"wrapped-operator", fmt.Errorf("%w (constraint y): pg", rbac.ErrOperatorNotFound), mcpCodeNotFound},
-		// Битый permission — wrapped ParsePermission без sentinel-а, ловится по
-		// префиксу "rbac: invalid permission ".
+		// A malformed permission is a wrapped ParsePermission error with no
+		// sentinel — caught by the "rbac: invalid permission " prefix.
 		{"bad-permission", fmt.Errorf("rbac: invalid permission %q: %w", "boom.x.y", errors.New("three segments")), mcpCodeValidationFailed},
 	}
 	for _, tc := range cases {
@@ -120,7 +120,7 @@ func TestMapRoleErrorToMCP(t *testing.T) {
 			if tc.err != nil && detail == "" {
 				t.Errorf("detail is empty for %v", tc.err)
 			}
-			// Public-detail не должен протекать internal-pkg-префиксом "rbac: ".
+			// Public detail must not leak the internal package prefix "rbac: ".
 			if strings.HasPrefix(detail, "rbac: ") {
 				t.Errorf("detail leaks internal prefix: %q", detail)
 			}
@@ -139,8 +139,8 @@ func TestMapSigilErrorToMCP(t *testing.T) {
 		{"already-active", sigil.ErrSigilAlreadyActive, mcpCodeSigilActive},
 		{"not-found", sigil.ErrSigilNotFound, mcpCodeSigilNotFound},
 		{"unknown", errors.New("boom"), mcpCodeInternalError},
-		// Обёрнутые %w-ошибки (Allow оборачивает ErrPluginNotInCache) распознаются
-		// через errors.Is.
+		// Wrapped %w errors (Allow wraps ErrPluginNotInCache) are recognized
+		// via errors.Is.
 		{"wrapped-not-in-cache", fmt.Errorf("%w: cloud-ghost", sigil.ErrPluginNotInCache), mcpCodePluginNotInCache},
 	}
 	for _, tc := range cases {
@@ -165,7 +165,7 @@ func TestIncarnationRBACContext(t *testing.T) {
 	if got == nil || got["incarnation"] != "redis-prod" {
 		t.Fatalf("name-bound context = %v, want {incarnation: redis-prod}", got)
 	}
-	// create/list — без селектора.
+	// create/list — no selector.
 	if incarnationRBACContext("") != nil {
 		t.Errorf("empty name must yield nil selector (NoSelector parity with REST)")
 	}

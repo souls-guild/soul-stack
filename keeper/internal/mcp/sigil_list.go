@@ -9,10 +9,10 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
 )
 
-// sigilView — output-проекция активного допуска для keeper.plugin.list
-// (schemaPluginListOutput). 1:1 с REST sigilItem / [sigil.SigilView]: каталожные
-// поля БЕЗ signature/manifest (крипто-материал / крупный JSONB — не лента
-// allow-list-а).
+// sigilView — output projection of an active allow-list entry for
+// keeper.plugin.list (schemaPluginListOutput). 1:1 with REST sigilItem /
+// [sigil.SigilView]: catalog fields WITHOUT signature/manifest (crypto
+// material / large JSONB isn't part of the allow-list feed).
 type sigilView struct {
 	Namespace    string     `json:"namespace"`
 	Name         string     `json:"name"`
@@ -23,17 +23,18 @@ type sigilView struct {
 	RevokedAt    *time.Time `json:"revoked_at"`
 }
 
-// pluginListOutput — output keeper.plugin.list: лента активных допусков под
-// ключом sigils (паритет REST GET /v1/plugins/sigils items).
+// pluginListOutput — output of keeper.plugin.list: the feed of active
+// allow-list entries under the sigils key (parity with REST GET
+// /v1/plugins/sigils items).
 type pluginListOutput struct {
 	Sigils []sigilView `json:"sigils"`
 }
 
-// callPluginList — read-tool keeper.plugin.list. Транспорт поверх
-// [sigil.Service.List] (read-only). reads НЕ аудируются.
+// callPluginList — read tool keeper.plugin.list. Transport over
+// [sigil.Service.List] (read-only). Reads are NOT audited.
 //
-// RBAC — plugin.list без селектора (rbac.md: NoSelector). arguments — пустой
-// объект (schemaEmptyObject); strictUnmarshal отвергает лишние поля.
+// RBAC — plugin.list has no selector (rbac.md: NoSelector). arguments — an
+// empty object (schemaEmptyObject); strictUnmarshal rejects extra fields.
 func (h *Handler) callPluginList(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.plugin.list"
 

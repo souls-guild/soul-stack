@@ -9,18 +9,18 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// serviceDeregisterArgs — arguments tool-а keeper.service.deregister
-// (schemaServiceDeregisterInput): только name.
+// serviceDeregisterArgs — arguments for keeper.service.deregister
+// (schemaServiceDeregisterInput): name only.
 type serviceDeregisterArgs struct {
 	Name string `json:"name"`
 }
 
-// callServiceDeregister — mutating-tool keeper.service.deregister. Транспорт
-// поверх [serviceregistry.Service.DeleteService]: удаление по PK + invalidate-
-// хук — в Service; tool маппит ErrNotFound в MCP-код и пишет audit
-// service.deregistered.
+// callServiceDeregister — mutating tool keeper.service.deregister. Transport
+// over [serviceregistry.Service.DeleteService]: delete by PK + the
+// invalidate hook live in Service; the tool maps ErrNotFound to an MCP code
+// and writes audit service.deregistered.
 //
-// RBAC — service.deregister без селектора (rbac.md: NoSelector).
+// RBAC — service.deregister without a selector (rbac.md: NoSelector).
 func (h *Handler) callServiceDeregister(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.service.deregister"
 
@@ -28,9 +28,9 @@ func (h *Handler) callServiceDeregister(ctx context.Context, claims *jwt.Claims,
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, serviceRegistryNotConfigured)
 	}
 
-	// RBAC ДО unmarshal/валидации (least-disclosure): неавторизованный оператор
-	// не получает validation-feedback по телу. Контекст nil — право не зависит
-	// от тела запроса.
+	// RBAC BEFORE unmarshal/validation (least-disclosure): an unauthorized
+	// operator gets no validation feedback about the body. Context nil — the
+	// permission doesn't depend on the request body.
 	if err := h.deps.RBAC.Check(claims.Subject, "service", "deregister", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission service.deregister")
@@ -59,11 +59,11 @@ func (h *Handler) callServiceDeregister(ctx context.Context, claims *jwt.Claims,
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	// Audit — параллельно REST-handler-у: payload {name}.
+	// Audit — parallels the REST handler: payload {name}.
 	h.writeAudit(audit.EventServiceDeregistered, claims.Subject, map[string]any{
 		"name": a.Name,
 	})
 
-	// REST возвращает 204 No Content; MCP-эквивалент — пустой output-объект.
+	// REST returns 204 No Content; the MCP equivalent is an empty output object.
 	return h.toolResult(req.ID, struct{}{})
 }

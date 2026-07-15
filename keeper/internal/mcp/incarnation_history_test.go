@@ -35,7 +35,7 @@ func mustHistoryOutput(t *testing.T, resp jsonRPCResponse) incarnationHistoryOut
 	return out
 }
 
-// readyInc — backing для existence-probe (SelectByName).
+// readyInc — backing incarnation for the existence probe (SelectByName).
 func readyInc(name string) (*incarnation.Incarnation, error) {
 	now := time.Now().UTC()
 	return &incarnation.Incarnation{Name: name, Service: "redis", ServiceVersion: "v1",
@@ -71,8 +71,8 @@ func TestToolsCall_IncarnationHistory_Success(t *testing.T) {
 }
 
 func TestToolsCall_IncarnationHistory_NotFound(t *testing.T) {
-	// incFn nil → existence-probe SelectByName → ErrNoRows → not-found
-	// (history НЕ должна вернуть пустую страницу для несуществующей name).
+	// incFn nil → existence probe SelectByName → ErrNoRows → not-found
+	// (history must NOT return an empty page for a non-existent name).
 	historyCalled := false
 	pool := &fakePool{
 		historyFn: func(_ string, _ incarnation.HistoryFilter) ([]*incarnation.HistoryEntry, int) {
@@ -96,8 +96,9 @@ func TestToolsCall_IncarnationHistory_NotFound(t *testing.T) {
 }
 
 func TestToolsCall_IncarnationHistory_RBACForbidden(t *testing.T) {
-	// RBAC пуст → deny. Existence-probe РЕЗОЛВИТ scope (covens ∪ {name}) для
-	// OR-Check (зеркало REST middleware), затем enforcer отказывает → forbidden.
+	// RBAC is empty → deny. The existence probe RESOLVES scope (covens ∪
+	// {name}) for the OR-check (mirrors REST middleware), then the
+	// enforcer denies → forbidden.
 	pool := &fakePool{incFn: func(name string) (*incarnation.Incarnation, error) {
 		return readyInc(name)
 	}}

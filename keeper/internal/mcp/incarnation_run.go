@@ -12,28 +12,28 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// incarnationRunArgs — arguments tool-а keeper.incarnation.run
-// (schemaIncarnationRunInput): name + scenario обязательны, input опционален.
+// incarnationRunArgs — arguments for keeper.incarnation.run
+// (schemaIncarnationRunInput): name + scenario are required, input is optional.
 type incarnationRunArgs struct {
 	Name     string         `json:"name"`
 	Scenario string         `json:"scenario"`
 	Input    map[string]any `json:"input,omitempty"`
 }
 
-// incarnationRunOutput — output keeper.incarnation.run classic single-run
-// (schemaIncarnationRunOutput): apply_id + echo incarnation / scenario.
-// Симметричен REST runScenarioResponse.
+// incarnationRunOutput — output of keeper.incarnation.run classic single-run
+// (schemaIncarnationRunOutput): apply_id + echoed incarnation / scenario.
+// Mirrors REST runScenarioResponse.
 type incarnationRunOutput struct {
 	ApplyID     string `json:"_apply_id"`
 	Incarnation string `json:"incarnation"`
 	Scenario    string `json:"scenario"`
 }
 
-// callIncarnationRun — mutating async-tool keeper.incarnation.run. Паритет
-// REST IncarnationHandler.Run: резолв incarnation → вторичный probe
-// error_locked → резолв service → runner.Start → 202 + apply_id.
+// callIncarnationRun — mutating async tool keeper.incarnation.run. Parity
+// with REST IncarnationHandler.Run: resolve incarnation → secondary
+// error_locked probe → resolve service → runner.Start → 202 + apply_id.
 //
-// RBAC-context — {"incarnation": name} (name-bound). audit:
+// RBAC context — {"incarnation": name} (name-bound). audit:
 // EventIncarnationScenarioStarted {name, scenario, apply_id}, source=mcp.
 func (h *Handler) callIncarnationRun(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.incarnation.run"
@@ -60,7 +60,7 @@ func (h *Handler) callIncarnationRun(ctx context.Context, claims *jwt.Claims, re
 			"field 'scenario' must match "+scenario.ScenarioNamePattern)
 	}
 
-	// runner / services обязательны для запуска прогона (паритет REST Run).
+	// runner / services are required to start a run (parity with REST Run).
 	if h.deps.ScenarioRunner == nil || h.deps.ServiceRegistry == nil {
 		return h.toolError(req.ID, toolName, mcpCodeInternalError,
 			"scenario runner is not configured")
@@ -68,9 +68,10 @@ func (h *Handler) callIncarnationRun(ctx context.Context, claims *jwt.Claims, re
 
 	inc, err := incarnation.SelectByName(ctx, h.deps.IncarnationDB, a.Name)
 	if err != nil {
-		// Fail-closed RBAC при ненайденной/сбойной incarnation (паритет REST:
-		// IncarnationScopeSelector вернул бы nil-набор → scoped deny, bare/`*`
-		// pass → handler отдаёт 404/500). Forbidden имеет приоритет над 404.
+		// Fail-closed RBAC when the incarnation is missing/failed to load
+		// (parity with REST: IncarnationScopeSelector would return a nil set →
+		// scoped deny, bare/`*` passes → handler returns 404/500). Forbidden
+		// takes priority over 404.
 		if scopeErr := h.checkIncarnationScope(claims, "run", a.Name, "", nil); scopeErr != nil {
 			return h.toolError(req.ID, toolName, mcpCodeForbidden,
 				"operator lacks required permission incarnation.run")
@@ -86,16 +87,16 @@ func (h *Handler) callIncarnationRun(ctx context.Context, claims *jwt.Claims, re
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	// RBAC OR-Check по coven/service-scope incarnation (covens ∪ {name}) —
-	// зеркало REST middleware. Проверка ПОСЛЕ select: scope строится из
-	// inc.Service / inc.Covens.
+	// RBAC OR-Check over the incarnation's coven/service scope (covens ∪
+	// {name}) — mirrors REST middleware. Checked AFTER select: the scope is
+	// built from inc.Service / inc.Covens.
 	if err := h.checkIncarnationScope(claims, "run", inc.Name, inc.Service, inc.Covens); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission incarnation.run")
 	}
 
-	// Вторичный слой gate-а: быстрый отказ для error_locked до запуска прогона
-	// (авторитет — lockRun под FOR UPDATE; паритет REST).
+	// Secondary gate layer: fast rejection for error_locked before starting a
+	// run (authority is lockRun under FOR UPDATE; parity with REST).
 	if inc.Status == incarnation.StatusErrorLocked {
 		return h.toolError(req.ID, toolName, mcpCodeIncarnationLocked,
 			"incarnation "+a.Name+" is error_locked — unlock required before next run")
@@ -107,9 +108,9 @@ func (h *Handler) callIncarnationRun(ctx context.Context, claims *jwt.Claims, re
 			"service "+inc.Service+" is not registered (manage via service.* API, ADR-029)")
 	}
 
-	// Sync-валидация input против `input:`-схемы запускаемого scenario — ДО
-	// enqueue (паритет REST Run, оба режима). nil loader → деградация без
-	// проверки. Невалидный input → validation-failed; сбой снапшота → internal.
+	// Sync validation of input against the scenario's `input:` schema — BEFORE
+	// enqueue (parity with REST Run, both modes). nil loader → degrades to no
+	// validation. Invalid input → validation-failed; snapshot failure → internal.
 	if h.deps.ServiceLoader != nil {
 		if err := scenario.ValidateInput(ctx, h.deps.ServiceLoader, serviceRef, a.Scenario, a.Input); err != nil {
 			if errors.Is(err, scenario.ErrInputInvalid) {

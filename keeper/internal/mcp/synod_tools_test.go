@@ -8,9 +8,9 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac/rbactest"
 )
 
-// synodAdminCfg — конфиг RBAC, дающий archon-alice все synod.*-permissions
-// (ADR-049). Делит harness (newRoleHandler / callTool / mustToolErrorData /
-// roleFakePool) с role_tools_test.go — тот же пакет mcp.
+// synodAdminCfg — RBAC config granting archon-alice all synod.* permissions
+// (ADR-049). Shares the harness (newRoleHandler / callTool / mustToolErrorData /
+// roleFakePool) with role_tools_test.go — same mcp package.
 func synodAdminCfg() *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -76,7 +76,7 @@ func TestSynodTools_NilGuard(t *testing.T) {
 // --- RBAC ---
 
 func TestSynodTools_RBACForbidden(t *testing.T) {
-	// archon-alice без synod.*-permissions (пустой RBAC → deny all).
+	// archon-alice has no synod.* permissions (empty RBAC → deny all).
 	h := newRoleHandler(t, nil, &roleFakePool{})
 	resp := callTool(t, h, "archon-alice", "keeper.synod.create", `{"name":"team"}`)
 	if resp.Error == nil {
@@ -122,9 +122,9 @@ func TestSynodTools_Validation(t *testing.T) {
 
 // --- success (create) ---
 
-// Create-success через synod-aware fake: CreateSynod делает BeginTx → INSERT
-// synods → Commit; roleFakePool отдаёт INSERT как no-op success. Проверяем
-// 2xx-результат + эмиссию audit-event-а (ADR-022 parity role.*).
+// Create-success via a synod-aware fake: CreateSynod does BeginTx → INSERT
+// synods → Commit; roleFakePool returns the INSERT as a no-op success.
+// Checks the 2xx result + the audit-event emission (ADR-022 parity role.*).
 func TestSynodTools_Create_Success(t *testing.T) {
 	h, rec := newRoleHandlerRec(t, synodAdminCfg(), &roleFakePool{})
 	resp := callTool(t, h, "archon-alice", "keeper.synod.create",
@@ -137,13 +137,13 @@ func TestSynodTools_Create_Success(t *testing.T) {
 	}
 }
 
-// Guard-тест cap: keeper.synod.create с description длиннее
-// [rbac.SynodDescriptionMaxLen] → validation-failed (паритет HTTP-422 и
-// keeper.synod.update). Без проверки create-path молча пишет раздутый payload.
-// Граничная пара:
-//   - ровно MaxLen → проходит (НЕ validation-failed): ловит `>=` вместо `>`
-//     и off-by-one (MaxLen-1);
-//   - MaxLen+1 → validation-failed: ловит снятие cap-а целиком.
+// Guard test for the cap: keeper.synod.create with description longer than
+// [rbac.SynodDescriptionMaxLen] → validation-failed (parity with HTTP-422
+// and keeper.synod.update). Without this check the create path silently
+// writes a bloated payload. Boundary pair:
+//   - exactly MaxLen → passes (NOT validation-failed): catches `>=` instead
+//     of `>` and off-by-one (MaxLen-1);
+//   - MaxLen+1 → validation-failed: catches the cap being dropped entirely.
 func TestSynodTools_Create_DescriptionCap(t *testing.T) {
 	t.Run("at-limit-ok", func(t *testing.T) {
 		h := newRoleHandler(t, synodAdminCfg(), &roleFakePool{})
@@ -173,7 +173,7 @@ func TestSynodTools_Create_DescriptionCap(t *testing.T) {
 // --- update (ADR-049 amend) ---
 
 func TestSynodTools_Update_Forbidden(t *testing.T) {
-	// archon-alice без synod.update (пустой RBAC → deny all) → forbidden.
+	// archon-alice has no synod.update (empty RBAC → deny all) → forbidden.
 	h := newRoleHandler(t, nil, &roleFakePool{})
 	resp := callTool(t, h, "archon-alice", "keeper.synod.update",
 		`{"name":"team","description":"x"}`)
@@ -185,8 +185,8 @@ func TestSynodTools_Update_Forbidden(t *testing.T) {
 	}
 }
 
-// Update-success: UpdateSynodDescription делает UPDATE synods (roleFakePool
-// отдаёт OK 1 → группа найдена), эмитится synod.updated (ADR-022 parity).
+// Update-success: UpdateSynodDescription does UPDATE synods (roleFakePool
+// returns OK 1 → synod found), emits synod.updated (ADR-022 parity).
 func TestSynodTools_Update_Success(t *testing.T) {
 	h, rec := newRoleHandlerRec(t, synodAdminCfg(), &roleFakePool{})
 	resp := callTool(t, h, "archon-alice", "keeper.synod.update",
@@ -199,13 +199,13 @@ func TestSynodTools_Update_Success(t *testing.T) {
 	}
 }
 
-// Guard-тест cap: keeper.synod.update с description длиннее
-// [rbac.SynodDescriptionMaxLen] → validation-failed (паритет HTTP-422). Без
-// проверки оба write-path расходятся: HTTP режет, MCP молча пишет раздутый
-// payload. Мутационная устойчивость — граничная пара:
-//   - ровно MaxLen → проходит (НЕ validation-failed): ловит `>=` вместо `>`
-//     и off-by-one (MaxLen-1);
-//   - MaxLen+1 → validation-failed: ловит снятие cap-а целиком.
+// Guard test for the cap: keeper.synod.update with description longer than
+// [rbac.SynodDescriptionMaxLen] → validation-failed (parity with HTTP-422).
+// Without this check the two write paths diverge: HTTP truncates, MCP
+// silently writes a bloated payload. Mutation-resistance boundary pair:
+//   - exactly MaxLen → passes (NOT validation-failed): catches `>=` instead
+//     of `>` and off-by-one (MaxLen-1);
+//   - MaxLen+1 → validation-failed: catches the cap being dropped entirely.
 func TestSynodTools_Update_DescriptionCap(t *testing.T) {
 	t.Run("at-limit-ok", func(t *testing.T) {
 		h := newRoleHandler(t, synodAdminCfg(), &roleFakePool{})

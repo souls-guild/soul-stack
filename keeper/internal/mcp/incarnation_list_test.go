@@ -61,15 +61,15 @@ func TestToolsCall_IncarnationList_Success(t *testing.T) {
 	if out.Items[0].Spec["replicas"] != float64(2) {
 		t.Errorf("item spec lost: %+v", out.Items[0].Spec)
 	}
-	// reads НЕ аудируются (паритет REST List).
+	// reads are NOT audited (parity with REST List).
 	if len(rec.events) != 0 {
 		t.Errorf("list must not write audit, got %d", len(rec.events))
 	}
 }
 
 func TestToolsCall_IncarnationList_Empty(t *testing.T) {
-	// nil incListFn → пустой список, total=0. Items НЕ должен быть nil
-	// (make-инициализация) — JSON-массив `[]`, не `null`.
+	// nil incListFn → empty list, total=0. Items must NOT be nil
+	// (make-initialized) — a JSON array `[]`, not `null`.
 	h, _, _ := newTestHandler(t, &fakePool{}, listerRBAC())
 	out := mustListOutput(t, callTool(t, h, "archon-alice", "keeper.incarnation.list", `{}`))
 	if out.Total != 0 || len(out.Items) != 0 {
@@ -90,7 +90,7 @@ func TestToolsCall_IncarnationList_RBACForbidden(t *testing.T) {
 			return nil, 0
 		},
 	}
-	h, _, _ := newTestHandler(t, pool, nil) // пустой RBAC → deny
+	h, _, _ := newTestHandler(t, pool, nil) // empty RBAC → deny
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.list", `{}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")

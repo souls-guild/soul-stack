@@ -11,10 +11,10 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// incarnationHistoryArgs — arguments tool-а keeper.incarnation.history
-// (schemaIncarnationHistoryInput): name required; offset/limit/apply_id —
-// опциональны. apply_id фильтрует страницу по конкретному прогону (паритет
-// REST query-param).
+// incarnationHistoryArgs — arguments for keeper.incarnation.history
+// (schemaIncarnationHistoryInput): name is required; offset/limit/apply_id
+// are optional. apply_id filters the page to one specific run (parity with
+// the REST query param).
 type incarnationHistoryArgs struct {
 	Name    string `json:"name"`
 	ApplyID string `json:"apply_id"`
@@ -22,9 +22,9 @@ type incarnationHistoryArgs struct {
 	Limit   *int   `json:"limit"`
 }
 
-// incarnationHistoryEntry — элемент history-output. Симметричен REST
-// historyDTO: state_before/state_after прогоняются через [audit.MaskSecrets]
-// (defense-in-depth, history — второй наружный канал чтения state).
+// incarnationHistoryEntry — one element of the history output. Mirrors the
+// REST historyDTO: state_before/state_after go through [audit.MaskSecrets]
+// (defense-in-depth — history is a second external channel for reading state).
 type incarnationHistoryEntry struct {
 	HistoryID    string         `json:"history_id"`
 	Scenario     string         `json:"scenario"`
@@ -35,7 +35,7 @@ type incarnationHistoryEntry struct {
 	At           time.Time      `json:"created_at"`
 }
 
-// incarnationHistoryOutput — output keeper.incarnation.history. Симметричен
+// incarnationHistoryOutput — output of keeper.incarnation.history. Mirrors
 // REST PagedResponse[historyDTO].
 type incarnationHistoryOutput struct {
 	Items  []incarnationHistoryEntry `json:"items"`
@@ -44,13 +44,14 @@ type incarnationHistoryOutput struct {
 	Total  int                       `json:"total"`
 }
 
-// callIncarnationHistory — read-tool keeper.incarnation.history. Паритет REST
-// IncarnationHandler.History: existence-probe (404 для несуществующей name,
-// иначе пустая history неотличима от существующей-без-истории) →
-// HistorySelectByName → masked-DTO.
+// callIncarnationHistory — read-tool keeper.incarnation.history. Parity
+// with REST IncarnationHandler.History: existence probe (404 for a
+// non-existent name, otherwise an empty history is indistinguishable from
+// an existing incarnation with no history) → HistorySelectByName → masked
+// DTO.
 //
-// RBAC-context — {"incarnation": name} (name-bound, паритет REST
-// IncarnationNameSelector). reads НЕ аудируются.
+// RBAC context — {"incarnation": name} (name-bound, parity with REST
+// IncarnationNameSelector). Reads are NOT audited.
 func (h *Handler) callIncarnationHistory(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.incarnation.history"
 
@@ -93,12 +94,13 @@ func (h *Handler) callIncarnationHistory(ctx context.Context, claims *jwt.Claims
 		filter.ApplyID = a.ApplyID
 	}
 
-	// Existence-probe + источник coven/service-scope: иначе несуществующая name
-	// даёт пустую history (total=0), неотличимо от существующей-но-без-истории
-	// (паритет REST History). inc нужен для RBAC OR-Check (covens ∪ {name}).
+	// Existence probe + source of coven/service scope: otherwise a
+	// non-existent name yields an empty history (total=0), indistinguishable
+	// from an existing incarnation with no history (parity with REST
+	// History). inc is needed for the RBAC OR-check (covens ∪ {name}).
 	inc, err := incarnation.SelectByName(ctx, h.deps.IncarnationDB, a.Name)
 	if err != nil {
-		// Fail-closed RBAC при ненайденной/сбойной incarnation (паритет REST).
+		// Fail-closed RBAC when incarnation lookup fails or is not found (parity with REST).
 		if scopeErr := h.checkIncarnationScope(claims, "history", a.Name, "", nil); scopeErr != nil {
 			return h.toolError(req.ID, toolName, mcpCodeForbidden,
 				"operator lacks required permission incarnation.history")
@@ -114,8 +116,8 @@ func (h *Handler) callIncarnationHistory(ctx context.Context, claims *jwt.Claims
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	// RBAC OR-Check по coven/service-scope incarnation (covens ∪ {name}) —
-	// зеркало REST middleware, scope из inc.Service / inc.Covens.
+	// RBAC OR-check over the incarnation's coven/service scope (covens ∪
+	// {name}) — mirrors REST middleware, scope from inc.Service / inc.Covens.
 	if err := h.checkIncarnationScope(claims, "history", inc.Name, inc.Service, inc.Covens); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission incarnation.history")

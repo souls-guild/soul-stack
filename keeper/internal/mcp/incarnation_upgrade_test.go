@@ -22,8 +22,8 @@ func upgraderRBAC() *rbactest.Config {
 	}
 }
 
-// incAtVersion — backing incFn для upgrade: SelectByName (full row) и FOR
-// UPDATE-select читают один и тот же inc (serviceVersion / schema / status).
+// incAtVersion — backing incFn for upgrade: SelectByName (full row) and the
+// FOR UPDATE select read the same inc (serviceVersion / schema / status).
 func incAtVersion(serviceVer string, schema int, status incarnation.Status) func(string) (*incarnation.Incarnation, error) {
 	return func(name string) (*incarnation.Incarnation, error) {
 		now := time.Now().UTC()
@@ -74,7 +74,7 @@ func TestToolsCall_IncarnationUpgrade_Success(t *testing.T) {
 }
 
 func TestToolsCall_IncarnationUpgrade_Downgrade(t *testing.T) {
-	// Текущая схема 3, target 2 → ErrDowngradeViaRef (prepare) → incarnation-locked.
+	// Current schema 3, target 2 → ErrDowngradeViaRef (prepare) → incarnation-locked.
 	pool := &fakePool{incFn: incAtVersion("v3", 3, incarnation.StatusReady)}
 	loader := &mcpLoader{targetSchema: 2}
 	h, rec := newTestHandlerFull(t, pool, upgraderRBAC(), nil, &mcpResolver{ok: true}, loader)
@@ -92,7 +92,7 @@ func TestToolsCall_IncarnationUpgrade_Downgrade(t *testing.T) {
 }
 
 func TestToolsCall_IncarnationUpgrade_Noop(t *testing.T) {
-	// Тот же ref И та же схема → ErrUpgradeNoop → validation-failed.
+	// Same ref AND same schema → ErrUpgradeNoop → validation-failed.
 	pool := &fakePool{incFn: incAtVersion("v1", 1, incarnation.StatusReady)}
 	loader := &mcpLoader{targetSchema: 1, chain: statemigrate.Chain{}}
 	h, _ := newTestHandlerFull(t, pool, upgraderRBAC(), nil, &mcpResolver{ok: true}, loader)
@@ -121,9 +121,10 @@ func TestToolsCall_IncarnationUpgrade_ChainBroken(t *testing.T) {
 }
 
 func TestToolsCall_IncarnationUpgrade_Locked(t *testing.T) {
-	// Статус error_locked → tx-уровневый ErrIncarnationLocked → incarnation-locked
-	// (этот же путь покрывает migration_failed-статус, см. errors.go §
-	// mcpCodeMigrationFailed). PrepareUpgrade проходит (статус не читается до tx).
+	// Status error_locked → tx-level ErrIncarnationLocked → incarnation-locked
+	// (same path covers the migration_failed status, see errors.go §
+	// mcpCodeMigrationFailed). PrepareUpgrade succeeds (status isn't read
+	// before the tx).
 	pool := &fakePool{incFn: incAtVersion("v1", 1, incarnation.StatusErrorLocked)}
 	loader := &mcpLoader{targetSchema: 2, chain: oneStepChain(t)}
 	h, rec := newTestHandlerFull(t, pool, upgraderRBAC(), nil, &mcpResolver{ok: true}, loader)
@@ -154,8 +155,8 @@ func TestToolsCall_IncarnationUpgrade_NotFound(t *testing.T) {
 }
 
 func TestToolsCall_IncarnationUpgrade_RBACForbidden(t *testing.T) {
-	// RBAC пуст → deny. SelectByName РЕЗОЛВИТ scope (covens ∪ {name}) для
-	// OR-Check (зеркало REST middleware), затем enforcer отказывает → forbidden.
+	// RBAC empty → deny. SelectByName RESOLVES scope (covens ∪ {name}) for the
+	// OR-Check (mirrors REST middleware), then the enforcer denies → forbidden.
 	pool := &fakePool{incFn: incAtVersion("v1", 1, incarnation.StatusReady)}
 	h, rec := newTestHandlerFull(t, pool, nil, nil, &mcpResolver{ok: true}, &mcpLoader{targetSchema: 2})
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.upgrade",

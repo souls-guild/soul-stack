@@ -19,9 +19,10 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// cloudFakePool — in-memory PG-имитация под provider+profile CRUD для MCP-tools.
-// Транспортный фокус (тот же приём, что svcRegFakePool): валидирует, что tool
-// зовёт Service, маппит ошибки, кодирует output, пишет audit.
+// cloudFakePool — in-memory PG stand-in for provider+profile CRUD in
+// MCP-tools tests. Same transport-focused approach as svcRegFakePool:
+// validates that the tool calls Service, maps errors, encodes output,
+// writes audit.
 type cloudFakePool struct {
 	providers map[string]*provider.Provider
 	profiles  map[string]*profile.Profile
@@ -283,7 +284,7 @@ func TestCloudTools_NilGuard(t *testing.T) {
 // --- RBAC ---
 
 func TestCloudTools_RBACForbidden(t *testing.T) {
-	h, _ := newCloudToolHandler(t, nil, newCloudFakePool()) // нет permissions → deny
+	h, _ := newCloudToolHandler(t, nil, newCloudFakePool()) // no permissions → deny
 	resp := callTool(t, h, "archon-alice", "keeper.provider.create",
 		`{"name":"wb","type":"wb","region":"ru","credentials_ref":"vault:x"}`)
 	if resp.Error == nil {
@@ -311,7 +312,7 @@ func TestProviderTool_CreateReadListDelete(t *testing.T) {
 	if out.Name != "wb" || out.CredentialsRef != "vault:secret/cloud/wb" {
 		t.Fatalf("output = %+v", out)
 	}
-	// Audit credentials_ref как ПУТЬ (не секрет).
+	// Audit credentials_ref as a PATH (not a secret).
 	if len(rec.events) != 1 || rec.events[0].EventType != audit.EventProviderCreated {
 		t.Fatalf("audit = %+v", rec.events)
 	}
@@ -326,7 +327,7 @@ func TestProviderTool_CreateReadListDelete(t *testing.T) {
 	if r := callTool(t, h, "archon-alice", "keeper.provider.delete", `{"name":"wb"}`); r.Error != nil {
 		t.Fatalf("delete error: %+v", r.Error)
 	}
-	// read после delete → not-found.
+	// read after delete → not-found.
 	r := callTool(t, h, "archon-alice", "keeper.provider.read", `{"name":"wb"}`)
 	if data := mustToolErrorData(t, r.Error.Data); data.Code != mcpCodeNotFound {
 		t.Errorf("read after delete code = %q, want not-found", data.Code)
@@ -369,13 +370,13 @@ func TestProfileTool_CreateAndMissingProvider(t *testing.T) {
 	pool := newCloudFakePool()
 	h, rec := newCloudToolHandler(t, cloudAdminCfg(), pool)
 
-	// нет Provider → profile.create отдаёт validation-failed (FK).
+	// no Provider → profile.create returns validation-failed (FK).
 	r := callTool(t, h, "archon-alice", "keeper.profile.create", `{"name":"p","provider":"ghost"}`)
 	if data := mustToolErrorData(t, r.Error.Data); data.Code != mcpCodeValidationFailed {
 		t.Fatalf("missing provider code = %q, want validation-failed", data.Code)
 	}
 
-	// заводим Provider, потом Profile.
+	// create a Provider, then a Profile.
 	if r := callTool(t, h, "archon-alice", "keeper.provider.create",
 		`{"name":"wb","type":"wb","region":"ru","credentials_ref":"vault:x"}`); r.Error != nil {
 		t.Fatalf("provider create: %+v", r.Error)
@@ -385,7 +386,7 @@ func TestProfileTool_CreateAndMissingProvider(t *testing.T) {
 		`{"name":"web","provider":"wb","params":{"image":"ubuntu"}}`); r.Error != nil {
 		t.Fatalf("profile create: %+v", r.Error)
 	}
-	// Audit profile.created с params_keys (без values).
+	// Audit profile.created with params_keys (no values).
 	if len(rec.events) != 1 || rec.events[0].EventType != audit.EventProfileCreated {
 		t.Fatalf("audit = %+v", rec.events)
 	}

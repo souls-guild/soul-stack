@@ -1,11 +1,11 @@
 //go:build integration
 
-// Integration-тест SSE-маршрута `/mcp/events`: реальный MCP-сервер на
-// ephemeral port (общий harness из integration_test.go), apply-bus
-// разделён с тестовым кодом — мы публикуем события напрямую и проверяем,
-// что SSE-клиент получает их через HTTP.
+// Integration test for the SSE route `/mcp/events`: a real MCP server on an
+// ephemeral port (shared harness from integration_test.go); the apply-bus is
+// shared with the test code — we publish events directly and verify that the
+// SSE client receives them over HTTP.
 //
-// Запуск:
+// Run:
 //
 //	cd keeper && SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1 \
 //	    go test -tags=integration -race -count=1 ./internal/mcp/...
@@ -32,11 +32,12 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// seedApplyRunForSSE кладёт минимальную цепочку operator → incarnation →
-// apply_runs так, чтобы authorizeSSE (sse.go) разрешил подписку владельцу:
-// started_by_aid = ownerAID == JWT.sub. ApplyAccessPG резолвит apply_id в эту
-// строку, owner-ветка authorizeSSE даёт allow без RBAC-проверки. Без apply_run
-// SSE fail-closed (apply_id не найден → 403, anti-enum).
+// seedApplyRunForSSE inserts the minimal operator → incarnation → apply_runs
+// chain so authorizeSSE (sse.go) allows the owner to subscribe:
+// started_by_aid = ownerAID == JWT.sub. ApplyAccessPG resolves apply_id to
+// this row, and the owner branch of authorizeSSE allows without an RBAC
+// check. Without an apply_run, SSE fails closed (apply_id not found → 403,
+// anti-enum).
 func seedApplyRunForSSE(t *testing.T, applyID, ownerAID string) {
 	t.Helper()
 	ctx := context.Background()
@@ -64,10 +65,10 @@ func seedApplyRunForSSE(t *testing.T, applyID, ownerAID string) {
 	}
 }
 
-// startMCPServerWithBus поднимает MCP-listener с пользовательской bus-шиной.
-// Возвращает baseURL и саму шину, чтобы тест мог публиковать события
-// напрямую (имитация publisher-а из events_taskevent.go/events_runresult.go,
-// без gRPC-обвязки — отдельный slice integration-сценарий).
+// startMCPServerWithBus starts an MCP listener with a custom event bus.
+// Returns baseURL and the bus itself so the test can publish events directly
+// (simulating the publisher from events_taskevent.go/events_runresult.go,
+// without the gRPC wrapping — a separate integration-scenario slice).
 func startMCPServerWithBus(t *testing.T) (baseURL string, bus *applybus.EventBus, shutdown func()) {
 	t.Helper()
 	verifier, err := keeperjwt.NewVerifier([]byte(integrationSigningKey), integrationIssuer)
@@ -106,10 +107,11 @@ func startMCPServerWithBus(t *testing.T) (baseURL string, bus *applybus.EventBus
 	}
 
 	bus = applybus.NewBus(slog.New(slog.NewJSONHandler(io.Discard, nil)))
-	// ApplyAccess + RBAC включают RBAC-проверку SSE-подписки (M1, authorizeSSE):
-	// без ApplyAccess подписка fail-closed (deny → 403). Прод всегда прокидывает
-	// ApplyAccessPG; harness — тот же путь поверх тест-пула. RBAC=enforcer для
-	// ветки «не владелец» (тесты используют ветку владельца через started_by_aid).
+	// ApplyAccess + RBAC turn on the RBAC check for SSE subscriptions (M1,
+	// authorizeSSE): without ApplyAccess, a subscription fails closed (deny →
+	// 403). Prod always wires ApplyAccessPG; the harness takes the same path
+	// over the test pool. RBAC=enforcer covers the "not owner" branch (tests
+	// use the owner branch via started_by_aid).
 	srv, err := NewServer(config.KeeperListenSimple{Addr: "127.0.0.1:0"}, ServerDeps{
 		JWTVerifier: verifier,
 		Handler:     handler,
@@ -155,7 +157,7 @@ func TestIntegration_SSE_EndToEnd(t *testing.T) {
 	token := newToken(t, "archon-alice", []string{"cluster-admin"})
 
 	applyID := "01J0SSE00000000000000ABCDE"
-	// SSE-подписка авторизуется как владелец прогона (started_by_aid == sub).
+	// SSE subscription is authorized as the run owner (started_by_aid == sub).
 	seedApplyRunForSSE(t, applyID, "archon-alice")
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
@@ -180,7 +182,7 @@ func TestIntegration_SSE_EndToEnd(t *testing.T) {
 		t.Errorf("Content-Type = %q, want text/event-stream", ct)
 	}
 
-	// Ждём пока SSE-handler подписался в bus-е.
+	// Wait until the SSE handler subscribes to the bus.
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if bus.Subscribers(applyID) >= 1 {
@@ -192,8 +194,8 @@ func TestIntegration_SSE_EndToEnd(t *testing.T) {
 		t.Fatal("SSE handler did not subscribe within 3s")
 	}
 
-	// Имитируем последовательность publisher-а events_taskevent.go +
-	// events_runresult.go: одна задача + финальный SUCCESS.
+	// Simulate the publisher sequence from events_taskevent.go +
+	// events_runresult.go: one task + a final SUCCESS.
 	bus.Publish(applybus.Event{
 		ApplyID: applyID,
 		Kind:    applybus.KindTaskExecuted,
@@ -233,7 +235,7 @@ func TestIntegration_SSE_EndToEnd(t *testing.T) {
 	}
 
 	cancel()
-	// После disconnect bus должен оссвободить subscriber-а.
+	// After disconnect, the bus must release the subscriber.
 	deadline = time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if bus.Subscribers(applyID) == 0 {

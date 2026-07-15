@@ -12,13 +12,13 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// keeper.push-provider.<verb> — паритет REST POST/GET/PUT/DELETE /v1/push-providers*
-// (PushProviderHandler, ADR-032 amendment 2026-05-26, S7-2). Тонкая
-// MCP-обёртка над тем же pushprovider.Service, что REST. Permission-маппинг
-// 1:1 (keeper.push-provider.<verb> ↔ push-provider.<verb>), селектор —
-// NoSelector (паттерн service.* / role.*).
+// keeper.push-provider.<verb> — parity with REST POST/GET/PUT/DELETE
+// /v1/push-providers* (PushProviderHandler, ADR-032 amendment 2026-05-26,
+// S7-2). A thin MCP wrapper over the same pushprovider.Service as REST.
+// Permission mapping is 1:1 (keeper.push-provider.<verb> ↔
+// push-provider.<verb>), selector — NoSelector (the service.* / role.* pattern).
 
-// pushProviderViewOut — JSON-форма output-а (та же, что HTTP-handler).
+// pushProviderViewOut — the JSON shape of the output (same as the HTTP handler).
 type pushProviderViewOut struct {
 	Name         string         `json:"name"`
 	Params       map[string]any `json:"params"`
@@ -270,8 +270,8 @@ func (h *Handler) callPushProviderList(ctx context.Context, claims *jwt.Claims, 
 	})
 }
 
-// paramKeysSortedMCP — копия handlers.paramKeysSorted (mcp не импортит handlers
-// для audit-payload, чтобы не плодить обратные зависимости).
+// paramKeysSortedMCP — a copy of handlers.paramKeysSorted (mcp doesn't import
+// handlers for the audit payload, to avoid creating reverse dependencies).
 func paramKeysSortedMCP(params map[string]any) []string {
 	if len(params) == 0 {
 		return []string{}

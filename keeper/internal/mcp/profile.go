@@ -12,14 +12,14 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// keeper.profile.<verb> — паритет REST POST/GET/DELETE /v1/profiles*
-// (ProfileHandler, ADR-017, Cloud CRUD). Тонкая MCP-обёртка над тем же
-// profile.Service, что REST. Permission-маппинг 1:1, селектор — NoSelector.
-// БЕЗ update (Profile иммутабелен).
+// keeper.profile.<verb> — parity with REST POST/GET/DELETE /v1/profiles*
+// (ProfileHandler, ADR-017, Cloud CRUD). A thin MCP wrapper over the same
+// profile.Service as REST. Permission mapping is 1:1, selector is
+// NoSelector. NO update (Profile is immutable).
 //
-// Секрет-гигиена: VALUE params в audit НЕ кладутся (только ключи).
+// Secret hygiene: VALUE params are NOT put into audit (keys only).
 
-// profileViewOut — JSON-форма output-а (та же, что HTTP-handler).
+// profileViewOut — JSON form of the output (same as the HTTP handler).
 type profileViewOut struct {
 	Name         string         `json:"name"`
 	Provider     string         `json:"provider"`

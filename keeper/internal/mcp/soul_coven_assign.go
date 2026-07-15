@@ -12,22 +12,23 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// keeper.soul.coven-assign — паритет REST POST /v1/souls/coven
-// (SoulHandler.AssignCoven). Массово добавляет (append) или снимает (remove)
-// ОДНУ Coven-метку с хостов под selector ∩ coven-scope оператора.
+// keeper.soul.coven-assign — parity with REST POST /v1/souls/coven
+// (SoulHandler.AssignCoven). Bulk-adds (append) or removes (remove) ONE
+// Coven label on hosts under selector ∩ operator coven-scope.
 //
-// Логика scope-intersection переиспользует тот же service-слой, что REST
-// (soul.BulkAssignCoven / soul.CountBulkMatched + soul.BulkScope из
-// CovenScope), без дубля бизнес-логики и без хождения через HTTP-handler.
+// Scope-intersection logic reuses the same service layer as REST
+// (soul.BulkAssignCoven / soul.CountBulkMatched + soul.BulkScope from
+// CovenScope) — no duplicated business logic and no HTTP-handler round-trip.
 //
-// БЕЗОПАСНОСТЬ — двойная проверка scope, идентичная REST:
-//   - гейт (a): целевые хосты ⊆ coven-scope (предикат `coven && ARRAY[scope]`
-//     в BulkAssignCoven/CountBulkMatched);
-//   - гейт (b): назначаемая (append) метка ∈ scope. В REST его держат ДВА слоя —
-//     middleware RBAC.Check с селектором `{coven: label}` (SoulCovenLabelSelector)
-//     и service-проверка (ErrBulkLabelOutOfScope). У MCP middleware-селектора
-//     нет, поэтому RBAC.Check с `{"coven": label}` зовётся здесь явно, плюс
-//     остаётся service-гейт. Без обоих MCP стал бы обходом REST-защиты.
+// SECURITY — dual scope check, identical to REST:
+//   - gate (a): target hosts ⊆ coven-scope (predicate `coven && ARRAY[scope]`
+//     in BulkAssignCoven/CountBulkMatched);
+//   - gate (b): the (append) label being assigned ∈ scope. REST enforces
+//     this with TWO layers — middleware RBAC.Check with selector
+//     `{coven: label}` (SoulCovenLabelSelector) plus a service check
+//     (ErrBulkLabelOutOfScope). MCP has no middleware selector, so
+//     RBAC.Check with `{"coven": label}` is called explicitly here, on top
+//     of the service gate. Without both, MCP would bypass REST protection.
 
 type soulCovenAssignArgs struct {
 	Mode     string                  `json:"mode"`
@@ -45,16 +46,17 @@ type soulCovenAssignSelector struct {
 	Status      string   `json:"status,omitempty"`
 }
 
-// soulCovenAssignOutput — паритет REST soulCovenAssignResponse. Для
-// mode=replace отдаём `labels` (включая пустой `[]`), для append/remove — `label`.
-// MarshalJSON решает XOR на сериализации (`omitempty` на []string не годится:
-// пустой набор для replace надо отдать как `[]`, а не опустить поле). json-теги
-// нужны для UnmarshalJSON (тесты декодят tool-output обратной операцией).
+// soulCovenAssignOutput — parity with REST soulCovenAssignResponse. For
+// mode=replace returns `labels` (including empty `[]`), for append/remove —
+// `label`. MarshalJSON resolves the XOR at serialization time (`omitempty`
+// on []string won't work: an empty replace set must render as `[]`, not be
+// omitted). json tags are needed for UnmarshalJSON (tests decode tool
+// output back).
 type soulCovenAssignOutput struct {
 	Mode    string   `json:"mode"`
 	Label   string   `json:"label,omitempty"`
 	Labels  []string `json:"labels,omitempty"`
-	HasSet  bool     `json:"-"` // только для MarshalJSON.
+	HasSet  bool     `json:"-"` // MarshalJSON only.
 	Matched int      `json:"matched"`
 	Changed int      `json:"changed"`
 	Status  string   `json:"status"`
@@ -106,7 +108,7 @@ func (h *Handler) callSoulCovenAssign(ctx context.Context, claims *jwt.Claims, r
 			"field 'mode' must be one of: append, remove, replace")
 	}
 
-	// XOR label↔labels по mode (паритет REST handler).
+	// XOR label↔labels by mode (parity with REST handler).
 	switch mode {
 	case soul.CovenAppend, soul.CovenRemove:
 		if len(a.Labels) > 0 {
@@ -165,12 +167,12 @@ func (h *Handler) callSoulCovenAssign(ctx context.Context, claims *jwt.Claims, r
 			"selector 'incarnation' must match "+incarnation.NamePattern)
 	}
 
-	// Гейт (b), permission-слой: RBAC.Check с селектором `{coven: label}` —
-	// эквивалент REST-middleware SoulCovenLabelSelector. Для append/remove —
-	// одна метка. Для replace — проверяем КАЖДУЮ метку набора (множественные
-	// последовательные Check; иначе coven-scoped оператор с scope `dev` мог
-	// бы пройти как `labels=[dev, prod]` — на первой метке). Без обоих гейтов
-	// MCP стал бы обходом REST-защиты.
+	// Gate (b), permission layer: RBAC.Check with selector `{coven: label}`
+	// — equivalent to REST middleware SoulCovenLabelSelector. append/remove
+	// check one label. replace checks EVERY label in the set (multiple
+	// sequential Check calls; otherwise a coven-scoped operator with scope
+	// `dev` could pass `labels=[dev, prod]` on the first label alone).
+	// Without both gates, MCP would bypass REST protection.
 	switch mode {
 	case soul.CovenAppend, soul.CovenRemove:
 		if err := h.deps.RBAC.Check(claims.Subject, "soul", "coven-assign",
@@ -179,9 +181,9 @@ func (h *Handler) callSoulCovenAssign(ctx context.Context, claims *jwt.Claims, r
 				"operator lacks required permission soul.coven-assign")
 		}
 	case soul.CovenReplace:
-		// Пустой набор: ни одной метки в проверке — bare-permission
-		// достаточна, coven-scoped без scope-match отвалится на service-гейте
-		// (a) (целевые хосты ⊆ scope).
+		// Empty set: no label to check — bare permission is enough;
+		// coven-scoped without a scope match fails at service gate (a)
+		// (target hosts ⊆ scope).
 		if len(a.Labels) == 0 {
 			if err := h.deps.RBAC.Check(claims.Subject, "soul", "coven-assign", nil); err != nil {
 				return h.toolError(req.ID, toolName, mcpCodeForbidden,
@@ -225,9 +227,9 @@ func (h *Handler) callSoulCovenAssign(ctx context.Context, claims *jwt.Claims, r
 		rep, err = soul.BulkAssignCoven(ctx, h.deps.SoulDB, sel, scope, a.Label, mode)
 	}
 	if err != nil {
-		// partial: часть чанков закоммичена — отдаём результат (не error),
-		// чтобы оператор видел сделанное и мог до-повторить идемпотентно
-		// (паритет REST: 200 + status:partial).
+		// partial: some chunks committed — return a result (not an error)
+		// so the operator can see what happened and idempotently retry
+		// (parity with REST: 200 + status:partial).
 		if rep.Status == soul.BulkPartial {
 			h.deps.Logger.Warn("mcp: soul.coven-assign partial",
 				slog.String("label", a.Label),
@@ -247,8 +249,8 @@ func (h *Handler) callSoulCovenAssign(ctx context.Context, claims *jwt.Claims, r
 	return h.toolResult(req.ID, buildCovenAssignOutput(a, mode, rep, false))
 }
 
-// buildCovenAssignOutput собирает паритетный REST-у output: для append/remove —
-// одна `label`, для replace — `labels[]` (nil→[] для устойчивого JSON).
+// buildCovenAssignOutput assembles REST-parity output: one `label` for
+// append/remove, `labels[]` for replace (nil→[] for stable JSON).
 func buildCovenAssignOutput(a soulCovenAssignArgs, mode soul.CovenMode, rep soul.Report, dryRun bool) soulCovenAssignOutput {
 	out := soulCovenAssignOutput{
 		Mode:    string(mode),
@@ -272,10 +274,10 @@ func buildCovenAssignOutput(a soulCovenAssignArgs, mode soul.CovenMode, rep soul
 	return out
 }
 
-// bulkAssignError маппит ошибки bulk-слоя в MCP-error. ErrBulkEmptySelector и
-// ErrBulkLabelOutOfScope → validation-failed (паритет REST TypeValidationFailed
-// в writeBulkError); прочее → internal-error с логом (oracle-attack-защита, как
-// в соседних мапперах).
+// bulkAssignError maps bulk-layer errors to an MCP error. ErrBulkEmptySelector
+// and ErrBulkLabelOutOfScope → validation-failed (parity with REST
+// TypeValidationFailed in writeBulkError); everything else → internal-error
+// with a log entry (oracle-attack protection, same as neighboring mappers).
 func (h *Handler) bulkAssignError(id json.RawMessage, toolName string, err error) jsonRPCResponse {
 	switch {
 	case errors.Is(err, soul.ErrBulkEmptySelector):
@@ -290,12 +292,13 @@ func (h *Handler) bulkAssignError(id json.RawMessage, toolName string, err error
 	}
 }
 
-// auditCovenAssign пишет audit-event soul.coven-changed. Payload симметричен
-// REST (respondCovenAssign), но `source` = "mcp" (string(audit.SourceMCP)) —
-// MCP-канал отделён от api/keeper_internal для granular trail.
+// auditCovenAssign writes the soul.coven-changed audit event. Payload
+// mirrors REST (respondCovenAssign), but `source` = "mcp"
+// (string(audit.SourceMCP)) — the MCP channel is separated from
+// api/keeper_internal for a granular trail.
 //
-// `label`/`labels` — XOR по mode (REST-паритет): append/remove → `label`,
-// replace → `labels` (всегда массив, в т.ч. пустой при «снять все»).
+// `label`/`labels` is XOR by mode (REST parity): append/remove → `label`,
+// replace → `labels` (always an array, including empty for "remove all").
 func (h *Handler) auditCovenAssign(aid string, a soulCovenAssignArgs, mode soul.CovenMode, scope soul.BulkScope, rep soul.Report, dryRun bool) {
 	payload := map[string]any{
 		"mode":          string(mode),
@@ -319,8 +322,8 @@ func (h *Handler) auditCovenAssign(aid string, a soulCovenAssignArgs, mode soul.
 	h.writeAudit(audit.EventSoulCovenChanged, aid, payload)
 }
 
-// normalizeMCPCovenSelector — нормализованная форма селектора для audit-payload
-// (паритет handlers.normalizeCovenSelector, приватного для пакета handlers).
+// normalizeMCPCovenSelector — normalized selector form for the audit
+// payload (mirrors handlers.normalizeCovenSelector, private to package handlers).
 func normalizeMCPCovenSelector(s soulCovenAssignSelector) map[string]any {
 	out := map[string]any{"all": s.All}
 	if len(s.SIDs) > 0 {

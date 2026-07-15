@@ -11,16 +11,16 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// incarnationUnlockArgs — arguments tool-а keeper.incarnation.unlock
-// (schemaIncarnationUnlockInput): name + reason обязательны. reason пишется
-// в audit-payload (паритет REST).
+// incarnationUnlockArgs — arguments for keeper.incarnation.unlock
+// (schemaIncarnationUnlockInput): name + reason required. reason is written
+// to the audit payload (parity with REST).
 type incarnationUnlockArgs struct {
 	Name   string `json:"name"`
 	Reason string `json:"reason"`
 }
 
-// incarnationUnlockOutput — output keeper.incarnation.unlock. Симметричен REST
-// unlockResponse (IncarnationUnlockReply).
+// incarnationUnlockOutput — output of keeper.incarnation.unlock. Mirrors
+// REST unlockResponse (IncarnationUnlockReply).
 type incarnationUnlockOutput struct {
 	Name           string    `json:"name"`
 	PreviousStatus string    `json:"previous_status"`
@@ -29,13 +29,14 @@ type incarnationUnlockOutput struct {
 	UnlockedAt     time.Time `json:"unlocked_at"`
 }
 
-// callIncarnationUnlock — mutating-tool keeper.incarnation.unlock. Паритет
-// REST IncarnationHandler.Unlock: снятие блокирующего статуса (error_locked /
-// migration_failed → ready) под FOR UPDATE, state не меняется.
+// callIncarnationUnlock — mutating tool keeper.incarnation.unlock. Parity
+// with REST IncarnationHandler.Unlock: clears the blocking status
+// (error_locked / migration_failed → ready) under FOR UPDATE; state is
+// unchanged.
 //
 // RBAC-context — {"incarnation": name} (name-bound). audit:
 // EventIncarnationUnlocked {name, previous_status, reason}, source=mcp
-// (writeAudit). RBAC ДО бизнес-вызова; audit — после успешного Unlock.
+// (writeAudit). RBAC before the business call; audit after a successful Unlock.
 func (h *Handler) callIncarnationUnlock(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.incarnation.unlock"
 
@@ -57,11 +58,12 @@ func (h *Handler) callIncarnationUnlock(ctx context.Context, claims *jwt.Claims,
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'reason' is required")
 	}
 
-	// RBAC OR-Check по coven/service-scope incarnation (covens ∪ {name}) —
-	// зеркало REST middleware. Unlock сам делает FOR UPDATE-select внутри
-	// бизнес-вызова, поэтому scope резолвим отдельным probe-SelectByName (тот
-	// же холодный RBAC-round-trip, что REST IncarnationScopeSelector). Битый
-	// probe → fail-closed (scoped deny, bare/`*` pass → Unlock вернёт 404/500).
+	// RBAC OR-Check over the incarnation's coven/service scope (covens ∪
+	// {name}) — mirrors REST middleware. Unlock does its own FOR UPDATE
+	// select inside the business call, so scope is resolved via a separate
+	// probe-SelectByName (same cold RBAC round-trip as REST
+	// IncarnationScopeSelector). A failed probe → fail-closed (scoped deny,
+	// bare/`*` pass through → Unlock returns 404/500).
 	inc, probeErr := incarnation.SelectByName(ctx, h.deps.IncarnationDB, a.Name)
 	if probeErr != nil {
 		if scopeErr := h.checkIncarnationScope(claims, "unlock", a.Name, "", nil); scopeErr != nil {

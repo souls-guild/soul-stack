@@ -18,11 +18,12 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// svcRegFakePool — узкий fake под [serviceregistry.ServicePool]: гоняет ровно те
-// SQL, что нужны service-tools (Insert/Update RETURNING, Get/List SELECT, Delete
-// Exec). Бизнес-инварианты serviceregistry.Service покрыты integration-тестами
-// пакета serviceregistry; здесь проверяется ТРАНСПОРТ — что tool правильно зовёт
-// Service, маппит ошибки, кодирует output и пишет audit.
+// svcRegFakePool — a narrow fake for [serviceregistry.ServicePool]: handles
+// exactly the SQL service-tools need (Insert/Update RETURNING, Get/List
+// SELECT, Delete Exec). Business invariants of serviceregistry.Service are
+// covered by the serviceregistry package's integration tests; this checks
+// TRANSPORT — that the tool calls Service correctly, maps errors, encodes
+// output, and writes audit.
 type svcRegFakePool struct {
 	insertErr  error
 	updateErr  error
@@ -83,7 +84,7 @@ type svcRegErrRow struct{ err error }
 
 func (r svcRegErrRow) Scan(_ ...any) error { return r.err }
 
-// svcRegRow — однострочный pgx.Row для INSERT/UPDATE RETURNING и Get.
+// svcRegRow — single-row pgx.Row for INSERT/UPDATE RETURNING and Get.
 type svcRegRow struct{ values []any }
 
 func (r svcRegRow) Scan(dest ...any) error { return scanSvcReg(dest, r.values) }
@@ -105,7 +106,7 @@ func (r *svcRegRows) Values() ([]any, error) { return nil, nil }
 func (r *svcRegRows) RawValues() [][]byte    { return nil }
 func (r *svcRegRows) Conn() *pgx.Conn        { return nil }
 
-// scanSvcReg раскладывает values по dest для time.Time / string / *string.
+// scanSvcReg scatters values into dest for time.Time / string / *string.
 func scanSvcReg(dest, values []any) error {
 	for i, d := range dest {
 		switch d := d.(type) {
@@ -132,8 +133,8 @@ func svcRegEntryRow(name, git, ref string) []any {
 
 // --- harness ---
 
-// newServiceToolHandler собирает Handler с реальным serviceregistry.Service над
-// svcRegFakePool. pool=nil → ServiceSvc остаётся nil (nil-guard).
+// newServiceToolHandler builds a Handler with a real serviceregistry.Service
+// over svcRegFakePool. pool=nil → ServiceSvc stays nil (nil-guard).
 func newServiceToolHandler(t *testing.T, rbacCfg *rbactest.Config, pool *svcRegFakePool) (*Handler, *recordingAudit) {
 	t.Helper()
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
@@ -176,7 +177,7 @@ func newServiceToolHandler(t *testing.T, rbacCfg *rbactest.Config, pool *svcRegF
 	return h, rec
 }
 
-// serviceAdminCfg — RBAC, дающий archon-alice все service.*-permissions.
+// serviceAdminCfg — RBAC config granting archon-alice all service.* permissions.
 func serviceAdminCfg() *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -235,7 +236,7 @@ func TestServiceTools_NilGuard(t *testing.T) {
 // --- tests: RBAC enforcement ---
 
 func TestServiceTools_RBACForbidden(t *testing.T) {
-	// archon-alice без service.*-permissions (пустой RBAC → deny all).
+	// archon-alice has no service.* permissions (empty RBAC → deny all).
 	h, _ := newServiceToolHandler(t, nil, &svcRegFakePool{})
 	resp := callTool(t, h, "archon-alice", "keeper.service.register",
 		`{"name":"web","git":"g","ref":"v1"}`)
@@ -299,7 +300,7 @@ func TestServiceRegister_Success(t *testing.T) {
 		t.Errorf("output = %+v", out)
 	}
 
-	// audit-event service.registered с payload {name, git, ref, created_by_aid}.
+	// audit event service.registered with payload {name, git, ref, created_by_aid}.
 	if len(rec.events) != 1 {
 		t.Fatalf("audit events = %d, want 1", len(rec.events))
 	}
@@ -390,7 +391,7 @@ func TestServiceList_Success(t *testing.T) {
 	if len(out.Services) != 2 {
 		t.Fatalf("services = %d, want 2", len(out.Services))
 	}
-	// read-only: list НЕ аудируется.
+	// read-only: list is not audited.
 	if len(rec.events) != 0 {
 		t.Errorf("list emitted %d audit events, want 0", len(rec.events))
 	}
@@ -419,7 +420,7 @@ func TestServiceDeregister_NotFound404(t *testing.T) {
 	}
 }
 
-// assertPayload проверяет, что payload[key] == want (string).
+// assertPayload checks that payload[key] == want (string).
 func assertPayload(t *testing.T, payload map[string]any, key, want string) {
 	t.Helper()
 	got, ok := payload[key]

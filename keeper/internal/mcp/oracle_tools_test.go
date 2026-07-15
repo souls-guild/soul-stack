@@ -18,9 +18,10 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// oracleFakePool — узкий fake под [oracle.ServicePool] для oracle-tools-тестов.
-// Покрывает ТРАНСПОРТ (RBAC-проверка / маппинг sentinel→MCP-code / output /
-// audit); бизнес-инварианты oracle.Service покрыты oracle/integration_test.go.
+// oracleFakePool — a narrow fake for [oracle.ServicePool] used by
+// oracle-tools tests. Covers TRANSPORT (RBAC check / sentinel→MCP-code
+// mapping / output / audit); business invariants of oracle.Service are
+// covered by oracle/integration_test.go.
 type oracleFakePool struct {
 	vigilInsertErr  error
 	vigilGetRow     []any
@@ -212,7 +213,7 @@ func newOracleToolHandler(t *testing.T, rbacCfg *rbactest.Config, pool *oracleFa
 	return h, rec
 }
 
-// oracleAdminCfg — RBAC, дающий archon-alice все vigil.*/decree.*-permissions.
+// oracleAdminCfg — RBAC config granting archon-alice all vigil.*/decree.* permissions.
 func oracleAdminCfg() *rbactest.Config {
 	return &rbactest.Config{
 		Roles: []rbactest.Role{
@@ -274,7 +275,7 @@ func TestOracleTools_NilGuard(t *testing.T) {
 // --- tests: RBAC enforcement ---
 
 func TestOracleTools_RBACForbidden(t *testing.T) {
-	// archon-alice без vigil/decree-permissions (пустой RBAC → deny all).
+	// archon-alice has no vigil/decree permissions (empty RBAC → deny all).
 	h, _ := newOracleToolHandler(t, nil, &oracleFakePool{})
 	cases := []struct {
 		tool string

@@ -9,18 +9,18 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// roleDeleteArgs — arguments tool-а keeper.role.delete (schemaRoleDeleteInput):
-// только name.
+// roleDeleteArgs — arguments for the keeper.role.delete tool
+// (schemaRoleDeleteInput): name only.
 type roleDeleteArgs struct {
 	Name string `json:"name"`
 }
 
-// callRoleDelete — mutating-tool keeper.role.delete. Транспорт поверх
-// [rbac.Service.DeleteRole]: builtin-граница и self-lockout-проверка — в
-// Service (под FOR UPDATE); tool маппит ErrRoleNotFound/ErrRoleBuiltin/
-// ErrWouldLockOutCluster в MCP-коды.
+// callRoleDelete — mutating tool keeper.role.delete. Transport over
+// [rbac.Service.DeleteRole]: the builtin boundary and self-lockout check live
+// in Service (under FOR UPDATE); the tool maps ErrRoleNotFound/ErrRoleBuiltin/
+// ErrWouldLockOutCluster to MCP codes.
 //
-// RBAC — role.delete без селектора (nil-context).
+// RBAC — role.delete has no selector (nil context).
 func (h *Handler) callRoleDelete(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.role.delete"
 
@@ -28,9 +28,9 @@ func (h *Handler) callRoleDelete(ctx context.Context, claims *jwt.Claims, req js
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, roleManagementNotConfigured)
 	}
 
-	// RBAC ДО unmarshal/валидации (least-disclosure): неавторизованный оператор
-	// не получает validation-feedback по телу. Контекст nil — право не зависит
-	// от тела запроса.
+	// RBAC BEFORE unmarshal/validation (least-disclosure): an unauthorized
+	// operator gets no validation feedback about the body. Context nil — the
+	// permission doesn't depend on the request body.
 	if err := h.deps.RBAC.Check(claims.Subject, "role", "delete", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission role.delete")
@@ -59,11 +59,11 @@ func (h *Handler) callRoleDelete(ctx context.Context, claims *jwt.Claims, req js
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	// Audit — параллельно HTTP-handler-у (изменение авторизации, ADR-022).
+	// Audit — parallel to the HTTP handler (authorization change, ADR-022).
 	h.writeAudit(audit.EventRoleDeleted, claims.Subject, map[string]any{
 		"name": a.Name,
 	})
 
-	// HTTP-эквивалент — 204 No Content; MCP — пустой output-объект.
+	// HTTP equivalent — 204 No Content; MCP — an empty output object.
 	return h.toolResult(req.ID, struct{}{})
 }

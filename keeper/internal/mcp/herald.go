@@ -11,20 +11,21 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// keeper.herald.* / keeper.tiding.* — паритет REST POST/GET/PUT/DELETE
-// /v1/heralds* и /v1/tidings* (HeraldHandler, ADR-052, S4). Тонкая MCP-обёртка
-// над тем же herald.Service, что REST. Permission-маппинг 1:1
+// keeper.herald.* / keeper.tiding.* — parity with REST POST/GET/PUT/DELETE
+// /v1/heralds* and /v1/tidings* (HeraldHandler, ADR-052, S4). A thin MCP
+// wrapper over the same herald.Service as REST. Permission mapping is 1:1
 // (keeper.herald.<verb> ↔ herald.<verb>, keeper.tiding.<verb> ↔ tiding.<verb>),
-// селектор — NoSelector (паттерн omen.* / push-provider.*). Коды ошибок зеркалят
-// REST (mapHeraldErrorToMCP / mapTidingErrorToMCP).
+// selector is NoSelector (omen.* / push-provider.* pattern). Error codes
+// mirror REST (mapHeraldErrorToMCP / mapTidingErrorToMCP).
 
-// heraldNotConfigured — public-detail nil-guard-а herald/tiding-tools. HeraldSvc —
-// опц. поле HandlerDeps: при nil tools диспатчатся, но возвращают internal-error.
+// heraldNotConfigured — public-detail nil-guard for herald/tiding-tools.
+// HeraldSvc is an optional HandlerDeps field: when nil, tools still dispatch
+// but return internal-error.
 const heraldNotConfigured = "herald registry is not configured"
 
-// --- Herald: output-проекции ----------------------------------------
+// --- Herald: output projections ----------------------------------------
 
-// heraldView — output-форма Herald-а (та же, что REST toHeraldResponse).
+// heraldView — output form of a Herald (same as REST toHeraldResponse).
 type heraldView struct {
 	Name         string         `json:"name"`
 	Type         string         `json:"type"`
@@ -60,9 +61,10 @@ type heraldCreateArgs struct {
 	Type      string         `json:"type"`
 	Config    map[string]any `json:"config"`
 	SecretRef *string        `json:"secret_ref"`
-	// Secret — опц. plaintext webhook signing-token (dual-mode, ADR-064); XOR с
-	// secret_ref. Config-секреты канала (bot_token/webhook_url/…) — тоже dual-mode
-	// внутри config. keeper пишет plaintext в Vault, plaintext не персистится.
+	// Secret — optional plaintext webhook signing token (dual-mode, ADR-064);
+	// XOR with secret_ref. Channel config secrets (bot_token/webhook_url/…) are
+	// also dual-mode inside config. keeper writes plaintext to Vault; plaintext
+	// is never persisted.
 	Secret  *string `json:"secret"`
 	Enabled *bool   `json:"enabled"`
 }
@@ -92,7 +94,7 @@ type heraldListOut struct {
 	Total  int          `json:"total"`
 }
 
-// --- Herald: call-методы ---------------------------------------------
+// --- Herald: call methods ---------------------------------------------
 
 func (h *Handler) callHeraldCreate(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.herald.create"
@@ -244,7 +246,7 @@ func (h *Handler) callHeraldList(ctx context.Context, claims *jwt.Claims, req js
 	return h.toolResult(req.ID, heraldListOut{Items: out, Offset: a.Offset, Limit: a.Limit, Total: total})
 }
 
-// heraldErr — общий маппер Herald-ошибок в MCP-ответ; internal-error логируется.
+// heraldErr — shared mapper of Herald errors to an MCP response; internal-error is logged.
 func (h *Handler) heraldErr(id json.RawMessage, toolName string, err error, op, name string) jsonRPCResponse {
 	code, detail := mapHeraldErrorToMCP(err)
 	if code == mcpCodeInternalError {
@@ -261,7 +263,7 @@ func heraldAuditMCP(h *herald.Herald) map[string]any {
 	if h.SecretRef != nil {
 		p["secret_ref"] = *h.SecretRef
 	}
-	// plaintext_ingested — маркер записи секрета keeper-ом (ADR-064), без plaintext.
+	// plaintext_ingested — marker that keeper wrote the secret (ADR-064), no plaintext.
 	if h.SecretWritten {
 		p["plaintext_ingested"] = true
 	}
@@ -271,7 +273,7 @@ func heraldAuditMCP(h *herald.Herald) map[string]any {
 	return p
 }
 
-// --- Tiding: output-проекции -----------------------------------------
+// --- Tiding: output projections -----------------------------------------
 
 type tidingView struct {
 	Name         string   `json:"name"`
@@ -352,7 +354,7 @@ type tidingListOut struct {
 	Total  int          `json:"total"`
 }
 
-// --- Tiding: call-методы ---------------------------------------------
+// --- Tiding: call methods ---------------------------------------------
 
 func (h *Handler) callTidingCreate(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.tiding.create"
@@ -415,7 +417,7 @@ func (h *Handler) callTidingUpdate(ctx context.Context, claims *jwt.Claims, req 
 		OnlyChanges:  boolOrMCP(a.OnlyChanges, false),
 		Incarnation:  a.Incarnation,
 		Cadence:      a.Cadence,
-		// PUT/update replace: nil task = очистка (omit==clear, как REST).
+		// PUT/update replace: nil task = clear (omit==clear, like REST).
 		Task:    a.Task,
 		Enabled: boolOrMCP(a.Enabled, true),
 	})
@@ -503,7 +505,7 @@ func (h *Handler) callTidingList(ctx context.Context, claims *jwt.Claims, req js
 	return h.toolResult(req.ID, tidingListOut{Items: out, Offset: a.Offset, Limit: a.Limit, Total: total})
 }
 
-// tidingErr — общий маппер Tiding-ошибок в MCP-ответ; internal-error логируется.
+// tidingErr — shared mapper of Tiding errors to an MCP response; internal-error is logged.
 func (h *Handler) tidingErr(id json.RawMessage, toolName string, err error, op, name string) jsonRPCResponse {
 	code, detail := mapTidingErrorToMCP(err)
 	if code == mcpCodeInternalError {
@@ -536,7 +538,7 @@ func tidingAuditMCP(t *herald.Tiding) map[string]any {
 	return p
 }
 
-// aidArgMCP — пустой AID → nil (NULL created_by_aid). boolOrMCP — *bool с дефолтом.
+// aidArgMCP — empty AID → nil (NULL created_by_aid). boolOrMCP — *bool with a default.
 func aidArgMCP(aid string) *string {
 	if aid == "" {
 		return nil

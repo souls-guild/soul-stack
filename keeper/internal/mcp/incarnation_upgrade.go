@@ -10,34 +10,35 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// incarnationUpgradeArgs — arguments tool-а keeper.incarnation.upgrade
-// (schemaIncarnationUpgradeInput): name + to_version обязательны. to_version —
-// git-ref целевой версии сервиса (ADR-007).
+// incarnationUpgradeArgs — arguments for keeper.incarnation.upgrade
+// (schemaIncarnationUpgradeInput): name + to_version required. to_version is
+// the git-ref of the target service version (ADR-007).
 type incarnationUpgradeArgs struct {
 	Name      string `json:"name"`
 	ToVersion string `json:"to_version"`
 }
 
-// incarnationUpgradeOutput — output keeper.incarnation.upgrade
-// (schemaApplyIDOutput): apply_id одной upgrade-операции (общий на цепочку
-// миграций). Симметричен REST upgradeResponse.
+// incarnationUpgradeOutput — output of keeper.incarnation.upgrade
+// (schemaApplyIDOutput): apply_id of a single upgrade operation (shared
+// across the migration chain). Mirrors REST upgradeResponse.
 type incarnationUpgradeOutput struct {
 	ApplyID string `json:"_apply_id"`
 }
 
-// callIncarnationUpgrade — mutating async-tool keeper.incarnation.upgrade.
-// Паритет REST IncarnationHandler.Upgrade: SelectByName → [incarnation.
-// PrepareUpgrade] (тот же helper, что REST) → [incarnation.UpgradeStateSchema]
-// (sync под 202) → apply_id. apply_id генерится здесь (ULID), передаётся в
-// PrepareUpgrade и в UpgradeStateSchema; ChangedByAID = claims.Subject.
+// callIncarnationUpgrade — mutating async tool keeper.incarnation.upgrade.
+// Parity with REST IncarnationHandler.Upgrade: SelectByName →
+// [incarnation.PrepareUpgrade] (same helper as REST) →
+// [incarnation.UpgradeStateSchema] (sync under a 202) → apply_id. apply_id
+// is generated here (ULID) and passed into PrepareUpgrade and
+// UpgradeStateSchema; ChangedByAID = claims.Subject.
 //
 // RBAC-context — {"incarnation": name} (name-bound). audit:
 // EventIncarnationUpgradeStarted {name, to_version, apply_id}, source=mcp.
 //
-// Маппинг sentinel-ов prepare- и tx-фазы — общий [mapIncarnationErrorToMCP]
-// (downgrade / no-op / chain-broken / busy / locked / schema-mismatch — те же
-// коды, что REST). migration_failed-статус покрывается incarnation-locked
-// (см. errors.go § mcpCodeMigrationFailed).
+// Sentinel mapping for the prepare and tx phases shares
+// [mapIncarnationErrorToMCP] (downgrade / no-op / chain-broken / busy /
+// locked / schema-mismatch — same codes as REST). migration_failed status
+// is covered by incarnation-locked (see errors.go § mcpCodeMigrationFailed).
 func (h *Handler) callIncarnationUpgrade(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.incarnation.upgrade"
 
@@ -59,8 +60,8 @@ func (h *Handler) callIncarnationUpgrade(ctx context.Context, claims *jwt.Claims
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'to_version' is required")
 	}
 
-	// loader / services обязательны: без них нечем материализовать снапшот
-	// целевого ref-а (паритет REST Upgrade).
+	// loader / services are required: without them there's nothing to
+	// materialize the target ref's snapshot from (parity with REST Upgrade).
 	if h.deps.ServiceLoader == nil || h.deps.ServiceRegistry == nil {
 		return h.toolError(req.ID, toolName, mcpCodeInternalError,
 			"service loader is not configured")
@@ -68,7 +69,7 @@ func (h *Handler) callIncarnationUpgrade(ctx context.Context, claims *jwt.Claims
 
 	inc, err := incarnation.SelectByName(ctx, h.deps.IncarnationDB, a.Name)
 	if err != nil {
-		// Fail-closed RBAC при ненайденной/сбойной incarnation (паритет REST).
+		// Fail-closed RBAC on a not-found/failed incarnation lookup (parity with REST).
 		if scopeErr := h.checkIncarnationScope(claims, "upgrade", a.Name, "", nil); scopeErr != nil {
 			return h.toolError(req.ID, toolName, mcpCodeForbidden,
 				"operator lacks required permission incarnation.upgrade")
@@ -84,8 +85,8 @@ func (h *Handler) callIncarnationUpgrade(ctx context.Context, claims *jwt.Claims
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	// RBAC OR-Check по coven/service-scope incarnation (covens ∪ {name}) —
-	// зеркало REST middleware, scope из inc.Service / inc.Covens.
+	// RBAC OR-Check over the incarnation's coven/service scope (covens ∪
+	// {name}) — mirrors REST middleware, scope from inc.Service / inc.Covens.
 	if err := h.checkIncarnationScope(claims, "upgrade", inc.Name, inc.Service, inc.Covens); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission incarnation.upgrade")

@@ -8,17 +8,17 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
 )
 
-// serviceListOutput — output keeper.service.list: реестр Service-ов под ключом
-// services (паритет REST GET /v1/services items).
+// serviceListOutput — output of keeper.service.list: registry of Services
+// under the key services (parity with REST GET /v1/services items).
 type serviceListOutput struct {
 	Services []serviceView `json:"services"`
 }
 
-// callServiceList — read-tool keeper.service.list. Транспорт поверх
-// [serviceregistry.Service.ListServices] (read-only). reads НЕ аудируются.
+// callServiceList — read-tool keeper.service.list. A transport layer over
+// [serviceregistry.Service.ListServices] (read-only). reads are NOT audited.
 //
-// RBAC — service.list без селектора (rbac.md: NoSelector). arguments — пустой
-// объект (schemaEmptyObject); strictUnmarshal отвергает лишние поля.
+// RBAC — service.list without a selector (rbac.md: NoSelector). arguments —
+// an empty object (schemaEmptyObject); strictUnmarshal rejects extra fields.
 func (h *Handler) callServiceList(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.service.list"
 
