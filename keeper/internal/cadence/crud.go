@@ -64,20 +64,20 @@ func validate(c *Cadence) error {
 	switch c.ScheduleKind {
 	case ScheduleKindInterval:
 		if c.IntervalSeconds == nil {
-			return fmt.Errorf("cadence: schedule_kind=interval требует interval_seconds")
+			return fmt.Errorf("cadence: schedule_kind=interval requires interval_seconds")
 		}
 		if *c.IntervalSeconds <= 0 {
 			return fmt.Errorf("cadence: interval_seconds must be > 0, got %d", *c.IntervalSeconds)
 		}
 		if c.CronExpr != nil && *c.CronExpr != "" {
-			return fmt.Errorf("cadence: schedule_kind=interval не должен нести cron_expr")
+			return fmt.Errorf("cadence: schedule_kind=interval must not carry cron_expr")
 		}
 	case ScheduleKindCron:
 		if c.CronExpr == nil || *c.CronExpr == "" {
-			return fmt.Errorf("cadence: schedule_kind=cron требует непустой cron_expr")
+			return fmt.Errorf("cadence: schedule_kind=cron requires non-empty cron_expr")
 		}
 		if c.IntervalSeconds != nil {
-			return fmt.Errorf("cadence: schedule_kind=cron не должен нести interval_seconds")
+			return fmt.Errorf("cadence: schedule_kind=cron must not carry interval_seconds")
 		}
 		// Reject a broken cron here, ahead of PG: the migration 066 CHECK
 		// invariant doesn't parse cron grammar, and the scheduler (NextRun)
@@ -95,17 +95,17 @@ func validate(c *Cadence) error {
 	switch c.Kind {
 	case KindScenario:
 		if c.ScenarioName == nil || *c.ScenarioName == "" {
-			return fmt.Errorf("cadence: kind=scenario требует непустой scenario_name")
+			return fmt.Errorf("cadence: kind=scenario requires non-empty scenario_name")
 		}
 		if c.Module != nil && *c.Module != "" {
-			return fmt.Errorf("cadence: kind=scenario не должен нести module")
+			return fmt.Errorf("cadence: kind=scenario must not carry module")
 		}
 	case KindCommand:
 		if c.Module == nil || *c.Module == "" {
-			return fmt.Errorf("cadence: kind=command требует непустой module")
+			return fmt.Errorf("cadence: kind=command requires non-empty module")
 		}
 		if c.ScenarioName != nil && *c.ScenarioName != "" {
-			return fmt.Errorf("cadence: kind=command не должен нести scenario_name")
+			return fmt.Errorf("cadence: kind=command must not carry scenario_name")
 		}
 	}
 	if len(c.Target) == 0 {
@@ -130,7 +130,7 @@ func validate(c *Cadence) error {
 		return fmt.Errorf("cadence: fail_threshold_percent must be in [1, 100], got %d", *c.FailThresholdPercent)
 	}
 	if c.FailThreshold != nil && c.FailThresholdPercent != nil {
-		return fmt.Errorf("cadence: fail_threshold и fail_threshold_percent взаимоисключающи (задайте один)")
+		return fmt.Errorf("cadence: fail_threshold and fail_threshold_percent are mutually exclusive (set one)")
 	}
 	if c.OnFailure != nil && !ValidOnFailure(*c.OnFailure) {
 		return fmt.Errorf("cadence: invalid on_failure %q", *c.OnFailure)
@@ -159,7 +159,7 @@ func ValidateIntervalFloor(c *Cadence, floorSeconds int) error {
 	}
 	if *c.IntervalSeconds < floorSeconds {
 		return fmt.Errorf(
-			"cadence: минимальный период Cadence — %ds; для реакции быстрее %ds используйте Beacons (Vigil/Oracle, ADR-030), got interval_seconds=%d",
+			"cadence: minimum Cadence period is %ds; for faster reactions than %ds use Beacons (Vigil/Oracle, ADR-030), got interval_seconds=%d",
 			floorSeconds, floorSeconds, *c.IntervalSeconds)
 	}
 	return nil
