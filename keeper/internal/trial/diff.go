@@ -11,19 +11,19 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// deepEqualJSON сравнивает две Go-структуры, прошедшие через structpb
-// (map[string]any / []any / float64 / string / bool / nil). Прямой
-// reflect.DeepEqual достаточен: обе стороны нормализованы одинаковым
-// structpb.AsMap (числа → float64, обход map детерминирован сравнением).
+// deepEqualJSON compares two Go structs that passed through structpb
+// (map[string]any / []any / float64 / string / bool / nil). Direct
+// reflect.DeepEqual is sufficient: both sides are normalized identically
+// by structpb.AsMap (numbers → float64, map traversal is deterministic).
 func deepEqualJSON(a, b any) bool {
 	return reflect.DeepEqual(a, b)
 }
 
-// mergeStateChanges — ★ логика идентична scenario.mergeStateChanges (state.go):
-// применяет упорядоченный список отрендеренных операций `state_changes` поверх
-// базового state (orchestration.md §7). Trial обязан давать тот же state_after,
-// что прод-коммит; любое расхождение тел разведёт Trial с продом (анти-дрейф
-// дубля, держит Mirror-тест). Семантика — см. scenario.mergeStateChanges.
+// mergeStateChanges — ★ logic identical to scenario.mergeStateChanges (state.go):
+// applies an ordered list of rendered `state_changes` operations on top of
+// base state (orchestration.md §7). Trial must yield the same state_after as
+// prod-commit; any divergence would split Trial from prod (anti-drift for duplicate,
+// keeps Mirror-test). Semantics — see scenario.mergeStateChanges.
 func mergeStateChanges(stateBefore map[string]any, ops []render.RenderedOp, schema map[string]any, matchEval render.StateMatchFunc, opEval render.StateOpEvalFunc) (map[string]any, error) {
 	out := deepCopyState(stateBefore)
 	for i := range ops {
@@ -44,13 +44,13 @@ func mergeStateChanges(stateBefore map[string]any, ops []render.RenderedOp, sche
 				return nil, fmt.Errorf("state_changes[%d] remove %q: %w", i, op.Field, err)
 			}
 		default:
-			return nil, fmt.Errorf("state_changes[%d]: verb %q не поддержан движком", i, op.Verb)
+			return nil, fmt.Errorf("state_changes[%d]: verb %q not supported", i, op.Verb)
 		}
 	}
 	return out, nil
 }
 
-// applyModifyOp — ★ логика идентична scenario.applyModifyOp.
+// applyModifyOp — ★ logic identical to scenario.applyModifyOp.
 func applyModifyOp(out map[string]any, op render.RenderedOp, opEval render.StateOpEvalFunc) error {
 	existing, present := out[op.Field]
 	if !present {
@@ -104,10 +104,10 @@ func applyModifyOp(out map[string]any, op render.RenderedOp, opEval render.State
 		out[op.Field] = coll
 		return nil
 	}
-	return fmt.Errorf("поле %q не является коллекцией (map/list)", op.Field)
+	return fmt.Errorf("field %q is not a collection (map/list)", op.Field)
 }
 
-// applyRemoveOp — ★ логика идентична scenario.applyRemoveOp.
+// applyRemoveOp — ★ logic identical to scenario.applyRemoveOp.
 func applyRemoveOp(out map[string]any, op render.RenderedOp, opEval render.StateOpEvalFunc) error {
 	existing, present := out[op.Field]
 	if !present {
@@ -155,30 +155,30 @@ func applyRemoveOp(out map[string]any, op render.RenderedOp, opEval render.State
 		out[op.Field] = kept
 		return nil
 	}
-	return fmt.Errorf("поле %q не является коллекцией (map/list)", op.Field)
+	return fmt.Errorf("field %q is not a collection (map/list)", op.Field)
 }
 
-// evalOpBool — ★ логика идентична scenario.evalOpBool.
+// evalOpBool — ★ logic identical to scenario.evalOpBool.
 func evalOpBool(opEval render.StateOpEvalFunc, match string, ctx, binds map[string]any) (bool, error) {
 	if match == "" {
 		return false, nil
 	}
 	res, err := opEval(match, ctx, binds, true)
 	if err != nil {
-		return false, fmt.Errorf("match-предикат %q: %w", match, err)
+		return false, fmt.Errorf("match-predicate %q: %w", match, err)
 	}
 	b, ok := res.(bool)
 	if !ok {
-		return false, fmt.Errorf("match-предикат %q вернул %T, ожидался bool", match, res)
+		return false, fmt.Errorf("match-predicate %q returned %T, expected bool", match, res)
 	}
 	return b, nil
 }
 
-// applyPatch — ★ логика идентична scenario.applyPatch.
+// applyPatch — ★ logic identical to scenario.applyPatch.
 func applyPatch(elem any, patch, ctx, binds map[string]any, opEval render.StateOpEvalFunc) (any, error) {
 	target, ok := deepCopyValue(elem).(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("patch применим только к объекту-записи (элемент %T не объект)", elem)
+		return nil, fmt.Errorf("patch applicable only to record objects (element %T is not an object)", elem)
 	}
 	for path, rawVal := range patch {
 		val, err := renderPatchValue(rawVal, ctx, binds, opEval)
@@ -192,7 +192,7 @@ func applyPatch(elem any, patch, ctx, binds map[string]any, opEval render.StateO
 	return target, nil
 }
 
-// renderPatchValue — ★ логика идентична scenario.renderPatchValue.
+// renderPatchValue — ★ logic identical to scenario.renderPatchValue.
 func renderPatchValue(raw any, ctx, binds map[string]any, opEval render.StateOpEvalFunc) (any, error) {
 	s, ok := raw.(string)
 	if !ok {
@@ -201,10 +201,10 @@ func renderPatchValue(raw any, ctx, binds map[string]any, opEval render.StateOpE
 	return opEval(s, ctx, binds, false)
 }
 
-// setNestedPath — ★ логика идентична scenario.setNestedPath. Отсутствующий
-// промежуточный узел материализуем (ADR-057 §f); существующий не-map узел →
-// ошибка (не молчаливый клоббер). Расхождение с прод-веткой разведёт Trial с
-// продом — держит Mirror-тест.
+// setNestedPath — ★ logic identical to scenario.setNestedPath. Missing
+// intermediate nodes are materialized (ADR-057 §f); existing non-map nodes →
+// error (not silent clobber). Divergence from prod branch would split Trial from
+// prod — keeps Mirror-test.
 func setNestedPath(m map[string]any, path string, val any) error {
 	parts := splitPath(path)
 	cur := m
@@ -219,7 +219,7 @@ func setNestedPath(m map[string]any, path string, val any) error {
 		}
 		next, ok := existing.(map[string]any)
 		if !ok {
-			return fmt.Errorf("промежуточный узел %q уже существует и не является объектом (%T) — patch вложенного пути %q затёр бы его", seg, existing, path)
+			return fmt.Errorf("intermediate node %q already exists and is not an object (%T) — patch of nested path %q would clobber it", seg, existing, path)
 		}
 		cur = next
 	}
@@ -227,29 +227,29 @@ func setNestedPath(m map[string]any, path string, val any) error {
 	return nil
 }
 
-// splitPath — ★ логика идентична scenario.splitPath.
+// splitPath — ★ logic identical to scenario.splitPath.
 func splitPath(path string) []string {
 	return strings.Split(path, ".")
 }
 
-// checkExpect — ★ логика идентична scenario.checkExpect.
+// checkExpect — ★ logic identical to scenario.checkExpect.
 func checkExpect(op render.RenderedOp, matched int) error {
 	switch op.Expect {
 	case "", config.ExpectAny:
 		return nil
 	case config.ExpectOne:
 		if matched != 1 {
-			return fmt.Errorf("expect: one — match зацепил %d элементов (ожидался ровно один)", matched)
+			return fmt.Errorf("expect: one — match caught %d elements (expected exactly one)", matched)
 		}
 	case config.ExpectAtMostOne:
 		if matched > 1 {
-			return fmt.Errorf("expect: at_most_one — match зацепил %d элементов (ожидалось ≤1)", matched)
+			return fmt.Errorf("expect: at_most_one — match caught %d elements (expected ≤1)", matched)
 		}
 	}
 	return nil
 }
 
-// deepCopyValue — ★ логика идентична scenario.deepCopyValue.
+// deepCopyValue — ★ logic identical to scenario.deepCopyValue.
 func deepCopyValue(v any) any {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -262,7 +262,7 @@ func deepCopyValue(v any) any {
 	return out
 }
 
-// applyAddOp — ★ логика идентична scenario.applyAddOp.
+// applyAddOp — ★ logic identical to scenario.applyAddOp.
 func applyAddOp(out map[string]any, op render.RenderedOp, schema map[string]any, matchEval render.StateMatchFunc, opEval render.StateOpEvalFunc) error {
 	existing, present := out[op.Field]
 	kind := collectionKind(existing, present, schema, op.Field)
@@ -270,7 +270,7 @@ func applyAddOp(out map[string]any, op render.RenderedOp, schema map[string]any,
 	switch kind {
 	case collKindMap:
 		if op.Key == "" {
-			return fmt.Errorf("add в map-коллекцию требует key:")
+			return fmt.Errorf("add to map-collection requires key:")
 		}
 		coll, _ := existing.(map[string]any)
 		if coll == nil {
@@ -279,12 +279,12 @@ func applyAddOp(out map[string]any, op render.RenderedOp, schema map[string]any,
 		if _, exists := coll[op.Key]; exists {
 			switch op.OnConflict {
 			case config.OnConflictError:
-				// Без зарезолвленного op.Key в reason (BUG-3, security) — см.
-				// scenario.applyAddOp. Печатаем только имя коллекции-поля.
-				return fmt.Errorf("add %q: ключ уже существует (on_conflict: error)", op.Field)
+				// Without resolving op.Key in reason (BUG-3, security) — see
+				// scenario.applyAddOp. Print only the field collection name.
+				return fmt.Errorf("add %q: key already exists (on_conflict: error)", op.Field)
 			case config.OnConflictReplace:
 				coll[op.Key] = op.Value
-			default: // skip (default) — идемпотентный no-op
+			default: // skip (default) — idempotent no-op
 			}
 		} else {
 			coll[op.Key] = op.Value
@@ -301,11 +301,11 @@ func applyAddOp(out map[string]any, op render.RenderedOp, schema map[string]any,
 		if idx >= 0 {
 			switch op.OnConflict {
 			case config.OnConflictError:
-				// Без зарезолвленного op.Value в reason (BUG-3, security).
-				return fmt.Errorf("add %q: элемент с такой идентичностью уже существует (on_conflict: error)", op.Field)
+				// Without resolving op.Value in reason (BUG-3, security).
+				return fmt.Errorf("add %q: element with such identity already exists (on_conflict: error)", op.Field)
 			case config.OnConflictReplace:
 				coll[idx] = op.Value
-			default: // skip (default) — идемпотентный no-op
+			default: // skip (default) — idempotent no-op
 			}
 		} else {
 			coll = append(coll, op.Value)
@@ -313,10 +313,10 @@ func applyAddOp(out map[string]any, op render.RenderedOp, schema map[string]any,
 		out[op.Field] = coll
 		return nil
 	}
-	return fmt.Errorf("поле %q не является коллекцией (map/list) и тип не выводится из schema", op.Field)
+	return fmt.Errorf("field %q is not a collection (map/list) and type cannot be inferred from schema", op.Field)
 }
 
-// findListMatch — ★ логика идентична scenario.findListMatch.
+// findListMatch — ★ logic identical to scenario.findListMatch.
 func findListMatch(coll []any, op render.RenderedOp, matchEval render.StateMatchFunc, opEval render.StateOpEvalFunc) (int, error) {
 	for i := range coll {
 		if op.Match != "" {
@@ -328,7 +328,7 @@ func findListMatch(coll []any, op render.RenderedOp, matchEval render.StateMatch
 				ok, err = matchEval(op.Match, coll[i], op.Value)
 			}
 			if err != nil {
-				return -1, fmt.Errorf("match-предикат %q: %w", op.Match, err)
+				return -1, fmt.Errorf("match-predicate %q: %w", op.Match, err)
 			}
 			if ok {
 				return i, nil
@@ -342,10 +342,10 @@ func findListMatch(coll []any, op render.RenderedOp, matchEval render.StateMatch
 	return -1, nil
 }
 
-// setOpsProjection проецирует set-операции отрендеренного списка в map
-// поле→значение для back-compat ассерта `assert.state_changes` (add-операции в
-// проекцию не входят — они проверяются через assert.state_after). Логика
-// идентична render.Pipeline.RenderStateChanges-проекции.
+// setOpsProjection projects set-operations of rendered list into map
+// field→value for back-compat assert `assert.state_changes` (add-operations are not
+// included in projection — they are checked via assert.state_after). Logic
+// identical to render.Pipeline.RenderStateChanges-projection.
 func setOpsProjection(ops []render.RenderedOp) map[string]any {
 	out := make(map[string]any, len(ops))
 	for i := range ops {
@@ -356,7 +356,7 @@ func setOpsProjection(ops []render.RenderedOp) map[string]any {
 	return out
 }
 
-// collKind/collectionKind/schemaFieldType — ★ логика идентична scenario.* (одноимённые).
+// collKind/collectionKind/schemaFieldType — ★ logic identical to scenario.* (same names).
 type collKind int
 
 const (
@@ -397,10 +397,10 @@ func schemaFieldType(schema map[string]any, field string) string {
 	return t
 }
 
-// deepCopyState — deep-copy базового state через JSON round-trip (ожидаемый итог
-// не должен держать ссылку на fixtures.state). nil/пустой → пустой map. Данные
-// JSON-safe (YAML-фикстуры); при сбое marshal — пустая база, расхождение поймает
-// сверка. ★ Логика идентична scenario.deepCopyMap (имя локальное во избежание коллизии).
+// deepCopyState — deep-copy base state via JSON round-trip (expected result
+// must not hold reference to fixtures.state). nil/empty → empty map. Data is
+// JSON-safe (YAML fixtures); on marshal failure — empty base, verification catches
+// divergence. ★ Logic identical to scenario.deepCopyMap (name local to avoid collision).
 func deepCopyState(m map[string]any) map[string]any {
 	out := map[string]any{}
 	if len(m) > 0 {
@@ -411,12 +411,12 @@ func deepCopyState(m map[string]any) map[string]any {
 	return out
 }
 
-// hasErrors — есть ли среди диагностик ошибки уровня error.
+// hasErrors — are there error-level diagnostics.
 func hasErrors(ds []diag.Diagnostic) bool {
 	return diag.HasErrors(ds)
 }
 
-// formatDiags сводит диагностики в одну строку для сообщения об ошибке.
+// formatDiags merges diagnostics into one string for error message.
 func formatDiags(ds []diag.Diagnostic) string {
 	var b strings.Builder
 	for _, d := range ds {

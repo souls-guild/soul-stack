@@ -6,20 +6,20 @@ import (
 	"github.com/google/cel-go/common/types/ref"
 )
 
-// coverageSink реализует cel.CoverageSink: учитывает trial coverage по
-// CEL-веткам ([ADR-023]). Гранулярность пилота — «выражение truthy/falsy»:
-// для каждого уникального выражения отмечается, встречались ли true- и
-// false-результаты. Под-ветки внутри одного CEL вне scope ([ADR-023]).
+// coverageSink implements cel.CoverageSink: tracks trial coverage by
+// CEL branches ([ADR-023]). Pilot granularity — "expression truthy/falsy":
+// for each unique expression, we track whether true- and
+// false-results were seen. Sub-branches within one CEL out of scope ([ADR-023]).
 //
-// Не-bool результаты (интерполяция `${ … }`-блоков, арифметика) учитываются
-// как «выражение прогнано», но без branch-разбивки — у них нет осмысленной
-// truthy/falsy-ветки в смысле предиката.
+// Non-bool results (interpolation of `${ … }` blocks, arithmetic) are tracked
+// as "expression executed", but without branch split — they have no meaningful
+// truthy/falsy branch in the predicate sense.
 type coverageSink struct {
 	exprs map[string]*branchState
 }
 
 type branchState struct {
-	boolean  bool // выражение хоть раз дало bool-результат
+	boolean  bool // expression produced bool-result at least once
 	sawTrue  bool
 	sawFalse bool
 }
@@ -28,8 +28,8 @@ func newCoverageSink() *coverageSink {
 	return &coverageSink{exprs: make(map[string]*branchState)}
 }
 
-// Record — реализация cel.CoverageSink. Вызывается после каждого успешного
-// eval; expr нормализован движком.
+// Record implements cel.CoverageSink. Called after each successful
+// eval; expr is normalized by the engine.
 func (s *coverageSink) Record(expr string, out ref.Val) {
 	st := s.exprs[expr]
 	if st == nil {
@@ -46,27 +46,27 @@ func (s *coverageSink) Record(expr string, out ref.Val) {
 	}
 }
 
-// CoverageReport — агрегат trial coverage по завершении прогона кейса(ов).
+// CoverageReport aggregates trial coverage upon completion of case(s) run.
 type CoverageReport struct {
-	// Branches — все bool-выражения (предикаты where:/when:/…). Покрытое
-	// выражение = обе ветки (true и false) встретились.
+	// Branches — all bool-expressions (predicates where:/when:/…). Covered
+	// expression = both branches (true and false) were seen.
 	Branches []BranchCoverage
-	// NonBranch — не-bool выражения (интерполяции, арифметика): прогнаны,
-	// но без branch-разбивки. Для текстовой сводки «прогнано N выражений».
+	// NonBranch — non-bool expressions (interpolations, arithmetic): executed,
+	// but without branch split. For text summary "executed N expressions".
 	NonBranch []string
 }
 
-// BranchCoverage — покрытие одного bool-выражения.
+// BranchCoverage tracks coverage of a single bool-expression.
 type BranchCoverage struct {
 	Expr     string
 	SawTrue  bool
 	SawFalse bool
 }
 
-// Covered — обе ветки выражения встретились.
+// Covered returns true if both branches of the expression were seen.
 func (b BranchCoverage) Covered() bool { return b.SawTrue && b.SawFalse }
 
-// Report строит детерминированный (отсортированный) отчёт.
+// Report builds a deterministic (sorted) report.
 func (s *coverageSink) Report() CoverageReport {
 	var rep CoverageReport
 	for expr, st := range s.exprs {
@@ -83,8 +83,8 @@ func (s *coverageSink) Report() CoverageReport {
 	return rep
 }
 
-// CoveredBranches возвращает число выражений с обеими покрытыми ветками и
-// общее число bool-выражений (для сводки «when-branches X/Y»).
+// CoveredBranches returns the count of expressions with both branches covered and
+// the total count of bool-expressions (for summary "when-branches X/Y").
 func (r CoverageReport) CoveredBranches() (covered, total int) {
 	total = len(r.Branches)
 	for _, b := range r.Branches {

@@ -9,56 +9,56 @@ import (
 	yaml "github.com/goccy/go-yaml"
 )
 
-// L2Case — кейс уровня L2 (исполнение на эфемерном Linux-стенде с post-apply
-// верификацией, ADR-023). В отличие от L0 (render-only) L2 реально применяет
-// отрендеренный план на хосте через `soul apply` (push-oneshot, ADR-004) и
-// сверяет результат verify-задачами. Структура read-only после загрузки.
+// L2Case — L2 level case (execution on ephemeral Linux stand with post-apply
+// verification, ADR-023). Unlike L0 (render-only) L2 actually applies
+// rendered plan on host via `soul apply` (push-oneshot, ADR-004) and
+// verifies result with verify tasks. Structure is read-only after loading.
 //
-// Формат — расширение L0-кейса полями stand:/input:/expect_idempotent:/verify:
-// (docs/destiny/testing.md §L2). Декодируется только под build-tag integration:
-// дефолтный harness L2-кейс лишь помечает Skipped (см. Run / isL2Case), его
-// структуру не парсит.
+// Format — extension of L0 case with stand:/input:/expect_idempotent:/verify: fields
+// (docs/destiny/testing.md §L2). Decoded only under build-tag integration:
+// default harness marks L2 case as Skipped (see Run / isL2Case), does not
+// parse its structure.
 type L2Case struct {
 	Name        string         `yaml:"name"`
 	Description string         `yaml:"description,omitempty"`
 	Stand       Stand          `yaml:"stand"`
 	Input       map[string]any `yaml:"input,omitempty"`
-	// Idempotent — двойной прогон того же ApplyRequest: второе применение обязано
-	// не менять state хоста (все register.changed==false). По умолчанию true:
-	// идемпотентность — обязательная часть L2-проверки (testing.md §L2 / open Q №5).
+	// Idempotent — double run of same ApplyRequest: second application must
+	// not change host state (all register.changed==false). Defaults to true:
+	// idempotence — mandatory part of L2 check (testing.md §L2 / open Q №5).
 	Idempotent *bool    `yaml:"expect_idempotent,omitempty"`
 	Verify     []Verify `yaml:"verify,omitempty"`
 }
 
-// Stand — описание эфемерного стенда (docs/destiny/testing.md §L2). Reuse
-// семантики mode: push (push-oneshot soul apply по ADR-004) — новых stand-значений
-// L2-пилот не вводит.
+// Stand — description of ephemeral stand (docs/destiny/testing.md §L2). Reuse
+// of mode semantics: push (push-oneshot soul apply per ADR-004) — L2 pilot
+// does not introduce new stand values.
 type Stand struct {
-	// Driver — драйвер стенда. Пилот поддерживает только docker.
+	// Driver — stand driver. Pilot supports only docker.
 	Driver string `yaml:"driver"`
-	// Image — базовый образ хоста-стенда (например ubuntu:24.04). Для init: systemd
-	// поле игнорируется: стенд собирается из debian-12.Dockerfile (см. StartL2Stand).
+	// Image — base image of stand host (e.g. ubuntu:24.04). For init: systemd
+	// field is ignored: stand built from debian-12.Dockerfile (see StartL2Stand).
 	Image string `yaml:"image"`
-	// Mode — как destiny попадает на стенд. push = push-oneshot soul apply
-	// (Keeper рендерит план, доставляет soul + ApplyRequest на хост, исполняет).
+	// Mode — how destiny reaches stand. push = push-oneshot soul apply
+	// (Keeper renders plan, delivers soul + ApplyRequest to host, executes).
 	Mode string `yaml:"mode"`
-	// Init — init-система стенда (опционально). `none` (default) — контейнер живёт
-	// под `sleep infinity`, без PID1-init (текущее поведение L2-пилота). `systemd` —
-	// systemd-PID1-стенд (privileged, образ из debian-12.Dockerfile e2e-live),
-	// нужен кейсам с core.service.* (is-active/restart требуют живого systemd).
+	// Init — stand init system (optional). `none` (default) — container lives
+	// under `sleep infinity`, no PID1-init (current L2 pilot behavior). `systemd` —
+	// systemd-PID1 stand (privileged, image from debian-12.Dockerfile e2e-live),
+	// needed for cases with core.service.* (is-active/restart require live systemd).
 	Init string `yaml:"init,omitempty"`
 }
 
-// Init-режимы стенда (поле stand.init). Closed-set: неизвестное значение
-// отвергается на загрузке кейса (validate).
+// Stand init modes (stand.init field). Closed-set: unknown value
+// rejected on case load (validate).
 const (
-	// StandInitNone — без PID1-init: контейнер на `sleep infinity` (default).
+	// StandInitNone — no PID1-init: container on `sleep infinity` (default).
 	StandInitNone = "none"
-	// StandInitSystemd — systemd-PID1-стенд для core.service.*-кейсов.
+	// StandInitSystemd — systemd-PID1 stand for core.service.* cases.
 	StandInitSystemd = "systemd"
 )
 
-// init возвращает эффективное значение stand.init (default none при пустом).
+// init returns effective value of stand.init (default none if empty).
 func (s Stand) init() string {
 	if s.Init == "" {
 		return StandInitNone
@@ -66,34 +66,34 @@ func (s Stand) init() string {
 	return s.Init
 }
 
-// Verify — одна проверка результата (docs/destiny/testing.md §L2). Каждая
-// исполняет одну module-задачу на том же стенде тем же `soul apply` (однозадачный
-// ApplyRequest) и сверяет поля register-output через Expect. Отдельного DSL
-// ассерций нет (testing.md) — проверки выражаются теми же модулями.
+// Verify — one result check (docs/destiny/testing.md §L2). Each
+// executes one module task on same stand with same `soul apply` (single-task
+// ApplyRequest) and verifies register-output fields via Expect. No separate assertion
+// DSL (testing.md) — checks expressed with same modules.
 type Verify struct {
 	Name   string      `yaml:"name"`
 	Apply  VerifyApply `yaml:"apply"`
 	Expect Expect      `yaml:"expect"`
 }
 
-// VerifyApply — module-задача verify-шага. Module — полное имя со state-суффиксом
-// (например core.cmd.shell), как в destiny-задаче; Params — её params (без
-// CEL-render: verify-шаги задаются литерально на стенде).
+// VerifyApply — module task of verify step. Module — full name with state suffix
+// (e.g. core.cmd.shell), as in destiny task; Params — its params (without
+// CEL-render: verify steps specified literally on stand).
 type VerifyApply struct {
 	Module string         `yaml:"module"`
 	Params map[string]any `yaml:"params"`
 }
 
-// Expect — ожидания на register-output verify-задачи (docs/destiny/testing.md §L2).
-// Набор ключей — минимум зафиксированного (exit_code / stdout / stdout_contains).
-// Указатели/опциональность: незаданное поле не сверяется (частичный ассерт).
+// Expect — expectations on register-output of verify task (docs/destiny/testing.md §L2).
+// Set of keys — minimum of recorded (exit_code / stdout / stdout_contains).
+// Pointers/optionality: unspecified field not checked (partial assert).
 type Expect struct {
 	ExitCode       *int    `yaml:"exit_code,omitempty"`
 	Stdout         *string `yaml:"stdout,omitempty"`
 	StdoutContains string  `yaml:"stdout_contains,omitempty"`
 }
 
-// expectIdempotent возвращает эффективное значение expect_idempotent (default true).
+// expectIdempotent returns effective value of expect_idempotent (default true).
 func (c *L2Case) expectIdempotent() bool {
 	if c.Idempotent == nil {
 		return true
@@ -101,8 +101,8 @@ func (c *L2Case) expectIdempotent() bool {
 	return *c.Idempotent
 }
 
-// LoadL2Case читает и валидирует L2 case.yml (strict-декод: неизвестный ключ —
-// ошибка). path — путь к файлу либо к директории кейса (resolveCaseFile).
+// LoadL2Case reads and validates L2 case.yml (strict decode: unknown key is
+// error). path — path to file or case directory (resolveCaseFile).
 func LoadL2Case(path string) (*L2Case, string, error) {
 	file, err := resolveCaseFile(path)
 	if err != nil {
@@ -110,11 +110,11 @@ func LoadL2Case(path string) (*L2Case, string, error) {
 	}
 	data, err := os.ReadFile(file)
 	if err != nil {
-		return nil, "", fmt.Errorf("trial: чтение %s: %w", file, err)
+		return nil, "", fmt.Errorf("trial: reading %s: %w", file, err)
 	}
 	var c L2Case
 	if err := yaml.UnmarshalWithOptions(data, &c, yaml.Strict()); err != nil {
-		return nil, "", fmt.Errorf("trial: разбор L2 %s: %w", file, err)
+		return nil, "", fmt.Errorf("trial: parsing L2 %s: %w", file, err)
 	}
 	if err := c.validate(); err != nil {
 		return nil, "", fmt.Errorf("trial: %s: %w", file, err)
@@ -124,28 +124,28 @@ func LoadL2Case(path string) (*L2Case, string, error) {
 
 func (c *L2Case) validate() error {
 	if c.Name == "" {
-		return fmt.Errorf("name: обязателен")
+		return fmt.Errorf("name: required")
 	}
 	if c.Stand.Driver != "docker" {
-		return fmt.Errorf("stand.driver: пилот L2 поддерживает только docker (получено %q)", c.Stand.Driver)
+		return fmt.Errorf("stand.driver: L2 pilot supports only docker (got %q)", c.Stand.Driver)
 	}
 	if c.Stand.Image == "" {
-		return fmt.Errorf("stand.image: обязателен")
+		return fmt.Errorf("stand.image: required")
 	}
 	if c.Stand.Mode != "push" {
-		return fmt.Errorf("stand.mode: пилот L2 поддерживает только push (получено %q)", c.Stand.Mode)
+		return fmt.Errorf("stand.mode: L2 pilot supports only push (got %q)", c.Stand.Mode)
 	}
 	switch c.Stand.Init {
 	case "", StandInitNone, StandInitSystemd:
 	default:
-		return fmt.Errorf("stand.init: неизвестное значение %q (допустимо none|systemd)", c.Stand.Init)
+		return fmt.Errorf("stand.init: unknown value %q (allowed none|systemd)", c.Stand.Init)
 	}
 	if len(c.Verify) == 0 {
-		return fmt.Errorf("verify: пуст (L2 сверяет результат apply verify-задачами)")
+		return fmt.Errorf("verify: empty (L2 checks apply result with verify tasks)")
 	}
 	for i, v := range c.Verify {
 		if v.Apply.Module == "" {
-			return fmt.Errorf("verify[%d].apply.module: обязателен", i)
+			return fmt.Errorf("verify[%d].apply.module: required", i)
 		}
 	}
 	return nil

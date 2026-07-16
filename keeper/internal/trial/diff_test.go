@@ -10,14 +10,14 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// ★ Анти-дрейф-сверка: trial-сторона зеркала прод-merge. Фикстура/операции/
-// ожидание ДОЛЖНЫ совпадать байт-в-байт с scenario.TestMergeStateChanges_MirrorProd
-// (state_test.go). Если тела mergeStateChanges (state.go vs diff.go) разойдутся —
-// один из двух тестов упадёт на одном и том же входе.
+// ★ Anti-drift verification: trial-side of prod-merge mirror. Fixtures/operations/
+// expectation MUST match byte-for-byte with scenario.TestMergeStateChanges_MirrorProd
+// (state_test.go). If mergeStateChanges bodies (state.go vs diff.go) diverge —
+// one of two tests will fail on the same input.
 //
-// Зеркальные значения дублированы здесь намеренно (пакеты scenario/trial
-// изолированы; общая фикстура потребовала бы экспортного хелпера в render — over-
-// engineering ради одного теста).
+// Mirror values are duplicated here intentionally (scenario/trial packages
+// are isolated; shared fixture would require exported helper in render — over-
+// engineering for one test).
 
 func mirrorSchema() map[string]any {
 	return map[string]any{
@@ -50,12 +50,12 @@ func mirrorOps() []render.RenderedOp {
 	}
 	return []render.RenderedOp{
 		{Verb: config.VerbSet, Field: "redis_version", Value: "7.4"},
-		add("host-b", "replica"), // новый → растёт
-		add("host-a", "primary"), // существующий → no-op
+		add("host-b", "replica"), // new → grows
+		add("host-a", "primary"), // existing → no-op
 	}
 }
 
-// mirrorExpectedJSON — обязан совпадать со scenario.stateMirrorExpectedJSON.
+// mirrorExpectedJSON — must match scenario.stateMirrorExpectedJSON.
 const mirrorExpectedJSON = `{"redis_version":"7.4","redis_hosts":[{"sid":"host-a","role":"primary"},{"sid":"host-b","role":"replica"}]}`
 
 func TestMergeMirror_Trial(t *testing.T) {
@@ -80,13 +80,13 @@ func TestMergeMirror_Trial(t *testing.T) {
 		t.Fatalf("unmarshal expected: %v", err)
 	}
 	if !reflect.DeepEqual(ma, mb) {
-		t.Errorf("★ trial state_after = %s, want %s (дрейф дубля mergeStateChanges)", got, mirrorExpectedJSON)
+		t.Errorf("★ trial state_after = %s, want %s (duplicate mergeStateChanges drift)", got, mirrorExpectedJSON)
 	}
 }
 
-// --- Анти-дрейф для НОВЫХ глаголов modify/remove. Фикстура/операции/ожидание
-// ДОЛЖНЫ совпадать байт-в-байт с scenario.TestMergeVerbsMirror_Prod (state_test.go).
-// Расхождение тел applyModifyOp/applyRemoveOp/applyPatch разведёт Trial с продом.
+// --- Anti-drift for NEW verbs modify/remove. Fixtures/operations/expectation
+// MUST match byte-for-byte with scenario.TestMergeVerbsMirror_Prod (state_test.go).
+// Divergence in bodies applyModifyOp/applyRemoveOp/applyPatch would split Trial from prod.
 
 func verbsMirrorFixture() map[string]any {
 	return map[string]any{
@@ -113,7 +113,7 @@ func verbsMirrorOps() []render.RenderedOp {
 	}
 }
 
-// verbsMirrorExpectedJSON — обязан совпадать со scenario.verbsMirrorExpectedJSON.
+// verbsMirrorExpectedJSON — must match scenario.verbsMirrorExpectedJSON.
 const verbsMirrorExpectedJSON = `{"redis_users":{"alice":{"acl":"+@all","state":"on"},"bob":{"acl":"+@read","state":"on"}},"redis_hosts":[{"sid":"host-a","role":"primary"},{"sid":"host-b","role":"replica"}]}`
 
 func TestMergeVerbsMirror_Trial(t *testing.T) {
@@ -137,14 +137,14 @@ func TestMergeVerbsMirror_Trial(t *testing.T) {
 		t.Fatalf("unmarshal expected: %v", err)
 	}
 	if !reflect.DeepEqual(ma, mb) {
-		t.Errorf("★ trial state_after = %s, want %s (дрейф modify/remove дубля)", got, verbsMirrorExpectedJSON)
+		t.Errorf("★ trial state_after = %s, want %s (modify/remove duplicate drift)", got, verbsMirrorExpectedJSON)
 	}
 }
 
-// TestPatchClobber_Trial — ★ trial-сторона patch-clobber (синхронность с
+// TestPatchClobber_Trial — ★ trial-side patch-clobber (synchronous with
 // scenario.TestMergeStateChanges_PatchClobber_MissingVsExistingScalar): missing
-// промежуточный путь материализуется, существующий не-map узел → ошибка. Расхождение
-// поведения setNestedPath разведёт Trial с продом.
+// intermediate path is materialized, existing non-map node → error. Divergence in
+// setNestedPath behavior would split Trial from prod.
 func TestPatchClobber_Trial(t *testing.T) {
 	eng, err := cel.New()
 	if err != nil {
@@ -155,46 +155,46 @@ func TestPatchClobber_Trial(t *testing.T) {
 	patchOp := render.RenderedOp{Verb: config.VerbModify, Field: "redis_hosts",
 		Match: "elem.sid == 'host-a'", Patch: map[string]any{"config.maxmemory": "${ input.mem }"}, Context: ctx}
 
-	// missing → материализуем.
+	// missing → materialize.
 	beforeMissing := map[string]any{"redis_hosts": []any{
 		map[string]any{"sid": "host-a", "role": "primary"},
 	}}
 	after, err := mergeStateChanges(beforeMissing, []render.RenderedOp{patchOp}, mirrorSchema(), pl.EvalStateMatch, pl.EvalStateOpExpr)
 	if err != nil {
-		t.Fatalf("★ trial: missing промежуточный путь должен материализоваться: %v", err)
+		t.Fatalf("★ trial: missing intermediate path must materialize: %v", err)
 	}
 	cfg := after["redis_hosts"].([]any)[0].(map[string]any)["config"].(map[string]any)
 	if cfg["maxmemory"] != "512mb" {
 		t.Errorf("★ trial config.maxmemory = %v, want 512mb", cfg["maxmemory"])
 	}
 
-	// existing-scalar → ошибка.
+	// existing-scalar → error.
 	beforeScalar := map[string]any{"redis_hosts": []any{
 		map[string]any{"sid": "host-a", "role": "primary", "config": "some-string-value"},
 	}}
 	if _, err := mergeStateChanges(beforeScalar, []render.RenderedOp{patchOp}, mirrorSchema(), pl.EvalStateMatch, pl.EvalStateOpExpr); err == nil {
-		t.Fatal("★ trial: patch поверх config=\"string\" должен дать ошибку (синхронно с прод-веткой)")
+		t.Fatal("★ trial: patch over config=\"string\" must error (synchronized with prod branch)")
 	}
 }
 
-// TestSetNestedPath_NoSilentClobber — unit-guard прямо на setNestedPath: missing
-// сегмент создаётся, существующий не-map сегмент → ошибка БЕЗ мутации.
+// TestSetNestedPath_NoSilentClobber — unit-guard directly on setNestedPath: missing
+// segment is created, existing non-map segment → error WITHOUT mutation.
 func TestSetNestedPath_NoSilentClobber(t *testing.T) {
-	// missing → создаём вложенный map.
+	// missing → create nested map.
 	m := map[string]any{}
 	if err := setNestedPath(m, "config.maxmemory", "256mb"); err != nil {
 		t.Fatalf("setNestedPath missing: %v", err)
 	}
 	if m["config"].(map[string]any)["maxmemory"] != "256mb" {
-		t.Errorf("setNestedPath не материализовал config: %+v", m)
+		t.Errorf("setNestedPath did not materialize config: %+v", m)
 	}
 
-	// existing-scalar → ошибка, исходное значение НЕ затёрто.
+	// existing-scalar → error, original value NOT clobbered.
 	m2 := map[string]any{"config": "scalar"}
 	if err := setNestedPath(m2, "config.maxmemory", "256mb"); err == nil {
-		t.Fatal("★ setNestedPath поверх config=\"scalar\" должен вернуть ошибку, не клоббить")
+		t.Fatal("★ setNestedPath over config=\"scalar\" must return error, not clobber")
 	}
 	if m2["config"] != "scalar" {
-		t.Errorf("★ исходное скалярное значение затёрто: %+v (silent-clobber)", m2)
+		t.Errorf("★ original scalar value clobbered: %+v (silent-clobber)", m2)
 	}
 }

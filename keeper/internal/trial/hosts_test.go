@@ -8,10 +8,10 @@ import (
 	"testing"
 )
 
-// hostsSizeMain — scenario, печатающий size(soulprint.hosts) в params команды.
-// Render-наблюдаемый аналог size-guard-а: размер roster-а проявляется прямо в
-// отрендеренном плане (а не во flow-control `failed_when:`, который Soul-side и
-// не несёт soulprint.hosts во flow_context — см. buildFlowContext).
+// hostsSizeMain — scenario that prints size(soulprint.hosts) in command params.
+// Render-observable analog of size-guard: roster size appears directly in rendered plan
+// (not in flow-control `failed_when:`, which Soul-side does not carry soulprint.hosts
+// in flow_context — see buildFlowContext).
 const hostsSizeMain = `name: create
 input: {}
 tasks:
@@ -21,8 +21,8 @@ tasks:
       cmd: "echo ${ soulprint.hosts.size() }"
 `
 
-// hostsWhereMain — scenario, фильтрующий roster по declared-роли: cross-host
-// проекция soulprint.hosts.where(...) в params (primary-discovery идиома).
+// hostsWhereMain — scenario that filters roster by declared-role: cross-host projection
+// of soulprint.hosts.where(...) in params (primary-discovery idiom).
 const hostsWhereMain = `name: create
 input: {}
 tasks:
@@ -32,9 +32,9 @@ tasks:
       cmd: "replicaof ${ soulprint.hosts.where(\"role == 'primary'\")[0].network.primary_ip } 6379"
 `
 
-// TestRunCase_MultiHostRoster_Size3 — fixtures.hosts из 3 хостов даёт
-// size(soulprint.hosts)==3 в отрендеренном плане: multi-host roster реально
-// поднимает потолок single-host harness-а.
+// TestRunCase_MultiHostRoster_Size3 — fixtures.hosts with 3 hosts gives
+// size(soulprint.hosts)==3 in rendered plan: multi-host roster really raises
+// the ceiling of single-host harness.
 func TestRunCase_MultiHostRoster_Size3(t *testing.T) {
 	caseDir := writeScenarioTree(t, hostsSizeMain, `name: roster of three
 fixtures:
@@ -58,12 +58,12 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if !results[0].Pass {
-		t.Fatalf("ожидали PASS (size==3 на 3-хостовом roster), получили: %v", results[0].Failures)
+		t.Fatalf("expected PASS (size==3 on 3-host roster), got: %v", results[0].Failures)
 	}
 }
 
-// TestRunCase_MultiHostRoster_WhereProjection — soulprint.hosts.where(...) на
-// roster-е резолвит cross-host факт (primary_ip хоста с declared-ролью primary).
+// TestRunCase_MultiHostRoster_WhereProjection — soulprint.hosts.where(...) on
+// roster resolves cross-host fact (primary_ip of host with declared-role primary).
 func TestRunCase_MultiHostRoster_WhereProjection(t *testing.T) {
 	caseDir := writeScenarioTree(t, hostsWhereMain, `name: where over roster
 fixtures:
@@ -91,13 +91,13 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if !results[0].Pass {
-		t.Fatalf("ожидали PASS (where role==primary → 10.0.0.1), получили: %v", results[0].Failures)
+		t.Fatalf(“expected PASS (where role==primary → 10.0.0.1), got: %v”, results[0].Failures)
 	}
 }
 
-// TestRunCase_MultiHostRoster_DeterministicOrder — порядок soulprint.hosts
-// детерминирован сортировкой по SID независимо от порядка записей в YAML.
-// [0]-элемент после where("role!=”) — лексикографически первый SID.
+// TestRunCase_MultiHostRoster_DeterministicOrder — order of soulprint.hosts
+// is determined by SID sorting regardless of YAML entry order.
+// [0]-element after where(“role!=”) is lexicographically first SID.
 func TestRunCase_MultiHostRoster_DeterministicOrder(t *testing.T) {
 	main := `name: create
 input: {}
@@ -105,10 +105,10 @@ tasks:
   - name: first host by sid
     module: core.exec.run
     params:
-      cmd: "first=${ soulprint.hosts[0].sid }"
+      cmd: “first=${ soulprint.hosts[0].sid }”
 `
-	// YAML-порядок (c, a, b) намеренно не отсортирован: harness обязан
-	// отсортировать по SID → первый = a.example.com.
+	// YAML order (c, a, b) is intentionally unsorted: harness must sort
+	// by SID → first = a.example.com.
 	caseYML := `name: order by sid
 fixtures:
   hosts:
@@ -123,20 +123,20 @@ assert:
     - index: 0
       module: core.exec.run
       params:
-        cmd: "first=a.example.com"
+        cmd: “first=a.example.com”
 `
 	caseDir := writeScenarioTree(t, main, caseYML)
 	results, err := Run(context.Background(), caseDir)
 	if err != nil {
-		t.Fatalf("Run: %v", err)
+		t.Fatalf(“Run: %v”, err)
 	}
 	if !results[0].Pass {
-		t.Fatalf("ожидали PASS (детерминированный порядок: первый по SID = a.example.com), получили: %v", results[0].Failures)
+		t.Fatalf(“expected PASS (deterministic order: first by SID = a.example.com), got: %v”, results[0].Failures)
 	}
 }
 
 // TestRunCase_SingleHostSugar_Size1 — back-compat: fixtures.soulprint
-// (single-host сахар) даёт size(soulprint.hosts)==1 бит-в-бит, как до правки.
+// (single-host sugar) gives size(soulprint.hosts)==1 bit-for-bit as before the fix.
 func TestRunCase_SingleHostSugar_Size1(t *testing.T) {
 	caseDir := writeScenarioTree(t, hostsSizeMain, `name: single host sugar
 fixtures:
@@ -156,13 +156,13 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if !results[0].Pass {
-		t.Fatalf("ожидали PASS (single-host сахар → size==1), получили: %v", results[0].Failures)
+		t.Fatalf("expected PASS (single-host sugar → size==1), got: %v", results[0].Failures)
 	}
 }
 
-// TestLoadCase_RejectsSoulprintAndHosts — fixtures.soulprint (single) и
-// fixtures.hosts (multi) в одном кейсе → strict-ошибка (взаимоисключение,
-// в духе strict-декода harness).
+// TestLoadCase_RejectsSoulprintAndHosts — fixtures.soulprint (single) and
+// fixtures.hosts (multi) in one case → strict-error (mutually exclusive,
+// in spirit of strict-decode harness).
 func TestLoadCase_RejectsSoulprintAndHosts(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, caseFileName)
@@ -182,15 +182,15 @@ assert:
 	}
 	_, _, err := LoadCase(file)
 	if err == nil {
-		t.Fatalf("ожидали ошибку взаимоисключения soulprint+hosts")
+		t.Fatalf("expected error on soulprint+hosts mutual exclusion")
 	}
-	if !strings.Contains(err.Error(), "взаимоисключены") {
-		t.Fatalf("ожидали сообщение про взаимоисключение, получили: %v", err)
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("expected message about mutual exclusion, got: %v", err)
 	}
 }
 
-// TestLoadCase_RejectsHostWithoutSID — host-запись roster-а без sid →
-// strict-ошибка (sid обязателен).
+// TestLoadCase_RejectsHostWithoutSID — host-entry in roster without sid →
+// strict-error (sid is mandatory).
 func TestLoadCase_RejectsHostWithoutSID(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, caseFileName)
@@ -207,16 +207,16 @@ assert:
 	}
 	_, _, err := LoadCase(file)
 	if err == nil {
-		t.Fatalf("ожидали ошибку на host без sid")
+		t.Fatalf("expected error on host without sid")
 	}
 	if !strings.Contains(err.Error(), "sid") {
-		t.Fatalf("ожидали сообщение про обязательный sid, получили: %v", err)
+		t.Fatalf("expected message about mandatory sid, got: %v", err)
 	}
 }
 
-// TestLoadCase_RejectsDuplicateSID — две host-записи roster-а с одинаковым sid →
-// strict-ошибка. Дубль схлопывает RegisterByHost (карта по SID) и делает порядок
-// soulprint.hosts недетерминированным → недопустим.
+// TestLoadCase_RejectsDuplicateSID — two host-entries in roster with same sid →
+// strict-error. Duplicate collapses RegisterByHost (map by SID) and makes order of
+// soulprint.hosts non-deterministic → unacceptable.
 func TestLoadCase_RejectsDuplicateSID(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, caseFileName)
@@ -236,21 +236,21 @@ assert:
 	}
 	_, _, err := LoadCase(file)
 	if err == nil {
-		t.Fatalf("ожидали ошибку на дублирующийся sid")
+		t.Fatalf("expected error on duplicate sid")
 	}
-	if !strings.Contains(err.Error(), "дублирующийся sid") {
-		t.Fatalf("ожидали сообщение про дублирующийся sid, получили: %v", err)
+	if !strings.Contains(err.Error(), "duplicate sid") {
+		t.Fatalf("expected message about duplicate sid, got: %v", err)
 	}
 }
 
-// TestRunCase_MultiHostSizeGuard_PassAndFail — demo size-guard на render-уровне:
-// param сверяет size(soulprint.hosts) с ожидаемым N. Pass-ветка (roster ровно
-// N) и fail-ветка (roster != N) — обе наблюдаемы в отрендеренном плане.
+// TestRunCase_MultiHostSizeGuard_PassAndFail — demo size-guard at render-level:
+// param checks size(soulprint.hosts) against expected N. Pass-branch (roster exactly
+// N) and fail-branch (roster != N) — both observable in rendered plan.
 //
-// L0-форма guard-а — render-наблюдаемая (size в params), НЕ flow-control
-// `failed_when:`: flow_context Soul-side не несёт soulprint.hosts
-// (buildFlowContext), поэтому реальный failed_when-size-guard сервиса — это
-// scenario-слой следующего слайса, а не L0-render.
+// L0-form of guard is render-observable (size in params), NOT flow-control
+// `failed_when:`: flow_context Soul-side does not carry soulprint.hosts
+// (buildFlowContext), therefore real failed_when-size-guard for service is
+// scenario-layer of next slice, not L0-render.
 func TestRunCase_MultiHostSizeGuard_PassAndFail(t *testing.T) {
 	main := `name: create
 input: {}
@@ -270,7 +270,7 @@ tasks:
       covens: [create]
 `
 
-	// Pass: ассерт ждёт ровно size==3 на 3-хостовом roster.
+	// Pass: assert expects exactly size==3 on 3-host roster.
 	passDir := writeScenarioTree(t, main, "name: guard pass\n"+threeHosts+`assert:
   rendered_tasks:
     - index: 0
@@ -283,10 +283,10 @@ tasks:
 		t.Fatalf("Run pass: %v", err)
 	}
 	if !passRes[0].Pass {
-		t.Fatalf("pass-ветка: ожидали PASS (size==3), получили: %v", passRes[0].Failures)
+		t.Fatalf("pass-branch: expected PASS (size==3), got: %v", passRes[0].Failures)
 	}
 
-	// Fail: ассерт ждёт size==4, но roster — 3 хоста → расхождение.
+	// Fail: assert expects size==4, but roster has 3 hosts → mismatch.
 	failDir := writeScenarioTree(t, main, "name: guard fail\n"+threeHosts+`assert:
   rendered_tasks:
     - index: 0
@@ -299,6 +299,6 @@ tasks:
 		t.Fatalf("Run fail: %v", err)
 	}
 	if failRes[0].Pass {
-		t.Fatalf("fail-ветка: ожидали FAIL (roster=3, ассерт ждал size=4)")
+		t.Fatalf("fail-branch: expected FAIL (roster=3, assert expected size=4)")
 	}
 }

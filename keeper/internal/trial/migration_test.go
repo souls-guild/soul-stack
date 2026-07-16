@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-// writeMigrationTree создаёт временное дерево migrations/<NNN>_to_<MMM>/
-// {<NNN>_to_<MMM>.yml, tests/<case>.yml} и возвращает (путь к case-файлу,
-// корень дерева для рекурсивного прогона).
+// writeMigrationTree creates temporary tree migrations/<NNN>_to_<MMM>/
+// {<NNN>_to_<MMM>.yml, tests/<case>.yml} and returns (path to case file,
+// tree root for recursive run).
 func writeMigrationTree(t *testing.T, step, migrationYML, caseName, caseYML string) (caseFile, root string) {
 	t.Helper()
 	root = t.TempDir()
@@ -40,8 +40,8 @@ transform:
       to:   state.new
 `
 
-// TestRunMigrationCase_Happy — state_before применяется соседней миграцией и
-// совпадает со state_after.
+// TestRunMigrationCase_Happy — state_before applied by adjacent migration and
+// matches state_after.
 func TestRunMigrationCase_Happy(t *testing.T) {
 	caseFile, _ := writeMigrationTree(t, "001_to_002", renameMigration, "rename-ok", `name: rename-ok
 state_before:
@@ -58,12 +58,12 @@ state_after:
 		t.Fatalf("RunMigrationCase: %v", err)
 	}
 	if !res.Pass {
-		t.Fatalf("ожидался pass, failures: %v", res.Failures)
+		t.Fatalf("expected pass, failures: %v", res.Failures)
 	}
 }
 
-// TestRunMigrationCase_Mismatch — несовпадение state_after даёт понятный fail
-// (а не ошибку прогона), с указанием расходящегося поля.
+// TestRunMigrationCase_Mismatch — state_after mismatch gives clear fail
+// (not run error), with indication of diverging field.
 func TestRunMigrationCase_Mismatch(t *testing.T) {
 	caseFile, _ := writeMigrationTree(t, "001_to_002", renameMigration, "rename-bad", `name: rename-bad
 state_before:
@@ -77,18 +77,18 @@ state_after:
 	}
 	res, err := RunMigrationCase(context.Background(), mc, caseFile, nil)
 	if err != nil {
-		t.Fatalf("RunMigrationCase должен вернуть fail-Result, а не ошибку: %v", err)
+		t.Fatalf("RunMigrationCase should return fail-Result, not error: %v", err)
 	}
 	if res.Pass {
-		t.Fatal("ожидался fail")
+		t.Fatal("expected fail")
 	}
 	if len(res.Failures) == 0 || !strings.Contains(strings.Join(res.Failures, "\n"), "new") {
-		t.Fatalf("ожидалось расхождение по полю new, получено: %v", res.Failures)
+		t.Fatalf("expected mismatch on field new, got: %v", res.Failures)
 	}
 }
 
-// TestRunMigrationCase_ExtraField — лишний ключ в итоге миграции (нет в
-// state_after) — расхождение (L1 сверяет state целиком, не частично).
+// TestRunMigrationCase_ExtraField — extra key in migration result (absent in
+// state_after) — mismatch (L1 checks state fully, not partially).
 func TestRunMigrationCase_ExtraField(t *testing.T) {
 	caseFile, _ := writeMigrationTree(t, "001_to_002", renameMigration, "extra", `name: extra
 state_before:
@@ -106,17 +106,17 @@ state_after:
 		t.Fatalf("RunMigrationCase: %v", err)
 	}
 	if res.Pass {
-		t.Fatal("ожидался fail из-за лишнего поля keep")
+		t.Fatal("expected fail due to extra field keep")
 	}
 	if !strings.Contains(strings.Join(res.Failures, "\n"), "keep") {
-		t.Fatalf("ожидалось упоминание лишнего поля keep, получено: %v", res.Failures)
+		t.Fatalf("expected mention of extra field keep, got: %v", res.Failures)
 	}
 }
 
-// TestRunMigrationCase_MissingMigrationFile — отсутствие соседнего
-// migration-файла → ошибка прогона (не fail-Result).
+// TestRunMigrationCase_MissingMigrationFile — absence of adjacent
+// migration file → run error (not fail-Result).
 func TestRunMigrationCase_MissingMigrationFile(t *testing.T) {
-	// migrationYML="" → файл миграции не создаётся.
+	// migrationYML="" → migration file not created.
 	caseFile, _ := writeMigrationTree(t, "001_to_002", "", "no-mig", `name: no-mig
 state_before:
   old: hello
@@ -129,26 +129,26 @@ state_after:
 	}
 	_, err = RunMigrationCase(context.Background(), mc, caseFile, nil)
 	if err == nil {
-		t.Fatal("ожидалась ошибка из-за отсутствия migration-файла")
+		t.Fatal("expected error due to missing migration file")
 	}
-	if !strings.Contains(err.Error(), "миграции") {
-		t.Fatalf("ожидалась ошибка чтения миграции, получено: %v", err)
+	if !strings.Contains(err.Error(), "migration") {
+		t.Fatalf("expected migration read error, got: %v", err)
 	}
 }
 
-// TestLoadMigrationCase_MissingSection — strict-валидация: case без state_after
-// отвергается явной ошибкой.
+// TestLoadMigrationCase_MissingSection — strict validation: case without state_after
+// rejected with explicit error.
 func TestLoadMigrationCase_MissingSection(t *testing.T) {
 	caseFile, _ := writeMigrationTree(t, "001_to_002", renameMigration, "incomplete", `name: incomplete
 state_before:
   old: hello
 `)
 	if _, err := LoadMigrationCase(caseFile); err == nil {
-		t.Fatal("ожидалась ошибка из-за отсутствия state_after")
+		t.Fatal("expected error due to missing state_after")
 	}
 }
 
-// TestLoadMigrationCase_UnknownKey — strict-декод отвергает посторонний ключ.
+// TestLoadMigrationCase_UnknownKey — strict decode rejects foreign key.
 func TestLoadMigrationCase_UnknownKey(t *testing.T) {
 	caseFile, _ := writeMigrationTree(t, "001_to_002", renameMigration, "junk", `name: junk
 state_before:
@@ -158,13 +158,13 @@ state_after:
 unexpected: 1
 `)
 	if _, err := LoadMigrationCase(caseFile); err == nil {
-		t.Fatal("ожидалась ошибка strict-декода на ключе unexpected")
+		t.Fatal("expected strict decode error on key unexpected")
 	}
 }
 
-// TestRouting_L0L1L2_NotConfused — рекурсивный прогон смешанного дерева
-// маршрутизирует кейсы по форме без путаницы: L0 case.yml → L0, миграционный
-// tests/<case>.yml → L1, stand-кейс → L2 skip.
+// TestRouting_L0L1L2_NotConfused — recursive run of mixed tree
+// routes cases by form without confusion: L0 case.yml → L0, migration
+// tests/<case>.yml → L1, stand case → L2 skip.
 func TestRouting_L0L1L2_NotConfused(t *testing.T) {
 	root := t.TempDir()
 
@@ -204,7 +204,7 @@ assert:
       module: core.file.present
 `)
 
-	// L2: scenario/create/tests/stand1/case.yml (маркер stand:)
+	// L2: scenario/create/tests/stand1/case.yml (stand: marker)
 	mustMkdir(t, filepath.Join(scnDir, "tests", "stand1"))
 	mustWrite(t, filepath.Join(scnDir, "tests", "stand1", "case.yml"), `name: l2-stand
 stand:
@@ -224,37 +224,37 @@ verify:
 		case LevelL0:
 			l0++
 			if !r.Pass {
-				t.Errorf("L0 %s не прошёл: %v", r.Case, r.Failures)
+				t.Errorf("L0 %s did not pass: %v", r.Case, r.Failures)
 			}
 		case LevelL1:
 			l1++
 			if !r.Pass {
-				t.Errorf("L1 %s не прошёл: %v", r.Case, r.Failures)
+				t.Errorf("L1 %s did not pass: %v", r.Case, r.Failures)
 			}
 		case LevelL2:
 			l2++
 			if !r.Skipped {
-				t.Errorf("L2 %s должен быть skipped", r.Case)
+				t.Errorf("L2 %s should be skipped", r.Case)
 			}
 		}
 	}
 	if l0 != 1 || l1 != 1 || l2 != 1 {
-		t.Fatalf("маршрутизация: L0=%d L1=%d L2=%d, want 1/1/1", l0, l1, l2)
+		t.Fatalf("routing: L0=%d L1=%d L2=%d, want 1/1/1", l0, l1, l2)
 	}
 }
 
-// TestRouting_StandTestNotPickedAsL1 — `*.yml` в tests/ ВНЕ migrations/ не
-// должен попадать в discovery как L1 (структурный фильтр isMigrationTestFile).
+// TestRouting_StandTestNotPickedAsL1 — `*.yml` in tests/ OUTSIDE migrations/ should NOT
+// match discovery as L1 (structural filter isMigrationTestFile).
 func TestRouting_StandTestNotPickedAsL1(t *testing.T) {
 	root := t.TempDir()
-	// service-level tests/smoke.yml (не под migrations/) — не L1-кандидат.
+	// service-level tests/smoke.yml (not under migrations/) — not L1 candidate.
 	mustMkdir(t, filepath.Join(root, "tests"))
 	mustWrite(t, filepath.Join(root, "tests", "smoke.yml"), `name: smoke
 tasks:
   - name: ping
     module: core.exec.run
 `)
-	// чтобы дерево не было пустым — добавим валидный L1-кейс.
+	// to keep tree non-empty — add valid L1 case.
 	migStepDir := filepath.Join(root, "migrations", "001_to_002")
 	mustMkdir(t, filepath.Join(migStepDir, "tests"))
 	mustWrite(t, filepath.Join(root, "migrations", "001_to_002.yml"), renameMigration)
@@ -271,11 +271,11 @@ state_after:
 	}
 	for _, f := range files {
 		if filepath.Base(f) == "smoke.yml" {
-			t.Fatalf("smoke.yml не должен попасть в discovery: %v", files)
+			t.Fatalf("smoke.yml should not match discovery: %v", files)
 		}
 	}
 	if len(files) != 1 {
-		t.Fatalf("ожидался ровно 1 case (L1 m1.yml), получено: %v", files)
+		t.Fatalf("expected exactly 1 case (L1 m1.yml), got: %v", files)
 	}
 }
 

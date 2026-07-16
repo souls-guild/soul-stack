@@ -5,16 +5,16 @@ import (
 	"testing"
 )
 
-// nameGuardMain — синтетический сценарий с guard-assert на форму имени инкарнации
-// (зеркало NIM-58 provision-guard). Проверяет проброс fixtures.incarnation_name в
-// incarnation.name L0-рендера.
+// nameGuardMain — synthetic scenario with guard-assert on incarnation name form
+// (mirror of NIM-58 provision-guard). Checks that fixtures.incarnation_name flows
+// into incarnation.name in L0-render.
 const nameGuardMain = `name: create
 tasks:
   - name: guard incarnation name
     assert:
       that:
         - "incarnation.name.matches('^[a-z][a-z0-9-]{0,48}[a-z0-9]$')"
-      message: "имя инкарнации не подходит как базовое имя VM"
+      message: "incarnation name does not fit as base VM name"
   - name: write marker
     module: core.file.present
     params:
@@ -22,27 +22,27 @@ tasks:
       content: ok
 `
 
-// TestRunCase_IncarnationNameOverride_BadNameAborts — override incarnation_name на
-// «плохое» имя (старт-цифра) обрывает render на guard-assert. Доказывает, что поле
-// реально управляет incarnation.name: scn.Name="create" валиден, без override
-// render прошёл бы.
+// TestRunCase_IncarnationNameOverride_BadNameAborts — override incarnation_name to
+// «bad» name (starts with digit) aborts render on guard-assert. Proves that the field
+// really controls incarnation.name: scn.Name="create" is valid, without override
+// render would pass.
 func TestRunCase_IncarnationNameOverride_BadNameAborts(t *testing.T) {
 	caseDir := writeScenarioTree(t, nameGuardMain, `name: bad incarnation name aborts render
 fixtures:
   incarnation_name: 9redis
-expect_render_error: "имя инкарнации не подходит как базовое имя VM"
+expect_render_error: "incarnation name does not fit as base VM name"
 `)
 	results, err := Run(context.Background(), caseDir)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if !results[0].Pass {
-		t.Fatalf("ожидали PASS (render оборвался на guard-assert): %v", results[0].Failures)
+		t.Fatalf("expected PASS (render aborted on guard-assert): %v", results[0].Failures)
 	}
 }
 
-// TestRunCase_IncarnationNameOverride_GoodNameRenders — override на валидное имя
-// проходит guard-assert, план рендерится.
+// TestRunCase_IncarnationNameOverride_GoodNameRenders — override to valid name
+// passes guard-assert, plan renders.
 func TestRunCase_IncarnationNameOverride_GoodNameRenders(t *testing.T) {
 	caseDir := writeScenarioTree(t, nameGuardMain, `name: valid incarnation name renders
 fixtures:
@@ -58,6 +58,6 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if !results[0].Pass {
-		t.Fatalf("ожидали PASS (валидное имя, план рендерится): %v", results[0].Failures)
+		t.Fatalf("expected PASS (valid name, plan renders): %v", results[0].Failures)
 	}
 }

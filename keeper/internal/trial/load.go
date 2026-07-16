@@ -8,30 +8,28 @@ import (
 	yaml "github.com/goccy/go-yaml"
 )
 
-// caseFileName — каноническое имя файла испытания внутри tests/<case>/.
+// caseFileName — canonical name of test file inside tests/<case>/.
 const caseFileName = "case.yml"
 
-// l2Markers — ключи верхнего уровня, маркирующие кейс как уровень L2
-// (исполнение на стенде с post-apply-верификацией, ADR-023 post-MVP). MVP-harness
-// уровня L0 (render-only) их не исполняет и не должен на них падать strict-декодом
-// — такой кейс распознаётся мягким пред-парсом и пропускается при рекурсивном
-// прогоне дерева.
+// l2Markers — top-level keys marking case as level L2
+// (stand execution with post-apply verification, ADR-023 post-MVP). MVP-harness
+// of level L0 (render-only) does not execute them and should not fail on strict decode
+// — such case recognized by soft pre-parse and skipped in recursive tree run.
 var l2Markers = []string{"stand", "verify"}
 
-// l1Markers — ключи верхнего уровня, маркирующие кейс как уровень L1 (тест
-// миграции state_schema, ADR-019/docs/migrations.md §Тесты). Форма L1-кейса
-// принципиально отличается от L0 (нет fixtures/assert.rendered_tasks), поэтому
-// он распознаётся мягким пред-парсом ДО strict L0-декода и уходит в отдельный
-// раннер RunMigrationCase. Обе ключевые секции обязаны присутствовать.
+// l1Markers — top-level keys marking case as level L1 (state_schema migration test,
+// ADR-019/docs/migrations.md §Tests). Form of L1 case fundamentally differs from L0
+// (no fixtures/assert.rendered_tasks), so it is recognized by soft pre-parse BEFORE
+// strict L0 decode and goes to separate runner RunMigrationCase. Both key sections must be present.
 var l1Markers = []string{"state_before", "state_after"}
 
-// LoadCase читает и валидирует один `case.yml`. path принимается двумя
-// формами: путь к самому файлу или путь к директории кейса
-// (`.../tests/<case>/`), внутри которой ищется case.yml.
+// LoadCase reads and validates single `case.yml`. path accepted in two
+// forms: path to file itself or path to case directory
+// (`.../tests/<case>/`), inside which case.yml is sought.
 //
-// Декод strict ([yaml.Strict]): неизвестный ключ — ошибка, а не silent-skip.
-// Это отсекает кейсы, опирающиеся на нереализованные секции пилота
-// (assert.dispatch / assert.state_after), явной ошибкой.
+// Strict decode ([yaml.Strict]): unknown key is error, not silent-skip.
+// This cuts off cases relying on unimplemented pilot sections
+// (assert.dispatch / assert.state_after) with explicit error.
 func LoadCase(path string) (*Case, string, error) {
 	file, err := resolveCaseFile(path)
 	if err != nil {
@@ -40,12 +38,12 @@ func LoadCase(path string) (*Case, string, error) {
 
 	data, err := os.ReadFile(file)
 	if err != nil {
-		return nil, "", fmt.Errorf("trial: чтение %s: %w", file, err)
+		return nil, "", fmt.Errorf("trial: reading %s: %w", file, err)
 	}
 
 	var c Case
 	if err := yaml.UnmarshalWithOptions(data, &c, yaml.Strict()); err != nil {
-		return nil, "", fmt.Errorf("trial: разбор %s: %w", file, err)
+		return nil, "", fmt.Errorf("trial: parsing %s: %w", file, err)
 	}
 	if err := c.validate(); err != nil {
 		return nil, "", fmt.Errorf("trial: %s: %w", file, err)
@@ -53,22 +51,22 @@ func LoadCase(path string) (*Case, string, error) {
 	return &c, file, nil
 }
 
-// isL2Case — мягкий пред-парс case.yml: распознаёт уровень L2 по наличию
-// верхнеуровневого маркера stand:/verify: ДО strict L0-декода. Парсит только
-// ключи верхнего уровня в свободную карту (lax-декод), не валидируя их форму:
-// L2-секции (stand/verify/expect/…) MVP-harness не исполняет, поэтому их строгая
-// структура здесь не важна — важен лишь сам факт принадлежности к L2.
+// isL2Case — soft pre-parse of case.yml: recognizes level L2 by presence
+// of top-level marker stand:/verify: BEFORE strict L0 decode. Parses only
+// top-level keys into free map (lax decode), not validating their form:
+// L2 sections (stand/verify/expect/…) MVP-harness does not execute, so their strict
+// structure is not important here — only the fact of L2 membership matters.
 //
-// L0-кейс маркеров не несёт → false → дальше идёт обычный strict-декод, где
-// unknown-field остаётся ошибкой (strict-decode для L0 не ослаблен).
+// L0 case does not carry markers → false → then usual strict decode follows, where
+// unknown-field remains error (strict-decode for L0 not weakened).
 func isL2Case(file string) (bool, error) {
 	data, err := os.ReadFile(file)
 	if err != nil {
-		return false, fmt.Errorf("trial: чтение %s: %w", file, err)
+		return false, fmt.Errorf("trial: reading %s: %w", file, err)
 	}
 	var top map[string]any
 	if err := yaml.Unmarshal(data, &top); err != nil {
-		return false, fmt.Errorf("trial: пред-парс %s: %w", file, err)
+		return false, fmt.Errorf("trial: pre-parse %s: %w", file, err)
 	}
 	for _, marker := range l2Markers {
 		if _, ok := top[marker]; ok {
@@ -78,22 +76,22 @@ func isL2Case(file string) (bool, error) {
 	return false, nil
 }
 
-// isL1Case — мягкий пред-парс case-файла: распознаёт уровень L1 по наличию
-// верхнеуровневых маркеров state_before:/state_after: ДО strict L0-декода
-// (симметрично isL2Case). Парсит только ключи верхнего уровня в свободную карту,
-// форму секций не валидирует — это делает раннер RunMigrationCase.
+// isL1Case — soft pre-parse of case file: recognizes level L1 by presence
+// of top-level markers state_before:/state_after: BEFORE strict L0 decode
+// (symmetric to isL2Case). Parses only top-level keys into free map,
+// does not validate section form — runner RunMigrationCase does this.
 //
-// L1-кейс требует ОБЕ секции: одиночный state_before без state_after (или
-// наоборот) — не L1, идёт дальше и будет отвергнут strict L0-декодом как явная
-// ошибка формы, а не молча-пропущен. L0-кейс маркеров не несёт → false.
+// L1 case requires BOTH sections: single state_before without state_after (or
+// vice versa) — not L1, continues and will be rejected by strict L0 decode as explicit
+// form error, not silently skipped. L0 case does not carry markers → false.
 func isL1Case(file string) (bool, error) {
 	data, err := os.ReadFile(file)
 	if err != nil {
-		return false, fmt.Errorf("trial: чтение %s: %w", file, err)
+		return false, fmt.Errorf("trial: reading %s: %w", file, err)
 	}
 	var top map[string]any
 	if err := yaml.Unmarshal(data, &top); err != nil {
-		return false, fmt.Errorf("trial: пред-парс %s: %w", file, err)
+		return false, fmt.Errorf("trial: pre-parse %s: %w", file, err)
 	}
 	for _, marker := range l1Markers {
 		if _, ok := top[marker]; !ok {
@@ -103,7 +101,7 @@ func isL1Case(file string) (bool, error) {
 	return true, nil
 }
 
-// resolveCaseFile сводит вход (файл или директория) к пути case.yml.
+// resolveCaseFile reduces input (file or directory) to case.yml path.
 func resolveCaseFile(path string) (string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -115,64 +113,63 @@ func resolveCaseFile(path string) (string, error) {
 	return path, nil
 }
 
-// validate — структурная проверка кейса после декода. Глубже схему не
-// валидируем: render-пайплайн сам отвергнет некорректный scenario, а
-// fixtures — свободные YAML-данные.
+// validate — structural validation of case after decode. We do not validate deeper:
+// render pipeline itself will reject invalid scenario, and
+// fixtures — free YAML data.
 func (c *Case) validate() error {
 	if c.Name == "" {
-		return fmt.Errorf("name: обязателен")
+		return fmt.Errorf("name: required")
 	}
-	// fixtures.soulprint (single-host сахар) и fixtures.hosts (multi-host roster)
-	// взаимоисключены — оба описывают факты хостов прогона; одновременная подача
-	// неоднозначна (один синтетический хост vs N) → strict-ошибка, как unknown-key.
+	// fixtures.soulprint (single-host sugar) and fixtures.hosts (multi-host roster)
+	// are mutually exclusive — both describe facts of run hosts; simultaneous
+	// submission is ambiguous (one synthetic host vs N) → strict error, like unknown-key.
 	if c.Fixtures.Soulprint != nil && len(c.Fixtures.Hosts) > 0 {
-		return fmt.Errorf("fixtures.soulprint и fixtures.hosts взаимоисключены: soulprint — single-host сахар, hosts — multi-host roster")
+		return fmt.Errorf("fixtures.soulprint and fixtures.hosts are mutually exclusive: soulprint — single-host sugar, hosts — multi-host roster")
 	}
-	// SID-уникальность roster-а: дубль валит детерминизм. RegisterByHost —
-	// карта по SID (harness), второй хост с тем же SID перезаписывает первый;
-	// сортировка soulprint.hosts по SID делает порядок дублей неустойчивым.
-	// Strict-ошибка (как взаимоисключение single/multi), а не молчаливое
-	// схлопывание.
+	// SID uniqueness of roster: duplicate breaks determinism. RegisterByHost —
+	// map by SID (harness), second host with same SID overwrites first;
+	// sorting soulprint.hosts by SID makes order of duplicates unstable.
+	// Strict error (like single/multi exclusion), not silent collapse.
 	seenSID := make(map[string]struct{}, len(c.Fixtures.Hosts))
 	for i, h := range c.Fixtures.Hosts {
 		if h.SID == "" {
-			return fmt.Errorf("fixtures.hosts[%d]: sid обязателен", i)
+			return fmt.Errorf("fixtures.hosts[%d]: sid required", i)
 		}
 		if _, dup := seenSID[h.SID]; dup {
-			return fmt.Errorf("fixtures.hosts[%d]: дублирующийся sid %q (sid в roster-е обязан быть уникальным)", i, h.SID)
+			return fmt.Errorf("fixtures.hosts[%d]: duplicate sid %q (sid in roster must be unique)", i, h.SID)
 		}
 		seenSID[h.SID] = struct{}{}
 	}
-	// expect_render_error (ожидаем render-abort) ⊕ assert.* (ожидаем план) —
-	// противоположные исходы, в одном кейсе бессмысленны (ADR-023 amendment).
-	// Presence-формы (task_present/task_absent) тоже ожидают успешный план —
-	// одинаково взаимоисключимы с обрывом.
+	// expect_render_error (expect render-abort) ⊕ assert.* (expect plan) —
+	// opposite outcomes, meaningless in one case (ADR-023 amendment).
+	// Presence forms (task_present/task_absent) also expect successful plan —
+	// equally mutually exclusive with abort.
 	if c.ExpectRenderError != "" {
 		if len(c.Assert.RenderedTasks) > 0 || len(c.Assert.TaskPresent) > 0 || len(c.Assert.TaskAbsent) > 0 ||
 			c.Assert.StateChanges != nil || c.Assert.StateAfter != nil {
-			return fmt.Errorf("expect_render_error и assert.* взаимоисключены: expect_render_error ожидает обрыв рендера, assert.* — успешный план/итог")
+			return fmt.Errorf("expect_render_error and assert.* are mutually exclusive: expect_render_error expects render abort, assert.* — successful plan/result")
 		}
 		return nil
 	}
-	// L0 требует ассерт плана задач хотя бы в одной форме: позиционной
-	// (rendered_tasks) ИЛИ presence (task_present/task_absent). state_changes/
-	// state_after — дополнительные секции, сам план ими не подменяется.
+	// L0 requires assertion of task plan in at least one form: positional
+	// (rendered_tasks) OR presence (task_present/task_absent). state_changes/
+	// state_after — additional sections, plan itself is not replaced by them.
 	if len(c.Assert.RenderedTasks) == 0 && len(c.Assert.TaskPresent) == 0 && len(c.Assert.TaskAbsent) == 0 {
-		return fmt.Errorf("assert: пуст (L0 требует план задач — rendered_tasks ИЛИ task_present/task_absent; state_changes/state_after — дополнительные секции; либо задай expect_render_error для fail-кейса)")
+		return fmt.Errorf("assert: empty (L0 requires task plan — rendered_tasks OR task_present/task_absent; state_changes/state_after — additional sections; or set expect_render_error for fail-case)")
 	}
 	for i, et := range c.Assert.RenderedTasks {
 		if et.Module == "" {
-			return fmt.Errorf("assert.rendered_tasks[%d]: module обязателен", i)
+			return fmt.Errorf("assert.rendered_tasks[%d]: module required", i)
 		}
 	}
 	for i, et := range c.Assert.TaskPresent {
 		if et.Module == "" {
-			return fmt.Errorf("assert.task_present[%d]: module обязателен", i)
+			return fmt.Errorf("assert.task_present[%d]: module required", i)
 		}
 	}
 	for i, et := range c.Assert.TaskAbsent {
 		if et.Module == "" {
-			return fmt.Errorf("assert.task_absent[%d]: module обязателен", i)
+			return fmt.Errorf("assert.task_absent[%d]: module required", i)
 		}
 	}
 	return nil

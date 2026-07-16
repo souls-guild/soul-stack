@@ -1,16 +1,16 @@
 //go:build integration
 
-// L2-исполнение Trial (ADR-023): дизайн «Вариант A» (без реального Keeper, без
-// SSH). soul-trial рендерит план in-process тем же Keeper-side render-пайплайном,
-// что и L0 (renderCase), сериализует ApplyRequest в protojson, доставляет soul-
-// бинарь + ApplyRequest в эфемерный контейнер (testcontainers-go) и исполняет
-// `soul apply` (push-oneshot, ADR-004) с редиректом protojson из файла на stdin.
-// Из stdout читается NDJSON-поток TaskEvent + финальный RunResult. Реальные
-// core-модули работают в контейнере; vault-ref резолвится Keeper-side (fixture-
-// vault как L0) — на хост уходит готовый ApplyRequest без vault-ссылок.
+// L2 trial execution (ADR-023): design "Option A" (no real Keeper, no SSH).
+// soul-trial renders plan in-process using the same Keeper-side render pipeline
+// as L0 (renderCase), serializes ApplyRequest to protojson, delivers the soul
+// binary + ApplyRequest to an ephemeral container (testcontainers-go) and executes
+// `soul apply` (push-oneshot, ADR-004) with protojson redirected from file to stdin.
+// From stdout, reads NDJSON stream of TaskEvent + final RunResult. Real core
+// modules run in the container; vault-ref is resolved Keeper-side (fixture-vault
+// as L0) — host receives ready ApplyRequest without vault references.
 //
-// Build-tag integration: дефолтный `make test` L2 не запускает (тянет docker +
-// testcontainers). Запуск: `go test -tags integration -run TestL2 ./internal/trial/...`.
+// Build-tag integration: default `make test` does not run L2 (requires docker +
+// testcontainers). Run: `go test -tags integration -run TestL2 ./internal/trial/...`.
 package trial
 
 import (
@@ -35,35 +35,34 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// containerSoulPath / containerReqPath — фиксированные пути в стенде, куда
-// доставляются soul-бинарь и сериализованный ApplyRequest.
+// containerSoulPath / containerReqPath — fixed paths in the stand where soul binary
+// and serialized ApplyRequest are delivered.
 const (
 	containerSoulPath = "/usr/local/bin/soul"
 	containerReqPath  = "/tmp/apply-request.json"
 )
 
-// L2Stand — поднятый эфемерный стенд с доставленным soul-бинарём. Закрывается
-// через Close (terminate контейнера). Применять план — Apply.
+// L2Stand — ephemeral stand with delivered soul binary. Closed via Close
+// (container terminate). Apply plan via Apply.
 type L2Stand struct {
 	ctr  testcontainers.Container
-	soul string // путь soul-бинаря внутри контейнера
+	soul string // path to soul binary inside container
 }
 
-// applyOutcome — разобранный итог одного `soul apply`: финальный RunResult +
-// per-task register-payload-ы (для idempotent-проверки changed==false и
-// verify-expect). exitCode — код возврата процесса soul.
+// applyOutcome — parsed result of one `soul apply`: final RunResult + per-task
+// register payloads (for idempotent check changed==false and verify-expect).
+// exitCode — soul process exit code.
 type applyOutcome struct {
 	exitCode int
 	result   *keeperv1.RunResult
 	events   []*keeperv1.TaskEvent
-	rawErr   string // содержимое stderr soul (для диагностики при фейле)
+	rawErr   string // soul stderr contents (for diagnostic on failure)
 }
 
-// StartL2Stand собирает soul под linux/<arch стенда> (= GOARCH хоста, контейнер
-// под ту же платформу), поднимает контейнер и доставляет soul. Контейнер держится
-// живым (sleep infinity в режиме init: none, systemd-PID1 в режиме init: systemd) —
-// exec-ы идут поверх него (soul apply каждый раз отдельным exec, как oneshot
-// push-сессия).
+// StartL2Stand builds soul for linux/<stand arch> (= host GOARCH, container
+// matches), starts container and delivers soul. Container stays alive (sleep infinity
+// in init: none mode, systemd-PID1 in init: systemd mode) — execs run on top of it
+// (soul apply each time as separate exec, like oneshot push-session).
 func StartL2Stand(ctx context.Context, stand Stand) (*L2Stand, error) {
 	soulBin, err := buildSoulLinux(ctx)
 	if err != nil {
@@ -80,26 +79,26 @@ func StartL2Stand(ctx context.Context, stand Stand) (*L2Stand, error) {
 		Started:          true,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("trial L2: поднять стенд (init=%s): %w", stand.init(), err)
+		return nil, fmt.Errorf("trial L2: start stand (init=%s): %w", stand.init(), err)
 	}
 
 	if err := ctr.CopyFileToContainer(ctx, soulBin, containerSoulPath, 0o755); err != nil {
 		_ = ctr.Terminate(ctx)
-		return nil, fmt.Errorf("trial L2: доставить soul в стенд: %w", err)
+		return nil, fmt.Errorf("trial L2: deliver soul to stand: %w", err)
 	}
 
 	return &L2Stand{ctr: ctr, soul: containerSoulPath}, nil
 }
 
-// standRequest строит ContainerRequest под выбранный init-режим стенда.
+// standRequest builds ContainerRequest for selected stand init mode.
 //
-//   - none (default): контейнер на `sleep infinity` из stand.Image, без PID1-init
-//     (текущее поведение L2-пилота, не меняется);
-//   - systemd: systemd-PID1-стенд из tests/e2e-live/dockerfiles/debian-12.Dockerfile
-//     (тот же отлаженный образ, что L3b real-soul harness). Профиль privileged +
-//     CgroupnsMode=host + tmpfs /run,/run/lock + Entrypoint /sbin/init + ожидание
-//     `systemctl is-system-running --wait` (exit 0=running|1=degraded) — копия
-//     эталона harness.SpawnSoulContainer.
+//   - none (default): container on `sleep infinity` from stand.Image, no PID1-init
+//     (current L2 pilot behavior, unchanged);
+//   - systemd: systemd-PID1-stand from tests/e2e-live/dockerfiles/debian-12.Dockerfile
+//     (same tuned image as L3b real-soul harness). Privileged profile +
+//     CgroupnsMode=host + tmpfs /run,/run/lock + Entrypoint /sbin/init + wait for
+//     `systemctl is-system-running --wait` (exit 0=running|1=degraded) — copy of
+//     canonical harness.SpawnSoulContainer.
 func standRequest(stand Stand) (testcontainers.ContainerRequest, error) {
 	if stand.init() == StandInitNone {
 		return testcontainers.ContainerRequest{
@@ -117,15 +116,15 @@ func standRequest(stand Stand) (testcontainers.ContainerRequest, error) {
 		FromDockerfile: testcontainers.FromDockerfile{
 			Context:    filepath.Dir(dockerfile),
 			Dockerfile: filepath.Base(dockerfile),
-			// Образ детерминирован Dockerfile-ом — кешируем слои между кейсами,
-			// как L3b harness (KeepImage).
+			// Image determined by Dockerfile — cache layers between cases,
+			// as L3b harness (KeepImage).
 			KeepImage: true,
 		},
 		Entrypoint: []string{"/sbin/init"},
 		HostConfigModifier: func(hc *dockercontainer.HostConfig) {
 			hc.Privileged = true
 			// systemd-PID1: tmpfs /run + /run/lock; CgroupnsMode=host — systemd
-			// видит cgroup-fs хоста (необходимо для systemctl).
+			// sees host cgroup-fs (necessary for systemctl).
 			hc.CgroupnsMode = "host"
 			if hc.Tmpfs == nil {
 				hc.Tmpfs = map[string]string{}
@@ -133,46 +132,46 @@ func standRequest(stand Stand) (testcontainers.ContainerRequest, error) {
 			hc.Tmpfs["/run"] = "rw"
 			hc.Tmpfs["/run/lock"] = "rw"
 		},
-		// is-system-running: 0=running, 1=degraded (slim-Debian без unit-ов —
-		// норма), 2=initializing (ещё ждём). Принимаем 0 и 1.
+		// is-system-running: 0=running, 1=degraded (slim-Debian without units —
+		// normal), 2=initializing (still waiting). Accept 0 and 1.
 		WaitingFor: wait.ForExec([]string{"systemctl", "is-system-running", "--wait"}).
 			WithExitCodeMatcher(func(code int) bool { return code == 0 || code == 1 }).
 			WithStartupTimeout(60 * time.Second),
 	}, nil
 }
 
-// systemdStandDockerfile возвращает путь к L3b-Dockerfile-у systemd-PID1-стенда
-// (tests/e2e-live/dockerfiles/debian-12.Dockerfile), переиспользуемому из этого
-// пакета. repo-root выводится тем же runtime.Caller-ом, что soulModuleDir.
+// systemdStandDockerfile returns path to L3b-Dockerfile of systemd-PID1-stand
+// (tests/e2e-live/dockerfiles/debian-12.Dockerfile), reused from this package.
+// repo-root derived via same runtime.Caller as soulModuleDir.
 func systemdStandDockerfile() (string, error) {
 	_, self, _, ok := runtimeCaller()
 	if !ok {
-		return "", fmt.Errorf("trial L2: не удалось определить путь пакета")
+		return "", fmt.Errorf("trial L2: could not determine package path")
 	}
 	// self = .../keeper/internal/trial/l2_run.go → repo-root = ../../../..
 	trialDir := filepath.Dir(self)
 	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(trialDir)))
 	dockerfile := filepath.Join(repoRoot, "tests", "e2e-live", "dockerfiles", "debian-12.Dockerfile")
 	if _, err := os.Stat(dockerfile); err != nil {
-		return "", fmt.Errorf("trial L2: systemd-стенд: Dockerfile не найден по %s: %w", dockerfile, err)
+		return "", fmt.Errorf("trial L2: systemd-stand: Dockerfile not found at %s: %w", dockerfile, err)
 	}
 	return dockerfile, nil
 }
 
-// Close уничтожает стенд.
+// Close destroys the stand.
 func (s *L2Stand) Close(ctx context.Context) error {
 	return s.ctr.Terminate(ctx)
 }
 
-// containerErrPath — файл внутри стенда, куда перенаправляется stderr soul apply.
-// stdout оставляем чистым (только NDJSON), чтобы tcexec.Multiplexed combined-reader
-// не смешал диагностику soul с NDJSON-потоком.
+// containerErrPath — file inside stand where soul apply stderr is redirected.
+// stdout stays clean (NDJSON only) so tcexec.Multiplexed combined-reader
+// doesn't mix soul diagnostics with NDJSON stream.
 const containerErrPath = "/tmp/apply-stderr.log"
 
-// Apply сериализует req в protojson, доставляет в стенд и исполняет
-// `soul apply` с редиректом protojson из файла на stdin (testcontainers Exec не
-// прокидывает stdin — редирект из файла внутри контейнера эквивалентен). stderr
-// soul уводится в файл, чтобы stdout нёс только NDJSON. Парсит NDJSON в outcome.
+// Apply serializes req to protojson, delivers to stand and executes
+// `soul apply` with protojson redirected from file to stdin (testcontainers Exec
+// doesn't pass stdin — redirecting from file inside container is equivalent).
+// soul stderr sent to file so stdout carries only NDJSON. Parses NDJSON into outcome.
 func (s *L2Stand) Apply(ctx context.Context, req *keeperv1.ApplyRequest) (applyOutcome, error) {
 	var out applyOutcome
 
@@ -184,9 +183,9 @@ func (s *L2Stand) Apply(ctx context.Context, req *keeperv1.ApplyRequest) (applyO
 		return out, err
 	}
 
-	// soul apply читает ApplyRequest со stdin; редиректим из доставленного файла —
-	// поведение идентично push-сессии (Keeper пишет protojson в stdin SSH-exec).
-	// stderr → файл: stdout остаётся чистым NDJSON для Multiplexed-reader.
+	// soul apply reads ApplyRequest from stdin; redirect from delivered file —
+	// behavior identical to push-session (Keeper writes protojson to stdin SSH-exec).
+	// stderr → file: stdout stays clean NDJSON for Multiplexed-reader.
 	cmd := []string{"sh", "-c", fmt.Sprintf("%s apply < %s 2> %s", s.soul, containerReqPath, containerErrPath)}
 	code, stdout, err := s.exec(ctx, cmd)
 	if err != nil {
@@ -196,32 +195,32 @@ func (s *L2Stand) Apply(ctx context.Context, req *keeperv1.ApplyRequest) (applyO
 	out.rawErr = s.readFile(ctx, containerErrPath)
 
 	if err := parseNDJSON(stdout, &out); err != nil {
-		return out, fmt.Errorf("trial L2: разбор NDJSON soul apply (stderr: %s): %w", strings.TrimSpace(out.rawErr), err)
+		return out, fmt.Errorf("trial L2: parse NDJSON soul apply (stderr: %s): %w", strings.TrimSpace(out.rawErr), err)
 	}
 	return out, nil
 }
 
-// copyBytes пишет data во временный файл хоста и доставляет в стенд по dst.
+// copyBytes writes data to host temp file and delivers to stand at dst.
 func (s *L2Stand) copyBytes(ctx context.Context, data []byte, dst string) error {
 	tmp, err := os.CreateTemp("", "l2-apply-*.json")
 	if err != nil {
-		return fmt.Errorf("trial L2: temp-файл: %w", err)
+		return fmt.Errorf("trial L2: temp file: %w", err)
 	}
 	defer os.Remove(tmp.Name())
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
-		return fmt.Errorf("trial L2: запись temp: %w", err)
+		return fmt.Errorf("trial L2: write temp: %w", err)
 	}
 	tmp.Close()
 	if err := s.ctr.CopyFileToContainer(ctx, tmp.Name(), dst, 0o644); err != nil {
-		return fmt.Errorf("trial L2: доставить %s в стенд: %w", dst, err)
+		return fmt.Errorf("trial L2: deliver %s to stand: %w", dst, err)
 	}
 	return nil
 }
 
-// exec гоняет cmd в стенде и возвращает combined-output (tcexec.Multiplexed
-// сам снимает docker-stream-заголовки). Вызывающий редиректит stderr команды в
-// файл, поэтому combined здесь = чистый stdout команды.
+// exec runs cmd in stand and returns combined-output (tcexec.Multiplexed
+// removes docker-stream headers itself). Caller redirects command stderr to
+// file, so combined here = clean command stdout.
 func (s *L2Stand) exec(ctx context.Context, cmd []string) (int, string, error) {
 	code, reader, err := s.ctr.Exec(ctx, cmd, tcexec.Multiplexed())
 	if err != nil {
@@ -229,12 +228,12 @@ func (s *L2Stand) exec(ctx context.Context, cmd []string) (int, string, error) {
 	}
 	var buf bytes.Buffer
 	if _, err := buf.ReadFrom(reader); err != nil {
-		return code, buf.String(), fmt.Errorf("чтение output: %w", err)
+		return code, buf.String(), fmt.Errorf("read output: %w", err)
 	}
 	return code, buf.String(), nil
 }
 
-// readFile дочитывает файл из стенда через cat (best-effort, для диагностики).
+// readFile reads file from stand via cat (best-effort, for diagnostics).
 func (s *L2Stand) readFile(ctx context.Context, path string) string {
 	_, out, err := s.exec(ctx, []string{"cat", path})
 	if err != nil {
@@ -243,16 +242,16 @@ func (s *L2Stand) readFile(ctx context.Context, path string) string {
 	return out
 }
 
-// RunL2Case прогоняет один L2-кейс end-to-end (дизайн Вариант A): render
-// in-process → ApplyRequest → стенд → soul apply → verify → expect_idempotent.
-// caseFile — путь к L2 case.yml (рядом с scenario/<name>/main.yml). Возвращает
-// Result (LevelL2, Pass + Failures). Стенд поднимается и уничтожается внутри.
+// RunL2Case runs one L2-case end-to-end (design Option A): render in-process →
+// ApplyRequest → stand → soul apply → verify → expect_idempotent. caseFile —
+// path to L2 case.yml (alongside scenario/<name>/main.yml). Returns Result
+// (LevelL2, Pass + Failures). Stand is started and destroyed inside.
 func RunL2Case(ctx context.Context, c *L2Case, caseFile string) (Result, error) {
 	res := Result{Case: c.Name, Level: LevelL2}
 
-	// 1. Render in-process тем же Keeper-side путём, что L0. L2-кейс несёт input:
-	//    (а не fixtures:), поэтому маппим его в герметичный Fixtures.Input;
-	//    остальной контекст L2-пилота пуст (один хост, без essence/vault).
+	// 1. Render in-process using same Keeper-side path as L0. L2-case carries input:
+	//    (not fixtures:), so map it to hermetic Fixtures.Input; rest of L2 pilot
+	//    context is empty (one host, no essence/vault).
 	l0 := &Case{Name: c.Name, Fixtures: Fixtures{Input: c.Input}}
 	rc, err := renderCase(ctx, l0, caseFile)
 	if err != nil {
@@ -265,7 +264,7 @@ func RunL2Case(ctx context.Context, c *L2Case, caseFile string) (Result, error) 
 	}
 	defer func() { _ = stand.Close(ctx) }()
 
-	// 2. План → ApplyRequest → стенд.
+	// 2. Plan → ApplyRequest → stand.
 	req := &keeperv1.ApplyRequest{
 		ApplyId: "trial-l2-" + sanitizeID(c.Name),
 		Tasks:   render.ToProtoTasks(rc.tasks),
@@ -280,7 +279,7 @@ func RunL2Case(ctx context.Context, c *L2Case, caseFile string) (Result, error) 
 		return res, nil
 	}
 
-	// 3. verify-блок: каждая проверка — однозадачный ApplyRequest на том же стенде.
+	// 3. verify-block: each check — single-task ApplyRequest on same stand.
 	for _, v := range c.Verify {
 		fails, err := stand.runVerify(ctx, req.ApplyId, v)
 		if err != nil {
@@ -289,8 +288,8 @@ func RunL2Case(ctx context.Context, c *L2Case, caseFile string) (Result, error) 
 		res.Failures = append(res.Failures, fails...)
 	}
 
-	// 4. expect_idempotent: повторный прогон того же ApplyRequest → все
-	//    register.changed==false (state хоста уже сошёлся, второй apply — no-op).
+	// 4. expect_idempotent: re-run same ApplyRequest → all register.changed==false
+	//    (host state converged, second apply — no-op).
 	if c.expectIdempotent() {
 		second, err := stand.Apply(ctx, req)
 		if err != nil {
@@ -306,11 +305,11 @@ func RunL2Case(ctx context.Context, c *L2Case, caseFile string) (Result, error) 
 	return res, nil
 }
 
-// runVerify исполняет один verify-шаг как однозадачный ApplyRequest и сверяет
-// register-output задачи с Expect. apply_id наследуется от основного прогона для
-// трассируемости (verify — продолжение той же сессии стенда). Module задаётся
-// полным именем `<namespace>.<module>.<state>` (например core.cmd.shell) — soul
-// сам отделяет state суффиксом (splitModuleAddr).
+// runVerify executes one verify-step as single-task ApplyRequest and compares
+// task register-output with Expect. apply_id inherited from main run for
+// traceability (verify — continuation of same stand session). Module specified
+// by full name `<namespace>.<module>.<state>` (e.g. core.cmd.shell) — soul
+// separates state via suffix (splitModuleAddr).
 func (s *L2Stand) runVerify(ctx context.Context, applyID string, v Verify) ([]string, error) {
 	params, err := structpb.NewStruct(v.Apply.Params)
 	if err != nil {
@@ -331,25 +330,25 @@ func (s *L2Stand) runVerify(ctx context.Context, applyID string, v Verify) ([]st
 	return compareExpect(v, out), nil
 }
 
-// Конвертация render-плана в wire-форму ApplyRequest.tasks — общий
-// render.ToProtoTasks (keeper/internal/render/prototask.go), тот же, что зовёт
-// scenario-orchestrator. Index — orchestrator-only, в proto не идёт; Module
-// несёт полное имя со state-суффиксом (soul splits state из RenderedTask).
+// Conversion of render-plan to wire-form ApplyRequest.tasks — shared
+// render.ToProtoTasks (keeper/internal/render/prototask.go), same as called by
+// scenario-orchestrator. Index — orchestrator-only, not in proto; Module carries
+// full name with state-suffix (soul splits state from RenderedTask).
 
-// parseNDJSON разбирает stdout `soul apply` (NDJSON: по строке на TaskEvent, в
-// конце — RunResult). Различает по наличию поля apply_id+status: RunResult несёт
-// RunStatus, TaskEvent — TaskStatus+task_idx. Простой разбор: пробуем TaskEvent;
-// строка без task-полей, но со status — RunResult. Надёжнее — по эксклюзивному
-// полю: RunResult имеет state_changes/только status; TaskEvent — task_idx.
+// parseNDJSON parses stdout `soul apply` (NDJSON: one line per TaskEvent, final
+// RunResult). Distinguishes by presence of apply_id+status: RunResult carries
+// RunStatus, TaskEvent — TaskStatus+task_idx. Simple parse: try TaskEvent; line
+// without task-fields but with status — RunResult. More reliable — by exclusive
+// field: RunResult has state_changes/status only; TaskEvent — task_idx.
 func parseNDJSON(stdout string, out *applyOutcome) error {
 	for _, line := range strings.Split(strings.TrimRight(stdout, "\n"), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		// RunResult и TaskEvent оба несут apply_id+status; различаем по task_idx
-		// (только TaskEvent). protojson игнорирует неизвестные поля при
-		// DiscardUnknown=false → парсим строго в правильный тип, выбирая по ключу.
+		// RunResult and TaskEvent both carry apply_id+status; distinguish by task_idx
+		// (TaskEvent only). protojson ignores unknown fields with DiscardUnknown=false
+		// → parse strictly into correct type, choosing by key.
 		if strings.Contains(line, "\"taskIdx\"") || strings.Contains(line, "\"task_idx\"") || strings.Contains(line, "\"registerData\"") || strings.Contains(line, "\"register_data\"") {
 			ev := &keeperv1.TaskEvent{}
 			if err := protojson.Unmarshal([]byte(line), ev); err != nil {
@@ -365,67 +364,67 @@ func parseNDJSON(stdout string, out *applyOutcome) error {
 		out.result = rr
 	}
 	if out.result == nil {
-		return fmt.Errorf("в stdout нет RunResult")
+		return fmt.Errorf("no RunResult in stdout")
 	}
 	return nil
 }
 
-// assertRunSuccess проверяет, что прогон завершился RUN_STATUS_SUCCESS и exit 0.
+// assertRunSuccess checks that run completed with RUN_STATUS_SUCCESS and exit 0.
 func assertRunSuccess(phase string, out applyOutcome) string {
 	if out.result == nil {
-		return fmt.Sprintf("%s: нет RunResult (exit=%d, stderr: %s)", phase, out.exitCode, strings.TrimSpace(out.rawErr))
+		return fmt.Sprintf("%s: no RunResult (exit=%d, stderr: %s)", phase, out.exitCode, strings.TrimSpace(out.rawErr))
 	}
 	if out.result.GetStatus() != keeperv1.RunStatus_RUN_STATUS_SUCCESS {
-		return fmt.Sprintf("%s: статус %s, ожидался SUCCESS (exit=%d, stderr: %s)",
+		return fmt.Sprintf("%s: status %s, expected SUCCESS (exit=%d, stderr: %s)",
 			phase, out.result.GetStatus(), out.exitCode, strings.TrimSpace(out.rawErr))
 	}
 	if out.exitCode != 0 {
-		return fmt.Sprintf("%s: exit %d при SUCCESS-статусе", phase, out.exitCode)
+		return fmt.Sprintf("%s: exit %d with SUCCESS status", phase, out.exitCode)
 	}
 	return ""
 }
 
-// assertNoChanges проверяет, что во втором прогоне ни одна задача не пометила
-// changed==true (идемпотентность). Пропущенные (skipped) задачи changed==false —
-// это и есть ожидаемый no-op повторного применения.
+// assertNoChanges checks that on second run no task marked changed==true
+// (idempotency). Skipped tasks with changed==false — that's expected no-op
+// of re-application.
 func assertNoChanges(out applyOutcome) []string {
 	var fails []string
 	for _, ev := range out.events {
 		if registerBool(ev.GetRegisterData(), "changed") {
 			fails = append(fails, fmt.Sprintf(
-				"idempotent: задача idx=%d (%s) во втором прогоне changed=true — план не идемпотентен",
+				"idempotent: task idx=%d (%s) on second run changed=true — plan not idempotent",
 				ev.GetTaskIdx(), ev.GetStatus()))
 		}
 	}
 	return fails
 }
 
-// compareExpect сверяет register-output verify-задачи с Expect (exit_code /
-// stdout / stdout_contains). Один TaskEvent на verify-шаг (однозадачный req).
+// compareExpect compares verify-task register-output with Expect (exit_code /
+// stdout / stdout_contains). One TaskEvent per verify-step (single-task req).
 func compareExpect(v Verify, out applyOutcome) []string {
 	var fails []string
 	if len(out.events) == 0 {
-		return []string{fmt.Sprintf("verify %q: нет TaskEvent (stderr: %s)", v.Name, strings.TrimSpace(out.rawErr))}
+		return []string{fmt.Sprintf("verify %q: no TaskEvent (stderr: %s)", v.Name, strings.TrimSpace(out.rawErr))}
 	}
 	rd := out.events[len(out.events)-1].GetRegisterData()
 
 	if v.Expect.ExitCode != nil {
 		got := registerInt(rd, "exit_code")
 		if got != *v.Expect.ExitCode {
-			fails = append(fails, fmt.Sprintf("verify %q: exit_code=%d, ожидался %d", v.Name, got, *v.Expect.ExitCode))
+			fails = append(fails, fmt.Sprintf("verify %q: exit_code=%d, expected %d", v.Name, got, *v.Expect.ExitCode))
 		}
 	}
 	if v.Expect.Stdout != nil {
 		got := strings.TrimRight(registerString(rd, "stdout"), "\n")
 		want := strings.TrimRight(*v.Expect.Stdout, "\n")
 		if got != want {
-			fails = append(fails, fmt.Sprintf("verify %q: stdout=%q, ожидался %q", v.Name, got, want))
+			fails = append(fails, fmt.Sprintf("verify %q: stdout=%q, expected %q", v.Name, got, want))
 		}
 	}
 	if v.Expect.StdoutContains != "" {
 		got := registerString(rd, "stdout")
 		if !strings.Contains(got, v.Expect.StdoutContains) {
-			fails = append(fails, fmt.Sprintf("verify %q: stdout не содержит %q (получено %q)", v.Name, v.Expect.StdoutContains, got))
+			fails = append(fails, fmt.Sprintf("verify %q: stdout does not contain %q (got %q)", v.Name, v.Expect.StdoutContains, got))
 		}
 	}
 	return fails
@@ -459,8 +458,8 @@ func registerString(s *structpb.Struct, key string) string {
 	return ""
 }
 
-// sanitizeID приводит произвольное имя кейса/шага к безопасному id-фрагменту для
-// apply_id (буквы/цифры/дефис).
+// sanitizeID converts arbitrary case/step name to safe id-fragment for
+// apply_id (letters/digits/hyphen).
 func sanitizeID(s string) string {
 	var b strings.Builder
 	for _, r := range s {
@@ -478,11 +477,10 @@ func sanitizeID(s string) string {
 	return out
 }
 
-// buildSoulLinux собирает soul-бинарь под linux/<GOARCH хоста> во временный файл,
-// путь к нему возвращает (caller обязан удалить). Контейнер поднимается под ту же
-// платформу, что хост (docker desktop), поэтому GOARCH хоста = arch стенда.
-// CGO_ENABLED=0 — статический бинарь без glibc-зависимостей (работает в любом
-// базовом образе, вкл. alpine).
+// buildSoulLinux builds soul binary for linux/<host GOARCH> to temp file,
+// returns path to it (caller must delete). Container started matches host
+// platform (docker desktop), so host GOARCH = stand arch. CGO_ENABLED=0 —
+// static binary without glibc dependencies (works in any base image, incl. alpine).
 func buildSoulLinux(ctx context.Context) (string, error) {
 	soulMod, err := soulModuleDir()
 	if err != nil {
@@ -509,24 +507,24 @@ func buildSoulLinux(ctx context.Context) (string, error) {
 	return bin.Name(), nil
 }
 
-// soulModuleDir находит корень модуля soul/ относительно этого пакета
-// (keeper/internal/trial). go.work-раскладка ADR-011: soul/ — sibling keeper/.
+// soulModuleDir finds soul/ module root relative to this package
+// (keeper/internal/trial). go.work layout ADR-011: soul/ — sibling of keeper/.
 func soulModuleDir() (string, error) {
 	_, self, _, ok := runtimeCaller()
 	if !ok {
-		return "", fmt.Errorf("trial L2: не удалось определить путь пакета")
+		return "", fmt.Errorf("trial L2: could not determine package path")
 	}
 	// self = .../keeper/internal/trial/l2_run.go → repo-root = ../../../..
 	trialDir := filepath.Dir(self)
 	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(trialDir)))
 	soulMod := filepath.Join(repoRoot, "soul")
 	if _, err := os.Stat(filepath.Join(soulMod, "go.mod")); err != nil {
-		return "", fmt.Errorf("trial L2: модуль soul/ не найден по %s: %w", soulMod, err)
+		return "", fmt.Errorf("trial L2: soul/ module not found at %s: %w", soulMod, err)
 	}
 	return soulMod, nil
 }
 
-// runtimeCaller — тонкая обёртка над runtime.Caller (изоляция импорта для теста).
+// runtimeCaller — thin wrapper over runtime.Caller (import isolation for tests).
 func runtimeCaller() (uintptr, string, int, bool) {
 	return runtime.Caller(0)
 }

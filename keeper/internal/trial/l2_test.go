@@ -1,14 +1,14 @@
 //go:build integration
 
-// L2 integration-тест Trial (ADR-023, дизайн «Вариант A»). Прогоняет пилот-кейс
-// node-exporter end-to-end на docker-стенде: render in-process → ApplyRequest →
-// soul apply в контейнере → verify → expect_idempotent. Не входит в дефолтный
-// `make test` (build-tag integration). Запуск:
+// L2 integration test of Trial (ADR-023, design «Variant A»). Runs pilot case
+// node-exporter end-to-end on docker stand: render in-process → ApplyRequest →
+// soul apply in container → verify → expect_idempotent. Not included in default
+// `make test` (build-tag integration). Run:
 //
 //	cd keeper && go test -tags integration -run TestL2 ./internal/trial/...
 //
-// Требует docker. Без docker и без SOUL_STACK_INTEGRATION_REQUIRE_DOCKER — skip;
-// с флагом — fatal (паттерн прочих integration-тестов keeper).
+// Requires docker. Without docker and without SOUL_STACK_INTEGRATION_REQUIRE_DOCKER — skip;
+// with flag — fatal (pattern of other keeper integration tests).
 package trial
 
 import (
@@ -21,21 +21,21 @@ import (
 	"time"
 )
 
-// l2PilotCase — путь к пилот-кейсу относительно этого пакета (keeper/internal/trial).
-// Раскладка ADR-023: <destiny>/_trial/scenario/<name>/tests/<case>/case.yml.
+// l2PilotCase — path to pilot case relative to this package (keeper/internal/trial).
+// Layout ADR-023: <destiny>/_trial/scenario/<name>/tests/<case>/case.yml.
 const l2PilotCase = "../../../examples/destiny/node-exporter/_trial/scenario/verify-l2/tests/run-and-probe"
 
-// l2ReloadCases — daemon-reload L2-кейсы (systemd-PID1 стенд). auto-reload —
-// основной guard (NeedDaemonReload-flag-flip надёжен на debian-12); always-reload —
-// детерминированный дубль (reload→новое-определение независимо от флага).
+// l2ReloadCases — daemon-reload L2 cases (systemd-PID1 stand). auto-reload —
+// main guard (NeedDaemonReload-flag-flip reliable on debian-12); always-reload —
+// deterministic duplicate (reload→new definition regardless of flag).
 var l2ReloadCases = []string{
 	"../../../examples/destiny/service-reload/_trial/scenario/verify-l2/tests/auto-reload",
 	"../../../examples/destiny/service-reload/_trial/scenario/verify-l2/tests/always-reload",
 }
 
-// dockerAvailable — best-effort проба доступности docker через попытку короткого
-// прогона: реальная проверка делается StartL2Stand. Здесь только grуб-фильтр по
-// наличию docker-сокета, чтобы дать осмысленный skip без полного fail.
+// dockerAvailable — best-effort probe of docker availability via short run attempt:
+// real check done by StartL2Stand. Here only rough filter by presence of docker socket,
+// to give meaningful skip without full fail.
 func dockerAvailable() bool {
 	for _, p := range []string{
 		os.Getenv("DOCKER_HOST"),
@@ -55,11 +55,11 @@ func dockerAvailable() bool {
 
 func TestL2_NodeExporterPilot(t *testing.T) {
 	if !dockerAvailable() && !requireDocker() {
-		t.Skip("L2: docker недоступен, SOUL_STACK_INTEGRATION_REQUIRE_DOCKER не задан — skip")
+		t.Skip("L2: docker unavailable, SOUL_STACK_INTEGRATION_REQUIRE_DOCKER not set — skip")
 	}
 
-	// Абсолютный путь: template-резолвер (securejoin) отвергает root с '..'
-	// (serviceRootFor выводит svcRoot из caseFile; относительный путь даёт '..').
+	// Absolute path: template resolver (securejoin) rejects root with '..'
+	// (serviceRootFor derives svcRoot from caseFile; relative path gives '..').
 	caseAbs, err := filepath.Abs(l2PilotCase)
 	if err != nil {
 		t.Fatalf("filepath.Abs: %v", err)
@@ -69,40 +69,39 @@ func TestL2_NodeExporterPilot(t *testing.T) {
 		t.Fatalf("LoadL2Case: %v", err)
 	}
 
-	// go build soul (linux) + pull образа + apply×2 + verify×3 — щедрый таймаут.
+	// go build soul (linux) + pull image + apply×2 + verify×3 — generous timeout.
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
 
 	res, err := RunL2Case(ctx, c, file)
 	if err != nil {
-		// docker недоступен по-настоящему (StartL2Stand упал на поднятии стенда):
-		// при отсутствии REQUIRE_DOCKER — skip, иначе fail.
+		// docker truly unavailable (StartL2Stand failed on stand start):
+		// without REQUIRE_DOCKER — skip, otherwise fail.
 		if isDockerSetupErr(err) && !requireDocker() {
-			t.Skipf("L2: стенд не поднялся (docker?): %v", err)
+			t.Skipf("L2: stand failed to start (docker?): %v", err)
 		}
 		t.Fatalf("RunL2Case: %v", err)
 	}
 
 	if res.Level != LevelL2 {
-		t.Errorf("Level = %v, ожидался LevelL2", res.Level)
+		t.Errorf("Level = %v, expected LevelL2", res.Level)
 	}
 	if !res.Pass {
-		t.Fatalf("пилот-кейс L2 не прошёл:\n  - %s", joinFailures(res.Failures))
+		t.Fatalf("L2 pilot case did not pass:\n  - %s", joinFailures(res.Failures))
 	}
 }
 
-// TestL2_ServiceDaemonReload прогоняет daemon-reload L2-кейсы на systemd-PID1
-// стенде (init: systemd). Доказывает фикс util.EnsureDaemonReloaded: после
-// перезаписи unit-файла core.service.restarted сам делает daemon-reload и
-// применяет НОВОЕ определение (ExecStart=…2000) без ручного reload.
+// TestL2_ServiceDaemonReload runs daemon-reload L2 cases on systemd-PID1
+// stand (init: systemd). Proves fix of util.EnsureDaemonReloaded: after
+// unit file rewrite core.service.restarted itself does daemon-reload and
+// applies NEW definition (ExecStart=…2000) without manual reload.
 //
-// Skip при отсутствии docker ИЛИ при отказе privileged/cgroup (rootless/sandbox):
-// isDockerSetupErr распознаёт privileged/cgroup/permission/timeout как
-// setup-ошибку → t.Skip, не t.Fatal (ложного красного на окружении без privileged
-// быть не должно).
+// Skip if docker absent OR privileged/cgroup denied (rootless/sandbox):
+// isDockerSetupErr recognizes privileged/cgroup/permission/timeout as
+// setup error → t.Skip, not t.Fatal (no false red on environment without privileged).
 func TestL2_ServiceDaemonReload(t *testing.T) {
 	if !dockerAvailable() && !requireDocker() {
-		t.Skip("L2: docker недоступен, SOUL_STACK_INTEGRATION_REQUIRE_DOCKER не задан — skip")
+		t.Skip("L2: docker unavailable, SOUL_STACK_INTEGRATION_REQUIRE_DOCKER not set — skip")
 	}
 
 	for _, casePath := range l2ReloadCases {
@@ -117,19 +116,19 @@ func TestL2_ServiceDaemonReload(t *testing.T) {
 				t.Fatalf("LoadL2Case: %v", err)
 			}
 
-			// systemd-build (~60s cold) + boot + apply×N + verify — щедрый таймаут.
+			// systemd-build (~60s cold) + boot + apply×N + verify — generous timeout.
 			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 			defer cancel()
 
 			res, err := RunL2Case(ctx, c, file)
 			if err != nil {
 				if isDockerSetupErr(err) && !requireDocker() {
-					t.Skipf("L2: systemd-стенд не поднялся (docker/privileged?): %v", err)
+					t.Skipf("L2: systemd stand failed to start (docker/privileged?): %v", err)
 				}
 				t.Fatalf("RunL2Case: %v", err)
 			}
 			if !res.Pass {
-				t.Fatalf("daemon-reload L2-кейс %q не прошёл:\n  - %s", c.Name, joinFailures(res.Failures))
+				t.Fatalf("daemon-reload L2 case %q did not pass:\n  - %s", c.Name, joinFailures(res.Failures))
 			}
 		})
 	}
@@ -141,12 +140,12 @@ func isDockerSetupErr(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	for _, s := range []string{
-		"поднять стенд", "docker", "cannot connect", "dial unix", "rootless",
-		// systemd-стенд требует --privileged + CgroupnsMode=host: на rootless/
-		// sandbox-окружении docker отказывает на этих опциях. Считаем это
-		// setup-ошибкой (skip, не fatal): кейс не должен давать ложный красный там,
-		// где privileged недоступен. WaitingFor по systemctl на не-systemd-host
-		// упрётся в startup-timeout → DeadlineExceeded (ниже).
+		"starting stand", "docker", "cannot connect", "dial unix", "rootless",
+		// systemd stand requires --privileged + CgroupnsMode=host: on rootless/
+		// sandbox environment docker denies these options. We consider this
+		// setup error (skip, not fatal): case must not give false red where
+		// privileged unavailable. WaitingFor via systemctl on non-systemd host
+		// will hit startup timeout → DeadlineExceeded (below).
 		"privileged", "cgroup", "permission denied", "operation not permitted",
 		"is-system-running", "starting container", "/sbin/init",
 	} {

@@ -10,35 +10,35 @@ import (
 	"strings"
 )
 
-// Run прогоняет испытания по target. target — путь к одному case-файлу
-// (L0 `case.yml` либо L1 `migrations/.../tests/<case>.yml`), к директории кейса
-// (`tests/<case>/`), либо к директории-дереву, внутри которого case-файлы
-// ищутся рекурсивно. Возвращает результаты по каждому кейсу в детерминированном
-// порядке.
+// Run runs tests on target. target — path to single case file
+// (L0 `case.yml` or L1 `migrations/.../tests/<case>.yml`), to case directory
+// (`tests/<case>/`), or to directory tree where case files
+// are searched recursively. Returns results for each case in deterministic
+// order.
 //
-// Маршрутизация уровня по форме файла (мягкий пред-парс ДО strict-декода):
+// Level routing by file form (soft pre-parse BEFORE strict decode):
 //
-//	stand:/verify:               → L2, skip (ADR-023 post-MVP, не исполняется)
-//	state_before:/state_after:   → L1, RunMigrationCase (тест миграции)
-//	иначе                        → L0, RunCase (render-only strict, unknown-field — ошибка)
+//	stand:/verify:               → L2, skip (ADR-023 post-MVP, not executed)
+//	state_before:/state_after:   → L1, RunMigrationCase (migration test)
+//	otherwise                    → L0, RunCase (render-only strict, unknown-field — error)
 func Run(ctx context.Context, target string) ([]Result, error) {
 	files, err := discoverCases(target)
 	if err != nil {
 		return nil, err
 	}
 	if len(files) == 0 {
-		return nil, fmt.Errorf("trial: не найдено ни одного case-файла в %q", target)
+		return nil, fmt.Errorf("trial: no case files found in %q", target)
 	}
 
-	// Один migration-CEL evaluator на весь прогон (compile-cache): переиспользуется
-	// всеми L1-кейсами. Собирается лениво при первом L1-кейсе.
+	// Single migration-CEL evaluator for entire run (compile-cache): reused
+	// by all L1 cases. Built lazily at first L1 case.
 	var migEv migrationEvaluator
 
 	results := make([]Result, 0, len(files))
 	for _, f := range files {
-		// Порядок проб важен: сперва L2 (skip), затем L1 (миграция), иначе L0.
-		// Strict-декод для L0 не ослаблен — L0-кейс маркеров L1/L2 не несёт и идёт
-		// в LoadCase как прежде, unknown-field в нём остаётся ошибкой.
+		// Probe order is important: first L2 (skip), then L1 (migration), otherwise L0.
+		// Strict decode for L0 is not weakened — L0 case does not carry L1/L2 markers and goes
+		// to LoadCase as before, unknown-field in it remains error.
 		isL2, err := isL2Case(f)
 		if err != nil {
 			return results, err
@@ -84,11 +84,11 @@ func Run(ctx context.Context, target string) ([]Result, error) {
 	return results, nil
 }
 
-// discoverCases резолвит target в список путей case-файлов.
-//   - файл → [файл] (L0/L1/L2 определяется формой при прогоне);
-//   - директория с case.yml внутри → [этот case.yml];
-//   - директория-дерево → рекурсивный поиск всех case-файлов: `case.yml`
-//     (L0/L2-форма) + любой `*.yml` под `migrations/.../tests/` (L1-форма).
+// discoverCases resolves target to list of case file paths.
+//   - file → [file] (L0/L1/L2 determined by form at run time);
+//   - directory with case.yml inside → [that case.yml];
+//   - directory tree → recursive search of all case files: `case.yml`
+//     (L0/L2 form) + any `*.yml` under `migrations/.../tests/` (L1 form).
 func discoverCases(target string) ([]string, error) {
 	info, err := os.Stat(target)
 	if err != nil {
@@ -117,18 +117,18 @@ func discoverCases(target string) ([]string, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("trial: обход %q: %w", target, err)
+		return nil, fmt.Errorf("trial: traversing %q: %w", target, err)
 	}
 	sort.Strings(found)
 	return found, nil
 }
 
-// isMigrationTestFile — структурный признак L1 case-файла: `*.yml` (кроме
-// `case.yml`), лежащий в директории `tests/`, чей дед — `migrations/`
-// (`.../migrations/<NNN>_to_<MMM>/tests/<case>.yml`). Точная раскладка
-// (docs/migrations.md §Тесты), а не «любой yml в tests/»: иначе под обход
-// попали бы stand-тесты сервиса (`<service>/tests/smoke.yml`), не относящиеся
-// к миграциям. Окончательная классификация уровня — по форме при прогоне.
+// isMigrationTestFile — structural marker of L1 case file: `*.yml` (except
+// `case.yml`), located in `tests/` directory whose grandparent is `migrations/`
+// (`.../migrations/<NNN>_to_<MMM>/tests/<case>.yml`). Exact layout
+// (docs/migrations.md §Tests), not «any yml in tests/»: otherwise stand tests of
+// service (`<service>/tests/smoke.yml`) not related to migrations would match.
+// Final level classification — by form at run time.
 func isMigrationTestFile(path string) bool {
 	if !strings.HasSuffix(path, ".yml") || filepath.Base(path) == caseFileName {
 		return false

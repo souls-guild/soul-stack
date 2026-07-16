@@ -4,10 +4,10 @@ package trial
 
 import "os"
 
-// requireDocker — true, если CI требует обязательного docker-а
-// (SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1|true). Паттерн совпадает с прочими
-// integration-тестами keeper (topology/applyrun/...): без флага и без docker —
-// тест skip; с флагом — fatal при недоступном docker.
+// requireDocker — true if CI requires mandatory docker
+// (SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1|true). Pattern matches other
+// integration tests of keeper (topology/applyrun/...): without flag and without docker —
+// test skip; with flag — fatal if docker unavailable.
 func requireDocker() bool {
 	v := os.Getenv("SOUL_STACK_INTEGRATION_REQUIRE_DOCKER")
 	return v == "1" || v == "true"

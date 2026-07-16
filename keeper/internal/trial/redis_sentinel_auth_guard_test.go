@@ -1,23 +1,23 @@
 package trial
 
-// Guard на connection-AUTH к sentinel-демону :26379 (прод-дефект: verify/MONITOR-
-// задачи community.redis НЕ аутентифицировались к sentinel-демону, защищённому
-// aclfile sentinel-users.acl, → apply падал `connect: NOAUTH Authentication required`).
+// Guard on connection-AUTH to sentinel daemon :26379 (prod defect: verify/MONITOR
+// tasks of community.redis did not authenticate to sentinel daemon protected by
+// aclfile sentinel-users.acl, → apply failed `connect: NOAUTH Authentication required`).
 //
-// Корень: sentinel.conf несёт `aclfile sentinel-users.acl`, где default-юзер
-// `user default on #<hash>` (sentinel_users.default = ГЛАВНЫЙ секрет
-// secret/<svc>/<inc>#password). Значит ЛЮБОЙ коннект к :26379 требует AUTH — и
-// SENTINEL MONITOR (community.redis.sentinel), и PONG-verify (community.redis.command
-// args PING). connection-AUTH идёт через params.password (parseConnConfig →
-// redis.Options.Password), а НЕ через auth_pass (тот — пароль МОНИТОРИНГА master-а,
-// команда SENTINEL SET <master> auth-pass, к AUTH самого демона отношения не имеет).
+// Root: sentinel.conf carries `aclfile sentinel-users.acl`, where default user
+// is `user default on #<hash>` (sentinel_users.default = MASTER secret
+// secret/<svc>/<inc>#password). So ANY connection to :26379 requires AUTH — both
+// SENTINEL MONITOR (community.redis.sentinel) and PONG-verify (community.redis.command
+// args PING). connection-AUTH goes via params.password (parseConnConfig →
+// redis.Options.Password), not via auth_pass (that is master monitoring password,
+// SENTINEL SET <master> auth-pass command, unrelated to daemon AUTH itself).
 //
-// Почему Go-guard, а не только L0 case.yml: L0 expect_tasks сверяет params_subset
-// ТОЛЬКО для MONITOR-задач и ТОЛЬКО в кейсах с expect_tasks (PONG-verify не сверяется
-// нигде, detach_source-ветка — отдельный сценарий). Этот guard обходит РЕАЛЬНЫЙ план
-// (LoadScenarioManifest + ExpandIncludes) и ловит ВЕСЬ класс: каждая community.redis-
-// задача с addr на :26379 ОБЯЗАНА нести непустой params.password. Мутация (удаление
-// password из любой :26379-задачи sentinel-сценария) роняет этот тест.
+// Why Go guard, not just L0 case.yml: L0 expect_tasks verifies params_subset
+// ONLY for MONITOR tasks and ONLY in cases with expect_tasks (PONG-verify not verified
+// anywhere, detach_source branch — separate scenario). This guard walks REAL plan
+// (LoadScenarioManifest + ExpandIncludes) and catches ENTIRE class: every community.redis
+// task with addr on :26379 MUST carry non-empty params.password. Mutation (deletion
+// of password from any :26379 task of sentinel scenario) fails this test.
 
 import (
 	"fmt"
@@ -28,26 +28,26 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// sentinelDaemonPort — порт sentinel-демона; addr с ним требует connection-AUTH
-// (демон защищён aclfile, default-юзер `on`). Литерал во всех sentinel-задачах
-// (sentinel-демон не TLS-порт-агностичен: 26379 без отдельного tls-порта).
+// sentinelDaemonPort — sentinel daemon port; addr with it requires connection-AUTH
+// (daemon protected by aclfile, default user `on`). Literal in all sentinel tasks
+// (sentinel daemon is not TLS-port agnostic: 26379 without separate tls-port).
 const sentinelDaemonPort = "26379"
 
-// scenarioCasesWithSentinelDaemon — L0-кейсы, чей план содержит коннект к sentinel-
-// демону :26379 (create sentinel-ветка + detach_source sentinel-ветка обоих сервисов
-// с aclfile-защищённым демоном). loadScenarioPlan грузит сценарий по пути любого его
-// кейса; ветви дропаются ПОЗЖЕ на render, поэтому план несёт обе ветви и :26379-задачи
-// видны на нём целиком.
+// scenarioCasesWithSentinelDaemon — L0 cases whose plan contains connection to sentinel
+// daemon :26379 (create sentinel branch + detach_source sentinel branch of both services
+// with aclfile-protected daemon). loadScenarioPlan loads scenario by path of any of its
+// cases; branches are dropped LATER on render, so plan carries both branches and :26379 tasks
+// are fully visible on it.
 var scenarioCasesWithSentinelDaemon = []string{
 	"../../../examples/service/redis/scenario/create/tests/sentinel-create-1master-2replica/case.yml",
 	"../../../examples/service/redis/scenario/detach_source/tests/sentinel-detach-source/case.yml",
 	"../../../examples/service/dragonfly/scenario/create/tests/create-sentinel-1master-1replica/case.yml",
 }
 
-// loadScenarioPlan грузит сценарий по пути любого его L0-кейса и возвращает плоский
-// план после ExpandIncludes (без Stratify — guard сверяет params задач, не порядок).
-// Нейтрально по имени сценария: тот же механизм, что loadCreatePlan, но не привязан к
-// create-семантике (используется и для detach_source).
+// loadScenarioPlan loads scenario by path of any of its L0 cases and returns flat
+// plan after ExpandIncludes (without Stratify — guard checks params of tasks, not order).
+// Neutral about scenario name: same mechanism as loadCreatePlan, but not tied to
+// create semantics (also used for detach_source).
 func loadScenarioPlan(t *testing.T, caseFile string) []config.Task {
 	t.Helper()
 	_, file, err := LoadCase(caseFile)
@@ -69,9 +69,9 @@ func loadScenarioPlan(t *testing.T, caseFile string) []config.Task {
 	return expanded
 }
 
-// taskAddrParam — литеральное значение params.addr задачи (или "" если addr не
-// строка/отсутствует). sentinel-задачи задают addr строковым литералом
-// "127.0.0.1:26379", поэтому подстроки порта в нём достаточно.
+// taskAddrParam — literal value of params.addr of task (or "" if addr is not
+// string/missing). sentinel tasks set addr as string literal
+// "127.0.0.1:26379", so substring of port in it is sufficient.
 func taskAddrParam(t *config.Task) string {
 	if t.Module == nil {
 		return ""
@@ -82,9 +82,9 @@ func taskAddrParam(t *config.Task) string {
 	return ""
 }
 
-// taskHasConnectionPassword — задача несёт непустой params.password (строка с CEL-
-// выражением до render — здесь проверяется ПРИСУТСТВИЕ поля, не резолвнутое значение:
-// пустая строка/отсутствие = NOAUTH в проде).
+// taskHasConnectionPassword checks if task carries non-empty params.password (string
+// with CEL expression before render — here PRESENCE of field is checked, not resolved
+// value: empty string/missing = NOAUTH in prod).
 func taskHasConnectionPassword(t *config.Task) bool {
 	if t.Module == nil {
 		return false
@@ -93,8 +93,8 @@ func taskHasConnectionPassword(t *config.Task) bool {
 	return ok && strings.TrimSpace(s) != ""
 }
 
-// assertSentinelDaemonTasksAuthenticate — каждая community.redis-задача с addr на
-// :26379 в плане сценария несёт connection-password.
+// assertSentinelDaemonTasksAuthenticate checks that every community.redis task with addr on
+// :26379 in scenario plan carries connection-password.
 func assertSentinelDaemonTasksAuthenticate(t *testing.T, caseFile string) {
 	t.Helper()
 	tasks := loadScenarioPlan(t, caseFile)
@@ -110,19 +110,19 @@ func assertSentinelDaemonTasksAuthenticate(t *testing.T, caseFile string) {
 		}
 		checked++
 		if !taskHasConnectionPassword(task) {
-			t.Fatalf("%s: задача %q (%s, addr на :%s) НЕ несёт params.password — коннект к sentinel-демону защищён aclfile (default-юзер `on`), без password прод-прогон падает `connect: NOAUTH`",
+			t.Fatalf("%s: task %q (%s, addr on :%s) does NOT carry params.password — connection to sentinel daemon is protected by aclfile (default user `on`), without password prod run fails `connect: NOAUTH`",
 				caseFile, task.Name, task.Module.Module, sentinelDaemonPort)
 		}
 	}
 	if checked == 0 {
-		t.Fatalf("%s: ни одной community.redis-задачи на :%s в плане — guard потерял предмет проверки (sentinel-ветка перестала коннектиться к демону?)",
+		t.Fatalf("%s: no community.redis task on :%s in plan — guard lost its subject of check (sentinel branch stopped connecting to daemon?)",
 			caseFile, sentinelDaemonPort)
 	}
-	t.Logf("%s: %d community.redis-задач на :%s — все несут connection-password", caseFile, checked, sentinelDaemonPort)
+	t.Logf("%s: %d community.redis tasks on :%s — all carry connection-password", caseFile, checked, sentinelDaemonPort)
 }
 
-// TestSentinelDaemonTasksCarryConnectionPassword — guard на connection-AUTH к :26379
-// по всем sentinel-несущим сценариям (create + detach_source, redis + dragonfly).
+// TestSentinelDaemonTasksCarryConnectionPassword is a guard for connection-AUTH to :26379
+// across all sentinel-bearing scenarios (create + detach_source, redis + dragonfly).
 func TestSentinelDaemonTasksCarryConnectionPassword(t *testing.T) {
 	for _, caseFile := range scenarioCasesWithSentinelDaemon {
 		t.Run(scenarioGuardSubtestName(caseFile), func(t *testing.T) {
@@ -131,8 +131,8 @@ func TestSentinelDaemonTasksCarryConnectionPassword(t *testing.T) {
 	}
 }
 
-// scenarioGuardSubtestName — компактное имя под-теста из пути кейса
-// (<service>/<scenario>/<case>) для читаемого вывода.
+// scenarioGuardSubtestName creates compact subtest name from case path
+// (<service>/<scenario>/<case>) for readable output.
 func scenarioGuardSubtestName(caseFile string) string {
 	parts := strings.Split(caseFile, "/")
 	// .../service/<svc>/scenario/<scn>/tests/<case>/case.yml
