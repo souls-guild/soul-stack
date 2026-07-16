@@ -1,8 +1,8 @@
 package provider
 
-// Guard-leak тесты dual-mode приёма credentials (ADR-064 митигация b, NIM-11):
-// plaintext-credentials НЕ утекают ни в один sink (PG-args / возвращаемый
-// Provider / текст ошибки), пишутся ТОЛЬКО в Vault; XOR/disabled отвергаются.
+// Guard-leak tests for dual-mode credential ingestion (ADR-064 mitigation b,
+// NIM-11): plaintext credentials do not leak to any sink (PG args / returned
+// Provider / error text), are written only to Vault, and XOR/disabled are rejected.
 
 import (
 	"context"
@@ -18,7 +18,7 @@ import (
 
 const leakCred = "PLAINTEXT-AWS-SECRET-KEY-4d9f2c"
 
-// fakeCredVault — SecretWriter-фейк: запоминает записанный credentials-map.
+// fakeCredVault is a SecretWriter fake that records the written credentials map.
 type fakeCredVault struct {
 	got  map[string]any
 	fail bool
@@ -32,7 +32,7 @@ func (v *fakeCredVault) WriteMap(_ context.Context, domain, entity, field string
 	return "vault:secret/" + domain + "/" + entity + "/" + field, nil
 }
 
-// newCredService собирает Service с fakeDB (Insert возвращает created_at).
+// newCredService builds Service with fakeDB (Insert returns created_at).
 func newCredService(t *testing.T, v SecretWriter, db *fakeDB, accept bool) *Service {
 	t.Helper()
 	db.queryRowFunc = func(string) pgx.Row { return staticRow{values: []any{time.Unix(0, 0)}} }
@@ -52,7 +52,7 @@ func credInput() CreateInput {
 	}
 }
 
-// TestProviderCredentialsNoLeak — plaintext credentials → Vault, в PG только ref.
+// TestProviderCredentialsNoLeak verifies plaintext credentials -> Vault, only ref in PG.
 func TestProviderCredentialsNoLeak(t *testing.T) {
 	v := &fakeCredVault{}
 	db := &fakeDB{}
@@ -63,28 +63,28 @@ func TestProviderCredentialsNoLeak(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	// Весь credentials-map записан в Vault.
+	// Whole credentials map is written to Vault.
 	if v.got == nil || v.got["secret_key"] != leakCred {
 		t.Fatalf("vault got=%v, want plaintext creds", v.got)
 	}
-	// credentials_ref в PG = vault:… , НЕ plaintext.
+	// credentials_ref in PG is vault ref, not plaintext.
 	if p.CredentialsRef == "" || strings.Contains(p.CredentialsRef, leakCred) {
-		t.Fatalf("credentials_ref=%q — должен быть vault-ref", p.CredentialsRef)
+		t.Fatalf("credentials_ref=%q must be vault-ref", p.CredentialsRef)
 	}
 	if !p.SecretWritten {
-		t.Fatal("SecretWritten не взведён")
+		t.Fatal("SecretWritten was not set")
 	}
-	// PG-args (INSERT) НЕ содержат plaintext.
+	// PG args (INSERT) do not contain plaintext.
 	if blob := fmt.Sprintf("%v", db.queryRowArgs); strings.Contains(blob, leakCred) {
-		t.Fatal("plaintext утёк в PG args")
+		t.Fatal("plaintext leaked into PG args")
 	}
-	// Возвращаемый Provider (source для View/wire) НЕ содержит plaintext.
+	// Returned Provider (source for View/wire) does not contain plaintext.
 	if j, _ := json.Marshal(p); strings.Contains(string(j), leakCred) {
-		t.Fatalf("plaintext утёк в JSON Provider-а: %s", j)
+		t.Fatalf("plaintext leaked into Provider JSON: %s", j)
 	}
 }
 
-// TestProviderRefModeUnchanged — ref-режим без записи в Vault.
+// TestProviderRefModeUnchanged covers ref mode without writing to Vault.
 func TestProviderRefModeUnchanged(t *testing.T) {
 	v := &fakeCredVault{}
 	db := &fakeDB{}
@@ -98,14 +98,15 @@ func TestProviderRefModeUnchanged(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	if v.got != nil {
-		t.Fatalf("ref-режим не должен писать в Vault, got=%v", v.got)
+		t.Fatalf("ref mode must not write to Vault, got=%v", v.got)
 	}
 	if p.SecretWritten {
-		t.Fatal("SecretWritten не должен быть взведён в ref-режиме")
+		t.Fatal("SecretWritten must not be set in ref mode")
 	}
 }
 
-// TestProviderXORRejected — заданы и credentials, и credentials_ref → 422 без Vault-записи.
+// TestProviderXORRejected covers both credentials and credentials_ref set -> 422
+// without Vault write.
 func TestProviderXORRejected(t *testing.T) {
 	v := &fakeCredVault{}
 	db := &fakeDB{}
@@ -118,14 +119,14 @@ func TestProviderXORRejected(t *testing.T) {
 		t.Fatalf("XOR: err=%v, want ErrValidation", err)
 	}
 	if strings.Contains(err.Error(), leakCred) {
-		t.Fatalf("plaintext утёк в текст ошибки: %v", err)
+		t.Fatalf("plaintext leaked into error text: %v", err)
 	}
 	if v.got != nil {
-		t.Fatal("при XOR-отказе не должно быть записи в Vault")
+		t.Fatal("XOR rejection must not write to Vault")
 	}
 }
 
-// TestProviderCredentialsRequired — не задано ни credentials, ни ref → 422.
+// TestProviderCredentialsRequired covers neither credentials nor ref set -> 422.
 func TestProviderCredentialsRequired(t *testing.T) {
 	v := &fakeCredVault{}
 	db := &fakeDB{}
@@ -137,7 +138,8 @@ func TestProviderCredentialsRequired(t *testing.T) {
 	}
 }
 
-// TestProviderPlaintextDisabled — accept=false → plaintext отвергается (ADR-064 митигация a).
+// TestProviderPlaintextDisabled covers accept=false -> plaintext rejected
+// (ADR-064 mitigation a).
 func TestProviderPlaintextDisabled(t *testing.T) {
 	v := &fakeCredVault{}
 	db := &fakeDB{}
@@ -148,11 +150,12 @@ func TestProviderPlaintextDisabled(t *testing.T) {
 		t.Fatalf("disabled: err=%v, want ErrPlaintextDisabled", err)
 	}
 	if v.got != nil {
-		t.Fatal("при disabled не должно быть записи в Vault")
+		t.Fatal("disabled mode must not write to Vault")
 	}
 }
 
-// TestProviderVaultFailureNoLeak — сбой Vault → ошибка БЕЗ plaintext, БЕЗ INSERT.
+// TestProviderVaultFailureNoLeak covers Vault failure -> error without plaintext
+// and without INSERT.
 func TestProviderVaultFailureNoLeak(t *testing.T) {
 	v := &fakeCredVault{fail: true}
 	db := &fakeDB{}
@@ -160,12 +163,12 @@ func TestProviderVaultFailureNoLeak(t *testing.T) {
 
 	_, err := svc.Create(context.Background(), credInput())
 	if err == nil {
-		t.Fatal("ожидалась ошибка при сбое Vault")
+		t.Fatal("expected error on Vault failure")
 	}
 	if strings.Contains(err.Error(), leakCred) {
-		t.Fatalf("plaintext утёк в текст ошибки Vault-сбоя: %v", err)
+		t.Fatalf("plaintext leaked into Vault failure error text: %v", err)
 	}
 	if db.queryRowCalls != 0 {
-		t.Fatal("при сбое Vault не должно быть INSERT в PG")
+		t.Fatal("Vault failure must not INSERT into PG")
 	}
 }

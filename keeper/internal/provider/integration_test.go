@@ -1,7 +1,7 @@
 //go:build integration
 
-// Integration-тесты CRUD provider через testcontainers-go.
-// Паттерн совпадает с keeper/internal/incarnation/integration_test.go.
+// Integration tests for provider CRUD through testcontainers-go.
+// The pattern matches keeper/internal/incarnation/integration_test.go.
 
 package provider
 
@@ -71,7 +71,7 @@ func run(m *testing.M) int {
 
 func resetAll(t *testing.T) {
 	t.Helper()
-	// CASCADE: profiles → providers → operators (FK chain).
+	// CASCADE: profiles -> providers -> operators (FK chain).
 	_, err := integrationPool.Exec(context.Background(),
 		`TRUNCATE TABLE profiles, providers, operators, audit_log CASCADE`)
 	if err != nil {
@@ -159,7 +159,7 @@ func TestIntegration_Insert_CHECKViolation_BadName(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	ctx := context.Background()
-	// Прямой INSERT в обход Go-валидации: SQL CHECK должен отбить bad name.
+	// Direct INSERT bypassing Go validation: SQL CHECK must reject bad name.
 	_, err := integrationPool.Exec(ctx,
 		`INSERT INTO providers (name, type, region, credentials_ref, created_by_aid)
 		 VALUES ($1, 'aws', 'eu', 'vault:x', $2)`,
@@ -170,7 +170,7 @@ func TestIntegration_Insert_CHECKViolation_BadName(t *testing.T) {
 }
 
 func TestIntegration_Insert_NullCreatedByOnOperatorDelete(t *testing.T) {
-	// ON DELETE SET NULL: запись Provider-а переживает удаление оператора.
+	// ON DELETE SET NULL: Provider row survives operator deletion.
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	ctx := context.Background()
@@ -219,7 +219,7 @@ func TestIntegration_SelectAll_Pagination(t *testing.T) {
 	if len(out) != 2 {
 		t.Errorf("len(out) = %d, want 2", len(out))
 	}
-	// DESC по created_at → последний (yc-c) первым.
+	// DESC by created_at: last inserted (yc-c) first.
 	if out[0].Name != "yc-c" {
 		t.Errorf("out[0].Name = %q, want yc-c", out[0].Name)
 	}

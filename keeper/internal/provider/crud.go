@@ -10,15 +10,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Sentinel-ошибки CRUD-слоя. Handler-сторона (Cloud.CRUD.b) маппит:
-//   - ErrProviderAlreadyExists → 409 provider-already-exists.
-//   - ErrProviderNotFound      → 404 not-found.
+// Sentinel errors for the CRUD layer. Handler side (Cloud.CRUD.b) maps:
+//   - ErrProviderAlreadyExists -> 409 provider-already-exists.
+//   - ErrProviderNotFound      -> 404 not-found.
 var (
 	ErrProviderAlreadyExists = errors.New("provider: name already exists")
 	ErrProviderNotFound      = errors.New("provider: name not found")
-	// ErrProviderHasProfiles — попытка удалить Provider, на который ссылаются
-	// Profile-и (FK profiles_provider_fk ON DELETE RESTRICT, миграция 020).
-	// Handler маппит в 409 (delete заблокирован зависимостями).
+	// ErrProviderHasProfiles means deleting a Provider referenced by Profiles (FK
+	// profiles_provider_fk ON DELETE RESTRICT, migration 020). Handler maps it to
+	// 409 because delete is blocked by dependencies.
 	ErrProviderHasProfiles = errors.New("provider: has dependent profiles")
 )
 
@@ -28,9 +28,9 @@ const (
 	pgErrCodeCheckViolation      = "23514"
 )
 
-// ExecQueryRower — узкое подмножество pgxpool.Pool, нужное CRUD-у.
-// Симметрично incarnation/operator: unit-тесты ходят через fake без подъёма
-// PG, production даёт реальный pool / Conn / Tx.
+// ExecQueryRower is the narrow pgxpool.Pool subset required by CRUD. Symmetric to
+// incarnation/operator: unit tests use a fake without starting PG, while
+// production supplies a real pool / Conn / Tx.
 type ExecQueryRower interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
@@ -44,8 +44,8 @@ var (
 	_ ExecQueryRower = (pgx.Tx)(nil)
 )
 
-// insertSQL — INSERT с RETURNING для получения server-side created_at
-// (DEFAULT NOW()) одной round-trip-ой.
+// insertSQL is INSERT with RETURNING to fetch server-side created_at
+// (DEFAULT NOW()) in one round trip.
 const insertSQL = `
 INSERT INTO providers (name, type, region, credentials_ref, created_by_aid, fqdn_suffix)
 VALUES ($1, $2, $3, $4, $5, $6)
@@ -62,17 +62,17 @@ WHERE name = $1
 
 const deleteSQL = `DELETE FROM providers WHERE name = $1`
 
-// Insert вставляет новый Provider.
+// Insert inserts a new Provider.
 //
 // Pre-conditions:
-//   - p.Name / p.Type соответствуют [NamePattern];
-//   - p.Region непустой;
-//   - p.CredentialsRef проходит [ValidCredentialsRef].
+//   - p.Name / p.Type match [NamePattern];
+//   - p.Region is non-empty;
+//   - p.CredentialsRef passes [ValidCredentialsRef].
 //
-// Возврат:
-//   - [ErrProviderAlreadyExists] на UNIQUE по PK.
-//   - wrapped fmt.Errorf на FK-violation (`created_by_aid` ссылается на
-//     несуществующий AID) и CHECK-violation (name/type format).
+// Returns:
+//   - [ErrProviderAlreadyExists] on UNIQUE by PK.
+//   - wrapped fmt.Errorf on FK violation (`created_by_aid` references a missing
+//     AID) and CHECK violation (name/type format).
 func Insert(ctx context.Context, db ExecQueryRower, p *Provider) error {
 	if p == nil {
 		return fmt.Errorf("provider: nil provider")
@@ -90,8 +90,8 @@ func Insert(ctx context.Context, db ExecQueryRower, p *Provider) error {
 		return fmt.Errorf("provider: invalid credentials_ref %q (must start with %q and carry a path)",
 			p.CredentialsRef, CredentialsRefPrefix)
 	}
-	// fqdn_suffix опционален (self-onboard Вариант T); если задан — обязан быть
-	// валидным DNS-суффиксом (иначе предсказанный FQDN=SID не пройдёт soul.ValidSID).
+	// fqdn_suffix is optional (self-onboard option T); if set, it must be a valid
+	// DNS suffix, otherwise the predicted FQDN=SID will not pass soul.ValidSID.
 	if p.FQDNSuffix != nil && !ValidFQDNSuffix(*p.FQDNSuffix) {
 		return fmt.Errorf("provider: invalid fqdn_suffix %q (must match %s; use nil for none)",
 			*p.FQDNSuffix, FQDNSuffixPattern)
@@ -131,7 +131,7 @@ func mapInsertError(err error) error {
 	return fmt.Errorf("provider: insert: %w", err)
 }
 
-// SelectByName читает Provider по PK. [ErrProviderNotFound] при pgx.ErrNoRows.
+// SelectByName reads a Provider by PK. [ErrProviderNotFound] on pgx.ErrNoRows.
 func SelectByName(ctx context.Context, db ExecQueryRower, name string) (*Provider, error) {
 	row := db.QueryRow(ctx, selectByNameSQL, name)
 	return scanProvider(row)
@@ -163,13 +163,12 @@ func scanProvider(row pgx.Row) (*Provider, error) {
 	return &p, nil
 }
 
-// Delete удаляет Provider по PK. [ErrProviderNotFound], если запись
-// отсутствует (RowsAffected==0).
+// Delete removes a Provider by PK. [ErrProviderNotFound] when the row is absent
+// (RowsAffected==0).
 //
-// FK profiles_provider_fk (ON DELETE RESTRICT, миграция 020): удаление
-// Provider-а с зависимыми Profile-ями отдаёт wrapped FK-violation
-// ([ErrProviderHasProfiles]) — handler маппит её в 409, симметрично
-// «удаление невозможно, есть зависимости».
+// FK profiles_provider_fk (ON DELETE RESTRICT, migration 020): deleting a Provider
+// with dependent Profiles returns a wrapped FK violation ([ErrProviderHasProfiles]).
+// Handler maps it to 409, symmetric to "delete impossible, dependencies exist".
 func Delete(ctx context.Context, db ExecQueryRower, name string) error {
 	if !ValidName(name) {
 		return fmt.Errorf("provider: invalid name %q (must match %s)", name, NamePattern)
@@ -189,14 +188,13 @@ func Delete(ctx context.Context, db ExecQueryRower, name string) error {
 	return nil
 }
 
-// SelectAll возвращает страницу Provider-ов и общее количество (без
-// offset/limit).
+// SelectAll returns a page of Providers and the total count without offset/limit.
 //
-// Сортировка — `created_at DESC, name ASC` (поздние выше; tie-break по имени,
-// иначе пагинация неустойчива при одинаковом таймстемпе).
+// Sort order is `created_at DESC, name ASC`: newer first, name as tie-breaker so
+// pagination stays stable when timestamps match.
 //
-// Total и items получаются двумя запросами вне общей транзакции — total
-// **eventually consistent**, симметрично incarnation.SelectAll.
+// Total and items are fetched by two queries outside one transaction, so total is
+// eventually consistent, symmetric to incarnation.SelectAll.
 func SelectAll(ctx context.Context, db ExecQueryRower, offset, limit int) ([]*Provider, int, error) {
 	if offset < 0 {
 		return nil, 0, fmt.Errorf("provider: offset must be >= 0, got %d", offset)

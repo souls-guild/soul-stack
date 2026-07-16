@@ -11,8 +11,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// fakeDB — ExecQueryRower-stub для unit-тестов. Захватывает последний SQL и
-// аргументы, отдаёт настраиваемый Row / Rows. Паттерн совпадает с
+// fakeDB is an ExecQueryRower stub for unit tests. It captures the last SQL and
+// arguments, and returns configurable Row / Rows. Pattern matches
 // incarnation.fakeDB.
 type fakeDB struct {
 	queryRowSQL   string
@@ -163,7 +163,7 @@ func TestInsert_HappyPath(t *testing.T) {
 	if f.queryRowArgs[4] != "archon-alice" {
 		t.Errorf("args[4] created_by_aid = %v", f.queryRowArgs[4])
 	}
-	// args[5] — fqdn_suffix (nil у validProvider, self-onboard не задан).
+	// args[5] is fqdn_suffix (nil for validProvider, self-onboard not set).
 	if f.queryRowArgs[5] != nil {
 		t.Errorf("args[5] fqdn_suffix = %v, want nil", f.queryRowArgs[5])
 	}
@@ -359,7 +359,7 @@ func TestSelectAll_RejectsZeroLimit(t *testing.T) {
 
 // --- ValidName / ValidCredentialsRef ----------------------------------
 
-// execDB — fakeDB-вариант с управляемым результатом Exec (для Delete-тестов).
+// execDB is a fakeDB variant with controlled Exec result for Delete tests.
 type execDB struct {
 	tag pgconn.CommandTag
 	err error
@@ -437,8 +437,8 @@ func TestValidCredentialsRef(t *testing.T) {
 	}
 }
 
-// TestValidFQDNSuffix — форма fqdn_suffix (self-onboard Вариант T): DNS-labels
-// через точку, без ведущей/замыкающей точки и underscore.
+// TestValidFQDNSuffix covers fqdn_suffix form (self-onboard option T): DNS labels
+// separated by dots, without leading/trailing dot or underscore.
 func TestValidFQDNSuffix(t *testing.T) {
 	good := []string{"clv3", "vm.clv3", "fedorovstepan2-dev.vm.xc.clv3", "a.b.c"}
 	bad := []string{"", ".clv3", "clv3.", "vm..clv3", "with_underscore.clv3", "UPPER.clv3", "-lead.clv3"}
@@ -454,8 +454,8 @@ func TestValidFQDNSuffix(t *testing.T) {
 	}
 }
 
-// TestInsert_FQDNSuffix — Insert прокидывает fqdn_suffix в args[5] и реджектит
-// невалидный суффикс до round-trip-а (self-onboard Вариант T).
+// TestInsert_FQDNSuffix verifies that Insert passes fqdn_suffix as args[5] and
+// rejects an invalid suffix before the round trip (self-onboard option T).
 func TestInsert_FQDNSuffix(t *testing.T) {
 	t.Run("valid suffix passed as args[5]", func(t *testing.T) {
 		f := &fakeDB{queryRowFunc: func(_ string) pgx.Row { return staticRow{values: []any{time.Now()}} }}
