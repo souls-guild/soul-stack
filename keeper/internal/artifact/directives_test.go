@@ -23,7 +23,7 @@ func requireRedisExamples(t *testing.T) string {
 		t.Fatalf("filepath.Abs: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, essenceDefaultFile)); err != nil {
-		t.Skipf("examples/service/redis/essence/_default.yaml недоступен (%v); guard пропущен", err)
+		t.Skipf("examples/service/redis/essence/_default.yaml unavailable (%v); guard skipped", err)
 	}
 	return root
 }
@@ -44,26 +44,26 @@ func TestLoadDirectiveCatalog_FullRealCatalog(t *testing.T) {
 			got = append(got, s)
 		}
 		sort.Strings(got)
-		t.Fatalf("серий в каталоге = %d %v, want %d %v", len(cat), got, len(wantSeries), wantSeries)
+		t.Fatalf("series in catalog = %d %v, want %d %v", len(cat), got, len(wantSeries), wantSeries)
 	}
 	for _, s := range wantSeries {
 		if _, ok := cat[s]; !ok {
-			t.Errorf("серия %q отсутствует в каталоге", s)
+			t.Errorf("series %q is missing from catalog", s)
 		}
 	}
 
 	// A known directive is present in 8.2; its typo variant is not (a guard on
 	// the generator).
 	if !containsStr(cat["8.2"], "maxmemory") {
-		t.Errorf("директива maxmemory отсутствует в серии 8.2")
+		t.Errorf("directive maxmemory is missing from series 8.2")
 	}
 	if containsStr(cat["8.2"], "maxmemoyr") {
-		t.Errorf("опечатка maxmemoyr просочилась в серию 8.2")
+		t.Errorf("typo maxmemoyr leaked into series 8.2")
 	}
 	// Every series is sorted.
 	for s, names := range cat {
 		if !sort.StringsAreSorted(names) {
-			t.Errorf("серия %q не отсортирована", s)
+			t.Errorf("series %q is not sorted", s)
 		}
 	}
 }
@@ -84,10 +84,10 @@ func TestLoadDirectiveCatalog_VersionNarrows(t *testing.T) {
 		t.Fatalf("LoadDirectiveCatalog(8.2.2): %v", err)
 	}
 	if len(v82) != 1 || v82["8.2"] == nil {
-		t.Fatalf("version=8.2.2 → %v, want ровно {8.2}", keysOf(v82))
+		t.Fatalf("version=8.2.2 -> %v, want exactly {8.2}", keysOf(v82))
 	}
 	if !containsStr(v82["8.2"], "maxmemory") {
-		t.Errorf("maxmemory отсутствует в сужении 8.2")
+		t.Errorf("maxmemory is missing from 8.2 narrowing")
 	}
 
 	// 6.2.21 → exactly series 6.2.
@@ -96,17 +96,17 @@ func TestLoadDirectiveCatalog_VersionNarrows(t *testing.T) {
 		t.Fatalf("LoadDirectiveCatalog(6.2.21): %v", err)
 	}
 	if len(v62) != 1 || v62["6.2"] == nil {
-		t.Fatalf("version=6.2.21 → %v, want ровно {6.2}", keysOf(v62))
+		t.Fatalf("version=6.2.21 -> %v, want exactly {6.2}", keysOf(v62))
 	}
 
 	// A directive present in 8.2 but absent from 6.2 is missing from the 6.2
 	// narrowing.
 	only82 := firstOnlyIn(full["8.2"], full["6.2"])
 	if only82 == "" {
-		t.Skip("не нашлось 8.2-only директивы для cross-version-проверки")
+		t.Skip("no 8.2-only directive found for cross-version check")
 	}
 	if containsStr(v62["6.2"], only82) {
-		t.Errorf("8.2-only директива %q протекла в сужение 6.2", only82)
+		t.Errorf("8.2-only directive %q leaked into 6.2 narrowing", only82)
 	}
 }
 
@@ -122,10 +122,10 @@ func TestLoadDirectiveCatalog_NoCatalog(t *testing.T) {
 		t.Fatalf("LoadDirectiveCatalog: %v", err)
 	}
 	if cat == nil {
-		t.Fatalf("каталог nil, want непустой пустой map")
+		t.Fatalf("catalog is nil, want non-nil empty map")
 	}
 	if len(cat) != 0 {
-		t.Errorf("каталог %v, want пустой", keysOf(cat))
+		t.Errorf("catalog %v, want empty", keysOf(cat))
 	}
 
 	// (b) essence file is absent entirely → also an empty catalog, no error.
@@ -135,7 +135,7 @@ func TestLoadDirectiveCatalog_NoCatalog(t *testing.T) {
 		t.Fatalf("LoadDirectiveCatalog(no file): %v", err)
 	}
 	if cat2 == nil || len(cat2) != 0 {
-		t.Errorf("каталог без essence-файла = %v, want пустой non-nil", cat2)
+		t.Errorf("catalog without essence file = %v, want empty non-nil", cat2)
 	}
 }
 
@@ -151,7 +151,7 @@ func TestLoadDirectiveCatalog_SortsNames(t *testing.T) {
 	}
 	want := []string{"alpha", "maxmemory", "zebra"}
 	if !equalStr(cat["8.2"], want) {
-		t.Errorf("8.2 = %v, want отсортированный %v", cat["8.2"], want)
+		t.Errorf("8.2 = %v, want sorted %v", cat["8.2"], want)
 	}
 }
 
@@ -165,21 +165,21 @@ func TestFilterDirectivesByVersion(t *testing.T) {
 	}
 	// version="" → the whole catalog (the same map).
 	if got := FilterDirectivesByVersion(cat, ""); len(got) != 3 {
-		t.Errorf("version='' → %d серий, want 3", len(got))
+		t.Errorf("version='' -> %d series, want 3", len(got))
 	}
 	// A distro pin with an epoch prefix matches the series.
 	if got := FilterDirectivesByVersion(cat, "5:7.4.1-1~deb12u7"); len(got) != 1 || got["7.4"] == nil {
-		t.Errorf("epoch-пин 5:7.4.1 → %v, want {7.4}", keysOf(got))
+		t.Errorf("epoch pin 5:7.4.1 -> %v, want {7.4}", keysOf(got))
 	}
 	// 7.4 does not catch a 7.04-like series (the series boundary is the
 	// trailing dot).
 	if got := FilterDirectivesByVersion(cat, "7.42.0"); len(got) != 0 {
-		t.Errorf("7.42.0 → %v, want пусто (7.4 не матчит 7.42)", keysOf(got))
+		t.Errorf("7.42.0 -> %v, want empty (7.4 does not match 7.42)", keysOf(got))
 	}
 	// An unknown version → an empty non-nil map (assert-skip semantics).
 	got := FilterDirectivesByVersion(cat, "9.9.9")
 	if got == nil || len(got) != 0 {
-		t.Errorf("9.9.9 → %v, want пустой non-nil", got)
+		t.Errorf("9.9.9 -> %v, want empty non-nil", got)
 	}
 }
 
@@ -202,12 +202,12 @@ func TestListScenarios_RedisSettingsHasDirectivesAnnotation(t *testing.T) {
 	for _, name := range []string{"create", "create_from_souls", "update_config"} {
 		sc, ok := byName[name]
 		if !ok {
-			t.Errorf("сценарий %q не найден в listing-е", name)
+			t.Errorf("scenario %q not found in listing", name)
 			continue
 		}
 		rs, ok := sc.InputSchema["redis_settings"].(map[string]any)
 		if !ok {
-			t.Errorf("%s: redis_settings отсутствует/не map в input_schema", name)
+			t.Errorf("%s: redis_settings missing/not a map in input_schema", name)
 			continue
 		}
 		if got := rs["x-directives"]; got != "redis" {

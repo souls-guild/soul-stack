@@ -41,7 +41,7 @@ func TestListDependencies_ReadsManifest(t *testing.T) {
 		t.Errorf("Modules = %+v", deps.Modules)
 	}
 	if deps.Modules[0].Git != "" {
-		t.Errorf("Modules[0].Git должен быть пуст (override запрещён для modules): %q", deps.Modules[0].Git)
+		t.Errorf("Modules[0].Git should be empty (override is forbidden for modules): %q", deps.Modules[0].Git)
 	}
 }
 
@@ -56,10 +56,10 @@ func TestListDependencies_NoBlocks(t *testing.T) {
 		t.Fatalf("ListDependencies: %v", err)
 	}
 	if deps.Destiny == nil || len(deps.Destiny) != 0 {
-		t.Errorf("Destiny = %+v, ожидался непустой non-nil слайс длины 0", deps.Destiny)
+		t.Errorf("Destiny = %+v, want non-nil empty slice", deps.Destiny)
 	}
 	if deps.Modules == nil || len(deps.Modules) != 0 {
-		t.Errorf("Modules = %+v, ожидался непустой non-nil слайс длины 0", deps.Modules)
+		t.Errorf("Modules = %+v, want non-nil empty slice", deps.Modules)
 	}
 }
 
@@ -67,7 +67,7 @@ func TestListDependencies_NoBlocks(t *testing.T) {
 func TestListDependencies_MissingManifest(t *testing.T) {
 	root := t.TempDir()
 	if _, err := ListDependencies(root, discardLogger()); err == nil {
-		t.Fatalf("ожидалась ошибка при отсутствии service.yml")
+		t.Fatalf("want error when service.yml is missing")
 	}
 }
 
@@ -77,6 +77,6 @@ func TestListDependencies_BrokenManifest(t *testing.T) {
 	root := t.TempDir()
 	writeServiceManifest(t, root, "name: 123\nstate_schema_version: oops\n")
 	if _, err := ListDependencies(root, discardLogger()); err == nil {
-		t.Fatalf("ожидалась ошибка при невалидном service.yml")
+		t.Fatalf("want error for invalid service.yml")
 	}
 }

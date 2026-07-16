@@ -43,19 +43,19 @@ func TestValidateGitScheme_FileRequiresFlag(t *testing.T) {
 
 	t.Setenv(allowFileReposEnv, "")
 	if err := validateGitScheme(url); err == nil {
-		t.Fatalf("file:// без флага: ожидалась ошибка")
+		t.Fatalf("file:// without flag: want error")
 	} else if !errors.Is(err, ErrUnsupportedGitScheme) {
-		t.Fatalf("file:// без флага: err = %v, want ErrUnsupportedGitScheme", err)
+		t.Fatalf("file:// without flag: err = %v, want ErrUnsupportedGitScheme", err)
 	}
 
 	t.Setenv(allowFileReposEnv, "1")
 	if err := validateGitScheme(url); err != nil {
-		t.Fatalf("file:// с флагом=1: err = %v, want nil", err)
+		t.Fatalf("file:// with flag=1: err = %v, want nil", err)
 	}
 
 	t.Setenv(allowFileReposEnv, "0")
 	if err := validateGitScheme(url); err == nil {
-		t.Fatalf("file:// с флагом=0: ожидалась ошибка")
+		t.Fatalf("file:// with flag=0: want error")
 	}
 }
 
@@ -68,9 +68,9 @@ func TestLoad_FileRejectedWithoutFlag(t *testing.T) {
 	t.Setenv(allowFileReposEnv, "")
 	_, err := loader.Load(t.Context(), ServiceRef{Name: "web-app", Git: tr.fileURL()})
 	if err == nil {
-		t.Fatalf("Load с file:// без флага: ожидалась ошибка")
+		t.Fatalf("Load with file:// without flag: want error")
 	}
 	if !errors.Is(err, ErrUnsupportedGitScheme) {
-		t.Fatalf("Load с file:// без флага: err = %v, want ErrUnsupportedGitScheme", err)
+		t.Fatalf("Load with file:// without flag: err = %v, want ErrUnsupportedGitScheme", err)
 	}
 }

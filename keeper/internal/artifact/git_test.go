@@ -20,10 +20,10 @@ func TestOpenOrClone_HealsBrokenWorkClone(t *testing.T) {
 
 	// Broken clone: initialize a repository without an origin remote.
 	if _, err := git.PlainInit(workDir, false); err != nil {
-		t.Fatalf("PlainInit битого клона: %v", err)
+		t.Fatalf("PlainInit for broken clone: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(workDir, ".git")); err != nil {
-		t.Fatalf("предусловие: .git не создан: %v", err)
+		t.Fatalf("precondition: .git was not created: %v", err)
 	}
 
 	repo, err := openOrClone(context.Background(), workDir, tr.fileURL(), nil)
@@ -31,10 +31,10 @@ func TestOpenOrClone_HealsBrokenWorkClone(t *testing.T) {
 		t.Fatalf("openOrClone: %v", err)
 	}
 	if _, rerr := repo.Remote("origin"); rerr != nil {
-		t.Fatalf("origin-remote не восстановлен после self-heal: %v", rerr)
+		t.Fatalf("origin remote was not restored after self-heal: %v", rerr)
 	}
 	if err := fetch(context.Background(), repo, nil); err != nil {
-		t.Fatalf("fetch после self-heal: %v", err)
+		t.Fatalf("fetch after self-heal: %v", err)
 	}
 }
 
@@ -51,7 +51,7 @@ func TestOpenOrClone_KeepsHealthyClone(t *testing.T) {
 		t.Fatalf("openOrClone #1: %v", err)
 	}
 	if _, rerr := first.Remote("origin"); rerr != nil {
-		t.Fatalf("предусловие: первый клон без origin: %v", rerr)
+		t.Fatalf("precondition: first clone without origin: %v", rerr)
 	}
 	gitInfo1, err := os.Stat(filepath.Join(workDir, ".git"))
 	if err != nil {
@@ -66,6 +66,6 @@ func TestOpenOrClone_KeepsHealthyClone(t *testing.T) {
 		t.Fatalf("stat .git #2: %v", err)
 	}
 	if !gitInfo1.ModTime().Equal(gitInfo2.ModTime()) {
-		t.Fatalf("здоровый клон пересоздан: .git modtime изменился (%v != %v)", gitInfo1.ModTime(), gitInfo2.ModTime())
+		t.Fatalf("healthy clone was recreated: .git modtime changed (%v != %v)", gitInfo1.ModTime(), gitInfo2.ModTime())
 	}
 }

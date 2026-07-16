@@ -7,16 +7,15 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 )
 
-// TestListRefs_LocalRepo прогоняет ListRefs против локального file://-репо
-// (testRepo даёт правильный init + main-branch + теги). Покрывает три
-// инварианта:
+// TestListRefs_LocalRepo runs ListRefs against a local file:// repo (testRepo
+// provides correct init + main branch + tags). It covers three invariants:
 //
-//   - branches приходят и помечают main как is_default (HEAD-symref);
-//   - tags приходят с правильными commit-hash-ами;
-//   - tags идут перед branches в результирующем слайсе.
+//   - branches arrive and mark main as is_default (HEAD symref);
+//   - tags arrive with correct commit hashes;
+//   - tags precede branches in the resulting slice.
 func TestListRefs_LocalRepo(t *testing.T) {
 	tr := newTestRepo(t)
-	// initial-commit уже есть; добавим коммит и теги поверх него.
+	// Initial commit already exists; add a commit and tags on top.
 	tr.writeFile("VERSION", "1.0\n")
 	v1head := tr.commit("v1-base")
 	tr.tag("v1.0.0")
@@ -29,58 +28,58 @@ func TestListRefs_LocalRepo(t *testing.T) {
 		t.Fatalf("ListRefs: %v", err)
 	}
 	if len(refs) < 3 {
-		t.Fatalf("ожидалось >= 3 ref-а (2 тега + main), получено %d: %+v", len(refs), refs)
+		t.Fatalf("want >= 3 refs (2 tags + main), got %d: %+v", len(refs), refs)
 	}
 
-	// Tags — первыми, semver-desc: v2.0.0 перед v1.0.0.
+	// Tags first, semver-desc: v2.0.0 before v1.0.0.
 	if refs[0].Name != "v2.0.0" || refs[0].Type != GitRefTypeTag {
-		t.Errorf("первая запись должна быть tag v2.0.0, получено %+v", refs[0])
+		t.Errorf("first entry should be tag v2.0.0, got %+v", refs[0])
 	}
 	if refs[1].Name != "v1.0.0" || refs[1].Type != GitRefTypeTag {
-		t.Errorf("вторая запись должна быть tag v1.0.0, получено %+v", refs[1])
+		t.Errorf("second entry should be tag v1.0.0, got %+v", refs[1])
 	}
 	if refs[1].Commit != v1head {
-		t.Errorf("tag v1.0.0 указывает на %s, ожидалось %s", refs[1].Commit, v1head)
+		t.Errorf("tag v1.0.0 points to %s, want %s", refs[1].Commit, v1head)
 	}
 
-	// main — после тегов, IsDefault=true (HEAD-symref в file:// тоже виден go-git).
+	// main after tags, IsDefault=true (HEAD symref in file:// is visible to go-git too).
 	var mainFound bool
 	for _, r := range refs {
 		if r.Name == "main" && r.Type == GitRefTypeBranch {
 			mainFound = true
 			if !r.IsDefault {
-				t.Errorf("main branch не помечен is_default: %+v", r)
+				t.Errorf("main branch is not marked is_default: %+v", r)
 			}
 			break
 		}
 	}
 	if !mainFound {
-		t.Fatalf("main branch не найден среди refs: %+v", refs)
+		t.Fatalf("main branch not found among refs: %+v", refs)
 	}
 }
 
-// TestListRefs_EmptyURL — sanity-check на ранний возврат без сетевых вызовов.
+// TestListRefs_EmptyURL sanity-checks early return without network calls.
 func TestListRefs_EmptyURL(t *testing.T) {
 	if _, err := ListRefs(context.Background(), ""); err == nil {
-		t.Fatalf("ожидалась ошибка на пустой gitURL")
+		t.Fatalf("want error for empty gitURL")
 	}
 }
 
-// TestListRefs_UnsupportedScheme — http:// не в allowlist-е.
+// TestListRefs_UnsupportedScheme verifies that http:// is not in the allowlist.
 func TestListRefs_UnsupportedScheme(t *testing.T) {
-	t.Setenv(allowFileReposEnv, "0") // file:// тоже выключим, чтобы http не проскочил
+	t.Setenv(allowFileReposEnv, "0") // disable file:// too so http cannot slip through
 	if _, err := ListRefs(context.Background(), "http://example.com/repo.git"); err == nil {
-		t.Fatalf("ожидалась ошибка на http://")
+		t.Fatalf("want error for http://")
 	}
 }
 
-// TestClassifyRefs_Sorting проверяет чистую функцию-сортировщик без сети.
+// TestClassifyRefs_Sorting verifies the pure sorting function without network.
 //
-// Покрывает:
-//   - semver-desc для тегов с pre-release; не-semver идёт после semver-валидных;
-//   - peeled-форма annotated-тега подменяет голый sha тег-объекта на commit;
-//   - default-branch первым; остальные ветки lex-asc;
-//   - fallback main/master, если HEAD-symref не пришёл.
+// Covers:
+//   - semver-desc for tags with pre-release; non-semver goes after valid semver;
+//   - peeled form of annotated tag replaces raw tag-object sha with commit;
+//   - default branch first; other branches lex-asc;
+//   - main/master fallback if HEAD symref did not arrive.
 func TestClassifyRefs_Sorting(t *testing.T) {
 	const (
 		commitA = "1111111111111111111111111111111111111111"
@@ -104,16 +103,16 @@ func TestClassifyRefs_Sorting(t *testing.T) {
 
 	got := classifyRefs(in)
 
-	// Ожидаемый порядок:
+	// Expected order:
 	//   tag v2.0.0  (release > rc)
 	//   tag v2.0.0-rc.1
 	//   tag v1.0.0
-	//   tag release-old (не-semver, идёт после semver)
+	//   tag release-old (non-semver, after semver)
 	//   branch main (default)
 	//   branch develop
 	//   branch feature/x
 	want := []GitRef{
-		{Name: "v2.0.0", Type: GitRefTypeTag, Commit: commitB}, // peeled подменил sha
+		{Name: "v2.0.0", Type: GitRefTypeTag, Commit: commitB}, // peeled replaced sha
 		{Name: "v2.0.0-rc.1", Type: GitRefTypeTag, Commit: commitC},
 		{Name: "v1.0.0", Type: GitRefTypeTag, Commit: commitA},
 		{Name: "release-old", Type: GitRefTypeTag, Commit: commitD},
@@ -131,8 +130,9 @@ func TestClassifyRefs_Sorting(t *testing.T) {
 	}
 }
 
-// TestClassifyRefs_FallbackDefault — без HEAD-symref main помечается через
-// fallback (старые серверы без HEAD-листинга / некоторые file://-форматы).
+// TestClassifyRefs_FallbackDefault verifies that without HEAD symref, main is
+// marked through fallback (old servers without HEAD listing / some file://
+// formats).
 func TestClassifyRefs_FallbackDefault(t *testing.T) {
 	in := []*plumbing.Reference{
 		plumbing.NewHashReference("refs/heads/develop", plumbing.NewHash("1111111111111111111111111111111111111111")),
@@ -143,11 +143,11 @@ func TestClassifyRefs_FallbackDefault(t *testing.T) {
 		t.Fatalf("len = %d, want 2", len(got))
 	}
 	if got[0].Name != "main" || !got[0].IsDefault {
-		t.Errorf("main должен быть первым с IsDefault=true, got %+v", got[0])
+		t.Errorf("main should be first with IsDefault=true, got %+v", got[0])
 	}
 }
 
-// TestClassifyRefs_FallbackMaster — fallback берёт master, если main нет.
+// TestClassifyRefs_FallbackMaster verifies that fallback takes master if main is absent.
 func TestClassifyRefs_FallbackMaster(t *testing.T) {
 	in := []*plumbing.Reference{
 		plumbing.NewHashReference("refs/heads/feat", plumbing.NewHash("1111111111111111111111111111111111111111")),
@@ -155,12 +155,12 @@ func TestClassifyRefs_FallbackMaster(t *testing.T) {
 	}
 	got := classifyRefs(in)
 	if got[0].Name != "master" || !got[0].IsDefault {
-		t.Errorf("master должен быть первым с IsDefault=true, got %+v", got[0])
+		t.Errorf("master should be first with IsDefault=true, got %+v", got[0])
 	}
 }
 
-// TestParseSemver проверяет граничные случаи парсера: v-prefix, pre-release,
-// невалидные строки уходят в not-ok.
+// TestParseSemver verifies parser edge cases: v-prefix, pre-release, invalid
+// strings go to not-ok.
 func TestParseSemver(t *testing.T) {
 	cases := []struct {
 		in    string

@@ -41,22 +41,22 @@ func TestListScenarios_ResolvesBareTypeRef(t *testing.T) {
 	}
 	target, ok := got[0].InputSchema["target"].(map[string]any)
 	if !ok {
-		t.Fatalf("target не map: %#v", got[0].InputSchema["target"])
+		t.Fatalf("target is not a map: %#v", got[0].InputSchema["target"])
 	}
 	// $type is replaced by the type body.
 	if _, stillRef := target[typeRefKey]; stillRef {
-		t.Fatalf("$type должен быть резолвнут, остался сырым: %#v", target)
+		t.Fatalf("$type should be resolved, still raw: %#v", target)
 	}
 	if target["type"] != "object" {
-		t.Fatalf("target.type = %v, ожидался object", target["type"])
+		t.Fatalf("target.type = %v, want object", target["type"])
 	}
 	props, ok := target["properties"].(map[string]any)
 	if !ok || props["host"] == nil {
-		t.Fatalf("target.properties.host отсутствует: %#v", target)
+		t.Fatalf("target.properties.host is missing: %#v", target)
 	}
 	// x-type annotation is present.
 	if target[typeAnnotationKey] != "Endpoint" {
-		t.Fatalf("x-type = %v, ожидался Endpoint", target[typeAnnotationKey])
+		t.Fatalf("x-type = %v, want Endpoint", target[typeAnnotationKey])
 	}
 }
 
@@ -84,13 +84,13 @@ func TestListScenarios_ResolvesItemsTypeRef(t *testing.T) {
 	nodes := got[0].InputSchema["nodes"].(map[string]any)
 	items, ok := nodes["items"].(map[string]any)
 	if !ok {
-		t.Fatalf("nodes.items не map: %#v", nodes["items"])
+		t.Fatalf("nodes.items is not a map: %#v", nodes["items"])
 	}
 	if _, stillRef := items[typeRefKey]; stillRef {
-		t.Fatalf("items.$type должен быть резолвнут: %#v", items)
+		t.Fatalf("items.$type should be resolved: %#v", items)
 	}
 	if items["type"] != "object" || items[typeAnnotationKey] != "Node" {
-		t.Fatalf("items должен нести форму Node + x-type=Node: %#v", items)
+		t.Fatalf("items should carry Node shape + x-type=Node: %#v", items)
 	}
 }
 
@@ -126,13 +126,13 @@ func TestListScenarios_ResolvesNestedTypeRef(t *testing.T) {
 	props := cluster["properties"].(map[string]any)
 	primary, ok := props["primary"].(map[string]any)
 	if !ok {
-		t.Fatalf("cluster.properties.primary не map: %#v", props["primary"])
+		t.Fatalf("cluster.properties.primary is not a map: %#v", props["primary"])
 	}
 	if _, stillRef := primary[typeRefKey]; stillRef {
-		t.Fatalf("вложенный primary.$type должен быть резолвнут: %#v", primary)
+		t.Fatalf("nested primary.$type should be resolved: %#v", primary)
 	}
 	if primary[typeAnnotationKey] != "Endpoint" {
-		t.Fatalf("primary.x-type = %v, ожидался Endpoint", primary[typeAnnotationKey])
+		t.Fatalf("primary.x-type = %v, want Endpoint", primary[typeAnnotationKey])
 	}
 }
 
@@ -163,7 +163,7 @@ func TestListScenarios_CycleDoesNotHang(t *testing.T) {
 		t.Fatalf("ListScenarios: %v", err)
 	}
 	if got[0].InputSchema["root"] == nil {
-		t.Fatalf("root должен присутствовать (best-effort при цикле)")
+		t.Fatalf("root should be present (best-effort on cycle)")
 	}
 }
 
@@ -185,10 +185,10 @@ func TestListScenarios_UnknownTypeLeftRaw(t *testing.T) {
 	}
 	x := got[0].InputSchema["x"].(map[string]any)
 	if x[typeRefKey] != "Ghost" {
-		t.Fatalf("неизвестный тип — узел остаётся сырым с $type, got %#v", x)
+		t.Fatalf("unknown type - node remains raw with $type, got %#v", x)
 	}
 	if _, annotated := x[typeAnnotationKey]; annotated {
-		t.Fatalf("неизвестный тип не должен получить x-type: %#v", x)
+		t.Fatalf("unknown type should not get x-type: %#v", x)
 	}
 }
 
@@ -212,12 +212,12 @@ func TestListScenarios_NoTypesCatalog_BackCompat(t *testing.T) {
 	}
 	port := got[0].InputSchema["port"].(map[string]any)
 	if port["type"] != "integer" {
-		t.Fatalf("port должен пройти насквозь: %#v", port)
+		t.Fatalf("port should pass through unchanged: %#v", port)
 	}
 	opts := got[0].InputSchema["opts"].(map[string]any)
 	props := opts["properties"].(map[string]any)
 	if props["verbose"].(map[string]any)["type"] != "boolean" {
-		t.Fatalf("вложенный opts.verbose должен пройти насквозь: %#v", props)
+		t.Fatalf("nested opts.verbose should pass through unchanged: %#v", props)
 	}
 }
 
@@ -250,7 +250,7 @@ func TestListScenarios_SharedTypeIsolated(t *testing.T) {
 	b := got[0].InputSchema["b"].(map[string]any)
 	bItems := b["items"].(map[string]any)
 	if a[typeAnnotationKey] != "Endpoint" || bItems[typeAnnotationKey] != "Endpoint" {
-		t.Fatalf("оба использования Endpoint должны нести x-type=Endpoint: a=%#v b.items=%#v", a, bItems)
+		t.Fatalf("both Endpoint uses should carry x-type=Endpoint: a=%#v b.items=%#v", a, bItems)
 	}
 }
 
@@ -286,31 +286,31 @@ func TestListScenarios_TypeRefKeepsRequiredChildren(t *testing.T) {
 	}
 	user, ok := got[0].InputSchema["user"].(map[string]any)
 	if !ok {
-		t.Fatalf("user не map: %#v", got[0].InputSchema["user"])
+		t.Fatalf("user is not a map: %#v", got[0].InputSchema["user"])
 	}
 	// $type is resolved + x-type annotation.
 	if _, stillRef := user[typeRefKey]; stillRef {
-		t.Fatalf("$type должен быть резолвнут: %#v", user)
+		t.Fatalf("$type should be resolved: %#v", user)
 	}
 	if user[typeAnnotationKey] != "AclUser" {
-		t.Fatalf("x-type = %v, ожидался AclUser", user[typeAnnotationKey])
+		t.Fatalf("x-type = %v, want AclUser", user[typeAnnotationKey])
 	}
 	// object-level required array is NOT overwritten by the reference node's
 	// boolean true.
 	req, ok := user["required"].([]any)
 	if !ok {
-		t.Fatalf("required должен остаться массивом [name perms], got %#v (%T)", user["required"], user["required"])
+		t.Fatalf("required should remain array [name perms], got %#v (%T)", user["required"], user["required"])
 	}
 	if len(req) != 2 || req[0] != "name" || req[1] != "perms" {
-		t.Fatalf("required-массив искажён: %#v", req)
+		t.Fatalf("required array is distorted: %#v", req)
 	}
 	// the type's properties are preserved.
 	if _, ok := user["properties"].(map[string]any); !ok {
-		t.Fatalf("properties должны сохраниться: %#v", user)
+		t.Fatalf("properties should be preserved: %#v", user)
 	}
 	// the reference node's presentational description is carried over.
 	if user["description"] != "ACL user" {
-		t.Fatalf("description = %v, ожидался перенос с узла-ссылки", user["description"])
+		t.Fatalf("description = %v, want transfer from reference node", user["description"])
 	}
 }
 
@@ -345,13 +345,13 @@ func TestListScenarios_TypeRefCarriesXRequired(t *testing.T) {
 	user := got[0].InputSchema["user"].(map[string]any)
 	// x-required annotation is present and equals true.
 	if user[typeRequiredAnnotationKey] != true {
-		t.Fatalf("x-required = %v, ожидался true (field-level required узла-ссылки)", user[typeRequiredAnnotationKey])
+		t.Fatalf("x-required = %v, want true (field-level required from reference node)", user[typeRequiredAnnotationKey])
 	}
 	// the type's required-children array is NOT affected (coexists with
 	// x-required).
 	req, ok := user["required"].([]any)
 	if !ok || len(req) != 2 {
-		t.Fatalf("required должен остаться массивом [name perms], got %#v", user["required"])
+		t.Fatalf("required should remain array [name perms], got %#v", user["required"])
 	}
 }
 
@@ -384,11 +384,11 @@ func TestListScenarios_TypeRefNoXRequiredWhenAbsent(t *testing.T) {
 	}
 	user := got[0].InputSchema["user"].(map[string]any)
 	if _, has := user[typeRequiredAnnotationKey]; has {
-		t.Fatalf("bare-ref без required не должен нести x-required: %#v", user)
+		t.Fatalf("bare-ref without required should not carry x-required: %#v", user)
 	}
 	items := got[0].InputSchema["users"].(map[string]any)["items"].(map[string]any)
 	if _, has := items[typeRequiredAnnotationKey]; has {
-		t.Fatalf("items-ref не должен нести x-required: %#v", items)
+		t.Fatalf("items-ref should not carry x-required: %#v", items)
 	}
 }
 
@@ -416,9 +416,9 @@ func TestListScenarios_TypeRefCarriesRequiredWhen(t *testing.T) {
 	}
 	target := got[0].InputSchema["target"].(map[string]any)
 	if target["required_when"] != "input.mode == 'remote'" {
-		t.Fatalf("required_when узла-ссылки должен перенестись в DTO, got %v", target["required_when"])
+		t.Fatalf("required_when from reference node should transfer into DTO, got %v", target["required_when"])
 	}
 	if target[typeAnnotationKey] != "Endpoint" {
-		t.Fatalf("x-type = %v, ожидался Endpoint", target[typeAnnotationKey])
+		t.Fatalf("x-type = %v, want Endpoint", target[typeAnnotationKey])
 	}
 }

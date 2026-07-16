@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-// writeServiceManifest — хелпер: кладёт `service.yml` в корень тестового
-// serviceRoot. parallel с writeScenario.
+// writeServiceManifest is a helper: puts `service.yml` into the test
+// serviceRoot. Parallel with writeScenario.
 func writeServiceManifest(t *testing.T, root, body string) {
 	t.Helper()
 	p := filepath.Join(root, serviceManifestFile)
@@ -16,8 +16,8 @@ func writeServiceManifest(t *testing.T, root, body string) {
 	}
 }
 
-// writeMigration — хелпер: кладёт `migrations/<NNN>_to_<MMM>.yml` с пустым
-// телом (content не парсится — listing работает по metadata).
+// writeMigration is a helper: puts `migrations/<NNN>_to_<MMM>.yml` with an
+// empty body (content is not parsed; listing works from metadata).
 func writeMigration(t *testing.T, root, name, body string) {
 	t.Helper()
 	dir := filepath.Join(root, migrationsDir)
@@ -42,8 +42,8 @@ state_schema:
       type: integer
 `
 
-// TestListStateSchema_ReadsManifest — happy-path: версия + структура +
-// migrations присутствуют, в ответе всё на месте, сортировка по `to` ASC.
+// TestListStateSchema_ReadsManifest is the happy path: version + structure +
+// migrations are present, response contains everything, sorted by `to` ASC.
 func TestListStateSchema_ReadsManifest(t *testing.T) {
 	root := t.TempDir()
 	writeServiceManifest(t, root, validManifestV2)
@@ -58,7 +58,7 @@ func TestListStateSchema_ReadsManifest(t *testing.T) {
 		t.Errorf("Version = %d, want 2", info.Version)
 	}
 	if info.Schema == nil {
-		t.Fatal("Schema=nil, ожидалась декларация state_schema")
+		t.Fatal("Schema=nil, want state_schema declaration")
 	}
 	if got, ok := info.Schema["type"].(string); !ok || got != "object" {
 		t.Errorf("Schema.type = %v, want object", info.Schema["type"])
@@ -77,8 +77,9 @@ func TestListStateSchema_ReadsManifest(t *testing.T) {
 	}
 }
 
-// TestListStateSchema_NoMigrationsDir — каталога `migrations/` нет; должен
-// вернуться пустой список без ошибки (parity со ListScenarios для scenario/).
+// TestListStateSchema_NoMigrationsDir covers a missing `migrations/` directory;
+// it should return an empty list without error (parity with ListScenarios for
+// scenario/).
 func TestListStateSchema_NoMigrationsDir(t *testing.T) {
 	root := t.TempDir()
 	writeServiceManifest(t, root, validManifestV2)
@@ -88,19 +89,19 @@ func TestListStateSchema_NoMigrationsDir(t *testing.T) {
 		t.Fatalf("ListStateSchema: %v", err)
 	}
 	if info.Migrations == nil {
-		t.Errorf("Migrations должен быть пустым slice, не nil")
+		t.Errorf("Migrations should be an empty slice, not nil")
 	}
 	if len(info.Migrations) != 0 {
-		t.Errorf("ожидался пустой список, got %+v", info.Migrations)
+		t.Errorf("want empty list, got %+v", info.Migrations)
 	}
 }
 
-// TestListStateSchema_SortByToAsc — миграции отдаются отсортированными по `to`
-// (граф цепочки растёт), независимо от os.ReadDir-порядка.
+// TestListStateSchema_SortByToAsc returns migrations sorted by `to` (the chain
+// graph grows), regardless of os.ReadDir order.
 func TestListStateSchema_SortByToAsc(t *testing.T) {
 	root := t.TempDir()
 	writeServiceManifest(t, root, validManifestV2)
-	// Кладём в обратном порядке имён, чтобы убедиться, что сортировка реально работает.
+	// Put files in reverse name order to verify that sorting actually works.
 	writeMigration(t, root, "003_to_004.yml", "")
 	writeMigration(t, root, "001_to_002.yml", "")
 	writeMigration(t, root, "002_to_003.yml", "")
@@ -120,9 +121,9 @@ func TestListStateSchema_SortByToAsc(t *testing.T) {
 	}
 }
 
-// TestListStateSchema_IgnoresNonCanonicalFiles — файлы в `migrations/`, не
-// подпадающие под `<NNN>_to_<MMM>.yml`, должны игнорироваться (README, тестовый
-// subdir, неверный pattern).
+// TestListStateSchema_IgnoresNonCanonicalFiles verifies that files in
+// `migrations/` outside `<NNN>_to_<MMM>.yml` are ignored (README, test subdir,
+// invalid pattern).
 func TestListStateSchema_IgnoresNonCanonicalFiles(t *testing.T) {
 	root := t.TempDir()
 	writeServiceManifest(t, root, validManifestV2)
@@ -130,7 +131,7 @@ func TestListStateSchema_IgnoresNonCanonicalFiles(t *testing.T) {
 	writeMigration(t, root, "README.md", "docs")
 	writeMigration(t, root, "1_to_2.yml", "no leading zeros")
 	writeMigration(t, root, "001_to_002.yaml", "wrong ext")
-	// тестовый subdir миграции (docs/migrations.md: tests/<case>.yml внутри
+	// Test migration subdir (docs/migrations.md: tests/<case>.yml inside
 	// `migrations/<NNN_to_MMM>/`).
 	if err := os.MkdirAll(filepath.Join(root, migrationsDir, "001_to_002", "tests"), 0o755); err != nil {
 		t.Fatalf("MkdirAll tests: %v", err)
@@ -148,30 +149,30 @@ func TestListStateSchema_IgnoresNonCanonicalFiles(t *testing.T) {
 	}
 }
 
-// TestListStateSchema_MissingManifest — `service.yml` нет → error (битый
-// снапшот; caller отдаёт 502).
+// TestListStateSchema_MissingManifest covers missing `service.yml` -> error
+// (broken snapshot; caller returns 502).
 func TestListStateSchema_MissingManifest(t *testing.T) {
 	root := t.TempDir()
 	_, err := ListStateSchema(root, discardLogger())
 	if err == nil {
-		t.Fatalf("ожидалась ошибка при отсутствии service.yml")
+		t.Fatalf("want error when service.yml is missing")
 	}
 }
 
-// TestListStateSchema_BrokenManifest — невалидный YAML → error.
+// TestListStateSchema_BrokenManifest covers invalid YAML -> error.
 func TestListStateSchema_BrokenManifest(t *testing.T) {
 	root := t.TempDir()
 	writeServiceManifest(t, root, "{ this is: not valid: yaml :::\n")
 	_, err := ListStateSchema(root, discardLogger())
 	if err == nil {
-		t.Fatalf("ожидалась ошибка при невалидном service.yml")
+		t.Fatalf("want error for invalid service.yml")
 	}
 }
 
-// TestListStateSchema_NoStateSchemaField — manifest без `state_schema:` →
-// согласно нормативной валидации это ошибка (state_schema required в MVP).
-// Гарантирует, что мы не маскируем drift между UI-ответом и нормативной
-// схемой.
+// TestListStateSchema_NoStateSchemaField covers a manifest without
+// `state_schema:` -> normative validation treats it as an error (state_schema
+// required in MVP). It ensures we do not mask drift between the UI response and
+// the normative schema.
 func TestListStateSchema_NoStateSchemaField(t *testing.T) {
 	root := t.TempDir()
 	writeServiceManifest(t, root, `name: redis-cluster
@@ -179,6 +180,6 @@ state_schema_version: 1
 `)
 	_, err := ListStateSchema(root, discardLogger())
 	if err == nil {
-		t.Fatalf("ожидалась ошибка валидации (state_schema required)")
+		t.Fatalf("want validation error (state_schema required)")
 	}
 }

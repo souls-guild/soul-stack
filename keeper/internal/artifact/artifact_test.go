@@ -12,16 +12,16 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
-// TestMain включает SOUL_STACK_ALLOW_FILE_REPOS на всё время прогона пакета:
-// unit/integration-тесты грузят локальные file://-репозитории, которые в проде
-// запрещены scheme-allowlist-ом (security review L2). Тесты на сам allowlist
-// сохраняют/восстанавливают флаг локально через t.Setenv.
+// TestMain enables SOUL_STACK_ALLOW_FILE_REPOS for the whole package run:
+// unit/integration tests load local file:// repositories, which are forbidden
+// in prod by the scheme allowlist (security review L2). Tests for the allowlist
+// itself save/restore the flag locally through t.Setenv.
 func TestMain(m *testing.M) {
 	os.Setenv(allowFileReposEnv, "1")
 	os.Exit(m.Run())
 }
 
-// validManifest — минимальный валидный service.yml для тестовых репозиториев.
+// validManifest is the minimal valid service.yml for test repositories.
 const validManifest = `name: web-app
 state_schema_version: 1
 state_schema:
@@ -31,15 +31,15 @@ state_schema:
       type: integer
 `
 
-// testRepo — рабочая обёртка над локальным git-репозиторием для тестов.
+// testRepo is a working wrapper around a local git repository for tests.
 type testRepo struct {
 	t    *testing.T
 	dir  string
 	repo *git.Repository
 }
 
-// newTestRepo создаёт непустой (non-bare) git-репозиторий во временном каталоге
-// с одним начальным коммитом, содержащим service.yml.
+// newTestRepo creates a non-empty (non-bare) git repository in a temp directory
+// with one initial commit containing service.yml.
 func newTestRepo(t *testing.T) *testRepo {
 	t.Helper()
 	tr := &testRepo{t: t, dir: t.TempDir()}
@@ -49,10 +49,10 @@ func newTestRepo(t *testing.T) *testRepo {
 	return tr
 }
 
-// initRepo инициализирует git-репозиторий в tr.dir (для repo-обёрток, наполняемых
-// нестандартным набором файлов — например, destiny-репо в destiny_test.go).
-// Дефолтная ветка — `main` (`master` вне словаря Soul Stack); тесты ветки
-// резолвят `Ref: "main"`.
+// initRepo initializes a git repository in tr.dir (for repo wrappers populated
+// with a custom file set, for example a destiny repo in destiny_test.go).
+// Default branch is `main` (`master` is outside the Soul Stack vocabulary);
+// branch tests resolve `Ref: "main"`.
 func (tr *testRepo) initRepo() {
 	tr.t.Helper()
 	repo, err := git.PlainInitWithOptions(tr.dir, &git.PlainInitOptions{
@@ -64,7 +64,7 @@ func (tr *testRepo) initRepo() {
 	tr.repo = repo
 }
 
-// fileURL возвращает file://-URL репозитория для go-git.
+// fileURL returns the repository file:// URL for go-git.
 func (tr *testRepo) fileURL() string { return "file://" + tr.dir }
 
 func (tr *testRepo) writeFile(path, content string) {
@@ -78,7 +78,7 @@ func (tr *testRepo) writeFile(path, content string) {
 	}
 }
 
-// commit добавляет все изменения и создаёт коммит, возвращая его sha1.
+// commit adds all changes and creates a commit, returning its sha1.
 func (tr *testRepo) commit(msg string) string {
 	tr.t.Helper()
 	wt, err := tr.repo.Worktree()
@@ -97,7 +97,7 @@ func (tr *testRepo) commit(msg string) string {
 	return h.String()
 }
 
-// tag создаёт lightweight-тег на HEAD.
+// tag creates a lightweight tag on HEAD.
 func (tr *testRepo) tag(name string) {
 	tr.t.Helper()
 	head, err := tr.repo.Head()
@@ -136,14 +136,14 @@ func TestLoad_DefaultHEAD(t *testing.T) {
 		t.Fatalf("SHA1 = %s, want HEAD %s", art.SHA1, want)
 	}
 	if art.Manifest == nil || art.Manifest.Name != "web-app" {
-		t.Fatalf("manifest не распарсен корректно: %+v", art.Manifest)
+		t.Fatalf("manifest was not parsed correctly: %+v", art.Manifest)
 	}
 	if _, err := os.Stat(filepath.Join(art.LocalDir, "service.yml")); err != nil {
-		t.Fatalf("снапшот не содержит service.yml: %v", err)
+		t.Fatalf("snapshot does not contain service.yml: %v", err)
 	}
-	// Снапшот — чистое дерево без .git.
+	// Snapshot is a clean tree without .git.
 	if _, err := os.Stat(filepath.Join(art.LocalDir, ".git")); !os.IsNotExist(err) {
-		t.Fatalf(".git не должен попадать в снапшот, stat err = %v", err)
+		t.Fatalf(".git should not land in snapshot, stat err = %v", err)
 	}
 }
 
@@ -164,7 +164,7 @@ func TestLoad_Tag(t *testing.T) {
 		t.Fatalf("tag SHA1 = %s, want %s", art.SHA1, tagged)
 	}
 	if art.Manifest.Description != "" {
-		t.Fatalf("снапшот тега подхватил состояние после тега: desc=%q", art.Manifest.Description)
+		t.Fatalf("tag snapshot picked up state after tag: desc=%q", art.Manifest.Description)
 	}
 }
 
@@ -177,7 +177,7 @@ func TestLoad_BranchAdvanceRefetched(t *testing.T) {
 		t.Fatalf("Load #1: %v", err)
 	}
 
-	// Двигаем ветку main вперёд.
+	// Move branch main forward.
 	tr.writeFile("CHANGELOG", "advance\n")
 	newHead := tr.commit("advance")
 
@@ -186,10 +186,10 @@ func TestLoad_BranchAdvanceRefetched(t *testing.T) {
 		t.Fatalf("Load #2: %v", err)
 	}
 	if second.SHA1 == first.SHA1 {
-		t.Fatalf("ветка не перефетчена: оба Load вернули %s", first.SHA1)
+		t.Fatalf("branch was not refetched: both Load calls returned %s", first.SHA1)
 	}
 	if second.SHA1 != newHead {
-		t.Fatalf("второй Load = %s, want новый tip %s", second.SHA1, newHead)
+		t.Fatalf("second Load = %s, want new tip %s", second.SHA1, newHead)
 	}
 }
 
@@ -209,11 +209,11 @@ func TestLoad_SnapshotReuse(t *testing.T) {
 		t.Fatalf("Load #2: %v", err)
 	}
 	if a.LocalDir != b.LocalDir {
-		t.Fatalf("снапшот не переиспользован: %s != %s", a.LocalDir, b.LocalDir)
+		t.Fatalf("snapshot was not reused: %s != %s", a.LocalDir, b.LocalDir)
 	}
 	info2, _ := os.Stat(b.LocalDir)
 	if !info1.ModTime().Equal(info2.ModTime()) {
-		t.Fatalf("снапшот пересоздан (modtime изменился)")
+		t.Fatalf("snapshot was recreated (modtime changed)")
 	}
 }
 
@@ -232,7 +232,7 @@ func TestReadFile_ArbitraryFile(t *testing.T) {
 		t.Fatalf("ReadFile: %v", err)
 	}
 	if string(data) != "on: keeper\n" {
-		t.Fatalf("содержимое = %q", string(data))
+		t.Fatalf("content = %q", string(data))
 	}
 }
 
@@ -243,22 +243,22 @@ func TestReadFile_PathTraversalBlocked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	// securejoin клампит `..` к корню снапшота → попытка выйти наружу не читает
-	// внешний файл, а упирается в несуществующий путь внутри снапшота.
+	// securejoin clamps `..` to the snapshot root: an escape attempt does not
+	// read the external file and instead hits a nonexistent path inside snapshot.
 	if _, err := loader.ReadFile(art, "../../../../etc/passwd"); err == nil {
-		t.Fatalf("path traversal не заблокирован")
+		t.Fatalf("path traversal was not blocked")
 	}
 }
 
 func TestLoad_InvalidManifestRejected(t *testing.T) {
 	tr := newTestRepo(t)
-	tr.writeFile("service.yml", "name: web-app\n") // нет state_schema_version/state_schema
+	tr.writeFile("service.yml", "name: web-app\n") // no state_schema_version/state_schema
 	tr.commit("break manifest")
 
 	loader := newLoader(t)
 	_, err := loader.Load(context.Background(), ServiceRef{Name: "web-app", Git: tr.fileURL()})
 	if err == nil {
-		t.Fatalf("ожидалась ошибка на невалидный service.yml")
+		t.Fatalf("want error for invalid service.yml")
 	}
 }
 
@@ -267,14 +267,14 @@ func TestLoad_UnresolvableRef(t *testing.T) {
 	loader := newLoader(t)
 	_, err := loader.Load(context.Background(), ServiceRef{Name: "web-app", Git: tr.fileURL(), Ref: "no-such-ref"})
 	if err == nil {
-		t.Fatalf("ожидалась ошибка на несуществующий ref")
+		t.Fatalf("want error for nonexistent ref")
 	}
 }
 
 func TestLoad_EmptyGitURL(t *testing.T) {
 	loader := newLoader(t)
 	if _, err := loader.Load(context.Background(), ServiceRef{Name: "web-app"}); err == nil {
-		t.Fatalf("ожидалась ошибка на пустой Git URL")
+		t.Fatalf("want error for empty Git URL")
 	}
 }
 
@@ -282,6 +282,6 @@ func TestLoad_NonKebabNameRejected(t *testing.T) {
 	tr := newTestRepo(t)
 	loader := newLoader(t)
 	if _, err := loader.Load(context.Background(), ServiceRef{Name: "../escape", Git: tr.fileURL()}); err == nil {
-		t.Fatalf("ожидалась ошибка на не-kebab имя сервиса")
+		t.Fatalf("want error for non-kebab service name")
 	}
 }

@@ -10,8 +10,8 @@ import (
 	"testing"
 )
 
-// writeScenario — хелпер для подкладывания scenario/<name>/main.yml внутрь
-// тестового serviceRoot. Возвращает абсолютный путь к main.yml.
+// writeScenario is a helper for placing scenario/<name>/main.yml inside the
+// test serviceRoot. It returns the absolute path to main.yml.
 func writeScenario(t *testing.T, root, name, body string) string {
 	t.Helper()
 	dir := filepath.Join(root, scenarioDir, name)
@@ -25,8 +25,9 @@ func writeScenario(t *testing.T, root, name, body string) string {
 	return p
 }
 
-// writeUpgrade — хелпер для подкладывания upgrade/<slug>/main.yml внутрь тестового
-// serviceRoot (зеркало writeScenario для второго канала дискавери, ADR-0068).
+// writeUpgrade is a helper for placing upgrade/<slug>/main.yml inside the test
+// serviceRoot (mirror of writeScenario for the second discovery channel,
+// ADR-0068).
 func writeUpgrade(t *testing.T, root, slug, body string) string {
 	t.Helper()
 	dir := filepath.Join(root, upgradeDir, slug)
@@ -44,12 +45,12 @@ func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// TestListScenarios_ReadsAllValid — три валидных scenario, сортировка по имени,
-// description / input_schema / tags вычитываются.
+// TestListScenarios_ReadsAllValid covers three valid scenarios, name sorting,
+// and reading description / input_schema / tags.
 func TestListScenarios_ReadsAllValid(t *testing.T) {
 	root := t.TempDir()
 
-	writeScenario(t, root, "create", `description: Создаёт incarnation
+	writeScenario(t, root, "create", `description: Creates incarnation
 input_schema:
   shards:
     type: integer
@@ -57,12 +58,12 @@ input_schema:
     type: integer
 tags: [create]
 `)
-	writeScenario(t, root, "add_replicas", `description: Добавить реплики
+	writeScenario(t, root, "add_replicas", `description: Add replicas
 input:
   count:
     type: integer
 `)
-	writeScenario(t, root, "rolling_restart", `description: Перезапуск по очереди
+	writeScenario(t, root, "rolling_restart", `description: Rolling restart
 `)
 
 	got, err := ListScenarios(root, discardLogger())
@@ -72,16 +73,16 @@ input:
 	if len(got) != 3 {
 		t.Fatalf("len = %d, want 3; got = %+v", len(got), got)
 	}
-	// Сортировка по имени (alphabetical asc): add_replicas, create, rolling_restart.
+	// Name sorting (alphabetical asc): add_replicas, create, rolling_restart.
 	wantOrder := []string{"add_replicas", "create", "rolling_restart"}
 	for i, n := range wantOrder {
 		if got[i].Name != n {
 			t.Errorf("got[%d].Name = %q, want %q", i, got[i].Name, n)
 		}
 	}
-	// create: input_schema подхвачен (приоритет input_schema над input), tags заполнен.
+	// create: input_schema is picked up (input_schema takes precedence over input), tags are filled.
 	create := got[1]
-	if create.Description != "Создаёт incarnation" {
+	if create.Description != "Creates incarnation" {
 		t.Errorf("create.Description = %q", create.Description)
 	}
 	if len(create.InputSchema) != 2 {
@@ -93,24 +94,24 @@ input:
 	if create.Path != "scenario/create/main.yml" {
 		t.Errorf("create.Path = %q", create.Path)
 	}
-	// add_replicas: top-level `input` (без _schema) — должен попасть в InputSchema.
+	// add_replicas: top-level `input` (without _schema) should land in InputSchema.
 	add := got[0]
 	if len(add.InputSchema) != 1 {
-		t.Errorf("add_replicas.InputSchema len = %d (input fallback не сработал)", len(add.InputSchema))
+		t.Errorf("add_replicas.InputSchema len = %d (input fallback did not work)", len(add.InputSchema))
 	}
-	// rolling_restart: только description, остальное — пустое.
+	// rolling_restart: description only, everything else is empty.
 	rr := got[2]
 	if rr.Description == "" {
-		t.Errorf("rolling_restart.Description пустое")
+		t.Errorf("rolling_restart.Description is empty")
 	}
 	if rr.InputSchema != nil {
-		t.Errorf("rolling_restart.InputSchema должен быть nil, got %+v", rr.InputSchema)
+		t.Errorf("rolling_restart.InputSchema should be nil, got %+v", rr.InputSchema)
 	}
 }
 
-// TestListScenarios_PreferInputSchemaOverInput — если заданы оба поля,
-// input_schema побеждает (это нормативное имя; `input` — fallback для свежих
-// примеров).
+// TestListScenarios_PreferInputSchemaOverInput verifies that when both fields
+// are set, input_schema wins (it is the normative name; `input` is fallback for
+// fresh examples).
 func TestListScenarios_PreferInputSchemaOverInput(t *testing.T) {
 	root := t.TempDir()
 	writeScenario(t, root, "create", `input_schema:
@@ -126,21 +127,22 @@ input:
 		t.Fatalf("len = %d", len(got))
 	}
 	if _, ok := got[0].InputSchema["schema_key"]; !ok {
-		t.Errorf("schema_key должен победить: %+v", got[0].InputSchema)
+		t.Errorf("schema_key should win: %+v", got[0].InputSchema)
 	}
 	if _, ok := got[0].InputSchema["input_key"]; ok {
-		t.Errorf("input_key не должен попасть: %+v", got[0].InputSchema)
+		t.Errorf("input_key should not appear: %+v", got[0].InputSchema)
 	}
 }
 
-// TestListScenarios_ResolvesCovenantInput — ★guard на UI-баг: сценарий наследует
-// input через `extends: covenant`, своя input-дельта нулевая. ListScenarios обязан
-// СЛИТЬ covenant.yml.input в InputSchema (тот же add-only merge, что runtime), иначе
-// UI-форма create приходит пустой (covenant-поля отсутствуют). Красный до фикса:
-// loadScenario парсил сырой main.yml без covenant-резолва → InputSchema пустой.
+// TestListScenarios_ResolvesCovenantInput is a guard for a UI bug: scenario
+// inherits input through `extends: covenant`, with a zero local input delta.
+// ListScenarios must MERGE covenant.yml.input into InputSchema (same add-only
+// merge as runtime), otherwise the create UI form arrives empty (covenant fields
+// are absent). Before the fix, loadScenario parsed raw main.yml without
+// covenant resolution -> empty InputSchema.
 func TestListScenarios_ResolvesCovenantInput(t *testing.T) {
 	root := t.TempDir()
-	// covenant.yml несёт ВЕСЬ input-контракт (как redis covenant.yml).
+	// covenant.yml carries the FULL input contract (like redis covenant.yml).
 	writeCovenant(t, root, "covenant", `input:
   version:
     type: string
@@ -154,7 +156,7 @@ func TestListScenarios_ResolvesCovenantInput(t *testing.T) {
     type: integer
     min: 64
 `)
-	// Дельта сценария — НУЛЕВОЙ input (всё наследуется из covenant), как
+	// Scenario delta is ZERO input (everything is inherited from covenant), as in
 	// create_from_souls/main.yml.
 	writeScenario(t, root, "create_from_souls", `name: create_from_souls
 create: true
@@ -170,27 +172,28 @@ tasks: []
 		t.Fatalf("len = %d, want 1; got = %+v", len(got), got)
 	}
 	sc := got[0]
-	// covenant-поля обязаны попасть в InputSchema (иначе UI-форма пустая).
+	// covenant fields must land in InputSchema (otherwise the UI form is empty).
 	for _, field := range []string{"version", "redis_type", "memory_mb"} {
 		if _, ok := sc.InputSchema[field]; !ok {
-			t.Errorf("covenant-поле %q не подмержено в InputSchema: %#v", field, sc.InputSchema)
+			t.Errorf("covenant field %q was not merged into InputSchema: %#v", field, sc.InputSchema)
 		}
 	}
-	// Форма поля сохранена raw (UI читает type/enum/required напрямую).
+	// Field shape is preserved raw (UI reads type/enum/required directly).
 	ver, ok := sc.InputSchema["version"].(map[string]any)
 	if !ok {
-		t.Fatalf("version не raw-map: %T", sc.InputSchema["version"])
+		t.Fatalf("version is not a raw map: %T", sc.InputSchema["version"])
 	}
 	if ver["type"] != "string" {
 		t.Errorf("version.type = %v, want string", ver["type"])
 	}
 	if _, ok := ver["enum"]; !ok {
-		t.Errorf("version.enum потерян после merge: %#v", ver)
+		t.Errorf("version.enum lost after merge: %#v", ver)
 	}
 }
 
-// TestListScenarios_CovenantMergeAddOnly — covenant-input и СОБСТВЕННЫЙ input
-// сценария оба попадают в InputSchema (add-only union, дельта дополняет covenant).
+// TestListScenarios_CovenantMergeAddOnly verifies that covenant input and the
+// scenario's OWN input both land in InputSchema (add-only union, delta
+// complements covenant).
 func TestListScenarios_CovenantMergeAddOnly(t *testing.T) {
 	root := t.TempDir()
 	writeCovenant(t, root, "covenant", `input:
@@ -214,15 +217,16 @@ input:
 	}
 	sc := got[0]
 	if _, ok := sc.InputSchema["shared_field"]; !ok {
-		t.Errorf("covenant-поле shared_field потеряно: %#v", sc.InputSchema)
+		t.Errorf("covenant field shared_field lost: %#v", sc.InputSchema)
 	}
 	if _, ok := sc.InputSchema["local_field"]; !ok {
-		t.Errorf("local-поле local_field потеряно: %#v", sc.InputSchema)
+		t.Errorf("local field local_field lost: %#v", sc.InputSchema)
 	}
 }
 
-// TestListScenarios_NoExtendsUnaffected — сценарий БЕЗ extends резолвится как
-// прежде (covenant-резолв no-op, forward-compat бит-в-бит).
+// TestListScenarios_NoExtendsUnaffected verifies that a scenario WITHOUT
+// extends resolves as before (covenant resolution no-op, bit-for-bit
+// forward-compat).
 func TestListScenarios_NoExtendsUnaffected(t *testing.T) {
 	root := t.TempDir()
 	writeScenario(t, root, "create", `name: create
@@ -239,12 +243,13 @@ input:
 		t.Fatalf("len = %d", len(got))
 	}
 	if len(got[0].InputSchema) != 1 {
-		t.Errorf("без extends InputSchema должен нести только своё поле, got %#v", got[0].InputSchema)
+		t.Errorf("without extends, InputSchema should carry only its own field, got %#v", got[0].InputSchema)
 	}
 }
 
-// TestListScenarios_MissingScenarioDir — каталога scenario/ нет; должен
-// вернуться пустой список без ошибки (сервис без сценариев — валидный).
+// TestListScenarios_MissingScenarioDir covers missing scenario/ directory; it
+// should return an empty list without error (service without scenarios is
+// valid).
 func TestListScenarios_MissingScenarioDir(t *testing.T) {
 	root := t.TempDir()
 	got, err := ListScenarios(root, discardLogger())
@@ -252,12 +257,12 @@ func TestListScenarios_MissingScenarioDir(t *testing.T) {
 		t.Fatalf("ListScenarios: %v", err)
 	}
 	if len(got) != 0 {
-		t.Errorf("ожидался пустой список, got %+v", got)
+		t.Errorf("want empty list, got %+v", got)
 	}
 }
 
-// TestListScenarios_SkipsBrokenYAML — невалидный YAML в одном scenario не
-// должен ломать listing-у остальных (partial-success).
+// TestListScenarios_SkipsBrokenYAML verifies that invalid YAML in one scenario
+// must not break listing for the others (partial success).
 func TestListScenarios_SkipsBrokenYAML(t *testing.T) {
 	root := t.TempDir()
 	writeScenario(t, root, "good", `description: ok
@@ -269,17 +274,17 @@ func TestListScenarios_SkipsBrokenYAML(t *testing.T) {
 		t.Fatalf("ListScenarios: %v", err)
 	}
 	if len(got) != 1 || got[0].Name != "good" {
-		t.Errorf("ожидался только good, got %+v", got)
+		t.Errorf("want only good, got %+v", got)
 	}
 }
 
-// TestListScenarios_SkipsFolderWithoutMain — каталог scenario/<n> без main.yml
-// пропускается (warning, без ошибки).
+// TestListScenarios_SkipsFolderWithoutMain verifies that a scenario/<n>
+// directory without main.yml is skipped (warning, no error).
 func TestListScenarios_SkipsFolderWithoutMain(t *testing.T) {
 	root := t.TempDir()
 	writeScenario(t, root, "good", `description: ok
 `)
-	// «Голая» директория без main.yml.
+	// Bare directory without main.yml.
 	if err := os.MkdirAll(filepath.Join(root, scenarioDir, "empty"), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
@@ -289,12 +294,12 @@ func TestListScenarios_SkipsFolderWithoutMain(t *testing.T) {
 		t.Fatalf("ListScenarios: %v", err)
 	}
 	if len(got) != 1 || got[0].Name != "good" {
-		t.Errorf("ожидался только good, got %+v", got)
+		t.Errorf("want only good, got %+v", got)
 	}
 }
 
-// TestListScenarios_IgnoresFilesAtTopLevel — файл `scenario/foo.txt` рядом с
-// директориями игнорируется (только субдиректории).
+// TestListScenarios_IgnoresFilesAtTopLevel verifies that file
+// `scenario/foo.txt` next to directories is ignored (subdirectories only).
 func TestListScenarios_IgnoresFilesAtTopLevel(t *testing.T) {
 	root := t.TempDir()
 	writeScenario(t, root, "create", "description: ok\n")
@@ -307,13 +312,13 @@ func TestListScenarios_IgnoresFilesAtTopLevel(t *testing.T) {
 		t.Fatalf("ListScenarios: %v", err)
 	}
 	if len(got) != 1 || got[0].Name != "create" {
-		t.Errorf("ожидался только create, got %+v", got)
+		t.Errorf("want only create, got %+v", got)
 	}
 }
 
-// TestListScenarios_IgnoresUnknownTopLevelFields — нестандартные top-level
-// поля YAML (`tasks:`, `state_changes:` и т.п.) парсер игнорирует — берёт
-// только name/description/input/input_schema/tags.
+// TestListScenarios_IgnoresUnknownTopLevelFields verifies that the parser
+// ignores non-standard top-level YAML fields (`tasks:`, `state_changes:`, etc.)
+// and reads only name/description/input/input_schema/tags.
 func TestListScenarios_IgnoresUnknownTopLevelFields(t *testing.T) {
 	root := t.TempDir()
 	writeScenario(t, root, "create", `description: ok
@@ -337,9 +342,9 @@ random_field: 123
 	}
 }
 
-// TestListScenarios_FormProjection — top-level `form:` парсится в Scenario.Form:
-// секции с key/title/collapsed/show_when и полями name/label/show_when/placeholder/
-// hint попадают в listing-проекцию.
+// TestListScenarios_FormProjection verifies that top-level `form:` is parsed
+// into Scenario.Form: sections with key/title/collapsed/show_when and fields
+// with name/label/show_when/placeholder/hint land in the listing projection.
 func TestListScenarios_FormProjection(t *testing.T) {
 	root := t.TempDir()
 	writeScenario(t, root, "create", `description: ok
@@ -350,30 +355,30 @@ input:
 form:
   sections:
     - key: connection
-      title: "Подключение"
+      title: "Connection"
       collapsed: false
       show_when: "input.tls_enabled"
       fields:
         - { name: tls_enabled, label: "TLS" }
-        - { name: tls_port, show_when: "input.tls_enabled", placeholder: "6379", hint: "TCP-порт" }
+        - { name: tls_port, show_when: "input.tls_enabled", placeholder: "6379", hint: "TCP port" }
     - key: secrets
-      title: "Секреты"
+      title: "Secrets"
       collapsed: true
       fields:
-        - { name: redis_password, label: "Пароль Redis" }
+        - { name: redis_password, label: "Redis password" }
 `)
 	got, err := ListScenarios(root, discardLogger())
 	if err != nil {
 		t.Fatalf("ListScenarios: %v", err)
 	}
 	if len(got) != 1 || got[0].Form == nil {
-		t.Fatalf("Form не распарсен: %+v", got)
+		t.Fatalf("Form was not parsed: %+v", got)
 	}
 	f := got[0].Form
 	if len(f.Sections) != 2 {
 		t.Fatalf("Sections len = %d, want 2", len(f.Sections))
 	}
-	if f.Sections[0].Key != "connection" || f.Sections[0].Title != "Подключение" || f.Sections[0].Collapsed {
+	if f.Sections[0].Key != "connection" || f.Sections[0].Title != "Connection" || f.Sections[0].Collapsed {
 		t.Errorf("section[0] = %#v", f.Sections[0])
 	}
 	if f.Sections[0].ShowWhen != "input.tls_enabled" {
@@ -386,13 +391,14 @@ form:
 		t.Errorf("field[0] = %#v", f.Sections[0].Fields[0])
 	}
 	f1 := f.Sections[0].Fields[1]
-	if f1.ShowWhen != "input.tls_enabled" || f1.Placeholder != "6379" || f1.Hint != "TCP-порт" {
+	if f1.ShowWhen != "input.tls_enabled" || f1.Placeholder != "6379" || f1.Hint != "TCP port" {
 		t.Errorf("field[1] show_when/placeholder/hint = %#v", f1)
 	}
 }
 
-// TestListScenarios_FormUXKeysOmitted — поле без show_when/placeholder/hint: ключи
-// отсутствуют в JSON reply (omitempty, бит-в-бит как до фичи; forward-compat).
+// TestListScenarios_FormUXKeysOmitted verifies that a field without
+// show_when/placeholder/hint omits those keys from the JSON reply (omitempty,
+// bit-for-bit as before the feature; forward-compat).
 func TestListScenarios_FormUXKeysOmitted(t *testing.T) {
 	root := t.TempDir()
 	writeScenario(t, root, "create", `description: ok
@@ -414,13 +420,14 @@ form:
 	}
 	for _, key := range []string{`"show_when"`, `"placeholder"`, `"hint"`} {
 		if strings.Contains(string(out), key) {
-			t.Errorf("ключ %s не должен присутствовать без значения (omitempty), got %s", key, out)
+			t.Errorf("key %s should not be present without a value (omitempty), got %s", key, out)
 		}
 	}
 }
 
-// TestListScenarios_FormAbsentOmitted — нет `form:` → Form==nil И поле отсутствует
-// в JSON reply (omitempty, бит-в-бит как до фичи; forward-compat).
+// TestListScenarios_FormAbsentOmitted verifies that without `form:`, Form==nil
+// and the field is absent from the JSON reply (omitempty, bit-for-bit as before
+// the feature; forward-compat).
 func TestListScenarios_FormAbsentOmitted(t *testing.T) {
 	root := t.TempDir()
 	writeScenario(t, root, "create", `description: ok
@@ -432,19 +439,19 @@ input:
 		t.Fatalf("ListScenarios: %v", err)
 	}
 	if len(got) != 1 || got[0].Form != nil {
-		t.Fatalf("Form должен быть nil без form:, got %+v", got)
+		t.Fatalf("Form should be nil without form:, got %+v", got)
 	}
 	out, err := json.Marshal(got[0])
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
 	if strings.Contains(string(out), `"form"`) {
-		t.Errorf("ключ \"form\" не должен присутствовать в JSON при отсутствии form:, got %s", out)
+		t.Errorf("key \"form\" should not be present in JSON when form: is absent, got %s", out)
 	}
 }
 
-// TestScenarioListerFunc_CompileTime — компилируемая гарантия, что Scenario
-// несёт ожидаемые exported-поля для JSON-сериализации (handler полагается на
+// TestScenarioListerFunc_CompileTime is a compile-time guarantee that Scenario
+// carries expected exported fields for JSON serialization (handler relies on
 // json-tags).
 func TestScenarioListerFunc_CompileTime(t *testing.T) {
 	s := Scenario{
@@ -459,22 +466,22 @@ func TestScenarioListerFunc_CompileTime(t *testing.T) {
 	_ = s
 }
 
-// TestListScenarios_CreateFlag — top-level `create: true|false` парсится в
-// Scenario.Create; отсутствие ключа → false (back-compat). Дискриминатор create-
-// kind для UI-фильтра «выбрать стартовый сценарий».
+// TestListScenarios_CreateFlag verifies that top-level `create: true|false` is
+// parsed into Scenario.Create; missing key -> false (back-compat). The create
+// kind discriminator is used by the UI filter "choose starter scenario".
 func TestListScenarios_CreateFlag(t *testing.T) {
 	root := t.TempDir()
 
-	writeScenario(t, root, "create", `description: дефолтный bootstrap
+	writeScenario(t, root, "create", `description: default bootstrap
 create: true
 `)
 	writeScenario(t, root, "create_cluster", `description: cluster-bootstrap
 create: true
 `)
-	writeScenario(t, root, "add_user", `description: day-2 операция
+	writeScenario(t, root, "add_user", `description: day-2 operation
 create: false
 `)
-	writeScenario(t, root, "restart", `description: рестарт без флага
+	writeScenario(t, root, "restart", `description: restart without flag
 `)
 
 	got, err := ListScenarios(root, discardLogger())
@@ -498,9 +505,9 @@ create: false
 	}
 }
 
-// TestListScenarios_CreateFlagJSONOmitempty — Scenario.Create сериализуется в JSON
-// под ключом `create` и опускается при false (omitempty: бит-в-бит как до фичи для
-// non-create сценариев).
+// TestListScenarios_CreateFlagJSONOmitempty verifies that Scenario.Create is
+// serialized to JSON under key `create` and omitted when false (omitempty:
+// bit-for-bit as before the feature for non-create scenarios).
 func TestListScenarios_CreateFlagJSONOmitempty(t *testing.T) {
 	withCreate, err := json.Marshal(Scenario{Name: "create", Create: true})
 	if err != nil {
@@ -518,13 +525,14 @@ func TestListScenarios_CreateFlagJSONOmitempty(t *testing.T) {
 	}
 }
 
-// --- ListUpgrades: второй канал авто-дискавери upgrade/<slug>/ (ADR-0068 §3) ---
+// --- ListUpgrades: second auto-discovery channel upgrade/<slug>/ (ADR-0068 §3) ---
 
-// TestListUpgrades_FindsUpgradeWithFrom — upgrade/<slug>/main.yml с top-level `from:`
-// находится и проецируется в Scenario.FromVersions; Path указывает на upgrade/.
+// TestListUpgrades_FindsUpgradeWithFrom verifies that upgrade/<slug>/main.yml
+// with top-level `from:` is found and projected into Scenario.FromVersions;
+// Path points to upgrade/.
 func TestListUpgrades_FindsUpgradeWithFrom(t *testing.T) {
 	root := t.TempDir()
-	writeUpgrade(t, root, "v2", `description: sentinel→cluster на v2
+	writeUpgrade(t, root, "v2", `description: sentinel -> cluster on v2
 from: ["v1.0.0", "v1.2.0"]
 tasks: []
 `)
@@ -549,14 +557,14 @@ tasks: []
 	}
 }
 
-// TestListUpgrades_IgnoresNonDirs — свободный файл под upgrade/ (не каталог)
-// пропускается, как и у ListScenarios.
+// TestListUpgrades_IgnoresNonDirs verifies that a loose file under upgrade/
+// (not a directory) is skipped, like in ListScenarios.
 func TestListUpgrades_IgnoresNonDirs(t *testing.T) {
 	root := t.TempDir()
 	writeUpgrade(t, root, "v2", `from: ["v1.0.0"]
 tasks: []
 `)
-	// Свободный файл рядом с каталогами upgrade/ — не должен попасть в listing.
+	// Loose file next to upgrade/ directories should not land in listing.
 	if err := os.WriteFile(filepath.Join(root, upgradeDir, "README.md"), []byte("noise"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -566,31 +574,33 @@ tasks: []
 		t.Fatalf("ListUpgrades: %v", err)
 	}
 	if len(got) != 1 || got[0].Name != "v2" {
-		t.Fatalf("got = %+v, want ровно [v2]", got)
+		t.Fatalf("got = %+v, want exactly [v2]", got)
 	}
 }
 
-// TestListUpgrades_MissingDir_Empty — отсутствие каталога upgrade/ → пустой список,
-// НЕ ошибка (сервис без upgrade-сценариев валиден, ADR-0068 §5 legacy-путь).
+// TestListUpgrades_MissingDir_Empty verifies that missing upgrade/ directory
+// returns an empty list, NOT an error (service without upgrade scenarios is
+// valid, ADR-0068 §5 legacy path).
 func TestListUpgrades_MissingDir_Empty(t *testing.T) {
 	root := t.TempDir()
 	writeScenario(t, root, "create", "description: x\ntasks: []\n")
 
 	got, err := ListUpgrades(root, discardLogger())
 	if err != nil {
-		t.Fatalf("ListUpgrades без upgrade/ должен вернуть nil-ошибку, got %v", err)
+		t.Fatalf("ListUpgrades without upgrade/ should return nil error, got %v", err)
 	}
 	if len(got) != 0 {
-		t.Fatalf("got = %+v, want пустой список", got)
+		t.Fatalf("got = %+v, want empty list", got)
 	}
 }
 
-// TestListScenarios_IgnoresUpgradeDir — РЕГРЕСС-ГУАРД изоляции (ADR-0068 §3):
-// upgrade/<slug>/ НЕ должен просачиваться в day-2 scenario-список, а scenario/ —
-// в upgrade-список. Каналы строго разделены.
+// TestListScenarios_IgnoresUpgradeDir is an isolation regression guard
+// (ADR-0068 §3): upgrade/<slug>/ must NOT leak into the day-2 scenario list,
+// and scenario/ must not leak into the upgrade list. Channels are strictly
+// separated.
 func TestListScenarios_IgnoresUpgradeDir(t *testing.T) {
 	root := t.TempDir()
-	writeScenario(t, root, "create", "description: стартовый\ntasks: []\n")
+	writeScenario(t, root, "create", "description: starter\ntasks: []\n")
 	writeUpgrade(t, root, "v2", "from: [\"v1.0.0\"]\ntasks: []\n")
 
 	scenarios, err := ListScenarios(root, discardLogger())
@@ -598,7 +608,7 @@ func TestListScenarios_IgnoresUpgradeDir(t *testing.T) {
 		t.Fatalf("ListScenarios: %v", err)
 	}
 	if len(scenarios) != 1 || scenarios[0].Name != "create" {
-		t.Fatalf("ListScenarios = %+v, want ровно [create] (upgrade/ не должен просачиваться)", scenarios)
+		t.Fatalf("ListScenarios = %+v, want exactly [create] (upgrade/ must not leak)", scenarios)
 	}
 
 	upgrades, err := ListUpgrades(root, discardLogger())
@@ -606,18 +616,18 @@ func TestListScenarios_IgnoresUpgradeDir(t *testing.T) {
 		t.Fatalf("ListUpgrades: %v", err)
 	}
 	if len(upgrades) != 1 || upgrades[0].Name != "v2" {
-		t.Fatalf("ListUpgrades = %+v, want ровно [v2] (scenario/ не должен просачиваться)", upgrades)
+		t.Fatalf("ListUpgrades = %+v, want exactly [v2] (scenario/ must not leak)", upgrades)
 	}
 }
 
-// TestListScenarios_StrayFromNotProjected — ФИЗИЧЕСКИЙ гейт изоляции поля (ADR-0068
-// §3): стрэй top-level `from:` в scenario/<name>/main.yml НЕ просачивается в day-2
-// reply — FromVersions заполняется только на upgrade/-канале (dir==upgradeDir), а не
-// по каталогу-косвенно. Регресс на случай, если оператор случайно напишет `from:` в
-// обычном сценарии.
+// TestListScenarios_StrayFromNotProjected is the PHYSICAL field-isolation gate
+// (ADR-0068 §3): stray top-level `from:` in scenario/<name>/main.yml must NOT
+// leak into the day-2 reply. FromVersions is filled only on the upgrade/
+// channel (dir==upgradeDir), not indirectly by directory. Regression guard for
+// an operator accidentally writing `from:` in a regular scenario.
 func TestListScenarios_StrayFromNotProjected(t *testing.T) {
 	root := t.TempDir()
-	writeScenario(t, root, "create", `description: стартовый
+	writeScenario(t, root, "create", `description: starter
 from: ["v1.0.0"]
 tasks: []
 `)
@@ -630,16 +640,16 @@ tasks: []
 		t.Fatalf("len = %d, want 1", len(got))
 	}
 	if got[0].FromVersions != nil {
-		t.Fatalf("scenario/-запись не должна нести FromVersions (стрэй from: просочился): %+v", got[0].FromVersions)
+		t.Fatalf("scenario/ entry should not carry FromVersions (stray from: leaked): %+v", got[0].FromVersions)
 	}
 
-	// Тот же стрэй-guard симметрично: upgrade/-канал ДОЛЖЕН нести from:.
+	// Same stray guard symmetrically: upgrade/ channel MUST carry from:.
 	writeUpgrade(t, root, "v2", "from: [\"v1.0.0\"]\ntasks: []\n")
 	ups, err := ListUpgrades(root, discardLogger())
 	if err != nil {
 		t.Fatalf("ListUpgrades: %v", err)
 	}
 	if len(ups) != 1 || len(ups[0].FromVersions) != 1 || ups[0].FromVersions[0] != "v1.0.0" {
-		t.Fatalf("upgrade/-запись должна нести FromVersions=[v1.0.0], got %+v", ups)
+		t.Fatalf("upgrade/ entry should carry FromVersions=[v1.0.0], got %+v", ups)
 	}
 }

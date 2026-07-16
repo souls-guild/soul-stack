@@ -61,7 +61,7 @@ func TestDestinyLoad_InvalidTasksRejected(t *testing.T) {
 
 	loader := NewDestinyLoader(t.TempDir(), nil)
 	if _, err := loader.Load(context.Background(), DestinyRef{Name: "pilot-flat", Git: tr.fileURL()}); err == nil {
-		t.Fatal("ожидалась ошибка на невалидный tasks/main.yml")
+		t.Fatal("want error for invalid tasks/main.yml")
 	}
 }
 
@@ -73,7 +73,7 @@ func TestDestinyLoad_MissingTasksFile(t *testing.T) {
 
 	loader := NewDestinyLoader(t.TempDir(), nil)
 	if _, err := loader.Load(context.Background(), DestinyRef{Name: "pilot-flat", Git: tr.fileURL()}); err == nil {
-		t.Fatal("ожидалась ошибка на отсутствующий tasks/main.yml")
+		t.Fatal("want error for missing tasks/main.yml")
 	}
 }
 
@@ -94,7 +94,7 @@ func TestDestinyLoad_WithinInclude(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	if len(art.Tasks) != 2 {
-		t.Fatalf("len(tasks) = %d, want 2 (раскрытый плоский список)", len(art.Tasks))
+		t.Fatalf("len(tasks) = %d, want 2 (expanded flat list)", len(art.Tasks))
 	}
 	if art.Tasks[0].Module == nil || art.Tasks[0].Module.Module != "core.file.present" {
 		t.Errorf("task0 = %+v, want core.file.present", art.Tasks[0].Module)
@@ -118,6 +118,6 @@ func TestDestinyLoad_IncludeCycle(t *testing.T) {
 	loader := NewDestinyLoader(t.TempDir(), nil)
 	_, err := loader.Load(context.Background(), DestinyRef{Name: "pilot-flat", Git: tr.fileURL()})
 	if err == nil {
-		t.Fatal("ожидалась ошибка include-цикла")
+		t.Fatal("want error for include cycle")
 	}
 }

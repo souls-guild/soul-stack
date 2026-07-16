@@ -43,7 +43,7 @@ func TestIntegration_ConcurrentLoadsSameSnapshot(t *testing.T) {
 			t.Fatalf("goroutine %d: %v", i, errs[i])
 		}
 		if results[i] != results[0] {
-			t.Fatalf("goroutine %d вернула другой снапшот: %s != %s", i, results[i], results[0])
+			t.Fatalf("goroutine %d returned a different snapshot: %s != %s", i, results[i], results[0])
 		}
 	}
 }
