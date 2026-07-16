@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// fakeVault — VaultWriter-заглушка, запоминает последнюю запись.
+// fakeVault is a VaultWriter stub that records the latest write.
 type fakeVault struct {
 	path string
 	data map[string]any
@@ -79,7 +79,7 @@ func TestCustomMountInRef(t *testing.T) {
 	}
 }
 
-// TestPathRejectsUnsafeSegments — fail-closed на обход scope (`..`, слеши, пусто).
+// TestPathRejectsUnsafeSegments verifies fail-closed rejection of scope bypass (`..`, slashes, empty).
 func TestPathRejectsUnsafeSegments(t *testing.T) {
 	fv := &fakeVault{}
 	w, _ := NewWriter(fv, "secret")
@@ -93,8 +93,8 @@ func TestPathRejectsUnsafeSegments(t *testing.T) {
 	}
 }
 
-// TestSecretValueNotInError — plaintext НЕ утекает в текст ошибки Vault-записи
-// (главный митигейшн ADR-064(b)).
+// TestSecretValueNotInError verifies plaintext never leaks into Vault write error text
+// (primary mitigation for ADR-064(b)).
 func TestSecretValueNotInError(t *testing.T) {
 	const plaintext = "SUPER-SECRET-TOKEN-42"
 	fv := &fakeVault{err: errors.New("vault down")}

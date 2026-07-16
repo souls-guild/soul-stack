@@ -1,9 +1,9 @@
-// Package secretwrite материализует plaintext-секреты оператора в Vault по
-// детерминированным путям (ADR-064, NIM-11). Dual-mode приёма секрета: оператор
-// передаёт значение (plaintext) вместо vault-ref, keeper пишет его в Vault сам и
-// хранит в Postgres только внутренний ref. Один write-слой для Herald и Provider
-// поверх того же vault.Client.WriteKV, что sigil/cert — обобщение keeper-side
-// write-path, не новый инфра-код.
+// Package secretwrite materializes plaintext operator secrets to Vault at
+// deterministic paths (ADR-064, NIM-11). Dual-mode secret intake: operator
+// provides value (plaintext) instead of vault-ref, keeper writes it to Vault itself
+// and stores only the internal ref in Postgres. Single write layer for Herald and
+// Provider on top of the same vault.Client.WriteKV used by sigil/cert — a
+// generalization of keeper-side write-path, not new infra code.
 package secretwrite
 
 import (
@@ -12,37 +12,37 @@ import (
 	"regexp"
 )
 
-// Домены секретов — первый сегмент детерминированного пути secret/<domain>/…
+// Secret domains — first segment of deterministic path secret/<domain>/…
 const (
 	DomainHerald   = "herald"
 	DomainProvider = "provider"
 )
 
-// defaultMount — KV-mount по умолчанию (совпадает с vault.defaultKVMount).
+// defaultMount is the default KV-mount (matches vault.defaultKVMount).
 const defaultMount = "secret"
 
-// segmentRe — безопасный сегмент пути (domain/entity/field): буквы/цифры/`_`/`-`.
-// Отсекает `.`/`..`/слеши/пустое — исключает обход scope в Vault-пути (ParseRef
-// тоже реджектит `..`, здесь fail-closed на входе write-path).
+// segmentRe matches a safe path segment (domain/entity/field): letters/digits/`_`/`-`.
+// Rejects `.`/`..`/slashes/empty — prevents scope bypass in Vault paths (ParseRef
+// also rejects `..`, here fail-closed at write-path entry).
 var segmentRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
-// VaultWriter — узкая поверхность записи Vault KV (реализуется
-// vault.Client.WriteKV). Сужение до интерфейса даёт fake в unit/guard-тестах без
-// реального Vault (симметрично sigil.VaultWriter).
+// VaultWriter is a narrow interface for writing to Vault KV (implemented by
+// vault.Client.WriteKV). Narrowing to an interface enables fakes in unit/guard tests
+// without a real Vault (symmetric to sigil.VaultWriter).
 type VaultWriter interface {
 	WriteKV(ctx context.Context, path string, data map[string]any) error
 }
 
-// Writer пишет plaintext-секрет оператора в Vault по пути
-// <mount>/<domain>/<entity>/<field> и возвращает внутренний vault-ref для PG.
-// mount — из keeper.yml (vault.kv_mount, default "secret"); тот же клиент, что
-// sigil/cert. БЕЗОПАСНОСТЬ: значение секрета в текст ошибок/логов НЕ попадает.
+// Writer writes an operator's plaintext secret to Vault at path
+// <mount>/<domain>/<entity>/<field> and returns the internal vault-ref for PG.
+// mount comes from keeper.yml (vault.kv_mount, default "secret"); same client as
+// sigil/cert. SECURITY: secret value must never leak into error/log text.
 type Writer struct {
 	vault VaultWriter
 	mount string
 }
 
-// NewWriter собирает writer. v обязателен (nil → ошибка). mount=="" → "secret".
+// NewWriter constructs a writer. v is required (nil → error). mount=="" → "secret".
 func NewWriter(v VaultWriter, mount string) (*Writer, error) {
 	if v == nil {
 		return nil, fmt.Errorf("secretwrite: nil VaultWriter")
@@ -53,11 +53,10 @@ func NewWriter(v VaultWriter, mount string) (*Writer, error) {
 	return &Writer{vault: v, mount: mount}, nil
 }
 
-// WriteString пишет одиночное строковое поле секрета {field: value} по
-// детерминированному пути и возвращает ref
-// vault:<mount>/<domain>/<entity>/<field>#<field>. Явный #field делает резолв
-// (resolveVaultString) независимым от числа полей секрета. value в ошибку не
-// попадает.
+// WriteString writes a single string field secret {field: value} at a deterministic
+// path and returns ref vault:<mount>/<domain>/<entity>/<field>#<field>. The explicit
+// #field makes resolution (resolveVaultString) independent of the number of secret
+// fields. value must never leak into errors.
 func (w *Writer) WriteString(ctx context.Context, domain, entity, field, value string) (string, error) {
 	path, err := w.path(domain, entity, field)
 	if err != nil {
@@ -72,10 +71,10 @@ func (w *Writer) WriteString(ctx context.Context, domain, entity, field, value s
 	return "vault:" + path + "#" + field, nil
 }
 
-// WriteMap пишет multi-field секрет (напр. cloud credentials) по
-// детерминированному пути и возвращает ref vault:<mount>/<domain>/<entity>/<field>
-// (без #field — потребитель читает весь map, как cloud.credentials.Resolve).
-// Значения секрета в ошибку не попадают.
+// WriteMap writes a multi-field secret (e.g. cloud credentials) at a deterministic
+// path and returns ref vault:<mount>/<domain>/<entity>/<field> (no #field — the
+// consumer reads the entire map, as in cloud.credentials.Resolve). Secret values
+// must never leak into errors.
 func (w *Writer) WriteMap(ctx context.Context, domain, entity, field string, data map[string]any) (string, error) {
 	path, err := w.path(domain, entity, field)
 	if err != nil {
@@ -90,9 +89,9 @@ func (w *Writer) WriteMap(ctx context.Context, domain, entity, field string, dat
 	return "vault:" + path, nil
 }
 
-// path собирает и валидирует детерминированный logical-путь
-// <mount>/<domain>/<entity>/<field>. domain/entity/field обязаны быть
-// безопасными сегментами (segmentRe).
+// path builds and validates the deterministic logical path
+// <mount>/<domain>/<entity>/<field>. domain/entity/field must be safe segments
+// (matching segmentRe).
 func (w *Writer) path(domain, entity, field string) (string, error) {
 	if !segmentRe.MatchString(domain) {
 		return "", fmt.Errorf("secretwrite: invalid domain %q", domain)
