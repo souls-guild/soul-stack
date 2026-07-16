@@ -571,7 +571,7 @@ func describeExpected(et ExpectedTask) string {
 		fmt.Fprintf(&b, ", id=%q", et.ID)
 	}
 	if len(et.ParamsSubset) > 0 {
-		fmt.Fprintf(&b, ", params_subset-ключи=%v", sortedKeys(et.ParamsSubset))
+		fmt.Fprintf(&b, ", params_subset keys=%v", sortedKeys(et.ParamsSubset))
 	}
 	return b.String()
 }

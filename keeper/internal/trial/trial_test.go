@@ -10,8 +10,8 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// writeScenarioTree создаёт временное дерево scenario/<name>/{main.yml,
-// tests/<case>/case.yml} и возвращает путь к директории кейса.
+// writeScenarioTree creates a temporary scenario/<name>/{main.yml,
+// tests/<case>/case.yml} tree and returns the case directory path.
 func writeScenarioTree(t *testing.T, mainYML, caseYML string) string {
 	t.Helper()
 	root := t.TempDir()
@@ -29,8 +29,8 @@ func writeScenarioTree(t *testing.T, mainYML, caseYML string) string {
 	return caseDir
 }
 
-// writeScenarioSibling кладёт sibling-файл в scenario/create/<name> (для
-// include-целей). Возвращает абсолютный путь файла.
+// writeScenarioSibling writes a sibling file into scenario/create/<name> (for
+// include targets). Returns the absolute file path.
 func writeScenarioSibling(t *testing.T, caseDir, name, content string) {
 	t.Helper()
 	scnDir := filepath.Dir(filepath.Dir(caseDir)) // .../scenario/create
@@ -39,8 +39,8 @@ func writeScenarioSibling(t *testing.T, caseDir, name, content string) {
 	}
 }
 
-// writeServiceLevelSibling кладёт файл на service-level (scenario/<name> — общий
-// для всех сценариев каталог scenario/, родитель scenario/create/).
+// writeServiceLevelSibling writes a service-level file (scenario/<name>, the
+// shared scenario/ directory for all scenarios, parent of scenario/create/).
 func writeServiceLevelSibling(t *testing.T, caseDir, name, content string) {
 	t.Helper()
 	scnDir := filepath.Dir(filepath.Dir(caseDir)) // .../scenario/create
@@ -50,9 +50,9 @@ func writeServiceLevelSibling(t *testing.T, caseDir, name, content string) {
 	}
 }
 
-// TestRunCase_ScenarioIncludeShadowing — двухуровневый резолв (orchestration.md
-// §6): локальный include-файл полностью перекрывает service-level одноимённый
-// (shadowing, без merge).
+// TestRunCase_ScenarioIncludeShadowing checks two-level resolution
+// (orchestration.md section 6): a local include file fully shadows a
+// same-named service-level file (shadowing, no merge).
 func TestRunCase_ScenarioIncludeShadowing(t *testing.T) {
 	mainYML := `name: create
 input:
@@ -74,14 +74,14 @@ assert:
         path: /tmp/local
         content: hi
 `)
-	// service-level версия (должна быть перекрыта локальной).
+	// service-level version (must be shadowed by the local one).
 	writeServiceLevelSibling(t, caseDir, "greet.yml", `- name: service-level
   module: core.file.present
   params:
     path: /tmp/service-level
     content: "${ input.greeting }"
 `)
-	// локальная версия — побеждает.
+	// local version wins.
 	writeScenarioSibling(t, caseDir, "greet.yml", `- name: local
   module: core.file.present
   params:
@@ -94,12 +94,12 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if !results[0].Pass {
-		t.Fatalf("ожидали PASS (локальный перекрывает service-level), FAIL: %v", results[0].Failures)
+		t.Fatalf("expected PASS (local shadows service-level), FAIL: %v", results[0].Failures)
 	}
 }
 
-// TestRunCase_ScenarioIncludeServiceLevelFallback — при отсутствии локального
-// файла резолв падает на service-level.
+// TestRunCase_ScenarioIncludeServiceLevelFallback checks that resolution falls
+// back to service-level when the local file is missing.
 func TestRunCase_ScenarioIncludeServiceLevelFallback(t *testing.T) {
 	mainYML := `name: create
 input:
@@ -133,7 +133,7 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if !results[0].Pass {
-		t.Fatalf("ожидали PASS (service-level fallback), FAIL: %v", results[0].Failures)
+		t.Fatalf("expected PASS (service-level fallback), FAIL: %v", results[0].Failures)
 	}
 }
 
@@ -170,7 +170,7 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if !results[0].Pass {
-		t.Fatalf("ожидали PASS scenario-include splice, получили FAIL: %v", results[0].Failures)
+		t.Fatalf("expected PASS scenario-include splice, got FAIL: %v", results[0].Failures)
 	}
 }
 
@@ -197,10 +197,10 @@ assert:
 
 	_, err := Run(context.Background(), caseDir)
 	if err == nil {
-		t.Fatal("ожидалась ошибка include-цикла a→b→a, получили nil")
+		t.Fatal("expected include-cycle error a->b->a, got nil")
 	}
 	if !strings.Contains(err.Error(), "include_cycle") {
-		t.Fatalf("ожидался include_cycle в ошибке, получили: %v", err)
+		t.Fatalf("expected include_cycle in error, got: %v", err)
 	}
 }
 
@@ -236,14 +236,14 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if len(results) != 1 {
-		t.Fatalf("ожидали 1 результат, получили %d", len(results))
+		t.Fatalf("expected 1 result, got %d", len(results))
 	}
 	if !results[0].Pass {
-		t.Fatalf("ожидали PASS, получили FAIL: %v", results[0].Failures)
+		t.Fatalf("expected PASS, got FAIL: %v", results[0].Failures)
 	}
-	// `${ input.greeting }` — одна не-bool интерполяция, должна попасть в coverage.
+	// `${ input.greeting }` is one non-bool interpolation and must be covered.
 	if got := len(results[0].Coverage.NonBranch) + len(results[0].Coverage.Branches); got == 0 {
-		t.Errorf("ожидали ненулевой trial coverage, получили 0 выражений")
+		t.Errorf("expected non-zero trial coverage, got 0 expressions")
 	}
 }
 
@@ -266,14 +266,14 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if results[0].Pass {
-		t.Fatalf("ожидали FAIL на расхождении content")
+		t.Fatalf("expected FAIL on content mismatch")
 	}
 	if len(results[0].Failures) == 0 {
-		t.Fatalf("ожидали непустой список расхождений")
+		t.Fatalf("expected non-empty mismatch list")
 	}
 }
 
-// TestRunCase_FailOnModule — расхождение по module-адресу.
+// TestRunCase_FailOnModule checks a module address mismatch.
 func TestRunCase_FailOnModule(t *testing.T) {
 	caseDir := writeScenarioTree(t, helloMain, `name: wrong module
 fixtures:
@@ -289,12 +289,12 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if results[0].Pass {
-		t.Fatalf("ожидали FAIL на расхождении module")
+		t.Fatalf("expected FAIL on module mismatch")
 	}
 }
 
-// whereMain — scenario с where:-предикатом по soulprint.self для проверки
-// branch-coverage. Один хост → предикат вычисляется один раз.
+// whereMain is a scenario with a where: predicate on soulprint.self for checking
+// branch coverage. One host means the predicate is evaluated once.
 const whereMain = `name: create
 input:
   greeting:
@@ -309,8 +309,8 @@ tasks:
       content: "${ input.greeting }"
 `
 
-// TestRunCase_WhereBranchCovered — кейс с where:, попавший в truthy-ветку,
-// учитывается в branch-coverage (одна ветка из двух).
+// TestRunCase_WhereBranchCovered checks that a case with where: that hit the
+// truthy branch is included in branch coverage (one branch out of two).
 func TestRunCase_WhereBranchCovered(t *testing.T) {
 	caseDir := writeScenarioTree(t, whereMain, `name: where truthy
 fixtures:
@@ -333,21 +333,21 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if !results[0].Pass {
-		t.Fatalf("ожидали PASS, получили: %v", results[0].Failures)
+		t.Fatalf("expected PASS, got: %v", results[0].Failures)
 	}
 	covered, total := results[0].Coverage.CoveredBranches()
 	if total != 1 {
-		t.Fatalf("ожидали 1 bool-выражение (where:), получили %d", total)
+		t.Fatalf("expected 1 bool expression (where:), got %d", total)
 	}
 	if covered != 0 {
-		t.Fatalf("одна truthy-ветка не покрывает выражение целиком: covered=%d, ожидали 0", covered)
+		t.Fatalf("one truthy branch does not cover the expression fully: covered=%d, expected 0", covered)
 	}
 }
 
-// optionalStateMain — scenario, читающий optional-без-default input в
-// state_changes.sets БЕЗ has()-guard. На latest-пути (значение не передано)
-// рендер sets обязан упасть «no such key» — класс багов, который harness ловит
-// рендером state_changes.
+// optionalStateMain is a scenario that reads optional-without-default input in
+// state_changes.sets WITHOUT a has() guard. On the latest path (value not
+// provided), sets rendering must fail with "no such key": the class of bugs the
+// harness catches by rendering state_changes.
 const optionalStateMain = `name: create
 input:
   redis_version:
@@ -364,10 +364,10 @@ tasks:
       content: x
 `
 
-// TestRunCase_StateChangesRenderError — незащищённый optional-без-default input в
-// state_changes.sets даёт ошибку рендера sets (RunCase возвращает err), а не
-// тихий PASS. Это слепая зона harness-а до расширения: tasks рендерились,
-// state_changes — нет.
+// TestRunCase_StateChangesRenderError checks that unguarded
+// optional-without-default input in state_changes.sets causes a sets render
+// error (RunCase returns err), not a silent PASS. This was a harness blind spot
+// before expansion: tasks rendered, state_changes did not.
 func TestRunCase_StateChangesRenderError(t *testing.T) {
 	caseDir := writeScenarioTree(t, optionalStateMain, `name: state_changes render must fail
 fixtures:
@@ -379,15 +379,15 @@ assert:
 `)
 	_, err := Run(context.Background(), caseDir)
 	if err == nil {
-		t.Fatal("ожидали ошибку рендера state_changes (no such key по незащищённому optional input), получили nil")
+		t.Fatal("expected state_changes render error (no such key on unguarded optional input), got nil")
 	}
 	if !strings.Contains(err.Error(), "state_changes") {
-		t.Fatalf("ошибка должна указывать на state_changes, получили: %v", err)
+		t.Fatalf("error must point to state_changes, got: %v", err)
 	}
 }
 
-// guardedStateMain — тот же optional input, но с каноническим has()-guard:
-// рендер sets не падает, на latest в state пишется "".
+// guardedStateMain is the same optional input, but with the canonical has()
+// guard: sets rendering does not fail, and latest writes "" into state.
 const guardedStateMain = `name: create
 input:
   redis_version:
@@ -404,8 +404,8 @@ tasks:
       content: x
 `
 
-// TestRunCase_StateChangesAssertPass — has()-guarded optional рендерится в ""
-// и совпадает с assert.state_changes.
+// TestRunCase_StateChangesAssertPass checks that has()-guarded optional renders
+// as "" and matches assert.state_changes.
 func TestRunCase_StateChangesAssertPass(t *testing.T) {
 	caseDir := writeScenarioTree(t, guardedStateMain, `name: state_changes assert pass
 fixtures:
@@ -422,12 +422,12 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if !results[0].Pass {
-		t.Fatalf("ожидали PASS (guard → \"\"), получили: %v", results[0].Failures)
+		t.Fatalf("expected PASS (guard -> \"\"), got: %v", results[0].Failures)
 	}
 }
 
-// TestRunCase_StateChangesAssertFail — расхождение assert.state_changes с
-// отрендеренным значением — фейл кейса.
+// TestRunCase_StateChangesAssertFail checks that a mismatch between
+// assert.state_changes and the rendered value fails the case.
 func TestRunCase_StateChangesAssertFail(t *testing.T) {
 	caseDir := writeScenarioTree(t, guardedStateMain, `name: state_changes assert fail
 fixtures:
@@ -445,16 +445,17 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if results[0].Pass {
-		t.Fatal("ожидали FAIL на расхождении state_changes")
+		t.Fatal("expected FAIL on state_changes mismatch")
 	}
 	if len(results[0].Failures) == 0 {
-		t.Fatal("ожидали непустой список расхождений")
+		t.Fatal("expected non-empty mismatch list")
 	}
 }
 
-// addUserStateMain — scenario, накапливающий state поверх существующего:
-// state_changes.sets добавляет last_user из input, не трогая базовый users.
-// Зеркало add_user-операций над incarnation.state (orchestration.md §7.1).
+// addUserStateMain is a scenario that accumulates state on top of existing
+// state: state_changes.sets adds last_user from input without touching base
+// users. Mirror of add_user operations over incarnation.state
+// (orchestration.md section 7.1).
 const addUserStateMain = `name: add_user
 input:
   name:
@@ -469,9 +470,9 @@ tasks:
       name: "${ input.name }"
 `
 
-// TestRunCase_StateAfterPass — assert.state_after сверяет ПОЛНЫЙ итоговый state:
-// базовый fixtures.state (users) + отрендеренный sets (last_user). Зеркало
-// прод-коммита mergeStateChanges(stateBefore, renderedSets).
+// TestRunCase_StateAfterPass checks assert.state_after against the FULL final
+// state: base fixtures.state (users) + rendered sets (last_user). Mirror of the
+// production mergeStateChanges(stateBefore, renderedSets) commit.
 func TestRunCase_StateAfterPass(t *testing.T) {
 	caseDir := writeScenarioTree(t, addUserStateMain, `name: add_user accumulates over base state
 fixtures:
@@ -494,12 +495,12 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if !results[0].Pass {
-		t.Fatalf("ожидали PASS (base.users + sets.last_user), получили: %v", results[0].Failures)
+		t.Fatalf("expected PASS (base.users + sets.last_user), got: %v", results[0].Failures)
 	}
 }
 
-// TestRunCase_StateAfterFail — расхождение ожидаемого итога с фактическим
-// (last_user в state_after не совпадает с отрендеренным) — фейл кейса.
+// TestRunCase_StateAfterFail checks that expected final state differing from
+// actual (last_user in state_after does not match rendered value) fails the case.
 func TestRunCase_StateAfterFail(t *testing.T) {
 	caseDir := writeScenarioTree(t, addUserStateMain, `name: add_user state_after mismatch
 fixtures:
@@ -522,16 +523,17 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if results[0].Pass {
-		t.Fatal("ожидали FAIL на расхождении last_user в state_after")
+		t.Fatal("expected FAIL on last_user mismatch in state_after")
 	}
 	if len(results[0].Failures) == 0 {
-		t.Fatal("ожидали непустой список расхождений")
+		t.Fatal("expected non-empty mismatch list")
 	}
 }
 
-// TestRunCase_StateAfterFullCompare — state_after сверяется ПОЛНОСТЬЮ (как L1):
-// лишний ключ в фактическом итоге (базовый users не упомянут в ожидаемом
-// state_after) — тоже расхождение. Отличие от частичной сверки state_changes.
+// TestRunCase_StateAfterFullCompare checks that state_after is compared FULLY
+// (like L1): an extra key in the actual final state (base users not mentioned in
+// expected state_after) is also a mismatch. This differs from partial
+// state_changes checks.
 func TestRunCase_StateAfterFullCompare(t *testing.T) {
 	caseDir := writeScenarioTree(t, addUserStateMain, `name: add_user state_after must be complete
 fixtures:
@@ -552,12 +554,12 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if results[0].Pass {
-		t.Fatal("ожидали FAIL: базовый users не упомянут в state_after, полная сверка ловит лишний ключ")
+		t.Fatal("expected FAIL: base users not mentioned in state_after, full comparison catches extra key")
 	}
 }
 
-// assertMain — scenario с assert-задачей (ADR-009 amendment 2026-06-23): render
-// обрывается, если число хостов roster-а != input.want_hosts.
+// assertMain is a scenario with an assert task (ADR-009 amendment 2026-06-23):
+// render aborts if the roster host count != input.want_hosts.
 const assertMain = `name: create
 input:
   want_hosts:
@@ -576,8 +578,9 @@ tasks:
       content: ok
 `
 
-// TestRunCase_ExpectRenderError_Match — assert-провал обрывает render; кейс с
-// expect_render_error на совпадающую подстроку → PASS (ADR-023 amendment).
+// TestRunCase_ExpectRenderError_Match checks that an assert failure aborts
+// render; a case with expect_render_error matching the substring passes
+// (ADR-023 amendment).
 func TestRunCase_ExpectRenderError_Match(t *testing.T) {
 	caseDir := writeScenarioTree(t, assertMain, `name: assert aborts render
 fixtures:
@@ -593,12 +596,12 @@ expect_render_error: "topology mismatch"
 		t.Fatalf("Run: %v", err)
 	}
 	if !results[0].Pass {
-		t.Fatalf("ожидали PASS (render оборвался с подстрокой): %v", results[0].Failures)
+		t.Fatalf("expected PASS (render aborted with substring): %v", results[0].Failures)
 	}
 }
 
-// TestRunCase_ExpectRenderError_RenderSucceeds — expect_render_error задан, но
-// render УСПЕШЕН (топология совпала) → FAIL (ожидался abort, его не было).
+// TestRunCase_ExpectRenderError_RenderSucceeds checks expect_render_error set
+// while render SUCCEEDS (topology matches) -> FAIL (expected abort did not happen).
 func TestRunCase_ExpectRenderError_RenderSucceeds(t *testing.T) {
 	caseDir := writeScenarioTree(t, assertMain, `name: assert passes but error expected
 fixtures:
@@ -614,12 +617,12 @@ expect_render_error: "topology mismatch"
 		t.Fatalf("Run: %v", err)
 	}
 	if results[0].Pass {
-		t.Fatal("ожидали FAIL: render успешен, а кейс ждал обрыв")
+		t.Fatal("expected FAIL: render succeeded while the case expected an abort")
 	}
 }
 
-// TestRunCase_ExpectRenderError_WrongSubstring — render оборвался, но подстрока
-// ошибки не совпала с ожиданием → FAIL (ловит подмену сообщения).
+// TestRunCase_ExpectRenderError_WrongSubstring checks render abort with a
+// non-matching error substring -> FAIL (catches message substitution).
 func TestRunCase_ExpectRenderError_WrongSubstring(t *testing.T) {
 	caseDir := writeScenarioTree(t, assertMain, `name: assert aborts but wrong substring
 fixtures:
@@ -634,13 +637,13 @@ expect_render_error: "completely different text"
 		t.Fatalf("Run: %v", err)
 	}
 	if results[0].Pass {
-		t.Fatal("ожидали FAIL: render оборвался, но подстрока не совпала")
+		t.Fatal("expected FAIL: render aborted, but substring did not match")
 	}
 }
 
-// TestLoadCase_ExpectRenderErrorConflictsWithRenderedTasks — expect_render_error и
-// assert.rendered_tasks в одном кейсе — strict-ошибка валидации (противоположные
-// исходы).
+// TestLoadCase_ExpectRenderErrorConflictsWithRenderedTasks checks
+// expect_render_error and assert.rendered_tasks in one case: strict validation
+// error (opposite outcomes).
 func TestLoadCase_ExpectRenderErrorConflictsWithRenderedTasks(t *testing.T) {
 	caseDir := writeScenarioTree(t, assertMain, `name: conflict
 fixtures:
@@ -654,21 +657,21 @@ assert:
 `)
 	_, _, err := LoadCase(caseDir)
 	if err == nil {
-		t.Fatal("ожидали ошибку валидации: expect_render_error ⊕ assert.rendered_tasks")
+		t.Fatal("expected validation error: expect_render_error XOR assert.rendered_tasks")
 	}
-	if !strings.Contains(err.Error(), "взаимоисключены") {
-		t.Errorf("ошибка не про взаимоисключение: %v", err)
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("error is not about mutual exclusion: %v", err)
 	}
 }
 
-// TestRun_MixedL0L2Tree — рекурсивный прогон дерева с L0- и L2-кейсами: L0
-// исполняются, L2 (маркер stand:/verify:) пропускаются с пометкой Skipped, нет
-// краша на strict-декоде L2-кейса. Регресс на mixed-дерево examples/.
+// TestRun_MixedL0L2Tree recursively runs a tree with L0 and L2 cases: L0
+// executes, L2 (stand:/verify: marker) is skipped with Skipped, and strict decode
+// of the L2 case does not crash. Regression for a mixed examples/ tree.
 func TestRun_MixedL0L2Tree(t *testing.T) {
 	root := t.TempDir()
 	scnDir := filepath.Join(root, "scenario", "create")
 
-	// L0-кейс: исполняется обычным L0-пайплайном.
+	// L0 case: executed by the regular L0 pipeline.
 	l0Dir := filepath.Join(scnDir, "tests", "l0")
 	if err := os.MkdirAll(l0Dir, 0o755); err != nil {
 		t.Fatalf("mkdir l0: %v", err)
@@ -691,15 +694,16 @@ assert:
 		t.Fatalf("write l0 case: %v", err)
 	}
 
-	// L2-кейс: несёт stand:/verify: + поля, на которых L0 strict-декод упал бы
-	// (description, expect_idempotent). Должен быть распознан как L2 и пропущен.
+	// L2 case: carries stand:/verify: plus fields that would make L0 strict
+	// decode fail (description, expect_idempotent). Must be recognized as L2 and
+	// skipped.
 	l2Dir := filepath.Join(scnDir, "tests", "l2")
 	if err := os.MkdirAll(l2Dir, 0o755); err != nil {
 		t.Fatalf("mkdir l2: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(l2Dir, caseFileName), []byte(`name: l2 stand
 description: |
-  Этот кейс исполняется на стенде, MVP-harness его не гоняет.
+  This case runs on the stand; the MVP harness does not run it.
 stand:
   driver: docker
   image: ubuntu:24.04
@@ -716,10 +720,10 @@ verify:
 
 	results, err := Run(context.Background(), root)
 	if err != nil {
-		t.Fatalf("Run на mixed-дереве не должен падать на L2-кейсе: %v", err)
+		t.Fatalf("Run on mixed tree must not fail on L2 case: %v", err)
 	}
 	if len(results) != 2 {
-		t.Fatalf("ожидали 2 результата (L0 + L2), получили %d", len(results))
+		t.Fatalf("expected 2 results (L0 + L2), got %d", len(results))
 	}
 
 	var sawL0Pass, sawL2Skip bool
@@ -728,25 +732,25 @@ verify:
 		case r.Skipped:
 			sawL2Skip = true
 			if !strings.Contains(r.Case, "l2") {
-				t.Errorf("пропущенным ожидался L2-кейс, получили %q", r.Case)
+				t.Errorf("expected skipped result to be the L2 case, got %q", r.Case)
 			}
 		default:
 			sawL0Pass = r.Pass
 			if !r.Pass {
-				t.Errorf("L0-кейс должен пройти, FAIL: %v", r.Failures)
+				t.Errorf("L0 case must pass, FAIL: %v", r.Failures)
 			}
 		}
 	}
 	if !sawL0Pass {
-		t.Fatal("ожидали исполненный (не пропущенный) L0-кейс")
+		t.Fatal("expected executed (not skipped) L0 case")
 	}
 	if !sawL2Skip {
-		t.Fatal("ожидали пропущенный L2-кейс")
+		t.Fatal("expected skipped L2 case")
 	}
 }
 
-// TestRun_L2OnlyVerifyMarker — кейс лишь с verify: (без stand:) тоже распознаётся
-// как L2 и пропускается (любой из маркеров достаточен).
+// TestRun_L2OnlyVerifyMarker checks that a case with only verify: (without
+// stand:) is also recognized as L2 and skipped (either marker is enough).
 func TestRun_L2OnlyVerifyMarker(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, caseFileName)
@@ -763,15 +767,16 @@ verify:
 		t.Fatalf("Run: %v", err)
 	}
 	if len(results) != 1 || !results[0].Skipped {
-		t.Fatalf("ожидали 1 пропущенный L2-кейс, получили %+v", results)
+		t.Fatalf("expected 1 skipped L2 case, got %+v", results)
 	}
 }
 
-// TestRun_L0WithUnknownField_StillErrors — центральный инвариант L2-skip: L0-кейс
-// с unknown-field (опечатка) и БЕЗ маркеров stand:/verify: проходит мягкий
-// пред-парс isL2Case как НЕ-L2 и обязан упасть strict-декодом в LoadCase, а не
-// тихо проскочить как «не-L2 → strict не сработал». Прогон строго через новый
-// путь Run→isL2Case→LoadCase: ошибка проброшена, кейс НЕ помечен Skipped.
+// TestRun_L0WithUnknownField_StillErrors is the central L2-skip invariant: an
+// L0 case with an unknown field (typo) and WITHOUT stand:/verify: markers passes
+// soft pre-parse isL2Case as NOT-L2 and must fail strict decoding in LoadCase,
+// rather than silently slipping through as "not-L2 -> strict did not run". The
+// run goes strictly through the new Run->isL2Case->LoadCase path: error is
+// propagated, and the case is NOT marked Skipped.
 func TestRun_L0WithUnknownField_StillErrors(t *testing.T) {
 	root := t.TempDir()
 	scnDir := filepath.Join(root, "scenario", "create")
@@ -782,7 +787,7 @@ func TestRun_L0WithUnknownField_StillErrors(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(scnDir, "main.yml"), []byte(helloMain), 0o644); err != nil {
 		t.Fatalf("write main.yml: %v", err)
 	}
-	// Опечатка верхнего уровня (assertt вместо assert) + нет stand:/verify:.
+	// Top-level typo (assertt instead of assert) + no stand:/verify:.
 	if err := os.WriteFile(filepath.Join(caseDir, caseFileName), []byte(`name: l0 typo
 fixtures:
   input:
@@ -797,18 +802,18 @@ assertt:
 
 	results, err := Run(context.Background(), root)
 	if err == nil {
-		t.Fatal("ожидали ошибку strict-декода на unknown-field L0-кейса (без stand/verify), получили nil")
+		t.Fatal("expected strict-decode error on unknown-field L0 case (without stand/verify), got nil")
 	}
 	for _, r := range results {
 		if r.Skipped {
-			t.Fatalf("L0-кейс с опечаткой не должен пропускаться как L2: %q", r.Case)
+			t.Fatalf("L0 case with typo must not be skipped as L2: %q", r.Case)
 		}
 	}
 }
 
-// TestRun_NonMapTopLevel_Errors — case.yml с non-map top-level (скаляр/список):
-// мягкий пред-парс isL2Case не может декодировать его в map → ошибка, Run её
-// пробрасывает, а не молча скипает кейс.
+// TestRun_NonMapTopLevel_Errors checks case.yml with non-map top-level
+// (scalar/list): soft pre-parse isL2Case cannot decode it into a map -> error,
+// and Run propagates it instead of silently skipping the case.
 func TestRun_NonMapTopLevel_Errors(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, caseFileName)
@@ -817,11 +822,11 @@ func TestRun_NonMapTopLevel_Errors(t *testing.T) {
 	}
 	results, err := Run(context.Background(), file)
 	if err == nil {
-		t.Fatal("ожидали ошибку пред-парса на non-map top-level, получили nil")
+		t.Fatal("expected pre-parse error on non-map top-level, got nil")
 	}
 	for _, r := range results {
 		if r.Skipped {
-			t.Fatalf("non-map кейс не должен пропускаться: %q", r.Case)
+			t.Fatalf("non-map case must not be skipped: %q", r.Case)
 		}
 	}
 }
@@ -839,7 +844,7 @@ assert:
 		t.Fatalf("write: %v", err)
 	}
 	if _, _, err := LoadCase(file); err == nil {
-		t.Fatalf("ожидали ошибку strict-decode на assert.dispatch (TODO-секция)")
+		t.Fatalf("expected strict-decode error on assert.dispatch (TODO section)")
 	}
 }
 
@@ -855,12 +860,12 @@ assert:
 		t.Fatalf("write: %v", err)
 	}
 	if _, _, err := LoadCase(file); err == nil {
-		t.Fatalf("ожидали ошибку на пустой assert.rendered_tasks")
+		t.Fatalf("expected error on empty assert.rendered_tasks")
 	}
 }
 
-// vaultMain — scenario с vault:-ref в params для проверки, что fixtures.vault
-// feeds render-пайплайн герметично (без поднятия Vault).
+// vaultMain is a scenario with vault:-ref in params to check that fixtures.vault
+// feeds the render pipeline hermetically (without starting Vault).
 const vaultMain = `name: create
 input: {}
 tasks:
@@ -871,8 +876,8 @@ tasks:
       content: "vault:secret/app/cfg#token"
 `
 
-// TestRunCase_VaultRef — fixtures.vault резолвится в params через
-// fixture-backed KVReader (герметично, без Vault).
+// TestRunCase_VaultRef checks that fixtures.vault resolves into params through
+// fixture-backed KVReader (hermetic, without Vault).
 func TestRunCase_VaultRef(t *testing.T) {
 	caseDir := writeScenarioTree(t, vaultMain, `name: vault ref
 fixtures:
@@ -893,14 +898,14 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if !results[0].Pass {
-		t.Fatalf("ожидали PASS (vault-ref резолвлен в abc123), получили: %v", results[0].Failures)
+		t.Fatalf("expected PASS (vault-ref resolved to abc123), got: %v", results[0].Failures)
 	}
 }
 
-// celVaultMain — scenario с CEL-функцией vault() (НЕ vault:-ref) в params.
-// vault() резолвится keeper-side в CEL-render-фазе через fixtureVault (тот же
-// герметичный reader, что для vault:-ref). Закрывает qa-пробел: L0 покрывал
-// только vault:-ref, не CEL vault().
+// celVaultMain is a scenario with CEL function vault() (NOT vault:-ref) in
+// params. vault() resolves keeper-side in the CEL render phase through
+// fixtureVault (the same hermetic reader as for vault:-ref). Closes a QA gap:
+// L0 covered only vault:-ref, not CEL vault().
 const celVaultMain = `name: create
 input: {}
 tasks:
@@ -911,8 +916,9 @@ tasks:
       content: "${ vault('secret/app/cfg#token') }"
 `
 
-// TestRunCase_CELVaultFunc — fixtures.vault резолвится через CEL-функцию vault()
-// (#field-форма) детерминированно в реальное значение секрета в L0 (soul-trial).
+// TestRunCase_CELVaultFunc checks fixtures.vault resolving through CEL function
+// vault() (#field form) deterministically into the real secret value in L0
+// (soul-trial).
 func TestRunCase_CELVaultFunc(t *testing.T) {
 	caseDir := writeScenarioTree(t, celVaultMain, `name: cel vault()
 fixtures:
@@ -933,12 +939,12 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if !results[0].Pass {
-		t.Fatalf("ожидали PASS (CEL vault() резолвлен в abc123), получили: %v", results[0].Failures)
+		t.Fatalf("expected PASS (CEL vault() resolved to abc123), got: %v", results[0].Failures)
 	}
 }
 
-// vaultNoLogMain — scenario с vault-ref в params задачи, помеченной no_log:
-// при FAIL значение не должно утечь в diff.
+// vaultNoLogMain is a scenario with vault-ref in params of a task marked
+// no_log: on FAIL the value must not leak into the diff.
 const vaultNoLogMain = `name: create
 input: {}
 tasks:
@@ -950,9 +956,9 @@ tasks:
       content: "vault:secret/app/cfg#token"
 `
 
-// TestRunCase_FailNoLogMasksSecret — задача с no_log: true и FAIL по params:
-// diff маскирует значения (печатает только ключи), сырой секрет abc123 в
-// Failures не появляется.
+// TestRunCase_FailNoLogMasksSecret checks a task with no_log: true and FAIL by
+// params: the diff masks values (prints only keys), and the raw secret abc123
+// does not appear in Failures.
 func TestRunCase_FailNoLogMasksSecret(t *testing.T) {
 	caseDir := writeScenarioTree(t, vaultNoLogMain, `name: vault no_log fail
 fixtures:
@@ -973,20 +979,20 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if results[0].Pass {
-		t.Fatalf("ожидали FAIL на расхождении content")
+		t.Fatalf("expected FAIL on content mismatch")
 	}
 	if len(results[0].Failures) == 0 {
-		t.Fatalf("ожидали непустой список расхождений")
+		t.Fatalf("expected non-empty mismatch list")
 	}
 	for _, f := range results[0].Failures {
 		if strings.Contains(f, "abc123") {
-			t.Fatalf("секрет abc123 утёк в diff no_log-задачи: %q", f)
+			t.Fatalf("secret abc123 leaked into no_log task diff: %q", f)
 		}
 	}
 }
 
-// TestCompareParams_NoLogMask — unit на маскировку: при noLog=true diff не
-// содержит значений, только ключи (и наоборот при noLog=false).
+// TestCompareParams_NoLogMask is a masking unit test: when noLog=true, diff
+// contains no values, only keys (and conversely when noLog=false).
 func TestCompareParams_NoLogMask(t *testing.T) {
 	got, err := structpb.NewStruct(map[string]any{"content": "abc123"})
 	if err != nil {
@@ -996,30 +1002,30 @@ func TestCompareParams_NoLogMask(t *testing.T) {
 
 	masked := compareParams(0, want, got, true)
 	if masked == "" {
-		t.Fatalf("ожидали diff (значения расходятся)")
+		t.Fatalf("expected diff (values differ)")
 	}
 	if strings.Contains(masked, "abc123") || strings.Contains(masked, "WRONG") {
-		t.Fatalf("no_log diff не должен содержать значений: %q", masked)
+		t.Fatalf("no_log diff must not contain values: %q", masked)
 	}
 	if !strings.Contains(masked, "content") {
-		t.Fatalf("no_log diff должен печатать ключи: %q", masked)
+		t.Fatalf("no_log diff must print keys: %q", masked)
 	}
 
 	open := compareParams(0, want, got, false)
 	if !strings.Contains(open, "abc123") {
-		t.Fatalf("без no_log diff должен показывать значения: %q", open)
+		t.Fatalf("without no_log, diff must show values: %q", open)
 	}
 }
 
-// writeApplyDestinyTree строит герметичное дерево для L0-кейса с apply:destiny:
+// writeApplyDestinyTree builds a hermetic tree for an L0 case with apply:destiny:
 //
 //	<root>/service.yml                       — declares destiny[] dep
-//	<root>/scenario/create/main.yml          — scenario с apply: { destiny: <dst> }
-//	<root>/scenario/create/tests/c1/case.yml — кейс с fixtures.soulprint + default_destiny_source
-//	<root>/destiny-<dst>/{destiny.yml,tasks/main.yml} — destiny, читающая soulprint.self
+//	<root>/scenario/create/main.yml          — scenario with apply: { destiny: <dst> }
+//	<root>/scenario/create/tests/c1/case.yml — case with fixtures.soulprint + default_destiny_source
+//	<root>/destiny-<dst>/{destiny.yml,tasks/main.yml} — destiny reading soulprint.self
 //
-// Возвращает путь к каталогу кейса (для Run). serviceRootFor(case.yml) == <root>,
-// поэтому service.yml и destiny-каталог резолвятся относительно него.
+// Returns the case directory path (for Run). serviceRootFor(case.yml) == <root>,
+// so service.yml and the destiny directory resolve relative to it.
 func writeApplyDestinyTree(t *testing.T, dst, mainYML, caseYML, destinyYML, destinyTasks string) string {
 	t.Helper()
 	root := t.TempDir()
@@ -1045,11 +1051,12 @@ func writeApplyDestinyTree(t *testing.T, dst, mainYML, caseYML, destinyYML, dest
 	return caseDir
 }
 
-// TestRunCase_ApplyDestinySelfArch — L0-guard ослабления инварианта (ADR-009/010
-// amendment): destiny, рендерящаяся через scenario-обёртку apply:destiny, видит
-// инжектированный fixtures.soulprint.self.os.arch (синтетический arm64). Доказывает,
-// что self целевого хоста течёт в destiny-проход и в L0 (тот же renderApplyDestiny,
-// что в проде) — soulprint.self в destiny-CEL рендерится с fixtures.soulprint.
+// TestRunCase_ApplyDestinySelfArch is an L0 guard for relaxing the invariant
+// (ADR-009/010 amendment): destiny rendered through the apply:destiny scenario
+// wrapper sees injected fixtures.soulprint.self.os.arch (synthetic arm64).
+// Proves that the target host self flows into the destiny pass and into L0 (the
+// same renderApplyDestiny as in production): soulprint.self in destiny-CEL
+// renders with fixtures.soulprint.
 func TestRunCase_ApplyDestinySelfArch(t *testing.T) {
 	caseDir := writeApplyDestinyTree(t, "arch-aware",
 		`name: create
@@ -1086,15 +1093,15 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if len(results) != 1 {
-		t.Fatalf("ожидали 1 результат, получили %d", len(results))
+		t.Fatalf("expected 1 result, got %d", len(results))
 	}
 	if !results[0].Pass {
-		t.Fatalf("ожидали PASS (soulprint.self.os.arch=arm64 в destiny-проходе L0), получили: %v", results[0].Failures)
+		t.Fatalf("expected PASS (soulprint.self.os.arch=arm64 in L0 destiny pass), got: %v", results[0].Failures)
 	}
 }
 
-// TestFixtureVault — fixture-vault резолвит vault-ref герметично и нормализует
-// logical/relative формы пути.
+// TestFixtureVault checks fixture-vault resolving vault-ref hermetically and
+// normalizing logical/relative path forms.
 func TestFixtureVault(t *testing.T) {
 	fv := newFixtureVault(map[string]map[string]any{
 		"secret/db/cred": {"password": "s3cret"},
@@ -1109,14 +1116,14 @@ func TestFixtureVault(t *testing.T) {
 		}
 	}
 	if _, err := fv.ReadKV(context.Background(), "secret/missing"); err == nil {
-		t.Fatalf("ожидали ErrVaultKVNotFound на отсутствующем секрете")
+		t.Fatalf("expected ErrVaultKVNotFound for missing secret")
 	}
 }
 
-// presenceMain — scenario с ДВУМЯ задачами одного module (core.file.present) с
-// разными register/path и одной уникальной (core.service.running) — стресс
-// presence-матчера: совпадение по module создаёт коллизию, дизамбигуируемую по
-// id(register)/params_subset.
+// presenceMain is a scenario with TWO tasks of one module (core.file.present)
+// with different register/path and one unique task (core.service.running): a
+// stress case for the presence matcher where matching by module creates a
+// collision disambiguated by id(register)/params_subset.
 const presenceMain = `name: create
 input:
   greeting:
@@ -1142,10 +1149,10 @@ tasks:
       enabled: true
 `
 
-// TestRunCase_PresencePass — positive: task_present находит задачи по module +
-// params_subset (частичное подмножество params), task_absent проходит на
-// невызванном module. Доказывает базовый матч и сосуществование с позиционной
-// формой (rendered_tasks тут не задан — план ассертится только presence).
+// TestRunCase_PresencePass is positive: task_present finds tasks by module +
+// params_subset (partial subset of params), and task_absent passes on an
+// uncalled module. Proves the basic match and coexistence with positional form
+// (rendered_tasks is not set here; the plan is asserted only by presence).
 func TestRunCase_PresencePass(t *testing.T) {
 	caseDir := writeScenarioTree(t, presenceMain, `name: presence pass
 fixtures:
@@ -1168,12 +1175,12 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if !results[0].Pass {
-		t.Fatalf("ожидали PASS, получили: %v", results[0].Failures)
+		t.Fatalf("expected PASS, got: %v", results[0].Failures)
 	}
 }
 
-// TestRunCase_PresenceNotFound — negative: task_present по несуществующему
-// params_subset (path не совпадает ни с одной задачей) → FAIL с «не найдено».
+// TestRunCase_PresenceNotFound is negative: task_present by nonexistent
+// params_subset (path does not match any task) -> FAIL with "not found".
 func TestRunCase_PresenceNotFound(t *testing.T) {
 	caseDir := writeScenarioTree(t, presenceMain, `name: presence not found
 fixtures:
@@ -1190,15 +1197,15 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if results[0].Pass {
-		t.Fatalf("ожидали FAIL: task_present не должен был найтись")
+		t.Fatalf("expected FAIL: task_present must not be found")
 	}
-	if !strings.Contains(strings.Join(results[0].Failures, "\n"), "не найдено") {
-		t.Fatalf("ожидали расхождение «не найдено», получили: %v", results[0].Failures)
+	if !strings.Contains(strings.Join(results[0].Failures, "\n"), "not found") {
+		t.Fatalf("expected \"not found\" mismatch, got: %v", results[0].Failures)
 	}
 }
 
-// TestRunCase_PresenceAbsentViolated — negative: task_absent на module, который
-// в плане ЕСТЬ и матчится по params_subset → FAIL.
+// TestRunCase_PresenceAbsentViolated is negative: task_absent on a module that
+// EXISTS in the plan and matches by params_subset -> FAIL.
 func TestRunCase_PresenceAbsentViolated(t *testing.T) {
 	caseDir := writeScenarioTree(t, presenceMain, `name: presence absent violated
 fixtures:
@@ -1219,16 +1226,16 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if results[0].Pass {
-		t.Fatalf("ожидали FAIL: task_absent нарушен (задача присутствует)")
+		t.Fatalf("expected FAIL: task_absent violated (task is present)")
 	}
-	if !strings.Contains(strings.Join(results[0].Failures, "\n"), "ожидалось отсутствие") {
-		t.Fatalf("ожидали расхождение «ожидалось отсутствие», получили: %v", results[0].Failures)
+	if !strings.Contains(strings.Join(results[0].Failures, "\n"), "expected absence") {
+		t.Fatalf("expected \"expected absence\" mismatch, got: %v", results[0].Failures)
 	}
 }
 
-// TestRunCase_PresenceCollision — коллизия: task_present по module без
-// дизамбигуатора матчит ОБЕ core.file.present задачи (>1 совпадение) → FAIL с
-// подсказкой добавить id/register или сузить params_subset.
+// TestRunCase_PresenceCollision checks collision: task_present by module without
+// disambiguator matches BOTH core.file.present tasks (>1 match) -> FAIL with a
+// hint to add id/register or narrow params_subset.
 func TestRunCase_PresenceCollision(t *testing.T) {
 	caseDir := writeScenarioTree(t, presenceMain, `name: presence collision
 fixtures:
@@ -1245,16 +1252,16 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if results[0].Pass {
-		t.Fatalf("ожидали FAIL: коллизия (2 совпадения на task_present)")
+		t.Fatalf("expected FAIL: collision (2 matches on task_present)")
 	}
-	if !strings.Contains(strings.Join(results[0].Failures, "\n"), "коллизия") {
-		t.Fatalf("ожидали расхождение «коллизия», получили: %v", results[0].Failures)
+	if !strings.Contains(strings.Join(results[0].Failures, "\n"), "collision") {
+		t.Fatalf("expected \"collision\" mismatch, got: %v", results[0].Failures)
 	}
 }
 
-// TestRunCase_PresenceCollisionResolved — та же коллизия, но дизамбигуирована
-// id(register) → ровно одно совпадение → PASS. Доказывает, что register∪id
-// снимает коллизию.
+// TestRunCase_PresenceCollisionResolved checks the same collision disambiguated
+// by id(register) -> exactly one match -> PASS. Proves register union id removes
+// the collision.
 func TestRunCase_PresenceCollisionResolved(t *testing.T) {
 	caseDir := writeScenarioTree(t, presenceMain, `name: presence collision resolved
 fixtures:
@@ -1272,17 +1279,18 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if !results[0].Pass {
-		t.Fatalf("ожидали PASS (коллизия снята id=beta_file), получили: %v", results[0].Failures)
+		t.Fatalf("expected PASS (collision resolved by id=beta_file), got: %v", results[0].Failures)
 	}
 }
 
-// skipBranchMain — scenario с выключаемой веткой: задача core.pkg.installed под
-// static-false when (`when: input.enabled`, при enabled=false → static-when skip-
-// placeholder, ADR-012(d) Вариант b) + всегда-активная core.service.running. Один
-// module (core.pkg.installed) живёт ТОЛЬКО в выключенной ветке — стресс
-// skip-placeholder-матча: bare-module presence/absence не должны срабатывать на
-// skip. when статический (без register/soulprint) — Keeper эмитит placeholder с
-// Params=nil, не рендерит params.
+// skipBranchMain is a scenario with a disableable branch: task
+// core.pkg.installed under static-false when (`when: input.enabled`, with
+// enabled=false -> static-when skip-placeholder, ADR-012(d) Variant b) plus
+// always-active core.service.running. One module (core.pkg.installed) lives ONLY
+// in the disabled branch: stress for skip-placeholder matching where bare-module
+// presence/absence must not trigger on skip. when is static (no
+// register/soulprint), so Keeper emits a placeholder with Params=nil and does
+// not render params.
 const skipBranchMain = `name: create
 input:
   enabled:
@@ -1301,10 +1309,10 @@ tasks:
       enabled: true
 `
 
-// TestRunCase_PresenceAbsentOnSkippedBranch — GUARD (MAJOR-баг): выключенная ветка
-// (when:false → skip-placeholder) + task_absent ТОЛЬКО с module этой ветки.
-// Skip = «не вызвано» → НЕ присутствие → task_absent проходит. До фикса placeholder
-// сохранял Module при Params=nil, давая ложный FAIL «задача найдена».
+// TestRunCase_PresenceAbsentOnSkippedBranch is a GUARD (MAJOR bug): disabled
+// branch (when:false -> skip-placeholder) + task_absent ONLY with that branch's
+// module. Skip = "not called" -> NOT presence -> task_absent passes. Before the
+// fix, placeholder kept Module with Params=nil, causing false FAIL "task found".
 func TestRunCase_PresenceAbsentOnSkippedBranch(t *testing.T) {
 	caseDir := writeScenarioTree(t, skipBranchMain, `name: absent on skipped branch
 fixtures:
@@ -1319,13 +1327,13 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if !results[0].Pass {
-		t.Fatalf("ожидали PASS: skip-placeholder не должен считаться присутствием, получили: %v", results[0].Failures)
+		t.Fatalf("expected PASS: skip-placeholder must not count as presence, got: %v", results[0].Failures)
 	}
 }
 
-// TestRunCase_PresenceNotFoundOnSkippedBranch — GUARD: тот же скип + task_present с
-// bare-module скип-ветки → NOT FOUND (skip не present). До фикса bare-module мог
-// ложно зазеленеть на placeholder.
+// TestRunCase_PresenceNotFoundOnSkippedBranch is a GUARD: same skip +
+// task_present with bare-module of the skipped branch -> NOT FOUND (skip is not
+// present). Before the fix, bare-module could falsely pass on placeholder.
 func TestRunCase_PresenceNotFoundOnSkippedBranch(t *testing.T) {
 	caseDir := writeScenarioTree(t, skipBranchMain, `name: present on skipped branch
 fixtures:
@@ -1340,16 +1348,16 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if results[0].Pass {
-		t.Fatalf("ожидали FAIL: skip-placeholder не должен матчить task_present")
+		t.Fatalf("expected FAIL: skip-placeholder must not match task_present")
 	}
-	if !strings.Contains(strings.Join(results[0].Failures, "\n"), "не найдено") {
-		t.Fatalf("ожидали расхождение «не найдено», получили: %v", results[0].Failures)
+	if !strings.Contains(strings.Join(results[0].Failures, "\n"), "not found") {
+		t.Fatalf("expected \"not found\" mismatch, got: %v", results[0].Failures)
 	}
 }
 
-// TestRunCase_PresenceWhenDisambiguatorPositive — дизамбигуация через when: (только
-// when, без id): при enabled=true ветка АКТИВНА (реальная задача с Params), и
-// when-дизамбигуатор адресует именно её → ровно одно совпадение → PASS.
+// TestRunCase_PresenceWhenDisambiguatorPositive checks disambiguation via when:
+// (only when, no id): with enabled=true the branch is ACTIVE (real task with
+// Params), and when-disambiguator addresses exactly it -> one match -> PASS.
 func TestRunCase_PresenceWhenDisambiguatorPositive(t *testing.T) {
 	caseDir := writeScenarioTree(t, skipBranchMain, `name: when disambiguator positive
 fixtures:
@@ -1367,13 +1375,13 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if !results[0].Pass {
-		t.Fatalf("ожидали PASS (when-дизамбигуатор адресует активную задачу), получили: %v", results[0].Failures)
+		t.Fatalf("expected PASS (when-disambiguator addresses active task), got: %v", results[0].Failures)
 	}
 }
 
-// TestRunCase_PresenceWhenDisambiguatorNegative — негатив when-дизамбигуатора:
-// when ассерта не совпадает с when задачи → не матчит → NOT FOUND. Доказывает, что
-// when сужает матч (а не игнорируется).
+// TestRunCase_PresenceWhenDisambiguatorNegative is a negative case for
+// when-disambiguator: assert when does not match task when -> no match -> NOT
+// FOUND. Proves when narrows the match (is not ignored).
 func TestRunCase_PresenceWhenDisambiguatorNegative(t *testing.T) {
 	caseDir := writeScenarioTree(t, skipBranchMain, `name: when disambiguator negative
 fixtures:
@@ -1391,19 +1399,20 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if results[0].Pass {
-		t.Fatalf("ожидали FAIL: when ассерта не совпадает с when задачи, матч не должен срабатывать")
+		t.Fatalf("expected FAIL: assert when does not match task when, match must not fire")
 	}
-	if !strings.Contains(strings.Join(results[0].Failures, "\n"), "не найдено") {
-		t.Fatalf("ожидали расхождение «не найдено», получили: %v", results[0].Failures)
+	if !strings.Contains(strings.Join(results[0].Failures, "\n"), "not found") {
+		t.Fatalf("expected \"not found\" mismatch, got: %v", results[0].Failures)
 	}
 }
 
-// TestRunCase_PresencePlusPositional — сосуществование presence + позиционной
-// rendered_tasks в ОДНОМ кейсе: обе сверки независимы и обе должны пройти.
-// Закрепляет заявленное свойство (compareTaskPresence и compareRenderedTasks
-// аппендятся независимо в RunCase). Скип-ветка отключена (enabled=false): позиционная
-// сверка видит skip-placeholder по индексу 0 (module сохранён), presence по нему
-// НЕ срабатывает (Params=nil) — два контракта на одном плане.
+// TestRunCase_PresencePlusPositional checks presence + positional
+// rendered_tasks coexistence in ONE case: both checks are independent and must
+// pass. Pins the stated property (compareTaskPresence and compareRenderedTasks
+// are appended independently in RunCase). The skip branch is disabled
+// (enabled=false): positional check sees skip-placeholder at index 0 (module
+// preserved), presence does NOT fire on it (Params=nil): two contracts on one
+// plan.
 func TestRunCase_PresencePlusPositional(t *testing.T) {
 	caseDir := writeScenarioTree(t, skipBranchMain, `name: presence plus positional
 fixtures:
@@ -1429,6 +1438,6 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if !results[0].Pass {
-		t.Fatalf("ожидали PASS (presence + позиционная независимы), получили: %v", results[0].Failures)
+		t.Fatalf("expected PASS (presence + positional are independent), got: %v", results[0].Failures)
 	}
 }
