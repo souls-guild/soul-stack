@@ -62,7 +62,7 @@ type Store struct {
 	db ExecQueryRower
 }
 
-// NewStore конструирует Store. db обязателен.
+// NewStore constructs Store. db is required.
 func NewStore(db ExecQueryRower) *Store {
 	return &Store{db: db}
 }

@@ -100,10 +100,10 @@ func (r *pushDestinyResolver) resolveGitURL() (string, error) {
 		template = r.template.DefaultDestinySource()
 	}
 	if template == "" {
-		return "", fmt.Errorf("pushorch: default_destiny_source не задан (keeper_settings) — резолв destiny %q невозможен", r.name)
+		return "", fmt.Errorf("pushorch: default_destiny_source is not set (keeper_settings); cannot resolve destiny %q", r.name)
 	}
 	if !strings.Contains(template, destinyNamePlaceholder) {
-		return "", fmt.Errorf("pushorch: default_destiny_source %q не содержит %s — имя destiny некуда подставить", template, destinyNamePlaceholder)
+		return "", fmt.Errorf("pushorch: default_destiny_source %q does not contain %s; no place to substitute destiny name", template, destinyNamePlaceholder)
 	}
 	return strings.ReplaceAll(template, destinyNamePlaceholder, r.name), nil
 }

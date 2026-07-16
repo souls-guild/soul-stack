@@ -152,9 +152,9 @@ func NewPushRun(deps Deps) (*PushRun, error) {
 	return &PushRun{deps: deps}, nil
 }
 
-// ApplyRequest — вход для PushRun.Apply (HTTP-handler / MCP-tool маппят body).
-// Поля host-side (DestinyRef, SSHProvider) — как в `PushApplyRequest`
-// docs/keeper/operator-api.md → Push endpoints.
+// ApplyRequest is input for PushRun.Apply (HTTP handler / MCP tool map body).
+// Host-side fields (DestinyRef, SSHProvider) match `PushApplyRequest` in
+// docs/keeper/operator-api.md -> Push endpoints.
 type ApplyRequest struct {
 	InventorySIDs []string
 	DestinyRef    string // "<name>@<ref>"
@@ -576,9 +576,9 @@ func terminalAuditPayload(applyID string, req ApplyRequest, status PushRunStatus
 type hostResult struct {
 	sid      string
 	provider string
-	ok       bool   // true ⇔ SendApply вернул nil-error И RunStatus==SUCCESS
-	status   string // строковая форма для summary (`success`/`failed`/`cancelled`/`error_locked`/`error`)
-	errText  string // ненулевое только при ok=false; SendApply error, либо причина не-SUCCESS статуса
+	ok       bool   // true iff SendApply returned nil error and RunStatus==SUCCESS
+	status   string // string form for summary (`success`/`failed`/`cancelled`/`error_locked`/`error`)
+	errText  string // non-empty only when ok=false; SendApply error or the non-SUCCESS status reason
 }
 
 // buildHostResult classifies SendApply return:

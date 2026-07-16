@@ -157,7 +157,7 @@ func (f *fakeAudit) Write(_ context.Context, ev *audit.Event) error {
 	return nil
 }
 
-// fakeDestinyLoader / stubTemplate — переиспользованы из destiny_test.go.
+// fakeDestinyLoader / stubTemplate are reused from destiny_test.go.
 
 func newTestPushRun(t *testing.T, store *fakeStore, topo *fakeTopology, rend *fakeRender, disp *fakeDispatcher, audWriter *fakeAudit) *PushRun {
 	t.Helper()
@@ -268,7 +268,7 @@ func TestSummarize_Empty(t *testing.T) {
 	// case: 0 ok == 0 total).
 	status, summary := summarize(nil)
 	if status != StatusSuccess {
-		// total=0, success=0 → формула success==total срабатывает.
+		// total=0, success=0 -> the success==total formula is triggered.
 		t.Errorf("empty summarize: status = %s, want success (0 == 0)", status)
 	}
 	if summary["total"] != 0 {
@@ -412,7 +412,7 @@ func (t *trackingRouter) RouteFor(ctx context.Context, sid string) (string, push
 	return t.inner.RouteFor(ctx, sid)
 }
 
-// perSIDRouter — карта SID → (provider, source).
+// perSIDRouter is a SID -> (provider, source) map.
 type perSIDRouter struct {
 	out map[string]struct {
 		name   string
@@ -482,8 +482,9 @@ func TestRunStatusLabel(t *testing.T) {
 	}
 }
 
-// TestNewPushRun_RequiredDeps — конструктор отвергает nil обязательные deps.
-// Конкретный список — defense-in-depth: программная ошибка caller-а wire-up.
+// TestNewPushRun_RequiredDeps verifies that the constructor rejects nil required
+// deps. The concrete list is defense-in-depth: a caller wire-up programming
+// error.
 func TestNewPushRun_RequiredDeps(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	loader := &stubLoader{}

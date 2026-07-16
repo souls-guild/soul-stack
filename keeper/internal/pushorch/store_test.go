@@ -10,10 +10,10 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// fakeStoreDB — узкий ExecQueryRower-stub для unit-тестов Store.SelectAll.
-// Хранит SQL и args последнего вызова, отвечает преднастроенными значениями.
-// Симметричен fakeDB из tide/crud_test.go, в облегчённой форме (без full Insert-
-// path-а).
+// fakeStoreDB is a narrow ExecQueryRower stub for Store.SelectAll unit tests.
+// It stores SQL and args from the last call and returns preconfigured values.
+// It mirrors fakeDB from tide/crud_test.go in a lightweight form (without the
+// full Insert path).
 type fakeStoreDB struct {
 	queryRowSQL  string
 	queryRowArgs []any
