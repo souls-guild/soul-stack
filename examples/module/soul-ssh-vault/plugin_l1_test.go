@@ -13,11 +13,11 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// L1 — provider-as-plugin через РЕАЛЬНЫЙ gRPC server+client. Симметрично
-// soul-ssh-static/plugin_l1_test.go: проверка, что VaultProvider корректно
-// работает по proto-контракту SshProvider поверх настоящего gRPC-стрима, а не
-// in-proc вызова метода. Handshake-spawn под Sigil-gate покрыт на host-стороне
-// (общий pluginhost); здесь — RPC-контракт самого провайдера.
+// L1 is provider-as-plugin through a REAL gRPC server+client. Symmetrical with
+// soul-ssh-static/plugin_l1_test.go: verifies that VaultProvider correctly works
+// through the SshProvider proto contract over a real gRPC stream, not an in-proc
+// method call. Handshake-spawn under Sigil-gate is covered on the host side
+// (shared pluginhost); here we cover the provider RPC contract itself.
 
 func serveProviderGRPC(t *testing.T, impl *VaultProvider) (pluginv1.SshProviderClient, func()) {
 	t.Helper()
@@ -39,8 +39,8 @@ func serveProviderGRPC(t *testing.T, impl *VaultProvider) (pluginv1.SshProviderC
 	}
 }
 
-// l1Adapter — мост impl→SshProviderServer (embed Unimplemented для forward-compat),
-// идентичный sdk/sshprovider.serverAdapter (тот неэкспортирован).
+// l1Adapter bridges impl -> SshProviderServer (embedding Unimplemented for
+// forward compatibility), matching sdk/sshprovider.serverAdapter (not exported).
 type l1Adapter struct {
 	pluginv1.UnimplementedSshProviderServer
 	impl *VaultProvider
@@ -81,13 +81,13 @@ func TestL1_SignOverGRPC(t *testing.T) {
 		t.Fatalf("Sign rpc: %v", err)
 	}
 	if reply.GetCertificate() != mock.signedKey {
-		t.Errorf("certificate изменился при marshaling по gRPC: got %q", reply.GetCertificate())
+		t.Errorf("certificate changed during gRPC marshaling: got %q", reply.GetCertificate())
 	}
 	if reply.GetPrivateKey() != "" {
-		t.Errorf("private_key должен быть пустым в Vault SSH CA flow, got %q", reply.GetPrivateKey())
+		t.Errorf("private_key must be empty in Vault SSH CA flow, got %q", reply.GetPrivateKey())
 	}
 	if mock.gotBody["public_key"] != "ssh-ed25519 AAAA-test-pub" {
-		t.Errorf("Vault не получил pubkey через gRPC: %v", mock.gotBody["public_key"])
+		t.Errorf("Vault did not receive pubkey over gRPC: %v", mock.gotBody["public_key"])
 	}
 }
 
@@ -105,10 +105,10 @@ func TestL1_AuthorizeDenyOverGRPC(t *testing.T) {
 		t.Fatalf("Authorize rpc: %v", err)
 	}
 	if deny.GetAllowed() {
-		t.Fatal("ждали deny по gRPC")
+		t.Fatal("expected deny over gRPC")
 	}
 	if !strings.HasPrefix(deny.GetReason(), string(sshprovider.DenyExplicitDeny)) {
-		t.Errorf("reason=%q, ждали %q-префикс", deny.GetReason(), sshprovider.DenyExplicitDeny)
+		t.Errorf("reason=%q, expected %q prefix", deny.GetReason(), sshprovider.DenyExplicitDeny)
 	}
 
 	allow, err := client.Authorize(ctx, &pluginv1.AuthorizeRequest{Host: "prod-1", User: "soul"})
@@ -116,7 +116,7 @@ func TestL1_AuthorizeDenyOverGRPC(t *testing.T) {
 		t.Fatalf("Authorize rpc: %v", err)
 	}
 	if !allow.GetAllowed() {
-		t.Errorf("ждали allow для user вне deny-list")
+		t.Errorf("expected allow for user outside deny-list")
 	}
 }
 
@@ -131,6 +131,6 @@ func TestL1_SignRejectsEmptyPubkeyOverGRPC(t *testing.T) {
 
 	_, err := client.Sign(ctx, &pluginv1.SignRequest{Host: "h", User: "u", PublicKey: ""})
 	if err == nil {
-		t.Fatal("ждали ошибку на пустой public_key через gRPC (Vault SSH CA = Keeper-ephemeral)")
+		t.Fatal("expected error for empty public_key over gRPC (Vault SSH CA = Keeper-ephemeral)")
 	}
 }

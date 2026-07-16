@@ -17,17 +17,18 @@ import (
 
 // --- mock Vault server (httptest) ---
 
-// mockVault — HTTP-сервер, имитирующий относящиеся к нам пути Vault SSH CA:
+// mockVault is an HTTP server that imitates the Vault SSH CA paths we use:
 //
 //	POST /v1/<mount>/sign/<role>  → { "data": { "signed_key": "<openssh-cert>" } }
 //
-// Любой другой path → status задаётся в полях (404/403), для проверки fail-веток.
+// Any other path -> status is controlled by fields (404/403), for checking fail
+// branches.
 type mockVault struct {
 	signMount    string
 	signRole     string
 	signedKey    string
-	signedStatus int  // 200 по умолчанию
-	requireToken bool // если true — проверяем заголовок X-Vault-Token
+	signedStatus int  // 200 by default
+	requireToken bool // if true, check the X-Vault-Token header
 	expectedReq  func(t *testing.T, body map[string]any)
 	gotToken     string
 	gotPath      string
@@ -75,8 +76,8 @@ func (m *mockVault) start(t *testing.T) *httptest.Server {
 	return srv
 }
 
-// realClientForMock строит production-vaultClient (через defaultClient), но
-// указывая на mock-сервер. Используется для тестов SSHSign-пути end-to-end.
+// realClientForMock builds a production vaultClient (through defaultClient) but
+// points it at the mock server. Used for end-to-end SSHSign path tests.
 func realClientForMock(addr, token string) func(p params) (vaultClient, error) {
 	return func(_ params) (vaultClient, error) {
 		cfg := vaultapi.DefaultConfig()
@@ -100,13 +101,13 @@ func TestSign_HappyPath_KeeperEphemeral(t *testing.T) {
 		requireToken: true,
 		expectedReq: func(t *testing.T, body map[string]any) {
 			if body["public_key"] != "ssh-ed25519 AAAAtest" {
-				t.Errorf("Vault не получил pubkey: %v", body["public_key"])
+				t.Errorf("Vault did not receive pubkey: %v", body["public_key"])
 			}
 			if body["valid_principals"] != "soul" {
-				t.Errorf("Vault не получил valid_principals=soul: %v", body["valid_principals"])
+				t.Errorf("Vault did not receive valid_principals=soul: %v", body["valid_principals"])
 			}
 			if body["cert_type"] != "user" {
-				t.Errorf("ждали cert_type=user, got %v", body["cert_type"])
+				t.Errorf("expected cert_type=user, got %v", body["cert_type"])
 			}
 		},
 	}
@@ -130,17 +131,17 @@ func TestSign_HappyPath_KeeperEphemeral(t *testing.T) {
 		t.Fatalf("Sign: %v", err)
 	}
 	if reply.GetCertificate() != mock.signedKey {
-		t.Errorf("certificate не совпал: got %q want %q", reply.GetCertificate(), mock.signedKey)
+		t.Errorf("certificate did not match: got %q want %q", reply.GetCertificate(), mock.signedKey)
 	}
 	if reply.GetPrivateKey() != "" {
-		t.Errorf("private_key должен быть пустым в Vault SSH CA flow, got %q", reply.GetPrivateKey())
+		t.Errorf("private_key must be empty in Vault SSH CA flow, got %q", reply.GetPrivateKey())
 	}
 	if mock.gotToken != "test-token" {
-		t.Errorf("Vault не получил token: got %q", mock.gotToken)
+		t.Errorf("Vault did not receive token: got %q", mock.gotToken)
 	}
 }
 
-// --- Sign fail-closed: пустая pubkey ---
+// --- Sign fail-closed: empty pubkey ---
 
 func TestSign_RejectsEmptyPublicKey(t *testing.T) {
 	v := &VaultProvider{cfg: params{
@@ -148,10 +149,10 @@ func TestSign_RejectsEmptyPublicKey(t *testing.T) {
 	}}
 	_, err := v.Sign(context.Background(), &pluginv1.SignRequest{Host: "h", User: "u", PublicKey: ""})
 	if err == nil {
-		t.Fatal("ждали ошибку на пустой public_key (Vault SSH CA требует Keeper-ephemeral)")
+		t.Fatal("expected error for empty public_key (Vault SSH CA requires Keeper-ephemeral)")
 	}
 	if !strings.HasPrefix(err.Error(), string(sshprovider.SignFailIssue)+": ") {
-		t.Errorf("reason=%q, ждали префикс %q", err.Error(), sshprovider.SignFailIssue)
+		t.Errorf("reason=%q, expected prefix %q", err.Error(), sshprovider.SignFailIssue)
 	}
 }
 
@@ -163,25 +164,25 @@ func TestSign_AuthFail(t *testing.T) {
 		requireToken: true,
 	}
 	srv := mock.start(t)
-	// Передаём ПУСТОЙ token → mockVault ответит 403.
+	// Pass an EMPTY token -> mockVault responds with 403.
 	v := &VaultProvider{cfg: params{
 		VaultAddr: srv.URL, VaultMount: "ssh", Role: "r", AuthMethod: authMethodToken, Token: "ignored",
 	}, newClient: realClientForMock(srv.URL, "")}
 
 	_, err := v.Sign(context.Background(), &pluginv1.SignRequest{Host: "h", User: "u", PublicKey: "ssh-ed25519 AAAA"})
 	if err == nil {
-		t.Fatal("ждали ошибку при auth-fail (Vault 403)")
+		t.Fatal("expected error on auth-fail (Vault 403)")
 	}
 	if !strings.HasPrefix(err.Error(), string(sshprovider.SignFailIssue)+": ") {
-		t.Errorf("reason=%q, ждали префикс %q", err.Error(), sshprovider.SignFailIssue)
+		t.Errorf("reason=%q, expected prefix %q", err.Error(), sshprovider.SignFailIssue)
 	}
 }
 
 // --- Sign fail: ssh-engine/role not found (404) ---
 
 func TestSign_RoleNotFound(t *testing.T) {
-	// mockVault обслуживает только signMount=ssh+signRole=keeper-push; запрос
-	// под role=missing уйдёт на другой path → 404.
+	// mockVault serves only signMount=ssh+signRole=keeper-push; a request with
+	// role=missing goes to another path -> 404.
 	mock := &mockVault{signMount: "ssh", signRole: "keeper-push", signedKey: "x"}
 	srv := mock.start(t)
 	v := &VaultProvider{cfg: params{
@@ -190,17 +191,17 @@ func TestSign_RoleNotFound(t *testing.T) {
 
 	_, err := v.Sign(context.Background(), &pluginv1.SignRequest{Host: "h", User: "u", PublicKey: "ssh-ed25519 AAAA"})
 	if err == nil {
-		t.Fatal("ждали ошибку при role=missing (404)")
+		t.Fatal("expected error for role=missing (404)")
 	}
 	if !strings.HasPrefix(err.Error(), string(sshprovider.SignFailIssue)+": ") {
-		t.Errorf("reason=%q, ждали префикс %q", err.Error(), sshprovider.SignFailIssue)
+		t.Errorf("reason=%q, expected prefix %q", err.Error(), sshprovider.SignFailIssue)
 	}
 }
 
-// --- Sign fail: empty signed_key в response ---
+// --- Sign fail: empty signed_key in response ---
 
 func TestSign_EmptySignedKey(t *testing.T) {
-	mock := &mockVault{signMount: "ssh", signRole: "r", signedKey: ""} // вернёт data{signed_key:""}
+	mock := &mockVault{signMount: "ssh", signRole: "r", signedKey: ""} // returns data{signed_key:""}
 	srv := mock.start(t)
 	v := &VaultProvider{cfg: params{
 		VaultAddr: srv.URL, VaultMount: "ssh", Role: "r", AuthMethod: authMethodToken, Token: "t",
@@ -208,27 +209,27 @@ func TestSign_EmptySignedKey(t *testing.T) {
 
 	_, err := v.Sign(context.Background(), &pluginv1.SignRequest{Host: "h", User: "u", PublicKey: "ssh-ed25519 AAAA"})
 	if err == nil {
-		t.Fatal("ждали ошибку при пустом signed_key")
+		t.Fatal("expected error for empty signed_key")
 	}
 	if !strings.HasPrefix(err.Error(), string(sshprovider.SignFailIssue)+": ") {
-		t.Errorf("reason=%q, ждали префикс %q", err.Error(), sshprovider.SignFailIssue)
+		t.Errorf("reason=%q, expected prefix %q", err.Error(), sshprovider.SignFailIssue)
 	}
 }
 
-// --- Sign fail: user вне valid_principals ---
+// --- Sign fail: user outside valid_principals ---
 
 func TestSign_PrincipalAllowlistRejects(t *testing.T) {
 	v := &VaultProvider{cfg: params{
 		VaultAddr: "http://nowhere", VaultMount: "ssh", Role: "r", AuthMethod: authMethodToken, Token: "t",
 		ValidPrincipals: []string{"soul", "deploy"},
 	}}
-	// root не в allowlist → fail без обращения в Vault.
+	// root is not in allowlist -> fail without calling Vault.
 	_, err := v.Sign(context.Background(), &pluginv1.SignRequest{Host: "h", User: "root", PublicKey: "ssh-ed25519 AAAA"})
 	if err == nil {
-		t.Fatal("ждали отказ для user не в valid_principals")
+		t.Fatal("expected rejection for user outside valid_principals")
 	}
 	if !strings.Contains(err.Error(), "valid_principals") {
-		t.Errorf("err=%q, ждали упоминание valid_principals", err.Error())
+		t.Errorf("err=%q, expected valid_principals mention", err.Error())
 	}
 }
 
@@ -241,7 +242,7 @@ func TestAuthorize_AllowByDefault(t *testing.T) {
 		t.Fatalf("Authorize: %v", err)
 	}
 	if !r.GetAllowed() {
-		t.Error("ждали allow при пустом deny-list")
+		t.Error("expected allow with empty deny-list")
 	}
 }
 
@@ -252,15 +253,15 @@ func TestAuthorize_DenyExplicit(t *testing.T) {
 		t.Fatalf("Authorize: %v", err)
 	}
 	if r.GetAllowed() {
-		t.Fatal("ждали deny для пары из deny-list")
+		t.Fatal("expected deny for deny-list pair")
 	}
 	if !strings.HasPrefix(r.GetReason(), string(sshprovider.DenyExplicitDeny)) {
-		t.Errorf("reason=%q, ждали префикс %q", r.GetReason(), sshprovider.DenyExplicitDeny)
+		t.Errorf("reason=%q, expected prefix %q", r.GetReason(), sshprovider.DenyExplicitDeny)
 	}
 }
 
 func TestAuthorize_DenyWildcard(t *testing.T) {
-	// host:"" → wildcard: root запрещён везде (симметрично static).
+	// host:"" -> wildcard: root is denied everywhere (symmetrical with static).
 	v := &VaultProvider{cfg: params{Deny: []denyRule{{User: "root"}}}}
 	for _, host := range []string{"web-1", "db-2"} {
 		r, err := v.Authorize(context.Background(), &pluginv1.AuthorizeRequest{Host: host, User: "root"})
@@ -268,7 +269,7 @@ func TestAuthorize_DenyWildcard(t *testing.T) {
 			t.Fatalf("Authorize: %v", err)
 		}
 		if r.GetAllowed() {
-			t.Errorf("ждали deny root на %s", host)
+			t.Errorf("expected deny for root on %s", host)
 		}
 	}
 }
@@ -286,7 +287,7 @@ func TestLoadParams(t *testing.T) {
 			t.Errorf("params=%+v", p)
 		}
 		if p.VaultMount != "ssh" {
-			t.Errorf("ждали default mount=ssh, got %q", p.VaultMount)
+			t.Errorf("expected default mount=ssh, got %q", p.VaultMount)
 		}
 	})
 	t.Run("ok approle", func(t *testing.T) {
@@ -299,49 +300,49 @@ func TestLoadParams(t *testing.T) {
 			t.Errorf("params=%+v", p)
 		}
 		if p.AppRole.Mount != "approle" {
-			t.Errorf("ждали default approle.mount=approle, got %q", p.AppRole.Mount)
+			t.Errorf("expected default approle.mount=approle, got %q", p.AppRole.Mount)
 		}
 	})
 	t.Run("empty env fail-closed", func(t *testing.T) {
 		t.Setenv(paramsEnv, "")
 		if _, err := loadParams(); err == nil {
-			t.Error("ждали ошибку на пустой env")
+			t.Error("expected error for empty env")
 		}
 	})
 	t.Run("missing vault_addr", func(t *testing.T) {
 		t.Setenv(paramsEnv, `{"role":"r","auth_method":"token","token":"t"}`)
 		if _, err := loadParams(); err == nil {
-			t.Error("ждали ошибку без vault_addr")
+			t.Error("expected error without vault_addr")
 		}
 	})
 	t.Run("missing role", func(t *testing.T) {
 		t.Setenv(paramsEnv, `{"vault_addr":"https://v","auth_method":"token","token":"t"}`)
 		if _, err := loadParams(); err == nil {
-			t.Error("ждали ошибку без role")
+			t.Error("expected error without role")
 		}
 	})
 	t.Run("token method without token", func(t *testing.T) {
 		t.Setenv(paramsEnv, `{"vault_addr":"https://v","role":"r","auth_method":"token"}`)
 		if _, err := loadParams(); err == nil {
-			t.Error("ждали ошибку: auth_method=token требует token")
+			t.Error("expected error: auth_method=token requires token")
 		}
 	})
 	t.Run("approle method without creds", func(t *testing.T) {
 		t.Setenv(paramsEnv, `{"vault_addr":"https://v","role":"r","auth_method":"approle"}`)
 		if _, err := loadParams(); err == nil {
-			t.Error("ждали ошибку: approle без role_id/secret_id")
+			t.Error("expected error: approle without role_id/secret_id")
 		}
 	})
 	t.Run("unsupported auth_method", func(t *testing.T) {
 		t.Setenv(paramsEnv, `{"vault_addr":"https://v","role":"r","auth_method":"kubernetes"}`)
 		if _, err := loadParams(); err == nil {
-			t.Error("ждали ошибку для неподдерживаемого auth_method")
+			t.Error("expected error for unsupported auth_method")
 		}
 	})
 	t.Run("bad json", func(t *testing.T) {
 		t.Setenv(paramsEnv, `{not json`)
 		if _, err := loadParams(); err == nil {
-			t.Error("ждали ошибку на битый JSON")
+			t.Error("expected error for bad JSON")
 		}
 	})
 }
@@ -355,9 +356,9 @@ func TestSign_NewClientFailPropagated(t *testing.T) {
 	}
 	_, err := v.Sign(context.Background(), &pluginv1.SignRequest{Host: "h", User: "u", PublicKey: "ssh-ed25519 AAAA"})
 	if err == nil {
-		t.Fatal("ждали ошибку при newClient fail")
+		t.Fatal("expected error on newClient fail")
 	}
 	if !strings.Contains(err.Error(), "synthetic auth fail") {
-		t.Errorf("err=%q, ждали обёрнутый текст newClient ошибки", err.Error())
+		t.Errorf("err=%q, expected wrapped newClient error text", err.Error())
 	}
 }

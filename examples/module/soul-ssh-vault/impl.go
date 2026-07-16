@@ -12,37 +12,40 @@ import (
 	"github.com/souls-guild/soul-stack/sdk/sshprovider"
 )
 
-// paramsEnv — env-var, через который keeper.push передаёт vault-провайдеру его
-// params (JSON по schema.json) при fork-е плагина. Симметрично soul-ssh-static:
-// SshProvider-контракт (Sign/Authorize) не несёт per-request параметров
-// провайдера, поэтому config приезжает на старте процесса, как и путь к сокету.
+// paramsEnv is the env var through which keeper.push passes params (JSON per
+// schema.json) to the vault provider when the plugin is forked. Symmetrical with
+// soul-ssh-static: the SshProvider contract (Sign/Authorize) carries no
+// per-request provider params, so config arrives at process startup, just like
+// the socket path.
 const paramsEnv = "SOUL_SSH_VAULT_PARAMS"
 
-// authMethodToken / authMethodAppRole — поддерживаемые в MVP методы. Kubernetes
-// и AWS IAM — расширение без правки proto/manifest (добавить case в authClient).
+// authMethodToken / authMethodAppRole are the methods supported in MVP.
+// Kubernetes and AWS IAM are extensions without proto/manifest changes (add a
+// case in authClient).
 const (
 	authMethodToken   = "token"
 	authMethodAppRole = "approle"
 )
 
-// params — конфигурация vault-провайдера, разобранная из paramsEnv.
+// params is the vault-provider configuration parsed from paramsEnv.
 type params struct {
-	// VaultAddr — базовый URL Vault API (https://vault.example.com:8200).
+	// VaultAddr is the base URL of the Vault API (https://vault.example.com:8200).
 	VaultAddr string `json:"vault_addr"`
-	// VaultMount — SSH CA mount path (без leading/trailing slash). По умолчанию "ssh".
+	// VaultMount is the SSH CA mount path (without leading/trailing slash).
+	// Default is "ssh".
 	VaultMount string `json:"vault_mount"`
 	// Role — Vault SSH role name.
 	Role string `json:"role"`
-	// AuthMethod — token / approle (см. константы). По умолчанию token.
+	// AuthMethod is token / approle (see constants). Default is token.
 	AuthMethod string `json:"auth_method"`
-	// Token — Vault token для AuthMethod=token. SENSITIVE.
+	// Token is the Vault token for AuthMethod=token. SENSITIVE.
 	Token string `json:"token"`
-	// AppRole — креденшалы для AuthMethod=approle.
+	// AppRole holds credentials for AuthMethod=approle.
 	AppRole appRoleCreds `json:"approle"`
-	// ValidPrincipals — allowlist principal-ов; пустой = принимать `req.User`
-	// без локальной фильтрации (отдаётся Vault role на проверку).
+	// ValidPrincipals is a principal allowlist; empty = accept `req.User` without
+	// local filtering (delegated to the Vault role for validation).
 	ValidPrincipals []string `json:"valid_principals"`
-	// Deny — deny-list пар (host, user); пустой = allow-all (dev/test).
+	// Deny is the deny-list of (host, user) pairs; empty = allow-all (dev/test).
 	Deny []denyRule `json:"deny"`
 }
 
@@ -53,8 +56,9 @@ type appRoleCreds struct {
 	Mount string `json:"mount"`
 }
 
-// denyRule — одна запись deny-list. Пустое поле = wildcard по этому измерению.
-// Семантика идентична soul-ssh-static (одинаковая модель отказа для тиража).
+// denyRule is one deny-list entry. An empty field is a wildcard for that
+// dimension. Semantics match soul-ssh-static (the same denial model for the
+// rollout).
 type denyRule struct {
 	Host string `json:"host"`
 	User string `json:"user"`
@@ -64,23 +68,23 @@ func (r denyRule) matches(host, user string) bool {
 	return (r.Host == "" || r.Host == host) && (r.User == "" || r.User == user)
 }
 
-// loadParams читает и валидирует params из env. fail-closed: невалидный JSON,
-// отсутствие vault_addr/role, неподдерживаемый auth_method, нехватка
-// auth-credentials → ошибка, плагин не стартует.
+// loadParams reads and validates params from env. Fail-closed: invalid JSON,
+// missing vault_addr/role, unsupported auth_method, or missing auth credentials
+// returns an error and the plugin does not start.
 func loadParams() (params, error) {
 	raw := os.Getenv(paramsEnv)
 	if raw == "" {
-		return params{}, fmt.Errorf("env %s пуст: vault-провайдеру нужны params", paramsEnv)
+		return params{}, fmt.Errorf("env %s is empty: vault provider requires params", paramsEnv)
 	}
 	var p params
 	if err := json.Unmarshal([]byte(raw), &p); err != nil {
-		return params{}, fmt.Errorf("разбор %s: %w", paramsEnv, err)
+		return params{}, fmt.Errorf("parse %s: %w", paramsEnv, err)
 	}
 	if p.VaultAddr == "" {
-		return params{}, errors.New("vault_addr обязателен")
+		return params{}, errors.New("vault_addr is required")
 	}
 	if p.Role == "" {
-		return params{}, errors.New("role обязателен (имя Vault SSH role)")
+		return params{}, errors.New("role is required (Vault SSH role name)")
 	}
 	if p.VaultMount == "" {
 		p.VaultMount = "ssh"
@@ -91,60 +95,61 @@ func loadParams() (params, error) {
 	switch p.AuthMethod {
 	case authMethodToken:
 		if p.Token == "" {
-			return params{}, errors.New("auth_method=token требует поле token")
+			return params{}, errors.New("auth_method=token requires the token field")
 		}
 	case authMethodAppRole:
 		if p.AppRole.RoleID == "" || p.AppRole.SecretID == "" {
-			return params{}, errors.New("auth_method=approle требует approle.role_id и approle.secret_id")
+			return params{}, errors.New("auth_method=approle requires approle.role_id and approle.secret_id")
 		}
 		if p.AppRole.Mount == "" {
 			p.AppRole.Mount = "approle"
 		}
 	default:
-		return params{}, fmt.Errorf("неподдерживаемый auth_method=%q (ожидался token|approle)", p.AuthMethod)
+		return params{}, fmt.Errorf("unsupported auth_method=%q (expected token|approle)", p.AuthMethod)
 	}
 	return p, nil
 }
 
-// VaultProvider — SshProvider поверх Vault SSH CA mount-а.
+// VaultProvider is an SshProvider over a Vault SSH CA mount.
 //
-// Sign: ходит в Vault (vault_addr, ssh/sign/<role>), подписывает
-// `req.PublicKey` (ephemeral pubkey от Keeper-а), возвращает только
-// certificate (private_key=""). Authorize: deny-list, по умолчанию allow-all.
+// Sign: calls Vault (vault_addr, ssh/sign/<role>), signs `req.PublicKey`
+// (ephemeral pubkey from Keeper), and returns only certificate (private_key="").
+// Authorize: deny-list, defaults to allow-all.
 type VaultProvider struct {
 	sshprovider.BaseProvider
 	cfg params
-	// newClient — фабрика Vault-клиента (внедряется для unit-тестов через
-	// httptest-сервер). nil → defaultClient.
+	// newClient is the Vault-client factory (injected for unit tests through an
+	// httptest server). nil -> defaultClient.
 	newClient func(p params) (vaultClient, error)
 }
 
-// vaultClient — узкий интерфейс над *vaultapi.Client: только то, чем пользуется
-// VaultProvider. Узкая поверхность держит unit-тесты простыми (мок без всего
-// SDK), не плодя ради этого фабрику ради фабрики — реализация ровно одна.
+// vaultClient is a narrow interface over *vaultapi.Client: only what
+// VaultProvider uses. The narrow surface keeps unit tests simple (a mock without
+// the full SDK), without introducing a factory for its own sake - there is
+// exactly one implementation.
 type vaultClient interface {
-	// SSHSign вызывает `<mount>/sign/<role>` с заданными data. Возвращает
-	// signed-key (поле `signed_key` в Vault response) либо typed-error.
+	// SSHSign calls `<mount>/sign/<role>` with the given data. It returns the
+	// signed-key (`signed_key` field in Vault response) or a typed error.
 	SSHSign(ctx context.Context, mount, role string, data map[string]any) (signedKey string, err error)
 }
 
-// Sign — Keeper-ephemeral режим (PM-decision SSH key-ownership):
+// Sign is Keeper-ephemeral mode (PM-decision SSH key-ownership):
 //
-//   - req.PublicKey должен быть непустым OpenSSH authorized_keys (ephemeral
-//     pubkey, который Keeper сгенерил per-session). Пустой → fail-closed (для
-//     Vault SSH CA нет смысла без pubkey).
-//   - принципал — req.User (Linux-пользователь на push-хосте); если в params
-//     задан valid_principals — req.User должен в нём быть (локальный allowlist
-//     поверх Vault role policy).
-//   - reply.private_key = "" — приватник остаётся у Keeper-а.
+//   - req.PublicKey must be non-empty OpenSSH authorized_keys (ephemeral pubkey
+//     generated by Keeper per session). Empty -> fail-closed (Vault SSH CA is
+//     meaningless without a pubkey).
+//   - principal is req.User (Linux user on the push host); if valid_principals is
+//     set in params, req.User must be included (local allowlist over Vault role
+//     policy).
+//   - reply.private_key = "" - the private key stays with Keeper.
 func (v *VaultProvider) Sign(ctx context.Context, req *pluginv1.SignRequest) (*pluginv1.SignReply, error) {
 	if req.GetPublicKey() == "" {
 		return nil, sshprovider.SignError(sshprovider.SignFailIssue,
-			errors.New("public_key пуст: Vault SSH CA работает только в Keeper-ephemeral режиме"))
+			errors.New("public_key is empty: Vault SSH CA works only in Keeper-ephemeral mode"))
 	}
 	if len(v.cfg.ValidPrincipals) > 0 && !contains(v.cfg.ValidPrincipals, req.GetUser()) {
 		return nil, sshprovider.SignError(sshprovider.SignFailIssue,
-			fmt.Errorf("user %q не в valid_principals", req.GetUser()))
+			fmt.Errorf("user %q is not in valid_principals", req.GetUser()))
 	}
 
 	newClient := v.newClient
@@ -168,22 +173,23 @@ func (v *VaultProvider) Sign(ctx context.Context, req *pluginv1.SignRequest) (*p
 	}
 	if signed == "" {
 		return nil, sshprovider.SignError(sshprovider.SignFailIssue,
-			errors.New("vault вернул пустой signed_key"))
+			errors.New("vault returned empty signed_key"))
 	}
 
 	return &pluginv1.SignReply{
 		Certificate: signed,
 		PrivateKey:  "",
-		// Vault SSH CA TTL приходит в response.lease_duration, но keeper.push
-		// его пока не использует (одноразовый сертификат на сессию; refresh
-		// делается следующим SendApply). 0 = «без планируемого refresh».
+		// Vault SSH CA TTL comes in response.lease_duration, but keeper.push does
+		// not use it yet (one-shot cert per session; refresh is done by the next
+		// SendApply). 0 = "no planned refresh".
 		TtlSeconds: 0,
 	}, nil
 }
 
-// Authorize — deny-list. Пустой deny → allow-all (dev/test). Симметрично
-// soul-ssh-static: тираж SshProvider использует общий словарь reason-кодов из
-// sdk/sshprovider для агрегации причин отказа в audit Keeper-а.
+// Authorize applies the deny-list. Empty deny -> allow-all (dev/test).
+// Symmetrical with soul-ssh-static: the SshProvider rollout uses the shared
+// reason-code dictionary from sdk/sshprovider to aggregate denial reasons in
+// Keeper audit.
 func (v *VaultProvider) Authorize(_ context.Context, req *pluginv1.AuthorizeRequest) (*pluginv1.AuthorizeReply, error) {
 	for _, rule := range v.cfg.Deny {
 		if rule.matches(req.GetHost(), req.GetUser()) {
@@ -205,9 +211,9 @@ func contains(xs []string, x string) bool {
 	return false
 }
 
-// --- vault client production-реализация ---
+// --- vault client production implementation ---
 
-// realVaultClient — обёртка над *vaultapi.Client, реализующая узкий vaultClient.
+// realVaultClient wraps *vaultapi.Client and implements the narrow vaultClient.
 type realVaultClient struct {
 	c *vaultapi.Client
 }
@@ -219,21 +225,21 @@ func (r *realVaultClient) SSHSign(ctx context.Context, mount, role string, data 
 		return "", err
 	}
 	if secret == nil || secret.Data == nil {
-		return "", errors.New("vault: пустой response от ssh/sign")
+		return "", errors.New("vault: empty response from ssh/sign")
 	}
 	v, ok := secret.Data["signed_key"]
 	if !ok {
-		return "", errors.New("vault: в response нет поля signed_key")
+		return "", errors.New("vault: response has no signed_key field")
 	}
 	signed, ok := v.(string)
 	if !ok {
-		return "", fmt.Errorf("vault: signed_key не string (%T)", v)
+		return "", fmt.Errorf("vault: signed_key is not string (%T)", v)
 	}
 	return signed, nil
 }
 
-// defaultClient собирает production-vaultClient: создаёт vaultapi.Client,
-// выполняет аутентификацию по cfg.AuthMethod.
+// defaultClient builds the production vaultClient: creates vaultapi.Client and
+// authenticates by cfg.AuthMethod.
 func defaultClient(p params) (vaultClient, error) {
 	cfg := vaultapi.DefaultConfig()
 	cfg.Address = p.VaultAddr
@@ -253,11 +259,11 @@ func defaultClient(p params) (vaultClient, error) {
 			return nil, fmt.Errorf("approle login: %w", err)
 		}
 		if secret == nil || secret.Auth == nil || secret.Auth.ClientToken == "" {
-			return nil, errors.New("approle login: пустой ClientToken")
+			return nil, errors.New("approle login: empty ClientToken")
 		}
 		c.SetToken(secret.Auth.ClientToken)
 	default:
-		return nil, fmt.Errorf("неподдерживаемый auth_method=%q", p.AuthMethod)
+		return nil, fmt.Errorf("unsupported auth_method=%q", p.AuthMethod)
 	}
 	return &realVaultClient{c: c}, nil
 }
