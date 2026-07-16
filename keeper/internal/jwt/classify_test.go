@@ -22,27 +22,27 @@ func TestClassifyVerifyErr(t *testing.T) {
 		want string
 	}{
 		{
-			name: "nil — пустая строка",
+			name: "nil returns empty string",
 			err:  nil,
 			want: "",
 		},
 		{
-			name: "истёкший токен",
+			name: "expired token",
 			err:  ErrExpiredToken,
 			want: publicDetailExpiredToken,
 		},
 		{
-			name: "истёкший токен в обёртке",
+			name: "expired token wrapped",
 			err:  fmt.Errorf("%w: extra context", ErrExpiredToken),
 			want: publicDetailExpiredToken,
 		},
 		{
-			name: "неверный issuer",
+			name: "invalid issuer",
 			err:  ErrInvalidIssuer,
 			want: publicDetailInvalidIssuer,
 		},
 		{
-			name: "неверный issuer в обёртке (как возвращает Verify)",
+			name: "invalid issuer wrapped (as Verify returns it)",
 			err:  fmt.Errorf("%w: got %q, want %q", ErrInvalidIssuer, "evil", "keeper.test"),
 			want: publicDetailInvalidIssuer,
 		},
@@ -52,13 +52,13 @@ func TestClassifyVerifyErr(t *testing.T) {
 			want: publicDetailInvalidToken,
 		},
 		{
-			name: "ErrInvalidToken в обёртке (malformed/bad-sig путь Verify)",
+			name: "ErrInvalidToken wrapped (malformed/bad-sig Verify path)",
 			err:  fmt.Errorf("%w: token is malformed", ErrInvalidToken),
 			want: publicDetailInvalidToken,
 		},
 		{
-			name: "произвольная необёрнутая ошибка → дефолтная ветка",
-			err:  errors.New("что-то совсем другое"),
+			name: "arbitrary unwrapped error -> default branch",
+			err:  errors.New("something entirely different"),
 			want: publicDetailInvalidToken,
 		},
 	}
@@ -82,13 +82,13 @@ func TestClassifyVerifyErr_NeverLeaksRawError(t *testing.T) {
 	err := fmt.Errorf("%w: %s", ErrInvalidToken, marker)
 	got := ClassifyVerifyErr(err)
 	if got == "" {
-		t.Fatalf("ClassifyVerifyErr на не-nil ошибке вернул пустую строку")
+		t.Fatalf("ClassifyVerifyErr returned an empty string for a non-nil error")
 	}
 	if got != publicDetailInvalidToken {
 		t.Fatalf("detail = %q, want %q", got, publicDetailInvalidToken)
 	}
 	// Extra invariant check: the marker must not surface in detail.
 	if got == err.Error() {
-		t.Errorf("detail совпал с raw err.Error() — утечка внутреннего сообщения")
+		t.Errorf("detail matched raw err.Error() - internal message leak")
 	}
 }

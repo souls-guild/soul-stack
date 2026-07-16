@@ -14,79 +14,79 @@ func TestParseBearerToken(t *testing.T) {
 		wantOK  bool
 	}{
 		{
-			name:    "валидный Bearer",
+			name:    "valid Bearer",
 			header:  "Bearer abc.def.ghi",
 			wantTok: "abc.def.ghi",
 			wantOK:  true,
 		},
 		{
-			name:    "scheme в нижнем регистре",
+			name:    "lowercase scheme",
 			header:  "bearer abc.def.ghi",
 			wantTok: "abc.def.ghi",
 			wantOK:  true,
 		},
 		{
-			name:    "scheme в верхнем регистре",
+			name:    "uppercase scheme",
 			header:  "BEARER abc.def.ghi",
 			wantTok: "abc.def.ghi",
 			wantOK:  true,
 		},
 		{
-			name:    "scheme смешанный регистр",
+			name:    "mixed-case scheme",
 			header:  "BeArEr abc.def.ghi",
 			wantTok: "abc.def.ghi",
 			wantOK:  true,
 		},
 		{
-			name:    "разделитель — табуляция",
+			name:    "tab separator",
 			header:  "Bearer\tabc.def.ghi",
 			wantTok: "abc.def.ghi",
 			wantOK:  true,
 		},
 		{
-			name:    "лишние пробелы вокруг токена режутся TrimSpace",
+			name:    "extra spaces around token are trimmed by TrimSpace",
 			header:  "Bearer    abc.def.ghi   ",
 			wantTok: "abc.def.ghi",
 			wantOK:  true,
 		},
 		{
-			name:    "пустая строка",
+			name:    "empty string",
 			header:  "",
 			wantTok: "",
 			wantOK:  false,
 		},
 		{
-			name:    "нет разделителя — только scheme",
+			name:    "no separator, scheme only",
 			header:  "Bearer",
 			wantTok: "",
 			wantOK:  false,
 		},
 		{
-			name:    "scheme с разделителем, но без токена",
+			name:    "scheme with separator but without token",
 			header:  "Bearer ",
 			wantTok: "",
 			wantOK:  false,
 		},
 		{
-			name:    "scheme и только пробелы вместо токена",
+			name:    "scheme and only spaces instead of token",
 			header:  "Bearer      ",
 			wantTok: "",
 			wantOK:  false,
 		},
 		{
-			name:    "не-Bearer scheme (Basic)",
+			name:    "non-Bearer scheme (Basic)",
 			header:  "Basic dXNlcjpwYXNz",
 			wantTok: "",
 			wantOK:  false,
 		},
 		{
-			name:    "header начинается с пробела (idx == 0)",
+			name:    "header starts with a space (idx == 0)",
 			header:  " Bearer abc.def.ghi",
 			wantTok: "",
 			wantOK:  false,
 		},
 		{
-			name:    "голый токен без scheme",
+			name:    "bare token without scheme",
 			header:  "abc.def.ghi",
 			wantTok: "",
 			wantOK:  false,
@@ -117,6 +117,6 @@ func TestParseBearerToken_InternalSpacesPreserved(t *testing.T) {
 		t.Fatalf("ParseBearerToken: ok = false, want true")
 	}
 	if gotTok != "abc def" {
-		t.Errorf("ParseBearerToken token = %q, want %q (внутренний пробел сохраняется)", gotTok, "abc def")
+		t.Errorf("ParseBearerToken token = %q, want %q (internal space is preserved)", gotTok, "abc def")
 	}
 }

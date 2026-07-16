@@ -14,8 +14,8 @@ import (
 // don't reject it on length first.
 var leakMarkerKey = []byte("SIGNKEY-MUST-NOT-LEAK-0123456789abcdef")
 
-// assertNoKeyLeak — общий помощник: ошибка не должна содержать ни маркер,
-// ни сырое значение ключа целиком.
+// assertNoKeyLeak is a shared helper: the error must contain neither the
+// marker nor the full raw key value.
 func assertNoKeyLeak(t *testing.T, where string, err error, key []byte) {
 	t.Helper()
 	if err == nil {
@@ -30,11 +30,11 @@ func assertNoKeyLeak(t *testing.T, where string, err error, key []byte) {
 	}
 }
 
-// TestSigningKey_NotLeaked_Constructors — ошибки NewIssuer/NewVerifier не
-// содержат значения ключа (только его длину).
+// TestSigningKey_NotLeaked_Constructors ensures NewIssuer/NewVerifier errors
+// do not contain the key value (only its length).
 func TestSigningKey_NotLeaked_Constructors(t *testing.T) {
-	// Слишком короткий ключ с маркером → ошибка по длине; маркера в ней быть
-	// не должно (логируется len, а не значение).
+	// A too-short key with a marker returns a length error; the marker must not
+	// appear in it (len is logged, not the value).
 	shortKeyWithMarker := []byte("SIGNKEY-MUST-NOT-LEAK")
 
 	_, errIss := NewIssuer(shortKeyWithMarker, "keeper.test")
@@ -50,16 +50,16 @@ func TestSigningKey_NotLeaked_Constructors(t *testing.T) {
 	assertNoKeyLeak(t, "NewVerifier", errVer, shortKeyWithMarker)
 }
 
-// TestSigningKey_NotLeaked_IssueAndVerify — ошибки Issue (bad input) и Verify
-// (bad signature / malformed) не содержат значения ключа.
+// TestSigningKey_NotLeaked_IssueAndVerify ensures Issue (bad input) and Verify
+// (bad signature / malformed) errors do not contain the key value.
 func TestSigningKey_NotLeaked_IssueAndVerify(t *testing.T) {
 	iss, err := NewIssuer(leakMarkerKey, "keeper.test")
 	if err != nil {
 		t.Fatalf("NewIssuer: %v", err)
 	}
 
-	// Issue с заведомо невалидным input → ошибки валидации. Ключ в них
-	// фигурировать не должен.
+	// Issue with deliberately invalid input returns validation errors. The key
+	// must not appear in them.
 	if _, err := iss.Issue("", []string{"x"}, time.Hour, false); err == nil {
 		t.Fatalf("Issue empty aid: expected error")
 	} else {
@@ -71,9 +71,9 @@ func TestSigningKey_NotLeaked_IssueAndVerify(t *testing.T) {
 		assertNoKeyLeak(t, "Issue(bad ttl)", err, leakMarkerKey)
 	}
 
-	// Verify с verifier-ом на ДРУГОМ ключе того же маркера-семейства →
-	// bad-signature. err.Error() оборачивает внутреннее сообщение
-	// golang-jwt (verifier.go:138), но ключа там быть не должно.
+	// Verify with a verifier on a DIFFERENT key from the same marker family
+	// returns bad-signature. err.Error() wraps the internal golang-jwt message
+	// (verifier.go:138), but the key must not appear there.
 	tok, err := iss.Issue("archon-alice", []string{"cluster-admin"}, time.Hour, false)
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
@@ -90,7 +90,7 @@ func TestSigningKey_NotLeaked_IssueAndVerify(t *testing.T) {
 		assertNoKeyLeak(t, "Verify(bad signature, verifier key)", err, otherKey)
 	}
 
-	// Malformed token → ErrInvalidToken c обёрнутым jwt-сообщением; ключа нет.
+	// Malformed token -> ErrInvalidToken with a wrapped JWT message; no key.
 	ver2, err := NewVerifier(leakMarkerKey, "keeper.test")
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)

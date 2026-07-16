@@ -69,8 +69,8 @@ func TestVerify_Happy(t *testing.T) {
 }
 
 func TestVerify_Expired(t *testing.T) {
-	// Создаём токен с exp в прошлом — через manual ParseWithClaims-обход
-	// нельзя (Issue не даёт negative ttl). Используем jwtv5 напрямую.
+	// Create a token with exp in the past; the manual ParseWithClaims workaround
+	// cannot be used (Issue does not allow negative ttl). Use jwtv5 directly.
 	claims := archonClaims{
 		Roles: []string{"cluster-admin"},
 		RegisteredClaims: jwtv5.RegisteredClaims{
@@ -129,8 +129,8 @@ func TestVerify_Malformed(t *testing.T) {
 	}
 }
 
-// TestVerify_RejectsNoneAlg — токен с `alg: none` (un-signed) должен
-// отбраковываться независимо от подписи.
+// TestVerify_RejectsNoneAlg checks that a token with `alg: none` (unsigned) is
+// rejected regardless of the signature.
 func TestVerify_RejectsNoneAlg(t *testing.T) {
 	claims := archonClaims{
 		RegisteredClaims: jwtv5.RegisteredClaims{
@@ -151,13 +151,13 @@ func TestVerify_RejectsNoneAlg(t *testing.T) {
 	}
 }
 
-// TestVerify_MissingClaims — токен без обязательных claims (sub/iat/exp)
-// → ErrInvalidToken.
+// TestVerify_MissingClaims checks that a token without required claims
+// (sub/iat/exp) returns ErrInvalidToken.
 func TestVerify_MissingSubject(t *testing.T) {
 	claims := archonClaims{
 		RegisteredClaims: jwtv5.RegisteredClaims{
 			Issuer: testIssuer,
-			// Subject пустой намеренно.
+			// Subject is intentionally empty.
 			IssuedAt:  jwtv5.NewNumericDate(time.Now()),
 			ExpiresAt: jwtv5.NewNumericDate(time.Now().Add(time.Hour)),
 		},
