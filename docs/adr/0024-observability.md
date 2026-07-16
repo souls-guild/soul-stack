@@ -10,7 +10,7 @@
   - **A new file [`docs/observability.md`](../observability.md)** — a cross-cutting spec (one file for both binaries, symmetric to `shared/obs` as one Go module; the "not per-binary" rationale is in the file itself).
   - **Two new names in [`docs/naming-rules.md`](../naming-rules.md)** — the namespace prefixes `soul_*` / `keeper_*` and the custom OTel resource-attrs `soulstack.kid` / `soulstack.sid`.
   - **The `shared/obs` OTel-bridge** (trace-provider, OTLP-exporter, resource-attrs) — an extension point of the existing module, a separate implementation task. The existing Prometheus code (`keeper_http_*`) is already consistent with the ADR — no renames needed.
-  - The [cross-cutting requirements](../architecture.md#сквозные-требования-и-где-они-приземляются) section spells out "Metrics" / "OpenTelemetry" via a reference to ADR-024.
+  - The [end-to-end requirements](../architecture.md#end-to-end-requirements-and-where-they-land) section spells out "Metrics" / "OpenTelemetry" via a reference to ADR-024.
 - **Trade-offs.**
   - **Prometheus-primary vs OTel-primary.** Prometheus pull is more mature in the configuration-management niche, easier to debug (`curl /metrics`), and Keeper already has it written. OTel-primary would require a collector as a mandatory dependency even for a single metric. The cost of Prometheus-primary — metrics and traces travel over different channels (no unified OTLP pipeline); this is closed by the OTel-bridge for those who need a unified push.
   - **A prefix vs a label for the component.** A prefix (`keeper_`/`soul_`) loses to "a shared name with a `component=` label" on dashboard unification, but wins on greppability and matches Prometheus's per-exporter standard. One scrape target = one component, no shared name needed.

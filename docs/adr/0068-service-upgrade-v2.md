@@ -71,7 +71,7 @@ The objection to §4 "`from` in the new version does not give visibility into wh
 
 Permission — reuse `incarnation.upgrade` (the same operation, read facet) or `incarnation.get`; the choice is left to impl (§Scope). READ, without audit.
 
-> *Amendment 2026-07-04 (NIM-34 impl): §6 reconciled with the implementation.* The cheap mode is reduced to an `is_current` mark — direction by tag names is NOT computed ([ADR-007](0007-versioning-git-ref.md)). `?to=` gives `direction` ∈ {`no-op`, `downgrade`, `forward`, `same-schema`}, and a target unreachable due to a broken migration chain is signaled by `reachable: false` + `unreachable_reason` (200, not 422). The wire contract — [operator-api/incarnations.md](../keeper/operator-api/incarnations.md); the enum dictionary — [naming-rules.md](../naming-rules.md#upgrade-v2-каталог-upgrade-ключ-from-upgrade-paths).
+> *Amendment 2026-07-04 (NIM-34 impl): §6 reconciled with the implementation.* The cheap mode is reduced to an `is_current` mark — direction by tag names is NOT computed ([ADR-007](0007-versioning-git-ref.md)). `?to=` gives `direction` ∈ {`no-op`, `downgrade`, `forward`, `same-schema`}, and a target unreachable due to a broken migration chain is signaled by `reachable: false` + `unreachable_reason` (200, not 422). The wire contract — [operator-api/incarnations.md](../keeper/operator-api/incarnations.md); the enum dictionary — [naming-rules.md](../naming-rules.md#upgrade-v2-directory-upgrade-key-from-upgrade-paths).
 
 ### 7. The input canon — a boundary: input is NOT migrated
 

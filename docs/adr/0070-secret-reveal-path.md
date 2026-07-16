@@ -51,7 +51,7 @@ The 200 body of the reveal endpoint carries plaintext and **does NOT pass throug
 
 ## RBAC and the right
 
-A new scoped right **`incarnation.view-secrets`** ([ADR-047](0047-purview.md), catalog — [rbac.md](../keeper/rbac.md#каталог-permissions)):
+A new scoped right **`incarnation.view-secrets`** ([ADR-047](0047-purview.md), catalog — [rbac.md](../keeper/rbac.md#permissions-directory)):
 
 - **Strictly more privileged than `incarnation.get`** — reading a (masked) incarnation ≠ revealing its secrets; a separate right, not a facet of `get`.
 - **Scope as for incarnation mutations** — selectors `coven=`/`service=`/`incarnation=` by the path `name` (parity with `incarnation.update-hosts`/`incarnation.traits-set`).
@@ -94,7 +94,7 @@ The service manifest is **not a trusted** input in the reveal threat model: the 
 
 ## Impact (implementation — NIM-74, outside this ADR)
 
-`shared/config` (parsing + validation of `revealable_secrets[]`) + Operator API 2 endpoints (+OpenAPI drift-regen) + the reveal handler (scope gate + enumerate-guard + `vault.ParseRef` + the positive namespace allowlist `secret/<service>/<incarnation>/` + floor-backstop + `ReadKV`) + the audit event + the RBAC right (catalog [rbac.md](../keeper/rbac.md#каталог-permissions)) + the vault-policy read prefix + the companion UI (State view, reveal control) + leak-guard tests. **Implemented in NIM-74.**
+`shared/config` (parsing + validation of `revealable_secrets[]`) + Operator API 2 endpoints (+OpenAPI drift-regen) + the reveal handler (scope gate + enumerate-guard + `vault.ParseRef` + the positive namespace allowlist `secret/<service>/<incarnation>/` + floor-backstop + `ReadKV`) + the audit event + the RBAC right (catalog [rbac.md](../keeper/rbac.md#permissions-directory)) + the vault-policy read prefix + the companion UI (State view, reveal control) + leak-guard tests. **Implemented in NIM-74.**
 
 ## Relation to ADRs
 

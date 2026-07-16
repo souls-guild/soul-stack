@@ -1,6 +1,6 @@
 # ADR-065. core.module.installed — delivery of SoulModule plugins to the Soul host (FetchModule + plugins.soul_modules catalog)
 
-> **Status: amended (accepted, docs-first BEFORE code; implementation — slices S1–S6; amendment 2026-07-03 — auto-synthesis of install steps from `service.yml::modules[]`).** Architect's design, all decisions approved by the user (2026-07-02). Closes open Q No. 5 "where the module registry lives in the Keeper" ([architecture.md → Open questions](../architecture.md#текущие)) and the design debt [ADR-015 Consequences](0015-core-modules-mvp.md) ("the `core.module.installed` specification is a separate task"). **Amends [ADR-012](0012-keeper-soul-grpc.md) (third RPC `FetchModule`, only-add) / [ADR-020](0020-plugin-infrastructure.md) (`plugins.soul_modules[]` catalog) / [ADR-015](0015-core-modules-mvp.md) (specification fixed).** [ADR-026](0026-sigil.md) (Sigil) — **NOT changed**: allowances, signature, snapshot distribution and host-side verify are reused as-is, no new trust mechanisms.
+> **Status: amended (accepted, docs-first BEFORE code; implementation — slices S1–S6; amendment 2026-07-03 — auto-synthesis of install steps from `service.yml::modules[]`).** Architect's design, all decisions approved by the user (2026-07-02). Closes open Q No. 5 "where the module registry lives in the Keeper" ([architecture.md → Open questions](../architecture.md#current)) and the design debt [ADR-015 Consequences](0015-core-modules-mvp.md) ("the `core.module.installed` specification is a separate task"). **Amends [ADR-012](0012-keeper-soul-grpc.md) (third RPC `FetchModule`, only-add) / [ADR-020](0020-plugin-infrastructure.md) (`plugins.soul_modules[]` catalog) / [ADR-015](0015-core-modules-mvp.md) (specification fixed).** [ADR-026](0026-sigil.md) (Sigil) — **NOT changed**: allowances, signature, snapshot distribution and host-side verify are reused as-is, no new trust mechanisms.
 >
 > **Amendment 2026-07-03 (auto-synthesis from `modules[]`)** — see the block of the same name in (e): the canon "only an explicit step, without auto-inject" is **lifted** — Keeper synthesizes Soul-side `core.module.installed` steps from the explicit manifest declaration `service.yml::modules[]`; the validation-hint post-MVP is preserved in the reverse direction.
 
@@ -28,7 +28,7 @@ service Keeper {
 
 ### (b) Byte registry — the `plugins.soul_modules[]` catalog, NO new storage (closes open Q No. 5)
 
-`keeper.yml::plugins` is extended with a third kind of entries — **`soul_modules[]`** (`{name, source, ref}`), symmetric to `cloud_drivers`/`ssh_providers` ([keeper/plugins.md → Plugin catalog](../keeper/plugins.md#каталог-плагинов-в-keeperyml)):
+`keeper.yml::plugins` is extended with a third kind of entries — **`soul_modules[]`** (`{name, source, ref}`), symmetric to `cloud_drivers`/`ssh_providers` ([keeper/plugins.md → Plugin directory](../keeper/plugins.md#plugin-directory-in-keeperyml)):
 
 ```yaml
 plugins:
