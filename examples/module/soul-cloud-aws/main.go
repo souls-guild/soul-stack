@@ -1,18 +1,18 @@
-// soul-cloud-aws — реальный CloudDriver-плагин Soul Stack для AWS EC2
-// (ADR-016 Фаза 4 cloud parity; пилот тиража по docs/keeper/plugins.md).
+// soul-cloud-aws is a real CloudDriver plugin for Soul Stack on AWS EC2
+// (ADR-016 Phase 4 cloud parity; rollout pilot per docs/keeper/plugins.md).
 //
-// Собирается в статический бинарь `soul-cloud-aws`. Keeper-side модуль
-// `core.cloud.provisioned` (ADR-017) запускает его как sub-process, делает
-// gRPC-stdio handshake (sdk/handshake) и зовёт RPC CloudDriver.
+// Builds into a static binary `soul-cloud-aws`. The Keeper-side module
+// `core.cloud.provisioned` (ADR-017) runs it as a sub-process, performs
+// the gRPC-stdio handshake (sdk/handshake), and calls CloudDriver RPC.
 //
-// Credentials (A-flow, docs/keeper/cloud.md): Keeper резолвит секрет из Vault и
-// кладёт plain в CreateRequest.credentials / DestroyRequest.credentials; драйвер
-// в Vault НЕ ходит. Cloud-init userdata для bootstrap soul-агента приходит в
+// Credentials (A-flow, docs/keeper/cloud.md): Keeper resolves the secret from Vault
+// and puts plain values into CreateRequest.credentials / DestroyRequest.credentials;
+// the driver does NOT call Vault. Cloud-init userdata for Soul agent bootstrap arrives in
 // CreateRequest.userdata.
 //
-// Shared-каркас (error-таксономия / wait-until-ready / retry-backoff) — из
-// sdk/clouddriver, общий для всех драйверов тиража. Provider-specific здесь —
-// только вызовы ec2-API и AWS-классификатор ошибок (classify.go).
+// Shared framework (error taxonomy / wait-until-ready / retry-backoff) comes from
+// sdk/clouddriver and is common to all rollout drivers. Provider-specific code here is
+// limited to EC2 API calls and the AWS error classifier (classify.go).
 package main
 
 import (
@@ -34,30 +34,30 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// profileSchemaJSON — profile_schema (JSON Schema draft 2020-12), embedded
-// рядом с бинарём. Приём для тиража: схема — отдельный файл, не хардкод в Go
-// (легче держать в синхроне с manifest.spec.profile_schema).
+// profileSchemaJSON is profile_schema (JSON Schema draft 2020-12), embedded
+// next to the binary. Rollout approach: schema is a separate file, not hardcoded in Go
+// (easier to keep in sync with manifest.spec.profile_schema).
 //
 //go:embed schema.json
 var profileSchemaJSON []byte
 
-// runTagKey — тег идемпотентности: значение = идентификатор прогона/incarnation
-// (из profile.tags). Повторный Create по тому же тегу не плодит дубли —
-// существующие running/pending VM переиспользуются.
+// runTagKey is the idempotency tag: value = run/incarnation identifier
+// (from profile.tags). Repeated Create with the same tag does not create duplicates —
+// existing running/pending VMs are reused.
 const runTagKey = "soulstack:run"
 
-// defaultBackoff — фабрика [clouddriver.BackoffConfig] для wait/retry-фаз.
-// Вынесена в переменную, чтобы L0-тесты могли подменить (быстрый MaxAttempts,
-// короткие задержки) без поднятия таймера 1s→2s→4s. Та же техника, что и
-// `newEC2Client` (см. ec2api.go).
+// defaultBackoff is the [clouddriver.BackoffConfig] factory for wait/retry phases.
+// Kept in a variable so L0 tests can replace it (small MaxAttempts,
+// short delays) without waiting through 1s→2s→4s timers. Same technique as
+// `newEC2Client` (see ec2api.go).
 var defaultBackoff = clouddriver.DefaultBackoff
 
-// AwsDriver — реализация CloudDriver для AWS EC2.
+// AwsDriver is the CloudDriver implementation for AWS EC2.
 type AwsDriver struct {
 	clouddriver.BaseDriver
 }
 
-// Schema публикует embedded profile_schema.
+// Schema publishes the embedded profile_schema.
 func (a *AwsDriver) Schema(_ context.Context, _ *pluginv1.SchemaRequest) (*pluginv1.SchemaReply, error) {
 	var raw map[string]any
 	if err := json.Unmarshal(profileSchemaJSON, &raw); err != nil {
@@ -70,8 +70,8 @@ func (a *AwsDriver) Schema(_ context.Context, _ *pluginv1.SchemaRequest) (*plugi
 	return &pluginv1.SchemaReply{ProfileSchema: s}, nil
 }
 
-// Validate не несёт credentials (ValidateProfileRequest), structural-проверки
-// здесь; auth — на фазе Create.
+// Validate does not carry credentials (ValidateProfileRequest), so only structural checks
+// happen here; auth is checked during Create.
 func (a *AwsDriver) Validate(_ context.Context, req *pluginv1.ValidateProfileRequest) (*pluginv1.ValidateProfileReply, error) {
 	p := req.GetProfile().AsMap()
 	var errs []string
@@ -87,7 +87,7 @@ func (a *AwsDriver) Validate(_ context.Context, req *pluginv1.ValidateProfileReq
 	return &pluginv1.ValidateProfileReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
 
-// vmProfile — параметры профиля, разобранные для RunInstances.
+// vmProfile contains profile parameters parsed for RunInstances.
 type vmProfile struct {
 	region     string
 	ami        string
@@ -134,8 +134,8 @@ func parseProfile(p map[string]any) vmProfile {
 	return prof
 }
 
-// Create: проверка идемпотентности по тегу → RunInstances → wait-until-ready →
-// финальное событие с VmInfo (fqdn=SID). См. doc-комментарий пакета.
+// Create: idempotency check by tag → RunInstances → wait-until-ready →
+// final event with VmInfo (fqdn=SID). See the package doc comment.
 func (a *AwsDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerStreamingServer[pluginv1.CreateEvent]) error {
 	ctx := stream.Context()
 	count := req.GetCount()
@@ -155,9 +155,9 @@ func (a *AwsDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerStream
 
 	backoff := defaultBackoff()
 
-	// Идемпотентность: если по runTag уже есть живые VM — переиспользуем их,
-	// добиваем только недостающие. Без runTag idempotency-проверку не делаем
-	// (некому соотнести прогон).
+	// Idempotency: if live VMs already exist for runTag, reuse them
+	// and only create the missing count. Without runTag, no idempotency check is possible
+	// (nothing to correlate the run with).
 	var existing []ec2types.Instance
 	if prof.runTag != "" {
 		existing, err = a.findByRunTag(ctx, cli, backoff, prof.runTag)
@@ -192,14 +192,14 @@ func (a *AwsDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerStream
 	return a.finalizeCreate(ctx, cli, stream, backoff, allIDs)
 }
 
-// finalizeCreate ждёт готовности VM (running + IP/DNS) и шлёт финальное событие.
-// Anti-orphan: при ctx-cancel/timeout недоехавшие VM попадают в финальное
-// событие с failed=true, но с заполненным vm_id — Keeper сможет их Destroy.
+// finalizeCreate waits for VM readiness (running + IP/DNS) and sends the final event.
+// Anti-orphan: on ctx-cancel/timeout, unfinished VMs still appear in the final
+// event with failed=true and vm_id filled, so Keeper can Destroy them.
 func (a *AwsDriver) finalizeCreate(ctx context.Context, cli ec2API, stream grpc.ServerStreamingServer[pluginv1.CreateEvent], backoff clouddriver.BackoffConfig, vmIDs []string) error {
 	probe := func(pctx context.Context, vmID string) clouddriver.ProbeResult {
 		inst, perr := a.describeOne(pctx, cli, vmID)
 		if perr != nil {
-			// Транзиентную ошибку опроса глотаем — поллер повторит.
+			// Swallow transient probe errors; the poller will retry.
 			if clouddriver.Classify(classifyAWS, perr).Transient() {
 				return clouddriver.ProbeResult{}
 			}
@@ -239,8 +239,8 @@ func (a *AwsDriver) finalizeCreate(ctx context.Context, cli ec2API, stream grpc.
 	}
 
 	if waitErr != nil {
-		// ctx-cancel / deadline: финальное событие НЕСЁТ vm_id всех созданных VM
-		// с failed=true (anti-orphan) — Keeper увидит instance-id и сможет Destroy.
+		// ctx-cancel / deadline: final event carries vm_id for all created VMs
+		// with failed=true (anti-orphan), so Keeper sees instance-id and can Destroy.
 		return stream.Send(&pluginv1.CreateEvent{
 			Message: clouddriver.FailMessage(clouddriver.Classify(classifyAWS, waitErr), "wait-until-ready", waitErr),
 			Vms:     vms,
@@ -254,7 +254,7 @@ func (a *AwsDriver) finalizeCreate(ctx context.Context, cli ec2API, stream grpc.
 	})
 }
 
-// runInstances оборачивает ec2.RunInstances в retry/backoff (throttling-safe).
+// runInstances wraps ec2.RunInstances in retry/backoff (throttling-safe).
 func (a *AwsDriver) runInstances(ctx context.Context, cli ec2API, backoff clouddriver.BackoffConfig, prof vmProfile, userdata string, count int32) (*ec2.RunInstancesOutput, error) {
 	in := &ec2.RunInstancesInput{
 		ImageId:      aws.String(prof.ami),
@@ -269,8 +269,8 @@ func (a *AwsDriver) runInstances(ctx context.Context, cli ec2API, backoff cloudd
 		in.SecurityGroupIds = prof.secGroups
 	}
 	if userdata != "" {
-		// EC2 требует base64; aws-sdk-go-v2 RunInstances UserData НЕ кодирует
-		// (сериализует как plain string) — кодируем сами.
+		// EC2 requires base64; aws-sdk-go-v2 RunInstances does NOT encode UserData
+		// (serializes it as a plain string), so we encode it ourselves.
 		in.UserData = aws.String(base64.StdEncoding.EncodeToString([]byte(userdata)))
 	}
 	if len(prof.tags) > 0 {
@@ -289,7 +289,7 @@ func (a *AwsDriver) runInstances(ctx context.Context, cli ec2API, backoff cloudd
 	return out, err
 }
 
-// findByRunTag перечисляет живые (не terminated) VM с заданным runTag.
+// findByRunTag lists live (non-terminated) VMs with the given runTag.
 func (a *AwsDriver) findByRunTag(ctx context.Context, cli ec2API, backoff clouddriver.BackoffConfig, runTag string) ([]ec2types.Instance, error) {
 	in := &ec2.DescribeInstancesInput{
 		Filters: []ec2types.Filter{
@@ -309,8 +309,8 @@ func (a *AwsDriver) findByRunTag(ctx context.Context, cli ec2API, backoff cloudd
 	return flattenInstances(out), nil
 }
 
-// describeOne читает одну VM (без retry — вызывается из поллера, который сам
-// ретраит через раунды).
+// describeOne reads one VM (without retry; it is called from the poller,
+// which retries across rounds itself).
 func (a *AwsDriver) describeOne(ctx context.Context, cli ec2API, vmID string) (ec2types.Instance, error) {
 	out, err := cli.DescribeInstances(ctx, &ec2.DescribeInstancesInput{InstanceIds: []string{vmID}})
 	if err != nil {
@@ -323,7 +323,7 @@ func (a *AwsDriver) describeOne(ctx context.Context, cli ec2API, vmID string) (e
 	return insts[0], nil
 }
 
-// Destroy: TerminateInstances, стрим per-vm событий.
+// Destroy: TerminateInstances, streaming per-VM events.
 func (a *AwsDriver) Destroy(req *pluginv1.DestroyRequest, stream grpc.ServerStreamingServer[pluginv1.DestroyEvent]) error {
 	ctx := stream.Context()
 	creds := credsFromMap(req.GetCredentials().AsMap())
@@ -345,8 +345,8 @@ func (a *AwsDriver) Destroy(req *pluginv1.DestroyRequest, stream grpc.ServerStre
 	}()
 	if err != nil {
 		class := clouddriver.Classify(classifyAWS, err)
-		// not_found на Destroy — это успех-как-таковой (VM уже нет): шлём per-vm
-		// terminated, не failed (идемпотентность destroy).
+		// not_found on Destroy is success by definition (VM is already gone): send per-VM
+		// terminated, not failed (destroy idempotency).
 		if class == clouddriver.FailNotFound {
 			for _, id := range req.GetVmIds() {
 				_ = stream.Send(&pluginv1.DestroyEvent{VmId: id, Message: "already absent"})
@@ -366,8 +366,8 @@ func (a *AwsDriver) Destroy(req *pluginv1.DestroyRequest, stream grpc.ServerStre
 	return nil
 }
 
-// Status — опрос одной VM (DescribeInstances). credentials приходят отдельным
-// полем StatusRequest.credentials (A-flow, симметрично Create/Destroy).
+// Status polls one VM (DescribeInstances). credentials arrive through the separate
+// StatusRequest.credentials field (A-flow, symmetric with Create/Destroy).
 func (a *AwsDriver) Status(ctx context.Context, req *pluginv1.StatusRequest) (*pluginv1.StatusReply, error) {
 	creds := credsFromMap(req.GetCredentials().AsMap())
 	cli, err := newEC2Client(ctx, creds)
@@ -384,9 +384,9 @@ func (a *AwsDriver) Status(ctx context.Context, req *pluginv1.StatusRequest) (*p
 	}, nil
 }
 
-// List — стрим инвентаря VM по фильтру. credentials приходят отдельным полем
-// ListRequest.credentials (A-flow, симметрично Create/Destroy/Status). Старый
-// workaround «creds внутри filter-Struct» удалён.
+// List streams VM inventory by filter. credentials arrive through the separate
+// ListRequest.credentials field (A-flow, symmetric with Create/Destroy/Status). Old
+// "creds inside filter-Struct" workaround has been removed.
 func (a *AwsDriver) List(req *pluginv1.ListRequest, stream grpc.ServerStreamingServer[pluginv1.VmInfo]) error {
 	ctx := stream.Context()
 	creds := credsFromMap(req.GetCredentials().AsMap())

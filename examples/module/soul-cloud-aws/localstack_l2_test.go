@@ -1,14 +1,14 @@
 //go:build integration
 
-// L2 — driver против LocalStack (реальный EC2-API в контейнере) через
-// testcontainers. Только AWS это умеет out-of-the-box — поэтому AWS пилот
-// тиража (GCP/Azure/YC/Proxmox/OpenStack своего LocalStack не имеют). L2
-// гоняется `go test -tags=integration` при наличии docker; без docker —
-// skip (если не задан REQUIRE_DOCKER).
+// L2 — driver against LocalStack (real EC2 API in a container) through
+// testcontainers. Only AWS supports this out-of-the-box, so AWS is the rollout pilot
+// (GCP/Azure/YC/Proxmox/OpenStack do not have their own LocalStack). L2
+// runs with `go test -tags=integration` when docker is available; without docker,
+// skips unless REQUIRE_DOCKER is set.
 //
-// LocalStack community поддерживает базовые EC2 RunInstances/DescribeInstances/
-// TerminateInstances с mock-инстансами (сразу running) — этого хватает для
-// проверки реального code-path драйвера end-to-end.
+// LocalStack community supports basic EC2 RunInstances/DescribeInstances/
+// TerminateInstances with mock instances (immediately running), enough to
+// verify the driver's real code path end-to-end.
 
 package main
 
@@ -94,7 +94,7 @@ func TestL2_LocalStack_CreateListDestroy(t *testing.T) {
 		vmIDs = append(vmIDs, vm.VmId)
 	}
 
-	// --- Idempotency: повторный Create по тому же runTag не плодит дубли ---
+	// --- Idempotency: repeated Create with the same runTag does not create duplicates ---
 	cs2 := &createStream{ctx: ctx}
 	if err := d.Create(&pluginv1.CreateRequest{
 		Count: 2,

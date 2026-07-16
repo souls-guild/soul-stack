@@ -8,24 +8,24 @@ import (
 	"github.com/souls-guild/soul-stack/sdk/clouddriver"
 )
 
-// classifyAWS — per-provider [clouddriver.ClassifyFunc] для AWS: маппит
-// smithy-API-ошибки EC2 в общую таксономию SDK по ErrorCode. Это
-// единственная provider-specific часть error-обработки; backoff/retry/маппинг-
-// в-event делает SDK (sdk/clouddriver), общий для всех драйверов тиража.
+// classifyAWS is a per-provider [clouddriver.ClassifyFunc] for AWS: maps
+// smithy API errors from EC2 to a common SDK taxonomy by ErrorCode. This
+// is the only provider-specific part of error handling; backoff/retry/event-mapping
+// are done by SDK (sdk/clouddriver), common to all drivers.
 //
-// Коды — стабильные строковые ErrorCode AWS EC2/STS; группируем по семейству
-// суффикса/префикса, чтобы не перечислять сотни частных кодов.
+// Codes are stable string ErrorCodes from AWS EC2/STS; we group by suffix/prefix
+// family to avoid enumerating hundreds of specific codes.
 func classifyAWS(err error) clouddriver.FailClass {
 	var apiErr smithy.APIError
 	if !errors.As(err, &apiErr) {
-		// Не-API ошибка (сеть/DNS/EOF) — транзиентна: ретрай оправдан.
+		// Non-API error (network/DNS/EOF) is transient: retry is justified.
 		return clouddriver.FailTransient
 	}
 	code := apiErr.ErrorCode()
 	switch {
-	// Throttle проверяется ПЕРЕД quota: `RequestLimitExceeded` — это rate-limit
-	// (транзиентный), а не исчерпание квоты ресурсов, хотя содержит подстроку
-	// `LimitExceeded`, которую ловит isQuota.
+	// Throttle is checked BEFORE quota: `RequestLimitExceeded` is a rate-limit
+	// (transient), not resource quota exhaustion, even though it contains the substring
+	// `LimitExceeded` that isQuota would match.
 	case isThrottle(code):
 		return clouddriver.FailTransient
 	case isQuota(code):
@@ -61,7 +61,7 @@ func isAuth(code string) bool {
 }
 
 func isNotFound(code string) bool {
-	// EC2 not-found-семейство: InvalidAMIID.NotFound, InvalidSubnetID.NotFound,
+	// EC2 not-found family: InvalidAMIID.NotFound, InvalidSubnetID.NotFound,
 	// InvalidInstanceID.NotFound, InvalidGroup.NotFound, …
 	return strings.Contains(code, ".NotFound") ||
 		strings.HasSuffix(code, "NotFound") ||
@@ -74,7 +74,7 @@ func isInvalidParams(code string) bool {
 		"InvalidParameter", "InvalidInstanceType", "Unsupported", "VPCResourceNotSpecified":
 		return true
 	}
-	// Прочие Invalid*Malformed/Value (но НЕ .NotFound — он выше как not_found).
+	// Other Invalid*Malformed/Value (but NOT .NotFound — it's above as not_found).
 	return (strings.HasPrefix(code, "Invalid") && !strings.Contains(code, ".NotFound")) ||
 		strings.HasSuffix(code, "Malformed")
 }

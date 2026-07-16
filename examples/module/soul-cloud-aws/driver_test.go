@@ -18,9 +18,9 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// withFastBackoff подменяет defaultBackoff на «нулевые» задержки + указанный
-// MaxAttempts. Используется в wait-deadline / transient-probe тестах, где
-// дефолтный 1s→2s→4s сделал бы тест медленным.
+// withFastBackoff replaces defaultBackoff with "zero" delays plus the specified
+// MaxAttempts. Used in wait-deadline / transient-probe tests where the default
+// 1s→2s→4s would make the test slow.
 func withFastBackoff(t *testing.T, maxAttempts int) {
 	t.Helper()
 	orig := defaultBackoff
@@ -35,20 +35,20 @@ func withFastBackoff(t *testing.T, maxAttempts int) {
 	t.Cleanup(func() { defaultBackoff = orig })
 }
 
-// fakeEC2 — mock ec2API для L0-unit-тестов (без сети). Поведение
-// настраивается per-метод; describeSeq позволяет смоделировать переход
-// pending→running между раундами поллера.
+// fakeEC2 is a mock ec2API for L0 unit tests (without network). Behavior
+// is configured per-method; describeSeq allows modeling the transition from
+// pending→running across poller rounds.
 //
-// describeFn — опциональный override: получает 0-based номер вызова и волен
-// вернуть свою пару (out, err) — для тестов transient-probe-error (ошибка
-// классифицирована Transient → поллер проглатывает) и других сценариев,
-// где плоского describeSeq не хватает.
+// describeFn is an optional override: receives the 0-based call number and may
+// return its own (out, err) pair — for transient-probe-error tests (error
+// classified as Transient → poller swallows it) and other scenarios where
+// a flat describeSeq is insufficient.
 type fakeEC2 struct {
 	runOut  *ec2.RunInstancesOutput
 	runErr  error
 	runCall int
 
-	describeSeq []*ec2.DescribeInstancesOutput // последовательные ответы Describe
+	describeSeq []*ec2.DescribeInstancesOutput // sequential Describe responses
 	describeIdx int
 	describeErr error
 	describeFn  func(call int) (*ec2.DescribeInstancesOutput, error)
@@ -105,7 +105,7 @@ func (f *fakeEC2) DescribeSubnets(_ context.Context, _ *ec2.DescribeSubnetsInput
 	return &ec2.DescribeSubnetsOutput{}, nil
 }
 
-// withFakeEC2 подменяет фабрику клиента на возврат f, восстанавливает после теста.
+// withFakeEC2 replaces the client factory with f, restores it after the test.
 func withFakeEC2(t *testing.T, f *fakeEC2) {
 	t.Helper()
 	orig := newEC2Client
@@ -214,7 +214,7 @@ func TestCreate_HappyPath(t *testing.T) {
 		runOut: &ec2.RunInstancesOutput{Instances: []ec2types.Instance{
 			{InstanceId: aws.String("i-aaa")},
 		}},
-		// первый Describe (поллер) сразу running с IP/DNS.
+		// first Describe (poller) returns running with IP/DNS.
 		describeSeq: []*ec2.DescribeInstancesOutput{
 			describeOut(runningInstance("i-aaa", "10.0.0.5", "ip-10-0-0-5.eu-west-1.compute.internal")),
 		},
@@ -251,8 +251,8 @@ func TestCreate_HappyPath(t *testing.T) {
 	if vm.PrimaryIp != "10.0.0.5" {
 		t.Errorf("primary_ip=%q", vm.PrimaryIp)
 	}
-	// userdata прокинут в RunInstances в виде base64 (EC2-требование):
-	// aws-sdk-go-v2 поле UserData НЕ кодирует, драйвер кодирует сам.
+	// userdata is passed to RunInstances as base64 (EC2 requirement):
+	// aws-sdk-go-v2 does NOT encode the UserData field, driver encodes itself.
 	if f.lastRunInput == nil {
 		t.Fatal("RunInstances not called")
 	}
@@ -269,12 +269,12 @@ func TestCreate_WaitsForRunning(t *testing.T) {
 	f := &fakeEC2{
 		runOut: &ec2.RunInstancesOutput{Instances: []ec2types.Instance{{InstanceId: aws.String("i-bbb")}}},
 		describeSeq: []*ec2.DescribeInstancesOutput{
-			// раунд 1: pending, без IP
+			// round 1: pending, no IP
 			describeOut(ec2types.Instance{
 				InstanceId: aws.String("i-bbb"),
 				State:      &ec2types.InstanceState{Name: ec2types.InstanceStateNamePending},
 			}),
-			// раунд 2: running с IP
+			// round 2: running with IP
 			describeOut(runningInstance("i-bbb", "10.0.0.9", "ip-10-0-0-9.internal")),
 		},
 	}
@@ -323,7 +323,7 @@ func TestCreate_RunInstancesAuthError(t *testing.T) {
 func TestCreate_Idempotent_ReusesExisting(t *testing.T) {
 	f := &fakeEC2{
 		describeSeq: []*ec2.DescribeInstancesOutput{
-			// findByRunTag → одна живая VM (>= count=1) → переиспользуем
+			// findByRunTag → one live VM (>= count=1) → reuse
 			describeOut(runningInstance("i-existing", "10.1.1.1", "ip-10-1-1-1.internal")),
 		},
 	}
@@ -355,7 +355,7 @@ func TestCreate_CtxCancel_AntiOrphan(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	f := &fakeEC2{
 		runOut: &ec2.RunInstancesOutput{Instances: []ec2types.Instance{{InstanceId: aws.String("i-orphan")}}},
-		// всегда pending → поллер крутится, пока ctx не отменят
+		// always pending → poller runs until ctx is canceled
 		describeSeq: []*ec2.DescribeInstancesOutput{
 			describeOut(ec2types.Instance{
 				InstanceId: aws.String("i-orphan"),
@@ -364,7 +364,7 @@ func TestCreate_CtxCancel_AntiOrphan(t *testing.T) {
 		},
 	}
 	withFakeEC2(t, f)
-	cancel() // отменяем сразу — поллер уйдёт в sleepCtx и вернёт ctx.Err
+	cancel() // cancel immediately — poller goes into sleepCtx and returns ctx.Err
 
 	d := &AwsDriver{}
 	s := &createStream{ctx: ctx}
@@ -384,10 +384,10 @@ func TestCreate_CtxCancel_AntiOrphan(t *testing.T) {
 	}
 }
 
-// TestCreate_WaitDeadline_AntiOrphan — wait-поллер упирается в MaxAttempts
-// (НЕ ctx-cancel) → возврат ErrWaitDeadline → failed-event с заполненным vm_id
-// (anti-orphan ветка, отличная от ctx-cancel). Все probe-запросы возвращают
-// pending, поэтому WaitUntilReady исчерпает попытки и вернёт deadline-ошибку.
+// TestCreate_WaitDeadline_AntiOrphan: wait-poller hits MaxAttempts
+// (NOT ctx-cancel) → return ErrWaitDeadline → failed-event with vm_id
+// (anti-orphan branch, different from ctx-cancel). All probe requests return
+// pending, so WaitUntilReady exhausts attempts and returns a deadline error.
 func TestCreate_WaitDeadline_AntiOrphan(t *testing.T) {
 	withFastBackoff(t, 2)
 	f := &fakeEC2{
@@ -417,21 +417,21 @@ func TestCreate_WaitDeadline_AntiOrphan(t *testing.T) {
 	if len(last.Vms) != 1 || last.Vms[0].VmId != "i-wait" {
 		t.Errorf("anti-orphan: final event must carry vm_id i-wait, got %+v", last.Vms)
 	}
-	// Anti-orphan ветка отличается от ctx-cancel: ctx тут НЕ отменялся,
-	// failed-message приходит из ErrWaitDeadline (transient-класс по Classify-
-	// преобразованию, но это особенность таксономии — детерминанта здесь именно
-	// «не дождались за MaxAttempts»).
+	// Anti-orphan branch differs from ctx-cancel: ctx was NOT canceled here,
+	// failed-message comes from ErrWaitDeadline (transient class after Classify
+	// conversion, but that is a taxonomy detail — the determinant here is exactly
+	// "did not become ready within MaxAttempts").
 	if !contains(last.Message, "max attempts exhausted") {
 		t.Errorf("message=%q, want max-attempts-exhausted (ErrWaitDeadline)", last.Message)
 	}
 }
 
-// TestCreate_TerminalStateProbe — VM во время wait уходит в terminal-state
-// (stopped/stopping/terminated) → probe возвращает ProbeResult{Err} →
-// поллер прекращает опрос этой VM, finalizeCreate шлёт failed-event с vm_id
-// и описательным сообщением. Этот случай ОТЛИЧАЕТСЯ от wait-deadline тем, что
-// сам WaitUntilReady НЕ возвращает ошибку (probe-Err per-VM), но drvier видит
-// !Ready во всех wr и выставляет anyFailed=true.
+// TestCreate_TerminalStateProbe covers a VM entering a terminal state during wait
+// (stopped/stopping/terminated) → probe returns ProbeResult{Err} →
+// poller stops polling this VM, finalizeCreate sends failed-event with vm_id
+// and a descriptive message. This case DIFFERS from wait-deadline because
+// WaitUntilReady itself does NOT return an error (probe-Err is per-VM), but driver sees
+// !Ready in all wr values and sets anyFailed=true.
 func TestCreate_TerminalStateProbe(t *testing.T) {
 	withFastBackoff(t, 4)
 	cases := []struct {
@@ -467,13 +467,13 @@ func TestCreate_TerminalStateProbe(t *testing.T) {
 			if !last.Failed {
 				t.Fatalf("terminal=%s: expected failed=true, got %+v", tc.state, last)
 			}
-			// WaitUntilReady вернул nil (per-VM Err внутри results), поэтому
-			// сообщение — обычное "completed" с failed=true, не FailMessage.
-			// vm_id ОБЯЗАН быть в финальном событии (anti-orphan).
+			// WaitUntilReady returned nil (per-VM Err inside results), so
+			// message is ordinary "completed" with failed=true, not FailMessage.
+			// vm_id MUST be present in the final event (anti-orphan).
 			if len(last.Vms) != 1 || last.Vms[0].VmId != "i-term" {
 				t.Errorf("terminal=%s: final vms=%+v, want vm_id=i-term", tc.state, last.Vms)
 			}
-			// wr.Ready=false → finalizeCreate НЕ заполняет Fqdn (probe failed).
+			// wr.Ready=false → finalizeCreate does NOT fill Fqdn (probe failed).
 			if last.Vms[0].Fqdn != "" {
 				t.Errorf("terminal=%s: Fqdn=%q must be empty (probe failed)", tc.state, last.Vms[0].Fqdn)
 			}
@@ -481,18 +481,18 @@ func TestCreate_TerminalStateProbe(t *testing.T) {
 	}
 }
 
-// TestCreate_TransientProbeError_SwallowAndRetry — describeInstances между
-// раундами возвращает классифицируемую как Transient() ошибку → probe-обёртка
-// глотает её (ProbeResult{}) → следующий round успешен (running + IP).
-// Покрывает контракт «transient error в probe — поллер повторяет, не плодит
+// TestCreate_TransientProbeError_SwallowAndRetry covers describeInstances between
+// rounds returning an error classified as Transient() → probe wrapper
+// swallows it (ProbeResult{}) → next round succeeds (running + IP).
+// Covers the contract "transient error in probe — poller retries, does not produce
 // failed-event».
 func TestCreate_TransientProbeError_SwallowAndRetry(t *testing.T) {
 	withFastBackoff(t, 8)
 	f := &fakeEC2{
 		runOut: &ec2.RunInstancesOutput{Instances: []ec2types.Instance{{InstanceId: aws.String("i-trans")}}},
 	}
-	// call 0 — pending (первый probe round);
-	// call 1 — Throttling (transient, проглатывается);
+	// call 0 — pending (first probe round);
+	// call 1 — Throttling (transient, swallowed);
 	// call 2 — running + IP/DNS → Ready.
 	f.describeFn = func(call int) (*ec2.DescribeInstancesOutput, error) {
 		switch call {
@@ -527,14 +527,14 @@ func TestCreate_TransientProbeError_SwallowAndRetry(t *testing.T) {
 	}
 }
 
-// TestCreate_Idempotent_OverCount — findByRunTag вернул БОЛЬШЕ VM, чем
-// запрошенный count. Драйвер обязан вернуть все найденные (не падать, не плодить
-// дубли). Защита от «после crash-а Keeper-а провижининг создал лишние VM, при
-// retry-е счётчик count меньше реального инвентаря».
+// TestCreate_Idempotent_OverCount covers findByRunTag returning MORE VMs than
+// requested count. The driver must return all found VMs (not fail, not create
+// duplicates). Protection for "after Keeper crash provisioning created extra VMs,
+// and on retry count is lower than the real inventory".
 func TestCreate_Idempotent_OverCount(t *testing.T) {
 	withFastBackoff(t, 2)
-	// findByRunTag возвращает 3 живые VM (count=2 → over-count на 1);
-	// далее probe для каждой возвращает running с IP.
+	// findByRunTag returns 3 live VMs (count=2 → over-count by 1);
+	// then probe returns running with IP for each.
 	existing := []ec2types.Instance{
 		runningInstance("i-old-1", "10.1.0.1", "ip-10-1-0-1.internal"),
 		runningInstance("i-old-2", "10.1.0.2", "ip-10-1-0-2.internal"),
@@ -542,9 +542,9 @@ func TestCreate_Idempotent_OverCount(t *testing.T) {
 	}
 	f := &fakeEC2{
 		describeSeq: []*ec2.DescribeInstancesOutput{
-			// первый Describe = findByRunTag → 3 VM;
-			// далее describeOne по каждой → их статус running (последний out
-			// «залипает», см. fakeEC2.DescribeInstances).
+			// first Describe = findByRunTag → 3 VMs;
+			// then describeOne for each → their status is running (last out
+			// sticks, see fakeEC2.DescribeInstances).
 			{Reservations: []ec2types.Reservation{{Instances: existing}}},
 			describeOut(existing[0]),
 			describeOut(existing[1]),
@@ -556,7 +556,7 @@ func TestCreate_Idempotent_OverCount(t *testing.T) {
 	d := &AwsDriver{}
 	s := &createStream{}
 	if err := d.Create(&pluginv1.CreateRequest{
-		Count: 2, // меньше, чем реальное число существующих VM
+		Count: 2, // lower than the real number of existing VMs
 		Profile: mustStruct(t, map[string]any{
 			"region": "eu-west-1", "ami": "ami-0abc1234", "instance_type": "t3.medium",
 			"tags": map[string]any{runTagKey: "run-over"},
@@ -577,9 +577,9 @@ func TestCreate_Idempotent_OverCount(t *testing.T) {
 	}
 }
 
-// TestStatus_UsesCredentials — Status с credentials в новом StatusRequest-поле
-// успешно опрашивает VM (не возвращает «requires credentials»-ошибку workaround-
-// версии). Покрывает only-add StatusRequest.credentials.
+// TestStatus_UsesCredentials verifies that Status with credentials in the new
+// StatusRequest field polls a VM successfully (does not return the workaround version's
+// "requires credentials" error). Covers the additive StatusRequest.credentials field.
 func TestStatus_UsesCredentials(t *testing.T) {
 	inst := runningInstance("i-stat", "10.6.6.6", "ip-10-6-6-6.internal")
 	f := &fakeEC2{
@@ -603,8 +603,8 @@ func TestStatus_UsesCredentials(t *testing.T) {
 	}
 }
 
-// TestList_UsesCredentialsField — List с credentials в новом ListRequest-поле
-// (не workaround «creds внутри filter»). Покрывает миграцию filter-Struct →
+// TestList_UsesCredentialsField verifies List with credentials in the new ListRequest field
+// (not the "creds inside filter" workaround). Covers migration from filter-Struct →
 // credentials-Struct.
 func TestList_UsesCredentialsField(t *testing.T) {
 	f := &fakeEC2{
@@ -689,7 +689,7 @@ func TestClassifyAWS_Codes(t *testing.T) {
 			t.Errorf("classifyAWS(%q)=%v, want %v", code, got, want)
 		}
 	}
-	// не-API ошибка → transient
+	// non-API error → transient
 	if got := classifyAWS(errors.New("dial tcp: timeout")); got != clouddriver.FailTransient {
 		t.Errorf("non-API err class=%v, want transient", got)
 	}

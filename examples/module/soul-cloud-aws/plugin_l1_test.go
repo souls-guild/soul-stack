@@ -19,16 +19,17 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// L1 — driver-as-plugin через РЕАЛЬНЫЙ gRPC server+client (тот же
-// RegisterCloudDriverServer, что sdk/clouddriver.Serve навешивает после
-// handshake). Проверяет, что AwsDriver корректно работает по proto-контракту
-// CloudDriver — включая новые поля credentials/userdata — поверх настоящего
-// gRPC-стрима, а не in-proc вызова метода. Это L1 для пилота: handshake-spawn
-// под Sigil-gate покрыт keeper/internal/coremod/cloud/integration_adapter_test.go
-// на keeper-стороне (там общий host); здесь — RPC-контракт самого драйвера.
+// L1 — driver-as-plugin through a REAL gRPC server+client (the same
+// RegisterCloudDriverServer that sdk/clouddriver.Serve attaches after
+// handshake). Verifies that AwsDriver works correctly through the CloudDriver
+// proto contract, including new credentials/userdata fields, over a real
+// gRPC stream rather than an in-proc method call. This is L1 for the pilot:
+// handshake-spawn under Sigil-gate is covered by
+// keeper/internal/coremod/cloud/integration_adapter_test.go on the Keeper side
+// (shared host there); here we cover the driver's own RPC contract.
 
-// serveDriverGRPC поднимает CloudDriver-сервис на bufless TCP-loopback и
-// возвращает клиент + teardown.
+// serveDriverGRPC starts CloudDriver service on bufless TCP-loopback and
+// returns client + teardown.
 func serveDriverGRPC(t *testing.T, impl *AwsDriver) (pluginv1.CloudDriverClient, func()) {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
@@ -36,11 +37,11 @@ func serveDriverGRPC(t *testing.T, impl *AwsDriver) (pluginv1.CloudDriverClient,
 		t.Fatalf("listen: %v", err)
 	}
 	srv := grpc.NewServer()
-	// Регистрируем через тот же serverAdapter-путь, что SDK: SDK-adapter
-	// неэкспортирован, но Serve навешивает именно CloudDriverServer; здесь
-	// регистрируем impl напрямую через сгенерённый Register (impl уже
-	// удовлетворяет CloudDriverServer? нет — у impl нет mustEmbed). Поэтому
-	// заворачиваем в локальный мост, идентичный SDK-adapter.
+	// Register through the same serverAdapter path as SDK: SDK adapter
+	// is unexported, but Serve attaches exactly CloudDriverServer; here
+	// we register impl directly through generated Register (does impl already
+	// satisfy CloudDriverServer? no — impl lacks mustEmbed). Therefore
+	// wrap it in a local bridge identical to SDK adapter.
 	pluginv1.RegisterCloudDriverServer(srv, &l1Adapter{impl: impl})
 	go func() { _ = srv.Serve(lis) }()
 
@@ -55,8 +56,8 @@ func serveDriverGRPC(t *testing.T, impl *AwsDriver) (pluginv1.CloudDriverClient,
 	return pluginv1.NewCloudDriverClient(conn), teardown
 }
 
-// l1Adapter — мост impl→CloudDriverServer (embed Unimplemented для forward-compat),
-// идентичный sdk/clouddriver.serverAdapter (тот неэкспортирован).
+// l1Adapter is bridge impl→CloudDriverServer (embed Unimplemented for forward-compat),
+// identical to sdk/clouddriver.serverAdapter (which is unexported).
 type l1Adapter struct {
 	pluginv1.UnimplementedCloudDriverServer
 	impl *AwsDriver
@@ -127,8 +128,8 @@ func TestL1_CreateOverGRPC(t *testing.T) {
 	if len(lastVms) != 1 || lastVms[0].VmId != "i-l1" || lastVms[0].Fqdn == "" {
 		t.Errorf("vms over gRPC = %+v", lastVms)
 	}
-	// credentials/userdata доехали через proto-стрим до драйвера (UserData
-	// base64-кодирован драйвером — EC2-требование, см. main.go).
+	// credentials/userdata reached the driver through the proto stream (UserData
+	// is base64-encoded by the driver — EC2 requirement, see main.go).
 	decoded, derr := base64.StdEncoding.DecodeString(aws.ToString(f.lastRunInput.UserData))
 	if derr != nil || string(decoded) != "#cloud-config\n" {
 		t.Errorf("userdata lost over gRPC marshaling: decoded=%q err=%v", decoded, derr)
