@@ -82,13 +82,13 @@ func normalizeLogical(body string) (string, error) {
 			// repeated slash (`//`) — collapse it, drop the segment.
 			continue
 		case ".", "..":
-			return "", fmt.Errorf("сегмент %q недопустим в vault-path", seg)
+			return "", fmt.Errorf("segment %q is not allowed in vault path", seg)
 		default:
 			out = append(out, seg)
 		}
 	}
 	if len(out) < 2 {
-		return "", fmt.Errorf("после нормализации не осталось <mount>/<path>")
+		return "", fmt.Errorf("normalization left no <mount>/<path>")
 	}
 	return strings.Join(out, "/"), nil
 }

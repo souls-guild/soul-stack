@@ -52,10 +52,10 @@ func FuzzNormalizeLogical(f *testing.F) {
 		// canonical form and not fail with an error.
 		out2, err2 := normalizeLogical(out)
 		if err2 != nil {
-			t.Fatalf("normalizeLogical неидемпотентна: на канон %q (из %q) вернула ошибку %v", out, body, err2)
+			t.Fatalf("normalizeLogical is not idempotent: returned error %v for canonical %q (from %q)", err2, out, body)
 		}
 		if out2 != out {
-			t.Fatalf("normalizeLogical неидемпотентна: normalize(%q)=%q, повторно=%q (исходный вход %q)", out, out2, out, body)
+			t.Fatalf("normalizeLogical is not idempotent: normalize(%q)=%q, repeated=%q (original input %q)", out, out2, out, body)
 		}
 	})
 }
@@ -98,10 +98,10 @@ func FuzzParseRef(f *testing.F) {
 		// dot segments slipping through).
 		out2, err2 := normalizeLogical(out)
 		if err2 != nil {
-			t.Fatalf("ParseRef(%q)=%q, но normalizeLogical на результате упала: %v", ref, out, err2)
+			t.Fatalf("ParseRef(%q)=%q, but normalizeLogical failed on the result: %v", ref, out, err2)
 		}
 		if out2 != out {
-			t.Fatalf("ParseRef(%q)=%q не канонична: повторная нормализация дала %q", ref, out, out2)
+			t.Fatalf("ParseRef(%q)=%q is not canonical: repeated normalization returned %q", ref, out, out2)
 		}
 	})
 }
@@ -112,17 +112,17 @@ func FuzzParseRef(f *testing.F) {
 func assertNoTraversal(t *testing.T, src, out string) {
 	t.Helper()
 	if out == "" {
-		t.Fatalf("успешный результат пуст при входе %q (контракт: успех ⇒ непустой канон)", src)
+		t.Fatalf("successful result is empty for input %q (contract: success implies non-empty canonical value)", src)
 	}
 	if strings.HasPrefix(out, "/") {
-		t.Fatalf("результат %q начинается с '/' (обход вверх) при входе %q", out, src)
+		t.Fatalf("result %q starts with '/' (upward traversal) for input %q", out, src)
 	}
 	for _, seg := range strings.Split(out, "/") {
 		switch seg {
 		case "":
-			t.Fatalf("результат %q содержит пустой сегмент (несхлопнутый '//') при входе %q", out, src)
+			t.Fatalf("result %q contains an empty segment (uncollapsed '//') for input %q", out, src)
 		case ".", "..":
-			t.Fatalf("результат %q содержит dot-сегмент %q (обход scope) при входе %q", out, seg, src)
+			t.Fatalf("result %q contains dot segment %q (scope bypass) for input %q", out, seg, src)
 		}
 	}
 }

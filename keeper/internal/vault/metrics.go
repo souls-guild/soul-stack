@@ -80,7 +80,7 @@ func RegisterVaultMetrics(reg *obs.Registry) *VaultMetrics {
 		readDuration: prometheus.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Name:    "keeper_vault_read_duration_seconds",
-				Help:    "Латентность чтения Vault KV (ReadKV) в секундах, разрезанная по mount.",
+				Help:    "Latency of Vault KV reads (ReadKV) in seconds, cut by mount.",
 				Buckets: prometheus.DefBuckets,
 			},
 			[]string{"mount"},
@@ -88,14 +88,14 @@ func RegisterVaultMetrics(reg *obs.Registry) *VaultMetrics {
 		readErrorsTotal: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "keeper_vault_read_errors_total",
-				Help: "Количество неуспешных чтений Vault KV, разрезанное по mount и kind (notfound/error).",
+				Help: "Number of failed Vault KV reads, cut by mount and kind (notfound/error).",
 			},
 			[]string{"mount", "kind"},
 		),
 		writeDuration: prometheus.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Name:    "keeper_vault_write_duration_seconds",
-				Help:    "Латентность записи Vault KV (WriteKV) в секундах, разрезанная по mount.",
+				Help:    "Latency of Vault KV writes (WriteKV) in seconds, cut by mount.",
 				Buckets: prometheus.DefBuckets,
 			},
 			[]string{"mount"},
@@ -103,14 +103,14 @@ func RegisterVaultMetrics(reg *obs.Registry) *VaultMetrics {
 		writeErrorsTotal: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "keeper_vault_write_errors_total",
-				Help: "Количество неуспешных записей Vault KV, разрезанное по mount.",
+				Help: "Number of failed Vault KV writes, cut by mount.",
 			},
 			[]string{"mount"},
 		),
 		listDuration: prometheus.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Name:    "keeper_vault_list_duration_seconds",
-				Help:    "Латентность перечисления Vault KV (ListKV) в секундах, разрезанная по mount.",
+				Help:    "Latency of Vault KV listings (ListKV) in seconds, cut by mount.",
 				Buckets: prometheus.DefBuckets,
 			},
 			[]string{"mount"},
@@ -118,7 +118,7 @@ func RegisterVaultMetrics(reg *obs.Registry) *VaultMetrics {
 		listErrorsTotal: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "keeper_vault_list_errors_total",
-				Help: "Количество неуспешных перечислений Vault KV, разрезанное по mount и kind (notfound/error).",
+				Help: "Number of failed Vault KV listings, cut by mount and kind (notfound/error).",
 			},
 			[]string{"mount", "kind"},
 		),
