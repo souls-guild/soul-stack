@@ -1,9 +1,9 @@
-# Cadence — MCP-tools регулярных запусков
+# Cadence - MCP-tools for regular launches
 
-Доменная секция [каталога MCP-tools](../mcp-tools.md): домен Cadence (`/v1/cadences*`, регулярные запуски Voyage по расписанию, [ADR-046](../../adr/0046-cadence.md#adr-046-cadence--регулярные-запуски-scheduledrecurring-voyage)). Источник правды по семантике — [operator-api/cadences.md](../operator-api/cadences.md).
+Domain section [MCP-tools directory](../mcp-tools.md): Cadence domain (`/v1/cadences*`, regular scheduled Voyage launches, [ADR-046](../../adr/0046-cadence.md)). The source of truth for semantics is [operator-api/cadences.md](../operator-api/cadences.md).
 
 ### Cadence (0)
 
-У Cadence **MCP-tool-ов нет** — домен REST-only. В каталоге `keeper/internal/mcp/manifest.go` нет ни одного `keeper.cadence.*`-tool-а: управление расписаниями ведётся через Operator API (`POST/GET/PATCH/DELETE /v1/cadences*` + `enable`/`disable` + `runs`). Если оператору-LLM нужен периодический прогон — он создаёт Voyage напрямую ([mcp-tools/voyages.md](voyages.md)) либо обращается к человеку-оператору за заведением Cadence через UI/REST.
+Cadence does not have **MCP tools** - REST-only domain. There is not a single `keeper.cadence.*`-tool in the `keeper/internal/mcp/manifest.go` directory: schedules are managed via the Operator API (`POST/GET/PATCH/DELETE /v1/cadences*` + `enable`/`disable` + `runs`). If an LLM operator needs a periodic run, he creates Voyage directly ([mcp-tools/voyages.md](voyages.md)) or contacts a human operator for the Cadence establishment via UI/REST.
 
-MCP-симметрия для домена Cadence не реализована и в MVP-каталог 72 tool-ов не входит; появится отдельным PR при необходимости (расширение каталога — only-add, [mcp-tools.md → Будущие чтения и удаления](../mcp-tools.md#будущие-чтения-и-удаления)).
+MCP symmetry for the Cadence domain is not implemented and is not included in the MVP catalog of 72 tools; will appear as a separate PR if necessary (directory extension - only-add, [mcp-tools.md → Future readings and deletions](../mcp-tools.md)).

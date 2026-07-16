@@ -1,72 +1,72 @@
-# Herald — endpoints реестра каналов доставки уведомлений
+# Herald - endpoints of the registry of notification delivery channels
 
-Доменная секция [Operator API](../operator-api.md): эндпоинты `/v1/heralds*` — CRUD реестра `heralds` (каналы доставки уведомлений о событиях прогонов, [ADR-052](../../adr/0052-herald-notifications.md#adr-052-herald--tiding--уведомления-о-событиях-прогонов), S4). Herald отвечает на вопрос «куда слать» (Tiding — «на что реагировать», [tidings.md](tidings.md)). Conventions, error-format, pagination, mapping-таблица — в корневом [operator-api.md](../operator-api.md). MCP-сторона — [mcp-tools/heralds.md](../mcp-tools/heralds.md).
+Domain section [Operator API](../operator-api.md): endpoints `/v1/heralds*` - CRUD registry `heralds` (channels for delivering notifications about run events, [ADR-052](../../adr/0052-herald-notifications.md), S4). Herald answers the question "where to send" (Tiding - "what to respond to", [tidings.md](tidings.md)). Conventions, error-format, pagination, mapping table - in the root [operator-api.md](../operator-api.md). MCP side - [mcp-tools/heralds.md](../mcp-tools/heralds.md).
 
-## Endpoint-секции
+## Endpoint sections
 
-Mapping endpoint ↔ MCP-tool ↔ permission (таблица 5 роутов) — в корневом [operator-api.md → Herald (5)](../operator-api.md#herald-5--реестр-каналов-доставки-уведомлений-о-прогонах-adr-052). Полная схема request/response — [`openapi.yaml`](../openapi.yaml) (`HeraldCreateRequest` / `HeraldUpdateRequest` / `Herald` / `HeraldListReply` — **источник правды по форме**). `herald.*` — NoSelector (управление кластер-уровневое, как `push-provider.*` / `omen.*`). Роуты монтируются только при сконфигурированном реестре (`router.go`: `if heraldH != nil`); при выключенном — catch-all → `404`.
+Mapping endpoint ↔ MCP-tool ↔ permission (table of 5 routes) - in the root [operator-api.md → Herald (5)](../operator-api.md). The full request/response scheme is [`openapi.yaml`](../openapi.yaml) (`HeraldCreateRequest` / `HeraldUpdateRequest` / `Herald` / `HeraldListReply` - **source of truth by form**). `herald.*` - NoSelector (cluster-level control, like `push-provider.*` / `omen.*`). Routes are mounted only when the registry is configured (`router.go`: `if heraldH != nil`); when disabled - catch-all → `404`.
 
-`type` — closed-enum (`webhook` в MVP; `slack`/`email` — additive post-MVP). `config` — per-type JSONB: для webhook `{ url, опц. headers }` плюс SSRF-opt-out-флаги (ниже). После commit-а каждой мутации `herald.Service` инвалидирует снимок dispatcher-кэша in-process и cross-keeper через Redis pub/sub `herald:invalidate`.
+`type` - closed-enum (`webhook` in MVP; `slack`/`email` - additive post-MVP). `config` - per-type JSONB: for webhook `{ url, optional headers }` plus SSRF-opt-out flags (below). After committing each mutation, `herald.Service` invalidates the snapshot of the in-process dispatcher cache and cross-keeper via Redis pub/sub `herald:invalidate`.
 
-### SSRF-контур (взведён по умолчанию)
+### SSRF circuit (enabled by default)
 
-Webhook = исходящий HTTP-вызов на оператор-заданный URL → SSRF-вектор. Контур взведён по умолчанию (паттерн `core.url`, безопасный default + аудируемый opt-out):
+Webhook = outgoing HTTP call to operator-specified URL → SSRF vector. The circuit is armed by default (pattern `core.url`, safe default + auditable opt-out):
 
-- **https-only по умолчанию** — `http://`-URL только явным `config.http_allowed=true` (с warning).
-- **deny приватных IP по умолчанию** — dial в loopback / RFC1918 / link-local / metadata-endpoint блокируется по фактически резолвнутому IP; снимается `config.allow_private=true`.
-- **запрет redirect** + **timeout** на доставку (общий keeper-side `shared/netguard`).
+- **https-only by default** - `http://`-URL only explicit `config.http_allowed=true` (with warning).
+- **deny private IPs by default** - dial in loopback / RFC1918 / link-local / metadata-endpoint is blocked by the actually resolved IP; `config.allow_private=true` is removed.
+- **redirect prohibition** + **timeout** for delivery (general keeper-side `shared/netguard`).
 
-Битый/запрещённый URL или конфликтующий config → `422 validation-failed` на create/update.
+Broken/forbidden URL or conflicting config → `422 validation-failed` on create/update.
 
-### `secret_ref` и подпись `X-SoulStack-Signature`
+### `secret_ref` and signature `X-SoulStack-Signature`
 
-`secret_ref` (nullable) — **только vault-ref** (`vault:<mount>/<path>`) на signing-token; сам секрет в записи НЕ хранится (не cleartext, маскируется в ошибках). При заданном `secret_ref` webhook-доставка подписывает тело запроса заголовком:
+`secret_ref` (nullable) - **vault-ref only** (`vault:<mount>/<path>`) on signing-token; the secret itself is NOT stored in the record (not cleartext, it is masked in errors). When `secret_ref` is specified, the webhook delivery signs the request body with the header:
 
 ```
 X-SoulStack-Signature: sha256=<hex>
 ```
 
-где `<hex>` — `HMAC-SHA256(body, signing-token)` в hex-кодировании. Приёмник валидирует так: берёт сырое тело запроса, считает `HMAC-SHA256` тем же общим signing-token-ом, сравнивает hex-результат с частью после `sha256=` (constant-time-сравнение). При `secret_ref: null` подписи нет — заголовок не выставляется.
+where `<hex>` is `HMAC-SHA256(body, signing-token)` in hex encoding. The receiver validates this way: it takes the raw request body, considers `HMAC-SHA256` to be the same general signing token, and compares the hex result with the part after `sha256=` (constant-time comparison). If `secret_ref: null` is not signed, the header is not set.
 
-Payload уведомления НЕ несёт resolved-секреты (`input`/vault-резолвленные значения не кладутся; проходит secret-masking, инвариант A [ADR-027](../../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim)).
+Payload notifications do NOT carry resolved-secrets (`input`/vault-resolved values ​​are not included; secret-masking passes, invariant A [ADR-027](../../adr/0027-apply-work-queue.md)).
 
-### `POST /v1/heralds` — создать Herald
+### `POST /v1/heralds` - create Herald
 
 Permission: `herald.create`. MCP-tool: `keeper.herald.create`.
 
-**Request `HeraldCreateRequest`** (`required: name, type, config`): `{name (^[a-z0-9-]{1,63}$), type (enum: webhook), config (object), secret_ref? (vault-ref|null), enabled? (bool, опущено → true)}`.
+**Request `HeraldCreateRequest`** (`required: name, type, config`): `{name (^[a-z0-9-]{1,63}$), type (enum: webhook), config (object), secret_ref? (vault-ref|null), enabled? (bool, omitted → true)}`.
 
 **Response `201 Herald`:** `{name, type, config, secret_ref, enabled, created_at, updated_at, created_by_aid}`.
 
-Ошибки: `400` (битый JSON / unknown-поле strict-probe), `409` (`name` занят), `422 validation-failed` (битый `name`/`type`/`config`/`secret_ref` или нарушение SSRF-контура). Audit: `herald.created`.
+Errors: `400` (broken JSON / unknown strict-probe field), `409` (`name` busy), `422 validation-failed` (broken `name`/`type`/`config`/`secret_ref` or SSRF circuit violation). Audit: `herald.created`.
 
-### `GET /v1/heralds` — список Herald-каналов
+### `GET /v1/heralds` — list of Herald channels
 
 Permission: `herald.list`. MCP-tool: `keeper.herald.list`. Query `offset`/`limit`. Sort `updated_at` DESC, `name` ASC. Response `200 HeraldListReply` (`{items, offset, limit, total}`).
 
-### `GET /v1/heralds/{name}` — прочитать один канал
+### `GET /v1/heralds/{name}` - read one channel
 
-Permission: `herald.read`. MCP-tool: `keeper.herald.read`. Response `200 Herald`; `404 not-found` — записи нет.
+Permission: `herald.read`. MCP-tool: `keeper.herald.read`. Response `200 Herald`; `404 not-found` - no entry.
 
-### `PUT /v1/heralds/{name}` — заменить канал (replace-семантика)
+### `PUT /v1/heralds/{name}` — replace channel (replace semantics)
 
-Permission: `herald.update`. MCP-tool: `keeper.herald.update`. **Replace** — тело полностью заменяет mutable-поля (`type`/`config`/`secret_ref`/`enabled`); `name` (PK) immutable. Как у Push-Provider — `PUT` (полная замена), не `PATCH`. SSRF-инвариант тот же, что у create.
+Permission: `herald.update`. MCP-tool: `keeper.herald.update`. **Replace** - body completely replaces mutable fields (`type`/`config`/`secret_ref`/`enabled`); `name` (PK) immutable. Like Push-Provider - `PUT` (complete replacement), not `PATCH`. The SSRF invariant is the same as that of create.
 
 **Request `HeraldUpdateRequest`** (`required: type, config`): `{type (enum: webhook), config (object), secret_ref? (vault-ref|null), enabled? (bool)}`.
 
-**Response `200 Herald`.** Ошибки: `400`, `404 not-found`, `422 validation-failed`. Audit: `herald.updated`.
+**Response `200 Herald`.** Errors: `400`, `404 not-found`, `422 validation-failed`. Audit: `herald.updated`.
 
-### `DELETE /v1/heralds/{name}` — удалить канал
+### `DELETE /v1/heralds/{name}` — delete channel
 
-Permission: `herald.delete`. MCP-tool: `keeper.herald.delete`. Каскадно сносит связанные Tiding-подписки (`tidings.herald ON DELETE CASCADE`). Response `204`; `404 not-found`. Audit: `herald.deleted`.
+Permission: `herald.delete`. MCP-tool: `keeper.herald.delete`. Cascadingly demolishes associated Tiding subscriptions (`tidings.herald ON DELETE CASCADE`). Response `204`; `404 not-found`. Audit: `herald.deleted`.
 
-## Терминалы доставки (не CRUD)
+## Delivery terminals (not CRUD)
 
-Исходы webhook-доставки worker пишет в audit как `herald.delivered` (успех) / `herald.failed` (провал после исчерпания retry); это область `keeper_internal`, не CRUD-роуты. Статусы in-flight-попыток — hot-данные в Redis (инвариант hot→Redis, [ADR-006](../../adr/0006-cache-redis.md#adr-006-кэш-и-координация--redis)), синхронно в PG на каждую попытку НЕ пишутся. Семантика доставки — at-least-once (редкий дубль допустим).
+Outcomes of webhook delivery worker writes in audit as `herald.delivered` (success) / `herald.failed` (failure after exhaustion of retry); This is the `keeper_internal` area, not CRUD routes. Statuses of in-flight attempts - hot data in Redis (invariant hot→Redis, [ADR-006](../../adr/0006-cache-redis.md)), synchronously in PG for each attempt. Delivery semantics are at-least-once (a rare double is acceptable).
 
-## См. также
+## See also
 
-- [tidings.md](tidings.md) — парный реестр правил подписки (`event_types` → Herald).
-- [mcp-tools/heralds.md](../mcp-tools/heralds.md) — MCP-сторона (`keeper.herald.*`).
-- [ADR-052](../../adr/0052-herald-notifications.md#adr-052-herald--tiding--уведомления-о-событиях-прогонов) — дизайн Herald/Tiding (tap поверх audit-writer, at-least-once webhook-доставка, SSRF-инварианты).
-- [rbac.md](../rbac.md) — каталог permissions `herald.*`.
+- [tidings.md](tidings.md) - paired register of subscription rules (`event_types` → Herald).
+- [mcp-tools/heralds.md](../mcp-tools/heralds.md) - MCP side (`keeper.herald.*`).
+- [ADR-052](../../adr/0052-herald-notifications.md) - Herald/Tiding design (tap over audit-writer, at-least-once webhook-delivery, SSRF invariants).
+- [rbac.md](../rbac.md) — permissions directory `herald.*`.

@@ -1,23 +1,23 @@
-# Operator — endpoints управления Архонтами
+# Operator — endpoints for managing Archons
 
-Доменная секция [Operator API](../operator-api.md): эндпоинты `/v1/operators*` (создание / отзыв / выпуск JWT / чтение Архонтов, [ADR-013](../../adr/0013-bootstrap-archon.md#adr-013-bootstrap-первого-архонта) / [ADR-014](../../adr/0014-operator-identity.md#adr-014-identity-модель-оператора-archon)). Conventions, error-format, pagination, secret-masking, mapping-таблица — в корневом [operator-api.md](../operator-api.md). MCP-сторона — [mcp-tools/operator.md](../mcp-tools/operator.md).
+Domain section [Operator API](../operator-api.md): endpoints `/v1/operators*` (create / review / release JWT / read Archons, [ADR-013](../../adr/0013-bootstrap-archon.md) / [ADR-014](../../adr/0014-operator-identity.md)). Conventions, error-format, pagination, secret-masking, mapping table - in the root [operator-api.md](../operator-api.md). MCP side - [mcp-tools/operator.md](../mcp-tools/operator.md).
 
-## Endpoint-секции
+## Endpoint sections
 
-Mapping endpoint ↔ MCP-tool ↔ permission (таблица 5 роутов + ремарка про отложенную MCP-симметрию read-эндпоинтов) — в корневом [operator-api.md → Operator (5)](../operator-api.md#operator-5--управление-архонтами-adr-013--adr-014).
+Mapping endpoint ↔ MCP-tool ↔ permission (table of 5 routes + a note about the deferred MCP symmetry of read endpoints) - in the root [operator-api.md → Operator (5)](../operator-api.md).
 
-#### `POST /v1/operators` — создать Архонта
+#### `POST /v1/operators` - create an Archon
 
 Permission: `operator.create`. MCP-tool: `keeper.operator.create`.
 
-Создаёт запись в реестре `operators` ([storage.md](../storage.md), [ADR-014](../../adr/0014-operator-identity.md#adr-014-identity-модель-оператора-archon)), привязывает к ролям из `keeper.yml → rbac.roles[].operators`, выпускает первый JWT с `auth.jwt.ttl_default` ([config.md → auth](../config.md#auth)).
+Creates a registry entry `operators` ([storage.md](../storage.md), [ADR-014](../../adr/0014-operator-identity.md)), binds to roles from `keeper.yml → rbac.roles[].operators`, releases the first JWT with `auth.jwt.ttl_default` ([config.md → auth](../config.md#auth)).
 
 **Request `OperatorCreateRequest`:**
 
-| Поле | Тип | Required | Смысл |
+| Field | Type | Required | Meaning |
 |---|---|---|---|
-| `aid` | `string` (regex `^[a-z0-9][a-z0-9._@-]{1,127}$`) | yes | AID нового Архонта ([naming-rules.md](../../naming-rules.md#идентификаторы)). |
-| `display_name` | `string` | yes | Человекочитаемое имя для UI/аудита. |
+| `aid` | `string` (regex `^[a-z0-9][a-z0-9._@-]{1,127}$`) | yes | AID of the new Archon ([naming-rules.md](../../naming-rules.md)). |
+| `display_name` | `string` | yes | Human readable name for UI/audit. |
 
 ```json
 {
@@ -28,13 +28,13 @@ Permission: `operator.create`. MCP-tool: `keeper.operator.create`.
 
 **Response `201 OperatorCreateReply`:**
 
-| Поле | Тип | Смысл |
+| Field | Type | Meaning |
 |---|---|---|
-| `aid` | `string` | AID созданного Архонта. |
-| `display_name` | `string` | Зеркало из request. |
-| `created_at` | `string` (RFC 3339) | Время создания записи в Postgres. |
-| `created_by_aid` | `string` | AID Архонта, выполнившего запрос (из JWT `sub`). FK на `operators(aid)`. |
-| `jwt` | `string` | Выпущенный JWT, TTL = `auth.jwt.ttl_default`. **Возвращается один раз** — повторный выпуск только через `POST /v1/operators/{aid}/issue-token`. |
+| `aid` | `string` | AID of the created Archon. |
+| `display_name` | `string` | Mirror from request. |
+| `created_at` | `string` (RFC 3339) | Postgres record creation time. |
+| `created_by_aid` | `string` | AID of the Archon who made the request (from JWT `sub`). FK on `operators(aid)`. |
+| `jwt` | `string` | Issued JWT, TTL = `auth.jwt.ttl_default`. **One time return** - reissue only via `POST /v1/operators/{aid}/issue-token`. |
 
 ```json
 {
@@ -46,56 +46,56 @@ Permission: `operator.create`. MCP-tool: `keeper.operator.create`.
 }
 ```
 
-> JWT в ответе маскируется во всех observability-каналах (правило masked-keys, [§ Secret masking](../operator-api.md#secret-masking-в-логах-и-трейсах)) и **отдаётся один раз** — сохраните токен сразу при получении.
+> The JWT in the response is masked in all observability channels (masked-keys rule, [§ Secret masking](../operator-api.md)) and **is given once** - save the token immediately upon receipt.
 
-**Errors:** `403 forbidden`, `409 operator-already-exists`, `422 validation-failed` (невалидный AID).
+**Errors:** `403 forbidden`, `409 operator-already-exists`, `422 validation-failed` (invalid AID).
 
-#### `POST /v1/operators/{aid}/revoke` — отозвать Архонта
+#### `POST /v1/operators/{aid}/revoke` - recall Archon
 
 Permission: `operator.revoke`. MCP-tool: `keeper.operator.revoke`. Path-param: `aid`.
 
-Ставит `revoked_at = now()` в `operators`. Активные JWT продолжают работать до `exp` (нет revocation-blocklist; короткий TTL — естественная защита, [ADR-014](../../adr/0014-operator-identity.md#adr-014-identity-модель-оператора-archon)).
+Sets `revoked_at = now()` to `operators`. Active JWTs continue to run until `exp` (no revocation-blocklist; short TTL - natural protection, [ADR-014](../../adr/0014-operator-identity.md)).
 
 **Request body `OperatorRevokeRequest`:**
 
-| Поле | Тип | Обязательность | Смысл |
+| Field | Type | Obligation | Meaning |
 |---|---|---|---|
-| `reason` | `string` | optional | Свободный текст причины для audit-trail (фиксируется в `payload.reason` audit-event `operator.revoked`, [ADR-022](../../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)). |
+| `reason` | `string` | optional | Free text reason for audit-trail (captured in `payload.reason` audit-event `operator.revoked`, [ADR-022](../../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)). |
 
-**Response `204 No Content`** при успехе. **Errors:** `404 not-found`, `409 would-lock-out-cluster` (нельзя отозвать последнего `*`-Архонта, [§ Self-lockout invariant](../operator-api.md#self-lockout-invariant)).
+**Response `204 No Content`** on success. **Errors:** `404 not-found`, `409 would-lock-out-cluster` (you cannot recall the last `*`-Archon, [§ Self-lockout invariant](../operator-api.md#self-lockout-invariant)).
 
-#### `POST /v1/operators/{aid}/issue-token` — выпустить новый JWT
+#### `POST /v1/operators/{aid}/issue-token` - release new JWT
 
 Permission: `operator.issue-token`. MCP-tool: `keeper.operator.issue-token`. Path-param: `aid`.
 
-Выписывает новый JWT для существующего Архонта (после потери токена, плановой ротации). Старые JWT остаются валидными до `exp`.
+Writes a new JWT for an existing Archon (after token loss, scheduled rotation). Old JWTs remain valid until `exp`.
 
-**Request body:** пустой (TTL берётся из `auth.jwt.ttl_default`).
+**Request body:** empty (TTL is taken from `auth.jwt.ttl_default`).
 
 **Response `200 IssueTokenReply`:**
 
-| Поле | Тип | Смысл |
+| Field | Type | Meaning |
 |---|---|---|
 | `aid` | `string` | AID. |
-| `jwt` | `string` | Новый JWT. |
-| `expires_at` | `string` (RFC 3339) | Срок истечения. Не путать с JWT-claim `exp` (unix-сек) внутри самого токена — это decoded-форма для удобства клиента. |
+| `jwt` | `string` | New JWT. |
+| `expires_at` | `string` (RFC 3339) | Expiration date. Not to be confused with the JWT-claim `exp` (unix-sec) inside the token itself - this is a decoded form for the convenience of the client. |
 
-#### `GET /v1/operators` — список Архонтов
+#### `GET /v1/operators` - list of Archons
 
-Permission: `operator.list`. Read-only, без audit.
+Permission: `operator.list`. Read-only, no audit.
 
-**Query-параметры:**
+**Query parameters:**
 
-| Поле | Тип | Обязательность | Смысл |
+| Field | Type | Obligation | Meaning |
 |---|---|---|---|
-| `auth_method` | `string` (jwt/mtls/combined) | optional | Фильтр по форме credential. |
-| `revoked` | `bool` (default `false`) | optional | `false` — только активные (`revoked_at IS NULL`); `true` — включая ревокнутых. |
-| `offset` / `limit` | `int` | optional | Стандартная пагинация ([§ Pagination](../operator-api.md#pagination)). |
+| `auth_method` | `string` (jwt/mtls/combined) | optional | Filter by credential form. |
+| `revoked` | `bool` (default `false`) | optional | `false` - active only (`revoked_at IS NULL`); `true` - including the reviled. |
+| `offset` / `limit` | `int` | optional | Standard pagination ([§ Pagination](../operator-api.md#pagination)). |
 
-**Response `200 OperatorListReply`:** `{items: Operator[], offset, limit, total}`. Сортировка `created_at DESC` (новые сверху).
+**Response `200 OperatorListReply`:** `{items: Operator[], offset, limit, total}`. Sort by `created_at DESC` (newest on top).
 
-#### `GET /v1/operators/{aid}` — detail Архонта
+#### `GET /v1/operators/{aid}` — Archon detail
 
-Permission: `operator.list` (паттерн `soul.list`: одна permission покрывает list+get). Path-param: `aid`. Read-only, без audit.
+Permission: `operator.list` (`soul.list` pattern: one permission covers list+get). Path-param: `aid`. Read-only, no audit.
 
-**Response `200 Operator`:** запись реестра `operators`. **Errors:** `404 not-found` если AID не существует, `422 validation-failed` для битого AID.
+**Response `200 Operator`:** registry entry `operators`. **Errors:** `404 not-found` if the AID does not exist, `422 validation-failed` for a broken AID.

@@ -1,35 +1,35 @@
-# RBAC и операторы
+# RBAC and operators
 
-RBAC встроен в Keeper из коробки ([requirements.md](../requirements.md)) и применяется к **OpenAPI / MCP / push-операциям единообразно**: один и тот же набор политик решает, может ли оператор завести Soul, дёрнуть `push.apply`, прочитать Soulprint конкретного coven-а или создать Provider.
+RBAC is built into Keeper out of the box ([requirements.md](../requirements.md)) and applies to **OpenAPI / MCP / push operations uniformly**: the same set of policies decides whether an operator can start a Soul, pull `push.apply`, read the Soulprint of a specific coven, or create a Provider.
 
-Модель — классическая trio «операторы (Архонты) ↔ роли ↔ permissions». Всё хранится в Postgres ([ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)): Архонты ([ADR-014](../adr/0014-operator-identity.md#adr-014-identity-модель-оператора-archon)) — реестр `operators`, роли и их permissions — таблицы `rbac_roles` / `rbac_role_permissions`, привязка «оператор ↔ роль» (**membership**) — таблица `rbac_role_operators`. Управление — через OpenAPI/MCP (`role.*`-permissions, [§ Каталог permissions](#каталог-permissions)), не правкой YAML.
+The model is the classic trio "operators (Archons) ↔ roles ↔ permissions." Everything is stored in Postgres ([ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)): Archons ([ADR-014](../adr/0014-operator-identity.md)) - registry `operators`, roles and their permissions - tables `rbac_roles` / `rbac_role_permissions`, binding "operator ↔ role" (**membership**) - table `rbac_role_operators`. Management - via OpenAPI/MCP (`role.*`-permissions, § Permissions directory), not by editing YAML.
 
-> **Hard-cut: блок `rbac:` в `keeper.yml` удалён ([ADR-028(g)](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)).** До ADR-028 роли / permissions / membership декларировались в `keeper.yml::rbac` — это давало BUG-1 (`keeper init` создаёт Архонта в БД, но membership кладёт в JWT-claim, который enforcer не читает, резолвя его из YAML → bootstrap-Архонт получает `403`). Ключ `rbac:` теперь отвергается парсером как `unknown_key`; типы `config.KeeperRBAC` / `config.RBACRole` / поле `KeeperConfig.RBAC` удалены. Легаси-инсталляций нет, миграции YAML→БД не требуется.
+> **Hard-cut: block `rbac:` in `keeper.yml` removed ([ADR-028(g)](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)).** Before ADR-028, roles / permissions / membership were declared in `keeper.yml::rbac` - this gave BUG-1 (`keeper init` creates an Archon in the database, but membership puts in a JWT-claim, which the enforcer does not read, resolving it from YAML → bootstrap - Archon receives `403`). The key `rbac:` is now rejected by the parser as `unknown_key`; types `config.KeeperRBAC` / `config.RBACRole` / field `KeeperConfig.RBAC` removed. There are no legacy installations, YAML→DB migration is not required.
 
-## Storage — три PG-таблицы
+## Storage - three PG tables
 
-RBAC материализован в Postgres ([ADR-028(a)](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres), схемы — [storage.md](storage.md)):
+RBAC materialized in Postgres ([ADR-028(a)](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres), schemas - [storage.md](storage.md)):
 
-| Таблица | Колонки | Роль |
+| Table | Columns | Role |
 |---|---|---|
-| **`rbac_roles`** | `name` PK (kebab-case, CHECK на формат), `description`, `builtin` BOOL, `created_at`, `created_by_aid` FK→`operators(aid)` NULL-able | Каталог ролей. `builtin=true` запрещает `role.delete` / `role.update` (встроенная роль — `cluster-admin`, см. [§ Встроенные роли](#встроенные-роли)). `created_by_aid IS NULL` — seed-роли без инициатора-Архонта. |
-| **`rbac_role_permissions`** | `role_name` FK→`rbac_roles(name)` `ON DELETE CASCADE`, `permission` TEXT, PK `(role_name, permission)` | Permissions роли. `permission` хранится **RAW-строкой** и парсится `ParsePermission` ([§ Формат permissions](#формат-permissions)) — БД строку не интерпретирует. |
-| **`rbac_role_operators`** | `role_name` FK→`rbac_roles(name)` `ON DELETE CASCADE`, `aid` FK→`operators(aid)`, `granted_at`, `granted_by_aid` FK→`operators(aid)` NULL-able, PK `(role_name, aid)` | **Membership** «роль ↔ оператор». Отсутствие этого слоя раньше было причиной BUG-1 — membership-у негде было персистентно жить так, чтобы его видели и `keeper init`, и enforcer на всех нодах. |
+| **`rbac_roles`** | `name` PK (kebab-case, CHECK on format), `description`, `builtin` BOOL, `created_at`, `created_by_aid` FK→`operators(aid)` NULL-able | Directory of roles. `builtin=true` disables `role.delete` / `role.update` (built-in role - `cluster-admin`, see § Built-in Roles). `created_by_aid IS NULL` - seed roles without an Archon initiator. |
+| **`rbac_role_permissions`** | `role_name` FK→`rbac_roles(name)` `ON DELETE CASCADE`, `permission` TEXT, PK `(role_name, permission)` | Role permissions. `permission` is stored as a **RAW string** and parsed by `ParsePermission` (§ Permissions format) - the database does not interpret the string. |
+| **`rbac_role_operators`** | `role_name` FK→`rbac_roles(name)` `ON DELETE CASCADE`, `aid` FK→`operators(aid)`, `granted_at`, `granted_by_aid` FK→`operators(aid)` NULL-able, PK `(role_name, aid)` | **Membership** "role ↔ operator". The absence of this layer used to be the cause of BUG-1 - membership had nowhere to persistently live so that it could be seen by both `keeper init` and the enforcer on all nodes. |
 
-**Термин «FK».** «FK» здесь — **настоящий PG foreign key** (`rbac_role_operators.aid` / `granted_by_aid` / `created_by_aid` → `operators(aid)`). Прежний метафорический «FK» YAML-списка `roles[].operators` — это **membership** (строка `rbac_role_operators`), не ссылка в файле ([ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres), [naming-rules.md → RBAC](../naming-rules.md#rbac-реестр-ролей-membership-и-термин-fk)).
+**The term "FK".** The "FK" here is **a real PG foreign key** (`rbac_role_operators.aid` / `granted_by_aid` / `created_by_aid` → `operators(aid)`). The former metaphorical "FK" of the YAML list `roles[].operators` is **membership** (line `rbac_role_operators`), not a link in the file ([ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres), [naming-rules.md → RBAC](../naming-rules.md)).
 
-## Базовая политика
+## Basic Policy
 
-| Понятие | Смысл |
+| Concept | Meaning |
 |---|---|
-| **`default_policy: deny`** | По умолчанию любое действие, не покрытое явной allow-permission, **запрещено**. Без exception-ов. Это инвариант enforcer-а (не конфиг-поле после hard-cut). |
-| **Роль** | Запись `rbac_roles` (`name` kebab-case) + набор permissions (`rbac_role_permissions`) + набор привязанных AID (`rbac_role_operators`). |
-| **Permission** | Строка `rbac_role_permissions.permission`: либо `*` (всё), либо `<resource>.<action>` с опциональным фильтром `on <selector>` ([§ Формат permissions](#формат-permissions)). |
-| **Membership** | Строка `rbac_role_operators` `(role_name, aid)` — «AID имеет эту роль». |
+| **`default_policy: deny`** | By default, any action not covered by an explicit allow-permission is **prohibited**. No exceptions. This is an enforcer invariant (not a config field after hard-cut). |
+| **Role** | Record `rbac_roles` (`name` kebab-case) + set of permissions (`rbac_role_permissions`) + set of bound AIDs (`rbac_role_operators`). |
+| **Permission** | Line `rbac_role_permissions.permission`: either `*` (all) or `<resource>.<action>` with optional filter `on <selector>` (§ Format permissions). |
+| **Membership** | Line `rbac_role_operators` `(role_name, aid)` - "AID has this role." |
 
-## Пример (логическая модель)
+## Example (logic model)
 
-Роль `db-operator`, привязанная к двум Архонтам, с двумя permissions:
+Role `db-operator`, tied to two Archons, with two permissions:
 
 ```
 rbac_roles:
@@ -44,11 +44,11 @@ rbac_role_operators:
   (db-operator, archon-db-02)   granted_by_aid: archon-alice
 ```
 
-`db-operator` может делать любые операции над incarnation-ами сервисов `redis` и `vault-cluster` и видеть список Souls; всё остальное запрещено. Создаётся через OpenAPI/MCP: `role.create` (роль + permissions) + `role.grant-operator` (membership) — [§ Каталог permissions](#каталог-permissions).
+`db-operator` can perform any operations on the incarnation services `redis` and `vault-cluster` and see the list of Souls; everything else is prohibited. Created via OpenAPI/MCP: `role.create` (role + permissions) + `role.grant-operator` (membership) - § Permissions directory.
 
-## Формат permissions
+## Format permissions
 
-Permission-строка — либо `*` (полный доступ, эквивалент cluster-admin), либо двух-уровневое имя `<resource>.<action>` с опциональным селектором `on <selector>`. Формально:
+Permission string - either `*` (full access, equivalent to cluster-admin), or a two-level name `<resource>.<action>` with an optional selector `on <selector>`. Formally:
 
 ```
 permission := "*" | <resource>.<action> ( " on " <selector> )?
@@ -61,563 +61,563 @@ value      := [a-zA-Z0-9_.-]+
 trait-pair := <value> ":" <value>
 ```
 
-Правила, не выражаемые грамматикой:
+Rules not expressed by grammar:
 
-- **Ровно два сегмента.** `incarnation.create` — валидно; `keeper.incarnation.create` — невалидно (три сегмента; имя такого вида — это **MCP-tool name**, не permission).
-- **Wildcard только в `<action>`.** `incarnation.*` — валидно (все действия над `incarnation`). `*.create` — **не** поддерживается в MVP. Полный wildcard — `*` (без точки), отдельный case.
-- **Whitespace.** Между `<resource>.<action>` и `on` — ровно один пробел; между ключом и значением селектора — `=` без пробелов; между значениями — `,` без пробелов.
-- **Регистр.** Permission-имена, ключи селектора и значения — case-sensitive. Канон — lower-case (`coven=`, не `Coven=`).
-- **Kebab-case в action.** Дефис в `<action>` допустим (`operator.issue-token`); пробел и подчёркивание — нет.
+- **Exactly two segments.** `incarnation.create` - valid; `keeper.incarnation.create` - invalid (three segments; a name of this type is **MCP-tool name**, not permission).
+- **Wildcard only in `<action>`.** `incarnation.*` - valid (all actions on `incarnation`). `*.create` - **not** supported in MVP. Full wildcard - `*` (without dot), separate case.
+- **Whitespace.** There is exactly one space between `<resource>.<action>` and `on`; between the selector key and value - `=` without spaces; between values ​​- `,` without spaces.
+- **Registration** Permission names, selector keys and values ​​are case-sensitive. Canon - lower-case (`coven=`, not `Coven=`).
+- **Kebab-case in action.** Hyphen in `<action>` is acceptable (`operator.issue-token`); Space and underscore are not.
 
-Расширение грамматики (новые ключи селектора, wildcards в значениях, новые формы) — отдельный PR в `rbac.md` с обоснованием. Добавление новых ключей — не breaking (старые роли продолжают валидироваться).
+Grammar expansion (new selector keys, wildcards in values, new forms) - separate PR in `rbac.md` with justification. Adding new keys is not breaking (old roles continue to be validated).
 
 ## Permission ↔ MCP-tool / OpenAPI endpoint
 
-**Соответствие 1:1.** Каждая permission двух-сегментного формата `<resource>.<action>` контролирует:
+**1:1 correspondence.** Each permission of the two-segment format `<resource>.<action>` controls:
 
-- MCP-tool keeper-side с именем `keeper.<resource>.<action>` (4-сегментное имя).
-- Соответствующий OpenAPI endpoint (POST `/v1/<resource>/<action>` или подобный).
+- MCP-tool keeper-side with name `keeper.<resource>.<action>` (4-segment name).
+- Corresponding OpenAPI endpoint (POST `/v1/<resource>/<action>` or similar).
 
-Пример: permission `incarnation.create` даёт право вызвать MCP-tool `keeper.incarnation.create` или HTTP endpoint `POST /v1/incarnations`. Полное соответствие MCP-tool ↔ OpenAPI endpoint ↔ permission нормировано в [operator-api.md → Mapping endpoint ↔ MCP-tool ↔ permission](operator-api.md#mapping-endpoint--mcp-tool--permission); MCP-сторона (формат tool declaration, транспорт, async-convention, input/output schemas) — в [mcp-tools.md](mcp-tools.md).
+Example: permission `incarnation.create` gives the right to call MCP-tool `keeper.incarnation.create` or HTTP endpoint `POST /v1/incarnations`. Full compliance with MCP-tool ↔ OpenAPI endpoint ↔ permission is normalized in [operator-api.md → Mapping endpoint ↔ MCP-tool ↔ permission](operator-api.md#mapping-endpoint--mcp-tool--permission); MCP side (tool declaration format, transport, async-convention, input/output schemas) - in [mcp-tools.md](mcp-tools.md).
 
-## Грамматика селектора
+## Selector grammar
 
-Селектор — однопеременный фильтр `<key>=<v1>,<v2>,…`, где `<key>` — из closed enum:
+The selector is a single-variable filter `<key>=<v1>,<v2>,…`, where `<key>` is from closed enum:
 
-| Ключ | Семантика | Источник значения при матчинге запроса |
+| Key | Semantics | Value source for query matching |
 |---|---|---|
-| `service=` | Permission ограничен incarnation-ами указанных Service-типов. | **incarnation-операции:** `incarnation.service` (имя Service из git, [architecture.md → Артефакты](../architecture.md#артефакты-soul-stack-что-в-git-что-в-бд)). На create — `service` из тела запроса. |
-| `coven=` | Permission ограничен указанными Coven-метками. | **incarnation-операции** (run / destroy / upgrade / get / history): declared `incarnation.covens` ∪ `{incarnation.name}` — env-теги incarnation плюс её имя как корневая Coven-метка ([ADR-008](../adr/0008-coven-stable-tags.md#adr-008-coven--только-стабильные-логические-теги), amendment a). На create — declared `covens` из тела запроса ∪ `{name}`. **soul-операции** (`soul.coven-assign` / `soul.list`): метка хоста из тела/query (`souls.coven[]`). |
-| `incarnation=` | Permission ограничен конкретным instance. | `incarnation.name` целевого instance. |
-| `host=` | Permission ограничен конкретным хостом. **Источник контекста — path/body мутации** (`soul.issue-token` / `soul.ssh-target-update` / `errand.run`), где SID известен до handler-а. На read-видимости souls (`soul.list` и покрываемые ею get/soulprint/history) `host=`-селектор на gate-этапе НЕ применяется — read гейтится existence-`RequireAction`, сужение по scope делает handler (ADR-047 §г G1, [§ Двухслойная авторизация read-эндпоинтов](#двухслойная-авторизация-read-эндпоинтов-adr-047-г-g1)). | SID хоста ([identity.md](../soul/identity.md)) из path/body мутации. |
-| `regex='…'` | Permission ограничен хостами, чей SID/имя матчит RE2-паттерн ([ADR-047](../architecture.md) S2a). | SID/имя хоста — `host`- или `sid`-ключ контекста запроса. |
-| `soulprint='…'` | Permission ограничен хостами, чьи факты удовлетворяют CEL-предикату `soulprint.self.*` ([ADR-047](../architecture.md) S2b, [ADR-018](../adr/0018-soulprint-typed.md#adr-018-soulprint-typed-схема-mvp)). | Факты хоста (`SoulprintFacts`) — подаёт резолвер list-видимости/target (слайсы S3/S4). |
-| `trait=key:value` | Permission ограничен инкарнациями, у которых operator-set trait-метка `key` равна `value` (exact scalar-equality, **не** CEL). ADR-047 amendment / [ADR-060](../adr/0060-traits.md) п.7 slice 1. **OR-измерение** (несколько trait-permission-ов = «или эта пара, или та»); AND-сужение по нескольким парам — follow-up (multi-key). | trait-пара инкарнации (`incarnation.traits` jsonb) — подаёт резолвер `incarnation.list`/`get` (slice 1: `inc.Traits[key] == value`). |
+| `service=` | Permission is limited to incarnations of the specified Service types. | **incarnation-operations:** `incarnation.service` (Service name from git, [architecture.md → Artifacts](../architecture.md)). On create - `service` from the request body. |
+| `coven=` | Permission is limited to the specified Coven tags. | **incarnation operations** (run / destroy / upgrade / get / history): declared `incarnation.covens` ∪ `{incarnation.name}` - incarnation env tags plus its name as the root Coven label ([ADR-008](../adr/0008-coven-stable-tags.md), amendment a). On create - declared `covens` from the request body ∪ `{name}`. **soul-operations** (`soul.coven-assign` / `soul.list`): host label from body/query (`souls.coven[]`). |
+| `incarnation=` | Permission is limited to a specific instance. | `incarnation.name` target instance. |
+| `host=` | Permission is limited to a specific host. **Context source is path/body mutation** (`soul.issue-token` / `soul.ssh-target-update` / `errand.run`), where the SID is known before the handler. On the read-visibility of souls (`soul.list` and the get/soulprint/history covered by it) the `host=` selector at the gate stage is NOT applied - read is gated by existence-`RequireAction`, narrowing by scope is done by handler (ADR-047 §g G1, § Two-layer authorization read-endpoints). | Host SID ([identity.md](../soul/identity.md)) from path/body mutation. |
+| `regex='…'` | Permission is limited to hosts whose SID/name matches the RE2 pattern ([ADR-047](../architecture.md) S2a). | SID/hostname - `host`- or `sid`-request context key. |
+| `soulprint='…'` | Permission is limited to hosts whose facts satisfy the CEL predicate `soulprint.self.*` ([ADR-047](../architecture.md) S2b, [ADR-018](../adr/0018-soulprint-typed.md)). | Host facts (`SoulprintFacts`) - supplied by list-visibility/target resolver (slices S3/S4). |
+| `trait=key:value` | Permission is limited to incarnations whose operator-set trait label `key` is equal to `value` (exact scalar-equality, **not** CEL). ADR-047 amendment / [ADR-060](../adr/0060-traits.md) p. 7 slice 1. **OR-dimension** (several trait-permissions = "either this pair or that"); AND-narrowing on several pairs - follow-up (multi-key). | incarnation trait pair (`incarnation.traits` jsonb) - feeds the resolver `incarnation.list`/`get` (slice 1: `inc.Traits[key] == value`). |
 
-**Множественные значения** перечисляются через запятую без пробелов (`coven=db,cache`), матчинг — exact-match по каждому значению; OR-логика среди значений одного селектора (`coven=db,cache` = «coven `db` ИЛИ `cache`»).
+**Multiple values** are listed comma-separated without spaces (`coven=db,cache`), matching is exact-match for each value; OR logic among the values ​​of one selector (`coven=db,cache` = "coven `db` OR `cache`").
 
-**regex-ключ (ADR-047 S2a).** Значение — один RE2-паттерн (Go `regexp`, консистентно с UI `compileSidRegex`) в **одинарных кавычках**: `incarnation.run on regex='^web-.*'`. Кавычки обязательны и отделяют regex от `,`-разделителя value-list — запятая внутри regex (`{1,3}`) не рвёт значение; спецсимволы regex не проходят `reSelValue`, поэтому незакавыченная форма отвергается на load. Один паттерн на ключ (multi-regex через `,` неоднозначен с regex-запятой); union нескольких regex набирается несколькими ролями/permission-ами. Паттерн компилируется при load снимка — битый regex фейлит load (как unknown-permission); длина ограничена 256 символами (RE2 без catastrophic-backtracking, cap — страховка). Матчинг — `regexp.MatchString` против `host`/`sid`-контекста; запрос без host/sid-ключа → deny (как exact-ключ без своего ключа). **РЕАЛЬНОЕ применение** regex к видимости list-эндпоинтов и пересечению target-ов — слайсы S3/S4; в S2a regex участвует в `Check`-матчинге (host-context-эндпоинты) и least-privilege subset.
+**regex key (ADR-047 S2a).** Value - one RE2 pattern (Go `regexp`, consistent with UI `compileSidRegex`) in **single quotes**: `incarnation.run on regex='^web-.*'`. Quotes are required and separate the regex from the `,` value-list delimiter - a comma inside the regex (`{1,3}`) does not break the value; regex special characters do not pass `reSelValue`, so the unquoted form is rejected on load. One pattern per key (multi-regex via `,` is ambiguous with regex comma); union of several regex is typed by several roles/permissions. The pattern is compiled when the image is loaded - a broken regex fails load (as unknown-permission); length is limited to 256 characters (RE2 without catastrophic-backtracking, cap - insurance). Matching - `regexp.MatchString` vs `host`/`sid`-context; request without a host/sid key → deny (like an exact key without its own key). **REAL application** of regex to the visibility of list endpoints and the intersection of targets - S3/S4 slices; in S2a regex participates in `Check`-matching (host-context-endpoints) and least-privilege subset.
 
-**regex в least-privilege subset.** Покрытие одного regex другим (`^web-` ⊇ `^web-prod-`?) статически неразрешимо в общем случае. MVP — **string-equality fail-closed**: caller вправе выдать regex-permission, только если у него есть `*`, либо матчащая bare-permission (не ограничен по regex), либо матчащая permission с **идентичной** regex-строкой. Иной/более узкий regex → DENY (безопасно). Containment regex не реализуется.
+**regex in the least-privilege subset.** Covering one regex with another (`^web-` ⊇ `^web-prod-`?) is statically undecidable in the general case. MVP - **string-equality fail-closed**: the caller has the right to issue a regex-permission only if it has `*`, either a matching bare-permission (not limited by regex), or a matching permission with an **identical** regex string. Different/narrower regex → DENY (safe). Containment regex is not implemented.
 
-**soulprint-ключ (ADR-047 S2b).** Значение — один CEL-предикат по фактам хоста в **канонической форме `soulprint.self.*`** ([ADR-018](../adr/0018-soulprint-typed.md#adr-018-soulprint-typed-схема-mvp)) в **одинарных кавычках**: `incarnation.run on soulprint='soulprint.self.os.family == "debian"'`. Кавычки обязательны и отделяют CEL от `,`-разделителя value-list — пробелы/двойные кавычки/запятые внутри предиката не рвут значение; незакавыченная форма отвергается на load. Один предикат на ключ; union нескольких — несколькими ролями/permission-ами. Предикат компилируется при load снимка через `shared/cel` (sandbox-режим `NewFlowControl`: объявлен `soulprint.self.*`, запрещены `vault()`/`now()`, host-аксессор `soulprint.hosts`/`soulprint.where`) — битый/использующий `vault`/`now`/`state`/`soulprint.hosts` предикат фейлит load (как unknown-permission); длина ограничена 512 символами. **РЕАЛЬНЫЙ CEL-eval** против `SoulprintFacts` хоста — слайсы S3/S4 (видимость list-эндпоинтов / пересечение target-ов): там резолвер подаёт факты. В `Check`-матчинге S2b soulprint-измерение **fail-closed (deny)** — request-context (`map[string]string`) не несёт nested-факты хоста; soulprint участвует в S2b в грамматике, `Purview.SoulprintExprs` и least-privilege subset.
+**soulprint key (ADR-047 S2b).** Value is a single CEL predicate on host facts in **canonical form `soulprint.self.*`** ([ADR-018](../adr/0018-soulprint-typed.md)) in **single quotes**: `incarnation.run on soulprint='soulprint.self.os.family == "debian"'`. Quotes are required and separate the CEL from the `,` value-list delimiter - spaces/double quotes/commas inside the predicate do not break the value; the unquoted form is rejected on load. One predicate per key; union of several - several roles/permissions. The predicate is compiled when loading a snapshot via `shared/cel` (sandbox mode `NewFlowControl`: declared `soulprint.self.*`, prohibited `vault()`/`now()`, host accessor `soulprint.hosts`/`soulprint.where`) - broken/using `vault`/`now`/`state`/`soulprint.hosts` predicate fails load (as unknown-permission); length is limited to 512 characters. **REAL CEL-eval** against `SoulprintFacts` host - S3/S4 slices (visibility of list endpoints / intersection of targets): there the resolver provides facts. In `Check`-matching S2b soulprint-dimension **fail-closed (deny)** - request-context (`map[string]string`) does not carry nested facts of the host; soulprint participates in S2b in grammar, `Purview.SoulprintExprs` and least-privilege subset.
 
-**soulprint в least-privilege subset.** Логический containment одного CEL-предиката другим статически недоказуем. MVP — **string-equality fail-closed** (как regex): caller вправе выдать soulprint-permission, только если у него есть `*`, либо матчащая bare-permission (не ограничен по soulprint), либо матчащая permission с **идентичным** предикатом. Иной/более узкий предикат → DENY.
+**soulprint in the least-privilege subset.** The logical containment of one CEL predicate by another is statically unprovable. MVP - **string-equality fail-closed** (as regex): the caller can issue soulprint-permission only if it has `*`, either a matching bare-permission (not limited by soulprint), or a matching permission with an **identical** predicate. Another/narrower predicate → DENY.
 
-**trait-ключ (ADR-047 amendment / [ADR-060](../adr/0060-traits.md) п.7 slice 1) — РЕАЛИЗОВАН.** Значение — пара `key:value` (**не** CEL, в отличие от soulprint/state): `incarnation.run on trait=owner:alice`. Грамматика — ровно **одна** `:` (разделитель ключа и значения), обе половины непустые и матчат `[a-zA-Z0-9_.-]+` (тот же символьный класс, что у обычных exact-значений; пробел/двоеточие внутри половин запрещены, поэтому неоднозначности «какая `:` разделитель» нет). Хранится в `Selector["trait"]` нормализованной строкой `key:value`, не разбивается. Семантика match — **exact scalar-equality** против пары `incarnation.traits` (как `coven=`, не предикат): permission матчит, если у инкарнации `traits[key] == value`. Один trait на ключ; **OR-измерение** (несколько trait-permission-ов = «или эта пара, или та» — union, как `Covens`). **★ Slice 1 — только OR; AND-сужение по нескольким trait-парам (multi-key `trait=a:x,b:y`) — follow-up**, в текущей грамматике форма `trait=` несёт ровно одну пару. В `Check`-матчинге trait-измерение **fail-closed (deny)** — request-context (`map[string]string`) не несёт nested-traits хоста; **реальный match** против traits инкарнации делает резолвер `incarnation.list`/`get` (двухслойная авторизация, slice 1), trait участвует в грамматике, `Purview.TraitExprs` и least-privilege subset.
+**trait-key (ADR-047 amendment / [ADR-060](../adr/0060-traits.md) p. 7 slice 1) - IMPLEMENTED.** Value - pair `key:value` (**not** CEL, unlike soulprint/state): `incarnation.run on trait=owner:alice`. The grammar is exactly **one** `:` (key-value separator), both halves are non-empty, and the match is `[a-zA-Z0-9_.-]+` (the same character class as regular exact values; space/colon inside halves is not allowed, so there is no ambiguity "which `:` separator" is). Stored in `Selector["trait"]` by the normalized string `key:value`, not broken. The semantics of match is **exact scalar-equality** against the pair `incarnation.traits` (as `coven=`, not a predicate): permission matches if the incarnation has `traits[key] == value`. One trait per key; **OR-dimension** (several trait-permissions = "either this pair or that" - union, like `Covens`). **★ Slice 1 - OR only; AND-narrowing by several trait pairs (multi-key `trait=a:x,b:y`) - follow-up**, in the current grammar the form `trait=` carries exactly one pair. In `Check`-matching, the trait dimension **fail-closed (deny)** - request-context (`map[string]string`) does not carry the nested-traits of the host; **real match** against incarnation traits is done by the resolver `incarnation.list`/`get` (two-layer authorization, slice 1), trait is involved in the grammar, `Purview.TraitExprs` and least-privilege subset.
 
-**trait в least-privilege subset.** Точное равенство → **string-equality fail-closed** (как regex/soulprint): caller вправе выдать trait-permission, только если у него есть `*`, либо матчащая bare-permission (не ограничен по trait), либо матчащая permission с **идентичной** парой `key:value`. Иная/более узкая пара → DENY (выдать `owner:bob`, имея только `owner:alice`, нельзя; bare-permission caller-а покрывает любой trait, но trait-scoped caller не может выдать bare — bare шире).
+**trait in the least-privilege subset.** Exact equality → **string-equality fail-closed** (like regex/soulprint): the caller can issue trait-permission only if it has `*`, or a matching bare-permission (not limited by trait), or a matching permission with an **identical** pair `key:value`. Another/narrower pair → DENY (it is impossible to issue `owner:bob`, having only `owner:alice`; a bare-permission caller covers any trait, but a trait-scoped caller cannot issue bare - bare is broader).
 
-**Multi-value coven у incarnation-операций.** Источник `coven=` для incarnation — *множество* (declared `covens` ∪ `{name}`), а enforcer оперирует одним значением на ключ. Поэтому permission допускается, если её `coven=`-значение совпадает с **хотя бы одной** меткой из этого множества (OR по кандидатам). Пример: incarnation `redis-prod` с `covens=[prod, dc1]` имеет эффективное coven-множество `{prod, dc1, redis-prod}`; роль `incarnation.run on coven=prod` её матчит, роль `incarnation.run on coven=dev` — нет. Имя incarnation всегда входит в множество как корневая Coven-метка (ADR-008), поэтому роль `incarnation.* on coven=redis-prod` работает даже у incarnation без env-тегов.
+**Multi-value coven for incarnation operations.** The source `coven=` for incarnation is *set* (declared `covens` ∪ `{name}`), and enforcer operates on one value per key. Therefore, permission is allowed if its `coven=` value matches **at least one** label from this set (OR by candidates). Example: incarnation `redis-prod` with `covens=[prod, dc1]` has an effective coven set of `{prod, dc1, redis-prod}`; the role `incarnation.run on coven=prod` matches it, the role `incarnation.run on coven=dev` does not. The name incarnation is always included in the set as the root Coven tag (ADR-008), so the role `incarnation.* on coven=redis-prod` works even for incarnation without env tags.
 
-> **История (ADR-008 amendment a).** Ранее этот раздел декларировал источником `coven=` для incarnation «`soulprint.self.covens` целевого хоста» — но incarnation-эндпоинты не резолвят хосты на этапе RBAC-гейта (chicken-egg + волатильность), и код приземлял в context только `{incarnation: name}` без `coven`/`service`. Из-за этого роли `incarnation.* on coven=…` / `on service=…` молча НЕ матчили (enforcer на отсутствующий ключ → deny). Источником стали стабильные атрибуты самой incarnation (declared `covens` ∪ `name` + `service`), резолвимые из её строки в Postgres.
+> **History (ADR-008 amendment a).** Previously, this section declared the source `coven=` for the incarnation "`soulprint.self.covens` target host" - but incarnation endpoints do not resolve hosts at the RBAC gate stage (chicken-egg + volatility), and the code landed in the context only `{incarnation: name}` without `coven`/`service`. Because of this, the roles `incarnation.* on coven=…` / `on service=…` were silently NOT matched (enforcer for the missing key → deny). The source was the stable attributes of the incarnation itself (declared `covens` ∪ `name` + `service`), resolved from its string in Postgres.
 
-**Wildcards (`*`) в значениях запрещены в MVP** — расширение требует отдельного ADR (формы экранирования, семантика для FQDN-имён хостов, поведение пустого значения). Парсер (`reSelValue = ^[a-zA-Z0-9_.-]+$`) отвергает `*` как значение селектора на load снимка, поэтому формы `coven=*` **не существует** как загруженной permission. Для `soul.coven-assign` это значит: unrestricted-scope (любая метка, любой хост) достигается **bare**-permission `soul.coven-assign` (без `on coven=…`) либо полным `*`-permission — не через `coven=*`.
+**Wildcards (`*`) in values ​​are prohibited in MVP** - the extension requires a separate ADR (escaping forms, semantics for FQDN hostnames, empty value behavior). The parser (`reSelValue = ^[a-zA-Z0-9_.-]+$`) rejects `*` as the value of the selector on the load of the snapshot, so the form `coven=*` **does not exist** as a loaded permission. For `soul.coven-assign` this means: unrestricted-scope (any label, any host) is achieved by **bare**-permission `soul.coven-assign` (without `on coven=…`) or full `*`-permission - not through `coven=*`.
 
-**`namespace=`** (фильтр по namespace плагина) пока не вводим — RBAC на plugin-namespace не входит в MVP-сценарии. Появится при необходимости.
+**`namespace=`** (filter by plugin namespace) is not introduced yet - RBAC on plugin-namespace is not included in MVP scenarios. Will appear if necessary.
 
-Расширение enum-а ключей — через PR в `rbac.md`; добавление новых ключей не ломает существующие роли (старые правила продолжают валидироваться, новые ключи опциональны).
+Extending enum keys - via PR in `rbac.md`; adding new keys does not break existing roles (old rules continue to be validated, new keys are optional).
 
-## Семантика конфликта
+## Semantics of conflict
 
-- **OR-логика среди allow-permissions.** У Архонта может быть несколько ролей; permission матчится, если **хотя бы одна** roles[].permissions[] этого Архонта удовлетворяет запросу. Конфликт между ролями — union permissions.
-- **Нет deny-permissions.** В MVP не поддерживаются явные `deny <permission>`. Любое разрешение задаётся allow-правилом; всё прочее запрещено `default_policy: deny`. Расширение — отдельный ADR при появлении реального сценария «разрешить всё, кроме X».
-- **`default_policy: deny`.** Любое действие, не покрытое явной allow-permission, отвергается. Это встроенный инвариант enforcer-а ([ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres) — после hard-cut `rbac:` нет конфиг-поля `default_policy`); `allow`-режим как опция за пределами dev/test не предусмотрен.
-- **Union селекторов одной permission.** Если две роли одного оператора дают `incarnation.create on service=foo` и `incarnation.create on service=bar` — эффективный селектор = `service=foo,bar`.
+- **OR logic among allow-permissions.** An Archon can have multiple roles; permission matches if **at least one** roles[].permissions[] of this Archon satisfies the request. Conflict between roles - union permissions.
+- **No deny-permissions.** MVP does not support explicit `deny <permission>`. Any permission is specified by the allow rule; everything else is prohibited `default_policy: deny`. The extension is a separate ADR when a real "allow everything except X" scenario appears.
+- **`default_policy: deny`.** Any action not covered by an explicit allow-permission is rejected. This is a built-in invariant of the enforcer ([ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres) - after the hard-cut `rbac:` there is no config field `default_policy`); `allow`-mode is not provided as an option outside of dev/test.
+- **Union of selectors of the same permission.** If two roles of the same operator give `incarnation.create on service=foo` and `incarnation.create on service=bar` - the effective selector = `service=foo,bar`.
 
-Алгоритм проверки запроса на permission `incarnation.create` с контекстом `{service: redis, incarnation: redis-prod, …}`:
+Algorithm for checking permission request `incarnation.create` with context `{service: redis, incarnation: redis-prod, …}`:
 
-1. Найти все роли Архонта по membership (`rbac_role_operators` где `aid = <запрашивающий AID>`).
-2. Развернуть в плоский список permissions (`rbac_role_permissions` по найденным ролям).
-3. Для каждой permission: матчит ли `<resource>.<action>` запрос (с учётом wildcard `*` в `<action>`); если есть селектор — матчит ли он контекст (key есть в контексте, значение из values совпадает).
-4. Если **хотя бы одна** permission матчит → allow. Иначе → deny.
+1. Find all Archon roles by membership (`rbac_role_operators` where `aid = <requesting AID>`).
+2. Expand to a flat list of permissions (`rbac_role_permissions` by found roles).
+3. For each permission: does the `<resource>.<action>` request match (taking into account the wildcard `*` in `<action>`); if there is a selector, does it match the context (the key is in the context, the value from values ​​matches).
+4. If **at least one** permission matches → allow. Otherwise → deny.
 
-Шаги 1–2 идут по **in-memory снимку** enforcer-а, не по живому SQL (см. [§ Как enforcer резолвит](#как-enforcer-резолвит)).
+Steps 1–2 are based on the enforcer's **in-memory snapshot**, not live SQL (see § How an enforcer resolves).
 
-## Как enforcer резолвит
+## How to enforcer resolve
 
-Интерфейс `PermissionChecker.Check` **не ходит в Postgres на каждый запрос** ([ADR-028(d)](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)) — он матчит по in-memory снимку `map[AID][]*Role`.
+Interface `PermissionChecker.Check` **does not go to Postgres for every request** ([ADR-028(d)](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)) - it matches the in-memory snapshot `map[AID][]*Role`.
 
-- **Источник снимка — БД.** Снимок строится тремя SELECT-ами по `rbac_roles` ⋈ `rbac_role_permissions` ⋈ `rbac_role_operators` (вместо прежнего парсинга `keeper.yml::rbac`). Permission-строки парсятся `ParsePermission` при построении снимка.
-- **Обновление снимка — B2 (реализовано).** Снимок инвалидируется через Redis pub/sub: каждая мутация роли / permissions / membership публикует сигнал в топик **`rbac:invalidate`** (envelope `{origin_kid, at}`), и все ноды перечитывают снимок из БД. **Self-filter по KID**: нода игнорирует собственный сигнал (паттерн `applybus` — публикующая нода уже обновила снимок в той же транзакции мутации). **B1 TTL-poll остаётся fallback**: фоновая goroutine (`rbac.Holder`) перечитывает снимок из БД с фиксированным интервалом (`DefaultRefreshInterval` = 10s) — best-effort страховка на случай недоступного / потерявшего сигнал Redis; на сбой перечита остаётся прежний снимок + warn. Окно устаревания (секунды, до следующего TTL-перечита при потере сигнала) приемлемо: мутации ролей/membership редки.
-- **Self-lockout-проверки — из БД, не из снимка.** Инвариант «≥1 активный `*`-admin останется» (см. [§ Встроенные роли](#встроенные-роли)) проверяется **не** по in-memory снимку enforcer-а, а прямым SQL под `SELECT … FOR UPDATE` на `rbac_role_operators` / `rbac_role_permissions` / `operators` в той же транзакции, что и мутация. Снимок устаревает на TTL-окно — решение по нему дало бы staleness-дыру (можно снять последнего админа, если снимок ещё «помнит» уже-revoked-нутого второго); `FOR UPDATE` дополнительно сериализует конкурентные lockout-операции на разных нодах. См. [§ Управление ролями](#управление-ролями-rest--mcp).
-- **RBAC вне hot-reload-config-пути.** Снимок перестраивается из БД (Redis pub/sub-инвалидация через топик `rbac:invalidate` + TTL-poll fallback), **не** по `SIGHUP` / config-swap ([ADR-021](../adr/0021-hot-reload-config.md#adr-021-hot-reload-конфига-с-write-back-yaml), уточнено [ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)). Ревокация роли / membership-а (`role.revoke-operator` / `role.delete`) — `DELETE` в БД + перечит снимка, эффект для всех будущих проверок не позднее TTL-окна (отдельно от неотзываемости активного JWT до `exp` — [ADR-014(d)](../adr/0014-operator-identity.md#adr-014-identity-модель-оператора-archon)).
-- **`Check`-интерфейс неизменен** — меняется только источник снимка и механизм его обновления, не сигнатура проверки.
+- **The source of the snapshot is the database.** The snapshot is built by three SELECTs using `rbac_roles` ⋈ `rbac_role_permissions` ⋈ `rbac_role_operators` (instead of the previous parsing `keeper.yml::rbac`). Permission lines are parsed `ParsePermission` when creating a snapshot.
+- **Updating the snapshot - B2 (implemented).** The snapshot is invalidated via Redis pub/sub: each mutation of the role / permissions / membership publishes a signal to the topic **`rbac:invalidate`** (envelope `{origin_kid, at}`), and all nodes re-read the snapshot from the database. **Self-filter by KID**: the node ignores its own signal (pattern `applybus` - the publishing node has already updated the snapshot in the same mutation transaction). **B1 TTL-poll remains fallback**: background goroutine (`rbac.Holder`) rereads the snapshot from the database at a fixed interval (`DefaultRefreshInterval` = 10s) - best-effort insurance in case of Redis being unavailable/lost signal; If the reread fails, the previous snapshot remains + warn. The aging window (seconds until the next TTL reread when the signal is lost) is acceptable: role/membership mutations are rare.
+- **Self-lockout checks - from the database, not from the snapshot.** The invariant "≥1 active `*`-admin will remain" (see § Built-in roles) is checked **not** by the enforcer's in-memory snapshot, but by direct SQL under `SELECT … FOR UPDATE` on `rbac_role_operators` / `rbac_role_permissions` / `operators` in the same transaction as the mutation. The snapshot becomes obsolete in the TTL window - a solution to it would give a staleness hole (you can remove the last admin if the snapshot still "remembers" the already-revoked second one); `FOR UPDATE` additionally serializes concurrent lockout operations on different nodes. See § Role Management.
+- **RBAC outside the hot-reload-config-path.** The snapshot is rebuilt from the database (Redis pub/sub-invalidation via topic `rbac:invalidate` + TTL-poll fallback), **not** by `SIGHUP` / config-swap ([ADR-021](../adr/0021-hot-reload-config.md), clarified [ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)). Revocation of role/membership (`role.revoke-operator` / `role.delete`) - `DELETE` in the database + re-reads the snapshot, effect for all future checks no later than the TTL window (separate from the irrevocability of the active JWT until `exp` - [ADR-014(d)](../adr/0014-operator-identity.md)).
+- **`Check` interface is unchanged** - only the source of the snapshot and the mechanism for updating it change, not the verification signature.
 
-## Управление ролями (REST + MCP)
+## Role management (REST + MCP)
 
-RBAC-CRUD (роли, permissions, membership) управляется через OpenAPI / MCP — Фаза 2 [ADR-028(e)](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres) (не правкой YAML). Один источник правды — `rbac.Service`: REST-handler-ы (`/v1/roles`) и MCP-tool-ы (`keeper.role.*`) — тонкие транспортные обёртки над ним, бизнес-инварианты (builtin-граница, self-lockout, валидация name/permission) живут в Service.
+RBAC-CRUD (roles, permissions, membership) managed via OpenAPI / MCP - Phase 2 [ADR-028(e)](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres) (not YAML editing). One source of truth is `rbac.Service`: REST handlers (`/v1/roles`) and MCP tools (`keeper.role.*`) - thin transport wrappers over it, business invariants (builtin boundary, self-lockout, name/permission validation) live in the Service.
 
 ### REST `/v1/roles`
 
-Шесть эндпоинтов. RBAC-проверка — в middleware (`role.*`-permission без селектора), до handler-а. Ошибки — RFC 7807 ([operator-api.md → Типы ошибок](operator-api.md#типы-ошибок)).
+Six endpoints. RBAC check - in middleware (`role.*`-permission without selector), before the handler. Errors - RFC 7807 ([operator-api.md → Error types](operator-api.md)).
 
-| Метод + путь | Permission | Тело / path | Успех | Коды ошибок |
+| Method + path | Permission | Body/path | Success | Error codes |
 |---|---|---|---|---|
-| `POST /v1/roles` | `role.create` | body `{name, description?, permissions[]}` | `201` (тело пустое) | `403 forbidden` (least-privilege: право вне набора caller-а); `409 role-already-exists`; `422 validation-failed` (битый `name` / `permission`); `400 malformed-request` |
+| `POST /v1/roles` | `role.create` | body `{name, description?, permissions[]}` | `201` (body empty) | `403 forbidden` (least-privilege: right outside the caller set); `409 role-already-exists`; `422 validation-failed` (broken `name` / `permission`); `400 malformed-request` |
 | `GET /v1/roles` | `role.list` | — | `200 {items: [...]}` | `500 internal-error` |
 | `DELETE /v1/roles/{name}` | `role.delete` | path `name` | `204` | `404 role-not-found`; `409 role-builtin`; `409 would-lock-out-cluster` |
-| `PATCH /v1/roles/{name}/permissions` | `role.update` | path `name` + body `{permissions[]}` (replace) | `204` | `403 forbidden` (least-privilege: добавляемое право вне набора caller-а); `404 role-not-found`; `409 role-builtin`; `409 would-lock-out-cluster`; `422 validation-failed`; `400 malformed-request` |
-| `POST /v1/roles/{name}/operators` | `role.grant-operator` | path `name` + body `{aid}` | `204` | `403 forbidden` (least-privilege: роль содержит право вне набора caller-а); `404 role-not-found`; `404 not-found` (AID не существует); `422 validation-failed` (пустой/битый AID); `400 malformed-request` |
-| `DELETE /v1/roles/{name}/operators/{aid}` | `role.revoke-operator` | path `name`, `aid` | `204` | `404 not-found` (пары `(name, aid)` нет); `409 would-lock-out-cluster`; `422 validation-failed` (битый path-AID) |
+| `PATCH /v1/roles/{name}/permissions` | `role.update` | path `name` + body `{permissions[]}` (replace) | `204` | `403 forbidden` (least-privilege: added right outside the caller's set); `404 role-not-found`; `409 role-builtin`; `409 would-lock-out-cluster`; `422 validation-failed`; `400 malformed-request` |
+| `POST /v1/roles/{name}/operators` | `role.grant-operator` | path `name` + body `{aid}` | `204` | `403 forbidden` (least-privilege: role contains a right outside the caller's set); `404 role-not-found`; `404 not-found` (AID does not exist); `422 validation-failed` (empty/broken AID); `400 malformed-request` |
+| `DELETE /v1/roles/{name}/operators/{aid}` | `role.revoke-operator` | path `name`, `aid` | `204` | `404 not-found` (no pair `(name, aid)`); `409 would-lock-out-cluster`; `422 validation-failed` (broken path-AID) |
 
-- **`GET /v1/roles` items[]** — `{name, description, builtin, permissions[], operators[]}`; `permissions` / `operators` сериализуются non-nil массивом (`[]`, не `null`).
-- **`grant-operator` идемпотентен** — повторная привязка той же пары `(name, aid)` — no-op (`204`).
-- **`granted_by_aid`** на grant берётся из JWT-claim caller-а.
+- **`GET /v1/roles` items[]** — `{name, description, builtin, permissions[], operators[]}`; `permissions` / `operators` are serialized by a non-nil array (`[]`, not `null`).
+- **`grant-operator` idempotent** - re-binding the same pair `(name, aid)` - no-op (`204`).
+- **`granted_by_aid`** for grant is taken from the JWT-claim caller.
 
 ### MCP `keeper.role.*`
 
-1:1 с REST: `keeper.role.<action>` ↔ `role.<action>` ↔ один эндпоинт `/v1/roles`. Input-схемы и mapping ошибок RFC 7807 → MCP-tool error — в [mcp-tools/roles.md](mcp-tools/roles.md). Mutating-tool-ы возвращают пустой output-объект (`{}`), `keeper.role.list` — `{roles: [...]}`.
+1:1 with REST: `keeper.role.<action>` ↔ `role.<action>` ↔ one endpoint `/v1/roles`. Input schemes and mapping errors RFC 7807 → MCP-tool error - in [mcp-tools/roles.md](mcp-tools/roles.md). Mutating tools return an empty output object (`{}`), `keeper.role.list` - `{roles: [...]}`.
 
-### Инвариант self-lockout: четыре пути
+### Self-lockout invariant: four ways
 
-Инвариант [ADR-028(f)](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres) / [§ Встроенные роли](#встроенные-роли): после операции в кластере обязан остаться **≥1 активный** (`revoked_at IS NULL`) Архонт с эффективным `*`-permission. Четыре мутации могут его нарушить:
+Invariant [ADR-028(f)](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres) / § Built-in roles: after the operation, **≥1 active** (`revoked_at IS NULL`) Archon with an effective `*`-permission must remain in the cluster. Four mutations can break it:
 
-| Путь | Когда проверка срабатывает | Что считается «выжившими» |
+| Path | When the check is triggered | What counts as "survivors" |
 |---|---|---|
-| `operator.revoke` | Отзыв Архонта, держащего `*` ([ADR-013(c)](../adr/0013-bootstrap-archon.md#adr-013-bootstrap-первого-архонта)). | Активные `*`-admins, кроме отзываемого AID. |
-| `role.delete` | Удаляемая роль даёт `*`. | Активные `*`-admins через **другие** роли (≠ удаляемая). |
-| `role.update` | Старый набор роли давал `*`, новый — нет (снятие `*`). | Активные `*`-admins через другие роли. Если новый набор тоже даёт `*` — проверка не нужна. |
-| `role.revoke-operator` | Роль даёт `*` и снимается membership. | Активные `*`-admins после исключения ровно пары `(role, aid)` — AID остаётся, если держит `*` ещё через другую роль; роль остаётся для других AID. |
+| `operator.revoke` | Review of the Archon holding `*` ([ADR-013(c)](../adr/0013-bootstrap-archon.md)). | Active `*`-admins, except the revoked AID. |
+| `role.delete` | The role being removed gives `*`. | Active `*`-admins through **other** roles (≠ to be deleted). |
+| `role.update` | The old role set gave `*`, the new one did not (removing `*`). | Active `*`-admins through other roles. If the new set also gives `*`, no check is needed. |
+| `role.revoke-operator` | The role is given `*` and membership is removed. | Active `*`-admins after excluding exactly the pair `(role, aid)` - AID remains if it holds `*` through another role; the role remains for other AIDs. |
 
-Нарушение → `409 would-lock-out-cluster` (общий problem-type для operator- и role-путей, [naming-rules.md → Error codes](../naming-rules.md#error-codes)). Self-lockout — защита «вниз» (нельзя запереть admin-set). От эскалации «вверх» (нельзя выдать право, которого не имеешь) защищает отдельный [§ Инвариант least-privilege](#инвариант-least-privilege-subset-check); `role.create` / `role.grant-operator` ему подчиняются, хотя self-lockout-у — нет.
+Violation → `409 would-lock-out-cluster` (common problem-type for operator and role paths, [naming-rules.md → Error codes](../naming-rules.md#error-codes)). Self-lockout - "downward" protection (you cannot lock admin-set). A separate § Invariant least-privilege; `role.create` / `role.grant-operator` obey it, although self-lockout does not.
 
-**Проверка — из БД под `FOR UPDATE`, не из снимка enforcer-а** (см. [§ Как enforcer резолвит](#как-enforcer-резолвит)). Контрольный SQL берёт row-lock на `rbac_role_operators` / `rbac_role_permissions` / `operators` в той же транзакции, что и мутация: исключает целевую роль/пару из выборки и проверяет, что осталась ≥1 строка. Снимок устаревает на TTL-окно — по нему проверка была бы дырой; `FOR UPDATE` сериализует параллельные lockout-операции (две tx, снимающие `*` разными путями, не могут обе пройти).
+**Check - from the database under `FOR UPDATE`, not from the enforcer snapshot** (see § How an enforcer resolves). The control SQL takes a row-lock on `rbac_role_operators` / `rbac_role_permissions` / `operators` in the same transaction as the mutation: excludes the target role/pair from the sample and checks that ≥1 row remains. The snapshot becomes outdated on the TTL window - checking against it would be a hole; `FOR UPDATE` serializes parallel lockout operations (two txs that unlock `*` in different ways cannot both pass).
 
-### Инвариант least-privilege (subset-check)
+### Invariant least-privilege (subset-check)
 
-Отдельная от self-lockout защита — против **вертикальной эскалации привилегий**. Без неё оператор с `role.create` + `role.grant-operator` (но **без** `*`) мог бы: создать роль с `permissions: ["*"]` → привязать её себе через `role.grant-operator` → стать эффективным cluster-admin. То есть права на *управление ролями* конвертировались бы в *любые* права.
+Separate from self-lockout protection - against **vertical escalation of privileges**. Without it, an operator with `role.create` + `role.grant-operator` (but **without** `*`) could: create a role with `permissions: ["*"]` → bind it to himself via `role.grant-operator` → become an effective cluster-admin. That is, the rights to *manage roles* would be converted into *any* rights.
 
-**Инвариант: оператор не может выдать через роль permission, которым не обладает сам.** Три мутации подчиняются ему:
+**Invariant: an operator cannot issue permission through a role that it does not itself have.** Three mutations are subject to it:
 
-| Путь | Что проверяется против эффективного набора caller-а |
+| Path | What is checked against the effective dialing of a caller |
 |---|---|
-| `role.create` | **каждая** permission новой роли. |
-| `role.update` | **каждая ДОБАВЛЯЕМАЯ** permission (которой не было в старом наборе). Удаление прав **не** ограничивается — урезание чужой роли не эскалация. |
-| `role.grant-operator` | **каждая** permission **грантящейся роли** (иначе обход: cluster-admin создал мощную роль, suboperator с `role.grant-operator` привязал её себе/другому и поднялся). |
+| `role.create` | **each** permission of the new role. |
+| `role.update` | **each ADDED** permission (which was not in the old set). Removing rights is **not** limited - cutting someone else's role is not escalation. |
+| `role.grant-operator` | **each** permission **granted role** (otherwise bypass: cluster-admin created a powerful role, suboperator with `role.grant-operator` assigned it to himself/other and rose). |
 
-- **Покрытие** — та же семантика implication, что у `Check` ([§ Как enforcer резолвит](#как-enforcer-резолвит)): caller «имеет» permission `P`, если хотя бы одна его permission матчит `P` (с учётом `*` → покрывает всё; `resource.*` → покрывает любой action этого resource; селектор `on key=a,b` → caller обязан покрывать **каждое** значение). Выдать full-wildcard `*` может только владелец `*`.
-- **cluster-admin (`*`)** проходит любую такую проверку — его набор покрывает всё.
-- **Источник набора caller-а — БД** (та же транзакция мутации, фильтр `operators.revoked_at IS NULL`), не снимок enforcer-а: same-tx-read свежее TTL-снимка. Read-only (без `FOR UPDATE`): subset-check — authorization-гейт, а не consistency-инвариант как self-lockout, поэтому он не добавляет row-lock-ов и не трогает детерминированный lock-порядок self-lockout-ядра (нет deadlock-риска).
-- **Bootstrap-грант** (`keeper init`, `granted_by_aid IS NULL`, без caller-Архонта) subset-check не проходит — он привязывает первого Архонта к `cluster-admin` до появления любого субъекта.
-- Нарушение → `403 forbidden` (REST `TypeForbidden` / MCP `forbidden`), sentinel `ErrPermissionNotHeld` — отдельный от `ErrPermissionDenied` («нет права на саму операцию», проверяется middleware/tool до Service).
+- **Coverage** - the same implication semantics as `Check` (§ How enforcer resolves): caller "has" permission `P` if at least one of its permissions matches `P` (taking into account `*` → covers everything; `resource.*` → covers any action of this resource; selector `on key=a,b` → caller must cover **every** value). Only the owner of `*` can issue a full-wildcard `*`.
+- **cluster-admin (`*`)** passes any such check - its set covers everything.
+- **Source of caller set is DB** (same mutation transaction, filter `operators.revoked_at IS NULL`), not enforcer snapshot: same-tx-read fresher than TTL snapshot. Read-only (without `FOR UPDATE`): subset-check is an authorization gate, and not a consistency invariant like self-lockout, so it does not add row-locks and does not affect the deterministic lock order of the self-lockout kernel (no deadlock risk).
+- **Bootstrap-grant** (`keeper init`, `granted_by_aid IS NULL`, without caller-Archon) subset-check fails - it binds the first Archon to `cluster-admin` before any subject appears.
+- Violation → `403 forbidden` (REST `TypeForbidden` / MCP `forbidden`), sentinel `ErrPermissionNotHeld` - separate from `ErrPermissionDenied` ("no right to the operation itself", checked by middleware/tool ​​before Service).
 
-Self-lockout и least-privilege **сосуществуют**: первый запрещает запереть admin-set «вниз», второй — выдать право «вверх». Они проверяют разные вещи и не конфликтуют по порядку.
+Self-lockout and least-privilege **coexist**: the first prohibits locking the admin-set "down", the second prohibits granting the "up" right. They check different things and don't conflict in order.
 
-### Builtin-граница
+### Builtin-border
 
-`cluster-admin` (`builtin=true`, [§ Встроенные роли](#встроенные-роли)):
+`cluster-admin` (`builtin=true`, § Built-in Roles):
 
-- `role.delete` / `role.update` над ней — **запрещены** → `409 role-builtin` (проверка builtin идёт **до** self-lockout; builtin важнее).
-- `role.grant-operator` / `role.revoke-operator` над ней — **разрешены** (иначе нельзя добавить второго админа или снять ошибочно назначенного), с тем же self-lockout-ом на revoke.
+- `role.delete` / `role.update` above it - **prohibited** → `409 role-builtin` (builtin check goes **before** self-lockout; builtin is more important).
+- `role.grant-operator` / `role.revoke-operator` above it - **allowed** (otherwise you cannot add a second admin or remove an erroneously assigned one), with the same self-lockout on revoke.
 
-## Управление группами архонов (Synod)
+## Managing Archon Groups (Synod)
 
-**Synod** ([ADR-049](../adr/0049-synod.md#adr-049-synod--группа-архонов)) — промежуточный уровень модели **Архон → Synod → Роли**: группа архонов, **бандлящая набор ролей**. Вместо того чтобы грантить каждому архону роли по отдельности, оператор собирает группу с нужным bundle ролей и добавляет в неё архонов — все члены автоматически получают весь bundle.
+**Synod** ([ADR-049](../adr/0049-synod.md)) - intermediate level of the **Archon → Synod → Roles** model: a group of archons **banding a set of roles**. Instead of granting roles to each archon individually, the operator assembles a group with the required bundle of roles and adds archons to it - all members automatically receive the entire bundle.
 
-- **Synod своего scope НЕ несёт.** Scope (селекторы `on coven=…` / `on service=…` / `regex` / `soulprint`) живёт на ролях ([Purview](#двухслойная-авторизация-read-эндпоинтов-adr-047-г-g1) / [ADR-047](../adr/0047-purview.md#adr-047-purview--scoped-rbac-видимость-узлов-role-default_scope--расширенный-селектор)); Synod лишь группирует уже-scoped роли. Group-scope ADR-049 не вводит (additive на будущее).
-- **Synod плоская** — группа не содержит другие группы (вложенность — additive-расширение).
-- **Архон может входить в несколько групп.**
+- **Synod does NOT carry its own scope.** Scope (selectors `on coven=…` / `on service=…` / `regex` / `soulprint`) lives on roles ([Purview](../adr/0047-purview.md) / [ADR-047](../adr/0047-purview.md)); Synod only groups already-scoped roles. Group-scope ADR-049 is not introduced (additive for the future).
+- **Synod flat** - the group does not contain other groups (nesting is an additive extension).
+- **An Archon can belong to several groups.**
 
-### Эффективные роли = прямые ∪ через Synod
+### Effective roles = direct ∪ via Synod
 
-Эффективные роли архона = **прямые** (membership `rbac_role_operators`) **∪** роли через **все его Synod-ы** (`synod_operators` ⋈ `synod_roles`). Объединение собирается при построении in-memory снимка enforcer-а ([§ Как enforcer резолвит](#как-enforcer-резолвит)) — слой матчинга `Check` источник роли не различает (роль через прямой грант и роль через группу эквивалентны). Дубль роли (через прямой грант И группу, либо через две группы) идемпотентен — union множества, не мультимножество.
+Effective roles of an archon = **direct** (membership `rbac_role_operators`) **∪** roles through **all his Synods** (`synod_operators` ⋈ `synod_roles`). The union is assembled when constructing an in-memory snapshot of the enforcer (§ How an enforcer resolves) - the matching layer `Check` does not distinguish the source of the role (a role through a direct grant and a role through a group are equivalent). A duplicate role (through a direct grant AND a group, or through two groups) is idempotent - a union of a set, not a multiset.
 
-### Storage — три PG-таблицы (паттерн `rbac_*`)
+### Storage - three PG tables (pattern `rbac_*`)
 
-Реестр Synod материализован тем же паттерном, что `rbac_*` ([миграция 069](../adr/0049-synod.md#adr-049-synod--группа-архонов), схемы — [storage.md](storage.md)):
+The Synod registry is materialized with the same pattern as `rbac_*` ([migration 069](../adr/0049-synod.md), schemes - [storage.md](storage.md)):
 
-| Таблица | Колонки | Роль |
+| Table | Columns | Role |
 |---|---|---|
-| **`synods`** | `name` PK (kebab-case, CHECK `^[a-z][a-z0-9-]*$`), `description`, `builtin` BOOL, `created_at`, `created_by_aid` FK→`operators(aid)` NULL-able | Каталог групп. `builtin=true` запрещает `synod.delete` (симметрия `rbac_roles.builtin`). |
-| **`synod_operators`** | PK `(synod_name, aid)`; `synod_name` FK→`synods(name)` `ON DELETE CASCADE`, `aid` FK→`operators(aid)` `ON DELETE CASCADE`, `added_at`, `added_by_aid` FK→`operators(aid)` NULL-able | **Membership** «Synod ↔ архон». CASCADE с обеих сторон: удаление группы или архона авто-чистит membership. |
-| **`synod_roles`** | PK `(synod_name, role_name)`; `synod_name` FK→`synods(name)` `ON DELETE CASCADE`, `role_name` FK→`rbac_roles(name)` `ON DELETE CASCADE`, `granted_at`, `granted_by_aid` FK→`operators(aid)` NULL-able | **Bundle** «Synod ↔ роль». CASCADE с обеих сторон: удаление группы чистит bundle, удаление роли снимает её из всех групп. |
+| **`synods`** | `name` PK (kebab-case, CHECK `^[a-z][a-z0-9-]*$`), `description`, `builtin` BOOL, `created_at`, `created_by_aid` FK→`operators(aid)` NULL-able | Catalog of groups. `builtin=true` disables `synod.delete` (symmetry `rbac_roles.builtin`). |
+| **`synod_operators`** | PK `(synod_name, aid)`; `synod_name` FK→`synods(name)` `ON DELETE CASCADE`, `aid` FK→`operators(aid)` `ON DELETE CASCADE`, `added_at`, `added_by_aid` FK→`operators(aid)` NULL-able | **Membership** "Synod ↔ archon." CASCADE on both sides: deleting a group or archon auto-clears membership. |
+| **`synod_roles`** | PK `(synod_name, role_name)`; `synod_name` FK→`synods(name)` `ON DELETE CASCADE`, `role_name` FK→`rbac_roles(name)` `ON DELETE CASCADE`, `granted_at`, `granted_by_aid` FK→`operators(aid)` NULL-able | **Bundle** "Synod ↔ role." CASCADE on both sides: deleting a group cleans the bundle, deleting a role removes it from all groups. |
 
 ### REST `/v1/synods`
 
-Восемь эндпоинтов. RBAC-проверка — в middleware (`synod.*`-permission, NoSelector), до handler-а. Один источник правды — `rbac.Service`: REST-handler-ы и MCP-tool-ы `keeper.synod.*` ([mcp-tools/synods.md](mcp-tools/synods.md)) — тонкие транспортные обёртки. Ошибки — RFC 7807 ([operator-api.md → Типы ошибок](operator-api.md#типы-ошибок)).
+Eight endpoints. RBAC check - in middleware (`synod.*`-permission, NoSelector), before the handler. One source of truth is `rbac.Service`: REST-handlers and MCP-tools `keeper.synod.*` ([mcp-tools/synods.md](mcp-tools/synods.md)) are thin transport wrappers. Errors - RFC 7807 ([operator-api.md → Error types](operator-api.md)).
 
-| Метод + путь | Permission | Тело / path | Успех | Коды ошибок |
+| Method + path | Permission | Body/path | Success | Error codes |
 |---|---|---|---|---|
-| `POST /v1/synods` | `synod.create` | body `{name, description?}` | `201` (тело пустое) | `409 synod-already-exists`; `422 validation-failed` (пустой/битый `name`); `400 malformed-request` |
+| `POST /v1/synods` | `synod.create` | body `{name, description?}` | `201` (body empty) | `409 synod-already-exists`; `422 validation-failed` (empty/broken `name`); `400 malformed-request` |
 | `GET /v1/synods` | `synod.list` | — | `200 {items: [...]}` | `500 internal-error` |
-| `PATCH /v1/synods/{name}` | `synod.update` | path `name` + body `{description}` (required, 1..1024 символов) | `204` | `404 synod-not-found`; `422 validation-failed` (пустой `description` / превышение лимита); `400 malformed-request` (битый JSON, неизвестное поле — в т.ч. `name` в теле) |
+| `PATCH /v1/synods/{name}` | `synod.update` | path `name` + body `{description}` (required, 1..1024 characters) | `204` | `404 synod-not-found`; `422 validation-failed` (empty `description` / limit exceeded); `400 malformed-request` (broken JSON, unknown field - including `name` in the body) |
 | `DELETE /v1/synods/{name}` | `synod.delete` | path `name` | `204` | `404 synod-not-found`; `409 synod-builtin`; `409 would-lock-out-cluster` |
-| `POST /v1/synods/{name}/operators` | `synod.add-operator` | path `name` + body `{aid}` | `204` | `403 forbidden` (least-privilege: bundle группы содержит право вне набора caller-а); `404 synod-not-found`; `404 not-found` (AID не существует); `422 validation-failed` (пустой/битый AID); `400 malformed-request` |
-| `DELETE /v1/synods/{name}/operators/{aid}` | `synod.remove-operator` | path `name`, `aid` | `204` | `404 not-found` (пары `(name, aid)` нет); `409 would-lock-out-cluster`; `422 validation-failed` (битый path-AID) |
-| `POST /v1/synods/{name}/roles` | `synod.grant-role` | path `name` + body `{role}` | `204` | `403 forbidden` (least-privilege: роль содержит право вне набора caller-а); `404 synod-not-found`; `404 role-not-found`; `422 validation-failed` (пустой `role`); `400 malformed-request` |
-| `DELETE /v1/synods/{name}/roles/{role_name}` | `synod.revoke-role` | path `name`, `role_name` | `204` | `404 not-found` (bundle-пары `(name, role)` нет); `409 would-lock-out-cluster` |
+| `POST /v1/synods/{name}/operators` | `synod.add-operator` | path `name` + body `{aid}` | `204` | `403 forbidden` (least-privilege: group bundle contains a right outside the caller's set); `404 synod-not-found`; `404 not-found` (AID does not exist); `422 validation-failed` (empty/broken AID); `400 malformed-request` |
+| `DELETE /v1/synods/{name}/operators/{aid}` | `synod.remove-operator` | path `name`, `aid` | `204` | `404 not-found` (no pair `(name, aid)`); `409 would-lock-out-cluster`; `422 validation-failed` (broken path-AID) |
+| `POST /v1/synods/{name}/roles` | `synod.grant-role` | path `name` + body `{role}` | `204` | `403 forbidden` (least-privilege: role contains a right outside the caller's set); `404 synod-not-found`; `404 role-not-found`; `422 validation-failed` (empty `role`); `400 malformed-request` |
+| `DELETE /v1/synods/{name}/roles/{role_name}` | `synod.revoke-role` | path `name`, `role_name` | `204` | `404 not-found` (no bundle pair `(name, role)`); `409 would-lock-out-cluster` |
 
-- **`GET /v1/synods` items[]** — `{name, description, builtin, roles[], operators[]}`; `roles` / `operators` сериализуются non-nil массивом (`[]`, не `null`), отсортированы детерминированно.
-- **`add-operator` / `grant-role` идемпотентны** — повторное добавление той же пары — no-op (`204`).
-- **`added_by_aid` / `granted_by_aid`** берутся из JWT-claim caller-а; у seed-/bootstrap-строк — `NULL`.
+- **`GET /v1/synods` items[]** — `{name, description, builtin, roles[], operators[]}`; `roles` / `operators` are serialized by a non-nil array (`[]`, not `null`), sorted deterministically.
+- **`add-operator` / `grant-role` are idempotent** - re-adding the same pair is a no-op (`204`).
+- **`added_by_aid` / `granted_by_aid`** are taken from the JWT-claim caller; for seed/bootstrap lines - `NULL`.
 
-### Security-инварианты Synod
+### Synod Security Invariants
 
-Обе защиты RBAC ([§ Инвариант self-lockout](#инвариант-self-lockout-четыре-пути), [§ Инвариант least-privilege](#инвариант-least-privilege-subset-check)) **обязаны учитывать роли через Synod** ([ADR-049 §f](../adr/0049-synod.md#adr-049-synod--группа-архонов)) — иначе через группу обходился бы любой из них. Эффективный `*`-permission архона может приходить **через Synod**, поэтому self-lockout проверяет и Synod-путь; член группы получает весь её bundle, поэтому least-privilege subset проверяет bundle/роль группы.
+Both RBAC protections (§ Self-lockout invariant, § Least-privilege invariant) **must take into account roles via Synod** ([ADR-049 §f](../adr/0049-synod.md)) - otherwise any of them would have to go through the group. The effective `*`-permission of an archon can come **via Synod**, so self-lockout checks the Synod path as well; a member of a group receives its entire bundle, so the least-privilege subset checks the bundle/role of the group.
 
-| Мутация | Защита | Что проверяется |
+| Mutation | Protection | What is being checked |
 |---|---|---|
-| `synod.add-operator` | **least-privilege subset** | Член получает **весь bundle ролей группы**. Caller обязан держать **все эффективные права** этого bundle (каждая роль развёрнута под своим `default_scope`), иначе `403 forbidden` (`ErrPermissionNotHeld`). Self-lockout **нет** — add только расширяет admin-set. |
-| `synod.grant-role` | **least-privilege subset** | Роль выдаётся всем членам. Caller обязан держать **все эффективные права гранящейся роли** (под её `default_scope`), иначе `403 forbidden`. Self-lockout **нет**. Несуществующая роль → `404 role-not-found` (FK-violation, не ложный subset-pass). |
-| `synod.delete` | **builtin-граница + self-lockout** | `builtin=true` → `409 synod-builtin` (**первой**, builtin важнее lockout). Если группа бандлит `*`-дающую роль и кто-то держал `*` только через неё → `409 would-lock-out-cluster`. |
-| `synod.remove-operator` | **self-lockout** | Снятие отнимает у архона роли группы. Если группа даёт `*` и архон держал его только через неё → `409 would-lock-out-cluster` (исключается ровно пара `(synod, aid)`; `*` через прямой грант / другую группу остаётся). |
-| `synod.revoke-role` | **self-lockout** | Снятие отнимает права роли у всех членов. Если снимаемая роль — последняя `*`-дающая роль группы и член держал `*` только через неё → `409 would-lock-out-cluster`. |
+| `synod.add-operator` | **least-privilege subset** | The member receives **the entire bundle of group roles**. The Caller must hold **all effective rights** of this bundle (each role is deployed under its own `default_scope`), otherwise `403 forbidden` (`ErrPermissionNotHeld`). Self-lockout **no** - add only extends admin-set. |
+| `synod.grant-role` | **least-privilege subset** | The role is issued to all members. The Caller must hold **all effective rights of the facing role** (under its `default_scope`), otherwise `403 forbidden`. Self-lockout **no**. Non-existent role → `404 role-not-found` (FK-violation, not false subset-pass). |
+| `synod.delete` | **builtin-border + self-lockout** | `builtin=true` → `409 synod-builtin` (**first**, builtin is more important than lockout). If the group is bandit `*`-giving role and someone held `*` only through it → `409 would-lock-out-cluster`. |
+| `synod.remove-operator` | **self-lockout** | Removal takes away the archon's group roles. If the group gives `*` and the archon held it only through it → `409 would-lock-out-cluster` (exactly the pair `(synod, aid)` is excluded; `*` through a direct grant / another group remains). |
+| `synod.revoke-role` | **self-lockout** | Withdrawal removes role rights from all members. If the role being removed is the last `*`-giving role of the group and the member held `*` only through it → `409 would-lock-out-cluster`. |
 
-Self-lockout-проверки Synod — **из БД под `SELECT … FOR UPDATE`**, не из снимка enforcer-а (как и для role-путей, [§ Как enforcer резолвит](#как-enforcer-резолвит)): детерминированный lock-порядок (группа → её роли → admin-set), исключение целевой пары из Synod-ветки admin-set-probe, проверка «осталась ≥1 строка». Lockout-проверка запускается **только если** группа/роль реально бандлит `*`-дающую роль — иначе admin-set не уменьшается, лишний probe не нужен.
+Synod self-lockout checks - **from the database under `SELECT … FOR UPDATE`**, not from the enforcer snapshot (as for role paths, § How an enforcer resolves): deterministic lock order (group → its roles → admin-set), exclusion of the target pair from the Synod branch admin-set-probe, check "≥1 line left". The lockout check is launched **only if** the group/role actually bundles the `*`-giving role - otherwise the admin-set is not reduced, an extra probe is not needed.
 
-> **Гейт RBAC выше Synod не меняется.** Резолв «эффективные роли = прямые ∪ через Synod» — дополнение snapshot-сборки enforcer-а ([§ Как enforcer резолвит](#как-enforcer-резолвит)); матчинг-слой `Check` / Purview ([ADR-047](../adr/0047-purview.md#adr-047-purview--scoped-rbac-видимость-узлов-role-default_scope--расширенный-селектор)) источник роли не различает и не переписывается.
+> **The RBAC gate above Synod does not change.** The "effective roles = direct ∪ via Synod" resolution is an addition to the enforcer snapshot assembly (§ How an enforcer resolves); matching layer `Check` / Purview ([ADR-047](../adr/0047-purview.md)) role source does not distinguish and is not overwritten.
 
-## Каталог permissions
+## Permissions directory
 
-Полный список permission-имён, валидируемых Keeper-ом в MVP. Имена за пределами этого каталога отвергаются парсером `keeper.yml` с ошибкой `unknown_permission`.
+Full list of permission names validated by Keeper in MVP. Names outside this directory are rejected by the `keeper.yml` parser with error `unknown_permission`.
 
-### Operator (5) — [ADR-014](../adr/0014-operator-identity.md#adr-014-identity-модель-оператора-archon)
+### Operator (5) — [ADR-014](../adr/0014-operator-identity.md)
 
-| Permission | Семантика |
+| Permission | Semantics |
 |---|---|
-| `operator.create` | Создание нового Архонта в реестре `operators` (через OpenAPI/MCP). Первый Архонт создаётся не через эту permission, а через `keeper init` ([ADR-013](../adr/0013-bootstrap-archon.md#adr-013-bootstrap-первого-архонта)). |
-| `operator.revoke` | Установка `revoked_at` для существующего Архонта. Активные JWT продолжают работать до `exp` ([ADR-014(d)](../adr/0014-operator-identity.md#adr-014-identity-модель-оператора-archon)). |
-| `operator.issue-token` | Выпуск нового JWT для существующего Архонта (например, оператор потерял токен; другой оператор с этим правом выписывает новый). |
-| `operator.list` | Перечисление Архонтов с фильтрами (`auth_method` / `revoked`). Покрывает также single-archon read `GET /v1/operators/{aid}` — паттерн one-permission-on-read, как `soul.list` / `service.list`. Селектор — NoSelector в MVP. |
-| `operator.read` | Зарегистрирована forward-only в каталоге; в роутере MVP не используется (route монтирует `operator.list` на оба эндпоинта). Введена, чтобы конфиги ролей могли указывать её без `unknown_permission`. |
+| `operator.create` | Creating a new Archon in the registry `operators` (via OpenAPI/MCP). The first Archon is created not through this permission, but through `keeper init` ([ADR-013](../adr/0013-bootstrap-archon.md)). |
+| `operator.revoke` | Setting `revoked_at` for an existing Archon. Active JWTs continue to run until `exp` ([ADR-014(d)](../adr/0014-operator-identity.md)). |
+| `operator.issue-token` | Issuing a new JWT for an existing Archon (for example, an operator has lost a token; another operator with this right issues a new one). |
+| `operator.list` | Enumeration of Archons with filters (`auth_method` / `revoked`). Also covers single-archon read `GET /v1/operators/{aid}` - the one-permission-on-read pattern, like `soul.list` / `service.list`. The selector is NoSelector in MVP. |
+| `operator.read` | Registered forward-only in the directory; MVP is not used in the router (route mounts `operator.list` on both endpoints). Introduced so that role configs can specify it without `unknown_permission`. |
 
 ### Role (6) — [ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)
 
-Управление RBAC (роли, permissions, membership) через OpenAPI/MCP — RBAC-storage в Postgres (`rbac_roles` / `rbac_role_permissions` / `rbac_role_operators`, [§ Storage](#storage--три-pg-таблицы)).
+RBAC management (roles, permissions, membership) via OpenAPI/MCP - RBAC-storage in Postgres (`rbac_roles` / `rbac_role_permissions` / `rbac_role_operators`, § Storage).
 
-| Permission | Семантика |
+| Permission | Semantics |
 |---|---|
-| `role.create` | Создание роли (`rbac_roles` + её permissions в `rbac_role_permissions`). Нельзя включить permission вне набора caller-а ([§ Инвариант least-privilege](#инвариант-least-privilege-subset-check)). |
-| `role.delete` | Удаление роли (каскадом permissions + membership). **Запрещено** над `builtin=true` (`cluster-admin`) и при нарушении self-lockout-инварианта ([§ Встроенные роли](#встроенные-роли)). |
-| `role.list` | Перечисление ролей с их permissions и membership. |
-| `role.update` | Изменение permissions роли. **Запрещено** над `builtin=true`; убрать `*` у роли, держащей единственный эффективный `*`, нельзя (self-lockout); добавить permission вне набора caller-а нельзя (least-privilege). |
-| `role.grant-operator` | Привязка `(role, aid)` — добавление membership-строки в `rbac_role_operators`. Нельзя грантить роль с permission вне набора caller-а ([§ Инвариант least-privilege](#инвариант-least-privilege-subset-check)). |
-| `role.revoke-operator` | Снятие membership-строки. **Запрещено**, если снимает последнего активного AID с эффективным `*` (self-lockout). |
+| `role.create` | Creating a role (`rbac_roles` + its permissions in `rbac_role_permissions`). You cannot enable permission outside the caller set (§ least-privilege invariant). |
+| `role.delete` | Removing a role (permissions + membership cascade). **Forbidden** over `builtin=true` (`cluster-admin`) and when the self-lockout invariant is violated (§ Built-in roles). |
+| `role.list` | Listing the roles with their permissions and membership. |
+| `role.update` | Changing role permissions. **Forbidden** over `builtin=true`; you cannot remove `*` from a role that holds the only effective `*` (self-lockout); You cannot add permission outside the caller set (least-privilege). |
+| `role.grant-operator` | Binding `(role, aid)` - adding a membership string to `rbac_role_operators`. You cannot grant a role with permission outside the caller set (§ Least-privilege invariant). |
+| `role.revoke-operator` | Removing the membership line. **Disabled** if it removes the last active AID with effective `*` (self-lockout). |
 
-### Synod (8) — [ADR-049](../adr/0049-synod.md#adr-049-synod--группа-архонов)
+### Synod (8) — [ADR-049](../adr/0049-synod.md)
 
-Управление **Synod-группами** (группы архонов, бандлящие роли — промежуточный уровень модели **Архон → Synod → Роли**, [§ Управление группами архонов](#управление-группами-архонов-synod)). Селектор — **NoSelector** (управление группами — кластер-уровневая операция без scope по coven/host, как `role.*` / `operator.*`; group-scope ADR-049 НЕ вводит). Мутирующие пишут audit, read-only `synod.list` — нет.
+Managing **Synod groups** (groups of archons, banding roles - the intermediate level of the model **Archon → Synod → Roles**, § Managing groups of archons). Selector - **NoSelector** (group management - cluster-level operation without scope by coven/host, like `role.*` / `operator.*`; group-scope ADR-049 does NOT enter). Those who mutate write audit, read-only `synod.list` - no.
 
-| Permission | Семантика | Audit-event |
+| Permission | Semantics | Audit-event |
 |---|---|---|
-| `synod.create` | Создание Synod-группы (`POST /v1/synods`). Пустая группа прав не выдаёт — least-privilege/self-lockout к create неприменимы (роли добавляются позже через `synod.grant-role`). | `synod.created` |
-| `synod.update` | Правка **ТОЛЬКО `description`** группы (`PATCH /v1/synods/{name}`, ADR-049 amend). `name` (PK) **immutable** — rename сознательно не поддержан (нарушал бы инвариант immutable-идентификаторов; симметрия с `rbac_roles.name`). **builtin-граница НЕ применяется** — builtin-группа редактируется (`description` — косметика для UI/аудита, не поведение). **Без subset-check и self-lockout** (`description` прав не выдаёт и не отнимает — оба инварианта неприменимы); снимок enforcer-а не инвалидируется (`description` в матчинг не входит). | `synod.updated` |
-| `synod.delete` | Удаление группы (каскадом membership + bundle, `DELETE /v1/synods/{name}`). **Запрещено** над `builtin=true` → `409 synod-builtin` (builtin важнее lockout, проверяется первой); запрещено, если исчезновение группы оставит кластер без эффективного `*`-админа → `409 would-lock-out-cluster` (self-lockout). | `synod.deleted` |
-| `synod.list` | Перечисление групп с развёрнутыми ролями (bundle) и членами-AID (`GET /v1/synods`). | — (read-only) |
-| `synod.add-operator` | Добавление архона в группу (`POST /v1/synods/{name}/operators`). Идемпотентно. **Под least-privilege subset:** член получает весь bundle ролей группы — caller обязан держать все эффективные права этого bundle, иначе `403 forbidden` ([§ Управление группами архонов](#управление-группами-архонов-synod)). | `synod.operator-added` |
-| `synod.remove-operator` | Снятие архона из группы (`DELETE /v1/synods/{name}/operators/{aid}`). **Под self-lockout:** снятие отнимает у архона роли группы (в т.ч. `*`-дающую) — запрещено, если осиротит последнего `*`-админа → `409 would-lock-out-cluster`. | `synod.operator-removed` |
-| `synod.grant-role` | Добавление роли в bundle группы (`POST /v1/synods/{name}/roles`). Идемпотентно. **Под least-privilege subset:** роль выдаётся всем членам группы — caller обязан держать все эффективные права роли, иначе `403 forbidden`. | `synod.role-granted` |
-| `synod.revoke-role` | Снятие роли из bundle группы (`DELETE /v1/synods/{name}/roles/{role_name}`). **Под self-lockout:** снятие отнимает права роли у всех членов — запрещено, если это последняя `*`-дающая роль группы и кто-то держал `*` только через неё → `409 would-lock-out-cluster`. | `synod.role-revoked` |
+| `synod.create` | Creating a Synod group (`POST /v1/synods`). An empty rights group does not issue - least-privilege/self-lockout is not applicable to create (roles are added later via `synod.grant-role`). | `synod.created` |
+| `synod.update` | Edit **ONLY `description`** group (`PATCH /v1/synods/{name}`, ADR-049 amend). `name` (PK) **immutable** - rename is deliberately not supported (would violate the invariant of immutable identifiers; symmetry with `rbac_roles.name`). **builtin-border NOT applied** - builtin-group is edited (`description` - cosmetics for UI/audit, not behavior). **Without subset-check and self-lockout** (`description` does not grant or take away rights - both invariants are not applicable); The enforcer's snapshot is not invalidated (`description` is not included in the matching). | `synod.updated` |
+| `synod.delete` | Deleting a group (cascade membership + bundle, `DELETE /v1/synods/{name}`). **Forbidden** over `builtin=true` → `409 synod-builtin` (builtin is more important than lockout, checked first); prohibited if the disappearance of the group would leave the cluster without an effective `*` admin → `409 would-lock-out-cluster` (self-lockout). | `synod.deleted` |
+| `synod.list` | Enumeration of groups with expanded roles (bundle) and AID members (`GET /v1/synods`). | — (read-only) |
+| `synod.add-operator` | Adding an archon to the group (`POST /v1/synods/{name}/operators`). Idempotent. **Under the least-privilege subset:** a member receives the entire bundle of group roles - the caller must hold all effective rights of this bundle, otherwise `403 forbidden` (§ Managing archon groups). | `synod.operator-added` |
+| `synod.remove-operator` | Removing an archon from the group (`DELETE /v1/synods/{name}/operators/{aid}`). **Under self-lockout:** removal takes away the group roles from the archon (including `*`-giver) - prohibited if it orphans the last `*`-administrator → `409 would-lock-out-cluster`. | `synod.operator-removed` |
+| `synod.grant-role` | Adding a role to the bundle group (`POST /v1/synods/{name}/roles`). Idempotent. **Under least-privilege subset:** the role is issued to all members of the group - the caller must hold all effective rights of the role, otherwise `403 forbidden`. | `synod.role-granted` |
+| `synod.revoke-role` | Removing a role from the bundle group (`DELETE /v1/synods/{name}/roles/{role_name}`). **Under self-lockout:** removal takes away the rights of the role from all members - prohibited if this is the last `*`-giving role of the group and someone held `*` only through it → `409 would-lock-out-cluster`. | `synod.role-revoked` |
 
-### Incarnation (13, из них одна — deprecated-alias) — [ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) / [scenario/](../scenario/README.md) / [ADR-031](../adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile) / [ADR-060](../adr/0060-traits.md)
+### Incarnation (13, one of them is deprecated-alias) - [ADR-009](../adr/0009-scenario-dsl.md) / [scenario/](../scenario/README.md) / [ADR-031](../adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile) / [ADR-060](../adr/0060-traits.md)
 
-| Permission | Семантика |
+| Permission | Semantics |
 |---|---|
-| `incarnation.create` | Создание нового instance — запуск сценария `create` сервиса. |
-| `incarnation.rerun-last` | Перезапуск **последнего упавшего** сценария инкарнации из `error_locked` (`POST /v1/incarnations/{name}/rerun-last`, [architecture.md → Атомарность и error_locked](../architecture.md#атомарность-и-error_locked)). Атомарно снимает блок (`state` НЕ трогается — last known-good, snapshot в `state_history`) и тем же действием перезапускает последний упавший сценарий — bootstrap (`create`/…) на create-пути ИЛИ day-2-операцию (`add_user`/…) — с сохранённым input упавшего прогона (`error_locked → applying` минуя `ready` под одним `FOR UPDATE`). Input восстанавливается из `incarnation.spec.input` (create-путь) либо из рецепта упавшего прогона (`apply_runs.recipe.input`, day-2-путь); если рецепт недоступен (прогон упал до dispatch — render/no_hosts/preflight, рецепт не записан; вычищен ретеншном Reaper; legacy-прогон) → `409` (fail-closed: сними блок обычным `unlock` и запусти сценарий вручную с явным input). Отдельное право от `incarnation.create` (создание новой инкарнации) и `incarnation.unlock` (снятие блока без перезапуска): rerun требует явного `reason`. Работает только из статуса `error_locked` (иначе `409`). Селекторы — те же, что у других incarnation-мутаций (`coven=`/`service=`/`incarnation=`). Audit-событие — `incarnation.rerun_last` (НЕ `incarnation.unlocked`). |
-| `incarnation.run` | Запуск произвольного сценария (`add_user`, `restart`, любой другой из `scenario/`). |
-| `incarnation.get` | Чтение `spec` + `state` + `status` instance. |
-| `incarnation.list` | Перечисление инстансов (с фильтрами). |
-| `incarnation.history` | Чтение `state_history` instance (snapshot per-change). |
-| `incarnation.unlock` | Снятие статуса `error_locked` после ручной разборки последствий частичного сбоя. |
-| `incarnation.upgrade` | Перевод instance на новую `state_schema_version` (запуск миграций, [migrations.md](../migrations.md)). |
-| `incarnation.destroy` | Удаление instance (с tombstone-периодом для облачных VM, [cloud.md](cloud.md)). |
-| `incarnation.check-drift` | Scry on-demand-проверка drift ([ADR-031](../adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile)): рендер `scenario/converge/` в `dry_run`-режиме + сборка `DriftReport`. Sync-операция (не async). Селекторы — те же, что у `incarnation.run` (`coven=`/`service=`/`incarnation=`). |
-| `incarnation.update-hosts` | Изменение mutable-полей записи incarnation через Operator API. MVP-объём — declared `spec.hosts[]` (`PATCH /v1/incarnations/{name}/hosts`, три mode: replace/append/remove; ADR-008). Селекторы — те же, что у других incarnation-мутаций (`coven=`/`service=`/`incarnation=`). Прежнее имя — `incarnation.update` (deprecated-alias, следующая строка). |
-| `incarnation.update` | **DEPRECATED-alias** `incarnation.update-hosts` (PM-decision 2026-06-02: имя сужено под задел будущих update-covens/update-spec). `ParsePermission` канонизирует его в `incarnation.update-hosts` на load снимка enforcer-а — существующие роли в `keeper.yml`/БД со старым именем продолжают работать (доступ к `PATCH /v1/incarnations/{name}/hosts`), миграции не требуют. Остаётся в каталоге навсегда (closed enum, removed-имена — never); роутер монтирует только каноническое имя. |
-| `incarnation.traits-set` | Целостная замена operator-set key-value trait-меток инкарнации (`incarnation.traits` jsonb — источник истины, [ADR-060](../adr/0060-traits.md) R1 slice a) через `PUT /v1/incarnations/{name}/traits`; проецируется sync-hook-ом в `souls.traits` хостов-членов. Перенос operator-facing trait-управления с per-soul (`soul.traits-assign`, deprecated) на per-incarnation. Action — kebab (`traits-set`), грамматика `<resource>.<action>` (паттерн `soul.traits-assign` / `incarnation.update-hosts`). trait-**ключ** НЕ scope-измерение RBAC — авторизация одним incarnation-scope-гейтом (`coven=`/`service=`/`incarnation=` по path-`name`, тот же селектор, что у `incarnation.update-hosts`). Audit-событие `incarnation.traits_changed` (только КЛЮЧИ, не значения). MCP-зеркало — `keeper.incarnation.traits-set`. |
-| `incarnation.view-secrets` | Раскрытие (reveal) plaintext-значения секрета инкарнации, объявленного `revealable_secrets` сервиса (POST `.../secrets/reveal` + discovery GET `.../secrets/revealable`). Строго привилегированнее `incarnation.get` (снятие маски). Селекторы — `coven=`/`service=`/`incarnation=`. Audit `incarnation.secret_revealed` (без значения). |
+| `incarnation.create` | Creating a new instance - running the `create` service script. |
+| `incarnation.rerun-last` | Restarting the **last fallen** incarnation script from `error_locked` (`POST /v1/incarnations/{name}/rerun-last`, [architecture.md → Atomicity and error_locked](../architecture.md)). Atomically removes the block (`state` DOES NOT touch - last known-good, snapshot in `state_history`) and with the same action restarts the last fallen script - bootstrap (`create`/...) on the create path OR day-2 operation (`add_user`/...) - with the saved input of the failed run (`error_locked → applying` bypassing `ready` under one `FOR UPDATE`). Input is restored from `incarnation.spec.input` (create-path) or from the failed run recipe (`apply_runs.recipe.input`, day-2-path); if the recipe is not available (the run fell to dispatch - render/no_hosts/preflight, the recipe was not written; cleaned up by Reaper retention; legacy run) → `409` (fail-closed: remove the block with the usual `unlock` and run the script manually with an explicit input). Separate right from `incarnation.create` (creating a new incarnation) and `incarnation.unlock` (removing a block without restarting): rerun requires an explicit `reason`. Works only from status `error_locked` (otherwise `409`). The selectors are the same as for other incarnation mutations (`coven=`/`service=`/`incarnation=`). Audit event - `incarnation.rerun_last` (NOT `incarnation.unlocked`). |
+| `incarnation.run` | Run a custom script (`add_user`, `restart`, any other from `scenario/`). |
+| `incarnation.get` | Read `spec` + `state` + `status` instance. |
+| `incarnation.list` | Enumeration of instances (with filters). |
+| `incarnation.history` | Reading `state_history` instance (snapshot per-change). |
+| `incarnation.unlock` | Removal of `error_locked` status after manual disassembly of the consequences of a partial failure. |
+| `incarnation.upgrade` | Transferring instance to new `state_schema_version` (running migrations, [migrations.md](../migrations.md)). |
+| `incarnation.destroy` | Delete instance (with tombstone period for cloud VMs, [cloud.md](cloud.md)). |
+| `incarnation.check-drift` | Scry on-demand drift check ([ADR-031](../adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile)): render `scenario/converge/` in `dry_run` mode + build `DriftReport`. Sync operation (not async). The selectors are the same as for `incarnation.run` (`coven=`/`service=`/`incarnation=`). |
+| `incarnation.update-hosts` | Changing mutable fields of an incarnation record via the Operator API. MVP volume — declared `spec.hosts[]` (`PATCH /v1/incarnations/{name}/hosts`, three modes: replace/append/remove; ADR-008). The selectors are the same as for other incarnation mutations (`coven=`/`service=`/`incarnation=`). The former name is `incarnation.update` (deprecated-alias, next line). |
+| `incarnation.update` | **DEPRECATED-alias** `incarnation.update-hosts` (PM-decision 2026-06-02: name narrowed to accommodate future update-covens/update-spec). `ParsePermission` canonicalizes it to `incarnation.update-hosts` on the load of the enforcer snapshot - existing roles in `keeper.yml`/DB with the old name continue to work (access to `PATCH /v1/incarnations/{name}/hosts`), no migration is required. Remains in the directory forever (closed enum, removed names - never); The router mounts only the canonical name. |
+| `incarnation.traits-set` | Holistic replacement of operator-set key-value trait tags of incarnation (`incarnation.traits` jsonb - source of truth, [ADR-060](../adr/0060-traits.md) R1 slice a) via `PUT /v1/incarnations/{name}/traits`; projected by a sync hook to `souls.traits` member hosts. Transfer of operator-facing trait control from per-soul (`soul.traits-assign`, deprecated) to per-incarnation. Action - kebab (`traits-set`), grammar `<resource>.<action>` (pattern `soul.traits-assign` / `incarnation.update-hosts`). trait-**key** NOT scope-dimension RBAC - authorization with one incarnation-scope-gate (`coven=`/`service=`/`incarnation=` by path-`name`, the same selector as `incarnation.update-hosts`). Audit event `incarnation.traits_changed` (KEYS only, not values). MCP mirror - `keeper.incarnation.traits-set`. |
+| `incarnation.view-secrets` | Reveal the plaintext value of the incarnation secret declared by the `revealable_secrets` service (POST `.../secrets/reveal` + discovery GET `.../secrets/revealable`). Strictly privileged `incarnation.get` (removal of mask). Selectors - `coven=`/`service=`/`incarnation=`. Audit `incarnation.secret_revealed` (no value). |
 
 ### Choir (5) — [ADR-044](../adr/0044-choir.md)
 
-CRUD именованной топологии хостов внутри инкарнации (Choir / Voice, таблицы `incarnation_choirs` / `incarnation_choir_voices`). **REST-only** (`/v1/incarnations/{name}/choirs*`, MCP-tool-ов нет; тела и семантика — [operator-api/choirs.md](operator-api/choirs.md)); роуты подключаются только при сконфигурированном ChoirDB-пуле. Choir принадлежит инкарнации, поэтому селектор — тот же, что у `incarnation.*`: `incarnation=` / `service=` / `coven=` (приземляется по path-`{name}`); bare — unrestricted. Мутирующие пишут audit, read-only `choir.list` — нет.
+CRUD named host topology inside incarnation (Choir / Voice, tables `incarnation_choirs` / `incarnation_choir_voices`). **REST-only** (`/v1/incarnations/{name}/choirs*`, no MCP tools; bodies and semantics - [operator-api/choirs.md](operator-api/choirs.md)); routes are connected only when the ChoirDB pool is configured. Choir belongs to the incarnation, so the selector is the same as `incarnation.*`: `incarnation=` / `service=` / `coven=` (landing on path-`{name}`); bare - unrestricted. Those who mutate write audit, read-only `choir.list` - no.
 
-| Permission | Семантика | Audit-event |
+| Permission | Semantics | Audit-event |
 |---|---|---|
-| `choir.create` | Создание Choir внутри инкарнации (`POST /v1/incarnations/{name}/choirs`). | `choir.created` |
-| `choir.delete` | Удаление Choir (`DELETE /v1/incarnations/{name}/choirs/{choir}`). | `choir.deleted` |
-| `choir.list` | Перечисление Choir-ов инкарнации (`GET …/choirs`) и Voice-членов одного Choir (`GET …/choirs/{choir}/voices`) — one-permission-on-read. | — (read-only) |
-| `choir.add-voice` | Добавление Voice (хоста) в Choir (`POST …/choirs/{choir}/voices`). Action — kebab, грамматика `<resource>.<action>` (паттерн `soul.ssh-target-update` / `sigil.key-introduce`). | `choir.voice_added` |
-| `choir.remove-voice` | Снятие Voice из Choir (`DELETE …/choirs/{choir}/voices/{sid}`). | `choir.voice_removed` |
+| `choir.create` | Creating a Choir within an incarnation (`POST /v1/incarnations/{name}/choirs`). | `choir.created` |
+| `choir.delete` | Delete Choir (`DELETE /v1/incarnations/{name}/choirs/{choir}`). | `choir.deleted` |
+| `choir.list` | Enumeration of incarnation Choirs (`GET …/choirs`) and Voice members of one Choir (`GET …/choirs/{choir}/voices`) - one-permission-on-read. | — (read-only) |
+| `choir.add-voice` | Adding a Voice (host) to Choir (`POST …/choirs/{choir}/voices`). Action - kebab, grammar `<resource>.<action>` (pattern `soul.ssh-target-update` / `sigil.key-introduce`). | `choir.voice_added` |
+| `choir.remove-voice` | Removing Voice from Choir (`DELETE …/choirs/{choir}/voices/{sid}`). | `choir.voice_removed` |
 
-### Soul (6) — реестр хостов
+### Soul (6) - host registry
 
-| Permission | Семантика |
+| Permission | Semantics |
 |---|---|
-| `soul.create` | Регистрация нового хоста в реестре `souls` (`status: pending`) и выпуск первого bootstrap-токена ([onboarding.md](../soul/onboarding.md)). `transport` (`agent`/`ssh`) обязателен; для `ssh` bootstrap-токен не выпускается. |
-| `soul.issue-token` | Повторный выпуск bootstrap-токена для существующей Soul с `transport: agent` (потеря токена, плановая ре-выписка). При уже-активном токене — отказ `409`, если не указан `force=true`. Для `transport: ssh` — `422` (ssh-хост не имеет bootstrap-фазы). **Мутация** — scope-aware gate `RequirePermission`, селектор `host=<sid>` из path (контекст известен до handler-а, в отличие от read-видимости). |
-| `soul.list` | Перечисление Souls в реестре (с фильтрами по coven / status / transport). Покрывает также single-soul read `GET /v1/souls/{sid}`, soulprint-read `GET /v1/souls/{sid}/soulprint` и per-host history `GET /v1/souls/{sid}/history` — паттерн one-permission-on-read, как `service.list` / `omen.list` / `vigil.list` / `decree.list`. **Read-видимость авторизуется двухслойно** (ADR-047 §г G1, [§ Двухслойная авторизация read-эндпоинтов](#двухслойная-авторизация-read-эндпоинтов-adr-047-г-g1)): gate `RequireAction` (existence — держит ли `soul.list` в принципе) + сужение по scope в handler (`soulpurview` — coven-pushdown / regex-keyset / soulprint-CEL / `InScope`). **Селектор НЕ применяется на gate-этапе read-роутов** — scope резолвится из строк БД, которых ещё нет; selector-форма (`coven=`/`host=`) у роли всё равно сужает видимость в handler-е, но gate её игнорирует. host-селектор (`host=<sid>`) — это форма для **мутаций** souls (см. `soul.issue-token` / `soul.ssh-target-update`), не для read. |
-| `soul.coven-assign` | Массовое назначение/снятие одной Coven-метки на хосты по селектору (`POST /v1/souls/coven`). Coven — холодная PG-метка: чистый UPDATE `souls`, без Redis. **Двухслойная авторизация:** middleware проверяет право вообще + назначаемую метку (гейт b — coven-scoped оператор проходит только для метки в своём `coven=`-scope); service-слой пересекает целевые хосты со scope-ом оператора (гейт a — `souls.coven && scope`). Без обоих гейтов bulk = privilege-escalation (оператор с `coven=dev` навесил бы `prod` на весь флот). |
-| `soul.traits-assign` | **DEPRECATED** ([ADR-060](../adr/0060-traits.md) R1 slice a — Trait релоцирован per-soul → per-incarnation; используйте `incarnation.traits-set`). Сохранён forward-compat (НЕ удалён): роли с этим правом не ломаются, per-soul write ещё работает, но **перетирается проекцией** `incarnation.traits` при следующем sync (create / bind). Bulk-назначение operator-set key-value trait-меток на хосты по селектору (`POST /v1/souls/traits`, jsonb-колонка `souls.traits`). Режимы `merge` / `replace` / `remove`. Зеркалит coven-write-path (`soul.coven-assign` / `soul.coven-changed` / `POST /v1/souls/coven`), но trait-**ключ** — НЕ scope-измерение RBAC (в отличие от Coven-метки), поэтому авторизуется **одним** гейтом, а не двумя: existence-gate `RequireAction(soul, traits-assign)` (есть ли право вообще) + service-слой пересекает целевые хосты со scope-ом оператора (гейт a — `souls.coven && scope`, тот же `BulkScope`, что у coven-assign). Гейта (b) на ключи нет — least-privilege держится единым гейтом и не слабее coven-assign. Подробнее — [§ Двухслойная авторизация read-эндпоинтов](#двухслойная-авторизация-read-эндпоинтов-adr-047-г-g1). |
-| `soul.ssh-target-update` | Обновление per-host SSH-реквизитов push-flow (`PUT /v1/souls/{sid}/ssh-target`, ADR-032 amendment 2026-05-26, S7-1). Body: `{ssh_port, ssh_user, soul_path}`. Action — hyphenated (`ssh-target-update`), т.к. permission-грамматика — ровно `<resource>.<action>` (паттерн `sigil.key-introduce`); MCP-tool — 3-сегментный `keeper.soul.ssh-target.update`. **Мутация** — scope-aware gate `RequirePermission`, селектор `host=<sid>` из path. Audit `soul.ssh-target.updated`. |
+| `soul.create` | Registering a new host in the registry `souls` (`status: pending`) and issuing the first bootstrap token ([onboarding.md](../soul/onboarding.md)). `transport` (`agent`/`ssh`) required; for `ssh` bootstrap token is not issued. |
+| `soul.issue-token` | Re-issue of bootstrap token for existing Soul with `transport: agent` (loss of token, planned re-issue). If the token is already active, `409` is rejected if `force=true` is not specified. For `transport: ssh` - `422` (ssh host does not have a bootstrap phase). **Mutation** - scope-aware gate `RequirePermission`, selector `host=<sid>` from path (the context is known before the handler, as opposed to read-visibility). |
+| `soul.list` | Listing Souls in the registry (with filters by coven/status/transport). Also covers single-soul read `GET /v1/souls/{sid}`, soulprint-read `GET /v1/souls/{sid}/soulprint` and per-host history `GET /v1/souls/{sid}/history` - the one-permission-on-read pattern, like `service.list` / `omen.list` / `vigil.list` / `decree.list`. **Read visibility is authorized in two layers** (ADR-047 section g/G1, section Two-layer authorization of read endpoints): gate `RequireAction` (existence - does `soul.list` hold in principle) + narrowing by scope in handler (`soulpurview` - coven-pushdown / regex-keyset/soulprint-CEL/`InScope`). **The selector is NOT used at the gate stage of read routes** - scope is resolved from database lines that do not yet exist; The selector form (`coven=`/`host=`) for the role still narrows the visibility in the handler, but the gate ignores it. host selector (`host=<sid>`) is a form for **mutations** souls (see `soul.issue-token` / `soul.ssh-target-update`), not for read. |
+| `soul.coven-assign` | Bulk assignment/removal of one Coven tag to hosts using a selector (`POST /v1/souls/coven`). Coven - cold PG tag: pure UPDATE `souls`, no Redis. **Two-layer authorization:** middleware checks the right in general + the assigned label (gate b - the coven-scoped operator passes only for the label in its `coven=`-scope); The service layer intersects target hosts with the scope of the operator (gate a - `souls.coven && scope`). Without both gates bulk = privilege-escalation (an operator with `coven=dev` would assign `prod` to the entire fleet). |
+| `soul.traits-assign` | **DEPRECATED** ([ADR-060](../adr/0060-traits.md) R1 slice a - Trait relocated per-soul → per-incarnation; use `incarnation.traits-set`). forward-compat saved (NOT deleted): roles with this right do not break, per-soul write still works, but is **overwritten by the projection** `incarnation.traits` at the next sync (create / bind). Bulk assignment of operator-set key-value trait tags to hosts by selector (`POST /v1/souls/traits`, jsonb column `souls.traits`). Modes `merge` / `replace` / `remove`. Mirrors coven-write-path (`soul.coven-assign` / `soul.coven-changed` / `POST /v1/souls/coven`), but trait-**key** is NOT an RBAC scope dimension (unlike Coven-tag), therefore it is authorized by **one** gate, not two: existence-gate `RequireAction(soul, traits-assign)` (is there a right at all) + service-layer intersects target hosts with scope operator (gate a - `souls.coven && scope`, the same `BulkScope` as for coven-assign). There is no gate (b) for keys - least-privilege is maintained by a single gate and is no weaker than coven-assign. More details - § Two-layer authorization of read endpoints. |
+| `soul.ssh-target-update` | Update per-host SSH push-flow details (`PUT /v1/souls/{sid}/ssh-target`, ADR-032 amendment 2026-05-26, S7-1). Body: `{ssh_port, ssh_user, soul_path}`. Action - hyphenated (`ssh-target-update`), because permission grammar - exactly `<resource>.<action>` (pattern `sigil.key-introduce`); MCP-tool - 3-segment `keeper.soul.ssh-target.update`. **Mutation** - scope-aware gate `RequirePermission`, selector `host=<sid>` from path. Audit `soul.ssh-target.updated`. |
 
-Селектор `coven=` ([§ Грамматика селектора](#грамматика-селектора)) применим к мутирующим (`soul.issue-token` / `soul.coven-assign` / `soul.ssh-target-update`) и read- (`soul.list`) permission-ам: ограничивает действие хостами с указанными Coven-метками. Для **scope-aware мутаций** (`soul.issue-token` / `soul.coven-assign` / `soul.ssh-target-update`) он сужает scope на gate-этапе (scope-aware `Check`, контекст из path/body); у `soul.coven-assign` дополнительно задаёт допустимый набор назначаемых меток и подмножество целевых хостов (scope-intersection). Для **read** (`soul.list` и покрываемые ею get/soulprint/history) coven-/regex-/soulprint-сужение делает handler через `soulpurview` (gate — лишь existence `RequireAction`), см. [§ Двухслойная авторизация read-эндпоинтов](#двухслойная-авторизация-read-эндпоинтов-adr-047-г-g1).
+The `coven=` selector (§ Selector Grammar) applies to mutating (`soul.issue-token` / `soul.coven-assign` / `soul.ssh-target-update`) and read- (`soul.list`) permissions: restricts the action to hosts with the specified Coven labels. For **scope-aware mutations** (`soul.issue-token` / `soul.coven-assign` / `soul.ssh-target-update`) it narrows the scope at the gate stage (scope-aware `Check`, context from path/body); `soul.coven-assign` additionally specifies the valid set of assigned labels and a subset of target hosts (scope-intersection). For **read** (`soul.list` and the get/soulprint/history it covers), coven-/regex-/soulprint-narrowing makes the handler via `soulpurview` (gate is only the existence of `RequireAction`), see § Two-layer authorization of read endpoints.
 
-`soul.traits-assign` стоит особняком: на **per-soul write-path** trait-**ключ не является scope-измерением RBAC** (в отличие от Coven-метки), поэтому селектор по traits для этого bulk-write в грамматике не применяется, а сам permission авторизуется existence-gate-ом (см. строку каталога выше); в его write-path traits меняются только в пределах coven-scope оператора (единый `BulkScope`). Это **не** противоречит тому, что **на incarnation-измерении** trait-scope **реализован** (slice 1, [§ Грамматика селектора](#грамматика-селектора) — `trait=key:value` сужает видимость `incarnation.list`/`get`): per-soul bulk-write (`soul.traits-assign`, deprecated) и per-incarnation read-scope (`trait=`-селектор на `incarnation.*`) — разные поверхности. AND-сужение по нескольким trait-парам остаётся follow-up.
+`soul.traits-assign` stands apart: on the **per-soul write-path** trait-**key is not an RBAC scope-dimension** (unlike the Coven-tag), therefore the traits selector for this bulk-write is not applied in the grammar, and the permission itself is authorized by the existence-gate (see directory line above); in its write-path traits change only within the coven-scope operator (single `BulkScope`). This **does not** contradict the fact that **on the incarnation dimension** trait-scope is **implemented** (slice 1, § Selector grammar - `trait=key:value` narrows the visibility of `incarnation.list`/`get`): per-soul bulk-write (`soul.traits-assign`, deprecated) and per-incarnation read-scope (`trait=`-selector on `incarnation.*`) - different surfaces. AND-narrowing on several trait pairs remains follow-up.
 
-**Пример** — оператор управляет только dev-окружением:
+**Example** - the operator controls only the dev environment:
 
 ```yaml
 roles:
   - name: dev-coven-ops
     permissions:
-      - "soul.coven-assign on coven=dev,stage"   # навешивает/снимает только dev|stage, только на dev|stage-хостах
+      - "soul.coven-assign on coven=dev,stage"   # attaches/unsets only dev|stage, only on dev|stage hosts
       - "soul.list on coven=dev,stage"
 ```
 
-С такой ролью `POST /v1/souls/coven {mode: append, label: dev, selector: {all: true}}` затронет лишь хосты с меткой `dev`/`stage`; попытка навесить `label: prod` отвергается `422` (метка вне scope), а хосты вне `dev`/`stage` не попадают в UPDATE.
+With this role, `POST /v1/souls/coven {mode: append, label: dev, selector: {all: true}}` will only affect hosts with the label `dev`/`stage`; an attempt to assign `label: prod` is rejected by `422` (the label is outside the scope), and hosts outside `dev`/`stage` are not included in the UPDATE.
 
-Будущие кандидаты (`soul.revoke` для отзыва SoulSeed) — вводятся отдельным PR при появлении соответствующих API-операций. `soul.get` сознательно не вводится: single-soul read покрывается `soul.list` (паттерн service/omen/vigil/decree).
+Future Candidates (`soul.revoke` for SoulSeed Review) - Introduced as a separate PR when appropriate API operations occur. `soul.get` is deliberately not introduced: single-soul read is covered by `soul.list` (pattern service/omen/vigil/decree).
 
 ### Service (4) — [ADR-029](../adr/0029-service-registry.md)
 
-Управление реестром Service-ов `service_registry` (git-источник + ref сервиса; роуты — [operator-api.md → Service](operator-api.md), реестр — [ADR-029](../adr/0029-service-registry.md)). Селектор — **NoSelector** (CRUD оперирует самим реестром, паттерн `provider.*` / `push-provider.*` / `operator.*`). Мутирующие три пишут audit ([ADR-022](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)), read-only `service.list` — нет.
+Managing the Service registry `service_registry` (git source + service ref; routes - [operator-api.md → Service](operator-api.md), registry - [ADR-029](../adr/0029-service-registry.md)). The selector is **NoSelector** (CRUD operates on the registry itself, pattern `provider.*` / `push-provider.*` / `operator.*`). Mutating three write audit ([ADR-022](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)), read-only `service.list` - no.
 
-| Permission | Семантика |
+| Permission | Semantics |
 |---|---|
-| `service.register` | Регистрация Service в реестре (`POST /v1/services`; MCP `keeper.service.register`). `409 service-already-exists` на дубль `name`. |
-| `service.update` | Правка записи реестра (`PATCH /v1/services/{name}`; MCP `keeper.service.update`). |
-| `service.list` | Перечисление (`GET /v1/services`) + single-get (`GET /v1/services/{name}`) + четыре git-проекции (`/refs` / `/scenarios` / `/state-schema` / `/dependencies`) — one-permission-on-read, отдельной `service.get` нет. MCP `keeper.service.list`. |
-| `service.deregister` | Снятие Service из реестра (`DELETE /v1/services/{name}`; MCP `keeper.service.deregister`). |
+| `service.register` | Registering Service in the registry (`POST /v1/services`; MCP `keeper.service.register`). `409 service-already-exists` for take `name`. |
+| `service.update` | Editing a registry entry (`PATCH /v1/services/{name}`; MCP `keeper.service.update`). |
+| `service.list` | Enumeration (`GET /v1/services`) + single-get (`GET /v1/services/{name}`) + four git projections (`/refs` / `/scenarios` / `/state-schema` / `/dependencies`) - one-permission-on-read, no separate `service.get`. MCP `keeper.service.list`. |
+| `service.deregister` | Removing Service from the registry (`DELETE /v1/services/{name}`; MCP `keeper.service.deregister`). |
 
 ### Push (3) — [push.md](push.md)
 
-| Permission | Семантика |
+| Permission | Semantics |
 |---|---|
-| `push.apply` | SSH-доставка Destiny на хост через модуль `keeper.push`. |
-| `push.cleanup` | Чистка `/var/lib/soul-stack/` на хосте при `revoke` или выводе из реестра ([push.md → Cleanup](push.md#cleanup-на-хосте)). |
-| `push.read` | Чтение состояния push-прогона (`GET /v1/push/{apply_id}`, Variant C orchestrator). |
+| `push.apply` | SSH delivery of Destiny to the host via the `keeper.push` module. |
+| `push.cleanup` | Cleaning `/var/lib/soul-stack/` on the host when `revoke` or output from the registry ([push.md → Cleanup](push.md)). |
+| `push.read` | Read push run status (`GET /v1/push/{apply_id}`, Variant C orchestrator). |
 
 ### Push-Provider (5) — [push.md → S7-2 migration](push.md#s7-2-migration-to-push_providers-pg-table-2026-05-26)
 
-CRUD реестра Push-Provider-ов — per-provider env-payload params SSH-плагинов push-flow (ADR-032 amendment 2026-05-26, S7-2). Сущность реализована как «SSH Provider» variant of Provider (см. amendment). Селектор — NoSelector (как `provider.*` / `service.*`).
+CRUD of the Push-Provider registry - per-provider env-payload params of SSH push-flow plugins (ADR-032 amendment 2026-05-26, S7-2). The entity is implemented as an "SSH Provider" variant of Provider (see amendment). The selector is NoSelector (like `provider.*` / `service.*`).
 
-| Permission | Семантика |
+| Permission | Semantics |
 |---|---|
-| `push-provider.create` | Создать запись в `push_providers` (`POST /v1/push-providers`). Sensitive params (secret_id/token/password/private_key) обязаны быть vault-refs. |
-| `push-provider.update` | Заменить params существующей записи (`PUT /v1/push-providers/{name}`, replace-семантика). |
-| `push-provider.delete` | Удалить запись (`DELETE /v1/push-providers/{name}`). |
-| `push-provider.list` | Перечислить записи (`GET /v1/push-providers`). |
-| `push-provider.read` | Прочитать одну запись (`GET /v1/push-providers/{name}`). |
+| `push-provider.create` | Create an entry in `push_providers` (`POST /v1/push-providers`). Sensitive params (secret_id/token/password/private_key) must be vault-refs. |
+| `push-provider.update` | Replace params of an existing record (`PUT /v1/push-providers/{name}`, replace semantics). |
+| `push-provider.delete` | Delete entry (`DELETE /v1/push-providers/{name}`). |
+| `push-provider.list` | List records (`GET /v1/push-providers`). |
+| `push-provider.read` | Read one entry (`GET /v1/push-providers/{name}`). |
 
-### Errand (3) — [ADR-033](../adr/0033-errand.md#adr-033-errand--pull-ad-hoc-exec-вне-scenario)
+### Errand (3) — [ADR-033](../adr/0033-errand.md)
 
-| Permission | Семантика |
+| Permission | Semantics |
 |---|---|
-| `errand.run` | Запуск Errand на Soul через `POST /v1/souls/{sid}/exec` ([ADR-033](../adr/0033-errand.md#adr-033-errand--pull-ad-hoc-exec-вне-scenario)). Селекторы: `host=<sid>` / `coven=<label>`; bare — unrestricted. |
-| `errand.cancel` | Отмена in-flight Errand через `DELETE /v1/errands/{errand_id}` (ADR-033 slice E5). Селектор — NoSelector (SID известен только после lookup-а строки errand-а, что несовместимо с pre-handler-middleware-check-ом). |
-| `errand.list` | Чтение реестра Errand (`GET /v1/errands` + `GET /v1/errands/{errand_id}`). Read-only. Селекторы фильтруют видимость per-row. |
+| `errand.run` | Running Errand on Soul via `POST /v1/souls/{sid}/exec` ([ADR-033](../adr/0033-errand.md)). Selectors: `host=<sid>` / `coven=<label>`; bare - unrestricted. |
+| `errand.cancel` | Cancel in-flight Errand via `DELETE /v1/errands/{errand_id}` (ADR-033 slice E5). Selector - NoSelector (SID is known only after lookup of the errand line, which is incompatible with pre-handler-middleware-check). |
+| `errand.list` | Reading registry Errand (`GET /v1/errands` + `GET /v1/errands/{errand_id}`). Read-only. Selectors filter per-row visibility. |
 
-### Cadence (6) — [ADR-046](../adr/0046-cadence.md#adr-046-cadence--регулярные-запуски-scheduledrecurring-voyage)
+### Cadence (6) - [ADR-046](../adr/0046-cadence.md)
 
-CRUD реестра Cadence-расписаний (`cadences`) — расписание, спавнящее обычный [Voyage](../adr/0043-voyage.md#adr-043-voyage--унифицированный-батчевый-прогон)-прогон по времени ([ADR-046 §7](../adr/0046-cadence.md#adr-046-cadence--регулярные-запуски-scheduledrecurring-voyage)). Селектор — NoSelector в MVP (CRUD оперирует самим реестром расписаний, паттерн `push-provider.*` / `operator.*`); per-name scope — отдельный slice при появлении мульти-тенант-RBAC. Мутирующие пишут audit (`cadence.created` / `cadence.updated` / `cadence.deleted`), read-only `cadence.list` — нет.
+CRUD of the Cadence schedule registry (`cadences`) - a schedule that spawns a regular [Voyage](../adr/0043-voyage.md) time run ([ADR-046 §7](../adr/0046-cadence.md)). Selector - NoSelector in MVP (CRUD operates with the schedule registry itself, pattern `push-provider.*` / `operator.*`); per-name scope - a separate slice when a multi-tenant RBAC appears. Mutating ones write audit (`cadence.created` / `cadence.updated` / `cadence.deleted`), read-only `cadence.list` - no.
 
-| Permission | Семантика |
+| Permission | Semantics |
 |---|---|
-| `cadence.create` | Создание Cadence-расписания (`POST /v1/cadences`). **Помимо route-level `cadence.create` срабатывает второй уровень guard-а — см. ниже [§ Двухуровневый guard](#cadence-двухуровневый-guard-create).** |
-| `cadence.list` | Перечисление Cadence-расписаний (`GET /v1/cadences`) и деталь одного (`GET /v1/cadences/{id}`) — паттерн one-permission-on-read (как `soul.list` / `errand.list`). |
-| `cadence.update` | Правка рецепта расписания (`PATCH /v1/cadences/{id}`). **Backcompat:** остаётся валидным грантом и для toggle (`enable`/`disable`) — роли со старым `cadence.update` сохраняют возможность паузы/возобновления (амендмент 2026-06-02). |
-| `cadence.delete` | Снятие расписания (`DELETE /v1/cadences/{id}`). История порождённых Voyage сохраняется ([ADR-046 §9](../adr/0046-cadence.md#adr-046-cadence--регулярные-запуски-scheduledrecurring-voyage)). |
-| `cadence.enable` | Возобновление расписания без удаления (`POST /v1/cadences/{id}/enable`). Гранулярное право; эндпоинт допускает `cadence.enable` **ИЛИ** `cadence.update` (OR-гейт, амендмент 2026-06-02). |
-| `cadence.disable` | Пауза расписания без удаления (`POST /v1/cadences/{id}/disable`). Гранулярное право; эндпоинт допускает `cadence.disable` **ИЛИ** `cadence.update` (OR-гейт). |
+| `cadence.create` | Creating a Cadence schedule (`POST /v1/cadences`). **In addition to the route-level `cadence.create`, the second level of guard is triggered - see below § Two-level guard.** |
+| `cadence.list` | Enumeration of Cadence schedules (`GET /v1/cadences`) and detail of one (`GET /v1/cadences/{id}`) - one-permission-on-read pattern (like `soul.list` / `errand.list`). |
+| `cadence.update` | Editing the schedule recipe (`PATCH /v1/cadences/{id}`). **Backcompat:** remains a valid grant for toggle (`enable`/`disable`) - roles with the old `cadence.update` retain the ability to pause/resume (amendment 2026-06-02). |
+| `cadence.delete` | Removing the schedule (`DELETE /v1/cadences/{id}`). The history of Voyage spawns is preserved ([ADR-046 §9](../adr/0046-cadence.md)). |
+| `cadence.enable` | Resume schedule without deleting (`POST /v1/cadences/{id}/enable`). Granular Law; endpoint allows `cadence.enable` **OR** `cadence.update` (OR-gate, amendment 2026-06-02). |
+| `cadence.disable` | Pause schedule without deleting (`POST /v1/cadences/{id}/disable`). Granular Law; endpoint allows `cadence.disable` **OR** `cadence.update` (OR gate). |
 
-`GET /v1/cadences/{id}/runs` (дочерние Voyage расписания, reuse Voyage-DTO) гейтится **`incarnation.history`** (NoSelector), а не `cadence.list` — это чтение истории дочерних прогонов, симметрично остальным history-эндпоинтам.
+`GET /v1/cadences/{id}/runs` (child Voyage schedules, reuse Voyage-DTO) is gated **`incarnation.history`** (NoSelector), and not `cadence.list` - this is reading the history of child runs, symmetrically to the rest of the history endpoints.
 
-> Spawn-флоу (Reaper-лидер `spawn_due_cadence` → Insert дочернего Voyage по наступлении `next_run_at`) RBAC-permission **не контролируется** — это автономная инициатива фонового Reaper-правила, не операторский вызов ([ADR-046 §8](../adr/0046-cadence.md#adr-046-cadence--регулярные-запуски-scheduledrecurring-voyage), audit-source `background` / `archon_aid: NULL`). Авторизация исполнения «зашита» в момент создания (двухуровневый guard ниже) — спавн идёт от имени `created_by_aid` расписания.
+> Spawn flow (Reaper leader `spawn_due_cadence` → Insert child Voyage upon onset of `next_run_at`) RBAC-permission **not controlled** is an autonomous initiative of a background Reaper rule, not an operator call ([ADR-046 §8](../adr/0046-cadence.md), audit-source `background` / `archon_aid: NULL`). Authorization for execution is "hardened" at the time of creation (two-level guard below) - spawning occurs on behalf of the `created_by_aid` schedule.
 
-#### Cadence: двухуровневый guard на create
+#### Cadence: two-level guard on create
 
-Право `cadence.*` управляет самим **расписанием**, но рецепт Cadence спавнит **Voyage**. Если бы для заведения Cadence хватало одного `cadence.create`, оператор без права запускать прогоны мог бы завести расписание, которое запускает их за него — это privilege-escalation-обход RBAC. Поэтому `POST /v1/cadences` проверяется **на двух уровнях** (параллель с двухслойной авторизацией Voyage-create и `soul.coven-assign`):
+The `cadence.*` right controls the **schedule** itself, but the Cadence recipe spawns **Voyage**. If only one `cadence.create` were enough for the Cadence establishment, an operator without the right to launch runs could create a schedule that runs them for him - this is a privilege-escalation bypass of RBAC. Therefore, `POST /v1/cadences` is checked **at two levels** (parallel to the two-layer authorization of Voyage-create and `soul.coven-assign`):
 
-1. **Route-level (middleware):** `cadence.create` (NoSelector) — право управлять расписаниями вообще. Проверяется до handler-а.
-2. **Body-level (handler):** Voyage-permission **по `kind` рецепта** (kind виден только из тела, поэтому проверка не в middleware, а в `CadenceHandler.Create`, parity Voyage-create):
-   - `kind: scenario` → требуется **`incarnation.run`**;
-   - `kind: command` → требуется **`errand.run`**.
+1. **Route-level (middleware):** `cadence.create` (NoSelector) - the right to manage schedules in general. Checked before the handler.
+2. **Body-level (handler):** Voyage-permission **according to `kind` recipe** (kind is visible only from the body, so the check is not in middleware, but in `CadenceHandler.Create`, parity Voyage-create):
+   - `kind: scenario` → required **`incarnation.run`**;
+   - `kind: command` → **`errand.run`** required.
 
-Имена этих Voyage-permission и kind-маппинг — те же, что у разового Voyage-create ([ADR-043 §6](../adr/0043-voyage.md#adr-043-voyage--унифицированный-батчевый-прогон)). Чтобы завести Cadence, нужны **оба** уровня: и право на управление расписанием, и право запускать то, что расписание будет спавнить. Нарушение второго уровня → `403 forbidden` (problem-detail вида `cadence recipe requires Voyage-permission <resource>.<action> by kind=<kind>`); неизвестный `kind` → `422 validation-failed`. Target в рецепте — выбор из RBAC-скоупа создателя на момент создания (parity [ADR-043 §5](../adr/0043-voyage.md#adr-043-voyage--унифицированный-батчевый-прогон)).
+The names of these Voyage-permission and kind-mapping are the same as those of the one-time Voyage-create ([ADR-043 §6](../adr/0043-voyage.md)). To start Cadence, you need **both** levels: both the right to manage the schedule and the right to launch what the schedule will spawn. Second level violation → `403 forbidden` (problem-detail of the form `cadence recipe requires Voyage-permission <resource>.<action> by kind=<kind>`); unknown `kind` → `422 validation-failed`. Target in a recipe is the choice from the creator's RBAC scope at the time of creation (parity [ADR-043 §5](../adr/0043-voyage.md)).
 
-### Herald / Tiding (10) — [ADR-052](../adr/0052-herald-notifications.md#adr-052-herald--tiding--уведомления-о-событиях-прогонов)
+### Herald / Tiding (10) - [ADR-052](../adr/0052-herald-notifications.md)
 
-CRUD реестров уведомлений о событиях прогонов: **Herald** (каналы доставки, `heralds`) и **Tiding** (правила подписки, `tidings`). Селектор — NoSelector (управление каналами/правилами кластер-уровневое, паттерн `push-provider.*` / `omen.*` / `role.*`); per-name scope — отдельный slice при появлении мульти-тенант-RBAC. Мутирующие пишут audit (`herald.created`/`updated`/`deleted` + `tiding.*`), read-only `*.list`/`*.read` — нет.
+CRUD registries for notifications about run events: **Herald** (delivery channels, `heralds`) and **Tiding** (subscription rules, `tidings`). Selector - NoSelector (cluster-level channel/rule management, pattern `push-provider.*` / `omen.*` / `role.*`); per-name scope - a separate slice when a multi-tenant RBAC appears. Mutating ones write audit (`herald.created`/`updated`/`deleted` + `tiding.*`), read-only `*.list`/`*.read` - no.
 
-| Permission | Семантика |
+| Permission | Semantics |
 |---|---|
-| `herald.create` | Создать Herald-канал (`POST /v1/heralds`). Webhook-config под SSRF-guard; `secret_ref` — vault-ref на signing-token. |
-| `herald.read` | Прочитать один Herald-канал (`GET /v1/heralds/{name}`). |
-| `herald.list` | Перечислить Herald-каналы (`GET /v1/heralds`). |
-| `herald.update` | Заменить mutable-поля канала (`PUT /v1/heralds/{name}`, replace-семантика как Push-Provider). |
-| `herald.delete` | Удалить канал (`DELETE /v1/heralds/{name}`); каскадно сносит связанные Tiding-подписки. |
-| `tiding.create` | Создать Tiding-правило подписки (`POST /v1/tidings`). `herald` — FK на существующий канал; `event_types` — area-glob в scope прогонов. |
-| `tiding.read` | Прочитать одно Tiding-правило (`GET /v1/tidings/{name}`). |
-| `tiding.list` | Перечислить Tiding-правила (`GET /v1/tidings`). |
-| `tiding.update` | Заменить mutable-поля правила (`PUT /v1/tidings/{name}`, replace). |
-| `tiding.delete` | Удалить правило (`DELETE /v1/tidings/{name}`). |
+| `herald.create` | Create a Herald channel (`POST /v1/heralds`). Webhook-config under SSRF-guard; `secret_ref` - vault-ref to signing-token. |
+| `herald.read` | Read one Herald channel (`GET /v1/heralds/{name}`). |
+| `herald.list` | List Herald channels (`GET /v1/heralds`). |
+| `herald.update` | Replace mutable channel fields (`PUT /v1/heralds/{name}`, replace semantics as Push-Provider). |
+| `herald.delete` | Delete channel(`DELETE /v1/heralds/{name}`); cascade demolishes related Tiding subscriptions. |
+| `tiding.create` | Create a Tiding subscription rule (`POST /v1/tidings`). `herald` - FK to an existing channel; `event_types` - area-glob in the scope of runs. |
+| `tiding.read` | Read one Tiding rule (`GET /v1/tidings/{name}`). |
+| `tiding.list` | List Tiding Rules (`GET /v1/tidings`). |
+| `tiding.update` | Replace mutable fields of the rule (`PUT /v1/tidings/{name}`, replace). |
+| `tiding.delete` | Delete rule (`DELETE /v1/tidings/{name}`). |
 
 ### Provisioning (2) — [ADR-058](../adr/0058-operator-auth-ldap-oidc.md)
 
-Runtime-управление политикой способов **СОЗДАНИЯ** операторов — ключ `provisioning_allowed_methods` в `keeper_settings` (CSV из домена `{user,ldap,oidc}`). Политика гейтит ТОЛЬКО ветку создания оператора (`POST /v1/operators` → `user`; federated auto-provision → `ldap`/`oidc`); существующие операторы логинятся независимо от политики, `bootstrap`/`system` НЕ гейтятся никогда. ОТСУТСТВИЕ ключа = все способы разрешены (back-compat); заданный-но-пустой = config-error (anti-lockout — нельзя запретить ВСЕ способы и залочить заведение операторов). Селектор — **NoSelector** (политика кластер-уровневая, как `operator.*` / `role.*`). `update` пишет audit (`provisioning.policy_changed`), read-only `read` — нет.
+Runtime policy management of **CREATE** operator methods - key `provisioning_allowed_methods` in `keeper_settings` (CSV from domain `{user,ldap,oidc}`). The policy gates ONLY the operator creation branch (`POST /v1/operators` → `user`; federated auto-provision → `ldap`/`oidc`); existing operators log in regardless of policy, `bootstrap`/`system` are never gated. NO key = all methods are allowed (back-compat); specified-but-empty = config-error (anti-lockout - you cannot prohibit ALL methods and lock the establishment of operators). The selector is **NoSelector** (cluster-level policy, like `operator.*` / `role.*`). `update` writes audit (`provisioning.policy_changed`), read-only `read` - no.
 
-| Permission | Семантика |
+| Permission | Semantics |
 |---|---|
-| `provisioning.read` | Прочитать текущую политику способов создания операторов (`GET /v1/provisioning-policy`). `policy_set=false` → политика не задана (дефолт: всё разрешено). |
-| `provisioning.update` | Сменить политику (`PUT /v1/provisioning-policy`, replace-семантика). Пустой список → 422 (anti-lockout); метод вне `{user,ldap,oidc}` → 422. Аудируется (`provisioning.policy_changed`). |
+| `provisioning.read` | Read the current statement creation method policy (`GET /v1/provisioning-policy`). `policy_set=false` → policy is not set (default: everything is allowed). |
+| `provisioning.update` | Change policy (`PUT /v1/provisioning-policy`, replace semantics). Empty list → 422 (anti-lockout); method outside `{user,ldap,oidc}` → 422. Audited (`provisioning.policy_changed`). |
 
 ### Audit (1) — [ADR-022](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)
 
-Read-only-доступ к ленте audit-событий (`audit_log`) через `GET /v1/audit` (UI iteration 2). Сам факт чтения audit-таблицы НЕ пишется в audit (избегаем рекурсии — каждый GET удваивал бы таблицу).
+Read-only access to the audit event feed (`audit_log`) via `GET /v1/audit` (UI iteration 2). The very fact of reading the audit table is NOT written to audit (we avoid recursion - each GET would double the table).
 
-| Permission | Семантика |
+| Permission | Semantics |
 |---|---|
-| `audit.read` | Чтение `audit_log` с фильтрами (`type` multi-value, `source` multi-value, `archon_aid`, `correlation_id`, `started_after`/`started_before`). Селектор — NoSelector в MVP; per-AID/coven-scope на audit-trail — отдельный slice при необходимости. |
+| `audit.read` | Reading `audit_log` with filters (`type` multi-value, `source` multi-value, `archon_aid`, `correlation_id`, `started_after`/`started_before`). Selector - NoSelector in MVP; per-AID/coven-scope on audit-trail - a separate slice if necessary. |
 
 ### Cloud (6) — [cloud.md](cloud.md)
 
-CRUD реестров Cloud-Provider-ов (`providers`) и Cloud-Profile-ей (`profiles`, ADR-017). Полная поверхность **реализована** (REST `/v1/providers*` + `/v1/profiles*` и MCP `keeper.provider.*` / `keeper.profile.*`). Селектор — **NoSelector** (CRUD оперирует самим реестром, паттерн `push-provider.*` / `service.*`). **`update`-permission НЕТ** — Provider/Profile иммутабельны (смена параметров = `delete` + `create`); read-видимость (list + get) гейтит одна permission `*.read` (паттерн `operator.list`↔`read`). Мутирующие пишут audit, read-only — нет.
+CRUD registries of Cloud-Providers (`providers`) and Cloud-Profiles (`profiles`, ADR-017). Full surface **implemented** (REST `/v1/providers*` + `/v1/profiles*` and MCP `keeper.provider.*` / `keeper.profile.*`). The selector is **NoSelector** (CRUD operates on the registry itself, pattern `push-provider.*` / `service.*`). **`update`-permission NO** - Provider/Profile are immutable (change parameters = `delete` + `create`); read-visibility (list + get) gates one permission `*.read` (pattern `operator.list`↔`read`). Those who mutate write audit, read-only - no.
 
-| Permission | Семантика | Audit-event |
+| Permission | Semantics | Audit-event |
 |---|---|---|
-| `provider.create` | Создание Provider record в Postgres (`POST /v1/providers`) — настроенная учётка облака. `409 provider-already-exists` на дубль `name`; `credentials_ref` обязан быть `vault:<path>` (creds не резолвятся в API). | `provider.created` |
-| `provider.read` | Перечисление Provider-ов (`GET /v1/providers`) и чтение одного (`GET /v1/providers/{name}`) — паттерн one-permission-on-read. | — (read-only) |
-| `provider.delete` | Удаление Provider record (`DELETE /v1/providers/{name}`). `409 provider-has-profiles`, если на Provider ссылаются Profile-и (FK `ON DELETE RESTRICT`, миграция 020) — сперва удалить зависимые Profile-и. | `provider.deleted` |
-| `profile.create` | Создание Profile record (`POST /v1/profiles`) — многоразовый VM-spec поверх Provider-а. `409 profile-already-exists` на дубль `name`; `422 validation-failed` на ссылку на несуществующий Provider (FK). | `profile.created` |
-| `profile.read` | Перечисление Profile-ей (`GET /v1/profiles`, опц. фильтр `provider=`) и чтение одного (`GET /v1/profiles/{name}`). | — (read-only) |
-| `profile.delete` | Удаление Profile record (`DELETE /v1/profiles/{name}`). | `profile.deleted` |
+| `provider.create` | Creating a Provider record in Postgres (`POST /v1/providers`) - a configured cloud account. `409 provider-already-exists` per take `name`; `credentials_ref` must be `vault:<path>` (creds are not resolved in the API). | `provider.created` |
+| `provider.read` | Enumerating Providers (`GET /v1/providers`) and reading one (`GET /v1/providers/{name}`) is the one-permission-on-read pattern. | — (read-only) |
+| `provider.delete` | Deleting Provider record (`DELETE /v1/providers/{name}`). `409 provider-has-profiles`, if the Provider is referenced by Profiles (FK `ON DELETE RESTRICT`, migration 020) - first delete dependent Profiles. | `provider.deleted` |
+| `profile.create` | Creating a Profile record (`POST /v1/profiles`) - a reusable VM-spec on top of the Provider. `409 profile-already-exists` per take `name`; `422 validation-failed` to a reference to a non-existent Provider (FK). | `profile.created` |
+| `profile.read` | Enumerating Profiles (`GET /v1/profiles`, optional filter `provider=`) and reading one (`GET /v1/profiles/{name}`). | — (read-only) |
+| `profile.delete` | Deleting Profile record (`DELETE /v1/profiles/{name}`). | `profile.deleted` |
 
-### Augur (6) — [ADR-025](../adr/0025-augur.md#adr-025-augur--keeper-side-брокер-внешнего-доступа-soul) / [augur.md](augur.md)
+### Augur (6) - [ADR-025](../adr/0025-augur.md) / [augur.md](augur.md)
 
-CRUD реестров брокера внешнего доступа Augur (Omen — внешняя система, Rite — grant). OpenAPI / MCP-поверхность стартует как **stub-каталог** ([augur.md](augur.md)); permissions нормированы здесь.
+CRUD registries of the external access broker Augur (Omen - external system, Rite - grant). OpenAPI / MCP surface starts as **stub directory** ([augur.md](augur.md)); permissions are normalized here.
 
-| Permission | Семантика |
+| Permission | Semantics |
 |---|---|
-| `omen.create` | Создание Omen record в Postgres (`omens`) — внешняя система (vault / prometheus / elk) с vault-ref на master-cred. |
-| `omen.list` | Перечисление Omen-ов в реестре. |
-| `omen.delete` | Удаление Omen record (каскадно убирает связанные Rite — `rites.omen ON DELETE CASCADE`). |
-| `rite.create` | Создание Rite record в Postgres (`rites`) — grant субъекта (coven/sid) на Omen с allow-list и `delegate`. |
-| `rite.list` | Перечисление Rite-ов в реестре. |
-| `rite.delete` | Удаление Rite record. |
+| `omen.create` | Creating an Omen record in Postgres (`omens`) - external system (vault/prometheus/elk) with vault-ref to master-cred. |
+| `omen.list` | Listing Omens in the registry. |
+| `omen.delete` | Removing Omen record (cascade removes related Rites - `rites.omen ON DELETE CASCADE`). |
+| `rite.create` | Creating a Rite record in Postgres (`rites`) - grant a subject (coven/sid) to Omen with allow-list and `delegate`. |
+| `rite.list` | Listing Rites in the registry. |
+| `rite.delete` | Removing Rite record. |
 
-> **Live-fetch от Soul (`AugurRequest`) RBAC-permission не контролируется** — это не операторская операция через OpenAPI / MCP, а машинный запрос Soul-а по gRPC EventStream. Авторизация live-fetch — отдельный механизм Augur-а (Omen + Rite + allow-list по mTLS→SID→covens, [augur.md → Авторизация](augur.md#6-авторизация-keeper-side)), не RBAC-permission Архонта.
+> **Live-fetch from Soul (`AugurRequest`) RBAC-permission is not controlled** - this is not an operator operation via OpenAPI / MCP, but a machine request from Soul via gRPC EventStream. Live-fetch authorization is a separate Augur mechanism (Omen + Rite + allow-list by mTLS→SID→covens, [augur.md → Authorization](augur.md)), not the Archon's RBAC-permission.
 
-### Oracle (6) — [ADR-030](../adr/0030-vigil-oracle.md#adr-030-vigil--oracle--event-driven-мониторинг-beacons--reactor)
+### Oracle (6) - [ADR-030](../adr/0030-vigil-oracle.md)
 
-CRUD реестров beacons-контура Oracle (Vigil — Soul-side проверка, Decree — правило reactor). OpenAPI (`POST/GET/DELETE /v1/vigils*` + `/v1/decrees*`) и MCP (`keeper.oracle.vigil.*` / `keeper.oracle.decree.*`) — поверхность реализована (S3). Все шесть проверяются `RequirePermission`-middleware (selector — NoSelector, как `omen.*`/`rite.*`); провал → 403 `forbidden`. Мутирующие (`*.create`/`*.delete`) пишут audit, read-only `*.list` (и get) — нет.
+CRUD of Oracle beacons circuit registries (Vigil - Soul-side check, Decree - reactor rule). OpenAPI (`POST/GET/DELETE /v1/vigils*` + `/v1/decrees*`) and MCP (`keeper.oracle.vigil.*` / `keeper.oracle.decree.*`) - surface implemented (S3). All six are checked by `RequirePermission`-middleware (selector is NoSelector, like `omen.*`/`rite.*`); failure → 403 `forbidden`. Mutating ones (`*.create`/`*.delete`) write audit, read-only `*.list` (and get) do not.
 
-| Permission | Семантика | Audit-event |
+| Permission | Semantics | Audit-event |
 |---|---|---|
-| `vigil.create` | Создание Vigil record в Postgres (`vigils`) — Soul-side проверка (check — адрес core-beacon + interval + субъект coven XOR sid). | `vigil.created` |
-| `vigil.list` | Перечисление Vigil-ов в реестре (и get по имени). | — (read-only) |
-| `vigil.delete` | Удаление Vigil record (перестаёт раздаваться в `VigilSnapshot`; Decree-ы не каскадятся). | `vigil.deleted` |
-| `decree.create` | Создание Decree record в Postgres (`decrees`) — правило reactor (on_beacon × субъект × incarnation_name → named scenario; опц. where-CEL + cooldown). | `decree.created` |
-| `decree.list` | Перечисление Decree-ов в реестре (и get по имени). | — (read-only) |
-| `decree.delete` | Удаление Decree record (каскадом чистит cooldown-state `oracle_fires`). | `decree.deleted` |
+| `vigil.create` | Creating a Vigil record in Postgres (`vigils`) - Soul-side check (check - address core-beacon + interval + subject coven XOR sid). | `vigil.created` |
+| `vigil.list` | List Vigils in the registry (and get them by name). | — (read-only) |
+| `vigil.delete` | Deleting Vigil record (stops being heard in `VigilSnapshot`; Decrees do not cascade). | `vigil.deleted` |
+| `decree.create` | Creating a Decree record in Postgres (`decrees`) - reactor rule (on_beacon × subject × incarnation_name → named scenario; option where-CEL + cooldown). | `decree.created` |
+| `decree.list` | List Decrees in the registry (and get them by name). | — (read-only) |
+| `decree.delete` | Removing Decree record (cleans cooldown-state `oracle_fires` in a cascade). | `decree.deleted` |
 
-> **Reactor-флоу (`Portent` → match Decree → enqueue scenario) RBAC-permission не контролируется** — это машинный Soul-инициированный путь по gRPC EventStream, не операторская операция. Защита — субъектная привязка Decree (coven XOR sid) + membership-check + default-deny + whitelist scenario ([ADR-030(b)](../adr/0030-vigil-oracle.md#adr-030-vigil--oracle--event-driven-мониторинг-beacons--reactor)), не RBAC-permission Архонта.
+> **Reactor-flow (`Portent` → match Decree → enqueue scenario) RBAC-permission is not controlled** - this is a machine Soul-initiated path via gRPC EventStream, not an operator operation. Protection - subject binding Decree (coven XOR sid) + membership-check + default-deny + whitelist scenario ([ADR-030(b)](../adr/0030-vigil-oracle.md)), not RBAC-permission of the Archon.
 
 ### Plugin Sigil (3)
 
-[ADR-026](../adr/0026-sigil.md#adr-026-sigil--целостность-плагинов-keeper-signed-digest-индекс) / [plugins.md → Integrity-model](plugins.md#integrity-model). Управление allow-list-ом целостности плагинов **Sigil** — явный допуск Архонтом конкретного бинаря в реестр `plugin_sigils`. OpenAPI-поверхность **реализована** (S4a, `POST/GET/DELETE /v1/plugins/sigils*`); MCP — S4b. Все три проверяются `RequirePermission`-middleware (selector — NoSelector, как `operator.*`/`role.*`); провал → 403 `forbidden`. Мутирующие (`plugin.allow`/`plugin.revoke`) пишут audit (см. ниже), read-only `plugin.list` — нет.
+[ADR-026](../adr/0026-sigil.md) / [plugins.md → Integrity-model](plugins.md#integrity-model). Managing the allow-list of plugin integrity **Sigil** - explicit permission by the Archon of a specific binary to the registry `plugin_sigils`. OpenAPI surface **implemented** (S4a, `POST/GET/DELETE /v1/plugins/sigils*`); MCP - S4b. All three are checked by `RequirePermission`-middleware (selector is NoSelector, like `operator.*`/`role.*`); failure → 403 `forbidden`. Mutating ones (`plugin.allow`/`plugin.revoke`) write audit (see below), read-only `plugin.list` - no.
 
-| Permission | Семантика | Audit-event |
+| Permission | Semantics | Audit-event |
 |---|---|---|
-| `plugin.allow` | Допуск `(namespace, name, ref)` в allow-list `plugin_sigils` — Keeper читает бинарь активного слота кеша через `current`-symlink (R-nested `<ns>-<name>/<commit_sha>/`), считает `sha256`, подписывает и вставляет запись. `ref` — git-verified (Keeper резолвит `source`+`ref` в `commit_sha`-слот через go-git, [ADR-026(g)](../adr/0026-sigil.md#adr-026-sigil--целостность-плагинов-keeper-signed-digest-индекс)). Человеко-подтверждаемая операция supply-chain-контроля. | `plugin.allowed` |
-| `plugin.revoke` | Отзыв ранее допущенной записи из `plugin_sigils` (бинарь перестаёт проходить Sigil-верификацию). | `plugin.revoked` |
-| `plugin.list` | Перечисление активных записей allow-list-а `plugin_sigils` (без signature/manifest). | — (read-only) |
+| `plugin.allow` | Allowance `(namespace, name, ref)` in allow-list `plugin_sigils` — Keeper reads the binary of the active cache slot via `current`-symlink (R-nested `<ns>-<name>/<commit_sha>/`), reads `sha256`, signs and inserts the record. `ref` - git-verified (Keeper resolves `source`+`ref` into `commit_sha` slot via go-git, [ADR-026(g)](../adr/0026-sigil.md)). Human-verified supply-chain control operation. | `plugin.allowed` |
+| `plugin.revoke` | Revocation of a previously accepted entry from `plugin_sigils` (the binary no longer passes Sigil verification). | `plugin.revoked` |
+| `plugin.list` | Enumeration of active entries of the allow-list `plugin_sigils` (without signature/manifest). | — (read-only) |
 
-> **Верификация Sigil перед seal/exec RBAC-permission не контролируется** — это host-side проверка digest + подписи Keeper-а ([ADR-026(b)](../adr/0026-sigil.md#adr-026-sigil--целостность-плагинов-keeper-signed-digest-индекс)), а не операторская операция. Прочие plugin-management операции (`plugin.install` / `plugin.update` доставки/кеша) — отдельный PR при появлении соответствующего API.
+> **Sigil verification before seal/exec RBAC-permission is not controlled** - this is a host-side verification of the Keeper's digest + signature ([ADR-026(b)](../adr/0026-sigil.md)), and not an operator operation. Other plugin-management operations (`plugin.install` / `plugin.update` delivery/cache) - separate PR when the corresponding API appears.
 
-### Sigil signing keys (4) — [ADR-026(h)](../adr/0026-sigil.md#adr-026-sigil--целостность-плагинов-keeper-signed-digest-индекс) / R3
+### Sigil signing keys (4) - [ADR-026(h)](../adr/0026-sigil.md) / R3
 
-Ротация trust-anchor-**ключей подписи** Sigil (реестр `sigil_signing_keys`, отдельный от допусков `plugin_sigils`). OpenAPI **реализована** (`POST/GET /v1/sigil/keys`, `POST /v1/sigil/keys/{key_id}/primary`, `DELETE /v1/sigil/keys/{key_id}`) + MCP `keeper.sigil.key.*`. Все четыре — `RequirePermission`-middleware (selector NoSelector, как `plugin.*`); провал → 403. Мутирующие пишут audit, read-only `sigil.key-list` — нет. **Resource `sigil`, action — hyphenated** (`key-introduce`): грамматика permission — ровно `<resource>.<action>` (3-сегментный `sigil.key.introduce` — это MCP-tool, не permission); соответствие `keeper.sigil.key.<verb>` ↔ `sigil.key-<verb>`.
+Rotation of trust-anchor-**signing keys** Sigil (registry `sigil_signing_keys`, separate from permissions `plugin_sigils`). OpenAPI **implemented** (`POST/GET /v1/sigil/keys`, `POST /v1/sigil/keys/{key_id}/primary`, `DELETE /v1/sigil/keys/{key_id}`) + MCP `keeper.sigil.key.*`. All four are `RequirePermission`-middleware(selector NoSelector like `plugin.*`); failure → 403. Mutating ones write audit, read-only `sigil.key-list` - no. **Resource `sigil`, action - hyphenated** (`key-introduce`): permission grammar - exactly `<resource>.<action>` (3-segment `sigil.key.introduce` is MCP-tool, not permission); correspondence `keeper.sigil.key.<verb>` ↔ `sigil.key-<verb>`.
 
-| Permission | Семантика | Audit-event |
+| Permission | Semantics | Audit-event |
 |---|---|---|
-| `sigil.key-introduce` | Ввод нового ключа подписи: Keeper генерирует ed25519-пару, пишет приватник в Vault KV (`secret/keeper/sigil-keys/<key_id>`), вставляет публичную часть в реестр. Приватник НИКОГДА не в ответе/логе. | `sigil.key-introduced` |
-| `sigil.key-set-primary` | Сделать active-ключ primary (новые Sigil-ы подписываются им после cluster reload). | `sigil.key-primary-set` |
-| `sigil.key-retire` | Вывод ключа из набора (Soul забывает при следующем `SigilTrustAnchors`). Запрещено для primary напрямую и для последнего active. | `sigil.key-retired` |
-| `sigil.key-list` | Перечисление active-ключей подписи (primary первым, без `vault_ref`). | — (read-only) |
+| `sigil.key-introduce` | Entering a new signing key: Keeper generates an ed25519 pair, writes the private key to Vault KV (`secret/keeper/sigil-keys/<key_id>`), inserts the public part into the registry. Private is NEVER in the response/log. | `sigil.key-introduced` |
+| `sigil.key-set-primary` | Make the active key primary (new Sigils are signed with it after the cluster reload). | `sigil.key-primary-set` |
+| `sigil.key-retire` | Deriving a key from a set (Soul forgets the next time `SigilTrustAnchors`). Prohibited for primary directly and for last active. | `sigil.key-retired` |
+| `sigil.key-list` | Enumeration of active signature keys (primary first, without `vault_ref`). | — (read-only) |
 
 ### Bootstrap
 
-**Bootstrap-specific permissions отсутствуют.** `keeper init` ([ADR-013](../adr/0013-bootstrap-archon.md#adr-013-bootstrap-первого-архонта)) действует под admin-bypass: проверяется только инвариант «реестр `operators` пуст» под PG advisory lock, никаких permission-проверок. Первый Архонт получает роль `cluster-admin` (`permissions: ["*"]`).
+**Bootstrap-specific permissions are missing.** `keeper init` ([ADR-013](../adr/0013-bootstrap-archon.md)) operates under admin-bypass: only the "registry `operators` is empty" invariant is checked under PG advisory lock, no permission checks. The First Archon receives the role `cluster-admin` (`permissions: ["*"]`).
 
-## Встроенные роли
+## Built-in roles
 
-В MVP закреплена ровно одна встроенная роль:
+MVP has exactly one built-in role:
 
-- **`cluster-admin`** — `permissions: ["*"]`, `builtin=true`. Вставляется **seed-миграцией** (E1, [ADR-028(b)](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)) в `rbac_roles` + `rbac_role_permissions` ещё до любого `keeper init`. Привязывается к первому Архонту при `keeper init` — это **membership-строка** `(cluster-admin, <aid>)` в `rbac_role_operators` (фикс BUG-1, [ADR-028(c)](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)). Флаг `builtin=true` защищает её от `role.delete` / `role.update`. Дополнительные операторы получают эту роль через `role.grant-operator` (оператором с этим правом).
+- **`cluster-admin`** — `permissions: ["*"]`, `builtin=true`. Inserted by **seed migration** (E1, [ADR-028(b)](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)) into `rbac_roles` + `rbac_role_permissions` before any `keeper init`. Binds to the first Archon at `keeper init` - this is the **membership string** `(cluster-admin, <aid>)` in `rbac_role_operators` (fix BUG-1, [ADR-028(c)](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)). The `builtin=true` flag protects it from `role.delete` / `role.update`. Additional operators are assigned this role through `role.grant-operator` (an operator with this privilege).
 
-Остальные роли создаются через OpenAPI/MCP (`role.create` + `role.grant-operator`); специальной встроенной семантики у них нет.
+The remaining roles are created via OpenAPI/MCP (`role.create` + `role.grant-operator`); they do not have special built-in semantics.
 
-**Инвариант self-lockout ([ADR-028(f)](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)).** Нельзя оставить кластер без хотя бы одного активного Архонта (`revoked_at IS NULL`) с эффективным `*`-permission. Проверяется на всех путях, которые могут это нарушить:
+**Invariant self-lockout ([ADR-028(f)](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)).** You cannot leave a cluster without at least one active Archon (`revoked_at IS NULL`) with an effective `*`-permission. Checked on all paths that could break this:
 
-- `operator.revoke` — отзыв последнего Архонта с `*` ([ADR-013(c)](../adr/0013-bootstrap-archon.md#adr-013-bootstrap-первого-архонта)).
-- `role.delete` — удаление роли (`cluster-admin` или иной), дающей единственный путь к `*`.
-- `role.update` — снятие permission `*` у роли, через которую держится единственный эффективный `*`.
-- `role.revoke-operator` — снятие последнего AID с эффективным `*`.
+- `operator.revoke` - recall of the last Archon from `*` ([ADR-013(c)](../adr/0013-bootstrap-archon.md)).
+- `role.delete` - removing the role (`cluster-admin` or other) that provides the only path to `*`.
+- `role.update` — removing permission `*` from the role through which the only effective `*` is maintained.
+- `role.revoke-operator` - removes the last AID with the effective `*`.
 
-При попытке API возвращает `409` (`would-lock-out-cluster`, [naming-rules.md → Error codes](../naming-rules.md#error-codes)). Единственный путь восстановления после lockout-а — wipe Postgres + повторный `keeper init`, что неприемлемо для прода — отсюда инвариант.
+When trying, the API returns `409` (`would-lock-out-cluster`, [naming-rules.md → Error codes](../naming-rules.md#error-codes)). The only way to recover from a lockout is to wipe Postgres + repeat `keeper init`, which is unacceptable for sales - hence the invariant.
 
-## Применение
+## Application
 
-RBAC проверяется **до** выполнения операции, независимо от транспорта:
+RBAC is checked **before** the operation is executed, regardless of the transport:
 
-- **OpenAPI** — на входе HTTP-handler-а, до бизнес-логики.
-- **MCP** — на входе MCP-tool, до выполнения.
-- **`keeper.push`** — перед открытием SSH-сессии и перед стартом каждого шага Destiny на push-хосте.
+- **OpenAPI** - at the input of the HTTP handler, before the business logic.
+- **MCP** - at the MCP-tool input, before execution.
+- **`keeper.push`** - before opening an SSH session and before starting each Destiny step on a push host.
 
-Аудит-события пишутся в журнал прогонов ([storage.md](storage.md)) с указанием AID-оператора, ресурса, действия, результата проверки RBAC и (при отказе) причины.
+Audit events are written to the run log ([storage.md](storage.md)) indicating the AID operator, resource, action, RBAC check result and (if failure) reason.
 
-### Двухслойная авторизация read-эндпоинтов (ADR-047 §г G1)
+### Two-layer authorization of read endpoints (ADR-047 §g G1)
 
-Read-эндпоинты с scoped-видимостью (souls-list/get/soulprint/history; ADR-047) авторизуются **в два слоя**, потому что один gate-слой не может одновременно «пропустить держателя права» и «сузить видимость по scope»:
+Read endpoints with scoped visibility (souls-list/get/soulprint/history; ADR-047) are authorized **in two layers**, because one gate layer cannot simultaneously "pass the right holder" and "narrow visibility by scope":
 
-1. **Gate (existence) — `RequireAction` поверх `HoldsAction`.** Спрашивает только: держит ли оператор `<resource>.<action>` **в принципе**, в любом scope, игнорируя селектор-контекст. Не держит → `403`.
-2. **Scope-сужение — handler.** После фетча строк handler урезает выдачу до scope-границы оператора через per-resource резолвер: `keeper/internal/soulpurview` (coven-pushdown в SQL / regex-keyset / soulprint-page-CEL) для списка и `InScope` для одиночного объекта; `keeper/internal/statepredicate` (state-CEL) для инкарнаций. Вне scope: список — пусто, single-get/soulprint/history — `404`/`403`.
+1. **Gate (existence) - `RequireAction` over `HoldsAction`.** It only asks: does the `<resource>.<action>` operator hold **in principle**, in any scope, ignoring the context selector. Doesn't hold → `403`.
+2. **Scope-narrowing - handler.** After the row fetch, handler reduces output to the scope-boundary of the operator through the per-resource resolver: `keeper/internal/soulpurview` (coven-pushdown in SQL / regex-keyset / soulprint-page-CEL) for a list and `InScope` for a single object; `keeper/internal/statepredicate` (state-CEL) for incarnations. Outside scope: list is empty, single-get/soulprint/history is `404`/`403`.
 
-**Почему два слоя, а не scope-aware gate.** Scope-aware `Check(aid, resource, action, context)` для **scoped**-permission с пустым контекстом даёт ложный `deny`: селектор-ключ (`coven`/`host`/…) отсутствует в `nil`-контексте read-запроса, а enforcer на отсутствующий ключ возвращает deny (та же механика, что у incarnation-гейтов до ADR-008 amendment a). Это ломало доступ scoped-оператора к **собственному** списку — `RequirePermission(...Selector)` отрезал его ещё **до** handler-а, хотя по своему scope он видеть хосты обязан. Корень: read-эндпоинт **не несёт scope-контекст на gate-этапе** — scope (`coven` хоста, `state` инкарнации) резолвится из строк БД, которых на момент middleware-проверки ещё нет. `HoldsAction` снимает контекст из вопроса (existence, а не applicability), а реальное сужение откладывается в handler, где строки уже зафетчены.
+**Why two layers and not a scope-aware gate.** Scope-aware `Check(aid, resource, action, context)` for **scoped**-permission with an empty context gives false `deny`: the selector-key (`coven`/`host`/…) is missing in the `nil` context of the read request, and enforcer for a missing key, deny is returned (the same mechanics as in incarnation gates before ADR-008 amendment a). This broke the scoped operator's access to **its own** list - `RequirePermission(...Selector)` cut it off even **before** the handler, although by its scope it is required to see hosts. Root: read endpoint **does not carry a scope context at the gate stage** - scope (`coven` host, `state` incarnation) is resolved from database lines that do not yet exist at the time of the middleware check. `HoldsAction` removes the context from the question (existence, not applicability), and the real narrowing is deferred to the handler, where the lines are already fetched.
 
-**Бо́льшая часть мутаций остаётся на scope-aware `Check`.** issue-token / ssh-target-update / coven-assign по souls несут scope-контекст из path/body (`host=<sid>` из path, `coven=<label>` из body), поэтому продолжают гейтиться scope-aware `RequirePermission` / `RequirePermissionMulti` — для них контекст известен до handler-а и ложного deny нет. Граница для них: **read** (контекст из строк БД, ещё нет) → `RequireAction`; **scope-aware мутация** (контекст из path/body) → `RequirePermission`.
+**Most of the mutations remain on scope-aware `Check`.** issue-token / ssh-target-update / coven-assign by souls carry the scope-context from path/body (`host=<sid>` from path, `coven=<label>` from body), so they continue to gate scope-aware `RequirePermission` / `RequirePermissionMulti` - for them the context is known before the handler and there is no false deny. The boundary for them is: **read** (context from database rows, not yet) → `RequireAction`; **scope-aware mutation** (context from path/body) → `RequirePermission`.
 
-**Исключение — `soul.traits-assign` (`POST /v1/souls/traits`).** Эта bulk-мутация гейтится **existence-gate-ом `RequireAction`**, а НЕ селекторным `RequirePermission`, хотя контекст и есть в теле. Причина — другая, чем у read-эндпоинтов: trait-**ключ** (в отличие от Coven-метки у `coven-assign`) **не является scope-измерением RBAC**, поэтому селекторного гейта по ключу (гейт b) для неё нет — селекторный `RequirePermission` тут не сузил бы scope, а отрезал бы coven-scoped оператора (его `coven=dev`-permission не сматчила бы запрос без coven-контекста на gate-этапе), хотя менять traits на своих dev-хостах он вправе. Least-privilege для traits держится **единым гейтом a** на уровне service-слоя (`soul.BulkAssignTraits`/`BulkReplaceTraits`): целевые хосты ⊆ coven-scope оператора (тот же `BulkScope`, что у `coven-assign`) — поэтому traits-write **не слабее** coven-write по строгости. RBAC-scope по самим traits как селектор-измерение реализован **на incarnation-стороне** (`trait=key:value` сужает read-видимость `incarnation.list`/`get`, slice 1 — [§ Грамматика селектора](#грамматика-селектора)); на этот per-soul bulk-write он **не** распространяется (per-soul `soul.traits-assign` deprecated, [ADR-060](../adr/0060-traits.md) R1 slice a).
+**The exception is `soul.traits-assign` (`POST /v1/souls/traits`).** This bulk mutation is gated by the **existence-gate `RequireAction`**, and NOT by the selector `RequirePermission`, although the context is in the body. The reason is different from that of read endpoints: trait-**key** (unlike the Coven-tag of `coven-assign`) **is not a scope-dimension of RBAC**, therefore there is no selector gate by key (gate b) for it - the selector `RequirePermission` here would not narrow the scope, but would cut off the coven-scoped operator (its `coven=dev`-permission would not match a request without a coven context at the gate stage), although he has the right to change traits on his dev hosts. Least-privilege for traits is maintained **by a single gate a** at the service-layer level (`soul.BulkAssignTraits`/`BulkReplaceTraits`): target hosts ⊆ coven-scope operator (the same `BulkScope` as `coven-assign`) - therefore traits-write is **not weaker** than coven-write in terms of severity. RBAC-scope on the traits themselves as a selector-dimension is implemented **on the incarnation side** (`trait=key:value` narrows the read-visibility of `incarnation.list`/`get`, slice 1 - § Selector grammar); it **does not** apply to this per-soul bulk-write (per-soul `soul.traits-assign` deprecated, [ADR-060](../adr/0060-traits.md) R1 slice a).
 
-### Revoked-семантика на read-путях (ADR-047 §г G1)
+### Revoked semantics on read paths (ADR-047 §g G1)
 
-`ResolvePurview` стал **revoked-aware**: для отозванного (`operators.revoked_at IS NOT NULL`) оператора возвращает `Purview{Deny:true}` (терминальный флаг, [naming-rules.md → Purview](../naming-rules.md#purview--scope-резолвер-adr-047)) **до** сбора любых scope-измерений — иначе bare `*`-роль revoked-оператора вернула бы `Unrestricted`. Это **единая точка**, отрезающая revoked на всех read-souls-путях, потому что все они деривируются из `ResolvePurview`:
+`ResolvePurview` has become **revoked-aware**: for a revoked (`operators.revoked_at IS NOT NULL`) operator returns `Purview{Deny:true}` (terminal flag, [naming-rules.md → Purview](../naming-rules.md)) **before** collecting any scope dimensions - otherwise bare `*`-role The revoked operator would return `Unrestricted`. This is a **single point** cutting off revoked on all read-souls paths, because they are all derived from `ResolvePurview`:
 
 - **gate** — `HoldsAction`→`Deny`→`false`→`403`;
-- **list** — `soulpurview.Resolve`→Empty-scope→пустой список;
+- **list** — `soulpurview.Resolve`→Empty-scope→empty list;
 - **single-get / soulprint / history** — `readScope`→Empty→`InScope`→`false`→`404`.
 
-Per-host **history** (`GET /v1/souls/{sid}/history`) проходит **тот же** handler-`InScope`-gate, что get/soulprint — видимость хоста проверяется до раскрытия timeline, revoked отрезается там же. Это первое реальное использование поля `Purview.Deny` (до G1 — заготовка, всегда `false`).
+Per-host **history** (`GET /v1/souls/{sid}/history`) goes through the **same** handler-`InScope`-gate as get/soulprint - the visibility of the host is checked before the timeline is expanded, revoked is cut off there. This is the first real use of the `Purview.Deny` field (before G1 - blank, always `false`).
 
-На read revoked = «нет доступа» (`403`/`404`), а НЕ `401`-паритет scope-aware `Check`-а (который маппит revoked в `401 operator-revoked`): видимость флота не должна различать revoked и no-permission.
+On read revoked = "no access" (`403`/`404`), and NOT `401`'s scope-aware parity `Check` (which mapped revoked to `401 operator-revoked`): fleet visibility should not differentiate between revoked and no-permission.
 
-## Bootstrap первого Архонта
+## Bootstrap of the first Archon
 
-Закреплено [ADR-013](../adr/0013-bootstrap-archon.md#adr-013-bootstrap-первого-архонта). Кратко:
+Pinned [ADR-013](../adr/0013-bootstrap-archon.md). Briefly:
 
-- **Имя сущности — Archon** (Архонт). См. [naming-rules.md → Сущности предметной области](../naming-rules.md#сущности-предметной-области).
-- **Механизм выпуска первой credential** — administrative subcommand `keeper init`:
+- **Entity name is Archon** (Archon). See [naming-rules.md → Domain Entities](../naming-rules.md).
+- **Mechanism for issuing the first credential** - administrative subcommand `keeper init`:
 
   ```bash
   keeper init --archon=archon-alice --config=/etc/keeper/keeper.yml
   ```
 
-  - Команда требует пустого реестра `operators` в Postgres (защита через PG advisory lock + явный `--initialize` флаг для обычного старта Keeper-а до bootstrap-а).
-  - Создаёт первого Архонта с указанным **AID** ([Archon ID](../naming-rules.md#идентификаторы)), привязывает к нему роль `cluster-admin` (`permissions: ["*"]`) — пишет membership-строку `(cluster-admin, <aid>)` в `rbac_role_operators` (роль `cluster-admin` уже есть из seed-миграции E1, [ADR-028(b/c)](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres); это фикс BUG-1).
-  - Выпускает JWT-credential (форма — [ADR-014](../adr/0014-operator-identity.md#adr-014-identity-модель-оператора-archon)) и кладёт в файл с `mode 0400`. Этот токен — единственный путь оператора в систему после bootstrap-а.
-  - При повторном вызове на уже инициализированной БД отказывается.
-- **Restart-семантика.** Если `operators` пуст и `--initialize` не указан — Keeper отказывается стартовать с подсказкой запустить `keeper init`. Это защита от случайного re-bootstrap-а после catastrophic wipe Postgres.
-- **HA race-condition.** PG advisory lock на этапе `keeper init` исключает гонку N инстансов кластера.
+  - The command requires an empty registry `operators` in Postgres (protection via PG advisory lock + explicit `--initialize` flag for normal start of Keeper before bootstrap).
+  - Creates the first Archon with the specified **AID** ([Archon ID](../naming-rules.md)), binds the role `cluster-admin` (`permissions: ["*"]`) to it - writes the membership string `(cluster-admin, <aid>)` to `rbac_role_operators` (the role `cluster-admin` already exists from the E1 seed migration, [ADR-028(b/c)](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres); this is a BUG-1 fix.
+  - Issues a JWT-credential (form - [ADR-014](../adr/0014-operator-identity.md)) and puts it in a file with `mode 0400`. This token is the operator's only path into the system after bootstrap.
+  - When called again on an already initialized database, it refuses.
+- **Restart semantics.** If `operators` is empty and `--initialize` is not specified, Keeper refuses to start with a prompt to run `keeper init`. This is protection against accidental re-bootstrap after a catastrophic wipe of Postgres.
+- **HA race-condition.** PG advisory lock at stage `keeper init` excludes the race of N instances of the cluster.
 
-После выпуска первого Архонта все остальные операторы создаются через обычный OpenAPI/MCP с RBAC-проверкой — Архонт с правом `operator.create` заводит новых, в `operators` они получают FK `created_by_aid` на родителя.
+After the release of the first Archon, all other operators are created through the usual OpenAPI/MCP with RBAC checking - An Archon with the right `operator.create` creates new ones, in `operators` they receive FK `created_by_aid` for the parent.
 
-## Примеры ролей
+## Role examples
 
-Роли заводятся через OpenAPI/MCP (`role.create` для роли + permissions, `role.grant-operator` для membership — [§ Каталог permissions](#каталог-permissions)). Ниже — логическая модель (что лежит в `rbac_roles` / `rbac_role_permissions` / `rbac_role_operators`); permission-строки следуют грамматике [§ Формат permissions](#формат-permissions).
+Roles are created via OpenAPI/MCP (`role.create` for role + permissions, `role.grant-operator` for membership - § Permissions directory). Below is the logical model (which lies in `rbac_roles` / `rbac_role_permissions` / `rbac_role_operators`); permission lines follow the grammar § permissions format.
 
-**Простые роли — без селектора:**
+**Simple roles - no selector:**
 
 ```
 role: soul-reader
@@ -635,7 +635,7 @@ role: cloud-admin
   operators:   ["archon-cloud-01"]
 ```
 
-**Сложная роль — с селекторами:**
+**Complicated role - with selectors:**
 
 ```
 role: db-operator
@@ -647,9 +647,9 @@ role: db-operator
   operators: ["archon-db-01", "archon-db-02"]
 ```
 
-`db-operator` может: делать любые операции над incarnation-ами сервисов `redis` и `vault-cluster` (включая `upgrade`); делать push-apply на хосты с coven `db` или `cache`; видеть список Souls. Прочее — запрещено (`default_policy: deny`).
+`db-operator` can: do any operations on incarnations of services `redis` and `vault-cluster` (including `upgrade`); do push-apply to hosts with coven `db` or `cache`; see the Souls list. Other - prohibited (`default_policy: deny`).
 
-**Точечная роль — по конкретному instance:**
+**Point role - for a specific instance:**
 
 ```
 role: redis-prod-only
@@ -660,9 +660,9 @@ role: redis-prod-only
   operators: ["archon-oncall-01"]
 ```
 
-Дежурный по `redis-prod` может запускать сценарии и читать состояние только этого instance.
+The `redis-prod` attendant can run scripts and read the state of only this instance.
 
-**Per-Coven / per-Service роли (ADR-008 amendment a):**
+**Per-Coven / per-Service roles (ADR-008 amendment a):**
 
 ```
 role: prod-operator
@@ -677,19 +677,19 @@ role: redis-fleet
   operators: ["archon-redis-team"]
 ```
 
-- `prod-operator` может запускать и сносить incarnation-ы, у которых declared `covens` содержит `prod` (либо имя incarnation = `prod`) — env-scope по Coven-метке, независимо от сервиса. incarnation с `covens=[dev]` он не тронет.
-- `redis-fleet` может выполнять любые incarnation-операции над incarnation-ами сервиса `redis` (`incarnation.service == "redis"`), независимо от их env-тегов.
-- При create правило `coven=prod` не даст создать incarnation с тегом вне `prod`: scope резолвится из declared `covens` тела запроса ∪ `{name}` (см. [§ Грамматика селектора](#грамматика-селектора)).
+- `prod-operator` can launch and demolish incarnations whose declared `covens` contains `prod` (or incarnation name = `prod`) - env-scope by Coven label, regardless of the service. he will not touch incarnation with `covens=[dev]`.
+- `redis-fleet` can perform any incarnation operations on incarnations of the `redis` (`incarnation.service == "redis"`) service, regardless of their env tags.
+- When create, the `coven=prod` rule will not allow creating an incarnation with a tag outside `prod`: scope resolves from declared `covens` request body ∪ `{name}` (see § Selector grammar).
 
-## См. также
+## See also
 
-- [architecture.md → ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres) — перенос RBAC-storage в Postgres, фикс BUG-1, пакет решений (таблицы / permissions / self-lockout / hard-cut / фазы).
-- [operator-api.md](operator-api.md) — OpenAPI-сторона: HTTP endpoints, 1:1 mapping endpoint ↔ permission ↔ MCP-tool.
-- [mcp-tools.md](mcp-tools.md) — MCP-сторона: каталог tools, формат declaration, async-convention, error mapping.
-- [push.md](push.md) — push под единый RBAC.
-- [cloud.md](cloud.md) — RBAC на cloud-операции.
-- [storage.md](storage.md) — реестр `operators` и таблицы `rbac_roles` / `rbac_role_permissions` / `rbac_role_operators` в Postgres.
-- [architecture.md → Сквозные требования](../architecture.md#сквозные-требования-и-где-они-приземляются).
-- [architecture.md → ADR-013](../adr/0013-bootstrap-archon.md#adr-013-bootstrap-первого-архонта) и [ADR-014](../adr/0014-operator-identity.md#adr-014-identity-модель-оператора-archon) — bootstrap первого Архонта, форма credential, реестр `operators`.
-- [naming-rules.md → RBAC](../naming-rules.md#rbac-реестр-ролей-membership-и-термин-fk) — таблицы `rbac_*`, permissions `role.*`, разведение термина «FK».
-- [requirements.md](../requirements.md) — RBAC как требование из коробки.
+- [architecture.md → ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres) - transfer of RBAC-storage to Postgres, fix BUG-1, solution package (tables / permissions / self-lockout / hard-cut / phases).
+- [operator-api.md](operator-api.md) - OpenAPI side: HTTP endpoints, 1:1 mapping endpoint ↔ permission ↔ MCP-tool.
+- [mcp-tools.md](mcp-tools.md) - MCP side: tools directory, declaration format, async-convention, error mapping.
+- [push.md](push.md) - push under a single RBAC.
+- [cloud.md](cloud.md) - RBAC for cloud operations.
+- [storage.md](storage.md) - registry `operators` and tables `rbac_roles` / `rbac_role_permissions` / `rbac_role_operators` in Postgres.
+- [architecture.md → End-to-end requirements](../architecture.md).
+- [architecture.md → ADR-013](../adr/0013-bootstrap-archon.md) and [ADR-014](../adr/0014-operator-identity.md) - bootstrap of the first Archon, credential form, registry `operators`.
+- [naming-rules.md → RBAC](../naming-rules.md) - tables `rbac_*`, permissions `role.*`, dilution of the term "FK".
+- [requirements.md](../requirements.md) - RBAC as a requirement out of the box.

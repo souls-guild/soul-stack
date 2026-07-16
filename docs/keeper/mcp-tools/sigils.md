@@ -1,33 +1,33 @@
-# Sigil-key — MCP-tools ротации ключей подписи Sigil
+# Sigil-key - MCP-tools for rotating Sigil signature keys
 
-Доменная секция [каталога MCP-tools](../mcp-tools.md): tools `keeper.sigil.key.*` (ротация trust-anchor-**ключей подписи** Sigil, [ADR-026(h)](../../adr/0026-sigil.md#adr-026-sigil--целостность-плагинов-keeper-signed-digest-индекс), R3-S7). Транспорт, auth, формат tool declaration, error mapping — в корневом [mcp-tools.md](../mcp-tools.md). Источник правды по семантике — [operator-api/sigils.md](../operator-api/sigils.md). Допуски самих бинарей (allow-list, отдельная зона) — [mcp-tools/plugins.md](plugins.md).
+Domain section [MCP-tools directory](../mcp-tools.md): tools `keeper.sigil.key.*` (rotation of trust-anchor-**signature keys** Sigil, [ADR-026(h)](../../adr/0026-sigil.md), R3-S7). Transport, auth, tool declaration format, error mapping - in the root [mcp-tools.md](../mcp-tools.md). The source of truth for semantics is [operator-api/sigils.md](../operator-api/sigils.md). Tolerances of the binaries themselves (allow-list, separate zone) - [mcp-tools/plugins.md](plugins.md).
 
 ### Sigil-key (4)
 
-Ротация trust-anchor-**ключей подписи** Sigil ([ADR-026(h)](../../adr/0026-sigil.md#adr-026-sigil--целостность-плагинов-keeper-signed-digest-индекс), R3-S7; реестр `sigil_signing_keys`, отдельный от допусков `plugin_sigils`). 1:1 с REST `POST/GET /v1/sigil/keys` + `POST /v1/sigil/keys/{key_id}/primary` + `DELETE /v1/sigil/keys/{key_id}`. **3-сегментный tool-name `keeper.sigil.key.<verb>` ↔ 2-сегментная permission `sigil.key-<verb>`** (selector NoSelector). Бизнес-логика (key-gen, Vault-write, CRUD, publish `sigil:anchors-changed`) — в `sigil.KeyService`; tool — транспорт. Доступны только при сконфигурированном Sigil; иначе `internal-error` («sigil is not configured»). **Приватник НИКОГДА не в output/логе.**
+Rotation of trust-anchor-**signing keys** Sigil ([ADR-026(h)](../../adr/0026-sigil.md), R3-S7; registry `sigil_signing_keys`, separate from tolerances `plugin_sigils`). 1:1 with REST `POST/GET /v1/sigil/keys` + `POST /v1/sigil/keys/{key_id}/primary` + `DELETE /v1/sigil/keys/{key_id}`. **3-segment tool-name `keeper.sigil.key.<verb>` ↔ 2-segment permission `sigil.key-<verb>`** (selector NoSelector). Business logic (key-gen, Vault-write, CRUD, publish `sigil:anchors-changed`) - in `sigil.KeyService`; tool - transport. Available only with Sigil configured; else `internal-error` ("sigil is not configured"). **Private is NEVER in the output/log.**
 
 #### `keeper.sigil.key.introduce`
 
-Keeper генерирует ed25519-пару, пишет приватник в Vault KV (`secret/keeper/sigil-keys/<key_id>`), вставляет публичную часть в реестр как active. `make_primary=true` делает ключ primary. Permission: `sigil.key-introduce`. Endpoint: [`POST /v1/sigil/keys`](../operator-api/sigils.md). Async: нет.
+Keeper generates an ed25519 pair, writes the private to Vault KV (`secret/keeper/sigil-keys/<key_id>`), inserts the public part into the registry as active. `make_primary=true` makes the key primary. Permission: `sigil.key-introduce`. Endpoint: [`POST /v1/sigil/keys`](../operator-api/sigils.md). Async: no.
 
-**Input:** `{make_primary?: bool}` (по умолчанию false; тело опционально).
+**Input:** `{make_primary?: bool}` (default false; body optional).
 
-**Output:** `{key_id, pubkey_pem, is_primary, status, introduced_at}` — без приватника. Ошибки: `sigil-key-concurrent-change` (гонка primary, retry). Audit: `sigil.key-introduced`.
+**Output:** `{key_id, pubkey_pem, is_primary, status, introduced_at}` - without private. Errors: `sigil-key-concurrent-change` (race primary, retry). Audit: `sigil.key-introduced`.
 
 #### `keeper.sigil.key.list`
 
-Active-ключи подписи (primary первым, без `vault_ref`). Permission: `sigil.key-list`. Endpoint: [`GET /v1/sigil/keys`](../operator-api/sigils.md). Async: нет.
+Active signing keys (primary first, without `vault_ref`). Permission: `sigil.key-list`. Endpoint: [`GET /v1/sigil/keys`](../operator-api/sigils.md). Async: no.
 
-**Input:** пустой объект. **Output:** `{keys: array<{key_id, is_primary, status, introduced_at}>}`.
+**Input:** empty object. **Output:** `{keys: array<{key_id, is_primary, status, introduced_at}>}`.
 
 #### `keeper.sigil.key.set-primary`
 
-Делает active-ключ primary (новые Sigil-ы подписываются им после cluster reload). Permission: `sigil.key-set-primary`. Endpoint: [`POST /v1/sigil/keys/{key_id}/primary`](../operator-api/sigils.md). Async: нет.
+Makes the active key primary (new Sigils are signed with it after cluster reload). Permission: `sigil.key-set-primary`. Endpoint: [`POST /v1/sigil/keys/{key_id}/primary`](../operator-api/sigils.md). Async: no.
 
-**Input:** `{key_id}` (64-hex). **Output:** пустой объект. Ошибки: `sigil-key-not-found`, `sigil-key-concurrent-change` (гонка primary либо ключ retired), `validation-failed`. Audit: `sigil.key-primary-set`.
+**Input:** `{key_id}` (64-hex). **Output:** empty object. Errors: `sigil-key-not-found`, `sigil-key-concurrent-change` (primary race or retired key), `validation-failed`. Audit: `sigil.key-primary-set`.
 
 #### `keeper.sigil.key.retire`
 
-Выводит ключ из набора (Soul забывает при следующем `SigilTrustAnchors`). Permission: `sigil.key-retire`. Endpoint: [`DELETE /v1/sigil/keys/{key_id}`](../operator-api/sigils.md). Async: нет.
+Outputs the key from the set (Soul forgets the next `SigilTrustAnchors`). Permission: `sigil.key-retire`. Endpoint: [`DELETE /v1/sigil/keys/{key_id}`](../operator-api/sigils.md). Async: no.
 
-**Input:** `{key_id}` (64-hex). **Output:** пустой объект. Ошибки: `sigil-key-not-found` (active-записи нет), `sigil-key-last-active` (последний active), `sigil-key-primary` (primary напрямую — сперва set-primary другому), `validation-failed`. Audit: `sigil.key-retired`.
+**Input:** `{key_id}` (64-hex). **Output:** empty object. Errors: `sigil-key-not-found` (no active record), `sigil-key-last-active` (last active), `sigil-key-primary` (primary directly - first set-primary to another), `validation-failed`. Audit: `sigil.key-retired`.

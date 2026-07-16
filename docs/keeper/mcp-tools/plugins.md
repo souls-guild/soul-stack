@@ -1,56 +1,56 @@
-# Plugin — MCP-tools Sigil allow-list целостности плагинов
+# Plugin — MCP-tools Sigil allow-list plugin integrity
 
-Доменная секция [каталога MCP-tools](../mcp-tools.md): tools `keeper.plugin.*` (допуск/отзыв/список записей allow-list-а `plugin_sigils`, [ADR-026](../../adr/0026-sigil.md#adr-026-sigil--целостность-плагинов-keeper-signed-digest-индекс) S4a). Транспорт, auth, формат tool declaration, error mapping — в корневом [mcp-tools.md](../mcp-tools.md). Источник правды по семантике, телам и `sha256`-вычислению — [plugins.md → Integrity-model](../plugins.md#integrity-model); REST-сторона — [operator-api/plugins.md](../operator-api/plugins.md). Ротация самих ключей **подписи** (отдельная зона) — [mcp-tools/sigils.md](sigils.md).
+Domain section [MCP-tools directory](../mcp-tools.md): tools `keeper.plugin.*` (admission/revocation/list of allow-list entries `plugin_sigils`, [ADR-026](../../adr/0026-sigil.md) S4a). Transport, auth, tool declaration format, error mapping - in the root [mcp-tools.md](../mcp-tools.md). The source of truth for semantics, bodies and `sha256`-computation is [plugins.md → Integrity-model](../plugins.md#integrity-model); REST side - [operator-api/plugins.md](../operator-api/plugins.md). Rotation of the **signature** keys themselves (separate zone) - [mcp-tools/sigils.md](sigils.md).
 
 ### Plugin (3)
 
-Sigil allow-list целостности плагинов ([ADR-026](../../adr/0026-sigil.md#adr-026-sigil--целостность-плагинов-keeper-signed-digest-индекс)). 1:1 с REST `POST/GET/DELETE /v1/plugins/sigils*` и permission (`keeper.plugin.<action>` ↔ `plugin.<action>`, selector — NoSelector, как `operator.*`/`role.*`). `ref` — git-verified (Keeper резолвит `source`+`ref` в `commit_sha`-слот через go-git, вариант A/F-fetch, [ADR-026(g)](../../adr/0026-sigil.md#adr-026-sigil--целостность-плагинов-keeper-signed-digest-индекс)): в lookup слота не участвует (читается активный слот через `current`), authority целостности — `sha256` + подпись Keeper-а. Tools доступны только при сконфигурированном Sigil (`keeper.yml → sigil.signing_key_ref`); при выключенном Sigil вызов возвращает `internal-error` («sigil is not configured»).
+Sigil allow-list plugin integrity ([ADR-026](../../adr/0026-sigil.md)). 1:1 with REST `POST/GET/DELETE /v1/plugins/sigils*` and permission (`keeper.plugin.<action>` ↔ `plugin.<action>`, selector - NoSelector, like `operator.*`/`role.*`). `ref` - git-verified (Keeper resolves `source`+`ref` into `commit_sha` slot via go-git, option A/F-fetch, [ADR-026(g)](../../adr/0026-sigil.md)): does not participate in slot lookup (read active slot via `current`), integrity authority — `sha256` + Keeper signature. Tools are only available when Sigil is configured (`keeper.yml → sigil.signing_key_ref`); with Sigil disabled, the call returns `internal-error` ("sigil is not configured").
 
 #### `keeper.plugin.allow`
 
-Допуск `(namespace, name, ref)` в allow-list `plugin_sigils`: Keeper читает бинарь активного слота кеша через `current`-symlink (R-nested `<ns>-<name>/<commit_sha>/`), считает `sha256`, подписывает и вставляет запись. Permission: `plugin.allow`. Endpoint: [`POST /v1/plugins/sigils`](../operator-api/plugins.md). Async: нет.
+Allowing `(namespace, name, ref)` in the allow-list `plugin_sigils`: Keeper reads the active cache slot binary via `current`-symlink (R-nested `<ns>-<name>/<commit_sha>/`), reads `sha256`, signs and inserts the entry. Permission: `plugin.allow`. Endpoint: [`POST /v1/plugins/sigils`](../operator-api/plugins.md). Async: no.
 
 **Input:**
 
-| Поле | Тип | Required | Смысл |
+| Field | Type | Required | Meaning |
 |---|---|---|---|
-| `namespace` | `string` | yes | Namespace плагина (kebab-case + точки/подчёркивание; без слешей и `..`). |
-| `name` | `string` | yes | Имя плагина. |
-| `ref` | `string` | yes | Operator-asserted метка допуска (tag-ref вида `v1.0.0`). Branch-ref со слешем в MVP не поддержан. |
+| `namespace` | `string` | yes | Namespace of the plugin (kebab-case + dots/underscore; no slashes and `..`). |
+| `name` | `string` | yes | Plugin name. |
+| `ref` | `string` | yes | Operator-asserted tolerance label (tag-ref of the form `v1.0.0`). Branch-ref with a slash is not supported in MVP. |
 
 **Output:**
 
-| Поле | Тип | Смысл |
+| Field | Type | Meaning |
 |---|---|---|
-| `namespace`, `name`, `ref` | `string` | Эхо input. |
-| `sha256` | `string` | SHA-256 (hex) допущенного бинаря. |
+| `namespace`, `name`, `ref` | `string` | Echo input. |
+| `sha256` | `string` | SHA-256 (hex) of the accepted binary. |
 
-Ошибки: `plugin-not-in-cache` (плагина нет в кеше host-а), `sigil-already-active` (активный допуск на `(namespace, name, ref)` уже есть), `validation-failed` (битая тройка). Audit: `plugin.allowed`.
+Errors: `plugin-not-in-cache` (the plugin is not in the host's cache), `sigil-already-active` (there is already active permission for `(namespace, name, ref)`), `validation-failed` (broken three). Audit: `plugin.allowed`.
 
 #### `keeper.plugin.revoke`
 
-Отзыв активного допуска `(namespace, name, ref)` из `plugin_sigils` (бинарь перестаёт проходить Sigil-верификацию). Permission: `plugin.revoke`. Endpoint: [`DELETE /v1/plugins/sigils/{namespace}/{name}/{ref}`](../operator-api/plugins.md). Async: нет.
+Revocation of active clearance `(namespace, name, ref)` from `plugin_sigils` (the binary no longer passes Sigil verification). Permission: `plugin.revoke`. Endpoint: [`DELETE /v1/plugins/sigils/{namespace}/{name}/{ref}`](../operator-api/plugins.md). Async: no.
 
 **Input:**
 
-| Поле | Тип | Required | Смысл |
+| Field | Type | Required | Meaning |
 |---|---|---|---|
-| `namespace` | `string` | yes | Namespace плагина. |
-| `name` | `string` | yes | Имя плагина. |
-| `ref` | `string` | yes | Метка отзываемого допуска. |
+| `namespace` | `string` | yes | Namespace of the plugin. |
+| `name` | `string` | yes | Plugin name. |
+| `ref` | `string` | yes | Revoked clearance label. |
 
-**Output:** пустой объект (REST-эквивалент — 204 No Content).
+**Output:** empty object (REST equivalent - 204 No Content).
 
-Ошибки: `sigil-not-found` (активной записи нет), `validation-failed` (битая тройка). Audit: `plugin.revoked`.
+Errors: `sigil-not-found` (no active record), `validation-failed` (broken three). Audit: `plugin.revoked`.
 
 #### `keeper.plugin.list`
 
-Перечисление активных (не отозванных) записей allow-list-а `plugin_sigils`, новые первыми. Без `signature`/`manifest` (крипто-материал / крупный JSONB). Permission: `plugin.list`. Endpoint: [`GET /v1/plugins/sigils`](../operator-api/plugins.md). Async: нет.
+Listing the active (not revoked) entries of the allow-list `plugin_sigils`, new ones first. Without `signature`/`manifest` (crypto stuff/large JSONB). Permission: `plugin.list`. Endpoint: [`GET /v1/plugins/sigils`](../operator-api/plugins.md). Async: no.
 
-**Input:** пустой объект.
+**Input:** empty object.
 
 **Output:**
 
-| Поле | Тип | Смысл |
+| Field | Type | Meaning |
 |---|---|---|
-| `sigils` | `array<SigilView>` | Элементы — `{namespace, name, ref, sha256, allowed_by_aid, allowed_at, revoked_at}`. |
+| `sigils` | `array<SigilView>` | Items - `{namespace, name, ref, sha256, allowed_by_aid, allowed_at, revoked_at}`. |

@@ -1,123 +1,123 @@
-# Synod — MCP-tools управления группами архонов
+# Synod - MCP-tools for managing groups of archons
 
-Доменная секция [каталога MCP-tools](../mcp-tools.md): tools `keeper.synod.*` (Synod-группы, бандлящие роли). Транспорт, auth, формат tool declaration, async-convention, error mapping — в корневом [mcp-tools.md](../mcp-tools.md). Источник правды по семантике — [operator-api.md → Synod](../operator-api/synods.md) (тела и инварианты — [rbac.md → REST `/v1/synods`](../rbac.md#rest-v1synods)).
+Domain section [MCP-tools directory](../mcp-tools.md): tools `keeper.synod.*` (Synod groups, bundling roles). Transport, auth, tool declaration format, async-convention, error mapping - in the root [mcp-tools.md](../mcp-tools.md). The source of truth for semantics is [operator-api.md → Synod](../operator-api/synods.md) (bodies and invariants are [rbac.md → REST `/v1/synods`](../rbac.md#rest-v1synods)).
 
 ### Synod (8)
 
-Управление **Synod-группами** (группы архонов, бандлящие роли — модель **Архон → Synod → Роли**) через MCP — [ADR-049](../../adr/0049-synod.md#adr-049-synod--группа-архонов), storage в Postgres (`synods` / `synod_operators` / `synod_roles`, [rbac.md → Управление группами архонов](../rbac.md#управление-группами-архонов-synod)). Permission ↔ tool — 1:1: `keeper.synod.<action>` ↔ `synod.<action>`. Бизнес-инварианты (builtin-граница, self-lockout, least-privilege subset) живут в `rbac.Service`; tool — транспорт. Эффективные права инициатора при subset-check = прямые ∪ роли через его Synod-ы.
+Management of **Synod groups** (archon groups, bundling roles - model **Archon → Synod → Roles**) via MCP - [ADR-049](../../adr/0049-synod.md), storage in Postgres (`synods` / `synod_operators` / `synod_roles`, [rbac.md → Managing groups of archons](../rbac.md)). Permission ↔ tool — 1:1: `keeper.synod.<action>` ↔ `synod.<action>`. Business invariants (builtin-border, self-lockout, least-privilege subset) live in `rbac.Service`; tool - transport. Effective rights of the initiator with subset-check = direct ∪ roles through his Synods.
 
 #### `keeper.synod.create`
 
-Создание Synod-группы (пустой — роли добавляются через `keeper.synod.grant-role`). Permission: `synod.create`. Endpoint: `POST /v1/synods` ([rbac.md → REST `/v1/synods`](../rbac.md#rest-v1synods)). Async: нет.
+Creating a Synod group (empty - roles are added via `keeper.synod.grant-role`). Permission: `synod.create`. Endpoint: `POST /v1/synods` ([rbac.md → REST `/v1/synods`](../rbac.md#rest-v1synods)). Async: no.
 
 **Input:**
 
-| Поле | Тип | Required | Смысл |
+| Field | Type | Required | Meaning |
 |---|---|---|---|
-| `name` | `string` (regex `^[a-z][a-z0-9-]*$`) | yes | Имя группы (kebab-case). |
-| `description` | `string` | optional | Человекочитаемое описание группы. |
+| `name` | `string` (regex `^[a-z][a-z0-9-]*$`) | yes | Group name (kebab-case). |
+| `description` | `string` | optional | A human-readable description of the group. |
 
-**Output:** пустой объект (`{}`). Соответствует HTTP `201 Created`.
+**Output:** empty object (`{}`). Corresponds to HTTP `201 Created`.
 
-Ошибки: `synod-already-exists` (`name` занят), `validation-failed` (битый `name`). Least-privilege/self-lockout к create неприменимы — пустая группа прав не выдаёт.
+Errors: `synod-already-exists` (`name` busy), `validation-failed` (dead `name`). Least-privilege/self-lockout is not applicable to create - an empty group of rights does not issue.
 
 #### `keeper.synod.delete`
 
-Удаление группы (каскадом membership + bundle). Permission: `synod.delete`. Endpoint: `DELETE /v1/synods/{name}` ([rbac.md → REST `/v1/synods`](../rbac.md#rest-v1synods)). Async: нет.
+Deleting a group (membership + bundle cascade). Permission: `synod.delete`. Endpoint: `DELETE /v1/synods/{name}` ([rbac.md → REST `/v1/synods`](../rbac.md#rest-v1synods)). Async: no.
 
 **Input:**
 
-| Поле | Тип | Required | Смысл |
+| Field | Type | Required | Meaning |
 |---|---|---|---|
-| `name` | `string` | yes | Имя группы. |
+| `name` | `string` | yes | Group name. |
 
-**Output:** пустой объект (`{}`). Соответствует HTTP `204 No Content`.
+**Output:** empty object (`{}`). Corresponds to HTTP `204 No Content`.
 
-Ошибки: `synod-not-found`, `synod-builtin` (builtin-группу удалять нельзя, проверка **до** self-lockout), `would-lock-out-cluster` (исчезновение группы снимет последний эффективный `*`).
+Errors: `synod-not-found`, `synod-builtin` (builtin group cannot be deleted, check **before** self-lockout), `would-lock-out-cluster` (disappearance of the group will remove the last effective `*`).
 
 #### `keeper.synod.list`
 
-Перечисление групп с развёрнутыми ролями (bundle) и членами-AID. Permission: `synod.list`. Endpoint: `GET /v1/synods` ([rbac.md → REST `/v1/synods`](../rbac.md#rest-v1synods)). Async: нет.
+Enumeration of groups with deployed roles (bundle) and AID members. Permission: `synod.list`. Endpoint: `GET /v1/synods` ([rbac.md → REST `/v1/synods`](../rbac.md#rest-v1synods)). Async: no.
 
-**Input:** пустой объект (`{}`).
+**Input:** empty object (`{}`).
 
 **Output:**
 
-| Поле | Тип | Смысл |
+| Field | Type | Meaning |
 |---|---|---|
-| `synods` | `array<object>` | Элементы — `{name, description, builtin, roles[], operators[]}`; `roles` / `operators` — non-nil массивы (группа без записей → `[]`), отсортированы детерминированно. |
+| `synods` | `array<object>` | Elements - `{name, description, builtin, roles[], operators[]}`; `roles` / `operators` - non-nil arrays (group without records → `[]`), sorted deterministically. |
 
 #### `keeper.synod.update`
 
-Правка **ТОЛЬКО `description`** группы (ADR-049 amend). Permission: `synod.update`. Endpoint: `PATCH /v1/synods/{name}` ([rbac.md → REST `/v1/synods`](../rbac.md#rest-v1synods)). Async: нет. **`name` (PK) immutable** — адресует группу из path, не переименовывается. **builtin РАЗРЕШЁН** к правке (`description` — косметика для UI/аудита, не поведение). **Без subset-check и self-lockout** (`description` прав не выдаёт и не отнимает); снимок enforcer-а не инвалидируется.
+Edit **ONLY `description`** groups (ADR-049 amend). Permission: `synod.update`. Endpoint: `PATCH /v1/synods/{name}` ([rbac.md → REST `/v1/synods`](../rbac.md#rest-v1synods)). Async: no. **`name` (PK) immutable** - addresses a group from path, is not renamed. **builtin ALLOWED** for editing (`description` - cosmetics for UI/audit, not behavior). **Without subset-check and self-lockout** (`description` does not grant or take away rights); The enforcer's snapshot is not invalidated.
 
 **Input:**
 
-| Поле | Тип | Required | Смысл |
+| Field | Type | Required | Meaning |
 |---|---|---|---|
-| `name` | `string` (regex `^[a-z][a-z0-9-]*$`) | yes | Имя группы (PK, не меняется — адресует строку). |
-| `description` | `string` (1..1024 символов) | yes | Новое описание (полностью заменяет старое). |
+| `name` | `string` (regex `^[a-z][a-z0-9-]*$`) | yes | Group name (PK, does not change - addresses the string). |
+| `description` | `string` (1..1024 characters) | yes | New description (completely replaces the old one). |
 
-**Output:** пустой объект (`{}`). Соответствует HTTP `204 No Content`.
+**Output:** empty object (`{}`). Corresponds to HTTP `204 No Content`.
 
-Ошибки: `synod-not-found` (группы нет), `validation-failed` (пустой `description` либо превышение лимита 1024). Audit: `synod.updated`.
+Errors: `synod-not-found` (no group), `validation-failed` (empty `description` or limit exceeded 1024). Audit: `synod.updated`.
 
 #### `keeper.synod.add-operator`
 
-Добавление архона (AID) в группу. Идемпотентно. Permission: `synod.add-operator`. Endpoint: `POST /v1/synods/{name}/operators` ([rbac.md → REST `/v1/synods`](../rbac.md#rest-v1synods)). Async: нет.
+Adding an Archon (AID) to the group. Idempotent. Permission: `synod.add-operator`. Endpoint: `POST /v1/synods/{name}/operators` ([rbac.md → REST `/v1/synods`](../rbac.md#rest-v1synods)). Async: no.
 
 **Input:**
 
-| Поле | Тип | Required | Смысл |
+| Field | Type | Required | Meaning |
 |---|---|---|---|
-| `synod` | `string` (regex `^[a-z][a-z0-9-]*$`) | yes | Имя группы. |
-| `aid` | `string` (regex `^[a-z0-9][a-z0-9._@-]{1,127}$`) | yes | AID добавляемого Архонта. |
+| `synod` | `string` (regex `^[a-z][a-z0-9-]*$`) | yes | Group name. |
+| `aid` | `string` (regex `^[a-z0-9][a-z0-9._@-]{1,127}$`) | yes | AID of the added Archon. |
 
-**Output:** пустой объект (`{}`). Соответствует HTTP `204 No Content`.
+**Output:** empty object (`{}`). Corresponds to HTTP `204 No Content`.
 
-Ошибки: `synod-not-found`, `not-found` (AID не существует), `forbidden` (**least-privilege subset**: член получает весь bundle группы — caller обязан держать все его эффективные права). Self-lockout **нет** — add только расширяет admin-set.
+Errors: `synod-not-found`, `not-found` (AID does not exist), `forbidden` (**least-privilege subset**: the member receives the entire bundle of the group - the caller is required to hold all its effective rights). Self-lockout **no** - add only extends admin-set.
 
 #### `keeper.synod.remove-operator`
 
-Снятие архона (AID) из группы. Permission: `synod.remove-operator`. Endpoint: `DELETE /v1/synods/{name}/operators/{aid}` ([rbac.md → REST `/v1/synods`](../rbac.md#rest-v1synods)). Async: нет.
+Removing the Archon (AID) from the group. Permission: `synod.remove-operator`. Endpoint: `DELETE /v1/synods/{name}/operators/{aid}` ([rbac.md → REST `/v1/synods`](../rbac.md#rest-v1synods)). Async: no.
 
 **Input:**
 
-| Поле | Тип | Required | Смысл |
+| Field | Type | Required | Meaning |
 |---|---|---|---|
-| `synod` | `string` (regex `^[a-z][a-z0-9-]*$`) | yes | Имя группы. |
-| `aid` | `string` (regex `^[a-z0-9][a-z0-9._@-]{1,127}$`) | yes | AID снимаемого Архонта. |
+| `synod` | `string` (regex `^[a-z][a-z0-9-]*$`) | yes | Group name. |
+| `aid` | `string` (regex `^[a-z0-9][a-z0-9._@-]{1,127}$`) | yes | AID of the removed Archon. |
 
-**Output:** пустой объект (`{}`). Соответствует HTTP `204 No Content`.
+**Output:** empty object (`{}`). Corresponds to HTTP `204 No Content`.
 
-Ошибки: `not-found` (пары `(synod, aid)` нет), `would-lock-out-cluster` (**self-lockout**: снятие осиротит последнего админа, чей `*` держится только через эту группу).
+Errors: `not-found` (there are no `(synod, aid)` pairs), `would-lock-out-cluster` (**self-lockout**: removal will orphan the last admin whose `*` is held only through this group).
 
 #### `keeper.synod.grant-role`
 
-Добавление роли в bundle группы (выдаёт её всем членам). Идемпотентно. Permission: `synod.grant-role`. Endpoint: `POST /v1/synods/{name}/roles` ([rbac.md → REST `/v1/synods`](../rbac.md#rest-v1synods)). Async: нет.
+Adding a role to the group's bundle (issues it to all members). Idempotent. Permission: `synod.grant-role`. Endpoint: `POST /v1/synods/{name}/roles` ([rbac.md → REST `/v1/synods`](../rbac.md#rest-v1synods)). Async: no.
 
 **Input:**
 
-| Поле | Тип | Required | Смысл |
+| Field | Type | Required | Meaning |
 |---|---|---|---|
-| `synod` | `string` (regex `^[a-z][a-z0-9-]*$`) | yes | Имя группы. |
-| `role` | `string` (regex `^[a-z][a-z0-9-]*$`) | yes | Имя добавляемой роли. |
+| `synod` | `string` (regex `^[a-z][a-z0-9-]*$`) | yes | Group name. |
+| `role` | `string` (regex `^[a-z][a-z0-9-]*$`) | yes | The name of the role to be added. |
 
-**Output:** пустой объект (`{}`). Соответствует HTTP `204 No Content`.
+**Output:** empty object (`{}`). Corresponds to HTTP `204 No Content`.
 
-Ошибки: `synod-not-found`, `role-not-found` (роли нет), `forbidden` (**least-privilege subset**: роль выдаётся всем членам — caller обязан держать все её эффективные права). Self-lockout **нет**.
+Errors: `synod-not-found`, `role-not-found` (no role), `forbidden` (**least-privilege subset**: the role is issued to all members - the caller is required to hold all its effective rights). Self-lockout **no**.
 
 #### `keeper.synod.revoke-role`
 
-Снятие роли из bundle группы (у всех членов). Permission: `synod.revoke-role`. Endpoint: `DELETE /v1/synods/{name}/roles/{role_name}` ([rbac.md → REST `/v1/synods`](../rbac.md#rest-v1synods)). Async: нет.
+Removing a role from a bundle group (for all members). Permission: `synod.revoke-role`. Endpoint: `DELETE /v1/synods/{name}/roles/{role_name}` ([rbac.md → REST `/v1/synods`](../rbac.md#rest-v1synods)). Async: no.
 
 **Input:**
 
-| Поле | Тип | Required | Смысл |
+| Field | Type | Required | Meaning |
 |---|---|---|---|
-| `synod` | `string` (regex `^[a-z][a-z0-9-]*$`) | yes | Имя группы. |
-| `role` | `string` (regex `^[a-z][a-z0-9-]*$`) | yes | Имя снимаемой роли. |
+| `synod` | `string` (regex `^[a-z][a-z0-9-]*$`) | yes | Group name. |
+| `role` | `string` (regex `^[a-z][a-z0-9-]*$`) | yes | The name of the role being filmed. |
 
-**Output:** пустой объект (`{}`). Соответствует HTTP `204 No Content`.
+**Output:** empty object (`{}`). Corresponds to HTTP `204 No Content`.
 
-Ошибки: `not-found` (bundle-пары `(synod, role)` нет), `would-lock-out-cluster` (**self-lockout**: снимаемая роль — последняя `*`-дающая роль группы, член держал `*` только через неё).
+Errors: `not-found` (there are no `(synod, role)` bundle pairs), `would-lock-out-cluster` (**self-lockout**: the role being removed is the last `*`-giving role of the group, the member held `*` only through it).

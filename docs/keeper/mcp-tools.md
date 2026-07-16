@@ -1,58 +1,58 @@
-# MCP-tools — каталог Keeper-tools для LLM-агентов
+# MCP-tools - Keeper-tools directory for LLM agents
 
-Нормативная спецификация **MCP-tools каталога**, который Keeper-кластер публикует на listener-е `listen.mcp.addr` ([config.md → listen](config.md#listen)). Каталог — declarative wrapper над [Operator API](operator-api.md): каждый MCP-tool жёстко соответствует одному HTTP endpoint-у `/v1/*` и одной permission ([rbac.md → Permission ↔ MCP-tool / OpenAPI endpoint](rbac.md#permission--mcp-tool--openapi-endpoint)).
+Regulatory specification of the **MCP-tools directory** that the Keeper cluster publishes to listener `listen.mcp.addr` ([config.md → listen](config.md#listen)). The directory is a declarative wrapper over [Operator API](operator-api.md): each MCP-tool strictly corresponds to one HTTP endpoint `/v1/*` and one permission ([rbac.md → Permission ↔ MCP-tool / OpenAPI endpoint](rbac.md#permission--mcp-tool--openapi-endpoint)).
 
-**Источник правды по семантике** — [operator-api.md](operator-api.md). Этот документ описывает:
+**The source of truth in semantics** is [operator-api.md](operator-api.md). This document describes:
 
-- транспорт и auth MCP-стороны;
-- формат tool declaration по MCP spec;
+- transport and auth MCP sides;
+- tool declaration format according to MCP spec;
 - async-convention `_apply_id`;
-- mapping ошибок RFC 7807 → MCP-tool error;
-- каталог 89 tool с input/output schemas;
-- что **не** публикуется как MCP-tool;
-- формат SSE event-payloads для `GET /mcp/events?apply_id=<ULID>`.
+- mapping RFC 7807 errors → MCP-tool error;
+- directory 89 tool with input/output schemas;
+- that **not** published as MCP-tool;
+- SSE event-payloads format for `GET /mcp/events?apply_id=<ULID>`.
 
-Документ адресован:
+Document addressed to:
 
-- авторам LLM-агентов и MCP-host-приложений (Claude Code, IDE-плагины), подключающимся к Keeper MCP-серверу;
-- разработчикам Keeper-а, реализующим MCP-handler-ы;
-- `soul-lint` и аналогичным инструментам, валидирующим сценарии вызова tools.
+- authors of LLM agents and MCP host applications (Claude Code, IDE plugins) connecting to the Keeper MCP server;
+- Keeper developers implementing MCP handlers;
+- `soul-lint` and similar tools that validate scripts for calling tools.
 
-## Транспорт и auth
+## Transport and auth
 
 | Decision | Value | Rationale |
 |---|---|---|
-| **Транспорт** | MCP-HTTP (Streamable HTTP) — текущая стабильная revision MCP spec. | Cross-platform, серверная модель без stdio/SSE-ограничений. |
-| **Listener** | `listen.mcp.addr` — отдельный HTTP listener Keeper-кластера ([config.md → listen](config.md#listen)). | Обязательный listener согласно сквозному требованию «встроенный MCP» ([requirements.md](../requirements.md)). |
-| **Auth** | `Authorization: Bearer <jwt>` — тот же JWT, что и в Operator API ([operator-api.md → Auth](operator-api.md#auth), [ADR-014](../adr/0014-operator-identity.md#adr-014-identity-модель-оператора-archon)). MCP-клиент передаёт header при connect. | Единая identity-модель: один Archon, один токен, один RBAC. Не плодим вторую auth-цепочку. |
-| **Bootstrap-bypass** | Не применимо. MCP-tools требуют JWT всегда; первый Архонт выпускается через `keeper init` ([ADR-013](../adr/0013-bootstrap-archon.md#adr-013-bootstrap-первого-архонта)), не через MCP. | Симметрия с Operator API. |
-| **Naming** | `keeper.<resource>.<action>` (4-сегментный, точки как separators). | Зафиксировано в [rbac.md](rbac.md#permission--mcp-tool--openapi-endpoint) и [operator-api.md](operator-api.md#mapping-endpoint--mcp-tool--permission). |
-| **Input naming** | `snake_case` для всех полей input. | Совпадает с JSON body HTTP endpoint-а. |
-| **Output naming** | `snake_case` для бизнес-полей + top-level `_apply_id` для async-операций (underscore-префикс отличает MCP-convention от business-data). | См. [§ Async operations в MCP](#async-operations-в-mcp). |
-| **Pagination** | `offset` (int, ≥0, default `0`) + `limit` (int, 1..1000, default `50`). Output list-tools: `{items, offset, limit, total}`. | Симметрия с [operator-api.md → Pagination](operator-api.md#pagination). |
-| **Source of truth по семантике** | [operator-api.md](operator-api.md). | MCP-tools не дублируют business-логику. |
-| **Tracing** | Каждый MCP-вызов получает OTel-span с атрибутом `archon.aid=<aid>` (из JWT `sub`) и `mcp.tool=<name>`. | Симметрия с Operator API ([operator-api.md → Conventions](operator-api.md#conventions)). |
-| **Secret masking** | JWT в выходе (`jwt`-поле) пишется один раз в результат tool-а; в логи/OTel — маскируется по тем же правилам, что и в Operator API ([operator-api.md → Secret masking](operator-api.md#secret-masking-в-логах-и-трейсах)). | Single rule across транспортов. |
+| **Transport** | MCP-HTTP (Streamable HTTP) - current stable revision of MCP spec. | Cross-platform, server model without stdio/SSE restrictions. |
+| **Listener** | `listen.mcp.addr` is a separate HTTP listener for the Keeper cluster ([config.md → listen](config.md#listen)). | Mandatory listener according to the end-to-end requirement "embedded MCP" ([requirements.md](../requirements.md)). |
+| **Auth** | `Authorization: Bearer <jwt>` is the same JWT as in the Operator API ([operator-api.md → Auth](operator-api.md#auth), [ADR-014](../adr/0014-operator-identity.md)). The MCP client sends header when connecting. | Single identity model: one Archon, one token, one RBAC. We do not create a second auth chain. |
+| **Bootstrap-bypass** | Not applicable. MCP tools always require JWT; The first Archon is released through `keeper init` ([ADR-013](../adr/0013-bootstrap-archon.md)), not through MCP. | Symmetry with Operator API. |
+| **Naming** | `keeper.<resource>.<action>` (4-segment, dots as separators). | Recorded in [rbac.md](rbac.md#permission--mcp-tool--openapi-endpoint) and [operator-api.md](operator-api.md#mapping-endpoint--mcp-tool--permission). |
+| **Input naming** | `snake_case` for all input fields. | Matches the JSON body of the HTTP endpoint. |
+| **Output naming** | `snake_case` for business fields + top-level `_apply_id` for async operations (the underscore prefix distinguishes MCP-convention from business-data). | See [§ Async operations in MCP](#async-operations-in-mcp). |
+| **Pagination** | `offset` (int, ≥0, default `0`) + `limit` (int, 1..1000, default `50`). Output list-tools: `{items, offset, limit, total}`. | Symmetry with [operator-api.md → Pagination](operator-api.md#pagination). |
+| **Source of truth on semantics** | [operator-api.md](operator-api.md). | MCP-tools do not duplicate business logic. |
+| **Tracing** | Each MCP call receives an OTel-span with the attribute `archon.aid=<aid>` (from JWT `sub`) and `mcp.tool=<name>`. | Symmetry with Operator API ([operator-api.md → Conventions](operator-api.md#conventions)). |
+| **Secret masking** | The JWT in the output (`jwt`-field) is written once to the result of the tool; in logs/OTel - masked according to the same rules as in the Operator API ([operator-api.md → Secret masking](operator-api.md)). | Single rule across transports. |
 
-Подробности MCP transport / handshake / session lifecycle — в актуальной [MCP spec](https://spec.modelcontextprotocol.io/); этот документ их не дублирует.
+Details MCP transport / handshake / session lifecycle - in the current [MCP spec](https://spec.modelcontextprotocol.io/); this document does not duplicate them.
 
-## Формат tool declaration
+## Tool declaration format
 
-Каждый MCP-tool публикуется согласно MCP spec со следующими полями:
+Each MCP-tool is published according to the MCP spec with the following fields:
 
-| Поле | Тип | Смысл |
+| Field | Type | Meaning |
 |---|---|---|
-| `name` | `string` | 4-сегментное имя `keeper.<resource>.<action>` (точки — separators). |
-| `description` | `string` | Краткое описание операции, 1–3 предложения для LLM. Полная семантика — в operator-api.md. |
-| `inputSchema` | `object` | JSON Schema draft 2020-12, описывает входные параметры. Required-поля в `required: [...]`. Дополнительные поля запрещены (`additionalProperties: false`). |
-| `outputSchema` | `object` | JSON Schema draft 2020-12 для structured output. Для async-tools содержит `_apply_id: string`. |
+| `name` | `string` | 4-segment name `keeper.<resource>.<action>` (dots - separators). |
+| `description` | `string` | Brief description of the operation, 1-3 sentences for LLM. Full semantics is in operator-api.md. |
+| `inputSchema` | `object` | JSON Schema draft 2020-12, describes input parameters. Required fields in `required: [...]`. Additional fields are not allowed (`additionalProperties: false`). |
+| `outputSchema` | `object` | JSON Schema draft 2020-12 for structured output. For async-tools it contains `_apply_id: string`. |
 
-### Пример: `keeper.incarnation.create`
+### Example: `keeper.incarnation.create`
 
 ```json
 {
   "name": "keeper.incarnation.create",
-  "description": "Создать новый Incarnation: запустить выбранный стартовый сценарий указанного Service, создать запись в Postgres. Асинхронная операция — возвращает _apply_id; статус опрашивать через keeper.incarnation.get / keeper.incarnation.history.",
+"description": "Create a new Incarnation: run the selected startup script of the specified Service, create an entry in Postgres. Asynchronous operation - returns _apply_id; query status via keeper.incarnation.get / keeper.incarnation.history.",
   "inputSchema": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
@@ -62,20 +62,20 @@
       "name": {
         "type": "string",
         "pattern": "^[a-z][a-z0-9-]*$",
-        "description": "Имя нового instance, корневая Coven-метка."
+"description": "The name of the new instance, the root Coven label."
       },
       "service": {
         "type": "string",
-        "description": "Имя сервиса из keeper.yml → services[].name."
+"description": "Service name from keeper.yml → services[].name."
       },
       "create_scenario": {
         "type": "string",
         "pattern": "^[a-z][a-z0-9_]*$",
-        "description": "Имя стартового сценария (scenario с create: true). Пусто: сервис предлагает create-сценарии → выбор обязателен (validation-failed с их списком); сервис без create-сценариев → bare-инкарнация (ready без прогона)."
+"description": "Name of the starting script (scenario with create: true). Empty: the service offers create scripts → selection is required (validation-failed with a list of them); service without create scripts → bare incarnation (ready without running)."
       },
       "input": {
         "type": "object",
-        "description": "Input для выбранного стартового сценария, валидируется против его input-схемы.",
+"description": "Input for the selected startup script, validated against its input schema.",
         "default": {}
       }
     }
@@ -86,318 +86,318 @@
     "additionalProperties": false,
     "required": ["_apply_id", "incarnation"],
     "properties": {
-      "_apply_id": { "type": "string", "description": "ULID запуска." },
-      "incarnation": { "type": "string", "description": "Имя созданного instance." }
+"_apply_id": { "type": "string", "description": "Launch ULID." },
+"incarnation": { "type": "string", "description": "The name of the created instance." }
     }
   }
 }
 ```
 
-По этому шаблону декларируется каждый из 89 tool каталога. Полное соответствие input/output schema полям HTTP endpoint-а — см. [operator-api.md → Endpoint-секции](operator-api.md#endpoint-секции).
+Each of the 89 tools in the directory is declared using this template. Full compliance of input/output schema with HTTP endpoint fields - see [operator-api.md → Endpoint sections](operator-api.md).
 
-**Enum serialization.** MCP-сервер использует тот же enum mapping (короткие snake_case значения без family-prefix: `"ready"`, `"connected"`, `"agent"`, …), что HTTP API — см. [operator-api.md → Conventions → Enum serialization](operator-api.md#conventions). Полные proto-константы (`INCARNATION_STATUS_READY`, …) в MCP input/output не пробрасываются.
+**Enum serialization.** The MCP server uses the same enum mapping (short snake_case values without family-prefix: `"ready"`, `"connected"`, `"agent"`, ...) as the HTTP API - see [operator-api.md → Conventions → Enum serialization](operator-api.md#conventions). Full proto-constants (`INCARNATION_STATUS_READY`, ...) are not forwarded to MCP input/output.
 
-## Async operations в MCP
+## Async operations in MCP
 
-В MCP-протоколе нет HTTP status codes — `202 Accepted + body {apply_id}` Operator API в MCP отображается как **structured output** tool-а с top-level полем `_apply_id` (underscore-prefix отличает MCP-convention от business-data).
+There are no HTTP status codes in the MCP protocol - `202 Accepted + body {apply_id}` Operator API in MCP is displayed as a **structured output** tool with the top-level field `_apply_id` (underscore-prefix distinguishes MCP-convention from business-data).
 
-Список async-tools: `keeper.incarnation.create`, `keeper.incarnation.rerun-last`, `keeper.incarnation.run`, `keeper.incarnation.upgrade`, `keeper.incarnation.destroy`, `keeper.push.apply`, `keeper.push.cleanup`. `keeper.soul.errand.run` — sync-by-default (server-cap 30s), при превышении возвращает `async=true` со `status=running`; poll через `keeper.errand.get`.
+List of async-tools: `keeper.incarnation.create`, `keeper.incarnation.rerun-last`, `keeper.incarnation.run`, `keeper.incarnation.upgrade`, `keeper.incarnation.destroy`, `keeper.push.apply`, `keeper.push.cleanup`. `keeper.soul.errand.run` - sync-by-default (server-cap 30s), if exceeded, returns `async=true` from `status=running`; poll via `keeper.errand.get`.
 
-**Опрос статуса:**
+**Status Poll:**
 
-- `keeper.incarnation.get` → читает `status` / `status_details` instance.
-- `keeper.incarnation.history` → возвращает записи `state_history` с полем `apply_id`; элемент с `apply_id == <ULID>` появляется после успешного коммита.
+- `keeper.incarnation.get` → reads `status` / `status_details` instance.
+- `keeper.incarnation.history` → returns records `state_history` with field `apply_id`; the element with `apply_id == <ULID>` appears after a successful commit.
 
-Отдельного tool-а `keeper.apply.get` в MVP **нет** — симметрия с Operator API ([operator-api.md → Async operations](operator-api.md#async-operations)).
+There is **no separate tool `keeper.apply.get` in MVP** - symmetry with the Operator API ([operator-api.md → Async operations](operator-api.md#async-operations)).
 
 ## Errors
 
-RFC 7807 ProblemDetails Operator API ([operator-api.md → Error format](operator-api.md#error-format-rfc-7807)) отображается в MCP-tool error следующим образом:
+RFC 7807 ProblemDetails Operator API ([operator-api.md → Error format](operator-api.md#error-format-rfc-7807)) is displayed in MCP-tool error as follows:
 
-| RFC 7807 поле | MCP-tool error поле | Преобразование |
+| RFC 7807 field | MCP-tool error field | Conversion |
 |---|---|---|
-| `type` (URI suffix под `https://soul-stack.io/errors/`) | `code` | Берётся suffix URN: `https://soul-stack.io/errors/incarnation-locked` → `code: "incarnation-locked"`. |
-| `title` | — | Не пробрасывается отдельно (короткий текст, дублирует `code`). |
-| `status` | — | HTTP status code в MCP не применим; MCP-клиент не парсит его. |
-| `detail` | `message` | Свободный текст из `detail` ProblemDetails. |
-| `instance` | `data.instance` | URI неудачного запроса (`/v1/...`); полезен для аудита. Поле `data` MCP error может содержать произвольный structured-payload. |
+| `type` (URI suffix under `https://soul-stack.io/errors/`) | `code` | Take suffix URN: `https://soul-stack.io/errors/incarnation-locked` → `code: "incarnation-locked"`. |
+| `title` | — | Not forwarded separately (short text, duplicates `code`). |
+| `status` | — | HTTP status code in MCP is not applicable; The MCP client does not parse it. |
+| `detail` | `message` | Free text from `detail` ProblemDetails. |
+| `instance` | `data.instance` | Failed request URI (`/v1/...`); useful for auditing. The `data` MCP error field can contain an arbitrary structured-payload. |
 
-Полный список error codes — стабильные suffix-ы URN из [operator-api.md → Типы ошибок](operator-api.md#типы-ошибок):
+Full list of error codes - stable URN suffixes from [operator-api.md → Error types](operator-api.md):
 
-| Code | Когда возникает в MCP |
+| Code | When occurs in MCP |
 |---|---|
-| `unauthenticated` | JWT отсутствует/не валиден/истёк. |
-| `forbidden` | RBAC-проверка не прошла. `message` содержит требуемую permission. |
-| `not-found` | Ресурс не существует. |
-| `validation-failed` | Семантическая ошибка валидации input. |
-| `malformed-request` | Неверный JSON/неверные query params. |
-| `incarnation-locked` | Incarnation в `error_locked` — вызвать `keeper.incarnation.unlock` перед новым прогоном. В `keeper.incarnation.rerun-last` — статус не `error_locked` (нечего перезапускать). |
-| `rerun-input-unavailable` | `keeper.incarnation.rerun-last` (day-2-путь) не может восстановить input упавшего прогона: рецепт `apply_runs.recipe` вычищен ретеншном Reaper / legacy-прогон без рецепта (fail-closed) — сними блок обычным `unlock` и запусти сценарий вручную с явным input. Отдельный код от `incarnation-locked` (REST `TypeRerunInputUnavailable`, 409): machine-readable различие «input утрачен» от «статус не `error_locked`». |
-| `migration-failed` | Incarnation в `migration_failed` — нужен ручной разбор state_history. |
-| `would-lock-out-cluster` | Операция оставила бы кластер без активного Архонта с эффективным `*`-permission. Возникает в `keeper.operator.revoke` (отзыв последнего `*`-Архонта), в role-операциях `keeper.role.delete` / `keeper.role.update` / `keeper.role.revoke-operator` (см. [§ Role](#role-6)) и в synod-операциях `keeper.synod.delete` / `keeper.synod.remove-operator` / `keeper.synod.revoke-role` (эффективный `*` может приходить через Synod, см. [§ Synod](#synod-8)). |
-| `role-not-found` | Роль с указанным `name` отсутствует в `rbac_roles` (`keeper.role.delete` / `keeper.role.update` / `keeper.role.grant-operator` / `keeper.role.revoke-operator`; `keeper.synod.grant-role` над несуществующей ролью). |
-| `role-already-exists` | `name` роли занят (`keeper.role.create`). |
-| `role-builtin` | Роль с `builtin=true` (`cluster-admin`) — `keeper.role.delete` / `keeper.role.update` над ней запрещены. `grant-operator` / `revoke-operator` над builtin-ролью разрешены. |
-| `synod-not-found` | Synod-группа с указанным `name` отсутствует в `synods` (`keeper.synod.update` / `keeper.synod.delete` / `keeper.synod.add-operator` / `keeper.synod.grant-role`). |
-| `synod-already-exists` | `name` группы занят (`keeper.synod.create`). |
-| `synod-builtin` | Группа с `builtin=true` — `keeper.synod.delete` над ней запрещён. |
-| `incarnation-already-exists` | Incarnation с указанным `name` уже создан. |
-| `operator-already-exists` | AID уже занят. |
-| `soul-already-exists` | SID уже зарегистрирован в реестре `souls`. |
-| `bootstrap-token-active` | У Soul уже есть активный bootstrap-токен — повторный выпуск с `force: true` (`keeper.soul.issue-token`). |
-| `plugin-not-in-cache` | Активного слота плагина `(namespace, name)` нет в кеше host-а (нет `current`-symlink / битый слот, `keeper.plugin.allow`). |
-| `sigil-already-active` | Активный допуск на `(namespace, name, ref)` уже есть (`keeper.plugin.allow`). |
-| `sigil-not-found` | Активной записи allow-list-а на `(namespace, name, ref)` нет (`keeper.plugin.revoke`). |
-| `sigil-key-not-found` | Ключа подписи с таким `key_id` нет (`keeper.sigil.key.set-primary` / `keeper.sigil.key.retire`). |
-| `sigil-key-last-active` | Нельзя вывести последний active-ключ подписи — набор не должен опустеть (`keeper.sigil.key.retire`). |
-| `sigil-key-primary` | Нельзя вывести primary-ключ напрямую — сперва set-primary другому active (`keeper.sigil.key.retire`). |
-| `sigil-key-concurrent-change` | Гонка установки primary либо ключ retired при set-primary; retry (`keeper.sigil.key.introduce` / `set-primary`). |
-| `service-already-exists` | `name` Service-а занят в реестре `service_registry` (`keeper.service.register`). |
-| `service-not-registered` | `service` отсутствует в `keeper.yml → services[]`. |
-| `omen-already-exists` | `name` Omen-а занят в реестре `omens` (`keeper.augur.omen.create`). |
-| `provider-already-exists` | `name` Provider-а занят в реестре `providers` (`keeper.provider.create`). |
-| `profile-already-exists` | `name` Profile-я занят в реестре `profiles` (`keeper.profile.create`). |
-| `provider-has-profiles` | Удаление Provider-а заблокировано — на него ссылаются Profile-и (`keeper.provider.delete`; FK `ON DELETE RESTRICT`). |
-| `errand-not-cancellable` | Errand уже в терминальном статусе — отменять нечего (`keeper.errand.cancel`, ADR-033 slice E5). |
-| `internal-error` | Незапланированная ошибка; полная диагностика — в OTel-trace. |
+| `unauthenticated` | JWT is missing/not valid/expired. |
+| `forbidden` | RBAC check failed. `message` contains the required permission. |
+| `not-found` | The resource does not exist. |
+| `validation-failed` | Semantic input validation error. |
+| `malformed-request` | Invalid JSON/incorrect query params. |
+| `incarnation-locked` | Incarnation in `error_locked` - call `keeper.incarnation.unlock` before a new run. In `keeper.incarnation.rerun-last` - the status is not `error_locked` (nothing to restart). |
+| `rerun-input-unavailable` | `keeper.incarnation.rerun-last` (day-2-path) cannot restore the input of a failed run: recipe `apply_runs.recipe` cleaned up by retention Reaper / legacy run without a recipe (fail-closed) - remove the block with the usual `unlock` and run the script manually with an explicit input. Separate code from `incarnation-locked` (REST `TypeRerunInputUnavailable`, 409): machine-readable distinguishing "input lost" from "status not `error_locked`". |
+| `migration-failed` | Incarnation in `migration_failed` - manual parsing of state_history is required. |
+| `would-lock-out-cluster` | The operation would leave the cluster without an active Archon with an effective `*`-permission. Occurs in `keeper.operator.revoke` (recall of the last `*`-Archon), in role-operations `keeper.role.delete` / `keeper.role.update` / `keeper.role.revoke-operator` (see [§ Role](#role-6)) and in synod-operations `keeper.synod.delete` / `keeper.synod.remove-operator` / `keeper.synod.revoke-role` (effective `*` may come via Synod, see [§ Synod](#synod-8)). |
+| `role-not-found` | The role with the specified `name` is missing from `rbac_roles` (`keeper.role.delete` / `keeper.role.update` / `keeper.role.grant-operator` / `keeper.role.revoke-operator`; `keeper.synod.grant-role` over a non-existent role). |
+| `role-already-exists` | `name` role is occupied (`keeper.role.create`). |
+| `role-builtin` | The role with `builtin=true` (`cluster-admin`) - `keeper.role.delete` / `keeper.role.update` above it is prohibited. `grant-operator` / `revoke-operator` over the builtin role are allowed. |
+| `synod-not-found` | The synod group with the specified `name` is missing in `synods` (`keeper.synod.update` / `keeper.synod.delete` / `keeper.synod.add-operator` / `keeper.synod.grant-role`). |
+| `synod-already-exists` | Group `name` is busy (`keeper.synod.create`). |
+| `synod-builtin` | The group with `builtin=true` - `keeper.synod.delete` above it is prohibited. |
+| `incarnation-already-exists` | An Incarnation with the specified `name` has already been created. |
+| `operator-already-exists` | AID is already busy. |
+| `soul-already-exists` | The SID is already registered in the registry `souls`. |
+| `bootstrap-token-active` | Soul already has an active bootstrap token - re-release with `force: true` (`keeper.soul.issue-token`). |
+| `plugin-not-in-cache` | The active plugin slot `(namespace, name)` is not in the host cache (no `current`-symlink / broken slot, `keeper.plugin.allow`). |
+| `sigil-already-active` | There is already an active permit for `(namespace, name, ref)` (`keeper.plugin.allow`). |
+| `sigil-not-found` | There is no active allow-list entry on `(namespace, name, ref)` (`keeper.plugin.revoke`). |
+| `sigil-key-not-found` | There is no signing key with this `key_id` (`keeper.sigil.key.set-primary` / `keeper.sigil.key.retire`). |
+| `sigil-key-last-active` | The last active signature key cannot be displayed - the set must not be empty (`keeper.sigil.key.retire`). |
+| `sigil-key-primary` | You cannot display the primary key directly - first set-primary to another active (`keeper.sigil.key.retire`). |
+| `sigil-key-concurrent-change` | Primary installation race or retired key with set-primary; retry(`keeper.sigil.key.introduce` / `set-primary`). |
+| `service-already-exists` | `name` Service is busy in the registry `service_registry` (`keeper.service.register`). |
+| `service-not-registered` | `service` is missing from `keeper.yml → services[]`. |
+| `omen-already-exists` | `name` Omen is busy in the registry `omens` (`keeper.augur.omen.create`). |
+| `provider-already-exists` | `name` Provider is busy in the registry `providers` (`keeper.provider.create`). |
+| `profile-already-exists` | `name` Profile - I am busy in the registry `profiles` (`keeper.profile.create`). |
+| `provider-has-profiles` | The removal of the Provider is blocked - it is referenced by the Profile (`keeper.provider.delete`; FK `ON DELETE RESTRICT`). |
+| `errand-not-cancellable` | Errand is already in terminal status - there is nothing to cancel (`keeper.errand.cancel`, ADR-033 slice E5). |
+| `internal-error` | Unplanned error; full diagnostics - in OTel-trace. |
 
-> Неизвестный-но-валидный сценарий в `keeper.incarnation.run` — **не** ошибка вызова: tool возвращает `_apply_id` (async-accepted), прогон затем уходит в `error_locked` (`scenario_load_failed`), статус опрашивается через `keeper.incarnation.get`. Симметрично [operator-api/incarnations.md → `POST …/scenarios/{scenario}`](operator-api/incarnations.md#post-v1incarnationsnamescenariosscenario--запустить-произвольный-сценарий).
+> Unknown-but-valid script in `keeper.incarnation.run` - **not** call error: tool returns `_apply_id` (async-accepted), run then goes to `error_locked` (`scenario_load_failed`), status is polled via `keeper.incarnation.get`. Symmetrically [operator-api/incarnations.md → `POST …/scenarios/{scenario}`](operator-api/incarnations.md).
 
-Расширение списка кодов — only-add симметрично Operator API.
+Extending the code list - only-add symmetrically Operator API.
 
-## Каталог 89 MCP-tool
+## Catalog 89 MCP-tool
 
-1:1 с HTTP endpoints из [operator-api.md → Mapping endpoint ↔ MCP-tool ↔ permission](operator-api.md#mapping-endpoint--mcp-tool--permission). Для каждого tool: input schema (краткая таблица полей), output schema, cross-link на endpoint-секцию operator-api.md как источник правды по семантике.
+1:1 with HTTP endpoints from [operator-api.md → Mapping endpoint ↔ MCP-tool ↔ permission](operator-api.md#mapping-endpoint--mcp-tool--permission). For each tool: input schema (short table of fields), output schema, cross-link to the endpoint section of operator-api.md as a source of truth for semantics.
 
-Имена полей input — 1:1 с JSON body HTTP endpoint-а; пути в output — те же, что в HTTP response. Async-tools помечены в столбце **Async**.
+Field names input - 1:1 with JSON body HTTP endpoint; The paths in output are the same as in the HTTP response. Async-tools are marked in the **Async** column.
 
 ### Operator (3)
 
-Вынесены в доменный файл — [mcp-tools/operator.md](mcp-tools/operator.md): `keeper.operator.create`, `keeper.operator.revoke`, `keeper.operator.issue-token`. Источник правды по семантике — [operator-api/operator.md](operator-api/operator.md).
+Moved to a domain file - [mcp-tools/operator.md](mcp-tools/operator.md): `keeper.operator.create`, `keeper.operator.revoke`, `keeper.operator.issue-token`. The source of truth for semantics is [operator-api/operator.md](operator-api/operator.md).
 
 ### Role (6)
 
-Вынесены в доменный файл — [mcp-tools/roles.md](mcp-tools/roles.md): `keeper.role.create`, `keeper.role.delete`, `keeper.role.list`, `keeper.role.update`, `keeper.role.grant-operator`, `keeper.role.revoke-operator`. Источник правды по семантике — [operator-api/roles.md](operator-api/roles.md) (тела и инварианты — [rbac.md → REST `/v1/roles`](rbac.md#rest-v1roles)).
+Moved to a domain file - [mcp-tools/roles.md](mcp-tools/roles.md): `keeper.role.create`, `keeper.role.delete`, `keeper.role.list`, `keeper.role.update`, `keeper.role.grant-operator`, `keeper.role.revoke-operator`. The source of truth for semantics is [operator-api/roles.md](operator-api/roles.md) (bodies and invariants are [rbac.md → REST `/v1/roles`](rbac.md#rest-v1roles)).
 
 ### Synod (8)
 
-Вынесены в доменный файл — [mcp-tools/synods.md](mcp-tools/synods.md): `keeper.synod.create`, `keeper.synod.delete`, `keeper.synod.list`, `keeper.synod.update`, `keeper.synod.add-operator`, `keeper.synod.remove-operator`, `keeper.synod.grant-role`, `keeper.synod.revoke-role`. Источник правды по семантике — [operator-api/synods.md](operator-api/synods.md) (тела и инварианты — [rbac.md → REST `/v1/synods`](rbac.md#rest-v1synods)).
+Moved to a domain file - [mcp-tools/synods.md](mcp-tools/synods.md): `keeper.synod.create`, `keeper.synod.delete`, `keeper.synod.list`, `keeper.synod.update`, `keeper.synod.add-operator`, `keeper.synod.remove-operator`, `keeper.synod.grant-role`, `keeper.synod.revoke-role`. The source of truth for semantics is [operator-api/synods.md](operator-api/synods.md) (bodies and invariants are [rbac.md → REST `/v1/synods`](rbac.md#rest-v1synods)).
 
 ### Incarnation (11)
 
-Вынесены в доменный файл — [mcp-tools/incarnations.md](mcp-tools/incarnations.md): `keeper.incarnation.create`, `keeper.incarnation.rerun-last`, `keeper.incarnation.run`, `keeper.incarnation.get`, `keeper.incarnation.list`, `keeper.incarnation.history`, `keeper.incarnation.unlock`, `keeper.incarnation.upgrade`, `keeper.incarnation.check-drift`, `keeper.incarnation.destroy`, `keeper.incarnation.traits-set` — одиннадцать tool-ов с MCP-парностью к REST-роутам [operator-api.md → Incarnation (17)](operator-api.md#incarnation-17--жизненный-цикл-runtime-инстансов-adr-009). Шесть REST-only-роутов MCP-tool-а не имеют: `PATCH /v1/incarnations/{name}/hosts`, `POST …/scenarios/{scenario}/form-prefill`, `GET …/runs`, `GET …/runs/{apply_id}`, `POST …/secrets/reveal`, `GET …/secrets/revealable`; глобальные `GET /v1/runs` + `/v1/runs/stats` ([operator-api.md → Runs (2)](operator-api.md#runs-2--глобальный-read-view-прогонов-через-все-инкарнации)) — тоже REST-only. Источник правды по семантике — [operator-api/incarnations.md](operator-api/incarnations.md).
+Moved to a domain file - [mcp-tools/incarnations.md](mcp-tools/incarnations.md): `keeper.incarnation.create`, `keeper.incarnation.rerun-last`, `keeper.incarnation.run`, `keeper.incarnation.get`, `keeper.incarnation.list`, `keeper.incarnation.history`, `keeper.incarnation.unlock`, `keeper.incarnation.upgrade`, `keeper.incarnation.check-drift`, `keeper.incarnation.destroy`, `keeper.incarnation.traits-set` - eleven tools with MCP pairing to REST routes [operator-api.md → Incarnation (17)](operator-api.md). Six REST-only routes do not have an MCP tool: `PATCH /v1/incarnations/{name}/hosts`, `POST …/scenarios/{scenario}/form-prefill`, `GET …/runs`, `GET …/runs/{apply_id}`, `POST …/secrets/reveal`, `GET …/secrets/revealable`; global `GET /v1/runs` + `/v1/runs/stats` ([operator-api.md → Runs (2)](operator-api.md)) - also REST-only. The source of truth for semantics is [operator-api/incarnations.md](operator-api/incarnations.md).
 
 ### Soul (5)
 
-Вынесены в доменный файл — [mcp-tools/souls.md](mcp-tools/souls.md): `keeper.soul.create`, `keeper.soul.issue-token`, `keeper.soul.coven-assign`, `keeper.soul.list`, `keeper.soul.ssh-target.update`. Источник правды по семантике — [operator-api/souls.md](operator-api/souls.md). Read-роуты реестра (`GET /v1/souls/{sid}`, `/soulprint`, `/history`) — REST-only (MCP-tool-ов нет).
+Moved to a domain file - [mcp-tools/souls.md](mcp-tools/souls.md): `keeper.soul.create`, `keeper.soul.issue-token`, `keeper.soul.coven-assign`, `keeper.soul.list`, `keeper.soul.ssh-target.update`. The source of truth for semantics is [operator-api/souls.md](operator-api/souls.md). Read registry routes (`GET /v1/souls/{sid}`, `/soulprint`, `/history`) - REST-only (no MCP tools).
 
 ### Plugin (3)
 
-Вынесены в доменный файл — [mcp-tools/plugins.md](mcp-tools/plugins.md): `keeper.plugin.allow`, `keeper.plugin.revoke`, `keeper.plugin.list`. Источник правды по семантике — [operator-api/plugins.md](operator-api/plugins.md) (детали Integrity-model — [plugins.md → Integrity-model](plugins.md#integrity-model)). Ротация самих ключей **подписи** (отдельная зона) — [mcp-tools/sigils.md](mcp-tools/sigils.md).
+Moved to a domain file - [mcp-tools/plugins.md](mcp-tools/plugins.md): `keeper.plugin.allow`, `keeper.plugin.revoke`, `keeper.plugin.list`. The source of truth for semantics is [operator-api/plugins.md](operator-api/plugins.md) (Integrity-model details are [plugins.md → Integrity-model](plugins.md#integrity-model)). Rotation of the **signature keys** (separate zone) - [mcp-tools/sigils.md](mcp-tools/sigils.md).
 
 ### Sigil-key (4)
 
-Вынесены в доменный файл — [mcp-tools/sigils.md](mcp-tools/sigils.md): `keeper.sigil.key.introduce`, `keeper.sigil.key.list`, `keeper.sigil.key.set-primary`, `keeper.sigil.key.retire`. Источник правды по семантике — [operator-api/sigils.md](operator-api/sigils.md). Допуски самих бинарей (allow-list) — [mcp-tools/plugins.md](mcp-tools/plugins.md).
+Moved to a domain file - [mcp-tools/sigils.md](mcp-tools/sigils.md): `keeper.sigil.key.introduce`, `keeper.sigil.key.list`, `keeper.sigil.key.set-primary`, `keeper.sigil.key.retire`. The source of truth for semantics is [operator-api/sigils.md](operator-api/sigils.md). Tolerances of the binaries themselves (allow-list) - [mcp-tools/plugins.md](mcp-tools/plugins.md).
 
 ### Service (4)
 
-Реестр Service-ов `service_registry` (ADR-028-паттерн RBAC-storage: каталог `services[]` переносится из статического `keeper.yml` в managed-через-OpenAPI/MCP PG-таблицу). 1:1 с REST `POST/GET/PATCH/DELETE /v1/services*` и permission (`keeper.service.<action>` ↔ `service.<action>`, selector — NoSelector, как `operator.*`/`role.*`). Бизнес-логика (валидация `name`/`git`/`ref`/`refresh`, cluster-wide-инвалидация снимка после commit-а) живёт в `serviceregistry.Service`; tool — транспорт. Tools доступны только при подключённом реестре; при выключенном вызов возвращает `internal-error` («service registry is not configured»).
+Service registry `service_registry` (ADR-028 RBAC-storage pattern: directory `services[]` is transferred from static `keeper.yml` to managed-via-OpenAPI/MCP PG-table). 1:1 with REST `POST/GET/PATCH/DELETE /v1/services*` and permission (`keeper.service.<action>` ↔ `service.<action>`, selector - NoSelector, like `operator.*`/`role.*`). Business logic (validation `name`/`git`/`ref`/`refresh`, cluster-wide snapshot validation after commit) lives in `serviceregistry.Service`; tool - transport. Tools are only available when the registry is connected; when disabled, the call returns `internal-error` ("service registry is not configured").
 
 #### `keeper.service.register`
 
-Регистрирует Service в `service_registry`: git-источник service-репо + `ref` (версия = git ref, [ADR-007](../adr/0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте)) + опц. авто-`refresh`. Permission: `service.register`. Endpoint: [`POST /v1/services`](operator-api.md). Async: нет.
+Registers a Service in `service_registry`: git-source service-repo + `ref` (version = git ref, [ADR-007](../adr/0007-versioning-git-ref.md)) + opt. auto-`refresh`. Permission: `service.register`. Endpoint: [`POST /v1/services`](operator-api.md). Async: no.
 
 **Input:**
 
-| Поле | Тип | Required | Смысл |
+| Field | Type | Required | Meaning |
 |---|---|---|---|
-| `name` | `string` | yes | Имя Service-а (kebab-case `^[a-z][a-z0-9-]*$`). |
-| `git` | `string` | yes | git-источник service-репо (URL; не секрет). |
-| `ref` | `string` | yes | git ref (tag/branch) — версия Service-а. |
-| `refresh` | `string` | no | duration авто-refresh (`5m`); опущено — без авто-refresh. |
+| `name` | `string` | yes | Service name (kebab-case `^[a-z][a-z0-9-]*$`). |
+| `git` | `string` | yes | git source service repo (URL; no secret). |
+| `ref` | `string` | yes | git ref (tag/branch) - version of the Service. |
+| `refresh` | `string` | no | duration auto-refresh(`5m`); omitted - no auto-refresh. |
 
 **Output:** `ServiceView` — `{name, git, ref, refresh?, created_by_aid?, updated_by_aid?, created_at, updated_at}`.
 
-Ошибки: `service-already-exists` (`name` занят), `not-found` (AID создателя отсутствует в `operators`), `validation-failed` (битый `name`/`git`/`ref`/`refresh`). Audit: `service.registered`.
+Errors: `service-already-exists` (`name` busy), `not-found` (creator's AID missing from `operators`), `validation-failed` (broken `name`/`git`/`ref`/`refresh`). Audit: `service.registered`.
 
 #### `keeper.service.update`
 
-Заменяет mutable-поля записи Service-а (`git`/`ref`/`refresh`, replace-семантика); `name` — ключ, не меняется. Permission: `service.update`. Endpoint: [`PATCH /v1/services/{name}`](operator-api.md). Async: нет.
+Replaces mutable fields of a Service record (`git`/`ref`/`refresh`, replace semantics); `name` - key, does not change. Permission: `service.update`. Endpoint: [`PATCH /v1/services/{name}`](operator-api.md). Async: no.
 
 **Input:**
 
-| Поле | Тип | Required | Смысл |
+| Field | Type | Required | Meaning |
 |---|---|---|---|
-| `name` | `string` | yes | Имя Service-а (ключ записи). |
-| `git` | `string` | yes | Новый git-источник. |
-| `ref` | `string` | yes | Новый git ref. |
-| `refresh` | `string` | no | duration авто-refresh (`5m`). |
+| `name` | `string` | yes | Service name (record key). |
+| `git` | `string` | yes | New git source. |
+| `ref` | `string` | yes | New git ref. |
+| `refresh` | `string` | no | duration auto-refresh (`5m`). |
 
 **Output:** `ServiceView`.
 
-Ошибки: `not-found` (записи нет либо AID правщика отсутствует в `operators`), `validation-failed` (битый `git`/`ref`/`refresh`). Audit: `service.updated`.
+Errors: `not-found` (there is no record or the editor's AID is missing in `operators`), `validation-failed` (broken `git`/`ref`/`refresh`). Audit: `service.updated`.
 
 #### `keeper.service.list`
 
-Перечисление зарегистрированных Service-ов (sort `name` ASC). Permission: `service.list`. Endpoint: [`GET /v1/services`](operator-api.md). Async: нет.
+List of registered Services (sort `name` ASC). Permission: `service.list`. Endpoint: [`GET /v1/services`](operator-api.md). Async: no.
 
-**Input:** пустой объект.
+**Input:** empty object.
 
 **Output:**
 
-| Поле | Тип | Смысл |
+| Field | Type | Meaning |
 |---|---|---|
-| `services` | `array<ServiceView>` | Элементы — `{name, git, ref, refresh?, created_by_aid?, updated_by_aid?, created_at, updated_at}`. |
+| `services` | `array<ServiceView>` | Items - `{name, git, ref, refresh?, created_by_aid?, updated_by_aid?, created_at, updated_at}`. |
 
 #### `keeper.service.deregister`
 
-Удаляет запись Service-а из `service_registry` по имени. Permission: `service.deregister`. Endpoint: [`DELETE /v1/services/{name}`](operator-api.md). Async: нет.
+Removes a Service entry from `service_registry` by name. Permission: `service.deregister`. Endpoint: [`DELETE /v1/services/{name}`](operator-api.md). Async: no.
 
 **Input:**
 
-| Поле | Тип | Required | Смысл |
+| Field | Type | Required | Meaning |
 |---|---|---|---|
-| `name` | `string` | yes | Имя Service-а. |
+| `name` | `string` | yes | Service name. |
 
-**Output:** пустой объект (REST-эквивалент — 204 No Content).
+**Output:** empty object (REST equivalent - 204 No Content).
 
-Ошибки: `not-found` (записи нет). Audit: `service.deregistered`.
+Errors: `not-found` (no entry). Audit: `service.deregistered`.
 
 ### Augur (6)
 
-Вынесены в доменный файл — [mcp-tools/augur.md](mcp-tools/augur.md): `keeper.augur.omen.create`, `keeper.augur.omen.list`, `keeper.augur.omen.delete`, `keeper.augur.rite.create`, `keeper.augur.rite.list`, `keeper.augur.rite.delete`. Источник правды по семантике — [operator-api/augur.md](operator-api/augur.md). **Live-fetch от Soul (`AugurRequest`) этими tool-ами НЕ управляется** ([rbac.md §Augur](rbac.md)).
+Moved to a domain file - [mcp-tools/augur.md](mcp-tools/augur.md): `keeper.augur.omen.create`, `keeper.augur.omen.list`, `keeper.augur.omen.delete`, `keeper.augur.rite.create`, `keeper.augur.rite.list`, `keeper.augur.rite.delete`. The source of truth for semantics is [operator-api/augur.md](operator-api/augur.md). **Live-fetch from Soul (`AugurRequest`) is NOT controlled by these tools** ([rbac.md §Augur](rbac.md)).
 
 ### Oracle (6)
 
-Вынесены в доменный файл — [mcp-tools/oracle.md](mcp-tools/oracle.md): `keeper.oracle.vigil.create`, `keeper.oracle.vigil.list`, `keeper.oracle.vigil.delete`, `keeper.oracle.decree.create`, `keeper.oracle.decree.list`, `keeper.oracle.decree.delete`. Источник правды по семантике — [operator-api/oracle.md](operator-api/oracle.md). **Reactor-флоу (Portent → match Decree → enqueue) этими tool-ами НЕ управляется** ([rbac.md §Oracle](rbac.md)).
+Moved to a domain file - [mcp-tools/oracle.md](mcp-tools/oracle.md): `keeper.oracle.vigil.create`, `keeper.oracle.vigil.list`, `keeper.oracle.vigil.delete`, `keeper.oracle.decree.create`, `keeper.oracle.decree.list`, `keeper.oracle.decree.delete`. The source of truth for semantics is [operator-api/oracle.md](operator-api/oracle.md). **Reactor flow (Portent → match Decree → enqueue) is NOT controlled by these tools** ([rbac.md §Oracle](rbac.md)).
 
 ### Errand (4)
 
-Вынесены в доменный файл — [mcp-tools/errands.md](mcp-tools/errands.md): `keeper.soul.errand.run`, `keeper.errand.list`, `keeper.errand.get`, `keeper.errand.cancel`. Источник правды по семантике — [operator-api/errands.md](operator-api/errands.md).
+Moved to a domain file - [mcp-tools/errands.md](mcp-tools/errands.md): `keeper.soul.errand.run`, `keeper.errand.list`, `keeper.errand.get`, `keeper.errand.cancel`. The source of truth for semantics is [operator-api/errands.md](operator-api/errands.md).
 
 ### Voyage (4)
 
-Вынесены в доменный файл — [mcp-tools/voyages.md](mcp-tools/voyages.md): `keeper.voyage.start`, `keeper.voyage.get`, `keeper.voyage.list`, `keeper.voyage.cancel`. `POST /v1/voyages/preview` — REST-only (MCP-tool нет). Источник правды по семантике — [operator-api/voyages.md](operator-api/voyages.md).
+Moved to a domain file - [mcp-tools/voyages.md](mcp-tools/voyages.md): `keeper.voyage.start`, `keeper.voyage.get`, `keeper.voyage.list`, `keeper.voyage.cancel`. `POST /v1/voyages/preview` - REST-only (no MCP-tool). The source of truth for semantics is [operator-api/voyages.md](operator-api/voyages.md).
 
 ### Push (2)
 
-Вынесены в доменный файл — [mcp-tools/push.md](mcp-tools/push.md): `keeper.push.apply`, `keeper.push.cleanup`. Источник правды по семантике — [operator-api/push.md](operator-api/push.md).
+Moved to a domain file - [mcp-tools/push.md](mcp-tools/push.md): `keeper.push.apply`, `keeper.push.cleanup`. The source of truth for semantics is [operator-api/push.md](operator-api/push.md).
 
 ### Cloud (8)
 
-CRUD реестров Cloud-Provider-ов (`providers`) и Cloud-Profile-ей (`profiles`, ADR-017, [cloud.md → Provider и Profile](cloud.md#provider-и-profile-в-postgres)). **Реализовано** (REST + MCP, один источник правды `provider.Service` / `profile.Service`): по четыре tool на сущность — `create` / `list` / `get` / `delete`. **`update`-tool-а нет** — Provider/Profile иммутабельны (смена параметров = `delete` + `create`, защита от частичной мутации spec живущих VM); поэтому read-видимость гейтит одна permission `provider.read` / `profile.read` (паттерн `operator.list`↔`read`). Селектор — NoSelector. Tools доступны только при подключённом реестре; при выключенном вызов возвращает `internal-error`. Async: нет. Источник правды по семантике — [cloud.md](cloud.md), permission-каталог — [rbac.md → Cloud](rbac.md#cloud-6--cloudmd).
+CRUD registries of Cloud-Providers (`providers`) and Cloud-Profiles (`profiles`, ADR-017, [cloud.md → Provider and Profile](cloud.md)). **Implemented** (REST + MCP, one source of truth `provider.Service` / `profile.Service`): four tools per entity - `create` / `list` / `get` / `delete`. **`update`-tool-but no** - Provider/Profile are immutable (change parameters = `delete` + `create`, protection against partial mutation spec of living VMs); therefore read-visibility gates one permission `provider.read` / `profile.read` (pattern `operator.list`↔`read`). Selector - NoSelector. Tools are only available when the registry is connected; when disabled, the call returns `internal-error`. Async: no. The source of truth for semantics is [cloud.md](cloud.md), permission directory is [rbac.md → Cloud](rbac.md#cloud-6--cloudmd).
 
-`credentials_ref` (только Provider) хранится и отдаётся как **путь** `vault:<mount>/<path>` — сами credentials API НЕ резолвит и НЕ возвращает; в audit пишется тоже путь (не секрет).
+`credentials_ref` (Provider only) is stored and returned as **path** `vault:<mount>/<path>` - the credentials themselves are NOT resolved or returned by the API; The path is also written in audit (not a secret).
 
 #### `keeper.provider.create`
 
-Создание Provider. Permission: `provider.create`. Endpoint: `POST /v1/providers`. Audit: `provider.created`.
+Creating a Provider. Permission: `provider.create`. Endpoint: `POST /v1/providers`. Audit: `provider.created`.
 
 **Input:**
 
-| Поле | Тип | Required | Смысл |
+| Field | Type | Required | Meaning |
 |---|---|---|---|
-| `name` | `string` (kebab-case) | yes | Имя Provider. |
-| `type` | `string` (kebab-case) | yes | Имя CloudDriver-плагина (`soul-cloud-<type>`). |
-| `region` | `string` | yes | Регион/zone. |
-| `credentials_ref` | `string` (`vault:<path>`) | yes | Vault-ref до credentials (путь, не секрет). |
+| `name` | `string` (kebab-case) | yes | Provider name. |
+| `type` | `string` (kebab-case) | yes | CloudDriver plugin name (`soul-cloud-<type>`). |
+| `region` | `string` | yes | Region/zone. |
+| `credentials_ref` | `string` (`vault:<path>`) | yes | Vault-ref to credentials (path, no secret). |
 
-**Output:** `{name, type, region, credentials_ref, created_at (RFC 3339), created_by_aid?}` — зеркало input + server-side метки.
+**Output:** `{name, type, region, credentials_ref, created_at (RFC 3339), created_by_aid?}` - mirror input + server-side labels.
 
-Ошибки: `provider-already-exists` (`409`, дубль `name`); `validation-failed` (битый `name`/`type`/`region`/`credentials_ref`).
+Errors: `provider-already-exists` (`409`, double `name`); `validation-failed` (broken `name`/`type`/`region`/`credentials_ref`).
 
 #### `keeper.provider.list`
 
-Перечисление Provider-ов (paged). Permission: `provider.read`. Endpoint: `GET /v1/providers`.
+Enumeration of Providers (paged). Permission: `provider.read`. Endpoint: `GET /v1/providers`.
 
 **Input:** `{offset?, limit?}` (`limit` default `100`). **Output:** `{items: [...], offset, limit, total}`.
 
 #### `keeper.provider.get`
 
-Чтение одного Provider по имени. Permission: `provider.read`. Endpoint: `GET /v1/providers/{name}`.
+Reading one Provider by name. Permission: `provider.read`. Endpoint: `GET /v1/providers/{name}`.
 
-**Input:** `{name}`. **Output:** `providerViewOut`. Ошибки: `not-found`.
+**Input:** `{name}`. **Output:** `providerViewOut`. Errors: `not-found`.
 
 #### `keeper.provider.delete`
 
-Удаление Provider. Permission: `provider.delete`. Endpoint: `DELETE /v1/providers/{name}`. Audit: `provider.deleted`.
+Removing Provider. Permission: `provider.delete`. Endpoint: `DELETE /v1/providers/{name}`. Audit: `provider.deleted`.
 
-**Input:** `{name}`. **Output:** пустой объект. Ошибки: `not-found`; `provider-has-profiles` (`409` — на Provider ссылаются Profile-и, FK `ON DELETE RESTRICT`; сперва удалить зависимые Profile-и).
+**Input:** `{name}`. **Output:** empty object. Errors: `not-found`; `provider-has-profiles` (`409` - Provider is referenced by Profiles, FK `ON DELETE RESTRICT`; first delete dependent Profiles).
 
 #### `keeper.profile.create`
 
-Создание Profile. Permission: `profile.create`. Endpoint: `POST /v1/profiles`. Audit: `profile.created`.
+Creating a Profile. Permission: `profile.create`. Endpoint: `POST /v1/profiles`. Audit: `profile.created`.
 
 **Input:**
 
-| Поле | Тип | Required | Смысл |
+| Field | Type | Required | Meaning |
 |---|---|---|---|
-| `name` | `string` (kebab-case) | yes | Имя Profile. |
-| `provider` | `string` | yes | Имя зарегистрированного Provider (FK). |
-| `params` | `object` | optional | Параметры VM (freeform jsonb; валидируются против `profile_schema` CloudDriver-плагина на scenario-слое, не в CRUD). |
-| `cloud_init` | `string` | optional | Сырая cloud-init userdata. |
+| `name` | `string` (kebab-case) | yes | Profile name. |
+| `provider` | `string` | yes | Name of the registered Provider (FK). |
+| `params` | `object` | optional | VM parameters (freeform jsonb; validated against the `profile_schema` CloudDriver plugin on the scenario layer, not in CRUD). |
+| `cloud_init` | `string` | optional | Raw cloud-init userdata. |
 
 **Output:** `{name, provider, params, cloud_init?, created_at, created_by_aid?}`.
 
-Ошибки: `profile-already-exists` (`409`, дубль `name`); `validation-failed` (`422` — ссылка на несуществующий Provider (FK) либо битый `name`/`provider`).
+Errors: `profile-already-exists` (`409`, double `name`); `validation-failed` (`422` - link to a non-existent Provider (FK) or broken `name`/`provider`).
 
 #### `keeper.profile.list`
 
-Перечисление Profile-ей (paged; опц. фильтр по Provider-у). Permission: `profile.read`. Endpoint: `GET /v1/profiles`.
+Enumeration of Profiles (paged; optional filter by Provider). Permission: `profile.read`. Endpoint: `GET /v1/profiles`.
 
 **Input:** `{provider?, offset?, limit?}`. **Output:** `{items: [...], offset, limit, total}`.
 
 #### `keeper.profile.get`
 
-Чтение одного Profile по имени. Permission: `profile.read`. Endpoint: `GET /v1/profiles/{name}`.
+Reading one Profile by name. Permission: `profile.read`. Endpoint: `GET /v1/profiles/{name}`.
 
-**Input:** `{name}`. **Output:** `profileViewOut`. Ошибки: `not-found`.
+**Input:** `{name}`. **Output:** `profileViewOut`. Errors: `not-found`.
 
 #### `keeper.profile.delete`
 
-Удаление Profile. Permission: `profile.delete`. Endpoint: `DELETE /v1/profiles/{name}`. Audit: `profile.deleted`.
+Deleting Profile. Permission: `profile.delete`. Endpoint: `DELETE /v1/profiles/{name}`. Audit: `profile.deleted`.
 
-**Input:** `{name}`. **Output:** пустой объект. Ошибки: `not-found`.
+**Input:** `{name}`. **Output:** empty object. Errors: `not-found`.
 
 ### Push-Provider (5)
 
-Вынесены в доменный файл — [mcp-tools/push-providers.md](mcp-tools/push-providers.md): `keeper.push-provider.create`, `keeper.push-provider.update`, `keeper.push-provider.delete`, `keeper.push-provider.list`, `keeper.push-provider.read`. Источник правды по семантике — [operator-api/push-providers.md](operator-api/push-providers.md). Sensitive params (`secret_id`/`token`/`password`/`private_key`) ОБЯЗАНЫ быть vault-refs.
+Moved to a domain file - [mcp-tools/push-providers.md](mcp-tools/push-providers.md): `keeper.push-provider.create`, `keeper.push-provider.update`, `keeper.push-provider.delete`, `keeper.push-provider.list`, `keeper.push-provider.read`. The source of truth for semantics is [operator-api/push-providers.md](operator-api/push-providers.md). Sensitive params (`secret_id`/`token`/`password`/`private_key`) MUST be vault-refs.
 
 ### Herald (5)
 
-Вынесены в доменный файл — [mcp-tools/heralds.md](mcp-tools/heralds.md): `keeper.herald.create`, `keeper.herald.update`, `keeper.herald.delete`, `keeper.herald.list`, `keeper.herald.read`. Источник правды по семантике — [operator-api/heralds.md](operator-api/heralds.md). Каналы доставки уведомлений о прогонах ([ADR-052](../adr/0052-herald-notifications.md#adr-052-herald--tiding--уведомления-о-событиях-прогонов)); webhook + SSRF-guard (https-only/deny-private по умолчанию), `secret_ref` — vault-ref на signing-token (подпись `X-SoulStack-Signature: sha256=<hex>`).
+Moved to a domain file - [mcp-tools/heralds.md](mcp-tools/heralds.md): `keeper.herald.create`, `keeper.herald.update`, `keeper.herald.delete`, `keeper.herald.list`, `keeper.herald.read`. The source of truth for semantics is [operator-api/heralds.md](operator-api/heralds.md). Run notification delivery channels ([ADR-052](../adr/0052-herald-notifications.md)); webhook + SSRF-guard (https-only/deny-private by default), `secret_ref` - vault-ref to signing-token (signature `X-SoulStack-Signature: sha256=<hex>`).
 
 ### Tiding (5)
 
-Вынесены в доменный файл — [mcp-tools/tidings.md](mcp-tools/tidings.md): `keeper.tiding.create`, `keeper.tiding.update`, `keeper.tiding.delete`, `keeper.tiding.list`, `keeper.tiding.read`. Источник правды по семантике — [operator-api/tidings.md](operator-api/tidings.md). Правила подписки (`event_types` area-glob в scope прогонов → Herald); `herald` — FK на существующий Herald.
+Moved to a domain file - [mcp-tools/tidings.md](mcp-tools/tidings.md): `keeper.tiding.create`, `keeper.tiding.update`, `keeper.tiding.delete`, `keeper.tiding.list`, `keeper.tiding.read`. The source of truth for semantics is [operator-api/tidings.md](operator-api/tidings.md). Subscription rules (`event_types` area-glob in scope runs → Herald); `herald` - FK to existing Herald.
 
-### Cadence (0) и Choir (0) — REST-only
+### Cadence (0) and Choir (0) - REST-only
 
-Домены **Cadence** (`/v1/cadences*`, [ADR-046](../adr/0046-cadence.md#adr-046-cadence--регулярные-запуски-scheduledrecurring-voyage)) и **Choir** (`/v1/incarnations/{name}/choirs*`, [ADR-044](../adr/0044-choir.md#adr-044-choir--именованная-топология-хостов-внутри-инкарнации)) MCP-tool-ов **не имеют** — `manifest.go` их не содержит. Стаб-файлы фиксируют отсутствие: [mcp-tools/cadences.md](mcp-tools/cadences.md), [mcp-tools/choirs.md](mcp-tools/choirs.md). Управление этими доменами — только через Operator API ([operator-api/cadences.md](operator-api/cadences.md), [operator-api/choirs.md](operator-api/choirs.md)).
+Domains **Cadence** (`/v1/cadences*`, [ADR-046](../adr/0046-cadence.md)) and **Choir** (`/v1/incarnations/{name}/choirs*`, [ADR-044](../adr/0044-choir.md)) **do not have MCP tools** - `manifest.go` does not contain them. Stub files record the absence: [mcp-tools/cadences.md](mcp-tools/cadences.md), [mcp-tools/choirs.md](mcp-tools/choirs.md). These domains are managed only through the Operator API ([operator-api/cadences.md](operator-api/cadences.md), [operator-api/choirs.md](operator-api/choirs.md)).
 
-## Что НЕ публикуется как MCP-tool
+## What is NOT published as MCP-tool
 
 ### Health / Meta endpoints
 
-`/healthz`, `/readyz`, `/metrics`, `/openapi.yaml` — **не MCP-tools**. LLM-агент не должен дёргать healthcheck/metrics; их потребители — оркестраторы, monitoring, документация. Доступ — напрямую через HTTP на `listen.openapi.addr` / `listen.metrics.addr` без auth (метрики — на отдельном listener-е, см. [config.md → listen](config.md#listen)).
+`/healthz`, `/readyz`, `/metrics`, `/openapi.yaml` - **not MCP-tools**. The LLM agent should not pull healthcheck/metrics; their consumers are orchestrators, monitoring, documentation. Access - directly via HTTP to `listen.openapi.addr` / `listen.metrics.addr` without auth (metrics - on a separate listener, see [config.md → listen](config.md#listen)).
 
-### Bootstrap первого Архонта
+### Bootstrap of the first Archon
 
-`keeper init` ([ADR-013](../adr/0013-bootstrap-archon.md#adr-013-bootstrap-первого-архонта)) — administrative subcommand, выполняется на keeper-хосте оператором с shell-доступом. MCP-tool-а вида `keeper.bootstrap.init` **нет**: первый Архонт создаётся, когда реестр `operators` пуст; MCP-доступ требует JWT, который ещё не выпущен. Bootstrap-bypass через MCP не вводится сознательно — это снизит security-границу.
+`keeper init` ([ADR-013](../adr/0013-bootstrap-archon.md)) - administrative subcommand, executed on the keeper host by an operator with shell access. MCP-tool like `keeper.bootstrap.init` **no**: the first Archon is created when the registry `operators` is empty; MCP access requires JWT, which has not yet been released. Bootstrap-bypass through MCP is not introduced deliberately - this will reduce the security boundary.
 
-### Будущие чтения и удаления
+### Future reads and deletes
 
-Каталог 89 tool — 1:1 с MVP-каталогом permissions из [rbac.md → Каталог permissions](rbac.md#каталог-permissions). Чтения / удаления, отложенные до появления соответствующих permissions (`operator.get`, `soul.get` и т.п.), добавляются в этот каталог одним PR с расширением `rbac.md` + `operator-api.md` + этого документа. Cloud-CRUD (`provider.*` / `profile.*`) — больше не отложен: реализован полностью (create/list/get/delete по каждой сущности, см. [§ Cloud](#cloud-8)).
+Directory 89 tool - 1:1 with MVP directory permissions from [rbac.md → Directory permissions](rbac.md). Reads/deletions that are deferred until the corresponding permissions (`operator.get`, `soul.get`, etc.) are available are added to this directory in one PR with the extension `rbac.md` + `operator-api.md` + of this document. Cloud-CRUD (`provider.*` / `profile.*`) - no longer deferred: fully implemented (create/list/get/delete per entity, see [§ Cloud](#cloud-8)).
 
 ## SSE event payloads
 
-`GET /mcp/events?apply_id=<ULID>` отдаёт Server-Sent Events stream с typed apply-event-payloads, публикуемыми in-memory шиной [`keeper/internal/applybus`](https://github.com/souls-guild/soul-stack/tree/main/keeper/internal/applybus). Шина связывает publisher-ов (Keeper-side handler-ы EventStream-payload-ов [`TaskEvent`](https://github.com/souls-guild/soul-stack/blob/main/keeper/internal/grpc/events_taskevent.go) / [`RunResult`](https://github.com/souls-guild/soul-stack/blob/main/keeper/internal/grpc/events_runresult.go) и, в будущем, scenario-runner) с SSE-subscriber-ами.
+`GET /mcp/events?apply_id=<ULID>` sends a Server-Sent Events stream with typed apply-event-payloads published by the in-memory bus [`keeper/internal/applybus`](https://github.com/souls-guild/soul-stack/tree/main/keeper/internal/applybus). The bus connects publishers (Keeper-side handlers of EventStream-payloads [`TaskEvent`](https://github.com/souls-guild/soul-stack/blob/main/keeper/internal/grpc/events_taskevent.go) / [`RunResult`](https://github.com/souls-guild/soul-stack/blob/main/keeper/internal/grpc/events_runresult.go) and, in the future, scenario-runners) with SSE-subscribers.
 
-Этот раздел — нормативная фиксация формата SSE-frame и payload-ов; код-publisher-ы и handler — у источника правды по семантике (см. ссылки выше).
+This section is a regulatory fixation of the SSE-frame and payload format; code publishers and handler are at the source of truth in semantics (see links above).
 
 ### SSE frame
 
-Каждое apply-событие транслируется одним SSE-frame-ом:
+Each apply event is broadcast by one SSE frame:
 
 ```
 event: <kind>
@@ -406,37 +406,37 @@ data: <json payload>
 
 ```
 
-- `event:` — имя `EventKind` (см. ниже), стабильный snake-case с точкой-разделителем.
-- `id:` — `apply_id` события (ULID); SSE-клиент видит его в `MessageEvent.lastEventId`.
-- `data:` — одна строка JSON-payload (без переносов); структура зависит от `kind`-а (см. § Per-kind schema).
-- Завершающий пустой строкой по SSE-spec.
+- `event:` - name `EventKind` (see below), stable snake-case with dot separator.
+- `id:` - `apply_id` events (ULID); The SSE client sees it in `MessageEvent.lastEventId`.
+- `data:` — one line JSON-payload (without hyphens); the structure depends on `kind` (see § Per-kind schema).
+- Terminates with an empty line according to SSE-spec.
 
 ### Common payload fields
 
-Все payload-ы — JSON-объект с тремя обязательными ключами:
+All payloads are a JSON object with three required keys:
 
-| Поле | Тип | Описание |
+| Field | Type | Description |
 |---|---|---|
-| `apply_id` | string ULID | Идентификатор apply-run; дублирует SSE-frame `id:`-line (subscriber может опираться на любой). |
-| `kind` | string (closed enum) | Тип события (см. ниже); дублирует SSE-frame `event:`-line. |
-| `sid` | string FQDN | Soul-инициатор события. Источник payload-а: Soul-side TaskEvent/RunResult, mTLS peer cert при доставке EventStream — авторитативный SID. |
+| `apply_id` | string ULID | Id apply-run; duplicates SSE-frame `id:`-line (subscriber can rely on any). |
+| `kind` | string (closed enum) | Event type (see below); duplicates SSE-frame `event:`-line. |
+| `sid` | string FQDN | Soul is the initiator of the event. Payload source: Soul-side TaskEvent/RunResult, mTLS peer cert upon delivery EventStream - authoritative SID. |
 
-**Чего нет в SSE payload-е:**
+**What is not in the SSE payload:**
 
-- Поля `at` (timestamp публикации) в JSON-payload **нет** — оно живёт во внутренней структуре `applybus.Event.At` и используется только для логирования/диагностики. SSE-клиент берёт timestamp у себя при получении event-а либо проставляет на стороне keeper-side scenario-runner-а в `state_changes`/audit-log (источник — Postgres `audit_log.created_at`).
-- Поля `register_data` (TaskEvent) в SSE payload-е **нет**. Это сознательное упрощение: register-data может быть крупным и/или содержать секреты — для аудит-цепочки она пишется в `audit_log.payload.register_data` (с прогоном через [`audit.MaskSecrets`](https://github.com/souls-guild/soul-stack/tree/main/shared/audit)); SSE-клиенту, отслеживающему ход прогона, она не нужна.
+- Fields `at` (post timestamp) in JSON-payload **no** - it lives in the internal structure of `applybus.Event.At` and is used only for logging/diagnostics. The SSE client takes the timestamp from itself when receiving an event or puts it on the keeper-side scenario-runner side in `state_changes`/audit-log (source - Postgres `audit_log.created_at`).
+- The `register_data` (TaskEvent) fields in the SSE payload are **not**. This is a deliberate simplification: register-data can be large and/or contain secrets - for the audit chain it is written in `audit_log.payload.register_data` (run through [`audit.MaskSecrets`](https://github.com/souls-guild/soul-stack/tree/main/shared/audit)); The SSE client that monitors the progress of the run does not need it.
 
 ### Event kinds (closed enum)
 
-| `kind` | Когда публикуется | Источник |
+| `kind` | When is it published | Source |
 |---|---|---|
-| `apply.started` | Apply-прогон начат. Зарезервировано за keeper-side scenario-runner-ом; в M0.7.c publisher-а **нет**, но SSE-клиент должен распознавать `kind` для forward-compat. | scenario-runner (post-MVP). |
-| `task.executed` | Одна задача внутри прогона завершилась (любой `TaskStatus`: OK / FAILED / CANCELLED / SKIPPED). | [`handleTaskEvent`](https://github.com/souls-guild/soul-stack/blob/main/keeper/internal/grpc/events_taskevent.go) при получении `TaskEvent` от Soul. |
-| `apply.completed` | Прогон завершился успешно (`RUN_STATUS_SUCCESS`). | [`handleRunResult`](https://github.com/souls-guild/soul-stack/blob/main/keeper/internal/grpc/events_runresult.go). |
-| `apply.failed` | Прогон завершился ошибкой (`RUN_STATUS_FAILED` / `RUN_STATUS_ERROR_LOCKED` / любой неуспех, не отнесённый к `cancelled`). | `handleRunResult`. |
-| `apply.cancelled` | Прогон отменён (`RUN_STATUS_CANCELLED`). | `handleRunResult`. |
+| `apply.started` | The Apply run has started. Reserved for keeper-side scenario-runner; in M0.7.c there is **no** publisher, but the SSE client must recognize `kind` for forward-compat. | scenario-runner (post-MVP). |
+| `task.executed` | One task within the run has completed (any `TaskStatus`: OK / FAILED / CANCELLED / SKIPPED). | [`handleTaskEvent`](https://github.com/souls-guild/soul-stack/blob/main/keeper/internal/grpc/events_taskevent.go) when receiving `TaskEvent` from Soul. |
+| `apply.completed` | The run completed successfully (`RUN_STATUS_SUCCESS`). | [`handleRunResult`](https://github.com/souls-guild/soul-stack/blob/main/keeper/internal/grpc/events_runresult.go). |
+| `apply.failed` | The run failed (`RUN_STATUS_FAILED` / `RUN_STATUS_ERROR_LOCKED` / any failure not attributed to `cancelled`). | `handleRunResult`. |
+| `apply.cancelled` | Run canceled (`RUN_STATUS_CANCELLED`). | `handleRunResult`. |
 
-Расширение enum-а — only-add: новые kind-ы добавляются здесь и в [`applybus.EventKind`](https://github.com/souls-guild/soul-stack/blob/main/keeper/internal/applybus/bus.go) одним PR, без переименования существующих.
+Enum extension - only-add: new kinds are added here and in [`applybus.EventKind`](https://github.com/souls-guild/soul-stack/blob/main/keeper/internal/applybus/bus.go) with one PR, without renaming existing ones.
 
 ### Per-kind schema
 
@@ -450,7 +450,7 @@ data: <json payload>
 }
 ```
 
-Без дополнительных полей. Зарезервировано за scenario-runner-ом — в M0.7.c таких событий публикатор не выпускает, но SSE-клиент не должен ронять stream при встрече kind-а.
+No additional fields. Reserved for the scenario-runner - in M0.7.c the publisher does not issue such events, but the SSE client should not drop the stream when it encounters a kind.
 
 #### `task.executed`
 
@@ -468,11 +468,11 @@ data: <json payload>
 }
 ```
 
-| Поле | Тип | Required | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `task_idx` | integer (≥0) | yes | Индекс задачи в `RenderedTask[]` apply-прогона. |
-| `task_status` | string | yes | Полное имя enum-константы `TaskStatus` из proto (`TASK_STATUS_OK` / `TASK_STATUS_FAILED` / `TASK_STATUS_CANCELLED` / …). При расширении enum-а Soul-side новые значения уходят в payload «как есть» — SSE-клиент должен трактовать неизвестные значения как `failed`-аналог для UX, не падать. |
-| `error` | object | optional | Заполнено только при `task_status` ≠ OK. Структура — `{code, module}` (подмножество `keeperv1.ModuleError`). **`message` (stderr задачи) на SSE НЕ публикуется** (BUG-3 floor): stderr упавшей задачи может нести plaintext-секрет (особенно `no_log: true`-задачи), который `MaskSecrets` по vault-ref не ловит; флаг `no_log` живёт в run-goroutine-е, а SSE-publish (grpc-слой) на multi-Keeper его не знает (ADR-002, ADR-012(d)). Детальную безопасную причину оператор получает через `status_details` / `GET /v1/incarnations/<name>` (там no_log подавлён + двойной `MaskSecrets`, см. `scenario.failureReason`). `code`/`module` несут триаж без тела stderr. |
+| `task_idx` | integer (≥0) | yes | The task index in the `RenderedTask[]` apply-run. |
+| `task_status` | string | yes | The full name of the enum constant `TaskStatus` from proto (`TASK_STATUS_OK` / `TASK_STATUS_FAILED` / `TASK_STATUS_CANCELLED` / ...). When expanding the Soul-side enum, new values go to the payload "as is" - the SSE client must treat unknown values as the `failed` analogue for UX, and not crash. |
+| `error` | object | optional | Filled only when `task_status` ≠ OK. Structure - `{code, module}` (subset of `keeperv1.ModuleError`). **`message` (task stderr) is NOT published on SSE** (BUG-3 floor): stderr of a fallen task may carry a plaintext secret (especially `no_log: true` task), which `MaskSecrets` does not catch according to vault-ref; the `no_log` flag lives in the run-goroutine, but SSE-publish (grpc layer) on multi-Keeper does not know it (ADR-002, ADR-012(d)). The operator receives the detailed safe reason via `status_details` / `GET /v1/incarnations/<name>` (there no_log is suppressed + double `MaskSecrets`, see `scenario.failureReason`). `code`/`module` carry triage without body stderr. |
 
 #### `apply.completed`
 
@@ -488,10 +488,10 @@ data: <json payload>
 }
 ```
 
-| Поле | Тип | Required | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `run_status` | string | yes | Полное имя enum-константы `RunStatus` из proto. Для `apply.completed` — всегда `RUN_STATUS_SUCCESS`. |
-| `state_changes` | object | optional | Дельта состояния, посчитанная Soul-side scenario-runner-ом и переданная в `RunResult.state_changes`. JSON-объект (decoded из `google.protobuf.Struct`). Может отсутствовать, если scenario не модифицирует state. |
+| `run_status` | string | yes | The full name of the enum constant `RunStatus` from proto. For `apply.completed` - always `RUN_STATUS_SUCCESS`. |
+| `state_changes` | object | optional | State delta calculated by the Soul-side scenario-runner and passed to `RunResult.state_changes`. JSON object (decoded from `google.protobuf.Struct`). May be absent if scenario does not modify state. |
 
 #### `apply.failed`
 
@@ -504,11 +504,11 @@ data: <json payload>
 }
 ```
 
-| Поле | Тип | Required | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `run_status` | string | yes | `RUN_STATUS_FAILED` / `RUN_STATUS_ERROR_LOCKED` / любой иной не-success / не-cancelled. SSE-клиент должен распознавать конкретный sub-status по этому полю. |
+| `run_status` | string | yes | `RUN_STATUS_FAILED` / `RUN_STATUS_ERROR_LOCKED` / any other non-success / non-cancelled. The SSE client must recognize a specific sub-status by this field. |
 
-Поле `state_changes` для `apply.failed` **не публикуется**: на ошибочный прогон state не перезаписывается (см. `commitRunState`), и отдавать частичную дельту наружу запрещено. Per-task диагностика собирается клиентом из предшествующих `task.executed`-событий с `error`-полем.
+Field `state_changes` for `apply.failed` **not published**: state is not overwritten for an error run (see `commitRunState`), and it is prohibited to give a partial delta outside. Per-task diagnostics are collected by the client from previous `task.executed` events with the `error` field.
 
 #### `apply.cancelled`
 
@@ -521,38 +521,38 @@ data: <json payload>
 }
 ```
 
-| Поле | Тип | Required | Описание |
+| Field | Type | Required | Description |
 |---|---|---|---|
-| `run_status` | string | yes | Всегда `RUN_STATUS_CANCELLED`. |
+| `run_status` | string | yes | Always `RUN_STATUS_CANCELLED`. |
 
-`state_changes` отсутствует по той же причине, что и для `apply.failed`.
+`state_changes` is missing for the same reason as for `apply.failed`.
 
 ### Lifecycle: subscribe semantics
 
-- **In-memory only.** В M0.7.c шина — in-memory single-Keeper, без persistence-а: событие доставляется только подписчикам, существующим на момент `Publish`-а. Late subscriber (подключился ПОСЛЕ публикации события) уже отданное событие **не получит** — replay-а в M0.7.c **нет**.
-- **Subscribe-then-call.** Корректный порядок клиента: сначала подписаться `GET /mcp/events?apply_id=<ULID>`, дождаться `200 OK` + первого `:keepalive\n\n` от сервера, и только после этого вызывать async-tool (`tools/call keeper.incarnation.create` / `keeper.incarnation.run` / …). Иначе риск пропустить ранние `task.executed`-события мелких прогонов.
-- **Buffer overflow → drop-oldest.** Per-subscriber buffer — 64 события ([`applybus.SubscriberBufferSize`](https://github.com/souls-guild/soul-stack/blob/main/keeper/internal/applybus/bus.go)). При переполнении (slow client) шина дропает самое старое событие и пишет `warn` в slog — publisher никогда не блокируется. Клиенту следует читать stream без задержек; гарантия порядка «новее старее» сохраняется.
-- **Connection close → auto-unsubscribe.** Закрытие SSE-соединения (клиент-side `EventSource.close()` или транспортный disconnect) отменяет HTTP-request-context; шина детектирует `ctx.Done()`, удаляет subscriber-а из map-ы и закрывает канал. Явного unsubscribe-вызова не требуется.
+- **In-memory only.** In M0.7.c, the bus is an in-memory single-Keeper, without persistence: the event is delivered only to subscribers existing at the time of `Publish`. Late subscriber (connected AFTER the event was published) will not receive an already sent event** - there is no replay in M0.7.c **.
+- **Subscribe-then-call.** The correct order for the client is to first subscribe `GET /mcp/events?apply_id=<ULID>`, wait for `200 OK` + the first `:keepalive\n\n` from the server, and only then call the async-tool (`tools/call keeper.incarnation.create` / `keeper.incarnation.run` / ...). Otherwise, there is a risk of missing early `task.executed` events of small runs.
+- **Buffer overflow → drop-oldest.** Per-subscriber buffer - 64 events ([`applybus.SubscriberBufferSize`](https://github.com/souls-guild/soul-stack/blob/main/keeper/internal/applybus/bus.go)). When overflowing (slow client), the bus drops the oldest event and writes `warn` to slog - the publisher is never blocked. The client SHOULD read the stream without delay; The newest-oldest order guarantee remains.
+- **Connection close → auto-unsubscribe.** Closing an SSE connection (client-side `EventSource.close()` or transport disconnect) cancels the HTTP-request-context; the bus detects `ctx.Done()`, removes the subscriber from the map and closes the channel. An explicit unsubscribe call is not required.
 
 ### Heartbeat
 
-Каждые 30 секунд (`sseHeartbeatInterval` в [`keeper/internal/mcp/sse.go`](https://github.com/souls-guild/soul-stack/blob/main/keeper/internal/mcp/sse.go)) сервер пишет в stream SSE-comment-line:
+Every 30 seconds (`sseHeartbeatInterval` in [`keeper/internal/mcp/sse.go`](https://github.com/souls-guild/soul-stack/blob/main/keeper/internal/mcp/sse.go)) the server writes to stream SSE-comment-line:
 
 ```
 :keepalive
 
 ```
 
-Это **не event** (нет `event:`/`data:`-полей); reverse-proxy (nginx, AWS ALB) и браузерный `EventSource` уважают comment-line, не доставляют его JS-обработчику и не закрывают соединение по idle-timeout. Frequency не настраивается в M0.7.c.
+This is **not an event** (no `event:`/`data:` fields); reverse-proxy (nginx, AWS ALB) and browser `EventSource` respect the comment-line, do not deliver it to the JS handler and do not close the connection due to idle-timeout. Frequency is not configurable in M0.7.c.
 
-### Auth и RBAC
+### Auth and RBAC
 
-- SSE-handler требует тот же JWT, что и `POST /mcp` (см. § Транспорт и auth). На auth-ошибку отдаётся HTTP `401` / `400` c JSON-error-body (не SSE-формат) — клиент ещё не подписался, нет смысла открывать stream только чтобы сразу закрыть.
-- Отдельной RBAC-permission на `/mcp/events` в M0.7.c **нет**: подписаться на свой `apply_id` может любой авторизованный Архонт. Detail check «может ли этот AID знать состояние конкретного apply_id» отложен до scenario-runner-а (mapping `apply_id → archon_aid` будет частью runner-таблицы).
+- SSE-handler requires the same JWT as `POST /mcp` (see § Transport and auth). The auth error is returned HTTP `401` / `400` with JSON-error-body (not SSE format) - the client has not yet subscribed, there is no point in opening a stream only to immediately close it.
+- There is no separate RBAC-permission for `/mcp/events` in M0.7.c: any authorized Archon can subscribe to his `apply_id`. The detail check "can this AID know the state of a specific apply_id" is deferred to the scenario-runner (mapping `apply_id → archon_aid` will be part of the runner-table).
 
 ### Cluster-mode (cross-instance routing)
 
-В горизонтально масштабируемом кластере (ADR-002) Soul прогона может быть подключён к Keeper-инстансу B, тогда как SSE-subscriber `GET /mcp/events?apply_id=X` висит на Keeper-инстансе A. Cross-instance routing applybus-событий **реализован** через Redis pub/sub ([ADR-006(c.1)](https://github.com/souls-guild/soul-stack/blob/main/docs/adr/0006-cache-redis.md)): publisher транслирует событие в **шардированный канал `events:shard:<n>`**, где `n = fnv32a(apply_id) % 256` (фиксированное множество из K=256 шардов). Каждый Keeper держит Redis-bridge **per-shard** (не per-applyID): первый Subscribe любого applyID данного shard-а поднимает одну подписку на shard-канал, остальные applyID того же shard-а её переиспользуют. Forward-loop фильтрует входящие события по `envelope.apply_id` и раздаёт только local-subscriber-ам соответствующего applyID — коллизия двух прогонов в один shard (частота ≈ 1/K) их payload-ы не смешивает. Sticky-session на LB не требуется: subscriber на любом инстансе получит события прогона с любого другого. Реализация — [`keeper/internal/redis/applybus.go`](https://github.com/souls-guild/soul-stack/blob/main/keeper/internal/redis/applybus.go) (`ApplyBusChannel`/`ApplyBusShardIndex`/`ApplyBusShardCount`) + per-shard `bridges` и `deliverFromCluster`-фильтр в [`keeper/internal/applybus/bus.go`](https://github.com/souls-guild/soul-stack/blob/main/keeper/internal/applybus/bus.go).
+In a horizontally scalable cluster (ADR-002), the Soul of the run can be connected to Keeper instance B, while the SSE-subscriber `GET /mcp/events?apply_id=X` hangs on Keeper instance A. Cross-instance routing of applybus events **implemented** via Redis pub/sub ([ADR-006(c.1)](https://github.com/souls-guild/soul-stack/blob/main/docs/adr/0006-cache-redis.md)): publisher broadcasts the event to the **sharded channel `events:shard:<n>`**, where `n = fnv32a(apply_id) % 256` (fixed set of K=256 shards). Each Keeper holds a Redis-bridge **per-shard** (not per-applyID): the first Subscribe of any applyID of a given shard raises one subscription to the shard channel, the remaining applyIDs of the same shard reuse it. Forward-loop filters incoming events by `envelope.apply_id` and distributes only to local subscribers of the corresponding applyID - the collision of two runs into one shard (frequency ≈ 1/K) does not mix their payloads. Sticky-session on LB is not required: subscriber on any instance will receive run events from any other. Implementation - [`keeper/internal/redis/applybus.go`](https://github.com/souls-guild/soul-stack/blob/main/keeper/internal/redis/applybus.go) (`ApplyBusChannel`/`ApplyBusShardIndex`/`ApplyBusShardCount`) + per-shard `bridges` and `deliverFromCluster` filter in [`keeper/internal/applybus/bus.go`](https://github.com/souls-guild/soul-stack/blob/main/keeper/internal/applybus/bus.go).
 
 ### Client examples
 
@@ -574,7 +574,7 @@ curl -N -sS https://keeper.example.com/mcp/events?apply_id=${APPLY_ID} \
 
 #### JavaScript (EventSource)
 
-Стандартный `EventSource` не поддерживает кастомные headers — используйте [`@microsoft/fetch-event-source`](https://github.com/Azure/fetch-event-source) (или аналог) для прокидывания `Authorization`:
+The standard `EventSource` does not support custom headers - use [`@microsoft/fetch-event-source`](https://github.com/Azure/fetch-event-source) (or an analogue) to pass `Authorization`:
 
 ```javascript
 import { fetchEventSource } from '@microsoft/fetch-event-source';
@@ -601,12 +601,12 @@ await fetchEventSource(`/mcp/events?apply_id=${applyId}`, {
 });
 ```
 
-## См. также
+## See also
 
-- [operator-api.md](operator-api.md) — источник правды по семантике, request/response schemas, error codes.
-- [rbac.md → Каталог permissions](rbac.md#каталог-permissions) и [rbac.md → Permission ↔ MCP-tool / OpenAPI endpoint](rbac.md#permission--mcp-tool--openapi-endpoint) — каталог permissions и 1:1 mapping.
-- [config.md → `listen.mcp.addr`](config.md#listen) — bind-адрес MCP-listener-а. [config.md → `auth`](config.md#auth) — JWT-подпись.
-- [`../architecture.md → ADR-013`](../adr/0013-bootstrap-archon.md#adr-013-bootstrap-первого-архонта) — Bootstrap первого Архонта (вне MCP).
-- [`../architecture.md → ADR-014`](../adr/0014-operator-identity.md#adr-014-identity-модель-оператора-archon) — identity-модель оператора, JWT-claims.
-- [`../requirements.md`](../requirements.md) — «встроенный MCP» как сквозное требование.
-- [MCP spec](https://spec.modelcontextprotocol.io/) — детали transport / handshake / session lifecycle.
+- [operator-api.md](operator-api.md) - source of truth for semantics, request/response schemas, error codes.
+- [rbac.md → Permissions directory](rbac.md) and [rbac.md → Permission ↔ MCP-tool / OpenAPI endpoint](rbac.md#permission--mcp-tool--openapi-endpoint) - permissions directory and 1:1 mapping.
+- [config.md → `listen.mcp.addr`](config.md#listen) — bind address of the MCP listener. [config.md → `auth`](config.md#auth) - JWT signature.
+- [`../architecture.md → ADR-013`](../adr/0013-bootstrap-archon.md) - Bootstrap of the first Archon (outside MCP).
+- [`../architecture.md → ADR-014`](../adr/0014-operator-identity.md) — operator identity model, JWT-claims.
+- [`../requirements.md`](../requirements.md) - "embedded MCP" as an end-to-end requirement.
+- [MCP spec](https://spec.modelcontextprotocol.io/) - transport / handshake / session lifecycle details.

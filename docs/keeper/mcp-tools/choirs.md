@@ -1,9 +1,9 @@
-# Choir — MCP-tools именованной топологии хостов
+# Choir - MCP-tools named host topology
 
-Доменная секция [каталога MCP-tools](../mcp-tools.md): домен Choir (`/v1/incarnations/{name}/choirs*`, топология Choir/Voice внутри инкарнации, [ADR-044](../../adr/0044-choir.md#adr-044-choir--именованная-топология-хостов-внутри-инкарнации)). Источник правды по семантике — [operator-api/choirs.md](../operator-api/choirs.md).
+Domain section [MCP-tools directory](../mcp-tools.md): Choir domain (`/v1/incarnations/{name}/choirs*`, Choir/Voice topology within incarnation, [ADR-044](../../adr/0044-choir.md)). The source of truth for semantics is [operator-api/choirs.md](../operator-api/choirs.md).
 
 ### Choir (0)
 
-У Choir **MCP-tool-ов нет** — домен REST-only. В каталоге `keeper/internal/mcp/manifest.go` нет ни одного `keeper.choir.*`-tool-а: топология хостов внутри инкарнации (Choir/Voice) управляется через Operator API (`POST/GET/DELETE /v1/incarnations/{name}/choirs*` + voices). MCP-симметрия для домена Choir не реализована и в MVP-каталог 72 tool-ов не входит; появится отдельным PR при необходимости (расширение каталога — only-add, [mcp-tools.md → Будущие чтения и удаления](../mcp-tools.md#будущие-чтения-и-удаления)).
+Choir does not have **MCP tools** - it is a REST-only domain. There is not a single `keeper.choir.*`-tool in the `keeper/internal/mcp/manifest.go` directory: the topology of hosts inside the incarnation (Choir/Voice) is controlled via the Operator API (`POST/GET/DELETE /v1/incarnations/{name}/choirs*` + voices). MCP symmetry for the Choir domain is not implemented and is not included in the MVP catalog of 72 tools; will appear as a separate PR if necessary (directory extension - only-add, [mcp-tools.md → Future readings and deletions](../mcp-tools.md)).
 
-> **Ремарка о drift в OpenAPI-описаниях.** Текстовые `description` choir-операций в [`openapi.yaml`](../openapi.yaml) упоминают `MCP-tool: keeper.choir.create` / `keeper.choir.delete` / `keeper.choir.add-voice` / `keeper.choir.remove-voice` — этих tool-ов в `manifest.go` фактически нет (домен REST-only). Источник правды по наличию tool-а — `manifest.go`; описания в спеке устарели и подлежат правке отдельной задачей (не входит в эту mapping-инвентаризацию).
+> **Remark about drift in OpenAPI descriptions.** Text `description` choir operations in [`openapi.yaml`](../openapi.yaml) mention `MCP-tool: keeper.choir.create` / `keeper.choir.delete` / `keeper.choir.add-voice` / `keeper.choir.remove-voice` - these tools in `manifest.go` actually does not exist (REST-only domain). The source of truth for the presence of the tool is `manifest.go`; the descriptions in the spec are outdated and must be edited in a separate task (not included in this mapping inventory).

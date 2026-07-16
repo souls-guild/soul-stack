@@ -1,18 +1,18 @@
-# Soul — endpoints реестра хостов
+# Soul - host registry endpoints
 
-Доменная секция [Operator API](../operator-api.md): эндпоинты `/v1/souls*` (реестр хостов, bootstrap-токены, bulk-назначение Coven-меток). Conventions, error-format, pagination, mapping-таблица целиком — в корневом [operator-api.md](../operator-api.md). MCP-сторона — [mcp-tools.md → Soul](../mcp-tools/souls.md).
+Domain section [Operator API](../operator-api.md): endpoints `/v1/souls*` (host registry, bootstrap tokens, bulk assignment of Coven labels). Conventions, error-format, pagination, entire mapping table - in the root [operator-api.md](../operator-api.md). MCP side - [mcp-tools.md → Soul](../mcp-tools/souls.md).
 
-## Endpoint-секции
+## Endpoint sections
 
 ### Soul endpoints
 
-Mapping endpoint ↔ MCP-tool ↔ permission (таблица 8 роутов: create / coven-assign / list + read-роуты `{sid}` / `{sid}/soulprint` / `{sid}/history` под `soul.list` + issue-token + `{sid}/ssh-target`; ремарка про отложенный `soul.get`) — в корневом [operator-api.md → Soul (8)](../operator-api.md#soul-8--реестр-хостов).
+Mapping endpoint ↔ MCP-tool ↔ permission (table of 8 routes: create / coven-assign / list + read routes `{sid}` / `{sid}/soulprint` / `{sid}/history` under `soul.list` + issue-token + `{sid}/ssh-target`; note about deferred `soul.get`) - in the root [operator-api.md → Soul (8)](../operator-api.md).
 
-#### `POST /v1/souls/coven` — bulk назначение Coven-меток
+#### `POST /v1/souls/coven` — bulk assignment of Coven tags
 
-Массовое добавление (`mode: append`) / снятие (`mode: remove`) **одной** Coven-метки либо **замена** (`mode: replace`) набора Coven-меток целиком на хостах по селектору. Coven — холодная PG-метка ([ADR-008](../../adr/0008-coven-stable-tags.md#adr-008-coven--только-стабильные-логические-теги)): чистый `UPDATE souls`, без записи в Redis. MCP-tool [`keeper.soul.coven-assign`](../mcp-tools/souls.md#keepersoulcoven-assign) — паритет REST. CEL-предикат — будущий слайс.
+Bulk addition (`mode: append`) / removal (`mode: remove`) of **one** Coven tag or **replacement** (`mode: replace`) of an entire set of Coven tags on hosts using a selector. Coven - cold PG tag ([ADR-008](../../adr/0008-coven-stable-tags.md)): pure `UPDATE souls`, no Redis entry. MCP-tool [`keeper.soul.coven-assign`](../mcp-tools/souls.md#keepersoulcoven-assign) - REST parity. CEL predicate - future slice.
 
-**Тело (append/remove — одна метка):**
+**Body (append/remove - one label):**
 
 ```json
 {
@@ -23,7 +23,7 @@ Mapping endpoint ↔ MCP-tool ↔ permission (таблица 8 роутов: cre
 }
 ```
 
-**Тело (replace — набор):**
+**Body (replace - set):**
 
 ```json
 {
@@ -34,37 +34,37 @@ Mapping endpoint ↔ MCP-tool ↔ permission (таблица 8 роутов: cre
 ```
 
 - `mode` — `append` | `remove` | `replace`.
-- `label` — одна kebab-case Coven-метка для `append`/`remove`. Обязателен для этих режимов, **запрещён** для `replace`.
-- `labels` — массив kebab-case Coven-меток для `replace`. Обязателен для `replace`, **запрещён** для `append`/`remove`. Пустой массив = «снять все метки».
-- `selector` — подмножество словаря таргетинга `soul.*`:
-  - `all` — весь реестр ∩ scope (без host-фильтра);
-  - `sids` — точечный список хостов (SID = FQDN);
-  - `coven` — хосты с уже имеющейся Coven-меткой;
-  - `incarnation` — хосты этой incarnation (имя incarnation — корневая Coven-метка по ADR-008; матчинг через `name = ANY(coven)`);
-  - `status` — фильтр по статусу `souls`.
+- `label` - one kebab-case Coven label for `append`/`remove`. Mandatory for these modes, **prohibited** for `replace`.
+- `labels` - array of kebab-case Coven labels for `replace`. Mandatory for `replace`, **prohibited** for `append`/`remove`. Empty array = "uncheck all marks".
+- `selector` is a subset of the `soul.*` targeting dictionary:
+  - `all` — the entire registry ∩ scope (without host filter);
+  - `sids` - dot list of hosts (SID = FQDN);
+  - `coven` — hosts with an existing Coven tag;
+  - `incarnation` — hosts of this incarnation (incarnation name — root Coven label according to ADR-008; matching via `name = ANY(coven)`);
+  - `status` - filter by `souls` status.
 
-  Должен задавать хотя бы один критерий (`all: true` или непустой `sids`/`coven`/`incarnation`/`status`), иначе `422`. Комбинации соединяются **AND** (`incarnation: redis` + `status: connected` → connected-хосты incarnation `redis`). Свободный CEL-предикат сознательно не поддержан (доказуемость scope-проверки).
-- `dry_run` — `true` посчитать `matched` без `UPDATE`. Эквивалент query-параметра `?dry_run=true` (объединяются по OR).
+Must specify at least one criterion (`all: true` or non-empty `sids`/`coven`/`incarnation`/`status`), otherwise `422`. Combinations are connected by **AND** (`incarnation: redis` + `status: connected` → connected-hosts incarnation `redis`). The free CEL predicate is deliberately not supported (scope check provability).
+- `dry_run` — `true` count `matched` without `UPDATE`. Equivalent to the query parameter `?dry_run=true` (combined by OR).
 
-**Ответ `200`:** `{mode, label?, labels?, matched, changed, status, dry_run}`, где `label`/`labels` отражают применённую форму mode-а; `matched` — хостов под `selector ∩ scope`, `changed` — фактически изменённых строк (идемпотентный отсев: `append` не трогает хост, где метка уже есть; `remove` — где метки нет; `replace` — где набор уже совпадает с целевым через `coven IS DISTINCT FROM $labels`); `status` — `completed` | `partial`.
+**Answer `200`:** `{mode, label?, labels?, matched, changed, status, dry_run}`, where `label`/`labels` reflect the applied mode form; `matched` - hosts under `selector ∩ scope`, `changed` - actually modified strings (idempotent screening: `append` does not affect the host where the label already exists; `remove` - where there is no label; `replace` - where the set already matches the target set through `coven IS DISTINCT FROM $labels`); `status` - `completed` | `partial`.
 
-**scope-поведение:** действие двухслойно авторизуется (см. [rbac.md → Soul](../rbac.md#soul-6--реестр-хостов)). Оператор с `soul.coven-assign on coven=dev` может навешивать только `dev`/входящие в его scope метки и только на хосты с этими метками; назначаемая метка вне scope → `422`, хост вне scope просто не попадает в `UPDATE`. Для `replace` гейт (b) проверяет КАЖДУЮ метку набора (любая метка вне scope → `422` ДО UPDATE; иначе оператор с scope `dev` мог бы навесить `prod` через `labels: [dev, prod]`). Bare-permission `soul.coven-assign` или `*` снимают оба ограничения.
+**scope behavior:** the action is two-layer authorized (see [rbac.md → Soul](../rbac.md)). An operator with `soul.coven-assign on coven=dev` can only attach `dev`/labels included in its scope and only to hosts with these labels; assigned label outside scope → `422`, host outside scope simply does not fall into `UPDATE`. For `replace`, gate (b) checks EVERY label of the set (any label outside of scope → `422` BEFORE UPDATE; otherwise a statement with scope `dev` could override `prod` through `labels: [dev, prod]`). Bare-permission `soul.coven-assign` or `*` removes both restrictions.
 
-**partial-семантика:** массовый `UPDATE` идёт чанками с коммитом на чанк (keyset-итерация по PK) — иначе одна гигантская транзакция держала бы row-lock на `souls` десятки секунд, блокируя горячий heartbeat-flush. При сбое середины часть чанков уже закоммичена; ответ — `200` со `status: partial`. Это безопасно: операция идемпотентна, оператор просто повторяет тот же запрос (закоммиченные изменения повторно не применяются).
+**partial semantics:** massive `UPDATE` goes in chunks with a commit per chunk (keyset iteration over PK) - otherwise one giant transaction would hold the row-lock for `souls` for tens of seconds, blocking the hot heartbeat-flush. If the middle fails, some of the chunks are already committed; the answer is `200` with `status: partial`. This is safe: the operation is idempotent, the operator simply repeats the same request (committed changes are not reapplied).
 
-#### `POST /v1/souls` — зарегистрировать Soul
+#### `POST /v1/souls` — register Soul
 
 Permission: `soul.create`. MCP-tool: `keeper.soul.create`.
 
-Создаёт запись в реестре `souls` в статусе `pending` ([onboarding.md → Поток онбординга](../../soul/onboarding.md#поток-онбординга-агентский-режим)). Для `transport: agent` в той же операции выпускается первый bootstrap-токен (одноразовый, TTL по умолчанию `24h`); plain-токен возвращается **один раз**, в БД пишется только `token_hash`. Для `transport: ssh` bootstrap-токен не выпускается — онбординг сводится к настройке SSH-доступа ([push.md](../push.md)), поле `bootstrap_token` в ответе отсутствует.
+Creates a registry entry `souls` with status `pending` ([onboarding.md → Onboarding flow](../../soul/onboarding.md)). For `transport: agent`, the first bootstrap token is issued in the same operation (one-time use, default TTL `24h`); The plain token is returned **once**, only `token_hash` is written to the database. For `transport: ssh` bootstrap token is not issued - onboarding comes down to setting up SSH access ([push.md](../push.md)), the `bootstrap_token` field is missing in the response.
 
 **Request `SoulCreateRequest`:**
 
-| Поле | Тип | Required | Смысл |
+| Field | Type | Required | Meaning |
 |---|---|---|---|
-| `sid` | `string` (FQDN) | yes | SID нового хоста = FQDN ([identity.md](../../soul/identity.md)). |
-| `transport` | `enum` (`agent`/`ssh`) | yes | Способ управления хостом ([push.md](../push.md)). От него зависит, выпускается ли bootstrap-токен. |
-| `covens` | `list<string>` | optional | Стабильные Coven-метки хоста ([ADR-008](../../adr/0008-coven-stable-tags.md#adr-008-coven--только-стабильные-логические-теги)). По умолчанию `[]`. |
+| `sid` | `string` (FQDN) | yes | New host SID = FQDN ([identity.md](../../soul/identity.md)). |
+| `transport` | `enum` (`agent`/`ssh`) | yes | Host control method ([push.md](../push.md)). It determines whether a bootstrap token is issued. |
+| `covens` | `list<string>` | optional | Stable host Coven tags ([ADR-008](../../adr/0008-coven-stable-tags.md)). Default is `[]`. |
 
 ```json
 {
@@ -76,16 +76,16 @@ Permission: `soul.create`. MCP-tool: `keeper.soul.create`.
 
 **Response `201 SoulCreateReply`:**
 
-| Поле | Тип | Смысл |
+| Field | Type | Meaning |
 |---|---|---|
-| `sid` | `string` | SID созданной записи. |
-| `transport` | `enum` | Зеркало из request. |
-| `covens` | `list<string>` | Зеркало из request. |
-| `status` | `enum` | Всегда `pending` сразу после создания. |
-| `registered_at` | `string` (RFC 3339) | Время создания записи в Postgres. |
-| `created_by_aid` | `string` | AID Архонта, выполнившего запрос (из JWT `sub`). FK на `operators(aid)`. |
-| `bootstrap_token` | `string` (optional) | Plain bootstrap-токен. Присутствует только для `transport: agent`. **Возвращается один раз** — повторный выпуск через `POST /v1/souls/{sid}/issue-token`. |
-| `expires_at` | `string` (RFC 3339, optional) | Срок истечения bootstrap-токена. Присутствует вместе с `bootstrap_token`. |
+| `sid` | `string` | SID of the created record. |
+| `transport` | `enum` | Mirror from request. |
+| `covens` | `list<string>` | Mirror from request. |
+| `status` | `enum` | Always `pending` immediately after creation. |
+| `registered_at` | `string` (RFC 3339) | Postgres record creation time. |
+| `created_by_aid` | `string` | AID of the Archon who made the request (from JWT `sub`). FK on `operators(aid)`. |
+| `bootstrap_token` | `string` (optional) | Plain bootstrap token. Present only for `transport: agent`. **One time return** - reissue via `POST /v1/souls/{sid}/issue-token`. |
+| `expires_at` | `string` (RFC 3339, optional) | Bootstrap token expiration date. Present along with `bootstrap_token`. |
 
 ```json
 {
@@ -100,36 +100,36 @@ Permission: `soul.create`. MCP-tool: `keeper.soul.create`.
 }
 ```
 
-> **Важно для клиента:** `bootstrap_token` отдаётся один раз и нигде не сохраняется. Доставьте его на хост сразу ([onboarding.md → Способы доставки](../../soul/onboarding.md#способы-доставки-токена)); потерянный токен восстановить нельзя — только выпустить новый через `POST /v1/souls/{sid}/issue-token`. Поле `bootstrap_token` маскируется во всех observability-каналах (правило masked-keys, [§ Secret masking](../operator-api.md#secret-masking-в-логах-и-трейсах)).
+> **Important for the client:** `bootstrap_token` is given once and is not stored anywhere. Deliver it to the host immediately ([onboarding.md → Delivery methods](../../soul/onboarding.md)); a lost token cannot be restored - only a new one can be issued via `POST /v1/souls/{sid}/issue-token`. The `bootstrap_token` field is masked in all observability channels (masked-keys rule, [§ Secret masking](../operator-api.md)).
 
-**Errors:** `403 forbidden`, `409 soul-already-exists`, `422 validation-failed` (невалидный SID/transport).
+**Errors:** `403 forbidden`, `409 soul-already-exists`, `422 validation-failed` (invalid SID/transport).
 
-#### `POST /v1/souls/{sid}/issue-token` — перевыпустить bootstrap-токен
+#### `POST /v1/souls/{sid}/issue-token` — reissue bootstrap token
 
-Permission: `soul.issue-token`. MCP-tool: `keeper.soul.issue-token`. Path-param: `sid` (FQDN, URL-encoded — см. [§ Conventions → ID в path](../operator-api.md#conventions)).
+Permission: `soul.issue-token`. MCP-tool: `keeper.soul.issue-token`. Path-param: `sid` (FQDN, URL-encoded - see [§ Conventions → ID in path](../operator-api.md#conventions)).
 
-Выпускает новый bootstrap-токен для существующей Soul с `transport: agent` (оператор потерял токен, плановая ре-выписка). Действует инвариант `UNIQUE (sid) WHERE used_at IS NULL` — у Soul не более одного активного токена ([identity.md](../../soul/identity.md)).
+Issues a new bootstrap token for the existing Soul with `transport: agent` (operator lost token, scheduled re-issue). The `UNIQUE (sid) WHERE used_at IS NULL` invariant applies - Soul has no more than one active token ([identity.md](../../soul/identity.md)).
 
-- **Без `force`** при уже-активном (не сожжённом, не истёкшем) токене — `409 bootstrap-token-active`: новый токен не выпускается, чтобы не плодить параллельные валидные токены.
-- **С `?force=true`** — текущий активный токен помечается использованным (`used_at = now()`, не `expires_at`: иначе строка продолжала бы держать partial-unique slot `WHERE used_at IS NULL` и reissue упёрся бы в 409), выпускается новый.
+- **Without `force`** with an already active (not burned, not expired) token - `409 bootstrap-token-active`: a new token is not issued so as not to produce parallel valid tokens.
+- **With `?force=true`** - the current active token is marked used (`used_at = now()`, not `expires_at`: otherwise the line would continue to hold the partial-unique slot `WHERE used_at IS NULL` and the reissue would hit 409), a new one is issued.
 
-Для Soul с `transport: ssh` — `422 validation-failed` (ssh-хост не имеет bootstrap-фазы / SoulSeed).
+For Soul with `transport: ssh` - `422 validation-failed` (ssh host does not have bootstrap phase / SoulSeed).
 
 **Query:**
 
-| Param | Тип | Required | Смысл |
+| Param | Type | Required | Meaning |
 |---|---|---|---|
-| `force` | `bool` | optional | Default `false`. `true` — истечь активный токен и выпустить новый. При `false` и наличии активного токена → `409 bootstrap-token-active`. |
+| `force` | `bool` | optional | Default `false`. `true` - expire the active token and issue a new one. With `false` and the presence of an active token → `409 bootstrap-token-active`. |
 
-**Request body:** пустой (TTL берётся из дефолта токена, `24h`).
+**Request body:** empty (TTL is taken from the default token, `24h`).
 
 **Response `200 SoulIssueTokenReply`:**
 
-| Поле | Тип | Смысл |
+| Field | Type | Meaning |
 |---|---|---|
 | `sid` | `string` | SID. |
-| `bootstrap_token` | `string` | Новый plain bootstrap-токен. **Возвращается один раз**, маскируется в логах. |
-| `expires_at` | `string` (RFC 3339) | Срок истечения нового токена. |
+| `bootstrap_token` | `string` | New plain bootstrap token. **Returns once**, masked in logs. |
+| `expires_at` | `string` (RFC 3339) | Expiration date for the new token. |
 
 ```json
 {
@@ -139,17 +139,17 @@ Permission: `soul.issue-token`. MCP-tool: `keeper.soul.issue-token`. Path-param:
 }
 ```
 
-**Errors:** `403 forbidden`, `404 not-found` (SID отсутствует в реестре), `409 bootstrap-token-active` (активный токен есть, `force` не указан), `422 validation-failed` (`transport: ssh`).
+**Errors:** `403 forbidden`, `404 not-found` (SID is not in the registry), `409 bootstrap-token-active` (active token is present, `force` is not specified), `422 validation-failed` (`transport: ssh`).
 
-#### `GET /v1/souls` — список Souls
+#### `GET /v1/souls` - Souls list
 
 Permission: `soul.list`. MCP-tool: `keeper.soul.list`.
 
-**Query:** `offset`, `limit` + фильтры:
+**Query:** `offset`, `limit` + filters:
 
-| Param | Тип | Смысл |
+| Param | Type | Meaning |
 |---|---|---|
-| `coven` | `string` | Фильтр по coven-метке (exact-match по любому значению из `souls.coven[]`). Множественный — повторение query-параметра. |
+| `coven` | `string` | Filter by coven tag (exact-match by any value from `souls.coven[]`). Multiple - repetition of the query parameter. |
 | `status` | `enum` | `pending` / `connected` / `disconnected` / `expired`. |
 | `transport` | `enum` | `agent` / `ssh` ([push.md](../push.md)). |
 
@@ -174,4 +174,4 @@ Permission: `soul.list`. MCP-tool: `keeper.soul.list`.
 }
 ```
 
-Поля элемента (`SoulListEntry`) — проекция реестра `souls` из Postgres ([storage.md](../storage.md), [`../soul/identity.md`](../../soul/identity.md)).
+Item fields (`SoulListEntry`) - registry projection `souls` from Postgres ([storage.md](../storage.md), [`../soul/identity.md`](../../soul/identity.md)).

@@ -1,22 +1,22 @@
 # Role — endpoints RBAC-CRUD
 
-Доменная секция [Operator API](../operator-api.md): эндпоинты `/v1/roles*` (роли / permissions / membership Архонтов, [ADR-013](../../adr/0013-bootstrap-archon.md#adr-013-bootstrap-первого-архонта) / [ADR-028](../../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)). Conventions, error-format, pagination, mapping-таблица — в корневом [operator-api.md](../operator-api.md). MCP-сторона — [mcp-tools/roles.md](../mcp-tools/roles.md).
+Domain section [Operator API](../operator-api.md): endpoints `/v1/roles*` (roles / permissions / membership of Archons, [ADR-013](../../adr/0013-bootstrap-archon.md) / [ADR-028](../../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)). Conventions, error-format, pagination, mapping table - in the root [operator-api.md](../operator-api.md). MCP side - [mcp-tools/roles.md](../mcp-tools/roles.md).
 
-## Endpoint-секции
+## Endpoint sections
 
-Mapping endpoint ↔ MCP-tool ↔ permission (таблица 6 роутов + ремарка про replace-семантику `PATCH .../permissions`, NoSelector, audit) — в корневом [operator-api.md → Role (6)](../operator-api.md#role-6--rbac-crud-роли--permissions--membership-adr-013--rbacmd).
+Mapping endpoint ↔ MCP-tool ↔ permission (table of 6 routes + remark about replace semantics `PATCH .../permissions`, NoSelector, audit) - in the root [operator-api.md → Role (6)](../operator-api.md).
 
-**Источник правды по семантике, телам и кодам ошибок** REST `/v1/roles*` (`role-already-exists`, `role-builtin`, `would-lock-out-cluster`) — [rbac.md → REST `/v1/roles`](../rbac.md#rest-v1roles) (бизнес-инварианты builtin-границы и self-lockout живут в `rbac.Service`). Этот файл — доменный якорь Operator API; детали тел не дублируются.
+**Source of truth on semantics, bodies and error codes** REST `/v1/roles*` (`role-already-exists`, `role-builtin`, `would-lock-out-cluster`) - [rbac.md → REST `/v1/roles`](../rbac.md#rest-v1roles) (business invariants of builtin boundaries and self-lockout live in `rbac.Service`). This file is the Operator API domain anchor; body details are not duplicated.
 
-Сводно по 6 роутам:
+Summary of 6 routes:
 
-| Метод / Path | Permission | MCP-tool | Семантика |
+| Method/Path | Permission | MCP-tool | Semantics |
 |---|---|---|---|
-| `POST /v1/roles` | `role.create` | [`keeper.role.create`](../mcp-tools/roles.md#keeperrolecreate) | Создать роль + её permissions. |
-| `GET /v1/roles` | `role.list` | [`keeper.role.list`](../mcp-tools/roles.md#keeperrolelist) | Список ролей с развёрнутыми permissions/operators. Read-only, без audit. |
-| `DELETE /v1/roles/{name}` | `role.delete` | [`keeper.role.delete`](../mcp-tools/roles.md#keeperroledelete) | Удалить роль (каскадом permissions + membership). |
-| `PATCH /v1/roles/{name}/permissions` | `role.update` | [`keeper.role.update`](../mcp-tools/roles.md#keeperroleupdate) | **Replace** набора permissions роли (не merge). |
-| `POST /v1/roles/{name}/operators` | `role.grant-operator` | [`keeper.role.grant-operator`](../mcp-tools/roles.md#keeperrolegrant-operator) | Привязать Архонта (AID) к роли. Идемпотентно. |
-| `DELETE /v1/roles/{name}/operators/{aid}` | `role.revoke-operator` | [`keeper.role.revoke-operator`](../mcp-tools/roles.md#keeperrolerevoke-operator) | Снять membership-строку `(role, aid)`. |
+| `POST /v1/roles` | `role.create` | [`keeper.role.create`](../mcp-tools/roles.md#keeperrolecreate) | Create a role + its permissions. |
+| `GET /v1/roles` | `role.list` | [`keeper.role.list`](../mcp-tools/roles.md#keeperrolelist) | List of roles with expanded permissions/operators. Read-only, no audit. |
+| `DELETE /v1/roles/{name}` | `role.delete` | [`keeper.role.delete`](../mcp-tools/roles.md#keeperroledelete) | Delete a role (permissions + membership cascade). |
+| `PATCH /v1/roles/{name}/permissions` | `role.update` | [`keeper.role.update`](../mcp-tools/roles.md#keeperroleupdate) | **Replace** set role permissions (not merge). |
+| `POST /v1/roles/{name}/operators` | `role.grant-operator` | [`keeper.role.grant-operator`](../mcp-tools/roles.md#keeperrolegrant-operator) | Bind an Archon (AID) to a role. Idempotent. |
+| `DELETE /v1/roles/{name}/operators/{aid}` | `role.revoke-operator` | [`keeper.role.revoke-operator`](../mcp-tools/roles.md#keeperrolerevoke-operator) | Remove the membership line `(role, aid)`. |
 
-`role.*` — NoSelector (cluster-уровневая операция без coven/host-scope, как `operator.*` / `synod.*`). Мутирующие 5 роутов аудируются (изменение авторизации, [ADR-022](../../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)); `role.list` — read-only, без audit.
+`role.*` - NoSelector (cluster-level operation without coven/host-scope, like `operator.*` / `synod.*`). Mutating 5 routes are audited (authorization change, [ADR-022](../../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)); `role.list` - read-only, no audit.

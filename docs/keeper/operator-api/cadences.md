@@ -1,67 +1,67 @@
-# Cadence — endpoints регулярных запусков (scheduled/recurring Voyage)
+# Cadence — endpoints of regular launches (scheduled/recurring Voyage)
 
-Доменная секция [Operator API](../operator-api.md): эндпоинты `/v1/cadences*` — расписания, по времени спавнящие обычный [Voyage](voyages.md)-прогон ([ADR-046](../../adr/0046-cadence.md#adr-046-cadence--регулярные-запуски-scheduledrecurring-voyage), реестр `cadences`). Conventions, error-format, pagination, mapping-таблица — в корневом [operator-api.md](../operator-api.md). Поведение исполнителя расписаний (due-выборка, `overlap_policy`, пересчёт `next_run_at`, adaptive poll) — [conductor.md](../conductor.md) (source-of-truth поведению). **MCP-стороны нет** — у Cadence MCP-tool-ов не заведено ([mcp-tools/cadences.md](../mcp-tools/cadences.md)).
+Domain section [Operator API](../operator-api.md): endpoints `/v1/cadences*` - schedules that spawn the usual [Voyage](voyages.md)-run ([ADR-046](../../adr/0046-cadence.md), registry `cadences`). Conventions, error-format, pagination, mapping table - in the root [operator-api.md](../operator-api.md). Schedule executor behavior (due-fetch, `overlap_policy`, recalculation `next_run_at`, adaptive poll) - [conductor.md](../conductor.md) (source-of-truth behavior). **There is no MCP side** - Cadence does not have MCP tools installed ([mcp-tools/cadences.md](../mcp-tools/cadences.md)).
 
-## Endpoint-секции
+## Endpoint sections
 
-Mapping endpoint ↔ MCP-tool ↔ permission (таблица 8 роутов) — в корневом [operator-api.md → Cadence (8)](../operator-api.md#cadence-8--регулярные-запуски-scheduledrecurring-voyage-adr-046--adr-048). Полная схема request/response — [`openapi.yaml`](../openapi.yaml) (`CadenceCreateRequest` / `CadencePatchRequest` / `Cadence` / `CadenceCreateReply` / `CadenceEnabledReply` / `CadenceListReply` — **источник правды по форме**). Ниже — нормативная семантика поведения, на которую опирается контракт.
+Mapping endpoint ↔ MCP-tool ↔ permission (table of 8 routes) - in the root [operator-api.md → Cadence (8)](../operator-api.md). The full request/response scheme is [`openapi.yaml`](../openapi.yaml) (`CadenceCreateRequest` / `CadencePatchRequest` / `Cadence` / `CadenceCreateReply` / `CadenceEnabledReply` / `CadenceListReply` - **source of truth in form**). Below is the normative semantics of behavior on which the contract is based.
 
-Cadence — это строка в `cadences` с «рецептом» прогона (то же множество полей, что [`VoyageCreateRequest`](voyages.md): `kind`/`scenario_name`|`module`/`target`/`input`/batch-настройки) + правилом повторения (`schedule_kind` `interval`|`cron`) + `overlap_policy`. Исполняет триггер [Conductor](../conductor.md) — leader-elected подсистема внутри `keeper`; спавнутый Voyage входит в обычный Voyage-lifecycle.
+Cadence is a line in `cadences` with a "recipe" for the run (the same set of fields as [`VoyageCreateRequest`](voyages.md): `kind`/`scenario_name`|`module`/`target`/`input`/batch settings) + repetition rule (`schedule_kind` `interval`|`cron`) + `overlap_policy`. Executes the trigger [Conductor](../conductor.md) - leader-elected subsystem inside `keeper`; The spawned Voyage is included in the regular Voyage-lifecycle.
 
-### Двухуровневый RBAC (security-критичный fail-closed)
+### Two-level RBAC (security-critical fail-closed)
 
-Право `cadence.*` управляет самим расписанием, но рецепт спавнит Voyage от имени создателя ([ADR-046 §7](../../adr/0046-cadence.md#adr-046-cadence--регулярные-запуски-scheduledrecurring-voyage)). Поэтому на **создании** (и на правке target/рецепта) действует **второй уровень** — Voyage-permission по `kind` рецепта (`scenario`→`incarnation.run`, `command`→`errand.run`, [ADR-043 §6](../../adr/0043-voyage.md#adr-043-voyage--унифицированный-батчевый-прогон)): иначе Cadence стала бы privilege-escalation-обходом RBAC. `kind` виден только из тела → второй гейт живёт внутри `CadenceHandler.Create`/`.Patch` (первый, `cadence.create`/`cadence.update`, гейтит middleware-route).
+The `cadence.*` right controls the schedule itself, but the recipe spawns Voyage on behalf of the creator ([ADR-046 §7](../../adr/0046-cadence.md)). Therefore, on **creation** (and on editing a target/recipe), the **second level** is in effect - Voyage-permission according to `kind` recipe (`scenario`→`incarnation.run`, `command`→`errand.run`, [ADR-043 §6](../../adr/0043-voyage.md)): otherwise Cadence would become privilege-escalation-bypass RBAC. `kind` is visible only from the body → the second gate lives inside `CadenceHandler.Create`/`.Patch` (the first, `cadence.create`/`cadence.update`, gates middleware-route).
 
-Для `kind=scenario` сверх bare-check работает **per-target coven-scope-check** (parity `VoyageHandler.createScenario`): резолвнутый target (его `covens ∪ {name}`) обязан лежать в RBAC-скоупе создателя на каждой инкарнации — иначе scoped-Архонт «run on `coven=A`» создал бы Cadence на `coven=B` (вне scope) и фоновый спавн исполнил бы вне scope. `kind=command` — bare-check `errand.run` (per-host селекторы отложены пост-MVP, parity Voyage).
+For `kind=scenario`, in addition to bare-check, **per-target coven-scope-check** (parity `VoyageHandler.createScenario`) works: the resolved target (its `covens ∪ {name}`) must be in the creator's RBAC scope on each incarnation - otherwise the scoped Archon "run on `coven=A`" would create Cadence on `coven=B` (outside scope) and background spawn would execute outside scope. `kind=command` - bare-check `errand.run` (per-host selectors are deferred post-MVP, parity Voyage).
 
-PATCH несёт тот же двухуровневый guard: он меняет `target`/`scenario_name`, поэтому без guard-а scoped-Архонт создал бы Cadence на разрешённом `coven=A` и PATCH-ом перенаправил target на `coven=B`. `kind` в PATCH **не меняется** (смена `kind` = delete + create).
+PATCH carries the same two-level guard: it changes `target`/`scenario_name`, so without the scoped guard, the Archon would create a Cadence on the allowed `coven=A` and PATCH redirect the target to `coven=B`. `kind` in PATCH **does not change** (change `kind` = delete + create).
 
-### `POST /v1/cadences` — создать Cadence
+### `POST /v1/cadences` - create Cadence
 
-Permission: `cadence.create` (middleware) **+** Voyage-permission по `kind` (handler, см. выше). MCP-tool: нет. Async: нет (создание расписания синхронно; спавн прогонов — отложенный, ведёт Conductor).
+Permission: `cadence.create` (middleware) **+** Voyage-permission by `kind` (handler, see above). MCP-tool: no. Async: no (schedule creation is synchronous; run spawning is delayed, conducted by Conductor).
 
 **Request `CadenceCreateRequest`** (`required: name, schedule_kind, overlap_policy, kind, target`):
 
-| Поле | Тип | Required | Смысл |
+| Field | Type | Required | Meaning |
 |---|---|---|---|
-| `name` | `string` | yes | Человекочитаемое имя расписания. |
-| `schedule_kind` | `string` (`interval`/`cron`) | yes | Вид правила повторения (`interval_seconds` XOR `cron_expr`). |
-| `interval_seconds` | `integer` (≥30) | для interval | Период. Минимум **30s** (floor-лимит, ADR-046 Pass B); `<30` → `422`. Для реакции быстрее 30s — Beacons (Vigil/Oracle, [ADR-030](../../adr/0030-vigil-oracle.md#adr-030-vigil--oracle--event-driven-мониторинг-beacons--reactor)). |
-| `cron_expr` | `string` | для cron | Стандартное 5-полевое cron-выражение (UTC). |
-| `overlap_policy` | `string` (`skip`/`queue`/`parallel`) | yes | Поведение при наложении (предыдущий ребёнок ещё не терминален). |
-| `kind` | `string` (`scenario`/`command`) | yes | Тип рецепта-прогона. |
-| `scenario_name` | `string` | для scenario | Обязательно для `kind=scenario`; запрещено для `command`. |
-| `module` | `string` | для command | Обязательно для `kind=command`; запрещено для `scenario`. |
-| `target` | `VoyageTarget` | yes | Таргет прогона (резолвится на **спавне**, не на создании). |
-| `input` | `object` | no | Параметры прогона. **НЕ логируется** (инвариант A [ADR-027](../../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim)). |
-| `batch` | `string` | no | Размер Leg: `N` единиц / `N%` (1..100) от spawn-scope. Взаимоисключающе с `batch_size`/`batch_percent` → `422 voyage_batch_spec_conflict`. |
-| `max_failures` | `string` | no | Порог провалов: `N` абсолют / `N%` от единиц прогона spawn-scope. Взаимоисключающе с `fail_threshold` → `422`. |
-| `batch_size` / `batch_percent` | `integer` | no | **DEPRECATED** (используйте `batch`). |
-| `fail_threshold` | `integer` | no | **DEPRECATED** (используйте `max_failures`). |
-| `concurrency` | `integer` (≥1) | no | Параллелизм внутри Leg (barrier) / ширина окна (window). |
-| `batch_mode` | `string` (`barrier`/`window`) | no | Режим батчинга (`NULL` ⇒ `barrier`). |
-| `inter_batch_interval_ms` / `inter_unit_interval_ms` | `integer` (≥0) | no | Паузы между Leg-ами (barrier) / per-unit (window). |
-| `require_alive` | `boolean` | no | Presence-фильтр живых на резолве scope (kind=command). Default `false`. |
-| `on_failure` | `string` (`abort`/`continue`) | no | Поведение при провале Leg. |
-| `enabled` | `boolean` | no | Включено ли расписание. Default **`true`** (default-ON; `false` → пауза). |
-| `notify` | `array<VoyageNotify>` | no | Подписки на уведомления о прогонах ЭТОГО расписания. Форма элемента — та же [`VoyageNotify`](voyages.md), что у разового `voyage.notify`. См. [«Уведомления `notify[]`»](#уведомления-notify--постоянные-tiding-из-формы-расписания) ниже. |
+| `name` | `string` | yes | The human-readable name of the schedule. |
+| `schedule_kind` | `string` (`interval`/`cron`) | yes | Type of repetition rule (`interval_seconds` XOR `cron_expr`). |
+| `interval_seconds` | `integer` (≥30) | for interval | Period. Minimum **30s** (floor limit, ADR-046 Pass B); `<30` → `422`. For a reaction faster than 30s - Beacons (Vigil/Oracle, [ADR-030](../../adr/0030-vigil-oracle.md)). |
+| `cron_expr` | `string` | for cron | Standard 5-field cron expression (UTC). |
+| `overlap_policy` | `string` (`skip`/`queue`/`parallel`) | yes | Overlay behavior (the previous child is not yet terminal). |
+| `kind` | `string` (`scenario`/`command`) | yes | Recipe-run type. |
+| `scenario_name` | `string` | for scenario | Required for `kind=scenario`; prohibited for `command`. |
+| `module` | `string` | for command | Required for `kind=command`; prohibited for `scenario`. |
+| `target` | `VoyageTarget` | yes | Run target (resolves at **spawn**, not at creation). |
+| `input` | `object` | no | Run parameters. **NOT logged** (invariant A [ADR-027](../../adr/0027-apply-work-queue.md)). |
+| `batch` | `string` | no | Leg size: `N` units / `N%` (1..100) from spawn-scope. Mutually exclusive with `batch_size`/`batch_percent` → `422 voyage_batch_spec_conflict`. |
+| `max_failures` | `string` | no | Failure threshold: `N` absolute / `N%` from spawn-scope run units. Mutually exclusive with `fail_threshold` → `422`. |
+| `batch_size` / `batch_percent` | `integer` | no | **DEPRECATED** (use `batch`). |
+| `fail_threshold` | `integer` | no | **DEPRECATED** (use `max_failures`). |
+| `concurrency` | `integer` (≥1) | no | Parallelism inside Leg (barrier) / window width (window). |
+| `batch_mode` | `string` (`barrier`/`window`) | no | Batch mode (`NULL` ⇒ `barrier`). |
+| `inter_batch_interval_ms` / `inter_unit_interval_ms` | `integer` (≥0) | no | Pauses between Legs (barrier) / per-unit (window). |
+| `require_alive` | `boolean` | no | Presence filter for living people on the scope resolution (kind=command). Default `false`. |
+| `on_failure` | `string` (`abort`/`continue`) | no | Behavior upon failure of Leg. |
+| `enabled` | `boolean` | no | Is the schedule included? Default **`true`** (default-ON; `false` → pause). |
+| `notify` | `array<VoyageNotify>` | no | Subscriptions to notifications about runs of THIS schedule. The shape of the element is the same [`VoyageNotify`](voyages.md) as that of the one-time `voyage.notify`. See ["Notifications `notify[]`"](#notifications-notify---permanent-tiding-from-the-schedule-form) below. |
 
-Процентные `batch`/`max_failures` (формат `N%`) **не резолвятся в абсолют на create** — у Cadence spawn-scope неизвестен на создании; процент стешится в колонки `batch_percent`/`fail_threshold_percent` и резолвится на spawn-scope при спавне Voyage.
+Percentages `batch`/`max_failures` (format `N%`) **do not resolve to absolute on create** - Cadence spawn-scope is unknown on creation; the percentage goes into the `batch_percent`/`fail_threshold_percent` columns and resolves to the spawn-scope when Voyage spawns.
 
-### Уведомления `notify[]` — постоянные Tiding из формы расписания
+### Notifications `notify[]` - permanent Tiding from the schedule form
 
-`notify` ([ADR-052 §m](../../adr/0052-herald-notifications.md#adr-052-herald--tiding--уведомления-о-событиях-прогонов), опц.) — список подписок на уведомления о прогонах **этого** расписания. Форма каждого элемента — та же [`VoyageNotify`](voyages.md) (`herald` + опц. `on`/`only_failures`/`only_changes`/`annotations`/`projection`), что у разового `voyage.notify`; валидация и RBAC переиспользуются. Отличие от Voyage-формы — в природе создаваемого правила:
+`notify` ([ADR-052 §m](../../adr/0052-herald-notifications.md), opt.) - list of subscriptions to notifications about runs of **this** schedule. The shape of each element is the same [`VoyageNotify`](voyages.md) (`herald` + opt. `on`/`only_failures`/`only_changes`/`annotations`/`projection`) as the one-time `voyage.notify`; validation and RBAC are reused. The difference from the Voyage form is in the nature of the rule being created:
 
-- **Постоянное, не ephemeral.** В отличие от `voyage.notify` (разовое правило `ephemeral=true` на один прогон), каждый элемент `cadence.notify` материализуется keeper-ом в **постоянный** Tiding (`ephemeral=false`), который слушает прогоны расписания и дальше — пока расписание живёт.
-- **Привязка по ULID расписания.** Правило несёт селектор `cadence` (фильтр «слать только про прогоны этого расписания») + внутренний origin-маркер `created_from_cadence_id = cadences.id` (стабильный ULID-PK, rename-safe — имя расписания мутабельно через PATCH). Имя автоправила — `<name>-notify[-N]` (детерминированный суффикс).
-- **Атомарность.** Insert правил идёт в **той же PG-транзакции**, что создаёт Cadence: либо Cadence + все правила, либо ничего (FK/коллизия имени/валидация откатывает весь `POST`).
-- **Каскад при удалении.** `DELETE /v1/cadences/{id}` каскадно сносит порождённые формой правила ([ADR-046 §9](../../adr/0046-cadence.md#adr-046-cadence--регулярные-запуски-scheduledrecurring-voyage), `tidings.created_from_cadence_id ON DELETE CASCADE`). Вручную заведённые Tiding-и с тем же `cadence`-селектором (но `created_from_cadence_id = NULL`) **не трогаются** — маркер происхождения ортогонален фильтр-селектору.
-- **RBAC `herald.read`.** Инициатор обязан иметь permission `herald.read` на **каждый** указанный канал доставки — иначе `403` (нельзя «подвесить» доставку через чужой Herald). Несуществующий канал → `422`.
-- **Cap 64 канала.** Длина `notify[]` ограничена **64** каналами на расписание (превышение → `422` до открытия транзакции).
+- **Permanent, not ephemeral.** Unlike `voyage.notify` (one-time rule `ephemeral=true` for one run), each element of `cadence.notify` is materialized by the keeper into a **permanent** Tiding (`ephemeral=false`), which listens to schedule runs and further - while the schedule lives.
+- **Binding by schedule ULID.** The rule carries the `cadence` selector (filter "send only about runs of this schedule") + internal origin marker `created_from_cadence_id = cadences.id` (stable ULID-PK, rename-safe - schedule name is mutable via PATCH). The auto rule name is `<name>-notify[-N]` (deterministic suffix).
+- **Atomicity.** Insert of rules goes in **the same PG transaction** that creates Cadence: either Cadence + all rules, or nothing (FK/name collision/validation rolls back the entire `POST`).
+- **Cascade when deleting.** `DELETE /v1/cadences/{id}` cascades the rules generated by the form ([ADR-046 §9](../../adr/0046-cadence.md), `tidings.created_from_cadence_id ON DELETE CASCADE`). Manually created Tidings with the same `cadence` selector (but `created_from_cadence_id = NULL`) **do not touch** - the origin marker is orthogonal to the filter selector.
+- **RBAC `herald.read`.** The initiator must have permission `herald.read` for **each** specified delivery channel - otherwise `403` (you cannot "suspend" delivery through someone else's Herald). Non-existent channel → `422`.
+- **Cap 64 channels.** The length of `notify[]` is limited to **64** channels per schedule (exceeding → `422` before transaction opens).
 
-`notify=[]`/опущено ⇒ расписание без уведомлений (одна транзакция с единственным Insert Cadence).
+`notify=[]`/omitted ⇒ schedule without notifications (one transaction with a single Insert Cadence).
 
-**Response `201 CadenceCreateReply`** (`required: cadence_id, name, enabled, location`) + заголовок `Location: /v1/cadences/{id}`:
+**Response `201 CadenceCreateReply`** (`required: cadence_id, name, enabled, location`) + header `Location: /v1/cadences/{id}`:
 
 ```json
 {
@@ -73,30 +73,30 @@ Permission: `cadence.create` (middleware) **+** Voyage-permission по `kind` (h
 }
 ```
 
-`next_run_at` вычисляется при создании (чистая функция от расписания; для `enabled=false` тоже считается — серия не «залипает», стартует при enable). `created_by_aid = JWT.sub`. Audit: `cadence.created`.
+`next_run_at` is calculated during creation (a pure function from the schedule; for `enabled=false` it is also calculated - the series does not "stick", it starts when enabled). `created_by_aid = JWT.sub`. Audit: `cadence.created`.
 
-**Errors:** `400` (невалидный JSON); `401` `unauthenticated` / `operator-revoked-token` (AID ревокнут); `403 forbidden` (двухуровневый RBAC deny: нет Voyage-permission по `kind`, либо target вне scope для scenario, **либо нет `herald.read` на канал из `notify[]`**); `404 not-found` (явная инкарнация target-а не существует, scenario); `422 validation-failed` (невалидный рецепт/расписание: XOR interval/cron, enum `overlap_policy`/`kind`/`batch_mode`/`on_failure`, `kind`↔`scenario_name`/`module`, битый cron, batch-spec conflict, пустой резолв `cadence_empty_target`, **floor-лимит `interval_seconds < 30`**, **несуществующий Herald-канал в `notify[]` / `notify[]` > 64 каналов**); `500` (store/enforcer не сконфигурирован / БД-сбой).
+**Errors:** `400` (invalid JSON); `401` `unauthenticated` / `operator-revoked-token` (AID revoked); `403 forbidden` (two-level RBAC deny: no Voyage-permission by `kind`, or target outside scope for scenario, **or no `herald.read` per channel from `notify[]`**); `404 not-found` (explicit incarnation of target does not exist, scenario); `422 validation-failed` (invalid recipe/schedule: XOR interval/cron, enum `overlap_policy`/`kind`/`batch_mode`/`on_failure`, `kind`↔`scenario_name`/`module`, broken cron, batch-spec conflict, empty resolution `cadence_empty_target`, **floor limit `interval_seconds < 30`**, **non-existent Herald channel in `notify[]` / `notify[]` > 64 channels**); `500` (store/enforcer not configured / DB failed).
 
-### `GET /v1/cadences` — список Cadence-расписаний
+### `GET /v1/cadences` — list of Cadence schedules
 
-Permission: `cadence.list`. MCP-tool: нет. Query: `enabled` (`true` → только enabled; `false`/опущен → все), `kind` (exact `scenario`/`command`) + `offset`/`limit` ([§ Pagination](../operator-api.md#pagination)). Sort `created_at` DESC. Response `200 CadenceListReply` (`{items, offset, limit, total}`). `input` рецепта в list-выдаче **не отдаётся** (инвариант A ADR-027).
+Permission: `cadence.list`. MCP-tool: no. Query: `enabled` (`true` → enabled only; `false`/omitted → all), `kind` (exact `scenario`/`command`) + `offset`/`limit` ([§ Pagination](../operator-api.md#pagination)). Sort `created_at` DESC. Response `200 CadenceListReply` (`{items, offset, limit, total}`). `input` of the recipe in the list-issue **not given** (invariant A ADR-027).
 
-### `GET /v1/cadences/{id}` — деталь Cadence
+### `GET /v1/cadences/{id}` - Cadence part
 
-Permission: `cadence.list`. MCP-tool: нет. `id` — ULID. Response `200 Cadence` (рецепт + расписание + `next_run_at`/`last_run_at` + audit-метаданные; `input` НЕ отдаётся). `404 cadence_not_found` (записи нет); `422 validation-failed` (`id` не ULID).
+Permission: `cadence.list`. MCP-tool: no. `id` - ULID. Response `200 Cadence` (recipe + schedule + `next_run_at`/`last_run_at` + audit metadata; `input` NOT given). `404 cadence_not_found` (no entry); `422 validation-failed` (`id` is not a ULID).
 
-### `PATCH /v1/cadences/{id}` — обновить Cadence
+### `PATCH /v1/cadences/{id}` - update Cadence
 
-Permission: `cadence.update` (middleware) **+** двухуровневый guard (handler, см. выше). MCP-tool: нет. Read-modify-write: заданные поля перезаписывают, опущенные сохраняются. Request `CadencePatchRequest` (все поля опциональны; `kind` отсутствует — не меняется). При смене расписания (`schedule_kind`/`interval_seconds`/`cron_expr`) — пересчёт `next_run_at`. Response `200 Cadence`. Audit: `cadence.updated`.
+Permission: `cadence.update` (middleware) **+** two-level guard (handler, see above). MCP-tool: no. Read-modify-write: specified fields are overwritten, omitted fields are retained. Request `CadencePatchRequest` (all fields are optional; `kind` is missing - does not change). When changing the schedule (`schedule_kind`/`interval_seconds`/`cron_expr`), `next_run_at` is recalculated. Response `200 Cadence`. Audit: `cadence.updated`.
 
-**Errors:** `400` (невалидный JSON); `403` (двухуровневый RBAC deny на пост-patch target); `404 cadence_not_found`; `422 validation-failed` (невалидный рецепт/расписание, batch-spec conflict, **floor-лимит** — в т.ч. при переводе расписания на `interval`); `500` (БД-сбой).
+**Errors:** `400` (invalid JSON); `403` (two-level RBAC deny on post-patch target); `404 cadence_not_found`; `422 validation-failed` (invalid recipe/schedule, batch-spec conflict, **floor-limit** - including when transferring the schedule to `interval`); `500` (DB failure).
 
-### `POST /v1/cadences/{id}/enable` | `POST /v1/cadences/{id}/disable` — toggle расписания
+### `POST /v1/cadences/{id}/enable` | `POST /v1/cadences/{id}/disable` — toggle schedules
 
-Permission: **`cadence.enable` ИЛИ `cadence.update`** (enable) / **`cadence.disable` ИЛИ `cadence.update`** (disable) — OR-гейт `RequireAnyPermission` (backcompat: роли со старым `cadence.update` сохраняют toggle, [ADR-046 amendment 2026-06-02](../../adr/0046-cadence.md#adr-046-cadence--регулярные-запуски-scheduledrecurring-voyage)). MCP-tool: нет. Lightweight toggle без перезаписи рецепта. Response `200 CadenceEnabledReply` (`{cadence_id, enabled}`). Audit: `cadence.updated`. `404 cadence_not_found`; `422` (`id` не ULID).
+Permission: **`cadence.enable` OR `cadence.update`** (enable) / **`cadence.disable` OR `cadence.update`** (disable) - OR gate `RequireAnyPermission` (backcompat: roles with old `cadence.update` retain toggle, [ADR-046 amendment 2026-06-02](../../adr/0046-cadence.md)). MCP-tool: no. Lightweight toggle without rewriting the recipe. Response `200 CadenceEnabledReply` (`{cadence_id, enabled}`). Audit: `cadence.updated`. `404 cadence_not_found`; `422` (`id` is not a ULID).
 
-### `GET /v1/cadences/{id}/runs` — дочерние Voyage расписания
+### `GET /v1/cadences/{id}/runs` - Voyage child schedules
 
-Permission: **`incarnation.history`** (read runtime-состояния прогонов, parity Voyage-list — не `cadence.*`). MCP-tool: нет. Drill «расписание → его прогоны» (`voyages WHERE cadence_id=$1`, reuse [Voyage-DTO](voyages.md)). Query: `status` (multi-value `?status=X&status=Y`, OR-семантика) + `offset`/`limit`. Response `200 VoyageListReply`. `404 cadence_not_found` (если Cadence не существует — пустой список неотличим от несуществующего id, поэтому existence-probe). `422 validation-failed` (`id` не ULID / битый `status`-фильтр).
+Permission: **`incarnation.history`** (read runtime states of runs, parity Voyage-list - not `cadence.*`). MCP-tool: no. Drill "schedule → its runs" (`voyages WHERE cadence_id=$1`, reuse [Voyage-DTO](voyages.md)). Query: `status` (multi-value `?status=X&status=Y`, OR semantics) + `offset`/`limit`. Response `200 VoyageListReply`. `404 cadence_not_found` (if Cadence does not exist, an empty list is indistinguishable from a non-existent id, so existence-probe). `422 validation-failed` (`id` is not a ULID / broken `status` filter).
 
-> **Note (поведение исполнителя).** При `DELETE /v1/cadences/{id}` (`cadence.delete`) порождённые Voyage **остаются** (FK `voyages.cadence_id ON DELETE SET NULL` — история детей и ручные прогоны сохраняются), но постоянные Tiding-и из блока `notify[]` **сносятся каскадом** (FK `tidings.created_from_cadence_id ON DELETE CASCADE`, [ADR-046 §9](../../adr/0046-cadence.md#adr-046-cadence--регулярные-запуски-scheduledrecurring-voyage)); вручную заведённые правила с тем же `cadence`-селектором (`created_from_cadence_id = NULL`) не трогаются. Спавн-семантику (due-выборка, три `overlap_policy`, anchored-пересчёт `next_run_at`, missed-slot anti-storm, авторство дочернего Voyage от `created_by_aid` Cadence с audit `source: background`) ведёт [Conductor](../conductor.md), а не эти эндпоинты.
+> **Note (performer behavior).** With `DELETE /v1/cadences/{id}` (`cadence.delete`), the spawned Voyages **remain** (FK `voyages.cadence_id ON DELETE SET NULL` - children's history and manual runs are preserved), but the permanent Tidings from the block `notify[]` **are demolished in a cascade** (FK `tidings.created_from_cadence_id ON DELETE CASCADE`, [ADR-046 §9](../../adr/0046-cadence.md)); manually created rules with the same `cadence` selector (`created_from_cadence_id = NULL`) are not affected. Spawn semantics (due-fetch, three `overlap_policy`, anchored-recalculation `next_run_at`, missed-slot anti-storm, authorship of the child Voyage from `created_by_aid` Cadence with audit `source: background`) are carried out by [Conductor](../conductor.md), and not by these endpoints.

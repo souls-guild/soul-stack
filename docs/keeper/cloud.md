@@ -1,27 +1,27 @@
-# Cloud-интеграция (`keeper.cloud`)
+# Cloud integration (`keeper.cloud`)
 
-Модуль внутри `keeper`-бинаря, отвечающий за cloud-операции (создание / удаление / опрос VM). Динамическое создание VM реализовано как **шаг сценария с `on: keeper`** через CloudDriver-плагин ([plugins.md](plugins.md)). Service не знает специфики облаков — он знает «нужен шаг создания VM с параметрами»; Keeper выбирает driver и исполняет.
+Module inside the `keeper` binary, responsible for cloud operations (creating / deleting / polling VMs). Dynamic VM creation is implemented as a **script step with `on: keeper`** via the CloudDriver plugin ([plugins.md](plugins.md)). Service does not know the specifics of clouds - it knows "the step of creating a VM with parameters is needed"; Keeper selects the driver and executes.
 
-## Provider и Profile в Postgres
+## Provider and Profile in Postgres
 
-**Provider** — настроенная учётка облака (AWS-аккаунт, GCP-проект, OpenStack-tenant). Хранится в Postgres ([storage.md](storage.md)), управляется через OpenAPI / MCP. CRUD-поверхность **реализована**:
+**Provider** — configured cloud account (AWS account, GCP project, OpenStack-tenant). Stored in Postgres ([storage.md](storage.md)), managed via OpenAPI / MCP. CRUD surface **implemented**:
 
-| Метод + путь | Permission | MCP-tool | Назначение |
+| Method + path | Permission | MCP-tool | Destination |
 |---|---|---|---|
-| `POST /v1/providers` | `provider.create` | `keeper.provider.create` | Создать Provider; `409 provider-already-exists` на дубль `name`. |
-| `GET /v1/providers` | `provider.read` | `keeper.provider.list` | Перечислить (paged `offset`/`limit`). |
-| `GET /v1/providers/{name}` | `provider.read` | `keeper.provider.get` | Прочитать один; `404 not-found`. |
-| `DELETE /v1/providers/{name}` | `provider.delete` | `keeper.provider.delete` | Удалить; `404 not-found`; `409 provider-has-profiles` при привязанных Profile-ях (FK RESTRICT, миграция 020). |
-| `POST /v1/profiles` | `profile.create` | `keeper.profile.create` | Создать Profile; `409 profile-already-exists` на дубль `name`; `422 validation-failed` на ссылку на несуществующий Provider (FK). |
-| `GET /v1/profiles` | `profile.read` | `keeper.profile.list` | Перечислить (опц. фильтр `provider=`). |
-| `GET /v1/profiles/{name}` | `profile.read` | `keeper.profile.get` | Прочитать один; `404 not-found`. |
-| `DELETE /v1/profiles/{name}` | `profile.delete` | `keeper.profile.delete` | Удалить; `404 not-found`. |
+| `POST /v1/providers` | `provider.create` | `keeper.provider.create` | Create Provider; `409 provider-already-exists` for take `name`. |
+| `GET /v1/providers` | `provider.read` | `keeper.provider.list` | Enumerate (paged `offset`/`limit`). |
+| `GET /v1/providers/{name}` | `provider.read` | `keeper.provider.get` | Read one; `404 not-found`. |
+| `DELETE /v1/providers/{name}` | `provider.delete` | `keeper.provider.delete` | Delete; `404 not-found`; `409 provider-has-profiles` with linked Profiles (FK RESTRICT, migration 020). |
+| `POST /v1/profiles` | `profile.create` | `keeper.profile.create` | Create Profile; `409 profile-already-exists` per take `name`; `422 validation-failed` to a reference to a non-existent Provider (FK). |
+| `GET /v1/profiles` | `profile.read` | `keeper.profile.list` | Enumerate (optional filter `provider=`). |
+| `GET /v1/profiles/{name}` | `profile.read` | `keeper.profile.get` | Read one; `404 not-found`. |
+| `DELETE /v1/profiles/{name}` | `profile.delete` | `keeper.profile.delete` | Delete; `404 not-found`. |
 
-**Иммутабельность.** `update`-операции **нет**: Provider/Profile неизменяемы, смена параметров = `delete` + `create`. Это защита от частичной мутации `spec` уже-живущих VM (нельзя на лету подменить регион/credentials под работающим флотом). Поэтому в каталоге [rbac.md](rbac.md#cloud-6--cloudmd) — только `create`/`read`/`delete` (без `update`), а MCP-tools — `create`/`list`/`get`/`delete`.
+**Immutability.** `update` operations **no**: Provider/Profile are immutable, change parameters = `delete` + `create`. This is protection against partial mutation `spec` of already living VMs (it is impossible to replace the region/credentials under a running fleet on the fly). Therefore, in the directory [rbac.md](rbac.md#cloud-6--cloudmd) there is only `create`/`read`/`delete` (without `update`), and MCP-tools is `create`/`list`/`get`/`delete`.
 
-**`credentials_ref` — только vault-путь.** Поле принимает строку `vault:<mount>/<path>`; сами credentials API **НЕ резолвит и НЕ возвращает** — отдаёт `credentials_ref` как путь (секрет-гигиена, симметрия с jwt-signing-key-ref). Резолв vault-секрета происходит на scenario-слое при вызове `core.cloud.provisioned` (см. [Credentials-flow](#credentials-flow)), не в CRUD.
+**`credentials_ref` — vault path only.** The field accepts the string `vault:<mount>/<path>`; The credentials API themselves **DO NOT resolve and DO NOT return** - returns `credentials_ref` as a path (secret-hygiene, symmetry with jwt-signing-key-ref). The vault secret resolution occurs on the scenario layer when calling `core.cloud.provisioned` (see [Credentials-flow](#credentials-flow)), not in CRUD.
 
-`provider.created` / `provider.deleted` и `profile.created` / `profile.deleted` пишутся в audit-журнал ([rbac.md](rbac.md)); read-роуты audit не пишут. Форма тел Provider/Profile описана ниже.
+`provider.created` / `provider.deleted` and `profile.created` / `profile.deleted` are written to the audit log ([rbac.md](rbac.md)); read routes do not write audit. The form of Provider/Profile bodies is described below.
 
 ```yaml
 keeper.provider.create
@@ -31,7 +31,7 @@ keeper.provider.create
   credentials_ref=vault:secret/cloud/aws-prod
 ```
 
-**Profile** — шаблон VM, многоразовый. Тоже в Postgres:
+**Profile** - VM template, reusable. Also in Postgres:
 
 ```yaml
 keeper.profile.create
@@ -46,199 +46,199 @@ keeper.profile.create
   cloud_init=...
 ```
 
-Параметры профиля валидируются против `profile_schema`, который driver публикует через RPC `Schema()` ([plugins.md](plugins.md)).
+Profile parameters are validated against `profile_schema`, which driver publishes via RPC `Schema()` ([plugins.md](plugins.md)).
 
-**Default essence в git как подложка.** Дефолтные параметры сервиса лежат в `essence/` репо сервиса (см. [architecture.md → Essence: pipeline сборки](../architecture.md#essence-pipeline-сборки)); оператор переопределяет их в `incarnation.spec` через API. Сами Provider/Profile — runtime-state, и потому в Postgres, а не в git ([architecture.md → Артефакты Soul Stack](../architecture.md#артефакты-soul-stack-что-в-git-что-в-бд)).
+**Default essence in git as a substrate.** The default service parameters are in the `essence/` service repo (see [architecture.md → Essence: build pipeline](../architecture.md)); operator overrides them in `incarnation.spec` via the API. The Provider/Profile themselves are runtime-state, and therefore in Postgres, and not in git ([architecture.md → Soul Stack Artifacts](../architecture.md)).
 
-## Cloud-create как шаг сценария
+## Cloud-create as script step
 
-В сценарии сервиса cloud-create — обычный шаг с `on: keeper`, использующий keeper-side core-модуль `core.cloud.provisioned` ([ADR-017](../adr/0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read), [keeper/modules.md](modules.md)). Прежний паттерн «core-destiny `cloud-provision`» **отменён ADR-017**: это не пакет задач для Soul, а keeper-side операция реестра, поэтому она — core-модуль с диспетчером `on: keeper`, а не destiny.
+In the cloud-create service script, a normal step with `on: keeper`, using the keeper-side core module `core.cloud.provisioned` ([ADR-017](../adr/0017-keeper-side-core.md), [keeper/modules.md](modules.md)). Previous "core-destiny `cloud-provision`" pattern **repealed by ADR-017**: This is not a task package for Soul, but a keeper-side registry operation, so it is a core module with a dispatcher `on: keeper`, not destiny.
 
 ```yaml
 - name: provision
-  on: keeper                             # шаг исполняется на keeper-е
-  module: core.cloud.created             # base core.cloud + state created (state — последний сегмент адреса)
+  on: keeper                             # step is executed on the keeper
+  module: core.cloud.created             # base core.cloud + state created (state is the last address segment)
   params:
-    provider: "${ input.spawn.provider }"  # ИМЯ Provider-а из реестра providers
+    provider: "${ input.spawn.provider }"  # Provider NAME from the providers registry
     profile:  "${ input.spawn.profile }"
     count:    "${ input.spawn.count }"
-    userdata: "${ input.spawn.cloud_init }" # опц. cloud-init blob для bootstrap soul
+    userdata: "${ input.spawn.cloud_init }" # opt. cloud-init blob for bootstrap soul
 ```
 
-> **★ State — последний сегмент `module:`-адреса**, не отдельный ключ. Пишется
-> `module: core.cloud.created` / `core.cloud.destroyed`; формы `module:
-> core.cloud.provisioned` или отдельного `state: created`-ключа **не существует**
-> (реестр делит адрес `core.cloud.created` на base `core.cloud` + state `created`,
-> поля `state:` в задаче нет).
+> **★ State is the last segment of the `module:` address**, not a separate key. It is written
+> `module: core.cloud.created` / `core.cloud.destroyed`; `module forms:
+> core.cloud.provisioned` or a separate `state: created` key **does not exist**
+> (registry divides address `core.cloud.created` into base `core.cloud` + state `created`,
+> there is no `state:` field in the task).
 
-Что делает `core.cloud` (state `created`):
+What `core.cloud` (state `created`) does:
 
-1. **Резолвит Provider-реестр.** `params.provider` — это имя строки `providers` (не имя CloudDriver-плагина). Keeper читает строку, берёт `type` (= имя плагина `soul-cloud-<type>`), `region` и `credentials_ref`.
-2. **Резолвит credentials.** По `credentials_ref` (`vault:<mount>/<path>`) Keeper читает секрет из Vault KV тем же keeper-side Vault-клиентом, что `core.vault.kv-read`, и кладёт plain-секрет + `region` в `CreateRequest.credentials`. Драйвер в Vault **НЕ ходит** (см. [Credentials-flow](#credentials-flow) ниже).
-3. **Дёргает `CloudDriver.Create`** через PluginHost (spawn one-shot, ADR-020): провайдер создаёт VM, стримит прогресс, ждёт готовности (running + IP/DNS) и возвращает `VmInfo` с заполненным `fqdn` (= SID).
-4. Для каждой VM создаётся запись в `souls` со `status: pending` и выписывается bootstrap-токен под её FQDN (plain-токен попадает только в register-output — `register.<step>.hosts[i].bootstrap_token`, в БД — hash).
-5. Cloud-init на VM (через `userdata`) ставит **только setup**: `soul`-бинарь, CA, `soul.yml`, systemd-unit — **без токена**. Токен доставляет отдельный keeper-side шаг `module: core.bootstrap.delivered` ([ADR-063](../adr/0063-bootstrap-token-delivery.md), [modules.md → core.bootstrap.delivered](modules.md#corebootstrapdelivered)); он же делает redeem (`soul init`) на VM. После init Soul поднимает EventStream и переходит в `connected`.
+1. **Resolve Provider registry.** `params.provider` is the name of the string `providers` (not the name of the CloudDriver plugin). Keeper reads the line, takes `type` (= plugin name `soul-cloud-<type>`), `region` and `credentials_ref`.
+2. **Resolves credentials.** By `credentials_ref` (`vault:<mount>/<path>`) Keeper reads the secret from Vault KV with the same keeper-side Vault client as `core.vault.kv-read`, and puts the plain secret + `region` in `CreateRequest.credentials`. The driver is **NOT running in Vault** (see [Credentials-flow](#credentials-flow) below).
+3. **Pulls `CloudDriver.Create`** via PluginHost (spawn one-shot, ADR-020): the provider creates a VM, streams progress, waits for readiness (running + IP/DNS) and returns `VmInfo` with `fqdn` (= SID) filled in.
+4. For each VM, an entry is created in `souls` with `status: pending` and a bootstrap token is issued under its FQDN (the plain token goes only to register-output - `register.<step>.hosts[i].bootstrap_token`, to the database - hash).
+5. Cloud-init on the VM (via `userdata`) puts **setup only**: `soul`-binary, CA, `soul.yml`, systemd-unit - **without token**. The token is delivered by a separate keeper-side step `module: core.bootstrap.delivered` ([ADR-063](../adr/0063-bootstrap-token-delivery.md), [modules.md → core.bootstrap.delivered](modules.md#corebootstrapdelivered)); he also makes redeem (`soul init`) on VM. After init, Soul raises EventStream and goes to `connected`.
 
-Шаги 4–5 — режим **B-flat (default)**. При `self_onboard: true` порядок другой: токены выписываются **ДО** create и запекаются в userdata — VM онбордится сама, шаг доставки не нужен (см. [Self-onboard «Вариант T»](#self-onboard-вариант-t)).
+Steps 4-5 - **B-flat (default)** mode. With `self_onboard: true`, the order is different: tokens are issued **BEFORE** create and baked in userdata - VM onboards itself, the delivery step is not needed (see Self-onboard "Option T").
 
-State `destroyed` симметричен: Keeper резолвит тот же Provider (для credentials) и зовёт `CloudDriver.Destroy(vm_ids, credentials)`, затем — cascade-транзакция реестров ([ADR-017](../adr/0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read)).
+State `destroyed` is symmetrical: Keeper resolves the same Provider (for credentials) and calls `CloudDriver.Destroy(vm_ids, credentials)`, then the cascade transaction of registries ([ADR-017](../adr/0017-keeper-side-core.md)).
 
 ### Credentials-flow
 
-Вариант **A** (зафиксирован): **Keeper резолвит секрет из Vault и передаёт plain в драйвер; драйвер в Vault не ходит.**
+Option **A** (fixed): **Keeper resolves the secret from Vault and passes plain to the driver; the driver does not go to Vault.**
 
-- Секрет хранится в Vault, в реестре `providers` — только `credentials_ref` (`vault:<mount>/<path>`).
-- На каждый `Create`/`Destroy` Keeper читает секрет (keeper-side Vault-клиент), складывает его поля + `region` в `CreateRequest.credentials` / `DestroyRequest.credentials` (`google.protobuf.Struct`, only-add поля в [`clouddriver.proto`](plugins.md)).
-- `region` живёт **внутри** credentials/profile Struct, а не отдельным типизированным полем: он provider-specific (у Proxmox/OpenStack своего `region` нет).
-- Секрет **маскируется на любом выходе** (audit / OTel / SSE / error-сообщения) тем же `MaskSecrets`, что чистит bootstrap-токен и vault-ref-ы. Драйверам поэтому **не нужна** capability `vault_access`.
+- The secret is stored in Vault, in the registry `providers` - only `credentials_ref` (`vault:<mount>/<path>`).
+- For each `Create`/`Destroy` Keeper reads the secret (keeper-side Vault client), adds its fields + `region` to `CreateRequest.credentials` / `DestroyRequest.credentials` (`google.protobuf.Struct`, only-add fields to [`clouddriver.proto`](plugins.md)).
+- `region` lives **inside** the credentials/profile Struct, and not as a separate typed field: it is provider-specific (Proxmox/OpenStack does not have its own `region`).
+- The secret is **masked on any output** (audit / OTel / SSE / error messages) by the same `MaskSecrets` that cleans the bootstrap token and vault refs. Drivers therefore **do not need** capability `vault_access`.
 
-> **Cloud-init bootstrap (B-flat, ADR-017(h) amendment 2026-05-27).** Реализованный MVP: per-VM bootstrap-токен выписывается ПОСЛЕ возврата `VmInfo` (когда SID известен) и кладётся в `register.<step>.hosts[i].bootstrap_token`. **Cloud-init userdata токены НЕ несёт** (cloud-provider API хранит userdata в plaintext metadata, доступной процессам VM) — содержит только: установку `soul`-бинаря (curl с pinned-CA), embedded PEM CA Keeper-а (`/etc/soul/tls/keeper-ca.pem`), минимальный `soul.yml` с `keeper.endpoints`, systemd-unit `soul.service`. **Доставка per-VM-токена на VM — отдельный keeper-side шаг сценария `module: core.bootstrap.delivered`** ([ADR-063](../adr/0063-bootstrap-token-delivery.md); прежняя заглушка `keeper.push.applied` отвергнута — такого keeper-side модуля не существовало, BUG#2): шаг читает `${ register.<step>.hosts }` (`sid`/`primary_ip`/`bootstrap_token`), по SSH кладёт токен на VM (STDIN, не argv) и там же делает redeem — `soul init`. См. [«Cloud-init bootstrap (MVP)»](#cloud-init-bootstrap-mvp) ниже и [modules.md → core.bootstrap.delivered](modules.md#corebootstrapdelivered).
+> **Cloud-init bootstrap (B-flat, ADR-017(h) amendment 2026-05-27).** Implemented MVP: per-VM bootstrap token is issued AFTER `VmInfo` is returned (when the SID is known) and placed in `register.<step>.hosts[i].bootstrap_token`. **Cloud-init userdata does NOT carry tokens** (cloud-provider API stores userdata in plaintext metadata, accessible to VM processes) - contains only: installation of `soul` binary (curl with pinned-CA), embedded PEM CA Keeper (`/etc/soul/tls/keeper-ca.pem`), minimal `soul.yml` with `keeper.endpoints`, systemd-unit `soul.service`. **Delivery of per-VM token to VM is a separate keeper-side script step `module: core.bootstrap.delivered`** ([ADR-063](../adr/0063-bootstrap-token-delivery.md); previous stub `keeper.push.applied` rejected - such keeper-side module did not exist, BUG#2): step reads `${ register.<step>.hosts }` (`sid`/`primary_ip`/`bootstrap_token`), via SSH puts a token on the VM (STDIN, not argv) and makes a redeem there - `soul init`. See ["Cloud-init bootstrap (MVP)"](#cloud-init-bootstrap-mvp) below and [modules.md → core.bootstrap.delivered](modules.md#corebootstrapdelivered).
 
-> **Coven-привязка нового хоста — отдельный scenario-шаг.** `core.cloud.provisioned` создаёт VM и регистрирует их в `souls`, но **сам по себе coven-метки не назначает**: запись `souls → coven` — это отдельный шаг сценария через core-модуль `core.soul.registered` ([`docs/keeper/modules.md`](modules.md)). Разделение сознательное: cloud-create и привязка к coven — разные операции реестра, каждый со своими guard-rails, и они компонуются в сценарии независимо.
+> **Coven binding of a new host is a separate scenario step.** `core.cloud.provisioned` creates VMs and registers them in `souls`, but **does not assign coven labels by itself**: writing `souls → coven` is a separate scenario step through the core module `core.soul.registered` ([`docs/keeper/modules.md`](modules.md)). The separation is deliberate: cloud-create and binding to coven are different registry operations, each with its own guard-rails, and they are assembled independently in the script.
 
-Дальше следующие шаги сценария идут уже по coven этого incarnation (`on: ["{{ incarnation.name }}"]`) и ставят destiny на свеже-созданные хосты.
+The next steps of the script follow the coven of this incarnation (`on: ["{{ incarnation.name }}"]`) and set the destiny to the newly created hosts.
 
-## Безопасность destroy
+## Security destroy
 
-Удаление VM — деструктивная операция, обязательны guard-rails:
+Removing a VM is a destructive operation, guard-rails are required:
 
-- **Tombstone period.** При scale-down или `incarnation.destroy` VM не удаляется немедленно — помечается `marked_for_deletion`, ждёт `tombstone_ttl` (default 24h). Оператор может откатить.
-- **Confirm flag.** Reconcile/destroy не делает physical destroy без явного `--allow-destroy` или соответствующего поля.
-- **Storage protection.** EBS-volumes / диски не удаляются вместе с VM по умолчанию — отдельно подтверждаются.
-- **Audit.** Каждое удаление пишется в журнал с указанием инициатора ([rbac.md](rbac.md)).
+- **Tombstone period.** With scale-down or `incarnation.destroy`, the VM is not deleted immediately - it is marked with `marked_for_deletion`, waits for `tombstone_ttl` (default 24h). The operator can roll back.
+- **Confirm flag.** Reconcile/destroy does not do physical destroy without an explicit `--allow-destroy` or corresponding field.
+- **Storage protection.** EBS-volumes / disks are not deleted along with the VM by default - they are confirmed separately.
+- **Audit.** Each deletion is written to the log indicating the initiator ([rbac.md](rbac.md)).
 
-Это критично — иначе одна опечатка в `count` стирает прод.
+This is critical - otherwise one typo in `count` will erase the rest.
 
 ## Cloud-init bootstrap (MVP)
 
-Реализованный B-flat вариант (ADR-017(h) amendment 2026-05-27). Цель: новая VM, созданная `core.cloud.provisioned`, поднимает `soul`-агента и подключается к Keeper-кластеру.
+Implemented B-flat option (ADR-017(h) amendment 2026-05-27). Goal: a new VM created by `core.cloud.provisioned` raises the `soul` agent and connects to the Keeper cluster.
 
-Bootstrap-доставка токена — три режима:
+Bootstrap token delivery - three modes:
 
-1. **B-flat (default)** — userdata несёт только setup, **без токенов**; токен доставляет отдельный шаг `core.bootstrap.delivered` (token-only). Описан во [Flow](#flow) ниже.
-2. **Full-install** — платформы без cloud-init userdata: `core.bootstrap.delivered` с `install: true` (`transport: teleport`) сам ставит весь setup по SSH и доставляет токен ([ADR-063](../adr/0063-bootstrap-token-delivery.md), [modules.md → core.bootstrap.delivered](modules.md#corebootstrapdelivered)).
-3. **Self-onboard «Вариант T»** — `self_onboard: true` на `core.cloud.created`: per-VM токены запечены в userdata, VM онбордится **сама в один цикл cloud-init**, шага доставки нет ([ADR-017(h) amendment 2026-07-01](../adr/0017-keeper-side-core.md)). См. [подраздел ниже](#self-onboard-вариант-t).
+1. **B-flat (default)** — userdata carries only setup, **without tokens**; the token is delivered by a separate step `core.bootstrap.delivered` (token-only). Described in [Flow](#flow) below.
+2. **Full-install** - platforms without cloud-init userdata: `core.bootstrap.delivered` with `install: true` (`transport: teleport`) itself installs the entire setup via SSH and delivers the token ([ADR-063](../adr/0063-bootstrap-token-delivery.md), [modules.md → core.bootstrap.delivered](modules.md#corebootstrapdelivered)).
+3. **Self-onboard "Option T"** - `self_onboard: true` on `core.cloud.created`: per-VM tokens are baked in userdata, VM onboards **itself in one cloud-init cycle**, there is no delivery step ([ADR-017(h) amendment 2026-07-01](../adr/0017-keeper-side-core.md)). See subsection below.
 
 ### Flow
 
-1. **Шаг сценария `module: core.cloud.created`** с параметром `generate_userdata: true`:
-   - Keeper резолвит `keeper.yml::cloud_init.tls_ca_ref` в PEM CA через Vault (поле `ca`).
-   - Keeper рендерит cloud-config YAML по embed template `keeper/internal/soulinstall/templates/cloud-init.tmpl`. Install-blueprint (пути/права/soul.yml/unit) вынесен в shared-пакет [`keeper/internal/soulinstall`](../../keeper/internal/soulinstall) — единый источник для userdata-пути **и** full-install по SSH ([ADR-063](../adr/0063-bootstrap-token-delivery.md) amendment 2026-06-30); `keeper/internal/cloudinit` остался config-резолвером (Vault) и тонкой обёрткой рендера.
-   - Userdata уходит в `CreateRequest.userdata` (ADR-017(e) only-add), провайдер создаёт VM с этой userdata.
-   - После Create — Keeper выписывает per-VM bootstrap-токен под FQDN VM, кладёт в `register.<step>.hosts[i].bootstrap_token` (plaintext, маскируется на всех выходах audit/SSE/OTel substring-фильтром `audit.MaskSecrets`).
-2. **На VM работает cloud-init:**
-   - Устанавливает CA: `/etc/soul/tls/keeper-ca.pem` (PEM, embedded в userdata).
-   - Скачивает `soul`-бинарь: `curl --cacert /etc/soul/tls/keeper-ca.pem $SOUL_BINARY_URL` → `/usr/local/bin/soul` (pinned-CA, TOFU-mitigation). При `soul_binary_ca: system` curl идёт без `--cacert` (системный trust-store, для публичных CA artifact-хостов); см. поле в разделе «Конфиг».
-   - Пишет минимальный `/etc/soul/soul.yml` с `keeper.endpoints[0] = {host, bootstrap_port, event_stream_port}` (`event_stream_port` — из `cloud_init.event_stream_port`; не задан → fallback на порт `bootstrap_endpoint`, single-port LB).
-   - `systemctl daemon-reload + enable + start soul.service`. Без SoulSeed демон **сам не онбордится**: `soul run` завершается ошибкой «SoulSeed not found — run `soul init` first» и рестартится systemd-ом, пока токен не доставлен и не redeem-нут (шаг 3).
-3. **Следующий шаг сценария — доставка токена: `module: core.bootstrap.delivered`** ([ADR-063](../adr/0063-bootstrap-token-delivery.md), спецификация — [modules.md → core.bootstrap.delivered](modules.md#corebootstrapdelivered)):
-   - Читает `${ register.<step1>.hosts }` (`sid` / `primary_ip` / `bootstrap_token`) через CEL.
-   - По SSH (direct-режим через SshProvider-плагин + CA-signed host-cert, либо `transport: teleport` by-name) кладёт токен в `token_path` (default `/etc/soul/token`); **токен идёт в STDIN, не в argv**.
-   - Там же **redeem токена**: `test -e <seed-cert> || SOUL_BOOTSTRAP_TOKEN="$(cat <token_path>)" soul init --config /etc/soul/soul.yml` — идемпотентно (guard по seed-cert; токен single-use). При `start_soul: true` (default) — `systemctl daemon-reload && enable && start soul`.
-4. **`soul init` → Bootstrap-RPC** (ADR-012(b)): CSR с токеном → подпись Vault PKI → mTLS-cert (SoulSeed). Дальше демон держит EventStream; онбординга набора VM дожидается барьер `await_online` шага `core.soul.registered` ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)).
+1. **Script step `module: core.cloud.created`** with parameter `generate_userdata: true`:
+   - Keeper resolves `keeper.yml::cloud_init.tls_ca_ref` to PEM CA via Vault (field `ca`).
+   - Keeper renders cloud-config YAML using embed template `keeper/internal/soulinstall/templates/cloud-init.tmpl`. Install-blueprint (paths/permissions/soul.yml/unit) is included in the shared package [`keeper/internal/soulinstall`](../../keeper/internal/soulinstall) - a single source for the userdata path **and** full-install via SSH ([ADR-063](../adr/0063-bootstrap-token-delivery.md) amendment 2026-06-30); `keeper/internal/cloudinit` remains a config resolver (Vault) and a thin render wrapper.
+   - Userdata goes to `CreateRequest.userdata` (ADR-017(e) only-add), the provider creates a VM with this userdata.
+   - After Create - Keeper issues a per-VM bootstrap token under the VM FQDN, puts it in `register.<step>.hosts[i].bootstrap_token` (plaintext, masked on all audit/SSE/OTel outputs by the `audit.MaskSecrets` substring filter).
+2. **Cloud-init is running on the VM:**
+   - Sets CA: `/etc/soul/tls/keeper-ca.pem` (PEM, embedded in userdata).
+   - Downloads the `soul` binary: `curl --cacert /etc/soul/tls/keeper-ca.pem $SOUL_BINARY_URL` → `/usr/local/bin/soul` (pinned-CA, TOFU-mitigation). With `soul_binary_ca: system` curl goes without `--cacert` (system trust-store, for public CA artifact hosts); see the field in the "Config" section.
+   - Writes the minimum `/etc/soul/soul.yml` from `keeper.endpoints[0] = {host, bootstrap_port, event_stream_port}` (`event_stream_port` - from `cloud_init.event_stream_port`; not specified → fallback to port `bootstrap_endpoint`, single-port LB).
+   - `systemctl daemon-reload + enable + start soul.service`. Without SoulSeed, the demon **does not board itself**: `soul run` ends with the error "SoulSeed not found - run `soul init` first" and is restarted by systemd until the token is delivered and redeemed (step 3).
+3. **The next step of the script is token delivery: `module: core.bootstrap.delivered`** ([ADR-063](../adr/0063-bootstrap-token-delivery.md), specification - [modules.md → core.bootstrap.delivered](modules.md#corebootstrapdelivered)):
+   - Reads `${ register.<step1>.hosts }` (`sid` / `primary_ip` / `bootstrap_token`) via CEL.
+   - Via SSH (direct mode via SshProvider plugin + CA-signed host-cert, or `transport: teleport` by-name) puts the token in `token_path` (default `/etc/soul/token`); **token goes to STDIN, not to argv**.
+   - Ibid **redeem token**: `test -e <seed-cert> || SOUL_BOOTSTRAP_TOKEN="$(cat <token_path>)" soul init --config /etc/soul/soul.yml` - idempotent (guard by seed-cert; single-use token). With `start_soul: true` (default) - `systemctl daemon-reload && enable && start soul`.
+4. **`soul init` → Bootstrap-RPC** (ADR-012(b)): CSR with token → Vault PKI signature → mTLS-cert (SoulSeed). Next, the demon holds the EventStream; VM set onboarding waits for barrier `await_online` step `core.soul.registered` ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)).
 
-### Конфиг
+### Config
 
-Блок `keeper.yml::cloud_init` (опциональный):
+Block `keeper.yml::cloud_init` (optional):
 
 ```yaml
 cloud_init:
   bootstrap_endpoint: lb.keeper.example:9442      # LB host:port (Bootstrap-RPC listener)
-  event_stream_port:  9443                         # опц.: TCP-порт EventStream (mTLS); 0/нет → порт bootstrap_endpoint
-  tls_ca_ref:         vault:secret/keeper/ca      # PEM CA, поле `ca` в KV
+  event_stream_port:  9443                         # opt: EventStream TCP port (mTLS); 0/no → bootstrap_endpoint port
+  tls_ca_ref:         vault:secret/keeper/ca      # PEM CA, field `ca` in KV
   soul_binary_url:    https://artifacts.example/soul/v1.0.0/soul
-  soul_binary_ca:     keeper                       # опц.: keeper (default) | system
-  soul_version:       v1.0.0                       # опц. метка для диагностики
+  soul_binary_ca:     keeper                       # opt: keeper (default) | system
+  soul_version:       v1.0.0                       # opt. diagnostic label
 ```
 
-Тот же блок — единый источник install-параметров и для **full-install-режима** `core.bootstrap.delivered` (платформы без cloud-init userdata): имя `cloud_init` сохранено сознательно, второй блок под тем же содержимым был бы drift ([ADR-063](../adr/0063-bootstrap-token-delivery.md) amendment 2026-06-30).
+The same block is a single source of install parameters for **full-install mode** `core.bootstrap.delivered` (platforms without cloud-init userdata): the name `cloud_init` was saved deliberately, the second block with the same content would be drift ([ADR-063](../adr/0063-bootstrap-token-delivery.md) amendment 2026-06-30).
 
-Поля:
+Fields:
 
 - `bootstrap_endpoint` — `host:port` LB (Bootstrap-RPC listener).
-- `event_stream_port` — опц. TCP-порт EventStream-фазы (mTLS) того же host-а; попадает в `event_stream_port` генерённого `soul.yml`. `0`/опущено → back-compat fallback на порт `bootstrap_endpoint` (single-port LB). Без него на топологиях с раздельными портами `soul run` дозванивался бы EventStream-ом на Bootstrap-only listener («Unimplemented: method EventStream», 6-я стена [ADR-063](../adr/0063-bootstrap-token-delivery.md)).
-- `tls_ca_ref` — vault-ref (`vault:<mount>/<path>`) на PEM-CA Keeper-а (поле `ca` в KV).
-- `soul_binary_url` — HTTPS URL для скачивания `soul`-бинаря (plain http отвергается).
-- `soul_binary_ca` — какой trust-store использует curl при скачивании бинаря:
-  - `keeper` (default, пустое значение) — pin на keeper-CA (`curl --cacert keeper-ca.pem`); для self-hosted artifact-хоста с тем же CA, что у Keeper-а;
-  - `system` — системный trust-store (`curl` без `--cacert`); для artifact-хостов с публичным CA (например, бинарь на Nexus за GlobalSign).
-  - `soul_binary_ca: system` ослабляет **только** верификацию сертификата artifact-хоста при curl-скачивании бинаря. Bootstrap-канал (souls↔keeper mTLS) пинится на keeper-CA **всегда**, независимо от этого поля; `system` — это всё ещё system-CA-over-TLS, не plain-http.
-- `soul_version` — опц. метка для диагностики.
+- `event_stream_port` - opt. TCP port of the EventStream phase (mTLS) of the same host; falls into `event_stream_port` of the generated `soul.yml`. `0`/omitted → back-compat fallback to port `bootstrap_endpoint` (single-port LB). Without it, on topologies with separate ports `soul run` would have called EventStream on the Bootstrap-only listener ("Unimplemented: method EventStream", 6th wall [ADR-063](../adr/0063-bootstrap-token-delivery.md)).
+- `tls_ca_ref` — vault-ref (`vault:<mount>/<path>`) on PEM-CA Keeper (field `ca` in KV).
+- `soul_binary_url` — HTTPS URL for downloading the `soul` binary (plain http is rejected).
+- `soul_binary_ca` — which trust-store curl uses when downloading the binary:
+  - `keeper` (default, empty value) - pin on keeper-CA (`curl --cacert keeper-ca.pem`); for a self-hosted artifact host with the same CA as Keeper;
+  - `system` - system trust-store (`curl` without `--cacert`); for artifact hosts with a public CA (for example, the binary on Nexus for GlobalSign).
+  - `soul_binary_ca: system` weakens **only** artifact host certificate verification when curling a binary. The Bootstrap channel (souls↔keeper mTLS) is pinned to the keeper-CA **always**, regardless of this field; `system` is still system-CA-over-TLS, not plain-http.
+- `soul_version` - opt. diagnostic label.
 
-Hot-reload работает: правка `keeper.yml` через `keeper-reload` → следующий cloud-create-шаг рендерит userdata с новым snapshot-ом (без рестарта Keeper-а).
+Hot-reload works: editing `keeper.yml` via `keeper-reload` → the next cloud-create step renders userdata with a new snapshot (without restarting Keeper).
 
-При отсутствии блока — параметр `generate_userdata: true` валит шаг сценария с понятной ошибкой; явный `userdata: "<blob>"` продолжает работать (legacy / gold-image flow).
+If there is no block, the `generate_userdata: true` parameter fails the script step with an understandable error; explicit `userdata: "<blob>"` continues to run (legacy/gold-image flow).
 
-### Параметр scenario
+### scenario parameter
 
 ```yaml
 - name: provision
   on: keeper
-  module: core.cloud.created           # base core.cloud + state created (НЕ core.cloud.provisioned; state — последний сегмент)
+  module: core.cloud.created           # base core.cloud + state created (NOT core.cloud.provisioned; state is the last segment)
   params:
     provider:          aws-prod
-    profile:           redis-medium-eu # ИМЯ записи реестра profiles (НЕ inline-object — ADR-017 amendment 2026-06-29)
+    profile:           redis-medium-eu # registry entry NAME profiles (NOT inline-object - ADR-017 amendment 2026-06-29)
     count:             3
-    generate_userdata: true            # ← рендер из keeper.yml::cloud_init
+    generate_userdata: true            # ← render from keeper.yml::cloud_init
   register: vm
 ```
 
-`profile` — **имя** строки реестра `profiles` (`POST /v1/profiles` до прогона): Keeper резолвит имя в VM-spec params через Profile-реестр, симметрично `provider`→credentials. Inline-object в `params.profile` **не поддерживается** (рудимент раннего дизайна до появления Profile-реестра; [ADR-017](../adr/0017-keeper-side-core.md) amendment 2026-06-29).
+`profile` - **name** of the registry line `profiles` (`POST /v1/profiles` before running): Keeper resolves the name in VM-spec params through the Profile registry, symmetrically `provider`→credentials. Inline-object in `params.profile` **not supported** (a vestige of an early design before the advent of the Profile registry; [ADR-017](../adr/0017-keeper-side-core.md) amendment 2026-06-29).
 
-`generate_userdata: true` и `userdata: "..."` — **mutually exclusive** (одновременное присутствие → fail). Без обоих провайдер получает пустой userdata. `self_onboard: true` тоже взаимоисключим с явным `userdata:` — keeper обязан сам запечь токены (см. ниже).
+`generate_userdata: true` and `userdata: "..."` - **mutually exclusive** (simultaneous presence → fail). Without both, the provider receives an empty userdata. `self_onboard: true` is also mutually exclusive with the explicit `userdata:` - the keeper must bake the tokens himself (see below).
 
-### Self-onboard «Вариант T»
+### Self-onboard "Option T"
 
-Третий режим bootstrap-доставки ([ADR-017(h) amendment 2026-07-01](../adr/0017-keeper-side-core.md)): VM онбордится **сама в один цикл cloud-init**, без шага `core.bootstrap.delivered` и без claim-callback. Chicken-egg «SID известен только ПОСЛЕ create» снят предсказанием FQDN: keeper сам задаёт базовое имя VM-батча (param `name` → `CreateRequest.name`, драйвер именует VM `<name>-<index>`) и знает FQDN-суффикс провайдера (поле реестра `providers.fqdn_suffix`, миграция 094) — полный FQDN `<name>-<index>.<fqdn_suffix>` каждой VM известен ДО create.
+Third mode of bootstrap delivery ([ADR-017(h) amendment 2026-07-01](../adr/0017-keeper-side-core.md)): VM onboards **itself in one cloud-init cycle**, without the `core.bootstrap.delivered` step and without claim-callback. Chicken-egg "SID is known only AFTER create" removed by FQDN prediction: keeper itself sets the base name of the VM batch (param `name` → `CreateRequest.name`, the driver names the VM `<name>-<index>`) and knows the FQDN suffix of the provider (registry field `providers.fqdn_suffix`, migration 094) - full FQDN `<name>-<index>.<fqdn_suffix>` is known to each VM BEFORE create.
 
 ```yaml
 - name: provision
   on: keeper
   module: core.cloud.created
   params:
-    provider:     dev-cloud       # у Provider-а должен быть задан fqdn_suffix
+    provider:     dev-cloud       # Provider must have fqdn_suffix set
     profile:      redis-medium-eu
     count:        3
-    name:         soul-e2e        # base-имя: FQDN = soul-e2e-<i>.<fqdn_suffix>
-    self_onboard: true            # generate_userdata подразумевается
+    name:         soul-e2e        # base-name: FQDN = soul-e2e-<i>.<fqdn_suffix>
+    self_onboard: true            # generate_userdata is implied
   register: vm
 ```
 
-Как работает:
+How it works:
 
-1. Keeper **ДО create** выписывает per-VM bootstrap-токены на предсказанные SID (записи `souls` со `status: pending`, в `bootstrap_tokens` — hash) и рендерит userdata с map FQDN→token: файл `/etc/soul/self-onboard-tokens` (`0600`, строки `<fqdn> <token>`).
-2. Провайдер создаёт VM с этой userdata; keeper сверяет фактические FQDN с предсказанными — расхождение (драйвер не учёл `CreateRequest.name`) → fail-fast, иначе токен не совпал бы с hostname VM. Провал create/сверки **откатывает** вставленные souls/токены (orphan-cleanup — без него rerun упирался бы в PK-конфликт).
-3. cloud-init на VM ставит обычный setup (CA, `soul.yml`, unit, `soul`-бинарь), затем **между установкой бинаря и стартом `soul.service`** выбирает свою строку токена по `$(hostname -f)` и делает `soul init` (токен уходит через env `SOUL_BOOTSTRAP_TOKEN`, не argv). После init `soul.service` поднимает уже онбордившийся демон; онбординга набора ждёт штатный барьер `await_online` (`core.soul.registered`).
+1. Keeper **BEFORE create** writes per-VM bootstrap tokens to the predicted SIDs (records `souls` with `status: pending`, in `bootstrap_tokens` - hash) and renders userdata with map FQDN→token: file `/etc/soul/self-onboard-tokens` (`0600`, lines `<fqdn> <token>`).
+2. The provider creates a VM with this userdata; keeper checks the actual FQDNs with the predicted ones - discrepancy (the driver did not take into account `CreateRequest.name`) → fail-fast, otherwise the token would not match the hostname of the VM. Failure of create/reconciliation **rolls back** inserted souls/tokens (orphan-cleanup - without it, rerun would run into a PK conflict).
+3. cloud-init on the VM installs the usual setup (CA, `soul.yml`, unit, `soul`-binary), then **between installing the binary and starting `soul.service`** selects its token line by `$(hostname -f)` and does `soul init` (the token goes through env `SOUL_BOOTSTRAP_TOKEN`, not argv). After init `soul.service` raises the already boarded demon; There is a standard barrier `await_online` (`core.soul.registered`) waiting for recruitment onboarding.
 
-Контракт params: `self_onboard: true` (bool, opt) **требует `name`**; **взаимоисключим с явным `userdata:`**; `generate_userdata` подразумевается — блок `keeper.yml::cloud_init` обязан быть сконфигурирован. **Plain-токен в register-output НЕ кладётся** — ключа `bootstrap_token` в `register.<step>.hosts[i]` в этом режиме нет (доставки нет); output несёт признак `self_onboard: true`.
+Contract params: `self_onboard: true` (bool, opt) **requires `name`**; **mutually exclusive with explicit `userdata:`**; `generate_userdata` is implied - block `keeper.yml::cloud_init` must be configured. **Plain token is NOT placed in register-output** - there is no key `bootstrap_token` in `register.<step>.hosts[i]` in this mode (no delivery); output carries the flag `self_onboard: true`.
 
-> **★ Security — осознанное отступление от B-flat.** B-flat держит userdata «без токенов» (cloud-provider хранит userdata в plaintext-metadata, доступной процессам VM). Self-onboard кладёт токены в userdata сознательно: они **single-use** — redeem происходит немедленно, на первом же boot-цикле, повторное употребление невозможно; альтернатива — обязательная push-доставка, которой на части платформ нет. Режим — **opt-in per-шаг** (`self_onboard`); default остаётся B-flat.
+> **★ Security is a deliberate departure from B-flat.** B-flat keeps userdata "without tokens" (cloud-provider stores userdata in plaintext-metadata, accessible to VM processes). Self-onboard puts tokens in userdata deliberately: they are **single-use** - redeem occurs immediately, on the first boot cycle, re-use is impossible; the alternative is mandatory push delivery, which is not available on some platforms. Mode - **opt-in per-step** (`self_onboard`); default remains B-flat.
 
-Границы: провайдер без предсказуемого FQDN (пустой `fqdn_suffix`) — явная ошибка шага; на платформах с выключенным userdata (WB `ci_user_data`, [ADR-066](../adr/0066-teleport-onboarding-profile.md)) режим недоступен — там штатный путь full-install через Teleport ([ADR-063](../adr/0063-bootstrap-token-delivery.md)).
+Bounds: provider without predictable FQDN (empty `fqdn_suffix`) - clear step error; on platforms with userdata disabled (WB `ci_user_data`, [ADR-066](../adr/0066-teleport-onboarding-profile.md)), the mode is not available - there is a standard full-install path via Teleport ([ADR-063](../adr/0063-bootstrap-token-delivery.md)).
 
-### Безопасность
+### Security
 
-- **Userdata НЕ несёт токены** (cloud-provider plaintext metadata) — в default-режиме B-flat. Исключение — opt-in [self-onboard «Вариант T»](#self-onboard-вариант-t): токены в userdata сознательно, single-use.
-- **Pinned-CA для curl** (`soul_binary_ca: keeper`, default) — атакующий не может подменить `soul`-бинарь man-in-the-middle-ом (требует владения приватником CA Keeper-а). При `soul_binary_ca: system` верификация cert artifact-хоста идёт по системному trust-store (для публичных CA); ослабляется **только** этот шаг — Bootstrap-канал (souls↔keeper mTLS) пинится на keeper-CA всегда, plain-http по-прежнему отвергается.
-- **TLS CA из Vault** — единый источник правды, ротация без правок keeper.yml.
-- **Per-VM-токен доставляется отдельным шагом по SSH** (`core.bootstrap.delivered`: токен в STDIN, не в argv; audit-payload без токенов) — атакующая поверхность ограничена SSH-доступом, а не cloud metadata.
+- **Userdata does NOT carry tokens** (cloud-provider plaintext metadata) - in default B-flat mode. The exception is opt-in self-onboard "Option T": tokens in userdata are deliberate, single-use.
+- **Pinned-CA for curl** (`soul_binary_ca: keeper`, default) - an attacker cannot replace the `soul` binary with a man-in-the-middle (requires ownership of the CA Keeper privateer). With `soul_binary_ca: system`, the cert artifact host is verified using the system trust-store (for public CAs); **only** this step is weakened - the Bootstrap channel (souls↔keeper mTLS) is always pinned to keeper-CA, plain-http is still rejected.
+- **TLS CA from Vault** - single source of truth, rotation without keeper.yml edits.
+- **Per-VM token is delivered in a separate step via SSH** (`core.bootstrap.delivered`: token in STDIN, not in argv; audit-payload without tokens) - the attack surface is limited to SSH access, not cloud metadata.
 
-### Пример
+### Example
 
-См. [`examples/service/example-cloud-bootstrap/`](../../examples/service/example-cloud-bootstrap/) — полный scenario create со связкой `core.cloud.provisioned` + per-VM-token.
+See [`examples/service/example-cloud-bootstrap/`](../../examples/service/example-cloud-bootstrap/) - complete scenario create with `core.cloud.provisioned` + per-VM-token.
 
-## Список cloud-провайдеров для MVP
+## List of cloud providers for MVP
 
-AWS / GCP / Azure / Yandex Cloud / OpenStack / vSphere / Proxmox — что из них поставляется в первом релизе, а что — extension community: [open Q №13](../architecture.md#открытые-вопросы).
+AWS / GCP / Azure / Yandex Cloud / OpenStack / vSphere / Proxmox - which of them is supplied in the first release, and which is the extension community: [open Q No. 13](../architecture.md).
 
-Reconcile-loop «declared count vs actual VM count» (фоновое выравнивание) — [open Q №17](../architecture.md#открытые-вопросы): закладываем сразу или MVP только manual `incarnation.upgrade/scale`.
+Reconcile-loop "declared count vs actual VM count" (background alignment) - [open Q No. 17](../architecture.md): lay down the MVP immediately or only manual `incarnation.upgrade/scale`.
 
-## См. также
+## See also
 
-- [plugins.md](plugins.md) — контракт `CloudDriver`.
-- [storage.md](storage.md) — где живут Provider, Profile, реестр VM.
-- [rbac.md](rbac.md) — RBAC на cloud-операции.
-- [config.md](config.md) → `plugins.cloud_drivers` — реестр драйверов.
-- [architecture.md → Cloud-интеграция через `keeper.cloud`](../architecture.md#cloud-интеграция-через-keepercloud).
-- [architecture.md → Targeting и связь хостов](../architecture.md#targeting-и-связь-хостов) — `on: keeper` vs `on: [coven, …]`.
+- [plugins.md](plugins.md) - contract `CloudDriver`.
+- [storage.md](storage.md) - where Provider, Profile, VM registry live.
+- [rbac.md](rbac.md) - RBAC for cloud operations.
+- [config.md](config.md) → `plugins.cloud_drivers` - driver registry.
+- [architecture.md → Cloud integration via `keeper.cloud`](../architecture.md).
+- [architecture.md → Targeting and host communication](../architecture.md) — `on: keeper` vs `on: [coven, …]`.
 - [naming-rules.md](../naming-rules.md) — `keeper.cloud`, `CloudDriver`, Provider, Profile.

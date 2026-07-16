@@ -1,171 +1,171 @@
-# Push-режим (`keeper.push`)
+# Push mode (`keeper.push`)
 
-Модуль внутри `keeper`-бинаря для управления хостами **без установки Soul-агента**. Keeper по SSH ходит на хост, выполняет шаги Destiny, забирает результаты; на хосте между прогонами ничего не работает.
+A module inside the `keeper` binary for managing hosts **without installing a Soul agent**. Keeper goes to the host over SSH, executes the Destiny steps, collects the results; nothing runs on the host between runs.
 
-Не отдельный бинарь ([ADR-004](../adr/0004-binaries.md#adr-004-раскладка-бинарей--keeper-soul-soul-lint-push-режим--модуль-внутри-keeper)) — это серверная функция (RBAC, аудит, выпуск SSH-credentials через Vault), её место в Keeper-е, а не в клиентском бинаре.
+Not a separate binary ([ADR-004](../adr/0004-binaries.md#adr-004-binary-layout--keeper-soul-soul-lint-push-mode-as-a-module-inside-keeper)) — this is a server function (RBAC, audit, issuing SSH credentials via Vault), its place is in Keeper, not in a client binary.
 
-## Назначение
+## Purpose
 
-Используется для:
+Used for:
 
-- одноразовых задач, где постоянный агент избыточен;
-- хостов, где политика безопасности запрещает долгоживущий демон с привилегиями;
-- начальной автоматизации до того, как принято решение ставить Soul-агента;
-- bootstrap-сценариев: выкатить `soul`-бинарь и SoulSeed-токен push-режимом, дальше работать в pull.
+- one-off tasks where a permanent agent is excessive;
+- hosts where the security policy forbids a long-lived daemon with privileges;
+- initial automation before a decision is made to install a Soul agent;
+- bootstrap scenarios: roll out the `soul` binary and a SoulSeed token in push mode, then work in pull.
 
-## Модель
+## Model
 
-- **Единый реестр.** Push-хост — запись в той же таблице `souls` с `transport: ssh`. Колонки `last_seen_at`, `last_seen_by_kid`, `coven`, `registered_at` имеют смысл и здесь (`last_seen_at` обновляется по факту последнего push-прогона, не стрима). См. [storage.md](storage.md) и [`../soul/identity.md`](../soul/identity.md).
-- **`soul_seeds` для push не используется.** У push-хостов нет mTLS-идентичности — нет сертификата, нет приватного ключа, нечего ротировать.
-- **Нет демона.** Между прогонами хост ничего не делает; никакой стрим не висит.
-- **Аудит.** Каждый push-прогон — событие в журнале Keeper-а (что, куда, кем, результат) с RBAC-фильтром ([rbac.md](rbac.md)).
-- **Миграция push ↔ agent.** Хост может быть в `transport: ssh` и затем смигрирован в `transport: agent` (поставили Soul) — запись та же, поле меняется, история не теряется.
+- **A single registry.** A push host is a record in the same `souls` table with `transport: ssh`. The `last_seen_at`, `last_seen_by_kid`, `coven`, `registered_at` columns make sense here too (`last_seen_at` is updated by the fact of the last push run, not a stream). See [storage.md](storage.md) and [`../soul/identity.md`](../soul/identity.md).
+- **`soul_seeds` is not used for push.** Push hosts have no mTLS identity — no certificate, no private key, nothing to rotate.
+- **No daemon.** Between runs the host does nothing; no stream hangs.
+- **Audit.** Each push run is an event in Keeper's journal (what, where, by whom, result) with an RBAC filter ([rbac.md](rbac.md)).
+- **push ↔ agent migration.** A host can be in `transport: ssh` and then migrated to `transport: agent` (a Soul was installed) — the record is the same, the field changes, history is not lost.
 
-## Аутентификация SSH — pluggable provider
+## SSH authentication — pluggable provider
 
-Конкретная реализация **не закреплена** ([open Q SSH-2 / №3](../architecture.md#открытые-вопросы)). Принцип: SSH-аутентификация идёт через подключаемый интерфейс провайдера; в первом релизе поставляется минимум одна эталонная реализация, остальные подключаются через тот же интерфейс. Кандидаты:
+The specific implementation is **not fixed** ([open Q SSH-2 / #3](../architecture.md)). The principle: SSH authentication goes through a pluggable provider interface; in the first release at least one reference implementation is shipped, the rest plug in through the same interface. Candidates:
 
-- **Vault SSH CA.** Keeper при каждом push запрашивает у Vault короткоживущий SSH-сертификат, ходит им. Хосты доверяют CA Vault. Без долгоживущих ключей. Лучший вариант по безопасности, согласован с уже обязательным Vault.
-- **Static key.** Долгоживущий SSH-ключ на keeper-хосте, его публичная часть в `authorized_keys` целевых хостов. Для dev/test и инсталляций без Vault.
-- **Teleport.** Интеграция с Teleport bastion: Keeper ходит через Teleport-proxy, использует Teleport-issued SSH-сертификаты.
+- **Vault SSH CA.** On each push Keeper requests a short-lived SSH certificate from Vault and uses it. The hosts trust the Vault CA. Without long-lived keys. The best option security-wise, aligned with the already-mandatory Vault.
+- **Static key.** A long-lived SSH key on the keeper host, its public part in the target hosts' `authorized_keys`. For dev/test and installations without Vault.
+- **Teleport.** Integration with a Teleport bastion: Keeper goes through the Teleport proxy, using Teleport-issued SSH certificates.
 
-Все три вписываются под единый контракт **`SshProvider`** (gRPC-stdio плагин: `Sign` / `Authorize`). Подробности контракта — в [plugins.md](plugins.md). Каталог провайдеров в конфиге — [config.md](config.md) → `plugins.ssh_providers`.
+All three fit under the single **`SshProvider`** contract (a gRPC-stdio plugin: `Sign` / `Authorize`). Contract details — in [plugins.md](plugins.md). The provider catalog in the config — [config.md](config.md) → `plugins.ssh_providers`.
 
-## Интерфейс оператора
+## Operator interface
 
-Push, как и весь Keeper, выставляется через **OpenAPI и MCP** ([ADR-004](../adr/0004-binaries.md#adr-004-раскладка-бинарей--keeper-soul-soul-lint-push-режим--модуль-внутри-keeper)). CLI-обёртка допустима как тонкая утилита поверх API, не первичный интерфейс. Типичный поток:
+Push, like all of Keeper, is exposed via **OpenAPI and MCP** ([ADR-004](../adr/0004-binaries.md#adr-004-binary-layout--keeper-soul-soul-lint-push-mode-as-a-module-inside-keeper)). A CLI wrapper is allowed as a thin utility over the API, not the primary interface. A typical flow:
 
-1. Оператор готовит inventory (список хостов и/или Coven-метки) и Destiny.
-2. Дёргает `POST /v1/push/apply` (или MCP-tool `keeper.push.apply`) с inventory, ссылкой на Destiny, и опциями. Нормативная спецификация request/response — [operator-api/push.md → `POST /v1/push/apply`](operator-api/push.md#post-v1pushapply--push-прогон-destiny-по-ssh).
-3. Keeper для каждого хоста: получает SSH-credentials у выбранного provider-а, открывает SSH-сессию, выполняет шаги Destiny, собирает результат.
-4. Журнал прогона доступен через тот же API/MCP.
+1. The operator prepares an inventory (a list of hosts and/or Coven labels) and Destiny.
+2. Calls `POST /v1/push/apply` (or the MCP tool `keeper.push.apply`) with the inventory, a reference to Destiny, and options. The normative request/response specification — [operator-api/push.md → `POST /v1/push/apply`](operator-api/push.md#post-v1pushapply--push-run-of-destiny-over-ssh).
+3. For each host, Keeper: obtains SSH credentials from the chosen provider, opens an SSH session, executes the Destiny steps, collects the result.
+4. The run journal is available through the same API/MCP.
 
-## Доставка `soul`-бинаря и модулей на хост
+## Delivery of the `soul` binary and modules to the host
 
-Push-режим переиспользует тот же `soul`-бинарь и те же модули, что и pull ([architecture.md → Модель модулей](../architecture.md#модель-модулей), [`../soul/modules.md`](../soul/modules.md)). Бинарь работает в одноразовом режиме `soul apply`: получает отрендеренный `ApplyRequest` (protojson) через stdin, применяет, отдаёт NDJSON-поток `TaskEvent` + финальный `RunResult` (protojson) в stdout, завершается с exit 0 при `RunResult.status==success` и 1 иначе. Контракт proto — общий с pull (ADR-012), вводить push-only схему не требуется.
+Push mode reuses the same `soul` binary and the same modules as pull ([architecture.md → Module model](../architecture.md), [`../soul/modules.md`](../soul/modules.md)). The binary runs in one-shot mode `soul apply`: it receives a rendered `ApplyRequest` (protojson) via stdin, applies it, and returns an NDJSON stream of `TaskEvent` + a final `RunResult` (protojson) on stdout, exiting with exit 0 when `RunResult.status==success` and 1 otherwise. The proto contract is common with pull (ADR-012), no push-only schema needs to be introduced.
 
-### Раскладка на хосте
+### Layout on the host
 
 ```
 /var/lib/soul-stack/
   bin/
-    soul-<sha>          # текущая версия + 1–2 предыдущих для отката
+    soul-<sha>          # the current version + 1–2 previous ones for rollback
   modules/
     soul-mod-<name>-<sha>
     ...
 ```
 
-### Алгоритм каждого push-прогона
+### Algorithm of each push run
 
-1. Keeper подключается к хосту через выбранный SSH-провайдер.
-2. Сравнивает по SHA-256 целевую версию `soul`-бинаря с тем, что лежит в `/var/lib/soul-stack/bin/`. Совпало — копирование пропускается, иначе бинарь докатывается.
-3. Передаются **все модули, зарегистрированные в Keeper-е** (без статического анализа Destiny). Сравнение по SHA-256 на каждый модуль; ничего не изменилось — копирование пропускается. Работает за счёт горячего кеша.
-4. Запускается `soul apply` — отрендеренный план (`ApplyRequest`: `apply_id` + `RenderedTask[]` после Keeper-side фаз `vault-resolve → input-validation → CEL-render → text/template-render`, ADR-012(d)) передаётся в stdin как protojson и не пишется на диск. Сырой Destiny/Essence на push-хост не попадает — Keeper резолвит Vault у себя, Soul только исполняет план. Stdout читается как NDJSON-поток `TaskEvent` + финальный `RunResult`.
-5. После — артефакты остаются в кеше; хостовый cleanup устаревших версий — отдельная операция, см. [`../soul/modules.md`](../soul/modules.md).
+1. Keeper connects to the host through the chosen SSH provider.
+2. Compares by SHA-256 the target version of the `soul` binary with what lies in `/var/lib/soul-stack/bin/`. Matches — copying is skipped, otherwise the binary is delivered.
+3. **All modules registered in Keeper** are transferred (without static analysis of the Destiny). Comparison by SHA-256 per module; nothing changed — copying is skipped. Works thanks to the hot cache.
+4. `soul apply` is launched — the rendered plan (`ApplyRequest`: `apply_id` + `RenderedTask[]` after Keeper-side phases `vault-resolve → input-validation → CEL-render → text/template-render`, ADR-012(d)) is passed to stdin as protojson and is not written to disk. Raw Destiny/Essence does not reach the push host — Keeper resolves Vault on its side, the Soul only executes the plan. Stdout is read as an NDJSON stream of `TaskEvent` + a final `RunResult`.
+5. Afterwards — the artifacts remain in the cache; host-side cleanup of stale versions is a separate operation, see [`../soul/modules.md`](../soul/modules.md).
 
-### Ключевые свойства
+### Key properties
 
-- **Передаём всё, не угадываем.** Статический анализ «какие модули нужны конкретно этому Destiny» обманчив (модули вызываются динамически из шаблонов и условий). Передавать все + кеш по хешу = просто и без сюрпризов. Будущая оптимизация — обязательное декларирование `required_modules` в Destiny — описана в [open Q №5](../architecture.md#открытые-вопросы).
-- **Кеш по хешу.** Первый прогон на новом хосте — медленный (копируется бинарь и все модули). Последующие — мгновенные.
-- **Версии хранятся явно.** Имя файла содержит SHA, что позволяет иметь несколько версий рядом и откатываться без перекачки.
-- **Реестр модулей в Keeper-е** — где он физически (Postgres `bytea` / отдельный artifact store / ФС) — [open Q №5](../architecture.md#открытые-вопросы). Влияет на эксплуатацию и backup-стратегию, но не на сам протокол доставки.
+- **We transfer everything, we do not guess.** Static analysis of "which modules this particular Destiny needs" is deceptive (modules are invoked dynamically from templates and conditions). Transferring all + a hash cache = simple and without surprises. A future optimization — mandatory declaration of `required_modules` in Destiny — is described in [open Q No. 5](../architecture.md).
+- **Hash cache.** The first run on a new host is slow (the binary and all modules are copied). Subsequent ones are instant.
+- **Versions are stored explicitly.** The file name contains the SHA, which allows keeping several versions side by side and rolling back without re-downloading.
+- **The module registry is in Keeper** - where it is physically (Postgres `bytea` / a separate artifact store / the FS) - [open Q No. 5](../architecture.md). Affects operations and backup strategy, but not the delivery protocol itself.
 
-## Cleanup на хосте
+## Cleanup on the host
 
-Reaper Keeper-а на хосты **не ходит** — он работает только над Postgres ([reaper.md](reaper.md)). Удаление устаревших файлов в `/var/lib/soul-stack/` устроено иначе:
+Keeper's Reaper does **not** go to hosts — it works only over Postgres ([reaper.md](reaper.md)). Removal of stale files in `/var/lib/soul-stack/` is arranged differently:
 
-- В push-режиме чистка может идти в рамках самого `keeper.push` (опционально, по флагу политики): сравнение локального кеша с реестром модулей и удаление устаревших версий в той же SSH-сессии.
-- При отзыве (`revoke`) или удалении хоста из реестра оператор может инициировать `keeper.push.cleanup` — отдельную операцию push, которая стирает `/var/lib/soul-stack/` целиком на указанном хосте.
+- In push mode, cleanup can go within `keeper.push` itself (optionally, by a policy flag): comparison of the local cache with the module registry and removal of stale versions in the same SSH session.
+- On revoke (`revoke`) or removal of a host from the registry, the operator can initiate `keeper.push.cleanup` — a separate push operation that wipes `/var/lib/soul-stack/` entirely on the specified host.
 
-Подробности и pull-вариант чистки — в [`../soul/modules.md`](../soul/modules.md).
+Details and the pull variant of cleanup — in [`../soul/modules.md`](../soul/modules.md).
 
-## Wire-up SshDispatcher в daemon (S6 pilot, 2026-05-26)
+## Wire-up of SshDispatcher in the daemon (S6 pilot, 2026-05-26)
 
-Pilot-фаза включения `keeper.push.apply` в проде (single-CA, config-backed targets/providers, single-provider routing). Long-term canon (S7) — миграция в `souls.ssh_target jsonb` + PG-table `push_providers` + `push.host_ca_refs[]` — отдельный slice; pilot будет deprecated сразу после S7.
+The pilot phase of enabling `keeper.push.apply` in prod (single-CA, config-backed targets/providers, single-provider routing). The long-term canon (S7) — migration to `souls.ssh_target jsonb` + the PG table `push_providers` + `push.host_ca_refs[]` — is a separate slice; the pilot will be deprecated right after S7.
 
-`setupPushDispatchers` (`keeper/cmd/keeper/daemon.go`) поднимается сразу после `setupPushOrchestrator` и до `setupGRPCEventStream`:
+`setupPushDispatchers` (`keeper/cmd/keeper/daemon.go`) is brought up right after `setupPushOrchestrator` and before `setupGRPCEventStream`:
 
-1. **Gate-проверки.** Пустой `plugins.ssh_providers[]` ИЛИ нет дискаверенных SshProvider-плагинов в кеше ИЛИ отсутствует `push.host_ca_ref` → push выключен (WARN в лог, `api.Deps.PushRun=nil`, `/v1/push/*` и `keeper.push.apply` возвращают «не сконфигурировано»). Это нормальный режим pull-only-инсталляции — без ошибки старта.
+1. **Gate checks.** An empty `plugins.ssh_providers[]` OR no discovered SshProvider plugins in the cache OR a missing `push.host_ca_ref` → push is disabled (WARN in the log, `api.Deps.PushRun=nil`, `/v1/push/*` and `keeper.push.apply` return "not configured"). This is the normal mode of a pull-only installation — without a start error.
 
-2. **Резолв host-CA.** `push.host_ca_refs[]` (S7-3 multi-CA) → `push.LoadHostCAs` для каждого ref-а читает Vault KV, парсит PEM `public_key` в `ssh.PublicKey`, собирает `[]NamedHostKeyAuthority` (имя из `name` оператора). Backward-compat: при пустом `host_ca_refs[]` и заполненном singular `host_ca_ref` daemon auto-adapt-ит singular в singleton-набор с auto-name `default` + одноразовый WARN. Любая ошибка резолва (Vault недоступен / поле отсутствует / битый PEM) — **fail-fast**: keeper отказывается стартовать (`errSetupFailed`) с именем сбойного CA в сообщении. Оператор явно объявил push в конфиге, молча отключать без host-CA нельзя.
+2. **Host-CA resolution.** `push.host_ca_refs[]` (S7-3 multi-CA) → `push.LoadHostCAs` for each ref reads Vault KV, parses the PEM `public_key` into an `ssh.PublicKey`, and assembles `[]NamedHostKeyAuthority` (the name from the operator's `name`). Backward-compat: with an empty `host_ca_refs[]` and a filled singular `host_ca_ref` the daemon auto-adapts the singular into a singleton set with the auto-name `default` + a one-time WARN. Any resolution error (Vault unavailable / field absent / broken PEM) is a **fail-fast**: keeper refuses to start (`errSetupFailed`) with the name of the failing CA in the message. The operator explicitly declared push in the config, silently disabling it without a host-CA is not allowed.
 
-3. **Spawn SshProvider-плагина (single-provider pilot).** Берётся **первый** дискаверенный SshProvider-плагин (по порядку `pluginhost.Discover`/`FilterByCatalog`). Multi-provider routing (`push_runs.ssh_provider` → выбор адаптера) отложен на S7.
+3. **Spawn the SshProvider plugin (single-provider pilot).** The **first** discovered SshProvider plugin is taken (in the order of `pluginhost.Discover`/`FilterByCatalog`). Multi-provider routing (`push_runs.ssh_provider` → adapter choice) is deferred to S7.
 
-4. **Env-payload params.** Для плагина с именем `<name>` ищется запись `push.providers[].name == <name>`. Если есть и `params` непуст — сериализуется в JSON и кладётся в env-переменную `SOUL_SSH_<UPPER_SNAKE(name)>_PARAMS` плагина ([ADR-020 amendment l](../adr/0020-plugin-infrastructure.md#adr-020-plugin-инфраструктура-формат-manifest-handshake-lifecycle)). Пример: `vault-bastion` → `SOUL_SSH_VAULT_BASTION_PARAMS`. Запись отсутствует / params пуст → плагин стартует без env-payload.
+4. **Env-payload params.** For a plugin named `<name>`, the record `push.providers[].name == <name>` is looked up. If present and `params` is non-empty — it is serialized to JSON and put into the plugin's env variable `SOUL_SSH_<UPPER_SNAKE(name)>_PARAMS` ([ADR-020 amendment l](../adr/0020-plugin-infrastructure.md)). Example: `vault-bastion` → `SOUL_SSH_VAULT_BASTION_PARAMS`. Record absent / params empty → the plugin starts without an env-payload.
 
-5. **Сборка SshDispatcher.** `push.NewSshDispatcher` с:
-   - `Provider` — обёртка `pluginhost.SshProviderPlugin` поверх spawned-плагина;
-   - `Targets` — `push.NewConfigTargetResolver(cfg.Push.Targets)` (per-SID lookup, дефолты port=22/user=root/soul_path=/usr/local/bin/soul);
-   - `Souls` — `push.NewPGSoulLookup(pool)` (проверка предусловия `transport=ssh`);
-   - `HostAuthorities` — резолвленный multi-CA-набор (S7-3, OR-проверка через `ssh.CertChecker.IsHostAuthority`);
-   - `Metrics` — `push.Metrics` (счётчик `keeper_push_host_ca_used_total{ca_name=...}` на каждый матч CA);
+5. **Assembly of SshDispatcher.** `push.NewSshDispatcher` with:
+   - `Provider` — a wrapper `pluginhost.SshProviderPlugin` over the spawned plugin;
+   - `Targets` — `push.NewConfigTargetResolver(cfg.Push.Targets)` (per-SID lookup, defaults port=22/user=root/soul_path=/usr/local/bin/soul);
+   - `Souls` — `push.NewPGSoulLookup(pool)` (checking the precondition `transport=ssh`);
+   - `HostAuthorities` — the resolved multi-CA set (S7-3, OR-check via `ssh.CertChecker.IsHostAuthority`);
+   - `Metrics` — `push.Metrics` (the counter `keeper_push_host_ca_used_total{ca_name=...}` on each CA match);
    - `Deliverer` / `Cleaner` — `ShaDeliverer` / `ShaCleaner` (S1/S5).
 
-6. **Lifecycle plugin-handle.** Spawned-плагин держится **до shutdown** (long-living handle, в отличие от cloud-плагинов, где Spawn идёт per-RPC). Close регистрируется в `cleanups`-стеке ПОСЛЕ всех ssh-потребителей (LIFO выполнит ДО Redis/Pool — плагин держит unix-socket на keeper-host-стороне, разумно прибрать первым).
+6. **Plugin-handle lifecycle.** The spawned plugin is held **until shutdown** (a long-living handle, unlike cloud plugins where Spawn is per-RPC). Close is registered in the `cleanups` stack AFTER all ssh consumers (LIFO will run it BEFORE Redis/Pool — the plugin holds a unix socket on the keeper-host side, reasonable to tidy up first).
 
-7. **`finalizePushOrchestrator` собирает `*pushorch.PushRun`.** Если `d.pushDispatcher != nil` после `setupPushDispatchers`, после `setupGRPCEventStream` (там создаётся `topologyResolver`) собирается `pushorch.PushRun` со всеми deps; иначе остаётся nil (`api.Deps.PushRun=nil`).
+7. **`finalizePushOrchestrator` assembles `*pushorch.PushRun`.** If `d.pushDispatcher != nil` after `setupPushDispatchers`, then after `setupGRPCEventStream` (where the `topologyResolver` is created) a `pushorch.PushRun` is assembled with all deps; otherwise it stays nil (`api.Deps.PushRun=nil`).
 
-### Когда push **включается**
+### When push is **enabled**
 
-- `plugins.ssh_providers[]` непустой И хотя бы один плагин дискаверен в кеше;
-- `push.host_ca_refs[]` (S7-3 canonical) непустой ИЛИ singular `push.host_ca_ref` (deprecated, auto-adapt) задан; в любом случае резолвится из Vault, поле `public_key` — валидный PEM SSH public key;
-- хотя бы одна запись `souls.ssh_target jsonb` (S7-1, canonical) либо непустой `push.targets[]` + `push.allow_legacy_push_targets: true` (legacy fallback под deprecation-окном).
+- `plugins.ssh_providers[]` is non-empty AND at least one plugin is discovered in the cache;
+- `push.host_ca_refs[]` (S7-3 canonical) is non-empty OR the singular `push.host_ca_ref` (deprecated, auto-adapt) is set; in any case it resolves from Vault, the `public_key` field is a valid PEM SSH public key;
+- at least one `souls.ssh_target jsonb` record (S7-1, canonical) or a non-empty `push.targets[]` + `push.allow_legacy_push_targets: true` (legacy fallback under a deprecation window).
 
 ## S7-1 migration to souls.ssh_target (2026-05-26)
 
-ADR-032 amendment 2026-05-26 (S7-1) переносит per-host SSH-реквизиты push-flow из `keeper.yml::push.targets[]` (pilot S6) в реестр `souls`: новая колонка `souls.ssh_target jsonb` со shape-CHECK `{ssh_port:int, ssh_user:text, soul_path:text}` становится canonical-источником.
+ADR-032 amendment 2026-05-26 (S7-1) moves the per-host SSH details of the push flow out of `keeper.yml::push.targets[]` (pilot S6) into the `souls` registry: a new column `souls.ssh_target jsonb` with a shape-CHECK `{ssh_port:int, ssh_user:text, soul_path:text}` becomes the canonical source.
 
-**Write-path:** `PUT /v1/souls/{sid}/ssh-target` (permission `soul.ssh-target-update`, audit `soul.ssh-target.updated`) либо MCP-tool `keeper.soul.ssh-target.update`. soulctl: `soulctl souls ssh-target set <sid> --port … --user … --soul-path …`.
+**Write path:** `PUT /v1/souls/{sid}/ssh-target` (permission `soul.ssh-target-update`, audit `soul.ssh-target.updated`) or the MCP tool `keeper.soul.ssh-target.update`. soulctl: `soulctl souls ssh-target set <sid> --port … --user … --soul-path …`.
 
-**Read-path (резолвер):** `PGFallbackTargetResolver` (`keeper/internal/push/target_pg.go`) на каждом `SshDispatcher.SendApply` делает SELECT по PK `souls.sid` и:
+**Read path (the resolver):** `PGFallbackTargetResolver` (`keeper/internal/push/target_pg.go`) on every `SshDispatcher.SendApply` does a SELECT by the PK `souls.sid` and:
 
-- PG-row.ssh_target проставлен → отдаёт SSHTarget с подстановкой дефолтов (port 22 / user root / soul-path `/usr/local/bin/soul`) для опущенных полей.
-- PG-row.ssh_target IS NULL и `push.allow_legacy_push_targets: false` (default) → `ErrTargetNotConfigured` (fail-closed, оператор видит чёткое сообщение в `push_runs.summary`).
-- PG-row.ssh_target IS NULL и `push.allow_legacy_push_targets: true` → одноразовый WARN deprecation + fallback на `ConfigTargetResolver` поверх `keeper.yml::push.targets[]`.
+- PG-row.ssh_target is set → returns an SSHTarget with defaults substituted (port 22 / user root / soul-path `/usr/local/bin/soul`) for the omitted fields.
+- PG-row.ssh_target IS NULL and `push.allow_legacy_push_targets: false` (default) → `ErrTargetNotConfigured` (fail-closed, the operator sees a clear message in `push_runs.summary`).
+- PG-row.ssh_target IS NULL and `push.allow_legacy_push_targets: true` → a one-time WARN deprecation + fallback to `ConfigTargetResolver` over `keeper.yml::push.targets[]`.
 
-**Deprecation policy (PM-decision):** 1 release WARN → hard-cut. После закрытия S7 inline-форма `push.targets[]` отвергается на schema-валидации как `unknown_key`.
+**Deprecation policy (PM-decision):** 1 release WARN → hard-cut. After S7 closes, the inline form `push.targets[]` is rejected at schema validation as `unknown_key`.
 
-**Что НЕ в S7-1:**
-- Auto-import keeper.yml::push.targets[] в `souls.ssh_target` — отложено в S7-4 (требует explicit consent + idempotency-гарантий, чтобы не перетереть оператор-вручную-выставленные значения).
-- `push_providers` PG-table (env-payload SSH-плагинов) — S7-2.
+**What is NOT in S7-1:**
+- Auto-import of keeper.yml::push.targets[] into `souls.ssh_target` — deferred to S7-4 (requires explicit consent + idempotency guarantees so as not to overwrite operator-hand-set values).
+- The `push_providers` PG table (the env-payload of SSH plugins) — S7-2.
 
 ## S7-2 migration to push_providers PG-table (2026-05-26)
 
-ADR-032 amendment 2026-05-26 (S7-2) переносит per-provider env-payload params SSH-плагинов из `keeper.yml::push.providers[]` (pilot S6 / S7-1) в PG-таблицу `push_providers` (миграция 054). Сущность реализована как «SSH Provider» variant of Provider (PM-decision: расширение существующей Provider entity, не новая сущность): тот же концепт provider, но разные таблицы (`providers` для cloud, `push_providers` для ssh), разные схемы params и разные RBAC-permission-области (`provider.*` vs `push-provider.*`).
+ADR-032 amendment 2026-05-26 (S7-2) moves the per-provider env-payload params of SSH plugins out of `keeper.yml::push.providers[]` (pilot S6 / S7-1) into the PG table `push_providers` (migration 054). The entity is implemented as an "SSH Provider" variant of Provider (PM-decision: an extension of the existing Provider entity, not a new entity): the same provider concept, but different tables (`providers` for cloud, `push_providers` for ssh), different params schemas and different RBAC permission areas (`provider.*` vs `push-provider.*`).
 
-**Имя/формат.**
+**Name/format.**
 
-- PK: `name TEXT`, регулярка `^[a-z][a-z0-9-]{0,62}$` (env-var-name-safe — name транслируется в `SOUL_SSH_<UPPER_SNAKE(name)>_PARAMS`, лидирующая цифра/дефис сломает env-имя; на одно ограничение строже cloud Provider).
-- `params JSONB NOT NULL DEFAULT '{}'` — opaque-форма самого плагина.
-- `created_by_aid TEXT NOT NULL REFERENCES operators(aid)` — изменения только через Архонтов.
-- `updated_at` / `updated_by_aid` — для аудита триажа (last-write-wins, no version vector).
+- PK: `name TEXT`, the regex `^[a-z][a-z0-9-]{0,62}$` (env-var-name-safe — the name is translated into `SOUL_SSH_<UPPER_SNAKE(name)>_PARAMS`, a leading digit/hyphen would break the env name; one constraint stricter than a cloud Provider).
+- `params JSONB NOT NULL DEFAULT '{}'` — the opaque form of the plugin itself.
+- `created_by_aid TEXT NOT NULL REFERENCES operators(aid)` — changes only through Archons.
+- `updated_at` / `updated_by_aid` — for triage audit (last-write-wins, no version vector).
 
-**Sensitive params (PM-decision S7-2 #5).** Реальные секреты (`secret_id` / `token` / `password` / `private_key`) ОБЯЗАНЫ быть vault-refs (`vault:<path>`); plaintext-значение по этим ключам отвергается на service-слое (`pushprovider.Service.validateSensitive`) с `ErrSensitiveNotVaultRef` (422 validation-failed). Allow-list ключей — opaque, расширение через PR в `keeper/internal/pushprovider/service.go::sensitiveKeys`. Non-sensitive params (`vault_addr` / `role` / `proxy_addr`) допускаются plain.
+**Sensitive params (PM-decision S7-2 #5).** Real secrets (`secret_id` / `token` / `password` / `private_key`) MUST be vault-refs (`vault:<path>`); a plaintext value under these keys is rejected at the service layer (`pushprovider.Service.validateSensitive`) with `ErrSensitiveNotVaultRef` (422 validation-failed). The key allow-list is opaque, extension via a PR in `keeper/internal/pushprovider/service.go::sensitiveKeys`. Non-sensitive params (`vault_addr` / `role` / `proxy_addr`) are allowed plain.
 
-**Write-path:** REST `POST/PUT/DELETE /v1/push-providers[/{name}]` (permissions `push-provider.create/update/delete`, audit `push-provider.created/updated/deleted`) либо MCP-tools `keeper.push-provider.{create,update,delete,list,read}`. soulctl: `soulctl push-providers {create,update,delete,list,get}`.
+**Write path:** REST `POST/PUT/DELETE /v1/push-providers[/{name}]` (permissions `push-provider.create/update/delete`, audit `push-provider.created/updated/deleted`) or the MCP tools `keeper.push-provider.{create,update,delete,list,read}`. soulctl: `soulctl push-providers {create,update,delete,list,get}`.
 
-**Read-path (резолвер).** `PGFallbackProviderResolver` (`keeper/internal/push/provider_pg.go`) на старте `setupPushDispatchers` резолвит env-payload params для дискаверенного SSH-плагина:
+**Read path (the resolver).** `PGFallbackProviderResolver` (`keeper/internal/push/provider_pg.go`) at the start of `setupPushDispatchers` resolves the env-payload params for a discovered SSH plugin:
 
-- PG-row найдена → отдаёт `params` (пустые `{}` допустимы; плагин стартует с дефолтами).
-- PG-row отсутствует и `push.allow_legacy_push_providers: false` (default) → `ErrPushProviderNotConfigured`; daemon стартует плагин без env-payload (поведение зависит от плагина: `soul-ssh-static` работает с дефолтами, `soul-ssh-vault` требует params и упадёт сам).
-- PG-row отсутствует и `push.allow_legacy_push_providers: true` → одноразовый WARN deprecation + fallback на `keeper.yml::push.providers[]` (legacy).
+- PG-row found → returns `params` (empty `{}` is allowed; the plugin starts with defaults).
+- PG-row absent and `push.allow_legacy_push_providers: false` (default) → `ErrPushProviderNotConfigured`; the daemon starts the plugin without an env-payload (behavior depends on the plugin: `soul-ssh-static` works with defaults, `soul-ssh-vault` requires params and will fail on its own).
+- PG-row absent and `push.allow_legacy_push_providers: true` → a one-time WARN deprecation + fallback to `keeper.yml::push.providers[]` (legacy).
 
-**Hot-reload (spawn-on-change, PM-decision S7-2 #6).** REST/MCP-мутация публикует в Redis pub/sub topic `push-providers:changed` (`keeper/internal/redis/pushproviderchanged.go`). Каждая нода кластера подписана через `SubscribePushProvidersChanged`. При получении сообщения daemon-listener (`runPushProviderInvalidationListener`) делегирует фактический re-spawn методу `SshDispatcher.RefreshProvider` (S7-2 closure, ADR-032 amendment 2026-05-27): под `d.mu.Lock` зовётся `ProviderRespawner.RespawnProvider`, который закрывает старый plugin-handle и spawn-ит новый с обновлёнными env-payload `SOUL_SSH_<UPPER_SNAKE(name)>_PARAMS` (резолв через `PGFallbackProviderResolver` — PG-first + legacy fallback). Параллельные SendApply на горячем пути не блокируются: берут snapshot ссылки на provider через RLock и доезжают до конца сессии. Persistence Redis pub/sub нет: потеря сообщения → re-spawn ленивый при следующей мутации либо рестарте keeper-а; мутации редкие, окно устаревания миллисекунды. При неудачном re-spawn (упавший Spawn, отсутствующий discovered-binary) dispatcher переходит в degraded state до следующего успешного refresh — последующий SendApply падает с «SshProvider недоступен», listener продолжает работу (ERROR-лог).
+**Hot-reload (spawn-on-change, PM-decision S7-2 #6).** A REST/MCP mutation publishes to the Redis pub/sub topic `push-providers:changed` (`keeper/internal/redis/pushproviderchanged.go`). Each cluster node is subscribed via `SubscribePushProvidersChanged`. On receiving a message the daemon listener (`runPushProviderInvalidationListener`) delegates the actual re-spawn to the method `SshDispatcher.RefreshProvider` (S7-2 closure, ADR-032 amendment 2026-05-27): under `d.mu.Lock` it calls `ProviderRespawner.RespawnProvider`, which closes the old plugin handle and spawns a new one with the updated env-payload `SOUL_SSH_<UPPER_SNAKE(name)>_PARAMS` (resolution via `PGFallbackProviderResolver` — PG-first + legacy fallback). Concurrent SendApply on the hot path are not blocked: they take a snapshot reference to the provider via RLock and ride out to the end of the session. There is no Redis pub/sub persistence: a lost message → lazy re-spawn on the next mutation or a keeper restart; mutations are rare, the staleness window is milliseconds. On a failed re-spawn (a crashed Spawn, a missing discovered binary) the dispatcher goes into a degraded state until the next successful refresh — a subsequent SendApply fails with "SshProvider unavailable", the listener keeps working (ERROR log).
 
-**Audit.** События `push-provider.created` / `.updated` / `.deleted` (kebab single-section имя ресурса; payload `{name, params_keys}` без values — фиксирует факт мутации без раскрытия секретов).
+**Audit.** The events `push-provider.created` / `.updated` / `.deleted` (a kebab single-section resource name; payload `{name, params_keys}` without values — records the fact of a mutation without revealing secrets).
 
-**Deprecation policy (PM-decision S7-2 #4).** 1-release WARN → hard-cut: после следующего релиза inline-форма `keeper.yml::push.providers[]` отвергается на schema-валидации как `unknown_key`. Auto-import legacy `push.providers[]` в PG — НЕ в этом slice, отложен в S7-4 (требует explicit consent + idempotency).
+**Deprecation policy (PM-decision S7-2 #4).** 1-release WARN → hard-cut: after the next release the inline form `keeper.yml::push.providers[]` is rejected at schema validation as `unknown_key`. Auto-import of legacy `push.providers[]` into PG — NOT in this slice, deferred to S7-4 (requires explicit consent + idempotency).
 
-**Что НЕ в S7-2:**
-- Auto-import legacy `keeper.yml::push.providers[]` в PG — S7-4.
-- Per-host invalidation (текущая публикация — кластеро-wide; per-host-routing — отдельный slice multi-provider routing).
-- Capabilities manifest плагина с собственным `sensitive_keys[]` — пост-MVP (текущий allow-list — opaque в pushprovider-пакете).
+**What is NOT in S7-2:**
+- Auto-import of legacy `keeper.yml::push.providers[]` into PG — S7-4.
+- Per-host invalidation (the current publication is cluster-wide; per-host routing — a separate multi-provider routing slice).
+- A plugin capabilities manifest with its own `sensitive_keys[]` — post-MVP (the current allow-list is opaque in the pushprovider package).
 
 ## S7-3 multi-CA host_ca_refs[] (2026-05-26)
 
-ADR-032 amendment 2026-05-26 (S7-3) расширяет single Vault-ref `push.host_ca_ref` до массива структур `push.host_ca_refs[]` для verify host-keys через SSH. Singular `host_ca_ref` остаётся под 1-release WARN deprecation window.
+ADR-032 amendment 2026-05-26 (S7-3) extends the single Vault-ref `push.host_ca_ref` to an array of structures `push.host_ca_refs[]` for verifying host keys over SSH. The singular `host_ca_ref` remains under a 1-release WARN deprecation window.
 
-**Грамматика:**
+**Grammar:**
 
 ```yaml
 push:
@@ -174,107 +174,107 @@ push:
     - { ref: vault:secret/keeper/ssh-host-ca-stage, name: trusted-bastion-2 }
 ```
 
-- `ref` — vault-ref (`vault:<mount>/<path>`), указывает на Vault KV с полем `public_key` (тот же формат, что singular). Plaintext-inline-PEM запрещён (`vault_ref_invalid`).
-- `name` — operator-defined kebab-case, обязательно, должно быть уникально в наборе (`duplicate_push_host_ca_name`). Используется как label-значение в `keeper_push_host_ca_used_total{ca_name=...}` и в diag-сообщениях.
+- `ref` — a vault-ref (`vault:<mount>/<path>`), pointing to a Vault KV with a `public_key` field (the same format as the singular). Plaintext-inline-PEM is forbidden (`vault_ref_invalid`).
+- `name` — operator-defined kebab-case, mandatory, must be unique within the set (`duplicate_push_host_ca_name`). Used as the label value in `keeper_push_host_ca_used_total{ca_name=...}` and in diag messages.
 
-**Verify-логика.** На каждом SSH-handshake-е (target и proxy_jump-хоп) `ssh.CertChecker.IsHostAuthority` OR-проверяет marshaled-форму предъявленного host-authority против всех CA из набора. Host-cert, подписанный любым из них → доверенный; иначе reject (отказ от TOFU). При матче callback `OnHostCAMatch(caName)` инкрементирует `keeper_push_host_ca_used_total{ca_name=...}` + debug-лог. Линейный bytes.Equal по marshaled-форме внутри handshake-а — handshake уже делает больше системной работы (crypto/network), индекс по форме излишен (closed-set единиц CA).
+**Verify logic.** On each SSH handshake (target and proxy_jump hop) `ssh.CertChecker.IsHostAuthority` OR-checks the marshaled form of the presented host authority against all CAs in the set. A host cert signed by any of them → trusted; otherwise reject (a rejection of TOFU). On a match the callback `OnHostCAMatch(caName)` increments `keeper_push_host_ca_used_total{ca_name=...}` + a debug log. A linear bytes.Equal over the marshaled form inside the handshake — the handshake already does more system work (crypto/network), an index over the form is unnecessary (a closed set of single-digit CAs).
 
-**Backward-compat (S7-3 deprecation window).** При заполненном singular `push.host_ca_ref` и пустом `host_ca_refs[]` daemon на старте `setupPushDispatchers` auto-adapt-ит singular в `host_ca_refs[0]` с `name='default'` и пишет одноразовый WARN. Одновременное присутствие singular + plural → schema-фаза отвергает (`mutually_exclusive_keys`). После закрытия окна (1 release) singular будет hard-cut на schema-фазе как `unknown_key`.
+**Backward-compat (S7-3 deprecation window).** With the singular `push.host_ca_ref` filled and `host_ca_refs[]` empty, the daemon at the start of `setupPushDispatchers` auto-adapts the singular into `host_ca_refs[0]` with `name='default'` and writes a one-time WARN. Simultaneous presence of singular + plural → the schema phase rejects it (`mutually_exclusive_keys`). After the window closes (1 release) the singular will be hard-cut at the schema phase as `unknown_key`.
 
-**Per-provider CA-override — ОТЛОЖЕНО.** В MVP all-providers-trust-all-CAs: один набор `host_ca_refs[]` действует на все SSH-handshake-и (target + proxy_jump). Отдельный CA на provider/route — пост-MVP open Q после S7.
+**Per-provider CA-override — DEFERRED.** In the MVP all-providers-trust-all-CAs: one `host_ca_refs[]` set applies to all SSH handshakes (target + proxy_jump). A separate CA per provider/route — a post-MVP open Q after S7.
 
-**PM-decisions S7-3:** (1) формат — массив структур (не плоский массив строк) для извлечения `name` под label-значение; (2) backward-compat singular auto-adapt в singleton + WARN; (3) mutually exclusive singular+plural; (4) verify через `CertChecker.IsHostAuthority` OR-loop; (5) per-provider CA-override отложен (all-trust-all в MVP); (6) deprecation policy — 1 release WARN (как S7-1/S7-2).
+**PM-decisions S7-3:** (1) the format is an array of structures (not a flat array of strings) to extract `name` as a label value; (2) backward-compat singular auto-adapt into a singleton + WARN; (3) mutually exclusive singular+plural; (4) verify via `CertChecker.IsHostAuthority` OR-loop; (5) per-provider CA-override deferred (all-trust-all in the MVP); (6) deprecation policy — 1 release WARN (like S7-1/S7-2).
 
 ## S7-4 auto-import legacy on start (2026-05-26)
 
-[ADR-032 amendment 2026-05-26 (S7-4)](../adr/0032-push-orchestrator.md#adr-032-push-orchestrator-variant-c--multi-host-destiny-push-без-incarnationscenario) закрывает migration loop: оператор включает один проход миграции inline-`keeper.yml::push`-блоков в PG-источники флагами в самом `keeper.yml`. Pilot и canon продолжают coexist (резолверы PG-first + fallback под `allow_legacy_push_*`), а auto-import — отдельный opt-in, не вшит в работу резолверов.
+[ADR-032 amendment 2026-05-26 (S7-4)](../adr/0032-push-orchestrator.md) closes the migration loop: the operator enables a single pass of migrating inline `keeper.yml::push` blocks into the PG sources via flags in `keeper.yml` itself. The pilot and canon keep coexisting (the resolvers are PG-first + fallback under `allow_legacy_push_*`), and auto-import is a separate opt-in, not wired into the resolvers' operation.
 
-**Грамматика.** Два новых поля, оба default `false` (без явного согласия оператора молчаливая миграция данных запрещена):
+**Grammar.** Two new fields, both default `false` (without the operator's explicit consent, silent data migration is forbidden):
 
 ```yaml
 push:
   # … host_ca_refs[], targets[], providers[] (legacy / canon) …
 
-  # S7-4: opt-in one-shot миграция при старте Keeper-а.
+  # S7-4: opt-in one-shot migration at Keeper start.
   auto_import_legacy_targets:    true   # push.targets[]    → souls.ssh_target jsonb
   auto_import_legacy_providers:  true   # push.providers[]  → push_providers PG-table
 
-  # S7-1/S7-2: legacy-fallback при PG-row отсутствует.
-  # При allow_legacy_*=false (default) и auto_import_*=false — yml игнорируется
-  # резолверами; включение auto_import_* — рекомендованный путь миграции.
+  # S7-1/S7-2: legacy-fallback when the PG-row is absent.
+  # With allow_legacy_*=false (default) and auto_import_*=false — the yml is ignored
+  # by the resolvers; enabling auto_import_* is the recommended migration path.
   allow_legacy_push_targets:     false
   allow_legacy_push_providers:   false
 ```
 
-**One-shot семантика.** Импорт идёт шагом `runLegacyAutoImport` в pipeline `keeper run` после `setupPushProviderSvc` (CRUD-фасад и audit-writer уже подняты) и ДО `setupAPIServer` (импортированные строки сразу видны через REST/MCP). Идемпотентно:
+**One-shot semantics.** The import runs as the step `runLegacyAutoImport` in the `keeper run` pipeline after `setupPushProviderSvc` (the CRUD facade and audit writer are already up) and BEFORE `setupAPIServer` (the imported rows are immediately visible via REST/MCP). Idempotent:
 
-- `targets[]` — для каждого SID читается `souls.ssh_target`; `IS NULL` → INSERT + audit; не NULL → skip (PG canonical, не перезаписываем).
-- `providers[]` — для каждого `name` пробуется `SelectByName`; `ErrPushProviderNotFound` → INSERT с `created_by_aid='archon-system'` + audit; запись есть → skip.
-- Повторный старт без новых записей в `keeper.yml` — no-op (нет ни одного write).
-- Отсутствующая `souls`-row для config-target SID — WARN-skip (не fatal): soul ещё не зарегистрирован, импорт реквизита бессмыслен; оператор позже PUT-нёт через `/v1/souls/{sid}/ssh-target`.
-- PG read/write fail (одно из чтений / UPDATE / INSERT) → `errSetupFailed`. Уже импортированные строки остаются; неимпортированные подхватятся при следующем старте.
-- Audit write fail — best-effort WARN, импорт следующих записей продолжается (storage уже committed; mismatch audit↔storage оператор разрешает вручную, паттерн `bootstrap.ErrAuditWriteFailed`).
+- `targets[]` — for each SID `souls.ssh_target` is read; `IS NULL` → INSERT + audit; not NULL → skip (PG canonical, we do not overwrite).
+- `providers[]` — for each `name`, `SelectByName` is tried; `ErrPushProviderNotFound` → INSERT with `created_by_aid='archon-system'` + audit; the record exists → skip.
+- A repeated start without new records in `keeper.yml` — a no-op (not a single write).
+- A missing `souls` row for a config-target SID — WARN-skip (not fatal): the soul is not yet registered, importing the detail is meaningless; the operator will later PUT it via `/v1/souls/{sid}/ssh-target`.
+- A PG read/write fail (one of the reads / UPDATE / INSERT) → `errSetupFailed`. Already-imported rows remain; the non-imported ones will be picked up on the next start.
+- An audit write fail — best-effort WARN, the import of subsequent records continues (storage is already committed; the operator resolves the audit↔storage mismatch manually, the pattern `bootstrap.ErrAuditWriteFailed`).
 
-**Audit-events** (новый `source: config_bootstrap`, `archon_aid: NULL`):
+**Audit events** (a new `source: config_bootstrap`, `archon_aid: NULL`):
 
-| Имя | Когда пишется | Payload |
+| Name | When written | Payload |
 |---|---|---|
-| `soul.ssh-target.imported_from_config` | per-row, после успешного `UpdateSshTarget`. | `{sid, ssh_port, ssh_user, soul_path}` — cleartext (зеркало `soul.ssh-target.updated`). |
-| `push-provider.imported_from_config` | per-row, после успешного `pushprovider.Insert`. | `{name, params_keys}` — список ключей params, БЕЗ значений (симметрия с `push-provider.created`: sensitive значения в audit не пишутся, политика единая). |
+| `soul.ssh-target.imported_from_config` | per-row, after a successful `UpdateSshTarget`. | `{sid, ssh_port, ssh_user, soul_path}` — cleartext (a mirror of `soul.ssh-target.updated`). |
+| `push-provider.imported_from_config` | per-row, after a successful `pushprovider.Insert`. | `{name, params_keys}` — the list of params keys, WITHOUT values (symmetric with `push-provider.created`: sensitive values are not written to audit, the policy is uniform). |
 
-**System-AID `archon-system`.** Импортированные `push_providers`-строки несут `created_by_aid='archon-system'` (отделить от Архонт-create-ов). FK на `operators(aid)` обязывает row `archon-system` существовать в реестре до первого auto-import-а; pilot S7-4 предполагает, что оператор добавляет её руками (`POST /v1/operators` с `aid=archon-system, auth_method=none`) либо она будет заведена в bootstrap-семантике следующего slice-а (отдельный заход).
+**System-AID `archon-system`.** The imported `push_providers` rows carry `created_by_aid='archon-system'` (to separate them from Archon creates). The FK to `operators(aid)` requires the `archon-system` row to exist in the registry before the first auto-import; the S7-4 pilot assumes the operator adds it by hand (`POST /v1/operators` with `aid=archon-system, auth_method=none`) or it will be created in the bootstrap semantics of the next slice (a separate effort).
 
 **Deprecation timeline.**
 
-- **S7 wave (текущий релиз):** pilot и canon coexist. PG-first резолверы. yml fallback под `allow_legacy_push_*` (default false). Auto-import под `auto_import_legacy_*` (default false). 1-release WARN при использовании любого legacy-fallback и при auto-adapt singular `host_ca_ref`.
-- **S8 (после следующего prod-release):** hard-cut. `keeper.yml::push.targets[]` / `push.providers[]` / singular `host_ca_ref` → `unknown_key` на schema-фазе; `allow_legacy_push_*` / `auto_import_legacy_*` флаги удаляются; PG-резолверы упрощаются до PG-only (без `Fallback`/`AllowLegacy` полей).
+- **S7 wave (current release):** the pilot and canon coexist. PG-first resolvers. yml fallback under `allow_legacy_push_*` (default false). Auto-import under `auto_import_legacy_*` (default false). A 1-release WARN on the use of any legacy fallback and on the auto-adapt of the singular `host_ca_ref`.
+- **S8 (after the next prod release):** hard-cut. `keeper.yml::push.targets[]` / `push.providers[]` / the singular `host_ca_ref` → `unknown_key` at the schema phase; the `allow_legacy_push_*` / `auto_import_legacy_*` flags are removed; the PG resolvers are simplified to PG-only (without the `Fallback`/`AllowLegacy` fields).
 
-**Operator-driven migration path** (если auto-import не подходит — например, оператор хочет review импортируемых данных перед записью):
+**Operator-driven migration path** (if auto-import does not fit — for example, the operator wants to review the imported data before writing):
 
 - `soulctl souls ssh-target set <sid> --port … --user … --soul-path …` (S7-1).
 - `soulctl push-providers create <name> --params=…` (S7-2).
-- После заведения PG-данных — удалить inline-блоки из `keeper.yml`.
+- After the PG data is created — remove the inline blocks from `keeper.yml`.
 
-**PM-decisions S7-4:** (1) auto-import — opt-in (default false, explicit operator-consent); (2) one-shot + idempotent (PG-row presence check, не ON CONFLICT — нужно различить created/skipped для audit); (3) audit-events `soul.ssh-target.imported_from_config` + `push-provider.imported_from_config`; (4) новая `source` enum `config_bootstrap` (отделить от `keeper_internal` semantically); (5) deprecation 1-release WARN → S8 hard-cut; (6) system-AID `archon-system` для импортированных `push_providers` строк.
+**PM-decisions S7-4:** (1) auto-import — opt-in (default false, explicit operator consent); (2) one-shot + idempotent (PG-row presence check, not ON CONFLICT — created/skipped must be distinguished for audit); (3) audit events `soul.ssh-target.imported_from_config` + `push-provider.imported_from_config`; (4) a new `source` enum `config_bootstrap` (to separate it from `keeper_internal` semantically); (5) deprecation 1-release WARN → S8 hard-cut; (6) system-AID `archon-system` for the imported `push_providers` rows.
 
-**Что НЕ в S7-4:** S8 hard-cut (отдельный slice после prod-release); миграция reserved-AID `archon-system` (отдельный slice). TODO `push-providers:changed` re-spawn SshDispatcher plugin-handle — **закрыт** в ADR-032 amendment 2026-05-27 (S7-2 closure), см. раздел «S7-2 migration» выше.
+**What is NOT in S7-4:** the S8 hard-cut (a separate slice after the prod release); migration of the reserved-AID `archon-system` (a separate slice). The TODO `push-providers:changed` re-spawn of the SshDispatcher plugin-handle is **closed** in ADR-032 amendment 2026-05-27 (S7-2 closure), see the "S7-2 migration" section above.
 
 ## P2 Multi-provider routing (2026-05-27)
 
-[ADR-032 amendment 2026-05-27](../adr/0032-push-orchestrator.md#adr-032-push-orchestrator-variant-c--multi-host-destiny-push-без-incarnationscenario) переводит push с single-provider pilot (один SshProvider на keeper) на eager spawn ВСЕХ дискаверенных SshProvider-плагинов + per-SID routing их между Souls. Оператор поднимает одновременно, например, `soul-ssh-vault` и `soul-ssh-static` и маршрутизирует SID-ы между ними.
+[ADR-032 amendment 2026-05-27](../adr/0032-push-orchestrator.md) moves push from the single-provider pilot (one SshProvider per keeper) to an eager spawn of ALL discovered SshProvider plugins + per-SID routing of them between Souls. The operator brings up, for example, `soul-ssh-vault` and `soul-ssh-static` at the same time and routes SIDs between them.
 
 ### Selector R1 — 3-tier resolve
 
-Router (`keeper/internal/push/router.go::PGRouter`) разрешает имя SshProvider-плагина per-SID в три уровня:
+The router (`keeper/internal/push/router.go::PGRouter`) resolves the SshProvider plugin name per-SID in three levels:
 
-1. **Level 1: `souls.ssh_target.ssh_provider`** (per-SID explicit). Optional поле в jsonb-shape `souls.ssh_target` (миграция 056). Когда задано — побеждает всегда. `source: soul` в audit.
-2. **Level 2: `push.coven_default_providers: { <coven>: <provider_name> }`** (per-coven default). Карта в `keeper.yml`, hot-reload-aware. Tiebreak при множественном coven-match — **алфавитный порядок имён ковенов** (детерминизм). `source: coven`.
-3. **Level 3: `push.cluster_default_provider: <name>`** (cluster fallback). Скаляр в `keeper.yml`. `source: cluster`.
+1. **Level 1: `souls.ssh_target.ssh_provider`** (per-SID explicit). An optional field in the jsonb-shape `souls.ssh_target` (migration 056). When set — it always wins. `source: soul` in audit.
+2. **Level 2: `push.coven_default_providers: { <coven>: <provider_name> }`** (per-coven default). A map in `keeper.yml`, hot-reload-aware. Tiebreak on a multiple coven-match — **alphabetical order of coven names** (determinism). `source: coven`.
+3. **Level 3: `push.cluster_default_provider: <name>`** (cluster fallback). A scalar in `keeper.yml`. `source: cluster`.
 
-Все три уровня пусты → **`ErrProviderNotRouted`** → fail per-host (status="error", error_code="provider_not_routed"). **БЕЗ provider-chain fallback** (security-инвариант: auth-perimeter разных providers разный, silent fallback ломает trust).
+All three levels empty → **`ErrProviderNotRouted`** → fail per-host (status="error", error_code="provider_not_routed"). **WITHOUT provider-chain fallback** (a security invariant: the auth perimeter of different providers differs, a silent fallback breaks trust).
 
 ### α-compat: per-job preset
 
-REST-body / MCP-args `POST /v1/push/apply` несут optional поле `ssh_provider` — старый pilot-параметр S6. P2 сохраняет совместимость:
+The REST body / MCP args of `POST /v1/push/apply` carry an optional field `ssh_provider` — the old pilot parameter from S6. P2 keeps compatibility:
 
-- Поле задано → preset применяется КО ВСЕМ SID-ам прогона, **router НЕ вызывается** (per-job override). audit-source трактуется как `soul` (per-SID explicit семантически).
-- Поле пусто → router-резолв per-SID по правилам выше.
+- The field is set → the preset is applied to ALL SIDs of the run, the **router is NOT invoked** (a per-job override). The audit source is treated as `soul` (per-SID explicit semantically).
+- The field is empty → per-SID router resolution by the rules above.
 
 ### Eager spawn
 
-Все SshProvider-плагины, прошедшие `pluginhost.Discover` + `FilterByCatalog`, **spawn-ятся при старте Keeper-а** одной волной в `setupPushDispatchers`. Аргументы:
+All SshProvider plugins that passed `pluginhost.Discover` + `FilterByCatalog` are **spawned at Keeper start** in one wave in `setupPushDispatchers`. Arguments:
 
-- **UX-предсказуемость:** оператор видит на старте, что все настроенные провайдеры работают. Lazy-spawn-задержка на первом push прогоне ухудшает first-SLA.
-- **Plugin start cost — единовременный:** даже 5+ SshProvider-плагинов поднимаются параллельно за единицы секунд (handshake + Sigil-verify); вторичные RPC (Authorize/Sign) — мгновенные.
+- **UX predictability:** the operator sees at start that all configured providers work. A lazy-spawn delay on the first push run worsens the first-SLA.
+- **Plugin start cost is a one-time cost:** even 5+ SshProvider plugins come up in parallel within single-digit seconds (handshake + Sigil-verify); the secondary RPCs (Authorize/Sign) are instant.
 
-При spawn-fail любого плагина — `errSetupFailed` (оператор явно объявил его в `plugins.ssh_providers[]`, молча игнорировать нельзя).
+On a spawn-fail of any plugin — `errSetupFailed` (the operator explicitly declared it in `plugins.ssh_providers[]`, silently ignoring it is not allowed).
 
-### Аудит и метрики
+### Audit and metrics
 
-- **Audit:** routing-decision **НЕ** пишется отдельным event-ом (избыточный шум при N\_SID-ах в прогоне). Реальный SshProvider per-SID сохраняется в **`push_runs.summary.hosts[sid].ssh_provider`** — операторская выборка через `GET /v1/push/{apply_id}`.
-- **Metric:** `keeper_push_provider_routed_total{provider, decision_source}` (counter). `decision_source ∈ {soul, coven, cluster}`. Cardinality-safe: ~N\_providers × 3 = единицы серий.
+- **Audit:** a routing decision is **NOT** written as a separate event (excessive noise with N_SIDs in a run). The actual SshProvider per-SID is saved in **`push_runs.summary.hosts[sid].ssh_provider`** — an operator query via `GET /v1/push/{apply_id}`.
+- **Metric:** `keeper_push_provider_routed_total{provider, decision_source}` (counter). `decision_source ∈ {soul, coven, cluster}`. Cardinality-safe: ~N_providers × 3 = single-digit series.
 
-### Грамматика keeper.yml
+### keeper.yml grammar
 
 ```yaml
 push:
@@ -291,43 +291,43 @@ push:
 
 ### Operator surface
 
-- **Per-SID:** `PUT /v1/souls/{sid}/ssh-target` (extended body: `ssh_provider`) → `soulctl souls ssh-target set <sid> ... --ssh-provider=<name>`. MCP-tool `keeper.soul.ssh-target.update` принимает то же поле.
-- **Bulk per-coven:** `soulctl souls ssh-target bulk-set --coven=<name> --ssh-provider=<name>` (client-side fan-out поверх list+PUT; server-side bulk-эндпоинта не вводится).
-- **Cluster / per-coven default:** редактирование `keeper.yml::push.{coven_default_providers,cluster_default_provider}` + SIGHUP / API-reload (hot-reload-aware).
+- **Per-SID:** `PUT /v1/souls/{sid}/ssh-target` (extended body: `ssh_provider`) → `soulctl souls ssh-target set <sid> ... --ssh-provider=<name>`. The MCP tool `keeper.soul.ssh-target.update` accepts the same field.
+- **Bulk per-coven:** `soulctl souls ssh-target bulk-set --coven=<name> --ssh-provider=<name>` (client-side fan-out over list+PUT; a server-side bulk endpoint is not introduced).
+- **Cluster / per-coven default:** editing `keeper.yml::push.{coven_default_providers,cluster_default_provider}` + SIGHUP / API-reload (hot-reload-aware).
 
-### Что НЕ в P2
+### What is NOT in P2
 
-- **Soul-label-selector** `souls.attributes` (новая сущность; propose-and-wait, отложено).
-- **Per-job inline `routing_rules`** (γ-variant per-prog override карты; post-MVP).
-- **Provider-chain fallback** (silent retry на другом provider при connect-fail — security trade-off, отвергнуто PM-decision).
-- **Lazy spawn** (UX trade-off, отвергнуто).
+- **Soul-label-selector** `souls.attributes` (a new entity; propose-and-wait, deferred).
+- **Per-job inline `routing_rules`** (a γ-variant per-run override map; post-MVP).
+- **Provider-chain fallback** (a silent retry on another provider on connect-fail — a security trade-off, rejected by PM-decision).
+- **Lazy spawn** (a UX trade-off, rejected).
 
 **Metrics:**
 
-- `keeper_push_host_ca_used_total{ca_name="<name>"}` (counter) — инкрементируется при каждом матче CA в `hostCertCallback`. Cardinality-safe: имена закрепляются в `keeper.yml::push.host_ca_refs[].name` (closed-set единиц), kebab-case-формат валидируется schema-фазой.
+- `keeper_push_host_ca_used_total{ca_name="<name>"}` (counter) — incremented on every CA match in `hostCertCallback`. Cardinality-safe: the names are fixed in `keeper.yml::push.host_ca_refs[].name` (a closed set of single digits), the kebab-case format is validated by the schema phase.
 
-### Когда push **выключается** (fail-open, без ошибки старта)
+### When push is **disabled** (fail-open, no start error)
 
-- `plugins.ssh_providers[]` пустой/отсутствует → INFO в лог;
-- Discover не нашёл SshProvider-плагинов (битый кеш / mismatch имён в FilterByCatalog) → WARN;
-- `push:` блок или `push.host_ca_ref` отсутствует → WARN.
+- `plugins.ssh_providers[]` is empty/absent → INFO in the log;
+- Discover found no SshProvider plugins (a broken cache / a name mismatch in FilterByCatalog) → WARN;
+- the `push:` block or `push.host_ca_ref` is absent → WARN.
 
-В этих случаях `/v1/push/*` возвращает 404 (роуты не подключаются), MCP `keeper.push.apply` возвращает internal-error «не сконфигурировано».
+In these cases `/v1/push/*` returns 404 (the routes are not mounted), MCP `keeper.push.apply` returns an internal-error "not configured".
 
-### Когда push **валит старт keeper-а** (fail-closed)
+### When push **fails Keeper's start** (fail-closed)
 
-- `push.host_ca_ref` задан, но Vault недоступен / поле отсутствует / битый PEM.
-- Spawn первого SshProvider-плагина упал (Sigil-verify не прошёл / handshake-таймаут / capability-mismatch).
-- Build `SshDispatcher` упал (программная неконсистентность, не runtime).
+- `push.host_ca_ref` is set, but Vault is unavailable / the field is absent / broken PEM.
+- The spawn of the first SshProvider plugin failed (Sigil-verify did not pass / handshake timeout / capability mismatch).
+- Building the `SshDispatcher` failed (a code inconsistency, not runtime).
 
-См. также [`config.md → push`](config.md#push) для нормативной грамматики блока.
+See also [`config.md → push`](config.md#push) for the normative grammar of the block.
 
-## См. также
+## See also
 
-- [plugins.md](plugins.md) — контракт `SshProvider`, общий gRPC-stdio механизм.
-- [reaper.md](reaper.md) — Жнец работает над Postgres, не над хостами.
-- [config.md](config.md) → `plugins.ssh_providers` — реестр SSH-провайдеров.
-- [rbac.md](rbac.md) — RBAC применяется к push единообразно.
-- [`../soul/modules.md`](../soul/modules.md) — раскладка модулей на хосте и хостовый cleanup.
-- [architecture.md → Push-режим](../architecture.md#push-режим-keeperpush).
-- [architecture.md → Доставка SoulSeed-токена на хост](../architecture.md#доставка-soulseed-токена-на-хост) — push как целевой путь для bootstrap агента.
+- [plugins.md](plugins.md) — the `SshProvider` contract, the common gRPC-stdio mechanism.
+- [reaper.md](reaper.md) — the Reaper works over Postgres, not over hosts.
+- [config.md](config.md) → `plugins.ssh_providers` — the registry of SSH providers.
+- [rbac.md](rbac.md) — RBAC is applied to push uniformly.
+- [`../soul/modules.md`](../soul/modules.md) — the module layout on the host and host-side cleanup.
+- [architecture.md → Push mode](../architecture.md).
+- [architecture.md → Delivery of a SoulSeed token to the host](../architecture.md) — push as the target path for bootstrapping an agent.

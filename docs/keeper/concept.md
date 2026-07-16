@@ -1,65 +1,65 @@
-# Keeper — концепция
+# Keeper - concept
 
-Keeper — центральный сервер Soul Stack (аналог `salt-master`). Управляющий узел, к которому подключаются Souls и через который оператор управляет парком.
+Keeper is the central server of Soul Stack (similar to `salt-master`). The control node to which Souls connect and through which the operator manages the Souls.
 
-## Роль
+## Role
 
-- **Реестр Souls.** Хранит и обслуживает таблицы `souls`, `soul_seeds`, `bootstrap_tokens` в Postgres ([storage.md](storage.md)). Принимает CSR при онбординге, выпускает SoulSeed-сертификаты через Vault PKI, отслеживает heartbeat и статусы.
-- **Destiny-каталог.** Тянет git-репозитории Destiny / Service / Module по `ref:`-ам из конфига ([config.md](config.md)), валидирует и рендерит шаги перед раздачей. См. [architecture.md → Артефакты Soul Stack](../architecture.md#артефакты-soul-stack-что-в-git-что-в-бд).
-- **Раздача прогонов.** В pull-режиме шлёт команды Souls по живому gRPC bidi-стриму поверх mTLS ([ADR-002](../adr/0002-transport-grpc-ha.md#adr-002-транспорт-keeper--souls--grpc-bidirectional-stream-поверх-mtls-ha-кластер-keeper)). В push-режиме сам ходит по SSH через модуль `keeper.push` ([push.md](push.md)).
-- **Агрегация Soulprint.** Соулс шлют принты (факты о хосте) — Keeper складывает в Postgres, отдаёт через API с RBAC-фильтром.
-- **Интеграция с Vault.** Полный клиент: Essence-секреты, PKI для выпуска SoulSeed, SSH-CA для `keeper.push`, credentials cloud-driver-ов ([config.md](config.md) → блок `vault:`).
+- **Souls Registry.** Stores and maintains tables `souls`, `soul_seeds`, `bootstrap_tokens` in Postgres ([storage.md](storage.md)). Accepts CSR during onboarding, issues SoulSeed certificates via Vault PKI, monitors heartbeat and statuses.
+- **Destiny directory.** Pulls Destiny / Service / Module git repositories by `ref:` from the config ([config.md](config.md)), validates and renders steps before distribution. See [architecture.md → Soul Stack Artifacts](../architecture.md).
+- **Distributing runs.** In pull mode, sends Souls commands via a live gRPC bidi stream over mTLS ([ADR-002](../adr/0002-transport-grpc-ha.md#adr-002-transport-keeper--souls--grpc-bidirectional-stream-over-mtls-ha-keeper-cluster)). In push mode, it itself navigates via SSH through the module `keeper.push` ([push.md](push.md)).
+- **Soulprint aggregation.** Souls sends prints (facts about the host) - Keeper adds them to Postgres, sends them through the API with an RBAC filter.
+- **Integration with Vault.** Full client: Essence secrets, PKI for SoulSeed release, SSH-CA for `keeper.push`, cloud driver credentials ([config.md](config.md) → block `vault:`).
 
-## HA-кластер, stateless
+## HA cluster, stateless
 
-Keeper — **горизонтально масштабируемый stateless-кластер** ([ADR-002](../adr/0002-transport-grpc-ha.md#adr-002-транспорт-keeper--souls--grpc-bidirectional-stream-поверх-mtls-ha-кластер-keeper)). Несколько инстансов `keeper` с разными KID стоят за общими Postgres и Redis. Любой инстанс может обслужить любой запрос — источник правды лежит снаружи бинаря:
+Keeper - **horizontally scalable stateless cluster** ([ADR-002](../adr/0002-transport-grpc-ha.md#adr-002-transport-keeper--souls--grpc-bidirectional-stream-over-mtls-ha-keeper-cluster)). Several instances `keeper` with different KIDs are behind the common Postgres and Redis. Any instance can serve any request - the source of truth lies outside the binary:
 
-- **Postgres** — холодное хранилище: реестры, Destiny-каталог, incarnation, state_history, журналы ([ADR-005](../adr/0005-storage-postgres.md#adr-005-хранилище-состояния-keeper--postgres)).
-- **Redis** — горячий слой и координация: heartbeat-кэш Souls, lease на SID, pub/sub между Keeper-инстансами, лидерский lease для Reaper ([ADR-006](../adr/0006-cache-redis.md#adr-006-кэш-и-координация--redis)).
+- **Postgres** - cold storage: registries, Destiny directory, incarnation, state_history, logs ([ADR-005](../adr/0005-storage-postgres.md#adr-005-keeper-state-storage--postgres)).
+- **Redis** - hot layer and coordination: Souls heartbeat cache, lease on SID, pub/sub between Keeper instances, leader lease for Reaper ([ADR-006](../adr/0006-cache-redis.md)).
 
-Подробности раскладки данных — в [storage.md](storage.md). Соул-сторонний алгоритм выбора Keeper-а из списка endpoint-ов — в [../soul/connection.md](../soul/connection.md).
+Details of the data layout are in [storage.md](storage.md). A soul-side algorithm for selecting a Keeper from a list of endpoints is in [../soul/connection.md](../soul/connection.md).
 
 ## KID
 
-Каждый инстанс Keeper-кластера имеет **KID** (Keeper ID) — стабильный человекочитаемый идентификатор. Используется для:
+Each Keeper cluster instance has a **KID** (Keeper ID) - a stable human-readable identifier. Used for:
 
-- **Lease на SID** в Redis: `SET sid:lock <kid> NX EX <ttl>` — какой Keeper сейчас держит активный gRPC-стрим к данному Soul.
-- **Колонка `last_seen_by_kid`** в `souls` — какой Keeper последним видел этого Soul.
-- **Аудит-логи и метрики** — для разделения событий по инстансам.
+- **Lease on SID** in Redis: `SET sid:lock <kid> NX EX <ttl>` - which Keeper currently has an active gRPC stream to this Soul.
+- **Column `last_seen_by_kid`** in `souls` - which Keeper last saw this Soul.
+- **Audit logs and metrics** - for separating events by instance.
 
-KID задаётся в конфиге одной строкой (см. [config.md](config.md) → `kid:`).
+KID is set in the config in one line (see [config.md](config.md) → `kid:`).
 
-## Интерфейсы оператора
+## Operator Interfaces
 
-Первичный путь — **OpenAPI и MCP** ([ADR-004](../adr/0004-binaries.md#adr-004-раскладка-бинарей--keeper-soul-soul-lint-push-режим--модуль-внутри-keeper)). Всё, что делает оператор (заведение Souls, выписка bootstrap-токенов, создание incarnation, push-прогон, управление Provider/Profile, чтение Soulprint), — через OpenAPI или MCP-tool. RBAC применяется к обоим единообразно ([rbac.md](rbac.md)).
+Primary path is **OpenAPI and MCP** ([ADR-004](../adr/0004-binaries.md#adr-004-binary-layout--keeper-soul-soul-lint-push-mode-as-a-module-inside-keeper)). Everything the operator does (establishing Souls, issuing bootstrap tokens, creating incarnation, push runs, managing Provider/Profile, reading Soulprint) is done through OpenAPI or MCP-tool. RBAC applies to both uniformly ([rbac.md](rbac.md)).
 
-CLI допустим как **тонкая обёртка** поверх API, не как первичный путь. Будет ли он отдельным бинарём, подкомандой `keeper` в клиентском режиме или только сторонними тулзами — [open Q №2](../architecture.md#открытые-вопросы).
+The CLI is acceptable as a **thin wrapper** on top of the API, not as the primary path. Will it be a separate binary, a subcommand `keeper` in client mode, or only third-party tools - [open Q No. 2](../architecture.md).
 
-Внутренний транспорт Keeper ↔ Souls — gRPC bidi на отдельном listener-е, наружу через mTLS.
+Internal transport Keeper ↔ Souls - gRPC bidi on a separate listener, externally via mTLS.
 
-## Что входит в `keeper`-бинарь
+## What is included in the `keeper` binary
 
-По [ADR-004](../adr/0004-binaries.md#adr-004-раскладка-бинарей--keeper-soul-soul-lint-push-режим--модуль-внутри-keeper) Soul Stack поставляет три отдельных бинаря (`keeper`, `soul`, `soul-lint`). В составе `keeper`-а:
+By [ADR-004](../adr/0004-binaries.md#adr-004-binary-layout--keeper-soul-soul-lint-push-mode-as-a-module-inside-keeper) Soul Stack supplies three separate binaries (`keeper`, `soul`, `soul-lint`). Contains `keeper`:
 
-- **gRPC-сервер для Souls** — приём bidi-стримов, mTLS, выпуск SoulSeed.
-- **OpenAPI + MCP фасад** — gRPC-Gateway/connect-go поверх того же ядра, MCP-сервер.
-- **Модуль `keeper.push`** — SSH-доставка Destiny на хосты без Soul-агента. Не отдельный бинарь, см. [push.md](push.md).
-- **Модуль `keeper.cloud`** — cloud-операции (Provider/Profile, CloudDriver-плагины), см. [cloud.md](cloud.md).
-- **Reaper / Жнец** — фоновая чистка БД, лидер через Redis-lease, см. [reaper.md](reaper.md).
-- **Plugin-host для CloudDriver и SshProvider** — sub-process по gRPC-stdio, см. [plugins.md](plugins.md).
-- **Интеграции из коробки** — Vault, OTel, Prometheus-метрики, RBAC, ротация логов, hot-reload конфига ([requirements.md](../requirements.md)).
+- **gRPC server for Souls** - receiving bidi streams, mTLS, releasing SoulSeed.
+- **OpenAPI + MCP facade** - gRPC-Gateway/connect-go on top of the same kernel, MCP server.
+- **Module `keeper.push`** - SSH delivery of Destiny to hosts without a Soul agent. Not a separate binary, see [push.md](push.md).
+- **Module `keeper.cloud`** - cloud operations (Provider/Profile, CloudDriver plugins), see [cloud.md](cloud.md).
+- **Reaper / Reaper** - background cleaning of the database, leader via Redis-lease, see [reaper.md](reaper.md).
+- **Plugin-host for CloudDriver and SshProvider** - sub-process by gRPC-stdio, see [plugins.md](plugins.md).
+- **Integrations out of the box** - Vault, OTel, Prometheus metrics, RBAC, log rotation, hot-reload config ([requirements.md](../requirements.md)).
 
-В `keeper`-бинарь **не входит**: серверный код агентов, реализация core-модулей Destiny (это `soul`), офлайн-линтер (это `soul-lint`).
+The `keeper` binary **does not include**: agent server code, implementation of Destiny core modules (this is `soul`), offline linter (this is `soul-lint`).
 
-## См. также
+## See also
 
-- [storage.md](storage.md) — где живут реестры и кэш.
-- [push.md](push.md) — модуль `keeper.push`.
-- [reaper.md](reaper.md) — фоновая чистка БД.
-- [plugins.md](plugins.md) — CloudDriver и SshProvider.
+- [storage.md](storage.md) - where the registries and cache live.
+- [push.md](push.md) - module `keeper.push`.
+- [reaper.md](reaper.md) - background database cleaning.
+- [plugins.md](plugins.md) - CloudDriver and SshProvider.
 - [cloud.md](cloud.md) — `keeper.cloud`.
 - [rbac.md](rbac.md) — RBAC.
-- [config.md](config.md) — формат `keeper.yml`.
-- [`../soul/`](../soul/README.md) — `soul`-бинарь (соседний компонент).
-- [architecture.md → Роли бинарей](../architecture.md#роли-бинарей) — короткая сводка по всем трём бинарям.
-- [architecture.md → Топология](../architecture.md#топология) — место Keeper-а в общей картине.
+- [config.md](config.md) - format `keeper.yml`.
+- [`../soul/`](../soul/README.md) - `soul`-binary (neighboring component).
+- [architecture.md → Roles of binaries](../architecture.md) - a short summary of all three binaries.
+- [architecture.md → Topology](../architecture.md) - Keeper's place in the overall picture.

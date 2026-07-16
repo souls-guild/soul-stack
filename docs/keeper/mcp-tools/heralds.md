@@ -1,39 +1,39 @@
-# Herald — MCP-tools реестра каналов доставки уведомлений
+# Herald - MCP-tools registry of notification delivery channels
 
-Доменная секция [каталога MCP-tools](../mcp-tools.md): tools `keeper.herald.*` (CRUD реестра `heralds`, [ADR-052](../../adr/0052-herald-notifications.md#adr-052-herald--tiding--уведомления-о-событиях-прогонов), S4). Транспорт, auth, формат tool declaration, error mapping — в корневом [mcp-tools.md](../mcp-tools.md). Источник правды по семантике, телам, кодам ошибок — [operator-api/heralds.md](../operator-api/heralds.md).
+Domain section [MCP-tools directory](../mcp-tools.md): tools `keeper.herald.*` (registry CRUD `heralds`, [ADR-052](../../adr/0052-herald-notifications.md), S4). Transport, auth, tool declaration format, error mapping - in the root [mcp-tools.md](../mcp-tools.md). The source of truth for semantics, bodies, error codes is [operator-api/heralds.md](../operator-api/heralds.md).
 
 ### Herald (5)
 
-5 tool-ов 1:1 `keeper.herald.<verb>` ↔ permission `herald.<verb>` ↔ REST `POST/GET/PUT/DELETE /v1/heralds*` (selector — NoSelector). Бизнес-логика (валидация `config`/`secret_ref` + SSRF-контур https-only + deny приватных IP + инвалидация dispatcher-кэша через Redis `herald:invalidate`) живёт в `herald.Service`; tool — транспорт. Tools доступны только при подключённом реестре (`HeraldSvc`); при выключенном вызов возвращает `internal-error` («herald registry is not configured»).
+5 tools 1:1 `keeper.herald.<verb>` ↔ permission `herald.<verb>` ↔ REST `POST/GET/PUT/DELETE /v1/heralds*` (selector - NoSelector). Business logic (validation `config`/`secret_ref` + SSRF circuit https-only + deny private IPs + dispatcher cache invalidation via Redis `herald:invalidate`) lives in `herald.Service`; tool - transport. Tools are available only when the registry is connected (`HeraldSvc`); when disabled, the call returns `internal-error` ("herald registry is not configured").
 
 #### `keeper.herald.create`
 
-Создаёт Herald-канал доставки уведомлений (webhook в MVP: `config.url` + опц. `headers`). SSRF-контур (https-only + deny приватных IP) взведён по умолчанию, снимается `config.http_allowed` / `config.allow_private`. `secret_ref` (опц.) — vault-ref на signing-token (подпись webhook `X-SoulStack-Signature: sha256=<hex>`, HMAC-SHA256). Permission: `herald.create`. Endpoint: [`POST /v1/heralds`](../operator-api/heralds.md#post-v1heralds--создать-herald). Async: нет.
+Creates a Herald notification delivery channel (webhook in MVP: `config.url` + opt. `headers`). The SSRF circuit (https-only + deny private IPs) is enabled by default, disabled `config.http_allowed` / `config.allow_private`. `secret_ref` (opt.) - vault-ref to signing-token (webhook signature `X-SoulStack-Signature: sha256=<hex>`, HMAC-SHA256). Permission: `herald.create`. Endpoint: [`POST /v1/heralds`](../operator-api/heralds.md). Async: no.
 
-**Input** (`required: name, type, config`): `{name (^[a-z0-9-]{1,63}$), type (enum: webhook), config (object), secret_ref? (vault-ref|null), enabled? (bool, опущено → true)}`.
+**Input** (`required: name, type, config`): `{name (^[a-z0-9-]{1,63}$), type (enum: webhook), config (object), secret_ref? (vault-ref|null), enabled? (bool, omitted → true)}`.
 
-**Output:** `Herald` — `{name, type, config, secret_ref, enabled, created_at, updated_at, created_by_aid}`. Ошибки: `herald-already-exists` (`name` занят), `validation-failed` (битый `name`/`type`/`config`/`secret_ref` или нарушение SSRF-контура).
+**Output:** `Herald` - `{name, type, config, secret_ref, enabled, created_at, updated_at, created_by_aid}`. Errors: `herald-already-exists` (`name` busy), `validation-failed` (broken `name`/`type`/`config`/`secret_ref` or SSRF circuit violation).
 
 #### `keeper.herald.update`
 
-Заменяет mutable-поля Herald-канала (replace-семантика; `name` — ключ, не меняется). SSRF-инвариант тот же, что у create. Permission: `herald.update`. Endpoint: [`PUT /v1/heralds/{name}`](../operator-api/heralds.md#put-v1heraldsname--заменить-канал-replace-семантика). Async: нет.
+Replaces the mutable fields of the Herald channel (replace semantics; `name` is the key, does not change). The SSRF invariant is the same as that of create. Permission: `herald.update`. Endpoint: [`PUT /v1/heralds/{name}`](../operator-api/heralds.md). Async: no.
 
-**Input** (`required: name, type, config`): `{name, type (enum: webhook), config (полный новый config — replace), secret_ref? (|null), enabled?}`. **Output:** `Herald`. Ошибки: `not-found` (записи нет).
+**Input** (`required: name, type, config`): `{name, type (enum: webhook), config (complete new config - replace), secret_ref? (|null), enabled?}`. **Output:** `Herald`. Errors: `not-found` (no entry).
 
 #### `keeper.herald.delete`
 
-Удаляет Herald-канал; каскадно сносит связанные Tiding-подписки (`ON DELETE CASCADE`). Permission: `herald.delete`. Endpoint: [`DELETE /v1/heralds/{name}`](../operator-api/heralds.md#delete-v1heraldsname--удалить-канал). Async: нет.
+Deletes the Herald channel; cascade demolishes related Tiding subscriptions (`ON DELETE CASCADE`). Permission: `herald.delete`. Endpoint: [`DELETE /v1/heralds/{name}`](../operator-api/heralds.md). Async: no.
 
-**Input:** `{name}`. **Output:** пустой объект (REST-эквивалент — 204). Ошибки: `not-found`.
+**Input:** `{name}`. **Output:** empty object (REST equivalent - 204). Errors: `not-found`.
 
 #### `keeper.herald.list`
 
-Перечисление Herald-каналов (sort `updated_at` DESC, `name` ASC). Permission: `herald.list`. Endpoint: [`GET /v1/heralds`](../operator-api/heralds.md#get-v1heralds--список-herald-каналов). Async: нет.
+Enumeration of Herald channels (sort `updated_at` DESC, `name` ASC). Permission: `herald.list`. Endpoint: [`GET /v1/heralds`](../operator-api/heralds.md). Async: no.
 
 **Input:** `{offset?, limit?}`. **Output:** `{items: array<Herald>, offset, limit, total}`.
 
 #### `keeper.herald.read`
 
-Читает один Herald-канал по имени. Permission: `herald.read` (отделён от `list` — параллель `operator.read`↔`operator.list`). Endpoint: [`GET /v1/heralds/{name}`](../operator-api/heralds.md#get-v1heraldsname--прочитать-один-канал). Async: нет.
+Reads one Herald channel by name. Permission: `herald.read` (separated from `list` - parallel to `operator.read`↔`operator.list`). Endpoint: [`GET /v1/heralds/{name}`](../operator-api/heralds.md). Async: no.
 
-**Input:** `{name}`. **Output:** `Herald`. Ошибки: `not-found`.
+**Input:** `{name}`. **Output:** `Herald`. Errors: `not-found`.

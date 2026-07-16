@@ -1,99 +1,99 @@
-# Прод-развёртывание Keeper-а
+# Production deployment of Keeper
 
-Операционная дока для перевода Keeper-а из dev-стека ([local-setup.md](../dev/local-setup.md)) в продакшен. Фокус — на отличиях от dev и на инфра-зависимостях (Vault, Postgres), которые не покрываются нашим кодом, но обязательны для безопасной эксплуатации.
+Operational documentation for moving Keeper from the dev stack ([local-setup.md](../dev/local-setup.md)) to production. The focus is on the differences from dev and on the infra dependencies (Vault, Postgres) that our code does not cover but that are mandatory for safe operation.
 
-Нормативный контракт конфига — [config.md](config.md); пример прод-конфига — [`examples/keeper/keeper.yml`](../../examples/keeper/keeper.yml).
+The normative config contract is [config.md](config.md); a sample production config is [`examples/keeper/keeper.yml`](../../examples/keeper/keeper.yml).
 
-## Чем прод отличается от dev
+## How production differs from dev
 
-| Аспект | dev ([local-setup.md](../dev/local-setup.md)) | прод |
+| Aspect | dev ([local-setup.md](../dev/local-setup.md)) | production |
 |---|---|---|
-| Vault auth | `vault.token: "root"` (статический root-токен) | AppRole (`vault.auth.method: approle`) — см. ниже |
-| Vault backend | dev-mode, секреты в RAM (теряются на рестарте) | persistent storage backend + auto-unseal |
-| Vault TLS | HTTP без TLS (`http://127.0.0.1:8200`) | HTTPS с валидным сертификатом (`https://vault.internal:8200`) |
-| Vault-policy | root (всё разрешено) | узкая least-privilege policy ([vault-policy.hcl](../../examples/keeper/vault-policy.hcl)) |
-| TLS-материал Keeper-а | self-signed / Vault-issued leaf в `/tmp/keeper-dev/tls/` | leaf из прод-PKI, ротация по политике организации |
-| `services[]` / destiny | file://-репо из `/tmp/keeper-dev/` | git-URL-ы реестра сервисов (Postgres, ADR-029) |
-| OTel | `otel.enabled: false` | включён, экспорт в коллектор |
+| Vault auth | `vault.token: "root"` (static root token) | AppRole (`vault.auth.method: approle`) — see below |
+| Vault backend | dev-mode, secrets in RAM (lost on restart) | persistent storage backend + auto-unseal |
+| Vault TLS | HTTP without TLS (`http://127.0.0.1:8200`) | HTTPS with a valid certificate (`https://vault.internal:8200`) |
+| Vault policy | root (everything allowed) | narrow least-privilege policy ([vault-policy.hcl](../../examples/keeper/vault-policy.hcl)) |
+| Keeper TLS material | self-signed / Vault-issued leaf in `/tmp/keeper-dev/tls/` | leaf from the production PKI, rotated per the organization's policy |
+| `services[]` / destiny | file:// repos from `/tmp/keeper-dev/` | git URLs of the service registry (Postgres, ADR-029) |
+| OTel | `otel.enabled: false` | enabled, export to a collector |
 
-dev-shortcut `vault.token: "root"` в проде **не использовать** — root-токен Vault не должен жить в конфиге сервиса. Прод-путь — AppRole + узкая policy.
+The dev shortcut `vault.token: "root"` must **not** be used in production — the Vault root token must not live in a service config. The production path is AppRole + a narrow policy.
 
 ## Vault: AppRole + persistent + auto-unseal
 
-### AppRole-аутентификация Keeper-а
+### Keeper AppRole authentication
 
-В проде Keeper аутентифицируется в Vault через AppRole (ADR-014; в коде — `shared/config.AuthMethodAppRole`). Keeper делает `auth/approle/login` с парой `role_id` + `secret_id`, получает renewable client-token и продлевает его (TokenRenewer, `keeper/internal/.../renewer.go`).
+In production, Keeper authenticates to Vault via AppRole (ADR-014; in code — `shared/config.AuthMethodAppRole`). Keeper performs `auth/approle/login` with a `role_id` + `secret_id` pair, obtains a renewable client token, and renews it (TokenRenewer, `keeper/internal/.../renewer.go`).
 
-Блок `keeper.yml::vault`:
+The `keeper.yml::vault` block:
 
 ```yaml
 vault:
   addr: "https://vault.internal:8200"
   auth:
     method: approle
-    role_id: keeper-prod                       # НЕ секрет — идентификатор роли
-    secret_id_file: /etc/keeper/vault-secret-id  # secret_id из файла mode 0400
+    role_id: keeper-prod                       # NOT a secret — the role identifier
+    secret_id_file: /etc/keeper/vault-secret-id  # secret_id from a mode 0400 file
   pki_mount: "pki/soulstack"
   pki_role: "soul-seed"
 ```
 
-`role_id` — **не секрет** (идентификатор роли), допустимо хранить в открытом виде прямо в `keeper.yml`. `secret_id` — **секрет**, в основном конфиге plaintext-ом **не хранится**; источник задаётся одним из (взаимоисключающе):
+`role_id` is **not a secret** (a role identifier), so it may be stored in the clear right in `keeper.yml`. `secret_id` is a **secret**, and is **not** stored as plaintext in the main config; its source is set by one of the following (mutually exclusive):
 
-- `secret_id_file` — путь к файлу с правами **`mode 0400`** (только владелец-процесс читает), содержимое = `secret_id` (trailing newline снимается). Рекомендуемый прод-вариант;
-- `secret_id_env` — имя env-переменной с `secret_id` (для инжекторов секретов вроде Vault Agent / k8s-secret-as-env).
+- `secret_id_file` — path to a file with **`mode 0400`** permissions (only the owner process reads it), whose content is the `secret_id` (a trailing newline is stripped). The recommended production option;
+- `secret_id_env` — the name of an env variable holding the `secret_id` (for secret injectors such as Vault Agent / k8s-secret-as-env).
 
-AppRole-credentials **намеренно НЕ читаются из Vault** (`vault:`-ref недопустим) — это chicken-egg: именно этими credentials Keeper и логинится, чтобы потом резолвить все остальные `vault:`-ref-ы (`postgres.dsn_ref`, `signing_key_ref`, …). Источник `secret_id` поэтому всегда локальный (файл/env), до подъёма Vault-клиента. Детали контракта — [config.md → `vault`](config.md#vault), comment в `shared/config/keeper.go` (`KeeperVaultAuth`).
+AppRole credentials are **intentionally NOT read from Vault** (a `vault:` ref is not allowed) — this is a chicken-and-egg problem: these are the very credentials Keeper uses to log in so that it can then resolve all the other `vault:` refs (`postgres.dsn_ref`, `signing_key_ref`, …). The `secret_id` source is therefore always local (file/env), available before the Vault client is brought up. Contract details — [config.md → `vault`](config.md#vault), comment in `shared/config/keeper.go` (`KeeperVaultAuth`).
 
-Настройка роли на стороне Vault (привязка least-privilege policy из п. ниже):
+Configuring the role on the Vault side (binding the least-privilege policy from the section below):
 
 ```sh
 vault policy write keeper-prod examples/keeper/vault-policy.hcl
 vault write auth/approle/role/keeper-prod \
     token_policies=keeper-prod \
     secret_id_ttl=720h token_ttl=1h token_max_ttl=24h
-# role_id — выдать оператору (в keeper.yml):
+# role_id — hand it to the operator (into keeper.yml):
 vault read auth/approle/role/keeper-prod/role-id
-# secret_id — положить в /etc/keeper/vault-secret-id (mode 0400):
+# secret_id — place into /etc/keeper/vault-secret-id (mode 0400):
 vault write -f auth/approle/role/keeper-prod/secret-id
 ```
 
-### Least-privilege Vault-policy
+### Least-privilege Vault policy
 
-Keeper в проде работает под узкой policy, а не под root. Шаблон с покомментированными path-ами — [`examples/keeper/vault-policy.hcl`](../../examples/keeper/vault-policy.hcl). Кратко, что он выдаёт и почему минимально:
+In production, Keeper runs under a narrow policy, not under root. A template with commented path entries is [`examples/keeper/vault-policy.hcl`](../../examples/keeper/vault-policy.hcl). In brief, what it grants and why it is minimal:
 
-| Path | Capabilities | Зачем |
+| Path | Capabilities | Why |
 |---|---|---|
-| `secret/data/keeper/*` | `read` | Чтение KV-секретов Keeper-а (jwt-signing-key, postgres/redis, providers/credentials cloud-driver-ов, essence-секреты). Только read — Keeper их не пишет. |
-| `pki/issue/soul-seed` | `update` | Подпись CSR SoulSeed при онбординге (Bootstrap-RPC, ADR-012(b)). `update` (POST) — единственное, что нужно issue-эндпоинту. |
-| `secret/metadata/keeper/sigil-keys/*` | `list`, `read` | Reaper-правило `reap_orphan_vault_keys` (ADR-026(h)) — report-only reconcile осиротевших ключей подписи Sigil: только имена (`list`) + `created_time` (metadata). **БЕЗ `delete`, БЕЗ data-пути** — Reaper ничего не удаляет и не читает значения приватников. |
-| `auth/token/renew-self` | `update` | TokenRenewer продлевает собственный client-token Keeper-а. Без права создавать/ревокать чужие токены. |
+| `secret/data/keeper/*` | `read` | Reading Keeper's KV secrets (jwt-signing-key, postgres/redis, providers/credentials of cloud drivers, essence secrets). Read only — Keeper does not write them. |
+| `pki/issue/soul-seed` | `update` | Signing the SoulSeed CSR during onboarding (Bootstrap-RPC, ADR-012(b)). `update` (POST) is the only thing the issue endpoint needs. |
+| `secret/metadata/keeper/sigil-keys/*` | `list`, `read` | Reaper rule `reap_orphan_vault_keys` (ADR-026(h)) — report-only reconcile of orphaned Sigil signing keys: only names (`list`) + `created_time` (metadata). **NO `delete`, NO data path** — Reaper deletes nothing and does not read private-key values. |
+| `auth/token/renew-self` | `update` | TokenRenewer renews Keeper's own client token. Without the right to create/revoke other tokens. |
 
-Пути в шаблоне соответствуют дефолтам dev-провижининга (KV mount `secret/`, PKI mount `pki/` + role `soul-seed` — см. [`dev/provision.sh`](../../dev/provision.sh)). В проде KV/PKI mount могут отличаться (в примере конфига `pki_mount: "pki/soulstack"`) — поправьте префиксы путей в `.hcl` под фактические `keeper.yml::vault.kv_mount` / `pki_mount` / `pki_role`.
+The paths in the template correspond to the defaults of dev provisioning (KV mount `secret/`, PKI mount `pki/` + role `soul-seed` — see [`dev/provision.sh`](../../dev/provision.sh)). In production the KV/PKI mounts may differ (in the sample config `pki_mount: "pki/soulstack"`) — adjust the path prefixes in the `.hcl` to the actual `keeper.yml::vault.kv_mount` / `pki_mount` / `pki_role`.
 
-### Persistent backend + auto-unseal (инфра-зависимость)
+### Persistent backend + auto-unseal (infra dependency)
 
-Это **инфраструктурная зависимость Vault**, не часть кода Soul Stack — операционные заметки:
+This is an **infrastructure dependency of Vault**, not part of the Soul Stack code — operational notes:
 
-- **Persistent storage backend** обязателен. dev-mode Vault держит секреты в RAM и теряет их при рестарте — в проде это означало бы потерю jwt-signing-key (инвалидация всех JWT) и PKI-корня. Использовать persistent backend (raft / consul / поддерживаемый storage).
-- **Auto-unseal** настоятельно рекомендуется (cloud KMS / transit / HSM). Без него каждый рестарт Vault требует ручного unseal с кворумом ключей, что ломает автоматический recovery Keeper-кластера: пока Vault sealed, Keeper не резолвит `vault:`-ref-ы и не стартует.
-- Подъём/тюнинг этих компонентов — на стороне команды эксплуатации Vault; Soul Stack только потребляет готовый unsealed Vault по `keeper.yml::vault.addr`.
+- **Persistent storage backend** is mandatory. dev-mode Vault keeps secrets in RAM and loses them on restart — in production that would mean losing the jwt-signing-key (invalidating all JWTs) and the PKI root. Use a persistent backend (raft / consul / a supported storage).
+- **Auto-unseal** is strongly recommended (cloud KMS / transit / HSM). Without it, every Vault restart requires a manual unseal with a quorum of keys, which breaks automatic recovery of the Keeper cluster: while Vault is sealed, Keeper does not resolve `vault:` refs and does not start.
+- Bringing up and tuning these components is on the Vault operations team; Soul Stack only consumes a ready, unsealed Vault via `keeper.yml::vault.addr`.
 
-## JWT signing-key (прод)
+## JWT signing key (production)
 
-JWT операторов (ADR-014) подписываются ключом из KV `secret/keeper/jwt-signing-key` (поле `signing_key`), резолв через `auth.jwt.signing_key_ref`. На MVP это HS256-ключ (симметричный) в KV — приемлемо; transit-вариант (асимметричная подпись на стороне Vault) — post-MVP.
+Operator JWTs (ADR-014) are signed with a key from KV `secret/keeper/jwt-signing-key` (field `signing_key`), resolved via `auth.jwt.signing_key_ref`. In the MVP this is an HS256 (symmetric) key in KV — acceptable; the transit variant (asymmetric signing on the Vault side) is post-MVP.
 
-**Ротация signing-key** — операционная процедура (не автоматизирована):
+**Rotating the signing key** is an operational procedure (not automated):
 
-1. Сгенерировать новый ключ и записать в KV: `vault kv put secret/keeper/jwt-signing-key signing_key="$(openssl rand -base64 32)"`.
-2. Передеплоить / hot-reload Keeper, чтобы он перечитал ключ.
-3. **Пересоздать bootstrap-токены / перевыпустить операторские JWT** — все ранее выпущенные HS256-JWT после смены ключа становятся невалидны (подпись не сойдётся). Короткий TTL JWT (`auth.jwt.ttl_default`) ограничивает окно, но активные токены придётся перевыпустить явно.
+1. Generate a new key and write it to KV: `vault kv put secret/keeper/jwt-signing-key signing_key="$(openssl rand -base64 32)"`.
+2. Redeploy / hot-reload Keeper so it re-reads the key.
+3. **Recreate bootstrap tokens / reissue operator JWTs** — all previously issued HS256 JWTs become invalid after the key change (the signature will not verify). The short JWT TTL (`auth.jwt.ttl_default`) limits the window, but active tokens will have to be reissued explicitly.
 
-Поэтому ротацию планировать в окно обслуживания, а не «на ходу».
+For this reason, plan rotation for a maintenance window, not "on the fly".
 
-## См. также
+## See also
 
-- [local-setup.md](../dev/local-setup.md) — dev-стек (для прода смотреть эту страницу, dev-копию конфига не использовать).
-- [config.md](config.md) — нормативный контракт `keeper.yml` (блоки `vault`, `auth`, `reaper`, `acolytes`).
-- [vault-policy.hcl](../../examples/keeper/vault-policy.hcl) — least-privilege Vault-policy с покомментированными путями.
-- [reaper.md → Включение recovery](reaper.md#включение-recovery-recovery-enable) — отдельная гейт-процедура для `reclaim_apply_runs` в проде.
-- [rbac.md](rbac.md) — RBAC и Bootstrap первого Архонта (ADR-013).
+- [local-setup.md](../dev/local-setup.md) — the dev stack (for production see this page; do not use the dev copy of the config).
+- [config.md](config.md) — the normative `keeper.yml` contract (blocks `vault`, `auth`, `reaper`, `acolytes`).
+- [vault-policy.hcl](../../examples/keeper/vault-policy.hcl) — least-privilege Vault policy with commented paths.
+- [reaper.md → Enabling recovery](reaper.md) — a separate gate procedure for `reclaim_apply_runs` in production.
+- [rbac.md](rbac.md) — RBAC and Bootstrap of the first Archon (ADR-013).

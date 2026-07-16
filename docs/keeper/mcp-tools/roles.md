@@ -1,94 +1,94 @@
 # Role — MCP-tools RBAC-CRUD
 
-Доменная секция [каталога MCP-tools](../mcp-tools.md): tools `keeper.role.*` (роли / permissions / membership Архонтов). Транспорт, auth, формат tool declaration, async-convention, error mapping — в корневом [mcp-tools.md](../mcp-tools.md). Источник правды по семантике — [operator-api.md → Role](../operator-api/roles.md) (тела и инварианты — [rbac.md → REST `/v1/roles`](../rbac.md#rest-v1roles)).
+Domain section [MCP-tools directory](../mcp-tools.md): tools `keeper.role.*` (roles / permissions / membership of Archons). Transport, auth, tool declaration format, async-convention, error mapping - in the root [mcp-tools.md](../mcp-tools.md). The source of truth for semantics is [operator-api.md → Role](../operator-api/roles.md) (bodies and invariants are [rbac.md → REST `/v1/roles`](../rbac.md#rest-v1roles)).
 
 ### Role (6)
 
-Управление RBAC (роли, permissions, membership) через MCP — [ADR-028](../../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres), storage в Postgres (`rbac_roles` / `rbac_role_permissions` / `rbac_role_operators`, [rbac.md → Storage](../rbac.md#storage--три-pg-таблицы)). Permission ↔ tool — 1:1: `keeper.role.<action>` ↔ `role.<action>`. Бизнес-инварианты (builtin-граница, self-lockout) живут в `rbac.Service`; tool — транспорт ([rbac.md → Управление ролями](../rbac.md#управление-ролями-rest--mcp)).
+RBAC management (roles, permissions, membership) via MCP - [ADR-028](../../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres), storage in Postgres (`rbac_roles` / `rbac_role_permissions` / `rbac_role_operators`, [rbac.md → Storage](../rbac.md)). Permission ↔ tool — 1:1: `keeper.role.<action>` ↔ `role.<action>`. Business invariants (builtin-boundary, self-lockout) live in `rbac.Service`; tool — transport ([rbac.md → Role management](../rbac.md)).
 
 #### `keeper.role.create`
 
-Создание роли + её permissions. Permission: `role.create`. Endpoint: `POST /v1/roles` ([rbac.md → REST `/v1/roles`](../rbac.md#rest-v1roles)). Async: нет.
+Creating a role + its permissions. Permission: `role.create`. Endpoint: `POST /v1/roles` ([rbac.md → REST `/v1/roles`](../rbac.md#rest-v1roles)). Async: no.
 
 **Input:**
 
-| Поле | Тип | Required | Смысл |
+| Field | Type | Required | Meaning |
 |---|---|---|---|
-| `name` | `string` (regex `^[a-z][a-z0-9-]*$`) | yes | Имя роли (kebab-case). |
-| `description` | `string` | optional | Человекочитаемое описание роли. |
-| `permissions` | `array<string>` | yes | Permission-строки `<resource>.<action>` (+ опц. ` on <selector>`), [rbac.md → Формат permissions](../rbac.md#формат-permissions). |
+| `name` | `string` (regex `^[a-z][a-z0-9-]*$`) | yes | Role name (kebab-case). |
+| `description` | `string` | optional | Human-readable description of the role. |
+| `permissions` | `array<string>` | yes | Permission lines `<resource>.<action>` (+ opt. ` on <selector>`), [rbac.md → Permissions format](../rbac.md). |
 
-**Output:** пустой объект (`{}`). Соответствует HTTP `201 Created`.
+**Output:** empty object (`{}`). Corresponds to HTTP `201 Created`.
 
-Ошибки: `role-already-exists` (`name` занят), `validation-failed` (битый `name` или `permission`).
+Errors: `role-already-exists` (`name` busy), `validation-failed` (broken `name` or `permission`).
 
 #### `keeper.role.delete`
 
-Удаление роли (каскадом permissions + membership). Permission: `role.delete`. Endpoint: `DELETE /v1/roles/{name}` ([rbac.md → REST `/v1/roles`](../rbac.md#rest-v1roles)). Async: нет.
+Removing a role (permissions + membership cascade). Permission: `role.delete`. Endpoint: `DELETE /v1/roles/{name}` ([rbac.md → REST `/v1/roles`](../rbac.md#rest-v1roles)). Async: no.
 
 **Input:**
 
-| Поле | Тип | Required | Смысл |
+| Field | Type | Required | Meaning |
 |---|---|---|---|
-| `name` | `string` | yes | Имя роли. |
+| `name` | `string` | yes | Role name. |
 
-**Output:** пустой объект (`{}`). Соответствует HTTP `204 No Content`.
+**Output:** empty object (`{}`). Corresponds to HTTP `204 No Content`.
 
-Ошибки: `role-not-found`, `role-builtin` (builtin-роль удалять нельзя), `would-lock-out-cluster` (удаление снимет последний эффективный `*`).
+Errors: `role-not-found`, `role-builtin` (builtin role cannot be deleted), `would-lock-out-cluster` (deletion will remove the last effective `*`).
 
 #### `keeper.role.list`
 
-Перечисление ролей с развёрнутыми permissions и назначенными Архонтами. Permission: `role.list`. Endpoint: `GET /v1/roles` ([rbac.md → REST `/v1/roles`](../rbac.md#rest-v1roles)). Async: нет.
+Listing roles with expanded permissions and assigned Archons. Permission: `role.list`. Endpoint: `GET /v1/roles` ([rbac.md → REST `/v1/roles`](../rbac.md#rest-v1roles)). Async: no.
 
-**Input:** пустой объект (`{}`).
+**Input:** empty object (`{}`).
 
 **Output:**
 
-| Поле | Тип | Смысл |
+| Field | Type | Meaning |
 |---|---|---|
-| `roles` | `array<object>` | Элементы — `{name, description, builtin, permissions[], operators[]}`; `permissions` / `operators` — non-nil массивы (роль без записей → `[]`). |
+| `roles` | `array<object>` | Elements - `{name, description, builtin, permissions[], operators[]}`; `permissions` / `operators` - non-nil arrays (role without entries → `[]`). |
 
 #### `keeper.role.update`
 
-Замена набора permissions роли (replace-семантика). Permission: `role.update`. Endpoint: `PATCH /v1/roles/{name}/permissions` ([rbac.md → REST `/v1/roles`](../rbac.md#rest-v1roles)). Async: нет.
+Replacing the set of role permissions (replace semantics). Permission: `role.update`. Endpoint: `PATCH /v1/roles/{name}/permissions` ([rbac.md → REST `/v1/roles`](../rbac.md#rest-v1roles)). Async: no.
 
 **Input:**
 
-| Поле | Тип | Required | Смысл |
+| Field | Type | Required | Meaning |
 |---|---|---|---|
-| `name` | `string` | yes | Имя роли. |
-| `permissions` | `array<string>` | yes | Новый набор permissions (полностью заменяет существующий). |
+| `name` | `string` | yes | Role name. |
+| `permissions` | `array<string>` | yes | New set of permissions (completely replaces the existing one). |
 
-**Output:** пустой объект (`{}`). Соответствует HTTP `204 No Content`.
+**Output:** empty object (`{}`). Corresponds to HTTP `204 No Content`.
 
-Ошибки: `role-not-found`, `role-builtin`, `would-lock-out-cluster` (снятие последнего `*`), `validation-failed` (битый `permission`).
+Errors: `role-not-found`, `role-builtin`, `would-lock-out-cluster` (removing the last `*`), `validation-failed` (broken `permission`).
 
 #### `keeper.role.grant-operator`
 
-Привязка Архонта (AID) к роли — добавление membership-строки `(role, aid)`. Идемпотентно. Permission: `role.grant-operator`. Endpoint: `POST /v1/roles/{name}/operators` ([rbac.md → REST `/v1/roles`](../rbac.md#rest-v1roles)). Async: нет.
+Binding the Archon (AID) to the role - adding the membership line `(role, aid)`. Idempotent. Permission: `role.grant-operator`. Endpoint: `POST /v1/roles/{name}/operators` ([rbac.md → REST `/v1/roles`](../rbac.md#rest-v1roles)). Async: no.
 
 **Input:**
 
-| Поле | Тип | Required | Смысл |
+| Field | Type | Required | Meaning |
 |---|---|---|---|
-| `role` | `string` | yes | Имя роли. |
-| `aid` | `string` (regex `^[a-z0-9][a-z0-9._@-]{1,127}$`) | yes | AID привязываемого Архонта. |
+| `role` | `string` | yes | Role name. |
+| `aid` | `string` (regex `^[a-z0-9][a-z0-9._@-]{1,127}$`) | yes | AID of the bound Archon. |
 
-**Output:** пустой объект (`{}`). Соответствует HTTP `204 No Content`.
+**Output:** empty object (`{}`). Corresponds to HTTP `204 No Content`.
 
-Ошибки: `not-found` (роль или AID не существуют). Self-lockout-проверки **нет**: grant только расширяет admin-set, кластер запереть не может. Над builtin-ролью разрешено.
+Errors: `not-found` (role or AID does not exist). Self-lockout checks **no**: grant only extends admin-set, the cluster cannot lock. Over builtin role is allowed.
 
 #### `keeper.role.revoke-operator`
 
-Снятие membership-строки `(role, aid)`. Permission: `role.revoke-operator`. Endpoint: `DELETE /v1/roles/{name}/operators/{aid}` ([rbac.md → REST `/v1/roles`](../rbac.md#rest-v1roles)). Async: нет.
+Removing the membership string `(role, aid)`. Permission: `role.revoke-operator`. Endpoint: `DELETE /v1/roles/{name}/operators/{aid}` ([rbac.md → REST `/v1/roles`](../rbac.md#rest-v1roles)). Async: no.
 
 **Input:**
 
-| Поле | Тип | Required | Смысл |
+| Field | Type | Required | Meaning |
 |---|---|---|---|
-| `role` | `string` | yes | Имя роли. |
-| `aid` | `string` (regex `^[a-z0-9][a-z0-9._@-]{1,127}$`) | yes | AID снимаемого Архонта. |
+| `role` | `string` | yes | Role name. |
+| `aid` | `string` (regex `^[a-z0-9][a-z0-9._@-]{1,127}$`) | yes | AID of the removed Archon. |
 
-**Output:** пустой объект (`{}`). Соответствует HTTP `204 No Content`.
+**Output:** empty object (`{}`). Corresponds to HTTP `204 No Content`.
 
-Ошибки: `not-found` (пары `(role, aid)` нет), `would-lock-out-cluster` (снятие последнего эффективного `*`). Над builtin-ролью разрешено.
+Errors: `not-found` (no pair `(role, aid)`), `would-lock-out-cluster` (removal of the last effective `*`). Over builtin role is allowed.

@@ -1,48 +1,48 @@
-# Augur — брокер внешнего доступа Soul
+# Augur - Soul external access broker
 
-> **Статус — MVP-1 реализован (2026-05, в baseline); MVP-2 отложен.** Источник статуса — [ADR-025](../adr/0025-augur.md#adr-025-augur--keeper-side-брокер-внешнего-доступа-soul) (amendment 2026-06-16). Этот документ нормирует архитектуру **Augur**.
+> **Status - MVP-1 implemented (2026-05, in baseline); MVP-2 is postponed.** Status source - [ADR-025](../adr/0025-augur.md) (amendment 2026-06-16). This document standardizes the **Augur** architecture.
 >
-> - **MVP-1 (брокер, `delegate=false`) — РЕАЛИЗОВАН:** реестры `omens` / `rites` (миграции 032/033), keeper-side fetch Vault / Prometheus / ELK, Soul-side `core.augur.fetch`, роуты `/v1/augur/*` (`omens` + `rites`).
-> - **MVP-2 (делегация, `delegate=true`, минтинг scoped-токенов) — ОТЛОЖЕН:** на уровне кода Rite с `delegate=true` резолвится в `denied`; proto-сообщения `ScopedVaultToken` / `ScopedStaticCred` заведены как контракт, но не заполняются. Порядок реализации относительно прочего backlog-а — за PM/пользователем.
+> - **MVP-1 (broker, `delegate=false`) - IMPLEMENTED:** registries `omens` / `rites` (migrations 032/033), keeper-side fetch Vault / Prometheus / ELK, Soul-side `core.augur.fetch`, routes `/v1/augur/*` (`omens` + `rites`).
+> - **MVP-2 (delegation, `delegate=true`, scoped token minting) - POSTPONED:** at the Rite code level with `delegate=true` resolves to `denied`; proto-messages `ScopedVaultToken` / `ScopedStaticCred` are created as a contract, but are not filled out. The order of implementation relative to other backlog is up to the PM/user.
 
-**Augur** — Keeper-side подсистема, дающая Soul-у **живой** (во время рендера / apply) доступ к внешним системам — Vault, Prometheus, ELK — которого не покрывает pre-resolved-модель Soul Stack. Метафора: авгур (оракул) посредничает между смертным и волей богов; здесь Augur посредничает между Soul-ом и внешними системами, не отдавая Soul-у master-credential.
+**Augur** - Keeper-side subsystem that gives Soul **live** (during render / apply) access to external systems - Vault, Prometheus, ELK - which is not covered by the pre-resolved Soul Stack model. Metaphor: an augur (oracle) mediates between a mortal and the will of the gods; here Augur mediates between Soul and external systems, without giving Soul master-credentials.
 
-## 1. Зачем Augur — граница с pre-resolved-моделью
+## 1. Why Augur - a border with a pre-resolved model
 
-Действующая модель доступа к внешним системам — **pre-resolved**: всё, что нужно прогону, резолвится Keeper-side **до** отправки команды на Soul. CEL-фаза (`vault(...)` / `soulprint.*` / `register.*` / `essence.*`) исполняется на Keeper-е, Vault читается на Keeper-е, и Soul получает уже отрендеренный `ApplyRequest` ([ADR-012(d)](../adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add)). На Soul нет ни `cel-go`, ни Vault-клиента, ни Vault-токенов.
+The current model for accessing external systems is **pre-resolved**: everything that the run needs is resolved by Keeper-side **before** sending the command to Soul. The CEL phase (`vault(...)` / `soulprint.*` / `register.*` / `essence.*`) is executed on Keeper, Vault is read on Keeper, and Soul receives the already rendered `ApplyRequest` ([ADR-012(d)](../adr/0012-keeper-soul-grpc.md)). There is no `cel-go` on Soul, no Vault client, no Vault tokens.
 
-Эта модель не покрывает случаи, когда значение нужно **в момент исполнения на хосте**, а не на этапе рендера:
+This model does not cover cases where the value is needed **at execution time on the host**, and not at the render stage:
 
-- секрет, который должен быть прочитан как можно ближе к использованию (короткоживущий dynamic secret Vault, который протухнет, если зарезолвить его на Keeper-е заранее);
-- live-запрос в Prometheus («сколько сейчас реплик в кворуме?») как условие шага apply;
-- чтение из ELK-индекса в ходе прогона.
+- a secret that should be read as close to use as possible (short-lived dynamic secret Vault, which will go bad if you resolve it on Keeper in advance);
+- live query in Prometheus ("how many replicas are in quorum now?") as a condition of the apply step;
+- reading from the ELK index during the run.
 
-Augur — **forward-looking слой**: он не заменяет pre-resolved-модель и не двигает её границу для обычного рендера. Он добавляет узкий, авторизованный канал «Soul просит внешнее значение прямо сейчас». Pre-resolved остаётся дефолтом; Augur — для того, что pre-resolve по своей природе не может отдать заранее.
+Augur - **forward-looking layer**: it does not replace the pre-resolved model and does not move its border for normal rendering. It adds a narrow, authorized channel of "Soul is asking for external meaning right now." Pre-resolved remains a default; Augur - for what pre-resolve by its nature cannot give in advance.
 
-## 2. Две фазы (один ADR)
+## 2. Two phases (one ADR)
 
-Augur нормируется одним [ADR-025](../adr/0025-augur.md#adr-025-augur--keeper-side-брокер-внешнего-доступа-soul), но реализуется в две фазы. Граница между фазами — поле `delegate` в [Rite](#42-таблица-rites--grant--policy-mapping) и форма ответа в [`AugurReply`](#52-augurreply-keeper--soul).
+Augur is normalized by one [ADR-025](../adr/0025-augur.md), but is implemented in two phases. The boundary between phases is the `delegate` field in Rite and the response form in [`AugurReply`](#52-augurreply-keeper--soul).
 
-### 2.1 MVP-1 — брокер (`delegate=false`)
+### 2.1 MVP-1 - broker (`delegate=false`)
 
-Soul просит значение **через Keeper**; Keeper сам ходит во внешнюю систему и возвращает значение Soul-у inline.
+Soul requests value **via Keeper**; Keeper itself goes to the external system and returns the value of Soul to inline.
 
-- Для Vault — Keeper читает KV своим существующим механизмом (`ReadKV`, тот же, что у [`core.vault.kv-read`](modules.md) / implicit `${ vault(...) }`).
-- Данные текут **через Keeper** (`AugurReply.inline_data`). На Soul внешний токен/credential **не попадает**.
-- Граница [ADR-012(d)](../adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add) **не трогается**: внешний доступ остаётся за Keeper-ом, как и для обычного рендера. Меняется только **момент** (live, по запросу Soul-а), не **сторона**.
-- AppRole для MVP-1 **не нужен** — Keeper использует уже имеющийся доступ к Vault.
+- For Vault - Keeper reads KV with its existing mechanism (`ReadKV`, same as [`core.vault.kv-read`](modules.md) / implicit `${ vault(...) }`).
+- Data flows **via Keeper** (`AugurReply.inline_data`). On Soul, the external token/credential **does not apply**.
+- Border [ADR-012(d)](../adr/0012-keeper-soul-grpc.md) **not touched**: external access remains with Keeper, as for normal rendering. Only the **moment** changes (live, at Soul's request), not the **side**.
+- AppRole for MVP-1 **not needed** - Keeper uses existing access to Vault.
 
-### 2.2 MVP-2 — делегация (`delegate=true`)
+### 2.2 MVP-2 - delegation (`delegate=true`)
 
-Keeper выдаёт Soul-у узкий короткоживущий credential, и Soul ходит во внешнюю систему **напрямую**. Модель заимствована из salt-vault.
+Keeper issues Soul a narrow, short-lived credential, and Soul goes to the external system **directly**. The model is borrowed from salt-vault.
 
-- **Vault.** Keeper **минтит** scoped / short-TTL / limited-use Vault-токен (`auth/token/create` под master-AppRole Keeper-а) с политиками/TTL/числом использований из Rite, и отдаёт его Soul-у (`AugurReply.scoped_vault_token`). Soul читает Vault напрямую этим эфемерным токеном. Требует: AppRole + право `auth/token/create` в `keeper/internal/vault` (server-side).
-- **Prometheus / ELK.** Vault-style минтинга нет. Делегация = выдача scoped **статического** pre-scoped read-key (`AugurReply.scoped_static_cred`), который оператор заранее положил в Vault и сослался на него в `omens.auth_ref` отдельной [записью](#62-prometheus--elk-delegate-через-pre-scoped-read-key) — это **не** master-cred системы. Soul делает прямой read-only-запрос этим ключом.
+- **Vault.** Keeper **mints** scoped / short-TTL / limited-use Vault token (`auth/token/create` under master-AppRole Keeper) with policies/TTL/number of uses from Rite, and gives it to Soul (`AugurReply.scoped_vault_token`). Soul reads Vault directly with this ephemeral token. Requires: AppRole + `auth/token/create` right in `keeper/internal/vault` (server-side).
+- **Prometheus / ELK.** There is no Vault-style minting. Delegation = issuing a scoped **static** pre-scoped read-key (`AugurReply.scoped_static_cred`), which the operator previously put in Vault and referenced in `omens.auth_ref` as a separate record - this is **not** a master-cred system. Soul makes a direct read-only request with this key.
 
-## 3. Поток запроса end-to-end
+## 3. End-to-end request flow
 
 ```
-Soul                         Keeper (Augur)                       Внешняя система
+Soul Keeper (Augur) External system
  │                                │                                       │
  │── AugurRequest ───────────────▶│                                       │
  │   {request_id, apply_id,       │ 1. resolve omen by name               │
@@ -60,193 +60,193 @@ Soul                         Keeper (Augur)                       Внешняя
  │── (direct read with ephemeral cred) ──────────────────────────────────▶│
 ```
 
-SID в запросе **не передаётся** как identity-claim — авторитет идентичности Soul-а это `Subject Alternative Name` mTLS peer cert ([ADR-012(i)](../adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add)). `apply_id` в запросе служит корреляцией с прогоном (см. [§8 Audit](#8-audit)).
+The SID in the request is **not transmitted** as identity-claim - identity authority Soul - and this is `Subject Alternative Name` mTLS peer cert ([ADR-012(i)](../adr/0012-keeper-soul-grpc.md)). `apply_id` in the query serves as a correlation with the run (see [§8 Audit](#8-audit)).
 
-## 4. Модель данных (Postgres)
+## 4. Data model (Postgres)
 
-Реестр Augur живёт в Postgres, управляется через OpenAPI / MCP — по образцу [Provider / Profile](cloud.md) ([architecture.md → Артефакты](../architecture.md#артефакты-soul-stack-что-в-git-что-в-бд): runtime-state → Postgres, не git). Две таблицы.
+The Augur registry lives in Postgres, managed via OpenAPI / MCP - similar to [Provider / Profile](cloud.md) ([architecture.md → Artifacts](../architecture.md): runtime-state → Postgres, not git). Two tables.
 
-### 4.1 Таблица `omens` — реестр внешних систем
+### 4.1 Table `omens` - registry of external systems
 
-**Omen** — внешняя система, к которой Augur посредничает доступ (один Vault-mount, один Prometheus, один ELK-кластер). Аналог [Provider](cloud.md) для облаков.
+**Omen** is an external system to which Augur mediates access (one Vault-mount, one Prometheus, one ELK cluster). Analogous to [Provider](cloud.md) for clouds.
 
-| Колонка | Тип | Смысл |
+| Column | Type | Meaning |
 |---|---|---|
-| `name` | `TEXT PRIMARY KEY` | Имя Omen-а, kebab-case (`vault-prod` / `prom-main` / `elk-logs`). |
-| `source_type` | `TEXT` (enum) | Тип внешней системы: `vault` / `prometheus` / `elk`. Descriptive-enum (см. [§7](#7-source_type-enum)). |
-| `endpoint` | `TEXT` | URL внешней системы (`https://vault.internal:8200`). |
-| `auth_ref` | `TEXT` (vault-ref) | **Всегда** `vault:<mount>/<path>`-ссылка на master-credential Keeper-а (Vault AppRole-secret / pre-scoped read-key). **Master-credential в БД не хранится** — только vault-ref на него. Формат vault-ref — [config.md](config.md) (диагностика `vault_ref_invalid_format`). |
+| `name` | `TEXT PRIMARY KEY` | Omen's name, kebab-case (`vault-prod` / `prom-main` / `elk-logs`). |
+| `source_type` | `TEXT` (enum) | External system type: `vault` / `prometheus` / `elk`. Descriptive-enum (see [§7](#7-source_type-enum)). |
+| `endpoint` | `TEXT` | External system URL (`https://vault.internal:8200`). |
+| `auth_ref` | `TEXT` (vault-ref) | **Always** `vault:<mount>/<path>`-link to the master-credential Keeper (Vault AppRole-secret / pre-scoped read-key). **Master-credential is not stored in the database** - only a vault-ref for it. The vault-ref format is [config.md](config.md) (diagnostics `vault_ref_invalid_format`). |
 
-**Инвариант:** `auth_ref` всегда vault-ref. Plaintext-credential в `omens` запрещён — симметрично `metrics.auth.basic.password_ref` ([config.md → metrics](config.md#metrics)) и `provider.credentials_ref` ([cloud.md](cloud.md)).
+**Invariant:** `auth_ref` is always vault-ref. Plaintext-credential in `omens` is prohibited - symmetrically `metrics.auth.basic.password_ref` ([config.md → metrics](config.md#metrics)) and `provider.credentials_ref` ([cloud.md](cloud.md)).
 
-### 4.2 Таблица `rites` — grant / policy-mapping
+### 4.2 Table `rites` - grant / policy-mapping
 
-**Rite** — grant: разрешение «такой-то субъект может через Augur получить из такого-то Omen-а такие-то значения, в таком-то режиме». Связывает субъект (Coven или конкретный SID) с Omen-ом, allow-list-ом и режимом доставки.
+**Rite** - grant: permission "such and such an entity can, through Augur, obtain such and such values from such and such Omen, in such and such mode." Associates a subject (Coven or specific SID) with an Omen, an allow-list, and a delivery mode.
 
-| Колонка | Тип | Смысл |
+| Column | Type | Meaning |
 |---|---|---|
-| `id` | `BIGINT` / `UUID` PK | Суррогатный ключ Rite-а. |
-| `omen` | `TEXT REFERENCES omens(name) ON DELETE CASCADE` | Omen, к которому относится grant. **CASCADE**: удаление Omen-а удаляет все его Rite-ы (см. [§9 форк](#9-принятые-дизайн-форки)). |
-| `coven` | `TEXT NULL` | Субъект-grant по Coven-метке. **XOR** с `sid`. |
-| `sid` | `TEXT NULL` | Субъект-grant по конкретному SID. **XOR** с `coven`. |
-| `allow` | `JSONB` | Allow-list разрешённых значений. Форма зависит от `source_type` Omen-а (см. ниже). |
-| `delegate` | `BOOLEAN NOT NULL DEFAULT false` | `false` — брокер (MVP-1); `true` — делегация (MVP-2). |
-| `token_ttl` | `interval` / `TEXT` (duration) `NULL` | **Только для `vault`-Omen с `delegate=true`**: TTL минтуемого scoped-токена. `NULL` для prom / elk. |
-| `token_num_uses` | `INT NULL` | **Только для `vault`-Omen с `delegate=true`**: лимит использований минтуемого токена. `NULL` для prom / elk. |
+| `id` | `BIGINT` / `UUID` PK | Rite's surrogate key. |
+| `omen` | `TEXT REFERENCES omens(name) ON DELETE CASCADE` | Omen, which grant refers to. **CASCADE**: deleting an Omen removes all of its Rites (see §9 fork). |
+| `coven` | `TEXT NULL` | Subject-grant by Coven-label. **XOR** with `sid`. |
+| `sid` | `TEXT NULL` | Subject-grant for a specific SID. **XOR** with `coven`. |
+| `allow` | `JSONB` | Allow-list of allowed values. The form depends on `source_type` Omen (see below). |
+| `delegate` | `BOOLEAN NOT NULL DEFAULT false` | `false` - broker (MVP-1); `true` - delegation (MVP-2). |
+| `token_ttl` | `interval` / `TEXT` (duration) `NULL` | **Only for `vault`-Omen with `delegate=true`**: TTL of the mined scoped token. `NULL` for prom/elk. |
+| `token_num_uses` | `INT NULL` | **Only for `vault`-Omen with `delegate=true`**: minable token usage limit. `NULL` for prom/elk. |
 
-**Субъект — строго XOR.** Ровно одно из `coven` / `sid` непусто (CHECK-constraint). `coven`-Rite применяется ко всем Soul-ам с этой меткой; `sid`-Rite — к одному хосту.
+**Subject is strictly XOR.** Exactly one of `coven` / `sid` is non-empty (CHECK-constraint). `coven`-Rite applies to all Souls with this tag; `sid`-Rite - to one host.
 
-**`allow` по `source_type`:**
+**`allow` to `source_type`:**
 
-| `source_type` | Содержимое `allow` |
+| `source_type` | Contents `allow` |
 |---|---|
-| `vault` | `paths` (KV-пути, доступные для чтения) и/или `policies` (Vault-политики, навешиваемые на минтуемый scoped-токен при `delegate=true`). |
-| `prometheus` | `queries` (разрешённые запросы / шаблоны запросов). |
-| `elk` | `indices` (разрешённые индексы). |
+| `vault` | `paths` (KV paths available for reading) and/or `policies` (Vault policies attached to the minable scoped token at `delegate=true`). |
+| `prometheus` | `queries` (allowed requests/request patterns). |
+| `elk` | `indices` (indexes allowed). |
 
-**`token_ttl` / `token_num_uses` — только vault-delegate.** Для prom / elk-делегации Vault-style минтинга нет (выдаётся статический pre-scoped read-key), поэтому оба поля `NULL`. Для `delegate=false` оба поля игнорируются (брокер не минтит токен).
+**`token_ttl` / `token_num_uses` - only vault-delegate.** For prom / elk-delegation Vault-style there is no minting (a static pre-scoped read-key is issued), so both fields are `NULL`. For `delegate=false` both fields are ignored (the broker does not mint the token).
 
-## 5. Транспорт
+## 5. Transport
 
-Augur **не вводит новый RPC**. Он добавляет **два only-add сообщения** в `oneof payload` существующего `EventStream` ([ADR-012(c)](../adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add) forward-compat only-add; [ADR-002](../adr/0002-transport-grpc-ha.md#adr-002-транспорт-keeper--souls--grpc-bidirectional-stream-поверх-mtls-ha-кластер-keeper) «один долгоживущий стрим» — соблюдён). Сообщения живут в новом файле `proto/keeper/v1/augur.proto` (тематическая раскладка [ADR-012(b)](../adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add): один файл = одна семантическая ось).
+Augur **does not introduce new RPC**. It adds **two only-add messages** to `oneof payload` of the existing `EventStream` ([ADR-012(c)](../adr/0012-keeper-soul-grpc.md) forward-compat only-add; [ADR-002](../adr/0002-transport-grpc-ha.md#adr-002-transport-keeper--souls--grpc-bidirectional-stream-over-mtls-ha-keeper-cluster) "one long-lived stream" - complied with). Messages live in a new file `proto/keeper/v1/augur.proto` (thematic layout [ADR-012(b)](../adr/0012-keeper-soul-grpc.md): one file = one semantic axis).
 
 ### 5.1 `AugurRequest` (Soul → Keeper)
 
-| Поле | Тип | Смысл |
+| Field | Type | Meaning |
 |---|---|---|
-| `request_id` | string | ID запроса, для корреляции `AugurRequest` ↔ `AugurReply` внутри стрима. **Генерируется Soul-ом** (ULID / UUID), **уникален per-stream**. |
-| `apply_id` | string | Прогон, в рамках которого Soul делает запрос (correlation для аудита). |
-| `omen_name` | string | Имя Omen-а (`omens.name`). |
-| `query` | string | Запрос к Omen-у: KV-путь (vault), promQL (prometheus), index-query (elk). Проверяется против `Rite.allow`. |
+| `request_id` | string | Request ID for correlation `AugurRequest` ↔ `AugurReply` within the stream. **Generated by Soul** (ULID / UUID), **unique per-stream**. |
+| `apply_id` | string | The run in which Soul makes a request (audit correlation). |
+| `omen_name` | string | Omen's name (`omens.name`). |
+| `query` | string | Query to Omen: KV-path (vault), promQL (prometheus), index-query (elk). Tested against `Rite.allow`. |
 
-**`request_id` — генерация и уникальность.** ID запроса генерирует **Soul** (ULID / UUID); он обязан быть **уникален в пределах одного `EventStream`-а**. Назначение — корреляция параллельных Augur-запросов одного apply: в рамках прогона Soul может держать несколько Augur-запросов in-flight одновременно (разные шаги / Omen-ы), и Keeper эхо-возвращает `request_id` в `AugurReply`, чтобы Soul сопоставил ответ с ожиданием. Keeper `request_id` не интерпретирует как identity / авторизацию — только как непрозрачный correlation-ключ.
+**`request_id` - generation and uniqueness.** Request ID generates **Soul** (ULID / UUID); it must be **unique within one `EventStream`-a**. The purpose is to correlate parallel Augur requests of one apply: within a run, Soul can hold several Augur requests in-flight simultaneously (different steps/Omens), and Keeper echoes `request_id` to `AugurReply` so that Soul matches the response with the expectation. Keeper does not interpret `request_id` as identity / authorization - only as an opaque correlation key.
 
-SID в payload **отсутствует** — берётся из mTLS peer cert ([ADR-012(i)](../adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add)).
+SID in payload **missing** - taken from mTLS peer cert ([ADR-012(i)](../adr/0012-keeper-soul-grpc.md)).
 
 ### 5.2 `AugurReply` (Keeper → Soul)
 
-| Поле | Тип | Смысл |
+| Field | Type | Meaning |
 |---|---|---|
 | `request_id` | string | Echo `AugurRequest.request_id`. |
 | `status` | enum | `ok` / `denied` / `error`. |
-| `result` | `oneof` | При `status=ok` — одно из трёх (см. ниже). |
-| `error` | string | При `status=error` / `denied` — диагностика. |
+| `result` | `oneof` | With `status=ok` - one of three (see below). |
+| `error` | string | For `status=error` / `denied` - diagnostics. |
 
 `result` (`oneof`):
 
-| Вариант | Когда | Смысл |
+| Option | When | Meaning |
 |---|---|---|
-| `inline_data` | `delegate=false` (MVP-1, любой `source_type`) | Значение, прочитанное Keeper-ом и переданное Soul-у через Keeper. |
-| `scoped_vault_token` | `delegate=true` + `source_type=vault` (MVP-2) | Эфемерный scoped Vault-токен (TTL / num_uses / policies из Rite), которым Soul читает Vault напрямую. |
-| `scoped_static_cred` | `delegate=true` + `source_type ∈ {prometheus, elk}` (MVP-2) | Scoped read-only static cred (pre-scoped read-key), которым Soul делает прямой read-only-запрос. |
+| `inline_data` | `delegate=false` (MVP-1, any `source_type`) | The value read by the Keeper and transmitted to the Soul via the Keeper. |
+| `scoped_vault_token` | `delegate=true` + `source_type=vault` (MVP-2) | An ephemeral scoped Vault token (TTL/num_uses/policies from Rite) with which Soul reads the Vault directly. |
+| `scoped_static_cred` | `delegate=true` + `source_type ∈ {prometheus, elk}` (MVP-2) | Scoped read-only static cred (pre-scoped read-key), with which Soul makes a direct read-only request. |
 
-Forward-compat: новые `result`-варианты добавляются only-add, без reuse field-номеров ([ADR-012(c)](../adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add)).
+Forward-compat: new `result` options are added only-add, without reuse field numbers ([ADR-012(c)](../adr/0012-keeper-soul-grpc.md)).
 
-### 5.3 Форма `inline_data` (shape convention)
+### 5.3 Shape `inline_data` (shape convention)
 
-`inline_data` — `google.protobuf.Struct` (всегда объект на уровне proto). Содержимое нормируется convention-ом по форме исходного результата:
+`inline_data` - `google.protobuf.Struct` (always a proto-level object). The content is normalized by the convention according to the form of the original result:
 
-- **Скаляр** (например vault-KV `#field` — одно значение из секрета) — объект `{ "value": <scalar> }`. Скаляр заворачивается в единственный ключ `value`, потому что `Struct` не несёт голый скаляр на верхнем уровне.
-- **Map** (vault KV целиком / Prometheus-результат / ELK-ответ) — **натуральный объект** «как есть» (ключи исходной map-ы становятся ключами `Struct`).
+- **Scalar** (for example vault-KV `#field` - one value from the secret) - object `{ "value": <scalar> }`. The scalar is wrapped in a single key `value` because `Struct` does not carry a bare scalar at the top level.
+- **Map** (entire vault KV / Prometheus-result / ELK-response) - **natural object** "as is" (the keys of the original map become the keys of `Struct`).
 
-**Проекцию `#field` делает Keeper при чтении Omen-а**, не Soul. То есть: если запрос адресует конкретное поле секрета (`#field`-нотация), Keeper читает KV, выбирает нужное поле и возвращает уже спроецированный скаляр в форме `{ "value": <scalar> }`. Soul получает готовое значение и не парсит секрет целиком — это держит инвариант «Soul не видит лишнего» (минимизация секретного материала на Soul-е, [§безопасности](#требование-безопасности-нормативный-инвариант)).
+**The `#field` projection is made by Keeper when reading Omen**, not Soul. That is: if the request addresses a specific secret field (`#field` notation), Keeper reads the KV, selects the desired field and returns an already projected scalar in the form `{ "value": <scalar> }`. Soul receives a ready-made value and does not parse the entire secret - this maintains the invariant "Soul does not see unnecessary things" (minimization of secret material on Soul, §security).
 
-## 6. Авторизация (Keeper-side)
+## 6. Authorization (Keeper-side)
 
-Решение об удовлетворении `AugurRequest` принимает Keeper. Алгоритм:
+The decision to satisfy `AugurRequest` is made by Keeper. Algorithm:
 
-1. **Omen существует.** `omens` содержит запись с `name == omen_name`. Иначе → `denied`.
-2. **SID → covens.** SID берётся из mTLS peer cert; covens резолвятся из registry (`souls.coven[]`, [storage.md](storage.md)).
-3. **Rite найден.** Существует Rite с `omen == omen_name` и субъектом, матчащим запрос: либо `rites.sid == SID`, либо `rites.coven ∈ covens(SID)`. Иначе → `denied`.
-4. **Query в allow-list.** `query` ∈ `Rite.allow` (по форме `source_type`: путь в `paths`, query в `queries`, index в `indices`). Иначе → `denied`.
-5. **Ветвление.** По `Rite.delegate` и `Omen.source_type`:
+1. **Omen exists.** `omens` contains an entry with `name == omen_name`. Otherwise → `denied`.
+2. **SID → covens.** SID is taken from mTLS peer cert; covens are resolved from registry (`souls.coven[]`, [storage.md](storage.md)).
+3. **Rite found.** There is a Rite with `omen == omen_name` and a subject matching the request: either `rites.sid == SID` or `rites.coven ∈ covens(SID)`. Otherwise → `denied`.
+4. **Query in allow-list.** `query` ∈ `Rite.allow` (in the form `source_type`: path in `paths`, query in `queries`, index in `indices`). Otherwise → `denied`.
+5. **Branching.** From `Rite.delegate` and `Omen.source_type`:
 
-   | `delegate` | `source_type` | Действие Keeper-а | `AugurReply.result` |
+| `delegate` | `source_type` | Keeper action | `AugurReply.result` |
    |---|---|---|---|
-   | `false` | любой | прочитать значение сам (vault `ReadKV` / prom-query / elk-query под master-cred) | `inline_data` |
-   | `true` | `vault` | заминтить scoped-токен (`auth/token/create`, TTL/num_uses/policies из Rite) | `scoped_vault_token` |
-   | `true` | `prometheus` / `elk` | вернуть pre-scoped read-key из `auth_ref` | `scoped_static_cred` |
+| `false` | any | read value itself (vault `ReadKV`/prom-query/elk-query under master-cred) | `inline_data` |
+| `true` | `vault` | mint scoped token (`auth/token/create`, TTL/num_uses/policies from Rite) | `scoped_vault_token` |
+| `true` | `prometheus` / `elk` | return pre-scoped read-key from `auth_ref` | `scoped_static_cred` |
 
-Любая неуспешная проверка → `AugurReply{status: denied}` + audit-event `augur.access_denied` (см. [§8](#8-audit)).
+Any failed audit → `AugurReply{status: denied}` + audit-event `augur.access_denied` (see [§8](#8-audit)).
 
-### 6.1 Vault-delegate — orphan-токен
+### 6.1 Vault-delegate - orphan token
 
-Минтуемый scoped Vault-токен создаётся как **orphan** (`no_parent=true`): он не привязан к токену Keeper-инстанса и переживает Keeper-restart / failover. Иначе при ротации/рестарте инстанса Keeper-а токены, выданные Soul-ам, отозвались бы вместе с родителем — это сломало бы in-flight-прогоны на хостах. Trade-off и обоснование — [§9](#9-принятые-дизайн-форки).
+The minable scoped Vault token is created as **orphan** (`no_parent=true`): it is not tied to the Keeper instance token and survives Keeper-restart / failover. Otherwise, when rotating/restarting the Keeper instance, the tokens issued to the Souls would be recalled along with the parent - this would break in-flight runs on the hosts. Trade-off and rationale - §9.
 
-### 6.2 Prometheus / ELK delegate через pre-scoped read-key
+### 6.2 Prometheus / ELK delegate via pre-scoped read-key
 
-Для prom / elk-делегации в `omens.auth_ref` оператор кладёт vault-ref на **отдельный pre-scoped read-only read-key** (созданный заранее в самой внешней системе и положенный в Vault), а **не** master-credential. Keeper при `delegate=true` отдаёт Soul-у именно этот ключ как `scoped_static_cred`. Master-credential Keeper-а к Soul-у при этом не попадает — инвариант [§безопасности](#требование-безопасности-нормативный-инвариант) соблюдён.
+For prom / elk delegation in `omens.auth_ref`, the operator puts the vault-ref on a **separate pre-scoped read-only read-key** (created in advance in the external system itself and placed in Vault), and **not** the master-credential. Keeper at `delegate=true` gives Soul exactly this key as `scoped_static_cred`. In this case, the Master-credential Keeper does not get to the Soul - the §security invariant is respected.
 
-## Требование безопасности (нормативный инвариант)
+## Safety requirement (normative invariant)
 
-> **Soul НИКОГДА не получает master-credential внешней системы.** Soul получает только эфемерный scoped-токен (Vault, `delegate=true`) либо scoped read-only static cred (prom / elk, `delegate=true`), либо вообще не получает credential (`delegate=false` — данные приходят inline через Keeper).
+> **Soul NEVER receives the master-credential of the external system.** Soul receives only an ephemeral scoped token (Vault, `delegate=true`) or a scoped read-only static cred (prom / elk, `delegate=true`), or does not receive a credential at all (`delegate=false` - data comes inline through Keeper).
 
-Это нормативный инвариант Augur, не рекомендация. Следствия:
+This is a normative Augur invariant, not a recommendation. Consequences:
 
-- **MVP-1 (`delegate=false`) границу [ADR-012(d)](../adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add) НЕ трогает.** Внешний доступ остаётся за Keeper-ом — ровно как для обычного рендера. На Soul нет ни Vault-токена, ни Vault-клиента.
-- **MVP-2 (`delegate=true`) — узкое осознанное исключение из [ADR-012(d)](../adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add).** На Soul появляется **минимальный fetch-клиент** (читает Vault эфемерным токеном / делает read-only-запрос в prom-elk pre-scoped-ключом). Но и тогда: master-credential, `cel-go`, sprig-render-контекст и Vault-токены Keeper-а по-прежнему **не** на Soul. Исключение касается ровно одного: узкого live-fetch с эфемерным scoped credential, никогда — master-доступа.
+- **MVP-1 (`delegate=false`) does NOT touch the [ADR-012(d)](../adr/0012-keeper-soul-grpc.md) border.** External access remains with Keeper - exactly like for a regular render. There is no Vault token or Vault client on Soul.
+- **MVP-2 (`delegate=true`) is a narrow deliberate exception to [ADR-012(d)](../adr/0012-keeper-soul-grpc.md).** A **minimal fetch client** appears on Soul (reads Vault with an ephemeral token / makes a read-only request in prom-elk with a pre-scoped key). But even then: master-credential, `cel-go`, sprig-render-context and Keeper Vault tokens are still **not** on Soul. The exception concerns exactly one thing: narrow live-fetch with an ephemeral scoped credential, never master access.
 
-«Безопасность на первом месте» ([requirements.md](../requirements.md)): дефолт `Rite.delegate = false`; делегация — явный осознанный opt-in оператора на конкретный Rite.
+"Safety First" ([requirements.md](../requirements.md)): default `Rite.delegate = false`; delegation is an explicit conscious opt-in of the operator for a specific Rite.
 
 ## 7. `source_type` enum
 
-Descriptive closed enum в `omens.source_type`:
+Descriptive closed enum in `omens.source_type`:
 
-| Значение | Внешняя система |
+| Meaning | External system |
 |---|---|
-| `vault` | HashiCorp Vault (KV; делегация = минтуемый scoped-токен). |
-| `prometheus` | Prometheus (live-query; делегация = pre-scoped read-key). |
-| `elk` | Elasticsearch / ELK-стек (index-read; делегация = pre-scoped read-key). |
+| `vault` | HashiCorp Vault (KV; delegation = minable scoped token). |
+| `prometheus` | Prometheus (live-query; delegation = pre-scoped read-key). |
+| `elk` | Elasticsearch / ELK stack (index-read; delegation = pre-scoped read-key). |
 
-Расширение enum-а — propose-and-wait + PR в этот файл и [naming-rules.md](../naming-rules.md). Augur **не добавляет** нового значения в audit-`source` enum ([§8](#8-audit)) — live-fetch от Soul попадает в существующую категорию `soul_grpc`.
+The enum extension is propose-and-wait + PR to this file and [naming-rules.md](../naming-rules.md). Augur **doesn't add** a new value to audit-`source` enum ([§8](#8-audit)) - Soul's live-fetch falls into the existing `soul_grpc` category.
 
 ## 8. Audit
 
-Augur-события пишутся в общий audit-pipeline ([ADR-022](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention), [storage.md → audit_log](storage.md#таблица-audit_log)). Имена — convention `<area>.<action>` ([naming-rules.md → Audit-events](../naming-rules.md#audit-events)).
+Augur events are written to the general audit-pipeline ([ADR-022](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention), [storage.md → audit_log](storage.md)). Names - convention `<area>.<action>` ([naming-rules.md → Audit-events](../naming-rules.md#audit-events)).
 
-| Событие | Категория `source` | `archon_aid` | `correlation_id` | Когда |
+| Event | Category `source` | `archon_aid` | `correlation_id` | When |
 |---|---|---|---|---|
-| `augur.fetch_brokered` | `soul_grpc` | `NULL` | `apply_id` | MVP-1 брокер прочитал и вернул значение (`delegate=false`). |
-| `augur.token_minted` | `soul_grpc` | `NULL` | `apply_id` | MVP-2 заминтил scoped Vault-токен (`delegate=true`, vault). |
-| `augur.cred_issued` | `soul_grpc` | `NULL` | `apply_id` | MVP-2 выдал scoped static cred (`delegate=true`, prom / elk). |
-| `augur.access_denied` | `soul_grpc` | `NULL` | `apply_id` | Любая проверка [§6](#6-авторизация-keeper-side) провалена. |
-| `omen.created` / `omen.revoked` | `api` / `mcp` | AID из JWT | — | CRUD Omen-а через OpenAPI / MCP. |
-| `rite.created` / `rite.revoked` | `api` / `mcp` | AID из JWT | — | CRUD Rite-а через OpenAPI / MCP. |
+| `augur.fetch_brokered` | `soul_grpc` | `NULL` | `apply_id` | MVP-1 broker read and returned value (`delegate=false`). |
+| `augur.token_minted` | `soul_grpc` | `NULL` | `apply_id` | MVP-2 minted the scoped Vault token (`delegate=true`, vault). |
+| `augur.cred_issued` | `soul_grpc` | `NULL` | `apply_id` | MVP-2 issued scoped static cred (`delegate=true`, prom/elk). |
+| `augur.access_denied` | `soul_grpc` | `NULL` | `apply_id` | Any check §6 fails. |
+| `omen.created` / `omen.revoked` | `api` / `mcp` | AID from JWT | — | CRUD Omen via OpenAPI / MCP. |
+| `rite.created` / `rite.revoked` | `api` / `mcp` | AID from JWT | — | CRUD Rite via OpenAPI / MCP. |
 
-Live-fetch-события (`augur.*`) — категория **`soul_grpc`** ([ADR-022(b)](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)): инициатор — Soul (машинный actor, AID нет → `archon_aid: NULL`), `correlation_id = apply_id`. **Нового значения в `source` enum Augur не вводит.** Секрет-значения в audit-payload не пишутся (secret-masking — [ADR-010](../adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов)): логируется факт + Omen + query, не само значение / токен.
+Live-fetch-events (`augur.*`) - category **`soul_grpc`** ([ADR-022(b)](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)): initiator - Soul (machine actor, no AID → `archon_aid: NULL`), `correlation_id = apply_id`. **Augur does not introduce a new value in `source` enum.** Secret-values ​​are not written in audit-payload (secret-masking - [ADR-010](../adr/0010-templating.md)): the fact + Omen + query is logged, not the value / token itself.
 
-## 9. Принятые дизайн-форки
+## 9. Accepted design forks
 
-Решения, прошедшие через пользователя + architect (зафиксированы как принятые, не open Q):
+Solutions passed through user + architect (logged as accepted, not open Q):
 
-| Форк | Решение | Обоснование |
+| Fork | Solution | Rationale |
 |---|---|---|
-| Rite ↔ Omen lifecycle | `ON DELETE CASCADE` | Rite без Omen-а бессмыслен; удаление Omen-а должно атомарно убрать все grant-ы на него (нет orphan-Rite-ов). |
-| Vault-токен parentage | orphan (`no_parent=true`) | Scoped-токен должен пережить Keeper-restart / failover, иначе in-flight-прогоны на хостах ломаются при ротации инстанса. Цена — токен не отзывается каскадом при revoke родителя; компенсируется коротким TTL / num_uses из Rite. |
-| prom / elk delegate | отдельный pre-scoped read-key в `auth_ref` (не master) | Для prom / elk нет Vault-style минтинга; делегация без раздачи master-cred возможна только через заранее ограниченный read-key. |
-| response-wrapping | post-MVP hardening | Vault response-wrapping минтуемого токена усиливает защиту in-transit, но не блокирует MVP-2; вводится отдельной задачей hardening-а. |
+| Rite ↔ Omen lifecycle | `ON DELETE CASCADE` | Rite without Omen is meaningless; deleting Omen should atomically remove all grants to it (no orphan-Rites). |
+| Vault token parentage | orphan(`no_parent=true`) | The Scoped token must survive Keeper-restart/failover, otherwise in-flight runs on the hosts break when the instance is rotated. Price - the token is not cascaded when the parent is revoke; offset by the short TTL/num_uses from Rite. |
+| prom/elk delegate | separate pre-scoped read-key in `auth_ref` (not master) | There is no Vault-style minting for prom / elk; delegation without distributing master-cred is only possible through a pre-limited read-key. |
+| response-wrapping | post-MVP hardening | Vault response-wrapping of a minted token enhances in-transit protection, but does not block MVP-2; is introduced by a separate hardening task. |
 
-## 10. Реконсиляция с действующими ADR
+## 10. Reconciliation with valid ADRs
 
-| ADR | Отношение к Augur |
+| ADR | Relation to Augur |
 |---|---|
-| [ADR-002](../adr/0002-transport-grpc-ha.md#adr-002-транспорт-keeper--souls--grpc-bidirectional-stream-поверх-mtls-ha-кластер-keeper) (один EventStream) | **Соблюдён** — Augur only-add в существующий `oneof`, нового RPC / стрима нет. |
-| [ADR-012(c)](../adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add) (forward-compat only-add) | `AugurRequest` / `AugurReply` добавляются only-add в `oneof payload`, новый файл `augur.proto`. |
-| [ADR-012(d)](../adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add) (граница рендера / внешнего доступа) | MVP-1 границу **не трогает**; MVP-2 (`delegate=true`) — узкое осознанное исключение (минимальный fetch-клиент на Soul; master-cred / cel-go / sprig-контекст по-прежнему не на Soul). |
-| [ADR-014](../adr/0014-operator-identity.md#adr-014-identity-модель-оператора-archon) (Vault AppRole — post-MVP) | AppRole, ранее post-MVP, становится **зависимостью MVP-2** (минтинг scoped-токена под master-AppRole). |
-| [ADR-017](../adr/0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read) (`core.vault.kv-read`) | **Обобщается Augur-ом.** `core.vault.kv-read` остаётся для render-фазы (pre-resolve, чтение на этапе рендера scenario); Augur — live-доступ при apply. Два разных момента, не дубль. |
+| [ADR-002](../adr/0002-transport-grpc-ha.md#adr-002-transport-keeper--souls--grpc-bidirectional-stream-over-mtls-ha-keeper-cluster) (one EventStream) | **Complied** - Augur only-add to existing `oneof`, no new RPC / stream. |
+| [ADR-012(c)](../adr/0012-keeper-soul-grpc.md) (forward-compat only-add) | `AugurRequest` / `AugurReply` are added only-add to `oneof payload`, new file `augur.proto`. |
+| [ADR-012(d)](../adr/0012-keeper-soul-grpc.md) (render/external access boundary) | MVP-1 **does not touch the border**; MVP-2 (`delegate=true`) is a narrow conscious exception (minimal fetch client on Soul; master-cred/cel-go/sprig-context still not on Soul). |
+| [ADR-014](../adr/0014-operator-identity.md) (Vault AppRole - post-MVP) | AppRole, formerly post-MVP, becomes **dependency of MVP-2** (minting a scoped token under master-AppRole). |
+| [ADR-017](../adr/0017-keeper-side-core.md) (`core.vault.kv-read`) | **Generalized by Augur.** `core.vault.kv-read` remains for the render phase (pre-resolve, read at the scenario render stage); Augur - live access when apply. Two different moments, not a double. |
 
-## См. также
+## See also
 
-- [architecture.md → ADR-025](../adr/0025-augur.md#adr-025-augur--keeper-side-брокер-внешнего-доступа-soul) — фиксация дизайна, 2-фазность, исключение из ADR-012(d).
-- [naming-rules.md → Augur / Omen / Rite](../naming-rules.md#augur-вложенные-proto-типы-и-реестры) — словарь имён, source_type enum, proto-имена, RBAC-perms, audit-events, PG-таблицы.
-- [storage.md](storage.md) — Postgres-реестры Keeper-а (куда лягут `omens` / `rites`).
-- [cloud.md](cloud.md) — образец реестра Provider / Profile в Postgres, managed через API/MCP.
-- [modules.md](modules.md) — `core.vault.kv-read` (render-фаза, обобщается Augur-ом для live-доступа).
+- [architecture.md → ADR-025](../adr/0025-augur.md) - design fixation, 2-phase, exception from ADR-012(d).
+- [naming-rules.md → Augur / Omen / Rite](../naming-rules.md) - name dictionary, source_type enum, proto-names, RBAC-perms, audit-events, PG tables.
+- [storage.md](storage.md) — Keeper Postgres registries (where `omens` / `rites` will go).
+- [cloud.md](cloud.md) - sample Provider / Profile registry in Postgres, managed via API/MCP.
+- [modules.md](modules.md) - `core.vault.kv-read` (render phase, generalized by Augur for live access).
 - [rbac.md](rbac.md) — RBAC-perms (`omen.*` / `rite.*`).
-- [operator-api.md](operator-api.md) — OpenAPI-сторона CRUD Omen / Rite (старт как stub-каталог).
-- [mcp-tools.md](mcp-tools.md) — MCP-tools для Omen / Rite (старт как stub-каталог).
-- [architecture.md → ADR-012](../adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add) — контракт EventStream (only-add, граница рендера).
-- [requirements.md](../requirements.md) — «безопасность на первом месте», интеграция с Vault из коробки.
+- [operator-api.md](operator-api.md) - OpenAPI side of CRUD Omen / Rite (start as stub directory).
+- [mcp-tools.md](mcp-tools.md) - MCP-tools for Omen / Rite (start as stub directory).
+- [architecture.md → ADR-012](../adr/0012-keeper-soul-grpc.md) - EventStream contract (only-add, render border).
+- [requirements.md](../requirements.md) - "security comes first", integration with Vault out of the box.
 </content>
 </invoke>

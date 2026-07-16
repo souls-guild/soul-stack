@@ -1,30 +1,30 @@
-# Keeper-side core-модули
+# Keeper-side core modules
 
-Подавляющее большинство core-модулей — **Soul-side** (исполняются на хосте `soul`-бинарём: `pkg`, `file`, `service`, `user`, `exec`, `cmd`, `cron`, …; см. [architecture.md → «Модель модулей»](../architecture.md#модель-модулей)). Часть core-модулей — **Keeper-side**: оперируют реестрами keeper-а (Postgres `souls`+coven, Redis-кэш, журналы) и исполняются на самом keeper-е. Здесь собрана нормативная спецификация Keeper-side core-модулей.
+The vast majority of core modules are **Soul-side** (executed on the host `soul` binary: `pkg`, `file`, `service`, `user`, `exec`, `cmd`, `cron`, ...; see [architecture.md → "Module model"](../architecture.md)). Some of the core modules are **Keeper-side**: they operate on keeper registries (Postgres `souls`+coven, Redis cache, logs) and are executed on the keeper itself. The regulatory specification of Keeper-side core modules is collected here.
 
-## Диспетчер Soul-side / Keeper-side — `on:`
+## Soul-side / Keeper-side dispatcher - `on:`
 
-Адресация (`<namespace>.<module>.<state>`) и контракт SoulModule для обеих сторон один и тот же. Разница — **где исполняется шаг**; это решает scenario-ключ `on:` ([scenario/orchestration.md §3](../scenario/orchestration.md#3-таргет-шага--on)):
+Addressing (`<namespace>.<module>.<state>`) and SoulModule contract are the same for both sides. The difference is **where the step is performed**; this is solved by the scenario key `on:` ([scenario/orchestration.md §3](../scenario/orchestration.md)):
 
-| `on:` | Где исполняется | Подходит модулям |
+| `on:` | Where is it performed | Suitable for modules |
 |---|---|---|
-| опущен / `[coven, …]` | на хостах incarnation | Soul-side core (`core.pkg.installed`, `core.file.present`, …) |
-| `keeper` | на самом keeper-е | Keeper-side core (`core.soul.registered`, `core.cloud.created` — cloud-create через CloudDriver, `core.bootstrap.delivered` — доставка bootstrap-токена по SSH, …) |
+| omitted / `[coven, …]` | on incarnation hosts | Soul-side core (`core.pkg.installed`, `core.file.present`, ...) |
+| `keeper` | on the keeper itself | Keeper-side core (`core.soul.registered`, `core.cloud.created` - cloud-create via CloudDriver, `core.bootstrap.delivered` - bootstrap token delivery via SSH, ...) |
 
-Запуск Soul-side core-модуля с `on: keeper` — ошибка валидации; и наоборот. Принадлежность модуля стороне декларируется в его манифесте; `soul-lint` сверяет статически.
+Launching Soul-side core module with `on: keeper` - validation error; and vice versa. The ownership of a module by a party is declared in its manifest; `soul-lint` checks statically.
 
-## Регистрация и диспетчеризация по адресу (`base` + `state`)
+## Registration and dispatch at (`base` + `state`)
 
-Keeper-side core-модули регистрируются в keeper-side Registry (`keeper/internal/coremod/registry.go`) по **базовому имени** — `<namespace>.<module>` без state-суффикса: `core.soul`, `core.cloud`, `core.bootstrap`, `core.choir`, `core.vault`. State приходит из последнего сегмента адреса задачи.
+Keeper-side core modules are registered in the keeper-side Registry (`keeper/internal/coremod/registry.go`) by **base name** - `<namespace>.<module>` without state suffix: `core.soul`, `core.cloud`, `core.bootstrap`, `core.choir`, `core.vault`. State comes from the last segment of the task address.
 
-При исполнении keeper-side задачи (`keeper/internal/scenario/keeper_dispatch.go`) адрес `module: <namespace>.<module>.<state>` делится функцией `config.SplitModuleAddr` (единый разборщик для обеих сторон, тот же что у Soul-side runtime) на пару `(base, state)`:
+When executing a keeper-side task (`keeper/internal/scenario/keeper_dispatch.go`), the address `module: <namespace>.<module>.<state>` is divided by the function `config.SplitModuleAddr` (a single parser for both sides, the same as the Soul-side runtime) into a pair `(base, state)`:
 
-- `base` (`core.cloud`) идёт в `Registry.Lookup` — находит реализацию `SoulModule`;
-- `state` (`created`) кладётся в `ApplyRequest.state` и диспетчится **внутри** реализации модуля.
+- `base` (`core.cloud`) goes to `Registry.Lookup` - finds the implementation of `SoulModule`;
+- `state` (`created`) is placed in `ApplyRequest.state` and dispatched **inside** the module implementation.
 
-Примеры author-формы → разбор:
+Author-form examples → parsing:
 
-| Адрес задачи (`module:`) | Registry-ключ (`base`) | `ApplyRequest.state` |
+| Task address (`module:`) | Registry-key (`base`) | `ApplyRequest.state` |
 |---|---|---|
 | `core.soul.registered` | `core.soul` | `registered` |
 | `core.cloud.created` / `core.cloud.destroyed` | `core.cloud` | `created` / `destroyed` |
@@ -32,109 +32,109 @@ Keeper-side core-модули регистрируются в keeper-side Regist
 | `core.choir.present` / `core.choir.absent` | `core.choir` | `present` / `absent` |
 | `core.vault.kv-read` / `core.vault.kv-present` | `core.vault` | `kv-read` / `kv-present` |
 
-Бракованный адрес (`SplitModuleAddr` вернул `ok=false`: пустой, `.state`, `core.`) или `base`, которого нет в Registry, — keeper-задача падает (`failed`-событие «unknown keeper-side module»), как Soul-side на неизвестный модуль. Регистрация модуля в Registry условна по наличию его зависимости в `coremod.Deps`: `core.choir` подключается только при заданном `ChoirStore`, `core.bootstrap` — только при полном наборе SSH-deps (provider-карта + host-CA + dialer), иначе сборка их не несёт, и шаг с этим модулем упадёт «unknown».
+Defective address (`SplitModuleAddr` returned `ok=false`: empty, `.state`, `core.`) or `base`, which is not in the Registry - the keeper-task crashes (`failed`-event "unknown keeper-side module"), like Soul-side on an unknown module. Registration of a module in the Registry is conditional based on the presence of its dependency in `coremod.Deps`: `core.choir` is connected only when `ChoirStore` is specified, `core.bootstrap` - only with a full set of SSH-deps (provider card + host-CA + dialer), otherwise the assembly does not carry them, and the step with this module will fall "unknown".
 
-### Audit-след и per-task алертинг
+### Audit-trace and per-task alerting
 
-Каждая keeper-side задача пишет audit-event `task.executed` (симметрично Soul-side handler-у `TaskEvent`): `sid = keeper` (адрес keeper-target-а прогона), `correlation_id = apply_id`, `source: keeper_internal`, `payload.status` — имя `keeperv1.TaskStatus` (`changed → TASK_STATUS_CHANGED` / `failed → TASK_STATUS_FAILED` / иначе `TASK_STATUS_OK`). Благодаря этому **task:-подписка Tiding работает и на keeper-side адреса** (`on: keeper`): keeper-задача с адресом `register ∪ id` (включая `provision_vm` с `id:` без `register:`) попадает в `changed_tasks` терминального события `incarnation.run_completed` и матчится task-селектором ([ADR-052 amend §k/§l](../adr/0052-herald-notifications.md#amend-kl-t4-fix-2026-06-12-changed_tasks-и-task-подписка-покрывают-keeper-side-задачи)). Секрет-гигиена: keeper-side `task.executed` несёт только адрес + status (без `register_data`/output); `error.message` — лишь на провале и только для не-`no_log` задач. Operator-SSE keeper-side прогресс не транслирует.
+Each keeper-side task writes audit-event `task.executed` (symmetrically to Soul-side handler `TaskEvent`): `sid = keeper` (address of the keeper-target of the run), `correlation_id = apply_id`, `source: keeper_internal`, `payload.status` - name `keeperv1.TaskStatus` (`changed → TASK_STATUS_CHANGED` / `failed → TASK_STATUS_FAILED` / otherwise `TASK_STATUS_OK`). Thanks to this, **task:-Tiding subscription also works for keeper-side addresses** (`on: keeper`): a keeper task with the address `register ∪ id` (including `provision_vm` with `id:` without `register:`) ends up in `changed_tasks` of the terminal event `incarnation.run_completed` and is matched by the task selector ([ADR-052 amend §k/§l](../adr/0052-herald-notifications.md)). Secret hygiene: keeper-side `task.executed` carries only address + status (without `register_data`/output); `error.message` - only on failure and only for non-`no_log` tasks. Operator-SSE keeper-side does not broadcast progress.
 
-### Контекст `params:` — `incarnation.state`, но не `soulprint`
+### The context of `params:` is `incarnation.state`, but not `soulprint`
 
-Keeper-side задача исполняется на самом keeper-е — хостов у неё нет. Поэтому `params:` рендерятся в **рун-уровневом** контексте (один раз на прогон, не per-host): доступны `input.*` / `essence.*` / `incarnation.*` / `register.*` (от предыдущих keeper-задач), но **не** `soulprint.self` / `soulprint.hosts` — обращение к ним в `params` keeper-задачи даёт штатную CEL-ошибку `no such key` (фактов хоста нет, и это правильно: keeper-шаг оперирует реестрами, а не фактами конкретной VM).
+Keeper-side task is executed on the keeper itself - it has no hosts. Therefore, `params:` are rendered in a **run-level** context (once per run, not per-host): `input.*` / `essence.*` / `incarnation.*` / `register.*` are available (from previous keeper tasks), but **not** `soulprint.self` / `soulprint.hosts` - access to them in `params` keeper task gives the standard CEL error `no such key` (there are no host facts, and this is correct: the keeper step operates with registries, not facts of a specific VM).
 
-В `incarnation.*` доступен ключ **`incarnation.state.<path>`** — read-only **pre-run снимок** `incarnation.state` (тот же `stateBefore` под row-lock прогона, симметрично Soul-side задачам). Снимок инвариантен в пределах прогона (фиксируется один раз, не накапливается между passages). Это позволяет keeper-side задаче читать факты, записанные предыдущим прогоном: например, `core.cloud.destroyed` в teardown-сценарии `destroy` берёт `provider`/`vm_ids`/`sids` из `incarnation.state.provisioned_*`, записанных create-прогоном через `core.cloud.created` ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)). Если у инкарнации ещё нет state (push/trial без него) — `incarnation.state.<x>` даёт `no such key`; защищай чтение `default(incarnation.state.<path>, …)` там, где факт может отсутствовать.
+In `incarnation.*` the key **`incarnation.state.<path>`** is available - read-only **pre-run snapshot** `incarnation.state` (the same `stateBefore` for row-lock runs, symmetrically for Soul-side tasks). The snapshot is invariant within the run (fixed once, does not accumulate between passages). This allows the keeper-side task to read facts written by the previous run: for example, `core.cloud.destroyed` in the teardown script `destroy` takes `provider`/`vm_ids`/`sids` from `incarnation.state.provisioned_*` written by the create run through `core.cloud.created` ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)). If the incarnation does not yet have a state (push/trial without it) - `incarnation.state.<x>` gives `no such key`; defend reading `default(incarnation.state.<path>, …)` where fact may be missing.
 
 ## `core.soul.registered`
 
-**Первый Keeper-side core-модуль.** Управляет привязкой Soul-а (по `SID`) к набору стабильных Coven-меток в реестре keeper-а (таблицы `souls` + coven, [storage.md](storage.md)). Принимает **строку ИЛИ список SID** (регистрация N созданных хостов одним шагом) и опционально несёт **барьер онбординга** `await_online` (блокирующе ждёт, пока зарегистрированные Souls станут online) — [ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md).
+**The first Keeper-side core module.** Controls Soul's binding (by `SID`) to a set of stable Coven labels in the keeper's registry (tables `souls` + coven, [storage.md](storage.md)). Accepts a **string OR list of SIDs** (registering N created hosts in one step) and optionally carries an **onboarding barrier** `await_online` (blockingly waits for registered Souls to become online) - [ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md).
 
-### Адресация и сторона
+### Addressing and side
 
 - Namespace: `core`. Module: `soul`. State: `registered`.
-- Полное имя задачи: `module: core.soul.registered`.
-- Сторона: **Keeper-side**. Шаг **обязан** нести `on: keeper`.
+- Full task name: `module: core.soul.registered`.
+- Side: **Keeper-side**. The step **must** carry `on: keeper`.
 
-### Состояние (state-форма)
+### State (state form)
 
-`registered` — декларативная форма: «Soul с указанным `sid` находится в реестре и привязан к указанному набору Coven-меток». Модуль идемпотентен по конструкции (повторный вызов с тем же набором — no-op).
+`registered` - declarative form: "Soul with the specified `sid` is in the registry and is bound to the specified set of Coven tags." The module is idempotent by design (re-calling with the same set is no-op).
 
-Если записи в `souls` для этого `sid` ещё нет — модуль создаёт её под `status: pending` (новый хост, добавленный сценарием — например, host-ветка `add_replica` или после cloud-create через `core.cloud.provisioned`). Создание записи здесь — единственный side-effect помимо обновления coven; модуль не выписывает bootstrap-токены и не запускает CSR-цикл (это компетенция онбординга, [soul/onboarding.md](../soul/onboarding.md)).
+If there is no entry in `souls` for this `sid` yet, the module creates it under `status: pending` (a new host added by the script - for example, host branch `add_replica` or after cloud-create via `core.cloud.provisioned`). Creating an entry here is the only side-effect besides updating the coven; the module does not issue bootstrap tokens and does not launch a CSR cycle (this is the responsibility of onboarding, [soul/onboarding.md](../soul/onboarding.md)).
 
-При списочной форме `sid` (см. [list-SID](#list-sid--регистрацияожидание-n-хостов-одним-шагом)) переданный набор `coven` применяется к **каждому** SID списка; `await_online`-барьер (если задан) агрегирует presence поверх **всего** набора.
+In list form `sid` (see list-SID), the passed set `coven` is applied to **each** list SID; The `await_online` barrier (if specified) aggregates presence over the **entire** set.
 
-### Параметры (`params:`)
+### Parameters (`params:`)
 
-| Параметр | Тип | Обязательность | Default | Описание |
+| Parameter | Type | Obligation | Default | Description |
 |---|---|---|---|---|
-| `sid` | string **или** array of string, `format: fqdn` | required | — | `SID` Soul-а (FQDN), к которому применяется привязка. Принимает **одиночную строку ИЛИ список** ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md), см. [list-SID](#list-sid--регистрацияожидание-n-хостов-одним-шагом)). Список на практике приходит CEL-выражением `${ register.<provision>.hosts }` (SID-список от `core.cloud.provisioned`); литеральный список `sid: [a, b]` статически `soul-lint` **не** проходит (manifest объявляет `sid` как `string`) — это осознанный trade-off, см. [list-SID](#list-sid--регистрацияожидание-n-хостов-одним-шагом). |
-| `coven` | array of string, `pattern: "^[a-z][a-z0-9-]*$"`, `min_items: 1`, `unique: true` | required | — | Набор стабильных Coven-меток. Минимум одна метка. При списочном `sid` применяется к каждому SID. |
-| `mode` | string, `enum: [append, replace, remove]` | optional | `append` | Стратегия применения набора `coven` к существующим меткам (см. ниже). |
-| `refresh_soulprint` | boolean | optional | `false` | **Реализован (S2/S3 [ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)).** `true` — шаг становится passage-определяющей границей (Stratify), после его успеха scenario-runner пере-резолвит roster перед следующим Passage (live-снимок); output `refreshed` эхает значение флага. **Вместе с `await_online: true`** дополнительно ужесточает барьер: SID засчитывается только когда online **и** typed soulprint записан в PG (см. [facts-wait](#барьер-онбординга-await_online), amendment 2026-07-02). |
-| `await_online` | boolean | optional | `false` | **Барьер онбординга** ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)). `true` — после записи `souls`+coven для всех SID шаг **блокирующе** ждёт готовности зарегистрированных Souls. Готовность: online по **Redis SID-lease** (живой EventStream, **не** PG `souls.status`); при `refresh_soulprint: true` — дополнительно записанный первый typed soulprint (`souls.soulprint_facts`). Требует сконфигурированного presence-checker-а на keeper-е: `await_online: true` без него → шаг `failed`. |
-| `await_timeout` | duration | **required при `await_online: true`** | — | Верхняя граница ожидания барьера. **Обязателен** при `await_online: true` — без него валидация падает (барьер не должен висеть вечно). Сверху ограничен `keeper.yml::max_await_timeout` (см. [потолок](#потолок-await_timeout-max_await_timeout)). |
-| `await_min_count` | int | optional | число регистрируемых SID | Минимум online-хостов для успеха барьера. Default — **все** зарегистрированные SID (`len(sids)`). Допустимый диапазон: `0 < await_min_count ≤ len(sids)`. |
-| `await_poll_interval` | duration | optional | `2s` | Период опроса presence (Redis SID-lease) во время барьера. |
+| `sid` | string **or** array of string, `format: fqdn` | required | — | `SID` Soul (FQDN) to which the binding is applied. Accepts **single string OR list** ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md), see list-SID). The list in practice comes with the CEL expression `${ register.<provision>.hosts }` (SID list from `core.cloud.provisioned`); literal list `sid: [a, b]` statically `soul-lint` **doesn't** pass (manifest declares `sid` as `string`) - this is a deliberate trade-off, see list-SID. |
+| `coven` | array of string, `pattern: "^[a-z][a-z0-9-]*$"`, `min_items: 1`, `unique: true` | required | — | A set of stable Coven tags. At least one tag. When listed, `sid` applies to each SID. |
+| `mode` | string, `enum: [append, replace, remove]` | optional | `append` | Strategy for applying the `coven` set to existing labels (see below). |
+| `refresh_soulprint` | boolean | optional | `false` | **Implemented (S2/S3 [ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)).** `true` - the step becomes a passage-defining boundary (Stratify), after its success, the scenario-runner will re-resolve the roster before the next Passage (live snapshot); output `refreshed` echoes the value of the flag. **Together with `await_online: true`** further tightens the barrier: SID is only counted when online **and** typed soulprint is written to PG (see facts-wait, amendment 2026-07-02). |
+| `await_online` | boolean | optional | `false` | **Onboarding Barrier** ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)). `true` - after recording `souls`+coven for all SIDs, the step **blocking** waits for the registered Souls to be ready. Readiness: online by **Redis SID-lease** (live EventStream, **not** PG `souls.status`); with `refresh_soulprint: true` - additionally recorded first typed soulprint (`souls.soulprint_facts`). Requires a configured presence checker on the keeper: `await_online: true` without it → step `failed`. |
+| `await_timeout` | duration | **required at `await_online: true`** | — | The upper limit of the barrier expectation. **Required** for `await_online: true` - without it, validation falls (the barrier should not hang forever). The top is limited by `keeper.yml::max_await_timeout` (see ceiling). |
+| `await_min_count` | int | optional | number of registered SIDs | Minimum online hosts for barrier success. Default - **all** registered SIDs (`len(sids)`). Valid range: `0 < await_min_count ≤ len(sids)`. |
+| `await_poll_interval` | duration | optional | `2s` | Presence (Redis SID-lease) polling period during the barrier. |
 
-### Семантика `mode`
+### Semantics `mode`
 
-| `mode` | Итоговый набор coven у `sid` | Поведение по краям | Идемпотентность |
+| `mode` | The final set of coven at `sid` | Edge behavior | Idempotency |
 |---|---|---|---|
-| `append` (default) | существующие ∪ переданные | пустой пересекающийся набор → no-op | да: повторный вызов с тем же `coven` ничего не меняет |
-| `replace` | переданные (existing, не упомянутые, удаляются) | пустой `coven: []` — **ошибка** (двойная защита от footgun-а «хост без корневого coven incarnation»: схема `params.coven` `min_items: 1` + повтор на уровне семантики `mode`; намеренно — чтобы footgun ловился и при ослаблении схемы / расширении контракта в будущем) | да: повторный вызов с тем же набором — no-op |
-| `remove` | существующие \ переданные | пустой `coven: []` или метки, которых нет на хосте — **no-op** (без ошибки); снимает только реально привязанные метки | да: повторный вызов с тем же набором — no-op |
+| `append` (default) | existing ∪ transferred | empty intersecting set → no-op | yes: calling again with the same `coven` does not change anything |
+| `replace` | transferred (existing, not mentioned, deleted) | empty `coven: []` - **error** (double protection from footgun "host without root coven incarnation": scheme `params.coven` `min_items: 1` + repetition at the semantic level `mode`; intentionally - so that footgun is caught even when the scheme is weakened / the contract is expanded in the future) | yes: call again with the same dialing - no-op |
+| `remove` | existing\transferred | empty `coven: []` or labels that do not exist on the host - **no-op** (no error); removes only actually attached tags | yes: call again with the same dialing - no-op |
 
-`replace` с непустым `coven`, не содержащим корневой `incarnation.name` — модуль **не блокирует** на уровне семантики mode (set операция симметрична), но это пользовательская ошибка-footgun. Гарантия «хост всегда несёт корневой coven incarnation» — invariant на уровне `souls`+coven таблицы / резолвера (см. [storage.md](storage.md), [scenario/orchestration.md §3](../scenario/orchestration.md#3-таргет-шага--on)), не на уровне отдельного вызова модуля.
+`replace` with a non-empty `coven` that does not contain the root `incarnation.name` - the module **does not block** at the mode semantic level (the set operation is symmetrical), but this is a user error - footgun. The "host always carries the root coven incarnation" guarantee is invariant at the `souls`+coven table/resolver level (see [storage.md](storage.md), [scenario/orchestration.md §3](../scenario/orchestration.md)), not at the level of an individual module call.
 
-### list-SID — регистрация+ожидание N хостов одним шагом
+### list-SID — registration+waiting for N hosts in one step
 
-Параметр `sid` принимает **строку ИЛИ список строк** ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)). Целевой сценарий — один create-scenario, который через `core.cloud.provisioned` создаёт N VM (их `sid` приходят списком в `register.<provision>.hosts`), затем одним шагом-барьером `core.soul.registered` регистрирует их и ждёт онбординга. Список естественнее `loop:`: барьер `await_online` агрегирует presence поверх **всего** набора SID (общий `await_min_count`), а не запускает независимые per-iteration барьеры.
+The `sid` parameter accepts a **string OR a list of strings** ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)). The target scenario is one create-scenario, which through `core.cloud.provisioned` creates N VMs (their `sid` come as a list in `register.<provision>.hosts`), then with one barrier step `core.soul.registered` registers them and waits for onboarding. The list is more natural than `loop:`: the `await_online` barrier aggregates presence on top of the **total** set of SIDs (general `await_min_count`), rather than launching independent per-iteration barriers.
 
-- Переданный `coven` применяется ко **всем** SID списка (общий набор Coven-меток шага).
-- Одиночная строка `sid` остаётся валидной (обратная совместимость) — внутренне нормализуется в список из одного элемента.
-- **Форма output по `sid`:** одиночная строка → `register.<name>.sid` строкой (историческая форма); список → массивом. Поля `coven`/`removed` отражают набор первого SID; `created`/`removed`-факт совокупный; `online`/`pending` — списки SID.
+- The `coven` passed applies to **all** list SIDs (the common set of step Coven labels).
+- Single string `sid` remains valid (backwards compatible) - internally normalized to a list of one element.
+- **Output form by `sid`:** single line → `register.<name>.sid` line (historical form); list → array. The `coven`/`removed` fields reflect the set of the first SID; `created`/`removed` - cumulative fact; `online`/`pending` - lists of SIDs.
 
-**Manifest-DSL trade-off.** Урезанный manifest-input DSL ([`shared/coremanifest/soul.yaml`](../../shared/coremanifest/soul.yaml)) не выражает union `string|list`, а смена объявленного типа `sid` на `list` сломала бы одиночно-строковую author-форму. Поэтому `sid` объявлен `type: string`: одиночная литеральная строка проходит `soul-lint` как раньше; **список приходит CEL-выражением** `${ register.<step>.hosts }`, которое `soul-lint` пропускает мимо type-check-а ([ADR-010](../adr/0010-templating.md): `${…}`-значение статически не типизируется). **Литеральный список `sid: [a, b]` статический type-check `soul-lint` не проходит** — приемлемо: на практике SID-список всегда из `register.*` (CEL), а runtime принимает обе формы.
+**Manifest-DSL trade-off.** The stripped-down manifest-input DSL ([`shared/coremanifest/soul.yaml`](../../shared/coremanifest/soul.yaml)) does not express the union `string|list`, and changing the declared type `sid` to `list` would break the single-string author form. Therefore `sid` is declared `type: string`: a single literal string passes `soul-lint` as before; **the list comes with the CEL expression** `${ register.<step>.hosts }`, which `soul-lint` skips the type-check ([ADR-010](../adr/0010-templating.md): `${…}`-value is not statically typed). **Literal list `sid: [a, b]` static type-check `soul-lint` does not pass** - acceptable: in practice, the SID list is always from `register.*` (CEL), and runtime accepts both forms.
 
-### Барьер онбординга (`await_online`)
+### Onboarding barrier (`await_online`)
 
-При `await_online: true` шаг работает в два этапа ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)):
+With `await_online: true` the step works in two stages ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)):
 
-1. Сперва — обычная регистрация (souls+coven, как без барьера) для **всех** SID.
-2. Затем — **блокирующий** опрос готовности с периодом `await_poll_interval` под общим таймаутом `await_timeout`, пока число готовых хостов среди регистрируемых SID не достигнет `await_min_count`.
+1. First, regular registration (souls+coven, as without a barrier) for **all** SIDs.
+2. Then a **blocking** readiness poll with a period of `await_poll_interval` under a general timeout of `await_timeout` until the number of ready hosts among the registered SIDs reaches `await_min_count`.
 
-**Источник истины «online» — Redis SID-lease** (живой EventStream-lease, [ADR-006(a)](../adr/0006-cache-redis.md)), **НЕ** PG `souls.status`. PG-статус — lifecycle-снимок, отстаёт от реального состояния стрима; lease — конструктивно авторитетный признак, что агент на связи (тот же источник, что presence-фильтр таргет-резолвера и lease-aware Reaper). Барьер не считает хост online до фактического стрима.
+**Source of truth "online" - Redis SID-lease** (live EventStream-lease, [ADR-006(a)](../adr/0006-cache-redis.md)), **NOT** PG `souls.status`. PG status - lifecycle snapshot, lags behind the real state of the stream; lease is a constructively authoritative sign that the agent is in touch (the same source as the presence filter of the target resolver and lease-aware Reaper). The barrier does not consider the online host until the actual stream.
 
-**Facts-wait при `refresh_soulprint: true`** ([ADR-061 amendment 2026-07-02](../adr/0061-onboarding-await-and-midrun-reresolve.md)). SID «готов» = **online (lease) И typed soulprint записан в PG** (`souls.soulprint_facts IS NOT NULL`). Одного lease мало: render следующего Passage читает `soulprint.self.*`, а Soul шлёт initial-репорт при connect **best-effort** ([ADR-018](../adr/0018-soulprint-typed.md)) — его запись асинхронна, на provision-from-zero барьер и render укладываются в одну секунду (гонка → `render_failed` «no such key»). На rerun / `create_from_souls` facts давно в PG → барьер проходит на первом же опросе, нулевое ожидание. Без `refresh_soulprint` барьер остаётся presence-only (facts не опрашиваются).
+**Facts-wait at `refresh_soulprint: true`** ([ADR-061 amendment 2026-07-02](../adr/0061-onboarding-await-and-midrun-reresolve.md)). SID "ready" = **online (lease) And the typed soulprint is written to PG** (`souls.soulprint_facts IS NOT NULL`). One lease is not enough: the render of the next Passage reads `soulprint.self.*`, and Soul sends an initial report when connecting **best-effort** ([ADR-018](../adr/0018-soulprint-typed.md)) - its recording is asynchronous, on provision-from-zero the barrier and render are completed in one second (race → `render_failed` "no such key"). On rerun / `create_from_souls` facts for a long time in PG → the barrier passes at the very first survey, zero wait. Without `refresh_soulprint`, the barrier remains presence-only (facts are not polled).
 
-**B1-strict (failure-семантика).** Если к `await_timeout` готовых `< await_min_count` — шаг завершается **`failed`** → fail-stop прогона → `incarnation.state` **не коммитится** → `incarnation.status: error_locked`. Частично-онбордившийся флот не «протекает» в роль-применение: либо набран кворум, либо явный fail с диагностикой (`pending[]` в сообщении и в output; при facts-wait классы недобора разделены — `not online: [sids]` vs `online but factless: [sids]`, чтобы гонка первого репорта была отличима от несостоявшегося онбординга). Персистентная ошибка опроса (Redis presence или PG facts-чек недоступны) — тоже `failed`, не «слепой» успех; отмена прогона (context-cancel) — `failed`.
+**B1-strict (failure-semantics).** If `< await_min_count` is ready for `await_timeout`, the step ends **`failed`** → fail-stop run → `incarnation.state` **does not commit** → `incarnation.status: error_locked`. A partially onboarded fleet does not "leak" into the role-use: either a quorum has been reached, or an explicit fail with diagnostics (`pending[]` in the message and in the output; with facts-wait, the classes of shortage are divided - `not online: [sids]` vs `online but factless: [sids]`, so that the race of the first report is distinguishable from the failed onboarding). Persistent polling error (Redis presence or PG facts check not available) - also `failed`, not a "blind" success; cancel run (context-cancel) - `failed`.
 
-Запрос `await_online: true` без сконфигурированного presence-checker-а на keeper-е завершается `failed` (молчаливый success при отсутствии источника presence недопустим).
+Request `await_online: true` without a configured presence checker on the keeper ends with `failed` (silent success in the absence of a presence source is not allowed).
 
-#### Потолок `await_timeout` (`max_await_timeout`)
+#### Ceiling `await_timeout` (`max_await_timeout`)
 
-DoS-guard, fail-closed. Поле `keeper.yml::max_await_timeout` (duration, default `30m` — [`DefaultMaxAwaitTimeout`](../../shared/config/keeper.go)) ограничивает сверху `await_timeout`. Если шаг задаёт `await_timeout` **больше** потолка — шаг `failed` **до** любого опроса (явная ошибка, а **не** тихое обрезание до потолка: скрытое изменение заявленного поведения отвергнуто). Это защищает кластер от сценария-DoS (зловредный/ошибочный `await_timeout: 100h` держал бы run-goroutine / Acolyte-воркер занятым). Потолок читается hot-reload-aware (из текущего snapshot `keeper.yml` на каждый `Apply`); пустое/невалидное/`≤0` значение конфига → дефолт `30m`.
+DoS-guard, fail-closed. The field `keeper.yml::max_await_timeout` (duration, default `30m` - [`DefaultMaxAwaitTimeout`](../../shared/config/keeper.go)) limits the top to `await_timeout`. If the step specifies `await_timeout` **more** than the ceiling, step `failed` **before** any polling (an obvious error, and **not** a silent cut to the ceiling: the hidden change in the stated behavior is rejected). This protects the cluster from a DoS script (a malicious/buggy `await_timeout: 100h` would keep the run-goroutine/Acolyte-worker busy). The ceiling is read hot-reload-aware (from the current snapshot `keeper.yml` for each `Apply`); empty/invalid/`≤0` config value → default `30m`.
 
-> **HA.** Single-binary провижн-прогон с долгим `await_online`-барьером уязвим к крашу инстанса (блокирующий poll держит run-goroutine). Provision→онбординг→роль сценарии рекомендуется гнать через **Voyage** ([ADR-043](../adr/0043-voyage.md)), где recovery закрыт (осиротевший claim переклеймит другой воркер, [ADR-027(l)](../adr/0027-apply-work-queue.md)). Standalone staged-recovery долгого барьера — открытый риск ([ADR-056 §S4](../adr/0056-staged-render-passage.md)).
+> **HA.** Single-binary provisioning run with a long `await_online` barrier is vulnerable to instance crash (blocking poll holds run-goroutine). Provision→onboarding→role scenarios are recommended to be driven through **Voyage** ([ADR-043](../adr/0043-voyage.md)), where recovery is closed (an orphaned claim will be rebranded by another worker, [ADR-027(l)](../adr/0027-apply-work-queue.md)). Standalone staged-recovery of a long barrier is an open risk ([ADR-056 §S4](../adr/0056-staged-render-passage.md)).
 
-### Выходной контракт (`output:` модуля)
+### Output contract (`output:` module)
 
-Модуль возвращает в `register.<имя>.*` (схема, попадающая в applier-`register:` либо в `register:` обычной module-задачи):
+The module returns in `register.<name>.*` (scheme that falls into applier-`register:` or `register:` of a regular module task):
 
-| Поле | Тип | Описание |
+| Field | Type | Description |
 |---|---|---|
-| `sid` | string **или** array of string | `SID`, к которому применилось действие. **Строка** при одиночном `sid`, **массив** при списочном (форма зеркалит вход, [list-SID](#list-sid--регистрацияожидание-n-хостов-одним-шагом)). |
-| `coven` | array of string | **Итоговый** набор coven-меток на хосте после применения `mode` (а не переданный набор-аргумент). При списочном `sid` — набор первого SID. |
-| `mode` | string | Применённый `mode` (эхо `params.mode`, удобно при шаблонной композиции). |
-| `created` | boolean | `true`, если хотя бы одна запись в `souls` была создана модулем; `false`, если все уже существовали. |
-| `refreshed` | boolean | Эхо значения `refresh_soulprint`: `true` ⇒ scenario-runner гарантированно пере-резолвит roster перед следующим Passage (S3 [ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)). |
-| `removed` | array of string | **Только при `mode: remove`**: метки, которые были фактически сняты. Пустой массив, если no-op (или mode ≠ `remove`). |
-| `online` | array of string | **Только при `await_online: true`**: SID, ставшие online (Redis SID-lease) к моменту успеха/таймаута барьера. |
-| `pending` | array of string | **Только при `await_online: true`**: SID, не успевшие стать online к таймауту (диагностика B1-strict-провала). |
-| `satisfied` | boolean | **Только при `await_online: true`**: достигнут ли `await_min_count` (при `refresh_soulprint: true` — по «готовым»: online **и** soulprint записан). При успехе `true`; при `failed`-провале — `false` (поля `online`/`pending` несут диагностику; факт-классы — в failed-сообщении шага). |
+| `sid` | string **or** array of string | `SID` to which the action was applied. **String** for a single `sid`, **array** for a list (the form mirrors the input, list-SID). |
+| `coven` | array of string | **The final** set of coven labels on the host after applying `mode` (not the passed argument set). For list `sid` — dialing the first SID. |
+| `mode` | string | Applied `mode` (echo `params.mode`, convenient for template composition). |
+| `created` | boolean | `true` if at least one entry in `souls` was created by the module; `false` if all already existed. |
+| `refreshed` | boolean | Echo the value `refresh_soulprint`: `true` ⇒ scenario-runner is guaranteed to re-resolve the roster before the next Passage (S3 [ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)). |
+| `removed` | array of string | **Only with `mode: remove`**: marks that were actually removed. Empty array if no-op (or mode ≠ `remove`). |
+| `online` | array of string | **Only with `await_online: true`**: SIDs that have become online (Redis SID-lease) at the time of barrier success/timeout. |
+| `pending` | array of string | **Only with `await_online: true`**: SIDs that did not have time to become online by the timeout (B1-strict-failure diagnostics). |
+| `satisfied` | boolean | **Only for `await_online: true`**: whether `await_min_count` has been reached (for `refresh_soulprint: true` - according to "ready": online **and** soulprint recorded). If successful, `true`; in case of `failed` failure - `false` (fields `online`/`pending` carry diagnostics; fact classes - in the failed message of the step). |
 
-Поля `online`/`pending`/`satisfied` присутствуют в output **только** когда задан `await_online: true`; без барьера их нет. Плюс стандартные `.changed` / `.failed` DSL-ядра ([destiny/tasks.md §8](../destiny/tasks.md#8-requisites--salt-style-зависимости)).
+The fields `online`/`pending`/`satisfied` are present in output **only** when `await_online: true` is specified; without a barrier they do not exist. Plus standard `.changed` / `.failed` DSL cores ([destiny/tasks.md §8](../destiny/tasks.md)).
 
-### Пример вызова из сценария
+### Example call from script
 
 ```yaml
 - name: Register the new replica with the cluster coven labels
@@ -148,11 +148,11 @@ DoS-guard, fail-closed. Поле `keeper.yml::max_await_timeout` (duration, defa
     refresh_soulprint: true
 ```
 
-После этого шага запись в реестре `souls` создана/обновлена, а scenario-runner пере-резолвит roster перед следующим Passage (`refresh_soulprint: true`, S3 [ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)).
+After this step, the registry entry `souls` is created/updated, and scenario-runner will re-resolve the roster before the next Passage (`refresh_soulprint: true`, S3 [ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)).
 
-### Пример: регистрация+барьер для N созданных VM
+### Example: registration+barrier for N created VMs
 
-Регистрация списка SID от `core.cloud.provisioned` и блокирующее ожидание онбординга — один шаг ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)):
+Registering a list of SIDs from `core.cloud.provisioned` and blocking wait for onboarding - one step ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)):
 
 ```yaml
 - name: Register provisioned shards and await onboarding
@@ -160,181 +160,181 @@ DoS-guard, fail-closed. Поле `keeper.yml::max_await_timeout` (duration, defa
   module: core.soul.registered
   register: shards
   params:
-    sid:                 "${ register.provision.hosts }"   # список SID из cloud-provision
+    sid:                 "${ register.provision.hosts }"   # list of SIDs from cloud-provision
     coven:               ["${ incarnation.name }"]
     mode:                append
     await_online:        true
     await_timeout:       10m                                # ≤ keeper.yml::max_await_timeout (default 30m)
-    await_min_count:     "${ register.provision.count }"    # опц.; default = все SID
+    await_min_count:     "${ register.provision.count }"    # opt; default = all SIDs
     await_poll_interval: 2s
 ```
 
-Шаг сперва регистрирует все SID списка, затем блокирующе поллит Redis SID-lease. Если к `10m` online `< await_min_count` — шаг `failed` (B1-strict), прогон уходит в `error_locked`, `register.shards.pending` несёт не успевшие SID.
+The step first registers all SIDs of the list, then blocks Redis SID-lease. If to `10m` online `< await_min_count` - step `failed` (B1-strict), the run goes to `error_locked`, `register.shards.pending` carries unfinished SIDs.
 
-### Отношение к destiny `coven-assign`
+### Relation to destiny `coven-assign`
 
-Существующая destiny `coven-assign` ([examples/destiny/coven-assign/](../../examples/destiny/coven-assign/)) остаётся как **тонкая обёртка** вокруг этого модуля: её `tasks/main.yml` сводится к одному шагу `module: core.soul.registered` с `mode: append` (одиночный `sid`, без барьера и без `refresh_soulprint`). `destiny.yml` `coven-assign` (input-контракт `sid`+`coven`) — совместим, не меняется.
+The existing destiny `coven-assign` ([examples/destiny/coven-assign/](../../examples/destiny/coven-assign/)) remains as a **thin wrapper** around this module: its `tasks/main.yml` is reduced to a single step `module: core.soul.registered` with `mode: append` (single `sid`, no barrier and without `refresh_soulprint`). `destiny.yml` `coven-assign` (input contract `sid`+`coven`) - compatible, does not change.
 
-Когда писать вызов модуля напрямую, а когда `apply: { destiny: coven-assign }`:
+When to write a module call directly, and when to write `apply: { destiny: coven-assign }`:
 
-- **Напрямую `module: core.soul.registered`** — типовой случай в сценарии. Один шаг, всё видно на месте, поддерживает все `mode`-режимы.
-- **`apply: { destiny: coven-assign }`** — когда уже есть устоявшийся вызов через destiny (исторический совместимый код), либо когда destiny используется как self-contained unit с molecule-тестом и независимым git-ref-ом ([ADR-007](../adr/0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте)). Обёртка фиксирует `mode: append` — для `replace`/`remove` нужен прямой вызов.
+- **Directly `module: core.soul.registered`** is a typical case in the scenario. One step, everything is visible in place, supports all `mode` modes.
+- **`apply: { destiny: coven-assign }`** - when there is already an established call through destiny (historical compatible code), or when destiny is used as a self-contained unit with a molecule test and an independent git ref ([ADR-007](../adr/0007-versioning-git-ref.md)). The wrapper fixes `mode: append` - `replace`/`remove` requires a direct call.
 
 ## `core.choir.present` / `core.choir.absent`
 
-Правка членства Voice-а в Choir-е инкарнации (ADR-044): «SID является Voice-ом указанного Choir-а данной инкарнации». **Keeper-side**, диспетчер `on: keeper`. Registry-ключ — base `core.choir`; state (`present`/`absent`) приходит из суффикса адреса через `SplitModuleAddr` (см. раздел «Регистрация и диспетчеризация»). Регистрируется только при заданном `Deps.ChoirStore` — иначе шаг падает «unknown keeper-side module». Реализация — [`keeper/internal/coremod/choir/member.go`](../../keeper/internal/coremod/choir/member.go).
+Editing Voice membership in Choir incarnation (ADR-044): "SID is the Voice of the specified Choir of this incarnation." **Keeper-side**, dispatcher `on: keeper`. Registry key - base `core.choir`; state (`present`/`absent`) comes from the address suffix via `SplitModuleAddr` (see the Registration and Dispatch section). Registered only when `Deps.ChoirStore` is specified - otherwise the step drops to "unknown keeper-side module". Implementation - [`keeper/internal/coremod/choir/member.go`](../../keeper/internal/coremod/choir/member.go).
 
-### Адресация и сторона
+### Addressing and side
 
-- Namespace: `core`. Module: `choir`. State: `present` (default при пустом state) / `absent`.
-- Полное имя задачи: `module: core.choir.present` / `module: core.choir.absent`.
-- Сторона: **Keeper-side**. Шаг **обязан** нести `on: keeper`.
+- Namespace: `core`. Module: `choir`. State: `present` (default if state is empty) / `absent`.
+- Full task name: `module: core.choir.present` / `module: core.choir.absent`.
+- Side: **Keeper-side**. The step **must** carry `on: keeper`.
 
-### Состояние (state-форма)
+### State (state form)
 
-| State | Действие | Идемпотентность |
+| State | Action | Idempotency |
 |---|---|---|
-| `present` (default) | `AddVoice` — SID становится Voice-ом Choir-а. | Voice уже есть (`ErrVoiceExists`) → `changed=false`, не ошибка. |
-| `absent` | `RemoveVoice` — членство снимается. | Voice-а нет (`ErrVoiceNotFound`) → `changed=false`, не ошибка. |
+| `present` (default) | `AddVoice` - SID becomes the Voice of the Choir. | Voice already exists (`ErrVoiceExists`) → `changed=false`, not an error. |
+| `absent` | `RemoveVoice` - membership is canceled. | Voice no (`ErrVoiceNotFound`) → `changed=false`, not an error. |
 
-Перед мутацией модуль валидирует существование инкарнации (`IncarnationExists`): отсутствует → `failed`. Инвариант членства (Voice только для SID, уже являющегося членом инкарнации, ADR-044) реализован в choir-CRUD (`AddVoice → ErrNotMembers`) и здесь не дублируется; `ErrNotMembers` → `failed`-событие (прогон уходит в onfail / `error_locked`).
+Before mutation, the module validates the existence of incarnation (`IncarnationExists`): absent → `failed`. The membership invariant (Voice only for a SID that is already a member of the incarnation, ADR-044) is implemented in choir-CRUD (`AddVoice → ErrNotMembers`) and is not duplicated here; `ErrNotMembers` → `failed`-event (the run goes to onfail / `error_locked`).
 
-### Параметры (`params:`)
+### Parameters (`params:`)
 
-| Параметр | Тип | Обязательность | Описание |
+| Parameter | Type | Obligation | Description |
 |---|---|---|---|
-| `incarnation` | string | required | Имя инкарнации, которой принадлежит Choir. Проверяется на существование. |
-| `choir` | string | required | Имя Choir-а. Валидируется `ValidChoirName`; мусор → `failed`. |
-| `sid` | string | required | `SID` хоста-Voice (FQDN). Валидируется `ValidSID`; невалидный → `failed`. |
-| `role` | string | optional | Партия Voice-а в Choir-е (только `present`). |
-| `position` | int (≥ 0) | optional | Позиция Voice-а (только `present`); отрицательная → `failed`. |
+| `incarnation` | string | required | The name of the incarnation to which Choir belongs. Checks for existence. |
+| `choir` | string | required | Choir's name. Validated by `ValidChoirName`; garbage → `failed`. |
+| `sid` | string | required | `SID` host-Voice (FQDN). Validated by `ValidSID`; invalid → `failed`. |
+| `role` | string | optional | Voice part in Choir (`present` only). |
+| `position` | int (≥ 0) | optional | Voice position (`present` only); negative → `failed`. |
 
-### Выходной контракт (`output:` модуля)
+### Output contract (`output:` module)
 
-`present` отдаёт в `register.<имя>.*`: `incarnation`, `choir`, `sid`, `state: present`, `added` (bool — был ли Voice добавлен). `absent`: `incarnation`, `choir`, `sid`, `state: absent`, `removed` (bool — был ли Voice снят). Плюс стандартные `.changed` / `.failed` DSL-ядра.
+`present` returns to `register.<name>.*`: `incarnation`, `choir`, `sid`, `state: present`, `added` (bool - whether Voice was added). `absent`: `incarnation`, `choir`, `sid`, `state: absent`, `removed` (bool - whether Voice was removed). Plus standard `.changed` / `.failed` DSL cores.
 
-### Ограничения S-T5 (не реализовано)
+### S-T5 limitations (not implemented)
 
-- **Cross-incarnation guard** (`param.incarnation` == инкарнация прогона): run-context модулю недоступен; модуль доверяет param `incarnation`, лишь валидируя его существование. Жёсткий guard — отдельная задача (RunContext-инъекция в keeper-dispatch).
-- **Roster-growth** (новый Voice виден следующему шагу прогона) — не реализовано.
+- **Cross-incarnation guard** (`param.incarnation` == run incarnation): run-context is not available to the module; the module trusts param `incarnation`, only validating its existence. Hard guard is a separate task (RunContext injection into keeper-dispatch).
+- **Roster-growth** (new Voice visible to next run step) - not implemented.
 
-Полный per-module справочник — [docs/module/core/choir/README.md](../module/core/choir/README.md).
+Complete per-module reference - [docs/module/core/choir/README.md](../module/core/choir/README.md).
 
 ## `core.cloud.created` / `core.cloud.destroyed`
 
-Создание/удаление VM через CloudDriver-плагин ([ADR-017](../adr/0017-keeper-side-core.md)). **Keeper-side**, диспетчер `on: keeper`. Registry-ключ — base `core.cloud`; state (`created` / `destroyed`, также `resized`) приходит из суффикса адреса. Реализация — [`keeper/internal/coremod/cloud/provisioned.go`](../../keeper/internal/coremod/cloud/provisioned.go). Полный flow (Provider/Profile-резолв, credentials Вариант A, userdata-рендер, guard-rails destroy) — [cloud.md](cloud.md); per-module справочник — [docs/module/core/cloud/README.md](../module/core/cloud/README.md).
+Creating/deleting VMs via CloudDriver plugin ([ADR-017](../adr/0017-keeper-side-core.md)). **Keeper-side**, dispatcher `on: keeper`. Registry key - base `core.cloud`; state (`created` / `destroyed`, also `resized`) comes from the address suffix. Implementation - [`keeper/internal/coremod/cloud/provisioned.go`](../../keeper/internal/coremod/cloud/provisioned.go). Full flow (Provider/Profile-resolve, credentials Option A, userdata-render, guard-rails destroy) - [cloud.md](cloud.md); per-module reference - [docs/module/core/cloud/README.md](../module/core/cloud/README.md).
 
-### Параметры `created` (`params:`)
+### Parameters `created` (`params:`)
 
-| Параметр | Тип | Обязательность | Default | Описание |
+| Parameter | Type | Obligation | Default | Description |
 |---|---|---|---|---|
-| `provider` | string | required | — | ИМЯ строки реестра `providers`: keeper резолвит её в driver-имя (`soul-cloud-<type>`) + plain-credentials из Vault (Вариант A, [cloud.md → Credentials-flow](cloud.md#credentials-flow)). |
-| `profile` | string | optional | — | ИМЯ строки реестра `profiles` (**НЕ inline-object**, [ADR-017 amendment 2026-06-29](../adr/0017-keeper-side-core.md)); keeper резолвит имя в VM-spec params. |
-| `count` | int (≥ 1) | optional | `1` | Сколько VM создать. |
-| `userdata` | string | optional | — | Готовый cloud-init blob (legacy / gold-image flow). Взаимоисключим и с `generate_userdata: true`, и с `self_onboard: true`. |
-| `generate_userdata` | bool | optional | `false` | Рендер userdata из `keeper.yml::cloud_init` — setup **без токенов**, режим B-flat ([cloud.md → Cloud-init bootstrap](cloud.md#cloud-init-bootstrap-mvp)). |
-| `name` | string | optional; **required при `self_onboard: true`** | — | Базовое имя VM-батча → `CreateRequest.name`; драйвер именует VM `<name>-<index>`. В связке с полем Provider-реестра `fqdn_suffix` (миграция 094) даёт предсказуемый FQDN `<name>-<index>.<fqdn_suffix>` ДО create. **Значение обязано подходить как base-имя VM** — паттерн `^[a-z][a-z0-9-]{0,48}[a-z0-9]$` (строже `incarnation.NamePattern` `^[a-z0-9][a-z0-9-]{0,62}$`: без старт-цифры и хвост-дефиса, длина ≤ 50). Create-сценарии redis/dragonfly подставляют сюда `incarnation.name` и pre-flight-`assert`-ят его первым шагом provision-тела: имя инкарнации, не подходящее как VM-база (старт-цифра / хвост-дефис / длина 51–63), при `input.provision.enabled=true` отклоняется **422 ещё ДО создания инкарнации** (не доходя до CloudDriver); без провижина ограничение не действует. |
-| `self_onboard` | bool | optional | `false` | Self-onboard «Вариант T» ([ADR-017(h) amendment 2026-07-01](../adr/0017-keeper-side-core.md)): keeper ДО create выписывает per-VM токены на предсказанные SID и запекает их в userdata (`/etc/soul/self-onboard-tokens`, `0600`) — VM онбордится сама в один цикл cloud-init, шаг `core.bootstrap.delivered` не нужен. Требует `name` и непустой `providers.fqdn_suffix` (иначе явная ошибка); **взаимоисключим с явным `userdata:`**; `generate_userdata` подразумевается (блок `keeper.yml::cloud_init` обязателен). **Plain-токен в register-output НЕ кладётся** (ключа `bootstrap_token` нет). Провал create/сверки FQDN откатывает вставленные souls/токены (orphan-cleanup). Осознанное отступление от security-floor B-flat (single-use токены, opt-in per-шаг) — [cloud.md → Self-onboard «Вариант T»](cloud.md#self-onboard-вариант-t). |
+| `provider` | string | required | — | Registry line NAME `providers`: keeper resolves it to driver-name (`soul-cloud-<type>`) + plain-credentials from Vault (Option A, [cloud.md → Credentials-flow](cloud.md#credentials-flow)). |
+| `profile` | string | optional | — | Registry string NAME `profiles` (**NOT inline-object**, [ADR-017 amendment 2026-06-29](../adr/0017-keeper-side-core.md)); keeper resolves the name in VM-spec params. |
+| `count` | int (≥ 1) | optional | `1` | How many VMs to create. |
+| `userdata` | string | optional | — | Ready cloud-init blob (legacy / gold-image flow). Mutually exclusive with both `generate_userdata: true` and `self_onboard: true`. |
+| `generate_userdata` | bool | optional | `false` | Render userdata from `keeper.yml::cloud_init` - setup **without tokens**, B-flat mode ([cloud.md → Cloud-init bootstrap](cloud.md#cloud-init-bootstrap-mvp)). |
+| `name` | string | optional; **required at `self_onboard: true`** | — | Base name of the VM batch → `CreateRequest.name`; The driver names the VM `<name>-<index>`. In conjunction with the Provider registry field `fqdn_suffix` (migration 094) gives the predictable FQDN `<name>-<index>.<fqdn_suffix>` BEFORE create. **The value must match the base name of the VM** - pattern `^[a-z][a-z0-9-]{0,48}[a-z0-9]$` (stricter than `incarnation.NamePattern` `^[a-z0-9][a-z0-9-]{0,62}$`: without start digit and tail hyphen, length ≤ 50). Create-scripts redis/dragonfly substitute `incarnation.name` here and pre-flight-`assert`-it is the first step of the provision body: the name of the incarnation, which is not suitable as a VM-base (start-digit / tail-hyphen / length 51–63), with `input.provision.enabled=true` is rejected **422 even BEFORE the creation of the incarnation** (not reaching clouddriver); Without provision, the restriction does not apply. |
+| `self_onboard` | bool | optional | `false` | Self-onboard "Option T" ([ADR-017(h) amendment 2026-07-01](../adr/0017-keeper-side-core.md)): keeper BEFORE create issues per-VM tokens to the predicted SIDs and bakes them in userdata (`/etc/soul/self-onboard-tokens`, `0600`) - VM onboards itself in one cloud-init cycle, step `core.bootstrap.delivered` not needed. Requires `name` and a non-empty `providers.fqdn_suffix` (otherwise an obvious error); **mutually exclusive with explicit `userdata:`**; `generate_userdata` is implied (the `keeper.yml::cloud_init` block is required). **Plain token is NOT placed in register-output** (there is no `bootstrap_token` key). Failure of create/FQDN reconciliation rolls back inserted souls/tokens (orphan-cleanup). A conscious departure from the security-floor B-flat (single-use tokens, opt-in per-step) - [cloud.md → Self-onboard "Option T"](cloud.md). |
 
-Output `created` (`register.<имя>.*`): `hosts[]` (`sid` / `vm_id` / `primary_ip` / `attributes`; в B-flat дополнительно `bootstrap_token` — plain, единственная точка видимости, маскируется `audit.MaskSecrets`), `count`, `vm_ids`, `action`. При `self_onboard: true` — плюс признак `self_onboard: true` и **без** `bootstrap_token`. Params `destroyed` (`provider` / `vm_ids` / `sids` + cascade-семантика) — [per-module README](../module/core/cloud/README.md) и [cloud.md](cloud.md).
+Output `created` (`register.<name>.*`): `hosts[]` (`sid` / `vm_id` / `primary_ip` / `attributes`; in B-flat additionally `bootstrap_token` - plain, the only point of visibility, masked by `audit.MaskSecrets`), `count`, `vm_ids`, `action`. With `self_onboard: true` - plus the sign `self_onboard: true` and **without** `bootstrap_token`. Params `destroyed` (`provider` / `vm_ids` / `sids` + cascade semantics) - [per-module README](../module/core/cloud/README.md) and [cloud.md](cloud.md).
 
 ## `core.bootstrap.delivered`
 
-Доставка per-VM bootstrap-токена по SSH на свежесозданные VM ([ADR-063](../adr/0063-bootstrap-token-delivery.md)). **Keeper-side**, диспетчер `on: keeper`. Registry-ключ — base `core.bootstrap`; state `delivered` приходит из суффикса адреса. Реализация — [`keeper/internal/coremod/bootstrap/delivered.go`](../../keeper/internal/coremod/bootstrap/delivered.go).
+Delivery of per-VM bootstrap token via SSH to newly created VMs ([ADR-063](../adr/0063-bootstrap-token-delivery.md)). **Keeper-side**, dispatcher `on: keeper`. Registry key - base `core.bootstrap`; state `delivered` comes from the address suffix. Implementation - [`keeper/internal/coremod/bootstrap/delivered.go`](../../keeper/internal/coremod/bootstrap/delivered.go).
 
-**Два транспорта** (`keeper.yml::push.transport`, [ADR-063 amendment Teleport](../adr/0063-bootstrap-token-delivery.md#amendment-teleport-by-name-transport)): **`direct`** (default) — generic `push.Dial` по `primary_ip` через SshProvider-плагин (Authorize/Sign + CA-signed host-cert verify из Vault host-CA); **`teleport`** — by-name через Teleport Proxy (target=SID, не IP; транспорт+auth+host-verify целиком через Teleport identity-file, Authorize/Sign/Vault-host-CA не задействованы, retry-до-join). Регистрация условна: direct-режим требует полного набора SSH-зависимостей (`BootstrapProviders` + `BootstrapHostCAs` + `BootstrapDial` в `coremod.Deps`), teleport — только dialer; иначе шаг падает «unknown keeper-side module».
+**Two transports** (`keeper.yml::push.transport`, [ADR-063 amendment Teleport](../adr/0063-bootstrap-token-delivery.md#amendment-teleport-by-name-transport)): **`direct`** (default) - generic `push.Dial` by `primary_ip` via SshProvider plugin (Authorize/Sign + CA-signed host-cert verify from Vault host-CA); **`teleport`** - by-name via Teleport Proxy (target=SID, not IP; transport+auth+host-verify entirely via Teleport identity-file, Authorize/Sign/Vault-host-CA are not used, retry-to-join). Registration is conditional: direct mode requires a full set of SSH dependencies (`BootstrapProviders` + `BootstrapHostCAs` + `BootstrapDial` in `coremod.Deps`), teleport - dialer only; otherwise the step drops "unknown keeper-side module".
 
-**Два режима работы** ([ADR-063 amendment full-install](../adr/0063-bootstrap-token-delivery.md#amendment-2026-06-30--full-install-режим-платформы-без-cloud-init-userdata)): **token-only** (default) — cloud-init уже поставил setup, доставляется только токен + redeem; **full-install** (`install: true`, только `transport: teleport`) — модуль сперва ставит ВЕСЬ setup (keeper-ca.pem → soul.yml → soul.service → curl soul-бинаря) по шагам `soulinstall.RenderInstallScript` — тот же shared-blueprint, что у cloud-init userdata, — затем токен/redeem/start. Для платформ, где провайдер не принимает userdata.
+**Two operating modes** ([ADR-063 amendment full-install](../adr/0063-bootstrap-token-delivery.md)): **token-only** (default) - cloud-init has already installed setup, only token + redeem is delivered; **full-install** (`install: true`, only `transport: teleport`) - the module first installs the ENTIRE setup (keeper-ca.pem → soul.yml → soul.service → curl soul binary) in steps `soulinstall.RenderInstallScript` - the same shared-blueprint as cloud-init userdata - then token /redeem/start. For platforms where the provider does not accept userdata.
 
-**Закрывает BUG#2 cloud-provision.** До ADR-063 scenario нёс адрес-заглушку `keeper.push.applied`, которой keeper-side не существует (это audit-event push-прогона Destiny, не модуль) — созданная VM ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)) не получала токен, барьер `await_online` не набирал presence, прогон уходил в `error_locked`.
+**Closes BUG#2 cloud-provision.** Before ADR-063, the scenario carried a stub address `keeper.push.applied`, which keeper-side does not exist (this is an audit-event of a Destiny push run, not a module) - the created VM ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)) did not receive a token, the barrier `await_online` did not typed presence, the run went to `error_locked`.
 
-### Дизайн A1 — «тонкая доставка» + init-фаза
+### Design A1 - "thin delivery" + init phase
 
-cloud-init (B-flat, [ADR-017(h)](../adr/0017-keeper-side-core.md)) уже поставил на VM soul-бинарь + CA + systemd-unit (но **намеренно НЕ токен** — userdata логируется провайдером). Модуль кладёт токен, **redeem-ит его** (`soul init` — единственный механизм создания SoulSeed; soul-side «подхвата» token-файла не существует, [ADR-063 amendment init-фаза](../adr/0063-bootstrap-token-delivery.md#amendment-2026-07-02--init-фаза-в-потоке-a1-активация-unit-а-event_stream_port-в-cloud_init)) и опционально активирует unit. Поток per-host (**последовательно**):
+cloud-init (B-flat, [ADR-017(h)](../adr/0017-keeper-side-core.md)) has already installed a soul binary + CA + systemd-unit on the VM (but **intentionally NOT a token** - userdata is logged by the provider). The module places a token, **redeems it** (`soul init` is the only mechanism for creating SoulSeed; there is no soul-side "pickup" of the token file, [ADR-063 amendment init-phase](../adr/0063-bootstrap-token-delivery.md)) and optionally activates the unit. Per-host stream (**sequentially**):
 
-1. `SshProvider.Authorize(host, user)` — deny прерывает доставку до connect-а (**fail-closed**).
-2. ephemeral ed25519-keypair + `SshProvider.Sign(pubkey)` → `ssh.AuthMethod`-ы (переиспользует `push.NewEphemeralEd25519` + `push.AuthMethodsFromSign`). Приватник не покидает Keeper.
-3. `push.Dial` → `Session` (CA-signed host-cert verify, тот же путь, что `SshDispatcher.SendApply`).
-4. `session.Run("install -d -m 0700 /etc/soul && umask 077 && cat > <token_path> && chmod 0400 <token_path>", tokenBytes)` — **★ токен в STDIN, НЕ в argv** (иначе утечёт в `ps`/audit/journald на VM).
-5. `session.Run("test -e /var/lib/soul-stack/seed/current/cert.pem || SOUL_BOOTSTRAP_TOKEN=\"$(cat <token_path>)\" /usr/local/bin/soul init --config /etc/soul/soul.yml", nil)` — redeem токена (CSR→Bootstrap-RPC→SoulSeed). Guard по seed-cert = идемпотентность (токен single-use); литеральная `$(cat …)` раскрывается subshell-ом на VM — токен не в argv keeper-а. Выполняется независимо от `start_soul`.
-6. если `start_soul` — `session.Run("systemctl daemon-reload && systemctl enable soul && systemctl start soul", nil)` (parity с cloud-init runcmd: daemon-reload подхватывает свежий unit в install-режиме, enable переживает ребут VM).
+1. `SshProvider.Authorize(host, user)` — deny interrupts delivery to connect (**fail-closed**).
+2. ephemeral ed25519-keypair + `SshProvider.Sign(pubkey)` → `ssh.AuthMethod`s (reuses `push.NewEphemeralEd25519` + `push.AuthMethodsFromSign`). The Privateer does not leave Keeper.
+3. `push.Dial` → `Session` (CA-signed host-cert verify, same path as `SshDispatcher.SendApply`).
+4. `session.Run("install -d -m 0700 /etc/soul && umask 077 && cat > <token_path> && chmod 0400 <token_path>", tokenBytes)` - **★ token in STDIN, NOT in argv** (otherwise it will leak to `ps`/audit/journald on VM).
+5. `session.Run("test -e /var/lib/soul-stack/seed/current/cert.pem || SOUL_BOOTSTRAP_TOKEN=\"$(cat <token_path>)\" /usr/local/bin/soul init --config /etc/soul/soul.yml", nil)` — redeem the token (CSR→Bootstrap-RPC→SoulSeed). Guard by seed-cert = idempotency(single-use token); the literal `$(cat …)` is expanded by the subshell on the VM - the token is not in the keeper's argv. Executes regardless of `start_soul`.
+6. if `start_soul` is `session.Run("systemctl daemon-reload && systemctl enable soul && systemctl start soul", nil)` (parity with cloud-init runcmd: daemon-reload picks up a fresh unit in install mode, enable survives VM reboot).
 
-**B1-strict:** ошибка любого хоста (Authorize-deny / connect-fail / write-fail / init-fail / start-fail) → шаг `failed` → state не коммитится → `error_locked`.
+**B1-strict:** any host error (Authorize-deny / connect-fail / write-fail / init-fail / start-fail) → step `failed` → state not committed → `error_locked`.
 
-### Адресация и сторона
+### Addressing and side
 
 - Namespace `core`, module `bootstrap`, state `delivered`.
-- Полное имя задачи: `module: core.bootstrap.delivered`.
-- Сторона: **Keeper-side**. Шаг **обязан** нести `on: keeper`.
+- Full task name: `module: core.bootstrap.delivered`.
+- Side: **Keeper-side**. The step **must** carry `on: keeper`.
 
-### Параметры (`params:`)
+### Parameters (`params:`)
 
-| Параметр | Тип | Обязательность | Default | Описание |
+| Parameter | Type | Obligation | Default | Description |
 |---|---|---|---|---|
-| `hosts` | array of object `{sid, primary_ip, bootstrap_token}` | required | — | Список VM. На практике приходит CEL-выражением `${ register.<provision>.hosts }` (выход `core.cloud.created`). Пустой список → `failed`. |
-| `ssh_provider` | string | required | — | Имя SshProvider-плагина (`keeper.yml::plugins.ssh_providers[].name`). **★ В `transport: teleport` НЕ определяет транспорт** (Authorize/Sign не зовутся) — имя уходит ТОЛЬКО в audit-payload. |
-| `token_path` | string | optional | `/etc/soul/token` | Путь файла токена на VM. |
-| `ssh_user` | string | optional | `root` | SSH-пользователь. |
-| `ssh_port` | int (1..65535) | optional | `22` | TCP-порт sshd. |
-| `start_soul` | bool | optional | `true` | Активация unit-а после init: `systemctl daemon-reload && systemctl enable soul && systemctl start soul`. `soul init` (шаг 5) идёт независимо от флага. |
-| `install` | bool | optional | `false` | Full-install-режим: перед токеном поставить весь setup по SSH (см. «Два режима работы» выше). Только `transport: teleport`; в direct-режиме → Validate-ошибка. Требует сконфигурированного блока `keeper.yml::cloud_init` (источник blueprint, config-reuse). |
-| `join_wait_timeout` | int (секунды) | optional | `360` | Потолок ожидания Teleport-join хоста (retry-with-backoff до появления ноды в кластере); релевантен только в `transport: teleport`. По истечении — шаг `failed` (B1-strict). |
+| `hosts` | array of object `{sid, primary_ip, bootstrap_token}` | required | — | List of VMs. In practice, the CEL expression `${ register.<provision>.hosts }` comes in (output `core.cloud.created`). Empty list → `failed`. |
+| `ssh_provider` | string | required | — | SshProvider plugin name (`keeper.yml::plugins.ssh_providers[].name`). **★ In `transport: teleport` DOES NOT define a transport** (Authorize/Sign are not called) - the name goes ONLY to audit-payload. |
+| `token_path` | string | optional | `/etc/soul/token` | Path to the token file on the VM. |
+| `ssh_user` | string | optional | `root` | SSH user. |
+| `ssh_port` | int (1..65535) | optional | `22` | sshd TCP port. |
+| `start_soul` | bool | optional | `true` | Unit activation after init: `systemctl daemon-reload && systemctl enable soul && systemctl start soul`. `soul init` (step 5) goes regardless of the flag. |
+| `install` | bool | optional | `false` | Full-install mode: before the token, put the entire setup via SSH (see "Two modes of operation" above). Only `transport: teleport`; in direct mode → Validate error. Requires a configured block `keeper.yml::cloud_init` (blueprint source, config-reuse). |
+| `join_wait_timeout` | int (seconds) | optional | `360` | Host Teleport-join waiting ceiling (retry-with-backoff until a node appears in the cluster); relevant only in `transport: teleport`. Upon expiration, step `failed` (B1-strict). |
 
-### Выходной контракт (`output:` модуля)
+### Output contract (`output:` module)
 
-`register.<имя>.*`: `hosts[] = {sid, delivered, started}` + `count`. Плюс стандартные `.changed` (всегда `true` при успехе) / `.failed` DSL-ядра. **★ БЕЗ токена в output** — plain-токен виден только в register предыдущего шага (`core.cloud.created`, ключ `bootstrap_token`, маскируется `audit.MaskSecrets`); здесь его нет.
+`register.<name>.*`: `hosts[] = {sid, delivered, started}` + `count`. Plus standard `.changed` (always `true` on success) / `.failed` DSL cores. **★ WITHOUT token in output** - the plain token is visible only in the register of the previous step (`core.cloud.created`, key `bootstrap_token`, masked by `audit.MaskSecrets`); it is not here.
 
-### Безопасность
+### Security
 
-- Токен в STDIN, не в argv (шаг 4); init-шаг (5) несёт литеральную нераскрытую `$(cat <token_path>)` — токен раскрывается subshell-ом на VM, не keeper-ом. Audit-payload `bootstrap.delivered` — `{action, ssh_provider, count, sids}`, **без токенов**. Текст ошибки маскируется (`audit.MaskSecrets`) перед `failed`-event. CA-signed host-cert verify обязателен (пустой host-CA → явная ошибка). fail-closed Authorize.
+- Token in STDIN, not in argv (step 4); init step (5) carries the literal unexpanded `$(cat <token_path>)` - the token is expanded by the subshell on the VM, not by the keeper. Audit-payload `bootstrap.delivered` — `{action, ssh_provider, count, sids}`, **without tokens**. The error text is masked (`audit.MaskSecrets`) before the `failed`-event. CA-signed host-cert verify is required (empty host-CA → obvious error). fail-closed Authorize.
 
-### Границы MVP (ADR-063)
+### MVP Limits (ADR-063)
 
-- Один key-based SshProvider, хосты последовательно. Full-install — только `transport: teleport`.
-- **★ C1 — cloud-init CA-signed host-key (required-для-live direct-режима, отдельный слайс).** `push.Dial` доверяет только host-cert, подписанному host-CA (отказ от TOFU) — свежая VM обязана иметь CA-signed host-key, иначе handshake реджектится: до C1 live-e2e в **direct**-режиме не пройдёт (модуль валиден на render L0 Trial + unit-тестах). К `transport: teleport` C1 **неприменим** — host-verify идёт через Teleport CA.
+- One key-based SshProvider, hosts sequentially. Full-install - only `transport: teleport`.
+- **★ C1 - cloud-init CA-signed host-key (required-for-live direct-mode, separate slice).** `push.Dial` trusts only host-cert signed by host-CA (TOFU refusal) - fresh VM must have CA-signed host-key, otherwise handshake is rejected: up to C1 live-e2e in **direct** mode will not work (the module is valid in render L0 Trial + unit tests). For `transport: teleport` C1 **not applicable** - host-verify goes through Teleport CA.
 
 ## `core.vault.kv-read`
 
-Явное чтение секрета из Vault KV (v1/v2, версия mount-а определяется автоматически) на keeper-стороне с обязательной записью audit-event-а `vault.kv-read` (ADR-017(b)). **Keeper-side**, диспетчер `on: keeper`. Registry-ключ — base `core.vault`; state `kv-read` (verb) приходит из суффикса адреса. Существует параллельно с implicit `${ vault(...) }` в CEL: implicit-форма дёшева для рендера, но не оставляет audit-записи; этот модуль — explicit-форма для compliance-аккуратного чтения. Read-only (`changed=false` всегда). Полный per-module справочник с params/output/security — [docs/module/core/vault/README.md](../module/core/vault/README.md).
+Explicit reading of the secret from Vault KV (v1/v2, mount version is determined automatically) on the keeper side with a mandatory recording of the audit event `vault.kv-read` (ADR-017(b)). **Keeper-side**, dispatcher `on: keeper`. Registry key - base `core.vault`; state `kv-read` (verb) comes from the address suffix. Exists in parallel with implicit `${ vault(...) }` in CEL: the implicit form is cheap to render, but does not leave an audit record; this module is an explicit form for compliance-accurate reading. Read-only (`changed=false` always). Complete per-module reference with params/output/security - [docs/module/core/vault/README.md](../module/core/vault/README.md).
 
 ## `core.vault.kv-present`
 
-Generate-if-absent для Vault KV-секретов на keeper-стороне ([ADR-017 amendment 2026-06-28](../adr/0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read)). **Keeper-side**, диспетчер `on: keeper`. Тот же модуль, что `kv-read`: Registry-ключ — base `core.vault`; state `kv-present` приходит из суффикса адреса. Для каждого target гарантирует существование непустого поля секрета: отсутствующее (нет поля / `null` / пустая строка) генерит криптослучайным значением (`crypto/rand`, bias-free) по описанной автором **password-policy** (длина в символах + алфавит `charset`/`allowed_chars`), присутствующее — no-op (не перезатирает). `changed=true` только при реальной генерации; идемпотентно (rerun/re-create безопасны). `destroy` секреты не чистит → re-create переиспользует те же пароли. Назначение — сервис сам генерит недостающие пароли при `create`, оператору не нужно пред-сеять секреты ручным `vault kv put`.
+Generate-if-absent for Vault KV secrets on the keeper side ([ADR-017 amendment 2026-06-28](../adr/0017-keeper-side-core.md)). **Keeper-side**, dispatcher `on: keeper`. The same module as `kv-read`: Registry key - base `core.vault`; state `kv-present` comes from the address suffix. For each target, it guarantees the existence of a non-empty secret field: absent (no field / `null` / empty string) generates a crypto-random value (`crypto/rand`, bias-free) according to the **password-policy** described by the author (length in characters + alphabet `charset`/`allowed_chars`), present - no-op (does not overwrite). `changed=true` only during real generation; idempotent (rerun/re-create are safe). `destroy` does not clear secrets → re-create reuses the same passwords. Purpose - the service itself generates missing passwords when `create`, the operator does not need to manually pre-seed secrets `vault kv put`.
 
-**Security-инвариант (ADR-010):** сгенерированное **значение** никогда не уходит в register-output / audit-payload / лог / OTel / текст ошибки — наружу только `path` + имена сгенерированных полей. register-output — `generated` (map путь → \[поля]); audit-event `vault.kv-present` (`source: keeper_internal`) пишется только при `changed=true`, payload `{paths}` — без значений. Полный per-module справочник с params (`targets` / `policy`) / output / security — [docs/module/core/vault/README.md](../module/core/vault/README.md#corevaultkv-present).
+**Security-invariant (ADR-010):** the generated **value** never goes into register-output / audit-payload / log / OTel / error text - only `path` + names of generated fields come out. register-output - `generated` (map path → \[fields]); audit-event `vault.kv-present` (`source: keeper_internal`) is written only with `changed=true`, payload `{paths}` - without values. Complete per-module reference with params (`targets` / `policy`) / output / security - [docs/module/core/vault/README.md](../module/core/vault/README.md#corevaultkv-present).
 
-## Авто-синтез `core.module.installed` из `service.yml::modules[]`
+## Auto-synthesis of `core.module.installed` from `service.yml::modules[]`
 
-Сам шаг `core.module.installed` — **Soul-side** (доставка SoulModule-плагина на хост: allow-check → `FetchModule` → verify → hot-register; хостовая сторона — [soul/modules.md](../soul/modules.md), фиксация — [ADR-065](../adr/0065-core-module-installed.md)). Keeper при этом **синтезирует** такие шаги в план прогона из manifest-декларации `service.yml::modules[]` (`{name, ref}`, [service/manifest.md](../service/manifest.md#формат-destiny-и-modules)) — оператор декларирует зависимость один раз на сервис, install-boilerplate в каждом сценарии не нужен ([ADR-065 amendment 2026-07-03](../adr/0065-core-module-installed.md)).
+The step itself `core.module.installed` - **Soul-side** (delivery of the SoulModule plugin to the host: allow-check → `FetchModule` → verify → hot-register; host side - [soul/modules.md](../soul/modules.md), commit - [ADR-065](../adr/0065-core-module-installed.md)). Keeper **synthesizes** such steps into the run plan from the manifest declaration `service.yml::modules[]` (`{name, ref}`, [service/manifest.md](../service/manifest.md)) - the operator declares the dependency once per service, install-boilerplate is not needed in each scenario ([ADR-065 amendment 2026-07-03](../adr/0065-core-module-installed.md)).
 
-**Точка синтеза.** Сразу после раскрытия `include:` (плоский список задач, [scenario/orchestration.md §6](../scenario/orchestration.md#6-двухуровневый-резолв-ресурсов)) и до Stratify — одинаково во всех местах, строящих план прогона: scenario-runner (apply), check-drift (drift-план ≡ apply-плану, иначе синтез-шаг был бы вечным drift-ом), claim-render Acolyte (воспроизводит план run-goroutine — корреляция plan_index/TaskEvent) и L0-trial-harness. Pre-flight/parsing/UI-поверхности план не мутируют.
+**Synthesis point.** Immediately after expanding `include:` (flat task list, [scenario/orchestration.md §6](../scenario/orchestration.md)) and before Stratify - the same in all places that build the run plan: scenario-runner (apply), check-drift (drift-plan ≡ apply-plan, otherwise the synthesis step would be eternal drift), claim-render Acolyte (reproduces the run-goroutine plan - correlation plan_index/TaskEvent) and L0-trial-harness. Pre-flight/parsing/UI-plane surfaces do not mutate.
 
-**Что вставляется.** Для каждой записи `modules[]`, у которой в плане есть задача-потребитель (задача `module:` с префиксом `<ns>.<module>.`), синтезируется обычная задача плана с именем-маркером:
+**What is inserted.** For each record `modules[]`, which has a consumer task in the plan (task `module:` with the prefix `<ns>.<module>.`), a regular plan task with a marker name is synthesized:
 
 ```yaml
-- name: install community.redis (service manifest)   # имя-маркер синтез-шага
+- name: install community.redis (service manifest)   # synthesis step marker name
   module: core.module.installed
-  params: { name: community.redis, ref: v1.2.0 }     # name+ref — из записи manifest
+  params: { name: community.redis, ref: v1.2.0 }     # name+ref - from the manifest entry
 ```
 
-- **Позиция** — непосредственно перед первой задачей-потребителем; потребитель внутри `block:` → вставка перед block-ом целиком. Несколько синтез-шагов перед одной задачей — в порядке манифеста.
-- **Без `on:`/`where:`** — обычная roster-задача: стратифицируется как её потребитель, в т.ч. едет **после** roster-refresh-границы ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)) — provision-from-zero работает без спец-логики.
-- **Модуль без потребителей в плане НЕ синтезируется**; записи `core.*` пропускаются (они и так запрещены валидацией манифеста, `core_module_in_modules_list`).
-- `ref` в params — **pin-сверка** ([ADR-065(c)](../adr/0065-core-module-installed.md)): активный Sigil-допуск обязан быть на этом ref, иначе шаг `failed`.
-- Синтез-шаг проходит render → dispatch → TaskEvent как любая задача и виден в run-view по имени-маркеру.
+- **Position** - immediately before the first consumer task; consumer inside `block:` → insertion before the entire block. Several synthesis steps before one task - in manifest order.
+- **Without `on:`/`where:`** - a regular roster task: stratified as its consumer, incl. goes **after** roster-refresh-border ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)) - provision-from-zero works without special logic.
+- **A module without consumers in the plan is NOT synthesized**; `core.*` entries are skipped (they are already prohibited by manifest validation, `core_module_in_modules_list`).
+- `ref` in params - **pin-verification** ([ADR-065(c)](../adr/0065-core-module-installed.md)): the active Sigil permit must be on this ref, otherwise step `failed`.
+- The synthesis step goes through render → dispatch → TaskEvent like any task and is visible in the run-view by its marker name.
 
-**Takeover — явный шаг отключает синтез.** Явный `core.module.installed` с тем же **литеральным** `params.name` в плане подавляет синтез этого имени — оператор сам управляет позицией, `ref` и `when:`. `${…}`-CEL в `params.name` литеральному сравнению не поддаётся: синтез не подавится, возможен дубль-шаг — безвредный (идемпотентность по sha256: бинарь уже установлен → `changed=false`, fetch не выполняется).
+**Takeover - an explicit step disables synthesis.** An explicit `core.module.installed` with the same **literal** `params.name` in plan suppresses the synthesis of this name - the operator controls the position itself, `ref` and `when:`. `${…}`-CEL in `params.name` cannot be compared literally: synthesis will not be suppressed, a double step is possible - harmless (idempotency by sha256: the binary is already installed → `changed=false`, fetch is not executed).
 
-**Идемпотентность и ошибки.** Скип только модульный (sha256 установленного бинаря == sha активного Sigil-допуска); plan-level skip нет — Keeper не ведёт реестра установленного per-host, roster меняется mid-run. Отсутствие записи в `plugins.soul_modules[]` / активного Sigil-допуска ловит Soul-side allow-check шага (`module_not_allowed`) — как у явного шага; keeper-side pre-flight-гейта в MVP нет (вместе с validation-hint «модуль используется, но не задекларирован» — post-MVP).
+**Idempotency and errors.** Skip is modular only (sha256 of installed binary == sha of active Sigil permission); plan-level skip no - Keeper does not maintain a register of the installed per-host, the roster changes mid-run. The absence of an entry in `plugins.soul_modules[]` / active Sigil-permission catches the Soul-side allow-check of the step (`module_not_allowed`) - like an explicit step; There is no keeper-side pre-flight gate in MVP (together with the validation-hint "the module is used but not declared" - post-MVP).
 
-**Ограничение MVP.** Потребители определяются по `module:`-задачам сценария (top-level и внутри `block:`); модуль, используемый **только внутри destiny** (через `apply:`), потребителем не считается — ему по-прежнему нужен явный install-шаг. Push не затрагивается — там модули едут скопом ([ADR-020](../adr/0020-plugin-infrastructure.md)).
+**MVP limitation.** Consumers are defined by `module:` scenario tasks (top-level and inside `block:`); a module used **only within destiny** (via `apply:`) is not considered a consumer - it still needs an explicit install step. Push is not affected - modules travel there en masse ([ADR-020](../adr/0020-plugin-infrastructure.md)).
 
-## См. также
+## See also
 
-- [architecture.md → Модель модулей](../architecture.md#модель-модулей) — общая модель core/custom, Soul-side vs Keeper-side, протокол SoulModule.
-- [architecture.md → Адресация модулей](../architecture.md#адресация-модулей) — формат `<namespace>.<module>.<state>`.
-- [scenario/orchestration.md §3](../scenario/orchestration.md#3-таргет-шага--on) — `on:`, диспетчер шага между Soul-стороной и Keeper-стороной.
-- [storage.md](storage.md) — таблицы `souls`, привязка coven.
-- [cloud.md](cloud.md) — `core.cloud.provisioned` и граница с coven-привязкой (`core.soul.registered` — отдельный шаг).
-- [soul/modules.md](../soul/modules.md) — хостовая сторона `core.module.installed`: доставка, verify, кеш custom-модулей.
-- [naming-rules.md → Модули Destiny](../naming-rules.md#модули-destiny) — словарь имён.
+- [architecture.md → Module model](../architecture.md) - general core/custom model, Soul-side vs Keeper-side, SoulModule protocol.
+- [architecture.md → Module addressing](../architecture.md) - format `<namespace>.<module>.<state>`.
+- [scenario/orchestration.md §3](../scenario/orchestration.md) - `on:`, step manager between the Soul side and the Keeper side.
+- [storage.md](storage.md) - `souls` tables, coven binding.
+- [cloud.md](cloud.md) - `core.cloud.provisioned` and a border with coven binding (`core.soul.registered` is a separate step).
+- [soul/modules.md](../soul/modules.md) — host side of `core.module.installed`: delivery, verify, cache of custom modules.
+- [naming-rules.md → Destiny Modules](../naming-rules.md) - a dictionary of names.
