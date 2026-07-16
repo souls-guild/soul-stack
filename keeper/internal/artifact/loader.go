@@ -57,7 +57,7 @@ func (s *snapshotter) lockFor(name string) *sync.Mutex {
 // otherwise checkout → export the tree to staging → atomic rename into the cache.
 func (s *snapshotter) snapshot(ctx context.Context, name, gitURL, ref, kind string) (sha1, dir string, err error) {
 	if gitURL == "" {
-		return "", "", fmt.Errorf("artifact: git URL пуст для %s %q", kind, name)
+		return "", "", fmt.Errorf("artifact: git URL is empty for %s %q", kind, name)
 	}
 	if verr := validateGitScheme(gitURL); verr != nil {
 		return "", "", verr
@@ -97,9 +97,9 @@ func (s *snapshotter) snapshot(ctx context.Context, name, gitURL, ref, kind stri
 		if merr := s.materialize(layout, repo, sha1); merr != nil {
 			return "", "", merr
 		}
-		s.logger.Info("artifact: материализован снапшот "+kind, "name", name, "ref", ref, "sha1", sha1)
+		s.logger.Info("artifact: snapshot materialized "+kind, "name", name, "ref", ref, "sha1", sha1)
 	} else {
-		s.logger.Debug("artifact: переиспользован снапшот "+kind, "name", name, "ref", ref, "sha1", sha1)
+		s.logger.Debug("artifact: snapshot reused "+kind, "name", name, "ref", ref, "sha1", sha1)
 	}
 	return sha1, layout.snapshotDir(sha1), nil
 }
@@ -132,7 +132,7 @@ func (s *snapshotter) materialize(layout cacheLayout, repo *gitRepo, sha1 string
 		if layout.snapshotExists(sha1) {
 			return nil
 		}
-		return fmt.Errorf("artifact: rename снапшота %s: %w", sha1, err)
+		return fmt.Errorf("artifact: renaming snapshot %s: %w", sha1, err)
 	}
 	return nil
 }

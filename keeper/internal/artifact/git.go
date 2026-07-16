@@ -45,19 +45,19 @@ func openOrClone(ctx context.Context, workDir, gitURL string, auth transport.Aut
 			return repo, nil
 		}
 		if !errors.Is(rerr, git.ErrRemoteNotFound) {
-			return nil, fmt.Errorf("artifact: проверка origin-remote клона %s: %w", workDir, rerr)
+			return nil, fmt.Errorf("artifact: checking origin remote of clone %s: %w", workDir, rerr)
 		}
 		// Fall through to the common clone branch below via RemoveAll +
 		// PlainCloneContext.
 	} else if !errors.Is(err, git.ErrRepositoryNotExists) {
-		return nil, fmt.Errorf("artifact: открытие рабочего клона %s: %w", workDir, err)
+		return nil, fmt.Errorf("artifact: opening working clone %s: %w", workDir, err)
 	}
 
 	// The directory might have existed as empty/broken — remove it before a
 	// clean clone, so PlainCloneContext doesn't fail with
 	// ErrRepositoryAlreadyExists.
 	if rmErr := os.RemoveAll(workDir); rmErr != nil {
-		return nil, fmt.Errorf("artifact: очистка перед клоном %s: %w", workDir, rmErr)
+		return nil, fmt.Errorf("artifact: cleaning before clone %s: %w", workDir, rmErr)
 	}
 	repo, err = git.PlainCloneContext(ctx, workDir, false, &git.CloneOptions{
 		URL:  gitURL,
@@ -65,7 +65,7 @@ func openOrClone(ctx context.Context, workDir, gitURL string, auth transport.Aut
 		Tags: git.AllTags,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("artifact: клонирование %s: %w", gitURL, err)
+		return nil, fmt.Errorf("artifact: cloning %s: %w", gitURL, err)
 	}
 	return repo, nil
 }
@@ -112,7 +112,7 @@ func resolveRef(repo *gitRepo, ref string) (string, error) {
 		}
 		lastErr = err
 	}
-	return "", fmt.Errorf("artifact: ref %q не резолвится в репозитории: %w", ref, lastErr)
+	return "", fmt.Errorf("artifact: ref %q does not resolve in repository: %w", ref, lastErr)
 }
 
 // checkout puts the working clone into a detached-HEAD state at the given
@@ -198,7 +198,7 @@ func authFor(gitURL string) (transport.AuthMethod, error) {
 	user := sshUser(gitURL)
 	auth, err := gitssh.NewSSHAgentAuth(user)
 	if err != nil {
-		return nil, fmt.Errorf("artifact: SSH-agent auth для %s: %w", gitURL, err)
+		return nil, fmt.Errorf("artifact: SSH-agent auth for %s: %w", gitURL, err)
 	}
 	return auth, nil
 }

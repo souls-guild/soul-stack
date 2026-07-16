@@ -16,62 +16,62 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// StateSchemaInfo — проекция state_schema-метаданных одного снапшота Service-
-// репо для UI Schema explorer-а (`GET /v1/services/{name}/state-schema`):
-// текущая `state_schema_version`, опциональная декларация структуры state
-// (`state_schema:` mapping из service.yml) и плоский список найденных миграций
-// в `migrations/<NNN>_to_<MMM>.yml`. Content миграций не парсится — только
-// metadata (from / to / относительный путь), чтобы UI мог построить graph
-// «версия → версия» без серверной валидации DSL.
+// StateSchemaInfo is a projection of state_schema metadata from a single Service
+// repository snapshot for UI Schema explorer (`GET /v1/services/{name}/state-schema`):
+// current `state_schema_version`, optional state structure declaration
+// (`state_schema:` mapping from service.yml), and flat list of discovered
+// migrations in `migrations/<NNN>_to_<MMM>.yml`. Migration content is not parsed
+// — only metadata (from / to / relative path) so UI can build a "version → version"
+// graph without server-side DSL validation.
 //
-// Имена JSON-полей совпадают с UI-API (`ServiceStateSchemaReply`); типы —
-// минимально-достаточные: Schema хранится `map[string]any` (повторяет сырой
-// YAML), Migrations — отсортированный по `to` ASC список [Migration].
+// JSON field names match UI API (`ServiceStateSchemaReply`); types are minimal:
+// Schema is stored as `map[string]any` (repeats raw YAML), Migrations is a list
+// of [Migration] sorted by `to` ASC.
 type StateSchemaInfo struct {
 	Version    int            `json:"state_schema_version"`
 	Schema     map[string]any `json:"schema,omitempty"`
 	Migrations []Migration    `json:"migrations"`
 }
 
-// Migration — одна запись цепочки state_schema-миграций (metadata-only):
-// номер версий-источника и -приёмника + относительный путь файла в снапшоте.
-// Content (DSL-операции) НЕ парсится — UI Schema explorer-у нужен только
-// граф `from → to` (грамматику миграции пользователь смотрит в git-репо).
+// Migration is one entry in the state_schema migration chain (metadata-only):
+// source and target version numbers + relative file path in snapshot. Content
+// (DSL operations) is NOT parsed — UI Schema explorer needs only the `from → to`
+// graph (user views migration grammar in git repo).
 type Migration struct {
 	From int    `json:"from"`
 	To   int    `json:"to"`
 	Path string `json:"path"`
 }
 
-// reMigrationFile — каноническое имя файла миграции в `migrations/`
-// (docs/migrations.md → `<NNN>_to_<MMM>.yml`). NNN/MMM — три цифры с
-// ведущими нулями; иные файлы (`README.md`, тесты-каталоги, прочее) — игнорим.
+// reMigrationFile is the canonical migration filename pattern in `migrations/`
+// (docs/migrations.md → `<NNN>_to_<MMM>.yml`). NNN/MMM are three digits with
+// leading zeros; other files (`README.md`, test directories, etc.) are ignored.
 var reMigrationFile = regexp.MustCompile(`^(\d{3})_to_(\d{3})\.yml$`)
 
-// ListStateSchema собирает [StateSchemaInfo] из материализованного снапшота
-// service-репо (serviceRoot — абсолютный путь, обычно [ServiceArtifact.LocalDir]).
+// ListStateSchema collects [StateSchemaInfo] from a materialized service repository
+// snapshot (serviceRoot is absolute path, typically [ServiceArtifact.LocalDir]).
 //
-// Алгоритм:
-//  1. Парсит `service.yml` через нормативный [config.LoadServiceManifestFromBytes];
-//     валидацию manifest-уровня НЕ перепроверяет — error-диагностика == битый
-//     манифест в репо, поднимаем ошибку выше (caller отдаст 502).
-//  2. Достаёт `state_schema_version` (≥1; ADR-019: monotonic int) и `state_schema:`
-//     (опционально; service.yml МОЖЕТ декларировать структуру через MVP JSON
-//     Schema подмножество — type/required/properties/items/additionalProperties,
-//     см. validateStateSchema). Если поля нет — Schema=nil, и в JSON оно
-//     omitempty-выкидывается; UI трактует как «структура не задекларирована».
-//  3. Сканирует `migrations/` (если каталога нет — пустой список, не ошибка;
-//     parity со [ListScenarios]). Файлы вида `<NNN>_to_<MMM>.yml` парсятся
-//     только по имени (regex [reMigrationFile]); прочие сущности (subdir-ы
-//     `<NNN>_to_<MMM>/tests/`, README, и т.п.) пропускаются молча. Сортировка —
-//     by `to` ASC (граф цепочки растёт по версиям).
+// Algorithm:
+//  1. Parses `service.yml` via normative [config.LoadServiceManifestFromBytes];
+//     does NOT re-validate manifest-level validation — error diagnostics mean
+//     broken manifest in repo, error is raised above (caller returns 502).
+//  2. Extracts `state_schema_version` (≥1; ADR-019: monotonic int) and `state_schema:`
+//     (optional; service.yml MAY declare structure via MVP JSON Schema subset —
+//     type/required/properties/items/additionalProperties, see validateStateSchema).
+//     If field is missing — Schema=nil, omitempty drops it from JSON; UI treats as
+//     "structure not declared".
+//  3. Scans `migrations/` (if directory missing → empty list, no error; parity with
+//     [ListScenarios]). Files matching `<NNN>_to_<MMM>.yml` are parsed by name only
+//     (regex [reMigrationFile]); other entities (subdirs `<NNN>_to_<MMM>/tests/`,
+//     README, etc.) are silently skipped. Sorting is by `to` ASC (chain graph grows
+//     by version).
 //
-// Логгер опционален (nil → slog.Default). Stop-rules ТЗ:
-//   - state_schema_version отсутствует в манифесте → согласно spec MVP это
-//     ошибка валидации (config.schemaValidateService), которая поднимется
-//     выше через diag.HasErrors → возвращаем error.
-//   - migrations/ нет → empty list, без ошибки.
-//   - YAML битый → error (caller отдаёт 502 bad-gateway).
+// Logger is optional (nil → slog.Default). Stop-rules per spec:
+//   - state_schema_version missing from manifest → per MVP spec this is a validation
+//     error (config.schemaValidateService) raised above via diag.HasErrors →
+//     return error.
+//   - migrations/ missing → empty list, no error.
+//   - YAML broken → error (caller returns 502 bad-gateway).
 func ListStateSchema(serviceRoot string, logger *slog.Logger) (*StateSchemaInfo, error) {
 	if logger == nil {
 		logger = slog.Default()
@@ -79,18 +79,18 @@ func ListStateSchema(serviceRoot string, logger *slog.Logger) (*StateSchemaInfo,
 
 	manifestPath, err := securejoin.SecureJoin(serviceRoot, serviceManifestFile)
 	if err != nil {
-		return nil, fmt.Errorf("artifact: небезопасный путь %s: %w", serviceManifestFile, err)
+		return nil, fmt.Errorf("artifact: unsafe path %s: %w", serviceManifestFile, err)
 	}
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
-		return nil, fmt.Errorf("artifact: чтение %s: %w", serviceManifestFile, err)
+		return nil, fmt.Errorf("artifact: reading %s: %w", serviceManifestFile, err)
 	}
 	manifest, _, diags, err := config.LoadServiceManifestFromBytes(serviceManifestFile, data, config.ValidateOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("artifact: парсинг %s: %w", serviceManifestFile, err)
+		return nil, fmt.Errorf("artifact: parsing %s: %w", serviceManifestFile, err)
 	}
 	if diag.HasErrors(diags) {
-		return nil, fmt.Errorf("artifact: %s невалиден: %s", serviceManifestFile, firstError(diags))
+		return nil, fmt.Errorf("artifact: %s invalid: %s", serviceManifestFile, firstError(diags))
 	}
 
 	info := &StateSchemaInfo{
@@ -106,28 +106,28 @@ func ListStateSchema(serviceRoot string, logger *slog.Logger) (*StateSchemaInfo,
 	return info, nil
 }
 
-// scanMigrations читает `migrations/`-каталог снапшота и возвращает
-// отсортированный по `to` ASC список найденных шагов. Отсутствующий каталог
-// → пустой список (сервис без миграций валиден). Файлы, не подпадающие под
-// `<NNN>_to_<MMM>.yml`, пропускаются молча; subdir-ы (тесты миграций) —
-// тоже (мы НЕ заходим внутрь, content не парсится).
+// scanMigrations reads the `migrations/` directory of snapshot and returns a list
+// of discovered steps sorted by `to` ASC. Missing directory → empty list (service
+// without migrations is valid). Files not matching `<NNN>_to_<MMM>.yml` are silently
+// skipped; subdirectories (migration tests) are also skipped (we do NOT descend,
+// content is not parsed).
 func scanMigrations(serviceRoot string, logger *slog.Logger) ([]Migration, error) {
 	migRoot, err := securejoin.SecureJoin(serviceRoot, migrationsDir)
 	if err != nil {
-		return nil, fmt.Errorf("artifact: небезопасный путь %s: %w", migrationsDir, err)
+		return nil, fmt.Errorf("artifact: unsafe path %s: %w", migrationsDir, err)
 	}
 	entries, err := os.ReadDir(migRoot)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return []Migration{}, nil
 		}
-		return nil, fmt.Errorf("artifact: чтение %s: %w", migrationsDir, err)
+		return nil, fmt.Errorf("artifact: reading %s: %w", migrationsDir, err)
 	}
 
 	out := make([]Migration, 0, len(entries))
 	for _, e := range entries {
 		if e.IsDir() {
-			// `<NNN>_to_<MMM>/tests/` и прочие subdir-ы внутрь не сканируем.
+			// `<NNN>_to_<MMM>/tests/` and other subdirs are not scanned.
 			continue
 		}
 		m := reMigrationFile.FindStringSubmatch(e.Name())
@@ -137,8 +137,8 @@ func scanMigrations(serviceRoot string, logger *slog.Logger) ([]Migration, error
 		from, ferr := strconv.Atoi(m[1])
 		to, terr := strconv.Atoi(m[2])
 		if ferr != nil || terr != nil {
-			// Невозможно по regex, но guard на случай change-а grammar-а.
-			logger.Warn("artifact: миграция пропущена — неразборные NNN/MMM",
+			// Impossible via regex, but guard in case grammar changes.
+			logger.Warn("artifact: migration skipped — unparseable NNN/MMM",
 				slog.String("file", e.Name()))
 			continue
 		}

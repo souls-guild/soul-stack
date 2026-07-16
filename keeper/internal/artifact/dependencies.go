@@ -57,18 +57,18 @@ func ListDependencies(serviceRoot string, logger *slog.Logger) (*ServiceDependen
 
 	manifestPath, err := securejoin.SecureJoin(serviceRoot, serviceManifestFile)
 	if err != nil {
-		return nil, fmt.Errorf("artifact: небезопасный путь %s: %w", serviceManifestFile, err)
+		return nil, fmt.Errorf("artifact: unsafe path %s: %w", serviceManifestFile, err)
 	}
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
-		return nil, fmt.Errorf("artifact: чтение %s: %w", serviceManifestFile, err)
+		return nil, fmt.Errorf("artifact: reading %s: %w", serviceManifestFile, err)
 	}
 	manifest, _, diags, err := config.LoadServiceManifestFromBytes(serviceManifestFile, data, config.ValidateOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("artifact: парсинг %s: %w", serviceManifestFile, err)
+		return nil, fmt.Errorf("artifact: parsing %s: %w", serviceManifestFile, err)
 	}
 	if diag.HasErrors(diags) {
-		return nil, fmt.Errorf("artifact: %s невалиден: %s", serviceManifestFile, firstError(diags))
+		return nil, fmt.Errorf("artifact: %s invalid: %s", serviceManifestFile, firstError(diags))
 	}
 
 	return &ServiceDependencies{

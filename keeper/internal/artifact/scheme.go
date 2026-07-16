@@ -11,7 +11,7 @@ import (
 // artifact (security review L2). By default only `https://`, `ssh://`, and
 // the scp form `user@host:path` are in the allowlist; `file://` requires an
 // explicit env flag.
-var ErrUnsupportedGitScheme = errors.New("artifact: неподдерживаемая схема git-URL")
+var ErrUnsupportedGitScheme = errors.New("artifact: unsupported git-URL scheme")
 
 // allowFileReposEnv — env flag allowing `file://` repositories (dev/test).
 // Off by default in prod: `file://` would let ServiceRef.Git read local
@@ -32,13 +32,13 @@ func validateGitScheme(gitURL string) error {
 		if fileReposAllowed() {
 			return nil
 		}
-		return fmt.Errorf("%w: file:// запрещён в проде (выставьте %s=1 для dev/test): %q",
+		return fmt.Errorf("%w: file:// is forbidden in production (set %s=1 for dev/test): %q",
 			ErrUnsupportedGitScheme, allowFileReposEnv, gitURL)
 	case !strings.Contains(gitURL, "://") && isSCPForm(gitURL):
 		// scp-like form `git@host:org/repo.git` (SSH without an explicit scheme).
 		return nil
 	default:
-		return fmt.Errorf("%w: %q (разрешены https://, ssh://, scp-форма user@host:path)",
+		return fmt.Errorf("%w: %q (allowed: https://, ssh://, scp form user@host:path)",
 			ErrUnsupportedGitScheme, gitURL)
 	}
 }

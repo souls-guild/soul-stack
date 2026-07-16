@@ -27,7 +27,7 @@ type cacheLayout struct {
 
 func newCacheLayout(root, name string) (cacheLayout, error) {
 	if !reCacheName.MatchString(name) {
-		return cacheLayout{}, fmt.Errorf("artifact: имя сервиса %q не является kebab-case (защита cache-пути)", name)
+		return cacheLayout{}, fmt.Errorf("artifact: service name %q is not kebab-case (cache-path guard)", name)
 	}
 	return cacheLayout{root: root, name: name}, nil
 }
@@ -46,7 +46,7 @@ func (c cacheLayout) snapshotDir(sha1 string) string {
 // ensureServiceDir creates the service directory (recursively) if missing.
 func (c cacheLayout) ensureServiceDir() error {
 	if err := os.MkdirAll(c.serviceDir(), 0o755); err != nil {
-		return fmt.Errorf("artifact: создание cache-каталога %s: %w", c.serviceDir(), err)
+		return fmt.Errorf("artifact: creating cache directory %s: %w", c.serviceDir(), err)
 	}
 	return nil
 }
@@ -63,7 +63,7 @@ func (c cacheLayout) snapshotExists(sha1 string) bool {
 func (c cacheLayout) newStagingDir() (string, error) {
 	dir, err := os.MkdirTemp(c.serviceDir(), "_tmp-")
 	if err != nil {
-		return "", fmt.Errorf("artifact: создание staging-каталога: %w", err)
+		return "", fmt.Errorf("artifact: creating staging directory: %w", err)
 	}
 	return dir, nil
 }

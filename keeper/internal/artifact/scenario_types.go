@@ -59,7 +59,7 @@ func loadTypeCatalog(serviceRoot string, logger *slog.Logger) typeCatalog {
 	data, err := readSnapshotFile(serviceRoot, typesCatalogFile)
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
-			logger.Warn("artifact: types.yml пропущен — ошибка чтения",
+			logger.Warn("artifact: types.yml skipped — read error",
 				slog.Any("error", err))
 		}
 		return typeCatalog{}
@@ -69,7 +69,7 @@ func loadTypeCatalog(serviceRoot string, logger *slog.Logger) typeCatalog {
 		Types map[string]map[string]any `yaml:"types"`
 	}
 	if err := yaml.Unmarshal(data, &raw); err != nil {
-		logger.Warn("artifact: types.yml пропущен — невалидный YAML",
+		logger.Warn("artifact: types.yml skipped — invalid YAML",
 			slog.Any("error", err))
 		return typeCatalog{}
 	}

@@ -88,7 +88,7 @@ func resolveScenarioInputTypeRefs(art *ServiceArtifact, in config.InputSchemaMap
 				Level: diag.LevelError, Phase: diag.PhaseParse,
 				File: config.TypesCatalogFile, Code: "io_error",
 				Message: err.Error(),
-				Hint:    "types.yml присутствует, но не читается — $type-ссылки не резолвятся",
+				Hint:    "types.yml exists but cannot be read — $type references will not resolve",
 			}}
 		}
 		// No catalog: a type reference still yields input_type_unknown via the

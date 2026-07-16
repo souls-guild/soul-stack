@@ -75,7 +75,7 @@ func (f RefsListerFunc) ListRefs(ctx context.Context, gitURL string) ([]GitRef, 
 // failed).
 func ListRefs(ctx context.Context, gitURL string) ([]GitRef, error) {
 	if gitURL == "" {
-		return nil, fmt.Errorf("artifact: git URL пуст")
+		return nil, fmt.Errorf("artifact: git URL is empty")
 	}
 	if err := validateGitScheme(gitURL); err != nil {
 		return nil, err

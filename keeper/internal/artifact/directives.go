@@ -60,7 +60,7 @@ func loadDirectiveCatalogFull(serviceRoot string) (map[string][]string, error) {
 		RedisDirectives map[string][]string `yaml:"redis_directives"`
 	}
 	if err := yaml.Unmarshal(data, &raw); err != nil {
-		return nil, fmt.Errorf("artifact: парсинг %s: %w", essenceDefaultFile, err)
+		return nil, fmt.Errorf("artifact: parsing %s: %w", essenceDefaultFile, err)
 	}
 	if raw.RedisDirectives == nil {
 		return map[string][]string{}, nil
