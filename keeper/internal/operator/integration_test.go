@@ -85,7 +85,7 @@ func resetOperators(t *testing.T) {
 	// rbac_role_permissions, role must exist.
 	_, err = integrationPool.Exec(context.Background(),
 		`INSERT INTO rbac_roles (name, description, builtin, created_by_aid)
-		 VALUES ('cluster-admin', 'Встроенная роль полного доступа (permissions: *)', true, NULL)
+		 VALUES ('cluster-admin', 'Built-in full access role (permissions: *)', true, NULL)
 		 ON CONFLICT (name) DO NOTHING`)
 	if err != nil {
 		t.Fatalf("re-seed cluster-admin role: %v", err)

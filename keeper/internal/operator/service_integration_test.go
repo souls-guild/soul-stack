@@ -123,7 +123,7 @@ func TestIntegration_ServiceRevoke_WouldLockOutCluster(t *testing.T) {
 		t.Fatalf("SelectByAID: %v", err)
 	}
 	if got.IsRevoked() {
-		t.Errorf("archon-alice revoked, want активен (lockout-инвариант)")
+		t.Errorf("archon-alice revoked, want active (lockout invariant)")
 	}
 }
 
@@ -188,7 +188,7 @@ func TestIntegration_ServiceRevoke_RevokedSecondAdminStillLocks(t *testing.T) {
 		t.Fatalf("SelectByAID alice: %v", err)
 	}
 	if got.IsRevoked() {
-		t.Errorf("archon-alice revoked, want активен (lockout-инвариант)")
+		t.Errorf("archon-alice revoked, want active (lockout invariant)")
 	}
 }
 

@@ -38,7 +38,7 @@ func TestValidAID(t *testing.T) {
 		{"too-long-129", "a" + repeat("b", 128), false},
 		{"trailing-space", "archon-alice ", false},
 		{"leading-space", " archon-alice", false},
-		{"unicode", "archon-алиса", false},
+		{"invalid-char", "archon:alice", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

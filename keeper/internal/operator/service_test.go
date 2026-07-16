@@ -363,10 +363,10 @@ func TestCreate_HappyPath(t *testing.T) {
 	}
 	// created_at should come from DB (SelectByAID), not local "now".
 	if !res.CreatedAt.Equal(createdAt) {
-		t.Errorf("CreatedAt = %v, want %v (из БД)", res.CreatedAt, createdAt)
+		t.Errorf("CreatedAt = %v, want %v (from DB)", res.CreatedAt, createdAt)
 	}
 	if res.ExpiresAt.Before(time.Now()) {
-		t.Errorf("ExpiresAt = %v, должен быть в будущем", res.ExpiresAt)
+		t.Errorf("ExpiresAt = %v, must be in the future", res.ExpiresAt)
 	}
 }
 
@@ -458,14 +458,14 @@ func TestCreate_IssueFailsAfterInsert(t *testing.T) {
 		t.Fatal("Create with failing issuer returned nil err")
 	}
 	if res != nil {
-		t.Errorf("res = %v, want nil при провале Issue", res)
+		t.Errorf("res = %v, want nil on Issue failure", res)
 	}
 	if !strings.Contains(err.Error(), "issue JWT failed") {
 		t.Errorf("err = %q, want substring issue JWT failed", err)
 	}
 	// Insert already happened — operator row remains in DB (orphaned).
 	if pool.insertCalls != 1 {
-		t.Errorf("insertCalls = %d, want 1 — Insert committed до провала Issue", pool.insertCalls)
+		t.Errorf("insertCalls = %d, want 1: Insert committed before Issue failure", pool.insertCalls)
 	}
 	// Caller should be able to unwrap original cause.
 	if !strings.Contains(err.Error(), "vault signing key unavailable") {
@@ -574,10 +574,10 @@ func TestIssueToken_HappyPath(t *testing.T) {
 		t.Errorf("JWT = %q", res.JWT)
 	}
 	if res.ExpiresAt.Before(time.Now()) {
-		t.Errorf("ExpiresAt = %v, должен быть в будущем", res.ExpiresAt)
+		t.Errorf("ExpiresAt = %v, must be in the future", res.ExpiresAt)
 	}
 	if iss.lastRole == nil || iss.lastRole[0] != "operator" {
-		t.Errorf("issued roles = %v, want [operator] из RBAC", iss.lastRole)
+		t.Errorf("issued roles = %v, want [operator] from RBAC", iss.lastRole)
 	}
 }
 
@@ -603,7 +603,7 @@ func TestIssueToken_NotFound(t *testing.T) {
 		t.Fatalf("err = %v, want ErrOperatorNotFound", err)
 	}
 	if iss.calls != 0 {
-		t.Errorf("issuer.calls = %d, want 0 для несуществующего AID", iss.calls)
+		t.Errorf("issuer.calls = %d, want 0 for nonexistent AID", iss.calls)
 	}
 }
 
@@ -622,7 +622,7 @@ func TestIssueToken_Revoked(t *testing.T) {
 		t.Fatalf("err = %v, want ErrOperatorAlreadyRevoked", err)
 	}
 	if iss.calls != 0 {
-		t.Errorf("issuer.calls = %d, want 0 для ревокнутого оператора", iss.calls)
+		t.Errorf("issuer.calls = %d, want 0 for revoked operator", iss.calls)
 	}
 }
 
@@ -880,16 +880,16 @@ func TestCreate_WithRoles_UnknownRole_Rollback(t *testing.T) {
 		t.Fatalf("err = %v, want errors.Is(err, rbac.ErrRoleNotFound)", err)
 	}
 	if pool.tx == nil {
-		t.Fatal("tx не открыта")
+		t.Fatal("tx was not opened")
 	}
 	if pool.tx.committed {
-		t.Errorf("tx закоммичена при FK-violation на role — want rollback")
+		t.Errorf("tx committed on FK violation for role: want rollback")
 	}
 	if !pool.tx.rolled {
-		t.Errorf("tx не откачена явно")
+		t.Errorf("tx was not explicitly rolled back")
 	}
 	if len(pool.roleGrants) != 0 {
-		t.Errorf("roleGrants = %d, want 0 при rollback", len(pool.roleGrants))
+		t.Errorf("roleGrants = %d, want 0 on rollback", len(pool.roleGrants))
 	}
 }
 
@@ -910,10 +910,10 @@ func TestCreate_WithRoles_InvalidRoleName_Pre(t *testing.T) {
 		t.Errorf("err = %q, want substring invalid role name", err)
 	}
 	if pool.tx != nil {
-		t.Errorf("tx открыта на битом имени — want нет round-trip")
+		t.Errorf("tx opened on bad name: want no round-trip")
 	}
 	if pool.insertCalls != 0 {
-		t.Errorf("insertCalls = %d, want 0 — pre-валидация ДО Insert", pool.insertCalls)
+		t.Errorf("insertCalls = %d, want 0: pre-validation BEFORE Insert", pool.insertCalls)
 	}
 }
 
@@ -939,7 +939,7 @@ func TestCreate_WithRoles_PublishesInvalidate(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	if got := inv.calls.Load(); got != 1 {
-		t.Fatalf("Invalidate calls = %d, want 1 после atomic create+grant", got)
+		t.Fatalf("Invalidate calls = %d, want 1 after atomic create+grant", got)
 	}
 }
 
@@ -961,7 +961,7 @@ func TestCreate_WithoutRoles_NoInvalidate(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	if got := inv.calls.Load(); got != 0 {
-		t.Errorf("Invalidate calls = %d, want 0 без ролей в запросе", got)
+		t.Errorf("Invalidate calls = %d, want 0 without roles in request", got)
 	}
 }
 
@@ -988,7 +988,7 @@ func TestCreate_WithRoles_DoesNotPublishOnRollback(t *testing.T) {
 		t.Fatal("err = nil, want FK-violation")
 	}
 	if got := inv.calls.Load(); got != 0 {
-		t.Errorf("Invalidate calls = %d, want 0 при rollback", got)
+		t.Errorf("Invalidate calls = %d, want 0 on rollback", got)
 	}
 }
 
@@ -1009,7 +1009,7 @@ func TestCreate_WithRoles_BeginTxFails(t *testing.T) {
 		t.Errorf("err = %q, want substring begin tx", err)
 	}
 	if pool.insertCalls != 0 {
-		t.Errorf("insertCalls = %d, want 0 при провале BeginTx", pool.insertCalls)
+		t.Errorf("insertCalls = %d, want 0 on BeginTx failure", pool.insertCalls)
 	}
 }
 

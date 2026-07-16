@@ -479,7 +479,7 @@ func TestCountNonSystem_HappyPath(t *testing.T) {
 	}
 	// Guard: SQL must filter by created_via, otherwise archon-system blocks bootstrap again.
 	if !strings.Contains(f.lastQuerySQL, "created_via") {
-		t.Errorf("SQL = %q, want фильтр по created_via", f.lastQuerySQL)
+		t.Errorf("SQL = %q, want filter by created_via", f.lastQuerySQL)
 	}
 }
 
