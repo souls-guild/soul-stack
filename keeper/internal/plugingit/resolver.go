@@ -1,29 +1,28 @@
-// Package plugingit — git-резолвер источников Keeper-side плагинов
-// (ADR-026 Sigil, подход F-fetch, slice A1-S1).
+// Package plugingit — git resolver for Keeper-side plugin sources
+// (ADR-026 Sigil, F-fetch approach, slice A1-S1).
 //
-// До A1-S1 каталог `keeper.yml::plugins.{cloud_drivers,ssh_providers}` нёс
-// `source`/`ref`, но они НЕ использовались — бинарь в слот кеша попадал вне
-// Soul Stack. Резолвер закрывает это: для каждой записи каталога Keeper сам
-// git-резолвит `source`+`ref` в commit_sha-слот, извлекая УЖЕ СОБРАННЫЙ бинарь
-// из `dist/<binary-name>` (F-fetch — компиляции на Keeper НЕТ).
+// Before A1-S1 catalog `keeper.yml::plugins.{cloud_drivers,ssh_providers}` carried
+// `source`/`ref`, but they were NOT used — binary reached cache slot outside
+// Soul Stack. Resolver closes this: for each catalog entry Keeper itself
+// git-resolves `source`+`ref` to commit_sha slot, extracting ALREADY-BUILT binary
+// from `dist/<binary-name>` (F-fetch — no compilation on Keeper).
 //
-// Раскладка кеша (R-nested layout, A1-S1):
+// Cache layout (R-nested layout, A1-S1):
 //
 //	<cacheRoot>/
 //	  <ns>-<name>/
-//	    current -> <commit_sha>        # symlink на активный слот (атомарно)
-//	    <commit_sha>/                  # иммутабельный слот (commit_sha уникален)
+//	    current -> <commit_sha>        # symlink to active slot (atomic)
+//	    <commit_sha>/                  # immutable slot (commit_sha unique)
 //	      manifest.yaml
-//	      soul-cloud-<name>            # или soul-ssh-<name>
+//	      soul-cloud-<name>            # or soul-ssh-<name>
 //
-// git-egress — HIGH security-риск. Git-операции идут через go-git (pure-Go,
-// без форка системного `git`): hooks НЕ исполняются by design, транспорта
-// `ext::` не существует, submodules не рекурсятся по умолчанию, `file://`
-// заперт scheme-allowlist-ом ([validateGitScheme]); clone/fetch — shallow
-// (Depth=1) под context-timeout. Подробности hardening-инвариантов — в
-// [git.go]. Резолвленный бинарь НЕ исполняется и НЕ помечается доверенным —
-// доверие даётся отдельно через `plugin.allow` + Sigil (S3/S4/S6), резолвер
-// лишь наполняет кеш.
+// git-egress — HIGH security risk. Git operations via go-git (pure-Go,
+// no system `git` fork): hooks NOT executed by design, `ext::` transport
+// does not exist, submodules not recursive by default, `file://` locked by
+// scheme-allowlist ([validateGitScheme]); clone/fetch — shallow (Depth=1)
+// under context timeout. Hardening invariant details — in [git.go].
+// Resolved binary NOT executed and NOT marked trusted — trust given separately
+// via `plugin.allow` + Sigil (S3/S4/S6), resolver only populates cache.
 package plugingit
 
 import (
@@ -45,71 +44,71 @@ import (
 	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
 )
 
-// currentLink — имя symlink-а на активный commit_sha-слот внутри <ns>-<name>/.
+// currentLink — name of symlink to active commit_sha slot inside <ns>-<name>/.
 const currentLink = "current"
 
-// Sentinel-ошибки резолва одной записи каталога. ResolveCatalog маппит их в
-// per-entry warnings (fail-closed: сломанная запись скипается, Keeper не падает).
+// Sentinel errors for resolve of one catalog entry. ResolveCatalog maps them to
+// per-entry warnings (fail-closed: broken entry skipped, Keeper does not crash).
 var (
-	// ErrRefNotResolved — ResolveRevision(<ref>^{commit}) не нашёл коммит (ref
-	// не существует ни как тег, ни как ветка, ни как полный hash).
+	// ErrRefNotResolved — ResolveRevision(<ref>^{commit}) found no commit (ref
+	// does not exist as tag, branch, or full hash).
 	ErrRefNotResolved = errors.New("plugingit: ref does not resolve to a commit")
-	// ErrManifestNotFound — в checkout-е нет manifest.yaml в корне.
+	// ErrManifestNotFound — checkout has no manifest.yaml at root.
 	ErrManifestNotFound = errors.New("plugingit: manifest.yaml not found in checkout")
-	// ErrArtifactNotFound — ожидаемого собранного бинаря dist/<binary-name> нет
-	// или это не обычный файл (F-fetch требует УЖЕ собранный артефакт).
+	// ErrArtifactNotFound — expected built binary dist/<binary-name> missing
+	// or not a regular file (F-fetch requires ALREADY-built artifact).
 	ErrArtifactNotFound = errors.New("plugingit: built artifact not found in dist/")
-	// ErrSourceUnavailable — git clone/fetch/checkout источника провалился
-	// (недоступен remote, auth, таймаут).
+	// ErrSourceUnavailable — git clone/fetch/checkout of source failed
+	// (remote unavailable, auth, timeout).
 	ErrSourceUnavailable = errors.New("plugingit: git source unavailable")
-	// ErrArtifactTooLarge — бинарь dist/<binary-name> превышает
+	// ErrArtifactTooLarge — binary dist/<binary-name> exceeds
 	// plugins.max_artifact_size_mb. git-egress hardening (ADR-026(g)):
-	// враждебный/огромный артефакт не должен забить кеш keeper-host-а. Fail-closed
-	// — слот не создаётся.
+	// adversarial/huge artifact must not fill keeper-host cache. Fail-closed
+	// — slot not created.
 	ErrArtifactTooLarge = errors.New("plugingit: built artifact exceeds size limit")
-	// ErrCloneTooLarge — суммарный размер рабочего дерева клона (checkout + .git)
-	// превышает plugins.max_clone_size_mb. git-egress hardening (ADR-026(g)):
-	// огромный репозиторий не должен забить work_root. Fail-closed — workdir
-	// чистится, слот не создаётся.
+	// ErrCloneTooLarge — total size of clone working tree (checkout + .git)
+	// exceeds plugins.max_clone_size_mb. git-egress hardening (ADR-026(g)):
+	// huge repository must not fill work_root. Fail-closed — workdir
+	// cleaned, slot not created.
 	ErrCloneTooLarge = errors.New("plugingit: clone tree exceeds size limit")
 )
 
-// DefaultGitTimeout — дефолтный timeout цепочки git-операций резолва
-// (clone/fetch → resolve → checkout). Совпадает с config-дефолтом
+// DefaultGitTimeout — default timeout for resolver git-operation chain
+// (clone/fetch → resolve → checkout). Matches config default
 // [config.DefaultPluginFetchTimeout].
 const DefaultGitTimeout = config.DefaultPluginFetchTimeout
 
-// artifactSubdir — подкаталог собранного артефакта в репозитории плагина
-// (F-fetch: бинарь уже собран и лежит в dist/, Keeper его не компилирует).
+// artifactSubdir — subdirectory of built artifact in plugin repository
+// (F-fetch: binary already built in dist/, Keeper does not compile).
 const artifactSubdir = "dist"
 
-// ResolvedSlot — результат успешного резолва одной записи каталога: куда лёг
-// иммутабельный слот и чем он идентифицируется.
+// ResolvedSlot — result of successful resolve of one catalog entry: where
+// immutable slot was placed and how it is identified.
 type ResolvedSlot struct {
-	// Namespace / Name — ключ плагина (из manifest checkout-а, не из каталога:
-	// каталог несёт только `name`, namespace берётся из самого manifest-а).
+	// Namespace / Name — plugin key (from checkout manifest, not catalog:
+	// catalog carries only `name`, namespace taken from manifest itself).
 	Namespace string
 	Name      string
-	// Ref — operator-asserted метка из каталога (`ref:`), как есть.
+	// Ref — operator-asserted label from catalog (`ref:`), as-is.
 	Ref string
-	// CommitSHA — 40-hex commit, в который зарезолвился ref. Идентификатор слота
-	// (иммутабелен: один commit_sha → один каталог слота).
+	// CommitSHA — 40-hex commit to which ref resolved. Slot identifier
+	// (immutable: one commit_sha → one slot directory).
 	CommitSHA string
-	// SlotDir — абсолютный путь иммутабельного слота
+	// SlotDir — absolute path of immutable slot
 	// `<cacheRoot>/<ns>-<name>/<commit_sha>/`.
 	SlotDir string
-	// BinarySHA256 — SHA-256 (hex, lowercase) бинаря в слоте.
+	// BinarySHA256 — SHA-256 (hex, lowercase) of binary in slot.
 	BinarySHA256 string
 }
 
-// Resolver — git-резолвер каталога плагинов. cacheRoot — корень кеша слотов;
-// workRoot — корень рабочих клонов (СТРОГО вне cacheRoot, чтобы .git и checkout
-// не попадали в кеш-каталог, читаемый Discover/ReadSlot).
+// Resolver — git resolver for plugin catalog. cacheRoot — root of slot cache;
+// workRoot — root of working clones (STRICTLY outside cacheRoot, so .git and checkout
+// not in cache directory read by Discover/ReadSlot).
 //
-// maxArtifactSize / maxCloneSize — size-лимиты git-egress hardening (ADR-026(g),
-// байты): потолок одного извлекаемого бинаря и суммарного рабочего дерева клона.
-// Защита диска keeper-host-а от враждебного/огромного репозитория (timeout
-// ограничивает egress по времени, эти — по объёму). Превышение — fail-closed.
+// maxArtifactSize / maxCloneSize — size limits for git-egress hardening (ADR-026(g),
+// bytes): ceiling of single extracted binary and total clone working tree.
+// Protection of keeper-host disk from adversarial/huge repository (timeout
+// bounds egress by time, these — by volume). Exceeded — fail-closed.
 type Resolver struct {
 	cacheRoot       string
 	workRoot        string
@@ -119,11 +118,11 @@ type Resolver struct {
 	logger          *slog.Logger
 }
 
-// NewResolver конструирует резолвер. gitTimeout <= 0 → [DefaultGitTimeout].
-// maxArtifactSize / maxCloneSize <= 0 → дефолты [config.DefaultPluginMaxArtifactSizeMB]
-// / [config.DefaultPluginMaxCloneSizeMB] (резолв симметричен Resolved*-методам
-// конфига). logger nil → slog.Default(). Git-операции — go-git (pure-Go, без
-// форка системного `git`).
+// NewResolver constructs resolver. gitTimeout <= 0 → [DefaultGitTimeout].
+// maxArtifactSize / maxCloneSize <= 0 → defaults [config.DefaultPluginMaxArtifactSizeMB]
+// / [config.DefaultPluginMaxCloneSizeMB] (resolve symmetric to Resolved* config methods).
+// logger nil → slog.Default(). Git operations — go-git (pure-Go, no
+// system `git` fork).
 func NewResolver(cacheRoot, workRoot string, gitTimeout time.Duration, maxArtifactSize, maxCloneSize int64, logger *slog.Logger) *Resolver {
 	if gitTimeout <= 0 {
 		gitTimeout = DefaultGitTimeout
@@ -147,17 +146,17 @@ func NewResolver(cacheRoot, workRoot string, gitTimeout time.Duration, maxArtifa
 	}
 }
 
-// bytesPerMiB — множитель МиБ→байты, локальная копия [config.bytesPerMiB]
-// (неэкспортируемая в shared/config), чтобы дефолтить лимиты в байтах без
-// import-обхода.
+// bytesPerMiB — multiplier MiB→bytes, local copy of [config.bytesPerMiB]
+// (unexported in shared/config), to default limits in bytes without
+// import workaround.
 const bytesPerMiB = 1024 * 1024
 
-// ResolveCatalog резолвит весь каталог cloud_drivers + ssh_providers +
-// soul_modules. Per-entry ошибки превращаются в warnings (fail-closed):
-// сломанная запись скипается, Keeper не падает. Возвращает (успешно
-// зарезолвленные слоты, warnings, fatal-ошибку). fatal — только то, что ломает
-// резолв В ПРИНЦИПЕ (например, невозможность создать workRoot); nil plugins →
-// пустой результат.
+// ResolveCatalog resolves entire catalog cloud_drivers + ssh_providers +
+// soul_modules. Per-entry errors converted to warnings (fail-closed):
+// broken entry skipped, Keeper does not crash. Returns (successfully
+// resolved slots, warnings, fatal error). fatal — only what breaks
+// resolve IN PRINCIPLE (e.g., unable to create workRoot); nil plugins →
+// empty result.
 func (r *Resolver) ResolveCatalog(ctx context.Context, plugins *config.KeeperPlugins) ([]ResolvedSlot, []string, error) {
 	if plugins == nil {
 		return nil, nil, nil
@@ -184,28 +183,28 @@ func (r *Resolver) ResolveCatalog(ctx context.Context, plugins *config.KeeperPlu
 	return slots, warnings, nil
 }
 
-// ResolveEntry резолвит одну запись каталога в иммутабельный commit_sha-слот.
-// Поток (F-fetch — без компиляции):
+// ResolveEntry resolves one catalog entry to immutable commit_sha slot.
+// Flow (F-fetch — no compilation):
 //
-//  1. validateGitScheme(source): allowlist https/ssh/scp (file:// — только под
-//     env-флагом); недопустимая схема → ErrSourceUnavailable;
-//  2. workdir := <workRoot>/<name>/ (вне cacheRoot, mode 0700);
-//     go-git shallow clone (или fetch, если клон уже есть);
-//  3. commit_sha := resolveRef(<ref>^{commit}) (40-hex гарантирован типом
-//     plumbing.Hash; нерезолвящийся ref → ErrRefNotResolved);
-//  4. checkout detached-HEAD на commit_sha (go-git, hooks не исполняются);
-//  5. parse <workdir>/manifest.yaml (нет → ErrManifestNotFound) → kind →
-//     BinaryName() → ожидаемый dist/<binary-name> (нет/не файл → ErrArtifactNotFound);
-//  6. dst := <cacheRoot>/<ns>-<name>/<commit_sha>/; если уже валиден → skip
-//     (commit_sha иммутабелен);
-//  7. staging-каталог на том же fs → copy(manifest+binary)+fsync → atomic rename;
-//  8. atomic-обновление symlink <cacheRoot>/<ns>-<name>/current → <commit_sha>;
+//  1. validateGitScheme(source): allowlist https/ssh/scp (file:// — only under
+//     env flag); disallowed scheme → ErrSourceUnavailable;
+//  2. workdir := <workRoot>/<name>/ (outside cacheRoot, mode 0700);
+//     go-git shallow clone (or fetch if clone exists);
+//  3. commit_sha := resolveRef(<ref>^{commit}) (40-hex guaranteed by
+//     plumbing.Hash type; unresolvable ref → ErrRefNotResolved);
+//  4. checkout detached-HEAD to commit_sha (go-git, hooks not executed);
+//  5. parse <workdir>/manifest.yaml (missing → ErrManifestNotFound) → kind →
+//     BinaryName() → expected dist/<binary-name> (missing/not file → ErrArtifactNotFound);
+//  6. dst := <cacheRoot>/<ns>-<name>/<commit_sha>/; if already valid → skip
+//     (commit_sha immutable);
+//  7. staging directory on same fs → copy(manifest+binary)+fsync → atomic rename;
+//  8. atomic update symlink <cacheRoot>/<ns>-<name>/current → <commit_sha>;
 //  9. binary_sha256 := sha256(<dst>/<binary-name>).
 //
-// `<ns>` берётся из manifest-а ПОСЛЕ checkout: до parse namespace неизвестен,
-// поэтому workdir именуется по `name` каталога (детерминирован до parse), а
-// перенос в namespace-aware слот делается на шаге 6 (cacheRoot), где namespace
-// уже прочитан.
+// `<ns>` taken from manifest AFTER checkout: before parse namespace unknown,
+// so workdir named by catalog `name` (deterministic before parse), and
+// move to namespace-aware slot done on step 6 (cacheRoot), where namespace
+// already read.
 func (r *Resolver) ResolveEntry(ctx context.Context, e config.PluginCatalogEntry) (ResolvedSlot, error) {
 	ctx, cancel := context.WithTimeout(ctx, r.gitTimeout)
 	defer cancel()
@@ -220,7 +219,7 @@ func (r *Resolver) ResolveEntry(ctx context.Context, e config.PluginCatalogEntry
 		return ResolvedSlot{}, err
 	}
 
-	// workdir именуется по name каталога (namespace ещё не известен до parse).
+	// workdir named by catalog name (namespace not yet known before parse).
 	workdir := filepath.Join(r.workRoot, sanitizeSegment(e.Name))
 	commitSHA, err := r.prepareCheckout(ctx, workdir, e.Source, e.Ref)
 	if err != nil {
@@ -255,9 +254,9 @@ func (r *Resolver) ResolveEntry(ctx context.Context, e config.PluginCatalogEntry
 	if !ast.Mode().IsRegular() {
 		return ResolvedSlot{}, fmt.Errorf("%w: %s is not a regular file", ErrArtifactNotFound, artifactPath)
 	}
-	// git-egress hardening (ADR-026(g)): отсекаем огромный бинарь ДО копирования
-	// в кеш по os.Stat-размеру (LimitReader на самом copyFileSync — defense-in-
-	// depth ниже). Fail-closed: слот не материализуется.
+	// git-egress hardening (ADR-026(g)): cut off huge binary BEFORE copy to
+	// cache by os.Stat size (LimitReader in copyFileSync — defense-in-
+	// depth below). Fail-closed: slot not materialized.
 	if ast.Size() > r.maxArtifactSize {
 		return ResolvedSlot{}, fmt.Errorf("%w: %s = %d bytes > limit %d bytes", ErrArtifactTooLarge, artifactPath, ast.Size(), r.maxArtifactSize)
 	}
@@ -266,8 +265,8 @@ func (r *Resolver) ResolveEntry(ctx context.Context, e config.PluginCatalogEntry
 	pluginDir := filepath.Join(r.cacheRoot, slotKey)
 	dst := filepath.Join(pluginDir, commitSHA)
 
-	// commit_sha иммутабелен: если слот уже валиден — пропускаем извлечение,
-	// только обновляем current и считаем digest существующего бинаря.
+	// commit_sha immutable: if slot already valid — skip extraction,
+	// only update current and calculate digest of existing binary.
 	if !r.slotValid(dst, binName) {
 		if err := r.materializeSlot(pluginDir, dst, manifestPath, artifactPath, binName, r.maxArtifactSize); err != nil {
 			return ResolvedSlot{}, err
@@ -293,14 +292,14 @@ func (r *Resolver) ResolveEntry(ctx context.Context, e config.PluginCatalogEntry
 	}, nil
 }
 
-// prepareCheckout готовит рабочий клон workdir на ref-е и возвращает
-// зарезолвленный 40-hex commit_sha. Shallow-клонирует (Depth=1) при отсутствии
-// клона, иначе делает shallow fetch ровно ref-а; резолвит ref в commit; затем
-// checkout detached-HEAD на этот commit. workdir создаётся mode 0700
+// prepareCheckout prepares working clone at workdir on ref and returns
+// resolved 40-hex commit_sha. Shallow-clones (Depth=1) if clone missing,
+// otherwise shallow fetch exactly ref; resolves ref to commit; then
+// checkout detached-HEAD to this commit. workdir created mode 0700
 // (service-user-only).
 //
-// transport/auth/таймаут-фейлы clone/fetch → ErrSourceUnavailable;
-// нерезолвящийся ref → ErrRefNotResolved (от [resolveRef]).
+// transport/auth/timeout failures on clone/fetch → ErrSourceUnavailable;
+// unresolvable ref → ErrRefNotResolved (from [resolveRef]).
 func (r *Resolver) prepareCheckout(ctx context.Context, workdir, source, ref string) (string, error) {
 	if err := os.MkdirAll(r.workRoot, 0o700); err != nil {
 		return "", fmt.Errorf("plugingit: mkdir work root %q: %w", r.workRoot, err)
@@ -327,11 +326,11 @@ func (r *Resolver) prepareCheckout(ctx context.Context, workdir, source, ref str
 		return "", fmt.Errorf("%w: %v", ErrSourceUnavailable, err)
 	}
 
-	// git-egress hardening (ADR-026(g)): go-git не даёт byte-cap на clone, поэтому
-	// меряем рабочее дерево (checkout + .git) ПОСЛЕ извлечения, но ДО копирования
-	// артефакта в кеш. Shallow Depth=1 уже отсекает историю; этот walk ловит
-	// огромный рабочий-tree (мусорные файлы / раздутый артефакт). Превышение —
-	// fail-closed: чистим workdir, слот не создаётся.
+	// git-egress hardening (ADR-026(g)): go-git no byte-cap on clone, so
+	// measure working tree (checkout + .git) AFTER extraction but BEFORE copy
+	// artifact to cache. Shallow Depth=1 already cuts history; this walk catches
+	// huge working tree (junk files / inflated artifact). Exceeded —
+	// fail-closed: clean workdir, slot not created.
 	size, err := dirSize(workdir)
 	if err != nil {
 		return "", fmt.Errorf("%w: %v", ErrSourceUnavailable, err)
@@ -343,9 +342,9 @@ func (r *Resolver) prepareCheckout(ctx context.Context, workdir, source, ref str
 	return commitSHA, nil
 }
 
-// dirSize суммирует размер обычных файлов поддерева root (du-подобно, без учёта
-// каталогов/симлинков). Прерывается на первой walk-ошибке — частичный обход
-// сделал бы лимит-проверку недостоверной.
+// dirSize sums size of regular files in root subtree (du-like, excluding
+// directories/symlinks). Interrupts on first walk error — partial traverse
+// would make limit-check unreliable.
 func dirSize(root string) (int64, error) {
 	var total int64
 	err := filepath.WalkDir(root, func(_ string, d os.DirEntry, err error) error {
@@ -368,8 +367,8 @@ func dirSize(root string) (int64, error) {
 	return total, nil
 }
 
-// slotValid — true, если dst уже содержит manifest.yaml и бинарь binName
-// (commit_sha-слот иммутабелен; повторный резолв того же коммита — skip).
+// slotValid — true if dst already contains manifest.yaml and binary binName
+// (commit_sha slot immutable; re-resolve of same commit — skip).
 func (r *Resolver) slotValid(dst, binName string) bool {
 	if st, err := os.Stat(filepath.Join(dst, sharedplugin.FileName)); err != nil || st.IsDir() {
 		return false
@@ -380,11 +379,11 @@ func (r *Resolver) slotValid(dst, binName string) bool {
 	return true
 }
 
-// materializeSlot извлекает manifest+бинарь в иммутабельный слот dst атомарно:
-// сборка в staging-каталоге НА ТОМ ЖЕ fs, что dst (rename атомарен только в
-// пределах одного fs), fsync файлов, затем os.Rename(staging, dst). artifactMax
-// — байт-cap копирования бинаря (ADR-026(g)): copy через LimitReader, при
-// превышении staging чистится и возвращается ErrArtifactTooLarge (fail-closed).
+// materializeSlot extracts manifest+binary to immutable slot dst atomically:
+// build in staging directory ON SAME fs as dst (rename atomic only within
+// one fs), fsync files, then os.Rename(staging, dst). artifactMax
+// — byte-cap for binary copy (ADR-026(g)): copy via LimitReader, on
+// exceeded staging cleaned and ErrArtifactTooLarge returned (fail-closed).
 func (r *Resolver) materializeSlot(pluginDir, dst, manifestSrc, artifactSrc, binName string, artifactMax int64) error {
 	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
 		return fmt.Errorf("plugingit: mkdir plugin dir %q: %w", pluginDir, err)
@@ -395,7 +394,7 @@ func (r *Resolver) materializeSlot(pluginDir, dst, manifestSrc, artifactSrc, bin
 	}
 	cleanup := func() { _ = os.RemoveAll(staging) }
 
-	// manifest без cap (заведомо мелкий, его форму валидирует loader).
+	// manifest no cap (admittedly small, loader validates its form).
 	if err := copyFileSync(manifestSrc, filepath.Join(staging, sharedplugin.FileName), 0o644, 0); err != nil {
 		cleanup()
 		return err
@@ -407,8 +406,8 @@ func (r *Resolver) materializeSlot(pluginDir, dst, manifestSrc, artifactSrc, bin
 
 	if err := os.Rename(staging, dst); err != nil {
 		cleanup()
-		// Гонка двух резолверов на один commit_sha: победитель уже создал dst —
-		// это не ошибка (слот иммутабелен, содержимое идентично).
+		// Race of two resolvers on same commit_sha: winner already created dst —
+		// not an error (slot immutable, content identical).
 		if r.slotValid(dst, binName) {
 			return nil
 		}
@@ -417,7 +416,7 @@ func (r *Resolver) materializeSlot(pluginDir, dst, manifestSrc, artifactSrc, bin
 	return nil
 }
 
-// fileDigest считает SHA-256 файла потоково (бинари плагинов — десятки МБ).
+// fileDigest calculates file SHA-256 streaming (plugin binaries — tens of MB).
 func fileDigest(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -431,11 +430,11 @@ func fileDigest(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// copyFileSync копирует src→dst с заданным mode и fsync (слот должен пережить
-// crash до того, как current на него переключится). maxBytes > 0 — байт-cap
-// (ADR-026(g) git-egress hardening): копируем через LimitReader(maxBytes+1) и при
-// превышении возвращаем ErrArtifactTooLarge fail-closed (dst остаётся в staging,
-// который вызывающий чистит). maxBytes <= 0 — без лимита (manifest).
+// copyFileSync copies src→dst with given mode and fsync (slot must survive
+// crash before current switches to it). maxBytes > 0 — byte-cap
+// (ADR-026(g) git-egress hardening): copy via LimitReader(maxBytes+1) and
+// exceeded returns ErrArtifactTooLarge fail-closed (dst stays in staging,
+// caller cleans). maxBytes <= 0 — no limit (manifest).
 func copyFileSync(src, dst string, mode os.FileMode, maxBytes int64) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -448,7 +447,7 @@ func copyFileSync(src, dst string, mode os.FileMode, maxBytes int64) error {
 	}
 	var reader io.Reader = in
 	if maxBytes > 0 {
-		// +1 байт: если LimitReader отдал ровно maxBytes+1 — источник больше cap-а.
+		// +1 byte: if LimitReader gives exactly maxBytes+1 — source exceeds cap.
 		reader = io.LimitReader(in, maxBytes+1)
 	}
 	written, err := io.Copy(out, reader)
@@ -467,17 +466,17 @@ func copyFileSync(src, dst string, mode os.FileMode, maxBytes int64) error {
 	if err := out.Close(); err != nil {
 		return fmt.Errorf("plugingit: close %q: %w", dst, err)
 	}
-	// OpenFile с mode подвержен umask — выставляем mode явно.
+	// OpenFile with mode subject to umask — set mode explicitly.
 	if err := os.Chmod(dst, mode); err != nil {
 		return fmt.Errorf("plugingit: chmod %q: %w", dst, err)
 	}
 	return nil
 }
 
-// updateCurrentSymlink атомарно переставляет <pluginDir>/current → commitSHA:
-// создаёт temp-symlink рядом и os.Rename-ит его на current (rename symlink-а
-// атомарен в пределах каталога). Цель — относительная (commitSHA), чтобы слот
-// был перемещаемым вместе с pluginDir.
+// updateCurrentSymlink atomically swaps <pluginDir>/current → commitSHA:
+// creates temp-symlink nearby and os.Rename-s it to current (rename of symlink
+// atomic within directory). Target — relative (commitSHA), so slot
+// movable together with pluginDir.
 func updateCurrentSymlink(pluginDir, commitSHA string) error {
 	tmp := filepath.Join(pluginDir, ".current-"+randSuffix())
 	if err := os.Symlink(commitSHA, tmp); err != nil {
@@ -490,18 +489,18 @@ func updateCurrentSymlink(pluginDir, commitSHA string) error {
 	return nil
 }
 
-// randSuffix — короткий случайный суффикс для staging/temp-имён (избегаем
-// коллизий параллельных резолверов). crypto/rand — не для крипто-стойкости,
-// а чтобы два процесса не выбрали один суффикс.
+// randSuffix — short random suffix for staging/temp names (avoid
+// collisions of parallel resolvers). crypto/rand — not for crypto-strength,
+// but so two processes don't pick same suffix.
 func randSuffix() string {
 	var b [8]byte
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
 }
 
-// sanitizeSegment защищает имя path-сегмента от `/`/`..`: в каталог попадает
-// только `name` из каталога (kebab-case по manifest-валидации), но workdir
-// строится до parse — поэтому страхуемся от path-traversal в config-значении.
+// sanitizeSegment protects path segment name from `/`/`..`: directory receives
+// only `name` from catalog (kebab-case by manifest validation), but workdir
+// built before parse — so guard against path-traversal in config value.
 func sanitizeSegment(s string) string {
 	s = strings.ReplaceAll(s, "/", "-")
 	s = strings.ReplaceAll(s, "\\", "-")
@@ -512,8 +511,8 @@ func sanitizeSegment(s string) string {
 	return s
 }
 
-// firstManifestError возвращает первую error-уровневую диагностику manifest-а
-// (warning/hint игнорируются). nil — фатальных ошибок нет.
+// firstManifestError returns first error-level diagnostic of manifest
+// (warning/hint ignored). nil — no fatal errors.
 func firstManifestError(diags []diag.Diagnostic) error {
 	for _, d := range diags {
 		if d.Level == diag.LevelError {
