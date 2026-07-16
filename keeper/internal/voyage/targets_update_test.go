@@ -14,13 +14,13 @@ func TestMarkTargetRunning_SQLAndArgs(t *testing.T) {
 		t.Fatalf("MarkTargetRunning: %v", err)
 	}
 	if !strings.Contains(fdb.execSQL, "status   = 'running'") {
-		t.Errorf("SQL без перевода в running: %.200s", fdb.execSQL)
+		t.Errorf("SQL missing transition to running: %.200s", fdb.execSQL)
 	}
 	if !strings.Contains(fdb.execSQL, "vt.status       = 'awaiting'") {
-		t.Errorf("SQL без idempotent guard status='awaiting': %.200s", fdb.execSQL)
+		t.Errorf("SQL missing idempotent guard status='awaiting': %.200s", fdb.execSQL)
 	}
 	if !strings.Contains(fdb.execSQL, "v.attempt       = $5") {
-		t.Errorf("SQL без fencing guard voyages.attempt: %.200s", fdb.execSQL)
+		t.Errorf("SQL missing fencing guard voyages.attempt: %.200s", fdb.execSQL)
 	}
 	if len(fdb.execArgs) != 5 {
 		t.Fatalf("execArgs len = %d, want 5", len(fdb.execArgs))
@@ -41,13 +41,13 @@ func TestMarkTargetRunning_SID_WritesErrandID(t *testing.T) {
 		t.Fatalf("MarkTargetRunning(sid): %v", err)
 	}
 	if !strings.Contains(fdb.execSQL, "errand_id = $4") {
-		t.Errorf("SQL не пишет errand_id для kind=sid: %.200s", fdb.execSQL)
+		t.Errorf("SQL does not write errand_id for kind=sid: %.200s", fdb.execSQL)
 	}
 	if strings.Contains(fdb.execSQL, "apply_id = $4") {
-		t.Errorf("SQL пишет apply_id вместо errand_id для kind=sid: %.200s", fdb.execSQL)
+		t.Errorf("SQL writes apply_id instead of errand_id for kind=sid: %.200s", fdb.execSQL)
 	}
 	if len(fdb.execArgs) != 5 || fdb.execArgs[3] != "er1" || fdb.execArgs[4] != 1 {
-		t.Errorf("execArgs = %v, want back-link er1 в $4, attempt 1 в $5", fdb.execArgs)
+		t.Errorf("execArgs = %v, want back-link er1 in $4, attempt 1 in $5", fdb.execArgs)
 	}
 }
 
@@ -84,10 +84,10 @@ func TestMarkTargetTerminal_SQLAndArgs(t *testing.T) {
 		t.Fatalf("MarkTargetTerminal: %v", err)
 	}
 	if !strings.Contains(fdb.execSQL, "finished_at = NOW()") {
-		t.Errorf("SQL без finished_at: %.200s", fdb.execSQL)
+		t.Errorf("SQL missing finished_at: %.200s", fdb.execSQL)
 	}
 	if !strings.Contains(fdb.execSQL, "status NOT IN ('succeeded', 'failed', 'cancelled', 'no_match')") {
-		t.Errorf("SQL без idempotent terminal guard: %.200s", fdb.execSQL)
+		t.Errorf("SQL missing idempotent terminal guard: %.200s", fdb.execSQL)
 	}
 	if got := fdb.execArgs[3]; got != string(TargetStatusSucceeded) {
 		t.Errorf("status arg = %v, want succeeded", got)

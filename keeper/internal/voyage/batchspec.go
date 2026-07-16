@@ -6,26 +6,26 @@ import (
 	"strings"
 )
 
-// BatchSpecMode — дискриминатор разобранного строкового batch-поля: размер пачки
-// задан абсолютным числом хостов/инкарнаций либо процентом от scope.
+// BatchSpecMode — discriminator for the parsed string batch field: the batch
+// size is given either as an absolute number of hosts/incarnations or as a percentage of scope.
 type BatchSpecMode int
 
 const (
-	// BatchSpecHosts — `batch: "N"`: абсолютный размер Leg-а (parity batch_size).
+	// BatchSpecHosts — `batch: "N"`: absolute Leg size (parity batch_size).
 	BatchSpecHosts BatchSpecMode = iota
-	// BatchSpecPercent — `batch: "N%"`: процент от резолвнутого scope (parity
-	// batch_percent), эффективный размер считается ПОСЛЕ резолва scope через
-	// существующий effectiveBatchSize.
+	// BatchSpecPercent — `batch: "N%"`: percentage of the resolved scope (parity
+	// batch_percent), the effective size is computed AFTER resolving scope via
+	// the existing effectiveBatchSize.
 	BatchSpecPercent
 )
 
-// Sentinel-ошибки [ParseBatchSpec] — caller маппит их в человекочитаемый 422-detail
-// (или трактует [ErrBatchSpecEmpty] как «поле не задано»).
-//   - ErrBatchSpecEmpty        — пустая/пробельная строка; не «ошибка ввода», а
-//     отсутствие значения (caller: весь scope одним Leg).
-//   - ErrBatchSpecMalformed    — не соответствует `^\d+%?$` (точка, знак, мусор,
-//     внутренний пробел) либо число не влезает в int (overflow).
-//   - ErrBatchSpecPercentRange — percent вне [1, 100].
+// Sentinel errors for [ParseBatchSpec] — the caller maps them to a human-readable 422 detail
+// (or treats [ErrBatchSpecEmpty] as "field not set").
+//   - ErrBatchSpecEmpty        — empty/whitespace string; not an "input error" but
+//     an absent value (caller: the whole scope as one Leg).
+//   - ErrBatchSpecMalformed    — doesn't match `^\d+%?$` (dot, sign, garbage,
+//     internal whitespace) or the number doesn't fit in int (overflow).
+//   - ErrBatchSpecPercentRange — percent outside [1, 100].
 //   - ErrBatchSpecHostsRange   — hosts < 1.
 var (
 	ErrBatchSpecEmpty        = errors.New("voyage: batch spec is empty")
@@ -34,22 +34,22 @@ var (
 	ErrBatchSpecHostsRange   = errors.New("voyage: batch hosts must be >= 1")
 )
 
-// batchSpecMaxDigits — потолок длины числовой части. int64 в худшем случае —
-// 19 значащих цифр; 9 безопасно покрывает любой осмысленный размер батча
-// (до 999 999 999) и заведомо влезает в int на всех целевых платформах,
-// исключая overflow ещё до strconv.Atoi.
+// batchSpecMaxDigits — ceiling on the numeric part's length. int64 has 19
+// significant digits in the worst case; 9 safely covers any reasonable batch
+// size (up to 999,999,999) and reliably fits in int on all target platforms,
+// ruling out overflow before it even reaches strconv.Atoi.
 const batchSpecMaxDigits = 9
 
-// ParseBatchSpec разбирает строковое batch-поле Voyage (S1 строковых batch-полей).
+// ParseBatchSpec parses the Voyage string batch field (S1 of the string batch fields).
 //
-// Грамматика (fail-closed): trim входной строки → строго `^(\d+)(%?)$`. Суффикс
-// `%` ⇒ [BatchSpecPercent], value∈[1,100]; иначе [BatchSpecHosts], value≥1.
-// Любое отклонение (знак, точка, внутренний пробел, лишние символы, overflow) →
-// [ErrBatchSpecMalformed]. Пустая/пробельная строка → [ErrBatchSpecEmpty]
-// (caller трактует как «не задано», НЕ как ошибку ввода).
+// Grammar (fail-closed): trim the input string → strictly `^(\d+)(%?)$`. Suffix
+// `%` ⇒ [BatchSpecPercent], value∈[1,100]; otherwise [BatchSpecHosts], value≥1.
+// Any deviation (sign, dot, internal whitespace, extra characters, overflow) →
+// [ErrBatchSpecMalformed]. Empty/whitespace string → [ErrBatchSpecEmpty]
+// (the caller treats it as "not set", NOT as an input error).
 //
-// Pure-функция: без аллокаций сверх trim, без regexp (ручной скан дешевле и даёт
-// явный overflow-guard по длине цифровой части).
+// Pure function: no allocations beyond trim, no regexp (a manual scan is cheaper
+// and gives an explicit overflow guard on the digit part's length).
 func ParseBatchSpec(s string) (mode BatchSpecMode, value int, err error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -62,17 +62,17 @@ func ParseBatchSpec(s string) (mode BatchSpecMode, value int, err error) {
 		percent = true
 		digits = s[:last]
 	}
-	// Пустая цифровая часть ("%"), пустая после trim уже отсечена выше.
+	// Empty digit part ("%"); empty after trim is already ruled out above.
 	if digits == "" {
 		return 0, 0, ErrBatchSpecMalformed
 	}
-	// Только ASCII-цифры: исключает знак, точку, внутренний пробел, второй `%`.
+	// ASCII digits only: rules out sign, dot, internal whitespace, a second `%`.
 	for i := 0; i < len(digits); i++ {
 		if digits[i] < '0' || digits[i] > '9' {
 			return 0, 0, ErrBatchSpecMalformed
 		}
 	}
-	// Overflow-guard по длине ДО strconv: огромные цифры → malformed.
+	// Overflow guard on length BEFORE strconv: huge digit strings → malformed.
 	if len(digits) > batchSpecMaxDigits {
 		return 0, 0, ErrBatchSpecMalformed
 	}

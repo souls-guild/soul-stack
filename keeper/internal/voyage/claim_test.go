@@ -42,13 +42,13 @@ func TestClaimNext_PassesArgs_AndSQL(t *testing.T) {
 		t.Fatalf("ClaimNext: %v", err)
 	}
 	if !strings.Contains(fdb.queryRowSQL, "FOR UPDATE SKIP LOCKED") {
-		t.Errorf("claim SQL без FOR UPDATE SKIP LOCKED: %.300s", fdb.queryRowSQL)
+		t.Errorf("claim SQL missing FOR UPDATE SKIP LOCKED: %.300s", fdb.queryRowSQL)
 	}
 	if !strings.Contains(fdb.queryRowSQL, "attempt          = v.attempt + 1") {
-		t.Errorf("claim SQL без attempt++ (fencing): %.300s", fdb.queryRowSQL)
+		t.Errorf("claim SQL missing attempt++ (fencing): %.300s", fdb.queryRowSQL)
 	}
 	if !strings.Contains(fdb.queryRowSQL, "ORDER BY c.created_at ASC") {
-		t.Errorf("claim SQL без FIFO created_at: %.300s", fdb.queryRowSQL)
+		t.Errorf("claim SQL missing FIFO created_at: %.300s", fdb.queryRowSQL)
 	}
 	if len(fdb.queryRowArgs) != 2 {
 		t.Fatalf("queryRowArgs = %d, want 2", len(fdb.queryRowArgs))
@@ -58,9 +58,9 @@ func TestClaimNext_PassesArgs_AndSQL(t *testing.T) {
 	}
 }
 
-// TestClaimNext_ScheduledGatingSQL — claimable-предикат покрывает pending И
-// наступивший scheduled, но не будущий scheduled. Гейтинг живёт в SQL
-// (fakeDB не симулирует PG row-matching, поэтому проверяем shape предиката).
+// TestClaimNext_ScheduledGatingSQL — the claimable predicate covers pending AND
+// a due scheduled, but not a future scheduled. The gating lives in SQL
+// (fakeDB doesn't simulate PG row-matching, so we check the predicate's shape).
 func TestClaimNext_ScheduledGatingSQL(t *testing.T) {
 	t.Parallel()
 	for _, frag := range []string{
@@ -74,9 +74,9 @@ func TestClaimNext_ScheduledGatingSQL(t *testing.T) {
 			t.Errorf("claimNextSQL missing %q\nSQL: %s", frag, claimNextSQL)
 		}
 	}
-	// scheduled-гейтинг обязан быть OR-ветвью к pending (а не AND-сужением).
+	// scheduled-gating must be an OR-branch to pending (not an AND-narrowing).
 	if !strings.Contains(claimNextSQL, "WHERE c.status = 'pending'\n       OR (c.status = 'scheduled'") {
-		t.Errorf("claimNextSQL: scheduled должен быть OR-ветвью к pending\nSQL: %s", claimNextSQL)
+		t.Errorf("claimNextSQL: scheduled must be OR-branch to pending\nSQL: %s", claimNextSQL)
 	}
 }
 
@@ -112,7 +112,7 @@ func TestRenewLease_HappyPath(t *testing.T) {
 		t.Fatalf("RenewLease: %v", err)
 	}
 	if !strings.Contains(fdb.queryRowSQL, "claim_expires_at > NOW()") {
-		t.Errorf("renew SQL без not-expired-guard: %.200s", fdb.queryRowSQL)
+		t.Errorf("renew SQL missing not-expired-guard: %.200s", fdb.queryRowSQL)
 	}
 }
 
@@ -124,7 +124,7 @@ func TestReleaseLease_HappyPath(t *testing.T) {
 		t.Fatalf("ReleaseLease: %v", err)
 	}
 	if !strings.Contains(fdb.execSQL, "status           = 'pending'") {
-		t.Errorf("release SQL не возвращает в pending: %.200s", fdb.execSQL)
+		t.Errorf("release SQL does not return to pending: %.200s", fdb.execSQL)
 	}
 }
 
@@ -139,7 +139,7 @@ func TestReleaseLease_ValidationErrors(t *testing.T) {
 	}
 }
 
-// stringRow — Scan(*string) для RETURNING voyage_id (RenewLease).
+// stringRow — Scan(*string) for RETURNING voyage_id (RenewLease).
 type stringRow struct{ v string }
 
 func (r stringRow) Scan(dest ...any) error {

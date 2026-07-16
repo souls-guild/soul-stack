@@ -11,9 +11,9 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// verifyTestDB — ExecQueryRower для VerifyOwnership: QueryRow на verifyOwnershipSQL
-// возвращает строку-владельца (Scan 1) либо no-rows (→ ErrLeaseLost) под noRows.
-// Фиксирует args последнего QueryRow для проверки fencing-предиката.
+// verifyTestDB — ExecQueryRower for VerifyOwnership: QueryRow on verifyOwnershipSQL
+// returns owner row (Scan 1) or no-rows (→ ErrLeaseLost) for noRows.
+// Captures args of last QueryRow for fencing-predicate check.
 type verifyTestDB struct {
 	noRows  bool
 	queryRX bool
@@ -66,7 +66,7 @@ func TestVerifyOwnership_Owner(t *testing.T) {
 	if !db.queryRX {
 		t.Fatal("VerifyOwnership did not query")
 	}
-	// fencing-предикат: voyage_id / kid / attempt в args.
+	// fencing-predicate: voyage_id / kid / attempt in args.
 	if len(db.args) != 3 || db.args[0] != "v1" || db.args[1] != "kid-1" || db.args[2] != 3 {
 		t.Fatalf("verify args = %v, want [v1 kid-1 3]", db.args)
 	}

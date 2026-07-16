@@ -10,31 +10,30 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// voyageTargetsTable / voyageTargetsColumns — таблица и порядок колонок для
-// CopyFrom-вставки единиц прогона. Совпадают с прежним per-row INSERT (тот же
-// набор и порядок); serial-PK в набор не входит — target_id составной из
-// известных данных, CopyFrom не возвращает строки и они не нужны.
+// voyageTargetsTable / voyageTargetsColumns — table and column order for
+// CopyFrom insert of run units. Match former per-row INSERT (same set and
+// order); serial-PK not in set — target_id composite from known data, CopyFrom
+// does not return rows and they are not needed.
 var (
 	voyageTargetsTable   = pgx.Identifier{"voyage_targets"}
 	voyageTargetsColumns = []string{"voyage_id", "target_kind", "target_id", "batch_index", "status"}
 )
 
-// InsertTargets вставляет единицы прогона (Leg-разбиение) одного Voyage в
-// статусе [TargetStatusAwaiting]. Вызывается при создании Voyage (S5-handler /
-// orchestrator pre-plan) — снапшот целей фиксируется сразу за INSERT-ом самого
-// `voyages`-row (ADR-043: snapshot-scope не «дрожит» между Leg-ами).
+// InsertTargets inserts run units (Leg split) of one Voyage in
+// [TargetStatusAwaiting] status. Called on Voyage creation (S5-handler /
+// orchestrator pre-plan) — snapshot of targets fixed immediately after INSERT of
+// `voyages` row itself (ADR-043: snapshot-scope does not «drift» between Legs).
 //
-// Все targets обязаны ссылаться на тот же voyageID, иметь валидный TargetKind и
-// непустой TargetID. Caller обязан передавать db = pgx.Tx, если нужна атомарность
-// с Insert самого Voyage (CRUD не открывает транзакцию сам).
+// All targets must reference same voyageID, have valid TargetKind and non-empty
+// TargetID. Caller must pass db = pgx.Tx if atomicity with Voyage Insert needed
+// (CRUD does not open transaction itself).
 //
-// Вставка идёт одним COPY (pgx CopyFrom), а не циклом per-row INSERT (S-med-3):
-// scope Voyage может достигать [config.DefaultVoyageMaxScope] единиц, и N
-// отдельных round-trip-ов в одной транзакции упёрлись бы в INSERT-rate.
-// Атомарность сохранена — CopyFrom идёт через ту же tx, что и Insert самого
-// Voyage. Валидация (тот же voyageID / валидный TargetKind / непустой TargetID /
-// неотрицательный BatchIndex) проходит ДО COPY: невалидный target → error без
-// записи.
+// Insert goes via single COPY (pgx CopyFrom), not per-row INSERT loop (S-med-3):
+// Voyage scope can reach [config.DefaultVoyageMaxScope] units, and N separate
+// round-trips in one transaction would hit INSERT-rate limit. Atomicity preserved
+// — CopyFrom goes via same tx as Voyage Insert. Validation (same voyageID / valid
+// TargetKind / non-empty TargetID / non-negative BatchIndex) happens BEFORE COPY:
+// invalid target → error without write.
 func InsertTargets(ctx context.Context, db ExecQueryRower, voyageID string, targets []VoyageTarget) error {
 	if voyageID == "" {
 		return fmt.Errorf("voyage: empty voyage_id")
@@ -97,10 +96,10 @@ WHERE voyage_id = $1
 ORDER BY batch_index ASC, target_kind ASC, target_id ASC
 `
 
-// SelectTargets читает все единицы прогона Voyage по voyage_id, отсортированные
-// по (batch_index, target_kind, target_id) — порядок two-level drill для
-// All-runs вида (S5). Пустой результат — не ошибка (Voyage без targets либо чужой
-// id; вызывающий проверяет существование самого Voyage через SelectByID).
+// SelectTargets reads all run units of Voyage by voyage_id, sorted by
+// (batch_index, target_kind, target_id) — order two-level drill for All-runs
+// view (S5). Empty result — not error (Voyage without targets or foreign id;
+// caller checks Voyage existence via SelectByID).
 func SelectTargets(ctx context.Context, db ExecQueryRower, voyageID string) ([]VoyageTarget, error) {
 	if voyageID == "" {
 		return nil, fmt.Errorf("voyage: empty voyage_id")
@@ -125,9 +124,9 @@ func SelectTargets(ctx context.Context, db ExecQueryRower, voyageID string) ([]V
 	return out, nil
 }
 
-// updateTargetRunningApplySQL — back-link на дочерний scenario-run
-// (kind=incarnation, S2): пишем apply_id. JOIN на voyages.attempt фенсит CAS по
-// epoch захвата (см. [MarkTargetRunning]).
+// updateTargetRunningApplySQL — back-link to child scenario-run
+// (kind=incarnation, S2): write apply_id. JOIN on voyages.attempt fences CAS per
+// capture epoch (see [MarkTargetRunning]).
 const updateTargetRunningApplySQL = `
 UPDATE voyage_targets AS vt
 SET status   = 'running',
@@ -141,11 +140,11 @@ WHERE vt.voyage_id   = $1
   AND v.attempt       = $5
 `
 
-// updateTargetRunningErrandSQL — back-link на дочерний Errand (kind=sid, S3):
-// пишем errand_id. Колонка отличается от scenario-варианта, потому voyage_targets
-// несёт отдельные nullable apply_id / errand_id (миграция 059): один и тот же
-// перевод awaiting→running, но другой back-link-столбец по target_kind. JOIN на
-// voyages.attempt фенсит CAS по epoch захвата (см. [MarkTargetRunning]).
+// updateTargetRunningErrandSQL — back-link to child Errand (kind=sid, S3):
+// write errand_id. Column differs from scenario variant because voyage_targets
+// carries separate nullable apply_id / errand_id (migration 059): same
+// awaiting→running transition, but different back-link column per target_kind.
+// JOIN on voyages.attempt fences CAS per capture epoch (see [MarkTargetRunning]).
 const updateTargetRunningErrandSQL = `
 UPDATE voyage_targets AS vt
 SET status    = 'running',
@@ -159,23 +158,23 @@ WHERE vt.voyage_id   = $1
   AND v.attempt       = $5
 `
 
-// MarkTargetRunning переводит единицу прогона awaiting→running и проставляет
-// back-link на дочерний прогон. По target_kind выбирается столбец back-link-а:
+// MarkTargetRunning transitions run unit awaiting→running and sets back-link to
+// child run. Per target_kind selects back-link column:
 //   - [TargetKindIncarnation] → apply_id (per-incarnation scenario-run, S2);
 //   - [TargetKindSID]         → errand_id (per-host Errand, S3).
 //
-// backlinkID — applyID (scenario) либо errandID (command). attempt — claim-epoch
-// воркера (voyages.attempt из ClaimNext). Вызывается оркестратором сразу после
-// спавна дочернего прогона, ДО ожидания его терминала, чтобы All-runs-вид (S5)
-// показывал «в работе» с корректным drill-ом.
+// backlinkID — applyID (scenario) or errandID (command). attempt — worker claim
+// epoch (voyages.attempt from ClaimNext). Called by orchestrator immediately
+// after child run spawn, BEFORE awaiting its terminal, so All-runs view (S5)
+// shows «in progress» with correct drill.
 //
-// WHERE сужено до status='awaiting' + JOIN voyages.attempt=$attempt (idempotent +
-// fencing guard, S-med-2): повторный вызов после failover-re-claim — no-op
-// RowsAffected=0 (target уже running ЛИБО attempt сдвинулся при реклейме). Это
-// детерминированно отличает «свой running» от осиротевшего: воркер прежнего
-// claim-epoch (attempt=N) не перепишет running после реклейма (voyages.attempt=
-// N+1). CRUD-ошибка PG поднимается caller-у; «строки нет» — caller трактует как
-// уже-обработанную (recovery), не как fatal.
+// WHERE narrowed to status='awaiting' + JOIN voyages.attempt=$attempt
+// (idempotent + fencing guard, S-med-2): repeat call after failover-reclaim —
+// no-op RowsAffected=0 (target already running OR attempt shifted on reclaim).
+// This deterministically distinguishes «own running» from orphaned: worker of
+// prior claim-epoch (attempt=N) will not overwrite running after reclaim
+// (voyages.attempt=N+1). PG CRUD error raised to caller; «no rows» — caller
+// treats as already-processed (recovery), not fatal.
 func MarkTargetRunning(ctx context.Context, db ExecQueryRower, voyageID string, kind TargetKind, targetID, backlinkID string, attempt int) error {
 	if voyageID == "" {
 		return fmt.Errorf("voyage: empty voyage_id")
@@ -209,14 +208,14 @@ WHERE voyage_id   = $1
   AND status NOT IN ('succeeded', 'failed', 'cancelled', 'no_match')
 `
 
-// MarkTargetTerminal фиксирует терминал единицы прогона (succeeded / failed /
-// cancelled / no_match) + finished_at = NOW(). Вызывается оркестратором после
-// достижения терминала дочернего прогона target-а.
+// MarkTargetTerminal fixes terminal of run unit (succeeded / failed /
+// cancelled / no_match) + finished_at = NOW(). Called by orchestrator after
+// child run of target reaches terminal.
 //
-// WHERE исключает уже-терминальные строки (idempotent guard, parity
-// MarkTargetRunning): повторный финал после failover — no-op RowsAffected=0.
-// status обязан быть терминальным TargetStatus; awaiting/running → [ErrInvalidStatus]
-// (программная ошибка caller-а).
+// WHERE excludes already-terminal rows (idempotent guard, parity
+// MarkTargetRunning): repeat finalize after failover — no-op RowsAffected=0.
+// status must be terminal TargetStatus; awaiting/running → [ErrInvalidStatus]
+// (caller programming error).
 func MarkTargetTerminal(ctx context.Context, db ExecQueryRower, voyageID string, kind TargetKind, targetID string, status TargetStatus) error {
 	if voyageID == "" {
 		return fmt.Errorf("voyage: empty voyage_id")
@@ -236,8 +235,8 @@ func MarkTargetTerminal(ctx context.Context, db ExecQueryRower, voyageID string,
 	return nil
 }
 
-// isTerminalTargetStatus — terminal-подмножество [TargetStatus] (succeeded /
-// failed / cancelled / no_match). awaiting/running — не терминал.
+// isTerminalTargetStatus — terminal subset of [TargetStatus] (succeeded /
+// failed / cancelled / no_match). awaiting/running — not terminal.
 func isTerminalTargetStatus(s TargetStatus) bool {
 	switch s {
 	case TargetStatusSucceeded, TargetStatusFailed, TargetStatusCancelled, TargetStatusNoMatch:

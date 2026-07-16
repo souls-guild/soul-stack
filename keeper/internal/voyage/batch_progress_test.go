@@ -10,9 +10,9 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// batchProgressDB — ExecQueryRower-стаб для UpdateBatchProgress: фиксирует
-// последний Exec-SQL + args и эмулирует RowsAffected (0 → чужой voyage /
-// сменился attempt).
+// batchProgressDB — ExecQueryRower stub for UpdateBatchProgress: captures
+// the last Exec SQL + args and emulates RowsAffected (0 → foreign voyage /
+// attempt changed).
 type batchProgressDB struct {
 	execSQL  string
 	execArgs []any
@@ -50,28 +50,28 @@ func TestUpdateBatchProgress_OwnershipGuardedUpdate(t *testing.T) {
 	if err := UpdateBatchProgress(context.Background(), db, "v1", "kid-1", 3, 2); err != nil {
 		t.Fatalf("UpdateBatchProgress: %v", err)
 	}
-	// ownership-guard в WHERE: voyage_id + claimed_by_kid + attempt; SET
+	// ownership-guard in WHERE: voyage_id + claimed_by_kid + attempt; SET
 	// current_batch_index.
 	for _, frag := range []string{"current_batch_index", "claimed_by_kid", "attempt"} {
 		if !strings.Contains(db.execSQL, frag) {
 			t.Errorf("SQL missing %q:\n%s", frag, db.execSQL)
 		}
 	}
-	// args: $1 voyage_id, $2 completedBatches (SET), $3 kid, $4 attempt — порядок
-	// зависит от реализации, проверяем присутствие всех значений.
+	// args: $1 voyage_id, $2 completedBatches (SET), $3 kid, $4 attempt — order
+	// depends on the implementation, we check presence of all values.
 	if !argsContain(db.execArgs, "v1") || !argsContain(db.execArgs, "kid-1") ||
 		!argsContain(db.execArgs, 3) || !argsContain(db.execArgs, 2) {
 		t.Fatalf("args = %v, want [v1 kid-1 attempt=3 completed=2]", db.execArgs)
 	}
 }
 
-// UpdateBatchProgress на чужой voyage / после смены attempt → 0 rows. Best-effort:
-// НЕ ошибка (правда живёт в voyage_targets, прогресс — лишь UI-подсказка).
+// UpdateBatchProgress on a foreign voyage / after an attempt change → 0 rows. Best-effort:
+// NOT an error (the truth lives in voyage_targets, progress is just a UI hint).
 func TestUpdateBatchProgress_OwnershipMismatchNoError(t *testing.T) {
 	t.Parallel()
 	db := &batchProgressDB{affected: 0}
 	if err := UpdateBatchProgress(context.Background(), db, "v1", "kid-1", 99, 2); err != nil {
-		t.Fatalf("0 rows (чужой voyage) не должен быть ошибкой, got: %v", err)
+		t.Fatalf("0 rows (foreign voyage) should not be error, got: %v", err)
 	}
 }
 

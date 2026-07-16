@@ -4,7 +4,7 @@ package voyage
 
 import "os"
 
-// requireDocker — true, если CI требует обязательного docker-а (parity
+// requireDocker — true if CI requires mandatory docker (parity
 // choir / incarnation / operator).
 func requireDocker() bool {
 	v := os.Getenv("SOUL_STACK_INTEGRATION_REQUIRE_DOCKER")

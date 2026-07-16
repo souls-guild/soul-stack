@@ -5,9 +5,9 @@ import (
 	"testing"
 )
 
-// ParseBatchSpec — pure-парсер строкового batch-поля (S1 строковых batch-полей).
-// Грамматика fail-closed: trim → `^(\d+)(%?)$`; `%` → percent∈[1,100], иначе
-// hosts≥1. Тесты ДО реализации (TDD).
+// ParseBatchSpec — pure parser for the string batch field (S1 of the string batch fields).
+// Grammar fail-closed: trim → `^(\d+)(%?)$`; `%` → percent∈[1,100], otherwise
+// hosts≥1. Tests written BEFORE the implementation (TDD).
 
 func TestParseBatchSpec_Valid(t *testing.T) {
 	t.Parallel()
@@ -60,7 +60,7 @@ func TestParseBatchSpec_Errors(t *testing.T) {
 		{"+5", ErrBatchSpecMalformed},
 		{"5%%", ErrBatchSpecMalformed},
 		{"%5", ErrBatchSpecMalformed},
-		// Overflow: огромное число → malformed (не паника strconv, не молчаливый clamp).
+		// Overflow: a huge number → malformed (not an strconv panic, not a silent clamp).
 		{"99999999999999999999", ErrBatchSpecMalformed},
 		{"99999999999999999999%", ErrBatchSpecMalformed},
 	}

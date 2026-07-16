@@ -30,8 +30,8 @@ type fakeDB struct {
 	querySQL   string
 	queryArgs  []any
 
-	// CopyFrom-перехват (InsertTargets, S-med-3): фиксируем таблицу/колонки и
-	// прочитанные из источника строки; copyErr подменяет результат.
+	// CopyFrom interception (InsertTargets, S-med-3): captures the table/columns and
+	// the rows read from the source; copyErr substitutes the result.
 	copyCalls   int
 	copyTable   pgx.Identifier
 	copyColumns []string
@@ -69,8 +69,8 @@ func (f *fakeDB) Query(_ context.Context, sql string, args ...any) (pgx.Rows, er
 	return nil, errors.New("fakeDB: Query not configured")
 }
 
-// CopyFrom прокручивает источник до конца (как реальный pgx-COPY читает все
-// строки), запоминая значения каждой строки и таблицу/колонки для ассертов.
+// CopyFrom drains the source to the end (like a real pgx COPY reads all
+// rows), recording each row's values and the table/columns for assertions.
 func (f *fakeDB) CopyFrom(_ context.Context, table pgx.Identifier, columns []string, src pgx.CopyFromSource) (int64, error) {
 	f.copyCalls++
 	f.copyTable = table
@@ -202,13 +202,13 @@ func TestInsert_ValidationErrors(t *testing.T) {
 		{"empty id", func(v *Voyage) { v.VoyageID = "" }, "empty voyage_id"},
 		{"empty aid", func(v *Voyage) { v.StartedByAID = "" }, "empty started_by_aid"},
 		{"invalid kind", func(v *Voyage) { v.Kind = "bogus" }, "invalid kind"},
-		{"scenario without name", func(v *Voyage) { v.ScenarioName = nil }, "kind=scenario требует"},
-		{"scenario with module", func(v *Voyage) { v.Module = strptr("core.cmd.shell") }, "не должен нести module"},
+		{"scenario without name", func(v *Voyage) { v.ScenarioName = nil }, "kind=scenario requires"},
+		{"scenario with module", func(v *Voyage) { v.Module = strptr("core.cmd.shell") }, "must not carry module"},
 		{"empty target", func(v *Voyage) { v.TargetResolved = nil }, "empty target_resolved"},
 		{"batch_size zero", func(v *Voyage) { z := 0; v.BatchSize = &z }, "batch_size must be > 0"},
 		{"concurrency negative", func(v *Voyage) { n := -1; v.Concurrency = &n }, "concurrency must be > 0"},
 		{"invalid on_failure", func(v *Voyage) { f := OnFailure("noop"); v.OnFailure = &f }, "invalid on_failure"},
-		{"non-pending status", func(v *Voyage) { v.Status = StatusRunning }, "Insert требует status=pending"},
+		{"non-pending status", func(v *Voyage) { v.Status = StatusRunning }, "Insert requires status=pending"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -240,8 +240,8 @@ func TestInsert_CommandValidationErrors(t *testing.T) {
 		mut  func(*Voyage)
 		want string
 	}{
-		{"command without module", func(v *Voyage) { v.Module = nil }, "kind=command требует"},
-		{"command with scenario", func(v *Voyage) { v.ScenarioName = strptr("restart") }, "не должен нести scenario_name"},
+		{"command without module", func(v *Voyage) { v.Module = nil }, "kind=command requires"},
+		{"command with scenario", func(v *Voyage) { v.ScenarioName = strptr("restart") }, "must not carry scenario_name"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -298,21 +298,21 @@ func TestInsert_AutoFillStatusPendingAndInput(t *testing.T) {
 	fdb := &fakeDB{queryRowFunc: func(string) pgx.Row { return fixedTimeRow{t: time.Now().UTC()} }}
 	v := scenarioVoyage()
 	v.Status = ""
-	v.Input = nil // должен подставиться `{}`
+	v.Input = nil // should default to `{}`
 	if err := Insert(ctx, fdb, v); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
 	if v.Status != StatusPending {
 		t.Errorf("Status = %q, want pending (auto-fill)", v.Status)
 	}
-	// Аргумент input (5-й позиционный) — `{}`.
+	// Argument input (5th positional) — `{}`.
 	if got, ok := fdb.queryRowArgs[4].([]byte); !ok || string(got) != "{}" {
 		t.Errorf("input arg = %v, want []byte(`{}`)", fdb.queryRowArgs[4])
 	}
 }
 
-// TestInsert_ScheduleAtFuture_StatusScheduled — schedule_at в будущем (+ пустой
-// Status) → автоветка scheduled, в БД уходит status='scheduled' (arg #16).
+// TestInsert_ScheduleAtFuture_StatusScheduled — schedule_at in the future (+ empty
+// Status) → auto-branches to scheduled, status='scheduled' goes to the DB (arg #16).
 func TestInsert_ScheduleAtFuture_StatusScheduled(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -332,8 +332,8 @@ func TestInsert_ScheduleAtFuture_StatusScheduled(t *testing.T) {
 	}
 }
 
-// TestInsert_ScheduleAtPast_StatusPending — schedule_at в прошлом → ветка
-// pending (наступившее «отложенное» = немедленно подбираемое).
+// TestInsert_ScheduleAtPast_StatusPending — schedule_at in the past → pending
+// branch (a deferred start whose time has come = immediately claimable).
 func TestInsert_ScheduleAtPast_StatusPending(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -350,8 +350,8 @@ func TestInsert_ScheduleAtPast_StatusPending(t *testing.T) {
 	}
 }
 
-// TestInsert_NoScheduleAt_StatusPending — без schedule_at → pending (S1-S3
-// поведение не меняется).
+// TestInsert_NoScheduleAt_StatusPending — without schedule_at → pending (S1-S3
+// behavior is unchanged).
 func TestInsert_NoScheduleAt_StatusPending(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -367,8 +367,8 @@ func TestInsert_NoScheduleAt_StatusPending(t *testing.T) {
 	}
 }
 
-// TestInsert_ExplicitScheduledStatus_Accepted — caller может явно задать
-// scheduled (Insert больше не отвергает не-pending, если это scheduled).
+// TestInsert_ExplicitScheduledStatus_Accepted — the caller can explicitly set
+// scheduled (Insert no longer rejects non-pending if it's scheduled).
 func TestInsert_ExplicitScheduledStatus_Accepted(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -468,10 +468,10 @@ func TestFinalize_HappyPath_WithSummary(t *testing.T) {
 		t.Fatalf("Finalize: %v", err)
 	}
 	if !strings.Contains(fdb.execSQL, "claimed_by_kid = $2") {
-		t.Errorf("SQL без ownership-guard: %.200s", fdb.execSQL)
+		t.Errorf("SQL missing ownership-guard: %.200s", fdb.execSQL)
 	}
 	if !strings.Contains(fdb.execSQL, "status         = 'running'") {
-		t.Errorf("SQL без status='running'-guard: %.200s", fdb.execSQL)
+		t.Errorf("SQL missing status='running'-guard: %.200s", fdb.execSQL)
 	}
 }
 
@@ -504,9 +504,9 @@ func TestInsertTargets_HappyPath(t *testing.T) {
 	if err := InsertTargets(ctx, fdb, "v1", targets); err != nil {
 		t.Fatalf("InsertTargets: %v", err)
 	}
-	// S-med-3: вставка идёт одним CopyFrom, а не циклом per-row Exec.
+	// S-med-3: the insert is a single CopyFrom, not a per-row Exec loop.
 	if fdb.execCalls != 0 {
-		t.Errorf("execCalls = %d, want 0 (InsertTargets использует CopyFrom, не Exec)", fdb.execCalls)
+		t.Errorf("execCalls = %d, want 0 (InsertTargets uses CopyFrom, not Exec)", fdb.execCalls)
 	}
 	if fdb.copyCalls != 1 {
 		t.Errorf("copyCalls = %d, want 1", fdb.copyCalls)
@@ -519,12 +519,12 @@ func TestInsertTargets_HappyPath(t *testing.T) {
 	}
 }
 
-// TestInsertTargets_CopyColumnsMatchSchema059 — guard от рассинхрона колонок
-// CopyFrom со схемой voyage_targets (миграция 059): набор и порядок ДОЛЖНЫ быть
-// ровно (voyage_id, target_kind, target_id, batch_index, status). Эталон выписан
-// вручную из 059 (строки 127-131). Именно этот guard поймал бы BLOCKER, где
-// CopyFrom объявлял несуществующие target_sid / target_incarnation / attempt.
-// created_at в набор не входит — у колонки DEFAULT now() в схеме.
+// TestInsertTargets_CopyColumnsMatchSchema059 — guard against a column desync
+// between CopyFrom and the voyage_targets schema (migration 059): the set and order MUST be
+// exactly (voyage_id, target_kind, target_id, batch_index, status). The reference is written
+// out by hand from 059 (lines 127-131). This exact guard would have caught the BLOCKER where
+// CopyFrom declared nonexistent target_sid / target_incarnation / attempt.
+// created_at isn't in the set — the column has DEFAULT now() in the schema.
 func TestInsertTargets_CopyColumnsMatchSchema059(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -539,14 +539,14 @@ func TestInsertTargets_CopyColumnsMatchSchema059(t *testing.T) {
 
 	wantCols := []string{"voyage_id", "target_kind", "target_id", "batch_index", "status"}
 	if len(fdb.copyColumns) != len(wantCols) {
-		t.Fatalf("CopyFrom columns = %v, want %v (схема 059)", fdb.copyColumns, wantCols)
+		t.Fatalf("CopyFrom columns = %v, want %v (schema 059)", fdb.copyColumns, wantCols)
 	}
 	for i, c := range wantCols {
 		if fdb.copyColumns[i] != c {
 			t.Errorf("CopyFrom column[%d] = %q, want %q", i, fdb.copyColumns[i], c)
 		}
 	}
-	// Значения каждой строки идут СТРОГО в порядке колонок: voyage_id (override),
+	// Each row's values go STRICTLY in column order: voyage_id (override),
 	// target_kind, target_id, batch_index, status=awaiting (auto-fill).
 	if len(fdb.copyValues) != 2 {
 		t.Fatalf("CopyFrom rows = %d, want 2", len(fdb.copyValues))
@@ -567,9 +567,9 @@ func TestInsertTargets_CopyColumnsMatchSchema059(t *testing.T) {
 	}
 }
 
-// TestInsert_CadenceIDBackLink — спавн от Cadence (ADR-046 §2): CadenceID на
-// Voyage уходит последним позиционным аргументом insertSQL (arg #22). Ручной
-// прогон (CadenceID=nil) шлёт NULL (nil-интерфейс).
+// TestInsert_CadenceIDBackLink — spawned from a Cadence (ADR-046 §2): CadenceID on
+// the Voyage goes as insertSQL's last positional argument (arg #22). A manual
+// run (CadenceID=nil) sends NULL (a nil interface).
 func TestInsert_CadenceIDBackLink(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -599,9 +599,9 @@ func TestInsert_CadenceIDBackLink(t *testing.T) {
 	})
 }
 
-// TestScanVoyage_CadenceIDRoundTrip — back-link cadence_id читается из строки в
-// Voyage.CadenceID (последняя колонка selectColumns). Полная строка собирается
-// через voyageRow, чтобы пройти весь scanVoyage с populated cadence_id.
+// TestScanVoyage_CadenceIDRoundTrip — the back-link cadence_id is read from the row into
+// Voyage.CadenceID (the last selectColumns column). The full row is assembled
+// via voyageRow, to exercise the whole scanVoyage with a populated cadence_id.
 func TestScanVoyage_CadenceIDRoundTrip(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -617,7 +617,7 @@ func TestScanVoyage_CadenceIDRoundTrip(t *testing.T) {
 		t.Errorf("CadenceID = %v, want CAD42", v.CadenceID)
 	}
 
-	// Ручной прогон: cadence_id NULL → nil.
+	// Manual run: cadence_id NULL → nil.
 	row.cadenceID = nil
 	v2, err := SelectByID(ctx, fdb, "01H")
 	if err != nil {
@@ -628,8 +628,8 @@ func TestScanVoyage_CadenceIDRoundTrip(t *testing.T) {
 	}
 }
 
-// voyageRow — pgx.Row, отдающий все 31 колонку selectColumns в порядке scanVoyage.
-// Минимальный набор валидных значений + изменяемый cadenceID для back-link-теста.
+// voyageRow — a pgx.Row that returns all 31 selectColumns columns in scanVoyage order.
+// A minimal set of valid values + a mutable cadenceID for the back-link test.
 type voyageRow struct {
 	cadenceID *string
 }
@@ -674,15 +674,15 @@ func (r *voyageRow) Scan(dest ...any) error {
 	return nil
 }
 
-// voyageScanColumns — эталонный порядок колонок строки `voyages` в том виде, в
-// каком scanVoyage присваивает row.Scan-аргументы (crud.go). Единственный источник
-// правды для guard-а: при добавлении/перестановке колонки в insertSQL/
-// selectColumns/scanVoyage без синхронизации списка — тест падает. Давно хрупкий
-// (6 мест на cadence_id, ADR-046 §2); parity guard-059 voyage_targets.
+// voyageScanColumns — the reference column order for a `voyages` row, exactly as
+// scanVoyage assigns the row.Scan arguments (crud.go). The single source of
+// truth for the guard: adding/reordering a column in insertSQL/
+// selectColumns/scanVoyage without syncing this list — the test fails. Long fragile
+// (6 spots for cadence_id, ADR-046 §2); parity with guard-059 voyage_targets.
 //
-// insertSQL пишет лишь подмножество (без DB-managed current_batch_index/
-// claimed_by_kid/... и RETURNING created_at) — проверяем как ПОДпоследовательность
-// эталона в том же относительном порядке, не как префикс.
+// insertSQL writes only a subset (without the DB-managed current_batch_index/
+// claimed_by_kid/... and RETURNING created_at) — we check it as a SUBsequence
+// of the reference in the same relative order, not as a prefix.
 var voyageScanColumns = []string{
 	"voyage_id", "kind", "scenario_name", "module", "input",
 	"target_resolved", "target_origin",
@@ -695,31 +695,31 @@ var voyageScanColumns = []string{
 	"cadence_id",
 }
 
-// TestColumnsMatchScanOrder — guard от рассинхрона ПОРЯДКА позиционных колонок.
-// len(dest)!=31 ловит только число; этот тест ловит перестановку: selectColumns
-// сверяется с [voyageScanColumns] по составу и порядку, insertSQL — что его
-// колонки идут подпоследовательностью эталона (без DB-managed/RETURNING).
+// TestColumnsMatchScanOrder — guard against a desync in the ORDER of positional columns.
+// len(dest)!=31 only catches the count; this test catches a reordering: selectColumns
+// is checked against [voyageScanColumns] for composition and order, insertSQL — that its
+// columns form a subsequence of the reference (without DB-managed/RETURNING).
 func TestColumnsMatchScanOrder(t *testing.T) {
 	t.Parallel()
 
 	sel := parseColumnList(selectColumns)
 	if len(sel) != len(voyageScanColumns) {
-		t.Fatalf("selectColumns = %d колонок %v, want %d %v", len(sel), sel, len(voyageScanColumns), voyageScanColumns)
+		t.Fatalf("selectColumns = %d columns %v, want %d %v", len(sel), sel, len(voyageScanColumns), voyageScanColumns)
 	}
 	for i, want := range voyageScanColumns {
 		if sel[i] != want {
-			t.Errorf("selectColumns[%d] = %q, want %q (рассинхрон со scanVoyage)", i, sel[i], want)
+			t.Errorf("selectColumns[%d] = %q, want %q (out of sync with scanVoyage)", i, sel[i], want)
 		}
 	}
 
 	ins := parseInsertColumns(insertSQL)
 	if !isSubsequence(ins, voyageScanColumns) {
-		t.Errorf("insertSQL колонки %v не являются упорядоченной подпоследовательностью эталона %v (рассинхрон порядка)", ins, voyageScanColumns)
+		t.Errorf("insertSQL columns %v are not an ordered subsequence of expected %v (order out of sync)", ins, voyageScanColumns)
 	}
 }
 
-// isSubsequence сообщает, входят ли все элементы sub в seq в том же относительном
-// порядке (каждый элемент sub должен встретиться при одном проходе по seq).
+// isSubsequence reports whether all elements of sub occur in seq in the same relative
+// order (each element of sub must be encountered during a single pass over seq).
 func isSubsequence(sub, seq []string) bool {
 	i := 0
 	for _, s := range seq {
@@ -730,8 +730,8 @@ func isSubsequence(sub, seq []string) bool {
 	return i == len(sub)
 }
 
-// parseColumnList разбирает SELECT-список колонок в имена по порядку: split по
-// запятым + распаковка `EXTRACT(EPOCH FROM x)::float8` → x.
+// parseColumnList parses a SELECT column list into names in order: split on
+// commas + unwrap `EXTRACT(EPOCH FROM x)::float8` → x.
 func parseColumnList(list string) []string {
 	parts := strings.Split(list, ",")
 	out := make([]string, 0, len(parts))
@@ -743,8 +743,8 @@ func parseColumnList(list string) []string {
 	return out
 }
 
-// parseInsertColumns вытаскивает имена колонок из INSERT INTO t (...) VALUES (...):
-// берёт содержимое первой пары скобок (column-list) и разбирает как список.
+// parseInsertColumns extracts column names from INSERT INTO t (...) VALUES (...):
+// takes the contents of the first pair of parens (the column list) and parses it as a list.
 func parseInsertColumns(sql string) []string {
 	open := strings.Index(sql, "(")
 	closeParen := strings.Index(sql, ")")
@@ -754,8 +754,8 @@ func parseInsertColumns(sql string) []string {
 	return parseColumnList(sql[open+1 : closeParen])
 }
 
-// normalizeColumn приводит элемент column-списка к голому имени:
-// EXTRACT(EPOCH FROM x)::float8 → x; иначе trim + отброс хвостовых ::cast.
+// normalizeColumn reduces a column-list element to its bare name:
+// EXTRACT(EPOCH FROM x)::float8 → x; otherwise trim + drop a trailing ::cast.
 func normalizeColumn(s string) string {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -774,7 +774,7 @@ func normalizeColumn(s string) string {
 	return strings.TrimSpace(s)
 }
 
-// TestInsertTargets_CopyFromError — PG-сбой на CopyFrom оборачивается, не паникует.
+// TestInsertTargets_CopyFromError — a PG failure on CopyFrom is wrapped, not panicked.
 func TestInsertTargets_CopyFromError(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

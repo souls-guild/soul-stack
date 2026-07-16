@@ -1,7 +1,7 @@
 //go:build integration
 
-// Integration-тесты CRUD Voyage через testcontainers-go (ADR-043).
-// Паттерн совпадает с keeper/internal/choir/integration_test.go.
+// Integration tests of Voyage CRUD via testcontainers-go (ADR-043).
+// Pattern matches keeper/internal/choir/integration_test.go.
 
 package voyage
 
@@ -85,21 +85,21 @@ func seedOperator(t *testing.T, aid string) {
 	}
 }
 
-// TestInsertTargets_Integration прогоняет CopyFrom-вставку voyage_targets против
-// РЕАЛЬНОГО Postgres (testcontainers + миграция 059) и читает строки обратно.
-// Ловит mismatch колонок voyage_targets, который мок-тест в принципе не способен
-// поймать (S-med-3 BLOCKER: CopyFrom объявлял несуществующие
-// target_sid / target_incarnation / attempt — на живой БД упало бы «column does
-// not exist», а мок давал ложно-зелёный). Покрывает оба вида target-ов:
-// scenario (target_id = имя инкарнации) и command (target_id = SID).
+// TestInsertTargets_Integration runs CopyFrom insert of voyage_targets against
+// REAL Postgres (testcontainers + migration 059) and reads rows back. Catches
+// column mismatch of voyage_targets that mock test cannot catch in principle
+// (S-med-3 BLOCKER: CopyFrom declared nonexistent target_sid / target_incarnation
+// / attempt — on live DB would fail «column does not exist», but mock gave
+// false-green). Covers both target types: scenario (target_id = incarnation name)
+// and command (target_id = SID).
 func TestInsertTargets_Integration(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
 
 	seedOperator(t, "archon-test")
 
-	// Родительский Voyage (kind=scenario) через реальный CRUD: InsertTargets
-	// ссылается на него по FK voyage_targets.voyage_id → voyages.voyage_id.
+	// Parent Voyage (kind=scenario) via real CRUD: InsertTargets references it
+	// via FK voyage_targets.voyage_id → voyages.voyage_id.
 	v := scenarioVoyage()
 	v.VoyageID = "01H000000000000000000VOYIN"
 	v.StartedByAID = "archon-test"
@@ -107,7 +107,7 @@ func TestInsertTargets_Integration(t *testing.T) {
 		t.Fatalf("Insert voyage: %v", err)
 	}
 
-	// Один CopyFrom через реальный пул: смешанные scenario/command targets.
+	// Single CopyFrom via real pool: mixed scenario/command targets.
 	targets := []VoyageTarget{
 		{TargetKind: TargetKindIncarnation, TargetID: "service-web", BatchIndex: 0},
 		{TargetKind: TargetKindSID, TargetID: "host-a.example.com", BatchIndex: 1},
@@ -116,10 +116,10 @@ func TestInsertTargets_Integration(t *testing.T) {
 		t.Fatalf("InsertTargets (real PG): %v", err)
 	}
 
-	// Обратный SELECT: сверяем target_id (incarnation/SID по kind), kind,
-	// batch_index, status (DEFAULT awaiting). Если бы колонки CopyFrom не
-	// совпадали со схемой 059 — InsertTargets выше упал бы на «column does not
-	// exist», ассерты сюда бы не дошли.
+	// Reverse SELECT: check target_id (incarnation/SID per kind), kind,
+	// batch_index, status (DEFAULT awaiting). If CopyFrom columns did not match
+	// schema 059 — InsertTargets above would fail on «column does not exist»,
+	// asserts would not reach here.
 	rows, err := integrationPool.Query(ctx, `
 		SELECT target_kind, target_id, batch_index, status
 		FROM voyage_targets
@@ -153,11 +153,11 @@ func TestInsertTargets_Integration(t *testing.T) {
 		{kind: string(TargetKindSID), targetID: "host-a.example.com", batch: 1, status: string(TargetStatusAwaiting)},
 	}
 	if len(got) != len(want) {
-		t.Fatalf("число строк = %d, want %d (%+v)", len(got), len(want), got)
+		t.Fatalf("row count = %d, want %d (%+v)", len(got), len(want), got)
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Fatalf("строка %d: got %+v, want %+v", i, got[i], want[i])
+			t.Fatalf("row %d: got %+v, want %+v", i, got[i], want[i])
 		}
 	}
 }

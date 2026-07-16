@@ -2,7 +2,7 @@ package voyage
 
 import "testing"
 
-// ---- ResolveBatchMode: NULL/пустой → barrier (forward-compat), иначе как есть ----
+// ---- ResolveBatchMode: NULL/empty → barrier (forward-compat), otherwise as-is ----
 
 func TestResolveBatchMode(t *testing.T) {
 	t.Parallel()
@@ -28,7 +28,7 @@ func TestResolveBatchMode(t *testing.T) {
 	}
 }
 
-// ---- ValidBatchMode: только closed-enum значения валидны ----
+// ---- ValidBatchMode: only closed-enum values valid ----
 
 func TestValidBatchMode(t *testing.T) {
 	t.Parallel()
@@ -40,7 +40,7 @@ func TestValidBatchMode(t *testing.T) {
 		{BatchModeWindow, true},
 		{BatchMode(""), false},
 		{BatchMode("garbage"), false},
-		{BatchMode("WINDOW"), false}, // регистр значим
+		{BatchMode("WINDOW"), false}, // case sensitive
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.in), func(t *testing.T) {
@@ -51,7 +51,7 @@ func TestValidBatchMode(t *testing.T) {
 	}
 }
 
-// ---- ResolveFailThreshold: обобщённый abort-gate (S-W3) ----
+// ---- ResolveFailThreshold: generalized abort-gate (S-W3) ----
 
 func TestResolveFailThreshold(t *testing.T) {
 	t.Parallel()
@@ -64,11 +64,11 @@ func TestResolveFailThreshold(t *testing.T) {
 		policy    *OnFailure
 		want      int
 	}{
-		{"nil+nil → 0 (без порога)", nil, nil, 0},
+		{"nil+nil → 0 (no threshold)", nil, nil, 0},
 		{"nil+continue → 0", nil, &cont, 0},
 		{"nil+abort → 1 (backcompat)", nil, &abort, 1},
 		{"explicit 3 → 3", &n3, nil, 3},
-		{"explicit 3 побеждает abort", &n3, &abort, 3},
+		{"explicit 3 defeats abort", &n3, &abort, 3},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
