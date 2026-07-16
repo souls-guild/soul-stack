@@ -1,6 +1,6 @@
 # Forms of running work on hosts
 
-Soul Stack provides several entry points for executing work on the fleet.
+Soul Stack provides several entry points for executing work across Souls.
 The choice depends on the semantics of the work and on access to the Soul agent.
 
 ## Decision table
@@ -10,7 +10,7 @@ The choice depends on the semantics of the work and on access to the Soul agent.
 | Apply a scenario to ONE incarnation | `POST /v1/incarnations/{name}/scenarios/{scenario}` (single-incarnation scenario-run, `incarnation.run`) | agent (mTLS EventStream) | yes | Stateful infra operation (deploy, configure, upgrade) |
 | Same, but as a batch (several incarnations / 1000+ hosts) | `POST /v1/voyages` (`kind=scenario`) + `batch_size`/`concurrency` (batch = N incarnations, Leg) | agent | yes | Crowd control / canary / zonal rollout |
 | Ad-hoc command on ONE Soul | `POST /v1/souls/{sid}/exec` | agent | no | Diagnostics of a single host, sync-30s response |
-| Ad-hoc command on MANY Souls | `POST /v1/voyages` (`kind=command`, [ADR-043](../adr/0043-voyage.md)) | agent | no | `uptime` on a coven, fleet state check |
+| Ad-hoc command on MANY Souls | `POST /v1/voyages` (`kind=command`, [ADR-043](../adr/0043-voyage.md)) | agent | no | `uptime` on a coven, Souls state check |
 | Bare-host operation (agentless) | `POST /v1/push/apply` | ssh (via SshProvider) | no (synthetic scenario) | Bootstrap of new VMs, hosts without the soul daemon |
 
 ## Decomposition: "how" vs "what"

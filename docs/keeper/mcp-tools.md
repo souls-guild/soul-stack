@@ -16,7 +16,7 @@ Document addressed to:
 
 - authors of LLM agents and MCP host applications (Claude Code, IDE plugins) connecting to the Keeper MCP server;
 - Keeper developers implementing MCP handlers;
-- `soul-lint` and similar tools that validate scripts for calling tools.
+- `soul-lint` and similar tools that validate scenarios for calling tools.
 
 ## Transport and auth
 
@@ -52,7 +52,7 @@ Each MCP-tool is published according to the MCP spec with the following fields:
 ```json
 {
   "name": "keeper.incarnation.create",
-"description": "Create a new Incarnation: run the selected startup script of the specified Service, create an entry in Postgres. Asynchronous operation - returns _apply_id; query status via keeper.incarnation.get / keeper.incarnation.history.",
+"description": "Create a new Incarnation: run the selected startup scenario of the specified Service, create an entry in Postgres. Asynchronous operation - returns _apply_id; query status via keeper.incarnation.get / keeper.incarnation.history.",
   "inputSchema": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
@@ -71,11 +71,11 @@ Each MCP-tool is published according to the MCP spec with the following fields:
       "create_scenario": {
         "type": "string",
         "pattern": "^[a-z][a-z0-9_]*$",
-"description": "Name of the starting script (scenario with create: true). Empty: the service offers create scripts → selection is required (validation-failed with a list of them); service without create scripts → bare incarnation (ready without running)."
+"description": "Name of the starting scenario (scenario with create: true). Empty: the service offers create scenarios → selection is required (validation-failed with a list of them); service without create scenarios → bare incarnation (ready without running)."
       },
       "input": {
         "type": "object",
-"description": "Input for the selected startup script, validated against its input schema.",
+"description": "Input for the selected startup scenario, validated against its input schema.",
         "default": {}
       }
     }
@@ -132,7 +132,7 @@ Full list of error codes - stable URN suffixes from [operator-api.md → Error t
 | `validation-failed` | Semantic input validation error. |
 | `malformed-request` | Invalid JSON/incorrect query params. |
 | `incarnation-locked` | Incarnation in `error_locked` - call `keeper.incarnation.unlock` before a new run. In `keeper.incarnation.rerun-last` - the status is not `error_locked` (nothing to restart). |
-| `rerun-input-unavailable` | `keeper.incarnation.rerun-last` (day-2-path) cannot restore the input of a failed run: recipe `apply_runs.recipe` cleaned up by retention Reaper / legacy run without a recipe (fail-closed) - remove the block with the usual `unlock` and run the script manually with an explicit input. Separate code from `incarnation-locked` (REST `TypeRerunInputUnavailable`, 409): machine-readable distinguishing "input lost" from "status not `error_locked`". |
+| `rerun-input-unavailable` | `keeper.incarnation.rerun-last` (day-2-path) cannot restore the input of a failed run: recipe `apply_runs.recipe` cleaned up by retention Reaper / legacy run without a recipe (fail-closed) - remove the block with the usual `unlock` and run the scenario manually with an explicit input. Separate code from `incarnation-locked` (REST `TypeRerunInputUnavailable`, 409): machine-readable distinguishing "input lost" from "status not `error_locked`". |
 | `migration-failed` | Incarnation in `migration_failed` - manual parsing of state_history is required. |
 | `would-lock-out-cluster` | The operation would leave the cluster without an active Archon with an effective `*`-permission. Occurs in `keeper.operator.revoke` (recall of the last `*`-Archon), in role-operations `keeper.role.delete` / `keeper.role.update` / `keeper.role.revoke-operator` (see [§ Role](#role-6)) and in synod-operations `keeper.synod.delete` / `keeper.synod.remove-operator` / `keeper.synod.revoke-role` (effective `*` may come via Synod, see [§ Synod](#synod-8)). |
 | `role-not-found` | The role with the specified `name` is missing from `rbac_roles` (`keeper.role.delete` / `keeper.role.update` / `keeper.role.grant-operator` / `keeper.role.revoke-operator`; `keeper.synod.grant-role` over a non-existent role). |
@@ -161,7 +161,7 @@ Full list of error codes - stable URN suffixes from [operator-api.md → Error t
 | `errand-not-cancellable` | Errand is already in terminal status - there is nothing to cancel (`keeper.errand.cancel`, ADR-033 slice E5). |
 | `internal-error` | Unplanned error; full diagnostics - in OTel-trace. |
 
-> Unknown-but-valid script in `keeper.incarnation.run` - **not** call error: tool returns `_apply_id` (async-accepted), run then goes to `error_locked` (`scenario_load_failed`), status is polled via `keeper.incarnation.get`. Symmetrically [operator-api/incarnations.md → `POST …/scenarios/{scenario}`](operator-api/incarnations.md).
+> Unknown-but-valid scenario in `keeper.incarnation.run` - **not** call error: tool returns `_apply_id` (async-accepted), run then goes to `error_locked` (`scenario_load_failed`), status is polled via `keeper.incarnation.get`. Symmetrically [operator-api/incarnations.md → `POST …/scenarios/{scenario}`](operator-api/incarnations.md).
 
 Extending the code list - only-add symmetrically Operator API.
 

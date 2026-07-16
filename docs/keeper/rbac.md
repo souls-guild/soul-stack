@@ -65,8 +65,8 @@ Rules not expressed by grammar:
 
 - **Exactly two segments.** `incarnation.create` - valid; `keeper.incarnation.create` - invalid (three segments; a name of this type is **MCP-tool name**, not permission).
 - **Wildcard only in `<action>`.** `incarnation.*` - valid (all actions on `incarnation`). `*.create` - **not** supported in MVP. Full wildcard - `*` (without dot), separate case.
-- **Whitespace.** There is exactly one space between `<resource>.<action>` and `on`; between the selector key and value - `=` without spaces; between values ​​- `,` without spaces.
-- **Registration** Permission names, selector keys and values ​​are case-sensitive. Canon - lower-case (`coven=`, not `Coven=`).
+- **Whitespace.** There is exactly one space between `<resource>.<action>` and `on`; between the selector key and value - `=` without spaces; between values - `,` without spaces.
+- **Case.** Permission names, selector keys and values are case-sensitive. Canon - lower-case (`coven=`, not `Coven=`).
 - **Kebab-case in action.** Hyphen in `<action>` is acceptable (`operator.issue-token`); Space and underscore are not.
 
 Grammar expansion (new selector keys, wildcards in values, new forms) - separate PR in `rbac.md` with justification. Adding new keys is not breaking (old roles continue to be validated).
@@ -94,7 +94,7 @@ The selector is a single-variable filter `<key>=<v1>,<v2>,…`, where `<key>` is
 | `soulprint='…'` | Permission is limited to hosts whose facts satisfy the CEL predicate `soulprint.self.*` ([ADR-047](../architecture.md) S2b, [ADR-018](../adr/0018-soulprint-typed.md)). | Host facts (`SoulprintFacts`) - supplied by list-visibility/target resolver (slices S3/S4). |
 | `trait=key:value` | Permission is limited to incarnations whose operator-set trait label `key` is equal to `value` (exact scalar-equality, **not** CEL). ADR-047 amendment / [ADR-060](../adr/0060-traits.md) p. 7 slice 1. **OR-dimension** (several trait-permissions = "either this pair or that"); AND-narrowing on several pairs - follow-up (multi-key). | incarnation trait pair (`incarnation.traits` jsonb) - feeds the resolver `incarnation.list`/`get` (slice 1: `inc.Traits[key] == value`). |
 
-**Multiple values** are listed comma-separated without spaces (`coven=db,cache`), matching is exact-match for each value; OR logic among the values ​​of one selector (`coven=db,cache` = "coven `db` OR `cache`").
+**Multiple values** are listed comma-separated without spaces (`coven=db,cache`), matching is exact-match for each value; OR logic among the values of one selector (`coven=db,cache` = "coven `db` OR `cache`").
 
 **regex key (ADR-047 S2a).** Value - one RE2 pattern (Go `regexp`, consistent with UI `compileSidRegex`) in **single quotes**: `incarnation.run on regex='^web-.*'`. Quotes are required and separate the regex from the `,` value-list delimiter - a comma inside the regex (`{1,3}`) does not break the value; regex special characters do not pass `reSelValue`, so the unquoted form is rejected on load. One pattern per key (multi-regex via `,` is ambiguous with regex comma); union of several regex is typed by several roles/permissions. The pattern is compiled when the image is loaded - a broken regex fails load (as unknown-permission); length is limited to 256 characters (RE2 without catastrophic-backtracking, cap - insurance). Matching - `regexp.MatchString` vs `host`/`sid`-context; request without a host/sid key → deny (like an exact key without its own key). **REAL application** of regex to the visibility of list endpoints and the intersection of targets - S3/S4 slices; in S2a regex participates in `Check`-matching (host-context-endpoints) and least-privilege subset.
 
@@ -112,7 +112,7 @@ The selector is a single-variable filter `<key>=<v1>,<v2>,…`, where `<key>` is
 
 > **History (ADR-008 amendment a).** Previously, this section declared the source `coven=` for the incarnation "`soulprint.self.covens` target host" - but incarnation endpoints do not resolve hosts at the RBAC gate stage (chicken-egg + volatility), and the code landed in the context only `{incarnation: name}` without `coven`/`service`. Because of this, the roles `incarnation.* on coven=…` / `on service=…` were silently NOT matched (enforcer for the missing key → deny). The source was the stable attributes of the incarnation itself (declared `covens` ∪ `name` + `service`), resolved from its string in Postgres.
 
-**Wildcards (`*`) in values ​​are prohibited in MVP** - the extension requires a separate ADR (escaping forms, semantics for FQDN hostnames, empty value behavior). The parser (`reSelValue = ^[a-zA-Z0-9_.-]+$`) rejects `*` as the value of the selector on the load of the snapshot, so the form `coven=*` **does not exist** as a loaded permission. For `soul.coven-assign` this means: unrestricted-scope (any label, any host) is achieved by **bare**-permission `soul.coven-assign` (without `on coven=…`) or full `*`-permission - not through `coven=*`.
+**Wildcards (`*`) in values are prohibited in MVP** - the extension requires a separate ADR (escaping forms, semantics for FQDN hostnames, empty value behavior). The parser (`reSelValue = ^[a-zA-Z0-9_.-]+$`) rejects `*` as the value of the selector on the load of the snapshot, so the form `coven=*` **does not exist** as a loaded permission. For `soul.coven-assign` this means: unrestricted-scope (any label, any host) is achieved by **bare**-permission `soul.coven-assign` (without `on coven=…`) or full `*`-permission - not through `coven=*`.
 
 **`namespace=`** (filter by plugin namespace) is not introduced yet - RBAC on plugin-namespace is not included in MVP scenarios. Will appear if necessary.
 
@@ -129,12 +129,12 @@ Algorithm for checking permission request `incarnation.create` with context `{se
 
 1. Find all Archon roles by membership (`rbac_role_operators` where `aid = <requesting AID>`).
 2. Expand to a flat list of permissions (`rbac_role_permissions` by found roles).
-3. For each permission: does the `<resource>.<action>` request match (taking into account the wildcard `*` in `<action>`); if there is a selector, does it match the context (the key is in the context, the value from values ​​matches).
+3. For each permission: does the `<resource>.<action>` request match (taking into account the wildcard `*` in `<action>`); if there is a selector, does it match the context (the key is in the context, the value from values matches).
 4. If **at least one** permission matches → allow. Otherwise → deny.
 
 Steps 1–2 are based on the enforcer's **in-memory snapshot**, not live SQL (see § How an enforcer resolves).
 
-## How to enforcer resolve
+## How the enforcer resolves
 
 Interface `PermissionChecker.Check` **does not go to Postgres for every request** ([ADR-028(d)](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)) - it matches the in-memory snapshot `map[AID][]*Role`.
 
@@ -200,7 +200,7 @@ Separate from self-lockout protection - against **vertical escalation of privile
 - **cluster-admin (`*`)** passes any such check - its set covers everything.
 - **Source of caller set is DB** (same mutation transaction, filter `operators.revoked_at IS NULL`), not enforcer snapshot: same-tx-read fresher than TTL snapshot. Read-only (without `FOR UPDATE`): subset-check is an authorization gate, and not a consistency invariant like self-lockout, so it does not add row-locks and does not affect the deterministic lock order of the self-lockout kernel (no deadlock risk).
 - **Bootstrap-grant** (`keeper init`, `granted_by_aid IS NULL`, without caller-Archon) subset-check fails - it binds the first Archon to `cluster-admin` before any subject appears.
-- Violation → `403 forbidden` (REST `TypeForbidden` / MCP `forbidden`), sentinel `ErrPermissionNotHeld` - separate from `ErrPermissionDenied` ("no right to the operation itself", checked by middleware/tool ​​before Service).
+- Violation → `403 forbidden` (REST `TypeForbidden` / MCP `forbidden`), sentinel `ErrPermissionNotHeld` - separate from `ErrPermissionDenied` ("no right to the operation itself", checked by middleware/tool before Service).
 
 Self-lockout and least-privilege **coexist**: the first prohibits locking the admin-set "down", the second prohibits granting the "up" right. They check different things and don't conflict in order.
 
