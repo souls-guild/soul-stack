@@ -1,31 +1,31 @@
-// soul-mod-community-mongo — реальный SoulModule-плагин Soul Stack
-// (community.mongo): ОСНОВНОЙ интерфейс к живому MongoDB (PILOT-срез). Scenario
-// сервиса оркеструет порядок/таргетинг, плагин исполняет ОДНУ операцию над одним
-// mongod-инстансом ЧЕРЕЗ go-mongo-driver (НЕ core.exec+mongosh: пароль в argv —
-// ИБ-риск, хрупкий парсинг; параллель с community.redis).
+// soul-mod-community-mongo is a real SoulModule plugin for Soul Stack
+// (community.mongo): main interface to live MongoDB (PILOT slice). The service's
+// Scenario orchestrates order/targeting; plugin executes ONE operation on ONE
+// mongod instance via go-mongo-driver (NOT core.exec+mongosh: password in argv is
+// a security risk with fragile parsing; parallel to community.redis).
 //
 // States (PILOT):
-//   - pinged  — health-probe через driver Ping (read-only, changed=false
-//               конструктивно, прецедент core.http.probe / community.redis.pinged);
-//   - user    — createUser/dropUser (upsert, imperative — НЕ aclfile: в mongo
-//               юзеры живут в admin.system.users, не в конфиг-файле). state
-//               present/absent. Идемпотентен по usersInfo. ★ localhost-exception:
-//               первый admin создаётся БЕЗ auth через localhost, пока admin-БД
-//               пуста (mongo-механика, аналог redis default_admin bootstrap);
-//   - command — raw db.runCommand (imperative verb-state, changed из params —
-//               прецедент community.redis.command).
+//   - pinged  — health-probe via driver Ping (read-only, changed=false by design,
+//     precedent: core.http.probe / community.redis.pinged);
+//   - user    — createUser/dropUser (upsert, imperative — NOT aclfile: in mongo
+//     users live in admin.system.users, not in config file). state
+//     present/absent. Idempotent by usersInfo. ★ localhost-exception:
+//     first admin is created WITHOUT auth via localhost while admin DB
+//     is empty (mongo-mechanism, analog to redis default_admin bootstrap);
+//   - command — raw db.runCommand (imperative verb-state, changed from params —
+//     precedent: community.redis.command).
 //
-// СОЗНАТЕЛЬНО без dry-run preview: плагин на BaseModule НЕ реализует PlanReadSafe
-// → host применяет default-deny (на dry_run — честный «drift не поддержан»,
-// решение пользователя, параллель community.redis).
+// Intentionally without dry-run preview: plugin on BaseModule does NOT implement
+// PlanReadSafe → host applies default-deny (on dry_run — honest "drift unsupported",
+// user's choice, parallel to community.redis).
 //
-// Backend — go.mongodb.org/mongo-driver. Адрес + пароль приходят от Keeper:
-// пароль уже отрезолвлен render-фазой из vault-ref (ADR-012), плагин свой
-// Vault-клиент НЕ тянет (capability — только network_outbound).
+// Backend — go.mongodb.org/mongo-driver. Address + password come from Keeper:
+// password is already resolved by render phase from vault-ref (ADR-012), plugin does
+// NOT fetch its own Vault client (capability — network_outbound only).
 //
-// КРИТ ИБ (ADR-010): params["password"] НИКОГДА не попадает в ApplyEvent.Message,
-// .Output, в текст ошибок или в stderr. Все коннект/команд-ошибки санитизируются
-// (redactError по паролю).
+// CRITICAL SECURITY (ADR-010): params["password"] NEVER goes into ApplyEvent.Message,
+// .Output, error text, or stderr. All connection/command errors are sanitized
+// (redactError by password).
 package main
 
 import (
@@ -40,41 +40,41 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// MongoModule — реализация SoulModule community.mongo.
+// MongoModule is the implementation of SoulModule community.mongo.
 //
-// BaseModule даёт no-op Plan (без PlanReadSafe → default-deny на dry_run) и
-// СОЗНАТЕЛЬНО НЕ реализует ErrandReadSafe (default-deny на Errand). Переопределяем
-// Validate и Apply.
+// BaseModule provides a no-op Plan (without PlanReadSafe → default-deny on dry_run) and
+// intentionally does NOT implement ErrandReadSafe (default-deny on Errand). We override
+// Validate and Apply.
 type MongoModule struct {
 	module.BaseModule
 
-	// connect — точка инъекции для L0. nil → реальный mongo.Connect.
+	// connect is an injection point for L0. nil → real mongo.Connect.
 	connect func(ctx context.Context, cfg connConfig) (mongoConn, error)
 }
 
-// mongoConn — узкий интерфейс над *mongo.Client (для L0-фейка).
+// mongoConn is a narrow interface over *mongo.Client (for L0 mocking).
 type mongoConn interface {
-	// Ping проверяет живость инстанса (driver Ping к primary).
+	// Ping checks instance liveness (driver Ping to primary).
 	Ping(ctx context.Context) error
-	// RunCommand выполняет команду в БД db и возвращает сырой bson-ответ.
-	// Строка/поля ответа — это ответ сервера, не секрет оператора.
+	// RunCommand executes a command in database db and returns raw bson response.
+	// The response string/fields are server output, not operator secrets.
 	RunCommand(ctx context.Context, db string, cmd bson.D) (bson.Raw, error)
 	Close(ctx context.Context) error
 }
 
-// connConfig — параметры коннекта. password и tls.*PEM держатся отдельно и
-// НИКОГДА не логируются / не кладутся в события (ИБ-инвариант ADR-010).
+// connConfig is connection parameters. password and tls.*PEM are kept separate and
+// NEVER logged or placed in events (security invariant ADR-010).
 type connConfig struct {
 	addr     string // host:port
 	username string
 	password string
-	authDB   string // authenticationDatabase (обычно admin)
+	authDB   string // authenticationDatabase (usually admin)
 	tls      tlsParams
 }
 
-// Validate — runtime-проверки поверх статических от soul-lint. Возвращает
-// ValidateReply с errors (не error) — это контракт Validate. Тексты ошибок НЕ
-// содержат пароль.
+// Validate performs runtime checks on top of static checks from soul-lint. Returns
+// ValidateReply with errors (not error) — this is the Validate contract. Error text
+// does NOT contain the password.
 func (m *MongoModule) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
 	var errs []string
 	f := req.GetParams().GetFields()
@@ -96,13 +96,13 @@ func (m *MongoModule) Validate(_ context.Context, req *pluginv1.ValidateRequest)
 	return &pluginv1.ValidateReply{Ok: true}, nil
 }
 
-// Apply — диспетчеризация по state. Финальное событие переносит changed/failed +
-// output (ADR-012). Ошибки коннекта/команд санитизируются (redactError) — адрес
-// сохраняем для диагностики, пароль вырезаем.
+// Apply dispatches by state. The final event carries changed/failed +
+// output (ADR-012). Connection/command errors are sanitized (redactError) — address
+// is preserved for diagnostics, password is stripped.
 //
-// ★ user-state открывает коннект САМ (localhost-exception fallback: первый admin
-// создаётся без auth) — поэтому его коннект-жизненный-цикл вынесен в applyUser, а
-// не в общий openConn здесь. pinged/command идут общим путём (коннект с auth).
+// ★ user-state opens connection ITSELF (localhost-exception fallback: first admin
+// is created without auth) — therefore its connection lifecycle is extracted to applyUser,
+// not to the common openConn here. pinged/command go through the common path (connection with auth).
 func (m *MongoModule) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
 	ctx := stream.Context()
 
@@ -130,9 +130,9 @@ func (m *MongoModule) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStream
 	}
 }
 
-// parseConnConfig вытаскивает коннект-параметры из params. password держится
-// отдельно от всего, что попадает в события (ИБ-инвариант ADR-010). authDB по
-// умолчанию admin (стандартная БД аутентификации системных юзеров mongo).
+// parseConnConfig extracts connection parameters from params. password is kept
+// separate from everything that goes into events (security invariant ADR-010). authDB
+// defaults to admin (mongo's standard authentication database for system users).
 func parseConnConfig(s *structpb.Struct) (connConfig, error) {
 	f := s.GetFields()
 	addr, _ := stringValue(f["addr"])
@@ -159,9 +159,9 @@ func (m *MongoModule) openConn(ctx context.Context, cfg connConfig) (mongoConn, 
 	return defaultConnect(ctx, cfg)
 }
 
-// applyPinged — health-probe через driver Ping. changed=false КОНСТРУКТИВНО
-// (probe, не изменение): интерпретация «здоров/нет» — на уровне scenario через
-// retry/until/failed_when по register.self.ok.
+// applyPinged is health-probe via driver Ping. changed=false by design
+// (probe, not change): interpretation of "healthy/not" is at the scenario level via
+// retry/until/failed_when by register.self.ok.
 func (m *MongoModule) applyPinged(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], conn mongoConn, password string) error {
 	if err := conn.Ping(ctx); err != nil {
 		return sendFailure(stream, "PING: "+redactError(err, password))
@@ -171,10 +171,10 @@ func (m *MongoModule) applyPinged(ctx context.Context, stream grpc.ServerStreami
 	})
 }
 
-// applyCommand — raw db.runCommand (imperative verb-state). changed берётся из
-// params.changed (default false, probe-семантика). db — целевая БД (default
-// admin). command — bson-документ команды (первый ключ = имя команды). Output
-// несёт ok-флаг ответа; пароль в события не попадает.
+// applyCommand executes raw db.runCommand (imperative verb-state). changed is
+// taken from params.changed (default false, probe-semantics). db is the target
+// database (default admin). command is the bson document of the command (first key = command name).
+// Output carries the ok flag from the response; password does not go into events.
 func (m *MongoModule) applyCommand(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], conn mongoConn, params *structpb.Struct, password string) error {
 	f := params.GetFields()
 	db := stringOrEmpty(f["db"])
@@ -190,8 +190,8 @@ func (m *MongoModule) applyCommand(ctx context.Context, stream grpc.ServerStream
 
 	raw, err := conn.RunCommand(ctx, db, cmd)
 	if err != nil {
-		// Ошибка команды — ответ сервера (не секрет оператора); коннект-уровень мог
-		// нести пароль → redactError по password (defense-in-depth).
+		// Command error is server response (not operator secret); connection level could
+		// carry password → redactError by password (defense-in-depth).
 		return sendFailure(stream, "runCommand: "+redactError(err, password))
 	}
 	return sendOutcome(stream, changed, "runCommand ok", map[string]any{
@@ -199,14 +199,13 @@ func (m *MongoModule) applyCommand(ctx context.Context, stream grpc.ServerStream
 	})
 }
 
-// commandDoc строит bson.D команды из params.command (map). Первый ключ команды
-// mongo обязан быть её именем, а порядок итерации map не детерминирован — надёжны
-// только single-field команды ({ping: 1} и т.п.), порядок multi-field не
-// гарантирован (ограничение пилота).
+// commandDoc builds bson.D command from params.command (map). First key of mongo command
+// must be its name, but map iteration order is nondeterministic — only single-field
+// commands are reliable ({ping: 1}, etc.), multi-field order is not guaranteed (pilot limitation).
 func commandDoc(v *structpb.Value) (bson.D, error) {
 	fields := structField(v)
 	if len(fields) == 0 {
-		return nil, fmt.Errorf("params.command: must be a non-empty map (bson-документ команды)")
+		return nil, fmt.Errorf("params.command: must be a non-empty map (bson command document)")
 	}
 	doc := bson.D{}
 	for k, vv := range fields {
@@ -215,8 +214,8 @@ func commandDoc(v *structpb.Value) (bson.D, error) {
 	return doc, nil
 }
 
-// commandOK извлекает поле "ok" из bson-ответа команды (1 → true). Ответ mongo
-// на успешную команду несёт {ok: 1}. Отсутствие/0 → false.
+// commandOK extracts field "ok" from a command bson response (1 → true). A successful
+// mongo command response carries {ok: 1}. Missing/0 → false.
 func commandOK(raw bson.Raw) bool {
 	if len(raw) == 0 {
 		return false
@@ -237,13 +236,13 @@ func commandOK(raw bson.Raw) bool {
 	}
 }
 
-// validateCommand — статические проверки command-state: addr + command
-// обязательны.
+// validateCommand performs static checks for command-state: addr + command
+// are required.
 func validateCommand(f map[string]*structpb.Value) []string {
 	var errs []string
 	errs = append(errs, validateAddr(f)...)
 	if len(structField(f["command"])) == 0 {
-		errs = append(errs, "params.command: must be a non-empty map (bson-документ команды)")
+		errs = append(errs, "params.command: must be a non-empty map (bson command document)")
 	}
 	return errs
 }
