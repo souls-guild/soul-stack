@@ -7,31 +7,29 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/health"
 )
 
-// NamedPinger — именованная зависимость для probe. Имя попадает в сообщение об
-// ошибке, чтобы оператор видел, ЧТО именно отвалилось (postgres / redis).
+// NamedPinger is a named dependency for probing. Name appears in error
+// messages so operators see which dependency failed (postgres / redis).
 type NamedPinger struct {
 	Name   string
 	Pinger health.Pinger
 }
 
-// depsProbe — реализация [HealthProbe] поверх набора `health.Pinger`-ов. Тот же
-// контракт зависимостей, что у `/readyz` (PG + Redis обязательны для обслуживания
-// запросов): инстанс, потерявший их, изолирован. nil-Pinger пропускается
-// (симметрия с health.Readyz: Redis может быть отключён в dev — тогда его
-// отсутствие не считается изоляцией).
+// depsProbe implements [HealthProbe] over a set of `health.Pinger`s.
+// Same dependency contract as `/readyz` (PG + Redis required to serve requests):
+// an instance that lost them is isolated. nil-Pinger is skipped
+// (symmetric with health.Readyz: Redis can be off in dev — its absence then
+// does not count as isolation).
 //
-// Probe идёт ПОСЛЕДОВАТЕЛЬНО и short-circuit-ит на первой же ошибке: Watchman-у
-// достаточно факта «хотя бы одна зависимость недоступна», полный список
-// провалов (как в `/readyz`-JSON) ему не нужен — это экономит ping на втором
-// ресурсе, когда первый уже отвалился.
+// Probe runs SEQUENTIALLY and short-circuits on first error: Watchman only needs
+// "at least one dependency unreachable", not the full list of failures (as in
+// `/readyz` JSON) — this saves a ping on the second resource after the first fails.
 type depsProbe struct {
 	pingers []NamedPinger
 }
 
-// NewDepsProbe собирает [HealthProbe] из именованных Pinger-ов (обычно PG +
-// Redis, те же, что в `/readyz`). nil-Pinger-ы отфильтровываются. Если после
-// фильтрации не осталось ни одного — [ErrNoProbeDeps] (Watchman без зависимостей
-// бессмыслен).
+// NewDepsProbe constructs [HealthProbe] from named Pingers (usually PG +
+// Redis, same as `/readyz`). nil-Pingers are filtered out. If none remain,
+// returns [ErrNoProbeDeps] (Watchman without dependencies is pointless).
 func NewDepsProbe(pingers ...NamedPinger) (HealthProbe, error) {
 	live := make([]NamedPinger, 0, len(pingers))
 	for _, p := range pingers {
@@ -45,8 +43,8 @@ func NewDepsProbe(pingers ...NamedPinger) (HealthProbe, error) {
 	return &depsProbe{pingers: live}, nil
 }
 
-// Probe пингует зависимости последовательно, возвращая первую ошибку (с именем
-// зависимости). nil — все здоровы. ctx уже несёт per-tick timeout от Watchman-а.
+// Probe pings dependencies sequentially, returning first error (with dependency
+// name). nil means all healthy. ctx already carries per-tick timeout from Watchman.
 func (p *depsProbe) Probe(ctx context.Context) error {
 	for _, np := range p.pingers {
 		if err := np.Pinger.Ping(ctx); err != nil {

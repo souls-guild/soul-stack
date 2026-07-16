@@ -14,8 +14,8 @@ func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// scriptedProbe — probe, отдающий ошибки по заранее заданному скрипту. Когда
-// скрипт исчерпан, отдаёт последнее значение (удобно для «дальше всё хорошо»).
+// scriptedProbe is a probe that returns errors from a pre-set script.
+// When script is exhausted, returns the last value (convenient for "rest is good").
 type scriptedProbe struct {
 	mu     sync.Mutex
 	script []error
@@ -38,8 +38,8 @@ func (p *scriptedProbe) Probe(context.Context) error {
 	return err
 }
 
-// countingCloser — fake StreamCloser: считает вызовы CloseAll, возвращает
-// настроенное число «закрытых» стримов.
+// countingCloser is a fake StreamCloser: counts CloseAll calls, returns
+// configured number of "closed" streams.
 type countingCloser struct {
 	mu      sync.Mutex
 	calls   int
@@ -59,7 +59,7 @@ func (c *countingCloser) closeCalls() int {
 	return c.calls
 }
 
-// recordingMetrics — fake Metrics: фиксирует последний isolated и сумму shed.
+// recordingMetrics is a fake Metrics: records last isolated state and shed total.
 type recordingMetrics struct {
 	mu           sync.Mutex
 	isolatedSets []bool
@@ -103,7 +103,7 @@ func TestWatchman_IsolationAfterThreshold(t *testing.T) {
 	m := &recordingMetrics{}
 	w := newTestWatchman(t, &scriptedProbe{}, closer, m, 3)
 
-	// Два провала — изоляции ещё нет (debounce).
+	// Two failures — no isolation yet (debounce).
 	w.tick(errDep)
 	w.tick(errDep)
 	if closer.closeCalls() != 0 {
@@ -113,7 +113,7 @@ func TestWatchman_IsolationAfterThreshold(t *testing.T) {
 		t.Fatal("isolated set before threshold")
 	}
 
-	// Третий провал — порог достигнут → shedding.
+	// Third failure — threshold reached → shedding.
 	w.tick(errDep)
 	if closer.closeCalls() != 1 {
 		t.Fatalf("CloseAll calls = %d, want 1", closer.closeCalls())
@@ -146,7 +146,7 @@ func TestWatchman_RecoveryResetsCounterBeforeIsolation(t *testing.T) {
 	closer := &countingCloser{returns: 1}
 	w := newTestWatchman(t, &scriptedProbe{}, closer, nil, 3)
 
-	// Два провала, затем успех — счётчик сброшен, изоляции не было.
+	// Two failures, then success — counter reset, no isolation.
 	w.tick(errDep)
 	w.tick(errDep)
 	w.tick(nil)
@@ -160,7 +160,7 @@ func TestWatchman_RecoveryResetsCounterBeforeIsolation(t *testing.T) {
 		t.Fatalf("CloseAll called despite recovery: %d", closer.closeCalls())
 	}
 
-	// Теперь три новых провала подряд — порог считается с нуля → shedding.
+	// Now three new consecutive failures — threshold restarts from zero → shedding.
 	w.tick(errDep)
 	w.tick(errDep)
 	if closer.closeCalls() != 0 {
@@ -178,7 +178,7 @@ func TestWatchman_RecoveryAfterIsolationClearsFlag(t *testing.T) {
 	w := newTestWatchman(t, &scriptedProbe{}, closer, m, 2)
 
 	w.tick(errDep)
-	w.tick(errDep) // изоляция
+	w.tick(errDep) // isolation
 	if !w.isolated {
 		t.Fatal("not isolated after threshold")
 	}
@@ -201,7 +201,7 @@ func TestWatchman_NoSecondShedWhileIsolated(t *testing.T) {
 	if closer.closeCalls() != 1 {
 		t.Fatalf("CloseAll calls = %d, want 1", closer.closeCalls())
 	}
-	// Ещё провалы в изоляции — повторного CloseAll быть не должно.
+	// More failures while isolated — no repeat CloseAll.
 	w.tick(errDep)
 	w.tick(errDep)
 	if closer.closeCalls() != 1 {
@@ -209,10 +209,10 @@ func TestWatchman_NoSecondShedWhileIsolated(t *testing.T) {
 	}
 }
 
-// TestWatchman_RunLoopShedsAndStops прогоняет реальный Run-loop: probe отдаёт
-// устойчивые провалы → после порога shedding → cancel ctx останавливает loop.
+// TestWatchman_RunLoopShedsAndStops runs the actual Run loop: probe returns
+// persistent failures → after threshold shedding → cancel ctx stops loop.
 func TestWatchman_RunLoopShedsAndStops(t *testing.T) {
-	probe := &scriptedProbe{script: []error{errDep}} // всегда провал
+	probe := &scriptedProbe{script: []error{errDep}} // always fails
 	closer := &countingCloser{returns: 2}
 	m := &recordingMetrics{}
 	w, err := New(probe, closer, Config{Interval: time.Millisecond, FailThreshold: 2}, m, discardLogger())

@@ -49,7 +49,7 @@ func TestNewDepsProbe_FirstFailShortCircuits(t *testing.T) {
 	if err == nil {
 		t.Fatal("Probe did not surface PG failure")
 	}
-	// Short-circuit: второй pinger не вызывается после провала первого.
+	// Short-circuit: second pinger not called after first failure.
 	if rd.calls != 0 {
 		t.Fatalf("redis pinged after pg failure: calls=%d", rd.calls)
 	}
