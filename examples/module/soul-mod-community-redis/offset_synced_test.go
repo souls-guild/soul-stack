@@ -10,15 +10,15 @@ import (
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 )
 
-// offsetConn — fake redisConn для offset-synced: отвечает на INFO replication
-// заданной секцией и на DBSIZE заданным числом; прочие verb → "OK". Пишет вызовы.
+// offsetConn - fake redisConn for offset-synced: responds to INFO replication
+// by a given section and on DBSIZE by a given number; other verb -> "OK". Writes calls.
 type offsetConn struct {
 	cfg       connConfig
-	infoReply string // ответ INFO replication
-	dbsize    int64  // ответ DBSIZE
+	infoReply string // reply INFO replication
+	dbsize    int64  // answer DBSIZE
 	calls     [][]any
 	closed    bool
-	failVerb  string // непусто → ошибка на этот verb (args[0])
+	failVerb  string // non-empty -> error for this verb (args[0])
 }
 
 func (c *offsetConn) Do(_ context.Context, args ...any) (string, error) {
@@ -44,9 +44,9 @@ func (c *offsetConn) GetKeysInSlot(_ context.Context, _, _ int) ([]string, error
 func (c *offsetConn) AclList(_ context.Context) ([]string, error)                 { return nil, nil }
 func (c *offsetConn) Close() error                                                { c.closed = true; return nil }
 
-// offsetModule собирает RedisModule, роутящий коннект по cfg.addr: selfAddr →
-// self, иначе → source. Так applyOffsetSynced получает РАЗНЫЕ инстансы для своего
-// addr и для source_addr (второй коннект).
+// offsetModule collects RedisModule, routing connection by cfg.addr: selfAddr ->
+// self, otherwise -> source. This is how applyOffsetSynced gets DIFFERENT instances for its
+// addr and for source_addr (second connection).
 func offsetModule(selfAddr string, self, source *offsetConn) *RedisModule {
 	return &RedisModule{
 		connect: func(_ context.Context, cfg connConfig) (redisConn, error) {
@@ -64,21 +64,21 @@ func offsetModule(selfAddr string, self, source *offsetConn) *RedisModule {
 
 func TestValidate_OffsetSyncedRequiresAddrAndSource(t *testing.T) {
 	m := &RedisModule{}
-	// нет source_addr
+	// no source_addr
 	r1, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
 		State:  "offset-synced",
 		Params: mustStruct(t, map[string]any{"addr": "127.0.0.1:6379"}),
 	})
 	if r1.Ok {
-		t.Error("ждали Ok=false без source_addr")
+		t.Error("expected Ok=false without source_addr")
 	}
-	// нет addr
+	// no addr
 	r2, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
 		State:  "offset-synced",
 		Params: mustStruct(t, map[string]any{"source_addr": "203.0.113.5:6379"}),
 	})
 	if r2.Ok {
-		t.Error("ждали Ok=false без addr")
+		t.Error("waited Ok=false without addr")
 	}
 }
 
@@ -92,7 +92,7 @@ func TestValidate_OffsetSyncedHappyPath(t *testing.T) {
 		}),
 	})
 	if !reply.Ok || len(reply.Errors) != 0 {
-		t.Fatalf("ждали Ok=true без ошибок, got %+v", reply)
+		t.Fatalf("waited Ok=true without errors, got %+v", reply)
 	}
 }
 
@@ -107,13 +107,13 @@ func TestValidate_OffsetSyncedRejectsNegativeLag(t *testing.T) {
 		}),
 	})
 	if reply.Ok {
-		t.Fatal("ждали Ok=false на отрицательный lag_threshold")
+		t.Fatal("waited Ok=false for negative lag_threshold")
 	}
 }
 
 // --- Apply offset-synced ---
 
-// selfReplInfo — INFO replication своего инстанса (реплики).
+// selfReplInfo - INFO replication of your instance (replica).
 func selfReplInfo(slaveOffset int, link string, syncInProgress int) string {
 	return "# Replication\r\n" +
 		"role:slave\r\n" +
@@ -123,7 +123,7 @@ func selfReplInfo(slaveOffset int, link string, syncInProgress int) string {
 		"slave_repl_offset:" + strconv.Itoa(slaveOffset) + "\r\n"
 }
 
-// sourceReplInfo — INFO replication внешнего master-источника.
+// sourceReplInfo - INFO replication of the external master source.
 func sourceReplInfo(masterOffset int) string {
 	return "# Replication\r\n" +
 		"role:master\r\n" +
@@ -154,7 +154,7 @@ func applyOffset(t *testing.T, m *RedisModule, extra map[string]any) *pluginv1.A
 }
 
 // TestApplyOffsetSynced_CaughtUp — link up + sync done + lag<=thr → caught_up=true,
-// changed=false конструктивно. Главный happy-path safety-gate.
+// changed=false is constructive. Main happy-path safety-gate.
 func TestApplyOffsetSynced_CaughtUp(t *testing.T) {
 	self := &offsetConn{infoReply: selfReplInfo(1000, "up", 0), dbsize: 42}
 	source := &offsetConn{infoReply: sourceReplInfo(1000), dbsize: 42}
@@ -162,27 +162,27 @@ func TestApplyOffsetSynced_CaughtUp(t *testing.T) {
 
 	fin := applyOffset(t, m, map[string]any{"skip_checksum": true})
 	if fin == nil || fin.Failed {
-		t.Fatalf("ждали успех, got %+v", fin)
+		t.Fatalf("expected success, got %+v", fin)
 	}
 	if fin.Changed {
-		t.Error("offset-synced: changed обязан быть false конструктивно (probe)")
+		t.Error("offset-synced: changed must be false by design (probe)")
 	}
 	out := fin.GetOutput().GetFields()
 	if !out["caught_up"].GetBoolValue() {
-		t.Error("ждали caught_up=true (link up + sync done + lag 0)")
+		t.Error("waited caught_up=true (link up + sync done + lag 0)")
 	}
 	if got := out["lag_bytes"].GetNumberValue(); got != 0 {
-		t.Errorf("lag_bytes=%v, ждали 0 (offset равны)", got)
+		t.Errorf("lag_bytes=%v, waited 0 (offset equal)", got)
 	}
 	if out["master_sync_in_progress"].GetBoolValue() {
-		t.Error("master_sync_in_progress=true, ждали false")
+		t.Error("master_sync_in_progress=true, waited false")
 	}
 }
 
 // TestApplyOffsetSynced_LagExceedsThreshold — lag > lag_threshold → caught_up=false
-// (link up, sync done, но данные ещё не догнаны). Ключевой кейс gate.
+// (link up, sync done, but the data has not yet been caught up). Key case gate.
 func TestApplyOffsetSynced_LagExceedsThreshold(t *testing.T) {
-	// master впереди на 500 байт, порог 100 → не догнал.
+	// master is 500 bytes ahead, threshold 100 -> not caught up.
 	self := &offsetConn{infoReply: selfReplInfo(1000, "up", 0)}
 	source := &offsetConn{infoReply: sourceReplInfo(1500)}
 	m := offsetModule(selfAddr, self, source)
@@ -190,15 +190,15 @@ func TestApplyOffsetSynced_LagExceedsThreshold(t *testing.T) {
 	fin := applyOffset(t, m, map[string]any{"skip_checksum": true, "lag_threshold": 100})
 	out := fin.GetOutput().GetFields()
 	if out["caught_up"].GetBoolValue() {
-		t.Error("ждали caught_up=false: lag 500 > threshold 100")
+		t.Error("waited caught_up=false: lag 500 > threshold 100")
 	}
 	if got := out["lag_bytes"].GetNumberValue(); got != 500 {
-		t.Errorf("lag_bytes=%v, ждали 500", got)
+		t.Errorf("lag_bytes=%v, waited 500", got)
 	}
 }
 
 // TestApplyOffsetSynced_LagWithinThreshold — lag <= lag_threshold → caught_up=true
-// (допуск отставания принят оператором через lag_threshold).
+// (lag tolerance is accepted by the operator via lag_threshold).
 func TestApplyOffsetSynced_LagWithinThreshold(t *testing.T) {
 	self := &offsetConn{infoReply: selfReplInfo(1000, "up", 0)}
 	source := &offsetConn{infoReply: sourceReplInfo(1050)} // lag 50
@@ -206,24 +206,24 @@ func TestApplyOffsetSynced_LagWithinThreshold(t *testing.T) {
 
 	fin := applyOffset(t, m, map[string]any{"skip_checksum": true, "lag_threshold": 100})
 	if !fin.GetOutput().GetFields()["caught_up"].GetBoolValue() {
-		t.Error("ждали caught_up=true: lag 50 <= threshold 100")
+		t.Error("waited caught_up=true: lag 50 <= threshold 100")
 	}
 }
 
 // TestApplyOffsetSynced_SyncInProgress — master_sync_in_progress==1 → caught_up=false
-// ДАЖЕ если offset сошлись (идёт full-sync, данные не консистентны).
+// EVEN if the offset agrees (full-sync is in progress, the data is not consistent).
 func TestApplyOffsetSynced_SyncInProgress(t *testing.T) {
-	self := &offsetConn{infoReply: selfReplInfo(1000, "up", 1)} // sync идёт
-	source := &offsetConn{infoReply: sourceReplInfo(1000)}      // offset сошлись
+	self := &offsetConn{infoReply: selfReplInfo(1000, "up", 1)} // sync is in progress
+	source := &offsetConn{infoReply: sourceReplInfo(1000)}      // offset agreed
 	m := offsetModule(selfAddr, self, source)
 
 	fin := applyOffset(t, m, map[string]any{"skip_checksum": true})
 	out := fin.GetOutput().GetFields()
 	if out["caught_up"].GetBoolValue() {
-		t.Error("ждали caught_up=false: master_sync_in_progress==1 (идёт full-sync)")
+		t.Error("waited caught_up=false: master_sync_in_progress==1 (full-sync in progress)")
 	}
 	if !out["master_sync_in_progress"].GetBoolValue() {
-		t.Error("ждали master_sync_in_progress=true в Output")
+		t.Error("expected master_sync_in_progress=true in Output")
 	}
 }
 
@@ -235,11 +235,11 @@ func TestApplyOffsetSynced_LinkDown(t *testing.T) {
 
 	fin := applyOffset(t, m, map[string]any{"skip_checksum": true})
 	if fin.GetOutput().GetFields()["caught_up"].GetBoolValue() {
-		t.Error("ждали caught_up=false: master_link_status:down")
+		t.Error("waited caught_up=false: master_link_status:down")
 	}
 }
 
-// TestApplyOffsetSynced_ChecksumDBSize — !skip_checksum → DBSIZE обоих в Output.
+// TestApplyOffsetSynced_ChecksumDBSize - !skip_checksum -> DBSIZE of both in Output.
 func TestApplyOffsetSynced_ChecksumDBSize(t *testing.T) {
 	self := &offsetConn{infoReply: selfReplInfo(1000, "up", 0), dbsize: 40}
 	source := &offsetConn{infoReply: sourceReplInfo(1000), dbsize: 42}
@@ -248,22 +248,22 @@ func TestApplyOffsetSynced_ChecksumDBSize(t *testing.T) {
 	fin := applyOffset(t, m, nil) // skip_checksum=false (default)
 	out := fin.GetOutput().GetFields()
 	if got := out["dbsize_source"].GetNumberValue(); got != 42 {
-		t.Errorf("dbsize_source=%v, ждали 42", got)
+		t.Errorf("dbsize_source=%v, waited 42", got)
 	}
 	if got := out["dbsize_replica"].GetNumberValue(); got != 40 {
-		t.Errorf("dbsize_replica=%v, ждали 40", got)
+		t.Errorf("dbsize_replica=%v, waited 40", got)
 	}
-	// DBSIZE вызван на обоих коннектах.
+	// DBSIZE is called on both connections.
 	if !hasCall(source.calls, "DBSIZE") {
-		t.Errorf("DBSIZE не вызван на источнике: %v", source.calls)
+		t.Errorf("DBSIZE not called on source: %v", source.calls)
 	}
 	if !hasCall(self.calls, "DBSIZE") {
-		t.Errorf("DBSIZE не вызван на реплике: %v", self.calls)
+		t.Errorf("DBSIZE not called on replica: %v", self.calls)
 	}
 }
 
-// TestApplyOffsetSynced_SkipChecksum — skip_checksum=true → DBSIZE НЕ вызывается,
-// dbsize-полей в Output нет.
+// TestApplyOffsetSynced_SkipChecksum - skip_checksum=true -> DBSIZE is NOT called,
+// There are no dbsize fields in Output.
 func TestApplyOffsetSynced_SkipChecksum(t *testing.T) {
 	self := &offsetConn{infoReply: selfReplInfo(1000, "up", 0)}
 	source := &offsetConn{infoReply: sourceReplInfo(1000)}
@@ -271,15 +271,15 @@ func TestApplyOffsetSynced_SkipChecksum(t *testing.T) {
 
 	fin := applyOffset(t, m, map[string]any{"skip_checksum": true})
 	if hasCall(self.calls, "DBSIZE") || hasCall(source.calls, "DBSIZE") {
-		t.Errorf("skip_checksum: DBSIZE не должен вызываться: self=%v source=%v", self.calls, source.calls)
+		t.Errorf("skip_checksum: DBSIZE should not be called: self=%v source=%v", self.calls, source.calls)
 	}
 	if _, ok := fin.GetOutput().GetFields()["dbsize_source"]; ok {
-		t.Error("skip_checksum: dbsize_source не должен быть в Output")
+		t.Error("skip_checksum: dbsize_source should not be in Output")
 	}
 }
 
-// TestApplyOffsetSynced_SecondConnectUsesSourceSecrets — второй коннект уходит на
-// source_addr с source_password (НЕ свой password). Доказывает изоляцию кредов.
+// TestApplyOffsetSynced_SecondConnectUsesSourceSecrets - the second connection goes to
+// source_addr with source_password (NOT your password). Proves the isolation of creds.
 func TestApplyOffsetSynced_SecondConnectUsesSourceSecrets(t *testing.T) {
 	self := &offsetConn{infoReply: selfReplInfo(1000, "up", 0)}
 	source := &offsetConn{infoReply: sourceReplInfo(1000)}
@@ -287,23 +287,23 @@ func TestApplyOffsetSynced_SecondConnectUsesSourceSecrets(t *testing.T) {
 
 	_ = applyOffset(t, m, map[string]any{"skip_checksum": true})
 	if source.cfg.addr != sourceAddr {
-		t.Errorf("второй коннект ушёл не на source_addr: %q", source.cfg.addr)
+		t.Errorf("the second connection did not go to source_addr: %q", source.cfg.addr)
 	}
 	if source.cfg.password != masterSourcePass {
-		t.Errorf("второй коннект не несёт source_password: %q", source.cfg.password)
+		t.Errorf("the second connection does not carry source_password: %q", source.cfg.password)
 	}
 	if self.cfg.password != secretPass {
-		t.Errorf("первый коннект не несёт свой password: %q", self.cfg.password)
+		t.Errorf("the first connection does not carry its own password: %q", self.cfg.password)
 	}
 	if !source.closed {
-		t.Error("второй коннект (source) не закрыт")
+		t.Error("the second connection (source) is not closed")
 	}
 }
 
 // TestApplyOffsetSynced_SourceTLS_SecondConnectUsesTLS — source_tls=true:
-// ВТОРОЙ коннект (к внешнему источнику) идёт по TLS с source_tls_ca, а коннект к
-// СВОЕМУ инстансу — по своим tls-параметрам. Доказывает доведённый TLS-к-источнику
-// на offset-synced: source-секреты и source-TLS изолированы от своих.
+// The SECOND connection (to an external source) goes via TLS with source_tls_ca, and the connection to
+// YOUR OWN instance - according to its tls parameters. Proves brought TLS-to-origin
+// to offset-synced: source-secrets and source-TLS are isolated from their own.
 func TestApplyOffsetSynced_SourceTLS_SecondConnectUsesTLS(t *testing.T) {
 	self := &offsetConn{infoReply: selfReplInfo(1000, "up", 0)}
 	source := &offsetConn{infoReply: sourceReplInfo(1000)}
@@ -316,22 +316,22 @@ func TestApplyOffsetSynced_SourceTLS_SecondConnectUsesTLS(t *testing.T) {
 		"source_tls_ca": sourceCA,
 	})
 
-	// Второй коннект (источник) — TLS включён, CA источника проброшен.
+	// Second connection (source) - TLS is enabled, source CA is forwarded.
 	if !source.cfg.tls.enabled {
-		t.Error("source_tls=true не доехал до второго коннекта (TLS к источнику не включён)")
+		t.Error("source_tls=true did not reach the second connection (TLS to the source is not enabled)")
 	}
 	if source.cfg.tls.caPEM != sourceCA {
-		t.Errorf("source_tls_ca не доехал до второго коннекта: %q", source.cfg.tls.caPEM)
+		t.Errorf("source_tls_ca did not reach the second connection: %q", source.cfg.tls.caPEM)
 	}
-	// Свой коннект НЕ должен унаследовать source-TLS (изоляция): tls не задан → false.
+	// Your connection should NOT inherit source-TLS (isolation): tls is not specified -> false.
 	if self.cfg.tls.enabled {
-		t.Error("свой коннект ошибочно включил TLS из source_tls (нет изоляции)")
+		t.Error("your connection mistakenly enabled TLS from source_tls (no isolation)")
 	}
 }
 
-// TestApplyOffsetSynced_OwnTLSIndependentOfSource — свой tls=true и source_tls=true
-// читаются из РАЗНЫХ полей: свой коннект берёт tls/tls_ca, источник —
-// source_tls/source_tls_ca. Доказывает раздельность двух TLS-контекстов.
+// TestApplyOffsetSynced_OwnTLSIndependentOfSource - custom tls=true and source_tls=true
+// are read from DIFFERENT fields: tls/tls_ca takes its connection, the source is
+// source_tls/source_tls_ca. Proves the separability of two TLS contexts.
 func TestApplyOffsetSynced_OwnTLSIndependentOfSource(t *testing.T) {
 	self := &offsetConn{infoReply: selfReplInfo(1000, "up", 0)}
 	source := &offsetConn{infoReply: sourceReplInfo(1000)}
@@ -348,15 +348,15 @@ func TestApplyOffsetSynced_OwnTLSIndependentOfSource(t *testing.T) {
 	})
 
 	if !self.cfg.tls.enabled || self.cfg.tls.caPEM != ownCA {
-		t.Errorf("свой коннект: ждали tls с ownCA, got enabled=%v ca=%q", self.cfg.tls.enabled, self.cfg.tls.caPEM)
+		t.Errorf("your connection: expected tls with ownCA, got enabled=%v ca=%q", self.cfg.tls.enabled, self.cfg.tls.caPEM)
 	}
 	if !source.cfg.tls.enabled || source.cfg.tls.caPEM != srcCA {
-		t.Errorf("коннект источника: ждали tls с srcCA, got enabled=%v ca=%q", source.cfg.tls.enabled, source.cfg.tls.caPEM)
+		t.Errorf("source connection: expected tls with srcCA, got enabled=%v ca=%q", source.cfg.tls.enabled, source.cfg.tls.caPEM)
 	}
 }
 
-// TestApplyOffsetSynced_NoSourceTLS_SecondConnectPlaintext — без source_tls
-// второй коннект plaintext (back-compat: tls=false → enabled=false).
+// TestApplyOffsetSynced_NoSourceTLS_SecondConnectPlaintext - without source_tls
+// second plaintext connection (back-compat: tls=false -> enabled=false).
 func TestApplyOffsetSynced_NoSourceTLS_SecondConnectPlaintext(t *testing.T) {
 	self := &offsetConn{infoReply: selfReplInfo(1000, "up", 0)}
 	source := &offsetConn{infoReply: sourceReplInfo(1000)}
@@ -364,12 +364,12 @@ func TestApplyOffsetSynced_NoSourceTLS_SecondConnectPlaintext(t *testing.T) {
 
 	_ = applyOffset(t, m, map[string]any{"skip_checksum": true})
 	if source.cfg.tls.enabled {
-		t.Error("без source_tls второй коннект не должен включать TLS")
+		t.Error("without source_tls the second connection should not include TLS")
 	}
 }
 
-// TestApplyOffsetSynced_NoSecretLeak — ни свой, ни source-пароль не утекают в
-// события (ИБ-инвариант ADR-010).
+// TestApplyOffsetSynced_NoSecretLeak - neither your password nor the source password is leaked to
+// events (IS-invariant ADR-010).
 func TestApplyOffsetSynced_NoSecretLeak(t *testing.T) {
 	self := &offsetConn{infoReply: selfReplInfo(1000, "up", 0), dbsize: 5}
 	source := &offsetConn{infoReply: sourceReplInfo(1000), dbsize: 5}
@@ -387,13 +387,13 @@ func TestApplyOffsetSynced_NoSecretLeak(t *testing.T) {
 	assertEventsNoSecret(t, stream)
 	for i, ev := range stream.sent {
 		if strings.Contains(ev.GetMessage(), masterSourcePass) {
-			t.Errorf("событие[%d].Message несёт source_password: %q", i, ev.GetMessage())
+			t.Errorf("event[%d].Message carries source_password: %q", i, ev.GetMessage())
 		}
 	}
 }
 
-// TestApplyOffsetSynced_SourceConnectFailure_DoesNotLeak — коннект к источнику
-// упал, текст содержит source_password → санитизируется.
+// TestApplyOffsetSynced_SourceConnectFailure_DoesNotLeak - connection to the source
+// fell, the text contains source_password -> sanitized.
 func TestApplyOffsetSynced_SourceConnectFailure_DoesNotLeak(t *testing.T) {
 	self := &offsetConn{infoReply: selfReplInfo(1000, "up", 0)}
 	m := &RedisModule{
@@ -402,7 +402,7 @@ func TestApplyOffsetSynced_SourceConnectFailure_DoesNotLeak(t *testing.T) {
 				self.cfg = cfg
 				return self, nil
 			}
-			return nil, errors.New("dial failed for AUTH " + cfg.password) // source-пароль в тексте
+			return nil, errors.New("dial failed for AUTH " + cfg.password) // source password in text
 		},
 	}
 	stream := &applyStream{}
@@ -418,25 +418,25 @@ func TestApplyOffsetSynced_SourceConnectFailure_DoesNotLeak(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || !fin.Failed {
-		t.Fatalf("ждали failed=true на коннект-фейл источника, got %+v", fin)
+		t.Fatalf("expected failed=true on the source connection file, got %+v", fin)
 	}
 	assertEventsNoSecret(t, stream)
 	for i, ev := range stream.sent {
 		if strings.Contains(ev.GetMessage(), masterSourcePass) {
-			t.Errorf("событие[%d].Message несёт source_password при коннект-фейле: %q", i, ev.GetMessage())
+			t.Errorf("event[%d].Message carries source_password for connection failure: %q", i, ev.GetMessage())
 		}
 	}
 }
 
-// TestApplyOffsetSynced_MissingOffset_NotCaughtUp — на своём INFO нет
-// slave_repl_offset (нештатный ввод: addr не реплика) → caught_up=false, не паника.
+// TestApplyOffsetSynced_MissingOffset_NotCaughtUp - not on your INFO
+// slave_repl_offset (abnormal input: addr not a replica) -> caught_up=false, not panic.
 func TestApplyOffsetSynced_MissingOffset_NotCaughtUp(t *testing.T) {
-	self := &offsetConn{infoReply: "# Replication\r\nrole:master\r\nmaster_link_status:up\r\n"} // нет slave_repl_offset
+	self := &offsetConn{infoReply: "# Replication\r\nrole:master\r\nmaster_link_status:up\r\n"} // no slave_repl_offset
 	source := &offsetConn{infoReply: sourceReplInfo(1000)}
 	m := offsetModule(selfAddr, self, source)
 
 	fin := applyOffset(t, m, map[string]any{"skip_checksum": true})
 	if fin.GetOutput().GetFields()["caught_up"].GetBoolValue() {
-		t.Error("ждали caught_up=false: slave_repl_offset отсутствует (addr не реплика)")
+		t.Error("waited caught_up=false: slave_repl_offset is missing (addr is not a replica)")
 	}
 }

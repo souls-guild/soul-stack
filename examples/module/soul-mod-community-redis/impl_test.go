@@ -11,29 +11,29 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// secretPass — пароль, который НИКОГДА не должен утечь в события/ошибки/stderr
-// (ИБ-инвариант ADR-010). Длинный/уникальный, чтобы поиск подстроки был надёжен.
+// secretPass - a password that should NEVER be leaked to events/errors/stderr
+// (IS-invariant ADR-010). Long/unique so that substring searches are reliable.
 const secretPass = "vault-resolved-supersecret-9f3a7c1e2b"
 
-// fakeConn — in-memory redisConn: пишет каждый вызов Do, отдаёт скриптованные
-// ответы. seenPassword фиксируем, чтобы доказать: пароль уходит в коннект, но НЕ
-// в аргументы команд.
+// fakeConn - in-memory redisConn: writes every Do call, returns scripted
+// answers. seenPassword is recorded to prove: the password goes into the connection, but NOT
+// into command arguments.
 //
-// configLive моделирует текущие значения CONFIG GET <param> (для честного diff
-// config-state): пусто/нет ключа → пара "param " (значение "").
+// configLive simulates the current values CONFIG GET <param> (for fair diff
+// config-state): empty/no key -> "param" pair (value "").
 type fakeConn struct {
 	cfg        connConfig
 	calls      [][]any
-	results    map[string]string // ключ — args[0]; "" → echo "OK"
-	configLive map[string]string // CONFIG GET <param> → текущее значение
+	results    map[string]string // key - args[0]; "" -> echo "OK"
+	configLive map[string]string // CONFIG GET <param> -> current value
 	doErr      error
 	closed     bool
 
-	// aclSeq — последовательные ответы ACL LIST (по одному на вызов: before, after).
-	// Если длиннее не нужно — повторяет последний. nil → пустой список.
+	// aclSeq - sequential ACL LIST responses (one per call: before, after).
+	// If a longer one is not needed, repeat the last one. nil -> empty list.
 	aclSeq   [][]string
 	aclCalls int
-	aclErr   error // ошибка ACL LIST (для error-path acl-state)
+	aclErr   error // ACL LIST error (for error-path acl-state)
 }
 
 func (f *fakeConn) Do(_ context.Context, args ...any) (string, error) {
@@ -51,10 +51,10 @@ func (f *fakeConn) Do(_ context.Context, args ...any) (string, error) {
 	return "OK", nil
 }
 
-// ConfigGet — типизированный путь: отдаёт {param: value} из configLive БЕЗ
-// space-join, поэтому многословные значения (save) сохраняются целиком (паритет
-// с реальным go-redis ConfigGet → map[string]string). Записываем вызов в calls,
-// чтобы diff-проба CONFIG GET оставалась видимой для assert.
+// ConfigGet - typed path: returns {param: value} from configLive WITHOUT
+// space-join, so multiword values (save) are saved in their entirety (parity
+// with real go-redis ConfigGet -> map[string]string). We record the call in calls,
+// so that the CONFIG GET diff probe remains visible to assert.
 func (f *fakeConn) ConfigGet(_ context.Context, param string) (map[string]string, error) {
 	f.calls = append(f.calls, []any{"CONFIG", "GET", param})
 	if f.doErr != nil {
@@ -63,14 +63,14 @@ func (f *fakeConn) ConfigGet(_ context.Context, param string) (map[string]string
 	return map[string]string{param: f.configLive[param]}, nil
 }
 
-// GetKeysInSlot — command/config-тесты слоты не мигрируют, стаб под интерфейс.
+// GetKeysInSlot - command/config tests, slots do not migrate, stub under the interface.
 func (f *fakeConn) GetKeysInSlot(_ context.Context, _, _ int) ([]string, error) {
 	return nil, nil
 }
 
-// AclList — отдаёт следующий элемент aclSeq (before/after для diff acl-state),
-// фиксируя порядковый вызов. Записывает вызов в calls (видим для assert порядка
-// LIST → LOAD → LIST). Длиннее aclSeq — повторяет последний.
+// AclList - returns the next aclSeq element (before/after for diff acl-state),
+// fixing the serial call. Records the call in calls (visible for assert order
+// LIST -> LOAD -> LIST). Longer aclSeq - repeats the last one.
 func (f *fakeConn) AclList(_ context.Context) ([]string, error) {
 	f.calls = append(f.calls, []any{"ACL", "LIST"})
 	if f.aclErr != nil {
@@ -89,7 +89,7 @@ func (f *fakeConn) AclList(_ context.Context) ([]string, error) {
 
 func (f *fakeConn) Close() error { f.closed = true; return nil }
 
-// newModule собирает RedisModule с инъектированным fakeConn и возвращает оба.
+// newModule assembles a RedisModule with an injected fakeConn and returns both.
 func newModule(conn *fakeConn) *RedisModule {
 	return &RedisModule{
 		connect: func(_ context.Context, cfg connConfig) (redisConn, error) {
@@ -99,7 +99,7 @@ func newModule(conn *fakeConn) *RedisModule {
 	}
 }
 
-// applyStream — локальный fake grpc-stream (паритет с sdk fakeApplyStream).
+// applyStream - local fake grpc-stream (parity with sdk fakeApplyStream).
 type applyStream struct {
 	grpc.ServerStreamingServer[pluginv1.ApplyEvent]
 	sent []*pluginv1.ApplyEvent
@@ -136,7 +136,7 @@ func TestValidate_CommandRejectsEmptyArgs(t *testing.T) {
 		t.Fatalf("Validate: %v", err)
 	}
 	if reply.Ok {
-		t.Fatal("ждали Ok=false на пустой args")
+		t.Fatal("expected Ok=false on empty args")
 	}
 }
 
@@ -147,7 +147,7 @@ func TestValidate_ConfigRejectsEmptyMap(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"addr": "127.0.0.1:6379", "config": map[string]any{}}),
 	})
 	if reply.Ok {
-		t.Fatal("ждали Ok=false на пустой config")
+		t.Fatal("waited Ok=false on empty config")
 	}
 }
 
@@ -158,7 +158,7 @@ func TestValidate_RejectsEmptyAddr(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"addr": "", "args": []any{"PING"}}),
 	})
 	if reply.Ok {
-		t.Fatal("ждали Ok=false на пустой addr")
+		t.Fatal("waited Ok=false on empty addr")
 	}
 }
 
@@ -169,7 +169,7 @@ func TestValidate_RejectsUnknownState(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"addr": "127.0.0.1:6379"}),
 	})
 	if reply.Ok {
-		t.Fatal("ждали Ok=false на нереализованный state")
+		t.Fatal("expected Ok=false for unrealized state")
 	}
 }
 
@@ -180,7 +180,7 @@ func TestValidate_HappyPath(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"addr": "127.0.0.1:6379", "args": []any{"PING"}}),
 	})
 	if !reply.Ok || len(reply.Errors) != 0 {
-		t.Fatalf("ждали Ok=true без ошибок, got %+v", reply)
+		t.Fatalf("waited Ok=true without errors, got %+v", reply)
 	}
 }
 
@@ -205,21 +205,21 @@ func TestApplyCommand_HappyPath_ChangedFalseByDefault(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed {
-		t.Fatalf("ждали успешное финальное событие, got %+v", fin)
+		t.Fatalf("were waiting for a successful final event, got %+v", fin)
 	}
 	if fin.Changed {
-		t.Error("changed должен быть false по умолчанию (probe-семантика)")
+		t.Error("changed should be false by default (probe semantics)")
 	}
 	if got := fin.GetOutput().GetFields()["result"].GetStringValue(); got != "PONG" {
-		t.Errorf("result=%q, ждали PONG", got)
+		t.Errorf("result=%q, expected PONG", got)
 	}
-	// Пароль ушёл в коннект, но НЕ в аргументы команды.
+	// The password went into the connection, but NOT into the command arguments.
 	if conn.cfg.password != secretPass {
-		t.Errorf("пароль не доехал до коннекта: %q", conn.cfg.password)
+		t.Errorf("the password did not reach the connection: %q", conn.cfg.password)
 	}
 	assertNoCommandCarriesSecret(t, conn)
 	if !conn.closed {
-		t.Error("соединение не закрыто")
+		t.Error("connection not closed")
 	}
 }
 
@@ -238,7 +238,7 @@ func TestApplyCommand_ChangedTrueWhenRequested(t *testing.T) {
 	}, stream)
 
 	if fin := stream.final(); fin == nil || !fin.Changed {
-		t.Fatalf("ждали changed=true при changed:true в params, got %+v", fin)
+		t.Fatalf("expected changed=true with changed:true in params, got %+v", fin)
 	}
 }
 
@@ -253,7 +253,7 @@ func TestApplyCommand_RedisErrorIsFailure(t *testing.T) {
 	}, stream)
 
 	if fin := stream.final(); fin == nil || !fin.Failed {
-		t.Fatalf("ждали failed=true на ошибку Redis, got %+v", fin)
+		t.Fatalf("waited failed=true for error Redis, got %+v", fin)
 	}
 }
 
@@ -281,10 +281,10 @@ func TestApplyConfig_HappyPath_ChangedTrue(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed || !fin.Changed {
-		t.Fatalf("ждали успех changed=true, got %+v", fin)
+		t.Fatalf("expected success changed=true, got %+v", fin)
 	}
-	// Честный diff: live пуст → обе директивы отличаются → GET перед каждым SET,
-	// затем SET (детерминированный порядок по ключу).
+	// Honest diff: live is empty -> both directives are different -> GET before each SET,
+	// then SET (deterministic order by key).
 	wantCalls := [][]any{
 		{"CONFIG", "GET", "maxmemory"},
 		{"CONFIG", "SET", "maxmemory", "256mb"},
@@ -295,8 +295,8 @@ func TestApplyConfig_HappyPath_ChangedTrue(t *testing.T) {
 	assertNoCommandCarriesSecret(t, conn)
 }
 
-// TestApplyConfig_NoOpWhenLiveMatches — честный diff: live уже на желаемом
-// значении → CONFIG SET НЕ вызывается, changed=false (идемпотентность, M3-фикс).
+// TestApplyConfig_NoOpWhenLiveMatches - fair diff: live is already on the desired one
+// value -> CONFIG SET is NOT called, changed=false (idempotency, M3-fix).
 func TestApplyConfig_NoOpWhenLiveMatches(t *testing.T) {
 	conn := &fakeConn{configLive: map[string]string{
 		"maxmemory":        "256mb",
@@ -321,26 +321,26 @@ func TestApplyConfig_NoOpWhenLiveMatches(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed {
-		t.Fatalf("ждали успех, got %+v", fin)
+		t.Fatalf("expected success, got %+v", fin)
 	}
 	if fin.Changed {
-		t.Error("ждали changed=false: live уже на желаемом (no-op, M3 честный diff)")
+		t.Error("waited changed=false: live already on the desired one (no-op, M3 fair diff)")
 	}
 	if hasCall(conn.calls, "CONFIG", "SET") {
-		t.Errorf("no-op нарушен: CONFIG SET вызван при совпадении live: %v", conn.calls)
+		t.Errorf("no-op broken: CONFIG SET called when live: %v matches", conn.calls)
 	}
-	// GET по обеим директивам всё равно прошёл (diff-проба).
+	// GET for both directives still passed (diff test).
 	if !hasCall(conn.calls, "CONFIG", "GET", "maxmemory") {
-		t.Errorf("CONFIG GET maxmemory должен выполниться для diff: %v", conn.calls)
+		t.Errorf("CONFIG GET maxmemory should be executed for diff: %v", conn.calls)
 	}
 }
 
-// TestApplyConfig_PartialDiff — часть директив совпала, часть нет: SET только для
-// реально отличающихся, changed=true, count — по применённым.
+// TestApplyConfig_PartialDiff - some of the directives matched, some did not: SET only for
+// really different, changed=true, count - according to those applied.
 func TestApplyConfig_PartialDiff(t *testing.T) {
 	conn := &fakeConn{configLive: map[string]string{
-		"maxmemory":        "256mb",      // совпадёт → no-op
-		"maxmemory-policy": "noeviction", // отличается → SET
+		"maxmemory":        "256mb",      // matches -> no-op
+		"maxmemory-policy": "noeviction", // different -> SET
 	}}
 	m := newModule(conn)
 	stream := &applyStream{}
@@ -358,24 +358,24 @@ func TestApplyConfig_PartialDiff(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed || !fin.Changed {
-		t.Fatalf("ждали успех changed=true (одна директива отличается), got %+v", fin)
+		t.Fatalf("expected success changed=true (one directive is different), got %+v", fin)
 	}
 	if hasCall(conn.calls, "CONFIG", "SET", "maxmemory", "256mb") {
-		t.Errorf("совпавшую директиву не должны SET-ить: %v", conn.calls)
+		t.Errorf("the matching directive should not be SET: %v", conn.calls)
 	}
 	if !hasCall(conn.calls, "CONFIG", "SET", "maxmemory-policy", "allkeys-lru") {
-		t.Errorf("отличающуюся директиву должны SET-ить: %v", conn.calls)
+		t.Errorf("a different directive must be SET: %v", conn.calls)
 	}
 	if got := fin.GetOutput().GetFields()["count"].GetNumberValue(); got != 1 {
-		t.Errorf("count=%v, ждали 1 (одна применённая директива)", got)
+		t.Errorf("count=%v, waited 1 (one applied directive)", got)
 	}
 }
 
-// TestApplyConfig_MultiwordValueNoOp — P3-регресс: многословное значение
-// (save "900 1 300 10 60 10000") при space-join+strings.Fields рассыпалось бы в
-// перепутанные пары → current != want → ложный CONFIG SET (потеря
-// идемпотентности на day-2 update_config). Типизированный ConfigGet сохраняет
-// значение целиком → live == want → no-op.
+// TestApplyConfig_MultiwordValueNoOp - P3 regression: multiword value
+// (save "900 1 300 10 60 10000") with space-join+strings.Fields would crumble into
+// mixed up pairs -> current != want -> false CONFIG SET (loss
+// idempotency on day-2 update_config). Typed ConfigGet saves
+// entire meaning -> live == want -> no-op.
 func TestApplyConfig_MultiwordValueNoOp(t *testing.T) {
 	const save = "900 1 300 10 60 10000"
 	conn := &fakeConn{configLive: map[string]string{"save": save}}
@@ -395,13 +395,13 @@ func TestApplyConfig_MultiwordValueNoOp(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed {
-		t.Fatalf("ждали успех, got %+v", fin)
+		t.Fatalf("expected success, got %+v", fin)
 	}
 	if fin.Changed {
-		t.Error("ждали changed=false: live save совпадает с желаемым (многословное значение сохранено целиком)")
+		t.Error("expected changed=false: live save matches the desired one (the verbose value is saved in its entirety)")
 	}
 	if hasCall(conn.calls, "CONFIG", "SET") {
-		t.Errorf("ложный CONFIG SET на совпавшем многословном значении (P3): %v", conn.calls)
+		t.Errorf("false CONFIG SET on matched multiword value (P3): %v", conn.calls)
 	}
 }
 
@@ -419,11 +419,11 @@ func TestApplyConfig_NumericValueStringified(t *testing.T) {
 	}, stream)
 
 	if fin := stream.final(); fin == nil || fin.Failed {
-		t.Fatalf("ждали успех, got %+v", fin)
+		t.Fatalf("expected success, got %+v", fin)
 	}
-	// GET (live пуст) + SET со стрингифицированным значением.
+	// GET (live is empty) + SET with stringified value.
 	if !hasCall(conn.calls, "CONFIG", "SET", "maxclients", "20000") {
-		t.Errorf("ждали CONFIG SET maxclients 20000 (стрингифицировано), got %v", conn.calls)
+		t.Errorf("waited CONFIG SET maxclients 20000 (stringified), got %v", conn.calls)
 	}
 }
 
@@ -443,15 +443,15 @@ func TestApplyConfig_RewriteCallsConfigRewrite(t *testing.T) {
 
 	last := conn.calls[len(conn.calls)-1]
 	if len(last) != 2 || last[0] != "CONFIG" || last[1] != "REWRITE" {
-		t.Errorf("ждали финальный CONFIG REWRITE, got %v", last)
+		t.Errorf("expected the final CONFIG REWRITE, got %v", last)
 	}
 }
 
-// TestApplyConfig_StartupOnlyDirectivesSkipped — денилист startup-only: CONFIG SET
-// их отвергает, day-2 рендерит ПОЛНЫЙ redis.conf (с ними), поэтому плагин их
-// ПРОПУСКАЕТ (не падает). Hot-settable директивы того же вызова применяются как
-// обычно. Проверяем: ни CONFIG GET, ни CONFIG SET по startup-only НЕ вызваны;
-// hot-settable применена; skipped/skippedCount в Output корректны.
+// TestApplyConfig_StartupOnlyDirectivesSkipped - denylist startup-only: CONFIG SET
+// rejects them, day-2 renders the FULL redis.conf (with them), so the plugin them
+// SKIPS (does not fall). Hot-settable directives of the same call are applied as
+// usually. We check: neither CONFIG GET nor CONFIG SET by startup-only are called;
+// hot-settable applied; skipped/skippedCount in Output are correct.
 func TestApplyConfig_StartupOnlyDirectivesSkipped(t *testing.T) {
 	conn := &fakeConn{}
 	m := newModule(conn)
@@ -462,13 +462,13 @@ func TestApplyConfig_StartupOnlyDirectivesSkipped(t *testing.T) {
 		Params: mustStruct(t, map[string]any{
 			"addr": "127.0.0.1:6379",
 			"config": map[string]any{
-				// startup-only — должны быть пропущены (CONFIG SET их отвергает):
+				// startup-only - must be skipped (CONFIG SET rejects them):
 				"port":            "6379",
 				"dir":             "/var/lib/redis",
 				"aclfile":         "/etc/redis/users.acl",
 				"cluster-enabled": "yes",
 				"loadmodule":      "/x.so",
-				// hot-settable — должна примениться:
+				// hot-settable - should apply:
 				"maxmemory": "512mb",
 			},
 		}),
@@ -479,41 +479,41 @@ func TestApplyConfig_StartupOnlyDirectivesSkipped(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed {
-		t.Fatalf("ждали успех (startup-only пропущены, не падение), got %+v", fin)
+		t.Fatalf("expected success (startup-only skipped, no crash), got %+v", fin)
 	}
 	if !fin.Changed {
-		t.Error("ждали changed=true: hot-settable maxmemory применена")
+		t.Error("waited changed=true: hot-settable maxmemory applied")
 	}
 
-	// Ни одна startup-only-директива не должна дойти ни до GET, ни до SET.
+	// No startup-only directive should reach either GET or SET.
 	for _, k := range []string{"port", "dir", "aclfile", "cluster-enabled", "loadmodule"} {
 		if hasCall(conn.calls, "CONFIG", "GET", k) || hasCall(conn.calls, "CONFIG", "SET", k) {
-			t.Errorf("startup-only %q не должна попадать в CONFIG GET/SET: %v", k, conn.calls)
+			t.Errorf("startup-only %q should not be included in CONFIG GET/SET: %v", k, conn.calls)
 		}
 	}
-	// Hot-settable применена.
+	// Hot-settable applied.
 	if !hasCall(conn.calls, "CONFIG", "SET", "maxmemory", "512mb") {
-		t.Errorf("hot-settable maxmemory должна примениться: %v", conn.calls)
+		t.Errorf("hot-settable maxmemory should apply: %v", conn.calls)
 	}
-	// Output: applied/count по hot-settable, skipped/skippedCount по startup-only.
+	// Output: applied/count by hot-settable, skipped/skippedCount by startup-only.
 	out := fin.GetOutput().GetFields()
 	if got := out["count"].GetNumberValue(); got != 1 {
-		t.Errorf("count=%v, ждали 1 (одна hot-settable)", got)
+		t.Errorf("count=%v, waited 1 (one hot-settable)", got)
 	}
 	if got := out["skippedCount"].GetNumberValue(); got != 5 {
-		t.Errorf("skippedCount=%v, ждали 5 (port/dir/aclfile/cluster-enabled/loadmodule)", got)
+		t.Errorf("skippedCount=%v, waited 5 (port/dir/aclfile/cluster-enabled/loadmodule)", got)
 	}
 	skipped := out["skipped"].GetStringValue()
 	for _, k := range []string{"port", "dir", "aclfile", "cluster-enabled", "loadmodule"} {
 		if !strings.Contains(skipped, k) {
-			t.Errorf("skipped не содержит %q: %q", k, skipped)
+			t.Errorf("skipped does not contain %q: %q", k, skipped)
 		}
 	}
 }
 
-// TestApplyConfig_AllStartupOnly_NoChange — если ВСЕ директивы startup-only,
-// CONFIG SET не вызывается ни разу, changed=false (нечего применять hot), прогон не
-// падает. Граничный кейс денилиста: rewrite тоже не дёргается (len(applied)==0).
+// TestApplyConfig_AllStartupOnly_NoChange - if ALL directives are startup-only,
+// CONFIG SET is not called even once, changed=false (there is nothing to use hot), the run is not
+// falls. Borderline denilista case: rewrite does not twitch either (len(applied)==0).
 func TestApplyConfig_AllStartupOnly_NoChange(t *testing.T) {
 	conn := &fakeConn{}
 	m := newModule(conn)
@@ -530,16 +530,16 @@ func TestApplyConfig_AllStartupOnly_NoChange(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed {
-		t.Fatalf("ждали успех (все startup-only пропущены), got %+v", fin)
+		t.Fatalf("expected success (all startup-only skipped), got %+v", fin)
 	}
 	if fin.Changed {
-		t.Error("ждали changed=false: нечего применять hot (все директивы startup-only)")
+		t.Error("expected changed=false: there is nothing to apply hot (all directives are startup-only)")
 	}
 	if hasCall(conn.calls, "CONFIG", "SET") {
-		t.Errorf("CONFIG SET не должен вызываться при всех startup-only: %v", conn.calls)
+		t.Errorf("CONFIG SET should not be called for all startup-only: %v", conn.calls)
 	}
 	if hasCall(conn.calls, "CONFIG", "REWRITE") {
-		t.Errorf("CONFIG REWRITE не должен вызываться при пустом applied: %v", conn.calls)
+		t.Errorf("CONFIG REWRITE should not be called when applied: %v", conn.calls)
 	}
 }
 
@@ -552,7 +552,7 @@ func TestValidate_AclRequiresAddr(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"addr": ""}),
 	})
 	if reply.Ok {
-		t.Fatal("ждали Ok=false на пустой addr для acl")
+		t.Fatal("waited Ok=false on an empty addr for acl")
 	}
 }
 
@@ -563,19 +563,19 @@ func TestValidate_AclHappyPath(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"addr": "127.0.0.1:6379"}),
 	})
 	if !reply.Ok || len(reply.Errors) != 0 {
-		t.Fatalf("ждали Ok=true без ошибок, got %+v", reply)
+		t.Fatalf("waited Ok=true without errors, got %+v", reply)
 	}
 }
 
 // --- Apply: acl ---
 
-// TestApplyACL_SendsAclLoad — базовый контракт: acl-state шлёт ACL LOAD между
-// двумя ACL LIST (diff-проба), коннект получает пароль, аргументы команд его не
-// несут, соединение закрывается.
+// TestApplyACL_SendsAclLoad - base contract: acl-state sends ACL LOAD between
+// two ACL LIST (diff test), the connection receives a password, the command arguments do not
+// carried, the connection is closed.
 func TestApplyACL_SendsAclLoad(t *testing.T) {
 	conn := &fakeConn{aclSeq: [][]string{
 		{"user default on nopass ~* +@all"},
-		{"user default on nopass ~* +@all", "user alice on #abc ~app:* +@read"}, // после LOAD добавился alice
+		{"user default on nopass ~* +@all", "user alice on #abc ~app:* +@read"}, // after LOAD alice was added
 	}}
 	m := newModule(conn)
 	stream := &applyStream{}
@@ -593,9 +593,9 @@ func TestApplyACL_SendsAclLoad(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed {
-		t.Fatalf("ждали успешное финальное событие, got %+v", fin)
+		t.Fatalf("were waiting for a successful final event, got %+v", fin)
 	}
-	// Порядок: ACL LIST (before) → ACL LOAD → ACL LIST (after).
+	// Order: ACL LIST (before) -> ACL LOAD -> ACL LIST (after).
 	wantCalls := [][]any{
 		{"ACL", "LIST"},
 		{"ACL", "LOAD"},
@@ -603,16 +603,16 @@ func TestApplyACL_SendsAclLoad(t *testing.T) {
 	}
 	assertCalls(t, conn, wantCalls)
 	if conn.cfg.password != secretPass {
-		t.Errorf("пароль не доехал до коннекта: %q", conn.cfg.password)
+		t.Errorf("the password did not reach the connection: %q", conn.cfg.password)
 	}
 	assertNoCommandCarriesSecret(t, conn)
 	if !conn.closed {
-		t.Error("соединение не закрыто")
+		t.Error("connection not closed")
 	}
 }
 
-// TestApplyACL_ChangedTrueWhenAclDiffers — ACL LIST до/после отличается (LOAD
-// реально перечитал файл с новыми правилами) → changed=true, users — по after.
+// TestApplyACL_ChangedTrueWhenAclDiffers - ACL LIST before/after differs (LOAD
+// I actually re-read the file with the new rules) -> changed=true, users - by after.
 func TestApplyACL_ChangedTrueWhenAclDiffers(t *testing.T) {
 	conn := &fakeConn{aclSeq: [][]string{
 		{"user default on nopass ~* +@all"},
@@ -628,17 +628,17 @@ func TestApplyACL_ChangedTrueWhenAclDiffers(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed || !fin.Changed {
-		t.Fatalf("ждали успех changed=true (ACL изменился), got %+v", fin)
+		t.Fatalf("expected success changed=true (ACL has changed), got %+v", fin)
 	}
 	if got := fin.GetOutput().GetFields()["users"].GetNumberValue(); got != 2 {
-		t.Errorf("users=%v, ждали 2 (after-список)", got)
+		t.Errorf("users=%v, waited 2 (after-list)", got)
 	}
 }
 
-// TestApplyACL_ChangedFalseWhenAclUnchanged — живой инстанс уже совпадал с
-// aclfile: ACL LIST до/после идентичен → changed=false (no-op, идемпотентность
-// как config/cluster/sentinel). ACL LOAD при этом всё равно выполняется
-// (приведение к декларированному — by construction).
+// TestApplyACL_ChangedFalseWhenAclUnchanged - the live instance has already matched
+// aclfile: ACL LIST before/after is identical -> changed=false (no-op, idempotency
+// like config/cluster/sentinel). ACL LOAD is still executed
+// (reduction to the declared one - by construction).
 func TestApplyACL_ChangedFalseWhenAclUnchanged(t *testing.T) {
 	same := []string{"user default on nopass ~* +@all", "user alice on #abc ~app:* +@read"}
 	conn := &fakeConn{aclSeq: [][]string{same, same}}
@@ -652,18 +652,18 @@ func TestApplyACL_ChangedFalseWhenAclUnchanged(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed {
-		t.Fatalf("ждали успех, got %+v", fin)
+		t.Fatalf("expected success, got %+v", fin)
 	}
 	if fin.Changed {
-		t.Error("ждали changed=false: ACL LIST до/после совпал (no-op)")
+		t.Error("waited changed=false: ACL LIST before/after matched (no-op)")
 	}
 	if !hasCall(conn.calls, "ACL", "LOAD") {
-		t.Errorf("ACL LOAD должен выполниться даже на no-op (приведение by construction): %v", conn.calls)
+		t.Errorf("ACL LOAD must be executed even on a no-op (cast by construction): %v", conn.calls)
 	}
 }
 
-// TestApplyACL_LoadErrorIsFailure — ACL LOAD упал (битый/несконфигурированный
-// aclfile) → failed=true с внятным сообщением.
+// TestApplyACL_LoadErrorIsFailure - ACL LOAD failed (broken/unconfigured
+// aclfile) -> failed=true with a clear message.
 func TestApplyACL_LoadErrorIsFailure(t *testing.T) {
 	conn := &fakeConn{doErr: errors.New("ERR This Redis instance is not configured to use an ACL file.")}
 	m := newModule(conn)
@@ -676,15 +676,15 @@ func TestApplyACL_LoadErrorIsFailure(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || !fin.Failed {
-		t.Fatalf("ждали failed=true на ошибку ACL LOAD, got %+v", fin)
+		t.Fatalf("waited failed=true for ACL LOAD error, got %+v", fin)
 	}
 	if !strings.Contains(fin.GetMessage(), "ACL LOAD") {
-		t.Errorf("ждали внятный prefix 'ACL LOAD' в сообщении, got %q", fin.GetMessage())
+		t.Errorf("Expected a clear prefix 'ACL LOAD' in the message, got %q", fin.GetMessage())
 	}
 }
 
-// TestApplyACL_ListErrorIsFailure — ACL LIST (before) недоступен → failed, ACL
-// LOAD НЕ выполняется (нет точки сравнения — не трогаем живой инстанс вслепую).
+// TestApplyACL_ListErrorIsFailure - ACL LIST (before) unavailable -> failed, ACL
+// LOAD is NOT executed (there is no point of comparison - we do not touch the live instance blindly).
 func TestApplyACL_ListErrorIsFailure(t *testing.T) {
 	conn := &fakeConn{aclErr: errors.New("WRONGPASS invalid username-password pair")}
 	m := newModule(conn)
@@ -697,15 +697,15 @@ func TestApplyACL_ListErrorIsFailure(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || !fin.Failed {
-		t.Fatalf("ждали failed=true на ошибку ACL LIST, got %+v", fin)
+		t.Fatalf("waited failed=true for ACL LIST error, got %+v", fin)
 	}
 	if hasCall(conn.calls, "ACL", "LOAD") {
-		t.Errorf("ACL LOAD не должен выполняться при недоступном ACL LIST (before): %v", conn.calls)
+		t.Errorf("ACL LOAD should not be executed when ACL LIST is not available (before): %v", conn.calls)
 	}
 }
 
-// TestApplyACL_ConnectFailure_DoesNotLeakPassword — ошибка коннекта, чей текст
-// СОДЕРЖИТ пароль, санитизируется (общий путь Apply, redactError).
+// TestApplyACL_ConnectFailure_DoesNotLeakPassword - connection error, whose text
+// CONTAINS password, sanitized (general path Apply, redactError).
 func TestApplyACL_ConnectFailure_DoesNotLeakPassword(t *testing.T) {
 	m := &RedisModule{
 		connect: func(_ context.Context, cfg connConfig) (redisConn, error) {
@@ -723,13 +723,13 @@ func TestApplyACL_ConnectFailure_DoesNotLeakPassword(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || !fin.Failed {
-		t.Fatalf("ждали failed=true, got %+v", fin)
+		t.Fatalf("waited failed=true, got %+v", fin)
 	}
 	assertEventsNoSecret(t, stream)
 }
 
-// TestApplyACL_TLSParamsReachConnect — TLS-параметры (tls/tls_ca) доезжают до
-// коннекта (acl читает тот же набор, что config/command — общий путь).
+// TestApplyACL_TLSParamsReachConnect - TLS parameters (tls/tls_ca) reach
+// connection (acl reads the same set as config/command - the general path).
 func TestApplyACL_TLSParamsReachConnect(t *testing.T) {
 	var captured connConfig
 	m := &RedisModule{
@@ -749,10 +749,10 @@ func TestApplyACL_TLSParamsReachConnect(t *testing.T) {
 	}, &applyStream{})
 
 	if !captured.tls.enabled {
-		t.Error("tls=true не доехал до коннекта acl-state")
+		t.Error("tls=true did not reach the acl-state connection")
 	}
 	if captured.tls.caPEM != caPEM {
-		t.Errorf("tls_ca не доехал до коннекта: %q", captured.tls.caPEM)
+		t.Errorf("tls_ca did not reach the connection: %q", captured.tls.caPEM)
 	}
 }
 
@@ -772,18 +772,18 @@ func TestApply_UnixSocketAddrParsed(t *testing.T) {
 	}, &applyStream{})
 
 	if captured.addr != "unix:/var/run/redis/redis-server.sock" {
-		t.Errorf("addr не доехал до коннекта: %q", captured.addr)
+		t.Errorf("addr did not reach the connection: %q", captured.addr)
 	}
 }
 
-// --- ИБ-инвариант: пароль не утекает ---
+// --- Cybersecurity invariant: password does not leak ---
 
-// TestApply_ConnectFailure_DoesNotLeakPassword — ошибка коннекта, чей текст
-// СОДЕРЖИТ пароль, должна быть санитизирована в событии (redactError).
+// TestApply_ConnectFailure_DoesNotLeakPassword - connection error, whose text
+// CONTAINS a password, must be sanitized in the (redactError) event.
 func TestApply_ConnectFailure_DoesNotLeakPassword(t *testing.T) {
 	m := &RedisModule{
 		connect: func(_ context.Context, cfg connConfig) (redisConn, error) {
-			// Моделируем worst-case: драйвер положил пароль в текст ошибки.
+			// Let's simulate the worst-case: the driver put the password in the error text.
 			return nil, errors.New("dial failed for AUTH " + cfg.password)
 		},
 	}
@@ -799,13 +799,13 @@ func TestApply_ConnectFailure_DoesNotLeakPassword(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || !fin.Failed {
-		t.Fatalf("ждали failed=true, got %+v", fin)
+		t.Fatalf("waited failed=true, got %+v", fin)
 	}
 	assertEventsNoSecret(t, stream)
 }
 
-// TestApply_NoEventCarriesSecret — сквозная проверка: ни одно событие
-// (command + config happy-path) не содержит пароль ни в Message, ни в Output.
+// TestApply_NoEventCarriesSecret - end-to-end verification: no events
+// (command + config happy-path) does not contain the password in either the Message or Output.
 func TestApply_NoEventCarriesSecret(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -827,9 +827,9 @@ func TestApply_NoEventCarriesSecret(t *testing.T) {
 	}
 }
 
-// TestApplyConfig_SecretLeakInDriverError_Redacted — драйвер вернул ошибку,
-// СОДЕРЖАЩУЮ значение директивы (requirepass): applyConfig обязан вырезать его
-// через redactError. Доказывает, что error-path config-state симметричен
+// TestApplyConfig_SecretLeakInDriverError_Redacted - the driver returned an error,
+// CONTAINING the value of the directive (requirepass): applyConfig must cut it
+// via redactError. Proves that error-path config-state is symmetric
 // replica/cluster/sentinel (M4, defense-in-depth).
 func TestApplyConfig_SecretLeakInDriverError_Redacted(t *testing.T) {
 	conn := &leakyConfigConn{secret: secretPass}
@@ -848,18 +848,18 @@ func TestApplyConfig_SecretLeakInDriverError_Redacted(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || !fin.Failed {
-		t.Fatalf("ждали failed=true, got %+v", fin)
+		t.Fatalf("waited failed=true, got %+v", fin)
 	}
 	if strings.Contains(fin.GetMessage(), secretPass) {
-		t.Errorf("значение директивы (секрет) утекло в Message ошибки: %q", fin.GetMessage())
+		t.Errorf("the value of the directive (secret) was leaked in the error Message: %q", fin.GetMessage())
 	}
 	if !strings.Contains(fin.GetMessage(), "***") {
-		t.Errorf("ждали маску *** в редактированной ошибке, got %q", fin.GetMessage())
+		t.Errorf("expected mask *** in edited error, got %q", fin.GetMessage())
 	}
 }
 
-// leakyConfigConn моделирует драйвер, эхающий значение SET-аргумента в текст
-// ошибки (worst-case для проверки redactError на error-path config-state).
+// leakyConfigConn simulates a driver echoing the value of a SET argument to text
+// errors (worst-case for checking redactError on error-path config-state).
 type leakyConfigConn struct {
 	secret string
 }
@@ -867,12 +867,12 @@ type leakyConfigConn struct {
 func (c *leakyConfigConn) Do(_ context.Context, args ...any) (string, error) {
 	if len(args) >= 4 && args[0] == "CONFIG" && args[1] == "SET" {
 		val, _ := args[3].(string)
-		return "", errors.New("ERR could not set value to " + val) // эхает секрет
+		return "", errors.New("ERR could not set value to " + val) // secret echoes
 	}
 	return "OK", nil
 }
 
-// ConfigGet — live пуст → diff сработает, applyConfig дойдёт до CONFIG SET.
+// ConfigGet - live is empty -> diff will work, applyConfig will reach CONFIG SET.
 func (c *leakyConfigConn) ConfigGet(_ context.Context, param string) (map[string]string, error) {
 	return map[string]string{param: ""}, nil
 }
@@ -882,34 +882,34 @@ func (c *leakyConfigConn) GetKeysInSlot(_ context.Context, _, _ int) ([]string, 
 func (c *leakyConfigConn) AclList(_ context.Context) ([]string, error) { return nil, nil }
 func (c *leakyConfigConn) Close() error                                { return nil }
 
-// --- redactError: регресс для коротких паролей-подстрок ---
+// --- redactError: regression for short substring passwords ---
 
-// TestRedactError_ShortPasswordSubstring — пароль-подстрока, совпадающая с частью
-// безобидного текста ("6379" в "127.0.0.1:6379"), при ReplaceAll затрёт И адрес.
-// Тест ФИКСИРУЕТ текущее поведение (хрупкость ReplaceAll на коротких секретах):
-// маскируется ЛЮБОЕ вхождение подстроки. Инвариант ИБ соблюдён (секрет не виден),
-// ценой возможной чрезмерной маскировки диагностики. Регресс ловит изменение.
+// TestRedactError_ShortPasswordSubstring - substring password that matches the part
+// harmless text ("6379" in "127.0.0.1:6379"), ReplaceAll will overwrite AND the address.
+// The test FIXES the current behavior (fragility of ReplaceAll on short secrets):
+// ANY occurrence of the substring is masked. The information security invariant is met (the secret is not visible),
+// at the cost of possible over-concealment of diagnosis. Regression catches change.
 func TestRedactError_ShortPasswordSubstring(t *testing.T) {
 	err := errors.New("dial 127.0.0.1:6379: connection refused")
 	got := redactError(err, "6379")
 	if strings.Contains(got, "6379") {
-		t.Errorf("секрет-подстрока должна быть вырезана отовсюду, got %q", got)
+		t.Errorf("secret-substring must be stripped from everywhere, got %q", got)
 	}
-	// Документируем over-masking: адрес тоже задет — ОЖИДАЕМО при коротком секрете.
+	// We document over-masking: the address is also affected - EXPECTED with a short secret.
 	if !strings.Contains(got, "127.0.0.1:***") {
-		t.Errorf("ждали затёртый порт (over-masking фиксируется): %q", got)
+		t.Errorf("expected a worn out port (over-masking is fixed): %q", got)
 	}
-	// Пустой пароль — no-op.
+	// An empty password is no-op.
 	if redactError(errors.New("plain error"), "") != "plain error" {
-		t.Error("пустой пароль должен быть no-op для redactError")
+		t.Error("empty password should be no-op for redactError")
 	}
 }
 
-// --- valueToString / args со значением, содержащим пробел ---
+// --- valueToString / args with value containing space ---
 
-// TestStringList_PreservesValueWithSpace — guard: значение элемента args с
-// пробелом ("hello world") приходит ОДНИМ аргументом команды и не теряет
-// структуру (каждый элемент списка = отдельный arg, без склейки/Fields).
+// TestStringList_PreservesValueWithSpace - guard: the value of the args element with
+// space ("hello world") comes as ONE command argument and does not lose
+// structure (each list element = separate arg, without gluing/Fields).
 func TestStringList_PreservesValueWithSpace(t *testing.T) {
 	conn := &fakeConn{}
 	m := newModule(conn)
@@ -924,20 +924,20 @@ func TestStringList_PreservesValueWithSpace(t *testing.T) {
 	}, stream)
 
 	if len(conn.calls) != 1 {
-		t.Fatalf("ждали один вызов команды, got %v", conn.calls)
+		t.Fatalf("expected one command call, got %v", conn.calls)
 	}
 	call := conn.calls[0]
 	if len(call) != 3 {
-		t.Fatalf("ждали 3 аргумента (SET greeting 'hello world'), got %d: %v", len(call), call)
+		t.Fatalf("expected 3 arguments (SET greeting 'hello world'), got %d: %v", len(call), call)
 	}
 	if call[2] != "hello world" {
-		t.Errorf("значение с пробелом потеряло структуру: arg[2]=%v (ждали 'hello world')", call[2])
+		t.Errorf("a value with a space has lost its structure: arg[2]=%v (expected 'hello world')", call[2])
 	}
 }
 
-// TestStringMap_NumericAndStringValuesStringified — guard valueToString в составе
-// config-map: число и bool стрингифицируются предсказуемо (256 не 256.000000;
-// true не пусто) — Redis ждёт строки.
+// TestStringMap_NumericAndStringValuesStringified - guard valueToString in composition
+// config-map: number and bool are stringified predictably (256 not 256.000000;
+// true is not empty) - Redis is waiting for a line.
 func TestStringMap_NumericAndStringValuesStringified(t *testing.T) {
 	conn := &fakeConn{}
 	m := newModule(conn)
@@ -948,33 +948,33 @@ func TestStringMap_NumericAndStringValuesStringified(t *testing.T) {
 		Params: mustStruct(t, map[string]any{
 			"addr": "127.0.0.1:6379",
 			"config": map[string]any{
-				"maxclients":             20000,      // число → "20000"
-				"appendfsync":            "everysec", // строка как есть
-				"lazyfree-lazy-eviction": true,       // bool → "true" (оператор предупреждён: Redis ждёт yes/no — это его выбор)
+				"maxclients":             20000,      // number -> "20000"
+				"appendfsync":            "everysec", // line as is
+				"lazyfree-lazy-eviction": true,       // bool -> "true" (the operator is warned: Redis expects yes/no - this is his choice)
 			},
 		}),
 	}, stream)
 
 	if !hasCall(conn.calls, "CONFIG", "SET", "maxclients", "20000") {
-		t.Errorf("число должно стать '20000': %v", conn.calls)
+		t.Errorf("the number should become '20000': %v", conn.calls)
 	}
 	if !hasCall(conn.calls, "CONFIG", "SET", "appendfsync", "everysec") {
-		t.Errorf("строка как есть: %v", conn.calls)
+		t.Errorf("the line as is: %v", conn.calls)
 	}
 }
 
-// --- assert-хелперы ---
+// --- assert helpers ---
 
 func assertEventsNoSecret(t *testing.T, stream *applyStream) {
 	t.Helper()
 	for i, ev := range stream.sent {
 		if strings.Contains(ev.GetMessage(), secretPass) {
-			t.Errorf("событие[%d].Message содержит пароль: %q", i, ev.GetMessage())
+			t.Errorf("event[%d].Message contains password: %q", i, ev.GetMessage())
 		}
 		if out := ev.GetOutput(); out != nil {
 			for k, v := range out.GetFields() {
 				if strings.Contains(v.GetStringValue(), secretPass) {
-					t.Errorf("событие[%d].Output[%s] содержит пароль", i, k)
+					t.Errorf("event[%d].Output[%s] contains the password", i, k)
 				}
 			}
 		}
@@ -986,7 +986,7 @@ func assertNoCommandCarriesSecret(t *testing.T, conn *fakeConn) {
 	for i, call := range conn.calls {
 		for _, a := range call {
 			if s, ok := a.(string); ok && strings.Contains(s, secretPass) {
-				t.Errorf("команда[%d] несёт пароль в аргументах: %v", i, call)
+				t.Errorf("command[%d] carries the password in its arguments: %v", i, call)
 			}
 		}
 	}
@@ -995,15 +995,15 @@ func assertNoCommandCarriesSecret(t *testing.T, conn *fakeConn) {
 func assertCalls(t *testing.T, conn *fakeConn, want [][]any) {
 	t.Helper()
 	if len(conn.calls) != len(want) {
-		t.Fatalf("вызовов %d, ждали %d: %v", len(conn.calls), len(want), conn.calls)
+		t.Fatalf("calls %d, waiting for %d: %v", len(conn.calls), len(want), conn.calls)
 	}
 	for i := range want {
 		if len(conn.calls[i]) != len(want[i]) {
-			t.Fatalf("вызов[%d] арность %d, ждали %d: %v", i, len(conn.calls[i]), len(want[i]), conn.calls[i])
+			t.Fatalf("call[%d] arity %d, expected %d: %v", i, len(conn.calls[i]), len(want[i]), conn.calls[i])
 		}
 		for j := range want[i] {
 			if conn.calls[i][j] != want[i][j] {
-				t.Errorf("вызов[%d][%d]=%v, ждали %v", i, j, conn.calls[i][j], want[i][j])
+				t.Errorf("call[%d][%d]=%v, expected %v", i, j, conn.calls[i][j], want[i][j])
 			}
 		}
 	}

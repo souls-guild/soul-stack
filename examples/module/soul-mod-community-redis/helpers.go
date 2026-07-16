@@ -10,8 +10,8 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// parseConnConfig вытаскивает коннект-параметры из params. password держится
-// отдельно от всего, что попадает в события (ИБ-инвариант ADR-010).
+// parseConnConfig pulls connection parameters from params. password holds
+// separately from everything that falls into the events (IS-invariant ADR-010).
 func parseConnConfig(s *structpb.Struct) (connConfig, error) {
 	f := s.GetFields()
 	addr, _ := stringValue(f["addr"])
@@ -27,7 +27,7 @@ func parseConnConfig(s *structpb.Struct) (connConfig, error) {
 	}, nil
 }
 
-// validateAddr — общая проверка непустого params.addr (command/config).
+// validateAddr - general check for non-empty params.addr (command/config).
 func validateAddr(f map[string]*structpb.Value) []string {
 	if s, _ := stringValue(f["addr"]); strings.TrimSpace(s) == "" {
 		return []string{"params.addr: must be a non-empty string"}
@@ -35,12 +35,12 @@ func validateAddr(f map[string]*structpb.Value) []string {
 	return nil
 }
 
-// redactError вырезает секреты из текста ошибки. go-redis формирует ошибки
-// коннекта по полям *redis.Options / *tls.Config; на некоторых путях (dial-фейл
-// с authentication, TLS-handshake) текст теоретически может содержать кредлы —
-// fail-safe заменяем подстроку каждого секрета на "***". Вариадик: вызывается и
-// с одним паролем (redactError(err, password)), и с парой пароль+PEM-ключ
-// (redactError(err, password, keyPEM) на TLS-коннекте). Пустые секреты — no-op.
+// redactError strips secrets from the error text. go-redis generates errors
+// connection by fields *redis.Options / *tls.Config; on some paths (dial fail
+// with authentication, TLS-handshake) the text can theoretically contain cradle -
+// fail-safe replace the substring of each secret with "***". Variadic: called and
+// with one password (redactError(err, password)), and with a password+PEM key pair
+// (redactError(err, password, keyPEM) on TLS connection). Empty secrets are no-op.
 func redactError(err error, secrets ...string) string {
 	msg := err.Error()
 	for _, s := range secrets {
@@ -51,8 +51,8 @@ func redactError(err error, secrets ...string) string {
 	return msg
 }
 
-// sortedKeys — детерминированный порядок применения директив (воспроизводимый
-// вывод applied и стабильные L0-asserts).
+// sortedKeys - deterministic order of directives (reproducible
+// output applied and stable L0-asserts).
 func sortedKeys(m map[string]string) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
@@ -74,8 +74,8 @@ func stringValue(v *structpb.Value) (string, bool) {
 	return "", false
 }
 
-// stringOrEmpty — строковое значение или "" (для опциональных полей). НЕ берёт
-// "первый элемент" — отдаёт строку как есть либо "" для не-строки/nil.
+// stringOrEmpty - string value or "" (for optional fields). does NOT take
+// "first element" - returns the string as is or "" for a non-string/nil.
 func stringOrEmpty(v *structpb.Value) string {
 	s, _ := stringValue(v)
 	return s
@@ -96,8 +96,8 @@ func stringList(v *structpb.Value) []string {
 	return out
 }
 
-// stringMap — map[string]string из structpb-map. Значения приводятся к строке
-// (CONFIG SET принимает строковые значения; число из YAML станет "256" и т.п.).
+// stringMap - map[string]string from structpb-map. Values are cast to string
+// (CONFIG SET accepts string values; the number from YAML will become "256", etc.).
 func stringMap(v *structpb.Value) map[string]string {
 	if v == nil {
 		return nil
@@ -114,9 +114,9 @@ func stringMap(v *structpb.Value) map[string]string {
 	return out
 }
 
-// nodeSpecs — map[ключ -> вложенный struct] из structpb-map-of-maps (cluster
-// nodes). Значение каждого ключа — спецификация ноды ({addr|ip+port}); НЕ
-// стрингифицируется (в отличие от stringMap), доступ к полям остаётся типовым.
+// nodeSpecs - map[key -> nested struct] from structpb-map-of-maps (cluster
+// nodes). The value of each key is the node specification ({addr|ip+port}); NOT
+// is stringified (unlike stringMap), access to fields remains standard.
 func nodeSpecs(v *structpb.Value) map[string]map[string]*structpb.Value {
 	if v == nil {
 		return nil
@@ -138,9 +138,9 @@ func nodeSpecs(v *structpb.Value) map[string]map[string]*structpb.Value {
 	return out
 }
 
-// nodeSpec — поля одной вложенной ноды-спецификации ({addr|ip+port}) из
-// structpb-map. Параллель nodeSpecs, но для ОДНОГО узла (add-node: new_node/seed/
-// master). nil → пустой map (caller трактует как «не задано»).
+// nodeSpec - fields of one nested specification node ({addr|ip+port}) from
+// structpb-map. Parallel nodeSpecs, but for ONE node (add-node: new_node/seed/
+// master). nil -> empty map (caller interprets it as "not specified").
 func nodeSpec(v *structpb.Value) map[string]*structpb.Value {
 	if v == nil {
 		return nil
@@ -172,9 +172,9 @@ func intOrDefault(v *structpb.Value, def int) int {
 	return def
 }
 
-// valueToString приводит произвольный structpb.Value к строке. Числа без
-// дробной части — без ".000000" (256, не 256.000000): config-директивы и args
-// часто числовые в YAML, Redis ждёт строку.
+// valueToString casts an arbitrary structpb.Value to a string. Numbers without
+// fractional part - without ".000000" (256, not 256.000000): config directives and args
+// often numeric in YAML, Redis expects a string.
 func valueToString(v *structpb.Value) string {
 	if v == nil {
 		return ""

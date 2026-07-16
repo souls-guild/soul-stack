@@ -1,36 +1,36 @@
-// probe-states плагина community.redis — read-probe-операции над живым Redis
-// ЦЕЛИКОМ через go-redis (без redis-cli/shell, capability только
-// network_outbound). Все state — read-only, changed=false КОНСТРУКТИВНО
-// (прецедент core.http.probe / core.exec.run): это проверка, не изменение.
-// Output несёт результат probe для health-gate (retry/until/failed_when) и для
-// волатильного where-таргетинга (роль хоста).
+// probe-states of the community.redis plugin - read-probe operations on live Redis
+// ENTIRELY via go-redis (without redis-cli/shell, capability only
+// network_outbound). All state is read-only, changed=false CONSTRUCTIVE
+// (use case core.http.probe/core.exec.run): This is a test, not a change.
+// Output carries the probe result for health-gate (retry/until/failed_when) and for
+// volatile where targeting (host role).
 //
-//	pinged — health-probe: go-redis PING → ожидает PONG. Заменяет idiom
+//	pinged - health-probe: go-redis PING -> expects PONG. Replaces idiom
 //	         community.redis.command args:[PING] (Output.result == 'PONG'
-//	         сохраняется как поле result — совместимо с register.self.result).
-//	role   — role-probe: INFO replication → роль инстанса (master/slave).
-//	         Заменяет shell-idiom `redis-cli role | head -1 | tr -d '\n'` —
-//	         волатильную роль для where-таргетинга rolling-restart (ADR-008:
-//	         фактическая роль волатильна, берётся живым probe перед таргетингом).
-//	replica-synced — restart health-gate реплики: INFO replication →
-//	         master_link_status == "up" (реплика РЕСИНКНУЛАСЬ с master-ом).
-//	         Строже pinged (PONG = демон жив, но мог ещё не догнать master);
-//	         Output.synced bool + master_link_status строкой для диагностики.
-//	         Поле master_link_status есть ТОЛЬКО у реплики — у master-а его
-//	         нет: synced=false с явной причиной (не тихий success), state
-//	         предназначен для slave-пути (restart block.where slave).
-//	offset-synced — safety-gate миграции из ВНЕШНЕГО источника: «link жив ≠
-//	         данные догнаны». Сверяет slave_repl_offset СВОЕГО инстанса с
-//	         master_repl_offset ВНЕШНЕГО master-а (ВТОРОЙ коннект к source_addr
-//	         со source-секретами). caught_up=true только когда link up + НЕТ
-//	         идущей full-sync (master_sync_in_progress==0) + отставание
-//	         (master − slave) <= lag_threshold. Опц. сверка DBSIZE обоих при
-//	         !skip_checksum. Read-only, changed=false КОНСТРУКТИВНО.
+//	         saved as result field - compatible with register.self.result).
+//	role - role-probe: INFO replication -> instance role (master/slave).
+//	         Replaces shell-idiom `redis-cli role | head -1 | tr -d '\n'` -
+//	         volatile role for where targeting rolling-restart (ADR-008:
+//	         the actual role is volatile, a live probe is taken before targeting).
+//	replica-synced - restart health-gate replicas: INFO replication ->
+//	         master_link_status == "up" (replica HAS RESYNCED with master).
+//	         Stricter pinged (PONG = the demon is alive, but might not have caught up with the master yet);
+//	         Output.synced bool + master_link_status as a diagnostic string.
+//	         ONLY the replica has the master_link_status field - the master has it
+//	         no: synced=false with explicit reason (not silent success), state
+//	         intended for the slave path (restart block.where slave).
+//	offset-synced - safety-gate of migration from an EXTERNAL source: "link is alive !=
+//	         The data has been caught up." Checks slave_repl_offset of HIS instance with
+//	         master_repl_offset EXTERNAL master (SECOND connection to source_addr
+//	         with source secrets). caught_up=true only when link up + NO
+//	         running full-sync (master_sync_in_progress==0) + lag
+//	         (master - slave) <= lag_threshold. Opt. checking DBSIZE of both when
+//	         !skip_checksum. Read-only, changed=false CONSTRUCTIVE.
 //
-// КРИТ ИБ (ADR-010): params.password / source_password НИКОГДА не попадают в
-// ApplyEvent.Message/.Output/ошибки. Коннект-ошибки санитизируются redactError
-// (по обоим паролям); ответ PING (PONG), роль и offset — это ответ сервера, не
-// секрет оператора.
+// KRIT IB (ADR-010): params.password / source_password NEVER get into
+// ApplyEvent.Message/.Output/errors. Connection errors are sanitized by redactError
+// (for both passwords); the PING (PONG) response, role and offset are the server response, not
+// operator secret.
 package main
 
 import (
@@ -43,21 +43,21 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// applyPinged — health-probe через go-redis PING. changed=false КОНСТРУКТИВНО
-// (probe, не изменение): интерпретация «здоров/нет» — на уровне scenario через
-// retry/until/failed_when по register.self.result. Output.result несёт ответ
-// сервера (PONG) — совместимо с прежним community.redis.command args:[PING],
-// который тоже клал ответ в Output.result.
+// applyPinged - health-probe via go-redis PING. changed=false CONSTRUCTIVE
+// (probe, not change): interpretation of "healthy/not" - at the scenario level via
+// retry/until/failed_when by register.self.result. Output.result carries the answer
+// server (PONG) - compatible with the previous community.redis.command args:[PING],
+// which also put the answer in Output.result.
 func (m *RedisModule) applyPinged(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], conn redisConn, params *structpb.Struct) error {
 	password := stringOrEmpty(params.GetFields()["password"])
-	// Коннект уже выполнен openConn → defaultConnect, который сам шлёт PING при
-	// открытии. Явный PING здесь нужен, чтобы (1) отделить health-probe от факта
-	// коннекта и (2) положить ответ сервера в Output.result для health-gate.
+	// The connection has already been made openConn -> defaultConnect, which itself sends PING when
+	// opening. Explicit PING is needed here to (1) separate the health-probe from the fact
+	// connection and (2) put the server response in Output.result for health-gate.
 	res, err := conn.Do(ctx, "PING")
 	if err != nil {
-		// Ошибка PING — ответ сервера (LOADING / MASTERDOWN / ...): её аргументы
-		// пароль не несут. redactError по password — defense-in-depth/единообразие
-		// с applyRole/applyConfig (драйвер теоретически мог эхнуть коннект-кредл).
+		// PING error - server response (LOADING / MASTERDOWN /...): its arguments
+		// they don't carry the password. redactError by password - defense-in-depth/uniformity
+		// with applyRole/applyConfig (the driver could theoretically fail the connect cradle).
 		return sendFailure(stream, "PING: "+redactError(err, password))
 	}
 	return sendOutcome(stream, false, "PING ok", map[string]any{
@@ -65,16 +65,16 @@ func (m *RedisModule) applyPinged(ctx context.Context, stream grpc.ServerStreami
 	})
 }
 
-// applyRole — role-probe через INFO replication. Возвращает фактическую
-// (волатильную) роль инстанса в Output.role: "master" / "slave" (значения Redis
-// в INFO replication; redis-cli role-shell отдавал те же master/slave). changed=
-// false КОНСТРУКТИВНО (probe). where-таргетинг сравнивает register.self.role ==
-// 'master'/'slave' (ADR-008: роль волатильна, замеряется живым probe).
+// applyRole - role-probe via INFO replication. Returns the actual
+// (volatile) instance role in Output.role: "master" / "slave" (Redis values
+// in INFO replication; redis-cli role-shell gave the same master/slave). changed=
+// false CONSTRUCTIVE (probe). where targeting compares register.self.role ==
+// 'master'/'slave' (ADR-008: the role is volatile, measured by a live probe).
 //
-// INFO replication выбран вместо команды ROLE: переиспользует parseInfoSection
-// (replica.go) — типизированный разбор "key:value", без хрупкого парсинга
-// ROLE-массива (первый элемент). master_link_status тоже доступен (бонус для
-// диагностики), но для where достаточно role.
+// INFO replication selected instead of ROLE command: reuses parseInfoSection
+// (replica.go) - typed "key:value" parsing, no fragile parsing
+// ROLE array (first element). master_link_status is also available (bonus for
+// diagnostics), but for where role is enough.
 func (m *RedisModule) applyRole(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], conn redisConn, params *structpb.Struct) error {
 	password := stringOrEmpty(params.GetFields()["password"])
 	info, err := conn.Do(ctx, "INFO", "replication")
@@ -84,27 +84,27 @@ func (m *RedisModule) applyRole(ctx context.Context, stream grpc.ServerStreaming
 	repl := parseInfoSection(info)
 	role := repl["role"]
 	if role == "" {
-		// INFO replication без поля role — нештатный ответ (обрезанный INFO/
-		// сломанный инстанс). Явный fail, а не пустая роль в where (тихо никого
-		// не таргетит → молчаливый пропуск рестарта).
-		return sendFailure(stream, "INFO replication: поле role отсутствует в ответе")
+		// INFO replication without the role field is an abnormal response (truncated INFO/
+		// broken instance). Explicit fail, not an empty role in where (quietly no one
+		// does not target -> silently skipping the restart).
+		return sendFailure(stream, "INFO replication: role field is missing in response")
 	}
 	return sendOutcome(stream, false, "role: "+role, map[string]any{
 		"role": role,
 	})
 }
 
-// applyReplicaSynced — restart health-gate реплики: INFO replication →
-// master_link_status == "up" (реплика РЕСИНКНУЛАСЬ с master-ом, не просто
-// «демон отвечает PONG»). changed=false КОНСТРУКТИВНО (read-probe). Output.synced
-// bool + Output.master_link_status строкой для диагностики health-gate
-// (until:/failed_when: по register.self.synced).
+// applyReplicaSynced - restart health-gate replicas: INFO replication ->
+// master_link_status == "up" (the replica has RESYNCED with the master, not just
+// "the demon responds with PONG"). changed=false CONSTRUCTIVE (read-probe). Output.synced
+// bool + Output.master_link_status string for health-gate diagnostics
+// (until:/failed_when: by register.self.synced).
 //
-// ★ Граница master/slave: поле master_link_status присутствует в INFO replication
-// ТОЛЬКО у реплики (role:slave) — у master-а его нет. State предназначен для
-// slave-пути (restart block.where slave). Если поля нет (это master или нештатный
-// INFO) → synced=false с явной причиной в Message (НЕ тихий success): иначе
-// health-gate реплики молча прошёл бы на инстансе, который ещё не реплика.
+// master/slave boundary: the master_link_status field is present in INFO replication
+// ONLY the replica (role:slave) - the master does not have it. State is for
+// slave paths (restart block.where slave). If there is no field (this is master or non-standard
+// INFO) -> synced=false with explicit reason in Message (NOT silent success): otherwise
+// The health-gate of the replica would silently pass on an instance that is not yet a replica.
 func (m *RedisModule) applyReplicaSynced(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], conn redisConn, params *structpb.Struct) error {
 	password := stringOrEmpty(params.GetFields()["password"])
 	info, err := conn.Do(ctx, "INFO", "replication")
@@ -114,10 +114,10 @@ func (m *RedisModule) applyReplicaSynced(ctx context.Context, stream grpc.Server
 	repl := parseInfoSection(info)
 	status, present := repl["master_link_status"]
 	if !present {
-		// master_link_status отсутствует — это master (поля нет у роли master) либо
-		// нештатный ответ. synced=false с причиной, а НЕ тихий success: health-gate
-		// реплики не должен пройти на не-реплике.
-		return sendOutcome(stream, false, "master_link_status отсутствует (инстанс не реплика — это master либо нештатный INFO)", map[string]any{
+		// master_link_status is missing - this is master (the master role does not have this field) or
+		// abnormal answer. synced=false with reason, NOT silent success: health-gate
+		// replicas must not pass on a non-replica.
+		return sendOutcome(stream, false, "master_link_status is missing (the instance is not a replica - it is master or non-standard INFO)", map[string]any{
 			"synced":             false,
 			"master_link_status": "",
 		})
@@ -129,8 +129,8 @@ func (m *RedisModule) applyReplicaSynced(ctx context.Context, stream grpc.Server
 	})
 }
 
-// validateOffsetSynced — статические проверки offset-synced: addr (свой) +
-// source_addr (внешний master) обязательны; lag_threshold (если задан) >= 0.
+// validateOffsetSynced - static checks offset-synced: addr (own) +
+// source_addr (external master) are required; lag_threshold (if set) >= 0.
 func validateOffsetSynced(f map[string]*structpb.Value) []string {
 	var errs []string
 	errs = append(errs, validateAddr(f)...)
@@ -143,17 +143,17 @@ func validateOffsetSynced(f map[string]*structpb.Value) []string {
 	return errs
 }
 
-// applyOffsetSynced — safety-gate миграции из внешнего источника. conn —
-// СВОЙ инстанс (addr); метод сам открывает ВТОРОЙ коннект к внешнему master-у
-// (source_addr) со source-секретами (как cluster.go открывает per-node conn).
-// Read-only, changed=false КОНСТРУКТИВНО (probe).
+// applyOffsetSynced - safety-gate migration from an external source. conn -
+// OWN instance (addr); the method itself opens a SECOND connection to the external master
+// (source_addr) with source secrets (like cluster.go opens per-node conn).
+// Read-only, changed=false CONSTRUCTIVE (probe).
 //
-// caught_up=true ⟺ master_link_status=="up" И master_sync_in_progress==0 И
-// (master_repl_offset − slave_repl_offset) <= lag_threshold. Любое из условий
-// ложно → caught_up=false (success-event, НЕ failed: health-gate решает сам через
-// until:/failed_when: по register.self.caught_up). master_link_status / поля
-// offset на master-е/реплике отсутствуют у противоположной роли — это нештатный
-// ввод (свой addr не реплика, либо source_addr не master): caught_up=false.
+// caught_up=true master_link_status=="up" AND master_sync_in_progress==0 AND
+// (master_repl_offset - slave_repl_offset) <= lag_threshold. Any of the conditions
+// false -> caught_up=false (success-event, NOT failed: health-gate decides itself through
+// until:/failed_when: by register.self.caught_up). master_link_status/fields
+// offset on the master/replica is missing from the opposite role - this is abnormal
+// input (your addr is not a replica, or source_addr is not master): caught_up=false.
 func (m *RedisModule) applyOffsetSynced(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], conn redisConn, params *structpb.Struct) error {
 	f := params.GetFields()
 	password := stringOrEmpty(f["password"])
@@ -161,7 +161,7 @@ func (m *RedisModule) applyOffsetSynced(ctx context.Context, stream grpc.ServerS
 	skipChecksum := boolOrDefault(f["skip_checksum"], false)
 	lagThreshold := intOrDefault(f["lag_threshold"], 0)
 
-	// Свой инстанс: slave_repl_offset, состояние линка и идущей full-sync.
+	// Own instance: slave_repl_offset, state of the link and running full-sync.
 	selfInfo, err := conn.Do(ctx, "INFO", "replication")
 	if err != nil {
 		return sendFailure(stream, "INFO replication (self): "+redactError(err, password, sourcePassword))
@@ -171,8 +171,8 @@ func (m *RedisModule) applyOffsetSynced(ctx context.Context, stream grpc.ServerS
 	linkStatus := selfRepl["master_link_status"]
 	syncInProgress := selfRepl["master_sync_in_progress"] == "1"
 
-	// Внешний master: ВТОРОЙ коннект со source-секретами (source_addr/
-	// source_password/source_tls*). master_repl_offset — авторитетный «head».
+	// External master: SECOND connection with source secrets (source_addr/
+	// source_password/source_tls*). master_repl_offset - authoritative "head".
 	sourceCfg := connConfig{
 		addr:     strings.TrimSpace(stringOrEmpty(f["source_addr"])),
 		password: sourcePassword,
@@ -191,14 +191,14 @@ func (m *RedisModule) applyOffsetSynced(ctx context.Context, stream grpc.ServerS
 	sourceRepl := parseInfoSection(sourceInfo)
 	masterOffset, masterOffsetOK := parseOffset(sourceRepl["master_repl_offset"])
 
-	// lag и caught_up. Без обоих offset-ов lag неопределён → caught_up=false
-	// (нештатный ввод: свой addr не реплика, либо source не master).
+	// lag and caught_up. Without both offsets, lag is undefined -> caught_up=false
+	// (abnormal input: your addr is not a replica, or source is not master).
 	lagBytes := 0
 	offsetsKnown := slaveOffsetOK && masterOffsetOK
 	if offsetsKnown {
 		lagBytes = masterOffset - slaveOffset
 		if lagBytes < 0 {
-			lagBytes = 0 // реплика «впереди» (read-after-write окно) — не отрицательный lag
+			lagBytes = 0 // replica "ahead" (read-after-write window) - non-negative lag
 		}
 	}
 	caughtUp := linkStatus == "up" && !syncInProgress && offsetsKnown && lagBytes <= lagThreshold
@@ -209,9 +209,9 @@ func (m *RedisModule) applyOffsetSynced(ctx context.Context, stream grpc.ServerS
 		"master_sync_in_progress": syncInProgress,
 	}
 
-	// Опц. checksum-сверка размеров обоих наборов (грубый sanity-чек поверх
-	// offset-а; offset — авторитет, DBSIZE — вспомогательный сигнал). Не влияет на
-	// caught_up: разный DBSIZE на ходу нормален (TTL/eviction), но виден в Output.
+	// Opt. checksum - reconciliation of the sizes of both sets (rough sanity check on top
+	// offset; offset - authority, DBSIZE - auxiliary signal). Does not affect
+	// caught_up: different DBSIZE on the go is normal (TTL/eviction), but visible in Output.
 	if !skipChecksum {
 		dbSource, derr := dbSize(ctx, sourceConn)
 		if derr != nil {
@@ -228,10 +228,10 @@ func (m *RedisModule) applyOffsetSynced(ctx context.Context, stream grpc.ServerS
 	return sendOutcome(stream, false, "caught_up: "+strconv.FormatBool(caughtUp)+", lag_bytes: "+strconv.Itoa(lagBytes), output)
 }
 
-// parseOffset разбирает offset-поле INFO replication в int. Пусто/нечисло → (0,
-// false): поле отсутствует у противоположной роли (slave_repl_offset нет у
-// master-а; master_repl_offset на реплике отражает её собственный поток, а не
-// head источника — поэтому head берём с ОТДЕЛЬНОГО коннекта к source).
+// parseOffset parses the INFO replication offset field into an int. Empty/non-number -> (0,
+// false): the field is not available for the opposite role (slave_repl_offset is not available for
+// master; master_repl_offset on a replica reflects its own thread, not
+// head of the source - therefore we take head from a SEPARATE connection to source).
 func parseOffset(s string) (int, bool) {
 	if s == "" {
 		return 0, false
@@ -243,8 +243,8 @@ func parseOffset(s string) (int, bool) {
 	return n, true
 }
 
-// dbSize читает DBSIZE через redisConn.Do (число ключей текущей БД). Ответ —
-// число, не секрет.
+// dbSize reads DBSIZE via redisConn.Do (the number of keys in the current database). Answer -
+// number is no secret.
 func dbSize(ctx context.Context, conn redisConn) (int64, error) {
 	res, err := conn.Do(ctx, "DBSIZE")
 	if err != nil {
@@ -252,7 +252,7 @@ func dbSize(ctx context.Context, conn redisConn) (int64, error) {
 	}
 	n, convErr := strconv.ParseInt(strings.TrimSpace(res), 10, 64)
 	if convErr != nil {
-		return 0, nil // нечисловой ответ — best-effort 0 (не валим probe)
+		return 0, nil // non-numeric response - best-effort 0 (do not fail probe)
 	}
 	return n, nil
 }

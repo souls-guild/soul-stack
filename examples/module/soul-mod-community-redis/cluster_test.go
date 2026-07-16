@@ -12,39 +12,39 @@ import (
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 )
 
-// clusterConn — fake redisConn для cluster-тестов: пишет каждый вызов и отвечает
-// на CLUSTER-подкоманды по args[1] (MYID/INFO/NODES). На MEET/ADDSLOTS/REPLICATE
-// отдаёт "OK". id уникален на ноду — REPLICATE-asserts проверяют правильный мастер.
+// clusterConn - fake redisConn for cluster tests: writes each call and responds
+// to CLUSTER subcommands by args[1] (MYID/INFO/NODES). On MEET/ADDSLOTS/REPLICATE
+// gives "OK". id is unique per node - REPLICATE-asserts check the correct master.
 type clusterConn struct {
 	cfg   connConfig
-	id    string // ответ на CLUSTER MYID
-	info  string // ответ на CLUSTER INFO (пусто → форма «не сформирован»)
-	nodes string // ответ на CLUSTER NODES (пусто → ровно nodesCount строк)
-	// nodesSeq — последовательные ответы на CLUSTER NODES (add-node: до/после MEET
-	// топология разная). i-й вызов отдаёт nodesSeq[i]; за пределами — последний
-	// элемент (или nodes, если seq пуст). nodesCalls — счётчик вызовов NODES.
+	id    string // reply to CLUSTER MYID
+	info  string // response to CLUSTER INFO (empty -> form "not formed")
+	nodes string // answer to CLUSTER NODES (empty -> exactly nodesCount rows)
+	// nodesSeq - sequential responses to CLUSTER NODES (add-node: before/after MEET
+	// topology is different). The i-th call returns nodesSeq[i]; outside - last
+	// element (or nodes if seq is empty). nodesCalls - NODES call counter.
 	nodesSeq   []string
 	nodesCalls int
 	calls      [][]any
 	closed     bool
 
-	// keysInSlot — ключи слота для CLUSTER GETKEYSINSLOT (remove-node миграция).
-	// slot -> single-batch: первый GetKeysInSlot отдаёт весь срез разом, затем пусто.
+	// keysInSlot - slot keys for CLUSTER GETKEYSINSLOT (remove-node migration).
+	// slot -> single-batch: the first GetKeysInSlot gives the entire slice at once, then it is empty.
 	keysInSlot map[int][]string
-	// keysInSlotBatches — multi-batch модель: slot -> ОЧЕРЕДЬ порций. Каждый
-	// GetKeysInSlot снимает с головы следующую порцию (имитируя, что предыдущий
-	// MIGRATE удалил её ключи с источника), пустая очередь → nil (цикл завершается).
-	// Покрывает слот с >migrateBatch ключей (несколько итераций цикла migrateOneSlot).
-	// keysInSlot и keysInSlotBatches на ОДНОМ слоте одновременно не задаются.
+	// keysInSlotBatches - multi-batch model: slot -> QUEUE of portions. Everyone
+	// GetKeysInSlot removes the next portion from the head (simulating that the previous
+	// MIGRATE removed its keys from the source), empty queue -> nil (cycle ends).
+	// Covers a slot with >migrateBatch keys (several iterations of the migrateOneSlot loop).
+	// keysInSlot and keysInSlotBatches on the SAME slot are not set at the same time.
 	keysInSlotBatches map[int][][]string
 
-	// infoRepl — ответ на INFO replication (failover-takeover sync-gate читает
-	// master_link_status/role). Пусто → "" (parseInfoSection вернёт пустой map →
-	// role/master_link_status отсутствуют, sync-gate трактует как нештатный INFO).
+	// infoRepl - response to INFO replication (failover-takeover sync-gate reads
+	// master_link_status/role). Empty -> "" (parseInfoSection will return an empty map ->
+	// role/master_link_status are missing, sync-gate is treated as non-standard INFO).
 	infoRepl string
 
-	// forgetErr — ошибка на CLUSTER FORGET (forget-external идемпотентность: нода
-	// уже забыла старого → "Unknown node", глотается). nil → FORGET успешен ("OK").
+	// forgetErr - error on CLUSTER FORGET (forget-external idempotency: node
+	// I've already forgotten the old one -> "Unknown node", swallowed). nil -> FORGET successful ("OK").
 	forgetErr error
 }
 
@@ -76,17 +76,17 @@ func (c *clusterConn) Do(_ context.Context, args ...any) (string, error) {
 	return "OK", nil
 }
 
-// GetKeysInSlot моделирует CLUSTER GETKEYSINSLOT go-redis: миграционный цикл
-// migrateOneSlot крутится, пока срез непуст. Ключи возвращаются БЕЗ потери
-// разделителей (имя с пробелом остаётся одним элементом) — это проверяет
-// whitespace-key lossless тест. Две формы источника на слот (взаимоисключающие):
+// GetKeysInSlot simulates CLUSTER GETKEYSINSLOT go-redis: migration loop
+// migrateOneSlot rotates as long as the slice is not empty. Keys are returned WITHOUT loss
+// delimiters (a name with a space remains one element) - this checks
+// whitespace-key lossless test. Two source forms per slot (mutually exclusive):
 //
-//   - keysInSlot[slot]        — single-batch: весь срез разом, затем nil;
-//   - keysInSlotBatches[slot] — multi-batch: ОЧЕРЕДЬ порций, по одной за вызов
-//     (имитация того, что предыдущий MIGRATE удалил порцию с источника), затем nil.
+//   - keysInSlot[slot] - single-batch: the entire slice at once, then nil;
+//   - keysInSlotBatches[slot] - multi-batch: QUEUE of batches, one per call
+//     (simulating that the previous MIGRATE removed the chunk from the source), then nil.
 //
-// Multi-batch покрывает слот с >migrateBatch ключей: несколько итераций цикла,
-// где каждая порция — отдельный MIGRATE. Объединение всех порций обязано переехать.
+// Multi-batch covers the slot with >migrateBatch keys: multiple iterations of the loop,
+// where each portion is a separate MIGRATE. The pool of all portions is required to move.
 func (c *clusterConn) GetKeysInSlot(_ context.Context, slot, _ int) ([]string, error) {
 	if q := c.keysInSlotBatches[slot]; len(q) > 0 {
 		batch := q[0]
@@ -100,13 +100,13 @@ func (c *clusterConn) GetKeysInSlot(_ context.Context, slot, _ int) ([]string, e
 	if len(batch) == 0 {
 		return nil, nil
 	}
-	// Отдаём весь оставшийся батч разом (single-batch тест держит ≤ migrateBatch
-	// ключей) и опустошаем — следующий вызов вернёт nil → цикл завершается.
+	// We give away the entire remaining batch at once (single-batch test holds <= migrateBatch
+	// keys) and empty - the next call will return nil -> the cycle ends.
 	c.keysInSlot[slot] = nil
 	return batch, nil
 }
 
-// nodesResponse отдаёт текущий ответ на CLUSTER NODES с учётом nodesSeq.
+// nodesResponse gives the current response to CLUSTER NODES taking into account nodesSeq.
 func (c *clusterConn) nodesResponse() string {
 	idx := c.nodesCalls
 	c.nodesCalls++
@@ -119,18 +119,18 @@ func (c *clusterConn) nodesResponse() string {
 	return c.nodesSeq[idx]
 }
 
-// ConfigGet — cluster-state не вызывает CONFIG GET, стаб под интерфейс redisConn.
+// ConfigGet - cluster-state does not call CONFIG GET, stub for the redisConn interface.
 func (c *clusterConn) ConfigGet(_ context.Context, param string) (map[string]string, error) {
 	return map[string]string{param: ""}, nil
 }
 
-// AclList — cluster-state ACL не трогает, стаб под интерфейс redisConn.
+// AclList - cluster-state ACL does not touch, stub for redisConn interface.
 func (c *clusterConn) AclList(_ context.Context) ([]string, error) { return nil, nil }
 
 func (c *clusterConn) Close() error { c.closed = true; return nil }
 
-// clusterFleet — набор fake-нод, раздаваемых по addr. registry фиксирует, к какой
-// ноде ушёл каждый коннект (для per-node assert ADDSLOTS/REPLICATE).
+// clusterFleet - a set of fake nodes distributed via addr. registry records which
+// Every connection has left the node (for per-node assert ADDSLOTS/REPLICATE).
 type clusterFleet struct {
 	byAddr map[string]*clusterConn
 }
@@ -143,10 +143,10 @@ func newFleet(addrs ...string) *clusterFleet {
 	return fl
 }
 
-// nodesView — общий для всех нод вывод CLUSTER NODES (gossip сошёлся): по строке
-// на ноду. Строка несёт РЕАЛЬНЫЙ node-id ноды (тот, что отдаёт её CLUSTER MYID) —
-// это нужно gossip-gate перед REPLICATE (узел-реплика обязан увидеть node-id
-// своего мастера в локальном CLUSTER NODES). countClusterNodes считает строки.
+// nodesView - output common to all nodes CLUSTER NODES (gossip converged): by line
+// to the node. The line carries the REAL node-id of the node (the one that gives it CLUSTER MYID) -
+// gossip-gate needs this before REPLICATE (the replica node must see the node-id
+// your master in the local CLUSTER NODES). countClusterNodes counts rows.
 func (fl *clusterFleet) setConvergedNodesView() {
 	lines := make([]string, 0, len(fl.byAddr))
 	for addr, c := range fl.byAddr {
@@ -171,7 +171,7 @@ func (fl *clusterFleet) module() *RedisModule {
 	}
 }
 
-// clusterNodesParam строит params.nodes-map из набора addr (ключ = "node-<i>").
+// clusterNodesParam builds params.nodes-map from set addr(key="node-<i>").
 func clusterNodesParam(addrs ...string) map[string]any {
 	nodes := map[string]any{}
 	for i, a := range addrs {
@@ -189,7 +189,7 @@ func TestValidate_ClusterRejectsEmptyNodes(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"action": "create", "nodes": map[string]any{}}),
 	})
 	if reply.Ok {
-		t.Fatal("ждали Ok=false на пустой nodes")
+		t.Fatal("waited Ok=false on empty nodes")
 	}
 }
 
@@ -203,13 +203,13 @@ func TestValidate_ClusterRejectsNonCreateAction(t *testing.T) {
 		}),
 	})
 	if reply.Ok {
-		t.Fatal("ждали Ok=false на нереализованный action reshard (только create / add-node / remove-node)")
+		t.Fatal("waited Ok=false for unrealized action reshard (only create / add-node / remove-node)")
 	}
 }
 
 func TestValidate_ClusterRejectsIndivisibleNodes(t *testing.T) {
 	m := &RedisModule{}
-	// 5 нод не делится на shardSize=2 (1 master + 1 replica).
+	// 5 nodes are not divisible by shardSize=2 (1 master + 1 replica).
 	reply, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
 		State: "cluster",
 		Params: mustStruct(t, map[string]any{
@@ -221,7 +221,7 @@ func TestValidate_ClusterRejectsIndivisibleNodes(t *testing.T) {
 		}),
 	})
 	if reply.Ok {
-		t.Fatal("ждали Ok=false: 5 нод не делится на размер шарда 2")
+		t.Fatal("waited Ok=false: 5 nodes is not divisible by shard size 2")
 	}
 }
 
@@ -236,51 +236,51 @@ func TestValidate_ClusterHappy(t *testing.T) {
 		}),
 	})
 	if !reply.Ok || len(reply.Errors) != 0 {
-		t.Fatalf("ждали Ok=true, got %+v", reply)
+		t.Fatalf("waited Ok=true, got %+v", reply)
 	}
 }
 
-// --- slot-allocation (детерминизм деления 16384) ---
+// --- slot-allocation (16384 division determinism) ---
 
 func TestAllocateSlots_FullCoverageAndRemainder(t *testing.T) {
 	for _, shards := range []int{1, 2, 3, 6, 7} {
 		ranges := allocateSlots(shards)
 		if len(ranges) != shards {
-			t.Fatalf("shards=%d: ждали %d диапазонов, got %d", shards, shards, len(ranges))
+			t.Fatalf("shards=%d: expected %d ranges, got %d", shards, shards, len(ranges))
 		}
-		// Непрерывное покрытие 0..16383 без дыр и пересечений.
+		// Continuous coverage 0..16383 without holes or intersections.
 		expect := 0
 		total := 0
 		for i, r := range ranges {
 			if r.from != expect {
-				t.Fatalf("shards=%d диапазон[%d].from=%d, ждали %d", shards, i, r.from, expect)
+				t.Fatalf("shards=%d range[%d].from=%d, expected %d", shards, i, r.from, expect)
 			}
 			if r.to < r.from {
-				t.Fatalf("shards=%d диапазон[%d] пуст: [%d-%d]", shards, i, r.from, r.to)
+				t.Fatalf("shards=%d range[%d] empty: [%d-%d]", shards, i, r.from, r.to)
 			}
 			expect = r.to + 1
 			total += r.to - r.from + 1
 		}
 		if total != totalSlots {
-			t.Fatalf("shards=%d: покрыто %d слотов, ждали %d", shards, total, totalSlots)
+			t.Fatalf("shards=%d: %d slots covered, waiting for %d", shards, total, totalSlots)
 		}
-		// Остаток — первым мастерам: размеры монотонно невозрастающие.
+		// The rest goes to the first masters: the sizes are monotonically non-increasing.
 		for i := 1; i < len(ranges); i++ {
 			prev := ranges[i-1].to - ranges[i-1].from + 1
 			cur := ranges[i].to - ranges[i].from + 1
 			if cur > prev {
-				t.Fatalf("shards=%d: размер диапазона[%d]=%d > [%d]=%d (остаток не первым)", shards, i, cur, i-1, prev)
+				t.Fatalf("shards=%d: range size[%d]=%d > [%d]=%d (remainder not first)", shards, i, cur, i-1, prev)
 			}
 		}
 	}
 }
 
-// --- Apply create: happy-path (MEET/ADDSLOTS/REPLICATE + полное покрытие) ---
+// --- Apply create: happy-path (MEET/ADDSLOTS/REPLICATE + full coverage) ---
 
 func TestApplyClusterCreate_HappyPath(t *testing.T) {
 	addrs := []string{"10.0.0.1:6379", "10.0.0.2:6379", "10.0.0.3:6379", "10.0.0.4:6379"}
 	fl := newFleet(addrs...)
-	fl.setConvergedNodesView() // gossip сходится сразу
+	fl.setConvergedNodesView() // gossip converges immediately
 	m := fl.module()
 	stream := &applyStream{}
 
@@ -299,26 +299,26 @@ func TestApplyClusterCreate_HappyPath(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed || !fin.Changed {
-		t.Fatalf("ждали успех changed=true, got %+v", fin)
+		t.Fatalf("expected success changed=true, got %+v", fin)
 	}
 
-	// node-0/node-1 — мастера (первые shards=2 по sort ключей), node-2/node-3 — реплики.
+	// node-0/node-1 - masters (first shards=2 by sort keys), node-2/node-3 - replicas.
 	master0 := fl.byAddr[addrs[0]]
 	master1 := fl.byAddr[addrs[1]]
 	replica2 := fl.byAddr[addrs[2]]
 	replica3 := fl.byAddr[addrs[3]]
 
-	// Hub (первая нода = master0) шлёт MEET всех остальных по ip:port.
+	// Hub (first node = master0) sends MEET to all others via ip:port.
 	assertMeetTargets(t, master0, []string{"10.0.0.2:6379", "10.0.0.3:6379", "10.0.0.4:6379"})
 
-	// ADDSLOTS только мастерам, диапазоны детерминированы и полностью покрывают 16384.
+	// ADDSLOTS for masters only, ranges are deterministic and fully cover 16384.
 	r0 := assertAddSlots(t, master0)
 	r1 := assertAddSlots(t, master1)
 	assertNoAddSlots(t, replica2)
 	assertNoAddSlots(t, replica3)
 	assertFullSlotCoverage(t, r0, r1)
 
-	// REPLICATE: реплики привязаны к своему мастеру (round-robin j%shards).
+	// REPLICATE: replicas are bound to their master (round-robin j%shards).
 	// node-2 (j=0) -> master0, node-3 (j=1) -> master1.
 	assertReplicateTo(t, replica2, master0.id)
 	assertReplicateTo(t, replica3, master1.id)
@@ -329,12 +329,12 @@ func TestApplyClusterCreate_HappyPath(t *testing.T) {
 	}
 }
 
-// --- Apply create: идемпотентность (уже сформирован → changed=false) ---
+// --- Apply create: idempotency (already generated -> changed=false) ---
 
 func TestApplyClusterCreate_AlreadyFormedNoOp(t *testing.T) {
 	addrs := []string{"10.0.0.1:6379", "10.0.0.2:6379"}
 	fl := newFleet(addrs...)
-	// Первый мастер рапортует сформированный кластер: state ok, все ноды, все слоты.
+	// The first master reports the formed cluster: state ok, all nodes, all slots.
 	fl.byAddr[addrs[0]].info = "cluster_state:ok\n" +
 		"cluster_slots_assigned:16384\n" +
 		"cluster_known_nodes:2\n"
@@ -355,25 +355,25 @@ func TestApplyClusterCreate_AlreadyFormedNoOp(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed {
-		t.Fatalf("ждали успех, got %+v", fin)
+		t.Fatalf("expected success, got %+v", fin)
 	}
 	if fin.Changed {
-		t.Error("ждали changed=false на уже сформированном кластере (no-op)")
+		t.Error("expected changed=false on an already formed cluster (no-op)")
 	}
-	// No-op: ни MEET, ни ADDSLOTS не должны вызываться.
+	// No-op: Neither MEET nor ADDSLOTS should be called.
 	for addr, c := range fl.byAddr {
 		for _, call := range c.calls {
 			if isClusterSub(call, "MEET") || isClusterSub(call, "ADDSLOTS") {
-				t.Errorf("нода %s: no-op нарушен, вызвана %v", addr, call)
+				t.Errorf("node %s: no-op broken, caused by %v", addr, call)
 			}
 		}
 	}
 }
 
-// convergedNodesViewMastersOnly строит CLUSTER NODES, где ВСЕ ноды fleet-а —
-// master (gossip сошёлся, slots могут быть назначены, но реплики НЕ настроены).
-// rows: addr -> диапазон слотов (nil → master без слотов). node-id берётся из
-// fake-ноды (её CLUSTER MYID), что нужно gossip-gate перед REPLICATE.
+// convergedNodesViewMastersOnly builds CLUSTER NODES, where ALL fleet nodes are
+// master (gossip agreed, slots can be assigned, but replicas are NOT configured).
+// rows: addr -> range of slots (nil -> master without slots). node-id is taken from
+// fake node (its CLUSTER MYID), which requires gossip-gate before REPLICATE.
 func (fl *clusterFleet) convergedNodesViewMastersOnly(slotsByAddr map[string][2]int) string {
 	lines := make([]string, 0, len(fl.byAddr))
 	for addr, c := range fl.byAddr {
@@ -386,27 +386,27 @@ func (fl *clusterFleet) convergedNodesViewMastersOnly(slotsByAddr map[string][2]
 	return strings.Join(lines, "\n")
 }
 
-// --- Apply create: PARTIAL topology (6 master, реплики не настроены) → доделать REPLICATE ---
+// --- Apply create: PARTIAL topology (6 master, no replicas configured) -> complete REPLICATE ---
 //
-// LIVE-БАГ (доказан на стенде): первый REPLICATE упал на gossip-timing («Unknown
-// node»), кластер застыл как N master (slots полны, cluster_state:ok), а idempotent-
-// гейт clusterAlreadyFormed смотрел ТОЛЬКО cluster_state/known_nodes/slots_assigned
-// → рапортовал «уже сформирован» → no-op → реплики НИКОГДА не доделывались. Здесь
-// 4 ноды (план: 2 master + 2 replica), live-кластер сошёлся как 4 master без реплик:
-// плагин ОБЯЗАН доделать REPLICATE недостающих реплик (changed=true), НЕ трогая
-// MEET/ADDSLOTS (slots уже на месте).
+// LIVE BUG (proven at the stand): the first REPLICATE fell on gossip-timing ("Unknown
+// node"), the cluster is frozen as N master (slots are full, cluster_state: ok), and idempotent is
+// gate clusterAlreadyFormed looked ONLY cluster_state/known_nodes/slots_assigned
+// -> reported "already formed" -> no-op -> replicas were NEVER completed. Here
+// 4 nodes (plan: 2 master + 2 replica), live cluster converged as 4 master without replicas:
+// the plugin MUST complete the REPLICATE of the missing replicas (changed=true), WITHOUT touching
+// MEET/ADDSLOTS (slots are already in place).
 func TestApplyClusterCreate_PartialTopologyCompletesReplicas(t *testing.T) {
 	addrs := []string{"10.0.0.1:6379", "10.0.0.2:6379", "10.0.0.3:6379", "10.0.0.4:6379"}
 	fl := newFleet(addrs...)
-	// План (sort ключей node-0..node-3): master node-0/node-1, replica node-2/node-3.
-	// Реплики round-robin: node-2 (j=0) -> master0, node-3 (j=1) -> master1.
+	// Plan (sort of keys node-0..node-3): master node-0/node-1, replica node-2/node-3.
+	// Round-robin replicas: node-2 (j=0) -> master0, node-3 (j=1) -> master1.
 	master0 := fl.byAddr[addrs[0]]
 	master1 := fl.byAddr[addrs[1]]
 	replica2 := fl.byAddr[addrs[2]]
 	replica3 := fl.byAddr[addrs[3]]
 
-	// Live-топология: ВСЕ 4 ноды — master (реплики не настроены). slots раскиданы
-	// между первыми двумя (как если бы ADDSLOTS прошёл, а REPLICATE — нет).
+	// Live topology: ALL 4 nodes are master (replicas are not configured). slots are scattered
+	// between the first two (as if ADDSLOTS passed, but REPLICATE did not).
 	view := fl.convergedNodesViewMastersOnly(map[string][2]int{
 		addrs[0]: {0, 8191},
 		addrs[1]: {8192, 16383},
@@ -414,8 +414,8 @@ func TestApplyClusterCreate_PartialTopologyCompletesReplicas(t *testing.T) {
 	for _, c := range fl.byAddr {
 		c.nodes = view
 	}
-	// CLUSTER INFO первого мастера: state ok, все ноды, все слоты — ровно те три
-	// условия, на которых старый гейт ошибочно говорил «сформирован».
+	// CLUSTER INFO of the first master: state ok, all nodes, all slots - exactly those three
+	// the conditions under which the old gate erroneously said "formed".
 	master0.info = "cluster_state:ok\ncluster_slots_assigned:16384\ncluster_known_nodes:4\n"
 
 	m := fl.module()
@@ -436,24 +436,24 @@ func TestApplyClusterCreate_PartialTopologyCompletesReplicas(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed {
-		t.Fatalf("ждали успех, got %+v", fin)
+		t.Fatalf("expected success, got %+v", fin)
 	}
 	if !fin.Changed {
-		t.Fatal("ждали changed=true: partial-topology обязана доделать REPLICATE")
+		t.Fatal("waited changed=true: partial-topology must complete REPLICATE")
 	}
 
-	// REPLICATE доделан на ОБОИХ узлах-репликах к их мастерам (по live node-id).
+	// REPLICATE is completed on BOTH replica nodes to their masters (by live node-id).
 	assertReplicateTo(t, replica2, master0.id)
 	assertReplicateTo(t, replica3, master1.id)
 
-	// ADDSLOTS НЕ переназначаются (slots уже на месте — иначе «Slot is already busy»).
+	// ADDSLOTS are NOT reassigned (slots are already in place - otherwise "Slot is already busy").
 	assertNoAddSlots(t, master0)
 	assertNoAddSlots(t, master1)
-	// REPLICATE НЕ вызывается на мастерах.
+	// REPLICATE is NOT called on masters.
 	for _, c := range []*clusterConn{master0, master1} {
 		for _, call := range c.calls {
 			if isClusterSub(call, "REPLICATE") {
-				t.Errorf("мастер не должен получать REPLICATE: %v", call)
+				t.Errorf("the master should not receive REPLICATE: %v", call)
 			}
 		}
 	}
@@ -464,10 +464,10 @@ func TestApplyClusterCreate_PartialTopologyCompletesReplicas(t *testing.T) {
 	}
 }
 
-// --- Apply create: ПОЛНАЯ topology (master+replica настроены) → no-op ---
+// --- Apply create: FULL topology (master+replica configured) -> no-op ---
 //
-// Guard против over-fix: если live-кластер уже полон (реплики на месте) — гейт
-// обязан остаться идемпотентным (changed=false, никаких REPLICATE/ADDSLOTS).
+// Guard versus over-fix: if the live cluster is already full (replicas are in place) - gate
+// must remain idempotent (changed=false, no REPLICATE/ADDSLOTS).
 func TestApplyClusterCreate_FullyFormedWithReplicasNoOp(t *testing.T) {
 	addrs := []string{"10.0.0.1:6379", "10.0.0.2:6379", "10.0.0.3:6379", "10.0.0.4:6379"}
 	fl := newFleet(addrs...)
@@ -476,7 +476,7 @@ func TestApplyClusterCreate_FullyFormedWithReplicasNoOp(t *testing.T) {
 	replica2 := fl.byAddr[addrs[2]]
 	replica3 := fl.byAddr[addrs[3]]
 
-	// Live-топология ПОЛНАЯ: node-2 — реплика master0, node-3 — реплика master1.
+	// FULL live topology: node-2 is a replica of master0, node-3 is a replica of master1.
 	view := strings.Join([]string{
 		master0.id + " " + addrs[0] + "@16379 master - 0 0 0 connected 0-8191",
 		master1.id + " " + addrs[1] + "@16379 master - 0 0 0 connected 8192-16383",
@@ -505,44 +505,44 @@ func TestApplyClusterCreate_FullyFormedWithReplicasNoOp(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed {
-		t.Fatalf("ждали успех, got %+v", fin)
+		t.Fatalf("expected success, got %+v", fin)
 	}
 	if fin.Changed {
-		t.Error("ждали changed=false: кластер уже полностью сформирован (no-op)")
+		t.Error("waited changed=false: the cluster is already fully formed (no-op)")
 	}
-	// No-op: ни MEET, ни ADDSLOTS, ни REPLICATE.
+	// No-op: no MEET, no ADDSLOTS, no REPLICATE.
 	for addr, c := range fl.byAddr {
 		for _, call := range c.calls {
 			if isClusterSub(call, "MEET") || isClusterSub(call, "ADDSLOTS") || isClusterSub(call, "REPLICATE") {
-				t.Errorf("нода %s: no-op нарушен, вызвана %v", addr, call)
+				t.Errorf("node %s: no-op broken, caused by %v", addr, call)
 			}
 		}
 	}
 }
 
-// --- Apply create: gossip-gate перед REPLICATE (master-id ещё не виден реплике) ---
+// --- Apply create: gossip-gate before REPLICATE (master-id is not yet visible to the replica) ---
 //
-// Корень live-«Unknown node»: формирование с нуля шлёт REPLICATE на узле-реплике
-// сразу после ADDSLOTS, но узел мог ещё не получить gossip о мастере → его
-// локальный CLUSTER NODES не содержит master node-id → REPLICATE падает. Фикс
-// ждёт (bounded retry), пока узел-реплика увидит master-id. Здесь узел-реплика
-// первые вызовы CLUSTER NODES отдаёт БЕЗ строки мастера, затем — со строкой:
-// плагин обязан дождаться и не упасть.
+// Root live-"Unknown node": forming from scratch sends REPLICATE on the replica node
+// immediately after ADDSLOTS, but the node might not yet have received gossip about the master -> it
+// local CLUSTER NODES does not contain master node-id -> REPLICATE crashes. Fix
+// waits (bounded retry) until the replica node sees the master-id. Here is a replica node
+// CLUSTER NODES makes the first calls WITHOUT a master line, then with the line:
+// The plugin must wait and not fall.
 func TestApplyClusterCreate_GossipGateBeforeReplicate(t *testing.T) {
 	addrs := []string{"10.0.0.1:6379", "10.0.0.2:6379"}
 	fl := newFleet(addrs...)
-	fl.setConvergedNodesView() // hub видит обе ноды (число) — MEET-gate проходит
+	fl.setConvergedNodesView() // hub sees both nodes (number) - MEET-gate passes
 
 	master0 := fl.byAddr[addrs[0]]
 	replica1 := fl.byAddr[addrs[1]]
 
-	// Узел-реплика (node-1) сперва НЕ видит мастера в локальной топологии (только
-	// себя), затем gossip доносит мастера. master0.id — то, что вернёт CLUSTER MYID
-	// мастера и что обязано появиться в NODES реплики до REPLICATE.
+	// The replica node (node-1) does NOT first see the master in the local topology (only
+	// himself), then the gossip informs the master. master0.id is what CLUSTER MYID will return
+	// master and what must appear in the NODES of the replica before REPLICATE.
 	selfOnly := replica1.id + " " + addrs[1] + "@16379 myself,master - 0 0 0 connected"
 	withMaster := selfOnly + "\n" + master0.id + " " + addrs[0] + "@16379 master - 0 0 0 connected 0-16383"
-	// Первые 2 ответа NODES реплики — без мастера, 3-й и далее — с мастером. hub
-	// (master0) свою converged-view уже имеет (setConvergedNodesView выше).
+	// The first 2 NODES responses of the replica are without a master, the 3rd and further are with a master. hub
+	// (master0) already has its own converged-view (setConvergedNodesView above).
 	replica1.nodesSeq = []string{selfOnly, selfOnly, withMaster}
 
 	m := fl.module()
@@ -563,21 +563,21 @@ func TestApplyClusterCreate_GossipGateBeforeReplicate(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed {
-		t.Fatalf("ждали успех (gossip-gate дождался мастера), got %+v", fin)
+		t.Fatalf("expected success (gossip-gate expected the master), got %+v", fin)
 	}
 	if !fin.Changed {
-		t.Fatal("ждали changed=true")
+		t.Fatal("waited changed=true")
 	}
-	// REPLICATE состоялся к master0 ПОСЛЕ того, как master-id стал виден реплике.
+	// REPLICATE took place to master0 AFTER master-id became visible to the replica.
 	assertReplicateTo(t, replica1, master0.id)
-	// Узел-реплика опросил локальный CLUSTER NODES минимум трижды (2 пустых + 1 с
-	// мастером) — gossip-gate реально ждал, а не выстрелил вслепую.
+	// The replica node polled the local CLUSTER NODES at least three times (2 empty + 1 s
+	// master) - gossip-gate really waited, and did not shoot blindly.
 	if replica1.nodesCalls < 3 {
-		t.Errorf("ждали >=3 опросов CLUSTER NODES реплики (gossip-gate), got %d", replica1.nodesCalls)
+		t.Errorf("waited >=3 polls CLUSTER NODES replicas (gossip-gate), got %d", replica1.nodesCalls)
 	}
 }
 
-// --- Детерминизм: один вход → одна раскладка (несколько прогонов) ---
+// --- Determinism: one input -> one layout (multiple runs) ---
 
 func TestApplyClusterCreate_LayoutDeterministic(t *testing.T) {
 	addrs := []string{"10.0.0.4:6379", "10.0.0.1:6379", "10.0.0.3:6379", "10.0.0.2:6379", "10.0.0.6:6379", "10.0.0.5:6379"}
@@ -601,22 +601,22 @@ func TestApplyClusterCreate_LayoutDeterministic(t *testing.T) {
 		}
 		got := stream.final().GetOutput().GetFields()["layout"].GetStringValue()
 		if got == "" {
-			t.Fatalf("run %d: пустой layout", run)
+			t.Fatalf("run %d: empty layout", run)
 		}
 		if run == 0 {
 			first = got
 			continue
 		}
 		if got != first {
-			t.Fatalf("раскладка недетерминирована: run0=%q run%d=%q", first, run, got)
+			t.Fatalf("the layout is non-deterministic: run0=%q run%d=%q", first, run, got)
 		}
 	}
 }
 
-// --- Детерминизм по ключу, не по addr-строке: одинаковые ключи → одинаковая роль ---
+// --- Determinism by key, not by addr-line: same keys -> same role ---
 
 func TestBuildClusterPlan_RoleByKeyOrder(t *testing.T) {
-	// Ключи задаются явно — раскладка обязана идти по СОРТИРОВКЕ ключей.
+	// The keys are specified explicitly - the layout must follow the SORTING of the keys.
 	nodes := []clusterNode{
 		{key: "z", addr: "10.0.0.9:6379", ip: "10.0.0.9", port: 6379},
 		{key: "a", addr: "10.0.0.1:6379", ip: "10.0.0.1", port: 6379},
@@ -627,14 +627,14 @@ func TestBuildClusterPlan_RoleByKeyOrder(t *testing.T) {
 		t.Fatalf("buildClusterPlan: %v", err)
 	}
 	if len(plan.masters) != 1 || plan.masters[0].key != "a" {
-		t.Fatalf("master должен быть ключ 'a' (первый по sort), got %+v", plan.masters)
+		t.Fatalf("master must be key 'a' (first by sort), got %+v", plan.masters)
 	}
 	if len(plan.replicas) != 1 || plan.replicas[0].key != "z" {
-		t.Fatalf("replica должна быть ключ 'z', got %+v", plan.replicas)
+		t.Fatalf("replica must be key 'z', got %+v", plan.replicas)
 	}
 }
 
-// --- Негатив Validate: дублируем happy-обвязку для пустого/неверного входа ---
+// --- Negative Validate: duplicate the happy binding for an empty/invalid input ---
 
 func TestValidate_ClusterRejectsNegativeReplicas(t *testing.T) {
 	m := &RedisModule{}
@@ -647,11 +647,11 @@ func TestValidate_ClusterRejectsNegativeReplicas(t *testing.T) {
 		}),
 	})
 	if reply.Ok {
-		t.Fatal("ждали Ok=false на отрицательный replicas_per_shard")
+		t.Fatal("waited Ok=false for negative replicas_per_shard")
 	}
 }
 
-// --- Пароль не утекает (Apply create) ---
+// --- Password does not leak (Apply create) ---
 
 func TestApplyClusterCreate_NoSecretLeak(t *testing.T) {
 	addrs := []string{"10.0.0.1:6379", "10.0.0.2:6379"}
@@ -672,9 +672,9 @@ func TestApplyClusterCreate_NoSecretLeak(t *testing.T) {
 
 	assertEventsNoSecret(t, stream)
 	for addr, c := range fl.byAddr {
-		// Пароль ушёл в коннект.
+		// The password has gone into the connection.
 		if c.cfg.password != secretPass {
-			t.Errorf("нода %s: пароль не доехал до коннекта", addr)
+			t.Errorf("node %s: password did not reach the connection", addr)
 		}
 		assertNoClusterSecret(t, addr, c)
 	}
@@ -699,20 +699,20 @@ func TestApplyClusterCreate_ConnectFailureNoLeak(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || !fin.Failed {
-		t.Fatalf("ждали failed=true, got %+v", fin)
+		t.Fatalf("waited failed=true, got %+v", fin)
 	}
 	assertEventsNoSecret(t, stream)
 }
 
 // =============================== add-node ====================================
 
-// clusterNodesTable строит реалистичный вывод CLUSTER NODES из спецификаций строк.
-// Каждая строка: "<id> <ipPort>@<cport> <flags> <masterID|-> 0 0 0 connected".
+// clusterNodesTable builds realistic CLUSTER NODES output from row specifications.
+// Each line: "<id> <ipPort>@<cport> <flags> <masterID|-> 0 0 0 connected".
 type nodeRowSpec struct {
 	id       string
 	ipPort   string
 	master   bool
-	masterID string // для реплики
+	masterID string // for a replica
 }
 
 func clusterNodesTable(rows ...nodeRowSpec) string {
@@ -727,14 +727,14 @@ func clusterNodesTable(rows ...nodeRowSpec) string {
 		if mid == "" {
 			mid = "-"
 		}
-		cport := r.ipPort // @cport не парсится — годится любой суффикс
+		cport := r.ipPort // @cport doesn't parse - any suffix will do
 		lines = append(lines, fmt.Sprintf("%s %s@%s %s %s 0 0 0 connected", r.id, r.ipPort, cport, flags, mid))
 	}
 	return strings.Join(lines, "\n")
 }
 
-// formedTwoMasterSeed — seed с двумя мастерами m0/m1 (для add-node-сценариев).
-// До MEET: 2 строки; после MEET: + строка новичка (gossip сошёлся).
+// formedTwoMasterSeed - seed with two masters m0/m1 (for add-node scenarios).
+// Before MEET: 2 lines; after MEET: + newbie line (gossip agreed).
 func formedTwoMasterSeed(newIPPort string) (before, after string) {
 	before = clusterNodesTable(
 		nodeRowSpec{id: "m0id", ipPort: "10.0.0.1:6379", master: true},
@@ -759,7 +759,7 @@ func TestValidate_AddNodeRequiresNewNodeAndSeed(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"action": "add-node"}),
 	})
 	if reply.Ok {
-		t.Fatal("ждали Ok=false без new_node/seed")
+		t.Fatal("expected Ok=false without new_node/seed")
 	}
 }
 
@@ -775,7 +775,7 @@ func TestValidate_AddNodeRejectsBadRole(t *testing.T) {
 		}),
 	})
 	if reply.Ok {
-		t.Fatal("ждали Ok=false на неизвестную role")
+		t.Fatal("expected Ok=false for unknown role")
 	}
 }
 
@@ -791,22 +791,22 @@ func TestValidate_AddNodeHappy(t *testing.T) {
 		}),
 	})
 	if !reply.Ok || len(reply.Errors) != 0 {
-		t.Fatalf("ждали Ok=true, got %+v", reply)
+		t.Fatalf("waited Ok=true, got %+v", reply)
 	}
 }
 
-// --- Apply add-node: replica, авто-выбор master (наименее загруженный) ---
+// --- Apply add-node: replica, auto-select master (least loaded) ---
 
 func TestApplyClusterAddNode_ReplicaAutoMaster(t *testing.T) {
 	newAddr, seedAddr := "10.0.0.9:6379", "10.0.0.1:6379"
 	fl := newFleet(newAddr, seedAddr)
-	// m1 уже несёт одну реплику → авто-выбор обязан пасть на m0 (0 реплик).
+	// m1 already carries one replica -> auto-selection must fall on m0 (0 replicas).
 	before := clusterNodesTable(
 		nodeRowSpec{id: "m0id", ipPort: "10.0.0.1:6379", master: true},
 		nodeRowSpec{id: "m1id", ipPort: "10.0.0.2:6379", master: true},
 		nodeRowSpec{id: "r1id", ipPort: "10.0.0.3:6379", masterID: "m1id"},
 	)
-	// after — gossip сошёлся: +новичок (len(before)+1 = 4 строки).
+	// after - gossip agreed: + newbie (len(before)+1 = 4 lines).
 	after := clusterNodesTable(
 		nodeRowSpec{id: "m0id", ipPort: "10.0.0.1:6379", master: true},
 		nodeRowSpec{id: "m1id", ipPort: "10.0.0.2:6379", master: true},
@@ -833,15 +833,15 @@ func TestApplyClusterAddNode_ReplicaAutoMaster(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed || !fin.Changed {
-		t.Fatalf("ждали успех changed=true, got %+v", fin)
+		t.Fatalf("expected success changed=true, got %+v", fin)
 	}
 
-	// seed шлёт MEET новичку по ip:port.
+	// seed sends MEET to the newcomer via ip:port.
 	assertMeetTargets(t, fl.byAddr[seedAddr], []string{"10.0.0.9:6379"})
-	// REPLICATE исполнен НА НОВИЧКЕ к m0id (наименее загруженный мастер).
+	// REPLICATE executed ON NOVICE to m0id (least loaded master).
 	assertReplicateTo(t, fl.byAddr[newAddr], "m0id")
 	if got := fin.GetOutput().GetFields()["master_id"].GetStringValue(); got != "m0id" {
-		t.Errorf("master_id=%q, ждали m0id (авто-выбор наименее загруженного)", got)
+		t.Errorf("master_id=%q, expected m0id (auto-select the least loaded one)", got)
 	}
 
 	assertEventsNoSecret(t, stream)
@@ -850,7 +850,7 @@ func TestApplyClusterAddNode_ReplicaAutoMaster(t *testing.T) {
 	}
 }
 
-// --- Apply add-node: replica, явный master ---
+// --- Apply add-node: replica, explicit master ---
 
 func TestApplyClusterAddNode_ReplicaExplicitMaster(t *testing.T) {
 	newAddr, seedAddr := "10.0.0.9:6379", "10.0.0.1:6379"
@@ -875,13 +875,13 @@ func TestApplyClusterAddNode_ReplicaExplicitMaster(t *testing.T) {
 	}
 	fin := stream.final()
 	if fin == nil || fin.Failed || !fin.Changed {
-		t.Fatalf("ждали успех changed=true, got %+v", fin)
+		t.Fatalf("expected success changed=true, got %+v", fin)
 	}
-	// Явный master 10.0.0.2 → m1id, несмотря на то что m0 менее загружен.
+	// Explicit master 10.0.0.2 -> m1id, despite the fact that m0 is less loaded.
 	assertReplicateTo(t, fl.byAddr[newAddr], "m1id")
 }
 
-// Явный master не из кластера → ошибка (failed=true), пароль не течёт.
+// Explicit master is not from the cluster -> error (failed=true), password does not leak.
 func TestApplyClusterAddNode_ReplicaUnknownMaster(t *testing.T) {
 	newAddr, seedAddr := "10.0.0.9:6379", "10.0.0.1:6379"
 	fl := newFleet(newAddr, seedAddr)
@@ -898,24 +898,24 @@ func TestApplyClusterAddNode_ReplicaUnknownMaster(t *testing.T) {
 			"new_node": nodeMapParam(newAddr),
 			"seed":     nodeMapParam(seedAddr),
 			"role":     "replica",
-			"master":   nodeMapParam("10.0.0.7:6379"), // нет в кластере
+			"master":   nodeMapParam("10.0.0.7:6379"), // not in the cluster
 		}),
 	}, stream)
 
 	fin := stream.final()
 	if fin == nil || !fin.Failed {
-		t.Fatalf("ждали failed=true на master вне кластера, got %+v", fin)
+		t.Fatalf("expected failed=true on master outside the cluster, got %+v", fin)
 	}
-	// MEET не должен был выполниться (мастер резолвится ДО MEET).
+	// MEET should not have been executed (the wizard resolves BEFORE MEET).
 	for _, call := range fl.byAddr[seedAddr].calls {
 		if isClusterSub(call, "MEET") {
-			t.Error("MEET не должен вызываться при нерезолвимом master")
+			t.Error("MEET should not be called when master is unresolvable")
 		}
 	}
 	assertEventsNoSecret(t, stream)
 }
 
-// --- Apply add-node: master (пустой, без слотов) ---
+// --- Apply add-node: master (empty, no slots) ---
 
 func TestApplyClusterAddNode_EmptyMaster(t *testing.T) {
 	newAddr, seedAddr := "10.0.0.9:6379", "10.0.0.1:6379"
@@ -939,26 +939,26 @@ func TestApplyClusterAddNode_EmptyMaster(t *testing.T) {
 	}
 	fin := stream.final()
 	if fin == nil || fin.Failed || !fin.Changed {
-		t.Fatalf("ждали успех changed=true, got %+v", fin)
+		t.Fatalf("expected success changed=true, got %+v", fin)
 	}
 	if got := fin.GetOutput().GetFields()["role"].GetStringValue(); got != "master" {
-		t.Errorf("role=%q, ждали master", got)
+		t.Errorf("role=%q, waiting for master", got)
 	}
-	// add-node master НЕ двигает слоты: ни ADDSLOTS, ни REPLICATE.
+	// add-node master DOES NOT move slots: neither ADDSLOTS nor REPLICATE.
 	assertNoAddSlots(t, fl.byAddr[newAddr])
 	for _, call := range fl.byAddr[newAddr].calls {
 		if isClusterSub(call, "REPLICATE") {
-			t.Error("empty master не должен REPLICATE")
+			t.Error("empty master should not REPLICATE")
 		}
 	}
 }
 
-// --- Apply add-node: идемпотентность (нода уже в кластере → no-op) ---
+// --- Apply add-node: idempotency (node is already in the cluster -> no-op) ---
 
 func TestApplyClusterAddNode_AlreadyMemberNoOp(t *testing.T) {
 	newAddr, seedAddr := "10.0.0.9:6379", "10.0.0.1:6379"
 	fl := newFleet(newAddr, seedAddr)
-	// Топология seed-а УЖЕ содержит новичка 10.0.0.9.
+	// The seed topology ALREADY contains newcomer 10.0.0.9.
 	fl.byAddr[seedAddr].nodes = clusterNodesTable(
 		nodeRowSpec{id: "m0id", ipPort: "10.0.0.1:6379", master: true},
 		nodeRowSpec{id: "newid", ipPort: "10.0.0.9:6379", master: true},
@@ -980,22 +980,22 @@ func TestApplyClusterAddNode_AlreadyMemberNoOp(t *testing.T) {
 	}
 	fin := stream.final()
 	if fin == nil || fin.Failed {
-		t.Fatalf("ждали успех, got %+v", fin)
+		t.Fatalf("expected success, got %+v", fin)
 	}
 	if fin.Changed {
-		t.Error("ждали changed=false: нода уже в кластере (no-op)")
+		t.Error("expected changed=false: node is already in the cluster (no-op)")
 	}
-	// No-op: ни MEET, ни REPLICATE.
+	// No-op: neither MEET nor REPLICATE.
 	for addr, c := range fl.byAddr {
 		for _, call := range c.calls {
 			if isClusterSub(call, "MEET") || isClusterSub(call, "REPLICATE") {
-				t.Errorf("нода %s: no-op нарушен, вызвана %v", addr, call)
+				t.Errorf("node %s: no-op broken, caused by %v", addr, call)
 			}
 		}
 	}
 }
 
-// --- Apply add-node: коннект-фейл к seed не течёт паролем ---
+// --- Apply add-node: connection file to seed does not contain password ---
 
 func TestApplyClusterAddNode_SeedConnectFailNoLeak(t *testing.T) {
 	m := &RedisModule{
@@ -1017,12 +1017,12 @@ func TestApplyClusterAddNode_SeedConnectFailNoLeak(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || !fin.Failed {
-		t.Fatalf("ждали failed=true, got %+v", fin)
+		t.Fatalf("waited failed=true, got %+v", fin)
 	}
 	assertEventsNoSecret(t, stream)
 }
 
-// --- parseClusterNodesTable: разбор строк топологии ---
+// --- parseClusterNodesTable: parse topology rows ---
 
 func TestParseClusterNodesTable(t *testing.T) {
 	table := clusterNodesTable(
@@ -1031,21 +1031,21 @@ func TestParseClusterNodesTable(t *testing.T) {
 	)
 	rows := parseClusterNodesTable(table)
 	if len(rows) != 2 {
-		t.Fatalf("ждали 2 строки, got %d", len(rows))
+		t.Fatalf("waited 2 lines, got %d", len(rows))
 	}
 	if rows[0].id != "m0id" || rows[0].ipPort != "10.0.0.1:6379" || !rows[0].isMaster {
-		t.Errorf("строка master разобрана неверно: %+v", rows[0])
+		t.Errorf("master line parsed incorrectly: %+v", rows[0])
 	}
 	if rows[1].isMaster || rows[1].masterID != "m0id" {
-		t.Errorf("строка replica разобрана неверно: %+v", rows[1])
+		t.Errorf("replica line parsed incorrectly: %+v", rows[1])
 	}
-	// @cport должен быть отрезан.
+	// @cport should be cut off.
 	if strings.Contains(rows[0].ipPort, "@") {
-		t.Errorf("ipPort несёт @cport: %q", rows[0].ipPort)
+		t.Errorf("ipPort carries @cport: %q", rows[0].ipPort)
 	}
 }
 
-// --- assert-хелперы (cluster) ---
+// --- assert helpers (cluster) ---
 
 func sortNodesByKey(nodes []clusterNode) {
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].key < nodes[j].key })
@@ -1060,7 +1060,7 @@ func isClusterSub(call []any, sub string) bool {
 	return strings.EqualFold(v0, "CLUSTER") && strings.EqualFold(v1, sub)
 }
 
-// assertMeetTargets проверяет множество ip:port, которым нода слала CLUSTER MEET.
+// assertMeetTargets checks the set of ip:ports to which the node sent CLUSTER MEET.
 func assertMeetTargets(t *testing.T, c *clusterConn, want []string) {
 	t.Helper()
 	var got []string
@@ -1074,12 +1074,12 @@ func assertMeetTargets(t *testing.T, c *clusterConn, want []string) {
 	sort.Strings(got)
 	sort.Strings(want)
 	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Errorf("MEET targets=%v, ждали %v", got, want)
+		t.Errorf("MEET targets=%v, expected %v", got, want)
 	}
 }
 
-// assertAddSlots извлекает диапазон слотов из CLUSTER ADDSLOTS на ноде; требует
-// ровно один такой вызов.
+// assertAddSlots retrieves a range of slots from CLUSTER ADDSLOTS on the node; requires
+// exactly one such challenge.
 func assertAddSlots(t *testing.T, c *clusterConn) slotRange {
 	t.Helper()
 	var found *slotRange
@@ -1088,31 +1088,31 @@ func assertAddSlots(t *testing.T, c *clusterConn) slotRange {
 			continue
 		}
 		if found != nil {
-			t.Fatal("ждали ровно один ADDSLOTS на мастере")
+			t.Fatal("waited exactly one ADDSLOTS on the master")
 		}
 		slots := make([]int, 0, len(call)-2)
 		for _, a := range call[2:] {
 			s, _ := a.(string)
 			n, err := strconv.Atoi(s)
 			if err != nil {
-				t.Fatalf("ADDSLOTS аргумент не число: %v", a)
+				t.Fatalf("ADDSLOTS argument is not a number: %v", a)
 			}
 			slots = append(slots, n)
 		}
 		if len(slots) == 0 {
-			t.Fatal("ADDSLOTS без слотов")
+			t.Fatal("ADDSLOTS without slots")
 		}
-		// Слоты непрерывны и возрастают.
+		// The slots are continuous and increasing.
 		for i := 1; i < len(slots); i++ {
 			if slots[i] != slots[i-1]+1 {
-				t.Fatalf("ADDSLOTS слоты не непрерывны: %v", slots)
+				t.Fatalf("ADDSLOTS slots are not continuous: %v", slots)
 			}
 		}
 		r := slotRange{from: slots[0], to: slots[len(slots)-1]}
 		found = &r
 	}
 	if found == nil {
-		t.Fatal("на мастере не было ADDSLOTS")
+		t.Fatal("there were no ADDSLOTS on the master")
 	}
 	return *found
 }
@@ -1121,7 +1121,7 @@ func assertNoAddSlots(t *testing.T, c *clusterConn) {
 	t.Helper()
 	for _, call := range c.calls {
 		if isClusterSub(call, "ADDSLOTS") {
-			t.Errorf("на реплике не должно быть ADDSLOTS, got %v", call)
+			t.Errorf("there should be no ADDSLOTS on the replica, got %v", call)
 		}
 	}
 }
@@ -1132,12 +1132,12 @@ func assertFullSlotCoverage(t *testing.T, ranges ...slotRange) {
 	expect := 0
 	for _, r := range ranges {
 		if r.from != expect {
-			t.Fatalf("дыра/перекрытие слотов: ждали from=%d, got %d", expect, r.from)
+			t.Fatalf("hole/slot overlap: waited from=%d, got %d", expect, r.from)
 		}
 		expect = r.to + 1
 	}
 	if expect != totalSlots {
-		t.Fatalf("покрыто %d слотов, ждали %d", expect, totalSlots)
+		t.Fatalf("covered %d slots, waiting for %d", expect, totalSlots)
 	}
 }
 
@@ -1147,12 +1147,12 @@ func assertReplicateTo(t *testing.T, c *clusterConn, masterID string) {
 		if isClusterSub(call, "REPLICATE") {
 			got, _ := call[2].(string)
 			if got != masterID {
-				t.Errorf("REPLICATE -> %q, ждали %q", got, masterID)
+				t.Errorf("REPLICATE -> %q, expected %q", got, masterID)
 			}
 			return
 		}
 	}
-	t.Errorf("на реплике не было CLUSTER REPLICATE")
+	t.Errorf("there was no CLUSTER REPLICATE on the replica")
 }
 
 func assertNoClusterSecret(t *testing.T, addr string, c *clusterConn) {
@@ -1160,7 +1160,7 @@ func assertNoClusterSecret(t *testing.T, addr string, c *clusterConn) {
 	for i, call := range c.calls {
 		for _, a := range call {
 			if s, ok := a.(string); ok && strings.Contains(s, secretPass) {
-				t.Errorf("нода %s команда[%d] несёт пароль: %v", addr, i, call)
+				t.Errorf("node %s command[%d] carries the password: %v", addr, i, call)
 			}
 		}
 	}
@@ -1168,21 +1168,21 @@ func assertNoClusterSecret(t *testing.T, addr string, c *clusterConn) {
 
 // ============================= remove-node ===================================
 
-// nodesTableWithSlots собирает вывод CLUSTER NODES из готовых строк (clusterNodesTable
-// слоты не несёт, а remove-node их разбирает — строки строим явно).
+// nodesTableWithSlots collects CLUSTER NODES output from ready rows (clusterNodesTable
+// does not carry slots, but remove-node parses them - we build the lines explicitly).
 func nodesTableWithSlots(rows ...string) string { return strings.Join(rows, "\n") }
 
-// masterRowSlots строит строку CLUSTER NODES master-а с диапазоном слотов.
+// masterRowSlots builds the master's CLUSTER NODES row with a range of slots.
 func masterRowSlots(id, ipPort string, from, to int) string {
 	return fmt.Sprintf("%s %s@%s master - 0 0 0 connected %d-%d", id, ipPort, ipPort, from, to)
 }
 
-// masterRowNoSlots — master без слотов (пустой master).
+// masterRowNoSlots - master without slots (empty master).
 func masterRowNoSlots(id, ipPort string) string {
 	return fmt.Sprintf("%s %s@%s master - 0 0 0 connected", id, ipPort, ipPort)
 }
 
-// replicaRow — реплика (slave) master-а masterID, без слотов.
+// replicaRow - replica (slave) of the master masterID, without slots.
 func replicaRow(id, ipPort, masterID string) string {
 	return fmt.Sprintf("%s %s@%s slave %s 0 0 0 connected", id, ipPort, ipPort, masterID)
 }
@@ -1216,7 +1216,7 @@ func TestValidate_RemoveNodeRequiresNodeAndSeed(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"action": "remove-node"}),
 	})
 	if reply.Ok {
-		t.Fatal("ждали Ok=false без node/seed")
+		t.Fatal("expected Ok=false without node/seed")
 	}
 }
 
@@ -1231,18 +1231,18 @@ func TestValidate_RemoveNodeHappy(t *testing.T) {
 		}),
 	})
 	if !reply.Ok || len(reply.Errors) != 0 {
-		t.Fatalf("ждали Ok=true, got %+v", reply)
+		t.Fatalf("waited Ok=true, got %+v", reply)
 	}
 }
 
-// --- Apply remove-node: replica (просто FORGET на всех оставшихся) ---
+// --- Apply remove-node: replica (simply FORGET on all remaining ones) ---
 
 func TestApplyClusterRemoveNode_ReplicaForgetOnly(t *testing.T) {
 	removeAddr, seedAddr := "10.0.0.3:6379", "10.0.0.1:6379"
 	m0Addr := "10.0.0.1:6379"
 	m1Addr := "10.0.0.2:6379"
 	fl := newFleet(m0Addr, m1Addr, removeAddr)
-	// Топология: m0/m1 — мастера со слотами, r1 (10.0.0.3) — реплика m1.
+	// Topology: m0/m1 - masters with slots, r1 (10.0.0.3) - replica m1.
 	table := nodesTableWithSlots(
 		masterRowSlots("m0id", "10.0.0.1:6379", 0, 8191),
 		masterRowSlots("m1id", "10.0.0.2:6379", 8192, 16383),
@@ -1269,35 +1269,35 @@ func TestApplyClusterRemoveNode_ReplicaForgetOnly(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed || !fin.Changed {
-		t.Fatalf("ждали успех changed=true, got %+v", fin)
+		t.Fatalf("expected success changed=true, got %+v", fin)
 	}
 
-	// Реплику не мигрируют: ни SETSLOT, ни MIGRATE.
+	// The replica is not migrated: neither SETSLOT nor MIGRATE.
 	for addr, c := range fl.byAddr {
 		for _, call := range c.calls {
 			if isClusterSub(call, "SETSLOT") {
-				t.Errorf("нода %s: SETSLOT при удалении РЕПЛИКИ не должен вызываться: %v", addr, call)
+				t.Errorf("node %s: SETSLOT should not be called when deleting a REPLICA: %v", addr, call)
 			}
 			if v0, _ := call[0].(string); strings.EqualFold(v0, "MIGRATE") {
-				t.Errorf("нода %s: MIGRATE при удалении РЕПЛИКИ не должен вызываться: %v", addr, call)
+				t.Errorf("node %s: MIGRATE should not be called when deleting a REPLICA: %v", addr, call)
 			}
 		}
 	}
-	// FORGET r1id на ОБОИХ оставшихся мастерах, НЕ на самой удаляемой.
+	// FORGET r1id on BOTH remaining masters, NOT on the one being deleted.
 	if !hasClusterForget(fl.byAddr[m0Addr], "r1id") {
-		t.Error("m0: ждали CLUSTER FORGET r1id")
+		t.Error("m0: waiting for CLUSTER FORGET r1id")
 	}
 	if !hasClusterForget(fl.byAddr[m1Addr], "r1id") {
-		t.Error("m1: ждали CLUSTER FORGET r1id")
+		t.Error("m1: waiting for CLUSTER FORGET r1id")
 	}
 	if len(clusterForgetTargets(fl.byAddr[removeAddr])) != 0 {
-		t.Error("удаляемая нода не должна получать FORGET")
+		t.Error("The node being deleted should not receive FORGET")
 	}
 	if got := fin.GetOutput().GetFields()["forgotten_on"].GetNumberValue(); got != 2 {
-		t.Errorf("forgotten_on=%v, ждали 2", got)
+		t.Errorf("forgotten_on=%v, waited 2", got)
 	}
 	if got := fin.GetOutput().GetFields()["slots_migrated"].GetNumberValue(); got != 0 {
-		t.Errorf("slots_migrated=%v, ждали 0 (реплика)", got)
+		t.Errorf("slots_migrated=%v, waited 0 (replica)", got)
 	}
 
 	assertEventsNoSecret(t, stream)
@@ -1306,10 +1306,10 @@ func TestApplyClusterRemoveNode_ReplicaForgetOnly(t *testing.T) {
 	}
 }
 
-// --- Apply remove-node: master СО слотами (миграция слотов + FORGET) ---
+// --- Apply remove-node: master WITH slots (slot migration + FORGET) ---
 
 func TestApplyClusterRemoveNode_MasterWithSlotsMigrates(t *testing.T) {
-	removeAddr := "10.0.0.3:6379" // m2 — удаляемый master со слотами 16380-16383 (4 слота)
+	removeAddr := "10.0.0.3:6379" // m2 - removable master with slots 16380-16383 (4 slots)
 	m0Addr := "10.0.0.1:6379"
 	m1Addr := "10.0.0.2:6379"
 	seedAddr := m0Addr
@@ -1322,7 +1322,7 @@ func TestApplyClusterRemoveNode_MasterWithSlotsMigrates(t *testing.T) {
 	for _, c := range fl.byAddr {
 		c.nodes = table
 	}
-	// На слоте 16380 у источника лежит один ключ → миграция реально шлёт MIGRATE.
+	// There is one key on slot 16380 at the source -> migration actually sends MIGRATE.
 	fl.byAddr[removeAddr].keysInSlot = map[int][]string{16380: {"key-a"}}
 	m := fl.module()
 	stream := &applyStream{}
@@ -1342,64 +1342,64 @@ func TestApplyClusterRemoveNode_MasterWithSlotsMigrates(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed || !fin.Changed {
-		t.Fatalf("ждали успех changed=true, got %+v", fin)
+		t.Fatalf("expected success changed=true, got %+v", fin)
 	}
-	// 4 слота (16380..16383) перенесены.
+	// 4 slots (16380..16383) have been moved.
 	if got := fin.GetOutput().GetFields()["slots_migrated"].GetNumberValue(); got != 4 {
-		t.Errorf("slots_migrated=%v, ждали 4", got)
+		t.Errorf("slots_migrated=%v, waited 4", got)
 	}
 
 	src := fl.byAddr[removeAddr]
 
-	// Источник: MIGRATING на КАЖДЫЙ слот + GETKEYSINSLOT + SETSLOT NODE.
+	// Source: MIGRATING per slot + GETKEYSINSLOT + SETSLOT NODE.
 	migratingSlots := setslotSlots(src, "MIGRATING")
 	if len(migratingSlots) != 4 {
-		t.Errorf("источник: ждали 4 SETSLOT MIGRATING, got %d (%v)", len(migratingSlots), migratingSlots)
+		t.Errorf("source: waited 4 SETSLOT MIGRATING, got %d (%v)", len(migratingSlots), migratingSlots)
 	}
-	// Слоты round-robin между двумя destination-мастерами (16380→m0, 16381→m1, ...).
-	assertSetslotImporting(t, fl.byAddr[m0Addr], "m2id") // m0 импортирует слоты из m2
+	// Round-robin slots between two destination masters (16380->m0, 16381->m1,...).
+	assertSetslotImporting(t, fl.byAddr[m0Addr], "m2id") // m0 imports slots from m2
 	assertSetslotImporting(t, fl.byAddr[m1Addr], "m2id")
 
-	// На слоте 16380 был ключ → MIGRATE действительно выполнен (с AUTH ***).
+	// On slot 16380 the switch -> MIGRATE was indeed executed (with AUTH ***).
 	if !hasMigrate(src) {
-		t.Error("источник: ждали MIGRATE для слота с ключом")
+		t.Error("source: expected MIGRATE for slot with key")
 	}
 
-	// После миграции — FORGET m2id на обоих оставшихся мастерах.
+	// After migration - FORGET m2id on both remaining masters.
 	if !hasClusterForget(fl.byAddr[m0Addr], "m2id") {
-		t.Error("m0: ждали CLUSTER FORGET m2id после миграции")
+		t.Error("m0: expected CLUSTER FORGET m2id after migration")
 	}
 	if !hasClusterForget(fl.byAddr[m1Addr], "m2id") {
-		t.Error("m1: ждали CLUSTER FORGET m2id после миграции")
+		t.Error("m1: expected CLUSTER FORGET m2id after migration")
 	}
 
-	// ИБ-инвариант: пароль НЕ в событиях/ошибках (логи/OTel/RunResult). На ПРОВОДЕ
-	// он неизбежен ровно в одном месте — MIGRATE ... AUTH <pass> (AUTH к
-	// password-protected destination; ровно так шлёт и сам go-redis). Везде, КРОМЕ
-	// этого AUTH-аргумента, пароля быть не должно.
+	// Information security invariant: password is NOT in events/errors (logs/OTel/RunResult). ON THE WIRE
+	// it is inevitable in exactly one place - MIGRATE... AUTH <pass> (AUTH to
+	// password-protected destination; This is exactly what go-redis itself sends). Everywhere EXCEPT
+	// this AUTH argument, there should not be a password.
 	assertEventsNoSecret(t, stream)
 	assertSecretOnlyInMigrateAuth(t, src)
 	for addr, c := range fl.byAddr {
 		if addr == removeAddr {
-			continue // источник MIGRATE — проверен отдельно выше
+			continue // source MIGRATE - checked separately above
 		}
 		assertNoClusterSecret(t, addr, c)
 	}
 }
 
-// --- Apply remove-node: ключи с whitespace в имени мигрируют лосслесс ---
+// --- Apply remove-node: keys with whitespace in the name migrate lossless ---
 
-// TestApplyClusterRemoveNode_WhitespaceKeysLossless фиксирует MAJOR-дефект:
-// Redis-ключ — произвольная байт-строка и может содержать пробел/\t/\n. Раньше
-// GETKEYSINSLOT стрингифицировался join-ом через пробел + strings.Fields →
-// ключ "user 42" рвался на два токена → MIGRATE по несуществующим ключам → ключ
-// НЕ переносился, а SETSLOT NODE всё равно отдавал слот → ПОТЕРЯ ДАННЫХ.
+// TestApplyClusterRemoveNode_WhitespaceKeysLossless fixes the MAJOR defect:
+// Redis-key is an arbitrary byte string and can contain a space/\t/\n. Previously
+// GETKEYSINSLOT is stringed with a join separated by a space + strings.Fields ->
+// the key "user 42" was torn into two tokens -> MIGRATE on non-existent keys -> key
+// NOT transferred, but SETSLOT NODE still gave away the slot -> DATA LOSS.
 //
-// Типизированный GetKeysInSlot ([]string) сохраняет ключи целиком. Тест требует:
-// каждый ключ слота (включая whitespace-имена) попал в MIGRATE как ОДИН KEYS-
-// аргумент, и множество перенесённых ключей в точности равно исходному (лосслесс).
+// The typed GetKeysInSlot ([]string) stores the entire keys. The test requires:
+// each slot key (including whitespace names) ended up in MIGRATE as ONE KEYS-
+// argument, and the set of transferred keys is exactly equal to the original one (lossless).
 func TestApplyClusterRemoveNode_WhitespaceKeysLossless(t *testing.T) {
-	removeAddr := "10.0.0.3:6379" // m2 — удаляемый master со слотом 16380
+	removeAddr := "10.0.0.3:6379" // m2 - removable master with slot 16380
 	m0Addr := "10.0.0.1:6379"
 	m1Addr := "10.0.0.2:6379"
 	seedAddr := m0Addr
@@ -1407,13 +1407,13 @@ func TestApplyClusterRemoveNode_WhitespaceKeysLossless(t *testing.T) {
 	table := nodesTableWithSlots(
 		masterRowSlots("m0id", "10.0.0.1:6379", 0, 8189),
 		masterRowSlots("m1id", "10.0.0.2:6379", 8190, 16379),
-		masterRowSlots("m2id", "10.0.0.3:6379", 16380, 16380), // ровно один слот
+		masterRowSlots("m2id", "10.0.0.3:6379", 16380, 16380), // exactly one slot
 	)
 	for _, c := range fl.byAddr {
 		c.nodes = table
 	}
-	// Слот 16380 содержит ключи С разделителями в имени: пробел, таб, перевод
-	// строки — и обычный ключ для контраста. Все должны переехать как есть.
+	// Slot 16380 contains keys With name delimiters: space, tab, translate
+	// lines - and a regular key for contrast. Everyone should move as is.
 	keys := []string{"user 42", "a\tb", "c\nd", "plain"}
 	fl.byAddr[removeAddr].keysInSlot = map[int][]string{16380: append([]string(nil), keys...)}
 	m := fl.module()
@@ -1434,33 +1434,33 @@ func TestApplyClusterRemoveNode_WhitespaceKeysLossless(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed || !fin.Changed {
-		t.Fatalf("ждали успех changed=true, got %+v", fin)
+		t.Fatalf("expected success changed=true, got %+v", fin)
 	}
 
-	// Множество ключей, реально ушедших в MIGRATE … KEYS …, должно совпасть с
-	// исходным БЕЗ потерь и БЕЗ расщепления (никаких "user"/"42" по отдельности).
+	// The set of keys that actually went into MIGRATE... KEYS... must coincide with
+	// original WITHOUT loss and WITHOUT splitting (no "user"/"42" separately).
 	got := migrateKeyArgs(t, fl.byAddr[removeAddr])
 	if !equalStringSets(got, keys) {
-		t.Fatalf("MIGRATE KEYS лоссово: got %q, ждали %q (ключи с whitespace расщеплены/потеряны)", got, keys)
+		t.Fatalf("MIGRATE KEYS loss: got %q, expected %q (keys with whitespace are split/lost)", got, keys)
 	}
-	// Точечно: "user 42" обязан быть ОДНИМ аргументом, не двумя токенами.
+	// Point to point: "user 42" must be ONE argument, not two tokens.
 	if !containsString(got, "user 42") {
-		t.Errorf(`ключ "user 42" не передан как один аргумент MIGRATE: %q`, got)
+		t.Errorf(`key "user 42" not passed as one argument MIGRATE: %q`, got)
 	}
 }
 
-// --- Apply remove-node: слот с >1 непустым батчем (multi-batch цикл) ---
+// --- Apply remove-node: slot with >1 non-empty batch (multi-batch cycle) ---
 
-// TestApplyClusterRemoveNode_MultiBatchSlotLossless фиксирует DATA-RISK путь:
-// migrateOneSlot циклит GETKEYSINSLOT+MIGRATE ПОКА слот не пуст. Слот с >migrateBatch
-// ключей отдаёт несколько порций → несколько итераций цикла. Если цикл прервётся
-// после первой порции (или fake-источник отдаст всё разом и спрячет баг), ключи
-// сверх первого батча ПОТЕРЯЮТСЯ при SETSLOT NODE. Тест держит на удаляемом
-// master-е слот с очередью из 3 порций (whitespace-ключ — во ВТОРОЙ, не первой):
-// требует, чтобы объединение ВСЕХ порций ушло в MIGRATE, цикл завершился, а
-// порядок фаз слота был IMPORTING→MIGRATING→(N MIGRATE)→SETSLOT NODE.
+// TestApplyClusterRemoveNode_MultiBatchSlotLossless fixes the DATA-RISK path:
+// migrateOneSlot loops GETKEYSINSLOT+MIGRATE UNTIL the slot is empty. Slot with >migrateBatch
+// gives several portions of keys -> several iterations of the loop. If the cycle is interrupted
+// after the first portion (or the fake source will give everything away at once and hide the bug), the keys
+// beyond the first batch WILL BE LOST at SETSLOT NODE. The test keeps on being deleted
+// master slot with a queue of 3 portions (the whitespace key is in the SECOND, not the first):
+// requires that the union of ALL portions go to MIGRATE, the loop ends, and
+// the slot phase order was IMPORTING->MIGRATING->(N MIGRATE)->SETSLOT NODE.
 func TestApplyClusterRemoveNode_MultiBatchSlotLossless(t *testing.T) {
-	removeAddr := "10.0.0.3:6379" // m2 — удаляемый master со слотом 16380
+	removeAddr := "10.0.0.3:6379" // m2 - removable master with slot 16380
 	m0Addr := "10.0.0.1:6379"
 	m1Addr := "10.0.0.2:6379"
 	seedAddr := m0Addr
@@ -1468,15 +1468,15 @@ func TestApplyClusterRemoveNode_MultiBatchSlotLossless(t *testing.T) {
 	table := nodesTableWithSlots(
 		masterRowSlots("m0id", "10.0.0.1:6379", 0, 8189),
 		masterRowSlots("m1id", "10.0.0.2:6379", 8190, 16379),
-		masterRowSlots("m2id", "10.0.0.3:6379", 16380, 16380), // ровно один слот
+		masterRowSlots("m2id", "10.0.0.3:6379", 16380, 16380), // exactly one slot
 	)
 	for _, c := range fl.byAddr {
 		c.nodes = table
 	}
-	// Слот 16380 опустошается за 3 порции (по >1 итерации цикла). whitespace-ключ
-	// "user 42" — во ВТОРОЙ порции (не в первой): доказывает, что lossless держится
-	// и за пределами первого батча. Round-robin: 16380 — первый и единственный слот
-	// удаляемого master-а → уходит на m0 (di=0).
+	// Slot 16380 is emptied in 3 chunks (>1 loop iteration each). whitespace-key
+	// "user 42" - in the SECOND portion (not in the first): proves that lossless holds
+	// and beyond the first batch. Round-robin: 16380 - first and only slot
+	// of the deleted master -> goes to m0 (di=0).
 	batch1 := []string{"k1", "k2"}
 	batch2 := []string{"user 42", "k3"}
 	batch3 := []string{"k4"}
@@ -1501,43 +1501,43 @@ func TestApplyClusterRemoveNode_MultiBatchSlotLossless(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed || !fin.Changed {
-		t.Fatalf("ждали успех changed=true, got %+v", fin)
+		t.Fatalf("expected success changed=true, got %+v", fin)
 	}
 	if got := fin.GetOutput().GetFields()["slots_migrated"].GetNumberValue(); got != 1 {
-		t.Errorf("slots_migrated=%v, ждали 1", got)
+		t.Errorf("slots_migrated=%v, waited 1", got)
 	}
 
 	src := fl.byAddr[removeAddr]
 	wantKeys := append(append(append([]string(nil), batch1...), batch2...), batch3...)
 
-	// ВСЕ ключи всех порций ушли в MIGRATE (объединение), ничего не потеряно.
+	// ALL keys of all portions went to MIGRATE (merger), nothing was lost.
 	got := migrateKeyArgs(t, src)
 	if !equalStringSets(got, wantKeys) {
-		t.Fatalf("multi-batch лоссово: MIGRATE KEYS=%q, ждали объединение порций %q", got, wantKeys)
+		t.Fatalf("multi-batch loss: MIGRATE KEYS=%q, waiting for the merging of portions %q", got, wantKeys)
 	}
 	if !containsString(got, "user 42") {
-		t.Errorf(`whitespace-ключ "user 42" из 2-й порции не переехал/расщеплён: %q`, got)
+		t.Errorf(`whitespace key "user 42" from the 2nd portion did not move/split: %q`, got)
 	}
-	// Три порции → ровно три MIGRATE-вызова (по одному на непустой батч).
+	// Three portions -> exactly three MIGRATE calls (one per non-empty batch).
 	if n := countMigrate(src); n != 3 {
-		t.Errorf("ждали 3 MIGRATE (по порции на батч), got %d", n)
+		t.Errorf("expected 3 MIGRATE (portions per batch), got %d", n)
 	}
-	// Цикл завершился (не зациклился): очередь слота опустошена.
+	// The loop has ended (not looped): the slot's queue is empty.
 	if q := src.keysInSlotBatches[16380]; len(q) != 0 {
-		t.Errorf("очередь слота 16380 не исчерпана (цикл недокрутил): осталось %d порций", len(q))
+		t.Errorf("queue of slot 16380 is not exhausted (the cycle is not enough): there are %d portions left", len(q))
 	}
-	// Порядок фаз слота 16380: IMPORTING(цель)→MIGRATING(источник)→3×MIGRATE→
-	// SETSLOT NODE. Источник несёт MIGRATING, 3 MIGRATE и SETSLOT NODE в этом порядке.
+	// Slot 16380 phase order: IMPORTING(target)->MIGRATING(source)->3xMIGRATE->
+	// SETSLOT NODE. The source carries MIGRATING, 3 MIGRATE and SETSLOT NODE in that order.
 	assertSlotPhaseOrder(t, src, 16380)
-	// IMPORTING на цели (m0, di=0) указывает на источник m2id.
+	// IMPORTING on target (m0, di=0) points to the source m2id.
 	assertSetslotImporting(t, fl.byAddr[m0Addr], "m2id")
 
 	assertEventsNoSecret(t, stream)
 	assertSecretOnlyInMigrateAuth(t, src)
 }
 
-// migrateKeyArgs собирает все ключи, переданные в MIGRATE … KEYS k1 k2 … (всё
-// после литерала "KEYS"). Каждый ключ — ОТДЕЛЬНЫЙ аргумент команды.
+// migrateKeyArgs collects all the keys passed to MIGRATE... KEYS k1 k2... (all
+// after the literal "KEYS"). Each key is a SEPARATE command argument.
 func migrateKeyArgs(t *testing.T, c *clusterConn) []string {
 	t.Helper()
 	var out []string
@@ -1553,7 +1553,7 @@ func migrateKeyArgs(t *testing.T, c *clusterConn) []string {
 			}
 		}
 		if keysAt < 0 {
-			t.Fatalf("MIGRATE без KEYS-секции: %v", call)
+			t.Fatalf("MIGRATE without KEYS section: %v", call)
 		}
 		for _, a := range call[keysAt+1:] {
 			s, _ := a.(string)
@@ -1588,7 +1588,7 @@ func equalStringSets(a, b []string) bool {
 	return true
 }
 
-// --- Apply remove-node: master БЕЗ слотов (просто FORGET) ---
+// --- Apply remove-node: master WITHOUT slots (just FORGET) ---
 
 func TestApplyClusterRemoveNode_EmptyMasterForgetOnly(t *testing.T) {
 	removeAddr := "10.0.0.3:6379"
@@ -1598,7 +1598,7 @@ func TestApplyClusterRemoveNode_EmptyMasterForgetOnly(t *testing.T) {
 	table := nodesTableWithSlots(
 		masterRowSlots("m0id", "10.0.0.1:6379", 0, 8191),
 		masterRowSlots("m1id", "10.0.0.2:6379", 8192, 16383),
-		masterRowNoSlots("m2id", "10.0.0.3:6379"), // пустой master, слотов нет
+		masterRowNoSlots("m2id", "10.0.0.3:6379"), // empty master, no slots
 	)
 	for _, c := range fl.byAddr {
 		c.nodes = table
@@ -1619,28 +1619,28 @@ func TestApplyClusterRemoveNode_EmptyMasterForgetOnly(t *testing.T) {
 	}
 	fin := stream.final()
 	if fin == nil || fin.Failed || !fin.Changed {
-		t.Fatalf("ждали успех changed=true, got %+v", fin)
+		t.Fatalf("expected success changed=true, got %+v", fin)
 	}
 	if got := fin.GetOutput().GetFields()["slots_migrated"].GetNumberValue(); got != 0 {
-		t.Errorf("slots_migrated=%v, ждали 0 (пустой master)", got)
+		t.Errorf("slots_migrated=%v, waited 0 (empty master)", got)
 	}
-	// Никакой миграции у пустого master-а.
+	// No migration for an empty master.
 	for addr, c := range fl.byAddr {
 		for _, call := range c.calls {
 			if isClusterSub(call, "SETSLOT") {
-				t.Errorf("нода %s: SETSLOT при удалении ПУСТОГО master не должен вызываться: %v", addr, call)
+				t.Errorf("node %s: SETSLOT when deleting an EMPTY master should not be called: %v", addr, call)
 			}
 		}
 	}
 	if !hasClusterForget(fl.byAddr[m0Addr], "m2id") || !hasClusterForget(fl.byAddr[m1Addr], "m2id") {
-		t.Error("ждали CLUSTER FORGET m2id на обоих оставшихся мастерах")
+		t.Error("expected CLUSTER FORGET m2id on both remaining masters")
 	}
 }
 
-// --- Apply remove-node: идемпотентность (ноды уже нет → no-op) ---
+// --- Apply remove-node: idempotency (no node no longer exists -> no-op) ---
 
 func TestApplyClusterRemoveNode_AbsentNoOp(t *testing.T) {
-	removeAddr := "10.0.0.9:6379" // нет в топологии
+	removeAddr := "10.0.0.9:6379" // no in topology
 	m0Addr := "10.0.0.1:6379"
 	m1Addr := "10.0.0.2:6379"
 	fl := newFleet(m0Addr, m1Addr)
@@ -1667,22 +1667,22 @@ func TestApplyClusterRemoveNode_AbsentNoOp(t *testing.T) {
 	}
 	fin := stream.final()
 	if fin == nil || fin.Failed {
-		t.Fatalf("ждали успех, got %+v", fin)
+		t.Fatalf("expected success, got %+v", fin)
 	}
 	if fin.Changed {
-		t.Error("ждали changed=false: ноды уже нет (no-op)")
+		t.Error("waited changed=false: the node no longer exists (no-op)")
 	}
-	// No-op: ни FORGET, ни SETSLOT, ни MIGRATE.
+	// No-op: no FORGET, no SETSLOT, no MIGRATE.
 	for addr, c := range fl.byAddr {
 		for _, call := range c.calls {
 			if isClusterSub(call, "FORGET") || isClusterSub(call, "SETSLOT") {
-				t.Errorf("нода %s: no-op нарушен, вызвана %v", addr, call)
+				t.Errorf("node %s: no-op broken, caused by %v", addr, call)
 			}
 		}
 	}
 }
 
-// --- Apply remove-node: коннект-фейл к seed не течёт паролем ---
+// --- Apply remove-node: connection file to seed does not contain password ---
 
 func TestApplyClusterRemoveNode_SeedConnectFailNoLeak(t *testing.T) {
 	m := &RedisModule{
@@ -1703,7 +1703,7 @@ func TestApplyClusterRemoveNode_SeedConnectFailNoLeak(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || !fin.Failed {
-		t.Fatalf("ждали failed=true, got %+v", fin)
+		t.Fatalf("waited failed=true, got %+v", fin)
 	}
 	assertEventsNoSecret(t, stream)
 }
@@ -1719,7 +1719,7 @@ func TestValidate_ReshardRequiresFromToSlots(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"action": "reshard"}),
 	})
 	if reply.Ok {
-		t.Fatal("ждали Ok=false без from/to/slots")
+		t.Fatal("expected Ok=false without from/to/slots")
 	}
 }
 
@@ -1735,11 +1735,11 @@ func TestValidate_ReshardRejectsSameFromTo(t *testing.T) {
 		}),
 	})
 	if reply.Ok {
-		t.Fatal("ждали Ok=false на from == to")
+		t.Fatal("waited Ok=false on from == to")
 	}
 }
 
-// {addr} и {ip,port}-форма ОДНОГО узла обязаны распознаваться как совпадение.
+// The {addr} and {ip,port} forms of the SAME node must be recognized as a match.
 func TestValidate_ReshardRejectsSameFromToMixedForm(t *testing.T) {
 	m := &RedisModule{}
 	reply, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
@@ -1752,7 +1752,7 @@ func TestValidate_ReshardRejectsSameFromToMixedForm(t *testing.T) {
 		}),
 	})
 	if reply.Ok {
-		t.Fatal("ждали Ok=false на from == to (addr vs ip+port одного узла)")
+		t.Fatal("waited Ok=false on from == to (addr vs ip+port of one node)")
 	}
 }
 
@@ -1768,7 +1768,7 @@ func TestValidate_ReshardRejectsZeroSlots(t *testing.T) {
 		}),
 	})
 	if reply.Ok {
-		t.Fatal("ждали Ok=false на slots < 1")
+		t.Fatal("waited Ok=false on slots < 1")
 	}
 }
 
@@ -1784,15 +1784,15 @@ func TestValidate_ReshardHappy(t *testing.T) {
 		}),
 	})
 	if !reply.Ok || len(reply.Errors) != 0 {
-		t.Fatalf("ждали Ok=true, got %+v", reply)
+		t.Fatalf("waited Ok=true, got %+v", reply)
 	}
 }
 
-// --- Apply reshard: happy-path (перенос N слотов from→to, последовательность) ---
+// --- Apply reshard: happy-path (transfer N slots from->to, sequence) ---
 
 func TestApplyClusterReshard_HappyPathSequence(t *testing.T) {
-	fromAddr := "10.0.0.1:6379" // m0 — источник, слоты 0..8191
-	toAddr := "10.0.0.2:6379"   // m1 — получатель, слоты 8192..16383
+	fromAddr := "10.0.0.1:6379" // m0 - source, slots 0..8191
+	toAddr := "10.0.0.2:6379"   // m1 - receiver, slots 8192..16383
 	fl := newFleet(fromAddr, toAddr)
 	table := nodesTableWithSlots(
 		masterRowSlots("m0id", "10.0.0.1:6379", 0, 8191),
@@ -1801,7 +1801,7 @@ func TestApplyClusterReshard_HappyPathSequence(t *testing.T) {
 	for _, c := range fl.byAddr {
 		c.nodes = table
 	}
-	// На первом из переносимых слотов (0) лежит ключ → MIGRATE реально вызывается.
+	// The first of the transferred slots (0) contains the key -> MIGRATE is actually called.
 	fl.byAddr[fromAddr].keysInSlot = map[int][]string{0: {"key-a"}}
 	m := fl.module()
 	stream := &applyStream{}
@@ -1823,60 +1823,60 @@ func TestApplyClusterReshard_HappyPathSequence(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed || !fin.Changed {
-		t.Fatalf("ждали успех changed=true, got %+v", fin)
+		t.Fatalf("expected success changed=true, got %+v", fin)
 	}
 	if got := fin.GetOutput().GetFields()["slots_moved"].GetNumberValue(); got != moveN {
-		t.Errorf("slots_moved=%v, ждали %d", got, moveN)
+		t.Errorf("slots_moved=%v, expected %d", got, moveN)
 	}
 
 	src := fl.byAddr[fromAddr]
 	dst := fl.byAddr[toAddr]
 
-	// Переносятся ПЕРВЫЕ N слотов источника по возрастанию: 0, 1, 2.
+	// The FIRST N source slots are transferred in ascending order: 0, 1, 2.
 	wantSlots := []int{0, 1, 2}
 
-	// Цель: SETSLOT <slot> IMPORTING <src-id> на каждый перенесённый слот.
+	// Goal: SETSLOT <slot> IMPORTING <src-id> for each transferred slot.
 	if got := setslotSlots(dst, "IMPORTING"); !equalIntSlices(got, wantSlots) {
-		t.Errorf("цель: SETSLOT IMPORTING слоты=%v, ждали %v", got, wantSlots)
+		t.Errorf("goal: SETSLOT IMPORTING slots=%v, waiting for %v", got, wantSlots)
 	}
-	// Источник: SETSLOT <slot> MIGRATING <dst-id> на каждый слот.
+	// Source: SETSLOT <slot> MIGRATING <dst-id> per slot.
 	if got := setslotSlots(src, "MIGRATING"); !equalIntSlices(got, wantSlots) {
-		t.Errorf("источник: SETSLOT MIGRATING слоты=%v, ждали %v", got, wantSlots)
+		t.Errorf("source: SETSLOT MIGRATING slots=%v, waiting for %v", got, wantSlots)
 	}
-	// SETSLOT NODE <dst-id> на ОБЕИХ нодах для каждого слота (фиксация владельца).
+	// SETSLOT NODE <dst-id> on BOTH nodes for each slot (fixing the owner).
 	if got := setslotSlots(src, "NODE"); !equalIntSlices(got, wantSlots) {
-		t.Errorf("источник: SETSLOT NODE слоты=%v, ждали %v", got, wantSlots)
+		t.Errorf("source: SETSLOT NODE slots=%v, expected %v", got, wantSlots)
 	}
 	if got := setslotSlots(dst, "NODE"); !equalIntSlices(got, wantSlots) {
-		t.Errorf("цель: SETSLOT NODE слоты=%v, ждали %v", got, wantSlots)
+		t.Errorf("target: SETSLOT NODE slots=%v, waiting for %v", got, wantSlots)
 	}
-	// На слоте 0 был ключ → MIGRATE действительно выполнен.
+	// On slot 0 the switch -> MIGRATE was indeed executed.
 	if !hasMigrate(src) {
-		t.Error("источник: ждали MIGRATE для слота с ключом")
+		t.Error("source: expected MIGRATE for slot with key")
 	}
-	// IMPORTING/MIGRATING указывают на правильные node-id (m1id импортирует у m0id).
+	// IMPORTING/MIGRATING point to the correct node-id (m1id imports from m0id).
 	assertSetslotImporting(t, dst, "m0id")
 
-	// ИБ: пароль только в MIGRATE AUTH (на проводе неизбежно), больше нигде.
+	// IB: password only in MIGRATE AUTH (inevitably on the wire), nowhere else.
 	assertEventsNoSecret(t, stream)
 	assertSecretOnlyInMigrateAuth(t, src)
 	assertNoClusterSecret(t, toAddr, dst)
 }
 
-// --- Apply reshard: лосслесс ключей с whitespace в имени ---
+// --- Apply reshard: lossless keys with whitespace in the name ---
 
 func TestApplyClusterReshard_WhitespaceKeysLossless(t *testing.T) {
 	fromAddr := "10.0.0.1:6379"
 	toAddr := "10.0.0.2:6379"
 	fl := newFleet(fromAddr, toAddr)
 	table := nodesTableWithSlots(
-		masterRowSlots("m0id", "10.0.0.1:6379", 0, 0), // ровно один слот у источника
+		masterRowSlots("m0id", "10.0.0.1:6379", 0, 0), // exactly one slot at the source
 		masterRowSlots("m1id", "10.0.0.2:6379", 1, 16383),
 	)
 	for _, c := range fl.byAddr {
 		c.nodes = table
 	}
-	// Слот 0 содержит ключи С разделителями: пробел, таб, перевод строки + обычный.
+	// Slot 0 contains keys Delimited by: space, tab, newline + regular.
 	keys := []string{"user 42", "a\tb", "c\nd", "plain"}
 	fl.byAddr[fromAddr].keysInSlot = map[int][]string{0: append([]string(nil), keys...)}
 	m := fl.module()
@@ -1898,32 +1898,32 @@ func TestApplyClusterReshard_WhitespaceKeysLossless(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed || !fin.Changed {
-		t.Fatalf("ждали успех changed=true, got %+v", fin)
+		t.Fatalf("expected success changed=true, got %+v", fin)
 	}
 
-	// Все ключи (вкл. whitespace-имена) ушли в MIGRATE … KEYS … как ОТДЕЛЬНЫЕ
-	// аргументы, множество совпадает с исходным (типизированный GetKeysInSlot).
+	// All keys (including whitespace names) went to MIGRATE... KEYS... as SEPARATE
+	// arguments, the set is the same as the original one (typed GetKeysInSlot).
 	got := migrateKeyArgs(t, fl.byAddr[fromAddr])
 	if !equalStringSets(got, keys) {
-		t.Fatalf("MIGRATE KEYS лоссово: got %q, ждали %q (whitespace-ключи расщеплены/потеряны)", got, keys)
+		t.Fatalf("MIGRATE KEYS loss: got %q, expected %q (whitespace keys split/lost)", got, keys)
 	}
 	if !containsString(got, "user 42") {
-		t.Errorf(`ключ "user 42" не передан как один аргумент MIGRATE: %q`, got)
+		t.Errorf(`key "user 42" not passed as one argument MIGRATE: %q`, got)
 	}
 }
 
-// --- Apply reshard: слот с >1 непустым батчем (multi-batch цикл) ---
+// --- Apply reshard: slot with >1 non-empty batch (multi-batch cycle) ---
 
-// TestApplyClusterReshard_MultiBatchSlotLossless — reshard-зеркало multi-batch
-// guard: единственный переносимый слот (0) отдаёт ключи тремя порциями, цикл
-// migrateOneSlot обязан опустошить слот полностью (3 MIGRATE) и зафиксировать
-// владельца только после. whitespace-ключ — в 3-й (последней) порции.
+// TestApplyClusterReshard_MultiBatchSlotLossless - multi-batch reshard mirror
+// guard: the only portable slot (0) gives out keys in three portions, loop
+// migrateOneSlot must empty the slot completely (3 MIGRATE) and commit
+// owner only after. whitespace key - in the 3rd (last) portion.
 func TestApplyClusterReshard_MultiBatchSlotLossless(t *testing.T) {
 	fromAddr := "10.0.0.1:6379"
 	toAddr := "10.0.0.2:6379"
 	fl := newFleet(fromAddr, toAddr)
 	table := nodesTableWithSlots(
-		masterRowSlots("m0id", "10.0.0.1:6379", 0, 0), // ровно один слот у источника
+		masterRowSlots("m0id", "10.0.0.1:6379", 0, 0), // exactly one slot at the source
 		masterRowSlots("m1id", "10.0.0.2:6379", 1, 16383),
 	)
 	for _, c := range fl.byAddr {
@@ -1931,7 +1931,7 @@ func TestApplyClusterReshard_MultiBatchSlotLossless(t *testing.T) {
 	}
 	batch1 := []string{"k1", "k2"}
 	batch2 := []string{"k3"}
-	batch3 := []string{"c\nd", "user 42"} // whitespace-ключи в последней порции
+	batch3 := []string{"c\nd", "user 42"} // whitespace keys in the last portion
 	fl.byAddr[fromAddr].keysInSlotBatches = map[int][][]string{
 		0: {batch1, batch2, batch3},
 	}
@@ -1954,7 +1954,7 @@ func TestApplyClusterReshard_MultiBatchSlotLossless(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed || !fin.Changed {
-		t.Fatalf("ждали успех changed=true, got %+v", fin)
+		t.Fatalf("expected success changed=true, got %+v", fin)
 	}
 
 	src := fl.byAddr[fromAddr]
@@ -1963,18 +1963,18 @@ func TestApplyClusterReshard_MultiBatchSlotLossless(t *testing.T) {
 
 	got := migrateKeyArgs(t, src)
 	if !equalStringSets(got, wantKeys) {
-		t.Fatalf("multi-batch лоссово: MIGRATE KEYS=%q, ждали объединение порций %q", got, wantKeys)
+		t.Fatalf("multi-batch loss: MIGRATE KEYS=%q, waiting for the merging of portions %q", got, wantKeys)
 	}
 	if !containsString(got, "user 42") {
-		t.Errorf(`whitespace-ключ "user 42" из 3-й порции не переехал/расщеплён: %q`, got)
+		t.Errorf(`whitespace key "user 42" from the 3rd portion did not move/split: %q`, got)
 	}
 	if n := countMigrate(src); n != 3 {
-		t.Errorf("ждали 3 MIGRATE (по порции на батч), got %d", n)
+		t.Errorf("expected 3 MIGRATE (portions per batch), got %d", n)
 	}
 	if q := src.keysInSlotBatches[0]; len(q) != 0 {
-		t.Errorf("очередь слота 0 не исчерпана (цикл недокрутил): осталось %d порций", len(q))
+		t.Errorf("queue of slot 0 is not exhausted (the cycle is not enough): %d portions left", len(q))
 	}
-	// Порядок фаз слота 0: IMPORTING(цель)→MIGRATING(источник)→3×MIGRATE→SETSLOT NODE.
+	// The phase order of slot 0 is: IMPORTING(target)->MIGRATING(source)->3xMIGRATE->SETSLOT NODE.
 	assertSlotPhaseOrder(t, src, 0)
 	assertSetslotImporting(t, dst, "m0id")
 
@@ -1982,10 +1982,10 @@ func TestApplyClusterReshard_MultiBatchSlotLossless(t *testing.T) {
 	assertSecretOnlyInMigrateAuth(t, src)
 }
 
-// --- Apply reshard: from не master в кластере → failed, пароль не течёт ---
+// --- Apply reshard: from not master in the cluster -> failed, password does not leak ---
 
 func TestApplyClusterReshard_UnknownFromMaster(t *testing.T) {
-	fromAddr := "10.0.0.9:6379" // нет в топологии
+	fromAddr := "10.0.0.9:6379" // no in topology
 	toAddr := "10.0.0.2:6379"
 	fl := newFleet(fromAddr, toAddr)
 	table := nodesTableWithSlots(
@@ -2011,23 +2011,23 @@ func TestApplyClusterReshard_UnknownFromMaster(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || !fin.Failed {
-		t.Fatalf("ждали failed=true на from вне кластера, got %+v", fin)
+		t.Fatalf("expected failed=true on from outside the cluster, got %+v", fin)
 	}
-	// Никаких SETSLOT/MIGRATE до резолва топологии.
+	// No SETSLOT/MIGRATE until the topology is resolved.
 	for _, c := range fl.byAddr {
 		for _, call := range c.calls {
 			if isClusterSub(call, "SETSLOT") {
-				t.Error("SETSLOT не должен вызываться при нерезолвимом from")
+				t.Error("SETSLOT should not be called when from is unresolvable")
 			}
 		}
 	}
 	assertEventsNoSecret(t, stream)
 }
 
-// --- Apply reshard: slots > имеющихся у источника → failed ---
+// --- Apply reshard: slots > available at the source -> failed ---
 
 func TestApplyClusterReshard_SlotsExceedOwned(t *testing.T) {
-	fromAddr := "10.0.0.1:6379" // m0 владеет ровно 4 слотами 0..3
+	fromAddr := "10.0.0.1:6379" // m0 owns exactly 4 slots 0..3
 	toAddr := "10.0.0.2:6379"
 	fl := newFleet(fromAddr, toAddr)
 	table := nodesTableWithSlots(
@@ -2046,25 +2046,25 @@ func TestApplyClusterReshard_SlotsExceedOwned(t *testing.T) {
 			"action": "reshard",
 			"from":   nodeMapParam(fromAddr),
 			"to":     nodeMapParam(toAddr),
-			"slots":  5, // больше, чем 4 имеющихся
+			"slots":  5, // more than 4 available
 		}),
 	}, stream)
 
 	fin := stream.final()
 	if fin == nil || !fin.Failed {
-		t.Fatalf("ждали failed=true на slots > имеющихся, got %+v", fin)
+		t.Fatalf("expected failed=true on slots > available, got %+v", fin)
 	}
-	// Перенос не начат: ни одного SETSLOT.
+	// Transfer not started: no SETSLOT.
 	for _, c := range fl.byAddr {
 		for _, call := range c.calls {
 			if isClusterSub(call, "SETSLOT") {
-				t.Error("SETSLOT не должен вызываться при slots > имеющихся")
+				t.Error("SETSLOT should not be called when slots > available")
 			}
 		}
 	}
 }
 
-// --- Apply reshard: коннект-фейл к from не течёт паролем ---
+// --- Apply reshard: connection file to from does not leak password ---
 
 func TestApplyClusterReshard_FromConnectFailNoLeak(t *testing.T) {
 	m := &RedisModule{
@@ -2086,13 +2086,13 @@ func TestApplyClusterReshard_FromConnectFailNoLeak(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || !fin.Failed {
-		t.Fatalf("ждали failed=true, got %+v", fin)
+		t.Fatalf("waited failed=true, got %+v", fin)
 	}
 	assertEventsNoSecret(t, stream)
 }
 
-// equalIntSlices — точное поэлементное сравнение (порядок важен: слоты в порядке
-// переноса). setslotSlots уже сортирует, поэтому сравнение детерминировано.
+// equalIntSlices - exact element-wise comparison (order is important: slots are in order
+// transfer). setslotSlots already sorts, so the comparison is deterministic.
 func equalIntSlices(a, b []int) bool {
 	if len(a) != len(b) {
 		return false
@@ -2105,9 +2105,9 @@ func equalIntSlices(a, b []int) bool {
 	return true
 }
 
-// --- assert-хелперы (remove-node) ---
+// --- assert helpers (remove-node) ---
 
-// setslotSlots — слоты, которым нода слала CLUSTER SETSLOT <slot> <sub>.
+// setslotSlots - slots to which the node sent CLUSTER SETSLOT <slot> <sub>.
 func setslotSlots(c *clusterConn, sub string) []int {
 	var got []int
 	for _, call := range c.calls {
@@ -2125,7 +2125,7 @@ func setslotSlots(c *clusterConn, sub string) []int {
 	return got
 }
 
-// assertSetslotImporting — нода получила хотя бы один SETSLOT … IMPORTING <srcID>.
+// assertSetslotImporting - the node has received at least one SETSLOT... IMPORTING <srcID>.
 func assertSetslotImporting(t *testing.T, c *clusterConn, srcID string) {
 	t.Helper()
 	for _, call := range c.calls {
@@ -2138,10 +2138,10 @@ func assertSetslotImporting(t *testing.T, c *clusterConn, srcID string) {
 			}
 		}
 	}
-	t.Errorf("ждали SETSLOT IMPORTING %s, не найдено", srcID)
+	t.Errorf("expected SETSLOT IMPORTING %s, not found", srcID)
 }
 
-// hasMigrate — нода исполнила хотя бы один MIGRATE.
+// hasMigrate - the node has executed at least one MIGRATE.
 func hasMigrate(c *clusterConn) bool {
 	for _, call := range c.calls {
 		if v0, _ := call[0].(string); strings.EqualFold(v0, "MIGRATE") {
@@ -2151,8 +2151,8 @@ func hasMigrate(c *clusterConn) bool {
 	return false
 }
 
-// countMigrate — сколько MIGRATE-вызовов исполнила нода (в multi-batch цикле —
-// один на непустую порцию ключей слота).
+// countMigrate - how many MIGRATE calls the node executed (in a multi-batch cycle -
+// one per non-empty portion of slot keys).
 func countMigrate(c *clusterConn) int {
 	n := 0
 	for _, call := range c.calls {
@@ -2163,12 +2163,12 @@ func countMigrate(c *clusterConn) int {
 	return n
 }
 
-// assertSlotPhaseOrder проверяет на ИСТОЧНИКЕ корректный порядок фаз миграции
-// конкретного слота: SETSLOT <slot> MIGRATING (ровно раз) → один или несколько
-// MIGRATE → SETSLOT <slot> NODE (фиксация владельца ПОСЛЕ всех MIGRATE). Это
-// гарантирует, что владелец слота не зафиксирован раньше, чем перенесены все
-// порции ключей (иначе — потеря данных в multi-batch). MIGRATE на источнике
-// относятся к текущему слоту (за раз мигрируется один слот).
+// assertSlotPhaseOrder checks the correct order of migration phases on the SOURCE
+// specific slot: SETSLOT <slot> MIGRATING (exactly once) -> one or more
+// MIGRATE -> SETSLOT <slot> NODE (fix owner AFTER all MIGRATEs). This
+// ensures that the slot owner is not fixed before all have been transferred
+// portions of keys (otherwise, data loss in multi-batch). MIGRATE on source
+// refer to the current slot (one slot is migrated at a time).
 func assertSlotPhaseOrder(t *testing.T, c *clusterConn, slot int) {
 	t.Helper()
 	slotArg := strconv.Itoa(slot)
@@ -2188,7 +2188,7 @@ func assertSlotPhaseOrder(t *testing.T, c *clusterConn, slot int) {
 		switch sub, _ := call[3].(string); {
 		case strings.EqualFold(sub, "MIGRATING"):
 			if migratingAt != -1 {
-				t.Errorf("слот %d: более одного SETSLOT MIGRATING", slot)
+				t.Errorf("slot %d: more than one SETSLOT MIGRATING", slot)
 			}
 			migratingAt = i
 		case strings.EqualFold(sub, "NODE"):
@@ -2196,30 +2196,30 @@ func assertSlotPhaseOrder(t *testing.T, c *clusterConn, slot int) {
 		}
 	}
 	if migratingAt < 0 {
-		t.Fatalf("слот %d: нет SETSLOT MIGRATING на источнике", slot)
+		t.Fatalf("slot %d: no SETSLOT MIGRATING on source", slot)
 	}
 	if nodeAt < 0 {
-		t.Fatalf("слот %d: нет SETSLOT NODE на источнике", slot)
+		t.Fatalf("slot %d: no SETSLOT NODE on source", slot)
 	}
 	if len(migrateIdx) == 0 {
-		t.Fatalf("слот %d: нет ни одного MIGRATE между MIGRATING и NODE", slot)
+		t.Fatalf("slot %d: there is no MIGRATE between MIGRATING and NODE", slot)
 	}
 	if nodeAt < migratingAt {
-		t.Errorf("слот %d: SETSLOT NODE (idx %d) раньше MIGRATING (idx %d)", slot, nodeAt, migratingAt)
+		t.Errorf("slot %d: SETSLOT NODE (idx %d) before MIGRATING (idx %d)", slot, nodeAt, migratingAt)
 	}
 	for _, mi := range migrateIdx {
 		if mi < migratingAt {
-			t.Errorf("слот %d: MIGRATE (idx %d) раньше SETSLOT MIGRATING (idx %d)", slot, mi, migratingAt)
+			t.Errorf("slot %d: MIGRATE (idx %d) before SETSLOT MIGRATING (idx %d)", slot, mi, migratingAt)
 		}
 		if mi > nodeAt {
-			t.Errorf("слот %d: MIGRATE (idx %d) ПОСЛЕ SETSLOT NODE (idx %d) — владелец зафиксирован до переноса", slot, mi, nodeAt)
+			t.Errorf("slot %d: MIGRATE (idx %d) AFTER SETSLOT NODE (idx %d) - owner fixed before transfer", slot, mi, nodeAt)
 		}
 	}
 }
 
-// assertSecretOnlyInMigrateAuth допускает пароль ТОЛЬКО как AUTH-аргумент MIGRATE
-// (неизбежно на проводе для password-protected destination); любое другое
-// появление пароля в командах — утечка.
+// assertSecretOnlyInMigrateAuth allows password ONLY as an AUTH argument to MIGRATE
+// (inevitably on the wire for a password-protected destination); any other
+// the appearance of a password in commands is a leak.
 func assertSecretOnlyInMigrateAuth(t *testing.T, c *clusterConn) {
 	t.Helper()
 	for i, call := range c.calls {
@@ -2232,27 +2232,27 @@ func assertSecretOnlyInMigrateAuth(t *testing.T, c *clusterConn) {
 			if !ok || !strings.Contains(s, secretPass) {
 				continue
 			}
-			// MIGRATE host port "" db timeout AUTH <pass> KEYS … → пароль на позиции
-			// сразу после "AUTH".
+			// MIGRATE host port "" db timeout AUTH <pass> KEYS... -> password on position
+			// right after "AUTH".
 			if isMigrate && j > 0 {
 				if prev, _ := call[j-1].(string); strings.EqualFold(prev, "AUTH") {
 					continue
 				}
 			}
-			t.Errorf("команда[%d] несёт пароль вне MIGRATE AUTH: %v", i, call)
+			t.Errorf("command[%d] carries the password outside MIGRATE AUTH: %v", i, call)
 		}
 	}
 }
 
 // ============================= explicit topology =============================
 //
-// Опциональный params.topology задаёт ЯВНУЮ раскладку шардов (оператор сам распихал
-// VM по зонам / закодировал anti-affinity в списке). buildClusterPlanExplicit —
-// зеркало buildClusterPlan: masters[i]=nodes[topology[i][0]], реплики из хвостов
-// (replicaOf=i), слоты — та же allocateSlots(len(topology)). Сборка (MEET/ADDSLOTS/
-// REPLICATE), идемпотентность и no-secret-leak переиспользуются (общий clusterPlan).
+// The optional params.topology specifies an EXPLICIT layout of shards (the operator himself stuffed
+// VM by zone / coded anti-affinity in the list). buildClusterPlanExplicit -
+// mirror buildClusterPlan: masters[i]=nodes[topology[i][0]], replicas from tails
+// (replicaOf=i), slots - the same allocateSlots(len(topology)). Assembly (MEET/ADDSLOTS/
+// REPLICATE), idempotency and no-secret-leak are reused (general clusterPlan).
 
-// topologyParam строит params.topology — список шардов из списков SID.
+// topologyParam builds params.topology - a list of shards from SID lists.
 func topologyParam(shards ...[]string) []any {
 	out := make([]any, 0, len(shards))
 	for _, shard := range shards {
@@ -2265,8 +2265,8 @@ func topologyParam(shards ...[]string) []any {
 	return out
 }
 
-// namedNodesParam строит params.nodes-map с ЯВНЫМИ ключами (SID) — topology
-// ссылается на ноды по ключу, а не по индексу (в отличие от clusterNodesParam).
+// namedNodesParam builds params.nodes-map with EXPLICIT keys (SID) - topology
+// refers to nodes by key, not by index (unlike clusterNodesParam).
 func namedNodesParam(byKey map[string]string) map[string]any {
 	nodes := map[string]any{}
 	for key, addr := range byKey {
@@ -2288,7 +2288,7 @@ func TestValidate_ClusterTopology(t *testing.T) {
 		name     string
 		params   map[string]any
 		wantOk   bool
-		errMatch string // подстрока в одной из ошибок (если wantOk=false)
+		errMatch string // substring in one of the errors (if wantOk=false)
 	}{
 		{
 			name: "happy: 2 shards x 1 replica covers all nodes",
@@ -2350,7 +2350,7 @@ func TestValidate_ClusterTopology(t *testing.T) {
 			name: "unused node (not covered by topology) rejected",
 			params: map[string]any{
 				"action":   "create",
-				"nodes":    nodes, // 4 ноды, но topology покрывает только 3
+				"nodes":    nodes, // 4 nodes, but topology only covers 3
 				"topology": topologyParam([]string{"node-a", "node-c"}, []string{"node-b"}),
 			},
 			wantOk:   false,
@@ -2361,7 +2361,7 @@ func TestValidate_ClusterTopology(t *testing.T) {
 			params: map[string]any{
 				"action":             "create",
 				"nodes":              nodes,
-				"replicas_per_shard": 2, // ждёт шарды по 3 ноды, а они по 2
+				"replicas_per_shard": 2, // waiting for shards with 3 nodes, but they have 2
 				"topology":           topologyParam([]string{"node-a", "node-c"}, []string{"node-b", "node-d"}),
 			},
 			wantOk:   false,
@@ -2372,7 +2372,7 @@ func TestValidate_ClusterTopology(t *testing.T) {
 			params: map[string]any{
 				"action":             "create",
 				"nodes":              nodes,
-				"replicas_per_shard": 1, // шарды по 2 = 1 master + 1 replica → ок
+				"replicas_per_shard": 1, // 2 shards = 1 master + 1 replica -> ok
 				"topology":           topologyParam([]string{"node-a", "node-c"}, []string{"node-b", "node-d"}),
 			},
 			wantOk: true,
@@ -2387,25 +2387,25 @@ func TestValidate_ClusterTopology(t *testing.T) {
 				Params: mustStruct(t, tc.params),
 			})
 			if reply.Ok != tc.wantOk {
-				t.Fatalf("Ok=%v, ждали %v (errors=%v)", reply.Ok, tc.wantOk, reply.Errors)
+				t.Fatalf("Ok=%v, expected %v (errors=%v)", reply.Ok, tc.wantOk, reply.Errors)
 			}
 			if tc.wantOk {
 				return
 			}
 			joined := strings.Join(reply.Errors, " | ")
 			if !strings.Contains(joined, tc.errMatch) {
-				t.Fatalf("ошибка не содержит %q: %v", tc.errMatch, reply.Errors)
+				t.Fatalf("error does not contain %q: %v", tc.errMatch, reply.Errors)
 			}
 		})
 	}
 }
 
-// --- buildClusterPlanExplicit: раскладка из явной топологии ---
+// --- buildClusterPlanExplicit: layout from explicit topology ---
 
 func TestBuildClusterPlanExplicit_RolesAndSlots(t *testing.T) {
-	// Ключи расставлены так, что АВТО-раскладка (sort) дала бы мастерами node-a/node-b;
-	// topology же делает мастерами node-b/node-d — доказывает, что topology перекрывает
-	// sort, а не совпадает с ним случайно.
+	// The keys are arranged in such a way that the AUTO layout (sort) would give node-a/node-b masters;
+	// topology makes node-b/node-d masters - it proves that topology covers
+	// sort rather than randomly matching it.
 	nodes := []clusterNode{
 		{key: "node-a", addr: "10.0.0.1:6379", ip: "10.0.0.1", port: 6379},
 		{key: "node-b", addr: "10.0.0.2:6379", ip: "10.0.0.2", port: 6379},
@@ -2422,29 +2422,29 @@ func TestBuildClusterPlanExplicit_RolesAndSlots(t *testing.T) {
 		t.Fatalf("buildClusterPlanExplicit: %v", err)
 	}
 
-	// Мастера — ПЕРВЫЕ SID шардов в порядке topology (не sort).
+	// Masters are the FIRST SIDs of shards in topology order (not sort).
 	if len(plan.masters) != 2 || plan.masters[0].key != "node-b" || plan.masters[1].key != "node-d" {
-		t.Fatalf("masters=%v, ждали [node-b node-d]", masterKeys(plan))
+		t.Fatalf("masters=%v, waited [node-b node-d]", masterKeys(plan))
 	}
-	// Реплики — хвосты шардов, replicaOf указывает на их шард.
+	// Replicas are the tails of shards, replicaOf points to their shard.
 	if len(plan.replicas) != 2 || len(plan.replicaOf) != 2 {
-		t.Fatalf("replicas=%v replicaOf=%v, ждали по 2", replicaKeys(plan), plan.replicaOf)
+		t.Fatalf("replicas=%v replicaOf=%v, expected 2", replicaKeys(plan), plan.replicaOf)
 	}
 	if plan.replicas[0].key != "node-a" || plan.replicaOf[0] != 0 {
-		t.Errorf("replica[0]=%q->shard%d, ждали node-a->shard0", plan.replicas[0].key, plan.replicaOf[0])
+		t.Errorf("replica[0]=%q->shard%d, expected node-a->shard0", plan.replicas[0].key, plan.replicaOf[0])
 	}
 	if plan.replicas[1].key != "node-c" || plan.replicaOf[1] != 1 {
-		t.Errorf("replica[1]=%q->shard%d, ждали node-c->shard1", plan.replicas[1].key, plan.replicaOf[1])
+		t.Errorf("replica[1]=%q->shard%d, expected node-c->shard1", plan.replicas[1].key, plan.replicaOf[1])
 	}
-	// Слоты — та же равномерная allocateSlots(2): полное покрытие 16384 без дыр.
+	// Slots - the same uniform allocateSlots(2): full coverage of 16384 without holes.
 	if len(plan.slots) != 2 {
-		t.Fatalf("slots=%v, ждали 2 диапазона", plan.slots)
+		t.Fatalf("slots=%v, waiting for 2 ranges", plan.slots)
 	}
 	assertFullSlotCoverage(t, plan.slots...)
 }
 
 func TestBuildClusterPlanExplicit_MasterOnlyShards(t *testing.T) {
-	// Шарды без реплик (master-only) — реплик нет, replicaOf пуст, слоты полны.
+	// Shards without replicas (master-only) - there are no replicas, replicaOf is empty, slots are full.
 	nodes := []clusterNode{
 		{key: "node-a", addr: "10.0.0.1:6379", ip: "10.0.0.1", port: 6379},
 		{key: "node-b", addr: "10.0.0.2:6379", ip: "10.0.0.2", port: 6379},
@@ -2455,10 +2455,10 @@ func TestBuildClusterPlanExplicit_MasterOnlyShards(t *testing.T) {
 		t.Fatalf("buildClusterPlanExplicit: %v", err)
 	}
 	if len(plan.masters) != 3 {
-		t.Fatalf("masters=%v, ждали 3", masterKeys(plan))
+		t.Fatalf("masters=%v, waited 3", masterKeys(plan))
 	}
 	if len(plan.replicas) != 0 || len(plan.replicaOf) != 0 {
-		t.Fatalf("ждали 0 реплик, got replicas=%v replicaOf=%v", replicaKeys(plan), plan.replicaOf)
+		t.Fatalf("expected 0 replicas, got replicas=%v replicaOf=%v", replicaKeys(plan), plan.replicaOf)
 	}
 	assertFullSlotCoverage(t, plan.slots...)
 }
@@ -2479,7 +2479,7 @@ func replicaKeys(p clusterPlan) []string {
 	return out
 }
 
-// --- Apply create с явной топологией: MEET/ADDSLOTS/REPLICATE по списку оператора ---
+// --- Apply create with explicit topology: MEET/ADDSLOTS/REPLICATE by operator list ---
 
 func TestApplyClusterCreate_ExplicitTopology(t *testing.T) {
 	addrByKey := map[string]string{
@@ -2494,7 +2494,7 @@ func TestApplyClusterCreate_ExplicitTopology(t *testing.T) {
 	m := fl.module()
 	stream := &applyStream{}
 
-	// topology: мастера node-b/node-d (НЕ первые по sort), реплики node-a/node-c.
+	// topology: node-b/node-d masters (NOT first in sort), node-a/node-c replicas.
 	err := m.Apply(&pluginv1.ApplyRequest{
 		State: "cluster",
 		Params: mustStruct(t, map[string]any{
@@ -2510,7 +2510,7 @@ func TestApplyClusterCreate_ExplicitTopology(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed || !fin.Changed {
-		t.Fatalf("ждали успех changed=true, got %+v", fin)
+		t.Fatalf("expected success changed=true, got %+v", fin)
 	}
 
 	masterB := fl.byAddr[addrByKey["node-b"]]
@@ -2518,14 +2518,14 @@ func TestApplyClusterCreate_ExplicitTopology(t *testing.T) {
 	replicaA := fl.byAddr[addrByKey["node-a"]]
 	replicaC := fl.byAddr[addrByKey["node-c"]]
 
-	// ADDSLOTS — только мастерам из topology (node-b/node-d), полное покрытие 16384.
+	// ADDSLOTS - only to masters from topology (node-b/node-d), full coverage 16384.
 	rB := assertAddSlots(t, masterB)
 	rD := assertAddSlots(t, masterD)
 	assertNoAddSlots(t, replicaA)
 	assertNoAddSlots(t, replicaC)
 	assertFullSlotCoverage(t, rB, rD)
 
-	// REPLICATE — реплики привязаны к мастеру СВОЕГО шарда (а не round-robin по sort).
+	// REPLICATE - replicas are tied to the master of YOUR shard (and not round-robin by sort).
 	assertReplicateTo(t, replicaA, masterB.id)
 	assertReplicateTo(t, replicaC, masterD.id)
 

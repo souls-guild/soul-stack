@@ -17,9 +17,9 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// genCertPEM возвращает (certPEM, keyPEM) самоподписанного ECDSA-сертификата —
-// материал для L0 client-cert / CA проверок (валидный для x509.AppendCertsFromPEM
-// и tls.X509KeyPair). Без сети/файлов.
+// genCertPEM returns (certPEM, keyPEM) self-signed ECDSA certificate -
+// material for L0 client-cert / CA checks (valid for x509.AppendCertsFromPEM
+// and tls.X509KeyPair). No network/files.
 func genCertPEM(t *testing.T) (certPEM, keyPEM string) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -47,7 +47,7 @@ func genCertPEM(t *testing.T) (certPEM, keyPEM string) {
 	return certPEM, keyPEM
 }
 
-// --- buildTLSConfig (чистая функция) ---
+// --- buildTLSConfig (pure function) ---
 
 func TestBuildTLSConfig_DisabledReturnsNil(t *testing.T) {
 	cfg, err := buildTLSConfig(tlsParams{enabled: false, caPEM: "ignored"})
@@ -55,7 +55,7 @@ func TestBuildTLSConfig_DisabledReturnsNil(t *testing.T) {
 		t.Fatalf("buildTLSConfig: %v", err)
 	}
 	if cfg != nil {
-		t.Fatal("tls выключен → *tls.Config обязан быть nil (plaintext-коннект)")
+		t.Fatal("tls is disabled -> *tls.Config must be nil (plaintext connection)")
 	}
 }
 
@@ -66,13 +66,13 @@ func TestBuildTLSConfig_CALoadedVerifyOn(t *testing.T) {
 		t.Fatalf("buildTLSConfig: %v", err)
 	}
 	if cfg == nil {
-		t.Fatal("tls включён → *tls.Config обязан быть не-nil")
+		t.Fatal("tls is enabled -> *tls.Config must be non-nil")
 	}
 	if cfg.RootCAs == nil {
-		t.Fatal("CA PEM передан → RootCAs обязан быть загружен")
+		t.Fatal("CA PEM is transferred -> RootCAs must be loaded")
 	}
 	if cfg.InsecureSkipVerify {
-		t.Fatal("default — ПРОВЕРЯТЬ сертификат (skip_verify не задан → false)")
+		t.Fatal("default - VERIFY certificate (skip_verify is not set -> false)")
 	}
 }
 
@@ -82,7 +82,7 @@ func TestBuildTLSConfig_SkipVerifyPropagated(t *testing.T) {
 		t.Fatalf("buildTLSConfig: %v", err)
 	}
 	if !cfg.InsecureSkipVerify {
-		t.Fatal("tls_skip_verify=true → InsecureSkipVerify обязан быть проброшен")
+		t.Fatal("tls_skip_verify=true -> InsecureSkipVerify must be skipped")
 	}
 }
 
@@ -94,14 +94,14 @@ func TestBuildTLSConfig_ClientCertWhenPresent(t *testing.T) {
 		t.Fatalf("buildTLSConfig: %v", err)
 	}
 	if len(cfg.Certificates) != 1 {
-		t.Fatalf("client-cert (cert+key) → ровно 1 Certificate, got %d (mTLS)", len(cfg.Certificates))
+		t.Fatalf("client-cert (cert+key) -> exactly 1 Certificate, got %d (mTLS)", len(cfg.Certificates))
 	}
 }
 
 func TestBuildTLSConfig_BadCAErrors(t *testing.T) {
 	_, err := buildTLSConfig(tlsParams{enabled: true, caPEM: "-----BEGIN CERTIFICATE-----\nnot-pem\n-----END CERTIFICATE-----"})
 	if err == nil {
-		t.Fatal("битый CA PEM → ошибка")
+		t.Fatal("broken CA PEM -> error")
 	}
 }
 
@@ -109,36 +109,36 @@ func TestBuildTLSConfig_CertWithoutKeyErrors(t *testing.T) {
 	certPEM, _ := genCertPEM(t)
 	_, err := buildTLSConfig(tlsParams{enabled: true, certPEM: certPEM})
 	if err == nil {
-		t.Fatal("tls_cert без tls_key → ошибка (mTLS пара только вместе)")
+		t.Fatal("tls_cert without tls_key -> error (mTLS pair only together)")
 	}
 }
 
-// TestBuildTLSConfig_CABundleLoadsBoth — склейка двух CA PEM (CA-rollover rotate_tls:
-// scenario отдаёт tls_ca = старый ∪ новый CA) → x509-пул принимает ОБА
-// (AppendCertsFromPEM парсит несколько PEM-блоков подряд). Фиксирует, что bundle-строка
-// из compute.tls_ca валидна для плагина без правок самого плагина.
+// TestBuildTLSConfig_CABundleLoadsBoth - gluing two CA PEMs (CA-rollover rotate_tls:
+// scenario gives tls_ca = old new CA) -> x509-pool receives BOTH
+// (AppendCertsFromPEM parses several PEM blocks in a row). Fixes that the bundle string
+// from compute.tls_ca is valid for the plugin without editing the plugin itself.
 func TestBuildTLSConfig_CABundleLoadsBoth(t *testing.T) {
 	caOld, _ := genCertPEM(t)
 	caNew, _ := genCertPEM(t)
-	bundle := caOld + "\n" + caNew // так compute.tls_ca склеивает старый+новый CA
+	bundle := caOld + "\n" + caNew // so compute.tls_ca merges the old + new CA
 	cfg, err := buildTLSConfig(tlsParams{enabled: true, caPEM: bundle})
 	if err != nil {
 		t.Fatalf("buildTLSConfig(bundle): %v", err)
 	}
 	if cfg == nil || cfg.RootCAs == nil {
-		t.Fatal("bundle CA → RootCAs обязан быть загружен")
+		t.Fatal("bundle CA -> RootCAs must be loaded")
 	}
 	if got := len(cfg.RootCAs.Subjects()); got != 2 {
-		t.Fatalf("bundle из ДВУХ CA → пул обязан содержать оба сертификата, got %d", got)
+		t.Fatalf("bundle of TWO CAs -> the pool must contain both certificates, got %d", got)
 	}
 }
 
-// --- parseTLS + проброс в connConfig через connect-инъекцию ---
+// --- parseTLS + forwarding to connConfig via connect injection ---
 
-// TestApply_TLSParamsReachConnect — все state-пути (command/config/replica/
-// sentinel) читают TLS из params через parseConnConfig → tls попадает в
-// connConfig, который видит connect-инъекция. cluster коннектится по nodes-map,
-// проверен отдельно (TestApplyCluster_TLSReachesNodeConnect).
+// TestApply_TLSParamsReachConnect - all state paths (command/config/replica/
+// sentinel) read TLS from params via parseConnConfig -> tls gets into
+// connConfig, which the connect injection sees. cluster connects via nodes-map,
+// tested separately (TestApplyCluster_TLSReachesNodeConnect).
 func TestApply_TLSParamsReachConnect(t *testing.T) {
 	caPEM, _ := genCertPEM(t)
 	certPEM, keyPEM := genCertPEM(t)
@@ -165,25 +165,25 @@ func TestApply_TLSParamsReachConnect(t *testing.T) {
 	}, &applyStream{})
 
 	if !captured.tls.enabled {
-		t.Fatal("tls=true не доехал до connConfig.tls.enabled")
+		t.Fatal("tls=true did not reach connConfig.tls.enabled")
 	}
 	if captured.tls.caPEM != caPEM {
-		t.Error("tls_ca не доехал до connConfig.tls.caPEM")
+		t.Error("tls_ca did not reach connConfig.tls.caPEM")
 	}
 	if captured.tls.certPEM != certPEM || captured.tls.keyPEM != keyPEM {
-		t.Error("client-cert (tls_cert/tls_key) не доехал до connConfig.tls")
+		t.Error("client-cert (tls_cert/tls_key) did not reach connConfig.tls")
 	}
 	if captured.tls.skipVerify {
-		t.Error("tls_skip_verify=false должен пробросить false (default secure)")
+		t.Error("tls_skip_verify=false should forward false (default secure)")
 	}
 
-	// Из тех же params строим итоговый *tls.Config — он корректен (CA + client-cert).
+	// From the same params we build the final *tls.Config - it is correct (CA + client-cert).
 	cfg, err := buildTLSConfig(captured.tls)
 	if err != nil {
-		t.Fatalf("buildTLSConfig из доехавших params: %v", err)
+		t.Fatalf("buildTLSConfig from the arrived params: %v", err)
 	}
 	if cfg.RootCAs == nil || len(cfg.Certificates) != 1 || cfg.InsecureSkipVerify {
-		t.Fatalf("tls.Config неполон: RootCAs=%v certs=%d skip=%v", cfg.RootCAs != nil, len(cfg.Certificates), cfg.InsecureSkipVerify)
+		t.Fatalf("tls.Config is incomplete: RootCAs=%v certs=%d skip=%v", cfg.RootCAs != nil, len(cfg.Certificates), cfg.InsecureSkipVerify)
 	}
 }
 
@@ -201,18 +201,18 @@ func TestApply_TLSDefaultOffPlaintext(t *testing.T) {
 	}, &applyStream{})
 
 	if captured.tls.enabled {
-		t.Fatal("tls не задан → enabled должен быть false (plaintext, back-compat)")
+		t.Fatal("tls is not set -> enabled should be false (plaintext, back-compat)")
 	}
 	cfg, err := buildTLSConfig(captured.tls)
 	if err != nil || cfg != nil {
-		t.Fatalf("tls выключен → buildTLSConfig nil,nil; got cfg=%v err=%v", cfg, err)
+		t.Fatalf("tls disabled -> buildTLSConfig nil,nil; got cfg=%v err=%v", cfg, err)
 	}
 }
 
-// TestApplyCluster_TLSReachesNodeConnect — cluster-state читает tls из params и
-// прокидывает в connConfig каждой ноды (только network_outbound, своего vault
-// нет). Перехватываем connect, отдаём already-formed-кластер → проба ноды видит
-// TLS-параметры.
+// TestApplyCluster_TLSReachesNodeConnect - cluster-state reads tls from params and
+// sends it to the connConfig of each node (only network_outbound, its vault
+// no). We intercept connect, give the already-formed cluster -> the sample node sees
+// TLS parameters.
 func TestApplyCluster_TLSReachesNodeConnect(t *testing.T) {
 	caPEM, _ := genCertPEM(t)
 	var sawTLS bool
@@ -221,8 +221,8 @@ func TestApplyCluster_TLSReachesNodeConnect(t *testing.T) {
 			if cfg.tls.enabled && cfg.tls.caPEM == caPEM {
 				sawTLS = true
 			}
-			// already-formed: CLUSTER INFO ok + наши ноды на месте → no-op,
-			// но connect к первому мастеру уже произошёл (TLS проброс доказан).
+			// already-formed: CLUSTER INFO ok + our nodes are in place -> no-op,
+			// but connect to the first master has already occurred (TLS forwarding has been proven).
 			return &clusterConn{
 				info:  "cluster_state:ok\ncluster_known_nodes:1\n",
 				nodes: "id0 10.0.0.1:6379@16379 myself,master - 0 0 0 connected 0-16383\n",
@@ -243,19 +243,19 @@ func TestApplyCluster_TLSReachesNodeConnect(t *testing.T) {
 	}, stream)
 
 	if !sawTLS {
-		t.Fatal("cluster: TLS-параметры (tls/tls_ca) не доехали до connConfig ноды")
+		t.Fatal("cluster: TLS parameters (tls/tls_ca) did not reach the connConfig node")
 	}
 }
 
-// TestTLS_NoLeakOfKeyInEvents — PEM client-key НЕ утекает в события даже на
-// ошибке коннекта, чей текст содержит ключ (worst-case: драйвер положил PEM в
-// ошибку). redactError вырезает; событие Failed без PEM. Симметрия с
-// TestApply_ConnectFailure_DoesNotLeakPassword, но для tls_key.
+// TestTLS_NoLeakOfKeyInEvents - PEM client-key does NOT leak into events even for
+// connection error whose text contains a key (worst-case: the driver put PEM in
+// error). redactError cuts; Failed event without PEM. Symmetry with
+// TestApply_ConnectFailure_DoesNotLeakPassword, but for tls_key.
 func TestTLS_NoLeakOfKeyInEvents(t *testing.T) {
 	_, keyPEM := genCertPEM(t)
 	m := &RedisModule{
 		connect: func(_ context.Context, cfg connConfig) (redisConn, error) {
-			// worst-case: ошибка несёт И пароль, И PEM-ключ.
+			// worst-case: the error carries BOTH the password AND the PEM key.
 			return nil, errStr("dial failed: AUTH " + cfg.password + " key=" + cfg.tls.keyPEM)
 		},
 	}
@@ -273,19 +273,19 @@ func TestTLS_NoLeakOfKeyInEvents(t *testing.T) {
 
 	for _, e := range stream.sent {
 		if strings.Contains(e.GetMessage(), secretPass) {
-			t.Fatalf("пароль утёк в событие: %q", e.GetMessage())
+			t.Fatalf("password leaked in event: %q", e.GetMessage())
 		}
-		// Достаточная улика PEM-ключа — заголовок блока; полный ключ многострочен.
+		// Sufficient evidence of a PEM key is the block header; the full key is multi-line.
 		if strings.Contains(e.GetMessage(), "PRIVATE KEY") {
-			t.Fatalf("PEM client-key утёк в событие: %q", e.GetMessage())
+			t.Fatalf("PEM client-key leaked in event: %q", e.GetMessage())
 		}
 	}
 }
 
-// errStr — error из строки (без fmt, чтобы не тащить лишний импорт здесь).
+// errStr - error from the string (without fmt, so as not to drag unnecessary imports here).
 type errStr string
 
 func (e errStr) Error() string { return string(e) }
 
-// мостик к structpb в этом файле уже покрыт mustStruct из impl_test.go.
+// the bridge to structpb in this file is already covered by mustStruct from impl_test.go.
 var _ = structpb.NewStruct

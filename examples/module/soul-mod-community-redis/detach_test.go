@@ -8,7 +8,7 @@ import (
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 )
 
-// --- Validate: detached требует только addr ---
+// --- Validate: detached only requires addr ---
 
 func TestValidate_DetachedRejectsEmptyAddr(t *testing.T) {
 	m := &RedisModule{}
@@ -17,7 +17,7 @@ func TestValidate_DetachedRejectsEmptyAddr(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"addr": ""}),
 	})
 	if reply.Ok {
-		t.Fatal("ждали Ok=false на пустой addr (detached)")
+		t.Fatal("waited Ok=false on empty addr (detached)")
 	}
 }
 
@@ -28,14 +28,14 @@ func TestValidate_DetachedHappyPath(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"addr": "127.0.0.1:6379"}),
 	})
 	if !reply.Ok || len(reply.Errors) != 0 {
-		t.Fatalf("ждали Ok=true без ошибок, got %+v", reply)
+		t.Fatalf("waited Ok=true without errors, got %+v", reply)
 	}
 }
 
 // --- Apply detached: slave → master (REPLICAOF NO ONE, changed=true) ---
 
-// TestApplyDetached_SlavePromotedToMaster — инстанс был репликой → REPLICAOF NO
-// ONE, changed=true, previous_master несёт прежний master host:port.
+// TestApplyDetached_SlavePromotedToMaster - the instance was a replica -> REPLICAOF NO
+// ONE, changed=true, previous_master carries the previous master host:port.
 func TestApplyDetached_SlavePromotedToMaster(t *testing.T) {
 	conn := &replConn{infoReply: "# Replication\r\n" +
 		"role:slave\r\n" +
@@ -58,21 +58,21 @@ func TestApplyDetached_SlavePromotedToMaster(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed || !fin.Changed {
-		t.Fatalf("ждали успех changed=true (slave промоутнут в master), got %+v", fin)
+		t.Fatalf("expected success changed=true (slave is promoted to master), got %+v", fin)
 	}
 	if !hasCall(conn.calls, "REPLICAOF", "NO", "ONE") {
-		t.Errorf("нет REPLICAOF NO ONE: %v", conn.calls)
+		t.Errorf("no REPLICAOF NO ONE: %v", conn.calls)
 	}
 	if got := fin.GetOutput().GetFields()["previous_master"].GetStringValue(); got != "10.0.0.1:6379" {
-		t.Errorf("previous_master=%q, ждали 10.0.0.1:6379", got)
+		t.Errorf("previous_master=%q, waited 10.0.0.1:6379", got)
 	}
 	assertEventsNoSecret(t, stream)
 }
 
-// --- Apply detached: master → no-op (идемпотентность) ---
+// --- Apply detached: master -> no-op (idempotency) ---
 
-// TestApplyDetached_AlreadyMasterNoOp — инстанс уже master → changed=false,
-// REPLICAOF НЕ вызывается (идемпотентно, безопасно к повтору сценария).
+// TestApplyDetached_AlreadyMasterNoOp - instance is already master -> changed=false,
+// REPLICAOF is NOT called (idempotent, script replay safe).
 func TestApplyDetached_AlreadyMasterNoOp(t *testing.T) {
 	conn := &replConn{infoReply: "# Replication\r\nrole:master\r\nconnected_slaves:2\r\n"}
 	m := replModule(conn)
@@ -91,21 +91,21 @@ func TestApplyDetached_AlreadyMasterNoOp(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed {
-		t.Fatalf("ждали успех, got %+v", fin)
+		t.Fatalf("expected success, got %+v", fin)
 	}
 	if fin.Changed {
-		t.Error("ждали changed=false: инстанс уже master (no-op идемпотентно)")
+		t.Error("waited changed=false: instance is already master (no-op idempotent)")
 	}
 	if hasCall(conn.calls, "REPLICAOF") {
-		t.Errorf("no-op нарушен: REPLICAOF вызван на уже-master: %v", conn.calls)
+		t.Errorf("no-op violated: REPLICAOF called on already-master: %v", conn.calls)
 	}
 	if got := fin.GetOutput().GetFields()["previous_master"].GetStringValue(); got != "" {
-		t.Errorf("previous_master=%q, ждали пусто (уже master)", got)
+		t.Errorf("previous_master=%q, waited empty (already master)", got)
 	}
 }
 
-// TestApplyDetached_InfoErrorIsFailure — INFO replication упал → failed (не
-// трогаем инстанс вслепую без знания роли).
+// TestApplyDetached_InfoErrorIsFailure - INFO replication fell -> failed (not
+// we touch the instance blindly without knowing the role).
 func TestApplyDetached_InfoErrorIsFailure(t *testing.T) {
 	conn := &replConn{failOnVerb: "INFO"}
 	m := replModule(conn)
@@ -118,15 +118,15 @@ func TestApplyDetached_InfoErrorIsFailure(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || !fin.Failed {
-		t.Fatalf("ждали failed=true на ошибку INFO replication, got %+v", fin)
+		t.Fatalf("expected failed=true for INFO replication error, got %+v", fin)
 	}
 	if hasCall(conn.calls, "REPLICAOF") {
-		t.Errorf("REPLICAOF не должен вызываться при недоступном INFO: %v", conn.calls)
+		t.Errorf("REPLICAOF should not be called when INFO: %v is not available", conn.calls)
 	}
 }
 
-// TestApplyDetached_ConnectFailure_DoesNotLeakPassword — коннект-ошибка с
-// паролем в тексте санитизируется (ИБ-инвариант ADR-010).
+// TestApplyDetached_ConnectFailure_DoesNotLeakPassword - connection error with
+// the password in the text is sanitized (IS-invariant ADR-010).
 func TestApplyDetached_ConnectFailure_DoesNotLeakPassword(t *testing.T) {
 	m := &RedisModule{
 		connect: func(_ context.Context, cfg connConfig) (redisConn, error) {
@@ -144,7 +144,7 @@ func TestApplyDetached_ConnectFailure_DoesNotLeakPassword(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || !fin.Failed {
-		t.Fatalf("ждали failed=true, got %+v", fin)
+		t.Fatalf("waited failed=true, got %+v", fin)
 	}
 	assertEventsNoSecret(t, stream)
 }

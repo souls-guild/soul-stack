@@ -1,6 +1,6 @@
-// Entry-point плагина soul-mod-community-redis. Собирается в один статический
-// бинарь через `go build`; Soul запускает его как sub-process, делает
-// gRPC-stdio handshake (sdk/handshake) и зовёт RPC SoulModule. Логика — impl.go.
+// Entry-point of the soul-mod-community-redis plugin. Collected into one static
+// binary via `go build`; Soul runs it as a sub-process, does
+// gRPC-stdio handshake (sdk/handshake) and calls RPC SoulModule. Logic - impl.go.
 package main
 
 import (

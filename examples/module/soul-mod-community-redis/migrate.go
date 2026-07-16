@@ -1,30 +1,30 @@
-// migrate-cluster плагина community.redis — миграция «старый кластер → новый
-// кластер той же топологии» в ТРИ day-2-шага (каждый — отдельный action cluster):
+// migrate-cluster community.redis plugin - migration "old cluster -> new"
+// cluster of the same topology" in THREE day-2 steps (each is a separate action cluster):
 //
-//	join-external      — вступление НОВЫХ cluster-mode нод в УЖЕ существующий
-//	                     (старый) кластер репликами старых мастеров 1:1 (CLUSTER
-//	                     MEET + REPLICATE); новые ноды догоняют данные.
-//	failover-takeover  — промоушен этих реплик в мастера через GRACEFUL CLUSTER
-//	                     FAILOVER (сначала sync-gate master_link_status==up на ВСЕХ;
-//	                     fail-closed без эскалации на FORCE/TAKEOVER — split-brain).
-//	forget-external    — выкидывание старых узлов из кластера (CLUSTER FORGET всех
-//	                     старых node-id на каждой новой ноде; слоты уже у новых).
+//	join-external - entry of NEW cluster-mode nodes into an ALREADY existing one
+//	                     (old) cluster with replicas of old masters 1:1 (CLUSTER
+//	                     MEET + REPLICATE); new nodes are catching up with the data.
+//	failover-takeover - promotion of these replicas to the master via GRACEFUL CLUSTER
+//	                     FAILOVER (first sync-gate master_link_status==up on ALL;
+//	                     fail-closed without escalation to FORCE/TAKEOVER - split-brain).
+//	forget-external - throwing out old nodes from the cluster (CLUSTER FORGET all
+//	                     old node-id on each new node; the slots are already with the new ones).
 //
-// ЦЕЛИКОМ через go-redis (CLUSTER NODES / MEET / REPLICATE / FAILOVER / FORGET +
-// INFO replication), как create/add-node: никакого redis-cli/shell, capability
-// остаётся network_outbound. ТА ЖЕ сеть и ТОТ ЖЕ пароль кластера (оператор
-// выравнивает новый пароль == старый до запуска) — единый password/tls на старые
-// seed-ноды и на новые узлы.
+// ENTIRELY via go-redis (CLUSTER NODES / MEET / REPLICATE / FAILOVER / FORGET +
+// INFO replication) like create/add-node: no redis-cli/shell, capability
+// remains network_outbound. SAME network and SAME cluster password (operator
+// aligns new password == old before launch) - single password/tls for old ones
+// seed nodes and to new nodes.
 //
-// Маппинг 1:1 ДЕТЕРМИНИРОВАН: новые узлы сортируются по ключу nodes-map (как
-// buildClusterPlan), старые мастера — по возрастанию первого слот-диапазона.
-// i-й новый узел реплицирует i-го старого мастера. Это требует РОВНО столько же
-// новых узлов, сколько старых мастеров (shards_dest == shards_source) — иначе
-// fail-fast (1:1 невозможен). shards_source render-фазе не виден (он в живой
-// топологии старого кластера), поэтому проверка — runtime-assert в Apply.
+// 1:1 mapping is DETERMINISTIC: new nodes are sorted by nodes-map key (as
+// buildClusterPlan), old masters - in ascending order of the first slot range.
+// The i-th new node replicates the i-th old master. It requires EXACTLY the same amount
+// new nodes, how many old masters (shards_dest == shards_source) - otherwise
+// fail-fast (1:1 is not possible). shards_source is not visible in the render phase (it is in the live
+// topology of the old cluster), so the check is runtime-assert in Apply.
 //
-// Идемпотентен: узел уже реплика нужного старого мастера (CLUSTER NODES узла) →
-// для него no-op; повторный apply на сошедшемся входе → changed=false.
+// Idempotent: the node is already a replica of the desired old master (CLUSTER NODES of the node) ->
+// no-op for him; apply again on the converged input -> changed=false.
 package main
 
 import (
@@ -41,10 +41,10 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// validateClusterJoinExternal — статические проверки join-external: непустой
-// nodes-map, непустой source_nodes, shards_dest >= 1. Соответствие shards_dest
-// числу новых узлов И числу старых мастеров проверяется в Apply (число старых
-// мастеров видно только в живой топологии). Тексты без пароля.
+// validateClusterJoinExternal - static checks join-external: non-empty
+// nodes-map, non-empty source_nodes, shards_dest >= 1. Match shards_dest
+// the number of new nodes AND the number of old masters is checked in Apply (the number of old
+// masters are visible only in live topology). Texts without password.
 func validateClusterJoinExternal(f map[string]*structpb.Value) []string {
 	var errs []string
 
@@ -61,18 +61,18 @@ func validateClusterJoinExternal(f map[string]*structpb.Value) []string {
 	return errs
 }
 
-// applyClusterJoinExternal вливает новые cluster-mode ноды в старый кластер и
-// делает каждую репликой смаппленного старого мастера (day-2 migration step 1):
+// applyClusterJoinExternal merges new cluster-mode nodes into the old cluster and
+// makes each a replica of the mapped old master (day-2 migration step 1):
 //
-//  1. коннект к первой source-seed → CLUSTER NODES → старые мастера + их слоты;
-//  2. fail-fast: число старых мастеров != shards_dest → 1:1 невозможен;
-//  3. маппинг 1:1 — новый узел i (сортировка ключей nodes) ↔ старый мастер i
-//     (сортировка по возрастанию слот-диапазона);
-//  4. на каждом новом узле: MEET old-seed → waitGossipConverged → REPLICATE
-//     old-master-id (идемпотентно: уже реплика нужного мастера → no-op).
+//  1. connection to the first source-seed -> CLUSTER NODES -> old masters + their slots;
+//  2. fail-fast: number of old masters != shards_dest -> 1:1 impossible;
+//  3. 1:1 mapping - new node i (sorting nodes keys) old master i
+//     (sorting by ascending slot range);
+//  4. on each new node: MEET old-seed -> waitGossipConverged -> REPLICATE
+//     old-master-id (idempotent: already a replica of the desired master -> no-op).
 //
-// Финальный Output несёт маппинг (новый-ключ → старый-master-id) и per-node
-// join-статус (joined|already). Пароль НЕ попадает в события (ИБ ADR-010).
+// The final Output carries a mapping (new-key -> old-master-id) and per-node
+// join-status (joined|already). The password is NOT included in the events (IB ADR-010).
 func (m *RedisModule) applyClusterJoinExternal(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], params *structpb.Struct) error {
 	f := params.GetFields()
 	password := stringOrEmpty(f["password"])
@@ -88,8 +88,8 @@ func (m *RedisModule) applyClusterJoinExternal(ctx context.Context, stream grpc.
 		return sendFailure(stream, redactError(err, password))
 	}
 
-	// Число НОВЫХ узлов обязано совпасть с shards_dest (1:1 ровно по одной реплике
-	// на старый мастер — пилот не делает >1 реплику и не оставляет узлы без пары).
+	// The number of NEW nodes must match shards_dest (1:1 for exactly one replica
+	// to the old master - the pilot does not make >1 replica and does not leave nodes without a pair).
 	if len(newNodes) != shardsDest {
 		return sendFailure(stream, fmt.Sprintf(
 			"params.nodes: %d new nodes != shards_dest %d (join-external maps exactly one new node per source master)",
@@ -100,32 +100,32 @@ func (m *RedisModule) applyClusterJoinExternal(ctx context.Context, stream grpc.
 	connect := func(node clusterNode) (redisConn, error) {
 		conn, err := m.openConn(ctx, connConfig{addr: node.addr, username: username, password: password, tls: tlsP})
 		if err != nil {
-			// TLS-handshake-ошибка теоретически несёт PEM client-key — редактируем
-			// его ПРЯМО тут (пароль редактируется caller-ом по тексту отдельно).
+			// TLS-handshake error theoretically carries PEM client-key - edit
+			// it is RIGHT here (the password is edited by the caller separately in the text).
 			return nil, fmt.Errorf("%s", redactError(err, tlsP.keyPEM))
 		}
 		return conn, nil
 	}
 
-	// Топология СТАРОГО кластера с первой доступной source-seed. Перебираем seed-ы
-	// по порядку: первый ответивший CLUSTER NODES задаёт топологию (как redis-cli,
-	// который берёт первый достижимый узел).
+	// Topology of the OLD cluster with the first available source-seed. We sort through the seeds
+	// in order: the first CLUSTER NODES to respond sets the topology (like redis-cli,
+	// which takes the first reachable node).
 	srcMasters, seedEndpoint, err := sourceMasters(ctx, connect, sources, password)
 	if err != nil {
 		return sendFailure(stream, redactError(err, password))
 	}
 
-	// FAIL-FAST: 1:1 маппинг возможен только при равном числе старых мастеров и
-	// новых узлов (= shards_dest). shards_source render-фазе не виден (живая
-	// топология), поэтому assert здесь.
+	// FAIL-FAST: 1:1 mapping is possible only with an equal number of old masters and
+	// new nodes (= shards_dest). shards_source is not visible to the render phase (live
+	// topology), so the assert is here.
 	if len(srcMasters) != shardsDest {
 		return sendFailure(stream, fmt.Sprintf(
 			"source cluster has %d masters, dest expects %d shards — 1:1 mapping impossible (align shards_dest with source master count)",
 			len(srcMasters), shardsDest))
 	}
 
-	// Маппинг 1:1: новый узел i ↔ старый мастер i. newNodes уже отсортированы по
-	// ключу (parseClusterNodes), srcMasters — по возрастанию слот-диапазона.
+	// Mapping 1:1: new node i old master i. newNodes are already sorted by
+	// key (parseClusterNodes), srcMasters - in ascending slot range.
 	results := make([]joinResult, len(newNodes))
 	mapping := make(map[string]any, len(newNodes))
 	for i, node := range newNodes {
@@ -160,20 +160,20 @@ func (m *RedisModule) applyClusterJoinExternal(ctx context.Context, stream grpc.
 		})
 }
 
-// joinResult — итог вступления одного нового узла: статус (joined|already) и
-// node-id старого мастера, чьей репликой узел стал.
+// joinResult - the result of the entry of one new node: status (joined|already) and
+// node-id of the old master whose replica the node became.
 type joinResult struct {
 	node     clusterNode
 	masterID string
-	status   string // "joined" (выполнили REPLICATE) | "already" (уже реплика)
+	status   string // "joined" (did REPLICATE) | "already" (already a replica)
 }
 
-// joinNodeToMaster вливает один новый узел в старый кластер и делает его репликой
-// заданного старого мастера. Идемпотентно: узел уже реплика этого мастера
-// (по его CLUSTER NODES) → status "already", REPLICATE НЕ шлём.
+// joinNodeToMaster merges one new node into the old cluster and makes it a replica
+// given by the old master. Idempotent: the node is already a replica of this master
+// (according to its CLUSTER NODES) -> status "already", REPLICATE is NOT sent.
 //
-//	MEET old-seed (по ip:port) → waitGossipConverged (узел увидел старый кластер)
-//	→ REPLICATE old-master-id (узел становится репликой смаппленного мастера).
+//	MEET old-seed (by ip:port) -> waitGossipConverged (the node saw the old cluster)
+//	-> REPLICATE old-master-id (the node becomes a replica of the mapped master).
 func joinNodeToMaster(ctx context.Context, connect func(clusterNode) (redisConn, error), node clusterNode, master sourceMaster, seedEndpoint, password string) (joinResult, error) {
 	conn, err := connect(node)
 	if err != nil {
@@ -181,9 +181,9 @@ func joinNodeToMaster(ctx context.Context, connect func(clusterNode) (redisConn,
 	}
 	defer func() { _ = conn.Close() }()
 
-	// Идемпотентность: узел уже реплика нужного мастера → no-op (его CLUSTER NODES
-	// несёт строку самого узла с master-id == целевому). На изолированном свежем
-	// узле своя строка master-id пуста → пойдём вливать.
+	// Idempotency: the node is already a replica of the desired master -> no-op (its CLUSTER NODES
+	// carries the string of the node itself with master-id == target). On isolated fresh
+	// the node has its own master-id line is empty -> let's go pour it in.
 	own, err := conn.Do(ctx, "CLUSTER", "NODES")
 	if err != nil {
 		return joinResult{}, fmt.Errorf("CLUSTER NODES on new node %s: %w", node.addr, err)
@@ -192,7 +192,7 @@ func joinNodeToMaster(ctx context.Context, connect func(clusterNode) (redisConn,
 		return joinResult{node: node, masterID: master.id, status: "already"}, nil
 	}
 
-	// MEET старого seed-а: узел знакомится с gossip старого кластера по ip:port.
+	// MEET the old seed: the node gets acquainted with the gossip of the old cluster via ip:port.
 	seedIP, seedPort, err := splitIPPort(seedEndpoint)
 	if err != nil {
 		return joinResult{}, fmt.Errorf("source seed %q: %w", seedEndpoint, err)
@@ -202,9 +202,9 @@ func joinNodeToMaster(ctx context.Context, connect func(clusterNode) (redisConn,
 			net.JoinHostPort(seedIP, strconv.Itoa(seedPort)), node.addr, err)
 	}
 
-	// Сходимость: узел обязан увидеть весь старый кластер + себя. Ждём, пока в его
-	// CLUSTER NODES появится хотя бы целевой мастер (его id) — иначе REPLICATE
-	// упрётся в неизвестный node-id.
+	// Convergence: the node must see the entire old cluster + itself. We are waiting for him to
+	// CLUSTER NODES at least the target master (its id) will appear - otherwise REPLICATE
+	// will run into an unknown node-id.
 	if err := waitNodeKnows(ctx, conn, master.id); err != nil {
 		return joinResult{}, fmt.Errorf("new node %s: %w", node.addr, err)
 	}
@@ -215,20 +215,20 @@ func joinNodeToMaster(ctx context.Context, connect func(clusterNode) (redisConn,
 	return joinResult{node: node, masterID: master.id, status: "joined"}, nil
 }
 
-// sourceMaster — старый мастер из топологии источника: node-id + первый слот
-// (ключ детерминированной сортировки маппинга 1:1).
+// sourceMaster - old master from the source topology: node-id + first slot
+// (1:1 mapping deterministic sort key).
 type sourceMaster struct {
 	id        string
 	ipPort    string
 	firstSlot int
 }
 
-// sourceMasters коннектится к source-seed-ам по порядку, берёт CLUSTER NODES с
-// первой ответившей и возвращает её мастеров СО слотами, отсортированных по
-// возрастанию первого слот-диапазона (детерминированная база маппинга 1:1).
-// Возвращает также endpoint (ip:port) сработавшего seed-а для последующих MEET.
-// Мастера БЕЗ слотов (свежие пустые) в маппинг не идут — реплицируем владельцев
-// данных. Все seed-ы недоступны → ошибка.
+// sourceMasters connects to source-seeds in order, takes CLUSTER NODES from
+// first responder and returns her masters WITH slots, sorted by
+// increasing the first slot range (deterministic mapping base 1:1).
+// It also returns the endpoint (ip:port) of the triggered seed for subsequent MEETs.
+// Masters WITHOUT slots (fresh empty) do not go into mapping - we replicate owners
+// data. All seeds are unavailable -> error.
 func sourceMasters(ctx context.Context, connect func(clusterNode) (redisConn, error), seeds []clusterNode, password string) ([]sourceMaster, string, error) {
 	var lastErr error
 	for _, seed := range seeds {
@@ -257,9 +257,9 @@ func sourceMasters(ctx context.Context, connect func(clusterNode) (redisConn, er
 	return nil, "", lastErr
 }
 
-// mastersWithSlots извлекает из топологии мастеров СО слотами, отсортированных по
-// возрастанию первого слота (детерминированный 1:1-маппинг). Мастер без слотов
-// данных не владеет → в миграционный маппинг не берётся.
+// mastersWithSlots retrieves masters WITH slots from the topology, sorted by
+// increasing the first slot (deterministic 1:1 mapping). Master without slots
+// does not own data -> is not included in migration mapping.
 func mastersWithSlots(table []clusterNodeRow) []sourceMaster {
 	var out []sourceMaster
 	for _, row := range table {
@@ -278,21 +278,21 @@ func mastersWithSlots(table []clusterNodeRow) []sourceMaster {
 		if out[i].firstSlot != out[j].firstSlot {
 			return out[i].firstSlot < out[j].firstSlot
 		}
-		return out[i].id < out[j].id // tie-break (диапазоны не пересекаются — почти не нужен)
+		return out[i].id < out[j].id // tie-break (ranges do not intersect - almost not needed)
 	})
 	return out
 }
 
-// alreadyReplicaOf — несёт ли топология самого узла строку с его ip:port, уже
-// привязанную как реплика к masterID (идемпотентность join). Свежий изолированный
-// узел свою строку как master с пустым master-id → false.
+// alreadyReplicaOf - does the topology of the node itself carry a line with its ip:port, already
+// tied as a replica to masterID (join idempotency). Fresh isolated
+// node its string as master with empty master-id -> false.
 func alreadyReplicaOf(table []clusterNodeRow, node clusterNode, masterID string) bool {
 	row := findNodeRow(table, node)
 	return row != nil && !row.isMaster && row.masterID == masterID
 }
 
-// parseSourceSeeds резолвит список source_nodes (host:port-строки старого
-// кластера) в clusterNode для коннекта + MEET. key = "source-<i>" (для сообщений).
+// parseSourceSeeds resolves the list of source_nodes (host:port lines of the old
+// cluster) in clusterNode for connection + MEET. key = "source-<i>" (for messages).
 func parseSourceSeeds(v *structpb.Value) ([]clusterNode, error) {
 	raw := stringList(v)
 	if len(raw) == 0 {
@@ -314,9 +314,9 @@ func parseSourceSeeds(v *structpb.Value) ([]clusterNode, error) {
 	return out, nil
 }
 
-// waitNodeKnows ждёт (ограниченный retry, переиспользует gossip-таймауты), пока
-// CLUSTER NODES узла начнёт содержать строку с masterID — узел узнал целевого
-// старого мастера и REPLICATE по его id пройдёт. Не сошлось за лимит → ошибка.
+// waitNodeKnows waits (limited retry, reuses gossip timeouts) until
+// CLUSTER NODES of the node will begin to contain a line with masterID - the node has recognized the target
+// old master and REPLICATE by his id will pass. Did not meet the limit -> error.
 func waitNodeKnows(ctx context.Context, conn redisConn, masterID string) error {
 	for attempt := 0; attempt < gossipPollAttempts; attempt++ {
 		nodes, err := conn.Do(ctx, "CLUSTER", "NODES")
@@ -335,7 +335,7 @@ func waitNodeKnows(ctx context.Context, conn redisConn, masterID string) error {
 	return fmt.Errorf("gossip did not converge: source master %s not visible after %d attempts", masterID, gossipPollAttempts)
 }
 
-// tableHasID — есть ли в топологии строка с данным node-id (узел узнал мастера).
+// tableHasID - whether there is a row in the topology with this node-id (the node has recognized the master).
 func tableHasID(table []clusterNodeRow, id string) bool {
 	for _, row := range table {
 		if row.id == id {
@@ -345,8 +345,8 @@ func tableHasID(table []clusterNodeRow, id string) bool {
 	return false
 }
 
-// mappingSummary — детерминированная сводка маппинга (новый-ключ -> старый-master-id)
-// для Output (без секретов: ключи nodes и node-id, не адреса/пароли).
+// mappingSummary - deterministic mapping summary (new-key -> old-master-id)
+// for Output (no secrets: nodes and node-id keys, not addresses/passwords).
 func mappingSummary(results []joinResult) string {
 	parts := make([]string, 0, len(results))
 	for _, r := range results {
@@ -357,8 +357,8 @@ func mappingSummary(results []joinResult) string {
 
 // ============================ failover-takeover ==============================
 
-// validateClusterFailoverTakeover — статические проверки failover-takeover:
-// непустой nodes-map (новые узлы — реплики старых мастеров). Тексты без пароля.
+// validateClusterFailoverTakeover - static failover-takeover checks:
+// non-empty nodes-map (new nodes are replicas of old masters). Texts without password.
 func validateClusterFailoverTakeover(f map[string]*structpb.Value) []string {
 	if len(nodeSpecs(f["nodes"])) == 0 {
 		return []string{"params.nodes: must be a non-empty map (key -> {addr|ip+port}) of the NEW cluster nodes (replicas to promote)"}
@@ -366,23 +366,23 @@ func validateClusterFailoverTakeover(f map[string]*structpb.Value) []string {
 	return nil
 }
 
-// applyClusterFailoverTakeover промоутит новые узлы (реплики старых мастеров после
-// join-external) в мастера через GRACEFUL CLUSTER FAILOVER (day-2 migration step 2):
+// applyClusterFailoverTakeover will promote new nodes (replicas of old masters after
+// join-external) to the master via GRACEFUL CLUSTER FAILOVER (day-2 migration step 2):
 //
-//  1. ★sync-gate ДО первого failover: на КАЖДОМ новом узле INFO replication
-//     master_link_status == "up" (реплика догнала свой старый мастер). Хоть один
-//     не догнал → ОШИБКА до любого failover (ранний failover на недогнанной
-//     реплике теряет незаписанный хвост репликации);
-//  2. на каждом новом узле: идемпотентность (уже master → no-op), иначе GRACEFUL
-//     CLUSTER FAILOVER (без аргументов: мастер останавливает запись, ждёт догонку,
-//     лосслесс) → poll CLUSTER NODES узла, пока он не стал master СО слотами.
+//  1. sync-gate BEFORE the first failover: on EVERY new node INFO replication
+//     master_link_status == "up" (the replica has caught up with its old master). At least one
+//     didn't catch up -> ERROR before any failover (early failover on not caught up
+//     the replica loses an unwritten replication tail);
+//  2. on each new node: idempotency (already master -> no-op), otherwise GRACEFUL
+//     CLUSTER FAILOVER (no arguments: the master stops recording, waits for catch-up,
+//     lossless) -> poll CLUSTER NODES of a node until it becomes master WITH slots.
 //
-// ★FAIL-CLOSED: graceful не сошёлся за лимит → ОШИБКА. НЕ эскалируем на
-// FORCE/TAKEOVER — они промоутят без согласия старого мастера (split-brain + потеря
-// данных, противоречит «безопасность на первом месте»). Оператор разбирается явно.
+// FAIL-CLOSED: graceful did not meet the limit -> ERROR. DO NOT escalate to
+// FORCE/TAKEOVER - they will promote without the consent of the old master (split-brain + loss
+// data, contradicts "safety first"). The operator clearly understands.
 //
-// Финальный Output несёт per-node-статус (promoted|already) + число
-// промоутнутых. Пароль НЕ попадает в события (ИБ ADR-010).
+// The final Output carries the per-node status (promoted|already) + number
+// promoted. The password is NOT included in the events (IB ADR-010).
 func (m *RedisModule) applyClusterFailoverTakeover(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], params *structpb.Struct) error {
 	f := params.GetFields()
 	password := stringOrEmpty(f["password"])
@@ -397,19 +397,19 @@ func (m *RedisModule) applyClusterFailoverTakeover(ctx context.Context, stream g
 	connect := func(node clusterNode) (redisConn, error) {
 		conn, err := m.openConn(ctx, connConfig{addr: node.addr, username: username, password: password, tls: tlsP})
 		if err != nil {
-			// TLS-handshake-ошибка теоретически несёт PEM client-key — редактируем
-			// его ПРЯМО тут (пароль редактируется caller-ом по тексту отдельно).
+			// TLS-handshake error theoretically carries PEM client-key - edit
+			// it is RIGHT here (the password is edited by the caller separately in the text).
 			return nil, fmt.Errorf("%s", redactError(err, tlsP.keyPEM))
 		}
 		return conn, nil
 	}
 
-	// ★SYNC-GATE: ВСЕ новые реплики обязаны быть синхронны (master_link_status==up)
-	// ДО первого failover. Если промоутить первый шард на догнавшей реплике, а
-	// второй ещё догоняет — на его failover потеряется хвост. Проверяем всё разом,
-	// до любого мутирующего CLUSTER FAILOVER. master-узлы (уже промоутнутые,
-	// повторный apply) sync-gate пропускают: у master нет master_link_status.
-	syncState := make([]bool, len(newNodes)) // true → узел уже master (failover не нужен)
+	// SYNC-GATE: ALL new replicas must be synchronous (master_link_status==up)
+	// BEFORE the first failover. If you promote the first shard on a catch-up replica, and
+	// the second one is still catching up - his tail will be lost during his failover. Let's check everything at once
+	// to any mutating CLUSTER FAILOVER. master nodes (already promoted,
+	// re-apply) sync-gate is skipped: master does not have master_link_status.
+	syncState := make([]bool, len(newNodes)) // true -> node is already master (failover is not needed)
 	for i, node := range newNodes {
 		isMaster, err := nodeSyncReady(ctx, connect, node)
 		if err != nil {
@@ -418,8 +418,8 @@ func (m *RedisModule) applyClusterFailoverTakeover(ctx context.Context, stream g
 		syncState[i] = isMaster
 	}
 
-	// Все синхронны (или уже master) — промоутим. Идемпотентность: узел уже master
-	// → no-op (failover не шлём).
+	// Everyone is synchronous (or already master) - let's promote. Idempotency: node is already master
+	// -> no-op (we don't send failover).
 	promoted := 0
 	statuses := make([]string, len(newNodes))
 	for i, node := range newNodes {
@@ -443,11 +443,11 @@ func (m *RedisModule) applyClusterFailoverTakeover(ctx context.Context, stream g
 		})
 }
 
-// nodeSyncReady проверяет готовность одного нового узла к failover ДО его запуска.
-// Возвращает (isMaster, error): isMaster=true — узел УЖЕ master (повторный apply,
-// failover не нужен, sync-gate неприменим). isMaster=false + nil — узел реплика,
-// её линк здоров (master_link_status=="up"), failover можно запускать. Реплика с
-// нездоровым линком (или нештатный INFO) → ОШИБКА (fail до любого failover).
+// nodeSyncReady checks that one new node is ready to failover BEFORE it starts.
+// Returns (isMaster, error): isMaster=true - node ALREADY master (reapply,
+// failover is not needed, sync-gate is not applicable). isMaster=false + nil - replica node,
+// its link is healthy (master_link_status=="up"), failover can be launched. Replica with
+// unhealthy link (or abnormal INFO) -> ERROR (fail before any failover).
 func nodeSyncReady(ctx context.Context, connect func(clusterNode) (redisConn, error), node clusterNode) (bool, error) {
 	conn, err := connect(node)
 	if err != nil {
@@ -461,11 +461,11 @@ func nodeSyncReady(ctx context.Context, connect func(clusterNode) (redisConn, er
 	}
 	repl := parseInfoSection(info)
 	if repl["role"] == "master" {
-		return true, nil // уже промоутнут (идемпотентность), sync-gate неприменим
+		return true, nil // already promoted (idempotency), sync-gate is not applicable
 	}
 	if repl["master_link_status"] != "up" {
-		// Реплика ещё не догнала свой старый мастер. Ранний failover потерял бы
-		// хвост репликации — отказываем ДО первого failover (fail-closed).
+		// The replica has not yet caught up with its old master. An early failover would have lost
+		// replication tail - we refuse BEFORE the first failover (fail-closed).
 		return false, fmt.Errorf(
 			"new node %s not synced before failover: master_link_status=%q (want \"up\") — replica has not caught up, refusing to fail over",
 			node.addr, repl["master_link_status"])
@@ -473,14 +473,14 @@ func nodeSyncReady(ctx context.Context, connect func(clusterNode) (redisConn, er
 	return false, nil
 }
 
-// failoverNode промоутит один новый узел (синхронную реплику) в master через
-// GRACEFUL CLUSTER FAILOVER (БЕЗ аргументов) и ждёт, пока узел реально станет
-// master СО слотами (CLUSTER NODES самого узла). graceful: старый мастер
-// останавливает запись, отдаёт реплике хвост, та берёт слоты — лосслесс.
+// failoverNode will promote one new node (synchronous replica) to master via
+// GRACEFUL CLUSTER FAILOVER (WITHOUT arguments) and waits until the node actually becomes
+// master WITH slots (CLUSTER NODES of the node itself). graceful: old master
+// stops recording, gives the tail to the replica, which takes slots - lossless.
 //
-// ★FAIL-CLOSED: не сошёлся за gossipPollAttempts → ОШИБКА. НЕ шлём FORCE/TAKEOVER
-// (промоушен без согласия мастера = split-brain). Узел уже master (внезапно
-// промоутнулся между sync-gate и сюда) → poll сойдётся сразу (no-op de-facto).
+// FAIL-CLOSED: did not match gossipPollAttempts -> ERROR. We DO NOT send FORCE/TAKEOVER
+// (promotion without master's consent = split-brain). The node is already master (suddenly
+// moved between sync-gate and here) -> poll will converge immediately (no-op de-facto).
 func failoverNode(ctx context.Context, connect func(clusterNode) (redisConn, error), node clusterNode) error {
 	conn, err := connect(node)
 	if err != nil {
@@ -488,26 +488,26 @@ func failoverNode(ctx context.Context, connect func(clusterNode) (redisConn, err
 	}
 	defer func() { _ = conn.Close() }()
 
-	// GRACEFUL: без FORCE/TAKEOVER. Redis координирует с мастером (остановка записи
-	// + дослать хвост + смена эпохи). На уже-master узле FAILOVER вернёт ошибку
-	// "You should send CLUSTER FAILOVER to a replica" — но сюда мы попадаем только
-	// для НЕ-master узлов (sync-gate выше), так что путь штатный.
+	// GRACEFUL: without FORCE/TAKEOVER. Redis coordinates with the master (stop recording
+	// + send the tail + change of era). On an already-master node, FAILOVER will return an error
+	// "You should send CLUSTER FAILOVER to a replica" - but here we only get
+	// for NON-master nodes (sync-gate above), so the path is standard.
 	if _, err := conn.Do(ctx, "CLUSTER", "FAILOVER"); err != nil {
 		return fmt.Errorf("CLUSTER FAILOVER on %s: %w", node.addr, err)
 	}
 
-	// Дожидаемся завершения graceful failover: узел стал master И владеет слотами
-	// (только тогда промоушен фактически состоялся). Слоты появляются в строке
-	// самого узла его же CLUSTER NODES после смены роли.
+	// We are waiting for graceful failover to complete: the node has become master and owns the slots
+	// (only then did the promotion actually take place). Slots appear in line
+	// the node itself is its own CLUSTER NODES after changing the role.
 	if err := waitNodePromoted(ctx, conn, node); err != nil {
 		return fmt.Errorf("new node %s: %w", node.addr, err)
 	}
 	return nil
 }
 
-// waitNodePromoted ждёт (ограниченный retry, переиспользует gossip-таймауты), пока
-// CLUSTER NODES узла покажет его самого как master СО слотами. Не сошлось за лимит
-// → ОШИБКА (FAIL-CLOSED: graceful failover не завершился, эскалации на FORCE НЕТ).
+// waitNodePromoted waits (limited retry, reuses gossip timeouts) until
+// CLUSTER NODES of a node will show itself as a master WITH slots. Didn't meet the limit
+// -> ERROR (FAIL-CLOSED: graceful failover did not complete, NO escalation to FORCE).
 func waitNodePromoted(ctx context.Context, conn redisConn, node clusterNode) error {
 	for attempt := 0; attempt < gossipPollAttempts; attempt++ {
 		nodes, err := conn.Do(ctx, "CLUSTER", "NODES")
@@ -528,9 +528,9 @@ func waitNodePromoted(ctx context.Context, conn redisConn, node clusterNode) err
 
 // ============================== forget-external ==============================
 
-// validateClusterForgetExternal — статические проверки forget-external: непустой
-// nodes-map (новые узлы, исполняющие FORGET) и непустой source_nodes (старые seed,
-// откуда берутся node-id для забывания). Тексты без пароля.
+// validateClusterForgetExternal - static checks forget-external: non-empty
+// nodes-map (new nodes executing FORGET) and non-empty source_nodes (old seeds,
+// where do node-ids come from for forgetting). Texts without password.
 func validateClusterForgetExternal(f map[string]*structpb.Value) []string {
 	var errs []string
 	if len(nodeSpecs(f["nodes"])) == 0 {
@@ -542,24 +542,24 @@ func validateClusterForgetExternal(f map[string]*structpb.Value) []string {
 	return errs
 }
 
-// applyClusterForgetExternal выкидывает старые узлы из кластера через CLUSTER
-// FORGET на каждой новой ноде (day-2 migration step 3, после failover-takeover):
+// applyClusterForgetExternal throws old nodes out of the cluster via CLUSTER
+// FORGET on each new node (day-2 migration step 3, after failover-takeover):
 //
-//  1. коннект к source_nodes (старые seed, перебор по порядку) → CLUSTER NODES →
-//     node-id СТАРОГО кластера (мастера И реплики — выкидываем всех). ★Строки новых
-//     нод (по ip:port из nodes-map) ОТФИЛЬТРОВАНЫ: пост-join они в той же топологии,
-//     их id → self-forget;
-//  2. на КАЖДОЙ новой ноде: CLUSTER FORGET <old-id> для каждого старого id.
+//  1. connection to source_nodes (old seeds, search in order) -> CLUSTER NODES ->
+//     node-id of the OLD cluster (master AND replicas - throw them all out). New lines
+//     nodes (by ip:port from nodes-map) FILTERED: post-join they are in the same topology,
+//     their id -> self-forget;
+//  2. on EACH new node: CLUSTER FORGET <old-id> for each old id.
 //
-// ★БЕЗ миграции слотов (в отличие от remove-node): слоты УЖЕ у новых мастеров
-// после failover-takeover, старые мастера их лишились. Идемпотентно: старый id
-// уже неизвестен ноде → FORGET вернёт "Unknown node", глотаем (no-op); старых в
-// топологии seed уже не осталось (все забыты) → пустой oldIDs, changed=false. Все
-// старые seed недоступны (кластер уже погашен, id взять неоткуда) → ОШИБКА с
-// понятным текстом (мы не знаем, что забывать — не идемпотентный путь).
+// WITHOUT slot migration (unlike remove-node): new masters ALREADY have the slots
+// after the failover-takeover, the old masters lost them. Idempotent: old id
+// already unknown to the node -> FORGET will return "Unknown node", swallow (no-op); old in
+// there is no seed topology left (everyone is forgotten) -> empty oldIDs, changed=false. All
+// old seeds are not available (the cluster has already been extinguished, there is nowhere to get the id) -> ERROR with
+// in clear text (we don't know that forgetting is not an idempotent way).
 //
-// Финальный Output несёт число забытых старых узлов и число новых нод, на которых
-// FORGET исполнен. Пароль НЕ попадает в события (ИБ ADR-010).
+// The final Output carries the number of forgotten old nodes and the number of new nodes on which
+// FORGET is executed. The password is NOT included in the events (IB ADR-010).
 func (m *RedisModule) applyClusterForgetExternal(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], params *structpb.Struct) error {
 	f := params.GetFields()
 	password := stringOrEmpty(f["password"])
@@ -583,20 +583,20 @@ func (m *RedisModule) applyClusterForgetExternal(ctx context.Context, stream grp
 		return conn, nil
 	}
 
-	// node-id старого кластера с первой доступной source-seed (как join-external).
-	// ★ИСКЛЮЧАЕМ новые ноды: после join-external + failover-takeover новые ноды —
-	// члены ТОГО ЖЕ кластера, и CLUSTER NODES старого seed перечисляет их тоже. Без
-	// фильтра их id попали бы в oldIDs → нода форгетила бы СЕБЯ (Redis: "I can't
-	// forget myself" — это НЕ "unknown node", hard-fail). Фильтр — по ip:port из
-	// nodes-map (надёжнее, чем CLUSTER MYID на каждой ноде: один проход топологии).
+	// node-id of the old cluster with the first available source-seed (like join-external).
+	// EXCLUDE new nodes: after join-external + failover-takeover new nodes -
+	// members of the SAME cluster, and CLUSTER NODES of the old seed lists them too. Without
+	// filter, their ids would end up in oldIDs -> the node would forget ITSELF (Redis: "I can't
+	// forget myself" - this is NOT "unknown node", hard-fail). Filter - by ip:port from
+	// nodes-map (more reliable than CLUSTER MYID on each node: one topology pass).
 	oldIDs, seedEndpoint, err := sourceNodeIDs(ctx, connect, sources, newNodes)
 	if err != nil {
 		return sendFailure(stream, redactError(err, password))
 	}
 
-	// На КАЖДОЙ новой ноде FORGET всех старых id. "Unknown node" (нода уже забыла
-	// старого) → идемпотентность, глотаем. Считаем число (нода × старый) пар, где
-	// FORGET реально что-то забыл.
+	// On EVERY new node FORGET all old ids. "Unknown node" (I have already forgotten the node
+	// old) -> idempotency, swallow. We count the number of (node x old) pairs, where
+	// FORGET really forgot something.
 	forgotten := 0
 	for _, node := range newNodes {
 		n, err := forgetIDsOnNode(ctx, connect, node, oldIDs)
@@ -616,19 +616,19 @@ func (m *RedisModule) applyClusterForgetExternal(ctx context.Context, stream grp
 		})
 }
 
-// sourceNodeIDs коннектится к source-seed-ам по порядку, берёт CLUSTER NODES с
-// первой ответившей и возвращает node-id СТАРОГО кластера (мастера И реплики —
-// забываем всех), детерминированно отсортированные. Возвращает также endpoint
-// сработавшего seed-а (для Output). Все seed-ы недоступны → ошибка.
+// sourceNodeIDs connects to source seeds in order, takes CLUSTER NODES from
+// first to respond and returns the node-id of the OLD cluster (master AND replica -
+// forget everyone), deterministically sorted. Returns also endpoint
+// triggered seed (for Output). All seeds are unavailable -> error.
 //
-// ★ Узлы, чей ip:port совпадает с newNodes, ИСКЛЮЧАЮТСЯ: после join-external +
-// failover-takeover новые ноды — члены того же кластера и попадают в CLUSTER NODES
-// старого seed; их id в oldIDs привёл бы к self-forget ("can't forget myself").
+// Nodes whose ip:port matches newNodes ARE EXCLUDED: after join-external +
+// failover-takeover new nodes are members of the same cluster and fall into CLUSTER NODES
+// old seed; their id in oldIDs would result in self-forget ("can't forget myself").
 //
-// Отличие от sourceMasters: тот берёт только мастеров со слотами (для маппинга
-// репликации), здесь нужны ВСЕ старые узлы (forget выкидывает целиком старый кластер).
+// Difference from sourceMasters: it only takes masters with slots (for mapping
+// replication), ALL old nodes are needed here (forget throws out the entire old cluster).
 func sourceNodeIDs(ctx context.Context, connect func(clusterNode) (redisConn, error), seeds, newNodes []clusterNode) ([]string, string, error) {
-	// Set ip:port новых нод — их строки в топологии старого seed отбрасываем.
+	// Set ip:port of new nodes - discard their lines in the topology of the old seed.
 	newEndpoints := make(map[string]struct{}, len(newNodes))
 	for _, n := range newNodes {
 		newEndpoints[net.JoinHostPort(n.ip, strconv.Itoa(n.port))] = struct{}{}
@@ -650,7 +650,7 @@ func sourceNodeIDs(ctx context.Context, connect func(clusterNode) (redisConn, er
 
 		rows := parseClusterNodesTable(topology)
 		if len(rows) == 0 {
-			// Битый/пустой ответ seed (ни одной строки) — пробуем следующий seed.
+			// Broken/empty response seed (not a single line) - try the next seed.
 			lastErr = fmt.Errorf("source seed %s: no nodes in CLUSTER NODES", seed.addr)
 			continue
 		}
@@ -660,15 +660,15 @@ func sourceNodeIDs(ctx context.Context, connect func(clusterNode) (redisConn, er
 				continue
 			}
 			if _, isNew := newEndpoints[row.ipPort]; isNew {
-				continue // новая нода (уже в кластере) — не забываем (иначе self-forget)
+				continue // new node (already in the cluster) - don't forget (otherwise self-forget)
 			}
 			ids = append(ids, row.id)
 		}
-		// ids может быть пустым, если все строки топологии — новые ноды (старые уже
-		// забыты/выключены): забывать нечего — идемпотентный no-op (caller вернёт
-		// changed=false), а НЕ ошибка. Сюда мы дошли с непустой топологией (битый
-		// seed отсеян выше), поэтому пустой ids — это steady-state, а не сбой seed.
-		sort.Strings(ids) // детерминированный порядок FORGET (стабильный вывод/asserts)
+		// ids can be empty if all topology lines are new nodes (old ones are already
+		// forgotten/disabled): there is nothing to forget - idempotent no-op (caller will return
+		// changed=false), and NOT an error. We got here with a non-empty topology (broken
+		// seed is filtered out above), so an empty ids is a steady-state, not a seed failure.
+		sort.Strings(ids) // deterministic order FORGET (stable output/asserts)
 		return ids, net.JoinHostPort(seed.ip, strconv.Itoa(seed.port)), nil
 	}
 	if lastErr == nil {
@@ -677,13 +677,13 @@ func sourceNodeIDs(ctx context.Context, connect func(clusterNode) (redisConn, er
 	return nil, "", lastErr
 }
 
-// forgetIDsOnNode исполняет CLUSTER FORGET <old-id> на одной новой ноде для каждого
-// старого id. Возвращает число реально забытых. Два класса ошибок глотаются как
-// идемпотентность: "Unknown node" (нода уже забыла этот id — gossip-anti-entropy /
-// повторный apply) и "can't forget myself" (id оказался самой ноды — defense-in-
-// depth: oldIDs уже отфильтрован по ip:port в sourceNodeIDs, но gossip мог добавить
-// новую ноду в seed-топологию ПОСЛЕ фильтра, ip-форма могла разойтись — глотаем,
-// чтобы не падать на безопасном no-op).
+// forgetIDsOnNode executes CLUSTER FORGET <old-id> on one new node for each
+// old id. Returns the number of actually forgotten ones. Two classes of errors are swallowed as
+// idempotency: "Unknown node" (node has already forgotten this id - gossip-anti-entropy /
+// apply again) and "can't forget myself" (the id turned out to be the node itself - defense-in-
+// depth: oldIDs is already filtered by ip:port in sourceNodeIDs, but gossip could have added
+// a new node in the seed topology AFTER the filter, the ip form could diverge - swallow it,
+// so as not to fall on a safe no-op).
 func forgetIDsOnNode(ctx context.Context, connect func(clusterNode) (redisConn, error), node clusterNode, oldIDs []string) (int, error) {
 	conn, err := connect(node)
 	if err != nil {
@@ -695,8 +695,8 @@ func forgetIDsOnNode(ctx context.Context, connect func(clusterNode) (redisConn, 
 	for _, id := range oldIDs {
 		_, err := conn.Do(ctx, "CLUSTER", "FORGET", id)
 		if err != nil {
-			// Идемпотентность: нода уже забыла старого ("Unknown node") либо id — она
-			// сама ("can't forget myself", пост-join gossip-гонка). Не ошибка, дальше.
+			// Idempotency: the node has already forgotten the old one ("Unknown node") or the id is it
+			// itself ("can't forget myself", post-join gossip race). No mistake, move on.
 			if isUnknownNodeErr(err) || isCantForgetSelfErr(err) {
 				continue
 			}
@@ -707,9 +707,9 @@ func forgetIDsOnNode(ctx context.Context, connect func(clusterNode) (redisConn, 
 	return done, nil
 }
 
-// isCantForgetSelfErr — CLUSTER FORGET по собственному node-id → Redis отвечает
-// "ERR I tried hard but I can't forget myself...". Пост-join новая нода — член того
-// же кластера; sourceNodeIDs её отфильтровывает, но на gossip-гонку глотаем и здесь.
+// isCantForgetSelfErr - CLUSTER FORGET by its own node-id -> Redis responds
+// "ERR I tried hard but I can't forget myself...". Post-join new node is a member of that
+// same cluster; sourceNodeIDs filters it out, but we swallow the gossip race here too.
 func isCantForgetSelfErr(err error) bool {
 	return strings.Contains(strings.ToLower(err.Error()), "can't forget myself")
 }

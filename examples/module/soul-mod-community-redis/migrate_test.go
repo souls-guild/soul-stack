@@ -10,16 +10,16 @@ import (
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 )
 
-// masterRowWithSlots строит строку CLUSTER NODES для master-а СО слот-диапазоном
-// (clusterNodesTable слоты не несёт, а join-external их разбирает для сортировки
-// маппинга 1:1). Формат: <id> <ip:port@cport> master - 0 0 0 connected <from-to>.
+// masterRowWithSlots builds a CLUSTER NODES row for master WITH slot range
+// (clusterNodesTable does not carry slots, but join-external parses them for sorting
+// mapping 1:1). Format: <id> <ip:port@cport> master - 0 0 0 connected <from-to>.
 func masterRowWithSlots(id, ipPort string, from, to int) string {
 	return fmt.Sprintf("%s %s@%s master - 0 0 0 connected %d-%d", id, ipPort, ipPort, from, to)
 }
 
-// sourceClusterTwoMasters — топология старого кластера из двух мастеров со
-// слотами (m0 владеет нижней половиной, m1 — верхней): база happy-path и проверки
-// сортировки маппинга по возрастанию первого слота.
+// sourceClusterTwoMasters - topology of the old cluster of two masters with
+// slots (m0 owns the bottom half, m1 the top): happy-path base and checks
+// sort the mapping in ascending order of the first slot.
 func sourceClusterTwoMasters() string {
 	return strings.Join([]string{
 		masterRowWithSlots("oldm0", "10.0.0.1:6379", 0, 8191),
@@ -27,8 +27,8 @@ func sourceClusterTwoMasters() string {
 	}, "\n")
 }
 
-// ownIsolated — CLUSTER NODES свежего изолированного нового узла (одна строка:
-// он сам как master без слотов) → alreadyReplicaOf=false, идём вливать.
+// ownIsolated - CLUSTER NODES of the fresh isolated new node (one line:
+// he himself is like a master without slots) -> alreadyReplicaOf=false, let's go pour in.
 func ownIsolated(id, ipPort string) string {
 	return clusterNodesTable(nodeRowSpec{id: id, ipPort: ipPort, master: true})
 }
@@ -47,7 +47,7 @@ func TestValidate_JoinExternalRejectsEmptyNodes(t *testing.T) {
 		}),
 	})
 	if reply.Ok {
-		t.Fatal("ждали Ok=false на пустой nodes")
+		t.Fatal("waited Ok=false on empty nodes")
 	}
 }
 
@@ -63,7 +63,7 @@ func TestValidate_JoinExternalRejectsEmptySourceNodes(t *testing.T) {
 		}),
 	})
 	if reply.Ok {
-		t.Fatal("ждали Ok=false на пустой source_nodes")
+		t.Fatal("waited Ok=false on empty source_nodes")
 	}
 }
 
@@ -79,7 +79,7 @@ func TestValidate_JoinExternalRejectsBadShardsDest(t *testing.T) {
 		}),
 	})
 	if reply.Ok {
-		t.Fatal("ждали Ok=false на shards_dest < 1")
+		t.Fatal("waited Ok=false on shards_dest < 1")
 	}
 }
 
@@ -95,27 +95,27 @@ func TestValidate_JoinExternalHappy(t *testing.T) {
 		}),
 	})
 	if !reply.Ok || len(reply.Errors) != 0 {
-		t.Fatalf("ждали Ok=true, got %+v", reply)
+		t.Fatalf("waited Ok=true, got %+v", reply)
 	}
 }
 
-// --- Apply join-external: happy-path (NODES → MEET → REPLICATE, 1:1 по слотам) ---
+// --- Apply join-external: happy-path (NODES -> MEET -> REPLICATE, 1:1 by slots) ---
 
-// TestApplyJoinExternal_HappyPath — два новых узла вливаются в старый кластер из
-// двух мастеров: каждый шлёт MEET на source-seed, ждёт сходимости, REPLICATE
-// смаппленного мастера. Маппинг 1:1 ПО СЛОТАМ: новый узел с меньшим ключом ↔
-// старый мастер с меньшим первым слотом.
+// TestApplyJoinExternal_HappyPath - two new nodes join the old cluster from
+// two masters: each sends MEET to source-seed, waits for convergence, REPLICATE
+// mapped master. 1:1 mapping BY SLOT: new node with smaller key
+// old master with a smaller first slot.
 func TestApplyJoinExternal_HappyPath(t *testing.T) {
 	new0, new1 := "10.1.0.1:6379", "10.1.0.2:6379"
 	seed := "10.0.0.1:6379"
 	fl := newFleet(new0, new1, seed)
 
-	// Source-seed отдаёт топологию старого кластера (2 мастера со слотами).
+	// Source-seed gives the topology of the old cluster (2 masters with slots).
 	fl.byAddr[seed].nodes = sourceClusterTwoMasters()
 
-	// Новый узел: первый CLUSTER NODES (до MEET) — изолированный (он сам, master
-	// без master-id) → не реплика; после MEET — видит целевого старого мастера
-	// (его id в топологии) → waitNodeKnows сходится.
+	// New node: first CLUSTER NODES (before MEET) - isolated (itself, master
+	// without master-id) -> not a replica; after MEET - sees the target old master
+	// (its id in the topology) -> waitNodeKnows converges.
 	converged := sourceClusterTwoMasters()
 	fl.byAddr[new0].nodesSeq = []string{ownIsolated("n0", new0), converged}
 	fl.byAddr[new1].nodesSeq = []string{ownIsolated("n1", new1), converged}
@@ -139,30 +139,30 @@ func TestApplyJoinExternal_HappyPath(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed || !fin.Changed {
-		t.Fatalf("ждали успех changed=true, got %+v", fin)
+		t.Fatalf("expected success changed=true, got %+v", fin)
 	}
 
-	// Маппинг 1:1 по слотам: node-0 (clusterNodesParam ключ "node-0") ↔ oldm0
-	// (слоты 0-8191), node-1 ↔ oldm1 (8192-16383).
+	// 1:1 mapping by slots: node-0 (clusterNodesParam key "node-0") oldm0
+	// (slots 0-8191), node-1 oldm1 (8192-16383).
 	assertReplicateTo(t, fl.byAddr[new0], "oldm0")
 	assertReplicateTo(t, fl.byAddr[new1], "oldm1")
 
-	// Каждый новый узел слал MEET именно на source-seed ip:port.
+	// Each new node sent MEET to the source-seed ip:port.
 	assertMeetTargets(t, fl.byAddr[new0], []string{seed})
 	assertMeetTargets(t, fl.byAddr[new1], []string{seed})
 
-	// Source-seed НЕ получает MEET/REPLICATE — он лишь источник топологии.
+	// Source-seed does NOT receive MEET/REPLICATE - it is only a topology source.
 	for _, call := range fl.byAddr[seed].calls {
 		if isClusterSub(call, "MEET") || isClusterSub(call, "REPLICATE") {
-			t.Errorf("source seed не должен получать MEET/REPLICATE: %v", call)
+			t.Errorf("source seed should not receive MEET/REPLICATE: %v", call)
 		}
 	}
 
 	if got := fin.GetOutput().GetFields()["mapping"].GetStringValue(); got != "node-0->oldm0,node-1->oldm1" {
-		t.Errorf("mapping=%q, ждали node-0->oldm0,node-1->oldm1", got)
+		t.Errorf("mapping=%q, waited node-0->oldm0,node-1->oldm1", got)
 	}
 	if got := fin.GetOutput().GetFields()["shards"].GetNumberValue(); got != 2 {
-		t.Errorf("shards=%v, ждали 2", got)
+		t.Errorf("shards=%v, waited 2", got)
 	}
 
 	assertEventsNoSecret(t, stream)
@@ -171,17 +171,17 @@ func TestApplyJoinExternal_HappyPath(t *testing.T) {
 	}
 }
 
-// TestApplyJoinExternal_MappingByFirstSlotNotID — порядок строк CLUSTER NODES и
-// node-id НЕ влияют на маппинг: он строго по возрастанию первого слота. Старый
-// мастер с алфавитно-БОЛЬШИМ id, но МЕНЬШИМ слотом обязан смаппиться на первый
-// (по ключу) новый узел.
+// TestApplyJoinExternal_MappingByFirstSlotNotID - order of CLUSTER NODES rows and
+// node-id does NOT affect the mapping: it is strictly in ascending order of the first slot. Old
+// a master with an alphabetically LARGER id, but a SMALLER slot must be mapped to the first one
+// (by key) new node.
 func TestApplyJoinExternal_MappingByFirstSlotNotID(t *testing.T) {
 	new0, new1 := "10.1.0.1:6379", "10.1.0.2:6379"
 	seed := "10.0.0.1:6379"
 	fl := newFleet(new0, new1, seed)
 
-	// zzz владеет нижними слотами 0-8191, aaa — верхними 8192-16383. По id-сортировке
-	// первым был бы aaa; по слот-сортировке (правильной) — zzz.
+	// zzz owns the lower slots 0-8191, aaa owns the upper slots 8192-16383. By id sorting
+	// the first would be aaa; by slot sorting (correct) - zzz.
 	src := strings.Join([]string{
 		masterRowWithSlots("aaa", "10.0.0.2:6379", 8192, 16383),
 		masterRowWithSlots("zzz", "10.0.0.1:6379", 0, 8191),
@@ -206,24 +206,24 @@ func TestApplyJoinExternal_MappingByFirstSlotNotID(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed {
-		t.Fatalf("ждали успех, got %+v", fin)
+		t.Fatalf("expected success, got %+v", fin)
 	}
-	// node-0 ↔ zzz (первый слот 0), node-1 ↔ aaa (первый слот 8192).
+	// node-0 zzz (first slot 0), node-1 aaa (first slot 8192).
 	assertReplicateTo(t, fl.byAddr[new0], "zzz")
 	assertReplicateTo(t, fl.byAddr[new1], "aaa")
 }
 
-// --- Apply join-external: FAIL-FAST на shards-mismatch ---
+// --- Apply join-external: FAIL-FAST on shards-mismatch ---
 
-// TestApplyJoinExternal_FailFastShardsMismatch — у источника 3 мастера, dest
-// ждёт 2 шарда (и подаёт 2 новых узла) → 1:1 невозможен → failed, REPLICATE/MEET
-// на новых узлах НЕ выполняется. Пароль не течёт.
+// TestApplyJoinExternal_FailFastShardsMismatch - source has 3 masters, dest
+// waits for 2 shards (and feeds 2 new nodes) -> 1:1 impossible -> failed, REPLICATE/MEET
+// NOT performed on new nodes. The password does not leak.
 func TestApplyJoinExternal_FailFastShardsMismatch(t *testing.T) {
 	new0, new1 := "10.1.0.1:6379", "10.1.0.2:6379"
 	seed := "10.0.0.1:6379"
 	fl := newFleet(new0, new1, seed)
 
-	// Источник: 3 мастера со слотами (3 шарда).
+	// Source: 3 masters with slots (3 shards).
 	fl.byAddr[seed].nodes = strings.Join([]string{
 		masterRowWithSlots("oldm0", "10.0.0.1:6379", 0, 5460),
 		masterRowWithSlots("oldm1", "10.0.0.2:6379", 5461, 10922),
@@ -237,33 +237,33 @@ func TestApplyJoinExternal_FailFastShardsMismatch(t *testing.T) {
 		Params: mustStruct(t, map[string]any{
 			"action":       "join-external",
 			"password":     secretPass,
-			"nodes":        clusterNodesParam(new0, new1), // 2 новых узла
+			"nodes":        clusterNodesParam(new0, new1), // 2 new nodes
 			"source_nodes": []any{seed},
-			"shards_dest":  2, // ждём 2, у источника 3
+			"shards_dest":  2, // waiting 2, at the source 3
 		}),
 	}, stream)
 
 	fin := stream.final()
 	if fin == nil || !fin.Failed {
-		t.Fatalf("ждали failed=true на shards-mismatch (3 source masters vs 2 dest), got %+v", fin)
+		t.Fatalf("expected failed=true on shards-mismatch (3 source masters vs 2 dest), got %+v", fin)
 	}
 	if !strings.Contains(fin.GetMessage(), "3 masters") || !strings.Contains(fin.GetMessage(), "2 shards") {
-		t.Errorf("ждали понятную ошибку про 3 masters / 2 shards, got %q", fin.GetMessage())
+		t.Errorf("We were expecting a clear error about 3 masters / 2 shards, got %q", fin.GetMessage())
 	}
-	// Новые узлы НЕ трогались: ни MEET, ни REPLICATE (fail до вливания).
+	// New nodes were NOT touched: neither MEET nor REPLICATE (fail before infusion).
 	for _, addr := range []string{new0, new1} {
 		for _, call := range fl.byAddr[addr].calls {
 			if isClusterSub(call, "MEET") || isClusterSub(call, "REPLICATE") {
-				t.Errorf("узел %s тронут при fail-fast: %v", addr, call)
+				t.Errorf("node %s touched during fail-fast: %v", addr, call)
 			}
 		}
 	}
 	assertEventsNoSecret(t, stream)
 }
 
-// TestApplyJoinExternal_FailFastNodesCountMismatch — число новых узлов != shards_dest
-// (статически непроверяемо относительно живого источника, но узлы↔shards_dest
-// сверяются до коннекта) → failed, источник даже не опрашивается.
+// TestApplyJoinExternal_FailFastNodesCountMismatch - number of new nodes != shards_dest
+// (statically unverifiable against live source, but nodesshards_dest
+// verified until connection) -> failed, the source is not even polled.
 func TestApplyJoinExternal_FailFastNodesCountMismatch(t *testing.T) {
 	new0 := "10.1.0.1:6379"
 	seed := "10.0.0.1:6379"
@@ -276,35 +276,35 @@ func TestApplyJoinExternal_FailFastNodesCountMismatch(t *testing.T) {
 		State: "cluster",
 		Params: mustStruct(t, map[string]any{
 			"action":       "join-external",
-			"nodes":        clusterNodesParam(new0), // 1 узел
+			"nodes":        clusterNodesParam(new0), // 1 node
 			"source_nodes": []any{seed},
-			"shards_dest":  2, // ждём 2
+			"shards_dest":  2, // waiting 2
 		}),
 	}, stream)
 
 	fin := stream.final()
 	if fin == nil || !fin.Failed {
-		t.Fatalf("ждали failed=true на nodes!=shards_dest, got %+v", fin)
+		t.Fatalf("waited failed=true on nodes!=shards_dest, got %+v", fin)
 	}
-	// Источник не опрашивался — fail до коннекта к seed.
+	// The source was not polled - fail before connecting to the seed.
 	if len(fl.byAddr[seed].calls) != 0 {
-		t.Errorf("source seed не должен опрашиваться при nodes!=shards_dest: %v", fl.byAddr[seed].calls)
+		t.Errorf("source seed should not be polled when nodes!=shards_dest: %v", fl.byAddr[seed].calls)
 	}
 }
 
-// --- Apply join-external: идемпотентность (узел уже реплика нужного мастера) ---
+// --- Apply join-external: idempotency (the node is already a replica of the desired master) ---
 
-// TestApplyJoinExternal_AlreadyReplicaNoOp — оба новых узла УЖЕ реплики своих
-// смаппленных старых мастеров (повторный apply) → changed=false, ни MEET, ни
-// REPLICATE не шлются.
+// TestApplyJoinExternal_AlreadyReplicaNoOp - both new nodes are ALREADY replicas of their own
+// mapped old masters (re-apply) -> changed=false, neither MEET nor
+// REPLICATE are not sent.
 func TestApplyJoinExternal_AlreadyReplicaNoOp(t *testing.T) {
 	new0, new1 := "10.1.0.1:6379", "10.1.0.2:6379"
 	seed := "10.0.0.1:6379"
 	fl := newFleet(new0, new1, seed)
 	fl.byAddr[seed].nodes = sourceClusterTwoMasters()
 
-	// CLUSTER NODES каждого узла УЖЕ содержит его строку как реплику нужного
-	// мастера (n0 → oldm0, n1 → oldm1) → alreadyReplicaOf=true.
+	// CLUSTER NODES of each node ALREADY contains its row as a replica of the desired
+	// masters (n0 -> oldm0, n1 -> oldm1) -> alreadyReplicaOf=true.
 	n0Topo := strings.Join([]string{
 		masterRowWithSlots("oldm0", "10.0.0.1:6379", 0, 8191),
 		clusterNodesTable(nodeRowSpec{id: "n0", ipPort: new0, masterID: "oldm0"}),
@@ -332,33 +332,33 @@ func TestApplyJoinExternal_AlreadyReplicaNoOp(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed {
-		t.Fatalf("ждали успех, got %+v", fin)
+		t.Fatalf("expected success, got %+v", fin)
 	}
 	if fin.Changed {
-		t.Error("ждали changed=false: оба узла уже реплики нужных мастеров (no-op)")
+		t.Error("expected changed=false: both nodes are already replicas of the required masters (no-op)")
 	}
-	// No-op: ни MEET, ни REPLICATE на новых узлах.
+	// No-op: neither MEET nor REPLICATE on new nodes.
 	for _, addr := range []string{new0, new1} {
 		for _, call := range fl.byAddr[addr].calls {
 			if isClusterSub(call, "MEET") || isClusterSub(call, "REPLICATE") {
-				t.Errorf("узел %s: no-op нарушен, вызвана %v", addr, call)
+				t.Errorf("node %s: no-op broken, caused by %v", addr, call)
 			}
 		}
 	}
 	if got := fin.GetOutput().GetFields()["per_node"].GetStringValue(); !strings.Contains(got, "already") {
-		t.Errorf("per_node=%q, ждали статус already", got)
+		t.Errorf("per_node=%q, waiting for status already", got)
 	}
 }
 
-// TestApplyJoinExternal_PartialIdempotent — один узел уже реплика, второй ещё нет:
-// changed=true (второй влит), первый не трогается.
+// TestApplyJoinExternal_PartialIdempotent - one node is already a replica, the second is not yet:
+// changed=true (the second one is in), the first one is not touched.
 func TestApplyJoinExternal_PartialIdempotent(t *testing.T) {
 	new0, new1 := "10.1.0.1:6379", "10.1.0.2:6379"
 	seed := "10.0.0.1:6379"
 	fl := newFleet(new0, new1, seed)
 	fl.byAddr[seed].nodes = sourceClusterTwoMasters()
 
-	// n0 уже реплика oldm0 (no-op), n1 ещё изолирован (вливается).
+	// n0 is already a replica of oldm0 (no-op), n1 is still isolated (joined in).
 	fl.byAddr[new0].nodes = strings.Join([]string{
 		masterRowWithSlots("oldm0", "10.0.0.1:6379", 0, 8191),
 		clusterNodesTable(nodeRowSpec{id: "n0", ipPort: new0, masterID: "oldm0"}),
@@ -381,20 +381,20 @@ func TestApplyJoinExternal_PartialIdempotent(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed || !fin.Changed {
-		t.Fatalf("ждали успех changed=true (n1 влит), got %+v", fin)
+		t.Fatalf("expected success changed=true (n1 added), got %+v", fin)
 	}
-	// n0 не трогался.
+	// n0 was not touched.
 	for _, call := range fl.byAddr[new0].calls {
 		if isClusterSub(call, "MEET") || isClusterSub(call, "REPLICATE") {
-			t.Errorf("n0 (уже реплика) не должен трогаться: %v", call)
+			t.Errorf("n0 (already a replica) should not be touched: %v", call)
 		}
 	}
-	// n1 влит: MEET seed + REPLICATE oldm1.
+	// n1 infused: MEET seed + REPLICATE oldm1.
 	assertMeetTargets(t, fl.byAddr[new1], []string{seed})
 	assertReplicateTo(t, fl.byAddr[new1], "oldm1")
 }
 
-// --- Apply join-external: коннект к source-seed падает не утекая паролем ---
+// --- Apply join-external: connection to source-seed fails without leaking password ---
 
 func TestApplyJoinExternal_SourceConnectFailNoLeak(t *testing.T) {
 	m := &RedisModule{
@@ -416,18 +416,18 @@ func TestApplyJoinExternal_SourceConnectFailNoLeak(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || !fin.Failed {
-		t.Fatalf("ждали failed=true, got %+v", fin)
+		t.Fatalf("waited failed=true, got %+v", fin)
 	}
 	assertEventsNoSecret(t, stream)
 }
 
-// TestApplyJoinExternal_SourceSeedFailoverToNext — первый source-seed недоступен,
-// второй отвечает: топология берётся со второго (как redis-cli с первым
-// достижимым узлом).
+// TestApplyJoinExternal_SourceSeedFailoverToNext - the first source-seed is not available,
+// the second one answers: the topology is taken from the second one (like redis-cli with the first one
+// reachable node).
 func TestApplyJoinExternal_SourceSeedFailoverToNext(t *testing.T) {
 	new0, new1 := "10.1.0.1:6379", "10.1.0.2:6379"
 	seedDown, seedUp := "10.0.0.9:6379", "10.0.0.1:6379"
-	// seedDown в fleet НЕ заводим → connect к нему вернёт ошибку, перебор идёт дальше.
+	// We do NOT start seedDown in fleet -> connect to it will return an error, the search goes further.
 	fl := newFleet(new0, new1, seedUp)
 	fl.byAddr[seedUp].nodes = sourceClusterTwoMasters()
 	conv := sourceClusterTwoMasters()
@@ -450,11 +450,11 @@ func TestApplyJoinExternal_SourceSeedFailoverToNext(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed || !fin.Changed {
-		t.Fatalf("ждали успех через второй seed, got %+v", fin)
+		t.Fatalf("expected success through the second seed, got %+v", fin)
 	}
-	// MEET ушёл на ВТОРОЙ (живой) seed, не на первый (мёртвый).
+	// MEET went to the SECOND (live) seed, not to the first (dead).
 	assertMeetTargets(t, fl.byAddr[new0], []string{seedUp})
 	if got := fin.GetOutput().GetFields()["source_via"].GetStringValue(); got != seedUp {
-		t.Errorf("source_via=%q, ждали %q (второй seed)", got, seedUp)
+		t.Errorf("source_via=%q, expected %q (second seed)", got, seedUp)
 	}
 }

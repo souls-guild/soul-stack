@@ -1,20 +1,20 @@
-// sentinel-state плагина community.redis — горячая реконсиляция конфигурации
-// Redis Sentinel ЦЕЛИКОМ через go-redis: SENTINEL MASTERS/MASTER (diff) →
-// SENTINEL MONITOR/REMOVE+MONITOR (монитор) → SENTINEL SET (per-master) →
-// SENTINEL CONFIG GET/SET (globals). НИКАКОГО redis-cli/shell — capability
-// плагина остаётся только network_outbound.
+// sentinel-state community.redis plugin - hot configuration reconciliation
+// Redis Sentinel ENTIRELY via go-redis: SENTINEL MASTERS/MASTER (diff) ->
+// SENTINEL MONITOR/REMOVE+MONITOR (monitor) -> SENTINEL SET (per-master) ->
+// SENTINEL CONFIG GET/SET (globals). NO redis-cli/shell - capability
+// The only plugin left is network_outbound.
 //
-// Алгоритм перенесён 1:1 из Ansible library/redis_sentinel_update.py
+// The algorithm has been transferred 1:1 from Ansible library/redis_sentinel_update.py
 // (classify_config / compute_monitor_action / compute_set_updates): top-level
-// CONFIG в режиме Sentinel НЕ поддерживается, поэтому глобальные параметры идут
-// через SENTINEL CONFIG SET, а параметры master-а — через SENTINEL SET.
+// CONFIG in Sentinel mode is NOT supported, so global options go
+// via SENTINEL CONFIG SET, and the master parameters via SENTINEL SET.
 //
-// Идемпотентен: монитор не трогается, если master уже на нужном адресе; SET/
-// CONFIG SET применяются только при реальном отличии от текущего.
+// Idempotent: the monitor is not touched if master is already at the desired address; SET/
+// CONFIG SET are applied only if there is a real difference from the current one.
 //
-// КРИТ ИБ (ADR-010): auth_pass / sentinel-pass НИКОГДА не попадают в
-// ApplyEvent.Message/.Output/ошибки. Output несёт только имена применённых
-// действий, не их секретные значения.
+// KRIT IB (ADR-010): auth_pass / sentinel-pass NEVER get into
+// ApplyEvent.Message/.Output/errors. Output carries only the names of applied
+// actions, not their secret meanings.
 package main
 
 import (
@@ -29,11 +29,11 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// defaultMasterName — имя monitored master по умолчанию (как в роли: mymaster).
+// defaultMasterName - the default name of the monitored master (as in role: mymaster).
 const defaultMasterName = "mymaster"
 
-// sentinelGlobalParams — глобальные параметры Sentinel, принимаемые SENTINEL
-// CONFIG SET (одно слово после "sentinel "). Перенос SENTINEL_GLOBAL_PARAMS.
+// sentinelGlobalParams - global parameters Sentinel accepted by SENTINEL
+// CONFIG SET (one word after "sentinel"). Transfer SENTINEL_GLOBAL_PARAMS.
 var sentinelGlobalParams = map[string]bool{
 	"announce-ip":        true,
 	"announce-port":      true,
@@ -43,13 +43,13 @@ var sentinelGlobalParams = map[string]bool{
 	"sentinel-pass":      true,
 }
 
-// secretGlobalParams — глобальные параметры-секреты: SENTINEL CONFIG GET
-// возвращает их пустыми, diff невозможен. В create-срезе rotate не делаем, поэтому
-// они просто не применяются как globals (sentinel-pass задаётся через монитор
-// при создании, как auth-pass). Перенос SECRET_GLOBAL_PARAMS.
+// secretGlobalParams - global secret parameters: SENTINEL CONFIG GET
+// returns them empty, diff is not possible. We don't do rotation in the create slice, so
+// they are simply not applied as globals (sentinel-pass is set via the monitor
+// when created, like auth-pass). Transfer SECRET_GLOBAL_PARAMS.
 var secretGlobalParams = map[string]bool{"sentinel-pass": true}
 
-// validateSentinel — статические проверки sentinel-params (тексты без секретов).
+// validateSentinel - static checks of sentinel-params (texts without secrets).
 func validateSentinel(f map[string]*structpb.Value) []string {
 	var errs []string
 	errs = append(errs, validateAddr(f)...)
@@ -60,8 +60,8 @@ func validateSentinel(f map[string]*structpb.Value) []string {
 		if intOrDefault(mon["port"], 0) <= 0 {
 			errs = append(errs, "params.monitor.port: must be a positive integer")
 		}
-		// quorum опционален (default 1 в reconcileMonitor), но ЕСЛИ задан — должен
-		// быть >=1: SENTINEL MONITOR ... 0 отвергается Redis (симметрично port>0).
+		// quorum is optional (default 1 in reconcileMonitor), but IF specified - must
+		// be >=1: SENTINEL MONITOR... 0 is rejected by Redis (symmetrical port>0).
 		if q := mon["quorum"]; q != nil && intOrDefault(q, 1) < 1 {
 			errs = append(errs, "params.monitor.quorum: must be a positive integer (>= 1)")
 		}
@@ -69,7 +69,7 @@ func validateSentinel(f map[string]*structpb.Value) []string {
 	return errs
 }
 
-// applySentinel реконсилирует один Sentinel-инстанс к желаемому состоянию.
+// applySentinel reconciles one Sentinel instance to the desired state.
 func (m *RedisModule) applySentinel(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], conn redisConn, params *structpb.Struct) error {
 	f := params.GetFields()
 	authPass := stringOrEmpty(f["auth_pass"])
@@ -102,10 +102,10 @@ func (m *RedisModule) applySentinel(ctx context.Context, stream grpc.ServerStrea
 		changed = changed || pChanged
 	}
 
-	// SENTINEL CONFIG GET/SET (механизм reconcileGlobals целиком) появился в Redis
-	// 7.0: на 6.2 ЛЮБОЙ global завалит apply на первом же CONFIG GET. На <7.0
-	// пропускаем все globals целиком (no-op) — НЕ только loglevel; непустой набор
-	// помечаем warning-действием, чтобы оператор видел незаполненное желаемое.
+	// SENTINEL CONFIG GET/SET (entire reconcileGlobals mechanism) appeared in Redis
+	// 7.0: on 6.2 ANY global will fail apply on the first CONFIG GET. At <7.0
+	// skip all globals entirely (no-op) - NOT just loglevel; non-empty set
+	// We mark it with a warning action so that the operator sees the empty desired one.
 	if sentinelGlobalsSupported(redisVersion) {
 		gChanged, err := reconcileGlobals(ctx, conn, globals, &actions)
 		if err != nil {
@@ -122,19 +122,19 @@ func (m *RedisModule) applySentinel(ctx context.Context, stream grpc.ServerStrea
 	})
 }
 
-// sentinelGlobalsSupported — умеет ли версия SENTINEL CONFIG GET/SET (>=7.0).
-// Это механизм reconcileGlobals целиком, не отдельный параметр. Пустая/неизвестная
-// версия → false (fail-closed: на неизвестной версии globals не трогаем).
+// sentinelGlobalsSupported - whether the version of SENTINEL CONFIG GET/SET (>=7.0) can be used.
+// This is the reconcileGlobals mechanism as a whole, not a separate parameter. Empty/Unknown
+// version -> false (fail-closed: on an unknown version we do not touch globals).
 func sentinelGlobalsSupported(redisVersion string) bool {
 	return versionGE(redisVersion, [3]int{7, 0, 0})
 }
 
-// classifyConfig раскладывает директивы sentinel.conf на (globals, per_master).
-// Чистая функция (перенос classify_config):
+// classifyConfig decomposes sentinel.conf directives into (globals, per_master).
+// Pure function (transfer classify_config):
 //   - plain "loglevel" -> global;
-//   - "sentinel <param>" (одно слово) -> global;
-//   - "sentinel <opt> <master>" -> per-master, только для нашего master_name;
-//   - остальное (dir/port/tls-*/pidfile — startup-only) игнорируется.
+//   - "sentinel <param>" (one word) -> global;
+//   - "sentinel <opt> <master>" -> per-master, only for our master_name;
+//   - the rest (dir/port/tls-*/pidfile - startup-only) is ignored.
 func classifyConfig(config map[string]string, masterName string) (globals, perMaster map[string]string) {
 	globals = map[string]string{}
 	perMaster = map[string]string{}
@@ -157,10 +157,10 @@ func classifyConfig(config map[string]string, masterName string) (globals, perMa
 	return globals, perMaster
 }
 
-// supportedGlobals оставляет только глобальные параметры, которые умеет SENTINEL
-// CONFIG SET на этой версии (перенос supported_globals). loglevel в Sentinel —
-// только с Redis 7.0; на 6.2 отбрасываем. Секретные globals (sentinel-pass)
-// отбрасываем тут же — diff по ним невозможен, в create-срезе rotate нет.
+// supportedGlobals leaves only global parameters that SENTINEL can handle
+// CONFIG SET on this version (supported_globals port). loglevel in Sentinel -
+// only with Redis 7.0; we drop it to 6.2. Secret globals (sentinel-pass)
+// discard them right away - diff on them is impossible, there is no rotation in the create slice.
 func supportedGlobals(globals map[string]string, redisVersion string) map[string]string {
 	out := map[string]string{}
 	for key, value := range globals {
@@ -180,9 +180,9 @@ func supportedGlobals(globals map[string]string, redisVersion string) map[string
 	return out
 }
 
-// computeMonitorAction — что сделать с монитором: "add" (нет такого master),
-// "readd" (адрес сменился), "none" (перенос compute_monitor_action). current —
-// map поля->значение из SENTINEL MASTER (или nil, если master неизвестен).
+// computeMonitorAction - what to do with the monitor: "add" (there is no such master),
+// "readd" (address changed), "none" (transfer compute_monitor_action). current -
+// map fields->value from SENTINEL MASTER (or nil if master is unknown).
 func computeMonitorAction(current map[string]string, ip, port string) string {
 	if current == nil {
 		return "add"
@@ -193,9 +193,9 @@ func computeMonitorAction(current map[string]string, ip, port string) string {
 	return "none"
 }
 
-// computeSetUpdates вычисляет опции, отличающиеся от текущего (перенос
-// compute_set_updates): {опция: новое-значение} для тех, где cur отсутствует или
-// не совпал. Возвращается отсортированный список ключей для детерминизма SET.
+// computeSetUpdates computes options different from the current one (transfer
+// compute_set_updates): {option: new-value} for those where cur is missing or
+// didn't match. Returns a sorted list of keys for SET determinism.
 func computeSetUpdates(desired, current map[string]string) (keys []string, values map[string]string) {
 	values = map[string]string{}
 	for opt, value := range desired {
@@ -211,10 +211,10 @@ func computeSetUpdates(desired, current map[string]string) (keys []string, value
 	return keys, values
 }
 
-// reconcileMonitor приводит монитор к желаемому адресу (перенос
-// reconcile_monitor). add/readd → SENTINEL MONITOR; readd сначала REMOVE. auth
-// на master задаётся при создании/пересоздании монитора (у нового монитора их
-// нет). Возвращает changed (создан/пересоздан монитор).
+// reconcileMonitor brings the monitor to the desired address (transfer
+// reconcile_monitor). add/readd -> SENTINEL MONITOR; readd first REMOVE. auth
+// on master is set when creating/recreating a monitor (the new monitor has
+// no). Returns changed (monitor created/recreated).
 func reconcileMonitor(ctx context.Context, conn redisConn, masterName string, monitor map[string]*structpb.Value, authUser, authPass string, actions *[]string) (bool, error) {
 	ip := strings.TrimSpace(stringOrEmpty(monitor["ip"]))
 	port := strconv.Itoa(intOrDefault(monitor["port"], 0))
@@ -238,7 +238,7 @@ func reconcileMonitor(ctx context.Context, conn redisConn, masterName string, mo
 		}
 		*actions = append(*actions, "sentinel_monitor")
 
-		// auth на master — только у нового/пересозданного монитора (у него их нет).
+		// auth on master - only for the new/recreated monitor (it does not have them).
 		if authUser != "" {
 			if _, err := conn.Do(ctx, "SENTINEL", "SET", masterName, "auth-user", authUser); err != nil {
 				return false, fmt.Errorf("SENTINEL SET %s auth-user: %w", masterName, err)
@@ -257,9 +257,9 @@ func reconcileMonitor(ctx context.Context, conn redisConn, masterName string, mo
 	return action == "add" || action == "readd", nil
 }
 
-// reconcileMasterParams обновляет параметры master-а через SENTINEL SET (перенос
-// reconcile_master_params). quorum из monitor добавляется в желаемое. Применяются
-// только реально отличающиеся (compute_set_updates). Возвращает changed.
+// reconcileMasterParams updates the master parameters via SENTINEL SET (transfer
+// reconcile_master_params). quorum from monitor is added to the desired one. Apply
+// only really different ones (compute_set_updates). Returns changed.
 func reconcileMasterParams(ctx context.Context, conn redisConn, masterName string, perMaster map[string]string, monitor map[string]*structpb.Value, actions *[]string) (bool, error) {
 	desired := make(map[string]string, len(perMaster)+1)
 	for k, v := range perMaster {
@@ -288,10 +288,10 @@ func reconcileMasterParams(ctx context.Context, conn redisConn, masterName strin
 	return len(keys) > 0, nil
 }
 
-// reconcileGlobals обновляет глобальные параметры через SENTINEL CONFIG SET
-// (перенос reconcile_globals). Применяется только при отличии от текущего
-// (SENTINEL CONFIG GET). Секретные globals сюда не доходят (отфильтрованы
-// supportedGlobals). Возвращает changed. Имена директив детерминированы (sort).
+// reconcileGlobals updates global parameters via SENTINEL CONFIG SET
+// (transfer reconcile_globals). Applies only if different from the current one
+// (SENTINEL CONFIG GET). Secret globals do not reach here (filtered
+// supportedGlobals). Returns changed. Directive names are deterministic (sort).
 func reconcileGlobals(ctx context.Context, conn redisConn, globals map[string]string, actions *[]string) (bool, error) {
 	keys := make([]string, 0, len(globals))
 	for k := range globals {
@@ -319,10 +319,10 @@ func reconcileGlobals(ctx context.Context, conn redisConn, globals map[string]st
 	return changed, nil
 }
 
-// sentinelMaster читает SENTINEL MASTER <name> в map поле->значение. Ответ Redis
-// — плоский массив [field, value, ...]; redisConn.Do стрингифицирует его как
-// join пробелом, поэтому разбираем пары токенов. Если master неизвестен (Redis
-// отвечает ошибкой "No such master") — возвращаем nil (для action=add).
+// sentinelMaster reads SENTINEL MASTER <name> into the map field->value. Answer Redis
+// - flat array [field, value,...]; redisConn.Do stringifies it as
+// join with a space, so we parse pairs of tokens. If master is unknown (Redis
+// responds with the error "No such master") - return nil (for action=add).
 func sentinelMaster(ctx context.Context, conn redisConn, name string) (map[string]string, error) {
 	res, err := conn.Do(ctx, "SENTINEL", "MASTER", name)
 	if err != nil {
@@ -337,8 +337,8 @@ func sentinelMaster(ctx context.Context, conn redisConn, name string) (map[strin
 	return pairsToMap(strings.Fields(res)), nil
 }
 
-// sentinelConfigGet читает SENTINEL CONFIG GET <param> → значение или "" (перенос
-// sentinel_config_get). Ответ — пара [param, value]; "" если параметр пуст/нет.
+// sentinelConfigGet reads SENTINEL CONFIG GET <param> -> value or "" (carry
+// sentinel_config_get). The answer is the pair [param, value]; "" if the parameter is empty/no.
 func sentinelConfigGet(ctx context.Context, conn redisConn, param string) (string, error) {
 	res, err := conn.Do(ctx, "SENTINEL", "CONFIG", "GET", param)
 	if err != nil {
@@ -347,8 +347,8 @@ func sentinelConfigGet(ctx context.Context, conn redisConn, param string) (strin
 	return pairsToMap(strings.Fields(res))[param], nil
 }
 
-// pairsToMap сворачивает плоский срез [k0, v0, k1, v1, ...] в map. Нечётный
-// хвост игнорируется. Используется для разбора массив-ответов SENTINEL.
+// pairsToMap collapses the flat slice [k0, v0, k1, v1,...] into a map. Odd
+// the tail is ignored. Used to parse the SENTINEL response array.
 func pairsToMap(tokens []string) map[string]string {
 	out := make(map[string]string, len(tokens)/2)
 	for i := 0; i+1 < len(tokens); i += 2 {
@@ -357,28 +357,28 @@ func pairsToMap(tokens []string) map[string]string {
 	return out
 }
 
-// versionGE — version >= target по (major, minor, patch). Перенос parse_version/
-// version_ge: из каждого dot-чанка берём ведущие цифры (8.0.3, v=8.0.3, 6.2 →
-// (8,0,3)/(8,0,3)/(6,2,0)). Пустая версия → (0,0,0): version-gated параметры
-// на неизвестной версии отбрасываются fail-closed.
+// versionGE - version >= target by (major, minor, patch). Transfer parse_version/
+// version_ge: from each dot chunk we take the leading digits (8.0.3, v=8.0.3, 6.2 ->
+// (8,0,3)/(8,0,3)/(6,2,0)). Empty version -> (0,0,0): version-gated parameters
+// on an unknown version, fail-closed are discarded.
 func versionGE(version string, target [3]int) bool {
 	v := versionTuple(version)
 	rank := func(t [3]int) int { return t[0]*1_000_000 + t[1]*1_000 + t[2] }
 	return rank(v) >= rank(target)
 }
 
-// versionTuple разбирает строку версии в (major, minor, patch). Нормализует
-// distro-native форму перед разбором:
-//   - epoch "N:" срезается (deb-форма "5:7.0.15-1~deb12u7" → major=7, НЕ 5);
-//   - revision-хвост "-..." срезается ("7.0.15-1~deb12u7" → "7.0.15");
-//   - префикс "v" игнорируется (из каждого чанка берём ведущие цифры).
+// versionTuple parses the version string into (major, minor, patch). Normalizes
+// distro-native form before parsing:
+//   - epoch "N:" is cut off (deb-form "5:7.0.15-1~deb12u7" -> major=7, NOT 5);
+//   - revision tail "-..." is cut off ("7.0.15-1~deb12u7" -> "7.0.15");
+//   - the prefix "v" is ignored (we take the leading digits from each chunk).
 func versionTuple(version string) [3]int {
 	version = strings.TrimSpace(version)
 	if i := strings.IndexByte(version, ':'); i >= 0 {
-		version = version[i+1:] // срезаем epoch "N:"
+		version = version[i+1:] // cut off epoch "N:"
 	}
 	if i := strings.IndexByte(version, '-'); i >= 0 {
-		version = version[:i] // срезаем revision "-..."
+		version = version[:i] // cut off revision "-..."
 	}
 
 	var out [3]int

@@ -1,18 +1,18 @@
-// TLS-коннект плагина community.redis. Концепция — Ansible-роль redis
-// (redis.conf TLS-директивы + defaults redis_tls_*): оператор включает TLS на
-// кластере, а плагин ОБЯЗАН коннектиться по TLS — иначе в режиме only-TLS
-// (`port 0`, plain закрыт) он вообще не достучится до Redis.
+// TLS connection of the community.redis plugin. Concept - Ansible role redis
+// (redis.conf TLS directives + defaults redis_tls_*): statement enables TLS on
+// cluster, and the plugin MUST connect via TLS - otherwise in only-TLS mode
+// (`port 0`, plain closed) it will not reach Redis at all.
 //
-// Модель безопасности (security-memory: insecure = ЯВНЫЙ opt-out, default
-// secure): при tls=true плагин по умолчанию ПРОВЕРЯЕТ серверный сертификат
-// (RootCAs из переданного PEM CA). Client-cert (mTLS) — опционален. Отключить
-// проверку можно ТОЛЬКО явным tls_skip_verify=true (по умолчанию false).
+// Security model (security-memory: insecure = EXPLICIT opt-out, default
+// secure): with tls=true, the default plugin CHECKS the server certificate
+// (RootCAs from the passed PEM CA). Client-cert (mTLS) - optional. Disable
+// verification can ONLY be done with explicit tls_skip_verify=true (false by default).
 //
-// PEM приходит ЦЕЛИКОМ в params (scenario резолвит из Vault в render-фазе и
-// передаёт значение), плагин свой Vault-доступ не тянет (capability —
-// network_outbound). PEM-параметры (tls_ca/tls_cert/tls_key) помечены secret в
-// manifest и маскируются выходным слоем по имени ключа (shared/audit маскирует
-// tls_key/tls_cert/tls_ca) — в события/логи/ошибки не попадают.
+// PEM comes WHOLE to params (scenario resolves from Vault in the render phase and
+// transmits the value), the plugin does not provide its Vault access (capability -
+// network_outbound). PEM parameters (tls_ca/tls_cert/tls_key) are marked secret in
+// manifest and are masked by the output layer by the key name (shared/audit masks
+// tls_key/tls_cert/tls_ca) - do not appear in events/logs/errors.
 package main
 
 import (
@@ -23,21 +23,21 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// tlsParams — сырые TLS-параметры коннекта из params, отдельно от *tls.Config:
-// держим PEM-строки до построения конфига, чтобы фабрика была чистой функцией и
-// тестировалась без живого сокета (L0: buildTLSConfig над фейковыми PEM).
+// tlsParams - raw TLS connection parameters from params, separate from *tls.Config:
+// keep the PEM lines before building the config so that the factory is a pure function and
+// tested without a live socket (L0: buildTLSConfig over fake PEMs).
 type tlsParams struct {
 	enabled    bool
-	caPEM      string // PEM CA для проверки серверного сертификата (RootCAs)
-	certPEM    string // PEM client-cert для mTLS (опц.; вместе с keyPEM)
-	keyPEM     string // PEM client-key для mTLS (опц.; вместе с certPEM)
-	skipVerify bool   // ЯВНЫЙ opt-out проверки сертификата (default false)
+	caPEM      string // PEM CA for server certificate verification (RootCAs)
+	certPEM    string // PEM client-cert for mTLS (optional; with keyPEM)
+	keyPEM     string // PEM client-key for mTLS (optional; together with certPEM)
+	skipVerify bool   // EXPLICIT opt-out of certificate verification (default false)
 }
 
-// parseTLS вытаскивает TLS-параметры из params. Все поля опциональны: tls
-// отсутствует/false → enabled=false, коннект plaintext (back-compat для
-// инсталляций без TLS). PEM-строки держатся отдельно от всего, что попадает в
-// события (как password — ИБ-инвариант ADR-010).
+// parseTLS extracts TLS parameters from params. All fields are optional: tls
+// missing/false -> enabled=false, plaintext connection (back-compat for
+// installations without TLS). PEM strings are kept separate from anything that falls into
+// events (as password - IS invariant ADR-010).
 func parseTLS(f map[string]*structpb.Value) tlsParams {
 	return tlsParams{
 		enabled:    boolOrDefault(f["tls"], false),
@@ -48,11 +48,11 @@ func parseTLS(f map[string]*structpb.Value) tlsParams {
 	}
 }
 
-// parseSourceTLS — TLS-параметры коннекта к ВНЕШНЕМУ источнику (source_tls*),
-// отдельные от своих tls* (offset-synced открывает ВТОРОЙ коннект к чужому
-// master-у со своими CA/верификацией). Симметрия parseTLS, префикс source_.
-// mTLS-пара (source_tls_cert/source_tls_key) и skip_verify тоже поддержаны для
-// единообразия, хотя пилот ожидает обычно лишь source_tls + source_tls_ca.
+// parseSourceTLS - TLS parameters for connecting to an EXTERNAL source (source_tls*),
+// separate from their own tls* (offset-synced opens a SECOND connection to someone else's
+// master with its own CA/verification). parseTLS symmetry, prefix source_.
+// mTLS pair (source_tls_cert/source_tls_key) and skip_verify are also supported for
+// uniformity, although the pilot usually expects only source_tls + source_tls_ca.
 func parseSourceTLS(f map[string]*structpb.Value) tlsParams {
 	return tlsParams{
 		enabled:    boolOrDefault(f["source_tls"], false),
@@ -63,47 +63,47 @@ func parseSourceTLS(f map[string]*structpb.Value) tlsParams {
 	}
 }
 
-// buildTLSConfig строит *tls.Config из tlsParams. Возвращает nil, nil когда TLS
-// не включён (caller строит plaintext-коннект). Ошибка — только на битом PEM
-// (CA не распарсился / client-cert невалиден): текст ошибки НЕ содержит PEM
-// (x509/tls формируют ошибки без вложения исходного материала; на всякий случай
-// caller их редактирует по keyPEM).
+// buildTLSConfig builds *tls.Config from tlsParams. Returns nil, nil when TLS
+// not enabled (caller builds a plaintext connection). Error - only on broken PEM
+// (CA did not parse / client-cert is invalid): error text does NOT contain PEM
+// (x509/tls generate errors without embedding the source material; just in case
+// caller edits them using keyPEM).
 //
-// Чистая функция (без I/O) → L0 проверяет результат напрямую: RootCAs загружен,
-// skip_verify проброшен, client-cert добавлен при наличии — без живого Redis.
+// Pure function (no I/O) -> L0 checks the result directly: RootCAs loaded,
+// skip_verify is forwarded, client-cert is added if available - without live Redis.
 func buildTLSConfig(p tlsParams) (*tls.Config, error) {
 	if !p.enabled {
 		return nil, nil
 	}
 	cfg := &tls.Config{
 		MinVersion:         tls.VersionTLS12,
-		InsecureSkipVerify: p.skipVerify, //nolint:gosec // ЯВНЫЙ opt-out оператора (tls_skip_verify), default false — проверка включена
+		InsecureSkipVerify: p.skipVerify, //nolint:gosec // EXPLICIT opt-out operator (tls_skip_verify), default false - verification is enabled
 	}
 
-	// RootCAs из переданного CA PEM (проверка серверного сертификата). Без
-	// skip_verify и без CA проверка пойдёт по системному пулу доверия — для
-	// частного PKI это обычно фейл, поэтому CA в TLS-режиме практически
-	// обязателен; пустой CA при skip_verify=false оставляем системный пул
-	// (легитимно для публично-доверенного сертификата).
+	// RootCAs from the passed CA PEM (server certificate verification). Without
+	// skip_verify and without a CA, the verification will go through the system trust pool - for
+	// private PKI is usually a failure, so CA in TLS mode is practically
+	// required; empty CA with skip_verify=false leaving the system pool
+	// (legitimate for a publicly trusted certificate).
 	if p.caPEM != "" {
 		pool := x509.NewCertPool()
 		if !pool.AppendCertsFromPEM([]byte(p.caPEM)) {
-			return nil, fmt.Errorf("tls_ca: не удалось распарсить PEM CA-сертификата")
+			return nil, fmt.Errorf("tls_ca: failed to parse PEM CA certificate")
 		}
 		cfg.RootCAs = pool
 	}
 
-	// Client-cert (mTLS) — опционально, только если переданы ОБА (cert+key).
-	// Один без другого — ошибка конфигурации оператора (понятный текст без PEM).
+	// Client-cert (mTLS) - optional only if BOTH (cert+key) are sent.
+	// One without the other is an operator configuration error (clear text without PEM).
 	switch {
 	case p.certPEM != "" && p.keyPEM != "":
 		pair, err := tls.X509KeyPair([]byte(p.certPEM), []byte(p.keyPEM))
 		if err != nil {
-			return nil, fmt.Errorf("tls_cert/tls_key: невалидная client-cert пара (mTLS)")
+			return nil, fmt.Errorf("tls_cert/tls_key: invalid client-cert pair (mTLS)")
 		}
 		cfg.Certificates = []tls.Certificate{pair}
 	case p.certPEM != "" || p.keyPEM != "":
-		return nil, fmt.Errorf("tls_cert и tls_key задаются только ВМЕСТЕ (mTLS client-cert)")
+		return nil, fmt.Errorf("tls_cert and tls_key are specified only TOGETHER (mTLS client-cert)")
 	}
 
 	return cfg, nil

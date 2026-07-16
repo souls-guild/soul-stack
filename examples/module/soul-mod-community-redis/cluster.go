@@ -1,29 +1,29 @@
-// cluster-state плагина community.redis — сборка hash-slot-кластера Redis
-// (16384 слота) ЦЕЛИКОМ через go-redis: CLUSTER MEET / ADDSLOTS / REPLICATE +
-// CLUSTER INFO / CLUSTER NODES (диагностика и идемпотентность). НИКАКОГО
-// shell/redis-cli/exec — capability плагина остаётся только network_outbound.
+// cluster-state plugin community.redis - assembly of hash-slot cluster Redis
+// (16384 slots) ENTIRELY via go-redis: CLUSTER MEET / ADDSLOTS / REPLICATE +
+// CLUSTER INFO / CLUSTER NODES (diagnostics and idempotency). NO
+// shell/redis-cli/exec - the plugin's capability remains only network_outbound.
 //
-// action=create собирает кластер с нуля; action=add-node присоединяет ОДНУ новую
-// ноду к УЖЕ сформированному кластеру (day-2); action=remove-node выводит ОДНУ
-// ноду из кластера (day-2, с миграцией её слотов на оставшиеся masters, если она
-// master со слотами). action=reshard переносит N слотов с одного master-а на
-// другой (day-2, зеркало redis-cli `--cluster reshard`). Миграция «старый кластер
-// → новый» (см. migrate.go) — три шага: action=join-external вливает НОВЫЕ ноды в
-// ЧУЖОЙ (старый) кластер репликами его мастеров 1:1; action=failover-takeover
-// промоутит эти реплики в мастера через graceful CLUSTER FAILOVER (после sync-gate,
-// fail-closed без FORCE/TAKEOVER); action=forget-external выкидывает старые узлы
-// (CLUSTER FORGET, без миграции слотов — слоты уже у новых мастеров).
+// action=create builds a cluster from scratch; action=add-node attaches ONE new one
+// node to an ALREADY formed cluster (day-2); action=remove-node displays ONE
+// node from the cluster (day-2, with migration of its slots to the remaining masters, if it
+// master with slots). action=reshard transfers N slots from one master to
+// other (day-2, mirror redis-cli `--cluster reshard`). Migration "old cluster"
+// -> new" (see migrate.go) - three steps: action=join-external merges NEW nodes into
+// ALIEN (old) cluster with replicas of its masters 1:1; action=failover-takeover
+// will promote these replicas to the master via graceful CLUSTER FAILOVER (after sync-gate,
+// fail-closed without FORCE/TAKEOVER); action=forget-external throws out old nodes
+// (CLUSTER FORGET, without migration of slots - the slots are already with the new masters).
 //
-// ★ reshard ИМПЕРАТИВЕН и НЕ идемпотентен (осознанно, как старый
-// redis-cluster-live без unless): повторный apply сдвинет ещё N слотов. Это
-// exec-style day-2 операция — оператор зовёт её явно, она НЕ часть converge.
+// reshard is IMPERATIVE and NOT idempotent (consciously, like the old
+// redis-cluster-live without unless): applying again will shift N more slots. This
+// exec-style day-2 operation - the operator calls it explicitly, it is NOT part of converge.
 // create/add-node/remove-node/join-external/failover-takeover/forget-external,
-// напротив, идемпотентны (no-op на сошедшемся входе: узел уже реплика/master/забыт).
+// on the contrary, they are idempotent (no-op on the converged input: the node is already replica/master/forgotten).
 //
-// Раскладка ролей и слотов СТРОГО детерминирована (сортировка ключей nodes):
-// один и тот же вход → одна и та же топология master/replica и одни и те же
-// диапазоны слотов. Это критично для воспроизводимости и для idempotent-формы
-// (повторный create на сформированном кластере → changed=false, no-op).
+// The layout of roles and slots is STRICTLY deterministic (sorting nodes keys):
+// same input -> same master/replica topology and same
+// slot ranges. This is critical for reproducibility and for idempotent form
+// (re-create on the formed cluster -> changed=false, no-op).
 package main
 
 import (
@@ -40,22 +40,22 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// totalSlots — фиксированное число hash-слотов Redis Cluster (0..16383).
+// totalSlots - fixed number of hash slots Redis Cluster (0..16383).
 const totalSlots = 16384
 
-// gossip-сходимость: ограниченный retry (НЕ бесконечный цикл) — ждём, пока все
-// ноды увидят друг друга в CLUSTER NODES после MEET.
+// gossip convergence: limited retry (NOT infinite loop) - wait for everything
+// the nodes will see each other in CLUSTER NODES after MEET.
 const (
 	gossipPollAttempts = 30
 	gossipPollInterval = 200 * time.Millisecond
 )
 
-// clusterNode — одна нода кластера после резолва из nodes-map.
+// clusterNode - one cluster node after resolution from nodes-map.
 //
-//	key  — стабильный ключ из nodes-map (SID/имя); задаёт детерминированный порядок.
-//	addr — host:port для go-redis-коннекта.
-//	ip   — IP для CLUSTER MEET (gossip оперирует ip:port, не DNS-именем).
-//	port — клиентский порт для CLUSTER MEET.
+//	key - stable key from nodes-map (SID/name); specifies a deterministic order.
+//	addr - host:port for go-redis connection.
+//	ip - IP for CLUSTER MEET (gossip operates on ip:port, not DNS name).
+//	port - client port for CLUSTER MEET.
 type clusterNode struct {
 	key  string
 	addr string
@@ -63,24 +63,24 @@ type clusterNode struct {
 	port int
 }
 
-// clusterPlan — детерминированная раскладка: какие ноды мастера, какие реплики,
-// какие диапазоны слотов у каждого мастера, к какому мастеру привязана реплика.
+// clusterPlan - deterministic layout: which nodes are masters, which are replicas,
+// what slot ranges each master has, which master the replica is attached to.
 type clusterPlan struct {
 	masters  []clusterNode
 	replicas []clusterNode
-	// slots[i] — непрерывный диапазон слотов мастера masters[i].
+	// slots[i] is a contiguous range of master slots masters[i].
 	slots []slotRange
-	// replicaOf[j] — индекс мастера в masters для реплики replicas[j].
+	// replicaOf[j] - master index in masters for replica replicas[j].
 	replicaOf []int
 }
 
-// slotRange — непрерывный полуинтервал [from, to] слотов (оба конца включительно).
+// slotRange - continuous half-interval [from, to] slots (both ends inclusive).
 type slotRange struct {
 	from int
 	to   int
 }
 
-// validateCluster — статические проверки cluster-params (тексты без пароля).
+// validateCluster - static cluster-params checks (texts without password).
 func validateCluster(f map[string]*structpb.Value) []string {
 	switch stringOrEmpty(f["action"]) {
 	case "create":
@@ -103,8 +103,8 @@ func validateCluster(f map[string]*structpb.Value) []string {
 	}
 }
 
-// validateClusterCreate — проверки create: непустой nodes-map, корректный
-// replicas_per_shard и делимость состава на размер шарда.
+// validateClusterCreate - create checks: non-empty nodes-map, correct
+// replicas_per_shard and divisibility of the composition by the size of the shard.
 func validateClusterCreate(f map[string]*structpb.Value) []string {
 	var errs []string
 
@@ -118,14 +118,14 @@ func validateClusterCreate(f map[string]*structpb.Value) []string {
 		errs = append(errs, "params.replicas_per_shard: must be >= 0")
 	}
 
-	// Явная топология (params.topology) ВЫТЕСНЯЕТ авто-раскладку: при ней размер
-	// шардов задаёт оператор, а делимость nodes на 1+replicas НЕ проверяется
-	// (replicas_per_shard игнорируется — см. validateTopology про конфликт-гейт).
+	// Explicit topology (params.topology) REPLACES auto-layout: with it the size
+	// shards are specified by the operator, and the divisibility of nodes by 1+replicas is NOT checked
+	// (replicas_per_shard is ignored - see validateTopology about conflict gate).
 	if hasTopology(f["topology"]) {
 		return append(errs, validateTopology(f["topology"], nodes, replicas)...)
 	}
 
-	// Состав nodes обязан ровно делиться на размер шарда (1 master + N replicas).
+	// The composition of nodes must be evenly divided by the size of the shard (1 master + N replicas).
 	if len(nodes) > 0 && replicas >= 0 {
 		shardSize := 1 + replicas
 		if len(nodes)%shardSize != 0 {
@@ -138,8 +138,8 @@ func validateClusterCreate(f map[string]*structpb.Value) []string {
 	return errs
 }
 
-// hasTopology — задан ли непустой params.topology (list с хотя бы одним элементом).
-// Пустой список / отсутствие / не-список → false (авто-раскладка, старое поведение).
+// hasTopology - whether a non-empty params.topology (list with at least one element) is specified.
+// Empty list/no/non-list -> false (auto-layout, old behavior).
 func hasTopology(v *structpb.Value) bool {
 	if v == nil {
 		return false
@@ -148,12 +148,12 @@ func hasTopology(v *structpb.Value) bool {
 	return ok && len(lv.ListValue.GetValues()) > 0
 }
 
-// validateTopology проверяет явную топологию против nodes-map: каждый шард непуст,
-// каждый SID существует в nodes и встречается РОВНО один раз (нет дублей и нод в
-// двух шардах), все nodes покрыты (unused → ошибка). Дополнительно: если задан и
-// topology, И replicas_per_shard (>0) — размер КАЖДОГО шарда обязан совпасть с
-// 1+replicas (иначе fail-fast: противоречивый ввод). Без replicas_per_shard (0)
-// размеры шардов свободны — topology единственный источник раскладки.
+// validateTopology checks the explicit topology against nodes-map: each shard is non-empty,
+// each SID exists in nodes and occurs EXACTLY once (there are no duplicates and nodes in
+// two shards), all nodes are covered (unused -> error). Additionally: if specified and
+// topology, AND replicas_per_shard (>0) - the size of EACH shard must match
+// 1+replicas (aka fail-fast: inconsistent input). Without replicas_per_shard (0)
+// shard sizes are free - topology is the only source of layout.
 func validateTopology(v *structpb.Value, nodes map[string]map[string]*structpb.Value, replicas int) []string {
 	var errs []string
 
@@ -162,7 +162,7 @@ func validateTopology(v *structpb.Value, nodes map[string]map[string]*structpb.V
 		return []string{"params.topology: must be a list of shards (each a list of SID strings)"}
 	}
 
-	seen := make(map[string]int, len(nodes)) // SID -> сколько раз встретился
+	seen := make(map[string]int, len(nodes)) // SID -> number of times met
 	for i, shardVal := range lv.ListValue.GetValues() {
 		shard, ok := shardVal.GetKind().(*structpb.Value_ListValue)
 		if !ok {
@@ -174,7 +174,7 @@ func validateTopology(v *structpb.Value, nodes map[string]map[string]*structpb.V
 			errs = append(errs, fmt.Sprintf("params.topology[%d]: shard must have at least a master SID", i))
 			continue
 		}
-		// replicas_per_shard конфликт-гейт: размер шарда обязан быть 1+replicas.
+		// replicas_per_shard conflict gate: shard size must be 1+replicas.
 		if replicas > 0 && len(members) != 1+replicas {
 			errs = append(errs, fmt.Sprintf(
 				"params.topology[%d]: shard has %d nodes but replicas_per_shard=%d requires %d (1 master + %d replicas) — drop replicas_per_shard or fix the shard",
@@ -193,14 +193,14 @@ func validateTopology(v *structpb.Value, nodes map[string]map[string]*structpb.V
 		}
 	}
 
-	// Дубли: SID в двух шардах / дважды в одном.
+	// Doubles: SID in two shards / twice in one.
 	for _, sid := range sortedSeenKeys(seen) {
 		if seen[sid] > 1 {
 			errs = append(errs, fmt.Sprintf("params.topology: SID %q appears %d times (must be exactly once)", sid, seen[sid]))
 		}
 	}
 
-	// Покрытие: каждая нода обязана попасть в топологию (unused → ошибка).
+	// Coverage: each node must be included in the topology (unused -> error).
 	for _, key := range sortedNodeKeys(nodes) {
 		if seen[key] == 0 {
 			errs = append(errs, fmt.Sprintf("params.topology: node %q is not assigned to any shard (all nodes must be covered)", key))
@@ -210,8 +210,8 @@ func validateTopology(v *structpb.Value, nodes map[string]map[string]*structpb.V
 	return errs
 }
 
-// sortedSeenKeys / sortedNodeKeys — детерминированный порядок сообщений об ошибке
-// (стабильный вывод для тестов и операторских отчётов).
+// sortedSeenKeys / sortedNodeKeys - deterministic order of error messages
+// (stable output for tests and operator reports).
 func sortedSeenKeys(m map[string]int) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
@@ -230,8 +230,8 @@ func sortedNodeKeys(m map[string]map[string]*structpb.Value) []string {
 	return keys
 }
 
-// validateClusterAddNode — проверки add-node: непустые new_node и seed,
-// допустимый role и (для replica) корректная связка с master.
+// validateClusterAddNode - checks add-node: non-empty new_node and seed,
+// valid role and (for replica) correct connection with master.
 func validateClusterAddNode(f map[string]*structpb.Value) []string {
 	var errs []string
 
@@ -251,8 +251,8 @@ func validateClusterAddNode(f map[string]*structpb.Value) []string {
 	return errs
 }
 
-// validateClusterRemoveNode — проверки remove-node: непустые node (удаляемая) и
-// seed (контакт для CLUSTER NODES + источник топологии для FORGET/миграции слотов).
+// validateClusterRemoveNode - remove-node checks: non-empty node (removable) and
+// seed (pin for CLUSTER NODES + topology source for FORGET/slot migration).
 func validateClusterRemoveNode(f map[string]*structpb.Value) []string {
 	var errs []string
 
@@ -266,10 +266,10 @@ func validateClusterRemoveNode(f map[string]*structpb.Value) []string {
 	return errs
 }
 
-// validateClusterReshard — статические проверки reshard: непустые from/to
-// (endpoint-ы master-ов), их различие и slots >= 1. «from/to — существующие
-// masters» и «slots <= числа слотов у source» проверяются в Apply по живой
-// топологии (CLUSTER NODES), статически их не видно (тексты без пароля).
+// validateClusterReshard - static reshard checks: non-empty from/to
+// (endpoints of masters), their difference and slots >= 1. "from/to - existing
+// masters" and "slots <= number of slots in source" are checked in Apply live
+// topology (CLUSTER NODES), they are not statically visible (texts without a password).
 func validateClusterReshard(f map[string]*structpb.Value) []string {
 	var errs []string
 
@@ -281,8 +281,8 @@ func validateClusterReshard(f map[string]*structpb.Value) []string {
 	if len(to) == 0 {
 		errs = append(errs, "params.to: must be a map {addr|ip+port} of the target master")
 	}
-	// from != to: сравниваем по резолвленному endpoint (ip:port), чтобы {addr} и
-	// {ip,port}-форма одного и того же узла тоже распознавались как совпадение.
+	// from != to: compare by resolved endpoint (ip:port) so that {addr} and
+	// {ip,port} forms of the same node were also recognized as a match.
 	if len(from) > 0 && len(to) > 0 {
 		if fi, fp, _, ferr := resolveNodeEndpoint(from); ferr == nil {
 			if ti, tp, _, terr := resolveNodeEndpoint(to); terr == nil {
@@ -300,7 +300,7 @@ func validateClusterReshard(f map[string]*structpb.Value) []string {
 	return errs
 }
 
-// applyCluster — диспетчер cluster-state по action.
+// applyCluster - cluster-state dispatcher by action.
 func (m *RedisModule) applyCluster(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], params *structpb.Struct) error {
 	switch stringOrEmpty(params.GetFields()["action"]) {
 	case "create":
@@ -324,7 +324,7 @@ func (m *RedisModule) applyCluster(ctx context.Context, stream grpc.ServerStream
 	}
 }
 
-// roleOrDefault — нормализованная роль add-node (default replica, как у
+// roleOrDefault - normalized add-node role (default replica, like
 // redis-cli `--cluster add-node ... --cluster-slave`).
 func roleOrDefault(v *structpb.Value) string {
 	if role := strings.TrimSpace(stringOrEmpty(v)); role != "" {
@@ -333,12 +333,12 @@ func roleOrDefault(v *structpb.Value) string {
 	return "replica"
 }
 
-// applyClusterCreate строит кластер из nodes-map. Раскладку ролей даёт ЛИБО
-// детерминированная авто-форма по sort ключей (buildClusterPlan, replicas_per_shard),
-// ЛИБО ЯВНАЯ топология оператора (params.topology — список шардов [master, replica…],
-// buildClusterPlanExplicit). Сборка дальше (MEET/ADDSLOTS/REPLICATE, идемпотентность)
-// одна и та же — план обе формы дают в одном clusterPlan. Идемпотентен: если кластер
-// уже сформирован (cluster_state:ok, все наши ноды на месте, 16384 слота покрыты) —
+// applyClusterCreate builds a cluster from nodes-map. The layout of roles is given by EITHER
+// deterministic auto-form by sort keys (buildClusterPlan, replicas_per_shard),
+// OR EXPLICIT operator topology (params.topology - list of shards [master, replica...],
+// buildClusterPlanExplicit). Assembly further (MEET/ADDSLOTS/REPLICATE, idempotency)
+// the same - both forms give the plan in one clusterPlan. Idempotent: if the cluster
+// already formed (cluster_state:ok, all our nodes are in place, 16384 slots are covered) -
 // changed=false, no-op.
 func (m *RedisModule) applyClusterCreate(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], params *structpb.Struct) error {
 	f := params.GetFields()
@@ -351,8 +351,8 @@ func (m *RedisModule) applyClusterCreate(ctx context.Context, stream grpc.Server
 	}
 	replicas := intOrDefault(f["replicas_per_shard"], 0)
 
-	// Явная топология (params.topology) → раскладка ИЗ списка оператора; иначе —
-	// детерминированная авто-раскладка по sort ключей (backward-compat бит-в-бит).
+	// Explicit topology (params.topology) -> layout FROM operator list; otherwise -
+	// deterministic auto-layout by sort keys (backward-compat bit-for-bit).
 	var plan clusterPlan
 	if topology := parseTopology(f["topology"]); len(topology) > 0 {
 		plan, err = buildClusterPlanExplicit(nodes, topology)
@@ -367,16 +367,16 @@ func (m *RedisModule) applyClusterCreate(ctx context.Context, stream grpc.Server
 	connect := func(node clusterNode) (redisConn, error) {
 		conn, err := m.openConn(ctx, connConfig{addr: node.addr, username: username, password: password, tls: tlsP})
 		if err != nil {
-			// TLS-handshake-ошибка теоретически может нести PEM client-key —
-			// редактируем его ПРЯМО в connect, чтобы любой caller (probe/
-			// formCluster/migrate) получил уже-санированную ошибку (ключ
-			// password уже редактируется их собственными redactError по тексту).
+			// A TLS handshake error could theoretically carry a PEM client-key -
+			// we edit it DIRECTLY in connect, so that any caller (probe/
+			// formCluster/migrate) received an already-sanitized error (key
+			// password is already edited by their own redactError text).
 			return nil, fmt.Errorf("%s", redactError(err, tlsP.keyPEM))
 		}
 		return conn, nil
 	}
 
-	// Идемпотентность: спросим первый мастер о текущем состоянии кластера.
+	// Idempotency: let's ask the first master about the current state of the cluster.
 	state, liveTable := clusterFormStatus(ctx, connect, plan)
 	switch state {
 	case clusterFormed:
@@ -386,9 +386,9 @@ func (m *RedisModule) applyClusterCreate(ctx context.Context, stream grpc.Server
 			"slots":    int64(totalSlots),
 		})
 	case clusterPartial:
-		// MEET+ADDSLOTS прошли, но реплики настроены не полностью (след упавшего на
-		// gossip-timing REPLICATE). Доделываем ТОЛЬКО недостающие реплики, не трогая
-		// slots (повторный ADDSLOTS уже назначенного слота → «Slot is already busy»).
+		// MEET+ADDSLOTS passed, but the replicas are not fully configured (the trace of the one that fell on
+		// gossip-timing REPLICATE). We complete ONLY the missing replicas without touching
+		// slots (repeated ADDSLOTS of an already assigned slot -> "Slot is already busy").
 		done, err := completeReplication(ctx, connect, plan, liveTable, password)
 		if err != nil {
 			return sendFailure(stream, redactError(err, password))
@@ -414,16 +414,16 @@ func (m *RedisModule) applyClusterCreate(ctx context.Context, stream grpc.Server
 	})
 }
 
-// applyClusterAddNode присоединяет ОДНУ новую ноду к сформированному кластеру
-// (day-2): CLUSTER MEET через seed → ожидание сходимости → назначение роли.
+// applyClusterAddNode attaches ONE new node to the formed cluster
+// (day-2): CLUSTER MEET via seed -> waiting for convergence -> role assignment.
 //
-//	role=replica — CLUSTER REPLICATE: новичок становится репликой указанного
-//	  master-а (params.master) либо, если master не задан, мастера с наименьшим
-//	  числом реплик (балансировка, как redis-cli без --cluster-master-id).
-//	role=master  — пустой master (MEET без слотов). Слоты на новый master
-//	  переносит ОТДЕЛЬНАЯ операция reshard (follow-up); add-node их НЕ двигает.
+//	role=replica - CLUSTER REPLICATE: the newcomer becomes a replica of the specified
+//	  master (params.master) or, if master is not specified, the master with the smallest
+//	  number of replicas (balancing like redis-cli without --cluster-master-id).
+//	role=master - empty master (MEET without slots). Slots for new master
+//	  transfers a SEPARATE operation reshard (follow-up); add-node does NOT move them.
 //
-// Идемпотентен: если new_node уже в кластере (CLUSTER NODES seed-а содержит её
+// Idempotent: if new_node is already in the cluster (CLUSTER NODES seed contains it
 // ip:port) → changed=false, no-op.
 func (m *RedisModule) applyClusterAddNode(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], params *structpb.Struct) error {
 	f := params.GetFields()
@@ -444,10 +444,10 @@ func (m *RedisModule) applyClusterAddNode(ctx context.Context, stream grpc.Serve
 	connect := func(node clusterNode) (redisConn, error) {
 		conn, err := m.openConn(ctx, connConfig{addr: node.addr, username: username, password: password, tls: tlsP})
 		if err != nil {
-			// TLS-handshake-ошибка теоретически может нести PEM client-key —
-			// редактируем его ПРЯМО в connect, чтобы любой caller (probe/
-			// formCluster/migrate) получил уже-санированную ошибку (ключ
-			// password уже редактируется их собственными redactError по тексту).
+			// A TLS handshake error could theoretically carry a PEM client-key -
+			// we edit it DIRECTLY in connect, so that any caller (probe/
+			// formCluster/migrate) received an already-sanitized error (key
+			// password is already edited by their own redactError text).
 			return nil, fmt.Errorf("%s", redactError(err, tlsP.keyPEM))
 		}
 		return conn, nil
@@ -465,7 +465,7 @@ func (m *RedisModule) applyClusterAddNode(ctx context.Context, stream grpc.Serve
 	}
 	existing := parseClusterNodesTable(topology)
 
-	// Идемпотентность: новичок уже в топологии → no-op.
+	// Idempotency: new to topology -> no-op.
 	if nodeInTable(existing, newNode) {
 		return sendOutcome(stream, false, "node already in cluster (no-op)", map[string]any{
 			"node": newNode.ip + ":" + strconv.Itoa(newNode.port),
@@ -473,8 +473,8 @@ func (m *RedisModule) applyClusterAddNode(ctx context.Context, stream grpc.Serve
 		})
 	}
 
-	// Выбор master-а для реплики ДО MEET — на пустой топологии (новичок ещё не
-	// влит) выбор детерминирован и понятен в сообщении об ошибке.
+	// Selecting a master for a replica BEFORE MEET - on an empty topology (the newbie is not yet
+	// vlit) the choice is deterministic and clear in the error message.
 	var masterID string
 	if role == "replica" {
 		masterID, err = pickReplicationMaster(f["master"], existing)
@@ -483,13 +483,13 @@ func (m *RedisModule) applyClusterAddNode(ctx context.Context, stream grpc.Serve
 		}
 	}
 
-	// MEET: с seed-а приглашаем новичка в gossip по его ip:port.
+	// MEET: using the seed, we invite a newcomer to gossip using his ip:port.
 	if _, err := seedConn.Do(ctx, "CLUSTER", "MEET", newNode.ip, strconv.Itoa(newNode.port)); err != nil {
 		return sendFailure(stream, fmt.Sprintf("CLUSTER MEET %s: %s",
 			net.JoinHostPort(newNode.ip, strconv.Itoa(newNode.port)), redactError(err, password)))
 	}
 
-	// Сходимость: seed обязан увидеть новичка (всего стало known+1 нод).
+	// Convergence: the seed must see the newcomer (in total there are +1 known nodes).
 	if err := waitGossipConverged(ctx, seedConn, len(existing)+1); err != nil {
 		return sendFailure(stream, redactError(err, password))
 	}
@@ -501,7 +501,7 @@ func (m *RedisModule) applyClusterAddNode(ctx context.Context, stream grpc.Serve
 		})
 	}
 
-	// REPLICATE исполняется НА НОВИЧКЕ (он становится репликой master-id).
+	// REPLICATE is executed ON THE NEWBOY (it becomes the master-id replica).
 	newConn, err := connect(newNode)
 	if err != nil {
 		return sendFailure(stream, "connect new_node: "+redactError(err, password))
@@ -518,17 +518,17 @@ func (m *RedisModule) applyClusterAddNode(ctx context.Context, stream grpc.Serve
 	})
 }
 
-// migrateBatch — сколько ключей за один CLUSTER GETKEYSINSLOT + MIGRATE-пакет
-// (redis-cli использует тот же масштаб; ограничивает размер одного MIGRATE).
+// migrateBatch - how many keys in one CLUSTER GETKEYSINSLOT + MIGRATE package
+// (redis-cli uses the same scale; limits the size of a single MIGRATE).
 const migrateBatch = 100
 
-// applyClusterRemoveNode выводит ОДНУ ноду из кластера (day-2). Если удаляемая —
-// master СО слотами, её слоты СНАЧАЛА мигрируются на оставшиеся masters
+// applyClusterRemoveNode removes ONE node from the cluster (day-2). If deleted -
+// master WITH slots, its slots are FIRST migrated to the remaining masters
 // (CLUSTER SETSLOT IMPORTING/MIGRATING + GETKEYSINSLOT + MIGRATE keys + SETSLOT
-// NODE), затем CLUSTER FORGET на ВСЕХ оставшихся нодах. Если удаляемая — replica
-// либо master без слотов — просто FORGET на всех.
+// NODE), then CLUSTER FORGET on ALL remaining nodes. If the one being deleted is replica
+// or master without slots - just FORGET for all.
 //
-// Идемпотентен: ноды уже нет в CLUSTER NODES seed-а → changed=false, no-op.
+// Idempotent: the node is no longer in CLUSTER NODES seed -> changed=false, no-op.
 func (m *RedisModule) applyClusterRemoveNode(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], params *structpb.Struct) error {
 	f := params.GetFields()
 	password := stringOrEmpty(f["password"])
@@ -547,10 +547,10 @@ func (m *RedisModule) applyClusterRemoveNode(ctx context.Context, stream grpc.Se
 	connect := func(node clusterNode) (redisConn, error) {
 		conn, err := m.openConn(ctx, connConfig{addr: node.addr, username: username, password: password, tls: tlsP})
 		if err != nil {
-			// TLS-handshake-ошибка теоретически может нести PEM client-key —
-			// редактируем его ПРЯМО в connect, чтобы любой caller (probe/
-			// formCluster/migrate) получил уже-санированную ошибку (ключ
-			// password уже редактируется их собственными redactError по тексту).
+			// A TLS handshake error could theoretically carry a PEM client-key -
+			// we edit it DIRECTLY in connect, so that any caller (probe/
+			// formCluster/migrate) received an already-sanitized error (key
+			// password is already edited by their own redactError text).
 			return nil, fmt.Errorf("%s", redactError(err, tlsP.keyPEM))
 		}
 		return conn, nil
@@ -570,13 +570,13 @@ func (m *RedisModule) applyClusterRemoveNode(ctx context.Context, stream grpc.Se
 
 	target := findNodeRow(table, removeNode)
 	if target == nil {
-		// Идемпотентность: ноды уже нет в кластере → no-op.
+		// Idempotency: the node is no longer in the cluster -> no-op.
 		return sendOutcome(stream, false, "node already absent from cluster (no-op)", map[string]any{
 			"node": removeNode.ip + ":" + strconv.Itoa(removeNode.port),
 		})
 	}
 
-	// Слоты переносим ТОЛЬКО если удаляемая — master с назначенными слотами.
+	// We transfer slots ONLY if the one being deleted is a master with assigned slots.
 	migrated := 0
 	if target.isMaster && len(target.slots) > 0 {
 		moved, err := migrateSlotsAway(ctx, connect, table, *target, password)
@@ -586,9 +586,9 @@ func (m *RedisModule) applyClusterRemoveNode(ctx context.Context, stream grpc.Se
 		migrated = moved
 	}
 
-	// FORGET удаляемой ноды на ВСЕХ оставшихся (каждая нода забывает её
-	// независимо — gossip-anti-entropy сам бы дозабыл, но явный FORGET на всех
-	// детерминирует результат и закрывает окно ре-приглашения).
+	// FORGET the deleted node to ALL remaining nodes (each node forgets it
+	// regardless - gossip-anti-entropy I would have forgotten, but an explicit FORGET on everyone
+	// determines the result and closes the re-invitation window).
 	forgotten, err := forgetOnRemaining(ctx, connect, table, *target, password)
 	if err != nil {
 		return sendFailure(stream, redactError(err, password))
@@ -601,18 +601,18 @@ func (m *RedisModule) applyClusterRemoveNode(ctx context.Context, stream grpc.Se
 	})
 }
 
-// applyClusterReshard переносит N слотов с одного master-а (from) на другой (to)
-// в УЖЕ сформированном кластере (day-2). Зеркало redis-cli `--cluster reshard`:
-// выбирает первые N слотов источника (по возрастанию) и переносит каждый через
-// migrateOneSlot (SETSLOT IMPORTING на цели → MIGRATING на источнике →
-// GETKEYSINSLOT + MIGRATE лосслесс → SETSLOT NODE на обеих нодах).
+// applyClusterReshard transfers N slots from one master (from) to another (to)
+// in an ALREADY formed cluster (day-2). Mirror redis-cli `--cluster reshard`:
+// selects the first N source slots (ascending) and moves each through
+// migrateOneSlot(SETSLOT IMPORTING on target -> MIGRATING on source ->
+// GETKEYSINSLOT + MIGRATE lossless -> SETSLOT NODE on both nodes).
 //
-// ★ НЕ ИДЕМПОТЕНТЕН (осознанно): повторный apply сдвинет ещё N слотов с from на
-// to. Это императивная exec-style day-2 операция — оператор зовёт её явно, не
-// часть converge. Никакого unless/probe «уже перенесено» нет.
+// NOT IDEMPOTENT (deliberately): applying again will shift N more slots from from to
+// to. This is an imperative exec-style day-2 operation - the operator calls it explicitly, not
+// part of converge. There is no unless/probe "already transferred".
 //
-// Топология (CLUSTER NODES с from) даёт node-id обоих master-ов и текущие слоты
-// источника. Контакт — сам from (он master, всегда отвечает CLUSTER NODES).
+// Topology (CLUSTER NODES with from) gives node-id of both masters and current slots
+// source. The contact is from itself (it is master, always responds to CLUSTER NODES).
 func (m *RedisModule) applyClusterReshard(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], params *structpb.Struct) error {
 	f := params.GetFields()
 	password := stringOrEmpty(f["password"])
@@ -635,10 +635,10 @@ func (m *RedisModule) applyClusterReshard(ctx context.Context, stream grpc.Serve
 	connect := func(node clusterNode) (redisConn, error) {
 		conn, err := m.openConn(ctx, connConfig{addr: node.addr, username: username, password: password, tls: tlsP})
 		if err != nil {
-			// TLS-handshake-ошибка теоретически может нести PEM client-key —
-			// редактируем его ПРЯМО в connect, чтобы любой caller (probe/
-			// formCluster/migrate) получил уже-санированную ошибку (ключ
-			// password уже редактируется их собственными redactError по тексту).
+			// A TLS handshake error could theoretically carry a PEM client-key -
+			// we edit it DIRECTLY in connect, so that any caller (probe/
+			// formCluster/migrate) received an already-sanitized error (key
+			// password is already edited by their own redactError text).
 			return nil, fmt.Errorf("%s", redactError(err, tlsP.keyPEM))
 		}
 		return conn, nil
@@ -665,8 +665,8 @@ func (m *RedisModule) applyClusterReshard(ctx context.Context, stream grpc.Serve
 		return sendFailure(stream, fmt.Sprintf("params.to %s: not a master in this cluster", to.addr))
 	}
 
-	// Первые N слотов источника по возрастанию (детерминированно). Если у source
-	// меньше N слотов — это ошибка ввода (нельзя перенести больше, чем есть).
+	// The first N source slots are in ascending order (deterministic). If source
+	// Less than N slots is an input error (you cannot transfer more than you have).
 	owned := flattenSlots(srcRow.slots)
 	if slots > len(owned) {
 		return sendFailure(stream, fmt.Sprintf(
@@ -693,10 +693,10 @@ func (m *RedisModule) applyClusterReshard(ctx context.Context, stream grpc.Serve
 	})
 }
 
-// flattenSlots разворачивает диапазоны master-а в плоский отсортированный по
-// возрастанию список отдельных слотов (детерминированный выбор первых N для
-// reshard). Диапазоны CLUSTER NODES уже идут по возрастанию, но сортируем для
-// устойчивости к порядку токенов.
+// flattenSlots expands the master's ranges into a flat one sorted by
+// ascending list of individual slots (deterministic selection of the first N for
+// reshard). The CLUSTER NODES ranges are already in ascending order, but we sort for
+// stability to token order.
 func flattenSlots(ranges []slotRange) []int {
 	var out []int
 	for _, r := range ranges {
@@ -708,7 +708,7 @@ func flattenSlots(ranges []slotRange) []int {
 	return out
 }
 
-// findNodeRow возвращает строку топологии удаляемой ноды (по ip:port) или nil.
+// findNodeRow returns the topology string of the node being deleted (by ip:port) or nil.
 func findNodeRow(table []clusterNodeRow, node clusterNode) *clusterNodeRow {
 	want := net.JoinHostPort(node.ip, strconv.Itoa(node.port))
 	for i := range table {
@@ -719,8 +719,8 @@ func findNodeRow(table []clusterNodeRow, node clusterNode) *clusterNodeRow {
 	return nil
 }
 
-// remainingMasters — masters кластера БЕЗ удаляемой ноды, детерминированно по id.
-// Цели миграции слотов; FORGET тоже идёт на все оставшиеся (masters+replicas).
+// remainingMasters - masters of the cluster WITHOUT the node to be deleted, deterministic by id.
+// Slot migration goals; FORGET also goes to all the remaining ones (masters+replicas).
 func remainingMasters(table []clusterNodeRow, removeID string) []clusterNodeRow {
 	var out []clusterNodeRow
 	for _, row := range table {
@@ -732,12 +732,12 @@ func remainingMasters(table []clusterNodeRow, removeID string) []clusterNodeRow 
 	return out
 }
 
-// migrateSlotsAway переносит ВСЕ слоты удаляемого master-а на оставшиеся masters
-// (round-robin по их отсортированному порядку → детерминированно). Возвращает
-// число перенесённых слотов. Зеркало redis-cli reshard для одного слота:
+// migrateSlotsAway transfers ALL slots of the removed master to the remaining masters
+// (round-robin by their sorted order -> deterministic). Returns
+// number of transferred slots. Mirror redis-cli reshard for one slot:
 //
-//	IMPORTING на цели → MIGRATING на источнике → перенос ключей (GETKEYSINSLOT +
-//	MIGRATE) → SETSLOT NODE <to> на обеих нодах (фиксация владельца).
+//	IMPORTING on target -> MIGRATING on source -> key transfer (GETKEYSINSLOT +
+//	MIGRATE) -> SETSLOT NODE <to> on both nodes (fixing the owner).
 func migrateSlotsAway(ctx context.Context, connect func(clusterNode) (redisConn, error), table []clusterNodeRow, src clusterNodeRow, password string) (int, error) {
 	dests := remainingMasters(table, src.id)
 	if len(dests) == 0 {
@@ -754,8 +754,8 @@ func migrateSlotsAway(ctx context.Context, connect func(clusterNode) (redisConn,
 	}
 	defer func() { _ = srcConn.Close() }()
 
-	// Один долгоживущий коннект на каждую целевую ноду (SETSLOT исполняется на
-	// каждой). Закрываем все одним defer-ом, без defer-в-цикле.
+	// One long-lived connection per target node (SETSLOT is executed on
+	// each). We close everything with one defer, without a defer-in-the-loop.
 	destConns := make([]redisConn, len(dests))
 	defer func() {
 		for _, c := range destConns {
@@ -789,9 +789,9 @@ func migrateSlotsAway(ctx context.Context, connect func(clusterNode) (redisConn,
 	return moved, nil
 }
 
-// migrateOneSlot переносит один слот с источника на цель (redis-cli-алгоритм):
-// IMPORTING(to) → MIGRATING(from) → перенос всех ключей слота пакетами через
-// MIGRATE → SETSLOT NODE <to-id> на ОБЕИХ нодах (новый владелец).
+// migrateOneSlot migrates one slot from source to target (redis-cli algorithm):
+// IMPORTING(to) -> MIGRATING(from) -> transfer of all slot keys in batches via
+// MIGRATE -> SETSLOT NODE <to-id> on BOTH nodes (new owner).
 func migrateOneSlot(ctx context.Context, srcConn, destConn redisConn, srcID string, dest clusterNodeRow, slot int, password string) error {
 	slotArg := strconv.Itoa(slot)
 	if _, err := destConn.Do(ctx, "CLUSTER", "SETSLOT", slotArg, "IMPORTING", srcID); err != nil {
@@ -811,7 +811,7 @@ func migrateOneSlot(ctx context.Context, srcConn, destConn redisConn, srcID stri
 			return fmt.Errorf("GETKEYSINSLOT %d: %w", slot, err)
 		}
 		if len(keys) == 0 {
-			break // слот опустошён
+			break // slot is empty
 		}
 		// MIGRATE <host> <port> "" <db> <timeout> [AUTH pass] KEYS k...
 		args := []any{"MIGRATE", destIP, strconv.Itoa(destPort), "", "0", "5000"}
@@ -827,8 +827,8 @@ func migrateOneSlot(ctx context.Context, srcConn, destConn redisConn, srcID stri
 		}
 	}
 
-	// Зафиксировать нового владельца слота на источнике и цели. Полное
-	// распространение по кластеру доделает gossip.
+	// Commit the new slot owner to the source and target. Complete
+	// spreading throughout the cluster will complete gossip.
 	if _, err := srcConn.Do(ctx, "CLUSTER", "SETSLOT", slotArg, "NODE", dest.id); err != nil {
 		return fmt.Errorf("SETSLOT %d NODE (source): %w", slot, err)
 	}
@@ -838,9 +838,9 @@ func migrateOneSlot(ctx context.Context, srcConn, destConn redisConn, srcID stri
 	return nil
 }
 
-// forgetOnRemaining исполняет CLUSTER FORGET <remove-id> на каждой оставшейся
-// ноде (masters + replicas, кроме удаляемой). Возвращает число нод, на которых
-// FORGET выполнен. "Unknown node" на отдельной ноде (уже забыла) — не ошибка.
+// forgetOnRemaining executes CLUSTER FORGET <remove-id> on each remaining
+// node (masters + replicas, except the one being deleted). Returns the number of nodes on which
+// FORGET completed. "Unknown node" on a separate node (I already forgot) is not an error.
 func forgetOnRemaining(ctx context.Context, connect func(clusterNode) (redisConn, error), table []clusterNodeRow, remove clusterNodeRow, password string) (int, error) {
 	done := 0
 	for _, row := range table {
@@ -858,8 +858,8 @@ func forgetOnRemaining(ctx context.Context, connect func(clusterNode) (redisConn
 		_, err = conn.Do(ctx, "CLUSTER", "FORGET", remove.id)
 		_ = conn.Close()
 		if err != nil {
-			// Нода могла уже забыть удаляемую (gossip-anti-entropy) → "Unknown
-			// node": не ошибка, идём дальше.
+			// The node might have already forgotten the one being deleted (gossip-anti-entropy) -> "Unknown
+			// node": not an error, move on.
 			if isUnknownNodeErr(err) {
 				continue
 			}
@@ -870,7 +870,7 @@ func forgetOnRemaining(ctx context.Context, connect func(clusterNode) (redisConn
 	return done, nil
 }
 
-// nodeFromRow строит clusterNode из строки топологии (для коннекта по ip:port).
+// nodeFromRow builds a clusterNode from a topology row (for an ip:port connection).
 func nodeFromRow(row clusterNodeRow) (clusterNode, error) {
 	ip, port, err := splitIPPort(row.ipPort)
 	if err != nil {
@@ -879,7 +879,7 @@ func nodeFromRow(row clusterNodeRow) (clusterNode, error) {
 	return clusterNode{key: row.id, addr: row.ipPort, ip: ip, port: port}, nil
 }
 
-// splitIPPort режет "ip:port" CLUSTER NODES в (ip, port).
+// splitIPPort cuts "ip:port" CLUSTER NODES into (ip, port).
 func splitIPPort(ipPort string) (string, int, error) {
 	h, p, err := net.SplitHostPort(ipPort)
 	if err != nil {
@@ -892,21 +892,21 @@ func splitIPPort(ipPort string) (string, int, error) {
 	return h, n, nil
 }
 
-// isUnknownNodeErr — FORGET по уже забытой ноде → "ERR Unknown node ...".
+// isUnknownNodeErr - FORGET on an already forgotten node -> "ERR Unknown node...".
 func isUnknownNodeErr(err error) bool {
 	return strings.Contains(strings.ToLower(err.Error()), "unknown node")
 }
 
-// redactErr вырезает пароль из ошибки и возвращает обёрнутую ошибку (для
-// error-цепочки внутри миграции; redactError возвращает строку). Маскировка —
-// единой точкой истины поверх redactError, чтобы правка маски не разъехалась.
+// redactErr strips the password from the error and returns the wrapped error (for
+// error chains inside migration; redactError returns a string). Disguise -
+// a single point of truth on top of redactError so that the mask edit does not move apart.
 func redactErr(err error, password string) error {
 	return fmt.Errorf("%s", redactError(err, password))
 }
 
-// masterSpecGiven — задан ли явный master-endpoint. Пустой spec или spec с
-// пустыми addr/ip+port (scenario при незаданном master_sid шлёт master.addr: "")
-// трактуется как «не указан» → авто-выбор master-а.
+// masterSpecGiven - whether an explicit master-endpoint is specified. Blank spec or spec with
+// empty addr/ip+port (scenario sends master.addr: "") if master_sid is not specified
+// interpreted as "not specified" -> auto-selection of master.
 func masterSpecGiven(spec map[string]*structpb.Value) bool {
 	if len(spec) == 0 {
 		return false
@@ -915,8 +915,8 @@ func masterSpecGiven(spec map[string]*structpb.Value) bool {
 		strings.TrimSpace(stringOrEmpty(spec["ip"])) != ""
 }
 
-// resolveSingleNode извлекает clusterNode из единичной ноды-спецификации
-// ({addr|ip+port}). key совпадает с именем поля (для сообщений об ошибке).
+// resolveSingleNode retrieves a clusterNode from a single specification node
+// ({addr|ip+port}). key is the same as the field name (for error messages).
 func resolveSingleNode(field string, v *structpb.Value) (clusterNode, error) {
 	spec := nodeSpec(v)
 	if len(spec) == 0 {
@@ -929,18 +929,18 @@ func resolveSingleNode(field string, v *structpb.Value) (clusterNode, error) {
 	return clusterNode{key: field, addr: addr, ip: ip, port: port}, nil
 }
 
-// pickReplicationMaster определяет node-id master-а для новой реплики. Если задан
-// params.master ({addr|ip+port}) — резолвит его id из топологии по ip:port; иначе
-// выбирает master с наименьшим числом уже привязанных реплик (балансировка), при
-// равенстве — детерминированно по node-id.
+// pickReplicationMaster determines the master node-id for the new replica. If set
+// params.master ({addr|ip+port}) - resolves its id from the topology by ip:port; otherwise
+// selects the master with the smallest number of replicas already attached (balancing), when
+// equality - deterministic by node-id.
 func pickReplicationMaster(masterSpec *structpb.Value, table []clusterNodeRow) (string, error) {
 	masters := mastersFromTable(table)
 	if len(masters) == 0 {
 		return "", fmt.Errorf("cluster has no master to replicate")
 	}
 
-	// Явный master указан, только если spec несёт непустой endpoint (пустой
-	// master.addr из scenario при незаданном master_sid → авто-выбор).
+	// An explicit master is specified only if the spec carries a non-empty endpoint (empty
+	// master.addr from scenario when master_sid is not specified -> auto-selection).
 	if spec := nodeSpec(masterSpec); masterSpecGiven(spec) {
 		ip, port, _, err := resolveNodeEndpoint(spec)
 		if err != nil {
@@ -955,7 +955,7 @@ func pickReplicationMaster(masterSpec *structpb.Value, table []clusterNodeRow) (
 		return "", fmt.Errorf("params.master %s: not a master in this cluster", want)
 	}
 
-	// Авто-выбор: меньше всего реплик; при равенстве — меньший node-id.
+	// Auto-selection: least number of cues; if equal, the smaller node-id.
 	replicaCount := make(map[string]int, len(masters))
 	for _, row := range table {
 		if !row.isMaster && row.masterID != "" {
@@ -974,22 +974,22 @@ func pickReplicationMaster(masterSpec *structpb.Value, table []clusterNodeRow) (
 	return best.id, nil
 }
 
-// clusterNodeRow — одна разобранная строка CLUSTER NODES (нужные поля).
+// clusterNodeRow - one parsed row CLUSTER NODES (necessary fields).
 type clusterNodeRow struct {
 	id       string
-	ipPort   string // "ip:port" клиентского адреса (без @cport)
+	ipPort   string // "ip:port" client address (without @cport)
 	isMaster bool
-	masterID string      // id master-а для реплики ("-" → "")
-	slots    []slotRange // назначенные диапазоны слотов (только у master со слотами)
+	masterID string      // master id for the replica ("-" -> "")
+	slots    []slotRange // assigned slot ranges (only for masters with slots)
 }
 
-// parseClusterNodesTable разбирает вывод CLUSTER NODES в строки. Формат строки:
+// parseClusterNodesTable parses CLUSTER NODES output into strings. String format:
 //
 //	<id> <ip:port@cport> <flags> <master-id> <ping> <pong> <epoch> <link> [slots...]
 //
-// Берём id, ip:port (до @), флаг master/slave, master-id реплики и назначенные
-// диапазоны слотов (поля с 8-го). Слот-токены вида "[N-<importing-id" / "[N->-
-// migrating-id" (миграция in-flight) пропускаются — это не steady-state владение.
+// Take id, ip:port (up to @), master/slave flag, master-id replicas and assigned
+// slot ranges (fields from 8th). Slot tokens of the form "[N-<importing-id" / "[N->-
+// migrating-id" (in-flight migration) are skipped - this is not a steady-state possession.
 func parseClusterNodesTable(s string) []clusterNodeRow {
 	var rows []clusterNodeRow
 	for _, line := range strings.Split(s, "\n") {
@@ -1020,9 +1020,9 @@ func parseClusterNodesTable(s string) []clusterNodeRow {
 	return rows
 }
 
-// parseSlotTokens разбирает slot-токены строки CLUSTER NODES в диапазоны. Токен —
-// либо одиночный слот "N", либо диапазон "N-M". Importing/migrating-токены в
-// квадратных скобках ("[…") — нестабильная in-flight миграция, пропускаются.
+// parseSlotTokens parses the slot tokens of the CLUSTER NODES string into ranges. Token -
+// either a single slot "N" or a range "N-M". Importing/migrating tokens into
+// square brackets ("[...") - unstable in-flight migration, skipped.
 func parseSlotTokens(tokens []string) []slotRange {
 	var ranges []slotRange
 	for _, tok := range tokens {
@@ -1045,7 +1045,7 @@ func parseSlotTokens(tokens []string) []slotRange {
 	return ranges
 }
 
-// nodeInTable — присутствует ли узел (по ip:port) в топологии (идемпотентность).
+// nodeInTable - whether the node (by ip:port) is present in the topology (idempotency).
 func nodeInTable(table []clusterNodeRow, node clusterNode) bool {
 	want := net.JoinHostPort(node.ip, strconv.Itoa(node.port))
 	for _, row := range table {
@@ -1056,13 +1056,13 @@ func nodeInTable(table []clusterNodeRow, node clusterNode) bool {
 	return false
 }
 
-// masterRow — master из топологии (id + ip:port) для выбора цели REPLICATE.
+// masterRow - master from the topology (id + ip:port) to select the REPLICATE target.
 type masterRow struct {
 	id     string
 	ipPort string
 }
 
-// mastersFromTable — детерминированно отсортированный (по id) список master-ов.
+// mastersFromTable is a deterministically sorted (by id) list of masters.
 func mastersFromTable(table []clusterNodeRow) []masterRow {
 	var out []masterRow
 	for _, row := range table {
@@ -1074,8 +1074,8 @@ func mastersFromTable(table []clusterNodeRow) []masterRow {
 	return out
 }
 
-// parseClusterNodes резолвит nodes-map в детерминированно отсортированный
-// срез clusterNode. Каждая нода — либо {addr: "host:port"}, либо {ip, port}.
+// parseClusterNodes resolves nodes-map into deterministically sorted
+// slice clusterNode. Each node is either {addr: "host:port"} or {ip, port}.
 func parseClusterNodes(v *structpb.Value) ([]clusterNode, error) {
 	raw := nodeSpecs(v)
 	if len(raw) == 0 {
@@ -1086,7 +1086,7 @@ func parseClusterNodes(v *structpb.Value) ([]clusterNode, error) {
 	for k := range raw {
 		keys = append(keys, k)
 	}
-	sort.Strings(keys) // детерминированная база раскладки
+	sort.Strings(keys) // deterministic layout base
 
 	out := make([]clusterNode, 0, len(keys))
 	for _, k := range keys {
@@ -1100,11 +1100,11 @@ func parseClusterNodes(v *structpb.Value) ([]clusterNode, error) {
 	return out, nil
 }
 
-// parseTopology разбирает params.topology — список шардов, каждый шард — список
-// SID ([master_sid, replica_sid, ...], первый = master). Пустой/отсутствующий
-// topology → nil (caller трактует как «авто-раскладка», старое поведение). Не-строки
-// внутри шарда пропускаются (валидация в validateClusterCreate уже отвергла такой
-// вход; здесь fail-safe). Формат structpb: ListValue из ListValue-ов StringValue.
+// parseTopology parses params.topology - a list of shards, each shard - a list
+// SID ([master_sid, replica_sid,...], first = master). Empty/missing
+// topology -> nil (caller interprets as "auto-layout", old behavior). Non-strings
+// inside the shard are skipped (validation in validateClusterCreate has already rejected such
+// entrance; here fail-safe). structpb format: ListValue from ListValues StringValue.
 func parseTopology(v *structpb.Value) [][]string {
 	if v == nil {
 		return nil
@@ -1124,9 +1124,9 @@ func parseTopology(v *structpb.Value) [][]string {
 	return out
 }
 
-// resolveNodeEndpoint извлекает (ip, port, addr) из спецификации одной ноды.
-// Приоритет: явные ip+port; иначе split addr "host:port". addr для коннекта,
-// ip+port — для CLUSTER MEET (gossip оперирует ip:port).
+// resolveNodeEndpoint retrieves (ip, port, addr) from the specification of one node.
+// Priority: explicit ip+port; otherwise split addr "host:port". addr for connection,
+// ip+port - for CLUSTER MEET (gossip operates ip:port).
 func resolveNodeEndpoint(spec map[string]*structpb.Value) (ip string, port int, addr string, err error) {
 	ip = strings.TrimSpace(stringOrEmpty(spec["ip"]))
 	port = intOrDefault(spec["port"], 0)
@@ -1153,12 +1153,12 @@ func resolveNodeEndpoint(spec map[string]*structpb.Value) (ip string, port int, 
 	}
 }
 
-// buildClusterPlan раскладывает ноды по ролям и слотам СТРОГО детерминированно.
+// buildClusterPlan arranges nodes into roles and slots in a STRICTLY deterministic manner.
 //
 //	shards   = len(nodes) / (1 + replicas_per_shard)
-//	masters  = первые shards нод (по отсортированному порядку)
-//	replicas = остальные, round-robin к мастерам
-//	слоты    = 16384 поровну между мастерами; остаток — первым мастерам
+//	masters = first shards of nodes (in sorted order)
+//	replicas = rest, round-robin to masters
+//	slots = 16384 equally divided between masters; the rest goes to the first masters
 func buildClusterPlan(nodes []clusterNode, replicas int) (clusterPlan, error) {
 	if replicas < 0 {
 		return clusterPlan{}, fmt.Errorf("params.replicas_per_shard: must be >= 0")
@@ -1178,27 +1178,27 @@ func buildClusterPlan(nodes []clusterNode, replicas int) (clusterPlan, error) {
 		slots:     allocateSlots(shards),
 		replicaOf: make([]int, len(nodes)-shards),
 	}
-	// Round-robin реплик к мастерам: replica j → master j%shards.
+	// Round-robin replicas to masters: replica j -> master j%shards.
 	for j := range plan.replicas {
 		plan.replicaOf[j] = j % shards
 	}
 	return plan, nil
 }
 
-// buildClusterPlanExplicit раскладывает ноды по ролям ИЗ ЯВНОЙ ТОПОЛОГИИ оператора
-// (params.topology) — зеркало buildClusterPlan, но без авто-раскладки: оператор сам
-// задал список шардов, каждый шард — [master_sid, replica_sid, ...] (первый = master).
+// buildClusterPlanExplicit arranges nodes into roles FROM EXPLICIT TOPOLOGY operator
+// (params.topology) - a mirror of buildClusterPlan, but without auto-layout: the operator itself
+// specified a list of shards, each shard - [master_sid, replica_sid,...] (first = master).
 //
-//	masters[i]  = nodes[topology[i][0]]            (master i-го шарда)
-//	replicas    = хвосты шардов (topology[i][1:]), replicaOf = i (их шард)
-//	слоты       = allocateSlots(len(topology))     (та же равномерная, что в авто)
+//	masters[i] = nodes[topology[i][0]] (master of the i-th shard)
+//	replicas = tails of shards (topology[i][1:]), replicaOf = i (their shard)
+//	slots = allocateSlots(len(topology)) (same uniform as in auto)
 //
-// Порядок мастеров — порядок шардов topology (раскладка оператора, НЕ sort ключей).
-// Реплики обходятся шард-за-шардом (детерминированно). Слоты делятся РОВНО так же,
-// как в авто-раскладке (allocateSlots), — оператор управляет только тем, КТО master
-// и КТО чья реплика, а не размерами диапазонов. Все SID предполагаются валидными
-// (существуют в nodes, без дублей, шарды непусты) — это гарантирует
-// validateClusterCreate; здесь ошибка только при недостающем индексе (fail-safe).
+// The order of masters is the order of shards topology (operator layout, NOT sort keys).
+// Replicas are managed shard by shard (deterministically). Slots are divided EXACTLY the same way,
+// as in auto-layout (allocateSlots), - the operator controls only who is master
+// and WHO is whose replica, and not by the size of the ranges. All SIDs are assumed to be valid
+// (exist in nodes, no duplicates, shards are non-empty) - this guarantees
+// validateClusterCreate; here the error occurs only if there is a missing index (fail-safe).
 func buildClusterPlanExplicit(nodes []clusterNode, topology [][]string) (clusterPlan, error) {
 	if len(topology) == 0 {
 		return clusterPlan{}, fmt.Errorf("params.topology: must be a non-empty list of shards")
@@ -1233,8 +1233,8 @@ func buildClusterPlanExplicit(nodes []clusterNode, topology [][]string) (cluster
 	return plan, nil
 }
 
-// allocateSlots делит 16384 слота поровну между shards мастерами; остаток
-// (16384 % shards) распределяется по одному слоту первым мастерам.
+// allocateSlots divides 16384 slots equally among shards masters; remainder
+// (16384 % shards) is distributed over one slot to the first masters.
 func allocateSlots(shards int) []slotRange {
 	base := totalSlots / shards
 	rem := totalSlots % shards
@@ -1251,38 +1251,38 @@ func allocateSlots(shards int) []slotRange {
 	return ranges
 }
 
-// clusterFormState — итог проверки идемпотентности create против ЖИВОГО кластера.
+// clusterFormState - the result of the create idempotency check against the LIVE cluster.
 type clusterFormState int
 
 const (
-	// clusterNotFormed — кластера ещё нет (или не сошёлся): надо собирать с нуля
-	// (MEET → ADDSLOTS → REPLICATE). Коннект-фейл к первому мастеру тоже сюда.
+	// clusterNotFormed - there is no cluster yet (or has not converged): you need to assemble it from scratch
+	// (MEET -> ADDSLOTS -> REPLICATE). The connection file to the first master is also here.
 	clusterNotFormed clusterFormState = iota
-	// clusterPartial — MEET+ADDSLOTS прошли (cluster_state:ok, все ноды, 16384
-	// слота), но РЕПЛИКИ настроены не полностью: часть нод, которым по плану быть
-	// репликами, осталась мастерами без слотов (типичный след упавшего на gossip-
-	// timing первого REPLICATE). Надо ДОДЕЛАТЬ только репликацию, не трогая slots.
+	// clusterPartial - MEET+ADDSLOTS passed (cluster_state:ok, all nodes, 16384
+	// slot), but REPLICAS are not fully configured: part of the nodes that are planned to be
+	// replicas, was left by the masters without slots (a typical trace of something that fell on gossip-
+	// timing of the first REPLICATE). You only need to COMPLETE the replication without touching the slots.
 	clusterPartial
-	// clusterFormed — кластер полностью собран (slots + все реплики на местах) →
+	// clusterFormed - the cluster is fully assembled (slots + all replicas in place) ->
 	// no-op.
 	clusterFormed
 )
 
-// clusterFormStatus определяет состояние формирования кластера по ЖИВОЙ топологии
-// первого мастера. Коннект-фейл / нештатный INFO трактуем как clusterNotFormed
-// (ноды могут только подниматься) — НЕ ошибка.
+// clusterFormStatus determines the status of cluster formation according to the LIVE topology
+// first master. Connection failure / abnormal INFO is interpreted as clusterNotFormed
+// (nodes can only rise) - NOT an error.
 //
-// Полнота реплик (clusterPartial vs clusterFormed) проверяется по CLUSTER NODES:
-// число slave-нод в живой топологии обязано совпасть с len(plan.replicas). Если
-// INFO рапортует state:ok + все ноды + 16384 слота, но реплик МЕНЬШЕ ожидаемого —
-// это partial-топология (упавший REPLICATE заморозил кластер как N master), и
-// старый гейт ошибочно считал её сформированной. Возвращаем также живую топологию
-// (table) — её переиспользует completeReplication (node-id мастеров по ip:port).
+// The completeness of replicas (clusterPartial vs clusterFormed) is checked by CLUSTER NODES:
+// the number of slave nodes in a live topology must match len(plan.replicas). If
+// INFO reports state:ok + all nodes + 16384 slots, but LESS replicas than expected -
+// this is a partial topology (a failed REPLICATE froze the cluster as N master), and
+// the old gate mistakenly considered it to be formed. We also return a live topology
+// (table) - it is reused by completeReplication (node-id of masters by ip:port).
 func clusterFormStatus(ctx context.Context, connect func(clusterNode) (redisConn, error), plan clusterPlan) (clusterFormState, []clusterNodeRow) {
 	first := plan.masters[0]
 	conn, err := connect(first)
 	if err != nil {
-		return clusterNotFormed, nil // ноды поднимаются; не сформирован
+		return clusterNotFormed, nil // nodes rise; not formed
 	}
 	defer func() { _ = conn.Close() }()
 
@@ -1301,9 +1301,9 @@ func clusterFormStatus(ctx context.Context, connect func(clusterNode) (redisConn
 		return clusterNotFormed, nil
 	}
 
-	// state:ok + все ноды + полные слоты. Различаем partial/formed по числу реплик
-	// в живой топологии. Любой фейл чтения NODES → считаем НЕ formed (пересоберём
-	// репликацию безопасно: completeReplication идемпотентен).
+	// state:ok + all nodes + full slots. We distinguish partial/formed by the number of replicas
+	// in living topology. Any reading file NODES -> consider NOT formed (we will rebuild
+	// replication is safe: completeReplication is idempotent).
 	nodesOut, err := conn.Do(ctx, "CLUSTER", "NODES")
 	if err != nil {
 		return clusterPartial, nil //nolint:nilerr
@@ -1315,7 +1315,7 @@ func clusterFormStatus(ctx context.Context, connect func(clusterNode) (redisConn
 	return clusterPartial, table
 }
 
-// countReplicas — число slave-нод (реплик) в живой топологии.
+// countReplicas - the number of slave nodes (replicas) in the live topology.
 func countReplicas(table []clusterNodeRow) int {
 	n := 0
 	for _, row := range table {
@@ -1326,13 +1326,13 @@ func countReplicas(table []clusterNodeRow) int {
 	return n
 }
 
-// formCluster исполняет сборку: MEET всех нод в gossip с первого мастера,
-// ожидание сходимости, ADDSLOTS мастерам, REPLICATE репликам.
+// formCluster executes the assembly: MEET all nodes in gossip from the first master,
+// waiting for convergence, ADDSLOTS to masters, REPLICATE to replicas.
 func formCluster(ctx context.Context, connect func(clusterNode) (redisConn, error), plan clusterPlan, password string) error {
 	all := append(append([]clusterNode{}, plan.masters...), plan.replicas...)
 
-	// Один долгоживущий коннект на каждую ноду (нужен для MEET/ADDSLOTS/REPLICATE
-	// именно на этой ноде). Закрываем все одним defer-ом, без defer-в-цикле.
+	// One long-lived connection per node (needed for MEET/ADDSLOTS/REPLICATE
+	// exactly on this node). We close everything with one defer, without a defer-in-the-loop.
 	conns := make([]redisConn, 0, len(all))
 	defer func() {
 		for _, c := range conns {
@@ -1347,8 +1347,8 @@ func formCluster(ctx context.Context, connect func(clusterNode) (redisConn, erro
 		conns = append(conns, c)
 	}
 
-	// CLUSTER MYID нужен ТОЛЬКО мастерам: REPLICATE требует node-id мастера, у
-	// реплики собственный id не используется. Спрашиваем id у мастеров (conns[:M]).
+	// CLUSTER MYID is needed ONLY by masters: REPLICATE requires the node-id of the master,
+	// the replica's own id is not used. We ask the masters for id (conns[:M]).
 	idByKey := make(map[string]string, len(plan.masters))
 	for i, master := range plan.masters {
 		id, err := conns[i].Do(ctx, "CLUSTER", "MYID")
@@ -1358,7 +1358,7 @@ func formCluster(ctx context.Context, connect func(clusterNode) (redisConn, erro
 		idByKey[master.key] = strings.TrimSpace(id)
 	}
 
-	// Gossip: с первой ноды MEET всех остальных по ip:port.
+	// Gossip: from the first MEET node to all the others via ip:port.
 	hub := conns[0]
 	for _, n := range all[1:] {
 		if _, err := hub.Do(ctx, "CLUSTER", "MEET", n.ip, strconv.Itoa(n.port)); err != nil {
@@ -1370,7 +1370,7 @@ func formCluster(ctx context.Context, connect func(clusterNode) (redisConn, erro
 		return err
 	}
 
-	// ADDSLOTS мастерам — их детерминированные диапазоны.
+	// ADDSLOTS to masters - their deterministic ranges.
 	for i, master := range plan.masters {
 		r := plan.slots[i]
 		args := addSlotsArgs(r)
@@ -1379,10 +1379,10 @@ func formCluster(ctx context.Context, connect func(clusterNode) (redisConn, erro
 		}
 	}
 
-	// REPLICATE репликам — id их мастера. ПЕРЕД каждым REPLICATE ждём, пока узел-
-	// реплика увидит node-id мастера в СВОЁМ CLUSTER NODES (gossip-gate): иначе на
-	// неустоявшемся gossip REPLICATE падает с «ERR Unknown node» (живой баг —
-	// первый REPLICATE замораживал кластер как N master без реплик).
+	// REPLICATE to replicas - the id of their master. BEFORE each REPLICATE we wait until the node
+	// the replica will see the node-id of the master in ITS CLUSTER NODES (gossip-gate): otherwise on
+	// unsettled gossip REPLICATE crashes with "ERR Unknown node" (live bug -
+	// the first REPLICATE froze the cluster as N master without replicas).
 	for j, replica := range plan.replicas {
 		master := plan.masters[plan.replicaOf[j]]
 		masterID := idByKey[master.key]
@@ -1401,20 +1401,20 @@ func formCluster(ctx context.Context, connect func(clusterNode) (redisConn, erro
 	return nil
 }
 
-// completeReplication доделывает РЕПЛИКАЦИЮ на частично собранном кластере
-// (clusterPartial): MEET и ADDSLOTS уже прошли, но часть нод, которым по плану
-// быть репликами, осталась мастерами без слотов (упавший на gossip-timing первый
-// REPLICATE). Шлёт CLUSTER REPLICATE только тем узлам, которые ещё НЕ реплики
-// своего мастера; node-id мастеров берёт из ЖИВОЙ топологии (liveTable) по ip:port
-// (узлы уже в кластере — CLUSTER MYID не нужен). Идемпотентна: узел, уже
-// привязанный к нужному мастеру, пропускается. Возвращает число доделанных реплик.
+// completeReplication completes REPLICATION on a partially assembled cluster
+// (clusterPartial): MEET and ADDSLOTS have already passed, but some of the nodes that are scheduled to
+// be replicas, remained masters without slots (fell on gossip-timing first
+// REPLICATE). Sends CLUSTER REPLICATE only to those nodes that are NOT replicas yet
+// your master; node-id of masters is taken from the LIVE topology (liveTable) by ip:port
+// (nodes are already in the cluster - CLUSTER MYID is not needed). Idempotent: node, already
+// bound to the desired master is skipped. Returns the number of completed replicas.
 //
-// ПЕРЕД REPLICATE — тот же gossip-gate, что в formCluster (узел-реплика обязан
-// видеть master node-id в своём CLUSTER NODES). Slots НЕ трогаются (повторный
-// ADDSLOTS уже назначенного слота → «Slot is already busy»).
+// BEFORE REPLICATE - the same gossip-gate as in formCluster (the replica node must
+// see master node-id in your CLUSTER NODES). Slots are NOT touched (repeat
+// ADDSLOTS of an already assigned slot -> "Slot is already busy").
 func completeReplication(ctx context.Context, connect func(clusterNode) (redisConn, error), plan clusterPlan, liveTable []clusterNodeRow, password string) (int, error) {
-	// node-id плановых мастеров — из живой топологии по их ip:port. Если живой
-	// топологии нет (фейл чтения NODES в probe), читаем CLUSTER MYID каждого мастера.
+	// node-id of scheduled masters - from the live topology according to their ip:port. If alive
+	// there is no topology (read NODES file in probe), read CLUSTER MYID of each master.
 	masterID, err := resolvePlanMasterIDs(ctx, connect, plan, liveTable)
 	if err != nil {
 		return 0, err
@@ -1427,7 +1427,7 @@ func completeReplication(ctx context.Context, connect func(clusterNode) (redisCo
 		if wantMasterID == "" {
 			return done, fmt.Errorf("replica %s: unknown master id for %s", replica.addr, master.key)
 		}
-		// Идемпотентность: узел уже реплика нужного мастера в живой топологии → skip.
+		// Idempotency: the node is already a replica of the desired master in the living topology -> skip.
 		if replicaAlreadyAttached(liveTable, replica, wantMasterID) {
 			continue
 		}
@@ -1450,10 +1450,10 @@ func completeReplication(ctx context.Context, connect func(clusterNode) (redisCo
 	return done, nil
 }
 
-// resolvePlanMasterIDs сопоставляет каждый плановый мастер (plan.masters) с его
-// node-id. Сперва пытается по ЖИВОЙ топологии (liveTable) — мастер уже в кластере,
-// его id известен по ip:port. Для не найденных (или при пустой liveTable) — спросить
-// CLUSTER MYID напрямую (fallback, напр. probe не смог прочитать NODES).
+// resolvePlanMasterIDs matches each plan master (plan.masters) with its
+// node-id. First it tries using the LIVE topology (liveTable) - the master is already in the cluster,
+// its id is known by ip:port. For those not found (or if the liveTable is empty) - ask
+// CLUSTER MYID directly (fallback, eg probe could not read NODES).
 func resolvePlanMasterIDs(ctx context.Context, connect func(clusterNode) (redisConn, error), plan clusterPlan, liveTable []clusterNodeRow) (map[string]string, error) {
 	out := make(map[string]string, len(plan.masters))
 	for _, master := range plan.masters {
@@ -1475,7 +1475,7 @@ func resolvePlanMasterIDs(ctx context.Context, connect func(clusterNode) (redisC
 	return out, nil
 }
 
-// nodeIDFromTable — node-id узла (по ip:port) из живой топологии или "".
+// nodeIDFromTable - node-id of the node (by ip:port) from the live topology or "".
 func nodeIDFromTable(table []clusterNodeRow, node clusterNode) string {
 	want := net.JoinHostPort(node.ip, strconv.Itoa(node.port))
 	for _, row := range table {
@@ -1486,7 +1486,7 @@ func nodeIDFromTable(table []clusterNodeRow, node clusterNode) string {
 	return ""
 }
 
-// replicaAlreadyAttached — узел node уже реплика мастера masterID в живой топологии.
+// replicaAlreadyAttached - the node is already a replica of the master ID in the live topology.
 func replicaAlreadyAttached(table []clusterNodeRow, node clusterNode, masterID string) bool {
 	want := net.JoinHostPort(node.ip, strconv.Itoa(node.port))
 	for _, row := range table {
@@ -1497,10 +1497,10 @@ func replicaAlreadyAttached(table []clusterNodeRow, node clusterNode, masterID s
 	return false
 }
 
-// waitMasterVisible ждёт (bounded retry, переиспользует gossip-лимиты MEET), пока
-// узел-реплика увидит node-id своего мастера в СВОЁМ CLUSTER NODES. Без этого
-// REPLICATE на неустоявшемся gossip падает «ERR Unknown node». Возвращает ошибку,
-// если master-id не появился за лимит (лучше явный фейл, чем «Unknown node»).
+// waitMasterVisible waits (bounded retry, reuses MEET gossip limits) until
+// the replica node will see the node-id of its master in ITS CLUSTER NODES. Without this
+// REPLICATE on an unsettled gossip drops "ERR Unknown node". Returns an error
+// if the master-id did not appear beyond the limit (an obvious failure is better than an "Unknown node").
 func waitMasterVisible(ctx context.Context, conn redisConn, masterID string) error {
 	for attempt := 0; attempt < gossipPollAttempts; attempt++ {
 		nodesOut, err := conn.Do(ctx, "CLUSTER", "NODES")
@@ -1519,7 +1519,7 @@ func waitMasterVisible(ctx context.Context, conn redisConn, masterID string) err
 	return fmt.Errorf("master node %s not visible in local topology after %d attempts (gossip did not converge)", masterID, gossipPollAttempts)
 }
 
-// nodeIDInTable — присутствует ли узел с данным node-id в топологии.
+// nodeIDInTable - whether a node with a given node-id is present in the topology.
 func nodeIDInTable(table []clusterNodeRow, id string) bool {
 	for _, row := range table {
 		if row.id == id {
@@ -1529,8 +1529,8 @@ func nodeIDInTable(table []clusterNodeRow, id string) bool {
 	return false
 }
 
-// waitGossipConverged ждёт (ограниченный retry, НЕ бесконечно), пока hub увидит
-// в CLUSTER NODES все want нод. Возвращает ошибку, если за лимит не сошлось.
+// waitGossipConverged waits (limited retry, NOT infinite) for hub to see
+// in CLUSTER NODES all want nodes. Returns an error if the limit is not met.
 func waitGossipConverged(ctx context.Context, hub redisConn, want int) error {
 	for attempt := 0; attempt < gossipPollAttempts; attempt++ {
 		nodes, err := hub.Do(ctx, "CLUSTER", "NODES")
@@ -1549,7 +1549,7 @@ func waitGossipConverged(ctx context.Context, hub redisConn, want int) error {
 	return fmt.Errorf("gossip did not converge: fewer than %d nodes visible after %d attempts", want, gossipPollAttempts)
 }
 
-// addSlotsArgs строит аргументы CLUSTER ADDSLOTS для непрерывного диапазона.
+// addSlotsArgs builds the CLUSTER ADDSLOTS arguments for a contiguous range.
 func addSlotsArgs(r slotRange) []any {
 	args := make([]any, 0, 2+(r.to-r.from+1))
 	args = append(args, "CLUSTER", "ADDSLOTS")
@@ -1559,7 +1559,7 @@ func addSlotsArgs(r slotRange) []any {
 	return args
 }
 
-// parseClusterInfo разбирает вывод CLUSTER INFO ("key:value" построчно).
+// parseClusterInfo parses the output of CLUSTER INFO ("key:value" line by line).
 func parseClusterInfo(s string) map[string]string {
 	out := map[string]string{}
 	for _, line := range strings.Split(s, "\n") {
@@ -1576,8 +1576,8 @@ func parseClusterInfo(s string) map[string]string {
 	return out
 }
 
-// countClusterNodes считает непустые строки вывода CLUSTER NODES (одна строка =
-// одна нода).
+// countClusterNodes counts non-empty lines of CLUSTER NODES output (one line =
+// one node).
 func countClusterNodes(s string) int {
 	n := 0
 	for _, line := range strings.Split(s, "\n") {
@@ -1588,8 +1588,8 @@ func countClusterNodes(s string) int {
 	return n
 }
 
-// layoutSummary — детерминированная человекочитаемая сводка раскладки для
-// Output (без секретов: только key и слоты).
+// layoutSummary - deterministic human-readable summary of the layout for
+// Output (no secrets: only key and slots).
 func layoutSummary(plan clusterPlan) string {
 	parts := make([]string, 0, len(plan.masters)+len(plan.replicas))
 	for i, master := range plan.masters {
