@@ -18,8 +18,8 @@ import (
 	shlog "github.com/souls-guild/soul-stack/shared/log"
 )
 
-// keeperFixtureStore — копирует golden keeper.yml во временный файл и
-// оборачивает в Store. Редактирование файла + Reload эквивалентны SIGHUP.
+// keeperFixtureStore -- copies the golden keeper.yml into a temp file and
+// wraps it in a Store. Editing the file + Reload is equivalent to SIGHUP.
 func keeperFixtureStore(t *testing.T) (*config.Store[config.KeeperConfig], string) {
 	t.Helper()
 	data, err := os.ReadFile(filepath.FromSlash("../../../examples/keeper/keeper.yml"))
@@ -42,8 +42,9 @@ func keeperFixtureStore(t *testing.T) (*config.Store[config.KeeperConfig], strin
 	return store, path
 }
 
-// TestLevelSubscriber_ReflectsReload — подписка logger-level на store (как в
-// runDaemon) двигает порог фильтрации на Reload-swap из нового снимка.
+// TestLevelSubscriber_ReflectsReload -- the logger-level subscription on the
+// store (as in runDaemon) moves the filter threshold on a Reload-swap from
+// the new snapshot.
 func TestLevelSubscriber_ReflectsReload(t *testing.T) {
 	t.Parallel()
 	store, path := keeperFixtureStore(t)
@@ -90,12 +91,13 @@ func TestLevelSubscriber_ReflectsReload(t *testing.T) {
 	}
 }
 
-// TestTollSubscriber_AppliesNewThreshold — подписка daemon-applyTollReload
-// (wired через store.OnReload в setupToll) переписывает Leader-config при
-// успешном Reload-swap-е. Тест собирает реальный [toll.Leader] (через
-// publicly-exposed адаптеры pkg toll-а нельзя; вместо этого мы проверяем
-// связку: OnReload зовёт callback с новым cfg.Toll.* → daemon видит новое
-// значение). Полная проверка UpdateConfig-семантики в leader_reload_test.go.
+// TestTollSubscriber_AppliesNewThreshold -- the daemon-applyTollReload
+// subscription (wired via store.OnReload in setupToll) rewrites the
+// Leader config on a successful Reload-swap. The test assembles a real
+// [toll.Leader] (publicly-exposed toll pkg adapters are not allowed; instead
+// we check the linkage: OnReload calls the callback with the new
+// cfg.Toll.* -> the daemon sees the new value). Full UpdateConfig semantics
+// coverage is in leader_reload_test.go.
 func TestTollSubscriber_AppliesNewThreshold(t *testing.T) {
 	t.Parallel()
 	store, path := keeperFixtureStore(t)
@@ -104,8 +106,8 @@ func TestTollSubscriber_AppliesNewThreshold(t *testing.T) {
 		mu          sync.Mutex
 		lastApplied float64
 	)
-	// Имитация setupToll-подписки: на каждый Reload-swap читаем
-	// cfg.Toll.Threshold (резолв дефолтов как в applyTollReload).
+	// Simulates the setupToll subscription: on every Reload-swap we read
+	// cfg.Toll.Threshold (resolving defaults as in applyTollReload).
 	store.OnReload(func(_, newCfg *config.KeeperConfig) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -123,13 +125,13 @@ func TestTollSubscriber_AppliesNewThreshold(t *testing.T) {
 		lastApplied = threshold
 	})
 
-	// Редактируем fixture: добавляем toll-блок с явным threshold=0.42.
+	// Edit the fixture: add a toll block with an explicit threshold=0.42.
 	src, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read fixture path: %v", err)
 	}
 	if bytes.Contains(src, []byte("\ntoll:")) {
-		t.Skip("fixture уже содержит toll-блок — пере-настройка теста требуется")
+		t.Skip("fixture already contains a toll block -- test needs adjusting")
 	}
 	edited := append(src, []byte("\ntoll:\n  threshold: 0.42\n")...)
 	if err := os.WriteFile(path, edited, 0o644); err != nil {
@@ -141,7 +143,7 @@ func TestTollSubscriber_AppliesNewThreshold(t *testing.T) {
 		t.Fatalf("Swapped=false: %+v", res.Diagnostics)
 	}
 
-	// Notify происходит в отдельной goroutine — ждём результата.
+	// Notify happens in a separate goroutine -- wait for the result.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		mu.Lock()
@@ -157,67 +159,67 @@ func TestTollSubscriber_AppliesNewThreshold(t *testing.T) {
 	got := lastApplied
 	mu.Unlock()
 	if got != 0.42 {
-		t.Fatalf("ожидался threshold=0.42 после SIGHUP-style reload-а, got %v", got)
+		t.Fatalf("expected threshold=0.42 after a SIGHUP-style reload, got %v", got)
 	}
 }
 
-// TestTollWebhookCfgChanged_Diff — точечная проверка diff-помощника
-// [tollWebhookCfgChanged] (см. daemon.go). Покрывает nil-границы и каждое
-// поле в отдельности.
+// TestTollWebhookCfgChanged_Diff -- a targeted check of the diff helper
+// [tollWebhookCfgChanged] (see daemon.go). Covers nil boundaries and each
+// field individually.
 func TestTollWebhookCfgChanged_Diff(t *testing.T) {
 	t.Parallel()
 	if tollWebhookCfgChanged(nil, nil) {
-		t.Fatal("nil/nil — без изменений")
+		t.Fatal("nil/nil -- no change")
 	}
 	cfg := &config.KeeperTollWebhook{Enabled: true, URLRef: "https://x", Format: "generic", Timeout: "10s"}
 	if !tollWebhookCfgChanged(nil, cfg) {
-		t.Fatal("nil → non-nil — изменение")
+		t.Fatal("nil → non-nil -- change")
 	}
 	if !tollWebhookCfgChanged(cfg, nil) {
-		t.Fatal("non-nil → nil — изменение")
+		t.Fatal("non-nil → nil -- change")
 	}
 	clone := *cfg
 	if tollWebhookCfgChanged(cfg, &clone) {
-		t.Fatal("одинаковые блоки — без изменений")
+		t.Fatal("identical blocks -- no change")
 	}
 	mutated := *cfg
 	mutated.URLRef = "https://y"
 	if !tollWebhookCfgChanged(cfg, &mutated) {
-		t.Fatal("URLRef diff — изменение")
+		t.Fatal("URLRef diff -- change")
 	}
 	mutated = *cfg
 	mutated.Enabled = false
 	if !tollWebhookCfgChanged(cfg, &mutated) {
-		t.Fatal("Enabled diff — изменение")
+		t.Fatal("Enabled diff -- change")
 	}
 	mutated = *cfg
 	mutated.Format = "slack"
 	if !tollWebhookCfgChanged(cfg, &mutated) {
-		t.Fatal("Format diff — изменение")
+		t.Fatal("Format diff -- change")
 	}
 	mutated = *cfg
 	mutated.Timeout = "5s"
 	if !tollWebhookCfgChanged(cfg, &mutated) {
-		t.Fatal("Timeout diff — изменение")
+		t.Fatal("Timeout diff -- change")
 	}
 }
 
-// TestApplyTollReload_NoLeader — applyTollReload защищён nil-проверкой:
-// без подключённого Toll-а (нет Redis / опт-аут) вызов — no-op.
+// TestApplyTollReload_NoLeader -- applyTollReload is guarded by a nil check:
+// with no Toll attached (no Redis / opted out), the call is a no-op.
 func TestApplyTollReload_NoLeader(t *testing.T) {
 	t.Parallel()
 	d := &daemon{cfg: &config.KeeperConfig{KID: "kid-test"}}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	// Не должно паниковать / NPE при tollLeader==nil.
+	// Must not panic / NPE when tollLeader==nil.
 	d.applyTollReload(&config.KeeperConfig{KID: "kid-test"}, logger)
 }
 
-// TestApplyTollReload_RealLeader_UpdatesThreshold — собираем реальный
-// [toll.Leader] через публичный конструктор с минимальным fake-pipeline-ом
-// (адаптеры здесь интегрированы как тонкие inline-структуры; они не
-// импортируются из toll-test-helpers — те unexported). Проверяем сквозной
-// путь: applyTollReload → Leader.UpdateConfig → snapshot tick-а видит новое
-// значение.
+// TestApplyTollReload_RealLeader_UpdatesThreshold -- assembles a real
+// [toll.Leader] via the public constructor with a minimal fake pipeline
+// (adapters here are integrated as thin inline structs; they are not
+// imported from toll-test-helpers -- those are unexported). Verifies the
+// end-to-end path: applyTollReload → Leader.UpdateConfig → the tick
+// snapshot sees the new value.
 func TestApplyTollReload_RealLeader_UpdatesThreshold(t *testing.T) {
 	t.Parallel()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -248,7 +250,7 @@ func TestApplyTollReload_RealLeader_UpdatesThreshold(t *testing.T) {
 		cfg:        &config.KeeperConfig{KID: "kid-test"},
 		tollLeader: leader,
 	}
-	// Hot-reload: threshold=0.42 + per-coven-set.
+	// Hot-reload: threshold=0.42 + per-coven set.
 	newCfg := &config.KeeperConfig{
 		KID: "kid-test",
 		Toll: &config.KeeperToll{
@@ -261,15 +263,15 @@ func TestApplyTollReload_RealLeader_UpdatesThreshold(t *testing.T) {
 	}
 	d.applyTollReload(newCfg, logger)
 
-	// Sanity: CurrentNotifier остаётся nil (webhook в cfg нет).
+	// Sanity: CurrentNotifier stays nil (no webhook block in cfg).
 	if leader.CurrentNotifier() != nil {
-		t.Fatal("ожидался nil CurrentNotifier при отсутствующем webhook-блоке")
+		t.Fatal("expected nil CurrentNotifier with no webhook block")
 	}
 }
 
-// stubLeaseAcquirer — никогда не отдаёт lease (Leader-loop крутится в acquire-
-// retry, но мы Run в этом тесте не вызываем). Тест проверяет UpdateConfig-путь
-// в applyTollReload, не сам leader-loop.
+// stubLeaseAcquirer -- never grants a lease (the Leader-loop spins in
+// acquire-retry, but we never call Run in this test). The test checks the
+// UpdateConfig path in applyTollReload, not the leader loop itself.
 type stubLeaseAcquirer struct{}
 
 func (stubLeaseAcquirer) Acquire(_ context.Context, _, _ string, _ time.Duration) (toll.Lease, error) {

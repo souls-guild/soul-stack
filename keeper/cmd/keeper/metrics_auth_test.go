@@ -7,8 +7,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// resolveMetricsBasicAuth без настроенного блока / при disabled возвращает
-// (nil, nil) — listener поднимается без auth, vault не дёргается (vc=nil ok).
+// resolveMetricsBasicAuth with no configured block / when disabled returns
+// (nil, nil) -- the listener comes up without auth, vault is not touched
+// (vc=nil ok).
 func TestResolveMetricsBasicAuth_DisabledOrAbsent(t *testing.T) {
 	cases := []struct {
 		name string
@@ -23,7 +24,7 @@ func TestResolveMetricsBasicAuth_DisabledOrAbsent(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			// vc=nil намеренно: ни одна из этих веток не должна обращаться к vault.
+			// vc=nil deliberately: none of these branches should touch vault.
 			auth, err := resolveMetricsBasicAuth(context.Background(), nil, tc.m)
 			if err != nil {
 				t.Fatalf("err = %v, want nil", err)
@@ -35,8 +36,9 @@ func TestResolveMetricsBasicAuth_DisabledOrAbsent(t *testing.T) {
 	}
 }
 
-// resolveMetricsBasicAuth при enabled, но nil vault-клиенте — ошибка
-// (резолв password_ref невозможен). Пароль/ref в сообщение не попадают.
+// resolveMetricsBasicAuth with enabled but a nil vault client -- error
+// (password_ref resolution is impossible). The password/ref never end up
+// in the message.
 func TestResolveMetricsBasicAuth_EnabledNilVault(t *testing.T) {
 	m := &config.KeeperMetrics{Auth: &config.KeeperMetricsAuth{
 		Basic: &config.KeeperMetricsBasicAuth{

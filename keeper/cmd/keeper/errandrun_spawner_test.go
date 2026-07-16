@@ -9,13 +9,13 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/errand"
 )
 
-// fakeTerminalSource — программируемый errandTerminalSource. Возвращает
-// заранее заданную последовательность статусов по errand_id: каждый Get
-// продвигает курсор, имитируя running → terminal-переход, который пишет
-// background-горутина Dispatcher-а.
+// fakeTerminalSource -- a programmable errandTerminalSource. Returns a
+// predefined sequence of statuses by errand_id: each Get advances the
+// cursor, simulating the running → terminal transition written by the
+// Dispatcher's background goroutine.
 type fakeTerminalSource struct {
 	mu    sync.Mutex
-	rows  map[string][]errand.Status // errand_id → последовательность статусов
+	rows  map[string][]errand.Status // errand_id → status sequence
 	calls map[string]int
 }
 
@@ -44,8 +44,8 @@ func (f *fakeTerminalSource) Get(_ context.Context, id string) (*errand.Row, err
 	return &errand.Row{ErrandID: id, Status: seq[idx]}, nil
 }
 
-// TestAwaitTerminal_SuccessAfterPoll — после async-escalation bridge поллит
-// строку и возвращает реальный success (НЕ async_escalation).
+// TestAwaitTerminal_SuccessAfterPoll -- after the async-escalation the
+// bridge polls the row and returns the real success (NOT async_escalation).
 func TestAwaitTerminal_SuccessAfterPoll(t *testing.T) {
 	t.Parallel()
 	src := newFakeTerminalSource()
@@ -60,15 +60,15 @@ func TestAwaitTerminal_SuccessAfterPoll(t *testing.T) {
 		t.Fatalf("awaitTerminal err: %v", err)
 	}
 	if status != "success" {
-		t.Fatalf("status = %q, want success (НЕ async_escalation)", status)
+		t.Fatalf("status = %q, want success (NOT async_escalation)", status)
 	}
 	if errorCode != "" {
 		t.Fatalf("errorCode = %q, want empty", errorCode)
 	}
 }
 
-// TestAwaitTerminal_FailedTerminal — терминал failed возвращается как failed/
-// errand_failed (реальный результат, не хак).
+// TestAwaitTerminal_FailedTerminal -- a failed terminal returns as
+// failed/errand_failed (the real result, not a hack).
 func TestAwaitTerminal_FailedTerminal(t *testing.T) {
 	t.Parallel()
 	src := newFakeTerminalSource()
@@ -83,14 +83,15 @@ func TestAwaitTerminal_FailedTerminal(t *testing.T) {
 	}
 }
 
-// TestAwaitTerminal_DeadlineExceeded — строка вечно running → дедлайн →
-// failed/await_timeout (orchestrator не виснет навсегда).
+// TestAwaitTerminal_DeadlineExceeded -- a row stuck running forever ->
+// deadline -> failed/await_timeout (the orchestrator never hangs forever).
 func TestAwaitTerminal_DeadlineExceeded(t *testing.T) {
 	t.Parallel()
 	src := newFakeTerminalSource()
 	src.set("E3", errand.StatusRunning)
-	// Сжатые часы: каждый вызов now() прыгает на минуту, чтобы дедлайн
-	// (DefaultTimeoutSeconds+grace) истёк за пару тиков без реального ожидания.
+	// Compressed clock: each now() call jumps a minute forward so the
+	// deadline (DefaultTimeoutSeconds+grace) expires within a couple ticks
+	// without a real wait.
 	var n int64
 	clk := func() time.Time {
 		n++
@@ -106,8 +107,8 @@ func TestAwaitTerminal_DeadlineExceeded(t *testing.T) {
 	}
 }
 
-// TestAwaitTerminal_CtxCancel — отмена ctx (abort-policy / shutdown) →
-// cancelled (не считается провалом в Summary).
+// TestAwaitTerminal_CtxCancel -- ctx cancellation (abort-policy / shutdown)
+// -> cancelled (not counted as a failure in Summary).
 func TestAwaitTerminal_CtxCancel(t *testing.T) {
 	t.Parallel()
 	src := newFakeTerminalSource()
@@ -124,7 +125,7 @@ func TestAwaitTerminal_CtxCancel(t *testing.T) {
 	}
 }
 
-// TestClassifyErrandStatus — таблица проекции errand.Status → (status,error_code).
+// TestClassifyErrandStatus -- table of the errand.Status → (status,error_code) projection.
 func TestClassifyErrandStatus(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

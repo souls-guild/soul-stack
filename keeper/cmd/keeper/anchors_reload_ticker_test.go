@@ -9,10 +9,10 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// TestRunAnchorsReloadTicker_FiresPeriodically — тикер вызывает reload
-// многократно по интервалу (TTL-fallback самоисцеления пропущенного
-// `sigil:anchors-changed`, ADR-026(h) R3 known-gap). Коротким интервалом, без
-// реальных Vault/PG/Outbound-deps (reload вынесен параметром).
+// TestRunAnchorsReloadTicker_FiresPeriodically -- the ticker calls reload
+// repeatedly at the interval (TTL-fallback self-healing for a missed
+// `sigil:anchors-changed`, ADR-026(h) R3 known-gap). Short interval, no
+// real Vault/PG/Outbound-deps (reload is passed as a parameter).
 func TestRunAnchorsReloadTicker_FiresPeriodically(t *testing.T) {
 	var calls atomic.Int64
 	ctx, cancel := context.WithCancel(context.Background())
@@ -26,12 +26,12 @@ func TestRunAnchorsReloadTicker_FiresPeriodically(t *testing.T) {
 		})
 	}()
 
-	// Ждём минимум 3 тика, затем останавливаем.
+	// Wait for at least 3 ticks, then stop.
 	deadline := time.After(2 * time.Second)
 	for calls.Load() < 3 {
 		select {
 		case <-deadline:
-			t.Fatalf("тикер не дал 3 вызова reload за 2s: got %d", calls.Load())
+			t.Fatalf("ticker did not fire 3 reload calls in 2s: got %d", calls.Load())
 		case <-time.After(time.Millisecond):
 		}
 	}
@@ -40,14 +40,15 @@ func TestRunAnchorsReloadTicker_FiresPeriodically(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("goroutine тикера не завершилась после cancel — shutdown leak")
+		t.Fatal("ticker goroutine did not finish after cancel -- shutdown leak")
 	}
 }
 
-// TestRunAnchorsReloadTicker_SelfHealsMissedSignal — модель пропущенного pub/sub-
-// сигнала: «сигнал» НЕ приходит (callback не вызывается извне), но TTL-тик сам
-// перечитывает набор за интервал. Доказывает, что отставшая нода самоисцеляется
-// без рестарта (ключевое свойство fix-а known-gap).
+// TestRunAnchorsReloadTicker_SelfHealsMissedSignal -- models a missed pub/sub
+// signal: the "signal" never arrives (callback not invoked externally), but
+// the TTL tick re-reads the set on its own at the interval. Proves that a
+// lagging node self-heals without a restart (the key property of the
+// known-gap fix).
 func TestRunAnchorsReloadTicker_SelfHealsMissedSignal(t *testing.T) {
 	reloaded := make(chan struct{}, 1)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -60,20 +61,20 @@ func TestRunAnchorsReloadTicker_SelfHealsMissedSignal(t *testing.T) {
 		}
 	})
 
-	// Никаких внешних сигналов не шлём — только тик. Должен сработать сам.
+	// No external signals sent -- only the tick. Must fire on its own.
 	select {
 	case <-reloaded:
 	case <-time.After(2 * time.Second):
-		t.Fatal("пропущенный сигнал не самоисцелился TTL-тиком за окно")
+		t.Fatal("missed signal did not self-heal via TTL tick within the window")
 	}
 }
 
-// TestRunAnchorsReloadTicker_ShutdownBeforeFirstTick — cancel до первого тика:
-// goroutine выходит сразу, reload не вызывается.
+// TestRunAnchorsReloadTicker_ShutdownBeforeFirstTick -- cancel before the
+// first tick: goroutine exits immediately, reload is never called.
 func TestRunAnchorsReloadTicker_ShutdownBeforeFirstTick(t *testing.T) {
 	var calls atomic.Int64
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // уже отменён
+	cancel() // already cancelled
 
 	done := make(chan struct{})
 	go func() {
@@ -86,15 +87,16 @@ func TestRunAnchorsReloadTicker_ShutdownBeforeFirstTick(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		t.Fatal("goroutine не вышла на уже отменённом ctx")
+		t.Fatal("goroutine did not exit on an already-cancelled ctx")
 	}
 	if calls.Load() != 0 {
-		t.Errorf("reload вызван %d раз на отменённом ctx, want 0", calls.Load())
+		t.Errorf("reload called %d times on cancelled ctx, want 0", calls.Load())
 	}
 }
 
-// TestRunAnchorsReloadTicker_NonPositiveInterval — interval <= 0 не поднимает
-// тик (guard от busy-loop); функция возвращается сразу, reload не вызывается.
+// TestRunAnchorsReloadTicker_NonPositiveInterval -- interval <= 0 never starts
+// a ticker (busy-loop guard); the function returns immediately, reload is
+// never called.
 func TestRunAnchorsReloadTicker_NonPositiveInterval(t *testing.T) {
 	var calls atomic.Int64
 	done := make(chan struct{})
@@ -107,23 +109,23 @@ func TestRunAnchorsReloadTicker_NonPositiveInterval(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		t.Fatal("interval=0: функция не вернулась сразу (guard не сработал)")
+		t.Fatal("interval=0: function did not return immediately (guard did not fire)")
 	}
 	if calls.Load() != 0 {
-		t.Errorf("interval=0: reload вызван %d раз, want 0", calls.Load())
+		t.Errorf("interval=0: reload called %d times, want 0", calls.Load())
 	}
 }
 
-// TestSigilAnchorsReloadInterval_Default — пустое поле → дефолт 30s.
+// TestSigilAnchorsReloadInterval_Default -- empty field -> default 30s.
 func TestSigilAnchorsReloadInterval_Default(t *testing.T) {
 	cfg := &config.KeeperConfig{}
 	if got := sigilAnchorsReloadInterval(cfg); got != config.DefaultSigilAnchorsReloadInterval {
-		t.Errorf("пустое поле: interval = %v, want %v", got, config.DefaultSigilAnchorsReloadInterval)
+		t.Errorf("empty field: interval = %v, want %v", got, config.DefaultSigilAnchorsReloadInterval)
 	}
 }
 
-// TestSigilAnchorsReloadInterval_Explicit — заданное валидное значение берётся
-// как есть; некорректное/непозитивное → дефолт (резолвер fail-safe).
+// TestSigilAnchorsReloadInterval_Explicit -- a valid explicit value is taken
+// as-is; invalid/non-positive -> default (fail-safe resolver).
 func TestSigilAnchorsReloadInterval_Explicit(t *testing.T) {
 	cases := []struct {
 		name string

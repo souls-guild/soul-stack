@@ -19,13 +19,13 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 )
 
-// enqFakeDB — fake [oracleEnqueuerDB] с маршрутизацией по SQL:
-//   - QueryRow "FROM incarnation"     → incarnation-строка (или ErrNoRows);
-//   - QueryRow "INSERT INTO apply_runs" → started_at + захват аргументов.
+// enqFakeDB -- fake [oracleEnqueuerDB] that routes by SQL:
+//   - QueryRow "FROM incarnation"     → incarnation row (or ErrNoRows);
+//   - QueryRow "INSERT INTO apply_runs" → started_at + captured args.
 type enqFakeDB struct {
-	inc            *incarnation.Incarnation // nil → SelectByName даёт ErrNoRows
-	insertArgs     []any                    // захваченные аргументы InsertPlanned
-	insertedRecipe *applyrun.Recipe         // распарсенный recipe из аргументов
+	inc            *incarnation.Incarnation // nil → SelectByName gives ErrNoRows
+	insertArgs     []any                    // captured InsertPlanned args
+	insertedRecipe *applyrun.Recipe         // parsed recipe from the args
 }
 
 func (f *enqFakeDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
@@ -37,7 +37,7 @@ func (f *enqFakeDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row
 		return enqIncRow{inc: f.inc}
 	case strings.Contains(sql, "INSERT INTO apply_runs"):
 		f.insertArgs = args
-		// Аргумент 6 (index 5) — recipeJSON ([]byte) по insertPlannedSQL.
+		// Argument 6 (index 5) -- recipeJSON ([]byte) per insertPlannedSQL.
 		if len(args) >= 6 {
 			if b, ok := args[5].([]byte); ok && len(b) > 0 {
 				var r applyrun.Recipe
@@ -61,7 +61,7 @@ type enqErrRow struct{ err error }
 
 func (r enqErrRow) Scan(...any) error { return r.err }
 
-// enqIncRow эмулирует строку incarnation в порядке scanIncarnation:
+// enqIncRow emulates an incarnation row in scanIncarnation order:
 // name, service, service_version, state_schema_version, spec, state, status,
 // status_details, created_by_aid, created_at, updated_at, covens, traits,
 // last_drift_check_at, last_drift_summary, created_scenario, applying_apply_id.
@@ -86,15 +86,15 @@ func (r enqIncRow) Scan(dest ...any) error {
 	*dest[12].(*[]byte) = []byte("{}") // traits (ADR-060 amend R1)
 	*dest[13].(**time.Time) = nil
 	*dest[14].(*[]byte) = nil
-	// created_scenario NULLABLE (миграция 090): scanIncarnation читает в **string.
-	// nil-указатель инкарнации = bare (NULL); иначе указатель на имя стартового сценария.
+	// created_scenario NULLABLE (migration 090): scanIncarnation reads into **string.
+	// nil incarnation pointer = bare (NULL); otherwise a pointer to the starting scenario name.
 	*dest[15].(**string) = r.inc.CreatedScenario
-	// applying_apply_id (ADR-068 §A1, миграция 082): non-null пока applying, nil на терминале.
+	// applying_apply_id (ADR-068 §A1, migration 082): non-null while applying, nil at terminal.
 	*dest[16].(**string) = r.inc.ApplyingApplyID
 	return nil
 }
 
-// enqStartedAtRow возвращает started_at для InsertPlanned RETURNING.
+// enqStartedAtRow returns started_at for InsertPlanned RETURNING.
 type enqStartedAtRow struct{}
 
 func (r enqStartedAtRow) Scan(dest ...any) error {
@@ -106,7 +106,7 @@ func (r enqStartedAtRow) Scan(dest ...any) error {
 	return nil
 }
 
-// fakeResolver — fake [incarnation.ServiceResolver].
+// fakeResolver -- fake [incarnation.ServiceResolver].
 type fakeResolver struct {
 	ref artifact.ServiceRef
 	ok  bool
@@ -130,8 +130,8 @@ func TestEnqueue_ResolvesServiceRefFromIncarnation(t *testing.T) {
 		Status: incarnation.StatusReady,
 	}
 	db := &enqFakeDB{inc: inc}
-	// Резолвер вернёт git-координаты сервиса; ref ДОЛЖЕН быть переопределён
-	// enqueuer-ом на inc.ServiceVersion (калька destroy_prepare.go:88).
+	// The resolver returns git coordinates of the service; ref MUST be
+	// overridden by the enqueuer to inc.ServiceVersion (copy of destroy_prepare.go:88).
 	res := fakeResolver{ref: artifact.ServiceRef{Name: "web", Git: "https://git/web.git", Ref: "main"}, ok: true}
 	e := newEnqueuer(t, db, res)
 
@@ -146,12 +146,12 @@ func TestEnqueue_ResolvesServiceRefFromIncarnation(t *testing.T) {
 		t.Fatalf("EnqueueScenario: %v", err)
 	}
 	if applyID == "" {
-		t.Fatal("ожидали non-empty apply_id (ULID)")
+		t.Fatal("expected non-empty apply_id (ULID)")
 	}
 	if db.insertedRecipe == nil {
-		t.Fatal("InsertPlanned должен записать recipe")
+		t.Fatal("InsertPlanned should record the recipe")
 	}
-	// ServiceRef из incarnation: Git сервиса, но Ref = развёрнутая версия.
+	// ServiceRef from incarnation: service Git, but Ref = deployed version.
 	if db.insertedRecipe.ServiceRef.Git != "https://git/web.git" {
 		t.Errorf("recipe.ServiceRef.Git = %q, want git/web", db.insertedRecipe.ServiceRef.Git)
 	}
@@ -161,15 +161,15 @@ func TestEnqueue_ResolvesServiceRefFromIncarnation(t *testing.T) {
 	if db.insertedRecipe.ScenarioName != "restart" {
 		t.Errorf("recipe.ScenarioName = %q, want restart", db.insertedRecipe.ScenarioName)
 	}
-	// Input — vault-ref КАК ЕСТЬ (инвариант A): проброшен дословно.
+	// Input -- vault-ref AS-IS (invariant A): passed through verbatim.
 	if db.insertedRecipe.Input["service"] != "nginx" {
-		t.Errorf("recipe.Input не пробросился: %+v", db.insertedRecipe.Input)
+		t.Errorf("recipe.Input was not passed through: %+v", db.insertedRecipe.Input)
 	}
 	if db.insertedRecipe.StartedByAID != nil {
-		t.Error("StartedByAID должен быть nil (Soul-инициированная реакция)")
+		t.Error("StartedByAID should be nil (Soul-initiated reaction)")
 	}
-	// apply_runs row: planned-задание на subjectSID c корректной incarnation/scenario.
-	// args порядок insertPlannedSQL: apply_id, sid, incarnation_name, scenario, started_by, recipe.
+	// apply_runs row: planned job for subjectSID with the correct incarnation/scenario.
+	// args order per insertPlannedSQL: apply_id, sid, incarnation_name, scenario, started_by, recipe.
 	if db.insertArgs[1] != "host-a.example.com" {
 		t.Errorf("insert sid = %v, want host-a", db.insertArgs[1])
 	}
@@ -193,27 +193,27 @@ func TestEnqueue_IncarnationNotFound_FailClosed(t *testing.T) {
 		DecreeName:      "restart-web",
 	})
 	if !errors.Is(err, ErrEnqueueIncarnationNotFound) {
-		t.Fatalf("ожидали ErrEnqueueIncarnationNotFound, got %v", err)
+		t.Fatalf("expected ErrEnqueueIncarnationNotFound, got %v", err)
 	}
-	// fail-closed: planned-задание НЕ записано.
+	// fail-closed: planned job NOT recorded.
 	if db.insertArgs != nil {
-		t.Error("incarnation not found: InsertPlanned НЕ должен вызываться")
+		t.Error("incarnation not found: InsertPlanned should NOT be called")
 	}
 }
 
 func TestEnqueue_ServiceNotRegistered(t *testing.T) {
 	inc := &incarnation.Incarnation{Name: "web-app", Service: "web", ServiceVersion: "v1", Status: incarnation.StatusReady}
 	db := &enqFakeDB{inc: inc}
-	res := fakeResolver{ok: false} // сервис не в реестре
+	res := fakeResolver{ok: false} // service not in the registry
 	e := newEnqueuer(t, db, res)
 
 	_, err := e.EnqueueScenario(context.Background(), keepergrpc.EnqueueScenarioRequest{
 		SubjectSID: "host-a.example.com", IncarnationName: "web-app", ScenarioName: "restart",
 	})
 	if err == nil {
-		t.Fatal("ожидали ошибку при нерегистрированном сервисе")
+		t.Fatal("expected an error for an unregistered service")
 	}
 	if db.insertArgs != nil {
-		t.Error("service not registered: InsertPlanned НЕ должен вызываться")
+		t.Error("service not registered: InsertPlanned should NOT be called")
 	}
 }

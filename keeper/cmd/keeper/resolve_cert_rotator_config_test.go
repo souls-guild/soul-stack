@@ -7,11 +7,12 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// TestResolveCertRotatorConfig_DayDurations — guard на major-фикс: порог/джиттер
-// правила rotate_due_certs пишутся convention `<N>d` (как у всех reaper-правил) и
-// обязаны парситься через config.ParseDuration, а не stdlib time.ParseDuration
-// (последняя не знает суффикс `d` → Threshold=0 → правило МОЛЧА не ротирует при
-// enabled:true, тихий security-сбой).
+// TestResolveCertRotatorConfig_DayDurations -- guard for a major fix: the
+// threshold/jitter of the rotate_due_certs rule are written by convention as
+// `<N>d` (like all reaper rules) and must be parsed via config.ParseDuration,
+// not stdlib time.ParseDuration (the latter doesn't know the `d` suffix ->
+// Threshold=0 -> the rule SILENTLY fails to rotate while enabled:true, a
+// silent security failure).
 func TestResolveCertRotatorConfig_DayDurations(t *testing.T) {
 	seven := 7
 	cfg := &config.KeeperConfig{
@@ -44,9 +45,9 @@ func TestResolveCertRotatorConfig_DayDurations(t *testing.T) {
 	}
 }
 
-// TestResolveCertRotatorConfig_HourDurations — stdlib-совместимая форма `720h`
-// продолжает работать (config.ParseDuration делегирует time.ParseDuration без
-// суффикса `d`).
+// TestResolveCertRotatorConfig_HourDurations -- the stdlib-compatible form
+// `720h` keeps working (config.ParseDuration delegates to time.ParseDuration
+// when there's no `d` suffix).
 func TestResolveCertRotatorConfig_HourDurations(t *testing.T) {
 	cfg := &config.KeeperConfig{
 		Reaper: &config.KeeperReaper{
@@ -70,10 +71,11 @@ func TestResolveCertRotatorConfig_HourDurations(t *testing.T) {
 	}
 }
 
-// TestResolveCertRotatorConfig_InvalidThreshold — кривой формат порога не должен
-// молча схлопывать Threshold в 0 без следа: invalid остаётся Threshold=0 (правило
-// не ротирует), но факт должен быть залогирован warn-ом (см. runDurationRule).
-// Здесь проверяем только, что невалид не роняет резолв и не даёт мусорный порог.
+// TestResolveCertRotatorConfig_InvalidThreshold -- a malformed threshold
+// format must not silently collapse Threshold to 0 without a trace: invalid
+// input leaves Threshold=0 (the rule doesn't rotate), but the fact must be
+// logged as a warning (see runDurationRule). Here we only check that invalid
+// input doesn't crash the resolve and doesn't produce a garbage threshold.
 func TestResolveCertRotatorConfig_InvalidThreshold(t *testing.T) {
 	cfg := &config.KeeperConfig{
 		Reaper: &config.KeeperReaper{

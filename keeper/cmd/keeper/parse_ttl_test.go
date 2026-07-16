@@ -6,14 +6,14 @@ import (
 	"time"
 )
 
-// TestParseTTL_Bootstrap покрывает parseTTL для cfg.Auth.JWT.TTLBootstrap
-// (PM-decision M0.5c №3: default 720h при пустой строке).
+// TestParseTTL_Bootstrap covers parseTTL for cfg.Auth.JWT.TTLBootstrap
+// (PM-decision M0.5c #3: default 720h for an empty string).
 func TestParseTTL_Bootstrap(t *testing.T) {
 	tests := []struct {
 		name    string
 		raw     string
 		want    time.Duration
-		wantErr string // substring; "" = ожидается nil-error
+		wantErr string // substring; "" = expects nil error
 	}{
 		{"empty defaults to 720h", "", 720 * time.Hour, ""},
 		{"1h ok", "1h", time.Hour, ""},
@@ -44,8 +44,8 @@ func TestParseTTL_Bootstrap(t *testing.T) {
 	}
 }
 
-// TestParseTTL_Default — sanity-check для второго call-site-а
-// (ttl_default), убеждается, что message-context отражает field name.
+// TestParseTTL_Default -- sanity-check for the second call site
+// (ttl_default), confirms the message context reflects the field name.
 func TestParseTTL_Default(t *testing.T) {
 	if _, err := parseTTL("not-a-duration", "auth.jwt.ttl_default", 24*time.Hour); err == nil ||
 		!strings.Contains(err.Error(), "invalid auth.jwt.ttl_default") {

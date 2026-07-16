@@ -7,8 +7,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// Резолверы acolyte-параметров (ADR-027): пустой/нулевой конфиг → дефолты,
-// совпадающие с прежними хардкод-значениями; заданные значения долетают.
+// Acolyte-param resolvers (ADR-027): empty/zero config -> defaults matching
+// the previous hardcoded values; explicit values pass through.
 
 func TestAcolyteLease_DefaultOnEmpty(t *testing.T) {
 	if got := acolyteLease(&config.KeeperConfig{}); got != config.DefaultAcolyteLease {

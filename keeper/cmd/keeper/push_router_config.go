@@ -1,35 +1,36 @@
 package main
 
-// push_router_config.go — RouterConfigSource adapter поверх config.Store
+// push_router_config.go — RouterConfigSource adapter over config.Store
 // (ADR-032 amendment 2026-05-27, P2 W-4 Multi-provider routing).
 //
-// router-у нужен «живой» снимок CovenDefaultProviders / ClusterDefaultProvider:
-// на каждый Reload (SIGHUP / file-watch / API push) Store.Get() возвращает
-// свежий *KeeperConfig, отсюда тянем актуальные routing-поля без пересоздания
-// PGRouter-а. Иначе пришлось бы пересобирать pushorch.PushRun на каждый
-// reload — слишком инвазивно.
+// The router needs a "live" snapshot of CovenDefaultProviders /
+// ClusterDefaultProvider: on every Reload (SIGHUP / file-watch / API push)
+// Store.Get() returns a fresh *KeeperConfig, from which we pull the current
+// routing fields without recreating the PGRouter. Otherwise we'd have to
+// rebuild pushorch.PushRun on every reload -- too invasive.
 
 import (
 	"github.com/souls-guild/soul-stack/keeper/internal/push"
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// pushRouterConfigSource реализует [push.RouterConfigSource] поверх
-// config.Store[KeeperConfig]. Snapshot() — единый round-trip к Store.Get()
-// (атомарный read, hot-reload-safe).
+// pushRouterConfigSource implements [push.RouterConfigSource] over
+// config.Store[KeeperConfig]. Snapshot() is a single round-trip to
+// Store.Get() (atomic read, hot-reload-safe).
 type pushRouterConfigSource struct {
 	store *config.Store[config.KeeperConfig]
 }
 
-// newPushRouterConfigSource — конструктор adapter-а. Store != nil гарантировано
-// daemon-pipeline-ом (setupConfig валит старт при nil).
+// newPushRouterConfigSource is the adapter's constructor. Store != nil is
+// guaranteed by the daemon pipeline (setupConfig fails the start on nil).
 func newPushRouterConfigSource(store *config.Store[config.KeeperConfig]) *pushRouterConfigSource {
 	return &pushRouterConfigSource{store: store}
 }
 
-// Snapshot — текущий routing-снимок. При отсутствии push-блока возвращает
-// пустые карту/строку — router тогда сразу падает в ErrProviderNotRouted, что
-// и нужно (либо provider настроен в souls.ssh_target, либо fail per-host).
+// Snapshot returns the current routing snapshot. When the push block is
+// absent, it returns an empty map/string -- the router then immediately
+// falls into ErrProviderNotRouted, which is intended (either the provider is
+// configured in souls.ssh_target, or it fails per-host).
 func (s *pushRouterConfigSource) Snapshot() push.RouterConfig {
 	cfg := s.store.Get()
 	if cfg == nil || cfg.Push == nil {

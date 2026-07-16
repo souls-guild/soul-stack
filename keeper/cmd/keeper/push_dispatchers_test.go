@@ -15,7 +15,7 @@ func TestPushParamsEnvName(t *testing.T) {
 		{"static", "SOUL_SSH_STATIC_PARAMS"},
 		{"soul-ssh-vault", "SOUL_SSH_SOUL_SSH_VAULT_PARAMS"},
 		{"prod-1", "SOUL_SSH_PROD_1_PARAMS"},
-		{"WITH_UPPER", "SOUL_SSH_WITH_UPPER_PARAMS"}, // defensive: '_' уже OK
+		{"WITH_UPPER", "SOUL_SSH_WITH_UPPER_PARAMS"}, // defensive: '_' already OK
 	}
 	for _, c := range cases {
 		got := pushParamsEnvName(c.in)
@@ -74,15 +74,15 @@ func TestBuildPushSpawnOpts_Match(t *testing.T) {
 	if env != "SOUL_SSH_VAULT_BASTION_PARAMS" {
 		t.Errorf("env = %q, want SOUL_SSH_VAULT_BASTION_PARAMS", env)
 	}
-	// SpawnOption — функция; косвенно проверим, что она хоть что-то добавляет:
-	// применим к временной spawnOpts через published-через-pluginhost
-	// поверхность невозможно (приватно), поэтому проверяем, что вызов не паникует.
-	// Реальная end-to-end проверка env-payload — в integration_test.
+	// SpawnOption is a function; indirectly verify it adds something at all:
+	// applying it to a temporary spawnOpts via the published-via-pluginhost
+	// surface is not possible (private), so we just check the call doesn't panic.
+	// The real end-to-end env-payload check is in integration_test.
 	_ = opts
-	// Sanity: имя сериализованного env содержит ожидаемые поля. Восстанавливать
-	// payload из SpawnOption нельзя без spawn-а, поэтому проверяем JSON-форму
-	// напрямую (это рукотворный mirror того, что внутри buildPushSpawnOpts).
-	// Дополнительно проверим, что params содержит обе записи.
+	// Sanity: the serialized env name contains the expected fields. The
+	// payload can't be recovered from SpawnOption without a spawn, so we check
+	// the JSON form directly (a hand-rolled mirror of what's inside buildPushSpawnOpts).
+	// Additionally verify params contains both entries.
 	for _, k := range []string{"vault_addr", "role"} {
 		if !strings.Contains("vault_addr role", k) {
 			t.Fatalf("internal check broken: %s", k)

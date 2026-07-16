@@ -9,20 +9,22 @@ import (
 	"github.com/souls-guild/soul-stack/shared/obs"
 )
 
-// setupMaskMetrics регистрирует keeper_mask_regex_fallback_total и подключает
-// process-global [audit.SetSealHooks] — наблюдаемость слоя regex-last-resort
-// secret-маскинга ([ADR-010] §7.4, слой 4). Декуплинг: shared/audit не тянет
-// prometheus, keeper wired-up метрику здесь поверх общего [obs.Registry] (тот же
-// приём, что watchmanMetrics/renderMetrics). logger — канал warn-лога fallback-а.
+// setupMaskMetrics registers keeper_mask_regex_fallback_total and wires up
+// the process-global [audit.SetSealHooks] -- observability for the
+// regex-last-resort secret-masking layer ([ADR-010] §7.4, layer 4).
+// Decoupling: shared/audit does not pull in prometheus, keeper wires the
+// metric here on top of the shared [obs.Registry] (the same approach as
+// watchmanMetrics/renderMetrics). logger -- the fallback warn-log channel.
 //
-// Метрика растёт, когда секрет поймал ТОЛЬКО regex по имени ключа (декларатив —
-// schema/seal/vault — молчал): это сигнал пробела декларатива (ожидаемый класс ii
-// — внутренние bootstrap_token/jwt/creds без схемы). Rate этой серии показывает,
-// насколько часто маскинг держится на last-resort, а не на декларативе.
+// The metric grows when a secret was caught ONLY by the key-name regex (the
+// declarative layer -- schema/seal/vault -- stayed silent): this signals a
+// declarative gap (the expected class ii -- internal bootstrap_token/jwt/creds
+// without a schema). The rate of this series shows how often masking relies
+// on last-resort rather than on the declarative layer.
 func setupMaskMetrics(reg *obs.Registry, logger *slog.Logger) {
 	fallbackTotal := prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "keeper_mask_regex_fallback_total",
-		Help: "Число secret-значений, пойманных ТОЛЬКО regex-last-resort secret-маскинга (декларатив schema/seal/vault молчал) — сигнал пробела декларатива.",
+		Help: "Number of secret values caught ONLY by regex-last-resort secret masking (declarative schema/seal/vault stayed silent) -- signals a declarative gap.",
 	})
 	reg.Registerer().MustRegister(fallbackTotal)
 

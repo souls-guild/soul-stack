@@ -6,8 +6,9 @@ import (
 	"testing"
 )
 
-// TestGuardOperatorsRegistry покрывает чистое решение restart-семантики
-// ADR-013(d): отказ старта при пустом реестре без initialize, иначе proceed.
+// TestGuardOperatorsRegistry covers the pure restart-semantics decision of
+// ADR-013(d): refuse to start on an empty registry without initialize,
+// otherwise proceed.
 func TestGuardOperatorsRegistry(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -15,7 +16,7 @@ func TestGuardOperatorsRegistry(t *testing.T) {
 		initialize  bool
 		wantProceed bool
 		wantPending bool
-		wantRefuse  bool // ожидается непустой refuseMsg
+		wantRefuse  bool // expects a non-empty refuseMsg
 	}{
 		{"empty, no initialize → refuse", 0, false, false, false, true},
 		{"empty, initialize → bootstrap-pending", 0, true, true, true, false},
@@ -45,13 +46,13 @@ func TestGuardOperatorsRegistry(t *testing.T) {
 	}
 }
 
-// TestEnvTruthy — truthy-парсинг KEEPER_INITIALIZE (ADR-013(d)): валидные
-// boolean-формы → true, пустая/мусорная строка → false.
+// TestEnvTruthy -- truthy parsing of KEEPER_INITIALIZE (ADR-013(d)): valid
+// boolean forms -> true, empty/garbage string -> false.
 func TestEnvTruthy(t *testing.T) {
 	const key = "KEEPER_INITIALIZE_TEST"
 	tests := []struct {
 		raw  string
-		set  bool // false = переменная не выставлена
+		set  bool // false = variable not set
 		want bool
 	}{
 		{"true", true, true},
@@ -62,7 +63,7 @@ func TestEnvTruthy(t *testing.T) {
 		{"0", true, false},
 		{"", true, false},
 		{"garbage", true, false},
-		{"", false, false}, // переменная не выставлена вовсе
+		{"", false, false}, // variable not set at all
 	}
 	for _, tt := range tests {
 		name := tt.raw

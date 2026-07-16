@@ -84,20 +84,19 @@ import (
 	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 )
 
-// errSetupFailed — sentinel-ошибка шага setupX: означает «stderr уже
-// напечатан внутри шага, оркестратору осталось только выйти с exitError».
-// Каждый setupX печатает осмысленное сообщение сам (как делал прежний
-// runDaemon перед `return exitError`), поэтому оркестратор НЕ печатает
-// ошибку повторно — лишь маппит её в exit-code.
+// errSetupFailed -- sentinel error for a setupX step: means "stderr has
+// already been printed inside the step, the orchestrator only needs to exit
+// with exitError". Every setupX prints its own meaningful message (as the
+// former runDaemon did before `return exitError`), so the orchestrator does
+// NOT print the error again -- it only maps it to an exit code.
 var errSetupFailed = errors.New("keeper run: setup step failed")
 
-// cleanupStack — LIFO-стек cleanup-функций daemon-а. Заменяет россыпь
-// `defer`-ов внутри прежнего монолитного runDaemon: каждый setupX-метод
-// регистрирует свой teardown через push (а НЕ через свой defer — тот сработал
-// бы при выходе из setupX, а не из runDaemon, и сломал бы graceful shutdown).
-// runLIFO дёргается единственным defer-ом оркестратора и воспроизводит
-// порядок прежних defer-ов один-в-один (последний зарегистрированный —
-// первый исполняется).
+// cleanupStack -- LIFO stack of daemon cleanup functions. Replaces the
+// scattered `defer`s in the former monolithic runDaemon: every setupX method
+// registers its teardown via push (NOT via its own defer -- that would fire
+// on exit from setupX, not from runDaemon, breaking graceful shutdown).
+// runLIFO is invoked by the orchestrator's single defer and reproduces the
+// order of the former defers one-to-one (last registered -- first executed).
 type cleanupStack struct{ fns []func() }
 
 func (c *cleanupStack) push(fn func()) { c.fns = append(c.fns, fn) }
@@ -108,10 +107,11 @@ func (c *cleanupStack) runLIFO() {
 	}
 }
 
-// daemon — накапливаемое состояние wiring-а `keeper run`. Поля группируются по
-// подсистемам; каждый setupX-метод читает уже-заполненные поля предыдущих
-// шагов и пишет свои. Так добавление новой зависимости = новое поле + чтение
-// внутри своего метода, без правки оркестратора (см. мотивацию рефактора).
+// daemon -- accumulated wiring state for `keeper run`. Fields are grouped by
+// subsystem; each setupX method reads the already-filled fields of previous
+// steps and writes its own. Adding a new dependency thus means a new field +
+// a read inside its own method, with no change to the orchestrator (see the
+// refactor motivation).
 type daemon struct {
 	cleanups *cleanupStack
 
@@ -139,65 +139,69 @@ type daemon struct {
 	rbacHolder *rbac.Holder
 	rbacSvc    *rbac.Service
 
-	// --- service-registry (реестр Service-ов/keeper_settings в PG, ADR-029) ---
-	// serviceHolder — read-only in-memory снимок реестра (TTL-poll + pub/sub-
-	// инвалидация); из него читают потребители scenario (serviceRegistry/
-	// destinySource, S4). serviceSvc — CRUD-фасад (OpenAPI/MCP, S3).
+	// --- service-registry (Service/keeper_settings registry in PG, ADR-029) ---
+	// serviceHolder -- read-only in-memory snapshot of the registry (TTL-poll +
+	// pub/sub invalidation); scenario consumers (serviceRegistry/
+	// destinySource, S4) read from it. serviceSvc -- CRUD facade (OpenAPI/MCP, S3).
 	serviceHolder *serviceregistry.Holder
 	serviceSvc    *serviceregistry.Service
-	// serviceRefs — TTL-кеш git-ls-remote-листинга tag/branch для
+	// serviceRefs -- TTL cache of the git-ls-remote tag/branch listing for
 	// `GET /v1/services/{name}/refs` (UI Upgrade-modal dropdown). Per-keeper,
-	// не cluster-wide (refs read-only; отставание между инстансами не нарушает
-	// консистентность реестра).
+	// not cluster-wide (refs are read-only; lag between instances does not
+	// break registry consistency).
 	serviceRefs *serviceregistry.RefsCache
 
-	// serviceScenarios — TTL-кеш scenario-listing-а из материализованного
-	// снапшота git-репо Service-а для `GET /v1/services/{name}/scenarios` (UI
-	// Run-modal dropdown). Per-keeper, не cluster-wide — read-only listing.
+	// serviceScenarios -- TTL cache of the scenario listing from a
+	// materialized snapshot of the Service's git repo for
+	// `GET /v1/services/{name}/scenarios` (UI Run-modal dropdown). Per-keeper,
+	// not cluster-wide -- read-only listing.
 	serviceScenarios *serviceregistry.ScenariosCache
 
-	// serviceStateSchema — TTL-кеш state_schema-метаданных (version +
-	// declared schema + migrations metadata) из материализованного снапшота
-	// git-репо Service-а для `GET /v1/services/{name}/state-schema` (UI
-	// Schema explorer). Per-keeper, не cluster-wide — read-only listing
-	// (parity с serviceScenarios).
+	// serviceStateSchema -- TTL cache of state_schema metadata (version +
+	// declared schema + migrations metadata) from a materialized snapshot of
+	// the Service's git repo for `GET /v1/services/{name}/state-schema` (UI
+	// Schema explorer). Per-keeper, not cluster-wide -- read-only listing
+	// (parity with serviceScenarios).
 	serviceStateSchema *serviceregistry.StateSchemaCache
 
-	// serviceDependencies — TTL-кеш git-зависимостей (destiny/modules из
-	// `service.yml`) из материализованного снапшота git-репо Service-а для
-	// `GET /v1/services/{name}/dependencies` (UI Service Detail). Per-keeper,
-	// не cluster-wide — read-only listing (parity с serviceStateSchema).
+	// serviceDependencies -- TTL cache of git dependencies (destiny/modules
+	// from `service.yml`) from a materialized snapshot of the Service's git
+	// repo for `GET /v1/services/{name}/dependencies` (UI Service Detail).
+	// Per-keeper, not cluster-wide -- read-only listing (parity with
+	// serviceStateSchema).
 	serviceDependencies *serviceregistry.DependenciesCache
 
-	// serviceDirectives — TTL-кеш каталога валидных директив redis.conf по версиям
-	// (essence.redis_directives) из снапшота git-репо Service-а для
-	// `GET /v1/services/{name}/directives` (UI-редактор redis_settings). Per-keeper,
-	// не cluster-wide — read-only каталог (parity с serviceDependencies).
+	// serviceDirectives -- TTL cache of the valid redis.conf directive
+	// catalog by version (essence.redis_directives) from a snapshot of the
+	// Service's git repo for `GET /v1/services/{name}/directives` (UI
+	// redis_settings editor). Per-keeper, not cluster-wide -- read-only
+	// catalog (parity with serviceDependencies).
 	serviceDirectives *serviceregistry.DirectivesCache
 
 	// --- augur (ADR-025) ---
-	// augurSvc — management-CRUD реестров Omen / Rite (OpenAPI/MCP). ОТЛИЧАЕТСЯ
-	// от Augur-брокера (keepergrpc.AugurDeps в EventStream): тот резолвит
-	// AugurRequest от Soul-а, этот — operator-facing управление записями.
+	// augurSvc -- management CRUD for the Omen / Rite registries (OpenAPI/MCP).
+	// DIFFERS from the Augur broker (keepergrpc.AugurDeps in EventStream): that
+	// resolves AugurRequest from a Soul, this is operator-facing record management.
 	augurSvc *keeperaugur.Service
 
 	// --- oracle (ADR-030 beacons) ---
-	// oracleSvc — management-CRUD реестров Vigil / Decree (OpenAPI/MCP).
-	// ОТЛИЧАЕТСЯ от reactor-роутера (oracleScenarioEnqueuer в EventStream): тот
-	// резолвит Portent от Soul-а, этот — operator-facing управление записями.
+	// oracleSvc -- management CRUD for the Vigil / Decree registries (OpenAPI/MCP).
+	// DIFFERS from the reactor router (oracleScenarioEnqueuer in EventStream):
+	// that resolves a Portent from a Soul, this is operator-facing record management.
 	oracleSvc *oracle.Service
 
 	// --- sigil (ADR-026) ---
-	// nil = Sigil выключен (нет sigil.signing_key_ref): plugin.*-routes/tools
-	// не регистрируются (паттерн rbacSvc). Конструктор nil-safe (см. setupSigil).
+	// nil = Sigil disabled (no sigil.signing_key_ref): plugin.*-routes/tools
+	// are not registered (rbacSvc pattern). Constructor is nil-safe (see setupSigil).
 	sigilSvc *sigil.Service
-	// sigilKeySvc — operator-facing ротация trust-anchor-ключей подписи Sigil
-	// (ADR-026(h), R3-S7): introduce (key-gen+Vault-write) / retire / set-primary /
-	// list. nil при выключенном Sigil (как sigilSvc). Заполняется в setupSigil;
-	// читают setupAPIServer / setupMCPServer / setupSigilInvalidation (publisher).
+	// sigilKeySvc -- operator-facing rotation of Sigil signing trust-anchor
+	// keys (ADR-026(h), R3-S7): introduce (key-gen+Vault-write) / retire /
+	// set-primary / list. nil when Sigil is disabled (like sigilSvc). Filled
+	// in setupSigil; read by setupAPIServer / setupMCPServer /
+	// setupSigilInvalidation (publisher).
 	sigilKeySvc *sigil.KeyService
-	// sigilAnchors — НАБОР trust-anchor-ов подписи Sigil (ADR-026(h), R3
-	// multi-anchor) для keeper-host verify СВОИХ плагинов (ADR-026(f),
+	// sigilAnchors -- the SET of Sigil signing trust anchors (ADR-026(h), R3
+	// multi-anchor) for the keeper-host to verify ITS OWN plugins (ADR-026(f),
 	// S6-keeper-verify). Заполняется в setupSigil из Signer.AnchorSet() (все
 	// active-ключи подписи); пустой при выключенном Sigil → keeper-host плагины
 	// fail-closed (no_trust_anchor). OR-проверка по набору даёт безразрывную

@@ -1,17 +1,17 @@
-// Package main — entrypoint бинаря `soul-trial` ([ADR-004], [ADR-023]).
+// Package main -- entrypoint of the `soul-trial` binary ([ADR-004], [ADR-023]).
 //
-// Офлайн-раннер испытаний (Trial) Destiny/Scenario. Второй бинарь-артефакт
-// модуля `keeper` (параллель cmd/keeper): импортит keeper/internal/render +
-// keeper/internal/trial напрямую (вариант A раскладки, ADR-023).
+// An offline Trial runner for Destiny/Scenario. The second binary artifact
+// of the `keeper` module (parallel to cmd/keeper): imports keeper/internal/render +
+// keeper/internal/trial directly (layout variant A, ADR-023).
 //
-// Subcommand-router на stdlib `flag` (стиль cmd/keeper):
+// Subcommand router on stdlib `flag` (cmd/keeper style):
 //
-//	soul-trial run <case-file-or-dir>   прогон L0-испытаний
-//	soul-trial help                     показать справку
+//	soul-trial run <case-file-or-dir>   run L0 trials
+//	soul-trial help                     show help
 //
-// Пилот: только уровень L0 (render-only, hermetic) и только секция
-// assert.rendered_tasks. Exit 0 при pass всех кейсов, 1 при fail/ошибке,
-// 2 при usage-ошибке.
+// Pilot: only level L0 (render-only, hermetic) and only the
+// assert.rendered_tasks section. Exit 0 when all cases pass, 1 on fail/error,
+// 2 on a usage error.
 //
 // [ADR-004]: docs/adr/0004-binaries.md#adr-004-раскладка-бинарей--keeper-soul-soul-lint-push-режим--модуль-внутри-keeper
 // [ADR-023]: docs/adr/0023-trial-test-runner.md#adr-023-тест-раннер-trial-soul-trial-и-dsl-coverage
@@ -66,8 +66,8 @@ Commands:
 Levels: L0 (render-only, hermetic) only in this pilot.`)
 }
 
-// runTrial парсит аргументы, прогоняет L0-испытания и печатает текст-таблицу
-// с trial coverage. Exit 0 — все кейсы pass; 1 — есть fail или ошибка прогона.
+// runTrial parses arguments, runs L0 trials, and prints a text table with
+// trial coverage. Exit 0 -- all cases pass; 1 -- there's a fail or a run error.
 func runTrial(args []string) int {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -78,7 +78,7 @@ func runTrial(args []string) int {
 		return exitUsage
 	}
 	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "soul-trial run: ровно один аргумент-путь обязателен")
+		fmt.Fprintln(os.Stderr, "soul-trial run: exactly one path argument is required")
 		fs.Usage()
 		return exitUsage
 	}

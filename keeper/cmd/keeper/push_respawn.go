@@ -1,17 +1,17 @@
 package main
 
-// push_respawn.go — реализация [push.ProviderRespawner] для daemon-wire-up
+// push_respawn.go -- implementation of [push.ProviderRespawner] for the daemon wire-up
 // (S7-2 hot-reload, ADR-032 amendment 2026-05-27).
 //
-// Контекст: setupPushProviderSvc поднимает Redis pub/sub subscription на
-// `push-providers:changed`; при мутации `push_providers` через REST/MCP-фасад
-// каждая нода кластера получает имя изменённого провайдера. Daemon-listener
-// (runPushProviderInvalidationListener) делегирует фактический re-spawn
-// `SshDispatcher.RefreshProvider`, которому, в свою очередь, нужен respawner
-// — компонент, знающий, КАК поднять новый plugin-handle с обновлёнными
-// env-payload. Этот файл содержит такую реализацию: она держит ссылки на
-// pluginhost.Host + discovered + PGFallbackProviderResolver, и при вызове
-// закрывает старый handle и spawn-ит новый.
+// Context: setupPushProviderSvc sets up a Redis pub/sub subscription on
+// `push-providers:changed`; on a `push_providers` mutation via the REST/MCP facade,
+// every node in the cluster receives the name of the changed provider. The daemon listener
+// (runPushProviderInvalidationListener) delegates the actual re-spawn to
+// `SshDispatcher.RefreshProvider`, which in turn needs a respawner
+// -- a component that knows HOW to bring up a new plugin handle with the updated
+// env payload. This file contains that implementation: it holds references to
+// pluginhost.Host + discovered + PGFallbackProviderResolver, and on invocation
+// closes the old handle and spawns a new one.
 
 import (
 	"context"
@@ -24,10 +24,10 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/push"
 )
 
-// pushProviderRespawner — push.ProviderRespawner поверх pluginhost.Host и
-// PGFallbackProviderResolver. Хранит discovered-список ровно для того, чтобы
-// найти manifest+бинарь по имени плагина (multi-provider routing — пост-S7,
-// сейчас список из одного элемента).
+// pushProviderRespawner -- push.ProviderRespawner on top of pluginhost.Host and
+// PGFallbackProviderResolver. Holds the discovered list exactly so it can
+// find the manifest+binary by plugin name (multi-provider routing is post-S7,
+// right now the list has a single element).
 type pushProviderRespawner struct {
 	host       *pluginhost.Host
 	discovered []pluginhost.Discovered
@@ -35,10 +35,10 @@ type pushProviderRespawner struct {
 	logger     *slog.Logger
 }
 
-// newPushProviderRespawner собирает respawner. Возвращает nil без ошибки, если
-// какой-то из required-компонентов отсутствует (push выключен / Redis выключен
-// / pilot single-instance dev) — `SshDispatcher.RefreshProvider` тогда вернёт
-// ErrRespawnNotSupported, listener просто залогирует и продолжит.
+// newPushProviderRespawner assembles the respawner. Returns nil without an error if
+// any of the required components is missing (push disabled / Redis disabled
+// / pilot single-instance dev) -- `SshDispatcher.RefreshProvider` will then return
+// ErrRespawnNotSupported, and the listener will just log and continue.
 func newPushProviderRespawner(
 	host *pluginhost.Host,
 	discovered []pluginhost.Discovered,
@@ -56,20 +56,20 @@ func newPushProviderRespawner(
 	}
 }
 
-// RespawnProvider — реализация [push.ProviderRespawner].
+// RespawnProvider -- implementation of [push.ProviderRespawner].
 //
-// Шаги:
-//  1. Найти Discovered по имени (manifest.Name);
-//  2. Закрыть oldCloser, если передан (плагин держит unix-socket + child-
-//     process — оба нужно прибрать ДО spawn-а нового, чтобы не плодить
-//     orphan-сокеты при ошибке Spawn);
-//  3. Резолвить свежие params через resolver (PG → legacy-fallback);
-//  4. Собрать env-payload и Spawn новый plugin-handle;
-//  5. Обернуть BasePlugin в SshProviderPlugin (типовая защита kind=ssh_provider).
+// Steps:
+//  1. Find Discovered by name (manifest.Name);
+//  2. Close oldCloser if passed (the plugin holds a unix socket + child
+//     process -- both must be cleaned up BEFORE spawning the new one, to avoid
+//     leaking orphan sockets on a Spawn error);
+//  3. Resolve fresh params via the resolver (PG -> legacy fallback);
+//  4. Build the env payload and Spawn a new plugin handle;
+//  5. Wrap BasePlugin in SshProviderPlugin (type-check guard kind=ssh_provider).
 //
-// Возврат:
-//   - (SshProvider, io.Closer, nil) — handle готов к Authorize/Sign.
-//   - (nil, nil, error) — diagnostic; caller (SshDispatcher) перейдёт в
+// Returns:
+//   - (SshProvider, io.Closer, nil) -- handle ready for Authorize/Sign.
+//   - (nil, nil, error) -- diagnostic; the caller (SshDispatcher) transitions to
 //     degraded state.
 func (r *pushProviderRespawner) RespawnProvider(ctx context.Context, providerName string, oldCloser io.Closer) (push.SshProvider, io.Closer, error) {
 	d := r.findDiscoveredByName(providerName)
@@ -79,18 +79,18 @@ func (r *pushProviderRespawner) RespawnProvider(ctx context.Context, providerNam
 
 	if oldCloser != nil {
 		if cerr := oldCloser.Close(); cerr != nil {
-			// Не fatal: спавнить новый всё равно надо, иначе провайдер
-			// останется недоступен. Warning достаточно — старый процесс
-			// либо доумрёт сам, либо станет zombie до Reaper-а ОС.
+			// Not fatal: we still need to spawn a new one, otherwise the provider
+			// stays unavailable. A warning is enough -- the old process will
+			// either die on its own or become a zombie until reaped by the OS.
 			r.logger.Warn("respawn: close old plugin-handle returned error",
 				slog.String("provider", providerName), slog.Any("error", cerr))
 		}
 	}
 
 	params, resolveErr := r.resolver.ResolveParams(ctx, providerName)
-	// resolveErr=ErrPushProviderNotConfigured допустимо: плагин просто
-	// стартует без env-payload (как pilot S6). Real PG/transport-ошибки —
-	// fail (если респаунить не на чем — оставляем dispatcher degraded).
+	// resolveErr=ErrPushProviderNotConfigured is fine: the plugin simply
+	// starts without an env payload (as in pilot S6). Real PG/transport errors --
+	// fail (if there's nothing to respawn from, leave the dispatcher degraded).
 	if resolveErr != nil && !errors.Is(resolveErr, push.ErrPushProviderNotConfigured) {
 		return nil, nil, fmt.Errorf("respawn: resolve params %q: %w", providerName, resolveErr)
 	}
@@ -112,8 +112,8 @@ func (r *pushProviderRespawner) RespawnProvider(ctx context.Context, providerNam
 	return wrapped, wrapped, nil
 }
 
-// findDiscoveredByName — линейный поиск по discovered (single-provider pilot
-// держит обычно 1 элемент; multi-provider — единицы, мапу строить нет смысла).
+// findDiscoveredByName -- linear search over discovered (single-provider pilot
+// usually holds 1 element; multi-provider is a handful, no point building a map).
 func (r *pushProviderRespawner) findDiscoveredByName(name string) *pluginhost.Discovered {
 	for i := range r.discovered {
 		if r.discovered[i].Manifest != nil && r.discovered[i].Manifest.Name == name {

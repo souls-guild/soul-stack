@@ -7,13 +7,14 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/trial"
 )
 
-// printResults печатает текст-таблицу результатов + trial coverage. Возвращает
-// true, если все кейсы pass (L2-skip прогон не валит).
+// printResults prints a text table of results + trial coverage. Returns true
+// if all cases pass (an L2-skip run doesn't fail it).
 //
-// На L0-кейс: PASS/FAIL, сводка `when-branches X/Y, expressions N`, при FAIL —
-// список расхождений, при наличии непокрытых веток — их список. L1-кейс (тест
-// миграции): PASS/FAIL без coverage-сводки (render-пайплайн на нём не гонялся).
-// L2-кейс печатается как `SKIP (L2)` (стенд, ADR-023 post-MVP).
+// For an L0 case: PASS/FAIL, a `when-branches X/Y, expressions N` summary,
+// and on FAIL a list of mismatches; if there are uncovered branches, their
+// list. An L1 case (migration test): PASS/FAIL without a coverage summary
+// (the render pipeline didn't run for it). An L2 case prints as `SKIP (L2)`
+// (stand, ADR-023 post-MVP).
 func printResults(w io.Writer, results []trial.Result) bool {
 	allPass := true
 	var passL0, passL1, skippedL2 int
@@ -59,7 +60,7 @@ func printResults(w io.Writer, results []trial.Result) bool {
 	return allPass
 }
 
-// printUncovered печатает bool-выражения, у которых покрыта только одна ветка.
+// printUncovered prints bool expressions for which only one branch is covered.
 func printUncovered(w io.Writer, cov trial.CoverageReport) {
 	var uncovered []trial.BranchCoverage
 	for _, b := range cov.Branches {
