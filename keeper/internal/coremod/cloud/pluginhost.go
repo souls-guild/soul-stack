@@ -7,61 +7,60 @@ import (
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 )
 
-// PluginHost — узкое подмножество keeper/internal/pluginhost (ADR-020
-// keeper-side runtime для CloudDriver-плагинов), нужное модулю
-// `core.cloud.provisioned`. Прод-реализация — [PluginAdapter] поверх
-// keeper/internal/pluginhost.Host (см. adapter.go). [StubHost] оставлен
-// для unit-тестов модуля и для wire-сборок без discovered-плагинов.
+// PluginHost is a narrow subset of keeper/internal/pluginhost (ADR-020
+// keeper-side runtime for CloudDriver plugins), needed by the
+// `core.cloud.provisioned` module. Production implementation is [PluginAdapter]
+// over keeper/internal/pluginhost.Host (see adapter.go). [StubHost] is kept
+// for module unit tests and for wire builds without discovered plugins.
 //
-// Cross-import между proto/keeper и proto/plugin запрещён (ADR-011 / ADR-012(g)),
-// но keeper/internal/coremod/cloud — это keeper-side, не proto: импорт
-// proto/plugin для типа VmInfo здесь легитимен (тот же модуль уже импортируется
-// в soul/internal/pluginhost).
+// Cross-import between proto/keeper and proto/plugin is prohibited (ADR-011 /
+// ADR-012(g)), but keeper/internal/coremod/cloud is keeper-side, not proto:
+// importing proto/plugin for VmInfo type is legitimate here (the same module
+// is already imported in soul/internal/pluginhost).
 type PluginHost interface {
-	// Create создаёт `count` VM через CloudDriver-плагин `driver` (= Provider.Type)
-	// с заданным profile. credentials — plain-секрет провайдера (+region),
-	// резолвленный Keeper-ом из Provider-реестра (A-flow); userdata — cloud-init
-	// blob для bootstrap soul-агента. name — базовое имя VM-батча (self-onboard
-	// Вариант T, ADR-017(h)): драйвер именует i-ю VM как `<name>-<index>`, чтобы
-	// FQDN был предсказуем keeper-ом; пустое → драйвер именует по своему усмотрению.
-	// Stream-агрегация — на стороне реализации; модуль получает финальный []VmInfo
-	// (или ошибку при stream-fail).
+	// Create instantiates `count` VMs via CloudDriver plugin `driver` (=
+	// Provider.Type) with the given profile. credentials is the provider's
+	// plain-secret (+region), resolved by Keeper from the Provider registry
+	// (A-flow); userdata is a cloud-init blob for bootstrapping the soul agent.
+	// name is the base name for the VM batch (self-onboard Variant T, ADR-017(h)):
+	// the driver names the i-th VM as `<name>-<index>` so FQDN is predictable
+	// to Keeper; empty → driver names at its discretion. Stream aggregation is
+	// on the implementation side; the module receives final []VmInfo (or error
+	// on stream-fail).
 	Create(ctx context.Context, driver string, profile, credentials map[string]any, count int32, userdata, name string) ([]*pluginv1.VmInfo, error)
 
-	// Destroy удаляет VM с указанными vm_id через `driver` (= Provider.Type).
-	// credentials — plain-секрет провайдера (+region), резолвленный Keeper-ом.
-	// Возвращает список фактически удалённых vm_id (provider может отвергнуть
-	// подмножество).
+	// Destroy removes VMs with the given vm_id via `driver` (= Provider.Type).
+	// credentials is the provider's plain-secret (+region), resolved by Keeper.
+	// Returns a list of actually deleted vm_id (provider may reject a subset).
 	Destroy(ctx context.Context, driver string, credentials map[string]any, vmIDs []string) ([]string, error)
 
-	// Status опрашивает состояние одной VM через `driver` (= Provider.Type).
-	// credentials — тот же A-flow, что и в Create/Destroy (резолв из Provider-
-	// реестра). Возвращает provider-specific state-строку + дополнительные
-	// атрибуты VM.
+	// Status queries the state of a single VM via `driver` (= Provider.Type).
+	// credentials is the same A-flow as in Create/Destroy (resolved from Provider
+	// registry). Returns provider-specific state string + additional VM attributes.
 	Status(ctx context.Context, driver string, credentials map[string]any, vmID string) (*pluginv1.StatusReply, error)
 
-	// List перечисляет VM, известных провайдеру (отфильтрованные опц. фильтром).
-	// credentials — тот же A-flow. Stream-агрегация — на стороне реализации;
-	// модуль получает финальный []VmInfo.
+	// List enumerates VMs known to the provider (optionally filtered).
+	// credentials is the same A-flow. Stream aggregation is on the implementation
+	// side; the module receives final []VmInfo.
 	List(ctx context.Context, driver string, credentials, filter map[string]any) ([]*pluginv1.VmInfo, error)
 
-	// Resize расширяет ресурсы VM (cpu/ram/disk, наши единицы) через CloudDriver-
-	// плагин `driver` (= Provider.Type). desired — целевой spec (поля с 0 не
-	// меняются); allowDowntime разрешает stop/start. credentials — тот же A-flow.
-	// Stream-агрегация — на стороне реализации; модуль получает per-vm результаты
-	// (или ошибку при stream-fail / resize.unsupported).
+	// Resize expands VM resources (cpu/ram/disk, in our units) via CloudDriver
+	// plugin `driver` (= Provider.Type). desired is the target spec (fields with 0
+	// do not change); allowDowntime permits stop/start. credentials is the same
+	// A-flow. Stream aggregation is on the implementation side; the module receives
+	// per-vm results (or error on stream-fail / resize.unsupported).
 	Resize(ctx context.Context, driver string, credentials map[string]any, vmIDs []string, desired *pluginv1.ResizeSpec, allowDowntime bool) ([]*pluginv1.VmResizeResult, error)
 }
 
-// ErrPluginHostNotImplemented — sentinel-ошибка [StubHost], которую модуль
-// маппит в `failed`-event с понятным message. В проде используется
-// [PluginAdapter], который возвращает структурированные ошибки spawn-/RPC-фаз.
+// ErrPluginHostNotImplemented is a sentinel error for [StubHost], which the
+// module maps to a `failed`-event with a readable message. Production uses
+// [PluginAdapter], which returns structured errors for spawn/RPC phases.
 var ErrPluginHostNotImplemented = errors.New("cloud pluginhost: not implemented (using StubHost — wire PluginAdapter in main)")
 
-// StubHost — minimal-реализация PluginHost для unit-тестов модуля и для
-// сборок keeper без discovered-плагинов. Все методы возвращают
-// [ErrPluginHostNotImplemented]; прод-сборка main-а инжектирует
-// [PluginAdapter] вместо StubHost.
+// StubHost is a minimal PluginHost implementation for module unit tests and for
+// Keeper builds without discovered plugins. All methods return
+// [ErrPluginHostNotImplemented]; production main wiring injects [PluginAdapter]
+// instead of StubHost.
 type StubHost struct{}
 
 func (StubHost) Create(_ context.Context, _ string, _, _ map[string]any, _ int32, _, _ string) ([]*pluginv1.VmInfo, error) {

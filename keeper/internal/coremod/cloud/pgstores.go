@@ -14,7 +14,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/soulseed"
 )
 
-// SoulPG — adapter поверх keeper/internal/soul для интерфейса [SoulStore].
+// SoulPG is adapter over keeper/internal/soul for [SoulStore] interface.
 type SoulPG struct {
 	DB keepersoul.ExecQueryRower
 }
@@ -33,10 +33,10 @@ func (s *SoulPG) DeleteBySID(ctx context.Context, sid string) error {
 	return keepersoul.DeleteBySID(ctx, s.DB, sid)
 }
 
-// TokenPG — adapter поверх keeper/internal/bootstraptoken с фиксированным TTL.
-// TTL берётся из cfg-поля keeper-config (через ctor); MVP — 24h, согласуется
-// с рекомендацией docs/soul/onboarding.md (часы, не дни — токен это
-// одноразовый capability для первого подключения).
+// TokenPG is adapter over keeper/internal/bootstraptoken with fixed TTL.
+// TTL taken from cfg-field keeper-config (via ctor); MVP is 24h, aligns
+// with docs/soul/onboarding.md recommendation (hours, not days — token is
+// one-time capability for first connection).
 type TokenPG struct {
 	DB  bootstraptoken.ExecQueryRower
 	TTL time.Duration
@@ -63,39 +63,39 @@ func (t *TokenPG) DeleteByTokenID(ctx context.Context, tokenID string) error {
 	return bootstraptoken.DeleteByTokenID(ctx, t.DB, tokenID)
 }
 
-// PoolBeginner — узкое подмножество `*pgxpool.Pool`, нужное cascade-tx
-// (`core.cloud.provisioned destroyed`). pgx.BeginFunc принимает интерфейс
-// с одним методом Begin — этого хватает.
+// PoolBeginner is narrow subset of `*pgxpool.Pool` needed for cascade-tx
+// (`core.cloud.provisioned destroyed`). pgx.BeginFunc takes interface
+// with one Begin method — suffices.
 //
-// Реализуется `*pgxpool.Pool` напрямую; для unit-тестов делается fake.
+// Implemented by `*pgxpool.Pool` directly; for unit tests use fake.
 type PoolBeginner interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
 var _ PoolBeginner = (*pgxpool.Pool)(nil)
 
-// CascadePG — cascade-обработчик `core.cloud.provisioned destroyed` (ADR-017):
-// в одной PG-транзакции переводит souls→destroyed, активные soul_seeds→orphaned,
-// активные bootstrap_tokens→burned. Обособлен от SoulPG / TokenPG, потому что
-// атомарность всей цепочки требует pool с BeginFunc, а не узкий ExecQueryRower.
+// CascadePG is cascade handler for `core.cloud.provisioned destroyed` (ADR-017):
+// in single PG transaction moves souls→destroyed, active soul_seeds→orphaned,
+// active bootstrap_tokens→burned. Separate from SoulPG / TokenPG because
+// atomicity of whole chain requires pool with BeginFunc, not narrow ExecQueryRower.
 type CascadePG struct {
 	Pool PoolBeginner
 }
 
-// NewCascadePG строит adapter.
+// NewCascadePG builds adapter.
 func NewCascadePG(pool PoolBeginner) *CascadePG {
 	return &CascadePG{Pool: pool}
 }
 
-// CascadeCounts — агрегированные результаты [CascadePG.CascadeDestroy]
-// для audit-payload и observability.
+// CascadeCounts is aggregated results of [CascadePG.CascadeDestroy]
+// for audit-payload and observability.
 type CascadeCounts struct {
 	SoulsUpdated  int64
 	SeedsOrphaned int64
 	TokensBurned  int64
 }
 
-// CascadeDestroy — в одной PG-транзакции (ADR-017 cascade):
+// CascadeDestroy in single PG transaction (ADR-017 cascade):
 //
 //	UPDATE souls           SET status='destroyed'
 //	   WHERE sid IN (sids)
@@ -104,11 +104,11 @@ type CascadeCounts struct {
 //	UPDATE bootstrap_tokens SET used_at=NOW(), used_by_kid=$usedByKID
 //	   WHERE sid IN (sids) AND used_at IS NULL
 //
-// Возвращает агрегированные счётчики (для audit-payload и observability).
+// Returns aggregated counters (for audit-payload and observability).
 //
-// Семантика частичных совпадений: пустой `sids` → no-op (counts всё 0).
-// Несуществующий sid просто не затронет ни одной строки — это допустимо
-// (caller передаёт sids от CloudDriver-а, не проверяя их регистрацию).
+// Partial match semantics: empty `sids` → no-op (all counts 0).
+// Non-existent sid simply doesn't affect any rows — allowed
+// (caller provides sids from CloudDriver without verification).
 func (c *CascadePG) CascadeDestroy(ctx context.Context, sids []string, usedByKID string) (CascadeCounts, error) {
 	var counts CascadeCounts
 	if len(sids) == 0 {
@@ -122,8 +122,8 @@ func (c *CascadePG) CascadeDestroy(ctx context.Context, sids []string, usedByKID
 		for _, sid := range sids {
 			if err := keepersoul.UpdateStatus(ctx, tx, sid, keepersoul.StatusDestroyed, nil); err != nil {
 				if errors.Is(err, keepersoul.ErrSoulNotFound) {
-					// Допустимо: SID отсутствует в реестре (race с manual-cleanup
-					// или повторная destroy). Не двигаем counts, не валим tx.
+					// Allowed: SID missing from registry (race with manual-cleanup
+					// or re-destroy). Don't move counts, don't fail tx.
 					continue
 				}
 				return fmt.Errorf("souls destroyed for %q: %w", sid, err)

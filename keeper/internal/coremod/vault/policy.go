@@ -10,40 +10,41 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// passwordPolicy — описываемые автором сервиса правила генерации одного секрета
-// (`core.vault.kv-present`): сколько символов и из какого алфавита. В отличие от
-// «энтропии в байтах» (непредсказуемая для автора длина итоговой строки),
-// policy задаёт ИТОГОВУЮ длину строки в символах и явный набор разрешённых
-// символов — автор видит в YAML ровно то, что окажется в секрете.
+// passwordPolicy describes rules for generating one secret (set by the service
+// author in `core.vault.kv-present`): how many characters and from which
+// alphabet. Unlike "entropy in bytes" (unpredictable final string length for
+// the author), policy specifies the FINAL string length in characters and an
+// explicit set of allowed characters — the author sees in YAML exactly what
+// will end up in the secret.
 //
-// Форма в params (см. parsePolicy): автор пишет либо именованный `charset`-пресет,
-// либо явный `allowed_chars`; `length` — число символов. Дефолт алфавита —
-// redis.conf-safe (без пробела/кавычек/`#`/`\`/управляющих), чтобы пароль не
-// ломал redis.conf / users.acl при подстановке.
+// Form in params (see parsePolicy): the author writes either a named `charset`
+// preset or explicit `allowed_chars`; `length` is the character count. Default
+// alphabet is redis.conf-safe (no space/quotes/`#`/`\`/control chars) to prevent
+// password from breaking redis.conf / users.acl on substitution.
 type passwordPolicy struct {
-	// length — итоговая длина пароля В СИМВОЛАХ (не в байтах энтропии).
+	// length is the final password length IN CHARACTERS (not bytes of entropy).
 	length int
-	// alphabet — набор разрешённых символов (рунический срез для bias-free
-	// выбора по индексу). Гарантированно непустой после parsePolicy.
+	// alphabet is the set of allowed characters (rune slice for bias-free index
+	// selection). Guaranteed non-empty after parsePolicy.
 	alphabet []rune
 }
 
-// Дефолты policy. defaultPasswordLength — 32 символа: при redis-safe-алфавите
-// (~90 символов) это ~207 бит энтропии — с запасом для пароля. defaultCharset —
-// redis.conf-safe-пресет (см. charsetAlphabets).
+// Policy defaults. defaultPasswordLength is 32 characters: with redis-safe
+// alphabet (~90 characters) this is ~207 bits of entropy — with headroom for a
+// password. defaultCharset is the redis.conf-safe preset (see charsetAlphabets).
 const (
 	defaultPasswordLength = 32
 	defaultCharset        = charsetASCIIPrintableSafe
 
-	// minPasswordLength / maxPasswordLength — границы `length` (защита от
-	// 0/отрицательного и от гигантского значения, забивающего KV/метрики).
-	// 8 — нижний разумный порог для генерируемого пароля; 1024 символа —
-	// заведомо избыточный потолок.
+	// minPasswordLength / maxPasswordLength are bounds on `length` (protection
+	// from 0/negative and from huge value filling KV/metrics). 8 is the minimum
+	// reasonable threshold for generated password; 1024 characters is notionally
+	// excessive ceiling.
 	minPasswordLength = 8
 	maxPasswordLength = 1024
 )
 
-// Имена charset-пресетов (значение param `charset`).
+// Names of charset presets (value of param `charset`).
 const (
 	charsetAlphanumeric       = "alphanumeric"
 	charsetHex                = "hex"
@@ -51,32 +52,32 @@ const (
 	charsetASCIIPrintableSafe = "ascii-printable-safe"
 )
 
-// charsetAlphabets — алфавиты именованных пресетов.
+// charsetAlphabets is a map of alphabets for named presets.
 //
-//   - alphanumeric: латиница в обоих регистрах + цифры (безопасно везде, но уже
-//     по энтропии на символ).
-//   - hex: строчные hex-цифры (для секретов, потребляемых как hex-строка).
-//   - base64url: url-safe base64-алфавит (`-`/`_` вместо `+`/`/`, без `=`).
-//   - ascii-printable-safe: ПЕЧАТНЫЙ ASCII МИНУС символы, ломающие redis.conf /
-//     users.acl / shell-подстановку: пробел, `"`, `'`, `#`, `\`, а также
-//     backtick и `$` (защита от случайной интерполяции в конфигах). Дефолт
-//     шага — пароль не должен ломать целевой конфиг.
+//   - alphanumeric: Latin in both cases + digits (safe everywhere, but lower
+//     entropy per character).
+//   - hex: lowercase hex digits (for secrets consumed as hex string).
+//   - base64url: url-safe base64 alphabet (`-`/`_` instead of `+`/`/`, no `=`).
+//   - ascii-printable-safe: PRINTABLE ASCII MINUS characters that break redis.conf /
+//     users.acl / shell substitution: space, `"`, `'`, `#`, `\`, plus backtick
+//     and `$` (protection from accidental interpolation in configs). Step default
+//     — password must not break the target config.
 var charsetAlphabets = map[string]string{
 	charsetAlphanumeric: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
 	charsetHex:          "0123456789abcdef",
 	charsetBase64URL:    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_",
-	// ascii-printable-safe собирается из печатного диапазона 0x21..0x7E минус
-	// excludedFromSafe — держим список исключений в одном месте (safeAlphabet).
+	// ascii-printable-safe is built from printable range 0x21..0x7E minus
+	// excludedFromSafe — keep exclusion list in one place (safeAlphabet).
 	charsetASCIIPrintableSafe: safeAlphabet(),
 }
 
-// excludedFromSafe — символы, исключаемые из ascii-printable-safe-пресета:
-// ломают redis.conf/users.acl (пробел/кавычки/`#`/`\`) или провоцируют
-// интерполяцию (backtick и `$`).
+// excludedFromSafe is the set of characters excluded from ascii-printable-safe
+// preset: they break redis.conf/users.acl (space/quotes/#/\) or trigger
+// interpolation (backtick and $).
 const excludedFromSafe = " \"'#\\`$"
 
-// safeAlphabet строит ascii-printable-safe-алфавит: печатный ASCII 0x21..0x7E
-// (`!`..`~`) за вычетом excludedFromSafe.
+// safeAlphabet builds ascii-printable-safe alphabet: printable ASCII 0x21..0x7E
+// (!..~) minus excludedFromSafe.
 func safeAlphabet() string {
 	excluded := make(map[byte]bool, len(excludedFromSafe))
 	for i := 0; i < len(excludedFromSafe); i++ {
@@ -91,14 +92,13 @@ func safeAlphabet() string {
 	return string(out)
 }
 
-// parsePolicy разбирает policy из объекта params (верхний уровень шага или
-// override внутри target). nil-объект → policy из дефолтов (length=32,
-// charset=ascii-printable-safe). base — дефолт, который переопределяется
-// заданными полями (для per-target override поверх step-level default).
+// parsePolicy parses policy from params object (step top-level or override within
+// target). Nil object → policy from defaults (length=32, charset=ascii-printable-safe).
+// base is the default, overridden by provided fields (for per-target override over
+// step-level default).
 //
-// `charset` и `allowed_chars` взаимоисключимы: задавать оба — ошибка
-// (двусмысленность алфавита). Пустой `allowed_chars` / неизвестный `charset` —
-// ошибка.
+// charset and allowed_chars are mutually exclusive: specifying both is an error
+// (alphabet ambiguity). Empty allowed_chars / unknown charset is an error.
 func parsePolicy(obj *structpb.Struct, base passwordPolicy) (passwordPolicy, error) {
 	p := base
 
@@ -136,13 +136,13 @@ func parsePolicy(obj *structpb.Struct, base passwordPolicy) (passwordPolicy, err
 		p.alphabet = []rune(alpha)
 	}
 	if len(p.alphabet) < 2 {
-		// <2 символов: генерация выродилась бы в константу (0 энтропии).
+		// <2 characters — generation would devolve to constant (0 entropy).
 		return passwordPolicy{}, fmt.Errorf("policy: alphabet must have >= 2 distinct characters, got %d", len(p.alphabet))
 	}
 	return p, nil
 }
 
-// defaultPolicy — базовый policy из дефолтов (length=32, ascii-printable-safe).
+// defaultPolicy is the base policy from defaults (length=32, ascii-printable-safe).
 func defaultPolicy() passwordPolicy {
 	return passwordPolicy{
 		length:   defaultPasswordLength,
@@ -150,9 +150,9 @@ func defaultPolicy() passwordPolicy {
 	}
 }
 
-// dedupeRunes удаляет повторы рун, сохраняя порядок первого вхождения. Нужна для
-// `allowed_chars`: дубль в строке исказил бы равномерность (символ чаще
-// выпадал бы), поэтому алфавит дедуплицируется до выбора.
+// dedupeRunes removes duplicate runes, preserving order of first occurrence. Needed for
+// allowed_chars: a duplicate would skew uniformity (symbol appears more often), so
+// alphabet is deduplicated before selection.
 func dedupeRunes(s string) []rune {
 	seen := make(map[rune]bool, len(s))
 	out := make([]rune, 0, len(s))
@@ -165,11 +165,11 @@ func dedupeRunes(s string) []rune {
 	return out
 }
 
-// generate возвращает пароль длины p.length, каждый символ — равновероятно
-// выбранная руна из p.alphabet. Источник — crypto/rand (НЕ math/rand). Выбор
-// bias-free: rand.Int(crypto/rand, n) даёт равномерный индекс на [0,n) без
-// modulo-перекоса (внутри — rejection sampling). p.alphabet гарантированно
-// непуст (parsePolicy/defaultPolicy).
+// generate returns a password of length p.length, each character uniformly randomly
+// selected from p.alphabet. Source is crypto/rand (NOT math/rand). Bias-free
+// selection: rand.Int(crypto/rand, n) gives uniform index on [0,n) without modulo skew
+// (internally uses rejection sampling). p.alphabet is guaranteed non-empty
+// (parsePolicy/defaultPolicy).
 func (p passwordPolicy) generate() (string, error) {
 	n := big.NewInt(int64(len(p.alphabet)))
 	out := make([]rune, p.length)

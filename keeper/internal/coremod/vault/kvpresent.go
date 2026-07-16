@@ -15,30 +15,29 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// StatePresent — состояние generate-if-absent. Совпадает с author-state-суффиксом
-// `kv-present` адреса `core.vault.kv-present` (SplitModuleAddr выделит "kv-present").
+// StatePresent is generate-if-absent state. Matches author-state suffix
+// `kv-present` of address `core.vault.kv-present` (SplitModuleAddr extracts "kv-present").
 //
-// Парный близнец [StateRead]: kv-read читает секрет в register-output, kv-present
-// гарантирует существование секрета (генерит недостающее криптослучайным
-// значением по описанной автором password-policy), ничего из значений наружу
-// не отдавая.
+// Twin of [StateRead]: kv-read reads secret into register-output, kv-present
+// ensures secret exists (generates missing value cryptographically per
+// author-described password-policy), returns nothing from values.
 const StatePresent = "kv-present"
 
-// defaultPasswordField — имя поля по умолчанию для target без явного `field`.
-// Совпадает с конвенцией redis-секретов (`secret/redis/<inc>/users/<name>#password`).
+// defaultPasswordField is default field name for target without explicit `field`.
+// Matches redis-secret convention (`secret/redis/<inc>/users/<name>#password`).
 const defaultPasswordField = "password"
 
-// presentTarget — одна цель генерации: Vault-путь + имя поля + policy генерации.
-// policy резолвится на этапе parse (step-level default + per-target override),
-// поэтому Apply уже оперирует готовым алфавитом/длиной без повторного разбора.
+// presentTarget is one generation target: Vault path + field name + generation policy.
+// policy resolved at parse time (step-level default + per-target override),
+// so Apply operates with ready alphabet/length without re-parsing.
 type presentTarget struct {
 	path   string
 	field  string
 	policy passwordPolicy
 }
 
-// validatePresent — runtime-страховка params kv-present (soul-lint валидирует
-// author-форму статически). Проверяет targets и обе policy-формы.
+// validatePresent is runtime guard for kv-present params (soul-lint validates static
+// author form). Checks targets and both policy forms.
 func validatePresent(req *pluginv1.ValidateRequest) []string {
 	var errs []string
 	if _, err := parseTargets(req.Params); err != nil {
@@ -47,14 +46,14 @@ func validatePresent(req *pluginv1.ValidateRequest) []string {
 	return errs
 }
 
-// applyPresent: для каждого target читает путь; если поле отсутствует — генерит
-// значение по его policy и пишет (read-merge-write, чтобы не затереть соседние
-// поля того же пути); если присутствует — no-op. changed=true только когда
-// реально что-то сгенерировано (как `core.soul.registered`).
+// applyPresent: for each target, reads path; if field missing — generates value per
+// its policy and writes (read-merge-write preserves neighboring fields of same path);
+// if present — no-op. changed=true only when something actually generated
+// (like core.soul.registered).
 //
-// БЕЗОПАСНОСТЬ (ADR-010): сгенерированное ЗНАЧЕНИЕ не уходит в register-output,
-// audit-payload, логи и OTel. Наружу — только факт + path + список
-// сгенерированных полей (эталон sigil.KeyService.Introduce).
+// SECURITY (ADR-010): generated VALUE does not leak to register-output, audit-payload,
+// logs, or OTel. Only fact + path + list of generated fields exposed
+// (mirrors sigil.KeyService.Introduce).
 func (m *Module) applyPresent(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
 	ctx := stream.Context()
 
@@ -63,15 +62,15 @@ func (m *Module) applyPresent(req *pluginv1.ApplyRequest, stream grpc.ServerStre
 		return util.SendFailed(stream, err.Error())
 	}
 
-	// pendingWrites агрегирует генерацию ПО ПУТЯМ: несколько target-ов на один
-	// путь (разные поля) сливаются в один WriteKV поверх существующих полей. Это
-	// сохраняет соседние поля пути и не плодит лишних KV-версий.
+	// pendingWrites aggregates generation BY PATHS: multiple targets on one path
+	// (different fields) merged into single WriteKV preserving existing fields.
+	// Avoids spurious KV versions.
 	pendingWrites := make(map[string]map[string]any)
-	// existing кэширует прочитанный payload каждого пути в пределах Apply, чтобы
-	// два target-а на один путь не били ReadKV дважды и видели согласованную базу.
+	// existing caches each path payload during Apply, so two targets on one path
+	// don't hit ReadKV twice, see consistent base.
 	existing := make(map[string]map[string]any)
-	// generated — пути → отсортированный список сгенерированных полей (для output
-	// и audit). ТОЛЬКО имена полей, без значений.
+	// generated maps paths to sorted list of generated fields (for output and audit).
+	// Field names only, no values.
 	generated := make(map[string][]string)
 
 	for _, t := range targets {
@@ -85,10 +84,10 @@ func (m *Module) applyPresent(req *pluginv1.ApplyRequest, stream grpc.ServerStre
 		}
 
 		if fieldPresent(payload, t.field) {
-			continue // секрет уже есть — не перезатираем
+			continue // secret already exists — skip
 		}
-		// Учитываем уже запланированную в этом же Apply генерацию того же поля
-		// (два target-а с одним path+field): второй раз не генерим.
+		// Check for already planned generation of same field in this Apply
+		// (two targets with same path+field): skip duplicate generation.
 		if w, ok := pendingWrites[t.path]; ok {
 			if _, planned := w[t.field]; planned {
 				continue
@@ -101,9 +100,8 @@ func (m *Module) applyPresent(req *pluginv1.ApplyRequest, stream grpc.ServerStre
 		}
 		w := pendingWrites[t.path]
 		if w == nil {
-			// База для merge — копия существующих полей пути (если он уже был);
-			// сверху кладём сгенерированные. Так WriteKV (новая KV-версия) не
-			// теряет соседние поля.
+			// Merge base is copy of existing fields (if path existed), then layered with
+			// generated. WriteKV (new KV version) doesn't lose neighboring fields.
 			w = cloneMap(payload)
 			pendingWrites[t.path] = w
 		}
@@ -113,8 +111,8 @@ func (m *Module) applyPresent(req *pluginv1.ApplyRequest, stream grpc.ServerStre
 
 	for path, data := range pendingWrites {
 		if werr := m.Vault.WriteKV(ctx, path, data); werr != nil {
-			// WriteKV не кладёт значения в текст ошибки (vault.Client-инвариант);
-			// здесь тоже — только path.
+			// WriteKV doesn't leak values in error text (vault.Client invariant);
+			// same here — path only.
 			return util.SendFailed(stream, fmt.Sprintf("vault write %q: %v", path, werr))
 		}
 	}
@@ -127,7 +125,7 @@ func (m *Module) applyPresent(req *pluginv1.ApplyRequest, stream grpc.ServerStre
 			EventType: audit.EventVaultKVPresent,
 			Source:    audit.SourceKeeperInternal,
 			Payload: map[string]any{
-				"paths": genFields, // path → [сгенерированные поля]; значений нет
+				"paths": genFields, // path → [generated fields]; no values
 			},
 		}
 		if werr := m.Audit.Write(ctx, ev); werr != nil {
@@ -141,9 +139,8 @@ func (m *Module) applyPresent(req *pluginv1.ApplyRequest, stream grpc.ServerStre
 	return util.SendFinal(stream, changed, resp)
 }
 
-// readPath читает payload пути; несуществующий путь — НЕ ошибка, а пустой
-// payload (все его поля будут сгенерированы). Транспортные/политики-ошибки
-// прокидываются наверх.
+// readPath reads path payload; nonexistent path is NOT error, returns empty payload
+// (all fields will be generated). Transport/policy errors propagate up.
 func (m *Module) readPath(ctx context.Context, path string) (map[string]any, error) {
 	payload, err := m.Vault.ReadKV(ctx, path)
 	if err != nil {
@@ -155,11 +152,10 @@ func (m *Module) readPath(ctx context.Context, path string) (map[string]any, err
 	return payload, nil
 }
 
-// parseTargets разбирает `params.targets` — обязательный непустой список объектов
-// `{path: <str>, field?: <str>, policy?: <object>}`. Пустой/отсутствующий список
-// — ошибка (модулю нечего гарантировать). `field` по умолчанию —
-// [defaultPasswordField]. policy каждого target резолвится поверх step-level
-// `params.policy` (общий дефолт шага) → [defaultPolicy] (если ни там, ни там нет).
+// parseTargets parses params.targets — required non-empty list of objects {path: <str>,
+// field?: <str>, policy?: <object>}. Empty/missing list is error (nothing for module to
+// guarantee). field defaults to [defaultPasswordField]. policy of each target resolved
+// over step-level params.policy (step default) → [defaultPolicy] (if neither present).
 func parseTargets(params *structpb.Struct) ([]presentTarget, error) {
 	stepPolicy, err := parseStepPolicy(params)
 	if err != nil {
@@ -187,9 +183,8 @@ func parseTargets(params *structpb.Struct) ([]presentTarget, error) {
 	return out, nil
 }
 
-// parseStepPolicy разбирает опциональный step-level `params.policy` — общий
-// дефолт генерации для всех target-ов без своего `policy`. Отсутствует →
-// [defaultPolicy].
+// parseStepPolicy parses optional step-level params.policy — common generation
+// default for all targets without own policy. Missing → [defaultPolicy].
 func parseStepPolicy(params *structpb.Struct) (passwordPolicy, error) {
 	obj, err := util.OptStructParam(params, "policy")
 	if err != nil {
@@ -216,7 +211,7 @@ func parseTarget(s *structpb.Struct, idx int, stepPolicy passwordPolicy) (presen
 	if field == "" {
 		field = defaultPasswordField
 	}
-	// per-target policy override поверх step-level default.
+	// per-target policy override for step-level default.
 	override, err := util.OptStructParam(s, "policy")
 	if err != nil {
 		return presentTarget{}, fmt.Errorf("param \"targets\"[%d].%v", idx, err)
@@ -231,8 +226,8 @@ func parseTarget(s *structpb.Struct, idx int, stepPolicy passwordPolicy) (presen
 	return presentTarget{path: path, field: field, policy: policy}, nil
 }
 
-// fieldPresent — поле существует в payload и его значение непустое. Пустая
-// строка трактуется как «нет» (повод сгенерировать): пустой пароль бесполезен.
+// fieldPresent checks if field exists in payload with non-empty value. Empty string
+// is treated as "no" (reason to generate): empty password is useless.
 func fieldPresent(payload map[string]any, field string) bool {
 	v, ok := payload[field]
 	if !ok || v == nil {
@@ -242,9 +237,8 @@ func fieldPresent(payload map[string]any, field string) bool {
 	return ok && s != ""
 }
 
-// generatedFieldsOutput строит детерминированную проекцию `path → [поля]` для
-// output/audit: ключи путей и поля внутри отсортированы; ТОЛЬКО имена, без
-// значений секретов.
+// generatedFieldsOutput builds deterministic projection path → [fields] for output/audit:
+// path keys and inner fields sorted; field names only, no secret values.
 func generatedFieldsOutput(generated map[string][]string) map[string]any {
 	out := make(map[string]any, len(generated))
 	for path, fields := range generated {

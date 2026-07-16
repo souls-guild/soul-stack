@@ -15,10 +15,10 @@ var nameGuardProvisionScenarios = []string{
 	"../../../../examples/service/dragonfly/scenario/dragonfly-provision.yml",
 }
 
-// TestProvisionScenariosPinVMNameBasePattern — pin-guard NIM-58: each provision body
-// MUST validate incarnation.name exactly against [VMNameBasePattern] (single source of
-// pattern). Catches YAML-literal vs Go-const drift — main risk of variant B
-// (assert-string and driver drift silently).
+// TestProvisionScenariosPinVMNameBasePattern — pin-guard NIM-58: каждое
+// provision-тело обязано сверять incarnation.name РОВНО против [VMNameBasePattern]
+// (единый источник паттерна). Ловит дрейф YAML-литерала vs Go-const — главный
+// риск варианта B (assert-строка и драйвер разъедутся молча).
 func TestProvisionScenariosPinVMNameBasePattern(t *testing.T) {
 	want := "matches('" + VMNameBasePattern + "')"
 	for _, path := range nameGuardProvisionScenarios {

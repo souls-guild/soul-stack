@@ -1,28 +1,28 @@
-// Package choir реализует keeper-side core-модуль `core.choir`
-// (ADR-044, паттерн `core.soul.registered` из ADR-017).
+// Package choir implements keeper-side core-module `core.choir`
+// (ADR-044, pattern from `core.soul.registered` in ADR-017).
 //
-// Author-форма адреса задачи — `core.choir.present` / `core.choir.absent`
-// (base `core.choir` + state, как `core.file.present`/`core.file.absent`
-// Soul-side). Декларируемая сущность — членство «SID является Voice-ом в
-// указанном Choir-е данной инкарнации» (declared-партия хора, ADR-044 пункт 2).
+// Author form of task address is `core.choir.present` / `core.choir.absent`
+// (base `core.choir` + state, like `core.file.present`/`core.file.absent`
+// on Soul-side). Declared entity is membership "SID is a Voice in
+// the given Choir of this incarnation" (declared choir roster, ADR-044 section 2).
 //
-// State-семантика (симметрия present/absent остальных core-модулей):
-//   - present (default): AddVoice — SID становится Voice-ом Choir-а.
-//     Идемпотентно: Voice уже есть → changed=false, не ошибка.
-//   - absent: RemoveVoice — членство снимается. Идемпотентно: Voice-а нет →
-//     changed=false, не ошибка.
+// State semantics (symmetric present/absent to other core-modules):
+//   - present (default): AddVoice — SID becomes Voice of Choir.
+//     Idempotent: Voice already exists → changed=false, not error.
+//   - absent: RemoveVoice — membership removed. Idempotent: Voice doesn't exist →
+//     changed=false, not error.
 //
-// Инвариант членства (ADR-044 пункт 3 — Voice только для SID, который уже член
-// инкарнации) НЕ дублируется здесь: он реализован в choir-CRUD (AddVoice →
-// ErrNotMembers) и переиспользуется. При ErrNotMembers Apply отдаёт failed-event
-// (прогон уходит в onfail/error_locked).
+// Membership invariant (ADR-044 section 3 — Voice only for SID already member
+// of incarnation) is NOT duplicated here: implemented in choir-CRUD (AddVoice →
+// ErrNotMembers) and reused. On ErrNotMembers Apply sends failed-event
+// (run enters onfail/error_locked).
 //
-// ОГРАНИЧЕНИЯ S-T5 (future, не реализовано здесь):
+// RESTRICTIONS S-T5 (future, not implemented here):
 //   - Cross-incarnation guard (param.incarnation == run-context incarnation):
-//     run-context модулю недоступен (ADR-044/architect A1). Модуль доверяет
-//     param `incarnation` и лишь валидирует его существование. Жёсткий guard —
-//     отдельная задача (RunContext-инъекция в keeper-dispatch, needs_architect).
-//   - Roster-growth (новый Voice виден следующему шагу прогона) — не реализовано.
+//     run-context unavailable to module (ADR-044/architect A1). Module trusts
+//     param `incarnation` and only validates its existence. Hard guard is
+//     separate task (RunContext-injection in keeper-dispatch, needs_architect).
+//   - Roster-growth (new Voice visible to next step of run) — not implemented.
 package choir
 
 import (
@@ -38,46 +38,46 @@ import (
 	"google.golang.org/grpc"
 )
 
-// Name — base-имя модуля без state-суффикса (ключ Registry). Author-форма
-// адреса задачи — `core.choir.present` / `core.choir.absent`.
+// Name is the base module name without state suffix (Registry key). Author form
+// of task address is `core.choir.present` / `core.choir.absent`.
 const Name = "core.choir"
 
-// State-значения (симметрия present/absent с Soul-side core-модулями).
+// State values (symmetric present/absent to Soul-side core-modules).
 const (
 	StatePresent = "present"
 	StateAbsent  = "absent"
 )
 
-// Store — узкое подмножество choir-CRUD + проверка существования инкарнации,
-// нужное модулю. Полный pgxpool наружу не подсовываем (как у core.soul.registered):
-// fake реализует только три метода, контракт явный.
+// Store is narrow subset of choir-CRUD + incarnation existence check
+// needed by module. We don't expose full pgxpool outside (like core.soul.registered):
+// fake implements only three methods, contract is explicit.
 //
-// AddVoice/RemoveVoice — обёртки над одноимёнными package-функциями choir
-// (S-T2). IncarnationExists — лёгкая проверка существования инкарнации для
-// absent-ветки (present косвенно покрыт FK choir→incarnation внутри AddVoice).
+// AddVoice/RemoveVoice are wrappers over same-named choir package functions
+// (S-T2). IncarnationExists is lightweight incarnation existence check for
+// absent-branch (present is indirectly covered by FK choir→incarnation inside AddVoice).
 type Store interface {
 	AddVoice(ctx context.Context, v *keeperchoir.Voice) error
 	RemoveVoice(ctx context.Context, incarnation, choirName, sid string) error
 	IncarnationExists(ctx context.Context, incarnation string) (bool, error)
 }
 
-// Module — реализация sdk/module.SoulModule поверх Store.
+// Module implements sdk/module.SoulModule over Store.
 type Module struct {
 	Store Store
 }
 
-// New строит модуль с переданным Store. Caller обычно даёт adapter поверх
-// pgxpool — см. NewPGStore.
+// New builds module with given Store. Caller usually provides adapter over
+// pgxpool — see NewPGStore.
 func New(store Store) *Module {
 	return &Module{Store: store}
 }
 
-// Validate проверяет state и обязательные параметры. Запускается до Apply;
-// ошибки наружу как ValidateReply.errors[], не как gRPC-error.
+// Validate checks state and required parameters. Runs before Apply;
+// errors returned as ValidateReply.errors[], not as gRPC-error.
 //
 // Required: incarnation, choir, sid. Optional: role, position (int >= 0),
-// state (present/absent; пусто → present). soul-lint валидирует author-форму
-// статически; этот метод — runtime-страховка (как у core.soul.registered).
+// state (present/absent; empty → present). soul-lint validates author form
+// statically; this method is runtime safeguard (like core.soul.registered).
 func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
 	var errs []string
 	if req.State != "" && !isKnownState(req.State) {
@@ -103,13 +103,13 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 	return &pluginv1.ValidateReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
 
-// Plan — no-op в MVP (симметрично остальным core-модулям).
+// Plan is no-op in MVP (symmetric to other core-modules).
 func (m *Module) Plan(_ *pluginv1.PlanRequest, _ grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
 	return nil
 }
 
-// Apply применяет состояние present/absent. Все ошибки уходят как failed-event (не
-// gRPC-error), чтобы scenario-applier зашёл в onfail-ветку.
+// Apply applies present/absent state. All errors sent as failed-event (not
+// gRPC-error) so scenario-applier enters onfail-branch.
 func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
 	ctx := stream.Context()
 
@@ -152,10 +152,10 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 		return util.SendFailed(stream, fmt.Sprintf("param %q: must be >= 0, got %d", "position", position))
 	}
 
-	// S-T5 substitute жёсткого cross-incarnation guard: явно валидируем, что
-	// param-инкарнация существует. present косвенно покрыт FK choir→incarnation
-	// внутри AddVoice, но absent (RemoveVoice — единичный DELETE без FK-захода)
-	// иначе тихо вернул бы ErrVoiceNotFound на опечатке имени инкарнации.
+	// S-T5 substitute for hard cross-incarnation guard: explicitly validate that
+	// param-incarnation exists. present is indirectly covered by FK choir→incarnation
+	// inside AddVoice, but absent (RemoveVoice — single DELETE without FK-check)
+	// would silently return ErrVoiceNotFound on incarnation name typo.
 	exists, err := m.Store.IncarnationExists(ctx, incarnation)
 	if err != nil {
 		return util.SendFailed(stream, fmt.Sprintf("check incarnation %q: %v", incarnation, err))
@@ -174,9 +174,9 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	}
 }
 
-// applyPresent добавляет Voice. ErrVoiceExists → идемпотентный no-op
-// (changed=false). ErrNotMembers (инвариант членства, ADR-044 пункт 3) →
-// failed-event (прогон в error_locked). ErrChoirNotFound → failed.
+// applyPresent adds Voice. ErrVoiceExists → idempotent no-op
+// (changed=false). ErrNotMembers (membership invariant, ADR-044 section 3) →
+// failed-event (run enters error_locked). ErrChoirNotFound → failed.
 func (m *Module) applyPresent(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], incarnation, choirName, sid, role string, position int64, posSet bool) error {
 	v := &keeperchoir.Voice{
 		IncarnationName: incarnation,
@@ -196,16 +196,16 @@ func (m *Module) applyPresent(ctx context.Context, stream grpc.ServerStreamingSe
 	case err == nil:
 		return util.SendFinal(stream, true, presentOutput(incarnation, choirName, sid, true))
 	case errors.Is(err, keeperchoir.ErrVoiceExists):
-		// Идемпотентность: Voice уже есть → ничего не меняли.
+		// Idempotent: Voice already exists → nothing changed.
 		return util.SendFinal(stream, false, presentOutput(incarnation, choirName, sid, false))
 	default:
-		// ErrNotMembers / ErrChoirNotFound / прочее — failed-event.
+		// ErrNotMembers / ErrChoirNotFound / other → failed-event.
 		return util.SendFailed(stream, fmt.Sprintf("add voice %q to choir %q/%q: %v", sid, incarnation, choirName, err))
 	}
 }
 
-// applyAbsent снимает Voice. ErrVoiceNotFound → идемпотентный no-op
-// (changed=false). Прочие ошибки → failed-event.
+// applyAbsent removes Voice. ErrVoiceNotFound → idempotent no-op
+// (changed=false). Other errors → failed-event.
 func (m *Module) applyAbsent(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], incarnation, choirName, sid string) error {
 	err := m.Store.RemoveVoice(ctx, incarnation, choirName, sid)
 	switch {

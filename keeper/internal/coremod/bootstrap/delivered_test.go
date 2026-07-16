@@ -20,8 +20,8 @@ import (
 
 // --- test-doubles ---
 
-// fakeProvider — мок push.SshProvider. Записывает вызовы Authorize/Sign и
-// позволяет отвергать (deny / ошибка) для проверки fail-closed.
+// fakeProvider is a mock of push.SshProvider. Records Authorize/Sign calls and
+// allows denying (deny/error) for fail-closed testing.
 type fakeProvider struct {
 	allow      bool
 	denyReason string
@@ -45,21 +45,21 @@ func (p *fakeProvider) Sign(_ context.Context, req *pluginv1.SignRequest) (*plug
 	if p.signErr != nil {
 		return nil, p.signErr
 	}
-	// static-режим: возвращаем валидный ed25519 private key, чтобы
-	// push.AuthMethodsFromSign построил ssh.AuthMethod без ephemeral-cert.
+	// static mode: return valid ed25519 private key so
+	// push.AuthMethodsFromSign builds ssh.AuthMethod without ephemeral-cert.
 	return &pluginv1.SignReply{PrivateKey: testPrivateKeyPEM}, nil
 }
 
-// runCall — один Session.Run: команда + stdin (для проверки «токен в STDIN, не в argv»).
+// runCall is one Session.Run: command + stdin (to verify token in STDIN, not argv).
 type runCall struct {
 	cmd   string
 	stdin []byte
 }
 
-// fakeSession — мок push.Session. Захватывает все Run; опц. ошибка на N-м вызове.
+// fakeSession is a mock of push.Session. Captures all Run calls; optional error on N-th call.
 type fakeSession struct {
 	calls    []runCall
-	failAtN  int // 1-based индекс Run, который вернёт ошибку; 0 — без ошибок
+	failAtN  int // 1-based index of Run that returns error; 0 = no errors
 	closed   bool
 	runError error
 }
@@ -74,7 +74,7 @@ func (s *fakeSession) Run(_ context.Context, cmd string, stdin []byte) (string, 
 
 func (s *fakeSession) Close() error { s.closed = true; return nil }
 
-// dialRecorder — мок push.Dialer: возвращает заранее заданную сессию, пишет cfg.
+// dialRecorder is a mock of push.Dialer: returns a preset session, records cfg.
 type dialRecorder struct {
 	sess    *fakeSession
 	dialErr error
@@ -100,9 +100,9 @@ func (a *fakeAudit) Write(_ context.Context, e *audit.Event) error {
 	return nil
 }
 
-// fakeInstallResolver — мок coremodbootstrap.InstallResolver: отдаёт
-// заранее заданный cloudinit.Config (или ошибку) для install-режима. Записывает
-// число вызовов: install-blueprint резолвится ОДИН раз на шаг, не per-host.
+// fakeInstallResolver is a mock of coremodbootstrap.InstallResolver: returns
+// a preset cloudinit.Config (or error) for install mode. Records call count:
+// install-blueprint resolves once per step, not per-host.
 type fakeInstallResolver struct {
 	cfg   cloudinit.Config
 	err   error
@@ -117,13 +117,13 @@ func (r *fakeInstallResolver) Resolve(_ context.Context) (cloudinit.Config, erro
 	return r.cfg, nil
 }
 
-// testCAPem — минимальный PEM-маркер, удовлетворяющий soulinstall.Blueprint.Validate
-// (проверяет наличие подстроки "BEGIN CERTIFICATE", не парсит cert). Содержимое
-// неважно: install-шаги мокаются, реального TLS-handshake нет.
+// testCAPem is a minimal PEM marker satisfying soulinstall.Blueprint.Validate
+// (checks for "BEGIN CERTIFICATE" substring, does not parse cert). Content is arbitrary:
+// install steps are mocked, no real TLS handshake occurs.
 const testCAPem = "-----BEGIN CERTIFICATE-----\nMIIBfake\n-----END CERTIFICATE-----\n"
 
-// validInstallConfig — cloudinit.Config, проходящий blueprint-валидацию
-// (host:port endpoint, PEM-CA, https-URL). База для install-guard-тестов.
+// validInstallConfig returns a cloudinit.Config passing blueprint validation
+// (host:port endpoint, PEM-CA, https-URL). Base for install-guard tests.
 func validInstallConfig() cloudinit.Config {
 	return cloudinit.Config{
 		BootstrapEndpoint: "keeper.example.com:8443",
@@ -133,9 +133,9 @@ func validInstallConfig() cloudinit.Config {
 	}
 }
 
-// testPrivateKeyPEM — фиксированный ed25519 private key (OpenSSH PEM) для
-// static-режима SignReply в тестах. Сгенерирован разово ssh-keygen; не
-// используется ни для чего, кроме как удовлетворить ssh.ParsePrivateKey.
+// testPrivateKeyPEM is a fixed ed25519 private key (OpenSSH PEM) for
+// static-mode SignReply in tests. Generated once with ssh-keygen; used only
+// to satisfy ssh.ParsePrivateKey.
 const testPrivateKeyPEM = `-----BEGIN OPENSSH PRIVATE KEY-----
 b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
 QyNTUxOQAAACDMq91FxvZmBhL9iPmqOXxepRSXvF5305Sqw6X3hyfvbgAAAJh3XT4wd10+
@@ -145,9 +145,9 @@ FJe8XnfTlKrDpfeHJ+9uAAAAD3Jvb3RAc291bC1zdGFjawECAwQFBg==
 -----END OPENSSH PRIVATE KEY-----
 `
 
-// caAuthorities — непустой host-CA-набор для verify (конкретное значение
-// неважно: Dial мокается, реальная проверка host-cert не выполняется; важна
-// лишь непустота набора — gate fail-closed).
+// caAuthorities returns a non-empty host-CA set for verify (concrete value is arbitrary:
+// Dial is mocked, real host-cert verification does not occur; only non-emptiness
+// matters for the fail-closed gate).
 func caAuthorities(t *testing.T) []push.NamedHostKeyAuthority {
 	t.Helper()
 	signer, _, err := push.NewEphemeralEd25519()
@@ -166,7 +166,7 @@ func mustStruct(t *testing.T, m map[string]any) *structpb.Struct {
 	return s
 }
 
-// hostEntry — один элемент списка hosts в форме register.<provision>.hosts.
+// hostEntry is one element of the hosts list in register.<provision>.hosts form.
 func hostEntry(sid, ip, token string) map[string]any {
 	return map[string]any{
 		"sid":             sid,
@@ -175,12 +175,12 @@ func hostEntry(sid, ip, token string) map[string]any {
 	}
 }
 
-// hostsParam — один хост в форме register.<provision>.hosts.
+// hostsParam returns one host in register.<provision>.hosts form.
 func hostsParam(sid, ip, token string) []any {
 	return []any{hostEntry(sid, ip, token)}
 }
 
-// newModule собирает Module с одним провайдером "ssh-static" и мок-Dialer.
+// newModule builds a Module with one "ssh-static" provider and a mock Dialer.
 func newModule(t *testing.T, prov coremodbootstrap.SshProviderHost, dialer push.Dialer, a coremodbootstrap.AuditWriter) *coremodbootstrap.Module {
 	t.Helper()
 	return &coremodbootstrap.Module{
@@ -227,7 +227,7 @@ func TestApply_AuthorizeDeny_FailClosed(t *testing.T) {
 	if last == nil || !last.GetFailed() {
 		t.Fatalf("expected failed event on Authorize deny, got %+v", last)
 	}
-	// fail-closed: deny прерывает ДО Sign и ДО Dial.
+	// Fail-closed: deny stops before Sign and before Dial.
 	if len(prov.signCalls) != 0 {
 		t.Errorf("Sign called %d times despite Authorize deny — must be 0", len(prov.signCalls))
 	}
@@ -251,7 +251,7 @@ func TestApply_Success_TokenInStdinNotArgv(t *testing.T) {
 	if err := m.Apply(deliverReq(t, map[string]any{
 		"ssh_provider": "ssh-static",
 		"hosts":        hostsParam("vm1.example.com", "10.0.0.1", token),
-		// start_soul по умолчанию true — не задаём, проверим started=true ниже.
+		// start_soul defaults to true — not set, verify started=true below.
 	}), stream); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -264,33 +264,33 @@ func TestApply_Success_TokenInStdinNotArgv(t *testing.T) {
 		t.Errorf("changed must be true on delivery")
 	}
 
-	// Authorize + Sign вызваны ровно раз.
+	// Authorize + Sign called exactly once.
 	if len(prov.authCalls) != 1 {
 		t.Fatalf("Authorize calls = %d, want 1", len(prov.authCalls))
 	}
 	if len(prov.signCalls) != 1 {
 		t.Fatalf("Sign calls = %d, want 1", len(prov.signCalls))
 	}
-	// Sign получил публичный ephemeral-ключ (не пустой).
+	// Sign received a public ephemeral key (not empty).
 	if prov.signCalls[0].GetPublicKey() == "" {
 		t.Errorf("Sign got empty ephemeral public key")
 	}
 
-	// Три команды: запись токена (со stdin) + soul init + активация unit-а
-	// (start_soul default true).
+	// Three commands: write token (via stdin) + soul init + unit activation
+	// (start_soul defaults to true).
 	if len(sess.calls) != 3 {
 		t.Fatalf("Session.Run calls = %d, want 3 (write token + soul init + activate); calls=%v", len(sess.calls), cmds(sess))
 	}
 	writeCall := sess.calls[0]
-	// ★ Токен — в STDIN.
+	// Token is in STDIN.
 	if string(writeCall.stdin) != token {
 		t.Errorf("token not in stdin: got %q, want %q", writeCall.stdin, token)
 	}
-	// ★ Токен НЕ в argv (команде).
+	// Token NOT in argv (command).
 	if strings.Contains(writeCall.cmd, token) {
 		t.Errorf("SECURITY: token leaked into argv: cmd=%q", writeCall.cmd)
 	}
-	// Команда пишет в дефолтный token_path через `cat >`.
+	// Command writes to default token_path via `cat >`.
 	if !strings.Contains(writeCall.cmd, "/etc/soul/token") || !strings.Contains(writeCall.cmd, "cat >") {
 		t.Errorf("write command unexpected: %q", writeCall.cmd)
 	}
@@ -307,12 +307,12 @@ func TestApply_Success_TokenInStdinNotArgv(t *testing.T) {
 		t.Errorf("session not closed")
 	}
 
-	// Dial получил primary_ip как Host и непустой host-CA-набор.
+	// Dial received primary_ip as Host and non-empty host-CA set.
 	if dialer.lastCfg.Host != "10.0.0.1" {
 		t.Errorf("Dial Host = %q, want primary_ip 10.0.0.1", dialer.lastCfg.Host)
 	}
 	if len(dialer.lastCfg.HostAuthorities) == 0 {
-		t.Errorf("Dial HostAuthorities empty — CA-verify не передан")
+		t.Errorf("Dial HostAuthorities empty — CA-verify not passed")
 	}
 	if dialer.lastCfg.Port != 22 || dialer.lastCfg.User != "root" {
 		t.Errorf("Dial defaults wrong: port=%d user=%q (want 22/root)", dialer.lastCfg.Port, dialer.lastCfg.User)
@@ -338,12 +338,12 @@ func TestApply_Output_NoToken(t *testing.T) {
 		t.Fatalf("expected success, got %+v", last)
 	}
 
-	// ★ Output не содержит токена нигде.
+	// Output does not contain token anywhere.
 	out := last.GetOutput().AsMap()
 	if containsTokenDeep(out, token) {
 		t.Fatalf("SECURITY: token leaked into register output: %+v", out)
 	}
-	// Output несёт hosts[]={sid,delivered,started} + count.
+	// Output carries hosts[]={sid,delivered,started} + count.
 	hosts, _ := out["hosts"].([]any)
 	if len(hosts) != 1 {
 		t.Fatalf("output hosts = %v, want 1 entry", out["hosts"])
@@ -356,7 +356,7 @@ func TestApply_Output_NoToken(t *testing.T) {
 		t.Errorf("output count = %v, want 1", out["count"])
 	}
 
-	// ★ Audit-payload — без токена, только count + sids.
+	// Audit payload has no token, only count + sids.
 	if len(aud.events) != 1 {
 		t.Fatalf("audit events = %d, want 1", len(aud.events))
 	}
@@ -390,7 +390,7 @@ func TestApply_StartSoulFalse_SkipsStart(t *testing.T) {
 	if last == nil || last.GetFailed() {
 		t.Fatalf("expected success, got %+v", last)
 	}
-	// Запись токена + soul init, без systemctl (start_soul=false).
+	// Write token + soul init, no systemctl (start_soul=false).
 	if len(sess.calls) != 2 {
 		t.Fatalf("Session.Run calls = %d, want 2 (write + init); cmds=%v", len(sess.calls), cmds(sess))
 	}
@@ -432,7 +432,7 @@ func TestApply_CustomTokenPathAndUserPort(t *testing.T) {
 	if !strings.Contains(sess.calls[0].cmd, "/opt/soul/seed") {
 		t.Errorf("custom token_path not used: %q", sess.calls[0].cmd)
 	}
-	// soul init читает токен из того же custom token_path (subshell на VM).
+	// soul init reads token from custom token_path (subshell on VM).
 	if len(sess.calls) < 2 || !strings.Contains(sess.calls[1].cmd, `$(cat /opt/soul/seed)`) {
 		t.Errorf("soul init must read token from custom token_path; cmds=%v", cmds(sess))
 	}
@@ -443,7 +443,7 @@ func TestApply_CustomTokenPathAndUserPort(t *testing.T) {
 
 func TestApply_HostError_FailsStep_B1Strict(t *testing.T) {
 	prov := &fakeProvider{allow: true}
-	// Запись токена (1-я команда) падает.
+	// Write token (1st command) fails.
 	sess := &fakeSession{failAtN: 1, runError: errors.New("disk full")}
 	dialer := &dialRecorder{sess: sess}
 	aud := &fakeAudit{}
@@ -460,7 +460,7 @@ func TestApply_HostError_FailsStep_B1Strict(t *testing.T) {
 	if last == nil || !last.GetFailed() {
 		t.Fatalf("expected failed event on host error (B1-strict), got %+v", last)
 	}
-	// На провале доставки audit НЕ пишется (шаг failed до audit).
+	// On delivery failure, audit is not written (step failed before audit).
 	if len(aud.events) != 0 {
 		t.Errorf("audit written despite delivery failure: %+v", aud.events)
 	}
@@ -488,7 +488,7 @@ func TestApply_NoHostCAs_Fails(t *testing.T) {
 	dialer := &dialRecorder{sess: &fakeSession{}}
 	m := &coremodbootstrap.Module{
 		Providers: map[string]coremodbootstrap.SshProviderHost{"ssh-static": prov},
-		HostCAs:   nil, // не сконфигурировано → fail-closed
+		HostCAs:   nil, // not configured → fail-closed
 		Dial:      dialer.dial,
 	}
 	stream := internaltest.NewApplyStream()
@@ -521,7 +521,7 @@ func TestApply_EmptyHosts_Fails(t *testing.T) {
 
 func TestValidate(t *testing.T) {
 	m := &coremodbootstrap.Module{}
-	// Корректный.
+	// Valid.
 	rep, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
 		State: coremodbootstrap.StateDelivered,
 		Params: mustStruct(t, map[string]any{
@@ -532,7 +532,7 @@ func TestValidate(t *testing.T) {
 	if !rep.Ok {
 		t.Errorf("valid params rejected: %v", rep.Errors)
 	}
-	// Без ssh_provider и hosts.
+	// Without ssh_provider and hosts.
 	rep, _ = m.Validate(context.Background(), &pluginv1.ValidateRequest{
 		State:  coremodbootstrap.StateDelivered,
 		Params: mustStruct(t, map[string]any{}),
@@ -540,7 +540,7 @@ func TestValidate(t *testing.T) {
 	if rep.Ok {
 		t.Errorf("missing ssh_provider/hosts accepted")
 	}
-	// Неверный state.
+	// Invalid state.
 	rep, _ = m.Validate(context.Background(), &pluginv1.ValidateRequest{
 		State:  "created",
 		Params: mustStruct(t, map[string]any{}),
@@ -548,7 +548,7 @@ func TestValidate(t *testing.T) {
 	if rep.Ok {
 		t.Errorf("wrong state accepted")
 	}
-	// ssh_port вне диапазона.
+	// ssh_port out of range.
 	rep, _ = m.Validate(context.Background(), &pluginv1.ValidateRequest{
 		State: coremodbootstrap.StateDelivered,
 		Params: mustStruct(t, map[string]any{
@@ -560,7 +560,7 @@ func TestValidate(t *testing.T) {
 	if rep.Ok {
 		t.Errorf("ssh_port=70000 accepted")
 	}
-	// join_wait_timeout < 0 — отвергается (потолок ожидания не может быть отрицательным).
+	// join_wait_timeout < 0 is rejected (wait ceiling cannot be negative).
 	rep, _ = m.Validate(context.Background(), &pluginv1.ValidateRequest{
 		State: coremodbootstrap.StateDelivered,
 		Params: mustStruct(t, map[string]any{
@@ -572,7 +572,7 @@ func TestValidate(t *testing.T) {
 	if rep.Ok {
 		t.Errorf("join_wait_timeout=-1 accepted")
 	}
-	// join_wait_timeout == 0 — принимается (немедленный deadline: одна попытка без ожидания).
+	// join_wait_timeout == 0 is accepted (immediate deadline: one attempt without waiting).
 	rep, _ = m.Validate(context.Background(), &pluginv1.ValidateRequest{
 		State: coremodbootstrap.StateDelivered,
 		Params: mustStruct(t, map[string]any{
@@ -584,8 +584,8 @@ func TestValidate(t *testing.T) {
 	if !rep.Ok {
 		t.Errorf("join_wait_timeout=0 rejected: %v", rep.Errors)
 	}
-	// ★ install=true в direct-режиме (m.Transport=="") — отвергается: setch ставит
-	// cloud-init, install не нужен (ADR-063 amendment, MVP только teleport).
+	// install=true in direct mode (m.Transport=="") is rejected: setch sets
+	// cloud-init, install not needed (ADR-063 amendment, MVP teleport only).
 	rep, _ = m.Validate(context.Background(), &pluginv1.ValidateRequest{
 		State: coremodbootstrap.StateDelivered,
 		Params: mustStruct(t, map[string]any{
@@ -597,7 +597,7 @@ func TestValidate(t *testing.T) {
 	if rep.Ok {
 		t.Errorf("install=true accepted in direct transport")
 	}
-	// install=false в direct — принимается (token-only, backward-compat).
+	// install=false in direct is accepted (token-only, backward-compat).
 	rep, _ = m.Validate(context.Background(), &pluginv1.ValidateRequest{
 		State: coremodbootstrap.StateDelivered,
 		Params: mustStruct(t, map[string]any{
@@ -609,7 +609,7 @@ func TestValidate(t *testing.T) {
 	if !rep.Ok {
 		t.Errorf("install=false rejected in direct: %v", rep.Errors)
 	}
-	// ★ install=true в teleport-режиме — принимается.
+	// install=true in teleport mode is accepted.
 	tm := &coremodbootstrap.Module{Transport: coremodbootstrap.TransportTeleport}
 	rep, _ = tm.Validate(context.Background(), &pluginv1.ValidateRequest{
 		State: coremodbootstrap.StateDelivered,
@@ -626,8 +626,8 @@ func TestValidate(t *testing.T) {
 
 // --- teleport-transport guard tests (ADR-063 amendment) ---
 
-// newTeleportModule собирает Module в teleport-режиме: пустые Providers/HostCAs
-// (в teleport не используются), только Dial.
+// newTeleportModule builds a Module in teleport mode: empty Providers/HostCAs
+// (not used in teleport), Dial only.
 func newTeleportModule(dialer push.Dialer, a coremodbootstrap.AuditWriter) *coremodbootstrap.Module {
 	return &coremodbootstrap.Module{
 		Transport: coremodbootstrap.TransportTeleport,
@@ -636,15 +636,15 @@ func newTeleportModule(dialer push.Dialer, a coremodbootstrap.AuditWriter) *core
 	}
 }
 
-// TestApply_Teleport_DialsBySID — guard #1 (sid-адресация): в teleport-режиме
-// DialConfig.Host == h.sid (node-name), НЕ primary_ip; Authorize/Sign не зовутся.
+// TestApply_Teleport_DialsBySID is guard #1 (SID addressing): in teleport mode
+// DialConfig.Host == h.sid (node-name), not primary_ip; Authorize/Sign not called.
 func TestApply_Teleport_DialsBySID(t *testing.T) {
 	prov := &fakeProvider{allow: true}
 	sess := &fakeSession{}
 	dialer := &dialRecorder{sess: sess}
 	m := newTeleportModule(dialer.dial, &fakeAudit{})
-	// Provider всё равно объявлен (Validate требует ssh_provider в params), но
-	// в teleport-режиме он не должен дёргаться.
+	// Provider still declared (Validate requires ssh_provider in params), but
+	// in teleport mode it must not be called.
 	m.Providers = map[string]coremodbootstrap.SshProviderHost{"ssh-static": prov}
 
 	stream := internaltest.NewApplyStream()
@@ -658,11 +658,11 @@ func TestApply_Teleport_DialsBySID(t *testing.T) {
 	if last := stream.Last(); last == nil || last.GetFailed() {
 		t.Fatalf("expected success, got %+v", last)
 	}
-	// ★ target = SID, НЕ primary_ip.
+	// Target is SID, not primary_ip.
 	if dialer.lastCfg.Host != "vm1.example.com" {
 		t.Errorf("teleport Dial Host = %q, want SID vm1.example.com (NOT primary_ip)", dialer.lastCfg.Host)
 	}
-	// ★ В teleport-режиме DialConfig не несёт Auth/HostAuthorities/ProxyJump.
+	// In teleport mode, DialConfig has no Auth/HostAuthorities/ProxyJump.
 	if dialer.lastCfg.Auth != nil {
 		t.Errorf("teleport DialConfig.Auth must be nil, got %v", dialer.lastCfg.Auth)
 	}
@@ -672,20 +672,20 @@ func TestApply_Teleport_DialsBySID(t *testing.T) {
 	if dialer.lastCfg.ProxyJump != "" {
 		t.Errorf("teleport DialConfig.ProxyJump must be empty, got %q", dialer.lastCfg.ProxyJump)
 	}
-	// ★ Authorize/Sign НЕ вызывались.
+	// Authorize/Sign not called.
 	if len(prov.authCalls) != 0 || len(prov.signCalls) != 0 {
 		t.Errorf("teleport must not call Authorize/Sign: authorize=%d sign=%d", len(prov.authCalls), len(prov.signCalls))
 	}
 }
 
-// TestApply_Direct_DialsByIPAndAuthorizes — guard #2 (transport-selection,
-// direct-half): direct-режим адресует по primary_ip, зовёт Authorize/Sign и
-// передаёт host-CA. (teleport-half покрыт TestApply_Teleport_DialsBySID.)
+// TestApply_Direct_DialsByIPAndAuthorizes is guard #2 (transport-selection,
+// direct-half): direct mode addresses by primary_ip, calls Authorize/Sign and
+// passes host-CA. (teleport-half covered by TestApply_Teleport_DialsBySID.)
 func TestApply_Direct_DialsByIPAndAuthorizes(t *testing.T) {
 	prov := &fakeProvider{allow: true}
 	sess := &fakeSession{}
 	dialer := &dialRecorder{sess: sess}
-	// Дефолт Transport ("") => direct.
+	// Default Transport ("") => direct.
 	m := newModule(t, prov, dialer.dial, &fakeAudit{})
 
 	stream := internaltest.NewApplyStream()
@@ -710,15 +710,15 @@ func TestApply_Direct_DialsByIPAndAuthorizes(t *testing.T) {
 	}
 }
 
-// TestApply_Teleport_RetriesUntilJoin — guard #3 (retry-до-join): первые N
-// Dial-ов падают (VM ещё не в Teleport), затем успех — шаг НЕ валится на 1й
-// ошибке, доходит до success.
+// TestApply_Teleport_RetriesUntilJoin is guard #3 (retry-until-join): first N
+// Dials fail (VM not yet in Teleport), then success — step does not fail on 1st
+// error, reaches success.
 func TestApply_Teleport_RetriesUntilJoin(t *testing.T) {
 	sess := &fakeSession{}
 	dialer := &flakyDialer{sess: sess, failFirst: 3, err: errors.New("node offline or does not exist")}
 	m := newTeleportModule(dialer.dial, &fakeAudit{})
-	// Короткий backoff, чтобы 3 ретрая не спали реальные ~12с (поле существует
-	// ровно ради этого, см. Module.RetryBase).
+	// Short backoff so 3 retries don't sleep ~12s (field exists for this,
+	// see Module.RetryBase).
 	m.RetryBase = 1 * time.Millisecond
 	m.RetryJitter = 1 * time.Millisecond
 
@@ -735,24 +735,24 @@ func TestApply_Teleport_RetriesUntilJoin(t *testing.T) {
 	if last == nil || last.GetFailed() {
 		t.Fatalf("expected success after retries, got %+v", last)
 	}
-	// ★ Шаг НЕ упал на 1й ошибке — было >=4 попытки (3 fail + успех).
+	// Step did not fail on 1st error — >=4 attempts (3 fail + success).
 	if dialer.calls < 4 {
 		t.Errorf("expected >=4 Dial attempts (3 fail + success), got %d", dialer.calls)
 	}
 }
 
-// TestApply_Teleport_FailsAfterDeadline — guard #3 (deadline-half): если VM так
-// и не появилась в Teleport до join_wait_timeout — шаг failed (B1-strict,
-// error_locked), не висит вечно.
+// TestApply_Teleport_FailsAfterDeadline is guard #3 (deadline-half): if VM never
+// appears in Teleport before join_wait_timeout — step fails (B1-strict,
+// error_locked), not hanging forever.
 func TestApply_Teleport_FailsAfterDeadline(t *testing.T) {
 	sess := &fakeSession{}
-	// Всегда падает.
+	// Always fails.
 	dialer := &flakyDialer{sess: sess, failFirst: 1 << 30, err: errors.New("node offline or does not exist")}
 	m := newTeleportModule(dialer.dial, &fakeAudit{})
 
 	stream := internaltest.NewApplyStream()
-	// join_wait_timeout=0 → дедлайн сразу: первая попытка падает, второй
-	// интервал не помещается в бюджет → failed без долгого ожидания.
+	// join_wait_timeout=0 → deadline immediate: first attempt fails, second
+	// interval doesn't fit budget → failed without long wait.
 	if err := m.Apply(deliverReq(t, map[string]any{
 		"ssh_provider":      "ssh-static",
 		"hosts":             hostsParam("vm1.example.com", "10.0.0.1", "tok"),
@@ -767,16 +767,15 @@ func TestApply_Teleport_FailsAfterDeadline(t *testing.T) {
 	}
 }
 
-// TestApply_Teleport_CtxCancel_NoHang — guard: если прогон прерван (ctx
-// отменён) ПОСРЕДИ retry-до-join, шаг выходит быстро с ctx-ошибкой, НЕ висит до
-// join_wait_timeout. Dialer всегда fail; ctx отменяется коротким timeout-ом,
-// бюджет join_wait выставлен большим (60с) — выход обязан случиться по ctx, а не
-// по deadline.
+// TestApply_Teleport_CtxCancel_NoHang is a guard: if run is cancelled (ctx
+// canceled) DURING retry-until-join, step exits fast with ctx error, not hanging
+// until join_wait_timeout. Dialer always fails; ctx cancelled with short timeout,
+// join_wait budget is large (60s) — exit must happen by ctx, not deadline.
 func TestApply_Teleport_CtxCancel_NoHang(t *testing.T) {
 	dialer := &alwaysFailDialer{err: errors.New("node offline or does not exist")}
 	m := newTeleportModule(dialer.dial, &fakeAudit{})
-	// Мелкий backoff → несколько итераций до отмены (ловим cancel в середине, а
-	// не на самой первой попытке).
+	// Small backoff → several iterations until cancel (catch cancel mid-stream, not
+	// on first attempt).
 	m.RetryBase = 2 * time.Millisecond
 	m.RetryJitter = 1 * time.Millisecond
 
@@ -789,7 +788,7 @@ func TestApply_Teleport_CtxCancel_NoHang(t *testing.T) {
 		"ssh_provider":      "ssh-static",
 		"hosts":             hostsParam("vm1.example.com", "10.0.0.1", "tok"),
 		"start_soul":        false,
-		"join_wait_timeout": float64(60), // большой бюджет: выход обязан быть по ctx, не по deadline
+		"join_wait_timeout": float64(60), // large budget: exit must be via ctx, not deadline
 	}), stream); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -799,28 +798,27 @@ func TestApply_Teleport_CtxCancel_NoHang(t *testing.T) {
 	if last == nil || !last.GetFailed() {
 		t.Fatalf("expected failed event on ctx cancel, got %+v", last)
 	}
-	// ★ Не зависание: вышли близко к timeout-у (40мс), далеко от join_wait (60с).
+	// No hang: exited near timeout (40ms), far from join_wait (60s).
 	if elapsed > 5*time.Second {
 		t.Fatalf("ctx cancel did not short-circuit retry: elapsed=%s (join_wait was 60s)", elapsed)
 	}
-	// Ретраи реально шли (cancel поймали в середине, а не до первой попытки).
+	// Retries actually ran (caught cancel mid-stream, not before first attempt).
 	if dialer.calls < 1 {
 		t.Errorf("expected at least 1 Dial attempt before cancel, got %d", dialer.calls)
 	}
 }
 
-// TestApply_Teleport_MultiHost_PerHostDeadline — guard #5 (multi-host, B1-strict):
-// ≥2 хоста в одном deliver, transport=teleport. Один (vm1) join-ится сразу,
-// второй (vm2) всегда fail → весь шаг failed ПОСЛЕ исчерпания join_wait именно
-// второго хоста.
+// TestApply_Teleport_MultiHost_PerHostDeadline is guard #5 (multi-host, B1-strict):
+// ≥2 hosts in one deliver, transport=teleport. One (vm1) joins immediately,
+// second (vm2) always fails → whole step fails AFTER exhausting join_wait for
+// second host.
 //
-// ★ Фактическое поведение (зафиксировано КАК ЕСТЬ): дедлайн per-host
-// independent, НЕ общий бюджет. dialWithJoinRetry вычисляет
-// `deadline = time.Now().Add(joinWait)` при КАЖДОМ вызове (на каждый хост),
-// поэтому хосты обрабатываются последовательно и каждый получает свой полный
-// join_wait. Первый хост доставляется (2 Run — запись токена + soul init,
-// start_soul:false), затем шаг валится на втором. join_wait=0 → дедлайн второго
-// истекает сразу (одна fail-попытка), тест не платит реальные минуты.
+// Actual behavior (fixed AS-IS): deadline per-host independent, not global budget.
+// dialWithJoinRetry computes `deadline = time.Now().Add(joinWait)` on EVERY call
+// (per host), so hosts process sequentially and each gets full join_wait.
+// First host delivered (2 Runs — write token + init, start_soul:false),
+// then step fails on second. join_wait=0 → second deadline expires immediately
+// (one fail attempt), test doesn't wait real minutes.
 func TestApply_Teleport_MultiHost_PerHostDeadline(t *testing.T) {
 	const okSID, failSID = "vm1.example.com", "vm2.example.com"
 	dialer := &perHostDialer{okSID: okSID, err: errors.New("node offline or does not exist")}
@@ -835,23 +833,23 @@ func TestApply_Teleport_MultiHost_PerHostDeadline(t *testing.T) {
 			hostEntry(failSID, "10.0.0.2", "tok-2"),
 		},
 		"start_soul":        false,
-		"join_wait_timeout": float64(0), // дедлайн второго истекает сразу
+		"join_wait_timeout": float64(0), // second deadline expires immediately
 	}), stream); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
-	// ★ Весь шаг failed (B1-strict): второй хост не доехал.
+	// Whole step failed (B1-strict): second host never joined.
 	last := stream.Last()
 	if last == nil || !last.GetFailed() {
 		t.Fatalf("expected failed event when one of N hosts never joins, got %+v", last)
 	}
-	// failed-event указывает на провалившийся хост (vm2), не на первый.
+	// failed-event indicates failing host (vm2), not first one.
 	if det := last.GetMessage(); det != "" && !strings.Contains(det, failSID) {
 		t.Errorf("failed message does not name the failing host %q: %q", failSID, det)
 	}
 
-	// ★ Первый хост был доставлен ДО провала второго: ровно один Dial вернул
-	// сессию (okSID), на ней прошли запись токена + soul init (start_soul:false).
+	// First host was delivered BEFORE second failed: exactly one Dial returned
+	// session (okSID), ran token write + init on it (start_soul:false).
 	okSess, ok := dialer.byHost[okSID]
 	if !ok || okSess == nil {
 		t.Fatalf("first host %q was never dialed successfully (per-host independent deadline expected)", okSID)
@@ -866,7 +864,7 @@ func TestApply_Teleport_MultiHost_PerHostDeadline(t *testing.T) {
 		t.Errorf("first host session not closed")
 	}
 
-	// На провале шага audit НЕ пишется (B1-strict: failed до audit-секции).
+	// On step failure, audit not written (B1-strict: failed before audit).
 	if len(aud.events) != 0 {
 		t.Errorf("audit written despite step failure: %+v", aud.events)
 	}
@@ -874,7 +872,7 @@ func TestApply_Teleport_MultiHost_PerHostDeadline(t *testing.T) {
 
 // --- install-mode guard tests (ADR-063 amendment «full-install over SSH») ---
 
-// newTeleportInstallModule — teleport-режим + install-резолвер (full-install).
+// newTeleportInstallModule builds a teleport-mode Module with install-resolver (full-install).
 func newTeleportInstallModule(dialer push.Dialer, inst coremodbootstrap.InstallResolver, a coremodbootstrap.AuditWriter) *coremodbootstrap.Module {
 	return &coremodbootstrap.Module{
 		Transport: coremodbootstrap.TransportTeleport,
@@ -884,12 +882,12 @@ func newTeleportInstallModule(dialer push.Dialer, inst coremodbootstrap.InstallR
 	}
 }
 
-// TestApply_InstallOmitted_TokenOnly_BitForBit — guard (a), реверс-guard: без
-// param `install` (опущен) поведение token-only — НИ ОДНОГО install-шага,
-// install-резолвер НЕ дёргается. Ловит регресс, если install выполнился бы
-// безусловно. teleport-режим (install-режим только там), Install-резолвер задан,
-// но при отсутствии param `install` он обязан остаться нетронутым. soul init —
-// часть доставки (redeem токена), НЕ install-шаг: он идёт в обоих режимах.
+// TestApply_InstallOmitted_TokenOnly_BitForBit is guard (a), reverse-guard: without
+// `install` param (omitted), behavior is token-only — NO install steps,
+// install-resolver not called. Catches regression if install ran unconditionally.
+// Teleport mode (install-mode only there), Install-resolver set, but without
+// `install` param it must stay untouched. soul init is part of delivery
+// (redeem token), not install-step: it runs in both modes.
 func TestApply_InstallOmitted_TokenOnly_BitForBit(t *testing.T) {
 	sess := &fakeSession{}
 	dialer := &dialRecorder{sess: sess}
@@ -902,18 +900,18 @@ func TestApply_InstallOmitted_TokenOnly_BitForBit(t *testing.T) {
 		"ssh_provider": "ssh-static",
 		"hosts":        hostsParam("vm1.example.com", "10.0.0.1", token),
 		"start_soul":   false,
-		// install НЕ задан → token-only.
+		// install not set → token-only.
 	}), stream); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if last := stream.Last(); last == nil || last.GetFailed() {
 		t.Fatalf("expected success, got %+v", last)
 	}
-	// ★ install-резолвер НЕ вызван.
+	// install-resolver not called.
 	if inst.calls != 0 {
 		t.Errorf("install resolver called %d times despite install omitted — must be 0", inst.calls)
 	}
-	// ★ Два Run — запись токена + soul init (start_soul:false). Ни одного install-шага.
+	// Two Runs — write token + init (start_soul:false). No install steps.
 	if len(sess.calls) != 2 {
 		t.Fatalf("Session.Run calls = %d, want 2 (token + init, no install); cmds=%v", len(sess.calls), cmds(sess))
 	}
@@ -928,9 +926,9 @@ func TestApply_InstallOmitted_TokenOnly_BitForBit(t *testing.T) {
 	}
 }
 
-// TestApply_Install_FullSequenceBeforeToken — guard (b): install=true+teleport →
-// последовательность install-шагов (каталоги → keeper-ca.pem → soul.yml →
-// soul.service → curl-бинарь) ПЕРЕД токеном, токен ПЕРЕД `systemctl start`.
+// TestApply_Install_FullSequenceBeforeToken is guard (b): install=true+teleport →
+// sequence of install steps (directories → keeper-ca.pem → soul.yml →
+// soul.service → curl binary) BEFORE token, token BEFORE `systemctl start`.
 func TestApply_Install_FullSequenceBeforeToken(t *testing.T) {
 	sess := &fakeSession{}
 	dialer := &dialRecorder{sess: sess}
@@ -943,31 +941,31 @@ func TestApply_Install_FullSequenceBeforeToken(t *testing.T) {
 		"ssh_provider": "ssh-static",
 		"hosts":        hostsParam("vm1.example.com", "10.0.0.1", token),
 		"install":      true,
-		// start_soul по умолчанию true.
+		// start_soul defaults to true.
 	}), stream); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if last := stream.Last(); last == nil || last.GetFailed() {
 		t.Fatalf("expected success, got %+v", last)
 	}
-	// install-резолвер вызван РОВНО раз (один blueprint на шаг, не per-host).
+	// install-resolver called EXACTLY once (one blueprint per step, not per-host).
 	if inst.calls != 1 {
 		t.Errorf("install resolver calls = %d, want 1 (resolved once per step)", inst.calls)
 	}
 
-	// install (6 шагов: каталоги/CA/soul.yml/unit/curl/chmod) + токен + init + activate = 9.
+	// install (6 steps: directories/CA/soul.yml/unit/curl/chmod) + token + init + activate = 9.
 	if len(sess.calls) != 9 {
 		t.Fatalf("Session.Run calls = %d, want 9 (6 install + token + init + activate); cmds=%v", len(sess.calls), cmds(sess))
 	}
 
-	// ★ Порядок install-шагов до токена (по характерным подстрокам команд).
+	// Order of install steps before token (by characteristic substrings).
 	wantSubstr := []string{
-		"install -d",                  // каталоги
+		"install -d",                  // directories
 		"/etc/soul/tls/keeper-ca.pem", // CA
 		"/etc/soul/soul.yml",          // soul.yml
 		"soul.service",                // systemd-unit
-		"curl",                        // скачивание бинаря
-		"chmod 0755",                  // права бинаря
+		"curl",                        // download binary
+		"chmod 0755",                  // binary permissions
 	}
 	for i, want := range wantSubstr {
 		if !strings.Contains(sess.calls[i].cmd, want) {
@@ -975,7 +973,7 @@ func TestApply_Install_FullSequenceBeforeToken(t *testing.T) {
 		}
 	}
 
-	// ★ Токен — ПОСЛЕ install-шагов (индекс 6), затем soul init (7) и активация (8).
+	// Token is AFTER install steps (index 6), then init (7) and activation (8).
 	tokenCall := sess.calls[6]
 	if !strings.Contains(tokenCall.cmd, "/etc/soul/token") || !strings.Contains(tokenCall.cmd, "cat >") {
 		t.Errorf("call[6] must be token-write, got %q", tokenCall.cmd)
@@ -991,8 +989,8 @@ func TestApply_Install_FullSequenceBeforeToken(t *testing.T) {
 	}
 }
 
-// TestApply_Install_SecretsInStdinNotArgv — guard (c), argv-leak: CA-PEM (install)
-// и токен идут в Run.stdin, НЕ в cmd-argv. argv виден в `ps`/journald на самой VM.
+// TestApply_Install_SecretsInStdinNotArgv is guard (c), argv-leak: CA-PEM (install)
+// and token go to Run.stdin, NOT cmd-argv. argv visible in `ps`/journald on VM itself.
 func TestApply_Install_SecretsInStdinNotArgv(t *testing.T) {
 	sess := &fakeSession{}
 	dialer := &dialRecorder{sess: sess}
@@ -1013,7 +1011,7 @@ func TestApply_Install_SecretsInStdinNotArgv(t *testing.T) {
 		t.Fatalf("expected success, got %+v", last)
 	}
 
-	// ★ CA-PEM (testCAPem) — ровно в одном шаге через stdin, и НИ В ОДНОЙ команде.
+	// CA-PEM (testCAPem) in exactly one step via stdin, NOT in any command.
 	caInStdin := false
 	for _, c := range sess.calls {
 		if strings.Contains(c.cmd, testCAPem) {
@@ -1027,24 +1025,24 @@ func TestApply_Install_SecretsInStdinNotArgv(t *testing.T) {
 		t.Errorf("CA-PEM never delivered via stdin")
 	}
 
-	// ★ Токен — в stdin token-шага, НЕ в argv ни одной команды (включая soul init:
-	// тот несёт литеральную $(cat …), раскрываемую только на VM).
+	// Token in stdin of token step, NOT in argv of any command (including init:
+	// it carries literal $(cat …), expanded only on VM).
 	for _, c := range sess.calls {
 		if strings.Contains(c.cmd, token) {
 			t.Fatalf("SECURITY: token leaked into argv: cmd=%q", c.cmd)
 		}
 	}
-	tokenCall := sess.calls[len(sess.calls)-2] // start_soul:false → токен, затем init
+	tokenCall := sess.calls[len(sess.calls)-2] // start_soul:false → token, then init
 	if string(tokenCall.stdin) != token {
 		t.Errorf("token not in stdin of token step: got %q", tokenCall.stdin)
 	}
 }
 
-// TestApply_Install_StepError_FailsStep_B1Strict — guard (d): ненулевой exit
-// install-шага → deliverHost fail (B1-strict). Токен НЕ записывается (полу-
-// настроенная VM не онбордится), audit НЕ пишется.
+// TestApply_Install_StepError_FailsStep_B1Strict is guard (d): non-zero exit of
+// install step → deliverHost fail (B1-strict). Token NOT written (half-configured
+// VM not onboarded), audit NOT written.
 func TestApply_Install_StepError_FailsStep_B1Strict(t *testing.T) {
-	// 2-й Run (запись keeper-ca.pem) падает.
+	// 2nd Run (write keeper-ca.pem) fails.
 	sess := &fakeSession{failAtN: 2, runError: errors.New("permission denied")}
 	dialer := &dialRecorder{sess: sess}
 	inst := &fakeInstallResolver{cfg: validInstallConfig()}
@@ -1065,25 +1063,25 @@ func TestApply_Install_StepError_FailsStep_B1Strict(t *testing.T) {
 	if last == nil || !last.GetFailed() {
 		t.Fatalf("expected failed event on install step error (B1-strict), got %+v", last)
 	}
-	// ★ Токен НЕ записан: до token-шага не дошли (упали на install-шаге 2),
-	// и ни в одном выполненном Run токен не фигурирует (ни stdin, ни argv).
+	// Token NOT written: didn't reach token step (failed on install step 2),
+	// token not in any executed Run (stdin or argv).
 	for _, c := range sess.calls {
 		if string(c.stdin) == token || strings.Contains(c.cmd, token) {
 			t.Fatalf("token written despite install failure: cmd=%q stdin=%q", c.cmd, c.stdin)
 		}
 	}
-	// На провале install-шага audit НЕ пишется (B1-strict: failed до audit-секции).
+	// On install step failure, audit not written (B1-strict: failed before audit).
 	if len(aud.events) != 0 {
 		t.Errorf("audit written despite install failure: %+v", aud.events)
 	}
 }
 
-// TestApply_SoulInit_SeedGuardAndUnitActivation — guard 5-й стены + бонус-дыры
-// (ADR-063 amendment): доставленный токен без redeem — мёртвый груз (soul-side
-// «подхвата» /etc/soul/token нет, seed создаёт ТОЛЬКО `soul init`), поэтому после
-// token-write обязан идти init-шаг; активация unit-а — daemon-reload + enable +
-// start (parity cloud-init.tmpl: без enable после ребута VM soul.service не
-// поднимется, без daemon-reload systemd не видит свежезаписанный unit).
+// TestApply_SoulInit_SeedGuardAndUnitActivation is guard of 5th wall + bonus holes
+// (ADR-063 amendment): delivered token without redeem is dead weight (soul-side
+// has no /etc/soul/token hook, seed created only by `soul init`), so init-step
+// must follow token-write; unit activation — daemon-reload + enable + start
+// (parity cloud-init.tmpl: without enable, VM reboot loses soul.service, without
+// daemon-reload systemd doesn't see fresh unit).
 func TestApply_SoulInit_SeedGuardAndUnitActivation(t *testing.T) {
 	prov := &fakeProvider{allow: true}
 	sess := &fakeSession{}
@@ -1095,7 +1093,7 @@ func TestApply_SoulInit_SeedGuardAndUnitActivation(t *testing.T) {
 	if err := m.Apply(deliverReq(t, map[string]any{
 		"ssh_provider": "ssh-static",
 		"hosts":        hostsParam("vm1.example.com", "10.0.0.1", token),
-		// start_soul default true.
+		// start_soul defaults to true.
 	}), stream); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -1107,14 +1105,14 @@ func TestApply_SoulInit_SeedGuardAndUnitActivation(t *testing.T) {
 	}
 
 	initCall := sess.calls[1]
-	// ★ Идемпотентность: guard по seed-cert — токен single-use, повторный init
-	// после успешного redeem завалил бы хост при retry шага.
+	// Idempotency: guard by seed-cert — token is single-use, repeated init
+	// after successful redeem would fail host on step retry.
 	if !strings.HasPrefix(initCall.cmd, "test -e "+soulinstall.SeedCertPath+" || ") {
 		t.Errorf("init cmd must be guarded by seed-cert existence check: %q", initCall.cmd)
 	}
-	// ★ Secret-floor: команда несёт ЛИТЕРАЛЬНУЮ нераскрытую $(cat token_path) —
-	// раскрывается subshell-ом на VM, токен НЕ в argv keeper-а (симметрия
-	// cloud-init.tmpl self-onboard-фазы). STDIN пуст.
+	// Secret floor: command carries LITERAL unexpanded $(cat token_path) —
+	// expanded by subshell on VM, token NOT in keeper argv (symmetry with
+	// cloud-init.tmpl self-onboard phase). STDIN empty.
 	if !strings.Contains(initCall.cmd, `SOUL_BOOTSTRAP_TOKEN="$(cat /etc/soul/token)"`) {
 		t.Errorf("init cmd must read token via literal subshell from token_path: %q", initCall.cmd)
 	}
@@ -1128,14 +1126,14 @@ func TestApply_SoulInit_SeedGuardAndUnitActivation(t *testing.T) {
 		t.Errorf("init cmd must have empty stdin, got %q", initCall.stdin)
 	}
 
-	// ★ Активация unit-а одной цепочкой: daemon-reload → enable → start.
+	// Unit activation in one chain: daemon-reload → enable → start.
 	if sess.calls[2].cmd != "systemctl daemon-reload && systemctl enable soul && systemctl start soul" {
 		t.Errorf("activation cmd = %q, want 'systemctl daemon-reload && systemctl enable soul && systemctl start soul'", sess.calls[2].cmd)
 	}
 }
 
-// flakyDialer — мок push.Dialer: первые failFirst вызовов возвращают err, далее
-// — заданную сессию. Для retry-до-join guard-теста.
+// flakyDialer is a mock of push.Dialer: first failFirst calls return err, then
+// return the preset session. For retry-until-join guard test.
 type flakyDialer struct {
 	sess      *fakeSession
 	failFirst int
@@ -1153,8 +1151,8 @@ func (d *flakyDialer) dial(_ context.Context, cfg push.DialConfig) (push.Session
 	return d.sess, nil
 }
 
-// alwaysFailDialer — мок push.Dialer, который ВСЕГДА возвращает err и считает
-// попытки. Для ctx-cancel guard-теста (retry не должен зависнуть).
+// alwaysFailDialer is a mock of push.Dialer that ALWAYS returns err and counts
+// attempts. For ctx-cancel guard test (retry must not hang).
 type alwaysFailDialer struct {
 	err   error
 	calls int
@@ -1165,11 +1163,10 @@ func (d *alwaysFailDialer) dial(_ context.Context, _ push.DialConfig) (push.Sess
 	return nil, d.err
 }
 
-// perHostDialer — мок push.Dialer, дающий новую сессию для одного SID и всегда
-// ошибку для остальных. Для multi-host guard-теста (teleport-режим адресует по
-// SID = cfg.Host). Каждый успешный Dial — отдельная *fakeSession (token + init
-// на хост в teleport-режиме при start_soul:false), чтобы проверять доставку
-// независимо.
+// perHostDialer is a mock of push.Dialer that gives a new session for one SID
+// and always error for others. For multi-host guard test (teleport mode addresses
+// by SID = cfg.Host). Each successful Dial gets separate *fakeSession (token + init
+// on host in teleport mode with start_soul:false) to verify delivery independently.
 type perHostDialer struct {
 	okSID  string
 	err    error
@@ -1192,6 +1189,7 @@ func (d *perHostDialer) dial(_ context.Context, cfg push.DialConfig) (push.Sessi
 
 // --- helpers ---
 
+// cmds extracts commands from a session's calls.
 func cmds(s *fakeSession) []string {
 	out := make([]string, len(s.calls))
 	for i, c := range s.calls {
@@ -1200,10 +1198,10 @@ func cmds(s *fakeSession) []string {
 	return out
 }
 
-// TestDefaultJoinWaitTimeout_Is15m — guard дефолта Teleport-join: экспортированный
-// DefaultJoinWaitTimeout == 15m. Ловит регресс (был 6m — свежая cloud-VM
-// reverse-tunnel-агентом join-ится позже, шаг падал зря). Значение — часть
-// наблюдаемого контракта: на него завязан инвариант provision-run-timeout
+// TestDefaultJoinWaitTimeout_Is15m is a guard of Teleport-join default:
+// exported DefaultJoinWaitTimeout == 15m. Catches regression (was 6m — fresh
+// cloud-VM joins later via reverse-tunnel agent, step failed needlessly). Value
+// is part of observable contract: provision-run-timeout invariant relies on it
 // (keeper/internal/scenario TestProvisionTimeoutExceedsJoinWait).
 func TestDefaultJoinWaitTimeout_Is15m(t *testing.T) {
 	if coremodbootstrap.DefaultJoinWaitTimeout != 15*time.Minute {
@@ -1211,10 +1209,10 @@ func TestDefaultJoinWaitTimeout_Is15m(t *testing.T) {
 	}
 }
 
-// TestValidate_JoinWaitTimeout_Forms — guard формата param `join_wait_timeout`:
-// принимается duration-строка (convention `duration`, симметрия с await_timeout —
-// так его задаёт essence.provision_join_wait_timeout) И число секунд (back-compat
-// ADR-063). Отрицательное / невалидная строка — отвергаются.
+// TestValidate_JoinWaitTimeout_Forms is a guard of `join_wait_timeout` param format:
+// accepts duration-string (convention `duration`, symmetry with await_timeout —
+// essence.provision_join_wait_timeout uses it) AND seconds number (back-compat
+// ADR-063). Negative/invalid string rejected.
 func TestValidate_JoinWaitTimeout_Forms(t *testing.T) {
 	m := &coremodbootstrap.Module{}
 	tests := []struct {
@@ -1222,14 +1220,14 @@ func TestValidate_JoinWaitTimeout_Forms(t *testing.T) {
 		val  any
 		ok   bool
 	}{
-		{"duration-строка 15m", "15m", true},
-		{"duration-строка 90s", "90s", true},
-		{"duration-строка 1d", "1d", true},
-		{"число секунд 60 (back-compat)", float64(60), true},
-		{"число 0 (немедленный deadline)", float64(0), true},
-		{"невалидная строка", "nonsense", false},
-		{"отрицательная строка", "-5m", false},
-		{"отрицательное число", float64(-1), false},
+		{"duration-string 15m", "15m", true},
+		{"duration-string 90s", "90s", true},
+		{"duration-string 1d", "1d", true},
+		{"seconds number 60 (back-compat)", float64(60), true},
+		{"number 0 (immediate deadline)", float64(0), true},
+		{"invalid string", "nonsense", false},
+		{"negative string", "-5m", false},
+		{"negative number", float64(-1), false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1248,11 +1246,11 @@ func TestValidate_JoinWaitTimeout_Forms(t *testing.T) {
 	}
 }
 
-// TestApply_Teleport_JoinWaitDurationString — guard: duration-строка (форма
-// essence.provision_join_wait_timeout) реально доходит до retry-цикла как бюджет
-// ожидания, а не хардкод. "60s"-строкой + flakyDialer(3 fail) → шаг доживает до
-// success (бюджет положительный, ретраи укладываются). Контрпример с крошечным
-// бюджетом ("1ms") в TestApply_Teleport_JoinWaitTiny.
+// TestApply_Teleport_JoinWaitDurationString is a guard: duration-string (form of
+// essence.provision_join_wait_timeout) really reaches retry-loop as wait budget,
+// not hardcoded. "60s"-string + flakyDialer(3 fail) → step reaches success
+// (budget positive, retries fit). Counterexample with tiny budget ("1ms") in
+// TestApply_Teleport_JoinWaitTiny.
 func TestApply_Teleport_JoinWaitDurationString(t *testing.T) {
 	dialer := &flakyDialer{sess: &fakeSession{}, failFirst: 3, err: errors.New("node offline or does not exist")}
 	m := newTeleportModule(dialer.dial, &fakeAudit{})
@@ -1264,7 +1262,7 @@ func TestApply_Teleport_JoinWaitDurationString(t *testing.T) {
 		"ssh_provider":      "ssh-static",
 		"hosts":             hostsParam("vm1.example.com", "10.0.0.1", "tok"),
 		"start_soul":        false,
-		"join_wait_timeout": "60s", // ★ duration-строка, не число
+		"join_wait_timeout": "60s", // duration-string, not number
 	}), stream); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -1276,10 +1274,10 @@ func TestApply_Teleport_JoinWaitDurationString(t *testing.T) {
 	}
 }
 
-// TestApply_Teleport_JoinWaitTiny — контрпример к предыдущему: крошечный бюджет
-// duration-строкой ("1ms") исчерпывается на первой же попытке → failed. Вместе
-// с TestApply_Teleport_JoinWaitDurationString доказывает, что ИМЕННО значение из
-// param управляет deadline (а не игнорируется в пользу хардкод-дефолта).
+// TestApply_Teleport_JoinWaitTiny: counterexample to prior test. Tiny budget via
+// duration-string ("1ms") exhausts on first attempt → failed. Together with
+// TestApply_Teleport_JoinWaitDurationString proves that param value controls deadline
+// (not ignored in favor of hardcoded default).
 func TestApply_Teleport_JoinWaitTiny(t *testing.T) {
 	dialer := &flakyDialer{sess: &fakeSession{}, failFirst: 1 << 30, err: errors.New("node offline or does not exist")}
 	m := newTeleportModule(dialer.dial, &fakeAudit{})
@@ -1298,8 +1296,8 @@ func TestApply_Teleport_JoinWaitTiny(t *testing.T) {
 	}
 }
 
-// containsTokenDeep рекурсивно ищет подстроку token в любом строковом значении
-// структуры (output / audit payload) — страховка от утечки секрета.
+// containsTokenDeep recursively searches for token substring in any string value
+// within a structure (output/audit payload) — safeguard against secret leak.
 func containsTokenDeep(v any, token string) bool {
 	switch t := v.(type) {
 	case string:

@@ -32,9 +32,9 @@ func (f *fakeVault) ReadKV(_ context.Context, path string) (map[string]any, erro
 	return f.resp, f.err
 }
 
-// WriteKV — kv-read его не вызывает (read-state), но Module.Vault теперь требует
-// полный VaultWriter (общий с kv-present). Заглушка фиксирует факт вызова, чтобы
-// read-тесты ловили регресс, если read-ветка случайно начнёт писать.
+// WriteKV is not called by kv-read (read-state), but Module.Vault now requires
+// full VaultWriter (shared with kv-present). Stub captures call fact so
+// read-tests catch regression if read-branch accidentally starts writing.
 func (f *fakeVault) WriteKV(_ context.Context, path string, data map[string]any) error {
 	f.wrote = append(f.wrote, writeCall{path: path, data: data})
 	return nil
@@ -62,16 +62,16 @@ func mustStruct(t *testing.T, m map[string]any) *structpb.Struct {
 	return s
 }
 
-// flatSecret — то, что реально отдаёт vault.Client.ReadKV: плоский payload
-// (поля секрета), без обёртки `{data,metadata}`. Версия KV резолвится внутри
-// Client прозрачно (ADR-017(b) amendment 2026-06-22), модуль её не видит.
+// flatSecret is what vault.Client.ReadKV actually returns: flat payload
+// (secret fields), without `{data,metadata}` wrapper. KV version resolved
+// transparently inside Client (ADR-017(b) amendment 2026-06-22), module doesn't see it.
 func flatSecret(data map[string]any) map[string]any {
 	return data
 }
 
-// TestValidate_UnknownState — неизвестный state маршрутизируется в default-ветку
-// диспетчера и даёт ровно одну ошибку (паттерн cloud/choir: state проверяется
-// первым, до параметров конкретного state).
+// TestValidate_UnknownState checks unknown state routed to dispatcher default-branch
+// and yields exactly one error (pattern in cloud/choir: state checked
+// first, before specific state's parameters).
 func TestValidate_UnknownState(t *testing.T) {
 	m := coremodvault.New(&fakeVault{}, &fakeAudit{})
 	rep, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
@@ -83,8 +83,8 @@ func TestValidate_UnknownState(t *testing.T) {
 	}
 }
 
-// TestValidate_ReadRequiresPath — на валидном kv-read state отсутствие
-// обязательного `path` даёт ошибку.
+// TestValidate_ReadRequiresPath checks that on valid kv-read state,
+// absence of required `path` yields error.
 func TestValidate_ReadRequiresPath(t *testing.T) {
 	m := coremodvault.New(&fakeVault{}, &fakeAudit{})
 	rep, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
@@ -140,7 +140,7 @@ func TestApply_ReadKVv2_AllFields(t *testing.T) {
 	if got.EventType != audit.EventVaultKVRead || got.Source != audit.SourceKeeperInternal {
 		t.Errorf("audit event = %+v", got)
 	}
-	// Сами секреты в audit-payload не должны попасть.
+	// Secrets themselves must not appear in audit-payload.
 	if _, has := got.Payload["password"]; has {
 		t.Error("audit payload contains password — sensitive leak")
 	}
@@ -176,10 +176,10 @@ func TestApply_FieldsFilter(t *testing.T) {
 	}
 }
 
-// TestApply_FieldsFilter_MissingRequestedKey — запрошенное в `fields`, но
-// отсутствующее в секрете поле silently пропускается (не failure, не попадает в
-// output): caller хотел опциональные поля, на чтение secret уже потрачен
-// audit-event. Присутствующие из запрошенных — отдаются.
+// TestApply_FieldsFilter_MissingRequestedKey checks that field requested in `fields`
+// but absent in secret is silently skipped (no failure, doesn't appear in output):
+// caller wanted optional fields, audit-event already spent on secret read.
+// Present ones from requested are returned.
 func TestApply_FieldsFilter_MissingRequestedKey(t *testing.T) {
 	fv := &fakeVault{resp: flatSecret(map[string]any{
 		"password": "s3cret",
@@ -261,10 +261,9 @@ func TestApply_NilAudit_OK(t *testing.T) {
 }
 
 func TestApply_PlainPayload_PassedThrough(t *testing.T) {
-	// ReadKV всегда отдаёт плоский payload (v1 и v2 одинаково — версия
-	// резолвится в vault.Client). Модуль кладёт его в data как есть, без
-	// разворачивания обёртки. Прежний extractKVData-fallback убран как
-	// латентный баг (обёртки {data,metadata} в ReadKV никогда не было).
+	// ReadKV always returns flat payload (v1 and v2 same — version resolved in vault.Client).
+	// Module puts it in data as-is, without unwrapping wrapper. Previous extractKVData-fallback
+	// removed as latent bug (wrapper {data,metadata} never was in ReadKV).
 	fv := &fakeVault{resp: flatSecret(map[string]any{"k": "v"})}
 	m := coremodvault.New(fv, &fakeAudit{})
 	stream := internaltest.NewApplyStream()

@@ -1,28 +1,29 @@
-// Package cert реализует keeper-side core-модуль `core.cert.registered`
-// (cert-rotation Вар1, E1) — регистрирует СЕРВИСНЫЙ TLS-серт инкарнации в
-// реестре Warrant (keeper/internal/cert), чтобы Reaper-правило `rotate_due_certs`
-// видело срок его действия (`not_after`) и могло ротировать централизованно.
+// Package cert implements the keeper-side core module `core.cert.registered`
+// (cert-rotation Var1, E1) — registers a SERVICE TLS certificate of an
+// incarnation in the Warrant registry (keeper/internal/cert) so that the Reaper
+// rule `rotate_due_certs` can see its expiration (`not_after`) and rotate it
+// centrally.
 //
-// Состояние:
-//   - registered: декларативная форма «серт(ы) инкарнации зарегистрированы в
-//     Warrant по своему сроку действия». Без этого шага Reaper слеп к ПЕРВИЧНЫМ
-//     сертам (выданным оператором или в create-сценарии) — регистрация должна
-//     быть частью create/rotate_tls-сценария.
+// State:
+//   - registered: declarative form "certificate(s) of incarnation are registered
+//     in Warrant by their expiration". Without this step, Reaper is blind to
+//     PRIMARY certificates (issued by operator or in create-scenario) —
+//     registration must be part of create/rotate_tls scenario.
 //
-// Механика: для каждого cert из `certs[]` модуль ЧИТАЕТ PEM из Vault по
-// `vault_ref` (форма `<mount>/<path>#<field>`), парсит x509 и извлекает
-// serial_number / fingerprint / not_after ИЗ САМОГО серта (автономно — не
-// требует, чтобы сценарий доставал метаданные PKI). Затем регистрирует active-
-// строку Warrant (supersede предыдущего active той же kind + insert нового в
-// одной tx).
+// Mechanics: for each cert in `certs[]`, the module READS PEM from Vault via
+// `vault_ref` (form `<mount>/<path>#<field>`), parses x509 and extracts
+// serial_number / fingerprint / not_after FROM THE CERTIFICATE ITSELF (autonomously
+// — does not require the scenario to fetch PKI metadata). Then registers an
+// active-row in Warrant (supersede previous active of the same kind + insert new
+// in a single tx).
 //
-// ИДЕМПОТЕНТНОСТЬ: если active-строка с тем же fingerprint уже есть — no-op
-// (changed=false). Новый fingerprint (сменился серт) → supersede+insert,
+// IDEMPOTENCE: if an active-row with the same fingerprint already exists — no-op
+// (changed=false). New fingerprint (certificate changed) → supersede+insert,
 // changed=true.
 //
-// БЕЗОПАСНОСТЬ (ADR-010): в output/audit кладутся только НЕ-секретные метаданные
-// (kind + fingerprint + serial + not_after); сам PEM / приватник наружу не идут
-// (модуль читает лишь ПУБЛИЧНЫЙ серт, приватник не трогает).
+// SECURITY (ADR-010): output/audit only contains NON-secret metadata (kind +
+// fingerprint + serial + not_after); PEM itself / private key do not leave
+// (module reads only the PUBLIC certificate, does not touch the private key).
 package cert
 
 import (
@@ -44,40 +45,41 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// Name — base-имя модуля без state-суффикса (ключ Registry). Author-форма
-// адреса задачи — `core.cert.registered` (base + state, как core-модули
-// keeper-side); state `registered` приходит в pluginv1.ApplyRequest.state.
+// Name is the base name of the module without state suffix (Registry key). The
+// author form of the task address is `core.cert.registered` (base + state, like
+// keeper-side core modules); state `registered` arrives in pluginv1.ApplyRequest.state.
 const Name = "core.cert"
 
-// StateRegistered — единственное состояние модуля.
+// StateRegistered is the only state of the module.
 const StateRegistered = "registered"
 
-// VaultReader — узкая поверхность vault.Client, нужная модулю: чтение KV-пути
-// для извлечения PEM серта. Сужение упрощает unit-тест (fake без HTTP).
+// VaultReader is a narrow surface of vault.Client needed by the module: reading
+// KV paths to extract PEM certificates. Narrowing simplifies unit testing
+// (fake without HTTP).
 type VaultReader interface {
 	ReadKV(ctx context.Context, path string) (map[string]any, error)
 }
 
-// Store — узкая транзакционная поверхность реестра Warrant: регистрация active-
-// строки (supersede+insert в tx) + чтение текущего active (idempotency-чек).
-// Прод — [PGStore] поверх *pgxpool.Pool.
+// Store is a narrow transactional surface of the Warrant registry: registration
+// of active-row (supersede+insert in tx) + reading current active (idempotency
+// check). Production: [PGStore] over *pgxpool.Pool.
 type Store interface {
 	SelectActive(ctx context.Context, incarnationID string, kind keepercert.Kind) (*keepercert.Warrant, error)
 	RegisterActive(ctx context.Context, w *keepercert.Warrant) error
 }
 
-// AuditWriter — узкая зависимость для audit-event-а `cert.registered`.
+// AuditWriter is a narrow dependency for the `cert.registered` audit-event.
 type AuditWriter interface {
 	Write(ctx context.Context, event *audit.Event) error
 }
 
-// Module — реализация sdk/module.SoulModule. Один модуль на base-имя `core.cert`.
+// Module implements sdk/module.SoulModule. One module per base name `core.cert`.
 type Module struct {
 	Vault VaultReader
 	Store Store
 	Audit AuditWriter
-	// KID — идентификатор Keeper-инстанса, пишется в warrant.issued_by_kid
-	// (audit «какой инстанс зарегистрировал серт»). Пустой → NULL.
+	// KID is the Keeper instance identifier, written to warrant.issued_by_kid
+	// (audit: "which instance registered the cert"). Empty → NULL.
 	KID string
 }
 
@@ -105,20 +107,21 @@ func (m *Module) Plan(_ *pluginv1.PlanRequest, _ grpc.ServerStreamingServer[plug
 	return nil
 }
 
-// certTarget — одна цель регистрации: kind + Vault-ref на PEM.
+// certTarget is one registration target: kind + Vault-ref to PEM.
 type certTarget struct {
 	kind     keepercert.Kind
 	vaultRef string
 }
 
-// parseCertTargets разбирает `params.certs` — непустой список
-// `{kind: cert|key|ca, vault_ref: <str>}`. Пустой/отсутствующий — ошибка.
+// parseCertTargets parses `params.certs` — a non-empty list of
+// `{kind: cert|key|ca, vault_ref: <str>}`. Empty/absent is an error.
 func parseCertTargets(req *pluginv1.ValidateRequest) ([]certTarget, error) {
 	return parseCertTargetsFromStruct(req.Params)
 }
 
-// parseCertTargetsFromStruct — общий разбор `certs[]` для Validate/Apply (у их
-// Request-типов разные обёртки, но одинаковое поле .Params → *structpb.Struct).
+// parseCertTargetsFromStruct is common parsing of `certs[]` for Validate/Apply
+// (their Request types have different wrappers but identical .Params field →
+// *structpb.Struct).
 func parseCertTargetsFromStruct(params *structpb.Struct) ([]certTarget, error) {
 	raw, err := util.ListParam(params, "certs")
 	if err != nil {
@@ -153,9 +156,9 @@ func parseCertTargetsFromStruct(params *structpb.Struct) ([]certTarget, error) {
 	return out, nil
 }
 
-// Apply читает PEM каждого cert из Vault, извлекает метаданные и регистрирует
-// active-строку Warrant (idempotent по fingerprint). changed=true если хотя бы
-// один серт был вписан (новый / сменившийся fingerprint).
+// Apply reads PEM of each cert from Vault, extracts metadata and registers an
+// active-row in Warrant (idempotent by fingerprint). changed=true if at least
+// one cert was written (new / changed fingerprint).
 func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
 	ctx := stream.Context()
 	if req.State != StateRegistered {
@@ -171,8 +174,8 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 		return util.SendFailed(stream, err.Error())
 	}
 
-	// Опц. pki-метаданные (для аудита происхождения серта; в предикат ротации не
-	// входят). auto_rotate default true.
+	// Optional PKI metadata (for audit of cert origin; not part of rotation
+	// predicate). auto_rotate defaults to true.
 	pkiMount, err := util.OptStringParam(req.Params, "pki_mount")
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
@@ -189,7 +192,7 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 		autoRotate = true
 	}
 
-	var registered []map[string]any // не-секретные метаданные вписанных сертов
+	var registered []map[string]any // non-secret metadata of written certs
 	anyChanged := false
 
 	for _, t := range targets {
@@ -198,13 +201,13 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 			return util.SendFailed(stream, fmt.Sprintf("cert %s (%s): %v", t.kind, t.vaultRef, rerr))
 		}
 
-		// Idempotency: active-строка с тем же fingerprint → no-op.
+		// Idempotency: active-row with the same fingerprint → no-op.
 		cur, cerr := m.Store.SelectActive(ctx, incarnation, t.kind)
 		if cerr != nil && !errors.Is(cerr, keepercert.ErrNotFound) {
 			return util.SendFailed(stream, fmt.Sprintf("cert %s: read active: %v", t.kind, cerr))
 		}
 		if cur != nil && cur.Fingerprint == meta.fingerprint {
-			continue // тот же серт уже зарегистрирован
+			continue // same cert already registered
 		}
 
 		w := &keepercert.Warrant{
@@ -246,7 +249,7 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 			CorrelationID: incarnation,
 			Payload: map[string]any{
 				"incarnation": incarnation,
-				"certs":       registered, // только не-секретные метаданные
+				"certs":       registered, // non-secret metadata only
 			},
 		}
 		if werr := m.Audit.Write(ctx, ev); werr != nil {
@@ -254,7 +257,7 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 		}
 	}
 
-	// Детерминированный output: kinds вписанных сертов (sorted), без секретов.
+	// Deterministic output: kinds of written certs (sorted), no secrets.
 	kinds := make([]string, 0, len(registered))
 	for _, r := range registered {
 		kinds = append(kinds, r["kind"].(string))
@@ -270,27 +273,27 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	return util.SendFinal(stream, anyChanged, out)
 }
 
-// parseCertTargetsApply — тот же разбор, что parseCertTargets, но для
-// ApplyRequest (у Validate/Apply-Request разные типы, оба несут .Params).
+// parseCertTargetsApply is the same parsing as parseCertTargets, but for
+// ApplyRequest (Validate/Apply-Request have different types, both carry .Params).
 func parseCertTargetsApply(req *pluginv1.ApplyRequest) ([]certTarget, error) {
 	return parseCertTargetsFromStruct(req.Params)
 }
 
-// certMeta — извлечённые из PEM метаданные серта.
+// certMeta contains metadata extracted from PEM certificate.
 type certMeta struct {
 	serial      string
 	fingerprint string
 	notAfter    time.Time
 }
 
-// readCertMeta читает PEM из Vault по ref (`<mount>/<path>#<field>`), парсит
-// первый CERTIFICATE-блок и извлекает serial/fingerprint/not_after.
+// readCertMeta reads PEM from Vault via ref (`<mount>/<path>#<field>`), parses
+// the first CERTIFICATE block and extracts serial/fingerprint/not_after.
 //
-// kind=key ТОЖЕ ссылается на ref с сертом (у приватника нет собственного
-// not_after — он живёт вместе с cert): автор кладёт в certs[key].vault_ref тот
-// же серверный cert, что и в certs[cert] (парность материала), чтобы warrant-
-// строка key несла корректный срок. Это допустимо: реестр хранит СРОК, а
-// vault_ref key указывает, что ротировать (приватник).
+// kind=key also references a ref with a certificate (a private key has no own
+// not_after — it lives together with cert): the author puts in certs[key].vault_ref
+// the same server cert as in certs[cert] (material parity) so that the warrant-row
+// for key carries the correct expiration. This is valid: the registry stores the
+// EXPIRATION, and vault_ref key indicates what to rotate (private key).
 func (m *Module) readCertMeta(ctx context.Context, ref string) (certMeta, error) {
 	path, field, err := splitVaultRef(ref)
 	if err != nil {
@@ -315,12 +318,12 @@ func (m *Module) readCertMeta(ctx context.Context, ref string) (certMeta, error)
 	}, nil
 }
 
-// splitVaultRef разбивает `<mount>/<path>#<field>` на logical-path и field.
-// logical-path идёт в ReadKV как есть (без `vault:`-префикса) — симметрия с CEL
-// `vault('secret/...#field')` (shared/cel splitVaultField): авторские refs
-// сервисных сертов — чистый logical-path, как essence tls_cert_ref
-// "secret/services/redis/tls#cert". ReadKV сам нормализует путь (relativeKVPath:
-// strip mount + fail-closed guard на `..`).
+// splitVaultRef splits `<mount>/<path>#<field>` into logical-path and field.
+// logical-path goes to ReadKV as-is (without `vault:` prefix) — symmetry with CEL
+// `vault('secret/...#field')` (shared/cel splitVaultField): author refs for service
+// certs are pure logical-path, like essence tls_cert_ref "secret/services/redis/tls#cert".
+// ReadKV normalizes the path itself (relativeKVPath: strip mount + fail-closed
+// guard on `..`).
 func splitVaultRef(ref string) (path, field string, err error) {
 	body := ref
 	if i := strings.LastIndexByte(ref, '#'); i >= 0 {
@@ -335,8 +338,9 @@ func splitVaultRef(ref string) (path, field string, err error) {
 	return body, field, nil
 }
 
-// selectPEMField извлекает string-поле секрета. Без field и ровно одного поля —
-// берёт его; иначе field обязателен (несколько полей — неоднозначно).
+// selectPEMField extracts a string field from the secret. Without field and
+// exactly one field — takes it; otherwise field is required (multiple fields —
+// ambiguous).
 func selectPEMField(data map[string]any, field string) (string, error) {
 	if field == "" {
 		if len(data) != 1 {
@@ -361,9 +365,9 @@ func selectPEMField(data map[string]any, field string) (string, error) {
 	return s, nil
 }
 
-// parseFirstCertificate находит первый CERTIFICATE-PEM-блок и парсит его в
-// x509. leaf-серт кладётся первым в PEM-цепочке — берём его (его not_after —
-// срок, по которому ротируем).
+// parseFirstCertificate finds the first CERTIFICATE PEM block and parses it
+// into x509. The leaf cert is placed first in the PEM chain — we take it
+// (its not_after is the expiration we use for rotation).
 func parseFirstCertificate(pemBytes []byte) (*x509.Certificate, error) {
 	rest := pemBytes
 	for {

@@ -15,11 +15,11 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// presentVault — fake Vault для kv-present: хранит per-path payload в памяти,
-// ReadKV отдаёт сохранённое (или ErrVaultKVNotFound для несуществующего пути),
-// WriteKV мерджит. Так тест видит реально записанные значения и проверяет их
-// длину/алфавит. readErr/writeErr инъецируют транспортную ошибку (Vault
-// недоступен/нет прав) для негативных кейсов; writes считает фактические WriteKV.
+// presentVault is a fake Vault for kv-present: stores per-path payload in memory.
+// ReadKV returns stored value (or ErrVaultKVNotFound for missing path),
+// WriteKV merges. Test sees actual written values and checks their
+// length/alphabet. readErr/writeErr inject transport errors (Vault
+// unavailable/no permissions) for negative cases; writes counts actual WriteKV calls.
 type presentVault struct {
 	store    map[string]map[string]any
 	readErr  error
@@ -72,9 +72,9 @@ func presentParams(t *testing.T, m map[string]any) *structpb.Struct {
 	return mustStruct(t, m)
 }
 
-// TestPresent_AbsentPath_Generates — путь отсутствует → генерится, changed=true,
-// в Vault лежит значение дефолтной длины (32) и ТОЛЬКО из ascii-printable-safe
-// алфавита (дефолт). Значение в output/audit не светится (см. отдельный guard).
+// TestPresent_AbsentPath_Generates: absent path → value generated, changed=true.
+// Vault holds value of default length (32) from ascii-printable-safe
+// alphabet (default). Value doesn't appear in output/audit (separate guard).
 func TestPresent_AbsentPath_Generates(t *testing.T) {
 	pv := newPresentVault(nil)
 	fa := &fakeAudit{}
@@ -108,8 +108,8 @@ func TestPresent_AbsentPath_Generates(t *testing.T) {
 	}
 }
 
-// TestPresent_PathPresent_NoOp — поле присутствует → no-op, changed=false,
-// значение НЕ перезаписано, audit-event не пишется.
+// TestPresent_PathPresent_NoOp: field present → no-op, changed=false.
+// Value NOT overwritten, audit-event not written (idempotent).
 func TestPresent_PathPresent_NoOp(t *testing.T) {
 	pv := newPresentVault(map[string]map[string]any{
 		"secret/redis/users/admin": {"password": "EXISTING-do-not-touch"},
@@ -139,8 +139,8 @@ func TestPresent_PathPresent_NoOp(t *testing.T) {
 	}
 }
 
-// TestPresent_PartPresent_GeneratesOnlyMissing — три target-а, один уже есть →
-// генерятся только два отсутствующих; присутствующий не тронут.
+// TestPresent_PartPresent_GeneratesOnlyMissing: three targets, one exists.
+// Only missing two are generated; existing one untouched.
 func TestPresent_PartPresent_GeneratesOnlyMissing(t *testing.T) {
 	pv := newPresentVault(map[string]map[string]any{
 		"secret/app/a": {"password": "A-existing"},
@@ -181,8 +181,8 @@ func TestPresent_PartPresent_GeneratesOnlyMissing(t *testing.T) {
 	}
 }
 
-// TestPresent_ExplicitPolicy_Respected — явные charset+length (step-level)
-// реально отражены в выходе: hex-алфавит, длина 16.
+// TestPresent_ExplicitPolicy_Respected: explicit charset+length (step-level)
+// reflected in output: hex alphabet, length 16.
 func TestPresent_ExplicitPolicy_Respected(t *testing.T) {
 	pv := newPresentVault(nil)
 	m := coremodvault.New(pv, &fakeAudit{})
@@ -208,8 +208,8 @@ func TestPresent_ExplicitPolicy_Respected(t *testing.T) {
 	assertAlphabet(t, pw, []rune("0123456789abcdef"))
 }
 
-// TestPresent_AllowedChars_Respected — явный allowed_chars алфавит соблюдён,
-// per-target override перекрывает step-level policy.
+// TestPresent_AllowedChars_Respected: explicit allowed_chars alphabet respected.
+// Per-target override takes precedence over step-level policy.
 func TestPresent_AllowedChars_Respected(t *testing.T) {
 	pv := newPresentVault(nil)
 	m := coremodvault.New(pv, &fakeAudit{})
@@ -239,8 +239,8 @@ func TestPresent_AllowedChars_Respected(t *testing.T) {
 	assertAlphabet(t, pw, []rune("ABCDEF"))
 }
 
-// TestPresent_MergeKeepsSiblingFields — генерация в путь с существующими
-// СОСЕДНИМИ полями не теряет их (read-merge-write).
+// TestPresent_MergeKeepsSiblingFields: generation to path with existing
+// sibling fields doesn't lose them (read-merge-write).
 func TestPresent_MergeKeepsSiblingFields(t *testing.T) {
 	pv := newPresentVault(map[string]map[string]any{
 		"secret/u": {"username": "admin"},
@@ -265,10 +265,10 @@ func TestPresent_MergeKeepsSiblingFields(t *testing.T) {
 	}
 }
 
-// TestPresent_SecurityNoLeak — ★GUARD: сгенерированное ЗНАЧЕНИЕ не попадает ни
-// в register-output, ни в audit-payload (ADR-010, эталон sigil.KeyService.Introduce).
-// Проверяем рекурсивно весь output и payload: нигде не должно быть точного
-// значения секрета (ни как ключ, ни как значение, ни в подстроке).
+// TestPresent_SecurityNoLeak is a GUARD: generated VALUE doesn't leak to
+// register-output or audit-payload (ADR-010).
+// Recursively checks whole output and payload: secret must not appear
+// as key, value, or substring.
 func TestPresent_SecurityNoLeak(t *testing.T) {
 	pv := newPresentVault(nil)
 	fa := &fakeAudit{}
@@ -289,18 +289,18 @@ func TestPresent_SecurityNoLeak(t *testing.T) {
 		t.Fatal("precondition: secret not generated")
 	}
 
-	// 1. register-output не содержит значения нигде в дереве.
+	// 1. register-output doesn't contain value anywhere in tree
 	out := stream.Last().Output.AsMap()
 	if containsSecret(out, secret) {
 		t.Errorf("SECURITY: generated secret leaked into register-output: %v", out)
 	}
-	// Sanity: путь/имя поля в output есть (output не пустой и осмысленный).
+	// Sanity: path/field name in output exists (output not empty and sensible).
 	gen := out["generated"].(map[string]any)
 	if _, ok := gen["secret/leak/check"]; !ok {
 		t.Error("output.generated must list the path (field names ok, value not)")
 	}
 
-	// 2. audit-payload не содержит значения.
+	// 2. audit-payload doesn't contain value
 	if len(fa.events) != 1 {
 		t.Fatalf("want 1 audit event, got %d", len(fa.events))
 	}
@@ -309,8 +309,8 @@ func TestPresent_SecurityNoLeak(t *testing.T) {
 	}
 }
 
-// TestPresent_Validate — kv-present валидация: targets обязателен и непуст;
-// взаимоисключимость charset/allowed_chars; границы length.
+// TestPresent_Validate: kv-present validation. Targets required and non-empty;
+// mutual exclusion charset/allowed_chars; length boundaries.
 func TestPresent_Validate(t *testing.T) {
 	m := coremodvault.New(newPresentVault(nil), &fakeAudit{})
 	cases := []struct {
@@ -359,7 +359,7 @@ func TestPresent_Validate(t *testing.T) {
 	}
 }
 
-// TestPresent_UnknownState — неизвестный state на том же модуле → failed.
+// TestPresent_UnknownState: unknown state on same module fails the task.
 func TestPresent_UnknownState(t *testing.T) {
 	m := coremodvault.New(newPresentVault(nil), &fakeAudit{})
 	stream := internaltest.NewApplyStream()
@@ -374,10 +374,10 @@ func TestPresent_UnknownState(t *testing.T) {
 	}
 }
 
-// TestPresent_WriteKVError_FailsTask — WriteKV-failure (Vault недоступен/нет прав
-// на запись) → задача честно фейлит, ошибка не глотается. Аналог
-// kvread_test.go::TestApply_VaultError для write-ветки. read проходит (путь
-// отсутствует → генерация), падение ровно на WriteKV.
+// TestPresent_WriteKVError_FailsTask: WriteKV-failure (Vault unavailable/no write
+// permission) → task fails honestly, error not swallowed. Analog of
+// kvread_test.go::TestApply_VaultError for write branch. read succeeds (path
+// missing → generation), failure exactly on WriteKV.
 func TestPresent_WriteKVError_FailsTask(t *testing.T) {
 	pv := newPresentVault(nil)
 	pv.writeErr = errors.New("permission denied")
@@ -392,14 +392,14 @@ func TestPresent_WriteKVError_FailsTask(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Failed {
-		t.Fatal("WriteKV error must fail task (write-failure не должна молча проглатываться)")
+		t.Fatal("WriteKV error must fail task (write-failure must not be silently swallowed)")
 	}
 }
 
-// TestPresent_AuditWriteError_FailsTask — audit-write-fail → задача фейлит
-// (симметрия с kvread_test.go::TestApply_AuditWriteError_FailsTask): compliance-
-// запись нельзя молча пропустить. Секрет при этом В VAULT УЖЕ записан (WriteKV
-// прошёл до audit) — здесь проверяем только терминальный fail задачи.
+// TestPresent_AuditWriteError_FailsTask: audit-write-fail → task fails
+// (symmetry with kvread_test.go::TestApply_AuditWriteError_FailsTask): compliance
+// write can't be silently skipped. Secret ALREADY in VAULT (WriteKV passed before
+// audit) — check only terminal fail here.
 func TestPresent_AuditWriteError_FailsTask(t *testing.T) {
 	pv := newPresentVault(nil)
 	fa := &fakeAudit{err: errors.New("pg down")}
@@ -418,9 +418,9 @@ func TestPresent_AuditWriteError_FailsTask(t *testing.T) {
 	}
 }
 
-// TestPresent_EmptyStringField_Regenerates — поле присутствует, но его значение —
-// ПУСТАЯ строка → трактуется как absent (fieldPresent), генерится непустой пароль,
-// changed=true. Пустой пароль бесполезен, поэтому no-op на "" был бы дырой.
+// TestPresent_EmptyStringField_Regenerates: field present, but value is
+// EMPTY string → treated as absent (fieldPresent), non-empty password generated,
+// changed=true. Empty password useless, so no-op on "" would be a hole.
 func TestPresent_EmptyStringField_Regenerates(t *testing.T) {
 	pv := newPresentVault(map[string]map[string]any{
 		"secret/redis/users/admin": {"password": ""},
@@ -436,19 +436,19 @@ func TestPresent_EmptyStringField_Regenerates(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Changed {
-		t.Fatal("пустая строка должна трактоваться как absent → regenerate, changed=true")
+		t.Fatal("empty string must be treated as absent → regenerate, changed=true")
 	}
 	pw, _ := pv.store["secret/redis/users/admin"]["password"].(string)
 	if pw == "" {
-		t.Error("пустой пароль не перегенерён")
+		t.Error("empty password not regenerated")
 	}
 }
 
-// TestPresent_DifferentFieldPresent_GeneratesTargetKeepsSibling — путь существует с
-// ДРУГИМ полем (username), целевое (password) отсутствует → генерится только
-// password, существующий username сохраняется. Отличается от MergeKeepsSiblingFields
-// фокусом: явно проверяем, что наличие НЕ-целевого поля не считается «секрет уже
-// есть» (fieldPresent смотрит конкретное поле, не сам путь).
+// TestPresent_DifferentFieldPresent_GeneratesTargetKeepsSibling: path exists with
+// DIFFERENT field (username), target (password) missing → only password generated,
+// existing username preserved. Differs from MergeKeepsSiblingFields by focus:
+// explicitly check that non-target field presence doesn't mean "secret exists"
+// (fieldPresent checks specific field, not path).
 func TestPresent_DifferentFieldPresent_GeneratesTargetKeepsSibling(t *testing.T) {
 	pv := newPresentVault(map[string]map[string]any{
 		"secret/redis/users/admin": {"username": "admin"},
@@ -464,20 +464,20 @@ func TestPresent_DifferentFieldPresent_GeneratesTargetKeepsSibling(t *testing.T)
 		t.Fatalf("Apply: %v", err)
 	}
 	if !stream.Last().Changed {
-		t.Fatal("целевое поле password отсутствует → должно генериться (changed=true)")
+		t.Fatal("target field password missing → should be generated (changed=true)")
 	}
 	if pv.store["secret/redis/users/admin"]["username"] != "admin" {
-		t.Error("sibling username утерян при генерации password")
+		t.Error("sibling username lost on password generation")
 	}
 	if pw, _ := pv.store["secret/redis/users/admin"]["password"].(string); pw == "" {
-		t.Error("password не сгенерирован")
+		t.Error("password not generated")
 	}
 }
 
-// TestPresent_DuplicateTargetGeneratesOnce — два target-а с одинаковым {path,field}
-// → генерация ОДИН раз (pendingWrites-guard): один WriteKV, поле в output.generated
-// не дублируется. Без guard-а второй target перегенерил бы значение и/или дал
-// лишний WriteKV (новая KV-версия).
+// TestPresent_DuplicateTargetGeneratesOnce: two targets with same {path,field}
+// → generated ONCE (pendingWrites-guard): one WriteKV, field in output.generated
+// not duplicated. Without guard, second target would regenerate value and/or give
+// extra WriteKV (new KV-version).
 func TestPresent_DuplicateTargetGeneratesOnce(t *testing.T) {
 	pv := newPresentVault(nil)
 	m := coremodvault.New(pv, &fakeAudit{})
@@ -494,17 +494,17 @@ func TestPresent_DuplicateTargetGeneratesOnce(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	if pv.writes != 1 {
-		t.Errorf("WriteKV вызван %d раз, ждём 1 (дубль {path,field} не должен плодить запись)", pv.writes)
+		t.Errorf("WriteKV called %d times, want 1 (duplicate {path,field} must not trigger extra write)", pv.writes)
 	}
 	gen := stream.Last().Output.AsMap()["generated"].(map[string]any)
 	fields, ok := gen["secret/dup"].([]any)
 	if !ok || len(fields) != 1 {
-		t.Errorf("output.generated[secret/dup] = %v, ждём ровно одно поле password (без дубля)", gen["secret/dup"])
+		t.Errorf("output.generated[secret/dup] = %v, want exactly one field password (no duplicate)", gen["secret/dup"])
 	}
 }
 
-// TestPresent_PolicyLengthBoundaries — границы length: 8 и 1024 валидны, 7 и 1025
-// отвергаются. Проверка через Validate (parsePolicy) на step-level policy.
+// TestPresent_PolicyLengthBoundaries: length boundaries: 8 and 1024 valid,
+// 7 and 1025 rejected. Checked via Validate (parsePolicy) on step-level policy.
 func TestPresent_PolicyLengthBoundaries(t *testing.T) {
 	m := coremodvault.New(newPresentVault(nil), &fakeAudit{})
 	cases := []struct {
@@ -529,8 +529,8 @@ func TestPresent_PolicyLengthBoundaries(t *testing.T) {
 	}
 }
 
-// TestPresent_EmptyPathRejected — target с пустым path отвергается на Validate
-// (parseTargets/parseTarget): пустой путь — некорректная цель.
+// TestPresent_EmptyPathRejected: target with empty path rejected on Validate
+// (parseTargets/parseTarget): empty path is invalid target.
 func TestPresent_EmptyPathRejected(t *testing.T) {
 	m := coremodvault.New(newPresentVault(nil), &fakeAudit{})
 	rep, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
@@ -540,13 +540,13 @@ func TestPresent_EmptyPathRejected(t *testing.T) {
 		}),
 	})
 	if rep.Ok {
-		t.Fatal("пустой path в target должен отвергаться")
+		t.Fatal("empty path in target must be rejected")
 	}
 }
 
-// TestPresent_SingleCharAlphabetRejected — allowed_chars из одного символа (или
-// схлопывающийся в один после дедупликации повторов) отвергается: алфавит <2
-// distinct символов вырождает генерацию в константу (0 энтропии).
+// TestPresent_SingleCharAlphabetRejected: allowed_chars of one character (or
+// collapsed to one after deduplication) rejected: alphabet <2 distinct chars
+// degenerates generation to constant (0 entropy).
 func TestPresent_SingleCharAlphabetRejected(t *testing.T) {
 	m := coremodvault.New(newPresentVault(nil), &fakeAudit{})
 	for _, allowed := range []string{"a", "aaaa"} {
@@ -558,14 +558,14 @@ func TestPresent_SingleCharAlphabetRejected(t *testing.T) {
 			}),
 		})
 		if rep.Ok {
-			t.Errorf("allowed_chars=%q (collapse-to-one) должен отвергаться (нужно >= 2 distinct)", allowed)
+			t.Errorf("allowed_chars=%q (collapse-to-one) must be rejected (need >=2 distinct)", allowed)
 		}
 	}
 }
 
 // --- helpers ---
 
-// assertAlphabet проверяет, что каждый символ s входит в allowed.
+// assertAlphabet checks that each char in s is in allowed.
 func assertAlphabet(t *testing.T, s string, allowed []rune) {
 	t.Helper()
 	set := make(map[rune]bool, len(allowed))
@@ -579,9 +579,9 @@ func assertAlphabet(t *testing.T, s string, allowed []rune) {
 	}
 }
 
-// safeAlphabetRunes воспроизводит ascii-printable-safe алфавит (0x21..0x7E минус
-// исключённые) для assertAlphabet дефолтных тестов. Держим список исключений в
-// синхроне с policy.go::excludedFromSafe.
+// safeAlphabetRunes reproduces ascii-printable-safe alphabet (0x21..0x7E minus
+// excluded) for assertAlphabet default tests. Keep exclusion list in sync with
+// policy.go::excludedFromSafe.
 func safeAlphabetRunes() []rune {
 	const excluded = " \"'#\\`$"
 	ex := make(map[byte]bool)
@@ -597,9 +597,9 @@ func safeAlphabetRunes() []rune {
 	return out
 }
 
-// containsSecret рекурсивно ищет точное значение secret в произвольном
-// map/slice/string-дереве (ключи и значения). Substring-совпадение тоже считается
-// утечкой (частичное раскрытие недопустимо).
+// containsSecret recursively searches for exact secret value in arbitrary
+// map/slice/string tree (keys and values). Substring match also counts as leak
+// (partial disclosure not allowed).
 func containsSecret(v any, secret string) bool {
 	switch x := v.(type) {
 	case string:

@@ -9,100 +9,100 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/vault"
 )
 
-// ResolvedProvider — результат резолва Provider-реестра в данные, нужные для
-// вызова CloudDriver-плагина (credentials A-flow, docs/keeper/cloud.md):
+// ResolvedProvider is result of resolving Provider registry into data needed for
+// CloudDriver plugin call (credentials A-flow, docs/keeper/cloud.md):
 //
-//   - Driver — имя CloudDriver-плагина (Provider.Type), под которым плагин
-//     зарегистрирован в discovery-кеше (PluginHost lookup по нему).
-//   - Credentials — plain-секрет из Vault (по Provider.CredentialsRef) +
-//     `region` из Provider-реестра, склеенные в один map. Уходит в
-//     CreateRequest.credentials / DestroyRequest.credentials как Struct.
-//     Драйвер в Vault НЕ ходит — Keeper резолвит секрет за него (Вариант A).
+//   - Driver is CloudDriver plugin name (Provider.Type), by which plugin is
+//     registered in discovery cache (PluginHost lookup).
+//   - Credentials is plain secret from Vault (by Provider.CredentialsRef) +
+//     `region` from Provider registry, merged in single map. Goes to
+//     CreateRequest.credentials / DestroyRequest.credentials as Struct.
+//     Driver does NOT access Vault — Keeper resolves secret for it (Variant A).
 //
-// region кладётся внутрь Credentials, а не отдельным полем: он provider-specific
-// (у Proxmox/OpenStack своего `region` нет), driver сам решает, как его читать.
+// region is placed inside Credentials, not as separate field: it is provider-specific
+// (Proxmox/OpenStack have no `region`), driver decides how to read it.
 type ResolvedProvider struct {
 	Driver      string
 	Credentials map[string]any
 
-	// FQDNSuffix — суффикс FQDN VM провайдера (self-onboard Вариант T, ADR-017(h)):
-	// keeper предсказывает SID=FQDN как `<name>-<index>.<FQDNSuffix>`. Пустой →
-	// провайдер без предсказуемого FQDN (self_onboard: true тогда отдаст ошибку).
-	// В Credentials НЕ кладётся (driver его не использует — FQDN он возвращает сам;
-	// suffix нужен только keeper-у для предсказания).
+	// FQDNSuffix is VM provider FQDN suffix (self-onboard Variant T, ADR-017(h)):
+	// keeper predicts SID=FQDN as `<name>-<index>.<FQDNSuffix>`. Empty →
+	// provider without predictable FQDN (self_onboard: true returns error).
+	// NOT placed in Credentials (driver does not use it — returns FQDN itself;
+	// suffix needed only by keeper for prediction).
 	FQDNSuffix string
 }
 
-// regionKey — ключ, под которым `region` из Provider-реестра кладётся в
-// credentials-map (рядом с plain-секретом из Vault). Driver читает его как
-// обычное credentials-поле.
+// regionKey is the key under which `region` from Provider registry is placed in
+// credentials map (alongside plain secret from Vault). Driver reads it as
+// regular credentials field.
 const regionKey = "region"
 
-// ProviderResolver резолвит реестровые ссылки шага `core.cloud.provisioned` в
-// данные для CloudDriver-вызова:
+// ProviderResolver resolves registry links of step `core.cloud.provisioned` into
+// data for CloudDriver call:
 //
-//   - Resolve(provider-имя) → [ResolvedProvider]: driver-имя + plain-credentials
-//     (param `provider`, симметрия с credentials A-flow).
-//   - ResolveProfile(profile-имя) → VM-spec params из реестра `profiles`
-//     (param `profile`, Вариант A: `profile` = ИМЯ строки реестра /v1/profiles,
-//     не inline-object). Profile обязан быть пред-зарегистрирован.
+//   - Resolve(provider-name) → [ResolvedProvider]: driver name + plain credentials
+//     (param `provider`, symmetric to credentials A-flow).
+//   - ResolveProfile(profile-name) → VM-spec params from registry `profiles`
+//     (param `profile`, Variant A: `profile` = NAME of registry entry /v1/profiles,
+//     not inline object). Profile must be pre-registered.
 //
-// Оба метода держит один [CredentialsResolverPG] (Provider+Vault+Profile —
-// один резолв-слой реестровых ссылок), внедряется в [Module] одним полем. Для
-// unit-тестов модуля — fake (см. provisioned_test.go).
+// Both methods held by one [CredentialsResolverPG] (Provider+Vault+Profile —
+// single registry link resolution layer), injected into [Module] via one field. For
+// unit tests of module — use fake (see provisioned_test.go).
 type ProviderResolver interface {
 	Resolve(ctx context.Context, providerName string) (*ResolvedProvider, error)
-	// ResolveProfile резолвит имя Profile-я в его VM-spec params. Имя не найдено
-	// в реестре → ошибка (caller отдаёт SendFailed; маскировать не требуется —
-	// Profile.Params секретов не несёт, но caller всё равно прогоняет через
-	// maskErr единообразно).
+	// ResolveProfile resolves Profile name to its VM-spec params. Name not found
+	// in registry → error (caller returns SendFailed; masking not required —
+	// Profile.Params carries no secrets, but caller runs through maskErr
+	// uniformly anyway).
 	ResolveProfile(ctx context.Context, profileName string) (map[string]any, error)
 }
 
-// ProviderReader — узкое подмножество provider-CRUD (SelectByName), нужное
-// резолверу. Сужение упрощает unit-тест без поднятия PG.
+// ProviderReader is narrow subset of provider-CRUD (SelectByName), needed by
+// resolver. Narrow interface simplifies unit tests without PG.
 type ProviderReader interface {
 	SelectByName(ctx context.Context, name string) (*provider.Provider, error)
 }
 
-// ProfileReader — узкое подмножество profile-CRUD (SelectByName), симметрично
-// [ProviderReader]. Сужение упрощает unit-тест без поднятия PG.
+// ProfileReader is narrow subset of profile-CRUD (SelectByName), symmetric to
+// [ProviderReader]. Narrow interface simplifies unit tests without PG.
 type ProfileReader interface {
 	SelectByName(ctx context.Context, name string) (*profile.Profile, error)
 }
 
-// VaultReader — узкое подмножество keeper/internal/vault.Client (ReadKV),
-// симметрично coremod/vault.VaultReader. Дублируется, чтобы резолвер не тащил
-// весь vault-pipeline транзитивно.
+// VaultReader is narrow subset of keeper/internal/vault.Client (ReadKV),
+// symmetric to coremod/vault.VaultReader. Duplicated so resolver does not
+// transitively pull full vault pipeline.
 type VaultReader interface {
 	ReadKV(ctx context.Context, path string) (map[string]any, error)
 }
 
-// CredentialsResolverPG — прод-реализация [ProviderResolver]: читает Provider
-// из Postgres, резолвит `credentials_ref` (vault:<mount>/<path>) через Vault KV,
-// возвращает driver-имя (Provider.Type) + plain-credentials с добавленным
-// `region`. Profile-реестр резолвится через [ResolveProfile] (тот же слой
-// реестровых ссылок).
+// CredentialsResolverPG is prod implementation of [ProviderResolver]: reads
+// Provider from Postgres, resolves `credentials_ref` (vault:<mount>/<path>)
+// via Vault KV, returns driver name (Provider.Type) + plain credentials with
+// added `region`. Profile registry resolved via [ResolveProfile] (same
+// registry link resolution layer).
 type CredentialsResolverPG struct {
 	Providers ProviderReader
 	Profiles  ProfileReader
 	Vault     VaultReader
 }
 
-// NewCredentialsResolverPG — wire-helper. profiles обязателен: param `profile`
-// шага `core.cloud.created` резолвится через ResolveProfile (Вариант A).
+// NewCredentialsResolverPG is wire helper. profiles required: param `profile`
+// of step `core.cloud.created` resolved via ResolveProfile (Variant A).
 func NewCredentialsResolverPG(p ProviderReader, profiles ProfileReader, v VaultReader) *CredentialsResolverPG {
 	return &CredentialsResolverPG{Providers: p, Profiles: profiles, Vault: v}
 }
 
-// providerReaderFunc адаптирует пакетную функцию provider.SelectByName
-// (свободную, не метод) к [ProviderReader]. db фиксируется при wire-up.
+// providerReaderFunc adapts package function provider.SelectByName
+// (free function, not method) to [ProviderReader]. db fixed at wire-up.
 type providerReaderFunc struct {
 	db provider.ExecQueryRower
 }
 
-// NewProviderReaderPG оборачивает pgxpool.Pool (или Conn/Tx) в [ProviderReader]
-// поверх свободной функции provider.SelectByName.
+// NewProviderReaderPG wraps pgxpool.Pool (or Conn/Tx) into [ProviderReader]
+// using free function provider.SelectByName.
 func NewProviderReaderPG(db provider.ExecQueryRower) ProviderReader {
 	return providerReaderFunc{db: db}
 }
@@ -111,14 +111,14 @@ func (r providerReaderFunc) SelectByName(ctx context.Context, name string) (*pro
 	return provider.SelectByName(ctx, r.db, name)
 }
 
-// profileReaderFunc адаптирует пакетную функцию profile.SelectByName к
-// [ProfileReader], симметрично [providerReaderFunc].
+// profileReaderFunc adapts package function profile.SelectByName to
+// [ProfileReader], symmetric to [providerReaderFunc].
 type profileReaderFunc struct {
 	db profile.ExecQueryRower
 }
 
-// NewProfileReaderPG оборачивает pgxpool.Pool (или Conn/Tx) в [ProfileReader]
-// поверх свободной функции profile.SelectByName.
+// NewProfileReaderPG wraps pgxpool.Pool (or Conn/Tx) into [ProfileReader]
+// using free function profile.SelectByName.
 func NewProfileReaderPG(db profile.ExecQueryRower) ProfileReader {
 	return profileReaderFunc{db: db}
 }
@@ -127,11 +127,11 @@ func (r profileReaderFunc) SelectByName(ctx context.Context, name string) (*prof
 	return profile.SelectByName(ctx, r.db, name)
 }
 
-// Resolve читает Provider по имени, резолвит credentials_ref через Vault и
-// собирает credentials-map. region добавляется под ключом [regionKey].
+// Resolve reads Provider by name, resolves credentials_ref via Vault and
+// assembles credentials map. region added under key [regionKey].
 //
-// Безопасность: возвращаемый Credentials содержит plain-секрет — caller обязан
-// прогонять его через audit.MaskSecrets на ЛЮБОМ выходе (см. provisioned.go).
+// Security: returned Credentials contain plain secret — caller must
+// run it through audit.MaskSecrets on ANY output (see provisioned.go).
 func (r *CredentialsResolverPG) Resolve(ctx context.Context, providerName string) (*ResolvedProvider, error) {
 	p, err := r.Providers.SelectByName(ctx, providerName)
 	if err != nil {
@@ -152,11 +152,11 @@ func (r *CredentialsResolverPG) Resolve(ctx context.Context, providerName string
 	for k, v := range secret {
 		creds[k] = v
 	}
-	// region из Provider-реестра имеет приоритет над одноимённым полем секрета:
-	// реестровое значение — авторитетный источник, секрет хранит только auth-данные.
+	// region from Provider registry takes priority over same-named secret field:
+	// registry value is authoritative source, secret holds auth data only.
 	creds[regionKey] = p.Region
 
-	// fqdn_suffix (self-onboard Вариант T) — опционально; пустая строка при nil.
+	// fqdn_suffix (self-onboard Variant T) optional; empty string when nil.
 	var suffix string
 	if p.FQDNSuffix != nil {
 		suffix = *p.FQDNSuffix
@@ -165,10 +165,10 @@ func (r *CredentialsResolverPG) Resolve(ctx context.Context, providerName string
 	return &ResolvedProvider{Driver: p.Type, Credentials: creds, FQDNSuffix: suffix}, nil
 }
 
-// ResolveProfile читает Profile по имени и возвращает его VM-spec params
-// (Вариант A: param `profile` шага `core.cloud.created` = ИМЯ строки реестра
-// /v1/profiles). Имя не найдено → [profile.ErrProfileNotFound] (caller отдаёт
-// SendFailed). Params могут быть nil (профиль без VM-spec — валидно).
+// ResolveProfile reads Profile by name and returns its VM-spec params
+// (Variant A: param `profile` of step `core.cloud.created` = NAME of registry entry
+// /v1/profiles). Name not found → [profile.ErrProfileNotFound] (caller returns
+// SendFailed). Params may be nil (profile without VM-spec — valid).
 func (r *CredentialsResolverPG) ResolveProfile(ctx context.Context, profileName string) (map[string]any, error) {
 	p, err := r.Profiles.SelectByName(ctx, profileName)
 	if err != nil {

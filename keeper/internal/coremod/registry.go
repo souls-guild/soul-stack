@@ -1,17 +1,17 @@
-// Package coremod — соединяет keeper-side core-модули (ADR-017,
-// docs/keeper/modules.md) в единый Registry.
+// Package coremod wires keeper-side core modules (ADR-017,
+// docs/keeper/modules.md) into a single Registry.
 //
-// Модули (ключ Registry = base-имя, author-форма = base + state в адресе):
+// Modules (Registry key = base name, author form = base + state in address):
 // `core.soul` (`core.soul.registered`, docs/keeper/modules.md), `core.cloud`
 // (`core.cloud.created`/`core.cloud.destroyed`, ADR-017(a), Plugin.d-pending),
-// `core.vault` (`core.vault.kv-read`/`core.vault.kv-present`, ADR-017(b)) и `core.choir`
-// (`core.choir.present`/`core.choir.absent`, ADR-044 — правка членства Voice в
-// Choir-е инкарнации, регистрируется при наличии Deps.ChoirStore). Все
-// исполняются на keeper-инстансе, диспетчер scenario-runner-а — `on: keeper`.
+// `core.vault` (`core.vault.kv-read`/`core.vault.kv-present`, ADR-017(b)) and `core.choir`
+// (`core.choir.present`/`core.choir.absent`, ADR-044 — membership changes in
+// Choir of incarnation, registered when Deps.ChoirStore is present). All
+// execute on keeper instance, scenario-runner dispatcher is `on: keeper`.
 //
-// Симметрично soul/internal/coremod (Soul-side, ADR-015): тот же интерфейс
-// sdk/module.SoulModule, тот же Registry-pattern. Разница — где исполняется
-// шаг и какие dep-ы (PG-pool / Vault / PluginHost vs apt/systemd).
+// Symmetrically soul/internal/coremod (Soul-side, ADR-015): same interface
+// sdk/module.SoulModule, same Registry pattern. Difference is where step runs
+// and which deps (PG-pool / Vault / PluginHost vs apt/systemd).
 package coremod
 
 import (
@@ -25,133 +25,133 @@ import (
 	"github.com/souls-guild/soul-stack/sdk/module"
 )
 
-// Registry — иммутабельный набор «base-имя модуля → реализация SoulModule».
+// Registry is immutable set of module base-name → SoulModule implementation.
 //
-// Симметрично soul/internal/coremod.Registry: ключ — base-имя модуля БЕЗ
-// state-суффикса (`core.soul`, не `core.soul.registered`). Author-форма
-// адреса задачи — base + state (`core.soul.registered`, `core.cloud.created`);
-// config.SplitModuleAddr делит адрес на (base, state) в keeper_dispatch, base
-// идёт в Lookup, state — в pluginv1.ApplyRequest.state и обрабатывается внутри
-// реализации.
+// Symmetric to soul/internal/coremod.Registry: key is module base-name WITHOUT
+// state suffix (`core.soul`, not `core.soul.registered`). Author form of task
+// address is base + state (`core.soul.registered`, `core.cloud.created`);
+// config.SplitModuleAddr splits address into (base, state) in keeper_dispatch,
+// base goes to Lookup, state goes to pluginv1.ApplyRequest.state and is handled
+// inside implementation.
 type Registry struct {
 	mods map[string]module.SoulModule
 }
 
-// Deps — внешние зависимости keeper-side модулей. Поля обязательны
-// (кроме `Audit` — может быть nil в тестовых сборках; в проде всегда есть
+// Deps are external dependencies for keeper-side modules. Fields are required
+// (except `Audit` — may be nil in test builds; prod always has
 // auditmulti.Writer).
 type Deps struct {
-	// SoulStore — keeper/internal/coremod/soul.Store.
+	// SoulStore is keeper/internal/coremod/soul.Store.
 	SoulStore soul.Store
 
-	// SoulPresence — presence-checker (Redis SID-lease) для барьера онбординга
-	// `core.soul.registered` `await_online` (ADR-061). nil допустим (тестовые
-	// сборки / dev без Redis): шаг с `await_online: true` тогда завершится failed
-	// (барьер не может работать без источника presence). Прод — обёртка над
-	// keeperredis.SoulsStreamAlive (тот же источник, что topology.SoulLeaseChecker).
+	// SoulPresence is presence-checker (Redis SID-lease) for onboarding barrier
+	// `core.soul.registered` `await_online` (ADR-061). nil is allowed (test builds
+	// / dev without Redis): step with `await_online: true` will fail
+	// (barrier needs presence source). Prod wraps
+	// keeperredis.SoulsStreamAlive (same source as topology.SoulLeaseChecker).
 	SoulPresence soul.PresenceChecker
 
-	// MaxAwaitTimeout — провайдер строкового потолка keeper.yml::max_await_timeout
-	// (ADR-061), hot-reload-aware (читается на каждом Apply). nil → дефолт
-	// config.DefaultMaxAwaitTimeout. Прод — обёртка над config.Store.Get().
+	// MaxAwaitTimeout is string ceiling provider for keeper.yml::max_await_timeout
+	// (ADR-061), hot-reload-aware (read on each Apply). nil → defaults to
+	// config.DefaultMaxAwaitTimeout. Prod wraps config.Store.Get().
 	MaxAwaitTimeout func() string
 
-	// PluginHost — keeper/internal/coremod/cloud.PluginHost. До завершения
-	// Plugin.d caller передаёт cloud.StubHost{}; интерфейс зафиксирован
-	// заранее, чтобы Registry собирался без зависимости от Plugin.d.
+	// PluginHost is keeper/internal/coremod/cloud.PluginHost. Before Plugin.d
+	// completes, caller provides cloud.StubHost{}; interface is fixed early so
+	// Registry can build without Plugin.d dependency.
 	PluginHost cloud.PluginHost
 
-	// CloudResolver резолвит param `provider` в driver-имя + plain-credentials
-	// (A-flow): Provider-реестр + Vault. Прод — cloud.CredentialsResolverPG.
+	// CloudResolver resolves param `provider` to driver name + plain credentials
+	// (A-flow): Provider registry + Vault. Prod is cloud.CredentialsResolverPG.
 	CloudResolver cloud.ProviderResolver
 
-	// CloudSouls / CloudTokens — узкие PG-adapter-ы для cloud-модуля.
-	// Отделены от SoulStore: модуль `core.cloud` дёргает разные методы
-	// (Insert + UpdateStatus), не пересекающиеся с `core.soul`
+	// CloudSouls / CloudTokens are narrow PG-adapters for cloud module.
+	// Separated from SoulStore: module `core.cloud` calls different methods
+	// (Insert + UpdateStatus), non-overlapping with `core.soul`
 	// (SelectBySID + Insert + UpdateCoven).
 	CloudSouls  cloud.SoulStore
 	CloudTokens cloud.TokenStore
 
-	// CloudCascade — cascade-обработчик `destroyed`-state (ADR-017).
-	// Реализуется [cloud.CascadePG] поверх pgxpool.Pool. В тестовых
-	// сборках без destroyed-сценариев допустим nil.
+	// CloudCascade is cascade handler for `destroyed` state (ADR-017).
+	// Implemented via [cloud.CascadePG] on pgxpool.Pool. Allowed to be nil in
+	// test builds without destroyed scenarios.
 	CloudCascade cloud.Cascader
 
-	// CloudUserdata — резолвер cloud-init userdata для scenario-параметра
+	// CloudUserdata is cloud-init userdata resolver for scenario param
 	// `generate_userdata: true` (ADR-017(h) amendment 2026-05-27, B-flat).
-	// Прод-реализация — обёртка над cloudinit.Resolver+GenerateUserdata в
-	// daemon-е (читает текущий KeeperConfig.CloudInit snapshot + Vault.ReadKV).
-	// nil допустим: `generate_userdata: true` тогда вернёт явную ошибку,
-	// явный `userdata:` продолжает работать без изменений.
+	// Prod implementation wraps cloudinit.Resolver+GenerateUserdata in
+	// daemon (reads current KeeperConfig.CloudInit snapshot + Vault.ReadKV).
+	// nil is allowed: `generate_userdata: true` returns error,
+	// explicit `userdata:` continues to work unchanged.
 	CloudUserdata cloud.UserdataProvider
 
-	// Vault — vault-client для `core.vault` (kv-read читает; kv-present
-	// generate-if-absent читает+пишет). *vault.Client удовлетворяет обе операции;
-	// kv-read write-путь не вызывает (read-state).
+	// Vault is vault-client for `core.vault` (kv-read reads; kv-present
+	// generate-if-absent reads+writes). *vault.Client satisfies both;
+	// kv-read write-path does not call (read-state).
 	Vault vault.VaultWriter
 
-	// ChoirStore — choir-CRUD adapter (ADR-044) для `core.choir`:
-	// AddVoice/RemoveVoice над incarnation_choir_voices + проверка
-	// существования инкарнации. Прод — choir.NewPGStore(pool). nil допустим
-	// в тестовых сборках без choir-сценариев (модуль тогда не регистрируется).
+	// ChoirStore is choir-CRUD adapter (ADR-044) for `core.choir`:
+	// AddVoice/RemoveVoice on incarnation_choir_voices + incarnation existence
+	// check. Prod is choir.NewPGStore(pool). nil is allowed in test builds
+	// without choir scenarios (module not registered).
 	ChoirStore choir.Store
 
-	// CertStore — warrant-CRUD adapter (cert-rotation Вар1, E1) для
-	// `core.cert.registered`: SelectActive + RegisterActive над `warrant`. Прод —
-	// cert.NewPGStore(pool). nil допустим в тестовых сборках без cert-регистрации
-	// (модуль тогда не регистрируется — как choir). Модуль читает cert-PEM из
-	// Vault (общий Deps.Vault) и извлекает метаданные сам, поэтому отдельного
-	// Vault-поля не требует.
+	// CertStore is warrant-CRUD adapter (cert-rotation Var1, E1) for
+	// `core.cert.registered`: SelectActive + RegisterActive on `warrant`. Prod
+	// is cert.NewPGStore(pool). nil is allowed in test builds without cert
+	// registration (module not registered — like choir). Module reads cert-PEM
+	// from Vault (shared Deps.Vault) and extracts metadata itself, so no separate
+	// Vault field is needed.
 	CertStore cert.Store
 
-	// KID — идентификатор Keeper-инстанса, пробрасывается в
-	// `core.cert.registered` (warrant.issued_by_kid). Пустой → NULL в реестре.
+	// KID is Keeper instance identifier, passed to
+	// `core.cert.registered` (warrant.issued_by_kid). Empty → NULL in registry.
 	KID string
 
-	// BootstrapTransport — режим доставки токена `core.bootstrap.delivered`
-	// (ADR-063 amendment): bootstrap.TransportDirect ("" → direct) или
-	// bootstrap.TransportTeleport. Источник — keeper.yml::push.transport.
-	// Определяет, какие из остальных Bootstrap*-полей обязательны для регистрации
-	// модуля (см. гейт в Default).
+	// BootstrapTransport is token delivery mode for `core.bootstrap.delivered`
+	// (ADR-063 amendment): bootstrap.TransportDirect ("" → direct) or
+	// bootstrap.TransportTeleport. Source is keeper.yml::push.transport.
+	// Determines which other Bootstrap* fields are required for module
+	// registration (see gate in Default).
 	BootstrapTransport string
 
-	// BootstrapProviders / BootstrapHostCAs / BootstrapDial — зависимости
-	// keeper-side core-модуля `core.bootstrap.delivered` (ADR-063, доставка
-	// per-VM bootstrap-токена по SSH).
+	// BootstrapProviders / BootstrapHostCAs / BootstrapDial are dependencies
+	// for keeper-side core module `core.bootstrap.delivered` (ADR-063, per-VM
+	// bootstrap-token delivery over SSH).
 	//
-	// direct-режим: все три собираются wire-up-ом из той же push-инфраструктуры,
-	// что и SshDispatcher (дискаверенные SshProvider-плагины по manifest.Name +
-	// host-CA из Vault + push.Dial). Модуль регистрируется только при непустых
-	// BootstrapProviders И непустых BootstrapHostCAs И заданном BootstrapDial.
+	// direct mode: all three are wired from same push infrastructure as
+	// SshDispatcher (discovered SshProvider plugins by manifest.Name +
+	// host-CA from Vault + push.Dial). Module registered only when
+	// BootstrapProviders non-empty AND BootstrapHostCAs non-empty AND BootstrapDial set.
 	//
-	// teleport-режим (ADR-063 amendment): достаточно BootstrapDial
-	// (push.NewTeleportDialer из keeper.yml::push.teleport); BootstrapProviders/
-	// BootstrapHostCAs не требуются (Authorize/Sign не вызываются, host-verify
-	// через Teleport identity-file).
+	// teleport mode (ADR-063 amendment): BootstrapDial alone suffices
+	// (push.NewTeleportDialer from keeper.yml::push.teleport); BootstrapProviders/
+	// BootstrapHostCAs not needed (Authorize/Sign not called, host-verify
+	// via Teleport identity-file).
 	//
-	// Любой непокрытый пробел → модуль не регистрируется, шаг с этим адресом
-	// упадёт «unknown keeper-side module» (понятный «не сконфигурирован»).
+	// Any gap → module not registered, step with that address
+	// fails with "unknown keeper-side module" (clear "not configured").
 	BootstrapProviders map[string]bootstrap.SshProviderHost
 	BootstrapHostCAs   []push.NamedHostKeyAuthority
 	BootstrapDial      push.Dialer
 
-	// BootstrapInstall — резолвер install-blueprint для install-режима
-	// `core.bootstrap.delivered` (param `install: true`, только teleport, ADR-063
-	// amendment «full-install over SSH»). Прод-обёртка читает keeper.yml::cloud_init
-	// snapshot + Vault (тот же cloudinit.Resolver, что cloud-init userdata). nil
-	// допустим: задача с `install: true` тогда вернёт явную ошибку, token-only
-	// доставка не затронута.
+	// BootstrapInstall is install-blueprint resolver for install mode
+	// `core.bootstrap.delivered` (param `install: true`, teleport only, ADR-063
+	// amendment "full-install over SSH"). Prod wrapper reads keeper.yml::cloud_init
+	// snapshot + Vault (same cloudinit.Resolver as cloud-init userdata). nil
+	// allowed: task with `install: true` returns error, token-only
+	// delivery unaffected.
 	BootstrapInstall bootstrap.InstallResolver
 
-	// Audit — единый audit-writer для keeper-side модулей (cloud/vault
-	// пишут audit-event-ы; soul/choir — нет). nil допустим (модули пропустят
-	// запись и продолжат), но в проде wire-up из main должен подсовывать
-	// настоящий keeper/internal/auditpg или auditmulti.
+	// Audit is single audit-writer for keeper-side modules (cloud/vault write
+	// audit events; soul/choir do not). nil allowed (modules skip write and
+	// continue), but prod wire-up from main should provide real
+	// keeper/internal/auditpg or auditmulti.
 	Audit AuditWriter
 }
 
-// AuditWriter — общий тип для audit-пишущих модулей (cloud/vault/bootstrap/cert);
-// всё совпадает с shared/audit.Writer.
+// AuditWriter is common type for audit-writing modules (cloud/vault/bootstrap/cert);
+// matches shared/audit.Writer.
 type AuditWriter interface {
 	cloud.AuditWriter
 	vault.AuditWriter
@@ -159,47 +159,47 @@ type AuditWriter interface {
 	cert.AuditWriter
 }
 
-// Default собирает Registry с keeper-side core-модулями: безусловно
-// core.soul / core.cloud / core.vault, плюс core.choir при наличии
-// Deps.ChoirStore. Caller передаёт реальные dep-ы (PG-pool через
-// cloud.NewSoulPG / cloud.NewTokenPG / soul.NewPGStore, vault-client из
+// Default builds Registry with keeper-side core modules: unconditionally
+// core.soul / core.cloud / core.vault, plus core.choir if
+// Deps.ChoirStore present. Caller provides real deps (PG-pool via
+// cloud.NewSoulPG / cloud.NewTokenPG / soul.NewPGStore, vault-client from
 // keeper/internal/vault, choir.NewPGStore).
 func Default(d Deps) *Registry {
 	cloudMod := cloud.New(d.PluginHost, d.CloudResolver, d.CloudSouls, d.CloudTokens, d.CloudCascade, d.Audit)
 	if d.CloudUserdata != nil {
 		cloudMod = cloudMod.WithUserdata(d.CloudUserdata)
 	}
-	// core.soul.registered с барьером онбординга (ADR-061): presence-checker +
-	// провайдер потолка await_timeout подключаются опционально. nil presence —
-	// шаг с await_online: true завершится failed (тестовые/dev-сборки без Redis).
+	// core.soul.registered with onboarding barrier (ADR-061): presence-checker +
+	// await_timeout ceiling provider optional. nil presence →
+	// step with await_online: true fails (test/dev builds without Redis).
 	soulMod := soul.New(d.SoulStore).WithPresence(d.SoulPresence, d.MaxAwaitTimeout)
 	mods := map[string]module.SoulModule{
 		soul.Name:  soulMod,
 		cloud.Name: cloudMod,
 		vault.Name: vault.New(d.Vault, d.Audit),
 	}
-	// `core.choir` (ADR-044) — регистрируется только при наличии
-	// ChoirStore. nil означает сборку без choir-сценариев; шаг с этим модулем
-	// тогда упадёт «unknown keeper-side module» (как любой не подключённый).
+	// `core.choir` (ADR-044) registered only when ChoirStore present.
+	// nil means build without choir scenarios; step with that module
+	// fails with "unknown keeper-side module" (like any unconfigured one).
 	if d.ChoirStore != nil {
 		mods[choir.Name] = choir.New(d.ChoirStore)
 	}
-	// `core.cert.registered` (cert-rotation Вар1, E1) — регистрируется при
-	// наличии CertStore И Vault (модуль читает cert-PEM из Vault). nil любого —
-	// сборка без cert-регистрации (dev без Vault / без PG); шаг с этим адресом
-	// тогда упадёт «unknown keeper-side module». Симметрично условной
-	// регистрации core.choir.
+	// `core.cert.registered` (cert-rotation Var1, E1) registered when
+	// CertStore AND Vault present (module reads cert-PEM from Vault). nil either
+	// means build without cert registration (dev without Vault / PG); step with
+	// that address fails with "unknown keeper-side module". Symmetric to
+	// conditional core.choir registration.
 	if d.CertStore != nil && d.Vault != nil {
 		mods[cert.Name] = cert.New(d.Vault, d.CertStore, d.Audit, d.KID)
 	}
-	// `core.bootstrap.delivered` (ADR-063) — регистрируется при наличии нужного
-	// набора зависимостей; набор зависит от transport (ADR-063 amendment):
-	//   - teleport: достаточно BootstrapDial (Teleport-Dialer); providers/host-CA
-	//     не нужны (Authorize/Sign не вызываются, host-verify через Teleport);
-	//   - direct (default): провайдеры + host-CA + dialer (полный SSH-набор).
-	// Любой непокрытый пробел означает сборку без push-доступа: шаг с этим
-	// адресом тогда упадёт «unknown keeper-side module» (как любой не
-	// подключённый). Симметрично условной регистрации `core.choir`.
+	// `core.bootstrap.delivered` (ADR-063) registered when required dependency
+	// set present; set depends on transport (ADR-063 amendment):
+	//   - teleport: BootstrapDial alone suffices (Teleport-Dialer); providers/host-CA
+	//     not needed (Authorize/Sign not called, host-verify via Teleport);
+	//   - direct (default): providers + host-CA + dialer (full SSH set).
+	// Any gap means build without push access: step with that
+	// address fails with "unknown keeper-side module" (like any unconfigured one).
+	// Symmetric to conditional `core.choir` registration.
 	if bootstrapModuleConfigured(d) {
 		mods[bootstrap.Name] = &bootstrap.Module{
 			Transport: d.BootstrapTransport,
@@ -213,9 +213,9 @@ func Default(d Deps) *Registry {
 	return NewRegistry(mods)
 }
 
-// bootstrapModuleConfigured решает, регистрировать ли `core.bootstrap.delivered`
-// (ADR-063 + amendment). teleport-режим требует только dialer; direct — полный
-// SSH-набор (провайдеры + host-CA + dialer).
+// bootstrapModuleConfigured decides whether to register `core.bootstrap.delivered`
+// (ADR-063 + amendment). teleport mode requires only dialer; direct requires
+// full SSH set (providers + host-CA + dialer).
 func bootstrapModuleConfigured(d Deps) bool {
 	if d.BootstrapDial == nil {
 		return false
@@ -226,7 +226,7 @@ func bootstrapModuleConfigured(d Deps) bool {
 	return len(d.BootstrapProviders) > 0 && len(d.BootstrapHostCAs) > 0
 }
 
-// NewRegistry собирает Registry из произвольного набора реализаций.
+// NewRegistry builds Registry from arbitrary set of implementations.
 func NewRegistry(mods map[string]module.SoulModule) *Registry {
 	cp := make(map[string]module.SoulModule, len(mods))
 	for k, v := range mods {
@@ -235,14 +235,14 @@ func NewRegistry(mods map[string]module.SoulModule) *Registry {
 	return &Registry{mods: cp}
 }
 
-// Lookup возвращает модуль по base-имени (без state-суффикса) и флаг наличия.
+// Lookup returns module by base-name (without state suffix) and presence flag.
 func (r *Registry) Lookup(name string) (module.SoulModule, bool) {
 	m, ok := r.mods[name]
 	return m, ok
 }
 
-// Names возвращает список зарегистрированных модулей в недетерминированном
-// порядке (Go map iteration). Используется для diagnostic-вывода / healthz.
+// Names returns list of registered modules in non-deterministic order
+// (Go map iteration). Used for diagnostic output / healthz.
 func (r *Registry) Names() []string {
 	out := make([]string, 0, len(r.mods))
 	for k := range r.mods {

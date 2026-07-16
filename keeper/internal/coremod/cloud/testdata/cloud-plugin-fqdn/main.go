@@ -1,7 +1,7 @@
-// Минимальный CloudDriver-плагин для integration-теста PluginAdapter +
-// core.cloud.provisioned. Отличается от keeper/internal/pluginhost/testdata/cloud-plugin
-// только тем, что VmInfo в Create несёт fqdn (`provisioned` модуль
-// требует non-empty fqdn для использования как SID, см. applyCreated).
+// Minimal CloudDriver plugin for integration-test of PluginAdapter +
+// core.cloud.provisioned. Differs from keeper/internal/pluginhost/testdata/cloud-plugin
+// only in that VmInfo in Create carries fqdn (`provisioned` module
+// requires non-empty fqdn for use as SID, see applyCreated).
 package main
 
 import (

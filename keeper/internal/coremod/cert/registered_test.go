@@ -38,7 +38,7 @@ type registerCall struct {
 }
 
 type fakeStore struct {
-	active     *keepercert.Warrant // возвращается SelectActive (nil → ErrNotFound)
+	active     *keepercert.Warrant // returned by SelectActive (nil → ErrNotFound)
 	registered []registerCall
 	regErr     error
 }
@@ -77,8 +77,8 @@ func mustStruct(t *testing.T, m map[string]any) *structpb.Struct {
 	return s
 }
 
-// makeCertPEM генерит self-signed leaf-серт с заданным not_after и возвращает
-// (PEM, fingerprint) — fingerprint считается тем же способом, что модуль.
+// makeCertPEM generates self-signed leaf cert with given not_after and returns
+// (PEM, fingerprint) — fingerprint computed same way as module.
 func makeCertPEM(t *testing.T, cn string, notAfter time.Time) (string, string) {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -143,16 +143,16 @@ func TestValidate_RejectsBadKind(t *testing.T) {
 	}
 }
 
-// --- Apply: первичная регистрация ---
+// --- Apply: initial registration ---
 
-// TestApply_RegistersNewCert — GUARD первичной регистрации (design.md): create
-// пишет warrant → Reaper видит серт. Модуль читает PEM из Vault, извлекает
-// метаданные и регистрирует active-строку; changed=true.
+// TestApply_RegistersNewCert is GUARD for initial registration (design.md): create
+// writes warrant → Reaper sees cert. Module reads PEM from Vault, extracts
+// metadata and registers active row; changed=true.
 func TestApply_RegistersNewCert(t *testing.T) {
 	notAfter := time.Now().Add(90 * 24 * time.Hour).Truncate(time.Second)
 	certPEM, wantFP := makeCertPEM(t, "redis-prod.tls", notAfter)
 	fv := &fakeVault{resp: map[string]any{"cert": certPEM}}
-	fs := &fakeStore{} // нет active → ErrNotFound
+	fs := &fakeStore{} // no active → ErrNotFound
 	fa := &fakeAudit{}
 	m := coremodcert.New(fv, fs, fa, "kid-1")
 	stream := internaltest.NewApplyStream()
@@ -195,15 +195,15 @@ func TestApply_RegistersNewCert(t *testing.T) {
 	if !got.AutoRotate {
 		t.Error("auto_rotate default should be true")
 	}
-	// audit-событие есть, без секретов (PEM не течёт).
+	// audit event written, no secrets (PEM doesn't leak).
 	if len(fa.events) != 1 || fa.events[0].EventType != audit.EventCertRegistered {
 		t.Fatalf("expected 1 cert.registered event, got %v", fa.events)
 	}
 }
 
-// TestApply_IdempotentSameFingerprint — GUARD идемпотентности (design.md):
-// active-строка с тем же fingerprint уже есть → no-op, RegisterActive НЕ
-// вызывается, changed=false, audit-событие не пишется.
+// TestApply_IdempotentSameFingerprint is GUARD for idempotency (design.md):
+// active row with same fingerprint already exists → no-op, RegisterActive NOT
+// called, changed=false, no audit event written.
 func TestApply_IdempotentSameFingerprint(t *testing.T) {
 	notAfter := time.Now().Add(90 * 24 * time.Hour).Truncate(time.Second)
 	certPEM, fp := makeCertPEM(t, "redis-prod.tls", notAfter)
@@ -211,7 +211,7 @@ func TestApply_IdempotentSameFingerprint(t *testing.T) {
 	fs := &fakeStore{active: &keepercert.Warrant{
 		IncarnationID: "redis-prod",
 		Kind:          keepercert.KindCert,
-		Fingerprint:   fp, // тот же серт уже active
+		Fingerprint:   fp, // same cert already active
 	}}
 	fa := &fakeAudit{}
 	m := coremodcert.New(fv, fs, fa, "kid-1")
@@ -243,8 +243,8 @@ func TestApply_IdempotentSameFingerprint(t *testing.T) {
 	}
 }
 
-// TestApply_NewFingerprintSupersedes — сменившийся серт (другой fingerprint) →
-// RegisterActive вызывается (supersede+insert внутри), changed=true.
+// TestApply_NewFingerprintSupersedes tests changed cert (different fingerprint) →
+// RegisterActive called (supersede+insert inside), changed=true.
 func TestApply_NewFingerprintSupersedes(t *testing.T) {
 	notAfter := time.Now().Add(90 * 24 * time.Hour).Truncate(time.Second)
 	certPEM, newFP := makeCertPEM(t, "redis-prod.tls", notAfter)
@@ -252,7 +252,7 @@ func TestApply_NewFingerprintSupersedes(t *testing.T) {
 	fs := &fakeStore{active: &keepercert.Warrant{
 		IncarnationID: "redis-prod",
 		Kind:          keepercert.KindCert,
-		Fingerprint:   "old" + newFP[3:], // отличается от нового
+		Fingerprint:   "old" + newFP[3:], // differs from new
 	}}
 	m := coremodcert.New(fv, fs, &fakeAudit{}, "kid-1")
 	stream := internaltest.NewApplyStream()
@@ -276,8 +276,8 @@ func TestApply_NewFingerprintSupersedes(t *testing.T) {
 	}
 }
 
-// TestApply_FailsOnUnparsablePEM — мусор вместо PEM → failed-событие
-// (scenario-applier зайдёт в onfail), RegisterActive НЕ вызывается.
+// TestApply_FailsOnUnparsablePEM tests garbage instead of PEM → failed event
+// (scenario-applier goes to onfail), RegisterActive NOT called.
 func TestApply_FailsOnUnparsablePEM(t *testing.T) {
 	fv := &fakeVault{resp: map[string]any{"cert": "not-a-pem"}}
 	fs := &fakeStore{}

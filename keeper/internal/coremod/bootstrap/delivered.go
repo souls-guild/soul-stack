@@ -69,160 +69,155 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// Name — base-имя модуля без state-суффикса (ключ Registry). Author-форма
-// адреса задачи — `core.bootstrap.delivered` (base + state `delivered`); state
-// приходит в pluginv1.ApplyRequest.state и проверяется в Apply.
+// Name is the base module name without state suffix (Registry key). Author form
+// of task address is `core.bootstrap.delivered` (base + state `delivered`); state
+// arrives in pluginv1.ApplyRequest.state and is validated in Apply.
 const Name = "core.bootstrap"
 
-// StateDelivered — единственное состояние модуля.
+// StateDelivered is the only state of this module.
 const StateDelivered = "delivered"
 
-// Дефолты опциональных параметров.
+// Default values for optional parameters.
 const (
 	defaultTokenPath = "/etc/soul/token"
 	defaultSSHUser   = "root"
 	defaultSSHPort   = 22
 )
 
-// Транспортные режимы доставки (поле Module.Transport, источник —
-// keeper.yml::push.transport). Пустая строка трактуется как TransportDirect
-// (backward-compat: существующая generic-доставка).
+// Transport modes for delivery (Module.Transport field, source: keeper.yml::push.transport).
+// Empty string is treated as TransportDirect (backward-compat with existing generic delivery).
 const (
-	// TransportDirect — generic push.Dial по primary_ip (Authorize/Sign/CA-host-cert).
+	// TransportDirect is generic push.Dial by primary_ip (Authorize/Sign/CA-host-cert).
 	TransportDirect = "direct"
-	// TransportTeleport — by-name через Teleport Proxy (target = SID), без
-	// Authorize/Sign, host-verify через Teleport identity-file.
+	// TransportTeleport is by-name delivery via Teleport Proxy (target = SID), without
+	// Authorize/Sign, host-verify through Teleport identity-file.
 	TransportTeleport = "teleport"
 )
 
-// Параметры retry-with-backoff connect-а в teleport-режиме (свежая VM join-ится
-// в Teleport через ~3-5мин). В direct-режиме retry не применяется (хост уже
-// существует на момент шага).
+// Retry-with-backoff parameters for connect in teleport mode (fresh VM joins Teleport
+// around 3-5 minutes after creation). In direct mode, retry is not applied (host already
+// exists at step time).
 const (
-	// defaultJoinWaitTimeout — потолок ожидания Teleport-join по умолчанию
-	// (опц. param `join_wait_timeout`). 15 мин: reverse-tunnel-агент на свежей
-	// cloud-VM появляется в Teleport заметно позже типовых 3-5мин (медленный
-	// join → шаг падал зря, хотя VM в итоге поднималась), поэтому запас с большим
-	// margin. Инвариант: provision-aware run-timeout floor (ceiling+deployBudget)
-	// обязан превышать это значение — TestProvisionTimeoutExceedsJoinWait.
+	// defaultJoinWaitTimeout is the default ceiling for Teleport-join wait (optional param
+	// `join_wait_timeout`). 15 min: reverse-tunnel agent on fresh cloud-VM appears in Teleport
+	// significantly later than typical 3-5 min (slow join → step failed needlessly, though VM
+	// eventually came up), so large margin. Invariant: provision-aware run-timeout floor
+	// (ceiling+deployBudget) must exceed this value — TestProvisionTimeoutExceedsJoinWait.
 	defaultJoinWaitTimeout = 15 * time.Minute
-	// DefaultJoinWaitTimeout — экспортированное зеркало defaultJoinWaitTimeout:
-	// делает дефолтный тайм-бюджет Teleport-join частью наблюдаемого контракта,
-	// чтобы статический guard-инвариант (provision-aware effective run-timeout
-	// scenario обязан превышать joinWait — иначе настройка «мертва»: барьер
-	// онбординга упрётся в обрыв прогона) проверял РЕАЛЬНОЕ значение, а не его
-	// дубль. Значение и поведение delivered.go не меняются.
+	// DefaultJoinWaitTimeout is the exported mirror of defaultJoinWaitTimeout:
+	// makes default Teleport-join time-budget part of observable contract,
+	// so static guard-invariant (provision-aware effective run-timeout scenario must exceed
+	// joinWait — else setting is "dead": onboarding barrier stalls prematurely) checks the
+	// REAL value, not its duplicate. Value and behavior of delivered.go unchanged.
 	DefaultJoinWaitTimeout = defaultJoinWaitTimeout
-	// joinRetryBase — базовый интервал между попытками connect-а.
+	// joinRetryBase is the base interval between connect attempts.
 	joinRetryBase = 12 * time.Second
-	// joinRetryJitter — верхняя граница случайной добавки к интервалу (anti-
-	// thundering-herd при пакетной доставке на N VM).
+	// joinRetryJitter is the upper bound of random jitter added to interval
+	// (anti-thundering-herd for batch delivery to N VMs).
 	joinRetryJitter = 4 * time.Second
 )
 
-// deliverScriptFmt — shell-команда записи токена на VM. Токен подаётся в STDIN
-// (`cat > path`), НЕ в argv: argv утёк бы в `ps`/audit.log/journald на самой VM.
-// `install -d -m 0700 /etc/soul` создаёт каталог с приватными правами (umask 077
-// дополнительно страхует от race-окна между cat и chmod), `chmod 0400` —
-// read-only владельцу. token_path подставляется напрямую: источник — рендер
-// scenario (доверенный keeper-side вход, не Soul-reported), shell-escape не нужен.
+// deliverScriptFmt is a shell command to write token to VM. Token is passed via STDIN
+// (`cat > path`), NOT in argv: argv would leak to `ps`/audit.log/journald on the VM.
+// `install -d -m 0700 /etc/soul` creates directory with private permissions (umask 077
+// additionally protects from race window between cat and chmod), `chmod 0400` makes it
+// read-only to owner. token_path is substituted directly: source is scenario render
+// (trusted keeper-side input, not Soul-reported), shell-escape not needed.
 const deliverScriptFmt = "install -d -m 0700 /etc/soul && umask 077 && cat > %s && chmod 0400 %s"
 
-// initSoulCmdFmt — redeem токена после записи (5-я стена ADR-063): seed создаёт
-// ТОЛЬКО `soul init` (soul-side «подхвата» token-файла нет), без init доставленный
-// токен — мёртвый груз, soul run падает «SoulSeed not found». %s: seed-cert-guard
-// (SeedCertPath — токен single-use, повторный init после успешного redeem завалил
-// бы хост при retry шага) / token_path / бинарь / soul.yml. ★ Литеральная $(cat …)
-// раскрывается subshell-ом на VM — токен НЕ в argv keeper-а; симметрия
-// cloud-init.tmpl self-onboard-фазы бит-в-бит.
+// initSoulCmdFmt is the token redeem command after writing (5th wall ADR-063): seed creates
+// ONLY `soul init` (soul-side has no token-file "pickup"), without init the delivered token
+// is dead weight; soul run fails with "SoulSeed not found". %s placeholders: seed-cert-guard
+// (SeedCertPath — token is single-use, repeat init after successful redeem would break host
+// on step retry) / token_path / binary / soul.yml. ★ Literal $(cat …) is expanded by subshell
+// on VM — token is NOT in keeper's argv; exact parity with cloud-init.tmpl self-onboard phase.
 const initSoulCmdFmt = `test -e %s || SOUL_BOOTSTRAP_TOKEN="$(cat %s)" %s init --config %s`
 
-// startSoulCmd — активация soul-агента после init (start_soul: true): parity с
-// cloud-init.tmpl runcmd — daemon-reload подхватывает свежезаписанный unit
-// (install-режим), enable переживает ребут VM; оба идемпотентны.
+// startSoulCmd activates soul agent after init (start_soul: true): parity with cloud-init.tmpl
+// runcmd — daemon-reload picks up freshly written unit (install mode), enable survives VM reboot;
+// both are idempotent.
 const startSoulCmd = "systemctl daemon-reload && systemctl enable soul && systemctl start soul"
 
-// SshProviderHost — узкая поверхность SSH-аутентификации, нужная модулю:
-// Authorize (право Keeper-а ходить на хост) + Sign (выпуск SSH-credentials на
-// сессию). Это в точности [push.SshProvider] — тот же host-side потребительский
-// контракт из двух методов, которым пользуется SshDispatcher.
+// SshProviderHost is the narrow SSH authentication surface needed by this module:
+// Authorize (Keeper's right to reach host) + Sign (issue SSH credentials for session).
+// This is exactly [push.SshProvider] — same host-side consumer contract of two methods
+// used by SshDispatcher.
 //
-// Переиспользуется (а не дублируется) намеренно: прод-реализация —
-// дискаверенный SshProvider-плагин (`*pluginhost.SshProviderPlugin`), который
-// уже реализует Authorize/Sign и подаётся в SshDispatcher тем же типом. Карта
-// провайдеров собирается wire-up-ом daemon-а из тех же spawned-плагинов; в
-// unit-тестах модуля мокается struct-ом. nil-карта/пустая → модуль не
-// регистрируется (см. registry).
+// Reused (not duplicated) intentionally: production implementation is discovered
+// SshProvider plugin (`*pluginhost.SshProviderPlugin`), which already implements
+// Authorize/Sign and is provided to SshDispatcher with the same type. Provider map
+// is assembled by daemon wire-up from same spawned plugins; in module unit-tests
+// mocked by struct. nil-map/empty → module not registered (see registry).
 type SshProviderHost = push.SshProvider
 
-// AuditWriter — для audit-event-а `bootstrap.delivered`.
+// AuditWriter is for audit-event `bootstrap.delivered`.
 type AuditWriter interface {
 	Write(ctx context.Context, event *audit.Event) error
 }
 
-// InstallResolver резолвит cloud_init-блок keeper.yml в [cloudinit.Config] —
-// источник [soulinstall.Blueprint] для install-режима. Узкая поверхность (а не
-// сам *cloudinit.Resolver) держит bootstrap-пакет независимым от config.Store:
-// прод-обёртка в daemon-е читает текущий KeeperConfig snapshot (hot-reload) и
-// зовёт Resolver.Resolve — тот же паттерн, что cloudInitProvider для cloud-create.
+// InstallResolver resolves keeper.yml cloud_init block into [cloudinit.Config] —
+// source for [soulinstall.Blueprint] for install mode. Narrow surface (not the
+// *cloudinit.Resolver itself) keeps bootstrap package independent from config.Store:
+// production wrapper in daemon reads current KeeperConfig snapshot (hot-reload) and
+// calls Resolver.Resolve — same pattern as cloudInitProvider for cloud-create.
 //
-// Возвращаемый Config несёт уже резолвленный CA-PEM (из Vault) + endpoint/URL.
-// nil-резолвер на Module означает сборку без install-поддержки: install=true
-// тогда вернёт явную ошибку «install-режим не сконфигурирован».
+// Returned Config already carries resolved CA-PEM (from Vault) + endpoint/URL.
+// nil-resolver on Module means build without install support: install=true
+// then returns explicit error "install mode not configured".
 type InstallResolver interface {
 	Resolve(ctx context.Context) (cloudinit.Config, error)
 }
 
-// Module — реализация sdk/module.SoulModule.
+// Module implements sdk/module.SoulModule.
 //
-// Обязательность зависит от транспорта (поле Transport):
-//   - direct (default): Providers + HostCAs + Dial обязательны (nil/пусто → явная
-//     ошибка Apply либо не-регистрация в Registry).
-//   - teleport: достаточно Dial (Teleport-Dialer); Providers/HostCAs не
-//     используются (Authorize/Sign не вызываются, host-verify через Teleport).
+// Requirement depends on transport (Transport field):
+//   - direct (default): Providers + HostCAs + Dial are required (nil/empty →
+//     explicit error from Apply or non-registration in Registry).
+//   - teleport: Dial (Teleport-Dialer) suffices; Providers/HostCAs not used
+//     (Authorize/Sign not called, host-verify via Teleport).
 //
-// Audit опционален (nil → запись пропускается).
+// Audit is optional (nil → write skipped).
 type Module struct {
-	// Transport — режим доставки: TransportDirect (default при "") или
-	// TransportTeleport. Источник — keeper.yml::push.transport (wire-up daemon-а),
-	// НЕ scenario-param: режим — свойство инсталляции keeper-а, не отдельной задачи.
+	// Transport is the delivery mode: TransportDirect (default if "") or
+	// TransportTeleport. Source: keeper.yml::push.transport (daemon wire-up),
+	// NOT scenario-param: mode is property of keeper installation, not individual task.
 	Transport string
 
-	// Provider — резолв SSH-провайдера по имени param `ssh_provider`. MVP —
-	// single-provider: модуль держит карту, собранную wire-up-ом из
-	// дискаверенных SshProvider-плагинов (по manifest.Name). В teleport-режиме
-	// НЕ используется (Authorize/Sign не вызываются).
+	// Providers resolves SSH provider by name from param `ssh_provider`. MVP is
+	// single-provider: module holds map assembled by wire-up from discovered
+	// SshProvider plugins (by manifest.Name). Not used in teleport mode
+	// (Authorize/Sign not called).
 	Providers map[string]SshProviderHost
 
-	// HostCAs — multi-CA-набор для verify host-cert целевых VM (тот же
-	// push.LoadHostCAs, что у SshDispatcher). В direct-режиме непустой; пустой →
-	// Apply вернёт явную ошибку (CA-signed host-cert verify обязателен,
-	// fail-closed). В teleport-режиме НЕ используется (host-verify через Teleport
-	// identity-file, C1 неприменим).
+	// HostCAs is multi-CA set for verifying host-cert of target VMs (same
+	// push.LoadHostCAs as SshDispatcher). Non-empty in direct mode; empty →
+	// Apply returns explicit error (CA-signed host-cert verify is required,
+	// fail-closed). Not used in teleport mode (host-verify via Teleport
+	// identity-file, C1 not applicable).
 	HostCAs []push.NamedHostKeyAuthority
 
-	// Dial — открытие SSH-сессии. direct — push.Dial; teleport —
-	// push.NewTeleportDialer; тест — мок-Dialer.
+	// Dial opens SSH session. direct: push.Dial; teleport:
+	// push.NewTeleportDialer; test: mock-Dialer.
 	Dial push.Dialer
 
-	// RetryBase / RetryJitter — параметры backoff teleport-connect-retry. 0 →
-	// дефолты joinRetryBase / joinRetryJitter. Поля существуют ради unit-тестов
-	// (короткий backoff, чтобы retry-до-join не спал реальные ~12с); прод-wire-up
-	// их не задаёт.
+	// RetryBase / RetryJitter are backoff parameters for teleport-connect-retry.
+	// 0 → defaults joinRetryBase / joinRetryJitter. Fields exist for unit-tests
+	// (short backoff so retry-until-join doesn't sleep actual ~12s); production
+	// wire-up doesn't set them.
 	RetryBase   time.Duration
 	RetryJitter time.Duration
 
-	// Install — резолвер blueprint-параметров для install-режима (param
-	// `install: true`, только teleport). nil → install-режим не сконфигурирован:
-	// задача с `install: true` вернёт явную ошибку. Прод-обёртка читает
-	// keeper.yml::cloud_init snapshot + Vault (cloudinit.Resolver), wire-up в daemon-е.
+	// Install resolves blueprint parameters for install mode (param `install: true`,
+	// teleport only). nil → install mode not configured: task with `install: true`
+	// returns explicit error. Production wrapper reads keeper.yml::cloud_init
+	// snapshot + Vault (cloudinit.Resolver), wire-up in daemon.
 	Install InstallResolver
 
-	// Audit — audit-writer (`bootstrap.delivered`). nil → запись пропускается.
+	// Audit is audit-writer (`bootstrap.delivered`). nil → write skipped.
 	Audit AuditWriter
 }
 
-// retryBackoff возвращает (base, jitter) с подстановкой дефолтов при нулях.
+// retryBackoff returns (base, jitter) with default substitution for zero values.
 func (m *Module) retryBackoff() (base, jitter time.Duration) {
 	base = m.RetryBase
 	if base <= 0 {
@@ -235,20 +230,20 @@ func (m *Module) retryBackoff() (base, jitter time.Duration) {
 	return base, jitter
 }
 
-// teleport сообщает, работает ли модуль в by-name Teleport-режиме.
+// teleport reports whether module operates in by-name Teleport mode.
 func (m *Module) teleport() bool { return m.Transport == TransportTeleport }
 
-// hostInput — одна VM из param `hosts` (= register.<provision>.hosts от
-// core.cloud.created): SID, IP для коннекта и plain bootstrap-токен.
+// hostInput is one VM from param `hosts` (= register.<provision>.hosts from
+// core.cloud.created): SID, IP for connection, and plain bootstrap token.
 type hostInput struct {
 	sid       string
 	primaryIP string
 	token     string
 }
 
-// connectTarget — адрес коннекта для диагностики (direct → primary_ip; teleport
-// → SID/node-name). Используется в тексте failed-event, чтобы оператор видел, по
-// чему именно шла доставка.
+// connectTarget is the connection address for diagnostics (direct → primary_ip; teleport
+// → SID/node-name). Used in failed-event text so operator sees exactly what was
+// being delivered to.
 func (h hostInput) connectTarget(teleport bool) string {
 	if teleport {
 		return h.sid
@@ -256,11 +251,11 @@ func (h hostInput) connectTarget(teleport bool) string {
 	return h.primaryIP
 }
 
-// Validate проверяет params без транспорт-зависимости (режим — свойство
-// инсталляции, не задачи). ★ `ssh_provider` required в обоих режимах, но в
-// transport: teleport он НЕ определяет транспорт: Authorize/Sign не вызываются,
-// имя уходит ТОЛЬКО в audit-payload `bootstrap.delivered`. Смена required-статуса
-// по транспорту — пост-MVP опционально.
+// Validate checks params without transport dependency (mode is property of keeper
+// installation, not task). ★ `ssh_provider` is required in both modes, but in
+// transport: teleport it does NOT determine transport: Authorize/Sign not called,
+// name goes ONLY into audit-payload `bootstrap.delivered`. Changing required-status
+// per transport is post-MVP optional.
 func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
 	var errs []string
 	if req.State != StateDelivered {
@@ -270,8 +265,8 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 	if _, err := util.StringParam(req.Params, "ssh_provider"); err != nil {
 		errs = append(errs, err.Error())
 	}
-	// hosts валидируется на структуру в Apply (per-element list-of-objects);
-	// здесь проверяем лишь присутствие и тип через accessor.
+	// hosts is validated for structure in Apply (per-element list-of-objects);
+	// here we only check presence and type via accessor.
 	if _, ok := req.Params.GetFields()["hosts"]; !ok {
 		errs = append(errs, "param \"hosts\": missing")
 	}
@@ -292,13 +287,13 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 	if _, _, err := util.OptBoolParam(req.Params, "start_soul"); err != nil {
 		errs = append(errs, err.Error())
 	}
-	// install: full-install по SSH (ADR-063 amendment). Валиден ТОЛЬКО в
-	// transport=teleport (MVP): в direct setch ставит cloud-init userdata, install
-	// не нужен. install=true+direct — явная ошибка (а не тихий no-op).
+	// install: full-install over SSH (ADR-063 amendment). Valid ONLY in
+	// transport=teleport (MVP): in direct setup cloud-init userdata is used, install
+	// not needed. install=true+direct is explicit error (not silent no-op).
 	if install, ok, err := util.OptBoolParam(req.Params, "install"); err != nil {
 		errs = append(errs, err.Error())
 	} else if ok && install && !m.teleport() {
-		errs = append(errs, "param \"install\": install режим только для teleport-транспорта (в direct setch ставит cloud-init)")
+		errs = append(errs, "param \"install\": install mode only for teleport transport (direct setup uses cloud-init)")
 	}
 	return &pluginv1.ValidateReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
@@ -314,7 +309,7 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	return m.applyDelivered(req, stream)
 }
 
-// applyDelivered реализует state=delivered. См. doc-комментарий пакета.
+// applyDelivered implements state=delivered. See package doc-comment.
 func (m *Module) applyDelivered(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
 	ctx := stream.Context()
 
@@ -352,7 +347,7 @@ func (m *Module) applyDelivered(req *pluginv1.ApplyRequest, stream grpc.ServerSt
 		return util.SendFailed(stream, err.Error())
 	}
 	if !hasStart {
-		startSoul = true // default: запускаем soul после доставки токена
+		startSoul = true // default: start soul after token delivery
 	}
 	joinWait, hasJoinWait, err := parseJoinWait(req.Params)
 	if err != nil {
@@ -366,20 +361,20 @@ func (m *Module) applyDelivered(req *pluginv1.ApplyRequest, stream grpc.ServerSt
 		return util.SendFailed(stream, err.Error())
 	}
 	if install && !m.teleport() {
-		// Дублирует Validate-гейт: defense-in-depth, если Apply вызван в обход
-		// Validate (прямая сборка ApplyRequest в тестах/инструментах).
-		return util.SendFailed(stream, "bootstrap delivered: install режим только для teleport-транспорта")
+		// Duplicates Validate gate: defense-in-depth if Apply called bypassing
+		// Validate (direct ApplyRequest construction in tests/tools).
+		return util.SendFailed(stream, "bootstrap delivered: install mode only for teleport transport")
 	}
 
-	// Конфигурационные предусловия — явная ошибка вместо невнятного nil-panic.
+	// Configuration preconditions — explicit error instead of cryptic nil-panic.
 	if m.Dial == nil {
 		return util.SendFailed(stream, "bootstrap delivered: dialer not configured (wire push.Dial / push.NewTeleportDialer in main)")
 	}
 
-	// install-шаги резолвятся ОДИН раз на весь шаг (blueprint общий для всех VM:
-	// endpoint/CA/URL берутся из keeper.yml::cloud_init, не per-host). Resolve
-	// читает Vault (CA-PEM) — дёргать на каждый хост незачем. Пустой срез при
-	// install=false → deliverHost не выполняет ни одного install-шага (token-only).
+	// install-steps are resolved ONCE per step (blueprint shared by all VMs:
+	// endpoint/CA/URL taken from keeper.yml::cloud_init, not per-host). Resolve
+	// reads Vault (CA-PEM) — no need to call per-host. Empty slice when
+	// install=false → deliverHost executes no install-steps (token-only).
 	var installSteps []soulinstall.InstallStep
 	if install {
 		steps, ierr := m.resolveInstallSteps(ctx)
@@ -389,12 +384,12 @@ func (m *Module) applyDelivered(req *pluginv1.ApplyRequest, stream grpc.ServerSt
 		installSteps = steps
 	}
 
-	// prov резолвится только для direct-режима: teleport не вызывает Authorize/Sign
-	// (транспорт+auth целиком через identity-file), карта Providers пуста.
+	// prov is resolved only for direct mode: teleport doesn't call Authorize/Sign
+	// (transport+auth entirely through identity-file), Providers map is empty.
 	var prov SshProviderHost
 	if !m.teleport() {
 		if len(m.HostCAs) == 0 {
-			return util.SendFailed(stream, "bootstrap delivered: host CAs not configured (set keeper.yml::push.host_ca_refs[] — CA-signed host-cert verify обязателен)")
+			return util.SendFailed(stream, "bootstrap delivered: host CAs not configured (set keeper.yml::push.host_ca_refs[] — CA-signed host-cert verify required)")
 		}
 		p, ok := m.Providers[providerName]
 		if !ok || p == nil {
@@ -411,9 +406,9 @@ func (m *Module) applyDelivered(req *pluginv1.ApplyRequest, stream grpc.ServerSt
 	for _, h := range hosts {
 		started, err := m.deliverHost(ctx, prov, h, sshUser, int(sshPort), script, initCmd, installSteps, startSoul, joinWait)
 		if err != nil {
-			// B1-strict: ошибка любого хоста валит весь шаг. maskErr страхует
-			// от утечки vault-ref/токена в текст ошибки (failed-event уходит в
-			// status_details — наблюдаемый канал).
+			// B1-strict: error of any host fails entire step. maskErr protects against
+			// vault-ref/token leak into error text (failed-event goes to status_details —
+			// observable channel).
 			return util.SendFailed(stream, fmt.Sprintf("deliver token to %q (%s): %s", h.sid, h.connectTarget(m.teleport()), maskErr(err)))
 		}
 		results = append(results, map[string]any{
@@ -425,9 +420,9 @@ func (m *Module) applyDelivered(req *pluginv1.ApplyRequest, stream grpc.ServerSt
 	}
 
 	if m.Audit != nil {
-		// Audit-payload — БЕЗ токенов (как cloud.provisioned-маскинг): только
-		// count + sids. Токен plain виден лишь в register предыдущего шага и
-		// маскируется на всех его выходах; здесь его нет вовсе.
+		// Audit-payload — WITHOUT tokens (like cloud.provisioned masking): only
+		// count + sids. Plain token visible only in previous step's register and
+		// masked on all its outputs; not present here at all.
 		ev := &audit.Event{
 			EventType: audit.EventBootstrapDelivered,
 			Source:    audit.SourceKeeperInternal,
@@ -443,32 +438,32 @@ func (m *Module) applyDelivered(req *pluginv1.ApplyRequest, stream grpc.ServerSt
 		}
 	}
 
-	// ★ БЕЗ токена в output: register.<имя>.hosts[] несёт только {sid, delivered,
-	// started}. count — число успешно обработанных хостов (== len(hosts), иначе
-	// шаг бы упал).
+	// ★ WITHOUT token in output: register.<name>.hosts[] carries only {sid, delivered,
+	// started}. count is number of successfully processed hosts (== len(hosts), else
+	// step would have failed).
 	return util.SendFinal(stream, true, map[string]any{
 		"hosts": results,
 		"count": float64(len(hosts)),
 	})
 }
 
-// deliverHost обрабатывает один хост: открытие SSH-сессии (transport-зависимо) →
-// опц. install-blueprint → запись токена (STDIN) → soul init (redeem токена,
-// seed-guard-идемпотентно) → опц. активация unit-а. Возвращает (started, error).
+// deliverHost processes one host: open SSH session (transport-dependent) →
+// optional install-blueprint → write token (STDIN) → soul init (redeem token,
+// seed-guard-idempotent) → optional unit activation. Returns (started, error).
 //
-// Открытие сессии расходится по transport:
-//   - direct: Authorize (fail-closed) → ephemeral keypair + Sign → Dial по
-//     primary_ip (CA-signed host-cert verify) — переиспускает push-инфраструктуру
-//     (newEphemeralEd25519/authMethodsFromSign) ровно как SshDispatcher.SendApply,
-//     ephemeral-приватник не покидает Keeper.
-//   - teleport: retry-Dial по SID (node-name) — без Authorize/Sign/ephemeral;
-//     транспорт+auth+host-verify внутри Teleport-Dialer через identity-file.
+// Session opening diverges by transport:
+//   - direct: Authorize (fail-closed) → ephemeral keypair + Sign → Dial by
+//     primary_ip (CA-signed host-cert verify) — reuses push infrastructure
+//     (newEphemeralEd25519/authMethodsFromSign) exactly as SshDispatcher.SendApply,
+//     ephemeral private key never leaves Keeper.
+//   - teleport: retry-Dial by SID (node-name) — without Authorize/Sign/ephemeral;
+//     transport+auth+host-verify inside Teleport-Dialer via identity-file.
 //
-// installSteps (непустой только в install-режиме, teleport) выполняются по той же
-// сессии ПЕРЕД токеном — VM без cloud-init получает setch (бинарь/CA/soul.yml/unit)
-// прямо здесь. Любой ненулевой exit install-шага валит хост (B1-strict).
+// installSteps (non-empty only in install mode, teleport) execute on same
+// session BEFORE token — VM without cloud-init gets setup (binary/CA/soul.yml/unit)
+// right here. Any non-zero exit from install-step fails host (B1-strict).
 //
-// Хвост (запись токена + soul init + активация) общий для обоих режимов.
+// Tail (token write + soul init + activation) is common for both modes.
 func (m *Module) deliverHost(ctx context.Context, prov SshProviderHost, h hostInput, user string, port int, script, initCmd string, installSteps []soulinstall.InstallStep, startSoul bool, joinWait time.Duration) (started bool, err error) {
 	var sess push.Session
 	if m.teleport() {
@@ -481,22 +476,22 @@ func (m *Module) deliverHost(ctx context.Context, prov SshProviderHost, h hostIn
 	}
 	defer func() { _ = sess.Close() }()
 
-	// install ПЕРЕД токеном: VM без cloud-init userdata не имеет setch до этого
-	// момента. ★ Секреты install-шагов (CA-PEM) идут через step.Stdin, не argv
-	// (RenderInstallScript — единый источник, secret-write floor). Ненулевой
-	// exit/err любого шага → fail (B1-strict): полу-настроенная VM не получает токен.
+	// install BEFORE token: VM without cloud-init userdata has no setup until this
+	// point. ★ Secrets in install-steps (CA-PEM) go via step.Stdin, not argv
+	// (RenderInstallScript is single source, secret-write floor). Non-zero
+	// exit/err from any step → fail (B1-strict): partially configured VM doesn't get token.
 	for i, step := range installSteps {
 		if _, rerr := sess.Run(ctx, step.Cmd, step.Stdin); rerr != nil {
 			return false, fmt.Errorf("install step %d: %w", i+1, rerr)
 		}
 	}
 
-	// ★ Токен — в STDIN (script делает `cat > token_path`), НЕ в argv.
+	// ★ Token is in STDIN (script does `cat > token_path`), NOT in argv.
 	if _, rerr := sess.Run(ctx, script, []byte(h.token)); rerr != nil {
 		return false, fmt.Errorf("write token: %w", rerr)
 	}
 
-	// soul init — см. initSoulCmdFmt (5-я стена: без redeem токен бесполезен).
+	// soul init — see initSoulCmdFmt (5th wall: without redeem token is useless).
 	if _, rerr := sess.Run(ctx, initCmd, nil); rerr != nil {
 		return false, fmt.Errorf("soul init: %w", rerr)
 	}
@@ -510,11 +505,10 @@ func (m *Module) deliverHost(ctx context.Context, prov SshProviderHost, h hostIn
 	return started, nil
 }
 
-// dialDirect — generic-режим: Authorize → ephemeral keypair + Sign → push.Dial
-// по primary_ip (CA-signed host-cert verify). Без изменений относительно
-// первоначального A1-flow.
+// dialDirect is generic mode: Authorize → ephemeral keypair + Sign → push.Dial
+// by primary_ip (CA-signed host-cert verify). Unchanged from original A1-flow.
 func (m *Module) dialDirect(ctx context.Context, prov SshProviderHost, h hostInput, user string, port int) (push.Session, error) {
-	// Authorize — fail-closed: deny прекращает доставку до connect-а.
+	// Authorize is fail-closed: deny stops delivery before connect.
 	authReply, err := prov.Authorize(ctx, &pluginv1.AuthorizeRequest{Host: h.primaryIP, User: user})
 	if err != nil {
 		return nil, fmt.Errorf("authorize %s@%s: %w", user, h.primaryIP, err)
@@ -523,8 +517,8 @@ func (m *Module) dialDirect(ctx context.Context, prov SshProviderHost, h hostInp
 		return nil, fmt.Errorf("authorize denied for %s@%s: %s", user, h.primaryIP, authReply.GetReason())
 	}
 
-	// Ephemeral keypair: Keeper-side ed25519-пара per-host. Pubkey уезжает в
-	// SignRequest для CA-провайдеров; приватник НИКОГДА не покидает Keeper.
+	// Ephemeral keypair: Keeper-side ed25519 pair per-host. Pubkey goes into
+	// SignRequest for CA providers; private key NEVER leaves Keeper.
 	ephSigner, ephPub, err := push.NewEphemeralEd25519()
 	if err != nil {
 		return nil, fmt.Errorf("ephemeral keypair: %w", err)
@@ -552,17 +546,17 @@ func (m *Module) dialDirect(ctx context.Context, prov SshProviderHost, h hostInp
 	return sess, nil
 }
 
-// dialTeleport — by-name режим: Dial по SID (node-name) через Teleport-Dialer,
-// обёрнутый retry-with-backoff до joinWait. Свежая VM появляется в Teleport
-// только через ~3-5мин после создания, поэтому первые попытки DialHost вернут
-// 'offline or does not exist' — это ожидаемо, не valid повод валить шаг сразу.
+// dialTeleport is by-name mode: Dial by SID (node-name) via Teleport-Dialer
+// wrapped in retry-with-backoff until joinWait. Fresh VM appears in Teleport
+// only ~3-5 min after creation, so first DialHost attempts return
+// 'offline or does not exist' — expected, not valid reason to fail step immediately.
 //
-// ★ DialConfig несёт ТОЛЬКО Host=SID/Port/User/Timeout: Auth/HostAuthorities/
-// ProxyJump в teleport-режиме игнорируются Teleport-Dialer-ом (auth+host-verify
-// из identity-file). Authorize/Sign/ephemeral здесь не вызываются вовсе.
+// ★ DialConfig carries ONLY Host=SID/Port/User/Timeout: Auth/HostAuthorities/
+// ProxyJump are ignored by Teleport-Dialer in teleport mode (auth+host-verify
+// from identity-file). Authorize/Sign/ephemeral not called at all here.
 func (m *Module) dialTeleport(ctx context.Context, h hostInput, user string, port int, joinWait time.Duration) (push.Session, error) {
 	cfg := push.DialConfig{
-		Host: h.sid, // ★ node-name = SID, НЕ primary_ip
+		Host: h.sid, // ★ node-name = SID, NOT primary_ip
 		Port: port,
 		User: user,
 	}
@@ -573,12 +567,12 @@ func (m *Module) dialTeleport(ctx context.Context, h hostInput, user string, por
 	return sess, nil
 }
 
-// dialWithJoinRetry повторяет m.Dial(cfg) с фиксированным backoff + jitter, пока
-// не получит сессию или не истечёт joinWait (либо ctx). По deadline возвращает
-// последнюю ошибку Dial — caller переведёт шаг в failed (B1-strict, error_locked).
+// dialWithJoinRetry repeats m.Dial(cfg) with fixed backoff + jitter until
+// session is received or joinWait expires (or ctx). On deadline returns
+// last Dial error — caller moves step to failed (B1-strict, error_locked).
 //
-// Первая попытка — немедленно (без ожидания): если нода уже online (re-run /
-// долгий provision), доставка не платит лишний интервал.
+// First attempt is immediate (no wait): if node already online (re-run /
+// slow provision), delivery doesn't pay extra interval.
 func (m *Module) dialWithJoinRetry(ctx context.Context, cfg push.DialConfig, joinWait time.Duration) (push.Session, error) {
 	base, jitter := m.retryBackoff()
 	deadline := time.Now().Add(joinWait)
@@ -590,11 +584,11 @@ func (m *Module) dialWithJoinRetry(ctx context.Context, cfg push.DialConfig, joi
 		}
 		lastErr = err
 
-		// Контекст отменён (прогон прерван) — выходим немедленно с ctx-ошибкой.
+		// Context cancelled (run interrupted) — exit immediately with ctx-error.
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("teleport join wait cancelled after %d attempt(s): %w", attempt+1, ctx.Err())
 		}
-		// Бюджет ожидания исчерпан — VM так и не появилась в Teleport.
+		// Wait budget exhausted — VM never appeared in Teleport.
 		wait := base + time.Duration(rand.Int63n(int64(jitter)+1))
 		if time.Now().Add(wait).After(deadline) {
 			return nil, fmt.Errorf("node not reachable via Teleport within join_wait_timeout (%s, %d attempt(s)): %w", joinWait, attempt+1, lastErr)
@@ -610,11 +604,11 @@ func (m *Module) dialWithJoinRetry(ctx context.Context, cfg push.DialConfig, joi
 	}
 }
 
-// resolveInstallSteps собирает install-blueprint один раз на шаг: резолвит
-// cloud_init-блок keeper.yml в Config (Vault для CA-PEM) → маппит через
-// cloudinit.Config.Blueprint() (единый маппер, общий с cloud-init userdata) →
-// рендерит install-последовательность. RenderInstallScript внутри валидирует
-// blueprint (endpoint host:port / PEM CA / https-URL).
+// resolveInstallSteps gathers install-blueprint once per step: resolves
+// keeper.yml cloud_init block into Config (Vault for CA-PEM) → maps via
+// cloudinit.Config.Blueprint() (single mapper, shared with cloud-init userdata) →
+// renders install-sequence. RenderInstallScript validates blueprint inside
+// (endpoint host:port / PEM CA / https-URL).
 func (m *Module) resolveInstallSteps(ctx context.Context) ([]soulinstall.InstallStep, error) {
 	if m.Install == nil {
 		return nil, fmt.Errorf("install resolver not configured (wire keeper.yml::cloud_init resolver in main)")
@@ -623,9 +617,9 @@ func (m *Module) resolveInstallSteps(ctx context.Context) ([]soulinstall.Install
 	if err != nil {
 		return nil, err
 	}
-	// Маппинг Config→Blueprint — через cloudinit.Config.Blueprint() (тот же
-	// единственный маппер, что и cloud-init userdata): новое Blueprint-поле
-	// подхватится здесь автоматически, без рассинхрона install-пути.
+	// Config→Blueprint mapping via cloudinit.Config.Blueprint() (same
+	// single mapper as cloud-init userdata): new Blueprint-field
+	// auto-picked up here, no install-path desync.
 	return soulinstall.RenderInstallScript(cfg.Blueprint())
 }
 
@@ -637,10 +631,10 @@ func (m *Module) providerNames() []string {
 	return out
 }
 
-// parseHosts извлекает список {sid, primary_ip, bootstrap_token} из param
-// `hosts`. На практике приходит CEL-выражением `${ register.<provision>.hosts }`
-// (выход core.cloud.created). Пустой список / отсутствие обязательных полей —
-// ошибка (нечего доставлять / некуда / нечего записывать).
+// parseHosts extracts list {sid, primary_ip, bootstrap_token} from param
+// `hosts`. In practice arrives as CEL expression `${ register.<provision>.hosts }`
+// (output of core.cloud.created). Empty list / missing required fields is
+// error (nothing to deliver / nowhere / nothing to write).
 func parseHosts(params *structpb.Struct) ([]hostInput, error) {
 	lv, err := util.ListParam(params, "hosts")
 	if err != nil {
@@ -664,16 +658,16 @@ func parseHosts(params *structpb.Struct) ([]hostInput, error) {
 	return out, nil
 }
 
-// parseJoinWait читает опц. param `join_wait_timeout` в двух формах:
-//   - duration-строка convention `duration` Soul Stack (`"15m"`/`"90s"`/`"1d"`) —
-//     симметрично `await_timeout` у core.soul.registered; так его задаёт essence
-//     (`provision_join_wait_timeout`) через provision-сценарий;
-//   - число секунд (float64) — back-compat с ADR-063 (`int, секунды`).
+// parseJoinWait reads optional param `join_wait_timeout` in two forms:
+//   - duration string convention `duration` Soul Stack (`"15m"`/`"90s"`/`"1d"`) —
+//     symmetric to `await_timeout` in core.soul.registered; essence sets it
+//     (`provision_join_wait_timeout`) via provision scenario;
+//   - number of seconds (float64) — back-compat with ADR-063 (int, seconds).
 //
-// Возвращает (dur, ok, err): ok=false при отсутствии param (caller подставит
-// defaultJoinWaitTimeout). Отрицательное значение / невалидная строка — ошибка
-// (потолок ожидания не может быть отрицательным). 0 допустимо (немедленный
-// deadline: одна попытка без ожидания).
+// Returns (dur, ok, err): ok=false when param absent (caller substitutes
+// defaultJoinWaitTimeout). Negative value / invalid string is error
+// (wait ceiling cannot be negative). 0 is valid (immediate
+// deadline: one attempt without wait).
 func parseJoinWait(params *structpb.Struct) (time.Duration, bool, error) {
 	const key = "join_wait_timeout"
 	v, ok := params.GetFields()[key]
@@ -720,9 +714,9 @@ func hostFromStruct(s *structpb.Struct, idx int) (hostInput, error) {
 	return hostInput{sid: sid, primaryIP: ip, token: tok}, nil
 }
 
-// maskErr маскирует возможный leak секретов (vault-ref / токен) в тексте ошибки
-// перед выдачей в failed-event. Тот же substring-фильтр shared/audit, что чистит
-// register-output (`token`-фрагмент + vault-ref). Ключ `_` несекретный.
+// maskErr masks possible secret leak (vault-ref / token) in error text
+// before returning in failed-event. Same substring filter as shared/audit, which
+// cleans register-output (`token` fragment + vault-ref). Key `_` is non-secret.
 func maskErr(err error) string {
 	if err == nil {
 		return ""

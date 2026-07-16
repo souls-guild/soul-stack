@@ -9,9 +9,9 @@ import (
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 )
 
-// fakeCreateStream — in-memory createEventStream: отдаёт заранее заданные
-// события по одному, затем io.EOF. Опциональный recvErr возвращается ВМЕСТО
-// EOF в конце (имитация transport-сбоя стрима).
+// fakeCreateStream is in-memory createEventStream: yields pre-set
+// events one by one, then io.EOF. Optional recvErr returned INSTEAD OF
+// EOF at end (transport-failure simulation).
 type fakeCreateStream struct {
 	events  []*pluginv1.CreateEvent
 	idx     int
@@ -30,9 +30,9 @@ func (s *fakeCreateStream) Recv() (*pluginv1.CreateEvent, error) {
 	return nil, io.EOF
 }
 
-// TestCollectCreateVMs_Failed — guard на главный баг: driver вернул
-// failed=true (cluster read-only / quota / etc) → collectCreateVMs ОБЯЗАН
-// вернуть ошибку с driver-message, а не молча проглотить (ложный успех с 0 VM).
+// TestCollectCreateVMs_Failed — guard on core bug: driver returned
+// failed=true (cluster read-only / quota / etc) → collectCreateVMs MUST
+// return error with driver-message, not silently swallow (false success with 0 VM).
 func TestCollectCreateVMs_Failed(t *testing.T) {
 	stream := &fakeCreateStream{events: []*pluginv1.CreateEvent{
 		{Message: "validating profile"},
@@ -51,9 +51,9 @@ func TestCollectCreateVMs_Failed(t *testing.T) {
 	}
 }
 
-// TestCollectCreateVMs_FailedDropsPartialVMs — частичный успех = ошибка.
-// Драйвер успел сообщить часть VM, затем failed=true: НЕ возвращаем
-// подмножество как успех — провижн как целое провалился.
+// TestCollectCreateVMs_FailedDropsPartialVMs — partial success = error.
+// Driver managed to report some VMs, then failed=true: do NOT
+// return subset as success — provision as whole failed.
 func TestCollectCreateVMs_FailedDropsPartialVMs(t *testing.T) {
 	stream := &fakeCreateStream{events: []*pluginv1.CreateEvent{
 		{Vms: []*pluginv1.VmInfo{{VmId: "i-1", Fqdn: "host-1.example.com"}}},
@@ -72,8 +72,8 @@ func TestCollectCreateVMs_FailedDropsPartialVMs(t *testing.T) {
 	}
 }
 
-// TestCollectCreateVMs_FailedNoMessage — failed=true без message: ошибка всё
-// равно возвращается, с дефолтным текстом (не теряем сам факт фейла).
+// TestCollectCreateVMs_FailedNoMessage — failed=true without message: error still
+// returned, with default text (don't lose failure fact itself).
 func TestCollectCreateVMs_FailedNoMessage(t *testing.T) {
 	stream := &fakeCreateStream{events: []*pluginv1.CreateEvent{
 		{Failed: true},
@@ -84,8 +84,8 @@ func TestCollectCreateVMs_FailedNoMessage(t *testing.T) {
 	}
 }
 
-// TestCollectCreateVMs_Happy — все VM в финальном событии, без failed →
-// успех, VM агрегированы.
+// TestCollectCreateVMs_Happy — all VMs in final event, without failed →
+// success, VMs aggregated.
 func TestCollectCreateVMs_Happy(t *testing.T) {
 	stream := &fakeCreateStream{events: []*pluginv1.CreateEvent{
 		{Message: "provisioning"},
@@ -107,8 +107,8 @@ func TestCollectCreateVMs_Happy(t *testing.T) {
 	}
 }
 
-// TestCollectCreateVMs_HappyMultiEvent — VM пришли несколькими событиями:
-// агрегируются все.
+// TestCollectCreateVMs_HappyMultiEvent — VMs arrived in multiple events:
+// all are aggregated.
 func TestCollectCreateVMs_HappyMultiEvent(t *testing.T) {
 	stream := &fakeCreateStream{events: []*pluginv1.CreateEvent{
 		{Vms: []*pluginv1.VmInfo{{VmId: "i-1", Fqdn: "host-1.example.com"}}},
@@ -124,8 +124,8 @@ func TestCollectCreateVMs_HappyMultiEvent(t *testing.T) {
 	}
 }
 
-// TestCollectCreateVMs_RecvError — transport-сбой стрима (не EOF) →
-// пропагируется как ошибка.
+// TestCollectCreateVMs_RecvError — transport-failure of stream (not EOF) →
+// propagated as error.
 func TestCollectCreateVMs_RecvError(t *testing.T) {
 	wantErr := errors.New("connection reset")
 	stream := &fakeCreateStream{

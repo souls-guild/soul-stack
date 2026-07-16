@@ -59,9 +59,9 @@ func (f *fakePlugins) Destroy(_ context.Context, driver string, credentials map[
 	return f.destroyResp, nil
 }
 
-// Status/List — модуль `core.cloud.provisioned` (created/destroyed) их не
-// вызывает; реализованы как stub, чтобы fake удовлетворял расширенному
-// PluginHost после миграции Status/List на credentials-Struct.
+// Status/List are not called by core.cloud.provisioned (created/destroyed);
+// implemented as stub so fake satisfies expanded PluginHost after Status/List
+// migration to credentials-Struct.
 func (f *fakePlugins) Status(_ context.Context, _ string, _ map[string]any, _ string) (*pluginv1.StatusReply, error) {
 	return nil, coremodcloud.ErrPluginHostNotImplemented
 }
@@ -82,19 +82,18 @@ func (f *fakePlugins) Resize(_ context.Context, driver string, credentials map[s
 	return f.resizeResp, nil
 }
 
-// fakeResolver — стаб ProviderResolver: маппит param `provider` (= имя Provider)
-// в driver-имя + credentials и param `profile` (= имя Profile) в VM-spec params.
-// По умолчанию driver == имя provider-а (как было до A-flow, чтобы существующие
-// проверки lastDriver не ломались).
+// fakeResolver stubs ProviderResolver: maps param `provider` (=Provider name)
+// to driver-name + credentials and param `profile` (=Profile name) to VM-spec params.
+// By default driver == provider-name (as before A-flow so existing lastDriver checks remain valid).
 type fakeResolver struct {
-	driver       string // если "" — Resolve вернёт providerName как driver
+	driver       string // if "" — Resolve returns providerName as driver
 	creds        map[string]any
-	fqdnSuffix   string // self-onboard Вариант T: суффикс предсказания FQDN
+	fqdnSuffix   string // self-onboard Variant T: FQDN prediction suffix
 	err          error
 	lastProvider string
 
-	// profile-резолв (Вариант A): имя Profile → params. profileErr заставляет
-	// ResolveProfile вернуть ошибку (имя не в реестре).
+	// profile-resolve (Variant A): profile-name → params. profileErr causes
+	// ResolveProfile to return error (name not in registry).
 	profileParams map[string]any
 	profileErr    error
 	lastProfile   string
@@ -122,7 +121,7 @@ func (r *fakeResolver) ResolveProfile(_ context.Context, profileName string) (ma
 
 type fakeSouls struct {
 	inserted     []*keepersoul.Soul
-	deleted      []string // SID, для которых вызван DeleteBySID (orphan-cleanup)
+	deleted      []string // SID for which DeleteBySID was called (orphan-cleanup)
 	updateCalls  []string
 	updateStatus keepersoul.Status
 	insertErr    error
@@ -148,8 +147,8 @@ func (s *fakeSouls) UpdateStatus(_ context.Context, sid string, status keepersou
 	return nil
 }
 
-// remaining возвращает SID, которые вставлены и НЕ откачены (эмуляция
-// содержимого реестра после прогона: insert минус delete).
+// remaining returns SIDs that were inserted and NOT rolled back (emulates
+// registry contents after run: insert minus delete).
 func (s *fakeSouls) remaining() []string {
 	gone := make(map[string]bool, len(s.deleted))
 	for _, sid := range s.deleted {
@@ -173,8 +172,8 @@ func (s *fakeSouls) DeleteBySID(_ context.Context, sid string) error {
 }
 
 type fakeTokens struct {
-	inserted  []string // SIDs, для которых выпустили
-	deleted   []string // token-id, для которых вызван DeleteByTokenID (orphan-cleanup)
+	inserted  []string // SIDs for which tokens were issued
+	deleted   []string // token-id for which DeleteByTokenID was called (orphan-cleanup)
 	plain     bootstraptoken.PlainToken
 	insertErr error
 	genErr    error
@@ -182,8 +181,8 @@ type fakeTokens struct {
 }
 
 func newFakeTokens() *fakeTokens {
-	// Сгенерируем реальный plain-токен в тесте (через bootstraptoken.Generate),
-	// чтобы Hash() работал по тому же пути, что и в проде.
+	// Generate real plain-token in test (via bootstraptoken.Generate)
+	// so Hash() works same path as in production.
 	pt, err := bootstraptoken.Generate()
 	if err != nil {
 		panic(err)
@@ -203,8 +202,16 @@ func (t *fakeTokens) Insert(_ context.Context, sid, _ string, _ *string) (*boots
 		return nil, t.insertErr
 	}
 	t.inserted = append(t.inserted, sid)
-	// TokenID детерминированно = sid: тест сверяет откат по token-id с SID-ами.
+	// TokenID deterministically = sid: test verifies rollback by token-id against SIDs.
 	return &bootstraptoken.Record{TokenID: sid, SID: sid}, nil
+}
+
+func (t *fakeTokens) DeleteByTokenID(_ context.Context, tokenID string) error {
+	if t.deleteErr != nil {
+		return t.deleteErr
+	}
+	t.deleted = append(t.deleted, tokenID)
+	return nil
 }
 
 func (t *fakeTokens) DeleteByTokenID(_ context.Context, tokenID string) error {
@@ -300,8 +307,8 @@ func TestApply_Created_InsertsSoulsAndTokens(t *testing.T) {
 	ft := newFakeTokens()
 	fa := &fakeAudit{}
 
-	// profile = ИМЯ Profile-я (Вариант A); резолвер отдаёт его params, которые
-	// должны дойти до драйвера.
+	// profile = Profile name (Variant A); resolver yields its params which
+	// should reach driver.
 	fr := &fakeResolver{profileParams: map[string]any{"image_id": "ami-0001"}}
 	m := coremodcloud.New(fp, fr, fs, ft, nil, fa)
 	stream := internaltest.NewApplyStream()
@@ -355,15 +362,15 @@ func TestApply_Created_InsertsSoulsAndTokens(t *testing.T) {
 	}
 }
 
-// TestApply_Created_NoProfile_NilSpec — profile не задан (Вариант A optional-
-// семантика): ResolveProfile НЕ вызывается, драйвер получает nil profile-spec,
-// шаг НЕ падает.
+// TestApply_Created_NoProfile_NilSpec — profile not specified (Variant A optional-
+// semantics): ResolveProfile NOT called, driver receives nil profile-spec,
+// step does NOT fail.
 func TestApply_Created_NoProfile_NilSpec(t *testing.T) {
 	fp := &fakePlugins{createResp: []*pluginv1.VmInfo{
 		{VmId: "i-aaa", Fqdn: "h1.example.com", PrimaryIp: "10.0.0.1"},
 	}}
-	// profileErr выставлен, чтобы доказать: при пустом profile ResolveProfile
-	// НЕ зовётся (иначе тест упал бы этой ошибкой).
+	// profileErr set to prove: on empty profile ResolveProfile is NOT called
+	// (else test would fail with this error).
 	fr := &fakeResolver{profileErr: errors.New("must not be called")}
 	m := coremodcloud.New(fp, fr, &fakeSouls{}, newFakeTokens(), nil, &fakeAudit{})
 	stream := internaltest.NewApplyStream()
@@ -384,9 +391,9 @@ func TestApply_Created_NoProfile_NilSpec(t *testing.T) {
 	}
 }
 
-// TestApply_Created_ProfileNotFound_Fails — ★ имя Profile-я не в реестре:
-// ResolveProfile вернул ошибку → понятный SendFailed (failed-event), не
-// nil-panic и не ложный success.
+// TestApply_Created_ProfileNotFound_Fails — ★ profile-name not in registry:
+// ResolveProfile returned error → clear SendFailed (failed-event), not
+// nil-panic and not false success.
 func TestApply_Created_ProfileNotFound_Fails(t *testing.T) {
 	fp := &fakePlugins{createResp: []*pluginv1.VmInfo{
 		{VmId: "i-aaa", Fqdn: "h1.example.com"},
@@ -413,14 +420,14 @@ func TestApply_Created_ProfileNotFound_Fails(t *testing.T) {
 	if !strings.Contains(ev.Message, "ghost") {
 		t.Errorf("failed-event must name the missing profile; got %q", ev.Message)
 	}
-	// Драйвер не должен вызываться, если profile не зарезолвился.
+	// Driver must not be called if profile did not resolve.
 	if fp.lastDriver != "" {
 		t.Errorf("driver Create called despite profile-resolve failure (driver=%q)", fp.lastDriver)
 	}
 }
 
-// TestApply_Created_PassesDriverCredsUserdata — A-flow: модуль резолвит
-// provider в driver-имя + credentials и прокидывает их (плюс userdata) в
+// TestApply_Created_PassesDriverCredsUserdata — A-flow: module resolves
+// provider to driver-name + credentials and passes them (plus userdata) to
 // PluginHost.Create.
 func TestApply_Created_PassesDriverCredsUserdata(t *testing.T) {
 	fp := &fakePlugins{createResp: []*pluginv1.VmInfo{
@@ -435,7 +442,7 @@ func TestApply_Created_PassesDriverCredsUserdata(t *testing.T) {
 	if err := m.Apply(&pluginv1.ApplyRequest{
 		State: "created",
 		Params: mustStruct(t, map[string]any{
-			"provider": "aws-prod", // имя Provider-а
+			"provider": "aws-prod", // Provider name
 			"userdata": "#cloud-config\n",
 		}),
 	}, stream); err != nil {
@@ -458,8 +465,8 @@ func TestApply_Created_PassesDriverCredsUserdata(t *testing.T) {
 	}
 }
 
-// TestApply_Created_ResolverError_MasksVaultRef — ошибка резолва, несущая
-// vault-ref, не утекает plaintext в failed-event.
+// TestApply_Created_ResolverError_MasksVaultRef — resolve error carrying
+// vault-ref does not leak plaintext in failed-event.
 func TestApply_Created_ResolverError_MasksVaultRef(t *testing.T) {
 	fr := &fakeResolver{err: errors.New("provider \"p\" credentials_ref: read vault:secret/cloud/aws-prod failed")}
 	m := coremodcloud.New(&fakePlugins{}, fr, &fakeSouls{}, newFakeTokens(), nil, &fakeAudit{})
@@ -479,7 +486,7 @@ func TestApply_Created_ResolverError_MasksVaultRef(t *testing.T) {
 	}
 }
 
-// TestApply_Created_NilResolver_Fails — defensive: resolver не сконфигурирован.
+// TestApply_Created_NilResolver_Fails — defensive: resolver not configured.
 func TestApply_Created_NilResolver_Fails(t *testing.T) {
 	m := coremodcloud.New(&fakePlugins{}, nil, &fakeSouls{}, newFakeTokens(), nil, &fakeAudit{})
 	stream := internaltest.NewApplyStream()
@@ -511,11 +518,11 @@ func TestApply_Created_PluginError_FailsTask(t *testing.T) {
 	}
 }
 
-// TestApply_Created_DriverFailure_NotFalseOperational — guard на основной баг:
-// драйвер сообщил сбой (cluster read-only / quota), адаптер пропагирует его
-// ошибкой → core.cloud.created ОБЯЗАН отдать failed-event (шаг failed →
-// incarnation error_locked), а НЕ ложный success (0 VM, operational).
-// Driver-message должен дойти до failed-event для диагностики оператором.
+// TestApply_Created_DriverFailure_NotFalseOperational — guard on core bug:
+// driver reported failure (cluster read-only / quota), adapter propagates as
+// error → core.cloud.created MUST yield failed-event (step failed →
+// incarnation error_locked), NOT false success (0 VM, operational).
+// Driver-message must reach failed-event for operator diagnostics.
 func TestApply_Created_DriverFailure_NotFalseOperational(t *testing.T) {
 	fp := &fakePlugins{createErr: errors.New("driver create failed: cluster is read-only")}
 	m := coremodcloud.New(fp, &fakeResolver{}, &fakeSouls{}, newFakeTokens(), nil, &fakeAudit{})
@@ -542,7 +549,7 @@ func TestApply_Created_DriverFailure_NotFalseOperational(t *testing.T) {
 
 func TestApply_Created_VmWithoutFqdn(t *testing.T) {
 	fp := &fakePlugins{createResp: []*pluginv1.VmInfo{
-		{VmId: "i-aaa"}, // нет fqdn
+		{VmId: "i-aaa"}, // no fqdn
 	}}
 	m := coremodcloud.New(fp, &fakeResolver{}, &fakeSouls{}, newFakeTokens(), nil, &fakeAudit{})
 	stream := internaltest.NewApplyStream()
@@ -622,8 +629,8 @@ func TestApply_Destroyed_CascadeError_Fails(t *testing.T) {
 }
 
 func TestApply_Destroyed_NoCascader_WithSids_Fails(t *testing.T) {
-	// Defensive: если caller wire-up забыл Cascader, но sids указаны —
-	// destroyed-state валит scenario с понятной ошибкой.
+	// Defensive: if caller wire-up forgot Cascader but sids specified —
+	// destroyed-state fails scenario with clear error.
 	fp := &fakePlugins{destroyResp: []string{"i-aaa"}}
 	m := coremodcloud.New(fp, &fakeResolver{}, &fakeSouls{}, newFakeTokens(), nil, &fakeAudit{})
 	stream := internaltest.NewApplyStream()
@@ -679,15 +686,15 @@ func TestApply_Destroyed_NoSids_NoCascade(t *testing.T) {
 	}
 }
 
-// fakeUserdata — стаб UserdataProvider для тестов generate_userdata-флоу и
-// self-onboard (Вариант T).
+// fakeUserdata stubs UserdataProvider for testing generate_userdata flow and
+// self-onboard (Variant T).
 type fakeUserdata struct {
 	out            string
 	err            error
 	last           context.Context
 	selfOnboardOut string
 	selfOnboardErr error
-	lastTokens     map[string]string // токены, переданные в self-onboard рендер
+	lastTokens     map[string]string // tokens passed to self-onboard render
 }
 
 func (u *fakeUserdata) GenerateUserdata(ctx context.Context) (string, error) {
@@ -709,8 +716,8 @@ func (u *fakeUserdata) GenerateUserdataSelfOnboard(ctx context.Context, tokens m
 }
 
 // TestApply_Created_GenerateUserdataTrue — ADR-017(h) amendment 2026-05-27,
-// B-flat: `generate_userdata: true` + пустой `userdata` → driver Create-call
-// получает rendered cloud-config от UserdataProvider.
+// B-flat: `generate_userdata: true` + empty `userdata` → driver Create-call
+// receives rendered cloud-config from UserdataProvider.
 func TestApply_Created_GenerateUserdataTrue(t *testing.T) {
 	fp := &fakePlugins{createResp: []*pluginv1.VmInfo{
 		{VmId: "i-aaa", Fqdn: "h1.example.com", PrimaryIp: "10.0.0.1"},
@@ -739,8 +746,8 @@ func TestApply_Created_GenerateUserdataTrue(t *testing.T) {
 	}
 }
 
-// TestApply_Created_BothUserdataAndGenerate_Error — explicit `userdata:` И
-// `generate_userdata: true` одновременно → failed=true (mutually exclusive).
+// TestApply_Created_BothUserdataAndGenerate_Error — explicit `userdata:` AND
+// `generate_userdata: true` simultaneously → failed=true (mutually exclusive).
 func TestApply_Created_BothUserdataAndGenerate_Error(t *testing.T) {
 	fp := &fakePlugins{createResp: []*pluginv1.VmInfo{
 		{VmId: "i-aaa", Fqdn: "h1.example.com"},
@@ -766,7 +773,7 @@ func TestApply_Created_BothUserdataAndGenerate_Error(t *testing.T) {
 	}
 }
 
-// TestApply_Created_ExplicitUserdata — passthrough как раньше (без UserdataProvider).
+// TestApply_Created_ExplicitUserdata — passthrough as before (without UserdataProvider).
 func TestApply_Created_ExplicitUserdata(t *testing.T) {
 	fp := &fakePlugins{createResp: []*pluginv1.VmInfo{
 		{VmId: "i-aaa", Fqdn: "h1.example.com"},
@@ -791,7 +798,7 @@ func TestApply_Created_ExplicitUserdata(t *testing.T) {
 }
 
 // TestApply_Created_GenerateUserdata_NoProvider — generate_userdata: true,
-// но UserdataProvider не сконфигурирован → внятная ошибка.
+// but UserdataProvider not configured → clear error.
 func TestApply_Created_GenerateUserdata_NoProvider(t *testing.T) {
 	fp := &fakePlugins{createResp: []*pluginv1.VmInfo{
 		{VmId: "i-aaa", Fqdn: "h1.example.com"},
@@ -812,8 +819,8 @@ func TestApply_Created_GenerateUserdata_NoProvider(t *testing.T) {
 	}
 }
 
-// TestApply_Created_GenerateUserdata_ProviderError — UserdataProvider возвращает
-// ошибку → failed=true; ошибка маскируется (vault-ref-фильтр).
+// TestApply_Created_GenerateUserdata_ProviderError — UserdataProvider returns
+// error → failed=true; error is masked (vault-ref filter).
 func TestApply_Created_GenerateUserdata_ProviderError(t *testing.T) {
 	fp := &fakePlugins{createResp: []*pluginv1.VmInfo{
 		{VmId: "i-aaa", Fqdn: "h1.example.com"},
@@ -838,14 +845,14 @@ func TestApply_Created_GenerateUserdata_ProviderError(t *testing.T) {
 	}
 }
 
-// --- self-onboard (Вариант T, ADR-017(h) amendment) ---
+// --- self-onboard (Variant T, ADR-017(h) amendment) ---
 
 // TestApply_Created_SelfOnboard_PredictsFQDNAndBakesTokens — self_onboard=true:
-// keeper предсказывает FQDN каждой VM (`<name>-<i>.<suffix>`), выписывает per-VM
-// токены, запекает их в userdata (map FQDN→token), передаёт base-имя в
-// CreateRequest.name. Plain-токены в register НЕ кладутся.
+// keeper predicts FQDN for each VM (`<name>-<i>.<suffix>`), issues per-VM
+// tokens, bakes them into userdata (map FQDN→token), passes base-name to
+// CreateRequest.name. Plain-tokens NOT placed in register.
 func TestApply_Created_SelfOnboard_PredictsFQDNAndBakesTokens(t *testing.T) {
-	// Драйвер вернёт VM с FQDN, совпадающими с предсказанными (honor name).
+	// Driver returns VM with FQDN matching predicted (honor name).
 	fp := &fakePlugins{createResp: []*pluginv1.VmInfo{
 		{VmId: "i-aaa", Fqdn: "redis-0.ns.vm.clv3", PrimaryIp: "10.0.0.1"},
 		{VmId: "i-bbb", Fqdn: "redis-1.ns.vm.clv3", PrimaryIp: "10.0.0.2"},
@@ -873,16 +880,16 @@ func TestApply_Created_SelfOnboard_PredictsFQDNAndBakesTokens(t *testing.T) {
 		t.Fatalf("unexpected: %+v", ev)
 	}
 
-	// base-имя передано драйверу в CreateRequest.name.
+	// base-name passed to driver in CreateRequest.name.
 	if fp.lastName != "redis" {
 		t.Errorf("driver got name=%q, want redis (CreateRequest.name)", fp.lastName)
 	}
-	// userdata = self-onboard рендер (не generic).
+	// userdata = self-onboard render (not generic).
 	if fp.lastUserdata != "#cloud-config\n# baked\n" {
 		t.Errorf("driver got userdata=%q, want self-onboard baked", fp.lastUserdata)
 	}
-	// Токены запечены под ПРЕДСКАЗАННЫМИ FQDN (не под фактическими из ответа —
-	// они выписаны ДО create).
+	// Tokens baked under PREDICTED FQDNs (not under actual from response —
+	// they are issued BEFORE create).
 	if len(fu.lastTokens) != 2 {
 		t.Fatalf("baked tokens = %d, want 2", len(fu.lastTokens))
 	}
@@ -891,7 +898,7 @@ func TestApply_Created_SelfOnboard_PredictsFQDNAndBakesTokens(t *testing.T) {
 			t.Errorf("predicted FQDN %q missing from baked token map %v", fqdn, keysOf(fu.lastTokens))
 		}
 	}
-	// Souls + токены выписаны по предсказанным FQDN.
+	// Souls + tokens issued for predicted FQDNs.
 	if len(fs.inserted) != 2 || len(ft.inserted) != 2 {
 		t.Fatalf("souls=%d tokens=%d, want 2/2", len(fs.inserted), len(ft.inserted))
 	}
@@ -899,7 +906,7 @@ func TestApply_Created_SelfOnboard_PredictsFQDNAndBakesTokens(t *testing.T) {
 		t.Errorf("first soul SID=%q, want predicted redis-0.ns.vm.clv3", fs.inserted[0].SID)
 	}
 
-	// ★ Plain bootstrap_token НЕ в register (доставки нет, VM онбордится сама).
+	// ★ Plain bootstrap_token NOT in register (no delivery, VM self-onboards).
 	out := ev.Output.AsMap()
 	hosts := out["hosts"].([]any)
 	if len(hosts) != 2 {
@@ -916,12 +923,12 @@ func TestApply_Created_SelfOnboard_PredictsFQDNAndBakesTokens(t *testing.T) {
 	}
 }
 
-// TestApply_Created_SelfOnboard_NoFQDNSuffix_Fails — провайдер без fqdn_suffix:
-// keeper не может предсказать FQDN → понятный failed (не молчаливый provision).
+// TestApply_Created_SelfOnboard_NoFQDNSuffix_Fails — provider without fqdn_suffix:
+// keeper cannot predict FQDN → clear failed (not silent provision).
 func TestApply_Created_SelfOnboard_NoFQDNSuffix_Fails(t *testing.T) {
 	fp := &fakePlugins{}
 	fu := &fakeUserdata{}
-	fr := &fakeResolver{driver: "wb", fqdnSuffix: ""} // суффикса нет
+	fr := &fakeResolver{driver: "wb", fqdnSuffix: ""} // no suffix
 	m := coremodcloud.New(fp, fr, &fakeSouls{}, newFakeTokens(), nil, &fakeAudit{}).WithUserdata(fu)
 	stream := internaltest.NewApplyStream()
 	if err := m.Apply(&pluginv1.ApplyRequest{
@@ -941,18 +948,18 @@ func TestApply_Created_SelfOnboard_NoFQDNSuffix_Fails(t *testing.T) {
 	if !strings.Contains(stream.Last().Message, "fqdn_suffix") {
 		t.Errorf("error must name fqdn_suffix requirement; got %q", stream.Last().Message)
 	}
-	// Драйвер не должен вызываться без предсказуемого FQDN.
+	// Driver must not be called without predictable FQDN.
 	if fp.lastDriver != "" {
 		t.Errorf("driver called despite missing fqdn_suffix (driver=%q)", fp.lastDriver)
 	}
 }
 
-// TestApply_Created_SelfOnboard_FQDNMismatch_Fails — драйвер назвал VM иначе, чем
-// keeper предсказал (не honor name): токен в userdata под предсказанным FQDN,
-// а VM имеет другой hostname → self-onboard сломан молча. Fail-fast.
+// TestApply_Created_SelfOnboard_FQDNMismatch_Fails — driver named VM differently than
+// keeper predicted (not honor name): token in userdata under predicted FQDN,
+// VM has different hostname → self-onboard broken silently. Fail-fast.
 func TestApply_Created_SelfOnboard_FQDNMismatch_Fails(t *testing.T) {
 	fp := &fakePlugins{createResp: []*pluginv1.VmInfo{
-		{VmId: "i-aaa", Fqdn: "soul-anon-999-0.ns.vm.clv3"}, // НЕ redis-0.*
+		{VmId: "i-aaa", Fqdn: "soul-anon-999-0.ns.vm.clv3"}, // NOT redis-0.*
 	}}
 	fu := &fakeUserdata{selfOnboardOut: "#cloud-config\n"}
 	fr := &fakeResolver{driver: "wb", fqdnSuffix: "ns.vm.clv3"}
@@ -978,11 +985,11 @@ func TestApply_Created_SelfOnboard_FQDNMismatch_Fails(t *testing.T) {
 }
 
 // TestApply_Created_SelfOnboard_CreateFails_CleansOrphanedSoulsAndTokens —
-// ★ guard на major-риск review: souls (pending) + токены выписываются ДО
-// PluginHost.Create. Если Create падает, вставленные записи ОБЯЗАНЫ быть
-// откачены — иначе presence-барьер await_online виснет на онбординге
-// несуществующих VM, а rerun-last упирается в PK-конфликт insert soul под
-// тем же предсказанным FQDN (self-onboard не идемпотентен).
+// ★ guard on major review risk: souls (pending) + tokens issued BEFORE
+// PluginHost.Create. If Create fails, inserted records MUST be
+// rolled back — else presence-barrier await_online hangs on onboarding
+// nonexistent VMs, and rerun-last hits PK-conflict on insert soul under
+// same predicted FQDN (self-onboard not idempotent).
 func TestApply_Created_SelfOnboard_CreateFails_CleansOrphanedSoulsAndTokens(t *testing.T) {
 	fp := &fakePlugins{createErr: errors.New("driver create failed: quota exceeded")}
 	fs := &fakeSouls{}
@@ -1006,12 +1013,12 @@ func TestApply_Created_SelfOnboard_CreateFails_CleansOrphanedSoulsAndTokens(t *t
 	if !stream.Last().Failed {
 		t.Fatal("expected failed=true on create failure")
 	}
-	// Реестр souls пуст: все вставленные predicted-FQDN откачены.
+	// Registry souls empty: all inserted predicted-FQDNs rolled back.
 	if rem := fs.remaining(); len(rem) != 0 {
 		t.Errorf("orphaned souls after create-fail: %v — rerun will hit PK conflict", rem)
 	}
-	// Токены откачены: DeleteByTokenID вызван для каждого выписанного (token-id=SID
-	// в fake). Иначе висит bootstrap-capability для несуществующей VM.
+	// Tokens rolled back: DeleteByTokenID called for each issued (token-id=SID
+	// in fake). Else bootstrap-capability hangs for nonexistent VM.
 	if len(ft.deleted) != len(ft.inserted) {
 		t.Errorf("orphaned tokens: inserted %v, deleted %v", ft.inserted, ft.deleted)
 	}
@@ -1029,12 +1036,12 @@ func TestApply_Created_SelfOnboard_CreateFails_CleansOrphanedSoulsAndTokens(t *t
 	}
 }
 
-// TestApply_Created_SelfOnboard_FQDNMismatch_CleansOrphaned — тот же orphan-risk,
-// но провал происходит ПОСЛЕ успешного Create (драйвер назвал VM не как
-// предсказано). Вставленные souls/токены всё равно откатываются.
+// TestApply_Created_SelfOnboard_FQDNMismatch_CleansOrphaned — same orphan-risk,
+// but failure happens AFTER successful Create (driver named VM not as
+// predicted). Inserted souls/tokens still rolled back.
 func TestApply_Created_SelfOnboard_FQDNMismatch_CleansOrphaned(t *testing.T) {
 	fp := &fakePlugins{createResp: []*pluginv1.VmInfo{
-		{VmId: "i-aaa", Fqdn: "soul-anon-999-0.ns.vm.clv3"}, // НЕ redis-0.*
+		{VmId: "i-aaa", Fqdn: "soul-anon-999-0.ns.vm.clv3"}, // NOT redis-0.*
 	}}
 	fs := &fakeSouls{}
 	ft := newFakeTokens()
@@ -1065,12 +1072,12 @@ func TestApply_Created_SelfOnboard_FQDNMismatch_CleansOrphaned(t *testing.T) {
 	}
 }
 
-// TestApply_Created_SelfOnboard_UserdataFails_CleansOrphaned — провал происходит
-// ПОСЛЕ вставки souls/токенов, но ДО create: рендер self-onboard userdata упал
-// (напр. vault-ref в шаблоне). Провизия ещё не дошла до провайдера, но записи в
-// реестре уже есть → defer-cleanup ОБЯЗАН их откатить (иначе rerun упрётся в
-// PK-конфликт insert soul под тем же предсказанным FQDN, а токен висит capability
-// на несуществующую VM). Драйвер при этом не должен быть вызван.
+// TestApply_Created_SelfOnboard_UserdataFails_CleansOrphaned — failure happens
+// AFTER souls/tokens insertion, but BEFORE create: self-onboard userdata render
+// failed (e.g. vault-ref in template). Provision not yet reached provider, but
+// registry records exist → defer-cleanup MUST roll them back (else rerun hits
+// PK-conflict on insert soul under same predicted FQDN, token hangs capability
+// for nonexistent VM). Driver must not be called.
 func TestApply_Created_SelfOnboard_UserdataFails_CleansOrphaned(t *testing.T) {
 	fp := &fakePlugins{}
 	fs := &fakeSouls{}
@@ -1094,30 +1101,30 @@ func TestApply_Created_SelfOnboard_UserdataFails_CleansOrphaned(t *testing.T) {
 	if !stream.Last().Failed {
 		t.Fatal("expected failed=true on self-onboard userdata render error")
 	}
-	// vault-ref не утёк в failed-event.
+	// vault-ref did not leak into failed-event.
+	// Souls/tokens issued BEFORE userdata-render — rolled back by defer on render failure.
 	if strings.Contains(stream.Last().Message, "vault:secret/") {
 		t.Errorf("vault-ref leaked in failed-event: %q", stream.Last().Message)
 	}
-	// Souls/токены выписаны ДО userdata-render — при провале рендера откачены defer-ом.
 	if rem := fs.remaining(); len(rem) != 0 {
 		t.Errorf("orphaned souls after userdata-render fail: %v — rerun will hit PK conflict", rem)
 	}
 	if len(ft.deleted) != len(ft.inserted) {
 		t.Errorf("orphaned tokens after userdata-render fail: inserted %v, deleted %v", ft.inserted, ft.deleted)
 	}
-	// Провизия упала до create — драйвер не вызывался.
+	// Provision failed before create — driver not called.
 	if fp.lastDriver != "" {
 		t.Errorf("driver Create called despite userdata-render failure (driver=%q)", fp.lastDriver)
 	}
 }
 
-// TestApply_Created_SelfOnboard_EmptyFQDN_CleansOrphaned — Create прошёл, но
-// провайдер вернул VM без Fqdn (provisioned.go: sid == "" → SendFailed). Тот же
-// orphan-risk: souls/токены выписаны ДО create, откатываются defer-ом. Отличается
-// от FQDNMismatch тем, что бьёт по ветке пустого (а не несовпавшего) FQDN.
+// TestApply_Created_SelfOnboard_EmptyFQDN_CleansOrphaned — Create passed, but
+// provider returned VM without Fqdn (provisioned.go: sid == "" → SendFailed). Same
+// orphan-risk: souls/tokens issued BEFORE create, rolled back by defer. Differs
+// from FQDNMismatch in hitting branch of empty (not mismatched) FQDN.
 func TestApply_Created_SelfOnboard_EmptyFQDN_CleansOrphaned(t *testing.T) {
 	fp := &fakePlugins{createResp: []*pluginv1.VmInfo{
-		{VmId: "i-aaa"}, // Create ok, но Fqdn пустой
+		{VmId: "i-aaa"}, // Create ok, but Fqdn empty
 	}}
 	fs := &fakeSouls{}
 	ft := newFakeTokens()
@@ -1148,8 +1155,8 @@ func TestApply_Created_SelfOnboard_EmptyFQDN_CleansOrphaned(t *testing.T) {
 	}
 }
 
-// TestApply_Created_SelfOnboard_Success_NoCleanup — на успешном пути cleanup НЕ
-// срабатывает: вставленные souls/токены остаются (их ждёт await_online).
+// TestApply_Created_SelfOnboard_Success_NoCleanup — on success path cleanup does NOT
+// trigger: inserted souls/tokens remain (await_online waits for them).
 func TestApply_Created_SelfOnboard_Success_NoCleanup(t *testing.T) {
 	fp := &fakePlugins{createResp: []*pluginv1.VmInfo{
 		{VmId: "i-aaa", Fqdn: "redis-0.ns.vm.clv3", PrimaryIp: "10.0.0.1"},
@@ -1184,8 +1191,8 @@ func TestApply_Created_SelfOnboard_Success_NoCleanup(t *testing.T) {
 	}
 }
 
-// TestValidate_Created_SelfOnboard_RequiresName — self_onboard: true без name →
-// validate-ошибка (нельзя предсказать FQDN без базового имени).
+// TestValidate_Created_SelfOnboard_RequiresName — self_onboard: true without name →
+// validate error (cannot predict FQDN without base name).
 func TestValidate_Created_SelfOnboard_RequiresName(t *testing.T) {
 	m := coremodcloud.New(&fakePlugins{}, &fakeResolver{}, &fakeSouls{}, newFakeTokens(), nil, &fakeAudit{})
 	rep, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
@@ -1200,8 +1207,8 @@ func TestValidate_Created_SelfOnboard_RequiresName(t *testing.T) {
 	}
 }
 
-// TestApply_Created_Name_PassedThroughNonSelfOnboard — name передаётся драйверу
-// даже вне self-onboard (осмысленное имя вместо auto-slug), B-flat токены как раньше.
+// TestApply_Created_Name_PassedThroughNonSelfOnboard — name passed to driver
+// even outside self-onboard (meaningful name instead of auto-slug), B-flat tokens as before.
 func TestApply_Created_Name_PassedThroughNonSelfOnboard(t *testing.T) {
 	fp := &fakePlugins{createResp: []*pluginv1.VmInfo{
 		{VmId: "i-aaa", Fqdn: "redis-0.ns.vm.clv3"},
@@ -1223,7 +1230,7 @@ func TestApply_Created_Name_PassedThroughNonSelfOnboard(t *testing.T) {
 	if fp.lastName != "redis" {
 		t.Errorf("driver got name=%q, want redis (passed through non-self-onboard)", fp.lastName)
 	}
-	// B-flat: plain-токен в register (доставка отдельным шагом).
+	// B-flat: plain-token in register (delivery by separate step).
 	hosts := stream.Last().Output.AsMap()["hosts"].([]any)
 	if _, has := hosts[0].(map[string]any)["bootstrap_token"]; !has {
 		t.Error("non-self-onboard must keep bootstrap_token in register (B-flat)")
@@ -1239,8 +1246,8 @@ func keysOf(m map[string]string) []string {
 }
 
 func TestApply_StubHost_FailsCleanly(t *testing.T) {
-	// Integration-like smoke: StubHost возвращает ErrPluginHostNotImplemented,
-	// модуль обязан превратить его в failed=true, а не crash.
+	// Integration-like smoke: StubHost returns ErrPluginHostNotImplemented,
+	// module must turn it into failed=true, not crash.
 	m := coremodcloud.New(coremodcloud.StubHost{}, &fakeResolver{}, &fakeSouls{}, newFakeTokens(), nil, &fakeAudit{})
 	stream := internaltest.NewApplyStream()
 	if err := m.Apply(&pluginv1.ApplyRequest{
@@ -1325,7 +1332,7 @@ func TestApply_Resized_PassesDesiredAndAggregates(t *testing.T) {
 	if !ev.Changed {
 		t.Fatal("resize must report changed=true")
 	}
-	// Наши единицы прокинуты в ResizeSpec без конверсии (конверсия в WB-байты — драйвер).
+	// Our units forwarded to ResizeSpec without conversion (conversion to WB-bytes — driver).
 	if fp.lastDesired.GetCpuCores() != 4 || fp.lastDesired.GetRamMb() != 8192 || fp.lastDesired.GetDiskGb() != 100 {
 		t.Fatalf("desired not propagated: %+v", fp.lastDesired)
 	}
@@ -1393,7 +1400,7 @@ func TestApply_Resized_PluginError_FailsTask(t *testing.T) {
 }
 
 func TestApply_Resized_StubHost_FailsCleanly(t *testing.T) {
-	// StubHost возвращает ErrPluginHostNotImplemented → failed-event, не crash.
+	// StubHost returns ErrPluginHostNotImplemented → failed-event, not crash.
 	m := coremodcloud.New(coremodcloud.StubHost{}, &fakeResolver{}, &fakeSouls{}, newFakeTokens(), nil, &fakeAudit{})
 	stream := internaltest.NewApplyStream()
 	if err := m.Apply(&pluginv1.ApplyRequest{
@@ -1411,4 +1418,4 @@ func TestApply_Resized_StubHost_FailsCleanly(t *testing.T) {
 	}
 }
 
-var _ context.Context = context.Background() // защита от unused-import при rearrange
+var _ context.Context = context.Background() // guard against unused-import on rearrange

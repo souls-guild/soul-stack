@@ -1,13 +1,13 @@
-// Package util — общие helper-ы для keeper-side core-модулей
+// Package util provides common helpers for keeper-side core-modules
 // (`core.soul.registered`, `core.cloud.provisioned`, `core.vault.kv-read`).
 //
-// Содержимое — типизированные accessor-ы над `*structpb.Struct` (params
-// ApplyRequest-а) и helper-ы отправки финальных ApplyEvent-ов на gRPC-stream.
+// Contents are typed accessors over `*structpb.Struct` (ApplyRequest
+// params) and helpers to send final ApplyEvent-s on gRPC-stream.
 //
-// Аналог Soul-side `soul/internal/coremod/util/`: имена и сигнатуры симметричны,
-// чтобы автор keeper-side модуля писал код тем же способом, что и Soul-side.
-// Cross-import между сторонами запрещён (Soul-изоляция — ADR-011), поэтому
-// helper-ы дублируются.
+// Analog of Soul-side `soul/internal/coremod/util/`: names and signatures are symmetric
+// so keeper-side module author writes code same way as Soul-side.
+// Cross-import between sides forbidden (Soul-isolation — ADR-011), so
+// helpers are duplicated.
 package util
 
 import (
@@ -16,8 +16,8 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// StringParam — обязательный строковый параметр. Возвращает ошибку с именем
-// поля (она проксируется наружу как `failed`-event с понятным message).
+// StringParam is required string parameter. Returns error with field name
+// (proxied outward as `failed`-event with clear message).
 func StringParam(params *structpb.Struct, key string) (string, error) {
 	v, err := lookup(params, key)
 	if err != nil {
@@ -30,7 +30,7 @@ func StringParam(params *structpb.Struct, key string) (string, error) {
 	return s.StringValue, nil
 }
 
-// OptStringParam — опциональный string. "", nil если ключа нет или null.
+// OptStringParam is optional string. "", nil if key missing or null.
 func OptStringParam(params *structpb.Struct, key string) (string, error) {
 	v, ok := optLookup(params, key)
 	if !ok {
@@ -43,8 +43,8 @@ func OptStringParam(params *structpb.Struct, key string) (string, error) {
 	return s.StringValue, nil
 }
 
-// StringSliceParam — обязательный список строк. Используется
-// `core.soul.registered` для `params.coven` (min_items=1).
+// StringSliceParam is required string list. Used by
+// `core.soul.registered` for `params.coven` (min_items=1).
 func StringSliceParam(params *structpb.Struct, key string) ([]string, error) {
 	v, err := lookup(params, key)
 	if err != nil {
@@ -65,11 +65,11 @@ func StringSliceParam(params *structpb.Struct, key string) ([]string, error) {
 	return out, nil
 }
 
-// StringOrSliceParam — обязательный параметр, принимающий строку ИЛИ список
-// строк, нормализованный в []string. Используется `core.soul.registered` для
-// `params.sid` (ADR-061): одиночный SID-строкой остаётся валиден (обратная
-// совместимость), список — регистрация+ожидание N хостов одним шагом-барьером.
-// Пустой список / пустые элементы — ошибка (каждый SID должен быть непустым).
+// StringOrSliceParam is required parameter taking string OR list of
+// strings, normalized to []string. Used by `core.soul.registered` for
+// `params.sid` (ADR-061): single SID as string remains valid (backward
+// compatibility), list registers + awaits N hosts in single barrier-step.
+// Empty list / empty elements are error (each SID must be non-empty).
 func StringOrSliceParam(params *structpb.Struct, key string) ([]string, error) {
 	v, err := lookup(params, key)
 	if err != nil {
@@ -103,10 +103,10 @@ func StringOrSliceParam(params *structpb.Struct, key string) ([]string, error) {
 	}
 }
 
-// ListParam — обязательный список произвольных Value (для `hosts`
-// list-of-objects `core.bootstrap.delivered`). Возвращает сырые элементы;
-// разбор каждого (тип/поля) — на caller-е. Пустой список валиден на уровне
-// accessor-а (семантику «нечего обрабатывать» решает caller).
+// ListParam is required list of arbitrary Value (for `hosts`
+// list-of-objects `core.bootstrap.delivered`). Returns raw elements;
+// parsing each (type/fields) — caller's responsibility. Empty list valid at
+// accessor level (caller decides "nothing to process" semantics).
 func ListParam(params *structpb.Struct, key string) ([]*structpb.Value, error) {
 	v, err := lookup(params, key)
 	if err != nil {
@@ -119,8 +119,8 @@ func ListParam(params *structpb.Struct, key string) ([]*structpb.Value, error) {
 	return lv.ListValue.Values, nil
 }
 
-// OptStringSliceParam — опциональный список строк (для cloud `fields`,
-// `vm_ids` и т.п.). nil если ключа нет.
+// OptStringSliceParam is optional string list (for cloud `fields`,
+// `vm_ids` etc.). nil if key missing.
 func OptStringSliceParam(params *structpb.Struct, key string) ([]string, error) {
 	v, ok := optLookup(params, key)
 	if !ok {
@@ -141,8 +141,8 @@ func OptStringSliceParam(params *structpb.Struct, key string) ([]string, error) 
 	return out, nil
 }
 
-// OptBoolParam — опциональный bool. (false,false,nil) если ключа нет/null.
-// Второй bool — флаг наличия (нужен, чтобы отличить default от явного false).
+// OptBoolParam is optional bool. (false,false,nil) if key missing/null.
+// Second bool is presence flag (distinguishes default from explicit false).
 func OptBoolParam(params *structpb.Struct, key string) (bool, bool, error) {
 	v, ok := optLookup(params, key)
 	if !ok {
@@ -155,7 +155,7 @@ func OptBoolParam(params *structpb.Struct, key string) (bool, bool, error) {
 	return b.BoolValue, true, nil
 }
 
-// OptIntParam — опциональный integer (proto json маршалит как float64).
+// OptIntParam is optional integer (proto json marshals as float64).
 func OptIntParam(params *structpb.Struct, key string) (int64, bool, error) {
 	v, ok := optLookup(params, key)
 	if !ok {
@@ -172,8 +172,8 @@ func OptIntParam(params *structpb.Struct, key string) (int64, bool, error) {
 	return int64(f), true, nil
 }
 
-// OptStructParam — опциональный объект (для `profile` cloud-провайдера).
-// Возвращает nil если ключа нет; ошибка только при wrong-type.
+// OptStructParam is optional object (for cloud-provider `profile`).
+// Returns nil if key missing; error only on wrong-type.
 func OptStructParam(params *structpb.Struct, key string) (*structpb.Struct, error) {
 	v, ok := optLookup(params, key)
 	if !ok {

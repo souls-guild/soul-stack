@@ -1,22 +1,22 @@
-// Package cloud реализует keeper-side core-модуль `core.cloud.provisioned`
+// Package cloud implements keeper-side core module `core.cloud.provisioned`
 // (ADR-017, docs/keeper/cloud.md).
 //
-// Состояния:
-//   - created: CloudDriver.Create через PluginHost → []VmInfo → INSERT в
-//     souls (status: pending) + INSERT bootstrap_tokens (один на VM).
+// States:
+//   - created: CloudDriver.Create via PluginHost → []VmInfo → INSERT into
+//     souls (status: pending) + INSERT bootstrap_tokens (one per VM).
 //     Output: hosts: [{sid, vm_id, primary_ip, attributes}].
-//   - destroyed: PluginHost.Destroy(vm_ids) → cascade одной PG-транзакцией
+//   - destroyed: PluginHost.Destroy(vm_ids) → cascade in single PG transaction
 //     (ADR-017 cascade): souls→destroyed + active soul_seeds→orphaned +
 //     active bootstrap_tokens→burned. Output: destroyed_vm_ids + sids +
 //     cascade-counts.
-//   - resized: PluginHost.Resize(vm_ids, desired) — драйвер расширяет ресурсы
-//     VM (cpu/ram/disk, наши единицы). Keeper-агностичен к stop/start: всю
-//     последовательность инкапсулирует драйвер. БД не трогается (resize не
-//     меняет реестр souls). Output: results[{vm_id, caused_downtime, error}].
-//     Драйвер без Resizable-capability → resize.unsupported.
+//   - resized: PluginHost.Resize(vm_ids, desired) — driver expands VM resources
+//     (cpu/ram/disk, our units). Keeper-agnostic to stop/start: driver encapsulates
+//     full sequence. Database untouched (resize does not change souls registry).
+//     Output: results[{vm_id, caused_downtime, error}].
+//     Driver without Resizable-capability → resize.unsupported.
 //
-// Заменяет паттерн «destiny `cloud-provision` с `on: keeper`» (ADR-017):
-// это keeper-side операция, не пакет задач для Soul.
+// Replaces pattern "destiny `cloud-provision` with `on: keeper`" (ADR-017):
+// this is keeper-side operation, not task package for Soul.
 package cloud
 
 import (
@@ -34,87 +34,87 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// VMNameBasePattern — форма base-имени VM (param `name`, self-onboard Вариант T).
-// Единый источник паттерна: NIM-58 guard-assert в provision-телах сверяет
-// incarnation.name байт-в-байт против этого литерала (nameguard_pin_test).
-// lowercase-alnum + дефисы, старт/конец alnum, 1..50 — драйвер добавит `-<index>`,
-// FQDN=`<name>-<index>.<suffix>` обязан пройти SID-валидацию.
+// VMNameBasePattern is the form of VM base name (param `name`, self-onboard Variant T).
+// Single source of truth: NIM-58 guard-assert in provision bodies validates
+// incarnation.name byte-for-byte against this literal (nameguard_pin_test).
+// lowercase-alnum + hyphens, start/end alnum, 1..50 — driver adds `-<index>`,
+// FQDN=`<name>-<index>.<suffix>` must pass SID validation.
 const VMNameBasePattern = `^[a-z][a-z0-9-]{0,48}[a-z0-9]$`
 
 var VMNameBaseRe = regexp.MustCompile(VMNameBasePattern)
 
-// ValidVMNameBase проверяет base-имя VM на соответствие [VMNameBasePattern].
+// ValidVMNameBase validates VM base name against [VMNameBasePattern].
 func ValidVMNameBase(name string) bool { return VMNameBaseRe.MatchString(name) }
 
-// Name — base-имя модуля без state-суффикса (ключ Registry). Author-форма
-// адреса задачи — `core.cloud.created` / `core.cloud.destroyed` (base + state);
-// state приходит в pluginv1.ApplyRequest.state и диспетчеризуется в Apply.
+// Name is module base name without state suffix (Registry key). Author-form
+// of task address — `core.cloud.created` / `core.cloud.destroyed` (base + state);
+// state comes in pluginv1.ApplyRequest.state and is dispatched in Apply.
 const Name = "core.cloud"
 
-// Состояния модуля.
+// Module states.
 const (
 	StateCreated   = "created"
 	StateDestroyed = "destroyed"
 	StateResized   = "resized"
 )
 
-// SoulStore — узкое подмножество для INSERT в souls. DeleteBySID нужен для
-// orphan-cleanup self-onboard (Вариант T): souls вставляются ДО create, и при
-// провале create/сверки их надо откатить (иначе rerun упрётся в PK-конфликт).
+// SoulStore is narrow subset for INSERT into souls. DeleteBySID is needed for
+// orphan-cleanup self-onboard (Variant T): souls are inserted BEFORE create, and on
+// create/validation failure they must be rolled back (else rerun hits PK conflict).
 type SoulStore interface {
 	Insert(ctx context.Context, soul *keepersoul.Soul) error
 	UpdateStatus(ctx context.Context, sid string, status keepersoul.Status, kid *string) error
 	DeleteBySID(ctx context.Context, sid string) error
 }
 
-// TokenStore — узкое подмножество для INSERT в bootstrap_tokens. DeleteByTokenID
-// нужен для orphan-cleanup self-onboard (см. SoulStore): токены выписываются ДО
-// create и откатываются при провале.
+// TokenStore is narrow subset for INSERT into bootstrap_tokens. DeleteByTokenID
+// is needed for orphan-cleanup self-onboard (see SoulStore): tokens are issued BEFORE
+// create and rolled back on failure.
 type TokenStore interface {
 	Generate() (bootstraptoken.PlainToken, error)
 	Insert(ctx context.Context, sid, tokenHash string, createdByAID *string) (*bootstraptoken.Record, error)
 	DeleteByTokenID(ctx context.Context, tokenID string) error
 }
 
-// AuditWriter — для audit-event-а `cloud.provisioned`.
+// AuditWriter writes audit-event `cloud.provisioned`.
 type AuditWriter interface {
 	Write(ctx context.Context, event *audit.Event) error
 }
 
-// Cascader — cascade-обработчик `destroyed`-state (ADR-017 cascade):
-// одна PG-транзакция, переводящая souls/soul_seeds/bootstrap_tokens в
-// терминальные состояния. Прод-реализация — [CascadePG] поверх pgxpool.Pool;
-// для unit-тестов модуля — fake (см. provisioned_test.go).
+// Cascader processes cascade for `destroyed` state (ADR-017 cascade):
+// single PG transaction transitioning souls/soul_seeds/bootstrap_tokens to
+// terminal states. Production implementation — [CascadePG] over pgxpool.Pool;
+// for unit tests of module — fake (see provisioned_test.go).
 //
-// Может быть nil в wire-сборках без PG (тогда destroyed-state валит
-// scenario с понятной ошибкой; см. applyDestroyed).
+// May be nil in wire builds without PG (then destroyed state fails scenario
+// with clear error; see applyDestroyed).
 type Cascader interface {
 	CascadeDestroy(ctx context.Context, sids []string, usedByKID string) (CascadeCounts, error)
 }
 
-// UserdataProvider — резолвер cloud-init userdata по параметру scenario
+// UserdataProvider resolves cloud-init userdata per scenario parameter
 // `generate_userdata: true` (ADR-017(h) amendment 2026-05-27, B-flat).
-// Реализация — keeper/internal/cloudinit.Resolver+GenerateUserdata в обёртке
-// daemon-а: читает текущий snapshot KeeperConfig.CloudInit (hot-reload через
-// config.Store.Get) и Vault.ReadKV для PEM CA. Возвращает готовый cloud-config
-// YAML без секретов.
+// Implementation — keeper/internal/cloudinit.Resolver+GenerateUserdata wrapped
+// in daemon: reads current snapshot KeeperConfig.CloudInit (hot-reload via
+// config.Store.Get) and Vault.ReadKV for PEM CA. Returns ready cloud-config
+// YAML without secrets.
 //
-// Cross-package изоляция через interface: cloud-модуль не знает про cloudinit-
-// пакет, тестируется на fake-провайдере.
+// Cross-package isolation via interface: cloud module does not know cloudinit
+// package, tested on fake provider.
 //
-// Может быть nil — тогда `generate_userdata: true` вернёт ошибку «не сконфигурирован»;
-// явный `userdata: "..."` продолжает работать без UserdataProvider-а.
+// May be nil — then `generate_userdata: true` returns error "not configured";
+// explicit `userdata: "..."` continues working without UserdataProvider.
 //
-// GenerateUserdataSelfOnboard — рендер userdata с запечёнными per-VM токенами
-// для self-onboard «Вариант T» (ADR-017(h) amendment): keeper предсказывает FQDN
-// VM ДО create и передаёт map FQDN→plain-token; cloud-init на VM выбирает свой
-// токен по hostname и онбордится в один цикл (без claim/keeper.push).
+// GenerateUserdataSelfOnboard renders userdata with baked-in per-VM tokens
+// for self-onboard "Variant T" (ADR-017(h) amendment): keeper predicts VM FQDN
+// BEFORE create and passes map FQDN→plain-token; cloud-init on VM picks its token
+// by hostname and onboards in one cycle (without claim/keeper.push).
 type UserdataProvider interface {
 	GenerateUserdata(ctx context.Context) (string, error)
 	GenerateUserdataSelfOnboard(ctx context.Context, tokens map[string]string) (string, error)
 }
 
-// Module — реализация sdk/module.SoulModule.
+// Module implements sdk/module.SoulModule.
 type Module struct {
 	Plugins  PluginHost
 	Resolver ProviderResolver
@@ -125,21 +125,21 @@ type Module struct {
 	Userdata UserdataProvider
 }
 
-// New — wire-helper. `cascade` может быть nil в тестовых сборках, где
-// destroyed-state не используется; applyDestroyed отдаст явную ошибку.
-// `resolver` обязателен: и created, и destroyed резолвят Provider-реестр в
-// driver-имя + credentials (A-flow); nil даст явную ошибку при Apply.
+// New is wire-helper. `cascade` may be nil in test builds where
+// destroyed-state is not used; applyDestroyed returns explicit error.
+// `resolver` is required: both created and destroyed resolve Provider registry to
+// driver-name + credentials (A-flow); nil returns explicit error at Apply.
 //
-// UserdataProvider не подаётся через New (опциональная зависимость,
-// добавилась после фиксации первых 6 cloud-провайдеров) — wire-up идёт
-// через прямое присваивание поля или через [Module.WithUserdata].
+// UserdataProvider is not passed through New (optional dependency,
+// added after first 6 cloud providers fixed) — wire-up done via
+// direct field assignment or [Module.WithUserdata].
 func New(p PluginHost, r ProviderResolver, s SoulStore, t TokenStore, c Cascader, a AuditWriter) *Module {
 	return &Module{Plugins: p, Resolver: r, Souls: s, Tokens: t, Cascade: c, Audit: a}
 }
 
-// WithUserdata возвращает копию модуля с прокинутым UserdataProvider. Удобно
-// в wire-up daemon-а (`coremod.Default(...).Lookup("core.cloud.provisioned")
-// .WithUserdata(...)`), не ломая существующие callsite-ы [New].
+// WithUserdata returns copy of module with UserdataProvider wired. Convenient
+// for daemon wire-up (`coremod.Default(...).Lookup("core.cloud.provisioned")
+// .WithUserdata(...)`), without breaking existing [New] callsites.
 func (m *Module) WithUserdata(p UserdataProvider) *Module {
 	cp := *m
 	cp.Userdata = p
@@ -153,9 +153,9 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 		if _, err := util.StringParam(req.Params, "provider"); err != nil {
 			errs = append(errs, err.Error())
 		}
-		// profile = ИМЯ Profile-я в реестре profiles (Вариант A, ADR-017
-		// amendment 2026-06-29). Опциональный; пустое/отсутствует → VM без
-		// реестрового spec. Резолв имени → params — в applyCreated.
+		// profile = NAME of Profile in profiles registry (Variant A, ADR-017
+		// amendment 2026-06-29). Optional; empty/absent → VM without registry spec.
+		// Name resolution → params — in applyCreated.
 		if _, err := util.OptStringParam(req.Params, "profile"); err != nil {
 			errs = append(errs, err.Error())
 		}
@@ -164,7 +164,7 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 		} else if ok && n < 1 {
 			errs = append(errs, "param \"count\": must be >= 1")
 		}
-		// userdata + generate_userdata — type-check + mutually-exclusive проверка
+		// userdata + generate_userdata — type-check + mutually-exclusive validation
 		// (ADR-017(h) amendment 2026-05-27, B-flat).
 		userdata, uerr := util.OptStringParam(req.Params, "userdata")
 		if uerr != nil {
@@ -177,22 +177,21 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 		if gen && userdata != "" {
 			errs = append(errs, "params \"userdata\" and \"generate_userdata: true\" are mutually exclusive")
 		}
-		// name — базовое имя VM-батча (self-onboard Вариант T, ADR-017(h)): keeper
-		// передаёт его в CreateRequest.name, драйвер именует `<name>-<index>`,
-		// FQDN=`<name>-<index>.<suffix>` предсказуем. Валидируется как имя-фрагмент
-		// (тот же паттерн, что SID-labels; провайдер-специфичные ограничения
-		// проверяет драйвер).
+		// name — base name of VM batch (self-onboard Variant T, ADR-017(h)): keeper
+		// passes it in CreateRequest.name, driver names `<name>-<index>`,
+		// FQDN=`<name>-<index>.<suffix>` is predictable. Validated as name fragment
+		// (same pattern as SID-labels; provider-specific constraints checked by driver).
 		name, nerr := util.OptStringParam(req.Params, "name")
 		if nerr != nil {
 			errs = append(errs, nerr.Error())
 		} else if name != "" && !ValidVMNameBase(name) {
 			errs = append(errs, fmt.Sprintf("param %q: %q must match %s (VM-name base for predictable FQDN)", "name", name, VMNameBasePattern))
 		}
-		// self_onboard: true — VM онбордится сама из cloud-init (Вариант T):
-		// требует и name (для предсказания FQDN), и generate_userdata-путь (токены
-		// в userdata). Явный `userdata:` с self_onboard несовместим (нам надо
-		// самим запечь токены). generate_userdata тут НЕ обязателен как флаг —
-		// self_onboard подразумевает рендер userdata с токенами (см. applyCreated).
+		// self_onboard: true — VM onboards itself from cloud-init (Variant T):
+		// requires both name (for FQDN prediction) and generate_userdata path (tokens
+		// in userdata). Explicit `userdata:` with self_onboard is incompatible (we must
+		// bake tokens ourselves). generate_userdata is NOT required as flag —
+		// self_onboard implies userdata render with tokens (see applyCreated).
 		selfOnboard, _, serr := util.OptBoolParam(req.Params, "self_onboard")
 		if serr != nil {
 			errs = append(errs, serr.Error())
@@ -219,8 +218,8 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 		if _, err := util.StringSliceParam(req.Params, "vm_ids"); err != nil {
 			errs = append(errs, err.Error())
 		}
-		// desired — обязательный объект; хотя бы одно измерение (cpu/ram/disk)
-		// должно быть задано (>0), иначе resize — бессмысленный no-op.
+		// desired — required object; at least one dimension (cpu/ram/disk)
+		// must be set (>0), else resize is meaningless no-op.
 		if _, _, _, derr := parseDesired(req.Params); derr != nil {
 			errs = append(errs, derr.Error())
 		}
@@ -250,12 +249,12 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	}
 }
 
-// maskErr маскирует возможный leak секретов в тексте ошибки перед выдачей в
-// failed-event (он уходит в status_details/error_summary, наблюдаемый канал).
-// Резолв credentials может породить error со встроенным vault-ref
-// (`vault:secret/...`) — прогоняем строку через тот же substring-фильтр
-// shared/audit, что чистит register-output. Ключ `_` несекретный — сработает
-// только vault-ref-фильтр по значению.
+// maskErr masks possible secret leak in error text before sending to
+// failed-event (goes to status_details/error_summary, observable channel).
+// Credential resolution may produce error with embedded vault-ref
+// (`vault:secret/...`) — pass string through same substring filter from
+// shared/audit that cleans register-output. Key `_` is not secret — only
+// vault-ref filter by value will match.
 func maskErr(err error) string {
 	if err == nil {
 		return ""
@@ -267,16 +266,15 @@ func maskErr(err error) string {
 	return "***MASKED***"
 }
 
-// applyCreated реализует state=created. См. doc-комментарий пакета.
+// applyCreated implements state=created. See package doc-comment.
 //
-// Два режима userdata-доставки токена:
-//   - B-flat (default): create → per-VM токены выписываются ПОСЛЕ (SID=FQDN из
-//     ответа драйвера) → plain кладётся в register (доставка отдельным шагом).
-//   - self-onboard «Вариант T» (ADR-017(h) amendment, `self_onboard: true`):
-//     keeper ПРЕДСКАЗЫВАЕТ FQDN (`<name>-<i>.<suffix>`) ДО create, выписывает
-//     токены и запекает их в userdata; VM онбордится сама. Plain в register НЕ
-//     кладётся (доставки нет). CreateRequest.name = base-имя (драйвер именует
-//     `<name>-<i>`).
+// Two modes of token userdata delivery:
+//   - B-flat (default): create → per-VM tokens issued AFTER (SID=FQDN from
+//     driver response) → plain placed in register (delivery via separate step).
+//   - self-onboard "Variant T" (ADR-017(h) amendment, `self_onboard: true`):
+//     keeper PREDICTS FQDN (`<name>-<i>.<suffix>`) BEFORE create, issues tokens
+//     and bakes them in userdata; VM onboards itself. Plain NOT placed in register
+//     (no delivery). CreateRequest.name = base name (driver names `<name>-<i>`).
 func (m *Module) applyCreated(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
 	ctx := stream.Context()
 	provider, err := util.StringParam(req.Params, "provider")
@@ -336,8 +334,8 @@ func (m *Module) applyCreated(req *pluginv1.ApplyRequest, stream grpc.ServerStre
 		userdata = rendered
 	}
 
-	// A-flow: Keeper резолвит Provider-реестр в driver-имя + plain-credentials
-	// (+ FQDNSuffix для self-onboard-предсказания) и Profile-реестр в VM-spec params.
+	// A-flow: Keeper resolves Provider registry to driver-name + plain-credentials
+	// (+ FQDNSuffix for self-onboard prediction) and Profile registry to VM-spec params.
 	if m.Resolver == nil {
 		return util.SendFailed(stream, "cloud created: provider resolver not configured (wire CredentialsResolverPG in main)")
 	}
@@ -393,18 +391,17 @@ func (m *Module) applyCreated(req *pluginv1.ApplyRequest, stream grpc.ServerStre
 		if attrs := vm.GetAttributes(); attrs != nil {
 			hostEntry["attributes"] = attrs.AsMap()
 		}
-		// ВНИМАНИЕ (security, H1): plain bootstrap-token намеренно кладётся в
-		// register-output — cloud-init flow требует передать его на VM при
-		// первичной загрузке. Это единственный момент, когда plain-token
-		// виден; в БД хранится только hash, дальше токен не восстановим.
+		// WARNING (security, H1): plain bootstrap-token is intentionally placed in
+		// register-output — cloud-init flow requires sending it to VM on initial boot.
+		// This is the only moment when plain-token is visible; database stores only
+		// hash, token cannot be recovered later.
 		//
-		// Секретность ключа `bootstrap_token` обеспечивается на ВСЕХ выходах
-		// register-output (audit-log / OTel / SSE / любые логи): ключ матчит
-		// substring-фильтр [audit.MaskSecrets] (`token`-фрагмент). Любой новый
-		// канал вывода register-output ОБЯЗАН прогонять payload через
-		// audit.MaskSecrets — иначе action one-time token leak (см.
-		// .pm/tasks/2026-05-22-security-review). Менять имя ключа без проверки
-		// фильтра нельзя.
+		// Secrecy of key `bootstrap_token` is ensured on ALL register-output outlets
+		// (audit-log / OTel / SSE / any logs): key matches substring-filter
+		// [audit.MaskSecrets] (`token` fragment). Any new register-output channel MUST
+		// pass payload through audit.MaskSecrets — else risk one-time token leak (see
+		// .pm/tasks/2026-05-22-security-review). Cannot change key name without
+		// filter verification.
 		hostEntry["bootstrap_token"] = tok.Reveal()
 		hosts = append(hosts, hostEntry)
 		vmIDs = append(vmIDs, vm.GetVmId())
@@ -422,11 +419,11 @@ func (m *Module) applyCreated(req *pluginv1.ApplyRequest, stream grpc.ServerStre
 	})
 }
 
-// applyCreatedSelfOnboard — ветка self_onboard=true (Вариант T, ADR-017(h)):
-// keeper предсказывает FQDN VM ДО create, выписывает per-VM токены, запекает их в
-// userdata, создаёт VM (передавая base-имя в CreateRequest.name) и сверяет
-// фактические FQDN с предсказанными. Plain-токены в register НЕ кладутся —
-// доставки нет, VM онбордится из cloud-init.
+// applyCreatedSelfOnboard is self_onboard=true branch (Variant T, ADR-017(h)):
+// keeper predicts VM FQDN BEFORE create, issues per-VM tokens, bakes them in
+// userdata, creates VM (passing base name in CreateRequest.name) and validates
+// actual FQDN against predicted. Plain tokens NOT placed in register —
+// no delivery, VM onboards from cloud-init.
 func (m *Module) applyCreatedSelfOnboard(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], provider, name string, count int, resolved *ResolvedProvider, profileMap map[string]any) error {
 	if resolved.FQDNSuffix == "" {
 		return util.SendFailed(stream, fmt.Sprintf("cloud created: self_onboard requires provider %q to have fqdn_suffix (keeper predicts FQDN=<name>-<i>.<suffix>); set providers.fqdn_suffix", provider))
@@ -435,16 +432,16 @@ func (m *Module) applyCreatedSelfOnboard(ctx context.Context, stream grpc.Server
 		return util.SendFailed(stream, "cloud created: self_onboard=true but no UserdataProvider configured (set keeper.yml cloud_init block + wire cloudinit.Resolver in main)")
 	}
 
-	// Souls (pending) + токены выписываются ДО create — потому любой провал ПОСЛЕ
-	// вставки (create-fail, пустой/несовпавший FQDN, ошибка userdata-render)
-	// оставил бы осиротевшие записи: presence-барьер await_online завис бы на
-	// онбординге несуществующих VM, а rerun-last упёрся бы в PK-конфликт insert
-	// soul под тем же предсказанным FQDN. Накопленные записи откатываем defer-ом,
-	// если не дошли до успешного финала (флаг success). На успехе — оставляем.
+	// Souls (pending) + tokens issued BEFORE create — so any failure AFTER
+	// insertion (create-fail, empty/mismatched FQDN, userdata-render error)
+	// would leave orphaned records: presence barrier await_online would hang on
+	// onboarding non-existent VMs, and rerun-last would hit PK conflict inserting
+	// soul with same predicted FQDN. Accumulated records rolled back via defer if
+	// successful completion not reached (success flag). On success — kept.
 	//
-	// DeleteBySID каскадит на bootstrap_tokens (FK ON DELETE CASCADE, миграции
-	// 008/009), но токен откатываем и явно — не полагаемся на схему БД и покрываем
-	// случай soul-insert-ok / token-insert-fail.
+	// DeleteBySID cascades on bootstrap_tokens (FK ON DELETE CASCADE, migrations
+	// 008/009), but token rolled back explicitly — don't rely on schema and cover
+	// case soul-insert-ok / token-insert-fail.
 	type provisionedRecord struct{ sid, tokenID string }
 	var provisioned []provisionedRecord
 	success := false
@@ -453,19 +450,19 @@ func (m *Module) applyCreatedSelfOnboard(ctx context.Context, stream grpc.Server
 			return
 		}
 		for _, rec := range provisioned {
-			// Best-effort: terminal failed-event уже отправлен, ошибки отката
-			// пойти в стрим не могут.
-			// TODO(prod): логировать неудачный откат в OTel/лог daemon-а — на
-			// unit-уровне модуль не имеет logger-а; орфан после провала отката
-			// подберёт Reaper (purge_souls) по возрасту pending-записи.
+			// Best-effort: terminal failed-event already sent, rollback errors
+			// cannot go to stream.
+			// TODO(prod): log failed rollback to OTel/daemon log — at
+			// unit-level module has no logger; orphan after rollback failure
+			// will be picked by Reaper (purge_souls) by pending-record age.
 			_ = m.Tokens.DeleteByTokenID(ctx, rec.tokenID)
 			_ = m.Souls.DeleteBySID(ctx, rec.sid)
 		}
 	}()
 
-	// Предсказываем FQDN каждой VM и выписываем токен. Souls (pending) + токены
-	// (hash в БД) создаются ДО create — presence-барьер await_online потом ждёт
-	// их онбординга. Токены копим в map FQDN→plain для запекания в userdata.
+	// Predict FQDN of each VM and issue token. Souls (pending) + tokens
+	// (hash in DB) created BEFORE create — presence barrier await_online then waits
+	// for their onboarding. Tokens accumulated in map FQDN→plain for baking in userdata.
 	predicted := make([]string, count)
 	tokens := make(map[string]string, count)
 	for i := 0; i < count; i++ {
@@ -481,8 +478,8 @@ func (m *Module) applyCreatedSelfOnboard(ctx context.Context, stream grpc.Server
 		}
 		tok, err := m.Tokens.Generate()
 		if err != nil {
-			// soul уже вставлен — откатим его defer-ом (token-id пуст, DeleteByTokenID
-			// на несуществующий id безопасен).
+			// soul already inserted — roll back via defer (token-id empty, DeleteByTokenID
+			// on non-existent id is safe).
 			provisioned = append(provisioned, provisionedRecord{sid: sid})
 			return util.SendFailed(stream, fmt.Sprintf("generate bootstrap token for %q: %v", sid, err))
 		}
@@ -505,10 +502,10 @@ func (m *Module) applyCreatedSelfOnboard(ctx context.Context, stream grpc.Server
 		return util.SendFailed(stream, fmt.Sprintf("cloud create via provider %q: %s", provider, maskErr(err)))
 	}
 
-	// Сверяем фактические FQDN с предсказанными: если провайдер назвал VM иначе,
-	// self-onboard сломан молча (токен в userdata под предсказанным FQDN, а VM
-	// имеет другой hostname → soul init не найдёт токен). Fail-fast, чтобы не
-	// уходить в вечное ожидание presence-барьера.
+	// Validate actual FQDN against predicted: if provider named VM differently,
+	// self-onboard silently broken (token in userdata under predicted FQDN, but VM
+	// has different hostname → soul init won't find token). Fail-fast to avoid
+	// indefinite wait at presence barrier.
 	predictedSet := make(map[string]bool, len(predicted))
 	for _, f := range predicted {
 		predictedSet[f] = true
@@ -523,8 +520,8 @@ func (m *Module) applyCreatedSelfOnboard(ctx context.Context, stream grpc.Server
 		if !predictedSet[sid] {
 			return util.SendFailed(stream, fmt.Sprintf("cloud created: self_onboard: provider %q named VM %q, not among predicted FQDN %v — token in userdata will not match VM hostname (driver must honor CreateRequest.name)", provider, sid, predicted))
 		}
-		// БЕЗ bootstrap_token в register: self-onboard доставил токен через userdata,
-		// доставки отдельным шагом нет. Онбординг идёт из cloud-init на VM.
+		// NO bootstrap_token in register: self-onboard delivered token via userdata,
+		// no separate delivery step. Onboarding done from cloud-init on VM.
 		hostEntry := map[string]any{
 			"sid":        sid,
 			"vm_id":      vm.GetVmId(),
@@ -541,7 +538,7 @@ func (m *Module) applyCreatedSelfOnboard(ctx context.Context, stream grpc.Server
 		return util.SendFailed(stream, fmt.Sprintf("audit write: %v", werr))
 	}
 
-	// Дошли до успешного финала — souls/токены остаются, defer-cleanup не трогает.
+	// Reached successful completion — souls/tokens remain, defer-cleanup not triggered.
 	success = true
 	return util.SendFinal(stream, true, map[string]any{
 		"hosts":        hosts,
@@ -552,8 +549,8 @@ func (m *Module) applyCreatedSelfOnboard(ctx context.Context, stream grpc.Server
 	})
 }
 
-// writeCreatedAudit пишет audit-event `cloud.provisioned` для created-фазы
-// (общий для B-flat и self-onboard путей). nil Audit → no-op.
+// writeCreatedAudit writes audit-event `cloud.provisioned` for created phase
+// (shared by B-flat and self-onboard paths). nil Audit → no-op.
 func (m *Module) writeCreatedAudit(ctx context.Context, provider string, n int, vmIDs []any) error {
 	if m.Audit == nil {
 		return nil
@@ -570,11 +567,11 @@ func (m *Module) writeCreatedAudit(ctx context.Context, provider string, n int, 
 	})
 }
 
-// applyDestroyed реализует state=destroyed. См. doc-комментарий пакета.
+// applyDestroyed implements state=destroyed. See package doc-comment.
 //
-// Cascade (ADR-017) выполняется ПОСЛЕ успешного PluginHost.Destroy: если
-// cloud-destroy провалился, реестры остаются нетронутыми — хост ещё «жив»
-// с точки зрения cloud-провайдера, переводить souls→destroyed преждевременно.
+// Cascade (ADR-017) runs AFTER successful PluginHost.Destroy: if cloud-destroy
+// failed, registries remain untouched — host still "alive" from cloud-provider
+// perspective, premature to transition souls→destroyed.
 func (m *Module) applyDestroyed(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
 	ctx := stream.Context()
 	provider, err := util.StringParam(req.Params, "provider")
@@ -585,9 +582,8 @@ func (m *Module) applyDestroyed(req *pluginv1.ApplyRequest, stream grpc.ServerSt
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
 	}
-	// Опциональный список SID для cascade (per-VM связка sid↔vm_id
-	// держится caller-ом: cloud-driver не знает наш SID, мы не знаем
-	// provider-vm-id-mapping).
+	// Optional SID list for cascade (per-VM sid↔vm_id binding held by caller:
+	// cloud-driver doesn't know our SID, we don't know provider-vm-id-mapping).
 	sids, err := util.OptStringSliceParam(req.Params, "sids")
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
@@ -656,11 +652,11 @@ func (m *Module) applyDestroyed(req *pluginv1.ApplyRequest, stream grpc.ServerSt
 	})
 }
 
-// parseDesired извлекает целевые ресурсы из params.desired (наши единицы:
-// cpu=ядра / ram_mb=МБ / disk_gb=ГБ). Все поля опциональные, но хотя бы одно
-// должно быть задано (>0) — иначе resize бессмысленен. Возвращает значения
-// (0 = не менять) + ошибку валидации (отсутствует desired / неверный тип /
-// все нули / отрицательные).
+// parseDesired extracts target resources from params.desired (our units:
+// cpu=cores / ram_mb=MB / disk_gb=GB). All fields optional, but at least one
+// must be set (>0) — else resize is meaningless. Returns values
+// (0 = no change) + validation error (missing desired / wrong type /
+// all zeros / negative).
 func parseDesired(params *structpb.Struct) (cpu int32, ramMB, diskGB int64, err error) {
 	desired, derr := util.OptStructParam(params, "desired")
 	if derr != nil {
@@ -690,8 +686,8 @@ func parseDesired(params *structpb.Struct) (cpu int32, ramMB, diskGB int64, err 
 	return int32(cpu64), ramMB, diskGB, nil
 }
 
-// applyResized реализует state=resized. См. doc-комментарий пакета. БД не
-// трогается: resize меняет ресурсы VM, но не реестр souls.
+// applyResized implements state=resized. See package doc-comment. Database
+// untouched: resize changes VM resources, not souls registry.
 func (m *Module) applyResized(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
 	ctx := stream.Context()
 	provider, err := util.StringParam(req.Params, "provider")
@@ -762,10 +758,10 @@ func (m *Module) applyResized(req *pluginv1.ApplyRequest, stream grpc.ServerStre
 		}
 	}
 
-	// changed=true: resize всегда меняет ресурс (идемпотентность к целевому
-	// размеру — задача драйвера; на уровне модуля считаем resize изменяющей
-	// операцией). Per-VM ошибки не валят весь шаг (часть VM могла зарезайзиться),
-	// но попадают в output для наблюдаемости.
+	// changed=true: resize always changes resource (idempotency to target size
+	// is driver responsibility; at module level we treat resize as changing operation).
+	// Per-VM errors don't fail entire step (some VMs may have resized), but
+	// included in output for observability.
 	out := map[string]any{
 		"action":          StateResized,
 		"vm_ids":          toAnySlice(vmIDs),
@@ -778,7 +774,7 @@ func (m *Module) applyResized(req *pluginv1.ApplyRequest, stream grpc.ServerStre
 	return util.SendFinal(stream, true, out)
 }
 
-// toAnySlice конвертирует []string в []any для structpb-output.
+// toAnySlice converts []string to []any for structpb-output.
 func toAnySlice(ss []string) []any {
 	out := make([]any, len(ss))
 	for i, s := range ss {

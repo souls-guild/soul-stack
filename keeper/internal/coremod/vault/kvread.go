@@ -1,37 +1,37 @@
-// Package vault реализует keeper-side core-модуль `core.vault`
-// (ADR-017, docs/architecture.md → ADR-017) — единый модуль с диспетчеризацией
-// по state (паттерн `core.cloud` / `core.choir`).
+// Package vault implements keeper-side core module `core.vault`
+// (ADR-017, docs/architecture.md → ADR-017) — single module with state-based dispatch
+// (pattern `core.cloud` / `core.choir`).
 //
-// Состояния:
-//   - kv-read ([StateRead], applyReadKV): прочитать секрет из Vault KV (v1/v2)
-//     на keeper-стороне и отдать в register-output задачи.
-//   - kv-present ([StatePresent], applyPresent в kvpresent.go): generate-if-absent
-//     — гарантировать существование секретов, сгенерировав недостающие
-//     криптослучайным значением по описанной автором password-policy.
+// States:
+//   - kv-read ([StateRead], applyReadKV): read secret from Vault KV (v1/v2)
+//     on keeper side and return to task's register-output.
+//   - kv-present ([StatePresent], applyPresent in kvpresent.go): generate-if-absent
+//     — ensure secrets exist, generating missing ones with cryptographically random
+//     values per author-specified password-policy.
 //
-// Оба состояния обслуживает один [Module] (ключ Registry — base-имя `core.vault`,
-// state приходит в pluginv1.ApplyRequest.state и маршрутизируется в Validate/Apply).
+// Both states are handled by one [Module] (Registry key is base name `core.vault`,
+// state arrives in pluginv1.ApplyRequest.state and is routed to Validate/Apply).
 //
-// Зачем kv-read существует, если в CEL есть implicit `${ vault(...) }`:
-// implicit-vault — дёшев для рендера, но в audit-trail не отдельной записью.
-// Этот state — explicit-форма для случаев, требующих явного audit-event-а
-// `vault.kv-read` (PCI-DSS, SOC2, compliance-аккуратный код). kv-present
-// аналогично пишет `vault.kv-present` при генерации.
+// Why kv-read exists when CEL has implicit `${ vault(...) }`:
+// implicit-vault is cheap for render but not a distinct audit-trail entry.
+// This state is the explicit form for cases requiring explicit audit-event
+// `vault.kv-read` (PCI-DSS, SOC2, compliance-strict code). kv-present
+// similarly writes `vault.kv-present` during generation.
 //
 // Output kv-read:
 //
-//	register.<name>.data       — map[string]any с извлечёнными ключами.
-//	register.<name>.path       — эхо запрошенного пути.
-//	register.<name>.fields     — список ключей в data (sorted).
+//	register.<name>.data       — map[string]any with extracted keys.
+//	register.<name>.path       — echo of requested path.
+//	register.<name>.fields     — list of keys in data (sorted).
 //
 // Output kv-present:
 //
-//	register.<name>.generated  — map path → [сгенерированные поля] (без значений).
+//	register.<name>.generated  — map path → [generated fields] (no values).
 //
-// Сами значения секретов в audit-payload и output обоих состояний **не**
-// кладутся: фиксируется только факт (path + имена полей). Output kv-read
-// маскируется на write-path-е destiny/scenario (shared/audit.MaskSecrets) —
-// известные секретные ключи; output kv-present имён значений не несёт вовсе.
+// Secret values themselves are **not** included in audit-payload or output of either state:
+// only fact is recorded (path + field names). Output kv-read is masked at write-phase
+// in destiny/scenario (shared/audit.MaskSecrets) — known secret keys; output kv-present
+// carries no value names at all.
 package vault
 
 import (
@@ -46,42 +46,42 @@ import (
 	"google.golang.org/grpc"
 )
 
-// Name — base-имя модуля без state-суффикса (ключ Registry). Author-форма
-// адреса задачи — base + state (`core.vault.kv-read` / `core.vault.kv-present`);
-// state приходит в pluginv1.ApplyRequest.state.
+// Name is the base module name without state suffix (Registry key). Author form
+// of task address is base + state (`core.vault.kv-read` / `core.vault.kv-present`);
+// state arrives in pluginv1.ApplyRequest.state.
 const Name = "core.vault"
 
-// StateRead — состояние чтения. Совпадает с author-state-суффиксом `kv-read`
-// адреса `core.vault.kv-read` (SplitModuleAddr выделит "kv-read").
+// StateRead is the read state. Matches author-state suffix `kv-read`
+// of address `core.vault.kv-read` (SplitModuleAddr extracts "kv-read").
 const StateRead = "kv-read"
 
-// VaultWriter — узкое подмножество keeper/internal/vault.Client, нужное модулю:
-// чтение (kv-read + проверка присутствия в kv-present) и запись (генерация в
-// kv-present). Сужение поверх *vault.Client упрощает unit-тесты (fake без HTTP).
+// VaultWriter is a narrow subset of keeper/internal/vault.Client needed by the module:
+// read (kv-read + existence check in kv-present) and write (generation in kv-present).
+// Narrowing over *vault.Client simplifies unit tests (fake without HTTP).
 //
-// kv-read использует только ReadKV (write-путь не вызывается на read-state); один
-// общий интерфейс держит wire-up единым (`Deps.Vault` — *vault.Client, умеет оба).
+// kv-read uses only ReadKV (write path not called in read state); single common interface
+// keeps wire-up uniform (`Deps.Vault` — *vault.Client, implements both).
 type VaultWriter interface {
 	ReadKV(ctx context.Context, path string) (map[string]any, error)
 	WriteKV(ctx context.Context, path string, data map[string]any) error
 }
 
-// AuditWriter — узкая зависимость для audit-event-ов `vault.kv-read` /
-// `vault.kv-present`. Имя совпадает с shared/audit.Writer-сигнатурой; типизация
-// локально, чтобы модуль не таскал транзитивно весь pipeline.
+// AuditWriter is a narrow dependency for audit-events `vault.kv-read` /
+// `vault.kv-present`. Name matches shared/audit.Writer signature; typing
+// local to keep module from pulling entire pipeline transitively.
 type AuditWriter interface {
 	Write(ctx context.Context, event *audit.Event) error
 }
 
-// Module — реализация sdk/module.SoulModule поверх VaultWriter+AuditWriter.
-// Один модуль на base-имя `core.vault`; state (`kv-read`/`kv-present`)
-// маршрутизируется внутри Validate/Apply.
+// Module implements sdk/module.SoulModule over VaultWriter+AuditWriter.
+// One module per base name `core.vault`; state (`kv-read`/`kv-present`)
+// is routed inside Validate/Apply.
 type Module struct {
 	Vault VaultWriter
 	Audit AuditWriter
 }
 
-// New — wire-helper.
+// New is a wire helper.
 func New(v VaultWriter, a AuditWriter) *Module {
 	return &Module{Vault: v, Audit: a}
 }
@@ -108,9 +108,9 @@ func (m *Module) Plan(_ *pluginv1.PlanRequest, _ grpc.ServerStreamingServer[plug
 	return nil
 }
 
-// Apply маршрутизирует по state: kv-read → applyReadKV (read-only, changed=false),
-// kv-present → applyPresent (generate-if-absent, kvpresent.go). Неизвестный state
-// → failed-event (scenario-applier зайдёт в onfail).
+// Apply routes by state: kv-read → applyReadKV (read-only, changed=false),
+// kv-present → applyPresent (generate-if-absent, kvpresent.go). Unknown state
+// → failed-event (scenario-applier enters onfail).
 func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
 	switch req.State {
 	case StateRead:
@@ -122,8 +122,8 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	}
 }
 
-// applyReadKV делает Vault.ReadKV → фильтр по полю `fields` → пишет audit-event.
-// changed: всегда false — read-операция, не мутирует state.
+// applyReadKV does Vault.ReadKV → filter by `fields` field → write audit-event.
+// changed: always false — read operation, does not mutate state.
 func (m *Module) applyReadKV(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
 	ctx := stream.Context()
 
@@ -136,9 +136,9 @@ func (m *Module) applyReadKV(req *pluginv1.ApplyRequest, stream grpc.ServerStrea
 		return util.SendFailed(stream, err.Error())
 	}
 
-	// ReadKV отдаёт развёрнутый плоский payload (поля секрета) для ОБЕИХ
-	// версий KV — версия резолвится прозрачно в vault.Client (ADR-017(b),
-	// amendment 2026-06-22). Здесь обёртки `{data,metadata}` уже нет.
+	// ReadKV returns flattened payload (secret fields) for BOTH KV versions — version
+	// resolution is transparent in vault.Client (ADR-017(b), amendment 2026-06-22).
+	// Wrappers `{data,metadata}` already removed here.
 	payload, err := m.Vault.ReadKV(ctx, path)
 	if err != nil {
 		return util.SendFailed(stream, fmt.Sprintf("vault read %q: %v", path, err))
@@ -157,8 +157,8 @@ func (m *Module) applyReadKV(req *pluginv1.ApplyRequest, stream grpc.ServerStrea
 			},
 		}
 		if werr := m.Audit.Write(ctx, ev); werr != nil {
-			// audit-фейл не блокирует чтение, но логируется как failed —
-			// иначе модуль молча пропустит обязательный compliance-шаг.
+			// audit failure does not block read but is logged as failed —
+			// otherwise module silently skips mandatory compliance step.
 			return util.SendFailed(stream, fmt.Sprintf("audit write: %v", werr))
 		}
 	}
@@ -171,9 +171,9 @@ func (m *Module) applyReadKV(req *pluginv1.ApplyRequest, stream grpc.ServerStrea
 	return util.SendFinal(stream, false, resp)
 }
 
-// filterFields оставляет только указанные ключи. Пустой/nil wanted → весь payload.
-// Запрошенный, но отсутствующий ключ — silently пропускается (это не failure-кейс
-// модуля: caller хотел опциональные поля; на чтение secret уже потрачен audit-event).
+// filterFields keeps only specified keys. Empty/nil wanted → entire payload.
+// Requested but missing key is silently skipped (not module failure: caller wanted
+// optional fields; secret read already consumed audit-event).
 func filterFields(payload map[string]any, wanted []string) map[string]any {
 	if len(wanted) == 0 {
 		return cloneMap(payload)

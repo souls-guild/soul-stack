@@ -1,33 +1,33 @@
-// Package soul реализует keeper-side core-модуль `core.soul.registered`
+// Package soul implements the keeper-side core module `core.soul.registered`
 // (ADR-017, docs/keeper/modules.md).
 //
-// Состояние:
-//   - registered: декларативная форма «Soul с указанным sid находится в
-//     реестре и привязан к указанному набору Coven-меток».
+// State:
+//   - registered: declarative form "Soul with the given sid is in the registry
+//     and bound to the specified set of Coven labels".
 //
-// Mode-семантика:
-//   - append (default): existing ∪ переданные.
-//   - replace: переданные (пустой набор — ошибка, footgun-защита).
-//   - remove: existing \ переданные.
+// Mode semantics:
+//   - append (default): existing ∪ provided.
+//   - replace: provided (empty set is an error, footgun protection).
+//   - remove: existing \ provided.
 //
-// Side-effect: если записи в `souls` для sid нет — модуль создаёт её под
-// status: pending (новый хост, добавленный сценарием — host-ветка add_replica
-// или после cloud-provision). Bootstrap-токены/SoulSeed не выписывает —
-// это компетенция онбординга.
+// Side-effect: if there is no record in `souls` for sid, the module creates it
+// with status: pending (new host added by scenario — host branch add_replica
+// or after cloud-provision). Does not issue bootstrap tokens/SoulSeed — that is
+// the responsibility of onboarding.
 //
-// `sid` принимает строку ИЛИ список строк (ADR-061): одиночный SID остаётся
-// валиден (обратная совместимость), список — регистрация+ожидание N созданных
-// хостов одним шагом-барьером. `coven` применяется ко всем SID списка.
+// `sid` accepts a string OR a list of strings (ADR-061): a single SID remains
+// valid (backward compatibility), a list — registration + waiting for N hosts
+// created in one barrier step. `coven` applies to all SIDs in the list.
 //
-// Барьер онбординга (ADR-061): при `await_online: true` после регистрации
-// всех SID шаг блокирующе поллит presence (Redis SID-lease через
-// PresenceChecker) до `await_min_count` online или `await_timeout`. B1-strict:
-// недобор кворума к таймауту → шаг failed (см. await.go).
+// Onboarding barrier (ADR-061): with `await_online: true`, after registering
+// all SIDs, the step polls presence (Redis SID-lease via PresenceChecker) until
+// `await_min_count` online or `await_timeout`. B1-strict: quota shortfall at
+// timeout — step failed (see await.go).
 //
-// `refresh_soulprint` (ADR-061 §S2/§S3 — оживлён): при `true` шаг становится
-// passage-определяющей границей (Stratify), а scenario-runner ПОСЛЕ его успеха
-// пере-резолвит roster перед следующим Passage (run.go stage-loop). Output несёт
-// `refreshed` = значение флага (true ⇒ re-resolve гарантированно выполнится).
+// `refresh_soulprint` (ADR-061 §S2/§S3 — revived): when `true`, the step becomes
+// a passage-determining boundary (Stratify), and the scenario runner AFTER its
+// success re-resolves roster before the next Passage (run.go stage-loop). Output
+// carries `refreshed` = flag value (true ⇒ re-resolve is guaranteed to execute).
 package soul
 
 import (
@@ -42,25 +42,26 @@ import (
 	"google.golang.org/grpc"
 )
 
-// Name — base-имя модуля без state-суффикса (ключ Registry). Author-форма
-// адреса задачи — `core.soul.registered` (base + state, как core-модули
-// Soul-side); state `registered` приходит в pluginv1.ApplyRequest.state.
+// Name is the base name of the module without state suffix (Registry key). The
+// author form of the task address is `core.soul.registered` (base + state, like
+// Soul-side core modules); state `registered` arrives in pluginv1.ApplyRequest.state.
 const Name = "core.soul"
 
-// Mode-значения. Совпадают с docs/keeper/modules.md → семантика mode.
+// Mode values. Match docs/keeper/modules.md → mode semantics.
 const (
 	ModeAppend  = "append"
 	ModeReplace = "replace"
 	ModeRemove  = "remove"
 )
 
-// Store — узкое подмножество keeper/internal/soul, нужное модулю.
-// Полный pgxpool наружу не подсовываем — это упрощает unit-тестирование
-// (fake реализует только четыре метода) и фиксирует контракт.
+// Store is a narrow subset of keeper/internal/soul needed by the module.
+// Full pgxpool is not exposed — this simplifies unit testing (fake implements
+// only four methods) and fixes the contract.
 //
-// SoulsWithSoulprint — batch-чек «typed soulprint записан в PG» (подмножество
-// sids с `soulprint_facts IS NOT NULL`) для facts-части барьера онбординга
-// (ADR-061 amendment: refresh_soulprint ⇒ барьер ждёт presence И первый soulprint).
+// SoulsWithSoulprint is a batch check "typed soulprint is recorded in PG"
+// (subset of sids with `soulprint_facts IS NOT NULL`) for the facts-part of
+// the onboarding barrier (ADR-061 amendment: refresh_soulprint ⇒ barrier waits
+// for presence AND first soulprint).
 type Store interface {
 	SelectBySID(ctx context.Context, sid string) (*keepersoul.Soul, error)
 	Insert(ctx context.Context, s *keepersoul.Soul) error
@@ -68,63 +69,63 @@ type Store interface {
 	SoulsWithSoulprint(ctx context.Context, sids []string) (map[string]struct{}, error)
 }
 
-// PresenceChecker — узкая поверхность batch-проверки «жив ли Redis SID-lease»
-// (presence=online, ADR-006(a)/ADR-061), нужная барьеру онбординга
-// `await_online`. Сужение до одного метода изолирует модуль от полного
-// keeperredis.Client и допускает fake в unit-тестах; реальная реализация —
-// обёртка над keeperredis.SoulsStreamAlive, собранная в cmd/keeper
-// (симметрично topology.SoulLeaseChecker).
+// PresenceChecker is a narrow surface for batch-checking "is the Redis SID-lease
+// alive" (presence=online, ADR-006(a)/ADR-061), needed by the `await_online`
+// onboarding barrier. Narrowing to one method isolates the module from the full
+// keeperredis.Client and allows fakes in unit tests; the real implementation is
+// a wrapper over keeperredis.SoulsStreamAlive, assembled in cmd/keeper
+// (symmetrically to topology.SoulLeaseChecker).
 //
-// Источник истины «online» — именно lease (живой EventStream), а НЕ PG
-// souls.status (lifecycle-снимок, отстаёт): барьер не должен считать хост
-// online до фактического стрима.
+// The source of truth for "online" is precisely the lease (live EventStream),
+// not PG souls.status (lifecycle snapshot, lags behind): the barrier must not
+// consider a host online until the actual stream.
 type PresenceChecker interface {
 	SoulsStreamAlive(ctx context.Context, sids []string) (map[string]struct{}, error)
 }
 
-// Module — реализация sdk/module.SoulModule поверх Store.
+// Module implements sdk/module.SoulModule over Store.
 //
-// presence/maxAwaitTimeout заполняются опционально через WithPresence — нужны
-// только барьеру онбординга (`await_online`, ADR-061). Без них шаг работает
-// как до ADR-061 (регистрация без барьера); запрос `await_online: true` без
-// сконфигурированного presence-checker-а завершается failed (барьер не может
-// работать без источника presence — молчаливый success недопустим).
+// presence/maxAwaitTimeout are populated optionally via WithPresence — needed
+// only by the onboarding barrier (`await_online`, ADR-061). Without them, the
+// step works as before ADR-061 (registration without barrier); a request with
+// `await_online: true` without a configured presence-checker fails (the barrier
+// cannot work without a presence source — silent success is not allowed).
 type Module struct {
 	Store    Store
 	presence PresenceChecker
-	// maxAwaitTimeout — провайдер строкового потолка await_timeout из текущего
-	// snapshot keeper.yml (hot-reload: читается на каждом Apply). nil → дефолт
-	// config.DefaultMaxAwaitTimeout. Функция (а не значение): config.Store.Get()
-	// меняется при reload.
+	// maxAwaitTimeout is a provider of the string ceiling await_timeout from the
+	// current keeper.yml snapshot (hot-reload: read on each Apply). nil → default
+	// config.DefaultMaxAwaitTimeout. A function (not a value): config.Store.Get()
+	// changes on reload.
 	maxAwaitTimeout func() string
 }
 
-// New строит модуль с переданным Store. Caller обычно даёт adapter поверх
-// pgxpool — см. NewPGStore.
+// New constructs the module with the given Store. Caller typically provides an
+// adapter over pgxpool — see NewPGStore.
 func New(store Store) *Module {
 	return &Module{Store: store}
 }
 
-// WithPresence подключает presence-checker (Redis SID-lease) и провайдер
-// потолка await_timeout для барьера онбординга (ADR-061). maxAwaitTimeout —
-// функция, возвращающая текущее строковое значение keeper.yml::max_await_timeout
-// (hot-reload-aware); nil-функция или пустая строка → config.DefaultMaxAwaitTimeout.
+// WithPresence connects a presence-checker (Redis SID-lease) and a provider of
+// the await_timeout ceiling for the onboarding barrier (ADR-061). maxAwaitTimeout
+// is a function returning the current string value of keeper.yml::max_await_timeout
+// (hot-reload-aware); a nil function or empty string → config.DefaultMaxAwaitTimeout.
 func (m *Module) WithPresence(p PresenceChecker, maxAwaitTimeout func() string) *Module {
 	m.presence = p
 	m.maxAwaitTimeout = maxAwaitTimeout
 	return m
 }
 
-// Validate проверяет state и обязательные параметры. Запускается host-ом
-// до Apply; ошибки наружу как `ValidateReply.errors[]`, не как gRPC-error.
+// Validate checks state and required parameters. Runs before Apply; errors
+// returned as `ValidateReply.errors[]`, not as gRPC-error.
 //
-// НЕ делегирован в manifest-проверку (как url/repo на Soul-side): сверх
-// known-state + required(sid/coven) у модуля есть enum `mode` (append/replace/
-// remove), которого урезанный plugin.InputParamDef DSL не выражает. soul-lint
-// валидирует author-форму статически по shared/coremanifest/soul.yaml; этот
-// метод — runtime-страховка. (keeper-side util не несёт ValidateAgainstManifest —
-// его coremanifest-фасад живёт в Soul-side util; дублировать ради одного модуля
-// сейчас избыточно.)
+// Not delegated to manifest-checking (like url/repo on Soul-side): beyond
+// known-state + required(sid/coven), the module has an enum `mode` (append/replace/
+// remove) that the reduced plugin.InputParamDef DSL does not express. soul-lint
+// validates author form statically against shared/coremanifest/soul.yaml; this
+// method is runtime insurance. (keeper-side util does not carry
+// ValidateAgainstManifest — its coremanifest facade lives in Soul-side util;
+// duplicating for one module is excessive now.)
 func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
 	var errs []string
 	if req.State != "registered" {
@@ -146,23 +147,23 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 	return &pluginv1.ValidateReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
 
-// Plan — no-op в MVP (симметрично Soul-side core-модулям).
+// Plan is a no-op in MVP (symmetrically to Soul-side core modules).
 func (m *Module) Plan(_ *pluginv1.PlanRequest, _ grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
 	return nil
 }
 
-// Apply применяет состояние registered. Все ошибки уходят как failed-event
-// (не gRPC-error), чтобы scenario-applier видел их через ApplyEvent.failed
-// и зашёл в `onfail:`-ветку.
+// Apply applies the registered state. All errors are sent as failed-event
+// (not gRPC-error) so that scenario-applier sees them through ApplyEvent.failed
+// and enters the `onfail:` branch.
 func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
 	ctx := stream.Context()
 	if req.State != "registered" {
 		return util.SendFailed(stream, fmt.Sprintf("unknown state %q", req.State))
 	}
 
-	// sid принимает строку ИЛИ список (ADR-061). Одиночная строка нормализуется
-	// в список из одного элемента; форма output (агрегат vs одиночный) выбирается
-	// по len(sids) в самом конце.
+	// sid accepts a string OR a list (ADR-061). A single string is normalized
+	// to a list of one element; output form (aggregate vs single) is chosen by
+	// len(sids) at the very end.
 	sids, err := util.StringOrSliceParam(req.Params, "sid")
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
@@ -176,9 +177,9 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
 	}
-	// Симметрия с API-границей (POST /v1/souls → soul.ValidCoven): в souls.coven
-	// попадают только kebab-case-метки. Без этой проверки мусор вроде "Prod"/"a_b"
-	// через scenario-шаг тихо персистился бы в реестр.
+	// Symmetry with API boundary (POST /v1/souls → soul.ValidCoven): souls.coven
+	// only accepts kebab-case labels. Without this check, garbage like "Prod"/"a_b"
+	// would silently persist to the registry through scenario step.
 	for _, c := range wanted {
 		if !keepersoul.ValidCoven(c) {
 			return util.SendFailed(stream, fmt.Sprintf("invalid coven %q (want kebab-case, 1..63)", c))
@@ -196,37 +197,37 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 		return util.SendFailed(stream, fmt.Sprintf("unknown mode %q (want append/replace/remove)", modeParam))
 	}
 
-	// refresh_soulprint (ADR-061 §S3 — оживлён). При true scenario-runner ПОСЛЕ
-	// успеха этого шага пере-резолвит roster перед СЛЕДУЮЩИМ Passage (S2 уже сделала
-	// шаг passage-определяющим, S3 исполняет re-resolve в run.go stage-loop). Поэтому
-	// echo refreshed = значение флага: true ⇒ re-resolve гарантированно выполнится
-	// (созданные+онбордившиеся хосты войдут в roster последующих Passage). false /
-	// отсутствие ⇒ refreshed:false (поведение до ADR не меняется).
+	// refresh_soulprint (ADR-061 §S3 — revived). When true, the scenario runner
+	// AFTER this step's success re-resolves roster before the NEXT Passage (S2
+	// already made the step passage-determining, S3 executes re-resolve in run.go
+	// stage-loop). Therefore, echo refreshed = flag value: true ⇒ re-resolve is
+	// guaranteed to execute (created+onboarded hosts will enter roster of subsequent
+	// Passages). false / absent ⇒ refreshed:false (behavior before ADR unchanged).
 	refreshSoulprint, _, err := util.OptBoolParam(req.Params, "refresh_soulprint")
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
 	}
 
-	// Барьер онбординга (ADR-061): разбор+валидация ДО любых side-effect-ов в
-	// souls — недостижимый кворум / превышение потолка не должны оставлять
-	// частичную регистрацию (fail-fast на параметрах барьера).
+	// Onboarding barrier (ADR-061): parse+validate BEFORE any side-effects in
+	// souls — unmet quorum / ceiling overflow should not leave partial registration
+	// (fail-fast on barrier parameters).
 	awaitCfg, aerr := m.parseAwait(req.Params, len(sids))
 	if aerr != nil {
 		return util.SendFailed(stream, aerr.Error())
 	}
-	// refresh_soulprint ⇒ барьер ждёт presence И первый typed soulprint (ADR-061
-	// amendment): render следующего Passage читает soulprint.self.*, presence
-	// одного lease его не гарантирует (запись первого репорта асинхронна).
+	// refresh_soulprint ⇒ barrier waits for presence AND first typed soulprint
+	// (ADR-061 amendment): render of next Passage reads soulprint.self.*,
+	// presence alone does not guarantee it (first report write is async).
 	if awaitCfg != nil {
 		awaitCfg.requireFacts = refreshSoulprint
 	}
 
-	// replace + пустой coven — ошибка (двойная footgun-защита).
+	// replace + empty coven is an error (double footgun protection).
 	if modeParam == ModeReplace && len(wanted) == 0 {
 		return util.SendFailed(stream, "mode=replace requires non-empty coven (footgun protection: host must keep at least one coven label)")
 	}
 
-	// Регистрация всех SID (общий набор coven применяется к каждому).
+	// Register all SIDs (common coven set applies to each).
 	anyCreated := false
 	anyChanged := false
 	var savedFirst, removedFirst []string
@@ -242,8 +243,8 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 		}
 	}
 
-	// Барьер: блокирующе ждём готовность (presence, при refresh_soulprint — и
-	// первый typed soulprint) по всем SID до min_count/timeout.
+	// Barrier: blocking wait for readiness (presence, and if refresh_soulprint —
+	// first typed soulprint) across all SIDs up to min_count/timeout.
 	var barrier awaitResult
 	barrier.satisfied = true
 	if awaitCfg != nil {
@@ -252,8 +253,8 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 			return util.SendFailed(stream, err.Error())
 		}
 		if !barrier.satisfied {
-			// B1-strict: недобор кворума к таймауту → failed (fail-stop прогона,
-			// state не коммитится → error_locked).
+			// B1-strict: quota shortfall at timeout — failed (fail-stop run,
+			// state not committed — error_locked).
 			msg := barrierTimeoutMessage(sids, awaitCfg, barrier)
 			return util.SendFailed(stream, msg)
 		}
@@ -263,7 +264,7 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	return util.SendFinal(stream, anyChanged, out)
 }
 
-// registerResult — итог регистрации одного SID.
+// registerResult is the result of registering a single SID.
 type registerResult struct {
 	created      bool
 	covenChanged bool
@@ -271,7 +272,7 @@ type registerResult struct {
 	removed      []string
 }
 
-// registerOne создаёт/обновляет souls-запись одного SID и применяет coven-mode.
+// registerOne creates/updates a souls record for a single SID and applies coven-mode.
 func (m *Module) registerOne(ctx context.Context, sid string, wanted []string, mode keepersoul.CovenMode) (registerResult, error) {
 	cur, created, ferr := m.fetchOrCreate(ctx, sid)
 	if ferr != nil {
@@ -291,10 +292,9 @@ func (m *Module) registerOne(ctx context.Context, sid string, wanted []string, m
 	return registerResult{created: created, covenChanged: covenChanged, saved: saved, removed: removed}, nil
 }
 
-// buildOutput собирает register-payload. Одиночный SID сохраняет историческую
-// форму (`sid` строкой, `coven`/`removed` от единственного хоста); список —
-// `sid` массивом. Поля барьера (online/pending/satisfied) добавляются только
-// при await.
+// buildOutput constructs register-payload. A single SID preserves the historical
+// form (`sid` as string, `coven`/`removed` from the single host); a list — `sid`
+// as array. Barrier fields (online/pending/satisfied) are added only with await.
 func buildOutput(sids, savedFirst []string, mode string, created bool, removedFirst []string, refreshed, awaited bool, online, pending []string, satisfied bool) map[string]any {
 	out := map[string]any{
 		"mode":      mode,
@@ -316,9 +316,9 @@ func buildOutput(sids, savedFirst []string, mode string, created bool, removedFi
 	return out
 }
 
-// fetchOrCreate возвращает текущую запись souls; если её нет — создаёт под
-// status: pending с пустым coven (модуль сам потом обновит coven через
-// UpdateCoven, см. Apply).
+// fetchOrCreate returns the current souls record; if it doesn't exist, creates
+// one with status: pending and empty coven (the module will later update coven
+// via UpdateCoven, see Apply).
 func (m *Module) fetchOrCreate(ctx context.Context, sid string) (*keepersoul.Soul, bool, error) {
 	got, err := m.Store.SelectBySID(ctx, sid)
 	if err == nil {
@@ -327,8 +327,8 @@ func (m *Module) fetchOrCreate(ctx context.Context, sid string) (*keepersoul.Sou
 	if !errors.Is(err, keepersoul.ErrSoulNotFound) {
 		return nil, false, fmt.Errorf("lookup soul %q: %w", sid, err)
 	}
-	// Создаём pending-запись. Поля LastSeenAt/CreatedByAID — nil: cloud-provision
-	// или scenario-host-add не несут оператора (это keeper-internal action).
+	// Create a pending record. LastSeenAt/CreatedByAID fields are nil: cloud-provision
+	// or scenario-host-add do not carry an operator (this is a keeper-internal action).
 	stub := &keepersoul.Soul{
 		SID:       sid,
 		Transport: keepersoul.TransportAgent,
@@ -341,15 +341,15 @@ func (m *Module) fetchOrCreate(ctx context.Context, sid string) (*keepersoul.Sou
 	return stub, true, nil
 }
 
-// isValidMode — closed-enum проверка mode-строки модуля. Делегирует
-// в keeper-side soul.ValidCovenMode (единый словарь режимов; рефактор-пилот
-// bulk coven-assign вынес set-семантику в keeper/internal/soul).
+// isValidMode is a closed-enum check of the module's mode string. Delegates to
+// keeper-side soul.ValidCovenMode (unified mode vocabulary; refactor-pilot bulk
+// coven-assign moved set-semantics to keeper/internal/soul).
 func isValidMode(m string) bool {
 	return keepersoul.ValidCovenMode(keepersoul.CovenMode(m))
 }
 
-// toAnySlice — конверт []string → []any для structpb.NewStruct.
-// structpb не умеет list of string напрямую: только list of any с auto-coerce.
+// toAnySlice converts []string → []any for structpb.NewStruct.
+// structpb does not handle list of string directly: only list of any with auto-coerce.
 func toAnySlice(xs []string) []any {
 	if xs == nil {
 		return []any{}
