@@ -1,64 +1,64 @@
-# Soul — концепция
+# Soul — concept
 
-`soul`-бинарь — демон-агент на управляемом хосте. Получает от Keeper-а команды «применить такую-то Destiny с такой-то Essence», исполняет шаги модулей, отдаёт события и Soulprint обратно. В SaltStack-словаре это minion; в Soul Stack-словаре — Soul, единичная душа в реестре `souls`.
+The `soul` binary is the agent daemon on a managed host. It receives from Keeper commands of the form "apply such-and-such Destiny with such-and-such Essence", executes module steps, and returns events and Soulprint back. In the SaltStack vocabulary it is a minion; in the Soul Stack vocabulary it is a Soul, a single soul in the `souls` registry.
 
-## Где Soul в общей картине
+## Where Soul sits in the overall picture
 
 ```
-                        Keeper-кластер
+                        Keeper cluster
                               │
               ┌───────────────┴───────────────┐
               │                               │
-   gRPC bidi (mTLS)                       SSH-сессия
+   gRPC bidi (mTLS)                       SSH session
               │                               │
               ▼                               ▼
         ┌──────────┐                    ┌──────────┐
         │   soul   │                    │   soul   │
-        │ (демон,  │                    │ (oneshot,│
+        │ (daemon, │                    │ (oneshot,│
         │  pull)   │                    │   push)  │
         └──────────┘                    └──────────┘
         transport: agent                transport: ssh
-        запись в souls                  запись в souls
-        + soul_seeds                    без soul_seeds
+        record in souls                 record in souls
+        + soul_seeds                    no soul_seeds
 ```
 
-Слева — Keeper (центральный сервер, см. [architecture.md → Топология](../architecture.md#топология)). Справа от Keeper-а — реестр Destiny / Service / Incarnation в Postgres. Soul стоит «под Destiny»: получает атомарный кирпичик, применяет его на одном хосте через [модули](../architecture.md#модель-модулей).
+On the left is Keeper (the central server, see [architecture.md → Topology](../architecture.md#топология)). To the right of Keeper is the Destiny / Service / Incarnation registry in Postgres. Soul sits "below Destiny": it receives an atomic brick and applies it on a single host through [modules](../architecture.md#модель-модулей).
 
-Подробное определение бинарей — [architecture.md → Роли бинарей](../architecture.md#роли-бинарей).
+The detailed definition of the binaries is in [architecture.md → Binary roles](../architecture.md#роли-бинарей).
 
-## Два транспорта
+## Two transports
 
-Soul доступен через два режима доставки команд от Keeper-а — но это **один и тот же бинарь**, отличаются только условия запуска и идентичность.
+Soul is reachable through two modes of command delivery from Keeper — but it is the **same binary**, differing only in the launch conditions and the identity.
 
 | | `transport: agent` (pull) | `transport: ssh` (push) |
 |---|---|---|
-| Запуск | systemd-демон, держит стрим постоянно | one-shot `soul apply`, поднимается на каждый прогон через SSH-сессию |
-| Идентичность | SoulSeed (mTLS-пара), запись в `soul_seeds` | SSH-credentials от провайдера (Vault SSH CA / static / Teleport); `soul_seeds` для push-хоста **не используется** |
-| Инициатор связи | Soul → Keeper | Keeper → Soul (SSH) |
-| Передача плана прогона | `ApplyRequest` по живому gRPC-стриму, ответ — `TaskEvent`/`RunResult` обратно в стрим | `ApplyRequest` (protojson) в stdin `soul apply`, ответ — NDJSON `TaskEvent` + `RunResult` в stdout |
-| Запись в БД | `souls` с `transport: agent` | `souls` с `transport: ssh` — **та же таблица**, разный режим |
-| Кеш модулей на хосте | в `/var/lib/soul-stack/{bin,modules}/` (см. [modules.md](modules.md)) | в `/var/lib/soul-stack/{bin,modules}/` (см. [modules.md](modules.md)) |
-| Подключение к Keeper | алгоритм `priority + failback` (см. [connection.md](connection.md)) | алгоритм не применяется — Keeper сам ходит на хост |
+| Launch | systemd daemon, holds the stream continuously | one-shot `soul apply`, comes up on each run via an SSH session |
+| Identity | SoulSeed (mTLS pair), a `soul_seeds` record | SSH credentials from the provider (Vault SSH CA / static / Teleport); `soul_seeds` is **not used** for a push host |
+| Connection initiator | Soul → Keeper | Keeper → Soul (SSH) |
+| Run-plan delivery | `ApplyRequest` over the live gRPC stream, response — `TaskEvent`/`RunResult` back into the stream | `ApplyRequest` (protojson) into the stdin of `soul apply`, response — NDJSON `TaskEvent` + `RunResult` into stdout |
+| DB record | `souls` with `transport: agent` | `souls` with `transport: ssh` — the **same table**, a different mode |
+| Module cache on the host | in `/var/lib/soul-stack/{bin,modules}/` (see [modules.md](modules.md)) | in `/var/lib/soul-stack/{bin,modules}/` (see [modules.md](modules.md)) |
+| Connection to Keeper | the `priority + failback` algorithm (see [connection.md](connection.md)) | the algorithm does not apply — Keeper reaches the host itself |
 
-Push-режим расписан в [keeper/push.md](../keeper/push.md). Push не используется как самостоятельный «agent-less mode» с собственным бинарём; это другой режим запуска того же `soul`-а.
+The push mode is detailed in [keeper/push.md](../keeper/push.md). Push is not used as a standalone "agent-less mode" with its own binary; it is a different launch mode of the same `soul`.
 
-Push-хост может в любой момент мигрировать в pull (поставили демон, оператор сменил `transport`) — запись `souls` остаётся, история не теряется.
+A push host can migrate to pull at any time (a daemon is installed, the operator changes `transport`) — the `souls` record remains, history is not lost.
 
-## Принципы
+## Principles
 
-- **Никакого исходящего трафика помимо Keeper-а.** Soul по своей инициативе ходит только к своему Keeper-кластеру (и к ресурсам, явно разрешённым внутри Destiny). Никаких телеметрических обращений, никаких автоматических обновлений мимо Keeper-а.
-- **Один бинарь — два режима.** Pull-демон и push-oneshot — это `soul` с разным entry-point (`soul` как сервис vs `soul apply` как команда). Состав модулей, исполнение шагов, формат событий — идентичны.
-- **Одна запись `souls` на хост, разный `transport`.** Push и pull — это поле в `souls`, а не отдельные сущности. Это даёт единый реестр, единый аудит, единый RBAC и возможность переключения режимов без потери истории.
-- **Идентичность отделена от транспорта.** SoulSeed нужен только pull-режиму (там Soul инициирует подключение и должен себя авторизовать). В push идентичность хоста — это его SSH-сторона; см. [keeper/push.md → Аутентификация SSH](../keeper/push.md#аутентификация-ssh--pluggable-provider).
-- **Локальный admin-эндпоинт пока не определён.** Нужен ли отдельный сокет/порт на хосте для статуса, force-resync, дампа Soulprint — открытый вопрос (см. [architecture.md → Открытые вопросы](../architecture.md#открытые-вопросы), пункт «Локальный admin-эндпоинт на Soul»).
+- **No outbound traffic beyond Keeper.** On its own initiative Soul reaches only its Keeper cluster (and the resources explicitly allowed within a Destiny). No telemetry calls, no automatic updates that bypass Keeper.
+- **One binary — two modes.** The pull daemon and the push one-shot are `soul` with a different entry point (`soul` as a service vs `soul apply` as a command). The module set, step execution, and event format are identical.
+- **One `souls` record per host, a different `transport`.** Push and pull are a field in `souls`, not separate entities. This yields a single registry, a single audit, a single RBAC, and the ability to switch modes without losing history.
+- **Identity is decoupled from the transport.** SoulSeed is needed only by the pull mode (there Soul initiates the connection and must authorize itself). In push, the host identity is its SSH side; see [keeper/push.md → SSH authentication](../keeper/push.md#аутентификация-ssh--pluggable-provider).
+- **The local admin endpoint is not defined yet.** Whether a separate socket/port on the host is needed for status, force-resync, or a Soulprint dump is an open question (see [architecture.md → Open questions](../architecture.md#открытые-вопросы), the item "Локальный admin-эндпоинт на Soul").
 
-## См. также
+## See also
 
-- [identity.md](identity.md) — реестры `souls` / `soul_seeds` / `bootstrap_tokens`, статусы.
-- [onboarding.md](onboarding.md) — как Soul становится `connected`.
-- [connection.md](connection.md) — `priority + failback` для pull-режима.
-- [config.md](config.md) — формат `soul.yml`.
-- [modules.md](modules.md) — кеш модулей на хосте.
-- [architecture.md → Роли бинарей](../architecture.md#роли-бинарей) — определение `soul` в контексте трёх бинарей.
-- [architecture.md → Push-режим](../architecture.md#push-режим-keeperpush) — спецификация push.
-- [architecture.md → Модель модулей](../architecture.md#модель-модулей) — то, что Soul исполняет.
+- [identity.md](identity.md) — the `souls` / `soul_seeds` / `bootstrap_tokens` registries, statuses.
+- [onboarding.md](onboarding.md) — how a Soul becomes `connected`.
+- [connection.md](connection.md) — `priority + failback` for the pull mode.
+- [config.md](config.md) — the `soul.yml` format.
+- [modules.md](modules.md) — the module cache on the host.
+- [architecture.md → Binary roles](../architecture.md#роли-бинарей) — the definition of `soul` in the context of the three binaries.
+- [architecture.md → Push mode](../architecture.md#push-режим-keeperpush) — the push specification.
+- [architecture.md → Module model](../architecture.md#модель-модулей) — what Soul executes.

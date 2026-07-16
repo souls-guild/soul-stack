@@ -1,14 +1,14 @@
-# Онбординг Soul: bootstrap-токен и доставка
+# Soul onboarding: the bootstrap token and delivery
 
-Применимо к pull-режиму (`transport: agent`). Для push-режима (`transport: ssh`) онбординг сводится к настройке SSH-доступа и не использует bootstrap-токен — см. [architecture.md → Push-режим](../architecture.md#push-режим-keeperpush).
+Applies to the pull mode (`transport: agent`). For the push mode (`transport: ssh`) onboarding reduces to configuring SSH access and does not use a bootstrap token — see [architecture.md → Push mode](../architecture.md#push-режим-keeperpush).
 
-## Жизненный цикл bootstrap-токена
+## The bootstrap-token lifecycle
 
-«Сжигание» — операция в две стороны, обе атомарные.
+"Burning" is a two-sided operation, both sides atomic.
 
-### На стороне Keeper
+### On the Keeper side
 
-При предъявлении токена и CSR — одной транзакцией Postgres:
+On presentation of the token and the CSR — in a single Postgres transaction:
 
 ```sql
 UPDATE bootstrap_tokens
@@ -21,85 +21,85 @@ UPDATE bootstrap_tokens
 RETURNING token_id;
 ```
 
-- `UPDATE … WHERE used_at IS NULL` + row-level lock делает операцию race-safe: два одновременных предъявления одного токена дадут один успех и один отказ.
-- Пустой `RETURNING` — токен уже сожжён, истёк или не существует → `403`, `souls.status` остаётся `pending`.
-- В той же транзакции: `souls.status: pending → connected`, в `soul_seeds` создаётся `active`-запись с подписанным сертификатом. Полу-состояние «токен сожжён, но seed не создан» невозможно.
-- Plain-токен Keeper не хранит — после выписки оператору он уходит из памяти. В БД — только `token_hash` (SHA-256, hex, без соли — токен уже сам по себе high-entropy).
+- `UPDATE … WHERE used_at IS NULL` + a row-level lock makes the operation race-safe: two simultaneous presentations of the same token yield one success and one rejection.
+- An empty `RETURNING` — the token is already burned, expired, or does not exist → `403`, `souls.status` stays `pending`.
+- In the same transaction: `souls.status: pending → connected`, and an `active` record with the signed certificate is created in `soul_seeds`. The half-state "the token is burned but the seed is not created" is impossible.
+- Keeper does not store the plain token — after being issued to the operator it leaves memory. In the DB — only `token_hash` (SHA-256, hex, no salt — the token is already high-entropy by itself).
 
-### На стороне Soul
+### On the Soul side
 
-- `soul init` получает токен **строкой** — из флага `--token` или env `SOUL_BOOTSTRAP_TOKEN` (см. [§ Поток онбординга](#поток-онбординга-агентский-режим)); файлов с токеном сам бинарь **не читает и не удаляет**. Один процесс `init` = одно предъявление; после успешного bootstrap токен уже сожжён на стороне Keeper (SQL-транзакция выше) и повторно не пригоден.
-- Если канал доставки клал токен в файл (например, `/etc/soul/token` у `core.bootstrap.delivered`, [ADR-063](../adr/0063-bootstrap-token-delivery.md)) — файл остаётся артефактом **канала доставки**, его гигиена (права `0400`, чистка) — на канале/операторе, не на `soul`-бинаре. Основные защиты — одноразовость и короткий TTL токена, а не перезапись диска.
-- Содержимое токена **никогда** не логируется — ни `soul`-ом, ни Keeper-ом (на выходах Keeper-а ключ `bootstrap_token` маскируется `audit.MaskSecrets`).
+- `soul init` receives the token as a **string** — from the `--token` flag or the env `SOUL_BOOTSTRAP_TOKEN` (see [§ Onboarding flow](#onboarding-flow-agent-mode)); the binary itself **does not read or delete** any token files. One `init` process = one presentation; after a successful bootstrap the token is already burned on the Keeper side (the SQL transaction above) and is not reusable.
+- If the delivery channel put the token into a file (for example, `/etc/soul/token` from `core.bootstrap.delivered`, [ADR-063](../adr/0063-bootstrap-token-delivery.md)) — the file remains an artifact of the **delivery channel**, and its hygiene (`0400` permissions, cleanup) is on the channel/operator, not on the `soul` binary. The main protections are the one-time use and the short TTL of the token, not overwriting the disk.
+- The token contents are **never** logged — neither by `soul` nor by Keeper (on Keeper's outputs the `bootstrap_token` key is masked by `audit.MaskSecrets`).
 
-### Рекомендации оператору
+### Recommendations for the operator
 
-Вне зоны ответственности Soul Stack, но влияет на безопасность онбординга:
+Outside the Soul Stack area of responsibility, but it affects onboarding security:
 
-- Файл токена — `mode 0400`, owner `soul:soul`, директория `mode 0700`.
-- На systemd ≥ 250 — использовать `LoadCredential=` в unit-файле. Токен живёт в tmpfs, передаётся в процесс через ephemeral fd, **никогда не пишется на диск**. Лучшее решение, всё остальное — компромисс.
+- The token file — `mode 0400`, owner `soul:soul`, the directory `mode 0700`.
+- On systemd ≥ 250 — use `LoadCredential=` in the unit file. The token lives in tmpfs, is passed into the process through an ephemeral fd, and is **never written to disk**. The best solution; everything else is a compromise.
 
-**Жнец** позже подбирает использованные токены: правило `purge_used_tokens` с `max_age: 90d` от `used_at` — это уже не про безопасность, а GC. См. [architecture.md → Reaper / Жнец](../architecture.md#reaper--жнец).
+**The Reaper** later picks up the used tokens: the rule `purge_used_tokens` with `max_age: 90d` from `used_at` — this is no longer about security, but GC. See [architecture.md → Reaper](../architecture.md#reaper--жнец).
 
-## Поток онбординга (агентский режим)
+## Onboarding flow (agent mode)
 
-1. Оператор (или скрипт) через OpenAPI/MCP `keeper`-а регистрирует хост и получает bootstrap-токен под конкретный SID:
-   - **Первичная регистрация** — `POST /v1/souls` (permission `soul.create`, MCP-tool `keeper.soul.create`, [operator-api.md](../keeper/operator-api/souls.md#post-v1souls--зарегистрировать-soul)). Запись в `souls` появляется в статусе `pending`, `requested_at = now()`, `created_by_aid` = вызвавший Архонт (FK на `operators(aid)`). Для `transport: agent` в той же операции выпускается bootstrap-токен — одноразовый, TTL по умолчанию 24h; plain-токен в ответе один раз.
-   - **Повторный выпуск** — `POST /v1/souls/{sid}/issue-token` (permission `soul.issue-token`, MCP-tool `keeper.soul.issue-token`). Используется при потере токена или плановой ре-выписке для уже существующей Soul. Подробности — [§ Восстановление: потерян токен](#восстановление-потерян-токен).
-2. Доставка `soul`-бинаря, готового конфига и SoulSeed-токена на хост — задача оператора. Допустимые механизмы см. в разделе «Способы доставки токена» ниже.
-3. Оператор однократно выполняет `soul init [--config /etc/soul/soul.yml]`. Команда:
-   - берёт токен из флага `--token=<токен>` **или** из env `SOUL_BOOTSTRAP_TOKEN` (флаг побеждает env; оба пусты → ошибка). **stdin не читается.** Env-форма предпочтительнее: значение `--token` светится в `ps` и shell-history, env — нет;
-   - endpoints, retry, tls берёт из конфига (`keeper.endpoints` и т.д.); из аргументов командной строки — только `--token`, `--config` и `--sid` (override SID: `--sid` > `sid:` конфига > `os.Hostname` lowercased);
-   - локально генерирует приватный ключ (никогда не покидает хост) и CSR с SID = FQDN;
-   - подключается к Keeper Bootstrap-listener-у на `endpoints[].bootstrap_port` (server-only TLS), перебирая endpoints по `priority` от меньшего к большему без in-group shuffle (one-shot, порядок детерминирован; spray/shuffle есть только в EventStream-фазе — см. [connection.md → Две фазы, два порта](connection.md#две-фазы-два-порта)), предъявляет токен + CSR;
-   - получив подписанный сертификат, атомарно раскладывает SoulSeed в `paths.seed` и завершается.
+1. The operator (or a script), via Keeper's OpenAPI/MCP, registers the host and obtains a bootstrap token for a specific SID:
+   - **Primary registration** — `POST /v1/souls` (permission `soul.create`, MCP tool `keeper.soul.create`, [operator-api.md](../keeper/operator-api/souls.md#post-v1souls--зарегистрировать-soul)). A record appears in `souls` with status `pending`, `requested_at = now()`, `created_by_aid` = the calling Archon (FK to `operators(aid)`). For `transport: agent` a bootstrap token is issued in the same operation — one-time, TTL 24h by default; the plain token is in the response once.
+   - **Re-issue** — `POST /v1/souls/{sid}/issue-token` (permission `soul.issue-token`, MCP tool `keeper.soul.issue-token`). Used when a token is lost or for a planned re-issue for an already-existing Soul. Details — [§ Recovery: a lost token](#recovery-a-lost-token).
+2. Delivering the `soul` binary, the ready config, and the SoulSeed token to the host is the operator's task. Allowed mechanisms are in the "Ways to deliver the token" section below.
+3. The operator runs `soul init [--config /etc/soul/soul.yml]` once. The command:
+   - takes the token from the flag `--token=<token>` **or** from the env `SOUL_BOOTSTRAP_TOKEN` (the flag beats the env; both empty → error). **stdin is not read.** The env form is preferable: the `--token` value shows up in `ps` and shell history, the env does not;
+   - takes endpoints, retry, tls from the config (`keeper.endpoints`, etc.); from the command-line arguments — only `--token`, `--config`, and `--sid` (SID override: `--sid` > `sid:` of the config > `os.Hostname` lowercased);
+   - locally generates a private key (it never leaves the host) and a CSR with SID = FQDN;
+   - connects to the Keeper Bootstrap listener on `endpoints[].bootstrap_port` (server-only TLS), traversing endpoints by `priority` from smaller to larger without in-group shuffle (one-shot, the order is deterministic; spray/shuffle exist only in the EventStream phase — see [connection.md → Two phases, two ports](connection.md#две-фазы-два-порта)), and presents the token + CSR;
+   - having received the signed certificate, atomically lays out the SoulSeed into `paths.seed` and terminates.
 
-   Если SoulSeed уже лежит на диске — `init` падает с ошибкой, чтобы случайно не перевыпустить (для перевыпуска — отдельная процедура, см. [identity.md → Ротация SoulSeed](identity.md#ротация-soulseed)).
-4. Keeper при предъявлении токена и CSR:
-   - проверяет, что токен валиден, не истёк, не использован, и SID совпадает;
-   - выпускает SoulSeed (mTLS-сертификат и ключ через Vault PKI / встроенный CA — конкретная реализация зафиксирована в ADR-006/Vault-разделе);
-   - возвращает Soul-у;
-   - помечает токен использованным (SQL-транзакция выше);
-   - переводит запись в `souls` в `connected`, заполняет поля seed-а.
-5. Дальше — обычный запуск демона `soul` (через systemd-unit и т.п.); он держит стрим по алгоритму из [connection.md](connection.md).
+   If a SoulSeed already lies on disk — `init` fails with an error, so as not to accidentally re-issue (for a re-issue there is a separate procedure, see [identity.md → SoulSeed rotation](identity.md#ротация-soulseed)).
+4. Keeper, on presentation of the token and the CSR:
+   - checks that the token is valid, not expired, not used, and that the SID matches;
+   - issues a SoulSeed (an mTLS certificate and key via Vault PKI / the built-in CA — the concrete implementation is fixed in ADR-006 / the Vault section);
+   - returns it to Soul;
+   - marks the token used (the SQL transaction above);
+   - moves the `souls` record to `connected`, fills in the seed fields.
+5. Then — the ordinary launch of the `soul` daemon (via a systemd unit, etc.); it holds the stream by the algorithm from [connection.md](connection.md).
 
-## Восстановление: потерян токен
+## Recovery: a lost token
 
-Plain bootstrap-токен Keeper хранит только до выписки оператору — в БД остаётся лишь `token_hash` ([§ На стороне Keeper](#на-стороне-keeper)). Потерянный токен восстановить нельзя, только выпустить новый.
+Keeper stores the plain bootstrap token only until it is issued to the operator — only `token_hash` remains in the DB ([§ On the Keeper side](#on-the-keeper-side)). A lost token cannot be recovered, only a new one issued.
 
-Recovery-flow для существующей Soul (`transport: agent`), которая ещё не прошла онбординг (`status: pending`):
+The recovery flow for an existing Soul (`transport: agent`) that has not yet passed onboarding (`status: pending`):
 
-1. Оператор с permission `soul.issue-token` вызывает `POST /v1/souls/{sid}/issue-token` (CLI/обёртка — `--force` при наличии активного токена; MCP — `force: true`).
-2. Действует инвариант `UNIQUE (sid) WHERE used_at IS NULL` — максимум один активный токен на Soul:
-   - **без `force`** при уже-активном токене → `409 bootstrap-token-active` (защита от плодящихся валидных токенов);
-   - **с `force=true`** → старый активный токен помечается использованным (`used_at = now()` — освобождает partial-unique slot `WHERE used_at IS NULL`), выпускается новый.
-3. Новый plain-токен доставляется на хост обычным способом ([§ Способы доставки токена](#способы-доставки-токена)), `soul init` повторяется.
+1. An operator with permission `soul.issue-token` calls `POST /v1/souls/{sid}/issue-token` (the CLI/wrapper — `--force` when there is an active token; MCP — `force: true`).
+2. The invariant `UNIQUE (sid) WHERE used_at IS NULL` holds — at most one active token per Soul:
+   - **without `force`** with an already-active token → `409 bootstrap-token-active` (protection against proliferating valid tokens);
+   - **with `force=true`** → the old active token is marked used (`used_at = now()` — frees the partial-unique slot `WHERE used_at IS NULL`), a new one is issued.
+3. The new plain token is delivered to the host in the ordinary way ([§ Ways to deliver the token](#ways-to-deliver-the-token)), `soul init` is repeated.
 
-Для Soul с `transport: ssh` `issue-token` отдаёт `422 validation-failed` — ssh-онбординг не использует bootstrap-токен ([architecture.md → Push-режим](../architecture.md#push-режим-keeperpush)).
+For a Soul with `transport: ssh`, `issue-token` returns `422 validation-failed` — ssh onboarding does not use a bootstrap token ([architecture.md → Push mode](../architecture.md#push-режим-keeperpush)).
 
-## Способы доставки токена
+## Ways to deliver the token
 
-«Оператор сгенерировал bootstrap-токен → токен оказался в файле на ВМ, где запустится `soul`» — для этого допускаются разные пути. Часть из них — **внутри Soul Stack** (через `keeper.push`), часть — **вне зоны ответственности** (внешние тулзы оператора). Soul Stack принимает все варианты, потому что выписка токена и его приём — это API/MCP операции; способ физической доставки — выбор оператора.
+"The operator generated a bootstrap token → the token ended up in a file on the VM where `soul` will launch" — different paths are allowed for this. Some of them are **inside Soul Stack** (via `keeper.push`), some are **outside the area of responsibility** (the operator's external tools). Soul Stack accepts all variants, because issuing a token and accepting it are API/MCP operations; the method of physical delivery is the operator's choice.
 
-- **Через шаг сценария `core.bootstrap.delivered` (целевой вариант, внутри Soul Stack, [ADR-063](../adr/0063-bootstrap-token-delivery.md)).** Keeper-side core-модуль доставки: по SSH кладёт per-VM токен в файл на хосте (`token_path`, default `/etc/soul/token`; токен идёт через STDIN, не argv), там же делает redeem — `test -e <seed-cert> || SOUL_BOOTSTRAP_TOKEN="$(cat <token_path>)" soul init` — и опционально активирует unit (`daemon-reload && enable && start`). Два режима: **token-only** (setup уже поставил cloud-init) и **full-install** (весь setup — CA/soul.yml/unit/бинарь — тем же SSH-каналом, для платформ без cloud-init userdata). Типичное применение — после `core.cloud.created` в provision-сценарии ([keeper/cloud.md](../keeper/cloud.md)); спецификация модуля — [keeper/modules.md → core.bootstrap.delivered](../keeper/modules.md#corebootstrapdelivered). Преимущество: единый аудит, RBAC и логи в Keeper-е, никаких сторонних тулз.
-- **Ansible-role.** Рекомендуемая официальная роль будет жить в отдельном репозитории; принимает токен и адрес Keeper-а как переменные. Хорошо для тех, у кого Ansible — корпоративный стандарт.
-- **Обычный SSH/SCP** — оператор кладёт токен и `soul`-бинарь вручную или своим скриптом.
-- **CI/CD pipelines** — токен берётся из CI-secret store, доставляется через terraform-provisioner или bootstrap-скрипт.
-- **Cloud-init / image baking** — для эфемерных VM, где токен подкладывается на этапе создания инстанса.
+- **Via the scenario step `core.bootstrap.delivered` (the target variant, inside Soul Stack, [ADR-063](../adr/0063-bootstrap-token-delivery.md)).** A Keeper-side core delivery module: over SSH it puts the per-VM token into a file on the host (`token_path`, default `/etc/soul/token`; the token goes through STDIN, not argv), does the redeem right there — `test -e <seed-cert> || SOUL_BOOTSTRAP_TOKEN="$(cat <token_path>)" soul init` — and optionally activates the unit (`daemon-reload && enable && start`). Two modes: **token-only** (the setup already put cloud-init in place) and **full-install** (the whole setup — CA/soul.yml/unit/binary — over the same SSH channel, for platforms without cloud-init userdata). A typical application is after `core.cloud.created` in a provision scenario ([keeper/cloud.md](../keeper/cloud.md)); the module specification is [keeper/modules.md → core.bootstrap.delivered](../keeper/modules.md#corebootstrapdelivered). The advantage: a single audit, RBAC, and logs in Keeper, no third-party tools.
+- **An Ansible role.** The recommended official role will live in a separate repository; it accepts the token and the Keeper address as variables. Good for those for whom Ansible is a corporate standard.
+- **Ordinary SSH/SCP** — the operator puts the token and the `soul` binary in place manually or with their own script.
+- **CI/CD pipelines** — the token is taken from the CI secret store, delivered via a terraform provisioner or a bootstrap script.
+- **Cloud-init / image baking** — for ephemeral VMs, where the token is injected at the instance-creation stage.
 
-## Защиты со стороны Soul Stack
+## Protections on the Soul Stack side
 
-- **TTL токена** — короткий по умолчанию (24h), настраивается оператором.
-- **Одноразовость** — токен сжигается при первом успешном CSR (SQL-транзакция выше).
-- **Привязка к конкретному SID** — токен валиден только для того FQDN, под который выписан.
-- **Аудит** — каждая выписка и использование токена логируются в Keeper-е.
+- **Token TTL** — short by default (24h), configurable by the operator.
+- **One-time use** — the token is burned on the first successful CSR (the SQL transaction above).
+- **Binding to a specific SID** — the token is valid only for the FQDN it was issued for.
+- **Audit** — every issue and use of a token is logged in Keeper.
 
-Дополнительные защиты (привязка к IP/CIDR, требование cloud-metadata-доказательства, ручное approval) — см. open-вопрос «Утечка SoulSeed-токенов» в [architecture.md → Открытые вопросы](../architecture.md#открытые-вопросы).
+Additional protections (binding to an IP/CIDR, requiring cloud-metadata proof, manual approval) — see the open question "Утечка SoulSeed-токенов" in [architecture.md → Open questions](../architecture.md#открытые-вопросы).
 
-## См. также
+## See also
 
-- [identity.md](identity.md) — реестр `bootstrap_tokens`, реестр `soul_seeds`, статусы Soul.
-- [connection.md](connection.md) — алгоритм, по которому `soul init` подключается к Keeper-у.
-- [config.md](config.md) — где на хосте `paths.seed` и `tls.ca`.
-- [architecture.md → Жизненный цикл Soul и реестр душ](../architecture.md#жизненный-цикл-soul-и-реестр-душ) — архитектурный обзор онбординга и реестров.
-- [architecture.md → Доставка SoulSeed-токена на хост](../architecture.md#доставка-soulseed-токена-на-хост) — короткое перечисление способов доставки.
+- [identity.md](identity.md) — the `bootstrap_tokens` registry, the `soul_seeds` registry, Soul statuses.
+- [connection.md](connection.md) — the algorithm by which `soul init` connects to Keeper.
+- [config.md](config.md) — where `paths.seed` and `tls.ca` are on the host.
+- [architecture.md → Soul lifecycle and the soul registry](../architecture.md#жизненный-цикл-soul-и-реестр-душ) — the architectural overview of onboarding and the registries.
+- [architecture.md → Delivering the SoulSeed token to the host](../architecture.md#доставка-soulseed-токена-на-хост) — a short enumeration of delivery methods.

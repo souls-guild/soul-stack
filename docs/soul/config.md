@@ -1,44 +1,44 @@
-# Формат `soul.yml`
+# The soul.yml format
 
-Конфиг `soul`-агента на управляемом хосте. Один файл на хост, лежит по соглашению в `/etc/soul/soul.yml` (точный путь — на усмотрение оператора, бинарь принимает `--config <path>`). Применяется и в pull-демоне, и в push-режиме — но в push большая часть полей не нужна, потому что Keeper передаёт `soul`-у отрендеренный план прогона (`ApplyRequest` как protojson) через stdin одной командой `soul apply`, а не через долгоживущую конфигурацию. Сырой Destiny/Essence на push-хост не попадает.
+The config of the `soul` agent on a managed host. One file per host, located by convention at `/etc/soul/soul.yml` (the exact path is at the operator's discretion, the binary accepts `--config <path>`). It applies both in the pull daemon and in the push mode — but in push most of the fields are not needed, because Keeper passes the `soul` a rendered run plan (`ApplyRequest` as protojson) through stdin with a single `soul apply` command, not through a long-lived configuration. Raw Destiny/Essence does not reach a push host.
 
-Рабочий пример со всеми полями — [`examples/soul/soul.yml`](../../examples/soul/soul.yml). Этот документ **нормативно типизирует** все поля — по нему пишется парсер.
+A working example with all fields is [`examples/soul/soul.yml`](../../examples/soul/soul.yml). This document **normatively types** all fields — the parser is written against it.
 
-**У Soul нет блока `auth:`.** Аутентификация к Keeper-у — только через mTLS (SoulSeed), см. [`identity.md`](identity.md), [`onboarding.md`](onboarding.md). JWT-блок `auth:` есть только у Keeper-а (для операторов через OpenAPI/MCP, см. [`docs/keeper/config.md → auth:`](../keeper/config.md#auth) и [ADR-014](../adr/0014-operator-identity.md#adr-014-identity-модель-оператора-archon)).
+**Soul has no `auth:` block.** Authentication to Keeper is only via mTLS (SoulSeed), see [`identity.md`](identity.md), [`onboarding.md`](onboarding.md). The JWT `auth:` block exists only on Keeper (for operators via OpenAPI/MCP, see [`docs/keeper/config.md → auth:`](../keeper/config.md#auth) and [ADR-014](../adr/0014-operator-identity.md#adr-014-identity-модель-оператора-archon)).
 
-## Конвенции типов
+## Type conventions
 
-| Запись | Смысл |
+| Entry | Meaning |
 |---|---|
-| `string` | произвольная строка UTF-8. |
-| `int` | знаковое 64-битное целое. |
+| `string` | an arbitrary UTF-8 string. |
+| `int` | a signed 64-bit integer. |
 | `bool` | `true` / `false`. |
-| `duration` | Go-duration string (`5s` / `500ms` / `1h30m`). |
-| `enum{a,b,c}` | строка из явно перечисленного множества. |
-| `string(host:port)` | строка `host:port`; `host` — IP или DNS-имя, `port` — `1..65535`. |
-| `fqdn` | DNS-имя по RFC 1035/1123 hostname: набор labels через точку, каждый label `^[a-z0-9-]{1,63}$`, не начинается и не заканчивается дефисом. Пример: `redis-01.prod.example.com`. |
-| `path` | абсолютный путь в локальной ФС хоста. |
-| `list<T>` | как обычно. |
+| `duration` | a Go duration string (`5s` / `500ms` / `1h30m`). |
+| `enum{a,b,c}` | a string from an explicitly enumerated set. |
+| `string(host:port)` | a `host:port` string; `host` is an IP or DNS name, `port` is `1..65535`. |
+| `fqdn` | a DNS name per RFC 1035/1123 hostname: a set of labels separated by dots, each label `^[a-z0-9-]{1,63}$`, not starting or ending with a hyphen. Example: `redis-01.prod.example.com`. |
+| `path` | an absolute path in the host's local FS. |
+| `list<T>` | as usual. |
 
-`default: —` обозначает обязательное поле без default-а. Опциональные поля помечены `optional`. Значения `enum{…}` — lowercase ASCII, без пробелов.
+`default: —` denotes a required field without a default. Optional fields are marked `optional`. The `enum{…}` values are lowercase ASCII, without spaces.
 
-## Раскладка
+## Layout
 
 ```yaml
-# sid: redis1.cache-test-dev.example         # ОПЦ.: явный SID; по умолчанию = FQDN
+# sid: redis1.cache-test-dev.example         # OPT.: explicit SID; default = FQDN
 
 paths:
-  modules: /var/lib/soul-stack/modules        # кеш custom-модулей
-  seed:    /var/lib/soul-stack/seed           # каталог SoulSeed (версионная раскладка: current -> vN)
+  modules: /var/lib/soul-stack/modules        # cache of custom modules
+  seed:    /var/lib/soul-stack/seed           # SoulSeed directory (versioned layout: current -> vN)
 
 keeper:
-  endpoints:                                  # см. connection.md
+  endpoints:                                  # see connection.md
     - host: k1.dc1.example
       event_stream_port: 9443                  # mTLS, `soul run`
       bootstrap_port: 9442                     # server-only TLS, `soul init`
   retry: {...}
   failback: {...}
-  max_apply_size_mb: 8                         # recv-лимит ApplyRequest, default 8 MiB
+  max_apply_size_mb: 8                         # recv limit of ApplyRequest, default 8 MiB
   tls:
     ca: /var/lib/soul-stack/seed/ca.crt
 
@@ -52,134 +52,134 @@ cleanup:
 logging:
   level: info
   format: json
-  file: /var/log/soul/soul.log         # пусто/опущено → stderr без ротации
+  file: /var/log/soul/soul.log         # empty/omitted → stderr without rotation
   rotation: { max_size_mb: 50, max_age_days: 7, max_files: 5, compress: true }
 
 metrics:
   enabled: true
   listen: "127.0.0.1:9091"
-  basic_auth:                            # опц.; default — loopback-bind без auth
+  basic_auth:                            # opt.; default — loopback-bind without auth
     enabled: true
     username: scrape
-    password_file: /etc/soul/metrics-password   # mode 0400, одна строка
+    password_file: /etc/soul/metrics-password   # mode 0400, one line
 
 otel:
   enabled: true
   endpoint: "k1.dc1.example:4317"
 ```
 
-## Поля верхнего уровня
+## Top-level fields
 
 ### `sid:`
 
-| Поле | Тип | Default | Смысл |
+| Field | Type | Default | Meaning |
 |---|---|---|---|
-| `sid` | `fqdn` | FQDN хоста | Опциональный. По умолчанию вычисляется как FQDN хоста (см. [identity.md → Идентичность](identity.md#идентичность)). Переопределение допустимо, но требуется крайне редко — например, в окружениях, где FQDN недостаточно стабилен. При несовпадении `sid` в конфиге с тем, на который выписан SoulSeed, подключение к Keeper-у не пройдёт TLS-уровень. |
+| `sid` | `fqdn` | the host FQDN | Optional. By default computed as the host FQDN (see [identity.md → Identity](identity.md#идентичность)). Overriding is allowed, but is very rarely needed — for example, in environments where the FQDN is not stable enough. If the `sid` in the config mismatches the one the SoulSeed was issued for, the connection to Keeper will not pass the TLS level. |
 
 ### `paths:`
 
-Файловые пути на хосте. Если хост следует convention-раскладке `/var/lib/soul-stack/`, эти поля можно опустить и положиться на дефолты бинаря.
+File paths on the host. If the host follows the convention layout `/var/lib/soul-stack/`, these fields may be omitted, relying on the binary defaults.
 
-| Поле | Тип | Default | Смысл |
+| Field | Type | Default | Meaning |
 |---|---|---|---|
-| `paths.modules` | `path` | `/var/lib/soul-stack/modules` | Каталог кеша custom-модулей. Внутри — каталожные слоты `<ns>-<name>/{manifest.yaml, soul-mod-<имя>}` ([ADR-065](../adr/0065-core-module-installed.md), см. [modules.md](modules.md)). |
-| `paths.seed` | `path` | `/var/lib/soul-stack/seed` | Каталог с SoulSeed в версионной раскладке: активная версия — симлинк `current` на каталог `vN/` с `cert.pem`/`key.pem`/`ca.pem` (нормативно — [identity.md → On-disk-формат](identity.md#on-disk-формат-pathsseed-нормативно)). Приватный ключ генерируется локально при `soul init` и из этого каталога никуда не уходит. Для оператора значение не меняется: достаточно указать каталог. См. [onboarding.md](onboarding.md). |
+| `paths.modules` | `path` | `/var/lib/soul-stack/modules` | The cache directory of custom modules. Inside — catalog slots `<ns>-<name>/{manifest.yaml, soul-mod-<name>}` ([ADR-065](../adr/0065-core-module-installed.md), see [modules.md](modules.md)). |
+| `paths.seed` | `path` | `/var/lib/soul-stack/seed` | The directory with the SoulSeed in a versioned layout: the active version is the symlink `current` to the directory `vN/` with `cert.pem`/`key.pem`/`ca.pem` (normatively — [identity.md → On-disk format](identity.md#on-disk-формат-pathsseed-нормативно)). The private key is generated locally at `soul init` and never leaves this directory. For the operator the value does not change: it is enough to specify the directory. See [onboarding.md](onboarding.md). |
 
-В push-режиме `paths.seed` не используется — у push-хоста нет SoulSeed.
+In push mode `paths.seed` is not used — a push host has no SoulSeed.
 
 ### `keeper:`
 
-Подключение к Keeper-кластеру: список endpoints, retry-policy, failback, mTLS-материалы. **Полная нормативная спецификация алгоритма и семантика каждого поля — [connection.md](connection.md).** Здесь — типизация и краткий смысл.
+The connection to the Keeper cluster: a list of endpoints, the retry policy, failback, mTLS material. **The full normative specification of the algorithm and the semantics of each field are in [connection.md](connection.md).** Here — the typing and a brief meaning.
 
-| Поле | Тип | Default | Смысл |
+| Field | Type | Default | Meaning |
 |---|---|---|---|
-| `keeper.endpoints` | `list<KeeperEndpoint>` | — | Непустой список endpoints Keeper-кластера; см. [connection.md → YAML-конфиг](connection.md#yaml-конфиг). Минимум один. |
-| `keeper.endpoints[].host` | `string` | — | **Обязателен.** Хост одного Keeper-инстанса (FQDN или IP), общий для обеих фаз. Пустой → diag `missing_required_field`. |
-| `keeper.endpoints[].event_stream_port` | `int` (1..65535) | — | **Обязателен.** Порт EventStream-listener-а (mTLS, фаза `soul run`). Отсутствует → diag `event_stream_port_required`; вне диапазона → `port_out_of_range`. |
-| `keeper.endpoints[].bootstrap_port` | `int` (1..65535) | — | **Обязателен.** Порт Bootstrap-listener-а (server-only TLS, фаза `soul init`). Отсутствует → diag `bootstrap_port_required`; вне диапазона → `port_out_of_range`. Обязателен явно (ADR-012(b), «безопасность на первом месте»): никакого молчаливого ухода bootstrap на event_stream-порт. |
-| `keeper.endpoints[].priority` | `int` (≥1) | `1` | Приоритет (меньше = предпочтительнее, [connection.md → Соглашения](connection.md#соглашения)). Упорядочивает **обе** фазы (хосты совпадают). |
-| `keeper.retry.max_attempts` | `int` (≥1) | `2` | Сколько раз подряд пробовать один endpoint при retriable-ошибке (per-endpoint retries), прежде чем spray-ить к следующему endpoint. Default `2` (не `5`): per-endpoint упорство держим малым, устойчивость даёт spray + внешний reconnect; см. [connection.md → Параметры](connection.md#параметры) и [→ Классификация ошибок](connection.md#классификация-ошибок-что-ретраит-per-endpoint-что-сразу-spray). Опущенное/`0` → `2`. |
-| `keeper.retry.backoff.initial` | `duration` | `1s` | Начальный интервал экспоненциального backoff-а **между полными проходами** по fallback-list-у (внешний reconnect-loop). **Также** переиспользуется как **плоская** (без роста) пауза между попытками к одному endpoint в per-endpoint retry — отдельного ключа на inter-attempt-паузу нет. ⚠️ inter-attempt-паузу hot-reload не подхватывает (restart-required), reconnect-backoff — подхватывает. См. [connection.md → Параметры](connection.md#параметры). |
-| `keeper.retry.backoff.max` | `duration` | `30s` | Верхняя граница backoff-а между полными проходами (на per-endpoint retry не влияет — там пауза плоская). |
-| `keeper.retry.backoff.jitter` | `bool` | `true` | Применять ли случайный jitter к бэкоффу. По [connection.md → YAML-конфиг](connection.md#yaml-конфиг) — `bool` (`true`/`false`), не duration: это **тумблер** «использовать ли jitter», конкретная величина — внутренняя для алгоритма бэкоффа. |
-| `keeper.retry.handshake_timeout` | `duration` | `10s` | Таймаут на установление TLS+gRPC-соединения с одним endpoint. |
-| `keeper.failback.enabled` | `bool` | `true` | Пытаться ли возвращаться на более предпочтительный приоритет после переключения вниз. |
-| `keeper.failback.interval` | `duration` | `1h` | Как часто запускать попытку failback. |
-| `keeper.failback.spray` | `duration` | `10m` | **Амплитуда** случайного jitter-а вокруг `interval` (фактический момент = `interval ± spray`, равномерно). Защита от стадного эффекта при тысячах Souls. По [connection.md → Параметры](connection.md#параметры) — `duration`, не bool: тип согласован с «не растягивает интервал, защищает от синхронных пробуждений». |
-| `keeper.tls.ca` | `path` | — | Путь к CA-сертификату Keeper-кластера. Soul использует его, чтобы валидировать серверную сторону при mTLS-handshake. Сам клиентский сертификат и приватник лежат в `paths.seed/`. |
-| `keeper.max_apply_size_mb` | `int` (МиБ, ≥1) | `8` | Потолок размера одного входящего FromKeeper-сообщения, прежде всего `ApplyRequest` с пачкой отрендеренных `RenderedTask` (рендер Destiny — Keeper-side, [ADR-012](../adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add)). Применяется как `grpc.MaxCallRecvMsgSize` в dial EventStream-клиента, заменяя малый gRPC-дефолт recv (4 MiB), которого не хватает крупному Destiny. `0`/опущено → дефолт `8`; `<1` → diag `value_out_of_range`. **Должен быть ≥ Keeper-send-лимиту** (`listen.grpc.event_stream.max_apply_size_mb` в [keeper/config.md](../keeper/config.md#listen)), иначе Keeper отправит то, что Soul отвергнет; дефолты обеих сторон совпадают (8 MiB). В push-режиме не применяется (план приходит через stdin `soul apply`, не по gRPC). |
+| `keeper.endpoints` | `list<KeeperEndpoint>` | — | A non-empty list of Keeper-cluster endpoints; see [connection.md → YAML config](connection.md#yaml-конфиг). At least one. |
+| `keeper.endpoints[].host` | `string` | — | **Required.** The host of a single Keeper instance (FQDN or IP), shared by both phases. Empty → diag `missing_required_field`. |
+| `keeper.endpoints[].event_stream_port` | `int` (1..65535) | — | **Required.** The port of the EventStream listener (mTLS, the `soul run` phase). Absent → diag `event_stream_port_required`; out of range → `port_out_of_range`. |
+| `keeper.endpoints[].bootstrap_port` | `int` (1..65535) | — | **Required.** The port of the Bootstrap listener (server-only TLS, the `soul init` phase). Absent → diag `bootstrap_port_required`; out of range → `port_out_of_range`. Required explicitly (ADR-012(b), "security first"): no silent fallback of bootstrap onto the event_stream port. |
+| `keeper.endpoints[].priority` | `int` (≥1) | `1` | The priority (smaller = more preferred, [connection.md → Conventions](connection.md#соглашения)). Orders **both** phases (the hosts match). |
+| `keeper.retry.max_attempts` | `int` (≥1) | `2` | How many times in a row to try one endpoint on a retriable error (per-endpoint retries) before spraying to the next endpoint. Default `2` (not `5`): per-endpoint persistence is kept low, resilience is provided by spray + the external reconnect; see [connection.md → Parameters](connection.md#параметры) and [→ Error classification](connection.md#классификация-ошибок-что-ретраит-per-endpoint-что-сразу-spray). Omitted/`0` → `2`. |
+| `keeper.retry.backoff.initial` | `duration` | `1s` | The initial interval of the exponential backoff **between full passes** over the fallback list (the external reconnect loop). **Also** reused as a **flat** (non-growing) pause between attempts to a single endpoint in the per-endpoint retry — there is no separate key for the inter-attempt pause. ⚠️ The inter-attempt pause is not picked up by hot-reload (restart-required), the reconnect backoff — is. See [connection.md → Parameters](connection.md#параметры). |
+| `keeper.retry.backoff.max` | `duration` | `30s` | The upper bound of the backoff between full passes (does not affect per-endpoint retry — there the pause is flat). |
+| `keeper.retry.backoff.jitter` | `bool` | `true` | Whether to apply a random jitter to the backoff. Per [connection.md → YAML config](connection.md#yaml-конфиг) — a `bool` (`true`/`false`), not a duration: it is a **toggle** of "whether to use jitter", the concrete magnitude is internal to the backoff algorithm. |
+| `keeper.retry.handshake_timeout` | `duration` | `10s` | The timeout for establishing the TLS+gRPC connection to a single endpoint. |
+| `keeper.failback.enabled` | `bool` | `true` | Whether to try to return to a more preferred priority after switching down. |
+| `keeper.failback.interval` | `duration` | `1h` | How often to launch a failback attempt. |
+| `keeper.failback.spray` | `duration` | `10m` | The **amplitude** of the random jitter around `interval` (the actual moment = `interval ± spray`, uniformly). Protection against the herd effect with thousands of Souls. Per [connection.md → Parameters](connection.md#параметры) — a `duration`, not a bool: the type is consistent with "does not stretch the interval, protects against synchronous wakeups". |
+| `keeper.tls.ca` | `path` | — | The path to the Keeper cluster's CA certificate. Soul uses it to validate the server side during the mTLS handshake. The client certificate and the private key itself lie in `paths.seed/`. |
+| `keeper.max_apply_size_mb` | `int` (MiB, ≥1) | `8` | The ceiling on the size of a single incoming FromKeeper message, primarily `ApplyRequest` with a batch of rendered `RenderedTask` (Destiny rendering is Keeper-side, [ADR-012](../adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add)). Applied as `grpc.MaxCallRecvMsgSize` in the dial of the EventStream client, replacing the small gRPC recv default (4 MiB), which is not enough for a large Destiny. `0`/omitted → the default `8`; `<1` → diag `value_out_of_range`. **Must be ≥ the Keeper-send limit** (`listen.grpc.event_stream.max_apply_size_mb` in [keeper/config.md](../keeper/config.md#listen)), otherwise Keeper will send something Soul rejects; the defaults on both sides match (8 MiB). In push mode it does not apply (the plan comes through the stdin of `soul apply`, not over gRPC). |
 
-В push-режиме блок `keeper:` игнорируется — Soul-host получает отрендеренный план (`ApplyRequest` protojson) через stdin `soul apply` от Keeper-а. (Operator-side CLI-форма push-операции — `keeper.push.apply` — пока не нормирована, отдельный backlog; host-side entry-point `soul apply` зафиксирован — [keeper/push.md](../keeper/push.md).)
+In push mode the `keeper:` block is ignored — the Soul host receives the rendered plan (`ApplyRequest` protojson) through the stdin of `soul apply` from Keeper. (The operator-side CLI form of the push operation — `keeper.push.apply` — is not yet normalized, a separate backlog; the host-side entry point `soul apply` is fixed — [keeper/push.md](../keeper/push.md).)
 
 ### `soulprint:`
 
-Параметры сборки Soulprint (фактов о хосте). Typed-схема MVP — [`soulprint.md`](soulprint.md), фиксация — [ADR-018](../adr/0018-soulprint-typed.md#adr-018-soulprint-typed-схема-mvp).
+The parameters of assembling the Soulprint (facts about the host). The typed schema MVP is [`soulprint.md`](soulprint.md), the record is [ADR-018](../adr/0018-soulprint-typed.md#adr-018-soulprint-typed-схема-mvp).
 
-| Поле | Тип | Default | Смысл |
+| Field | Type | Default | Meaning |
 |---|---|---|---|
-| `soulprint.refresh_interval` | `duration` | `5m` | Как часто Soul пересобирает факты и (для pull) отдаёт обновление по стриму через `SoulprintReport`. |
+| `soulprint.refresh_interval` | `duration` | `5m` | How often Soul reassembles the facts and (for pull) emits an update over the stream via `SoulprintReport`. |
 
-Набор полей `SoulprintFacts` — нормативно в [`soulprint.md`](soulprint.md); собирается Soul-агентом по фиксированной таблице (`os.family`/`pkg_mgr`/`init_system` и т.д.) и в конфиге **не декларируется**. User-collectors (`/etc/soul/soulprint.d/*`) — отложены, см. [open Q №22](../architecture.md#текущие) (требует решений по sandbox/правам/format коллектора — отдельный ADR).
+The set of `SoulprintFacts` fields is normative in [`soulprint.md`](soulprint.md); it is collected by the Soul agent by a fixed table (`os.family`/`pkg_mgr`/`init_system`, etc.) and is **not declared** in the config. User-collectors (`/etc/soul/soulprint.d/*`) are deferred, see [open Q №22](../architecture.md#текущие) (requires decisions on the sandbox/rights/collector format — a separate ADR).
 
 ### `cleanup:`
 
-Локальная чистка кеша на хосте. Применяется в pull-режиме (демон выполняет периодический проход). В push-режиме чистка идёт со стороны `keeper.push`, не из `soul.yml`. См. [modules.md → Локальный cleanup](modules.md#локальный-cleanup-кеша).
+Local cache cleanup on the host. Applied in pull mode (the daemon performs a periodic pass). In push mode the cleanup comes from the `keeper.push` side, not from `soul.yml`. See [modules.md → Local cleanup](modules.md#локальный-cleanup-кеша).
 
-| Поле | Тип | Default | Смысл |
+| Field | Type | Default | Meaning |
 |---|---|---|---|
-| `cleanup.modules_ttl_days` | `int` (дней) | `30` | Сколько **дней** неиспользованная версия модуля или бинаря живёт в `/var/lib/soul-stack/{bin,modules}/`, прежде чем демон её удалит. Единица фиксирована в имени поля. |
-| `cleanup.run_interval` | `duration` | `24h` | Как часто демон запускает проход по кешу. |
+| `cleanup.modules_ttl_days` | `int` (days) | `30` | How many **days** an unused version of a module or a binary lives in `/var/lib/soul-stack/{bin,modules}/` before the daemon deletes it. The unit is fixed in the field name. |
+| `cleanup.run_interval` | `duration` | `24h` | How often the daemon runs a pass over the cache. |
 
-`modules_ttl_days` — намеренное исключение из конвенции `duration`: единица фиксирована в имени поля для удобства оператора (TTL модулей естественно мерять в днях).
+`modules_ttl_days` is a deliberate exception to the `duration` convention: the unit is fixed in the field name for the operator's convenience (module TTL is naturally measured in days).
 
 ### `logging:`
 
-Логи Soul-а. Ротация — встроенная (сквозное требование, см. [requirements.md](../requirements.md)).
+Soul's logs. Rotation is built-in (a cross-cutting requirement, see [requirements.md](../requirements.md)).
 
-Поведение зависит от `logging.file`:
+The behavior depends on `logging.file`:
 
-- **`logging.file` не задан** → вывод в `stderr` без ротации (dev-режим, удобно под systemd/journald и в контейнере).
-- **`logging.file` задан** → запись в этот файл с ротацией по размеру/возрасту (встроенный ротатор), архивы складываются рядом по шаблону `<file>-<timestamp>.<ext>`.
+- **`logging.file` not set** → output to `stderr` without rotation (dev mode, convenient under systemd/journald and in a container).
+- **`logging.file` set** → writing to that file with rotation by size/age (a built-in rotator), the archives are placed next to it by the template `<file>-<timestamp>.<ext>`.
 
-| Поле | Тип | Default | Смысл |
+| Field | Type | Default | Meaning |
 |---|---|---|---|
-| `logging.level` | `enum{debug,info,warn,error}` | `info` | Уровень логирования. |
-| `logging.format` | `enum{json,text}` | `json` | `json` для машинной обработки, `text` для человека. |
-| `logging.file` | `string` (путь) | — (stderr) | Путь к лог-файлу. Пусто — вывод в `stderr` без ротации. |
-| `logging.rotation.max_size_mb` | `int` (МБ) | `50` | Размер одного файла лога до ротации. |
-| `logging.rotation.max_age_days` | `int` (≥0) | `7` | Сколько дней хранить ротированный файл. Пусто/`0` → дефолт билдера (7 дней); «без ограничения по возрасту» в текущей грамматике не выражается (MVP-ограничение — поле перешло на плоский `int`, различение «0 vs не задано» снято). |
-| `logging.rotation.max_files` | `int` | `5` | Сколько ротированных файлов хранить. |
-| `logging.rotation.compress` | `bool` | `true` | Сжимать ли ротированные файлы. В MVP `false` не отключает сжатие (всегда `true`); отключение появится позже. |
+| `logging.level` | `enum{debug,info,warn,error}` | `info` | The logging level. |
+| `logging.format` | `enum{json,text}` | `json` | `json` for machine processing, `text` for a human. |
+| `logging.file` | `string` (path) | — (stderr) | The path to the log file. Empty — output to `stderr` without rotation. |
+| `logging.rotation.max_size_mb` | `int` (MB) | `50` | The size of a single log file before rotation. |
+| `logging.rotation.max_age_days` | `int` (≥0) | `7` | How many days to keep a rotated file. Empty/`0` → the builder default (7 days); "no age limit" is not expressible in the current grammar (an MVP limitation — the field moved to a flat `int`, the distinction "0 vs not set" was removed). |
+| `logging.rotation.max_files` | `int` | `5` | How many rotated files to keep. |
+| `logging.rotation.compress` | `bool` | `true` | Whether to compress rotated files. In the MVP `false` does not disable compression (always `true`); disabling will appear later. |
 
-Поля `logging.rotation.*` применяются только когда задан `logging.file`.
+The `logging.rotation.*` fields apply only when `logging.file` is set.
 
 ### `metrics:`
 
-Публикация метрик Soul-а (Prometheus-совместимый эндпоинт). Сквозное требование.
+The publication of Soul's metrics (a Prometheus-compatible endpoint). A cross-cutting requirement.
 
-| Поле | Тип | Default | Смысл |
+| Field | Type | Default | Meaning |
 |---|---|---|---|
-| `metrics.enabled` | `bool` | `true` | Включить публикацию. При `false` listener `/metrics` не поднимается. |
-| `metrics.listen` | `string(host:port)` | `127.0.0.1:9091` | Локальный адрес выделенного `/metrics` listener-а. По умолчанию **loopback** (`127.0.0.1`), чтобы не торчать наружу — скрейпер ходит через node_exporter-паттерн или sidecar. Если `enabled: true`, но `listen` пуст — применяется дефолт `127.0.0.1:9091`. |
-| `metrics.basic_auth.enabled` | `bool` | `false` | Включить HTTP Basic-auth на `/metrics`. По умолчанию выключено — защита эндпоинта обеспечивается loopback-bind-ом. Нужно при bind-е не на loopback (scrape с другого хоста). |
-| `metrics.basic_auth.username` | `string` | — | Имя пользователя для Basic-auth. Обязателен при `basic_auth.enabled: true`. |
-| `metrics.basic_auth.password_file` | `string(path)` | — | Путь к файлу с паролем (одна строка, trailing-newline отбрасывается). Обязателен при `basic_auth.enabled: true`. Источник — **файл**, не vault-ref: у Soul нет vault-клиента ([ADR-012](../adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add)). Plaintext-пароль прямо в YAML запрещён грамматикой — только путь. Права на файл — забота оператора (рекомендация `0400`). Существование файла проверяется на старте `soul run` (fail-fast при отсутствии/пустоте), не в `soul-lint`. |
+| `metrics.enabled` | `bool` | `true` | Enable publication. With `false` the `/metrics` listener does not come up. |
+| `metrics.listen` | `string(host:port)` | `127.0.0.1:9091` | The local address of the dedicated `/metrics` listener. By default **loopback** (`127.0.0.1`), so as not to be exposed outward — the scraper goes through the node_exporter pattern or a sidecar. If `enabled: true` but `listen` is empty — the default `127.0.0.1:9091` applies. |
+| `metrics.basic_auth.enabled` | `bool` | `false` | Enable HTTP Basic auth on `/metrics`. Disabled by default — the endpoint's protection is provided by the loopback bind. Needed when binding not on loopback (a scrape from another host). |
+| `metrics.basic_auth.username` | `string` | — | The username for Basic auth. Required when `basic_auth.enabled: true`. |
+| `metrics.basic_auth.password_file` | `string(path)` | — | The path to the file with the password (one line, the trailing newline is dropped). Required when `basic_auth.enabled: true`. The source is a **file**, not a vault-ref: Soul has no vault client ([ADR-012](../adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add)). A plaintext password directly in the YAML is forbidden by the grammar — only a path. The file permissions are the operator's concern (recommendation `0400`). The existence of the file is checked at the start of `soul run` (fail-fast on absence/emptiness), not in `soul-lint`. |
 
-На Soul метрики опциональны (в отличие от Keeper, где `listen.metrics` обязателен): не каждый управляемый хост хочет открывать порт. Сквозное требование «публикация метрик» из [`requirements.md`](../requirements.md) относится к компонентам в целом — Keeper всегда экспонирует, Soul по выбору оператора.
+On Soul, metrics are optional (unlike Keeper, where `listen.metrics` is required): not every managed host wants to open a port. The cross-cutting requirement "publication of metrics" from [`requirements.md`](../requirements.md) applies to the components as a whole — Keeper always exposes them, Soul at the operator's choice.
 
-> **Auth на Soul-`/metrics` — через `password_file`.** В отличие от Keeper (`metrics.auth.basic`, пароль из vault-ref, [keeper/config.md](../keeper/config.md#metrics)), у Soul нет vault-клиента ([ADR-012](../adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add)), которым резолвить креды. Поэтому источник пароля — файл на диске (`metrics.basic_auth.password_file`); сама constant-time проверка — общий хелпер `obs.ServeMetrics` (тот же, что у Keeper). При `basic_auth.enabled: false` (default) защита `/metrics` — loopback-bind.
+> **Auth on Soul's `/metrics` — via `password_file`.** Unlike Keeper (`metrics.auth.basic`, the password from a vault-ref, [keeper/config.md](../keeper/config.md#metrics)), Soul has no vault client ([ADR-012](../adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add)) to resolve credentials. Therefore the password source is a file on disk (`metrics.basic_auth.password_file`); the constant-time check itself is the common helper `obs.ServeMetrics` (the same as on Keeper). With `basic_auth.enabled: false` (default) the `/metrics` protection is the loopback bind.
 
 ### `otel:`
 
-OpenTelemetry-трейсинг. Сквозное требование.
+OpenTelemetry tracing. A cross-cutting requirement.
 
-| Поле | Тип | Default | Смысл |
+| Field | Type | Default | Meaning |
 |---|---|---|---|
-| `otel.enabled` | `bool` | `false` | Включить OTLP-экспорт. |
-| `otel.endpoint` | `string(host:port)` | — | Адрес OTLP-receiver-а (gRPC). Обязателен при `enabled: true`. В дефолтной поставке принимающая сторона — Keeper-инстанс с включённым OTLP-приёмом. |
-| `otel.export_metrics` | `bool` | `false` | Опц. push метрик по OTLP в дополнение к Prometheus-scrape ([ADR-024 §1.2](../adr/0024-observability.md#adr-024-observability-prometheus-primary--otel-bridge) / [observability.md §5](../observability.md)). **Заглушка под Slice 2:** поле читается, но OTLP-метрик-pipeline ещё не поднимается — в Slice 0 экспортируются только трейсы. По умолчанию метрики идут только через Prometheus-`/metrics`. |
+| `otel.enabled` | `bool` | `false` | Enable OTLP export. |
+| `otel.endpoint` | `string(host:port)` | — | The address of the OTLP receiver (gRPC). Required when `enabled: true`. In the default delivery the receiving side is a Keeper instance with OTLP intake enabled. |
+| `otel.export_metrics` | `bool` | `false` | Opt. push of metrics over OTLP in addition to the Prometheus scrape ([ADR-024 §1.2](../adr/0024-observability.md#adr-024-observability-prometheus-primary--otel-bridge) / [observability.md §5](../observability.md)). **A stub for Slice 2:** the field is read, but the OTLP metrics pipeline does not yet come up — in Slice 0 only traces are exported. By default metrics go only through the Prometheus `/metrics`. |
 
-При `enabled: true` поле `endpoint` обязательно; при `enabled: false` блок может быть опущен целиком.
+With `enabled: true` the `endpoint` field is required; with `enabled: false` the block may be omitted entirely.
 
 ### `plugin_runtime:`
 
@@ -199,33 +199,33 @@ plugin_runtime:
   enable_tls: false
 ```
 
-Lifecycle host-процесса для плагинов, запускаемых на Soul-стороне (`soul_module` — бинари `soul-mod-<name>`): таймауты handshake-а и shutdown-а, whitelist capabilities и resource-конфликт-политика, опциональный TLS на plugin-сокете. Применяется и в pull-демоне, и в push-режиме — set capabilities/конфликтов одинаков. Полная семантика lifecycle, формат handshake-строки, диаграмма запуска плагина — [`../keeper/plugins.md → Lifecycle`](../keeper/plugins.md#lifecycle); нормативное решение — [ADR-020(d/f/g/h)](../adr/0020-plugin-infrastructure.md#adr-020-plugin-инфраструктура-формат-manifest-handshake-lifecycle).
+The host-process lifecycle for plugins launched on the Soul side (`soul_module` — the `soul-mod-<name>` binaries): the handshake and shutdown timeouts, the capabilities whitelist and the resource-conflict policy, an optional TLS on the plugin socket. Applied both in the pull daemon and in push mode — the set of capabilities/conflicts is the same. The full lifecycle semantics, the handshake-string format, and the plugin-launch diagram are in [`../keeper/plugins.md → Lifecycle`](../keeper/plugins.md#lifecycle); the normative decision is [ADR-020(d/f/g/h)](../adr/0020-plugin-infrastructure.md#adr-020-plugin-инфраструктура-формат-manifest-handshake-lifecycle).
 
-| Поле | Тип | Default | Смысл |
+| Field | Type | Default | Meaning |
 |---|---|---|---|
-| `plugin_runtime.socket_dir` | `path` | `/var/run/soul-stack/plugins/` | Каталог, в котором Soul-host создаёт Unix-domain socket-ы плагинов (`<namespace>-<name>-<pid>.sock`). Создаётся с mode `0700`, owned by service user `soul` ([ADR-020(d)](../adr/0020-plugin-infrastructure.md#adr-020-plugin-инфраструктура-формат-manifest-handshake-lifecycle)). Путь различается для Soul-host-а (`soul-stack`) и Keeper-host-а (`soul-stack-keeper`), см. [`../keeper/config.md → plugin_runtime`](../keeper/config.md#plugin_runtime). |
-| `plugin_runtime.startup_timeout` | `duration` | `10s` | Время от `fork()` плагин-процесса до появления handshake-строки `"soul_stack":"plugin-v1"` в stdout. Превышение — host шлёт SIGTERM, далее SIGKILL по истечении `shutdown_grace` ([ADR-020(d)](../adr/0020-plugin-infrastructure.md#adr-020-plugin-инфраструктура-формат-manifest-handshake-lifecycle), [`../keeper/plugins.md → Поведение host-а при handshake`](../keeper/plugins.md#поведение-host-а-при-handshake)). |
-| `plugin_runtime.shutdown_grace` | `duration` | `10s` | Время от SIGTERM до SIGKILL. SDK предоставляет signal-handler, плагин должен закрыть in-flight RPC и завершиться сам в пределах этого окна ([ADR-020(d)](../adr/0020-plugin-infrastructure.md#adr-020-plugin-инфраструктура-формат-manifest-handshake-lifecycle)). |
-| `plugin_runtime.allowed_capabilities` | `list<enum>` | все 6 capabilities (см. YAML-block выше) | Closed enum (полный каталог — [`../keeper/plugins.md → required_capabilities-таблица`](../keeper/plugins.md#required_capabilities-таблица), [ADR-020(f)](../adr/0020-plugin-infrastructure.md#adr-020-plugin-инфраструктура-формат-manifest-handshake-lifecycle)). Whitelist: `soul-lint` отвергает destiny **до запуска**, если `manifest.required_capabilities` плагина ⊄ этого списка. Default разрешает все шесть; оператор сужает по политике безопасности. Значения вне closed enum-а парсер отвергает с `unknown_capability`. |
-| `plugin_runtime.conflict_policy` | `enum{warn,fail}` | `warn` | Политика на случай, когда два плагина в одном прогоне claim-ят один и тот же ресурс в `side_effects` (одинаковая пара `<resource_type>:<value>`). `warn` — host пишет audit-event и продолжает прогон; `fail` — шаг помечается `failed`, причина `policy_violation` отражается в диагностическом канале `TaskEvent` / `RunResult` ([ADR-020(g)](../adr/0020-plugin-infrastructure.md#adr-020-plugin-инфраструктура-формат-manifest-handshake-lifecycle), [`../keeper/plugins.md → Поведение host-а на side_effects`](../keeper/plugins.md#поведение-host-а-на-side_effects)). |
-| `plugin_runtime.enable_tls` | `bool` | `false` | Включение mTLS на plugin-сокете. В MVP — `false`: безопасность обеспечивается file-permissions `0700` на Unix-socket ([ADR-020(h)](../adr/0020-plugin-infrastructure.md#adr-020-plugin-инфраструктура-формат-manifest-handshake-lifecycle)). Post-MVP — `true` использует поле `server_cert` (base64-PEM) handshake-строки, уже зарезервированное forward-compat-резервом. До закрытия отдельной задачи поведение при `true` парсер отвергает с `tls_not_implemented`. |
+| `plugin_runtime.socket_dir` | `path` | `/var/run/soul-stack/plugins/` | The directory in which the Soul host creates the Unix-domain sockets of plugins (`<namespace>-<name>-<pid>.sock`). Created with mode `0700`, owned by the service user `soul` ([ADR-020(d)](../adr/0020-plugin-infrastructure.md#adr-020-plugin-инфраструктура-формат-manifest-handshake-lifecycle)). The path differs for the Soul host (`soul-stack`) and the Keeper host (`soul-stack-keeper`), see [`../keeper/config.md → plugin_runtime`](../keeper/config.md#plugin_runtime). |
+| `plugin_runtime.startup_timeout` | `duration` | `10s` | The time from the `fork()` of the plugin process to the appearance of the handshake string `"soul_stack":"plugin-v1"` in stdout. On exceedance — the host sends SIGTERM, then SIGKILL after `shutdown_grace` expires ([ADR-020(d)](../adr/0020-plugin-infrastructure.md#adr-020-plugin-инфраструктура-формат-manifest-handshake-lifecycle), [`../keeper/plugins.md → Host behavior on handshake`](../keeper/plugins.md#поведение-host-а-при-handshake)). |
+| `plugin_runtime.shutdown_grace` | `duration` | `10s` | The time from SIGTERM to SIGKILL. The SDK provides a signal handler, the plugin must close in-flight RPCs and terminate itself within this window ([ADR-020(d)](../adr/0020-plugin-infrastructure.md#adr-020-plugin-инфраструктура-формат-manifest-handshake-lifecycle)). |
+| `plugin_runtime.allowed_capabilities` | `list<enum>` | all 6 capabilities (see the YAML block above) | A closed enum (the full catalog — [`../keeper/plugins.md → required_capabilities table`](../keeper/plugins.md#required_capabilities-таблица), [ADR-020(f)](../adr/0020-plugin-infrastructure.md#adr-020-plugin-инфраструктура-формат-manifest-handshake-lifecycle)). A whitelist: `soul-lint` rejects a destiny **before launch** if the plugin's `manifest.required_capabilities` ⊄ this list. The default allows all six; the operator narrows it by the security policy. Values outside the closed enum are rejected by the parser with `unknown_capability`. |
+| `plugin_runtime.conflict_policy` | `enum{warn,fail}` | `warn` | The policy for when two plugins in one run claim the same resource in `side_effects` (an identical `<resource_type>:<value>` pair). `warn` — the host writes an audit event and continues the run; `fail` — the step is marked `failed`, the reason `policy_violation` is reflected in the diagnostic channel `TaskEvent` / `RunResult` ([ADR-020(g)](../adr/0020-plugin-infrastructure.md#adr-020-plugin-инфраструктура-формат-manifest-handshake-lifecycle), [`../keeper/plugins.md → Host behavior on side_effects`](../keeper/plugins.md#поведение-host-а-на-side_effects)). |
+| `plugin_runtime.enable_tls` | `bool` | `false` | Enabling mTLS on the plugin socket. In the MVP — `false`: security is provided by the `0700` file permissions on the Unix socket ([ADR-020(h)](../adr/0020-plugin-infrastructure.md#adr-020-plugin-инфраструктура-формат-manifest-handshake-lifecycle)). Post-MVP — `true` uses the `server_cert` (base64-PEM) field of the handshake string, already reserved as a forward-compat reserve. Until a separate task is closed, the behavior on `true` is rejected by the parser with `tls_not_implemented`. |
 
-#### Hot-reload блока `plugin_runtime:`
+#### Hot-reload of the plugin_runtime: block
 
-Per-поле политика (общий механизм перезагрузки нормирован [ADR-021](../adr/0021-hot-reload-config.md#adr-021-hot-reload-конфига-с-write-back-yaml), см. [Hot-reload](#hot-reload) ниже):
+The per-field policy (the general reload mechanism is normalized by [ADR-021](../adr/0021-hot-reload-config.md#adr-021-hot-reload-конфига-с-write-back-yaml), see [Hot-reload](#hot-reload) below):
 
-| Поле | Reload без рестарта `soul`-процесса | Обоснование |
+| Field | Reload without restarting the `soul` process | Rationale |
 |---|---|---|
-| `allowed_capabilities` | да | Параметр конкретного запуска плагина: host читает значение при fork-е, новые прогоны видят новое значение. |
-| `conflict_policy` | да | Оценка конфликта `side_effects` происходит в момент сборки прогона, in-memory. |
-| `startup_timeout` | да | Применяется к новым plugin-прогонам, не аффектит уже запущенные. |
-| `shutdown_grace` | да | То же. |
-| `socket_dir` | **нет, требует рестарта** | Меняет внешнюю поверхность host-а (file-system layout); уже запущенные plugin-сокеты лежат в старой директории. |
-| `enable_tls` | **нет, требует рестарта** | Меняет TLS-handshake-цепочку plugin-протокола. |
+| `allowed_capabilities` | yes | A parameter of a specific plugin launch: the host reads the value at fork, new runs see the new value. |
+| `conflict_policy` | yes | The `side_effects` conflict evaluation happens at run-assembly time, in-memory. |
+| `startup_timeout` | yes | Applied to new plugin runs, does not affect already-launched ones. |
+| `shutdown_grace` | yes | The same. |
+| `socket_dir` | **no, requires a restart** | Changes the host's external surface (the file-system layout); already-launched plugin sockets lie in the old directory. |
+| `enable_tls` | **no, requires a restart** | Changes the TLS-handshake chain of the plugin protocol. |
 
-Правило: меняем-без-рестарта то, что используется как параметр конкретного plugin-прогона; требуем-рестарт то, что меняет внешнюю поверхность host-а. Симметрично с Keeper-side, см. [`../keeper/config.md → Hot-reload блока plugin_runtime`](../keeper/config.md#hot-reload-блока-plugin_runtime).
+The rule: we change-without-restart what is used as a parameter of a specific plugin run; we require-a-restart for what changes the host's external surface. Symmetric with the Keeper side, see [`../keeper/config.md → Hot-reload of the plugin_runtime block`](../keeper/config.md#hot-reload-блока-plugin_runtime).
 
-В push-режиме блок `plugin_runtime:` применяется так же — Soul-host поднимает плагин из переданного Keeper-ом артефакт-кеша через те же таймауты и whitelist capabilities. (Operator-side CLI-форма push-операции пока не нормирована, отдельный backlog; host-side entry-point — `soul apply`.)
+In push mode the `plugin_runtime:` block applies the same way — the Soul host brings up a plugin from the artifact cache passed by Keeper through the same timeouts and the capabilities whitelist. (The operator-side CLI form of the push operation is not yet normalized, a separate backlog; the host-side entry point is `soul apply`.)
 
 ### `hot_reload:`
 
@@ -236,76 +236,76 @@ hot_reload:
   audit_correlation_id: true
 ```
 
-Блок регулирует включение триггеров hot-reload-механизма (`SIGHUP` / `inotify`) и генерацию `correlation_id` для audit-events `config.reload_succeeded` / `config.reload_failed`. Семантика и инварианты самого механизма — [ADR-021](../adr/0021-hot-reload-config.md#adr-021-hot-reload-конфига-с-write-back-yaml) и [Hot-reload](#hot-reload) ниже. Defaults идентичны Keeper-side ([`../keeper/config.md → hot_reload`](../keeper/config.md#hot_reload)). Блок целиком опционален: при отсутствии в `soul.yml` применяются defaults из таблицы. В push-режиме блок игнорируется — Soul-host one-shot, hot-reload не применим (см. [Hot-reload](#hot-reload) ниже).
+The block controls the enablement of the hot-reload-mechanism triggers (`SIGHUP` / `inotify`) and the generation of a `correlation_id` for the audit events `config.reload_succeeded` / `config.reload_failed`. The semantics and invariants of the mechanism itself are [ADR-021](../adr/0021-hot-reload-config.md#adr-021-hot-reload-конфига-с-write-back-yaml) and [Hot-reload](#hot-reload) below. The defaults are identical to the Keeper side ([`../keeper/config.md → hot_reload`](../keeper/config.md#hot_reload)). The block is entirely optional: when absent from `soul.yml` the defaults from the table apply. In push mode the block is ignored — the Soul host is one-shot, hot-reload is not applicable (see [Hot-reload](#hot-reload) below).
 
-| Поле | Тип | Default | Смысл |
+| Field | Type | Default | Meaning |
 |---|---|---|---|
-| `hot_reload.enable_signal` | `bool` | `true` | Включить `SIGHUP`-триггер file-edit-path: pull-демон ловит сигнал, перечитывает `soul.yml` с диска, прогоняет validation pipeline и делает atomic swap ([ADR-021(b)](../adr/0021-hot-reload-config.md#adr-021-hot-reload-конфига-с-write-back-yaml)). При `false` file-edit-path отключён. |
-| `hot_reload.enable_inotify` | `bool` | `false` | Включить auto-reload через `inotify`/`fsnotify` (Linux-only) — реагировать на изменение `soul.yml` без `SIGHUP`. Post-MVP опциональное расширение ([ADR-021(b)](../adr/0021-hot-reload-config.md#adr-021-hot-reload-конфига-с-write-back-yaml)): watch-handle overhead и Linux-only зависимость — причина не делать дефолтом. |
-| `hot_reload.audit_correlation_id` | `bool` | `true` | Генерировать `correlation_id` для audit-events `config.reload_succeeded` / `config.reload_failed` ([naming-rules.md → Audit-events](../naming-rules.md#audit-events)). |
+| `hot_reload.enable_signal` | `bool` | `true` | Enable the `SIGHUP` trigger of the file-edit path: the pull daemon catches the signal, re-reads `soul.yml` from disk, runs the validation pipeline, and does an atomic swap ([ADR-021(b)](../adr/0021-hot-reload-config.md#adr-021-hot-reload-конфига-с-write-back-yaml)). With `false` the file-edit path is disabled. |
+| `hot_reload.enable_inotify` | `bool` | `false` | Enable auto-reload via `inotify`/`fsnotify` (Linux-only) — reacting to a change of `soul.yml` without `SIGHUP`. A post-MVP optional extension ([ADR-021(b)](../adr/0021-hot-reload-config.md#adr-021-hot-reload-конфига-с-write-back-yaml)): the watch-handle overhead and the Linux-only dependency are the reason not to make it a default. |
+| `hot_reload.audit_correlation_id` | `bool` | `true` | Generate a `correlation_id` for the audit events `config.reload_succeeded` / `config.reload_failed` ([naming-rules.md → Audit-events](../naming-rules.md#audit-events)). |
 
-#### Hot-reload блока `hot_reload:`
+#### Hot-reload of the hot_reload: block
 
-Все три поля **требуют рестарта** `soul`-процесса — потому что они контролируют сам hot-reload-механизм: менять `enable_signal` / `enable_inotify` без рестарта = race условие на установку/снятие signal-handler-а или `inotify`-watch; менять `audit_correlation_id` на лету разделило бы одну логическую reload-операцию на два разных режима audit-логирования. Симметрично с Keeper-side, см. [`../keeper/config.md → Hot-reload блока hot_reload`](../keeper/config.md#hot-reload-блока-hot_reload).
+All three fields **require a restart** of the `soul` process — because they control the hot-reload mechanism itself: changing `enable_signal` / `enable_inotify` without a restart = a race condition on installing/removing the signal handler or the `inotify` watch; changing `audit_correlation_id` on the fly would split one logical reload operation into two different audit-logging modes. Symmetric with the Keeper side, see [`../keeper/config.md → Hot-reload of the hot_reload block`](../keeper/config.md#hot-reload-блока-hot_reload).
 
-| Поле | Reload без рестарта `soul`-процесса | Обоснование |
+| Field | Reload without restarting the `soul` process | Rationale |
 |---|---|---|
-| `enable_signal` | **нет, требует рестарта** | Меняет привязку signal-handler-а к `SIGHUP`; race на установке/снятии обработчика. |
-| `enable_inotify` | **нет, требует рестарта** | Меняет регистрацию `inotify`-watch на путь конфига; race на handle. |
-| `audit_correlation_id` | **нет, требует рестарта** | Параметр самого reload-pipeline-а; менять его одним из reload-ов означало бы писать audit-event о собственной мутации в двух разных режимах. |
+| `enable_signal` | **no, requires a restart** | Changes the binding of the signal handler to `SIGHUP`; a race on installing/removing the handler. |
+| `enable_inotify` | **no, requires a restart** | Changes the registration of the `inotify` watch on the config path; a race on the handle. |
+| `audit_correlation_id` | **no, requires a restart** | A parameter of the reload pipeline itself; changing it by one of the reloads would mean writing an audit event about its own mutation in two different modes. |
 
 ## Hot-reload
 
-Hot-reload конфига с перезаписью изменённого значения обратно на диск — сквозное требование ([requirements.md](../requirements.md), [architecture.md → Сквозные требования](../architecture.md#сквозные-требования-и-где-они-приземляются)). Механизм нормирован **[ADR-021](../adr/0021-hot-reload-config.md#adr-021-hot-reload-конфига-с-write-back-yaml)** — симметрично с Keeper-side (см. [`../keeper/config.md → Hot-reload`](../keeper/config.md#hot-reload) для полной формулировки); имплементация — общий пакет [`shared/config/`](../adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам) (Tier 2).
+Config hot-reload with write-back of the changed value to disk is a cross-cutting requirement ([requirements.md](../requirements.md), [architecture.md → Cross-cutting requirements](../architecture.md#сквозные-требования-и-где-они-приземляются)). The mechanism is normalized by **[ADR-021](../adr/0021-hot-reload-config.md#adr-021-hot-reload-конфига-с-write-back-yaml)** — symmetric with the Keeper side (see [`../keeper/config.md → Hot-reload`](../keeper/config.md#hot-reload) for the full formulation); the implementation is the common package [`shared/config/`](../adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам) (Tier 2).
 
-**Pull-режим (демон).** `soul`-демон читает локальный `soul.yml` — hot-reload работает:
+**Pull mode (the daemon).** The `soul` daemon reads the local `soul.yml` — hot-reload works:
 
-- **File-edit path** — оператор редактирует `soul.yml` на хосте → шлёт `SIGHUP` процессу `soul`. Pipeline parse → schema-validate → semantic-validate → atomic swap → audit-event `config.reload_succeeded` / `config.reload_failed` ([ADR-021(c, g)](../adr/0021-hot-reload-config.md#adr-021-hot-reload-конфига-с-write-back-yaml)).
-- **API/MCP path** — **не предусмотрен в MVP** для Soul-host. Soul admin-surface (локальный HTTP/MCP listener) — отложено post-MVP ([open Q №8](../architecture.md#текущие)). Централизованный rollout `soul.yml` в MVP — через CI / Ansible / SSH (operator's choice); по получению нового файла оператор шлёт `SIGHUP`. API/MCP path Keeper-side — нормирован, см. [`../keeper/config.md → Hot-reload`](../keeper/config.md#hot-reload).
-- **Validation** — три этапа (parse / schema-validate / semantic-validate); ошибка любого этапа → in-memory state неизменен, файл не модифицируется, audit `config.reload_failed` с `phase ∈ {parse, schema_validate, semantic_validate}`.
-- **Scope** — общий принцип: reload-able без рестарта — параметры конкретного запуска / прогона (timeouts, policies, thresholds, capabilities whitelist); require restart — внешняя поверхность процесса (Keeper endpoints в `keeper.endpoints`, TLS-сертификаты файлов, log-rotation paths). Summary-таблица ниже охватывает все блоки `soul.yml` 1:1; блоки с нетривиальной per-поле семантикой (`plugin_runtime`, `hot_reload`) дополнительно нормированы отдельными таблицами в своих разделах.
+- **File-edit path** — the operator edits `soul.yml` on the host → sends `SIGHUP` to the `soul` process. Pipeline parse → schema-validate → semantic-validate → atomic swap → the audit event `config.reload_succeeded` / `config.reload_failed` ([ADR-021(c, g)](../adr/0021-hot-reload-config.md#adr-021-hot-reload-конфига-с-write-back-yaml)).
+- **API/MCP path** — **not provided in the MVP** for the Soul host. The Soul admin surface (a local HTTP/MCP listener) is deferred post-MVP ([open Q №8](../architecture.md#текущие)). Centralized rollout of `soul.yml` in the MVP is via CI / Ansible / SSH (the operator's choice); upon receiving a new file the operator sends `SIGHUP`. The API/MCP path on the Keeper side is normalized, see [`../keeper/config.md → Hot-reload`](../keeper/config.md#hot-reload).
+- **Validation** — three stages (parse / schema-validate / semantic-validate); an error at any stage → the in-memory state is unchanged, the file is not modified, an audit `config.reload_failed` with `phase ∈ {parse, schema_validate, semantic_validate}`.
+- **Scope** — the general principle: reload-able without a restart — parameters of a specific launch / run (timeouts, policies, thresholds, capabilities whitelist); require restart — the process's external surface (Keeper endpoints in `keeper.endpoints`, file TLS certificates, log-rotation paths). The summary table below covers all `soul.yml` blocks 1:1; blocks with non-trivial per-field semantics (`plugin_runtime`, `hot_reload`) are additionally normalized by separate tables in their sections.
 
-**Summary per-block reload-policy** (нормативно, по одной строке на блок; симметрично с Keeper-side, см. [`../keeper/config.md → Hot-reload`](../keeper/config.md#hot-reload)):
+**Summary per-block reload policy** (normative, one row per block; symmetric with the Keeper side, see [`../keeper/config.md → Hot-reload`](../keeper/config.md#hot-reload)):
 
-| Блок | Reload-able без рестарта `soul`-процесса | Require restart | Примечание |
+| Block | Reload-able without restarting the `soul` process | Require restart | Note |
 |---|---|---|---|
-| `sid` | — | yes | SID привязан к mTLS-сертификату SoulSeed. |
+| `sid` | — | yes | SID is bound to the SoulSeed mTLS certificate. |
 | `paths.*` (`modules`, `seed`) | — | yes | File-system layout, cache locations. |
-| `keeper.endpoints` | — | yes | Open gRPC bidi stream connection. |
-| `keeper.retry.*` / `keeper.failback.*` | yes | — | Параметры next retry / failback iteration. **Исключение:** per-endpoint inter-attempt-пауза (reuse `backoff.initial`/`jitter`) restart-required — читается один раз при сборке EventStream-клиента; reconnect-backoff и failback подхватываются per-iteration. |
+| `keeper.endpoints` | — | yes | The open gRPC bidi stream connection. |
+| `keeper.retry.*` / `keeper.failback.*` | yes | — | Parameters of the next retry / failback iteration. **Exception:** the per-endpoint inter-attempt pause (reuse of `backoff.initial`/`jitter`) is restart-required — it is read once when the EventStream client is assembled; the reconnect backoff and failback are picked up per-iteration. |
 | `keeper.tls.ca` | — | yes | TLS-context init. |
-| `keeper.max_apply_size_mb` | — | yes | recv-лимит задаётся dial-опцией открытого gRPC-стрима; новое значение подхватывается на следующем reconnect. |
-| `soulprint.refresh_interval` | yes | — | Применяется к next collection iteration. |
+| `keeper.max_apply_size_mb` | — | yes | The recv limit is set by a dial option of the open gRPC stream; the new value is picked up on the next reconnect. |
+| `soulprint.refresh_interval` | yes | — | Applied to the next collection iteration. |
 | `cleanup.modules_ttl_days` / `cleanup.run_interval` | yes | — | In-memory cleanup loop. |
-| `logging.level` | yes | — | In-memory variable. |
-| `logging.format` / `logging.file` / `logging.rotation.*` | — | yes | Re-init log writer. |
-| `metrics.enabled` / `metrics.listen` / `metrics.basic_auth.*` | — | yes | Listener address + basic-auth креды (резолв `password_file` на старте listener-а). |
-| `otel.*` | — | yes | Re-init exporter. |
-| **`plugin_runtime.*`** | per-поле — см. [§ Hot-reload блока `plugin_runtime:`](#hot-reload-блока-plugin_runtime) | | |
-| **`hot_reload.*`** | per-поле — см. [§ Hot-reload блока `hot_reload:`](#hot-reload-блока-hot_reload) | | (все require restart) |
-- **Per-host без координации** — каждый Soul-host перезагружает свой `soul.yml` независимо; cross-host координация через Keeper — post-MVP ([ADR-021(f)](../adr/0021-hot-reload-config.md#adr-021-hot-reload-конфига-с-write-back-yaml)).
-- **Audit-events** — `config.reload_succeeded` / `config.reload_failed`, каталог в [`docs/naming-rules.md → Audit-events`](../naming-rules.md#audit-events). Soul-side audit пишется в локальный журнал и опционально стримится Keeper-у в общий audit-trail (механизм — backlog).
-- **History** — git-blame `soul.yml` (если оператор хранит конфиги в git/CI) + локальный audit-журнал.
+| `logging.level` | yes | — | An in-memory variable. |
+| `logging.format` / `logging.file` / `logging.rotation.*` | — | yes | Re-init the log writer. |
+| `metrics.enabled` / `metrics.listen` / `metrics.basic_auth.*` | — | yes | The listener address + the basic-auth credentials (the `password_file` resolve at listener start). |
+| `otel.*` | — | yes | Re-init the exporter. |
+| **`plugin_runtime.*`** | per-field — see [§ Hot-reload of the plugin_runtime: block](#hot-reload-of-the-plugin_runtime-block) | | |
+| **`hot_reload.*`** | per-field — see [§ Hot-reload of the hot_reload: block](#hot-reload-of-the-hot_reload-block) | | (all require restart) |
+- **Per-host without coordination** — each Soul host reloads its own `soul.yml` independently; cross-host coordination via Keeper is post-MVP ([ADR-021(f)](../adr/0021-hot-reload-config.md#adr-021-hot-reload-конфига-с-write-back-yaml)).
+- **Audit events** — `config.reload_succeeded` / `config.reload_failed`, the catalog is in [`docs/naming-rules.md → Audit-events`](../naming-rules.md#audit-events). The Soul-side audit is written to a local journal and optionally streamed to Keeper into the common audit trail (the mechanism — backlog).
+- **History** — git-blame of `soul.yml` (if the operator keeps configs in git/CI) + the local audit journal.
 
-**Push-режим (`keeper.push`).** В push-сессии `soul.yml` на удалённом хосте **не используется** (Soul поднимается one-shot, отрендеренный план прогона приходит от Keeper-а через stdin `soul apply` — см. [«Push-режим»](../architecture.md#push-режим-keeperpush)). **Hot-reload не применим** в push: процесс короткоживущий, файла на диске нет.
+**Push mode (`keeper.push`).** In a push session the `soul.yml` on the remote host is **not used** (Soul comes up one-shot, the rendered run plan arrives from Keeper through the stdin of `soul apply` — see ["Push mode"](../architecture.md#push-режим-keeperpush)). **Hot-reload is not applicable** in push: the process is short-lived, there is no file on disk.
 
-**Опциональный блок `hot_reload:`** в `soul.yml` (поля `enable_signal`, `enable_inotify`, `audit_correlation_id`) — нормативная типизация полей в [`### hot_reload:`](#hot_reload) выше. При отсутствии блока применяются defaults оттуда (встроены в `shared/config`), симметрично с Keeper-side.
+**The optional `hot_reload:` block** in `soul.yml` (the fields `enable_signal`, `enable_inotify`, `audit_correlation_id`) — the normative typing of the fields is in [`### hot_reload:`](#hot_reload) above. When the block is absent, the defaults from there apply (built into `shared/config`), symmetric with the Keeper side.
 
-## Что в `soul.yml` НЕ лежит
+## What does NOT live in soul.yml
 
-- **`auth:` блок.** Soul не аутентифицируется через JWT — только mTLS / SoulSeed, см. [identity.md](identity.md). JWT — для операторов Keeper-а, не для Soul.
-- **Destiny и Essence.** Сырыми на Soul-хост не попадают вообще — Keeper рендерит их у себя (`vault-resolve → input-validation → CEL-render → text/template-render`, ADR-012(d)). Soul получает только готовый план: в pull — `ApplyRequest` по живому стриму, в push — `ApplyRequest` (protojson) через stdin. На диске Soul-а их нет.
-- **SoulSeed-токен.** Используется однократно в `soul init`: передаётся флагом `--token` или через env `SOUL_BOOTSTRAP_TOKEN` (флаг побеждает env; env-форма предпочтительнее — флаг светится в `ps`/shell-history; stdin не читается). Файл с токеном, если канал доставки клал его на диск, — артефакт канала доставки, не конфига (см. [onboarding.md → На стороне Soul](onboarding.md#на-стороне-soul)).
-- **Список модулей или их источников.** Реестр модулей живёт на Keeper-е (каталог `keeper.yml::plugins.soul_modules[]` + Sigil-допуски, [ADR-065](../adr/0065-core-module-installed.md)); Soul получает модули через core-модуль `core.module.installed` (pull, RPC `FetchModule`) или массовой передачей в push-сессии (см. [modules.md](modules.md)).
-- **`version:` поле.** Версия Soul-бинаря — git ref / SHA артефакта; в `soul.yml` не дублируется (см. [ADR-007](../adr/0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте)).
-- **Набор Soulprint-коллекторов.** Фиксирован Soul-бинарём по [ADR-018](../adr/0018-soulprint-typed.md#adr-018-soulprint-typed-схема-mvp); user-collectors — отложены ([open Q №22](../architecture.md#текущие)).
+- **The `auth:` block.** Soul does not authenticate via JWT — only mTLS / SoulSeed, see [identity.md](identity.md). JWT — for Keeper operators, not for Soul.
+- **Destiny and Essence.** They do not reach the Soul host raw at all — Keeper renders them on its side (`vault-resolve → input-validation → CEL-render → text/template-render`, ADR-012(d)). Soul receives only the ready plan: in pull — `ApplyRequest` over the live stream, in push — `ApplyRequest` (protojson) through stdin. They are not on Soul's disk.
+- **The SoulSeed token.** Used once in `soul init`: passed by the `--token` flag or via the env `SOUL_BOOTSTRAP_TOKEN` (the flag beats the env; the env form is preferable — the flag shows up in `ps`/shell history; stdin is not read). The file with the token, if the delivery channel put it on disk, is an artifact of the delivery channel, not of the config (see [onboarding.md → On the Soul side](onboarding.md#на-стороне-soul)).
+- **A list of modules or their sources.** The module registry lives on Keeper (the catalog `keeper.yml::plugins.soul_modules[]` + Sigil grants, [ADR-065](../adr/0065-core-module-installed.md)); Soul receives modules via the core module `core.module.installed` (pull, RPC `FetchModule`) or by a bulk transfer in a push session (see [modules.md](modules.md)).
+- **The `version:` field.** The version of the Soul binary is a git ref / SHA of the artifact; it is not duplicated in `soul.yml` (see [ADR-007](../adr/0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте)).
+- **The set of Soulprint collectors.** Fixed by the Soul binary per [ADR-018](../adr/0018-soulprint-typed.md#adr-018-soulprint-typed-схема-mvp); user-collectors are deferred ([open Q №22](../architecture.md#текущие)).
 
-## Полный пример
+## The full example
 
-Минимальный валидный `soul.yml` со всеми обязательными и опциональными полями:
+A minimal valid `soul.yml` with all required and optional fields:
 
 ```yaml
-# sid: redis1.cache-test-dev.example         # опц.: явный SID; по умолчанию = FQDN
+# sid: redis1.cache-test-dev.example         # opt.: explicit SID; default = FQDN
 
 paths:
   modules: /var/lib/soul-stack/modules
@@ -333,7 +333,7 @@ keeper:
       priority: 3
 
   retry:
-    max_attempts: 2          # per-endpoint попытки до spray; default 2
+    max_attempts: 2          # per-endpoint attempts before spray; default 2
     backoff:
       initial: 1s
       max: 30s
@@ -358,7 +358,7 @@ cleanup:
 logging:
   level: info
   format: json
-  file: /var/log/soul/soul.log         # пусто/опущено → stderr без ротации
+  file: /var/log/soul/soul.log         # empty/omitted → stderr without rotation
   rotation: { max_size_mb: 50, max_age_days: 7, max_files: 5, compress: true }
 
 metrics:
@@ -383,23 +383,23 @@ plugin_runtime:
   conflict_policy: warn
   enable_tls: false
 
-# Опционально: блок целиком можно опустить — применятся defaults
+# Optional: the whole block can be omitted — defaults apply
 hot_reload:
   enable_signal: true
   enable_inotify: false
   audit_correlation_id: true
 ```
 
-Эталонный пример в файле — [`examples/soul/soul.yml`](../../examples/soul/soul.yml).
+The reference example is in the file [`examples/soul/soul.yml`](../../examples/soul/soul.yml).
 
-## См. также
+## See also
 
-- [connection.md](connection.md) — нормативная спецификация блока `keeper:` (алгоритм priority + failback).
-- [modules.md](modules.md) — что лежит в `paths.modules`, как работает `cleanup`.
-- [identity.md](identity.md) — что лежит в `paths.seed`, почему у Soul нет `auth:` (mTLS / SoulSeed вместо JWT).
-- [onboarding.md](onboarding.md) — как SoulSeed появляется в `paths.seed`.
-- [soulprint.md](soulprint.md) — typed-схема Soulprint MVP, `refresh_interval`.
-- [`docs/keeper/config.md`](../keeper/config.md) — Keeper-side конфиг (включая `auth:` для операторов).
-- [`examples/soul/soul.yml`](../../examples/soul/soul.yml) — рабочий пример.
-- [architecture.md → ADR-018](../adr/0018-soulprint-typed.md#adr-018-soulprint-typed-схема-mvp) — typed Soulprint MVP.
-- [architecture.md → Сквозные требования](../architecture.md#сквозные-требования-и-где-они-приземляются) — почему `logging.rotation`, `metrics`, `otel` обязательны.
+- [connection.md](connection.md) — the normative specification of the `keeper:` block (the priority + failback algorithm).
+- [modules.md](modules.md) — what lies in `paths.modules`, how `cleanup` works.
+- [identity.md](identity.md) — what lies in `paths.seed`, why Soul has no `auth:` (mTLS / SoulSeed instead of JWT).
+- [onboarding.md](onboarding.md) — how the SoulSeed appears in `paths.seed`.
+- [soulprint.md](soulprint.md) — the typed Soulprint schema MVP, `refresh_interval`.
+- [`docs/keeper/config.md`](../keeper/config.md) — the Keeper-side config (including `auth:` for operators).
+- [`examples/soul/soul.yml`](../../examples/soul/soul.yml) — a working example.
+- [architecture.md → ADR-018](../adr/0018-soulprint-typed.md#adr-018-soulprint-typed-схема-mvp) — the typed Soulprint MVP.
+- [architecture.md → Cross-cutting requirements](../architecture.md#сквозные-требования-и-где-они-приземляются) — why `logging.rotation`, `metrics`, `otel` are required.

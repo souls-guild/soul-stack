@@ -1,85 +1,85 @@
-# Модули и кеш на хосте Soul
+# Modules and the cache on the Soul host
 
-Раздел про **хостовую сторону** модулей: где они физически лежат, как попадают на хост, как кешируются и как чистятся. Про саму модель модулей (core vs custom, адресация `<namespace>.<module>.<state>`, протокол gRPC-stdio, манифест) — [architecture.md → Модель модулей](../architecture.md#модель-модулей); здесь это намеренно не дублируется.
+This section is about the **host side** of modules: where they physically live, how they reach the host, how they are cached, and how they are cleaned up. For the module model itself (core vs custom, the `<namespace>.<module>.<state>` addressing, the gRPC-stdio protocol, the manifest) — see [architecture.md → Module model](../architecture.md#модель-модулей); it is deliberately not duplicated here.
 
-## Раскладка на хосте
+## Layout on the host
 
 ```
 /var/lib/soul-stack/
   bin/
-    soul-<sha>                 # текущая версия + 1–2 предыдущих для отката
+    soul-<sha>                 # current version + 1–2 previous for rollback
   modules/
-    community-redis/           # каталожный слот custom-модуля: <ns>-<name>/
-      manifest.yaml            #   материализован из PluginSigil.manifest_raw
-      soul-mod-redis           #   бинарь (single-active, atomic rename)
+    community-redis/           # catalog slot of a custom module: <ns>-<name>/
+      manifest.yaml            #   materialized from PluginSigil.manifest_raw
+      soul-mod-redis           #   binary (single-active, atomic rename)
     wb-haproxy/
       manifest.yaml
       soul-mod-haproxy
 ```
 
-- **`bin/soul-<sha>`** — сам исполняемый файл агента. Имя содержит SHA-256 бинаря, что позволяет держать рядом несколько версий и откатываться без перекачки. Используется push-режимом (Keeper выкатывает бинарь через SSH); в pull-режиме обновление демона — задача оператора (systemd-unit, package manager).
-- **`modules/<ns>-<name>/{manifest.yaml, soul-mod-<name>}`** — каталожный слот custom-модуля ([ADR-065](../adr/0065-core-module-installed.md); имена — [naming-rules.md → Модули Destiny](../naming-rules.md#модули-destiny)). **Single-active** на пару `(namespace, name)`: одна активная версия, запись через atomic rename; несколько версий рядом не хранятся — authority = активный Sigil-допуск, «откат» = revoke+allow другого допуска на Keeper-е + повторный install-шаг. `manifest.yaml` материализуется из `PluginSigil.manifest_raw` (приезжает `SigilSnapshot`-ом, не через fetch). Бинарь запускается `soul`-бинарём как sub-process по gRPC-stdio.
-- **Core-модули на диске не лежат.** Они статически встроены в `soul-<sha>`-бинарь.
+- **`bin/soul-<sha>`** — the agent executable itself. The name contains the SHA-256 of the binary, which allows keeping several versions side by side and rolling back without re-downloading. Used by the push mode (Keeper rolls out the binary over SSH); in the pull mode updating the daemon is the operator's task (a systemd unit, a package manager).
+- **`modules/<ns>-<name>/{manifest.yaml, soul-mod-<name>}`** — the catalog slot of a custom module ([ADR-065](../adr/0065-core-module-installed.md); the names — [naming-rules.md → Destiny modules](../naming-rules.md#модули-destiny)). **Single-active** per `(namespace, name)` pair: one active version, writing via an atomic rename; several versions are not kept side by side — the authority = the active Sigil grant, a "rollback" = revoke+allow of another grant on Keeper + a repeated install step. `manifest.yaml` is materialized from `PluginSigil.manifest_raw` (it arrives in a `SigilSnapshot`, not via a fetch). The binary is launched by the `soul` binary as a sub-process over gRPC-stdio.
+- **Core modules do not lie on disk.** They are statically built into the `soul-<sha>` binary.
 
-Путь `/var/lib/soul-stack/modules/` настраивается через `paths.modules` в [`soul.yml`](config.md#paths). Путь к `bin/` сейчас фиксирован соглашением (под него выкатывается push-бинарь).
+The path `/var/lib/soul-stack/modules/` is configured via `paths.modules` in [`soul.yml`](config.md#paths). The path to `bin/` is currently fixed by convention (the push binary is rolled out into it).
 
-## Поведение в pull (агентский режим)
+## Behavior in pull (agent mode)
 
-- `soul`-демон при apply Destiny-шага дёргает встроенный core-модуль или sub-process custom-модуля.
-- Доставка custom-модулей на хост — через сам Destiny: встроенный core-модуль `core.module.installed` ([ADR-065](../adr/0065-core-module-installed.md)) — allow-check по локальному Sigil-набору **до** fetch (нет активного допуска → `module_not_allowed` без единого сетевого байта) → server-streaming RPC `FetchModule` с Keeper-а → полный verify (sha256 + подпись Sigil + `manifest_sha256`, `shared/pluginhost`) → atomic rename в каталожный слот → hot-register без рестарта демона (модуль доступен задачам того же прогона). Идемпотентность: sha256 установленного бинаря == sha активного Sigil → `changed=false`, fetch не выполняется. Это обычная Destiny-операция, ничего магического.
-- Демон не пытается «угадать», какие модули понадобятся вперёд: если нужный модуль отсутствует в момент apply — шаг падает. Install-шаг перед первым потребителем модуля обычно **синтезирует сам Keeper** из декларации `service.yml::modules[]` ([ADR-065 amendment](../adr/0065-core-module-installed.md); канон — [keeper/modules.md → Авто-синтез](../keeper/modules.md#авто-синтез-coremoduleinstalled-из-serviceymlmodules)) — для Soul-а синтезированный шаг неотличим от явного, доставка/verify/кеш не меняются. Явный шаг остаётся для takeover (свои позиция/`ref`/`when:`) и для модулей, используемых только внутри destiny.
+- When applying a Destiny step, the `soul` daemon invokes a built-in core module or a sub-process of a custom module.
+- Delivering custom modules to the host — via the Destiny itself: the built-in core module `core.module.installed` ([ADR-065](../adr/0065-core-module-installed.md)) — an allow-check against the local Sigil set **before** the fetch (no active grant → `module_not_allowed` without a single network byte) → the server-streaming RPC `FetchModule` from Keeper → a full verify (sha256 + the Sigil signature + `manifest_sha256`, `shared/pluginhost`) → an atomic rename into the catalog slot → hot-register without restarting the daemon (the module is available to the tasks of the same run). Idempotency: the sha256 of the installed binary == the sha of the active Sigil → `changed=false`, the fetch is not performed. This is an ordinary Destiny operation, nothing magical.
+- The daemon does not try to "guess" which modules will be needed ahead of time: if a needed module is absent at apply time — the step fails. The install step before the first consumer of a module is usually **synthesized by Keeper itself** from the `service.yml::modules[]` declaration ([ADR-065 amendment](../adr/0065-core-module-installed.md); the canon — [keeper/modules.md → Auto-synthesis](../keeper/modules.md#авто-синтез-coremoduleinstalled-из-serviceymlmodules)) — for Soul a synthesized step is indistinguishable from an explicit one, the delivery/verify/cache do not change. An explicit step remains for takeover (its own position/`ref`/`when:`) and for modules used only inside a destiny.
 
-## Поведение в push (`keeper.push`)
+## Behavior in push (keeper.push)
 
-- Keeper передаёт хосту **все модули, зарегистрированные в Keeper-е** (без статического анализа Destiny). Сравнение по SHA-256 на каждый модуль; ничего не изменилось — копирование пропускается. Это работает за счёт горячего кеша на хосте (те же каталожные слоты `<ns>-<name>/`, что в pull).
-- Сам `soul`-бинарь докатывается тем же механизмом: Keeper сравнивает SHA-256 целевой версии с тем, что лежит в `bin/`, и копирует только при расхождении.
-- Первый прогон на новом хосте — медленный (копируется бинарь и все модули). Последующие — мгновенные.
-- Для `bin/` имена файлов с SHA в суффиксе позволяют держать несколько версий агента рядом и откатываться без перекачки; слоты модулей — single-active ([ADR-065](../adr/0065-core-module-installed.md)).
+- Keeper delivers to the host **all modules registered in Keeper** (without static analysis of the Destiny). Comparison by SHA-256 per module; nothing changed — the copy is skipped. This works thanks to the hot cache on the host (the same catalog slots `<ns>-<name>/` as in pull).
+- The `soul` binary itself is rolled out by the same mechanism: Keeper compares the SHA-256 of the target version with what lies in `bin/`, and copies only on a mismatch.
+- The first run on a new host is slow (the binary and all modules are copied). Subsequent ones are instant.
+- For `bin/`, the file names with a SHA suffix allow keeping several agent versions side by side and rolling back without re-downloading; module slots are single-active ([ADR-065](../adr/0065-core-module-installed.md)).
 
-Полный алгоритм push-доставки — в [keeper/push.md → Доставка `soul`-бинаря и модулей на хост](../keeper/push.md#доставка-soul-бинаря-и-модулей-на-хост).
+The full push-delivery algorithm is in [keeper/push.md → Delivering the `soul` binary and modules to the host](../keeper/push.md#доставка-soul-бинаря-и-модулей-на-хост).
 
-## Локальный cleanup кеша
+## Local cache cleanup
 
-`Reaper` в Keeper-е работает только над Postgres — он **не ходит** на хосты по SSH и не чистит локальные файлы. Это сознательное решение: иначе Reaper-у пришлось бы выдать SSH-права на весь парк, что плохо с точки зрения blast radius. Хостовая чистка устроена иначе:
+The `Reaper` in Keeper works only over Postgres — it **does not go** to hosts over SSH and does not clean local files. This is a deliberate decision: otherwise the Reaper would have to be granted SSH rights over all Souls, which is bad from a blast-radius standpoint. Host cleanup is arranged differently:
 
-### В pull-режиме
+### In pull mode
 
-`soul`-демон периодически (по расписанию из своего конфига) удаляет в `/var/lib/soul-stack/bin/` и `/var/lib/soul-stack/modules/` те версии, которые не использовались N дней.
+The `soul` daemon periodically (on the schedule from its config) deletes in `/var/lib/soul-stack/bin/` and `/var/lib/soul-stack/modules/` the versions that were not used for N days.
 
-Параметры — в [`soul.yml` → cleanup](config.md#cleanup):
+The parameters — in [`soul.yml` → cleanup](config.md#cleanup):
 
-| Параметр | Смысл |
+| Parameter | Meaning |
 |---|---|
-| `cleanup.modules_ttl_days` | Сколько дней неиспользованная версия живёт до удаления. |
-| `cleanup.run_interval` | Как часто демон запускает проход по кешу. |
+| `cleanup.modules_ttl_days` | How many days an unused version lives before deletion. |
+| `cleanup.run_interval` | How often the daemon runs a pass over the cache. |
 
-### В push-режиме
+### In push mode
 
-Чистка идёт в рамках самого `keeper.push`: при подключении к хосту Keeper может опционально (по флагу политики) сравнить локальный кеш с реестром модулей и удалить устаревшие версии в той же SSH-сессии. Параметры на стороне Soul-а в этом случае не используются — push-хост ничего не делает между прогонами.
+Cleanup happens within `keeper.push` itself: when connecting to a host, Keeper may optionally (by a policy flag) compare the local cache with the module registry and delete stale versions in the same SSH session. The parameters on the Soul side are not used in this case — the push host does nothing between runs.
 
-### При revoke / удалении хоста
+### On revoke / host removal
 
-Оператор может инициировать `keeper.push.cleanup` — отдельную операцию push, которая стирает `/var/lib/soul-stack/` целиком на указанном хосте. Применяется при отзыве (`revoke`) Soul-а или выводе хоста из реестра.
+The operator may initiate `keeper.push.cleanup` — a separate push operation that wipes `/var/lib/soul-stack/` entirely on the specified host. Applied on revoking (`revoke`) a Soul or removing the host from the registry.
 
-## Manifest `SoulModule`
+## The SoulModule manifest
 
-Каждый custom-модуль декларирует себя в **статическом `manifest.yaml`** в корне репо плагина и рядом с бинарём в кеше хоста ([ADR-020(a)](../adr/0020-plugin-infrastructure.md#adr-020-plugin-инфраструктура-формат-manifest-handshake-lifecycle)). `soul-lint` парсит файл **без запуска бинаря** для статической валидации destiny.
+Each custom module declares itself in a **static `manifest.yaml`** at the root of the plugin repo and next to the binary in the host cache ([ADR-020(a)](../adr/0020-plugin-infrastructure.md#adr-020-plugin-инфраструктура-формат-manifest-handshake-lifecycle)). `soul-lint` parses the file **without running the binary** for static destiny validation.
 
-Manifest-формат — **единый для всех трёх kind-ов плагинов** (`soul_module` / `cloud_driver` / `ssh_provider`) с `kind:`-дискриминатором. Нормативный источник по полям manifest, handshake, lifecycle, capabilities, side_effects — **[`../keeper/plugins.md`](../keeper/plugins.md)**. Здесь — только специфика `kind: soul_module`.
+The manifest format is **unified for all three plugin kinds** (`soul_module` / `cloud_driver` / `ssh_provider`) with a `kind:` discriminator. The normative source on the manifest fields, handshake, lifecycle, capabilities, side_effects is **[`../keeper/plugins.md`](../keeper/plugins.md)**. Here — only the specifics of `kind: soul_module`.
 
-### `spec:` для `kind: soul_module`
+### spec: for kind: soul_module
 
-Kind-specific блок `SoulModule` — `spec.states`: map поддерживаемых состояний с input-схемой для каждого.
+The kind-specific `SoulModule` block is `spec.states`: a map of supported states with an input schema for each.
 
-| Поле | Тип | Default | Смысл |
+| Field | Type | Default | Meaning |
 |---|---|---|---|
-| `spec.states` | `map<state-name, {input, description?}>` | — | Map поддерживаемых состояний модуля. Ключ — имя состояния (`installed` / `running` / `run` / …, см. [naming-rules.md → Модули Destiny](../naming-rules.md#модули-destiny)). |
-| `spec.states.<name>.input` | input-schema ([`docs/input.md`](../input.md)) | `{}` | Контракт параметров для этого состояния. `soul-lint` валидирует `params:` каждой задачи destiny против этой схемы. |
-| `spec.states.<name>.description` | `string` (optional) | — | Человекочитаемое описание для документации / UI. |
+| `spec.states` | `map<state-name, {input, description?}>` | — | A map of supported module states. The key is the state name (`installed` / `running` / `run` / …, see [naming-rules.md → Destiny modules](../naming-rules.md#модули-destiny)). |
+| `spec.states.<name>.input` | input-schema ([`docs/input.md`](../input.md)) | `{}` | The parameter contract for this state. `soul-lint` validates the `params:` of each destiny task against this schema. |
+| `spec.states.<name>.description` | `string` (optional) | — | A human-readable description for documentation / UI. |
 
-Полная таблица общих полей manifest (`kind`, `protocol_version`, `namespace`, `name`, `required_capabilities`, `side_effects`), нормативная JSON-схема handshake, диаграмма lifecycle и enum-таблицы — в **[`../keeper/plugins.md`](../keeper/plugins.md)**, здесь намеренно не дублируются.
+The full table of common manifest fields (`kind`, `protocol_version`, `namespace`, `name`, `required_capabilities`, `side_effects`), the normative handshake JSON schema, the lifecycle diagram, and the enum tables are in **[`../keeper/plugins.md`](../keeper/plugins.md)**, deliberately not duplicated here.
 
-### Пример: `soul-mod-haproxy`
+### Example: soul-mod-haproxy
 
 ```yaml
 # soul-mod-haproxy/manifest.yaml
@@ -100,46 +100,46 @@ side_effects:
 spec:
   states:
     running:
-      description: HAProxy запущен и включён в systemd.
+      description: HAProxy is running and enabled in systemd.
       input:
         name:        { type: string, required: true }
         enabled:     { type: boolean, default: true }
         config_path: { type: string, default: /etc/haproxy/haproxy.cfg }
     stopped:
-      description: HAProxy остановлен.
+      description: HAProxy is stopped.
       input:
         name: { type: string, required: true }
     restarted:
-      description: HAProxy перезапущен (force-restart).
+      description: HAProxy restarted (force-restart).
       input:
         name:        { type: string, required: true }
         config_path: { type: string, default: /etc/haproxy/haproxy.cfg }
     reloaded:
-      description: HAProxy reload (SIGHUP) без downtime.
+      description: HAProxy reload (SIGHUP) without downtime.
       input:
         name: { type: string, required: true }
 ```
 
-Адресация шага destiny — `<namespace>.<name>.<state>`, в примере выше — `wb.haproxy.running` / `wb.haproxy.stopped` / `wb.haproxy.restarted` / `wb.haproxy.reloaded`.
+The destiny step addressing is `<namespace>.<name>.<state>`, in the example above — `wb.haproxy.running` / `wb.haproxy.stopped` / `wb.haproxy.restarted` / `wb.haproxy.reloaded`.
 
-### Core-модули и manifest
+### Core modules and the manifest
 
-**Core-модули** (статически встроены в `soul`-бинарь, см. [naming-rules.md → Модули Destiny](../naming-rules.md#модули-destiny)) обходятся без отдельного файла `manifest.yaml` рядом с бинарём: их декларация эмбедится в реестр на этапе компиляции (`go:embed`), таблица states и input-схем доступна `soul-lint`-у через тот же парсер `shared/plugin`, что и для custom-модулей, но без чтения с диска. Формат декларации — тот же `kind: soul_module`-формат из [`../keeper/plugins.md`](../keeper/plugins.md).
+**Core modules** (statically built into the `soul` binary, see [naming-rules.md → Destiny modules](../naming-rules.md#модули-destiny)) do without a separate `manifest.yaml` file next to the binary: their declaration is embedded into the registry at compile time (`go:embed`), and the table of states and input schemas is available to `soul-lint` through the same `shared/plugin` parser as for custom modules, but without reading from disk. The declaration format is the same `kind: soul_module` format from [`../keeper/plugins.md`](../keeper/plugins.md).
 
-Реализация:
+Implementation:
 
-- Манифесты лежат как `*.yaml` рядом с реестром в пакете **`shared/coremanifest`** (по одному файлу на core-модуль: `exec.yaml`, `file.yaml`, …). Размещение в `shared/` выбрано из-за изоляции: и `soul`, и `soul-lint` импортируют `shared/`, но не импортируют друг друга и не тянут `keeper` — компилятор гарантирует, что линтер не притянет рантайм-реализации модулей.
-- `soul-lint` при валидации destiny/scenario находит для каждой задачи `module: core.<m>.<state>` манифест в реестре, берёт `spec.states.<state>.input` и проверяет `params:`: неизвестный параметр (`command` вместо `cmd`), отсутствие required (`cmd`/`path`), несовпадение типа литерала. Структурная проверка по `plugin.InputParamDef` (type/required/secret/pattern); enum, числовые границы и вложенные object/array-схемы в этом DSL не выражаются — отложено до унификации `config.InputSchema`↔`plugin`.
-- Манифест описывает **author-facing** контракт — то, что оператор пишет в `params:`. Для `core.file.rendered` это `template:` (путь к `.tmpl`) + `vars:`, а **не** runtime-форма `template_content`+`render_context`, которую Keeper подставляет после CEL/text-template-фаз ([ADR-010](../adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов), [ADR-012](../adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add)). Поэтому runtime `Module.Validate` модулей с handoff-преобразованием params (rendered) валидирует свою runtime-форму отдельно; для модулей без handoff (`core.exec`) runtime `Validate` делегирует тому же manifest-реестру — единый источник per-field-проверок.
-- Keeper-side core (`core.soul`/`core.cloud`/`core.vault`, [ADR-017](../adr/0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read)) добавляются в реестр тем же механизмом (новый `<module>.yaml`).
+- The manifests lie as `*.yaml` next to the registry in the **`shared/coremanifest`** package (one file per core module: `exec.yaml`, `file.yaml`, …). Placement in `shared/` was chosen for isolation: both `soul` and `soul-lint` import `shared/`, but they do not import each other and do not pull `keeper` — the compiler guarantees that the linter does not pull in the runtime module implementations.
+- When validating a destiny/scenario, `soul-lint` finds for each task `module: core.<m>.<state>` the manifest in the registry, takes `spec.states.<state>.input`, and checks `params:`: an unknown parameter (`command` instead of `cmd`), a missing required (`cmd`/`path`), a literal type mismatch. A structural check by `plugin.InputParamDef` (type/required/secret/pattern); enum, numeric bounds, and nested object/array schemas are not expressible in this DSL — deferred until the unification of `config.InputSchema`↔`plugin`.
+- The manifest describes the **author-facing** contract — what the operator writes in `params:`. For `core.file.rendered` this is `template:` (the path to the `.tmpl`) + `vars:`, and **not** the runtime form `template_content`+`render_context` that Keeper substitutes after the CEL/text-template phases ([ADR-010](../adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов), [ADR-012](../adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add)). Therefore the runtime `Module.Validate` of modules with a handoff transformation of params (rendered) validates its runtime form separately; for modules without a handoff (`core.exec`) the runtime `Validate` delegates to the same manifest registry — a single source of per-field checks.
+- Keeper-side core (`core.soul`/`core.cloud`/`core.vault`, [ADR-017](../adr/0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read)) is added to the registry by the same mechanism (a new `<module>.yaml`).
 
-## См. также
+## See also
 
-- [config.md](config.md) — где задаются `paths.modules` и `cleanup.*`.
-- [identity.md](identity.md) — отзыв Soul-а как триггер для `keeper.push.cleanup`.
-- [architecture.md → Модель модулей](../architecture.md#модель-модулей) — core vs custom, адресация, манифест, протокол gRPC-stdio.
-- [architecture.md → Поведение на хосте и cleanup](../architecture.md#поведение-на-хосте-и-cleanup) — короткий обзор и граница «БД vs хост».
-- [architecture.md → ADR-020](../adr/0020-plugin-infrastructure.md#adr-020-plugin-инфраструктура-формат-manifest-handshake-lifecycle) — нормативное решение по plugin-инфраструктуре.
-- [`../keeper/plugins.md`](../keeper/plugins.md) — **нормативный источник** по manifest, handshake, lifecycle, capabilities, side_effects (формат един для всех трёх kind-ов).
-- [keeper/push.md](../keeper/push.md) — push-алгоритм и доставка `soul`-бинаря/модулей со стороны Keeper-а.
-- [naming-rules.md → Модули Destiny](../naming-rules.md#модули-destiny) — словарь имён (`soul-mod-<имя>`, core-модули, custom-модули).
+- [config.md](config.md) — where `paths.modules` and `cleanup.*` are set.
+- [identity.md](identity.md) — revoking a Soul as a trigger for `keeper.push.cleanup`.
+- [architecture.md → Module model](../architecture.md#модель-модулей) — core vs custom, addressing, the manifest, the gRPC-stdio protocol.
+- [architecture.md → Host behavior and cleanup](../architecture.md#поведение-на-хосте-и-cleanup) — a short overview and the "DB vs host" boundary.
+- [architecture.md → ADR-020](../adr/0020-plugin-infrastructure.md#adr-020-plugin-инфраструктура-формат-manifest-handshake-lifecycle) — the normative decision on the plugin infrastructure.
+- [`../keeper/plugins.md`](../keeper/plugins.md) — the **normative source** on the manifest, handshake, lifecycle, capabilities, side_effects (the format is unified for all three kinds).
+- [keeper/push.md](../keeper/push.md) — the push algorithm and the delivery of the `soul` binary/modules from the Keeper side.
+- [naming-rules.md → Destiny modules](../naming-rules.md#модули-destiny) — the vocabulary of names (`soul-mod-<name>`, core modules, custom modules).
