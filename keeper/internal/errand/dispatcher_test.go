@@ -13,8 +13,8 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// fakeStore — in-memory эмулятор StoreAPI без PG. Все методы под mu для
-// race-free доступа из background-горутины и тестового goroutine-а.
+// fakeStore — in-memory emulator of StoreAPI without PG. All methods under mu for
+// race-free access from background-goroutine and test goroutine.
 type fakeStore struct {
 	mu      sync.Mutex
 	rows    map[string]*Row
@@ -97,12 +97,12 @@ func (s *fakeStore) snapshot(id string) *Row {
 	return &cp
 }
 
-// fakeOutbound — учёт вызовов SendErrand/PublishErrand/SendCancelErrand/PublishCancelErrand.
+// fakeOutbound — tracking calls to SendErrand/PublishErrand/SendCancelErrand/PublishCancelErrand.
 type fakeOutbound struct {
 	mu            sync.Mutex
 	sent          []*keeperv1.ErrandRequest
 	sendErr       error
-	cancelled     []string // errand_id-ы по SendCancelErrand+PublishCancelErrand вместе.
+	cancelled     []string // errand_id-s from SendCancelErrand+PublishCancelErrand together.
 	cancelSendErr error
 }
 
@@ -120,10 +120,10 @@ func (o *fakeOutbound) PublishErrand(ctx context.Context, sid string, req *keepe
 	return o.SendErrand(ctx, sid, req)
 }
 
-// firstSentErrandID — errand_id первого отправленного ErrandRequest (через
-// SendErrand или PublishErrand). "" пока ничего не отправлено. Нужен guard-
-// тестам S1: errand_id генерится внутри Dispatch (ULID), а замер
-// Redis-Subscribe ведётся именно по этому id.
+// firstSentErrandID — errand_id of first sent ErrandRequest (via
+// SendErrand or PublishErrand). "" if nothing sent yet. Needed for guard-
+// tests S1: errand_id is generated inside Dispatch (ULID), and
+// Redis-Subscribe measurement is done by this id.
 func (o *fakeOutbound) firstSentErrandID() string {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -147,14 +147,14 @@ func (o *fakeOutbound) PublishCancelErrand(ctx context.Context, sid, errandID st
 	return o.SendCancelErrand(ctx, sid, errandID)
 }
 
-// fakeBus — in-memory pub/sub для одного applyID-канала. Фиксирует последнее
-// wantBridge-решение dispatcher-а (lastWantBridge) — guard-тесты S1 проверяют
-// holder→bridge маршрутизацию по нему.
+// fakeBus — in-memory pub/sub for one applyID channel. Records last
+// wantBridge decision of dispatcher (lastWantBridge) — guard-tests S1 check
+// holder→bridge routing by it.
 type fakeBus struct {
 	mu             sync.Mutex
 	chs            map[string]chan applybus.Event
 	lastWantBridge bool
-	bridgeSet      bool // был ли вызван SubscribeWithBridge (а не legacy Subscribe)
+	bridgeSet      bool // was SubscribeWithBridge called (not legacy Subscribe)
 }
 
 func newFakeBus() *fakeBus { return &fakeBus{chs: map[string]chan applybus.Event{}} }
@@ -173,7 +173,7 @@ func (b *fakeBus) SubscribeWithBridge(_ context.Context, applyID string, wantBri
 	return ch
 }
 
-// wantBridge возвращает последнее bridge-решение и факт его установки.
+// wantBridge returns last bridge decision and fact of its setting.
 func (b *fakeBus) wantBridge() (bool, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -189,7 +189,7 @@ func (b *fakeBus) publishLatest(ev applybus.Event) {
 	}
 }
 
-// fakeLease — мокаемый LeaseLookup.
+// fakeLease — mocked LeaseLookup.
 type fakeLease struct {
 	mu        sync.Mutex
 	holders   map[string]string
@@ -205,7 +205,7 @@ func (l *fakeLease) ReadHolder(_ context.Context, sid string) (string, error) {
 	return l.holders[sid], nil
 }
 
-// buildTestDispatcher собирает Dispatcher с fake-зависимостями без
+// buildTestDispatcher builds Dispatcher with fake-dependencies without
 // NewDispatcher-validate.
 func buildTestDispatcher(store StoreAPI, bus ApplyBus, ob OutboundSender, pub RemotePublisher, lease LeaseLookup, cap time.Duration) *Dispatcher {
 	return &Dispatcher{deps: Deps{
@@ -233,8 +233,8 @@ func TestDispatch_Sync_Success(t *testing.T) {
 
 	d := buildTestDispatcher(store, bus, ob, ob, lease, 500*time.Millisecond)
 
-	// Параллельно публикуем event с маленькой задержкой, чтобы Subscribe попал
-	// в map fakeBus до Publish-а.
+	// Publish event in parallel with small delay so Subscribe lands
+	// in fakeBus map before Publish.
 	go func() {
 		time.Sleep(20 * time.Millisecond)
 		bus.publishLatest(applybus.Event{
@@ -279,7 +279,7 @@ func TestDispatch_Sync_TimedOut(t *testing.T) {
 	ob := &fakeOutbound{}
 	lease := &fakeLease{holders: map[string]string{"host.test": "kid-test"}}
 
-	// TimeoutSec=1 (>= MinTimeoutSeconds), ServerCap=2s → ждём 1с sync, нет
+	// TimeoutSec=1 (>= MinTimeoutSeconds), ServerCap=2s → wait 1s sync, no
 	// event → terminal=timed_out.
 	d := buildTestDispatcher(store, bus, ob, ob, lease, 2*time.Second)
 

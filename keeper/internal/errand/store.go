@@ -1,19 +1,19 @@
-// Package errand — Keeper-side оркестратор pull-ad-hoc Errand-ов
+// Package errand — Keeper-side orchestrator of pull-ad-hoc Errands
 // (`POST /v1/souls/{sid}/exec`, ADR-033).
 //
-// Контур одного Errand-а: Operator (HTTP/MCP) → Dispatcher.Dispatch →
-// Outbound.SendErrand → Soul EventStream → ErrandResult в FromSoul →
+// One Errand circuit: Operator (HTTP/MCP) → Dispatcher.Dispatch →
+// Outbound.SendErrand → Soul EventStream → ErrandResult in FromSoul →
 // events_errand.handleErrandResult → ApplyBus.Publish(KindErrandCompleted) →
-// Dispatcher subscribe-waiter завершается → MarkTerminal в errands-table.
+// Dispatcher subscribe-waiter completes → MarkTerminal in errands-table.
 //
-// Cross-keeper: holder SID-стрима живёт в Redis-lease (`soul:<sid>:lock`).
-// Local-holder → Outbound.SendErrand. Remote-holder → publish в
-// `outbound:<sid>` pub/sub (тот же канал, что у apply/cancel). Reply
-// летит через applybus-канал `apply:<errand_id>` (cluster-bridge).
+// Cross-keeper: SID-stream holder lives in Redis-lease (`soul:<sid>:lock`).
+// Local-holder → Outbound.SendErrand. Remote-holder → publish to
+// `outbound:<sid>` pub/sub (same channel as apply/cancel). Reply
+// travels through applybus channel `apply:<errand_id>` (cluster-bridge).
 //
-// State-инвариант: Errand НЕ мутирует incarnation.state (ADR-033 §4).
-// Здесь нет ApplyRunDB, нет state_changes, нет barrier — только своя
-// таблица `errands` с двумя терминальными переводами (running → terminal).
+// State invariant: Errand does NOT mutate incarnation.state (ADR-033 §4).
+// No ApplyRunDB, no state_changes, no barrier here — only its own
+// `errands` table with two terminal transitions (running → terminal).
 package errand
 
 import (
@@ -27,8 +27,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// Status — терминал/in-flight статус строки `errands`. Совпадает с CHECK
-// `errands_status_valid` и enum-конвертацией из proto (см. mapping в
+// Status — terminal/in-flight status of `errands` row. Matches CHECK
+// `errands_status_valid` and enum conversion from proto (see mapping in
 // dispatcher.go::statusFromProto).
 type Status string
 
@@ -41,12 +41,12 @@ const (
 	StatusModuleNotAllowed Status = "module_not_allowed"
 )
 
-// ErrNotFound — запись по errand_id отсутствует (handler → 404).
+// ErrNotFound — record by errand_id is missing (handler → 404).
 var ErrNotFound = errors.New("errand: not found")
 
-// Row — read/write-проекция строки `errands`. Поля nullable (exit_code,
-// finished_at, output, stdout/stderr) — указатели; при NULL в БД значение
-// будет nil. Для конструктора Insert не все поля обязательны (см. метод).
+// Row — read/write projection of `errands` row. Nullable fields (exit_code,
+// finished_at, output, stdout/stderr) are pointers; NULL in DB becomes nil.
+// Not all fields are required for Insert constructor (see method).
 type Row struct {
 	ErrandID        string
 	SID             string
@@ -68,9 +68,9 @@ type Row struct {
 	TTLAt           time.Time
 }
 
-// ListFilter — параметры `GET /v1/errands`. Пустые поля = «без фильтра».
-// StartedAfter в UTC; пагинация — снаружи (offset/limit, paged response).
-// Modules — multi-value exact-match OR (`module IN (…)`), параметр query
+// ListFilter — parameters for `GET /v1/errands`. Empty fields = "no filter".
+// StartedAfter in UTC; pagination is external (offset/limit, paged response).
+// Modules — multi-value exact-match OR (`module IN (…)`), query parameter
 // `?module=X&module=Y`.
 type ListFilter struct {
 	SID          string
@@ -79,22 +79,22 @@ type ListFilter struct {
 	Modules      []string
 }
 
-// ExecQueryRower — узкая поверхность pgxpool.Pool, нужная Store-у
-// (симметрично pushorch / soul / topology). Позволяет fake в unit-тестах
-// без PG.
+// ExecQueryRower — narrow surface of pgxpool.Pool, needed by Store
+// (symmetric with pushorch / soul / topology). Allows faking in unit tests
+// without PG.
 type ExecQueryRower interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
-// Store — CRUD-обёртка над `errands`. Concurrent-safe; собственного
-// in-memory-состояния не держит.
+// Store — CRUD wrapper over `errands`. Concurrent-safe; does not maintain
+// its own in-memory state.
 type Store struct {
 	db ExecQueryRower
 }
 
-// NewStore конструирует Store; db обязателен.
+// NewStore constructs Store; db is required.
 func NewStore(db ExecQueryRower) *Store {
 	return &Store{db: db}
 }
@@ -109,9 +109,9 @@ INSERT INTO errands (
 )
 `
 
-// Insert вставляет начальную строку Errand-а со status='running'. errand_id —
-// ULID, валидируется caller-ом. input/output — jsonb; пустой input → '{}'::jsonb
-// (явно сериализуем для предсказуемости, как pushorch).
+// Insert inserts initial Errand row with status='running'. errand_id is
+// ULID, validated by caller. input/output are jsonb; empty input → '{}'::jsonb
+// (explicitly serialized for predictability, like pushorch).
 func (s *Store) Insert(ctx context.Context, row Row) error {
 	inputJSON, err := marshalJSONB(row.Input)
 	if err != nil {
@@ -144,7 +144,7 @@ FROM errands
 WHERE errand_id = $1
 `
 
-// Get читает строку Errand-а по ULID. ErrNotFound на отсутствие.
+// Get reads Errand row by ULID. Returns ErrNotFound if missing.
 func (s *Store) Get(ctx context.Context, errandID string) (*Row, error) {
 	r := s.db.QueryRow(ctx, selectByIDSQL, errandID)
 	row, err := scanRow(r)
@@ -173,8 +173,8 @@ WHERE errand_id = $1
   AND status = 'running'
 `
 
-// TerminalUpdate — payload для перевода Errand-а в терминальный статус.
-// stdout/stderr / output уже cap-нуты и маскированы caller-ом (mask.go).
+// TerminalUpdate — payload for transitioning Errand to terminal status.
+// stdout/stderr / output are already capped and masked by caller (mask.go).
 type TerminalUpdate struct {
 	Status          Status
 	ExitCode        *int32
@@ -187,10 +187,10 @@ type TerminalUpdate struct {
 	Output          map[string]any
 }
 
-// MarkTerminal переводит running → terminal с CAPACITY-маскированным выводом.
-// WHERE-guard `status='running'` — single-winner между двумя терминальными
-// путями (синхронный waiter и async-эскалация / timed_out): первый победил.
-// Возвращает false, если строка уже была не в running (дубль/late-event).
+// MarkTerminal transitions running → terminal with CAPACITY-masked output.
+// WHERE-guard `status='running'` — single-winner between two terminal
+// paths (sync waiter and async-escalation / timed_out): first one wins.
+// Returns false if row was already not running (duplicate/late-event).
 func (s *Store) MarkTerminal(ctx context.Context, errandID string, upd TerminalUpdate) (bool, error) {
 	outputJSON, err := marshalJSONBNullable(upd.Output)
 	if err != nil {
@@ -214,12 +214,12 @@ func (s *Store) MarkTerminal(ctx context.Context, errandID string, upd TerminalU
 	return tag.RowsAffected() > 0, nil
 }
 
-// List возвращает страницу строк под фильтром, отсортированную по
-// started_at DESC (свежие сверху, паритет push_runs/incarnations). total —
-// COUNT(*) под тем же фильтром без LIMIT/OFFSET (для UI-пагинации).
+// List returns a page of rows matching the filter, sorted by
+// started_at DESC (newest on top, parity with push_runs/incarnations). total is
+// COUNT(*) under the same filter without LIMIT/OFFSET (for UI pagination).
 //
-// Запросы простые без подготовленных выражений — фильтр маленький
-// (3 опц. поля), prepared statement переиспользуется драйвером.
+// Queries are simple without prepared statements — filter is small
+// (3 optional fields), prepared statement is reused by driver.
 func (s *Store) List(ctx context.Context, f ListFilter, offset, limit int) ([]*Row, int, error) {
 	whereSQL, args := buildListWhere(f)
 
@@ -261,9 +261,9 @@ LIMIT $` + itoa(len(args)+1) + ` OFFSET $` + itoa(len(args)+2)
 	return out, total, nil
 }
 
-// buildListWhere собирает WHERE-предикат под ListFilter. Параметры пишутся
-// инкрементально в args ([]any), плейсхолдеры $N — позиционные. Возвращает
-// строку с ведущим " WHERE …" либо "" если фильтр пуст.
+// buildListWhere builds WHERE predicate for ListFilter. Parameters are
+// written incrementally to args ([]any), placeholders $N are positional.
+// Returns string with leading " WHERE …" or "" if filter is empty.
 func buildListWhere(f ListFilter) (string, []any) {
 	var (
 		conds []string
@@ -282,7 +282,7 @@ func buildListWhere(f ListFilter) (string, []any) {
 		conds = append(conds, "started_at > $"+itoa(len(args)))
 	}
 	if len(f.Modules) > 0 {
-		// IN ($n,$n+1,…) — exact-match OR; regex/glob не вводим (ТЗ).
+		// IN ($n,$n+1,…) — exact-match OR; regex/glob not introduced (spec).
 		ph := ""
 		for i, m := range f.Modules {
 			args = append(args, m)
@@ -317,15 +317,15 @@ WHERE started_by_kid = $1
 RETURNING errand_id
 `
 
-// SweepOrphanRunning переводит «осиротевшие» running-Errand-ы этого инстанса
-// в timed_out. Источник осиротевших — рестарт keeper-а: каждая running-строка,
-// чей `started_by_kid` равен нашему KID и `started_at < now - grace`, точно
-// не дождётся ErrandResult (background-горутина умерла вместе с процессом).
-// Возвращает список переведённых errand_id для последующего audit-write
-// (caller сам решает писать события — Store без зависимостей от Writer).
+// SweepOrphanRunning transitions "orphaned" running-Errands of this instance
+// to timed_out. Source of orphaned Errands — keeper restart: each running-row
+// whose `started_by_kid` equals our KID and `started_at < now - grace` will
+// definitely not receive ErrandResult (background goroutine died with process).
+// Returns list of transitioned errand_id for subsequent audit-write
+// (caller decides whether to write events — Store has no Writer dependency).
 //
-// WHERE-guard `status='running'` — single-winner; параллельный live-handler
-// другой ноды перевод не сорвёт.
+// WHERE-guard `status='running'` — single-winner; parallel live-handler
+// on other node will not break transition.
 func (s *Store) SweepOrphanRunning(ctx context.Context, kid string, grace time.Duration, reason string) ([]string, error) {
 	rows, err := s.db.Query(ctx, sweepOrphanRunningSQL, kid, reason, grace)
 	if err != nil {
@@ -346,13 +346,13 @@ func (s *Store) SweepOrphanRunning(ctx context.Context, kid string, grace time.D
 	return out, nil
 }
 
-// scanner — общий интерфейс для pgx.Row и pgx.Rows для функции scanRow.
+// scanner — common interface for pgx.Row and pgx.Rows for scanRow function.
 type scanner interface {
 	Scan(dest ...any) error
 }
 
-// scanRow распаковывает один SELECT-row в *Row. Используется и Get-ом
-// (pgx.Row), и List-ом (pgx.Rows).
+// scanRow unpacks one SELECT-row into *Row. Used by both Get
+// (pgx.Row) and List (pgx.Rows).
 func scanRow(r scanner) (*Row, error) {
 	var (
 		row        Row
@@ -402,7 +402,7 @@ func scanRow(r scanner) (*Row, error) {
 	return &row, nil
 }
 
-// marshalJSONB кодирует map в jsonb-bytes. nil → "{}" (input всегда non-null).
+// marshalJSONB encodes map to jsonb-bytes. nil → "{}" (input always non-null).
 func marshalJSONB(m map[string]any) ([]byte, error) {
 	if m == nil {
 		return []byte(`{}`), nil
@@ -410,10 +410,10 @@ func marshalJSONB(m map[string]any) ([]byte, error) {
 	return json.Marshal(m)
 }
 
-// marshalJSONBNullable — для output: nil → SQL NULL (returned as nil-bytes),
-// иначе сериализованный JSON. shell/exec-модули не возвращают output → NULL
-// (а не "{}", чтобы отличать «модуль не положил структурный output» от
-// «положил пустой объект»).
+// marshalJSONBNullable — for output: nil → SQL NULL (returned as nil-bytes),
+// otherwise serialized JSON. shell/exec-modules don't return output → NULL
+// (not "{}", to distinguish "module did not put structured output" from
+// "put empty object").
 func marshalJSONBNullable(m map[string]any) ([]byte, error) {
 	if m == nil {
 		return nil, nil
@@ -421,8 +421,8 @@ func marshalJSONBNullable(m map[string]any) ([]byte, error) {
 	return json.Marshal(m)
 }
 
-// itoa — мелкий helper для построения $N плейсхолдеров. strconv.Itoa тащит
-// import; для одной маленькой функции в WHERE-builder проще inline.
+// itoa — small helper for building $N placeholders. strconv.Itoa imports;
+// for one small function in WHERE-builder simpler to inline.
 func itoa(n int) string {
 	if n == 0 {
 		return "0"
