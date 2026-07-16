@@ -11,38 +11,38 @@ import (
 	"github.com/souls-guild/soul-stack/sdk/sshprovider"
 )
 
-// paramsEnv — env-var, через который keeper.push передаёт teleport-провайдеру
-// его params (JSON по schema.json) при fork-е плагина. Симметрично
-// soul-ssh-vault / soul-ssh-static: SshProvider-контракт (Sign/Authorize) не
-// несёт per-request параметров провайдера, поэтому config приезжает на старте
-// процесса, как и путь к сокету.
+// paramsEnv is the env var through which keeper.push passes params (JSON per
+// schema.json) to the teleport provider when the plugin is forked. Symmetrical
+// with soul-ssh-vault / soul-ssh-static: the SshProvider contract
+// (Sign/Authorize) carries no per-request provider params, so config arrives at
+// process startup, just like the socket path.
 const paramsEnv = "SOUL_SSH_TELEPORT_PARAMS"
 
-// params — конфигурация teleport-провайдера, разобранная из paramsEnv.
+// params is the teleport-provider configuration parsed from paramsEnv.
 type params struct {
-	// ProxyAddr — endpoint Teleport-proxy (`host:port`). Едет в
-	// SignReply.proxy_jump для последующего использования keeper.push
-	// (dispatcher proxy_jump support — S3).
+	// ProxyAddr is the Teleport-proxy endpoint (`host:port`). It goes into
+	// SignReply.proxy_jump for later keeper.push use (dispatcher proxy_jump
+	// support - S3).
 	ProxyAddr string `json:"proxy_addr"`
-	// ClusterName — имя Teleport-кластера (опц., для multi-cluster trust).
+	// ClusterName is the Teleport cluster name (optional, for multi-cluster trust).
 	ClusterName string `json:"cluster_name"`
-	// IdentityFile — путь к Teleport identity-file (creds-flow B).
+	// IdentityFile is the path to the Teleport identity-file (creds-flow B).
 	IdentityFile string `json:"identity_file"`
-	// TbotSocket — путь к Unix-сокету tbot-демона (альтернатива
-	// IdentityFile). Один из двух источников обязателен.
+	// TbotSocket is the path to the Unix socket of the tbot daemon (alternative to
+	// IdentityFile). One of the two sources is required.
 	TbotSocket string `json:"tbot_socket"`
-	// Roles — список Teleport-ролей, под которыми запрашивается cert.
-	// Пустой = роли по умолчанию identity/bot.
+	// Roles is the list of Teleport roles under which the cert is requested.
+	// Empty = default identity/bot roles.
 	Roles []string `json:"roles"`
-	// ValidPrincipals — allowlist principal-ов поверх Teleport-роли;
-	// пустой = принимать любой req.User.
+	// ValidPrincipals is a principal allowlist over the Teleport role; empty =
+	// accept any req.User.
 	ValidPrincipals []string `json:"valid_principals"`
-	// Deny — deny-list пар (host, user); пустой = allow-all (dev/test).
+	// Deny is the deny-list of (host, user) pairs; empty = allow-all (dev/test).
 	Deny []denyRule `json:"deny"`
 }
 
-// denyRule — одна запись deny-list. Пустое поле = wildcard по этому измерению.
-// Семантика идентична soul-ssh-vault / soul-ssh-static.
+// denyRule is one deny-list entry. An empty field is a wildcard for that
+// dimension. Semantics match soul-ssh-vault / soul-ssh-static.
 type denyRule struct {
 	Host string `json:"host"`
 	User string `json:"user"`
@@ -52,77 +52,78 @@ func (r denyRule) matches(host, user string) bool {
 	return (r.Host == "" || r.Host == host) && (r.User == "" || r.User == user)
 }
 
-// loadParams читает и валидирует params из env. fail-closed: невалидный JSON,
-// отсутствие proxy_addr, отсутствие источника credentials (identity_file и
-// tbot_socket оба пусты) → ошибка, плагин не стартует.
+// loadParams reads and validates params from env. Fail-closed: invalid JSON,
+// missing proxy_addr, or missing credentials source (both identity_file and
+// tbot_socket empty) returns an error and the plugin does not start.
 func loadParams() (params, error) {
 	raw := os.Getenv(paramsEnv)
 	if raw == "" {
-		return params{}, fmt.Errorf("env %s пуст: teleport-провайдеру нужны params", paramsEnv)
+		return params{}, fmt.Errorf("env %s is empty: teleport provider requires params", paramsEnv)
 	}
 	var p params
 	if err := json.Unmarshal([]byte(raw), &p); err != nil {
-		return params{}, fmt.Errorf("разбор %s: %w", paramsEnv, err)
+		return params{}, fmt.Errorf("parse %s: %w", paramsEnv, err)
 	}
 	if p.ProxyAddr == "" {
-		return params{}, errors.New("proxy_addr обязателен (Teleport proxy host:port)")
+		return params{}, errors.New("proxy_addr is required (Teleport proxy host:port)")
 	}
 	if p.IdentityFile == "" && p.TbotSocket == "" {
-		return params{}, errors.New("нужен источник credentials: identity_file или tbot_socket")
+		return params{}, errors.New("credentials source required: identity_file or tbot_socket")
 	}
 	if p.IdentityFile != "" && p.TbotSocket != "" {
-		return params{}, errors.New("identity_file и tbot_socket взаимоисключающи (oneOf)")
+		return params{}, errors.New("identity_file and tbot_socket are mutually exclusive (oneOf)")
 	}
 	return p, nil
 }
 
-// TeleportProvider — SshProvider поверх Teleport Auth API.
+// TeleportProvider is an SshProvider over the Teleport Auth API.
 //
-// Sign: аутентифицируется в Teleport через identity_file/tbot, вызывает
-// GenerateUserCerts на req.PublicKey (Keeper-ephemeral), возвращает только
+// Sign: authenticates to Teleport through identity_file/tbot, calls
+// GenerateUserCerts on req.PublicKey (Keeper-ephemeral), returns only
 // certificate (private_key="") + proxy_jump=<proxy_addr>. Authorize: deny-list,
-// по умолчанию allow-all.
+// defaults to allow-all.
 type TeleportProvider struct {
 	sshprovider.BaseProvider
 	cfg params
-	// newClient — фабрика Teleport-клиента (внедряется для unit-тестов).
-	// nil → defaultClient.
+	// newClient is the Teleport-client factory (injected for unit tests).
+	// nil -> defaultClient.
 	newClient func(ctx context.Context, p params) (teleportClient, error)
 }
 
-// teleportClient — узкий интерфейс над Teleport Auth API: только то, чем
-// пользуется TeleportProvider. Держит unit-тесты простыми (mock без полного
-// SDK) и сужает поверхность зависимости — production-реализация в одном месте.
+// teleportClient is a narrow interface over Teleport Auth API: only what
+// TeleportProvider uses. It keeps unit tests simple (mock without the full SDK)
+// and narrows the dependency surface - production implementation lives in one
+// place.
 type teleportClient interface {
-	// GenerateUserSSHCert вызывает Teleport `GenerateUserCerts` с заданным
-	// public_key и принципалом. Возвращает PEM/openssh-encoded SSH user
-	// certificate (поле Cert ответа SSH). Не возвращает private_key —
-	// Keeper-ephemeral mode: приватник остаётся у Keeper-а.
+	// GenerateUserSSHCert calls Teleport `GenerateUserCerts` with the given
+	// public_key and principal. It returns PEM/openssh-encoded SSH user
+	// certificate (Cert field of the SSH response). It does not return private_key
+	// - Keeper-ephemeral mode keeps the private key with Keeper.
 	GenerateUserSSHCert(ctx context.Context, pubkey, principal string, roles []string) (cert string, err error)
-	// Close освобождает gRPC-коннект в Teleport (best-effort).
+	// Close releases the gRPC connection to Teleport (best-effort).
 	Close() error
 }
 
-// Sign — Keeper-ephemeral режим (PM-decision SSH key-ownership):
+// Sign is Keeper-ephemeral mode (PM-decision SSH key-ownership):
 //
-//   - req.PublicKey должен быть непустым OpenSSH authorized_keys-encoded
-//     pubkey (ephemeral, который Keeper сгенерил per-session). Пустой →
-//     fail-closed (Teleport CA не подписывает «пустой» ключ).
-//   - принципал — req.User (Linux-пользователь на push-хосте); если в
-//     params задан valid_principals — req.User должен в нём быть (локальный
-//     allowlist поверх Teleport-роли).
-//   - reply.private_key = "" — приватник остаётся у Keeper-а.
-//   - reply.proxy_jump = cfg.ProxyAddr — для последующего использования
-//     keeper.push (на момент пилота dispatcher это поле игнорирует, см.
-//     docstring пакета и docs/keeper/plugins.md).
+//   - req.PublicKey must be a non-empty OpenSSH authorized_keys-encoded pubkey
+//     (ephemeral key generated by Keeper per session). Empty -> fail-closed
+//     (Teleport CA does not sign an "empty" key).
+//   - principal is req.User (Linux user on the push host); if valid_principals is
+//     set in params, req.User must be included (local allowlist over the Teleport
+//     role).
+//   - reply.private_key = "" - the private key stays with Keeper.
+//   - reply.proxy_jump = cfg.ProxyAddr - for later keeper.push use (during the
+//     pilot, dispatcher ignores this field; see the package docstring and
+//     docs/keeper/plugins.md).
 func (t *TeleportProvider) Sign(ctx context.Context, req *pluginv1.SignRequest) (*pluginv1.SignReply, error) {
 	if req.GetPublicKey() == "" {
 		return nil, sshprovider.SignError(sshprovider.SignFailIssue,
-			errors.New("public_key пуст: Teleport работает только в Keeper-ephemeral режиме"))
+			errors.New("public_key is empty: Teleport works only in Keeper-ephemeral mode"))
 	}
 	if len(t.cfg.ValidPrincipals) > 0 && !contains(t.cfg.ValidPrincipals, req.GetUser()) {
 		return nil, sshprovider.SignError(sshprovider.SignFailIssue,
-			fmt.Errorf("user %q не в valid_principals", req.GetUser()))
+			fmt.Errorf("user %q is not in valid_principals", req.GetUser()))
 	}
 
 	newClient := t.newClient
@@ -143,23 +144,23 @@ func (t *TeleportProvider) Sign(ctx context.Context, req *pluginv1.SignRequest) 
 	}
 	if signed == "" {
 		return nil, sshprovider.SignError(sshprovider.SignFailIssue,
-			errors.New("teleport вернул пустой ssh-cert"))
+			errors.New("teleport returned empty ssh-cert"))
 	}
 
 	return &pluginv1.SignReply{
 		Certificate: signed,
 		PrivateKey:  "",
-		// Teleport-cert TTL приходит от Auth-роли; keeper.push сейчас не
-		// планирует refresh (одноразовый cert на сессию), 0 = «без refresh».
+		// Teleport-cert TTL comes from the Auth role; keeper.push currently does
+		// not schedule refresh (one-shot cert per session), 0 = "no refresh".
 		TtlSeconds: 0,
 		ProxyJump:  t.cfg.ProxyAddr,
 	}, nil
 }
 
-// Authorize — deny-list. Пустой deny → allow-all (dev/test). Симметрично
-// soul-ssh-vault / soul-ssh-static: тираж SshProvider использует общий
-// словарь reason-кодов из sdk/sshprovider для агрегации причин отказа в audit
-// Keeper-а.
+// Authorize applies the deny-list. Empty deny -> allow-all (dev/test).
+// Symmetrical with soul-ssh-vault / soul-ssh-static: the SshProvider rollout
+// uses the shared reason-code dictionary from sdk/sshprovider to aggregate
+// denial reasons in Keeper audit.
 func (t *TeleportProvider) Authorize(_ context.Context, req *pluginv1.AuthorizeRequest) (*pluginv1.AuthorizeReply, error) {
 	for _, rule := range t.cfg.Deny {
 		if rule.matches(req.GetHost(), req.GetUser()) {

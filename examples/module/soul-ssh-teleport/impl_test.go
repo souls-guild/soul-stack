@@ -13,10 +13,10 @@ import (
 
 // --- mock Teleport client ---
 
-// mockTeleportClient — узкий mock teleportClient: подменяет поведение
-// GenerateUserSSHCert/Close, фиксирует, как был вызван Sign (pubkey/principal/roles).
-// Симметрично vault/realClientForMock: тесту нужны только наблюдаемые точки
-// контракта, не реальный Teleport API.
+// mockTeleportClient is a narrow teleportClient mock: it overrides
+// GenerateUserSSHCert/Close behavior and records how Sign was called
+// (pubkey/principal/roles). Symmetrical with vault/realClientForMock: the test
+// needs only observable contract points, not the real Teleport API.
 type mockTeleportClient struct {
 	signedCert   string
 	signErr      error
@@ -41,10 +41,10 @@ func (m *mockTeleportClient) Close() error {
 	return nil
 }
 
-// mockFactory строит фабрику, возвращающую заранее подготовленный mock-клиент
-// (или ошибку, если factoryErr != nil). Позволяет покрыть identity-file-fail
-// (фабрика не смогла собрать клиент) и auth-error (фабрика ок, но
-// GenerateUserSSHCert упал) разными путями.
+// mockFactory builds a factory that returns a preconfigured mock client (or an
+// error if factoryErr != nil). This covers identity-file-fail (factory could not
+// build a client) and auth-error (factory ok, but GenerateUserSSHCert failed) as
+// separate paths.
 func mockFactory(client *mockTeleportClient, factoryErr error) func(context.Context, params) (teleportClient, error) {
 	return func(_ context.Context, _ params) (teleportClient, error) {
 		if factoryErr != nil {
@@ -76,26 +76,26 @@ func TestSign_HappyPath_KeeperEphemeral(t *testing.T) {
 		t.Fatalf("Sign: %v", err)
 	}
 	if reply.GetCertificate() != mock.signedCert {
-		t.Errorf("certificate не совпал: got %q want %q", reply.GetCertificate(), mock.signedCert)
+		t.Errorf("certificate did not match: got %q want %q", reply.GetCertificate(), mock.signedCert)
 	}
 	if reply.GetPrivateKey() != "" {
-		t.Errorf("private_key должен быть пустым в Teleport flow, got %q", reply.GetPrivateKey())
+		t.Errorf("private_key must be empty in Teleport flow, got %q", reply.GetPrivateKey())
 	}
 	if reply.GetProxyJump() != p.ProxyAddr {
-		t.Errorf("proxy_jump=%q, ждали %q (cfg.ProxyAddr)", reply.GetProxyJump(), p.ProxyAddr)
+		t.Errorf("proxy_jump=%q, expected %q (cfg.ProxyAddr)", reply.GetProxyJump(), p.ProxyAddr)
 	}
 	if mock.gotPubkey != "ssh-ed25519 AAAAtest" {
-		t.Errorf("Teleport не получил pubkey: %q", mock.gotPubkey)
+		t.Errorf("Teleport did not receive pubkey: %q", mock.gotPubkey)
 	}
 	if mock.gotPrincipal != "soul" {
-		t.Errorf("Teleport не получил principal=soul: %q", mock.gotPrincipal)
+		t.Errorf("Teleport did not receive principal=soul: %q", mock.gotPrincipal)
 	}
 	if !mock.closed.Load() {
-		t.Error("Teleport-клиент должен закрываться после Sign (defer Close)")
+		t.Error("Teleport client must be closed after Sign (defer Close)")
 	}
 }
 
-// --- Sign fail-closed: пустая pubkey ---
+// --- Sign fail-closed: empty pubkey ---
 
 func TestSign_RejectsEmptyPublicKey(t *testing.T) {
 	tp := &TeleportProvider{cfg: params{
@@ -103,14 +103,14 @@ func TestSign_RejectsEmptyPublicKey(t *testing.T) {
 	}}
 	_, err := tp.Sign(context.Background(), &pluginv1.SignRequest{Host: "h", User: "u", PublicKey: ""})
 	if err == nil {
-		t.Fatal("ждали ошибку на пустой public_key (Teleport = Keeper-ephemeral)")
+		t.Fatal("expected error for empty public_key (Teleport = Keeper-ephemeral)")
 	}
 	if !strings.HasPrefix(err.Error(), string(sshprovider.SignFailIssue)+": ") {
-		t.Errorf("reason=%q, ждали префикс %q", err.Error(), sshprovider.SignFailIssue)
+		t.Errorf("reason=%q, expected prefix %q", err.Error(), sshprovider.SignFailIssue)
 	}
 }
 
-// --- Sign fail: identity-file/auth fail на фабрике (factoryErr) ---
+// --- Sign fail: identity-file/auth fail in factory (factoryErr) ---
 
 func TestSign_IdentityFileFail(t *testing.T) {
 	tp := &TeleportProvider{
@@ -119,17 +119,17 @@ func TestSign_IdentityFileFail(t *testing.T) {
 	}
 	_, err := tp.Sign(context.Background(), &pluginv1.SignRequest{Host: "h", User: "u", PublicKey: "ssh-ed25519 AAAA"})
 	if err == nil {
-		t.Fatal("ждали ошибку при недоступной identity-file")
+		t.Fatal("expected error for unavailable identity-file")
 	}
 	if !strings.HasPrefix(err.Error(), string(sshprovider.SignFailIssue)+": ") {
-		t.Errorf("reason=%q, ждали префикс %q", err.Error(), sshprovider.SignFailIssue)
+		t.Errorf("reason=%q, expected prefix %q", err.Error(), sshprovider.SignFailIssue)
 	}
 	if !strings.Contains(err.Error(), "identity-file") {
-		t.Errorf("err=%q, ждали обёрнутый текст factory-ошибки", err.Error())
+		t.Errorf("err=%q, expected wrapped factory error text", err.Error())
 	}
 }
 
-// --- Sign fail: Teleport вернул ошибку из GenerateUserCerts ---
+// --- Sign fail: Teleport returned an error from GenerateUserCerts ---
 
 func TestSign_AuthError(t *testing.T) {
 	mock := &mockTeleportClient{signErr: errors.New("auth: access denied for role node-admin")}
@@ -139,17 +139,17 @@ func TestSign_AuthError(t *testing.T) {
 	}
 	_, err := tp.Sign(context.Background(), &pluginv1.SignRequest{Host: "h", User: "u", PublicKey: "ssh-ed25519 AAAA"})
 	if err == nil {
-		t.Fatal("ждали ошибку, когда Teleport вернул auth-fail")
+		t.Fatal("expected error when Teleport returned auth-fail")
 	}
 	if !strings.HasPrefix(err.Error(), string(sshprovider.SignFailIssue)+": ") {
-		t.Errorf("reason=%q, ждали префикс %q", err.Error(), sshprovider.SignFailIssue)
+		t.Errorf("reason=%q, expected prefix %q", err.Error(), sshprovider.SignFailIssue)
 	}
 	if !mock.closed.Load() {
-		t.Error("клиент должен закрываться даже при fail на GenerateUserCerts (defer Close)")
+		t.Error("client must be closed even on GenerateUserCerts failure (defer Close)")
 	}
 }
 
-// --- Sign fail: пустой signed-cert от Teleport ---
+// --- Sign fail: empty signed-cert from Teleport ---
 
 func TestSign_EmptySignedCert(t *testing.T) {
 	mock := &mockTeleportClient{signedCert: ""}
@@ -159,31 +159,31 @@ func TestSign_EmptySignedCert(t *testing.T) {
 	}
 	_, err := tp.Sign(context.Background(), &pluginv1.SignRequest{Host: "h", User: "u", PublicKey: "ssh-ed25519 AAAA"})
 	if err == nil {
-		t.Fatal("ждали ошибку при пустом ssh-cert от Teleport")
+		t.Fatal("expected error for empty ssh-cert from Teleport")
 	}
 	if !strings.HasPrefix(err.Error(), string(sshprovider.SignFailIssue)+": ") {
-		t.Errorf("reason=%q, ждали префикс %q", err.Error(), sshprovider.SignFailIssue)
+		t.Errorf("reason=%q, expected prefix %q", err.Error(), sshprovider.SignFailIssue)
 	}
 }
 
-// --- Sign fail: user вне valid_principals ---
+// --- Sign fail: user outside valid_principals ---
 
 func TestSign_PrincipalAllowlistRejects(t *testing.T) {
 	tp := &TeleportProvider{cfg: params{
 		ProxyAddr: "p:3023", IdentityFile: "/x",
 		ValidPrincipals: []string{"soul", "deploy"},
 	}}
-	// root не в allowlist → fail без обращения в Teleport.
+	// root is not in allowlist -> fail without calling Teleport.
 	_, err := tp.Sign(context.Background(), &pluginv1.SignRequest{Host: "h", User: "root", PublicKey: "ssh-ed25519 AAAA"})
 	if err == nil {
-		t.Fatal("ждали отказ для user не в valid_principals")
+		t.Fatal("expected rejection for user outside valid_principals")
 	}
 	if !strings.Contains(err.Error(), "valid_principals") {
-		t.Errorf("err=%q, ждали упоминание valid_principals", err.Error())
+		t.Errorf("err=%q, expected valid_principals mention", err.Error())
 	}
 }
 
-// --- Sign: proxy_jump в reply (отдельный явный тест) ---
+// --- Sign: proxy_jump in reply (separate explicit test) ---
 
 func TestSign_ProxyJumpEchoedInReply(t *testing.T) {
 	const expectedProxy = "teleport.example.com:3023"
@@ -197,7 +197,7 @@ func TestSign_ProxyJumpEchoedInReply(t *testing.T) {
 		t.Fatalf("Sign: %v", err)
 	}
 	if reply.GetProxyJump() != expectedProxy {
-		t.Errorf("proxy_jump=%q, ждали %q", reply.GetProxyJump(), expectedProxy)
+		t.Errorf("proxy_jump=%q, expected %q", reply.GetProxyJump(), expectedProxy)
 	}
 }
 
@@ -210,7 +210,7 @@ func TestAuthorize_AllowByDefault(t *testing.T) {
 		t.Fatalf("Authorize: %v", err)
 	}
 	if !r.GetAllowed() {
-		t.Error("ждали allow при пустом deny-list")
+		t.Error("expected allow with empty deny-list")
 	}
 }
 
@@ -221,15 +221,15 @@ func TestAuthorize_DenyExplicit(t *testing.T) {
 		t.Fatalf("Authorize: %v", err)
 	}
 	if r.GetAllowed() {
-		t.Fatal("ждали deny для пары из deny-list")
+		t.Fatal("expected deny for deny-list pair")
 	}
 	if !strings.HasPrefix(r.GetReason(), string(sshprovider.DenyExplicitDeny)) {
-		t.Errorf("reason=%q, ждали префикс %q", r.GetReason(), sshprovider.DenyExplicitDeny)
+		t.Errorf("reason=%q, expected prefix %q", r.GetReason(), sshprovider.DenyExplicitDeny)
 	}
 }
 
 func TestAuthorize_DenyWildcard(t *testing.T) {
-	// host:"" → wildcard: root запрещён везде (симметрично vault/static).
+	// host:"" -> wildcard: root is denied everywhere (symmetrical with vault/static).
 	tp := &TeleportProvider{cfg: params{Deny: []denyRule{{User: "root"}}}}
 	for _, host := range []string{"web-1", "db-2"} {
 		r, err := tp.Authorize(context.Background(), &pluginv1.AuthorizeRequest{Host: host, User: "root"})
@@ -237,7 +237,7 @@ func TestAuthorize_DenyWildcard(t *testing.T) {
 			t.Fatalf("Authorize: %v", err)
 		}
 		if r.GetAllowed() {
-			t.Errorf("ждали deny root на %s", host)
+			t.Errorf("expected deny for root on %s", host)
 		}
 	}
 }
@@ -268,31 +268,31 @@ func TestLoadParams(t *testing.T) {
 	t.Run("empty env fail-closed", func(t *testing.T) {
 		t.Setenv(paramsEnv, "")
 		if _, err := loadParams(); err == nil {
-			t.Error("ждали ошибку на пустой env")
+			t.Error("expected error for empty env")
 		}
 	})
 	t.Run("missing proxy_addr", func(t *testing.T) {
 		t.Setenv(paramsEnv, `{"identity_file":"/x"}`)
 		if _, err := loadParams(); err == nil {
-			t.Error("ждали ошибку без proxy_addr")
+			t.Error("expected error without proxy_addr")
 		}
 	})
 	t.Run("missing credentials source", func(t *testing.T) {
 		t.Setenv(paramsEnv, `{"proxy_addr":"p:3023"}`)
 		if _, err := loadParams(); err == nil {
-			t.Error("ждали ошибку без identity_file/tbot_socket")
+			t.Error("expected error without identity_file/tbot_socket")
 		}
 	})
 	t.Run("both identity_file and tbot_socket", func(t *testing.T) {
 		t.Setenv(paramsEnv, `{"proxy_addr":"p:3023","identity_file":"/x","tbot_socket":"/y"}`)
 		if _, err := loadParams(); err == nil {
-			t.Error("ждали ошибку: identity_file и tbot_socket взаимоисключающи")
+			t.Error("expected error: identity_file and tbot_socket are mutually exclusive")
 		}
 	})
 	t.Run("bad json", func(t *testing.T) {
 		t.Setenv(paramsEnv, `{not json`)
 		if _, err := loadParams(); err == nil {
-			t.Error("ждали ошибку на битый JSON")
+			t.Error("expected error for bad JSON")
 		}
 	})
 }

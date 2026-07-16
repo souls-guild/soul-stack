@@ -13,12 +13,12 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// L1 — provider-as-plugin через РЕАЛЬНЫЙ gRPC server+client. Симметрично
-// soul-ssh-vault/plugin_l1_test.go: проверка, что TeleportProvider корректно
-// работает по proto-контракту SshProvider поверх настоящего gRPC-стрима, а не
-// in-proc вызова метода. Handshake-spawn под Sigil-gate покрыт на host-стороне
-// (общий pluginhost); здесь — RPC-контракт самого провайдера, включая
-// round-trip нового only-add поля SignReply.proxy_jump.
+// L1 is provider-as-plugin through a REAL gRPC server+client. Symmetrical with
+// soul-ssh-vault/plugin_l1_test.go: verifies that TeleportProvider correctly
+// works through the SshProvider proto contract over a real gRPC stream, not an
+// in-proc method call. Handshake-spawn under Sigil-gate is covered on the host
+// side (shared pluginhost); here we cover the provider RPC contract itself,
+// including round-trip of the new only-add field SignReply.proxy_jump.
 
 func serveProviderGRPC(t *testing.T, impl *TeleportProvider) (pluginv1.SshProviderClient, func()) {
 	t.Helper()
@@ -40,8 +40,8 @@ func serveProviderGRPC(t *testing.T, impl *TeleportProvider) (pluginv1.SshProvid
 	}
 }
 
-// l1Adapter — мост impl→SshProviderServer (embed Unimplemented для forward-compat),
-// идентичный sdk/sshprovider.serverAdapter (тот неэкспортирован).
+// l1Adapter bridges impl -> SshProviderServer (embedding Unimplemented for
+// forward compatibility), matching sdk/sshprovider.serverAdapter (not exported).
 type l1Adapter struct {
 	pluginv1.UnimplementedSshProviderServer
 	impl *TeleportProvider
@@ -78,17 +78,17 @@ func TestL1_SignOverGRPC_WithProxyJump(t *testing.T) {
 		t.Fatalf("Sign rpc: %v", err)
 	}
 	if reply.GetCertificate() != expectedCert {
-		t.Errorf("certificate изменился при marshaling по gRPC: got %q", reply.GetCertificate())
+		t.Errorf("certificate changed during gRPC marshaling: got %q", reply.GetCertificate())
 	}
 	if reply.GetPrivateKey() != "" {
-		t.Errorf("private_key должен быть пустым в Teleport flow, got %q", reply.GetPrivateKey())
+		t.Errorf("private_key must be empty in Teleport flow, got %q", reply.GetPrivateKey())
 	}
-	// Главный round-trip check для only-add поля proto.
+	// Main round-trip check for the only-add proto field.
 	if reply.GetProxyJump() != expectedProxy {
 		t.Errorf("proxy_jump round-trip: got %q want %q", reply.GetProxyJump(), expectedProxy)
 	}
 	if mock.gotPubkey != "ssh-ed25519 AAAA-test-pub" {
-		t.Errorf("Teleport не получил pubkey через gRPC: %q", mock.gotPubkey)
+		t.Errorf("Teleport did not receive pubkey over gRPC: %q", mock.gotPubkey)
 	}
 }
 
@@ -106,10 +106,10 @@ func TestL1_AuthorizeDenyOverGRPC(t *testing.T) {
 		t.Fatalf("Authorize rpc: %v", err)
 	}
 	if deny.GetAllowed() {
-		t.Fatal("ждали deny по gRPC")
+		t.Fatal("expected deny over gRPC")
 	}
 	if !strings.HasPrefix(deny.GetReason(), string(sshprovider.DenyExplicitDeny)) {
-		t.Errorf("reason=%q, ждали %q-префикс", deny.GetReason(), sshprovider.DenyExplicitDeny)
+		t.Errorf("reason=%q, expected %q prefix", deny.GetReason(), sshprovider.DenyExplicitDeny)
 	}
 
 	allow, err := client.Authorize(ctx, &pluginv1.AuthorizeRequest{Host: "prod-1", User: "soul"})
@@ -117,7 +117,7 @@ func TestL1_AuthorizeDenyOverGRPC(t *testing.T) {
 		t.Fatalf("Authorize rpc: %v", err)
 	}
 	if !allow.GetAllowed() {
-		t.Errorf("ждали allow для user вне deny-list")
+		t.Errorf("expected allow for user outside deny-list")
 	}
 }
 
@@ -132,6 +132,6 @@ func TestL1_SignRejectsEmptyPubkeyOverGRPC(t *testing.T) {
 
 	_, err := client.Sign(ctx, &pluginv1.SignRequest{Host: "h", User: "u", PublicKey: ""})
 	if err == nil {
-		t.Fatal("ждали ошибку на пустой public_key через gRPC (Teleport = Keeper-ephemeral)")
+		t.Fatal("expected error for empty public_key over gRPC (Teleport = Keeper-ephemeral)")
 	}
 }
