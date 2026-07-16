@@ -35,7 +35,7 @@ func (k staticKV) ReadKV(_ context.Context, _ string) (map[string]any, error) {
 	return k.data, nil
 }
 
-// --- ValidateConfig по всем типам -------------------------------------
+// --- ValidateConfig for all types -------------------------------------
 
 func TestValidateConfig_AllTypes(t *testing.T) {
 	const ref = "vault:secret/keeper/x#f"
@@ -84,7 +84,7 @@ func TestValidateConfig_AllTypes(t *testing.T) {
 		{"email to not-strings", HeraldEmail, map[string]any{"smtp_host": "smtp.example.com", "smtp_port": float64(587), "from": "a@x", "to": []any{42}}, true},
 		{"email password plaintext", HeraldEmail, map[string]any{"smtp_host": "smtp.example.com", "smtp_port": float64(587), "from": "a@x", "to": []any{"b@y"}, "password_ref": "s3cr3t"}, true},
 		{"email bad tls_mode", HeraldEmail, map[string]any{"smtp_host": "smtp.example.com", "smtp_port": float64(587), "from": "a@x", "to": []any{"b@y"}, "tls_mode": "ssl"}, true},
-		// неизвестный тип
+		// unknown type
 		{"pagerduty unknown", HeraldType("pagerduty"), map[string]any{"url": "https://x/y"}, true},
 	}
 	for _, tc := range cases {
@@ -97,11 +97,11 @@ func TestValidateConfig_AllTypes(t *testing.T) {
 	}
 }
 
-// --- secret-разводка: secret_ref только webhook ------------------------
+// --- secret wiring: secret_ref only for webhook ------------------------
 
 func TestValidateSecretRef_TypeAware(t *testing.T) {
 	const ref = "vault:secret/keeper/sign"
-	// webhook: nil ок, валидный vault-ref ок, plaintext — ошибка.
+	// webhook: nil is ok, valid vault-ref is ok, plaintext is an error.
 	if err := ValidateSecretRef(HeraldWebhook, nil); err != nil {
 		t.Errorf("webhook nil secret_ref must be ok: %v", err)
 	}
@@ -111,8 +111,8 @@ func TestValidateSecretRef_TypeAware(t *testing.T) {
 	if err := ValidateSecretRef(HeraldWebhook, strptr("plain")); err == nil {
 		t.Error("webhook plaintext secret_ref must error")
 	}
-	// не-webhook типы: непустой secret_ref запрещён (даже валидный vault-ref);
-	// nil ок.
+	// non-webhook types: non-empty secret_ref is forbidden (even valid vault-ref);
+	// nil is ok.
 	for _, ty := range []HeraldType{HeraldTelegram, HeraldSlack, HeraldMattermost, HeraldDiscord, HeraldCustom, HeraldEmail} {
 		if err := ValidateSecretRef(ty, strptr(ref)); err == nil {
 			t.Errorf("%s: non-empty secret_ref must error (secret_ref is webhook-only)", ty)
@@ -123,7 +123,7 @@ func TestValidateSecretRef_TypeAware(t *testing.T) {
 	}
 }
 
-// --- resolveDelivery: сборка URL/тела с мок-KV, БЕЗ сети ---------------
+// --- resolveDelivery: URL/body assembly with mock KV, no network --------
 
 func telegramJob() *DeliveryJob {
 	return &DeliveryJob{
@@ -223,10 +223,10 @@ func TestResolveDelivery_Discord(t *testing.T) {
 	}
 }
 
-// TestResolveDelivery_DiscordTruncates — content Discord обрезается до 2000 рун.
+// TestResolveDelivery_DiscordTruncates checks Discord content is truncated to 2000 runes.
 func TestResolveDelivery_DiscordTruncates(t *testing.T) {
 	kv := staticKV{data: map[string]any{"url": "https://discord.com/api/webhooks/1/abc"}}
-	// Раздуваем payload огромной строкой → messageText > 2000 символов.
+	// Inflate payload with a huge string so messageText exceeds 2000 characters.
 	huge := strings.Repeat("x", 5000)
 	job := &DeliveryJob{EventType: audit.EventScenarioRunFailed, Herald: "ch", Tiding: "t", PayloadCopy: map[string]any{"blob": huge}}
 	h := &Herald{Name: "ch", Type: HeraldDiscord, Enabled: true, Config: map[string]any{"webhook_url_ref": "vault:secret/keeper/dc#url"}}
@@ -259,8 +259,8 @@ func TestResolveDelivery_Custom(t *testing.T) {
 	if hd.method != "PUT" {
 		t.Errorf("method = %q, want PUT", hd.method)
 	}
-	// Фиксированное тело — webhookPayload (event_type + payload), НЕ произвольный
-	// шаблон.
+	// Fixed body is webhookPayload (event_type + payload), NOT arbitrary
+	// template.
 	var wp webhookPayload
 	if err := json.Unmarshal(hd.body, &wp); err != nil {
 		t.Fatalf("custom body must be webhookPayload JSON: %v", err)
@@ -268,7 +268,7 @@ func TestResolveDelivery_Custom(t *testing.T) {
 	if wp.EventType != "scenario_run.failed" {
 		t.Errorf("custom body event_type = %q", wp.EventType)
 	}
-	// header_secret_ref → Authorization из Vault; статические заголовки сохранены.
+	// header_secret_ref -> Authorization from Vault; static headers are preserved.
 	if hd.headers["Authorization"] != "Bearer secret-xyz" {
 		t.Errorf("Authorization = %q, want resolved secret", hd.headers["Authorization"])
 	}
@@ -277,7 +277,7 @@ func TestResolveDelivery_Custom(t *testing.T) {
 	}
 }
 
-// TestResolveDelivery_CustomDefaultMethod — метод по умолчанию POST.
+// TestResolveDelivery_CustomDefaultMethod checks default method is POST.
 func TestResolveDelivery_CustomDefaultMethod(t *testing.T) {
 	h := &Herald{Name: "ch", Type: HeraldCustom, Enabled: true, Config: map[string]any{"url": "https://ci.example/hook"}}
 	hd, err := resolveDelivery(context.Background(), h, telegramJob(), staticKV{})
@@ -289,7 +289,7 @@ func TestResolveDelivery_CustomDefaultMethod(t *testing.T) {
 	}
 }
 
-// --- webhook-регресс: подпись + флаги бит-в-бит ------------------------
+// --- webhook regression: signature + flags bit-for-bit ------------------
 
 func TestResolveDelivery_WebhookSigned(t *testing.T) {
 	kv := staticKV{data: map[string]any{"key": "topsecret"}}
@@ -306,7 +306,7 @@ func TestResolveDelivery_WebhookSigned(t *testing.T) {
 	if hd.signingKey == nil {
 		t.Error("webhook with secret_ref must carry signingKey")
 	}
-	// Подпись строится в buildHTTPRequest — проверяем детерминированность заголовка.
+	// Signature is built in buildHTTPRequest; verify header determinism.
 	req, err := buildHTTPRequest(context.Background(), hd)
 	if err != nil {
 		t.Fatalf("buildHTTPRequest: %v", err)
@@ -316,7 +316,7 @@ func TestResolveDelivery_WebhookSigned(t *testing.T) {
 	}
 }
 
-// --- SSRF-инвариант: URL каждого HTTP-типа проходит единый guard -------
+// --- SSRF invariant: every HTTP type URL goes through one guard ----------
 
 func TestHTTPTypes_PassSSRFGuard(t *testing.T) {
 	cases := []struct {
@@ -342,8 +342,8 @@ func TestHTTPTypes_PassSSRFGuard(t *testing.T) {
 	}
 }
 
-// TestCustom_SSRFGuardRejectsPrivate — SSRF-guard режет приватный custom-URL,
-// прошедший резолв (config мог измениться после create). Единая точка контроля.
+// TestCustom_SSRFGuardRejectsPrivate checks SSRF guard rejects private custom URL
+// after resolution (config may change after create). Single control point.
 func TestCustom_SSRFGuardRejectsPrivate(t *testing.T) {
 	h := &Herald{Name: "c", Type: HeraldCustom, Enabled: true, Config: map[string]any{"url": "https://169.254.169.254/latest"}}
 	hd, err := resolveDelivery(context.Background(), h, telegramJob(), staticKV{})
@@ -355,10 +355,10 @@ func TestCustom_SSRFGuardRejectsPrivate(t *testing.T) {
 	}
 }
 
-// --- секрет не в тексте ошибок -----------------------------------------
+// --- secret is not in error text ----------------------------------------
 
 func TestResolveDelivery_SecretNotInError(t *testing.T) {
-	// Vault-сбой при резолве секрет-поля → ошибка transient, без утечки ref/секрета.
+	// Vault failure while resolving secret field -> transient error, no ref/secret leak.
 	kv := staticKV{err: errors.New("vault down")}
 	cases := []*Herald{
 		{Name: "c", Type: HeraldTelegram, Enabled: true, Config: map[string]any{"bot_token_ref": "vault:secret/keeper/tg#bot_token", "chat_id": "@o"}},
@@ -378,14 +378,14 @@ func TestResolveDelivery_SecretNotInError(t *testing.T) {
 	}
 }
 
-// TestResolveDelivery_MissingConfigTerminal — отсутствие обязательного поля в
-// резолве (config изменён после create) → terminal-no-retry для всех типов.
+// TestResolveDelivery_MissingConfigTerminal checks missing required field during
+// resolve (config changed after create) -> terminal-no-retry for all types.
 func TestResolveDelivery_MissingConfigTerminal(t *testing.T) {
 	cases := []*Herald{
-		{Name: "c", Type: HeraldTelegram, Enabled: true, Config: map[string]any{"chat_id": "@o"}}, // нет token
-		{Name: "c", Type: HeraldSlack, Enabled: true, Config: map[string]any{}},                   // нет url_ref
-		{Name: "c", Type: HeraldDiscord, Enabled: true, Config: map[string]any{}},                 // нет url_ref
-		{Name: "c", Type: HeraldCustom, Enabled: true, Config: map[string]any{"method": "POST"}},  // нет url
+		{Name: "c", Type: HeraldTelegram, Enabled: true, Config: map[string]any{"chat_id": "@o"}}, // no token
+		{Name: "c", Type: HeraldSlack, Enabled: true, Config: map[string]any{}},                   // no url_ref
+		{Name: "c", Type: HeraldDiscord, Enabled: true, Config: map[string]any{}},                 // no url_ref
+		{Name: "c", Type: HeraldCustom, Enabled: true, Config: map[string]any{"method": "POST"}},  // no url
 	}
 	for _, h := range cases {
 		t.Run(string(h.Type), func(t *testing.T) {
@@ -408,7 +408,7 @@ func TestDriverFor(t *testing.T) {
 			t.Errorf("%s must have HTTP driver", ty)
 		}
 	}
-	// email — SMTP-класс, НЕ в channelDrivers.
+	// email is SMTP class, NOT in channelDrivers.
 	if _, ok := driverFor(HeraldEmail); ok {
 		t.Error("email must NOT have HTTP driver (SMTP class)")
 	}
@@ -433,7 +433,7 @@ func TestAllHeraldTypes_SortedComplete(t *testing.T) {
 			t.Errorf("AllHeraldTypes not sorted: %q >= %q", got[i-1], got[i])
 		}
 	}
-	// Каждый тип валиден по ValidHeraldType (единый источник).
+	// Every type is valid by ValidHeraldType (single source).
 	for _, ty := range got {
 		if !ValidHeraldType(ty) {
 			t.Errorf("%s in AllHeraldTypes but not ValidHeraldType", ty)
@@ -441,9 +441,9 @@ func TestAllHeraldTypes_SortedComplete(t *testing.T) {
 	}
 }
 
-// TestAllHeraldTypes_MatchesPGCheck — СВЕРКА дескриптор↔PG-CHECK: набор типов из
-// AllHeraldTypes обязан совпадать со значениями CHECK heralds_type_enum миграции
-// 091 (иначе домен примет тип, который БД отвергнет, или наоборот).
+// TestAllHeraldTypes_MatchesPGCheck reconciles descriptor with PG CHECK: type set from
+// AllHeraldTypes must match CHECK heralds_type_enum values from migration
+// 091 (otherwise domain accepts type rejected by DB, or vice versa).
 func TestAllHeraldTypes_MatchesPGCheck(t *testing.T) {
 	const migPath = "../../migrations/091_extend_heralds_type.up.sql"
 	b, err := os.ReadFile(migPath)
@@ -459,12 +459,12 @@ func TestAllHeraldTypes_MatchesPGCheck(t *testing.T) {
 	sort.Strings(got)
 	sort.Strings(checkTypes)
 	if strings.Join(got, ",") != strings.Join(checkTypes, ",") {
-		t.Fatalf("herald.AllHeraldTypes=%v != CHECK heralds_type_enum=%v — дескриптор и PG-CHECK разошлись", got, checkTypes)
+		t.Fatalf("herald.AllHeraldTypes=%v != CHECK heralds_type_enum=%v: descriptor and PG CHECK diverged", got, checkTypes)
 	}
 }
 
-// parseCheckInValues извлекает значения `IN ('a', 'b')` последнего ADD CONSTRAINT
-// <name> ... CHECK (type IN (...)) из up.sql.
+// parseCheckInValues extracts `IN ('a', 'b')` values of last ADD CONSTRAINT
+// <name> ... CHECK (type IN (...)) from up.sql.
 func parseCheckInValues(t *testing.T, sql, constraintName string) []string {
 	t.Helper()
 	idx := strings.LastIndex(sql, "ADD CONSTRAINT "+constraintName)
@@ -487,7 +487,7 @@ func parseCheckInValues(t *testing.T, sql, constraintName string) []string {
 	return out
 }
 
-// --- fieldsFor: каталог покрывает AllHeraldTypes ----------------------
+// --- fieldsFor: catalog covers AllHeraldTypes ---------------------------
 
 func TestFieldsFor_CoversAllTypes(t *testing.T) {
 	for _, ty := range AllHeraldTypes() {
@@ -499,7 +499,7 @@ func TestFieldsFor_CoversAllTypes(t *testing.T) {
 		if len(fields) == 0 {
 			t.Errorf("%s field descriptor is empty", ty)
 		}
-		// Секрет-поле обязано быть vault_ref (разводка ADR-052 amendment).
+		// Secret field must be vault_ref (ADR-052 amendment wiring).
 		for _, f := range fields {
 			if f.Secret && f.Kind != KindVaultRef {
 				t.Errorf("%s field %q is Secret but Kind=%s (must be vault_ref)", ty, f.Name, f.Kind)
@@ -511,9 +511,9 @@ func TestFieldsFor_CoversAllTypes(t *testing.T) {
 	}
 }
 
-// --- email: SMTP-guard блокирует приватку/metadata --------------------
+// --- email: SMTP guard blocks private/metadata --------------------------
 
-// blockResolver — netguard.Resolver, отдающий фиксированный IP (без DNS).
+// blockResolver is netguard.Resolver returning fixed IP (without DNS).
 type blockResolver struct{ ip string }
 
 func (r blockResolver) LookupIPAddr(_ context.Context, _ string) ([]net.IPAddr, error) {
@@ -528,10 +528,9 @@ func emailHerald(host, tlsMode string) *Herald {
 	return &Herald{Name: "mail", Type: HeraldEmail, Enabled: true, Config: cfg}
 }
 
-// TestDeliverEmail_SSRFBlocksPrivate — email-host, резолвящийся в приватку/
-// metadata, блокируется терминально (email не имеет allow_private opt-out). БЕЗ
-// реального SMTP-dial: резолвер отдаёт заблокированный IP, guard срабатывает
-// раньше сети.
+// TestDeliverEmail_SSRFBlocksPrivate checks email host resolving to private/
+// metadata is terminally blocked (email has no allow_private opt-out). WITHOUT
+// real SMTP dial: resolver returns blocked IP, guard fires before network.
 func TestDeliverEmail_SSRFBlocksPrivate(t *testing.T) {
 	cases := []string{"169.254.169.254", "127.0.0.1", "10.0.0.5", "192.168.1.10"}
 	for _, ip := range cases {
@@ -550,8 +549,8 @@ func TestDeliverEmail_SSRFBlocksPrivate(t *testing.T) {
 	}
 }
 
-// TestDeliverEmail_MissingConfigTerminal — отсутствие обязательного поля в резолве
-// email → terminal-no-retry (config изменён после create).
+// TestDeliverEmail_MissingConfigTerminal checks missing required field during email
+// resolve -> terminal-no-retry (config changed after create).
 func TestDeliverEmail_MissingConfigTerminal(t *testing.T) {
 	h := &Herald{Name: "mail", Type: HeraldEmail, Enabled: true, Config: map[string]any{"smtp_port": float64(587), "from": "a@x", "to": []any{"b@y"}}}
 	err := deliverEmail(context.Background(), h, telegramJob(), staticKV{}, blockResolver{ip: "1.2.3.4"})
@@ -563,9 +562,9 @@ func TestDeliverEmail_MissingConfigTerminal(t *testing.T) {
 	}
 }
 
-// TestDeliverEmail_PasswordVaultFailureTransient — Vault-сбой резолва password_ref
-// → transient (retry), секрет/ref не в тексте ошибки. Резолвер не важен (падаем на
-// KV раньше). Проверяем классификацию до SSRF-резолва.
+// TestDeliverEmail_PasswordVaultFailureTransient checks Vault failure resolving password_ref
+// -> transient (retry), secret/ref not in error text. Resolver does not matter (fail at
+// KV earlier). Verify classification before SSRF resolve.
 func TestDeliverEmail_PasswordVaultFailureTransient(t *testing.T) {
 	h := &Herald{Name: "mail", Type: HeraldEmail, Enabled: true, Config: map[string]any{
 		"smtp_host": "smtp.example.com", "smtp_port": float64(587), "from": "a@x", "to": []any{"b@y"},
@@ -583,8 +582,8 @@ func TestDeliverEmail_PasswordVaultFailureTransient(t *testing.T) {
 	}
 }
 
-// TestBuildEmailMessage_Headers — тело письма несёт From/To/Subject + text,
-// заголовки без CRLF-инъекции.
+// TestBuildEmailMessage_Headers checks email body carries From/To/Subject + text,
+// headers without CRLF injection.
 func TestBuildEmailMessage_Headers(t *testing.T) {
 	target := &emailTarget{from: "a@x", to: []string{"b@y", "c@z"}, tlsMode: emailTLSStartTLS}
 	job := &DeliveryJob{EventType: audit.EventScenarioRunFailed, Tiding: "nightly", PayloadCopy: map[string]any{"voyage_id": "v1"}}
@@ -596,7 +595,7 @@ func TestBuildEmailMessage_Headers(t *testing.T) {
 	}
 }
 
-// --- io: тело resolveDelivery читается однократно (sanity) -------------
+// --- io: resolveDelivery body is read once (sanity) ---------------------
 
 func TestBuildHTTPRequest_BodyReadable(t *testing.T) {
 	hd := &httpDelivery{url: "https://x/y", body: []byte(`{"a":1}`)}

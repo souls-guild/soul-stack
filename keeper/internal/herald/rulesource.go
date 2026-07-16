@@ -5,25 +5,26 @@ import (
 	"fmt"
 )
 
-// PGRuleSource — PG-реализация [RuleSource]: читает ВКЛЮЧЁННЫЕ Tiding-правила
-// для снимка dispatcher-а. Запрос идёт по partial-индексу tidings_enabled_idx
-// (WHERE enabled=true, миграция 071) — выключенные подписки не сканируются.
+// PGRuleSource is the PG implementation of [RuleSource]: it reads enabled Tiding
+// rules for the dispatcher's snapshot. The query uses partial index
+// tidings_enabled_idx (WHERE enabled=true, migration 071), so disabled
+// subscriptions are not scanned.
 //
-// Реюзает узкий [ExecQueryRower] и пакетные хелперы scan/collect из crud.go
-// (тот же пакет): схема колонок и парсинг строки общие с CRUD-слоем.
+// It reuses the narrow [ExecQueryRower] and package scan/collect helpers from
+// crud.go: column layout and row parsing are shared with the CRUD layer.
 type PGRuleSource struct {
 	DB ExecQueryRower
 }
 
-// enabledTidingsSQL — снимок включённых правил. Без OFFSET/LIMIT: набор
-// правил мал (десятки), грузится целиком и кэшируется dispatcher-ом.
-// Сортировка по name для детерминизма (порядок матча/jobs стабилен в логах).
+// enabledTidingsSQL is a snapshot of enabled rules. No OFFSET/LIMIT: the rule set
+// is small (tens), loaded as a whole, and cached by the dispatcher. Sorting by
+// name keeps match/job order deterministic in logs.
 const enabledTidingsSQL = `SELECT ` + tidingColumns + `
 FROM tidings
 WHERE enabled = true
 ORDER BY name ASC`
 
-// EnabledTidings возвращает текущий снимок включённых Tiding-правил.
+// EnabledTidings returns the current snapshot of enabled Tiding rules.
 func (s PGRuleSource) EnabledTidings(ctx context.Context) ([]*Tiding, error) {
 	rows, err := s.DB.Query(ctx, enabledTidingsSQL)
 	if err != nil {

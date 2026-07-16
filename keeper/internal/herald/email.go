@@ -1,14 +1,14 @@
 package herald
 
-// SMTP-ось доставки Herald (ADR-052 amendment): тип email — отдельный класс, НЕ
-// [channelDriver] (нет httpDelivery/HTTP-транспорта). Свой транспорт (net/smtp),
-// свой SSRF-guard (резолв smtp_host → блок приватных IP по [netguard.IsBlockedIP])
-// и своя ветка в [DeliveryWorker.deliver]. Пароль — vault-ref config.password_ref,
-// резолвится из Vault на доставке; в текст ошибок не утекает.
+// SMTP delivery axis for Herald (ADR-052 amendment): email type is a separate class, NOT
+// [channelDriver] (no httpDelivery/HTTP transport). Own transport (net/smtp),
+// own SSRF guard (resolve smtp_host -> block private IPs via [netguard.IsBlockedIP]),
+// and own branch in [DeliveryWorker.deliver]. Password is vault-ref config.password_ref,
+// resolved from Vault on delivery; does not leak into error text.
 //
-// Транспорт — стандартная библиотека net/smtp (без сторонней зависимости): dial
-// вручную (SSRF-guard по резолвнутому IP) → tls_mode (starttls/tls/none) → опц.
-// PLAIN-auth → отправка. Тело — минимальное RFC5322 (From/To/Subject/Date + text).
+// Transport is standard library net/smtp (no third-party dependency): manual dial
+// (SSRF guard by resolved IP) -> tls_mode (starttls/tls/none) -> optional
+// PLAIN auth -> send. Body is minimal RFC5322 (From/To/Subject/Date + text).
 
 import (
 	"context"
@@ -24,34 +24,34 @@ import (
 )
 
 const (
-	// emailTLSStartTLS — STARTTLS-апгрейд открытого соединения (submission 587).
+	// emailTLSStartTLS is STARTTLS upgrade of open connection (submission 587).
 	emailTLSStartTLS = "starttls"
-	// emailTLSImplicit — implicit TLS с первого байта (smtps 465).
+	// emailTLSImplicit is implicit TLS from first byte (smtps 465).
 	emailTLSImplicit = "tls"
-	// emailTLSNone — без TLS (plain; только для доверенного локального relay).
+	// emailTLSNone is without TLS (plain; only for trusted local relay).
 	emailTLSNone = "none"
 
-	// emailDialTimeout — таймаут установления TCP-соединения с SMTP-сервером.
+	// emailDialTimeout is timeout for establishing TCP connection to SMTP server.
 	emailDialTimeout = 10 * time.Second
 )
 
-// emailFields — дескриптор config-полей email для CRUD-валидатора и каталога
-// GET /v1/herald-types (SMTP-ось вне channelDrivers, но каталог единый).
+// emailFields is descriptor of email config fields for CRUD validator and catalog
+// GET /v1/herald-types (SMTP axis outside channelDrivers, but catalog is unified).
 func emailFields() []HeraldFieldSpec {
 	return []HeraldFieldSpec{
-		{Name: "smtp_host", Label: "SMTP-хост", Required: true, Kind: KindString},
-		{Name: "smtp_port", Label: "SMTP-порт", Required: true, Kind: KindInt},
-		{Name: "from", Label: "Адрес отправителя", Required: true, Kind: KindString},
-		{Name: "to", Label: "Получатели", Required: true, Kind: KindListString},
-		{Name: "username", Label: "SMTP-логин", Kind: KindString},
-		{Name: "password_ref", Label: "Vault-ref пароля SMTP", Secret: true, Kind: KindVaultRef},
-		{Name: "tls_mode", Label: "Режим TLS", Kind: KindEnum, EnumValues: []string{"", emailTLSStartTLS, emailTLSImplicit, emailTLSNone}},
+		{Name: "smtp_host", Label: "SMTP host", Required: true, Kind: KindString},
+		{Name: "smtp_port", Label: "SMTP port", Required: true, Kind: KindInt},
+		{Name: "from", Label: "Sender address", Required: true, Kind: KindString},
+		{Name: "to", Label: "Recipients", Required: true, Kind: KindListString},
+		{Name: "username", Label: "SMTP login", Kind: KindString},
+		{Name: "password_ref", Label: "SMTP password Vault ref", Secret: true, Kind: KindVaultRef},
+		{Name: "tls_mode", Label: "TLS mode", Kind: KindEnum, EnumValues: []string{"", emailTLSStartTLS, emailTLSImplicit, emailTLSNone}},
 	}
 }
 
-// validateEmailConfig проверяет config email: форма полей (generic-обход по
-// [emailFields]) + доменный инвариант порта (1..65535). Секрет (password_ref) НЕ
-// читается из Vault на CRUD — держится как vault-ref.
+// validateEmailConfig checks email config: field shape (generic walk by
+// [emailFields]) + domain invariant for port (1..65535). Secret (password_ref) is NOT
+// read from Vault on CRUD; it stays as vault-ref.
 func validateEmailConfig(config map[string]any) error {
 	if err := validateBySpec(HeraldEmail, emailFields(), config); err != nil {
 		return err
@@ -66,7 +66,7 @@ func validateEmailConfig(config map[string]any) error {
 	return nil
 }
 
-// emailTarget — резолвнутые параметры отправки одного письма.
+// emailTarget contains resolved parameters for sending one email.
 type emailTarget struct {
 	host     string
 	port     int
@@ -77,9 +77,9 @@ type emailTarget struct {
 	tlsMode  string
 }
 
-// resolveEmailTarget извлекает параметры отправки из Herald-записи и резолвит
-// пароль (если задан password_ref) из Vault. Отсутствие обязательных полей
-// (config изменён после create) → terminal-no-retry; Vault-сбой пароля →
+// resolveEmailTarget extracts send parameters from Herald row and resolves
+// password (if password_ref is set) from Vault. Missing required fields
+// (config changed after create) -> terminal-no-retry; password Vault failure ->
 // transient (retry).
 func resolveEmailTarget(ctx context.Context, h *Herald, kv KVReader) (*emailTarget, error) {
 	host, ok := configString(h.Config, "smtp_host")
@@ -116,14 +116,14 @@ func resolveEmailTarget(ctx context.Context, h *Herald, kv KVReader) (*emailTarg
 	return t, nil
 }
 
-// deliverEmail отправляет одно письмо (SMTP-ветка [DeliveryWorker.deliver]).
-// SSRF-guard: smtp_host резолвится, ВСЕ IP проверяются на [netguard.IsBlockedIP]
-// (приватка/loopback/metadata блокируются — email не имеет allow_private opt-out).
-// Резолвнутый IP используется для dial (rebind-safe). tls_mode управляет TLS-
-// апгрейдом. Ошибки: terminal-no-retry (битый config/заблокированный IP/невалидный
-// tls_mode) либо transient (dial/TLS/SMTP-сбой — retry).
+// deliverEmail sends one email (SMTP branch of [DeliveryWorker.deliver]).
+// SSRF guard: smtp_host is resolved, ALL IPs are checked with [netguard.IsBlockedIP]
+// (private/loopback/metadata blocked; email has no allow_private opt-out).
+// Resolved IP is used for dial (rebind-safe). tls_mode controls TLS
+// upgrade. Errors: terminal-no-retry (bad config/blocked IP/invalid
+// tls_mode) or transient (dial/TLS/SMTP failure, retry).
 //
-// resolver инжектируется ради тестируемости SSRF-guard-а (в проде —
+// resolver is injected for SSRF guard testability (in prod,
 // [netguard.DefaultResolver]).
 func deliverEmail(ctx context.Context, h *Herald, job *DeliveryJob, kv KVReader, resolver netguard.Resolver) error {
 	target, err := resolveEmailTarget(ctx, h, kv)
@@ -134,9 +134,9 @@ func deliverEmail(ctx context.Context, h *Herald, job *DeliveryJob, kv KVReader,
 		resolver = netguard.DefaultResolver
 	}
 
-	// SSRF-guard: резолвим host, блокируем приватку/metadata по всем A-записям
-	// (один заблокированный IP → отказ целиком, как GuardedDialContext), dial по
-	// проверенному IP (rebind-safe).
+	// SSRF guard: resolve host, block private/metadata on all A records
+	// (one blocked IP -> reject whole target, like GuardedDialContext), dial by
+	// checked IP (rebind-safe).
 	ipAddrs, err := resolver.LookupIPAddr(ctx, target.host)
 	if err != nil {
 		return fmt.Errorf("herald: email resolve %q: %w", target.host, err)
@@ -155,10 +155,10 @@ func deliverEmail(ctx context.Context, h *Herald, job *DeliveryJob, kv KVReader,
 	return sendSMTP(ctx, target, dialAddr, msg)
 }
 
-// sendSMTP выполняет SMTP-обмен по уже-провалидированному адресу dialAddr.
-// tls_mode: implicit TLS (tls) — TLS с первого байта; starttls — открытое
-// соединение + STARTTLS-апгрейд; none — plain. Auth (PLAIN) — только если задан
-// username. ServerName для TLS-верификации — доменное имя host (не dial-IP).
+// sendSMTP performs SMTP exchange using already validated dialAddr.
+// tls_mode: implicit TLS (tls) is TLS from first byte; starttls is open
+// connection + STARTTLS upgrade; none is plain. Auth (PLAIN) only if
+// username is set. ServerName for TLS verification is domain host (not dial-IP).
 func sendSMTP(ctx context.Context, target *emailTarget, dialAddr string, msg []byte) error {
 	dialer := &net.Dialer{Timeout: emailDialTimeout}
 	tlsConf := &tls.Config{ServerName: target.host, MinVersion: tls.VersionTLS12}
@@ -222,10 +222,10 @@ func sendSMTP(ctx context.Context, target *emailTarget, dialAddr string, msg []b
 	return client.Quit()
 }
 
-// buildEmailMessage собирает минимальное RFC5322-письмо: From/To/Subject/Date +
-// text-часть. Subject — сводка события (event_type + tiding); text — та же
-// человекочитаемая сводка, что мессенджеры ([messageText], маскинг/projection
-// уже применены). CRLF-разделители заголовков (RFC5322).
+// buildEmailMessage builds minimal RFC5322 email: From/To/Subject/Date +
+// text part. Subject is event summary (event_type + tiding); text is same
+// human-readable summary as messengers ([messageText], masking/projection
+// already applied). Header separators are CRLF (RFC5322).
 func buildEmailMessage(target *emailTarget, job *DeliveryJob) []byte {
 	subject := string(job.EventType)
 	if job.Tiding != "" {
@@ -244,14 +244,14 @@ func buildEmailMessage(target *emailTarget, job *DeliveryJob) []byte {
 	return []byte(b.String())
 }
 
-// sanitizeHeader вырезает CR/LF из значения заголовка (header-injection-защита:
-// event_type/tiding — доменно-валидированные, но defence in depth).
+// sanitizeHeader removes CR/LF from header value (header-injection protection:
+// event_type/tiding are domain-validated, but defense in depth).
 func sanitizeHeader(s string) string {
 	return strings.NewReplacer("\r", " ", "\n", " ").Replace(s)
 }
 
-// configPort извлекает smtp_port из config как int (JSON-число приходит float64).
-// Ошибка — отсутствует, не число или дробное.
+// configPort extracts smtp_port from config as int (JSON number arrives as float64).
+// Error means missing, not a number, or fractional.
 func configPort(config map[string]any) (int, error) {
 	raw, ok := config["smtp_port"]
 	if !ok {
@@ -272,8 +272,8 @@ func configPort(config map[string]any) (int, error) {
 	}
 }
 
-// configStringList извлекает список непустых строк из config (email to). Не-строки
-// и пустые отбрасываются (форма уже провалидирована на CRUD).
+// configStringList extracts list of non-empty strings from config (email to). Non-strings
+// and empty strings are dropped (shape already validated on CRUD).
 func configStringList(config map[string]any, key string) []string {
 	raw, ok := config[key].([]any)
 	if !ok {

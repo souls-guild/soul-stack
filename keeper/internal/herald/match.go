@@ -56,26 +56,26 @@ func isFailureEvent(et audit.EventType) bool {
 	}
 }
 
-// hasChanges классифицирует событие как «несущее изменения» для фильтра
-// only_changes (ADR-052(c)). По фактическим payload-формам эмиттеров:
+// hasChanges classifies an event as carrying changes for the only_changes filter
+// (ADR-052(c)). Based on actual payload shapes from emitters:
 //
-//   - incarnation.drift_checked: changed ⇔ drift_summary.hosts_drifted > 0
-//     (Scry нашёл расхождение, payload incarnation.go/reaper.scry).
-//   - scenario_run.leg_completed: changed ⇔ succeeded > 0 (Leg реально
-//     применил часть инкарнаций; payload voyageorch.emitLegCompleted).
+//   - incarnation.drift_checked: changed <-> drift_summary.hosts_drifted > 0
+//     (Scry found divergence, payload incarnation.go/reaper.scry).
+//   - scenario_run.leg_completed: changed <-> succeeded > 0 (Leg actually
+//     applied part of the incarnations; payload voyageorch.emitLegCompleted).
 //   - scenario_run.completed / command_run.completed / *_partial_failed:
-//     changed ⇔ summary.succeeded > 0 (succeeded — у command в корне
-//     payload, у scenario во вложенном `summary`; voyageorch.emitFinalized).
+//     changed <-> summary.succeeded > 0 (succeeded is at payload root for command
+//     and inside nested `summary` for scenario; voyageorch.emitFinalized).
 //
-// Прочие run-scope-события (started/invoked/leg_started/cadence.*/failed без
-// успехов/lease_lost/reclaimed) изменений по payload-у НЕ несут → false.
-// Решение по семантике документировано: «changes» = «что-то применилось»
-// (есть успешный исход), а не «прогон завершился».
+// Other run-scope events (started/invoked/leg_started/cadence.*/failed without
+// successes/lease_lost/reclaimed) carry no payload-visible changes -> false.
+// Semantics are documented: "changes" means "something was applied" (there is a
+// successful outcome), not "the run finished".
 //
-// Консервативность: при отсутствии ожидаемого поля в payload (форма иная)
-// возвращаем false — лучше пропустить уведомление, чем солгать о changes,
-// которых не видно. only_changes — отбор «шумных» прогонов, false-negative
-// безопаснее false-positive.
+// Conservative behavior: if the expected payload field is absent (different
+// shape), return false. It is better to skip a notification than claim invisible
+// changes. only_changes filters noisy runs, so a false negative is safer than a
+// false positive.
 func hasChanges(et audit.EventType, payload map[string]any) bool {
 	switch et {
 	case audit.EventIncarnationDriftChecked:
@@ -98,13 +98,14 @@ func hasChanges(et audit.EventType, payload map[string]any) bool {
 		return payloadInt(payload, "succeeded") > 0
 
 	case audit.EventIncarnationRunCompleted:
-		// per-incarnation итог (ADR-052 §k): changed ⇔ есть хоть одна изменившаяся
-		// задача (changed_tasks непуст — каждая запись = адрес, изменившийся хотя бы
-		// на одном хосте, ADR-052 §j). Нужен для консистентности only_changes с
-		// task-селектором (ADR-052 §l): task-селектор сам по себе самодостаточен
-		// (присутствие в changed_tasks = изменилась), но если оператор скомбинирует
-		// его с only_changes, тот не должен молча отсеять матчевое событие. failed
-		// без изменений (ранний/пустой changed_tasks) → false.
+		// Per-incarnation result (ADR-052(k)): changed <-> at least one task
+		// changed (changed_tasks is non-empty; each entry is an address changed
+		// on at least one host, ADR-052(j)). Needed to keep only_changes
+		// consistent with the task selector (ADR-052(l)): the task selector is
+		// self-contained (presence in changed_tasks means changed), but if an
+		// operator combines it with only_changes, that filter must not silently
+		// drop a matching event. failed without changes (early/empty
+		// changed_tasks) is false.
 		return len(changedTasksEntries(payload)) > 0
 
 	default:

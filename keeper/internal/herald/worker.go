@@ -1,13 +1,13 @@
 package herald
 
-// DeliveryWorker — claim-queue worker реальной webhook-доставки (ADR-052(d),
-// S3). at-least-once: клеймит job из Redis-очереди, резолвит Herald-канал,
-// делает SSRF-guarded webhook-POST, при сбое — retry с backoff; на терминале —
-// audit `herald.delivered`/`herald.failed`.
+// DeliveryWorker is the claim-queue worker for real webhook delivery (ADR-052(d),
+// S3). at-least-once: it claims a job from the Redis queue, resolves the Herald
+// channel, performs an SSRF-guarded webhook POST, retries with backoff on failure,
+// and emits audit `herald.delivered`/`herald.failed` at terminal state.
 //
-// Конкурентные worker-ы (несколько на инстанс + N инстансов) безопасны: claim
-// атомарен (BRPOPLPUSH), дубль доставки приемлем (at-least-once). Lease-ключ +
-// mini-reaper ([RequeueExpired]) возвращают осиротевшие после крэша job-ы.
+// Concurrent workers (several per instance plus N instances) are safe: claim is
+// atomic (BRPOPLPUSH), duplicate delivery is acceptable (at-least-once). The lease
+// key plus mini-reaper ([RequeueExpired]) return jobs orphaned after a crash.
 
 import (
 	"context"
@@ -23,34 +23,34 @@ import (
 	"github.com/souls-guild/soul-stack/shared/netguard"
 )
 
-// defaultRetryBackoff — задержки перед повторной доставкой по номеру попытки
-// (ADR-052(d): «retry с backoff»). Длина среза = число попыток ПОСЛЕ первой
-// (всего 1 + len = 4 попытки). Подбор: первый retry быстрый (мигнувший endpoint
-// чинится за секунды), дальше экспоненциально-растущий хвост покрывает
-// кратковременный downtime приёмника (рестарт/деплой) без шторма попыток.
+// defaultRetryBackoff is the delay before redelivery by attempt number
+// (ADR-052(d): retry with backoff). Slice length is the number of attempts after
+// the first one (total 1 + len = 4 attempts). The first retry is quick because a
+// flickering endpoint often recovers within seconds; the exponential tail covers
+// short receiver downtime (restart/deploy) without a retry storm.
 //
-//	attempt 0 → сразу (первая доставка)
-//	attempt 1 → +5s
-//	attempt 2 → +30s
-//	attempt 3 → +2m   (последняя попытка; после — терминальный fail)
+//	attempt 0 -> immediately (first delivery)
+//	attempt 1 -> +5s
+//	attempt 2 -> +30s
+//	attempt 3 -> +2m   (last attempt; then terminal fail)
 var defaultRetryBackoff = []time.Duration{5 * time.Second, 30 * time.Second, 2 * time.Minute}
 
-// claimBlockTimeout — таймаут блокирующего claim-а (BRPOPLPUSH). По истечении
-// worker проверяет ctx.Done и заходит на новый claim. Конечный (не 0), чтобы
-// реагировать на shutdown даже при пустой очереди.
+// claimBlockTimeout is the blocking claim timeout (BRPOPLPUSH). On expiry, worker
+// checks ctx.Done and starts a new claim. It is finite, not 0, so shutdown is
+// observed even with an empty queue.
 const claimBlockTimeout = 2 * time.Second
 
-// leaseTTL — TTL lease-ключа claimed-job-а. Должен покрывать самую долгую
-// доставку (delivery-timeout + backoff sleep current attempt) с запасом, иначе
-// mini-reaper заберёт job, который ещё обрабатывается (→ дубль). Берётся как
-// максимальный backoff + щедрый запас на сам HTTP-POST.
+// leaseTTL is the TTL of the claimed job lease key. It must cover the longest
+// delivery (delivery timeout + backoff sleep for the current attempt) with margin,
+// otherwise mini-reaper may take a still-processing job and create a duplicate. It
+// is the maximum backoff plus a generous margin for the HTTP POST itself.
 const leaseTTL = 5 * time.Minute
 
-// leaseRenewInterval — период продления lease-ключа, пока job обрабатывается
-// (sleep backoff + POST могут длиться дольше leaseTTL не должны → продлеваем).
+// leaseRenewInterval is the lease-key renewal period while a job is processed.
+// backoff sleep + POST must not outlive leaseTTL, so we renew.
 const leaseRenewInterval = leaseTTL / 3
 
-// DeliveryWorker — один claim-loop. В daemon поднимается несколько на инстанс.
+// DeliveryWorker is one claim loop. daemon starts several per instance.
 type DeliveryWorker struct {
 	Queue    queueBackend
 	Heralds  HeraldReader
@@ -59,15 +59,15 @@ type DeliveryWorker struct {
 	Logger   *slog.Logger
 	Metrics  *DeliveryMetrics
 	Resolver netguard.Resolver
-	// Timeout — общий таймаут одного webhook-POST-а (0 → DefaultDeliveryTimeout).
+	// Timeout is the overall timeout for one webhook POST (0 uses DefaultDeliveryTimeout).
 	Timeout time.Duration
-	// Backoff — задержки между попытками (nil → defaultRetryBackoff). Инжектируем
-	// ради тестов (быстрые задержки) и будущей конфигурации; len определяет число
-	// повторов, всего попыток = 1 + len(Backoff).
+	// Backoff is the delay between attempts (nil uses defaultRetryBackoff). It is
+	// injected for tests (fast delays) and future config; len defines the number of
+	// retries, total attempts = 1 + len(Backoff).
 	Backoff []time.Duration
 }
 
-// backoff возвращает эффективный backoff-срез (nil → дефолт).
+// backoff returns the effective backoff slice (nil means default).
 func (w *DeliveryWorker) backoff() []time.Duration {
 	if w.Backoff == nil {
 		return defaultRetryBackoff
@@ -75,8 +75,8 @@ func (w *DeliveryWorker) backoff() []time.Duration {
 	return w.Backoff
 }
 
-// retryMax — максимальное число попыток (1 первая + len(backoff) повторов).
-// attempt+1 >= retryMax → терминальный fail без перепостановки.
+// retryMax is the maximum number of attempts (1 first + len(backoff) retries).
+// attempt+1 >= retryMax means terminal fail without requeue.
 func (w *DeliveryWorker) retryMax() int {
 	return 1 + len(w.backoff())
 }
@@ -97,8 +97,8 @@ func (w *DeliveryWorker) validate() error {
 	return nil
 }
 
-// Run крутит claim-loop до отмены ctx. Возврат на ctx.Done без ошибки —
-// graceful-shutdown. invalid-config → error (программная ошибка wire-up-а).
+// Run loops claims until ctx is cancelled. Returning on ctx.Done without an error
+// is graceful shutdown. invalid-config returns an error as a wire-up bug.
 func (w *DeliveryWorker) Run(ctx context.Context) error {
 	if err := w.validate(); err != nil {
 		return err
@@ -121,15 +121,15 @@ func (w *DeliveryWorker) Run(ctx context.Context) error {
 			continue
 		}
 		if claimed == nil {
-			continue // пустая очередь — повторный claim
+			continue // Empty queue: claim again.
 		}
 		w.handle(ctx, claimed.Payload)
 	}
 }
 
-// handle обрабатывает один claimed job: разбор, lease-renewal, доставка, retry/
-// терминал. Битый payload — дроп (Ack без перепостановки): положить мог только
-// marshalJob, аномалию не зацикливаем.
+// handle processes one claimed job: parse, lease renewal, delivery, retry or
+// terminal. Bad payload is dropped (Ack without requeue): only marshalJob could
+// put it there, so do not loop the anomaly.
 func (w *DeliveryWorker) handle(ctx context.Context, payload []byte) {
 	job, err := unmarshalJob(payload)
 	if err != nil {
@@ -138,11 +138,12 @@ func (w *DeliveryWorker) handle(ctx context.Context, payload []byte) {
 		return
 	}
 
-	// lease-renewal на время обработки job-а (backoff sleep + POST). Останавливаем
-	// renew ДО терминала: stopRenew отменяет renewCtx и ДОЖИДАЕТСЯ выхода горутины,
-	// чтобы in-flight SetLease не пере-создал lease-ключ ПОСЛЕ Ack-DEL (stray-ключ
-	// до истечения TTL). Cancel без синхронизации этого не гарантирует — горутина
-	// могла уже пройти select и войти в SetLease.
+	// Lease renewal while processing the job (backoff sleep + POST). Stop renewal
+	// before terminal handling: stopRenew cancels renewCtx and waits for the
+	// goroutine to exit, so an in-flight SetLease cannot recreate the lease key
+	// after Ack-DEL (stray key until TTL expiry). Cancel without synchronization
+	// does not guarantee this; the goroutine may have passed select and entered
+	// SetLease already.
 	renewCtx, cancelRenew := context.WithCancel(ctx)
 	if err := w.Queue.SetLease(renewCtx, job.ID, leaseTTL); err != nil {
 		w.Logger.Warn("herald: set lease failed", slog.String("job_id", job.ID), slog.Any("error", err))
@@ -155,64 +156,63 @@ func (w *DeliveryWorker) handle(ctx context.Context, payload []byte) {
 	}
 	defer stopRenew()
 
-	// Backoff перед попыткой attempt>0 (requeue положил job сразу, задержку держим
-	// тут, чтобы не плодить delay-очередей). Прерываемо по ctx.
+	// Backoff before attempt>0. Requeue puts the job back immediately; keep the
+	// delay here to avoid delay queues. Interruptible by ctx.
 	bo := w.backoff()
 	if job.Attempt > 0 && job.Attempt-1 < len(bo) {
 		if !sleepCtx(ctx, bo[job.Attempt-1]) {
-			return // shutdown — job останется в processing, mini-reaper вернёт
+			return // Shutdown: job stays in processing; mini-reaper will return it.
 		}
 	}
 
 	w.Metrics.observeAttempt(job.Herald)
 	statusCode, derr := w.deliver(ctx, job)
 	if derr == nil {
-		stopRenew() // renew стоит ДО Ack-DEL — иначе stray lease-ключ
+		stopRenew() // Renewal stops before Ack-DEL to avoid a stray lease key.
 		w.terminalDelivered(ctx, job, statusCode, payload)
 		return
 	}
 
-	// Сбой доставки. Терминал без retry: устойчивая ошибка (канал снесён/выключен,
-	// SSRF-guard отверг URL, битый payload) — повтор не поможет. Иначе retry с
-	// backoff, пока не исчерпан retryMax.
+	// Delivery failure. Terminal without retry: stable error (channel deleted or
+	// disabled, SSRF guard rejected URL, bad payload), so retry cannot help.
+	// Otherwise retry with backoff until retryMax is exhausted.
 	if isTerminalNoRetry(derr) || job.Attempt+1 >= w.retryMax() {
-		stopRenew() // renew стоит ДО Ack-DEL — иначе stray lease-ключ
+		stopRenew() // Renewal stops before Ack-DEL to avoid a stray lease key.
 		w.terminalFailed(ctx, job, derr, payload)
 		return
 	}
 	w.requeue(ctx, job, payload, derr)
 }
 
-// deliver доставляет один job. Возврат (statusCode, nil) на успех; иначе ошибка
-// (SSRF-guard / транспорт / non-2xx) — caller решает retry/терминал. Для email
-// statusCode всегда 0 (SMTP не имеет HTTP-статуса).
+// deliver delivers one job. It returns (statusCode, nil) on success; otherwise an
+// error (SSRF guard / transport / non-2xx), and caller decides retry vs terminal.
+// For email, statusCode is always 0 because SMTP has no HTTP status.
 //
-// Двухклассовая модель (ADR-052 amendment): резолв канала + Enabled-проверка —
-// общие. Далее диспетчер по классу: email → [deliverEmail] (своя SMTP-ветка,
-// свой SSRF-guard/транспорт); иначе HTTP-класс → [resolveDelivery] строит
-// httpDelivery, а ЕДИНЫЙ SSRF-guard (validateDeliveryEndpoint +
-// guardedDeliveryClient) и client.Do зовёт сам deliver(). Новый HTTP-тип НЕ
-// может обойти guard by construction. Классификация non-2xx (isTerminalStatus) —
-// общая для HTTP.
+// Two-class model (ADR-052 amendment): channel resolution and Enabled check are
+// shared. Then dispatch by class: email -> [deliverEmail] (own SMTP branch, own
+// SSRF guard/transport); otherwise HTTP class -> [resolveDelivery] builds
+// httpDelivery, while deliver itself calls the single SSRF guard
+// (validateDeliveryEndpoint + guardedDeliveryClient) and client.Do. A new HTTP
+// type cannot bypass the guard by construction. non-2xx classification
+// (isTerminalStatus) is shared for HTTP.
 func (w *DeliveryWorker) deliver(ctx context.Context, job *DeliveryJob) (int, error) {
 	h, err := w.Heralds.HeraldByName(ctx, job.Herald)
 	if err != nil {
 		if errors.Is(err, ErrHeraldNotFound) {
-			// Канал снесён между постановкой и доставкой — терминальный fail
-			// (ретраить некуда). Возвращаем ошибку без retry-смысла; handle
-			// исчерпает попытки/упрётся в not-found на каждой — форсируем fail
-			// через спец-ошибку.
+			// Channel was deleted between enqueue and delivery: terminal fail because
+			// there is nowhere to retry. Return a no-retry error; otherwise handle
+			// would exhaust attempts and hit not-found each time.
 			return 0, fmt.Errorf("%w", errTerminalNoRetry{err})
 		}
 		return 0, fmt.Errorf("herald: resolve channel: %w", err)
 	}
 	if !h.Enabled {
-		// Канал выключен — не доставляем (терминал, не retry).
+		// Channel disabled: do not deliver (terminal, no retry).
 		return 0, errTerminalNoRetry{fmt.Errorf("herald: channel %q disabled", h.Name)}
 	}
 
-	// SMTP-класс — своя ветка (свой транспорт net/smtp + свой SSRF-guard по
-	// резолвнутому IP). Без httpDelivery/HTTP-клиента.
+	// SMTP class has its own branch (own net/smtp transport + own SSRF guard by
+	// resolved IP). No httpDelivery/HTTP client.
 	if h.Type == HeraldEmail {
 		if err := deliverEmail(ctx, h, job, w.KV, w.Resolver); err != nil {
 			return 0, err
@@ -220,18 +220,18 @@ func (w *DeliveryWorker) deliver(ctx context.Context, job *DeliveryJob) (int, er
 		return 0, nil
 	}
 
-	// HTTP-класс: драйвер строит httpDelivery, guard+dial — общие.
+	// HTTP class: driver builds httpDelivery, guard+dial are shared.
 	hd, err := resolveDelivery(ctx, h, job, w.KV)
 	if err != nil {
-		// Драйвер сам классифицировал ошибку (terminal-no-retry для битого config /
-		// Vault-сбой transient) — пробрасываем как есть.
+		// Driver already classified the error (terminal-no-retry for bad config /
+		// transient for Vault failure), so pass it through.
 		return 0, err
 	}
 
-	// SSRF-валидация URL ПЕРЕД запросом (config мог измениться после create) —
-	// ЕДИНАЯ точка для всех HTTP-типов.
+	// SSRF URL validation before the request (config may have changed after create):
+	// the single point for all HTTP types.
 	if err := validateDeliveryEndpoint(hd.url, hd.httpAllowed, hd.allowPrivate); err != nil {
-		// Guard отверг — устойчивая ошибка конфигурации, ретраить бессмысленно.
+		// Guard rejected it: stable config error, retry is pointless.
 		return 0, errTerminalNoRetry{err}
 	}
 
@@ -246,26 +246,26 @@ func (w *DeliveryWorker) deliver(ctx context.Context, job *DeliveryJob) (int, er
 		return 0, fmt.Errorf("herald: delivery %s: %w", req.Method, err)
 	}
 	defer resp.Body.Close()
-	// Дренируем тело (с лимитом) — переиспользование keep-alive-соединения.
+	// Drain the body with a limit so the keep-alive connection can be reused.
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		err := fmt.Errorf("herald: delivery returned status %d", resp.StatusCode)
 		if isTerminalStatus(resp.StatusCode) {
-			// 4xx (кроме 408/429) — устойчивая клиентская ошибка (auth/route/
-			// payload): повтор не поможет, терминал без retry.
+			// 4xx except 408/429 is a stable client error (auth/route/payload):
+			// retry cannot help, terminal without retry.
 			return resp.StatusCode, errTerminalNoRetry{err}
 		}
-		// 408/429/5xx — транзиентно (rate-limit / перегрузка / рестарт приёмника):
-		// retry с backoff.
+		// 408/429/5xx is transient (rate limit / overload / receiver restart):
+		// retry with backoff.
 		return resp.StatusCode, err
 	}
 	return resp.StatusCode, nil
 }
 
-// isTerminalStatus сообщает, что HTTP-статус — устойчивая ошибка без смысла в
-// retry: любой 4xx, КРОМЕ 408 Request Timeout и 429 Too Many Requests (оба —
-// транзиентные и ретраятся вместе с 5xx/таймаутами/transport-сбоями).
+// isTerminalStatus reports that an HTTP status is a stable error where retry makes
+// no sense: any 4xx except 408 Request Timeout and 429 Too Many Requests. Those
+// two are transient and retry with 5xx/timeouts/transport failures.
 func isTerminalStatus(code int) bool {
 	if code < 400 || code >= 500 {
 		return false
@@ -273,29 +273,28 @@ func isTerminalStatus(code int) bool {
 	return code != http.StatusRequestTimeout && code != http.StatusTooManyRequests
 }
 
-// buildPayload собирает JSON-тело webhook-POST-а. Формат (зафиксирован,
-// ADR-052(d)/(h)/(i)):
+// buildPayload builds the webhook POST JSON body. Format is fixed by
+// ADR-052(d)/(h)/(i):
 //
 //	{
 //	  "event_type":   "<area>.<action>",
 //	  "occurred_at":  "<RFC3339>",
 //	  "herald":       "<channel-name>",
 //	  "tiding":       "<rule-name>",
-//	  "payload":      { ... },  // payload audit-события (опц. суженный projection-ом)
-//	  "annotations":  { ... }   // опц. статика оператора (опускается при пустых)
+//	  "payload":      { ... },  // audit-event payload, optionally narrowed by projection
+//	  "annotations":  { ... }   // optional operator static fields, omitted when empty
 //	}
 //
-// БЕЗ обогащения секретами: payload — копия уже-замаскированного audit-payload-а
-// (инвариант A ADR-027); прогоняем MaskSecrets ещё раз перед отправкой (defence
-// in depth: даже если job сконструирован минуя audit-маскинг, наружу секрет не
-// уйдёт).
+// No secret enrichment: payload is a copy of the already masked audit payload
+// (invariant A ADR-027); run MaskSecrets again before sending as defence in depth.
+// Even if a job is constructed without audit masking, no secret leaves the system.
 //
-// Порядок (ADR-052(h)): MaskSecrets → projection → annotations. projection
-// применяется к УЖЕ-замаскированному payload-у (allow-list не может вытащить
-// поле, которого после маскинга нет — секрет-гигиена сохранена). annotations —
-// статика оператора, мержится отдельным верхнеуровневым ключом (НЕ в payload).
-// Подпись (если задан signingKey) считается caller-ом ([deliver]) от ЭТОГО
-// финального тела — после projection+annotations.
+// Order (ADR-052(h)): MaskSecrets -> projection -> annotations. projection applies
+// to the already masked payload, so the allow-list cannot extract a field removed
+// by masking and secret hygiene is preserved. annotations are operator static
+// fields and merge as a separate top-level key, not into payload. Signature, when
+// signingKey is set, is calculated by caller ([deliver]) over this final body
+// after projection+annotations.
 func buildPayload(job *DeliveryJob) ([]byte, error) {
 	payload := audit.MaskSecrets(job.PayloadCopy)
 	if len(job.Projection) > 0 {
@@ -312,45 +311,42 @@ func buildPayload(job *DeliveryJob) ([]byte, error) {
 	return marshalWebhookPayload(out)
 }
 
-// projectPayload строит подмножество src по allow-list путей projection
-// (ADR-052(h)). Путь — точечная нотация (`summary.succeeded`, `voyage_id`);
-// синтаксис уже провалидирован на CRUD ([ValidateProjection]) — здесь только
-// резолв против фактической payload-формы.
+// projectPayload builds a subset of src by the projection path allow-list
+// (ADR-052(h)). Paths use dotted notation (`summary.succeeded`, `voyage_id`);
+// syntax was already validated at CRUD ([ValidateProjection]), so this only
+// resolves against the actual payload shape.
 //
-// Форма результата — ВЛОЖЕННАЯ: путь `summary.succeeded` → {"summary":
-// {"succeeded": N}}. Так приёмник парсит спроецированный payload тем же кодом,
-// что и полную форму (тот же ключевой контракт, лишь суженный набор полей);
-// плоская форма ("summary.succeeded": N) ввела бы второй несовместимый формат
-// одного и того же поля и ломала бы приёмник при переключении правила
-// projection↔полный.
+// Result shape is nested: path `summary.succeeded` -> {"summary": {"succeeded": N}}.
+// The receiver can parse projected payload with the same code as the full shape:
+// the same key contract, only fewer fields. A flat shape ("summary.succeeded": N)
+// would introduce a second incompatible format for the same field and break the
+// receiver when switching a rule between projection and full.
 //
-// Отсутствующий путь — ПРОПУСК (не ошибка, не null): оператор подписался на
-// поле, которого в этом конкретном событии нет — это норма (каталог payload-форм
-// разнороден по EventType). При полном промахе всех путей вернётся пустой объект.
+// Missing path is skipped, not error or null: the operator subscribed to a field
+// absent from this concrete event, which is normal because payload forms vary by
+// EventType. If all paths miss, an empty object is returned.
 func projectPayload(src map[string]any, paths []string) map[string]any {
 	out := map[string]any{}
 	for _, path := range paths {
 		val, ok := resolvePath(src, strings.Split(path, "."))
 		if !ok {
-			continue // путь отсутствует в этом payload-е — пропуск
+			continue // Path is absent in this payload: skip.
 		}
-		// deep-copy листа ПЕРЕД вставкой: иначе при коллизии префиксов
-		// (`summary` + `summary.failed`) широкий путь положил бы в out ссылку на
-		// вложенную map из src, а последующая глубокая вставка домутировала бы
-		// её — то есть исказила бы исходный src. buildPayload зовётся повторно на
-		// каждый retry-attempt над тем же job.PayloadCopy, поэтому src обязан
-		// оставаться неизменным: projectPayload(src, paths) НЕ мутирует src ни
-		// при каком наборе paths.
+		// Deep-copy the leaf before insertion. Otherwise, with prefix collision
+		// (`summary` + `summary.failed`), the broad path would place a reference
+		// to a nested src map into out, and the later deep insertion would mutate
+		// it, corrupting src. buildPayload is called again for every retry attempt
+		// over the same job.PayloadCopy, so src must stay unchanged: projectPayload
+		// never mutates src for any path set.
 		insertPath(out, strings.Split(path, "."), deepCopyValue(val))
 	}
 	return out
 }
 
-// deepCopyValue рекурсивно копирует значение, попадающее в проекцию, чтобы out
-// не делил с src ни одной вложенной map/slice. Scalar-листья (string/число/bool/
-// nil) иммутабельны — возвращаются как есть. Покрывает только формы, реально
-// встречающиеся в audit-payload-е (вложенные map[string]any и []any); прочие
-// типы листьев копируются по значению.
+// deepCopyValue recursively copies a value that enters projection, so out shares
+// no nested map/slice with src. Scalar leaves (string/number/bool/nil) are
+// immutable and returned as-is. It covers only forms that actually occur in audit
+// payloads (nested map[string]any and []any); other leaf types are copied by value.
 func deepCopyValue(v any) any {
 	switch x := v.(type) {
 	case map[string]any:
@@ -370,11 +366,11 @@ func deepCopyValue(v any) any {
 	}
 }
 
-// resolvePath спускается по segments в m (сегмент за сегментом). ok=false —
-// промежуточный сегмент отсутствует или не объект (лист достигнут раньше путь
-// глубже). Резолвит только через map[string]any: проекция в элементы массива не
-// поддерживается (синтаксис projection — только `[a-z0-9_]`-сегменты, индексов
-// нет, [ValidateProjection]).
+// resolvePath descends through segments in m one segment at a time. ok=false means
+// an intermediate segment is absent or not an object (a leaf was reached before a
+// deeper path). It resolves only through map[string]any: projection into array
+// elements is not supported. Projection syntax allows only `[a-z0-9_]` segments,
+// no indexes, see [ValidateProjection].
 func resolvePath(m map[string]any, segments []string) (any, bool) {
 	cur := any(m)
 	for _, seg := range segments {
@@ -390,11 +386,11 @@ func resolvePath(m map[string]any, segments []string) (any, bool) {
 	return cur, true
 }
 
-// insertPath восстанавливает вложенную структуру для segments в dst, кладя val в
-// лист. Промежуточные объекты создаются по мере необходимости; коллизия (на пути
-// уже лежит лист от более короткого projection-пути) разрешается в пользу более
-// глубокой вставки — projection-пути не должны быть префиксами друг друга на
-// практике, но детерминизм гарантируем.
+// insertPath restores a nested structure for segments in dst, placing val at the
+// leaf. Intermediate objects are created as needed; collision (a leaf from a
+// shorter projection path already lies on the path) is resolved in favor of the
+// deeper insertion. Projection paths should not be prefixes of each other in
+// practice, but deterministic behavior is guaranteed.
 func insertPath(dst map[string]any, segments []string, val any) {
 	for i := 0; i < len(segments)-1; i++ {
 		seg := segments[i]
@@ -408,12 +404,12 @@ func insertPath(dst map[string]any, segments []string, val any) {
 	dst[segments[len(segments)-1]] = val
 }
 
-// renewLease продлевает lease-ключ job-а, пока renewCtx жив (handle обрабатывает
-// job). Best-effort: ошибка продления логируется (debug), не валит доставку —
-// худший исход — mini-reaper заберёт ещё-живой job и доставит повторно
-// (at-least-once это допускает). close(done) на выходе — sync-точка для handle:
-// гарантирует, что после возврата ни один SetLease уже не выполняется (иначе
-// stray lease-ключ после терминального Ack-DEL).
+// renewLease extends the job lease key while renewCtx is alive and handle is
+// processing the job. Best-effort: renewal errors are logged at debug and do not
+// fail delivery. Worst case, mini-reaper takes a still-live job and delivers it
+// again, which at-least-once permits. close(done) on exit is the sync point for
+// handle: after it returns, no SetLease is still running, avoiding a stray lease
+// key after terminal Ack-DEL.
 func (w *DeliveryWorker) renewLease(ctx context.Context, jobID string, done chan<- struct{}) {
 	defer close(done)
 	t := time.NewTicker(leaseRenewInterval)
@@ -432,14 +428,15 @@ func (w *DeliveryWorker) renewLease(ctx context.Context, jobID string, done chan
 	}
 }
 
-// requeue возвращает job на повтор с инкрементом attempt. backoff применяется
-// при следующем claim-е (handle спит перед попыткой attempt>0).
+// requeue returns the job for retry with incremented attempt. Backoff is applied
+// at the next claim; handle sleeps before attempt>0.
 func (w *DeliveryWorker) requeue(ctx context.Context, job *DeliveryJob, oldPayload []byte, cause error) {
 	next := *job
 	next.Attempt = job.Attempt + 1
 	newPayload, err := marshalJob(&next)
 	if err != nil {
-		// Маршалинг не должен падать (job уже разобран) — на всякий fail-терминал.
+		// Marshaling should not fail because the job is already parsed; fail
+		// terminally just in case.
 		w.terminalFailed(ctx, job, fmt.Errorf("requeue marshal: %w", err), oldPayload)
 		return
 	}
@@ -453,7 +450,7 @@ func (w *DeliveryWorker) requeue(ctx context.Context, job *DeliveryJob, oldPaylo
 		slog.Int("attempt", next.Attempt), slog.String("error", maskErr(cause)))
 }
 
-// terminalDelivered: успешная доставка — Ack + audit herald.delivered + метрика.
+// terminalDelivered handles successful delivery: Ack + audit herald.delivered + metric.
 func (w *DeliveryWorker) terminalDelivered(ctx context.Context, job *DeliveryJob, statusCode int, payload []byte) {
 	_ = w.Queue.Ack(ctx, job.ID, payload)
 	w.Metrics.observeSucceeded(job.Herald)
@@ -469,7 +466,7 @@ func (w *DeliveryWorker) terminalDelivered(ctx context.Context, job *DeliveryJob
 		slog.Int("attempt", job.Attempt), slog.Int("status_code", statusCode))
 }
 
-// terminalFailed: исчерпан retry / no-retry-ошибка — Ack + audit herald.failed.
+// terminalFailed handles retry exhaustion / no-retry error: Ack + audit herald.failed.
 func (w *DeliveryWorker) terminalFailed(ctx context.Context, job *DeliveryJob, cause error, payload []byte) {
 	_ = w.Queue.Ack(ctx, job.ID, payload)
 	w.Metrics.observeFailed(job.Herald)
@@ -485,9 +482,9 @@ func (w *DeliveryWorker) terminalFailed(ctx context.Context, job *DeliveryJob, c
 		slog.Int("attempt", job.Attempt), slog.String("error", maskErr(cause)))
 }
 
-// emitAudit пишет терминальное событие доставки. Background-ctx: эмит вне
-// claim-ctx (тот мог отмениться при shutdown). source=keeper_internal,
-// archon_aid="" (NULL), correlation_id = correlation_id события прогона.
+// emitAudit writes a terminal delivery event. Background ctx: emit outside
+// claim-ctx, which may have been cancelled during shutdown. source=keeper_internal,
+// archon_aid="" (NULL), correlation_id = run event correlation_id.
 func (w *DeliveryWorker) emitAudit(et audit.EventType, job *DeliveryJob, payload map[string]any) {
 	if w.Audit == nil {
 		return
@@ -504,9 +501,9 @@ func (w *DeliveryWorker) emitAudit(et audit.EventType, job *DeliveryJob, payload
 	}
 }
 
-// errTerminalNoRetry оборачивает ошибку, на которой retry бессмыслен (устойчивая
-// конфигурация/состояние: канал снесён/выключен, SSRF-guard отверг URL, битый
-// payload). handle распознаёт её и форсирует терминальный fail без повторов.
+// errTerminalNoRetry wraps an error where retry makes no sense (stable
+// configuration/state: channel deleted/disabled, SSRF guard rejected URL, bad
+// payload). handle recognizes it and forces terminal fail without retries.
 type errTerminalNoRetry struct{ err error }
 
 func (e errTerminalNoRetry) Error() string { return e.err.Error() }
@@ -517,9 +514,9 @@ func isTerminalNoRetry(err error) bool {
 	return errors.As(err, &t)
 }
 
-// maskErr — текст ошибки, прогнанный через MaskSecrets (cause может транзитом
-// нести vault-ref в сообщении). audit.MaskSecrets работает с payload-map —
-// заворачиваем строку в map и достаём обратно.
+// maskErr returns error text passed through MaskSecrets; cause can transitively
+// carry a vault-ref in the message. audit.MaskSecrets works with payload maps, so
+// wrap the string in a map and read it back.
 func maskErr(err error) string {
 	if err == nil {
 		return ""
@@ -531,7 +528,7 @@ func maskErr(err error) string {
 	return "<masked>"
 }
 
-// sleepCtx ждёт d или ctx.Done. false → вышли по ctx.
+// sleepCtx waits for d or ctx.Done. false means ctx ended first.
 func sleepCtx(ctx context.Context, d time.Duration) bool {
 	t := time.NewTimer(d)
 	defer t.Stop()

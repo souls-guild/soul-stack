@@ -290,8 +290,8 @@ func TypeCatalog() []HeraldTypeDescriptor {
 	types := AllHeraldTypes()
 	out := make([]HeraldTypeDescriptor, 0, len(types))
 	for _, t := range types {
-		fields, _ := fieldsFor(t) // t ∈ AllHeraldTypes ⟹ дескриптор всегда есть
-		d, ok := driverFor(t)     // email не HTTP-класс ⟹ ok=false ⟹ secret_ref не для него
+		fields, _ := fieldsFor(t) // t in AllHeraldTypes means descriptor always exists
+		d, ok := driverFor(t)     // email is not HTTP class, so ok=false and secret_ref is not for it
 		out = append(out, HeraldTypeDescriptor{Type: t, Fields: fields, SecretRequired: ok && d.secretRequired()})
 	}
 	return out

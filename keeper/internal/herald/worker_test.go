@@ -18,7 +18,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// --- HMAC-подпись (unit) ---
+// --- HMAC signature (unit) ---
 
 func TestSignBody_HMACSHA256(t *testing.T) {
 	secret := []byte("s3cr3t-token")
@@ -46,7 +46,7 @@ func TestSignBody_DiffersByBodyAndKey(t *testing.T) {
 	}
 }
 
-// --- payload-формат (unit) ---
+// --- payload format (unit) ---
 
 func TestBuildPayload_ShapeAndFields(t *testing.T) {
 	occurred := time.Date(2026, 6, 11, 10, 30, 0, 0, time.UTC)
@@ -88,9 +88,9 @@ func TestBuildPayload_ShapeAndFields(t *testing.T) {
 	}
 }
 
-// TestBuildPayload_MasksSecretInPayload — defence-in-depth: даже если job-payload
-// несёт vault-ref-подобную строку, наружу она уходит замаскированной (инвариант
-// A ADR-027 + MaskSecrets на выходе).
+// TestBuildPayload_MasksSecretInPayload is defence in depth: even if job payload
+// carries a vault-ref-like string, it leaves masked (invariant A ADR-027 +
+// MaskSecrets on output).
 func TestBuildPayload_MasksSecretInPayload(t *testing.T) {
 	job := &DeliveryJob{
 		EventType:   audit.EventCommandRunCompleted,
@@ -105,7 +105,7 @@ func TestBuildPayload_MasksSecretInPayload(t *testing.T) {
 	}
 }
 
-// --- резолвер путей projection (unit, ADR-052(h) N3) ---
+// --- projection path resolver (unit, ADR-052(h) N3) ---
 
 func TestResolvePath(t *testing.T) {
 	src := map[string]any{
@@ -122,12 +122,12 @@ func TestResolvePath(t *testing.T) {
 		wantVal any
 		wantOK  bool
 	}{
-		{"верхнеуровневый", "voyage_id", "v1", true},
-		{"вложенный", "summary.succeeded", float64(3), true},
-		{"отсутствующий верхнеуровневый", "nope", nil, false},
-		{"отсутствующий вложенный сегмент", "summary.missing", nil, false},
-		{"спуск сквозь лист (не объект)", "kind.deeper", nil, false},
-		{"спуск сквозь лист верхнеуровневый", "voyage_id.x", nil, false},
+		{"top-level", "voyage_id", "v1", true},
+		{"nested", "summary.succeeded", float64(3), true},
+		{"missing top-level", "nope", nil, false},
+		{"missing nested segment", "summary.missing", nil, false},
+		{"descend through leaf (not object)", "kind.deeper", nil, false},
+		{"descend through top-level leaf", "voyage_id.x", nil, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -142,9 +142,9 @@ func TestResolvePath(t *testing.T) {
 	}
 }
 
-// TestProjectPayload_NestedShape — спроецированное тело сохраняет ВЛОЖЕННУЮ форму
-// исходного payload (summary.succeeded → {summary:{succeeded:N}}), отсутствующие
-// пути пропускаются.
+// TestProjectPayload_NestedShape verifies that projected body preserves the nested
+// shape of the source payload (summary.succeeded -> {summary:{succeeded:N}}) and
+// skips absent paths.
 func TestProjectPayload_NestedShape(t *testing.T) {
 	src := map[string]any{
 		"voyage_id": "v1",
@@ -156,7 +156,7 @@ func TestProjectPayload_NestedShape(t *testing.T) {
 	}
 	out := projectPayload(src, []string{"voyage_id", "summary.succeeded", "summary.missing", "absent.path"})
 
-	// allow-list: только перечисленные существующие пути.
+	// allow-list: only listed existing paths.
 	if len(out) != 2 {
 		t.Fatalf("projected top-level keys = %v, want voyage_id+summary", out)
 	}
@@ -170,24 +170,23 @@ func TestProjectPayload_NestedShape(t *testing.T) {
 	if summary["succeeded"] != float64(3) {
 		t.Errorf("summary.succeeded = %v, want 3", summary["succeeded"])
 	}
-	// summary.failed НЕ в allow-list — должен отсутствовать.
+	// summary.failed is not in the allow-list and must be absent.
 	if _, present := summary["failed"]; present {
 		t.Errorf("summary.failed leaked (not in allow-list)")
 	}
-	// поле не из allow-list не утекло.
+	// Field outside the allow-list must not leak.
 	if _, present := out["secret_field"]; present {
-		t.Errorf("secret_field leaked — projection is allow-list, not deny-list")
+		t.Errorf("secret_field leaked: projection is allow-list, not deny-list")
 	}
 }
 
-// TestProjectPayload_PrefixCollision_OrderInvariant — projection-пути, где один
-// путь является префиксом другого (`summary` И `summary.failed`), не валят
-// insertPath и дают ДЕТЕРМИНИРОВАННЫЙ результат, не зависящий от порядка путей в
-// списке. Инвариант от регресса: смена порядка merge/insert не должна менять
-// спроецированное тело (иначе одинаковое правило давало бы разный webhook-payload
-// от перестановки allow-list). Каждому порядку — свой свежий src: insertPath при
-// коллизии мутирует вложенный объект, поэтому общий src между прогонами исказил бы
-// замер.
+// TestProjectPayload_PrefixCollision_OrderInvariant verifies that projection paths
+// where one path prefixes another (`summary` and `summary.failed`) do not break
+// insertPath and produce deterministic output regardless of path order. Regression
+// invariant: changing merge/insert order must not change the projected body, or the
+// same rule would produce different webhook payloads when allow-list order changes.
+// Each order gets a fresh src: on collision, insertPath mutates the nested object,
+// so sharing src between runs would distort the measurement.
 func TestProjectPayload_PrefixCollision_OrderInvariant(t *testing.T) {
 	newSrc := func() map[string]any {
 		return map[string]any{
@@ -195,16 +194,16 @@ func TestProjectPayload_PrefixCollision_OrderInvariant(t *testing.T) {
 		}
 	}
 
-	// panic-safe: оба порядка отрабатывают без паники (insertPath не должен
-	// предполагать, что промежуточный сегмент ещё не занят листом/объектом).
+	// panic-safe: both orders run without panic. insertPath must not assume an
+	// intermediate segment is not already occupied by a leaf/object.
 	broadFirst := projectPayload(newSrc(), []string{"summary", "summary.failed"})
 	deepFirst := projectPayload(newSrc(), []string{"summary.failed", "summary"})
 
 	if !reflect.DeepEqual(broadFirst, deepFirst) {
-		t.Fatalf("prefix-collision projection зависит от порядка путей:\n  broad-first = %#v\n  deep-first  = %#v", broadFirst, deepFirst)
+		t.Fatalf("prefix-collision projection depends on path order:\n  broad-first = %#v\n  deep-first  = %#v", broadFirst, deepFirst)
 	}
-	// И сам результат — корректное вложенное тело (broad-путь подтягивает весь
-	// объект, более узкий путь не «обрезает» его).
+	// And the result itself is a correct nested body: the broad path brings the
+	// whole object, and the narrower path does not trim it.
 	summary, ok := broadFirst["summary"].(map[string]any)
 	if !ok {
 		t.Fatalf("summary not nested object: %T", broadFirst["summary"])
@@ -214,11 +213,11 @@ func TestProjectPayload_PrefixCollision_OrderInvariant(t *testing.T) {
 	}
 }
 
-// TestProjectPayload_DoesNotMutateSrc — инвариант: projectPayload(src, paths) НЕ
-// изменяет src ни при каком наборе paths, ВКЛЮЧАЯ коллизию префиксов. Latent
-// side-effect (N3): широкий путь клал в out ссылку на вложенную map из src,
-// глубокая вставка домутировала бы её. Снимаем deep-snapshot src до вызова,
-// сверяем deep-equal после.
+// TestProjectPayload_DoesNotMutateSrc is the invariant that projectPayload(src,
+// paths) never changes src for any path set, including prefix collisions. Latent
+// side effect (N3): a broad path used to put a reference to a nested map from src
+// into out, and a deep insertion would mutate it. Take a deep snapshot before the
+// call and compare with deep-equal afterwards.
 func TestProjectPayload_DoesNotMutateSrc(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -236,21 +235,22 @@ func TestProjectPayload_DoesNotMutateSrc(t *testing.T) {
 				"voyage_id": "v1",
 				"summary":   map[string]any{"succeeded": float64(3), "failed": float64(1)},
 			}
-			before := deepCopyValue(src) // независимый snapshot формы src
+			before := deepCopyValue(src) // Independent snapshot of src shape.
 
 			_ = projectPayload(src, tc.paths)
 
 			if !reflect.DeepEqual(src, before) {
-				t.Fatalf("projectPayload мутировал src:\n  before = %#v\n  after  = %#v", before, src)
+				t.Fatalf("projectPayload mutated src:\n  before = %#v\n  after  = %#v", before, src)
 			}
 		})
 	}
 }
 
-// TestBuildPayload_RetryIdempotent — buildPayload вызывается ПОВТОРНО на каждый
-// retry-attempt над тем же job.PayloadCopy. Тело обязано быть идентичным между
-// попытками, а сам PayloadCopy — неизменным (latent side-effect projection-а мог
-// бы исказить тело при ретраях). Projection с коллизией префиксов — худший кейс.
+// TestBuildPayload_RetryIdempotent verifies that buildPayload is called again for
+// every retry attempt over the same job.PayloadCopy. Body must be identical across
+// attempts, and PayloadCopy must stay unchanged. A latent projection side effect
+// could distort body across retries. Projection with prefix collision is the worst
+// case.
 func TestBuildPayload_RetryIdempotent(t *testing.T) {
 	job := &DeliveryJob{
 		EventType: audit.EventScenarioRunFailed,
@@ -268,22 +268,22 @@ func TestBuildPayload_RetryIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildPayload (attempt 0): %v", err)
 	}
-	// Имитация retry: тот же job, тот же PayloadCopy.
+	// Retry simulation: same job, same PayloadCopy.
 	second, err := buildPayload(job)
 	if err != nil {
 		t.Fatalf("buildPayload (retry): %v", err)
 	}
 
 	if string(first) != string(second) {
-		t.Fatalf("retry дал иное тело:\n  attempt 0 = %s\n  retry     = %s", first, second)
+		t.Fatalf("retry produced a different body:\n  attempt 0 = %s\n  retry     = %s", first, second)
 	}
 	if !reflect.DeepEqual(job.PayloadCopy, payloadSnapshot) {
-		t.Fatalf("buildPayload мутировал job.PayloadCopy между ретраями:\n  before = %#v\n  after  = %#v", payloadSnapshot, job.PayloadCopy)
+		t.Fatalf("buildPayload mutated job.PayloadCopy between retries:\n  before = %#v\n  after  = %#v", payloadSnapshot, job.PayloadCopy)
 	}
 }
 
-// TestProjectPayload_AllPathsAbsent — все пути промахнулись → пустой объект (не
-// nil, не ошибка): полностью отфильтрованный payload.
+// TestProjectPayload_AllPathsAbsent verifies that all missing paths produce an
+// empty object, not nil or error: fully filtered payload.
 func TestProjectPayload_AllPathsAbsent(t *testing.T) {
 	out := projectPayload(map[string]any{"a": 1}, []string{"x", "y.z"})
 	if out == nil {
@@ -294,8 +294,8 @@ func TestProjectPayload_AllPathsAbsent(t *testing.T) {
 	}
 }
 
-// TestBuildPayload_Projection_NarrowsPayload — projection непуст → payload в теле
-// = подмножество по путям; пустые остальные поля в дефолт-форме.
+// TestBuildPayload_Projection_NarrowsPayload verifies that non-empty projection
+// makes body payload a subset by paths, with other default-form fields empty.
 func TestBuildPayload_Projection_NarrowsPayload(t *testing.T) {
 	job := &DeliveryJob{
 		EventType: audit.EventScenarioRunFailed,
@@ -333,8 +333,8 @@ func TestBuildPayload_Projection_NarrowsPayload(t *testing.T) {
 	}
 }
 
-// TestBuildPayload_EmptyProjection_FullForm — пустой projection → payload целиком
-// (backward-compat дефолт).
+// TestBuildPayload_EmptyProjection_FullForm verifies that empty projection keeps
+// the full payload (backward-compatible default).
 func TestBuildPayload_EmptyProjection_FullForm(t *testing.T) {
 	job := &DeliveryJob{
 		EventType:   audit.EventScenarioRunFailed,
@@ -354,8 +354,8 @@ func TestBuildPayload_EmptyProjection_FullForm(t *testing.T) {
 	}
 }
 
-// TestBuildPayload_Annotations_Added — непустые annotations → верхнеуровневый
-// ключ `annotations` в теле (additive, НЕ внутри payload).
+// TestBuildPayload_Annotations_Added verifies that non-empty annotations add a
+// top-level `annotations` key to the body (additive, not inside payload).
 func TestBuildPayload_Annotations_Added(t *testing.T) {
 	job := &DeliveryJob{
 		EventType:   audit.EventScenarioRunFailed,
@@ -377,15 +377,15 @@ func TestBuildPayload_Annotations_Added(t *testing.T) {
 	if ann["team"] != "ops" || ann["severity"] != "high" {
 		t.Errorf("annotations = %v", ann)
 	}
-	// annotations НЕ должны попасть внутрь payload.
+	// annotations must not get inside payload.
 	p := got["payload"].(map[string]any)
 	if _, present := p["team"]; present {
 		t.Errorf("annotations leaked into payload")
 	}
 }
 
-// TestBuildPayload_EmptyAnnotations_Omitted — пустые annotations → ключ опущен
-// (omitempty), приёмники без поддержки annotations не ломаются.
+// TestBuildPayload_EmptyAnnotations_Omitted verifies that empty annotations omit
+// the key (omitempty), so receivers without annotations support do not break.
 func TestBuildPayload_EmptyAnnotations_Omitted(t *testing.T) {
 	job := &DeliveryJob{
 		EventType:   audit.EventScenarioRunFailed,
@@ -401,8 +401,8 @@ func TestBuildPayload_EmptyAnnotations_Omitted(t *testing.T) {
 	}
 }
 
-// TestBuildPayload_AnnotationsAndProjection_Together — оба поля вместе: payload
-// сужен projection-ом, annotations добавлены верхнеуровневым ключом.
+// TestBuildPayload_AnnotationsAndProjection_Together covers both fields together:
+// payload is narrowed by projection, annotations are added as a top-level key.
 func TestBuildPayload_AnnotationsAndProjection_Together(t *testing.T) {
 	job := &DeliveryJob{
 		EventType: audit.EventScenarioRunFailed,
@@ -434,9 +434,9 @@ func TestBuildPayload_AnnotationsAndProjection_Together(t *testing.T) {
 	}
 }
 
-// TestBuildPayload_Projection_AfterMaskSecrets — projection применяется к
-// УЖЕ-замаскированному payload: allow-list пути в замаскированное поле не
-// разворачивает секрет (секрет-гигиена, ADR-052(h)).
+// TestBuildPayload_Projection_AfterMaskSecrets verifies that projection applies to
+// the already masked payload: allow-listing a path into a masked field does not
+// reveal the secret (secret hygiene, ADR-052(h)).
 func TestBuildPayload_Projection_AfterMaskSecrets(t *testing.T) {
 	job := &DeliveryJob{
 		EventType: audit.EventCommandRunCompleted,
@@ -454,9 +454,9 @@ func TestBuildPayload_Projection_AfterMaskSecrets(t *testing.T) {
 	}
 }
 
-// TestBuildPayload_HMACFromFinalBody — подпись считается от ФИНАЛЬНОГО тела
-// (после projection+annotations), а не от исходного полного payload. Guard:
-// смена порядка (подпись до сборки тела) сломает этот тест.
+// TestBuildPayload_HMACFromFinalBody verifies that the signature is calculated
+// from the final body (after projection+annotations), not from the original full
+// payload. Guard: changing the order to sign before body assembly breaks this test.
 func TestBuildPayload_HMACFromFinalBody(t *testing.T) {
 	secret := []byte("sign-key")
 	job := &DeliveryJob{
@@ -472,15 +472,15 @@ func TestBuildPayload_HMACFromFinalBody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildPayload: %v", err)
 	}
-	// Подпись над финальным телом — то, что делает deliver перед POST.
+	// Signature over the final body, matching what deliver does before POST.
 	gotSig := signBody(secret, body)
 
-	// Тело содержит annotations + суженный payload, но НЕ исходное drop-поле.
+	// Body contains annotations + narrowed payload, but not the original drop field.
 	if strings.Contains(string(body), "should-not-be-signed") {
 		t.Fatalf("final body must not carry dropped field: %s", body)
 	}
-	// Подпись над ИСХОДНЫМ полным payload отличается (доказывает, что подписали
-	// финальное, а не исходное тело).
+	// Signature over the original full payload differs, proving we signed the final
+	// body rather than the original body.
 	full := &DeliveryJob{EventType: job.EventType, PayloadCopy: job.PayloadCopy}
 	fullBody, _ := buildPayload(full)
 	if signBody(secret, fullBody) == gotSig {
@@ -488,10 +488,10 @@ func TestBuildPayload_HMACFromFinalBody(t *testing.T) {
 	}
 }
 
-// --- retry-счёт и терминалы (integration of worker logic, fake backend) ---
+// --- retry count and terminals (integration of worker logic, fake backend) ---
 
-// fakeBackend — in-memory backend очереди для тестов worker-а. Список pending +
-// processing + lease-флаги. Потокобезопасен.
+// fakeBackend is an in-memory queue backend for worker tests. It tracks pending,
+// processing, and lease flags. Thread-safe.
 type fakeBackend struct {
 	mu         sync.Mutex
 	pending    [][]byte
@@ -578,7 +578,7 @@ func (b *fakeBackend) pendingJobs(t *testing.T) []*DeliveryJob {
 	return out
 }
 
-// recordingHeralds — реестр heralds для теста: один webhook-канал.
+// recordingHeralds is a heralds registry for tests: one webhook channel.
 type recordingHeralds struct {
 	herald *Herald
 	err    error
@@ -591,7 +591,7 @@ func (r recordingHeralds) HeraldByName(_ context.Context, _ string) (*Herald, er
 	return r.herald, nil
 }
 
-// recordingAudit — собирает записанные audit-события.
+// recordingAudit collects written audit events.
 type recordingAudit struct {
 	mu     sync.Mutex
 	events []*audit.Event
@@ -610,10 +610,9 @@ func (a *recordingAudit) terminals() []*audit.Event {
 	return append([]*audit.Event(nil), a.events...)
 }
 
-// TestHandle_TransientFailure_RequeuesWithIncrementedAttempt — сбой доставки
-// (канал есть, но URL ведёт в никуда → SSRF-guard пропускает literal-IP? нет:
-// используем no-retry vs retry). Здесь проверяем retry-СЧЁТ через requeue на
-// транзиентной ошибке (Vault-сбой при резолве secret_ref — retryable).
+// TestHandle_TransientFailure_RequeuesWithIncrementedAttempt verifies delivery
+// failure retry counting through requeue on a transient error. The channel exists,
+// but resolving secret_ref fails through Vault, which is retryable.
 func TestHandle_TransientFailure_RequeuesWithIncrementedAttempt(t *testing.T) {
 	backend := newFakeBackend()
 	secretRef := "vault:secret/keeper/herald-sign"
@@ -627,7 +626,7 @@ func TestHandle_TransientFailure_RequeuesWithIncrementedAttempt(t *testing.T) {
 	w := &DeliveryWorker{
 		Queue:   backend,
 		Heralds: recordingHeralds{herald: h},
-		KV:      failingKV{}, // Vault-сбой при резолве signing-token → retryable
+		KV:      failingKV{}, // Vault failure while resolving signing token: retryable.
 		Logger:  discardLogger(),
 		Backoff: fastBackoff,
 	}
@@ -645,8 +644,9 @@ func TestHandle_TransientFailure_RequeuesWithIncrementedAttempt(t *testing.T) {
 	}
 }
 
-// TestHandle_RetryExhausted_TerminalFailed — на последней попытке (attempt
-// достигает retryMax-1) сбой даёт терминальный herald.failed, без перепостановки.
+// TestHandle_RetryExhausted_TerminalFailed verifies that failure on the last
+// attempt (attempt reaches retryMax-1) produces terminal herald.failed without
+// requeue.
 func TestHandle_RetryExhausted_TerminalFailed(t *testing.T) {
 	backend := newFakeBackend()
 	rec := &recordingAudit{}
@@ -659,7 +659,7 @@ func TestHandle_RetryExhausted_TerminalFailed(t *testing.T) {
 		Queue: backend, Heralds: recordingHeralds{herald: h},
 		KV: failingKV{}, Audit: rec, Logger: discardLogger(), Backoff: fastBackoff,
 	}
-	// Последняя попытка: attempt = retryMax-1. +1 >= retryMax → терминал.
+	// Last attempt: attempt = retryMax-1. +1 >= retryMax means terminal.
 	lastAttempt := w.retryMax() - 1
 	job := &DeliveryJob{ID: "jX", Attempt: lastAttempt, Herald: "sign-webhook", EventType: audit.EventScenarioRunFailed}
 	payload, _ := marshalJob(job)
@@ -681,8 +681,8 @@ func TestHandle_RetryExhausted_TerminalFailed(t *testing.T) {
 	}
 }
 
-// TestHandle_ChannelDisabled_TerminalNoRetry — выключенный канал → терминал без
-// retry даже на первой попытке.
+// TestHandle_ChannelDisabled_TerminalNoRetry verifies that a disabled channel is
+// terminal without retry even on the first attempt.
 func TestHandle_ChannelDisabled_TerminalNoRetry(t *testing.T) {
 	backend := newFakeBackend()
 	rec := &recordingAudit{}
@@ -702,8 +702,8 @@ func TestHandle_ChannelDisabled_TerminalNoRetry(t *testing.T) {
 	}
 }
 
-// TestHandle_ChannelNotFound_TerminalNoRetry — канал снесён между постановкой и
-// доставкой → терминал без retry.
+// TestHandle_ChannelNotFound_TerminalNoRetry verifies that a channel deleted
+// between enqueue and delivery is terminal without retry.
 func TestHandle_ChannelNotFound_TerminalNoRetry(t *testing.T) {
 	backend := newFakeBackend()
 	rec := &recordingAudit{}
@@ -744,7 +744,7 @@ func TestMaskErr_Nil(t *testing.T) {
 
 // --- helpers ---
 
-// failingKV — KVReader, всегда возвращающий ошибку (имитация Vault-сбоя).
+// failingKV is a KVReader that always returns an error (Vault failure simulation).
 type failingKV struct{}
 
 func (failingKV) ReadKV(_ context.Context, _ string) (map[string]any, error) {
@@ -753,6 +753,6 @@ func (failingKV) ReadKV(_ context.Context, _ string) (map[string]any, error) {
 
 func discardLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
 
-// fastBackoff — короткие задержки между попытками для тестов (3 повтора по 1ms;
-// retryMax=4 как в проде, но без реального ожидания минут).
+// fastBackoff is short delays between attempts for tests: 3 retries by 1ms, so
+// retryMax=4 as in production but without real minutes of waiting.
 var fastBackoff = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}

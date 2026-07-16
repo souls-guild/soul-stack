@@ -20,8 +20,8 @@ func TestValidateDeliveryEndpoint(t *testing.T) {
 		{"literal private IP denied", "https://10.0.0.5/x", false, false, true},
 		{"literal loopback denied", "https://127.0.0.1/x", false, false, true},
 		{"metadata IP denied", "https://169.254.169.254/x", false, false, true},
-		// allow_private снимает dial-guard → literal private проходит pre-валидацию
-		// (фактический dial-guard выключен в guardedDeliveryClient).
+		// allow_private disables dial guard, so literal private passes pre-validation
+		// (actual dial guard disabled in guardedDeliveryClient).
 		{"literal private IP allowed by opt-out", "https://10.0.0.5/x", false, true, false},
 		{"no host", "https://", false, false, true},
 		{"bad scheme", "ftp://host/x", false, false, true},
@@ -37,7 +37,7 @@ func TestValidateDeliveryEndpoint(t *testing.T) {
 	}
 }
 
-// TestResolveSigningKey_FieldSelection — выбор поля signing-token из секрета.
+// TestResolveSigningKey_FieldSelection checks selecting signing-token field from secret.
 func TestResolveSigningKey_FieldSelection(t *testing.T) {
 	t.Run("explicit #field", func(t *testing.T) {
 		kv := stubKV{data: map[string]any{"token": "abc", "other": "x"}}
@@ -75,7 +75,7 @@ func TestResolveSigningKey_FieldSelection(t *testing.T) {
 	})
 }
 
-// stubKV — KVReader, возвращающий фиксированный секрет.
+// stubKV is KVReader returning fixed secret.
 type stubKV struct {
 	data map[string]any
 }

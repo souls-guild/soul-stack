@@ -1,7 +1,7 @@
 //go:build integration
 
-// Integration-тесты CRUD Herald/Tiding (ADR-052, S1) через testcontainers-go.
-// Паттерн совпадает с keeper/internal/augur/integration_test.go.
+// Integration tests for Herald/Tiding CRUD (ADR-052, S1) through testcontainers-go.
+// The pattern matches keeper/internal/augur/integration_test.go.
 
 package herald
 
@@ -78,7 +78,7 @@ func run(m *testing.M) int {
 
 func resetAll(t *testing.T) {
 	t.Helper()
-	// CASCADE: tidings → heralds → operators (FK chain).
+	// CASCADE: tidings -> heralds -> operators (FK chain).
 	_, err := integrationPool.Exec(context.Background(),
 		`TRUNCATE TABLE tidings, heralds, operators, audit_log CASCADE`)
 	if err != nil {
@@ -135,7 +135,7 @@ func TestIntegration_Herald_InsertSelectUpdateDelete(t *testing.T) {
 		t.Errorf("secret_ref round-trip = %v", got.SecretRef)
 	}
 
-	// Update: disable + сменить config.
+	// Update: disable and change config.
 	got.Enabled = false
 	got.Config = map[string]any{"url": "https://new.example.com/x"}
 	got.SecretRef = nil
@@ -164,7 +164,7 @@ func TestIntegration_Herald_NullableSecretRef(t *testing.T) {
 	ctx := context.Background()
 
 	h := newWebhookHerald("no-secret", "archon-alice")
-	h.SecretRef = nil // webhook без подписи — допустим.
+	h.SecretRef = nil // Webhook without a signature is allowed.
 	if err := InsertHerald(ctx, integrationPool, h); err != nil {
 		t.Fatalf("InsertHerald with nil secret_ref: %v", err)
 	}
@@ -197,8 +197,8 @@ func TestIntegration_Herald_TypeCHECK(t *testing.T) {
 	seedOperator(t, "archon-alice")
 	ctx := context.Background()
 
-	// Обходим service-валидацию ValidHeraldType, чтобы добраться до БД-CHECK
-	// heralds_type_enum (defence in depth — БД не пускает чужой type).
+	// Bypass ValidHeraldType service validation to reach the DB CHECK
+	// heralds_type_enum (defence in depth: the DB rejects foreign types).
 	_, err := integrationPool.Exec(ctx,
 		`INSERT INTO heralds (name, type, config) VALUES ($1, $2, '{}'::jsonb)`,
 		"bad-type", "pagerduty")
@@ -301,7 +301,7 @@ func TestIntegration_Tiding_HeraldCascadeDelete(t *testing.T) {
 		t.Fatalf("InsertTiding: %v", err)
 	}
 
-	// Снос Herald-а каскадом уносит Tiding (ADR-052(a) ON DELETE CASCADE).
+	// Deleting a Herald cascades to its Tiding (ADR-052(a) ON DELETE CASCADE).
 	if err := DeleteHerald(ctx, integrationPool, "ch"); err != nil {
 		t.Fatalf("DeleteHerald: %v", err)
 	}
@@ -318,7 +318,7 @@ func TestIntegration_Tiding_EmptyEventTypesCHECK(t *testing.T) {
 	if err := InsertHerald(ctx, integrationPool, newWebhookHerald("ch", "archon-alice")); err != nil {
 		t.Fatalf("InsertHerald: %v", err)
 	}
-	// Обходим service-валидацию ValidateEventTypes, чтобы добраться до БД-CHECK
+	// Bypass ValidateEventTypes service validation to reach the DB CHECK
 	// tidings_event_types_nonempty (defence in depth).
 	_, err := integrationPool.Exec(ctx,
 		`INSERT INTO tidings (name, herald, event_types) VALUES ($1, $2, $3)`,
@@ -348,9 +348,9 @@ func TestIntegration_Tiding_DuplicateName(t *testing.T) {
 
 // --- N1: ephemeral / voyage_id / annotations / projection round-trip --
 
-// TestIntegration_Tiding_EphemeralPayloadRoundTrip — новые N1-поля проходят
-// insert → select → update без потери (ADR-052(g)/(h)): ephemeral+voyage_id,
-// annotations (JSONB-объект) и projection (TEXT[]).
+// TestIntegration_Tiding_EphemeralPayloadRoundTrip verifies that the new N1
+// fields round-trip through insert -> select -> update without loss (ADR-052(g)/(h)):
+// ephemeral+voyage_id, annotations (JSONB object), and projection (TEXT[]).
 func TestIntegration_Tiding_EphemeralPayloadRoundTrip(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -389,7 +389,7 @@ func TestIntegration_Tiding_EphemeralPayloadRoundTrip(t *testing.T) {
 		t.Errorf("projection round-trip = %+v", got.Projection)
 	}
 
-	// Update: сменить projection/annotations, оставаясь ephemeral.
+	// Update projection/annotations while staying ephemeral.
 	got.Projection = []string{"event_type"}
 	got.Annotations = map[string]any{"runbook": "https://wiki/x"}
 	if err := UpdateTiding(ctx, integrationPool, got); err != nil {
@@ -404,10 +404,10 @@ func TestIntegration_Tiding_EphemeralPayloadRoundTrip(t *testing.T) {
 	}
 }
 
-// TestIntegration_Tiding_UpdateClearsPayload — replace-семантика UpdateTiding
-// (N4): постоянное правило с annotations/projection обновляется БЕЗ этих полей
-// (nil) → они очищаются (annotations='{}', projection='{}'). Live-доказательство
-// omit==clear для FE: пустое/опущенное поле в PUT затирает прежнее значение.
+// TestIntegration_Tiding_UpdateClearsPayload covers UpdateTiding replace semantics
+// (N4): a persistent rule with annotations/projection is updated without these
+// fields (nil), so they are cleared (annotations='{}', projection='{}'). This is
+// live proof for FE that empty/omitted PUT fields erase previous values.
 func TestIntegration_Tiding_UpdateClearsPayload(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -428,7 +428,7 @@ func TestIntegration_Tiding_UpdateClearsPayload(t *testing.T) {
 		t.Fatalf("InsertTiding: %v", err)
 	}
 
-	// PUT-replace без annotations/projection (handler передаёт nil) → очистка.
+	// PUT replace without annotations/projection (handler passes nil): clear.
 	cleared := &Tiding{
 		Name:       "persistent-payload",
 		Herald:     "ch",
@@ -450,9 +450,9 @@ func TestIntegration_Tiding_UpdateClearsPayload(t *testing.T) {
 	}
 }
 
-// TestIntegration_Tiding_TaskSelectorRoundTrip — task-селектор (ADR-052 §l, T4a)
-// проходит insert → select → update без потери, а PUT-replace без task его
-// очищает (omit==clear, как annotations/projection).
+// TestIntegration_Tiding_TaskSelectorRoundTrip verifies that the task selector
+// (ADR-052(l), T4a) round-trips through insert -> select -> update without loss,
+// and PUT replace without task clears it (omit==clear, like annotations/projection).
 func TestIntegration_Tiding_TaskSelectorRoundTrip(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -480,7 +480,7 @@ func TestIntegration_Tiding_TaskSelectorRoundTrip(t *testing.T) {
 		t.Errorf("task = %v, want nginx_pkg", got.Task)
 	}
 
-	// PUT-replace без task (handler передаёт nil) → очистка (omit==clear).
+	// PUT replace without task (handler passes nil): clear (omit==clear).
 	cleared := &Tiding{
 		Name:       "task-sub",
 		Herald:     "ch",
@@ -499,8 +499,9 @@ func TestIntegration_Tiding_TaskSelectorRoundTrip(t *testing.T) {
 	}
 }
 
-// TestIntegration_Tiding_PersistentDefaults — постоянное правило (как в S1) пишет
-// ephemeral=false, voyage_id=NULL, annotations='{}', projection='{}' через DEFAULT.
+// TestIntegration_Tiding_PersistentDefaults verifies that a persistent rule (as in
+// S1) writes ephemeral=false, voyage_id=NULL, annotations='{}', projection='{}'
+// through DEFAULT.
 func TestIntegration_Tiding_PersistentDefaults(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -525,9 +526,9 @@ func TestIntegration_Tiding_PersistentDefaults(t *testing.T) {
 	}
 }
 
-// TestIntegration_Tiding_EphemeralVoyageCHECK — БД-CHECK
-// tidings_ephemeral_voyage_consistent ловит нарушение ephemeral⟺voyage_id
-// (обходим service-валидацию прямым INSERT — defence in depth).
+// TestIntegration_Tiding_EphemeralVoyageCHECK verifies that DB CHECK
+// tidings_ephemeral_voyage_consistent catches an ephemeral <-> voyage_id violation
+// by bypassing service validation with a direct INSERT (defence in depth).
 func TestIntegration_Tiding_EphemeralVoyageCHECK(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -537,7 +538,7 @@ func TestIntegration_Tiding_EphemeralVoyageCHECK(t *testing.T) {
 		t.Fatalf("InsertHerald: %v", err)
 	}
 
-	// ephemeral=true без voyage_id → CHECK violation.
+	// ephemeral=true without voyage_id: CHECK violation.
 	_, err := integrationPool.Exec(ctx,
 		`INSERT INTO tidings (name, herald, event_types, ephemeral) VALUES ($1, $2, $3, true)`,
 		"bad-eph", "ch", []string{"scenario_run.*"})
@@ -545,7 +546,7 @@ func TestIntegration_Tiding_EphemeralVoyageCHECK(t *testing.T) {
 		t.Fatal("expected CHECK violation: ephemeral=true requires voyage_id")
 	}
 
-	// ephemeral=false с voyage_id → CHECK violation.
+	// ephemeral=false with voyage_id: CHECK violation.
 	_, err = integrationPool.Exec(ctx,
 		`INSERT INTO tidings (name, herald, event_types, ephemeral, voyage_id) VALUES ($1, $2, $3, false, $4)`,
 		"bad-persist", "ch", []string{"scenario_run.*"}, "vy_1")
@@ -554,9 +555,9 @@ func TestIntegration_Tiding_EphemeralVoyageCHECK(t *testing.T) {
 	}
 }
 
-// TestIntegration_Tiding_EphemeralPartialIndex — partial-индекс
-// tidings_ephemeral_voyage_idx покрывает ТОЛЬКО ephemeral-строки. Проверяем через
-// pg_indexes (определение индекса несёт voyage_id + WHERE ephemeral).
+// TestIntegration_Tiding_EphemeralPartialIndex verifies that the partial index
+// tidings_ephemeral_voyage_idx covers only ephemeral rows. It checks pg_indexes:
+// the index definition carries voyage_id plus WHERE ephemeral.
 func TestIntegration_Tiding_EphemeralPartialIndex(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -575,10 +576,10 @@ func TestIntegration_Tiding_EphemeralPartialIndex(t *testing.T) {
 	}
 }
 
-// TestIntegration_Tiding_ListHidesEphemeral — guard read-пути listing (S2,
-// ADR-042 «тупой фронт»): SelectAllTidings БЕЗ include_ephemeral отдаёт ТОЛЬКО
-// постоянные правила; total считается под тем же предикатом. include_ephemeral=
-// true отдаёт все. Сидим 1 постоянное + 2 разовых правила.
+// TestIntegration_Tiding_ListHidesEphemeral guards the listing read path (S2,
+// ADR-042 "dumb frontend"): SelectAllTidings without include_ephemeral returns
+// only persistent rules, and total uses the same predicate. include_ephemeral=true
+// returns everything. Seed one persistent rule and two one-shot rules.
 func TestIntegration_Tiding_ListHidesEphemeral(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -588,13 +589,13 @@ func TestIntegration_Tiding_ListHidesEphemeral(t *testing.T) {
 		t.Fatalf("InsertHerald: %v", err)
 	}
 
-	// Постоянное правило.
+	// Persistent rule.
 	persistent := &Tiding{Name: "persistent", Herald: "ch", EventTypes: []string{"voyage.*"}, Enabled: true}
 	if err := InsertTiding(ctx, integrationPool, persistent); err != nil {
 		t.Fatalf("InsertTiding persistent: %v", err)
 	}
-	// Два разовых правила (привязаны к прогонам). Имя Tiding должно матчить
-	// NamePattern (^[a-z0-9-]{1,63}$) — voyage_id с подчёркиванием в имя не годится.
+	// Two one-shot rules, bound to runs. The Tiding name must match NamePattern
+	// (^[a-z0-9-]{1,63}$), so a voyage_id with underscores cannot be used as name.
 	for i, vy := range []string{"vy_1", "vy_2"} {
 		eph := &Tiding{
 			Name:       fmt.Sprintf("eph-%d", i),
@@ -609,19 +610,19 @@ func TestIntegration_Tiding_ListHidesEphemeral(t *testing.T) {
 		}
 	}
 
-	// Default (includeEphemeral=false): только постоянное.
+	// Default (includeEphemeral=false): persistent only.
 	items, total, err := SelectAllTidings(ctx, integrationPool, false, 0, 50)
 	if err != nil {
 		t.Fatalf("SelectAllTidings(false): %v", err)
 	}
 	if total != 1 || len(items) != 1 {
-		t.Fatalf("default listing total = %d, items = %d, want 1/1 (ephemeral скрыт)", total, len(items))
+		t.Fatalf("default listing total = %d, items = %d, want 1/1 (ephemeral hidden)", total, len(items))
 	}
 	if items[0].Name != "persistent" || items[0].Ephemeral {
 		t.Errorf("default listing leaked ephemeral: %+v", items[0])
 	}
 
-	// includeEphemeral=true: все три.
+	// includeEphemeral=true: all three.
 	all, totalAll, err := SelectAllTidings(ctx, integrationPool, true, 0, 50)
 	if err != nil {
 		t.Fatalf("SelectAllTidings(true): %v", err)

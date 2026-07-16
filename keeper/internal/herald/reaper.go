@@ -1,11 +1,11 @@
 package herald
 
-// Mini-reaper осиротевших job-ов доставки (ADR-052(d)): worker, клеймивший job
-// (BRPOPLPUSH в processing-LIST), мог умереть до Ack/Requeue — job застрял в
-// processing с истёкшим lease-ключом. Reaper периодически возвращает такие
-// job-ы обратно в pending (at-least-once). Лёгкая фоновая горутина (одна на
-// инстанс; конкурентные reaper-ы на N инстансов безопасны — перенос идемпотентен
-// по LREM).
+// Mini-reaper for orphaned delivery jobs (ADR-052(d)): a worker that claimed a job
+// (BRPOPLPUSH into the processing LIST) could die before Ack/Requeue, leaving the
+// job stuck in processing with an expired lease key. Reaper periodically returns
+// such jobs back to pending (at-least-once). This is a lightweight background
+// goroutine, one per instance; concurrent reapers across N instances are safe
+// because transfer is idempotent by LREM.
 
 import (
 	"context"
@@ -13,14 +13,14 @@ import (
 	"time"
 )
 
-// DefaultReaperInterval — период скана processing-LIST на осиротевшие job-ы.
-// Реже leaseTTL (5m): осиротевший job ждёт максимум interval+leaseTTL до
-// возврата — приемлемо для уведомлений (не критичный по latency путь).
+// DefaultReaperInterval is the scan period for orphaned jobs in the processing
+// LIST. It is less frequent than leaseTTL (5m): an orphaned job waits at most
+// interval+leaseTTL before return, which is acceptable for notifications.
 const DefaultReaperInterval = time.Minute
 
-// RunDeliveryReaper крутит mini-reaper до отмены ctx. На каждом тике зовёт
-// RequeueExpired backend-а; число возвращённых job-ов логирует. Ошибка скана
-// best-effort (логируется, не валит loop — следующий тик повторит).
+// RunDeliveryReaper runs the mini-reaper until ctx is cancelled. On every tick it
+// calls the backend's RequeueExpired and logs the number of returned jobs. Scan
+// errors are best-effort: logged but do not stop the loop; the next tick retries.
 func RunDeliveryReaper(ctx context.Context, queue queueBackend, interval time.Duration, logger *slog.Logger) {
 	if interval <= 0 {
 		interval = DefaultReaperInterval

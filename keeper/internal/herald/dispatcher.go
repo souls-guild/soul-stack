@@ -147,19 +147,19 @@ func (d *Dispatcher) Dispatch(ctx context.Context, event *audit.Event) {
 		return
 	}
 
-	// Snapshot queue under RLock — late-binding SetQueue (setupRedis) may substitute
-	// её конкурентно с Dispatch (tap-consumer-горутина).
+	// Snapshot queue under RLock; late-binding SetQueue (setupRedis) may substitute
+	// it concurrently with Dispatch (tap-consumer goroutine).
 	d.mu.RLock()
 	queue := d.queue
 	d.mu.RUnlock()
 
-	// occurred_at момента матча: event.CreatedAt чаще всего zero — инициаторы
-	// write-path-а полагаются на PG `DEFAULT NOW()` (auditpg.Write пишет время в
-	// строку БД, но НЕ обратно в *event), поэтому к моменту tap-наблюдения поле
-	// нулевое. Берём время матча (d.clock — момент постановки job-а, ближайшее к
-	// audit-INSERT-у наблюдаемое нам время), а CreatedAt используем только когда
-	// инициатор проставил его явно (нечастый случай). Иначе occurred_at в webhook-
-	// теле был бы 0001-01-01 (баг live-smoke Herald).
+	// occurred_at of match moment: event.CreatedAt is usually zero; write-path
+	// initiators rely on PG `DEFAULT NOW()` (auditpg.Write writes time into
+	// DB row, but NOT back to *event), so by tap observation time field is
+	// zero. Use match time (d.clock, job enqueue moment, nearest observable time
+	// to audit INSERT), and use CreatedAt only when initiator set it explicitly
+	// (rare case). Otherwise occurred_at in webhook body would be 0001-01-01
+	// (Herald live-smoke bug).
 	occurredAt := occurredAt(event, d.clock())
 
 	matched := 0
@@ -176,10 +176,10 @@ func (d *Dispatcher) Dispatch(ctx context.Context, event *audit.Event) {
 			CorrelationID: event.CorrelationID,
 			OccurredAt:    occurredAt,
 			PayloadCopy:   copyPayload(event.Payload),
-			// Annotations/Projection переносятся в job из Tiding, но dispatcher
-			// их НЕ применяет (ADR-052(h): merge/projection — off-path в worker-е
-			// при сборке webhookPayload, N3). Здесь только перенос — worker (N3)
-			// читает эти поля; пока игнорирует (заглушка).
+			// Annotations/Projection are copied into job from Tiding, but dispatcher
+			// does NOT apply them (ADR-052(h): merge/projection is off-path in worker
+			// when building webhookPayload, N3). This only transfers fields; worker (N3)
+			// reads them.
 			Annotations: t.Annotations,
 			Projection:  t.Projection,
 		}
@@ -195,8 +195,8 @@ func (d *Dispatcher) Dispatch(ctx context.Context, event *audit.Event) {
 	d.metrics.observeDispatch(matched)
 }
 
-// rules возвращает снимок enabled-правил, перечитывая из source при холодном
-// кэше или истёкшем TTL. Под RWMutex: быстрый путь (read-lock) на тёплом кэше.
+// rules returns snapshot of enabled rules, rereading from source on cold
+// cache or expired TTL. Under RWMutex: fast path (read-lock) on warm cache.
 func (d *Dispatcher) rules(ctx context.Context) ([]*Tiding, error) {
 	now := d.clock()
 
@@ -210,16 +210,16 @@ func (d *Dispatcher) rules(ctx context.Context) ([]*Tiding, error) {
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	// Повторная проверка под write-lock: другой вызов мог обновить кэш, пока
-	// мы ждали lock (single-flight без отдельной группы — refresh дёшев).
+	// Recheck under write-lock: another call may have refreshed cache while
+	// we waited for lock (single-flight without separate group; refresh is cheap).
 	if d.cacheInit && now.Sub(d.cachedAt) < d.ttl {
 		return d.cached, nil
 	}
 	rules, err := d.source.EnabledTidings(ctx)
 	if err != nil {
-		// Кэш не трогаем: при сбое source держим прежний снимок (если был),
-		// но возвращаем ошибку — Dispatch её залогирует и пропустит событие.
-		// Прежний снимок остаётся валидным для следующих событий до сходимости.
+		// Do not touch cache: on source failure keep previous snapshot (if any),
+		// but return error so Dispatch logs it and skips event.
+		// Previous snapshot remains valid for following events until convergence.
 		return nil, err
 	}
 	d.cached = rules
@@ -228,15 +228,15 @@ func (d *Dispatcher) rules(ctx context.Context) ([]*Tiding, error) {
 	return rules, nil
 }
 
-// matchTiding — true, если событие проходит ВСЕ условия Tiding-правила
-// (ADR-052(c)): хотя бы один event_type-паттерн покрывает тип события И
-// (only_failures ⇒ событие-провал) И (only_changes ⇒ событие несёт changes)
-// И селекторы incarnation/cadence/task (если заданы) совпадают. task-селектор
-// (ADR-052 §l) матчит только incarnation.run_completed с искомым адресом в
-// changed_tasks (см. matchTask).
+// matchTiding is true if event passes ALL conditions of Tiding rule
+// (ADR-052(c)): at least one event_type pattern covers event type AND
+// (only_failures implies failed event) AND (only_changes implies event carries changes)
+// AND incarnation/cadence/task selectors (if set) match. task selector
+// (ADR-052 section l) matches only incarnation.run_completed with requested address in
+// changed_tasks (see matchTask).
 //
-// Disabled-правила сюда не доходят — source отдаёт только enabled
-// (tidings_enabled_idx). Пустой EventTypes невозможен (CHECK + валидация).
+// Disabled rules do not reach here; source returns only enabled
+// (tidings_enabled_idx). Empty EventTypes impossible (CHECK + validation).
 func matchTiding(t *Tiding, event *audit.Event) bool {
 	if t == nil {
 		return false
@@ -250,9 +250,9 @@ func matchTiding(t *Tiding, event *audit.Event) bool {
 	if t.OnlyChanges && !hasChanges(event.EventType, event.Payload) {
 		return false
 	}
-	// Ephemeral-правило (ADR-052(g)) сужено до СВОЕГО прогона: VoyageID-селектор
-	// матчит только события этого Voyage. Постоянные правила (VoyageID nil)
-	// проходят как раньше — matchVoyage возвращает true.
+	// Ephemeral rule (ADR-052(g)) is narrowed to ITS run: VoyageID selector
+	// matches only events of that Voyage. Permanent rules (VoyageID nil)
+	// pass as before; matchVoyage returns true.
 	if !matchVoyage(t.VoyageID, event.CorrelationID, event.Payload) {
 		return false
 	}
@@ -277,11 +277,11 @@ func matchAnyEventType(patterns []string, et audit.EventType) bool {
 	return false
 }
 
-// occurredAt выбирает occurred_at для DeliveryJob: явный event.CreatedAt, если
-// инициатор его проставил, иначе fallback на now (момент матча). Причина
-// fallback — auditpg.Write оставляет event.CreatedAt нулевым при опоре на PG
-// `DEFAULT NOW()`, а tap наблюдает тот же указатель уже после INSERT-а (см.
-// вызов в Dispatch). Возвращаемое время — UTC.
+// occurredAt chooses occurred_at for DeliveryJob: explicit event.CreatedAt if
+// initiator set it, otherwise fallback to now (match moment). Fallback reason:
+// auditpg.Write leaves event.CreatedAt zero when relying on PG
+// `DEFAULT NOW()`, and tap observes same pointer after INSERT (see
+// call in Dispatch). Returned time is UTC.
 func occurredAt(event *audit.Event, now time.Time) time.Time {
 	if !event.CreatedAt.IsZero() {
 		return event.CreatedAt.UTC()
@@ -289,15 +289,15 @@ func occurredAt(event *audit.Event, now time.Time) time.Time {
 	return now.UTC()
 }
 
-// copyPayload — копия ТОЛЬКО верхнего уровня payload-map: новый map с теми же
-// значениями по ссылке. Вложенные map/slice НЕ изолированы — глубокая мутация
-// (например, payload["summary"].(map)["x"]=…) видна и через копию, и через
-// оригинал. Это осознанный trade-off: здесь payload ещё НЕ замаскирован (сырой
-// in-process *event, tap видит его до маскинга), а это лишь read-only снимок для
-// доставки — маскинг секретов делается позже на доставке в worker.buildPayload
-// (MaskSecrets). Глубокое копирование на горячем write-path не оправдано; копия
-// защищает лишь от подмены/добавления ключей верхнего уровня общего указателя.
-// nil → nil.
+// copyPayload copies ONLY top level of payload map: new map with same
+// values by reference. Nested map/slice values are NOT isolated; deep mutation
+// (for example, payload["summary"].(map)["x"]=...) is visible through both copy
+// and original. Deliberate trade-off: payload here is NOT masked yet (raw
+// in-process *event, tap sees it before masking), and this is only read-only snapshot for
+// delivery; secret masking happens later on delivery in worker.buildPayload
+// (MaskSecrets). Deep copying on hot write-path is not justified; copy
+// protects only from replacing/adding top-level keys on shared pointer.
+// nil -> nil.
 func copyPayload(p map[string]any) map[string]any {
 	if p == nil {
 		return nil

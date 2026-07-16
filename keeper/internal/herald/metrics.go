@@ -37,19 +37,19 @@ func RegisterDispatcherMetrics(reg *obs.Registry) *DispatcherMetrics {
 	m := &DispatcherMetrics{
 		tapDropped: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "keeper_herald_tap_dropped_total",
-			Help: "Количество audit-событий, дропнутых notification-tap-ом из-за полного буфера (consumer не успевает).",
+			Help: "Audit events dropped by notification tap because the buffer is full (consumer cannot keep up).",
 		}),
 		dispatchTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "keeper_herald_dispatch_total",
-			Help: "Количество событий, обработанных notification-dispatcher-ом, разрезанное по факту матча (matched/unmatched).",
+			Help: "Events processed by notification dispatcher, split by match result (matched/unmatched).",
 		}, []string{"result"}),
 		matchesTotal: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "keeper_herald_matches_total",
-			Help: "Количество сматченных пар (событие × Tiding-правило); каждая порождает задание на доставку.",
+			Help: "Matched pairs (event x Tiding rule); each creates one delivery job.",
 		}),
 		errorsTotal: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "keeper_herald_dispatch_errors_total",
-			Help: "Количество ошибок загрузки Tiding-правил / постановки задания в очередь доставки (best-effort).",
+			Help: "Errors loading Tiding rules or enqueuing delivery jobs (best-effort).",
 		}),
 	}
 	reg.Registerer().MustRegister(m.tapDropped, m.dispatchTotal, m.matchesTotal, m.errorsTotal)
@@ -114,19 +114,19 @@ func RegisterDeliveryMetrics(reg *obs.Registry) *DeliveryMetrics {
 	m := &DeliveryMetrics{
 		attempts: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "keeper_herald_delivery_attempts_total",
-			Help: "Количество попыток webhook-доставки уведомления (claim + POST), по herald-каналу.",
+			Help: "Webhook notification delivery attempts (claim + POST), by herald channel.",
 		}, []string{"herald"}),
 		succeeded: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "keeper_herald_delivery_succeeded_total",
-			Help: "Количество успешных доставок уведомления (2xx-терминал), по herald-каналу.",
+			Help: "Successful notification deliveries (2xx terminal), by herald channel.",
 		}, []string{"herald"}),
 		failed: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "keeper_herald_delivery_failed_total",
-			Help: "Количество терминальных провалов доставки (исчерпан retry / no-retry-ошибка), по herald-каналу.",
+			Help: "Terminal delivery failures (retry exhausted / no-retry error), by herald channel.",
 		}, []string{"herald"}),
 		retries: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "keeper_herald_delivery_retries_total",
-			Help: "Количество перепостановок уведомления на повтор (retry с backoff), по herald-каналу.",
+			Help: "Notification requeues for retry with backoff, by herald channel.",
 		}, []string{"herald"}),
 	}
 	reg.Registerer().MustRegister(m.attempts, m.succeeded, m.failed, m.retries)

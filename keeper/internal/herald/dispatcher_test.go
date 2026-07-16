@@ -158,7 +158,7 @@ func TestMatchTiding_Table(t *testing.T) {
 		{"only_failures + only_changes both required", rule(func(t *Tiding) {
 			t.OnlyFailures = true
 			t.OnlyChanges = true
-		}), scenarioFailed, false}, // failed-событие succeeded=0 → changes=false
+		}), scenarioFailed, false}, // failed event with succeeded=0 -> changes=false
 
 		{"incarnation selector match on drift", rule(func(t *Tiding) {
 			t.EventTypes = []string{"incarnation.drift_checked"}
@@ -218,7 +218,7 @@ func TestDispatch_DisabledRuleNotInSource(t *testing.T) {
 	disabled := &Tiding{Name: "off", Herald: "h", EventTypes: []string{"scenario_run.*"}, Enabled: false}
 	q := &fakeQueue{}
 	d := NewDispatcher(DispatcherConfig{
-		Source: &staticSource{rules: nil}, // source уже отфильтровал disabled
+		Source: &staticSource{rules: nil}, // source already filtered disabled
 		Queue:  q,
 	})
 	_ = disabled
@@ -368,7 +368,7 @@ func TestDispatch_EnqueueError_ContinuesOtherRules(t *testing.T) {
 		}},
 		Queue: q,
 	})
-	// Не должно паниковать; ошибка enqueue проглатывается.
+	// Must not panic; enqueue error is swallowed.
 	d.Dispatch(context.Background(), ev(audit.EventScenarioRunCompleted, nil))
 }
 

@@ -9,30 +9,31 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// DefaultTapBuffer — ёмкость bounded-буфера notification-tap-а. Tap получает
-// КАЖДОЕ audit-событие keeper-а (горячий write-path); обработка (матч правил)
-// вынесена в отдельную горутину, чтобы Observe не блокировал write-path.
-// Буфер сглаживает всплески; при переполнении событие ДРОПается (drop-счётчик
-// + warn) — tap best-effort по ADR-052(c), потеря уведомления при шторме
-// приемлема, блокировка audit-записи — нет.
+// DefaultTapBuffer is the capacity of the notification tap's bounded buffer. Tap
+// receives every Keeper audit event on the hot write path; processing (rule
+// matching) is moved to a separate goroutine so Observe does not block the
+// write-path. The buffer smooths bursts; when full, the event is dropped
+// (drop counter + warn). Tap is best-effort per ADR-052(c): losing a notification
+// during a storm is acceptable, blocking audit writes is not.
 //
-// 1024 — заметно больше типичного burst-а финализаций (батч Voyage-ов), но
-// ограничивает память при затыке consumer-а (медленный PG-кэш правил).
+// 1024 is noticeably larger than a typical finalization burst (batch of Voyages)
+// while bounding memory if the consumer stalls on a slow PG rule cache.
 const DefaultTapBuffer = 1024
 
-// NotificationTap — keeper-side [audit.Tap]: на каждое успешно-записанное
-// audit-событие неблокирующе кладёт его в bounded-канал; фоновая горутина
-// разбирает канал и зовёт [Dispatcher.Dispatch]. ADR-052(c) tap-точка.
+// NotificationTap is the Keeper-side [audit.Tap]: for every successfully written
+// audit event, it non-blockingly puts the event into a bounded channel; a
+// background goroutine consumes the channel and calls [Dispatcher.Dispatch].
+// This is the ADR-052(c) tap point.
 //
-// Неблокируемость: Observe делает select-with-default — если буфер полон,
-// событие дропается (drop-счётчик + debug-лог). Это изолирует audit write-path
-// от любого затыка в матче/доставке.
+// Non-blocking behavior: Observe uses select-with-default. If the buffer is full,
+// the event is dropped (drop counter + debug log). This isolates the audit
+// write-path from any rule-match or delivery stall.
 //
-// Shutdown через done-канал, НЕ через close(ch): ch никогда не закрывается,
-// поэтому Observe (горячий write-path) не может попасть в send-after-close-панику
-// при гонке с Close. consume в select слушает done-ветку — по сигналу дочитывает
-// остаток буфера и выходит; Observe в select сначала проверяет done (после Close —
-// no-op), затем неблокирующую постановку в ch.
+// Shutdown uses the done channel, not close(ch): ch is never closed, so Observe
+// on the hot write-path cannot hit a send-after-close panic while racing Close.
+// consume listens to the done branch, drains the remaining buffer on signal, and
+// exits. Observe checks done first (after Close, no-op), then tries a non-blocking
+// send to ch.
 type NotificationTap struct {
 	ch         chan *audit.Event
 	done       chan struct{}
@@ -44,9 +45,9 @@ type NotificationTap struct {
 	closeOnce sync.Once
 }
 
-// NewNotificationTap собирает tap поверх dispatcher-а с буфером bufferSize
-// (<=0 → [DefaultTapBuffer]) и запускает consumer-горутину. Возвращает tap
-// (для NewMultiWriter) — его обязательно остановить через Close при shutdown.
+// NewNotificationTap builds a tap on top of dispatcher with bufferSize
+// (<=0 uses [DefaultTapBuffer]) and starts the consumer goroutine. It returns the
+// tap for NewMultiWriter; callers must stop it through Close during shutdown.
 func NewNotificationTap(dispatcher *Dispatcher, logger *slog.Logger, bufferSize int) *NotificationTap {
 	if bufferSize <= 0 {
 		bufferSize = DefaultTapBuffer
@@ -62,8 +63,8 @@ func NewNotificationTap(dispatcher *Dispatcher, logger *slog.Logger, bufferSize 
 	return t
 }
 
-// SetMetrics late-binding метрик (drop-counter / dispatch). Прокидывается
-// после metrics-registry (см. [Dispatcher.SetMetrics]). nil-safe.
+// SetMetrics late-binds metrics (drop counter / dispatch). It is wired after the
+// metrics registry, see [Dispatcher.SetMetrics]. nil-safe.
 func (t *NotificationTap) SetMetrics(m *DispatcherMetrics) {
 	if t == nil {
 		return
@@ -72,14 +73,14 @@ func (t *NotificationTap) SetMetrics(m *DispatcherMetrics) {
 	t.dispatcher.SetMetrics(m)
 }
 
-// Observe — реализация [audit.Tap]. Неблокирующе ставит в буфер указатель из
-// write-path (копия уже снята multi-writer-ом до tap-fan-out); consumer только
-// читает, а dispatcher делает копию payload при постановке job-а, поэтому
-// дополнительного копирования здесь не требуется. При полном буфере — drop.
+// Observe implements [audit.Tap]. It non-blockingly puts the write-path pointer
+// into the buffer (multi-writer already copied it before tap fan-out); the
+// consumer only reads, and dispatcher copies payload when enqueuing the job, so no
+// extra copy is needed here. Full buffer means drop.
 //
-// done-ветка идёт первой: после Close (или во время него) Observe — no-op, в ch
-// ничего не кладётся. Поскольку ch не закрывается, send-after-close-паника
-// невозможна by construction даже при гонке Observe ∥ Close.
+// The done branch comes first: after or during Close, Observe is no-op and puts
+// nothing into ch. Because ch is never closed, send-after-close panic is
+// impossible by construction even when Observe races Close.
 func (t *NotificationTap) Observe(_ context.Context, event *audit.Event) {
 	if t == nil || event == nil {
 		return
@@ -95,10 +96,10 @@ func (t *NotificationTap) Observe(_ context.Context, event *audit.Event) {
 	case t.ch <- event:
 	default:
 		t.metrics.observeDrop()
-		// Drop логируем на debug, не warn: при шторме затыка warn сработал бы на
-		// КАЖДОЕ событие (а не сэмплированно) и залил бы лог. Главный сигнал —
-		// метрика keeper_herald_tap_dropped (counter с производной/алертом);
-		// debug-строка нужна лишь для точечного разбора в дев-сборке.
+		// Log drops at debug, not warn: during a stall storm, warn would fire for
+		// every event and flood logs. The main signal is the
+		// keeper_herald_tap_dropped metric (counter with derivative/alert); the
+		// debug line is only for targeted investigation in a dev build.
 		if t.logger != nil {
 			t.logger.Debug("herald: notification tap buffer full, event dropped",
 				slog.String("event_type", string(event.EventType)))
@@ -106,29 +107,30 @@ func (t *NotificationTap) Observe(_ context.Context, event *audit.Event) {
 	}
 }
 
-// dispatchEnqueueDeadline — потолок на один Dispatch (включая Enqueue в
-// Redis-очередь). Dispatch отвязан от исходного write-ctx (тот мог отмениться),
-// но с реальной RedisDeliveryQueue (S3) Enqueue делает сетевой LPUSH — без
-// deadline зависший Redis подвесил бы consumer-горутину и Close на wg.Wait().
-// Deadline короткий: Enqueue должен быть быстрым (LPUSH), затык → drop job-а
-// (логируется dispatcher-ом как enqueue-ошибка), а не блокировка shutdown-а.
+// dispatchEnqueueDeadline caps one Dispatch, including Enqueue into the Redis
+// queue. Dispatch is detached from the original write ctx, which may have been
+// cancelled, but with a real RedisDeliveryQueue (S3), Enqueue does network
+// LPUSH. Without a deadline, a hung Redis would stall the consumer goroutine and
+// Close on wg.Wait. Deadline is short: Enqueue should be quick (LPUSH); a stall
+// drops the job (logged by dispatcher as an enqueue error) instead of blocking
+// shutdown.
 const dispatchEnqueueDeadline = 5 * time.Second
 
-// consume разбирает буфер до сигнала done, синхронно вызывая Dispatch на каждом
-// событии (одна consumer-горутина — матч правил сериализован, кэш правил под
-// RWMutex). Каждый Dispatch — под ctx с [dispatchEnqueueDeadline] (S3): tap
-// отвязан от исходного write-ctx, но deadline защищает от зависания в Enqueue на
-// неотвечающем Redis-е (иначе Close завис бы на wg.Wait).
+// consume drains the buffer until done is signalled, synchronously calling Dispatch
+// for each event (one consumer goroutine: rule matching is serialized, rule cache
+// is under RWMutex). Each Dispatch gets a ctx with [dispatchEnqueueDeadline] (S3):
+// tap is detached from the original write ctx, but the deadline protects against a
+// stuck Enqueue on an unresponsive Redis; otherwise Close would hang on wg.Wait.
 //
-// По сигналу done дочитывает остаток буфера неблокирующим drain-ом и выходит:
-// ch не закрывается (см. NotificationTap), поэтому остаток выгребается select-ом
-// с default-выходом, а не range-ом по закрытому каналу.
+// On done, it drains the remaining buffer non-blockingly and exits. ch is not
+// closed (see NotificationTap), so the remainder is drained with select and a
+// default exit, not range over a closed channel.
 func (t *NotificationTap) consume() {
 	defer t.wg.Done()
 	for {
 		select {
 		case <-t.done:
-			// Дочитываем то, что уже легло в буфер до сигнала, и выходим.
+			// Drain what was already buffered before the signal, then exit.
 			for {
 				select {
 				case event := <-t.ch:
@@ -143,25 +145,26 @@ func (t *NotificationTap) consume() {
 	}
 }
 
-// dispatch вызывает Dispatcher под ctx с deadline на Enqueue (см.
-// dispatchEnqueueDeadline). Отдельный ctx на каждое событие — отмена не утекает
-// между событиями.
+// dispatch calls Dispatcher under a ctx with an Enqueue deadline, see
+// dispatchEnqueueDeadline. A separate ctx per event prevents cancellation from
+// leaking between events.
 func (t *NotificationTap) dispatch(event *audit.Event) {
 	ctx, cancel := context.WithTimeout(context.Background(), dispatchEnqueueDeadline)
 	defer cancel()
 	t.dispatcher.Dispatch(ctx, event)
 }
 
-// Close сигналит consumer-у через done и дожидается слива остатка. Идемпотентен
-// и безопасен при конкурентных вызовах: закрытие done под sync.Once (без него
-// гонка double-close паникует), wg.Wait — вне Once (сам идемпотентен), поэтому
-// все параллельные Close дождутся завершения consumer-а, а не вернутся раньше.
-// Consumer по done дочитывает остаток буфера и выходит.
+// Close signals the consumer through done and waits for the remaining buffer to
+// drain. It is idempotent and safe under concurrent calls: done is closed under
+// sync.Once (without it, double-close races would panic), while wg.Wait is outside
+// Once and is itself idempotent, so all parallel Close calls wait for the consumer
+// to finish instead of returning early. On done, consumer drains the remaining
+// buffer and exits.
 //
-// Закрывается именно done, НЕ ch: Observe во время и после Close не паникует —
-// канал событий не закрывается вообще, shutdown идёт через done-сигнал, поэтому
-// конкурентный Observe ∥ Close безопасен by construction (см. NotificationTap).
-// Вызывается при graceful-shutdown keeper-а (cleanup-стек).
+// done is closed, not ch: Observe during and after Close does not panic. The event
+// channel is never closed; shutdown goes through the done signal, so concurrent
+// Observe and Close are safe by construction (see NotificationTap). Called during
+// Keeper graceful shutdown by the cleanup stack.
 func (t *NotificationTap) Close() {
 	if t == nil {
 		return

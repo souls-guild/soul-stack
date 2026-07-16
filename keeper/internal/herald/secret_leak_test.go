@@ -133,14 +133,14 @@ func TestWebhookSecretNoLeak(t *testing.T) {
 	}
 	// PG secret_ref = vault:…, not plaintext.
 	if created.SecretRef == nil || *created.SecretRef == leakSigning {
-		t.Fatalf("secret_ref=%v — must be vault-ref", created.SecretRef)
+		t.Fatalf("secret_ref=%v must be vault-ref", created.SecretRef)
 	}
 	// Secret field cleared, write marker set.
 	if created.Secret != nil {
 		t.Fatal("Secret plaintext not cleared after materialization")
 	}
 	if !created.SecretWritten {
-		t.Fatal("SecretWritten не взведён")
+		t.Fatal("SecretWritten was not set")
 	}
 	assertNoLeak(t, leakSigning, pool, created)
 }
@@ -174,10 +174,10 @@ func TestChannelTokenNoLeak(t *testing.T) {
 	}
 	ref, ok := created.Config["bot_token_ref"].(string)
 	if !ok || ref == leakToken {
-		t.Fatalf("config[bot_token_ref]=%v — должен быть vault-ref", created.Config["bot_token_ref"])
+		t.Fatalf("config[bot_token_ref]=%v must be vault-ref", created.Config["bot_token_ref"])
 	}
 	if !created.SecretWritten {
-		t.Fatal("SecretWritten не взведён")
+		t.Fatal("SecretWritten was not set")
 	}
 	assertNoLeak(t, leakToken, pool, created)
 }
@@ -208,7 +208,7 @@ func TestSlackWebhookURLNoLeak(t *testing.T) {
 		t.Fatal("config[webhook_url] plaintext not removed (masking does not catch it!)")
 	}
 	if ref, _ := created.Config["webhook_url_ref"].(string); ref == "" || ref == leakURL {
-		t.Fatalf("config[webhook_url_ref]=%v — должен быть vault-ref", created.Config["webhook_url_ref"])
+		t.Fatalf("config[webhook_url_ref]=%v must be vault-ref", created.Config["webhook_url_ref"])
 	}
 	assertNoLeak(t, leakURL, pool, created)
 }

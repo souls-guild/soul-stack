@@ -13,9 +13,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/obs"
 )
 
-// blockingQueue блокирует первый Enqueue до release — имитирует медленный
-// consumer (downstream доставки/PG-кэш не успевает), заставляя буфер tap-а
-// переполниться.
+// blockingQueue blocks the first Enqueue until release. It simulates a slow
+// consumer (delivery downstream / PG cache cannot keep up), forcing the tap buffer
+// to overflow.
 type blockingQueue struct {
 	release chan struct{}
 	once    sync.Once
@@ -42,8 +42,8 @@ func counterValue(t *testing.T, c prometheus.Counter) float64 {
 }
 
 func TestTap_BufferFull_DropsAndCounts(t *testing.T) {
-	// Правило, которое сматчит ВСЕ scenario_run-события (consumer на каждом
-	// зовёт Enqueue, который заблокирован → consumer застрянет на первом).
+	// Rule that matches all scenario_run events. The consumer calls Enqueue for
+	// each, and Enqueue is blocked, so the consumer gets stuck on the first one.
 	src := &staticSource{rules: []*Tiding{
 		{Name: "a", Herald: "h", EventTypes: []string{"scenario_run.*"}, Enabled: true},
 	}}
@@ -64,16 +64,16 @@ func TestTap_BufferFull_DropsAndCounts(t *testing.T) {
 		"summary": map[string]any{"succeeded": 1},
 	}}
 
-	// Первое событие — consumer его заберёт и застрянет на blockingQueue.Enqueue.
+	// First event: consumer takes it and gets stuck in blockingQueue.Enqueue.
 	tap.Observe(context.Background(), event)
 	select {
 	case <-bq.entered:
 	case <-time.After(2 * time.Second):
-		t.Fatal("consumer не вошёл в Enqueue — tap не разбирает буфер")
+		t.Fatal("consumer did not enter Enqueue: tap is not consuming the buffer")
 	}
 
-	// Теперь consumer заблокирован. Заполняем буфер (buf событий) + переполняем
-	// (ещё N — они должны дропнуться).
+	// Now the consumer is blocked. Fill the buffer (buf events) and overflow it
+	// with N more events that should be dropped.
 	const overflow = 5
 	for i := 0; i < buf+overflow; i++ {
 		tap.Observe(context.Background(), event)
@@ -81,13 +81,13 @@ func TestTap_BufferFull_DropsAndCounts(t *testing.T) {
 
 	drops := counterValue(t, metrics.tapDropped)
 	if drops < float64(overflow) {
-		t.Fatalf("ожидалось >= %d дропов при переполнении буфера, получили %v", overflow, drops)
+		t.Fatalf("expected >= %d drops on buffer overflow, got %v", overflow, drops)
 	}
 }
 
 func TestTap_Observe_NeverBlocks(t *testing.T) {
-	// Даже при наглухо заблокированном consumer Observe обязан вернуться
-	// мгновенно (неблокирующий select-with-default).
+	// Even with a fully blocked consumer, Observe must return immediately
+	// (non-blocking select-with-default).
 	bq := newBlockingQueue()
 	d := NewDispatcher(DispatcherConfig{
 		Source: &staticSource{rules: []*Tiding{
@@ -104,7 +104,7 @@ func TestTap_Observe_NeverBlocks(t *testing.T) {
 	event := &audit.Event{EventType: audit.EventScenarioRunCompleted}
 	done := make(chan struct{})
 	go func() {
-		// Много Observe подряд — ни один не должен заблокироваться.
+		// Many consecutive Observe calls; none must block.
 		for i := 0; i < 1000; i++ {
 			tap.Observe(context.Background(), event)
 		}
@@ -113,7 +113,7 @@ func TestTap_Observe_NeverBlocks(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("Observe заблокировался при полном буфере и застрявшем consumer-е")
+		t.Fatal("Observe blocked with full buffer and stuck consumer")
 	}
 }
 
@@ -121,14 +121,15 @@ func TestTap_Close_Idempotent(t *testing.T) {
 	d := NewDispatcher(DispatcherConfig{Source: &staticSource{}, Queue: &fakeQueue{}})
 	tap := NewNotificationTap(d, nil, 4)
 	tap.Close()
-	tap.Close() // повторный Close не должен паниковать / висеть
+	tap.Close() // Repeated Close must not panic or hang.
 }
 
-// TestTap_Close_Concurrent — guard на MAJOR из review S2: конкурентный Close не
-// должен паниковать «close of closed channel». 8 горутин с общим start-барьером
-// вызывают Close одновременно; sync.Once гарантирует единственное закрытие
-// done-канала. Прогон под -race ловит и гонку, и double-close. Стресс-итерации
-// повышают шанс воспроизвести узкое окно между select и close (старый баг).
+// TestTap_Close_Concurrent guards a MAJOR from review S2: concurrent Close must
+// not panic with "close of closed channel". 8 goroutines with a shared start
+// barrier call Close at the same time; sync.Once guarantees one close of the done
+// channel. Running with -race catches both race and double-close. Stress
+// iterations increase the chance of reproducing the narrow window between select
+// and close from the old bug.
 func TestTap_Close_Concurrent(t *testing.T) {
 	const iterations = 2000
 	for it := 0; it < iterations; it++ {
@@ -142,22 +143,22 @@ func TestTap_Close_Concurrent(t *testing.T) {
 		for i := 0; i < closers; i++ {
 			go func() {
 				defer wg.Done()
-				<-start // общий барьер: все стартуют как можно ближе друг к другу
+				<-start // Shared barrier: all start as close together as possible.
 				tap.Close()
 			}()
 		}
 		close(start)
-		wg.Wait() // не должно ни паниковать, ни зависнуть
+		wg.Wait() // Must neither panic nor hang.
 	}
 }
 
-// TestTap_Observe_During_Close — guard на MAJOR из re-review S2: Observe ∥ Close
-// не должен паниковать send-after-close. Раньше ch закрывался в Close, а
-// select-with-default в Observe ловил только полный буфер, не закрытый канал —
-// гонка приводила к панике «send on closed channel». Теперь ch не закрывается
-// (shutdown через done), и эта паника невозможна by construction. Стресс: на
-// каждой итерации несколько Observe-горутин крутятся параллельно с Close под
-// -race; ноль паник = инвариант держится.
+// TestTap_Observe_During_Close guards a MAJOR from re-review S2: Observe and Close
+// must not panic with send-after-close. Previously ch was closed in Close, and
+// select-with-default in Observe handled only a full buffer, not a closed channel;
+// the race caused "send on closed channel". Now ch is not closed (shutdown through
+// done), so this panic is impossible by construction. Stress: on every iteration
+// several Observe goroutines run in parallel with Close under -race; zero panics
+// means the invariant holds.
 func TestTap_Observe_During_Close(t *testing.T) {
 	const iterations = 500
 	for it := 0; it < iterations; it++ {
@@ -183,14 +184,14 @@ func TestTap_Observe_During_Close(t *testing.T) {
 			<-start
 			tap.Close()
 		}()
-		close(start) // отпускаем Observe-горутины и Close максимально близко по времени
-		wg.Wait()    // ни одна Observe не должна паниковать на send-after-close
+		close(start) // Release Observe goroutines and Close as close together as possible.
+		wg.Wait()    // No Observe may panic on send-after-close.
 	}
 }
 
-// TestTap_Observe_After_Close — guard: Observe после завершившегося Close —
-// тихий no-op, без паники. done уже закрыт → первая done-ветка select-а
-// возвращает управление, в ch ничего не пишется.
+// TestTap_Observe_After_Close guards that Observe after completed Close is a quiet
+// no-op without panic. done is already closed, so the first done branch of select
+// returns control and writes nothing to ch.
 func TestTap_Observe_After_Close(t *testing.T) {
 	d := NewDispatcher(DispatcherConfig{Source: &staticSource{}, Queue: &fakeQueue{}})
 	tap := NewNotificationTap(d, nil, 4)
@@ -198,7 +199,7 @@ func TestTap_Observe_After_Close(t *testing.T) {
 
 	event := &audit.Event{EventType: audit.EventScenarioRunCompleted}
 	for i := 0; i < 100; i++ {
-		tap.Observe(context.Background(), event) // не должно паниковать
+		tap.Observe(context.Background(), event) // Must not panic.
 	}
 }
 
@@ -219,7 +220,7 @@ func TestTap_DeliversToDispatcher(t *testing.T) {
 		Payload:       map[string]any{"summary": map[string]any{"succeeded": 1}},
 	})
 
-	// Ждём, пока consumer разберёт буфер и поставит job.
+	// Wait until consumer drains the buffer and enqueues a job.
 	deadline := time.After(2 * time.Second)
 	for {
 		if len(q.snapshot()) == 1 {
@@ -227,11 +228,11 @@ func TestTap_DeliversToDispatcher(t *testing.T) {
 		}
 		select {
 		case <-deadline:
-			t.Fatal("tap не доставил событие в dispatcher")
+			t.Fatal("tap did not deliver event to dispatcher")
 		case <-time.After(5 * time.Millisecond):
 		}
 	}
 	if got := q.snapshot()[0].CorrelationID; got != "vy_42" {
-		t.Fatalf("job несёт неверный CorrelationID: %q", got)
+		t.Fatalf("job carries wrong CorrelationID: %q", got)
 	}
 }

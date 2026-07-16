@@ -43,8 +43,8 @@ func runWorkerOnce(t *testing.T, w *DeliveryWorker) {
 	w.handle(context.Background(), claimed.Payload)
 }
 
-// TestDelivery_Success_PostsSignedPayload — end-to-end успех: httptest-приёмник
-// получает POST с правильным телом и валидной HMAC-подписью; терминал —
+// TestDelivery_Success_PostsSignedPayload checks end-to-end success: httptest receiver
+// gets POST with correct body and valid HMAC signature; terminal is
 // herald.delivered.
 func TestDelivery_Success_PostsSignedPayload(t *testing.T) {
 	var gotBody []byte
@@ -63,7 +63,7 @@ func TestDelivery_Success_PostsSignedPayload(t *testing.T) {
 	secretRef := "vault:secret/keeper/sign#token"
 	h := &Herald{
 		Name: "ok-webhook", Type: HeraldWebhook,
-		Config:    map[string]any{"url": srv.URL, "allow_private": true, "http_allowed": true}, // httptest на 127.0.0.1
+		Config:    map[string]any{"url": srv.URL, "allow_private": true, "http_allowed": true}, // httptest on 127.0.0.1
 		SecretRef: &secretRef, Enabled: true,
 	}
 	w := &DeliveryWorker{
@@ -93,14 +93,14 @@ func TestDelivery_Success_PostsSignedPayload(t *testing.T) {
 	// delivery must not send occurred_at=0001-01-01).
 	var bodyOut webhookPayload
 	if err := json.Unmarshal(gotBody, &bodyOut); err != nil {
-		t.Fatalf("webhook body не парсится как JSON: %v", err)
+		t.Fatalf("webhook body is not valid JSON: %v", err)
 	}
 	parsed, err := time.Parse(time.RFC3339, bodyOut.OccurredAt)
 	if err != nil {
-		t.Fatalf("occurred_at = %q не RFC3339: %v", bodyOut.OccurredAt, err)
+		t.Fatalf("occurred_at = %q is not RFC3339: %v", bodyOut.OccurredAt, err)
 	}
 	if parsed.IsZero() {
-		t.Fatalf("occurred_at нулевой в webhook-теле (баг 0001-01-01): %q", bodyOut.OccurredAt)
+		t.Fatalf("occurred_at is zero in webhook body (0001-01-01 bug): %q", bodyOut.OccurredAt)
 	}
 	if !parsed.Equal(occurred) {
 		t.Errorf("occurred_at = %v, want %v", parsed, occurred)
@@ -122,9 +122,9 @@ func TestDelivery_Success_PostsSignedPayload(t *testing.T) {
 }
 
 // TestDelivery_AnnotationsProjection_SignedFinalBody — end-to-end (ADR-052(h)/(i)
-// N3): httptest-приёмник получает тело с суженным projection-ом payload-ом +
-// верхнеуровневым annotations-ключом, а HMAC-подпись валидна над ЭТИМ финальным
-// телом (не над исходным полным payload).
+// N3): httptest receiver gets body with payload narrowed by projection +
+// top-level annotations key, and HMAC signature is valid over THIS final
+// body (not over original full payload).
 func TestDelivery_AnnotationsProjection_SignedFinalBody(t *testing.T) {
 	var gotBody []byte
 	var gotSig string
@@ -156,7 +156,7 @@ func TestDelivery_AnnotationsProjection_SignedFinalBody(t *testing.T) {
 		PayloadCopy: map[string]any{
 			"voyage_id": "v1",
 			"summary":   map[string]any{"succeeded": float64(7), "failed": float64(1)},
-			"drop":      "должно-исчезнуть",
+			"drop":      "should-disappear",
 		},
 		Projection:  []string{"voyage_id", "summary.failed"},
 		Annotations: map[string]any{"team": "ops", "severity": "high"},
@@ -171,7 +171,7 @@ func TestDelivery_AnnotationsProjection_SignedFinalBody(t *testing.T) {
 	}
 	var body webhookPayload
 	if err := json.Unmarshal(gotBody, &body); err != nil {
-		t.Fatalf("webhook body не парсится: %v", err)
+		t.Fatalf("webhook body is not parseable: %v", err)
 	}
 	// Projection: payload narrowed (voyage_id + summary.failed), original drop removed.
 	if body.Payload["voyage_id"] != "v1" {
@@ -307,7 +307,7 @@ func TestDelivery_429_Retries(t *testing.T) {
 func TestDelivery_Timeout_Retries(t *testing.T) {
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
-		<-release // держим до конца теста
+		<-release // hold until end of test
 		rw.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()

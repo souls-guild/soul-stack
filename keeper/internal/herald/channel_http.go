@@ -45,9 +45,9 @@ type webhookChannel struct{}
 func (webhookChannel) fields() []HeraldFieldSpec {
 	return []HeraldFieldSpec{
 		{Name: "url", Label: "URL", Required: true, Kind: KindURL},
-		{Name: "headers", Label: "HTTP-заголовки", Kind: KindMap},
-		{Name: "http_allowed", Label: "Разрешить http://", Kind: KindBool},
-		{Name: "allow_private", Label: "Разрешить приватные IP", Kind: KindBool},
+		{Name: "headers", Label: "HTTP headers", Kind: KindMap},
+		{Name: "http_allowed", Label: "Allow http://", Kind: KindBool},
+		{Name: "allow_private", Label: "Allow private IPs", Kind: KindBool},
 	}
 }
 
@@ -99,9 +99,9 @@ type telegramMessage struct {
 
 func (telegramChannel) fields() []HeraldFieldSpec {
 	return []HeraldFieldSpec{
-		{Name: "bot_token_ref", Label: "Vault-ref токена бота", Required: true, Secret: true, Kind: KindVaultRef},
-		{Name: "chat_id", Label: "ID чата/канала", Required: true, Kind: KindString},
-		{Name: "parse_mode", Label: "Формат текста", Kind: KindEnum, EnumValues: []string{"", "MarkdownV2", "HTML"}},
+		{Name: "bot_token_ref", Label: "Bot token Vault ref", Required: true, Secret: true, Kind: KindVaultRef},
+		{Name: "chat_id", Label: "Chat/channel ID", Required: true, Kind: KindString},
+		{Name: "parse_mode", Label: "Text format", Kind: KindEnum, EnumValues: []string{"", "MarkdownV2", "HTML"}},
 	}
 }
 
@@ -111,7 +111,7 @@ func (c telegramChannel) validateConfig(config map[string]any) error {
 	if err := validateBySpec(HeraldTelegram, c.fields(), config); err != nil {
 		return err
 	}
-	// chat_id непустой после трима: пробельный chat_id — мёртвый адрес.
+	// chat_id must be non-empty after trim: whitespace-only chat_id is a dead address.
 	if chatID, _ := config["chat_id"].(string); strings.TrimSpace(chatID) == "" {
 		return fmt.Errorf("herald: telegram config %q must be a non-empty chat id", "chat_id")
 	}
@@ -191,8 +191,8 @@ type mattermostMessage struct {
 func (mattermostChannel) fields() []HeraldFieldSpec {
 	return []HeraldFieldSpec{
 		{Name: "webhook_url_ref", Label: "Vault-ref URL incoming-webhook", Required: true, Secret: true, Kind: KindVaultRef},
-		{Name: "channel", Label: "Канал (override)", Kind: KindString},
-		{Name: "username", Label: "Имя отправителя (override)", Kind: KindString},
+		{Name: "channel", Label: "Channel (override)", Kind: KindString},
+		{Name: "username", Label: "Sender name (override)", Kind: KindString},
 	}
 }
 
@@ -231,7 +231,7 @@ type discordMessage struct {
 func (discordChannel) fields() []HeraldFieldSpec {
 	return []HeraldFieldSpec{
 		{Name: "webhook_url_ref", Label: "Vault-ref URL webhook", Required: true, Secret: true, Kind: KindVaultRef},
-		{Name: "username", Label: "Имя отправителя (override)", Kind: KindString},
+		{Name: "username", Label: "Sender name (override)", Kind: KindString},
 	}
 }
 
@@ -267,11 +267,11 @@ type customChannel struct{}
 func (customChannel) fields() []HeraldFieldSpec {
 	return []HeraldFieldSpec{
 		{Name: "url", Label: "URL", Required: true, Kind: KindURL},
-		{Name: "method", Label: "HTTP-метод", Kind: KindEnum, EnumValues: []string{"", "POST", "PUT", "PATCH"}},
-		{Name: "headers", Label: "HTTP-заголовки", Kind: KindMap},
-		{Name: "header_secret_ref", Label: "Vault-ref секрета для Authorization", Secret: true, Kind: KindVaultRef},
-		{Name: "http_allowed", Label: "Разрешить http://", Kind: KindBool},
-		{Name: "allow_private", Label: "Разрешить приватные IP", Kind: KindBool},
+		{Name: "method", Label: "HTTP method", Kind: KindEnum, EnumValues: []string{"", "POST", "PUT", "PATCH"}},
+		{Name: "headers", Label: "HTTP headers", Kind: KindMap},
+		{Name: "header_secret_ref", Label: "Authorization secret Vault ref", Secret: true, Kind: KindVaultRef},
+		{Name: "http_allowed", Label: "Allow http://", Kind: KindBool},
+		{Name: "allow_private", Label: "Allow private IPs", Kind: KindBool},
 	}
 }
 

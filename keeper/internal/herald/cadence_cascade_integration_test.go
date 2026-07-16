@@ -76,7 +76,7 @@ func TestIntegration_Cadence_DeleteCascadesFormRules_NotManual(t *testing.T) {
 		Name:         "manual-watch",
 		Herald:       "ops-webhook",
 		EventTypes:   []string{"scenario_run.completed"},
-		Cadence:      strptr(cadID), // тот же селектор!
+		Cadence:      strptr(cadID), // Same selector.
 		Enabled:      true,
 		CreatedByAID: strptr("archon-alice"),
 	}

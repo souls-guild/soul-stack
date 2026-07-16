@@ -26,7 +26,7 @@ const NamePattern = `^[a-z0-9-]{1,63}$`
 
 var nameRe = regexp.MustCompile(NamePattern)
 
-// ValidName проверяет соответствие name канонической форме.
+// ValidName checks that name matches the canonical form.
 func ValidName(name string) bool { return nameRe.MatchString(name) }
 
 // HeraldType is closed-enum of channel type (ADR-052 amendment). Canonical set

@@ -10,13 +10,13 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// --- fake ExecQueryRower (unit, без PG) -------------------------------
+// --- fake ExecQueryRower (unit, no PG) --------------------------------
 
 type fakeDB struct {
 	execTag pgconn.CommandTag
 	execErr error
 
-	rowErr error // ошибка, отдаваемая QueryRow.Scan
+	rowErr error // Error returned by QueryRow.Scan.
 }
 
 func (f *fakeDB) Exec(_ context.Context, _ string, _ ...any) (pgconn.CommandTag, error) {
@@ -54,7 +54,7 @@ func TestValidName(t *testing.T) {
 		"":            false,
 		"Bad-Case":    false,
 		"_under":      false,
-		"trailing-":   true, // дефис разрешён где угодно (как omens)
+		"trailing-":   true, // Hyphen is allowed anywhere, as with omens.
 	}
 	for name, want := range cases {
 		if got := ValidName(name); got != want {
@@ -71,13 +71,13 @@ func TestValidHeraldType(t *testing.T) {
 			t.Errorf("%s must be valid", ty)
 		}
 	}
-	// pagerduty не в реестре — неизвестный тип (fail-closed).
+	// pagerduty is not in the registry: unknown type, fail-closed.
 	if ValidHeraldType(HeraldType("pagerduty")) {
 		t.Error("pagerduty must be invalid (not in registry)")
 	}
 }
 
-// --- ValidateConfig (webhook + SSRF-контур) ---------------------------
+// --- ValidateConfig (webhook + SSRF boundary) -------------------------
 
 func TestValidateConfig_Webhook(t *testing.T) {
 	cases := []struct {
@@ -128,9 +128,9 @@ func TestValidateSecretRef(t *testing.T) {
 	if err := ValidateSecretRef(HeraldWebhook, strptr("vault:secret")); err == nil {
 		t.Error("vault-ref without <mount>/<path> must error")
 	}
-	// Разводка секрета (ADR-052 amendment): secret_ref только для webhook-подписи;
-	// у telegram даже валидный vault-ref в secret_ref → ошибка (его credential —
-	// bot_token_ref в config).
+	// Secret routing (ADR-052 amendment): secret_ref is only for webhook
+	// signatures. For telegram, even a valid vault-ref in secret_ref is an
+	// error; its credential is bot_token_ref in config.
 	if err := ValidateSecretRef(HeraldTelegram, strptr("vault:secret/keeper/tg")); err == nil {
 		t.Error("secret_ref for telegram must error (secret_ref is webhook-only)")
 	}
@@ -176,26 +176,26 @@ func TestValidateEventTypes(t *testing.T) {
 	}
 }
 
-// TestPointEventsListInError — текст ошибки out-of-scope перечисляет ВСЕ
-// разрешённые точечные типы из runScopePointEvents (map-driven, отсортированный),
-// а не статичную строку. Guard против стейл-message: при добавлении point-типа
-// (как incarnation.run_completed) перечень в ошибке обязан обновляться сам.
+// TestPointEventsListInError verifies that the out-of-scope error lists all
+// allowed point types from runScopePointEvents (map-driven, sorted), not a static
+// string. Guard against stale messages: when a point type such as
+// incarnation.run_completed is added, the error list must update itself.
 func TestPointEventsListInError(t *testing.T) {
-	err := validateEventType("role.created") // out-of-scope → ошибка с перечнем point-типов
+	err := validateEventType("role.created") // Out-of-scope error with point type list.
 	if err == nil {
 		t.Fatal("validateEventType(role.created) = nil, want out-of-scope error")
 	}
 	for et := range runScopePointEvents {
 		if !strings.Contains(err.Error(), et) {
-			t.Errorf("out-of-scope error %q does not list point type %q (стейл-message)", err.Error(), et)
+			t.Errorf("out-of-scope error %q does not list point type %q (stale message)", err.Error(), et)
 		}
 	}
 }
 
-// TestRunScopeGetters — экспортируемые геттеры каталога (`GET /v1/event-types`)
-// отдают РОВНО внутренние scope-множества (единый источник правды): каталог-
-// эндпоинт следует за scope без собственного списка. Также: оба геттера
-// детерминированно отсортированы (стабильность каталога/UI/тестов).
+// TestRunScopeGetters verifies that exported catalog getters (`GET /v1/event-types`)
+// return exactly the internal scope sets, the single source of truth. The catalog
+// endpoint follows scope without its own list. Both getters are deterministically
+// sorted for catalog, UI, and test stability.
 func TestRunScopeGetters(t *testing.T) {
 	gotAreas := RunScopeAreas()
 	if len(gotAreas) != len(runScopeAreas) {
@@ -203,7 +203,7 @@ func TestRunScopeGetters(t *testing.T) {
 	}
 	for _, a := range gotAreas {
 		if _, ok := runScopeAreas[a]; !ok {
-			t.Errorf("RunScopeAreas() вернул %q вне runScopeAreas", a)
+			t.Errorf("RunScopeAreas() returned %q outside runScopeAreas", a)
 		}
 	}
 	assertStringsSorted(t, "RunScopeAreas", gotAreas)
@@ -214,7 +214,7 @@ func TestRunScopeGetters(t *testing.T) {
 	}
 	for _, p := range gotPoints {
 		if _, ok := runScopePointEvents[p]; !ok {
-			t.Errorf("RunScopePointEvents() вернул %q вне runScopePointEvents", p)
+			t.Errorf("RunScopePointEvents() returned %q outside runScopePointEvents", p)
 		}
 	}
 	assertStringsSorted(t, "RunScopePointEvents", gotPoints)
@@ -224,7 +224,7 @@ func assertStringsSorted(t *testing.T, label string, xs []string) {
 	t.Helper()
 	for i := 1; i < len(xs); i++ {
 		if xs[i-1] >= xs[i] {
-			t.Errorf("%s не отсортирован или дубль: %q >= %q", label, xs[i-1], xs[i])
+			t.Errorf("%s is not sorted or has a duplicate: %q >= %q", label, xs[i-1], xs[i])
 		}
 	}
 }
@@ -289,9 +289,9 @@ func TestValidateAnnotationsJSON(t *testing.T) {
 	}
 }
 
-// TestValidateTiding_EphemeralVoyageInvariant — инвариант ephemeral⟺voyage_id
-// (ADR-052(g)) на domain-уровне через InsertTiding (DB не задействуется —
-// нарушение режется до похода в БД).
+// TestValidateTiding_EphemeralVoyageInvariant checks the ephemeral <-> voyage_id
+// invariant (ADR-052(g)) at the domain layer through InsertTiding. The DB is not
+// touched because the violation is rejected before it.
 func TestValidateTiding_EphemeralVoyageInvariant(t *testing.T) {
 	db := &fakeDB{rowErr: errors.New("db must not be hit on validation reject")}
 	cases := []struct {
@@ -325,8 +325,9 @@ func TestValidateTiding_EphemeralVoyageInvariant(t *testing.T) {
 					t.Errorf("err = %v, want IsValidationError true (→422)", err)
 				}
 			} else if err != nil {
-				// Валидный вход не должен зарезаться валидацией — но db-stub вернёт
-				// rowErr на Scan. Главное: ошибка НЕ про ephemeral-инвариант.
+				// Valid input must not be rejected by validation, but the DB stub
+				// returns rowErr on Scan. The key check is that the error is not about
+				// the ephemeral invariant.
 				if errors.Is(err, ErrEphemeralRequiresVoyage) {
 					t.Errorf("valid input rejected by ephemeral invariant: %v", err)
 				}
@@ -335,9 +336,9 @@ func TestValidateTiding_EphemeralVoyageInvariant(t *testing.T) {
 	}
 }
 
-// TestValidateTiding_NormalizesEmptyVoyageToNil — пустая строка VoyageID
-// нормализуется к nil в validateTiding, чтобы SQL-arg (optStrArg) писал NULL, а
-// не пустую строку (иначе non-ephemeral+&"" падал бы на CHECK 500-ой).
+// TestValidateTiding_NormalizesEmptyVoyageToNil verifies that an empty VoyageID
+// string is normalized to nil in validateTiding, so SQL arg optStrArg writes NULL
+// instead of an empty string. Otherwise non-ephemeral+&"" would hit CHECK as 500.
 func TestValidateTiding_NormalizesEmptyVoyageToNil(t *testing.T) {
 	tg := &Tiding{
 		Name:       "t1",
@@ -350,14 +351,14 @@ func TestValidateTiding_NormalizesEmptyVoyageToNil(t *testing.T) {
 		t.Fatalf("non-ephemeral with empty voyage rejected: %v", err)
 	}
 	if tg.VoyageID != nil {
-		t.Errorf("VoyageID = %v, want nil (empty string normalized → optStrArg writes NULL)", tg.VoyageID)
+		t.Errorf("VoyageID = %v, want nil (empty string normalized so optStrArg writes NULL)", tg.VoyageID)
 	}
 }
 
-// TestValidateTiding_NormalizesEmptyTaskToNil — пустая строка task-селектора
-// нормализуется к nil в validateTiding (ADR-052 §l): nil = «без фильтра», а
-// пустой адрес changed_tasks им матчиться не должен. Без нормализации optStrArg
-// записал бы `”` — мёртвый селектор.
+// TestValidateTiding_NormalizesEmptyTaskToNil verifies that an empty task selector
+// string is normalized to nil in validateTiding (ADR-052(l)): nil means no filter,
+// and an empty changed_tasks address must not match it. Without normalization,
+// optStrArg would write an empty selector.
 func TestValidateTiding_NormalizesEmptyTaskToNil(t *testing.T) {
 	tg := &Tiding{
 		Name:       "t1",
@@ -369,11 +370,12 @@ func TestValidateTiding_NormalizesEmptyTaskToNil(t *testing.T) {
 		t.Fatalf("validateTiding rejected empty task: %v", err)
 	}
 	if tg.Task != nil {
-		t.Errorf("Task = %v, want nil (empty string normalized → optStrArg writes NULL)", tg.Task)
+		t.Errorf("Task = %v, want nil (empty string normalized so optStrArg writes NULL)", tg.Task)
 	}
 }
 
-// TestInsertTiding_RejectsBadProjection — битый projection-путь режется до БД.
+// TestInsertTiding_RejectsBadProjection verifies that a bad projection path is
+// rejected before the DB.
 func TestInsertTiding_RejectsBadProjection(t *testing.T) {
 	db := &fakeDB{rowErr: errors.New("db must not be hit")}
 	tg := &Tiding{
