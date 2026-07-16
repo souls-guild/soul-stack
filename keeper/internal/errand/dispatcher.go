@@ -573,7 +573,7 @@ func (d *Dispatcher) applyResult(
 	}
 }
 
-// markTimedOut — общий путь для sync-timeout и async-timeout.
+// markTimedOut is the shared path for sync-timeout and async-timeout.
 func (d *Dispatcher) markTimedOut(ctx context.Context, errandID string, req DispatchRequest, elapsed time.Duration) DispatchResult {
 	ms := elapsed.Milliseconds()
 	upd := TerminalUpdate{
@@ -605,7 +605,7 @@ func (d *Dispatcher) markTimedOut(ctx context.Context, errandID string, req Disp
 }
 
 // writeInvoked writes audit-event `errand.invoked` (ADR-033, event_types.go).
-// Payload — sid/module/errand_id/timeout/dry_run; `input` is NOT put
+// Payload is sid/module/errand_id/timeout/dry_run; `input` is NOT put
 // (may carry vault-resolved secrets).
 func (d *Dispatcher) writeInvoked(ctx context.Context, errandID string, req DispatchRequest) {
 	if d.deps.Audit == nil {
@@ -658,7 +658,7 @@ func (d *Dispatcher) writeTerminal(ctx context.Context, errandID string, req Dis
 	case StatusCancelled:
 		eventType = audit.EventTypeErrandCancelled
 	default:
-		// failed / module_not_allowed / неизвестное → errand.failed.
+		// failed / module_not_allowed / unknown -> errand.failed.
 		eventType = audit.EventTypeErrandFailed
 	}
 

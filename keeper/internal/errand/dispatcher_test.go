@@ -223,7 +223,7 @@ func buildTestDispatcher(store StoreAPI, bus ApplyBus, ob OutboundSender, pub Re
 
 func ptrInt32(v int32) *int32 { return &v }
 
-// --- тесты ---
+// --- tests ---
 
 func TestDispatch_Sync_Success(t *testing.T) {
 	store := newFakeStore()
@@ -310,8 +310,8 @@ func TestDispatch_AsyncEscalation(t *testing.T) {
 	ob := &fakeOutbound{}
 	lease := &fakeLease{holders: map[string]string{"host.test": "kid-test"}}
 
-	// ServerCap=200ms, TimeoutSec=2 → sync ждёт 200ms, не получает →
-	// возвращает Async=true. Goroutine продолжает до полного TimeoutSec.
+	// ServerCap=200ms, TimeoutSec=2 -> sync waits 200ms, receives nothing, and
+	// returns Async=true. Goroutine continues until the full TimeoutSec.
 	d := buildTestDispatcher(store, bus, ob, ob, lease, 200*time.Millisecond)
 
 	res, err := d.Dispatch(context.Background(), DispatchRequest{
@@ -330,7 +330,7 @@ func TestDispatch_AsyncEscalation(t *testing.T) {
 		t.Fatalf("status = %q, want running", res.Status)
 	}
 
-	// Подождём goroutine timed_out (TimeoutSec=2s).
+	// Wait for goroutine timed_out (TimeoutSec=2s).
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		r := store.snapshot(res.ErrandID)
@@ -375,15 +375,15 @@ func TestDispatch_Validate_TimeoutOutOfRange(t *testing.T) {
 	}
 }
 
-// TestValidateDispatch_TimeoutBoundaries — граница timeout [Min, Max]=[1, 300]
-// плюс нормализация 0→default. 0→ok (default), 1→ok, 300→ok, 301→fail,
-// отрицательное→fail.
+// TestValidateDispatch_TimeoutBoundaries covers timeout boundaries
+// [Min, Max]=[1, 300] plus 0->default normalization. 0->ok (default), 1->ok,
+// 300->ok, 301->fail, negative->fail.
 func TestValidateDispatch_TimeoutBoundaries(t *testing.T) {
 	cases := []struct {
 		name    string
 		timeout int
 		wantErr bool
-		wantSet int // ожидаемый TimeoutSec после нормализации (только при !wantErr)
+		wantSet int // expected TimeoutSec after normalization (only when !wantErr)
 	}{
 		{"zero → default", 0, false, DefaultTimeoutSeconds},
 		{"min 1 → ok", MinTimeoutSeconds, false, MinTimeoutSeconds},
@@ -443,7 +443,7 @@ func TestDispatch_NotConnected_NoLease(t *testing.T) {
 	store := newFakeStore()
 	bus := newFakeBus()
 	ob := &fakeOutbound{}
-	lease := &fakeLease{holders: map[string]string{}} // нет holder-а
+	lease := &fakeLease{holders: map[string]string{}} // no holder
 
 	d := buildTestDispatcher(store, bus, ob, ob, lease, time.Second)
 
@@ -464,7 +464,7 @@ func TestDispatch_RemoteRouting(t *testing.T) {
 	store := newFakeStore()
 	bus := newFakeBus()
 	ob := &fakeOutbound{}
-	// holder = другой keeper → должен пойти через Publisher (тот же ob).
+	// holder = another keeper -> should go through Publisher (the same ob).
 	lease := &fakeLease{holders: map[string]string{"host.test": "kid-remote"}}
 
 	d := buildTestDispatcher(store, bus, ob, ob, lease, 200*time.Millisecond)
@@ -494,30 +494,31 @@ func TestDispatch_RemoteRouting(t *testing.T) {
 	}
 }
 
-// TestDispatch_WantBridgePredicate — прямая таблица wantBridge-предиката
-// (S1, holder==self skip). Используем fakeBus.wantBridge() как
-// измеритель последнего bridge-решения dispatcher-а. Ловит инверсию условия
+// TestDispatch_WantBridgePredicate is a direct table for the wantBridge
+// predicate (S1, holder==self skip). Use fakeBus.wantBridge() as the measure
+// for the dispatcher's last bridge decision. Catches inversion of the condition
 // `wantBridge := !(lookupOK && holder == d.deps.KID && holder != "")`.
 //
-// Покрытие:
-//   - holder == self (KID-test) → wantBridge=false (skip — событие придёт
-//     local от того же инстанса);
-//   - holder == other → true (cross-keeper, bridge нужен);
-//   - holder == "" авторитетный (lookupOK=true, пустой lease) → true; здесь
-//     дойдёт до ErrSoulNotConnected, но bridge-решение уже снято до send;
-//   - lookupErr (ReadHolder вернул error) → true (консервативно);
-//   - LeaseLookup == nil → true (single-keeper / holder неизвестен).
+// Coverage:
+//   - holder == self (KID-test) -> wantBridge=false (skip; the event will come
+//     locally from the same instance);
+//   - holder == other -> true (cross-keeper, bridge needed);
+//   - authoritative holder == "" (lookupOK=true, empty lease) -> true; this
+//     reaches ErrSoulNotConnected, but the bridge decision is already captured
+//     before send;
+//   - lookupErr (ReadHolder returned error) -> true (conservative);
+//   - LeaseLookup == nil -> true (single-keeper / holder unknown).
 func TestDispatch_WantBridgePredicate(t *testing.T) {
 	const selfKID = "kid-test"
 	const sid = "host.test"
 
 	cases := []struct {
 		name        string
-		holders     map[string]string // nil + withLease=false → LeaseLookup nil
+		holders     map[string]string // nil + withLease=false -> LeaseLookup nil
 		lookupErr   error
-		withLease   bool // true → fakeLease задан; false → LeaseLookup=nil
+		withLease   bool // true -> fakeLease set; false -> LeaseLookup=nil
 		wantBridge  bool
-		wantErrSent bool // ожидаем, что Dispatch дойдёт до send (есть Outbound-доставка)
+		wantErrSent bool // expect Dispatch to reach send (Outbound delivery exists)
 	}{
 		{
 			name:       "holder==self → skip bridge",
@@ -539,7 +540,7 @@ func TestDispatch_WantBridgePredicate(t *testing.T) {
 		},
 		{
 			name:       "lookupErr → conservative bridge",
-			holders:    map[string]string{sid: selfKID}, // игнорируется из-за lookupErr
+			holders:    map[string]string{sid: selfKID}, // ignored because of lookupErr
 			lookupErr:  errors.New("redis flap"),
 			withLease:  true,
 			wantBridge: true,
@@ -562,13 +563,15 @@ func TestDispatch_WantBridgePredicate(t *testing.T) {
 				lease = &fakeLease{holders: c.holders, lookupErr: c.lookupErr}
 			}
 
-			// ServerCap мал, TimeoutSec мал, event не публикуем → Dispatch
-			// завершится timed_out/failed, но wantBridge-решение снимается ДО
-			// wait-а. Главное — что Subscribe вызван и bridgeSet=true.
+			// ServerCap is small, TimeoutSec is small, and no event is published:
+			// Dispatch will finish timed_out/failed, but the wantBridge decision
+			// is captured BEFORE the wait. The important part is that Subscribe
+			// was called and bridgeSet=true.
 			d := buildTestDispatcher(store, bus, ob, ob, lease, 50*time.Millisecond)
 
-			// holder=="" authoritative ведёт к ErrSoulNotConnected (send fail) —
-			// но Subscribe всё равно вызывается ДО send, bridge-решение снято.
+			// authoritative holder=="" leads to ErrSoulNotConnected (send fail),
+			// but Subscribe is still called BEFORE send, so the bridge decision is
+			// captured.
 			_, _ = d.Dispatch(context.Background(), DispatchRequest{
 				SID:          sid,
 				Module:       "core.cmd.shell",
@@ -578,7 +581,7 @@ func TestDispatch_WantBridgePredicate(t *testing.T) {
 
 			gotBridge, set := bus.wantBridge()
 			if !set {
-				t.Fatalf("SubscribeWithBridge не вызван — bridge-решение не снято")
+				t.Fatalf("SubscribeWithBridge was not called; bridge decision was not captured")
 			}
 			if gotBridge != c.wantBridge {
 				t.Fatalf("wantBridge = %v, want %v", gotBridge, c.wantBridge)
@@ -587,19 +590,19 @@ func TestDispatch_WantBridgePredicate(t *testing.T) {
 	}
 }
 
-// TestDispatch_LookupErr_BridgeAndLocalDelivery — ошибка ReadHolder
-// (Redis-флап) НЕ ломает доставку: dispatcher выбирает консервативный
-// wantBridge=true И падает на local-fallback через Outbound (lookupOK=false →
-// SendErrand). Errand доставлен (success-event дочитан). Важно для HA: флап
-// Redis-lease не должен ронять exec.
+// TestDispatch_LookupErr_BridgeAndLocalDelivery checks that a ReadHolder error
+// (Redis flap) does NOT break delivery: the dispatcher chooses conservative
+// wantBridge=true AND falls back to local delivery through Outbound
+// (lookupOK=false -> SendErrand). Errand is delivered (success event is read).
+// Important for HA: a Redis lease flap must not break exec.
 //
-// Задействует fakeLease.lookupErr.
+// Uses fakeLease.lookupErr.
 func TestDispatch_LookupErr_BridgeAndLocalDelivery(t *testing.T) {
 	store := newFakeStore()
 	bus := newFakeBus()
 	ob := &fakeOutbound{}
 	lease := &fakeLease{
-		holders:   map[string]string{"host.test": "kid-test"}, // не важно — lookupErr перекрывает
+		holders:   map[string]string{"host.test": "kid-test"}, // does not matter; lookupErr overrides it
 		lookupErr: errors.New("redis: connection refused"),
 	}
 
@@ -624,14 +627,14 @@ func TestDispatch_LookupErr_BridgeAndLocalDelivery(t *testing.T) {
 		StartedByAID: "archon-alice",
 	})
 	if err != nil {
-		t.Fatalf("Dispatch: %v (lookup-флап не должен ронять доставку)", err)
+		t.Fatalf("Dispatch: %v (lookup flap must not break delivery)", err)
 	}
 
-	// Консервативный bridge при ошибке lookup-а.
+	// Conservative bridge on lookup error.
 	if gotBridge, set := bus.wantBridge(); !set || !gotBridge {
 		t.Fatalf("wantBridge = %v (set=%v), want true (lookupErr → conservative bridge)", gotBridge, set)
 	}
-	// Доставка прошла через local-fallback Outbound.
+	// Delivery went through local-fallback Outbound.
 	if res.Status != StatusSuccess {
 		t.Fatalf("status = %q, want success (local-fallback delivery on lookupErr)", res.Status)
 	}
@@ -640,19 +643,19 @@ func TestDispatch_LookupErr_BridgeAndLocalDelivery(t *testing.T) {
 	}
 }
 
-// TestDispatch_HolderSelf_LocalPublisherSilent_TimesOut — holder==self
-// (bridge пропущен), но local publisher МОЛЧИТ (Soul отвалился, ErrandRequest
-// не доехал / результат не пришёл). Dispatch завершается timed_out по
-// wait-timer-у (НЕ зависание), elapsed ≈ TimeoutSec. Зеркало
-// dispatcher_bridge_test.go::HolderFlipAfterSkip, но на fake-bus и без
-// публикации вовсе — изолирует «publisher молчит».
+// TestDispatch_HolderSelf_LocalPublisherSilent_TimesOut checks holder==self
+// (bridge skipped), but the local publisher is SILENT (Soul disconnected, the
+// ErrandRequest did not arrive / the result did not arrive). Dispatch finishes
+// timed_out by wait timer (NOT a hang), elapsed ~= TimeoutSec. Mirror of
+// dispatcher_bridge_test.go::HolderFlipAfterSkip, but on fake-bus and with no
+// publication at all; isolates "publisher silent".
 func TestDispatch_HolderSelf_LocalPublisherSilent_TimesOut(t *testing.T) {
 	store := newFakeStore()
 	bus := newFakeBus()
 	ob := &fakeOutbound{}
 	lease := &fakeLease{holders: map[string]string{"host.test": "kid-test"}} // holder==self
 
-	// TimeoutSec=1, ServerCap=2s → sync-wait 1с, нет event → timed_out (sync).
+	// TimeoutSec=1, ServerCap=2s -> 1s sync wait, no event -> timed_out (sync).
 	d := buildTestDispatcher(store, bus, ob, ob, lease, 2*time.Second)
 
 	start := time.Now()
@@ -665,7 +668,7 @@ func TestDispatch_HolderSelf_LocalPublisherSilent_TimesOut(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
-	// holder==self → bridge пропущен (но Errand всё равно завершается по timer-у).
+	// holder==self -> bridge skipped (but Errand still finishes by timer).
 	if gotBridge, set := bus.wantBridge(); !set || gotBridge {
 		t.Fatalf("wantBridge = %v (set=%v), want false (holder==self skip)", gotBridge, set)
 	}
@@ -680,17 +683,17 @@ func TestDispatch_HolderSelf_LocalPublisherSilent_TimesOut(t *testing.T) {
 	}
 }
 
-// TestDispatch_HolderSelf_HappyPath_Fast — holder==self happy-path: result
-// приходит быстро через local-bus, Dispatch возвращается БЫСТРО (НЕ ждёт
-// sync-timer). Контр-пара к Silent_TimesOut: skip-bridge не вносит задержку
-// на happy-path. assert: elapsed заметно меньше TimeoutSec.
+// TestDispatch_HolderSelf_HappyPath_Fast checks holder==self happy-path: the
+// result arrives quickly through local-bus, and Dispatch returns FAST (does NOT
+// wait for sync-timer). Counterpart to Silent_TimesOut: skip-bridge does not
+// add delay on the happy path. Assert: elapsed is noticeably below TimeoutSec.
 func TestDispatch_HolderSelf_HappyPath_Fast(t *testing.T) {
 	store := newFakeStore()
 	bus := newFakeBus()
 	ob := &fakeOutbound{}
 	lease := &fakeLease{holders: map[string]string{"host.test": "kid-test"}} // holder==self
 
-	// TimeoutSec=5, ServerCap=5s; event придёт через ~20ms → возврат быстрый.
+	// TimeoutSec=5, ServerCap=5s; event comes in ~20ms -> fast return.
 	d := buildTestDispatcher(store, bus, ob, ob, lease, 5*time.Second)
 
 	go func() {
@@ -721,27 +724,27 @@ func TestDispatch_HolderSelf_HappyPath_Fast(t *testing.T) {
 	if res.Async {
 		t.Fatalf("Async=true, want sync success")
 	}
-	// Быстро: не ждали ни ServerCap (5s), ни TimeoutSec (5s).
+	// Fast: waited for neither ServerCap (5s) nor TimeoutSec (5s).
 	if elapsed > time.Second {
 		t.Fatalf("elapsed = %v, want < 1s (happy-path must not wait timer)", elapsed)
 	}
 }
 
-// TestDispatch_MixedParallel — ≥10 одновременных Dispatch с разными SID/
-// errandID: часть holder==self (skip-bridge), часть holder==other (bridge).
-// Все завершаются success, refs изолированы по каналам (каждый Dispatch
-// получает СВОЙ результат, без перекрёстной доставки). Под -race.
+// TestDispatch_MixedParallel runs >=10 concurrent Dispatch calls with different
+// SID/errandID values: some holder==self (skip-bridge), some holder==other
+// (bridge). All finish success, refs are isolated by channel (each Dispatch
+// receives ITS OWN result, with no cross-channel delivery). Under -race.
 //
-// fakeBus здесь — отдельный per-Dispatch (изоляция каналов гарантируется
-// разными bus-инстансами, как в проде applyID-ключом). Это guard на то, что
-// holder→wantBridge маршрутизация корректна под параллелью и не путает
-// результаты.
+// fakeBus here is separate per Dispatch (channel isolation is guaranteed by
+// different bus instances, as in production by the applyID key). This guards
+// that holder->wantBridge routing is correct under parallelism and does not mix
+// results.
 func TestDispatch_MixedParallel(t *testing.T) {
 	const workers = 16
 
 	type job struct {
 		sid        string
-		holder     string // self или other
+		holder     string // self or other
 		wantBridge bool
 	}
 
@@ -770,10 +773,10 @@ func TestDispatch_MixedParallel(t *testing.T) {
 			lease := &fakeLease{holders: map[string]string{j.sid: j.holder}}
 			d := buildTestDispatcher(store, bus, ob, ob, lease, 2*time.Second)
 
-			// Каждый воркер публикует СВОЙ результат с уникальным stdout =
-			// собственный SID → проверяем изоляцию каналов.
+			// Each worker publishes ITS OWN result with unique stdout = its own
+			// SID -> verify channel isolation.
 			go func() {
-				// Ждём, пока Subscribe зарегистрирует канал на этом bus.
+				// Wait until Subscribe registers the channel on this bus.
 				for i := 0; i < 200; i++ {
 					if _, set := bus.wantBridge(); set {
 						break
@@ -798,7 +801,7 @@ func TestDispatch_MixedParallel(t *testing.T) {
 			gotBridge, _ := bus.wantBridge()
 			bridges[idx] = gotBridge
 
-			// Изоляция: результат этого Dispatch несёт собственный SID в stdout.
+			// Isolation: this Dispatch result carries its own SID in stdout.
 			if err == nil && res.Stdout != j.sid {
 				errs[idx] = errors.New("cross-channel leak: stdout=" + res.Stdout + " want " + j.sid)
 			}
@@ -821,7 +824,7 @@ func TestDispatch_MixedParallel(t *testing.T) {
 
 func TestReplay_OrphanRunning(t *testing.T) {
 	store := newFakeStore()
-	// Pre-insert running-Errand этого KID с давним started_at.
+	// Pre-insert this KID's running Errand with an old started_at.
 	old := time.Now().Add(-30 * time.Minute).UTC()
 	_ = store.Insert(context.Background(), Row{
 		ErrandID:     "01HAAAAAAAAAAAAAAAAAAAAAAA",

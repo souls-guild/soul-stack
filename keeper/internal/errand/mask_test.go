@@ -21,7 +21,7 @@ func TestMaskAndCapBytes_VaultRefMasked(t *testing.T) {
 	in := "error: bad creds at vault:secret/db-prod/conn"
 	s, _ := MaskAndCapBytes(in)
 	if strings.Contains(s, "vault:secret/") {
-		t.Fatalf("masked = %q, vault-ref должен быть скрыт", s)
+		t.Fatalf("masked = %q, vault-ref must be hidden", s)
 	}
 	if !strings.Contains(s, "MASKED") {
 		t.Fatalf("masked = %q, want ***MASKED***", s)
@@ -62,6 +62,6 @@ func TestMaskOutputMap_SecretKey(t *testing.T) {
 	}
 	out := MaskOutputMap(in)
 	if out["token"] == "secret-jwt-value" {
-		t.Fatalf("token не маскирован: %v", out["token"])
+		t.Fatalf("token is not masked: %v", out["token"])
 	}
 }

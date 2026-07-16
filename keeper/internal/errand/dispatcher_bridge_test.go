@@ -13,14 +13,14 @@ import (
 	keeperredis "github.com/souls-guild/soul-stack/keeper/internal/redis"
 )
 
-// Guard-тесты S1 (applybus-bottleneck): holder==self → пропуск per-applyID
-// Redis-Subscribe; holder!=self → bridge поднимается; holder-flip после
-// skip-решения → завершение по wait-timer-у (timed_out), НЕ зависание.
+// S1 guard tests (applybus-bottleneck): holder==self skips the per-applyID
+// Redis Subscribe; holder!=self raises the bridge; holder-flip after the skip
+// decision finishes by wait timer (timed_out), NOT by hanging.
 //
-// busBridge — адаптер real *applybus.EventBus к узкой errand.ApplyBus
-// (симметрично прод-обёртке errandApplyBusBridge из cmd/keeper/daemon.go).
-// Через него dispatcher гоняет НАСТОЯЩУЮ шину поверх miniredis, и
-// Redis-Subscribe-вызовы реально измеряются (PUBSUB NUMSUB).
+// busBridge adapts the real *applybus.EventBus to the narrow errand.ApplyBus
+// (mirrors the production errandApplyBusBridge wrapper from
+// cmd/keeper/daemon.go). The dispatcher uses it to drive the REAL bus over
+// miniredis, and Redis Subscribe calls are measured for real (PUBSUB NUMSUB).
 type busBridge struct{ bus *applybus.EventBus }
 
 func (b busBridge) Subscribe(ctx context.Context, applyID string) <-chan applybus.Event {
@@ -35,7 +35,7 @@ func bridgeTestLogger() *slog.Logger {
 	return slog.New(slog.NewJSONHandler(io.Discard, nil))
 }
 
-// newBridgeRedis — miniredis + keeperredis.Client (без Docker, как в
+// newBridgeRedis creates miniredis + keeperredis.Client (without Docker, as in
 // applybus/bus_cluster_test.go).
 func newBridgeRedis(t *testing.T) (*keeperredis.Client, *miniredis.Miniredis) {
 	t.Helper()
@@ -50,9 +50,9 @@ func newBridgeRedis(t *testing.T) (*keeperredis.Client, *miniredis.Miniredis) {
 	return c, mr
 }
 
-// redisSubCountFor — число Redis-side подписчиков на канал apply:<id> по
-// данным miniredis. 0 если канала/подписки нет. Это и есть прямой измеритель
-// «поднял ли bus per-applyID Redis-Subscribe».
+// redisSubCountFor returns the Redis-side subscriber count for apply:<id> from
+// miniredis. It is 0 if the channel/subscription is missing. This directly
+// measures whether the bus raised a per-applyID Redis Subscribe.
 func redisSubCountFor(mr *miniredis.Miniredis, applyID string) int {
 	ch := keeperredis.ApplyBusChannel(applyID)
 	return mr.PubSubNumSub(ch)[ch]
@@ -60,9 +60,9 @@ func redisSubCountFor(mr *miniredis.Miniredis, applyID string) int {
 
 const bridgeTestKID = "kid-self"
 
-// buildBridgeDispatcher — Dispatcher поверх real applybus-bus и fakeLease.
-// KID = bridgeTestKID совпадает с KID шины (self-publish фильтруется как в
-// проде). lease управляет тем, какой holder вернёт resolveHolder.
+// buildBridgeDispatcher builds a Dispatcher on top of the real applybus bus and
+// fakeLease. KID = bridgeTestKID matches the bus KID (self-publish is filtered
+// as in production). lease controls which holder resolveHolder returns.
 func buildBridgeDispatcher(t *testing.T, bus *applybus.EventBus, lease *fakeLease, ob *fakeOutbound, cap time.Duration) *Dispatcher {
 	t.Helper()
 	return &Dispatcher{deps: Deps{
@@ -78,25 +78,25 @@ func buildBridgeDispatcher(t *testing.T, bus *applybus.EventBus, lease *fakeLeas
 	}}
 }
 
-// TestErrand_SingleHolderSelf_NoRedisSubscribe — holder == self-KID ⇒
-// dispatcher просит wantBridge=false ⇒ per-applyID Redis-Subscribe НЕ
-// поднимается (redisSubCount==0 в течение всей жизни подписки), а Errand
-// доставляется через local-bus того же инстанса. Прямой guard на устранение
-// applybus-bottleneck.
+// TestErrand_SingleHolderSelf_NoRedisSubscribe checks that holder == self-KID
+// makes the dispatcher request wantBridge=false, so the per-applyID Redis
+// Subscribe is NOT raised (redisSubCount==0 for the whole subscription
+// lifetime), and the Errand is delivered through the same instance's local bus.
+// Direct guard for removing the applybus-bottleneck.
 func TestErrand_SingleHolderSelf_NoRedisSubscribe(t *testing.T) {
 	c, mr := newBridgeRedis(t)
 	bus := applybus.NewBusWithRedis(bridgeTestLogger(), c, bridgeTestKID)
 
 	const sid = "host.local"
-	// holder == self → skip-решение.
+	// holder == self -> skip decision.
 	lease := &fakeLease{holders: map[string]string{sid: bridgeTestKID}}
 	ob := &fakeOutbound{}
 
 	d := buildBridgeDispatcher(t, bus, lease, ob, 2*time.Second)
 
-	// Запускаем Dispatch в горутине; пока он ждёт event, измеряем
-	// Redis-Subscribe и доставляем результат локально (через тот же bus →
-	// local-доставка без bridge).
+	// Run Dispatch in a goroutine; while it waits for the event, measure Redis
+	// Subscribe and deliver the result locally (through the same bus -> local
+	// delivery without bridge).
 	type out struct {
 		res DispatchResult
 		err error
@@ -109,14 +109,14 @@ func TestErrand_SingleHolderSelf_NoRedisSubscribe(t *testing.T) {
 		done <- out{res, err}
 	}()
 
-	// Ждём, пока local-subscriber появится (подписка зарегистрирована).
+	// Wait until the local subscriber appears (subscription registered).
 	var errandID string
 	waitUntil(t, 2*time.Second, func() bool {
 		errandID = ob.firstSentErrandID()
 		return errandID != "" && bus.Subscribers(errandID) == 1
 	}, "errand not subscribed locally")
 
-	// Окно проверки: подписка жива, Redis-Subscribe должен оставаться 0.
+	// Check window: the subscription is alive, Redis Subscribe must remain 0.
 	for i := 0; i < 10; i++ {
 		if n := redisSubCountFor(mr, errandID); n != 0 {
 			t.Fatalf("redis subscribers = %d while holder==self, want 0 (bridge must be skipped)", n)
@@ -124,7 +124,7 @@ func TestErrand_SingleHolderSelf_NoRedisSubscribe(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	// Доставка результата через local-bus (publish того же инстанса).
+	// Deliver the result through the local bus (publish from the same instance).
 	bus.Publish(applybus.Event{
 		ApplyID: errandID,
 		Kind:    applybus.KindErrandCompleted,
@@ -143,10 +143,11 @@ func TestErrand_SingleHolderSelf_NoRedisSubscribe(t *testing.T) {
 	}
 }
 
-// TestErrand_HolderOther_StillBridges — holder != self ⇒ dispatcher просит
-// wantBridge=true ⇒ per-applyID Redis-bridge поднят (redisSubCount>=1), и
-// cross-keeper доставка работает: событие, опубликованное «другим» keeper-ом
-// (busOther, иной KID), доходит до dispatcher-а через bridge.
+// TestErrand_HolderOther_StillBridges checks that holder != self makes the
+// dispatcher request wantBridge=true, so the per-applyID Redis bridge is raised
+// (redisSubCount>=1), and cross-keeper delivery works: an event published by
+// the "other" keeper (busOther, different KID) reaches the dispatcher through
+// the bridge.
 func TestErrand_HolderOther_StillBridges(t *testing.T) {
 	c, mr := newBridgeRedis(t)
 	busSelf := applybus.NewBusWithRedis(bridgeTestLogger(), c, bridgeTestKID)
@@ -176,12 +177,12 @@ func TestErrand_HolderOther_StillBridges(t *testing.T) {
 		return errandID != "" && busSelf.Subscribers(errandID) == 1
 	}, "errand not subscribed")
 
-	// holder!=self → bridge обязан подняться (Redis-Subscribe на канал).
+	// holder!=self -> the bridge must be raised (Redis Subscribe on the channel).
 	waitUntil(t, 3*time.Second, func() bool {
 		return redisSubCountFor(mr, errandID) >= 1
 	}, "bridge not raised for holder!=self")
 
-	// Cross-keeper доставка: busOther публикует, bridge busSelf форвардит.
+	// Cross-keeper delivery: busOther publishes, busSelf's bridge forwards.
 	busOther.Publish(applybus.Event{
 		ApplyID: errandID,
 		Kind:    applybus.KindErrandCompleted,
@@ -197,24 +198,24 @@ func TestErrand_HolderOther_StillBridges(t *testing.T) {
 	}
 }
 
-// TestErrand_HolderFlipAfterSkip_TimesOut — holder==self на skip-решении
-// (bridge пропущен), но фактически событие приходит только на «другой» bus
-// (holder сменился после skip — реальный исполнитель оказался на другом
-// keeper-е). Dispatch НЕ получает event через свою local-only подписку и
-// завершается timed_out по wait-timer-у. Гарантия: потеря события при
-// holder-flip ≠ зависание.
+// TestErrand_HolderFlipAfterSkip_TimesOut checks holder==self at the skip
+// decision (bridge skipped), but the event actually arrives only on the
+// "other" bus (holder changed after skip; the real executor ended up on another
+// keeper). Dispatch does NOT receive the event through its local-only
+// subscription and finishes timed_out by wait timer. Guarantee: event loss on
+// holder-flip does not hang.
 func TestErrand_HolderFlipAfterSkip_TimesOut(t *testing.T) {
 	c, mr := newBridgeRedis(t)
 	busSelf := applybus.NewBusWithRedis(bridgeTestLogger(), c, bridgeTestKID)
 	busOther := applybus.NewBusWithRedis(bridgeTestLogger(), c, "kid-other")
 
 	const sid = "host.flip"
-	// Решение на момент Dispatch: holder==self → skip (wantBridge=false).
+	// Decision at Dispatch time: holder==self -> skip (wantBridge=false).
 	lease := &fakeLease{holders: map[string]string{sid: bridgeTestKID}}
 	ob := &fakeOutbound{}
 
-	// Короткий timeout: TimeoutSec=1, ServerCap=2s → sync-wait 1с, нет event
-	// → timed_out (sync, не async).
+	// Short timeout: TimeoutSec=1, ServerCap=2s -> 1s sync wait, no event ->
+	// timed_out (sync, not async).
 	d := buildBridgeDispatcher(t, busSelf, lease, ob, 2*time.Second)
 
 	type out struct {
@@ -236,13 +237,13 @@ func TestErrand_HolderFlipAfterSkip_TimesOut(t *testing.T) {
 		return errandID != "" && busSelf.Subscribers(errandID) == 1
 	}, "errand not subscribed locally")
 
-	// bridge пропущен — Redis-Subscribe не поднят.
+	// bridge skipped; Redis Subscribe was not raised.
 	if n := redisSubCountFor(mr, errandID); n != 0 {
 		t.Fatalf("redis subscribers = %d, want 0 (skip-decision)", n)
 	}
 
-	// Событие приходит ТОЛЬКО на «другой» bus (holder-flip). Поскольку busSelf
-	// без bridge — оно не доставится в подписку Dispatch-а.
+	// The event arrives ONLY on the "other" bus (holder-flip). Because busSelf
+	// has no bridge, it will not be delivered to Dispatch's subscription.
 	busOther.Publish(applybus.Event{
 		ApplyID: errandID,
 		Kind:    applybus.KindErrandCompleted,
