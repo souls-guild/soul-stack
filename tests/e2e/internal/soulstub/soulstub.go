@@ -1,14 +1,13 @@
 //go:build e2e
 
-// Package soulstub — fake-Soul helper для L3a E2E (ADR-039(2)).
+// Package soulstub is a fake-Soul helper for L3a E2E (ADR-039(2)).
 //
-// Открывает gRPC bidi-стрим к Keeper-у поверх mTLS (ровно как настоящий Soul),
-// отвечает на ApplyRequest предзаписанным RunResult из YAML-scripts. НЕ
-// запускает реальное apply, не мутирует filesystem, не парсит destiny —
-// контракт-тест L3a проверяет лифт-цикл apply_runs / RBAC / audit / metrics
-// на keeper-стороне, а не реализм apply (для этого L3b).
+// Opens gRPC bidi stream to Keeper over mTLS (exactly like real Soul), replies to
+// ApplyRequest with pre-recorded RunResult from YAML scripts. Does NOT run real
+// apply, mutate filesystem, or parse destiny: L3a contract test checks keeper-side
+// lifecycle of apply_runs / RBAC / audit / metrics, not apply realism (that is L3b).
 //
-// НЕ бинарь (ADR-004): test-fixture без operator-lifecycle.
+// NOT a binary (ADR-004): test fixture without operator lifecycle.
 package soulstub
 
 import (
@@ -29,98 +28,98 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// ErrAlreadyOpen возвращается, если Open вызван второй раз без Close.
+// ErrAlreadyOpen is returned when Open is called second time without Close.
 var ErrAlreadyOpen = errors.New("soulstub: stream already open")
 
-// Stub — один fake-Soul, держащий долгоживущий EventStream к Keeper-у.
+// Stub is one fake Soul holding a long-lived EventStream to Keeper.
 type Stub struct {
 	SID            string
 	KeeperGRPCAddr string
 
-	// endpoints — fallback-список gRPC-адресов keeper-ов (мульти-keeper, зеркало
-	// soul.yml::keeper.endpoints). Заполняется [SetEndpoints]; используется
-	// reconnectIfBroken для перевыбора живого keeper-а при разрыве стрима.
-	// KeeperGRPCAddr (initial Open) в reconnect НЕ переиспользуется как первый
-	// кандидат — список endpoints авторитетен. Пуст → reconnect выключен (стаб
-	// single-shot, как до WardRoster-расширения).
+	// endpoints is fallback list of keeper gRPC addresses (multi-keeper, mirror
+	// of soul.yml::keeper.endpoints). Filled by [SetEndpoints]; used by
+	// reconnectIfBroken to pick a live keeper when stream breaks.
+	// KeeperGRPCAddr (initial Open) is NOT reused as first reconnect candidate:
+	// endpoints list is authoritative. Empty -> reconnect disabled (single-shot
+	// stub, as before WardRoster extension).
 	endpoints []string
 
-	// reconnectEnabled — включён ли авто-reconnect+WardRoster при разрыве стрима
-	// (WardRoster dispatched-orphan e2e). Зеркало реального soul/cmd/soul
-	// reconnectLoop→handleSession: на (re)connect-е стаб шлёт Hello, затем СРАЗУ
-	// WardRoster(activeWard). Дефолт false — стаб не реконнектит (recvLoop на
-	// ошибке просто выходит, прежнее L3a-поведение). Включается [EnableReconnect].
+	// reconnectEnabled toggles auto-reconnect+WardRoster on stream break
+	// (WardRoster dispatched-orphan e2e). Mirrors real soul/cmd/soul
+	// reconnectLoop->handleSession: on (re)connect, stub sends Hello, then
+	// IMMEDIATELY WardRoster(activeWard). Default false: stub does not reconnect
+	// (recvLoop simply exits on error, previous L3a behavior). Enabled by
+	// [EnableReconnect].
 	reconnectEnabled bool
 
-	// holdApply — режим «держать ApplyRequest»: на ApplyRequest стаб НЕ шлёт
-	// RunResult (строка apply_runs остаётся `dispatched`), а лишь регистрирует
-	// apply_id в activeWard. Имитирует Soul, физически принявший задание и ещё не
-	// завершивший Run. Для dispatched-orphan e2e: после SIGKILL keeper-холдера
-	// строка зависает dispatched, reconnect+WardRoster её реконсилит. Дефолт false.
-	// Включается [SetHoldApply].
+	// holdApply mode "holds ApplyRequest": on ApplyRequest, stub does NOT send
+	// RunResult (apply_runs row stays `dispatched`), only registers apply_id in
+	// activeWard. Emulates Soul that physically accepted task and has not
+	// completed Run yet. For dispatched-orphan e2e: after SIGKILL of keeper holder,
+	// row hangs dispatched, reconnect+WardRoster reconciles it. Default false.
+	// Enabled by [SetHoldApply].
 	holdApply bool
 
-	// activeWard — набор apply_id, объявляемых стабом ведомыми в WardRoster на
-	// reconnect (зеркало runtime.ApplyRunner.ActiveSet). holdApply пополняет его
-	// на каждом удержанном ApplyRequest; [ClearActiveWard] обнуляет (имитация
-	// рестарта Soul-процесса — in-flight физически нет). Пустой → WardRoster шлёт
-	// пустой набор, keeper терминалит ВСЕ dispatched-строки SID-а (OrphanDispatched).
+	// activeWard is set of apply_id values declared by stub as active in
+	// WardRoster on reconnect (mirror of runtime.ApplyRunner.ActiveSet).
+	// holdApply adds each held ApplyRequest; [ClearActiveWard] resets it
+	// (emulates Soul process restart: no in-flight work physically exists).
+	// Empty -> WardRoster sends empty set, keeper terminalizes ALL dispatched
+	// rows of SID (OrphanDispatched).
 	activeWard map[string]int32
 
-	// TLS-материал mTLS-handshake. cert/key — client-cert stub-а (Vault-issued
-	// leaf под SID), caBundle — root CA Keeper-server-cert-а.
+	// TLS material for mTLS handshake. cert/key are stub client cert (Vault-issued
+	// leaf for SID), caBundle is root CA of Keeper server cert.
 	cert     []byte
 	key      []byte
 	caBundle []byte
 
-	// scripted — карта scenario-name → список ScriptEntry, заполняется из
-	// fixtures/stub-responses.yaml. Matching по task_name (порядок задач в
-	// ApplyRequest не гарантирован — ADR-027).
+	// scripted is map scenario-name -> list of ScriptEntry, filled from
+	// fixtures/stub-responses.yaml. Matching by task_name (task order in
+	// ApplyRequest is not guaranteed - ADR-027).
 	scripted map[string][]ScriptEntry
 
-	// errandStatus — статус, которым stub отвечает на ErrandRequest (ADR-033/041).
-	// Дефолт SUCCESS (см. New). recvLoop на ErrandRequest шлёт ErrandResult с этим
-	// статусом + эхо errand_id. Позволяет e2e-тесту ErrandRun-а прогнать цепочку
-	// dispatch→terminal без реального exec (stub не запускает shell — L3a-контракт).
+	// errandStatus is status returned by stub for ErrandRequest (ADR-033/041).
+	// Default SUCCESS (see New). recvLoop sends ErrandResult with this status +
+	// echoed errand_id on ErrandRequest. Lets ErrandRun e2e test drive
+	// dispatch->terminal chain without real exec (stub does not run shell - L3a contract).
 	errandStatus keeperv1.ErrandStatus
 
-	// applyStatusBySID / errandStatusBySID — per-SID override поверх глобального
-	// дефолта (applyDefaultSuccess / errandStatus). Нужны partial-failure-тестам
-	// (Tide/ErrandRun abort/continue): один хост волны возвращает FAILED, остальные
-	// — глобальный дефолт. Маршрутизация по соединению (один Stub = один SID), но
-	// recvLoop явно сверяет req-SID (echo в ErrandRequest.sid) / s.SID для
-	// читаемости и на случай нескольких Stub-ов в одном тесте. Пусто → дефолт.
+	// applyStatusBySID / errandStatusBySID are per-SID overrides over global
+	// default (applyDefaultSuccess / errandStatus). Needed for partial-failure
+	// tests (Tide/ErrandRun abort/continue): one host in wave returns FAILED,
+	// others use global default. Routing is by connection (one Stub = one SID),
+	// but recvLoop explicitly checks req-SID (echo in ErrandRequest.sid) / s.SID
+	// for readability and for multiple Stubs in one test. Empty -> default.
 	applyStatusBySID  map[string]bool
 	errandStatusBySID map[string]keeperv1.ErrandStatus
 
-	// applyDefaultSuccess — режим «success на любой ApplyRequest»: задача, не
-	// покрытая scripted-таблицей, считается SUCCESS (а не FAILED). Удобно для
-	// apply-e2e, которому важен lifecycle apply_runs (planned→…→success), а не
-	// реализм per-task RunResult-а (L3a-контракт). Дефолт false (строгий режим —
-	// unscripted task = FAILED, явный сигнал о дыре в fixture). Включается
-	// SetApplyDefaultSuccess.
+	// applyDefaultSuccess mode "success for any ApplyRequest": task not covered
+	// by scripted table counts as SUCCESS (not FAILED). Useful for apply-e2e
+	// where apply_runs lifecycle matters (planned->...->success), not realism of
+	// per-task RunResult (L3a contract). Default false (strict mode: unscripted
+	// task = FAILED, explicit signal of fixture gap). Enabled by SetApplyDefaultSuccess.
 	applyDefaultSuccess bool
 
-	// taskRegisterByName — scripted per-task register (staged-render, ADR-056):
-	// task_name → per-SID register-payload (sid → register_data). На ApplyRequest
-	// stub эмитит TaskEvent с RegisterData ДО агрегированного RunResult (как
-	// настоящий Soul на probe-задаче), echo-я passage из запроса. Keeper-side
-	// accumulateRegister складывает register per-(apply_id, sid, passage), откуда
-	// render следующего Passage резолвит where: register.*. Без scripted-register
-	// (дефолт) stub register не эмитит — обычный apply (L3a-контракт). Включается
+	// taskRegisterByName is scripted per-task register (staged-render, ADR-056):
+	// task_name -> per-SID register-payload (sid -> register_data). On ApplyRequest
+	// stub emits TaskEvent with RegisterData BEFORE aggregate RunResult (like real
+	// Soul on probe task), echoing passage from request. Keeper-side
+	// accumulateRegister stores register per-(apply_id, sid, passage), from where
+	// next Passage render resolves where: register.*. Without scripted-register
+	// (default), stub emits no register - normal apply (L3a contract). Enabled by
 	// [SetTaskRegister].
 	taskRegisterByName map[string]map[string]map[string]any
 
-	// dryRunPlanSet — включён ли Plan-ответ на dry_run-ApplyRequest (Scry,
-	// ADR-031). Когда true, на ApplyRequest{dry_run:true} stub перед RunResult
-	// шлёт по одному TaskEvent на каждую задачу со status=CHANGED|OK и
-	// register_data{changed:dryRunChanged} — keeper-side accumulateRegister
-	// складывает их в apply_task_register, откуда CheckDrift строит
-	// per-task changed (drifted/clean). Дефолт false: без явного включения
-	// dry_run-прогон ведёт себя как обычный (только RunResult), drift-report
-	// собирается с host=clean (нет register-строк). Имитирует SoulModule.Plan
-	// (mod.Apply на dry_run не вызывается — read-only гарантия ADR-031), НЕ
-	// исполняет реальный Plan core-модуля (L3a-контракт, как и весь stub).
+	// dryRunPlanSet toggles Plan reply on dry_run ApplyRequest (Scry, ADR-031).
+	// When true, for ApplyRequest{dry_run:true} stub sends one TaskEvent per task
+	// before RunResult with status=CHANGED|OK and register_data{changed:dryRunChanged};
+	// keeper-side accumulateRegister stores them in apply_task_register, from
+	// which CheckDrift builds per-task changed (drifted/clean). Default false:
+	// without explicit enabling, dry_run run behaves as normal (only RunResult),
+	// drift-report is built with host=clean (no register rows). Emulates
+	// SoulModule.Plan (mod.Apply is not called on dry_run - read-only guarantee
+	// ADR-031), does NOT execute real Plan core module (L3a contract, like whole stub).
 	dryRunPlanSet bool
 	dryRunChanged bool
 
@@ -130,30 +129,30 @@ type Stub struct {
 	recorded []Message
 	cancel   context.CancelFunc
 	done     chan struct{}
-	// closed — стаб закрыт (Close вызван). reconnectIfBroken после этого не
-	// поднимает новый стрим (иначе reconnect-цикл пережил бы cleanup-Close).
+	// closed means stub is closed (Close called). reconnectIfBroken does not
+	// open a new stream after that (otherwise reconnect loop would outlive cleanup Close).
 	closed bool
 }
 
-// ScriptEntry — одна scripted-реплика stub-а.
+// ScriptEntry is one scripted stub reply.
 //
-// TaskName — имя задачи, на которую stub реагирует RunResult-ом.
-// Status — RunStatus enum-значение.
-// StateChanges — произвольный jsonb-payload, упаковывается в RunResult.state_changes.
+// TaskName is task name that stub answers with RunResult.
+// Status is RunStatus enum value.
+// StateChanges is arbitrary jsonb payload packed into RunResult.state_changes.
 type ScriptEntry struct {
 	TaskName     string
 	Status       keeperv1.RunStatus
 	StateChanges map[string]any
 }
 
-// Message — зафиксированный stub-ом payload от Keeper-а.
+// Message is payload from Keeper recorded by stub.
 type Message struct {
 	Kind  string
 	Frame *keeperv1.FromKeeper
 }
 
-// New конструирует Stub. cert/key — client-cert mTLS, caBundle — root CA
-// Keeper-server-cert-а (для верификации server-cert-а на handshake-е).
+// New constructs Stub. cert/key are mTLS client cert, caBundle is root CA of
+// Keeper server cert (for server-cert verification on handshake).
 func New(sid, keeperGRPCAddr string, cert, key, caBundle []byte) *Stub {
 	return &Stub{
 		SID:                sid,
@@ -171,49 +170,50 @@ func New(sid, keeperGRPCAddr string, cert, key, caBundle []byte) *Stub {
 	}
 }
 
-// SetEndpoints задаёт fallback-список gRPC-адресов keeper-ов для reconnect
-// (мульти-keeper, зеркало soul.yml::keeper.endpoints). Reconnect перебирает их по
-// порядку, выбирая первый дозвонившийся живой keeper. Без вызова reconnect не имеет
-// кандидатов и завершается (стаб остаётся single-shot).
+// SetEndpoints sets fallback list of keeper gRPC addresses for reconnect
+// (multi-keeper, mirror of soul.yml::keeper.endpoints). Reconnect iterates in order,
+// choosing first reachable live keeper. Without this call reconnect has no
+// candidates and ends (stub remains single-shot).
 func (s *Stub) SetEndpoints(addrs []string) {
 	s.mu.Lock()
 	s.endpoints = append([]string(nil), addrs...)
 	s.mu.Unlock()
 }
 
-// EnableReconnect включает авто-reconnect+WardRoster при разрыве стрима (WardRoster
-// dispatched-orphan e2e). На (re)connect-е стаб шлёт Hello, затем СРАЗУ
-// WardRoster(activeWard) — зеркало реального soul/cmd/soul handleSession. Требует
-// заданных [SetEndpoints]. Дефолт выключен.
+// EnableReconnect enables auto reconnect plus WardRoster on stream break
+// (WardRoster dispatched-orphan e2e). On (re)connect, the stub sends Hello,
+// then immediately sends WardRoster(activeWard), mirroring real soul/cmd/soul
+// handleSession. Requires configured [SetEndpoints]. Disabled by default.
 func (s *Stub) EnableReconnect(v bool) {
 	s.mu.Lock()
 	s.reconnectEnabled = v
 	s.mu.Unlock()
 }
 
-// SetHoldApply включает режим «держать ApplyRequest»: на ApplyRequest стаб НЕ шлёт
-// RunResult (строка apply_runs остаётся `dispatched`), а регистрирует apply_id в
-// activeWard. Имитирует Soul, принявший задание и не завершивший Run. Для
-// dispatched-orphan e2e (строка зависает dispatched до reconnect+WardRoster).
+// SetHoldApply enables hold mode for ApplyRequest: the stub does NOT send
+// RunResult (apply_runs row remains `dispatched`), and instead registers apply_id
+// in activeWard. Emulates a Soul that accepted a task and did not finish the Run.
+// Used by dispatched-orphan e2e (row stays dispatched until reconnect+WardRoster).
 func (s *Stub) SetHoldApply(v bool) {
 	s.mu.Lock()
 	s.holdApply = v
 	s.mu.Unlock()
 }
 
-// ClearActiveWard обнуляет набор ведомых apply_id. Имитирует рестарт Soul-процесса:
-// после рестарта in-flight физически нет, и WardRoster на reconnect объявляет
-// пустой набор → keeper терминалит ВСЕ dispatched-строки SID-а (OrphanDispatched).
-// Без вызова reconnect объявит удержанные apply_id ведомыми и keeper их НЕ осиротит
-// (epoch-fenced защита: Soul декларирует, что прогон ведётся).
+// ClearActiveWard resets the set of warded apply_id values. It emulates a Soul
+// process restart: after restart there are physically no in-flight runs, and
+// WardRoster on reconnect declares an empty set, so keeper terminates ALL
+// dispatched rows for this SID (OrphanDispatched). Without this call, reconnect
+// declares held apply_id values as warded and keeper does NOT orphan them
+// (epoch-fenced guard: Soul declares that the run is still in progress).
 func (s *Stub) ClearActiveWard() {
 	s.mu.Lock()
 	s.activeWard = make(map[string]int32)
 	s.mu.Unlock()
 }
 
-// ActiveWardIDs возвращает отсортированный снимок объявляемых ведомыми apply_id
-// (для ассертов теста). Чистая read-проекция, состояние не меняет.
+// ActiveWardIDs returns a sorted snapshot of apply_id values declared as warded
+// (for test assertions). Pure read projection; it does not change state.
 func (s *Stub) ActiveWardIDs() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -225,12 +225,13 @@ func (s *Stub) ActiveWardIDs() []string {
 	return out
 }
 
-// SetTaskRegister задаёт scripted per-task register (staged-render, ADR-056):
-// задача taskName на хосте s.SID эмитит TaskEvent с RegisterData=data ДО
-// агрегированного RunResult (как настоящий Soul на probe-задаче, эхо-я passage
-// из ApplyRequest). Keeper копит register per-(apply_id, sid, passage), и render
-// следующего Passage резолвит `where: register.<name>.*` per-host этим фактом.
-// Для 2-passage e2e probe→where: один хост даёт role='master', другой 'slave'.
+// SetTaskRegister configures a scripted per-task register (staged-render,
+// ADR-056): taskName on host s.SID emits TaskEvent with RegisterData=data BEFORE
+// aggregated RunResult (like a real Soul on a probe task, echoing passage from
+// ApplyRequest). Keeper accumulates register per-(apply_id, sid, passage), and
+// rendering of the next Passage resolves `where: register.<name>.*` per host
+// using this fact. For 2-passage e2e probe->where: one host returns
+// role='master', another returns 'slave'.
 func (s *Stub) SetTaskRegister(taskName string, data map[string]any) {
 	s.mu.Lock()
 	bySID := s.taskRegisterByName[taskName]
@@ -242,50 +243,52 @@ func (s *Stub) SetTaskRegister(taskName string, data map[string]any) {
 	s.mu.Unlock()
 }
 
-// SetErrandStatus задаёт статус, которым stub ответит на ErrandRequest
-// (по умолчанию SUCCESS). Для тестов failed/timeout-веток ErrandRun-а.
+// SetErrandStatus sets the status the stub returns for ErrandRequest
+// (SUCCESS by default). Used by tests for failed/timeout ErrandRun branches.
 func (s *Stub) SetErrandStatus(st keeperv1.ErrandStatus) {
 	s.mu.Lock()
 	s.errandStatus = st
 	s.mu.Unlock()
 }
 
-// SetApplyDefaultSuccess включает режим «success на любой ApplyRequest»:
-// scripted-таблицей не покрытая задача даёт SUCCESS, а не FAILED. Для apply-e2e,
-// которому важен lifecycle apply_runs, а не реализм per-task RunResult-а.
+// SetApplyDefaultSuccess enables "success for any ApplyRequest" mode: a task not
+// covered by scripted table returns SUCCESS instead of FAILED. Used by apply-e2e,
+// where apply_runs lifecycle matters more than per-task RunResult realism.
 func (s *Stub) SetApplyDefaultSuccess(v bool) {
 	s.mu.Lock()
 	s.applyDefaultSuccess = v
 	s.mu.Unlock()
 }
 
-// SetApplyStatusForSID задаёт per-SID override RunResult-статуса на ApplyRequest:
-// success=true → RUN_STATUS_SUCCESS, success=false → RUN_STATUS_FAILED, независимо
-// от scripted-таблицы и applyDefaultSuccess. Применяется, если sid совпадает с
-// s.SID (один Stub = один SID, маршрутизация по соединению). Для partial-failure-
-// тестов Tide (одна волна с упавшим хостом → on_failure=abort/continue). Без
-// вызова поведение прежнее (глобальный дефолт).
+// SetApplyStatusForSID configures a per-SID RunResult status override for
+// ApplyRequest: success=true -> RUN_STATUS_SUCCESS, success=false ->
+// RUN_STATUS_FAILED, regardless of scripted table and applyDefaultSuccess. Applies
+// when sid matches s.SID (one Stub = one SID, routed by connection). Used by Tide
+// partial-failure tests (one wave with a failed host -> on_failure=abort/continue).
+// Without this call behavior stays the same (global default).
 func (s *Stub) SetApplyStatusForSID(sid string, success bool) {
 	s.mu.Lock()
 	s.applyStatusBySID[sid] = success
 	s.mu.Unlock()
 }
 
-// SetErrandStatusForSID задаёт per-SID override статуса ErrandResult на
-// ErrandRequest поверх глобального errandStatus. Применяется, если sid совпадает
-// с s.SID. Для partial-failure-тестов ErrandRun (один host FAILED → on_failure=
-// abort/continue). Без вызова поведение прежнее (глобальный SetErrandStatus/default).
+// SetErrandStatusForSID configures a per-SID ErrandResult status override for
+// ErrandRequest over the global errandStatus. Applies when sid matches s.SID.
+// Used by ErrandRun partial-failure tests (one host FAILED ->
+// on_failure=abort/continue). Without this call behavior stays the same (global
+// SetErrandStatus/default).
 func (s *Stub) SetErrandStatusForSID(sid string, status keeperv1.ErrandStatus) {
 	s.mu.Lock()
 	s.errandStatusBySID[sid] = status
 	s.mu.Unlock()
 }
 
-// SetDryRunPlan включает Plan-ответ на dry_run-ApplyRequest (Scry, ADR-031):
-// stub перед RunResult эмитит TaskEvent на каждую задачу с register_data{changed}
-// = changed. changed=true → drift (per-task CHANGED), false → clean (per-task OK).
-// Без вызова dry_run-прогон ведёт себя как обычный (только RunResult) и
-// drift-report собирается host=clean без per-task register-строк.
+// SetDryRunPlan enables a Plan response to dry_run ApplyRequest (Scry, ADR-031):
+// before RunResult, the stub emits TaskEvent for each task with
+// register_data{changed}=changed. changed=true -> drift (per-task CHANGED),
+// false -> clean (per-task OK). Without this call, dry_run behaves like a normal
+// run (RunResult only) and the drift report is built as host=clean without
+// per-task register rows.
 func (s *Stub) SetDryRunPlan(changed bool) {
 	s.mu.Lock()
 	s.dryRunPlanSet = true
@@ -293,17 +296,18 @@ func (s *Stub) SetDryRunPlan(changed bool) {
 	s.mu.Unlock()
 }
 
-// LoadScript заполняет scripted-карту из готового парс-результата
-// `stub-responses.yaml`. Валидация структуры RunResult — на caller-е (harness).
+// LoadScript fills the scripted map from a prepared parse result of
+// `stub-responses.yaml`. RunResult structure validation is the caller's
+// responsibility (harness).
 func (s *Stub) LoadScript(perScenario map[string][]ScriptEntry) {
 	for k, v := range perScenario {
 		s.scripted[k] = v
 	}
 }
 
-// Open подключается к Keeper-у через mTLS, открывает EventStream, шлёт Hello,
-// запускает recv-loop в фоновой goroutine. Блокирующего вызова нет — caller
-// дальше делает ассерты и потом Close.
+// Open connects to Keeper over mTLS, opens EventStream, sends Hello, and starts
+// recv-loop in a background goroutine. There is no blocking call; the caller then
+// makes assertions and calls Close.
 func (s *Stub) Open(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -320,11 +324,12 @@ func (s *Stub) Open(ctx context.Context) error {
 	return nil
 }
 
-// dialAndHandshake открывает gRPC-стрим к addr, шлёт Hello и (на reconnect-е)
-// WardRoster, и проставляет s.conn/s.stream/s.cancel. Вызывается под s.mu.
-// Общий код initial-Open ([Open]) и reconnect-а (reconnectIfBroken). При
-// sendWardRoster=true СРАЗУ после Hello шлёт WardRoster(activeWard) — зеркало
-// реального soul/cmd/soul handleSession (ПЕРВОЕ app-сообщение после handshake).
+// dialAndHandshake opens a gRPC stream to addr, sends Hello and (on reconnect)
+// WardRoster, and sets s.conn/s.stream/s.cancel. Called under s.mu. Shared code
+// for initial Open ([Open]) and reconnect (reconnectIfBroken). When
+// sendWardRoster=true it sends WardRoster(activeWard) immediately after Hello,
+// mirroring real soul/cmd/soul handleSession (the FIRST app message after
+// handshake).
 func (s *Stub) dialAndHandshake(ctx context.Context, addr string, sendWardRoster bool) error {
 	clientCert, err := tls.X509KeyPair(s.cert, s.key)
 	if err != nil {
@@ -332,7 +337,7 @@ func (s *Stub) dialAndHandshake(ctx context.Context, addr string, sendWardRoster
 	}
 	caPool := x509.NewCertPool()
 	if !caPool.AppendCertsFromPEM(s.caBundle) {
-		return fmt.Errorf("soulstub(%s): не удалось добавить CA в pool", s.SID)
+		return fmt.Errorf("soulstub(%s): failed to add CA to pool", s.SID)
 	}
 	tlsCfg := &tls.Config{
 		Certificates: []tls.Certificate{clientCert},
@@ -362,11 +367,12 @@ func (s *Stub) dialAndHandshake(ctx context.Context, addr string, sendWardRoster
 			Hello: &keeperv1.Hello{
 				SidEcho:     s.SID,
 				SoulVersion: "soulstub-l3a",
-				// Анонс фичей протокола (ADR-056 §S5) — тот же канон-список, что шлёт
-				// реальный Soul (soul/internal/grpc/client.go). Без "passage" keeper
-				// отвергает stub под staged-сценарием (N>1 Passage) fail-closed
-				// (soul_passage_unsupported, run.go), хотя respondToApply эхает passage
-				// в TaskEvent/RunResult (S3) — capability обязана совпасть с поведением.
+				// Protocol feature announcement (ADR-056 S5): same canonical list
+				// sent by real Soul (soul/internal/grpc/client.go). Without
+				// "passage", keeper rejects the stub under staged scenario
+				// (N>1 Passage) fail-closed (soul_passage_unsupported, run.go),
+				// although respondToApply echoes passage in TaskEvent/RunResult (S3);
+				// capability must match behavior.
 				Capabilities: config.SoulCapabilities(),
 			},
 		},
@@ -376,12 +382,13 @@ func (s *Stub) dialAndHandshake(ctx context.Context, addr string, sendWardRoster
 		return fmt.Errorf("soulstub(%s): send Hello: %w", s.SID, err)
 	}
 
-	// WardRoster (Soul-reconcile, ADR-027(g)): ПЕРВОЕ app-сообщение после
-	// handshake на reconnect-е — снимок ведомых apply_id (ReplaceAll). Зеркало
-	// soul/cmd/soul handleSession (шлёт СРАЗУ после Hello, ДО прочего). Keeper по
-	// нему терминалит осиротевшие dispatched-строки SID-а. На initial-Open не
-	// шлём (ничего ещё не ведётся; реальный Soul тоже шлёт пустой набор, но для
-	// чистоты L3a-контракта прежних тестов сохраняем прежнее initial-поведение).
+	// WardRoster (Soul-reconcile, ADR-027(g)): the FIRST app message after
+	// handshake on reconnect is a snapshot of warded apply_id values (ReplaceAll).
+	// Mirrors soul/cmd/soul handleSession (sent immediately after Hello, before
+	// anything else). Keeper uses it to terminate orphaned dispatched rows for
+	// the SID. It is not sent on initial Open (nothing is being warded yet; real
+	// Soul also sends an empty set, but we keep previous initial behavior for a
+	// clean L3a contract of older tests).
 	if sendWardRoster {
 		if err := stream.Send(&keeperv1.FromSoul{
 			Payload: &keeperv1.FromSoul_WardRoster{
@@ -400,9 +407,9 @@ func (s *Stub) dialAndHandshake(ctx context.Context, addr string, sendWardRoster
 	return nil
 }
 
-// wardRosterActiveLocked собирает proto-набор ActiveApply из activeWard для
-// WardRoster. Вызывается под s.mu. Пустой набор → nil (явная декларация «ничего
-// не ведётся» — реконсайл осиротит все dispatched-строки SID-а).
+// wardRosterActiveLocked builds the proto ActiveApply set from activeWard for
+// WardRoster. Called under s.mu. Empty set -> nil (explicit declaration that
+// nothing is being warded; reconcile will orphan all dispatched rows for the SID).
 func (s *Stub) wardRosterActiveLocked() []*keeperv1.ActiveApply {
 	if len(s.activeWard) == 0 {
 		return nil
@@ -414,10 +421,9 @@ func (s *Stub) wardRosterActiveLocked() []*keeperv1.ActiveApply {
 	return out
 }
 
-// recvLoop читает сообщения от Keeper-а и реагирует scripted-RunResult-ом на
-// ApplyRequest. Любое другое сообщение записывается в recorded и игнорируется
-// (L3a-контракт: stub не отвечает на CancelApply / SigilTrustAnchors кроме
-// записи).
+// recvLoop reads messages from Keeper and responds to ApplyRequest with scripted
+// RunResult. Any other message is recorded and ignored (L3a contract: the stub
+// does not respond to CancelApply / SigilTrustAnchors beyond recording).
 func (s *Stub) recvLoop() {
 	defer close(s.done)
 	for {
@@ -430,13 +436,13 @@ func (s *Stub) recvLoop() {
 
 		frame, err := stream.Recv()
 		if err != nil {
-			// Разрыв стрима (clean EOF / транспорт / смерть keeper-холдера). Если
-			// включён reconnect — перевыбираем живой keeper из fallback-списка и
-			// шлём WardRoster (зеркало soul/cmd/soul reconnectLoop→handleSession).
-			// Успех → продолжаем recvLoop на новом стриме; неудача (или reconnect
-			// выключен / Close) → выходим.
+			// Stream break (clean EOF / transport / keeper-holder death). If
+			// reconnect is enabled, select a live keeper from fallback list and
+			// send WardRoster (mirror of soul/cmd/soul reconnectLoop->handleSession).
+			// Success -> continue recvLoop on the new stream; failure (or reconnect
+			// disabled / Close) -> exit.
 			if errors.Is(err, context.Canceled) {
-				return // Close() отменил session-ctx — штатный выход.
+				return // Close() canceled session ctx - normal exit.
 			}
 			if s.reconnectIfBroken(err) {
 				continue
@@ -460,22 +466,22 @@ func (s *Stub) recvLoop() {
 	}
 }
 
-// reconnectIfBroken перевыбирает живой keeper из fallback-списка endpoints и
-// переустанавливает стрим (Hello + WardRoster), зеркало реального
-// soul/cmd/soul reconnectLoop→handleSession. Возвращает true, если новый стрим
-// поднят (recvLoop продолжает на нём); false — reconnect выключен / нет
-// endpoints / стаб закрыт / все endpoints мертвы.
+// reconnectIfBroken selects a live keeper from fallback endpoints and recreates
+// the stream (Hello + WardRoster), mirroring real soul/cmd/soul
+// reconnectLoop->handleSession. Returns true when a new stream is up (recvLoop
+// continues on it); false when reconnect is disabled / there are no endpoints /
+// the stub is closed / all endpoints are dead.
 //
-// Авто-retry с коротким backoff: после SIGKILL keeper-холдера живые keeper-ы
-// уже подняты, но в момент разрыва TCP к убитому ещё может «дёргаться» — даём
-// несколько попыток в пределах ~5s, как реальный Soul backoff-цикл.
+// Auto-retry with short backoff: after SIGKILL of the keeper holder, live keepers
+// are already up, but the TCP break against the killed one may still race; give
+// several attempts within about 5s, like the real Soul backoff loop.
 func (s *Stub) reconnectIfBroken(cause error) bool {
 	s.mu.Lock()
 	if s.closed || !s.reconnectEnabled || len(s.endpoints) == 0 {
 		s.mu.Unlock()
 		return false
 	}
-	// Старый conn закрываем — он указывал на мёртвый/разорванный keeper.
+	// Close the old conn; it pointed to a dead/broken keeper.
 	if s.cancel != nil {
 		s.cancel()
 		s.cancel = nil
@@ -508,11 +514,11 @@ func (s *Stub) reconnectIfBroken(cause error) bool {
 	return false
 }
 
-// respondToErrand отвечает на ErrandRequest (ADR-033/041) ErrandResult-ом с
-// настроенным статусом (default SUCCESS). НЕ запускает реальный shell/exec —
-// L3a-контракт проверяет keeper-side цепочку dispatch→applybus→Dispatcher-
-// terminal→errands-row (вкл. FK started_by_aid), а не реализм исполнения модуля.
-// errand_id эхо-проксируется из запроса. exit_code=0 для SUCCESS.
+// respondToErrand answers ErrandRequest (ADR-033/041) with ErrandResult using
+// configured status (default SUCCESS). It does NOT run real shell/exec; the L3a
+// contract checks keeper-side dispatch->applybus->Dispatcher-terminal->errands-row
+// chain (including FK started_by_aid), not module execution realism. errand_id is
+// echo-proxied from the request. exit_code=0 for SUCCESS.
 func (s *Stub) respondToErrand(req *keeperv1.ErrandRequest) {
 	s.mu.Lock()
 	status := s.errandStatus
@@ -541,9 +547,9 @@ func (s *Stub) respondToErrand(req *keeperv1.ErrandRequest) {
 	})
 }
 
-// respondToApply шлёт агрегированный RunResult по scripted-таблице. Если
-// какая-то задача в ApplyRequest scripted-таблицей не покрыта — статус
-// результата = FAILED (явный сигнал тесту о дыре в fixture).
+// respondToApply sends aggregated RunResult from the scripted table. If any task
+// in ApplyRequest is not covered by scripted table, result status is FAILED
+// (explicit signal to the test that the fixture has a gap).
 func (s *Stub) respondToApply(req *keeperv1.ApplyRequest) {
 	s.mu.Lock()
 	defaultSuccess := s.applyDefaultSuccess
@@ -552,19 +558,19 @@ func (s *Stub) respondToApply(req *keeperv1.ApplyRequest) {
 	sidOverride, hasSidOverride := s.applyStatusBySID[s.SID]
 	holdApply := s.holdApply
 	if holdApply {
-		// Режим «держать»: задание физически принято (apply_id ведётся), но
-		// RunResult не шлём — строка apply_runs остаётся `dispatched`. Регистрируем
-		// apply_id в activeWard (его эхо attempt — для epoch-fenced WardRoster).
-		// Реальный Soul так же держит apply_id в ActiveSet, пока Run не завершён.
+		// Hold mode: the task is physically accepted (apply_id is warded), but
+		// RunResult is not sent - apply_runs row remains `dispatched`. Register
+		// apply_id in activeWard (its echoed attempt is used for epoch-fenced
+		// WardRoster). Real Soul also keeps apply_id in ActiveSet until Run ends.
 		s.activeWard[req.GetApplyId()] = req.GetAttempt()
 		s.mu.Unlock()
 		return
 	}
 	s.mu.Unlock()
 
-	// Per-SID override (partial-failure-тесты Tide): этот хост возвращает
-	// детерминированный RunResult{SUCCESS|FAILED} вне зависимости от scripted-
-	// таблицы и applyDefaultSuccess — один host волны падает, остальные нет.
+	// Per-SID override (Tide partial-failure tests): this host returns deterministic
+	// RunResult{SUCCESS|FAILED} regardless of scripted table and applyDefaultSuccess
+	// - one host in the wave fails while the others do not.
 	if hasSidOverride {
 		status := keeperv1.RunStatus_RUN_STATUS_SUCCESS
 		if !sidOverride {
@@ -583,18 +589,18 @@ func (s *Stub) respondToApply(req *keeperv1.ApplyRequest) {
 		return
 	}
 
-	// Scripted per-task register (staged-render, ADR-056): для probe-задачи (с
-	// заданным SetTaskRegister) эмитим TaskEvent с RegisterData ДО RunResult,
-	// echo-я passage из запроса — как настоящий Soul на register-задаче. Keeper
-	// копит register per-(apply_id, sid, passage); render следующего Passage
-	// резолвит `where: register.<name>.*` этим фактом. Без scripted-register —
-	// no-op (обычный apply).
+	// Scripted per-task register (staged-render, ADR-056): for a probe task (with
+	// configured SetTaskRegister), emit TaskEvent with RegisterData BEFORE RunResult,
+	// echoing passage from the request, like real Soul on a register task. Keeper
+	// accumulates register per-(apply_id, sid, passage); rendering of the next
+	// Passage resolves `where: register.<name>.*` using this fact. Without
+	// scripted-register it is a no-op (normal apply).
 	s.emitTaskRegisters(req)
 
-	// dry_run + включённый Plan-режим (Scry, ADR-031): эмитим per-task TaskEvent
-	// с register_data{changed}, как сделал бы Soul после mod.Plan. Это наполняет
-	// apply_task_register, откуда CheckDrift собирает per-task drifted/clean.
-	// RunResult ниже закрывает host-терминал (driftBarrier ждёт его).
+	// dry_run + enabled Plan mode (Scry, ADR-031): emit per-task TaskEvent with
+	// register_data{changed}, as Soul would do after mod.Plan. This fills
+	// apply_task_register, where CheckDrift collects per-task drifted/clean.
+	// RunResult below closes the host terminal (driftBarrier waits for it).
 	if req.GetDryRun() && dryRunPlanSet {
 		s.emitPlanTaskEvents(req, dryRunChanged)
 	}
@@ -606,8 +612,8 @@ func (s *Stub) respondToApply(req *keeperv1.ApplyRequest) {
 		entries := s.findEntriesByTask(task.GetName())
 		if len(entries) == 0 {
 			if defaultSuccess {
-				// Apply-default-success режим: unscripted task = SUCCESS (lifecycle
-				// apply_runs важнее реализма per-task RunResult-а, L3a-контракт).
+				// Apply-default-success mode: unscripted task = SUCCESS (apply_runs
+				// lifecycle matters more than per-task RunResult realism, L3a contract).
 				continue
 			}
 			worst = keeperv1.RunStatus_RUN_STATUS_FAILED
@@ -635,20 +641,20 @@ func (s *Stub) respondToApply(req *keeperv1.ApplyRequest) {
 				Status:       worst,
 				StateChanges: stateStruct,
 				Attempt:      req.GetAttempt(),
-				// passage (ADR-056): echo из ApplyRequest — Keeper коррелирует
-				// терминал per-(apply_id, sid, passage) и барьерит срез Passage.
+				// passage (ADR-056): echo from ApplyRequest; Keeper correlates terminal
+				// per-(apply_id, sid, passage) and barriers the Passage slice.
 				Passage: req.GetPassage(),
 			},
 		},
 	})
 }
 
-// emitTaskRegisters эмитит TaskEvent с RegisterData для задач ApplyRequest, у
-// которых задан scripted per-task register этого SID (SetTaskRegister). task_idx
-// — позиция задачи в req.Tasks[] (так же его проставляет настоящий Soul); passage
-// — echo ApplyRequest.passage. Keeper-side accumulateRegister складывает
-// register_data в apply_task_register по (apply_id, sid, task_idx) с этим passage.
-// no-op, если scripted-register не задан.
+// emitTaskRegisters emits TaskEvent with RegisterData for ApplyRequest tasks that
+// have scripted per-task register for this SID (SetTaskRegister). task_idx is the
+// position of the task in req.Tasks[] (real Soul sets it the same way); passage is
+// echo of ApplyRequest.passage. Keeper-side accumulateRegister stores
+// register_data in apply_task_register by (apply_id, sid, task_idx) with this
+// passage. no-op if scripted-register is not configured.
 func (s *Stub) emitTaskRegisters(req *keeperv1.ApplyRequest) {
 	s.mu.Lock()
 	stream := s.stream
@@ -685,12 +691,12 @@ func (s *Stub) emitTaskRegisters(req *keeperv1.ApplyRequest) {
 	}
 }
 
-// emitPlanTaskEvents шлёт по одному TaskEvent на каждую задачу dry_run-
-// ApplyRequest со status=CHANGED|OK и register_data{changed}. task_idx —
-// позиция задачи в req.Tasks[] (так же его проставляет настоящий Soul:
-// applyrunner.go TaskIdx=int32(idx)), что совпадает с RenderedTask.Index для
-// linear-сценария вроде converge. Keeper-side accumulateRegister складывает
-// register_data в apply_task_register по task_idx.
+// emitPlanTaskEvents sends one TaskEvent for each task of dry_run ApplyRequest
+// with status=CHANGED|OK and register_data{changed}. task_idx is the task
+// position in req.Tasks[] (real Soul sets it the same way:
+// applyrunner.go TaskIdx=int32(idx)), which matches RenderedTask.Index for a
+// linear scenario such as converge. Keeper-side accumulateRegister stores
+// register_data in apply_task_register by task_idx.
 func (s *Stub) emitPlanTaskEvents(req *keeperv1.ApplyRequest, changed bool) {
 	s.mu.Lock()
 	stream := s.stream
@@ -721,15 +727,16 @@ func (s *Stub) emitPlanTaskEvents(req *keeperv1.ApplyRequest, changed bool) {
 	}
 }
 
-// SendPortent шлёт Soul-stub-ом PortentEvent в EventStream от имени live
-// Soul-producer-а (V5-1 ADR-030 amendment 2026-05-26). Используется L3a-тестами
-// Oracle-loop-а: stub эмитит typed/legacy Portent через настоящий gRPC-mTLS,
-// Keeper-handler принимает и проходит весь pipeline (match/where/cooldown/
-// enqueue → apply_runs). Возвращает ошибку send-а (stream закрыт / транспорт).
+// SendPortent sends PortentEvent from the Soul stub into EventStream on behalf of
+// the live Soul producer (V5-1 ADR-030 amendment 2026-05-26). Used by L3a tests
+// for Oracle loop: stub emits typed/legacy Portent through real gRPC-mTLS, the
+// Keeper handler accepts it and runs the full pipeline
+// (match/where/cooldown/enqueue -> apply_runs). Returns send error (stream closed
+// / transport).
 //
-// stub НЕ имитирует scheduler: caller сам собирает PortentEvent с нужным
-// beacon_name / payload (typed oneof либо legacy Data). collected_at /sid
-// заполняются автоматически из stub.SID и time.Now, если caller их не выставил.
+// The stub does NOT emulate scheduler: caller builds PortentEvent with required
+// beacon_name / payload (typed oneof or legacy Data). collected_at / sid are filled
+// automatically from stub.SID and time.Now when caller does not set them.
 func (s *Stub) SendPortent(ev *keeperv1.PortentEvent) error {
 	s.mu.Lock()
 	stream := s.stream
@@ -745,11 +752,11 @@ func (s *Stub) SendPortent(ev *keeperv1.PortentEvent) error {
 	})
 }
 
-// findEntriesByTask ищет scripted-entry по task_name по всем сценариям. Stub
-// не знает текущего scenario-имени (Keeper присылает только task_name в
-// RenderedTask), поэтому плоский поиск по объединению карт. Коллизия имён
-// задач между сценариями в test-окружении исключена (одно stub-responses.yaml
-// на смок-кейс).
+// findEntriesByTask looks up scripted entry by task_name across all scenarios.
+// Stub does not know current scenario name (Keeper sends only task_name in
+// RenderedTask), so it does a flat search across merged maps. Task name collision
+// between scenarios is excluded in the test environment (one stub-responses.yaml
+// per smoke case).
 func (s *Stub) findEntriesByTask(taskName string) []ScriptEntry {
 	var out []ScriptEntry
 	for _, entries := range s.scripted {
@@ -762,7 +769,7 @@ func (s *Stub) findEntriesByTask(taskName string) []ScriptEntry {
 	return out
 }
 
-// payloadKind возвращает имя oneof-варианта для Message.Kind.
+// payloadKind returns the oneof variant name for Message.Kind.
 func payloadKind(frame *keeperv1.FromKeeper) string {
 	switch frame.GetPayload().(type) {
 	case *keeperv1.FromKeeper_HelloReply:
@@ -790,10 +797,10 @@ func payloadKind(frame *keeperv1.FromKeeper) string {
 	}
 }
 
-// Close — graceful-shutdown стрима. Безопасен к повторному вызову.
+// Close gracefully shuts down the stream. Safe to call more than once.
 func (s *Stub) Close() error {
 	s.mu.Lock()
-	s.closed = true // reconnectIfBroken после этого не поднимет новый стрим.
+	s.closed = true // reconnectIfBroken will not open a new stream after this.
 	cancel := s.cancel
 	conn := s.conn
 	stream := s.stream
@@ -814,7 +821,7 @@ func (s *Stub) Close() error {
 	return nil
 }
 
-// Messages возвращает копию принятых от Keeper-а сообщений за время жизни стрима.
+// Messages returns a copy of messages received from Keeper during stream lifetime.
 func (s *Stub) Messages() []Message {
 	s.mu.Lock()
 	defer s.mu.Unlock()

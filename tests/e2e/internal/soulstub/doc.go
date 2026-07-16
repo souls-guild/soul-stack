@@ -1,7 +1,7 @@
 //go:build e2e
 
-// Package soulstub — fake-Soul helper для L3a E2E (см. soulstub.go::doc).
+// Package soulstub is a fake-Soul helper for L3a E2E (see soulstub.go::doc).
 //
-// Doc-only файл — для go doc / godoc-навигации. Никаких deklaratsiy сверх
-// тех, что в soulstub.go.
+// Doc-only file for go doc / godoc navigation. No declarations beyond those in
+// soulstub.go.
 package soulstub

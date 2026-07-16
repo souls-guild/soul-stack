@@ -2,13 +2,13 @@
 
 package harness
 
-// Voyage-helper-ы для multi-keeper crash-harness: создание scenario-Voyage
-// через Operator-API (POST /v1/voyages), наблюдение за claim-владельцем
-// (voyages.claimed_by_kid) и за recovery после краша владельца (reclaim_voyages
-// → re-claim другим KID → терминал).
+// Voyage helpers for multi-keeper crash harness: create scenario-Voyage through
+// Operator API (POST /v1/voyages), observe claim owner (voyages.claimed_by_kid),
+// and recovery after owner crash (reclaim_voyages -> re-claim by another KID ->
+// terminal).
 //
-// Терминал успешного Voyage = status='succeeded' (миграция 059). attempt++ на
-// каждый claim/reclaim (fencing-epoch ADR-027(g)).
+// Successful Voyage terminal = status='succeeded' (migration 059). attempt++ on
+// every claim/reclaim (fencing epoch ADR-027(g)).
 
 import (
 	"context"
@@ -20,7 +20,7 @@ import (
 	"time"
 )
 
-// VoyageSnapshot — наблюдаемое состояние строки voyages для assert-ов.
+// VoyageSnapshot is observable state of a voyages row for assertions.
 type VoyageSnapshot struct {
 	Status     string
 	ClaimedBy  *string
@@ -30,14 +30,14 @@ type VoyageSnapshot struct {
 	Finished   bool
 }
 
-// CreateScenarioVoyage создаёт scenario-Voyage через POST /v1/voyages поверх
-// перечисленных инкарнаций. batchSize>0 → serial-волны по batchSize инкарнаций
-// (несколько батчей растягивают прогон, расширяя crash-окно). Возвращает
-// voyage_id из 202-тела.
+// CreateScenarioVoyage creates scenario-Voyage through POST /v1/voyages over
+// listed incarnations. batchSize>0 -> serial waves of batchSize incarnations
+// (multiple batches stretch the run, widening crash window). Returns voyage_id
+// from 202 body.
 //
-// 202 → voyage_id; иной статус — t.Fatal с телом (диагностика без догадок).
-// Транзиентный 422 «not registered» (тёплый снимок service-registry) поллится,
-// как в CreateIncarnation.
+// 202 -> voyage_id; any other status -> t.Fatal with body (diagnostics without guessing).
+// Transient 422 "not registered" (warm service-registry snapshot) is polled as
+// in CreateIncarnation.
 func (s *Stack) CreateScenarioVoyage(t *testing.T, scenario string, incarnations []string, batchSize int) string {
 	t.Helper()
 	c := s.opClient(t)
@@ -79,13 +79,13 @@ func (s *Stack) CreateScenarioVoyage(t *testing.T, scenario string, incarnations
 		t.Fatalf("CreateScenarioVoyage %s: decode: %v (body=%s)", scenario, err, string(resp))
 	}
 	if out.VoyageID == "" {
-		t.Fatalf("CreateScenarioVoyage %s: пустой voyage_id (body=%s)", scenario, string(resp))
+		t.Fatalf("CreateScenarioVoyage %s: empty voyage_id (body=%s)", scenario, string(resp))
 	}
 	return out.VoyageID
 }
 
-// VoyageState читает текущий снимок строки voyages по ID. Fatal при отсутствии
-// строки или query-ошибке.
+// VoyageState reads current snapshot of voyages row by ID. Fatal on missing row
+// or query error.
 func (s *Stack) VoyageState(t *testing.T, voyageID string) VoyageSnapshot {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -105,9 +105,9 @@ func (s *Stack) VoyageState(t *testing.T, voyageID string) VoyageSnapshot {
 	return snap
 }
 
-// WaitVoyageRunningOwner поллит, пока Voyage не перейдёт в running с непустым
-// claimed_by_kid; возвращает KID-владельца. Это точка съёма «кого убивать».
-// Fatal при таймауте (с последним снимком).
+// WaitVoyageRunningOwner polls until Voyage becomes running with non-empty
+// claimed_by_kid; returns owner KID. This is the "who to kill" capture point.
+// Fatal on timeout (with last snapshot).
 func (s *Stack) WaitVoyageRunningOwner(t *testing.T, voyageID string, timeout time.Duration) string {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -117,27 +117,27 @@ func (s *Stack) WaitVoyageRunningOwner(t *testing.T, voyageID string, timeout ti
 		if last.Status == "running" && last.ClaimedBy != nil && *last.ClaimedBy != "" {
 			return *last.ClaimedBy
 		}
-		// Если Voyage уже доехал до терминала ДО того, как мы поймали running —
-		// окно слишком узкое для kill; тест обязан расширить прогон.
+		// If Voyage reached terminal BEFORE we caught running, window is too narrow
+		// for kill; test must widen the run.
 		if isVoyageTerminal(last.Status) {
-			t.Fatalf("WaitVoyageRunningOwner %s: Voyage достиг терминала %q до поимки running-владельца (окно слишком узкое — увеличь scope/batch)",
+			t.Fatalf("WaitVoyageRunningOwner %s: Voyage reached terminal %q before catching running owner (window too narrow - increase scope/batch)",
 				voyageID, last.Status)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("WaitVoyageRunningOwner %s: running-владелец не появился за %s (последний снимок=%+v)",
+	t.Fatalf("WaitVoyageRunningOwner %s: running owner did not appear within %s (last snapshot=%+v)",
 		voyageID, timeout, last)
 	return ""
 }
 
-// WaitVoyageReclaimed поллит, пока Voyage не будет перезахвачен ДРУГИМ KID
-// (claimed_by_kid != killedKID) при attempt > attemptBeforeKill. Это прямое
-// доказательство, что reclaim_voyages вернул протухший claim в pending, и живой
-// keeper его подобрал. Возвращает KID нового владельца.
+// WaitVoyageReclaimed polls until Voyage is re-claimed by ANOTHER KID
+// (claimed_by_kid != killedKID) with attempt > attemptBeforeKill. This directly
+// proves reclaim_voyages returned stale claim to pending and a live keeper picked
+// it up. Returns new owner KID.
 //
-// Допускает промежуточные снимки (pending без владельца между reclaim и
-// re-claim, либо уже succeeded с claimed_by_kid нового владельца) — ключевой
-// инвариант: владелец сменился И attempt вырос.
+// Allows intermediate snapshots (pending without owner between reclaim and
+// re-claim, or already succeeded with claimed_by_kid of new owner). Key invariant:
+// owner changed AND attempt increased.
 func (s *Stack) WaitVoyageReclaimed(t *testing.T, voyageID, killedKID string, attemptBeforeKill int, timeout time.Duration) string {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -148,23 +148,22 @@ func (s *Stack) WaitVoyageReclaimed(t *testing.T, voyageID, killedKID string, at
 			*last.ClaimedBy != "" && *last.ClaimedBy != killedKID {
 			return *last.ClaimedBy
 		}
-		// Терминал с новым владельцем-не-killed и выросшим attempt — тоже
-		// валидный re-claim (быстрый прогон успел добежать).
+		// Terminal with new non-killed owner and increased attempt is also a valid
+		// re-claim (fast run managed to finish).
 		if isVoyageTerminal(last.Status) && last.Attempt > attemptBeforeKill &&
 			last.ClaimedBy != nil && *last.ClaimedBy != killedKID {
 			return *last.ClaimedBy
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	t.Fatalf("WaitVoyageReclaimed %s: re-claim другим KID не произошёл за %s (killed=%s, attempt_before=%d, последний снимок=%+v)",
+	t.Fatalf("WaitVoyageReclaimed %s: re-claim by another KID did not happen within %s (killed=%s, attempt_before=%d, last snapshot=%+v)",
 		voyageID, timeout, killedKID, attemptBeforeKill, last)
 	return ""
 }
 
-// WaitVoyageSucceeded поллит, пока Voyage не достигнет status='succeeded' с
-// finished_at. Терминал != succeeded (failed/partial_failed/cancelled) —
-// немедленный t.Fatal (recovery должен доисполнить прогон до УСПЕХА, не до
-// любого терминала).
+// WaitVoyageSucceeded polls until Voyage reaches status='succeeded' with
+// finished_at. Terminal != succeeded (failed/partial_failed/cancelled) is
+// immediate t.Fatal (recovery must complete the run to SUCCESS, not any terminal).
 func (s *Stack) WaitVoyageSucceeded(t *testing.T, voyageID string, timeout time.Duration) VoyageSnapshot {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -174,23 +173,22 @@ func (s *Stack) WaitVoyageSucceeded(t *testing.T, voyageID string, timeout time.
 		switch last.Status {
 		case "succeeded":
 			if !last.Finished {
-				t.Fatalf("WaitVoyageSucceeded %s: status=succeeded, но finished_at пуст (нарушен инвариант voyages_terminal_finished_at)", voyageID)
+				t.Fatalf("WaitVoyageSucceeded %s: status=succeeded, but finished_at is empty (voyages_terminal_finished_at invariant violated)", voyageID)
 			}
 			return last
 		case "failed", "partial_failed", "cancelled":
-			t.Fatalf("WaitVoyageSucceeded %s: терминал %q вместо succeeded (recovery не доисполнил прогон; снимок=%+v)",
+			t.Fatalf("WaitVoyageSucceeded %s: terminal %q instead of succeeded (recovery did not finish the run; snapshot=%+v)",
 				voyageID, last.Status, last)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	t.Fatalf("WaitVoyageSucceeded %s: succeeded не достигнут за %s (последний снимок=%+v)", voyageID, timeout, last)
+	t.Fatalf("WaitVoyageSucceeded %s: succeeded not reached within %s (last snapshot=%+v)", voyageID, timeout, last)
 	return VoyageSnapshot{}
 }
 
-// AssertVoyageTargetsTerminal проверяет, что в voyage_targets все строки прогона
-// достигли терминала (status='succeeded'), то есть прогон РЕАЛЬНО доисполнился
-// по каждой единице (не «формально succeeded на пустом scope»). Возвращает
-// число succeeded-target-ов.
+// AssertVoyageTargetsTerminal checks that all voyage_targets rows of the run
+// reached terminal (status='succeeded'), meaning the run REALLY completed every
+// unit (not "formally succeeded on empty scope"). Returns count of succeeded targets.
 func (s *Stack) AssertVoyageTargetsTerminal(t *testing.T, voyageID string) int {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -213,12 +211,12 @@ func (s *Stack) AssertVoyageTargetsTerminal(t *testing.T, voyageID string) int {
 		t.Fatalf("AssertVoyageTargetsTerminal %s: rows.Err: %v", voyageID, err)
 	}
 	if len(statuses) == 0 {
-		t.Fatalf("AssertVoyageTargetsTerminal %s: ни одной строки voyage_targets", voyageID)
+		t.Fatalf("AssertVoyageTargetsTerminal %s: no voyage_targets rows", voyageID)
 	}
 	succeeded := 0
 	for ref, st := range statuses {
 		if st != "succeeded" {
-			t.Fatalf("AssertVoyageTargetsTerminal %s: target=%s status=%q (не succeeded; матрица=%v)",
+			t.Fatalf("AssertVoyageTargetsTerminal %s: target=%s status=%q (not succeeded; matrix=%v)",
 				voyageID, ref, st, statuses)
 		}
 		succeeded++
@@ -226,9 +224,9 @@ func (s *Stack) AssertVoyageTargetsTerminal(t *testing.T, voyageID string) int {
 	return succeeded
 }
 
-// IncarnationsInStatus возвращает имена инкарнаций (из incNames) в заданном
-// статусе. Используется для детекта seam-дефекта: инкарнация, осиротевшая в
-// `applying` после краша keeper-владельца её per-incarnation scenario-run-а.
+// IncarnationsInStatus returns incarnation names (from incNames) in given status.
+// Used to detect seam defect: incarnation orphaned in `applying` after crash of
+// keeper owning its per-incarnation scenario-run.
 func (s *Stack) IncarnationsInStatus(t *testing.T, incNames []string, status string) []string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -246,9 +244,9 @@ func (s *Stack) IncarnationsInStatus(t *testing.T, incNames []string, status str
 	return out
 }
 
-// IncarnationStatusDetails возвращает (status, status_details-как-строка) для
-// инкарнации. status_details — JSONB с причиной error_locked (для диагностики
-// seam-варианта, когда reclaim приводит к error_locked вместо succeeded).
+// IncarnationStatusDetails returns (status, status_details as string) for
+// incarnation. status_details is JSONB with error_locked reason (for diagnosing
+// seam variant where reclaim leads to error_locked instead of succeeded).
 func (s *Stack) IncarnationStatusDetails(t *testing.T, name string) (string, string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -266,10 +264,9 @@ func (s *Stack) IncarnationStatusDetails(t *testing.T, name string) (string, str
 	return status, d
 }
 
-// CountApplyRunsForIncarnation возвращает число строк apply_runs для инкарнации
-// (любой статус). Для подтверждения, что осиротевший `applying`-lock не имеет
-// живых apply_runs (нечего реклеймить через reclaim_apply_runs — lock висит
-// только на incarnation.status).
+// CountApplyRunsForIncarnation returns number of apply_runs rows for incarnation
+// (any status). Confirms orphaned `applying` lock has no live apply_runs (nothing
+// to reclaim through reclaim_apply_runs; lock only hangs on incarnation.status).
 func (s *Stack) CountApplyRunsForIncarnation(t *testing.T, incarnation string) int {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -282,10 +279,10 @@ func (s *Stack) CountApplyRunsForIncarnation(t *testing.T, incarnation string) i
 	return n
 }
 
-// DumpRecoveryState логирует диагностический срез состояния recovery: статусы
-// инкарнаций + apply_runs + voyage_targets. Используется при разборе seam-багов
-// (краш→reclaim→зависание): показывает, какие инкарнации застряли в applying и
-// какие apply_runs осиротели после краша владельца.
+// DumpRecoveryState logs diagnostic recovery state slice: incarnation statuses +
+// apply_runs + voyage_targets. Used when investigating seam bugs
+// (crash->reclaim->hang): shows which incarnations stuck in applying and which
+// apply_runs orphaned after owner crash.
 func (s *Stack) DumpRecoveryState(t *testing.T, voyageID string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -339,7 +336,7 @@ func (s *Stack) DumpRecoveryState(t *testing.T, voyageID string) {
 	}
 }
 
-// isVoyageTerminal — true для терминальных статусов voyages (миграция 059).
+// isVoyageTerminal is true for terminal voyages statuses (migration 059).
 func isVoyageTerminal(status string) bool {
 	switch status {
 	case "succeeded", "failed", "partial_failed", "cancelled":
@@ -349,9 +346,9 @@ func isVoyageTerminal(status string) bool {
 	}
 }
 
-// CountAuditEvents возвращает число audit_log-записей с заданным event_type,
-// у которых payload->>'voyage_id' = voyageID. Для доказательства, что
-// `voyage.reclaimed` реально эмитнут на crash-recovery.
+// CountAuditEvents returns count of audit_log records with given event_type and
+// payload->>'voyage_id' = voyageID. Proves `voyage.reclaimed` was actually emitted
+// on crash recovery.
 func (s *Stack) CountAuditEvents(t *testing.T, eventType, voyageID string) int {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

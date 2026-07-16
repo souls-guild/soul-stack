@@ -2,16 +2,16 @@
 
 // L3a E2E: service-hello-world happy-path (ADR-039).
 //
-// Полный pilot-pattern (как smoke-nginx, но с input.required и реальной мутацией
+// Full pilot pattern (like smoke-nginx, but with input.required and real mutation
 // incarnation.state). Flow:
-//  1. NewStack: testcontainers (PG/Redis/Vault) + Keeper-процесс + 1 soul-stub.
-//  2. CreateIncarnation `test-hello` поверх service `service-hello-world@main`.
-//  3. RunScenario `create` с input.greeting (required).
-//  4. WaitApplySuccess → asserts по after-create.yaml expectations:
+//  1. NewStack: testcontainers (PG/Redis/Vault) + Keeper process + 1 soul-stub.
+//  2. CreateIncarnation `test-hello` on top of service `service-hello-world@main`.
+//  3. RunScenario `create` with input.greeting (required).
+//  4. WaitApplySuccess -> asserts by after-create.yaml expectations:
 //     - apply_runs.status == "success";
 //     - incarnation.state.greeting_file == "/tmp/soul-stack-hello"
-//     (берётся state_changes.sets из scenario/create/main.yml);
-//     - audit_log: incarnation.scenario_started с apply_id;
+//     (taken from state_changes.sets in scenario/create/main.yml);
+//     - audit_log: incarnation.scenario_started with apply_id;
 //     - metrics: keeper_scenario_runs_total{result="ok"} >= 1.
 package e2e_test
 
