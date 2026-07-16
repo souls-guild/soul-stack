@@ -1,103 +1,103 @@
-# Выпуск версии Soul Stack
+# Soul Stack release
 
-Процедура выпуска релиза. Действует для беты (`vX.Y.Z-beta.N`) и далее.
+Release procedure. Valid for beta (`vX.Y.Z-beta.N`) onwards.
 
-Инвариант версионирования: **один git-тег на корень репозитория = одна логическая версия всех 7 модулей** go.work ([ADR-011](docs/adr/0011-go-layout.md)). Отдельных версий у `keeper`/`soul`/`soul-lint`/`soulctl`/`shared`/`sdk`/`proto` нет. Версия инъектится в бинари на этапе линковки через `-X main.<var>` (см. `Makefile`: `KEEPER_LDFLAGS`/`SOUL_LDFLAGS`/`SOULCTL_LDFLAGS`), бинарь печатает её командой `keeper version` / `soul version` / `soulctl version`. Это не противоречит ADR-007 (версия артефактов Service/Destiny/Module — git ref): здесь версионируется сам продукт-сборка, не пользовательские артефакты.
+Versioning invariant: **one git tag per repository root = one logical version of all 7 modules** go.work ([ADR-011](docs/adr/0011-go-layout.md)). There are no separate versions for `keeper`/`soul`/`soul-lint`/`soulctl`/`shared`/`sdk`/`proto`. The version is injected into the binary at the linking stage via `-X main.<var>` (see `Makefile`: `KEEPER_LDFLAGS`/`SOUL_LDFLAGS`/`SOULCTL_LDFLAGS`), the binary prints it with the command `keeper version` / `soul version` / `soulctl version`. This does not contradict ADR-007 (version of Service/Destiny/Module artifacts - git ref): the product assembly itself is versioned here, not user artifacts.
 
-## Процедура
+## Procedure
 
 ### (a) Freeze HEAD
 
-Зафиксировать релизный коммит на `main`. С этого момента в релиз идёт только то, что уже в дереве; новые фичи — после тега.
+Commit the release commit to `main`. From this moment on, only what is already in the tree is released; new features - after the tag.
 
-### (b) Зелёный гейт
+### (b) Green Gate
 
-Прогнать полный гейт на Linux-CI:
+Run the full gate on Linux-CI:
 
 ```sh
-make check              # fmt + vet + build + test + drift-проверки + vuln + lint examples
-make test-integration   # testcontainers (нужен docker)
-make e2e                # L3a fast-loop (нужен docker)
+make check              # fmt + vet + build + test + drift-checks + vuln + lint examples
+make test-integration   # testcontainers (needs docker)
+make e2e                # L3a fast-loop (docker required)
 ```
 
-Здесь — docker-зависимые уровни до L3a. Длительный L3b (`make e2e-live`) — отдельный **блокирующий** pre-tag шаг (e), L3c (`make e2e-k8s`) гоняется on-demand. Релиз не выпускается, пока гейт не зелёный.
+Here are docker-dependent levels up to L3a. Long-term L3b (`make e2e-live`) is a separate **blocking** pre-tag step (e), L3c (`make e2e-k8s`) is chased on-demand. The release is not issued until the gate is green.
 
 ### (c) Bump CHANGELOG
 
-В [CHANGELOG.md](CHANGELOG.md) (формат Keep a Changelog) перенести накопленное из `[Unreleased]` в новую версионную секцию `[vX.Y.Z-beta.N]`, проставить дату (или пометку «дата фиксируется при теге» — по стилю файла), отдельным блоком перечислить known-limitations релиза. `[Unreleased]` после этого остаётся пустым (для пост-релизного задела). Изменение CHANGELOG входит в релизный коммит до тега.
+In [CHANGELOG.md](CHANGELOG.md) (Keep a Changelog format) transfer what has been accumulated from `[Unreleased]` to the new version section `[vX.Y.Z-beta.N]`, put the date (or the note "the date is fixed with the tag" - according to the file style), list the known-limitations of the release in a separate block. `[Unreleased]` remains empty after this (for post-release backlog). The CHANGELOG change is included in the release commit before the tag.
 
-### (d) Сверка актуальности документации (docs-currency gate)
+### (d) Verifying the relevance of documentation (docs-currency gate)
 
-**Обязательный шаг до создания тега.** `docs-writer` проводит аудит
-актуальности документации — drift код↔дока по всем документируемым
-поверхностям (API/OpenAPI, CLI `soulctl`, поведение core-модулей и per-module
-README, конфиг-схемы, поведение proto-контракта Keeper↔Soul). Каждое
-расхождение либо закрывается правкой доки, либо явно фиксируется (known-limitation
-в CHANGELOG / флаг `adr_drift` PM-у, если разошлись код и ADR). Релиз не
-тегируется, пока в документируемых поверхностях остаётся незакрытый или
-незафиксированный drift.
+**Required step before tag creation.** `docs-writer` audits
+relevance of documentation - drift code↔doc for all documented
+surfaces (API/OpenAPI, CLI `soulctl`, behavior of core modules and per-module
+README, config-schemes, behavior of the Keeper↔Soul proto-contract). Each
+the discrepancy is either closed by editing the document, or explicitly fixed (known-limitation
+in CHANGELOG / flag `adr_drift` PM if the code and ADR diverge). Release not
+is tagged as long as the surfaces being documented remain uncovered or
+unfixed drift.
 
-### (e) e2e-live gate (real apply на реальном хосте) — блокирующий
+### (e) e2e-live gate (real apply on a real host) - blocking
 
-**Обязательный шаг до создания тега.** unit/integration гоняют стабы; единственный
-тест, доказывающий что `apply` работает на **реальном** хосте end-to-end (реальный
-soul-бинарь в privileged Debian-контейнере, реальный `apt`-install + systemd), —
-L3b `make e2e-live` (кейсы nginx / drift / redis-cluster). Без зелёного e2e-live тег
-**не режется**: apply на реальном хосте мог сломаться, и поймает это только этот
-уровень. Это локальный эквивалент CI-gate — без расхода GitHub-минут.
+**Required step before creating a tag.** unit/integration drive stubs; the only one
+test proving that `apply` works on a **real** host end-to-end
+soul binary in a privileged Debian container, real `apt`-install + systemd), —
+L3b `make e2e-live` (nginx / drift / redis-cluster cases). Without green e2e-live tag
+**not cut**: apply on a real host could break, and only this one will catch it
+level. It's the local equivalent of CI-gate - without the GitHub minutes.
 
-1. Docker-free гейт — зелёный:
+1. Docker-free gate - green:
 
    ```sh
    make check    # build + vet + test + check-gen/openapi/template/doc-links + vuln + lint
    ```
 
-2. L3b real apply — **все три кейса** зелёные:
+2. L3b real apply - **all three cases** are green:
 
    ```sh
    make e2e-live    # nginx / drift / redis-cluster — real apt-install + systemd
    ```
 
-   На **WSL2 + Docker-Desktop** перед прогоном пробросить реальный WSL2-хост-IP
-   (контейнер-соул не достучится до keeper через `host.docker.internal` — тот
-   указывает на DD-VM-шлюз, не на WSL2-хост):
+On **WSL2 + Docker-Desktop**, forward the real WSL2 host-IP before running
+(the soul container will not reach the keeper via `host.docker.internal` - that
+points to the DD-VM gateway, not the WSL2 host):
 
    ```sh
    E2E_KEEPER_HOST=$(hostname -I | awk '{print $1}') make e2e-live
    ```
 
-   На native-Linux env-override не нужен (CI-дефолт `host.docker.internal`).
-   Детали окружения и рецепт — [tests/e2e-live/README.md](tests/e2e-live/README.md).
+On native-Linux env-override is not needed (CI default `host.docker.internal`).
+Environment details and recipe - [tests/e2e-live/README.md](tests/e2e-live/README.md).
 
-Релиз не тегируется, пока `make check` и все кейсы `make e2e-live` не зелёные.
+The release is not tagged until `make check` and all `make e2e-live` cases are green.
 
-### (f) Аннотированный git-тег
+### (f) Annotated git tag
 
-Один тег на корень репозитория:
+One tag per repository root:
 
 ```sh
 git tag -a vX.Y.Z-beta.N -m "Soul Stack vX.Y.Z-beta.N"
 git push origin vX.Y.Z-beta.N
 ```
 
-Первый бета-тег — `v0.1.0-beta.1`. Тег **аннотированный** (не lightweight): `git describe` берёт ближайший аннотированный тег, и именно он попадает в `VERSION` при сборке.
+The first beta tag is `v0.1.0-beta.1`. **annotated** tag (not lightweight): `git describe` takes the nearest annotated tag, and that's what ends up in `VERSION` when built.
 
-### (g) Сборка артефактов на теге
+### (g) Assembling artifacts on a tag
 
-С checked-out тега (чтобы `git describe` дал чистую версию без `-dirty`/хеша) собрать релизные артефакты:
+With the checked-out tag (so that `git describe` gives a clean version without `-dirty`/hash) collect release artifacts:
 
 ```sh
-make pkg    # нативные пакеты deb + rpm (nfpm) → dist/pkg/, бинари под linux/amd64
-make sbom   # CycloneDX SBOM по keeper/soul/soul-lint → dist/sbom/
+make pkg    # native packages deb + rpm (nfpm) → dist/pkg/, binaries for linux/amd64
+make sbom   # CycloneDX SBOM by keeper/soul/soul-lint → dist/sbom/
 ```
 
-`make pkg` пересобирает бинари под `linux/$(PKG_ARCH)` (default `amd64`; `make pkg PKG_ARCH=arm64` — для arm) с теми же ldflags-инъекциями версии. `make sbom` строит SBOM в режиме `app` (граф того, что реально слинковано). Оба таргета требуют внешний tooling (`nfpm`, `cyclonedx-gomod`) — в `make check` не входят, ставятся через `go install` (подсказка печатается, если не найден). Для голой кросс-сборки бинарей без пакетов — `make build-linux`.
+`make pkg` rebuilds binaries under `linux/$(PKG_ARCH)` (default `amd64`; `make pkg PKG_ARCH=arm64` - for arm) with the same ldflags injection version. `make sbom` builds SBOM in `app` mode (graph of what is actually linked). Both targets require external tooling (`nfpm`, `cyclonedx-gomod`) - they are not included in `make check`, they are set via `go install` (the hint is printed if not found). For bare cross-assembly of binaries without packages - `make build-linux`.
 
-### (h) Раздача
+### (h) Giveaway
 
-Приложить артефакты из `dist/pkg/` и `dist/sbom/` к GitHub Release соответствующего тега (или раздать тестерам беты напрямую — на закрытой бете дистрибуция также build-from-source, см. [CONTRIBUTING.md](CONTRIBUTING.md)).
+Attach artifacts from `dist/pkg/` and `dist/sbom/` to the GitHub Release of the corresponding tag (or distribute beta testers directly - in closed beta distribution is also build-from-source, see [CONTRIBUTING.md](CONTRIBUTING.md)).
 
-## Отложено до GA (пост-бета)
+## Delayed until GA (post-beta)
 
-- **Подпись артефактов (cosign / sigstore).** `make sign` — documented-stub: реальная подпись требует registry для публикации образов + keyless-identity через OIDC (или приватный ключ). План и команды — раздел «Подпись образов (cosign)» в [deploy/README.md](deploy/README.md).
-- **Registry-образы.** Публикация контейнерных образов `keeper`/`soul` в registry — после GA; на бете образы собираются локально только для E2E (`make docker-build-keeper` / `make docker-build-soul`, грузятся в kind, в registry не публикуются).
+- **Artifact signature (cosign / sigstore).** `make sign` - documented-stub: real signature requires registry to publish images + keyless-identity via OIDC (or private key). Plan and commands - section "Image signing (cosign)" in [deploy/README.md](deploy/README.md).
+- **Registry images.** Publishing container images `keeper`/`soul` in the registry - after GA; in beta, images are collected locally only for E2E (`make docker-build-keeper` / `make docker-build-soul`, loaded into kind, not published in the registry).

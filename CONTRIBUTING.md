@@ -1,44 +1,44 @@
-# Участие в Soul Stack
+# Participation in Soul Stack
 
-Статус проекта — **закрытая малая бета**. На этой стадии вклад принимается в одной форме: **баг-репорты**. Pull request'ы от внешних участников не принимаются, исходный код для тестеров — read-only.
+Project status is **closed small beta**. At this stage, contributions are accepted in one form: **bug reports**. Pull requests from external participants are not accepted; the source code for testers is read-only.
 
-## Что принимается сейчас
+## What is accepted now
 
-- **Баг-репорты** через GitHub Issues приватного репозитория. Опишите: версию (`keeper version` / `soul version` — печатается на старте бинаря), окружение (ОС, версии Postgres/Redis/Vault), шаги воспроизведения, ожидаемое и фактическое поведение, релевантные логи. Минимальный воспроизводимый сценарий (Destiny/scenario-файл) ускоряет разбор.
-- **Вопросы и предложения** — тоже через Issues, отдельной меткой.
+- **Bug reports** via GitHub Issues private repository. Describe: version (`keeper version` / `soul version` - printed at the start of the binary), environment (OS, Postgres/Redis/Vault versions), reproduction steps, expected and actual behavior, relevant logs. A minimal reproducible script (Destiny/scenario file) speeds up parsing.
+- **Questions and suggestions** - also via Issues, with a separate tag.
 
-## Что НЕ принимается сейчас
+## What is NOT accepted now
 
-- **Pull request'ы с кодом.** Внешние изменения кода на закрытой бете не принимаются. Код доступен только для чтения и локальной сборки (для воспроизведения багов — см. ниже).
-- Шаблон PR в `.github/PULL_REQUEST_TEMPLATE.md` обслуживает внутренний процесс, не внешние контрибуции.
+- **Pull requests with code.** External code changes are not accepted in closed beta. The code is read-only and local assembly (for reproducing bugs - see below).
+- The PR template in `.github/PULL_REQUEST_TEMPLATE.md` serves internal process, not external contributions.
 
 ## CLA
 
-Contributor License Agreement пока **не заведён**. По [ADR-016](docs/adr/0016-parity-license.md) CLA заводится при появлении первого внешнего contributor-а; поскольку на закрытой бете внешние code-контрибуции не принимаются, необходимости в CLA ещё нет. CLA появится одновременно с открытием контрибуции — до подписания PR с кодом всё равно не будут приниматься.
+Contributor License Agreement is not yet **established**. According to [ADR-016](docs/adr/0016-parity-license.md) the CLA starts when the first external contributor appears; Since external code contributions are not accepted in the closed beta, there is no need for a CLA yet. The CLA will appear simultaneously with the opening of indemnities - PRs with the code will still not be accepted until signing.
 
-## Сборка из исходников для проверки бага
+## Build from source to check the bug
 
-Дистрибуция беты — build-from-source: клонируете приватный репозиторий и собираете бинари локально.
+Beta distribution - build-from-source: clone a private repository and build the binaries locally.
 
-Требования к окружению: Go (версия — см. `go.work` / `go.mod`), `make`, `protoc` с плагинами `protoc-gen-go` / `protoc-gen-go-grpc` (нужны только для `make gen`, для голой сборки уже закоммиченного кода — нет).
+Environment requirements: Go (version - see `go.work` / `go.mod`), `make`, `protoc` with plugins `protoc-gen-go` / `protoc-gen-go-grpc` (needed only for `make gen`, not for bare assembly of already committed code).
 
 ```sh
-git clone <приватный-repo-url> soul-stack
+git clone <private-repo-url> soul-stack
 cd soul-stack
-make build          # keeper / soul / soul-lint / soulctl → <модуль>/bin/
+make build          # keeper / soul / soul-lint / soulctl → <module>/bin/
 ```
 
-Бинари кладутся в `keeper/bin/keeper`, `soul/bin/soul`, `soul-lint/bin/soul-lint`, `soulctl/bin/soulctl`. Проверить версию собранного бинаря:
+Binaries are placed in `keeper/bin/keeper`, `soul/bin/soul`, `soul-lint/bin/soul-lint`, `soulctl/bin/soulctl`. Check the version of the compiled binary:
 
 ```sh
 ./keeper/bin/keeper version
 ```
 
-Версия инъектится из git при сборке (`git describe`); переопределяется через `make build VERSION=...` ([ADR-011](docs/adr/0011-go-layout.md)).
+The version is injected from git during the build (`git describe`); overridden via `make build VERSION=...` ([ADR-011](docs/adr/0011-go-layout.md)).
 
-Для воспроизведения бага на живом стеке — локальный dev-контур (Postgres + Redis + Vault через docker-compose) поднимается командами `make dev-up` / `make dev-stand`; подробности — [docs/dev/local-setup.md](docs/dev/local-setup.md). Быстрый старт оператора — [docs/getting-started.md](docs/getting-started.md).
+To reproduce the bug on a live stack, the local dev circuit (Postgres + Redis + Vault via docker-compose) is raised with the commands `make dev-up` / `make dev-stand`; details - [docs/dev/local-setup.md](docs/dev/local-setup.md). Quick start of the operator - [docs/getting-started.md](docs/getting-started.md).
 
-## Перед тем как заводить Issue
+## Before starting an Issue
 
-- Сверьтесь со списком известных ограничений беты — [docs/known-limitations.md](docs/known-limitations.md): часть поведения там — осознанный out-of-scope, а не баг.
-- Проверьте, что баг воспроизводится на свежесобранном бинаре из текущего `main`.
+- Check the list of known limitations in beta - [docs/known-limitations.md](docs/known-limitations.md): some of the behavior there is a deliberate out-of-scope, not a bug.
+- Check that the bug is reproduced on a freshly compiled binary from the current `main`.
