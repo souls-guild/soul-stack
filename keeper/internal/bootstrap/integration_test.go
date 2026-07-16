@@ -400,7 +400,7 @@ func TestIntegration_Init_Concurrent(t *testing.T) {
 	done.Wait()
 
 	if got := succeeded.Load(); got != 1 {
-		t.Errorf("успешных Init = %d, want ровно 1 (advisory lock сериализует гонку)", got)
+		t.Errorf("successful Init calls = %d, want exactly 1 (advisory lock serializes the race)", got)
 	}
 	for idx, err := range errs {
 		if err == nil {
@@ -421,7 +421,7 @@ func TestIntegration_Init_Concurrent(t *testing.T) {
 		t.Fatalf("count operators: %v", err)
 	}
 	if total != 1 {
-		t.Errorf("operators count = %d, want 1 (только победитель гонки)", total)
+		t.Errorf("operators count = %d, want 1 (only race winner)", total)
 	}
 	// ADR-058(d): the bootstrap invariant moved from `created_by_aid IS
 	// NULL` to `created_via = 'bootstrap'` (migration 085). Under race
@@ -432,7 +432,7 @@ func TestIntegration_Init_Concurrent(t *testing.T) {
 		t.Fatalf("count bootstrap operators: %v", err)
 	}
 	if bootstrapN != 1 {
-		t.Errorf("operators с created_via='bootstrap' = %d, want 1 (bootstrap-инвариант)", bootstrapN)
+		t.Errorf("operators with created_via='bootstrap' = %d, want 1 (bootstrap invariant)", bootstrapN)
 	}
 }
 
@@ -702,15 +702,15 @@ func TestIntegration_InitThenCheck_BUG1Closed(t *testing.T) {
 
 	// BUG-1 fix: the bootstrap Archon passes a real permission Check (not 403).
 	if err := holder.Check(aid, "operator", "create", nil); err != nil {
-		t.Errorf("BUG-1: bootstrap-Архонт %q должен проходить operator.create, got: %v", aid, err)
+		t.Errorf("BUG-1: bootstrap Archon %q must pass operator.create, got: %v", aid, err)
 	}
 	// cluster-admin = `*` → also passes any other operation.
 	if err := holder.Check(aid, "incarnation", "destroy", nil); err != nil {
-		t.Errorf("cluster-admin должен проходить incarnation.destroy: %v", err)
+		t.Errorf("cluster-admin must pass incarnation.destroy: %v", err)
 	}
 	// A foreign AID without membership is rejected (default deny).
 	if err := holder.Check("archon-ghost", "operator", "create", nil); err == nil {
-		t.Errorf("archon-ghost без membership-а должен быть denied, got nil")
+		t.Errorf("archon-ghost without membership must be denied, got nil")
 	}
 
 	// ClusterAdmins from the DB snapshot is exactly the bootstrap Archon
@@ -845,7 +845,7 @@ func TestIntegration_Init_GrantsRealRBACAccess(t *testing.T) {
 		{"soul", "list"},
 	} {
 		if err := enforcer.Check("archon-root", tc.resource, tc.action, nil); err != nil {
-			t.Errorf("первый Архонт должен пройти %s.%s через `*`-membership: %v", tc.resource, tc.action, err)
+			t.Errorf("first Archon must pass %s.%s through `*` membership: %v", tc.resource, tc.action, err)
 		}
 	}
 
@@ -858,7 +858,7 @@ func TestIntegration_Init_GrantsRealRBACAccess(t *testing.T) {
 		RoleName: BootstrapRoleClusterAdmin, AID: "archon-root",
 	})
 	if !errors.Is(err, rbac.ErrWouldLockOutCluster) {
-		t.Fatalf("revoke последнего админа: err = %v, want ErrWouldLockOutCluster", err)
+		t.Fatalf("revoke last admin: err = %v, want ErrWouldLockOutCluster", err)
 	}
 
 	// Membership survived (tx rolled back) — the first Archon is still admin.
@@ -869,7 +869,7 @@ func TestIntegration_Init_GrantsRealRBACAccess(t *testing.T) {
 		t.Fatalf("membership probe: %v", err)
 	}
 	if n != 1 {
-		t.Errorf("membership rows = %d, want 1 (revoke-lockout откатился)", n)
+		t.Errorf("membership rows = %d, want 1 (revoke-lockout rolled back)", n)
 	}
 }
 
@@ -892,7 +892,7 @@ func TestIntegration_Init_IgnoresSystemArchon(t *testing.T) {
 		CredentialOutput: filepath.Join(dir, "k.token"),
 	})
 	if err != nil {
-		t.Fatalf("Init на чистой БД с archon-system: %v (want success — системный оператор не считается)", err)
+		t.Fatalf("Init on clean DB with archon-system: %v (want success: system operator does not count)", err)
 	}
 	if res.CredentialPath == "" {
 		t.Errorf("CredentialPath empty")
@@ -914,7 +914,7 @@ func TestIntegration_Init_IgnoresSystemArchon(t *testing.T) {
 		t.Fatalf("count non-system: %v", err)
 	}
 	if nonSystem != 1 {
-		t.Errorf("non-system operators = %d, want 1 (только archon-alice)", nonSystem)
+		t.Errorf("non-system operators = %d, want 1 (only archon-alice)", nonSystem)
 	}
 }
 
@@ -970,6 +970,6 @@ func TestIntegration_CountNonSystem_IgnoresSystemArchon(t *testing.T) {
 		t.Fatalf("CountNonSystem: %v", err)
 	}
 	if nonSystem != 0 {
-		t.Errorf("CountNonSystem = %d, want 0 (archon-system не считается → restart-guard требует bootstrap)", nonSystem)
+		t.Errorf("CountNonSystem = %d, want 0 (archon-system does not count, so restart-guard requires bootstrap)", nonSystem)
 	}
 }
