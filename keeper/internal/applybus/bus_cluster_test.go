@@ -139,7 +139,7 @@ func TestCluster_NewBusWithRedis_EnablesClusterMode(t *testing.T) {
 		t.Fatal("clusterEnabled = false, want true (redis+kid set)")
 	}
 	if b.bridges == nil {
-		t.Error("bridges map nil — cluster-mode не инициализировал bridges")
+		t.Error("bridges map nil: cluster-mode did not initialize bridges")
 	}
 }
 
@@ -148,7 +148,7 @@ func TestCluster_NewBusWithRedis_EnablesClusterMode(t *testing.T) {
 func TestCluster_NilLoggerFallsBackToDefault(t *testing.T) {
 	b := NewBusWithRedis(nil, nil, "")
 	if b.logger == nil {
-		t.Fatal("logger nil after NewBusWithRedis(nil, ...) — fallback не сработал")
+		t.Fatal("logger nil after NewBusWithRedis(nil, ...): fallback did not work")
 	}
 	// Smoke: the bus is functional.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -180,7 +180,7 @@ func TestCluster_UnsubscribeUnknownIsNoop(t *testing.T) {
 	b.unsubscribe(applyID, ghost) // must not panic; ghost.ch stays open
 	select {
 	case <-ghost.ch:
-		t.Error("ghost.ch unexpectedly readable — unsubscribe тронул чужой канал")
+		t.Error("ghost.ch unexpectedly readable: unsubscribe touched a foreign channel")
 	default:
 	}
 	// The live subscriber is still there.
@@ -394,7 +394,7 @@ func TestCluster_LastUnsubscribeClosesBridge(t *testing.T) {
 	cancel()
 	waitFor(t, 3*time.Second, func() bool {
 		return redisSubCount(mr, applyID) == 0
-	}, "bridge не закрылся: Redis-канал всё ещё имеет subscriber-а")
+	}, "bridge did not close: Redis channel still has a subscriber")
 
 	if got := b.Subscribers(applyID); got != 0 {
 		t.Errorf("local Subscribers = %d, want 0", got)
@@ -674,7 +674,7 @@ func TestCluster_ConcurrentSubscribeUnsubscribe(t *testing.T) {
 	waitFor(t, 5*time.Second, func() bool { return b.Subscribers(applyID) == 0 },
 		"subscribers not drained to 0 after concurrent churn")
 	waitFor(t, 5*time.Second, func() bool { return redisSubCount(mr, applyID) == 0 },
-		"bridge не схлопнулся после concurrent churn — утечка bridge/refs")
+		"bridge did not collapse after concurrent churn: bridge/refs leak")
 }
 
 // TestSubscribe_BackCompat_DefaultBridges — Subscribe(ctx,id) is
@@ -891,7 +891,7 @@ func TestCluster_ConcurrentMixedBridgeChurn_HeldBridgeInvariant(t *testing.T) {
 
 	select {
 	case <-prematureClose:
-		t.Fatal("bridge закрылся преждевременно во время churn-а при живом anchor — heldBridge-инвариант нарушен (local-only sub уронил чужой bridge)")
+		t.Fatal("bridge closed prematurely during churn with a live anchor: heldBridge invariant broken (local-only sub dropped another bridge)")
 	default:
 	}
 
@@ -907,9 +907,9 @@ func TestCluster_ConcurrentMixedBridgeChurn_HeldBridgeInvariant(t *testing.T) {
 	// refs leak: a stray increment would leave refs>0 forever.
 	anchorCancel()
 	waitFor(t, 5*time.Second, func() bool { return redisSubCount(mr, applyID) == 0 },
-		"bridge не схлопнулся после снятия anchor — refs-leak от mixed churn")
+		"bridge did not collapse after anchor removal: refs leak from mixed churn")
 	waitFor(t, 5*time.Second, func() bool { return b.Subscribers(applyID) == 0 },
-		"local subscribers не обнулились после полного teardown")
+		"local subscribers did not return to zero after full teardown")
 }
 
 // TestCluster_ShardChannel_CrossKeeperErrand — cross-Keeper delivery of an
