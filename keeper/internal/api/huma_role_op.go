@@ -37,10 +37,10 @@ type roleCreateInput struct {
 // The struct name = the contract schema name in OpenAPI (committed hand-written spec
 // → RoleCreateRequest).
 type RoleCreateRequest struct {
-	Name         string   `json:"name" required:"true" pattern:"^[a-z][a-z0-9-]*$" doc:"имя роли (kebab-case), уникальное в кластере"`
-	Description  string   `json:"description,omitempty" doc:"человекочитаемое описание роли для UI/аудита"`
-	Permissions  []string `json:"permissions,omitempty" doc:"набор permission-строк роли (например incarnation.run, soul.*, *)"`
-	DefaultScope *string  `json:"default_scope,omitempty" doc:"селектор scope роли формы key=v1,v2,… (service/coven/incarnation/host); omitted/null → роль без scope"`
+	Name         string   `json:"name" required:"true" pattern:"^[a-z][a-z0-9-]*$" doc:"role name (kebab-case), unique in cluster"`
+	Description  string   `json:"description,omitempty" doc:"human-readable role description for UI/audit"`
+	Permissions  []string `json:"permissions,omitempty" doc:"set of permission strings for role (e.g., incarnation.run, soul.*, *)"`
+	DefaultScope *string  `json:"default_scope,omitempty" doc:"role scope selector of form key=v1,v2,… (service/coven/incarnation/host); omitted/null → role without scope"`
 }
 
 // roleCreateOutput — huma output (FULL-TYPED). Status=201; no Body (legacy contract:
@@ -63,8 +63,8 @@ func roleCreateOperation() huma.Operation {
 		OperationID:   "createRole",
 		Method:        http.MethodPost,
 		Path:          "/",
-		Summary:       "Создать роль",
-		Description:   "Создаёт RBAC-роль с набором permissions (ADR-022). Permission role.create. 409 — name уже занят.",
+		Summary:       "Create role",
+		Description:   "Creates RBAC role with set of permissions (ADR-022). Permission role.create. 409 — name already taken.",
 		Tags:          []string{"role"},
 		DefaultStatus: http.StatusCreated,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -94,7 +94,7 @@ type roleListOutput struct {
 // omitempty/[]-vs-null is held by the native RoleView itself. The struct name = the
 // contract schema name in OpenAPI.
 type RoleListReply struct {
-	Items []RoleView `json:"items" doc:"каталог ролей (метаданные + permissions + operators)"`
+	Items []RoleView `json:"items" doc:"role catalog (metadata + permissions + operators)"`
 }
 
 // roleListOperation — metadata for GET /v1/roles. Path = "/" relative to the
@@ -105,8 +105,8 @@ func roleListOperation() huma.Operation {
 		OperationID:   "listRoles",
 		Method:        http.MethodGet,
 		Path:          "/",
-		Summary:       "Список ролей",
-		Description:   "Каталог RBAC-ролей с развёрнутыми permissions и составом операторов (ADR-022). Permission role.list. Read-only, без audit.",
+		Summary:       "List roles",
+		Description:   "Catalog of RBAC roles with full permissions and operator membership (ADR-022). Permission role.list. Read-only, no audit.",
 		Tags:          []string{"role"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusInternalServerError},
@@ -122,7 +122,7 @@ func roleListOperation() huma.Operation {
 // roleDeleteInput — huma input for DELETE /v1/roles/{name}. Name — a path parameter
 // (huma extracts it by `path:"name"`, passes it to the handler). No Body.
 type roleDeleteInput struct {
-	Name string `path:"name" doc:"имя роли"`
+	Name string `path:"name" doc:"role name"`
 }
 
 // roleNoContentOutput — a shared huma output for the role 204 write routes
@@ -140,8 +140,8 @@ func roleDeleteOperation() huma.Operation {
 		OperationID:   "deleteRole",
 		Method:        http.MethodDelete,
 		Path:          "/{name}",
-		Summary:       "Удалить роль",
-		Description:   "Удаляет RBAC-роль каскадом (permissions + membership). Permission role.delete. 409 — builtin/last-admin.",
+		Summary:       "Delete role",
+		Description:   "Deletes RBAC role cascade (permissions + membership). Permission role.delete. 409 — builtin/last-admin.",
 		Tags:          []string{"role"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusInternalServerError},
@@ -155,7 +155,7 @@ func roleDeleteOperation() huma.Operation {
 // octet-stream artifact into the OpenAPI fragment (ADR-054 §Pattern third tier; the
 // RawBody bridge is REJECTED).
 type roleUpdatePermissionsInput struct {
-	Name string `path:"name" doc:"имя роли"`
+	Name string `path:"name" doc:"role name"`
 	Body RolePermissionsUpdateRequest
 }
 
@@ -167,8 +167,8 @@ type roleUpdatePermissionsInput struct {
 // OpenAPI (committed hand-written spec → RolePermissionsUpdateRequest — note the word
 // order in the contract name).
 type RolePermissionsUpdateRequest struct {
-	Permissions  []string         `json:"permissions" required:"true" doc:"полный новый набор permission-строк (replace)"`
-	DefaultScope Optional[string] `json:"default_scope" required:"false" doc:"селектор scope: omitted → scope не трогается; присутствует (вкл. null) → заменяет (null снимает scope)"`
+	Permissions  []string         `json:"permissions" required:"true" doc:"complete new set of permission strings (replace)"`
+	DefaultScope Optional[string] `json:"default_scope" required:"false" doc:"scope selector: omitted → scope untouched; present (incl. null) → replaces (null removes scope)"`
 }
 
 // roleUpdatePermissionsOperation — PATCH /v1/roles/{name}/permissions.
@@ -178,8 +178,8 @@ func roleUpdatePermissionsOperation() huma.Operation {
 		OperationID:   "updateRolePermissions",
 		Method:        http.MethodPatch,
 		Path:          "/{name}/permissions",
-		Summary:       "Заменить permissions роли",
-		Description:   "Replace-семантика: набор полностью заменяет существующий (ADR-022). Permission role.update. 409 — builtin/last-admin.",
+		Summary:       "Replace role permissions",
+		Description:   "Replace semantics: set completely replaces existing (ADR-022). Permission role.update. 409 — builtin/last-admin.",
 		Tags:          []string{"role"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -191,7 +191,7 @@ func roleUpdatePermissionsOperation() huma.Operation {
 // schema, but an empty/malformed format (domain validation operator.ValidAID) yields
 // 422 in GrantOperatorTyped.
 type roleGrantOperatorInput struct {
-	Name string `path:"name" doc:"имя роли"`
+	Name string `path:"name" doc:"role name"`
 	Body GrantOperatorRequest
 }
 
@@ -202,8 +202,8 @@ func roleGrantOperatorOperation() huma.Operation {
 		OperationID:   "grantRoleOperator",
 		Method:        http.MethodPost,
 		Path:          "/{name}/operators",
-		Summary:       "Привязать оператора к роли",
-		Description:   "Идемпотентно (повтор — no-op). Permission role.grant-operator. 404 — роль/оператор не найдены.",
+		Summary:       "Bind operator to role",
+		Description:   "Idempotent (repeat — no-op). Permission role.grant-operator. 404 — role/operator not found.",
 		Tags:          []string{"role"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -213,8 +213,8 @@ func roleGrantOperatorOperation() huma.Operation {
 // roleRevokeOperatorInput — huma input for DELETE /v1/roles/{name}/operators/{aid}.
 // Both parameters are path. No Body.
 type roleRevokeOperatorInput struct {
-	Name string `path:"name" doc:"имя роли"`
-	AID  string `path:"aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$" doc:"AID оператора-члена роли"`
+	Name string `path:"name" doc:"role name"`
+	AID  string `path:"aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$" doc:"AID of operator member of role"`
 }
 
 // roleRevokeOperatorOperation — DELETE /v1/roles/{name}/operators/{aid}.
@@ -224,8 +224,8 @@ func roleRevokeOperatorOperation() huma.Operation {
 		OperationID:   "revokeRoleOperator",
 		Method:        http.MethodDelete,
 		Path:          "/{name}/operators/{aid}",
-		Summary:       "Отвязать оператора от роли",
-		Description:   "Снимает membership-строку (name, aid). Permission role.revoke-operator. 409 — last-admin lock-out.",
+		Summary:       "Unbind operator from role",
+		Description:   "Removes membership entry (name, aid). Permission role.revoke-operator. 409 — last-admin lock-out.",
 		Tags:          []string{"role"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},

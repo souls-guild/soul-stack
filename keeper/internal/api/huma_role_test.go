@@ -371,7 +371,7 @@ func TestHumaRole_List_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут role.list записал audit (%d событий) — у него нет audit-middleware", len(auditCap.Events()))
+		t.Errorf("READ-роут role.list записал audit (%d withбытий) — у нits нет audit-middleware", len(auditCap.Events()))
 	}
 }
 
@@ -400,7 +400,7 @@ func TestHumaRole_Delete_204(t *testing.T) {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 	if body := strings.TrimSpace(rec.Body.String()); body != "" {
-		t.Errorf("204-тело role.delete должно быть ПУСТЫМ, got %q", body)
+		t.Errorf("204-body role.delete toлжbut быть ПУСТЫМ, got %q", body)
 	}
 }
 
@@ -433,7 +433,7 @@ func TestHumaAudit_RoleDelete_NoAudit_OnRBACDeny(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на RBAC-deny role.delete (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on RBAC-deny role.delete (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -479,7 +479,7 @@ func TestHumaAudit_RoleUpdatePermissions_NoAudit_OnReject(t *testing.T) {
 		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на rejected PATCH (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on rejected PATCH (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -551,8 +551,8 @@ func TestHumaRole_UpdatePermissions_ScopePresence(t *testing.T) {
 		wantScopeArg   any  // expected args[1] on write (nil=NULL/reset)
 	}{
 		{"omitted_не_трогать", `{"permissions":["incarnation.run"]}`, false, nil},
-		{"null_сброс", `{"permissions":["incarnation.run"],"default_scope":null}`, true, nil},
-		{"value_установка", `{"permissions":["incarnation.run"],"default_scope":"coven=prod"}`, true, "coven=prod"},
+		{"null_reset", `{"permissions":["incarnation.run"],"default_scope":null}`, true, nil},
+		{"value_set", `{"permissions":["incarnation.run"],"default_scope":"coven=prod"}`, true, "coven=prod"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -620,7 +620,7 @@ func TestHumaAudit_RoleGrantOperator_NoAudit_OnInvalidAID(t *testing.T) {
 		t.Fatalf("status = %d, want 422 (битый AID); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на invalid-AID grant (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on invalid-AID grant (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -666,7 +666,7 @@ func TestHumaAudit_RoleRevokeOperator_NoAudit_OnInvalidAID(t *testing.T) {
 		t.Fatalf("status = %d, want 422 (битый path-AID); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на invalid-AID revoke (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on invalid-AID revoke (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -685,7 +685,7 @@ func TestHumaRole_OpenAPIFragment_3_1(t *testing.T) {
 		"grantRoleOperator", "revokeRoleOperator", "permissions", "default_scope",
 	} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("OpenAPI-фрагмент не содержит %q:\n%s", want, frag)
+			t.Errorf("OpenAPI-фрагмент не withдержит %q:\n%s", want, frag)
 		}
 	}
 	// GOLDEN tier invariant (ADR-054 §Pattern third tier): the default_scope presence
@@ -720,7 +720,7 @@ func TestHumaRole_PatchPermissions_RequestBody_JSONOnly(t *testing.T) {
 	const bodySchemaName = "RolePermissionsUpdateRequest:"
 	bodyIdx := strings.Index(frag, bodySchemaName)
 	if bodyIdx < 0 {
-		t.Fatalf("фрагмент не содержит схему %s\n%s", bodySchemaName, frag)
+		t.Fatalf("фрагмент не withдержит схему %s\n%s", bodySchemaName, frag)
 	}
 	bodySection := frag[bodyIdx:]
 	if !strings.Contains(bodySection, "- string") || !strings.Contains(bodySection, `- "null"`) {
@@ -734,7 +734,7 @@ func assertAuditWritten(t *testing.T, cap *auditCaptureWriter, evt audit.EventTy
 	t.Helper()
 	evs := cap.Events()
 	if len(evs) == 0 {
-		t.Fatalf("audit НЕ записан на успешном write-роуте (S6-рецидив: huma-audit-middleware не довёл write-путь до audit, event=%s)", evt)
+		t.Fatalf("audit NOT записан on успешbutм write routeе (S6-рецидив: huma-audit-middleware не toвёл write-путь to audit, event=%s)", evt)
 	}
 	ev := evs[0]
 	if ev.EventType != evt {
@@ -747,7 +747,7 @@ func assertAuditWritten(t *testing.T, cap *auditCaptureWriter, evt audit.EventTy
 		t.Errorf("archon_aid = %q, want archon-alice", ev.ArchonAID)
 	}
 	if len(ev.Payload) == 0 {
-		t.Fatalf("audit payload пуст — huma-audit-middleware потерял доменный payload (carrier не пробросился), event=%s", evt)
+		t.Fatalf("audit payload empty — huma-audit-middleware потерял toменный payload (carrier не пробросился), event=%s", evt)
 	}
 	for k, want := range wantPayload {
 		if ev.Payload[k] != want {

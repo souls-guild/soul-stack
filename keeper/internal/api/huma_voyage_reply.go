@@ -9,7 +9,7 @@ package api
 // {id}/runs returns the SAME types). TestFullSpec_NoSchemaCollision deduplicates same-named
 // schemas ONLY when the body is byte-identical. So voyage AND cadence-runs MUST reference
 // ONE native set api.Voyage/api.VoyageListReply: the voyage domain — a direct native Body,
-// cadence-runs — a generic-envelope alias over the native api.VoyageListReply (huma_cadence_
+// cadence-runs — a generic envelope alias over the native api.VoyageListReply (huma_cadence_
 // envelope.go, registerCadenceEnvelopes). The Voyage body is identical by construction → no collision.
 //
 // ENUM (architect minor — checked against meta/openapi.yaml :7654-7851). ALL voyage reply enums
@@ -111,7 +111,7 @@ type Voyage struct {
 // VoyageListReply — native 200 envelope for GET /v1/voyages (1:1 shape with VoyageListReply,
 // types.gen.go :3923): items/offset/limit/total (offset/limit/total — int, parity with legacy-generated);
 // items.$ref to native Voyage. ★ SHARED type for voyage-list AND cadence-runs (the latter — via
-// a generic-envelope alias → api.VoyageListReply, huma_cadence_envelope.go) → one named schema
+// a generic envelope alias → api.VoyageListReply, huma_cadence_envelope.go) → one named schema
 // VoyageListReply byte-identical in both domains. The struct name = the contract schema name.
 type VoyageListReply struct {
 	Items  []Voyage `json:"items"`

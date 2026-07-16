@@ -29,15 +29,16 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// registerHumaRole монтирует POST /v1/roles через huma на переданный chi.Router
-// (та группа, что уже несёт RequireJWT/RequirePermission(role.create) + huma-audit-
-// middleware). roleH — доменный handler; nil → no-op (паттерн opt-in-домена
-// router.go: роут подключается только при non-nil roleH).
+// registerHumaRole mounts POST /v1/roles via huma onto the given chi.Router
+// (the group that already carries RequireJWT/RequirePermission(role.create) +
+// huma-audit-middleware). roleH is the domain handler; nil → no-op (router.go
+// opt-in-domain pattern: the route is wired only when roleH is non-nil).
 //
-// FULL-TYPED handler: huma валидирует typed Body → конверт в доменную модель →
-// CreateTyped → audit-payload на huma-ctx (SetHumaAuditPayload, читает
-// humaAuditMiddleware после next) → пустой typed output (201). Доменные problem-
-// ошибки — через humaProblemError (тот же error-контракт, что huma-валидация).
+// FULL-TYPED handler: huma validates the typed Body → converts to the domain
+// model → CreateTyped → audit payload on the huma-ctx (SetHumaAuditPayload,
+// read by humaAuditMiddleware after next) → empty typed output (201). Domain
+// problem errors go through humaProblemError (the same error contract as
+// huma validation).
 func registerHumaRole(humaAPI huma.API, roleH *handlers.RoleHandler) {
 	if roleH == nil {
 		return
@@ -56,18 +57,18 @@ func registerHumaRole(humaAPI huma.API, roleH *handlers.RoleHandler) {
 		if err != nil {
 			return nil, roleProblem(err)
 		}
-		// Audit-payload на huma-ctx: humaAuditMiddleware (вариант B) seed-ит carrier
-		// ДО next, читает payload ПОСЛЕ. Поля — parity легаси SetAuditPayload
-		// (name + permissions + created_by_aid; без секретов, ADR-022).
+		// Audit-payload on huma-ctx: humaAuditMiddleware (variant B) seeds carrier
+		// BEFORE next, reads payload AFTER. Fields — parity with legacy SetAuditPayload
+		// (name + permissions + created_by_aid; without secrets, ADR-022).
 		apimiddleware.SetHumaAuditPayload(ctx, apimiddleware.AuditPayload(reply.AuditPayload()))
 		return &roleCreateOutput{Status: http.StatusCreated}, nil
 	})
 }
 
-// registerHumaRoleList монтирует GET /v1/roles через huma на chi-группе
-// /v1/roles (READ-вариант pilot-1 — full-typed output, БЕЗ audit-middleware).
-// roleH nil → no-op. Handler читает каталог (ListTyped) → конверт в typed output;
-// ошибка чтения → roleProblem (500). RBAC role.list — на группе (huma наследует).
+// registerHumaRoleList mounts GET /v1/roles via huma on chi group
+// /v1/roles (READ variant pilot-1 — full-typed output, WITHOUT audit-middleware).
+// roleH nil → no-op. Handler reads catalog (ListTyped) → envelope to typed output;
+// error reading → roleProblem (500). RBAC role.list — on group (huma inherits).
 func registerHumaRoleList(humaAPI huma.API, roleH *handlers.RoleHandler) {
 	if roleH == nil {
 		return
@@ -81,9 +82,9 @@ func registerHumaRoleList(humaAPI huma.API, roleH *handlers.RoleHandler) {
 	})
 }
 
-// registerHumaRoleDelete монтирует DELETE /v1/roles/{name} через huma (WRITE+AUDIT
-// вариант B — event role.deleted навешан newHumaAuditAPI на группе). roleH nil →
-// no-op. Handler: DeleteTyped → audit-payload на huma-ctx → пустой 204-output.
+// registerHumaRoleDelete mounts DELETE /v1/roles/{name} via huma (WRITE+AUDIT
+// variant B — event role.deleted attached newHumaAuditAPI on group). roleH nil →
+// no-op. Handler: DeleteTyped → audit-payload on huma-ctx → empty 204 output.
 func registerHumaRoleDelete(humaAPI huma.API, roleH *handlers.RoleHandler) {
 	if roleH == nil {
 		return
@@ -98,11 +99,11 @@ func registerHumaRoleDelete(humaAPI huma.API, roleH *handlers.RoleHandler) {
 	})
 }
 
-// registerHumaRoleUpdatePermissions монтирует PATCH /v1/roles/{name}/permissions
-// через huma (WRITE+AUDIT — event role.permissions-updated). roleH nil → no-op.
-// Handler: claims → конверт presence default_scope из [Optional] в доменные
-// SetDefaultScope/DefaultScope (omitted→Set=false не трогать; null→Set=true сброс;
-// value→Set=true установка) → UpdatePermissionsTyped → audit-payload → 204.
+// registerHumaRoleUpdatePermissions mounts PATCH /v1/roles/{name}/permissions
+// via huma (WRITE+AUDIT — event role.permissions-updated). roleH nil → no-op.
+// Handler: claims → envelope presence default_scope from [Optional] to domain
+// SetDefaultScope/DefaultScope (omitted→Set=false do not touch; null→Set=true reset;
+// value→Set=true set) → UpdatePermissionsTyped → audit-payload → 204.
 func registerHumaRoleUpdatePermissions(humaAPI huma.API, roleH *handlers.RoleHandler) {
 	if roleH == nil {
 		return
@@ -129,9 +130,9 @@ func registerHumaRoleUpdatePermissions(humaAPI huma.API, roleH *handlers.RoleHan
 	})
 }
 
-// registerHumaRoleGrantOperator монтирует POST /v1/roles/{name}/operators через
+// registerHumaRoleGrantOperator mounts POST /v1/roles/{name}/operators via
 // huma (WRITE+AUDIT — event role.operator-granted). roleH nil → no-op. Handler:
-// claims → GrantOperatorTyped (валидация AID + привязка) → audit-payload → 204.
+// claims → GrantOperatorTyped (validation AID + binding) → audit-payload → 204.
 func registerHumaRoleGrantOperator(humaAPI huma.API, roleH *handlers.RoleHandler) {
 	if roleH == nil {
 		return
@@ -154,9 +155,9 @@ func registerHumaRoleGrantOperator(humaAPI huma.API, roleH *handlers.RoleHandler
 	})
 }
 
-// registerHumaRoleRevokeOperator монтирует DELETE /v1/roles/{name}/operators/{aid}
-// через huma (WRITE+AUDIT — event role.operator-revoked). roleH nil → no-op.
-// Handler: RevokeOperatorTyped (валидация path-AID + снятие) → audit-payload → 204.
+// registerHumaRoleRevokeOperator mounts DELETE /v1/roles/{name}/operators/{aid}
+// via huma (WRITE+AUDIT — event role.operator-revoked). roleH nil → no-op.
+// Handler: RevokeOperatorTyped (validation path-AID + removal) → audit-payload → 204.
 func registerHumaRoleRevokeOperator(humaAPI huma.API, roleH *handlers.RoleHandler) {
 	if roleH == nil {
 		return
@@ -174,16 +175,16 @@ func registerHumaRoleRevokeOperator(humaAPI huma.API, roleH *handlers.RoleHandle
 	})
 }
 
-// roleMissingClaims — defensive-ответ при отсутствии claims в ctx (недостижим:
-// RequireJWT кладёт claims до huma). Отдаётся как problem+json (а не huma.NewError),
-// чтобы defensive-путь эталона нёс тот же error-контракт, что прочие ошибки роутов.
+// roleMissingClaims — defensive-response when absent claims in ctx (unreachable:
+// RequireJWT puts claims to huma). Returned as problem+json (not huma.NewError),
+// to defensive-golden path carried same error contract, which other errors routes.
 func roleMissingClaims() huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "missing claims")}
 }
 
-// roleProblem доставляет ошибку CreateTyped через huma как problem+json. Доменная
-// *handlers.problemError → humaProblemError (его Details, статус из таблицы). Не-
-// problem (нештатный путь) → 500 internal (parity cadenceProblem).
+// roleProblem delivers error CreateTyped via huma as problem+json. Domain
+// *handlers.problemError → humaProblemError (its Details, status from table). No-
+// problem (non-standard path) → 500 internal (parity cadenceProblem).
 func roleProblem(err error) huma.StatusError {
 	if d, ok := handlers.AsProblemDetails(err); ok {
 		return humaProblemError{Details: d}
@@ -191,13 +192,13 @@ func roleProblem(err error) huma.StatusError {
 	return humaProblemError{Details: problem.New(problem.TypeInternalError, "", "internal error")}
 }
 
-// HumaRoleSpecYAML собирает OpenAPI-фрагмент ВСЕХ мигрированных-на-huma role-роутов
-// (create/list/delete/update-permissions/grant/revoke-operator) как YAML-строку, БЕЗ
-// монтирования на реальный router. Хук для спека-мерж-таргета тиража и guard-теста.
-// Делегирует generic [humaDumpSpec], регистрируя операции через те же register-
-// функции (единый register-путь, нет дубля dump-vs-mount): handler-заглушка при dump
-// не вызывается; audit-навеска не нужна (newHumaCadenceAPI без UseMiddleware
-// достаточно для схемы). Возвращает 3.1.0-спеку (huma-дефолт).
+// HumaRoleSpecYAML builds OpenAPI-fragment of ALL migrated-on-huma role routes
+// (create/list/delete/update-permissions/grant/revoke-operator) as YAML string, WITHOUT
+// mounting on real router. Hook for spec-merge target batch/rollout and guard test.
+// Delegates generic [humaDumpSpec], registering operations via same register-
+// functions (single register path, no duplicate dump-vs-mount): handler stub on dump
+// not called; audit-wrapper not needed (newHumaCadenceAPI without UseMiddleware
+// sufficient for schema). Returns 3.1.0-spec (huma default).
 func HumaRoleSpecYAML() (string, error) {
 	return humaDumpSpec(func(api huma.API) error {
 		stub := handlers.RoleSpecStub()
@@ -211,11 +212,11 @@ func HumaRoleSpecYAML() (string, error) {
 	})
 }
 
-// newHumaRoleAPI собирает huma.API поверх chi-группы /v1/roles с huma-audit-
-// middleware (вариант B) под переданный event-тип. Параллель newHumaCadenceAPI, но
-// role пишет audit СНАРУЖИ *Typed (через middleware) — cadence писал self-audit
-// внутри. evt параметризован: каждый write-роут role (create/delete/update/grant/
-// revoke) монтируется на СВОЕЙ chi-группе с собственным event-типом.
+// newHumaRoleAPI builds huma.API on top of chi group /v1/roles with huma-audit-
+// middleware (variant B) under passed event type. Parallel newHumaCadenceAPI, but
+// role writes audit OUTSIDE *Typed (via middleware) — cadence wrote self-audit
+// inside. evt parameterized: each write route role (create/delete/update/grant/
+// revoke) mounted on OWN chi-group with own event-type.
 func newHumaRoleAPI(r chi.Router, writer audit.Writer, evt audit.EventType, logger *slog.Logger) huma.API {
 	return newHumaAuditAPI(r, writer, evt, logger)
 }

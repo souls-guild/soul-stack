@@ -85,7 +85,7 @@ type SoulSshTargetReply struct {
 // and envelope-element schemas are identical (TestFullSpec_NoSchemaCollision).
 type SoulListEntry struct {
 	Covens        []string       `json:"covens" pattern:"^[a-z][a-z0-9]*(-[a-z0-9]+)*$"` // ← soul.CovenPattern (per-element)
-	Traits        map[string]any `json:"traits" doc:"operator-set key→value метки (ADR-060); значение — scalar или list of scalars; bare-soul → {}"`
+	Traits        map[string]any `json:"traits" doc:"operator-set key→value метки (ADR-060); зonчение — scalar or list of scalars; bare-soul → {}"`
 	CreatedByAID  *string        `json:"created_by_aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
 	LastSeenAt    *time.Time     `json:"last_seen_at"`
 	LastSeenByKid *string        `json:"last_seen_by_kid"`

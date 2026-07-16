@@ -22,15 +22,15 @@ import (
 // is built from the scenario schema on the backend) NOR the service version: the schema is always taken
 // by inc.ServiceVersion (an anti-version-craft invariant, see FormPrefillTyped).
 type incFormPrefillInput struct {
-	Name     string `path:"name" doc:"имя инкарнации"`
-	Scenario string `path:"scenario" doc:"имя сценария"`
+	Name     string `path:"name" doc:"incarnation name"`
+	Scenario string `path:"scenario" doc:"имя сцеonрия"`
 }
 
 // IncarnationFormPrefillReply — the native 200 body of POST .../form-prefill. Values —
 // a map `field → current-value` (only prefill-declared non-secret fields with a
 // covered state path; the rest are omitted). The struct name = the contract schema name.
 type IncarnationFormPrefillReply struct {
-	Values map[string]any `json:"values" doc:"field → текущее значение из incarnation.state (prefill-hint)"`
+	Values map[string]any `json:"values" doc:"field → текущее зonчение from incarnation.state (prefill-hint)"`
 }
 
 // incFormPrefillOutput — huma output for POST .../form-prefill (FULL-TYPED). Body —
@@ -48,8 +48,8 @@ func incFormPrefillOperation() huma.Operation {
 		OperationID:   "incarnationFormPrefill",
 		Method:        http.MethodPost,
 		Path:          "/{name}/scenarios/{scenario}/form-prefill",
-		Summary:       "Pre-fill day-2-формы сценария из incarnation.state",
-		Description:   "Текущие значения state под поля схемы сценария с prefill_from_state (docs/input.md). Path-whitelist (клиент путь не задаёт), secret-поля исключены. Вне RBAC-scope → 404. Permission incarnation.get. Read-only, без audit.",
+		Summary:       "Pre-fill day-2-формы сцеonрия from incarnation.state",
+		Description:   "Текущие зonчения state под поля схемы сцеonрия с prefill_from_state (docs/input.md). Path-whitelist (клиент путь не заgives), secret-поля исключены. Вне RBAC-scope → 404. Permission incarnation.get. Read-only, no audit.",
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},

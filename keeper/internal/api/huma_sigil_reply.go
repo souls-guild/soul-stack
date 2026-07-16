@@ -1,17 +1,21 @@
 package api
 
-// HUMA-NATIVE reply-DTO SIGIL-домена (plugins/sigils allow-list; Teardown T5b по эталону
-// T5a huma_incarnation_reply.go). Reply/output Body huma-операций — native Go-struct в
-// пакете api, НЕ генерёный legacy-генерата. Teardown сносит oapi/ + рукопись: reply-Body должен
-// стать code-first native.
+// HUMA-NATIVE reply-DTO for the SIGIL domain (plugins/sigils allow-list;
+// Teardown T5b, by the T5a huma_incarnation_reply.go reference). The
+// Reply/output Body of huma operations is a native Go struct in package api,
+// NOT legacy-generated. Teardown removes oapi/ + the handwritten layer:
+// reply-Body must become code-first native.
 //
-// ИНВАРИАНТЫ (★ wire byte-exact + ★ имя схемы стабильно): форма байт-в-байт = прежний
-// legacy-генерата (те же json-теги; revoked_at — `*time.Time` С omitempty → ключ опущен при nil,
-// категория C; allowed_at — наносекундный time-wire значения handler-слоя). Имя
-// EXPORTED-struct = контрактное (PluginSigilAllowReply / PluginSigilListReply /
-// PluginSigilView) → huma DefaultSchemaNamer даёт ту же схему. PluginSigilListReply — НЕ
-// paged-envelope (только items[]). Проекция доменных handlers.Sigil*-result-ов в эти типы
-// — register-func (huma_sigil.go); handler отдаёт плоские поля (handler-native T5d).
+// INVARIANTS (★ wire byte-exact + ★ schema name stable): the shape is
+// byte-for-byte identical to the former legacy-generated one (same json
+// tags; revoked_at — `*time.Time` WITH omitempty → key omitted when nil,
+// category C; allowed_at — nanosecond time-wire value from the handler
+// layer). EXPORTED-struct name = the contract name (PluginSigilAllowReply /
+// PluginSigilListReply / PluginSigilView) → huma DefaultSchemaNamer yields
+// the same schema. PluginSigilListReply is NOT a paged envelope (items[]
+// only). Projection of domain handlers.Sigil*-results into these types is
+// done by the register-func (huma_sigil.go); the handler hands out flat
+// fields (handler-native T5d).
 
 import (
 	"time"
@@ -19,34 +23,34 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 )
 
-// === top-level reply-DTO (форма 1:1 с прежним legacy-генерата) ===
+// === top-level reply-DTO (form 1:1 with previous legacy generated) ===
 
-// PluginSigilAllowReply — native 201-тело POST /v1/plugins/sigils (форма 1:1 с прежним
-// PluginSigilAllowReply). namespace/name/ref + sha256 (посчитан Keeper-ом).
+// PluginSigilAllowReply — native 201-body POST /v1/plugins/sigils (form 1:1 with previous
+// PluginSigilAllowReply). namespace/name/ref + sha256 (calculated Keeper).
 //
-// OUTPUT-PATTERN (документационный, НЕ рантайм-валидация): huma НЕ валидирует
-// response-body (эмпирически 200, не 500). sha256 — машинно hex(sha256) бинаря
+// OUTPUT-PATTERN (documentation, NOT runtime-validation): huma does NOT validate
+// response-body (empirically 200, not 500). sha256 — machine hex(sha256) binary
 // (hex.EncodeToString, lowercase 64 chars, pluginhost/slot.go:173); allowed_by_aid ←
-// operator.AIDPattern. ref НЕ тегируется: это git-ref (tag/branch по ADR-007),
-// произвольная строка, НЕ hash.
+// operator.AIDPattern. ref NOT tagged: this is git-ref (tag/branch per ADR-007),
+// arbitrary string, NOT hash.
 type PluginSigilAllowReply struct {
 	Name      string `json:"name"`
 	Namespace string `json:"namespace"`
 	Ref       string `json:"ref"`
-	SHA256    string `json:"sha256" pattern:"^[0-9a-f]{64}$"` // hex(sha256) бинаря
+	SHA256    string `json:"sha256" pattern:"^[0-9a-f]{64}$"` // hex(sha256) binary
 }
 
-// PluginSigilListReply — native 200-тело GET /v1/plugins/sigils (форма 1:1 с прежним
-// PluginSigilListReply). Только items[] — НЕ paged-envelope.
+// PluginSigilListReply — native 200-body GET /v1/plugins/sigils (form 1:1 with previous
+// PluginSigilListReply). Only items[] — NOT paged-envelope.
 type PluginSigilListReply struct {
 	Items []PluginSigilView `json:"items"`
 }
 
 // === nested reply-DTO ===
 
-// PluginSigilView — native элемент items[] (форма 1:1 с прежним PluginSigilView).
-// revoked_at — `*time.Time` С omitempty (nil у активных → ключ опущен); allowed_at —
-// наносекундный time-wire (значение усекает handler-слой до секунд).
+// PluginSigilView — native element items[] (form 1:1 with previous PluginSigilView).
+// revoked_at — `*time.Time` with omitempty (nil for active → key omitted); allowed_at —
+// nanosecond time-wire (value truncates handler-layer to seconds).
 type PluginSigilView struct {
 	AllowedAt    time.Time  `json:"allowed_at"`
 	AllowedByAID string     `json:"allowed_by_aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
@@ -54,12 +58,12 @@ type PluginSigilView struct {
 	Namespace    string     `json:"namespace"`
 	Ref          string     `json:"ref"`
 	RevokedAt    *time.Time `json:"revoked_at,omitempty"`
-	SHA256       string     `json:"sha256" pattern:"^[0-9a-f]{64}$"` // hex(sha256) бинаря
+	SHA256       string     `json:"sha256" pattern:"^[0-9a-f]{64}$"` // hex(sha256) binary
 }
 
-// === проекция доменных handlers.Sigil*-result-ов → native wire-DTO ===
+// === projection of domain handlers.Sigil*-result-s → native wire-DTO ===
 
-// newPluginSigilAllowReply проецирует плоскую доменную handlers.SigilAllowView в native.
+// newPluginSigilAllowReply projects flat domain handlers.SigilAllowView to native.
 func newPluginSigilAllowReply(v handlers.SigilAllowView) PluginSigilAllowReply {
 	return PluginSigilAllowReply{
 		Name:      v.Name,
@@ -69,8 +73,8 @@ func newPluginSigilAllowReply(v handlers.SigilAllowView) PluginSigilAllowReply {
 	}
 }
 
-// newPluginSigilView проецирует плоскую доменную handlers.SigilView в native. RevokedAt
-// и AllowedAt handler уже усёк до секунд (byte-exact с легаси-wire).
+// newPluginSigilView projects flat domain handlers.SigilView to native. RevokedAt
+// and AllowedAt handler already truncated to seconds (byte-exact with legacy wire).
 func newPluginSigilView(v handlers.SigilView) PluginSigilView {
 	return PluginSigilView{
 		AllowedAt:    v.AllowedAt,
@@ -83,9 +87,9 @@ func newPluginSigilView(v handlers.SigilView) PluginSigilView {
 	}
 }
 
-// newPluginSigilListReply проецирует доменный handlers.SigilListPage в native. Items
-// сохраняют nil-vs-empty 1:1 (nil → null, [] → []) ради byte-exact — ListTyped даёт
-// non-nil [] (пустой реестр → `[]`).
+// newPluginSigilListReply projects domain handlers.SigilListPage to native. Items
+// preserve nil-vs-empty 1:1 (nil → null, [] → []) for byte-exact — ListTyped returns
+// non-nil [] (empty registry → `[]`).
 func newPluginSigilListReply(p handlers.SigilListPage) PluginSigilListReply {
 	var items []PluginSigilView
 	if p.Items != nil {

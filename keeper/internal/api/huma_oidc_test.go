@@ -111,7 +111,7 @@ func TestOIDCCallback_SetsSecureCookieAndRedirects(t *testing.T) {
 	// ADR-058(g)). Strict is safe on the callback: the cookie is SET on the callback
 	// response and SENT on the subsequent same-site navigation to /ui (302).
 	if c.SameSite != http.SameSiteStrictMode {
-		t.Errorf("cookie SameSite = %v, want Strict (унифицировано с LDAP, MED-фикс)", c.SameSite)
+		t.Errorf("cookie SameSite = %v, want Strict (унифицироваbut с LDAP, MED-фикс)", c.SameSite)
 	}
 	if strings.Contains(rec.Body.String(), "ey.oidc.jwt") {
 		t.Errorf("JWT must NOT be in response body (cookie-only)")

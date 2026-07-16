@@ -12,5 +12,5 @@ package api
 // reflect.Type.Name()). AID required:"true" in the schema; empty/broken format —
 // domain validation operator.ValidAID (422) in Grant/AddOperatorTyped.
 type GrantOperatorRequest struct {
-	AID string `json:"aid" required:"true" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$" doc:"AID архонта, назначаемого в роль/группу (naming-rules.md)"`
+	AID string `json:"aid" required:"true" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$" doc:"AID архонта, onзonчаемого в роль/группу (naming-rules.md)"`
 }

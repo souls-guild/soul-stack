@@ -77,12 +77,12 @@ func TestSchemaNames_Incarnation(t *testing.T) {
 
 	for _, name := range incarnationContractSchemas {
 		if _, ok := schemas[name]; !ok {
-			t.Errorf("контрактная схема %q ОТСУТСТВУЕТ в components/schemas (имя не выровнено)", name)
+			t.Errorf("контрактonя схема %q ОТСУТСТВУЕТ в components/schemas (имя не выровнеbut)", name)
 		}
 	}
 	for _, name := range incarnationForbiddenSchemas {
 		if _, ok := schemas[name]; ok {
-			t.Errorf("техническое huma-имя %q ПРИСУТСТВУЕТ в спеке — имя не выровнено под контракт", name)
+			t.Errorf("техническое huma-имя %q ПРИСУТСТВУЕТ в спеке — имя не выровнеbut под контракт", name)
 		}
 	}
 }
@@ -142,7 +142,7 @@ func TestTraitsRelocation_OpenAPI(t *testing.T) {
 		t.Fatalf("decode soul.traits POST: %v", err)
 	}
 	if !op.Deprecated {
-		t.Error("POST /v1/souls/traits НЕ помечен deprecated:true (релокация per-soul → per-incarnation не отражена)")
+		t.Error("POST /v1/souls/traits NOT помечен deprecated:true (релокация per-soul → per-incarnation не отражеon)")
 	}
 }
 
@@ -164,14 +164,14 @@ func TestSchemaNames_IncarnationStatusEnum(t *testing.T) {
 
 	statusSchema, ok := schemas["IncarnationStatus"].(map[string]any)
 	if !ok {
-		t.Fatal("IncarnationStatus не вынесен как named-схема в components/schemas")
+		t.Fatal("IncarnationStatus не вынесен as named-схема в components/schemas")
 	}
 	if typ, _ := statusSchema["type"].(string); typ != "string" {
 		t.Errorf("IncarnationStatus.type=%q, ожидалось string", typ)
 	}
 	rawEnum, ok := statusSchema["enum"].([]any)
 	if !ok || len(rawEnum) == 0 {
-		t.Fatal("IncarnationStatus без enum — выноса как enum не произошло")
+		t.Fatal("IncarnationStatus без enum — выbutса as enum не проfromошло")
 	}
 	got := map[string]struct{}{}
 	for _, v := range rawEnum {
@@ -187,13 +187,13 @@ func TestSchemaNames_IncarnationStatusEnum(t *testing.T) {
 				have = append(have, k)
 			}
 			sort.Strings(have)
-			t.Errorf("enum IncarnationStatus не содержит %q; есть: %v", want, have)
+			t.Errorf("enum IncarnationStatus не withдержит %q; есть: %v", want, have)
 		}
 	}
 
 	// status fields reference the named schema via $ref (not inline).
 	if !strings.Contains(y, "#/components/schemas/IncarnationStatus") {
-		t.Error("ни одно поле не ссылается на IncarnationStatus через $ref — статус остался инлайн")
+		t.Error("ни одbut field не ссылается on IncarnationStatus via $ref — статус остался инлайн")
 	}
 }
 
@@ -251,11 +251,11 @@ func assertEnvelopeShape(t *testing.T, schemas map[string]any, name, element str
 			got = append(got, k)
 		}
 		sort.Strings(got)
-		t.Errorf("%q несёт %d полей %v, ожидалось ровно 4 (items/offset/limit/total) — cursor-поля протекли?", name, len(props), got)
+		t.Errorf("%q несёт %d fields %v, ожидалось ровbut 4 (items/offset/limit/total) — cursor-поля протекли?", name, len(props), got)
 	}
 	for f := range wantFields {
 		if _, ok := props[f]; !ok {
-			t.Errorf("%q не содержит контрактного поля %q", name, f)
+			t.Errorf("%q не withдержит контрактbutго поля %q", name, f)
 		}
 	}
 

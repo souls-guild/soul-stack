@@ -43,10 +43,10 @@ func TestCommittedOpenAPI_NoDrift(t *testing.T) {
 
 	committed, err := os.ReadFile(committedOpenAPIPath)
 	if err != nil {
-		t.Skipf("committed openapi.yaml недоступен (%v); drift-проверка пропущена", err)
+		t.Skipf("committed openapi.yaml неtoступен (%v); drift-проверка пропущеon", err)
 	}
 	if string(committed) != dump {
 		t.Errorf("openapi.yaml drift: docs/keeper/openapi.yaml расходится с huma-дампом — " +
-			"запустите `make gen-openapi` (committed-файл = производный huma-генерат, не рукопись)")
+			"запустите `make gen-openapi` (committed-файл = проfromводный huma-генерат, не hand-written)")
 	}
 }

@@ -188,7 +188,7 @@ func TestHumaAudit_SigilAllow_NoAudit_OnRBACDeny(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на RBAC-deny sigil.allow (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on RBAC-deny sigil.allow (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -246,7 +246,7 @@ func TestHumaSigil_List_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут sigil.list записал audit (%d событий)", len(auditCap.Events()))
+		t.Errorf("READ-роут sigil.list записал audit (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -271,7 +271,7 @@ func TestHumaSigil_Revoke_204(t *testing.T) {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 	if body := strings.TrimSpace(rec.Body.String()); body != "" {
-		t.Errorf("204-тело sigil.revoke должно быть ПУСТЫМ, got %q", body)
+		t.Errorf("204-body sigil.revoke toлжbut быть ПУСТЫМ, got %q", body)
 	}
 }
 
@@ -300,7 +300,7 @@ func TestHumaAudit_SigilRevoke_NoAudit_OnBadRef(t *testing.T) {
 		t.Fatalf("status = %d, want 422 (битый ref-сегмент); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на bad-ref revoke (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on bad-ref revoke (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -319,7 +319,7 @@ func TestHumaSigil_OpenAPIFragment_3_1(t *testing.T) {
 		"namespace", "sha256",
 	} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("OpenAPI-фрагмент не содержит %q:\n%s", want, frag)
+			t.Errorf("OpenAPI-фрагмент не withдержит %q:\n%s", want, frag)
 		}
 	}
 	if strings.Contains(frag, "octet-stream") {

@@ -65,12 +65,12 @@ func TestSchemaNames_Cadence(t *testing.T) {
 	schemas := loadFullSpecSchemas(t)
 	for _, name := range cadenceContractSchemas {
 		if _, ok := schemas[name]; !ok {
-			t.Errorf("контрактная схема %q ОТСУТСТВУЕТ в components/schemas (имя не выровнено)", name)
+			t.Errorf("контрактonя схема %q ОТСУТСТВУЕТ в components/schemas (имя не выровнеbut)", name)
 		}
 	}
 	for _, name := range cadenceForbiddenSchemas {
 		if _, ok := schemas[name]; ok {
-			t.Errorf("техническое huma-имя %q ПРИСУТСТВУЕТ в спеке — имя не выровнено под контракт", name)
+			t.Errorf("техническое huma-имя %q ПРИСУТСТВУЕТ в спеке — имя не выровнеbut под контракт", name)
 		}
 	}
 }
@@ -156,6 +156,6 @@ func TestSchemaNames_CadenceListEnvelope(t *testing.T) {
 
 	const targetRef = "#/components/schemas/VoyageTarget"
 	if got := propRef(t, schemas, "Cadence", "target"); got != targetRef {
-		t.Errorf("Cadence.target → %q, ожидался %q (target не типизирован на VoyageTarget — alias не сработал / free-form остался)", got, targetRef)
+		t.Errorf("Cadence.target → %q, ожидался %q (target не типfromирован on VoyageTarget — alias не сработал / free-form остался)", got, targetRef)
 	}
 }

@@ -330,23 +330,23 @@ func fullSpecGroups() []specGroup {
 			registerHumaErrandCancel(api, stub)
 			return nil
 		}},
-		// push-runs смонтирован прямо на /v1 (вне r.Route("/push")) — полный путь
-		// /push-runs в Operation, отдельная группа от /v1/push apply/get.
+		// push-runs is mounted directly on /v1 (outside r.Route("/push")) — the full path
+		// /push-runs is in the Operation, a separate group from /v1/push apply/get.
 		{"/v1", func(api huma.API) error {
 			registerHumaPushRunsList(api, handlers.PushSpecStub())
 			return nil
 		}},
 
-		// auth.* — федеративная аутентификация ВНЕ /v1 (ADR-058): группа на
-		// r.Route("/auth"), Operation.Path относителен (/ldap/login) → полный URL
-		// /auth/ldap/login. prefix "/auth", чтобы попасть в committed openapi.yaml.
+		// auth.* — federated authentication OUTSIDE /v1 (ADR-058): a group on
+		// r.Route("/auth"), Operation.Path is relative (/ldap/login) → the full URL is
+		// /auth/ldap/login. prefix "/auth" so it lands in the committed openapi.yaml.
 		{"/auth", func(api huma.API) error {
 			registerHumaLDAPLogin(api, ldapAuthSpecStub())
 			return nil
 		}},
-		// OIDC-эндпоинты (ADR-058 стадия 2): /auth/oidc/{login,callback}. Отдельная
-		// группа от LDAP, чтобы huma-API не делила операции — каждый домен дампит
-		// свои пути (LDAP-POST и OIDC-GET не пересекаются по path).
+		// OIDC endpoints (ADR-058 stage 2): /auth/oidc/{login,callback}. A separate
+		// group from LDAP, so the huma-API does not share operations — each domain dumps
+		// its own paths (LDAP-POST and OIDC-GET do not overlap by path).
 		{"/auth", func(api huma.API) error {
 			registerHumaOIDCLogin(api, oidcAuthSpecStub())
 			return nil
@@ -354,9 +354,9 @@ func fullSpecGroups() []specGroup {
 	}
 }
 
-// schemaCollisionError — два домена дали схему с ОДНИМ именем, но РАЗНЫМ телом.
-// При наивном merge один молча перезатёр бы другой (битая спека); pilot-гейт (б)
-// детектит это и останавливает сборку (needs_architect: как namespace-ить).
+// schemaCollisionError — two domains produced a schema with the SAME name but a DIFFERENT body.
+// A naive merge would silently overwrite one with the other (a broken spec); pilot-gate (b)
+// detects this and stops the build (needs_architect: how to namespace it).
 type schemaCollisionError struct {
 	name  string
 	bodyA string
@@ -364,29 +364,29 @@ type schemaCollisionError struct {
 }
 
 func (e *schemaCollisionError) Error() string {
-	return fmt.Sprintf("schema %q: коллизия имени с РАЗНЫМИ телами между доменами (нельзя молча дедуплицировать)\n--- вариант A ---\n%s\n--- вариант B ---\n%s",
+	return fmt.Sprintf("schema %q: коллfromия имени с РАЗНЫМИ телами между toмеonми (нельзя молча дедуплицировать)\n--- variant A ---\n%s\n--- variant B ---\n%s",
 		e.name, e.bodyA, e.bodyB)
 }
 
-// pathMethodCollisionError — два домена дали операцию на ОДНОМ полном пути+методе
-// после префиксования (pilot-гейт (а)).
+// pathMethodCollisionError — two domains produced an operation on the SAME full path+method
+// after prefixing (pilot-gate (a)).
 type pathMethodCollisionError struct {
 	method string
 	path   string
 }
 
 func (e *pathMethodCollisionError) Error() string {
-	return fmt.Sprintf("операция %s %s объявлена дважды после префиксования (коллизия path+method между доменами)", e.method, e.path)
+	return fmt.Sprintf("операция %s %s объявлеon дважды после префикwithвания (коллfromия path+method между toмеonми)", e.method, e.path)
 }
 
-// buildFullOpenAPISpec собирает единый huma.OpenAPI-объект из всех регистрационных
-// групп через A2-bis. Возвращает ошибку при коллизии path+method (гейт а) или при
-// коллизии имени схемы с разным телом (гейт б — needs_architect-сигнал).
+// buildFullOpenAPISpec assembles a single huma.OpenAPI object from all registration
+// groups via A2-bis. Returns an error on a path+method collision (gate a) or on a
+// schema-name collision with a different body (gate b — needs_architect signal).
 //
-// Для спеки middleware (audit/RBAC/Toll) НЕ нужен — только операции/схемы: каждая
-// группа дампится на «голую» newHumaCadenceAPI (без audit-навески). installHuma-
-// ErrorOverride вызывается, чтобы error-response-схемы (HumaProblemError) совпадали
-// с served-формой.
+// The spec does NOT need middleware (audit/RBAC/Toll) — only operations/schemas: each
+// group is dumped onto a "bare" newHumaCadenceAPI (without audit wiring). installHuma-
+// ErrorOverride is called so the error-response schemas (HumaProblemError) match
+// the served form.
 func buildFullOpenAPISpec() (*huma.OpenAPI, error) {
 	installHumaErrorOverride()
 
@@ -396,13 +396,13 @@ func buildFullOpenAPISpec() (*huma.OpenAPI, error) {
 		full.Components = &huma.Components{}
 	}
 
-	// bearerAuth securityScheme + глобальное security-требование. Это SCHEMA-ONLY:
-	// wire-auth уже в RequireJWT (router.go), здесь лишь декларация для вьювера —
-	// RapiDoc «Try It» читает components.securitySchemes + security и шлёт
-	// Authorization: Bearer (страница /docs префиллит JWT через setApiKey('bearerAuth')).
-	// Глобальное (top-level) требование покрывает ВСЕ операции спеки; все они —
-	// /v1 (meta-роуты /healthz/openapi.yaml/docs в спеку не входят), а /v1 целиком
-	// за JWT — поэтому per-операционное security не нужно.
+	// The bearerAuth securityScheme + the global security requirement. This is SCHEMA-ONLY:
+	// wire-auth is already in RequireJWT (router.go), this is just a declaration for the viewer —
+	// RapiDoc "Try It" reads components.securitySchemes + security and sends
+	// Authorization: Bearer (the /docs page prefills the JWT via setApiKey('bearerAuth')).
+	// The global (top-level) requirement covers ALL operations in the spec; all of them are
+	// /v1 (the meta routes /healthz/openapi.yaml/docs are not part of the spec), and /v1 as a whole
+	// is behind JWT — so per-operation security is not needed.
 	if full.Components.SecuritySchemes == nil {
 		full.Components.SecuritySchemes = map[string]*huma.SecurityScheme{}
 	}
@@ -413,20 +413,20 @@ func buildFullOpenAPISpec() (*huma.OpenAPI, error) {
 		Description:  "Archon JWT (Authorization: Bearer <jwt>). Все /v1-операции требуют валидный токен.",
 	}
 	full.Security = []map[string][]string{{bearerSecuritySchemeName: {}}}
-	// Базовая схема Registry full-спеки наполняется ниже из per-группа дампов;
-	// сохраняем её карту для merge-детекции коллизий.
+	// The base Registry schema of the full spec is filled in below from the per-group dumps;
+	// we keep its map for merge collision detection.
 	fullSchemas := full.Components.Schemas.Map()
 
-	// Дедупликация tags по имени (Operation.Tags ссылаются на них по строке).
+	// Tag dedup by name (Operation.Tags reference them by string).
 	tagSeen := map[string]struct{}{}
 	for _, t := range full.Tags {
 		tagSeen[t.Name] = struct{}{}
 	}
 
 	for _, g := range fullSpecGroups() {
-		// Каждая группа дампится на СВОЮ временную huma.API (изоляция: операции
-		// разных групп с одинаковым относительным путём "/" не сталкиваются на
-		// одной API). Префиксование при merge разводит их по полным URL.
+		// Each group is dumped onto its OWN temporary huma.API (isolation: operations
+		// of different groups with the same relative path "/" do not collide on
+		// one API). Prefixing during merge splits them apart by full URL.
 		subAPI := newHumaCadenceAPI(chi.NewRouter())
 		if err := g.register(subAPI); err != nil {
 			return nil, err
@@ -439,10 +439,10 @@ func buildFullOpenAPISpec() (*huma.OpenAPI, error) {
 	return full, nil
 }
 
-// mergeGroup вливает paths/schemas/tags одной группы (sub) в full, сдвигая
-// paths-ключи на prefix. Детектит обе коллизии pilot-гейта.
+// mergeGroup merges the paths/schemas/tags of one group (sub) into full, shifting
+// the paths keys by prefix. Detects both pilot-gate collisions.
 func mergeGroup(full *huma.OpenAPI, fullSchemas map[string]*huma.Schema, tagSeen map[string]struct{}, prefix string, sub *huma.OpenAPI) error {
-	// paths: ключ сдвигаем на prefix; "/" → сам prefix.
+	// paths: shift the key by prefix; "/" → prefix itself.
 	for rel, item := range sub.Paths {
 		abs := joinPrefix(prefix, rel)
 		dst, exists := full.Paths[abs]
@@ -450,16 +450,16 @@ func mergeGroup(full *huma.OpenAPI, fullSchemas map[string]*huma.Schema, tagSeen
 			full.Paths[abs] = item
 			continue
 		}
-		// Тот же полный путь уже есть от другой группы (напр. /v1/incarnations/{name}
-		// от incarnation- и choir-групп при разных под-путях не пересекается, но
-		// общий abs возможен) — сливаем операции по методам, НЕ перезатирая item
-		// целиком; коллизия одного метода → ошибка гейта (а).
+		// The same full path already exists from another group (e.g. /v1/incarnations/{name}
+		// from the incarnation- and choir-groups does not collide on different sub-paths, but
+		// a shared abs is possible) — merge operations by method, WITHOUT overwriting item
+		// wholesale; a collision on one method → gate (a) error.
 		if err := mergeOps(abs, dst, item); err != nil {
 			return err
 		}
 	}
 
-	// components.schemas: одинаковое имя + идентичное тело → дедуп; иначе коллизия.
+	// components.schemas: the same name + identical body → dedup; otherwise a collision.
 	for name, sch := range sub.Components.Schemas.Map() {
 		prev, exists := fullSchemas[name]
 		if !exists {
@@ -477,10 +477,10 @@ func mergeGroup(full *huma.OpenAPI, fullSchemas map[string]*huma.Schema, tagSeen
 		if ab != bb {
 			return &schemaCollisionError{name: name, bodyA: ab, bodyB: bb}
 		}
-		// идентичны — дедуп (ничего не делаем).
+		// identical — dedup (do nothing).
 	}
 
-	// tags: дедуп по имени.
+	// tags: dedup by name.
 	for _, t := range sub.Tags {
 		if _, seen := tagSeen[t.Name]; seen {
 			continue
@@ -492,9 +492,9 @@ func mergeGroup(full *huma.OpenAPI, fullSchemas map[string]*huma.Schema, tagSeen
 	return nil
 }
 
-// mergeOps вливает операции src-PathItem в dst по HTTP-методам. Метод, уже занятый
-// в dst, — коллизия path+method (гейт а). Покрывает редкий случай одного полного
-// пути от двух разных регистрационных групп.
+// mergeOps merges the operations of src-PathItem into dst by HTTP method. A method already
+// occupied in dst is a path+method collision (gate a). Covers the rare case of one full
+// path coming from two different registration groups.
 func mergeOps(path string, dst, src *huma.PathItem) error {
 	type slot struct {
 		get func() *huma.Operation
@@ -525,8 +525,8 @@ func mergeOps(path string, dst, src *huma.PathItem) error {
 	return nil
 }
 
-// pathItemOps раскладывает PathItem в map[METHOD]*Operation для итерации/детекции.
-// nil-item → пустая карта (безопасно для merge-проверки).
+// pathItemOps unpacks a PathItem into map[METHOD]*Operation for iteration/detection.
+// nil-item → an empty map (safe for the merge check).
 func pathItemOps(item *huma.PathItem) map[string]*huma.Operation {
 	if item == nil {
 		return map[string]*huma.Operation{}
@@ -559,8 +559,8 @@ func pathItemOps(item *huma.PathItem) map[string]*huma.Operation {
 	return ops
 }
 
-// joinPrefix приклеивает relative-путь huma-операции к chi-префиксу группы.
-// rel=="/" (корень группы) → сам prefix (POST /v1/roles, не /v1/roles/).
+// joinPrefix glues a huma operation's relative path to the group's chi prefix.
+// rel=="/" (the group root) → prefix itself (POST /v1/roles, not /v1/roles/).
 func joinPrefix(prefix, rel string) string {
 	if rel == "/" {
 		return prefix
@@ -568,16 +568,16 @@ func joinPrefix(prefix, rel string) string {
 	return prefix + rel
 }
 
-// HumaFullSpecYAML отдаёт единую агрегированную 3.1-спеку всех доменов как YAML-
-// строку. Точка входа будущего served-механизма (T4c) и доказательного pilot-теста.
+// HumaFullSpecYAML returns the single aggregated 3.1 spec of all domains as a YAML
+// string. The entry point for the future served mechanism (T4c) and the pilot proof-test.
 func HumaFullSpecYAML() (string, error) {
 	spec, err := buildFullOpenAPISpec()
 	if err != nil {
 		return "", err
 	}
-	// Детерминизм YAML-вывода huma зависит от обхода map (paths/schemas) — для
-	// guard-сравнений сериализуем как есть; стабильную сортировку YAML-ключей
-	// huma выполняет сам при маршалинге (map-ключи сортируются).
+	// The determinism of huma's YAML output depends on map traversal (paths/schemas) — for
+	// guard comparisons we serialize as-is; huma performs stable sorting of YAML keys
+	// itself during marshaling (map keys are sorted).
 	y, err := spec.YAML()
 	if err != nil {
 		return "", err

@@ -501,7 +501,7 @@ func TestIntegration_OpenAPI_200(t *testing.T) {
 	// keys alphabetically (components/info/openapi/paths…), so
 	// `openapi: 3.1.0` is NOT the first line — we search for the version as a substring across the document.
 	if !strings.Contains(string(body), "openapi: 3.1.0") {
-		t.Errorf("body не содержит маркер OpenAPI 3.1.0; first 64 bytes: %q", string(body[:min(64, len(body))]))
+		t.Errorf("body не withдержит маркер OpenAPI 3.1.0; first 64 bytes: %q", string(body[:min(64, len(body))]))
 	}
 }
 
@@ -519,7 +519,7 @@ func TestIntegration_Metrics_NotOnOpenAPI(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
-		t.Errorf("openapi /metrics status = %d, want 404 (эндпоинт ушёл на выделенный listener)", resp.StatusCode)
+		t.Errorf("openapi /metrics status = %d, want 404 (эндпоинт ушёл on выделенный listener)", resp.StatusCode)
 	}
 }
 
@@ -597,7 +597,7 @@ func TestIntegration_Metrics_RecordsV1Requests(t *testing.T) {
 
 	// the scrape must contain the go-collector before any /v1/ traffic.
 	if body := httpGetBody(t, metricsURL); !strings.Contains(body, "go_goroutines") {
-		t.Errorf("metrics output не содержит go_goroutines (core-collector); len=%d", len(body))
+		t.Errorf("metrics output не withдержит go_goroutines (core-collector); len=%d", len(body))
 	}
 
 	// Any request under /v1 without a token → 401, but the pipeline runs up to the
@@ -612,10 +612,10 @@ func TestIntegration_Metrics_RecordsV1Requests(t *testing.T) {
 
 	body := httpGetBody(t, metricsURL)
 	if !strings.Contains(body, "keeper_http_requests_total") {
-		t.Errorf("metrics output не содержит keeper_http_requests_total; len=%d", len(body))
+		t.Errorf("metrics output не withдержит keeper_http_requests_total; len=%d", len(body))
 	}
 	if !strings.Contains(body, `status="401"`) {
-		t.Errorf("metrics output не содержит status=\"401\" sample; got=\n%s", body)
+		t.Errorf("metrics output не withдержит status=\"401\" sample; got=\n%s", body)
 	}
 }
 
@@ -1391,10 +1391,10 @@ VALUES ('01HFIRST', 'redis-test', 'create', '{}', '{"x":1}', 'archon-alice', '01
 	}
 	ts, err := time.Parse(time.RFC3339, atRaw)
 	if err != nil {
-		t.Errorf("items[0].created_at = %q не парсится как RFC3339: %v", atRaw, err)
+		t.Errorf("items[0].created_at = %q не парсится as RFC3339: %v", atRaw, err)
 	}
 	if ts.IsZero() {
-		t.Errorf("items[0].created_at = %q — zero time, ожидался реальный момент записи", atRaw)
+		t.Errorf("items[0].created_at = %q — zero time, ожидался real момент записи", atRaw)
 	}
 }
 
@@ -1583,7 +1583,7 @@ VALUES ('01HHIST000000000000000000A', 'redis-h', 'create', '{}', '{"x":1}', 'arc
 				t.Fatalf("decode: %v", err)
 			}
 			if len(out.Items) < tc.minOk {
-				t.Fatalf("items len = %d, want >= %d (guard вхолостую без элемента)", len(out.Items), tc.minOk)
+				t.Fatalf("items len = %d, want >= %d (guard вхолостую без elementа)", len(out.Items), tc.minOk)
 			}
 			for key := range out.Items[0] {
 				if !snakeCaseKeyRe.MatchString(key) {
@@ -2396,7 +2396,7 @@ func walkSouls(t *testing.T, base, tok, baseQuery string) map[string]struct{} {
 		}
 		for _, it := range p.Items {
 			if _, dup := seen[it.SID]; dup {
-				t.Fatalf("ДУБЛЬ %s при keyset-обходе через HTTP", it.SID)
+				t.Fatalf("ДУБЛЬ %s при keyset-обходе via HTTP", it.SID)
 			}
 			seen[it.SID] = struct{}{}
 		}
@@ -2465,11 +2465,11 @@ func TestIntegration_Soul_List_Keyset_RegexScope(t *testing.T) {
 		"web-01.example.com": {}, "web-02.example.com": {}, "web-03.example.com": {},
 	}
 	if len(got) != len(want) {
-		t.Fatalf("keyset regex-scope собрал %d хостов, want %d: %v", len(got), len(want), got)
+		t.Fatalf("keyset regex-scope withбрал %d хостов, want %d: %v", len(got), len(want), got)
 	}
 	for sid := range want {
 		if _, ok := got[sid]; !ok {
-			t.Errorf("web-хост %s пропущен keyset-обходом", sid)
+			t.Errorf("web-хост %s пропущен keyset-обхоtoм", sid)
 		}
 	}
 	for _, leak := range []string{"db-01.example.com", "db-02.example.com"} {
@@ -2504,14 +2504,14 @@ func TestIntegration_Soul_List_Keyset_CovenRegexUnion(t *testing.T) {
 	got := walkSouls(t, base, tok, "limit=2")
 	for _, sid := range []string{"app-01.example.com", "db-01.example.com", "db-02.example.com"} {
 		if _, ok := got[sid]; !ok {
-			t.Errorf("union: %s скрыт (должен быть виден по coven ИЛИ regex)", sid)
+			t.Errorf("union: %s hidden (toлжен быть виден по coven ИЛИ regex)", sid)
 		}
 	}
 	if _, ok := got["noise-01.example.com"]; ok {
 		t.Error("union: noise-01 (ни prod, ни db-*) виден — over-show за границу Purview")
 	}
 	if len(got) != 3 {
-		t.Fatalf("union собрал %d, want 3 (app-01, db-01, db-02): %v", len(got), got)
+		t.Fatalf("union withбрал %d, want 3 (app-01, db-01, db-02): %v", len(got), got)
 	}
 }
 
@@ -2539,7 +2539,7 @@ func TestIntegration_Soul_List_Keyset_FilterIntersectsScope(t *testing.T) {
 	got := walkSouls(t, base, tok, "status=connected&limit=2")
 	want := map[string]struct{}{"web-01.example.com": {}, "web-03.example.com": {}}
 	if len(got) != len(want) {
-		t.Fatalf("filter∩scope собрал %d, want 2 (connected web-*): %v", len(got), got)
+		t.Fatalf("filter∩scope withбрал %d, want 2 (connected web-*): %v", len(got), got)
 	}
 	for sid := range want {
 		if _, ok := got[sid]; !ok {
@@ -2547,7 +2547,7 @@ func TestIntegration_Soul_List_Keyset_FilterIntersectsScope(t *testing.T) {
 		}
 	}
 	if _, ok := got["web-02.example.com"]; ok {
-		t.Error("pending web-02 виден под ?status=connected — фильтр НЕ применён в keyset-режиме (BLOCKER регресс)")
+		t.Error("pending web-02 виден под ?status=connected — фильтр NOT применён в keyset-режиме (BLOCKER регресс)")
 	}
 	if _, ok := got["db-01.example.com"]; ok {
 		t.Error("db-01 вне scope виден — утечка за Purview")
@@ -2648,7 +2648,7 @@ func TestIntegration_Soul_Get_RegexScope_ListGetConsistency(t *testing.T) {
 	// web-01 is visible in the keyset List…
 	seen := walkSouls(t, base, tok, "limit=10")
 	if _, ok := seen["web-01.example.com"]; !ok {
-		t.Fatal("web-01 не виден в regex-scoped List — предусловие consistency-теста нарушено")
+		t.Fatal("web-01 не виден в regex-scoped List — предусловие consistency-теста onрушеbut")
 	}
 	// …and reachable by a direct GET (previously InScope coven-only → 404 on a visible host).
 	if code := getSoulStatus(t, base, tok, "web-01.example.com"); code != http.StatusOK {
@@ -2762,10 +2762,10 @@ func TestIntegration_Soul_Read_Revoked_403(t *testing.T) {
 	baseOK, stopOK := startServer(t, notRevoked)
 	tokOK := newValidTokenFor(t, "archon-fired", []string{"viewer"})
 	if code := getReadStatus(t, baseOK, tokOK, "/v1/souls"); code != http.StatusOK {
-		t.Errorf("контроль (НЕ revoked) GET /v1/souls = %d, want 200", code)
+		t.Errorf("контроль (NOT revoked) GET /v1/souls = %d, want 200", code)
 	}
 	if code := getReadStatus(t, baseOK, tokOK, "/v1/souls/prod-01.example.com"); code != http.StatusOK {
-		t.Errorf("контроль (НЕ revoked) GET /{sid} = %d, want 200", code)
+		t.Errorf("контроль (NOT revoked) GET /{sid} = %d, want 200", code)
 	}
 	stopOK()
 
@@ -2816,7 +2816,7 @@ func TestIntegration_Soul_Read_Expired_401(t *testing.T) {
 		"/v1/souls/prod-01.example.com/history",
 	} {
 		if code := getReadStatus(t, base, tok, path); code != http.StatusUnauthorized {
-			t.Errorf("expired JWT GET %s = %d, want 401 (auth-слой не сломан revoked-фиксом)", path, code)
+			t.Errorf("expired JWT GET %s = %d, want 401 (auth-слой не сломан revoked-фикwithм)", path, code)
 		}
 	}
 }
@@ -2871,7 +2871,7 @@ func TestIntegration_Soul_CovenAssign_Revoked_401(t *testing.T) {
 	baseOK, stopOK := startServer(t, notRevoked)
 	tokOK := newValidTokenFor(t, "archon-fired", []string{"coven-op"})
 	if code := postCovenAssign(t, baseOK, tokOK, body); code != http.StatusOK {
-		t.Errorf("контроль (НЕ revoked) POST /v1/souls/coven = %d, want 200", code)
+		t.Errorf("контроль (NOT revoked) POST /v1/souls/coven = %d, want 200", code)
 	}
 	stopOK()
 
@@ -3111,13 +3111,13 @@ func TestIntegration_Incarnation_Read_Revoked(t *testing.T) {
 	baseOK, stopOK := startServer(t, notRevoked)
 	tokOK := newValidTokenFor(t, "archon-fired", []string{"inc-viewer"})
 	if code := getReadStatus(t, baseOK, tokOK, "/v1/incarnations"); code != http.StatusOK {
-		t.Errorf("контроль (НЕ revoked) GET /v1/incarnations = %d, want 200", code)
+		t.Errorf("контроль (NOT revoked) GET /v1/incarnations = %d, want 200", code)
 	}
 	if code := getIncStatus(t, baseOK, tokOK, "redis-prod"); code != http.StatusOK {
-		t.Errorf("контроль (НЕ revoked) GET /{name} = %d, want 200", code)
+		t.Errorf("контроль (NOT revoked) GET /{name} = %d, want 200", code)
 	}
 	if code := historyIncStatus(t, baseOK, tokOK, "redis-prod"); code != http.StatusOK {
-		t.Errorf("контроль (НЕ revoked) history = %d, want 200", code)
+		t.Errorf("контроль (NOT revoked) history = %d, want 200", code)
 	}
 	stopOK()
 
@@ -3257,7 +3257,7 @@ func firstSoulItem(t *testing.T, base, tok string) map[string]any {
 		t.Fatalf("firstSoulItem: decode: %v", err)
 	}
 	if len(out.Items) == 0 {
-		t.Fatalf("firstSoulItem: пустой список souls")
+		t.Fatalf("firstSoulItem: пустой спиwithк souls")
 	}
 	return out.Items[0]
 }

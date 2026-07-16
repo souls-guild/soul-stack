@@ -371,7 +371,7 @@ func TestHumaAudit_SoulCreate_NoAudit_OnRBACDeny(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на RBAC-deny soul.create (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on RBAC-deny soul.create (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -385,7 +385,7 @@ func TestHumaAudit_SoulCreate_NoAudit_OnValidationFail(t *testing.T) {
 		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на 422 soul.create (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on 422 soul.create (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -404,7 +404,7 @@ func TestHumaSoul_IssueToken_GoldenWire(t *testing.T) {
 		t.Fatalf("reply не JSON: %v; body=%s", err, rec.Body.String())
 	}
 	if m["sid"] != "host-1.example.com" || m["bootstrap_token"] == "" || m["expires_at"] == nil {
-		t.Errorf("issue-token 200-тело: %v (ожидали sid+bootstrap_token+expires_at)", m)
+		t.Errorf("issue-token 200-body: %v (ожидали sid+bootstrap_token+expires_at)", m)
 	}
 }
 
@@ -430,7 +430,7 @@ func TestHumaAudit_SoulIssueToken_NoAudit_OnRBACDeny(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на RBAC-deny soul.issue-token (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on RBAC-deny soul.issue-token (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -494,10 +494,10 @@ func TestHumaSoul_CovenAssign_DryRunGolden(t *testing.T) {
 	}
 	// custom MarshalJSON XOR: append → label (not labels), dry_run:true.
 	if m["mode"] != "append" || m["label"] != "prod" || m["dry_run"] != true {
-		t.Errorf("coven-assign dry_run 200-тело XOR-форма неверна: %v", m)
+		t.Errorf("coven-assign dry_run 200-body XOR-form неверon: %v", m)
 	}
 	if _, hasLabels := m["labels"]; hasLabels {
-		t.Errorf("append-mode не должен нести labels: %v", m)
+		t.Errorf("append-mode не toлжен нести labels: %v", m)
 	}
 }
 
@@ -603,7 +603,7 @@ func TestHumaSoul_List_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("read soul.list записал audit (%d событий)", len(auditCap.Events()))
+		t.Errorf("read soul.list записал audit (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -741,10 +741,10 @@ func TestHumaSoul_Exec_GoldenWire_Sync200(t *testing.T) {
 		strings.NewReader(`{"module":"core.cmd.shell","timeout_seconds":5}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (sync терминал); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 200 (sync термиonл); body=%s", rec.Code, rec.Body.String())
 	}
 	if loc := rec.Header().Get("Location"); loc != "" {
-		t.Errorf("Location-header на 200 sync должен ОТСУТСТВОВАТЬ, got %q", loc)
+		t.Errorf("Location-header on 200 sync toлжен ОТСУТСТВОВАТЬ, got %q", loc)
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
@@ -754,10 +754,10 @@ func TestHumaSoul_Exec_GoldenWire_Sync200(t *testing.T) {
 	// we check their presence and zero them for a byte-exact comparison of the rest of the wire (fields/enum/
 	// started_at-truncation). The same contract as the legacy strict path.
 	if m["errand_id"] == "" || m["errand_id"] == nil {
-		t.Errorf("sync 200-тело должно нести errand_id, got %v", m)
+		t.Errorf("sync 200-body toлжbut нести errand_id, got %v", m)
 	}
 	if _, ok := m["duration_ms"]; !ok {
-		t.Errorf("sync 200-тело должно нести duration_ms, got %v", m)
+		t.Errorf("sync 200-body toлжbut нести duration_ms, got %v", m)
 	}
 	delete(m, "errand_id")
 	delete(m, "duration_ms")
@@ -782,14 +782,14 @@ func TestHumaSoul_Exec_GoldenWire_Async202(t *testing.T) {
 	}
 	loc := rec.Header().Get("Location")
 	if !strings.HasPrefix(loc, "/v1/errands/") {
-		t.Errorf("Location-header на 202 должен быть /v1/errands/<id>, got %q", loc)
+		t.Errorf("Location-header on 202 toлжен быть /v1/errands/<id>, got %q", loc)
 	}
 	var m map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
 		t.Fatalf("reply не JSON-object: %v; body=%s", err, rec.Body.String())
 	}
 	if m["status"] != "running" || m["errand_id"] == "" || m["errand_id"] == nil {
-		t.Errorf("202-тело должно нести errand_id + status:running, got %v", m)
+		t.Errorf("202-body toлжbut нести errand_id + status:running, got %v", m)
 	}
 }
 
@@ -890,7 +890,7 @@ func TestHumaAudit_ErrandExec_NoAudit_OnRBACDeny(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на RBAC-deny soul.exec (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on RBAC-deny soul.exec (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -906,7 +906,7 @@ func TestHumaAudit_ErrandExec_NoAudit_OnValidationFail(t *testing.T) {
 		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на 422 soul.exec (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on 422 soul.exec (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -924,7 +924,7 @@ func TestHumaAudit_ErrandExec_NoAudit_OnSoulNotConnected_404(t *testing.T) {
 	}
 	assertHumaProblem(t, rec, problem.TypeNotFound)
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на 404 soul.exec (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on 404 soul.exec (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -1021,7 +1021,7 @@ func TestHumaSoul_Exec_ChiCoexistence(t *testing.T) {
 		t.Fatalf("chi.Walk: %v", err)
 	}
 	if execCount != 1 {
-		t.Errorf("POST /v1/souls/{sid}/exec встретился %d раз, want 1 (дубль/коллизия mount-а)", execCount)
+		t.Errorf("POST /v1/souls/{sid}/exec встретился %d раз, want 1 (дубль/коллfromия mount-а)", execCount)
 	}
 	if detailCount != 1 {
 		t.Errorf("GET /v1/souls/{sid}/soulprint встретился %d раз, want 1 (exec сломал soul-detail-группу)", detailCount)
@@ -1035,7 +1035,7 @@ func TestHumaSoul_SpecYAML(t *testing.T) {
 	}
 	for _, want := range []string{"createSoul", "assignSoulCoven", "issueSoulToken", "updateSoulSSHTarget", "ErrandExec", "listSouls", "getSoul", "getSoulprint", "getSoulHistory"} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("спека не содержит op %q:\n%s", want, frag)
+			t.Errorf("спека не withдержит op %q:\n%s", want, frag)
 		}
 	}
 }

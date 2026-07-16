@@ -50,10 +50,10 @@ import (
 // domain soul, not incarnation). items.$ref to the contract native element IncarnationGetReply
 // (T5a). The type name = the contract schema name (huma DefaultSchemaNamer capitalizes → "IncarnationListReply").
 type incarnationListReply struct {
-	Items  []IncarnationGetReply `json:"items" doc:"страница инкарнаций"`
-	Offset int32                 `json:"offset" doc:"сдвиг от начала набора"`
-	Limit  int32                 `json:"limit" doc:"размер страницы"`
-	Total  int32                 `json:"total" doc:"общее число записей в наборе"`
+	Items  []IncarnationGetReply `json:"items" doc:"страница инкарonций"`
+	Offset int32                 `json:"offset" doc:"offset from start of set"`
+	Limit  int32                 `json:"limit" doc:"page size"`
+	Total  int32                 `json:"total" doc:"total number of entries in set"`
 }
 
 // incarnationHistoryReply — the alias target schema for the GET /v1/incarnations/{name}/history envelope.
@@ -62,9 +62,9 @@ type incarnationListReply struct {
 // to the contract native element StateHistoryEntry (T5a). The type name = the contract schema name.
 type incarnationHistoryReply struct {
 	Items  []StateHistoryEntry `json:"items" doc:"страница записей state_history"`
-	Offset int32               `json:"offset" doc:"сдвиг от начала набора"`
-	Limit  int32               `json:"limit" doc:"размер страницы"`
-	Total  int32               `json:"total" doc:"общее число записей в наборе"`
+	Offset int32               `json:"offset" doc:"offset from start of set"`
+	Limit  int32               `json:"limit" doc:"page size"`
+	Total  int32               `json:"total" doc:"total number of entries in set"`
 }
 
 // incarnationRunsReply — the alias target schema for the GET /v1/incarnations/{name}/runs envelope.
@@ -72,10 +72,10 @@ type incarnationHistoryReply struct {
 // cursor fields), items.$ref to the native element RunSummaryEntry. The type name = the contract
 // schema name (huma DefaultSchemaNamer capitalizes → "IncarnationRunsReply").
 type incarnationRunsReply struct {
-	Items  []RunSummaryEntry `json:"items" doc:"страница прогонов инкарнации (свёртка apply_runs)"`
-	Offset int32             `json:"offset" doc:"сдвиг от начала набора"`
-	Limit  int32             `json:"limit" doc:"размер страницы"`
-	Total  int32             `json:"total" doc:"общее число прогонов инкарнации"`
+	Items  []RunSummaryEntry `json:"items" doc:"страница прогоbutв инкарonции (свёртка apply_runs)"`
+	Offset int32             `json:"offset" doc:"offset from start of set"`
+	Limit  int32             `json:"limit" doc:"page size"`
+	Total  int32             `json:"total" doc:"общее число прогоbutв инкарonции"`
 }
 
 // registerIncarnationEnvelopes registers on the registry a huma alias from the instantiated generic

@@ -31,11 +31,11 @@ type pushApplyInput struct {
 // hand-written spec (rollout N3). The register func projects into native handlers.PushApplyInput
 // (toPushApplyInput).
 type PushApplyRequest struct {
-	Inventory            []string       `json:"inventory" required:"true" doc:"список SID (FQDN) target-хостов (transport: ssh)"`
-	Destiny              string         `json:"destiny" required:"true" doc:"ссылка на Destiny в форме <name>@<ref>"`
-	Input                map[string]any `json:"input,omitempty" doc:"input для destiny"`
+	Inventory            []string       `json:"inventory" required:"true" doc:"спиwithк SID (FQDN) target-хостов (transport: ssh)"`
+	Destiny              string         `json:"destiny" required:"true" doc:"ссылка on Destiny в форме <name>@<ref>"`
+	Input                map[string]any `json:"input,omitempty" doc:"input for destiny"`
 	SSHProvider          string         `json:"ssh_provider,omitempty" doc:"имя SshProvider; по умолчанию первый зарегистрированный"`
-	CleanupStaleVersions bool           `json:"cleanup_stale_versions,omitempty" doc:"удалить устаревшие версии soul-бинаря/модулей в той же SSH-сессии"`
+	CleanupStaleVersions bool           `json:"cleanup_stale_versions,omitempty" doc:"удалить устаревшие версии soul-binary/модулей в той же SSH-сессии"`
 }
 
 // pushApplyOutput — huma output POST /v1/push/apply (FULL-TYPED). Status=202 (async
@@ -67,7 +67,7 @@ func pushApplyOperation() huma.Operation {
 
 // pushGetInput — huma input GET /v1/push/{apply_id}. ApplyID — path (ULID; empty → 422).
 type pushGetInput struct {
-	ApplyID string `path:"apply_id" doc:"ULID push-прогона"`
+	ApplyID string `path:"apply_id" doc:"ULID push-прогоon"`
 }
 
 // pushGetOutput — huma output GET /v1/push/{apply_id} (FULL-TYPED). Body — the native 200 body
@@ -83,8 +83,8 @@ func pushGetOperation() huma.Operation {
 		OperationID:   "pushGet",
 		Method:        http.MethodGet,
 		Path:          "/{apply_id}",
-		Summary:       "Состояние push-прогона",
-		Description:   "Текущее состояние push-прогона по apply_id (ADR-004 push-flow). Permission push.read. Read-only, без audit (recovery-friendly при degraded).",
+		Summary:       "Состояние push-прогоon",
+		Description:   "Текущее withстояние push-прогоon по apply_id (ADR-004 push-flow). Permission push.read. Read-only, no audit (recovery-friendly при degraded).",
 		Tags:          []string{"push"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -100,10 +100,10 @@ func pushGetOperation() huma.Operation {
 // SSHProvider — exact-match string. offset/limit — int32 with a default; CheckPageBounds
 // enforces the range in ListRunsTyped → 400 (NOT huma min/max — parity with ParsePage); bad-int → 400.
 type pushRunsListInput struct {
-	Statuses    []string `query:"status,explode" enum:"pending,running,success,partial_failed,failed,cancelled" doc:"multi-value ?status=X&status=Y — exact-match OR; значение вне enum → 422"`
+	Statuses    []string `query:"status,explode" enum:"pending,running,success,partial_failed,failed,cancelled" doc:"multi-value ?status=X&status=Y — exact-match OR; зonчение вне enum → 422"`
 	SSHProvider string   `query:"ssh_provider" doc:"exact-match по push_runs.ssh_provider"`
-	Offset      int32    `query:"offset" default:"0" doc:"сдвиг от начала набора, ≥0 (совпадает с shared/api.ParsePage; out-of-range → 400)"`
-	Limit       int32    `query:"limit" default:"50" doc:"размер страницы 1..1000 (совпадает с shared/api.ParsePage; out-of-range → 400)"`
+	Offset      int32    `query:"offset" default:"0" doc:"offset from start of set, ≥0 (matches shared/api.ParsePage; out-of-range → 400)"`
+	Limit       int32    `query:"limit" default:"50" doc:"page size 1..1000 (matches shared/api.ParsePage; out-of-range → 400)"`
 }
 
 // pushRunsListOutput — huma output GET /v1/push-runs (FULL-TYPED). Body — the native
@@ -122,8 +122,8 @@ func pushRunsListOperation() huma.Operation {
 		OperationID:   "listPushRuns",
 		Method:        http.MethodGet,
 		Path:          "/push-runs",
-		Summary:       "Список push-прогонов (paged)",
-		Description:   "Глобальный реестр push-прогонов с фильтрами status/ssh_provider и пагинацией (UI-4). Permission incarnation.history. Read-only, без audit.",
+		Summary:       "Спиwithк push-прогоbutв (paged)",
+		Description:   "Глобальный реестр push-прогоbutв с фильтрами status/ssh_provider и пагиonцией (UI-4). Permission incarnation.history. Read-only, no audit.",
 		Tags:          []string{"push"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},

@@ -73,13 +73,13 @@ import (
 // no input-422 risk. label (the singular append/remove echo) is NOT tagged: for replace mode
 // it is "" (XOR with labels), and a pattern would falsely require a coven on the empty string.
 type soulCovenAssignReply struct {
-	Mode    string   `json:"mode" doc:"тип операции над covens[]"`
-	Label   string   `json:"label" doc:"применённая метка для append/remove (зеркало input)"`
-	Labels  []string `json:"labels,omitempty" pattern:"^[a-z][a-z0-9]*(-[a-z0-9]+)*$" doc:"применённый набор меток для replace (зеркало input)"` // ← soul.CovenPattern (per-element, output echo)
-	Matched int32    `json:"matched" doc:"сколько хостов попало под selector ∩ scope"`
-	Changed int32    `json:"changed" doc:"сколько строк фактически изменено"`
-	Status  string   `json:"status" enum:"completed,partial" doc:"completed — все чанки закоммичены; partial — фейл середины"`
-	DryRun  bool     `json:"dry_run" doc:"dry-run-прогон без записи"`
+	Mode    string   `json:"mode" doc:"тип операции onд covens[]"`
+	Label   string   `json:"label" doc:"применёнonя метка for append/remove (mirror input)"`
+	Labels  []string `json:"labels,omitempty" pattern:"^[a-z][a-z0-9]*(-[a-z0-9]+)*$" doc:"applied set tokens for replace (mirror input)"` // ← soul.CovenPattern (per-element, output echo)
+	Matched int32    `json:"matched" doc:"number of hosts matching selector ∩ scope"`
+	Changed int32    `json:"changed" doc:"number of rows actually changed"`
+	Status  string   `json:"status" enum:"completed,partial" doc:"completed — all chunks committed; partial — mid-run failure"`
+	DryRun  bool     `json:"dry_run" doc:"dry-run without writing"`
 }
 
 // soulTraitsAssignReply — the alias target schema for the POST /v1/souls/traits 200 body (ADR-060). The type
@@ -89,11 +89,11 @@ type soulCovenAssignReply struct {
 // int32 (the soul envelope-domain convention). The reply is output-only → no input-422 pattern risk.
 type soulTraitsAssignReply struct {
 	Mode    string   `json:"mode" doc:"режим операции (merge/replace/remove)"`
-	Keys    []string `json:"keys" pattern:"^[a-z][a-z0-9]*([_-][a-z0-9]+)*$" doc:"затронутые trait-ключи (зеркало input)"` // ← soul.TraitKeyPattern (per-element, output echo)
-	Matched int32    `json:"matched" doc:"сколько хостов попало под selector ∩ scope"`
-	Changed int32    `json:"changed" doc:"сколько строк фактически изменено"`
-	Status  string   `json:"status" enum:"completed,partial" doc:"completed — все чанки закоммичены; partial — фейл середины"`
-	DryRun  bool     `json:"dry_run" doc:"dry-run-прогон без записи"`
+	Keys    []string `json:"keys" pattern:"^[a-z][a-z0-9]*([_-][a-z0-9]+)*$" doc:"affected trait keys (mirror input)"` // ← soul.TraitKeyPattern (per-element, output echo)
+	Matched int32    `json:"matched" doc:"number of hosts matching selector ∩ scope"`
+	Changed int32    `json:"changed" doc:"number of rows actually changed"`
+	Status  string   `json:"status" enum:"completed,partial" doc:"completed — all chunks committed; partial — mid-run failure"`
+	DryRun  bool     `json:"dry_run" doc:"dry-run without writing"`
 }
 
 // soulListReply — the alias target schema for the GET /v1/souls envelope (CURSOR, 6 fields). The shape is checked against
@@ -106,11 +106,11 @@ type soulTraitsAssignReply struct {
 // (next_cursor/total_approximate omitempty) → the wire does not change.
 type soulListReply struct {
 	Items            []SoulListEntry `json:"items" doc:"страница реестра souls"`
-	Offset           int32           `json:"offset" doc:"сдвиг от начала набора (offset-режим)"`
-	Limit            int32           `json:"limit" doc:"размер страницы"`
-	Total            int32           `json:"total" doc:"общее число записей; значимо только в offset-режиме"`
-	NextCursor       *string         `json:"next_cursor,omitempty" doc:"opaque keyset-курсор следующей страницы (keyset-режим); отсутствует в offset-режиме и когда набор исчерпан"`
-	TotalApproximate *bool           `json:"total_approximate,omitempty" doc:"total НЕ точен (keyset-режим); в offset-режиме опущено"`
+	Offset           int32           `json:"offset" doc:"offset from start of set (offset-режим)"`
+	Limit            int32           `json:"limit" doc:"page size"`
+	Total            int32           `json:"total" doc:"общее число записей; зonчимо только в offset-режиме"`
+	NextCursor       *string         `json:"next_cursor,omitempty" doc:"opaque keyset-курwithр следующей страницы (keyset-режим); отсутствует в offset-режиме и когда onбор исчерпан"`
+	TotalApproximate *bool           `json:"total_approximate,omitempty" doc:"total NOT точен (keyset-режим); в offset-режиме опущеbut"`
 }
 
 // registerSoulEnvelopes registers on the registry a huma alias from the instantiated generic

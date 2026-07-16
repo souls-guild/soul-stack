@@ -304,7 +304,7 @@ func TestHumaAudit_OmenCreate_NoAudit_OnRBACDeny(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на RBAC-deny omen.create (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on RBAC-deny omen.create (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -319,7 +319,7 @@ func TestHumaAudit_OmenCreate_NoAudit_OnValidationFail(t *testing.T) {
 		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на 422 omen.create (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on 422 omen.create (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -410,7 +410,7 @@ func TestHumaOmen_List_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут omen.list записал audit (%d событий)", len(auditCap.Events()))
+		t.Errorf("READ-роут omen.list записал audit (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -478,7 +478,7 @@ func TestHumaOmen_Delete_204(t *testing.T) {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 	if body := strings.TrimSpace(rec.Body.String()); body != "" {
-		t.Errorf("204-тело omen.delete должно быть ПУСТЫМ, got %q", body)
+		t.Errorf("204-body omen.delete toлжbut быть ПУСТЫМ, got %q", body)
 	}
 }
 
@@ -504,7 +504,7 @@ func TestHumaAudit_OmenDelete_NoAudit_OnNotFound(t *testing.T) {
 		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на 404 omen.delete (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on 404 omen.delete (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -627,7 +627,7 @@ func TestHumaRite_List_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут rite.list записал audit (%d событий)", len(auditCap.Events()))
+		t.Errorf("READ-роут rite.list записал audit (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -642,7 +642,7 @@ func TestHumaRite_Delete_204(t *testing.T) {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 	if body := strings.TrimSpace(rec.Body.String()); body != "" {
-		t.Errorf("204-тело rite.delete должно быть ПУСТЫМ, got %q", body)
+		t.Errorf("204-body rite.delete toлжbut быть ПУСТЫМ, got %q", body)
 	}
 }
 
@@ -668,7 +668,7 @@ func TestHumaAudit_RiteDelete_NoAudit_OnBadID(t *testing.T) {
 		t.Fatalf("status = %d, want 422 (id не число); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на bad-id rite.delete (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on bad-id rite.delete (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -687,7 +687,7 @@ func TestHumaAugur_OpenAPIFragment_3_1(t *testing.T) {
 		"createRite", "listRites", "deleteRite", "source_type",
 	} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("OpenAPI-фрагмент не содержит %q:\n%s", want, frag)
+			t.Errorf("OpenAPI-фрагмент не withдержит %q:\n%s", want, frag)
 		}
 	}
 	if strings.Contains(frag, "octet-stream") {

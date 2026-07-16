@@ -90,7 +90,7 @@ func TestHumaPermissions_GoldenWire(t *testing.T) {
 	want := remarshalSorted(t, mustMarshal(t, newPermissionCatalogReply(permH.ListTyped())))
 	got := remarshalSorted(t, rec.Body.Bytes())
 	if got != want {
-		t.Errorf("GOLDEN byte-exact дрейф permissions huma↔native:\n huma   = %s\n native = %s\n($schema / []-vs-null / набор ключей разошлись — проверь permissionsListOutput и newHumaCadenceAPI)", got, want)
+		t.Errorf("GOLDEN byte-exact дрейф permissions huma↔native:\n huma   = %s\n native = %s\n($schema / []-vs-null / onбор ключей разошлись — проверь permissionsListOutput и newHumaCadenceAPI)", got, want)
 	}
 }
 
@@ -99,7 +99,7 @@ func mustMarshal(t *testing.T, v any) []byte {
 	t.Helper()
 	b, err := json.Marshal(v)
 	if err != nil {
-		t.Fatalf("marshal эталона: %v", err)
+		t.Fatalf("marshal эталоon: %v", err)
 	}
 	return b
 }
@@ -115,7 +115,7 @@ func TestHumaPermissions_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут permissions записал audit (%d событий) — у него нет audit-middleware", len(auditCap.Events()))
+		t.Errorf("READ-роут permissions записал audit (%d withбытий) — у нits нет audit-middleware", len(auditCap.Events()))
 	}
 }
 
@@ -162,7 +162,7 @@ func TestHumaEventTypes_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут event-types записал audit (%d событий)", len(auditCap.Events()))
+		t.Errorf("READ-роут event-types записал audit (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -224,7 +224,7 @@ func TestHumaMyPermissions_ScopeWire(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), `"state"`) {
-		t.Fatalf("wire-JSON не содержит scope-ключ \"state\":\n%s", rec.Body.String())
+		t.Fatalf("wire-JSON не withдержит scope-ключ \"state\":\n%s", rec.Body.String())
 	}
 }
 
@@ -257,7 +257,7 @@ func TestHumaMyPermissions_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут me-permissions записал audit (%d событий)", len(auditCap.Events()))
+		t.Errorf("READ-роут me-permissions записал audit (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -279,7 +279,7 @@ func TestHumaCatalog_OpenAPIFragment_3_1(t *testing.T) {
 		"/permissions", "/event-types", "/me/permissions",
 	} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("OpenAPI-фрагмент не содержит %q:\n%s", want, frag)
+			t.Errorf("OpenAPI-фрагмент не withдержит %q:\n%s", want, frag)
 		}
 	}
 	// READ catalogs have no input → must NOT carry requestBody/octet-stream.

@@ -2197,19 +2197,19 @@ func TestVoyagePreview_BadJSON_400(t *testing.T) {
 
 // --- guard: wire-equivalence of the migration to oapi types (ADR-051) ---
 
-// toVoyageDTO мигрирован на pointer-optional поля [Voyage] (scenario_name/
-// module/batch_mode/on_failure — `*string`/`*enum` вместо `string ...,omitempty`;
-// summary.no_match — `*int` вместо `int ...,omitempty`). Guard фиксирует
-// байт-в-байт: nil/пустое → ключ ОПУЩЕН (не `null`, не `0`), non-nil → present.
-// Ловит регресс, если кто-то заменит alias-конвертер и сломает omitempty-семантику.
+// toVoyageDTO migrated to pointer-optional [Voyage] fields (scenario_name/
+// module/batch_mode/on_failure — `*string`/`*enum` instead of `string ...,omitempty`;
+// summary.no_match — `*int` instead of `int ...,omitempty`). The guard fixes
+// byte-for-byte: nil/empty → key OMITTED (not `null`, not `0`), non-nil → present.
+// Catches a regression if someone swaps the alias converter and breaks the omitempty semantics.
 func TestToVoyageDTO_PointerOptional_WireEquivalence(t *testing.T) {
 	noMatch := 0
 	bm := voyage.BatchModeBarrier
 	of := voyage.OnFailureContinue
 	mod := "core.cmd.shell"
 
-	// command-voyage: scenario_name nil → ключ опущен; module present; batch_mode
-	// nil (barrier → NULL) → опущен; on_failure present; no_match=0 → опущен.
+	// command-voyage: scenario_name nil → key omitted; module present; batch_mode
+	// nil (barrier → NULL) → omitted; on_failure present; no_match=0 → omitted.
 	v := &voyage.Voyage{
 		VoyageID:       "01J0000000000000000000000A",
 		Kind:           voyage.KindCommand,
@@ -2240,7 +2240,7 @@ func TestToVoyageDTO_PointerOptional_WireEquivalence(t *testing.T) {
 	if string(got["on_failure"]) != `"continue"` {
 		t.Errorf("on_failure = %s, want \"continue\"", got["on_failure"])
 	}
-	// summary.no_match=0 → ключ опущен внутри summary.
+	// summary.no_match=0 → key omitted inside summary.
 	var summ map[string]json.RawMessage
 	if err := json.Unmarshal(got["summary"], &summ); err != nil {
 		t.Fatalf("unmarshal summary: %v", err)
@@ -2249,7 +2249,7 @@ func TestToVoyageDTO_PointerOptional_WireEquivalence(t *testing.T) {
 		t.Errorf("summary.no_match присутствует при 0; want опущен")
 	}
 
-	// non-zero ветка: scenario_name/batch_mode/no_match присутствуют и несут значение.
+	// non-zero branch: scenario_name/batch_mode/no_match are present and carry a value.
 	sc := "deploy"
 	vv := &voyage.Voyage{
 		VoyageID:       "01J0000000000000000000000B",
@@ -2277,18 +2277,18 @@ func TestToVoyageDTO_PointerOptional_WireEquivalence(t *testing.T) {
 	}
 }
 
-// TestToVoyageDTO_DateTime_NanosecondWire — guard wire-формы date-time полей
-// detail/list-ответа Voyage (created_at/started_at/finished_at/schedule_at).
+// TestToVoyageDTO_DateTime_NanosecondWire — guards the wire form of the
+// Voyage detail/list response's date-time fields (created_at/started_at/finished_at/schedule_at).
 //
-// Domain Voyage несёт голый time.Time, toVoyageDTO присваивает его как есть БЕЗ
-// .UTC()/Truncate (см. комментарий проектора), поэтому домен Voyage —
-// НАНОСЕКУНДНЫЙ (RFC3339Nano): время с ненулевыми наносекундами обязано
-// появиться на wire с дробной частью секунд, а исходный таймзон-offset —
-// сохраниться (отсутствие .UTC()-нормализации). Тест фиксирует эту форму, чтобы
-// Фаза 2 (strict-server) не превратила её молча в секундную (Truncate) — что
-// было бы wire-change для уже выпущенного контракта.
+// Domain Voyage carries a bare time.Time, and toVoyageDTO assigns it as-is
+// WITHOUT .UTC()/Truncate (see the projector comment), so the domain Voyage is
+// NANOSECOND (RFC3339Nano): a time with non-zero nanoseconds must appear on
+// the wire with a fractional-seconds part, and the original timezone offset
+// must be preserved (no .UTC() normalization). The test fixes this form so
+// that Phase 2 (strict-server) doesn't silently turn it into second precision
+// (Truncate) — which would be a wire change for an already-released contract.
 func TestToVoyageDTO_DateTime_NanosecondWire(t *testing.T) {
-	// Не-UTC зона с фиксированным offset: ловит и наносекунды, и .UTC()-снос.
+	// A non-UTC zone with a fixed offset: catches both nanoseconds and .UTC() stripping.
 	zone := time.FixedZone("MSK", 3*60*60)
 	created := time.Date(2026, 6, 10, 12, 0, 1, 123456789, zone)
 	started := time.Date(2026, 6, 10, 12, 0, 5, 987654321, zone)
@@ -2317,7 +2317,7 @@ func TestToVoyageDTO_DateTime_NanosecondWire(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	// RFC3339Nano голого time.Time: дробная часть секунд + сохранённый +03:00.
+	// RFC3339Nano of a bare time.Time: fractional seconds + preserved +03:00.
 	wantWire := map[string]string{
 		"created_at":  `"2026-06-10T12:00:01.123456789+03:00"`,
 		"started_at":  `"2026-06-10T12:00:05.987654321+03:00"`,
@@ -2331,11 +2331,11 @@ func TestToVoyageDTO_DateTime_NanosecondWire(t *testing.T) {
 	}
 }
 
-// TestVoyageTargetEntry_FinishedAt_NanosecondWire — guard wire-формы finished_at
-// в drill-ответе GET /v1/voyages/{id}/targets. Handler собирает
-// voyageTargetEntryDTO напрямую (присваивая t.FinishedAt как есть), поэтому
-// finished_at единицы прогона — тоже НАНОСЕКУНДНЫЙ голый time.Time. Тест строит
-// DTO ровно так же, как Targets, и фиксирует наносекундную форму.
+// TestVoyageTargetEntry_FinishedAt_NanosecondWire — guards the wire form of
+// finished_at in the GET /v1/voyages/{id}/targets drill response. The handler
+// assembles voyageTargetEntryDTO directly (assigning t.FinishedAt as-is), so
+// a run unit's finished_at is also a NANOSECOND bare time.Time. The test
+// builds the DTO exactly like Targets does and fixes the nanosecond form.
 func TestVoyageTargetEntry_FinishedAt_NanosecondWire(t *testing.T) {
 	zone := time.FixedZone("MSK", 3*60*60)
 	finished := time.Date(2026, 6, 10, 12, 0, 9, 250000000, zone)

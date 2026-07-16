@@ -11,7 +11,7 @@ package api
 //   - ENUM field GitRef.Type — native GitRefType (huma_enums.go, INLINE enum): huma
 //     inlines the string-named type as `type: string` (schema byte-identical to legacy).
 //   - ServiceListReply / ServiceRefsListReply / ServiceDependenciesReply — direct Body
-//     types (items-only shape, no generic-envelope alias).
+//     types (items-only shape, no generic envelope alias).
 //   - wire SHAPE (json tags/omitempty/date-time/nullable categories A-D ADR-051) —
 //     golden byte-exact pinned by huma_service_reply_test.go.
 //

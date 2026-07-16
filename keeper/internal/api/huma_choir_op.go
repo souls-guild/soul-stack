@@ -19,7 +19,7 @@ import (
 // choirCreateInput — huma input for POST .../choirs. Name — path (incarnation name);
 // Body — typed body.
 type choirCreateInput struct {
-	Name string `path:"name" doc:"имя инкарнации"`
+	Name string `path:"name" doc:"incarnation name"`
 	Body ChoirCreateRequest
 }
 
@@ -29,7 +29,7 @@ type choirCreateInput struct {
 // additionalProperties:false (huma default) → an unknown field → 400. The struct name = the
 // contract schema name (huma DefaultSchemaNamer; hand-written ChoirCreateRequest, N4).
 type ChoirCreateRequest struct {
-	ChoirName   string  `json:"choir_name" required:"true" pattern:"^[a-z][a-z0-9_-]*$" doc:"имя Choir-а (^[a-z][a-z0-9_-]*$)"`
+	ChoirName   string  `json:"choir_name" required:"true" pattern:"^[a-z][a-z0-9_-]*$" doc:"Choir name (^[a-z][a-z0-9_-]*$)"`
 	Description *string `json:"description,omitempty" doc:"человекочитаемое описание"`
 	MinSize     *int    `json:"min_size,omitempty" doc:"нижний лимит размера партии (> 0)"`
 	MaxSize     *int    `json:"max_size,omitempty" doc:"верхний лимит размера партии (≥ min_size)"`
@@ -50,8 +50,8 @@ func choirCreateOperation() huma.Operation {
 		OperationID:   "createChoir",
 		Method:        http.MethodPost,
 		Path:          "/{name}/choirs",
-		Summary:       "Создать Choir",
-		Description:   "Declared-топология хостов внутри инкарнации (ADR-044). created_by_aid из JWT. Permission choir.create. 409 — имя занято.",
+		Summary:       "Create Choir",
+		Description:   "Declared-топология хостов внутри инкарonции (ADR-044). created_by_aid from JWT. Permission choir.create. 409 — имя занято.",
 		Tags:          []string{"choir"},
 		DefaultStatus: http.StatusCreated,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -62,7 +62,7 @@ func choirCreateOperation() huma.Operation {
 
 // choirListInput — huma-input GET .../choirs. Name — path.
 type choirListInput struct {
-	Name string `path:"name" doc:"имя инкарнации"`
+	Name string `path:"name" doc:"incarnation name"`
 }
 
 // choirListOutput — huma-output GET .../choirs (FULL-TYPED). Body — native envelope
@@ -78,8 +78,8 @@ func choirListOperation() huma.Operation {
 		OperationID:   "listChoirs",
 		Method:        http.MethodGet,
 		Path:          "/{name}/choirs",
-		Summary:       "Список Choir-ов инкарнации",
-		Description:   "Топология Choir-ов инкарнации (ADR-044). Permission choir.list. Несуществующая incarnation → items=[]. Read-only, без audit.",
+		Summary:       "Спиwithк Choir-ов инкарonции",
+		Description:   "Топология Choir-ов инкарonции (ADR-044). Permission choir.list. Несуществующая incarnation → items=[]. Read-only, no audit.",
 		Tags:          []string{"choir"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -90,8 +90,8 @@ func choirListOperation() huma.Operation {
 
 // choirDeleteInput — huma-input DELETE .../choirs/{choir}. Name/Choir — path.
 type choirDeleteInput struct {
-	Name  string `path:"name" doc:"имя инкарнации"`
-	Choir string `path:"choir" doc:"имя Choir-а"`
+	Name  string `path:"name" doc:"incarnation name"`
+	Choir string `path:"choir" doc:"Choir name"`
 }
 
 // choirDeleteOutput — huma-output DELETE .../choirs/{choir} (FULL-TYPED). Status=204
@@ -108,7 +108,7 @@ func choirDeleteOperation() huma.Operation {
 		Method:        http.MethodDelete,
 		Path:          "/{name}/choirs/{choir}",
 		Summary:       "Удалить Choir",
-		Description:   "Удаляет Choir (каскадом его Voice-ы). Permission choir.delete.",
+		Description:   "Удаляет Choir (каскаtoм its Voice-ы). Permission choir.delete.",
 		Tags:          []string{"choir"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -119,8 +119,8 @@ func choirDeleteOperation() huma.Operation {
 
 // voiceAddInput — huma-input POST .../voices. Name/Choir — path; Body — typed body.
 type voiceAddInput struct {
-	Name  string `path:"name" doc:"имя инкарнации"`
-	Choir string `path:"choir" doc:"имя Choir-а"`
+	Name  string `path:"name" doc:"incarnation name"`
+	Choir string `path:"choir" doc:"Choir name"`
 	Body  VoiceAddRequest
 }
 
@@ -129,7 +129,7 @@ type voiceAddInput struct {
 // additionalProperties:false → an unknown field → 400. The struct name = the contract
 // schema name (huma DefaultSchemaNamer; hand-written VoiceAddRequest, N4).
 type VoiceAddRequest struct {
-	SID      string  `json:"sid" required:"true" pattern:"^[a-z0-9][a-z0-9.-]{0,253}$" doc:"SID (FQDN) хоста — член инкарнации"`
+	SID      string  `json:"sid" required:"true" pattern:"^[a-z0-9][a-z0-9.-]{0,253}$" doc:"SID (FQDN) хоста — член инкарonции"`
 	Role     *string `json:"role,omitempty" doc:"declared-роль (kebab-case, 1..63)"`
 	Position *int    `json:"position,omitempty" doc:"порядковый индекс в партии (≥ 0)"`
 }
@@ -150,7 +150,7 @@ func voiceAddOperation() huma.Operation {
 		Method:        http.MethodPost,
 		Path:          "/{name}/choirs/{choir}/voices",
 		Summary:       "Добавить Voice в Choir",
-		Description:   "Членство SID в Choir-е (ADR-044). added_by_aid из JWT. Permission choir.add-voice. 409 — Voice уже есть; 422 — SID не член инкарнации.",
+		Description:   "Членство SID в Choir-е (ADR-044). added_by_aid from JWT. Permission choir.add-voice. 409 — Voice already есть; 422 — SID не член инкарonции.",
 		Tags:          []string{"choir"},
 		DefaultStatus: http.StatusCreated,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -161,8 +161,8 @@ func voiceAddOperation() huma.Operation {
 
 // voiceListInput — huma-input GET .../voices. Name/Choir — path.
 type voiceListInput struct {
-	Name  string `path:"name" doc:"имя инкарнации"`
-	Choir string `path:"choir" doc:"имя Choir-а"`
+	Name  string `path:"name" doc:"incarnation name"`
+	Choir string `path:"choir" doc:"Choir name"`
 }
 
 // voiceListOutput — huma-output GET .../voices (FULL-TYPED). Body — native envelope
@@ -178,8 +178,8 @@ func voiceListOperation() huma.Operation {
 		OperationID:   "listVoices",
 		Method:        http.MethodGet,
 		Path:          "/{name}/choirs/{choir}/voices",
-		Summary:       "Список Voice-ов Choir-а",
-		Description:   "Члены Choir-а (ADR-044). Permission choir.list. Несуществующий Choir → items=[]. Read-only, без audit.",
+		Summary:       "Спиwithк Voice-ов Choir-а",
+		Description:   "Члены Choir-а (ADR-044). Permission choir.list. Несуществующий Choir → items=[]. Read-only, no audit.",
 		Tags:          []string{"choir"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -190,8 +190,8 @@ func voiceListOperation() huma.Operation {
 
 // voiceRemoveInput — huma-input DELETE .../voices/{sid}. Name/Choir/SID — path.
 type voiceRemoveInput struct {
-	Name  string `path:"name" doc:"имя инкарнации"`
-	Choir string `path:"choir" doc:"имя Choir-а"`
+	Name  string `path:"name" doc:"incarnation name"`
+	Choir string `path:"choir" doc:"Choir name"`
 	SID   string `path:"sid" pattern:"^[a-z0-9][a-z0-9.-]{0,253}$" doc:"SID (FQDN) хоста"`
 }
 
@@ -207,7 +207,7 @@ func voiceRemoveOperation() huma.Operation {
 		OperationID:   "removeVoice",
 		Method:        http.MethodDelete,
 		Path:          "/{name}/choirs/{choir}/voices/{sid}",
-		Summary:       "Убрать Voice из Choir-а",
+		Summary:       "Убрать Voice from Choir-а",
 		Description:   "Снимает членство SID в Choir-е (ADR-044). Permission choir.remove-voice.",
 		Tags:          []string{"choir"},
 		DefaultStatus: http.StatusNoContent,

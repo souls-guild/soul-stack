@@ -83,7 +83,7 @@ type ldapLoginInput struct {
 // Password carries format:"password" (UI masking); it is NEVER logged and never
 // put into audit.
 type LDAPLoginRequest struct {
-	Username string `json:"username" minLength:"1" doc:"имя пользователя для LDAP search-bind"`
+	Username string `json:"username" minLength:"1" doc:"имя пользователя for LDAP search-bind"`
 	Password string `json:"password" format:"password" minLength:"1" doc:"пароль (не логируется, не возвращается)"`
 }
 
@@ -103,8 +103,8 @@ func ldapLoginOperation() huma.Operation {
 		OperationID:   "ldapLogin",
 		Method:        http.MethodPost,
 		Path:          "/ldap/login",
-		Summary:       "Логин оператора через LDAP",
-		Description:   "Федеративная аутентификация (ADR-058): LDAP search-bind → маппинг на operators(aid)+роли → внутренний JWT в HttpOnly+Secure cookie. Тело ответа пустое.",
+		Summary:       "Логин оператора via LDAP",
+		Description:   "Федеративonя аутентификация (ADR-058): LDAP search-bind → маппинг on operators(aid)+роли → внутренний JWT в HttpOnly+Secure cookie. Тело ответа пустое.",
 		Tags:          []string{"auth"},
 		DefaultStatus: http.StatusNoContent,
 		// 429 — anti-bruteforce throttle/lockout (AuthLoginLimit middleware, HIGH-3).

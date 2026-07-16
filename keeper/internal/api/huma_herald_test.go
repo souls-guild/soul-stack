@@ -337,7 +337,7 @@ func TestHumaAudit_HeraldCreate_NoAudit_OnRBACDeny(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на RBAC-deny herald.create (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on RBAC-deny herald.create (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -352,7 +352,7 @@ func TestHumaAudit_HeraldCreate_NoAudit_OnValidationFail(t *testing.T) {
 		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на 422 herald.create (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on 422 herald.create (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -430,7 +430,7 @@ func TestHumaHerald_List_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут herald.list записал audit (%d событий)", len(auditCap.Events()))
+		t.Errorf("READ-роут herald.list записал audit (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -537,7 +537,7 @@ func TestHumaAudit_HeraldUpdate_NoAudit_OnNotFound(t *testing.T) {
 		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на 404 herald.update (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on 404 herald.update (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -552,7 +552,7 @@ func TestHumaHerald_Delete_204(t *testing.T) {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 	if body := strings.TrimSpace(rec.Body.String()); body != "" {
-		t.Errorf("204-тело herald.delete должно быть ПУСТЫМ, got %q", body)
+		t.Errorf("204-body herald.delete toлжbut быть ПУСТЫМ, got %q", body)
 	}
 }
 
@@ -578,7 +578,7 @@ func TestHumaAudit_HeraldDelete_NoAudit_OnNotFound(t *testing.T) {
 		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на 404 herald.delete (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on 404 herald.delete (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -708,7 +708,7 @@ func TestHumaTiding_List_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут tiding.list записал audit (%d событий)", len(auditCap.Events()))
+		t.Errorf("READ-роут tiding.list записал audit (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -754,7 +754,7 @@ func TestHumaTiding_Delete_204(t *testing.T) {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 	if body := strings.TrimSpace(rec.Body.String()); body != "" {
-		t.Errorf("204-тело tiding.delete должно быть ПУСТЫМ, got %q", body)
+		t.Errorf("204-body tiding.delete toлжbut быть ПУСТЫМ, got %q", body)
 	}
 }
 
@@ -780,7 +780,7 @@ func TestHumaAudit_TidingDelete_NoAudit_OnNotFound(t *testing.T) {
 		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на 404 tiding.delete (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on 404 tiding.delete (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -800,7 +800,7 @@ func TestHumaHerald_OpenAPIFragment_3_1(t *testing.T) {
 		"event_types",
 	} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("OpenAPI-фрагмент не содержит %q:\n%s", want, frag)
+			t.Errorf("OpenAPI-фрагмент не withдержит %q:\n%s", want, frag)
 		}
 	}
 	if strings.Contains(frag, "octet-stream") {

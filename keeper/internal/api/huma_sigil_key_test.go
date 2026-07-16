@@ -218,12 +218,12 @@ func TestHumaSigilKey_Introduce_201(t *testing.T) {
 	// key_id/pubkey are ed25519-generated (not byte-exact); we guard the field set + types.
 	for _, k := range []string{"key_id", "pubkey_pem", "is_primary", "status", "introduced_at"} {
 		if _, ok := m[k]; !ok {
-			t.Errorf("introduce 201-тело без поля %q: %v", k, m)
+			t.Errorf("introduce 201-body без поля %q: %v", k, m)
 		}
 	}
 	if m["is_primary"] != true {
 		// makePrimary default — the first key becomes primary (Introduce semantics).
-		t.Logf("is_primary=%v (makePrimary=false; зависит от наличия active-primary)", m["is_primary"])
+		t.Logf("is_primary=%v (makePrimary=false; зависит от onличия active-primary)", m["is_primary"])
 	}
 	// pubkey must NOT carry the private key.
 	if pem, _ := m["pubkey_pem"].(string); strings.Contains(pem, "PRIVATE") {
@@ -263,7 +263,7 @@ func TestHumaAudit_SigilKeyIntroduce_RecordsOnSuccess(t *testing.T) {
 	}
 	evs := auditCap.Events()
 	if len(evs) == 0 {
-		t.Fatalf("audit НЕ записан на успешном introduce (S6-рецидив)")
+		t.Fatalf("audit NOT записан on успешbutм introduce (S6-рецидив)")
 	}
 	if evs[0].EventType != audit.EventSigilKeyIntroduced {
 		t.Errorf("event_type = %q, want %q", evs[0].EventType, audit.EventSigilKeyIntroduced)
@@ -289,7 +289,7 @@ func TestHumaAudit_SigilKeyIntroduce_NoAudit_OnRBACDeny(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на RBAC-deny introduce (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on RBAC-deny introduce (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -324,7 +324,7 @@ func TestHumaSigilKey_List_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут sigil-key.list записал audit (%d событий)", len(auditCap.Events()))
+		t.Errorf("READ-роут sigil-key.list записал audit (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -349,7 +349,7 @@ func TestHumaSigilKey_SetPrimary_204(t *testing.T) {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 	if body := strings.TrimSpace(rec.Body.String()); body != "" {
-		t.Errorf("204-тело set-primary должно быть ПУСТЫМ, got %q", body)
+		t.Errorf("204-body set-primary toлжbut быть ПУСТЫМ, got %q", body)
 	}
 }
 
@@ -377,7 +377,7 @@ func TestHumaAudit_SigilKeySetPrimary_NoAudit_OnBadKeyID(t *testing.T) {
 		t.Fatalf("status = %d, want 422 (битый key_id); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на bad-key_id set-primary (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on bad-key_id set-primary (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -392,7 +392,7 @@ func TestHumaSigilKey_Retire_204(t *testing.T) {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 	if body := strings.TrimSpace(rec.Body.String()); body != "" {
-		t.Errorf("204-тело retire должно быть ПУСТЫМ, got %q", body)
+		t.Errorf("204-body retire toлжbut быть ПУСТЫМ, got %q", body)
 	}
 }
 
@@ -420,7 +420,7 @@ func TestHumaAudit_SigilKeyRetire_NoAudit_OnBadKeyID(t *testing.T) {
 		t.Fatalf("status = %d, want 422 (битый key_id); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на bad-key_id retire (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on bad-key_id retire (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -439,7 +439,7 @@ func TestHumaSigilKey_OpenAPIFragment_3_1(t *testing.T) {
 		"make_primary", "pubkey_pem",
 	} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("OpenAPI-фрагмент не содержит %q:\n%s", want, frag)
+			t.Errorf("OpenAPI-фрагмент не withдержит %q:\n%s", want, frag)
 		}
 	}
 	if strings.Contains(frag, "octet-stream") {

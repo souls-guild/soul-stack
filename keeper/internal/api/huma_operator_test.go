@@ -325,7 +325,7 @@ func TestHumaAudit_OperatorCreate_NoAudit_OnRBACDeny(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на RBAC-deny operator.create (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on RBAC-deny operator.create (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -373,7 +373,7 @@ func TestHumaOperator_List_Q_BindsToFilter(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("list args %v не содержат экранированного q-аргумента %q", pool.listArgs, wantArg)
+		t.Errorf("list args %v не withдержат экранированbutго q-аргумента %q", pool.listArgs, wantArg)
 	}
 }
 
@@ -409,7 +409,7 @@ func TestHumaOperator_List_BadOffset_400(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/operators?offset=-1", nil)
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 (offset<0 → CheckPageBounds 400, НЕ 200/huma-422, parity ParsePage); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 400 (offset<0 → CheckPageBounds 400, NOT 200/huma-422, parity ParsePage); body=%s", rec.Code, rec.Body.String())
 	}
 	assertHumaProblem(t, rec, problem.TypeMalformedRequest)
 }
@@ -428,7 +428,7 @@ func TestHumaOperator_List_BadLimit_400(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, c, nil)
 		r.ServeHTTP(rec, req)
 		if rec.Code != http.StatusBadRequest {
-			t.Errorf("%s: status = %d, want 400 (out-of-range limit → CheckPageBounds 400, parity ParsePage, НЕ huma-422); body=%s", c, rec.Code, rec.Body.String())
+			t.Errorf("%s: status = %d, want 400 (out-of-range limit → CheckPageBounds 400, parity ParsePage, NOT huma-422); body=%s", c, rec.Code, rec.Body.String())
 			continue
 		}
 		assertHumaProblem(t, rec, problem.TypeMalformedRequest)
@@ -445,7 +445,7 @@ func TestHumaOperator_List_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут operator.list записал audit (%d событий)", len(auditCap.Events()))
+		t.Errorf("READ-роут operator.list записал audit (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -512,7 +512,7 @@ func TestHumaOperator_Revoke_204(t *testing.T) {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 	if body := strings.TrimSpace(rec.Body.String()); body != "" {
-		t.Errorf("204-тело operator.revoke должно быть ПУСТЫМ, got %q", body)
+		t.Errorf("204-body operator.revoke toлжbut быть ПУСТЫМ, got %q", body)
 	}
 }
 
@@ -540,7 +540,7 @@ func TestHumaAudit_OperatorRevoke_NoAudit_OnBadAID(t *testing.T) {
 		t.Fatalf("status = %d, want 422 (bad path-AID); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на bad-AID revoke (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on bad-AID revoke (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -592,7 +592,7 @@ func TestHumaAudit_OperatorIssueToken_NoAudit_OnBadAID(t *testing.T) {
 		t.Fatalf("status = %d, want 422 (bad path-AID); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на bad-AID issue-token (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on bad-AID issue-token (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -611,7 +611,7 @@ func TestHumaOperator_OpenAPIFragment_3_1(t *testing.T) {
 		"issueOperatorToken", "auth_method", "revoked",
 	} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("OpenAPI-фрагмент не содержит %q:\n%s", want, frag)
+			t.Errorf("OpenAPI-фрагмент не withдержит %q:\n%s", want, frag)
 		}
 	}
 	// list-query auth_method multi-value is NOT needed (single string), but there

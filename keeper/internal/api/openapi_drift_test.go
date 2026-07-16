@@ -1,17 +1,20 @@
-// SHARED-инфраструктура обхода chi-роутера Operator API для route-coverage гейтов.
+// SHARED infrastructure for walking the Operator API chi router for route-coverage gates.
 //
-// Здесь живут общие для агрегатор-тестов примитивы: тип [route], нормализация пути,
-// [collectRoutes] (chi.Walk по собранному [buildRouter]) + [pathAllowlist] (opt-in
-// домены, чьи handler-ы при сборке drift-router передаются nil). Их потребитель —
-// [TestFullSpec_CoversAllRoutes] (huma_full_spec_test.go), который сверяет реальные
-// chi-роуты с собранной huma-спекой ([buildFullOpenAPISpec]) в обе стороны: «роут
-// есть, в спеке нет» (агрегатор забыл домен) и «в спеке есть, роута нет» (лишняя
-// операция). Это и есть гарантия «все роуты в спеке» — отдельного источника-рукописи
-// больше нет, served-спека и committed-генерат производны от huma-dump.
+// Common primitives for the aggregator tests live here: the [route] type, path
+// normalization, [collectRoutes] (chi.Walk over the assembled [buildRouter]) +
+// [pathAllowlist] (opt-in domains whose handlers are passed nil when
+// assembling the drift router). Their consumer is
+// [TestFullSpec_CoversAllRoutes] (huma_full_spec_test.go), which cross-checks
+// the real chi routes against the assembled huma spec ([buildFullOpenAPISpec])
+// both ways: "route exists, not in the spec" (the aggregator forgot a domain)
+// and "in the spec, no route" (a stray operation). This is the "every route is
+// in the spec" guarantee — there's no separate handwritten source anymore, the
+// served spec and the committed generata are both derived from the huma dump.
 //
-// Тест чистый: роутер собирается через [buildRouter] со stub-зависимостями
-// (zero-value embedded-интерфейсы, методы которых при обходе дерева не
-// вызываются) — без Postgres/Redis/Vault, без build-tag `integration`.
+// The test is clean: the router is assembled via [buildRouter] with
+// stub dependencies (zero-value embedded interfaces whose methods aren't
+// called while walking the tree) — no Postgres/Redis/Vault, no `integration`
+// build tag.
 package api
 
 import (
@@ -35,9 +38,9 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/sigil"
 )
 
-// route — нормализованный ключ маршрута для сравнения множеств.
-// method — верхний регистр ("GET"/"POST"/…); path — `/v1/roles/{name}` с
-// унифицированными `{param}`-плейсхолдерами.
+// route — a normalized route key for set comparison.
+// method is upper case ("GET"/"POST"/…); path is `/v1/roles/{name}` with
+// unified `{param}` placeholders.
 type route struct {
 	method string
 	path   string
@@ -45,12 +48,12 @@ type route struct {
 
 func (r route) String() string { return r.method + " " + r.path }
 
-// normalizePath приводит path к каноничному виду для сравнения. chi монтирует
-// `r.Route("/operators")` + `.Post("/")` как `/v1/operators/` (с хвостовым
-// слешем), тогда как OpenAPI-нотация — `/v1/operators` (без). Это один и тот
-// же эндпоинт; убираем хвостовой слеш (кроме корня). `{param}`-плейсхолдеры у
-// chi и openapi уже идентичны (фигурные скобки) — отдельной нормализации не
-// требуется.
+// normalizePath brings path to a canonical form for comparison. chi mounts
+// `r.Route("/operators")` + `.Post("/")` as `/v1/operators/` (with a trailing
+// slash), while the OpenAPI notation is `/v1/operators` (without). It's the
+// same endpoint; we strip the trailing slash (except for root). `{param}`
+// placeholders are already identical between chi and openapi (curly braces) —
+// no separate normalization needed.
 func normalizePath(p string) string {
 	if len(p) > 1 {
 		p = strings.TrimSuffix(p, "/")
@@ -58,47 +61,47 @@ func normalizePath(p string) string {
 	return p
 }
 
-// wildcardSuffix — chi-нотация catch-all-сегмента. Роуты, оканчивающиеся
-// на него, — fallback-обработчики (router.go: r.HandleFunc("/*")), а не
-// эндпоинты; в спеке им места нет по определению. chi регистрирует такой
-// wildcard под ВСЕ HTTP-методы, поэтому фильтруем по суффиксу пути, а не
-// перечисляем (method, path) поимённо.
+// wildcardSuffix — chi notation for a catch-all segment. Routes ending in it
+// are fallback handlers (router.go: r.HandleFunc("/*")), not endpoints; by
+// definition they have no place in the spec. chi registers such a wildcard
+// under ALL HTTP methods, so we filter by path suffix rather than
+// enumerating (method, path) pairs by name.
 const wildcardSuffix = "/*"
 
-// pathAllowlist — спека-пути, которым законно НЕ иметь реализующего роута.
-// Декларации эндпоинтов, чьи handler-ы подключаются только при non-nil домене
-// (push / errand / audit / push-provider): drift-test собирает router с этими
-// доменами=nil, поэтому в спеке объявлены, но в роутере отсутствуют. Пустой
-// набор означал бы «любая декларация без роута = дрейф»; здесь фиксируем
-// заведомо известные opt-in-эндпоинты с явным обоснованием. При безусловном
-// подключении handler-а соответствующую строку нужно удалить — тогда тест
-// начнёт проверять их как обычные роуты.
+// pathAllowlist — spec paths that legitimately have no implementing route.
+// Endpoint declarations whose handlers are wired only for a non-nil domain
+// (push / errand / audit / push-provider): the drift-test builds the router
+// with these domains=nil, so they're declared in the spec but absent from the
+// router. An empty set would mean "any declaration without a route = drift";
+// here we record the known opt-in endpoints with an explicit rationale. Once a
+// handler is wired unconditionally, its entry must be removed — then the test
+// starts checking it as an ordinary route.
 var pathAllowlist = map[route]string{
-	{method: http.MethodPost, path: "/v1/push/apply"}:     "keeper.push apply объявлен в спеке, роут подключён ТОЛЬКО при non-nil pushH (drift-test собирает router с pushH=nil)",
-	{method: http.MethodGet, path: "/v1/push/{apply_id}"}: "keeper.push GET по apply_id, аналогично push/apply подключается только при non-nil pushH",
-	// errand.*-роуты подключаются ТОЛЬКО при non-nil errandH (ADR-033, slice E2);
-	// drift-test собирает router с errandH=nil, поэтому в спеке объявлены, но
-	// в роутере отсутствуют — это документированный «opt-in»-блок (паттерн push).
+	{method: http.MethodPost, path: "/v1/push/apply"}:     "keeper.push apply объявлен в спеке, роут подключён ТОЛЬКО при non-nil pushH (drift-test builds router с pushH=nil)",
+	{method: http.MethodGet, path: "/v1/push/{apply_id}"}: "keeper.push GET по apply_id, аonлогичbut push/apply подключается только при non-nil pushH",
+	// errand.*-routes are wired ONLY when errandH is non-nil (ADR-033, slice E2);
+	// the drift-test builds the router with errandH=nil, so they're declared in
+	// the spec but absent from the router — a documented "opt-in" block (push pattern).
 	{method: http.MethodPost, path: "/v1/souls/{sid}/exec"}:      "ADR-033 Errand: роут подключён ТОЛЬКО при non-nil errandH (slice E2 production-wire-up)",
 	{method: http.MethodGet, path: "/v1/errands"}:                "ADR-033 Errand list: роут подключён ТОЛЬКО при non-nil errandH",
 	{method: http.MethodGet, path: "/v1/errands/{errand_id}"}:    "ADR-033 Errand get: роут подключён ТОЛЬКО при non-nil errandH",
 	{method: http.MethodDelete, path: "/v1/errands/{errand_id}"}: "ADR-033 Errand cancel (slice E5): роут подключён ТОЛЬКО при non-nil errandH",
-	// audit.read — роут подключён ТОЛЬКО при non-nil auditH (UI iter 2, паттерн
-	// errandH/pushH). drift-test собирает router с auditH=nil → объявлен в
-	// спеке, но не в роутере.
-	{method: http.MethodGet, path: "/v1/audit"}: "UI iter 2 audit: роут подключён ТОЛЬКО при non-nil auditH (production-wire-up через AuditReader)",
-	// push-provider.* — роуты подключаются ТОЛЬКО при non-nil pushProviderH
-	// (ADR-032 amendment 2026-05-26, S7-2); drift-test собирает router с
-	// pushProviderH=nil → объявлены в спеке, но не в роутере.
+	// audit.read — route wired ONLY when auditH is non-nil (UI iter 2, errandH/pushH
+	// pattern). The drift-test builds the router with auditH=nil → declared in
+	// the spec, but not in the router.
+	{method: http.MethodGet, path: "/v1/audit"}: "UI iter 2 audit: роут подключён ТОЛЬКО при non-nil auditH (production-wire-up via AuditReader)",
+	// push-provider.* — routes are wired ONLY when pushProviderH is non-nil
+	// (ADR-032 amendment 2026-05-26, S7-2); the drift-test builds the router
+	// with pushProviderH=nil → declared in the spec, but not in the router.
 	{method: http.MethodPost, path: "/v1/push-providers"}:          "S7-2 push-provider CRUD: роут подключён ТОЛЬКО при non-nil pushProviderH",
 	{method: http.MethodGet, path: "/v1/push-providers"}:           "S7-2 push-provider list: роут подключён ТОЛЬКО при non-nil pushProviderH",
 	{method: http.MethodGet, path: "/v1/push-providers/{name}"}:    "S7-2 push-provider get: роут подключён ТОЛЬКО при non-nil pushProviderH",
 	{method: http.MethodPut, path: "/v1/push-providers/{name}"}:    "S7-2 push-provider update: роут подключён ТОЛЬКО при non-nil pushProviderH",
 	{method: http.MethodDelete, path: "/v1/push-providers/{name}"}: "S7-2 push-provider delete: роут подключён ТОЛЬКО при non-nil pushProviderH",
 
-	// provider.* / profile.* — Cloud CRUD (ADR-017): роуты подключаются ТОЛЬКО
-	// при non-nil providerH/profileH; drift-test собирает router с nil → в спеке
-	// объявлены, в роутере отсутствуют (документированный opt-in, паттерн push-provider).
+	// provider.* / profile.* — Cloud CRUD (ADR-017): routes are wired ONLY when
+	// providerH/profileH is non-nil; the drift-test builds the router with nil →
+	// declared in the spec, absent from the router (documented opt-in, push-provider pattern).
 	{method: http.MethodPost, path: "/v1/providers"}:          "ADR-017 provider create: роут подключён ТОЛЬКО при non-nil providerH",
 	{method: http.MethodGet, path: "/v1/providers"}:           "ADR-017 provider list: роут подключён ТОЛЬКО при non-nil providerH",
 	{method: http.MethodGet, path: "/v1/providers/{name}"}:    "ADR-017 provider get: роут подключён ТОЛЬКО при non-nil providerH",
@@ -108,26 +111,28 @@ var pathAllowlist = map[route]string{
 	{method: http.MethodGet, path: "/v1/profiles/{name}"}:     "ADR-017 profile get: роут подключён ТОЛЬКО при non-nil profileH",
 	{method: http.MethodDelete, path: "/v1/profiles/{name}"}:  "ADR-017 profile delete: роут подключён ТОЛЬКО при non-nil profileH",
 
-	// push-runs list: роут подключён ТОЛЬКО при non-nil pushH (UI-4); drift-test
-	// собирает router с pushH=nil. Парный per-id detail (`GET /v1/push/{apply_id}`)
-	// и `POST /v1/push/apply` уже в allowlist выше.
+	// push-runs list: route wired ONLY when pushH is non-nil (UI-4); the
+	// drift-test builds the router with pushH=nil. The paired per-id detail
+	// (`GET /v1/push/{apply_id}`) and `POST /v1/push/apply` are already in the
+	// allowlist above.
 	{method: http.MethodGet, path: "/v1/push-runs"}: "UI-4 Push-runs global list: роут подключён ТОЛЬКО при non-nil pushH",
 
-	// auth.ldap login: роут подключён ТОЛЬКО при non-nil LDAPAuth (ADR-058);
-	// drift-test собирает router с LDAPAuth=nil → объявлен в спеке (prefix /auth),
-	// но в роутере отсутствует. ВНЕ /v1 (публичный вход, RequireJWT неприменим).
+	// auth.ldap login: route wired ONLY when LDAPAuth is non-nil (ADR-058); the
+	// drift-test builds the router with LDAPAuth=nil → declared in the spec
+	// (prefix /auth), but absent from the router. OUTSIDE /v1 (public entry,
+	// RequireJWT doesn't apply).
 	{method: http.MethodPost, path: "/auth/ldap/login"}: "ADR-058 LDAP login: роут подключён ТОЛЬКО при non-nil LDAPAuth (опц. блок auth.ldap в keeper.yml)",
 
-	// auth.oidc эндпоинты (ADR-058 стадия 2): подключены ТОЛЬКО при non-nil
-	// OIDCAuth (опц. блок auth.oidc + Redis); drift-test собирает router с
-	// OIDCAuth=nil → в спеке объявлены (prefix /auth), в роутере отсутствуют.
+	// auth.oidc endpoints (ADR-058 stage 2): wired ONLY when OIDCAuth is non-nil
+	// (optional auth.oidc + Redis block); the drift-test builds the router with
+	// OIDCAuth=nil → declared in the spec (prefix /auth), absent from the router.
 	{method: http.MethodGet, path: "/auth/oidc/login"}:    "ADR-058 OIDC login: роут подключён ТОЛЬКО при non-nil OIDCAuth (опц. блок auth.oidc + Redis)",
 	{method: http.MethodGet, path: "/auth/oidc/callback"}: "ADR-058 OIDC callback: роут подключён ТОЛЬКО при non-nil OIDCAuth (опц. блок auth.oidc + Redis)",
 
-	// voyage.*-роуты подключаются ТОЛЬКО при non-nil voyageH (ADR-043 S5);
-	// drift-test собирает router с voyageH=nil, поэтому в спеке объявлены, но в
-	// роутере отсутствуют — документированный «opt-in»-блок (паттерн
-	// errandRunH/pushH).
+	// voyage.*-routes are wired ONLY when voyageH is non-nil (ADR-043 S5); the
+	// drift-test builds the router with voyageH=nil, so they're declared in the
+	// spec but absent from the router — a documented "opt-in" block (the
+	// errandRunH/pushH pattern).
 	{method: http.MethodPost, path: "/v1/voyages"}:             "ADR-043 Voyage create: роут подключён ТОЛЬКО при non-nil voyageH",
 	{method: http.MethodPost, path: "/v1/voyages/preview"}:     "ADR-043 amendment §4 Voyage preview: роут подключён ТОЛЬКО при non-nil voyageH",
 	{method: http.MethodGet, path: "/v1/voyages"}:              "ADR-043 Voyage list: роут подключён ТОЛЬКО при non-nil voyageH",
@@ -135,9 +140,10 @@ var pathAllowlist = map[route]string{
 	{method: http.MethodGet, path: "/v1/voyages/{id}/targets"}: "ADR-043 Voyage targets drill: роут подключён ТОЛЬКО при non-nil voyageH",
 	{method: http.MethodDelete, path: "/v1/voyages/{id}"}:      "ADR-043 Voyage cancel: роут подключён ТОЛЬКО при non-nil voyageH",
 
-	// cadence.*-роуты подключаются ТОЛЬКО при non-nil cadenceH (ADR-046 S4);
-	// drift-test собирает router с cadenceH=nil, поэтому в спеке объявлены, но в
-	// роутере отсутствуют — документированный «opt-in»-блок (паттерн voyageH).
+	// cadence.*-routes are wired ONLY when cadenceH is non-nil (ADR-046 S4); the
+	// drift-test builds the router with cadenceH=nil, so they're declared in the
+	// spec but absent from the router — a documented "opt-in" block (the voyageH
+	// pattern).
 	{method: http.MethodPost, path: "/v1/cadences"}:              "ADR-046 Cadence create: роут подключён ТОЛЬКО при non-nil cadenceH",
 	{method: http.MethodGet, path: "/v1/cadences"}:               "ADR-046 Cadence list: роут подключён ТОЛЬКО при non-nil cadenceH",
 	{method: http.MethodGet, path: "/v1/cadences/{id}"}:          "ADR-046 Cadence get: роут подключён ТОЛЬКО при non-nil cadenceH",
@@ -147,10 +153,10 @@ var pathAllowlist = map[route]string{
 	{method: http.MethodPost, path: "/v1/cadences/{id}/disable"}: "ADR-046 Cadence disable: роут подключён ТОЛЬКО при non-nil cadenceH",
 	{method: http.MethodGet, path: "/v1/cadences/{id}/runs"}:     "ADR-046 Cadence runs drill: роут подключён ТОЛЬКО при non-nil cadenceH",
 
-	// choir.*-роуты подключаются ТОЛЬКО при non-nil choirH (ADR-044 S-T3);
-	// drift-test собирает router с choirH=nil, поэтому в спеке объявлены, но
-	// в роутере отсутствуют — документированный «opt-in»-блок (паттерн
-	// tideH/errandH/pushH).
+	// choir.*-routes are wired ONLY when choirH is non-nil (ADR-044 S-T3); the
+	// drift-test builds the router with choirH=nil, so they're declared in the
+	// spec but absent from the router — a documented "opt-in" block (the
+	// tideH/errandH/pushH pattern).
 	{method: http.MethodPost, path: "/v1/incarnations/{name}/choirs"}:                        "ADR-044 Choir create: роут подключён ТОЛЬКО при non-nil choirH",
 	{method: http.MethodGet, path: "/v1/incarnations/{name}/choirs"}:                         "ADR-044 Choir list: роут подключён ТОЛЬКО при non-nil choirH",
 	{method: http.MethodDelete, path: "/v1/incarnations/{name}/choirs/{choir}"}:              "ADR-044 Choir delete: роут подключён ТОЛЬКО при non-nil choirH",
@@ -158,9 +164,10 @@ var pathAllowlist = map[route]string{
 	{method: http.MethodGet, path: "/v1/incarnations/{name}/choirs/{choir}/voices"}:          "ADR-044 Voice list: роут подключён ТОЛЬКО при non-nil choirH",
 	{method: http.MethodDelete, path: "/v1/incarnations/{name}/choirs/{choir}/voices/{sid}"}: "ADR-044 Voice remove: роут подключён ТОЛЬКО при non-nil choirH",
 
-	// herald.*/tiding.*-роуты подключаются ТОЛЬКО при non-nil heraldH (ADR-052 S4);
-	// drift-test собирает router с heraldH=nil, поэтому в спеке объявлены, но в
-	// роутере отсутствуют — документированный «opt-in»-блок (паттерн push-provider).
+	// herald.*/tiding.*-routes are wired ONLY when heraldH is non-nil (ADR-052 S4);
+	// the drift-test builds the router with heraldH=nil, so they're declared in
+	// the spec but absent from the router — a documented "opt-in" block (the
+	// push-provider pattern).
 	{method: http.MethodPost, path: "/v1/heralds"}:          "ADR-052 Herald create: роут подключён ТОЛЬКО при non-nil heraldH",
 	{method: http.MethodGet, path: "/v1/heralds"}:           "ADR-052 Herald list: роут подключён ТОЛЬКО при non-nil heraldH",
 	{method: http.MethodGet, path: "/v1/heralds/{name}"}:    "ADR-052 Herald get: роут подключён ТОЛЬКО при non-nil heraldH",
@@ -172,23 +179,24 @@ var pathAllowlist = map[route]string{
 	{method: http.MethodPut, path: "/v1/tidings/{name}"}:    "ADR-052 Tiding update: роут подключён ТОЛЬКО при non-nil heraldH",
 	{method: http.MethodDelete, path: "/v1/tidings/{name}"}: "ADR-052 Tiding delete: роут подключён ТОЛЬКО при non-nil heraldH",
 
-	// GET /v1/cluster — HA-топология из Conclave: роут подключён ТОЛЬКО при non-nil
-	// clusterH (Redis-wire-up); drift-test собирает router с clusterH=nil, поэтому
-	// в спеке объявлен, но в роутере отсутствует — документированный «opt-in»-блок
-	// (паттерн voyageH/cadenceH).
-	{method: http.MethodGet, path: "/v1/cluster"}: "ADR-006 Cluster overview: роут подключён ТОЛЬКО при non-nil clusterH (production-wire-up над Redis-Conclave)",
+	// GET /v1/cluster — HA topology from the Conclave: route wired ONLY when
+	// clusterH is non-nil (Redis wire-up); the drift-test builds the router with
+	// clusterH=nil, so it's declared in the spec but absent from the router — a
+	// documented "opt-in" block (the voyageH/cadenceH pattern).
+	{method: http.MethodGet, path: "/v1/cluster"}: "ADR-006 Cluster overview: роут подключён ТОЛЬКО при non-nil clusterH (production-wire-up onд Redis-Conclave)",
 }
 
-// collectRoutes собирает фактические `(method, path)` из chi-дерева через
-// chi.Walk. buildRouter возвращает http.Handler, конкретный тип — *chi.Mux,
-// реализующий chi.Routes. path-паттерны chi уже в форме `/v1/roles/{name}` —
-// совпадают с openapi-нотацией, отдельной нормализации `{param}` не требуется
-// (оба используют фигурные скобки); приводим только метод к верхнему регистру.
+// collectRoutes gathers the actual `(method, path)` pairs from the chi tree
+// via chi.Walk. buildRouter returns an http.Handler, whose concrete type is
+// *chi.Mux implementing chi.Routes. chi path patterns are already in the
+// `/v1/roles/{name}` form — matching the openapi notation, so no separate
+// `{param}` normalization is needed (both use curly braces); we only
+// upper-case the method.
 func collectRoutes(t *testing.T) map[route]struct{} {
 	t.Helper()
 	h := buildRouter(
-		nil, // verifier — middleware RequireJWT собирается lazily, не разыменовывается при обходе
-		nil, // healthH — r.Get(...) только сохраняет method-value-handler
+		nil, // verifier — middleware RequireJWT is built lazily, not dereferenced while walking
+		nil, // healthH — r.Get(...) only stores a method-value handler
 		stubOperatorHandler(t),
 		handlers.NewIncarnationHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil),
 		handlers.NewSoulHandler(nil, nil, nil, nil),
@@ -200,44 +208,44 @@ func collectRoutes(t *testing.T) map[route]struct{} {
 		stubProvisioningPolicyHandler(t),
 		stubAugurHandler(t),
 		stubOracleHandler(t),
-		nil, // pushH — push.*-роуты подключаются только при non-nil pushH (router.go); сейчас в allowlist
-		nil, // pushProviderH — push-provider.*-роуты подключаются только при non-nil; в allowlist
-		nil, // providerH — provider.*-роуты подключаются только при non-nil; в allowlist
-		nil, // profileH — profile.*-роуты подключаются только при non-nil; в allowlist
-		nil, // errandH — errand.*-роуты подключаются только при non-nil errandH; в allowlist
-		nil, // voyageH — voyage.*-роуты подключаются только при non-nil voyageH (ADR-043 S5); в allowlist
-		nil, // cadenceH — cadence.*-роуты подключаются только при non-nil cadenceH (ADR-046 S4); в allowlist
-		nil, // auditH — audit-роут подключается только при non-nil auditH; в allowlist
-		nil, // choirH — choir.*-роуты подключаются только при non-nil choirH (ADR-044 S-T3); в allowlist
-		nil, // heraldH — herald.*/tiding.*-роуты подключаются только при non-nil heraldH (ADR-052 S4); в allowlist
-		handlers.NewModuleCatalogHandler(nil, nil),  // moduleCatalogH — /v1/modules монтируется всегда (core-каталог); plugins=nil → только core
-		handlers.NewModuleFormPrepHandler(nil, nil), // moduleFormPrepH — non-nil → /v1/modules/{name}/form-prep монтируется (ADR-045 S3); resolver nil не дёргается при обходе
-		handlers.NewPermissionCatalogHandler(nil),   // permCatalogH — /v1/permissions монтируется всегда (статика rbac-каталога)
-		handlers.NewEventTypeCatalogHandler(nil),    // eventTypeCatalogH — /v1/event-types монтируется всегда (статика herald-каталога)
-		handlers.NewHeraldTypeCatalogHandler(nil),   // heraldTypeCatalogH — /v1/herald-types монтируется всегда (статика herald-type-каталога)
-		handlers.NewMyPermissionsHandler(nil, nil),  // meH — /v1/me/permissions монтируется всегда (зависит лишь от RBAC-снимка); PermissionsOf при обходе дерева не дёргается
-		nil,                                  // enforcer — RequirePermission собирается lazily
-		nil,                                  // auditWriter — Audit собирается lazily
-		nil,                                  // metricsHTTP — nil → metrics-middleware не подключается (router.go)
-		nil,                                  // tollDegradedReader — DegradedMiddleware skip при nil (router.go)
+		nil, // pushH — push.*-routes are wired only when pushH is non-nil (router.go); currently in the allowlist
+		nil, // pushProviderH — push-provider.*-routes are wired only when non-nil; in the allowlist
+		nil, // providerH — provider.*-routes are wired only when non-nil; in the allowlist
+		nil, // profileH — profile.*-routes are wired only when non-nil; in the allowlist
+		nil, // errandH — errand.*-routes are wired only when errandH is non-nil; in the allowlist
+		nil, // voyageH — voyage.*-routes are wired only when voyageH is non-nil (ADR-043 S5); in the allowlist
+		nil, // cadenceH — cadence.*-routes are wired only when cadenceH is non-nil (ADR-046 S4); in the allowlist
+		nil, // auditH — the audit route is wired only when auditH is non-nil; in the allowlist
+		nil, // choirH — choir.*-routes are wired only when choirH is non-nil (ADR-044 S-T3); in the allowlist
+		nil, // heraldH — herald.*/tiding.*-routes are wired only when heraldH is non-nil (ADR-052 S4); in the allowlist
+		handlers.NewModuleCatalogHandler(nil, nil),  // moduleCatalogH — /v1/modules is always mounted (core catalog); plugins=nil → core only
+		handlers.NewModuleFormPrepHandler(nil, nil), // moduleFormPrepH — non-nil → /v1/modules/{name}/form-prep is mounted (ADR-045 S3); the resolver isn't called while walking, even nil
+		handlers.NewPermissionCatalogHandler(nil),   // permCatalogH — /v1/permissions is always mounted (static rbac catalog)
+		handlers.NewEventTypeCatalogHandler(nil),    // eventTypeCatalogH — /v1/event-types is always mounted (static herald catalog)
+		handlers.NewHeraldTypeCatalogHandler(nil),   // heraldTypeCatalogH — /v1/herald-types is always mounted (static herald-type catalog)
+		handlers.NewMyPermissionsHandler(nil, nil),  // meH — /v1/me/permissions is always mounted (depends only on the RBAC snapshot); PermissionsOf isn't called while walking the tree
+		nil,                                  // enforcer — RequirePermission is built lazily
+		nil,                                  // auditWriter — Audit is built lazily
+		nil,                                  // metricsHTTP — nil → the metrics middleware isn't wired (router.go)
+		nil,                                  // tollDegradedReader — DegradedMiddleware skips when nil (router.go)
 		nil,                                  // tempoLimiter — nil → RateLimit middleware passthrough (router.go)
 		nil,                                  // tempoMetrics — nil → emit no-op (router.go)
-		nil,                                  // tempoVoyageCreateLimits — nil допустим (RateLimit при nil-limiter не вызывает provider)
-		nil,                                  // tempoVoyagePreviewLimits — nil допустим (RateLimit при nil-limiter не вызывает provider)
-		false,                                // webUIEnabled — /ui вне /v1, drift-walker его не видит; держим выключенным для чистоты периметра
-		nil,                                  // ldapAuth (LDAP не сконфигурирован в тесте)
-		nil,                                  // oidcAuth (OIDC не сконфигурирован в тесте)
-		nil,                                  // loginGuard (anti-bruteforce off в тесте)
+		nil,                                  // tempoVoyageCreateLimits — nil is fine (RateLimit doesn't call the provider when the limiter is nil)
+		nil,                                  // tempoVoyagePreviewLimits — nil is fine (RateLimit doesn't call the provider when the limiter is nil)
+		false,                                // webUIEnabled — /ui is outside /v1, the drift-walker doesn't see it; keep it off for perimeter cleanliness
+		nil,                                  // ldapAuth (LDAP isn't configured in the test)
+		nil,                                  // oidcAuth (OIDC isn't configured in the test)
+		nil,                                  // loginGuard (anti-bruteforce off in the test)
 		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
-		nil,                                  // soulStatsStaleFn (дефолт 90s в тесте)
-		nil,                                  // clusterH (cluster-view не монтируется в тесте)
-		&runEventsDeps{},                     // runEventsDeps — SSE run-events монтируется (ADR-068 §A3); методы deps при обходе дерева не вызываются
-		nil,                                  // logger — допустим nil (handler-ы получают io.Discard внутри)
+		nil,                                  // soulStatsStaleFn (default 90s in the test)
+		nil,                                  // clusterH (cluster-view isn't mounted in the test)
+		&runEventsDeps{},                     // runEventsDeps — SSE run-events is mounted (ADR-068 §A3); deps' methods aren't called while walking the tree
+		nil,                                  // logger — nil is fine (handlers get io.Discard internally)
 	)
 
 	routes, ok := h.(chi.Routes)
 	if !ok {
-		t.Fatalf("buildRouter вернул %T, не реализует chi.Routes — обход chi.Walk невозможен", h)
+		t.Fatalf("buildRouter вернул %T, не реалfromует chi.Routes — обход chi.Walk невозможен", h)
 	}
 
 	set := make(map[route]struct{})
@@ -249,27 +257,27 @@ func collectRoutes(t *testing.T) map[route]struct{} {
 		t.Fatalf("chi.Walk: %v", err)
 	}
 	if len(set) == 0 {
-		t.Fatal("chi.Walk не вернул ни одного роута — роутер пуст?")
+		t.Fatal("chi.Walk не вернул ни одbutго роута — роутер пуст?")
 	}
 	return set
 }
 
-// --- stub-зависимости handler-конструкторов ---
+// --- stub dependencies for handler constructors ---
 //
-// buildRouter при обходе дерева НЕ вызывает методы этих зависимостей —
-// нужны лишь non-nil экземпляры, чтобы конструкторы не паниковали и
-// зарегистрировали маршруты (в частности /v1/roles регистрируется только
-// при non-nil roleH). Embedded zero-value-интерфейс удовлетворяет
-// контракту типа без ручной реализации каждого метода; вызов любого из
-// них упал бы nil-panic-ом — но обход дерева до вызова не доходит.
+// buildRouter does NOT call these dependencies' methods while walking the
+// tree — it only needs non-nil instances so the constructors don't panic and
+// register the routes (in particular /v1/roles is registered only when
+// roleH is non-nil). An embedded zero-value interface satisfies the type
+// contract without hand-implementing every method; calling any of them
+// would nil-panic — but the tree walk never reaches a call.
 
-// stubOperatorHandler собирает OperatorHandler со stub-pool/issuer/rbac.
+// stubOperatorHandler builds an OperatorHandler with a stub pool/issuer/rbac.
 func stubOperatorHandler(t *testing.T) *handlers.OperatorHandler {
 	t.Helper()
 	return handlers.NewOperatorHandler(stubOperatorPool{}, stubIssuer{}, stubRBACSource{}, time.Hour, nil)
 }
 
-// stubRoleHandler собирает RoleHandler через rbac.Service со stub-pool.
+// stubRoleHandler builds a RoleHandler via rbac.Service with a stub pool.
 func stubRoleHandler(t *testing.T) *handlers.RoleHandler {
 	t.Helper()
 	svc, err := rbac.NewService(rbac.ServiceDeps{Pool: stubRBACPool{}})
@@ -279,8 +287,8 @@ func stubRoleHandler(t *testing.T) *handlers.RoleHandler {
 	return handlers.NewRoleHandler(svc, nil)
 }
 
-// stubSynodHandler — non-nil SynodHandler, чтобы synod.*-роуты зарегистрировались
-// для drift-проверки (методы service при обходе дерева не вызываются).
+// stubSynodHandler — a non-nil SynodHandler so synod.*-routes register for
+// the drift check (the service's methods aren't called while walking the tree).
 func stubSynodHandler(t *testing.T) *handlers.SynodHandler {
 	t.Helper()
 	svc, err := rbac.NewService(rbac.ServiceDeps{Pool: stubRBACPool{}})
@@ -290,10 +298,10 @@ func stubSynodHandler(t *testing.T) *handlers.SynodHandler {
 	return handlers.NewSynodHandler(svc, nil)
 }
 
-// stubSigilHandler собирает SigilHandler через sigil.Service со stub-
-// Signer/Store/SlotReader. Методы зависимостей при обходе дерева не
-// вызываются — нужен лишь non-nil service, чтобы plugin.*-роуты
-// зарегистрировались.
+// stubSigilHandler builds a SigilHandler via sigil.Service with a stub
+// Signer/Store/SlotReader. The dependencies' methods aren't called while
+// walking the tree — it only needs a non-nil service so plugin.*-routes
+// register.
 func stubSigilHandler(t *testing.T) *handlers.SigilHandler {
 	t.Helper()
 	signer, err := sigil.NewSigner(ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)))
@@ -311,9 +319,9 @@ func stubSigilHandler(t *testing.T) *handlers.SigilHandler {
 	return handlers.NewSigilHandler(svc, nil)
 }
 
-// stubSigilKeyHandler собирает SigilKeyHandler через sigil.KeyService со stub-
-// pool/vault. Методы зависимостей при обходе дерева не вызываются — нужен лишь
-// non-nil service, чтобы sigil/keys-роуты зарегистрировались.
+// stubSigilKeyHandler builds a SigilKeyHandler via sigil.KeyService with a
+// stub pool/vault. The dependencies' methods aren't called while walking the
+// tree — it only needs a non-nil service so sigil/keys-routes register.
 func stubSigilKeyHandler(t *testing.T) *handlers.SigilKeyHandler {
 	t.Helper()
 	svc, err := sigil.NewKeyService(sigil.KeyServiceDeps{
@@ -332,9 +340,9 @@ type stubVaultWriter struct{}
 
 func (stubVaultWriter) WriteKV(context.Context, string, map[string]any) error { return nil }
 
-// stubServiceHandler собирает ServiceHandler через serviceregistry.Service со
-// stub-pool. Методы pool при обходе дерева не вызываются — нужен лишь non-nil
-// service, чтобы service.*-роуты зарегистрировались.
+// stubServiceHandler builds a ServiceHandler via serviceregistry.Service with
+// a stub pool. The pool's methods aren't called while walking the tree — it
+// only needs a non-nil service so service.*-routes register.
 func stubServiceHandler(t *testing.T) *handlers.ServiceHandler {
 	t.Helper()
 	svc, err := serviceregistry.NewService(serviceregistry.ServiceDeps{Pool: stubServicePool{}})
@@ -346,10 +354,10 @@ func stubServiceHandler(t *testing.T) *handlers.ServiceHandler {
 
 type stubServicePool struct{ serviceregistry.ServicePool }
 
-// stubProvisioningPolicyHandler собирает ProvisioningPolicyHandler через
-// serviceregistry.Service со stub-pool + stub-reader. Методы при обходе дерева не
-// вызываются — нужен лишь non-nil handler, чтобы provisioning-policy-роуты
-// зарегистрировались (drift роутер↔full-spec). ADR-058 Часть B.
+// stubProvisioningPolicyHandler builds a ProvisioningPolicyHandler via
+// serviceregistry.Service with a stub pool + stub reader. The methods aren't
+// called while walking the tree — it only needs a non-nil handler so
+// provisioning-policy-routes register (drift router↔full-spec). ADR-058 Part B.
 func stubProvisioningPolicyHandler(t *testing.T) *handlers.ProvisioningPolicyHandler {
 	t.Helper()
 	svc, err := serviceregistry.NewService(serviceregistry.ServiceDeps{Pool: stubServicePool{}})
@@ -363,9 +371,9 @@ type stubProvisioningReader struct{}
 
 func (stubProvisioningReader) ProvisioningPolicy() ([]string, bool) { return nil, false }
 
-// stubAugurHandler собирает AugurHandler через augur.Service со stub-pool.
-// Методы pool при обходе дерева не вызываются — нужен лишь non-nil service,
-// чтобы augur.*-роуты зарегистрировались.
+// stubAugurHandler builds an AugurHandler via augur.Service with a stub pool.
+// The pool's methods aren't called while walking the tree — it only needs a
+// non-nil service so augur.*-routes register.
 func stubAugurHandler(t *testing.T) *handlers.AugurHandler {
 	t.Helper()
 	svc, err := augur.NewService(augur.ServiceDeps{Pool: stubAugurPool{}})
@@ -377,10 +385,10 @@ func stubAugurHandler(t *testing.T) *handlers.AugurHandler {
 
 type stubAugurPool struct{ augur.ServicePool }
 
-// stubOracleHandler собирает OracleHandler через oracle.Service со stub-pool +
-// реальным WhereEvaluator (compile-проверка where-CEL; конструктор требует
-// non-nil Where). Методы pool при обходе дерева не вызываются — нужен лишь
-// non-nil service, чтобы vigil.*/decree.*-роуты зарегистрировались.
+// stubOracleHandler builds an OracleHandler via oracle.Service with a stub
+// pool + a real WhereEvaluator (compile-check for where-CEL; the constructor
+// requires non-nil Where). The pool's methods aren't called while walking the
+// tree — it only needs a non-nil service so vigil.*/decree.*-routes register.
 func stubOracleHandler(t *testing.T) *handlers.OracleHandler {
 	t.Helper()
 	where, err := oracle.NewWhereEvaluator()
@@ -419,7 +427,7 @@ type stubOperatorPool struct{ handlers.OperatorPool }
 type stubIssuer struct{}
 
 func (stubIssuer) Issue(string, []string, time.Duration, bool) (string, error) {
-	return "", fmt.Errorf("stub issuer: не должен вызываться в drift-тесте")
+	return "", fmt.Errorf("stub issuer: не toлжен вызываться в drift-тесте")
 }
 
 type stubRBACSource struct{}

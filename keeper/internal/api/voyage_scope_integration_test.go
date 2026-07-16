@@ -101,10 +101,10 @@ func TestIntegration_Voyage_CommandScope_TargetForeignCoven_422(t *testing.T) {
 	code, body := postCommandVoyage(t, base, tok,
 		`{"kind":"command","module":"core.cmd.shell","target":{"coven":["coven-b"]}}`)
 	if code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422 (чужой coven урезан в ноль); body=%s", code, body)
+		t.Fatalf("status = %d, want 422 (чужой coven урезан в butль); body=%s", code, body)
 	}
 	if !strings.Contains(body, "voyage_empty_target") {
-		t.Errorf("detail не содержит voyage_empty_target: %s", body)
+		t.Errorf("detail не withдержит voyage_empty_target: %s", body)
 	}
 }
 
@@ -173,7 +173,7 @@ func TestIntegration_Voyage_CommandScope_WideTargetTrimmed_202(t *testing.T) {
 	}
 	// scope_size = 2 (visible via coven-a), NOT 3 (the whole shared).
 	if scope := scopeSizeFromReply(t, body); scope != 2 {
-		t.Errorf("scope_size = %d, want 2 (урезано до видимых coven-a, не весь shared)", scope)
+		t.Errorf("scope_size = %d, want 2 (урезаbut to видимых coven-a, не весь shared)", scope)
 	}
 }
 

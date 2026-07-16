@@ -27,16 +27,16 @@ type providerCreateInput struct {
 // (huma default) → an unknown field → 400. Domain format validation is in
 // CreateTyped (422).
 type ProviderCreateRequest struct {
-	Name   string `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"имя Cloud-Provider-а (kebab)"`
-	Type   string `json:"type" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"имя CloudDriver-плагина (= plugins.cloud_drivers[].name)"`
+	Name   string `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Cloud Provider name (kebab)"`
+	Type   string `json:"type" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"имя CloudDriver-плагиon (= plugins.cloud_drivers[].name)"`
 	Region string `json:"region" required:"true" doc:"регион провайдера"`
 	// credentials_ref XOR credentials (dual-mode, ADR-064): exactly one. ref — a
 	// vault path (the value is NOT resolved); credentials — plaintext (keeper writes
 	// it to Vault itself). The service validates format/XOR (422); pattern dropped
 	// (conditional validation).
-	CredentialsRef string         `json:"credentials_ref,omitempty" doc:"vault-ref до credentials (vault:<path>); XOR с credentials. Значение НЕ резолвится"`
-	Credentials    map[string]any `json:"credentials,omitempty" doc:"опц. plaintext cloud-credentials (dual-mode, ADR-064): напр. {access_key, secret_key}; keeper пишет их в Vault сам; XOR с credentials_ref. Требует TLS-фронта (secret_ingest.accept_plaintext)"`
-	FQDNSuffix     *string        `json:"fqdn_suffix,omitempty" doc:"суффикс FQDN VM (self-onboard: keeper предсказывает FQDN=<name>-<index>.<fqdn_suffix>). Опущено → self-onboard недоступен"`
+	CredentialsRef string         `json:"credentials_ref,omitempty" doc:"vault-ref to credentials (vault:<path>); XOR с credentials. Зonчение NOT резолвится"`
+	Credentials    map[string]any `json:"credentials,omitempty" doc:"опц. plaintext cloud-credentials (dual-mode, ADR-064): onпр. {access_key, secret_key}; keeper writes их в Vault сам; XOR с credentials_ref. Требует TLS-фронта (secret_ingest.accept_plaintext)"`
+	FQDNSuffix     *string        `json:"fqdn_suffix,omitempty" doc:"суффикс FQDN VM (self-onboard: keeper предсказывает FQDN=<name>-<index>.<fqdn_suffix>). Опущеbut → self-onboard неtoступен"`
 }
 
 type providerCreateOutput struct {
@@ -50,7 +50,7 @@ func providerCreateOperation() huma.Operation {
 		Method:        http.MethodPost,
 		Path:          "/",
 		Summary:       "Создать Cloud-Provider",
-		Description:   "Заносит Cloud-Provider (реестр providers, ADR-017). Permission provider.create. 409 — name занят. credentials_ref хранится как vault-путь, секрет не резолвится.",
+		Description:   "Заbutсит Cloud-Provider (реестр providers, ADR-017). Permission provider.create. 409 — name занят. credentials_ref хранится as vault-путь, секрет не резолвится.",
 		Tags:          []string{"provider"},
 		DefaultStatus: http.StatusCreated,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -60,8 +60,8 @@ func providerCreateOperation() huma.Operation {
 // === GET /v1/providers (list) — READ with typed query (no audit) ===
 
 type providerListInput struct {
-	Offset int32 `query:"offset" default:"0" doc:"сдвиг от начала набора, ≥0 (out-of-range → 400)"`
-	Limit  int32 `query:"limit" default:"50" doc:"размер страницы 1..1000 (out-of-range → 400)"`
+	Offset int32 `query:"offset" default:"0" doc:"offset from start of set, ≥0 (out-of-range → 400)"`
+	Limit  int32 `query:"limit" default:"50" doc:"page size 1..1000 (out-of-range → 400)"`
 }
 
 type providerListOutput struct {
@@ -73,8 +73,8 @@ func providerListOperation() huma.Operation {
 		OperationID:   "listProviders",
 		Method:        http.MethodGet,
 		Path:          "/",
-		Summary:       "Список Cloud-Provider-ов (paged)",
-		Description:   "Реестр Cloud-Provider-ов с пагинацией (ADR-017). Permission provider.read. Read-only, без audit.",
+		Summary:       "Спиwithк Cloud-Provider-ов (paged)",
+		Description:   "Реестр Cloud-Provider-ов с пагиonцией (ADR-017). Permission provider.read. Read-only, no audit.",
 		Tags:          []string{"provider"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusInternalServerError},
@@ -84,7 +84,7 @@ func providerListOperation() huma.Operation {
 // === GET /v1/providers/{name} (get) — READ with path (no audit) ===
 
 type providerGetInput struct {
-	Name string `path:"name" pattern:"^[a-z0-9-]{1,63}$" doc:"имя Cloud-Provider-а"`
+	Name string `path:"name" pattern:"^[a-z0-9-]{1,63}$" doc:"Cloud Provider name"`
 }
 
 type providerGetOutput struct {
@@ -97,7 +97,7 @@ func providerGetOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/{name}",
 		Summary:       "Карточка Cloud-Provider-а",
-		Description:   "Метаданные одного Cloud-Provider-а по имени (ADR-017). Permission provider.read. Read-only, без audit. credentials_ref — путь, секрет не резолвится.",
+		Description:   "Метаданные одbutго Cloud-Provider-а по имени (ADR-017). Permission provider.read. Read-only, no audit. credentials_ref — путь, секрет не резолвится.",
 		Tags:          []string{"provider"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -107,7 +107,7 @@ func providerGetOperation() huma.Operation {
 // === DELETE /v1/providers/{name} (delete) — WRITE+AUDIT provider.deleted ===
 
 type providerDeleteInput struct {
-	Name string `path:"name" pattern:"^[a-z0-9-]{1,63}$" doc:"имя Cloud-Provider-а"`
+	Name string `path:"name" pattern:"^[a-z0-9-]{1,63}$" doc:"Cloud Provider name"`
 }
 
 // providerNoContentOutput — 204 No Content (no Body).

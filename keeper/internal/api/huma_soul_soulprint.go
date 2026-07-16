@@ -49,8 +49,8 @@ type SoulprintFacts struct {
 	Kernel   *SoulprintKernelFacts  `json:"kernel,omitempty"`
 	Memory   *SoulprintMemoryFacts  `json:"memory,omitempty" doc:"объёмы памяти в МБ"`
 	Network  *SoulprintNetworkFacts `json:"network,omitempty"`
-	Os       *SoulprintOsFacts      `json:"os,omitempty" doc:"факты об операционной системе (ADR-018)"`
-	SID      *string                `json:"sid,omitempty" doc:"echo SID для логов; authority — mTLS peer cert"`
+	Os       *SoulprintOsFacts      `json:"os,omitempty" doc:"факты об операционbutй системе (ADR-018)"`
+	SID      *string                `json:"sid,omitempty" doc:"echo SID for логов; authority — mTLS peer cert"`
 }
 
 // SoulprintCpuFacts — the CPU sub-fact under the CONTRACT name (hand-written spec :7009; the oapi
@@ -64,7 +64,7 @@ type SoulprintCpuFacts struct {
 // SoulprintKernelFacts — kernel facts.
 type SoulprintKernelFacts struct {
 	Release *string `json:"release,omitempty" doc:"только версия ядра (5.15.0)"`
-	Version *string `json:"version,omitempty" doc:"полная версия с dist-suffix (5.15.0-101-generic)"`
+	Version *string `json:"version,omitempty" doc:"полonя версия с dist-suffix (5.15.0-101-generic)"`
 }
 
 // SoulprintMemoryFacts — memory amounts in MB.
@@ -78,7 +78,7 @@ type SoulprintMemoryFacts struct {
 type SoulprintNetworkFacts struct {
 	Fqdn       *string                      `json:"fqdn,omitempty"`
 	Interfaces *[]SoulprintNetworkInterface `json:"interfaces,omitempty"`
-	PrimaryIP  *string                      `json:"primary_ip,omitempty" doc:"основной IPv4 (интерфейс с default-route)"`
+	PrimaryIP  *string                      `json:"primary_ip,omitempty" doc:"осbutвbutй IPv4 (интерфейс с default-route)"`
 }
 
 // SoulprintNetworkInterface — a single network interface.
@@ -108,8 +108,8 @@ type SoulprintOsFacts struct {
 // SoulprintFacts + the sub-schemas into components. The wire body is serialized by the handler type
 // (json.RawMessage byte-passthrough); this type is only the shape source for OpenAPI.
 type soulprintReadReply struct {
-	SID         string          `json:"sid" doc:"SID (FQDN) Soul-а"`
-	TypedFacts  *SoulprintFacts `json:"typed_facts" doc:"typed-факты Soulprint (ADR-018); byte-passthrough JSONB на wire, форма по proto SoulprintFacts"`
+	SID         string          `json:"sid" doc:"SID (FQDN) of Soul"`
+	TypedFacts  *SoulprintFacts `json:"typed_facts" doc:"typed-факты Soulprint (ADR-018); byte-passthrough JSONB on wire, form по proto SoulprintFacts"`
 	CollectedAt *time.Time      `json:"collected_at,omitempty" doc:"Soul-side timestamp момента сбора фактов"`
 	ReceivedAt  *time.Time      `json:"received_at,omitempty" doc:"Keeper-side timestamp приёма стрима"`
 }

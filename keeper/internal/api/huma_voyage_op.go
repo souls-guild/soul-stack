@@ -35,13 +35,13 @@ type voyageCreateInput struct {
 // hand-written spec (rollout N3). The domain VoyageCreateRequest does not reach the spec (the huma input is
 // this struct; the oapi type is not used as the huma body).
 type VoyageCreateRequest struct {
-	Kind         string         `json:"kind" required:"true" enum:"scenario,command" doc:"тип рецепта прогона"`
-	ScenarioName string         `json:"scenario_name,omitempty" doc:"имя сценария для kind=scenario"`
-	Module       string         `json:"module,omitempty" doc:"модуль для kind=command"`
+	Kind         string         `json:"kind" required:"true" enum:"scenario,command" doc:"тип рецепта прогоon"`
+	ScenarioName string         `json:"scenario_name,omitempty" doc:"имя сцеonрия for kind=scenario"`
+	Module       string         `json:"module,omitempty" doc:"модуль for kind=command"`
 	Input        map[string]any `json:"input,omitempty" doc:"параметры рецепта"`
 	Target       VoyageTarget   `json:"target" required:"true" doc:"декларативный таргет (резолвится в snapshot единиц)"`
 
-	Batch                *string    `json:"batch,omitempty" doc:"размер батча: N хостов или N%"`
+	Batch                *string    `json:"batch,omitempty" doc:"размер батча: N хостов or N%"`
 	BatchSize            *int       `json:"batch_size,omitempty" minimum:"1"`
 	BatchPercent         *int       `json:"batch_percent,omitempty" minimum:"1" maximum:"100"`
 	Concurrency          *int       `json:"concurrency,omitempty" minimum:"1" maximum:"500"`
@@ -51,12 +51,12 @@ type VoyageCreateRequest struct {
 	InterBatchIntervalMS *int       `json:"inter_batch_interval_ms,omitempty"`
 	InterUnitIntervalMS  *int       `json:"inter_unit_interval_ms,omitempty"`
 
-	MaxFailures   *string `json:"max_failures,omitempty" doc:"порог провалов: N абсолют или N%"`
+	MaxFailures   *string `json:"max_failures,omitempty" doc:"порог провалов: N абwithлют or N%"`
 	FailThreshold *int    `json:"fail_threshold,omitempty" minimum:"1"`
 	RequireAlive  *bool   `json:"require_alive,omitempty"`
 	OnFailure     string  `json:"on_failure,omitempty" doc:"abort | continue (default)"`
 
-	Notify []VoyageNotify `json:"notify,omitempty" doc:"разовые подписки на ЭТОТ прогон (ephemeral)"`
+	Notify []VoyageNotify `json:"notify,omitempty" doc:"разовые подписки on ЭТОТ прогон (ephemeral)"`
 }
 
 // Nested target/notify — the single api.VoyageTarget/api.VoyageNotify (huma_voyage_target.go),
@@ -113,7 +113,7 @@ func voyagePreviewOperation() huma.Operation {
 		Method:        http.MethodPost,
 		Path:          "/preview",
 		Summary:       "Dry-resolve scope Voyage",
-		Description:   "Предпоказ числа единиц/батчей БЕЗ создания Voyage (ADR-043 amendment §4). Та же валидация/резолв/RBAC, что Create. Без раскрытия SID-списка. Read-like — без audit.",
+		Description:   "Предпоказ числа единиц/батчей БЕЗ withздания Voyage (ADR-043 amendment §4). Та же validation/резолв/RBAC, which Create. Без раhiddenия SID-списка. Read-like — no audit.",
 		Tags:          []string{"voyage"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusTooManyRequests, http.StatusInternalServerError},
@@ -129,8 +129,8 @@ func voyagePreviewOperation() huma.Operation {
 type voyageListInput struct {
 	Kind     string   `query:"kind" enum:"scenario,command" doc:"фильтр по kind; вне enum → 422"`
 	Statuses []string `query:"status,explode" enum:"scheduled,pending,running,succeeded,failed,partial_failed,cancelled" doc:"multi-value ?status=X&status=Y OR; вне enum → 422"`
-	Offset   int32    `query:"offset" default:"0" doc:"сдвиг от начала набора, ≥0 (out-of-range → 400)"`
-	Limit    int32    `query:"limit" default:"50" doc:"размер страницы 1..1000 (out-of-range → 400)"`
+	Offset   int32    `query:"offset" default:"0" doc:"offset from start of set, ≥0 (out-of-range → 400)"`
+	Limit    int32    `query:"limit" default:"50" doc:"page size 1..1000 (out-of-range → 400)"`
 }
 
 // voyageListOutput — huma output GET /v1/voyages (FULL-TYPED). Body — the huma-native envelope
@@ -148,8 +148,8 @@ func voyageListOperation() huma.Operation {
 		OperationID:   "listVoyages",
 		Method:        http.MethodGet,
 		Path:          "/",
-		Summary:       "Список Voyage-прогонов (paged)",
-		Description:   "Список прогонов с фильтрами kind/status и пагинацией (ADR-043). target_resolved НЕ раскрывается (UI читает scope_size). Permission incarnation.history. Read-only, без audit.",
+		Summary:       "Спиwithк Voyage-прогоbutв (paged)",
+		Description:   "Спиwithк прогоbutв с фильтрами kind/status и пагиonцией (ADR-043). target_resolved NOT раскрывается (UI читает scope_size). Permission incarnation.history. Read-only, no audit.",
 		Tags:          []string{"voyage"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -160,7 +160,7 @@ func voyageListOperation() huma.Operation {
 
 // voyageGetInput — huma input GET /v1/voyages/{id}. ID — path (ULID validation is domain).
 type voyageGetInput struct {
-	ID string `path:"id" doc:"ULID Voyage-прогона"`
+	ID string `path:"id" doc:"ULID of Voyage run"`
 }
 
 // voyageGetOutput — huma output GET /v1/voyages/{id} (FULL-TYPED). Body — the huma-native
@@ -176,8 +176,8 @@ func voyageGetOperation() huma.Operation {
 		OperationID:   "getVoyage",
 		Method:        http.MethodGet,
 		Path:          "/{id}",
-		Summary:       "Snapshot Voyage-прогона",
-		Description:   "Detail + summary одного прогона (ADR-043). Permission incarnation.history. Read-only, без audit.",
+		Summary:       "Snapshot Voyage-прогоon",
+		Description:   "Detail + summary одbutго прогоon (ADR-043). Permission incarnation.history. Read-only, no audit.",
 		Tags:          []string{"voyage"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -188,7 +188,7 @@ func voyageGetOperation() huma.Operation {
 
 // voyageTargetsInput — huma input GET /v1/voyages/{id}/targets. ID — path.
 type voyageTargetsInput struct {
-	ID string `path:"id" doc:"ULID Voyage-прогона"`
+	ID string `path:"id" doc:"ULID of Voyage run"`
 }
 
 // voyageTargetsOutput — huma output GET /v1/voyages/{id}/targets (FULL-TYPED). Body —
@@ -205,8 +205,8 @@ func voyageTargetsOperation() huma.Operation {
 		OperationID:   "listVoyageTargets",
 		Method:        http.MethodGet,
 		Path:          "/{id}/targets",
-		Summary:       "All-runs drill Voyage-прогона",
-		Description:   "Per-target batch/status/back-link одного прогона (ADR-043). Permission incarnation.history. Read-only, без audit.",
+		Summary:       "All-runs drill Voyage-прогоon",
+		Description:   "Per-target batch/status/back-link одbutго прогоon (ADR-043). Permission incarnation.history. Read-only, no audit.",
 		Tags:          []string{"voyage"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -217,7 +217,7 @@ func voyageTargetsOperation() huma.Operation {
 
 // voyageCancelInput — huma input DELETE /v1/voyages/{id}. ID — path.
 type voyageCancelInput struct {
-	ID string `path:"id" doc:"ULID Voyage-прогона"`
+	ID string `path:"id" doc:"ULID of Voyage run"`
 }
 
 // voyageCancelOutput — huma output DELETE /v1/voyages/{id} (FULL-TYPED). Status=202; Body —

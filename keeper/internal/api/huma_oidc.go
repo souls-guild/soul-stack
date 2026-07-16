@@ -67,8 +67,8 @@ func oidcLoginOperation() huma.Operation {
 		OperationID:   "oidcLogin",
 		Method:        http.MethodGet,
 		Path:          "/oidc/login",
-		Summary:       "Старт OIDC-логина оператора",
-		Description:   "Федеративная аутентификация (ADR-058): генерирует state+nonce+PKCE и редиректит (302) на authorization_endpoint внешнего IdP.",
+		Summary:       "Старт OIDC-логиon оператора",
+		Description:   "Федеративonя аутентификация (ADR-058): генерирует state+nonce+PKCE и редиректит (302) on authorization_endpoint внешнits IdP.",
 		Tags:          []string{"auth"},
 		DefaultStatus: http.StatusFound,
 		// 429 — anti-bruteforce throttle (AuthLoginLimit middleware, HIGH-3:
@@ -82,8 +82,8 @@ func oidcLoginOperation() huma.Operation {
 // oidcCallbackInput — query from the IdP redirect: code + state (+ optional error).
 type oidcCallbackInput struct {
 	Code  string `query:"code" doc:"authorization code от IdP"`
-	State string `query:"state" doc:"opaque CSRF-state, выданный на /auth/oidc/login"`
-	Error string `query:"error" doc:"код ошибки от IdP (если аутентификация отклонена)"`
+	State string `query:"state" doc:"opaque CSRF-state, выданный on /auth/oidc/login"`
+	Error string `query:"error" doc:"код ошибки от IdP (если аутентификация отклонеon)"`
 }
 
 // oidcCallbackOutput — 302 to the UI + Set-Cookie with the internal JWT.
@@ -99,7 +99,7 @@ func oidcCallbackOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/oidc/callback",
 		Summary:       "OIDC-callback оператора",
-		Description:   "Валидирует id_token (JWKS-подпись/iss/aud/exp/nonce), маппит на operators(aid)+роли, выпускает внутренний JWT в HttpOnly+Secure cookie и редиректит (302) в UI. Ошибка валидации/маппинга → 401/403.",
+		Description:   "Валидирует id_token (JWKS-подпись/iss/aud/exp/nonce), маппит on operators(aid)+роли, выпускает внутренний JWT в HttpOnly+Secure cookie и редиректит (302) в UI. Ошибка валидации/маппинга → 401/403.",
 		Tags:          []string{"auth"},
 		DefaultStatus: http.StatusFound,
 		// 429 — anti-bruteforce throttle/lockout (AuthLoginLimit middleware, HIGH-3).

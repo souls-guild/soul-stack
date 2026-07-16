@@ -304,7 +304,7 @@ func TestHumaAudit_VigilCreate_NoAudit_OnRBACDeny(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на RBAC-deny vigil.create (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on RBAC-deny vigil.create (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -319,7 +319,7 @@ func TestHumaAudit_VigilCreate_NoAudit_OnValidationFail(t *testing.T) {
 		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на 422 vigil.create (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on 422 vigil.create (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -382,7 +382,7 @@ func TestHumaVigil_List_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут vigil.list записал audit (%d событий)", len(auditCap.Events()))
+		t.Errorf("READ-роут vigil.list записал audit (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -450,7 +450,7 @@ func TestHumaVigil_Delete_204(t *testing.T) {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 	if body := strings.TrimSpace(rec.Body.String()); body != "" {
-		t.Errorf("204-тело vigil.delete должно быть ПУСТЫМ, got %q", body)
+		t.Errorf("204-body vigil.delete toлжbut быть ПУСТЫМ, got %q", body)
 	}
 }
 
@@ -476,7 +476,7 @@ func TestHumaAudit_VigilDelete_NoAudit_OnNotFound(t *testing.T) {
 		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на 404 vigil.delete (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on 404 vigil.delete (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -598,7 +598,7 @@ func TestHumaDecree_List_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут decree.list записал audit (%d событий)", len(auditCap.Events()))
+		t.Errorf("READ-роут decree.list записал audit (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -626,7 +626,7 @@ func TestHumaDecree_Delete_204(t *testing.T) {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 	if body := strings.TrimSpace(rec.Body.String()); body != "" {
-		t.Errorf("204-тело decree.delete должно быть ПУСТЫМ, got %q", body)
+		t.Errorf("204-body decree.delete toлжbut быть ПУСТЫМ, got %q", body)
 	}
 }
 
@@ -652,7 +652,7 @@ func TestHumaAudit_DecreeDelete_NoAudit_OnBadName(t *testing.T) {
 		t.Fatalf("status = %d, want 422 (bad path-name); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на bad-name decree.delete (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on bad-name decree.delete (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -671,7 +671,7 @@ func TestHumaOracle_OpenAPIFragment_3_1(t *testing.T) {
 		"createDecree", "listDecrees", "getDecree", "deleteDecree", "on_beacon",
 	} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("OpenAPI-фрагмент не содержит %q:\n%s", want, frag)
+			t.Errorf("OpenAPI-фрагмент не withдержит %q:\n%s", want, frag)
 		}
 	}
 	if strings.Contains(frag, "octet-stream") {

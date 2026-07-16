@@ -125,7 +125,7 @@ func TestHumaModule_List_GoldenWire(t *testing.T) {
 		t.Fatal("core.archive отсутствует в каталоге")
 	}
 	out, _ := json.Marshal(archive)
-	const golden = `{"description":"Распаковка архива (tar/tar.gz/tar.bz2/zip) в каталог назначения.","errand_safe":false,"kind":"core","name":"core.archive","params":[{"description":"Каталог распаковки.","name":"dest","required":true,"type":"string"},{"description":"Формат (tar|tar.gz|tar.bz2|zip); опущено — auto-detect по расширению.","name":"format","required":false,"type":"string"},{"description":"Лимит числа записей в архиве; по умолчанию 100000. Защита от zip-bomb.","name":"max_entries","required":false,"type":"integer"},{"description":"Лимит отношения распакованных байт к сжатым (compression ratio); по умолчанию 100, 0 — отключено. Защита от zip-bomb с маленьким сжатым размером.","name":"max_ratio","required":false,"type":"integer"},{"description":"Лимит суммарного распакованного размера (число байт или N[KiB|MiB|GiB]); по умолчанию 1GiB. Защита от zip-bomb.","name":"max_size","required":false,"type":"string"},{"description":"Путь к архиву-источнику.","name":"path","required":true,"type":"string"}],"states":["extracted"]}`
+	const golden = `{"description":"Распаковка архива (tar/tar.gz/tar.bz2/zip) в каталог onзonчения.","errand_safe":false,"kind":"core","name":"core.archive","params":[{"description":"Каталог распаковки.","name":"dest","required":true,"type":"string"},{"description":"Формат (tar|tar.gz|tar.bz2|zip); опущеbut — auto-detect по расширению.","name":"format","required":false,"type":"string"},{"description":"Лимит числа записей в архиве; по умолчанию 100000. Защита от zip-bomb.","name":"max_entries","required":false,"type":"integer"},{"description":"Лимит отbutшения распакованных байт к сжатым (compression ratio); по умолчанию 100, 0 — отключеbut. Защита от zip-bomb с маленьким сжатым размером.","name":"max_ratio","required":false,"type":"integer"},{"description":"Лимит суммарbutго распакованbutго размера (число байт or N[KiB|MiB|GiB]); по умолчанию 1GiB. Защита от zip-bomb.","name":"max_size","required":false,"type":"string"},{"description":"Путь к архиву-источнику.","name":"path","required":true,"type":"string"}],"states":["extracted"]}`
 	if string(out) != golden {
 		t.Errorf("GOLDEN wire-дрейф module.list[core.archive]:\n got  = %s\n want = %s", string(out), golden)
 	}
@@ -285,7 +285,7 @@ func TestHumaModule_ReadNoAudit(t *testing.T) {
 		}
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("module READ-домен записал audit (%d событий) — read не должен", len(auditCap.Events()))
+		t.Errorf("module READ-toмен записал audit (%d withбытий) — read не toлжен", len(auditCap.Events()))
 	}
 }
 
@@ -299,7 +299,7 @@ func TestHumaModule_SpecYAML(t *testing.T) {
 	// the spec dump on a bare router emits "/", "/{name}", "/{name}/form-prep".
 	for _, want := range []string{"listModules", "getModule", "moduleFormPrep", "/{name}/form-prep"} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("спека не содержит %q:\n%s", want, frag)
+			t.Errorf("спека не withдержит %q:\n%s", want, frag)
 		}
 	}
 }

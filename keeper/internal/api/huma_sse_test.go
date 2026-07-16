@@ -310,7 +310,7 @@ func readFirstSSEFrame(t *testing.T, r io.Reader) (event, data string) {
 	case f := <-ch:
 		return f.event, f.data
 	case <-time.After(3 * time.Second):
-		t.Fatal("таймаут чтения SSE-frame")
+		t.Fatal("таймаут reading SSE-frame")
 		return "", ""
 	}
 }

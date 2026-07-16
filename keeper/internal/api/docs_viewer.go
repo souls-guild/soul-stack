@@ -93,19 +93,19 @@ const docsPage = `<!DOCTYPE html>
     <button id="load" type="button">Load</button>
     <div id="err"></div>
   </div>
-  <!-- show-header=false прячет встроенную шапку RapiDoc с полем spec-url (грузим
-       спеку сами, инлайн). allow-advanced-search — это и есть full-text поиск.
-       allow-spec-url-load/allow-spec-file-load=false — оператор не должен
-       подгружать чужие спеки в наш вьювер. -->
+  <!-- show-header=false hides RapiDoc's built-in header with spec-url field (we load
+       the spec ourselves, inline). allow-advanced-search enables full-text search.
+       allow-spec-url-load/allow-spec-file-load=false prevents the operator from
+       loading external specs into our viewer. -->
   <rapi-doc id="viewer" show-header="false" theme="light" render-style="read"
             allow-search="true" allow-advanced-search="true" allow-try="true"
             allow-authentication="true" allow-spec-url-load="false"
             allow-spec-file-load="false" style="display:none;height:100vh"></rapi-doc>
 
-  <!-- Бандл подключаем В КОНЦЕ body (не в <head>): ~840КБ web-component не
-       блокирует отрисовку gate, поле JWT видно сразу. defer для скрипта в конце
-       body избыточен (исполнение и так после парса DOM) — оставлен явным
-       маркером неблокирующей загрузки. -->
+  <!-- Bundle is loaded at the END of body (not in <head>): ~840KB web-component
+       does not block gate rendering, JWT field is visible immediately. defer is
+       redundant for a script at the end of body (execution is after DOM parse),
+       kept as explicit non-blocking marker. -->
   <script defer src="/docs/assets/rapidoc-min.js"></script>
 
   <script>
@@ -128,19 +128,19 @@ const docsPage = `<!DOCTYPE html>
             return resp.json();
           })
           .then(function (specObj) {
-            // XSS-гигиена: токен только на время вкладки (per-tab), не персистентно.
+            // XSS hygiene: token stored per-tab only (sessionStorage), not persistent.
             sessionStorage.setItem('soulstack_jwt', jwt);
-            // RapiDoc.loadSpec ждёт ОБЪЕКТ (строку он трактует как spec-URL и
-            // фетчит её БЕЗ нашего Bearer → 401), поэтому подаём уже разобранный
-            // JSON. Ждём регистрацию <rapi-doc> бандлом (whenDefined) — иначе
-            // вызов сядет на ещё-неапгрейженный элемент. setApiKey несёт тот же
-            // JWT в "Try It"; передаём ЧИСТЫЙ jwt — RapiDoc сам добавит префикс
-            // 'Bearer ' для http/bearer-схемы bearerAuth.
+            // RapiDoc.loadSpec expects an OBJECT (treats a string as spec-URL and
+            // fetches it WITHOUT our Bearer → 401). We provide parsed JSON instead.
+            // Wait for <rapi-doc> registration by bundle (whenDefined), else the call
+            // will hit an unupgraded element. setApiKey carries the same JWT into
+            // "Try It"; pass raw jwt — RapiDoc adds 'Bearer ' prefix itself for
+            // http/bearer auth scheme.
             customElements.whenDefined('rapi-doc').then(function () {
               viewer.loadSpec(specObj);
               try {
                 viewer.setApiKey('bearerAuth', jwt);
-              } catch (e) { /* схема не найдена — Try It без префилла, рендер не страдает */ }
+              } catch (e) { /* schema not found — Try It without prefill, rendering unaffected */ }
               gate.style.display = 'none';
               viewer.style.display = 'block';
             });
@@ -162,7 +162,7 @@ const docsPage = `<!DOCTYPE html>
         }
       });
 
-      // Авто-восстановление из sessionStorage (тот же таб после reload).
+      // Auto-restore from sessionStorage (same tab after reload).
       var saved = sessionStorage.getItem('soulstack_jwt');
       if (saved) { input.value = saved; load(saved); }
     })();

@@ -357,7 +357,7 @@ func TestHumaAudit_ServiceRegister_NoAudit_OnRBACDeny(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на RBAC-deny service.register (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on RBAC-deny service.register (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -410,7 +410,7 @@ func TestHumaService_List_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут service.list записал audit (%d событий)", len(auditCap.Events()))
+		t.Errorf("READ-роут service.list записал audit (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -505,7 +505,7 @@ func TestHumaAudit_ServiceUpdate_NoAudit_OnMissingRef(t *testing.T) {
 		t.Fatalf("status = %d, want 422 (missing required ref); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на 422 service.update (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on 422 service.update (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -520,7 +520,7 @@ func TestHumaService_Deregister_204(t *testing.T) {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 	if body := strings.TrimSpace(rec.Body.String()); body != "" {
-		t.Errorf("204-тело service.deregister должно быть ПУСТЫМ, got %q", body)
+		t.Errorf("204-body service.deregister toлжbut быть ПУСТЫМ, got %q", body)
 	}
 }
 
@@ -546,7 +546,7 @@ func TestHumaAudit_ServiceDeregister_NoAudit_OnNotFound(t *testing.T) {
 		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на 404 service.deregister (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on 404 service.deregister (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -673,7 +673,7 @@ func TestHumaService_Scenarios_RefOverride_ReachesLister(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if gotRef != "v2.0.0" {
-		t.Errorf("override-ref НЕ доехал до lister: gotRef=%q, want \"v2.0.0\" (huma не забиндил ?ref= или override не применился)", gotRef)
+		t.Errorf("override-ref NOT toехал to lister: gotRef=%q, want \"v2.0.0\" (huma не забиндил ?ref= or override не применился)", gotRef)
 	}
 	var got struct {
 		Ref string `json:"ref"`
@@ -682,7 +682,7 @@ func TestHumaService_Scenarios_RefOverride_ReachesLister(t *testing.T) {
 		t.Fatalf("reply не JSON: %v; body=%s", err, rec.Body.String())
 	}
 	if got.Ref != "v2.0.0" {
-		t.Errorf("reply.Ref=%q, want \"v2.0.0\" (override должен отражаться в ответе, не дефолт реестра)", got.Ref)
+		t.Errorf("reply.Ref=%q, want \"v2.0.0\" (override toлжен отражаться в ответе, не дефолт реестра)", got.Ref)
 	}
 }
 
@@ -698,7 +698,7 @@ func TestHumaService_StateSchema_RefOverride_ReachesLister(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if gotRef != "v2.0.0" {
-		t.Errorf("override-ref НЕ доехал до lister: gotRef=%q, want \"v2.0.0\"", gotRef)
+		t.Errorf("override-ref NOT toехал to lister: gotRef=%q, want \"v2.0.0\"", gotRef)
 	}
 	var got struct {
 		Ref string `json:"ref"`
@@ -723,7 +723,7 @@ func TestHumaService_Dependencies_RefOverride_ReachesLister(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if gotRef != "v2.0.0" {
-		t.Errorf("override-ref НЕ доехал до lister: gotRef=%q, want \"v2.0.0\"", gotRef)
+		t.Errorf("override-ref NOT toехал to lister: gotRef=%q, want \"v2.0.0\"", gotRef)
 	}
 	var got struct {
 		Ref string `json:"ref"`
@@ -750,7 +750,7 @@ func TestHumaService_Scenarios_NoRef_UsesRegistryDefault(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if gotRef != "v1.0.0" {
-		t.Errorf("без ?ref= lister должен получить дефолт реестра: gotRef=%q, want \"v1.0.0\"", gotRef)
+		t.Errorf("без ?ref= lister toлжен получить дефолт реестра: gotRef=%q, want \"v1.0.0\"", gotRef)
 	}
 }
 
@@ -768,7 +768,7 @@ func TestHumaService_Scenarios_LoaderError_502(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/services/web/scenarios", nil)
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("status = %d, want 502 (loader git-источник недоступен); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 502 (loader git-источник неtoступен); body=%s", rec.Code, rec.Body.String())
 	}
 	assertHumaProblem(t, rec, problem.TypeBadGateway)
 }
@@ -780,7 +780,7 @@ func TestHumaService_Dependencies_LoaderError_502(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/services/web/dependencies", nil)
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("status = %d, want 502 (loader git-источник недоступен); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 502 (loader git-источник неtoступен); body=%s", rec.Code, rec.Body.String())
 	}
 	assertHumaProblem(t, rec, problem.TypeBadGateway)
 }
@@ -797,7 +797,7 @@ func TestHumaService_SubRead_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут service.refs записал audit (%d событий)", len(auditCap.Events()))
+		t.Errorf("READ-роут service.refs записал audit (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -816,7 +816,7 @@ func TestHumaService_OpenAPIFragment_3_1(t *testing.T) {
 		"listServiceRefs", "listServiceScenarios", "listServiceStateSchema", "listServiceDependencies",
 	} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("OpenAPI-фрагмент не содержит %q:\n%s", want, frag)
+			t.Errorf("OpenAPI-фрагмент не withдержит %q:\n%s", want, frag)
 		}
 	}
 	if strings.Contains(frag, "octet-stream") {

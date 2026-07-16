@@ -24,9 +24,9 @@ type profileCreateInput struct {
 // — the name of an existing Provider (FK, 422 on missing); params — opaque VM-spec
 // (optional, nil → {}); cloud_init — optional userdata.
 type ProfileCreateRequest struct {
-	Name      string         `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"имя Cloud-Profile-а (kebab)"`
-	Provider  string         `json:"provider" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"имя существующего Cloud-Provider-а"`
-	Params    map[string]any `json:"params,omitempty" doc:"opaque VM-spec (валидируется против CloudDriver.Schema на scenario-слое)"`
+	Name      string         `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Cloud Profile name (kebab)"`
+	Provider  string         `json:"provider" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"имя существующits Cloud-Provider-а"`
+	Params    map[string]any `json:"params,omitempty" doc:"opaque VM-spec (валидируется против CloudDriver.Schema on scenario-слое)"`
 	CloudInit *string        `json:"cloud_init,omitempty" doc:"сырая cloud-init userdata (опц.)"`
 }
 
@@ -41,7 +41,7 @@ func profileCreateOperation() huma.Operation {
 		Method:        http.MethodPost,
 		Path:          "/",
 		Summary:       "Создать Cloud-Profile",
-		Description:   "Заносит Cloud-Profile (VM-spec поверх Provider-а, реестр profiles, ADR-017). Permission profile.create. 409 — name занят; 422 — provider не существует.",
+		Description:   "Заbutсит Cloud-Profile (VM-spec on top of Provider-а, реестр profiles, ADR-017). Permission profile.create. 409 — name занят; 422 — provider не существует.",
 		Tags:          []string{"profile"},
 		DefaultStatus: http.StatusCreated,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -52,8 +52,8 @@ func profileCreateOperation() huma.Operation {
 
 type profileListInput struct {
 	Provider string `query:"provider" doc:"фильтр по имени Provider-а (опц.)"`
-	Offset   int32  `query:"offset" default:"0" doc:"сдвиг от начала набора, ≥0 (out-of-range → 400)"`
-	Limit    int32  `query:"limit" default:"50" doc:"размер страницы 1..1000 (out-of-range → 400)"`
+	Offset   int32  `query:"offset" default:"0" doc:"offset from start of set, ≥0 (out-of-range → 400)"`
+	Limit    int32  `query:"limit" default:"50" doc:"page size 1..1000 (out-of-range → 400)"`
 }
 
 type profileListOutput struct {
@@ -65,8 +65,8 @@ func profileListOperation() huma.Operation {
 		OperationID:   "listProfiles",
 		Method:        http.MethodGet,
 		Path:          "/",
-		Summary:       "Список Cloud-Profile-ей (paged)",
-		Description:   "Реестр Cloud-Profile-ей с пагинацией и фильтром provider (ADR-017). Permission profile.read. Read-only, без audit.",
+		Summary:       "Спиwithк Cloud-Profile-ей (paged)",
+		Description:   "Реестр Cloud-Profile-ей с пагиonцией и фильтром provider (ADR-017). Permission profile.read. Read-only, no audit.",
 		Tags:          []string{"profile"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusInternalServerError},
@@ -76,7 +76,7 @@ func profileListOperation() huma.Operation {
 // === GET /v1/profiles/{name} (get) — READ with path (no audit) ===
 
 type profileGetInput struct {
-	Name string `path:"name" pattern:"^[a-z0-9-]{1,63}$" doc:"имя Cloud-Profile-а"`
+	Name string `path:"name" pattern:"^[a-z0-9-]{1,63}$" doc:"Cloud Profile name"`
 }
 
 type profileGetOutput struct {
@@ -89,7 +89,7 @@ func profileGetOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/{name}",
 		Summary:       "Карточка Cloud-Profile-а",
-		Description:   "Метаданные одного Cloud-Profile-а по имени (ADR-017). Permission profile.read. Read-only, без audit.",
+		Description:   "Метаданные одbutго Cloud-Profile-а по имени (ADR-017). Permission profile.read. Read-only, no audit.",
 		Tags:          []string{"profile"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -99,7 +99,7 @@ func profileGetOperation() huma.Operation {
 // === DELETE /v1/profiles/{name} (delete) — WRITE+AUDIT profile.deleted ===
 
 type profileDeleteInput struct {
-	Name string `path:"name" pattern:"^[a-z0-9-]{1,63}$" doc:"имя Cloud-Profile-а"`
+	Name string `path:"name" pattern:"^[a-z0-9-]{1,63}$" doc:"Cloud Profile name"`
 }
 
 // profileNoContentOutput — 204 No Content (no Body).
@@ -113,7 +113,7 @@ func profileDeleteOperation() huma.Operation {
 		Method:        http.MethodDelete,
 		Path:          "/{name}",
 		Summary:       "Удалить Cloud-Profile",
-		Description:   "Удаляет запись Cloud-Profile-а (ADR-017). Permission profile.delete. 404 — записи нет.",
+		Description:   "Удаляет запись Cloud-Profile-а (ADR-017). Permission profile.delete. 404 — записи absent.",
 		Tags:          []string{"profile"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},

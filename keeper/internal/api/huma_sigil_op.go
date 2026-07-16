@@ -27,9 +27,9 @@ type sigilAllowInput struct {
 // missing→422; additionalProperties:false → unknown→400. The struct name = the contract
 // schema name (huma DefaultSchemaNamer; hand-written spec PluginSigilAllowRequest, N4).
 type PluginSigilAllowRequest struct {
-	Namespace string `json:"namespace" required:"true" pattern:"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" doc:"namespace плагина (тип — cloud/ssh/mod)"`
-	Name      string `json:"name" required:"true" pattern:"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" doc:"имя плагина (как в manifest.name)"`
-	Ref       string `json:"ref" required:"true" pattern:"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" doc:"git-tag-ref допуска (стабильная метка, без слешей)"`
+	Namespace string `json:"namespace" required:"true" pattern:"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" doc:"namespace плагиon (тип — cloud/ssh/mod)"`
+	Name      string `json:"name" required:"true" pattern:"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" doc:"имя плагиon (as в manifest.name)"`
+	Ref       string `json:"ref" required:"true" pattern:"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" doc:"git-tag-ref toпуска (стабильonя метка, без слешей)"`
 }
 
 // sigilAllowOutput — huma output for POST /v1/plugins/sigils (FULL-TYPED). Status=201;
@@ -50,7 +50,7 @@ func sigilAllowOperation() huma.Operation {
 		Method:        http.MethodPost,
 		Path:          "/",
 		Summary:       "Допустить плагин (Sigil)",
-		Description:   "Заносит (namespace,name,ref) в allow-list целостности плагинов с подписью SHA-256 (ADR-026 S4a). Permission plugin.allow. 404 — плагина нет в кеше host-а. 409 — допуск уже активен.",
+		Description:   "Заbutсит (namespace,name,ref) в allow-list целостbutсти плагиbutв с подписью SHA-256 (ADR-026 S4a). Permission plugin.allow. 404 — плагиon нет в кеше host-а. 409 — toпуск already активен.",
 		Tags:          []string{"plugin"},
 		DefaultStatus: http.StatusCreated,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -78,8 +78,8 @@ func sigilListOperation() huma.Operation {
 		OperationID:   "listPluginSigils",
 		Method:        http.MethodGet,
 		Path:          "/",
-		Summary:       "Список активных Sigil-ов",
-		Description:   "Лента активных допусков плагинов (без signature/manifest, ADR-026 S4a). Permission plugin.list. Read-only, без audit.",
+		Summary:       "Спиwithк активных Sigil-ов",
+		Description:   "Лента активных toпусков плагиbutв (без signature/manifest, ADR-026 S4a). Permission plugin.list. Read-only, no audit.",
 		Tags:          []string{"plugin"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusInternalServerError},
@@ -92,9 +92,9 @@ func sigilListOperation() huma.Operation {
 // Three path segments (huma extracts them by `path:"…"`). Segment format
 // (reSigilSegment, a slash in ref → 422) is domain validation in RevokeTyped. No Body.
 type sigilRevokeInput struct {
-	Namespace string `path:"namespace" pattern:"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" doc:"namespace плагина"`
-	Name      string `path:"name" pattern:"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" doc:"имя плагина"`
-	Ref       string `path:"ref" pattern:"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" doc:"git-tag-ref допуска"`
+	Namespace string `path:"namespace" pattern:"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" doc:"namespace плагиon"`
+	Name      string `path:"name" pattern:"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" doc:"имя плагиon"`
+	Ref       string `path:"ref" pattern:"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" doc:"git-tag-ref toпуска"`
 }
 
 // sigilNoContentOutput — huma output of the 204 write route revoke. No Body (the legacy
@@ -112,7 +112,7 @@ func sigilRevokeOperation() huma.Operation {
 		Method:        http.MethodDelete,
 		Path:          "/{namespace}/{name}/{ref}",
 		Summary:       "Отозвать Sigil",
-		Description:   "Снимает активный допуск (namespace,name,ref) из allow-list (ADR-026 S4a). Permission plugin.revoke. 404 — активной записи нет.",
+		Description:   "Снимает активный toпуск (namespace,name,ref) from allow-list (ADR-026 S4a). Permission plugin.revoke. 404 — активbutй записи absent.",
 		Tags:          []string{"plugin"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},

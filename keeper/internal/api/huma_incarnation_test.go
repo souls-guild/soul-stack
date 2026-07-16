@@ -283,7 +283,7 @@ func TestHumaIncarnation_Create_RBACDeny_403_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на 403 — RBAC-deny не должен доходить до handler-а")
+		t.Errorf("audit записан on 403 — RBAC-deny не toлжен toходить to handler-а")
 	}
 }
 
@@ -302,7 +302,7 @@ func TestHumaIncarnation_RevealSecret_RBACDeny_403(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на 403 reveal — RBAC-deny не должен доходить до handler-а")
+		t.Errorf("audit записан on 403 reveal — RBAC-deny не toлжен toходить to handler-а")
 	}
 }
 
@@ -418,13 +418,13 @@ func TestHumaIncarnation_Create_PreflightAssertFail_422(t *testing.T) {
 		t.Errorf("body не несёт problem-type assert-failed: %s", rec.Body.String())
 	}
 	if inserted {
-		t.Error("ИНВАРИАНТ НАРУШЕН: incarnation создана (insertRow вызван) на assert-fail — должно быть НЕ создано")
+		t.Error("ИНВАРИАНТ НАРУШЕН: incarnation withздаon (insertRow вызван) on assert-fail — toлжbut быть NOT withздаbut")
 	}
 	if started {
-		t.Error("ИНВАРИАНТ НАРУШЕН: scenario create запущен на assert-fail — Start не должен вызываться")
+		t.Error("ИНВАРИАНТ НАРУШЕН: scenario create запущен on assert-fail — Start не toлжен вызываться")
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на 422 assert-fail — middleware не пишет на 4xx")
+		t.Errorf("audit записан on 422 assert-fail — middleware не writes on 4xx")
 	}
 }
 
@@ -500,13 +500,13 @@ func TestHumaIncarnation_Create_ValidateRuleFail_422(t *testing.T) {
 		t.Errorf("body не несёт message правила: %s", rec.Body.String())
 	}
 	if inserted {
-		t.Error("ИНВАРИАНТ НАРУШЕН: incarnation создана на validate-fail — должно быть НЕ создано")
+		t.Error("ИНВАРИАНТ НАРУШЕН: incarnation withздаon on validate-fail — toлжbut быть NOT withздаbut")
 	}
 	if started {
-		t.Error("ИНВАРИАНТ НАРУШЕН: scenario create запущен на validate-fail — Start не должен вызываться")
+		t.Error("ИНВАРИАНТ НАРУШЕН: scenario create запущен on validate-fail — Start не toлжен вызываться")
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на 422 validate-fail — middleware не пишет на 4xx")
+		t.Errorf("audit записан on 422 validate-fail — middleware не writes on 4xx")
 	}
 }
 
@@ -533,10 +533,10 @@ func TestHumaIncarnation_Create_ValidateRulePass_202(t *testing.T) {
 		t.Fatalf("status = %d, want 202 (validate passes); body=%s", rec.Code, rec.Body.String())
 	}
 	if !inserted {
-		t.Error("incarnation не создана на validate-pass — happy-path сломан")
+		t.Error("incarnation не withздаon on validate-pass — happy-path сломан")
 	}
 	if !started {
-		t.Error("Start не запущен на validate-pass — happy-path сломан")
+		t.Error("Start не запущен on validate-pass — happy-path сломан")
 	}
 }
 
@@ -561,7 +561,7 @@ func TestHumaIncarnation_Create_PreflightAssertPass_202(t *testing.T) {
 		t.Fatalf("status = %d, want 202; body=%s", rec.Code, rec.Body.String())
 	}
 	if !started {
-		t.Error("Start не запущен на assert-pass — happy-path сломан")
+		t.Error("Start не запущен on assert-pass — happy-path сломан")
 	}
 	assertMiddlewareAudit(t, auditCap, audit.EventIncarnationCreated, "name")
 }
@@ -621,7 +621,7 @@ func TestHumaIncarnation_Unlock_NotFound_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на 404 unlock — write-путь не должен писать (middleware skip на 4xx)")
+		t.Errorf("audit записан on 404 unlock — write-путь не toлжен писать (middleware skip on 4xx)")
 	}
 }
 
@@ -642,7 +642,7 @@ func TestHumaIncarnation_Upgrade_MiddlewareAuditClass(t *testing.T) {
 		t.Fatalf("status = %d, want 500 (loader nil); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на 500 upgrade — middleware не должен писать на 5xx")
+		t.Errorf("audit записан on 500 upgrade — middleware не toлжен писать on 5xx")
 	}
 }
 
@@ -729,7 +729,7 @@ func TestHumaIncarnation_RerunLast_NotErrorLocked_409_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на 409 rerun — self-audit пишется только на успехе")
+		t.Errorf("audit записан on 409 rerun — self-audit writesся только on успехе")
 	}
 }
 
@@ -798,7 +798,7 @@ func TestHumaIncarnation_Destroy_ForceWireAndSelfAudit(t *testing.T) {
 	// destroy_started + destroy_completed are written by the service layer INSIDE
 	// Destroy/DeleteAfterTeardown (SELF-AUDIT) — at least destroy_started must be there.
 	if !hasAuditEvent(auditCap, audit.EventIncarnationDestroyStarted) {
-		t.Errorf("incarnation.destroy_started НЕ записан (SELF-AUDIT сломан); events=%v", auditEventTypes(auditCap))
+		t.Errorf("incarnation.destroy_started NOT записан (SELF-AUDIT сломан); events=%v", auditEventTypes(auditCap))
 	}
 }
 
@@ -853,7 +853,7 @@ func TestHumaIncarnation_List_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("read GET /v1/incarnations записал audit (%d) — read не пишет", len(auditCap.Events()))
+		t.Errorf("read GET /v1/incarnations записал audit (%d) — read не writes", len(auditCap.Events()))
 	}
 }
 
@@ -887,7 +887,7 @@ func TestHumaIncarnation_Get_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("read GET /{name} записал audit — read не пишет")
+		t.Errorf("read GET /{name} записал audit — read не writes")
 	}
 }
 
@@ -918,7 +918,7 @@ func TestHumaIncarnation_Get_BareIncarnation_OmitsCreatedScenario(t *testing.T) 
 		t.Errorf("name = %v, want redis-bare", body["name"])
 	}
 	if v, ok := body["created_scenario"]; ok {
-		t.Errorf("bare-инкарнация: created_scenario присутствует в wire (=%v), want опущено (omitempty)", v)
+		t.Errorf("bare-инкарonция: created_scenario присутствует в wire (=%v), want опущеbut (omitempty)", v)
 	}
 }
 
@@ -932,7 +932,7 @@ func TestHumaIncarnation_History_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("read GET /{name}/history записал audit — read не пишет")
+		t.Errorf("read GET /{name}/history записал audit — read не writes")
 	}
 }
 
@@ -959,7 +959,7 @@ func TestHumaIncarnation_SpecYAML(t *testing.T) {
 		"rerunLastIncarnation", "checkIncarnationDrift", "destroyIncarnation", "updateIncarnationHosts",
 	} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("спека не содержит op %q", want)
+			t.Errorf("спека не withдержит op %q", want)
 		}
 	}
 }
@@ -974,7 +974,7 @@ func assertMiddlewareAudit(t *testing.T, cap *auditCaptureWriter, want audit.Eve
 	t.Helper()
 	evs := cap.Events()
 	if len(evs) != 1 {
-		t.Fatalf("middleware-audit: %d событий, want 1 (event=%s)", len(evs), want)
+		t.Fatalf("middleware-audit: %d withбытий, want 1 (event=%s)", len(evs), want)
 	}
 	ev := evs[0]
 	if ev.EventType != want {
@@ -987,10 +987,10 @@ func assertMiddlewareAudit(t *testing.T, cap *auditCaptureWriter, want audit.Eve
 		t.Errorf("archon = %q, want archon-alice", ev.ArchonAID)
 	}
 	if len(ev.Payload) == 0 {
-		t.Fatalf("payload пуст — SetHumaAuditPayload не сработал (рецидив S6)")
+		t.Fatalf("payload empty — SetHumaAuditPayload не сработал (рецидив S6)")
 	}
 	if _, ok := ev.Payload[requiredKey]; !ok {
-		t.Errorf("payload не содержит ключ %q: %v", requiredKey, ev.Payload)
+		t.Errorf("payload не withдержит ключ %q: %v", requiredKey, ev.Payload)
 	}
 }
 

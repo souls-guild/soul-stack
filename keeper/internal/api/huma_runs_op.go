@@ -22,16 +22,16 @@ import (
 // done by AllRunsTyped: invalid status/incarnation → 422); offset/limit are int32 with a
 // default (out-of-range/limit>100 → 400).
 type runsListInput struct {
-	Status        string `query:"status" doc:"фильтр по агрегатному статусу прогона (applying/success/failed/cancelled); невалидный → 422"`
-	Incarnation   string `query:"incarnation" doc:"фильтр по имени инкарнации; невалидное имя → 422"`
-	Service       string `query:"service" doc:"фильтр по сервису инкарнации-владельца (точное совпадение); длиннее 128 символов → 422"`
+	Status        string `query:"status" doc:"фильтр по агрегатbutму статусу прогоon (applying/success/failed/cancelled); невалидный → 422"`
+	Incarnation   string `query:"incarnation" doc:"фильтр по имени инкарonции; невалидbutе имя → 422"`
+	Service       string `query:"service" doc:"фильтр по сервису инкарonции-владельца (точbutе withвпадение); длиннее 128 символов → 422"`
 	Q             string `query:"q" doc:"свободный поиск (substring, регистронезависимо) по incarnation/scenario/service/started_by; длиннее 128 символов → 422"`
-	StartedAfter  string `query:"started_after" doc:"фильтр: время старта прогона ≥ (RFC3339, inclusive); невалидное → 422"`
-	StartedBefore string `query:"started_before" doc:"фильтр: время старта прогона ≤ (RFC3339, inclusive); невалидное → 422"`
-	Sort          string `query:"sort" doc:"поле сортировки (started_at/finished_at/status/incarnation/service/scenario; дефолт started_at); невалидное → 422"`
-	SortDir       string `query:"sort_dir" doc:"направление сортировки (asc/desc; дефолт desc); невалидное → 422"`
-	Offset        int32  `query:"offset" default:"0" doc:"сдвиг от начала набора, ≥0 (out-of-range → 400)"`
-	Limit         int32  `query:"limit" default:"50" doc:"размер страницы 1..100 (out-of-range → 400)"`
+	StartedAfter  string `query:"started_after" doc:"фильтр: время старта прогоon ≥ (RFC3339, inclusive); невалидbutе → 422"`
+	StartedBefore string `query:"started_before" doc:"фильтр: время старта прогоon ≤ (RFC3339, inclusive); невалидbutе → 422"`
+	Sort          string `query:"sort" doc:"field withртировки (started_at/finished_at/status/incarnation/service/scenario; дефолт started_at); невалидbutе → 422"`
+	SortDir       string `query:"sort_dir" doc:"onправление withртировки (asc/desc; дефолт desc); невалидbutе → 422"`
+	Offset        int32  `query:"offset" default:"0" doc:"offset from start of set, ≥0 (out-of-range → 400)"`
+	Limit         int32  `query:"limit" default:"50" doc:"page size 1..100 (out-of-range → 400)"`
 }
 
 // runsListOutput — huma output for GET /v1/runs (FULL-TYPED). Body — the native envelope
@@ -45,8 +45,8 @@ func runsListOperation() huma.Operation {
 		OperationID:   "listRuns",
 		Method:        http.MethodGet,
 		Path:          "/",
-		Summary:       "Глобальный список прогонов (paged)",
-		Description:   "Свёртка apply_runs по apply_id ЧЕРЕЗ ВСЕ инкарнации: статус прогона (applying/success/failed/cancelled), инкарнация-владелец, границы времени, инициатор. Прогон (apply_run) — НЕ Voyage. Сортировка колонок — sort/sort_dir (стабильный tie-break apply_id). Видимость scoped по RBAC (ADR-047, fail-closed: пустой scope → пустой список). Permission incarnation.history. Read-only.",
+		Summary:       "Глобальный спиwithк прогоbutв (paged)",
+		Description:   "Свёртка apply_runs по apply_id ЧЕРЕЗ ВСЕ инкарonции: статус прогоon (applying/success/failed/cancelled), инкарonция-владелец, границы времени, инициатор. Прогон (apply_run) — NOT Voyage. Сортировка колоbutк — sort/sort_dir (стабильный tie-break apply_id). Видимость scoped по RBAC (ADR-047, fail-closed: пустой scope → пустой спиwithк). Permission incarnation.history. Read-only.",
 		Tags:          []string{"runs"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -70,8 +70,8 @@ func runsStatsOperation() huma.Operation {
 		OperationID:   "getRunsStats",
 		Method:        http.MethodGet,
 		Path:          "/stats",
-		Summary:       "Сводные счётчики прогонов",
-		Description:   "Счётчики прогонов по агрегатному статусу (total/applying/success/failed/cancelled) за всё время и за последние 24 часа, в границах RBAC-scope (fail-closed: пустой scope → нулевой агрегат). Permission incarnation.history. Read-only.",
+		Summary:       "Сводные счётчики прогоbutв",
+		Description:   "Счётчики прогоbutв по агрегатbutму статусу (total/applying/success/failed/cancelled) за всё время и за последние 24 часа, в границах RBAC-scope (fail-closed: пустой scope → нулевой агрегат). Permission incarnation.history. Read-only.",
 		Tags:          []string{"runs"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusInternalServerError},
@@ -98,16 +98,16 @@ type GlobalRunEntry struct {
 // items/offset/limit/total, parity with incarnationRunsReply). The type name = the
 // contract schema name (huma DefaultSchemaNamer capitalizes → "RunsListReply").
 type runsListReply struct {
-	Items  []GlobalRunEntry `json:"items" doc:"страница прогонов через все инкарнации (свёртка apply_runs)"`
-	Offset int32            `json:"offset" doc:"сдвиг от начала набора"`
-	Limit  int32            `json:"limit" doc:"размер страницы"`
-	Total  int32            `json:"total" doc:"общее число прогонов под фильтрами/scope"`
+	Items  []GlobalRunEntry `json:"items" doc:"страница прогоbutв via все инкарonции (свёртка apply_runs)"`
+	Offset int32            `json:"offset" doc:"offset from start of set"`
+	Limit  int32            `json:"limit" doc:"page size"`
+	Total  int32            `json:"total" doc:"общее число прогоbutв под фильтрами/scope"`
 }
 
 // RunsStatsBucket — one run-summary bucket (all time or the last 24 hours): total +
 // a counter for each aggregate status (zeros included — the enum is closed).
 type RunsStatsBucket struct {
-	Total     int `json:"total" doc:"всего прогонов в корзине"`
+	Total     int `json:"total" doc:"всits прогоbutв в корзине"`
 	Applying  int `json:"applying" doc:"прогоны в процессе"`
 	Success   int `json:"success" doc:"успешные прогоны"`
 	Failed    int `json:"failed" doc:"упавшие прогоны (включая orphaned-хосты)"`

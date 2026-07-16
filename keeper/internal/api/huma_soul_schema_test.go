@@ -84,12 +84,12 @@ func TestSchemaNames_Soul(t *testing.T) {
 	schemas := loadFullSpecSchemas(t)
 	for _, name := range soulContractSchemas {
 		if _, ok := schemas[name]; !ok {
-			t.Errorf("контрактная схема %q ОТСУТСТВУЕТ в components/schemas (имя не выровнено)", name)
+			t.Errorf("контрактonя схема %q ОТСУТСТВУЕТ в components/schemas (имя не выровнеbut)", name)
 		}
 	}
 	for _, name := range soulForbiddenSchemas {
 		if _, ok := schemas[name]; ok {
-			t.Errorf("техническое huma-имя %q ПРИСУТСТВУЕТ в спеке — имя не выровнено под контракт", name)
+			t.Errorf("техническое huma-имя %q ПРИСУТСТВУЕТ в спеке — имя не выровнеbut под контракт", name)
 		}
 	}
 }
@@ -107,10 +107,10 @@ func TestSchemaNames_SoulStatusEnum(t *testing.T) {
 	assertStringEnum(t, schemas, "SoulTransport", "agent", "ssh")
 
 	if !strings.Contains(y, "#/components/schemas/SoulStatus") {
-		t.Error("ни одно поле не ссылается на SoulStatus через $ref — статус остался инлайн")
+		t.Error("ни одbut field не ссылается on SoulStatus via $ref — статус остался инлайн")
 	}
 	if !strings.Contains(y, "#/components/schemas/SoulTransport") {
-		t.Error("ни одно поле не ссылается на SoulTransport через $ref — transport остался инлайн")
+		t.Error("ни одbut field не ссылается on SoulTransport via $ref — transport остался инлайн")
 	}
 }
 
@@ -130,7 +130,7 @@ func TestSchemaNames_SoulSshTargetNested(t *testing.T) {
 	// SoulSSHTargetReply → api-named-struct soulSshTargetReply). The capitalization drift
 	// SoulSSHTargetReply is displaced (in the forbidden set).
 	if got := propRef(t, schemas, "SoulSshTargetReply", "ssh_target"); got != targetRef {
-		t.Errorf("SoulSshTargetReply.ssh_target → %q, ожидался %q (output не сведён на единую SoulSshTarget — alias не сработал)", got, targetRef)
+		t.Errorf("SoulSshTargetReply.ssh_target → %q, ожидался %q (output не сведён on единую SoulSshTarget — alias не сработал)", got, targetRef)
 	}
 
 	// The SoulSshTarget shape is checked against the hand-written spec :6394.
@@ -169,11 +169,11 @@ func TestSchemaNames_SoulListEnvelope(t *testing.T) {
 			got = append(got, k)
 		}
 		sort.Strings(got)
-		t.Errorf("SoulListReply несёт %d полей %v, ожидалось ровно 6 (cursor-форма: items/offset/limit/total/next_cursor/total_approximate)", len(props), got)
+		t.Errorf("SoulListReply несёт %d fields %v, ожидалось ровbut 6 (cursor-form: items/offset/limit/total/next_cursor/total_approximate)", len(props), got)
 	}
 	for _, f := range wantFields {
 		if _, ok := props[f]; !ok {
-			t.Errorf("SoulListReply не содержит контрактного поля %q", f)
+			t.Errorf("SoulListReply не withдержит контрактbutго поля %q", f)
 		}
 	}
 
@@ -281,14 +281,14 @@ func assertStringEnum(t *testing.T, schemas map[string]any, name string, want ..
 	t.Helper()
 	sch, ok := schemas[name].(map[string]any)
 	if !ok {
-		t.Fatalf("%s не вынесен как named-схема в components/schemas", name)
+		t.Fatalf("%s не вынесен as named-схема в components/schemas", name)
 	}
 	if typ, _ := sch["type"].(string); typ != "string" {
 		t.Errorf("%s.type=%q, ожидалось string", name, typ)
 	}
 	rawEnum, ok := sch["enum"].([]any)
 	if !ok || len(rawEnum) == 0 {
-		t.Fatalf("%s без enum — выноса как enum не произошло", name)
+		t.Fatalf("%s без enum — выbutса as enum не проfromошло", name)
 	}
 	got := map[string]struct{}{}
 	for _, v := range rawEnum {
@@ -306,7 +306,7 @@ func assertStringEnum(t *testing.T, schemas map[string]any, name string, want ..
 	}
 	for _, w := range want {
 		if _, ok := got[w]; !ok {
-			t.Errorf("enum %s не содержит %q", name, w)
+			t.Errorf("enum %s не withдержит %q", name, w)
 		}
 	}
 }

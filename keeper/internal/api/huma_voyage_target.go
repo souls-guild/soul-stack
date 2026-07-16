@@ -40,18 +40,18 @@ package api
 // fails on byte-order. For INPUT the order is irrelevant (unmarshal is order-independent).
 type VoyageTarget struct {
 	Coven        []string `json:"coven,omitempty" doc:"coven-метки (env-тег scenario / метка хоста command)"`
-	Incarnations []string `json:"incarnations,omitempty" doc:"имена инкарнаций (scenario-режим)"`
+	Incarnations []string `json:"incarnations,omitempty" doc:"names инкарonций (scenario-режим)"`
 	Service      string   `json:"service,omitempty" doc:"имя сервиса (scenario-режим)"`
 	SIDs         []string `json:"sids,omitempty" doc:"SID-ы хостов (command-режим)"`
-	Where        string   `json:"where,omitempty" doc:"CEL-предикат как ДОПОЛНЕНИЕ к sids/coven (command-режим)"`
+	Where        string   `json:"where,omitempty" doc:"CEL-предикат as ДОПОЛNOTНИЕ к sids/coven (command-режим)"`
 }
 
 // VoyageNotify — a one-off subscription to run notifications (CLASS B, shared between input
 // bodies). Shape only; runtime validation (herald existence / RBAC herald.read / on-enum) is done
 // by the domain prepareNotifyErr. herald is required (spec :7612 — required:[herald]).
 type VoyageNotify struct {
-	Herald       string         `json:"herald" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"имя канала-герольда"`
-	On           []string       `json:"on,omitempty" doc:"терминалы/типы событий: completed|failed|partial"`
+	Herald       string         `json:"herald" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"имя каonла-герольда"`
+	On           []string       `json:"on,omitempty" doc:"термиonлы/типы withбытий: completed|failed|partial"`
 	OnlyFailures *bool          `json:"only_failures,omitempty"`
 	OnlyChanges  *bool          `json:"only_changes,omitempty"`
 	Annotations  map[string]any `json:"annotations,omitempty"`

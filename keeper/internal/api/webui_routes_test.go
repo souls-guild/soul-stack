@@ -83,7 +83,7 @@ func TestWebUI_Enabled_Public200(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ui/", http.NoBody)) // NO Authorization
 	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /ui/ при web_ui_enabled=on БЕЗ JWT = %d, want 200 (публичная статика); body=%s",
+		t.Fatalf("GET /ui/ при web_ui_enabled=on БЕЗ JWT = %d, want 200 (публичonя статика); body=%s",
 			rec.Code, rec.Body.String())
 	}
 }
@@ -117,7 +117,7 @@ func TestWebUI_DoesNotOpenAPIPerimeter(t *testing.T) {
 		// RequireJWT for an anonymous caller gives exactly 401.
 		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/souls", http.NoBody))
 		if rec.Code != http.StatusUnauthorized && rec.Code != http.StatusForbidden {
-			t.Errorf("GET /v1/souls без JWT (web_ui_enabled=%v) = %d, want 401/403 — embed /ui НЕ должен открывать API-периметр; body=%s",
+			t.Errorf("GET /v1/souls без JWT (web_ui_enabled=%v) = %d, want 401/403 — embed /ui NOT toлжен открывать API-периметр; body=%s",
 				enabled, rec.Code, rec.Body.String())
 		}
 	}

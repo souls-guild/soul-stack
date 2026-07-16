@@ -46,10 +46,10 @@ type soulCreateInput struct {
 // sid/transport/coven — domain validation (422 in CreateTyped). additionalProperties:false
 // (huma default) → unknown body field → 400.
 type SoulCreateRequest struct {
-	SID       string   `json:"sid" required:"true" doc:"SID нового хоста = FQDN"`
-	Transport string   `json:"transport" required:"true" enum:"agent,ssh" doc:"способ доставки: agent (mTLS gRPC stream) / ssh (push без агента)"`
-	Covens    []string `json:"covens,omitempty" pattern:"^[a-z][a-z0-9]*(-[a-z0-9]+)*$" maxLength:"63" doc:"стабильные Coven-метки хоста (kebab-case, ADR-008)"`
-	Note      string   `json:"note,omitempty" doc:"server-only заметка (souls.note)"`
+	SID       string   `json:"sid" required:"true" doc:"SID of new host = FQDN"`
+	Transport string   `json:"transport" required:"true" enum:"agent,ssh" doc:"delivery method: agent (mTLS gRPC stream) / ssh (push without agent)"`
+	Covens    []string `json:"covens,omitempty" pattern:"^[a-z][a-z0-9]*(-[a-z0-9]+)*$" maxLength:"63" doc:"stable Coven tags of host (kebab-case, ADR-008)"`
+	Note      string   `json:"note,omitempty" doc:"server-only note (souls.note)"`
 }
 
 // soulCreateOutput — huma output POST /v1/souls (FULL-TYPED). Status=201; Body — huma-native
@@ -69,8 +69,8 @@ func soulCreateOperation() huma.Operation {
 		OperationID:   "createSoul",
 		Method:        http.MethodPost,
 		Path:          "/",
-		Summary:       "Зарегистрировать Soul",
-		Description:   "Онбординг хоста в реестр souls (status: pending). Для transport=agent выпускается bootstrap-токен. Permission soul.create. 409 — SID занят.",
+		Summary:       "Register Soul",
+		Description:   "Onboarding host to souls registry (status: pending). For transport=agent, bootstrap token is issued. Permission soul.create. 409 — SID taken.",
 		Tags:          []string{"soul"},
 		DefaultStatus: http.StatusCreated,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -83,7 +83,7 @@ func soulCreateOperation() huma.Operation {
 // (mode + label/labels XOR + selector). DryRun also from query (?dry_run=true, OR with body).
 type soulCovenAssignInput struct {
 	Body   SoulCovenAssignRequest
-	DryRun bool `query:"dry_run" doc:"посчитать matched без UPDATE (OR с body.dry_run)"`
+	DryRun bool `query:"dry_run" doc:"count matched without UPDATE (OR with body.dry_run)"`
 }
 
 // SoulCovenAssignRequest — Go form of the POST /v1/souls/coven body. Struct name = contract name of
@@ -91,21 +91,21 @@ type soulCovenAssignInput struct {
 // replace) + XOR label↔labels (the domain validates the XOR → 422) + selector (at least one criterion) +
 // opt. dry_run. additionalProperties:false → unknown field → 400.
 type SoulCovenAssignRequest struct {
-	Mode     string                  `json:"mode" required:"true" enum:"append,remove,replace" doc:"append — добавить метку; remove — снять; replace — заменить набор"`
-	Label    string                  `json:"label,omitempty" maxLength:"63" doc:"метка для append/remove (запрещена для replace)"`
-	Labels   []string                `json:"labels,omitempty" pattern:"^[a-z][a-z0-9]*(-[a-z0-9]+)*$" maxLength:"63" doc:"набор для replace (может быть пустым = снять все; запрещён для append/remove)"`
-	DryRun   bool                    `json:"dry_run,omitempty" doc:"посчитать matched без UPDATE"`
-	Selector SoulCovenAssignSelector `json:"selector" required:"true" doc:"таргетинг (хотя бы один критерий; комбинации AND)"`
+	Mode     string                  `json:"mode" required:"true" enum:"append,remove,replace" doc:"append — add label; remove — remove; replace — replace set"`
+	Label    string                  `json:"label,omitempty" maxLength:"63" doc:"label for append/remove (forbidden for replace)"`
+	Labels   []string                `json:"labels,omitempty" pattern:"^[a-z][a-z0-9]*(-[a-z0-9]+)*$" maxLength:"63" doc:"set for replace (may be empty = remove all; forbidden for append/remove)"`
+	DryRun   bool                    `json:"dry_run,omitempty" doc:"count matched without UPDATE"`
+	Selector SoulCovenAssignSelector `json:"selector" required:"true" doc:"targeting (at least one criterion; AND combinations)"`
 }
 
 // SoulCovenAssignSelector — Go form of the selector (all/sids/coven/incarnation/status). Struct
 // name = contract name of the reference schema (SoulCovenAssignSelector; input-only — CLASS C).
 type SoulCovenAssignSelector struct {
-	All         bool     `json:"all,omitempty" doc:"без host-фильтра (весь реестр ∩ scope)"`
-	Sids        []string `json:"sids,omitempty" doc:"точечный список хостов (SID = FQDN)"`
-	Coven       string   `json:"coven,omitempty" maxLength:"63" doc:"хосты с этой Coven-меткой"`
-	Incarnation string   `json:"incarnation,omitempty" maxLength:"63" doc:"хосты этой incarnation (корневая Coven-метка)"`
-	Status      string   `json:"status,omitempty" enum:"pending,connected,disconnected,revoked,expired,destroyed" doc:"статус Soul в реестре"`
+	All         bool     `json:"all,omitempty" doc:"no host filter (entire registry ∩ scope)"`
+	Sids        []string `json:"sids,omitempty" doc:"point list of hosts (SID = FQDN)"`
+	Coven       string   `json:"coven,omitempty" maxLength:"63" doc:"hosts with this Coven tag"`
+	Incarnation string   `json:"incarnation,omitempty" maxLength:"63" doc:"hosts of this incarnation (root Coven tag)"`
+	Status      string   `json:"status,omitempty" enum:"pending,connected,disconnected,revoked,expired,destroyed" doc:"Soul status in registry"`
 }
 
 // soulCovenAssignOutput — huma output POST /v1/souls/coven (FULL-TYPED). Status=200; Body —
@@ -123,8 +123,8 @@ func soulCovenAssignOperation() huma.Operation {
 		OperationID:   "assignSoulCoven",
 		Method:        http.MethodPost,
 		Path:          "/coven",
-		Summary:       "Массовое назначение Coven-меток",
-		Description:   "Bulk append/remove одной метки либо replace набора на хостах под selector ∩ scope (ADR-008). Permission soul.coven-assign. partial → 200 status:partial.",
+		Summary:       "Bulk assign Coven tags",
+		Description:   "Bulk append/remove single label or replace set on hosts under selector ∩ scope (ADR-008). Permission soul.coven-assign. partial → 200 status:partial.",
 		Tags:          []string{"soul"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -137,7 +137,7 @@ func soulCovenAssignOperation() huma.Operation {
 // (mode + traits/keys XOR + selector). DryRun also from query (?dry_run=true, OR with body).
 type soulTraitsAssignInput struct {
 	Body   SoulTraitsAssignRequest
-	DryRun bool `query:"dry_run" doc:"посчитать matched без UPDATE (OR с body.dry_run)"`
+	DryRun bool `query:"dry_run" doc:"count matched without UPDATE (OR with body.dry_run)"`
 }
 
 // SoulTraitsAssignRequest — Go form of the POST /v1/souls/traits body (code-first source of schema AND
@@ -146,11 +146,11 @@ type soulTraitsAssignInput struct {
 // (at least one criterion) + opt. dry_run. traits — map key→(scalar|list of scalars); nested
 // objects/arrays are rejected by the domain. additionalProperties:false → unknown field → 400.
 type SoulTraitsAssignRequest struct {
-	Mode     string                  `json:"mode,omitempty" enum:"merge,replace,remove" doc:"merge (дефолт) — set/overwrite ключи; replace — заменить весь map; remove — удалить ключи из keys"`
-	Traits   map[string]any          `json:"traits,omitempty" doc:"набор ключ→значение для merge/replace (значение — scalar или list of scalars); запрещён для remove"`
-	Keys     []string                `json:"keys,omitempty" doc:"список имён ключей для remove (kebab-case); запрещён для merge/replace"`
-	DryRun   bool                    `json:"dry_run,omitempty" doc:"посчитать matched без UPDATE"`
-	Selector SoulCovenAssignSelector `json:"selector" required:"true" doc:"таргетинг (хотя бы один критерий; комбинации AND)"`
+	Mode     string                  `json:"mode,omitempty" enum:"merge,replace,remove" doc:"merge (дефолт) — set/overwrite ключи; replace — заменить весь map; remove — удалить ключи from keys"`
+	Traits   map[string]any          `json:"traits,omitempty" doc:"onбор ключ→зonчение for merge/replace (зonчение — scalar or list of scalars); запрещён for remove"`
+	Keys     []string                `json:"keys,omitempty" doc:"спиwithк имён ключей for remove (kebab-case); запрещён for merge/replace"`
+	DryRun   bool                    `json:"dry_run,omitempty" doc:"count matched without UPDATE"`
+	Selector SoulCovenAssignSelector `json:"selector" required:"true" doc:"targeting (at least one criterion; AND combinations)"`
 }
 
 // soulTraitsAssignOutput — huma output POST /v1/souls/traits (FULL-TYPED). Status=200; Body —
@@ -168,14 +168,14 @@ func soulTraitsAssignOperation() huma.Operation {
 		OperationID: "assignSoulTraits",
 		Method:      http.MethodPost,
 		Path:        "/traits",
-		Summary:     "Массовое назначение trait-меток (deprecated)",
+		Summary:     "Масwithвое onзonчение trait-tags (deprecated)",
 		// DEPRECATED (ADR-060 amend R1): operator-set trait management moved
 		// per-soul → per-incarnation. The source of truth is incarnation.traits
 		// (PUT /v1/incarnations/{name}/traits), projected into souls.traits
 		// by a sync hook. A per-soul write here is overwritten by the next projection.
 		// The endpoint is kept forward-compat (NOT removed); a call writes a warn log.
 		Deprecated:    true,
-		Description:   "DEPRECATED (ADR-060): используйте PUT /v1/incarnations/{name}/traits (incarnation.traits — источник истины, проецируется в souls.traits). Bulk merge/replace/remove operator-set trait-меток (souls.traits jsonb) на хостах под selector ∩ coven-scope. Per-soul write перетирается проекцией incarnation.traits. Permission soul.traits-assign. partial → 200 status:partial.",
+		Description:   "DEPRECATED (ADR-060): используйте PUT /v1/incarnations/{name}/traits (incarnation.traits — источник истины, проецируется в souls.traits). Bulk merge/replace/remove operator-set trait-tags (souls.traits jsonb) on хостах под selector ∩ coven-scope. Per-soul write перетирается проекцией incarnation.traits. Permission soul.traits-assign. partial → 200 status:partial.",
 		Tags:          []string{"soul"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -187,8 +187,8 @@ func soulTraitsAssignOperation() huma.Operation {
 // soulIssueTokenInput — huma input POST /v1/souls/{sid}/issue-token. SID — path; Force —
 // query (?force=true). No Body.
 type soulIssueTokenInput struct {
-	SID   string `path:"sid" doc:"SID (FQDN) Soul-а"`
-	Force bool   `query:"force" doc:"истечь активный токен и выписать новый"`
+	SID   string `path:"sid" doc:"SID (FQDN) of Soul"`
+	Force bool   `query:"force" doc:"истечь активный токен и выписать butвый"`
 }
 
 // soulIssueTokenOutput — huma output POST /v1/souls/{sid}/issue-token (FULL-TYPED). Status=200;
@@ -208,7 +208,7 @@ func soulIssueTokenOperation() huma.Operation {
 		Method:        http.MethodPost,
 		Path:          "/{sid}/issue-token",
 		Summary:       "Перевыпустить bootstrap-токен",
-		Description:   "Повторная выписка bootstrap-токена для transport=agent (?force=true истекает активный). Permission soul.issue-token. 409 — активный токен без force.",
+		Description:   "Повторonя выписка bootstrap-токеon for transport=agent (?force=true истекает активный). Permission soul.issue-token. 409 — активный токен без force.",
 		Tags:          []string{"soul"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -219,7 +219,7 @@ func soulIssueTokenOperation() huma.Operation {
 
 // soulSshTargetInput — huma input PUT /v1/souls/{sid}/ssh-target. SID — path; Body — typed body.
 type soulSshTargetInput struct {
-	SID  string `path:"sid" doc:"SID (FQDN) Soul-а"`
+	SID  string `path:"sid" doc:"SID (FQDN) of Soul"`
 	Body SoulSshTarget
 }
 
@@ -236,7 +236,7 @@ type soulSshTargetInput struct {
 // nested ssh_target in SoulSshTargetReply (output) vs the former legacy generator. For input parsing the order
 // of JSON keys is irrelevant.
 type SoulSshTarget struct {
-	SoulPath    string `json:"soul_path" required:"true" pattern:"^/" doc:"абсолютный путь установки soul-бинаря (начинается с /)"`
+	SoulPath    string `json:"soul_path" required:"true" pattern:"^/" doc:"абwithлютный путь устаbutвки soul-binary (onчиonется с /)"`
 	SSHPort     int    `json:"ssh_port" required:"true" minimum:"1" maximum:"65535" doc:"SSH-порт [1..65535]"`
 	SSHProvider string `json:"ssh_provider,omitempty" doc:"опц. имя SshProvider (3-tier routing); пусто → coven/cluster default"`
 	SSHUser     string `json:"ssh_user" required:"true" minLength:"1" doc:"SSH-пользователь"`
@@ -259,8 +259,8 @@ func soulSshTargetOperation() huma.Operation {
 		OperationID:   "updateSoulSSHTarget",
 		Method:        http.MethodPut,
 		Path:          "/{sid}/ssh-target",
-		Summary:       "Обновить SSH-реквизиты Soul-а",
-		Description:   "Per-host SSH-реквизиты push-flow (ADR-032 S7-1). Replace-семантика (полный набор). Permission soul.ssh-target-update. 404 — нет soul.",
+		Summary:       "Обbutвить SSH-реквfromиты Soul-а",
+		Description:   "Per-host SSH-реквfromиты push-flow (ADR-032 S7-1). Replace-семантика (полный onбор). Permission soul.ssh-target-update. 404 — нет soul.",
 		Tags:          []string{"soul"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -280,9 +280,9 @@ type soulListInput struct {
 	Coven     string `query:"coven" doc:"фильтр по Coven-метке (AND внутри scope)"`
 	Status    string `query:"status" enum:"pending,connected,disconnected,revoked,expired,destroyed" doc:"фильтр по статусу; вне enum → 422"`
 	Transport string `query:"transport" enum:"agent,ssh" doc:"фильтр по transport; вне enum → 422"`
-	Cursor    string `query:"cursor" doc:"keyset-курсор продолжения (regex-режим scope)"`
-	Offset    int32  `query:"offset" default:"0" doc:"сдвиг от начала набора, ≥0 (out-of-range → 400; offset+cursor → 422)"`
-	Limit     int32  `query:"limit" default:"50" doc:"размер страницы 1..1000 (out-of-range → 400)"`
+	Cursor    string `query:"cursor" doc:"keyset-курwithр проtoлжения (regex-режим scope)"`
+	Offset    int32  `query:"offset" default:"0" doc:"offset from start of set, ≥0 (out-of-range → 400; offset+cursor → 422)"`
+	Limit     int32  `query:"limit" default:"50" doc:"page size 1..1000 (out-of-range → 400)"`
 }
 
 // soulListOutput — huma output GET /v1/souls (FULL-TYPED). Body — a TAGGED native envelope
@@ -304,8 +304,8 @@ func soulListOperation() huma.Operation {
 		OperationID:   "listSouls",
 		Method:        http.MethodGet,
 		Path:          "/",
-		Summary:       "Список Soul-ов (paged, scoped)",
-		Description:   "Реестр souls со scoped-видимостью (ADR-047) и фильтрами coven/status/transport. offset-fast-path либо keyset (режим выбирает сервер из Purview). Permission soul.list. Read-only, без audit.",
+		Summary:       "Спиwithк Soul-ов (paged, scoped)",
+		Description:   "Реестр souls with scoped-видимостью (ADR-047) и фильтрами coven/status/transport. offset-fast-path либо keyset (режим выбирает сервер from Purview). Permission soul.list. Read-only, no audit.",
 		Tags:          []string{"soul"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -333,7 +333,7 @@ func soulStatsOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/stats",
 		Summary:       "Агрегат реестра Souls (Overview)",
-		Description:   "Сводка по status/transport/coven + total + stale_count для Souls Overview со scoped-видимостью (ADR-047). transport — agent/ssh (UI маппит на pull/push). stale_count — по mark_disconnected.stale_after. Permission soul.list. Read-only, без audit.",
+		Description:   "Сводка по status/transport/coven + total + stale_count for Souls Overview with scoped-видимостью (ADR-047). transport — agent/ssh (UI маппит on pull/push). stale_count — по mark_disconnected.stale_after. Permission soul.list. Read-only, no audit.",
 		Tags:          []string{"soul"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusInternalServerError},
@@ -344,7 +344,7 @@ func soulStatsOperation() huma.Operation {
 
 // soulGetInput — huma input GET /v1/souls/{sid}. SID — path.
 type soulGetInput struct {
-	SID string `path:"sid" doc:"SID (FQDN) Soul-а"`
+	SID string `path:"sid" doc:"SID (FQDN) of Soul"`
 }
 
 // soulGetOutput — huma output GET /v1/souls/{sid} (FULL-TYPED). Body — huma-native 200 body
@@ -361,7 +361,7 @@ func soulGetOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/{sid}",
 		Summary:       "Карточка Soul-а",
-		Description:   "Одна строка реестра souls для detail-page (ADR-047 scoped). Permission soul.list. Вне scope → 404. Read-only, без audit.",
+		Description:   "Одon string реестра souls for detail-page (ADR-047 scoped). Permission soul.list. Вне scope → 404. Read-only, no audit.",
 		Tags:          []string{"soul"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -372,7 +372,7 @@ func soulGetOperation() huma.Operation {
 
 // soulSoulprintInput — huma input GET /v1/souls/{sid}/soulprint. SID — path.
 type soulSoulprintInput struct {
-	SID string `path:"sid" doc:"SID (FQDN) Soul-а"`
+	SID string `path:"sid" doc:"SID (FQDN) of Soul"`
 }
 
 // soulSoulprintOutput — huma output GET /v1/souls/{sid}/soulprint (FULL-TYPED). Body — typed
@@ -390,7 +390,7 @@ func soulSoulprintOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/{sid}/soulprint",
 		Summary:       "Soulprint Soul-а",
-		Description:   "Последний typed-SoulprintReport (ADR-018) со scope-гейтом. Permission soul.list. 410 — soulprint ни разу не приходил. Read-only, без audit.",
+		Description:   "Последний typed-SoulprintReport (ADR-018) with scope-gateом. Permission soul.list. 410 — soulprint ни разу не приходил. Read-only, no audit.",
 		Tags:          []string{"soul"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusGone, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -403,11 +403,11 @@ func soulSoulprintOperation() huma.Operation {
 // path. Types — multi-value (?type=X&type=Y) OR (explode:true is MANDATORY). Since — date-time
 // (bad value → 400). offset/limit — int32 with default; range → CheckPageBounds 400.
 type soulHistoryInput struct {
-	SID    string    `path:"sid" doc:"SID (FQDN) Soul-а"`
+	SID    string    `path:"sid" doc:"SID (FQDN) of Soul"`
 	Types  []string  `query:"type,explode" enum:"scenario,errand" doc:"multi-value ?type=X&type=Y — OR по источнику; вне enum → 422"`
 	Since  time.Time `query:"since" doc:"started_at > since (RFC3339); bad value → 400"`
-	Offset int32     `query:"offset" default:"0" doc:"сдвиг от начала набора, ≥0 (out-of-range → 400)"`
-	Limit  int32     `query:"limit" default:"50" doc:"размер страницы 1..1000 (out-of-range → 400)"`
+	Offset int32     `query:"offset" default:"0" doc:"offset from start of set, ≥0 (out-of-range → 400)"`
+	Limit  int32     `query:"limit" default:"50" doc:"page size 1..1000 (out-of-range → 400)"`
 }
 
 // soulHistoryOutput — huma output GET /v1/souls/{sid}/history (FULL-TYPED). Body — a huma-native
@@ -425,8 +425,8 @@ func soulHistoryOperation() huma.Operation {
 		OperationID:   "getSoulHistory",
 		Method:        http.MethodGet,
 		Path:          "/{sid}/history",
-		Summary:       "История прогонов Soul-а (paged)",
-		Description:   "Per-host timeline (scenario apply_runs + ad-hoc errands) со scope-гейтом. Permission soul.list. Read-only, без audit.",
+		Summary:       "Run history Soul-а (paged)",
+		Description:   "Per-host timeline (scenario apply_runs + ad-hoc errands) with scope-gateом. Permission soul.list. Read-only, no audit.",
 		Tags:          []string{"soul"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -450,9 +450,9 @@ type errandExecInput struct {
 // timeout range / dry_run-for-verb / module format — domain validation (422/400 in ExecTyped).
 type ErrandRunRequest struct {
 	Module         string          `json:"module" required:"true" doc:"fully-qualified <ns>.<name>.<state> (core.cmd.shell / core.exec.run / ErrandReadSafe-модуль)"`
-	Input          *map[string]any `json:"input,omitempty" doc:"input для модуля (валидируется против input_schema)"`
-	TimeoutSeconds *int            `json:"timeout_seconds,omitempty" maximum:"300" doc:"полный timeout Errand-а [1..300]; 0/опущено → дефолт 30s; > server-cap (30s) → 202 + Location"`
-	DryRun         *bool           `json:"dry_run,omitempty" doc:"только для PlanReadSafe-модулей; verb-модуль (shell/exec) → 400"`
+	Input          *map[string]any `json:"input,omitempty" doc:"input for модуля (валидируется против input_schema)"`
+	TimeoutSeconds *int            `json:"timeout_seconds,omitempty" maximum:"300" doc:"полный timeout Errand-а [1..300]; 0/опущеbut → дефолт 30s; > server-cap (30s) → 202 + Location"`
+	DryRun         *bool           `json:"dry_run,omitempty" doc:"только for PlanReadSafe-модулей; verb-модуль (shell/exec) → 400"`
 }
 
 // errandExecOutput — huma output POST /v1/souls/{sid}/exec with TWO success codes under
@@ -478,8 +478,8 @@ func errandExecOperation() huma.Operation {
 		OperationID:   "ErrandExec",
 		Method:        http.MethodPost,
 		Path:          "/{sid}/exec",
-		Summary:       "Запустить Errand на Soul-е",
-		Description:   "Pull-ad-hoc exec модуля на одном хосте (ADR-033). 200 sync (терминал до server-cap 30s) либо 202 + Location async-escalation. Permission errand.run. 404 — Soul не подключён.",
+		Summary:       "Запустить Errand on Soul-е",
+		Description:   "Pull-ad-hoc exec модуля on одbutм хосте (ADR-033). 200 sync (термиonл to server-cap 30s) либо 202 + Location async-escalation. Permission errand.run. 404 — Soul не подключён.",
 		Tags:          []string{"Errand"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusAccepted, http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},

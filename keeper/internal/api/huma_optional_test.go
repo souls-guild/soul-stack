@@ -36,7 +36,7 @@ func TestOptional_UnmarshalJSON_ThreeBranches(t *testing.T) {
 			t.Fatalf("unmarshal: %v", err)
 		}
 		if w.Field.Set {
-			t.Errorf("omitted: Set=%v, want false (UnmarshalJSON не должен вызываться)", w.Field.Set)
+			t.Errorf("omitted: Set=%v, want false (UnmarshalJSON не toлжен вызываться)", w.Field.Set)
 		}
 		if w.Field.Null {
 			t.Errorf("omitted: Null=%v, want false", w.Field.Null)
@@ -104,10 +104,10 @@ func TestOptional_Schema_NullableNoOctetStream(t *testing.T) {
 		t.Fatal("Schema(r) вернул nil")
 	}
 	if s.Type != huma.TypeString {
-		t.Errorf("Schema.Type = %q, want %q (схема вложенного T, не octet-stream/object)", s.Type, huma.TypeString)
+		t.Errorf("Schema.Type = %q, want %q (схема вложенbutго T, не octet-stream/object)", s.Type, huma.TypeString)
 	}
 	if !s.Nullable {
-		t.Errorf("Schema.Nullable = %v, want true (presence-сброс через null)", s.Nullable)
+		t.Errorf("Schema.Nullable = %v, want true (presence-reset via null)", s.Nullable)
 	}
 	// octet-stream lives at the requestBody-MIME level (not on the schema) — its absence
 	// is guarded by the golden OpenAPI fragment (TestHumaRole_PatchPermissions_RequestBody_JSONOnly).
@@ -167,13 +167,13 @@ func TestOptional_Schema_StructT_NoRefNoPanic(t *testing.T) {
 		t.Fatal("Schema(r) вернул nil")
 	}
 	if fs.Ref != "" {
-		t.Fatalf("Schema.Ref = %q, want пусто (struct-T должен инлайниться, не $ref — иначе nullable-on-ref паника)", fs.Ref)
+		t.Fatalf("Schema.Ref = %q, want пусто (struct-T toлжен инлайниться, не $ref — иonче nullable-on-ref паника)", fs.Ref)
 	}
 	if fs.Type != huma.TypeObject {
 		t.Errorf("Schema.Type = %q, want %q (inline-object)", fs.Type, huma.TypeObject)
 	}
 	if !fs.Nullable {
-		t.Errorf("Schema.Nullable = %v, want true (nullable на реальной object-схеме)", fs.Nullable)
+		t.Errorf("Schema.Nullable = %v, want true (nullable on реальbutй object-схеме)", fs.Nullable)
 	}
 	if _, ok := fs.Properties["a"]; !ok {
 		t.Errorf("Schema.Properties не несёт inline-поля struct-T: %v", fs.Properties)
@@ -183,7 +183,7 @@ func TestOptional_Schema_StructT_NoRefNoPanic(t *testing.T) {
 	// exactly where huma expands the body schema and (before the fix) crashed on nullable-ref.
 	defer func() {
 		if rec := recover(); rec != nil {
-			t.Fatalf("huma.Register с полем Optional[struct] запаниковал: %v (регресс allowRef=false → ref+nullable)", rec)
+			t.Fatalf("huma.Register с fieldм Optional[struct] запаниковал: %v (регресс allowRef=false → ref+nullable)", rec)
 		}
 	}()
 	r := chi.NewRouter()
@@ -209,7 +209,7 @@ func TestOptional_Schema_NotInRequired(t *testing.T) {
 
 	for _, r := range s.Required {
 		if r == "opt" {
-			t.Errorf("Optional-поле `opt` попало в required %v — должно быть опциональным", s.Required)
+			t.Errorf("Optional-field `opt` попало в required %v — toлжbut быть опциоonльным", s.Required)
 		}
 	}
 	var hasMust bool
@@ -219,7 +219,7 @@ func TestOptional_Schema_NotInRequired(t *testing.T) {
 		}
 	}
 	if !hasMust {
-		t.Errorf("required = %v, ожидалось наличие `must` (sanity)", s.Required)
+		t.Errorf("required = %v, ожидалось onличие `must` (sanity)", s.Required)
 	}
 }
 

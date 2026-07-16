@@ -57,12 +57,12 @@ func TestSchemaNames_Voyage(t *testing.T) {
 	schemas := loadFullSpecSchemas(t)
 	for _, name := range voyageContractSchemas {
 		if _, ok := schemas[name]; !ok {
-			t.Errorf("контрактная схема %q ОТСУТСТВУЕТ в components/schemas (имя не выровнено)", name)
+			t.Errorf("контрактonя схема %q ОТСУТСТВУЕТ в components/schemas (имя не выровнеbut)", name)
 		}
 	}
 	for _, name := range voyageForbiddenSchemas {
 		if _, ok := schemas[name]; ok {
-			t.Errorf("техническое huma-имя %q ПРИСУТСТВУЕТ в спеке — имя не выровнено под контракт", name)
+			t.Errorf("техническое huma-имя %q ПРИСУТСТВУЕТ в спеке — имя не выровнеbut под контракт", name)
 		}
 	}
 }
@@ -134,13 +134,13 @@ func TestSchemaNames_VoyageNested(t *testing.T) {
 	// (1) VoyageTarget — consumers reference the single schema.
 	for _, name := range voyageTargetConsumers {
 		if got := propRef(t, schemas, name, "target"); got != targetRef {
-			t.Errorf("%s.target → %q, ожидался %q (target не сведён на единую VoyageTarget)", name, got, targetRef)
+			t.Errorf("%s.target → %q, ожидался %q (target не сведён on единую VoyageTarget)", name, got, targetRef)
 		}
 	}
 	// (2) VoyageNotify — input consumers reference the single schema (notify is an array).
 	for _, name := range voyageNotifyConsumers {
 		if got := propItemsRef(t, schemas, name, "notify"); got != notifyRef {
-			t.Errorf("%s.notify[] → %q, ожидался %q (notify не сведён на единую VoyageNotify)", name, got, notifyRef)
+			t.Errorf("%s.notify[] → %q, ожидался %q (notify не сведён on единую VoyageNotify)", name, got, notifyRef)
 		}
 	}
 
@@ -150,7 +150,7 @@ func TestSchemaNames_VoyageNested(t *testing.T) {
 		t.Fatal("VoyageTarget отсутствует в components.schemas")
 	}
 	if req, ok := tgt["required"]; ok {
-		t.Errorf("VoyageTarget.required=%v — рукопись :7455 НЕ объявляет required (все поля optional)", req)
+		t.Errorf("VoyageTarget.required=%v — hand-written :7455 NOT объявляет required (all поля optional)", req)
 	}
 	assertProps(t, tgt, "VoyageTarget", "incarnations", "service", "sids", "where", "coven")
 
@@ -204,11 +204,11 @@ func assertProps(t *testing.T, sch map[string]any, name string, want ...string) 
 	t.Helper()
 	props, _ := sch["properties"].(map[string]any)
 	if len(props) != len(want) {
-		t.Errorf("%s: %d полей, ожидалось %d (%v)", name, len(props), len(want), want)
+		t.Errorf("%s: %d fields, ожидалось %d (%v)", name, len(props), len(want), want)
 	}
 	for _, f := range want {
 		if _, ok := props[f]; !ok {
-			t.Errorf("%s: поле %q отсутствует", name, f)
+			t.Errorf("%s: field %q отсутствует", name, f)
 		}
 	}
 }
@@ -228,7 +228,7 @@ func assertRequiredExactly(t *testing.T, sch map[string]any, name string, want .
 	}
 	for _, w := range want {
 		if !got[w] {
-			t.Errorf("%s.required не содержит %q", name, w)
+			t.Errorf("%s.required не withдержит %q", name, w)
 		}
 	}
 }

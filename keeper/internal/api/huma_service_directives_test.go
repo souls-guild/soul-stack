@@ -114,7 +114,7 @@ func TestDirectives_FullCatalog_ETag(t *testing.T) {
 		t.Errorf("directives-серий = %d, want 3", len(body.Directives))
 	}
 	if !hDirContains(body.Directives["8.2"], "maxmemory") {
-		t.Errorf("8.2 не содержит maxmemory: %v", body.Directives["8.2"])
+		t.Errorf("8.2 не withдержит maxmemory: %v", body.Directives["8.2"])
 	}
 }
 
@@ -148,7 +148,7 @@ func TestDirectives_CacheControl_RevalidateForBranchRef(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if got, want := rec.Header().Get("Cache-Control"), "no-cache"; got != want {
-		t.Errorf("Cache-Control = %q, want %q (ветка-ref mutable)", got, want)
+		t.Errorf("Cache-Control = %q, want %q (branch-ref mutable)", got, want)
 	}
 }
 
@@ -167,7 +167,7 @@ func TestDirectives_VersionNarrows(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if len(body.Directives) != 1 || body.Directives["8.2"] == nil {
-		t.Fatalf("version=8.2.2 → серии %v, want ровно {8.2}", hDirKeys(body.Directives))
+		t.Fatalf("version=8.2.2 → серии %v, want ровbut {8.2}", hDirKeys(body.Directives))
 	}
 	// ETag stays snapshot SHA1 (per-URL resource, body changes, ETag = snapshot version).
 	if got := rec.Header().Get("ETag"); got != `"`+hDirSHA1+`"` {
@@ -208,10 +208,10 @@ func TestDirectives_IfNoneMatch_304(t *testing.T) {
 		t.Fatalf("status = %d, want 304; body=%s", rec.Code, rec.Body.String())
 	}
 	if rec.Body.Len() != 0 {
-		t.Errorf("304 тело непустое: %q", rec.Body.String())
+		t.Errorf("304 body непустое: %q", rec.Body.String())
 	}
 	if got := rec.Header().Get("ETag"); got != `"`+hDirSHA1+`"` {
-		t.Errorf("ETag на 304 = %q, want snapshot SHA1", got)
+		t.Errorf("ETag on 304 = %q, want snapshot SHA1", got)
 	}
 }
 
@@ -224,7 +224,7 @@ func TestDirectives_IfNoneMatch_Stale200(t *testing.T) {
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (ETag не совпал)", rec.Code)
+		t.Fatalf("status = %d, want 200 (ETag не withвпал)", rec.Code)
 	}
 }
 

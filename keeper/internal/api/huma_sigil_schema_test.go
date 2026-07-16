@@ -45,12 +45,12 @@ func TestSchemaNames_Sigil(t *testing.T) {
 	schemas := loadFullSpecSchemas(t)
 	for _, name := range sigilContractSchemas {
 		if _, ok := schemas[name]; !ok {
-			t.Errorf("контрактная схема %q ОТСУТСТВУЕТ в components/schemas (имя не выровнено)", name)
+			t.Errorf("контрактonя схема %q ОТСУТСТВУЕТ в components/schemas (имя не выровнеbut)", name)
 		}
 	}
 	for _, name := range sigilForbiddenSchemas {
 		if _, ok := schemas[name]; ok {
-			t.Errorf("техническое huma-имя %q ПРИСУТСТВУЕТ в спеке — имя не выровнено под контракт", name)
+			t.Errorf("техническое huma-имя %q ПРИСУТСТВУЕТ в спеке — имя не выровнеbut под контракт", name)
 		}
 	}
 }
@@ -81,6 +81,6 @@ func TestSchemaNames_SigilRequestShapes(t *testing.T) {
 		t.Fatal("SigilKeyIntroduceRequest отсутствует")
 	}
 	if req, ok := intro["required"]; ok {
-		t.Errorf("SigilKeyIntroduceRequest.required=%v — рукопись :5619 НЕ объявляет required (make_primary опционален)", req)
+		t.Errorf("SigilKeyIntroduceRequest.required=%v — hand-written :5619 NOT объявляет required (make_primary опциоonлен)", req)
 	}
 }

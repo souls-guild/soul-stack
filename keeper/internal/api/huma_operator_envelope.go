@@ -30,9 +30,9 @@ import (
 // the contract schema name (huma DefaultSchemaNamer capitalizes → "OperatorListReply").
 type operatorListReply struct {
 	Items  []Operator `json:"items" doc:"страница операторов"`
-	Offset int32      `json:"offset" doc:"сдвиг от начала набора"`
-	Limit  int32      `json:"limit" doc:"размер страницы"`
-	Total  int32      `json:"total" doc:"общее число записей в наборе"`
+	Offset int32      `json:"offset" doc:"offset from start of set"`
+	Limit  int32      `json:"limit" doc:"page size"`
+	Total  int32      `json:"total" doc:"total number of entries in set"`
 }
 
 // registerOperatorEnvelopes registers a huma alias on the registry from the instantiated generic

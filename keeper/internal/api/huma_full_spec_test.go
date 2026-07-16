@@ -1,20 +1,20 @@
-// Доказательный pilot-гейт агрегатора единой huma-OpenAPI-спеки (Teardown T4a).
+// Proof-of-concept pilot gate for the unified huma-OpenAPI-spec aggregator (Teardown T4a).
 //
-// Тесты доказывают четыре свойства собранной спеки ([buildFullOpenAPISpec] /
+// The tests prove four properties of the assembled spec ([buildFullOpenAPISpec] /
 // [HumaFullSpecYAML]):
 //
-//	(а) НЕТ дубль (path+method) после префиксования — все операции уникальны по
-//	    полному пути (иначе buildFullOpenAPISpec вернул бы pathMethodCollisionError).
-//	(б) НЕТ schema-merge-коллизий: одноимённые схемы из разных доменов имеют
-//	    идентичное тело (HumaProblemError ×20, Voyage/VoyageSummary/VoyageTarget ×2 —
-//	    дедуплицируются безопасно). Различие тел → schemaCollisionError → needs_architect.
-//	(в) собранная спека ВАЛИДНА как OpenAPI 3.1: openapi==3.1.0 + непустые paths +
-//	    components.schemas, каждый path-item несёт ≥1 HTTP-метод-операцию, YAML
-//	    парсится без ошибок.
-//	(г) спека СОДЕРЖИТ все ожидаемые роуты — множество (path+method) собранной спеки
-//	    совпадает с реальными chi-роутами Operator API (chi.Walk(buildRouter) ∪
-//	    opt-in-роуты из pathAllowlist; health/meta вне /v1 исключены). Drift-guard:
-//	    агрегатор не забыл домен.
+//	(a) NO (path+method) duplicates after prefixing — all operations are unique by
+//	    full path (otherwise buildFullOpenAPISpec would return pathMethodCollisionError).
+//	(b) NO schema-merge collisions: same-named schemas from different domains have
+//	    identical bodies (HumaProblemError ×20, Voyage/VoyageSummary/VoyageTarget ×2 —
+//	    dedup safely). A body mismatch → schemaCollisionError → needs_architect.
+//	(c) the assembled spec is VALID OpenAPI 3.1: openapi==3.1.0 + non-empty paths +
+//	    components.schemas, every path item carries ≥1 HTTP-method operation, YAML
+//	    parses without errors.
+//	(d) the spec CONTAINS all expected routes — the (path+method) set of the assembled
+//	    spec matches the real chi routes of the Operator API (chi.Walk(buildRouter) ∪
+//	    opt-in routes from pathAllowlist; health/meta outside /v1 excluded). Drift guard:
+//	    the aggregator didn't forget a domain.
 package api
 
 import (
@@ -26,44 +26,44 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
-// TestFullSpec_NoPathMethodCollision — гейт (а). buildFullOpenAPISpec уже падает с
-// pathMethodCollisionError при дубле; здесь убеждаемся, что сборка проходит и число
-// операций соответствует числу зарегистрированных (без молчаливой потери).
+// TestFullSpec_NoPathMethodCollision — gate (a). buildFullOpenAPISpec already fails with
+// pathMethodCollisionError on a duplicate; here we confirm the build succeeds and the
+// operation count matches the registered count (no silent loss).
 func TestFullSpec_NoPathMethodCollision(t *testing.T) {
 	spec, err := buildFullOpenAPISpec()
 	if err != nil {
 		t.Fatalf("buildFullOpenAPISpec: %v", err)
 	}
 
-	// Пересчёт операций: должно быть >100 (контракт ~120). Любой дубль path+method
-	// был бы пойман внутри buildFullOpenAPISpec — здесь дополнительно фиксируем
-	// порядок величины, чтобы тест ловил случайную усушку набора групп.
+	// Recount of operations: should be >100 (contract ~120). Any path+method duplicate
+	// would already be caught inside buildFullOpenAPISpec — here we additionally pin
+	// the order of magnitude so the test catches an accidental shrinkage of the group set.
 	ops := 0
 	for _, item := range spec.Paths {
 		ops += len(pathItemOps(item))
 	}
 	if ops < 100 {
-		t.Fatalf("собрано %d операций — ожидалось ~120; возможна усохшая регистрация групп", ops)
+		t.Fatalf("withбраbut %d операций — ожидалось ~120; возможon уwithхшая регистрация групп", ops)
 	}
-	t.Logf("гейт (а): %d путей, %d операций, дублей path+method нет", len(spec.Paths), ops)
+	t.Logf("gate (а): %d путей, %d операций, дублей path+method нет", len(spec.Paths), ops)
 }
 
-// TestFullSpec_NoSchemaCollision — гейт (б), главный unknown. buildFullOpenAPISpec
-// возвращает schemaCollisionError при одноимённых схемах с разным телом. Тест явно
-// перебирает ВСЕ группы и собирает имя→{домен→тело}, доказывая, что у любого дубль-
-// имени тело идентично (а значит дедуп безопасен и needs_architect не нужен).
+// TestFullSpec_NoSchemaCollision — gate (b), the main unknown. buildFullOpenAPISpec
+// returns schemaCollisionError for same-named schemas with different bodies. The test
+// explicitly iterates ALL groups and collects name→{domain→body}, proving that for any
+// duplicate name the body is identical (so dedup is safe and needs_architect isn't needed).
 func TestFullSpec_NoSchemaCollision(t *testing.T) {
-	// Прямая сборка обязана пройти без коллизии.
+	// The direct build must pass without a collision.
 	if _, err := buildFullOpenAPISpec(); err != nil {
-		t.Fatalf("schema-merge коллизия (гейт б): %v\n→ needs_architect: как namespace-ить одноимённые схемы разных доменов", err)
+		t.Fatalf("schema-merge коллfromия (gate б): %v\n→ needs_architect: as namespace-ить одbutимённые схемы разных toмеbutв", err)
 	}
 
-	// Независимый перебор групп: для каждого имени схемы собираем множество
-	// различных тел. >1 различное тело под одним именем = коллизия (быть не
-	// должно). Дубль-имена с идентичным телом перечисляем для протокола.
+	// Independent iteration over groups: for each schema name we collect the set of
+	// distinct bodies. >1 distinct body under one name = a collision (must not
+	// happen). Duplicate names with an identical body are listed for the record.
 	installHumaErrorOverride()
 	bodies := map[string]map[string]struct{}{} // name -> set(body)
-	dupNames := map[string]int{}               // name -> сколько групп его дали
+	dupNames := map[string]int{}               // name -> how many groups produced it
 	for i, g := range fullSpecGroups() {
 		api := newHumaCadenceAPI(chi.NewRouter())
 		if err := g.register(api); err != nil {
@@ -90,7 +90,7 @@ func TestFullSpec_NoSchemaCollision(t *testing.T) {
 	}
 	if len(collided) > 0 {
 		sort.Strings(collided)
-		t.Fatalf("гейт (б) ПРОВАЛЕН: схемы с одним именем но РАЗНЫМ телом между доменами: %v\n→ needs_architect", collided)
+		t.Fatalf("gate (б) ПРОВАЛЕН: схемы с одним именем but РАЗНЫМ bodyм между toмеonми: %v\n→ needs_architect", collided)
 	}
 
 	var shared []string
@@ -100,12 +100,12 @@ func TestFullSpec_NoSchemaCollision(t *testing.T) {
 		}
 	}
 	sort.Strings(shared)
-	t.Logf("гейт (б): 0 коллизий; одноимённые схемы с идентичным телом (безопасный дедуп): %v", shared)
+	t.Logf("gate (б): 0 коллfromий; одbutимённые схемы с идентичным bodyм (безопасный дедуп): %v", shared)
 }
 
-// TestFullSpec_ValidOpenAPI31 — гейт (в). Парсим YAML собранной спеки и проверяем
-// обязательные поля 3.1: openapi==3.1.0, непустые paths + components.schemas, каждый
-// path-item имеет ≥1 HTTP-метод-операцию, $ref-ы схем разрешимы внутри документа.
+// TestFullSpec_ValidOpenAPI31 — gate (c). Parses the YAML of the assembled spec and checks
+// the required 3.1 fields: openapi==3.1.0, non-empty paths + components.schemas, every
+// path item has ≥1 HTTP-method operation, schema $refs resolve within the document.
 func TestFullSpec_ValidOpenAPI31(t *testing.T) {
 	y, err := HumaFullSpecYAML()
 	if err != nil {
@@ -114,19 +114,19 @@ func TestFullSpec_ValidOpenAPI31(t *testing.T) {
 
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(y), &doc); err != nil {
-		t.Fatalf("собранная спека не парсится как YAML: %v", err)
+		t.Fatalf("withбранonя спека не парсится as YAML: %v", err)
 	}
 
 	if v, _ := doc["openapi"].(string); v != "3.1.0" {
 		t.Errorf("openapi=%q, ожидалось 3.1.0", v)
 	}
 	if _, ok := doc["info"]; !ok {
-		t.Error("обязательное поле info отсутствует")
+		t.Error("обязательbutе field info отсутствует")
 	}
 
 	paths, ok := doc["paths"].(map[string]any)
 	if !ok || len(paths) == 0 {
-		t.Fatal("paths пуст или не map — не валидная 3.1-спека")
+		t.Fatal("paths пуст or не map — не валидonя 3.1-спека")
 	}
 	comp, ok := doc["components"].(map[string]any)
 	if !ok {
@@ -155,30 +155,30 @@ func TestFullSpec_ValidOpenAPI31(t *testing.T) {
 			}
 		}
 		if !hasOp {
-			t.Errorf("path %q без единой HTTP-операции", p)
+			t.Errorf("path %q без едиbutй HTTP-операции", p)
 		}
 	}
 
-	// $ref-целостность: каждый #/components/schemas/<Name> в документе разрешим.
+	// $ref integrity: every #/components/schemas/<Name> in the document must resolve.
 	refs := collectSchemaRefs(doc)
 	for ref := range refs {
 		name := strings.TrimPrefix(ref, "#/components/schemas/")
 		if name == ref {
-			continue // не локальный schemas-ref
+			continue // not a local schemas-ref
 		}
 		if _, ok := schemas[name]; !ok {
 			t.Errorf("$ref %q не разрешается — схема %q отсутствует в components.schemas (битый merge)", ref, name)
 		}
 	}
 
-	t.Logf("гейт (в): валидная 3.1-спека — %d путей, %d схем, все $ref разрешимы", len(paths), len(schemas))
+	t.Logf("gate (в): валидonя 3.1-спека — %d путей, %d схем, все $ref разрешимы", len(paths), len(schemas))
 }
 
-// TestFullSpec_CoversAllRoutes — гейт (г), drift-guard. Множество (method, path)
-// собранной спеки обязано совпасть с реальными роутами Operator API:
-// chi.Walk(buildRouter) даёт роуты non-opt-in доменов; opt-in домены в drift-test-
-// router-е = nil, их роуты живут в pathAllowlist — добавляем оттуда. Health/meta
-// (/healthz, /readyz, /openapi.yaml, /openapi.json) — вне /v1, не huma-домены, исключаются.
+// TestFullSpec_CoversAllRoutes — gate (d), drift guard. The (method, path) set of the
+// assembled spec must match the real routes of the Operator API:
+// chi.Walk(buildRouter) gives routes for non-opt-in domains; opt-in domains in the
+// drift-test router = nil, their routes live in pathAllowlist — added from there. Health/meta
+// (/healthz, /readyz, /openapi.yaml, /openapi.json) — outside /v1, not huma domains, excluded.
 func TestFullSpec_CoversAllRoutes(t *testing.T) {
 	spec, err := buildFullOpenAPISpec()
 	if err != nil {
@@ -192,14 +192,14 @@ func TestFullSpec_CoversAllRoutes(t *testing.T) {
 		}
 	}
 
-	// Реальные роуты: non-opt-in из chi.Walk + opt-in из pathAllowlist.
+	// Real routes: non-opt-in from chi.Walk + opt-in from pathAllowlist.
 	realSet := map[route]struct{}{}
 	for r := range collectRoutes(t) {
 		if strings.HasSuffix(r.path, wildcardSuffix) {
 			continue // chi catch-all 404
 		}
 		if isHealthMetaRoute(r) {
-			continue // вне /v1, не huma-домен
+			continue // outside /v1, not a huma domain
 		}
 		realSet[r] = struct{}{}
 	}
@@ -222,42 +222,42 @@ func TestFullSpec_CoversAllRoutes(t *testing.T) {
 	sort.Strings(inRealNotSpec)
 
 	if len(inRealNotSpec) > 0 {
-		t.Errorf("РОУТ ЕСТЬ, в собранной спеке НЕТ (агрегатор забыл домен/группу) — %d:\n  %s",
+		t.Errorf("РОУТ ЕСТЬ, in compiled spec NOTТ (агрегатор забыл toмен/группу) — %d:\n  %s",
 			len(inRealNotSpec), strings.Join(inRealNotSpec, "\n  "))
 	}
 	if len(inSpecNotReal) > 0 {
-		t.Errorf("В СПЕКЕ ЕСТЬ, реального роута НЕТ (лишняя/неверно-префиксованная операция) — %d:\n  %s",
+		t.Errorf("В СПЕКЕ ЕСТЬ, реальbutго роута NOTТ (лишняя/неверbut-префикwithванonя операция) — %d:\n  %s",
 			len(inSpecNotReal), strings.Join(inSpecNotReal, "\n  "))
 	}
 
-	t.Logf("гейт (г): спека и роуты совпадают — %d роутов покрыто", len(specSet))
+	t.Logf("gate (г): спека и роуты withвпадают — %d роутов покрыто", len(specSet))
 }
 
-// TestFullSpec_NoTechnicalSchemaNames — ФИНАЛЬНЫЙ СКВОЗНОЙ ГЕЙТ чистоты спеки (батч N6,
-// перед T4c served-switch). Собирает агрегатор-спеку и проверяет, что НИ ОДНО имя схемы НЕ
-// несёт технического/дрейф-маркера:
+// TestFullSpec_NoTechnicalSchemaNames — FINAL END-TO-END CLEANLINESS GATE for the spec (batch N6,
+// before the T4c served-switch). Assembles the aggregator spec and checks that NOT A SINGLE
+// schema name carries a technical/drift marker:
 //
-//	(1) подстрочные маркеры huma-Go-имён и envelope-дрейфов: "HumaBody" (request/reply-Go-тип
-//	    не выровнен), "Response" (reply-дрейф вместо контрактного Reply), "PagedResponse"
-//	    (неаласенный generic envelope), "DTO" (handler-DTO-имя);
-//	(2) oapi-капитализационные дрейфы (генератор oapi эмитит ALLCAPS-аббревиатуры —
-//	    SSHTargetReply вместо SshTargetReply и т.п.).
+//	(1) substring markers of huma Go names and envelope drifts: "HumaBody" (request/reply Go type
+//	    not aligned), "Response" (reply drift instead of the contractual Reply), "PagedResponse"
+//	    (un-aliased generic envelope), "DTO" (handler-DTO name);
+//	(2) oapi capitalization drifts (the oapi generator emits ALLCAPS abbreviations —
+//	    SSHTargetReply instead of SshTargetReply, etc.).
 //
-// ЕДИНСТВЕННОЕ исключение — "HumaProblemError" (huma RFC 7807 error-wrapper, не доменная
-// схема, имя задаётся huma-фреймворком). Любое иное имя с маркером = незавершённое
-// выравнивание → тест краснит со списком оставшихся.
+// The ONLY exception is "HumaProblemError" (huma's RFC 7807 error wrapper, not a domain
+// schema, the name is set by the huma framework). Any other name with a marker = unfinished
+// alignment → the test fails red with a list of the remaining ones.
 func TestFullSpec_NoTechnicalSchemaNames(t *testing.T) {
 	spec, err := buildFullOpenAPISpec()
 	if err != nil {
 		t.Fatalf("buildFullOpenAPISpec: %v", err)
 	}
 
-	// Подстрочные маркеры технических/дрейф-имён.
+	// Substring markers of technical/drift names.
 	substrMarkers := []string{"HumaBody", "Response", "PagedResponse", "DTO"}
-	// ALLCAPS-аббревиатуры oapi-генератора (капитализационный дрейф контрактного CamelCase).
+	// ALLCAPS abbreviations from the oapi generator (capitalization drift from the contractual CamelCase).
 	capsMarkers := []string{"SSH", "HTTP", "URL", "JSON", "ACL", "DNS", "TLS", "TTL"}
 
-	const allowed = "HumaProblemError" // RFC 7807 wrapper huma — разрешён
+	const allowed = "HumaProblemError" // huma's RFC 7807 wrapper — allowed
 
 	var offenders []string
 	for name := range spec.Components.Schemas.Map() {
@@ -278,17 +278,17 @@ func TestFullSpec_NoTechnicalSchemaNames(t *testing.T) {
 	sort.Strings(offenders)
 
 	if len(offenders) > 0 {
-		t.Fatalf("ФИНАЛЬНЫЙ ГЕЙТ ПРОВАЛЕН: в спеке остались технические/дрейф-имена схем (%d) — выравнивание не завершено:\n  %s",
+		t.Fatalf("ФИНАЛЬНЫЙ ГЕЙТ ПРОВАЛЕН: в спеке остались technical/дрейф-names схем (%d) — выравнивание не завершеbut:\n  %s",
 			len(offenders), strings.Join(offenders, "\n  "))
 	}
 
-	t.Logf("финальный гейт: 0 техимён в спеке (%d схем; единственное исключение — %s)",
+	t.Logf("фиonльный gate: 0 техимён в спеке (%d схем; единственbutе исключение — %s)",
 		len(spec.Components.Schemas.Map()), allowed)
 }
 
-// isHealthMetaRoute — health/meta/docs-эндпоинты вне /v1 (не входят в huma-домены,
-// в агрегат-спеке отсутствуют). /docs/assets/* оканчивается на /* → отсеивается
-// раньше как wildcard.
+// isHealthMetaRoute — health/meta/docs endpoints outside /v1 (not part of the huma
+// domains, absent from the aggregate spec). /docs/assets/* ends with /* → filtered
+// out earlier as a wildcard.
 func isHealthMetaRoute(r route) bool {
 	switch r.path {
 	case "/healthz", "/readyz", "/openapi.yaml", "/openapi.json", "/docs":
@@ -297,8 +297,8 @@ func isHealthMetaRoute(r route) bool {
 	return false
 }
 
-// collectSchemaRefs рекурсивно собирает все строковые значения ключа "$ref" в
-// произвольном YAML-дереве (для проверки $ref-целостности гейта в).
+// collectSchemaRefs recursively collects all string values of the "$ref" key in
+// an arbitrary YAML tree (for the $ref integrity check of gate c).
 func collectSchemaRefs(node any) map[string]struct{} {
 	out := map[string]struct{}{}
 	var walk func(any)

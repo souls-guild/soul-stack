@@ -1,22 +1,24 @@
 package api
 
-// Guard-тесты ТИРАЖ-БАТЧА-2e разворота PUSH-домена ЦЕЛИКОМ на huma full-typed (ADR-054
-// §Pattern, эталоны operator issue-token + audit-endpoint). apply — WRITE+AUDIT (вариант B,
-// huma-audit-middleware; событие push.applied; 202+body async); get/push-runs — read (БЕЗ
-// audit). Доказывают инварианты кластера поверх chi:
+// Guard tests for ROLLOUT-BATCH-2e of the PUSH domain flipping ENTIRELY onto huma
+// full-typed (ADR-054 §Pattern, reference: operator issue-token + audit-endpoint).
+// apply is WRITE+AUDIT (variant B, huma-audit-middleware; event push.applied;
+// 202+body async); get/push-runs are read (WITHOUT audit). Prove cluster invariants
+// on top of chi:
 //
 //   - apply unknown-field → 400; apply missing-required → 422; push-runs bad pagination → 400;
 //     push-runs bad status-enum → 422; RBAC-deny → 403;
-//   - S6-GUARD на apply (единственный write): полная huma-навеска НЕ пишет push.applied на
-//     403/400/422 (security-критичная половина — over-write на отказе).
+//   - S6-GUARD on apply (the only write): the full huma wiring does NOT write
+//     push.applied on 403/400/422 (the security-critical half — over-write on failure).
 //
-// Apply happy-path (202 + S6 RecordsOnSuccess) и push-runs golden НЕ покрыты unit-level:
-// *pushorch.PushRun держит конкретный *Store на PG, и сам pushorch-пакет документирует
-// (run_test.go §newTestPushRun), что end-to-end Apply поверх Store отложен в
-// integration_test.go (build-tag integration_pg) — testcontainers, не unit. Поэтому здесь
-// (как и handlers/push_test.go) svc=nil: проверяются validation/RBAC/no-audit-ветки, которые
-// отрабатывают ДО обращения к orchestrator-у. happy-path wire — toOapiPushApplyView/
-// toOapiPushRunListEntry unit-тесты + pushorch/integration_test.go.
+// The apply happy-path (202 + S6 RecordsOnSuccess) and push-runs golden are NOT
+// covered at unit level: *pushorch.PushRun holds a concrete *Store on PG, and the
+// pushorch package itself documents (run_test.go §newTestPushRun) that end-to-end
+// Apply over Store is deferred to integration_test.go (build-tag integration_pg) —
+// testcontainers, not unit. So here (like handlers/push_test.go) svc=nil: this
+// checks the validation/RBAC/no-audit branches that run BEFORE reaching the
+// orchestrator. happy-path wire — toOapiPushApplyView/toOapiPushRunListEntry unit
+// tests + pushorch/integration_test.go.
 
 import (
 	"context"
@@ -35,20 +37,20 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// hPushApplier — fake-orchestrator (узкая Apply-поверхность): отдаёт статичный
-// apply_id без PG. Внедряется через handlers.NewPushHandlerWithApplier для
-// happy-path 202 → проверки S6 carrier→audit-пути (см.
-// TestHumaAudit_PushApply_RecordsOnSuccess). Прод по-прежнему *pushorch.PushRun.
+// hPushApplier — fake-orchestrator (narrow Apply surface): returns static
+// apply_id without PG. Injected via handlers.NewPushHandlerWithApplier for
+// happy-path 202 → S6 carrier→audit path checks (see
+// TestHumaAudit_PushApply_RecordsOnSuccess). Prod still *pushorch.PushRun.
 type hPushApplier struct{ applyID string }
 
 func (a hPushApplier) Apply(context.Context, pushorch.ApplyRequest) (string, error) {
 	return a.applyID, nil
 }
 
-// humaPushRouter собирает chi-роутер со ВСЕМИ push-роутами через huma — продакшен-навеска
-// из router.go: RequirePermission на каждой группе + (apply) huma-audit-middleware вариант B.
-// injectClaims заменяет RequireJWT. pushH с nil-svc достаточно для validation/RBAC/no-audit-
-// веток (они отрабатывают ДО orchestrator-вызова).
+// humaPushRouter builds chi router with ALL push routes via huma — production wrapper
+// from router.go: RequirePermission on each group + (apply) huma-audit-middleware variant B.
+// injectClaims replaces RequireJWT. pushH with nil-svc sufficient for validation/RBAC/no-audit-
+// branches (they work BEFORE orchestrator call).
 func humaPushRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, auditW audit.Writer, pushH *handlers.PushHandler) *chi.Mux {
 	t.Helper()
 	installHumaErrorOverride()
@@ -94,7 +96,7 @@ func TestHumaPush_Apply_UnknownField_400(t *testing.T) {
 func TestHumaPush_Apply_MissingRequired_422(t *testing.T) {
 	r := humaPushRouter(t, strictAllowAll{}, nil, nilSvcPushHandler())
 	rec := httptest.NewRecorder()
-	// inventory отсутствует (required) → huma 422 ДО handler-а (и ДО nil-svc-чека).
+	// inventory missing (required) → huma 422 BEFORE handler (and BEFORE nil-svc check).
 	req := httptest.NewRequest(http.MethodPost, "/v1/push/apply", strings.NewReader(`{"destiny":"d@v1"}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -114,7 +116,7 @@ func TestHumaPush_Apply_RBACDeny_403(t *testing.T) {
 	}
 }
 
-// === S6-AUDIT-GUARD (apply NO-write на отказе) ===
+// === S6-AUDIT-GUARD (apply NO-write on rejection) ===
 
 func TestHumaAudit_PushApply_NoAudit_OnRBACDeny(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
@@ -127,7 +129,7 @@ func TestHumaAudit_PushApply_NoAudit_OnRBACDeny(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на RBAC-deny push.apply (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on RBAC-deny push.apply (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -141,13 +143,13 @@ func TestHumaAudit_PushApply_NoAudit_OnValidationFail(t *testing.T) {
 		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на 422 push.apply (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on 422 push.apply (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
 func TestHumaAudit_PushApply_NoAudit_OnInternalError(t *testing.T) {
-	// nil-svc → ApplyTyped возвращает 500 ДО любого orchestrator-вызова; на 5xx
-	// middleware вариант B (hctx.Status()>=300) audit НЕ пишет.
+	// nil-svc → ApplyTyped returns 500 BEFORE any orchestrator call; on 5xx
+	// middleware variant B (hctx.Status()>=300) audit does NOT write.
 	auditCap := &auditCaptureWriter{}
 	r := humaPushRouter(t, strictAllowAll{}, auditCap, nilSvcPushHandler())
 	rec := httptest.NewRecorder()
@@ -158,17 +160,17 @@ func TestHumaAudit_PushApply_NoAudit_OnInternalError(t *testing.T) {
 		t.Fatalf("status = %d, want 500 (nil-svc); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на 500 push.apply (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on 500 push.apply (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
-// TestHumaAudit_PushApply_RecordsOnSuccess — S6-критичный happy-path: реальный
-// POST /v1/push/apply через прод-зеркальную huma.API + RequirePermission → 202 →
-// audit ДОЛЖЕН содержать push.applied с НЕПУСТЫМ payload (apply_id). Это ровно
-// carrier→middleware-путь, который ломала S6-регрессия (full-typed huma пишет
-// ответ сам, минуя StatusRecorder). Мок-сем (hPushApplier) развязывает PG-
-// зависимость orchestrator-а. Мутационная проверка: убрать SetHumaAuditPayload в
-// registerHumaPushApply → payload пуст → assertAuditWritten красит на len==0.
+// TestHumaAudit_PushApply_RecordsOnSuccess — S6-critical happy-path: real
+// POST /v1/push/apply through prod-mirror huma.API + RequirePermission → 202 →
+// audit MUST contain push.applied with NON-EMPTY payload (apply_id). This is exactly
+// carrier→middleware path, which S6-regression broke (full-typed huma writes
+// response itself, bypassing StatusRecorder). Mock setup (hPushApplier) decouples PG
+// orchestrator dependency. Mutation check: remove SetHumaAuditPayload in
+// registerHumaPushApply → payload empty → assertAuditWritten paints at len==0.
 func TestHumaAudit_PushApply_RecordsOnSuccess(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	pushH := handlers.NewPushHandlerWithApplier(hPushApplier{applyID: "01HPUSHAPPLY000000000000000"}, nil)
@@ -183,7 +185,7 @@ func TestHumaAudit_PushApply_RecordsOnSuccess(t *testing.T) {
 	assertAuditWritten(t, auditCap, audit.EventPushApplied, map[string]any{"apply_id": "01HPUSHAPPLY000000000000000"})
 }
 
-// === PUSH-RUNS (READ-with-typed-query, БЕЗ audit) — валидация ДО nil-svc-чека ===
+// === PUSH-RUNS (READ-with-typed-query, NO audit) — validation BEFORE nil-svc check ===
 
 func TestHumaPush_RunsList_BadOffset_400(t *testing.T) {
 	r := humaPushRouter(t, strictAllowAll{}, nil, nilSvcPushHandler())
@@ -215,16 +217,16 @@ func TestHumaPush_RunsList_BadStatusEnum_422(t *testing.T) {
 	assertHumaProblem(t, rec, problem.TypeValidationFailed)
 }
 
-// TestHumaPush_RunsList_ValidStatusEnum_PassesBind — каждый валидный статус домена
-// проходит huma-enum-bind (не отбивается 422) — enum-набор синхронен pushorch.PushRunStatus.
-// Дальше nil-svc → 500 (но enum-фаза пройдена, что и проверяем: НЕ 422).
+// TestHumaPush_RunsList_ValidStatusEnum_PassesBind — each valid status of domain
+// passes huma-enum-bind (not rejected with 422) — enum set synchronized with pushorch.PushRunStatus.
+// Then nil-svc → 500 (but enum phase passed, which we check: NOT 422).
 func TestHumaPush_RunsList_ValidStatusEnum_PassesBind(t *testing.T) {
 	r := humaPushRouter(t, strictAllowAll{}, nil, nilSvcPushHandler())
 	for _, st := range []string{"pending", "running", "success", "partial_failed", "failed", "cancelled"} {
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/push-runs?status="+st, nil))
 		if rec.Code == http.StatusUnprocessableEntity {
-			t.Errorf("валидный статус %q отбит 422 (enum-набор рассинхронен с доменом); body=%s", st, rec.Body.String())
+			t.Errorf("валидный статус %q отбит 422 (enum-onбор рассинхронен с toмеbutм); body=%s", st, rec.Body.String())
 		}
 	}
 }
@@ -238,18 +240,18 @@ func TestHumaPush_RunsList_RBACDeny_403(t *testing.T) {
 	}
 }
 
-// TestHumaPush_GetRunsRead_NoAudit — read-роуты (get/push-runs) не несут audit-middleware:
-// прогон с capture-writer (навешан лишь на apply-группу) даёт 0 событий на read.
+// TestHumaPush_GetRunsRead_NoAudit — read routes (get/push-runs) do not carry audit-middleware:
+// run with capture-writer (attached only to apply group) gives 0 events on read.
 func TestHumaPush_GetRunsRead_NoAudit(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	r := humaPushRouter(t, strictAllowAll{}, auditCap, nilSvcPushHandler())
 	for _, path := range []string{"/v1/push-runs", "/v1/push/01HABCDEFGHJKMNPQRSTVWXYZ0"} {
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
-		// nil-svc → 500, но это read-ветка: audit-middleware на этих группах НЕ навешан.
+		// nil-svc → 500, but this is read branch: audit-middleware NOT attached to these groups.
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("read push get/push-runs записали audit (%d событий)", len(auditCap.Events()))
+		t.Errorf("read push get/push-runs записали audit (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -260,7 +262,7 @@ func TestHumaPush_SpecYAML(t *testing.T) {
 	}
 	for _, want := range []string{"pushApply", "pushGet", "listPushRuns", "/apply", "/push-runs"} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("спека не содержит %q:\n%s", want, frag)
+			t.Errorf("спека не withдержит %q:\n%s", want, frag)
 		}
 	}
 }

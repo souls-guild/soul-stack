@@ -32,8 +32,8 @@ func provisioningPolicyGetOperation() huma.Operation {
 		OperationID:   "getProvisioningPolicy",
 		Method:        http.MethodGet,
 		Path:          "/",
-		Summary:       "Политика способов создания операторов",
-		Description:   "Текущий список разрешённых способов СОЗДАНИЯ оператора (provisioning_allowed_methods, ADR-058 Часть B). policy_set=false → политика не задана (дефолт: все способы разрешены). Permission provisioning.read. Read-only, без audit.",
+		Summary:       "Политика споwithбов withздания операторов",
+		Description:   "Текущий спиwithк разрешённых споwithбов СОЗДАНИЯ оператора (provisioning_allowed_methods, ADR-058 Часть B). policy_set=false → политика не задаon (дефолт: все споwithбы разрешены). Permission provisioning.read. Read-only, no audit.",
 		Tags:          []string{"provisioning"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusInternalServerError},
@@ -54,7 +54,7 @@ type provisioningPolicyPutInput struct {
 // lock out operator creation). Domain validation (domain/dedup) — in PutTyped.
 // Struct name = contract schema name in OpenAPI.
 type ProvisioningPolicyUpdateRequest struct {
-	AllowedMethods []string `json:"allowed_methods" required:"true" minItems:"1" enum:"user,ldap,oidc" doc:"разрешённые способы создания оператора (anti-lockout: непустой список из {user,ldap,oidc})"`
+	AllowedMethods []string `json:"allowed_methods" required:"true" minItems:"1" enum:"user,ldap,oidc" doc:"разрешённые споwithбы withздания оператора (anti-lockout: непустой спиwithк from {user,ldap,oidc})"`
 }
 
 // provisioningPolicyPutOutput — huma output PUT. Status=200 WITH BODY (native
@@ -73,8 +73,8 @@ func provisioningPolicyPutOperation() huma.Operation {
 		OperationID:   "updateProvisioningPolicy",
 		Method:        http.MethodPut,
 		Path:          "/",
-		Summary:       "Сменить политику способов создания операторов",
-		Description:   "Replace-семантика списка разрешённых способов СОЗДАНИЯ оператора (provisioning_allowed_methods, ADR-058 Часть B). Permission provisioning.update. 422 — пустой список (anti-lockout) или метод вне {user,ldap,oidc}. Гейтит ТОЛЬКО создание оператора; существующие логинятся независимо от политики.",
+		Summary:       "Сменить политику споwithбов withздания операторов",
+		Description:   "Replace-семантика списка разрешённых споwithбов СОЗДАНИЯ оператора (provisioning_allowed_methods, ADR-058 Часть B). Permission provisioning.update. 422 — пустой спиwithк (anti-lockout) or метод вне {user,ldap,oidc}. Гейтит ТОЛЬКО withздание оператора; существующие логинятся независимо от политики.",
 		Tags:          []string{"provisioning"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},

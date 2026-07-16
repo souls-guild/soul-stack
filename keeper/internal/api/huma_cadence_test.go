@@ -112,7 +112,7 @@ func TestHumaCadence_Create_UnknownField_400(t *testing.T) {
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 (unknown-field через huma additionalProperties:false); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 400 (unknown-field via huma additionalProperties:false); body=%s", rec.Code, rec.Body.String())
 	}
 	assertHumaProblem(t, rec, problem.TypeMalformedRequest)
 }
@@ -161,7 +161,7 @@ func TestHumaCadence_Create_RBACDeny_403(t *testing.T) {
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403 (RBAC-deny на cadence.create); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 403 (RBAC-deny on cadence.create); body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -182,7 +182,7 @@ func TestHumaCadence_Create_AuditRecorded(t *testing.T) {
 	}
 	evs := auditCap.Events()
 	if len(evs) == 0 {
-		t.Fatalf("audit НЕ записан на успешном 201 huma-роуте (huma сломал write-путь cadence.create)")
+		t.Fatalf("audit NOT записан on успешbutм 201 huma-роуте (huma сломал write-путь cadence.create)")
 	}
 	ev := evs[0]
 	if ev.EventType != audit.EventCadenceCreated {
@@ -192,7 +192,7 @@ func TestHumaCadence_Create_AuditRecorded(t *testing.T) {
 		t.Errorf("archon_aid = %q, want archon-alice", ev.ArchonAID)
 	}
 	if len(ev.Payload) == 0 {
-		t.Error("audit payload пуст — FULL-TYPED извлечение потеряло доменный payload")
+		t.Error("audit payload empty — FULL-TYPED fromвлечение потеряло toменный payload")
 	}
 	if ev.Payload["cadence_id"] == nil || ev.Payload["name"] == nil {
 		t.Errorf("audit payload без cadence_id/name: %+v", ev.Payload)
@@ -214,7 +214,7 @@ func TestHumaCadence_NoAudit_OnReject(t *testing.T) {
 		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на rejected-запросе (%d событий) — write-путь не должен писать на 422", len(auditCap.Events()))
+		t.Errorf("audit записан on rejected-запросе (%d withбытий) — write-путь не toлжен писать on 422", len(auditCap.Events()))
 	}
 }
 
@@ -231,7 +231,7 @@ func TestHumaCadence_OpenAPIFragment_3_1(t *testing.T) {
 	}
 	for _, want := range []string{"createCadence", "getCadence", "listCadenceRuns", "patchCadence", "deleteCadence", "enableCadence", "disableCadence", "schedule_kind", "overlap_policy", "cadence_id"} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("OpenAPI-фрагмент не содержит %q (форма из Go-типов потеряна):\n%s", want, frag)
+			t.Errorf("OpenAPI-фрагмент не withдержит %q (form from Go-типов потеряon):\n%s", want, frag)
 		}
 	}
 }
@@ -263,7 +263,7 @@ func TestHumaCadence_Create_GoldenWire(t *testing.T) {
 
 	const golden = `{"cadence_id":"_ULID_","enabled":true,"location":"/v1/cadences/_ULID_","name":"hourly","next_run_at":"_TS_"}`
 	if got != golden {
-		t.Errorf("GOLDEN wire-дрейф FULL-TYPED reply:\n got  = %s\n want = %s\n(набор ключей/omitempty/nullable/наличие $schema изменился — проверь CadenceCreateReply и newHumaCadenceAPI)", got, golden)
+		t.Errorf("GOLDEN wire-дрейф FULL-TYPED reply:\n got  = %s\n want = %s\n(onбор ключей/omitempty/nullable/onличие $schema fromменился — проверь CadenceCreateReply и newHumaCadenceAPI)", got, golden)
 	}
 }
 
@@ -302,7 +302,7 @@ func assertHumaProblem(t *testing.T, rec *httptest.ResponseRecorder, wantType st
 	}
 	var p problem.Details
 	if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
-		t.Fatalf("тело не problem+json: %v; body=%s", err, rec.Body.String())
+		t.Fatalf("body не problem+json: %v; body=%s", err, rec.Body.String())
 	}
 	if p.Type != wantType {
 		t.Errorf("problem type = %q, want %q", p.Type, wantType)

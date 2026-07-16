@@ -41,9 +41,9 @@ import (
 //     the range via CheckPageBounds → 400 — otherwise a wire change.
 type cadenceListInput struct {
 	Enabled string `query:"enabled" enum:"true,false" doc:"фильтр по enabled: true → только включённые, false → все (без фильтра); опущен → все"`
-	Kind    string `query:"kind" enum:"scenario,command" doc:"фильтр по типу рецепта (exact); вне набора → 422"`
-	Offset  int32  `query:"offset" default:"0" doc:"сдвиг от начала набора, ≥0 (совпадает с shared/api.ParsePage; out-of-range → 400)"`
-	Limit   int32  `query:"limit" default:"50" doc:"размер страницы 1..1000 (совпадает с shared/api.ParsePage; out-of-range → 400)"`
+	Kind    string `query:"kind" enum:"scenario,command" doc:"фильтр по типу рецепта (exact); вне onбора → 422"`
+	Offset  int32  `query:"offset" default:"0" doc:"offset from start of set, ≥0 (matches shared/api.ParsePage; out-of-range → 400)"`
+	Limit   int32  `query:"limit" default:"50" doc:"page size 1..1000 (matches shared/api.ParsePage; out-of-range → 400)"`
 }
 
 // cadenceListOutput — huma output for GET /v1/cadences (FULL-TYPED). Body is the typed
@@ -64,8 +64,8 @@ func cadenceListOperation() huma.Operation {
 		OperationID:   "listCadences",
 		Method:        http.MethodGet,
 		Path:          "/",
-		Summary:       "Список расписаний (Cadence, paged)",
-		Description:   "Read-only-список Cadence с фильтрами enabled/kind и пагinацией (sort created_at DESC). Permission cadence.list. Read-only, без audit.",
+		Summary:       "Спиwithк расписаний (Cadence, paged)",
+		Description:   "Read-only-спиwithк Cadence с фильтрами enabled/kind и пагinацией (sort created_at DESC). Permission cadence.list. Read-only, no audit.",
 		Tags:          []string{"cadence"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},

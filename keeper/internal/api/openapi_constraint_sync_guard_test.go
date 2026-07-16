@@ -380,12 +380,12 @@ var constraintSyncCases = []constraintSyncCase{
 		source:    "soul.CovenPattern (incarnation CreateTyped, incarnation_typed.go:95)",
 	},
 
-	// --- timeout_seconds верх (errand.MaxTimeoutSeconds = 300) ---
-	// ErrandRunRequest.timeout_seconds: рантайм 422-ит ТОЛЬКО `> MaxTimeoutSeconds`
-	// (dispatcher.go:685, dispatchError → ErrTimeoutOutOfRange). НИЖНЕЙ границы тегом
-	// НЕТ: timeout_seconds=0 (или опущено) → DefaultTimeoutSeconds (dispatcher.go:683,
-	// валидно) → minimum:"1" ложно 422-ил бы валидный 0 (ловушка нуля). Источник —
-	// ЭКСПОРТНЫЙ const errand.MaxTimeoutSeconds (не литерал).
+	// --- timeout_seconds upper bound (errand.MaxTimeoutSeconds = 300) ---
+	// ErrandRunRequest.timeout_seconds: the runtime 422s ONLY on `> MaxTimeoutSeconds`
+	// (dispatcher.go:685, dispatchError → ErrTimeoutOutOfRange). There is NO LOWER
+	// bound: timeout_seconds=0 (or omitted) → DefaultTimeoutSeconds (dispatcher.go:683,
+	// valid) → minimum:"1" would falsely 422 a valid 0 (the zero trap). Source is the
+	// EXPORTED const errand.MaxTimeoutSeconds (not a literal).
 	{
 		name:      "errand exec timeout_seconds maximum",
 		structPtr: &errandExecInput{},
@@ -395,11 +395,11 @@ var constraintSyncCases = []constraintSyncCase{
 		source:    "errand.MaxTimeoutSeconds (dispatcher.go:685, ErrTimeoutOutOfRange → 422)",
 	},
 
-	// --- батч-границы Voyage create (handlers/voyage.go + voyage/crud.go) ---
-	// Все поля *int omitempty: nil/опущено → дефолт (без 422); явный 0/<1 → 422 (тот
-	// же предикат, что huma minimum). batch_size/fail_threshold — только minimum
-	// (верх не валидируется). batch_percent — [1,100]. concurrency — [1,500] (верх
-	// voyageMaxConcurrency, ТОЛЬКО Voyage).
+	// --- Voyage create batch bounds (handlers/voyage.go + voyage/crud.go) ---
+	// All fields are *int omitempty: nil/omitted → default (no 422); explicit 0/<1 → 422
+	// (the same predicate as huma minimum). batch_size/fail_threshold have only a minimum
+	// (no upper-bound validation). batch_percent is [1,100]. concurrency is [1,500] (the
+	// upper bound voyageMaxConcurrency applies to Voyage ONLY).
 	{
 		name:      "voyage.create batch_size minimum",
 		structPtr: &voyageCreateInput{},
@@ -449,8 +449,8 @@ var constraintSyncCases = []constraintSyncCase{
 		source:    "validateVoyageRequest (handlers/voyage.go:436, fail_threshold > 0)",
 	},
 
-	// --- батч-границы Cadence create (cadence/crud.go validate, через Insert) ---
-	// concurrency верх у Cadence НЕ ограничен рантаймом → maximum НЕ тегируем.
+	// --- Cadence create batch bounds (cadence/crud.go validate, via Insert) ---
+	// Cadence's concurrency has NO runtime upper bound → we don't tag a maximum.
 	{
 		name:      "cadence.create batch_size minimum",
 		structPtr: &cadenceCreateInput{},
@@ -492,7 +492,7 @@ var constraintSyncCases = []constraintSyncCase{
 		source:    "cadence.validate (cadence/crud.go:125, fail_threshold > 0)",
 	},
 
-	// --- батч-границы Cadence PATCH (тот же cadence.validate через Update) ---
+	// --- Cadence PATCH batch bounds (same cadence.validate, via Update) ---
 	{
 		name:      "cadence.patch batch_size minimum",
 		structPtr: &cadencePatchInput{},
@@ -535,15 +535,15 @@ var constraintSyncCases = []constraintSyncCase{
 	},
 
 	// ====================================================================
-	// ID-ФОРМАТЫ OUTPUT-ПОЛЕЙ (ТИРАЖ-БАТЧ 3). Документационный pattern: huma НЕ
-	// валидирует response-body (эмпирически 200, не 500) → тег чисто документация
-	// формата для клиент-кодогена. Цель кейса — «документированный формат ==
-	// канонический рантайм-источник генератора/валидатора». structPtr — ЭКСПОРТНЫЙ
-	// reply-struct напрямую (fieldPath = имя поля, БЕЗ Body-обёртки — output-Body это
-	// сама структура). Для []string-полей (covens-стиль) pattern сидит на items[].
+	// ID FORMATS OF OUTPUT FIELDS (ROLLOUT BATCH 3). A documentation pattern: huma does
+	// NOT validate the response body (empirically 200, not 500) → the tag is purely
+	// format documentation for client codegen. The case's goal is "documented format ==
+	// the canonical runtime source of the generator/validator". structPtr is the EXPORTED
+	// reply struct directly (fieldPath = field name, WITHOUT a Body wrapper — the output
+	// Body IS the struct itself). For []string fields (covens-style) the pattern sits on items[].
 	// ====================================================================
 
-	// --- ULID на машинно-генерируемых ID (audit.NewULID) ---
+	// --- ULID on machine-generated IDs (audit.NewULID) ---
 	{
 		name:      "errandAccepted errand_id ULID",
 		structPtr: &errandAccepted{},
@@ -729,14 +729,14 @@ var constraintSyncCases = []constraintSyncCase{
 		source:    "ULID (миграция 001, correlation_id)",
 	},
 
-	// --- sha256 hex на хэш-производных ID ---
+	// --- sha256 hex on hash-derived IDs ---
 	{
 		name:      "PluginSigilAllowReply sha256 hex",
 		structPtr: &PluginSigilAllowReply{},
 		fieldPath: []string{"SHA256"},
 		tag:       tagPattern,
 		runtime:   sha256RuntimePattern,
-		source:    "hex(sha256) бинаря (pluginhost/slot.go:173)",
+		source:    "hex(sha256) binary (pluginhost/slot.go:173)",
 	},
 	{
 		name:      "PluginSigilView sha256 hex",
@@ -744,7 +744,7 @@ var constraintSyncCases = []constraintSyncCase{
 		fieldPath: []string{"SHA256"},
 		tag:       tagPattern,
 		runtime:   sha256RuntimePattern,
-		source:    "hex(sha256) бинаря (pluginhost/slot.go:173)",
+		source:    "hex(sha256) binary (pluginhost/slot.go:173)",
 	},
 	{
 		name:      "SigilKeyIntroduceReply key_id hex",
@@ -763,7 +763,7 @@ var constraintSyncCases = []constraintSyncCase{
 		source:    "hex(sha256(SPKI-DER)) (keyservice.go:287)",
 	},
 
-	// --- SID на sid-output-полях (← soul.SIDPattern) ---
+	// --- SID on sid output fields (← soul.SIDPattern) ---
 	{
 		name:      "ErrandResult sid",
 		structPtr: &ErrandResult{},
@@ -821,9 +821,9 @@ var constraintSyncCases = []constraintSyncCase{
 		source:    "soul.SIDPattern",
 	},
 
-	// --- AID на output *_by_aid / aid / archon_aid / operators[] (← operator.AIDPattern) ---
-	// Безопасно: huma НЕ валидирует output (200, не 500); миграция 058 — текущий AID-
-	// паттерн надмножество старого, легаси-AID тоже матчатся.
+	// --- AID on output *_by_aid / aid / archon_aid / operators[] (← operator.AIDPattern) ---
+	// Safe: huma does NOT validate output (200, not 500); migration 058 — the current AID
+	// pattern is a superset of the old one, legacy AIDs match too.
 	{
 		name:      "OperatorCreateReply aid",
 		structPtr: &OperatorCreateReply{},
@@ -994,13 +994,13 @@ var constraintSyncCases = []constraintSyncCase{
 	},
 
 	// ====================================================================
-	// INPUT-ПАТТЕРНЫ С РАНТАЙМ-422 (ТИРАЖ-БАТЧ 4). Каждое поле рантайм 422-ит на
-	// неверный ФОРМАТ ДО любых иных проверок (existence/FK/whitelist → 400/404/500
-	// тегом НЕ покрываются). Body-поля — через Body-обёртку; path-параметры — прямо.
+	// INPUT PATTERNS WITH RUNTIME-422 (ROLLOUT BATCH 4). Every field's runtime 422s on
+	// a bad FORMAT BEFORE any other checks (existence/FK/whitelist → 400/404/500 are NOT
+	// covered by the tag). Body fields go through the Body wrapper; path params directly.
 	// ====================================================================
 
-	// --- Sigil тройка namespace/name/ref (reSigilSegment, 422 в validateSigilTriple) ---
-	// ref — tag-ref ЭТИМ же валидатором (НЕ произвольный git-ref): слеш → 422.
+	// --- Sigil triple namespace/name/ref (reSigilSegment, 422 in validateSigilTriple) ---
+	// ref is a tag-ref per this SAME validator (NOT an arbitrary git ref): a slash → 422.
 	{
 		name:      "sigil.allow namespace",
 		structPtr: &sigilAllowInput{},
@@ -1050,10 +1050,10 @@ var constraintSyncCases = []constraintSyncCase{
 		source:    "reSigilSegment (validateSigilTriple, RevokeTyped — tag-ref, слеш→422)",
 	},
 
-	// --- incarnation name/service (incarnation.NamePattern, 422 в CreateTyped) ---
-	// service ВАЛИДИРУЕТСЯ тем же incarnation.NamePattern (handler reuse, не
-	// serviceregistry.NamePattern) и 422-ит ДО service-resolve (FK → 422 «not registered»
-	// идёт ПОЗЖЕ, формат-422 раньше). НЕ coven-паттерн.
+	// --- incarnation name/service (incarnation.NamePattern, 422 in CreateTyped) ---
+	// service is VALIDATED by the same incarnation.NamePattern (handler reuse, not
+	// serviceregistry.NamePattern) and 422s BEFORE service-resolve (the FK → 422 "not
+	// registered" comes LATER, format-422 comes first). NOT the coven pattern.
 	{
 		name:      "incarnation.create name",
 		structPtr: &incCreateInput{},
@@ -1071,8 +1071,8 @@ var constraintSyncCases = []constraintSyncCase{
 		source:    "incarnation.NamePattern (CreateTyped service-format, incarnation_typed.go:91)",
 	},
 
-	// --- push-provider name (pushprovider.NamePattern, 422 ДО existence) ---
-	// create body + get/update/delete path — все 422-ят формат ДО ErrAlreadyExists/404.
+	// --- push-provider name (pushprovider.NamePattern, 422 BEFORE existence) ---
+	// create body + get/update/delete path — all 422 the format BEFORE ErrAlreadyExists/404.
 	{
 		name:      "push-provider.create name",
 		structPtr: &pushProviderCreateInput{},
@@ -1106,7 +1106,7 @@ var constraintSyncCases = []constraintSyncCase{
 		source:    "pushprovider.NamePattern (DeleteTyped, pushprovider.go:219)",
 	},
 
-	// --- choir_name (choir.choirNamePattern, 422 ДО INSERT) ---
+	// --- choir_name (choir.choirNamePattern, 422 BEFORE INSERT) ---
 	{
 		name:      "choir.create choir_name",
 		structPtr: &choirCreateInput{},
@@ -1116,8 +1116,8 @@ var constraintSyncCases = []constraintSyncCase{
 		source:    "choir.ValidChoirName (CreateTyped, choir.go:154)",
 	},
 
-	// --- Voice sid (soul.SIDPattern, 422 ДО membership-check) ---
-	// add-voice body sid + remove-voice path sid — формат 422 раньше «SID не член».
+	// --- Voice sid (soul.SIDPattern, 422 BEFORE membership check) ---
+	// add-voice body sid + remove-voice path sid — format 422 comes before "SID not a member".
 	{
 		name:      "voice.add sid",
 		structPtr: &voiceAddInput{},
@@ -1135,7 +1135,7 @@ var constraintSyncCases = []constraintSyncCase{
 		source:    "soul.SIDPattern (RemoveVoiceTyped, choir.go:399)",
 	},
 
-	// --- decree incarnation_name/action_scenario (oracle.*Pattern, 422 ДО INSERT) ---
+	// --- decree incarnation_name/action_scenario (oracle.*Pattern, 422 BEFORE INSERT) ---
 	{
 		name:      "decree.create incarnation_name",
 		structPtr: &decreeCreateInput{},
@@ -1153,10 +1153,10 @@ var constraintSyncCases = []constraintSyncCase{
 		source:    "oracle.ScenarioPattern (CreateDecree, service.go:182)",
 	},
 
-	// --- soul_path абсолютность (start-with-slash, 422 в UpdateSshTargetTyped) ---
-	// SoulSshTarget — class-A shared input↔output; pattern документирует ОБА (output
-	// soul_path из БД всегда `/`-абсолютный, тем же валидатором при записи). `^/` (НЕ
-	// `^/.+`): голый `/` рантайм ПРИНИМАЕТ, `^/.+` бы ложно 422-ил.
+	// --- soul_path absoluteness (start-with-slash, 422 in UpdateSshTargetTyped) ---
+	// SoulSshTarget is class-A shared input↔output; the pattern documents BOTH (output
+	// soul_path from the DB is always `/`-absolute, via the same validator on write). `^/`
+	// (NOT `^/.+`): the runtime ACCEPTS a bare `/`, `^/.+` would falsely 422 it.
 	{
 		name:      "soul.ssh-target soul_path",
 		structPtr: &soulSshTargetInput{},
@@ -1167,16 +1167,17 @@ var constraintSyncCases = []constraintSyncCase{
 	},
 
 	// ====================================================================
-	// ПАТТЕРНЫ ИМЁН OUTPUT-ПОЛЕЙ (ТИРАЖ-БАТЧ 5). Документационный pattern: huma НЕ
-	// валидирует response-body (как ID-форматы батча 3) → тег чисто документация формата
-	// для клиент-кодогена. Цель кейса — «документированный формат имени == канонический
-	// рантайм-источник (тот же const, что для одноимённого INPUT-поля)». structPtr —
-	// reply/view-struct напрямую (fieldPath = имя поля, БЕЗ Body-обёртки — output-Body это
-	// сама структура). Для []string-полей (covens/roles/labels стиль) pattern сидит на items[].
-	// Все эти типы output-only (request-Body — отдельные *Request/*Input) → input-422-риска нет.
+	// NAME PATTERNS OF OUTPUT FIELDS (ROLLOUT BATCH 5). A documentation pattern: huma does
+	// NOT validate the response body (like the ID formats of batch 3) → the tag is purely
+	// format documentation for client codegen. The case's goal is "documented name format ==
+	// the canonical runtime source (the same const as the like-named INPUT field)". structPtr
+	// is the reply/view struct directly (fieldPath = field name, WITHOUT a Body wrapper — the
+	// output Body IS the struct itself). For []string fields (covens/roles/labels style) the
+	// pattern sits on items[]. All these types are output-only (request Body is a separate
+	// *Request/*Input) → no input-422 risk.
 	// ====================================================================
 
-	// --- kebab-имя name/omen/on_beacon (oracle/augur/herald.NamePattern ^[a-z0-9-]{1,63}$) ---
+	// --- kebab name name/omen/on_beacon (oracle/augur/herald.NamePattern ^[a-z0-9-]{1,63}$) ---
 	{
 		name:      "OmenView name (augur.NamePattern)",
 		structPtr: &OmenView{},
@@ -1191,7 +1192,7 @@ var constraintSyncCases = []constraintSyncCase{
 		fieldPath: []string{"Omen"},
 		tag:       tagPattern,
 		runtime:   augur.NamePattern,
-		source:    "augur.NamePattern (output rite.omen — FK на omens.name)",
+		source:    "augur.NamePattern (output rite.omen — FK on omens.name)",
 	},
 	{
 		name:      "VigilView name (oracle.NamePattern)",
@@ -1210,12 +1211,12 @@ var constraintSyncCases = []constraintSyncCase{
 		source:    "oracle.NamePattern (output decree name)",
 	},
 	{
-		name:      "DecreeView on_beacon (oracle.NamePattern, FK на Vigil)",
+		name:      "DecreeView on_beacon (oracle.NamePattern, FK on Vigil)",
 		structPtr: &DecreeView{},
 		fieldPath: []string{"OnBeacon"},
 		tag:       tagPattern,
 		runtime:   oracle.NamePattern,
-		source:    "oracle.NamePattern (output decree.on_beacon — имя Vigil-а)",
+		source:    "oracle.NamePattern (output decree.on_beacon — Vigil name)",
 	},
 	{
 		name:      "Herald name (herald.NamePattern)",
@@ -1239,12 +1240,12 @@ var constraintSyncCases = []constraintSyncCase{
 		fieldPath: []string{"Herald"},
 		tag:       tagPattern,
 		runtime:   herald.NamePattern,
-		source:    "herald.NamePattern (output tiding.herald — FK на heralds.name)",
+		source:    "herald.NamePattern (output tiding.herald — FK on heralds.name)",
 	},
 
 	// --- role-name (rbac.RoleNamePattern ^[a-z][a-z0-9-]*$) ---
-	// RoleView.name + SynodView.name (синод-имя единым reRoleName) + SynodView.roles[]
-	// (per-element имена ролей). RoleView.operators[]/SynodView.operators[] — AID, НЕ name.
+	// RoleView.name + SynodView.name (synod name via the same reRoleName) + SynodView.roles[]
+	// (per-element role names). RoleView.operators[]/SynodView.operators[] are AID, NOT name.
 	{
 		name:      "RoleView name (rbac.RoleNamePattern)",
 		structPtr: &RoleView{},
@@ -1267,7 +1268,7 @@ var constraintSyncCases = []constraintSyncCase{
 		fieldPath: []string{"Roles"},
 		tag:       tagPattern,
 		runtime:   rbac.RoleNamePattern,
-		source:    "rbac.RoleNamePattern (output synod.roles[] — имена ролей)",
+		source:    "rbac.RoleNamePattern (output synod.roles[] — names ролей)",
 	},
 
 	// --- service name (serviceregistry.NamePattern ^[a-z][a-z0-9-]*$) ---
@@ -1281,8 +1282,8 @@ var constraintSyncCases = []constraintSyncCase{
 	},
 
 	// --- coven label (soul.CovenPattern ^[a-z][a-z0-9]*(-[a-z0-9]+)*$, per-element) ---
-	// output covens[]/labels[] в Soul*/Incarnation* View/Reply. *[]string и []string —
-	// reflect-тег читается одинаково (helper спускается по Field, slice-обёртка прозрачна).
+	// output covens[]/labels[] in Soul*/Incarnation* View/Reply. *[]string and []string —
+	// the reflect tag reads the same way (the helper descends via Field, the slice wrapper is transparent).
 	{
 		name:      "SoulCreateReply covens[] (soul.CovenPattern)",
 		structPtr: &SoulCreateReply{},
@@ -1317,9 +1318,9 @@ var constraintSyncCases = []constraintSyncCase{
 	},
 
 	// --- incarnation_name (incarnation.NamePattern ^[a-z0-9][a-z0-9-]{0,62}$) ---
-	// IncarnationGetReply.name + echo Incarnation в create/run/rerun-last + choir/voice
-	// incarnation_name. DecreeView.incarnation_name — отдельный const oracle.IncarnationPattern
-	// (значение идентично, но домен decree — сверяем с ЕГО источником).
+	// IncarnationGetReply.name + the Incarnation echo in create/run/rerun-last + choir/voice
+	// incarnation_name. DecreeView.incarnation_name uses a separate const, oracle.IncarnationPattern
+	// (the value is identical, but decree is its own domain — checked against ITS OWN source).
 	{
 		name:      "IncarnationGetReply name (incarnation.NamePattern)",
 		structPtr: &IncarnationGetReply{},
@@ -1374,17 +1375,17 @@ var constraintSyncCases = []constraintSyncCase{
 		fieldPath: []string{"IncarnationName"},
 		tag:       tagPattern,
 		runtime:   oracle.IncarnationPattern,
-		source:    "oracle.IncarnationPattern (output decree.incarnation_name — тот же const, что INPUT)",
+		source:    "oracle.IncarnationPattern (output decree.incarnation_name — тот же const, which INPUT)",
 	},
 
 	// ====================================================================
-	// LENGTH-ГРАНИЦЫ INPUT (ТИРАЖ-БАТЧ 6 + добивка). minLength/maxLength, где
-	// рантайм РЕАЛЬНО 422-ит ту же границу. reason — обе границы: непустота
-	// (minLength:1) + верх incarnation.ReasonMaxLen (maxLength:500, рантайм-
-	// валидатор UnlockTyped/RerunLastTyped, решение PM вариант (а)).
+	// LENGTH BOUNDS OF INPUT (ROLLOUT BATCH 6 + cleanup). minLength/maxLength where the
+	// runtime REALLY 422s on that same bound. reason has both bounds: non-emptiness
+	// (minLength:1) + the upper bound incarnation.ReasonMaxLen (maxLength:500, the runtime
+	// validator is UnlockTyped/RerunLastTyped, PM decision option (a)).
 	// ====================================================================
 
-	// --- reason непустота + верх ReasonMaxLen (UnlockTyped/RerunLastTyped → 422) ---
+	// --- reason non-emptiness + upper bound ReasonMaxLen (UnlockTyped/RerunLastTyped → 422) ---
 	{
 		name:      "incarnation.unlock reason minLength",
 		structPtr: &incUnlockInput{},
@@ -1418,9 +1419,9 @@ var constraintSyncCases = []constraintSyncCase{
 		source:    "incarnation.ReasonMaxLen (RerunLastTyped, len(reason) > 500 → 422)",
 	},
 
-	// --- ssh_user непустота (UpdateSshTargetTyped soul.go:1529, "" → 422) ---
-	// SoulSshTarget — class-A shared input↔output: INPUT 422-ит пустое, OUTPUT
-	// doc-only (huma выходы не валидирует). Кейс сверяет ЕДИНУЮ схему.
+	// --- ssh_user non-emptiness (UpdateSshTargetTyped soul.go:1529, "" → 422) ---
+	// SoulSshTarget is class-A shared input↔output: INPUT 422s on empty, OUTPUT is
+	// doc-only (huma doesn't validate output). The case checks the SINGLE shared schema.
 	{
 		name:      "soul.ssh-target ssh_user minLength",
 		structPtr: &soulSshTargetInput{},
@@ -1430,14 +1431,14 @@ var constraintSyncCases = []constraintSyncCase{
 		source:    "UpdateSshTargetTyped (handlers/soul.go:1529, ssh_user == \"\" → 422)",
 	},
 
-	// --- coven/role длина 63 (ValidCoven / validHostRole len>63 → 422) ---
-	// maxLength на []string-полях сидит на items (covens/labels). Нижней границы
-	// тегом НЕТ: пустой role/coven/incarnation-selector валиден (opt/no-op),
-	// minLength:1 ложно 422-ил бы валидное пустое.
+	// --- coven/role length 63 (ValidCoven / validHostRole len>63 → 422) ---
+	// maxLength on []string fields sits on items (covens/labels). There is NO tag for
+	// the lower bound: an empty role/coven/incarnation-selector is valid (opt/no-op),
+	// minLength:1 would falsely 422 a valid empty value.
 	{
-		// maxLength сидит на вложенном IncarnationSpecHost.Role (elem
-		// PATCH .../hosts body.hosts[]) — ссылаемся на элемент-структуру
-		// напрямую (constraintTag не входит внутрь slice-элемента).
+		// maxLength sits on the nested IncarnationSpecHost.Role (the elem of
+		// PATCH .../hosts body.hosts[]) — we reference the element struct
+		// directly (constraintTag doesn't descend into a slice element).
 		name:      "IncarnationSpecHost role maxLength",
 		structPtr: &IncarnationSpecHost{},
 		fieldPath: []string{"Role"},
@@ -1454,9 +1455,9 @@ var constraintSyncCases = []constraintSyncCase{
 		source:    "soul.ValidCoven (soul.go:81, len(label) > 63 → 422; CreateTyped soul.go:221)",
 	},
 	{
-		// Симметрия с soul.create covens[]: рантайм incarnation CreateTyped
-		// уже 422-ит len>63 per-element (ValidCoven, incarnation_typed.go:95) —
-		// тег чисто восстанавливает границу в спеке.
+		// Symmetry with soul.create covens[]: runtime incarnation CreateTyped
+		// already 422s len>63 per-element (ValidCoven, incarnation_typed.go:95) —
+		// tag simply restores boundary in spec.
 		name:      "incarnation.create covens[] maxLength",
 		structPtr: &incCreateInput{},
 		fieldPath: []string{"Body", "Covens"},
@@ -1498,8 +1499,8 @@ var constraintSyncCases = []constraintSyncCase{
 	},
 
 	// --- synod description (rbac.SynodDescriptionMaxLen=1024) ---
-	// CreateTyped: description опц. (*string) → только maxLength. UpdateTyped:
-	// description обязателен, == "" → 422 → minLength:1 + maxLength:1024.
+	// CreateTyped: description is optional (*string) → maxLength only. UpdateTyped:
+	// description is required, == "" → 422 → minLength:1 + maxLength:1024.
 	{
 		name:      "synod.create description maxLength",
 		structPtr: &synodCreateInput{},
@@ -1526,28 +1527,28 @@ var constraintSyncCases = []constraintSyncCase{
 	},
 }
 
-// TestOpenAPIConstraintSyncWithRuntime — каждый кейс: тег op-input-поля обязан
-// ДОСЛОВНО совпасть с авторитетным рантайм-источником. Расхождение = спека
-// врёт о контракте → красный тест.
+// TestOpenAPIConstraintSyncWithRuntime — for every case, the op-input field's tag
+// must match the authoritative runtime source VERBATIM. A mismatch means the spec
+// is lying about the contract → a red test.
 func TestOpenAPIConstraintSyncWithRuntime(t *testing.T) {
 	for _, c := range constraintSyncCases {
 		t.Run(c.name, func(t *testing.T) {
 			got, ok := constraintTag(t, c.structPtr, c.fieldPath, c.tag)
 			if !ok {
-				t.Fatalf("поле %v типа %s НЕ несёт тега %q — пилотное ограничение исчезло из спеки (drift спека<рантайм)",
+				t.Fatalf("field %v типа %s NOT несёт тега %q — пилотbutе ограничение исчезло from спеки (drift спека<runtime)",
 					c.fieldPath, reflect.TypeOf(c.structPtr).Elem().Name(), c.tag)
 			}
 			if got != c.runtime {
-				t.Fatalf("DRIFT тег<>рантайм для %s:\n  huma-тег %q = %q\n  рантайм-источник %s = %q\n→ синхронизируй литерал тега с рантайм-валидатором (ручная синхронизация, см. шапку файла)",
+				t.Fatalf("DRIFT тег<>runtime for %s:\n  huma-тег %q = %q\n  runtime-источник %s = %q\n→ синхронfromируй литерал тега с runtime-валидатором (ручonя синхронfromация, see шапку файла)",
 					c.name, c.tag, got, c.source, c.runtime)
 			}
 		})
 	}
 }
 
-// constraintTag спускается по fieldPath в структуре structPtr и возвращает
-// значение запрошенного тега ограничения у конечного поля. Путь повторяет то,
-// как huma рекурсивно обходит вложенные/Body-структуры op-input-а.
+// constraintTag descends fieldPath within the structPtr struct and returns
+// the value of the requested constraint tag on the final field. The path mirrors
+// how huma recursively walks the nested/Body structs of an op-input.
 func constraintTag(t *testing.T, structPtr any, fieldPath []string, kind constraintTagKind) (string, bool) {
 	t.Helper()
 	typ := reflect.TypeOf(structPtr)
@@ -1561,7 +1562,7 @@ func constraintTag(t *testing.T, structPtr any, fieldPath []string, kind constra
 		}
 		f, ok := typ.FieldByName(name)
 		if !ok {
-			t.Fatalf("поле %q не найдено в %s (путь %v) — структура op-input переименована? обнови кейс",
+			t.Fatalf("field %q не onйдеbut в %s (путь %v) — структура op-input переимеbutваon? обbutви кейс",
 				name, typ.Name(), fieldPath)
 		}
 		last = f

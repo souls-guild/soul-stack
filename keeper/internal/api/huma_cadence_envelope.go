@@ -67,7 +67,7 @@ import (
 // letter → "Cadence"). The name "cadence" doesn't collide — package internal/cadence isn't imported into the api layer.
 // json tags mirror handler type cadenceDTO (it serializes the wire, not this type) → wire byte-exact.
 type cadence struct {
-	CadenceID            string        `json:"cadence_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$" doc:"ULID расписания"` // ULID (audit.NewULID)
+	CadenceID            string        `json:"cadence_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$" doc:"ULID of schedule"` // ULID (audit.NewULID)
 	Name                 string        `json:"name"`
 	Enabled              bool          `json:"enabled"`
 	ScheduleKind         string        `json:"schedule_kind" enum:"interval,cron"`
@@ -77,7 +77,7 @@ type cadence struct {
 	Kind                 string        `json:"kind" enum:"scenario,command"`
 	ScenarioName         string        `json:"scenario_name,omitempty"`
 	Module               string        `json:"module,omitempty"`
-	Target               *VoyageTarget `json:"target,omitempty" doc:"декларативный таргет прогона (declarative, отдаётся as-is)"`
+	Target               *VoyageTarget `json:"target,omitempty" doc:"декларативный таргет прогоon (declarative, отgivesся as-is)"`
 	BatchSize            *int          `json:"batch_size,omitempty"`
 	BatchPercent         *int          `json:"batch_percent,omitempty"`
 	Concurrency          *int          `json:"concurrency,omitempty"`
@@ -98,9 +98,9 @@ type cadence struct {
 // to element Cadence. Type name → "CadenceListReply". The wire body (PagedResponse[cadenceDTO]) does NOT change.
 type cadenceListReply struct {
 	Items  []cadence `json:"items" doc:"страница расписаний"`
-	Offset int32     `json:"offset" doc:"сдвиг от начала набора"`
-	Limit  int32     `json:"limit" doc:"размер страницы"`
-	Total  int32     `json:"total" doc:"общее число записей в наборе"`
+	Offset int32     `json:"offset" doc:"offset from start of set"`
+	Limit  int32     `json:"limit" doc:"page size"`
+	Total  int32     `json:"total" doc:"total number of entries in set"`
 }
 
 // registerCadenceEnvelopes registers the cadence-domain huma aliases on the registry. Called in

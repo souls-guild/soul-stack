@@ -130,7 +130,7 @@ func TestIntegration_VoyagePreview_Command_ScopedSubset(t *testing.T) {
 		t.Errorf("kind = %q, want command", rep.Kind)
 	}
 	if rep.ScopeSize != 2 {
-		t.Errorf("scope_size = %d, want 2 (подмножество coven-a, НЕ весь shared=3)", rep.ScopeSize)
+		t.Errorf("scope_size = %d, want 2 (подмbutжество coven-a, NOT весь shared=3)", rep.ScopeSize)
 	}
 }
 
@@ -170,7 +170,7 @@ func TestIntegration_VoyagePreview_Command_EmptyIntersection_422(t *testing.T) {
 		t.Fatalf("status = %d, want 422; body=%s", code, body)
 	}
 	if !strings.Contains(body, "voyage_empty_target") {
-		t.Errorf("detail не содержит voyage_empty_target: %s", body)
+		t.Errorf("detail не withдержит voyage_empty_target: %s", body)
 	}
 }
 
@@ -196,14 +196,14 @@ func TestIntegration_VoyagePreview_Command_Window_NoNullJunk(t *testing.T) {
 		t.Errorf("batch_mode = %q, want window", rep.BatchMode)
 	}
 	if rep.ScopeSize != 2 || rep.TotalBatches != 1 {
-		t.Errorf("scope_size=%d total_batches=%d, want 2/1 (плоское окно)", rep.ScopeSize, rep.TotalBatches)
+		t.Errorf("scope_size=%d total_batches=%d, want 2/1 (плоское окbut)", rep.ScopeSize, rep.TotalBatches)
 	}
 	if rep.EffectiveBatchSize != nil {
-		t.Errorf("effective_batch_size = %v, want отсутствие (window — поле неприменимо)", *rep.EffectiveBatchSize)
+		t.Errorf("effective_batch_size = %v, want отсутствие (window — field неприменимо)", *rep.EffectiveBatchSize)
 	}
 	// Explicit check: the raw JSON has no effective_batch_size key (omitempty).
 	if strings.Contains(body, "effective_batch_size") {
-		t.Errorf("window-ответ содержит effective_batch_size (должен быть опущен): %s", body)
+		t.Errorf("window-ответ withдержит effective_batch_size (toлжен быть опущен): %s", body)
 	}
 }
 
@@ -226,7 +226,7 @@ func TestIntegration_VoyagePreview_NoSIDDisclosure(t *testing.T) {
 	}
 	for _, forbidden := range []string{"secret-host", "\"sids\"", "\"hosts\"", "\"incarnations\"", "\"target_resolved\""} {
 		if strings.Contains(body, forbidden) {
-			t.Errorf("preview-ответ раскрывает узлы (нашёл %q): %s", forbidden, body)
+			t.Errorf("preview-ответ раскрывает узлы (onшёл %q): %s", forbidden, body)
 		}
 	}
 }

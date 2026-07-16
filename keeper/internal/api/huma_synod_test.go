@@ -297,7 +297,7 @@ func TestHumaAudit_SynodCreate_NoAudit_OnRBACDeny(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на RBAC-deny synod.create (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on RBAC-deny synod.create (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -352,7 +352,7 @@ func TestHumaSynod_List_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут synod.list записал audit (%d событий)", len(auditCap.Events()))
+		t.Errorf("READ-роут synod.list записал audit (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -377,7 +377,7 @@ func TestHumaSynod_Update_204(t *testing.T) {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 	if body := strings.TrimSpace(rec.Body.String()); body != "" {
-		t.Errorf("204-тело synod.update должно быть ПУСТЫМ, got %q", body)
+		t.Errorf("204-body synod.update toлжbut быть ПУСТЫМ, got %q", body)
 	}
 }
 
@@ -405,7 +405,7 @@ func TestHumaAudit_SynodUpdate_NoAudit_OnMissingDescription(t *testing.T) {
 		t.Fatalf("status = %d, want 422 (missing required description); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на 422 synod.update (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on 422 synod.update (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -420,7 +420,7 @@ func TestHumaSynod_Delete_204(t *testing.T) {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 	if body := strings.TrimSpace(rec.Body.String()); body != "" {
-		t.Errorf("204-тело synod.delete должно быть ПУСТЫМ, got %q", body)
+		t.Errorf("204-body synod.delete toлжbut быть ПУСТЫМ, got %q", body)
 	}
 }
 
@@ -446,7 +446,7 @@ func TestHumaAudit_SynodDelete_NoAudit_OnRBACDeny(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на RBAC-deny synod.delete (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on RBAC-deny synod.delete (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -486,7 +486,7 @@ func TestHumaAudit_SynodAddOperator_NoAudit_OnInvalidAID(t *testing.T) {
 		t.Fatalf("status = %d, want 422 (битый AID); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на invalid-AID add-operator (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on invalid-AID add-operator (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -526,7 +526,7 @@ func TestHumaAudit_SynodRemoveOperator_NoAudit_OnInvalidAID(t *testing.T) {
 		t.Fatalf("status = %d, want 422 (битый path-AID); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на invalid-AID remove-operator (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on invalid-AID remove-operator (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -566,7 +566,7 @@ func TestHumaAudit_SynodGrantRole_NoAudit_OnMissingRole(t *testing.T) {
 		t.Fatalf("status = %d, want 422 (missing required role); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на 422 grant-role (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on 422 grant-role (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -606,7 +606,7 @@ func TestHumaAudit_SynodRevokeRole_NoAudit_OnRBACDeny(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на RBAC-deny revoke-role (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on RBAC-deny revoke-role (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -625,7 +625,7 @@ func TestHumaSynod_OpenAPIFragment_3_1(t *testing.T) {
 		"addSynodOperator", "removeSynodOperator", "grantSynodRole", "revokeSynodRole",
 	} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("OpenAPI-фрагмент не содержит %q:\n%s", want, frag)
+			t.Errorf("OpenAPI-фрагмент не withдержит %q:\n%s", want, frag)
 		}
 	}
 	if strings.Contains(frag, "octet-stream") {

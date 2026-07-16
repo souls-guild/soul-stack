@@ -50,12 +50,12 @@ func TestSchemaNames_Herald(t *testing.T) {
 	schemas := loadFullSpecSchemas(t)
 	for _, name := range heraldContractSchemas {
 		if _, ok := schemas[name]; !ok {
-			t.Errorf("контрактная схема %q ОТСУТСТВУЕТ в components/schemas (имя не выровнено)", name)
+			t.Errorf("контрактonя схема %q ОТСУТСТВУЕТ в components/schemas (имя не выровнеbut)", name)
 		}
 	}
 	for _, name := range heraldForbiddenSchemas {
 		if _, ok := schemas[name]; ok {
-			t.Errorf("техническое huma-имя %q ПРИСУТСТВУЕТ в спеке — имя не выровнено под контракт", name)
+			t.Errorf("техническое huma-имя %q ПРИСУТСТВУЕТ в спеке — имя не выровнеbut под контракт", name)
 		}
 	}
 }
@@ -104,11 +104,11 @@ func assertOffsetEnvelopeNoFormat(t *testing.T, schemas map[string]any, name, el
 			got = append(got, k)
 		}
 		sort.Strings(got)
-		t.Errorf("%q несёт %d полей %v, ожидалось ровно 4 (items/offset/limit/total) — cursor-поля протекли?", name, len(props), got)
+		t.Errorf("%q несёт %d fields %v, ожидалось ровbut 4 (items/offset/limit/total) — cursor-поля протекли?", name, len(props), got)
 	}
 	for f := range wantFields {
 		if _, ok := props[f]; !ok {
-			t.Errorf("%q не содержит контрактного поля %q", name, f)
+			t.Errorf("%q не withдержит контрактbutго поля %q", name, f)
 		}
 	}
 

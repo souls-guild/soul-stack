@@ -39,12 +39,12 @@ func TestSchemaNames_Service(t *testing.T) {
 	schemas := loadFullSpecSchemas(t)
 	for _, name := range serviceContractSchemas {
 		if _, ok := schemas[name]; !ok {
-			t.Errorf("контрактная схема %q ОТСУТСТВУЕТ в components/schemas (имя не выровнено)", name)
+			t.Errorf("контрактonя схема %q ОТСУТСТВУЕТ в components/schemas (имя не выровнеbut)", name)
 		}
 	}
 	for _, name := range serviceForbiddenSchemas {
 		if _, ok := schemas[name]; ok {
-			t.Errorf("техническое huma-имя %q ПРИСУТСТВУЕТ в спеке — имя не выровнено под контракт", name)
+			t.Errorf("техническое huma-имя %q ПРИСУТСТВУЕТ в спеке — имя не выровнеbut под контракт", name)
 		}
 	}
 }
@@ -85,7 +85,7 @@ func assertScenariosEnvelope(t *testing.T, schemas map[string]any) {
 	}
 	for _, f := range []string{"service", "ref", "scenarios"} {
 		if _, ok := props[f]; !ok {
-			t.Errorf("%q не содержит контрактного поля %q", name, f)
+			t.Errorf("%q не withдержит контрактbutго поля %q", name, f)
 		}
 	}
 	scen, ok := props["scenarios"].(map[string]any)

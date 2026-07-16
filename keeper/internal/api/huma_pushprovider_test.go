@@ -335,7 +335,7 @@ func TestHumaAudit_PushProviderCreate_NoAudit_OnRBACDeny(t *testing.T) {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на RBAC-deny push-provider.create (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on RBAC-deny push-provider.create (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -349,7 +349,7 @@ func TestHumaAudit_PushProviderCreate_NoAudit_OnValidationFail(t *testing.T) {
 		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на 422 push-provider.create (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on 422 push-provider.create (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -438,7 +438,7 @@ func TestHumaPushProvider_List_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("READ-роут push-provider.list записал audit (%d событий)", len(auditCap.Events()))
+		t.Errorf("READ-роут push-provider.list записал audit (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -569,7 +569,7 @@ func TestHumaAudit_PushProviderUpdate_NoAudit_OnNotFound(t *testing.T) {
 		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на 404 push-provider.update (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on 404 push-provider.update (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -585,7 +585,7 @@ func TestHumaPushProvider_Delete_204(t *testing.T) {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 	if body := strings.TrimSpace(rec.Body.String()); body != "" {
-		t.Errorf("204-тело push-provider.delete должно быть ПУСТЫМ, got %q", body)
+		t.Errorf("204-body push-provider.delete toлжbut быть ПУСТЫМ, got %q", body)
 	}
 }
 
@@ -612,7 +612,7 @@ func TestHumaAudit_PushProviderDelete_NoAudit_OnBadName(t *testing.T) {
 		t.Fatalf("status = %d, want 422 (bad path-name); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на bad-name push-provider.delete (%d событий)", len(auditCap.Events()))
+		t.Errorf("audit записан on bad-name push-provider.delete (%d withбытий)", len(auditCap.Events()))
 	}
 }
 
@@ -631,7 +631,7 @@ func TestHumaPushProvider_OpenAPIFragment_3_1(t *testing.T) {
 		"updatePushProvider", "deletePushProvider", "params",
 	} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("OpenAPI-фрагмент не содержит %q:\n%s", want, frag)
+			t.Errorf("OpenAPI-фрагмент не withдержит %q:\n%s", want, frag)
 		}
 	}
 	if strings.Contains(frag, "octet-stream") {

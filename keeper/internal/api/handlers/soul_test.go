@@ -153,7 +153,7 @@ func (f *fakeSoulPool) QueryRow(_ context.Context, sql string, args ...any) pgx.
 			idx := f.bulkChunkCalls
 			f.bulkChunkCalls++
 			if idx >= len(f.bulkChunkPlan) {
-				return errRow{err: errors.New("fakeSoulPool: bulkChunkPlan exhausted (нет завершающего пустого чанка?)")}
+				return errRow{err: errors.New("fakeSoulPool: bulkChunkPlan exhausted (missing terminating empty chunk?)")}
 			}
 			step := f.bulkChunkPlan[idx]
 			if step.err != nil {
@@ -867,7 +867,7 @@ func TestAssignCoven_Incarnation_ScopeIntersection(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
 	}
-	// args: $1 = incarnation, $2 = scope []string{"dev"}. Проверяем оба.
+	// args: $1 = incarnation, $2 = scope []string{"dev"}. Verify both.
 	foundIncarnation := false
 	foundScope := false
 	for _, a := range pool.lastListArgs {
@@ -937,21 +937,21 @@ func TestAssignCoven_NilScoper_500(t *testing.T) {
 	}
 }
 
-// handlerBulkChunkSize дублирует soul.bulkChunkSize (unexported): multi-chunk
-// сценарий fake-плана требует первый чанк со scanned == размеру чанка, чтобы
-// BulkAssignCoven не оборвал итерацию. Должно совпадать с soul.bulkChunkSize.
+// handlerBulkChunkSize duplicates soul.bulkChunkSize (unexported): multi-chunk
+// scenario of fake-plan requires first chunk with scanned == chunk size to prevent
+// BulkAssignCoven from terminating iteration. Must match soul.bulkChunkSize.
 const handlerBulkChunkSize = 2000
 
-// TestAssignCoven_Partial_200 (gap: partial-маппинг ~588-597). chunk K падает
-// после закоммиченного чанка K-1 → BulkAssignCoven возвращает BulkPartial+Err.
-// Handler обязан отдать 200 + status:partial (НЕ 500), changed < matched.
+// TestAssignCoven_Partial_200 (gap: partial-mapping ~588-597). chunk K fails
+// after committed chunk K-1 → BulkAssignCoven returns BulkPartial+Err.
+// Handler MUST return 200 + status:partial (NOT 500), changed < matched.
 func TestAssignCoven_Partial_200(t *testing.T) {
 	pool := &fakeSoulPool{
-		listCount: handlerBulkChunkSize + 50, // matched: 1 полный чанк + хвост.
+		listCount: handlerBulkChunkSize + 50, // matched: 1 full chunk + remainder.
 		bulkChunkPlan: []bulkChunkStep{
-			// Чанк 1: полный, закоммичен (changed=chunk, scanned=chunk, есть курсор).
+			// Chunk 1: full, committed (changed=chunk, scanned=chunk, has cursor).
 			{scanned: handlerBulkChunkSize, changed: handlerBulkChunkSize, maxSID: "h01999.example.com"},
-			// Чанк 2: сбой коммита → BulkPartial, чанк 1 уцелел.
+			// Chunk 2: commit failure → BulkPartial, chunk 1 survived.
 			{err: errors.New("chunk 2 commit boom")},
 		},
 	}
@@ -959,7 +959,7 @@ func TestAssignCoven_Partial_200(t *testing.T) {
 
 	rec := doAssignCoven(t, h, `{"mode":"append","label":"batch","selector":{"all":true}}`, "")
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (partial НЕ 500), body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 200 (partial NOT 500), body=%s", rec.Code, rec.Body.String())
 	}
 	var out map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
@@ -977,27 +977,27 @@ func TestAssignCoven_Partial_200(t *testing.T) {
 		t.Errorf("changed (%v) must be < matched (%v) on partial", changed, matched)
 	}
 	if changed != float64(handlerBulkChunkSize) {
-		t.Errorf("changed = %v, want %d (ровно 1 закоммиченный чанк)", changed, handlerBulkChunkSize)
+		t.Errorf("changed = %v, want %d (exactly 1 committed chunk)", changed, handlerBulkChunkSize)
 	}
 	if out["dry_run"] != false {
 		t.Errorf("dry_run = %v, want false", out["dry_run"])
 	}
-	// Оба чанка дёрнуты (1 ок + 1 сбой), третий не вызывается.
+	// Both chunks invoked (1 ok + 1 fail), third not called.
 	if pool.bulkChunkCalls != 2 {
 		t.Errorf("bulkChunkCalls = %d, want 2", pool.bulkChunkCalls)
 	}
 }
 
-// TestAssignCoven_MultiChunk_Aggregates (gap: bulkMaxSID никогда не задан в
-// тестах). 2 полных чанка + завершающий пустой: matched/changed агрегируются
-// корректно через handler-путь.
+// TestAssignCoven_MultiChunk_Aggregates (gap: bulkMaxSID never set in
+// tests). 2 full chunks + terminating empty: matched/changed aggregate
+// correctly via handler-path.
 func TestAssignCoven_MultiChunk_Aggregates(t *testing.T) {
 	pool := &fakeSoulPool{
 		listCount: handlerBulkChunkSize * 2,
 		bulkChunkPlan: []bulkChunkStep{
 			{scanned: handlerBulkChunkSize, changed: handlerBulkChunkSize, maxSID: "h01999.example.com"},
 			{scanned: handlerBulkChunkSize, changed: handlerBulkChunkSize, maxSID: "h03999.example.com"},
-			// Завершающий пустой чанк: scanned < chunk → выход.
+			// Terminating empty chunk: scanned < chunk → exit.
 			{scanned: 0, changed: 0, maxSID: ""},
 		},
 	}
@@ -1017,7 +1017,7 @@ func TestAssignCoven_MultiChunk_Aggregates(t *testing.T) {
 	if out["matched"].(float64) != float64(handlerBulkChunkSize*2) {
 		t.Errorf("matched = %v, want %d", out["matched"], handlerBulkChunkSize*2)
 	}
-	// changed = сумма по двум полным чанкам (пустой финальный 0).
+	// changed = sum over two full chunks (empty final 0).
 	if out["changed"].(float64) != float64(handlerBulkChunkSize*2) {
 		t.Errorf("changed = %v, want %d (агрегат по чанкам)", out["changed"], handlerBulkChunkSize*2)
 	}
@@ -1026,8 +1026,8 @@ func TestAssignCoven_MultiChunk_Aggregates(t *testing.T) {
 	}
 }
 
-// auditCapture — audit.Writer-stub на handler-уровне: собирает записанные
-// события (паттерн middleware/audit_test.go captureWriter).
+// auditCapture — audit.Writer-stub at handler-level: collects written
+// events (pattern from middleware/audit_test.go captureWriter).
 type auditCapture struct {
 	events []*audit.Event
 }
@@ -1038,11 +1038,11 @@ func (c *auditCapture) Write(_ context.Context, ev *audit.Event) error {
 	return nil
 }
 
-// auditedAssignCoven вызывает AssignCovenTyped напрямую (handler-native T5d) и
-// воспроизводит семантику huma-audit-middleware (вариант B): audit-событие
-// soul.coven-changed пишется ТОЛЬКО на успехе (2xx), payload — reply.AuditPayload
-// (включая source:"api", собранный handler-ом); на раннем отказе (400/422) событие НЕ
-// пишется (parity middleware «не-2xx → skip»). Возвращает recorder + captured-события.
+// auditedAssignCoven calls AssignCovenTyped directly (handler-native T5d) and
+// reproduces huma-audit-middleware semantics (variant B): audit event
+// soul.coven-changed written ONLY on success (2xx), payload = reply.AuditPayload
+// (including source:"api" collected by handler); on early reject (400/422) event is NOT
+// written (parity middleware "not-2xx → skip"). Returns recorder + captured-events.
 func auditedAssignCoven(t *testing.T, h *SoulHandler, body, query string) (*httptest.ResponseRecorder, *auditCapture) {
 	t.Helper()
 	cap := &auditCapture{}
@@ -1063,7 +1063,7 @@ func auditedAssignCoven(t *testing.T, h *SoulHandler, body, query string) (*http
 		writeProblemError(rec, req, err)
 		return rec, cap
 	}
-	// success → вариант B: одно событие с payload handler-а (source:"api" внутри).
+	// success → variant B: one event with handler's payload (source:"api" inside).
 	_ = cap.Write(req.Context(), &audit.Event{
 		EventType: audit.EventSoulCovenChanged,
 		Source:    audit.SourceAPI,
@@ -1074,8 +1074,8 @@ func auditedAssignCoven(t *testing.T, h *SoulHandler, body, query string) (*http
 	return rec, cap
 }
 
-// TestAssignCoven_Audit_PayloadOnSuccess (gap: audit-payload не ассертился).
-// Успешная мутация пишет ровно одно событие soul.coven-changed с корректным
+// TestAssignCoven_Audit_PayloadOnSuccess (gap: audit-payload not asserted).
+// Successful mutation writes exactly one soul.coven-changed event with correct
 // payload (source/mode/label/selector/matched/changed/status/scope_applied/dry_run).
 func TestAssignCoven_Audit_PayloadOnSuccess(t *testing.T) {
 	pool := &fakeSoulPool{listCount: 3, bulkScanned: 3, bulkChanged: 2}
@@ -1112,14 +1112,14 @@ func TestAssignCoven_Audit_PayloadOnSuccess(t *testing.T) {
 	if p["status"] != "completed" {
 		t.Errorf("payload.status = %v, want completed", p["status"])
 	}
-	// coven-scoped оператор (не unrestricted) → scope_applied=true.
+	// coven-scoped operator (not unrestricted) → scope_applied=true.
 	if p["scope_applied"] != true {
 		t.Errorf("payload.scope_applied = %v, want true (coven-scoped)", p["scope_applied"])
 	}
 	if p["dry_run"] != false {
 		t.Errorf("payload.dry_run = %v, want false", p["dry_run"])
 	}
-	// Нормализованный селектор: all=false + coven/status (sids опущен).
+	// Normalized selector: all=false + coven/status (sids omitted).
 	sel, ok := p["selector"].(map[string]any)
 	if !ok {
 		t.Fatalf("payload.selector type = %T, want map", p["selector"])
@@ -1132,8 +1132,8 @@ func TestAssignCoven_Audit_PayloadOnSuccess(t *testing.T) {
 	}
 }
 
-// TestAssignCoven_Audit_OnDryRun (gap + PM-decision): dry_run=true ВСЁ РАВНО
-// пишет audit (след «кто запускал предпросмотр массовой операции») с dry_run:true.
+// TestAssignCoven_Audit_OnDryRun (gap + PM-decision): dry_run=true STILL
+// writes audit (trail of "who ran bulk operation preview") with dry_run:true.
 func TestAssignCoven_Audit_OnDryRun(t *testing.T) {
 	pool := &fakeSoulPool{listCount: 5}
 	h := NewSoulHandler(pool, fakeScoper{unrestricted: true}, nil, nil)
@@ -1162,9 +1162,9 @@ func TestAssignCoven_Audit_OnDryRun(t *testing.T) {
 	}
 }
 
-// TestAssignCoven_Audit_NotWrittenOnEarlyReject (gap): ранний отказ (битый JSON
-// 400 / невалидный ввод 422 / label-out-of-scope 422) НЕ пишет audit-событие
-// мутации — middleware.Audit пропускает не-2xx.
+// TestAssignCoven_Audit_NotWrittenOnEarlyReject (gap): early reject (malformed JSON
+// 400 / invalid input 422 / label-out-of-scope 422) does NOT write mutation audit-event
+// — middleware.Audit skips non-2xx.
 func TestAssignCoven_Audit_NotWrittenOnEarlyReject(t *testing.T) {
 	cases := []struct {
 		name string
@@ -1178,7 +1178,7 @@ func TestAssignCoven_Audit_NotWrittenOnEarlyReject(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			// coven=dev scope: 'prod' вне scope → 422 ДО БД (гейт b).
+			// coven=dev scope: 'prod' outside scope → 422 BEFORE DB (gate b).
 			h := NewSoulHandler(&fakeSoulPool{}, fakeScoper{covens: []string{"dev"}}, nil, nil)
 			rec, cap := auditedAssignCoven(t, h, tc.body, "")
 			if rec.Code != tc.code {
@@ -1206,7 +1206,7 @@ func TestSoulCreate_Happy_Agent(t *testing.T) {
 	if out["sid"] != "web-01.example.com" || out["status"] != "pending" {
 		t.Errorf("response = %v", out)
 	}
-	// covens из запроса должны вернуться в ответе (привязка при онбординге).
+	// covens from request must be returned in response (binding during onboarding).
 	covens, _ := out["covens"].([]any)
 	if len(covens) != 2 || covens[0] != "prod" || covens[1] != "dc-eu" {
 		t.Errorf("covens = %v, want [prod dc-eu]", out["covens"])
@@ -1214,9 +1214,9 @@ func TestSoulCreate_Happy_Agent(t *testing.T) {
 	if tok, _ := out["bootstrap_token"].(string); tok == "" {
 		t.Errorf("bootstrap_token missing for agent")
 	}
-	// guard: ключ срока истечения — `expires_at` (не legacy `token_expires_at`).
-	// Ловит регрессию переименования wire-ключа (вернуть тег `token_expires_at`
-	// → красный).
+	// guard: expiration key is `expires_at` (not legacy `token_expires_at`).
+	// Catches regression of wire-key rename (restore tag `token_expires_at`
+	// → red).
 	if _, ok := out["expires_at"]; !ok {
 		t.Errorf("ключ expires_at отсутствует в ответе")
 	}
@@ -1260,9 +1260,9 @@ func TestSoulCreate_Duplicate_409(t *testing.T) {
 	assertProblemType(t, rec, problem.TypeSoulExists)
 }
 
-// TestSoulCreate_TokenInsertFails_Rollback (coverage gap 3): сбой token-insert
-// после успешного souls-insert → tx.Rollback вызван, Commit нет. На реальной БД
-// это гарантирует отсутствие осиротевшей souls-row (insert и token в одной tx).
+// TestSoulCreate_TokenInsertFails_Rollback (coverage gap 3): token-insert failure
+// after successful souls-insert → tx.Rollback called, no Commit. On real DB
+// this guarantees no orphaned souls-row (insert and token in one tx).
 func TestSoulCreate_TokenInsertFails_Rollback(t *testing.T) {
 	pool := &fakeSoulPool{tokenInsertErr: errors.New("token insert boom")}
 	h := NewSoulHandler(pool, nil, nil, nil)
@@ -1279,8 +1279,8 @@ func TestSoulCreate_TokenInsertFails_Rollback(t *testing.T) {
 	}
 }
 
-// TestSoulCreate_UnknownCreator_422 (B2 unit): FK-violation на
-// souls_created_by_aid_fk маппится в 422, а не в opaque 500.
+// TestSoulCreate_UnknownCreator_422 (B2 unit): FK-violation on
+// souls_created_by_aid_fk maps to 422, not opaque 500.
 func TestSoulCreate_UnknownCreator_422(t *testing.T) {
 	pool := &fakeSoulPool{soulInsertErr: soul.ErrSoulCreatorNotFound}
 	h := NewSoulHandler(pool, nil, nil, nil)
@@ -1319,10 +1319,10 @@ func TestSoulCreate_InvalidSID_422(t *testing.T) {
 }
 
 // TestSoulCreate_Covens_AcceptedNotUnknownField (GAP #3 regression):
-// документированное OpenAPI-поле `covens` НЕ должно отвергаться
-// strict-декодером как unknown field. Раньше декодер ждал `coven` →
-// 400 "json: unknown field \"covens\"", и не было API-способа привязать
-// Soul к coven при онбординге.
+// documented OpenAPI field `covens` MUST NOT be rejected
+// by strict-decoder as unknown field. Previously decoder expected `coven` →
+// 400 "json: unknown field \"covens\"", and there was no API way to bind
+// Soul to coven during onboarding.
 func TestSoulCreate_Covens_AcceptedNotUnknownField(t *testing.T) {
 	pool := &fakeSoulPool{}
 	h := NewSoulHandler(pool, nil, nil, nil)
@@ -1333,8 +1333,8 @@ func TestSoulCreate_Covens_AcceptedNotUnknownField(t *testing.T) {
 	}
 }
 
-// TestSoulCreate_UnknownField_400: strict-декодер по-прежнему отвергает
-// действительно неизвестные поля (например, старое имя `coven`).
+// TestSoulCreate_UnknownField_400: strict-decoder still rejects
+// truly unknown fields (e.g., old name `coven`).
 func TestSoulCreate_UnknownField_400(t *testing.T) {
 	pool := &fakeSoulPool{}
 	h := NewSoulHandler(pool, nil, nil, nil)
@@ -1346,8 +1346,8 @@ func TestSoulCreate_UnknownField_400(t *testing.T) {
 	assertProblemType(t, rec, problem.TypeMalformedRequest)
 }
 
-// TestSoulCreate_InvalidCoven_422: coven-метка не в kebab-case → 422
-// (валидация ADR-008 стабильных тегов на API-границе).
+// TestSoulCreate_InvalidCoven_422: coven-tag not in kebab-case → 422
+// (validation of ADR-008 stable tags at API boundary).
 func TestSoulCreate_InvalidCoven_422(t *testing.T) {
 	pool := &fakeSoulPool{}
 	h := NewSoulHandler(pool, nil, nil, nil)
@@ -1394,7 +1394,7 @@ func TestSoulIssueToken_Happy(t *testing.T) {
 	if tok, _ := out["bootstrap_token"].(string); tok == "" {
 		t.Errorf("bootstrap_token missing")
 	}
-	// guard: ключ срока истечения — `expires_at` (не legacy `token_expires_at`).
+	// guard: expiration key is `expires_at` (not legacy `token_expires_at`).
 	if _, ok := out["expires_at"]; !ok {
 		t.Errorf("ключ expires_at отсутствует в ответе")
 	}
@@ -1479,15 +1479,15 @@ func TestSoulIssueToken_InvalidSID_422(t *testing.T) {
 	}
 }
 
-// doList выполняет GET /v1/souls (с claims archon-alice) через recordList.
+// doList performs GET /v1/souls (with claims archon-alice) via recordList.
 func doList(t *testing.T, h *SoulHandler, query string) *httptest.ResponseRecorder {
 	t.Helper()
 	return recordList(t, h, query, "archon-alice")
 }
 
-// recordList разбирает pagination/cursor так же, как прежний (w,r)-роут (offset+cursor
-// конфликт → 422, битый cursor / bad pagination → 400), вызывает ListTyped напрямую
-// (handler-native T5d) и сериализует результат в recorder. aid="" → fail-closed (no claims).
+// recordList parses pagination/cursor the same way as the former (w,r)-route (offset+cursor
+// conflict → 422, malformed cursor / bad pagination → 400), calls ListTyped directly
+// (handler-native T5d) and serializes the result in recorder. aid="" → fail-closed (no claims).
 func recordList(t *testing.T, h *SoulHandler, query, aid string) *httptest.ResponseRecorder {
 	t.Helper()
 	url := "/v1/souls"
@@ -1527,8 +1527,8 @@ func recordList(t *testing.T, h *SoulHandler, query, aid string) *httptest.Respo
 	return rec
 }
 
-// soulListReplyJSON проецирует доменный SoulListReply (PagedResponse[SoulListView]) в map с
-// json-ключами native envelope/element (для downstream decode тестов GET /v1/souls).
+// soulListReplyJSON projects the domain SoulListReply (PagedResponse[SoulListView]) into a map with
+// json keys native envelope/element (for downstream decode tests of GET /v1/souls).
 func soulListReplyJSON(r SoulListReply) map[string]any {
 	items := make([]map[string]any, 0, len(r.Items))
 	for i := range r.Items {
@@ -1609,16 +1609,16 @@ func TestSoulList_Happy(t *testing.T) {
 	if first.CreatedByAID == nil || *first.CreatedByAID != "archon-alice" {
 		t.Errorf("item[0].created_by_aid = %v", first.CreatedByAID)
 	}
-	// traits (ADR-060 read-path): хост с метками отдаёт их как object.
+	// traits (ADR-060 read-path): host with traits returns them as object.
 	if first.Traits["tier"] != "gold" || first.Traits["rack"] != "r12" {
 		t.Errorf("item[0].traits = %v, want {tier:gold rack:r12}", first.Traits)
 	}
-	// ssh-host без coven → covens должен быть `[]`, не null (coalesceCoven).
+	// ssh-host without coven → covens should be `[]`, not null (coalesceCoven).
 	if out.Items[1].Covens == nil {
 		t.Errorf("item[1].covens = null, want [] (coalesceCoven)")
 	}
-	// bare-soul без traits → `{}`, не null (coalesceTraits): UI рендерит пустой
-	// набор без nil-проверки.
+	// bare-soul without traits → `{}`, not null (coalesceTraits): UI renders empty
+	// set without nil-check.
 	if out.Items[1].Traits == nil {
 		t.Errorf("item[1].traits = null, want {} (coalesceTraits)")
 	}
@@ -1627,9 +1627,9 @@ func TestSoulList_Happy(t *testing.T) {
 	}
 }
 
-// TestSoulList_NoSecretsLeak — fingerprint и любые секреты SoulSeed-а НЕ
-// должны попадать в list-response. soulListItem их не объявляет; проверяем
-// через raw-map, что таких ключей нет.
+// TestSoulList_NoSecretsLeak — fingerprint and any SoulSeed secrets MUST NOT
+// appear in list-response. soulListItem does not declare them; we verify
+// via raw-map that such keys are absent.
 func TestSoulList_NoSecretsLeak(t *testing.T) {
 	pool := &fakeSoulPool{
 		listCount: 1,
@@ -1677,7 +1677,7 @@ func TestSoulList_Empty(t *testing.T) {
 	if out.Total != 0 {
 		t.Errorf("total = %d, want 0", out.Total)
 	}
-	// items должен сериализоваться как `[]`, не null.
+	// items should serialize as `[]`, not null.
 	if out.Items == nil {
 		t.Errorf("items = null, want [] (empty slice)")
 	}
@@ -1691,7 +1691,7 @@ func TestSoulList_Filters_ReachSQL(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
 	}
-	// Все три значения должны прийти как pgx-параметры (не конкатенация).
+	// All three values should arrive as pgx-parameters (not concatenation).
 	want := map[string]bool{"connected": false, "agent": false, "redis-prod": false}
 	for _, a := range pool.lastListArgs {
 		if s, ok := a.(string); ok {
@@ -1751,9 +1751,9 @@ func TestSoulList_QueryError_500(t *testing.T) {
 	assertProblemType(t, rec, problem.TypeInternalError)
 }
 
-// --- ADR-047 S3b: scoped-видимость souls-list по Purview ---
+// --- ADR-047 S3b: scoped visibility of souls-list by Purview ---
 
-// decodeListItems разбирает {items:[{sid,status}]} ответа List.
+// decodeListItems parses {items:[{sid,status}]} from List response.
 func decodeListItems(t *testing.T, body []byte) struct {
 	Items []struct {
 		SID    string `json:"sid"`
@@ -1775,10 +1775,10 @@ func decodeListItems(t *testing.T, body []byte) struct {
 	return out
 }
 
-// TestSoulList_EmptyPurview_FailClosed — ГЛАВНЫЙ security-инвариант (ADR-047):
-// оператор с пустым Purview (default-deny, нет coven-измерения) видит ПУСТОЙ
-// список, НЕ весь флот. fakeSoulPool отдал бы 1 хост — handler обязан вернуть 0
-// и НЕ обратиться к SelectAll. Регресс = оператор видит чужие хосты.
+// TestSoulList_EmptyPurview_FailClosed — CRITICAL security invariant (ADR-047):
+// an operator with empty Purview (default-deny, no coven dimension) sees an EMPTY
+// list, NOT the entire fleet. fakeSoulPool would return 1 host — handler MUST return 0
+// and NOT call SelectAll. Regression = operator sees others' hosts.
 func TestSoulList_EmptyPurview_FailClosed(t *testing.T) {
 	pool := &fakeSoulPool{
 		listCount: 1,
@@ -1801,8 +1801,8 @@ func TestSoulList_EmptyPurview_FailClosed(t *testing.T) {
 	}
 }
 
-// TestSoulList_NoClaims_FailClosed — нет claims в контексте (защитный инвариант,
-// штатно route под RequireJWT) → пустой список, НЕ весь флот.
+// TestSoulList_NoClaims_FailClosed — no claims in context (defensive invariant,
+// normally route under RequireJWT) → empty list, NOT the entire fleet.
 func TestSoulList_NoClaims_FailClosed(t *testing.T) {
 	pool := &fakeSoulPool{
 		listCount: 1,
@@ -1812,7 +1812,7 @@ func TestSoulList_NoClaims_FailClosed(t *testing.T) {
 	}
 	h := NewSoulHandler(pool, fakeScoper{unrestricted: true}, nil, nil)
 
-	// БЕЗ claims — запрос без identity (recordList с aid="" → fail-closed).
+	// WITHOUT claims — request without identity (recordList with aid="" → fail-closed).
 	rec := recordList(t, h, "", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
@@ -1823,9 +1823,9 @@ func TestSoulList_NoClaims_FailClosed(t *testing.T) {
 	}
 }
 
-// TestSoulList_NilScoper_FailClosed — scoper не сконфигурирован (nil) → пустой
-// список (НЕ весь флот). В отличие от prod (Holder всегда есть), это защита от
-// мис-wire-up-а: отсутствие резолвера НЕ должно раскрывать флот.
+// TestSoulList_NilScoper_FailClosed — scoper not configured (nil) → empty
+// list (NOT the entire fleet). Unlike prod (Holder always exists), this guards against
+// mis-wire-up: absence of resolver MUST NOT expose the fleet.
 func TestSoulList_NilScoper_FailClosed(t *testing.T) {
 	pool := &fakeSoulPool{
 		listCount: 1,
@@ -1845,8 +1845,8 @@ func TestSoulList_NilScoper_FailClosed(t *testing.T) {
 	}
 }
 
-// TestSoulList_Unrestricted_All — `*`/bare-без-default Purview → весь список без
-// scope-фильтра (coven-scope-args в SQL не добавляются).
+// TestSoulList_Unrestricted_All — `*`/bare-without-default Purview → entire list without
+// scope-filter (coven-scope-args not added to SQL).
 func TestSoulList_Unrestricted_All(t *testing.T) {
 	pool := &fakeSoulPool{
 		listCount: 2,
@@ -1865,7 +1865,7 @@ func TestSoulList_Unrestricted_All(t *testing.T) {
 	if out.Total != 2 || len(out.Items) != 2 {
 		t.Fatalf("unrestricted list total/len = %d/%d, want 2/2", out.Total, len(out.Items))
 	}
-	// Unrestricted → НЕ должно быть coven-scope-args (`[]string`) в SQL.
+	// Unrestricted → MUST NOT have coven-scope-args (`[]string`) in SQL.
 	for _, a := range pool.lastListArgs {
 		if _, ok := a.([]string); ok {
 			t.Errorf("unrestricted scope добавил coven-scope-args в SQL: %v", pool.lastListArgs)
@@ -1873,8 +1873,8 @@ func TestSoulList_Unrestricted_All(t *testing.T) {
 	}
 }
 
-// TestSoulList_CovenScope_ReachesSQL — coven-scoped оператор: covens доходят до
-// SQL как []string-аргумент scope-pushdown-а (`coven && ARRAY[covens]`).
+// TestSoulList_CovenScope_ReachesSQL — coven-scoped operator: covens reach
+// SQL as []string argument of scope-pushdown (`coven && ARRAY[covens]`).
 func TestSoulList_CovenScope_ReachesSQL(t *testing.T) {
 	pool := &fakeSoulPool{listCount: 0}
 	h := NewSoulHandler(pool, fakeScoper{covens: []string{"prod", "staging"}}, nil, nil)
@@ -1896,10 +1896,10 @@ func TestSoulList_CovenScope_ReachesSQL(t *testing.T) {
 	}
 }
 
-// TestSoulList_ScopeOverridesPresence — scope (fail-closed) и presence-overlay
-// (fail-safe) разведены: scope СУЖАЕТ результат ДО presence-overlay-я. Пустой
-// Purview → 0 хостов, даже если presence отдал бы их connected. Регресс этого
-// теста = presence-паттерн «при сомнении показать» протёк на scope-слой.
+// TestSoulList_ScopeOverridesPresence — scope (fail-closed) and presence-overlay
+// (fail-safe) are separate: scope NARROWS result BEFORE presence-overlay. Empty
+// Purview → 0 hosts, even if presence would return them as connected. Regression of this
+// test = presence pattern "show when in doubt" leaked into scope layer.
 func TestSoulList_ScopeOverridesPresence(t *testing.T) {
 	pool := &fakeSoulPool{
 		listCount: 1,
@@ -1907,7 +1907,7 @@ func TestSoulList_ScopeOverridesPresence(t *testing.T) {
 			{SID: "redis-01.example.com", Transport: soul.TransportAgent, Status: soul.StatusDisconnected, RegisteredAt: time.Now().UTC()},
 		},
 	}
-	// presence отдал бы redis-01 как connected (live lease) — но scope пуст.
+	// presence would return redis-01 as connected (live lease) — but scope is empty.
 	presence := &fakePresence{alive: aliveSet("redis-01.example.com")}
 	h := NewSoulHandler(pool, fakeScoper{empty: true}, presence, nil)
 
@@ -1924,9 +1924,9 @@ func TestSoulList_ScopeOverridesPresence(t *testing.T) {
 	}
 }
 
-// TestSoulList_PartialScope_AppliesCovenSubset — оператор с coven + не-coven
-// измерением (soulprint, ещё не вычисляется в пилоте): пилот применяет coven-
-// pushdown (строгое подмножество, никогда НЕ over-show), список не падает в 0.
+// TestSoulList_PartialScope_AppliesCovenSubset — operator with coven + non-coven
+// dimension (soulprint, not yet evaluated in pilot): pilot applies coven-
+// pushdown (strict subset, never over-show), list does not drop to 0.
 func TestSoulList_PartialScope_AppliesCovenSubset(t *testing.T) {
 	pool := &fakeSoulPool{
 		listCount: 1,
@@ -1943,8 +1943,8 @@ func TestSoulList_PartialScope_AppliesCovenSubset(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
 	}
-	// coven-pushdown применён (covens дошли до SQL); не-coven измерение пилот
-	// игнорирует (S3b-2), но НЕ обнуляет результат.
+	// coven-pushdown applied (covens reached SQL); non-coven dimension pilot
+	// ignores (S3b-2), but does NOT zero out result.
 	var found bool
 	for _, a := range pool.lastListArgs {
 		if covs, ok := a.([]string); ok && len(covs) == 1 && covs[0] == "prod" {

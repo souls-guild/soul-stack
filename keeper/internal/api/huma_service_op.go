@@ -36,10 +36,10 @@ type serviceRegisterInput struct {
 // domain validation lives in RegisterTyped (422/409/404). The struct name = the contract
 // schema name in OpenAPI (committed hand-written spec → ServiceRegisterRequest).
 type ServiceRegisterRequest struct {
-	Name    string  `json:"name" required:"true" pattern:"^[a-z][a-z0-9-]*$" doc:"имя Service-а (kebab-case)"`
+	Name    string  `json:"name" required:"true" pattern:"^[a-z][a-z0-9-]*$" doc:"Service name (kebab-case)"`
 	Git     string  `json:"git" required:"true" doc:"git-источник service-репо (URL; не секрет)"`
 	Ref     string  `json:"ref" required:"true" doc:"git ref (tag/branch) — версия Service-а (ADR-007)"`
-	Refresh *string `json:"refresh,omitempty" doc:"опц. duration авто-refresh ('5m'); опущено — без авто-refresh"`
+	Refresh *string `json:"refresh,omitempty" doc:"опц. duration авто-refresh ('5m'); опущеbut — без авто-refresh"`
 }
 
 // serviceRegisterOutput — huma-output POST /v1/services (FULL-TYPED). Status=201;
@@ -60,7 +60,7 @@ func serviceRegisterOperation() huma.Operation {
 		Method:        http.MethodPost,
 		Path:          "/",
 		Summary:       "Зарегистрировать Service",
-		Description:   "Заносит Service в реестр service_registry (ADR-028). Permission service.register. 409 — name занят. 404 — caller AID отсутствует в реестре операторов.",
+		Description:   "Заbutсит Service в реестр service_registry (ADR-028). Permission service.register. 409 — name занят. 404 — caller AID отсутствует в реестре операторов.",
 		Tags:          []string{"service"},
 		DefaultStatus: http.StatusCreated,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -88,8 +88,8 @@ func serviceListOperation() huma.Operation {
 		OperationID:   "listServices",
 		Method:        http.MethodGet,
 		Path:          "/",
-		Summary:       "Список Service-ов",
-		Description:   "Реестр Service-ов (sort name ASC, ADR-028). Permission service.list. Read-only, без audit.",
+		Summary:       "Спиwithк Service-ов",
+		Description:   "Реестр Service-ов (sort name ASC, ADR-028). Permission service.list. Read-only, no audit.",
 		Tags:          []string{"service"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusInternalServerError},
@@ -100,7 +100,7 @@ func serviceListOperation() huma.Operation {
 
 // serviceGetInput — huma-input GET /v1/services/{name}. Name — path parameter.
 type serviceGetInput struct {
-	Name string `path:"name" doc:"имя Service-а"`
+	Name string `path:"name" doc:"Service name"`
 }
 
 // serviceGetOutput — huma-output GET /v1/services/{name} (FULL-TYPED). Body —
@@ -118,7 +118,7 @@ func serviceGetOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/{name}",
 		Summary:       "Карточка Service-а",
-		Description:   "Метаданные одной записи реестра по имени (ADR-028). Permission service.list. Read-only, без audit.",
+		Description:   "Метаданные одbutй записи реестра по имени (ADR-028). Permission service.list. Read-only, no audit.",
 		Tags:          []string{"service"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError},
@@ -130,7 +130,7 @@ func serviceGetOperation() huma.Operation {
 // serviceUpdateInput — huma-input PATCH /v1/services/{name}. Name — path; Body —
 // the typed body (replace of the mutable fields git/ref/refresh).
 type serviceUpdateInput struct {
-	Name string `path:"name" doc:"имя Service-а (immutable)"`
+	Name string `path:"name" doc:"Service name (immutable)"`
 	Body ServiceUpdateRequest
 }
 
@@ -138,8 +138,8 @@ type serviceUpdateInput struct {
 // for the mutable fields: git/ref required, refresh optional; name is immutable — comes from path). The struct
 // name = the contract schema name in OpenAPI (committed hand-written spec → ServiceUpdateRequest).
 type ServiceUpdateRequest struct {
-	Git     string  `json:"git" required:"true" doc:"новый git-источник"`
-	Ref     string  `json:"ref" required:"true" doc:"новый git ref"`
+	Git     string  `json:"git" required:"true" doc:"butвый git-источник"`
+	Ref     string  `json:"ref" required:"true" doc:"butвый git ref"`
 	Refresh *string `json:"refresh,omitempty" doc:"опц. duration авто-refresh ('5m')"`
 }
 
@@ -159,8 +159,8 @@ func serviceUpdateOperation() huma.Operation {
 		OperationID:   "updateService",
 		Method:        http.MethodPatch,
 		Path:          "/{name}",
-		Summary:       "Обновить Service (replace mutable-полей)",
-		Description:   "Replace-семантика git/ref/refresh, name immutable (ADR-028). Permission service.update. 404 — записи нет.",
+		Summary:       "Обbutвить Service (replace mutable-fields)",
+		Description:   "Replace-семантика git/ref/refresh, name immutable (ADR-028). Permission service.update. 404 — записи absent.",
 		Tags:          []string{"service"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -171,7 +171,7 @@ func serviceUpdateOperation() huma.Operation {
 
 // serviceDeregisterInput — huma-input DELETE /v1/services/{name}. Name — path. No Body.
 type serviceDeregisterInput struct {
-	Name string `path:"name" doc:"имя Service-а"`
+	Name string `path:"name" doc:"Service name"`
 }
 
 // serviceNoContentOutput — huma-output for the 204-write route deregister. WITHOUT Body
@@ -189,8 +189,8 @@ func serviceDeregisterOperation() huma.Operation {
 		OperationID:   "deregisterService",
 		Method:        http.MethodDelete,
 		Path:          "/{name}",
-		Summary:       "Удалить Service из реестра",
-		Description:   "Удаляет запись реестра по имени + инвалидирует кеши (ADR-028). Permission service.deregister. 404 — записи нет.",
+		Summary:       "Удалить Service from реестра",
+		Description:   "Удаляет запись реестра по имени + инвалидирует кеши (ADR-028). Permission service.deregister. 404 — записи absent.",
 		Tags:          []string{"service"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError},
@@ -202,7 +202,7 @@ func serviceDeregisterOperation() huma.Operation {
 // serviceRefsInput — huma-input GET /v1/services/{name}/refs. Name — path. No
 // ?ref= (refs lists ALL tags+branches of the remote repo).
 type serviceRefsInput struct {
-	Name string `path:"name" doc:"имя Service-а"`
+	Name string `path:"name" doc:"Service name"`
 }
 
 // serviceRefsOutput — huma-output GET /v1/services/{name}/refs (FULL-TYPED). Body —
@@ -221,7 +221,7 @@ func serviceRefsOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/{name}/refs",
 		Summary:       "git-tag-и + branch-и Service-а",
-		Description:   "Список git-ref-ов remote-репозитория Service-а для UI Upgrade-modal (ADR-028). Permission service.list. Read-only, без audit. 502 — git-источник unreachable.",
+		Description:   "Спиwithк git-ref-ов remote-репозитория Service-а for UI Upgrade-modal (ADR-028). Permission service.list. Read-only, no audit. 502 — git-источник unreachable.",
 		Tags:          []string{"service"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError, http.StatusBadGateway},
@@ -233,8 +233,8 @@ func serviceRefsOperation() huma.Operation {
 // serviceScenariosInput — huma-input GET /v1/services/{name}/scenarios. Name — path;
 // Ref — optional query override (omitted → ref from the registry).
 type serviceScenariosInput struct {
-	Name string `path:"name" doc:"имя Service-а"`
-	Ref  string `query:"ref" doc:"опц. git-ref override (опущено → ref из реестра)"`
+	Name string `path:"name" doc:"Service name"`
+	Ref  string `query:"ref" doc:"opt. git-ref override (omitted → ref from registry)"`
 }
 
 // serviceScenariosOutput — huma-output GET /v1/services/{name}/scenarios (FULL-TYPED).
@@ -252,8 +252,8 @@ func serviceScenariosOperation() huma.Operation {
 		OperationID:   "listServiceScenarios",
 		Method:        http.MethodGet,
 		Path:          "/{name}/scenarios",
-		Summary:       "scenario из снапшота Service-репо",
-		Description:   "Список scenario из материализованного снапшота git-репо Service-а для UI Run-modal (ADR-028). Permission service.list. Read-only, без audit. 502 — loader упал.",
+		Summary:       "scenario from сonпшота Service-репо",
+		Description:   "Спиwithк scenario from материалfromованbutго сonпшота git-репо Service-а for UI Run-modal (ADR-028). Permission service.list. Read-only, no audit. 502 — loader упал.",
 		Tags:          []string{"service"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError, http.StatusBadGateway},
@@ -265,8 +265,8 @@ func serviceScenariosOperation() huma.Operation {
 // serviceStateSchemaInput — huma-input GET /v1/services/{name}/state-schema. Name —
 // path; Ref — optional query override.
 type serviceStateSchemaInput struct {
-	Name string `path:"name" doc:"имя Service-а"`
-	Ref  string `query:"ref" doc:"опц. git-ref override (опущено → ref из реестра)"`
+	Name string `path:"name" doc:"Service name"`
+	Ref  string `query:"ref" doc:"opt. git-ref override (omitted → ref from registry)"`
 }
 
 // serviceStateSchemaOutput — huma-output GET /v1/services/{name}/state-schema
@@ -285,7 +285,7 @@ func serviceStateSchemaOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/{name}/state-schema",
 		Summary:       "state_schema-метаданные Service-а",
-		Description:   "state_schema-версия + декларация структуры + цепочка миграций (metadata-only) для UI Schema explorer (ADR-019/028). Permission service.list. Read-only, без audit. 502 — loader упал.",
+		Description:   "state_schema-версия + декларация структуры + цепочка миграций (metadata-only) for UI Schema explorer (ADR-019/028). Permission service.list. Read-only, no audit. 502 — loader упал.",
 		Tags:          []string{"service"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError, http.StatusBadGateway},
@@ -297,8 +297,8 @@ func serviceStateSchemaOperation() huma.Operation {
 // serviceDependenciesInput — huma-input GET /v1/services/{name}/dependencies. Name —
 // path; Ref — optional query override.
 type serviceDependenciesInput struct {
-	Name string `path:"name" doc:"имя Service-а"`
-	Ref  string `query:"ref" doc:"опц. git-ref override (опущено → ref из реестра)"`
+	Name string `path:"name" doc:"Service name"`
+	Ref  string `query:"ref" doc:"opt. git-ref override (omitted → ref from registry)"`
 }
 
 // serviceDependenciesOutput — huma-output GET /v1/services/{name}/dependencies
@@ -317,7 +317,7 @@ func serviceDependenciesOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/{name}/dependencies",
 		Summary:       "git-зависимости Service-а",
-		Description:   "Задекларированные в service.yml destiny-кирпичики + custom-модули со своими git-ref-ами для UI Service Detail (ADR-007/028). Permission service.list. Read-only, без audit. 502 — loader упал.",
+		Description:   "Задекларированные в service.yml destiny-кирпичики + custom-модули with своими git-ref-ами for UI Service Detail (ADR-007/028). Permission service.list. Read-only, no audit. 502 — loader упал.",
 		Tags:          []string{"service"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError, http.StatusBadGateway},
@@ -356,10 +356,10 @@ func directivesCacheControlFor(ref string) string {
 // path; Ref/Version — optional query; If-None-Match — conditional-GET (304 on a match
 // with ETag=snapshot SHA1).
 type serviceDirectivesInput struct {
-	Name        string `path:"name" doc:"имя Service-а"`
-	Ref         string `query:"ref" doc:"опц. git-ref override (опущено → ref из реестра)"`
-	Version     string `query:"version" doc:"опц. версия (напр. 8.2.2) — сузить каталог до серии major.minor"`
-	IfNoneMatch string `header:"If-None-Match" doc:"conditional GET: 304, если совпало с ETag (snapshot SHA1)"`
+	Name        string `path:"name" doc:"Service name"`
+	Ref         string `query:"ref" doc:"opt. git-ref override (omitted → ref from registry)"`
+	Version     string `query:"version" doc:"опц. версия (onпр. 8.2.2) — сузить каталог to серии major.minor"`
+	IfNoneMatch string `header:"If-None-Match" doc:"conditional GET: 304, если withвпало с ETag (snapshot SHA1)"`
 }
 
 // serviceDirectivesOutput — huma-output GET /v1/services/{name}/directives (FULL-TYPED).
@@ -382,7 +382,7 @@ func serviceDirectivesOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/{name}/directives",
 		Summary:       "каталог валидных директив redis.conf по версиям",
-		Description:   "Каталог валидных имён директив сервиса (essence.redis_directives, карта серия major.minor → имена) для UI-редактора redis_settings (ADR-042). Permission service.list. Read-only, без audit. ?version=X.Y.Z сужает до серии. ETag=snapshot SHA1; If-None-Match → 304. Cache-Control: immutable+год для pinned commit-SHA ref, иначе no-cache (ветка/тег mutable — ревалидация через ETag/304). Сервис без каталога → directives:{} + 200. 502 — loader упал.",
+		Description:   "Каталог валидных имён директив сервиса (essence.redis_directives, карта серия major.minor → names) for UI-редактора redis_settings (ADR-042). Permission service.list. Read-only, no audit. ?version=X.Y.Z сужает to серии. ETag=snapshot SHA1; If-None-Match → 304. Cache-Control: immutable+год for pinned commit-SHA ref, иonче no-cache (branch/тег mutable — реvalidation via ETag/304). Сервис без каталога → directives:{} + 200. 502 — loader упал.",
 		Tags:          []string{"service"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError, http.StatusBadGateway},

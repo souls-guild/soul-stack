@@ -223,7 +223,7 @@ func TestIntegration_VoyageNotify_DefaultOnAllTerminals_202(t *testing.T) {
 		"command_run.partial_failed": true,
 	}
 	if len(tidings[0].eventTypes) != 3 {
-		t.Fatalf("event_types = %v, want 3 терминала", tidings[0].eventTypes)
+		t.Fatalf("event_types = %v, want 3 термиonла", tidings[0].eventTypes)
 	}
 	for _, et := range tidings[0].eventTypes {
 		if !want[et] {
@@ -254,7 +254,7 @@ func TestIntegration_VoyageNotify_NoHeraldRead_403_NoSideEffect(t *testing.T) {
 	}
 	// Atomicity of the failure: the guard fired BEFORE persist — the DB is clean.
 	if v := countVoyages(t); v != 0 {
-		t.Errorf("voyages = %d, want 0 (notify-403 не должен создать Voyage)", v)
+		t.Errorf("voyages = %d, want 0 (notify-403 не toлжен withздать Voyage)", v)
 	}
 	if ti := countTidings(t); ti != 0 {
 		t.Errorf("tidings = %d, want 0", ti)
@@ -277,10 +277,10 @@ func TestIntegration_VoyageNotify_HeraldNotFound_422_NoSideEffect(t *testing.T) 
 		"notify":[{"herald":"does-not-exist"}]}`
 	code, respBody := postCommandVoyage(t, base, tok, body)
 	if code != 422 {
-		t.Fatalf("status = %d, want 422 (канал не существует); body=%s", code, respBody)
+		t.Fatalf("status = %d, want 422 (каonл не существует); body=%s", code, respBody)
 	}
 	if v := countVoyages(t); v != 0 {
-		t.Errorf("voyages = %d, want 0 (notify-422 не должен создать Voyage)", v)
+		t.Errorf("voyages = %d, want 0 (notify-422 не toлжен withздать Voyage)", v)
 	}
 	if ti := countTidings(t); ti != 0 {
 		t.Errorf("tidings = %d, want 0", ti)
@@ -339,11 +339,11 @@ func TestIntegration_VoyageNotify_MultipleAllOrNothing_202(t *testing.T) {
 	voyageID := voyageIDFromReply(t, respBody)
 	tidings := selectTidingsByVoyage(t, voyageID)
 	if len(tidings) != 2 {
-		t.Fatalf("ephemeral-Tiding-ов = %d, want 2 (оба notify в одной tx)", len(tidings))
+		t.Fatalf("ephemeral-Tiding-ов = %d, want 2 (оба notify в одbutй tx)", len(tidings))
 	}
 	// Names are unique (a fresh ULID per rule), both bound to one voyage_id.
 	if tidings[0].name == tidings[1].name {
-		t.Errorf("имена ephemeral совпали: %q (нарушена уникальность)", tidings[0].name)
+		t.Errorf("names ephemeral withвпали: %q (onрушеon уникальbutсть)", tidings[0].name)
 	}
 	heralds := map[string]bool{tidings[0].herald: true, tidings[1].herald: true}
 	if !heralds["ops-a"] || !heralds["ops-b"] {

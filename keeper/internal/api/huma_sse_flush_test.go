@@ -103,14 +103,14 @@ func TestRunEventsSSE_PreambleFlushesThroughV1Middleware(t *testing.T) {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("SSE-preamble не долетел за 3s (флаш не прошёл сквозь /v1-обёртки?): %v", err)
+		t.Fatalf("SSE-preamble не toлетел за 3s (флаш не прошёл сквозь /v1-обёртки?): %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
 	if line := readSSEPreambleLine(t, resp.Body); !strings.HasPrefix(line, ":ok") {
-		t.Fatalf("первый flush-нутый кусок = %q, want :ok-preamble", line)
+		t.Fatalf("первый flush-нутый куwithк = %q, want :ok-preamble", line)
 	}
 }
 
@@ -128,7 +128,7 @@ func readSSEPreambleLine(t *testing.T, r io.Reader) string {
 	case s := <-ch:
 		return s
 	case <-time.After(2 * time.Second):
-		t.Fatal("таймаут чтения SSE-preamble")
+		t.Fatal("таймаут reading SSE-preamble")
 		return ""
 	}
 }

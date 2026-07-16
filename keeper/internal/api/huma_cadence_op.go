@@ -34,34 +34,34 @@ type cadenceCreateInput struct {
 // optional fields. additionalProperties:false (huma default, NOT removed) →
 // unknown field → error-override classifies it as 400 (cluster contract).
 type CadenceCreateRequest struct {
-	Name         string `json:"name" required:"true" doc:"человекочитаемое имя расписания"`
-	Enabled      *bool  `json:"enabled,omitempty" doc:"вкл/выкл планировщика (default true)"`
-	ScheduleKind string `json:"schedule_kind" required:"true" enum:"interval,cron" doc:"тип расписания"`
+	Name         string `json:"name" required:"true" doc:"human-readable schedule name"`
+	Enabled      *bool  `json:"enabled,omitempty" doc:"enable/disable scheduler (default true)"`
+	ScheduleKind string `json:"schedule_kind" required:"true" enum:"interval,cron" doc:"schedule type"`
 
-	IntervalSeconds *int   `json:"interval_seconds,omitempty" minimum:"30" doc:"период для schedule_kind=interval (минимум 30с — абсолютный poll_floor, ADR-046/048)"`
-	CronExpr        string `json:"cron_expr,omitempty" doc:"cron-выражение для schedule_kind=cron"`
-	OverlapPolicy   string `json:"overlap_policy" required:"true" enum:"skip,queue,parallel" doc:"политика наложения прогонов"`
+	IntervalSeconds *int   `json:"interval_seconds,omitempty" minimum:"30" doc:"period for schedule_kind=interval (minimum 30s — absolute poll_floor, ADR-046/048)"`
+	CronExpr        string `json:"cron_expr,omitempty" doc:"cron expression for schedule_kind=cron"`
+	OverlapPolicy   string `json:"overlap_policy" required:"true" enum:"skip,queue,parallel" doc:"overlap policy for runs"`
 
-	Kind         string         `json:"kind" required:"true" enum:"scenario,command" doc:"тип рецепта прогона"`
-	ScenarioName string         `json:"scenario_name,omitempty" doc:"имя сценария для kind=scenario"`
-	Module       string         `json:"module,omitempty" doc:"модуль для kind=command"`
-	Input        map[string]any `json:"input,omitempty" doc:"параметры рецепта"`
-	Target       VoyageTarget   `json:"target" required:"true" doc:"таргет прогона (резолвится на спавне)"`
+	Kind         string         `json:"kind" required:"true" enum:"scenario,command" doc:"run recipe type"`
+	ScenarioName string         `json:"scenario_name,omitempty" doc:"scenario name for kind=scenario"`
+	Module       string         `json:"module,omitempty" doc:"module for kind=command"`
+	Input        map[string]any `json:"input,omitempty" doc:"recipe parameters"`
+	Target       VoyageTarget   `json:"target" required:"true" doc:"run target (resolved on spawn)"`
 
-	Batch        *string `json:"batch,omitempty" doc:"размер батча: N хостов/инкарнаций или N%"`
+	Batch        *string `json:"batch,omitempty" doc:"batch size: N hosts/incarnations or N%"`
 	BatchSize    *int    `json:"batch_size,omitempty" minimum:"1"`
 	BatchPercent *int    `json:"batch_percent,omitempty" minimum:"1" maximum:"100"`
 	Concurrency  *int    `json:"concurrency,omitempty" minimum:"1"`
 	BatchMode    string  `json:"batch_mode,omitempty"`
 
-	MaxFailures          *string `json:"max_failures,omitempty" doc:"порог провалов: N абсолют или N%"`
+	MaxFailures          *string `json:"max_failures,omitempty" doc:"failure threshold: N absolute or N%"`
 	FailThreshold        *int    `json:"fail_threshold,omitempty" minimum:"1"`
 	InterBatchIntervalMS *int    `json:"inter_batch_interval_ms,omitempty"`
 	InterUnitIntervalMS  *int    `json:"inter_unit_interval_ms,omitempty"`
 	RequireAlive         *bool   `json:"require_alive,omitempty"`
 	OnFailure            string  `json:"on_failure,omitempty"`
 
-	Notify []VoyageNotify `json:"notify,omitempty" doc:"подписки на уведомления о прогонах этого расписания"`
+	Notify []VoyageNotify `json:"notify,omitempty" doc:"subscriptions to run notifications for this schedule"`
 }
 
 // Nested target/notify — the single api.VoyageTarget/api.VoyageNotify (huma_voyage_target.go),
@@ -83,11 +83,11 @@ type cadenceCreateOutput struct {
 // CadenceCreateReply, N4). omitempty/nullable are pinned by a golden-JSON snapshot
 // test (the rollout's wire-regression guard).
 type CadenceCreateReply struct {
-	CadenceID string     `json:"cadence_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$" doc:"ULID созданного расписания"` // ULID (audit.NewULID)
+	CadenceID string     `json:"cadence_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$" doc:"ULID of created schedule"` // ULID (audit.NewULID)
 	Name      string     `json:"name"`
 	Enabled   bool       `json:"enabled"`
-	NextRunAt *time.Time `json:"next_run_at,omitempty" doc:"RFC3339 время следующего запуска"`
-	Location  string     `json:"location" doc:"относительный URL ресурса"`
+	NextRunAt *time.Time `json:"next_run_at,omitempty" doc:"RFC3339 time of next run"`
+	Location  string     `json:"location" doc:"relative resource URL"`
 }
 
 // cadenceCreateOperation — huma.Operation metadata for POST /v1/cadences.
@@ -103,8 +103,8 @@ func cadenceCreateOperation() huma.Operation {
 		OperationID:   "createCadence",
 		Method:        http.MethodPost,
 		Path:          "/",
-		Summary:       "Создать расписание (Cadence)",
-		Description:   "Регулярный/повторяющийся Voyage (ADR-046). Двухуровневый RBAC: cadence.create + Voyage-permission по kind рецепта.",
+		Summary:       "Create schedule (Cadence)",
+		Description:   "Regular/recurring Voyage (ADR-046). Two-tier RBAC: cadence.create + Voyage-permission by recipe kind.",
 		Tags:          []string{"cadence"},
 		DefaultStatus: http.StatusCreated,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -125,7 +125,7 @@ func cadenceCreateOperation() huma.Operation {
 // cadencePatchInput — huma input for PATCH /v1/cadences/{id} (FULL-TYPED). ID — path
 // (ULID validation is domain-side, in PatchTyped). Body — the typed PATCH body.
 type cadencePatchInput struct {
-	ID   string `path:"id" doc:"ULID расписания"`
+	ID   string `path:"id" doc:"ULID of schedule"`
 	Body CadencePatchRequest
 }
 
@@ -136,27 +136,27 @@ type cadencePatchInput struct {
 // name = the contract schema name (huma DefaultSchemaNamer; hand-written spec
 // CadencePatchRequest, N4).
 type CadencePatchRequest struct {
-	Name            *string `json:"name,omitempty" doc:"человекочитаемое имя расписания"`
-	Enabled         *bool   `json:"enabled,omitempty" doc:"вкл/выкл планировщика"`
-	ScheduleKind    *string `json:"schedule_kind,omitempty" enum:"interval,cron" doc:"тип расписания"`
-	IntervalSeconds *int    `json:"interval_seconds,omitempty" minimum:"30" doc:"период для schedule_kind=interval (минимум 30с — абсолютный poll_floor, ADR-046/048)"`
-	CronExpr        *string `json:"cron_expr,omitempty" doc:"cron-выражение (пустая строка → очистить)"`
-	OverlapPolicy   *string `json:"overlap_policy,omitempty" enum:"skip,queue,parallel" doc:"политика наложения прогонов"`
+	Name            *string `json:"name,omitempty" doc:"human-readable schedule name"`
+	Enabled         *bool   `json:"enabled,omitempty" doc:"enable/disable scheduler"`
+	ScheduleKind    *string `json:"schedule_kind,omitempty" enum:"interval,cron" doc:"schedule type"`
+	IntervalSeconds *int    `json:"interval_seconds,omitempty" minimum:"30" doc:"period for schedule_kind=interval (minimum 30s — absolute poll_floor, ADR-046/048)"`
+	CronExpr        *string `json:"cron_expr,omitempty" doc:"cron expression (empty string → clear)"`
+	OverlapPolicy   *string `json:"overlap_policy,omitempty" enum:"skip,queue,parallel" doc:"overlap policy for runs"`
 
-	ScenarioName *string        `json:"scenario_name,omitempty" doc:"имя сценария (пустая строка → очистить)"`
-	Module       *string        `json:"module,omitempty" doc:"модуль для kind=command (пустая строка → очистить)"`
-	Input        map[string]any `json:"input,omitempty" doc:"параметры рецепта"`
-	Target       *VoyageTarget  `json:"target,omitempty" doc:"таргет прогона"`
+	ScenarioName *string        `json:"scenario_name,omitempty" doc:"scenario name (empty string → clear)"`
+	Module       *string        `json:"module,omitempty" doc:"module for kind=command (empty string → clear)"`
+	Input        map[string]any `json:"input,omitempty" doc:"recipe parameters"`
+	Target       *VoyageTarget  `json:"target,omitempty" doc:"run target"`
 
-	Batch         *string `json:"batch,omitempty" doc:"размер батча: N хостов/инкарнаций или N%"`
+	Batch         *string `json:"batch,omitempty" doc:"batch size: N hosts/incarnations or N%"`
 	BatchSize     *int    `json:"batch_size,omitempty" minimum:"1"`
 	BatchPercent  *int    `json:"batch_percent,omitempty" minimum:"1" maximum:"100"`
 	Concurrency   *int    `json:"concurrency,omitempty" minimum:"1"`
 	BatchMode     *string `json:"batch_mode,omitempty"`
-	MaxFailures   *string `json:"max_failures,omitempty" doc:"порог провалов: N абсолют или N%"`
+	MaxFailures   *string `json:"max_failures,omitempty" doc:"failure threshold: N absolute or N%"`
 	FailThreshold *int    `json:"fail_threshold,omitempty" minimum:"1"`
 	RequireAlive  *bool   `json:"require_alive,omitempty"`
-	OnFailure     *string `json:"on_failure,omitempty" doc:"abort|continue (пустая строка → очистить)"`
+	OnFailure     *string `json:"on_failure,omitempty" doc:"abort|continue (empty string → clear)"`
 }
 
 // cadencePatchOutput — huma output for PATCH /v1/cadences/{id} (FULL-TYPED). Status=200;
@@ -174,8 +174,8 @@ func cadencePatchOperation() huma.Operation {
 		OperationID:   "patchCadence",
 		Method:        http.MethodPatch,
 		Path:          "/{id}",
-		Summary:       "Обновить расписание (Cadence)",
-		Description:   "Read-modify-write рецепта/расписания/enabled-toggle. Двухуровневый RBAC (cadence.update + Voyage-permission по kind). kind не меняется.",
+		Summary:       "Update schedule (Cadence)",
+		Description:   "Read-modify-write recipe/schedule/enabled-toggle. Two-tier RBAC (cadence.update + Voyage-permission by kind). kind does not change.",
 		Tags:          []string{"cadence"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -186,7 +186,7 @@ func cadencePatchOperation() huma.Operation {
 
 // cadenceDeleteInput — huma input for DELETE /v1/cadences/{id}. ID — path. No body.
 type cadenceDeleteInput struct {
-	ID string `path:"id" doc:"ULID расписания"`
+	ID string `path:"id" doc:"ULID of schedule"`
 }
 
 // cadenceDeleteOutput — huma output for DELETE /v1/cadences/{id} (FULL-TYPED). Status=204;
@@ -203,8 +203,8 @@ func cadenceDeleteOperation() huma.Operation {
 		OperationID:   "deleteCadence",
 		Method:        http.MethodDelete,
 		Path:          "/{id}",
-		Summary:       "Снять расписание (Cadence)",
-		Description:   "Удаляет расписание; порождённые Voyage остаются (FK ON DELETE SET NULL). Permission cadence.delete.",
+		Summary:       "Delete schedule (Cadence)",
+		Description:   "Deletes schedule; spawned Voyages remain (FK ON DELETE SET NULL). Permission cadence.delete.",
 		Tags:          []string{"cadence"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -216,7 +216,7 @@ func cadenceDeleteOperation() huma.Operation {
 // cadenceToggleInput — huma input for POST /v1/cadences/{id}/enable|/disable. ID — path.
 // No body (toggle has no body).
 type cadenceToggleInput struct {
-	ID string `path:"id" doc:"ULID расписания"`
+	ID string `path:"id" doc:"ULID of schedule"`
 }
 
 // cadenceToggleOutput — huma output for enable/disable (FULL-TYPED, handler-native T5d). Status=200;
@@ -242,8 +242,8 @@ func cadenceEnableOperation() huma.Operation {
 		OperationID:   "enableCadence",
 		Method:        http.MethodPost,
 		Path:          "/{id}/enable",
-		Summary:       "Включить расписание (Cadence)",
-		Description:   "Возобновление планировщика. Permission cadence.enable ИЛИ backcompat cadence.update.",
+		Summary:       "Enable schedule (Cadence)",
+		Description:   "Resume scheduler. Permission cadence.enable OR backcompat cadence.update.",
 		Tags:          []string{"cadence"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -257,8 +257,8 @@ func cadenceDisableOperation() huma.Operation {
 		OperationID:   "disableCadence",
 		Method:        http.MethodPost,
 		Path:          "/{id}/disable",
-		Summary:       "Выключить расписание (Cadence)",
-		Description:   "Пауза планировщика. Permission cadence.disable ИЛИ backcompat cadence.update.",
+		Summary:       "Disable schedule (Cadence)",
+		Description:   "Pause scheduler. Permission cadence.disable OR backcompat cadence.update.",
 		Tags:          []string{"cadence"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -276,7 +276,7 @@ func cadenceDisableOperation() huma.Operation {
 // cadenceGetInput — huma input for GET /v1/cadences/{id}. ID — path (ULID validation is
 // domain-side, in GetTyped).
 type cadenceGetInput struct {
-	ID string `path:"id" doc:"ULID расписания"`
+	ID string `path:"id" doc:"ULID of schedule"`
 }
 
 // cadenceGetOutput — huma output for GET /v1/cadences/{id} (FULL-TYPED). Body — the typed
@@ -293,8 +293,8 @@ func cadenceGetOperation() huma.Operation {
 		OperationID:   "getCadence",
 		Method:        http.MethodGet,
 		Path:          "/{id}",
-		Summary:       "Получить расписание (Cadence)",
-		Description:   "Деталь расписания по ULID. Permission cadence.list. Read-only, без audit.",
+		Summary:       "Get schedule (Cadence)",
+		Description:   "Schedule detail by ULID. Permission cadence.list. Read-only, no audit.",
 		Tags:          []string{"cadence"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -310,10 +310,10 @@ func cadenceGetOperation() huma.Operation {
 // value → broken OR). offset/limit — int32 with default; the range is enforced by
 // CheckPageBounds in RunsTyped → 400 (NOT huma min/max — parity with legacy ParsePage); bad-int → 400.
 type cadenceRunsInput struct {
-	ID       string   `path:"id" doc:"ULID расписания"`
-	Statuses []string `query:"status,explode" enum:"scheduled,pending,running,succeeded,failed,partial_failed,cancelled" doc:"multi-value ?status=X&status=Y — exact-match OR; значение вне enum → 422"`
-	Offset   int32    `query:"offset" default:"0" doc:"сдвиг от начала набора, ≥0 (совпадает с shared/api.ParsePage; out-of-range → 400)"`
-	Limit    int32    `query:"limit" default:"50" doc:"размер страницы 1..1000 (совпадает с shared/api.ParsePage; out-of-range → 400)"`
+	ID       string   `path:"id" doc:"ULID of schedule"`
+	Statuses []string `query:"status,explode" enum:"scheduled,pending,running,succeeded,failed,partial_failed,cancelled" doc:"multi-value ?status=X&status=Y — exact-match OR; value outside enum → 422"`
+	Offset   int32    `query:"offset" default:"0" doc:"offset from start of set, ≥0 (matches shared/api.ParsePage; out-of-range → 400)"`
+	Limit    int32    `query:"limit" default:"50" doc:"page size 1..1000 (matches shared/api.ParsePage; out-of-range → 400)"`
 }
 
 // cadenceRunsOutput — huma output for GET /v1/cadences/{id}/runs (FULL-TYPED). Body —
@@ -332,8 +332,8 @@ func cadenceRunsOperation() huma.Operation {
 		OperationID:   "listCadenceRuns",
 		Method:        http.MethodGet,
 		Path:          "/{id}/runs",
-		Summary:       "Прогоны расписания (Cadence runs, paged)",
-		Description:   "Список Voyage, порождённых расписанием, с фильтром status[] и пагинацией. Permission incarnation.history. Read-only, без audit.",
+		Summary:       "Schedule runs (Cadence runs, paged)",
+		Description:   "List of Voyages spawned by schedule, with status[] filter and pagination. Permission incarnation.history. Read-only, no audit.",
 		Tags:          []string{"cadence"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},

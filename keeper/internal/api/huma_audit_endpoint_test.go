@@ -117,7 +117,7 @@ func TestHumaAudit_OutOfRangePagination_400(t *testing.T) {
 	} {
 		rec := auditGet(t, r, c)
 		if rec.Code != http.StatusBadRequest {
-			t.Errorf("%s: status = %d, want 400 (out-of-range → 400, parity ParsePage, НЕ huma-422); body=%s", c, rec.Code, rec.Body.String())
+			t.Errorf("%s: status = %d, want 400 (out-of-range → 400, parity ParsePage, NOT huma-422); body=%s", c, rec.Code, rec.Body.String())
 			continue
 		}
 		assertHumaProblem(t, rec, problem.TypeMalformedRequest)
@@ -134,7 +134,7 @@ func TestHumaAudit_BadSource_422(t *testing.T) {
 	rec := auditGet(t, r, "/v1/audit?source=hax0r")
 
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422 (bad source-enum → 422, parse-детект его НЕ ловит); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 422 (bad source-enum → 422, parse-детект its NOT ловит); body=%s", rec.Code, rec.Body.String())
 	}
 	assertHumaProblem(t, rec, problem.TypeValidationFailed)
 }
@@ -152,7 +152,7 @@ func TestHumaAudit_ConfigBootstrapSource_200(t *testing.T) {
 	rec := auditGet(t, r, "/v1/audit?source=config_bootstrap")
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (config_bootstrap — валидный source, НЕ 422; enum-тег = домен-valid-set); body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("status = %d, want 200 (config_bootstrap — валидный source, NOT 422; enum-тег = toмен-valid-set); body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -198,7 +198,7 @@ func TestHumaAudit_DefaultPagination_200(t *testing.T) {
 	out, _ := json.Marshal(m)
 	const golden = `{"items":[],"limit":50,"offset":0,"total":0}`
 	if got := string(out); got != golden {
-		t.Errorf("GOLDEN дрейф default-пагинации (должно совпадать с ParsePage offset=0 limit=50):\n got  = %s\n want = %s", got, golden)
+		t.Errorf("GOLDEN дрейф default-пагиonции (toлжbut withвпадать с ParsePage offset=0 limit=50):\n got  = %s\n want = %s", got, golden)
 	}
 }
 
@@ -235,7 +235,7 @@ func TestHumaAudit_OpenAPIFragment_3_1(t *testing.T) {
 		"int32",         // MINOR fix: offset/limit are int32 (match committed OffsetQuery/LimitQuery), NOT int64
 	} {
 		if !strings.Contains(frag, want) {
-			t.Errorf("OpenAPI-фрагмент не содержит %q:\n%s", want, frag)
+			t.Errorf("OpenAPI-фрагмент не withдержит %q:\n%s", want, frag)
 		}
 	}
 	// MINOR-3 scope — SPECIFICALLY the query params offset/limit must be int32
@@ -247,14 +247,14 @@ func TestHumaAudit_OpenAPIFragment_3_1(t *testing.T) {
 	_, afterParams, hasParams := strings.Cut(frag, "parameters:")
 	paramsBlock, _, hasResponses := strings.Cut(afterParams, "responses:")
 	if !hasParams || !hasResponses {
-		t.Fatalf("во фрагменте нет блока `parameters:`…`responses:` — структура операции изменилась, негатив-проверка int64 невалидна:\n%s", frag)
+		t.Fatalf("во фрагменте нет блока `parameters:`…`responses:` — структура операции fromменилась, негатив-проверка int64 невалидon:\n%s", frag)
 	}
 	if strings.Contains(paramsBlock, "int64") {
 		t.Errorf("query-параметры операции несут int64 (offset/limit обязаны быть int32):\n%s", paramsBlock)
 	}
 	// GET has no body: requestBody must not be present on the operation.
 	if strings.Contains(frag, "requestBody") {
-		t.Errorf("GET /v1/audit фрагмент несёт requestBody (у GET тела быть не должно):\n%s", frag)
+		t.Errorf("GET /v1/audit фрагмент несёт requestBody (у GET тела быть не toлжbut):\n%s", frag)
 	}
 	// the fourth tier does not carry a RawBody octet-stream artifact.
 	if strings.Contains(frag, "octet-stream") {

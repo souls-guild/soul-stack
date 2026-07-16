@@ -1,25 +1,30 @@
 package api
 
-// HUMA-NATIVE reply-DTO SIGIL-KEY-домена (ротация trust-anchor-ключей подписи Sigil;
-// Teardown T5b по эталону T5a huma_incarnation_reply.go). Reply/output Body huma-
-// операций — native Go-struct в пакете api, НЕ генерёный legacy-генерата. Teardown сносит oapi/
-// + рукопись: reply-Body должен стать code-first native.
+// HUMA-NATIVE reply DTOs for the SIGIL-KEY domain (Sigil signing trust-anchor
+// key rotation; Teardown T5b following the T5a huma_incarnation_reply.go
+// template). Reply/output Body of huma operations — native Go structs in
+// package api, NOT generated legacy-generata. Teardown removes oapi/ + the
+// handwritten layer: reply Body must become code-first native.
 //
-// ИНВАРИАНТЫ (★ wire byte-exact + ★ имя схемы стабильно): форма байт-в-байт = прежний
-// legacy-генерата (те же json-теги; introduced_at — наносекундный time-wire значения handler-слоя
-// (.UTC().Truncate(Second))). Имя EXPORTED-struct = контрактное (SigilKeyIntroduceReply /
-// SigilKeyListReply / SigilKeyView) → huma DefaultSchemaNamer даёт ту же схему.
-// SigilKeyListReply — НЕ paged-envelope (только items[]). Проекция доменных
-// handlers.SigilKey*-result-ов в эти типы — register-func (huma_sigil_key.go).
+// INVARIANTS (★ wire byte-exact + ★ schema name stable): the form is
+// byte-for-byte the old legacy-generata (same json tags; introduced_at is a
+// nanosecond time-wire value from the handler layer (.UTC().Truncate(Second))).
+// EXPORTED struct names are the contractual ones (SigilKeyIntroduceReply /
+// SigilKeyListReply / SigilKeyView) → huma DefaultSchemaNamer produces the same
+// schema. SigilKeyListReply is NOT a paged envelope (items[] only). Projection
+// of domain handlers.SigilKey* results into these types is the register-func
+// (huma_sigil_key.go).
 //
-// STATUS-ПОЛЯ — native enum-типы SigilKeyIntroduceReplyStatus / SigilKeyViewStatus
-// (huma_enums.go; per-field string-enum, рукопись инлайнит string+enum). Handler отдаёт
-// status plain-string-ом, register-func кастует в native enum (тот же underlying string).
+// STATUS FIELDS — native enum types SigilKeyIntroduceReplyStatus /
+// SigilKeyViewStatus (huma_enums.go; per-field string enum, handwritten
+// string+enum inline). The handler returns status as a plain string, the
+// register-func casts it to the native enum (same underlying string).
 //
-// OUTPUT-PATTERN (документационный, НЕ рантайм-валидация): huma НЕ валидирует
-// response-body (эмпирически 200, не 500). key_id — машинно hex(sha256) SPKI-DER
-// публичного ключа (keyIDFromPublic, keyservice.go:287; hex.EncodeToString → lowercase
-// 64 chars). Формат для клиент-кодогена; pattern не влияет на json.Marshal (golden цел).
+// OUTPUT-PATTERN (documentational, NOT runtime validation): huma does NOT
+// validate the response body (empirically 200, not 500). key_id is
+// mechanically hex(sha256) of the public key's SPKI DER (keyIDFromPublic,
+// keyservice.go:287; hex.EncodeToString → lowercase 64 chars). The format is
+// for client codegen; the pattern doesn't affect json.Marshal (golden intact).
 
 import (
 	"time"
@@ -27,11 +32,12 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 )
 
-// === top-level reply-DTO (форма 1:1 с прежним legacy-генерата) ===
+// === top-level reply DTOs (form 1:1 with the old legacy-generata) ===
 
-// SigilKeyIntroduceReply — native 201-тело POST /v1/sigil/keys (форма 1:1 с прежним
-// SigilKeyIntroduceReply). БЕЗ приватника. status — native enum
-// SigilKeyIntroduceReplyStatus (wire — строка); introduced_at — наносекундный time-wire.
+// SigilKeyIntroduceReply — native 201 body of POST /v1/sigil/keys (form 1:1
+// with the old SigilKeyIntroduceReply). No private key. status is the native
+// enum SigilKeyIntroduceReplyStatus (wire is a string); introduced_at is a
+// nanosecond time-wire value.
 type SigilKeyIntroduceReply struct {
 	IntroducedAt time.Time                    `json:"introduced_at"`
 	IsPrimary    bool                         `json:"is_primary"`
@@ -40,17 +46,18 @@ type SigilKeyIntroduceReply struct {
 	Status       SigilKeyIntroduceReplyStatus `json:"status"`
 }
 
-// SigilKeyListReply — native 200-тело GET /v1/sigil/keys (форма 1:1 с прежним
-// SigilKeyListReply). Только items[] — НЕ paged-envelope.
+// SigilKeyListReply — native 200 body of GET /v1/sigil/keys (form 1:1 with
+// the old SigilKeyListReply). items[] only — NOT a paged envelope.
 type SigilKeyListReply struct {
 	Items []SigilKeyView `json:"items"`
 }
 
 // === nested reply-DTO ===
 
-// SigilKeyView — native проекция active-ключа (форма 1:1 с прежним SigilKeyView).
-// БЕЗ vault_ref. status — native enum SigilKeyViewStatus (wire — строка); introduced_at —
-// наносекундный time-wire (значение усекает handler-слой до секунд).
+// SigilKeyView — native projection of an active key (form 1:1 with the old
+// SigilKeyView). No vault_ref. status is the native enum SigilKeyViewStatus
+// (wire is a string); introduced_at is a nanosecond time-wire value (the
+// handler layer truncates it to seconds).
 type SigilKeyView struct {
 	IntroducedAt time.Time          `json:"introduced_at"`
 	IsPrimary    bool               `json:"is_primary"`
@@ -58,11 +65,11 @@ type SigilKeyView struct {
 	Status       SigilKeyViewStatus `json:"status"`
 }
 
-// === проекция доменных handlers.SigilKey*-result-ов → native wire-DTO ===
+// === projection of domain handlers.SigilKey* results → native wire DTOs ===
 
-// newSigilKeyIntroduceReply проецирует плоскую доменную handlers.SigilKeyIntroduceView в
-// native. Status — native enum-каст (тот же underlying string); introduced_at handler
-// отдаёт как есть (byte-exact с легаси-wire).
+// newSigilKeyIntroduceReply projects the flat domain handlers.SigilKeyIntroduceView
+// into native. Status is a native enum cast (same underlying string); the
+// handler returns introduced_at as-is (byte-exact with the legacy wire).
 func newSigilKeyIntroduceReply(v handlers.SigilKeyIntroduceView) SigilKeyIntroduceReply {
 	return SigilKeyIntroduceReply{
 		IntroducedAt: v.IntroducedAt,
@@ -73,8 +80,9 @@ func newSigilKeyIntroduceReply(v handlers.SigilKeyIntroduceView) SigilKeyIntrodu
 	}
 }
 
-// newSigilKeyView проецирует плоскую доменную handlers.SigilKeyView в native.
-// introduced_at handler уже усёк до секунд (byte-exact с легаси-wire).
+// newSigilKeyView projects the flat domain handlers.SigilKeyView into native.
+// The handler already truncated introduced_at to seconds (byte-exact with the
+// legacy wire).
 func newSigilKeyView(v handlers.SigilKeyView) SigilKeyView {
 	return SigilKeyView{
 		IntroducedAt: v.IntroducedAt,
@@ -84,9 +92,9 @@ func newSigilKeyView(v handlers.SigilKeyView) SigilKeyView {
 	}
 }
 
-// newSigilKeyListReply проецирует доменный handlers.SigilKeyListPage в native. Items
-// сохраняют nil-vs-empty 1:1 (nil → null, [] → []) ради byte-exact — ListTyped даёт
-// non-nil [] (пустой реестр → `[]`).
+// newSigilKeyListReply projects the domain handlers.SigilKeyListPage into
+// native. Items preserve nil-vs-empty 1:1 (nil → null, [] → []) for
+// byte-exactness — ListTyped yields a non-nil [] (empty registry → `[]`).
 func newSigilKeyListReply(p handlers.SigilKeyListPage) SigilKeyListReply {
 	var items []SigilKeyView
 	if p.Items != nil {

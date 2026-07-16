@@ -32,7 +32,7 @@ func clusterGetOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/cluster",
 		Summary:       "HA-топология Keeper-кластера",
-		Description:   "Живые Keeper-инстансы из Conclave-реестра (kid + started_at + alive + is_reaper_leader) + self_kid + self_health (postgres/redis/vault текущего инстанса). Permission soul.list. Read-only, без audit. Версия агента (soul) НЕ включается.",
+		Description:   "Живые Keeper-инстансы from Conclave-реестра (kid + started_at + alive + is_reaper_leader) + self_kid + self_health (postgres/redis/vault текущits инстанса). Permission soul.list. Read-only, no audit. Версия агента (soul) NOT включается.",
 		Tags:          []string{"cluster"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusInternalServerError},

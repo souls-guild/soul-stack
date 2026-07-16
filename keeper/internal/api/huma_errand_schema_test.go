@@ -39,7 +39,7 @@ func TestSchemaNames_Errand(t *testing.T) {
 	schemas := loadFullSpecSchemas(t)
 	for _, name := range errandContractSchemas {
 		if _, ok := schemas[name]; !ok {
-			t.Errorf("контрактная схема %q ОТСУТСТВУЕТ в components/schemas (имя не выровнено)", name)
+			t.Errorf("контрактonя схема %q ОТСУТСТВУЕТ в components/schemas (имя не выровнеbut)", name)
 		}
 	}
 }
@@ -86,6 +86,6 @@ func TestSchemaNames_ErrandAccepted(t *testing.T) {
 	}
 	rawEnum, _ := status["enum"].([]any)
 	if len(rawEnum) != 1 || rawEnum[0] != "running" {
-		t.Errorf("ErrandAccepted.status.enum=%v, ожидался ровно [running]", rawEnum)
+		t.Errorf("ErrandAccepted.status.enum=%v, ожидался ровbut [running]", rawEnum)
 	}
 }

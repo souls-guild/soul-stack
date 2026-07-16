@@ -35,14 +35,14 @@ func RegisterTempoMetrics(reg *obs.Registry) *TempoMetrics {
 		allowedTotal: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "keeper_tempo_allowed_total",
-				Help: "Запросы, пропущенные Tempo rate-limiter-ом (токен взят). Лейбл endpoint = bucket-имя (voyage_create); AID-лейбла НЕТ (кардинальность, ADR-050).",
+				Help: "Запросы, пропущенные Tempo rate-limiter-ом (токен взят). Лейбл endpoint = bucket-имя (voyage_create); AID-лейбла NOTТ (кардиonльbutсть, ADR-050).",
 			},
 			[]string{"endpoint"},
 		),
 		rejectedTotal: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "keeper_tempo_rejected_total",
-				Help: "Запросы, отклонённые Tempo rate-limiter-ом (бакет пуст → 429 + Retry-After). Лейбл endpoint = bucket-имя (voyage_create); AID-лейбла НЕТ (ADR-050).",
+				Help: "Запросы, отклонённые Tempo rate-limiter-ом (бакет пуст → 429 + Retry-After). Лейбл endpoint = bucket-имя (voyage_create); AID-лейбла NOTТ (ADR-050).",
 			},
 			[]string{"endpoint"},
 		),

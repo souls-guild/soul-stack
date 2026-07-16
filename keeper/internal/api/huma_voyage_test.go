@@ -272,7 +272,7 @@ func TestHumaVoyage_Create_MissingTarget_422_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 422 (missing target); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на 422 — write-путь не должен писать")
+		t.Errorf("audit записан on 422 — write-путь не toлжен писать")
 	}
 }
 
@@ -288,7 +288,7 @@ func TestHumaVoyage_Create_RBACDeny_403_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 403 (RBAC-by-kind deny); body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на 403")
+		t.Errorf("audit записан on 403")
 	}
 }
 
@@ -314,7 +314,7 @@ func TestHumaVoyage_Preview_WireAndNoAudit(t *testing.T) {
 		t.Errorf("preview reply = %+v, want kind=command scope_size=2", reply)
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("preview записал audit (%d событий) — dry-resolve не должен писать", len(auditCap.Events()))
+		t.Errorf("preview записал audit (%d withбытий) — dry-resolve не toлжен писать", len(auditCap.Events()))
 	}
 }
 
@@ -337,7 +337,7 @@ func TestHumaVoyage_List_Read_NoAudit(t *testing.T) {
 		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
 	}
 	if reply.Items == nil {
-		t.Error("items должен быть [] (non-nil)")
+		t.Error("items toлжен быть [] (non-nil)")
 	}
 	if len(auditCap.Events()) != 0 {
 		t.Errorf("READ list записал audit")
@@ -441,7 +441,7 @@ func TestHumaVoyage_Cancel_NotFound_404_NoAudit(t *testing.T) {
 		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
 	}
 	if len(auditCap.Events()) != 0 {
-		t.Errorf("audit записан на 404 cancel")
+		t.Errorf("audit записан on 404 cancel")
 	}
 }
 
@@ -537,7 +537,7 @@ func TestHumaVoyage_Create_GoldenWire(t *testing.T) {
 	got := normalizeVoyageID(t, rec.Body.Bytes())
 	const golden = `{"kind":"command","location":"/v1/voyages/ULID","scope_size":1,"status":"pending","voyage_id":"ULID"}`
 	if got != golden {
-		t.Errorf("GOLDEN wire-дрейф create-202:\n got  = %s\n want = %s\n(набор ключей/$schema/location изменился — проверь voyageCreateOutput/VoyageCreateReply)", got, golden)
+		t.Errorf("GOLDEN wire-дрейф create-202:\n got  = %s\n want = %s\n(onбор ключей/$schema/location fromменился — проверь voyageCreateOutput/VoyageCreateReply)", got, golden)
 	}
 }
 
@@ -559,7 +559,7 @@ func TestHumaVoyage_Cancel_GoldenWire(t *testing.T) {
 	got := normalizeJSONKeys(t, rec.Body.Bytes())
 	const golden = `{"status":"cancelled","voyage_id":"01HZ0000000000000000000000"}`
 	if got != golden {
-		t.Errorf("GOLDEN wire-дрейф cancel-202:\n got  = %s\n want = %s\n(набор ключей/$schema изменился — проверь voyageCancelOutput/VoyageCancelReply)", got, golden)
+		t.Errorf("GOLDEN wire-дрейф cancel-202:\n got  = %s\n want = %s\n(onбор ключей/$schema fromменился — проверь voyageCancelOutput/VoyageCancelReply)", got, golden)
 	}
 }
 

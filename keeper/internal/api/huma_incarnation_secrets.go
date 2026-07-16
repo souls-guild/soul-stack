@@ -24,20 +24,20 @@ import (
 // {secret_id, key}. The client does NOT set the service version (taken from
 // inc.ServiceVersion).
 type incRevealSecretInput struct {
-	Name string `path:"name" doc:"имя инкарнации"`
+	Name string `path:"name" doc:"incarnation name"`
 	Body IncarnationRevealSecretRequest
 }
 
 // IncarnationRevealSecretRequest — the body of POST .../secrets/reveal.
 type IncarnationRevealSecretRequest struct {
 	SecretID string `json:"secret_id" doc:"id раскрываемого секрета (revealable_secrets манифеста сервиса)"`
-	Key      string `json:"key" doc:"ключ элемента enumerate-массива текущего state (element.name)"`
+	Key      string `json:"key" doc:"ключ elementа enumerate-массива текущits state (element.name)"`
 }
 
 // IncarnationRevealSecretReply — the native 200 body of POST .../secrets/reveal.
 // Value — plaintext (a sanctioned reveal: NOT run through MaskSecrets).
 type IncarnationRevealSecretReply struct {
-	Value string `json:"value" doc:"plaintext-значение секрета"`
+	Value string `json:"value" doc:"plaintext-зonчение секрета"`
 }
 
 // incRevealSecretOutput — huma-output POST .../secrets/reveal.
@@ -54,8 +54,8 @@ func incRevealSecretOperation() huma.Operation {
 		OperationID:   "incarnationRevealSecret",
 		Method:        http.MethodPost,
 		Path:          "/{name}/secrets/reveal",
-		Summary:       "Раскрыть plaintext секрета инкарнации",
-		Description:   "Резолв plaintext секрета, объявленного revealable_secrets сервиса, из Vault. Permission incarnation.view-secrets (снятие маски, строго привилегированнее incarnation.get). key обязан ∈ enumerate-массива текущего state. Audit incarnation.secret_revealed (без значения). Вне scope → 404.",
+		Summary:       "Раhide plaintext секрета инкарonции",
+		Description:   "Резолв plaintext секрета, объявленbutго revealable_secrets сервиса, from Vault. Permission incarnation.view-secrets (removal маски, строго привилегированнее incarnation.get). key обязан ∈ enumerate-массива текущits state. Audit incarnation.secret_revealed (без зonчения). Вне scope → 404.",
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -86,20 +86,20 @@ func registerHumaIncarnationRevealSecret(humaAPI huma.API, incH *handlers.Incarn
 
 // incRevealableSecretsInput — huma-input GET .../secrets/revealable.
 type incRevealableSecretsInput struct {
-	Name string `path:"name" doc:"имя инкарнации"`
+	Name string `path:"name" doc:"incarnation name"`
 }
 
 // IncarnationRevealableSecretItem — one item of the discovery response.
 type IncarnationRevealableSecretItem struct {
-	SecretID  string   `json:"secret_id" doc:"id секрета (передаётся в secret_id при reveal)"`
-	Label     string   `json:"label" doc:"подпись для UI"`
-	StatePath string   `json:"state_path" doc:"state-путь массива (tail enumerate, напр. redis_users)"`
-	Keys      []string `json:"keys" doc:"допустимые ключи (element.name текущего state)"`
+	SecretID  string   `json:"secret_id" doc:"id секрета (переgivesся в secret_id при reveal)"`
+	Label     string   `json:"label" doc:"подпись for UI"`
+	StatePath string   `json:"state_path" doc:"state-путь массива (tail enumerate, onпр. redis_users)"`
+	Keys      []string `json:"keys" doc:"toпустимые ключи (element.name текущits state)"`
 }
 
 // IncarnationRevealableSecretsReply — the native 200 body of GET .../secrets/revealable.
 type IncarnationRevealableSecretsReply struct {
-	Items []IncarnationRevealableSecretItem `json:"items" doc:"раскрываемые секреты инкарнации"`
+	Items []IncarnationRevealableSecretItem `json:"items" doc:"раскрываемые секреты инкарonции"`
 }
 
 // incRevealableSecretsOutput — huma-output GET .../secrets/revealable.
@@ -115,8 +115,8 @@ func incRevealableSecretsOperation() huma.Operation {
 		OperationID:   "incarnationRevealableSecrets",
 		Method:        http.MethodGet,
 		Path:          "/{name}/secrets/revealable",
-		Summary:       "Список раскрываемых секретов инкарнации",
-		Description:   "Discovery revealable_secrets сервиса + keys из enumerate-массива текущего state. Read-only, без audit. Permission incarnation.view-secrets (existence-gate). Вне scope → 404.",
+		Summary:       "Спиwithк раскрываемых секретов инкарonции",
+		Description:   "Discovery revealable_secrets сервиса + keys from enumerate-массива текущits state. Read-only, no audit. Permission incarnation.view-secrets (existence-gate). Вне scope → 404.",
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},

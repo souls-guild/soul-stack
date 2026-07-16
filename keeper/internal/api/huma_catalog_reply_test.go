@@ -43,8 +43,8 @@ func TestGoldenWire_CatalogReply(t *testing.T) {
 	// secret_required is always present (bool with no omitempty); enum_values is omitted
 	// for the non-enum field (vault_ref) via omitempty.
 	goldenCatalogWire(t, "HeraldTypeCatalogReply/full",
-		HeraldTypeCatalogReply{Types: []HeraldTypeCatalogEntry{{Type: "telegram", Fields: []HeraldTypeFieldSpec{{Name: "bot_token_ref", Label: "Vault-ref токена бота", Required: true, Secret: true, Kind: "vault_ref"}}}}},
-		`{"types":[{"type":"telegram","fields":[{"name":"bot_token_ref","label":"Vault-ref токена бота","required":true,"secret":true,"kind":"vault_ref"}],"secret_required":false}]}`)
+		HeraldTypeCatalogReply{Types: []HeraldTypeCatalogEntry{{Type: "telegram", Fields: []HeraldTypeFieldSpec{{Name: "bot_token_ref", Label: "Vault-ref токеon бота", Required: true, Secret: true, Kind: "vault_ref"}}}}},
+		`{"types":[{"type":"telegram","fields":[{"name":"bot_token_ref","label":"Vault-ref токеon бота","required":true,"secret":true,"kind":"vault_ref"}],"secret_required":false}]}`)
 	// enum field → enum_values present (select render); webhook → secret_required=true.
 	goldenCatalogWire(t, "HeraldTypeCatalogReply/enum_and_secret_required",
 		HeraldTypeCatalogReply{Types: []HeraldTypeCatalogEntry{{Type: "webhook", SecretRequired: true, Fields: []HeraldTypeFieldSpec{{Name: "parse_mode", Label: "Формат текста", Kind: "enum", EnumValues: []string{"", "MarkdownV2", "HTML"}}}}}},

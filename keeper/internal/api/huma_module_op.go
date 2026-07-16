@@ -43,7 +43,7 @@ func moduleListOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/",
 		Summary:       "Каталог модулей",
-		Description:   "Доступные для прогона модули (core + активные plugin) + input-метаданные (ADR-045). Опц. фильтр errand_safe. Permission service.list. Read-only, без audit.",
+		Description:   "Доступные for прогоon модули (core + активные plugin) + input-метаданные (ADR-045). Опц. фильтр errand_safe. Permission service.list. Read-only, no audit.",
 		Tags:          []string{"module"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusInternalServerError},
@@ -55,7 +55,7 @@ func moduleListOperation() huma.Operation {
 // moduleGetInput — huma input for GET /v1/modules/{name}. Name — path (full name without
 // the state suffix: core.cmd / official.postgres-user).
 type moduleGetInput struct {
-	Name string `path:"name" doc:"полное имя модуля без state-суффикса"`
+	Name string `path:"name" doc:"полbutе имя модуля без state-суффикса"`
 }
 
 // moduleGetOutput — huma output for GET /v1/modules/{name} (FULL-TYPED). Body — typed
@@ -72,7 +72,7 @@ func moduleGetOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/{name}",
 		Summary:       "Карточка модуля",
-		Description:   "Деталь одного модуля по полному имени (ADR-045). Permission service.list. Read-only, без audit.",
+		Description:   "Деталь одbutго модуля по полbutму имени (ADR-045). Permission service.list. Read-only, no audit.",
 		Tags:          []string{"module"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError},
@@ -85,7 +85,7 @@ func moduleGetOperation() huma.Operation {
 // (per-module contract, not used in resolve). Body — typed body (source discriminator
 // + optional prefix).
 type moduleFormPrepInput struct {
-	Name string `path:"name" doc:"полное имя модуля (per-module контракт, при резолве не используется)"`
+	Name string `path:"name" doc:"полbutе имя модуля (per-module контракт, при резолве не используется)"`
 	Body ModuleFormPrepRequest
 }
 
@@ -96,8 +96,8 @@ type moduleFormPrepInput struct {
 // name = contract schema name (huma DefaultSchemaNamer; hand-written spec ModuleFormPrepRequest,
 // N4).
 type ModuleFormPrepRequest struct {
-	Source ModuleFormPrepSource `json:"source" required:"true" doc:"дискриминатор source-каталога (ровно один из incarnation_hosts/choir)"`
-	Prefix string               `json:"prefix,omitempty" doc:"префикс SID для автокомплита (LIKE prefix%)"`
+	Source ModuleFormPrepSource `json:"source" required:"true" doc:"дискримиonтор source-каталога (ровbut один from incarnation_hosts/choir)"`
+	Prefix string               `json:"prefix,omitempty" doc:"префикс SID for автокомплита (LIKE prefix%)"`
 }
 
 // ModuleFormPrepSource — Go form of the source discriminator (class C input-only). Both
@@ -105,14 +105,14 @@ type ModuleFormPrepRequest struct {
 // validation. Struct name = contract schema name (hand-written spec ModuleFormPrepSource, N4).
 type ModuleFormPrepSource struct {
 	IncarnationHosts string                     `json:"incarnation_hosts,omitempty" doc:"имя incarnation — live SID-ы её хостов"`
-	Choir            *ModuleFormPrepChoirSource `json:"choir,omitempty" doc:"координаты Choir-source (incarnation + имя Choir-а)"`
+	Choir            *ModuleFormPrepChoirSource `json:"choir,omitempty" doc:"коордиonты Choir-source (incarnation + Choir name)"`
 }
 
 // ModuleFormPrepChoirSource — Go form of the Choir source (incarnation + name; class C input-only).
 // Struct name = contract schema name (hand-written spec ModuleFormPrepChoirSource, N4).
 type ModuleFormPrepChoirSource struct {
 	Incarnation string `json:"incarnation" doc:"имя incarnation Choir-а"`
-	Name        string `json:"name" doc:"имя Choir-а"`
+	Name        string `json:"name" doc:"Choir name"`
 }
 
 // ModuleFormPrepReply — native 200 body of POST /v1/modules/{name}/form-prep (flat). Shape 1:1 with
@@ -139,7 +139,7 @@ func moduleFormPrepOperation() huma.Operation {
 		Method:        http.MethodPost,
 		Path:          "/{name}/form-prep",
 		Summary:       "Резолв source-каталога формы модуля",
-		Description:   "Живые SID-ы под source-поля UI-формы Run→Command (ADR-045 S3). Permission incarnation.run. Read-only-резолв, без audit.",
+		Description:   "Живые SID-ы под source-поля UI-формы Run→Command (ADR-045 S3). Permission incarnation.run. Read-only-резолв, no audit.",
 		Tags:          []string{"module"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},
