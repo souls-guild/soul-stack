@@ -1,9 +1,9 @@
 //go:build integration
 
-// Integration-тесты глобального read-view прогонов (GET /v1/runs + /v1/runs/stats):
-// свёртка apply_runs по apply_id ЧЕРЕЗ ВСЕ инкарнации, SQL-форма AggregateRunStatus,
-// фильтры status/incarnation, Purview-scope-подзапрос и сводные счётчики.
-// Использует harness из integration_test.go (testcontainers PG).
+// Integration tests for the global run read-view (GET /v1/runs + /v1/runs/stats):
+// aggregation of apply_runs by apply_id ACROSS ALL incarnations, SQL form of
+// AggregateRunStatus, status/incarnation filters, Purview-scope subquery, and
+// summary counters. Uses harness from integration_test.go (testcontainers PG).
 
 package applyrun
 
@@ -15,12 +15,12 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 )
 
-// unrestrictedScope — scope без ограничений (Unrestricted-оператор).
+// unrestrictedScope is an unrestricted scope (Unrestricted operator).
 var unrestrictedScope = incarnation.ListScope{Unrestricted: true}
 
-// seedRun — helper: один прогон applyID в инкарнации inc с заданным НАБОРОМ
-// host-статусов (host-0..host-N). Терминальные статусы проставляются через
-// UpdateStatus (Insert принимает только planned/running).
+// seedRun is a helper: one run with applyID in incarnation inc with a given SET of
+// host statuses (host-0..host-N). Terminal statuses are set via UpdateStatus
+// (Insert accepts only planned/running).
 func seedRun(t *testing.T, ctx context.Context, applyID, inc, scenario string, statuses ...Status) {
 	t.Helper()
 	aid := "archon-alice"
@@ -36,9 +36,9 @@ func seedRun(t *testing.T, ctx context.Context, applyID, inc, scenario string, s
 	}
 }
 
-// TestIntegration_ListRuns_AcrossIncarnations — глобальная свёртка через инкарнации:
-// SQL-CASE агрегатного статуса совпадает с [AggregateRunStatus] на всех четырёх
-// значениях, Incarnation заполнен, порядок — новейшие сверху.
+// TestIntegration_ListRuns_AcrossIncarnations tests global aggregation across incarnations:
+// SQL-CASE for aggregate status matches [AggregateRunStatus] on all four values,
+// Incarnation is populated, order is newest first.
 func TestIntegration_ListRuns_AcrossIncarnations(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")

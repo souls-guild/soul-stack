@@ -14,12 +14,11 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 )
 
-// unrestricted — scope без ограничений (scope-подзапрос не добавляется, args чисты).
+// unrestricted is a scope with no restrictions (scope subquery not added, args clean).
 var unrestricted = incarnation.ListScope{Unrestricted: true}
 
-// defaultRunsOrderBy — прежний (до ADR-068) хардкод ORDER BY listSQL. Дефолт
-// сортировки обязан быть byte-exact ему (guard 6: без sort-параметров ничего не
-// меняется).
+// defaultRunsOrderBy is the previous (pre-ADR-068) hardcoded ORDER BY for listSQL.
+// The default sort must be byte-exact to it (guard 6: no sort parameters = no change).
 const defaultRunsOrderBy = "started_at DESC, apply_id DESC"
 
 func TestBuildRunsOrderBy_DefaultByteExact(t *testing.T) {
@@ -28,7 +27,7 @@ func TestBuildRunsOrderBy_DefaultByteExact(t *testing.T) {
 		t.Fatalf("buildRunsOrderBy(\"\",\"\"): %v", err)
 	}
 	if got != defaultRunsOrderBy {
-		t.Errorf("дефолт = %q, want byte-exact %q", got, defaultRunsOrderBy)
+		t.Errorf("default = %q, want byte-exact %q", got, defaultRunsOrderBy)
 	}
 }
 
@@ -51,8 +50,8 @@ func TestBuildRunsOrderBy_Columns(t *testing.T) {
 		{"service", "desc", "service DESC, apply_id DESC"},
 		{"scenario", "asc", "scenario ASC, apply_id DESC"},
 		{"scenario", "desc", "scenario DESC, apply_id DESC"},
-		// Дефолты применяются независимо: пустое поле → started_at, пустое
-		// направление → desc.
+		// Defaults apply independently: empty field → started_at, empty
+		// direction → desc.
 		{"", "asc", "started_at ASC, apply_id DESC"},
 		{"status", "", "status DESC, apply_id DESC"},
 	}
@@ -65,15 +64,15 @@ func TestBuildRunsOrderBy_Columns(t *testing.T) {
 		if got != c.want {
 			t.Errorf("buildRunsOrderBy(%q,%q) = %q, want %q", c.sort, c.dir, got, c.want)
 		}
-		// Tie-break обязателен во всех кейсах (стабильная пагинация).
+		// Tie-break is mandatory in all cases (stable pagination).
 		if !strings.HasSuffix(got, ", apply_id DESC") {
-			t.Errorf("buildRunsOrderBy(%q,%q) = %q: нет tie-break apply_id DESC", c.sort, c.dir, got)
+			t.Errorf("buildRunsOrderBy(%q,%q) = %q: no tie-break apply_id DESC", c.sort, c.dir, got)
 		}
 	}
 }
 
 // TestBuildRunsOrderBy_FinishedAtNullsLast — applying-прогоны (finished_at IS NULL)
-// уходят в конец при ЛЮБОМ направлении (guard 5).
+// go last regardless of direction (guard 5).
 func TestBuildRunsOrderBy_FinishedAtNullsLast(t *testing.T) {
 	for _, dir := range []string{"asc", "desc"} {
 		got, err := buildRunsOrderBy("finished_at", dir)
@@ -81,19 +80,19 @@ func TestBuildRunsOrderBy_FinishedAtNullsLast(t *testing.T) {
 			t.Fatalf("buildRunsOrderBy(finished_at,%q): %v", dir, err)
 		}
 		if !strings.Contains(got, "NULLS LAST") {
-			t.Errorf("finished_at %s: %q без NULLS LAST", dir, got)
+			t.Errorf("finished_at %s: %q without NULLS LAST", dir, got)
 		}
 	}
-	// NULLS LAST — только для finished_at (у not-null колонок бессмысленно).
+	// NULLS LAST only for finished_at (meaningless for not-null columns).
 	got, _ := buildRunsOrderBy("started_at", "asc")
 	if strings.Contains(got, "NULLS LAST") {
-		t.Errorf("started_at не должен нести NULLS LAST: %q", got)
+		t.Errorf("started_at should not have NULLS LAST: %q", got)
 	}
 }
 
-// TestBuildRunsOrderBy_InvalidField — не-whitelist поле → sentinel (→ 422). Ловим
-// и попытку инъекции, и валидную-в-другом-контексте колонку (created_at из
-// incarnation-whitelist здесь недопустима) (guard 3).
+// TestBuildRunsOrderBy_InvalidField tests non-whitelist field → sentinel (→ 422).
+// Catches both injection attempts and valid-in-another-context columns (created_at
+// from incarnation-whitelist is invalid here) (guard 3).
 func TestBuildRunsOrderBy_InvalidField(t *testing.T) {
 	for _, bad := range []string{"created_at", "name", "apply_id", "started_at; DROP TABLE apply_runs", "STARTED_AT"} {
 		_, err := buildRunsOrderBy(bad, "asc")

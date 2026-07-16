@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// fakeDB — ExecQueryRower stub for unit tests. Captures the last SQL and
+// fakeDB is an ExecQueryRower stub for unit tests. Captures the last SQL and
 // args, returns a configurable Row / CommandTag. Pattern matches
 // keeper/internal/incarnation/crud_test.go.
 type fakeDB struct {
@@ -382,7 +382,7 @@ func TestUpdateStatus_AppendOnlyGuardInSQL(t *testing.T) {
 		t.Fatalf("UpdateStatus: %v", err)
 	}
 	if !strings.Contains(f.execSQL, "status IN ('planned', 'claimed', 'running', 'dispatched')") {
-		t.Errorf("UPDATE без append-only guard исходного статуса: %q", f.execSQL)
+		t.Errorf("UPDATE without append-only guard of source status: %q", f.execSQL)
 	}
 }
 
@@ -396,10 +396,10 @@ func TestUpdateStatus_DispatchedToTerminal_OK(t *testing.T) {
 			t.Fatalf("dispatched → %s: %v", term, err)
 		}
 		if f.queryRowCalls != 0 {
-			t.Errorf("%s: queryRowCalls = %d, want 0 (UPDATE выиграл без probe)", term, f.queryRowCalls)
+			t.Errorf("%s: queryRowCalls = %d, want 0 (UPDATE won without probe)", term, f.queryRowCalls)
 		}
 		if !strings.Contains(f.execSQL, "'dispatched'") {
-			t.Errorf("%s: guard не допускает dispatched как исходный статус: %q", term, f.execSQL)
+			t.Errorf("%s: guard does not allow dispatched as source status: %q", term, f.execSQL)
 		}
 	}
 }
@@ -412,7 +412,7 @@ func TestUpdateStatus_NonTerminalToTerminal_OK(t *testing.T) {
 		t.Fatalf("non-terminal → terminal: %v", err)
 	}
 	if f.queryRowCalls != 0 {
-		t.Errorf("queryRowCalls = %d, want 0 (UPDATE выиграл без probe)", f.queryRowCalls)
+		t.Errorf("queryRowCalls = %d, want 0 (UPDATE won without probe)", f.queryRowCalls)
 	}
 }
 
@@ -433,7 +433,7 @@ func TestUpdateStatus_TerminalToTerminal_AlreadyTerminal(t *testing.T) {
 			t.Errorf("status=%s: err = %v, want ErrApplyRunAlreadyTerminal", st, err)
 		}
 		if f.queryRowCalls != 1 {
-			t.Errorf("status=%s: queryRowCalls = %d, want 1 (probe после UPDATE 0)", st, f.queryRowCalls)
+			t.Errorf("status=%s: queryRowCalls = %d, want 1 (probe after UPDATE 0)", st, f.queryRowCalls)
 		}
 	}
 }
@@ -482,10 +482,10 @@ func TestRecordTaskFailure_HappyPath(t *testing.T) {
 		t.Errorf("args[4] passage = %v, want 0", f.execArgs[4])
 	}
 	if f.execArgs[2] != 2 {
-		t.Errorf("args[2] task_idx (локальный) = %v, want 2", f.execArgs[2])
+		t.Errorf("args[2] task_idx (local) = %v, want 2", f.execArgs[2])
 	}
 	if f.execArgs[5] != 7 {
-		t.Errorf("args[5] failed_plan_index (глобальный) = %v, want 7", f.execArgs[5])
+		t.Errorf("args[5] failed_plan_index (global) = %v, want 7", f.execArgs[5])
 	}
 	if f.execArgs[3] != "task 7 core.pkg.installed: E: Version not found" {
 		t.Errorf("args[3] summary = %v", f.execArgs[3])
@@ -619,7 +619,7 @@ func TestSelectIncarnationByApplyID_HappyPath(t *testing.T) {
 		t.Errorf("got (%q, %q), want (redis-prod, scale)", name, scenario)
 	}
 	if attempt != 3 {
-		t.Errorf("attempt = %d, want 3 (fencing-epoch строки)", attempt)
+		t.Errorf("attempt = %d, want 3 (fencing-epoch of row)", attempt)
 	}
 	if len(f.queryRowArgs) != 3 || f.queryRowArgs[0] != "a" || f.queryRowArgs[1] != "s" || f.queryRowArgs[2] != 0 {
 		t.Errorf("args = %v", f.queryRowArgs)
@@ -669,7 +669,7 @@ func TestRequestCancel_NoRunningRows_NoOp(t *testing.T) {
 		t.Fatalf("RequestCancel: %v", err)
 	}
 	if affected != 0 {
-		t.Errorf("affected = %d, want 0 (терминальный/неизвестный прогон)", affected)
+		t.Errorf("affected = %d, want 0 (terminal/unknown run)", affected)
 	}
 }
 
@@ -692,13 +692,13 @@ func TestRequestCancel_PGError(t *testing.T) {
 	f := &fakeDB{execErr: boom}
 	affected, err := RequestCancel(context.Background(), f, "01HCANCEL")
 	if err == nil {
-		t.Fatal("RequestCancel при Exec-ошибке вернул nil")
+		t.Fatal("RequestCancel on Exec error returned nil")
 	}
 	if !errors.Is(err, boom) {
-		t.Errorf("err = %v, want обёрнутый Exec-error", err)
+		t.Errorf("err = %v, want wrapped Exec error", err)
 	}
 	if affected != 0 {
-		t.Errorf("affected = %d на ошибке, want 0", affected)
+		t.Errorf("affected = %d on error, want 0", affected)
 	}
 }
 
@@ -795,7 +795,7 @@ func TestClaimNext_Validation(t *testing.T) {
 		})
 	}
 	if f.queryCalls != 0 {
-		t.Errorf("queryCalls = %d на провале валидации, want 0 (в БД не ходим)", f.queryCalls)
+		t.Errorf("queryCalls = %d on validation failure, want 0 (don't go to DB)", f.queryCalls)
 	}
 }
 
@@ -810,10 +810,10 @@ func TestClaimNext_QueryShape(t *testing.T) {
 		t.Fatalf("queryCalls = %d, want 1", f.queryCalls)
 	}
 	if !strings.Contains(f.querySQL, "FOR UPDATE SKIP LOCKED") {
-		t.Errorf("SQL не содержит FOR UPDATE SKIP LOCKED: %q", f.querySQL)
+		t.Errorf("SQL does not contain FOR UPDATE SKIP LOCKED: %q", f.querySQL)
 	}
 	if !strings.Contains(f.querySQL, "attempt          = r.attempt + 1") {
-		t.Errorf("SQL не инкрементит attempt: %q", f.querySQL)
+		t.Errorf("SQL does not increment attempt: %q", f.querySQL)
 	}
 	if len(f.queryArgs) != 3 {
 		t.Fatalf("args len = %d, want 3", len(f.queryArgs))
@@ -837,7 +837,7 @@ func TestMarkDispatched_Validation(t *testing.T) {
 		t.Error("empty sid: expected error")
 	}
 	if f.execCalls != 0 {
-		t.Errorf("execCalls = %d на провале валидации, want 0", f.execCalls)
+		t.Errorf("execCalls = %d on validation failure, want 0", f.execCalls)
 	}
 }
 
@@ -848,13 +848,13 @@ func TestMarkDispatched_GuardFilter(t *testing.T) {
 		t.Fatalf("MarkDispatched: %v", err)
 	}
 	if !strings.Contains(f.execSQL, "status = 'claimed'") {
-		t.Errorf("guard-фильтр status='claimed' отсутствует в SQL: %q", f.execSQL)
+		t.Errorf("guard filter status='claimed' missing from SQL: %q", f.execSQL)
 	}
 	if !strings.Contains(f.execSQL, "status = 'dispatched'") {
-		t.Errorf("целевой статус dispatched отсутствует в SQL: %q", f.execSQL)
+		t.Errorf("target status dispatched missing from SQL: %q", f.execSQL)
 	}
 	if f.queryRowCalls != 0 {
-		t.Errorf("queryRowCalls = %d, want 0 (успешный UPDATE не добирает статус)", f.queryRowCalls)
+		t.Errorf("queryRowCalls = %d, want 0 (successful UPDATE doesn't add status)", f.queryRowCalls)
 	}
 }
 
@@ -983,10 +983,10 @@ func TestOrphanDispatched_NoRows_NotError(t *testing.T) {
 func TestOrphanDispatched_RejectsEmptySID(t *testing.T) {
 	f := &fakeDB{}
 	if _, err := OrphanDispatched(context.Background(), f, "", nil); err == nil {
-		t.Fatal("OrphanDispatched с пустым SID вернул nil-error")
+		t.Fatal("OrphanDispatched with empty SID returned nil-error")
 	}
 	if f.execCalls != 0 {
-		t.Errorf("execCalls = %d, want 0 (валидация до Exec)", f.execCalls)
+		t.Errorf("execCalls = %d, want 0 (validation before Exec)", f.execCalls)
 	}
 }
 
@@ -995,9 +995,9 @@ func TestOrphanDispatched_PGError(t *testing.T) {
 	f := &fakeDB{execErr: errors.New("boom")}
 	n, err := OrphanDispatched(context.Background(), f, "host-1", nil)
 	if err == nil {
-		t.Fatal("OrphanDispatched при Exec-ошибке вернул nil-error")
+		t.Fatal("OrphanDispatched on Exec error returned nil-error")
 	}
 	if n != 0 {
-		t.Errorf("RowsAffected = %d, want 0 при ошибке", n)
+		t.Errorf("RowsAffected = %d, want 0 on error", n)
 	}
 }

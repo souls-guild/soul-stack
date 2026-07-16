@@ -169,7 +169,7 @@ func InsertPlanned(ctx context.Context, db ExecQueryRower, run *ApplyRun) error 
 		return fmt.Errorf("applyrun: empty scenario")
 	}
 	if run.Recipe == nil {
-		return fmt.Errorf("applyrun: planned-задание без recipe")
+		return fmt.Errorf("applyrun: planned task without recipe")
 	}
 
 	recipeJSON, err := MarshalRecipe(run.Recipe)

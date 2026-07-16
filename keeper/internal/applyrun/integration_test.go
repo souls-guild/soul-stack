@@ -802,8 +802,8 @@ func TestIntegration_WardClaimColumns_Phase0(t *testing.T) {
 			claimByKID, claimAt, claimExpiresAt)
 	}
 
-	// CHECK принимает planned/claimed (raw SQL: ValidStatus намеренно их не
-	// пропускает в Phase 0, поэтому вставляем мимо CRUD).
+	// CHECK accepts planned/claimed (raw SQL: ValidStatus intentionally doesn't
+	// pass them in Phase 0, so we insert bypassing CRUD).
 	for _, st := range []string{"planned", "claimed"} {
 		if _, err := integrationPool.Exec(ctx, `
 			INSERT INTO apply_runs (apply_id, sid, incarnation_name, scenario, status)
@@ -824,7 +824,7 @@ func TestIntegration_WardClaimColumns_Phase0(t *testing.T) {
 		INSERT INTO apply_runs (apply_id, sid, incarnation_name, scenario, status)
 		VALUES ('01HWARD-bad', 'host-z', 'redis-prod', 'create', 'bogus')
 	`); err == nil {
-		t.Error("status 'bogus' принят, ожидали CHECK violation")
+		t.Error("status 'bogus' accepted, expected CHECK violation")
 	}
 
 	// Partial-индекс под claim-скан создан.
@@ -998,7 +998,7 @@ func seedPlanned(t *testing.T, applyID, sid string) {
 }
 
 // TestIntegration_ValidStatus_PlannedClaimedNowValid — Phase 1: planned/claimed
-// стали валидными для CRUD-слоя ([Insert]/[UpdateStatus]); при этом старый путь
+// became valid for the CRUD layer ([Insert]/[UpdateStatus]); however the old path
 // (прямой Insert(running)) не сломан.
 func TestIntegration_ValidStatus_PlannedClaimedNowValid(t *testing.T) {
 	resetAll(t)
@@ -1217,7 +1217,7 @@ func TestIntegration_ClaimNext_Concurrent(t *testing.T) {
 	}
 }
 
-// TestIntegration_ClaimNext_AttemptIncrements — attempt инкрементится при
+// TestIntegration_ClaimNext_AttemptIncrements tests that attempt increments on
 // повторном claim. Эмулируем recovery вручную: claimed → planned reset, затем
 // claim снова → attempt 1→2.
 func TestIntegration_ClaimNext_AttemptIncrements(t *testing.T) {
@@ -1253,7 +1253,7 @@ func TestIntegration_ClaimNext_AttemptIncrements(t *testing.T) {
 		t.Fatalf("second claim len = %d, want 1", len(second))
 	}
 	if second[0].Attempt != 2 {
-		t.Errorf("attempt = %d, want 2 (1→2 при повторном claim)", second[0].Attempt)
+		t.Errorf("attempt = %d, want 2 (1→2 on reclaim)", second[0].Attempt)
 	}
 	if second[0].ClaimByKID == nil || *second[0].ClaimByKID != "keeper-2" {
 		t.Errorf("claim_by_kid = %v, want keeper-2 (новый владелец после recovery)", second[0].ClaimByKID)
@@ -1261,7 +1261,7 @@ func TestIntegration_ClaimNext_AttemptIncrements(t *testing.T) {
 }
 
 // TestIntegration_ClaimNext_Validation — пустой kid / неположительные lease/batch
-// отвергаются до похода в БД.
+// are rejected before going to DB.
 func TestIntegration_ClaimNext_Validation(t *testing.T) {
 	ctx := context.Background()
 	if _, err := ClaimNext(ctx, integrationPool, "", time.Second, 1); err == nil {
@@ -1500,7 +1500,7 @@ func TestIntegration_OrphanDispatched_SweepsAbsent(t *testing.T) {
 
 // TestIntegration_OrphanDispatched_EpochDivergence_NotOrphaned — attempt-разъезд:
 // набор несёт тот же apply_id, что и dispatched-строка, но с ДРУГИМ attempt (идёт
-// пере-claim). Строка НЕ терминалится — присутствие apply_id в наборе (с любым
+// reclaim). The row is NOT terminalized — presence of apply_id in the set (with any
 // attempt) защищает её от orphan (epoch-fenced: orphan безопаснее НЕ делать).
 func TestIntegration_OrphanDispatched_EpochDivergence_NotOrphaned(t *testing.T) {
 	resetAll(t)
@@ -1569,7 +1569,7 @@ func TestIntegration_OrphanDispatched_SingleWinnerVsRunResult(t *testing.T) {
 
 	dispatchRow(t, "01HRACE", "host-a")
 
-	// RunResult пришёл первым: dispatched → success.
+	// RunResult arrived first: dispatched → success.
 	if err := UpdateStatus(ctx, integrationPool, "01HRACE", "host-a", 0, StatusSuccess, nil); err != nil {
 		t.Fatalf("UpdateStatus(success): %v", err)
 	}
@@ -1854,7 +1854,7 @@ func TestIntegration_SelectRunDetail_CrossIncarnationIsolation(t *testing.T) {
 
 	mustInsertRun(t, ctx, "01HXINC", "host-a", "redis-staging", "create", StatusSuccess, &aid)
 
-	// Прогон существует, но принадлежит redis-staging — из redis-prod not-found.
+	// Run exists, but belongs to redis-staging — from redis-prod not-found.
 	_, err := SelectRunDetail(ctx, integrationPool, "01HXINC", "redis-prod")
 	if !errors.Is(err, ErrApplyRunNotFound) {
 		t.Fatalf("err = %v, want ErrApplyRunNotFound (cross-incarnation)", err)
@@ -1878,7 +1878,7 @@ func TestIntegration_SelectRunDetail_NotFound(t *testing.T) {
 	}
 }
 
-// mustInsertRun — helper: Insert одной host-строки прогона, fatal при ошибке.
+// mustInsertRun is a helper: Insert one host row of a run, fatal on error.
 func mustInsertRun(t *testing.T, ctx context.Context, applyID, sid, inc, scenario string, status Status, startedBy *string) {
 	t.Helper()
 	if err := Insert(ctx, integrationPool, &ApplyRun{

@@ -26,7 +26,7 @@ func TestUpsertTaskRegister_HappyPath(t *testing.T) {
 		t.Errorf("SQL не upsert: %q", f.execSQL)
 	}
 	// args: apply_id($1), sid($2), plan_index($3), task_idx($4), register_data($5),
-	// passage($6) — ключ корреляции plan_index (миграция 079).
+	// passage($6) — plan_index correlation key (migration 079).
 	if len(f.execArgs) != 6 {
 		t.Fatalf("args len = %d, want 6", len(f.execArgs))
 	}
@@ -53,7 +53,7 @@ func TestUpsertTaskRegister_EmptyDataNoop(t *testing.T) {
 			t.Fatalf("UpsertTaskRegister: %v", err)
 		}
 		if f.execCalls != 0 {
-			t.Errorf("пустой register_data вызвал Exec (calls=%d)", f.execCalls)
+			t.Errorf("empty register_data called Exec (calls=%d)", f.execCalls)
 		}
 	}
 }
@@ -68,7 +68,7 @@ func TestUpsertTaskRegister_RejectsBadInput(t *testing.T) {
 	for i, tr := range cases {
 		f := &fakeDB{}
 		if err := UpsertTaskRegister(context.Background(), f, tr); err == nil {
-			t.Errorf("case %d: UpsertTaskRegister вернул nil для невалидного входа", i)
+			t.Errorf("case %d: UpsertTaskRegister returned nil for invalid input", i)
 		}
 		if f.execCalls != 0 {
 			t.Errorf("case %d: execCalls = %d, want 0", i, f.execCalls)

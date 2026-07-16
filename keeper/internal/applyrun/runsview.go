@@ -6,64 +6,65 @@ import (
 	"time"
 )
 
-// Read-view прогонов инкарнации для Operator API (GET /v1/incarnations/{name}/runs
-// и .../runs/{apply_id}). Отделён от write-CRUD (crud.go): здесь только
-// агрегирующие SELECT-ы под UI «статус выполнения / текущая джоба».
+// Read-view of incarnation runs for the Operator API (GET /v1/incarnations/{name}/runs
+// and .../runs/{apply_id}). Separated from write-CRUD (crud.go): here only
+// aggregating SELECTs for the UI "execution status / current job" display.
 //
-// ГРАНИЦА ДАННЫХ. apply_runs хранит статус НА ХОСТ-СТРОКУ (planned…orphaned),
-// НЕ per-task changed/ok/skipped: TaskEvent агрегируется на Soul-е без per-task-
-// прогресса в MVP (ADR-012). Единственная per-task деталь в PG — упавшая задача
-// (task_idx / failed_plan_index / error_summary на failed-строке). Поэтому
-// «детали прогона» — это срез по хостам (какие хосты идут/упали/успели + адрес
-// упавшей задачи), а не полный список задач с их статусами.
+// DATA BOUNDARY. apply_runs stores status PER HOST-ROW (planned…orphaned),
+// NOT per-task changed/ok/skipped: TaskEvent is aggregated on the Soul side without
+// per-task progress in MVP (ADR-012). The only per-task detail in PG is a failed task
+// (task_idx / failed_plan_index / error_summary on failed rows). Therefore,
+// "run details" are a slice by hosts (which hosts are running/failed/succeeded +
+// the address of the failed task), not a full list of tasks with their statuses.
 
-// RunStatus — агрегатный статус ВСЕГО прогона (свёртка host-строк apply_runs).
-// НЕ путать с [Status] (статус одной host-строки) и incarnation.Status
-// (error_locked — состояние инкарнации, не прогона).
+// RunStatus is the aggregate status of the ENTIRE run (aggregation of host rows
+// from apply_runs). NOT to be confused with [Status] (status of a single host row)
+// or incarnation.Status (error_locked is incarnation state, not run state).
 type RunStatus string
 
 const (
-	// RunStatusApplying — хотя бы одна host-строка ещё не терминальна
-	// (planned/claimed/running/dispatched). Прогон в процессе — «текущая джоба».
+	// RunStatusApplying indicates at least one host row is not yet terminal
+	// (planned/claimed/running/dispatched). The run is in progress — "current job".
 	RunStatusApplying RunStatus = "applying"
-	// RunStatusSuccess — все host-строки терминальны и benign (success/no_match).
+	// RunStatusSuccess indicates all host rows are terminal and benign (success/no_match).
 	RunStatusSuccess RunStatus = "success"
-	// RunStatusFailed — все host-строки терминальны, есть хотя бы одна
-	// failed/orphaned (не-успех). Приоритетнее cancelled.
+	// RunStatusFailed indicates all host rows are terminal with at least one
+	// failed/orphaned (non-success). Takes priority over cancelled.
 	RunStatusFailed RunStatus = "failed"
-	// RunStatusCancelled — все host-строки терминальны, есть cancelled и нет
-	// failed/orphaned.
+	// RunStatusCancelled indicates all host rows are terminal with cancelled,
+	// but no failed/orphaned rows.
 	RunStatusCancelled RunStatus = "cancelled"
 )
 
-// RunSummary — одна строка списка прогонов (GET .../runs и глобальный GET
-// /v1/runs). Свёртка всех host×passage-строк одного apply_id: агрегатный статус,
-// границы времени, инициатор. Incarnation — владелец прогона (в per-incarnation
-// выборке совпадает с аргументом, в глобальной — из строк apply_id).
+// RunSummary represents a single row in a run list (GET .../runs and global
+// GET /v1/runs). Aggregates all host×passage rows for one apply_id: aggregate status,
+// time boundaries, initiator. Incarnation is the run's owner (in per-incarnation
+// queries it matches the argument, in global queries it comes from apply_id rows).
 type RunSummary struct {
 	ApplyID     string
 	Incarnation string
-	// Service — сервис инкарнации-владельца (JOIN incarnation; "" если
-	// инкарнация недоступна). Заполняется только глобальным ListRuns.
+	// Service is the service of the owning incarnation (JOIN incarnation; "" if
+	// incarnation is not accessible). Populated only by global ListRuns.
 	Service   string
 	Scenario  string
 	Status    RunStatus
 	StartedAt time.Time
-	// FinishedAt — NULL, пока хотя бы одна host-строка не финишировала (прогон
-	// applying); иначе MAX(finished_at) по строкам.
+	// FinishedAt is NULL while at least one host row has not finished (run is
+	// applying); otherwise MAX(finished_at) across rows.
 	FinishedAt   *time.Time
 	StartedByAID *string
 }
 
-// RunHostStatus — статус одного хоста в рамках прогона (GET .../runs/{apply_id}).
-// На один хост приходится N строк (по Passage staged-render); проекция несёт
-// per-passage строку как есть — UI видит адрес упавшей задачи per-passage.
+// RunHostStatus represents the status of a single host within a run
+// (GET .../runs/{apply_id}). One host corresponds to N rows (by Passage from staged-render);
+// the projection carries the per-passage row as-is — the UI sees the failed task address
+// per passage.
 //
-// FailedTaskIdx — ЛОКАЛЬНЫЙ индекс упавшей задачи в ApplyRequest своего Passage
-// (nil на success/ещё-running/dispatch-level фейле). FailedPlanIndex — ГЛОБАЛЬНЫЙ
-// сквозной plan_index той же задачи по всему плану (ключ корреляции с планом
-// сценария; nil на тех же условиях). ErrorSummary — operator-facing причина
-// (`task <idx> <module>: <message>`, secret-masked на write-path).
+// FailedTaskIdx is the LOCAL index of the failed task in its Passage's ApplyRequest
+// (nil on success/still-running/dispatch-level failure). FailedPlanIndex is the
+// GLOBAL end-to-end plan_index of the same task across the entire plan (correlation key
+// with the scenario plan; nil under the same conditions). ErrorSummary is the
+// operator-facing reason (`task <idx> <module>: <message>`, secret-masked on the write path).
 type RunHostStatus struct {
 	SID             string
 	Status          Status
@@ -75,9 +76,9 @@ type RunHostStatus struct {
 	CancelRequested bool
 }
 
-// RunDetail — детали одного прогона (GET .../runs/{apply_id}): шапка + срез по
-// хостам. Scenario/StartedAt/StartedByAID берутся из любой host-строки (одинаковы
-// в пределах apply_id); Status — агрегат Hosts.
+// RunDetail represents the details of a single run (GET .../runs/{apply_id}):
+// header + slice by hosts. Scenario/StartedAt/StartedByAID are taken from any host row
+// (identical across apply_id); Status is the aggregate of Hosts.
 type RunDetail struct {
 	ApplyID      string
 	Scenario     string
@@ -88,11 +89,11 @@ type RunDetail struct {
 	Hosts        []RunHostStatus
 }
 
-// AggregateRunStatus сворачивает статусы host-строк прогона в [RunStatus].
-// Порядок приоритетов (соответствует барьер-классификации, dispatch.go classify):
-// любой non-terminal → applying; иначе failed/orphaned → failed; иначе cancelled
-// → cancelled; иначе (только success/no_match) → success. Пустой срез → applying
-// (строки ещё не диспатчены — прогон не завершён).
+// AggregateRunStatus collapses the statuses of host rows for a run into [RunStatus].
+// Priority order (corresponds to barrier classification, dispatch.go classify):
+// any non-terminal → applying; else failed/orphaned → failed; else cancelled
+// → cancelled; else (only success/no_match) → success. Empty slice → applying
+// (rows not yet dispatched — run not complete).
 func AggregateRunStatus(statuses []Status) RunStatus {
 	if len(statuses) == 0 {
 		return RunStatusApplying
@@ -101,7 +102,7 @@ func AggregateRunStatus(statuses []Status) RunStatus {
 	for _, s := range statuses {
 		switch s {
 		case StatusSuccess, StatusNoMatch:
-			// benign-терминал.
+			// benign terminal.
 		case StatusFailed, StatusOrphaned:
 			hasFailure = true
 		case StatusCancelled:
@@ -140,15 +141,15 @@ const countRunsByIncarnationSQL = `
 SELECT COUNT(DISTINCT apply_id) FROM apply_runs WHERE incarnation_name = $1
 `
 
-// ListRunsByIncarnation отдаёт страницу прогонов инкарнации (свёртка по apply_id),
-// новейшие сверху (MIN(started_at) DESC), и общее число прогонов. scenario/
-// started_by_aid одинаковы в пределах apply_id — берём MIN как детерминированный
-// представитель. finished_at — MAX по строкам, но только когда ВСЕ финишировали
-// (иначе NULL: прогон ещё applying). statuses — набор host-статусов для свёртки
-// [AggregateRunStatus].
+// ListRunsByIncarnation returns a page of incarnation runs (aggregated by apply_id),
+// with newest first (MIN(started_at) DESC), and the total run count. scenario/
+// started_by_aid are identical across apply_id — we take MIN as a deterministic
+// representative. finished_at is MAX across rows, but only when ALL have finished
+// (otherwise NULL: run still applying). statuses is the set of host statuses for
+// aggregation by [AggregateRunStatus].
 //
-// scope-гейт — на уровне handler-а (принадлежность incarnation проверяется до
-// вызова: WHERE по incarnation_name уже сужает выборку одной инкарнацией).
+// scope-gate is at the handler level (incarnation ownership is checked before
+// calling: WHERE by incarnation_name already narrows the query to one incarnation).
 func ListRunsByIncarnation(ctx context.Context, db ExecQueryRower, incarnationName string, offset, limit int) ([]RunSummary, int, error) {
 	var total int
 	if err := db.QueryRow(ctx, countRunsByIncarnationSQL, incarnationName).Scan(&total); err != nil {
@@ -188,12 +189,12 @@ WHERE apply_id = $1 AND incarnation_name = $2
 ORDER BY sid ASC, passage ASC
 `
 
-// SelectRunDetail отдаёт детали одного прогона: все host×passage-строки apply_id,
-// принадлежащего указанной инкарнации (WHERE по обоим — фильтр enforcement-а
-// «apply_id этой инкарнации»; чужой apply_id вернёт 0 строк → [ErrApplyRunNotFound]).
-// Шапка (scenario/started_at/started_by_aid) — из первой строки (одинакова в
-// пределах apply_id); finished_at детали — MAX по строкам, но nil пока не все
-// финишировали; Status — агрегат Hosts.
+// SelectRunDetail returns the details of a single run: all host×passage rows for an
+// apply_id belonging to the specified incarnation (WHERE on both — enforcement of
+// "apply_id of this incarnation"; foreign apply_id returns 0 rows → [ErrApplyRunNotFound]).
+// Header (scenario/started_at/started_by_aid) comes from the first row (identical
+// across apply_id); finished_at detail is MAX across rows, but nil until all have
+// finished; Status is the aggregate of Hosts.
 func SelectRunDetail(ctx context.Context, db ExecQueryRower, applyID, incarnationName string) (*RunDetail, error) {
 	rows, err := db.Query(ctx, selectRunHostsSQL, applyID, incarnationName)
 	if err != nil {
@@ -256,7 +257,7 @@ func SelectRunDetail(ctx context.Context, db ExecQueryRower, applyID, incarnatio
 	return &detail, nil
 }
 
-// toStatuses конвертирует срез строк-статусов из array_agg в []Status.
+// toStatuses converts a slice of status strings from array_agg into []Status.
 func toStatuses(ss []string) []Status {
 	out := make([]Status, len(ss))
 	for i, s := range ss {

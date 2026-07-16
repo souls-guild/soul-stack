@@ -1,10 +1,10 @@
 package applyrun
 
-// Docker-free guard-тесты store-слоя плана задач прогона (apply_run_plan, NIM-37):
-// bulk-upsert-форма InsertRunPlan (параллельные unnest-массивы), no-op/валидация,
-// scan SelectRunPlanByApplyID и scope-probe RunExistsForIncarnation. Реальный
-// round-trip к PG — в integration_test.go; здесь проверяем SQL-форму, маппинг
-// колонок и граничные ветки без БД.
+// Docker-free guard tests for the run plan task store layer (apply_run_plan, NIM-37):
+// bulk-upsert form of InsertRunPlan (parallel unnest arrays), no-op/validation,
+// scan of SelectRunPlanByApplyID and scope-probe RunExistsForIncarnation. Actual
+// round-trip to PG is in integration_test.go; here we check SQL form, column mapping,
+// and edge cases without DB.
 
 import (
 	"context"
@@ -16,9 +16,9 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// planRowsStub — pgx.Rows-stub над набором строк apply_run_plan в порядке колонок
-// selectRunPlanByApplyIDSQL (plan_index/name/module/no_log/passage). Scan reuse
-// пакетного assign (crud_test.go).
+// planRowsStub is a pgx.Rows stub over a set of apply_run_plan rows in the order of
+// selectRunPlanByApplyIDSQL columns (plan_index/name/module/no_log/passage). Scan reuses
+// the batch assign helper (crud_test.go).
 type planRowsStub struct {
 	rows [][]any
 	idx  int
@@ -121,7 +121,7 @@ func TestInsertRunPlan_BulkArrays(t *testing.T) {
 	}
 }
 
-// TestInsertRunPlan_EmptyApplyID — пустой apply_id отбивается ДО БД (ошибка, ноль Exec).
+// TestInsertRunPlan_EmptyApplyID tests that empty apply_id is rejected BEFORE DB (error, zero Exec).
 func TestInsertRunPlan_EmptyApplyID(t *testing.T) {
 	f := &fakeDB{}
 	err := InsertRunPlan(context.Background(), f, "", []RunPlanTask{{PlanIndex: 0, Name: "x"}})
@@ -129,7 +129,7 @@ func TestInsertRunPlan_EmptyApplyID(t *testing.T) {
 		t.Fatal("empty apply_id: ожидалась ошибка")
 	}
 	if f.execCalls != 0 {
-		t.Errorf("execCalls = %d, want 0 (в БД не ходим)", f.execCalls)
+		t.Errorf("execCalls = %d, want 0 (don't go to DB)", f.execCalls)
 	}
 }
 
@@ -195,7 +195,7 @@ func TestSelectRunPlanByApplyID_QueryShape(t *testing.T) {
 	}
 }
 
-// TestRunExistsForIncarnation — scope-probe принадлежности прогона инкарнации:
+// TestRunExistsForIncarnation tests scope-probe of run ownership to incarnation:
 // EXISTS true/false пробрасывается; ErrNoRows → (false, nil) (не ошибка).
 func TestRunExistsForIncarnation(t *testing.T) {
 	cases := []struct {

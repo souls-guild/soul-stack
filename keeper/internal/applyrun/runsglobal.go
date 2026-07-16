@@ -10,49 +10,49 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 )
 
-// Глобальный read-view прогонов ЧЕРЕЗ ВСЕ инкарнации (GET /v1/runs + /v1/runs/stats,
-// страница «All Runs» UI). Та же граница данных, что у per-incarnation view
-// (runsview.go): прогон = группа host-строк apply_runs по apply_id, НЕ хост-строка.
-// Purview-scope (ADR-047) приходит из handler-а как [incarnation.ListScope] и
-// уходит в SQL подзапросом по таблице incarnation — единый источник семантики
-// scope с incarnation.SelectAll ([incarnation.ScopeCondition]).
+// Global read-view of runs ACROSS ALL incarnations (GET /v1/runs + /v1/runs/stats,
+// "All Runs" UI page). Same data boundary as per-incarnation view (runsview.go):
+// run = group of apply_runs host rows by apply_id, NOT a host row.
+// Purview-scope (ADR-047) comes from the handler as [incarnation.ListScope] and
+// is passed to SQL as a subquery over the incarnation table — a single source of
+// scope semantics with incarnation.SelectAll ([incarnation.ScopeCondition]).
 
-// RunsFilter — пользовательские фильтры глобального списка прогонов (что оператор
-// попросил показать; scope — что ему положено видеть, AND-пересечение в WHERE).
+// RunsFilter represents user filters for the global run list (what the operator
+// requested to see; scope is what they are permitted to see, AND-intersection in WHERE).
 type RunsFilter struct {
-	// Status — фильтр по агрегатному статусу прогона ("" = все). Валидность
-	// значения — на handler-е ([ValidRunStatus] → 422).
+	// Status is a filter by aggregate run status ("" = all). Validity of
+	// the value is checked at the handler level ([ValidRunStatus] → 422).
 	Status RunStatus
-	// Incarnation — фильтр по имени инкарнации ("" = все).
+	// Incarnation is a filter by incarnation name ("" = all).
 	Incarnation string
-	// Service — фильтр по сервису инкарнации-владельца ("" = все); точное
-	// совпадение через incarnation.service (index-safe, incarnation_service_idx).
+	// Service is a filter by the owning incarnation's service ("" = all); exact
+	// match via incarnation.service (index-safe, incarnation_service_idx).
 	Service string
-	// Q — свободный поиск (ILIKE-substring) по incarnation/scenario/service/
-	// started_by ("" = без поиска). LIKE-метасимволы экранируются (литеральные).
+	// Q is a free-text search (ILIKE-substring) over incarnation/scenario/service/
+	// started_by ("" = no search). LIKE metacharacters are escaped (literal).
 	Q string
-	// StartedAfter/StartedBefore — inclusive-границы по АГРЕГАТУ started_at прогона
-	// (MIN(started_at)); nil = не задано. Фильтр по агрегату → в outerWhere (после
-	// GROUP BY): started_at не константен внутри apply_id, в sub расщепил бы группу.
+	// StartedAfter/StartedBefore are inclusive boundaries on the AGGREGATE started_at
+	// (MIN(started_at)); nil = not set. Aggregate filter goes in outerWhere (after
+	// GROUP BY): started_at is not constant within apply_id, in sub it would split the group.
 	StartedAfter  *time.Time
 	StartedBefore *time.Time
-	// Sort — поле сортировки (whitelist [runsSortableColumns], "" = дефолт
-	// started_at). SortDir — asc|desc ("" = desc). Невалидное значение всплывает
-	// из [ListRuns] sentinel-ошибкой ([ErrInvalidRunsSortField]/[ErrInvalidRunsSortDir]
-	// → 422 на handler-е). ADR-068 §B1.
+	// Sort is the sort field (whitelist [runsSortableColumns], "" = default started_at).
+	// SortDir is asc|desc ("" = desc). Invalid values surface from [ListRuns] as sentinel
+	// errors ([ErrInvalidRunsSortField]/[ErrInvalidRunsSortDir] → 422 at the handler).
+	// ADR-068 §B1.
 	Sort    string
 	SortDir string
 }
 
-// Sentinel-ошибки валидации сортировки [ListRuns] (handler маппит в 422). ADR-068 §B1.
+// Sentinel errors for sort validation in [ListRuns] (handler maps to 422). ADR-068 §B1.
 var (
 	ErrInvalidRunsSortField = errors.New("applyrun: invalid sort field")
 	ErrInvalidRunsSortDir   = errors.New("applyrun: invalid sort direction")
 )
 
-// runsSortableColumns — closed whitelist полей сортировки GET /v1/runs →
-// alias-колонка свёртки (подзапрос runs). Колонка берётся отсюда, не из сырой
-// строки — иначе SQL-инъекция через ORDER BY. ADR-068 §B1.
+// runsSortableColumns is a closed whitelist of sortable fields for GET /v1/runs →
+// alias column from the aggregation subquery (runs). Columns are taken from here, not
+// from raw input — otherwise SQL injection via ORDER BY. ADR-068 §B1.
 var runsSortableColumns = map[string]string{
 	"started_at":  "started_at",
 	"finished_at": "finished_at",
@@ -62,7 +62,7 @@ var runsSortableColumns = map[string]string{
 	"scenario":    "scenario",
 }
 
-// ValidRunStatus — закрытый набор агрегатных статусов прогона (фильтр /v1/runs).
+// ValidRunStatus is the closed set of aggregate run statuses (filter for /v1/runs).
 func ValidRunStatus(s RunStatus) bool {
 	switch s {
 	case RunStatusApplying, RunStatusSuccess, RunStatusFailed, RunStatusCancelled:
@@ -71,7 +71,7 @@ func ValidRunStatus(s RunStatus) bool {
 	return false
 }
 
-// RunsStatusCounts — счётчики прогонов по агрегатному статусу. Total = сумма всех.
+// RunsStatusCounts represents counters for runs by aggregate status. Total = sum of all.
 type RunsStatusCounts struct {
 	Total     int
 	Applying  int
@@ -80,23 +80,23 @@ type RunsStatusCounts struct {
 	Cancelled int
 }
 
-// RunsStats — сводка глобального read-view прогонов: за всё время + за последние
-// 24 часа (окно по MIN(started_at) прогона — та же ось, что порядок списка).
+// RunsStats represents a summary of the global run read-view: all-time and last
+// 24 hours (window based on MIN(started_at) — same axis as list order).
 type RunsStats struct {
 	All     RunsStatusCounts
 	Last24h RunsStatusCounts
 }
 
-// runsAggregateSelect — свёртка apply_runs по apply_id: общая подзапрос-основа
-// списка и статистики. Колонка status — SQL-форма [AggregateRunStatus]; литералы
-// собраны из Go-констант (init ниже) — единый источник приоритетов applying >
-// failed > cancelled > success. Неизвестный статус трактуется как non-terminal
-// (parity default-ветки AggregateRunStatus).
+// runsAggregateSelect aggregates apply_runs by apply_id: the common subquery base
+// for both list and stats. The status column is the SQL form of [AggregateRunStatus];
+// literals are gathered from Go constants (init below) — a single source of priority
+// applying > failed > cancelled > success. Unknown status is treated as non-terminal
+// (parity with AggregateRunStatus default branch).
 //
-// apply_runs заалиашена `ar`, incarnation — `i`: у incarnation свой status →
-// bare-колонки стали бы ambiguous. LEFT JOIN защитно (FK ON DELETE CASCADE не
-// оставляет orphan, но JOIN не роняет прогон при рассинхроне); service через
-// COALESCE к пустой строке — NULL-safe скан в string.
+// apply_runs is aliased as `ar`, incarnation as `i`: incarnation has its own status →
+// bare columns would be ambiguous. LEFT JOIN is defensive (FK ON DELETE CASCADE doesn't
+// leave orphans, but JOIN doesn't drop runs on desync); service via COALESCE to empty
+// string — NULL-safe scan into string.
 var runsAggregateSelect = fmt.Sprintf(`
 SELECT ar.apply_id,
        MIN(ar.incarnation_name)                        AS incarnation,
@@ -120,8 +120,8 @@ LEFT JOIN incarnation i ON ar.incarnation_name = i.name`,
 	RunStatusSuccess,
 )
 
-// terminalStatusesSQL — терминальные host-статусы списком SQL-литералов
-// ('success','no_match',...). Статусы — доверенные константы пакета, не ввод.
+// terminalStatusesSQL returns terminal host statuses as a list of SQL literals
+// ('success','no_match',...). Statuses are trusted package constants, not input.
 func terminalStatusesSQL() string {
 	terminal := []Status{StatusSuccess, StatusNoMatch, StatusFailed, StatusOrphaned, StatusCancelled}
 	quoted := make([]string, len(terminal))
@@ -131,8 +131,8 @@ func terminalStatusesSQL() string {
 	return strings.Join(quoted, ",")
 }
 
-// buildRunsQuery собирает подзапрос-свёртку с фильтрами/scope и внешний WHERE по
-// агрегатному статусу. Возвращает тело `(<свёртка>) runs` + внешний WHERE + args.
+// buildRunsQuery builds an aggregation subquery with filters/scope and an outer WHERE
+// for aggregate status. Returns the body `(<aggregation>) runs` + outer WHERE + args.
 func buildRunsQuery(filter RunsFilter, scope incarnation.ListScope) (sub, outerWhere string, args []any) {
 	var clauses []string
 	if filter.Incarnation != "" {
@@ -150,8 +150,8 @@ func buildRunsQuery(filter RunsFilter, scope incarnation.ListScope) (sub, outerW
 			"(ar.incarnation_name ILIKE $%[1]d OR ar.scenario ILIKE $%[1]d OR i.service ILIKE $%[1]d OR ar.started_by_aid ILIKE $%[1]d)",
 			n))
 	}
-	// Purview-scope — подзапросом по incarnation (fail-closed: пустой scope даёт
-	// WHERE FALSE внутри подзапроса → ни одного прогона).
+	// Purview-scope via subquery on incarnation (fail-closed: empty scope gives
+	// WHERE FALSE in the subquery → no runs).
 	cond, args := incarnation.ScopeCondition(args, scope)
 	if cond != "" {
 		clauses = append(clauses, "ar.incarnation_name IN (SELECT name FROM incarnation WHERE "+cond+")")
@@ -163,10 +163,10 @@ func buildRunsQuery(filter RunsFilter, scope incarnation.ListScope) (sub, outerW
 	}
 	sub += "\nGROUP BY ar.apply_id"
 
-	// Внешний WHERE — по АГРЕГАТНЫМ колонкам свёртки (status, started_at):
-	// фильтруются ПОСЛЕ GROUP BY (started_at = MIN по apply_id, не константен внутри
-	// группы — в sub расщепил бы её). И countSQL, и listSQL строятся из sub+outerWhere
-	// → total/страница консистентны. Все значения — bind-параметры.
+	// Outer WHERE filters by AGGREGATE columns from the aggregation (status, started_at):
+	// filtered AFTER GROUP BY (started_at = MIN per apply_id, not constant within
+	// the group — would split it in sub). Both countSQL and listSQL are built from
+	// sub+outerWhere → total/page are consistent. All values are bind parameters.
 	var outer []string
 	if filter.Status != "" {
 		args = append(args, string(filter.Status))
@@ -186,19 +186,19 @@ func buildRunsQuery(filter RunsFilter, scope incarnation.ListScope) (sub, outerW
 	return sub, outerWhere, args
 }
 
-// likeEscaper экранирует LIKE/ILIKE-метасимволы (backslash-escape по умолчанию в
-// PG): литеральные %/_/\ в свободном поиске не работают как wildcard. Один проход
-// NewReplacer (backslash первым в списке пар не даёт двойного экранирования).
+// likeEscaper escapes LIKE/ILIKE metacharacters (backslash-escape by default in PG):
+// literal %/_/\ in free search don't act as wildcards. Single pass NewReplacer
+// (backslash first in the pairs list avoids double-escaping).
 var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 
-// escapeLike готовит Q к подстановке в `%…%` ILIKE-паттерн.
+// escapeLike prepares Q for substitution into a `%…%` ILIKE pattern.
 func escapeLike(s string) string { return likeEscaper.Replace(s) }
 
-// buildRunsOrderBy — тело ORDER BY из whitelist-поля + направления. Дефолт поля
-// started_at, направления desc (byte-exact прежнему `started_at DESC, apply_id DESC`).
-// Tie-break `apply_id DESC` добавляется всегда (стабильность при равных значениях
-// сорт-колонки). finished_at → NULLS LAST (applying-прогоны без finished_at — в
-// конец при любом направлении). ADR-068 §B1.
+// buildRunsOrderBy builds the ORDER BY clause from a whitelist field + direction.
+// Default field is started_at, direction is desc (byte-exact to previous
+// `started_at DESC, apply_id DESC`). Tie-break `apply_id DESC` is always added
+// (stability for equal sort-column values). finished_at → NULLS LAST (applying runs
+// without finished_at go last regardless of direction). ADR-068 §B1.
 func buildRunsOrderBy(sort, sortDir string) (string, error) {
 	if sort == "" {
 		sort = "started_at"
@@ -218,8 +218,8 @@ func buildRunsOrderBy(sort, sortDir string) (string, error) {
 	return fmt.Sprintf("%s %s%s, apply_id DESC", col, dir, nulls), nil
 }
 
-// runsSortDirSQL валидирует направление сортировки. Пустое → DESC (дефолт
-// /v1/runs — новейшие сверху, в отличие от asc-дефолта incarnation).
+// runsSortDirSQL validates the sort direction. Empty → DESC (default for
+// /v1/runs — newest first, unlike the asc-default for incarnation).
 func runsSortDirSQL(d string) (string, error) {
 	switch d {
 	case "", "desc":
@@ -230,13 +230,13 @@ func runsSortDirSQL(d string) (string, error) {
 	return "", fmt.Errorf("%w: %q", ErrInvalidRunsSortDir, d)
 }
 
-// ListRuns отдаёт страницу прогонов через все инкарнации (свёртка по apply_id),
-// в порядке filter.Sort/SortDir (дефолт — новейшие сверху), и общее число прогонов
-// под теми же фильтрами/scope. Фильтр по агрегатному статусу — на SQL-уровне (иначе
-// total/offset разъехались бы с Go-постфильтром).
+// ListRuns returns a page of runs across all incarnations (aggregated by apply_id),
+// in the order of filter.Sort/SortDir (default — newest first), and the total run count
+// under the same filters/scope. Aggregate status filtering is at the SQL level (otherwise
+// total/offset would diverge from Go postfiltering).
 func ListRuns(ctx context.Context, db ExecQueryRower, filter RunsFilter, scope incarnation.ListScope, offset, limit int) ([]RunSummary, int, error) {
-	// Валидация sort — до БД: невалидное поле/направление → sentinel-ошибка (422),
-	// без лишнего count-запроса.
+	// Validate sort before DB: invalid field/direction → sentinel error (422),
+	// without unnecessary count query.
 	orderBy, err := buildRunsOrderBy(filter.Sort, filter.SortDir)
 	if err != nil {
 		return nil, 0, err
@@ -249,8 +249,8 @@ func ListRuns(ctx context.Context, db ExecQueryRower, filter RunsFilter, scope i
 		return nil, 0, fmt.Errorf("applyrun: count global runs: %w", err)
 	}
 
-	// ORDER BY — из whitelist-выражения (не из сырого ввода); countSQL выше НЕ
-	// затрагивается — total от сортировки не зависит (ADR-068 §B1).
+	// ORDER BY comes from a whitelist expression (not raw input); countSQL above is
+	// unaffected — total is independent of sort (ADR-068 §B1).
 	listSQL := "SELECT apply_id, incarnation, scenario, service, started_at, finished_at, started_by_aid, status FROM (" +
 		sub + ") runs" + outerWhere +
 		fmt.Sprintf("\nORDER BY %s OFFSET $%d LIMIT $%d", orderBy, len(args)+1, len(args)+2)
@@ -281,8 +281,8 @@ func ListRuns(ctx context.Context, db ExecQueryRower, filter RunsFilter, scope i
 	return out, total, nil
 }
 
-// SelectRunsStats отдаёт сводные счётчики прогонов (по агрегатному статусу, за всё
-// время и за 24 часа) одним запросом по свёртке в границах scope.
+// SelectRunsStats returns summary counters of runs (by aggregate status, all-time and
+// last 24 hours) in a single query over the aggregation within scope.
 func SelectRunsStats(ctx context.Context, db ExecQueryRower, scope incarnation.ListScope) (RunsStats, error) {
 	sub, _, args := buildRunsQuery(RunsFilter{}, scope)
 	statsSQL := `SELECT status, COUNT(*),

@@ -10,36 +10,37 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// TaskRegister — строка накопителя `apply_task_register` (миграция 022, ключ
-// перетянут на plan_index миграцией 079): register-результат одной probe-задачи
-// на одном хосте в рамках прогона.
+// TaskRegister represents a row in the `apply_task_register` accumulator
+// (migration 022, key moved to plan_index by migration 079): the register result
+// of a single probe task on one host within a run.
 //
-// register_name тут нет: handler в момент TaskEvent знает только индексы
-// (proto register-имя не несёт, ADR-012(d)). Резолв plan_index → register_name
-// делает scenario-runner при чтении (он держит []RenderedTask с полем Register).
+// register_name is not present here: the handler at the time of TaskEvent only knows
+// indices (the proto register name is not carried, ADR-012(d)). Resolution of
+// plan_index → register_name is done by scenario-runner when reading (it holds
+// []RenderedTask with a Register field).
 type TaskRegister struct {
 	ApplyID string
 	SID     string
 
-	// PlanIndex — ГЛОБАЛЬНЫЙ сквозной индекс задачи по всему плану прогона (по
-	// всем Passage), эхо TaskEvent.plan_index (ADR-056 §S1 fix Variant B). Ключ
-	// register-корреляции (PK-компонент, миграция 079): уникален и по всем Passage,
-	// и по всем хостам — устраняет коллизию task_idx (probe passage0 / действие
-	// passage1 делили локальный idx=0, ON CONFLICT затирал probe-register).
-	// scenario-runner мапит его против RenderedTask.Index. N=1 → ==TaskIdx.
+	// PlanIndex is the GLOBAL end-to-end task index across the entire run plan
+	// (across all Passages), echoing TaskEvent.plan_index (ADR-056 §S1 fix Variant B).
+	// It is the register correlation key (PK component, migration 079): unique across
+	// both all Passages and all hosts — eliminates the task_idx collision (probe
+	// passage0 / action passage1 shared local idx=0, ON CONFLICT overwrote probe-register).
+	// scenario-runner maps it against RenderedTask.Index. N=1 → ==TaskIdx.
 	PlanIndex int
 
-	// TaskIdx — ЛОКАЛЬНАЯ позиция задачи в ApplyRequest.tasks[] её Passage
-	// (эхо TaskEvent.task_idx). Хранится информационно (триаж); НЕ ключ
-	// корреляции — он неуникален между Passage И между хостами одного Passage
-	// (разный where:). Резолв register идёт по PlanIndex.
+	// TaskIdx is the LOCAL position of the task within its Passage's ApplyRequest.tasks[]
+	// (echoing TaskEvent.task_idx). Stored for informational purposes (triage);
+	// NOT the correlation key — it is not unique across Passages or across hosts within
+	// one Passage (different where:). Register resolution goes by PlanIndex.
 	TaskIdx int
 
 	RegisterData map[string]any
 
-	// Passage — индекс Passage staged-render (ADR-056, миграция 078): компонент
-	// FK на apply_runs(apply_id, sid, passage). passage пишется как данные строки
-	// и нужен FK-цели. N=1 → 0 (единственный Passage хоста).
+	// Passage is the Passage index for staged-render (ADR-056, migration 078):
+	// a component of the FK to apply_runs(apply_id, sid, passage). passage is written
+	// as row data and is needed for the FK target. N=1 → 0 (the host's only Passage).
 	Passage int
 }
 
@@ -50,17 +51,17 @@ ON CONFLICT (apply_id, sid, plan_index)
 DO UPDATE SET task_idx = EXCLUDED.task_idx, register_data = EXCLUDED.register_data, passage = EXCLUDED.passage, created_at = NOW()
 `
 
-// UpsertTaskRegister пишет (или перезаписывает) register-результат задачи.
-// Перезапись — для retry той же задачи на Soul-стороне: побеждает последний
-// результат (ON CONFLICT по PK (apply_id, sid, plan_index) — PK сменён в
-// миграции 079 с task_idx на plan_index).
+// UpsertTaskRegister writes (or overwrites) a task's register result.
+// Overwrite handles retries of the same task on the Soul side: the latest result wins
+// (ON CONFLICT on PK (apply_id, sid, plan_index) — PK changed in migration 079 from
+// task_idx to plan_index).
 //
-// Pre-conditions: непустые ApplyID / SID; неотрицательный TaskIdx; непустой
-// RegisterData (nil/пустой → no-op: register: без данных нечего копить).
+// Pre-conditions: non-empty ApplyID / SID; non-negative TaskIdx; non-empty
+// RegisterData (nil/empty → no-op: no data to accumulate for register).
 //
-// register_data сериализуется в jsonb через encoding/json. FK-violation
-// (нет строки apply_runs (apply_id, sid)) → wrapped fmt.Errorf: программная
-// ошибка порядка (Insert apply_run обязан предшествовать TaskEvent-у).
+// register_data is serialized to jsonb via encoding/json. FK-violation
+// (no apply_runs row with (apply_id, sid)) → wrapped fmt.Errorf: a programming
+// order error (Insert of apply_run must precede the TaskEvent).
 func UpsertTaskRegister(ctx context.Context, db ExecQueryRower, tr *TaskRegister) error {
 	if tr == nil {
 		return fmt.Errorf("applyrun: nil task register")
@@ -103,21 +104,21 @@ WHERE apply_id = $1
 ORDER BY sid ASC, plan_index ASC
 `
 
-// SelectTaskRegistersByApplyID возвращает все register-строки прогона
-// (один apply_id, разные sid/plan_index), отсортированные по (sid, plan_index).
-// Используется scenario-runner-ом после барьера: он группирует строки per-host,
-// резолвит plan_index → register_name из своих []RenderedTask (по
-// RenderedTask.Index = глобальный индекс) и строит RenderInput.Register для
-// рендера state_changes.sets. Сортировка по глобальному plan_index сохраняет
-// «поздняя в плане задача побеждает» при дублирующемся register-имени.
+// SelectTaskRegistersByApplyID returns all register rows for a run
+// (single apply_id, multiple sid/plan_index pairs), sorted by (sid, plan_index).
+// Used by scenario-runner after the barrier: it groups rows per-host,
+// resolves plan_index → register_name from its []RenderedTask (by
+// RenderedTask.Index = global index) and builds RenderInput.Register for
+// rendering state_changes.sets. Sorting by global plan_index preserves
+// the "later task wins" semantics when register names collide.
 //
-// Возвращает register ВСЕХ Passage прогона (staged-render, ADR-056): финальный
-// state_changes.sets-рендер агрегирует register всех passage (после последнего
-// барьера). Render следующего Passage в stage-loop читает register предыдущих
-// через [SelectTaskRegistersByApplyIDUpToPassage].
+// Returns registers for ALL Passages in the run (staged-render, ADR-056):
+// the final state_changes.sets render aggregates registers from all passages
+// (after the last barrier). Rendering the next Passage in the stage-loop reads
+// registers from previous passages via [SelectTaskRegistersByApplyIDUpToPassage].
 //
-// Пустой результат — прогон без register: задач (нечего копить); caller
-// трактует как пустой register-context.
+// An empty result means a run with no registers: no tasks to accumulate; the caller
+// treats this as an empty register context.
 func SelectTaskRegistersByApplyID(ctx context.Context, db ExecQueryRower, applyID string) ([]TaskRegister, error) {
 	rows, err := db.Query(ctx, selectTaskRegistersByApplyIDSQL, applyID)
 	if err != nil {
@@ -133,11 +134,11 @@ WHERE apply_id = $1 AND passage < $2
 ORDER BY sid ASC, plan_index ASC
 `
 
-// SelectTaskRegistersByApplyIDUpToPassage возвращает register-строки прогона,
-// накопленные в Passage СТРОГО МЕНЬШЕ upToPassage (staged-render, ADR-056 §в.1):
-// render Passage N подставляет register всех предыдущих Passage (per-host карта,
-// собранная их барьерами). upToPassage=0 (первый Passage) → пусто (register ещё
-// не собран — поведение как up-front render).
+// SelectTaskRegistersByApplyIDUpToPassage returns register rows for a run accumulated
+// in Passages STRICTLY LESS THAN upToPassage (staged-render, ADR-056 §S.1):
+// rendering Passage N passes in registers from all previous Passages (per-host map,
+// gathered by their barriers). upToPassage=0 (first Passage) → empty (register not yet
+// gathered — behavior matches up-front render).
 func SelectTaskRegistersByApplyIDUpToPassage(ctx context.Context, db ExecQueryRower, applyID string, upToPassage int) ([]TaskRegister, error) {
 	rows, err := db.Query(ctx, selectTaskRegistersUpToPassageSQL, applyID, upToPassage)
 	if err != nil {
@@ -146,8 +147,8 @@ func SelectTaskRegistersByApplyIDUpToPassage(ctx context.Context, db ExecQueryRo
 	return scanTaskRegisters(rows, applyID)
 }
 
-// scanTaskRegisters читает rows в []TaskRegister (общая часть обоих select-ов).
-// Закрывает rows.
+// scanTaskRegisters reads rows into []TaskRegister (common part of both selects).
+// Closes rows.
 func scanTaskRegisters(rows pgx.Rows, applyID string) ([]TaskRegister, error) {
 	defer rows.Close()
 

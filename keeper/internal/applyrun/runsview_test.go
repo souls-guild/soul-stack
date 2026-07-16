@@ -20,9 +20,9 @@ func TestAggregateRunStatus(t *testing.T) {
 		{"orphaned → failed", []Status{StatusSuccess, StatusOrphaned}, RunStatusFailed},
 		{"failed dominates cancelled → failed", []Status{StatusCancelled, StatusFailed}, RunStatusFailed},
 		{"cancelled without failure → cancelled", []Status{StatusSuccess, StatusCancelled}, RunStatusCancelled},
-		// applying имеет наивысший приоритет: незавершённый прогон не может быть
-		// объявлен failed/cancelled раньше времени (иначе UI покажет терминал на
-		// ещё идущей джобе).
+		// applying has the highest priority: an incomplete run cannot be
+		// declared failed/cancelled prematurely (otherwise the UI shows terminal
+		// on a still-running job).
 		{"non-terminal dominates failure", []Status{StatusFailed, StatusRunning}, RunStatusApplying},
 		{"non-terminal dominates cancel", []Status{StatusCancelled, StatusDispatched}, RunStatusApplying},
 	}
