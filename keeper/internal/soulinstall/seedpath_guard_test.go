@@ -1,10 +1,10 @@
 package soulinstall_test
 
-// Sync-guard layout-а SoulSeed: SeedCertPath (guard идемпотентности `soul init`
-// в core.bootstrap.delivered) обязан совпадать с тем, куда soul-агент реально
-// пишет seed — `<paths.seed из soul.yml>/<currentLink>/<CertFile>` из
-// soul/internal/seed. Прямой import невозможен (internal чужого Go-модуля),
-// поэтому константы извлекаются из исходника.
+// Sync guard for SoulSeed layout: SeedCertPath (idempotency guard for `soul init`
+// in core.bootstrap.delivered) must match where soul agent actually writes seed:
+// `<paths.seed from soul.yml>/<currentLink>/<CertFile>` from soul/internal/seed.
+// Direct import is impossible (internal of another Go module), so constants are
+// extracted from source.
 
 import (
 	"os"
@@ -26,7 +26,7 @@ func TestSeedCertPath_SyncWithSoulSeedLayout(t *testing.T) {
 	certFile := extractStringConst(t, src, "CertFile")
 	current := extractStringConst(t, src, "currentLink")
 
-	// paths.seed из генерённого soul.yml — то, что soul init получит в конфиге.
+	// paths.seed from generated soul.yml is what soul init receives in config.
 	var cfg struct {
 		Paths struct {
 			Seed string `yaml:"seed"`
@@ -41,7 +41,7 @@ func TestSeedCertPath_SyncWithSoulSeedLayout(t *testing.T) {
 
 	want := path.Join(cfg.Paths.Seed, current, certFile)
 	if soulinstall.SeedCertPath != want {
-		t.Fatalf("SeedCertPath = %q, want %q (layout soul/internal/seed или paths.seed soul.yml разъехались)", soulinstall.SeedCertPath, want)
+		t.Fatalf("SeedCertPath = %q, want %q (layout soul/internal/seed or paths.seed soul.yml drifted)", soulinstall.SeedCertPath, want)
 	}
 }
 
@@ -50,7 +50,7 @@ func extractStringConst(t *testing.T, src []byte, name string) string {
 	re := regexp.MustCompile(`\b` + regexp.QuoteMeta(name) + `\s*=\s*"([^"]+)"`)
 	m := re.FindSubmatch(src)
 	if m == nil {
-		t.Fatalf("константа %s не найдена в soul/internal/seed/seed.go", name)
+		t.Fatalf("constant %s not found in soul/internal/seed/seed.go", name)
 	}
 	return string(m[1])
 }

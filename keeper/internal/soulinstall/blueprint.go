@@ -1,29 +1,28 @@
-// Package soulinstall — canonical install-blueprint для разворачивания
-// soul-агента на свежей VM. Единый источник правды для двух путей доставки:
+// Package soulinstall is canonical install blueprint for deploying soul agent
+// on a fresh VM. Single source of truth for two delivery paths:
 //
 //   - cloud-init userdata (B-flat, [ADR-017(h)](../../../docs/adr/0017-keeper-side-core.md)):
-//     [RenderCloudInitYAML] печатает cloud-config YAML, провайдер кладёт в
-//     metadata VM при Create. Используется `core.cloud.created`.
-//   - full-install по SSH (Teleport, [ADR-063 amendment](../../../docs/adr/0063-bootstrap-token-delivery.md)):
-//     [RenderInstallScript] выдаёт последовательность SSH-команд для платформ
-//     без cloud-init userdata (напр. WB namespace без `ci_user_data`). Секреты
-//     (CA, soul.yml) идут через STDIN, не argv. ПОКА фундамент — вызовётся в
-//     Слайсе 2 (install-режим `core.bootstrap.delivered`).
+//     [RenderCloudInitYAML] prints cloud-config YAML, provider puts it into VM
+//     metadata during Create. Used by `core.cloud.created`.
+//   - full install over SSH (Teleport, [ADR-063 amendment](../../../docs/adr/0063-bootstrap-token-delivery.md)):
+//     [RenderInstallScript] returns sequence of SSH commands for platforms
+//     without cloud-init userdata (e.g. WB namespace without `ci_user_data`).
+//     Secrets (CA, soul.yml) go through STDIN, not argv. Foundation for now:
+//     called in Slice 2 (install mode `core.bootstrap.delivered`).
 //
-// Blueprint описывает ОДИН и тот же install-результат: те же файлы по тем же
-// путям с теми же правами (константы ниже), тот же soul.yml и systemd-unit.
-// Истинный единый источник: содержимое soul.yml/unit задают функции
-// SoulConfigYAML/SystemdUnit, а cloud-init-шаблон рендерит их через
-// {{ .SoulConfigYAMLIndented }} / {{ .SystemdUnitIndented }} (не текстовая
-// копия) — оба рендерера физически берут один и тот же материал, drift
-// невозможен. Единственное намеренное расхождение между путями — права
-// keeper-ca.pem: 0600 при SSH-install (floor построже) vs 0644 в cloud-init
-// (CA публичен); см. KeeperCAMode.
+// Blueprint describes ONE same install result: same files by same paths with
+// same modes (constants below), same soul.yml and systemd unit. True single
+// source: soul.yml/unit contents are produced by SoulConfigYAML/SystemdUnit, and
+// cloud-init template renders them through {{ .SoulConfigYAMLIndented }} /
+// {{ .SystemdUnitIndented }} (not text copy); both renderers physically take the
+// same material, making drift impossible. Only intentional difference between
+// paths is keeper-ca.pem mode: 0600 in SSH install (stricter floor) vs 0644 in
+// cloud-init (CA is public); see KeeperCAMode.
 //
-// ★ Per-VM bootstrap-токен blueprint НЕ несёт (ни в одном рендерере): userdata
-// логируется провайдером (security floor), токен — отдельный шаг scenario
-// (см. ADR-017(h) B-flat). RenderInstallScript НЕ включает token-write и
-// `systemctl start` — это добавляет delivered-режим в Слайсе 2.
+// Per-VM bootstrap token is NOT carried by blueprint (in either renderer):
+// userdata is logged by provider (security floor), token is a separate scenario
+// step (see ADR-017(h) B-flat). RenderInstallScript does NOT include token write
+// and `systemctl start`; delivered mode adds that in Slice 2.
 package soulinstall
 
 import (
@@ -40,116 +39,119 @@ import (
 //go:embed templates/cloud-init.tmpl
 var templatesFS embed.FS
 
-// parsedTemplate — один раз распарсенный cloud-init template из embed.FS.
-// parse-time проверяется тестом happy-path; ошибка тут — bug в коде
-// (template byte-compiled из go:embed), а не runtime-issue.
+// parsedTemplate is cloud-init template from embed.FS parsed once. Parse time is
+// checked by happy-path test; error here is code bug (template byte-compiled
+// from go:embed), not runtime issue.
 var parsedTemplate = template.Must(
 	template.New("cloud-init.tmpl").ParseFS(templatesFS, "templates/cloud-init.tmpl"),
 )
 
-// Канонические пути и права install-результата — единый источник для обоих
-// рендереров. RenderInstallScript собирает install-команды по этим константам
-// напрямую; cloud-init.tmpl держит пути в write_files/runcmd, а тело файлов
-// (soul.yml/unit) рендерит из SoulConfigYAML/SystemdUnit (см. RenderCloudInitYAML).
+// Canonical paths and modes of install result are single source for both
+// renderers. RenderInstallScript builds install commands directly from these
+// constants; cloud-init.tmpl keeps paths in write_files/runcmd, while file bodies
+// (soul.yml/unit) are rendered from SoulConfigYAML/SystemdUnit (see
+// RenderCloudInitYAML).
 const (
-	// TLSDir — каталог TLS-материала soul-агента на VM.
+	// TLSDir is directory for soul agent TLS material on VM.
 	TLSDir = "/etc/soul/tls"
-	// KeeperCAPath — PEM CA Keeper-а (pin Bootstrap-канала souls↔keeper mTLS).
+	// KeeperCAPath is Keeper CA PEM (pin Bootstrap channel souls<->keeper mTLS).
 	KeeperCAPath = "/etc/soul/tls/keeper-ca.pem"
-	// SoulConfigPath — минимальный конфиг soul-агента (keeper.endpoints + ca).
+	// SoulConfigPath is minimal soul agent config (keeper.endpoints + ca).
 	SoulConfigPath = "/etc/soul/soul.yml"
-	// SoulServicePath — systemd-unit soul-агента.
+	// SoulServicePath is systemd unit of soul agent.
 	SoulServicePath = "/etc/systemd/system/soul.service"
-	// SoulBinaryPath — путь установки soul-бинаря.
+	// SoulBinaryPath is soul binary install path.
 	SoulBinaryPath = "/usr/local/bin/soul"
-	// SeedCertPath — cert.pem активного SoulSeed на VM: <paths.seed из
-	// SoulConfigYAML>/current/cert.pem (layout soul/internal/seed, симлинк
-	// `current` + CertFile). Существование файла = токен уже redeem-нут — guard
-	// идемпотентности `soul init` в core.bootstrap.delivered (токен single-use).
+	// SeedCertPath is cert.pem of active SoulSeed on VM: <paths.seed from
+	// SoulConfigYAML>/current/cert.pem (layout soul/internal/seed, symlink
+	// `current` + CertFile). File existence means token already redeemed:
+	// idempotency guard for `soul init` in core.bootstrap.delivered (token is
+	// single-use).
 	// Sync-guard: TestSeedCertPath_SyncWithSoulSeedLayout.
 	SeedCertPath = "/var/lib/soul-stack/seed/current/cert.pem"
-	// SelfOnboardTokensPath — файл map FQDN→token на VM (self-onboard Вариант T).
-	// cloud-init выбирает свой токен по hostname и делает `soul init`. Права 0600
-	// (несёт секреты, тест-стенд). См. Blueprint.SelfOnboardTokens.
+	// SelfOnboardTokensPath is FQDN->token map file on VM (self-onboard Variant T).
+	// cloud-init chooses its token by hostname and runs `soul init`. Mode 0600
+	// (carries secrets, test stand). See Blueprint.SelfOnboardTokens.
 	SelfOnboardTokensPath = "/etc/soul/self-onboard-tokens"
 
-	// KeeperCAMode — права keeper-ca.pem при SSH-install (0600; в cloud-init
-	// тот же файл пишется write_files-ом с 0644 — оба варианта приватнее не
-	// требуются: CA публичен, но SSH-install ставит floor построже).
+	// KeeperCAMode is keeper-ca.pem mode for SSH install (0600; in cloud-init same
+	// file is written by write_files with 0644; neither needs more privacy: CA is
+	// public, but SSH install sets stricter floor).
 	KeeperCAMode = "0600"
-	// SoulBinaryMode — права soul-бинаря (исполняемый).
+	// SoulBinaryMode is soul binary mode (executable).
 	SoulBinaryMode = "0755"
 )
 
-// Значения SoulBinaryCA — какой trust-store использует curl при скачивании
-// soul-бинаря. Пустое значение трактуется как SoulBinaryCAKeeper (back-compat
-// secure-default). Ослабляет ТОЛЬКО верификацию cert artifact-хоста; Bootstrap-
-// канал (souls↔keeper mTLS) и SHA256-verify бинаря не затрагиваются.
+// SoulBinaryCA values define which trust store curl uses when downloading soul
+// binary. Empty value is treated as SoulBinaryCAKeeper (back-compat
+// secure-default). It relaxes ONLY certificate verification of artifact host;
+// Bootstrap channel (souls<->keeper mTLS) and binary SHA256 verification are
+// unaffected.
 const (
-	// SoulBinaryCAKeeper — pin на PEM-CA Keeper-а (`curl --cacert keeper-ca.pem`).
+	// SoulBinaryCAKeeper pins Keeper PEM CA (`curl --cacert keeper-ca.pem`).
 	SoulBinaryCAKeeper = "keeper"
-	// SoulBinaryCASystem — OS-trust bundle (`curl` без `--cacert`); для artifact-
-	// хостов с публичным CA (например, Nexus за GlobalSign).
+	// SoulBinaryCASystem uses OS trust bundle (`curl` without `--cacert`); for
+	// artifact hosts with public CA (for example Nexus behind GlobalSign).
 	SoulBinaryCASystem = "system"
 )
 
-// Blueprint — резолвленные параметры install-результата (cloud-init или SSH).
-// Собирается из [shared/config.KeeperCloudInit] на каждом рендер-вызове
-// (hot-reload-friendly). Источник полей — один блок keeper.yml::cloud_init,
-// общий для обоих путей доставки (config-reuse, DRY).
+// Blueprint is resolved parameters of install result (cloud-init or SSH). Built
+// from [shared/config.KeeperCloudInit] on each render call (hot-reload friendly).
+// Source of fields is one keeper.yml::cloud_init block shared by both delivery
+// paths (config reuse, DRY).
 type Blueprint struct {
-	// BootstrapEndpoint — `host:port` LB Keeper-а (Bootstrap-RPC listener).
-	// host идёт в soul.yml keeper.endpoints[0].host, port — в bootstrap_port.
+	// BootstrapEndpoint is `host:port` of Keeper LB (Bootstrap RPC listener).
+	// host goes to soul.yml keeper.endpoints[0].host, port to bootstrap_port.
 	BootstrapEndpoint string
 
-	// EventStreamPort — TCP-порт EventStream-фазы (mTLS-listener) того же
-	// host-а; идёт в soul.yml event_stream_port. 0 → порт bootstrap_endpoint
-	// (back-compat: single-port LB). См. 6-ю стену ADR-063: оба порта из одного
-	// endpoint → soul dial-ил EventStream на Bootstrap-порт.
+	// EventStreamPort is TCP port of EventStream phase (mTLS listener) on same
+	// host; goes to soul.yml event_stream_port. 0 -> bootstrap_endpoint port
+	// (back-compat: single-port LB). See 6th wall of ADR-063: both ports from one
+	// endpoint made soul dial EventStream on Bootstrap port.
 	EventStreamPort int
 
-	// KeeperCAPem — PEM-encoded CA Keeper-а (содержимое `ca`-поля из Vault KV).
-	// Пишется на VM по [KeeperCAPath]; затем curl --cacert использует его при
-	// скачивании soul-бинаря (в режиме SoulBinaryCAKeeper).
+	// KeeperCAPem is PEM-encoded Keeper CA (contents of `ca` field from Vault KV).
+	// Written to VM at [KeeperCAPath]; then curl --cacert uses it when downloading
+	// soul binary (in SoulBinaryCAKeeper mode).
 	KeeperCAPem string
 
-	// SoulBinaryURL — HTTPS URL для скачивания `soul`-бинаря. Plain http
-	// отвергается (security: только над TLS, независимо от SoulBinaryCA).
+	// SoulBinaryURL is HTTPS URL for downloading `soul` binary. Plain http is
+	// rejected (security: only over TLS, regardless of SoulBinaryCA).
 	SoulBinaryURL string
 
-	// SoulBinaryCA — trust-store для curl при скачивании бинаря:
-	// SoulBinaryCAKeeper (default/пусто) → `--cacert keeper-ca.pem`;
-	// SoulBinaryCASystem → системный bundle (без `--cacert`, для публичных CA).
-	// Ослабляет ТОЛЬКО верификацию cert artifact-хоста; Bootstrap-канал и
-	// SHA256-verify бинаря не затрагиваются.
+	// SoulBinaryCA is trust store for curl when downloading binary:
+	// SoulBinaryCAKeeper (default/empty) -> `--cacert keeper-ca.pem`;
+	// SoulBinaryCASystem -> system bundle (without `--cacert`, for public CAs).
+	// Relaxes ONLY artifact host certificate verification; Bootstrap channel and
+	// binary SHA256 verification are unaffected.
 	SoulBinaryCA string
 
-	// SoulVersion — опц. строка-метка (для диагностики). В cloud-init попадает
-	// комментарием. Sig-verify бинаря отложен (ADR-017(h) amendment).
+	// SoulVersion is optional string label (for diagnostics). Goes to cloud-init
+	// as comment. Binary signature verification is deferred (ADR-017(h) amendment).
 	SoulVersion string
 
-	// SelfOnboardTokens — map FQDN→plain-bootstrap-token для self-onboard
-	// «Вариант T» (ADR-017(h) amendment). Непустой → cloud-init запекает эти
-	// токены в userdata (общий blob) и добавляет фазу `soul init` (токен
-	// выбирается по hostname VM), между установкой бинаря и `soul run`. VM сама
-	// онбордится в один цикл cloud-init, без claim-callback и без keeper.push.
+	// SelfOnboardTokens is map FQDN->plain bootstrap token for self-onboard
+	// "Variant T" (ADR-017(h) amendment). Non-empty -> cloud-init bakes these
+	// tokens into userdata (shared blob) and adds `soul init` phase (token selected
+	// by VM hostname), between binary install and `soul run`. VM onboards itself
+	// in one cloud-init cycle, without claim callback and without keeper.push.
 	//
-	// ★ БЕЗОПАСНОСТЬ (тест-стенд): в этом режиме plain-токены попадают в userdata,
-	// который cloud-провайдер хранит в plaintext metadata. Это осознанный компромисс
-	// self-onboard тест-стенда (снимает security-guard `bootstrap_token` — см.
-	// RenderCloudInitYAML). TODO(prod): для прода вернуть late-binding claim (Вариант
-	// C) или per-VM userdata (individual blob на VM вместо общего map).
+	// SECURITY (test stand): in this mode plain tokens land in userdata, which
+	// cloud provider stores in plaintext metadata. This is a deliberate compromise
+	// of self-onboard test stand (removes security guard `bootstrap_token`; see
+	// RenderCloudInitYAML). TODO(prod): return late-binding claim (Variant C) or
+	// per-VM userdata (individual blob per VM instead of shared map).
 	//
-	// Пустой/nil → обычный B-flat рендер (токенов в userdata нет, guard активен).
+	// Empty/nil -> regular B-flat render (no tokens in userdata, guard active).
 	SelfOnboardTokens map[string]string
 }
 
-// selfOnboard — режим self-onboard (Blueprint несёт per-VM токены).
+// selfOnboard reports self-onboard mode (Blueprint carries per-VM tokens).
 func (b Blueprint) selfOnboard() bool { return len(b.SelfOnboardTokens) > 0 }
 
-// Validate проверяет, что Blueprint заполнен достаточно для рендера. Возвращает
-// первую найденную ошибку с понятным сообщением (несколько ошибок поднимать не
-// нужно: config-фаза уже отловила format-issues, тут — runtime-precondition).
+// Validate checks that Blueprint is filled enough for rendering. Returns first
+// found error with clear message (no need to raise several errors: config phase
+// already caught format issues, here it is runtime precondition).
 func (b Blueprint) Validate() error {
 	if b.BootstrapEndpoint == "" {
 		return errors.New("cloud_init.bootstrap_endpoint is empty")
@@ -167,7 +169,7 @@ func (b Blueprint) Validate() error {
 		return fmt.Errorf("cloud_init.soul_binary_url %q must be https (CA over TLS only, plain http rejected)", b.SoulBinaryURL)
 	}
 	if b.EventStreamPort < 0 || b.EventStreamPort > 65535 {
-		return fmt.Errorf("cloud_init.event_stream_port %d must be in 1..65535 (0 = порт bootstrap_endpoint)", b.EventStreamPort)
+		return fmt.Errorf("cloud_init.event_stream_port %d must be in 1..65535 (0 = bootstrap_endpoint port)", b.EventStreamPort)
 	}
 	switch b.SoulBinaryCA {
 	case "", SoulBinaryCAKeeper, SoulBinaryCASystem:
@@ -178,15 +180,15 @@ func (b Blueprint) Validate() error {
 	return nil
 }
 
-// useSystemCA — curl без `--cacert` (системный trust-store). Влияет ТОЛЬКО на
-// скачивание бинаря; keeper-ca.pem всё равно пишется на VM — Bootstrap-канал
-// (souls↔keeper mTLS) пинится на keeper-CA всегда.
+// useSystemCA means curl without `--cacert` (system trust store). It affects
+// ONLY binary download; keeper-ca.pem is still written to VM, and Bootstrap
+// channel (souls<->keeper mTLS) is always pinned to Keeper CA.
 func (b Blueprint) useSystemCA() bool {
 	return b.SoulBinaryCA == SoulBinaryCASystem
 }
 
-// hostPort разбирает BootstrapEndpoint в host + валидированный TCP-порт.
-// Вызывается после Validate (формат уже проверен), но port-range пере-проверяет.
+// hostPort parses BootstrapEndpoint into host + validated TCP port. Called after
+// Validate (format already checked), but re-checks port range.
 func (b Blueprint) hostPort() (string, int, error) {
 	host, portStr, _ := net.SplitHostPort(b.BootstrapEndpoint)
 	port, err := strconv.Atoi(portStr)
@@ -196,8 +198,8 @@ func (b Blueprint) hostPort() (string, int, error) {
 	return host, port, nil
 }
 
-// soulEndpoint — host + пара портов для soul.yml. EventStreamPort==0 →
-// fallback на bootstrap-порт (back-compat: single-port LB).
+// soulEndpoint is host + pair of ports for soul.yml. EventStreamPort==0 ->
+// fallback to bootstrap port (back-compat: single-port LB).
 func (b Blueprint) soulEndpoint() (host string, eventPort, bootstrapPort int, err error) {
 	host, bootstrapPort, err = b.hostPort()
 	if err != nil {
@@ -210,13 +212,13 @@ func (b Blueprint) soulEndpoint() (host string, eventPort, bootstrapPort int, er
 	return host, eventPort, bootstrapPort, nil
 }
 
-// RenderCloudInitYAML рендерит cloud-config YAML по cloud-init template.
-// Идемпотентна: на тех же входах даёт байт-идентичный вывод.
+// RenderCloudInitYAML renders cloud-config YAML from cloud-init template.
+// Idempotent: same inputs produce byte-identical output.
 //
-// Безопасность: вывод проверяется на отсутствие подстроки `bootstrap_token` /
-// `vault:` — защита от случайной утечки секретов из template-а (например, если
-// в Blueprint попадёт строка с такой подстрокой). Это инвариант для всех
-// каналов, куда уходит userdata (cloud-provider metadata, audit-payload, OTel).
+// Security: output is checked for absence of substrings `bootstrap_token` /
+// `vault:`; guard against accidental secret leak from template (for example if a
+// Blueprint field contains such substring). This is invariant for all channels
+// receiving userdata (cloud-provider metadata, audit payload, OTel).
 func RenderCloudInitYAML(bp Blueprint) (string, error) {
 	if err := bp.Validate(); err != nil {
 		return "", err
@@ -226,10 +228,10 @@ func RenderCloudInitYAML(bp Blueprint) (string, error) {
 		return "", err
 	}
 
-	// Тело soul.yml и systemd-unit рендерятся ИЗ тех же Go-функций
-	// (SoulConfigYAML/SystemdUnit), что использует RenderInstallScript, —
-	// единый источник правды без текстового дубля в шаблоне. Indent 6 пробелов
-	// кладёт блок под YAML-ключ `content: |` (как indentBlock для CA PEM).
+	// Body of soul.yml and systemd unit is rendered FROM the same Go functions
+	// (SoulConfigYAML/SystemdUnit) used by RenderInstallScript: single source of
+	// truth without text duplicate in template. Indent 6 spaces puts block under
+	// YAML key `content: |` (like indentBlock for CA PEM).
 	view := struct {
 		TLSCAPemIndented          string
 		SoulConfigYAMLIndented    string
@@ -258,46 +260,46 @@ func RenderCloudInitYAML(bp Blueprint) (string, error) {
 	}
 	out := sb.String()
 
-	// Security floor: userdata НЕ должен нести vault-ref (секреты резолвятся ДО
-	// рендера) — держится ВСЕГДА, включая self-onboard (в userdata легитимны
-	// только bootstrap-токены, но не vault-пути).
+	// Security floor: userdata must NOT carry vault-ref (secrets are resolved
+	// BEFORE render). Always enforced, including self-onboard (userdata may
+	// legitimately carry bootstrap tokens, but not vault paths).
 	if strings.Contains(out, "vault:") {
 		return "", errors.New("cloud-init render: output contains 'vault:' substring — vault-refs must be resolved before render")
 	}
-	// Security floor `bootstrap_token`: userdata НЕ должен нести токены (B-flat).
-	// ★ СНИМАЕТСЯ в self-onboard-режиме (Вариант T, тест-стенд): там per-VM токены
-	// в userdata — намеренно (VM онбордится в один цикл cloud-init). Вне
-	// self-onboard guard активен как раньше (защита от случайной утечки).
-	// TODO(prod): вернуть guard для прода (late-binding claim / per-VM userdata).
+	// Security floor `bootstrap_token`: userdata must NOT carry tokens (B-flat).
+	// Disabled in self-onboard mode (Variant T, test stand): per-VM tokens in
+	// userdata are intentional there (VM onboards in one cloud-init cycle).
+	// Outside self-onboard, guard remains active as before (accidental leak guard).
+	// TODO(prod): restore guard for prod (late-binding claim / per-VM userdata).
 	if !bp.selfOnboard() && strings.Contains(out, "bootstrap_token") {
 		return "", errors.New("cloud-init render: output contains 'bootstrap_token' substring — userdata must not carry per-VM tokens (B-flat invariant)")
 	}
 	return out, nil
 }
 
-// InstallStep — одна SSH-команда install-последовательности. Cmd — строка для
-// `session.Run` (попадёт в argv процесса на VM); Stdin — данные, скармливаемые
-// процессу через stdin (nil — без stdin). Секреты ОБЯЗАНЫ идти через Stdin, а
-// НЕ через Cmd — argv виден в `ps`/audit.log/journald на самой VM (ADR-063 §A1).
+// InstallStep is one SSH command of install sequence. Cmd is string for
+// `session.Run` (lands in process argv on VM); Stdin is data fed to process via
+// stdin (nil means no stdin). Secrets MUST go through Stdin, NOT Cmd: argv is
+// visible in `ps`/audit.log/journald on the VM itself (ADR-063 §A1).
 type InstallStep struct {
 	Cmd   string
 	Stdin []byte
 }
 
-// RenderInstallScript выдаёт последовательность SSH-команд, ставящих тот же
-// install-результат, что [RenderCloudInitYAML], для платформ без cloud-init
-// userdata (full-install по SSH, ADR-063 amendment). Порядок:
+// RenderInstallScript returns sequence of SSH commands installing the same
+// install result as [RenderCloudInitYAML], for platforms without cloud-init
+// userdata (full install over SSH, ADR-063 amendment). Order:
 //
-//  1. install -d каталоги (TLS-dir 0600 + soul-state-каталоги).
+//  1. install -d directories (TLS dir 0600 + soul state directories).
 //  2. cat > keeper-ca.pem (Stdin=CA PEM) + chmod 0600.
-//  3. cat > soul.yml (Stdin=soul.yml-контент).
+//  3. cat > soul.yml (Stdin=soul.yml content).
 //  4. cat > soul.service (Stdin=systemd-unit).
-//  5. curl soul-бинарь (--cacert keeper-ca.pem в keeper-режиме, без — в system)
+//  5. curl soul binary (--cacert keeper-ca.pem in keeper mode, absent in system)
 //     + chmod 0755.
 //
-// ★ НЕ включает token-write и `systemctl start` — это добавляет delivered-режим
-// (Слайс 2). ★ CA и soul.yml идут через Stdin (не argv) — secret-write floor.
-// ПОКА никем не вызывается: фундамент под Слайс 2.
+// Does NOT include token write and `systemctl start`: delivered mode adds this
+// (Slice 2). CA and soul.yml go through Stdin (not argv): secret-write floor.
+// Not called by anyone yet: foundation for Slice 2.
 func RenderInstallScript(bp Blueprint) ([]InstallStep, error) {
 	if err := bp.Validate(); err != nil {
 		return nil, err
@@ -323,9 +325,9 @@ func RenderInstallScript(bp Blueprint) ([]InstallStep, error) {
 	return steps, nil
 }
 
-// binaryCurlCmd — curl-команда скачивания soul-бинаря. В keeper-режиме пинится
-// на keeper-CA (`--cacert`); в system-режиме — системный trust-store (без
-// `--cacert`). Та же семантика, что runcmd cloud-init-шаблона.
+// binaryCurlCmd is curl command for downloading soul binary. In keeper mode it
+// pins Keeper CA (`--cacert`); in system mode uses system trust store (without
+// `--cacert`). Same semantics as runcmd in cloud-init template.
 func binaryCurlCmd(url string, systemCA bool) string {
 	if systemCA {
 		return fmt.Sprintf("curl --fail --show-error --silent --output %s %s", SoulBinaryPath, url)
@@ -333,12 +335,12 @@ func binaryCurlCmd(url string, systemCA bool) string {
 	return fmt.Sprintf("curl --fail --show-error --silent --cacert %s --output %s %s", KeeperCAPath, SoulBinaryPath, url)
 }
 
-// selfOnboardTokensFile сериализует map FQDN→token в построчный формат
-// `<fqdn> <token>` (self-onboard Вариант T). Формат grep/awk-friendly: cloud-init
-// выбирает свою строку по `$(hostname -f)` первым полем. FQDN отсортированы —
-// байт-стабильность рендера (map iteration в Go недетерминирован). Токены
-// base64url без пробелов (bootstraptoken.Generate), поэтому split по пробелу
-// однозначен.
+// selfOnboardTokensFile serializes map FQDN->token into line format
+// `<fqdn> <token>` (self-onboard Variant T). Format is grep/awk-friendly:
+// cloud-init selects its line by `$(hostname -f)` as first field. FQDNs are
+// sorted for byte stability of render (Go map iteration is nondeterministic).
+// Tokens are base64url without spaces (bootstraptoken.Generate), so split by
+// space is unambiguous.
 func selfOnboardTokensFile(tokens map[string]string) string {
 	fqdns := make([]string, 0, len(tokens))
 	for fqdn := range tokens {
@@ -355,15 +357,15 @@ func selfOnboardTokensFile(tokens map[string]string) string {
 	return b.String()
 }
 
-// SoulConfigYAML — содержимое soul.yml (минимальный конфиг soul-агента для
-// bootstrap: keeper.endpoints + pin CA). Единый источник: эта же функция даёт
-// тело soul.yml и для SSH-install (RenderInstallScript), и для cloud-init
-// (RenderCloudInitYAML подставляет вывод под write_files /etc/soul/soul.yml).
-// Порты фаз разные: eventStreamPort — EventStream (mTLS), bootstrapPort —
-// Bootstrap-RPC (см. 6-ю стену ADR-063).
+// SoulConfigYAML is contents of soul.yml (minimal soul agent config for
+// bootstrap: keeper.endpoints + pin CA). Single source: this same function
+// provides soul.yml body for both SSH install (RenderInstallScript) and
+// cloud-init (RenderCloudInitYAML substitutes output under write_files
+// /etc/soul/soul.yml). Phase ports differ: eventStreamPort is EventStream
+// (mTLS), bootstrapPort is Bootstrap RPC (see 6th wall of ADR-063).
 func SoulConfigYAML(host string, eventStreamPort, bootstrapPort int) string {
-	return fmt.Sprintf(`# Минимальный конфиг soul-агента для cloud-init bootstrap.
-# Per-VM-токен и SoulSeed-сертификат добавит следующий шаг scenario.
+	return fmt.Sprintf(`# Minimal soul agent config for cloud-init bootstrap.
+# Per-VM token and SoulSeed certificate will be added by next scenario step.
 paths:
   modules: /var/lib/soul-stack/modules
   seed:    /var/lib/soul-stack/seed
@@ -377,9 +379,9 @@ keeper:
 `, host, eventStreamPort, bootstrapPort, KeeperCAPath)
 }
 
-// SystemdUnit — содержимое soul.service. Единый источник: эта же функция даёт
-// тело unit-а и для SSH-install (RenderInstallScript), и для cloud-init
-// (RenderCloudInitYAML подставляет вывод под write_files soul.service).
+// SystemdUnit is contents of soul.service. Single source: this same function
+// provides unit body for both SSH install (RenderInstallScript) and cloud-init
+// (RenderCloudInitYAML substitutes output under write_files soul.service).
 func SystemdUnit() string {
 	return fmt.Sprintf(`[Unit]
 Description=Soul Stack agent
@@ -397,11 +399,11 @@ WantedBy=multi-user.target
 `, SoulBinaryPath, SoulConfigPath)
 }
 
-// indentBlock сдвигает каждую строку текстового блока на `prefix`, чтобы он лёг
-// под YAML-ключ с heredoc-style `content: |` (cloud-config). Используется для CA
-// PEM, soul.yml и systemd-unit — все три кладутся в шаблон одним механизмом.
-// Trailing newline отбрасывается (TrimRight), чтобы между блоком и следующим
-// YAML-ключом был ровно один break, а не пустая строка со сдвигом.
+// indentBlock shifts each line of text block by `prefix` so it lands under YAML
+// key with heredoc-style `content: |` (cloud-config). Used for CA PEM, soul.yml,
+// and systemd unit: all three are put into template by one mechanism. Trailing
+// newline is dropped (TrimRight) so there is exactly one break between block and
+// next YAML key, not an empty shifted line.
 func indentBlock(block, prefix string) string {
 	lines := strings.Split(strings.TrimRight(block, "\n"), "\n")
 	for i, l := range lines {
