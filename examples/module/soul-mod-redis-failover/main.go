@@ -1,12 +1,12 @@
-// Скелет custom-модуля Soul Stack на Go.
+// Skeleton of a custom Soul Stack module in Go.
 //
-// Соберётся в один статический бинарь `soul-mod-redis-failover` через `go build`.
-// Soul при apply Destiny-шага вида `module: wb.redis-failover.promoted` запустит
-// этот бинарь как sub-process, сделает gRPC-stdio handshake (см. sdk/handshake)
-// и будет звать RPC-методы SoulModule.
+// Builds into a single static binary `soul-mod-redis-failover` via `go build`.
+// Soul will run this binary when applying a Destiny step like `module: wb.redis-failover.promoted`
+// as a sub-process, perform gRPC-stdio handshake (see sdk/handshake)
+// and call SoulModule RPC methods.
 //
-// Это иллюстрация — для production-кода добавьте резолв vault-ссылок, идемпотентность,
-// OTel-трассировки шагов и реальную работу с redis-cli.
+// This is an illustration — for production code add vault link resolution, idempotency,
+// OTel step tracing and real redis-cli interaction.
 
 package main
 
@@ -21,23 +21,23 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// RedisFailover — реализация SoulModule для state `promoted` (switchover Redis-replica).
+// RedisFailover is a SoulModule implementation for the `promoted` state (Redis replica switchover).
 //
-// BaseModule даёт no-op-дефолты Validate/Plan; здесь переопределяем все три RPC,
-// чтобы показать типовой набор шагов.
+// BaseModule provides no-op defaults for Validate/Plan; here we override all three RPC methods,
+// to demonstrate a typical set of steps.
 type RedisFailover struct {
 	module.BaseModule
 }
 
-// Validate — runtime-проверки параметров поверх statических от soul-lint.
+// Validate performs runtime checks of parameters on top of static checks from soul-lint.
 func (r *RedisFailover) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
-	// TODO: убедиться, что new_master_sid не равен текущему master-у; что replica
-	// с таким SID есть в кластере; что vault-ссылка password резолвится.
+	// TODO: verify that new_master_sid is not equal to the current master; that a replica
+	// with such SID exists in the cluster; that vault link password resolves.
 	_ = req
 	return &pluginv1.ValidateReply{Ok: true}, nil
 }
 
-// Plan — dry-run: какие шаги будут выполнены.
+// Plan is a dry-run: which steps will be executed.
 func (r *RedisFailover) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
 	newMaster := paramString(req.Params, "new_master_sid")
 	for _, msg := range []string{
@@ -52,8 +52,8 @@ func (r *RedisFailover) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStream
 	return nil
 }
 
-// Apply — реальная работа со стримингом прогресса. Финальное событие переносит
-// changed/failed + output (см. ApplyEvent в proto/plugin/v1/soulmodule.proto).
+// Apply performs real work with progress streaming. The final event carries
+// changed/failed + output (see ApplyEvent in proto/plugin/v1/soulmodule.proto).
 func (r *RedisFailover) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
 	password := paramString(req.Params, "password")
 	newMaster := paramString(req.Params, "new_master_sid")
@@ -65,7 +65,7 @@ func (r *RedisFailover) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStre
 		if err := stream.Send(&pluginv1.ApplyEvent{Message: msg + ": running"}); err != nil {
 			return err
 		}
-		// TODO: реальная работа redis-cli.
+		// TODO: real redis-cli interaction.
 		if err := stream.Send(&pluginv1.ApplyEvent{Message: msg + ": ok"}); err != nil {
 			return err
 		}
