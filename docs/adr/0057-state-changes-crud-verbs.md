@@ -1,65 +1,65 @@
-# ADR-057. `state_changes` — упорядоченный список CRUD-глаголов (`set`/`add`/`modify`/`remove`)
+# ADR-057. `state_changes` — an ordered list of CRUD verbs (`set`/`add`/`modify`/`remove`)
 
-- **Контекст.** Грамматика `state_changes` из [ADR-009 §7.1](0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) определяла три ключа: `sets` (map `<поле>: <CEL>`, реализован) и `appends`/`modifies` (списки field-path). Последние два были **декларацией-плейсхолдером без источника значения** — движком не применялись (см. [orchestration.md §7.1 «`appends`/`modifies` — future»](../scenario/orchestration.md#71-грамматика-state_changes--список-crud-операций)). Это латентный баг: сценарий с `appends: [redis_hosts]` (`add_replica`, `add_replicas`, `add_user`) проходил успешно, но `incarnation.state` **не рос** — добавленный хост/пользователь не оседал в state. `modifies` (`update_acl`) аналогично — патч коллекции не применялся. Корень в том, что `appends`/`modifies` несли только **field-path** (что трогать), без **источника значения** (что записать) и без **предиката** (какой элемент). А `sets` умеет только перезапись поля целиком — для роста коллекций и точечного патча элементов её не хватает.
+- **Context.** The `state_changes` grammar from [ADR-009 §7.1](0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) defined three keys: `sets` (a map `<field>: <CEL>`, implemented) and `appends`/`modifies` (lists of field-paths). The latter two were a **placeholder declaration with no value source** — they were not applied by the engine (see [orchestration.md §7.1 «`appends`/`modifies` — future»](../scenario/orchestration.md#71-грамматика-state_changes--список-crud-операций)). This is a latent bug: a scenario with `appends: [redis_hosts]` (`add_replica`, `add_replicas`, `add_user`) passed successfully, but `incarnation.state` **did not grow** — the added host/user did not settle into the state. `modifies` (`update_acl`) likewise — the collection patch was not applied. The root cause is that `appends`/`modifies` carried only a **field-path** (what to touch), without a **value source** (what to write) and without a **predicate** (which element). And `sets` can only overwrite a field wholesale — it is not enough for growing collections and pointwise patching of elements.
 
-  Параллельно `sets` — map, то есть **неупорядоченный**: при росте грамматики (несколько мутаций одной коллекции, зависимых по порядку) map не задаёт детерминированной последовательности применения.
+  In parallel, `sets` is a map, i.e. **unordered**: as the grammar grows (several order-dependent mutations of one collection) a map does not define a deterministic application sequence.
 
-- **Решение.** `state_changes` — **упорядоченный список операций** (YAML-список, не map). Каждый элемент — ровно один **CRUD-глагол** (сингуляр): `set` / `add` / `modify` / `remove`. Множественность выражается **match-предикатом** (CEL над элементом коллекции), а не флагами/ручками. Bulk fan-out — структурным `foreach` (форма буквально как migration-DSL [ADR-019](0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)).
+- **Decision.** `state_changes` is an **ordered list of operations** (a YAML list, not a map). Each element is exactly one **CRUD verb** (singular): `set` / `add` / `modify` / `remove`. Multiplicity is expressed by a **match predicate** (CEL over a collection element), not by flags/knobs. Bulk fan-out is via a structural `foreach` (the form is literally like the migration-DSL [ADR-019](0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)).
 
-  ### (a) Глаголы
+  ### (a) Verbs
 
-  - **`set: <field>`** + **`value: "${CEL}"`** — перезапись поля целиком (заменяет прежний `sets`-map; одна запись `sets` ≡ один `set`-элемент списка).
-  - **`add: <collection>`** — добавить элемент в коллекцию:
-    - **map-коллекция:** `key: "${CEL}"` (ключ) + `value: {obj}` (значение записи).
-    - **list-коллекция:** `value: {obj|scalar}` + опц. `match: "<CEL-предикат>"` (дедуп-предикат — если элемент с таким предикатом уже есть, действует `on_conflict`).
-    - **`on_conflict: skip | replace | error`** (DEFAULT `skip`) — поведение при коллизии (ключ map уже занят / list-`match` уже находит элемент). `skip` даёт идемпотентное «добавить, если нет».
-  - **`modify: <collection>`** + **`match: "<CEL-предикат над элементом>"`** + **`patch: { <путь-в-элементе>: "${CEL}" }`** — патч **ВСЕХ** подходящих элементов (all-by-default).
-  - **`remove: <collection>`** + **`match: "<CEL-предикат>"`** — удалить **ВСЕХ** подходящих элементов.
-  - **`foreach: "${CEL-список|map}"`** + **`as: <имя>`** + **`do: { <глагол...> }`** — bulk fan-out N операций из коллекции/map. Внутри `do:` доступны те же глаголы и биндинг `<имя>` к текущему элементу итерации. Форма (`foreach`/`as`/`do`) — буквально из migration-DSL ([ADR-019](0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl), [migrations.md](../migrations.md)); оператор узнаёт уже знакомый паттерн.
+  - **`set: <field>`** + **`value: "${CEL}"`** — overwrite a field wholesale (replaces the former `sets` map; one `sets` entry ≡ one `set` element of the list).
+  - **`add: <collection>`** — add an element to a collection:
+    - **map collection:** `key: "${CEL}"` (the key) + `value: {obj}` (the entry's value).
+    - **list collection:** `value: {obj|scalar}` + optional `match: "<CEL predicate>"` (a dedup predicate — if an element matching this predicate already exists, `on_conflict` applies).
+    - **`on_conflict: skip | replace | error`** (DEFAULT `skip`) — behavior on a collision (the map key is already taken / the list `match` already finds an element). `skip` gives an idempotent "add if absent".
+  - **`modify: <collection>`** + **`match: "<CEL predicate over an element>"`** + **`patch: { <path-in-element>: "${CEL}" }`** — patch **ALL** matching elements (all-by-default).
+  - **`remove: <collection>`** + **`match: "<CEL predicate>"`** — remove **ALL** matching elements.
+  - **`foreach: "${CEL list|map}"`** + **`as: <name>`** + **`do: { <verb...> }`** — bulk fan-out of N operations from a collection/map. Inside `do:` the same verbs are available, plus a binding `<name>` to the current iteration element. The form (`foreach`/`as`/`do`) is literally from the migration-DSL ([ADR-019](0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl), [migrations.md](../migrations.md)); the operator recognizes an already familiar pattern.
 
-  ### (b) CEL-биндинги в `match`/`patch`/`value`
+  ### (b) CEL bindings in `match`/`patch`/`value`
 
-  Поверх полного sets-контекста (`input.*` / `incarnation.*` / `soulprint.self.*` / `register.*` / `vars.*` / `essence.*` — тот же CEL-env, что у `params:` задач, [ADR-010](0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов)) вводятся **локальные биндинги текущего элемента коллекции**:
+  On top of the full sets context (`input.*` / `incarnation.*` / `soulprint.self.*` / `register.*` / `vars.*` / `essence.*` — the same CEL env as for task `params:`, [ADR-010](0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов)) **local bindings of the current collection element** are introduced:
 
-  - **`elem`** — текущий элемент list-коллекции (или скаляр, если коллекция — list of scalars).
-  - **`key`** / **`value`** — ключ и значение текущей записи map-коллекции.
+  - **`elem`** — the current element of a list collection (or a scalar, if the collection is a list of scalars).
+  - **`key`** / **`value`** — the key and value of the current entry of a map collection.
 
-  Имя **`elem`** выбрано вместо `self` намеренно — `self` коллидирует с per-host `soulprint.self`.
+  The name **`elem`** was deliberately chosen instead of `self` — `self` collides with the per-host `soulprint.self`.
 
-  ### (c) `expect` — опц. runtime-ассерт кратности
+  ### (c) `expect` — optional runtime multiplicity assertion
 
-  **`expect: one | at_most_one | any`** (DEFAULT `any`) — необязательный ассерт числа элементов, зацепленных `match` в `modify`/`remove`. Если фактическая кратность ≠ ожидаемой (`one` требует ровно один, `at_most_one` — ноль или один) — прогон уходит в `error_locked` **до коммита** state. Не обязательный ключ; по умолчанию `any` (любое число, в т.ч. ноль).
+  **`expect: one | at_most_one | any`** (DEFAULT `any`) — an optional assertion on the number of elements caught by `match` in `modify`/`remove`. If the actual multiplicity ≠ the expected one (`one` requires exactly one, `at_most_one` — zero or one) the run goes into `error_locked` **before committing** the state. Not a required key; the default is `any` (any number, including zero).
 
-  ### (d) Предохранители широкого match
+  ### (d) Safeguards against a broad match
 
-  - **soul-lint WARN** на константно-истинный предикат: `match: true`, либо отсутствие `match:` на `remove`/`modify` (которое снесло/перепатчило бы всю коллекцию).
-  - **empty-match → no-op** (идемпотентно) для `modify` И `remove`: предикат не зацепил ничего — операция тихо ничего не делает, не ошибка.
+  - **soul-lint WARN** on a constantly-true predicate: `match: true`, or a missing `match:` on `remove`/`modify` (which would wipe/re-patch the entire collection).
+  - **empty-match → no-op** (idempotent) for both `modify` AND `remove`: the predicate caught nothing — the operation quietly does nothing, not an error.
 
-  ### (e) Порядок и атомарность
+  ### (e) Order and atomicity
 
-  - Операции применяются **в порядке объявления**, последовательно, к **промежуточному** state (каждая видит результат предыдущих — детерминированная цепочка).
-  - Вся цепочка — **одна PG-транзакция**, **один `state_history`-snapshot** (как в [ADR-009 §7](0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация)). Фейл любой операции (eval-ошибка CEL, нарушенный `expect`, `on_conflict: error`) → `error_locked`, state **не коммитится** (barrier/state-commit-инвариант §7 не ослаблен — операции применяются ПОСЛЕ cross-host барьера).
+  - Operations are applied **in declaration order**, sequentially, to the **intermediate** state (each sees the result of the previous ones — a deterministic chain).
+  - The entire chain is **one PG transaction**, **one `state_history` snapshot** (as in [ADR-009 §7](0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация)). A failure of any operation (a CEL eval error, a violated `expect`, `on_conflict: error`) → `error_locked`, the state is **not committed** (the §7 barrier/state-commit invariant is not weakened — operations are applied AFTER the cross-host barrier).
 
-  ### (f) Тип коллекции — из state_schema
+  ### (f) Collection type — from state_schema
 
-  Тип коллекции (map vs list) берётся из объявленной `state_schema` (`service.yml`). `add` в отсутствующее поле → материализовать **пустую map/list из схемы** (форма коллекции известна по схеме, даже если значения ещё нет).
+  The collection type (map vs list) is taken from the declared `state_schema` (`service.yml`). `add` into a missing field → materialize an **empty map/list from the schema** (the collection's shape is known from the schema, even if there is no value yet).
 
-  ### (g) Семантика per-RUN
+  ### (g) Per-RUN semantics
 
-  Значения берутся из `input.* / vars.* / incarnation.* / register.*` прогона. Это **per-RUN**, НЕ per-host union. Если выражение даёт разные значения per-host (`${ soulprint.self.* }` / `${ register.* }`) — действует **last-wins по сортировке SID** (как для `sets` в [ADR-009 §7.1](0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация); per-host свёртка коллекций в union — НЕ вводится).
+  Values are taken from the run's `input.* / vars.* / incarnation.* / register.*`. This is **per-RUN**, NOT a per-host union. If an expression yields different per-host values (`${ soulprint.self.* }` / `${ register.* }`) — **last-wins by SID sort order** applies (as for `sets` in [ADR-009 §7.1](0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация); a per-host fold of collections into a union is NOT introduced).
 
-- **Форма каждого глагола на реальных сценариях.**
+- **The form of each verb on real scenarios.**
 
-  **`add` (одиночный) — `add_replica`** (заменяет `appends: [redis_hosts]`):
+  **`add` (single) — `add_replica`** (replaces `appends: [redis_hosts]`):
   ```yaml
   state_changes:
     - add: redis_hosts
       value: "${ vars.new_sid }"
-      match: "elem == vars.new_sid"        # дедуп: тот же SID уже в списке?
-      on_conflict: skip                    # идемпотентно: повтор не дублирует
+      match: "elem == vars.new_sid"        # dedup: is the same SID already in the list?
+      on_conflict: skip                    # idempotent: a repeat does not duplicate
   ```
 
-  **`add` через `foreach` — `add_replicas`** (bulk, заменяет `appends: [redis_hosts]` для пачки):
+  **`add` via `foreach` — `add_replicas`** (bulk, replaces `appends: [redis_hosts]` for a batch):
   ```yaml
   state_changes:
     - foreach: "${ input.new_replicas }"
@@ -71,7 +71,7 @@
           on_conflict: skip
   ```
 
-  **`add` в map — `add_user`** (заменяет `appends: [redis_users]`):
+  **`add` into a map — `add_user`** (replaces `appends: [redis_users]`):
   ```yaml
   state_changes:
     - add: redis_users
@@ -79,24 +79,24 @@
       value:
         acl:   "${ input.acl }"
         state: "on"
-      on_conflict: error                   # двойное создание пользователя — явная ошибка
+      on_conflict: error                   # double creation of a user — an explicit error
   ```
 
-  **`modify` всех подходящих — `update_acl`** (заменяет `modifies: [redis_users.*.acl, redis_users.*.state]`):
+  **`modify` all matching — `update_acl`** (replaces `modifies: [redis_users.*.acl, redis_users.*.state]`):
   ```yaml
   state_changes:
     - modify: redis_users
-      match: "key == input.username"       # точечный патч одной записи map
+      match: "key == input.username"       # pointwise patch of a single map entry
       patch:
         acl:   "${ input.acl }"
         state: "${ input.state }"
   ```
 
-  **`modify` ВСЕХ реплик** (множественность через предикат, без ручек):
+  **`modify` ALL replicas** (multiplicity via a predicate, no knobs):
   ```yaml
   state_changes:
     - modify: redis_hosts
-      match: "elem.role == 'replica'"      # все реплики разом — all-by-default
+      match: "elem.role == 'replica'"      # all replicas at once — all-by-default
       patch:
         config_version: "${ input.version }"
   ```
@@ -106,45 +106,45 @@
   state_changes:
     - remove: redis_hosts
       match: "elem == input.sid"
-      expect: one                          # ассерт: ровно один такой хост был
+      expect: one                          # assert: there was exactly one such host
   ```
 
-- **Множественность — через `match`-предикат, не через ручки/флаги.** `modify`/`remove` патчат/удаляют **всех** подходящих под `match` по умолчанию (all-by-default). Сузить до одного — уточнить предикат (`key == X`, `elem.id == Y`) + опц. `expect: one`. Это сознательный отказ от пары глаголов `*_one`/`*_all` и от флага `all:` (см. отвергнутые альтернативы): один глагол + декларативный предикат покрывают оба кейса без диалекта.
+- **Multiplicity — via a `match` predicate, not via knobs/flags.** `modify`/`remove` patch/remove **all** elements matching `match` by default (all-by-default). To narrow to one — refine the predicate (`key == X`, `elem.id == Y`) + optional `expect: one`. This is a deliberate refusal of the verb pair `*_one`/`*_all` and of an `all:` flag (see rejected alternatives): one verb + a declarative predicate cover both cases without a dialect.
 
-- **Transit-план (breaking, dual-parse один релиз).** `state_changes` меняет форму **map → list**. Один релиз keeper парсит **обе** формы (dual-parse):
-  - Новая форма — список глаголов (канон выше).
-  - Старая map-форма (`sets:` / `appends:` / `modifies:`) парсится как **DEPRECATED**, soul-lint выдаёт warn. `sets`-map транслируется в эквивалентную последовательность `set`-элементов. `appends`/`modifies` были no-op-плейсхолдерами без источника — их deprecated-парс остаётся no-op (поведение не меняется, фиксируется warn-ом «перепиши на `add`/`modify`, иначе state не растёт»).
-  - В следующем релизе map-форма **удаляется** (парс старой формы → ошибка валидации).
+- **Transition plan (breaking, dual-parse for one release).** `state_changes` changes its form **map → list**. For one release keeper parses **both** forms (dual-parse):
+  - The new form — a list of verbs (the canon above).
+  - The old map form (`sets:` / `appends:` / `modifies:`) is parsed as **DEPRECATED**, soul-lint emits a warn. The `sets` map is translated into an equivalent sequence of `set` elements. `appends`/`modifies` were no-op placeholders with no source — their deprecated parse remains a no-op (behavior does not change, recorded with a warn "rewrite to `add`/`modify`, otherwise the state does not grow").
+  - In the next release the map form is **removed** (parsing the old form → a validation error).
 
-- **Связь с migration-DSL ([ADR-019](0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)).**
-  - **`foreach`/`as`/`do` — reuse** той же структурной формы (один паттерн на два DSL; оператор не учит второй синтаксис цикла).
-  - **`remove` (state_changes) ≠ `delete` (migration-DSL) — намеренно разные имена.** `delete` в миграции = «снести путь в state-структуре» (адресация `path:`, операция над формой данных при смене схемы). `remove` в state_changes = «вынуть элемент из коллекции» (адресация `match:`-предикатом над элементами, операция над содержимым при runtime-сценарии). Разные операции → разные имена, чтобы не путать «удалить поле схемы» и «удалить элемент коллекции».
+- **Relation to the migration-DSL ([ADR-019](0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)).**
+  - **`foreach`/`as`/`do` — reuse** of the same structural form (one pattern for two DSLs; the operator does not learn a second loop syntax).
+  - **`remove` (state_changes) ≠ `delete` (migration-DSL) — deliberately different names.** `delete` in a migration = "wipe a path in the state structure" (addressing by `path:`, an operation on the shape of the data when the schema changes). `remove` in state_changes = "extract an element from a collection" (addressing by a `match:` predicate over elements, an operation on the content during a runtime scenario). Different operations → different names, so as not to confuse "delete a schema field" and "delete a collection element".
 
-- **Отвергнутые альтернативы.**
-  - **Парные глаголы `remove_one` / `remove_all` (и `modify_one`/`modify_all`).** Удвоение словаря ради того, что выражается кратностью предиката + опц. `expect`. Отвергнуто: множественность — свойство `match`, а не имени глагола.
-  - **Флаг `all: true`.** Тот же недостаток — управляющая ручка вместо декларативного предиката; `all` неявно при отсутствии — а `expect` явно фиксирует ожидание автора, и линт ловит широкий `match` независимо от флага.
-  - **Позиционный `remove` (первый/последний элемент).** Невоспроизводим в JSONB-хранилище (порядок элементов в jsonb-массиве не является контрактом state); «первый по какому полю» = это `match` + сортировка, а не позиция. Отвергнуто как недетерминированное.
-  - **`clear`** (очистка коллекции) — избыточен: `set: <field>` + `value: []`/`{}`.
-  - **`rename` / `move`** — это операции над **формой** state при смене схемы, принадлежат migration-DSL ([ADR-019](0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)), не runtime-сценарию. В `state_changes` не вводятся.
-  - **`upsert`** — слитное «add-или-modify». Скрывает намерение автора (создаём новое vs патчим существующее — разные семантики аудита). Покрывается явным `add` + `on_conflict: replace`, где намерение видно.
+- **Rejected alternatives.**
+  - **Paired verbs `remove_one` / `remove_all` (and `modify_one`/`modify_all`).** Doubling the vocabulary for the sake of something that is expressed by the predicate's multiplicity + optional `expect`. Rejected: multiplicity is a property of `match`, not of the verb name.
+  - **An `all: true` flag.** The same drawback — a control knob instead of a declarative predicate; `all` is implicit when absent — whereas `expect` explicitly records the author's expectation, and the lint catches a broad `match` regardless of the flag.
+  - **A positional `remove` (first/last element).** Not reproducible in JSONB storage (the order of elements in a jsonb array is not part of the state contract); "first by which field" = this is `match` + sorting, not a position. Rejected as non-deterministic.
+  - **`clear`** (clearing a collection) — redundant: `set: <field>` + `value: []`/`{}`.
+  - **`rename` / `move`** — these are operations on the **shape** of the state when the schema changes; they belong to the migration-DSL ([ADR-019](0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)), not to a runtime scenario. They are not introduced in `state_changes`.
+  - **`upsert`** — a merged "add-or-modify". Hides the author's intent (creating something new vs patching an existing one — different audit semantics). Covered by an explicit `add` + `on_conflict: replace`, where the intent is visible.
 
 - **Consequences.**
-  - [orchestration.md §7.1](../scenario/orchestration.md#71-грамматика-state_changes--список-crud-операций) переписывается под list-of-verbs (нормативная спека); абзацы про `appends`/`modifies` уезжают в раздел «deprecated, переходный период».
-  - [ADR-009](0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) получает amendment (грамматика `state_changes` расширена; статус `amended`).
-  - [naming-rules.md](../naming-rules.md) пополняется глаголами и ключами state_changes.
-  - Латентный баг «`appends`/`modifies` не растят state» закрыт реализацией `add`/`modify`.
-  - Реализация (keeper-side render/apply state_changes) — параллельный слайс developer-а, вне этого ADR.
+  - [orchestration.md §7.1](../scenario/orchestration.md#71-грамматика-state_changes--список-crud-операций) is rewritten for list-of-verbs (the normative spec); the paragraphs about `appends`/`modifies` move to the "deprecated, transition period" section.
+  - [ADR-009](0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) receives an amendment (the `state_changes` grammar is extended; status `amended`).
+  - [naming-rules.md](../naming-rules.md) is augmented with the state_changes verbs and keys.
+  - The latent bug "`appends`/`modifies` do not grow the state" is closed by the implementation of `add`/`modify`.
+  - The implementation (keeper-side render/apply of state_changes) is a parallel developer slice, outside this ADR.
 
 - **Trade-offs.**
-  - Breaking-смена формы (map→list) — оправдана dual-parse-окном в один релиз + soul-lint warn; миграция механическая (`sets:` → список `set`-элементов).
-  - `expect` — опциональный, не обязательный: автор сам решает, нужна ли ассерт-страховка кратности; дефолт `any` не навязывает оверхед.
-  - all-by-default у `modify`/`remove` потенциально широк — компенсируется soul-lint WARN на константно-истинный/отсутствующий `match` и empty-match-as-no-op (идемпотентность).
+  - The breaking form change (map→list) is justified by a dual-parse window of one release + a soul-lint warn; the migration is mechanical (`sets:` → a list of `set` elements).
+  - `expect` is optional, not required: the author decides whether a multiplicity assertion safeguard is needed; the `any` default imposes no overhead.
+  - all-by-default for `modify`/`remove` is potentially broad — compensated by the soul-lint WARN on a constantly-true/missing `match` and empty-match-as-no-op (idempotency).
 
-- **Amendment (2026-06-24): day-2-сценарии читают развёрнутый факт из `incarnation.state`.** Симметрично write-семантике этого ADR (как `state` **записывается** после `create`) фиксируется read-конвенция: **day-2-сценарий читает развёрнутый факт о сервисе из `incarnation.state`, а НЕ из `essence`/`input`.**
+- **Amendment (2026-06-24): day-2 scenarios read the expanded fact from `incarnation.state`.** Symmetric to this ADR's write semantics (how `state` is **written** after `create`), a read convention is fixed: **a day-2 scenario reads the expanded fact about a service from `incarnation.state`, NOT from `essence`/`input`.**
 
-  - **Причина.** `create` транслирует операторский `input` (бьёт `essence`-дефолты) в развёрнутую конфигурацию и кладёт её в `state` (`state_changes`, глаголы `set`/`add`/…). На day-2 этот `input` уже недоступен, а `essence` — лишь author-подложка, не видящая operator-override. Day-2-сценарий, читающий `essence`, видит **не то, что реально применено** → рассинхрон «сценарий думает одно, на хосте другое». `state` — единственное место, где зафиксировано *что применено*.
-  - **Граница.** `essence`/`input` на day-2 используются только для того, что в `state` принципиально не лежит. Главный случай — **секреты** (ИБ-инвариант: PEM/пароли в `state` не материализуются; в `state` лежит лишь **путь** к секрету на хосте). Их day-2 резолвит `vault(<ref>)` тем же способом, что и `create` (`ref` из author-context `essence.<...>_ref` или конвенции пути). Известное ограничение: operator-override `ref` на `create` в `state` не сохраняется → day-2 читает `essence`-`ref` (совпадает с реально развёрнутым секретом при `create` без override; сохранение operator-override-ref в `state` — отдельный слайс при реальном запросе).
-  - **CEL-идиома чтения ключа с дефисом.** Проверка наличия ключа коллекции — оператором `'<key>' in <map>`, **не** `has(<map>['<key>'])`: `has()` — макрос только для field-selection, index-аргумент отвергается парсером. Защита от no-such-key (отсутствие `state` в push/trial-прогоне без State, ещё-не-материализованная коллекция) — `has(incarnation.state) && has(incarnation.state.<col>) && '<key>' in incarnation.state.<col>`. Bracket-нотация остаётся в **доступе** к значению (`incarnation.state.<col>['<key>']`).
-  - **Нормативная спека конвенции** — [docs/destiny/production-conventions.md §7a «Day-2: источник истины = `incarnation.state`»](../destiny/production-conventions.md). Рабочая иллюстрация — `restart` сервиса [`redis`](../../examples/service/redis/scenario/restart/main.yml) (TLS-дискриминатор из `incarnation.state.redis_config`, guard-кейсы `rolling-restart-replicas`/`rolling-restart-tls` на оба пути).
+  - **Reason.** `create` translates the operator's `input` (which beats the `essence` defaults) into the expanded configuration and puts it into `state` (`state_changes`, the verbs `set`/`add`/…). On day-2 this `input` is no longer available, and `essence` is only the author's substrate, blind to the operator override. A day-2 scenario that reads `essence` sees **not what was actually applied** → a desync "the scenario thinks one thing, the host has another". `state` is the only place where *what was applied* is recorded.
+  - **Boundary.** `essence`/`input` on day-2 are used only for what fundamentally does not reside in `state`. The main case is **secrets** (an infosec invariant: PEM/passwords are not materialized in `state`; only the **path** to the secret on the host resides in `state`). day-2 resolves them via `vault(<ref>)` the same way as `create` (`ref` from the author context `essence.<...>_ref` or a path convention). A known limitation: an operator override of `ref` at `create` is not saved into `state` → day-2 reads the `essence` `ref` (which matches the actually deployed secret when `create` had no override; saving the operator-override ref into `state` is a separate slice upon a real request).
+  - **CEL idiom for reading a key with a hyphen.** Checking for the presence of a collection key is done with the operator `'<key>' in <map>`, **not** `has(<map>['<key>'])`: `has()` is a macro only for field-selection, an index argument is rejected by the parser. Protection against no-such-key (the absence of `state` in a push/trial run without State, a not-yet-materialized collection) is `has(incarnation.state) && has(incarnation.state.<col>) && '<key>' in incarnation.state.<col>`. Bracket notation remains for **accessing** the value (`incarnation.state.<col>['<key>']`).
+  - **The normative spec of the convention** — [docs/destiny/production-conventions.md §7a "Day-2: source of truth = `incarnation.state`"](../destiny/production-conventions.md#7a-day-2-source-of-truth--incarnationstate). A working illustration — the `restart` of the [`redis`](../../examples/service/redis/scenario/restart/main.yml) service (the TLS discriminator from `incarnation.state.redis_config`, the guard cases `rolling-restart-replicas`/`rolling-restart-tls` on both paths).
 
-- **Статус.** amended (2026-06-24: day-2 read-конвенция).
+- **Status.** amended (2026-06-24: day-2 read convention).
