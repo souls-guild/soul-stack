@@ -9,16 +9,17 @@ import (
 	armnetwork "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/network/armnetwork/v4"
 )
 
-// vmsAPI / nicsAPI / pipsAPI — узкие подмножества Azure ARM-клиентов, которые
-// использует драйвер. Сужение даёт mockability L0-unit-тестов без сети.
+// vmsAPI / nicsAPI / pipsAPI are narrow subsets of Azure ARM clients used by
+// the driver. Narrowing gives L0 unit tests mockability without network access.
 //
-// Отличие от AWS: armcompute/armnetwork-методы возвращают generic-Poller
-// (`*runtime.Poller[T]`), что плохо мокается. Поэтому интерфейс exposes уже
-// «развёрнутый» метод (Begin* + PollUntilDone в одном вызове). Реальная
-// реализация делает их последовательно; mock возвращает плоский результат.
+// Difference from AWS: armcompute/armnetwork methods return generic Pollers
+// (`*runtime.Poller[T]`), which are awkward to mock. Therefore the interface
+// exposes an already "unrolled" method (Begin* + PollUntilDone in one call). The
+// real implementation performs those sequentially; the mock returns a flat
+// result.
 //
-// Get/NewListAllPager оставлены как-есть — pager mockается per-test через
-// runtime.NewPager или подмену метода целиком.
+// Get/NewListAllPager are left as-is - the pager is mocked per test through
+// runtime.NewPager or by replacing the method entirely.
 type vmsAPI interface {
 	CreateAndWait(ctx context.Context, rg, name string, params armcompute.VirtualMachine) (armcompute.VirtualMachine, error)
 	DeleteAndWait(ctx context.Context, rg, name string) error
@@ -37,21 +38,22 @@ type pipsAPI interface {
 	Get(ctx context.Context, rg, name string) (armnetwork.PublicIPAddress, error)
 }
 
-// azureClients — пакет mock-able API. Передаётся в драйвер целиком, чтобы
-// L0-тесты подменяли по одному «слою».
+// azureClients is a bundle of mockable APIs. It is passed into the driver as a
+// whole so L0 tests can replace one "layer" at a time.
 type azureClients struct {
 	vms  vmsAPI
 	nics nicsAPI
 	pips pipsAPI
 }
 
-// azureCredentials — credentials, переданные Keeper-ом в
-// CreateRequest.credentials / DestroyRequest.credentials (A-flow). Драйвер в
-// Vault НЕ ходит — Keeper уже резолвил секрет за него.
+// azureCredentials are credentials passed by Keeper in
+// CreateRequest.credentials / DestroyRequest.credentials (A-flow). The driver
+// does NOT call Vault - Keeper has already resolved the secret for it.
 //
-// subscription_id/resource_group/location идут в credentials рядом с
-// service-principal-токеном (provider-specific, см. docs/keeper/cloud.md →
-// Credentials-flow): по сути это «куда заходим», без них API-вызов невозможен.
+// subscription_id/resource_group/location travel in credentials alongside the
+// service-principal token (provider-specific, see docs/keeper/cloud.md ->
+// Credentials-flow): effectively this is "where we enter", and API calls are
+// impossible without them.
 type azureCredentials struct {
 	TenantID       string
 	ClientID       string
@@ -61,7 +63,7 @@ type azureCredentials struct {
 	Location       string
 }
 
-// credKeys — имена полей credentials-Struct (контракт с Keeper-side
+// credKeys are credentials Struct field names (contract with Keeper-side
 // CredentialsResolverPG).
 const (
 	credTenantID       = "tenant_id"
@@ -93,12 +95,12 @@ func stringField(m map[string]any, key string) string {
 	return ""
 }
 
-// newAzureClients конструирует тройку клиентов (VMs/NICs/PIPs) из переданных
-// credentials. Service-principal явный — не дефолтная chain (безопасность:
-// драйвер не должен подхватывать ambient-идентичность Keeper-хоста).
+// newAzureClients constructs the client trio (VMs/NICs/PIPs) from the supplied
+// credentials. Service-principal is explicit - not the default chain (security:
+// the driver must not pick up ambient identity from the Keeper host).
 //
-// newAzureClients вынесен в переменную, чтобы L0-тесты подменяли его fake-
-// фабрикой без сети.
+// newAzureClients is a variable so L0 tests can replace it with a network-free
+// fake factory.
 var newAzureClients = func(_ context.Context, c azureCredentials) (azureClients, error) {
 	cred, err := azidentity.NewClientSecretCredential(c.TenantID, c.ClientID, c.ClientSecret, nil)
 	if err != nil {
@@ -119,7 +121,7 @@ var newAzureClients = func(_ context.Context, c azureCredentials) (azureClients,
 	}, nil
 }
 
-// --- real-implementations: оборачивают Begin*+PollUntilDone в один вызов ---
+// --- real implementations: wrap Begin*+PollUntilDone in one call ---
 
 type realVMs struct {
 	cli *armcompute.VirtualMachinesClient
@@ -150,8 +152,9 @@ func (r *realVMs) Get(ctx context.Context, rg, name string, opts *armcompute.Vir
 	return r.cli.Get(ctx, rg, name, opts)
 }
 
-// ListByRunTag — VM по runTag в пределах resource-group. Pager раскручивается
-// здесь (Azure-pager не умеет в server-side filter по тегам, фильтруем in-Go).
+// ListByRunTag lists VMs by runTag within the resource group. The pager is
+// unrolled here (Azure pager has no server-side tag filter, so filtering is done
+// in Go).
 func (r *realVMs) ListByRunTag(ctx context.Context, rg, runTag string) ([]*armcompute.VirtualMachine, error) {
 	pager := r.cli.NewListPager(rg, nil)
 	var out []*armcompute.VirtualMachine

@@ -1,33 +1,36 @@
-// soul-cloud-azure — реальный CloudDriver-плагин Soul Stack для Azure VM
-// (ADR-016 Фаза 4 cloud parity; тираж по reference-паттерну soul-cloud-aws).
+// soul-cloud-azure is a real Soul Stack CloudDriver plugin for Azure VM
+// (ADR-016 Phase 4 cloud parity; rollout by the soul-cloud-aws reference
+// pattern).
 //
-// Собирается в статический бинарь `soul-cloud-azure`. Keeper-side модуль
-// `core.cloud.provisioned` (ADR-017) запускает его как sub-process, делает
-// gRPC-stdio handshake (sdk/handshake) и зовёт RPC CloudDriver.
+// Builds into the static binary `soul-cloud-azure`. The Keeper-side
+// `core.cloud.provisioned` module (ADR-017) starts it as a sub-process, performs
+// the gRPC-stdio handshake (sdk/handshake), and calls CloudDriver RPCs.
 //
-// Credentials (A-flow, docs/keeper/cloud.md): Keeper резолвит секрет
-// service-principal-а из Vault и кладёт plain в CreateRequest.credentials /
-// DestroyRequest.credentials (tenant_id/client_id/client_secret +
-// subscription_id/resource_group/location); драйвер в Vault НЕ ходит.
-// Cloud-init userdata для bootstrap soul-агента приходит в CreateRequest.userdata
-// и кодируется драйвером в base64 (Azure-требование для osProfile.customData).
+// Credentials (A-flow, docs/keeper/cloud.md): Keeper resolves the
+// service-principal secret from Vault and places plain values into
+// CreateRequest.credentials / DestroyRequest.credentials
+// (tenant_id/client_id/client_secret + subscription_id/resource_group/location);
+// the driver does NOT call Vault. Cloud-init userdata for bootstrapping the soul
+// agent arrives in CreateRequest.userdata and is base64-encoded by the driver
+// (Azure requirement for osProfile.customData).
 //
-// Shared-каркас (error-таксономия / wait-until-ready / retry-backoff) — из
-// sdk/clouddriver, общий для всех драйверов тиража. Provider-specific здесь —
-// только вызовы Azure ARM-API и Azure-классификатор ошибок (classify.go).
+// Shared framework (error taxonomy / wait-until-ready / retry-backoff) comes
+// from sdk/clouddriver and is common to all rollout drivers. Provider-specific
+// pieces here are only Azure ARM API calls and the Azure error classifier
+// (classify.go).
 //
-// # Multi-resource транзакция Create
+// # Multi-resource Create transaction
 //
-// Azure VM в отличие от EC2 — это композит: PublicIP + NIC + VM создаются
-// тремя отдельными ARM-операциями. Драйвер делает их последовательно (NIC
-// требует id-ссылку на готовый PublicIP, VM — на готовый NIC) и при фейле
-// шага N откатывает шаги 1..N-1 в обратном порядке (best-effort).
+// Unlike EC2, an Azure VM is a composite: PublicIP + NIC + VM are created by
+// three separate ARM operations. The driver performs them sequentially (NIC
+// requires an id reference to a ready PublicIP, VM requires a ready NIC), and on
+// failure of step N it rolls back steps 1..N-1 in reverse order (best-effort).
 //
-// Композитный идентификатор: primary `vm_id` = VM-имя
-// (`<runTag>-vm-<idx>` или `soul-vm-<short-rand>` без runTag). NIC/PIP имена —
-// детерминированные производные (`<vm_name>-nic` / `<vm_name>-pip`) — это даёт
-// Keeper-у возможность по одному `vm_id` восстановить все три ресурса и
-// корректно Destroy их в обратном порядке, без хранения отдельного mapping-а.
+// Composite identifier: primary `vm_id` = VM name (`<runTag>-vm-<idx>` or
+// `soul-vm-<short-rand>` without runTag). NIC/PIP names are deterministic
+// derivatives (`<vm_name>-nic` / `<vm_name>-pip`), allowing Keeper to reconstruct
+// all three resources from one `vm_id` and Destroy them correctly in reverse
+// order without storing a separate mapping.
 package main
 
 import (
@@ -52,36 +55,36 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// profileSchemaJSON — profile_schema (JSON Schema draft 2020-12), embedded
-// рядом с бинарём. Симметрично soul-cloud-aws.
+// profileSchemaJSON is profile_schema (JSON Schema draft 2020-12), embedded next
+// to the binary. Symmetrical with soul-cloud-aws.
 //
 //go:embed schema.json
 var profileSchemaJSON []byte
 
-// runTagKey — тег идемпотентности: значение = идентификатор прогона/incarnation.
-// Имя тега в Azure следует snake_case-нотации; двоеточия в ключах тегов
-// допустимы, но дефис безопаснее для CLI-фильтров и совместим со всеми
-// провайдерами тиража (тот же тег у soul-cloud-aws).
+// runTagKey is the idempotency tag: value = run/incarnation identifier. The tag
+// name in Azure follows snake_case notation; colons in tag keys are allowed, but
+// a hyphen is safer for CLI filters and compatible with all rollout providers
+// (same tag in soul-cloud-aws).
 const runTagKey = "soulstack-run"
 
-// defaultBackoff — фабрика [clouddriver.BackoffConfig] для wait/retry-фаз
-// (см. soul-cloud-aws). L0-тесты подменяют через withFastBackoff.
+// defaultBackoff is the [clouddriver.BackoffConfig] factory for wait/retry
+// phases (see soul-cloud-aws). L0 tests replace it through withFastBackoff.
 var defaultBackoff = clouddriver.DefaultBackoff
 
-// randomSuffix — короткий случайный суффикс для VM-имени, если runTag не
-// задан. Вынесен в переменную для детерминированных L0-тестов.
+// randomSuffix is a short random suffix for the VM name when runTag is not set.
+// It is a variable for deterministic L0 tests.
 var randomSuffix = func() string {
 	var b [3]byte
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
 }
 
-// AzureDriver — реализация CloudDriver для Azure.
+// AzureDriver implements CloudDriver for Azure.
 type AzureDriver struct {
 	clouddriver.BaseDriver
 }
 
-// Schema публикует embedded profile_schema (симметрично soul-cloud-aws).
+// Schema publishes the embedded profile_schema (symmetrical with soul-cloud-aws).
 func (a *AzureDriver) Schema(_ context.Context, _ *pluginv1.SchemaRequest) (*pluginv1.SchemaReply, error) {
 	var raw map[string]any
 	if err := json.Unmarshal(profileSchemaJSON, &raw); err != nil {
@@ -94,10 +97,9 @@ func (a *AzureDriver) Schema(_ context.Context, _ *pluginv1.SchemaRequest) (*plu
 	return &pluginv1.SchemaReply{ProfileSchema: s}, nil
 }
 
-// Validate — structural-проверки на стороне драйвера. Полная JSON Schema
-// валидация делается Keeper-ом по publish-нутому Schema; здесь покрываем
-// required-поля как защиту-в-глубину (Keeper не обязан её делать на каждый
-// Create).
+// Validate performs driver-side structural checks. Full JSON Schema validation
+// is done by Keeper against the published Schema; here we cover required fields
+// as defense-in-depth (Keeper is not required to do it on every Create).
 func (a *AzureDriver) Validate(_ context.Context, req *pluginv1.ValidateProfileRequest) (*pluginv1.ValidateProfileReply, error) {
 	p := req.GetProfile().AsMap()
 	var errs []string
@@ -117,7 +119,7 @@ func (a *AzureDriver) Validate(_ context.Context, req *pluginv1.ValidateProfileR
 	return &pluginv1.ValidateProfileReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
 
-// vmProfile — параметры профиля, разобранные для Create.
+// vmProfile contains profile params parsed for Create.
 type vmProfile struct {
 	location               string
 	vmSize                 string
@@ -145,8 +147,9 @@ func parseProfile(p map[string]any) vmProfile {
 		subnetID:      stringField(p, "subnet_id"),
 		adminUsername: stringField(p, "admin_username"),
 		sshPublicKey:  stringField(p, "ssh_public_key"),
-		// public_ip по умолчанию true — Azure-VM без публичного IP бесполезна для
-		// soul-bootstrap-а (Keeper не сможет дозвониться); оператор явно выключает.
+		// public_ip defaults to true: an Azure VM without a public IP is useless
+		// for soul bootstrap (Keeper cannot reach it); the operator disables it
+		// explicitly.
 		publicIPEnabled: true,
 		publicIPSku:     "Standard",
 		tags:            map[string]string{},
@@ -190,9 +193,9 @@ func parseProfile(p map[string]any) vmProfile {
 	return prof
 }
 
-// resourceNames — детерминированные имена тройки ресурсов VM/NIC/PIP по
-// `vmName`. Один primary `vm_id` = VM-имя достаточно для Destroy: NIC/PIP-имена
-// восстанавливаются по тем же правилам без хранения mapping-а.
+// resourceNames returns deterministic names for the VM/NIC/PIP resource trio by
+// `vmName`. One primary `vm_id` = VM name is enough for Destroy: NIC/PIP names
+// are reconstructed by the same rules without storing a mapping.
 type resourceNames struct {
 	vm  string
 	nic string
@@ -203,9 +206,9 @@ func makeResourceNames(vmName string) resourceNames {
 	return resourceNames{vm: vmName, nic: vmName + "-nic", pip: vmName + "-pip"}
 }
 
-// makeVMName — детерминированное имя VM:
-//   - с runTag:  "<runTag>-vm-<idx>" (idx — 0-based порядковый внутри прогона);
-//   - без runTag: "soul-vm-<3-byte-hex>" (через [randomSuffix], подменяется тестом).
+// makeVMName returns a deterministic VM name:
+//   - with runTag: "<runTag>-vm-<idx>" (idx is 0-based order within the run);
+//   - without runTag: "soul-vm-<3-byte-hex>" (through [randomSuffix], replaced by tests).
 func makeVMName(runTag string, idx int) string {
 	if runTag != "" {
 		return fmt.Sprintf("%s-vm-%d", runTag, idx)
@@ -213,8 +216,8 @@ func makeVMName(runTag string, idx int) string {
 	return "soul-vm-" + randomSuffix()
 }
 
-// Create: multi-resource транзакция PIP → NIC → VM с rollback при фейле.
-// См. doc-комментарий пакета.
+// Create: multi-resource transaction PIP -> NIC -> VM with rollback on failure.
+// See the package doc comment.
 func (a *AzureDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerStreamingServer[pluginv1.CreateEvent]) error {
 	ctx := stream.Context()
 	count := req.GetCount()
@@ -234,7 +237,7 @@ func (a *AzureDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerStre
 
 	backoff := defaultBackoff()
 
-	// Идемпотентность: переиспользуем уже созданные VM с тем же runTag.
+	// Idempotency: reuse already created VMs with the same runTag.
 	var existing []*armcompute.VirtualMachine
 	if prof.runTag != "" {
 		existing, err = a.findByRunTag(ctx, cli, backoff, creds.ResourceGroup, prof.runTag)
@@ -250,7 +253,7 @@ func (a *AzureDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerStre
 		count -= int32(len(existing))
 	}
 
-	// Создаём `count` новых VM, каждую — multi-resource транзакцией.
+	// Create `count` new VMs, each as a multi-resource transaction.
 	newIDs := make([]string, 0, count)
 	startIdx := len(existing)
 	for i := int32(0); i < count; i++ {
@@ -262,12 +265,12 @@ func (a *AzureDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerStre
 			return err
 		}
 		if err := a.createOneVM(ctx, cli, backoff, creds, prof, name, req.GetUserdata(), stream); err != nil {
-			// createOneVM сам сделал rollback и отправил частичные events;
-			// anti-orphan: имя уже созданной (но потом откатанной) VM в финальный
-			// vm-список НЕ попадает (rollback успешен → ресурсов нет).
+			// createOneVM already performed rollback and sent partial events;
+			// anti-orphan: the name of an already created (then rolled back) VM
+			// does NOT enter the final VM list (rollback succeeded -> no resources).
 			//
-			// Исключение: rollback частично провалился → имя пойдёт в final event
-			// как failed (см. createOneVM).
+			// Exception: rollback partially failed -> the name goes into the final
+			// event as failed (see createOneVM).
 			final := append(existingVMIDs(existing), newIDs...)
 			return sendFinalRollbackFail(stream, clouddriver.Classify(classifyAzure, err), "create-vm", err, final)
 		}
@@ -278,12 +281,13 @@ func (a *AzureDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerStre
 	return a.finalizeCreate(ctx, cli, stream, backoff, creds, all)
 }
 
-// createOneVM — multi-resource транзакция одной VM с rollback при фейле.
+// createOneVM is a multi-resource transaction for one VM with rollback on
+// failure.
 //
-// Порядок: PIP → NIC → VM. Rollback идёт в обратном порядке (VM → NIC → PIP)
-// и пропускает ресурсы, которые ещё не создались. Каждый шаг обёрнут в Retry
-// (transient API-сбои не валят весь create — это критично для Azure, чья
-// throttling-частота выше AWS).
+// Order: PIP -> NIC -> VM. Rollback goes in reverse order (VM -> NIC -> PIP) and
+// skips resources that were not created yet. Each step is wrapped in Retry
+// (transient API failures do not fail the whole create; this is critical for
+// Azure, whose throttling frequency is higher than AWS).
 func (a *AzureDriver) createOneVM(
 	ctx context.Context, cli azureClients, backoff clouddriver.BackoffConfig,
 	creds azureCredentials, prof vmProfile, vmName, userdata string,
@@ -291,22 +295,22 @@ func (a *AzureDriver) createOneVM(
 ) error {
 	names := makeResourceNames(vmName)
 
-	// Список созданных ресурсов для rollback (last-in-first-out).
+	// List of created resources for rollback (last-in-first-out).
 	var created []resourceRef
 	rollback := func(opErr error) {
 		_ = stream.Send(&pluginv1.CreateEvent{
 			Message: fmt.Sprintf("rollback after %v: deleting %d resource(s)", opErr, len(created)),
 		})
-		// Обратный порядок: VM → NIC → PIP. ctx может быть уже отменён —
-		// rollback использует Background для best-effort cleanup (anti-orphan),
-		// иначе orphan-ресурсы останутся висеть в подписке.
+		// Reverse order: VM -> NIC -> PIP. ctx may already be canceled - rollback
+		// uses Background for best-effort cleanup (anti-orphan), otherwise orphan
+		// resources remain in the subscription.
 		rbCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 		for i := len(created) - 1; i >= 0; i-- {
 			r := created[i]
 			if delErr := r.delete(rbCtx, cli, creds.ResourceGroup); delErr != nil {
-				// Транзиентную ошибку rollback ретраим один-два раза (быстрый
-				// backoff); упорная — пишем в event и идём дальше.
+				// Retry a transient rollback error once or twice (fast backoff);
+				// persistent errors are written to the event and we continue.
 				_ = stream.Send(&pluginv1.CreateEvent{
 					Message: fmt.Sprintf("rollback warn: delete %s %q: %v", r.kind, r.name, delErr),
 				})
@@ -316,7 +320,7 @@ func (a *AzureDriver) createOneVM(
 
 	tagsForResource := mergeTags(prof.tags)
 
-	// --- 1. PublicIP (опционально) ---
+	// --- 1. PublicIP (optional) ---
 	var pipID string
 	if prof.publicIPEnabled {
 		pipParams := buildPublicIP(prof, tagsForResource)
@@ -330,7 +334,7 @@ func (a *AzureDriver) createOneVM(
 			}
 			return nil
 		}); err != nil {
-			// Rollback пуст — нечего откатывать.
+			// Rollback is empty - nothing to roll back.
 			return fmt.Errorf("publicip create %s: %w", names.pip, err)
 		}
 		created = append(created, resourceRef{kind: "publicip", name: names.pip})
@@ -363,14 +367,14 @@ func (a *AzureDriver) createOneVM(
 		rollback(err)
 		return fmt.Errorf("vm create %s: %w", names.vm, err)
 	}
-	// VM в `created` НЕ добавляем — успешно созданная VM не подлежит rollback
-	// (она и есть конечная цель). Если упадёт wait-until-ready дальше, это
-	// уже не rollback, а anti-orphan (см. finalizeCreate).
+	// Do NOT add the VM to `created`: a successfully created VM is not subject to
+	// rollback (it is the final target). If wait-until-ready fails later, that is
+	// anti-orphan, not rollback (see finalizeCreate).
 	return nil
 }
 
-// finalizeCreate ждёт готовности VM (ProvisioningState=Succeeded + powerState=
-// running) и шлёт финальное событие.
+// finalizeCreate waits for VM readiness (ProvisioningState=Succeeded +
+// powerState=running) and sends the final event.
 func (a *AzureDriver) finalizeCreate(
 	ctx context.Context, cli azureClients,
 	stream grpc.ServerStreamingServer[pluginv1.CreateEvent],
@@ -417,9 +421,9 @@ func (a *AzureDriver) finalizeCreate(
 	})
 }
 
-// probeVMReady — true, если VM в ProvisioningState=Succeeded И InstanceView
-// содержит PowerState/running. Через один Get с Expand=InstanceView, чтобы не
-// дёргать API дважды.
+// probeVMReady is true when VM ProvisioningState=Succeeded AND InstanceView
+// contains PowerState/running. Uses one Get with Expand=InstanceView to avoid
+// hitting the API twice.
 func (a *AzureDriver) probeVMReady(ctx context.Context, cli azureClients, rg, vmName string) (bool, error) {
 	resp, err := cli.vms.Get(ctx, rg, vmName, &armcompute.VirtualMachinesClientGetOptions{
 		Expand: to.Ptr(armcompute.InstanceViewTypesInstanceView),
@@ -431,8 +435,8 @@ func (a *AzureDriver) probeVMReady(ctx context.Context, cli azureClients, rg, vm
 		return false, nil
 	}
 	if resp.Properties.ProvisioningState == nil || *resp.Properties.ProvisioningState != "Succeeded" {
-		// Failed-ProvisioningState — terminal, не транзиент: пробрасываем как error,
-		// поллер закроет эту VM.
+		// Failed-ProvisioningState is terminal, not transient: return it as error,
+		// and the poller will close this VM.
 		if resp.Properties.ProvisioningState != nil && *resp.Properties.ProvisioningState == "Failed" {
 			return false, fmt.Errorf("vm %s provisioning failed", vmName)
 		}
@@ -446,7 +450,7 @@ func (a *AzureDriver) probeVMReady(ctx context.Context, cli azureClients, rg, vm
 		if st == nil || st.Code == nil {
 			continue
 		}
-		// PowerState статус — формат "PowerState/<state>".
+		// PowerState status format is "PowerState/<state>".
 		if *st.Code == "PowerState/running" {
 			return true, nil
 		}
@@ -457,15 +461,15 @@ func (a *AzureDriver) probeVMReady(ctx context.Context, cli azureClients, rg, vm
 	return false, nil
 }
 
-// fillVMInfo дозаполняет VmInfo (fqdn/primary_ip/attributes) по готовой VM.
+// fillVMInfo fills VmInfo (fqdn/primary_ip/attributes) from a ready VM.
 func (a *AzureDriver) fillVMInfo(ctx context.Context, cli azureClients, creds azureCredentials, vmName string, vi *pluginv1.VmInfo) {
 	names := makeResourceNames(vmName)
-	// VM нужна только для attributes (vm_size/state) — без InstanceView.
+	// VM is needed only for attributes (vm_size/state) - without InstanceView.
 	vmResp, err := cli.vms.Get(ctx, creds.ResourceGroup, vmName, nil)
 	if err == nil {
 		vi.Attributes = vmAttributes(vmResp.VirtualMachine, creds.Location)
 	}
-	// Primary IP / FQDN — из PublicIP, если есть.
+	// Primary IP / FQDN come from PublicIP, if present.
 	if pip, err := cli.pips.Get(ctx, creds.ResourceGroup, names.pip); err == nil {
 		if pip.Properties != nil {
 			if pip.Properties.IPAddress != nil {
@@ -476,14 +480,14 @@ func (a *AzureDriver) fillVMInfo(ctx context.Context, cli azureClients, creds az
 			}
 		}
 	}
-	// Без PublicIP / без DNS-label: fallback FQDN = VM-имя (internal-name,
-	// уникальный в пределах resource-group). Это `SID` для bootstrap-а.
+	// Without PublicIP / DNS label: fallback FQDN = VM name (internal name, unique
+	// within the resource group). This is the `SID` for bootstrap.
 	if vi.Fqdn == "" {
 		vi.Fqdn = vmName
 	}
 }
 
-// findByRunTag перечисляет VM с заданным runTag в resource-group.
+// findByRunTag lists VMs with the given runTag in the resource group.
 func (a *AzureDriver) findByRunTag(ctx context.Context, cli azureClients, backoff clouddriver.BackoffConfig, rg, runTag string) ([]*armcompute.VirtualMachine, error) {
 	var out []*armcompute.VirtualMachine
 	err := clouddriver.Retry(ctx, backoff, classifyAzure, func() error {
@@ -497,7 +501,7 @@ func (a *AzureDriver) findByRunTag(ctx context.Context, cli azureClients, backof
 	return out, err
 }
 
-// Destroy: VM → NIC → PIP (обратный порядок Create). Per-vm события.
+// Destroy: VM -> NIC -> PIP (reverse Create order). Per-VM events.
 func (a *AzureDriver) Destroy(req *pluginv1.DestroyRequest, stream grpc.ServerStreamingServer[pluginv1.DestroyEvent]) error {
 	ctx := stream.Context()
 	creds := credsFromMap(req.GetCredentials().AsMap())
@@ -520,8 +524,8 @@ func (a *AzureDriver) Destroy(req *pluginv1.DestroyRequest, stream grpc.ServerSt
 			})
 			continue
 		}
-		// Все три шага вернули not-found ⇒ ресурсов уже нет ⇒ идемпотентно.
-		// Иначе хотя бы один реально удалили ⇒ "terminated".
+		// All three steps returned not-found => resources are already absent =>
+		// idempotent. Otherwise at least one was actually deleted => "terminated".
 		msg := "terminated"
 		if allMissing {
 			msg = "already absent"
@@ -531,9 +535,9 @@ func (a *AzureDriver) Destroy(req *pluginv1.DestroyRequest, stream grpc.ServerSt
 	return nil
 }
 
-// destroyOne — VM → NIC → PIP, каждый через Retry. not-found на любом шаге —
-// продолжаем (идемпотентность); возвращает allMissing=true только если ВСЕ три
-// шага оказались not-found (для корректной "already absent"-семантики).
+// destroyOne performs VM -> NIC -> PIP, each through Retry. not-found at any step
+// continues (idempotency); returns allMissing=true only if ALL three steps were
+// not-found (for correct "already absent" semantics).
 func (a *AzureDriver) destroyOne(ctx context.Context, cli azureClients, backoff clouddriver.BackoffConfig, rg string, names resourceNames) (bool, error) {
 	steps := []struct {
 		kind   string
@@ -558,7 +562,7 @@ func (a *AzureDriver) destroyOne(ctx context.Context, cli azureClients, backoff 
 	return allMissing, nil
 }
 
-// Status — опрос одной VM с Expand=InstanceView (state + powerState).
+// Status polls one VM with Expand=InstanceView (state + powerState).
 func (a *AzureDriver) Status(ctx context.Context, req *pluginv1.StatusRequest) (*pluginv1.StatusReply, error) {
 	creds := credsFromMap(req.GetCredentials().AsMap())
 	cli, err := newAzureClients(ctx, creds)
@@ -577,7 +581,7 @@ func (a *AzureDriver) Status(ctx context.Context, req *pluginv1.StatusRequest) (
 	}, nil
 }
 
-// List — стрим инвентаря VM (опц. фильтр по runTag).
+// List streams VM inventory (optional runTag filter).
 func (a *AzureDriver) List(req *pluginv1.ListRequest, stream grpc.ServerStreamingServer[pluginv1.VmInfo]) error {
 	ctx := stream.Context()
 	creds := credsFromMap(req.GetCredentials().AsMap())
@@ -588,9 +592,9 @@ func (a *AzureDriver) List(req *pluginv1.ListRequest, stream grpc.ServerStreamin
 	filter := req.GetFilter().AsMap()
 	runTag := stringField(filter, runTagKey)
 	if runTag == "" {
-		// Без фильтра — пустой список (защита от случайного «вытащи всю
-		// подписку»). Симметрично AWS-варианту, где filter обязателен в
-		// сценариях.
+		// Without a filter, return an empty list (protects against accidentally
+		// dumping the whole subscription). Symmetrical with the AWS variant where
+		// filter is required in scenarios.
 		return nil
 	}
 	vms, err := cli.vms.ListByRunTag(ctx, creds.ResourceGroup, runTag)
@@ -617,7 +621,7 @@ func main() {
 	}
 }
 
-// --- ARM-параметры (builders) ---
+// --- ARM parameters (builders) ---
 
 func buildPublicIP(prof vmProfile, tags map[string]*string) armnetwork.PublicIPAddress {
 	pip := armnetwork.PublicIPAddress{
@@ -687,7 +691,7 @@ func buildVM(prof vmProfile, nicID, userdata string, tags map[string]*string) ar
 				OSDisk: buildOSDisk(prof),
 			},
 			OSProfile: &armcompute.OSProfile{
-				ComputerName:  to.Ptr(prof.adminUsername + "-vm"), // hostname внутри VM
+				ComputerName:  to.Ptr(prof.adminUsername + "-vm"), // hostname inside VM
 				AdminUsername: &prof.adminUsername,
 			},
 			NetworkProfile: &armcompute.NetworkProfile{
@@ -700,8 +704,8 @@ func buildVM(prof vmProfile, nicID, userdata string, tags map[string]*string) ar
 			},
 		},
 	}
-	// SSH-публичный ключ → Linux profile. Без него Azure требует password,
-	// что нам не подходит (cloud-init runs SSH-only).
+	// SSH public key -> Linux profile. Without it Azure requires a password,
+	// which does not fit us (cloud-init runs SSH-only).
 	if prof.sshPublicKey != "" {
 		vm.Properties.OSProfile.LinuxConfiguration = &armcompute.LinuxConfiguration{
 			DisablePasswordAuthentication: to.Ptr(true),
@@ -713,7 +717,7 @@ func buildVM(prof vmProfile, nicID, userdata string, tags map[string]*string) ar
 			},
 		}
 	}
-	// cloud-init userdata → customData (base64, Azure-требование).
+	// cloud-init userdata -> customData (base64, Azure requirement).
 	if userdata != "" {
 		vm.Properties.OSProfile.CustomData = to.Ptr(base64.StdEncoding.EncodeToString([]byte(userdata)))
 	}
@@ -735,8 +739,8 @@ func buildOSDisk(prof vmProfile) *armcompute.OSDisk {
 	return od
 }
 
-// derivePowerState вытаскивает power-state из InstanceView, fallback на
-// ProvisioningState. Возвращает строку для StatusReply.State.
+// derivePowerState extracts power-state from InstanceView, falling back to
+// ProvisioningState. Returns the string for StatusReply.State.
 func derivePowerState(vm armcompute.VirtualMachine) string {
 	if vm.Properties != nil && vm.Properties.InstanceView != nil {
 		for _, st := range vm.Properties.InstanceView.Statuses {
@@ -754,7 +758,8 @@ func derivePowerState(vm armcompute.VirtualMachine) string {
 	return ""
 }
 
-// vmAttributes — снапшот VM-полей для StatusReply.Attributes / VmInfo.Attributes.
+// vmAttributes is a snapshot of VM fields for StatusReply.Attributes /
+// VmInfo.Attributes.
 func vmAttributes(vm armcompute.VirtualMachine, locationFallback string) *structpb.Struct {
 	m := map[string]any{}
 	if vm.Properties != nil && vm.Properties.HardwareProfile != nil && vm.Properties.HardwareProfile.VMSize != nil {
@@ -786,10 +791,10 @@ func sendCreateFailed(stream grpc.ServerStreamingServer[pluginv1.CreateEvent], c
 	return stream.Send(&pluginv1.CreateEvent{Message: clouddriver.FailMessage(class, op, err), Failed: true})
 }
 
-// sendFinalRollbackFail — финальное событие с уже-созданными vm_id (anti-orphan)
-// и failed=true. После rollback ресурсов конкретной упавшей VM нет, но
-// остальные `successful` VM (если они уже успели создаться) должны попасть в
-// final event, чтобы Keeper мог их Destroy при необходимости.
+// sendFinalRollbackFail sends the final event with already-created vm_id values
+// (anti-orphan) and failed=true. After rollback, resources for the specific
+// failed VM are gone, but other `successful` VMs (if already created) must be
+// included in the final event so Keeper can Destroy them if needed.
 func sendFinalRollbackFail(stream grpc.ServerStreamingServer[pluginv1.CreateEvent], class clouddriver.FailClass, op string, err error, vmIDs []string) error {
 	vms := make([]*pluginv1.VmInfo, 0, len(vmIDs))
 	for _, id := range vmIDs {
@@ -824,7 +829,7 @@ func existingVMIDs(vms []*armcompute.VirtualMachine) []string {
 	return out
 }
 
-// resourceRef — запись об уже-созданном ресурсе для rollback-цепочки.
+// resourceRef is an entry for an already-created resource in the rollback chain.
 type resourceRef struct {
 	kind string // "publicip" | "nic" | "vm"
 	name string

@@ -9,24 +9,24 @@ import (
 	"github.com/souls-guild/soul-stack/sdk/clouddriver"
 )
 
-// classifyAzure — per-provider [clouddriver.ClassifyFunc] для Azure: маппит
-// `*azcore.ResponseError` (ARM-ошибки) в общую таксономию SDK по StatusCode +
-// ErrorCode. Backoff/retry/маппинг-в-event делает SDK (sdk/clouddriver), общий
-// для всех драйверов тиража.
+// classifyAzure is the per-provider [clouddriver.ClassifyFunc] for Azure: it
+// maps `*azcore.ResponseError` (ARM errors) into the shared SDK taxonomy by
+// StatusCode + ErrorCode. Backoff/retry/event mapping is done by the SDK
+// (sdk/clouddriver), shared by all rollout drivers.
 //
-// Стратегия маппинга — двухуровневая: StatusCode (HTTP, надёжно) задаёт
-// «семейство», ErrorCode (строковый, ARM-specific) уточняет в пределах семейства.
-// Не-API ошибки (DNS/TLS/EOF/Azure SDK pipeline) — транзиентны.
+// Mapping strategy is two-level: StatusCode (HTTP, reliable) sets the "family",
+// ErrorCode (string, ARM-specific) refines within the family. Non-API errors
+// (DNS/TLS/EOF/Azure SDK pipeline) are transient.
 func classifyAzure(err error) clouddriver.FailClass {
 	var respErr *azcore.ResponseError
 	if !errors.As(err, &respErr) {
-		// Не-ARM ошибка (сеть/DNS/EOF/токен-pipeline) — транзиентна.
+		// Non-ARM error (network/DNS/EOF/token pipeline) is transient.
 		return clouddriver.FailTransient
 	}
 	code := respErr.ErrorCode
 
-	// Throttle проверяется ПЕРЕД quota: 429 — rate-limit (транзиентный),
-	// 5xx — server-side, тоже транзиентны.
+	// Throttle is checked BEFORE quota: 429 is rate-limit (transient), and 5xx is
+	// server-side, also transient.
 	if isAzureThrottle(respErr.StatusCode, code) {
 		return clouddriver.FailTransient
 	}
@@ -40,15 +40,15 @@ func classifyAzure(err error) clouddriver.FailClass {
 	case http.StatusNotFound:
 		return clouddriver.FailNotFound
 	case http.StatusBadRequest, http.StatusConflict, http.StatusUnprocessableEntity:
-		// 409 Conflict (`ResourceGroupNotFound` тоже сюда у Azure иногда падает —
-		// перебиваем через ErrorCode).
+		// 409 Conflict (`ResourceGroupNotFound` also sometimes lands here for
+		// Azure - override through ErrorCode).
 		if isAzureNotFound(code) {
 			return clouddriver.FailNotFound
 		}
 		return clouddriver.FailInvalidParams
 	}
 
-	// Без явного маркера — по ErrorCode.
+	// Without an explicit marker, decide by ErrorCode.
 	switch {
 	case isAzureAuth(code):
 		return clouddriver.FailAuth
@@ -58,7 +58,7 @@ func classifyAzure(err error) clouddriver.FailClass {
 		return clouddriver.FailInvalidParams
 	}
 
-	// 5xx без явного throttle-маркера — всё равно транзиент.
+	// 5xx without an explicit throttle marker is still transient.
 	if respErr.StatusCode >= 500 && respErr.StatusCode < 600 {
 		return clouddriver.FailTransient
 	}

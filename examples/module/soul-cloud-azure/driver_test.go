@@ -20,8 +20,8 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// withFastBackoff подменяет defaultBackoff на «нулевые» задержки + указанный
-// MaxAttempts. Симметрично soul-cloud-aws.
+// withFastBackoff replaces defaultBackoff with "zero" delays + the given
+// MaxAttempts. Symmetrical with soul-cloud-aws.
 func withFastBackoff(t *testing.T, maxAttempts int) {
 	t.Helper()
 	orig := defaultBackoff
@@ -36,8 +36,8 @@ func withFastBackoff(t *testing.T, maxAttempts int) {
 	t.Cleanup(func() { defaultBackoff = orig })
 }
 
-// withDeterministicSuffix — стабильный хвост для makeVMName без runTag,
-// иначе тесты получают рандомный suffix.
+// withDeterministicSuffix is a stable tail for makeVMName without runTag;
+// otherwise tests get a random suffix.
 func withDeterministicSuffix(t *testing.T, suffix string) {
 	t.Helper()
 	orig := randomSuffix
@@ -45,11 +45,11 @@ func withDeterministicSuffix(t *testing.T, suffix string) {
 	t.Cleanup(func() { randomSuffix = orig })
 }
 
-// --- fake-клиенты Azure ---
+// --- fake Azure clients ---
 
-// fakeVMs / fakeNICs / fakePIPs — mock-реализации vmsAPI/nicsAPI/pipsAPI.
-// Поведение настраивается per-метод; *Seq позволяет сменить результат между
-// раундами поллера (как describeSeq в AWS-тестах).
+// fakeVMs / fakeNICs / fakePIPs are mock implementations of
+// vmsAPI/nicsAPI/pipsAPI. Behavior is configured per method; *Seq allows
+// changing the result between poller rounds (like describeSeq in AWS tests).
 type fakeVMs struct {
 	createErr      error
 	createCalled   int
@@ -63,7 +63,7 @@ type fakeVMs struct {
 	getN   int
 
 	deleteErr   error
-	deleteCalls []string // имена удалённых VM
+	deleteCalls []string // names of deleted VMs
 
 	listResult []*armcompute.VirtualMachine
 	listErr    error
@@ -165,7 +165,7 @@ func (f *fakePIPs) Get(_ context.Context, _, _ string) (armnetwork.PublicIPAddre
 	return f.getResult, nil
 }
 
-// withFakeClients подменяет фабрику клиентов на возврат заданной тройки.
+// withFakeClients replaces the client factory to return the given trio.
 func withFakeClients(t *testing.T, vms vmsAPI, nics nicsAPI, pips pipsAPI) {
 	t.Helper()
 	orig := newAzureClients
@@ -175,7 +175,7 @@ func withFakeClients(t *testing.T, vms vmsAPI, nics nicsAPI, pips pipsAPI) {
 	t.Cleanup(func() { newAzureClients = orig })
 }
 
-// --- stream-mocks (симметрия AWS-теста) ---
+// --- stream mocks (AWS test symmetry) ---
 
 type createStream struct {
 	grpc.ServerStreamingServer[pluginv1.CreateEvent]
@@ -357,12 +357,12 @@ func TestCreate_HappyPath_ThreeResources(t *testing.T) {
 	if vm.PrimaryIp != "4.4.4.4" {
 		t.Errorf("primary_ip=%q", vm.PrimaryIp)
 	}
-	// 3-resource путь пройден полностью.
+	// 3-resource path completed fully.
 	if len(pips.createCalls) != 1 || len(nics.createCalls) != 1 || vms.createCalled != 1 {
 		t.Errorf("3-resource create calls: pip=%d nic=%d vm=%d",
 			len(pips.createCalls), len(nics.createCalls), vms.createCalled)
 	}
-	// userdata в osProfile.customData как base64 (Azure-требование).
+	// userdata is in osProfile.customData as base64 (Azure requirement).
 	cd := vms.lastCreateVM.Properties.OSProfile.CustomData
 	if cd == nil {
 		t.Fatal("customData not set")
@@ -373,7 +373,7 @@ func TestCreate_HappyPath_ThreeResources(t *testing.T) {
 	}
 }
 
-// --- Rollback при фейле NIC ---
+// --- Rollback on NIC failure ---
 
 func TestCreate_RollbackOnNICFail(t *testing.T) {
 	withDeterministicSuffix(t, "rb1")
@@ -396,7 +396,7 @@ func TestCreate_RollbackOnNICFail(t *testing.T) {
 	if !last.Failed {
 		t.Fatal("expected failed=true on NIC fail")
 	}
-	// PIP создан → rollback должен его удалить. VM не создавалась.
+	// PIP was created -> rollback must delete it. VM was not created.
 	if len(pips.deleteCalls) != 1 || pips.deleteCalls[0] != "soul-vm-rb1-pip" {
 		t.Errorf("rollback expected delete PIP, got %v", pips.deleteCalls)
 	}
@@ -405,7 +405,7 @@ func TestCreate_RollbackOnNICFail(t *testing.T) {
 	}
 }
 
-// --- Rollback при фейле VM ---
+// --- Rollback on VM failure ---
 
 func TestCreate_RollbackOnVMFail(t *testing.T) {
 	withDeterministicSuffix(t, "rb2")
@@ -428,7 +428,8 @@ func TestCreate_RollbackOnVMFail(t *testing.T) {
 	if !last.Failed {
 		t.Fatal("expected failed=true on VM fail")
 	}
-	// PIP + NIC созданы → rollback должен удалить обоих, обратный порядок (NIC, PIP).
+	// PIP + NIC were created -> rollback must delete both, reverse order
+	// (NIC, PIP).
 	if len(nics.deleteCalls) != 1 || nics.deleteCalls[0] != "soul-vm-rb2-nic" {
 		t.Errorf("rollback expected delete NIC, got %v", nics.deleteCalls)
 	}
@@ -442,7 +443,8 @@ func TestCreate_RollbackOnVMFail(t *testing.T) {
 func TestCreate_WaitsForRunning(t *testing.T) {
 	withDeterministicSuffix(t, "wt1")
 	vms := &fakeVMs{
-		// Первый Get (probe round) — Creating; второй и далее — Succeeded+running.
+		// First Get (probe round) is Creating; second and later are
+		// Succeeded+running.
 		getSeq: []armcompute.VirtualMachinesClientGetResponse{
 			pendingVMResponse("soul-vm-wt1"),
 			runningVMResponse("soul-vm-wt1"),
@@ -469,7 +471,7 @@ func TestCreate_WaitsForRunning(t *testing.T) {
 	}
 }
 
-// --- Auth-error на старте Create (не доходит до создания ресурсов) ---
+// --- Auth error at Create start (does not reach resource creation) ---
 
 func TestCreate_AuthError_NoResources(t *testing.T) {
 	withDeterministicSuffix(t, "au1")
@@ -495,7 +497,8 @@ func TestCreate_AuthError_NoResources(t *testing.T) {
 	if !strings.Contains(last.Message, "auth:") {
 		t.Errorf("message=%q, want auth-class", last.Message)
 	}
-	// PIP create вызывался один раз и сразу провалил без retry (auth — не transient).
+	// PIP create was called once and failed immediately without retry (auth is not
+	// transient).
 	if len(pips.createCalls) != 1 {
 		t.Errorf("PIP create calls=%d, want 1 (no retry on auth)", len(pips.createCalls))
 	}
@@ -504,7 +507,7 @@ func TestCreate_AuthError_NoResources(t *testing.T) {
 	}
 }
 
-// --- Идемпотентность: tag-match → не создаёт повторно ---
+// --- Idempotency: tag-match -> does not create again ---
 
 func TestCreate_Idempotent_TagMatch(t *testing.T) {
 	withDeterministicSuffix(t, "id1")
@@ -519,7 +522,8 @@ func TestCreate_Idempotent_TagMatch(t *testing.T) {
 	}}
 	vms := &fakeVMs{
 		listResult: existing,
-		// finalizeCreate сделает Get(InstanceView) + fillVMInfo->Get(no expand) → seq из 2.
+		// finalizeCreate does Get(InstanceView) + fillVMInfo->Get(no expand) -> seq
+		// of 2.
 		getSeq: []armcompute.VirtualMachinesClientGetResponse{
 			runningVMResponse("run-42-vm-0"),
 			runningVMResponse("run-42-vm-0"),
@@ -552,20 +556,20 @@ func TestCreate_Idempotent_TagMatch(t *testing.T) {
 	}
 }
 
-// --- Ctx-cancel anti-orphan: VM создалась, wait упёрся в cancel,
-//     composite vm_id попадает в финальный event. ---
+// --- Ctx-cancel anti-orphan: VM was created, wait hit cancel,
+//     composite vm_id gets into the final event. ---
 
 func TestCreate_CtxCancel_AntiOrphan(t *testing.T) {
 	withDeterministicSuffix(t, "ao1")
 	ctx, cancel := context.WithCancel(context.Background())
 	vms := &fakeVMs{
-		// все Get'ы возвращают pending — поллер крутится до отмены ctx.
+		// all Get calls return pending - poller runs until ctx is canceled.
 		getSeq: []armcompute.VirtualMachinesClientGetResponse{pendingVMResponse("soul-vm-ao1")},
 	}
 	nics := &fakeNICs{}
 	pips := &fakePIPs{}
 	withFakeClients(t, vms, nics, pips)
-	cancel() // отменим сразу — поллер уйдёт в sleepCtx и вернёт ctx.Err
+	cancel() // cancel immediately - poller enters sleepCtx and returns ctx.Err
 	d := &AzureDriver{}
 	s := &createStream{ctx: ctx}
 	if err := d.Create(&pluginv1.CreateRequest{
@@ -582,7 +586,7 @@ func TestCreate_CtxCancel_AntiOrphan(t *testing.T) {
 	}
 }
 
-// --- Destroy: 3-resource обратный порядок ---
+// --- Destroy: 3-resource reverse order ---
 
 func TestDestroy_ThreeResources_ReverseOrder(t *testing.T) {
 	withFastBackoff(t, 1)
@@ -598,7 +602,7 @@ func TestDestroy_ThreeResources_ReverseOrder(t *testing.T) {
 	}, s); err != nil {
 		t.Fatalf("Destroy: %v", err)
 	}
-	// VM сначала, потом NIC, потом PIP.
+	// VM first, then NIC, then PIP.
 	if len(vms.deleteCalls) != 1 || vms.deleteCalls[0] != "run-1-vm-0" {
 		t.Errorf("vm deletes=%v", vms.deleteCalls)
 	}
@@ -613,7 +617,7 @@ func TestDestroy_ThreeResources_ReverseOrder(t *testing.T) {
 	}
 }
 
-// --- Destroy not-found на VM-шаге = идемпотентно, продолжаем NIC/PIP ---
+// --- Destroy not-found at VM step = idempotent, continue NIC/PIP ---
 
 func TestDestroy_NotFoundIsIdempotent(t *testing.T) {
 	withFastBackoff(t, 1)
@@ -638,7 +642,7 @@ func TestDestroy_NotFoundIsIdempotent(t *testing.T) {
 	}
 }
 
-// --- Status: возвращает power-state из InstanceView ---
+// --- Status: returns power-state from InstanceView ---
 
 func TestStatus_PowerStateFromInstanceView(t *testing.T) {
 	vms := &fakeVMs{getSeq: []armcompute.VirtualMachinesClientGetResponse{runningVMResponse("v1")}}
@@ -659,7 +663,7 @@ func TestStatus_PowerStateFromInstanceView(t *testing.T) {
 	}
 }
 
-// --- List: фильтр по runTag ---
+// --- List: filter by runTag ---
 
 func TestList_FilterByRunTag(t *testing.T) {
 	vms := &fakeVMs{listResult: []*armcompute.VirtualMachine{
@@ -684,7 +688,7 @@ func TestList_FilterByRunTag(t *testing.T) {
 	}
 }
 
-// --- List без runTag → пустой ответ (защита от full-subscription dump) ---
+// --- List without runTag -> empty response (protection from full-subscription dump) ---
 
 func TestList_WithoutFilter_Empty(t *testing.T) {
 	vms := &fakeVMs{listResult: []*armcompute.VirtualMachine{{Name: to.Ptr("vm-x")}}}
@@ -729,7 +733,7 @@ func TestClassifyAzure_Codes(t *testing.T) {
 			}
 		})
 	}
-	// Не-API ошибка → transient.
+	// Non-API error -> transient.
 	if got := classifyAzure(errors.New("dial tcp: timeout")); got != clouddriver.FailTransient {
 		t.Errorf("non-API err class=%v, want transient", got)
 	}

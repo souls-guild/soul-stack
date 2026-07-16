@@ -19,10 +19,10 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// L1 — driver-as-plugin через РЕАЛЬНЫЙ gRPC server+client. Проверяет, что
-// AzureDriver корректно работает по proto-контракту CloudDriver — включая
-// credentials/userdata + composite vm_id для multi-resource VM — поверх
-// настоящего gRPC-стрима, а не in-proc вызова метода. Симметрично
+// L1 is driver-as-plugin through a REAL gRPC server+client. It verifies that
+// AzureDriver correctly works through the CloudDriver proto contract - including
+// credentials/userdata + composite vm_id for multi-resource VM - over a real
+// gRPC stream, not an in-proc method call. Symmetrical with
 // soul-cloud-aws/plugin_l1_test.go.
 
 func serveDriverGRPC(t *testing.T, impl *AzureDriver) (pluginv1.CloudDriverClient, func()) {
@@ -46,8 +46,8 @@ func serveDriverGRPC(t *testing.T, impl *AzureDriver) (pluginv1.CloudDriverClien
 	return pluginv1.NewCloudDriverClient(conn), teardown
 }
 
-// l1Adapter — мост impl→CloudDriverServer (embed Unimplemented для forward-compat),
-// идентичный sdk/clouddriver.serverAdapter (тот неэкспортирован).
+// l1Adapter bridges impl -> CloudDriverServer (embedding Unimplemented for
+// forward compatibility), matching sdk/clouddriver.serverAdapter (not exported).
 type l1Adapter struct {
 	pluginv1.UnimplementedCloudDriverServer
 	impl *AzureDriver
@@ -121,8 +121,8 @@ func TestL1_CreateOverGRPC(t *testing.T) {
 	if len(lastVms) != 1 || lastVms[0].VmId != "soul-vm-l1c" || lastVms[0].Fqdn == "" {
 		t.Errorf("vms over gRPC = %+v", lastVms)
 	}
-	// userdata доехал через proto-стрим и был закодирован драйвером в base64
-	// (Azure customData-требование, см. main.go).
+	// userdata arrived through the proto stream and was base64-encoded by the
+	// driver (Azure customData requirement, see main.go).
 	cd := vms.lastCreateVM.Properties.OSProfile.CustomData
 	if cd == nil {
 		t.Fatal("customData nil")
@@ -193,7 +193,7 @@ func TestL1_DestroyOverGRPC(t *testing.T) {
 	if got != 1 {
 		t.Errorf("destroy events=%d, want 1", got)
 	}
-	// 3-resource обратный порядок прошёл через gRPC.
+	// 3-resource reverse order went through gRPC.
 	if len(vms.deleteCalls) != 1 || len(nics.deleteCalls) != 1 || len(pips.deleteCalls) != 1 {
 		t.Errorf("3-resource destroy calls: vm=%d nic=%d pip=%d",
 			len(vms.deleteCalls), len(nics.deleteCalls), len(pips.deleteCalls))
