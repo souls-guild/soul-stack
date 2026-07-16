@@ -83,7 +83,7 @@ func TestNewPool_RejectsEmptyDSN(t *testing.T) {
 }
 
 func TestNewPool_RejectsMalformedDSN(t *testing.T) {
-	// `pgxpool.ParseConfig` фейлит на не-URL / не-keyvalue строке.
+	// `pgxpool.ParseConfig` fails on non-URL / non-keyvalue strings.
 	_, err := NewPool(context.Background(), config.KeeperPostgres{
 		DSNRef: "not-a-dsn",
 	}, nil)

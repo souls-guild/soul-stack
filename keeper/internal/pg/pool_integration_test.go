@@ -1,14 +1,14 @@
 //go:build integration
 
-// Integration-тесты ResolveDSN/NewPool с реальным Vault через testcontainers.
+// Integration tests for ResolveDSN/NewPool with real Vault via testcontainers.
 //
-// Один Vault + один Postgres per-package в TestMain — поднятие контейнеров
-// занимает 3-5 секунд каждый. Vault dev-mode, root-token = "root".
+// One Vault + one Postgres per-package in TestMain — container startup takes
+// 3-5 seconds each. Vault dev-mode, root-token = "root".
 //
-// Запуск:
+// To run:
 //
 //	make test-integration
-//	# или
+//	# or
 //	cd keeper && go test -tags=integration -race -count=1 ./internal/pg/
 
 package pg
@@ -113,8 +113,8 @@ func run(m *testing.M) int {
 	return m.Run()
 }
 
-// TestIntegration_ResolveDSN_HappyPath — записать DSN в Vault KV под
-// полем `dsn`, прочитать через ResolveDSN, сверить.
+// TestIntegration_ResolveDSN_HappyPath writes DSN to Vault KV under the
+// `dsn` field, reads it via ResolveDSN, and verifies it matches.
 func TestIntegration_ResolveDSN_HappyPath(t *testing.T) {
 	ctx := context.Background()
 	if _, err := integrationVaultAPI.KVv2("secret").Put(ctx, "keeper/postgres", map[string]any{
@@ -132,8 +132,8 @@ func TestIntegration_ResolveDSN_HappyPath(t *testing.T) {
 	}
 }
 
-// TestIntegration_NewPool_VaultRef — NewPool с vault-ref в DSNRef
-// поднимает реальный pool и Ping проходит.
+// TestIntegration_NewPool_VaultRef uses NewPool with vault-ref in DSNRef
+// to start a real pool and verify Ping succeeds.
 func TestIntegration_NewPool_VaultRef(t *testing.T) {
 	ctx := context.Background()
 	if _, err := integrationVaultAPI.KVv2("secret").Put(ctx, "keeper/postgres", map[string]any{
@@ -155,8 +155,8 @@ func TestIntegration_NewPool_VaultRef(t *testing.T) {
 	}
 }
 
-// TestIntegration_ResolveDSN_VaultPathMissing — путь в KV отсутствует →
-// ошибка от ReadKV пробрасывается как ErrVaultKVNotFound.
+// TestIntegration_ResolveDSN_VaultPathMissing verifies that when the KV
+// path is missing, the error from ReadKV is propagated as ErrVaultKVNotFound.
 func TestIntegration_ResolveDSN_VaultPathMissing(t *testing.T) {
 	_, err := ResolveDSN(context.Background(), integrationVault, "vault:secret/keeper/never-existed")
 	if !errors.Is(err, keepervault.ErrVaultKVNotFound) {
@@ -164,8 +164,8 @@ func TestIntegration_ResolveDSN_VaultPathMissing(t *testing.T) {
 	}
 }
 
-// TestIntegration_ResolveDSN_DSNFieldMissing — KV есть, но поля `dsn`
-// нет → ErrDSNFieldMissing.
+// TestIntegration_ResolveDSN_DSNFieldMissing verifies that when KV exists
+// but lacks the `dsn` field, ErrDSNFieldMissing is returned.
 func TestIntegration_ResolveDSN_DSNFieldMissing(t *testing.T) {
 	ctx := context.Background()
 	if _, err := integrationVaultAPI.KVv2("secret").Put(ctx, "keeper/postgres-bad", map[string]any{

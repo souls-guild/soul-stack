@@ -1,10 +1,10 @@
-// Package pg — pgx-pool инициализация для Keeper-а под ADR-005
-// (Postgres — единственное холодное хранилище состояния).
+// Package pg provides pgx-pool initialization for Keeper under ADR-005
+// (Postgres is the only cold storage for state).
 //
-// Owner-ship pool-а лежит на `keeper/cmd/keeper` (M0.4.2); каждая
-// подсистема, нуждающаяся в БД (`shared/audit`, реестры souls/operators,
-// Reaper), принимает уже инициализированный `*pgxpool.Pool` через
-// конструктор — пакет не держит global state.
+// Pool ownership resides in `keeper/cmd/keeper` (M0.4.2); each subsystem
+// needing the database (`shared/audit`, souls/operators registries, Reaper)
+// receives an already-initialized `*pgxpool.Pool` via constructor — the
+// package does not hold global state.
 package pg
 
 import (
@@ -19,37 +19,37 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// vaultDSNField — имя поля внутри Vault KV-secret, в котором лежит plain
-// DSN для Postgres-а. Совпадает с конвенцией [docs/keeper/config.md] и
-// дополнением [docs/dev/local-setup.md] (`vault kv put secret/keeper/postgres
+// vaultDSNField is the field name inside Vault KV-secret containing the
+// plain DSN for Postgres. Matches the convention in [docs/keeper/config.md]
+// and supplement [docs/dev/local-setup.md] (`vault kv put secret/keeper/postgres
 // dsn="postgres://..."`).
 const vaultDSNField = "dsn"
 
-// ErrEmptyDSN возвращается, если `cfg.DSNRef` пустой. Caller может
-// использовать `errors.Is(err, pg.ErrEmptyDSN)` для классификации
-// (например, отличать «конфиг не дозаполнен» от «vault недоступен»).
+// ErrEmptyDSN is returned if `cfg.DSNRef` is empty. Callers can use
+// `errors.Is(err, pg.ErrEmptyDSN)` for classification (e.g., to distinguish
+// "config incomplete" from "vault unavailable").
 var ErrEmptyDSN = errors.New("pg: empty dsn_ref")
 
-// ErrVaultClientRequired возвращается, когда `dsn_ref` начинается с
-// `vault:`, но vault-client не передан. Это инвариант caller-а
-// (`keeper/cmd/keeper`): vault-client всегда поднимается до NewPool.
+// ErrVaultClientRequired is returned when `dsn_ref` starts with `vault:`
+// but no vault-client was provided. This is a caller invariant
+// (`keeper/cmd/keeper`): vault-client is always initialized before NewPool.
 var ErrVaultClientRequired = errors.New("pg: vault client is required for vault:-ref")
 
-// ErrDSNFieldMissing возвращается, если Vault KV по [vaultDSNField]
-// отсутствует, пустой или имеет неподдерживаемый тип.
+// ErrDSNFieldMissing is returned if the Vault KV field specified by
+// [vaultDSNField] is missing, empty, or has an unsupported type.
 var ErrDSNFieldMissing = fmt.Errorf("pg: %q field missing or empty in Vault KV", vaultDSNField)
 
-// NewPool открывает пул соединений к Postgres-у по `cfg.DSNRef` /
-// `cfg.Pool`. Пул не пингует БД — это отдельный вызов [Ping] на старте
-// keeper-а после полной инициализации зависимостей.
+// NewPool opens a connection pool to Postgres using `cfg.DSNRef` / `cfg.Pool`.
+// The pool does not ping the database — that is a separate [Ping] call on
+// keeper startup after all dependencies are initialized.
 //
-// `vc` (vault-client) обязателен только если `cfg.DSNRef` — vault-ref
-// (`vault:<mount>/<path>`); для plain-DSN можно передать nil.
+// `vc` (vault-client) is required only if `cfg.DSNRef` is a vault-ref
+// (`vault:<mount>/<path>`); nil can be passed for plain-DSN.
 //
-// Pool min/max берутся из `cfg.Pool.Min` / `cfg.Pool.Max`. Если оба
-// нулевые (фикстуры без явного блока pool) — pgx использует свои
-// дефолты (max=4); это поведение принято, чтобы не дублировать default
-// pool-config между config-schema и кодом.
+// Pool min/max are taken from `cfg.Pool.Min` / `cfg.Pool.Max`. If both
+// are zero (fixtures without an explicit pool block) — pgx uses its own
+// defaults (max=4); this behavior is accepted to avoid duplicating the
+// default pool-config between config-schema and code.
 func NewPool(ctx context.Context, cfg config.KeeperPostgres, vc *keepervault.Client) (*pgxpool.Pool, error) {
 	dsn, err := ResolveDSN(ctx, vc, cfg.DSNRef)
 	if err != nil {
@@ -72,18 +72,18 @@ func NewPool(ctx context.Context, cfg config.KeeperPostgres, vc *keepervault.Cli
 	return pool, nil
 }
 
-// ResolveDSN превращает `dsn_ref` из config-а в plain-DSN. Поддерживает:
+// ResolveDSN converts a `dsn_ref` from config into a plain-DSN. Supports:
 //
-//   - plain DSN: `postgres://...` / `postgresql://...` — возвращается as-is
-//     (ctx/vc игнорируются).
-//   - vault-ref: `vault:<mount>/<path>` — читает поле `dsn` из Vault KV.
-//     `vc` обязателен; иначе [ErrVaultClientRequired].
+//   - plain DSN: `postgres://...` / `postgresql://...` — returned as-is
+//     (ctx/vc ignored).
+//   - vault-ref: `vault:<mount>/<path>` — reads the `dsn` field from Vault KV.
+//     `vc` is required; otherwise [ErrVaultClientRequired].
 //
-// Пустой `ref` → [ErrEmptyDSN]; отсутствует/пустое поле `dsn` в Vault →
-// [ErrDSNFieldMissing]; поле не string → error.
+// Empty `ref` → [ErrEmptyDSN]; missing/empty `dsn` field in Vault →
+// [ErrDSNFieldMissing]; field not a string → error.
 //
-// Экспортирован, чтобы `keeper/internal/migrate.Apply` мог получить тот
-// же DSN, что [NewPool], без двойной vault-resolve-логики.
+// Exported so `keeper/internal/migrate.Apply` can get the same DSN as
+// [NewPool] without duplicating vault-resolve logic.
 func ResolveDSN(ctx context.Context, vc *keepervault.Client, ref string) (string, error) {
 	if ref == "" {
 		return "", fmt.Errorf("%w", ErrEmptyDSN)
@@ -105,9 +105,9 @@ func ResolveDSN(ctx context.Context, vc *keepervault.Client, ref string) (string
 	return extractDSN(kv)
 }
 
-// extractDSN достаёт поле `dsn` из Vault KV payload-а. PM-decision C:
-// DSN — always plain string, без base64-fallback (он остаётся в
-// bootstrap.extractSigningKey, специфика бинарного ключа).
+// extractDSN extracts the `dsn` field from a Vault KV payload. PM-decision C:
+// DSN is always a plain string, without base64-fallback (which remains in
+// bootstrap.extractSigningKey for binary key specifics).
 func extractDSN(kv map[string]any) (string, error) {
 	raw, ok := kv[vaultDSNField]
 	if !ok {
