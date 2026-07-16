@@ -7,6 +7,7 @@
 //   - kind=scenario (S2): real batched scenario run over N incarnations per
 //     batch (Leg); each incarnation gets its own scenario-run + state-commit.
 //   - kind=command (S3): NOOP stub (S1 foundation); finalize succeeds.
+//
 // Config-gated OFF by default (see daemon.setupVoyageWorker); production
 // wire-up of Spawner/Awaiter for kind=scenario is S5.
 // Failover-resilience: on instance death, Reaper returns stale claim to
@@ -142,7 +143,7 @@ func (w *VoyageWorker) Run(ctx context.Context) error {
 	}
 }
 
-// sleep ждёт duration или ctx.Done. Возвращает false, если вышли по ctx.
+// sleep waits for duration or ctx.Done. Returns false when exiting through ctx.
 func (w *VoyageWorker) sleep(ctx context.Context, d time.Duration) bool {
 	t := time.NewTimer(d)
 	defer t.Stop()

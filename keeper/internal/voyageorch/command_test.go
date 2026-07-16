@@ -12,8 +12,8 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/voyage"
 )
 
-// commandClaimRow — claim-строка kind=command с module и двумя хостами в
-// target_resolved (25 колонок в порядке scanVoyage).
+// commandClaimRow is a kind=command claim row with module and two hosts in
+// target_resolved (25 columns in scanVoyage order).
 func commandClaimRow() scanRow {
 	r := claimedVoyageRow("01HVOYCMD", string(voyage.KindCommand), string(voyage.StatusRunning))
 	mod := "core.cmd.shell"
@@ -22,13 +22,13 @@ func commandClaimRow() scanRow {
 	return r
 }
 
-// fakeCommandSpawner — stub [CommandSpawner]. Возвращает детерминированный
-// errandID `er-<sid>` и статус из statuses (default "success") либо ошибку из
-// failSIDs. Считает вызовы и фиксирует max-параллелизм (для concurrency-cap).
+// fakeCommandSpawner is a [CommandSpawner] stub. It returns deterministic errandID
+// `er-<sid>` and status from statuses (default "success") or error from failSIDs.
+// It counts calls and records max parallelism (for concurrency-cap).
 type fakeCommandSpawner struct {
 	mu          sync.Mutex
 	failSIDs    map[string]bool
-	statuses    map[string]string // sid → errand-status (default "success")
+	statuses    map[string]string // sid -> errand-status (default "success")
 	calls       []string
 	active      int
 	maxParallel int
@@ -88,8 +88,8 @@ func commandVoyage(sids []string, batchSize, concurrency *int, onFailure *voyage
 	}
 }
 
-// windowCommandVoyage — kind=command в batch_mode=window (S-W1). batch_size не
-// используется (ширина окна = concurrency).
+// windowCommandVoyage is kind=command in batch_mode=window (S-W1). batch_size is
+// not used (window width = concurrency).
 func windowCommandVoyage(sids []string, concurrency *int, onFailure *voyage.OnFailure) *voyage.Voyage {
 	v := commandVoyage(sids, nil, concurrency, onFailure, nil)
 	wm := voyage.BatchModeWindow
@@ -155,7 +155,7 @@ func TestChunkSIDs(t *testing.T) {
 	}
 }
 
-// ---- executeCommandVoyage: один батч, все хосты success ----
+// ---- executeCommandVoyage: one batch, all hosts success ----
 
 func TestExecuteCommand_SingleBatch_AllSucceed(t *testing.T) {
 	t.Parallel()
@@ -175,7 +175,7 @@ func TestExecuteCommand_SingleBatch_AllSucceed(t *testing.T) {
 	if len(sp.calls) != 3 {
 		t.Errorf("spawn calls = %d, want 3", len(sp.calls))
 	}
-	// voyage_targets sid-трекинг: каждый хост дошёл до succeeded.
+	// voyage_targets SID tracking: every host reached succeeded.
 	for _, s := range []string{"s1", "s2", "s3"} {
 		if got := fdb.targetStatus(s); got != string(voyage.TargetStatusSucceeded) {
 			t.Errorf("target %s status = %q, want succeeded", s, got)
@@ -183,7 +183,7 @@ func TestExecuteCommand_SingleBatch_AllSucceed(t *testing.T) {
 	}
 }
 
-// ---- chunking по SID: N батчей ----
+// ---- chunking by SID: N batches ----
 
 func TestExecuteCommand_MultipleBatches(t *testing.T) {
 	t.Parallel()
@@ -191,7 +191,7 @@ func TestExecuteCommand_MultipleBatches(t *testing.T) {
 	sp := &fakeCommandSpawner{}
 	w := &VoyageWorker{KID: "k", Pool: fdb, Logger: quietLogger(), CommandSpawner: sp}
 
-	// 5 хостов, batch_size=2 → 3 Leg-а (2/2/1).
+	// 5 hosts, batch_size=2 -> 3 Legs (2/2/1).
 	v := commandVoyage([]string{"a", "b", "c", "d", "e"}, intp(2), nil, nil, nil)
 	status, summary, _ := w.executeCommandVoyage(context.Background(), v, make(chan struct{}))
 
@@ -211,8 +211,8 @@ func TestExecuteCommand_MultipleBatches(t *testing.T) {
 func TestExecuteCommand_OnFailureAbort(t *testing.T) {
 	t.Parallel()
 	fdb := &fakeDB{}
-	// "b" вернёт failed-статус → abort после первого Leg-а (batch_size=2):
-	// Leg0=[a,b] исполнится, провал → Leg1=[c,d] НЕ стартует.
+	// "b" returns failed status -> abort after the first Leg (batch_size=2):
+	// Leg0=[a,b] runs, failure -> Leg1=[c,d] does NOT start.
 	sp := &fakeCommandSpawner{statuses: map[string]string{"b": "failed"}}
 	w := &VoyageWorker{KID: "k", Pool: fdb, Logger: quietLogger(), CommandSpawner: sp}
 
@@ -224,7 +224,7 @@ func TestExecuteCommand_OnFailureAbort(t *testing.T) {
 		t.Errorf("status = %q, want partial_failed", status)
 	}
 	if len(sp.calls) != 2 {
-		t.Errorf("spawn calls = %d, want 2 (abort после Leg0)", len(sp.calls))
+		t.Errorf("spawn calls = %d, want 2 (abort after Leg0)", len(sp.calls))
 	}
 	if summary.Succeeded != 1 || summary.Failed != 1 {
 		t.Errorf("summary = %+v", summary)
@@ -245,18 +245,19 @@ func TestExecuteCommand_OnFailureContinue(t *testing.T) {
 		t.Errorf("status = %q, want partial_failed", status)
 	}
 	if len(sp.calls) != 4 {
-		t.Errorf("spawn calls = %d, want 4 (continue до конца)", len(sp.calls))
+		t.Errorf("spawn calls = %d, want 4 (continue to the end)", len(sp.calls))
 	}
 	if summary.Succeeded != 3 || summary.Failed != 1 {
 		t.Errorf("summary = %+v", summary)
 	}
 }
 
-// ---- fail_threshold: обобщённый abort-gate (S-W3) ----
+// ---- fail_threshold: generalized abort-gate (S-W3) ----
 
-// barrier: fail_threshold=2 — прогон идёт, пока кумулятив провалов < 2; на 2-м
-// провале (после Leg-а, в котором он накопился) — стоп. 6 хостов batch_size=1 →
-// Leg-и по 1; "b" и "d" падают: после Leg "d" failed=2 → стоп, "e"/"f" пропущены.
+// barrier: fail_threshold=2 means the run continues while cumulative failures < 2;
+// on the 2nd failure (after the Leg where it accumulated), stop. 6 hosts with
+// batch_size=1 -> Legs of 1; "b" and "d" fail: after Leg "d" failed=2 -> stop,
+// "e"/"f" are skipped.
 func TestExecuteCommand_FailThreshold_StopsAtN(t *testing.T) {
 	t.Parallel()
 	fdb := &fakeDB{}
@@ -271,17 +272,17 @@ func TestExecuteCommand_FailThreshold_StopsAtN(t *testing.T) {
 	if status != voyage.StatusPartialFailed {
 		t.Errorf("status = %q, want partial_failed", status)
 	}
-	// Leg-и a,b,c,d исполнены (4 спавна), на failed=2 после "d" — стоп; e,f пропущены.
+	// Legs a,b,c,d executed (4 spawns), failed=2 after "d" -> stop; e,f skipped.
 	if len(sp.calls) != 4 {
-		t.Errorf("spawn calls = %d, want 4 (стоп на fail_threshold=2 после d)", len(sp.calls))
+		t.Errorf("spawn calls = %d, want 4 (stop at fail_threshold=2 after d)", len(sp.calls))
 	}
 	if summary.Failed != 2 {
 		t.Errorf("summary.Failed = %d, want 2", summary.Failed)
 	}
 }
 
-// barrier: fail_threshold=3 при 1 провале → НЕ срабатывает, прогон до конца
-// (промежуточная толерантность).
+// barrier: fail_threshold=3 with 1 failure does NOT fire; run to the end
+// (intermediate tolerance).
 func TestExecuteCommand_FailThreshold_ToleratesBelowN(t *testing.T) {
 	t.Parallel()
 	fdb := &fakeDB{}
@@ -297,13 +298,13 @@ func TestExecuteCommand_FailThreshold_ToleratesBelowN(t *testing.T) {
 		t.Errorf("status = %q, want partial_failed", status)
 	}
 	if len(sp.calls) != 4 {
-		t.Errorf("spawn calls = %d, want 4 (1 провал < порога 3 → до конца)", len(sp.calls))
+		t.Errorf("spawn calls = %d, want 4 (1 failure < threshold 3 -> to the end)", len(sp.calls))
 	}
 }
 
-// window: fail_threshold=2 — окно прекращает спавн новых при достижении 2-х
-// провалов; уже-выработанные доработают, остаток очереди → cancelled. Все хосты
-// failed, concurrency=1 (детерминированный порядок выборки).
+// window: fail_threshold=2 stops spawning new items once 2 failures are reached;
+// already pulled items finish, queue remainder -> cancelled. All hosts fail,
+// concurrency=1 (deterministic pull order).
 func TestExecuteCommand_Window_FailThreshold(t *testing.T) {
 	t.Parallel()
 	fdb := &fakeDB{}
@@ -318,28 +319,28 @@ func TestExecuteCommand_Window_FailThreshold(t *testing.T) {
 	status, summary, _ := w.executeCommandVoyage(context.Background(), v, make(chan struct{}))
 
 	if status != voyage.StatusFailed {
-		t.Errorf("status = %q, want failed (все провалы, ни одного успеха)", status)
+		t.Errorf("status = %q, want failed (all failures, no successes)", status)
 	}
-	// concurrency=1: спавнятся a,b → failed=2 → cancelFan; c,d остаются в очереди.
+	// concurrency=1: a,b spawn -> failed=2 -> cancelFan; c,d remain in queue.
 	if len(sp.calls) != 2 {
-		t.Errorf("spawn calls = %d, want 2 (стоп на fail_threshold=2)", len(sp.calls))
+		t.Errorf("spawn calls = %d, want 2 (stop at fail_threshold=2)", len(sp.calls))
 	}
 	if summary.Failed != 2 || summary.Cancelled != 2 {
 		t.Errorf("summary = %+v, want Failed=2 Cancelled=2", summary)
 	}
 }
 
-// ---- inter_unit_interval: per-unit throttle в window (S-W3) ----
+// ---- inter_unit_interval: per-unit throttle in window (S-W3) ----
 
-// window с inter_unit_interval > 0: пауза перед каждой единицей удлиняет прогон
-// минимум на (N-1)×interval (грубая проверка: общее время ≥ суммы пауз).
+// window with inter_unit_interval > 0: pause before each unit lengthens the run by
+// at least (N-1)*interval (rough check: total time >= pause sum).
 func TestExecuteCommand_Window_InterUnitInterval(t *testing.T) {
 	t.Parallel()
 	fdb := &fakeDB{}
 	sp := &fakeCommandSpawner{}
 	w := &VoyageWorker{KID: "k", Pool: fdb, Logger: quietLogger(), CommandSpawner: sp}
 
-	// concurrency=1, 3 хоста, пауза 30ms перед каждой единицей → ≥ 90ms суммарно.
+	// concurrency=1, 3 hosts, 30ms pause before each unit -> >= 90ms total.
 	v := windowCommandVoyage([]string{"a", "b", "c"}, intp(1), nil)
 	iu := 30 * time.Millisecond
 	v.InterUnitInterval = &iu
@@ -355,14 +356,14 @@ func TestExecuteCommand_Window_InterUnitInterval(t *testing.T) {
 		t.Errorf("summary = %+v, want Succeeded=3", summary)
 	}
 	if elapsed < 80*time.Millisecond {
-		t.Errorf("elapsed = %v, want ≥ ~90ms (3×30ms inter_unit throttle)", elapsed)
+		t.Errorf("elapsed = %v, want >= ~90ms (3*30ms inter_unit throttle)", elapsed)
 	}
 }
 
-// Отмена (fanCtx) ВО ВРЕМЯ inter_unit-паузы прекращает спавн: единица, снятая с
-// очереди и ждущая throttle, помечается cancelled, SpawnCommand НЕ вызывается
-// (qa-gap к happy-path InterUnitInterval). concurrency=1, длинная пауза → первая
-// единица гарантированно стоит в throttle, когда отменяется родительский ctx.
+// Cancellation (fanCtx) DURING inter_unit pause stops spawning: unit taken from
+// the queue and waiting in throttle is marked cancelled, SpawnCommand is NOT called
+// (qa-gap to happy-path InterUnitInterval). concurrency=1, long pause -> first
+// unit is guaranteed to be in throttle when parent ctx is cancelled.
 func TestExecuteCommand_Window_InterUnitInterval_CancelledDuringPause(t *testing.T) {
 	t.Parallel()
 	fdb := &fakeDB{}
@@ -370,7 +371,7 @@ func TestExecuteCommand_Window_InterUnitInterval_CancelledDuringPause(t *testing
 	w := &VoyageWorker{KID: "k", Pool: fdb, Logger: quietLogger(), CommandSpawner: sp}
 
 	v := windowCommandVoyage([]string{"a", "b", "c"}, intp(1), nil)
-	iu := time.Hour // длинная пауза — единица застревает в throttle, отменим в ней
+	iu := time.Hour // long pause: unit gets stuck in throttle; cancel there
 	v.InterUnitInterval = &iu
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -380,7 +381,7 @@ func TestExecuteCommand_Window_InterUnitInterval_CancelledDuringPause(t *testing
 		done <- summary
 	}()
 
-	// Дать воркеру снять "a" с очереди и встать в inter_unit-паузу, затем отменить.
+	// Let worker take "a" from the queue and enter inter_unit pause, then cancel.
 	time.Sleep(30 * time.Millisecond)
 	cancel()
 
@@ -390,20 +391,20 @@ func TestExecuteCommand_Window_InterUnitInterval_CancelledDuringPause(t *testing
 		calls := append([]string(nil), sp.calls...)
 		sp.mu.Unlock()
 		if len(calls) != 0 {
-			t.Errorf("spawn calls = %v, want 0 (отмена в паузе — SpawnCommand не вызван)", calls)
+			t.Errorf("spawn calls = %v, want 0 (cancelled in pause - SpawnCommand not called)", calls)
 		}
 		if got := fdb.targetStatus("a"); got != string(voyage.TargetStatusCancelled) {
-			t.Errorf("target a status = %q, want cancelled (снят с очереди, не стартовал)", got)
+			t.Errorf("target a status = %q, want cancelled (taken from queue, did not start)", got)
 		}
 		if summary == nil || summary.Cancelled == 0 {
-			t.Errorf("summary = %+v, want Cancelled ≥ 1", summary)
+			t.Errorf("summary = %+v, want Cancelled >= 1", summary)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("executeCommandVoyage не вышел после отмены ctx в inter_unit-паузе")
+		t.Fatal("executeCommandVoyage did not exit after ctx cancellation in inter_unit pause")
 	}
 }
 
-// ---- timed_out / module_not_allowed считаются провалом ----
+// ---- timed_out / module_not_allowed count as failure ----
 
 func TestExecuteCommand_NonSuccessStatusesAreFailure(t *testing.T) {
 	t.Parallel()
@@ -430,7 +431,7 @@ func TestExecuteCommand_NonSuccessStatusesAreFailure(t *testing.T) {
 	}
 }
 
-// ---- spawn-ошибка (Errand не запустился) учитывается как failed ----
+// ---- spawn error (Errand did not start) counts as failed ----
 
 func TestExecuteCommand_SpawnError(t *testing.T) {
 	t.Parallel()
@@ -453,7 +454,7 @@ func TestExecuteCommand_SpawnError(t *testing.T) {
 	}
 }
 
-// ---- все провалились → failed ----
+// ---- all failed -> failed ----
 
 func TestExecuteCommand_AllFailed(t *testing.T) {
 	t.Parallel()
@@ -473,7 +474,7 @@ func TestExecuteCommand_AllFailed(t *testing.T) {
 	}
 }
 
-// ---- inter_batch_interval: пауза между Leg-ами ----
+// ---- inter_batch_interval: pause between Legs ----
 
 func TestExecuteCommand_InterBatchInterval(t *testing.T) {
 	t.Parallel()
@@ -482,7 +483,7 @@ func TestExecuteCommand_InterBatchInterval(t *testing.T) {
 	w := &VoyageWorker{KID: "k", Pool: fdb, Logger: quietLogger(), CommandSpawner: sp}
 
 	interval := 60 * time.Millisecond
-	// 3 хоста, batch_size=1 → 3 Leg-а → 2 паузы между ними ≈ 120ms.
+	// 3 hosts, batch_size=1 -> 3 Legs -> 2 pauses between them, about 120ms.
 	v := commandVoyage([]string{"a", "b", "c"}, intp(1), nil, nil, &interval)
 
 	start := time.Now()
@@ -493,7 +494,7 @@ func TestExecuteCommand_InterBatchInterval(t *testing.T) {
 		t.Errorf("status = %q, want succeeded", status)
 	}
 	if elapsed < 2*interval {
-		t.Errorf("elapsed %v < 2*interval %v — пауза между Leg-ами не соблюдена", elapsed, 2*interval)
+		t.Errorf("elapsed %v < 2*interval %v - pause between Legs not respected", elapsed, 2*interval)
 	}
 }
 
@@ -503,7 +504,7 @@ func TestExecuteCommand_InterBatchInterval_AbortedByLeaseLost(t *testing.T) {
 	sp := &fakeCommandSpawner{}
 	w := &VoyageWorker{KID: "k", Pool: fdb, Logger: quietLogger(), CommandSpawner: sp}
 
-	interval := time.Hour // длинная пауза, прервём через leaseLost
+	interval := time.Hour // long pause, interrupt through leaseLost
 	leaseLost := make(chan struct{})
 	v := commandVoyage([]string{"a", "b"}, intp(1), nil, nil, &interval)
 
@@ -513,7 +514,7 @@ func TestExecuteCommand_InterBatchInterval_AbortedByLeaseLost(t *testing.T) {
 		done <- st
 	}()
 
-	// Дожидаемся первого Leg-а (spawn "a"), затем теряем lease на паузе.
+	// Wait for the first Leg (spawn "a"), then lose lease during pause.
 	deadline := time.After(2 * time.Second)
 	for {
 		sp.mu.Lock()
@@ -524,7 +525,7 @@ func TestExecuteCommand_InterBatchInterval_AbortedByLeaseLost(t *testing.T) {
 		}
 		select {
 		case <-deadline:
-			t.Fatal("первый Leg не стартовал")
+			t.Fatal("first Leg did not start")
 		case <-time.After(2 * time.Millisecond):
 		}
 	}
@@ -533,24 +534,24 @@ func TestExecuteCommand_InterBatchInterval_AbortedByLeaseLost(t *testing.T) {
 	select {
 	case st := <-done:
 		if st != "" {
-			t.Errorf("status = %q, want \"\" (lease lost — не финализируем)", st)
+			t.Errorf("status = %q, want \"\" (lease lost - do not finalize)", st)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("executeCommandVoyage не вышел после leaseLost на паузе")
+		t.Fatal("executeCommandVoyage did not exit after leaseLost during pause")
 	}
 }
 
-// ---- lease lost ПОСРЕДИ серийного Leg-а: оставшиеся не спавнятся (КАК S2) ----
+// ---- lease lost IN THE MIDDLE of a serial Leg: remaining hosts do not spawn (AS S2) ----
 
 func TestExecuteCommand_LeaseLostMidLeg_StopsSpawn(t *testing.T) {
 	t.Parallel()
 	fdb := &fakeDB{}
-	// Длинный spawn (delay) — окно, чтобы потерять lease, пока первый хост
-	// ещё «в работе», до раздачи оставшихся.
+	// Long spawn (delay) creates a window to lose lease while the first host is
+	// still "in progress", before assigning the remaining ones.
 	sp := &fakeCommandSpawner{delay: time.Hour}
 	w := &VoyageWorker{KID: "k", Pool: fdb, Logger: quietLogger(), CommandSpawner: sp}
 
-	// batch_size=NULL → один Leg = все 4; concurrency=1 → строго серийный Leg.
+	// batch_size=NULL -> one Leg = all 4; concurrency=1 -> strictly serial Leg.
 	sids := []string{"a", "b", "c", "d"}
 	v := commandVoyage(sids, nil, intp(1), nil, nil)
 
@@ -561,7 +562,7 @@ func TestExecuteCommand_LeaseLostMidLeg_StopsSpawn(t *testing.T) {
 		done <- st
 	}()
 
-	// Ждём, пока стартует первый хост (висит в delay), затем теряем lease.
+	// Wait until the first host starts (blocked in delay), then lose lease.
 	deadline := time.After(2 * time.Second)
 	for {
 		sp.mu.Lock()
@@ -572,7 +573,7 @@ func TestExecuteCommand_LeaseLostMidLeg_StopsSpawn(t *testing.T) {
 		}
 		select {
 		case <-deadline:
-			t.Fatal("первый хост Leg-а не стартовал")
+			t.Fatal("first host in Leg did not start")
 		case <-time.After(2 * time.Millisecond):
 		}
 	}
@@ -581,31 +582,31 @@ func TestExecuteCommand_LeaseLostMidLeg_StopsSpawn(t *testing.T) {
 	select {
 	case st := <-done:
 		if st != "" {
-			t.Errorf("status = %q, want \"\" (lease lost посреди Leg-а — не финализируем)", st)
+			t.Errorf("status = %q, want \"\" (lease lost in the middle of a Leg - do not finalize)", st)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("executeCommandVoyage не вышел после leaseLost посреди Leg-а")
+		t.Fatal("executeCommandVoyage did not exit after leaseLost in the middle of a Leg")
 	}
 
-	// Оставшиеся хосты (b/c/d) НЕ спавнились: spawn остановлен на acquire.
+	// Remaining hosts (b/c/d) did NOT spawn: spawn stopped on acquire.
 	sp.mu.Lock()
 	calls := append([]string(nil), sp.calls...)
 	sp.mu.Unlock()
 	if len(calls) >= len(sids) {
-		t.Errorf("spawn calls = %v (%d), want < %d (оставшиеся не спавнятся)", calls, len(calls), len(sids))
+		t.Errorf("spawn calls = %v (%d), want < %d (remaining hosts do not spawn)", calls, len(calls), len(sids))
 	}
 	for _, c := range calls {
 		if c != "a" {
-			t.Errorf("заспавнен лишний хост %q после потери lease (calls=%v)", c, calls)
+			t.Errorf("extra host %q spawned after lease loss (calls=%v)", c, calls)
 		}
 	}
-	// Финализация Voyage не вызывалась.
+	// Voyage finalization was not called.
 	if got := fdb.finalCallCount.Load(); got != 0 {
-		t.Errorf("Finalize вызван %d раз, want 0 (lease lost — Reaper-reclaim)", got)
+		t.Errorf("Finalize called %d times, want 0 (lease lost - Reaper-reclaim)", got)
 	}
 }
 
-// ---- concurrency-cap внутри Leg-а (fan-out) ----
+// ---- concurrency-cap inside Leg (fan-out) ----
 
 func TestExecuteCommand_ConcurrencyCap(t *testing.T) {
 	t.Parallel()
@@ -613,7 +614,7 @@ func TestExecuteCommand_ConcurrencyCap(t *testing.T) {
 	sp := &fakeCommandSpawner{delay: 20 * time.Millisecond}
 	w := &VoyageWorker{KID: "k", Pool: fdb, Logger: quietLogger(), CommandSpawner: sp}
 
-	// 6 хостов одним Leg-ом, concurrency=2 → maxParallel должен быть == 2.
+	// 6 hosts in one Leg, concurrency=2 -> maxParallel must be == 2.
 	v := commandVoyage([]string{"a", "b", "c", "d", "e", "f"}, nil, intp(2), nil, nil)
 	status, _, _ := w.executeCommandVoyage(context.Background(), v, make(chan struct{}))
 
@@ -627,16 +628,16 @@ func TestExecuteCommand_ConcurrencyCap(t *testing.T) {
 		t.Errorf("maxParallel = %d, want <= 2 (concurrency-cap)", mp)
 	}
 	if mp < 2 {
-		t.Errorf("maxParallel = %d — параллелизм не достигнут (ожидали 2)", mp)
+		t.Errorf("maxParallel = %d - parallelism not reached (expected 2)", mp)
 	}
 }
 
-// ---- nil CommandSpawner → fail-closed ----
+// ---- nil CommandSpawner -> fail-closed ----
 
 func TestExecuteCommand_NilSpawner_FailClosed(t *testing.T) {
 	t.Parallel()
 	fdb := &fakeDB{}
-	w := &VoyageWorker{KID: "k", Pool: fdb, Logger: quietLogger()} // нет CommandSpawner
+	w := &VoyageWorker{KID: "k", Pool: fdb, Logger: quietLogger()} // no CommandSpawner
 	v := commandVoyage([]string{"a"}, nil, nil, nil, nil)
 	v.TotalBatches = 1
 	status, summary, _ := w.executeCommandVoyage(context.Background(), v, make(chan struct{}))
@@ -648,7 +649,7 @@ func TestExecuteCommand_NilSpawner_FailClosed(t *testing.T) {
 	}
 }
 
-// ---- nil module → fail-closed ----
+// ---- nil module -> fail-closed ----
 
 func TestExecuteCommand_NilModule_FailClosed(t *testing.T) {
 	t.Parallel()
@@ -662,11 +663,11 @@ func TestExecuteCommand_NilModule_FailClosed(t *testing.T) {
 		t.Errorf("status = %q, want failed (nil module fail-closed)", status)
 	}
 	if len(sp.calls) != 0 {
-		t.Errorf("spawn calls = %d, want 0 (module nil — спавн не стартует)", len(sp.calls))
+		t.Errorf("spawn calls = %d, want 0 (module nil - spawn does not start)", len(sp.calls))
 	}
 }
 
-// ---- voyage_targets back-link: errand_id, не apply_id ----
+// ---- voyage_targets back-link: errand_id, not apply_id ----
 
 func TestExecuteCommand_TargetBacklinkErrandID(t *testing.T) {
 	t.Parallel()
@@ -685,16 +686,16 @@ func TestExecuteCommand_TargetBacklinkErrandID(t *testing.T) {
 	gotArg := fdb.runningBacklink
 	fdb.mu.Unlock()
 	if gotSQL == "" {
-		t.Fatal("MarkTargetRunning не вызван")
+		t.Fatal("MarkTargetRunning not called")
 	}
 	if want := "er-s1"; gotArg != want {
 		t.Errorf("back-link arg = %q, want %q (errand_id)", gotArg, want)
 	}
 }
 
-// fencingSpawner — спавнер для теста реклейма посреди Leg-а (S-med-2): после
-// dispatch-а первого хоста срабатывает onFirst (тест поднимает реклейм через
-// fdb.verifyLeaseLost). Считает заспавненные SID-ы.
+// fencingSpawner is a spawner for mid-Leg reclaim test (S-med-2): after dispatch
+// of the first host, onFirst fires (test raises reclaim through fdb.verifyLeaseLost).
+// Counts spawned SIDs.
 type fencingSpawner struct {
 	mu      sync.Mutex
 	calls   []string
@@ -718,50 +719,50 @@ func (s *fencingSpawner) callList() []string {
 	return append([]string(nil), s.calls...)
 }
 
-// ---- реклейм посреди Leg-а: fencing перед dispatch не шлёт Errand (S-med-2) ----
+// ---- reclaim in the middle of a Leg: fencing before dispatch does not send Errand (S-med-2) ----
 //
-// Сценарий: серийный Leg [a,b]. Хост "a" заспавнен (воркер ещё владелец). Перед
-// dispatch-ем "b" Voyage реклеймнут другим Keeper-ом (attempt++) → VerifyOwnership
-// вернёт ErrLeaseLost → "b" Errand НЕ отправляется (нет дубля), Leg прерван,
-// executeCommandVoyage не финализирует.
+// Scenario: serial Leg [a,b]. Host "a" is spawned (worker still owns it). Before
+// dispatch of "b", Voyage is reclaimed by another Keeper (attempt++) -> VerifyOwnership
+// returns ErrLeaseLost -> "b" Errand is NOT sent (no duplicate), Leg is interrupted,
+// executeCommandVoyage does not finalize.
 func TestExecuteCommand_ReclaimMidLeg_FenceStopsDispatch(t *testing.T) {
 	t.Parallel()
 	fdb := &fakeDB{}
 	sp := &fencingSpawner{}
-	// После dispatch-а первого хоста имитируем реклейм: VerifyOwnership для
-	// следующего хоста вернёт ErrLeaseLost.
+	// After dispatch of first host, emulate reclaim: VerifyOwnership for the next
+	// host returns ErrLeaseLost.
 	sp.onFirst = func() { fdb.verifyLeaseLost.Store(true) }
 	w := &VoyageWorker{KID: "k", Pool: fdb, Logger: quietLogger(), CommandSpawner: sp}
 
-	// batch_size=NULL → один Leg = [a,b]; concurrency=1 → строго серийно.
+	// batch_size=NULL -> one Leg = [a,b]; concurrency=1 -> strictly serial.
 	v := commandVoyage([]string{"a", "b"}, nil, intp(1), nil, nil)
-	v.Attempt = 7 // claim-epoch воркера (передаётся в VerifyOwnership/MarkTargetRunning).
+	v.Attempt = 7 // worker claim epoch (passed to VerifyOwnership/MarkTargetRunning).
 
 	status, summary, _ := w.executeCommandVoyage(context.Background(), v, make(chan struct{}))
 
-	// Lease потеряна посреди Leg-а → НЕ финализируем.
+	// Lease lost in the middle of a Leg -> do NOT finalize.
 	if status != "" {
-		t.Errorf("status = %q, want \"\" (fence lost — Reaper-reclaim, не финализируем)", status)
+		t.Errorf("status = %q, want \"\" (fence lost - Reaper-reclaim, do not finalize)", status)
 	}
 	if summary != nil {
-		t.Errorf("summary = %+v, want nil (не финализируем)", summary)
+		t.Errorf("summary = %+v, want nil (do not finalize)", summary)
 	}
 
-	// "b" НЕ заспавнен (fencing остановил dispatch до отправки Errand-а).
+	// "b" is NOT spawned (fencing stopped dispatch before sending Errand).
 	calls := sp.callList()
 	if len(calls) != 1 || calls[0] != "a" {
-		t.Errorf("spawn calls = %v, want [a] (b не отправлен после реклейма)", calls)
+		t.Errorf("spawn calls = %v, want [a] (b not sent after reclaim)", calls)
 	}
-	// "b" зафиксирован cancelled (fencing-путь), не succeeded/failed.
+	// "b" recorded as cancelled (fencing path), not succeeded/failed.
 	if got := fdb.targetStatus("b"); got != string(voyage.TargetStatusCancelled) {
 		t.Errorf("target b status = %q, want cancelled (fence lost)", got)
 	}
 }
 
-// ---- fencing перед ПЕРВЫМ хостом: Errand не шлётся вообще ----
+// ---- fencing before FIRST host: Errand is not sent at all ----
 //
-// Если lease потеряна ещё до старта первого хоста (verifyLeaseLost=true с самого
-// начала), VerifyOwnership заваливает "a" → Errand не отправлен ни одному хосту.
+// If lease is lost before the first host starts (verifyLeaseLost=true from the
+// beginning), VerifyOwnership fails "a" -> Errand is not sent to any host.
 func TestExecuteCommand_ReclaimBeforeLeg_NoDispatch(t *testing.T) {
 	t.Parallel()
 	fdb := &fakeDB{}
@@ -774,21 +775,21 @@ func TestExecuteCommand_ReclaimBeforeLeg_NoDispatch(t *testing.T) {
 	status, summary, _ := w.executeCommandVoyage(context.Background(), v, make(chan struct{}))
 
 	if status != "" {
-		t.Errorf("status = %q, want \"\" (fence lost — не финализируем)", status)
+		t.Errorf("status = %q, want \"\" (fence lost - do not finalize)", status)
 	}
 	if summary != nil {
 		t.Errorf("summary = %+v, want nil", summary)
 	}
 	if calls := sp.callList(); len(calls) != 0 {
-		t.Errorf("spawn calls = %v, want [] (ни один Errand не отправлен)", calls)
+		t.Errorf("spawn calls = %v, want [] (no Errand sent)", calls)
 	}
 }
 
 // ============================================================================
-// S-W1: batch_mode=window (скользящее окно по хостам, kind=command)
+// S-W1: batch_mode=window (sliding window across hosts, kind=command)
 // ============================================================================
 
-// ---- window: вся очередь вырабатывается, все success ----
+// ---- window: entire queue drains, all success ----
 
 func TestExecuteCommand_Window_AllSucceed(t *testing.T) {
 	t.Parallel()
@@ -806,9 +807,9 @@ func TestExecuteCommand_Window_AllSucceed(t *testing.T) {
 	if summary.Total != 5 || summary.Succeeded != 5 || summary.Failed != 0 {
 		t.Errorf("summary = %+v, want total=5 succeeded=5", summary)
 	}
-	// Очередь выработана полностью: каждый SID заспавнен ровно один раз.
+	// Queue drained completely: every SID spawned exactly once.
 	if len(sp.calls) != 5 {
-		t.Errorf("spawn calls = %d, want 5 (очередь выработана)", len(sp.calls))
+		t.Errorf("spawn calls = %d, want 5 (queue drained)", len(sp.calls))
 	}
 	for _, s := range sids {
 		if got := fdb.targetStatus(s); got != string(voyage.TargetStatusSucceeded) {
@@ -817,11 +818,11 @@ func TestExecuteCommand_Window_AllSucceed(t *testing.T) {
 	}
 }
 
-// ---- window: окно держит ≤ concurrency активных, но прокачивает всю очередь ----
+// ---- window: keeps <= concurrency active, but drains the entire queue ----
 //
-// concurrency=3, 9 хостов, каждый spawn держится delay. Если бы окно работало
-// как chunk-барьер, maxParallel прыгал бы по пачкам; скользящее окно держит
-// СТРОГО 3 активных, при этом single-pool без барьеров прокачивает все 9.
+// concurrency=3, 9 hosts, each spawn holds delay. If window behaved like a chunk
+// barrier, maxParallel would jump by batches; sliding window keeps STRICTLY 3
+// active while single-pool without barriers drains all 9.
 func TestExecuteCommand_Window_HoldsConcurrencyActive(t *testing.T) {
 	t.Parallel()
 	fdb := &fakeDB{}
@@ -842,17 +843,17 @@ func TestExecuteCommand_Window_HoldsConcurrencyActive(t *testing.T) {
 	calls := len(sp.calls)
 	sp.mu.Unlock()
 	if mp > 3 {
-		t.Errorf("maxParallel = %d, want <= 3 (окно держит не больше concurrency)", mp)
+		t.Errorf("maxParallel = %d, want <= 3 (window keeps no more than concurrency)", mp)
 	}
 	if mp < 3 {
-		t.Errorf("maxParallel = %d — окно не заполнено до concurrency (ожидали 3)", mp)
+		t.Errorf("maxParallel = %d - window not filled to concurrency (expected 3)", mp)
 	}
 	if calls != 9 {
-		t.Errorf("spawn calls = %d, want 9 (вся очередь прокачана одним пулом)", calls)
+		t.Errorf("spawn calls = %d, want 9 (entire queue drained by one pool)", calls)
 	}
 }
 
-// ---- window: lease-fencing вызывается per-unit (VerifyOwnership на каждый SID) ----
+// ---- window: lease-fencing is called per-unit (VerifyOwnership for each SID) ----
 
 func TestExecuteCommand_Window_FencingPerUnit(t *testing.T) {
 	t.Parallel()
@@ -868,18 +869,18 @@ func TestExecuteCommand_Window_FencingPerUnit(t *testing.T) {
 	if status != voyage.StatusSucceeded {
 		t.Errorf("status = %q, want succeeded", status)
 	}
-	// runOneCommand вызывает VerifyOwnership перед каждым dispatch → ровно по
-	// одному на единицу окна.
+	// runOneCommand calls VerifyOwnership before each dispatch -> exactly one
+	// per window unit.
 	if got := fdb.verifyCalls.Load(); got != int64(len(sids)) {
 		t.Errorf("VerifyOwnership calls = %d, want %d (per-unit fencing)", got, len(sids))
 	}
 }
 
-// ---- window on_failure=abort: первый провал прекращает спавн новых ----
+// ---- window on_failure=abort: first failure stops spawning new items ----
 //
-// concurrency=1 (строго серийное окно), 5 хостов, "b" провалится. abort должен
-// прекратить выборку из очереди после провала "b" → c/d/e не спавнятся, но
-// помечаются cancelled (parity barrier «оставшиеся Leg-и пропущены», qa-gap).
+// concurrency=1 (strictly serial window), 5 hosts, "b" fails. abort must stop
+// polling the queue after "b" failure -> c/d/e are not spawned, but are marked
+// cancelled (parity with barrier "remaining Legs skipped", qa-gap).
 func TestExecuteCommand_Window_AbortStopsSpawn(t *testing.T) {
 	t.Parallel()
 	fdb := &fakeDB{}
@@ -893,35 +894,35 @@ func TestExecuteCommand_Window_AbortStopsSpawn(t *testing.T) {
 	if status != voyage.StatusPartialFailed {
 		t.Errorf("status = %q, want partial_failed", status)
 	}
-	// concurrency=1 строго серийно: a(ok) → b(fail→abort) → стоп. c/d/e не спавнятся.
+	// concurrency=1 strictly serial: a(ok) -> b(fail->abort) -> stop. c/d/e do not spawn.
 	sp.mu.Lock()
 	calls := append([]string(nil), sp.calls...)
 	sp.mu.Unlock()
 	if len(calls) != 2 {
-		t.Errorf("spawn calls = %v (%d), want 2 (abort прекратил спавн после провала)", calls, len(calls))
+		t.Errorf("spawn calls = %v (%d), want 2 (abort stopped spawning after failure)", calls, len(calls))
 	}
 	if summary.Succeeded != 1 || summary.Failed != 1 {
 		t.Errorf("summary = %+v, want succeeded=1 failed=1", summary)
 	}
 	if summary.Total != 5 {
-		t.Errorf("summary.Total = %d, want 5 (полный scope)", summary.Total)
+		t.Errorf("summary.Total = %d, want 5 (full scope)", summary.Total)
 	}
-	// parity barrier: недоспавненные c/d/e помечены cancelled, баланс закрыт.
+	// parity with barrier: unspawned c/d/e are marked cancelled, balance is closed.
 	if summary.Cancelled != 3 {
-		t.Errorf("summary.Cancelled = %d, want 3 (c/d/e недоспавнены → cancelled)", summary.Cancelled)
+		t.Errorf("summary.Cancelled = %d, want 3 (c/d/e unspawned -> cancelled)", summary.Cancelled)
 	}
 	if summary.Total != summary.Succeeded+summary.Failed+summary.Cancelled {
-		t.Errorf("баланс summary не закрыт: %+v (Total != succeeded+failed+cancelled)", summary)
+		t.Errorf("summary balance is not closed: %+v (Total != succeeded+failed+cancelled)", summary)
 	}
-	// voyage_targets: c/d/e записаны cancelled (drill UI видит их как barrier).
+	// voyage_targets: c/d/e are recorded cancelled (drill UI sees them like barrier).
 	for _, s := range []string{"c", "d", "e"} {
 		if got := fdb.targetStatus(s); got != string(voyage.TargetStatusCancelled) {
-			t.Errorf("target %s status = %q, want cancelled (недоспавнен при abort)", s, got)
+			t.Errorf("target %s status = %q, want cancelled (unspawned on abort)", s, got)
 		}
 	}
 }
 
-// ---- window on_failure=continue: окно вырабатывает очередь до конца ----
+// ---- window on_failure=continue: window drains queue to the end ----
 
 func TestExecuteCommand_Window_ContinueDrainsQueue(t *testing.T) {
 	t.Parallel()
@@ -937,14 +938,14 @@ func TestExecuteCommand_Window_ContinueDrainsQueue(t *testing.T) {
 		t.Errorf("status = %q, want partial_failed", status)
 	}
 	if len(sp.calls) != 4 {
-		t.Errorf("spawn calls = %d, want 4 (continue выработал всю очередь)", len(sp.calls))
+		t.Errorf("spawn calls = %d, want 4 (continue drained the entire queue)", len(sp.calls))
 	}
 	if summary.Succeeded != 3 || summary.Failed != 1 {
 		t.Errorf("summary = %+v, want succeeded=3 failed=1", summary)
 	}
 }
 
-// ---- window: все провалились → failed ----
+// ---- window: all failed -> failed ----
 
 func TestExecuteCommand_Window_AllFailed(t *testing.T) {
 	t.Parallel()
@@ -964,12 +965,12 @@ func TestExecuteCommand_Window_AllFailed(t *testing.T) {
 	}
 }
 
-// ---- window: lease lost посреди окна → не финализируем (Reaper-reclaim) ----
+// ---- window: lease lost in the middle of window -> do not finalize (Reaper-reclaim) ----
 
 func TestExecuteCommand_Window_LeaseLostMidRun_NoFinalize(t *testing.T) {
 	t.Parallel()
 	fdb := &fakeDB{}
-	sp := &fakeCommandSpawner{delay: time.Hour} // держим воркеры активными
+	sp := &fakeCommandSpawner{delay: time.Hour} // keep workers active
 	w := &VoyageWorker{KID: "k", Pool: fdb, Logger: quietLogger(), CommandSpawner: sp}
 
 	v := windowCommandVoyage([]string{"a", "b", "c", "d"}, intp(2), nil)
@@ -980,7 +981,7 @@ func TestExecuteCommand_Window_LeaseLostMidRun_NoFinalize(t *testing.T) {
 		done <- st
 	}()
 
-	// Ждём, пока окно заполнится (хотя бы один воркер встал в delay), теряем lease.
+	// Wait until the window fills (at least one worker enters delay), then lose lease.
 	deadline := time.After(2 * time.Second)
 	for {
 		sp.mu.Lock()
@@ -991,7 +992,7 @@ func TestExecuteCommand_Window_LeaseLostMidRun_NoFinalize(t *testing.T) {
 		}
 		select {
 		case <-deadline:
-			t.Fatal("окно не стартовало")
+			t.Fatal("window did not start")
 		case <-time.After(2 * time.Millisecond):
 		}
 	}
@@ -1000,20 +1001,20 @@ func TestExecuteCommand_Window_LeaseLostMidRun_NoFinalize(t *testing.T) {
 	select {
 	case st := <-done:
 		if st != "" {
-			t.Errorf("status = %q, want \"\" (lease lost посреди окна — не финализируем)", st)
+			t.Errorf("status = %q, want \"\" (lease lost in the middle of window - do not finalize)", st)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("runSlidingWindow не вышел после leaseLost")
+		t.Fatal("runSlidingWindow did not exit after leaseLost")
 	}
 	if got := fdb.finalCallCount.Load(); got != 0 {
-		t.Errorf("Finalize вызван %d раз, want 0 (lease lost — Reaper-reclaim)", got)
+		t.Errorf("Finalize called %d times, want 0 (lease lost - Reaper-reclaim)", got)
 	}
 }
 
-// ---- window: concurrency >= len(sids) → окно вырождается в «все сразу» ----
+// ---- window: concurrency >= len(sids) -> window degenerates into "all at once" ----
 //
-// concurrency=5 при 3 хостах: очередь не блокирует ни одного воркера, все
-// стартуют параллельно (maxParallel == len(sids)), все success (qa-gap high).
+// concurrency=5 with 3 hosts: queue does not block any worker, all start in
+// parallel (maxParallel == len(sids)), all success (qa-gap high).
 func TestExecuteCommand_Window_ConcurrencyGEQLen_AllParallel(t *testing.T) {
 	t.Parallel()
 	fdb := &fakeDB{}
@@ -1035,17 +1036,17 @@ func TestExecuteCommand_Window_ConcurrencyGEQLen_AllParallel(t *testing.T) {
 	calls := len(sp.calls)
 	sp.mu.Unlock()
 	if mp != len(sids) {
-		t.Errorf("maxParallel = %d, want %d (concurrency >= len → все сразу, очередь не блокирует)", mp, len(sids))
+		t.Errorf("maxParallel = %d, want %d (concurrency >= len -> all at once, queue does not block)", mp, len(sids))
 	}
 	if calls != len(sids) {
 		t.Errorf("spawn calls = %d, want %d", calls, len(sids))
 	}
 }
 
-// ---- window concurrency=1: строго серийный ПОРЯДОК вызовов ----
+// ---- window concurrency=1: strictly serial call ORDER ----
 //
-// Один воркер тянет FIFO-очередь → SpawnCommand вызывается строго [a,b,c]
-// (qa-gap high: окно при concurrency=1 = детерминированный серийный прогон).
+// One worker pulls the FIFO queue -> SpawnCommand is called strictly [a,b,c]
+// (qa-gap high: window with concurrency=1 = deterministic serial run).
 func TestExecuteCommand_Window_Concurrency1_SerialOrder(t *testing.T) {
 	t.Parallel()
 	fdb := &fakeDB{}
@@ -1066,14 +1067,14 @@ func TestExecuteCommand_Window_Concurrency1_SerialOrder(t *testing.T) {
 	mp := sp.maxParallel
 	sp.mu.Unlock()
 	if !reflect.DeepEqual(calls, []string{"a", "b", "c"}) {
-		t.Errorf("spawn order = %v, want [a b c] (concurrency=1 строго серийно)", calls)
+		t.Errorf("spawn order = %v, want [a b c] (concurrency=1 strictly serial)", calls)
 	}
 	if mp != 1 {
-		t.Errorf("maxParallel = %d, want 1 (один воркер)", mp)
+		t.Errorf("maxParallel = %d, want 1 (one worker)", mp)
 	}
 }
 
-// ---- window: 1 SID → один воркер, один dispatch ----
+// ---- window: 1 SID -> one worker, one dispatch ----
 func TestExecuteCommand_Window_SingleSID(t *testing.T) {
 	t.Parallel()
 	fdb := &fakeDB{}
@@ -1094,19 +1095,19 @@ func TestExecuteCommand_Window_SingleSID(t *testing.T) {
 	mp := sp.maxParallel
 	sp.mu.Unlock()
 	if !reflect.DeepEqual(calls, []string{"only"}) {
-		t.Errorf("spawn calls = %v, want [only] (один dispatch)", calls)
+		t.Errorf("spawn calls = %v, want [only] (one dispatch)", calls)
 	}
 	if mp != 1 {
-		t.Errorf("maxParallel = %d, want 1 (один SID — один воркер активен)", mp)
+		t.Errorf("maxParallel = %d, want 1 (one SID - one worker active)", mp)
 	}
 }
 
-// ---- window: реклейм посреди окна (fencing-CAS) → не финализируем ----
+// ---- window: reclaim in the middle of window (fencing-CAS) -> do not finalize ----
 
 func TestExecuteCommand_Window_FenceLostMidRun_NoFinalize(t *testing.T) {
 	t.Parallel()
 	fdb := &fakeDB{}
-	fdb.verifyLeaseLost.Store(true) // VerifyOwnership заваливает все единицы
+	fdb.verifyLeaseLost.Store(true) // VerifyOwnership fails all units
 	sp := &fakeCommandSpawner{}
 	w := &VoyageWorker{KID: "k", Pool: fdb, Logger: quietLogger(), CommandSpawner: sp}
 
@@ -1115,13 +1116,13 @@ func TestExecuteCommand_Window_FenceLostMidRun_NoFinalize(t *testing.T) {
 	status, summary, _ := w.executeCommandVoyage(context.Background(), v, make(chan struct{}))
 
 	if status != "" {
-		t.Errorf("status = %q, want \"\" (fence lost — не финализируем)", status)
+		t.Errorf("status = %q, want \"\" (fence lost - do not finalize)", status)
 	}
 	if summary != nil {
 		t.Errorf("summary = %+v, want nil", summary)
 	}
-	// fencing остановил dispatch — ни один Errand не отправлен.
+	// fencing stopped dispatch - no Errand was sent.
 	if len(sp.calls) != 0 {
-		t.Errorf("spawn calls = %d, want 0 (fencing до dispatch)", len(sp.calls))
+		t.Errorf("spawn calls = %d, want 0 (fencing before dispatch)", len(sp.calls))
 	}
 }

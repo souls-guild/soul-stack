@@ -231,7 +231,7 @@ func claimedVoyageRow(id, kind, status string) scanRow {
 		(*int)(nil),       // 28 fail_threshold
 		(*float64)(nil),   // 29 inter_unit_interval (epoch secs)
 		(*bool)(nil),      // 30 require_alive
-		(*string)(nil),    // 31 cadence_id (back-link ADR-046; ручной прогон = NULL)
+		(*string)(nil),    // 31 cadence_id (back-link ADR-046; manual run = NULL)
 	}}
 }
 
@@ -300,7 +300,7 @@ func TestWorker_DispatchCommandKind(t *testing.T) {
 		KID:            "kid-1",
 		Pool:           fdb,
 		LeaseTTL:       time.Minute,
-		RenewInterval:  time.Hour, // не тикает за время теста
+		RenewInterval:  time.Hour, // does not tick during the test
 		PollInterval:   5 * time.Millisecond,
 		Logger:         quietLogger(),
 		CommandSpawner: sp,

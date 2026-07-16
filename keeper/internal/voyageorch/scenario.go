@@ -141,18 +141,18 @@ func parseIncarnationTargets(raw json.RawMessage) ([]string, error) {
 	}
 	var names []string
 	if err := json.Unmarshal(raw, &names); err != nil {
-		return nil, fmt.Errorf("voyageorch: target_resolved (kind=scenario) не JSON-массив имён: %w", err)
+		return nil, fmt.Errorf("voyageorch: target_resolved (kind=scenario) is not a JSON array of names: %w", err)
 	}
 	if len(names) == 0 {
-		return nil, fmt.Errorf("voyageorch: target_resolved пуст (нет инкарнаций)")
+		return nil, fmt.Errorf("voyageorch: target_resolved is empty (no incarnations)")
 	}
 	seen := make(map[string]struct{}, len(names))
 	for i, n := range names {
 		if n == "" {
-			return nil, fmt.Errorf("voyageorch: target_resolved[%d] пустое имя инкарнации", i)
+			return nil, fmt.Errorf("voyageorch: target_resolved[%d] has empty incarnation name", i)
 		}
 		if _, dup := seen[n]; dup {
-			return nil, fmt.Errorf("voyageorch: target_resolved содержит дубликат инкарнации %q", n)
+			return nil, fmt.Errorf("voyageorch: target_resolved contains duplicate incarnation %q", n)
 		}
 		seen[n] = struct{}{}
 	}

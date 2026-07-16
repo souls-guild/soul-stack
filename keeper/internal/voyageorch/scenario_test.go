@@ -163,7 +163,7 @@ func TestChunkIncarnations(t *testing.T) {
 	}
 }
 
-// ---- executeScenarioVoyage: один батч ----
+// ---- executeScenarioVoyage: one batch ----
 
 func TestExecuteScenario_SingleBatch_AllSucceed(t *testing.T) {
 	t.Parallel()
@@ -191,7 +191,7 @@ func TestExecuteScenario_SingleBatch_AllSucceed(t *testing.T) {
 	}
 }
 
-// ---- executeScenarioVoyage: N батчей (chunking) ----
+// ---- executeScenarioVoyage: N batches (chunking) ----
 
 func TestExecuteScenario_MultipleBatches(t *testing.T) {
 	t.Parallel()
@@ -328,7 +328,7 @@ func TestExecuteScenario_NoMatchBenign(t *testing.T) {
 	}
 }
 
-// ---- inter_batch_interval: пауза между Leg-ами ----
+// ---- inter_batch_interval: pause between Legs ----
 
 func TestExecuteScenario_InterBatchInterval(t *testing.T) {
 	t.Parallel()
@@ -483,7 +483,7 @@ func TestExecuteScenario_ConcurrencyCap(t *testing.T) {
 		t.Errorf("maxParallel = %d, want <= 2 (concurrency-cap)", mp)
 	}
 	if mp < 2 {
-		t.Errorf("maxParallel = %d — параллелизм не достигнут (ожидали 2)", mp)
+		t.Errorf("maxParallel = %d - parallelism not reached (expected 2)", mp)
 	}
 }
 
@@ -554,7 +554,7 @@ func TestWorker_DispatchScenarioKind(t *testing.T) {
 		select {
 		case <-deadline:
 			cancel()
-			t.Fatal("Finalize не вызван")
+			t.Fatal("Finalize not called")
 		case <-time.After(2 * time.Millisecond):
 		}
 	}
@@ -722,13 +722,13 @@ func TestExecuteScenario_Window_AbortStopsSpawn(t *testing.T) {
 		t.Errorf("summary = %+v, want succeeded=1 failed=1", summary)
 	}
 	if summary.Total != 5 {
-		t.Errorf("summary.Total = %d, want 5 (полный scope)", summary.Total)
+		t.Errorf("summary.Total = %d, want 5 (full scope)", summary.Total)
 	}
 	if summary.Cancelled != 3 {
 		t.Errorf("summary.Cancelled = %d, want 3 (c/d/e unspawned → cancelled)", summary.Cancelled)
 	}
 	if summary.Total != summary.Succeeded+summary.Failed+summary.Cancelled {
-		t.Errorf("баланс summary не закрыт: %+v", summary)
+		t.Errorf("summary balance is not closed: %+v", summary)
 	}
 	for _, n := range []string{"c", "d", "e"} {
 		if got := fdb.targetStatus(n); got != string(voyage.TargetStatusCancelled) {
