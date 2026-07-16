@@ -398,7 +398,7 @@ func TestIntegration_Reader_DeliveryHistory_Filters(t *testing.T) {
 		t.Fatalf("List voyageA: %v", err)
 	}
 	if totalA != 2 {
-		t.Errorf("voyageA delivery total = %d, want 2 (delivered+failed этого прогона)", totalA)
+		t.Errorf("voyageA delivery total = %d, want 2 (delivered+failed for this run)", totalA)
 	}
 	for _, r := range rowsA {
 		if r.CorrelationID == nil || *r.CorrelationID != voyageA {
@@ -419,7 +419,7 @@ func TestIntegration_Reader_DeliveryHistory_Filters(t *testing.T) {
 		t.Fatalf("List herald ops-slack: %v", err)
 	}
 	if totalCh != 2 {
-		t.Errorf("ops-slack history total = %d, want 2 (доставки канала в A и B)", totalCh)
+		t.Errorf("ops-slack history total = %d, want 2 (channel deliveries in A and B)", totalCh)
 	}
 	for _, r := range rowsCh {
 		if got, _ := r.Payload["herald"].(string); got != "ops-slack" {
@@ -590,12 +590,12 @@ func TestIntegration_Reader_ChangedTaskKeys_PlanIndexPriority(t *testing.T) {
 
 	// The key is the GLOBAL plan_index (7), not the local task_idx (2).
 	if _, ok := keys[ChangedTaskKey{SID: "h.local", PlanIndex: 7}]; !ok {
-		t.Errorf("ожидался ключ (h.local, plan_index=7) — свёртка ДОЛЖНА брать глобальный plan_index; keys=%+v", keys)
+		t.Errorf("expected key (h.local, plan_index=7); rollup MUST use global plan_index; keys=%+v", keys)
 	}
 	// REVERSE: the local task_idx (2) must NOT become a key — otherwise the
 	// correlation with the plan would point at a neighboring task (T3 bug).
 	if _, ok := keys[ChangedTaskKey{SID: "h.local", PlanIndex: 2}]; ok {
-		t.Errorf("ключ (h.local, 2) присутствует — свёртка взяла ЛОКАЛЬНЫЙ task_idx вместо plan_index (T3-регресс); keys=%+v", keys)
+		t.Errorf("key (h.local, 2) is present; rollup used LOCAL task_idx instead of plan_index (T3 regression); keys=%+v", keys)
 	}
 	if len(keys) != 1 {
 		t.Fatalf("got %d keys, want 1: %+v", len(keys), keys)
@@ -670,7 +670,7 @@ func TestIntegration_Reader_PayloadVoyage_Filter(t *testing.T) {
 		t.Fatalf("List voyageA: %v", err)
 	}
 	if totalA != 2 {
-		t.Errorf("voyageA run-events total = %d, want 2 (обе инкарнации вояжа A)", totalA)
+		t.Errorf("voyageA run-events total = %d, want 2 (both incarnations of voyage A)", totalA)
 	}
 	if len(rowsA) != 2 {
 		t.Fatalf("voyageA rows = %d, want 2", len(rowsA))

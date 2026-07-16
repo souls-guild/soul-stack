@@ -1,16 +1,16 @@
-// Package auditpg — Postgres-реализация [audit.Writer] поверх pgxpool.Pool.
+// Package auditpg implements [audit.Writer] on top of pgxpool.Pool.
 //
-// Вынесен из `shared/audit/` в `keeper/internal/auditpg/` по architect-
-// решению M0.4.0: импорт `pgx/v5` тянет ~1.5 MB pgx-кода и
-// `pgtype.init.0`-регистрации; включение в `shared/` транзитивно
-// затягивало бы их в `soul`-бинарь через будущий путь
-// `soul → shared/config → shared/audit`, нарушая ADR-011 «Soul-изоляция
-// гарантируется компилятором».
+// Moved out of `shared/audit/` into `keeper/internal/auditpg/` by the M0.4.0
+// architecture decision: importing `pgx/v5` pulls in ~1.5 MB of pgx code and
+// `pgtype.init.0` registrations; including it in `shared/` would transitively
+// drag them into the `soul` binary through the future
+// `soul -> shared/config -> shared/audit` path, violating ADR-011 "Soul
+// isolation is guaranteed by the compiler".
 //
-// `shared/audit/` остаётся pgx-free: типы, интерфейс [audit.Writer], enum
-// [audit.Source], masking и ULID-helper. Реализации write-path-а живут в
-// бинарных модулях — этот пакет в `keeper/internal/`, будущие
-// (multi-writer + OTel dual-write, ADR-022(f)) — там же.
+// `shared/audit/` stays pgx-free: types, the [audit.Writer] interface, the
+// [audit.Source] enum, masking, and the ULID helper. Write-path implementations
+// live in binary modules: this package in `keeper/internal/`, future ones
+// (multi-writer + OTel dual-write, ADR-022(f)) there as well.
 package auditpg
 
 import (
@@ -24,55 +24,52 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// execer — узкое подмножество интерфейса pgxpool.Pool, нужное для
-// INSERT INTO audit_log. Сужение позволяет unit-тестировать writer
-// fake-реализацией без поднятия Postgres-а; реальный pool из
-// keeper/internal/pg удовлетворяет интерфейсу автоматически.
+// execer is the narrow subset of the pgxpool.Pool interface needed for
+// INSERT INTO audit_log. Narrowing allows unit-testing the writer with a fake
+// implementation without starting Postgres; the real pool from keeper/internal/pg
+// satisfies the interface automatically.
 type execer interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
-// pgxWriter — Writer-реализация поверх pgxpool.Pool (или совместимого
-// pgx.Conn в тестах). Один экземпляр на Keeper-процесс; safe for
-// concurrent use — pool сам обеспечивает потокобезопасность.
+// pgxWriter is a Writer implementation over pgxpool.Pool (or compatible
+// pgx.Conn in tests). One instance per Keeper process; safe for concurrent use
+// because the pool itself provides thread safety.
 type pgxWriter struct {
 	pool execer
 }
 
-// NewWriter оборачивает уже инициализированный pgxpool.Pool в
-// [audit.Writer]. Owner-ship пула остаётся у caller-а: writer не
-// закрывает пул, lifecycle — keeper/internal/pg → keeper/cmd/keeper.
+// NewWriter wraps an already initialized pgxpool.Pool as [audit.Writer].
+// Ownership of the pool remains with the caller: the writer does not close the
+// pool; lifecycle is keeper/internal/pg -> keeper/cmd/keeper.
 func NewWriter(pool execer) audit.Writer {
 	return &pgxWriter{pool: pool}
 }
 
-// insertSQL — single INSERT в audit_log. Колонки строго в порядке
-// ADR-022(a); audit_id обязателен (генерируется до Exec, иначе PG не
-// сможет применить DEFAULT — его нет на PK).
+// insertSQL is a single INSERT into audit_log. Columns are strictly in
+// ADR-022(a) order; audit_id is required (generated before Exec, otherwise PG
+// cannot apply DEFAULT because the PK has none).
 const insertSQL = `
 INSERT INTO audit_log (audit_id, created_at, event_type, source, archon_aid, correlation_id, payload)
 VALUES ($1, COALESCE($2, NOW()), $3, $4, $5, $6, $7)
 `
 
-// Write фиксирует событие в audit_log. Контракт:
+// Write records an event in audit_log. Contract:
 //
-//   - event.EventType и event.Source — обязательны; пустые значения →
-//     error без INSERT.
-//   - event.Source валидируется по [audit.Source.Valid] — закрытый enum
-//     по ADR-022(b); cast произвольной строки в audit.Source отлавливается
-//     тут.
-//   - event.AuditID пуст → генерируется [audit.NewULID].
-//   - event.CreatedAt zero → передаётся NULL, PG ставит DEFAULT NOW().
-//   - event.ArchonAID / event.CorrelationID пусты → NULL в БД.
-//   - event.Payload nil → пустой JSONB `{}`; nan/inf/неcериализуемые
-//     значения отдаются json.Marshal как есть и пробрасываются caller-у
-//     как error — это контракт инициатора (payload должен быть
-//     JSON-сериализуем).
-//   - Секреты в Payload маскируются через [audit.MaskSecrets] перед
-//     marshal-ом.
+//   - event.EventType and event.Source are required; empty values return an
+//     error without INSERT.
+//   - event.Source is validated by [audit.Source.Valid], a closed enum per
+//     ADR-022(b); casting an arbitrary string to audit.Source is caught here.
+//   - empty event.AuditID generates [audit.NewULID].
+//   - zero event.CreatedAt is passed as NULL, and PG sets DEFAULT NOW().
+//   - empty event.ArchonAID / event.CorrelationID become NULL in the DB.
+//   - nil event.Payload becomes empty JSONB `{}`; nan/inf/non-serializable
+//     values are handed to json.Marshal as-is and propagated to the caller as
+//     errors. This is the initiator's contract: payload must be JSON-serializable.
+//   - Secrets in Payload are masked through [audit.MaskSecrets] before marshaling.
 //
-// На любую error pgxWriter не делает retry — это ответственность
-// caller-а (Reaper-цикл / hot-reload иначе обрабатывают сбой).
+// pgxWriter does not retry any error; that is the caller's responsibility
+// (Reaper loop / hot-reload handle failures differently).
 func (w *pgxWriter) Write(ctx context.Context, event *audit.Event) error {
 	if event == nil {
 		return fmt.Errorf("audit: nil event")
@@ -123,10 +120,9 @@ func (w *pgxWriter) Write(ctx context.Context, event *audit.Event) error {
 	return nil
 }
 
-// marshalPayload маскирует секреты и сериализует payload в JSON-bytes,
-// пригодные для прямой подстановки в JSONB-колонку pgx-ом. nil-payload
-// → `[]byte("{}")` (валидный JSONB, не NULL — колонка NOT NULL DEFAULT
-// '{}'::jsonb).
+// marshalPayload masks secrets and serializes payload into JSON bytes suitable
+// for direct insertion into a JSONB column by pgx. nil-payload -> `[]byte("{}")`
+// (valid JSONB, not NULL; the column is NOT NULL DEFAULT '{}'::jsonb).
 func marshalPayload(payload map[string]any) ([]byte, error) {
 	masked := audit.MaskSecrets(payload)
 	if masked == nil {
@@ -135,8 +131,8 @@ func marshalPayload(payload map[string]any) ([]byte, error) {
 	return json.Marshal(masked)
 }
 
-// compileTimeAssertExecer — гарантия что *pgx.Conn удовлетворяет
-// execer-интерфейсу. Не используется в runtime; ловит поломку контракта
-// pgx/v5 при апгрейде версии. (`*pgxpool.Pool` — отдельный кандидат,
-// проверка через NewWriter-инициализацию в keeper/cmd/keeper.)
+// compileTimeAssertExecer guarantees that *pgx.Conn satisfies the execer
+// interface. It is not used at runtime; it catches pgx/v5 contract breakage on
+// version upgrades. (`*pgxpool.Pool` is a separate candidate, checked through
+// NewWriter initialization in keeper/cmd/keeper.)
 var _ execer = (*pgx.Conn)(nil)

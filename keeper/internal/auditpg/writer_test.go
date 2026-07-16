@@ -14,9 +14,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// fakeExecer — in-memory execer для unit-тестов pgxWriter. Захватывает
-// args каждого Exec; SQL не валидируется — это контракт ADR-022, не
-// поведение pgxWriter.
+// fakeExecer is an in-memory execer for pgxWriter unit tests. It captures args
+// for each Exec; SQL is not validated because that is the ADR-022 contract, not
+// pgxWriter behavior.
 type fakeExecer struct {
 	calls   int
 	lastSQL string
