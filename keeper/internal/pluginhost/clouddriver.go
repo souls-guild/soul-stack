@@ -8,24 +8,24 @@ import (
 	"google.golang.org/grpc"
 )
 
-// CloudDriverPlugin — тонкая обёртка над [Plugin], привязывающая базовый handle
-// к gRPC-клиенту CloudDriver. Создаётся через [NewCloudDriverPlugin] после
-// успешного [Host.Spawn]: caller проверяет, что manifest.kind == cloud_driver,
-// и оборачивает Plugin в CloudDriverPlugin.
+// CloudDriverPlugin is thin wrapper over [Plugin], tying base handle
+// to CloudDriver gRPC client. Created via [NewCloudDriverPlugin] after
+// successful [Host.Spawn]: caller verifies manifest.kind == cloud_driver,
+// and wraps Plugin in CloudDriverPlugin.
 //
-// Apply-цикл keeper.cloud / scenario step `core.cloud.provisioned`
-// (ADR-017) использует методы Create/Destroy/Status/List/Schema/Validate;
-// stream-методы возвращают grpc-stream напрямую — caller сам читает события.
+// Apply-cycle keeper.cloud / scenario step `core.cloud.provisioned`
+// (ADR-017) uses methods Create/Destroy/Status/List/Schema/Validate;
+// stream-methods return grpc-stream directly — caller reads events.
 //
-// Close проксируется на underlying Plugin.Close (идемпотентен).
+// Close proxied to underlying Plugin.Close (idempotent).
 type CloudDriverPlugin struct {
 	*Plugin
 	client pluginv1.CloudDriverClient
 }
 
-// NewCloudDriverPlugin оборачивает [Plugin] (из [Host.Spawn]) в kind-specific
-// handle. Возвращает ошибку, если manifest.kind != cloud_driver: это защита от
-// случайного вызова на soul_module / ssh_provider бинаре.
+// NewCloudDriverPlugin wraps [Plugin] (from [Host.Spawn]) in kind-specific
+// handle. Returns error if manifest.kind != cloud_driver: protection from
+// accidental call on soul_module / ssh_provider binary.
 func NewCloudDriverPlugin(p *Plugin) (*CloudDriverPlugin, error) {
 	if p == nil {
 		return nil, fmt.Errorf("pluginhost: nil Plugin")
@@ -40,46 +40,45 @@ func NewCloudDriverPlugin(p *Plugin) (*CloudDriverPlugin, error) {
 	}, nil
 }
 
-// Schema — RPC CloudDriver.Schema. Возвращает profile_schema плагина (должен
-// совпадать с manifest.spec.profile_schema; cross-check — задача keeper.cloud).
+// Schema is RPC CloudDriver.Schema. Returns plugin's profile_schema (should
+// match manifest.spec.profile_schema; cross-check is keeper.cloud task).
 func (c *CloudDriverPlugin) Schema(ctx context.Context, req *pluginv1.SchemaRequest) (*pluginv1.SchemaReply, error) {
 	return c.client.Schema(ctx, req)
 }
 
-// Validate — RPC CloudDriver.Validate. Runtime-проверки параметров профиля
-// (квоты, доступность образа, валидность subnet) — то, что не выражается
-// JSON Schema.
+// Validate is RPC CloudDriver.Validate. Runtime validation of profile parameters
+// (quotas, image availability, subnet validity) — what JSON Schema can't express.
 func (c *CloudDriverPlugin) Validate(ctx context.Context, req *pluginv1.ValidateProfileRequest) (*pluginv1.ValidateProfileReply, error) {
 	return c.client.Validate(ctx, req)
 }
 
-// Create — RPC CloudDriver.Create (server-streaming). Caller читает события
-// прогресса до EOF.
+// Create is RPC CloudDriver.Create (server-streaming). Caller reads
+// progress events until EOF.
 func (c *CloudDriverPlugin) Create(ctx context.Context, req *pluginv1.CreateRequest) (grpc.ServerStreamingClient[pluginv1.CreateEvent], error) {
 	return c.client.Create(ctx, req)
 }
 
-// Destroy — RPC CloudDriver.Destroy (server-streaming). Под guard-rails
-// keeper.cloud (см. docs/keeper/cloud.md → Безопасность destroy).
+// Destroy is RPC CloudDriver.Destroy (server-streaming). Under guard-rails
+// of keeper.cloud (see docs/keeper/cloud.md → Destroy Safety).
 func (c *CloudDriverPlugin) Destroy(ctx context.Context, req *pluginv1.DestroyRequest) (grpc.ServerStreamingClient[pluginv1.DestroyEvent], error) {
 	return c.client.Destroy(ctx, req)
 }
 
-// Status — RPC CloudDriver.Status. Опрос состояния конкретной VM.
+// Status is RPC CloudDriver.Status. Queries state of specific VM.
 func (c *CloudDriverPlugin) Status(ctx context.Context, req *pluginv1.StatusRequest) (*pluginv1.StatusReply, error) {
 	return c.client.Status(ctx, req)
 }
 
-// List — RPC CloudDriver.List (server-streaming). Перечисление VM, известных
-// провайдеру; caller читает stream до EOF.
+// List is RPC CloudDriver.List (server-streaming). Enumerates VMs known
+// to provider; caller reads stream until EOF.
 func (c *CloudDriverPlugin) List(ctx context.Context, req *pluginv1.ListRequest) (grpc.ServerStreamingClient[pluginv1.VmInfo], error) {
 	return c.client.List(ctx, req)
 }
 
-// Resize — RPC CloudDriver.Resize (server-streaming). Расширение ресурсов VM;
-// caller читает события прогресса по фазам до EOF. Драйвер без capability
-// `Resizable` (sdk/clouddriver) вернёт финальный ResizeEvent с failed=true и
-// message resize.unsupported — это НЕ gRPC Unimplemented.
+// Resize is RPC CloudDriver.Resize (server-streaming). Expands VM resources;
+// caller reads progress events by phases until EOF. Driver without capability
+// `Resizable` (sdk/clouddriver) returns final ResizeEvent with failed=true and
+// message resize.unsupported — this is NOT gRPC Unimplemented.
 func (c *CloudDriverPlugin) Resize(ctx context.Context, req *pluginv1.ResizeRequest) (grpc.ServerStreamingClient[pluginv1.ResizeEvent], error) {
 	return c.client.Resize(ctx, req)
 }

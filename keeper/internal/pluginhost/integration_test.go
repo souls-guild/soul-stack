@@ -20,12 +20,12 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// sigilFor подписывает валидный SigilRecord под бинарь+manifest из Discovered
-// тем же общим helper-ом, что keeper-Signer при Sign (BuildSigilBlock +
-// NormalizeManifestBytes — симметрия sign↔verify). Возвращает trust-anchor и
-// lookup с единственным допуском, готовые к навешиванию на Host. После S6b
-// verify-gate Spawn fail-closed без валидного допуска — без этого ни один
-// happy-path-тест не пройдёт.
+// sigilFor signs valid SigilRecord under binary+manifest from Discovered
+// with same helper as keeper-Signer does on Sign (BuildSigilBlock +
+// NormalizeManifestBytes — sign↔verify symmetry). Returns trust-anchor and
+// lookup with single permission ready to mount on Host. After S6b
+// verify-gate Spawn fails-closed without valid permission — without this
+// no happy-path test passes.
 func sigilFor(t *testing.T, d Discovered) (ed25519.PublicKey, sharedhost.SigilLookup) {
 	t.Helper()
 	manifest, err := os.ReadFile(filepath.Join(d.Dir, "manifest.yaml"))
@@ -58,18 +58,18 @@ func sigilFor(t *testing.T, d Discovered) (ed25519.PublicKey, sharedhost.SigilLo
 	return pub, testLookup{d.Manifest.Namespace + "." + d.Manifest.Name: rec}
 }
 
-// testLookup — минимальный sharedhost.SigilLookup поверх map.
+// testLookup is minimal sharedhost.SigilLookup over map.
 type testLookup map[string]*sharedhost.SigilRecord
 
 func (l testLookup) Get(ns, name string) *sharedhost.SigilRecord { return l[ns+"."+name] }
 
-// buildTestPlugin собирает плагин из testdata/<dir> и кладёт его в outDir с
-// именем outName. testdata-модуль имеет отдельный go.mod (replace на наши
-// proto/plugin и sdk), поэтому собираем с GOWORK=off — он не должен быть
-// частью корневого workspace.
+// buildTestPlugin builds plugin from testdata/<dir> and places it in outDir with
+// name outName. testdata module has separate go.mod (replace to our
+// proto/plugin and sdk), so build with GOWORK=off — shouldn't be
+// part of root workspace.
 //
-// На darwin длина sun_path Unix-сокета ограничена ~104 байтами, поэтому
-// outDir должен быть коротким (используем /tmp/ss-keeper-host-, не t.TempDir).
+// On darwin Unix socket sun_path length limited to ~104 bytes, so
+// outDir must be short (use /tmp/ss-keeper-host-, not t.TempDir).
 func buildTestPlugin(t *testing.T, testdataSubdir, outDir, outName string) string {
 	t.Helper()
 	srcDir, err := filepath.Abs(filepath.Join("testdata", testdataSubdir))
@@ -87,9 +87,9 @@ func buildTestPlugin(t *testing.T, testdataSubdir, outDir, outName string) strin
 	return binPath
 }
 
-// makeNestedSlot создаёт R-nested-слот (A1-S1): <cacheRoot>/<key>/<commit>/ +
-// current → <commit>. Возвращает каталог commit-слота, куда тест кладёт
-// manifest+бинарь. commit — синтетический фиксированный 40-hex.
+// makeNestedSlot creates R-nested slot (A1-S1): <cacheRoot>/<key>/<commit>/ +
+// current → <commit>. Returns commit-slot directory where test places
+// manifest+binary. commit is synthetic fixed 40-hex.
 func makeNestedSlot(t *testing.T, cacheRoot, key string) string {
 	t.Helper()
 	const commit = "0123456789abcdef0123456789abcdef01234567"
@@ -246,7 +246,7 @@ func TestSpawnCloudDriverHappyPath(t *testing.T) {
 		t.Errorf("Validate.Ok = false: %v", vr.GetErrors())
 	}
 
-	// Create stream — три события (две диагностики + финал с vms[]).
+	// Create stream — three events (two diagnostics + final with vms[]).
 	createStream, err := cd.Create(ctx, &pluginv1.CreateRequest{Profile: profile})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -275,7 +275,7 @@ func TestSpawnCloudDriverHappyPath(t *testing.T) {
 		t.Errorf("final vms = %d, want 1", finalVms)
 	}
 
-	// Status — точечный запрос.
+	// Status — point query.
 	st, err := cd.Status(ctx, &pluginv1.StatusRequest{VmId: "vm-1"})
 	if err != nil {
 		t.Fatalf("Status: %v", err)
@@ -284,7 +284,7 @@ func TestSpawnCloudDriverHappyPath(t *testing.T) {
 		t.Errorf("Status.State = %q, want running", st.GetState())
 	}
 
-	// List stream — два VmInfo.
+	// List stream — two VmInfo.
 	listStream, err := cd.List(ctx, &pluginv1.ListRequest{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -340,7 +340,7 @@ func TestSpawnCloudDriverValidationFailure(t *testing.T) {
 	}
 	defer cd.Close()
 
-	// Без profile — Validate должен вернуть Ok=false.
+	// No profile — Validate should return Ok=false.
 	vr, err := cd.Validate(ctx, &pluginv1.ValidateProfileRequest{})
 	if err != nil {
 		t.Fatalf("Validate: %v", err)
@@ -435,11 +435,11 @@ func TestSpawnRejectsCapabilityNotAllowed(t *testing.T) {
 	}
 }
 
-// TestSpawnFailsClosedNoSigil — keeper-host без допуска для (ns, name) →
-// Spawn fail-closed (VerifyReasonNoSigil), бинарь не запускается.
+// TestSpawnFailsClosedNoSigil verifies keeper-host without permission for (ns, name) →
+// Spawn fail-closed (VerifyReasonNoSigil), binary not started.
 func TestSpawnFailsClosedNoSigil(t *testing.T) {
 	h, d := setupCloudDriverPlugin(t)
-	// Подменяем lookup на пустой (trust-anchor остаётся валидным): допуска нет.
+	// Replace lookup with empty one (trust-anchor stays valid): no permission.
 	h.Sigils = testLookup{}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -457,12 +457,12 @@ func TestSpawnFailsClosedNoSigil(t *testing.T) {
 	}
 }
 
-// TestSpawnFailsClosedNoTrustAnchor — Sigil выключен на keeper (пустой набор
-// якорей) → Spawn fail-closed (VerifyReasonNoTrustAnchor). Интенсионально:
-// оператор с cloud/ssh обязан настроить Sigil (G-sigil-5).
+// TestSpawnFailsClosedNoTrustAnchor verifies Sigil disabled on keeper (empty anchor set)
+// → Spawn fail-closed (VerifyReasonNoTrustAnchor). Intentional:
+// operator with cloud/ssh must configure Sigil (G-sigil-5).
 func TestSpawnFailsClosedNoTrustAnchor(t *testing.T) {
 	h, d := setupCloudDriverPlugin(t)
-	// Допуск есть (lookup из setup), но набор trust-anchor-ов пуст.
+	// Permission exists (lookup from setup), but trust-anchor set empty.
 	h.SigilAnchors = sharedhost.NewAnchorSet(nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -481,7 +481,7 @@ func TestSpawnFailsClosedNoTrustAnchor(t *testing.T) {
 }
 
 func TestNewCloudDriverPluginRejectsWrongKind(t *testing.T) {
-	// Подсовываем «фейк» Plugin с manifest kind=ssh_provider в Cloud-обёртку.
+	// Feed "fake" Plugin with manifest kind=ssh_provider into Cloud wrapper.
 	p := &Plugin{BasePlugin: sharedhost.NewBasePluginForTest(
 		&Manifest{Kind: KindSSHProvider, Namespace: "x", Name: "y"},
 	)}
@@ -499,8 +499,8 @@ func TestNewSshProviderPluginRejectsWrongKind(t *testing.T) {
 	}
 }
 
-// TestSpawnParallel — несколько Spawn-ов параллельно работают корректно
-// (разные сокеты, нет коллизий имён).
+// TestSpawnParallel verifies multiple Spawns work correctly in parallel
+// (different sockets, no name collisions).
 func TestSpawnParallel(t *testing.T) {
 	h, d := setupCloudDriverPlugin(t)
 

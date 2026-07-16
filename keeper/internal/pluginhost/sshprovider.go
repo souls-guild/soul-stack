@@ -7,23 +7,23 @@ import (
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 )
 
-// SshProviderPlugin — тонкая обёртка над [Plugin], привязывающая базовый handle
-// к gRPC-клиенту SshProvider. Создаётся через [NewSshProviderPlugin] после
-// успешного [Host.Spawn]: caller проверяет, что manifest.kind == ssh_provider,
-// и оборачивает Plugin в SshProviderPlugin.
+// SshProviderPlugin is thin wrapper over [Plugin], tying base handle
+// to SshProvider gRPC client. Created via [NewSshProviderPlugin] after
+// successful [Host.Spawn]: caller verifies manifest.kind == ssh_provider,
+// and wraps Plugin in SshProviderPlugin.
 //
-// Apply-цикл keeper.push (docs/keeper/push.md) использует Sign перед каждой
-// SSH-сессией и Authorize для проверки прав на хост.
+// Apply-cycle keeper.push (docs/keeper/push.md) uses Sign before each
+// SSH session and Authorize to check host access permissions.
 //
-// Close проксируется на underlying Plugin.Close (идемпотентен).
+// Close proxied to underlying Plugin.Close (idempotent).
 type SshProviderPlugin struct {
 	*Plugin
 	client pluginv1.SshProviderClient
 }
 
-// NewSshProviderPlugin оборачивает [Plugin] (из [Host.Spawn]) в kind-specific
-// handle. Возвращает ошибку, если manifest.kind != ssh_provider: это защита
-// от случайного вызова на soul_module / cloud_driver бинаре.
+// NewSshProviderPlugin wraps [Plugin] (from [Host.Spawn]) in kind-specific
+// handle. Returns error if manifest.kind != ssh_provider: protection
+// from accidental call on soul_module / cloud_driver binary.
 func NewSshProviderPlugin(p *Plugin) (*SshProviderPlugin, error) {
 	if p == nil {
 		return nil, fmt.Errorf("pluginhost: nil Plugin")
@@ -38,14 +38,14 @@ func NewSshProviderPlugin(p *Plugin) (*SshProviderPlugin, error) {
 	}, nil
 }
 
-// Sign — RPC SshProvider.Sign. Выдаёт SSH-сертификат/ключ для текущей сессии
-// (Vault SSH CA, Teleport, static-key — всё под единым контрактом).
+// Sign is RPC SshProvider.Sign. Issues SSH certificate/key for current session
+// (Vault SSH CA, Teleport, static-key — all under unified contract).
 func (s *SshProviderPlugin) Sign(ctx context.Context, req *pluginv1.SignRequest) (*pluginv1.SignReply, error) {
 	return s.client.Sign(ctx, req)
 }
 
-// Authorize — RPC SshProvider.Authorize. Подтверждает право Keeper-а ходить
-// на конкретный хост (политика провайдера, если она есть).
+// Authorize is RPC SshProvider.Authorize. Confirms Keeper's right to access
+// specific host (provider policy if it exists).
 func (s *SshProviderPlugin) Authorize(ctx context.Context, req *pluginv1.AuthorizeRequest) (*pluginv1.AuthorizeReply, error) {
 	return s.client.Authorize(ctx, req)
 }

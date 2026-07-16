@@ -13,55 +13,54 @@ import (
 	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
 )
 
-// ErrSlotNotFound — в кеше нет слота `<cacheRoot>/<ns>-<name>/` или в нём нет
-// валидного manifest.yaml / бинаря. Возвращается [ReadSlot], когда плагин по
-// ключу (namespace, name) не найден в кеше host-а; sigil.Service маппит это в
+// ErrSlotNotFound indicates cache has no slot `<cacheRoot>/<ns>-<name>/` or it has no
+// valid manifest.yaml / binary. Returned by [ReadSlot] when plugin by
+// key (namespace, name) not found in host's cache; sigil.Service maps it to
 // ErrPluginNotInCache → 404.
 var ErrSlotNotFound = errors.New("pluginhost: plugin slot not found in cache")
 
-// CurrentLink — имя symlink-а на активный commit_sha-слот в R-nested-раскладке
+// CurrentLink is the name of symlink to active commit_sha-slot in R-nested layout
 // (ADR-026 F-fetch, A1-S1): `<cacheRoot>/<ns>-<name>/current → <commit_sha>`.
-// Резолвер ([plugingit.Resolver]) переставляет его атомарно при наполнении кеша.
+// Resolver ([plugingit.Resolver]) updates it atomically when populating cache.
 const CurrentLink = "current"
 
-// SlotContents — содержимое слота плагина в кеше, прочитанное по ключу
-// (namespace, name): путь к бинарю + сырые байты manifest.yaml + SHA-256
-// бинаря (hex, lowercase).
+// SlotContents is the contents of plugin slot in cache, read by key
+// (namespace, name): binary path + raw manifest.yaml bytes + SHA-256
+// of binary (hex, lowercase).
 //
-// Это вход для подписи Sigil (ADR-026): Keeper читает АКТИВНЫЙ бинарь+manifest
-// слота `<cacheRoot>/<ns>-<name>/current/` (R-nested layout, A1-S1: `current` —
-// symlink на иммутабельный commit_sha-слот, наполняемый git-резолвером).
-// `ref` в allow-record — operator-asserted метка, в поиске слота НЕ участвует.
+// This is input for Sigil signature (ADR-026): Keeper reads ACTIVE binary+manifest
+// of slot `<cacheRoot>/<ns>-<name>/current/` (R-nested layout, A1-S1: `current` is
+// symlink to immutable commit_sha-slot populated by git-resolver).
+// `ref` in allow-record is operator-asserted label, not used in slot lookup.
 type SlotContents struct {
-	// BinaryPath — абсолютный путь к исполняемому файлу плагина.
+	// BinaryPath is absolute path to plugin executable file.
 	BinaryPath string
-	// ManifestBytes — СЫРЫЕ байты manifest.yaml как лежат на диске (без
-	// канонизации: её делает sigil.Signer перед хешированием — S3↔S6-инвариант).
+	// ManifestBytes are RAW manifest.yaml bytes as on disk (without
+	// canonicalization: done by sigil.Signer before hashing — S3↔S6 invariant).
 	ManifestBytes []byte
-	// BinarySHA256 — SHA-256 бинаря (hex, lowercase, 64 символа). Подаётся в
-	// Signer.Sign и сохраняется в plugin_sigils.sha256.
+	// BinarySHA256 is SHA-256 of binary (hex, lowercase, 64 chars). Passed to
+	// Signer.Sign and stored in plugin_sigils.sha256.
 	BinarySHA256 string
 }
 
-// ReadSlot читает бинарь+manifest АКТИВНОГО слота плагина через current-symlink
-// `<cacheRoot>/<namespace>-<name>/current/` (R-nested layout, A1-S1). `ref` в
-// поиске слота НЕ участвует — авторитет целостности = sha256 + подпись Sigil.
+// ReadSlot reads binary+manifest of ACTIVE plugin slot via current-symlink
+// `<cacheRoot>/<namespace>-<name>/current/` (R-nested layout, A1-S1). `ref` not
+// used in slot lookup — integrity authority = sha256 + Sigil signature.
 //
-// Шаги:
-//  1. активный слот `<cacheRoot>/<ns>-<name>/current/` (symlink на commit_sha-
-//     каталог); нет / битый symlink → [ErrSlotNotFound];
-//  2. читает manifest.yaml сырыми байтами и парсит его (нужен kind → конвенция
-//     имени бинаря [sharedplugin.Manifest.BinaryName]); невалидный manifest →
-//     ошибка валидации;
-//  3. бинарь по конвенции рядом с manifest; нет / не исполняемый →
+// Steps:
+//  1. active slot `<cacheRoot>/<ns>-<name>/current/` (symlink to commit_sha-
+//     directory); missing / broken symlink → [ErrSlotNotFound];
+//  2. reads manifest.yaml as raw bytes and parses it (needs kind → binary name convention
+//     [sharedplugin.Manifest.BinaryName]); invalid manifest → validation error;
+//  3. binary by convention next to manifest; missing / not executable →
 //     [ErrSlotNotFound];
-//  4. потоковый SHA-256 бинаря.
+//  4. streaming SHA-256 of binary.
 //
-// Только чтение: ReadSlot НЕ форкает плагин, НЕ трогает handshake/Discover,
-// НЕ пишет sidecar. Контракт [Discover]/[Host.Spawn] не затрагивается.
+// Read-only: ReadSlot does NOT fork plugin, does NOT touch handshake/Discover,
+// does NOT write sidecar. Contract of [Discover]/[Host.Spawn] unaffected.
 //
-// os.Stat следует symlink-у current, поэтому проверка st.IsDir() работает и для
-// активного слота (битый/висячий current даёт ENOENT → [ErrSlotNotFound]).
+// os.Stat follows current symlink, so st.IsDir() check works for active slot too
+// (broken/dangling current gives ENOENT → [ErrSlotNotFound]).
 func ReadSlot(cacheRoot, namespace, name string) (*SlotContents, error) {
 	dir := filepath.Join(cacheRoot, namespace+"-"+name, CurrentLink)
 	st, err := os.Stat(dir)
@@ -117,26 +116,26 @@ func ReadSlot(cacheRoot, namespace, name string) (*SlotContents, error) {
 	}, nil
 }
 
-// SlotCommitSHA читает commit_sha АКТИВНОГО слота плагина (namespace, name) —
-// имя каталога, на который указывает symlink `<cacheRoot>/<ns>-<name>/current`
-// (R-nested layout, A1-S1). commit_sha — audit-метка происхождения бинаря,
-// заполняется в plugin_sigils при allow (ADR-026(g), вне подписи).
+// SlotCommitSHA reads commit_sha of ACTIVE plugin slot (namespace, name) —
+// directory name that symlink `<cacheRoot>/<ns>-<name>/current` points to
+// (R-nested layout, A1-S1). commit_sha is audit tag for binary origin,
+// filled in plugin_sigils on allow (ADR-026(g), outside signature).
 //
-// Читает ТОЛЬКО target символа (os.Readlink, без следования по нему): target —
-// относительная цель `<commit_sha>` (см. [plugingit.updateCurrentSymlink]),
-// поэтому возвращается её базовое имя. Чтение лишь target-а, а не stat slot-а,
-// делает хелпер дешёвым и независимым от наличия бинаря/manifest (их валидность
-// уже проверил [ReadSlot] на шаге allow).
+// Reads ONLY target of symlink (os.Readlink, without following it): target is
+// relative target `<commit_sha>` (see [plugingit.updateCurrentSymlink]),
+// so basic name of that is returned. Reading just target not stat of slot
+// makes helper cheap and independent of binary/manifest presence (their validity
+// already checked by [ReadSlot] at allow step).
 //
 // fail-closed:
-//   - нет каталога `<ns>-<name>/` или нет/битый symlink `current` (legacy-слот
-//     без current, висячая ссылка) → [ErrSlotNotFound];
-//   - `current` есть, но это не symlink → [ErrSlotNotFound] (R-nested-инвариант
-//     нарушен: current обязан быть символом на commit_sha-каталог).
+//   - missing directory `<ns>-<name>/` or missing/broken `current` symlink (legacy slot
+//     without current, dangling link) → [ErrSlotNotFound];
+//   - `current` exists but is not symlink → [ErrSlotNotFound] (R-nested invariant
+//     broken: current must be symlink to commit_sha directory).
 //
-// Возвращает базовое имя target-а как есть (без проверки на 40-hex): валидность
-// commit_sha гарантирует git-резолвер при наполнении кеша; здесь — только чтение
-// уже зафиксированного значения.
+// Returns basic name of target as-is (without 40-hex validation): commit_sha validity
+// guaranteed by git-resolver when populating cache; here only reading
+// already-fixed value.
 func SlotCommitSHA(cacheRoot, namespace, name string) (string, error) {
 	link := filepath.Join(cacheRoot, namespace+"-"+name, CurrentLink)
 	target, err := os.Readlink(link)
@@ -144,8 +143,8 @@ func SlotCommitSHA(cacheRoot, namespace, name string) (string, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", fmt.Errorf("%w: %s", ErrSlotNotFound, link)
 		}
-		// EINVAL (current — не symlink) и прочие — legacy/повреждённый слот:
-		// commit_sha надёжно не извлечь, fail-closed.
+		// EINVAL (current is not symlink) and other errors — legacy/corrupted slot:
+		// commit_sha cannot be reliably extracted, fail-closed.
 		return "", fmt.Errorf("%w: read current symlink %q: %v", ErrSlotNotFound, link, err)
 	}
 	commitSHA := filepath.Base(target)
@@ -155,10 +154,9 @@ func SlotCommitSHA(cacheRoot, namespace, name string) (string, error) {
 	return commitSHA, nil
 }
 
-// fileDigest считает SHA-256 файла потоково (бинари плагинов — десятки МБ).
-// Дубль computeFileDigest из shared/pluginhost (там unexported); локальная
-// копия избегает расширения публичной поверхности shared только ради чтения
-// слота.
+// fileDigest computes SHA-256 of file streaming (plugin binaries are tens of MB).
+// Duplicate of computeFileDigest from shared/pluginhost (unexported there); local
+// copy avoids expanding shared's public surface just for reading slot.
 func fileDigest(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -173,9 +171,9 @@ func fileDigest(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// firstManifestError возвращает первую error-уровневую диагностику из diags
-// (диагностики, не дотягивающие до error — warning/hint — игнорируются:
-// manifest валиден к подписи). nil — фатальных ошибок нет.
+// firstManifestError returns first error-level diagnostic from diags
+// (diagnostics below error level — warning/hint — ignored:
+// manifest valid for signing). nil means no fatal errors.
 func firstManifestError(diags []diag.Diagnostic) error {
 	for _, d := range diags {
 		if d.Level == diag.LevelError {

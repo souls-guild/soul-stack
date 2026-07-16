@@ -28,8 +28,8 @@ func writeFakeBinary(t *testing.T, dir, name string, executable bool) {
 	}
 }
 
-// writeNestedSlot создаёт R-nested-слот <root>/<ns>-<name>/<commit>/ +
-// current → <commit> с manifest и бинарём (A1-S1 раскладка).
+// writeNestedSlot creates R-nested slot <root>/<ns>-<name>/<commit>/ +
+// current → <commit> with manifest and binary (A1-S1 layout).
 func writeNestedSlot(t *testing.T, root, key, commit, manifest, binName string) {
 	t.Helper()
 	pluginDir := filepath.Join(root, key)
@@ -45,9 +45,9 @@ func writeNestedSlot(t *testing.T, root, key, commit, manifest, binName string) 
 }
 
 func TestDiscoverFiltersKeeperKinds(t *testing.T) {
-	// Раскладываем все три kind-а в R-nested-слотах. Keeper-host дискаверит
-	// cloud+ssh+soul_module (S1 эпика core.module.installed: keeper — реестр
-	// SoulModule-плагинов для раздачи Soul-ам).
+	// Lay out all three kinds in R-nested slots. Keeper-host discovers
+	// cloud+ssh+soul_module (S1 epic core.module.installed: keeper is registry
+	// of SoulModule plugins for distribution to Souls).
 	root := t.TempDir()
 	const commit = "0123456789abcdef0123456789abcdef01234567"
 
@@ -87,7 +87,7 @@ spec: { states: { promoted: {} } }
 		kinds[d.Manifest.Kind] = true
 	}
 	if !kinds[KindSoulModule] {
-		t.Errorf("soul_module не дискаверится: %v", kinds)
+		t.Errorf("soul_module not discovered: %v", kinds)
 	}
 }
 
@@ -99,8 +99,8 @@ func TestDiscoverRootMissing(t *testing.T) {
 }
 
 func TestFilterByCatalog(t *testing.T) {
-	// Готовим найденные плагины трёх kind-ов; в каталоге keeper.yml объявлены
-	// только aws (cloud), vault-ssh (ssh) и redis (soul_module).
+	// Prepare discovered plugins of three kinds; keeper.yml catalog declares
+	// only aws (cloud), vault-ssh (ssh), and redis (soul_module).
 	mk := func(kind, name string) Discovered {
 		return Discovered{Manifest: &Manifest{Kind: kind, Name: name, Namespace: "soulstack"}}
 	}
@@ -115,14 +115,14 @@ func TestFilterByCatalog(t *testing.T) {
 	plugins := &config.KeeperPlugins{
 		CloudDrivers: []config.PluginCatalogEntry{
 			{Name: "aws", Source: "git@example.com:soul-cloud-aws.git", Ref: "v1.0.0"},
-			{Name: "yc", Source: "git@example.com:soul-cloud-yc.git", Ref: "v0.1.0"}, // нет в кеше
+			{Name: "yc", Source: "git@example.com:soul-cloud-yc.git", Ref: "v0.1.0"}, // not in cache
 		},
 		SSHProviders: []config.PluginCatalogEntry{
 			{Name: "vault-ssh", Source: "git@example.com:soul-ssh-vault.git", Ref: "v1.0.0"},
 		},
 		SoulModules: []config.PluginCatalogEntry{
 			{Name: "redis", Source: "git@example.com:community-redis.git", Ref: "v1.0.0"},
-			{Name: "mongo", Source: "git@example.com:community-mongo.git", Ref: "v0.1.0"}, // нет в кеше
+			{Name: "mongo", Source: "git@example.com:community-mongo.git", Ref: "v0.1.0"}, // not in cache
 		},
 	}
 
@@ -138,7 +138,7 @@ func TestFilterByCatalog(t *testing.T) {
 		t.Errorf("expected aws+vault-ssh+redis, got %v", names)
 	}
 
-	// Warning-и: gcp/teleport/postgres не объявлены; yc/mongo объявлены, но не найдены.
+	// Warnings: gcp/teleport/postgres not declared; yc/mongo declared but not discovered.
 	var gotGcp, gotTeleport, gotYc, gotPostgres, gotMongo bool
 	for _, w := range warns {
 		switch {

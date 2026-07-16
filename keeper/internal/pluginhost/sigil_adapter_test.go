@@ -8,7 +8,7 @@ import (
 	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 )
 
-// fakeLister — минимальный SigilRecordLister для unit-теста адаптера.
+// fakeLister is minimal SigilRecordLister for unit test of adapter.
 type fakeLister struct {
 	recs []*sharedhost.SigilRecord
 	err  error
@@ -18,7 +18,7 @@ func (f fakeLister) ListActive(context.Context) ([]*sharedhost.SigilRecord, erro
 	return f.recs, f.err
 }
 
-// TestSigilLookupAdapter_Maps — Get резолвит запись по паре (namespace, name).
+// TestSigilLookupAdapter_Maps verifies Get resolves record by (namespace, name) pair.
 func TestSigilLookupAdapter_Maps(t *testing.T) {
 	want := &sharedhost.SigilRecord{
 		Namespace:       "soulstack",
@@ -36,7 +36,7 @@ func TestSigilLookupAdapter_Maps(t *testing.T) {
 	}
 }
 
-// TestSigilLookupAdapter_AbsentIsNil — нет записи по паре → nil (no_sigil).
+// TestSigilLookupAdapter_AbsentIsNil verifies no record for pair → nil (no_sigil).
 func TestSigilLookupAdapter_AbsentIsNil(t *testing.T) {
 	a := NewSigilLookupAdapter(fakeLister{recs: []*sharedhost.SigilRecord{
 		{Namespace: "soulstack", Name: "other"},
@@ -46,8 +46,8 @@ func TestSigilLookupAdapter_AbsentIsNil(t *testing.T) {
 	}
 }
 
-// TestSigilLookupAdapter_SingleSlotNewestWins — несколько записей по одной паре
-// → первая совпавшая (ListActive отдаёт новейшую первой: allowed_at DESC).
+// TestSigilLookupAdapter_SingleSlotNewestWins verifies multiple records per pair
+// → first match (ListActive returns newest first: allowed_at DESC).
 func TestSigilLookupAdapter_SingleSlotNewestWins(t *testing.T) {
 	a := NewSigilLookupAdapter(fakeLister{recs: []*sharedhost.SigilRecord{
 		{Namespace: "soulstack", Name: "hetzner", Ref: "v2"},
@@ -59,8 +59,8 @@ func TestSigilLookupAdapter_SingleSlotNewestWins(t *testing.T) {
 	}
 }
 
-// TestSigilLookupAdapter_NilLister — nil-lister не паникует, всегда nil
-// (no_sigil fail-closed при неполном wire-up / Sigil off).
+// TestSigilLookupAdapter_NilLister verifies nil-lister doesn't panic, always nil
+// (no_sigil fail-closed on incomplete wire-up / Sigil off).
 func TestSigilLookupAdapter_NilLister(t *testing.T) {
 	a := NewSigilLookupAdapter(nil, nil)
 	if rec := a.Get("soulstack", "hetzner"); rec != nil {
@@ -68,8 +68,8 @@ func TestSigilLookupAdapter_NilLister(t *testing.T) {
 	}
 }
 
-// TestSigilLookupAdapter_ListErrorIsNil — ошибка чтения реестра → nil
-// (verify fail-closed: ошибка ≠ «допустить»).
+// TestSigilLookupAdapter_ListErrorIsNil verifies registry read error → nil
+// (verify fail-closed: error ≠ "allow").
 func TestSigilLookupAdapter_ListErrorIsNil(t *testing.T) {
 	a := NewSigilLookupAdapter(fakeLister{err: errors.New("db down")}, nil)
 	if rec := a.Get("soulstack", "hetzner"); rec != nil {

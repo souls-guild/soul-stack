@@ -7,52 +7,52 @@ import (
 	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 )
 
-// SigilRecordLister — поверхность чтения активных допусков в verify-форме,
-// нужная адаптеру. Возвращает уже спроецированные [sharedhost.SigilRecord]
-// (single source of маппинга sigil.Sigil → SigilRecord держит call-site —
-// `keeper run`), чтобы keeper/internal/pluginhost НЕ импортировал
-// keeper/internal/sigil: sigil уже импортирует pluginhost (ReadSlot/SlotContents),
-// прямой импорт обратно дал бы import-цикл.
+// SigilRecordLister is the surface for reading active permissions in verify-form,
+// needed by adapter. Returns already-projected [sharedhost.SigilRecord]
+// (single source of sigil.Sigil → SigilRecord mapping held by call-site —
+// `keeper run`), so keeper/internal/pluginhost doesn't import
+// keeper/internal/sigil: sigil already imports pluginhost (ReadSlot/SlotContents),
+// direct import back would create import cycle.
 //
-// keeper читает plugin_sigils НАПРЯМУЮ из своей БД (pool), в отличие от Soul-а,
-// который получает допуски broadcast-ом по EventStream и держит in-memory кеш.
+// keeper reads plugin_sigils DIRECTLY from its DB (pool), unlike Soul
+// which receives permissions broadcast via EventStream and keeps in-memory cache.
 type SigilRecordLister interface {
 	ListActive(ctx context.Context) ([]*sharedhost.SigilRecord, error)
 }
 
-// SigilLookupAdapter мостит keeper-side реестр plugin_sigils (читается из
-// Postgres) к verify-контракту shared/pluginhost.SigilLookup. keeper-host сам
-// верифицирует СВОИ плагины (CloudDriver / SshProvider) против печатей доверия,
-// которые сам же и подписал (ADR-026(f)): trust-anchor — публичный ключ
-// keeper-Signer-а, источник допусков — тот же реестр plugin_sigils, что
-// раздаётся Soul-ам.
+// SigilLookupAdapter bridges keeper-side plugin_sigils registry (read from
+// Postgres) to verify-contract of shared/pluginhost.SigilLookup. keeper-host itself
+// verifies its OWN plugins (CloudDriver / SshProvider) against trust seals
+// that it signed itself (ADR-026(f)): trust-anchor is public key of
+// keeper-Signer, source of permissions is same plugin_sigils registry that
+// is distributed to Souls.
 type SigilLookupAdapter struct {
 	lister SigilRecordLister
 	logger *slog.Logger
 }
 
-// NewSigilLookupAdapter оборачивает lister реестра plugin_sigils в
-// shared-совместимый SigilLookup. nil-lister → адаптер всегда возвращает
-// nil-запись (verify fail-closed по no_sigil): защита от nil-разыменования при
-// неполном wire-up (Sigil выключен). logger может быть nil — тогда ошибки
-// чтения проглатываются молча (fail-closed verify и так защитит).
+// NewSigilLookupAdapter wraps plugin_sigils registry lister into
+// shared-compatible SigilLookup. nil-lister → adapter always returns
+// nil-record (verify fail-closed on no_sigil): protection from nil-dereference at
+// incomplete wire-up (Sigil disabled). logger can be nil — then read
+// errors silently swallowed (fail-closed verify protects anyway).
 func NewSigilLookupAdapter(lister SigilRecordLister, logger *slog.Logger) *SigilLookupAdapter {
 	return &SigilLookupAdapter{lister: lister, logger: logger}
 }
 
-// Get резолвит активный допуск по (namespace, name) из реестра plugin_sigils.
-// nil (допуска нет / ошибка чтения) → nil (verify трактует как no_sigil,
+// Get resolves active permission for (namespace, name) from plugin_sigils registry.
+// nil (permission absent / read error) → nil (verify interprets as no_sigil,
 // fail-closed).
 //
-// Single-slot per пара (ADR-026(g), Вариант C): на (namespace, name) допущен
-// ровно один бинарь, ref — operator-asserted метка внутри записи, в lookup НЕ
-// участвует. partial unique index допускает несколько активных записей с
-// разными ref на одну пару; при коллизии выбирается новейшая (ListActive
-// сортирует allowed_at DESC, id DESC — первая совпавшая = последний allow).
+// Single-slot per pair (ADR-026(g), Variant C): (namespace, name) has exactly
+// one allowed binary, ref is operator-asserted label within record, not used
+// in lookup. Partial unique index allows multiple active records with
+// different refs per pair; on collision newest chosen (ListActive
+// sorts allowed_at DESC, id DESC — first match = last allow).
 //
-// Manifest — byte-exact СЫРЫЕ байты manifest.yaml (call-site проецирует из
-// sigil.Sigil.ManifestRaw, НЕ JSONB-проекции); verify прогоняет их через
-// NormalizeManifestBytes (S3↔S6-инвариант).
+// Manifest is byte-exact RAW manifest.yaml bytes (call-site projects from
+// sigil.Sigil.ManifestRaw, NOT JSONB projection); verify passes them through
+// NormalizeManifestBytes (S3↔S6 invariant).
 func (a *SigilLookupAdapter) Get(namespace, name string) *sharedhost.SigilRecord {
 	if a.lister == nil {
 		return nil

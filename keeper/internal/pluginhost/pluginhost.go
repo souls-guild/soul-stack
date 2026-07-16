@@ -1,16 +1,16 @@
-// Package pluginhost — Keeper-side wrapper над `shared/pluginhost` для запуска
-// плагинов kind=cloud_driver и kind=ssh_provider (ADR-020, docs/keeper/plugins.md).
+// Package pluginhost provides Keeper-side wrapper over `shared/pluginhost` for running
+// plugins of kind=cloud_driver and kind=ssh_provider (ADR-020, docs/keeper/plugins.md).
 //
-// Общая kind-agnostic часть (Spawn / handshake / Close / discovery / tailBuffer)
-// живёт в [sharedhost]. Этот пакет добавляет:
+// The generic kind-agnostic part (Spawn / handshake / Close / discovery / tailBuffer)
+// lives in [sharedhost]. This package adds:
 //
-//   - kind-specific обёртки [CloudDriverPlugin], [SshProviderPlugin], общий
-//     приватный [Plugin] с gRPC-conn;
-//   - kind-specific дефолт SocketDir (`/var/run/soul-stack-keeper/plugins`);
-//   - фильтр Discover-результатов: на Keeper-host принимаются cloud_driver,
-//     ssh_provider и soul_module (последний — реестр для раздачи Soul-ам,
-//     эпик core.module.installed; Spawn его отвергает);
-//   - [FilterByCatalog] для cross-check найденных плагинов с реестром
+//   - kind-specific wrappers [CloudDriverPlugin], [SshProviderPlugin], common private
+//     [Plugin] with gRPC-conn;
+//   - kind-specific default SocketDir (`/var/run/soul-stack-keeper/plugins`);
+//   - Discover-result filter: Keeper-host accepts cloud_driver, ssh_provider and
+//     soul_module (the latter is a registry for distribution to Souls, epic core.module.installed;
+//     Spawn rejects it);
+//   - [FilterByCatalog] for cross-check of discovered plugins against catalog in
 //     `keeper.yml::plugins.{cloud_drivers,ssh_providers,soul_modules}`.
 package pluginhost
 
@@ -26,61 +26,59 @@ import (
 	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 )
 
-// DefaultSocketDir — Keeper-host дефолт каталога Unix-сокетов плагинов.
-// Отличается от Soul-host-дефолта: keeper-сервис работает под отдельным
-// пользователем (docs/keeper/plugins.md → Расположение сокета).
+// DefaultSocketDir is the Keeper-host default Unix socket directory for plugins.
+// Differs from Soul-host default: keeper service runs as separate user
+// (docs/keeper/plugins.md → Socket Location).
 const DefaultSocketDir = "/var/run/soul-stack-keeper/plugins"
 
-// DefaultCacheRoot — конвенция директории-кеша Keeper-side плагинов
-// (ADR-020(a), симметрия с [DefaultSocketDir]). Используется wire-up-ом
-// main-а, когда `keeper.yml` не задаёт явный путь (поле кеша в схеме
-// конфига пока не введено — git-резолв `plugins.{cloud_drivers,ssh_providers}`
-// отдельной задачей).
+// DefaultCacheRoot is the convention for Keeper-side plugin cache directory
+// (ADR-020(a), symmetric with [DefaultSocketDir]). Used by main's wire-up when
+// `keeper.yml` doesn't specify explicit path (cache field in config schema
+// not yet introduced — git-resolve for `plugins.{cloud_drivers,ssh_providers}` is separate task).
 const DefaultCacheRoot = "/var/lib/soul-stack-keeper/plugins"
 
-// Defaults перевыставляются из shared для удобства call-sites.
+// Defaults re-exported from shared for call-sites convenience.
 const (
 	DefaultStartupTimeout = sharedhost.DefaultStartupTimeout
 	DefaultShutdownGrace  = sharedhost.DefaultShutdownGrace
 )
 
-// Re-export типов из shared. Алиасы намеренно: они дают call-sites привычные
-// короткие имена и стабильную поверхность контракта Keeper-host-а.
+// Re-export types from shared. Aliases intentional: they provide call-sites familiar
+// short names and stable contract surface for Keeper-host.
 type (
 	Discovered = sharedhost.Discovered
 	Manifest   = sharedplugin.Manifest
 )
 
-// Kind-константы для Keeper-host.
+// Kind-constants for Keeper-host.
 const (
 	KindSoulModule  = sharedplugin.KindSoulModule
 	KindCloudDriver = sharedplugin.KindCloudDriver
 	KindSSHProvider = sharedplugin.KindSSHProvider
 )
 
-// SupportedProtocolVersions — версии plugin-протокола, понятные Keeper-host-у.
-// Делегируется в shared/plugin как single source of truth.
+// SupportedProtocolVersions is plugin-protocol versions understood by Keeper-host.
+// Delegated to shared/plugin as single source of truth.
 var SupportedProtocolVersions = sharedplugin.SupportedProtocolVersions
 
-// Host — Keeper-side runtime для плагинов kind ∈ {cloud_driver, ssh_provider}.
-// Тонкая обёртка над [sharedhost.Host] с kind-specific Spawn-методами.
+// Host is Keeper-side runtime for plugins where kind ∈ {cloud_driver, ssh_provider}.
+// Thin wrapper over [sharedhost.Host] with kind-specific Spawn methods.
 type Host struct {
 	*sharedhost.Host
 }
 
-// NewHost конструирует Keeper-host. Принимает `keeper.yml::plugin_runtime` и
-// подставляет [DefaultSocketDir] если cfg.SocketDir пуст.
+// NewHost constructs Keeper-host. Accepts `keeper.yml::plugin_runtime` and
+// substitutes [DefaultSocketDir] if cfg.SocketDir is empty.
 //
-// anchors — НАБОР trust-anchor-ов verify Sigil (ADR-026(h), R3 multi-anchor):
-// публичные ключи всех active-ключей keeper-Signer-а ([sigil.Signer.AnchorSet]).
-// keeper-host верифицирует СВОИ плагины против печатей, которые сам же подписал
-// (ADR-026(f)), поэтому набор якорей — это active-набор подписи; OR-проверка
-// даёт безразрывную ротацию ключа. Пустой набор = Sigil не настроен на Keeper →
-// verify любого плагина fail-closed (no_trust_anchor): оператор с cloud/ssh
-// обязан настроить Sigil + allow. sigils — поверхность чтения активных допусков
-// ([SigilLookupAdapter] поверх реестра plugin_sigils); nil = допусков нет →
-// fail-closed (no_sigil). Оба пробрасываются в [sharedhost.Host] как DI;
-// набор обёрнут в атомарный [sharedhost.AnchorSet] (S6 заменит его в рантайме).
+// anchors is a SET of trust-anchors for Sigil verification (ADR-026(h), R3 multi-anchor):
+// public keys of all active keeper-Signer keys ([sigil.Signer.AnchorSet]).
+// keeper-host verifies its own plugins against seals it signed itself
+// (ADR-026(f)), so anchor set is the active signing set; OR-check enables seamless key rotation.
+// Empty set = Sigil not configured on Keeper → verification of any plugin fail-closed (no_trust_anchor):
+// operator with cloud/ssh must configure Sigil + allow. sigils is the surface for reading active permissions
+// ([SigilLookupAdapter] over plugin_sigils registry); nil = no permissions →
+// fail-closed (no_sigil). Both are passed into [sharedhost.Host] as DI;
+// set wrapped in atomic [sharedhost.AnchorSet] (S6 will replace it at runtime).
 func NewHost(cfg *config.PluginRuntime, anchors []ed25519.PublicKey, sigils sharedhost.SigilLookup) (*Host, error) {
 	base, err := sharedhost.NewHost(cfg, DefaultSocketDir)
 	if err != nil {
@@ -91,26 +89,26 @@ func NewHost(cfg *config.PluginRuntime, anchors []ed25519.PublicKey, sigils shar
 	return &Host{Host: base}, nil
 }
 
-// SpawnOption — алиас на [sharedhost.SpawnOption] для удобства call-site
-// (keeper-side caller не таскает shared-импорт ради одного типа).
+// SpawnOption is alias to [sharedhost.SpawnOption] for call-site convenience
+// (keeper-side caller doesn't pull shared-import for one type).
 type SpawnOption = sharedhost.SpawnOption
 
-// WithEnv — re-export [sharedhost.WithEnv] (см. doc там). Используется push-S6
-// wire-up-ом SshDispatcher для env-payload params SshProvider-плагина
+// WithEnv re-exports [sharedhost.WithEnv] (see doc there). Used by push-S6
+// wire-up of SshDispatcher for env-payload params of SshProvider plugin
 // (ADR-020 amendment l).
 func WithEnv(env []string) SpawnOption { return sharedhost.WithEnv(env) }
 
-// Spawn — fork плагина и возврат generic [sharedhost.BasePlugin]. Caller
-// оборачивает результат в kind-specific [CloudDriverPlugin] / [SshProviderPlugin]
-// через [NewCloudDriverPlugin] / [NewSshProviderPlugin] — Keeper-host
-// различает два kind-а, поэтому промежуточный generic Plugin делает выбор
-// явным, а не неявным.
+// Spawn forks plugin and returns generic [sharedhost.BasePlugin]. Caller
+// wraps result in kind-specific [CloudDriverPlugin] / [SshProviderPlugin]
+// via [NewCloudDriverPlugin] / [NewSshProviderPlugin] — Keeper-host
+// distinguishes two kinds, so intermediate generic Plugin makes choice
+// explicit rather than implicit.
 //
-// Защита от kind-mismatch: если manifest.kind не в {cloud_driver, ssh_provider},
-// Spawn возвращает ошибку до fork-а.
+// Protection from kind-mismatch: if manifest.kind not in {cloud_driver, ssh_provider},
+// Spawn returns error before fork.
 //
-// opts — опц. SpawnOption-ы ([WithEnv] и т.п.); пробрасываются в
-// [sharedhost.Host.Spawn] без изменений.
+// opts are optional SpawnOptions ([WithEnv] etc.); passed through to
+// [sharedhost.Host.Spawn] unchanged.
 func (h *Host) Spawn(ctx context.Context, d Discovered, opts ...SpawnOption) (*Plugin, error) {
 	if d.Manifest != nil &&
 		d.Manifest.Kind != KindCloudDriver &&
@@ -124,38 +122,38 @@ func (h *Host) Spawn(ctx context.Context, d Discovered, opts ...SpawnOption) (*P
 	return &Plugin{BasePlugin: base}, nil
 }
 
-// Plugin — Keeper-side generic handle. Не содержит kind-specific gRPC-клиента
-// (в отличие от Soul-host-а, где kind ровно один): caller оборачивает Plugin в
-// [CloudDriverPlugin] / [SshProviderPlugin] через NewCloudDriverPlugin /
+// Plugin is Keeper-side generic handle. Doesn't contain kind-specific gRPC client
+// (unlike Soul-host where kind is singular): caller wraps Plugin in
+// [CloudDriverPlugin] / [SshProviderPlugin] via NewCloudDriverPlugin /
 // NewSshProviderPlugin.
 type Plugin struct {
 	*sharedhost.BasePlugin
 }
 
-// Discover — Keeper-host discovery: ищет плагины в cacheRoot и оставляет
-// только kind ∈ {cloud_driver, ssh_provider, soul_module}. soul_module Keeper
-// НЕ spawn-ит ([Host.Spawn] его отвергает) — держит в реестре для раздачи
-// Soul-ам (эпик core.module.installed). Прочие kind-ы и невалидные записи
-// попадают в warnings.
+// Discover performs Keeper-host discovery: searches for plugins in cacheRoot and keeps
+// only kind ∈ {cloud_driver, ssh_provider, soul_module}. soul_module Keeper does
+// not spawn ([Host.Spawn] rejects it) — keeps in registry for distribution
+// to Souls (epic core.module.installed). Other kinds and invalid entries
+// go to warnings.
 //
-// Раскладка кеша (R-nested layout, A1-S1 — git-резолвер наполняет слоты):
+// Cache layout (R-nested layout, A1-S1 — git-resolver populates slots):
 //
 //	<cacheRoot>/
 //	  <namespace>-<name>/
-//	    current -> <commit_sha>       # symlink на активный слот
+//	    current -> <commit_sha>       # symlink to active slot
 //	    <commit_sha>/
 //	      manifest.yaml
-//	      soul-cloud-<name>           # для kind=cloud_driver
-//	      soul-ssh-<name>             # для kind=ssh_provider
-//	      soul-mod-<name>             # для kind=soul_module
+//	      soul-cloud-<name>           # for kind=cloud_driver
+//	      soul-ssh-<name>             # for kind=ssh_provider
+//	      soul-mod-<name>             # for kind=soul_module
 //
-// Discovery идёт через `current` (одноуровневый резолв символа): для каждого
-// каталога `<ns>-<name>` дискаверится `<ns>-<name>/current/`. Каталоги без
-// валидного `current` (резолвер ещё не наполнил слот) попадают в warnings.
+// Discovery goes through `current` (one-level symlink resolution): for each
+// directory `<ns>-<name>` discovers `<ns>-<name>/current/`. Directories without
+// valid `current` (resolver hasn't populated slot yet) go to warnings.
 //
-// Наполнение кеша git-резолвером (`plugins.{cloud_drivers,ssh_providers,
-// soul_modules}` → commit_sha-слот) делает [plugingit.Resolver] ДО Discover
-// при старте Keeper-а; [FilterByCatalog] фильтрует найденное по реестру.
+// Cache population by git-resolver (`plugins.{cloud_drivers,ssh_providers,
+// soul_modules}` → commit_sha-slot) done by [plugingit.Resolver] before Discover
+// on Keeper startup; [FilterByCatalog] filters found plugins by registry.
 func Discover(cacheRoot string) ([]Discovered, []string, error) {
 	entries, err := os.ReadDir(cacheRoot)
 	if err != nil {
@@ -169,9 +167,9 @@ func Discover(cacheRoot string) ([]Discovered, []string, error) {
 		if !e.IsDir() {
 			continue
 		}
-		// Активный слот плагина — через current-symlink. sharedhost.Discover
-		// читает manifest+бинарь из переданного каталога; current указывает на
-		// commit_sha-слот с этой раскладкой.
+		// Active plugin slot — via current-symlink. sharedhost.Discover
+		// reads manifest+binary from passed directory; current points to
+		// commit_sha-slot with this layout.
 		current := filepath.Join(cacheRoot, e.Name(), CurrentLink)
 		if _, statErr := os.Stat(current); statErr != nil {
 			warnings = append(warnings, fmt.Sprintf("skip %s: no active slot (current): %v",
@@ -186,29 +184,29 @@ func Discover(cacheRoot string) ([]Discovered, []string, error) {
 	return keeperOnly, append(warnings, filterWarns...), nil
 }
 
-// FilterByCatalog оставляет в `found` только те плагины, чьё `manifest.name`
-// упомянуто в каталоге `keeper.yml::plugins.{cloud_drivers,ssh_providers,
-// soul_modules}`. Сравнение идёт по полю `name` (PluginCatalogEntry.Name) —
-// это тот же kebab-case, что и `manifest.name`.
+// FilterByCatalog keeps in `found` only plugins whose `manifest.name`
+// is mentioned in catalog `keeper.yml::plugins.{cloud_drivers,ssh_providers,
+// soul_modules}`. Comparison by field `name` (PluginCatalogEntry.Name) —
+// same kebab-case as `manifest.name`.
 //
-// Возвращает отфильтрованный список и список warnings:
+// Returns filtered list and warnings list:
 //
-//   - запись каталога без найденного плагина → warning;
-//   - найденный плагин без записи в каталоге → warning.
+//   - catalog entry without discovered plugin → warning;
+//   - discovered plugin without catalog entry → warning.
 //
-// Сами `source`/`ref` каталога этим filter-ом не используются — git-резолв
-// отдельная задача (см. [Discover]).
+// Catalog `source`/`ref` themselves not used by this filter — git-resolve
+// is separate task (see [Discover]).
 func FilterByCatalog(found []Discovered, plugins *config.KeeperPlugins) ([]Discovered, []string) {
 	if plugins == nil {
 		return nil, nil
 	}
-	// Индексируем декларированные имена по kind, чтобы один проход по
-	// found валидировал оба списка одновременно. set-ы пустые если nil-блок.
+	// Index declared names by kind to validate both lists in one pass over found.
+	// Sets empty if nil-block.
 	wantCloud := indexEntries(plugins.CloudDrivers)
 	wantSSH := indexEntries(plugins.SSHProviders)
 	wantModules := indexEntries(plugins.SoulModules)
 
-	// Каталог-ключ per kind — единая точка соответствия kind → yaml-список.
+	// Catalog key per kind — single point of correspondence kind → yaml-list.
 	catalogKey := map[string]string{
 		KindCloudDriver: "cloud_drivers",
 		KindSSHProvider: "ssh_providers",

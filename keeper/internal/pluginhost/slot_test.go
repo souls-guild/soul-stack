@@ -9,8 +9,8 @@ import (
 	"testing"
 )
 
-// validCloudManifest — минимально-валидный manifest cloud_driver-плагина для
-// фикстуры слота.
+// validCloudManifest is minimally-valid manifest for cloud_driver plugin
+// in slot fixture.
 const validCloudManifest = `kind: cloud_driver
 protocol_version: 1
 namespace: cloud
@@ -20,9 +20,9 @@ spec:
     type: object
 `
 
-// writeSlot создаёт R-nested-слот (A1-S1): <root>/<ns>-<name>/<commit>/ с
-// manifest.yaml и бинарём по конвенции BinaryName + current → <commit>.
-// commit — синтетический 40-hex для фикстуры (тест чтения, не git-резолва).
+// writeSlot creates R-nested slot (A1-S1): <root>/<ns>-<name>/<commit>/ with
+// manifest.yaml and binary by BinaryName convention + current → <commit>.
+// commit is synthetic 40-hex for fixture (read test, not git-resolve).
 func writeSlot(t *testing.T, root, ns, name, binaryName string, manifest, binary []byte) {
 	t.Helper()
 	const commit = "0123456789abcdef0123456789abcdef01234567"
@@ -70,7 +70,7 @@ func TestReadSlot_NoSlot(t *testing.T) {
 	root := t.TempDir()
 	_, err := ReadSlot(root, "cloud", "absent")
 	if !errors.Is(err, ErrSlotNotFound) {
-		t.Fatalf("ReadSlot отсутствующего слота: err = %v, want ErrSlotNotFound", err)
+		t.Fatalf("ReadSlot absent slot: err = %v, want ErrSlotNotFound", err)
 	}
 }
 
@@ -82,37 +82,37 @@ func TestReadSlot_NoManifest(t *testing.T) {
 	}
 	_, err := ReadSlot(root, "cloud", "hetzner")
 	if !errors.Is(err, ErrSlotNotFound) {
-		t.Fatalf("ReadSlot без manifest: err = %v, want ErrSlotNotFound", err)
+		t.Fatalf("ReadSlot without manifest: err = %v, want ErrSlotNotFound", err)
 	}
 }
 
 func TestReadSlot_BinaryMissing(t *testing.T) {
 	root := t.TempDir()
-	// manifest есть, бинаря нет.
+	// manifest present, binary missing.
 	writeSlot(t, root, "cloud", "hetzner", "", []byte(validCloudManifest), nil)
 	_, err := ReadSlot(root, "cloud", "hetzner")
 	if !errors.Is(err, ErrSlotNotFound) {
-		t.Fatalf("ReadSlot без бинаря: err = %v, want ErrSlotNotFound", err)
+		t.Fatalf("ReadSlot without binary: err = %v, want ErrSlotNotFound", err)
 	}
 }
 
 func TestReadSlot_InvalidManifest(t *testing.T) {
 	root := t.TempDir()
 	writeSlot(t, root, "cloud", "hetzner", "soul-cloud-hetzner",
-		[]byte("kind: cloud_driver\nprotocol_version: 1\n"), // нет namespace/name/spec
+		[]byte("kind: cloud_driver\nprotocol_version: 1\n"), // missing namespace/name/spec
 		[]byte("bin"))
 	_, err := ReadSlot(root, "cloud", "hetzner")
 	if err == nil {
-		t.Fatal("ReadSlot с невалидным manifest должен вернуть ошибку")
+		t.Fatal("ReadSlot with invalid manifest should return error")
 	}
 	if errors.Is(err, ErrSlotNotFound) {
-		t.Errorf("невалидный manifest не должен маппиться в ErrSlotNotFound: %v", err)
+		t.Errorf("invalid manifest should not map to ErrSlotNotFound: %v", err)
 	}
 }
 
-// TestReadSlot_RefIgnored — вариант C: чтение по (ns, name) без ref; один и тот
-// же слот возвращает тот же бинарь независимо от того, под какой меткой ref он
-// будет допущен (ref в путь кеша не входит).
+// TestReadSlot_RefIgnored is variant C: read by (ns, name) without ref; same
+// slot returns same binary regardless of which ref label it was
+// allowed under (ref not in cache path).
 func TestReadSlot_RefIgnored(t *testing.T) {
 	root := t.TempDir()
 	binary := []byte("single-slot-binary")
@@ -127,17 +127,17 @@ func TestReadSlot_RefIgnored(t *testing.T) {
 		t.Fatalf("ReadSlot #2: %v", err)
 	}
 	if a.BinarySHA256 != b.BinarySHA256 {
-		t.Errorf("single-slot должен давать стабильный digest: %q != %q", a.BinarySHA256, b.BinarySHA256)
+		t.Errorf("single-slot must give stable digest: %q != %q", a.BinarySHA256, b.BinarySHA256)
 	}
 }
 
-// commitFixtureSHA — synthetic 40-hex commit, которым writeSlot именует слот и
-// нацеливает current (тест чтения target-а, не git-резолва).
+// commitFixtureSHA is synthetic 40-hex commit that writeSlot uses to name slot
+// and target current (test symlink target reading, not git-resolve).
 const commitFixtureSHA = "0123456789abcdef0123456789abcdef01234567"
 
-// TestSlotCommitSHA_Success — current-symlink указывает на <commit_sha>-каталог;
-// SlotCommitSHA возвращает имя этого каталога (A1-S4: источник commit_sha для
-// plugin_sigils при allow).
+// TestSlotCommitSHA_Success verifies current-symlink points to <commit_sha> directory;
+// SlotCommitSHA returns that directory name (A1-S4: source of commit_sha for
+// plugin_sigils on allow).
 func TestSlotCommitSHA_Success(t *testing.T) {
 	root := t.TempDir()
 	writeSlot(t, root, "cloud", "hetzner", "soul-cloud-hetzner", []byte(validCloudManifest), []byte("bin"))
@@ -151,7 +151,7 @@ func TestSlotCommitSHA_Success(t *testing.T) {
 	}
 }
 
-// TestSlotCommitSHA_NoSlot — нет каталога <ns>-<name>/ → ErrSlotNotFound.
+// TestSlotCommitSHA_NoSlot verifies missing <ns>-<name>/ directory → ErrSlotNotFound.
 func TestSlotCommitSHA_NoSlot(t *testing.T) {
 	root := t.TempDir()
 	_, err := SlotCommitSHA(root, "cloud", "absent")
@@ -160,9 +160,9 @@ func TestSlotCommitSHA_NoSlot(t *testing.T) {
 	}
 }
 
-// TestSlotCommitSHA_LegacyNoCurrent — legacy-слот: каталог <ns>-<name>/ есть,
-// но symlink current отсутствует (commit_sha надёжно не извлечь). fail-closed →
-// ErrSlotNotFound (Allow обязан отклонить такой допуск).
+// TestSlotCommitSHA_LegacyNoCurrent verifies legacy slot: <ns>-<name>/ directory exists
+// but current symlink missing (commit_sha cannot be reliably extracted). fail-closed →
+// ErrSlotNotFound (Allow must reject such permission).
 func TestSlotCommitSHA_LegacyNoCurrent(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "cloud-hetzner", "somedir"), 0o755); err != nil {
@@ -170,12 +170,12 @@ func TestSlotCommitSHA_LegacyNoCurrent(t *testing.T) {
 	}
 	_, err := SlotCommitSHA(root, "cloud", "hetzner")
 	if !errors.Is(err, ErrSlotNotFound) {
-		t.Fatalf("legacy-слот без current: err = %v, want ErrSlotNotFound", err)
+		t.Fatalf("legacy slot without current: err = %v, want ErrSlotNotFound", err)
 	}
 }
 
-// TestSlotCommitSHA_CurrentNotSymlink — current существует, но это обычный
-// каталог, а не symlink (R-nested-инвариант нарушен). fail-closed →
+// TestSlotCommitSHA_CurrentNotSymlink verifies current exists but is regular
+// directory not symlink (R-nested invariant broken). fail-closed →
 // ErrSlotNotFound.
 func TestSlotCommitSHA_CurrentNotSymlink(t *testing.T) {
 	root := t.TempDir()
