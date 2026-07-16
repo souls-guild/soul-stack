@@ -9,8 +9,9 @@ import (
 	"time"
 )
 
-// fakeVault — in-memory подмена vault-клиента для reconcile-тестов. names[] —
-// что отдаёт ListKV; created[key_id] — created_time для ReadKVMetadata.
+// fakeVault is an in-memory vault client replacement for reconcile tests.
+// names[] is returned by ListKV; created[key_id] is created_time for
+// ReadKVMetadata.
 type fakeVault struct {
 	names    []string
 	created  map[string]time.Time
@@ -27,7 +28,7 @@ func (f *fakeVault) ListKV(_ context.Context, prefix string) ([]string, error) {
 		return nil, f.listErr
 	}
 	if prefix != orphanScanPrefix {
-		// Защита от регресса: правило обязано сканировать только зашитый prefix.
+		// Regression guard: the rule must scan only the hardcoded prefix.
 		return nil, errors.New("unexpected prefix: " + prefix)
 	}
 	return f.names, nil
@@ -36,7 +37,7 @@ func (f *fakeVault) ListKV(_ context.Context, prefix string) ([]string, error) {
 func (f *fakeVault) ReadKVMetadata(_ context.Context, path string) (time.Time, error) {
 	f.metaCnt++
 	f.metaSeen = append(f.metaSeen, path)
-	// path = orphanScanPrefix + "/" + key_id → извлекаем key_id.
+	// path = orphanScanPrefix + "/" + key_id; extract key_id.
 	keyID := path[len(orphanScanPrefix)+1:]
 	if f.metaErr != nil {
 		if err, ok := f.metaErr[keyID]; ok {
@@ -50,7 +51,7 @@ func (f *fakeVault) ReadKVMetadata(_ context.Context, path string) (time.Time, e
 	return t, nil
 }
 
-// fakeKeys — подмена sigil.ListAllKeyIDs (set живых key_id).
+// fakeKeys replaces sigil.ListAllKeyIDs with a set of live key_id values.
 type fakeKeys struct {
 	live map[string]struct{}
 	err  error
@@ -77,10 +78,10 @@ func set(ids ...string) map[string]struct{} {
 
 const testGrace = 24 * time.Hour
 
-// fixedNow — детерминированный clock для grace-сравнения.
+// fixedNow is a deterministic clock for grace comparisons.
 func fixedNow() time.Time { return time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC) }
 
-// (а) ключ есть и в Vault, и в PG → не сирота.
+// (a) key exists in both Vault and PG, so it is not an orphan.
 func TestReportOrphan_KeyInBothVaultAndPG_NotOrphan(t *testing.T) {
 	v := &fakeVault{
 		names:   []string{"k-active"},
@@ -95,17 +96,18 @@ func TestReportOrphan_KeyInBothVaultAndPG_NotOrphan(t *testing.T) {
 	if got != 0 {
 		t.Errorf("want 0 orphans, got %d", got)
 	}
-	// Ключ был в PG → metadata-read для него делать не должны.
+	// The key was in PG, so metadata-read must not be done for it.
 	if v.metaCnt != 0 {
 		t.Errorf("metadata read should be skipped for live key, got %d reads", v.metaCnt)
 	}
 }
 
-// (б) кандидат, но created_time внутри grace → НЕ считается (гонка Introduce).
+// (b) candidate exists, but created_time is within grace, so it is NOT counted
+// because Introduce may be racing.
 func TestReportOrphan_CandidateWithinGrace_NotOrphan(t *testing.T) {
 	v := &fakeVault{
 		names:   []string{"k-fresh"},
-		created: map[string]time.Time{"k-fresh": fixedNow().Add(-time.Hour)}, // моложе 24h grace
+		created: map[string]time.Time{"k-fresh": fixedNow().Add(-time.Hour)}, // younger than 24h grace
 	}
 	vr := NewVaultReconciler(v, fakeKeys{live: set()}, discardLogger(), fixedNow)
 
@@ -118,11 +120,11 @@ func TestReportOrphan_CandidateWithinGrace_NotOrphan(t *testing.T) {
 	}
 }
 
-// (в) кандидат старше grace → сирота, count=1.
+// (c) candidate older than grace becomes an orphan, count=1.
 func TestReportOrphan_OldCandidate_IsOrphan(t *testing.T) {
 	v := &fakeVault{
 		names:   []string{"k-orphan"},
-		created: map[string]time.Time{"k-orphan": fixedNow().Add(-48 * time.Hour)}, // старше grace
+		created: map[string]time.Time{"k-orphan": fixedNow().Add(-48 * time.Hour)}, // older than grace
 	}
 	vr := NewVaultReconciler(v, fakeKeys{live: set()}, discardLogger(), fixedNow)
 
@@ -135,8 +137,8 @@ func TestReportOrphan_OldCandidate_IsOrphan(t *testing.T) {
 	}
 }
 
-// Граница grace: created_time ровно на cutoff. created.After(cutoff) == false →
-// сирота (>= grace считается старым).
+// Grace boundary: created_time exactly at cutoff. created.After(cutoff) ==
+// false, so it is an orphan because >= grace is considered old.
 func TestReportOrphan_ExactlyAtGrace_IsOrphan(t *testing.T) {
 	v := &fakeVault{
 		names:   []string{"k-edge"},
@@ -153,7 +155,7 @@ func TestReportOrphan_ExactlyAtGrace_IsOrphan(t *testing.T) {
 	}
 }
 
-// (г) vault nil → degrade (0, error).
+// (d) vault nil degrades to (0, error).
 func TestReportOrphan_NilVault_Degrades(t *testing.T) {
 	vr := NewVaultReconciler(nil, fakeKeys{live: set()}, discardLogger(), fixedNow)
 
@@ -166,13 +168,14 @@ func TestReportOrphan_NilVault_Degrades(t *testing.T) {
 	}
 }
 
-// (д) retired-ключ в PG → НЕ сирота (ListAllKeyIDs включает все статусы).
+// (e) retired key in PG is NOT an orphan because ListAllKeyIDs includes all
+// statuses.
 func TestReportOrphan_RetiredKeyInPG_NotOrphan(t *testing.T) {
 	v := &fakeVault{
 		names:   []string{"k-retired"},
 		created: map[string]time.Time{"k-retired": fixedNow().Add(-100 * 24 * time.Hour)},
 	}
-	// k-retired присутствует в наборе живых (retired тоже живой).
+	// k-retired is present in the live set because retired also counts as live.
 	vr := NewVaultReconciler(v, fakeKeys{live: set("k-retired")}, discardLogger(), fixedNow)
 
 	got, err := vr.ReportOrphanVaultKeys(context.Background(), testGrace, 100)
@@ -187,7 +190,7 @@ func TestReportOrphan_RetiredKeyInPG_NotOrphan(t *testing.T) {
 	}
 }
 
-// Пустой LIST → 0 без обращения к PG.
+// Empty LIST returns 0 without calling PG.
 func TestReportOrphan_EmptyList_NoPGCall(t *testing.T) {
 	v := &fakeVault{names: nil}
 	keys := &countingKeys{}
@@ -212,7 +215,7 @@ func (c *countingKeys) ListAllKeyIDs(_ context.Context) (map[string]struct{}, er
 	return set(), nil
 }
 
-// batchSize ограничивает число metadata-чтений за прогон.
+// batchSize limits metadata reads per run.
 func TestReportOrphan_BatchSizeCapsMetadataReads(t *testing.T) {
 	old := fixedNow().Add(-48 * time.Hour)
 	v := &fakeVault{
@@ -235,7 +238,7 @@ func TestReportOrphan_BatchSizeCapsMetadataReads(t *testing.T) {
 	}
 }
 
-// ListKV-ошибка → (0, error), PG не дёргается.
+// ListKV error returns (0, error), and PG is not called.
 func TestReportOrphan_ListError_Propagates(t *testing.T) {
 	v := &fakeVault{listErr: errors.New("vault transport down")}
 	keys := &countingKeys{}
@@ -253,7 +256,7 @@ func TestReportOrphan_ListError_Propagates(t *testing.T) {
 	}
 }
 
-// ListAllKeyIDs-ошибка → (0, error).
+// ListAllKeyIDs error returns (0, error).
 func TestReportOrphan_PGError_Propagates(t *testing.T) {
 	v := &fakeVault{names: []string{"k1"}}
 	vr := NewVaultReconciler(v, fakeKeys{err: errors.New("pg down")}, discardLogger(), fixedNow)
@@ -267,8 +270,8 @@ func TestReportOrphan_PGError_Propagates(t *testing.T) {
 	}
 }
 
-// Сбой metadata-read одного кандидата не валит весь прогон: кандидат
-// пропускается, остальные обрабатываются.
+// A metadata-read failure for one candidate does not fail the whole run: the
+// candidate is skipped, and the rest are processed.
 func TestReportOrphan_MetadataReadError_SkipsCandidate(t *testing.T) {
 	old := fixedNow().Add(-48 * time.Hour)
 	v := &fakeVault{
@@ -287,7 +290,7 @@ func TestReportOrphan_MetadataReadError_SkipsCandidate(t *testing.T) {
 	}
 }
 
-// scope-prefix зашит: правило сканирует только orphanScanPrefix.
+// scope-prefix is hardcoded: the rule scans only orphanScanPrefix.
 func TestReportOrphan_ScanPrefixIsHardcoded(t *testing.T) {
 	if orphanScanPrefix != "keeper/sigil-keys" {
 		t.Fatalf("orphanScanPrefix must be hardcoded to keeper/sigil-keys, got %q", orphanScanPrefix)
@@ -302,9 +305,9 @@ func TestReportOrphan_ScanPrefixIsHardcoded(t *testing.T) {
 	if _, err := vr.ReportOrphanVaultKeys(context.Background(), testGrace, 100); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// fakeVault.ListKV возвращает ошибку, если prefix != orphanScanPrefix —
-	// успешный прогон уже доказывает, что правило шлёт именно зашитый prefix.
-	// Дополнительно: metadata-path должен начинаться с того же prefix-а.
+	// fakeVault.ListKV returns an error when prefix != orphanScanPrefix, so a
+	// successful run already proves that the rule sends exactly the hardcoded
+	// prefix. Additionally, metadata-path must start with the same prefix.
 	for _, p := range v.metaSeen {
 		if want := orphanScanPrefix + "/k1"; p != want {
 			t.Errorf("metadata path %q does not match hardcoded prefix layout %q", p, want)

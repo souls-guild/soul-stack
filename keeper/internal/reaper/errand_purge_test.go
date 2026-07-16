@@ -9,9 +9,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// fakeErrandsExecer — fake errandsExecer для unit-тестов. Захватывает
-// последний SQL + аргументы и возвращает заранее запрограммированный
-// CommandTag / error.
+// fakeErrandsExecer is a fake errandsExecer for unit tests. It captures the
+// last SQL plus arguments and returns a preprogrammed CommandTag or error.
 type fakeErrandsExecer struct {
 	calls   int
 	lastSQL string
@@ -27,12 +26,12 @@ func (f *fakeErrandsExecer) Exec(_ context.Context, sql string, args ...any) (pg
 	if f.err != nil {
 		return pgconn.CommandTag{}, f.err
 	}
-	// pgconn.NewCommandTag берёт raw bytes вида "DELETE <N>".
+	// pgconn.NewCommandTag takes raw bytes like "DELETE <N>".
 	tag := pgconn.NewCommandTag("DELETE " + itoaForTag(f.rowsAff))
 	return tag, nil
 }
 
-// itoaForTag — strconv.Itoa без import-а внутри теста.
+// itoaForTag is strconv.Itoa without importing it inside the test.
 func itoaForTag(n int64) string {
 	if n == 0 {
 		return "0"
@@ -73,7 +72,7 @@ func TestErrandsPurger_Run_DeletesRowsAndReturnsCount(t *testing.T) {
 		t.Errorf("SQL mismatch:\n got: %q\nwant: %q", fe.lastSQL, purgeOldErrandsSQL)
 	}
 	if len(fe.args) != 0 {
-		t.Errorf("args len = %d, want 0 (max_age в предикат не передаётся)", len(fe.args))
+		t.Errorf("args len = %d, want 0 (max_age is not passed to the predicate)", len(fe.args))
 	}
 }
 
@@ -97,7 +96,7 @@ func TestErrandsPurger_Run_PropagatesError(t *testing.T) {
 
 	_, err := p.Run(context.Background(), 7*24*time.Hour, 1000)
 	if err == nil {
-		t.Fatal("ожидалась ошибка")
+		t.Fatal("expected error")
 	}
 	if !errors.Is(err, want) {
 		t.Errorf("err = %v, want wrap of %v", err, want)

@@ -12,37 +12,39 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// voyagesQuerier — узкая поверхность pgxpool.Pool, нужная правилу
-// `reclaim_voyages`: один Query (UPDATE ... RETURNING) для per-row audit.
-// Сужение позволяет fake в unit-тестах без поднятия Postgres; реальный
-// *pgxpool.Pool удовлетворяет автоматически (паттерн errandsExecer).
+// voyagesQuerier is the narrow pgxpool.Pool surface needed by the
+// `reclaim_voyages` rule: one Query (UPDATE ... RETURNING) for per-row audit.
+// Narrowing allows a fake in unit tests without starting Postgres; a real
+// *pgxpool.Pool satisfies it automatically, following the errandsExecer pattern.
 type voyagesQuerier interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
-// reclaimVoyagesSQL — recovery-скан протухших Voyage-claim-ов (ADR-043 S4,
-// docs/keeper/reaper.md → §reclaim_voyages). Возвращает Voyage со статусом
-// `running` и истёкшим `claim_expires_at` обратно в `pending` для пере-claim
-// другим Keeper-инстансом; `attempt++` (fencing-epoch, parity
-// reclaim_apply_runs). `current_batch_index` сбрасывается в 0 — reclaim
-// переисполняет прогон с нуля (idempotent re-apply executor-а с legs[0]);
-// resume-from-batch (продолжение с N) — отдельный эпик.
+// reclaimVoyagesSQL is the recovery scan for expired Voyage claims (ADR-043 S4,
+// docs/keeper/reaper.md -> section reclaim_voyages). It returns a Voyage with
+// status `running` and expired `claim_expires_at` back to `pending` for re-claim
+// by another Keeper instance; `attempt++` provides a fencing epoch and parity
+// with reclaim_apply_runs. `current_batch_index` is reset to 0 so reclaim
+// re-executes the run from scratch (idempotent re-apply executor with legs[0]);
+// resume-from-batch, continuing at N, is a separate epic.
 //
-// Reclaim возвращает в `pending` (НЕ в исходный `scheduled`): к моменту running
-// schedule_at заведомо наступил, и строка должна быть немедленно подбираема.
+// Reclaim returns to `pending`, NOT the original `scheduled`: by the time a row
+// is running, schedule_at has definitely arrived, and the row must be picked up
+// immediately.
 //
-// Использует partial-индекс `voyages_claim_scan_idx` (миграция 059,
-// `WHERE status = 'running'`). Параметр `lease` правила в предикат НЕ входит:
-// lease уже зашит в `claim_expires_at` при захвате через voyage.ClaimNext —
-// предикат сравнивает `claim_expires_at < NOW()` напрямую (parity
-// reclaim_apply_runs). FOR UPDATE SKIP LOCKED во вложенном
-// SELECT защищает от гонки с конкурентным claim/renew.
+// Uses partial index `voyages_claim_scan_idx` (migration 059,
+// `WHERE status = 'running'`). The rule's `lease` parameter is NOT part of the
+// predicate: lease is already encoded in `claim_expires_at` during
+// voyage.ClaimNext, so the predicate compares `claim_expires_at < NOW()`
+// directly, matching reclaim_apply_runs. FOR UPDATE SKIP LOCKED in the nested
+// SELECT protects from races with concurrent claim/renew.
 //
-// CTE `picked` снимает дореклеймное `last_renewed_at` (audit нуждается в
-// значении ДО сброса в NULL) + защищает SKIP LOCKED; `UPDATE ... RETURNING`
-// отдаёт новый `attempt`. Итог Query: voyage_id + last_renewed_at(до) +
-// attempt(после) — payload per-row `voyage.reclaimed` (kind-agnostic, ADR-043
-// A3): SQL не разбирает kind, событие единое для scenario/command.
+// CTE `picked` captures the pre-reclaim `last_renewed_at` because audit needs
+// the value BEFORE it is reset to NULL, and also protects SKIP LOCKED.
+// `UPDATE ... RETURNING` returns the new `attempt`. Final Query output is
+// voyage_id + last_renewed_at(before) + attempt(after), the per-row
+// `voyage.reclaimed` payload (kind-agnostic, ADR-043 A3): SQL does not inspect
+// kind, and the event is shared for scenario/command.
 const reclaimVoyagesSQL = `
 WITH picked AS (
     SELECT voyage_id, last_renewed_at
@@ -66,44 +68,44 @@ FROM updated u
 JOIN picked p ON p.voyage_id = u.voyage_id
 `
 
-// VoyageReclaimer — реализация правила `reclaim_voyages` (ADR-043 S4,
-// docs/keeper/reaper.md). Один батч-проход = один Query (UPDATE ... RETURNING)
-// по partial-индексу `voyages_claim_scan_idx`. Сигнатура Run совместима с
-// runDurationRule-вызовом Runner-а.
+// VoyageReclaimer implements the `reclaim_voyages` rule (ADR-043 S4,
+// docs/keeper/reaper.md). One batch pass is one Query (UPDATE ... RETURNING)
+// through partial index `voyages_claim_scan_idx`. Run's signature is compatible
+// with Runner's runDurationRule call.
 //
-// Per-row audit (ADR-043 A3): на каждую реклеймнутую строку эмитится
-// `voyage.reclaimed` (область `voyage.*`, kind-agnostic — SQL не разбирает kind).
-// audit nil-safe: dev-без-audit живёт, эмит только при audit != nil.
+// Per-row audit (ADR-043 A3): each reclaimed row emits `voyage.reclaimed`
+// (scope `voyage.*`, kind-agnostic because SQL does not inspect kind). audit is
+// nil-safe: dev without audit works, and emit happens only when audit != nil.
 //
-// Параметр `lease` в предикат НЕ входит (см. docstring [reclaimVoyagesSQL]),
-// `batchSize` тоже: UPDATE режет одним statement-ом. Аргументы сохранены в
-// сигнатуре для совместимости с общим duration-runner-ом.
+// The `lease` parameter is NOT part of the predicate; see [reclaimVoyagesSQL].
+// `batchSize` is not either because UPDATE cuts in one statement. Arguments
+// remain in the signature for compatibility with the common duration runner.
 type VoyageReclaimer struct {
 	pool   voyagesQuerier
 	audit  audit.Writer
 	logger *slog.Logger
 }
 
-// NewVoyageReclaimer конструирует reclaimer. logger nil-safe (warn-ы
-// подавляются), audit nil-safe (эмит skip-ается). Публичный конструктор
-// фиксирует *pgxpool.Pool, чтобы caller-ы не цеплялись за расширение интерфейса
-// (паттерн NewErrandsPurger).
+// NewVoyageReclaimer constructs a reclaimer. logger is nil-safe, suppressing
+// warnings, and audit is nil-safe, skipping emits. The public constructor fixes
+// *pgxpool.Pool so callers do not depend on interface expansion, following the
+// NewErrandsPurger pattern.
 func NewVoyageReclaimer(pool *pgxpool.Pool, audit audit.Writer, logger *slog.Logger) *VoyageReclaimer {
 	return &VoyageReclaimer{pool: pool, audit: audit, logger: logger}
 }
 
-// newVoyageReclaimerFromQuerier — внутренний конструктор для unit-тестов.
+// newVoyageReclaimerFromQuerier is the internal constructor for unit tests.
 func newVoyageReclaimerFromQuerier(pool voyagesQuerier, audit audit.Writer, logger *slog.Logger) *VoyageReclaimer {
 	return &VoyageReclaimer{pool: pool, audit: audit, logger: logger}
 }
 
-// Run выполняет одну итерацию правила: возвращает протухшие running-Voyage-и
-// обратно в pending и эмитит per-row `voyage.reclaimed`. Возвращает
-// (affected, err): affected — число перезахваченных строк (callers сложат в
-// keeper_reaper_*-метрики).
+// Run executes one rule iteration: it returns expired running Voyages back to
+// pending and emits per-row `voyage.reclaimed`. It returns (affected, err),
+// where affected is the number of reclaimed rows that callers add to
+// keeper_reaper_* metrics.
 //
-// Сигнатура совместима с runDurationRule (`(ctx, duration, batch) → (int64, error)`),
-// аргументы lease/batchSize игнорируются (см. doc-comment типа).
+// The signature is compatible with runDurationRule (`(ctx, duration, batch) ->
+// (int64, error)`); lease/batchSize arguments are ignored, see the type comment.
 func (r *VoyageReclaimer) Run(ctx context.Context, _ time.Duration, _ int) (int64, error) {
 	if r.pool == nil {
 		return 0, fmt.Errorf("reaper.reclaim_voyages: pool is nil")
@@ -139,23 +141,23 @@ func (r *VoyageReclaimer) Run(ctx context.Context, _ time.Duration, _ int) (int6
 	}
 	rows.Close()
 
-	// Per-row audit ПОСЛЕ закрытия rows (не держим курсор открытым во время
-	// I/O-эмита). Best-effort: ошибка одного события не отменяет реклейм.
+	// Per-row audit happens AFTER closing rows so the cursor is not held open
+	// during I/O emit. Best-effort: one event error does not cancel reclaim.
 	for _, rv := range reclaimed {
 		r.emitReclaimed(ctx, rv)
 	}
 	return affected, nil
 }
 
-// reclaimedVoyage — снимок одной реклеймнутой строки для per-row audit.
+// reclaimedVoyage is a snapshot of one reclaimed row for per-row audit.
 type reclaimedVoyage struct {
 	voyageID    string
 	lastRenewed *time.Time
 	attempt     int
 }
 
-// emitReclaimed пишет `voyage.reclaimed` (ADR-043 A3, область `voyage.*`,
-// kind-agnostic). source=keeper_internal, archon_aid="" (NULL). nil-safe.
+// emitReclaimed writes `voyage.reclaimed` (ADR-043 A3, scope `voyage.*`,
+// kind-agnostic). source=keeper_internal, archon_aid="" (NULL). It is nil-safe.
 func (r *VoyageReclaimer) emitReclaimed(ctx context.Context, rv reclaimedVoyage) {
 	if r.audit == nil {
 		return

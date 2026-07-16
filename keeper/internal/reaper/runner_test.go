@@ -20,23 +20,22 @@ import (
 	"github.com/souls-guild/soul-stack/shared/obs/obstest"
 )
 
-// fakePurger — захватывает вызовы всех методов PurgerAPI и возвращает
-// фиксированное `deleted`/`err`. Подходит для проверки, был ли вызов,
-// с какими аргументами, и обработал ли Runner ошибку правильно.
+// fakePurger captures calls to all PurgerAPI methods and returns fixed
+// `deleted`/`err` values. It is useful for verifying whether a call happened,
+// with which arguments, and whether Runner handled the error correctly.
 //
-// `calls` агрегирует вызовы всех методов (нужно для тестов вида
-// «Runner всё-таки вызвал Purger хотя бы раз»). Per-method счётчики
-// и последние аргументы — в `byRule` (имя SQL-функции → counters)
-// чтобы вызов одного правила не затирал параметры другого
-// (dispatch обходит все правила в одном тике).
+// `calls` aggregates calls across all methods, needed by tests like "Runner
+// called Purger at least once". Per-method counters and latest arguments live in
+// `byRule` (SQL function name -> counters), so one rule call does not overwrite
+// another rule's parameters because dispatch visits all rules in one tick.
 type ruleCall struct {
 	count      int
 	lastMaxAge time.Duration
 	lastBatch  int
 	lastStatus []string
 
-	// Поля, специфичные для archive_state_history (ADR-Q19 retention):
-	// duration-аргумента нет, есть keep_last_n / keep_version_bump.
+	// Fields specific to archive_state_history (ADR-Q19 retention): there is no
+	// duration argument; it has keep_last_n / keep_version_bump.
 	lastKeepLastN       int
 	lastKeepVersionBump bool
 }
@@ -155,10 +154,10 @@ func (f *fakePurger) ArchiveStateHistory(_ context.Context, keepLastN int, keepV
 	return f.deleted, f.err
 }
 
-// snapshot возвращает агрегированный счётчик вызовов и параметры
-// последнего вызова правила `purge_audit_old` — это совместимость с
-// исходными Reaper.a-тестами, которые знали только одно правило.
-// Новые тесты (Reaper.b) используют ruleCall() для per-rule захвата.
+// snapshot returns the aggregate call counter and parameters of the latest
+// `purge_audit_old` rule call. This preserves compatibility with the original
+// Reaper.a tests, which knew only one rule. New Reaper.b tests use ruleCall()
+// for per-rule capture.
 func (f *fakePurger) snapshot() (calls int, maxAge time.Duration, batch int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -177,8 +176,8 @@ func (f *fakePurger) ruleCalls(rule string) int {
 	return 0
 }
 
-// ruleCall возвращает копию записанных параметров последнего вызова
-// именованного правила. Если правило не вызывалось — `ok=false`.
+// ruleCall returns a copy of the recorded parameters from the named rule's last
+// call. If the rule was not called, `ok=false`.
 func (f *fakePurger) ruleCall(rule string) (ruleCall, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -188,10 +187,9 @@ func (f *fakePurger) ruleCall(rule string) (ruleCall, bool) {
 	return ruleCall{}, false
 }
 
-// testKeeperYAML — минимальный валидный keeper.yml для unit-тестов
-// Runner-а. Содержит только поля, которые Runner реально читает —
-// остальные блоки (postgres/vault/listen/...) тоже обязаны быть для
-// прохождения LoadKeeper-а.
+// testKeeperYAML is the minimal valid keeper.yml for Runner unit tests. It
+// contains only fields Runner actually reads; other blocks
+// (postgres/vault/listen/...) are still required for LoadKeeper to pass.
 const testKeeperYAML = `
 kid: keeper-test-01
 
@@ -239,8 +237,8 @@ reaper:
       action: delete
 `
 
-// writeKeeperYAML кладёт YAML на диск и возвращает путь. body должен быть
-// валидным keeper.yml — иначе LoadKeeperStore вернёт error и тест упадёт.
+// writeKeeperYAML writes YAML to disk and returns the path. body must be a valid
+// keeper.yml, otherwise LoadKeeperStore returns an error and the test fails.
 func writeKeeperYAML(t *testing.T, body string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -251,8 +249,8 @@ func writeKeeperYAML(t *testing.T, body string) string {
 	return p
 }
 
-// newTestStore — Store[KeeperConfig] с известным начальным cfg. Использует
-// LoadKeeperStore, чтобы snapshot был валидным (с заполненным `Reaper`).
+// newTestStore is Store[KeeperConfig] with a known initial cfg. It uses
+// LoadKeeperStore so the snapshot is valid, with `Reaper` populated.
 func newTestStore(t *testing.T, body string) *config.Store[config.KeeperConfig] {
 	t.Helper()
 	store, _, err := config.LoadKeeperStore(writeKeeperYAML(t, body), config.ValidateOptions{})
@@ -265,7 +263,7 @@ func newTestStore(t *testing.T, body string) *config.Store[config.KeeperConfig] 
 	return store
 }
 
-// newTestRedis — клиент к miniredis-у. Cleanup автоматический.
+// newTestRedis is a miniredis client. Cleanup is automatic.
 func newTestRedis(t *testing.T) *redis.Client {
 	t.Helper()
 	mr := miniredis.RunT(t)
@@ -277,8 +275,8 @@ func newTestRedis(t *testing.T) *redis.Client {
 	return c
 }
 
-// silentLogger — slog-логгер, дисcarding output. Тесты не парсят логи;
-// нужен только не-nil pointer.
+// silentLogger is a slog logger discarding output. Tests do not parse logs; only
+// a non-nil pointer is needed.
 func silentLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
@@ -340,8 +338,8 @@ func TestRunner_HappyPath_DispatchesPurger(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- rn.Run(ctx) }()
 
-	// Ждём хотя бы один вызов (immediate dispatch при acquire + последующие
-	// tick-и через 50 ms).
+	// Wait for at least one call: immediate dispatch on acquire plus later ticks
+	// every 50 ms.
 	waitFor(t, 500*time.Millisecond, func() bool {
 		c, _, _ := fp.snapshot()
 		return c >= 1
@@ -366,7 +364,7 @@ func TestRunner_HappyPath_DispatchesPurger(t *testing.T) {
 
 func TestRunner_DryRun_SkipsPurger(t *testing.T) {
 	body := testKeeperYAML
-	// Заменяем dry_run: false → dry_run: true
+	// Replace dry_run: false -> dry_run: true.
 	body = replaceOnce(t, body, "dry_run: false", "dry_run: true")
 
 	fp := &fakePurger{}
@@ -431,9 +429,8 @@ func TestRunner_ReaperDisabled_NoLoop(t *testing.T) {
 		t.Fatalf("NewRunner: %v", err)
 	}
 
-	// Reaper.Enabled=false → dispatch — no-op. Runner всё равно держит
-	// lease и тикает, но никаких побочных эффектов нет. Проверяем, что
-	// purger не вызывается.
+	// Reaper.Enabled=false makes dispatch a no-op. Runner still holds the lease
+	// and ticks, but there are no side effects. Verify purger is not called.
 	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
 	defer cancel()
 
@@ -460,7 +457,7 @@ func TestRunner_CtxCancel_Graceful(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- rn.Run(ctx) }()
 
-	// Дадим acquire завершиться.
+	// Let acquire complete.
 	time.Sleep(150 * time.Millisecond)
 	cancel()
 
@@ -478,7 +475,7 @@ func TestRunner_LeaseLost_StopsLoopAndReacquires(t *testing.T) {
 	fp := &fakePurger{}
 	store := newTestStore(t, testKeeperYAML)
 
-	// Используем общий miniredis, чтобы достучаться до ключа извне.
+	// Use the shared miniredis so the key can be reached from outside.
 	mr := miniredis.RunT(t)
 	c, err := redis.NewClient(context.Background(), redis.Config{Addr: mr.Addr()}, nil)
 	if err != nil {
@@ -499,31 +496,31 @@ func TestRunner_LeaseLost_StopsLoopAndReacquires(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- rn.Run(ctx) }()
 
-	// Ждём acquire.
+	// Wait for acquire.
 	waitFor(t, 500*time.Millisecond, func() bool {
 		v, _ := mr.Get(LeaderLeaseKey)
 		return v == "keeper-test-01"
 	})
 	callsBefore, _, _ := fp.snapshot()
 
-	// «Воруем» lease: подменяем значение → следующий Renew вернёт
-	// ErrLeaseLost, main-loop остановится, dispatch не должен расти.
+	// "Steal" the lease by replacing the value. The next Renew returns
+	// ErrLeaseLost, the main loop stops, and dispatch must not grow.
 	mr.Set(LeaderLeaseKey, "intruder")
 
-	// Дадим времени renewal-goroutine отработать. renewEvery = lock_ttl/3
-	// = 100 ms; ждём 250 ms.
+	// Give the renewal goroutine time to run. renewEvery = lock_ttl/3 = 100 ms;
+	// wait 250 ms.
 	time.Sleep(250 * time.Millisecond)
 
-	// «Освобождаем» ключ, чтобы Runner смог пере-захватить.
+	// Release the key so Runner can reacquire it.
 	mr.Del(LeaderLeaseKey)
 
-	// Проверяем, что после потери lease Runner возвращается к acquire-у.
+	// Verify that after losing the lease Runner returns to acquire.
 	waitFor(t, 2*time.Second, func() bool {
 		v, _ := mr.Get(LeaderLeaseKey)
 		return v == "keeper-test-01"
 	})
 
-	// Дальше должны быть новые dispatch-ы.
+	// New dispatches must follow.
 	waitFor(t, 500*time.Millisecond, func() bool {
 		callsNow, _, _ := fp.snapshot()
 		return callsNow > callsBefore
@@ -553,17 +550,17 @@ func TestRunner_PurgerError_LoopContinues(t *testing.T) {
 	go func() { done <- rn.Run(ctx) }()
 	<-done
 
-	// Несмотря на ошибку Purger-а, loop должен продолжать тикать —
-	// counter > 1 (initial + хотя бы один tick).
+	// Despite the Purger error, the loop must keep ticking: counter > 1 (initial
+	// plus at least one tick).
 	if c, _, _ := fp.snapshot(); c < 2 {
 		t.Errorf("Purger.calls = %d on persistent error; want >= 2 (loop must keep ticking)", c)
 	}
 }
 
-// TestRunner_AcquireConflict_BlockedWhileHeld — параллельный holder
-// удерживает lease на всё время теста; Runner крутится в backoff-loop-е
-// Acquire-а и не должен ни перезаписать чужой ключ, ни вызвать Purger.
-// Positive-ветка (re-acquire после освобождения) проверяется
+// TestRunner_AcquireConflict_BlockedWhileHeld: a parallel holder keeps the
+// lease for the whole test. Runner spins in the Acquire backoff loop and must
+// neither overwrite the foreign key nor call Purger. The positive branch
+// (re-acquire after release) is tested in
 // TestRunner_LeaseLost_StopsLoopAndReacquires.
 func TestRunner_AcquireConflict_BlockedWhileHeld(t *testing.T) {
 	store := newTestStore(t, testKeeperYAML)
@@ -574,7 +571,7 @@ func TestRunner_AcquireConflict_BlockedWhileHeld(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = c.Close() })
 
-	// Захватываем lease извне — Runner должен попасть в backoff-loop.
+	// Acquire the lease externally; Runner must enter the backoff loop.
 	mr.Set(LeaderLeaseKey, "external-leader")
 	mr.SetTTL(LeaderLeaseKey, 10*time.Second)
 
@@ -600,10 +597,9 @@ func TestRunner_AcquireConflict_BlockedWhileHeld(t *testing.T) {
 	}
 }
 
-// testReaperBYAML — YAML с дефолтным набором reaper-правил (Reaper.b).
-// Использует короткие интервалы для тестов (interval/lock_ttl как в
-// testKeeperYAML), но с реалистичными max_age/stale_after значениями,
-// чтобы проверить корректную передачу cfg → SQL-функция.
+// testReaperBYAML is YAML with the default reaper rule set (Reaper.b). It uses
+// short test intervals (interval/lock_ttl as in testKeeperYAML), but realistic
+// max_age/stale_after values to verify correct cfg -> SQL function propagation.
 const testReaperBYAML = `
 kid: keeper-test-01
 
@@ -719,7 +715,7 @@ func TestRunner_DispatchesAllReaperRules(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- rn.Run(ctx) }()
 
-	// Ждём, пока каждое из 14 правил вызвалось хотя бы раз.
+	// Wait until each of the 14 rules has been called at least once.
 	want := []string{
 		"purge_audit_old",
 		"expire_pending_seeds",
@@ -750,12 +746,12 @@ func TestRunner_DispatchesAllReaperRules(t *testing.T) {
 		t.Errorf("Run returned: %v", err)
 	}
 
-	// Правила объявлены в фикстуре БЕЗ max_age → dispatch обязан подставить
-	// per-rule дефолт из runner.go-констант. Проверяем именно дефолтную
-	// ветку (push_runs=30d; три archive-правила=365d compliance-окно):
-	// если dispatch-case потеряет правило или прокинет не тот дефолт-аргумент,
-	// тест краснеет. Per-rule lastMaxAge не затирается другими правилами —
-	// у каждого имени свой *ruleCall в byRule.
+	// Rules are declared in the fixture WITHOUT max_age, so dispatch must supply
+	// each per-rule default from runner.go constants. Verify this default branch
+	// specifically (push_runs=30d; three archive rules=365d compliance window).
+	// If a dispatch case loses the rule or passes the wrong default argument, the
+	// test fails. Per-rule lastMaxAge is not overwritten by other rules because
+	// each name has its own *ruleCall in byRule.
 	const (
 		wantPushRunsMaxAge = 30 * 24 * time.Hour  // defaultPurgePushRunsMaxAge
 		wantArchiveMaxAge  = 365 * 24 * time.Hour // defaultPurgeArchiveMaxAge
@@ -810,8 +806,7 @@ func TestRunner_DryRun_SkipsAllReaperBRules(t *testing.T) {
 }
 
 func TestRunner_PerRuleEnabledFlag(t *testing.T) {
-	// Отключаем purge_souls точечно — остальные правила должны
-	// продолжать работать.
+	// Disable purge_souls specifically; the other rules must keep working.
 	body := replaceOnce(t, testReaperBYAML,
 		"purge_souls:\n      enabled: true",
 		"purge_souls:\n      enabled: false")
@@ -897,7 +892,7 @@ func TestRunner_MarkDisconnected_PassesStaleAfter(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- rn.Run(ctx) }()
 
-	// Захватываем последний вызов mark_disconnected.
+	// Capture the last mark_disconnected call.
 	waitFor(t, 500*time.Millisecond, func() bool {
 		return fp.ruleCalls("mark_disconnected") >= 1
 	})
@@ -905,20 +900,20 @@ func TestRunner_MarkDisconnected_PassesStaleAfter(t *testing.T) {
 	cancel()
 	<-done
 
-	// Поскольку другие правила тоже вызываются и перезаписывают
-	// lastMaxAge, по этому полю различить нельзя. Проверяем только сам
-	// факт диспетча mark_disconnected. Передача параметров покрыта
-	// unit-тестами Purger-а напрямую.
+	// Other rules are also called and overwrite lastMaxAge, so that field cannot
+	// distinguish the call. Verify only that mark_disconnected was dispatched.
+	// Parameter passing is covered directly by Purger unit tests.
 	if fp.ruleCalls("mark_disconnected") < 1 {
 		t.Error("mark_disconnected was not dispatched")
 	}
 }
 
-// TestRunner_ReclaimApplyRuns_NotDispatchedWhenAbsent — правило
-// reclaim_apply_runs (recovery-скан, ADR-027 Phase 2) ОТСУТСТВУЕТ в дефолтном
-// keeper.yml-наборе (testReaperBYAML его не объявляет) → dispatch его не зовёт.
-// Это нижний слой инварианта «recovery не в прод по дефолту»: правила нет —
-// recovery не работает; есть, но enabled:false — тоже не работает (см. ниже).
+// TestRunner_ReclaimApplyRuns_NotDispatchedWhenAbsent: reclaim_apply_runs
+// (recovery scan, ADR-027 Phase 2) is ABSENT from the default keeper.yml set
+// because testReaperBYAML does not declare it, so dispatch does not call it.
+// This is the lower layer of the invariant "recovery is not in prod by
+// default": no rule means recovery does not run; present but enabled:false also
+// does not run, see below.
 func TestRunner_ReclaimApplyRuns_NotDispatchedWhenAbsent(t *testing.T) {
 	fp := &fakePurger{}
 	store := newTestStore(t, testReaperBYAML)
@@ -935,7 +930,7 @@ func TestRunner_ReclaimApplyRuns_NotDispatchedWhenAbsent(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- rn.Run(ctx) }()
 
-	// Дожидаемся, что обычное правило отработало (значит dispatch крутился).
+	// Wait until a normal rule runs, proving dispatch was active.
 	waitFor(t, 500*time.Millisecond, func() bool {
 		return fp.ruleCalls("purge_audit_old") >= 1
 	})
@@ -947,10 +942,10 @@ func TestRunner_ReclaimApplyRuns_NotDispatchedWhenAbsent(t *testing.T) {
 	}
 }
 
-// TestRunner_ReclaimApplyRuns_DisabledByDefault — правило присутствует в
-// keeper.yml с enabled:false (как в дефолтном examples/keeper/keeper.yml) →
-// dispatch его НЕ исполняет. Это и есть механизм инварианта «recovery не в
-// прод до раскатки attempt-fencing»: правило заведено, но выключено.
+// TestRunner_ReclaimApplyRuns_DisabledByDefault: the rule is present in
+// keeper.yml with enabled:false, as in default examples/keeper/keeper.yml, so
+// dispatch does NOT execute it. This is the mechanism behind "recovery is not in
+// prod before attempt-fencing rollout": the rule exists but is disabled.
 func TestRunner_ReclaimApplyRuns_DisabledByDefault(t *testing.T) {
 	body := strings.Replace(testReaperBYAML,
 		"    purge_apply_task_register:\n      enabled: true\n      max_age: 1h\n      action: delete\n",
@@ -987,10 +982,10 @@ func TestRunner_ReclaimApplyRuns_DisabledByDefault(t *testing.T) {
 	}
 }
 
-// TestRunner_ReclaimApplyRuns_DispatchedWhenEnabled — при enabled:true правило
-// исполняется (оператор включил после раскатки attempt-fencing). Покрывает
-// case в dispatch-switch + передачу через ObserveRule (метрика — бесплатно
-// через runDurationRule, отдельный assert в TestRunner_Metrics_*).
+// TestRunner_ReclaimApplyRuns_DispatchedWhenEnabled: with enabled:true the rule
+// runs, representing an operator enabling it after attempt-fencing rollout.
+// Covers the dispatch switch case plus ObserveRule propagation; metrics come
+// through runDurationRule and are asserted separately in TestRunner_Metrics_*.
 func TestRunner_ReclaimApplyRuns_DispatchedWhenEnabled(t *testing.T) {
 	body := strings.Replace(testReaperBYAML,
 		"    purge_apply_task_register:\n      enabled: true\n      max_age: 1h\n      action: delete\n",
@@ -1028,7 +1023,7 @@ func TestRunner_ReclaimApplyRuns_DispatchedWhenEnabled(t *testing.T) {
 	if !ok {
 		t.Fatal("reclaim_apply_runs was not dispatched while enabled:true")
 	}
-	// stale_after: 1m → передаётся как lease-аргумент duration-runner-а.
+	// stale_after: 1m is passed as the duration runner's lease argument.
 	if call.lastMaxAge != time.Minute {
 		t.Errorf("reclaim_apply_runs lease = %v; want 1m", call.lastMaxAge)
 	}
@@ -1036,8 +1031,8 @@ func TestRunner_ReclaimApplyRuns_DispatchedWhenEnabled(t *testing.T) {
 		t.Errorf("reclaim_apply_runs batch = %d; want 200", call.lastBatch)
 	}
 
-	// Метрика «бесплатна» через ObserveRule в runDurationRule: executions/purged
-	// под label rule="reclaim_apply_runs".
+	// Metrics come through ObserveRule in runDurationRule: executions/purged
+	// under label rule="reclaim_apply_runs".
 	body2 := obstest.Scrape(t, reg.Gatherer())
 	if !strings.Contains(body2, `keeper_reaper_rule_executions_total{rule="reclaim_apply_runs"}`) {
 		t.Errorf("executions_total missing for reclaim_apply_runs; got=\n%s", body2)
@@ -1047,10 +1042,10 @@ func TestRunner_ReclaimApplyRuns_DispatchedWhenEnabled(t *testing.T) {
 	}
 }
 
-// TestRunner_ReapOrphanVaultKeys_DispatchedWhenEnabled — при enabled:true
-// cross-store report-only правило исполняется через runDurationRule с grace =
-// max_age (MaxAge-as-grace, как purge_apply_task_register). Покрывает case в
-// dispatch-switch + маршрут через ReportOrphanVaultKeys.
+// TestRunner_ReapOrphanVaultKeys_DispatchedWhenEnabled: with enabled:true the
+// cross-store report-only rule runs through runDurationRule with grace = max_age
+// (MaxAge-as-grace, like purge_apply_task_register). Covers the dispatch switch
+// case plus the ReportOrphanVaultKeys route.
 func TestRunner_ReapOrphanVaultKeys_DispatchedWhenEnabled(t *testing.T) {
 	body := strings.Replace(testReaperBYAML,
 		"    purge_apply_task_register:\n      enabled: true\n      max_age: 1h\n      action: delete\n",
@@ -1088,7 +1083,7 @@ func TestRunner_ReapOrphanVaultKeys_DispatchedWhenEnabled(t *testing.T) {
 	if !ok {
 		t.Fatal("reap_orphan_vault_keys was not dispatched while enabled:true")
 	}
-	// max_age: 24h → передаётся как grace-аргумент duration-runner-а.
+	// max_age: 24h is passed as the duration runner's grace argument.
 	if call.lastMaxAge != 24*time.Hour {
 		t.Errorf("reap_orphan_vault_keys grace = %v; want 24h", call.lastMaxAge)
 	}
@@ -1097,14 +1092,14 @@ func TestRunner_ReapOrphanVaultKeys_DispatchedWhenEnabled(t *testing.T) {
 	if !strings.Contains(body2, `keeper_reaper_rule_executions_total{rule="reap_orphan_vault_keys"}`) {
 		t.Errorf("executions_total missing for reap_orphan_vault_keys; got=\n%s", body2)
 	}
-	// report-only: «purged» = число задетектированных сирот (см. reaper.md).
+	// report-only: "purged" equals the number of detected orphans, see reaper.md.
 	if !strings.Contains(body2, `keeper_reaper_rule_purged_total{rule="reap_orphan_vault_keys"}`) {
 		t.Errorf("purged_total missing for reap_orphan_vault_keys (detected=3); got=\n%s", body2)
 	}
 }
 
-// TestRunner_ReapOrphanVaultKeys_NotDispatchedWhenAbsent — правила нет в
-// дефолтном конфиге (default enabled:false / отсутствует) → не исполняется.
+// TestRunner_ReapOrphanVaultKeys_NotDispatchedWhenAbsent: the rule is missing
+// from default config (default enabled:false / absent), so it does not run.
 func TestRunner_ReapOrphanVaultKeys_NotDispatchedWhenAbsent(t *testing.T) {
 	fp := &fakePurger{}
 	store := newTestStore(t, testReaperBYAML)
@@ -1131,10 +1126,11 @@ func TestRunner_ReapOrphanVaultKeys_NotDispatchedWhenAbsent(t *testing.T) {
 	}
 }
 
-// TestRunner_ArchiveStateHistory_DispatchedWithCfg — правило `archive_state_history`
-// (ADR-Q19 retention): при enabled:true + явных keep_last_n / keep_version_bump_snapshots
-// runner вызывает Purger.ArchiveStateHistory с этими значениями и шлёт executions/
-// purged через ObserveRule под label rule="archive_state_history".
+// TestRunner_ArchiveStateHistory_DispatchedWithCfg covers `archive_state_history`
+// (ADR-Q19 retention): with enabled:true plus explicit keep_last_n /
+// keep_version_bump_snapshots, runner calls Purger.ArchiveStateHistory with
+// those values and sends executions/purged through ObserveRule under label
+// rule="archive_state_history".
 func TestRunner_ArchiveStateHistory_DispatchedWithCfg(t *testing.T) {
 	body := strings.Replace(testReaperBYAML,
 		"    purge_apply_task_register:\n      enabled: true\n      max_age: 1h\n      action: delete\n",
@@ -1188,8 +1184,9 @@ func TestRunner_ArchiveStateHistory_DispatchedWithCfg(t *testing.T) {
 	}
 }
 
-// TestRunner_ArchiveStateHistory_Defaults — при enabled:true без явных полей
-// keep_* runner подставляет дефолты (keep_last_n=50, keep_version_bump=true).
+// TestRunner_ArchiveStateHistory_Defaults: with enabled:true and no explicit
+// keep_* fields, runner supplies defaults (keep_last_n=50,
+// keep_version_bump=true).
 func TestRunner_ArchiveStateHistory_Defaults(t *testing.T) {
 	body := strings.Replace(testReaperBYAML,
 		"    purge_apply_task_register:\n      enabled: true\n      max_age: 1h\n      action: delete\n",
@@ -1232,8 +1229,8 @@ func TestRunner_ArchiveStateHistory_Defaults(t *testing.T) {
 	}
 }
 
-// TestRunner_ArchiveStateHistory_NotDispatchedWhenAbsent — правила нет в
-// дефолтном конфиге → не исполняется.
+// TestRunner_ArchiveStateHistory_NotDispatchedWhenAbsent: rule is missing from
+// default config, so it does not run.
 func TestRunner_ArchiveStateHistory_NotDispatchedWhenAbsent(t *testing.T) {
 	fp := &fakePurger{}
 	store := newTestStore(t, testReaperBYAML)
@@ -1260,10 +1257,10 @@ func TestRunner_ArchiveStateHistory_NotDispatchedWhenAbsent(t *testing.T) {
 	}
 }
 
-// TestRunner_Metrics_InstrumentsDispatchAndLease — проверяет интеграцию
-// с [ReaperMetrics]: после нескольких dispatch-итераций счётчики
-// executions/purged/duration_count растут, lease_held=1 на лидере;
-// после cancel — lease_held=0.
+// TestRunner_Metrics_InstrumentsDispatchAndLease verifies [ReaperMetrics]
+// integration: after several dispatch iterations,
+// executions/purged/duration_count grow, lease_held=1 on the leader; after
+// cancel, lease_held=0.
 func TestRunner_Metrics_InstrumentsDispatchAndLease(t *testing.T) {
 	fp := &fakePurger{deleted: 5}
 	store := newTestStore(t, testKeeperYAML)
@@ -1288,13 +1285,13 @@ func TestRunner_Metrics_InstrumentsDispatchAndLease(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- rn.Run(ctx) }()
 
-	// Ждём хотя бы один успешный dispatch (executions_total > 0).
+	// Wait for at least one successful dispatch (executions_total > 0).
 	waitFor(t, 1*time.Second, func() bool {
 		return obstest.Contains(t, reg.Gatherer(),
 			`keeper_reaper_rule_executions_total{rule="purge_audit_old"} `)
 	})
 
-	// Lease Gauge должен быть 1 пока loop крутится.
+	// Lease Gauge must be 1 while the loop is running.
 	if !obstest.Contains(t, reg.Gatherer(), "keeper_reaper_lease_held 1") {
 		t.Errorf("lease_held should be 1 while runner holds lease; got=\n%s", obstest.Scrape(t, reg.Gatherer()))
 	}
@@ -1304,13 +1301,13 @@ func TestRunner_Metrics_InstrumentsDispatchAndLease(t *testing.T) {
 		t.Errorf("Run returned: %v", err)
 	}
 
-	// После cancel lease_held → 0.
+	// After cancel, lease_held -> 0.
 	if !obstest.Contains(t, reg.Gatherer(), "keeper_reaper_lease_held 0") {
 		t.Errorf("lease_held should be 0 after cancel; got=\n%s", obstest.Scrape(t, reg.Gatherer()))
 	}
 
-	// Покрытие purged_total: fakePurger.deleted=5, минимум один call —
-	// значит purged_total ≥ 5 (точное значение зависит от количества тиков).
+	// purged_total coverage: fakePurger.deleted=5 and at least one call means
+	// purged_total >= 5. The exact value depends on tick count.
 	body := obstest.Scrape(t, reg.Gatherer())
 	if !strings.Contains(body, `keeper_reaper_rule_purged_total{rule="purge_audit_old"}`) {
 		t.Errorf("purged_total sample missing; got=\n%s", body)
@@ -1318,7 +1315,7 @@ func TestRunner_Metrics_InstrumentsDispatchAndLease(t *testing.T) {
 	if !strings.Contains(body, `keeper_reaper_rule_duration_seconds_count{rule="purge_audit_old"}`) {
 		t.Errorf("duration_seconds_count sample missing; got=\n%s", body)
 	}
-	// Errors не должен расти на happy-path.
+	// Errors must not grow on the happy path.
 	if strings.Contains(body, `keeper_reaper_dispatch_errors_total{rule="purge_audit_old"}`) {
 		t.Errorf("dispatch_errors should be empty on happy-path; got=\n%s", body)
 	}
@@ -1349,14 +1346,14 @@ func TestRunner_Metrics_PurgerErrorIncrementsDispatchErrors(t *testing.T) {
 	if !strings.Contains(body, `keeper_reaper_dispatch_errors_total{rule="purge_audit_old"}`) {
 		t.Errorf("dispatch_errors sample missing on persistent Purger error; got=\n%s", body)
 	}
-	// Purged НЕ должен расти на error-пути.
+	// Purged must NOT grow on the error path.
 	if strings.Contains(body, `keeper_reaper_rule_purged_total{rule="purge_audit_old"}`) {
 		t.Errorf("purged_total should be empty when Purger errors; got=\n%s", body)
 	}
 }
 
-// TestRunner_Metrics_NilIsNoOp — Runner с Metrics=nil не должен паниковать
-// (это explicit поддержанный сценарий для тестов / dev-режима без obs).
+// TestRunner_Metrics_NilIsNoOp: Runner with Metrics=nil must not panic. This is
+// an explicitly supported scenario for tests and dev mode without obs.
 func TestRunner_Metrics_NilIsNoOp(t *testing.T) {
 	fp := &fakePurger{}
 	store := newTestStore(t, testKeeperYAML)
@@ -1377,9 +1374,9 @@ func TestRunner_Metrics_NilIsNoOp(t *testing.T) {
 	}
 }
 
-// waitFor крутит cond() с интервалом 5 ms, пока он не вернёт true или не
-// истечёт timeout. На timeout — t.Fatal. Используется вместо
-// `time.Sleep + assert` для уменьшения flakiness.
+// waitFor runs cond() every 5 ms until it returns true or timeout expires. On
+// timeout, it calls t.Fatal. Used instead of `time.Sleep + assert` to reduce
+// flakiness.
 func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -1392,13 +1389,13 @@ func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
 	t.Fatalf("condition not met within %v", timeout)
 }
 
-// replaceOnce — без аллокаций для одного вхождения. Если old не найден или
-// встречается несколько раз — t.Fatalf, чтобы поломанная подмена не
-// маскировала тест-bug-ом. Используется для построения вариантов YAML
-// внутри одного теста без копи-паста полного полотна.
+// replaceOnce avoids allocations for one occurrence. If old is not found or
+// appears more than once, it calls t.Fatalf so a broken replacement does not get
+// masked as a test bug. Used to build YAML variants inside one test without
+// copy-pasting the full body.
 //
-// Защищает от ошибок типа `s.Replace(...)` без count: новые тесты сразу
-// упадут, если YAML-шаблон сменится и точка подмены пропадёт.
+// Protects against mistakes like `s.Replace(...)` without count: new tests fail
+// immediately if the YAML template changes and the replacement point disappears.
 func replaceOnce(t *testing.T, s, old, newStr string) string {
 	t.Helper()
 	idx := strings.Index(s, old)

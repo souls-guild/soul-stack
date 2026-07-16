@@ -11,9 +11,9 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// fakeRow — in-memory pgx.Row для unit-тестов. Поведение определено
-// либо `err` (Scan возвращает err и не пишет в dest), либо `count`
-// (Scan пишет count в первый dest, ожидая *int64).
+// fakeRow is an in-memory pgx.Row for unit tests. Behavior is defined either
+// by `err` (Scan returns err and does not write to dest) or by `count` (Scan
+// writes count to the first dest, expecting *int64).
 type fakeRow struct {
 	count int64
 	err   error
@@ -34,9 +34,9 @@ func (f *fakeRow) Scan(dest ...any) error {
 	return nil
 }
 
-// fakeQueryRower захватывает аргументы каждого QueryRow и возвращает
-// заранее запрограммированный [fakeRow]. SQL не валидируется — это
-// контракт ADR-022(d) / миграции 002, а не поведение Purger-а.
+// fakeQueryRower captures the arguments of each QueryRow and returns a
+// preprogrammed [fakeRow]. SQL is not validated here; that is the contract of
+// ADR-022(d) / migration 002, not Purger behavior.
 type fakeQueryRower struct {
 	calls   int
 	lastSQL string
@@ -54,19 +54,19 @@ func (f *fakeQueryRower) QueryRow(_ context.Context, sql string, args ...any) pg
 	return f.row
 }
 
-// Query — часть расширенного [queryRower] (lease-aware mark_disconnected
-// тянет select_disconnect_candidates через Query). Существующие тесты
-// идут только через QueryRow-правила и lease=nil-ветку; для них Query не
-// вызывается. Возврат ошибки делает явным, что эти fake-сценарии не
-// рассчитаны на двухфазное правило.
+// Query is part of the extended [queryRower]: lease-aware mark_disconnected
+// calls select_disconnect_candidates through Query. Existing tests use only
+// QueryRow rules and the lease=nil branch, so Query is not called there.
+// Returning an error makes it explicit that these fake scenarios are not meant
+// for the two-phase rule.
 func (f *fakeQueryRower) Query(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
 	return nil, errors.New("fakeQueryRower: Query not implemented")
 }
 
 func TestNewPurger(t *testing.T) {
-	// Sanity: NewPurger принимает *pgxpool.Pool. Здесь проверяем только
-	// внутренний путь через newPurgerFromQueryRower (NewPurger требует
-	// реальный *pgxpool.Pool, который без поднятия PG не получить).
+	// Sanity: NewPurger accepts *pgxpool.Pool. Here we only verify the internal
+	// path through newPurgerFromQueryRower because NewPurger requires a real
+	// *pgxpool.Pool, which is not available without starting PG.
 	fq := &fakeQueryRower{}
 	p := newPurgerFromQueryRower(fq)
 	if p == nil {
@@ -121,7 +121,7 @@ func TestPurger_PurgeAuditOld_DefaultBatchSize(t *testing.T) {
 				t.Fatalf("PurgeAuditOld: %v", err)
 			}
 			if fq.args[1] != defaultBatchSize {
-				t.Errorf("batchSize=%d → args[1] = %v, want %d", tc.batchSize, fq.args[1], defaultBatchSize)
+				t.Errorf("batchSize=%d -> args[1] = %v, want %d", tc.batchSize, fq.args[1], defaultBatchSize)
 			}
 		})
 	}
@@ -145,8 +145,8 @@ func TestPurger_PurgeAuditOld_PropagatesError(t *testing.T) {
 }
 
 func TestPurger_PurgeAuditOld_ZeroDeletedNotError(t *testing.T) {
-	// Drain-pattern: возврат 0 — нормальный сигнал «больше нечего
-	// удалять», не ошибка. Тест защищает от регрессии вида
+	// Drain pattern: returning 0 is a normal "nothing left to delete" signal,
+	// not an error. The test protects against regressions like
 	// `if count == 0 { return err }`.
 	fq := &fakeQueryRower{row: &fakeRow{count: 0}}
 	p := newPurgerFromQueryRower(fq)
@@ -161,11 +161,11 @@ func TestPurger_PurgeAuditOld_ZeroDeletedNotError(t *testing.T) {
 }
 
 func TestPurger_PurgeAuditOld_RejectsNonPositiveMaxAge(t *testing.T) {
-	// Граничные случаи `maxAge <= 0` отлавливаются в PurgeAuditOld до
-	// обращения к PG: иначе отрицательная duration превратится в
-	// PG-interval `-N seconds`, и `NOW() - (-N seconds) = NOW() + N`
-	// удалит 0 строк, скрыв ошибку конфигурации. Покрываем 0 и
-	// негативный случай; PG в этом тесте не нужен (валидация раньше).
+	// Boundary cases `maxAge <= 0` are caught in PurgeAuditOld before touching
+	// PG. Otherwise a negative duration would become PG interval `-N seconds`,
+	// and `NOW() - (-N seconds) = NOW() + N` would delete 0 rows, hiding the
+	// configuration error. Cover 0 and a negative case; this test does not need
+	// PG because validation happens earlier.
 	cases := []struct {
 		name   string
 		maxAge time.Duration
@@ -191,18 +191,18 @@ func TestPurger_PurgeAuditOld_RejectsNonPositiveMaxAge(t *testing.T) {
 	}
 }
 
-// --- Reaper.b: пять оставшихся правил ----------------------------------
+// --- Reaper.b: five remaining rules ------------------------------------
 //
-// Каждое правило покрыто тремя тестами по pattern PurgeAuditOld:
-//   - PassesArgs: проверка маршалинга аргументов (interval / statuses /
-//     batch_size) в правильном порядке и формате.
-//   - DefaultBatchSize: zero/negative → defaultBatchSize.
-//   - PropagatesError: row.Scan error → wrapped err.
-// Для правил со statuses[] добавлен EmptyStatuses-кейс (валидация перед PG).
-// Для всех — RejectsNonPositiveDuration (zero/negative).
+// Each rule is covered by three tests following the PurgeAuditOld pattern:
+//   - PassesArgs: verify argument marshaling (interval / statuses / batch_size)
+//     in the right order and format.
+//   - DefaultBatchSize: zero/negative -> defaultBatchSize.
+//   - PropagatesError: row.Scan error -> wrapped err.
+// For rules with statuses[], add an EmptyStatuses case (validation before PG).
+// For all rules, RejectsNonPositiveDuration covers zero/negative.
 //
-// PG-poke здесь не делается — Purger даёт thin-wrapper, integration живёт
-// под build-tag `integration` (integration_test.go).
+// No PG poke is done here: Purger provides a thin wrapper, and integration
+// coverage lives under build tag `integration` (integration_test.go).
 
 func TestPurger_PurgeExpiredPendingTokens_PassesArgs(t *testing.T) {
 	fq := &fakeQueryRower{row: &fakeRow{count: 7}}
@@ -327,9 +327,9 @@ func TestPurger_MarkDisconnected_PassesArgs(t *testing.T) {
 	}
 }
 
-// fakeCandidateRows — in-memory pgx.Rows для select_disconnect_candidates:
-// отдаёт по одной строке SID. Реализует минимум pgx.Rows, нужный
-// selectDisconnectCandidates (Next/Scan/Err/Close).
+// fakeCandidateRows is an in-memory pgx.Rows for select_disconnect_candidates:
+// it returns one SID row at a time. It implements the minimum pgx.Rows surface
+// needed by selectDisconnectCandidates (Next/Scan/Err/Close).
 type fakeCandidateRows struct {
 	sids []string
 	pos  int
@@ -352,19 +352,19 @@ func (r *fakeCandidateRows) Values() ([]any, error)                       { retu
 func (r *fakeCandidateRows) RawValues() [][]byte                          { return nil }
 func (r *fakeCandidateRows) Conn() *pgx.Conn                              { return nil }
 
-// fakeLeaseQueryRower — fake под двунаправленный lease-aware reconcile.
-// Различает направления по имени SQL-функции в запросе:
-//   - select_disconnect_candidates → disconnectCands; mark_disconnected_sids → markedSIDs;
-//   - select_reconnect_candidates → reconnectCands; mark_connected_sids → connectedSIDs.
+// fakeLeaseQueryRower fakes bidirectional lease-aware reconcile. It
+// distinguishes directions by SQL function name in the query:
+//   - select_disconnect_candidates -> disconnectCands; mark_disconnected_sids -> markedSIDs;
+//   - select_reconnect_candidates -> reconnectCands; mark_connected_sids -> connectedSIDs.
 //
-// `markedSIDs`/`connectedSIDs` фиксируют, что именно ушло в каждую mark-фазу;
-// каждая QueryRow возвращает count = длине переданного массива.
+// `markedSIDs`/`connectedSIDs` capture what went to each mark phase; each
+// QueryRow returns count equal to the length of the passed array.
 type fakeLeaseQueryRower struct {
-	candidates    []string // disconnect-кандидаты (синоним disconnectCands для совместимости тестов)
-	reconnectCand []string // reconnect-кандидаты (status='disconnected')
+	candidates    []string // disconnect candidates (disconnectCands alias for test compatibility)
+	reconnectCand []string // reconnect candidates (status='disconnected')
 
-	markedSIDs    []string // SID-ы, переданные в mark_disconnected_sids
-	connectedSIDs []string // SID-ы, переданные в mark_connected_sids
+	markedSIDs    []string // SIDs passed to mark_disconnected_sids
+	connectedSIDs []string // SIDs passed to mark_connected_sids
 }
 
 func (f *fakeLeaseQueryRower) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
@@ -386,8 +386,8 @@ func (f *fakeLeaseQueryRower) QueryRow(_ context.Context, sql string, args ...an
 	return &fakeRow{count: int64(len(sids))}
 }
 
-// fakeLeaseChecker — детерминированный soulLeaseChecker для unit-тестов.
-// alive[sid]=true → живой стрим; errSIDs[sid]=true → ошибка проверки.
+// fakeLeaseChecker is a deterministic soulLeaseChecker for unit tests.
+// alive[sid]=true -> live stream; errSIDs[sid]=true -> check error.
 type fakeLeaseChecker struct {
 	alive   map[string]bool
 	errSIDs map[string]bool
@@ -400,8 +400,9 @@ func (c *fakeLeaseChecker) SoulStreamAlive(_ context.Context, sid string) (bool,
 	return c.alive[sid], nil
 }
 
-// TestPurger_MarkDisconnected_LeaseAware_SkipsAlive — lease-aware ветка метит
-// только кандидатов БЕЗ живого Redis-lease; Soul с живым стримом исключается.
+// TestPurger_MarkDisconnected_LeaseAware_SkipsAlive checks that the
+// lease-aware branch marks only candidates WITHOUT a live Redis lease; a Soul
+// with a live stream is excluded.
 func TestPurger_MarkDisconnected_LeaseAware_SkipsAlive(t *testing.T) {
 	fq := &fakeLeaseQueryRower{candidates: []string{"a.example.com", "b.example.com", "c.example.com"}}
 	lc := &fakeLeaseChecker{alive: map[string]bool{"b.example.com": true}}
@@ -411,7 +412,7 @@ func TestPurger_MarkDisconnected_LeaseAware_SkipsAlive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MarkDisconnected: %v", err)
 	}
-	// a, c протухли (нет lease); b жив → исключён.
+	// a and c expired with no lease; b is alive and excluded.
 	if got != 2 {
 		t.Errorf("count = %d, want 2 (a + c)", got)
 	}
@@ -425,9 +426,9 @@ func TestPurger_MarkDisconnected_LeaseAware_SkipsAlive(t *testing.T) {
 	}
 }
 
-// TestPurger_MarkDisconnected_LeaseAware_FailSafeOnError — ошибка Redis-проверки
-// конкретного SID → НЕ метить его (fail-safe: живой стрим важнее своевременного
-// disconnect-а).
+// TestPurger_MarkDisconnected_LeaseAware_FailSafeOnError checks that a Redis
+// check error for a specific SID does NOT mark it. This is fail-safe: keeping a
+// live stream is more important than timely disconnect marking.
 func TestPurger_MarkDisconnected_LeaseAware_FailSafeOnError(t *testing.T) {
 	fq := &fakeLeaseQueryRower{candidates: []string{"a.example.com", "b.example.com"}}
 	lc := &fakeLeaseChecker{
@@ -440,7 +441,7 @@ func TestPurger_MarkDisconnected_LeaseAware_FailSafeOnError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MarkDisconnected: %v", err)
 	}
-	// a — ошибка проверки → fail-safe keep; b — реально протух.
+	// a has a check error -> fail-safe keep; b really expired.
 	if got != 1 {
 		t.Errorf("count = %d, want 1 (only b)", got)
 	}
@@ -449,8 +450,8 @@ func TestPurger_MarkDisconnected_LeaseAware_FailSafeOnError(t *testing.T) {
 	}
 }
 
-// TestPurger_MarkDisconnected_LeaseAware_NoCandidates — пустой список кандидатов
-// → 0 без обращения к lease-checker-у / mark-фазе.
+// TestPurger_MarkDisconnected_LeaseAware_NoCandidates: an empty candidate list
+// returns 0 without calling the lease checker or mark phase.
 func TestPurger_MarkDisconnected_LeaseAware_NoCandidates(t *testing.T) {
 	fq := &fakeLeaseQueryRower{candidates: nil}
 	lc := &fakeLeaseChecker{alive: map[string]bool{}}
@@ -464,12 +465,12 @@ func TestPurger_MarkDisconnected_LeaseAware_NoCandidates(t *testing.T) {
 		t.Errorf("count = %d, want 0", got)
 	}
 	if fq.markedSIDs != nil {
-		t.Errorf("markedSIDs = %v, want nil (mark-фаза не вызвана)", fq.markedSIDs)
+		t.Errorf("markedSIDs = %v, want nil (mark phase was not called)", fq.markedSIDs)
 	}
 }
 
-// TestPurger_MarkDisconnected_LeaseAware_AllAlive — все кандидаты живы → 0,
-// mark-фаза не вызывается.
+// TestPurger_MarkDisconnected_LeaseAware_AllAlive: all candidates are alive,
+// so the result is 0 and the mark phase is not called.
 func TestPurger_MarkDisconnected_LeaseAware_AllAlive(t *testing.T) {
 	fq := &fakeLeaseQueryRower{candidates: []string{"a.example.com", "b.example.com"}}
 	lc := &fakeLeaseChecker{alive: map[string]bool{"a.example.com": true, "b.example.com": true}}
@@ -487,12 +488,12 @@ func TestPurger_MarkDisconnected_LeaseAware_AllAlive(t *testing.T) {
 	}
 }
 
-// TestPurger_MarkDisconnected_LeaseAware_Reconnect — обратное направление:
-// disconnected-кандидат с ЖИВЫМ lease возвращается в connected; disconnected
-// без lease — остаётся disconnected (не online).
+// TestPurger_MarkDisconnected_LeaseAware_Reconnect covers the reverse
+// direction: a disconnected candidate with a LIVE lease returns to connected;
+// disconnected without a lease remains disconnected, not online.
 func TestPurger_MarkDisconnected_LeaseAware_Reconnect(t *testing.T) {
 	fq := &fakeLeaseQueryRower{
-		// disconnect-направление пустое; вся работа в reconnect-фазе.
+		// The disconnect direction is empty; all work happens in the reconnect phase.
 		reconnectCand: []string{"back.example.com", "still-dead.example.com"},
 	}
 	lc := &fakeLeaseChecker{alive: map[string]bool{"back.example.com": true}}
@@ -502,21 +503,21 @@ func TestPurger_MarkDisconnected_LeaseAware_Reconnect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MarkDisconnected: %v", err)
 	}
-	// back жив → reconnect; still-dead без lease → остаётся disconnected.
+	// back is alive -> reconnect; still-dead has no lease -> remains disconnected.
 	if got != 1 {
-		t.Errorf("count = %d, want 1 (только back)", got)
+		t.Errorf("count = %d, want 1 (only back)", got)
 	}
 	if len(fq.connectedSIDs) != 1 || fq.connectedSIDs[0] != "back.example.com" {
 		t.Errorf("connectedSIDs = %v, want [back.example.com]", fq.connectedSIDs)
 	}
 	if fq.markedSIDs != nil {
-		t.Errorf("markedSIDs = %v, want nil (disconnect-фаза без кандидатов)", fq.markedSIDs)
+		t.Errorf("markedSIDs = %v, want nil (disconnect phase has no candidates)", fq.markedSIDs)
 	}
 }
 
-// TestPurger_MarkDisconnected_LeaseAware_Bidirectional — оба направления за один
-// прогон: один connected-без-lease метится disconnected, один disconnected-с-lease
-// возвращается в connected. Возврат — сумма обоих.
+// TestPurger_MarkDisconnected_LeaseAware_Bidirectional covers both directions
+// in one run: one connected-without-lease is marked disconnected, and one
+// disconnected-with-lease returns to connected. The return value is their sum.
 func TestPurger_MarkDisconnected_LeaseAware_Bidirectional(t *testing.T) {
 	fq := &fakeLeaseQueryRower{
 		candidates:    []string{"going-down.example.com"},
@@ -540,9 +541,10 @@ func TestPurger_MarkDisconnected_LeaseAware_Bidirectional(t *testing.T) {
 	}
 }
 
-// TestPurger_MarkDisconnected_LeaseAware_Reconnect_FailSafeOnError — ошибка
-// Redis-проверки disconnected-кандидата → НЕ возвращать его в connected (fail-safe
-// симметрично disconnect-направлению: при неизвестном lease снимок не двигаем).
+// TestPurger_MarkDisconnected_LeaseAware_Reconnect_FailSafeOnError checks that
+// a Redis check error for a disconnected candidate does NOT return it to
+// connected. This is symmetric fail-safe behavior with the disconnect
+// direction: unknown lease state does not move the snapshot.
 func TestPurger_MarkDisconnected_LeaseAware_Reconnect_FailSafeOnError(t *testing.T) {
 	fq := &fakeLeaseQueryRower{
 		reconnectCand: []string{"err.example.com", "alive.example.com"},
@@ -557,9 +559,9 @@ func TestPurger_MarkDisconnected_LeaseAware_Reconnect_FailSafeOnError(t *testing
 	if err != nil {
 		t.Fatalf("MarkDisconnected: %v", err)
 	}
-	// err.example.com — ошибка проверки → fail-safe skip; alive — online → reconnect.
+	// err.example.com has a check error -> fail-safe skip; alive is online -> reconnect.
 	if got != 1 {
-		t.Errorf("count = %d, want 1 (только alive)", got)
+		t.Errorf("count = %d, want 1 (only alive)", got)
 	}
 	if len(fq.connectedSIDs) != 1 || fq.connectedSIDs[0] != "alive.example.com" {
 		t.Errorf("connectedSIDs = %v, want [alive.example.com]", fq.connectedSIDs)
@@ -627,31 +629,32 @@ func TestPurger_ReclaimApplyRuns_PassesArgs(t *testing.T) {
 	if got != 6 {
 		t.Errorf("count = %d, want 6", got)
 	}
-	// Recovery — inline UPDATE (не SQL-функция): проверяем целевой контракт SQL.
+	// Recovery is an inline UPDATE, not a SQL function; verify the target SQL contract.
 	if !strings.Contains(fq.lastSQL, "status           = 'planned'") {
 		t.Errorf("SQL must set status=planned: %q", fq.lastSQL)
 	}
-	// S4: реклеймим ТОЛЬКО claimed (умер до отдачи). dispatched/running вне скана
-	// (после отдачи прогоном владеет Soul, пере-claim = двойной apply).
+	// S4: reclaim ONLY claimed rows that died before delivery. dispatched/running
+	// stay outside the scan because after delivery the Soul owns the run, and
+	// re-claiming would mean double apply.
 	if !strings.Contains(fq.lastSQL, "status = 'claimed'") {
 		t.Errorf("SQL must scan only claimed: %q", fq.lastSQL)
 	}
 	if strings.Contains(fq.lastSQL, "'dispatched'") || strings.Contains(fq.lastSQL, "'running'") {
-		t.Errorf("SQL must NOT reclaim dispatched/running (Soul владеет после отдачи): %q", fq.lastSQL)
+		t.Errorf("SQL must NOT reclaim dispatched/running (Soul owns after delivery): %q", fq.lastSQL)
 	}
 	if !strings.Contains(fq.lastSQL, "claim_expires_at < NOW()") {
 		t.Errorf("SQL must filter expired lease: %q", fq.lastSQL)
 	}
-	// attempt НЕ должен сбрасываться — fencing-epoch инкрементит следующий claim.
+	// attempt must NOT be reset; the fencing epoch is incremented by the next claim.
 	if strings.Contains(fq.lastSQL, "attempt") {
 		t.Errorf("SQL must NOT touch attempt (fencing-epoch must grow): %q", fq.lastSQL)
 	}
-	// claim-владелец/lease сбрасываются.
+	// claim owner and lease are reset.
 	if !strings.Contains(fq.lastSQL, "claim_by_kid     = NULL") {
 		t.Errorf("SQL must reset claim_by_kid: %q", fq.lastSQL)
 	}
-	// Один аргумент — batch (LIMIT). lease в SQL не передаётся (предикат
-	// сравнивает claim_expires_at < NOW() напрямую).
+	// The single argument is batch (LIMIT). lease is not passed to SQL because
+	// the predicate compares claim_expires_at < NOW() directly.
 	if len(fq.args) != 1 {
 		t.Fatalf("args len = %d, want 1", len(fq.args))
 	}
@@ -668,7 +671,7 @@ func TestPurger_ReclaimApplyRuns_DefaultBatchSize(t *testing.T) {
 			t.Fatalf("ReclaimApplyRuns(batch=%d): %v", batch, err)
 		}
 		if fq.args[0] != defaultBatchSize {
-			t.Errorf("batch=%d → args[0] = %v, want %d", batch, fq.args[0], defaultBatchSize)
+			t.Errorf("batch=%d -> args[0] = %v, want %d", batch, fq.args[0], defaultBatchSize)
 		}
 	}
 }
@@ -765,7 +768,7 @@ func TestPurger_ReaperB_DefaultBatchSize(t *testing.T) {
 			if err := tc.call(p); err != nil {
 				t.Fatalf("call: %v", err)
 			}
-			// Последний аргумент в каждом случае — batch_size.
+			// The last argument in each case is batch_size.
 			lastArg := fq.args[len(fq.args)-1]
 			if lastArg != defaultBatchSize {
 				t.Errorf("batch_size = %v, want %d", lastArg, defaultBatchSize)
@@ -821,10 +824,10 @@ func TestPurger_ReaperB_PropagatesError(t *testing.T) {
 }
 
 func TestPurger_ReaperB_RejectsNonPositiveDuration(t *testing.T) {
-	// Аналогично PurgeAuditOld: отрицательная/нулевая duration → PG-interval
-	// с отрицательным значением, что превратится в `NOW() - (-X) = NOW()+X`
-	// и тихо удалит/обновит 0 строк, скрывая ошибку конфигурации. Явный
-	// отказ — единственный безопасный режим. PG не должен быть тронут.
+	// Same as PurgeAuditOld: a negative or zero duration would become a
+	// negative PG interval, which turns into `NOW() - (-X) = NOW()+X` and
+	// silently deletes/updates 0 rows, hiding the configuration error. Explicit
+	// rejection is the only safe mode. PG must not be touched.
 	cases := []struct {
 		name string
 		call func(p *Purger) (int64, error)
@@ -954,7 +957,7 @@ func TestPurger_ArchiveStateHistory_DefaultBatchSize(t *testing.T) {
 			t.Fatalf("ArchiveStateHistory(batch=%d): %v", batch, err)
 		}
 		if fq.args[2] != defaultBatchSize {
-			t.Errorf("batch=%d → args[2] = %v, want %d", batch, fq.args[2], defaultBatchSize)
+			t.Errorf("batch=%d -> args[2] = %v, want %d", batch, fq.args[2], defaultBatchSize)
 		}
 	}
 }
@@ -990,9 +993,9 @@ func TestPurger_ArchiveStateHistory_PropagatesError(t *testing.T) {
 }
 
 func TestDurationToPGInterval(t *testing.T) {
-	// Плюрализация фиксируется как есть — Postgres парсит и `1 seconds`,
-	// и `0 seconds` без проблем; косметика «1 second» не имеет
-	// семантической пользы и не закрепляется тестом.
+	// Pluralization is fixed as-is: Postgres parses both `1 seconds` and
+	// `0 seconds` without issues; cosmetic `1 second` has no semantic value and
+	// is not locked by the test.
 	cases := []struct {
 		name string
 		in   time.Duration

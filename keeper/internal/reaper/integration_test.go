@@ -2,12 +2,12 @@
 
 package reaper_test
 
-// Integration-тесты Purger-а под testcontainers (M0.4.1a + Reaper.b).
-// Включается build-tag-ом `integration` — в дефолтном build файл не
-// компилируется, поэтому отсутствие testcontainers-обвязки в момент
-// мерджа M0.4.1c не ломает `make build` / `make test`. После merge
-// M0.4.1a `go test -tags=integration ./keeper/...` будет запускать его
-// вместе с другими integration-тестами.
+// Purger integration tests under testcontainers (M0.4.1a + Reaper.b).
+// Enabled by build tag `integration`: in the default build this file is not
+// compiled, so missing testcontainers wiring during the M0.4.1c merge does not
+// break `make build` / `make test`. After the M0.4.1a merge,
+// `go test -tags=integration ./keeper/...` will run it together with other
+// integration tests.
 
 import (
 	"context"
@@ -39,24 +39,24 @@ var (
 	integrationPool      *pgxpool.Pool
 	integrationRedisAddr string
 
-	// integrationVaultClient / integrationVaultAPI заполняются в TestMain,
-	// если testcontainer-Vault поднялся (best-effort, как Redis). Нужны только
-	// vaultreconcile_integration_test.go; PG-тесты работают и без Vault.
+	// integrationVaultClient / integrationVaultAPI are populated in TestMain when
+	// testcontainer Vault starts, best-effort like Redis. They are needed only by
+	// vaultreconcile_integration_test.go; PG tests work without Vault.
 	integrationVaultClient *keepervault.Client
 	integrationVaultAPI    *vaultapi.Client
 )
 
-// vaultIntegrationImage / vaultIntegrationToken — version-pin dev-Vault-а,
-// совпадает с keeper/internal/vault/integration_test.go.
+// vaultIntegrationImage / vaultIntegrationToken pin the dev Vault version,
+// matching keeper/internal/vault/integration_test.go.
 const (
 	vaultIntegrationImage = "hashicorp/vault:1.18"
 	vaultIntegrationToken = "root"
 )
 
-// TestMain — стандартный pattern с отдельной run()-функцией: defer-ы
-// внутри run() отрабатывают до os.Exit, в отличие от inline-варианта в
-// TestMain (см. https://pkg.go.dev/testing#hdr-Main). Один контейнер на
-// все интеграционные тесты пакета — между тестами `resetIdentityTables`.
+// TestMain uses the standard pattern with a separate run() function: defers
+// inside run() execute before os.Exit, unlike the inline variant in TestMain;
+// see https://pkg.go.dev/testing#hdr-Main. One container is shared by all
+// package integration tests; `resetIdentityTables` runs between tests.
 func TestMain(m *testing.M) {
 	os.Exit(run(m))
 }
@@ -102,10 +102,10 @@ func run(m *testing.M) int {
 	defer pool.Close()
 	integrationPool = pool
 
-	// Redis нужен только runner_integration_test.go: per-rule SQL-функции
-	// тестируются без Redis. На skip-сценарии Postgres-тесты должны
-	// продолжать работать — поэтому ошибку поднятия Redis-контейнера
-	// логируем (fatal-only под REQUIRE_DOCKER), но не возвращаем 1.
+	// Redis is needed only by runner_integration_test.go; per-rule SQL functions
+	// are tested without Redis. In skip scenarios Postgres tests should continue,
+	// so log Redis container startup errors (fatal only under REQUIRE_DOCKER) but
+	// do not return 1.
 	redisCtr, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image:        "redis:7-alpine",
@@ -134,9 +134,9 @@ func run(m *testing.M) int {
 		}
 	}
 
-	// Vault — нужен только vaultreconcile_integration_test.go (правило
-	// reap_orphan_vault_keys). Best-effort, как Redis: ошибку поднятия
-	// логируем (fatal-only под REQUIRE_DOCKER), Postgres-тесты продолжают.
+	// Vault is needed only by vaultreconcile_integration_test.go for rule
+	// reap_orphan_vault_keys. Best-effort like Redis: log startup errors (fatal
+	// only under REQUIRE_DOCKER), and let Postgres tests continue.
 	vaultCtr, err := tcvault.Run(ctx, vaultIntegrationImage, tcvault.WithToken(vaultIntegrationToken))
 	if err != nil {
 		if requireDocker() {
@@ -176,10 +176,10 @@ func run(m *testing.M) int {
 	return m.Run()
 }
 
-// fixturePool возвращает общий pgxpool.Pool, инициализированный в TestMain
-// через testcontainers (один контейнер на все интеграционные тесты пакета).
-// `defer pool.Close()` в caller-е — no-op: pool разделяется между
-// тестами и закрывается в run() через defer.
+// fixturePool returns the shared pgxpool.Pool initialized in TestMain through
+// testcontainers, one container for all package integration tests. `defer
+// pool.Close()` in callers is a no-op: pool is shared between tests and closed
+// in run() through defer.
 func fixturePool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	if integrationPool == nil {
@@ -188,17 +188,17 @@ func fixturePool(t *testing.T) *pgxpool.Pool {
 	return integrationPool
 }
 
-// fakeSHA256Hex генерирует синтетический hash для test-данных
-// bootstrap_tokens.token_hash. Использует SHA-256 от seed-строки —
-// гарантирует уникальность hash-а на разных seed-ах + правильный
-// формат (64 hex char), необходимый CHECK constraint-у в 008.
+// fakeSHA256Hex generates a synthetic hash for bootstrap_tokens.token_hash test
+// data. It uses SHA-256 of the seed string, guaranteeing unique hashes for
+// different seeds plus the correct 64 hex char format required by CHECK
+// constraint in 008.
 func fakeSHA256Hex(seed string) string {
 	sum := sha256.Sum256([]byte(seed))
 	return hex.EncodeToString(sum[:])
 }
 
-// seedSoul вставляет минимальную строку souls. Поля registered_at /
-// last_seen_at / status задаёт caller. transport='agent' по умолчанию.
+// seedSoul inserts a minimal souls row. caller sets registered_at / last_seen_at
+// / status. transport defaults to 'agent'.
 func seedSoul(t *testing.T, ctx context.Context, pool *pgxpool.Pool, sid, status string, registeredAt time.Time, lastSeenAt *time.Time) {
 	t.Helper()
 	const q = `INSERT INTO souls (sid, transport, status, registered_at, last_seen_at)
@@ -208,8 +208,8 @@ func seedSoul(t *testing.T, ctx context.Context, pool *pgxpool.Pool, sid, status
 	}
 }
 
-// seedToken вставляет bootstrap_tokens-строку для уже существующего sid.
-// Если usedAt nil — токен «pending» (used_at IS NULL), иначе «used».
+// seedToken inserts a bootstrap_tokens row for an existing sid. If usedAt is
+// nil, the token is pending (used_at IS NULL); otherwise it is used.
 func seedToken(t *testing.T, ctx context.Context, pool *pgxpool.Pool, sid string, createdAt, expiresAt time.Time, usedAt *time.Time, seed string) {
 	t.Helper()
 	const q = `INSERT INTO bootstrap_tokens
@@ -220,7 +220,7 @@ func seedToken(t *testing.T, ctx context.Context, pool *pgxpool.Pool, sid string
 	}
 }
 
-// seedSeed вставляет soul_seeds-строку для уже существующего sid.
+// seedSeed inserts a soul_seeds row for an existing sid.
 func seedSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool, sid, status string, issuedAt time.Time, seed string) {
 	t.Helper()
 	const q = `INSERT INTO soul_seeds
@@ -237,8 +237,8 @@ func seedSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool, sid, status
 	}
 }
 
-// seedIncarnation вставляет минимальную строку incarnation для FK-привязки
-// apply_runs. status='ready' — терминальный валидный enum.
+// seedIncarnation inserts a minimal incarnation row for apply_runs FK binding.
+// status='ready' is a valid terminal enum.
 func seedIncarnation(t *testing.T, ctx context.Context, pool *pgxpool.Pool, name string) {
 	t.Helper()
 	const q = `INSERT INTO incarnation (name, service, service_version, status)
@@ -248,10 +248,10 @@ func seedIncarnation(t *testing.T, ctx context.Context, pool *pgxpool.Pool, name
 	}
 }
 
-// seedApplyRun вставляет строку apply_runs для существующей incarnation.
-// finishedAt nil — прогон ещё running (под purge_apply_runs не попадает);
-// иначе status — терминальный (success/failed/cancelled) и finished_at
-// задаёт caller.
+// seedApplyRun inserts an apply_runs row for an existing incarnation. finishedAt
+// nil means the run is still running and not matched by purge_apply_runs;
+// otherwise status is terminal (success/failed/cancelled), and caller sets
+// finished_at.
 func seedApplyRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, applyID, sid, incarnation, status string, startedAt time.Time, finishedAt *time.Time) {
 	t.Helper()
 	const q = `INSERT INTO apply_runs
@@ -262,10 +262,11 @@ func seedApplyRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, applyID
 	}
 }
 
-// seedClaimedApplyRun вставляет строку apply_runs под Ward-claim (миграция 025)
-// для recovery-теста: произвольный статус (claimed/dispatched/running/…) с
-// заданным владельцем claim_by_kid, lease claim_expires_at и fencing-epoch
-// attempt. claimExpiresAt в прошлом — Ward протух; в будущем — Ward живой.
+// seedClaimedApplyRun inserts an apply_runs row under Ward claim (migration
+// 025) for recovery tests: any status (claimed/dispatched/running/...) with the
+// given claim_by_kid owner, claim_expires_at lease, and attempt fencing epoch.
+// claimExpiresAt in the past means the Ward expired; in the future means it is
+// alive.
 // finished_at IS NULL.
 func seedClaimedApplyRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, applyID, sid, incarnation, status string, attempt int, claimExpiresAt time.Time) {
 	t.Helper()
@@ -280,7 +281,7 @@ func seedClaimedApplyRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, 
 	}
 }
 
-// applyRunSnapshot читает поля, нужные recovery-тесту, по (apply_id, sid).
+// applyRunSnapshot reads fields needed by the recovery test by (apply_id, sid).
 func applyRunSnapshot(t *testing.T, ctx context.Context, pool *pgxpool.Pool, applyID, sid string) (status string, attempt int, claimByKID *string) {
 	t.Helper()
 	const q = `SELECT status, attempt, claim_by_kid FROM apply_runs WHERE apply_id = $1 AND sid = $2`
@@ -290,16 +291,16 @@ func applyRunSnapshot(t *testing.T, ctx context.Context, pool *pgxpool.Pool, app
 	return status, attempt, claimByKID
 }
 
-// seedTaskRegister вставляет строку apply_task_register под существующий
-// apply_run (FK на apply_runs(apply_id, sid)). register_data — минимальный
-// непустой jsonb, содержимое для purge-логики не важно (критерий — статус
-// apply_run + finished_at, а не сама register-строка).
+// seedTaskRegister inserts an apply_task_register row for an existing apply_run
+// (FK to apply_runs(apply_id, sid)). register_data is minimal non-empty jsonb;
+// contents do not matter for purge logic because the criterion is apply_run
+// status + finished_at, not the register row itself.
 //
-// plan_index — часть PK после миграции 079 (PK сменился с
-// (apply_id, sid, task_idx) на (apply_id, sid, plan_index)). Сидим plan_index =
-// task_idx: для линейного плана (N=1) они совпадают, ровно это и делает backfill
-// 079. Без него две строки одного apply_id с разными task_idx получили бы
-// DEFAULT plan_index 0 и упали в duplicate-key.
+// plan_index is part of PK after migration 079, which changed PK from
+// (apply_id, sid, task_idx) to (apply_id, sid, plan_index). Seed plan_index =
+// task_idx: for a linear plan (N=1) they match, exactly what backfill 079 does.
+// Without it, two rows for one apply_id with different task_idx would get
+// DEFAULT plan_index 0 and fail on duplicate key.
 func seedTaskRegister(t *testing.T, ctx context.Context, pool *pgxpool.Pool, applyID, sid string, taskIdx int) {
 	t.Helper()
 	const q = `INSERT INTO apply_task_register (apply_id, sid, task_idx, plan_index, register_data)
@@ -309,26 +310,26 @@ func seedTaskRegister(t *testing.T, ctx context.Context, pool *pgxpool.Pool, app
 	}
 }
 
-// resetIdentityTables очищает souls / bootstrap_tokens / soul_seeds между
-// под-тестами одного `t.Run`-namespace-а. CASCADE на FK сделает остальное.
+// resetIdentityTables clears souls / bootstrap_tokens / soul_seeds between
+// subtests in one `t.Run` namespace. FK CASCADE handles the rest.
 func resetIdentityTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	// TRUNCATE с CASCADE — самый дешёвый способ. operators не трогаем
-	// (FK ON DELETE SET NULL, наш FK created_by_aid в обоих таблицах
+	// TRUNCATE with CASCADE is the cheapest way. Do not touch operators
+	// (FK ON DELETE SET NULL, our FK created_by_aid in both tables
 	// nullable).
 	if _, err := pool.Exec(ctx, "TRUNCATE souls CASCADE"); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 }
 
-// TestIntegration_ExpirePendingSeeds — end-to-end проверка
+// TestIntegration_ExpirePendingSeeds is an end-to-end check of
 // `expire_pending_seeds(interval, integer)`:
 //
-//  1. seed-souls для FK-привязки токенов.
-//  2. inserts 3 pending tokens с истёкшим expires_at + 2 свежих pending +
+//  1. seed souls for FK binding of tokens.
+//  2. inserts 3 pending tokens with expired expires_at + 2 fresh pending +
 //     1 used token.
-//  3. вызов Purger.PurgeExpiredPendingTokens(0, 100).
-//  4. assert: 3 удалено; в таблице — 3 (2 pending свежих + 1 used).
+//  3. calls Purger.PurgeExpiredPendingTokens(0, 100).
+//  4. asserts 3 deleted; table has 3 left (2 fresh pending + 1 used).
 func TestIntegration_ExpirePendingSeeds(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -337,31 +338,31 @@ func TestIntegration_ExpirePendingSeeds(t *testing.T) {
 	resetIdentityTables(t, ctx, pool)
 
 	now := time.Now().UTC()
-	// Souls (один на токен, чтобы partial unique index по active SID не сорвался).
+	// Souls, one per token so the partial unique index by active SID does not fail.
 	for i := 0; i < 6; i++ {
 		seedSoul(t, ctx, pool, fmt.Sprintf("host%d.example.com", i), "pending", now.Add(-2*time.Hour), nil)
 	}
 
-	// 3 pending с истёкшим expires_at (24h назад)
+	// 3 pending with expired expires_at (24h ago).
 	for i := 0; i < 3; i++ {
 		seedToken(t, ctx, pool, fmt.Sprintf("host%d.example.com", i),
 			now.Add(-48*time.Hour), now.Add(-24*time.Hour), nil,
 			fmt.Sprintf("expired-pending-%d", i))
 	}
-	// 2 pending свежих (expires_at в будущем)
+	// 2 fresh pending with expires_at in the future.
 	for i := 3; i < 5; i++ {
 		seedToken(t, ctx, pool, fmt.Sprintf("host%d.example.com", i),
 			now.Add(-1*time.Hour), now.Add(23*time.Hour), nil,
 			fmt.Sprintf("fresh-pending-%d", i))
 	}
-	// 1 used (не должен попасть под правило)
+	// 1 used token that must not match the rule.
 	usedAt := now.Add(-12 * time.Hour)
 	seedToken(t, ctx, pool, "host5.example.com",
 		now.Add(-13*time.Hour), now.Add(-1*time.Hour), &usedAt,
 		"used-token")
 
 	p := reaper.NewPurger(pool)
-	// maxAge = 1ms — практически «всё, у чего expires_at в прошлом».
+	// maxAge = 1ms means practically everything with expires_at in the past.
 	deleted, err := p.PurgeExpiredPendingTokens(ctx, time.Millisecond, 100)
 	if err != nil {
 		t.Fatalf("PurgeExpiredPendingTokens: %v", err)
@@ -379,9 +380,9 @@ func TestIntegration_ExpirePendingSeeds(t *testing.T) {
 	}
 }
 
-// TestIntegration_PurgeUsedTokens — end-to-end проверка
-// `purge_used_tokens(interval, integer)`: удаление used-токенов старше
-// max_age по полю used_at.
+// TestIntegration_PurgeUsedTokens is an end-to-end check of
+// `purge_used_tokens(interval, integer)`: deleting used tokens older than
+// max_age by used_at.
 func TestIntegration_PurgeUsedTokens(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -395,14 +396,14 @@ func TestIntegration_PurgeUsedTokens(t *testing.T) {
 			now.Add(-200*24*time.Hour), &now)
 	}
 
-	// 3 used старых (used_at = 120 дней назад)
+	// 3 old used tokens (used_at = 120 days ago).
 	oldUsedAt := now.Add(-120 * 24 * time.Hour)
 	for i := 0; i < 3; i++ {
 		seedToken(t, ctx, pool, fmt.Sprintf("host%d.example.com", i),
 			now.Add(-150*24*time.Hour), now.Add(-149*24*time.Hour), &oldUsedAt,
 			fmt.Sprintf("old-used-%d", i))
 	}
-	// 2 used свежих (used_at = 10 дней назад)
+	// 2 fresh used tokens (used_at = 10 days ago).
 	freshUsedAt := now.Add(-10 * 24 * time.Hour)
 	for i := 3; i < 5; i++ {
 		seedToken(t, ctx, pool, fmt.Sprintf("host%d.example.com", i),
@@ -428,9 +429,9 @@ func TestIntegration_PurgeUsedTokens(t *testing.T) {
 	}
 }
 
-// TestIntegration_PurgeSouls — end-to-end проверка
-// `purge_souls(text[], interval, integer)`: удаление souls в указанных
-// статусах с возрастом старше max_age.
+// TestIntegration_PurgeSouls is an end-to-end check of
+// `purge_souls(text[], interval, integer)`: deleting souls in selected statuses
+// older than max_age.
 func TestIntegration_PurgeSouls(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -442,8 +443,8 @@ func TestIntegration_PurgeSouls(t *testing.T) {
 	oldLastSeen := now.Add(-60 * 24 * time.Hour)
 	freshLastSeen := now.Add(-1 * 24 * time.Hour)
 
-	// 2 disconnected старых, 1 expired старый, 1 disconnected свежий,
-	// 1 connected (live), 1 revoked (не в списке статусов).
+	// 2 old disconnected, 1 old expired, 1 fresh disconnected, 1 connected
+	// (live), 1 revoked (not in the status list).
 	seedSoul(t, ctx, pool, "old-disc-1.example.com", "disconnected", now.Add(-200*24*time.Hour), &oldLastSeen)
 	seedSoul(t, ctx, pool, "old-disc-2.example.com", "disconnected", now.Add(-200*24*time.Hour), &oldLastSeen)
 	seedSoul(t, ctx, pool, "old-exp.example.com", "expired", now.Add(-200*24*time.Hour), &oldLastSeen)
@@ -451,7 +452,8 @@ func TestIntegration_PurgeSouls(t *testing.T) {
 	seedSoul(t, ctx, pool, "live.example.com", "connected", now.Add(-90*24*time.Hour), &now)
 	seedSoul(t, ctx, pool, "old-rev.example.com", "revoked", now.Add(-200*24*time.Hour), &oldLastSeen)
 
-	// soul без last_seen_at (никогда не подключался), но старый registered_at — должен попасть под правило.
+	// soul without last_seen_at (never connected) but old registered_at must
+	// match the rule.
 	seedSoul(t, ctx, pool, "never-connected.example.com", "disconnected", now.Add(-90*24*time.Hour), nil)
 
 	p := reaper.NewPurger(pool)
@@ -468,15 +470,15 @@ func TestIntegration_PurgeSouls(t *testing.T) {
 	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM souls").Scan(&left); err != nil {
 		t.Fatalf("count: %v", err)
 	}
-	// Остались: fresh-disc, live, old-rev (revoked не в фильтре статусов).
+	// Left: fresh-disc, live, old-rev (revoked is not in the status filter).
 	if left != 3 {
 		t.Errorf("souls left = %d, want 3", left)
 	}
 }
 
-// TestIntegration_PurgeOldSeeds — end-to-end проверка
-// `purge_old_seeds(text[], interval, integer)`: удаление soul_seeds по
-// статусам superseded/expired/revoked.
+// TestIntegration_PurgeOldSeeds is an end-to-end check of
+// `purge_old_seeds(text[], interval, integer)`: deleting soul_seeds by statuses
+// superseded/expired/revoked.
 func TestIntegration_PurgeOldSeeds(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -485,21 +487,21 @@ func TestIntegration_PurgeOldSeeds(t *testing.T) {
 	resetIdentityTables(t, ctx, pool)
 
 	now := time.Now().UTC()
-	// Один soul, под него несколько seed-ов в разных статусах + один active.
+	// One soul with several seeds in different statuses plus one active.
 	seedSoul(t, ctx, pool, "h1.example.com", "connected", now.Add(-365*24*time.Hour), &now)
 
-	// 3 старых (issued_at = 120 дней назад) разных терминальных статусов.
+	// 3 old rows (issued_at = 120 days ago) in different terminal statuses.
 	oldIssued := now.Add(-120 * 24 * time.Hour)
 	seedSeed(t, ctx, pool, "h1.example.com", "superseded", oldIssued, "old-superseded")
 	seedSeed(t, ctx, pool, "h1.example.com", "expired", oldIssued, "old-expired")
 	seedSeed(t, ctx, pool, "h1.example.com", "revoked", oldIssued, "old-revoked")
 
-	// 1 свежий superseded (issued_at = 30 дней назад)
+	// 1 fresh superseded (issued_at = 30 days ago).
 	freshIssued := now.Add(-30 * 24 * time.Hour)
 	seedSeed(t, ctx, pool, "h1.example.com", "superseded", freshIssued, "fresh-superseded")
 
-	// 1 active (партишн-индекс гарантирует ровно один active per sid;
-	// возраст не важен — статус active не в фильтре).
+	// 1 active (partial index guarantees exactly one active per sid; age does
+	// not matter because status active is not in the filter).
 	seedSeed(t, ctx, pool, "h1.example.com", "active", oldIssued, "active-current")
 
 	p := reaper.NewPurger(pool)
@@ -515,14 +517,14 @@ func TestIntegration_PurgeOldSeeds(t *testing.T) {
 	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM soul_seeds").Scan(&left); err != nil {
 		t.Fatalf("count: %v", err)
 	}
-	// Остались: fresh-superseded + active.
+	// Left: fresh-superseded + active.
 	if left != 2 {
 		t.Errorf("rows left = %d, want 2", left)
 	}
 }
 
-// TestIntegration_MarkDisconnected — end-to-end проверка
-// `mark_disconnected(interval, integer)`: connected с stale last_seen_at →
+// TestIntegration_MarkDisconnected is an end-to-end check of
+// `mark_disconnected(interval, integer)`: connected with stale last_seen_at ->
 // disconnected.
 func TestIntegration_MarkDisconnected(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -535,16 +537,17 @@ func TestIntegration_MarkDisconnected(t *testing.T) {
 	staleSeen := now.Add(-5 * time.Minute)
 	freshSeen := now.Add(-10 * time.Second)
 
-	// 3 connected stale (last_seen_at > 90s назад)
+	// 3 connected stale (last_seen_at > 90s ago).
 	seedSoul(t, ctx, pool, "stale-1.example.com", "connected", now.Add(-1*time.Hour), &staleSeen)
 	seedSoul(t, ctx, pool, "stale-2.example.com", "connected", now.Add(-1*time.Hour), &staleSeen)
 	seedSoul(t, ctx, pool, "stale-3.example.com", "connected", now.Add(-1*time.Hour), &staleSeen)
 	// 2 connected fresh
 	seedSoul(t, ctx, pool, "fresh-1.example.com", "connected", now.Add(-1*time.Hour), &freshSeen)
 	seedSoul(t, ctx, pool, "fresh-2.example.com", "connected", now.Add(-1*time.Hour), &freshSeen)
-	// 1 disconnected stale (не должен трогаться — статус уже не connected)
+	// 1 disconnected stale, which must not be touched because status is already
+	// not connected.
 	seedSoul(t, ctx, pool, "disc.example.com", "disconnected", now.Add(-1*time.Hour), &staleSeen)
-	// 1 connected без last_seen_at (NULL < NOW()-90s → false, не трогаем)
+	// 1 connected without last_seen_at (NULL < NOW()-90s -> false, untouched).
 	seedSoul(t, ctx, pool, "never-seen.example.com", "connected", now.Add(-1*time.Hour), nil)
 
 	p := reaper.NewPurger(pool)
@@ -556,7 +559,7 @@ func TestIntegration_MarkDisconnected(t *testing.T) {
 		t.Errorf("updated = %d, want 3", updated)
 	}
 
-	// Перепроверим: оставшиеся connected — это 2 fresh + 1 never-seen.
+	// Recheck: remaining connected are 2 fresh + 1 never-seen.
 	var connectedLeft int64
 	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM souls WHERE status = 'connected'").Scan(&connectedLeft); err != nil {
 		t.Fatalf("count connected: %v", err)
@@ -569,26 +572,26 @@ func TestIntegration_MarkDisconnected(t *testing.T) {
 	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM souls WHERE status = 'disconnected'").Scan(&disconnected); err != nil {
 		t.Fatalf("count disconnected: %v", err)
 	}
-	// 3 stale-* + 1 изначально disconnected = 4
+	// 3 stale-* + 1 initially disconnected = 4.
 	if disconnected != 4 {
 		t.Errorf("disconnected = %d, want 4", disconnected)
 	}
 }
 
-// redisLeaseChecker — обёртка над Redis-клиентом под reaper-проверку «жив ли
-// EventStream к SID» (зеркалит soulLeaseChecker из cmd/keeper). External
-// test-пакет не может назвать unexported-интерфейс reaper.soulLeaseChecker,
-// но передаёт значение, удовлетворяющее ему (implicit satisfaction).
+// redisLeaseChecker wraps Redis client for the reaper check "is EventStream to
+// SID alive" and mirrors soulLeaseChecker from cmd/keeper. The external test
+// package cannot name unexported interface reaper.soulLeaseChecker, but it
+// passes a value that satisfies it through implicit satisfaction.
 type redisLeaseChecker struct{ rc *keeperredis.Client }
 
 func (c redisLeaseChecker) SoulStreamAlive(ctx context.Context, sid string) (bool, error) {
 	return keeperredis.SoulStreamAlive(ctx, c.rc, sid)
 }
 
-// TestIntegration_MarkDisconnected_LeaseAware — lease-aware правило (ADR-006(a)):
-// Soul с живым Redis SID-lease НЕ метится disconnected даже при stale PG
-// last_seen_at (idle-Soul на живом стриме); реально протухший (нет lease) —
-// метится. Покрывает ключевой инвариант части 3.
+// TestIntegration_MarkDisconnected_LeaseAware covers the lease-aware rule
+// (ADR-006(a)): a Soul with a live Redis SID lease is NOT marked disconnected
+// even with stale PG last_seen_at (idle Soul on a live stream); a truly expired
+// one with no lease is marked. Covers the key invariant of part 3.
 func TestIntegration_MarkDisconnected_LeaseAware(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -606,14 +609,14 @@ func TestIntegration_MarkDisconnected_LeaseAware(t *testing.T) {
 	defer func() { _ = rc.Close() }()
 
 	now := time.Now().UTC()
-	staleSeen := now.Add(-5 * time.Minute) // > 90s → кандидат
+	staleSeen := now.Add(-5 * time.Minute) // > 90s, candidate
 
-	// idle-host: connected, stale last_seen_at, НО живой стрим (есть lease).
+	// idle-host: connected, stale last_seen_at, BUT live stream (has lease).
 	seedSoul(t, ctx, pool, "idle-live.example.com", "connected", now.Add(-time.Hour), &staleSeen)
-	// dead-host: connected, stale last_seen_at, lease-а НЕТ (реально протух).
+	// dead-host: connected, stale last_seen_at, NO lease (truly expired).
 	seedSoul(t, ctx, pool, "dead.example.com", "connected", now.Add(-time.Hour), &staleSeen)
 
-	// Захватываем lease только для idle-live (имитация живого EventStream).
+	// Acquire lease only for idle-live, simulating a live EventStream.
 	lease, err := keeperredis.AcquireSoulLease(ctx, rc, "idle-live.example.com", "kid-live", time.Minute)
 	if err != nil {
 		t.Fatalf("AcquireSoulLease: %v", err)
@@ -625,9 +628,9 @@ func TestIntegration_MarkDisconnected_LeaseAware(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MarkDisconnected (lease-aware): %v", err)
 	}
-	// Только dead помечен; idle-live спасён живым lease-ом.
+	// Only dead is marked; idle-live is saved by the live lease.
 	if updated != 1 {
-		t.Errorf("updated = %d, want 1 (только dead)", updated)
+		t.Errorf("updated = %d, want 1 (only dead)", updated)
 	}
 
 	var idleStatus, deadStatus string
@@ -638,18 +641,19 @@ func TestIntegration_MarkDisconnected_LeaseAware(t *testing.T) {
 		t.Fatalf("scan dead status: %v", err)
 	}
 	if idleStatus != "connected" {
-		t.Errorf("idle-live status = %q, want connected (живой lease спасает от ложного disconnect)", idleStatus)
+		t.Errorf("idle-live status = %q, want connected (live lease prevents false disconnect)", idleStatus)
 	}
 	if deadStatus != "disconnected" {
-		t.Errorf("dead status = %q, want disconnected (нет lease → реально протух)", deadStatus)
+		t.Errorf("dead status = %q, want disconnected (no lease, truly expired)", deadStatus)
 	}
 }
 
-// TestIntegration_MarkDisconnected_LeaseAware_Reconnect — обратное направление
-// reconcile (фикс латча снимка): disconnected-снимок с ЖИВЫМ Redis-lease
-// возвращается в connected (реконнект уже-онбордированного Soul-а Bootstrap-RPC
-// не трогает, eventstream presence в PG не пишет — снимок чинит только Жнец).
-// disconnected БЕЗ lease (реально offline) остаётся disconnected.
+// TestIntegration_MarkDisconnected_LeaseAware_Reconnect covers the reverse
+// reconcile direction (snapshot latch fix): a disconnected snapshot with a LIVE
+// Redis lease returns to connected. Reconnect of an already onboarded Soul does
+// not touch Bootstrap RPC, and eventstream presence does not write to PG; only
+// Reaper fixes the snapshot. disconnected WITHOUT lease (truly offline) remains
+// disconnected.
 func TestIntegration_MarkDisconnected_LeaseAware_Reconnect(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -667,13 +671,13 @@ func TestIntegration_MarkDisconnected_LeaseAware_Reconnect(t *testing.T) {
 	defer func() { _ = rc.Close() }()
 
 	now := time.Now().UTC()
-	// Снимок латчился в disconnected, но last_seen_at свежий (Operator-API
-	// противоречие, которое чинит обратное направление).
+	// Snapshot latched in disconnected, but last_seen_at is fresh. This is an
+	// Operator API contradiction fixed by the reverse direction.
 	freshSeen := now.Add(-5 * time.Second)
 
-	// back-online: disconnected-снимок, реально online (есть lease) → reconnect.
+	// back-online: disconnected snapshot, actually online (has lease) -> reconnect.
 	seedSoul(t, ctx, pool, "back-online.example.com", "disconnected", now.Add(-time.Hour), &freshSeen)
-	// still-offline: disconnected, lease-а НЕТ (реально offline) → остаётся disconnected.
+	// still-offline: disconnected, NO lease (truly offline) -> remains disconnected.
 	seedSoul(t, ctx, pool, "still-offline.example.com", "disconnected", now.Add(-time.Hour), &freshSeen)
 
 	lease, err := keeperredis.AcquireSoulLease(ctx, rc, "back-online.example.com", "kid-live", time.Minute)
@@ -687,9 +691,9 @@ func TestIntegration_MarkDisconnected_LeaseAware_Reconnect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MarkDisconnected (reconnect): %v", err)
 	}
-	// Только back-online возвращён в connected.
+	// Only back-online is returned to connected.
 	if updated != 1 {
-		t.Errorf("updated = %d, want 1 (только back-online)", updated)
+		t.Errorf("updated = %d, want 1 (only back-online)", updated)
 	}
 
 	var backStatus, stillStatus string
@@ -700,16 +704,16 @@ func TestIntegration_MarkDisconnected_LeaseAware_Reconnect(t *testing.T) {
 		t.Fatalf("scan still status: %v", err)
 	}
 	if backStatus != "connected" {
-		t.Errorf("back-online status = %q, want connected (живой lease → reconnect, латч снят)", backStatus)
+		t.Errorf("back-online status = %q, want connected (live lease -> reconnect, latch cleared)", backStatus)
 	}
 	if stillStatus != "disconnected" {
-		t.Errorf("still-offline status = %q, want disconnected (нет lease → реально offline)", stillStatus)
+		t.Errorf("still-offline status = %q, want disconnected (no lease -> truly offline)", stillStatus)
 	}
 }
 
-// TestIntegration_MarkDisconnected_LeaseAware_Bidirectional — оба направления за
-// один прогон: connected+stale+no-lease → disconnected; disconnected+live-lease →
-// connected. Возврат = сумма.
+// TestIntegration_MarkDisconnected_LeaseAware_Bidirectional covers both
+// directions in one run: connected+stale+no-lease -> disconnected;
+// disconnected+live-lease -> connected. Return value is the sum.
 func TestIntegration_MarkDisconnected_LeaseAware_Bidirectional(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -729,9 +733,9 @@ func TestIntegration_MarkDisconnected_LeaseAware_Bidirectional(t *testing.T) {
 	now := time.Now().UTC()
 	staleSeen := now.Add(-5 * time.Minute)
 
-	// going-down: connected, stale, lease-а НЕТ → disconnect.
+	// going-down: connected, stale, NO lease -> disconnect.
 	seedSoul(t, ctx, pool, "going-down.example.com", "connected", now.Add(-time.Hour), &staleSeen)
-	// coming-back: disconnected, живой lease → reconnect.
+	// coming-back: disconnected, live lease -> reconnect.
 	seedSoul(t, ctx, pool, "coming-back.example.com", "disconnected", now.Add(-time.Hour), &staleSeen)
 
 	lease, err := keeperredis.AcquireSoulLease(ctx, rc, "coming-back.example.com", "kid-live", time.Minute)
@@ -764,19 +768,20 @@ func TestIntegration_MarkDisconnected_LeaseAware_Bidirectional(t *testing.T) {
 	}
 }
 
-// errLeaseChecker — soulLeaseChecker, всегда возвращающий ошибку Redis-проверки.
-// Имитирует недоступный Redis для fail-safe-теста: ни одна сторона снимка не
-// двигается (живой стрим важнее своевременности снимка).
+// errLeaseChecker is a soulLeaseChecker that always returns a Redis check error.
+// It simulates unavailable Redis for the fail-safe test: neither side of the
+// snapshot moves because a live stream is more important than snapshot
+// timeliness.
 type errLeaseChecker struct{}
 
 func (errLeaseChecker) SoulStreamAlive(_ context.Context, _ string) (bool, error) {
 	return false, fmt.Errorf("redis unavailable (fail-safe test)")
 }
 
-// TestIntegration_MarkDisconnected_LeaseAware_FailSafeRedisError — при ошибке
-// Redis-проверки reconcile НЕ метит ни в одну сторону: connected-кандидат
-// остаётся connected, disconnected-кандидат остаётся disconnected. Прогон сам
-// не падает (возврат 0, без error) — следующий тик повторит.
+// TestIntegration_MarkDisconnected_LeaseAware_FailSafeRedisError: on Redis
+// check error, reconcile marks neither direction. connected candidate remains
+// connected, disconnected candidate remains disconnected. The run itself does
+// not fail (returns 0, no error); the next tick will retry.
 func TestIntegration_MarkDisconnected_LeaseAware_FailSafeRedisError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -787,9 +792,9 @@ func TestIntegration_MarkDisconnected_LeaseAware_FailSafeRedisError(t *testing.T
 	now := time.Now().UTC()
 	staleSeen := now.Add(-5 * time.Minute)
 
-	// connected+stale: без Redis-ответа disconnect нельзя — fail-safe keep.
+	// connected+stale: without Redis response, disconnect is unsafe; fail-safe keep.
 	seedSoul(t, ctx, pool, "stale-conn.example.com", "connected", now.Add(-time.Hour), &staleSeen)
-	// disconnected: без Redis-ответа reconnect нельзя — fail-safe keep.
+	// disconnected: without Redis response, reconnect is unsafe; fail-safe keep.
 	seedSoul(t, ctx, pool, "disc.example.com", "disconnected", now.Add(-time.Hour), &staleSeen)
 
 	p := reaper.NewPurgerWithLease(pool, errLeaseChecker{}, nil)
@@ -798,7 +803,7 @@ func TestIntegration_MarkDisconnected_LeaseAware_FailSafeRedisError(t *testing.T
 		t.Fatalf("MarkDisconnected (fail-safe redis error): %v", err)
 	}
 	if updated != 0 {
-		t.Errorf("updated = %d, want 0 (Redis-ошибка → не метить ни одну сторону)", updated)
+		t.Errorf("updated = %d, want 0 (Redis error, mark neither direction)", updated)
 	}
 
 	var connStatus, discStatus string
@@ -817,10 +822,10 @@ func TestIntegration_MarkDisconnected_LeaseAware_FailSafeRedisError(t *testing.T
 }
 
 // TestIntegration_MarkDisconnected_FallbackNoLease — fallback lease==nil
-// (Purger без lease-checker-а): правило ОДНОСТОРОННЕЕ чисто-SQL mark_disconnected
-// (миграция 014) — connected+stale → disconnected, disconnected обратно НЕ
-// поднимается (нет Redis для определения online). Подтверждает сохранённое
-// поведение при незаконфигуренном Redis.
+// With Purger without lease checker: the rule is ONE-WAY pure-SQL
+// mark_disconnected (migration 014): connected+stale -> disconnected, while
+// disconnected does NOT move back because there is no Redis to determine
+// online. Confirms preserved behavior when Redis is not configured.
 func TestIntegration_MarkDisconnected_FallbackNoLease(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -834,15 +839,15 @@ func TestIntegration_MarkDisconnected_FallbackNoLease(t *testing.T) {
 	seedSoul(t, ctx, pool, "stale-conn.example.com", "connected", now.Add(-time.Hour), &staleSeen)
 	seedSoul(t, ctx, pool, "disc.example.com", "disconnected", now.Add(-time.Hour), &staleSeen)
 
-	// NewPurger без lease → fallback на чисто-SQL одностороннее правило.
+	// NewPurger without lease -> fallback to pure-SQL one-way rule.
 	p := reaper.NewPurger(pool)
 	updated, err := p.MarkDisconnected(ctx, 90*time.Second, 100)
 	if err != nil {
 		t.Fatalf("MarkDisconnected (fallback): %v", err)
 	}
-	// Только connected+stale метится; disconnected обратно не поднимается.
+	// Only connected+stale is marked; disconnected is not brought back.
 	if updated != 1 {
-		t.Errorf("updated = %d, want 1 (только stale-conn; reconnect недоступен без Redis)", updated)
+		t.Errorf("updated = %d, want 1 (only stale-conn; reconnect unavailable without Redis)", updated)
 	}
 
 	var connStatus, discStatus string
@@ -853,19 +858,19 @@ func TestIntegration_MarkDisconnected_FallbackNoLease(t *testing.T) {
 		t.Fatalf("scan disc status: %v", err)
 	}
 	if connStatus != "disconnected" {
-		t.Errorf("stale-conn status = %q, want disconnected (одностороннее SQL-правило)", connStatus)
+		t.Errorf("stale-conn status = %q, want disconnected (one-way SQL rule)", connStatus)
 	}
 	if discStatus != "disconnected" {
-		t.Errorf("disc status = %q, want disconnected (fallback не поднимает обратно)", discStatus)
+		t.Errorf("disc status = %q, want disconnected (fallback does not reconnect)", discStatus)
 	}
 }
 
-// TestIntegration_PurgeApplyRuns — end-to-end проверка
-// `purge_apply_runs(interval, integer)`: удаление finished apply_runs
-// (success/failed/cancelled/orphaned/no_match) старше max_age; running и свежие —
-// на месте. no_match (FINDING-01 вариант (б)) несёт finished_at и обязан
-// purge-иться наравне с прочими терминалами, иначе строки нецелевых хостов
-// копились бы вечно.
+// TestIntegration_PurgeApplyRuns is an end-to-end check of
+// `purge_apply_runs(interval, integer)`: deleting finished apply_runs
+// (success/failed/cancelled/orphaned/no_match) older than max_age; running and
+// fresh rows remain. no_match (FINDING-01 variant (b)) carries finished_at and
+// must be purged like other terminals, otherwise rows for non-target hosts would
+// accumulate forever.
 func TestIntegration_PurgeApplyRuns(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -882,20 +887,20 @@ func TestIntegration_PurgeApplyRuns(t *testing.T) {
 	oldFinished := now.Add(-60 * 24 * time.Hour)
 	freshFinished := now.Add(-1 * time.Hour)
 
-	// 5 старых finished разных терминальных статусов — попадут под правило
-	// (success/failed/cancelled/orphaned/no_match — все несут finished_at).
+	// 5 old finished rows in different terminal statuses match the rule
+	// (success/failed/cancelled/orphaned/no_match all carry finished_at).
 	seedApplyRun(t, ctx, pool, "old-success", "h1.example.com", "inc-1", "success", oldFinished.Add(-time.Hour), &oldFinished)
 	seedApplyRun(t, ctx, pool, "old-failed", "h1.example.com", "inc-1", "failed", oldFinished.Add(-time.Hour), &oldFinished)
 	seedApplyRun(t, ctx, pool, "old-cancelled", "h1.example.com", "inc-1", "cancelled", oldFinished.Add(-time.Hour), &oldFinished)
 	seedApplyRun(t, ctx, pool, "old-orphaned", "h1.example.com", "inc-1", "orphaned", oldFinished.Add(-time.Hour), &oldFinished)
 	seedApplyRun(t, ctx, pool, "old-no-match", "h1.example.com", "inc-1", "no_match", oldFinished.Add(-time.Hour), &oldFinished)
-	// 1 свежий finished — НЕ старше max_age, остаётся.
+	// 1 fresh finished row is NOT older than max_age and remains.
 	seedApplyRun(t, ctx, pool, "fresh-success", "h1.example.com", "inc-1", "success", freshFinished.Add(-time.Hour), &freshFinished)
-	// 1 старый running (finished_at IS NULL) — НИКОГДА не удаляется.
+	// 1 old running row (finished_at IS NULL) is NEVER deleted.
 	seedApplyRun(t, ctx, pool, "old-running", "h1.example.com", "inc-1", "running", oldFinished.Add(-time.Hour), nil)
 
 	p := reaper.NewPurger(pool)
-	// max_age = 30d → 5 старых finished попадают, fresh (1h) и running — нет.
+	// max_age = 30d: 5 old finished rows match; fresh (1h) and running do not.
 	deleted, err := p.PurgeApplyRuns(ctx, 30*24*time.Hour, 100)
 	if err != nil {
 		t.Fatalf("PurgeApplyRuns: %v", err)
@@ -908,11 +913,11 @@ func TestIntegration_PurgeApplyRuns(t *testing.T) {
 	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM apply_runs").Scan(&left); err != nil {
 		t.Fatalf("count: %v", err)
 	}
-	// Остались: fresh-success + old-running.
+	// Left: fresh-success + old-running.
 	if left != 2 {
 		t.Errorf("rows left = %d, want 2 (fresh finished + running)", left)
 	}
-	// Running должен пережить любой purge.
+	// Running must survive any purge.
 	var running int64
 	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM apply_runs WHERE status = 'running'").Scan(&running); err != nil {
 		t.Fatalf("count running: %v", err)
@@ -922,10 +927,10 @@ func TestIntegration_PurgeApplyRuns(t *testing.T) {
 	}
 }
 
-// TestIntegration_PurgeApplyTaskRegister — end-to-end проверка
-// `purge_apply_task_register(interval, integer)`: удаление register-строк
-// прогонов в терминальном статусе старше grace; register активных (running)
-// и свежих терминальных прогонов остаётся.
+// TestIntegration_PurgeApplyTaskRegister is an end-to-end check of
+// `purge_apply_task_register(interval, integer)`: deleting register rows for
+// terminal runs older than grace; registers for active (running) and fresh
+// terminal runs remain.
 func TestIntegration_PurgeApplyTaskRegister(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -942,26 +947,26 @@ func TestIntegration_PurgeApplyTaskRegister(t *testing.T) {
 	oldFinished := now.Add(-2 * time.Hour)
 	freshFinished := now.Add(-1 * time.Minute)
 
-	// Старый терминальный прогон (finished 2h назад) с 2 register-строками —
-	// обе попадут под правило (grace 1h).
+	// Old terminal run (finished 2h ago) with 2 register rows: both match the
+	// rule (grace 1h).
 	seedApplyRun(t, ctx, pool, "old-term", "h1.example.com", "inc-1", "success", oldFinished.Add(-time.Hour), &oldFinished)
 	seedTaskRegister(t, ctx, pool, "old-term", "h1.example.com", 0)
 	seedTaskRegister(t, ctx, pool, "old-term", "h1.example.com", 1)
 
-	// Свежий терминальный прогон (finished 1m назад) с register — НЕ старше
-	// grace 1h, register остаётся (scenario-runner мог ещё не дочитать).
+	// Fresh terminal run (finished 1m ago) with register: NOT older than grace
+	// 1h, so register remains because scenario-runner might not have read it yet.
 	seedApplyRun(t, ctx, pool, "fresh-term", "h2.example.com", "inc-1", "success", freshFinished.Add(-time.Hour), &freshFinished)
 	seedTaskRegister(t, ctx, pool, "fresh-term", "h2.example.com", 0)
 
-	// Активный (running) прогон, стартовавший давно (started 2h назад,
-	// finished_at IS NULL) с register — НИКОГДА не удаляется, scenario-runner
-	// ещё дойдёт до барьера и будет читать его.
+	// Active (running) run that started long ago (started 2h ago, finished_at IS
+	// NULL) with register is NEVER deleted because scenario-runner will still
+	// reach the barrier and read it.
 	seedApplyRun(t, ctx, pool, "running", "h3.example.com", "inc-1", "running", oldFinished.Add(-time.Hour), nil)
 	seedTaskRegister(t, ctx, pool, "running", "h3.example.com", 0)
 
 	p := reaper.NewPurger(pool)
-	// grace = 1h → 2 register-строки old-term попадают; fresh-term (1m) и
-	// running (нет finished_at) — нет.
+	// grace = 1h: 2 register rows for old-term match; fresh-term (1m) and running
+	// without finished_at do not.
 	deleted, err := p.PurgeApplyTaskRegister(ctx, time.Hour, 100)
 	if err != nil {
 		t.Fatalf("PurgeApplyTaskRegister: %v", err)
@@ -974,12 +979,12 @@ func TestIntegration_PurgeApplyTaskRegister(t *testing.T) {
 	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM apply_task_register").Scan(&left); err != nil {
 		t.Fatalf("count: %v", err)
 	}
-	// Остались: fresh-term (1) + running (1).
+	// Left: fresh-term (1) + running (1).
 	if left != 2 {
 		t.Errorf("rows left = %d, want 2 (fresh-term + running)", left)
 	}
 
-	// register активного прогона должен пережить любой purge.
+	// register for an active run must survive any purge.
 	var runningReg int64
 	if err := pool.QueryRow(ctx,
 		"SELECT COUNT(*) FROM apply_task_register WHERE apply_id = 'running'").Scan(&runningReg); err != nil {
@@ -989,22 +994,22 @@ func TestIntegration_PurgeApplyTaskRegister(t *testing.T) {
 		t.Errorf("running register left = %d, want 1 (running never purged)", runningReg)
 	}
 
-	// apply_runs не тронут: правило чистит только register, сам прогон
-	// остаётся под purge_apply_runs (30d).
+	// apply_runs are untouched: the rule cleans only register rows, while the run
+	// itself remains under purge_apply_runs (30d).
 	var runsLeft int64
 	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM apply_runs").Scan(&runsLeft); err != nil {
 		t.Fatalf("count apply_runs: %v", err)
 	}
 	if runsLeft != 3 {
-		t.Errorf("apply_runs left = %d, want 3 (register-purge не трогает apply_runs)", runsLeft)
+		t.Errorf("apply_runs left = %d, want 3 (register purge does not touch apply_runs)", runsLeft)
 	}
 }
 
-// seedVoyageWithStatus вставляет voyage в заданном статусе/finished_at.
-// Для running проставляет claim-поля (voyages_running_claim_consistency);
-// для терминалов finished_at обязателен (voyages_terminal_finished_at).
-// cadenceID nil → ручной прогон; populated → спавн от Cadence (для guard
-// «purge детей не трогает активное расписание»).
+// seedVoyageWithStatus inserts a voyage with the given status/finished_at. For
+// running it fills claim fields (voyages_running_claim_consistency); for
+// terminals finished_at is required (voyages_terminal_finished_at). cadenceID
+// nil means manual run; populated means spawned from Cadence for the guard that
+// purging children does not touch active schedule.
 func seedVoyageWithStatus(t *testing.T, ctx context.Context, pool *pgxpool.Pool, voyageID, aid, status string, finishedAt *time.Time, cadenceID *string) {
 	t.Helper()
 	switch status {
@@ -1026,8 +1031,8 @@ func seedVoyageWithStatus(t *testing.T, ctx context.Context, pool *pgxpool.Pool,
 	}
 }
 
-// seedVoyageTargetRow вставляет Leg-строку (FK voyage_id → voyages ON DELETE
-// CASCADE) для проверки каскадного сноса при purge_voyages.
+// seedVoyageTargetRow inserts a Leg row (FK voyage_id -> voyages ON DELETE
+// CASCADE) to verify cascading deletion in purge_voyages.
 func seedVoyageTargetRow(t *testing.T, ctx context.Context, pool *pgxpool.Pool, voyageID, targetID string) {
 	t.Helper()
 	const q = `INSERT INTO voyage_targets (voyage_id, target_kind, target_id, batch_index, status)
@@ -1037,8 +1042,8 @@ func seedVoyageTargetRow(t *testing.T, ctx context.Context, pool *pgxpool.Pool, 
 	}
 }
 
-// seedCadenceRow вставляет минимальное АКТИВНОЕ расписание (interval-kind).
-// Используется как guard: purge истории прогонов НЕ должен трогать cadences.
+// seedCadenceRow inserts a minimal ACTIVE schedule (interval-kind). It is used
+// as a guard: purging run history must NOT touch cadences.
 func seedCadenceRow(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id, aid string) {
 	t.Helper()
 	const q = `INSERT INTO cadences (id, name, schedule_kind, interval_seconds, overlap_policy,
@@ -1049,16 +1054,17 @@ func seedCadenceRow(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id, a
 	}
 }
 
-// TestIntegration_PurgeVoyages — end-to-end проверка `purge_voyages(interval,
-// integer)` (ADR-046 §79): удаление finished voyages (succeeded/failed/
-// partial_failed/cancelled) старше max_age; scheduled/pending/running и свежие
-// — на месте. Guard-инварианты:
-//   - voyage_targets уносятся ON DELETE CASCADE (нет битых Leg-строк);
-//   - активная Cadence (расписание-источник) НЕ тронута, её back-link voyage
-//     удалён без сноса самого расписания (FK ON DELETE SET NULL направлен от
-//     voyage к cadence — purge детей не трогает родителя);
-//   - ephemeral-Tiding с voyage_id удалённого прогона остаётся валидным для
-//     `purge_orphan_ephemeral_tidings` (soft-link без FK, битой ссылки нет).
+// TestIntegration_PurgeVoyages is an end-to-end check of
+// `purge_voyages(interval, integer)` (ADR-046 section 79): deleting finished
+// voyages (succeeded/failed/partial_failed/cancelled) older than max_age;
+// scheduled/pending/running and fresh rows remain. Guard invariants:
+//   - voyage_targets are removed by ON DELETE CASCADE, leaving no broken Leg rows;
+//   - active Cadence (source schedule) is NOT touched, and its back-link voyage
+//     is deleted without deleting the schedule itself. FK ON DELETE SET NULL is
+//     directed from voyage to cadence, so purging children does not touch parent;
+//   - ephemeral Tiding with voyage_id of the deleted run remains valid for
+//     `purge_orphan_ephemeral_tidings` because it is a soft link with no FK, so
+//     there is no broken reference.
 func TestIntegration_PurgeVoyages(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -1074,26 +1080,26 @@ func TestIntegration_PurgeVoyages(t *testing.T) {
 	oldFinished := now.Add(-60 * 24 * time.Hour)
 	freshFinished := now.Add(-1 * time.Hour)
 
-	// Активное расписание — guard: его дети-прогоны чистятся, но само оно нет.
+	// Active schedule guard: its child runs are cleaned, but the schedule itself is not.
 	seedCadenceRow(t, ctx, pool, "cad-1", "archon-v")
 
-	// 4 старых finished разных терминальных статусов — попадут под правило.
+	// 4 old finished rows in different terminal statuses match the rule.
 	for _, st := range []string{"succeeded", "failed", "partial_failed", "cancelled"} {
 		seedVoyageWithStatus(t, ctx, pool, "old-"+st, "archon-v", st, &oldFinished, nil)
 	}
-	// Старый succeeded, спавненный от Cadence (cadence_id populated) + Leg-строка
-	// — проверяем каскад voyage_targets и сохранность cadences.
+	// Old succeeded row spawned from Cadence (cadence_id populated) plus Leg row:
+	// verify voyage_targets cascade and cadences are preserved.
 	cadID := "cad-1"
 	seedVoyageWithStatus(t, ctx, pool, "old-from-cadence", "archon-v", "succeeded", &oldFinished, &cadID)
 	seedVoyageTargetRow(t, ctx, pool, "old-from-cadence", "h1.example.com")
 	seedVoyageTargetRow(t, ctx, pool, "old-from-cadence", "h2.example.com")
-	// ephemeral-Tiding (нужен Herald + soft-link voyage_id) на удаляемый прогон.
+	// ephemeral Tiding (needs Herald + soft-link voyage_id) for the deleted run.
 	seedHeraldRaw(t, ctx, "hook-v", "archon-v")
 	seedEphemeralTiding(t, ctx, "eph-old-from-cadence", "hook-v", "old-from-cadence")
 
-	// Свежий finished — НЕ старше max_age, остаётся.
+	// Fresh finished is NOT older than max_age and remains.
 	seedVoyageWithStatus(t, ctx, pool, "fresh-succeeded", "archon-v", "succeeded", &freshFinished, nil)
-	// Незавершённые — НИКОГДА не purge.
+	// Unfinished rows are NEVER purged.
 	seedVoyageWithStatus(t, ctx, pool, "pending-old", "archon-v", "pending", nil, nil)
 	seedVoyageWithStatus(t, ctx, pool, "scheduled-old", "archon-v", "scheduled", nil, nil)
 	seedVoyageWithStatus(t, ctx, pool, "running-old", "archon-v", "running", nil, nil)
@@ -1104,10 +1110,10 @@ func TestIntegration_PurgeVoyages(t *testing.T) {
 		t.Fatalf("PurgeVoyages: %v", err)
 	}
 	if deleted != 5 {
-		t.Errorf("deleted = %d, want 5 (4 терминала + 1 from-cadence)", deleted)
+		t.Errorf("deleted = %d, want 5 (4 terminals + 1 from-cadence)", deleted)
 	}
 
-	// Остались: fresh-succeeded + pending + scheduled + running.
+	// Left: fresh-succeeded + pending + scheduled + running.
 	var left int64
 	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM voyages").Scan(&left); err != nil {
 		t.Fatalf("count voyages: %v", err)
@@ -1115,7 +1121,7 @@ func TestIntegration_PurgeVoyages(t *testing.T) {
 	if left != 4 {
 		t.Errorf("voyages left = %d, want 4 (fresh + pending + scheduled + running)", left)
 	}
-	// Незавершённые статусы должны пережить любой purge.
+	// Unfinished statuses must survive any purge.
 	var active int64
 	if err := pool.QueryRow(ctx,
 		"SELECT COUNT(*) FROM voyages WHERE status IN ('pending', 'scheduled', 'running')").Scan(&active); err != nil {
@@ -1125,7 +1131,7 @@ func TestIntegration_PurgeVoyages(t *testing.T) {
 		t.Errorf("active voyages left = %d, want 3 (pending/scheduled/running never purged)", active)
 	}
 
-	// КАСКАД: voyage_targets удалённого прогона снесены ON DELETE CASCADE.
+	// CASCADE: voyage_targets for deleted run were removed by ON DELETE CASCADE.
 	var targetsLeft int64
 	if err := pool.QueryRow(ctx,
 		"SELECT COUNT(*) FROM voyage_targets WHERE voyage_id = 'old-from-cadence'").Scan(&targetsLeft); err != nil {
@@ -1135,31 +1141,32 @@ func TestIntegration_PurgeVoyages(t *testing.T) {
 		t.Errorf("voyage_targets left = %d, want 0 (ON DELETE CASCADE)", targetsLeft)
 	}
 
-	// GUARD: активное расписание НЕ тронуто (purge детей не трогает родителя).
+	// GUARD: active schedule is NOT touched because purging children does not touch parent.
 	var cadLeft int64
 	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM cadences WHERE id = 'cad-1'").Scan(&cadLeft); err != nil {
 		t.Fatalf("count cadences: %v", err)
 	}
 	if cadLeft != 1 {
-		t.Errorf("cadences left = %d, want 1 (активное расписание не purge-ится)", cadLeft)
+		t.Errorf("cadences left = %d, want 1 (active schedule is not purged)", cadLeft)
 	}
 
-	// Soft-link ephemeral-Tiding на удалённый voyage остаётся (без FK на voyages);
-	// его подберёт purge_orphan_ephemeral_tidings по предикату NOT EXISTS voyages.
-	// Здесь важно лишь, что purge_voyages НЕ упал на FK и не оставил битой ссылки.
+	// Soft-link ephemeral Tiding for deleted voyage remains, with no FK to
+	// voyages. purge_orphan_ephemeral_tidings will pick it up through NOT EXISTS
+	// voyages. Here it matters only that purge_voyages did NOT fail on FK and did
+	// not leave a broken reference.
 	var ephLeft int64
 	if err := pool.QueryRow(ctx,
 		"SELECT COUNT(*) FROM tidings WHERE name = 'eph-old-from-cadence'").Scan(&ephLeft); err != nil {
 		t.Fatalf("count ephemeral tiding: %v", err)
 	}
 	if ephLeft != 1 {
-		t.Errorf("ephemeral tiding left = %d, want 1 (soft-link, снимается отдельным правилом)", ephLeft)
+		t.Errorf("ephemeral tiding left = %d, want 1 (soft link, removed by separate rule)", ephLeft)
 	}
 }
 
-// TestIntegration_PurgeVoyages_BatchLimit — batch_size ограничивает размер
-// одного DELETE-прохода (parity purge_apply_runs): 5 старых терминалов, batch=2
-// → первый проход удаляет 2, остаются 3.
+// TestIntegration_PurgeVoyages_BatchLimit: batch_size limits one DELETE pass
+// size, matching purge_apply_runs. With 5 old terminals and batch=2, the first
+// pass deletes 2 and leaves 3.
 func TestIntegration_PurgeVoyages_BatchLimit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -1194,13 +1201,14 @@ func TestIntegration_PurgeVoyages_BatchLimit(t *testing.T) {
 	}
 }
 
-// TestIntegration_ReclaimApplyRuns — end-to-end проверка recovery-скана
-// (ADR-027 amend, S4): реклеймится ТОЛЬКО недо-доставленное (claimed с
-// claim_expires_at < NOW() — умер ДО отдачи Soul-у) → planned со сбросом
-// claim_by_kid/claim_at/claim_expires_at; attempt СОХРАНЯЕТСЯ. КЛЮЧЕВОЙ
-// инвариант: dispatched с протухшим lease НЕ трогается (после отдачи прогоном
-// владеет Soul, пере-claim = двойной apply). running тоже больше не реклеймится.
-// Живые Ward (claim_expires_at > NOW) и planned/терминальные строки не трогаются.
+// TestIntegration_ReclaimApplyRuns is an end-to-end check of the recovery scan
+// (ADR-027 amend, S4): ONLY under-delivered rows are reclaimed, meaning claimed
+// with claim_expires_at < NOW() that died BEFORE delivery to Soul. They return
+// to planned with claim_by_kid/claim_at/claim_expires_at reset; attempt is
+// PRESERVED. KEY invariant: dispatched with expired lease is NOT touched because
+// after delivery Soul owns the run and re-claim would be double apply. running
+// is also no longer reclaimed. Live Wards (claim_expires_at > NOW) and
+// planned/terminal rows are not touched.
 func TestIntegration_ReclaimApplyRuns(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -1213,22 +1221,22 @@ func TestIntegration_ReclaimApplyRuns(t *testing.T) {
 	seedIncarnation(t, ctx, pool, "inc-1")
 
 	now := time.Now().UTC()
-	expired := now.Add(-1 * time.Minute) // lease протух
-	alive := now.Add(10 * time.Minute)   // lease ещё живой
+	expired := now.Add(-1 * time.Minute) // lease expired
+	alive := now.Add(10 * time.Minute)   // lease still alive
 
-	// 1 протухший Ward, умерший ДО отдачи (claimed) — ЕДИНСТВЕННЫЙ реклеймится.
+	// 1 expired Ward that died BEFORE delivery (claimed), the ONLY reclaimed row.
 	seedClaimedApplyRun(t, ctx, pool, "zombie-claimed", "h1.example.com", "inc-1", "claimed", 1, expired)
-	// КЛЮЧЕВОЙ инвариант: dispatched с протухшим lease — НЕ трогать (отдано Soul-у,
-	// пере-claim = двойной apply).
+	// KEY invariant: dispatched with expired lease is NOT touched because it was
+	// delivered to Soul, and re-claim would be double apply.
 	seedClaimedApplyRun(t, ctx, pool, "dispatched-expired", "h2.example.com", "inc-1", "dispatched", 2, expired)
-	// running с протухшим lease (vestigial) — больше НЕ реклеймится.
+	// running with expired lease (vestigial) is no longer reclaimed.
 	seedClaimedApplyRun(t, ctx, pool, "zombie-running", "h6.example.com", "inc-1", "running", 3, expired)
-	// 1 живой Ward (claim_expires_at в будущем) — НЕ трогать.
+	// 1 live Ward with claim_expires_at in the future is NOT touched.
 	seedClaimedApplyRun(t, ctx, pool, "alive-claimed", "h3.example.com", "inc-1", "claimed", 1, alive)
-	// 1 planned (свободно, claim-колонки NULL) — НЕ трогать (уже в очереди).
+	// 1 planned row (free, claim columns NULL) is NOT touched because it is already queued.
 	seedApplyRun(t, ctx, pool, "free-planned", "h4.example.com", "inc-1", "planned", now.Add(-time.Hour), nil)
-	// 1 терминальный success с протухшим claim_expires_at — НЕ трогать
-	// (статус не claimed).
+	// 1 terminal success with expired claim_expires_at is NOT touched because
+	// status is not claimed.
 	seedClaimedApplyRun(t, ctx, pool, "done-success", "h5.example.com", "inc-1", "success", 1, expired)
 
 	p := reaper.NewPurger(pool)
@@ -1237,11 +1245,11 @@ func TestIntegration_ReclaimApplyRuns(t *testing.T) {
 		t.Fatalf("ReclaimApplyRuns: %v", err)
 	}
 	if reclaimed != 1 {
-		t.Errorf("reclaimed = %d, want 1 (только zombie-claimed)", reclaimed)
+		t.Errorf("reclaimed = %d, want 1 (only zombie-claimed)", reclaimed)
 	}
 
-	// Недо-доставленный claimed вернулся в planned, владелец/lease сброшены,
-	// attempt СОХРАНЁН.
+	// Under-delivered claimed row returned to planned, owner/lease reset, attempt
+	// PRESERVED.
 	status, attempt, kid := applyRunSnapshot(t, ctx, pool, "zombie-claimed", "h1.example.com")
 	if status != "planned" {
 		t.Errorf("zombie-claimed: status = %q, want planned", status)
@@ -1253,32 +1261,32 @@ func TestIntegration_ReclaimApplyRuns(t *testing.T) {
 		t.Errorf("zombie-claimed: claim_by_kid = %v, want NULL (claim released)", *kid)
 	}
 
-	// КЛЮЧЕВОЙ инвариант: dispatched с протухшим lease НЕ тронут (Soul владеет).
+	// KEY invariant: dispatched with expired lease is untouched because Soul owns it.
 	if status, _, kid := applyRunSnapshot(t, ctx, pool, "dispatched-expired", "h2.example.com"); status != "dispatched" || kid == nil {
-		t.Errorf("dispatched-expired: status=%q kid=%v; want dispatched + non-NULL kid (Soul владеет после отдачи, НЕ реклеймить)", status, kid)
+		t.Errorf("dispatched-expired: status=%q kid=%v; want dispatched + non-NULL kid (Soul owns after delivery, do NOT reclaim)", status, kid)
 	}
-	// running с протухшим lease НЕ тронут (vestigial, больше не реклеймится).
+	// running with expired lease is untouched (vestigial, no longer reclaimed).
 	if status, _, kid := applyRunSnapshot(t, ctx, pool, "zombie-running", "h6.example.com"); status != "running" || kid == nil {
-		t.Errorf("zombie-running: status=%q kid=%v; want running + non-NULL kid (running больше не реклеймится)", status, kid)
+		t.Errorf("zombie-running: status=%q kid=%v; want running + non-NULL kid (running is no longer reclaimed)", status, kid)
 	}
 
-	// Живой Ward не тронут.
+	// Live Ward is untouched.
 	if status, _, kid := applyRunSnapshot(t, ctx, pool, "alive-claimed", "h3.example.com"); status != "claimed" || kid == nil {
 		t.Errorf("alive-claimed: status=%q kid=%v; want claimed + non-NULL kid (alive Ward untouched)", status, kid)
 	}
-	// planned не тронут.
+	// planned is untouched.
 	if status, _, _ := applyRunSnapshot(t, ctx, pool, "free-planned", "h4.example.com"); status != "planned" {
 		t.Errorf("free-planned: status=%q; want planned (already queued)", status)
 	}
-	// Терминальный success не тронут.
+	// Terminal success is untouched.
 	if status, _, _ := applyRunSnapshot(t, ctx, pool, "done-success", "h5.example.com"); status != "success" {
 		t.Errorf("done-success: status=%q; want success (terminal untouched)", status)
 	}
 }
 
-// TestIntegration_ReclaimApplyRuns_BatchLimit — recovery уважает batch_size:
-// при batch=1 за один прогон возвращается ровно одна строка, остальные зомби
-// остаются для следующего прогона (drain-pattern, как у прочих правил).
+// TestIntegration_ReclaimApplyRuns_BatchLimit: recovery respects batch_size. At
+// batch=1, one run returns exactly one row, and the other zombies remain for the
+// next run, following the same drain pattern as other rules.
 func TestIntegration_ReclaimApplyRuns_BatchLimit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -1315,12 +1323,12 @@ func TestIntegration_ReclaimApplyRuns_BatchLimit(t *testing.T) {
 	}
 }
 
-// TestIntegration_PurgeAuditOld — end-to-end проверка
+// TestIntegration_PurgeAuditOld is an end-to-end check.
 // `purge_audit_old(interval, integer)`:
 //
-//  1. Inserts 5 audit-записей: 3 старше 365d, 2 свежих.
-//  2. Покрывает Purger.PurgeAuditOld(365d, 100).
-//  3. Assert: возвращено 3, в таблице осталось 2.
+//  1. Inserts 5 audit records: 3 older than 365d, 2 fresh.
+//  2. Covers Purger.PurgeAuditOld(365d, 100).
+//  3. Asserts 3 returned, 2 left in table.
 func TestIntegration_PurgeAuditOld(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -1333,8 +1341,8 @@ func TestIntegration_PurgeAuditOld(t *testing.T) {
 	insert := `INSERT INTO audit_log (audit_id, created_at, event_type, source, payload)
 		VALUES ($1, $2, 'config.reload_succeeded', 'signal', '{}'::jsonb)`
 	for i, ts := range []time.Time{expiredAt, expiredAt, expiredAt, freshAt, freshAt} {
-		// audit.NewULID() — Crockford-base32 26-char ULID, совместим с
-		// будущим CHECK constraint на формат audit_id (M0.6+).
+		// audit.NewULID() is Crockford-base32 26-char ULID, compatible with a
+		// future CHECK constraint on audit_id format (M0.6+).
 		auditID := audit.NewULID()
 		if _, err := pool.Exec(ctx, insert, auditID, ts); err != nil {
 			t.Fatalf("insert[%d]: %v", i, err)
@@ -1359,9 +1367,9 @@ func TestIntegration_PurgeAuditOld(t *testing.T) {
 	}
 }
 
-// seedStateHistory вставляет state_history-snapshot для существующей incarnation.
-// scenario — произвольная метка (`deploy`, `migration`, …); at задаёт caller для
-// контроля порядка ORDER BY at DESC.
+// seedStateHistory inserts a state_history snapshot for an existing
+// incarnation. scenario is an arbitrary label (`deploy`, `migration`, ...); at
+// is set by caller to control ORDER BY at DESC.
 func seedStateHistory(t *testing.T, ctx context.Context, pool *pgxpool.Pool, historyID, incarnation, scenario string, at time.Time) {
 	t.Helper()
 	const q = `INSERT INTO state_history
@@ -1372,8 +1380,8 @@ func seedStateHistory(t *testing.T, ctx context.Context, pool *pgxpool.Pool, his
 	}
 }
 
-// countArchivedStateHistory возвращает (всего, archived) snapshots для
-// incarnation. Используется как assert-helper в integration-тестах правила
+// countArchivedStateHistory returns (total, archived) snapshots for an
+// incarnation. Used as an assert helper in integration tests for the rule.
 // archive_state_history.
 func countArchivedStateHistory(t *testing.T, ctx context.Context, pool *pgxpool.Pool, incarnation string) (total, archived int64) {
 	t.Helper()
@@ -1386,15 +1394,15 @@ func countArchivedStateHistory(t *testing.T, ctx context.Context, pool *pgxpool.
 }
 
 // TestIntegration_ArchiveStateHistory_KeepsLastN — pre-fill N+10 active
-// snapshots → запускаем правило с keep_last_n=N, keep_version_bump=true (нет
-// migration-снимков) → ожидаем archived_at IS NOT NULL у 10 старейших.
+// snapshots -> run the rule with keep_last_n=N, keep_version_bump=true (no
+// migration snapshots) -> expect archived_at IS NOT NULL for the 10 oldest.
 func TestIntegration_ArchiveStateHistory_KeepsLastN(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	pool := fixturePool(t)
 	// state_history.incarnation_name → incarnation(name) ON DELETE CASCADE; TRUNCATE
-	// CASCADE подчищает state_history между подтестами.
+	// CASCADE cleans state_history between subtests.
 	if _, err := pool.Exec(ctx, "TRUNCATE incarnation CASCADE"); err != nil {
 		t.Fatalf("truncate incarnation: %v", err)
 	}
@@ -1406,7 +1414,7 @@ func TestIntegration_ArchiveStateHistory_KeepsLastN(t *testing.T) {
 
 	now := time.Now().UTC()
 	for i := 0; i < total; i++ {
-		// at — от старого к новому; (total-1-i) = старейший имеет наибольший offset.
+		// at goes from old to new; (total-1-i) means the oldest has the largest offset.
 		ts := now.Add(-time.Duration(total-1-i) * time.Minute)
 		seedStateHistory(t, ctx, pool, audit.NewULID(), incName, "deploy", ts)
 	}
@@ -1422,7 +1430,7 @@ func TestIntegration_ArchiveStateHistory_KeepsLastN(t *testing.T) {
 
 	gotTotal, gotArchived := countArchivedStateHistory(t, ctx, pool, incName)
 	if gotTotal != total {
-		t.Errorf("total rows = %d, want %d (физическое удаление запрещено)", gotTotal, total)
+		t.Errorf("total rows = %d, want %d (physical deletion is forbidden)", gotTotal, total)
 	}
 	if gotArchived != 10 {
 		t.Errorf("archived rows = %d, want 10", gotArchived)
@@ -1430,9 +1438,9 @@ func TestIntegration_ArchiveStateHistory_KeepsLastN(t *testing.T) {
 }
 
 // TestIntegration_ArchiveStateHistory_ExcludesVersionBump — pre-fill N+5
-// snapshots, 2 из них version-bump (scenario='migration') ВНУТРИ старого
-// хвоста → при keep_version_bump=true они НЕ архивируются: archived count = 3
-// (не-migration хвостовые), version-bump-snapshots остаются активными.
+// snapshots, 2 of them version-bump (scenario='migration') INSIDE the old tail.
+// With keep_version_bump=true they are NOT archived: archived count = 3
+// non-migration tail rows, and version-bump snapshots remain active.
 func TestIntegration_ArchiveStateHistory_ExcludesVersionBump(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -1448,14 +1456,14 @@ func TestIntegration_ArchiveStateHistory_ExcludesVersionBump(t *testing.T) {
 	seedIncarnation(t, ctx, pool, incName)
 
 	now := time.Now().UTC()
-	// Хвост из 5 старейших (rn > 50): индексы 0..4 в порядке by at ASC; 2 из них
-	// (положения 1 и 3) пишем как scenario='migration' — должны остаться активны.
+	// Tail of 5 oldest (rn > 50): indexes 0..4 in at ASC order; write 2 of them
+	// (positions 1 and 3) as scenario='migration', and they must remain active.
 	migrationPositions := map[int]bool{1: true, 3: true}
 	wantArchived := int64(0)
 	for i := 0; i < total; i++ {
 		ts := now.Add(-time.Duration(total-1-i) * time.Minute)
 		scenario := "deploy"
-		isTail := i < (total - keepLastN) // первые 5 = старый хвост
+		isTail := i < (total - keepLastN) // first 5 = old tail
 		if isTail && migrationPositions[i] {
 			scenario = "migration"
 		} else if isTail {
@@ -1464,7 +1472,7 @@ func TestIntegration_ArchiveStateHistory_ExcludesVersionBump(t *testing.T) {
 		seedStateHistory(t, ctx, pool, audit.NewULID(), incName, scenario, ts)
 	}
 	if wantArchived != 3 {
-		t.Fatalf("test arithmetic: wantArchived = %d, want 3 (5 хвостовых − 2 migration)", wantArchived)
+		t.Fatalf("test arithmetic: wantArchived = %d, want 3 (5 tail rows - 2 migration)", wantArchived)
 	}
 
 	p := reaper.NewPurger(pool)
@@ -1473,10 +1481,10 @@ func TestIntegration_ArchiveStateHistory_ExcludesVersionBump(t *testing.T) {
 		t.Fatalf("ArchiveStateHistory: %v", err)
 	}
 	if got != wantArchived {
-		t.Errorf("archived = %d, want %d (исключаем migration-snapshots)", got, wantArchived)
+		t.Errorf("archived = %d, want %d (excluding migration snapshots)", got, wantArchived)
 	}
 
-	// version-bump-snapshots должны остаться активными даже при rn > keepLastN.
+	// version-bump snapshots must remain active even with rn > keepLastN.
 	const q = `SELECT COUNT(*) FROM state_history
 		WHERE incarnation_name = $1 AND scenario = 'migration' AND archived_at IS NULL`
 	var activeMigration int64
@@ -1484,13 +1492,14 @@ func TestIntegration_ArchiveStateHistory_ExcludesVersionBump(t *testing.T) {
 		t.Fatalf("count active migration: %v", err)
 	}
 	if activeMigration != 2 {
-		t.Errorf("active migration snapshots = %d, want 2 (защищены keep_version_bump=true)", activeMigration)
+		t.Errorf("active migration snapshots = %d, want 2 (protected by keep_version_bump=true)", activeMigration)
 	}
 }
 
-// TestIntegration_ArchiveStateHistory_KeepVersionBumpFalse — с keep_version_bump=false
-// правило архивирует ВСЁ сверх keep_last_n, включая migration-snapshots. Покрывает
-// явный opt-out оператора (например, для тестового стенда без recovery-требований).
+// TestIntegration_ArchiveStateHistory_KeepVersionBumpFalse: with
+// keep_version_bump=false, the rule archives EVERYTHING beyond keep_last_n,
+// including migration snapshots. Covers explicit operator opt-out, for example
+// for a test stand without recovery requirements.
 func TestIntegration_ArchiveStateHistory_KeepVersionBumpFalse(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -1505,8 +1514,8 @@ func TestIntegration_ArchiveStateHistory_KeepVersionBumpFalse(t *testing.T) {
 	seedIncarnation(t, ctx, pool, incName)
 
 	now := time.Now().UTC()
-	// 5 snapshots: 0 = старейший (migration), 1..2 = deploy, 3..4 = deploy (новейшие).
-	// keep_last_n=3 → snapshots 0..1 в хвосте; при keep_version_bump=false оба архивируются.
+	// 5 snapshots: 0 = oldest (migration), 1..2 = deploy, 3..4 = deploy (newest).
+	// keep_last_n=3 -> snapshots 0..1 are in the tail; with keep_version_bump=false both are archived.
 	seedStateHistory(t, ctx, pool, audit.NewULID(), incName, "migration", now.Add(-5*time.Minute))
 	seedStateHistory(t, ctx, pool, audit.NewULID(), incName, "deploy", now.Add(-4*time.Minute))
 	seedStateHistory(t, ctx, pool, audit.NewULID(), incName, "deploy", now.Add(-3*time.Minute))
@@ -1519,21 +1528,22 @@ func TestIntegration_ArchiveStateHistory_KeepVersionBumpFalse(t *testing.T) {
 		t.Fatalf("ArchiveStateHistory: %v", err)
 	}
 	if got != 2 {
-		t.Errorf("archived = %d, want 2 (включая migration при keep_version_bump=false)", got)
+		t.Errorf("archived = %d, want 2 (including migration with keep_version_bump=false)", got)
 	}
 
 	gotTotal, gotArchived := countArchivedStateHistory(t, ctx, pool, incName)
 	if gotTotal != 5 {
-		t.Errorf("total = %d, want 5 (физическое удаление запрещено)", gotTotal)
+		t.Errorf("total = %d, want 5 (physical deletion is forbidden)", gotTotal)
 	}
 	if gotArchived != 2 {
 		t.Errorf("archived = %d, want 2", gotArchived)
 	}
 }
 
-// TestIntegration_ArchiveStateHistory_PerIncarnation — N считается отдельно
-// для каждой incarnation. 70 snapshots на A (keep=50 → archived=20) + 30
-// snapshots на B (keep=50 → archived=0). Покрывает PARTITION BY в window-функции.
+// TestIntegration_ArchiveStateHistory_PerIncarnation: N is counted separately
+// for each incarnation. 70 snapshots on A (keep=50 -> archived=20) + 30
+// snapshots on B (keep=50 -> archived=0). Covers PARTITION BY in the window
+// function.
 func TestIntegration_ArchiveStateHistory_PerIncarnation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -1574,10 +1584,10 @@ func TestIntegration_ArchiveStateHistory_PerIncarnation(t *testing.T) {
 	}
 }
 
-// TestIntegration_ArchiveStateHistory_BatchLimit — batch ограничивает число
-// soft-deleted за один прогон. При batch=5 на «хвосте» из 10 кандидатов
-// архивируется ровно 5, остальное ждёт следующего прогона (drain-pattern).
-// Архивируются САМЫЕ СТАРЫЕ из кандидатов (rn DESC в подзапросе).
+// TestIntegration_ArchiveStateHistory_BatchLimit: batch limits soft-deleted rows
+// per run. With batch=5 on a tail of 10 candidates, exactly 5 are archived and
+// the rest wait for the next run (drain pattern). The OLDEST candidates are
+// archived first (rn DESC in subquery).
 func TestIntegration_ArchiveStateHistory_BatchLimit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -1592,7 +1602,7 @@ func TestIntegration_ArchiveStateHistory_BatchLimit(t *testing.T) {
 	seedIncarnation(t, ctx, pool, incName)
 
 	now := time.Now().UTC()
-	// 60 snapshots: 10 хвостовых (rn 51..60), 50 «живых» (rn 1..50).
+	// 60 snapshots: 10 tail rows (rn 51..60), 50 live rows (rn 1..50).
 	for i := 0; i < 60; i++ {
 		seedStateHistory(t, ctx, pool, audit.NewULID(), incName, "deploy", now.Add(-time.Duration(60-i)*time.Minute))
 	}
@@ -1606,7 +1616,7 @@ func TestIntegration_ArchiveStateHistory_BatchLimit(t *testing.T) {
 		t.Errorf("first batch archived = %d, want 5", got)
 	}
 
-	// Второй прогон добивает остаток.
+	// Second run finishes the remainder.
 	got2, err := p.ArchiveStateHistory(ctx, keepLastN, true, 5)
 	if err != nil {
 		t.Fatalf("ArchiveStateHistory (drain): %v", err)
@@ -1620,7 +1630,7 @@ func TestIntegration_ArchiveStateHistory_BatchLimit(t *testing.T) {
 		t.Errorf("total archived = %d, want 10", archived)
 	}
 
-	// Третий прогон — пусто (drain до 0).
+	// Third run is empty (drain to 0).
 	got3, err := p.ArchiveStateHistory(ctx, keepLastN, true, 5)
 	if err != nil {
 		t.Fatalf("ArchiveStateHistory (zero): %v", err)

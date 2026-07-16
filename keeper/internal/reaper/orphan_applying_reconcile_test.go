@@ -17,8 +17,8 @@ import (
 
 // --- fakes ---
 
-// fakeOrphanCandidatesQuerier — fakeQuerier для фазы 1 (SELECT кандидатов).
-// Возвращает запрограммированный набор (name, prev_kid, apply_id) либо error.
+// fakeOrphanCandidatesQuerier is a fakeQuerier for phase 1 (SELECT candidates).
+// It returns a programmed set of (name, prev_kid, apply_id) or an error.
 type fakeOrphanCandidatesQuerier struct {
 	calls   int
 	lastSQL string
@@ -73,7 +73,7 @@ func (r *fakeOrphanRows) Values() ([]any, error)                       { return 
 func (r *fakeOrphanRows) RawValues() [][]byte                          { return nil }
 func (r *fakeOrphanRows) Conn() *pgx.Conn                              { return nil }
 
-// fakePresence — программируемый presence-чек по KID.
+// fakePresence is a programmable presence check by KID.
 type fakePresence struct {
 	alive map[string]bool
 	err   error
@@ -88,10 +88,10 @@ func (p *fakePresence) InstanceAlive(_ context.Context, kid string) (bool, error
 	return p.alive[kid], nil
 }
 
-// fakeReleaser — программируемый исход снятия по name.
+// fakeReleaser is a programmable release outcome by name.
 type fakeReleaser struct {
-	result   map[string]error // name → результат (nil = снят)
-	released []string         // имена, для которых вызов вернул nil
+	result   map[string]error // name -> result (nil = released)
+	released []string         // names for which the call returned nil
 	calls    []releaseCall
 }
 
@@ -109,7 +109,7 @@ func (r *fakeReleaser) ReleaseApplyingOrphan(_ context.Context, name, orphanAppl
 	return err
 }
 
-// fakeReconcileAudit — счётчик emit-ов reaper.reconcile_orphan_applying.executed.
+// fakeReconcileAudit counts reaper.reconcile_orphan_applying.executed emits.
 type fakeReconcileAudit struct {
 	events []map[string]any
 }
@@ -131,11 +131,11 @@ func aliveMap(pairs ...string) map[string]bool {
 	return m
 }
 
-// --- (b) NULL-epoch фильтр: правило НЕ реклеймит applying без applying_by_kid ---
+// --- (b) NULL-epoch filter: rule does NOT reclaim applying without applying_by_kid ---
 
-// TestOrphanApplyingSQL_FiltersNullEpoch — SQL-предикат фазы 1 содержит
-// `applying_by_kid IS NOT NULL`: legacy/pre-082 (NULL-epoch) applying-строки в
-// набор кандидатов НЕ попадают, правило их НЕ реклеймит (документированный
+// TestOrphanApplyingSQL_FiltersNullEpoch: phase 1 SQL predicate contains
+// `applying_by_kid IS NOT NULL`: legacy/pre-082 (NULL-epoch) applying rows do
+// NOT enter the candidate set, and the rule does NOT reclaim them (documented
 // known-gap, ADR-027 amend (m-S1)).
 func TestOrphanApplyingSQL_FiltersNullEpoch(t *testing.T) {
 	for _, frag := range []string{
@@ -150,7 +150,7 @@ func TestOrphanApplyingSQL_FiltersNullEpoch(t *testing.T) {
 	}
 }
 
-// --- (c) presence-живой владелец → правило НЕ реклеймит (split-brain guard) ---
+// --- (c) presence-live owner -> rule does NOT reclaim (split-brain guard) ---
 
 func TestOrphanApplyingReconciler_PresenceAlive_NotReclaimed(t *testing.T) {
 	fq := &fakeOrphanCandidatesQuerier{rows: []orphanRow{
@@ -166,27 +166,27 @@ func TestOrphanApplyingReconciler_PresenceAlive_NotReclaimed(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if affected != 0 {
-		t.Errorf("affected = %d, want 0 (живой владелец — lock не осиротел)", affected)
+		t.Errorf("affected = %d, want 0 (live owner, lock is not orphaned)", affected)
 	}
 	if len(releaser.calls) != 0 {
-		t.Errorf("releaser вызван %d раз, want 0 (presence жив → НЕ снимаем)", len(releaser.calls))
+		t.Errorf("releaser called %d times, want 0 (presence is live, do NOT release)", len(releaser.calls))
 	}
 	if len(ad.events) != 0 {
 		t.Errorf("audit events = %d, want 0", len(ad.events))
 	}
 }
 
-// --- (d/e) presence-мёртвый + ReleaseApplyingOrphan no-op (live-rival FENCING-1
-// либо honest-terminal гонка single-winner) → правило НЕ засчитывает снятие ---
+// --- (d/e) dead presence + ReleaseApplyingOrphan no-op (live-rival FENCING-1
+// or honest-terminal single-winner race) -> rule does NOT count a release ---
 
 func TestOrphanApplyingReconciler_DeadOwner_ReleaseNoOp_NotCounted(t *testing.T) {
 	fq := &fakeOrphanCandidatesQuerier{rows: []orphanRow{
 		{name: "redis-prod", prevKID: strptr("keeper-dead"), applyID: strptr("apply-1")},
 	}}
 	presence := &fakePresence{alive: aliveMap("keeper-dead", "dead")}
-	// ReleaseApplyingOrphan вернёт ErrOrphanLockNotReleased — FENCING-1 (живой
-	// rival с другим apply_id) ИЛИ single-winner (честный финал прошлого владельца
-	// уже вывел строку из applying).
+	// ReleaseApplyingOrphan returns ErrOrphanLockNotReleased: FENCING-1 with a
+	// live rival using another apply_id, OR single-winner where the previous
+	// owner's honest terminal already moved the row out of applying.
 	releaser := &fakeReleaser{result: map[string]error{
 		"redis-prod": incarnation.ErrOrphanLockNotReleased,
 	}}
@@ -198,24 +198,24 @@ func TestOrphanApplyingReconciler_DeadOwner_ReleaseNoOp_NotCounted(t *testing.T)
 		t.Fatalf("Run: %v", err)
 	}
 	if affected != 0 {
-		t.Errorf("affected = %d, want 0 (release no-op — fencing внутри отбил)", affected)
+		t.Errorf("affected = %d, want 0 (release no-op, fencing rejected internally)", affected)
 	}
 	if len(releaser.calls) != 1 {
-		t.Errorf("releaser вызван %d раз, want 1 (presence мёртв → попытка снятия была)", len(releaser.calls))
+		t.Errorf("releaser called %d times, want 1 (presence is dead, release was attempted)", len(releaser.calls))
 	}
 	if len(ad.events) != 0 {
-		t.Errorf("audit events = %d, want 0 (снятия не было)", len(ad.events))
+		t.Errorf("audit events = %d, want 0 (no release happened)", len(ad.events))
 	}
 }
 
-// --- (f) presence-мёртвый, без соперника → applying снят, audit эмитнут ---
+// --- (f) dead presence, no rival -> applying released, audit emitted ---
 
 func TestOrphanApplyingReconciler_DeadOwner_Released(t *testing.T) {
 	fq := &fakeOrphanCandidatesQuerier{rows: []orphanRow{
 		{name: "redis-prod", prevKID: strptr("keeper-dead"), applyID: strptr("apply-7")},
 	}}
 	presence := &fakePresence{alive: aliveMap("keeper-dead", "dead")}
-	releaser := &fakeReleaser{result: map[string]error{"redis-prod": nil}} // снят
+	releaser := &fakeReleaser{result: map[string]error{"redis-prod": nil}} // released
 	ad := &fakeReconcileAudit{}
 	r := newOrphanApplyingReconcilerForTest(fq, presence, releaser, ad, silentLogger())
 
@@ -224,10 +224,10 @@ func TestOrphanApplyingReconciler_DeadOwner_Released(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if affected != 1 {
-		t.Errorf("affected = %d, want 1 (lock снят)", affected)
+		t.Errorf("affected = %d, want 1 (lock released)", affected)
 	}
 	if len(releaser.calls) != 1 || releaser.calls[0].applyID != "apply-7" {
-		t.Errorf("release calls = %+v, want один вызов с applyID=apply-7", releaser.calls)
+		t.Errorf("release calls = %+v, want one call with applyID=apply-7", releaser.calls)
 	}
 	if len(ad.events) != 1 {
 		t.Fatalf("audit events = %d, want 1 (executed)", len(ad.events))
@@ -238,7 +238,7 @@ func TestOrphanApplyingReconciler_DeadOwner_Released(t *testing.T) {
 	}
 }
 
-// --- presence-ошибка → fail-safe skip (НЕ снимаем при неизвестном presence) ---
+// --- presence error -> fail-safe skip (do NOT release when presence is unknown) ---
 
 func TestOrphanApplyingReconciler_PresenceError_FailSafeSkip(t *testing.T) {
 	fq := &fakeOrphanCandidatesQuerier{rows: []orphanRow{
@@ -250,22 +250,22 @@ func TestOrphanApplyingReconciler_PresenceError_FailSafeSkip(t *testing.T) {
 
 	affected, err := r.Run(context.Background(), 90*time.Second, 1000)
 	if err != nil {
-		t.Fatalf("Run: %v (ошибка presence одного кандидата не валит проход)", err)
+		t.Fatalf("Run: %v (presence error for one candidate must not fail the pass)", err)
 	}
 	if affected != 0 {
-		t.Errorf("affected = %d, want 0 (presence неизвестен → fail-safe skip)", affected)
+		t.Errorf("affected = %d, want 0 (presence unknown -> fail-safe skip)", affected)
 	}
 	if len(releaser.calls) != 0 {
-		t.Errorf("releaser вызван %d раз, want 0 (presence-ошибка → НЕ снимаем)", len(releaser.calls))
+		t.Errorf("releaser called %d times, want 0 (presence error -> do NOT release)", len(releaser.calls))
 	}
 }
 
-// --- defensive-skip: пустой epoch (legacy/ручная правка) → skip без presence ---
+// --- defensive skip: empty epoch (legacy/manual edit) -> skip without presence ---
 
 func TestOrphanApplyingReconciler_DefensiveSkip_EmptyEpoch(t *testing.T) {
 	fq := &fakeOrphanCandidatesQuerier{rows: []orphanRow{
-		{name: "a", prevKID: nil, applyID: strptr("apply-1")},  // нет prev_kid
-		{name: "b", prevKID: strptr("keeper-X"), applyID: nil}, // нет apply_id
+		{name: "a", prevKID: nil, applyID: strptr("apply-1")},  // no prev_kid
+		{name: "b", prevKID: strptr("keeper-X"), applyID: nil}, // no apply_id
 	}}
 	presence := &fakePresence{alive: aliveMap("keeper-X", "dead")}
 	releaser := &fakeReleaser{result: map[string]error{}}
@@ -276,17 +276,17 @@ func TestOrphanApplyingReconciler_DefensiveSkip_EmptyEpoch(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if affected != 0 {
-		t.Errorf("affected = %d, want 0 (неполный epoch — defensive-skip)", affected)
+		t.Errorf("affected = %d, want 0 (incomplete epoch, defensive skip)", affected)
 	}
 	if len(presence.calls) != 0 {
-		t.Errorf("presence вызван %d раз, want 0 (skip ДО presence-чека)", len(presence.calls))
+		t.Errorf("presence called %d times, want 0 (skip BEFORE presence check)", len(presence.calls))
 	}
 	if len(releaser.calls) != 0 {
-		t.Errorf("releaser вызван %d раз, want 0", len(releaser.calls))
+		t.Errorf("releaser called %d times, want 0", len(releaser.calls))
 	}
 }
 
-// --- presence-gate: nil presence-клиент → graceful no-op (default-ON безопасен) ---
+// --- presence gate: nil presence client -> graceful no-op (default-ON is safe) ---
 
 func TestOrphanApplyingReconciler_NilPresence_GracefulNoop(t *testing.T) {
 	fq := &fakeOrphanCandidatesQuerier{rows: []orphanRow{
@@ -296,17 +296,17 @@ func TestOrphanApplyingReconciler_NilPresence_GracefulNoop(t *testing.T) {
 
 	affected, err := r.Run(context.Background(), 90*time.Second, 1000)
 	if err != nil {
-		t.Fatalf("Run: %v (presence-gate — graceful no-op, не ошибка)", err)
+		t.Fatalf("Run: %v (presence gate is graceful no-op, not an error)", err)
 	}
 	if affected != 0 {
 		t.Errorf("affected = %d, want 0", affected)
 	}
 	if fq.calls != 0 {
-		t.Errorf("querier вызван %d раз, want 0 (presence-gate отсекает ДО SQL)", fq.calls)
+		t.Errorf("querier called %d times, want 0 (presence gate cuts off BEFORE SQL)", fq.calls)
 	}
 }
 
-// --- mixed: один живой, один мёртвый-снят, один мёртвый-no-op → affected=1 ---
+// --- mixed: one live, one dead-released, one dead-no-op -> affected=1 ---
 
 func TestOrphanApplyingReconciler_Mixed(t *testing.T) {
 	fq := &fakeOrphanCandidatesQuerier{rows: []orphanRow{
@@ -331,14 +331,14 @@ func TestOrphanApplyingReconciler_Mixed(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if affected != 1 {
-		t.Errorf("affected = %d, want 1 (только dead-released снят)", affected)
+		t.Errorf("affected = %d, want 1 (only dead-released was released)", affected)
 	}
 	if len(ad.events) != 1 || ad.events[0]["incarnation"] != "dead-released" {
-		t.Errorf("audit = %+v, want один executed для dead-released", ad.events)
+		t.Errorf("audit = %+v, want one executed event for dead-released", ad.events)
 	}
 }
 
-// --- propagation: ошибка SELECT кандидатов валит проход ---
+// --- propagation: SELECT candidates error fails the pass ---
 
 func TestOrphanApplyingReconciler_QueryError_Propagates(t *testing.T) {
 	want := errors.New("pg down")
@@ -353,7 +353,7 @@ func TestOrphanApplyingReconciler_QueryError_Propagates(t *testing.T) {
 func TestOrphanApplyingReconciler_NilPoolReturnsError(t *testing.T) {
 	r := &OrphanApplyingReconciler{pool: nil}
 	if _, err := r.Run(context.Background(), 90*time.Second, 1000); err == nil {
-		t.Fatal("ожидалась ошибка при nil pool")
+		t.Fatal("expected error with nil pool")
 	}
 }
 
@@ -368,8 +368,8 @@ func newReconcileDispatchRunner(rec *OrphanApplyingReconciler) *Runner {
 	}
 }
 
-// TestDispatch_ReconcileOrphanApplying_DefaultOnWhenAbsent: ключ отсутствует в
-// Rules → правило ВСЁ РАВНО исполняется (default-ON path-defaulting).
+// TestDispatch_ReconcileOrphanApplying_DefaultOnWhenAbsent: key is absent from
+// Rules, but the rule STILL executes through default-ON path defaulting.
 func TestDispatch_ReconcileOrphanApplying_DefaultOnWhenAbsent(t *testing.T) {
 	fq := &fakeOrphanCandidatesQuerier{}
 	rec := newOrphanApplyingReconcilerForTest(fq, &fakePresence{}, &fakeReleaser{}, nil, silentLogger())
@@ -378,12 +378,12 @@ func TestDispatch_ReconcileOrphanApplying_DefaultOnWhenAbsent(t *testing.T) {
 	r.dispatch(context.Background(), reclaimDispatchCfg(nil))
 
 	if fq.calls != 1 {
-		t.Fatalf("reconcile_orphan_applying должно исполниться при отсутствии ключа (default-ON); querier calls=%d, want 1", fq.calls)
+		t.Fatalf("reconcile_orphan_applying must execute when key is absent (default-ON); querier calls=%d, want 1", fq.calls)
 	}
 }
 
-// TestDispatch_ReconcileOrphanApplying_SkippedWhenDisabled: явный enabled:false
-// → правило ПРОПУЩЕНО.
+// TestDispatch_ReconcileOrphanApplying_SkippedWhenDisabled: explicit
+// enabled:false means the rule is SKIPPED.
 func TestDispatch_ReconcileOrphanApplying_SkippedWhenDisabled(t *testing.T) {
 	fq := &fakeOrphanCandidatesQuerier{}
 	rec := newOrphanApplyingReconcilerForTest(fq, &fakePresence{}, &fakeReleaser{}, nil, silentLogger())
@@ -395,6 +395,6 @@ func TestDispatch_ReconcileOrphanApplying_SkippedWhenDisabled(t *testing.T) {
 	r.dispatch(context.Background(), cfg)
 
 	if fq.calls != 0 {
-		t.Fatalf("reconcile_orphan_applying с enabled:false должно быть пропущено; querier calls=%d, want 0", fq.calls)
+		t.Fatalf("reconcile_orphan_applying with enabled:false must be skipped; querier calls=%d, want 0", fq.calls)
 	}
 }

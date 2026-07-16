@@ -8,10 +8,11 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// certBarrierYAML — keeper.yml с ГЛОБАЛЬНЫМ reaper.dry_run: false (типичный прод:
-// боевой purge включён) и правилом rotate_due_certs с плейсхолдерами под подмену.
-// Барьер R1: боевая ротация TLS не должна зависеть от глобального reaper.dry_run —
-// у rotate_due_certs собственный per-rule dry_run, default true.
+// certBarrierYAML is keeper.yml with GLOBAL reaper.dry_run: false (typical
+// production setup: live purge is enabled) and a rotate_due_certs rule with
+// replacement placeholders. R1 barrier: live TLS rotation must not depend on
+// global reaper.dry_run because rotate_due_certs has its own per-rule dry_run,
+// default true.
 const certBarrierYAML = `
 kid: keeper-test-01
 
@@ -58,9 +59,10 @@ reaper:
       rotate_threshold: 30d
 `
 
-// buildBarrierRunner собирает Runner с реальным CertRotator поверх fakeCertDB.
-// Возвращает runner + fake-пул (для ассерта casCalls: CAS active→rotating зовётся
-// только в боевом проходе rotateOne, поэтому casCalls>0 ⟺ боевая ротация была).
+// buildBarrierRunner builds Runner with a real CertRotator over fakeCertDB.
+// It returns runner plus fake pool. For the casCalls assert, CAS active->rotating
+// is called only in the live rotateOne path, so casCalls>0 means live rotation
+// happened.
 func buildBarrierRunner(t *testing.T, cfgYAML string, db *fakeCertDB) (*Runner, *config.Store[config.KeeperConfig]) {
 	t.Helper()
 	store := newTestStore(t, cfgYAML)
@@ -81,10 +83,10 @@ func buildBarrierRunner(t *testing.T, cfgYAML string, db *fakeCertDB) (*Runner, 
 	return rn, store
 }
 
-// TestRotateDueCerts_Barrier_DefaultDryRunSkipsRotation — R1-барьер: при
-// enabled:true БЕЗ явного per-rule dry_run:false боевая ротация НЕ идёт, даже если
-// глобальный reaper.dry_run:false (тот включает боевой purge). Индикатор — CAS
-// active→rotating не вызывался.
+// TestRotateDueCerts_Barrier_DefaultDryRunSkipsRotation is the R1 barrier:
+// with enabled:true but WITHOUT explicit per-rule dry_run:false, live rotation
+// does NOT run even when global reaper.dry_run:false enables live purge. The
+// indicator is that CAS active->rotating was not called.
 func TestRotateDueCerts_Barrier_DefaultDryRunSkipsRotation(t *testing.T) {
 	db := &fakeCertDB{
 		dueRows:    [][]any{dueRow("cert-1", "redis-prod", time.Now().Add(24*time.Hour))},
@@ -95,12 +97,13 @@ func TestRotateDueCerts_Barrier_DefaultDryRunSkipsRotation(t *testing.T) {
 	rn.dispatch(context.Background(), store.Get())
 
 	if db.casCalls != 0 {
-		t.Errorf("боевая ротация под default dry_run: casCalls = %d, want 0 (барьер держит)", db.casCalls)
+		t.Errorf("live rotation under default dry_run: casCalls = %d, want 0 (barrier holds)", db.casCalls)
 	}
 }
 
-// TestRotateDueCerts_Barrier_ExplicitFalseRotates — снятие барьера: явный
-// rotate_due_certs.dry_run:false включает боевую ротацию (due-cert проходит CAS).
+// TestRotateDueCerts_Barrier_ExplicitFalseRotates removes the barrier: explicit
+// rotate_due_certs.dry_run:false enables live rotation, so the due cert passes
+// CAS.
 func TestRotateDueCerts_Barrier_ExplicitFalseRotates(t *testing.T) {
 	body := replaceOnce(t, certBarrierYAML,
 		"rotate_due_certs:\n      enabled: true\n      rotate_threshold: 30d",
@@ -115,12 +118,12 @@ func TestRotateDueCerts_Barrier_ExplicitFalseRotates(t *testing.T) {
 	rn.dispatch(context.Background(), store.Get())
 
 	if db.casCalls == 0 {
-		t.Errorf("явный dry_run:false: casCalls = 0, want >=1 (боевая ротация должна идти)")
+		t.Errorf("explicit dry_run:false: casCalls = 0, want >=1 (live rotation must run)")
 	}
 }
 
-// TestRotateDueCerts_Barrier_ExplicitTrueSkips — явный dry_run:true идентичен
-// дефолту: ротации нет.
+// TestRotateDueCerts_Barrier_ExplicitTrueSkips: explicit dry_run:true matches
+// the default, so there is no rotation.
 func TestRotateDueCerts_Barrier_ExplicitTrueSkips(t *testing.T) {
 	body := replaceOnce(t, certBarrierYAML,
 		"rotate_due_certs:\n      enabled: true\n      rotate_threshold: 30d",
@@ -135,6 +138,6 @@ func TestRotateDueCerts_Barrier_ExplicitTrueSkips(t *testing.T) {
 	rn.dispatch(context.Background(), store.Get())
 
 	if db.casCalls != 0 {
-		t.Errorf("явный dry_run:true: casCalls = %d, want 0", db.casCalls)
+		t.Errorf("explicit dry_run:true: casCalls = %d, want 0", db.casCalls)
 	}
 }

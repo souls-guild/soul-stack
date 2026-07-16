@@ -8,58 +8,60 @@ import (
 	"time"
 )
 
-// vaultreconcile.go — исполнитель cross-store Reaper-правила
-// `reap_orphan_vault_keys` (report-only, ADR-026(h), GATE-2). В отличие от
-// [Purger] (чистый pgx-DELETE), это reconcile двух хранилищ: Vault KV (имена
-// приватников подписи Sigil) против Postgres-реестра `sigil_signing_keys`
-// (авторитетный набор живых ключей). Поэтому отдельный тип, а не метод Purger-а.
+// vaultreconcile.go implements the cross-store Reaper rule
+// `reap_orphan_vault_keys` (report-only, ADR-026(h), GATE-2). Unlike [Purger],
+// which is pure pgx DELETE, this reconciles two stores: Vault KV, containing
+// names of Sigil signing private keys, against the Postgres
+// `sigil_signing_keys` registry, the authoritative set of live keys. That is
+// why this is a separate type instead of a Purger method.
 //
-// Сирота = секрет `secret/keeper/sigil-keys/<key_id>` в Vault, для которого НЕТ
-// строки в `sigil_signing_keys` НИ в одном статусе (active И retired считаются
-// живыми — retired-приватник нужен для verify старых Sigil-ов). Возникает,
-// например, если Introduce записал приватник в Vault, а PG-вставка следом упала:
-// keyservice сознательно НЕ делает reverse-cleanup, поэтому Vault-секрет
-// остаётся брошенным.
+// An orphan is a Vault secret `secret/keeper/sigil-keys/<key_id>` that has NO
+// row in `sigil_signing_keys` in ANY status. active AND retired count as live
+// because a retired private key is still needed to verify old Sigils. This can
+// happen, for example, if Introduce wrote the private key to Vault but the
+// following PG insert failed. keyservice intentionally does NOT do reverse
+// cleanup, so the Vault secret remains abandoned.
 //
-// БЕЗОПАСНОСТЬ (инвариант правила):
-//   - report-only: правило ТОЛЬКО считает/метрит/логирует — ничего из Vault НЕ
-//     удаляет.
-//   - приватник НИКОГДА не читается: используются только LIST имён и metadata
-//     (created_time), data-путь секрета не запрашивается вовсе.
-//   - scope-prefix [orphanScanPrefix] ЗАШИТ в коде, НЕ берётся из конфига —
-//     правило физически не может сканировать другой Vault-путь.
+// SAFETY, the rule invariant:
+//   - report-only: the rule ONLY counts, emits metrics, and logs; it deletes
+//     nothing from Vault.
+//   - the private key is NEVER read: only LIST names and metadata (created_time)
+//     are used, and the secret data path is never requested.
+//   - scope-prefix [orphanScanPrefix] is HARDCODED, not read from config, so the
+//     rule physically cannot scan another Vault path.
 
-// orphanScanPrefix — единственный Vault-prefix, который сканирует правило.
-// ЗАШИТ в коде (scope-guard): сирота осмысленна ТОЛЬКО для приватников подписи
-// Sigil. relative-форма (mount подставляет vault-client).
+// orphanScanPrefix is the only Vault prefix scanned by the rule. It is
+// HARDCODED as a scope guard: orphan logic is meaningful ONLY for Sigil signing
+// private keys. This is the relative form; the vault client supplies the mount.
 const orphanScanPrefix = "keeper/sigil-keys"
 
-// orphanLogCap — сколько key_id осиротевших секретов логировать поимённо.
-// Остаток сворачивается в «and N more», чтобы Warn-лог не разрастался при
-// массовом дрейфе. key_id = SHA-256 SPKI hex — публичный идентификатор,
-// логировать безопасно (приватник в правило не попадает).
+// orphanLogCap is how many orphaned-secret key_id values to log by name. The
+// rest is folded into "and N more" so Warn logs do not explode during mass
+// drift. key_id is SHA-256 SPKI hex, a public identifier, so logging it is safe
+// because the private key never enters the rule.
 const orphanLogCap = 20
 
-// VaultKVLister — узкое подмножество vault-клиента, нужное reconcile-у: LIST
-// имён под prefix + read metadata (created_time) для grace. Реальный
-// [*keepervault.Client] удовлетворяет автоматически; тесты подставляют fake.
-// Намеренно НЕ включает ReadKV(data) — приватник не читаем (security-инвариант).
-// Экспортируется ради wiring-а в keeper/cmd/keeper (typed-nil guard).
+// VaultKVLister is the narrow vault-client subset needed by reconcile: LIST
+// names under prefix plus read metadata (created_time) for grace. Real
+// [*keepervault.Client] satisfies it automatically; tests use a fake. It
+// intentionally does NOT include ReadKV(data) because the private key is not
+// read, preserving the security invariant. Exported for wiring in
+// keeper/cmd/keeper (typed-nil guard).
 type VaultKVLister interface {
 	ListKV(ctx context.Context, prefix string) ([]string, error)
 	ReadKVMetadata(ctx context.Context, path string) (time.Time, error)
 }
 
-// liveKeyIDsReader — резолв авторитетного набора живых key_id из Postgres
-// (`sigil.ListAllKeyIDs` над pool, все статусы). Узкий интерфейс для подмены
-// в unit-тестах без поднятия PG.
+// liveKeyIDsReader resolves the authoritative set of live key_id values from
+// Postgres (`sigil.ListAllKeyIDs` over pool, all statuses). It is a narrow
+// interface for unit-test replacement without starting PG.
 type liveKeyIDsReader interface {
 	ListAllKeyIDs(ctx context.Context) (map[string]struct{}, error)
 }
 
-// VaultReconciler — исполнитель `reap_orphan_vault_keys`. Один экземпляр на
-// Keeper-процесс; конкурентно безопасен (vault-client и pool потокобезопасны,
-// собственного изменяемого состояния нет).
+// VaultReconciler runs `reap_orphan_vault_keys`. There is one instance per
+// Keeper process; it is concurrency-safe because the vault client and pool are
+// thread-safe and it has no mutable state of its own.
 type VaultReconciler struct {
 	vault VaultKVLister
 	keys  liveKeyIDsReader
@@ -67,13 +69,13 @@ type VaultReconciler struct {
 	now   func() time.Time
 }
 
-// NewVaultReconciler собирает исполнитель. vault может быть nil (Vault не
-// настроен в конфиге) — тогда [VaultReconciler.ReportOrphanVaultKeys] вернёт
-// (0, error) с понятным сообщением, и runner залогирует fail и пойдёт дальше
-// (правило по умолчанию выключено, типовой deploy его не зовёт).
+// NewVaultReconciler builds the runner. vault may be nil when Vault is not
+// configured; then [VaultReconciler.ReportOrphanVaultKeys] returns (0, error)
+// with a clear message, and runner logs the failure and continues. The rule is
+// disabled by default, so a typical deploy does not call it.
 //
-// now — источник времени для grace-сравнения; nil → [time.Now] (тесты
-// подменяют фиксированным временем).
+// now is the time source for grace comparison; nil means [time.Now]. Tests
+// replace it with a fixed time.
 func NewVaultReconciler(vault VaultKVLister, keys liveKeyIDsReader, log *slog.Logger, now func() time.Time) *VaultReconciler {
 	if now == nil {
 		now = time.Now
@@ -81,22 +83,22 @@ func NewVaultReconciler(vault VaultKVLister, keys liveKeyIDsReader, log *slog.Lo
 	return &VaultReconciler{vault: vault, keys: keys, log: log, now: now}
 }
 
-// ReportOrphanVaultKeys (report-only) находит осиротевшие приватники подписи
-// Sigil в Vault и возвращает их количество. НИЧЕГО не удаляет.
+// ReportOrphanVaultKeys is report-only: it finds orphaned Sigil signing private
+// keys in Vault and returns their count. It deletes NOTHING.
 //
-// Алгоритм:
-//  1. LIST имён под [orphanScanPrefix] (Vault metadata-путь, без чтения данных).
-//  2. ListAllKeyIDs — set живых из Postgres (все статусы).
-//  3. candidates = имена из Vault, которых нет в set.
-//  4. Для каждого кандидата (не более batchSize metadata-round-trip-ов за
-//     прогон) ReadKVMetadata → если created_time старше now()-grace, это сирота.
-//     grace отсекает гонку с Introduce (write-before-PG-commit): свежий секрет
-//     ещё может получить PG-строку.
-//  5. Возврат count сирот + Warn-лог с key_id (cap [orphanLogCap]).
+// Algorithm:
+//  1. LIST names under [orphanScanPrefix], the Vault metadata path, without
+//     reading data.
+//  2. ListAllKeyIDs gives the live set from Postgres, all statuses.
+//  3. candidates are Vault names missing from the set.
+//  4. For each candidate, up to batchSize metadata round trips per run,
+//     ReadKVMetadata; if created_time is older than now()-grace, it is an
+//     orphan. grace filters out the Introduce race (write-before-PG-commit): a
+//     fresh secret may still get a PG row.
+//  5. Return orphan count and Warn-log key_id values capped by [orphanLogCap].
 //
-// grace передаётся runner-ом из rule.MaxAge (MaxAge-as-grace, как у
-// purge_apply_task_register). batchSize ограничивает число metadata-чтений за
-// один прогон.
+// grace is passed by runner from rule.MaxAge (MaxAge-as-grace, like
+// purge_apply_task_register). batchSize limits metadata reads per run.
 func (vr *VaultReconciler) ReportOrphanVaultKeys(ctx context.Context, grace time.Duration, batchSize int) (int64, error) {
 	if vr.vault == nil {
 		return 0, errors.New("reaper: reap_orphan_vault_keys requires a Vault client (vault not configured)")
@@ -107,7 +109,7 @@ func (vr *VaultReconciler) ReportOrphanVaultKeys(ctx context.Context, grace time
 		return 0, fmt.Errorf("reaper: list vault sigil-keys: %w", err)
 	}
 	if len(names) == 0 {
-		// Сирот нет (или подпапка пуста/отсутствует) — выходим без обращения к PG.
+		// No orphans, or the subfolder is empty/missing; exit without calling PG.
 		return 0, nil
 	}
 
@@ -116,7 +118,7 @@ func (vr *VaultReconciler) ReportOrphanVaultKeys(ctx context.Context, grace time
 		return 0, fmt.Errorf("reaper: list live sigil key ids: %w", err)
 	}
 
-	// candidates — в Vault, но не в PG (ни active, ни retired).
+	// candidates are in Vault but not in PG, neither active nor retired.
 	candidates := make([]string, 0)
 	for _, keyID := range names {
 		if _, ok := live[keyID]; ok {
@@ -132,7 +134,7 @@ func (vr *VaultReconciler) ReportOrphanVaultKeys(ctx context.Context, grace time
 	var orphans []string
 	var checked int
 	for _, keyID := range candidates {
-		// batchSize ограничивает число metadata-round-trip-ов за прогон.
+		// batchSize limits metadata round trips per run.
 		if batchSize > 0 && checked >= batchSize {
 			break
 		}
@@ -140,8 +142,8 @@ func (vr *VaultReconciler) ReportOrphanVaultKeys(ctx context.Context, grace time
 
 		created, err := vr.vault.ReadKVMetadata(ctx, orphanScanPrefix+"/"+keyID)
 		if err != nil {
-			// Секрет мог быть удалён между LIST и read, либо транспортный сбой.
-			// Не валим весь прогон — пропускаем кандидата с Warn-ом.
+			// The secret may have been deleted between LIST and read, or transport
+			// failed. Do not fail the whole run; skip the candidate with a Warn.
 			vr.log.Warn("reaper: read vault metadata for orphan candidate failed, skipping",
 				slog.String("rule", "reap_orphan_vault_keys"),
 				slog.String("key_id", keyID),
@@ -149,8 +151,8 @@ func (vr *VaultReconciler) ReportOrphanVaultKeys(ctx context.Context, grace time
 			)
 			continue
 		}
-		// grace: молодой секрет может ещё получить PG-строку (Introduce
-		// write-before-commit) — не считаем сиротой.
+		// grace: a young secret may still receive a PG row through Introduce
+		// write-before-commit, so do not count it as an orphan.
 		if created.After(cutoff) {
 			continue
 		}
@@ -172,7 +174,7 @@ func (vr *VaultReconciler) ReportOrphanVaultKeys(ctx context.Context, grace time
 		if extra > 0 {
 			attrs = append(attrs, slog.Int("orphan_key_ids_omitted", extra))
 		}
-		// report-only: фиксируем находку, оператор разбирается вручную.
+		// report-only: record the finding; the operator handles it manually.
 		vr.log.Warn("reaper: orphan vault sigil-keys detected (report-only, nothing deleted)", attrs...)
 	}
 

@@ -2,13 +2,14 @@
 
 package reaper_test
 
-// End-to-end integration правила reap_orphan_vault_keys (live Vault + PG).
-// Записываем приватник в Vault под secret/keeper/sigil-keys/<key_id> и проверяем:
-//   - секрет без строки в sigil_signing_keys + состаренный created_time → 1 сирота;
-//   - секрет с живой PG-строкой → 0 сирот.
+// End-to-end integration for rule reap_orphan_vault_keys (live Vault + PG).
+// Write a private key to Vault under secret/keeper/sigil-keys/<key_id> and
+// verify:
+//   - secret without a row in sigil_signing_keys + aged created_time -> 1 orphan;
+//   - secret with a live PG row -> 0 orphans.
 //
-// Vault-контейнер поднимается в TestMain (best-effort); при его отсутствии тест
-// skip-ится.
+// Vault container is started in TestMain on a best-effort basis; the test skips
+// when it is absent.
 
 import (
 	"context"
@@ -22,8 +23,8 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/sigil"
 )
 
-// sigilKeysReader адаптирует pool под reaper-зависимость live-keys-reader
-// (sigil.ListAllKeyIDs над pool). Зеркалит wiring-склейку в cmd/keeper.
+// sigilKeysReader adapts pool to the reaper live-keys-reader dependency
+// (sigil.ListAllKeyIDs over pool). Mirrors the wiring glue in cmd/keeper.
 type sigilKeysReader struct{ pool *pgxpool.Pool }
 
 func (r sigilKeysReader) ListAllKeyIDs(ctx context.Context) (map[string]struct{}, error) {
@@ -37,7 +38,7 @@ func requireVaultIntegration(t *testing.T) {
 	}
 }
 
-// seedSigilSecret кладёт приватник в Vault под secret/keeper/sigil-keys/<keyID>.
+// seedSigilSecret writes a private key to Vault under secret/keeper/sigil-keys/<keyID>.
 func seedSigilSecret(t *testing.T, ctx context.Context, keyID string) {
 	t.Helper()
 	kv := integrationVaultAPI.KVv2("secret")
@@ -48,7 +49,7 @@ func seedSigilSecret(t *testing.T, ctx context.Context, keyID string) {
 	}
 }
 
-// seedSigilRow вставляет строку sigil_signing_keys с заданным статусом.
+// seedSigilRow inserts a sigil_signing_keys row with the given status.
 func seedSigilRow(t *testing.T, ctx context.Context, pool *pgxpool.Pool, keyID, status string) {
 	t.Helper()
 	isPrimary := status == "active"
@@ -60,16 +61,17 @@ func seedSigilRow(t *testing.T, ctx context.Context, pool *pgxpool.Pool, keyID, 
 	}
 }
 
-// resetSigilState очищает реестр PG И Vault-секреты sigil-keys между тестами.
-// Vault-очистка обязательна: контейнер общий на пакет, секреты от предыдущего
-// подтеста иначе считались бы сиротами в следующем.
+// resetSigilState clears the PG registry AND Vault sigil-keys secrets between
+// tests. Vault cleanup is required because the container is shared by the
+// package; otherwise secrets from the previous subtest would count as orphans in
+// the next one.
 func resetSigilState(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
 	if _, err := pool.Exec(ctx, "TRUNCATE sigil_signing_keys"); err != nil {
 		t.Fatalf("truncate sigil_signing_keys: %v", err)
 	}
-	// Полностью удаляем metadata каждого секрета под sigil-keys/ (DeleteMetadata
-	// сносит секрет со всеми версиями — LIST его больше не отдаёт).
+	// Fully delete metadata for each secret under sigil-keys/. DeleteMetadata
+	// removes the secret with all versions, so LIST no longer returns it.
 	names, err := integrationVaultClient.ListKV(ctx, "keeper/sigil-keys")
 	if err != nil {
 		t.Fatalf("list vault sigil-keys for reset: %v", err)
@@ -91,8 +93,8 @@ func newReconciler(pool *pgxpool.Pool, now func() time.Time) *reaper.VaultReconc
 	)
 }
 
-// TestIntegration_ReapOrphan_DetectsOrphan — секрет в Vault без PG-строки,
-// состаренный за пределы grace → правило репортит ровно 1.
+// TestIntegration_ReapOrphan_DetectsOrphan: secret in Vault without PG row,
+// aged beyond grace, makes the rule report exactly 1.
 func TestIntegration_ReapOrphan_DetectsOrphan(t *testing.T) {
 	requireVaultIntegration(t)
 	pool := fixturePool(t)
@@ -102,7 +104,7 @@ func TestIntegration_ReapOrphan_DetectsOrphan(t *testing.T) {
 	const orphanKey = "orphan-key-detect"
 	seedSigilSecret(t, ctx, orphanKey)
 
-	// now() в будущем относительно created_time секрета → секрет «старый».
+	// now() is in the future relative to secret created_time, so the secret is old.
 	future := func() time.Time { return time.Now().Add(48 * time.Hour) }
 	vr := newReconciler(pool, future)
 
@@ -115,8 +117,8 @@ func TestIntegration_ReapOrphan_DetectsOrphan(t *testing.T) {
 	}
 }
 
-// TestIntegration_ReapOrphan_LivePGRow_NotOrphan — секрет с живой строкой в
-// sigil_signing_keys (active) → 0 сирот.
+// TestIntegration_ReapOrphan_LivePGRow_NotOrphan: secret with live row in
+// sigil_signing_keys (active) yields 0 orphans.
 func TestIntegration_ReapOrphan_LivePGRow_NotOrphan(t *testing.T) {
 	requireVaultIntegration(t)
 	pool := fixturePool(t)
@@ -139,8 +141,8 @@ func TestIntegration_ReapOrphan_LivePGRow_NotOrphan(t *testing.T) {
 	}
 }
 
-// TestIntegration_ReapOrphan_RetiredPGRow_NotOrphan — retired-строка тоже живая
-// (ListAllKeyIDs все статусы) → 0 сирот.
+// TestIntegration_ReapOrphan_RetiredPGRow_NotOrphan: retired row is also live
+// because ListAllKeyIDs includes all statuses, so there are 0 orphans.
 func TestIntegration_ReapOrphan_RetiredPGRow_NotOrphan(t *testing.T) {
 	requireVaultIntegration(t)
 	pool := fixturePool(t)
@@ -163,8 +165,8 @@ func TestIntegration_ReapOrphan_RetiredPGRow_NotOrphan(t *testing.T) {
 	}
 }
 
-// TestIntegration_ReapOrphan_WithinGrace_NotOrphan — свежий секрет без PG-строки,
-// но внутри grace → не сирота (гонка Introduce).
+// TestIntegration_ReapOrphan_WithinGrace_NotOrphan: fresh secret without PG row
+// but inside grace is not an orphan because Introduce may be racing.
 func TestIntegration_ReapOrphan_WithinGrace_NotOrphan(t *testing.T) {
 	requireVaultIntegration(t)
 	pool := fixturePool(t)
@@ -174,7 +176,7 @@ func TestIntegration_ReapOrphan_WithinGrace_NotOrphan(t *testing.T) {
 	const freshKey = "fresh-orphan-candidate"
 	seedSigilSecret(t, ctx, freshKey)
 
-	// now() = реальное время: секрет только что записан, моложе grace 24h.
+	// now() = real time: secret was just written and is younger than 24h grace.
 	vr := newReconciler(pool, time.Now)
 
 	got, err := vr.ReportOrphanVaultKeys(ctx, 24*time.Hour, 100)

@@ -20,9 +20,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// fakeDriftChecker — фейк scenario.Runner для теста: считает вызовы и
-// возвращает заранее заготовленный DriftReport / ошибку. delay задаёт сколько
-// «работает» один CheckDrift (для проверки throttle).
+// fakeDriftChecker is a scenario.Runner fake for tests: it counts calls and
+// returns a prepared DriftReport or error. delay controls how long one
+// CheckDrift "works" for throttle verification.
 type fakeDriftChecker struct {
 	mu          sync.Mutex
 	calls       int
@@ -65,7 +65,7 @@ func (f *fakeDriftChecker) MarkDriftStatus(_ context.Context, name string, _ boo
 	return nil
 }
 
-// fakeResolver — узкий стаб ServiceRefResolver: один сервис → фиксированный ref.
+// fakeResolver is a narrow ServiceRefResolver stub: one service maps to a fixed ref.
 type fakeServiceResolver struct {
 	known map[string]artifact.ServiceRef
 }
@@ -75,7 +75,7 @@ func (r *fakeServiceResolver) Resolve(name string) (artifact.ServiceRef, bool) {
 	return ref, ok
 }
 
-// fakeAuditWriter — захватывает записи audit-event-ов.
+// fakeAuditWriter captures audit event writes.
 type fakeAuditWriter struct {
 	mu     sync.Mutex
 	events []*audit.Event
@@ -88,14 +88,14 @@ func (w *fakeAuditWriter) Write(_ context.Context, ev *audit.Event) error {
 	return nil
 }
 
-// scryFakePool — fake pgxpool, понимающий ровно два запроса scry-rule:
-// (1) CountActiveDryRuns, (2) SelectScryCandidates, (3) FOR UPDATE-gate в
-// scryCheckStatus, (4) UpdateDriftScanResult Exec.
+// scryFakePool is a fake pgxpool that understands the scry rule queries:
+// (1) CountActiveDryRuns, (2) SelectScryCandidates, (3) FOR UPDATE gate in
+// scryCheckStatus, and (4) UpdateDriftScanResult Exec.
 type scryFakePool struct {
 	mu          sync.Mutex
 	candidates  []incarnation.ScryCandidate
 	activeCount int
-	statuses    map[string]string // name → status (gate-check)
+	statuses    map[string]string // name -> status (gate-check)
 	updates     int               // UpdateDriftScanResult calls
 }
 
@@ -128,7 +128,7 @@ func (p *scryFakePool) updateCount() int {
 	return p.updates
 }
 
-// scryFakeRow — отдаёт либо int64 (CountActiveDryRuns).
+// scryFakeRow returns int or int64 for CountActiveDryRuns.
 type scryFakeRow struct{ val int64 }
 
 func (r scryFakeRow) Scan(dest ...any) error {
@@ -144,7 +144,7 @@ func (r scryFakeRow) Scan(dest ...any) error {
 	return nil
 }
 
-// scryFakeRows — отдаёт candidates по одному ScryCandidate за вызов Scan.
+// scryFakeRows returns candidates, one ScryCandidate per Scan call.
 type scryFakeRows struct {
 	items []incarnation.ScryCandidate
 	idx   int
@@ -176,7 +176,7 @@ func (r *scryFakeRows) Values() ([]any, error)                       { return ni
 func (r *scryFakeRows) RawValues() [][]byte                          { return nil }
 func (r *scryFakeRows) Conn() *pgx.Conn                              { return nil }
 
-// scryFakeTx — fake pgx.Tx для scryCheckStatus.
+// scryFakeTx is a fake pgx.Tx for scryCheckStatus.
 type scryFakeTx struct {
 	statuses map[string]string
 }
@@ -236,16 +236,17 @@ func newScryTestRunner(t *testing.T) *Runner {
 	}}
 }
 
-// TestRunScryBackground_NilDeps — без ScryDeps правило молча пропускается.
+// TestRunScryBackground_NilDeps: without ScryDeps the rule is silently skipped.
 func TestRunScryBackground_NilDeps(t *testing.T) {
 	r := newScryTestRunner(t)
 	r.runScryBackground(context.Background(), "scry_background",
 		config.ReaperRule{Enabled: true}, 20, false, nil)
-	// Просто не падает.
+	// It simply does not panic.
 }
 
-// TestRunScryBackground_HappyPath — успешный pipeline: gate ok, CheckDrift
-// возвращает отчёт, UpdateDriftScanResult + MarkDriftStatus + audit вызываются.
+// TestRunScryBackground_HappyPath covers a successful pipeline: gate ok,
+// CheckDrift returns a report, and UpdateDriftScanResult + MarkDriftStatus +
+// audit are called.
 func TestRunScryBackground_HappyPath(t *testing.T) {
 	pool := &scryFakePool{
 		candidates: []incarnation.ScryCandidate{
@@ -293,8 +294,8 @@ func TestRunScryBackground_HappyPath(t *testing.T) {
 	}
 }
 
-// TestRunScryBackground_SkipsNonReadyStatuses — gate-tx видит applying,
-// CheckDrift не вызывается.
+// TestRunScryBackground_SkipsNonReadyStatuses: gate tx sees applying, so
+// CheckDrift is not called.
 func TestRunScryBackground_SkipsNonReadyStatuses(t *testing.T) {
 	pool := &scryFakePool{
 		candidates: []incarnation.ScryCandidate{
@@ -318,9 +319,9 @@ func TestRunScryBackground_SkipsNonReadyStatuses(t *testing.T) {
 	}
 }
 
-// TestRunScryBackground_ThrottleMaxConcurrent — параллельных CheckDrift-ов не
-// больше, чем maxConcurrent. Запускаем 5 candidates с задержкой и
-// max_concurrent_in_flight=2 — фиксируем cap.
+// TestRunScryBackground_ThrottleMaxConcurrent ensures parallel CheckDrift calls
+// do not exceed maxConcurrent. Start 5 candidates with delay and
+// max_concurrent_in_flight=2, then assert the cap.
 func TestRunScryBackground_ThrottleMaxConcurrent(t *testing.T) {
 	candidates := make([]incarnation.ScryCandidate, 5)
 	statuses := map[string]string{}
@@ -347,19 +348,19 @@ func TestRunScryBackground_ThrottleMaxConcurrent(t *testing.T) {
 	if checker.maxConc > 2 {
 		t.Errorf("max concurrent CheckDrift = %d, want <= 2", checker.maxConc)
 	}
-	// Все 5 candidates обработаны (после ожидания).
+	// All 5 candidates were processed after waiting.
 	if checker.calls != 5 {
 		t.Errorf("CheckDrift calls = %d, want 5", checker.calls)
 	}
 }
 
-// TestRunScryBackground_PoolFull — active+max уже занят, тик пропускается без
-// CheckDrift.
+// TestRunScryBackground_PoolFull: active+max is already occupied, so the tick
+// is skipped without CheckDrift.
 func TestRunScryBackground_PoolFull(t *testing.T) {
 	pool := &scryFakePool{
 		candidates:  []incarnation.ScryCandidate{{Name: "alpha", Service: "redis"}},
 		statuses:    map[string]string{"alpha": "ready"},
-		activeCount: 10, // == max_concurrent_in_flight по дефолту
+		activeCount: 10, // == default max_concurrent_in_flight
 	}
 	checker := &fakeDriftChecker{}
 	resolver := &fakeServiceResolver{}
@@ -374,7 +375,7 @@ func TestRunScryBackground_PoolFull(t *testing.T) {
 	}
 }
 
-// TestRunScryBackground_DryRun — dry_run=true вообще не делает SQL-вызовов.
+// TestRunScryBackground_DryRun: dry_run=true makes no SQL calls at all.
 func TestRunScryBackground_DryRun(t *testing.T) {
 	pool := &scryFakePool{}
 	checker := &fakeDriftChecker{}
@@ -393,9 +394,9 @@ func TestRunScryBackground_DryRun(t *testing.T) {
 	}
 }
 
-// TestRunScryBackground_ConvergeMissing — драйв-чекер вернул ErrConvergeMissing:
-// UpdateDriftScanResult/Mark/audit НЕ зовутся (incarnation не тронут, не
-// перезаписываем last_drift_*).
+// TestRunScryBackground_ConvergeMissing: the drift checker returned
+// ErrConvergeMissing, so UpdateDriftScanResult/Mark/audit are NOT called. The
+// incarnation is untouched, and last_drift_* is not overwritten.
 func TestRunScryBackground_ConvergeMissing(t *testing.T) {
 	pool := &scryFakePool{
 		candidates: []incarnation.ScryCandidate{{Name: "alpha", Service: "redis"}},
@@ -426,13 +427,13 @@ func TestRunScryBackground_ConvergeMissing(t *testing.T) {
 	}
 }
 
-// TestRunScryBackground_DefaultOff — Reaper.dispatch без правила enabled=true
-// не вызывает CheckDrift. Эмулируем cfg-блок без правила scry_background.
+// TestRunScryBackground_DefaultOff: Reaper.dispatch without enabled=true rule
+// does not call CheckDrift. Emulate a cfg block without scry_background.
 func TestRunScryBackground_DefaultOff(t *testing.T) {
-	// Проверяем что дефолтный cfg (rules without scry_background) → dispatch
-	// никогда не зовёт DriftChecker. Это уже косвенно проверяется в
-	// TestRunner_HappyPath_DispatchesPurger (PurgeAuditOld единственное rule,
-	// scry_background отсутствует). Здесь явный smoke: enabled=false → no-op.
+	// Verify that the default cfg (rules without scry_background) means dispatch
+	// never calls DriftChecker. This is already checked indirectly by
+	// TestRunner_HappyPath_DispatchesPurger, where PurgeAuditOld is the only rule
+	// and scry_background is absent. This is an explicit smoke: enabled=false -> no-op.
 	pool := &scryFakePool{
 		candidates: []incarnation.ScryCandidate{{Name: "alpha", Service: "redis"}},
 		statuses:   map[string]string{"alpha": "ready"},
@@ -440,16 +441,16 @@ func TestRunScryBackground_DefaultOff(t *testing.T) {
 	checker := &fakeDriftChecker{}
 	resolver := &fakeServiceResolver{}
 	r := newScryTestRunner(t)
-	// Rule.Enabled=false — runScryBackground не должен вызываться dispatch-ем,
-	// но проверяем напрямую: даже если вызвали (как заглушка тест-stub-а),
-	// все cases внутри обработаны корректно. Здесь принудительно проверяем
-	// dispatch flow через раннер.
+	// Rule.Enabled=false means runScryBackground must not be called by dispatch,
+	// but check directly that even if it is called, as a test-stub placeholder,
+	// all internal cases are handled correctly. Here we explicitly check dispatch
+	// flow through runner.
 	_ = r
 	_ = pool
 	_ = checker
 	_ = resolver
 
-	// Полный dispatch-flow test (что Rule.Enabled=false → runScryBackground
-	// не зовётся вообще) живёт в TestRunner_HappyPath_DispatchesPurger по
-	// факту отсутствия scry_background в testKeeperYAML.
+	// The full dispatch-flow test, proving Rule.Enabled=false -> runScryBackground
+	// is not called at all, lives in TestRunner_HappyPath_DispatchesPurger
+	// through the absence of scry_background in testKeeperYAML.
 }

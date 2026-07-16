@@ -14,9 +14,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// reclaimDispatchCfg — KeeperConfig с включённым Reaper и заданным набором
-// правил. rules == nil → ключ reclaim_voyages в map отсутствует (кейс
-// path-defaulting default-ON).
+// reclaimDispatchCfg is a KeeperConfig with Reaper enabled and a provided rule
+// set. rules == nil means the reclaim_voyages key is absent from the map, the
+// path-defaulting default-ON case.
 func reclaimDispatchCfg(rules map[string]config.ReaperRule) *config.KeeperConfig {
 	return &config.KeeperConfig{
 		Reaper: &config.KeeperReaper{
@@ -26,9 +26,9 @@ func reclaimDispatchCfg(rules map[string]config.ReaperRule) *config.KeeperConfig
 	}
 }
 
-// newReclaimDispatchRunner собирает Runner с реальным VoyageReclaimer поверх
-// fake-querier — так dispatch доходит до SQL, и fq.calls фиксирует факт запуска
-// правила.
+// newReclaimDispatchRunner builds Runner with a real VoyageReclaimer over a
+// fake querier. This lets dispatch reach SQL, and fq.calls records that the rule
+// was started.
 func newReclaimDispatchRunner(fq voyagesQuerier) *Runner {
 	return &Runner{
 		deps: Deps{
@@ -38,9 +38,9 @@ func newReclaimDispatchRunner(fq voyagesQuerier) *Runner {
 	}
 }
 
-// TestDispatch_ReclaimVoyages_DefaultOnWhenAbsent: ключ reclaim_voyages
-// ОТСУТСТВУЕТ в Rules → правило ВСЁ РАВНО исполняется (default-ON через
-// path-defaulting в dispatchReclaimVoyages, ADR-043 §8).
+// TestDispatch_ReclaimVoyages_DefaultOnWhenAbsent: the reclaim_voyages key is
+// ABSENT from Rules, but the rule STILL runs through default-ON path defaulting
+// in dispatchReclaimVoyages (ADR-043 section 8).
 func TestDispatch_ReclaimVoyages_DefaultOnWhenAbsent(t *testing.T) {
 	fq := &fakeVoyagesQuerier{}
 	r := newReclaimDispatchRunner(fq)
@@ -48,12 +48,12 @@ func TestDispatch_ReclaimVoyages_DefaultOnWhenAbsent(t *testing.T) {
 	r.dispatch(context.Background(), reclaimDispatchCfg(nil))
 
 	if fq.calls != 1 {
-		t.Fatalf("reclaim_voyages должно исполниться при отсутствии ключа (default-ON); querier calls=%d, want 1", fq.calls)
+		t.Fatalf("reclaim_voyages must run when the key is absent (default-ON); querier calls=%d, want 1", fq.calls)
 	}
 }
 
-// TestDispatch_ReclaimVoyages_SkippedWhenDisabled: явный enabled:false →
-// правило ПРОПУЩЕНО (единственный путь выключения default-ON-правила).
+// TestDispatch_ReclaimVoyages_SkippedWhenDisabled: explicit enabled:false means
+// the rule is SKIPPED, which is the only way to turn off the default-ON rule.
 func TestDispatch_ReclaimVoyages_SkippedWhenDisabled(t *testing.T) {
 	fq := &fakeVoyagesQuerier{}
 	r := newReclaimDispatchRunner(fq)
@@ -64,13 +64,13 @@ func TestDispatch_ReclaimVoyages_SkippedWhenDisabled(t *testing.T) {
 	r.dispatch(context.Background(), cfg)
 
 	if fq.calls != 0 {
-		t.Fatalf("reclaim_voyages с enabled:false должно быть пропущено; querier calls=%d, want 0", fq.calls)
+		t.Fatalf("reclaim_voyages with enabled:false must be skipped; querier calls=%d, want 0", fq.calls)
 	}
 }
 
-// fakeVoyagesQuerier — fake voyagesQuerier для unit-тестов reclaim_voyages.
-// Захватывает последний SQL, возвращает запрограммированный набор строк
-// (по одной reclaimed-Voyage) либо error.
+// fakeVoyagesQuerier is a fake voyagesQuerier for reclaim_voyages unit tests.
+// It captures the last SQL and returns a preprogrammed row set, one reclaimed
+// Voyage per row, or an error.
 type fakeVoyagesQuerier struct {
 	calls   int
 	lastSQL string
@@ -78,7 +78,7 @@ type fakeVoyagesQuerier struct {
 	err     error
 }
 
-// reclaimRow — одна строка результата UPDATE ... RETURNING.
+// reclaimRow is one UPDATE ... RETURNING result row.
 type reclaimRow struct {
 	voyageID    string
 	lastRenewed *time.Time
@@ -94,7 +94,7 @@ func (f *fakeVoyagesQuerier) Query(_ context.Context, sql string, _ ...any) (pgx
 	return &fakeReclaimRows{rows: f.rows}, nil
 }
 
-// fakeReclaimRows — pgx.Rows-stub поверх среза reclaimRow.
+// fakeReclaimRows is a pgx.Rows stub over a reclaimRow slice.
 type fakeReclaimRows struct {
 	rows []reclaimRow
 	idx  int
@@ -127,9 +127,9 @@ func (r *fakeReclaimRows) Values() ([]any, error)                       { return
 func (r *fakeReclaimRows) RawValues() [][]byte                          { return nil }
 func (r *fakeReclaimRows) Conn() *pgx.Conn                              { return nil }
 
-// fakeReclaimAudit — счётчик emit-ов voyage.reclaimed.
+// fakeReclaimAudit counts voyage.reclaimed emits.
 type fakeReclaimAudit struct {
-	events []string // voyage_id каждого записанного события
+	events []string // voyage_id of each written event
 }
 
 func (a *fakeReclaimAudit) Write(_ context.Context, ev *audit.Event) error {
@@ -205,7 +205,7 @@ func TestVoyageReclaimer_Run_PropagatesError(t *testing.T) {
 
 	_, err := r.Run(context.Background(), time.Minute, 1000)
 	if err == nil {
-		t.Fatal("ожидалась ошибка")
+		t.Fatal("expected error")
 	}
 	if !errors.Is(err, want) {
 		t.Errorf("err = %v, want wrap of %v", err, want)
@@ -215,14 +215,14 @@ func TestVoyageReclaimer_Run_PropagatesError(t *testing.T) {
 func TestVoyageReclaimer_Run_NilPoolReturnsError(t *testing.T) {
 	r := &VoyageReclaimer{pool: nil}
 	if _, err := r.Run(context.Background(), time.Minute, 1000); err == nil {
-		t.Fatal("ожидалась ошибка при nil pool")
+		t.Fatal("expected error with nil pool")
 	}
 }
 
-// TestReclaimVoyagesSQL_Shape — sanity SQL-инвариантов: CTE picked снимает
-// дореклеймное last_renewed_at, UPDATE по running с expired claim, сброс
-// claim-полей, attempt++, возврат в pending (не scheduled), FOR UPDATE SKIP
-// LOCKED, RETURNING attempt.
+// TestReclaimVoyagesSQL_Shape checks SQL invariants: CTE picked captures the
+// pre-reclaim last_renewed_at, UPDATE targets running rows with expired claims,
+// claim fields are reset, attempt++, status returns to pending, not scheduled,
+// FOR UPDATE SKIP LOCKED is used, and attempt is returned.
 func TestReclaimVoyagesSQL_Shape(t *testing.T) {
 	for _, frag := range []string{
 		"WITH picked AS (",
@@ -233,8 +233,8 @@ func TestReclaimVoyagesSQL_Shape(t *testing.T) {
 		"last_renewed_at  = NULL",
 		"claim_expires_at = NULL",
 		"attempt          = attempt + 1",
-		// reclaim откатывает current_batch_index в 0 — переисполнение прогона с нуля
-		// (idempotent re-apply; resume-from-batch — отдельный эпик).
+		// reclaim rolls current_batch_index back to 0 to re-execute the run from
+		// scratch (idempotent re-apply; resume-from-batch is a separate epic).
 		"current_batch_index = 0",
 		"WHERE status = 'running' AND claim_expires_at < NOW()",
 		"FOR UPDATE SKIP LOCKED",

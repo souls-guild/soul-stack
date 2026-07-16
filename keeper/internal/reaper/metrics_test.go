@@ -17,16 +17,16 @@ func TestRegisterReaperMetrics_RegistersAndExposes(t *testing.T) {
 		t.Fatal("RegisterReaperMetrics returned nil")
 	}
 
-	// Gauge keeper_reaper_lease_held виден сразу (Counter/Histogram-Vec без
-	// первого WithLabelValues не публикуют sample — проверим их после
-	// ObserveRule отдельно).
+	// Gauge keeper_reaper_lease_held is visible immediately. Counter/Histogram
+	// Vecs do not publish a sample before the first WithLabelValues, so verify
+	// them separately after ObserveRule.
 	body := obstest.Scrape(t, reg.Gatherer())
 	if !strings.Contains(body, "keeper_reaper_lease_held 0") {
 		t.Errorf("metrics output missing lease_held=0 sample; got=\n%s", body)
 	}
 
-	// Проверяем, что collectors функциональны — после ObserveRule все
-	// MetricFamily становятся видны через Gather().
+	// Verify collectors are functional: after ObserveRule all MetricFamilies
+	// become visible through Gather().
 	m.ObserveRule("purge_audit_old", 1, nil, time.Millisecond)
 	families, err := reg.Gatherer().Gather()
 	if err != nil {
@@ -77,10 +77,10 @@ func TestObserveRule_SuccessIncrementsExecutionsAndPurged(t *testing.T) {
 	if !strings.Contains(body, `keeper_reaper_rule_duration_seconds_count{rule="purge_audit_old"} 2`) {
 		t.Errorf("duration_seconds_count mismatch; got=\n%s", body)
 	}
-	// При успехе DispatchErrors не растёт. Если бы рос — sample был бы
-	// `..._errors_total{rule="purge_audit_old"} > 0`. Sample-а нет — Counter
-	// без вызовов WithLabelValues не публикует child-метрику; проверяем
-	// негативно — отсутствие label-а `rule="purge_audit_old"` в errors.
+	// DispatchErrors does not grow on success. If it did, the sample would be
+	// `..._errors_total{rule="purge_audit_old"} > 0`. There is no sample because
+	// Counter without WithLabelValues calls does not publish a child metric; check
+	// negatively by requiring no `rule="purge_audit_old"` label in errors.
 	if strings.Contains(body, `keeper_reaper_dispatch_errors_total{rule="purge_audit_old"}`) {
 		t.Errorf("dispatch_errors should not have sample for purge_audit_old on success; got=\n%s", body)
 	}
@@ -97,11 +97,11 @@ func TestObserveRule_ErrorIncrementsDispatchErrors(t *testing.T) {
 	if !strings.Contains(body, `keeper_reaper_dispatch_errors_total{rule="purge_souls"} 2`) {
 		t.Errorf("dispatch_errors mismatch; got=\n%s", body)
 	}
-	// Executions всё равно растёт — error не должен прятать факт прогона.
+	// Executions still grows; an error must not hide the run.
 	if !strings.Contains(body, `keeper_reaper_rule_executions_total{rule="purge_souls"} 2`) {
 		t.Errorf("executions_total on error mismatch; got=\n%s", body)
 	}
-	// Purged не растёт — affected при error невалиден.
+	// Purged does not grow because affected is invalid on error.
 	if strings.Contains(body, `keeper_reaper_rule_purged_total{rule="purge_souls"}`) {
 		t.Errorf("purged_total should not have sample on error; got=\n%s", body)
 	}
@@ -111,8 +111,9 @@ func TestObserveRule_ZeroAffectedSuccess_DoesNotEmitPurgedSample(t *testing.T) {
 	reg := obs.NewRegistry()
 	m := RegisterReaperMetrics(reg)
 
-	// affected=0 — частый случай: правило отработало, но строк под условие нет.
-	// Executions/duration обязаны быть, purged — нет (нечего инкрементить).
+	// affected=0 is common: the rule ran, but no rows matched the condition.
+	// Executions/duration must exist, purged must not because there is nothing
+	// to increment.
 	m.ObserveRule("mark_disconnected", 0, nil, 10*time.Millisecond)
 
 	body := obstest.Scrape(t, reg.Gatherer())
@@ -142,8 +143,8 @@ func TestSetLeaseHeld_TogglesGauge(t *testing.T) {
 }
 
 func TestReaperMetrics_NilReceiver_NoOp(t *testing.T) {
-	// caller (Reaper-runner) может быть без obs-стека (тесты/dev-режим).
-	// Все методы на nil-получателе должны быть no-op без панéks.
+	// caller (Reaper runner) may not have an obs stack in tests or dev mode.
+	// All methods on a nil receiver must be no-ops without panics.
 	var m *ReaperMetrics
 	m.ObserveRule("any", 5, nil, time.Second)
 	m.ObserveRule("any", 0, errors.New("x"), time.Second)

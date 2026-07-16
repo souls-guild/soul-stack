@@ -2,12 +2,13 @@
 
 package reaper_test
 
-// Integration-тест правила `purge_orphan_ephemeral_tidings` (ADR-052(g) N2) на
-// реальной PG. Самый важный guard эпика: снос ephemeral-Tiding НЕ опережает
-// доставку терминального уведомления — правило сносит правило ТОЛЬКО после
-// grace-периода от терминала Voyage (за grace tap-dispatcher гарантированно
-// сматчил и заэнкьюил уведомление). Проверяем матрицу: terminal<grace →
-// выживает; terminal>grace → снос; orphan (voyage нет) → снос; running → выживает.
+// Integration test for `purge_orphan_ephemeral_tidings` (ADR-052(g) N2) on real
+// PG. The epic's most important guard: deleting an ephemeral Tiding must NOT
+// outrun terminal notification delivery. The rule deletes only after the grace
+// period from terminal Voyage; during grace, tap-dispatcher has guaranteed time
+// to match and enqueue the notification. Verify the matrix: terminal<grace
+// survives; terminal>grace is deleted; orphan without voyage is deleted; running
+// survives.
 
 import (
 	"context"
@@ -20,12 +21,12 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/reaper"
 )
 
-// discardLogger — slog в io.Discard (silentLogger живёт в internal-package reaper).
+// discardLogger is slog to io.Discard; silentLogger lives in internal package reaper.
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewJSONHandler(io.Discard, nil))
 }
 
-// seedOperatorRaw — минимальный operator-row (FK для voyages.started_by_aid).
+// seedOperatorRaw is a minimal operator row, FK for voyages.started_by_aid.
 func seedOperatorRaw(t *testing.T, ctx context.Context, aid string) {
 	t.Helper()
 	if _, err := integrationPool.Exec(ctx,
@@ -35,7 +36,7 @@ func seedOperatorRaw(t *testing.T, ctx context.Context, aid string) {
 	}
 }
 
-// seedHeraldRaw — webhook-Herald (FK для tidings.herald).
+// seedHeraldRaw is a webhook Herald, FK for tidings.herald.
 func seedHeraldRaw(t *testing.T, ctx context.Context, name, aid string) {
 	t.Helper()
 	cfg, _ := json.Marshal(map[string]any{"url": "https://hooks.example.com/" + name})
@@ -46,7 +47,7 @@ func seedHeraldRaw(t *testing.T, ctx context.Context, name, aid string) {
 	}
 }
 
-// seedVoyageTerminal — voyage в терминальном статусе с заданным finished_at.
+// seedVoyageTerminal creates a voyage in a terminal status with given finished_at.
 func seedVoyageTerminal(t *testing.T, ctx context.Context, voyageID, aid string, finishedAt time.Time) {
 	t.Helper()
 	if _, err := integrationPool.Exec(ctx,
@@ -58,8 +59,9 @@ func seedVoyageTerminal(t *testing.T, ctx context.Context, voyageID, aid string,
 	}
 }
 
-// seedVoyageRunning — voyage в running (НЕ терминал, finished_at NULL). running
-// требует claim-полей NOT NULL (voyages_running_claim_consistency).
+// seedVoyageRunning creates a running voyage, NOT terminal, with finished_at
+// NULL. running requires claim fields to be NOT NULL
+// (voyages_running_claim_consistency).
 func seedVoyageRunning(t *testing.T, ctx context.Context, voyageID, aid string) {
 	t.Helper()
 	if _, err := integrationPool.Exec(ctx,
@@ -73,7 +75,7 @@ func seedVoyageRunning(t *testing.T, ctx context.Context, voyageID, aid string) 
 	}
 }
 
-// seedEphemeralTiding — ephemeral-Tiding, привязанный к voyage_id.
+// seedEphemeralTiding creates an ephemeral Tiding bound to voyage_id.
 func seedEphemeralTiding(t *testing.T, ctx context.Context, name, herald, voyageID string) {
 	t.Helper()
 	if _, err := integrationPool.Exec(ctx,
@@ -84,8 +86,8 @@ func seedEphemeralTiding(t *testing.T, ctx context.Context, name, herald, voyage
 	}
 }
 
-// seedPersistentTiding — обычное (НЕ ephemeral) правило: purger не должен его
-// трогать ни при каких условиях.
+// seedPersistentTiding creates a regular, NOT ephemeral rule. purger must never
+// touch it under any conditions.
 func seedPersistentTiding(t *testing.T, ctx context.Context, name, herald string) {
 	t.Helper()
 	if _, err := integrationPool.Exec(ctx,
@@ -114,11 +116,11 @@ func resetHeraldVoyageTables(t *testing.T, ctx context.Context) {
 	}
 }
 
-// TestIntegration_PurgeOrphanEphemeralTidings_GraceMatrix — основной guard
-// очистки. grace=10m: правило для прогона, завершённого 1m назад, ВЫЖИВАЕТ
-// (окно доставки) — снос опередил бы tap-dispatcher; завершённого 20m назад —
-// сносится; для несуществующего прогона — сносится; для running — выживает;
-// постоянное правило — не трогается никогда.
+// TestIntegration_PurgeOrphanEphemeralTidings_GraceMatrix is the main cleanup
+// guard. With grace=10m, the rule for a run finished 1m ago SURVIVES because it
+// is inside the delivery window; deletion would outrun tap-dispatcher. A run
+// finished 20m ago is deleted; a nonexistent run is deleted; running survives;
+// a persistent rule is never touched.
 func TestIntegration_PurgeOrphanEphemeralTidings_GraceMatrix(t *testing.T) {
 	ctx := context.Background()
 	resetHeraldVoyageTables(t, ctx)
@@ -126,18 +128,18 @@ func TestIntegration_PurgeOrphanEphemeralTidings_GraceMatrix(t *testing.T) {
 	seedHeraldRaw(t, ctx, "ops", "archon-r")
 
 	now := time.Now().UTC()
-	// (a) терминал 1m назад — В ОКНЕ доставки (grace=10m) → должен ВЫЖИТЬ.
+	// (a) terminal 1m ago is INSIDE the delivery window (grace=10m), so it must SURVIVE.
 	seedVoyageTerminal(t, ctx, "01HVOYAGEFRESH00000000000A", "archon-r", now.Add(-1*time.Minute))
 	seedEphemeralTiding(t, ctx, "eph-fresh", "ops", "01HVOYAGEFRESH00000000000A")
-	// (b) терминал 20m назад — за grace → должен быть СНЕСЁН.
+	// (b) terminal 20m ago is beyond grace, so it must be DELETED.
 	seedVoyageTerminal(t, ctx, "01HVOYAGEOLD0000000000000B", "archon-r", now.Add(-20*time.Minute))
 	seedEphemeralTiding(t, ctx, "eph-old", "ops", "01HVOYAGEOLD0000000000000B")
-	// (c) voyage не существует (orphan) → должен быть СНЕСЁН.
+	// (c) voyage does not exist (orphan), so it must be DELETED.
 	seedEphemeralTiding(t, ctx, "eph-orphan", "ops", "01HVOYAGEGONE000000000000C")
-	// (d) running voyage → не терминал → должен ВЫЖИТЬ.
+	// (d) running voyage is not terminal, so it must SURVIVE.
 	seedVoyageRunning(t, ctx, "01HVOYAGERUN0000000000000D", "archon-r")
 	seedEphemeralTiding(t, ctx, "eph-running", "ops", "01HVOYAGERUN0000000000000D")
-	// (e) постоянное правило → НИКОГДА не трогается.
+	// (e) persistent rule is NEVER touched.
 	seedPersistentTiding(t, ctx, "persistent-rule", "ops")
 
 	p := reaper.NewEphemeralTidingsPurger(integrationPool, discardLogger())
@@ -149,29 +151,30 @@ func TestIntegration_PurgeOrphanEphemeralTidings_GraceMatrix(t *testing.T) {
 		t.Errorf("affected = %d, want 2 (eph-old + eph-orphan)", affected)
 	}
 
-	// Guard доставки: свежий терминал (в окне grace) ОБЯЗАН выжить — иначе снос
-	// опередил бы tap-dispatcher и уведомление о завершении не ушло бы.
+	// Delivery guard: a fresh terminal inside the grace window MUST survive.
+	// Otherwise deletion could outrun tap-dispatcher and completion notification
+	// might not be delivered.
 	if !tidingExists(t, ctx, "eph-fresh") {
-		t.Error("eph-fresh снесён ПРЕЖДЕВРЕМЕННО (терминал в пределах grace) — уведомление могло не уйти")
+		t.Error("eph-fresh was deleted TOO EARLY (terminal within grace); notification might not have been delivered")
 	}
 	if !tidingExists(t, ctx, "eph-running") {
-		t.Error("eph-running снесён — running не терминал, сносить нельзя")
+		t.Error("eph-running was deleted; running is not terminal and must not be deleted")
 	}
 	if !tidingExists(t, ctx, "persistent-rule") {
-		t.Error("постоянное правило снесено — purger трогает только ephemeral")
+		t.Error("persistent rule was deleted; purger must touch only ephemeral rules")
 	}
 	if tidingExists(t, ctx, "eph-old") {
-		t.Error("eph-old НЕ снесён (терминал за пределами grace) — осиротевшее правило протекло")
+		t.Error("eph-old was NOT deleted (terminal beyond grace); orphaned rule leaked")
 	}
 	if tidingExists(t, ctx, "eph-orphan") {
-		t.Error("eph-orphan НЕ снесён (прогон не существует) — осиротевшее правило протекло")
+		t.Error("eph-orphan was NOT deleted (run does not exist); orphaned rule leaked")
 	}
 }
 
-// TestIntegration_PurgeOrphanEphemeralTidings_NoGraceWindow — при grace=0
-// (граничный) свежий терминал тоже сносится: подтверждает, что именно grace
-// защищает окно доставки, а не что-то иное. Держим как контрапункт основному
-// guard-у (grace — обязательный, не косметический, параметр корректности).
+// TestIntegration_PurgeOrphanEphemeralTidings_NoGraceWindow: with grace=0, the
+// boundary case, even a fresh terminal is deleted. This confirms that grace, not
+// something else, protects the delivery window. Keep it as a counterpoint to the
+// main guard: grace is required for correctness, not cosmetic.
 func TestIntegration_PurgeOrphanEphemeralTidings_NoGraceWindow(t *testing.T) {
 	ctx := context.Background()
 	resetHeraldVoyageTables(t, ctx)
@@ -183,11 +186,11 @@ func TestIntegration_PurgeOrphanEphemeralTidings_NoGraceWindow(t *testing.T) {
 	seedEphemeralTiding(t, ctx, "eph-just", "ops", "01HVOYAGEJUST0000000000000E")
 
 	p := reaper.NewEphemeralTidingsPurger(integrationPool, discardLogger())
-	// grace=0 → terminal 1s назад уже «старше» (finished_at < NOW() - 0) → снос.
+	// grace=0 means terminal 1s ago is already "older" (finished_at < NOW() - 0), so delete.
 	if _, err := p.Run(ctx, 0, 1000); err != nil {
 		t.Fatalf("purger.Run: %v", err)
 	}
 	if tidingExists(t, ctx, "eph-just") {
-		t.Error("при grace=0 свежий терминал должен быть снесён (доказывает, что окно держит именно grace)")
+		t.Error("with grace=0, a fresh terminal must be deleted (proves grace holds the window)")
 	}
 }

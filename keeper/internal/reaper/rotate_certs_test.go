@@ -17,25 +17,25 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// --- fake pool/tx для CertRotator ---
+// --- fake pool/tx for CertRotator ---
 //
-// fakeCertDB моделирует минимальный набор SQL, который дёргает CertRotator:
-//   - SELECT ... FROM warrant ... FOR UPDATE SKIP LOCKED (скан due) → Query.
-//   - UPDATE warrant SET status ... WHERE cert_id ... AND status = ... (CAS) → Exec.
-//   - INSERT INTO warrant ... RETURNING cert_id, issued_at → QueryRow.
-//   - INSERT INTO voyages ... RETURNING created_at → QueryRow.
-//   - INSERT INTO voyage_targets ... → Exec.
-//   - UPDATE warrant SET status='superseded'/... (Supersede) → Exec.
+// fakeCertDB models the minimal SQL set touched by CertRotator:
+//   - SELECT ... FROM warrant ... FOR UPDATE SKIP LOCKED (due scan) -> Query.
+//   - UPDATE warrant SET status ... WHERE cert_id ... AND status = ... (CAS) -> Exec.
+//   - INSERT INTO warrant ... RETURNING cert_id, issued_at -> QueryRow.
+//   - INSERT INTO voyages ... RETURNING created_at -> QueryRow.
+//   - INSERT INTO voyage_targets ... -> Exec.
+//   - UPDATE warrant SET status='superseded'/... (Supersede) -> Exec.
 type fakeCertDB struct {
-	dueRows [][]any // строки скана due (см. selectDueCertsSQL колонки)
+	dueRows [][]any // due scan rows, see selectDueCertsSQL columns
 
-	// casResults: последовательность RowsAffected для UPDATE ... status CAS.
-	// Первый Exec с "AND status = $3" берёт casResults[0] и т.д. Пустой → 1
-	// (always won). Моделирует single-winner: 0 = проиграл гонку.
+	// casResults is the RowsAffected sequence for UPDATE ... status CAS. The
+	// first Exec with "AND status = $3" takes casResults[0], and so on. Empty
+	// means 1 (always won). Models single-winner: 0 means lost the race.
 	casResults []int64
 	casIdx     int
 
-	// счётчики фактов для ассертов.
+	// fact counters for asserts.
 	insertedWarrants int
 	insertedVoyages  int
 	insertedTargets  int
@@ -43,8 +43,8 @@ type fakeCertDB struct {
 	casCalls         int
 	markFailedCalls  int
 
-	execErr    error // если задан — все Exec падают (кроме скан-Query)
-	insertVErr error // ошибка INSERT INTO voyages
+	execErr    error // if set, all Exec calls fail, except scan Query
+	insertVErr error // INSERT INTO voyages error
 }
 
 func (f *fakeCertDB) BeginTx(_ context.Context, _ pgx.TxOptions) (pgx.Tx, error) {
@@ -54,7 +54,7 @@ func (f *fakeCertDB) BeginTx(_ context.Context, _ pgx.TxOptions) (pgx.Tx, error)
 func (f *fakeCertDB) exec(sql string) (pgconn.CommandTag, error) {
 	switch {
 	case strings.Contains(sql, "AND status = $3"):
-		// CAS-переход по cert_id. Различаем целевой статус для счётчиков.
+		// CAS transition by cert_id. Distinguish target status for counters.
 		f.casCalls++
 		n := int64(1)
 		if f.casIdx < len(f.casResults) {
@@ -62,9 +62,10 @@ func (f *fakeCertDB) exec(sql string) (pgconn.CommandTag, error) {
 		}
 		f.casIdx++
 		if strings.Contains(sql, "SET status = $2") {
-			// markFailed использует тот же markStatusSQL; отличим по контексту нельзя,
-			// поэтому markFailedCalls считаем в отдельном Exec-пути ниже (rotating→failed
-			// проходит именно как CAS). Здесь просто отдаём RowsAffected.
+			// markFailed uses the same markStatusSQL; it cannot be distinguished by
+			// context, so markFailedCalls is counted in a separate Exec path below
+			// (rotating->failed goes exactly through CAS). Here only return
+			// RowsAffected.
 		}
 		return pgconn.NewCommandTag("UPDATE " + itoaForTag(n)), nil
 	case strings.Contains(sql, "SET status = 'superseded'"):
@@ -74,7 +75,7 @@ func (f *fakeCertDB) exec(sql string) (pgconn.CommandTag, error) {
 		}
 		return pgconn.NewCommandTag("UPDATE 1"), nil
 	}
-	// voyage_targets вставляются через CopyFrom (см. fakeCertTx.CopyFrom), не Exec.
+	// voyage_targets are inserted through CopyFrom, see fakeCertTx.CopyFrom, not Exec.
 	return pgconn.CommandTag{}, nil
 }
 
@@ -100,15 +101,15 @@ func (f *fakeCertDB) query(sql string) (pgx.Rows, error) {
 	return &fakeCertRows{}, nil
 }
 
-// fakeCertTx — pgx.Tx-обёртка (delegate в fakeCertDB).
+// fakeCertTx is a pgx.Tx wrapper delegated to fakeCertDB.
 type fakeCertTx struct{ db *fakeCertDB }
 
 func (t *fakeCertTx) Begin(context.Context) (pgx.Tx, error) { return t, nil }
 func (t *fakeCertTx) Commit(context.Context) error          { return nil }
 func (t *fakeCertTx) Rollback(context.Context) error        { return nil }
 
-// CopyFrom — voyage.InsertTargets батчит targets через CopyFrom. Дренируем
-// source, считаем строки (одна на target) и фиксируем факт вставки.
+// CopyFrom lets voyage.InsertTargets batch targets through CopyFrom. Drain the
+// source, count rows (one per target), and record the insertion fact.
 func (t *fakeCertTx) CopyFrom(_ context.Context, _ pgx.Identifier, _ []string, src pgx.CopyFromSource) (int64, error) {
 	var n int64
 	for src.Next() {
@@ -138,7 +139,7 @@ func (t *fakeCertTx) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
 }
 func (t *fakeCertTx) Conn() *pgx.Conn { return nil }
 
-// fakeCertRows — pgx.Rows над [][]any.
+// fakeCertRows is pgx.Rows over [][]any.
 type fakeCertRows struct {
 	rows [][]any
 	idx  int
@@ -197,7 +198,7 @@ type certErrRow struct{ err error }
 
 func (r certErrRow) Scan(_ ...any) error { return r.err }
 
-// itoaForTag — переиспользуется из errand_purge_test.go (тот же пакет).
+// itoaForTag is reused from errand_purge_test.go in the same package.
 
 // --- fake PKI signer / vault writer / csrgen ---
 
@@ -219,7 +220,7 @@ func (s *fakeSigner) SignCSR(_ context.Context, _, _, _ string) (*SignedCert, er
 
 type fakeVaultWriter struct {
 	err    error
-	writes []string // пути записи
+	writes []string // write paths
 }
 
 func (w *fakeVaultWriter) WriteKV(_ context.Context, path string, _ map[string]any) error {
@@ -227,7 +228,7 @@ func (w *fakeVaultWriter) WriteKV(_ context.Context, path string, _ map[string]a
 	return w.err
 }
 
-// makeTestCertPEM генерит self-signed cert (для fakeSigner.cert / fingerprint).
+// makeTestCertPEM generates a self-signed cert for fakeSigner.cert / fingerprint.
 func makeTestCertPEM(t *testing.T) []byte {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -247,14 +248,14 @@ func makeTestCertPEM(t *testing.T) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
 
-// fakeCSRGen — детерминированный keypair+CSR (реальный, чтобы SignCSR-mock не
-// парсил; приватник не используется в ассертах).
+// fakeCSRGen is a deterministic keypair+CSR. It is real enough that the SignCSR
+// mock does not parse it; the private key is not used in asserts.
 func fakeCSRGen(_ string, _ []string) (privateKeyPEM, csrPEM []byte, err error) {
 	return []byte("-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----"),
 		[]byte("-----BEGIN CERTIFICATE REQUEST-----\nfake\n-----END CERTIFICATE REQUEST-----"), nil
 }
 
-// dueRow строит строку скана due (колонки selectDueCertsSQL).
+// dueRow builds a due scan row with selectDueCertsSQL columns.
 func dueRow(certID, incarnation string, notAfter time.Time) []any {
 	return []any{certID, incarnation, "cert", "secret/redis/x/tls/cert#cert", "old-serial", strings.Repeat("a", 64), notAfter, nil, nil}
 }
@@ -268,7 +269,7 @@ func testRotatorCfg() CertRotatorConfig {
 	}
 }
 
-// buildRotator собирает CertRotator поверх fake-ов.
+// buildRotator builds CertRotator over fakes.
 func buildRotator(db *fakeCertDB, signer PKISigner, vw CertVaultWriter, cfg CertRotatorConfig) *CertRotator {
 	return newCertRotatorFromDB(db, CertRotatorDeps{
 		Signer: signer,
@@ -279,10 +280,11 @@ func buildRotator(db *fakeCertDB, signer PKISigner, vw CertVaultWriter, cfg Cert
 	})
 }
 
-// --- guard-тесты ---
+// --- guard tests ---
 
-// TestCertRotator_HappyRotation — due-cert проходит полную цепочку: CAS won →
-// SignCSR → WriteKV cert+key → insert новых warrant (cert+key) → спавн Voyage.
+// TestCertRotator_HappyRotation checks that a due cert passes the full chain:
+// CAS won -> SignCSR -> WriteKV cert+key -> insert new warrant rows (cert+key)
+// -> spawn Voyage.
 func TestCertRotator_HappyRotation(t *testing.T) {
 	certPEM := makeTestCertPEM(t)
 	db := &fakeCertDB{
@@ -306,25 +308,25 @@ func TestCertRotator_HappyRotation(t *testing.T) {
 	if db.insertedTargets != 1 {
 		t.Errorf("voyage target must be inserted, got %d", db.insertedTargets)
 	}
-	// cert+key записаны в Vault (E3-пути).
+	// cert+key are written to Vault (E3 paths).
 	if len(vw.writes) != 2 {
 		t.Errorf("expected 2 Vault writes (cert+key), got %d: %v", len(vw.writes), vw.writes)
 	}
-	// cert+key warrant-строки вписаны.
+	// cert+key warrant rows are inserted.
 	if db.insertedWarrants != 2 {
 		t.Errorf("expected 2 warrant inserts (cert+key), got %d", db.insertedWarrants)
 	}
 }
 
-// TestCertRotator_SingleWinner_LostCAS — GUARD single-winner (design.md): если
-// CAS active→rotating вернул 0 (другой тик/инстанс перехватил), ротация НЕ
-// происходит — ни Voyage, ни Vault-записи, ни insert-ов. Два тика на один
-// due-cert не спавнят две ротации.
+// TestCertRotator_SingleWinner_LostCAS guards single-winner behavior
+// (design.md): if CAS active->rotating returns 0 because another tick/instance
+// intercepted it, rotation does NOT happen: no Voyage, no Vault writes, no
+// inserts. Two ticks for one due cert must not spawn two rotations.
 func TestCertRotator_SingleWinner_LostCAS(t *testing.T) {
 	certPEM := makeTestCertPEM(t)
 	db := &fakeCertDB{
 		dueRows:    [][]any{dueRow("cert-1", "redis-prod", time.Now().Add(24*time.Hour))},
-		casResults: []int64{0}, // проиграли гонку
+		casResults: []int64{0}, // lost the race
 	}
 	vw := &fakeVaultWriter{}
 	r := buildRotator(db, &fakeSigner{cert: certPEM}, vw, testRotatorCfg())
@@ -347,9 +349,10 @@ func TestCertRotator_SingleWinner_LostCAS(t *testing.T) {
 	}
 }
 
-// TestCertRotator_FailedPath_SignerDown — GUARD failed-path (design.md): SignCSR
-// упал → серт помечается failed (CAS rotating→failed), НЕ остаётся active, Voyage
-// не спавнится. Ошибка одной ротации не роняет тик (Run возвращает nil).
+// TestCertRotator_FailedPath_SignerDown guards the failed path (design.md):
+// SignCSR failed -> cert is marked failed (CAS rotating->failed), does NOT stay
+// active, and Voyage is not spawned. One rotation error does not fail the tick
+// because Run returns nil.
 func TestCertRotator_FailedPath_SignerDown(t *testing.T) {
 	db := &fakeCertDB{
 		dueRows:    [][]any{dueRow("cert-1", "redis-prod", time.Now().Add(24*time.Hour))},
@@ -368,8 +371,8 @@ func TestCertRotator_FailedPath_SignerDown(t *testing.T) {
 	if db.insertedVoyages != 0 {
 		t.Errorf("no Voyage on signer failure, got %d", db.insertedVoyages)
 	}
-	// Второй CAS-вызов = markFailed (rotating→failed): цепочка захватила строку
-	// (casCalls>=2), но не вписала active.
+	// The second CAS call is markFailed (rotating->failed): the chain captured
+	// the row (casCalls>=2) but did not insert active.
 	if db.casCalls < 2 {
 		t.Errorf("expected CAS to rotating THEN markFailed (>=2 CAS calls), got %d", db.casCalls)
 	}
@@ -378,8 +381,9 @@ func TestCertRotator_FailedPath_SignerDown(t *testing.T) {
 	}
 }
 
-// TestCertRotator_FailClosed_VaultDown — GUARD fail-closed (design.md): Vault
-// WriteKV упал → markFailed, Voyage не спавнится, Run НЕ падает (тик выживает).
+// TestCertRotator_FailClosed_VaultDown guards fail-closed behavior (design.md):
+// Vault WriteKV failed -> markFailed, Voyage is not spawned, and Run does NOT
+// fail, so the tick survives.
 func TestCertRotator_FailClosed_VaultDown(t *testing.T) {
 	certPEM := makeTestCertPEM(t)
 	db := &fakeCertDB{
@@ -401,8 +405,8 @@ func TestCertRotator_FailClosed_VaultDown(t *testing.T) {
 	}
 }
 
-// TestCertRotator_Idempotent_NoDueSkipsWork — нет due-сертов → тик no-op (0
-// ротаций, ничего не спавнится).
+// TestCertRotator_Idempotent_NoDueSkipsWork: no due certs means a no-op tick
+// with 0 rotations and no spawned work.
 func TestCertRotator_Idempotent_NoDueSkipsWork(t *testing.T) {
 	db := &fakeCertDB{dueRows: nil}
 	vw := &fakeVaultWriter{}
@@ -417,16 +421,17 @@ func TestCertRotator_Idempotent_NoDueSkipsWork(t *testing.T) {
 	}
 }
 
-// TestCertRotator_Jitter_SpreadsSameExpiry — GUARD jitter (design.md): N сертов
-// с ОДНИМ not_after не все считаются due в один тик — indi­vidual jitter
-// (hash%window) отсеивает часть. Проверяем, что при узком пороге и широком
-// jitter-окне не все N попадают в ротацию за один тик.
+// TestCertRotator_Jitter_SpreadsSameExpiry guards jitter (design.md): N certs
+// with the SAME not_after are not all considered due in one tick because
+// individual jitter (hash%window) filters out some of them. Verify that with a
+// narrow threshold and wide jitter window not all N rotate in one tick.
 func TestCertRotator_Jitter_SpreadsSameExpiry(t *testing.T) {
-	// not_after ровно на границе порога: threshold=30d, серт истекает через 30d.
-	// jitter сдвигает эффективный порог назад на hash%window; при window=15d
-	// часть сертов «ещё не due» (их сдвинутый not_after > now+threshold... нет,
-	// сдвиг НАЗАД приближает → due), поэтому конструируем обратный кейс:
-	// not_after чуть ЗА порогом (now+threshold+10d), jitter возвращает часть в due.
+	// not_after exactly on the threshold boundary: threshold=30d, cert expires in
+	// 30d. Jitter shifts effective not_after backward by hash%window; with
+	// window=15d some certs are not "still not due" because the backward shift
+	// brings them closer and makes them due. Build the opposite case instead:
+	// not_after slightly AFTER the threshold (now+threshold+10d), so jitter
+	// returns some certs to due.
 	now := time.Now()
 	cfg := CertRotatorConfig{
 		Threshold:           30 * 24 * time.Hour,
@@ -435,9 +440,9 @@ func TestCertRotator_Jitter_SpreadsSameExpiry(t *testing.T) {
 		DefaultPKIRole:      "svc",
 		MaxRotationsPerTick: 100,
 	}
-	// not_after = now + threshold + 10d: без jitter НИКТО не due (not_after >
-	// now+threshold). jitter сдвигает not_after назад на hash%20d; due только те,
-	// у кого hash%20d > 10d (сдвинулись под порог).
+	// not_after = now + threshold + 10d: without jitter NOBODY is due
+	// (not_after > now+threshold). Jitter shifts not_after backward by hash%20d;
+	// only certs with hash%20d > 10d move under the threshold.
 	notAfter := now.Add(cfg.Threshold + 10*24*time.Hour)
 
 	dueCandidates := 0
@@ -449,17 +454,17 @@ func TestCertRotator_Jitter_SpreadsSameExpiry(t *testing.T) {
 			dueCandidates++
 		}
 	}
-	// Ключевой инвариант: НЕ все и НЕ ноль — jitter реально размазывает.
+	// Key invariant: not all and not zero, so jitter really spreads work.
 	if dueCandidates == 0 {
-		t.Errorf("jitter отсёк ВСЕХ — окно/порог подобраны неверно (ожидался частичный набор)")
+		t.Errorf("jitter filtered out EVERYONE: window/threshold are wrong (expected a partial set)")
 	}
 	if dueCandidates == total {
-		t.Errorf("jitter не отсёк НИКОГО (%d/%d due) — размазывания нет", dueCandidates, total)
+		t.Errorf("jitter filtered out NOBODY (%d/%d due): no spreading", dueCandidates, total)
 	}
 }
 
-// TestCertRotator_ThresholdZero_NoScan — threshold=0 → правило ничего не
-// сканирует (защита от кривого конфига).
+// TestCertRotator_ThresholdZero_NoScan: threshold=0 means the rule scans
+// nothing, protecting against invalid config.
 func TestCertRotator_ThresholdZero_NoScan(t *testing.T) {
 	db := &fakeCertDB{dueRows: [][]any{dueRow("cert-1", "x", time.Now())}}
 	cfg := testRotatorCfg()
@@ -475,9 +480,9 @@ func TestCertRotator_ThresholdZero_NoScan(t *testing.T) {
 	}
 }
 
-// TestCertRotator_MissingDeps — signer/vault/csrgen/cfg обязательны.
+// TestCertRotator_MissingDeps: signer/vault/csrgen/cfg are required.
 func TestCertRotator_MissingDeps(t *testing.T) {
-	r := newCertRotatorFromDB(&fakeCertDB{}, CertRotatorDeps{}) // всё nil
+	r := newCertRotatorFromDB(&fakeCertDB{}, CertRotatorDeps{}) // all nil
 	if _, err := r.Run(context.Background(), 0, 0); err == nil {
 		t.Fatal("Run without deps must error")
 	}

@@ -1,30 +1,32 @@
-// scry.go — Reaper-правило `scry_background` (ADR-031 Slice C):
-// фоновое периодическое drift-сканирование incarnation-ов через тот же
-// pipeline, что использует Slice B on-demand (`scenario.Runner.CheckDrift`).
+// scry.go implements the Reaper rule `scry_background` (ADR-031 Slice C):
+// periodic background drift scanning for incarnations through the same pipeline
+// used by Slice B on-demand (`scenario.Runner.CheckDrift`).
 //
-// Архитектурное намерение (PM-pilot 2026-05):
+// Architecture intent (PM pilot 2026-05):
 //
-//   - **Default OFF + opt-in**: правило отсутствует в дефолтном keeper.yml,
-//     включается оператором явно (см. docs/keeper/reaper.md → scry_background).
+//   - **Default OFF + opt-in**: the rule is absent from the default keeper.yml
+//     and is enabled explicitly by the operator; see docs/keeper/reaper.md ->
+//     scry_background.
 //
-//   - **Counts-only в фоне**: полный DriftReport НЕ сохраняется — Reaper
-//     берёт у CheckDrift только агрегаты Summary и пишет их в новую колонку
-//     `incarnation.last_drift_summary` (миграция 050). Slice B on-demand
-//     возвращает полный отчёт прямо в response, как и было.
+//   - **Counts-only in background**: the full DriftReport is NOT stored. Reaper
+//     takes only Summary aggregates from CheckDrift and writes them to the new
+//     `incarnation.last_drift_summary` column (migration 050). Slice B on-demand
+//     still returns the full report directly in the response.
 //
-//   - **Validate-and-skip gate**: ПЕРЕД вызовом тяжёлого CheckDrift Reaper
-//     берёт короткую PG-tx с `SELECT … FOR UPDATE` и проверяет, что incarnation
-//     до сих пор `ready`/`drift`. Если статус ушёл в applying/destroying/locked
-//     между iterator-выборкой и goroutine-stem-stage-ом — фон тихо skip-ает.
+//   - **Validate-and-skip gate**: BEFORE calling the heavy CheckDrift, Reaper
+//     takes a short PG tx with `SELECT ... FOR UPDATE` and checks that the
+//     incarnation is still `ready`/`drift`. If status moved to
+//     applying/destroying/locked between iterator selection and goroutine stem
+//     stage, background quietly skips it.
 //
-//   - **Throttle**: `max_concurrent_in_flight` (default 10) ограничивает
-//     одновременные активные dry_run-прогоны (semaphore + добор счёта из PG).
-//     `min_interval_per_incarnation` отсекает повторный скан одной incarnation
-//     раньше срока (применяется в iterator-предикате).
+//   - **Throttle**: `max_concurrent_in_flight` (default 10) limits concurrent
+//     active dry_run runs (semaphore plus active count from PG).
+//     `min_interval_per_incarnation` filters repeated scans of the same
+//     incarnation before the deadline, applied in the iterator predicate.
 //
-//   - **НЕ блокирует tick**: каждый кандидат уходит в отдельную goroutine;
-//     Reaper-tick стартует их батч и возвращается к loop-у, не дожидаясь
-//     завершения. Метрики/завершение пишутся в самой goroutine.
+//   - **Does NOT block tick**: each candidate goes to a separate goroutine; the
+//     Reaper tick starts the batch and returns to the loop without waiting for
+//     completion. Metrics/completion are written in the goroutine itself.
 package reaper
 
 import (
@@ -44,88 +46,89 @@ import (
 )
 
 const (
-	// defaultScryBackgroundInterval — period между tick-ами правила, если в
-	// конфиге не задан. 6h — продакт-выбор PM (Slice C pilot): редкий фон,
-	// чтобы не создавать постоянной dry_run-нагрузки; оператор поднимает по
-	// необходимости.
+	// defaultScryBackgroundInterval is the period between rule ticks when config
+	// does not set it. 6h is the PM product choice for the Slice C pilot: sparse
+	// background work avoids constant dry_run load, and the operator can raise it
+	// if needed.
 	defaultScryBackgroundInterval = 6 * time.Hour
 
-	// defaultScryBackgroundMaxConcurrent — потолок одновременно идущих
-	// фоновых dry_run-прогонов. 10 — компромисс: достаточно для прохода
-	// крупного инвентаря за рабочий час без забивания Acolyte-пула, и мало,
-	// чтобы случайный backlog не съел весь work-queue.
+	// defaultScryBackgroundMaxConcurrent is the cap for concurrently running
+	// background dry_run runs. 10 is a compromise: enough to scan a large
+	// inventory within a work hour without saturating the Acolyte pool, and small
+	// enough that an accidental backlog does not consume the whole work queue.
 	defaultScryBackgroundMaxConcurrent = 10
 
-	// defaultScryBackgroundBatchSize — размер батча incarnation-ов, который
-	// одна tick-итерация забирает из iterator-а. Меньше max_concurrent_in_flight
-	// + headroom, чтобы при полностью занятом пуле tick тратил мало времени
-	// и быстро отдавал управление tickLoop-у.
+	// defaultScryBackgroundBatchSize is the incarnation batch size fetched from
+	// the iterator by one tick iteration. It is smaller than
+	// max_concurrent_in_flight plus headroom so a tick spends little time when
+	// the pool is full and quickly returns control to tickLoop.
 	defaultScryBackgroundBatchSize = 20
 )
 
-// DriftChecker — узкий интерфейс scenario.Runner-а, нужный фоновому правилу.
-// Сужение позволяет unit-тестам подставлять fake; production wire-up в
-// daemon.setupReaper передаёт *scenario.Runner.
+// DriftChecker is the narrow scenario.Runner interface needed by the background
+// rule. Narrowing lets unit tests substitute a fake; production wire-up in
+// daemon.setupReaper passes *scenario.Runner.
 type DriftChecker interface {
 	CheckDrift(ctx context.Context, spec scenario.CheckDriftSpec) (*scenario.DriftReport, error)
 	MarkDriftStatus(ctx context.Context, name string, hasDrift bool) error
 }
 
-// ServiceRefResolver — узкая поверхность реестра сервисов (`scenario.ServiceRegistry`),
-// нужная фоновому правилу: резолв `service` → `artifact.ServiceRef` для
-// `scenario.CheckDriftSpec`. Возвращает копию ref-а; геттер синхронный (см.
+// ServiceRefResolver is the narrow service registry surface
+// (`scenario.ServiceRegistry`) needed by the background rule: resolve `service`
+// -> `artifact.ServiceRef` for `scenario.CheckDriftSpec`. It returns a copy of
+// the ref; the getter is synchronous, see
 // serviceregistry.Holder.Resolve).
 type ServiceRefResolver interface {
 	Resolve(service string) (artifact.ServiceRef, bool)
 }
 
-// ScryDeps — внешние зависимости фонового drift-правила. Передаются через
-// поля reaper.Deps (см. Deps.Scry); nil-ScryDeps → правило `scry_background`
-// в dispatch-е пропускается с одним warn-ом за uptime (защита от опечатки
-// в keeper.yml).
+// ScryDeps are external dependencies for the background drift rule. They are
+// passed through reaper.Deps fields, see Deps.Scry. nil ScryDeps makes
+// `scry_background` skipped in dispatch with one warn per uptime, guarding
+// against keeper.yml typos.
 type ScryDeps struct {
-	// Pool — конкретный pgx-pool. queryRower-абстракции недостаточно: gate
-	// требует BeginTx (SELECT FOR UPDATE + Commit/Rollback). nil → правило не
-	// функционирует.
+	// Pool is the concrete pgx pool. queryRower abstraction is not enough
+	// because gate requires BeginTx (SELECT FOR UPDATE + Commit/Rollback). nil
+	// means the rule does not function.
 	Pool TxBeginnerExecQuerier
 
-	// DriftChecker — реализатор Slice B pipeline (`scenario.Runner`). nil → no-op.
+	// DriftChecker implements the Slice B pipeline (`scenario.Runner`). nil -> no-op.
 	DriftChecker DriftChecker
 
-	// Services — реестр сервисов для резолва ServiceRef по incarnation.service.
+	// Services is the service registry for resolving ServiceRef by incarnation.service.
 	Services ServiceRefResolver
 
-	// Audit — writer audit-event-а `incarnation.drift_checked` (source=background).
-	// nil → audit не пишется (warn в лог caller-а wire-up-а).
+	// Audit writes `incarnation.drift_checked` audit events (source=background).
+	// nil -> audit is not written, with a warn in the wire-up caller log.
 	Audit audit.Writer
 }
 
-// TxBeginnerExecQuerier — узкое подмножество [*pgxpool.Pool], нужное Scry-rule.
-// Объединяет [incarnation.TxBeginner] (для FOR UPDATE-tx) и
-// [incarnation.ExecQueryRower] (для iterator/update-вызовов). Реальный
-// *pgxpool.Pool удовлетворяет автоматически.
+// TxBeginnerExecQuerier is the narrow [*pgxpool.Pool] subset needed by the Scry
+// rule. It combines [incarnation.TxBeginner] for FOR UPDATE tx and
+// [incarnation.ExecQueryRower] for iterator/update calls. A real *pgxpool.Pool
+// satisfies it automatically.
 type TxBeginnerExecQuerier interface {
 	incarnation.TxBeginner
 	incarnation.ExecQueryRower
 }
 
-// runScryBackground — handler правила `scry_background` (вызывается из
-// reaper.dispatch). Iterator → батч → per-incarnation goroutine с
+// runScryBackground handles the `scry_background` rule, called from
+// reaper.dispatch. Iterator -> batch -> per-incarnation goroutine with
 // throttle-check + validate-tx + CheckDrift + update + audit.
 //
-// throttle: семафор `max_concurrent_in_flight` минус число уже идущих
-// dry_run-прогонов в PG. Семафор-канал создаётся на каждый tick (lifetime —
-// один tick + завершение всех его goroutine-ов).
+// throttle: semaphore `max_concurrent_in_flight` minus the number of already
+// running dry_run runs in PG. The semaphore channel is created per tick, with
+// lifetime of one tick plus completion of all its goroutines.
 //
-// Reaper-tick синхронно ждёт завершения всех запущенных goroutine-ов до
-// возврата управления tickLoop-у. Это даёт корректные метрики
-// (ObserveRule с числом действительно завершённых) и предотвращает накопление
-// «висящих» goroutine-ов при ctx.Cancel. Семантика «фон не блокируется»
-// сохраняется на уровне правила (next tick придёт только через interval), но
-// один tick — не пожизненный.
+// Reaper tick synchronously waits for all launched goroutines before returning
+// control to tickLoop. This gives correct metrics (ObserveRule with the number
+// actually completed) and prevents accumulating dangling goroutines on
+// ctx.Cancel. The "background does not block" semantics remain at the rule
+// level because the next tick comes only after interval, but one tick is not
+// unbounded.
 func (r *Runner) runScryBackground(ctx context.Context, ruleName string, rule config.ReaperRule, batchSize int, dryRun bool, scry *ScryDeps) {
 	if scry == nil || scry.Pool == nil || scry.DriftChecker == nil || scry.Services == nil {
-		r.deps.Logger.Warn("reaper: scry_background — отсутствуют ScryDeps, правило пропущено",
+		r.deps.Logger.Warn("reaper: scry_background: missing ScryDeps, rule skipped",
 			slog.String("rule", ruleName),
 		)
 		return
@@ -136,7 +139,7 @@ func (r *Runner) runScryBackground(ctx context.Context, ruleName string, rule co
 		maxConcurrent = *rule.MaxConcurrentInFlight
 	}
 	if maxConcurrent <= 0 {
-		r.deps.Logger.Info("reaper: scry_background — max_concurrent_in_flight<=0, тик пропущен (правило заглушено без enabled=false)",
+		r.deps.Logger.Info("reaper: scry_background: max_concurrent_in_flight<=0, tick skipped (rule muted without enabled=false)",
 			slog.String("rule", ruleName),
 			slog.Int("max_concurrent_in_flight", maxConcurrent),
 		)
@@ -145,7 +148,7 @@ func (r *Runner) runScryBackground(ctx context.Context, ruleName string, rule co
 
 	minInterval, err := parseRuleDuration(rule.MinIntervalPerIncarnation, 0)
 	if err != nil {
-		r.deps.Logger.Warn("reaper: scry_background — невалидный min_interval_per_incarnation, использую 0 (без throttle)",
+		r.deps.Logger.Warn("reaper: scry_background: invalid min_interval_per_incarnation, using 0 (no throttle)",
 			slog.String("rule", ruleName),
 			slog.String("raw", rule.MinIntervalPerIncarnation),
 			slog.Any("error", err),
@@ -157,10 +160,10 @@ func (r *Runner) runScryBackground(ctx context.Context, ruleName string, rule co
 	if iterBatch <= 0 {
 		iterBatch = defaultScryBackgroundBatchSize
 	}
-	// Не запрашиваем у iterator-а больше, чем поместится в пул: lишние строки
-	// просто будут отброшены семафором с warn-ом «throttled». Cap-аем по
-	// max_concurrent_in_flight (плюс маленький headroom не нужен — sem.Acquire
-	// блокирует, не дропает, см. ниже).
+	// Do not ask the iterator for more than fits in the pool. Extra rows would
+	// simply be dropped by the semaphore with a "throttled" warn. Cap by
+	// max_concurrent_in_flight; a small headroom is unnecessary because
+	// sem.Acquire blocks instead of dropping, see below.
 	if iterBatch > maxConcurrent {
 		iterBatch = maxConcurrent
 	}
@@ -177,19 +180,19 @@ func (r *Runner) runScryBackground(ctx context.Context, ruleName string, rule co
 
 	start := time.Now()
 
-	// Учитываем уже идущие в кластере dry_run-прогоны (cross-keeper-throttle):
-	// сем-cap = max_concurrent_in_flight - active. <=0 → этот tick молча
-	// пропускается.
+	// Account for dry_run runs already active in the cluster (cross-Keeper
+	// throttle): sem cap = max_concurrent_in_flight - active. <=0 means this
+	// tick is skipped quietly.
 	active, err := incarnation.CountActiveDryRuns(ctx, scry.Pool)
 	if err != nil {
-		r.deps.Logger.Warn("reaper: scry_background — не получилось посчитать активные dry_run, пропуск тика",
+		r.deps.Logger.Warn("reaper: scry_background: failed to count active dry_run, skipping tick",
 			slog.String("rule", ruleName), slog.Any("error", err))
 		r.deps.Metrics.ObserveRule(ruleName, 0, err, time.Since(start))
 		return
 	}
 	headroom := maxConcurrent - active
 	if headroom <= 0 {
-		r.deps.Logger.Info("reaper: scry_background — пул занят, тик пропущен",
+		r.deps.Logger.Info("reaper: scry_background: pool full, tick skipped",
 			slog.String("rule", ruleName),
 			slog.Int("active", active),
 			slog.Int("max_concurrent_in_flight", maxConcurrent),
@@ -200,7 +203,7 @@ func (r *Runner) runScryBackground(ctx context.Context, ruleName string, rule co
 
 	candidates, err := incarnation.SelectScryCandidates(ctx, scry.Pool, minInterval, iterBatch)
 	if err != nil {
-		r.deps.Logger.Warn("reaper: scry_background — iterator упал",
+		r.deps.Logger.Warn("reaper: scry_background: iterator failed",
 			slog.String("rule", ruleName), slog.Any("error", err))
 		r.deps.Metrics.ObserveRule(ruleName, 0, err, time.Since(start))
 		return
@@ -210,8 +213,8 @@ func (r *Runner) runScryBackground(ctx context.Context, ruleName string, rule co
 		return
 	}
 
-	// Семафор-канал + WaitGroup, чтобы tick дождался завершения всех своих
-	// goroutine-ов (см. docstring выше).
+	// Semaphore channel plus WaitGroup-like completion so the tick waits for all
+	// its goroutines; see docstring above.
 	sem := make(chan struct{}, headroom)
 	done := make(chan struct{})
 	launched := 0
@@ -235,7 +238,7 @@ func (r *Runner) runScryBackground(ctx context.Context, ruleName string, rule co
 		<-done
 	}
 	r.deps.Metrics.ObserveRule(ruleName, int64(launched), nil, time.Since(start))
-	r.deps.Logger.Info("reaper: scry_background tick завершён",
+	r.deps.Logger.Info("reaper: scry_background tick completed",
 		slog.String("rule", ruleName),
 		slog.Int("launched", launched),
 		slog.Int("candidates", len(candidates)),
@@ -243,30 +246,30 @@ func (r *Runner) runScryBackground(ctx context.Context, ruleName string, rule co
 	)
 }
 
-// runScryOne — обработка одного incarnation в батче: validate-tx → CheckDrift
-// → UpdateDriftScanResult + MarkDriftStatus + audit. Защищена от panic-а в
-// CheckDrift на уровне tick-а: error из CheckDrift логируется и приводит к
-// no-op-у update (не затирает прежний last_drift_*).
+// runScryOne processes one incarnation in a batch: validate-tx -> CheckDrift ->
+// UpdateDriftScanResult + MarkDriftStatus + audit. It is protected from
+// CheckDrift panic at the tick level: CheckDrift error is logged and causes an
+// update no-op, preserving previous last_drift_* values.
 func (r *Runner) runScryOne(ctx context.Context, cand incarnation.ScryCandidate, scry *ScryDeps) {
 	log := r.deps.Logger.With(
 		slog.String("rule", "scry_background"),
 		slog.String("incarnation", cand.Name),
 	)
 
-	// Validate-and-go: короткая PG-tx с SELECT FOR UPDATE для recheck-а статуса.
-	// Если incarnation ушла из ready/drift между iterator-выборкой и сейчас —
-	// фон skip-ает без аудита и метрик-инкремента.
+	// Validate-and-go: short PG tx with SELECT FOR UPDATE to recheck status. If
+	// incarnation moved out of ready/drift between iterator selection and now,
+	// background skips it without audit or metric increment.
 	if ok, err := scryCheckStatus(ctx, scry.Pool, cand.Name); err != nil {
-		log.Warn("scry: validate tx упала, скан пропущен", slog.Any("error", err))
+		log.Warn("scry: validate tx failed, scan skipped", slog.Any("error", err))
 		return
 	} else if !ok {
-		log.Debug("scry: incarnation не в ready/drift, скан пропущен")
+		log.Debug("scry: incarnation is not ready/drift, scan skipped")
 		return
 	}
 
 	serviceRef, ok := scry.Services.Resolve(cand.Service)
 	if !ok {
-		log.Warn("scry: service не зарегистрирован, скан пропущен",
+		log.Warn("scry: service is not registered, scan skipped",
 			slog.String("service", cand.Service))
 		return
 	}
@@ -276,27 +279,26 @@ func (r *Runner) runScryOne(ctx context.Context, cand incarnation.ScryCandidate,
 		ApplyID:         applyID,
 		IncarnationName: cand.Name,
 		ServiceRef:      serviceRef,
-		// InputOverride: nil — фон не переопределяет converge-параметры,
-		// только auto-from-state (Slice B логика resolveDriftInput).
-		// StartedByAID: "" — фон без identity Архонта.
+		// InputOverride: nil means background does not override converge
+		// parameters, only auto-from-state (Slice B resolveDriftInput logic).
+		// StartedByAID: "" means background has no Archon identity.
 	})
 	if err != nil {
-		// ErrConvergeMissing — частый «штатный» случай для сервисов без
-		// drift-поддержки. Логируем тише.
+		// ErrConvergeMissing is a common expected case for services without drift
+		// support. Log it quieter.
 		if errors.Is(err, scenario.ErrConvergeMissing) {
-			log.Info("scry: converge отсутствует, drift не поддержан этим сервисом",
+			log.Info("scry: converge is absent, drift is not supported by this service",
 				slog.String("service", cand.Service))
 			return
 		}
-		log.Warn("scry: CheckDrift упал, скан не зафиксирован",
+		log.Warn("scry: CheckDrift failed, scan not recorded",
 			slog.String("apply_id", applyID),
 			slog.Any("error", err))
 		return
 	}
 
-	// Сначала summary (информационный слой), потом MarkDriftStatus (статус),
-	// потом audit. На каждом шаге best-effort: ошибка одного не отменяет
-	// остальные.
+	// First summary (information layer), then MarkDriftStatus (status), then
+	// audit. Each step is best-effort: one error does not cancel the others.
 	summary := incarnation.DriftScanSummary{
 		HostsDrifted:     report.Summary.HostsDrifted,
 		HostsClean:       report.Summary.HostsClean,
@@ -306,12 +308,12 @@ func (r *Runner) runScryOne(ctx context.Context, cand incarnation.ScryCandidate,
 		ScannedAt:        report.CheckedAt,
 	}
 	if err := incarnation.UpdateDriftScanResult(ctx, scry.Pool, cand.Name, summary); err != nil {
-		log.Warn("scry: запись last_drift_summary упала", slog.Any("error", err))
+		log.Warn("scry: last_drift_summary write failed", slog.Any("error", err))
 	}
 
 	hasDrift := report.Summary.HostsDrifted > 0 || report.Summary.HostsFailed > 0
 	if err := scry.DriftChecker.MarkDriftStatus(ctx, cand.Name, hasDrift); err != nil {
-		log.Warn("scry: MarkDriftStatus упал", slog.Any("error", err))
+		log.Warn("scry: MarkDriftStatus failed", slog.Any("error", err))
 	}
 
 	if scry.Audit != nil {
@@ -334,7 +336,7 @@ func (r *Runner) runScryOne(ctx context.Context, cand incarnation.ScryCandidate,
 		})
 	}
 
-	log.Info("scry: incarnation просканирована",
+	log.Info("scry: incarnation scanned",
 		slog.String("apply_id", applyID),
 		slog.Int("hosts_total", summary.TotalHosts),
 		slog.Int("hosts_drifted", summary.HostsDrifted),
@@ -343,14 +345,15 @@ func (r *Runner) runScryOne(ctx context.Context, cand incarnation.ScryCandidate,
 	)
 }
 
-// scryCheckStatus — короткая PG-tx, защищающая фон от запуска dry_run-а против
-// incarnation, статус которой только что ушёл из ready/drift (operator стартанул
-// run/destroy/upgrade между iterator-выборкой и goroutine-stage-ом).
-// Возвращает true, если incarnation ещё в ready/drift на момент проверки.
+// scryCheckStatus is a short PG tx that protects background from starting
+// dry_run against an incarnation whose status just moved out of ready/drift
+// because an operator started run/destroy/upgrade between iterator selection and
+// goroutine stage. It returns true when the incarnation is still ready/drift at
+// check time.
 //
-// SELECT … FOR UPDATE сериализует против любого конкурентного scenario.lockRun
-// (тот тоже берёт incarnation FOR UPDATE). Tx немедленно коммитится (gate-only),
-// чтобы не держать блокировку на всё время Scry-прогона.
+// SELECT ... FOR UPDATE serializes against any concurrent scenario.lockRun,
+// which also takes incarnation FOR UPDATE. Tx commits immediately (gate-only)
+// so the lock is not held for the whole Scry run.
 func scryCheckStatus(ctx context.Context, pool incarnation.TxBeginner, name string) (bool, error) {
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {

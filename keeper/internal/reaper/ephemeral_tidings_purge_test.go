@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// fakeEphemeralTidingsExecer — fake ephemeralTidingsExecer для unit-тестов.
+// fakeEphemeralTidingsExecer is a fake ephemeralTidingsExecer for unit tests.
 type fakeEphemeralTidingsExecer struct {
 	calls   int
 	lastSQL string
@@ -47,36 +47,37 @@ func TestEphemeralTidingsPurger_Run_PassesGraceAndReturnsCount(t *testing.T) {
 	if fe.lastSQL != purgeOrphanEphemeralTidingsSQL {
 		t.Errorf("SQL mismatch:\n got: %q\nwant: %q", fe.lastSQL, purgeOrphanEphemeralTidingsSQL)
 	}
-	// В отличие от errand-purge (TTL зашит в строку), grace ВХОДИТ в предикат
-	// как $1-аргумент — без него снос опередил бы доставку терминального
-	// уведомления (ADR-052(g)).
+	// Unlike errand purge, where TTL is embedded in the SQL string, grace is part
+	// of the predicate as the $1 argument. Without it, deletion could outrun
+	// delivery of the terminal notification (ADR-052(g)).
 	if len(fe.args) != 1 {
-		t.Fatalf("args len = %d, want 1 (grace-интервал в предикате)", len(fe.args))
+		t.Fatalf("args len = %d, want 1 (grace interval in predicate)", len(fe.args))
 	}
 	if d, ok := fe.args[0].(time.Duration); !ok || d != grace {
 		t.Errorf("args[0] = %v, want grace=%v", fe.args[0], grace)
 	}
 }
 
-// TestEphemeralTidingsPurger_SQL_TerminalAndOrphan — guard: SQL сносит ТОЛЬКО
-// ephemeral, учитывает terminal+grace И несуществующий voyage. Защита от
-// регресса предиката (снёс бы in-flight / non-terminal правила).
+// TestEphemeralTidingsPurger_SQL_TerminalAndOrphan guards that SQL deletes ONLY
+// ephemeral tidings, accounts for terminal+grace, and handles nonexistent
+// voyages. This protects the predicate from regressions that would delete
+// in-flight or non-terminal rules.
 func TestEphemeralTidingsPurger_SQL_TerminalAndOrphan(t *testing.T) {
 	sql := purgeOrphanEphemeralTidingsSQL
 	for _, must := range []string{
-		"t.ephemeral",                // только разовые
-		"NOT EXISTS",                 // осиротевший (voyage удалён)
-		"v.status IN",                // только терминал
-		"v.finished_at < NOW() - $1", // grace-период
+		"t.ephemeral",                // ephemeral only
+		"NOT EXISTS",                 // orphaned, voyage deleted
+		"v.status IN",                // terminal only
+		"v.finished_at < NOW() - $1", // grace period
 	} {
 		if !strings.Contains(sql, must) {
-			t.Errorf("SQL не содержит обязательный фрагмент %q:\n%s", must, sql)
+			t.Errorf("SQL does not contain required fragment %q:\n%s", must, sql)
 		}
 	}
-	// Не должен трогать non-terminal статусы напрямую — гарантия через IN-список
-	// (running/pending/scheduled в нём отсутствуют).
+	// It must not touch non-terminal statuses directly; the IN list is the guard
+	// because running/pending/scheduled are absent from it.
 	if strings.Contains(sql, "'running'") || strings.Contains(sql, "'pending'") {
-		t.Errorf("SQL предикат не должен ссылаться на non-terminal статусы:\n%s", sql)
+		t.Errorf("SQL predicate must not reference non-terminal statuses:\n%s", sql)
 	}
 }
 
