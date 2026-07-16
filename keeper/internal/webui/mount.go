@@ -9,37 +9,38 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// uiPrefix — URL-префикс встроенного UI. Слэш на конце обязателен для отдачи
-// статики (http.FileServer резолвит пути относительно него); голый /ui
-// редиректится на /ui/ (см. Mount).
+// uiPrefix is URL prefix of embedded UI. Trailing slash is required for serving
+// static files (http.FileServer resolves paths relative to it); bare /ui
+// redirects to /ui/ (see Mount).
 const uiPrefix = "/ui/"
 
-// indexFile — SPA-точка входа. Любой под-путь /ui/, не являющийся реальным
-// файлом embed-дерева, отдаёт её (client-side роутинг), а не 404.
+// indexFile is SPA entry point. Any /ui/ subpath that is not a real file in the
+// embed tree serves it (client-side routing), not 404.
 const indexFile = "index.html"
 
-// Mount вешает публичные роуты встроенного UI на корневой chi-router (ВНЕ /v1,
-// parity с /docs): без RequireJWT/RBAC/audit/maxBody/metrics-обвязки. Статика
-// публична намеренно (JS/CSS/HTML — не секрет, ADR-055 §в); защищён API.
+// Mount attaches public embedded UI routes to root chi-router (OUTSIDE /v1,
+// parity with /docs): without RequireJWT/RBAC/audit/maxBody/metrics wrapping.
+// Static files are intentionally public (JS/CSS/HTML are not secret, ADR-055
+// §c); API is protected.
 //
-// Топология:
-//   - GET /ui            → 308 redirect на /ui/ (канонизация без слэша; 308
-//     сохраняет метод, хотя для GET это безразлично — симметрия с http.Redirect-
-//     практикой статик-серверов).
-//   - GET /ui/           → index.html (корень SPA).
-//   - GET /ui/<file>     → реальный файл embed-дерева (assets/<file>), напр.
+// Topology:
+//   - GET /ui            -> 308 redirect to /ui/ (canonicalization without slash;
+//     308 preserves method, although for GET it is irrelevant; symmetry with
+//     http.Redirect practice of static servers).
+//   - GET /ui/           -> index.html (SPA root).
+//   - GET /ui/<file>     -> real embed-tree file (assets/<file>), e.g.
 //     /ui/assets/app.js.
-//   - GET /ui/<route>    → index.html, если <route> не резолвится в файл
-//     (SPA-fallback для deep-link client-side роутера вроде /ui/incarnations/42).
+//   - GET /ui/<route>    -> index.html if <route> does not resolve to file
+//     (SPA fallback for client-side router deep-link like /ui/incarnations/42).
 //
-// Directory-listing отключён (sub-FS не отдаётся как индекс — fallback на
-// index.html), path-traversal невозможен (раздача из embed.FS, не disk-FS).
+// Directory listing is disabled (sub-FS is not served as index; fallback to
+// index.html), path traversal is impossible (serving from embed.FS, not disk-FS).
 func Mount(r chi.Router) {
-	// fs.Sub снимает корневую папку assets/: embed-дерево держит ассеты под
-	// assets/, но раздаём их под /ui/ напрямую (assets/index.html → /ui/).
-	// Ошибка тут невозможна при валидном go:embed-дереве (assets/ существует);
-	// при пустом дереве (забытый снапшот) Open вернёт ошибку на запросе, а не
-	// на mount-е — отловится guard-тестом/ревью.
+	// fs.Sub strips root assets/ directory: embed tree keeps assets under assets/,
+	// but we serve them under /ui/ directly (assets/index.html -> /ui/). Error is
+	// impossible with a valid go:embed tree (assets/ exists); with an empty tree
+	// (forgotten snapshot), Open returns error on request, not on mount, and a
+	// guard test/review catches it.
 	sub, err := fs.Sub(FS, "assets")
 	if err != nil {
 		panic("webui: fs.Sub(assets): " + err.Error())
@@ -51,13 +52,13 @@ func Mount(r chi.Router) {
 	r.Get(uiPrefix+"*", spaHandler(sub))
 }
 
-// spaHandler отдаёт статику из встроенного дерева с SPA-fallback на index.html.
-// Реальный файл → как файл; несуществующий под-путь → index.html (200).
+// spaHandler serves static files from the embedded tree with SPA fallback to
+// index.html. Real file -> as file; missing subpath -> index.html (200).
 func spaHandler(sub fs.FS) http.HandlerFunc {
 	fileServer := http.StripPrefix(uiPrefix, http.FileServer(http.FS(sub)))
 	return func(w http.ResponseWriter, req *http.Request) {
-		// rel — путь внутри embed-дерева (без /ui/-префикса). "" / "/" → корень
-		// SPA: отдаём index.html напрямую (FileServer на "" попытался бы выдать
+		// rel is path inside embed tree (without /ui/ prefix). "" / "/" -> SPA
+		// root: serve index.html directly (FileServer on "" would try to return
 		// directory-listing).
 		rel := strings.TrimPrefix(req.URL.Path, uiPrefix)
 		rel = strings.TrimPrefix(rel, "/")
@@ -66,11 +67,11 @@ func spaHandler(sub fs.FS) http.HandlerFunc {
 			return
 		}
 
-		// Реальный файл embed-дерева → отдаём http.FileServer-ом (корректный
-		// Content-Type по расширению). Иначе (под-путь client-side роутера) →
-		// SPA-fallback на index.html. path.Clean нормализует ./.. до проверки;
-		// embed.FS сам по себе устойчив к traversal, но чистый rel убирает
-		// ложные промахи Stat на "a/./b".
+		// Real embed-tree file -> serve with http.FileServer (correct Content-Type
+		// by extension). Otherwise (client-side router subpath) -> SPA fallback to
+		// index.html. path.Clean normalizes ./.. before check; embed.FS is
+		// traversal-resistant by itself, but clean rel removes false Stat misses on
+		// "a/./b".
 		if isFile(sub, path.Clean(rel)) {
 			fileServer.ServeHTTP(w, req)
 			return
@@ -79,16 +80,17 @@ func spaHandler(sub fs.FS) http.HandlerFunc {
 	}
 }
 
-// isFile сообщает, существует ли в дереве обычный файл по rel-пути. Каталог
-// файлом не считается (его запрос уходит в SPA-fallback, не в directory-listing).
+// isFile reports whether a regular file exists in the tree by rel path.
+// Directory is not a file (its request goes to SPA fallback, not directory
+// listing).
 func isFile(sub fs.FS, rel string) bool {
 	info, err := fs.Stat(sub, rel)
 	return err == nil && !info.IsDir()
 }
 
-// serveIndex отдаёт index.html (200) — корень SPA и fallback для client-side
-// маршрутов. http.ServeContent выставляет Content-Type/Length по содержимому и
-// уважает conditional-заголовки.
+// serveIndex serves index.html (200): SPA root and fallback for client-side
+// routes. http.ServeContent sets Content-Type/Length by content and respects
+// conditional headers.
 func serveIndex(w http.ResponseWriter, req *http.Request, sub fs.FS) {
 	data, err := fs.ReadFile(sub, indexFile)
 	if err != nil {
