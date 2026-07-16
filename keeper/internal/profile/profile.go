@@ -1,12 +1,12 @@
-// Package profile — реестр Cloud-Profile-ей в Postgres (ADR-017,
+// Package profile is the Cloud Profile registry in Postgres (ADR-017,
 // docs/keeper/cloud.md).
 //
-// Cloud.CRUD.a: типы + CRUD (Insert / SelectByName / SelectAll /
-// SelectByProvider). Profile — VM-spec поверх конкретного Provider-а:
-// `Params` (jsonb, произвольный VM-spec) + optional `CloudInit` (userdata).
+// Cloud.CRUD.a: types + CRUD (Insert / SelectByName / SelectAll /
+// SelectByProvider). Profile is a VM spec on top of a concrete Provider:
+// `Params` (jsonb, freeform VM spec) + optional `CloudInit` (userdata).
 //
-// Валидация `Params` против CloudDriver.Schema живёт на service-слое
-// (Cloud.CRUD.b), не здесь.
+// Validation of `Params` against CloudDriver.Schema lives at the service layer
+// (Cloud.CRUD.b), not here.
 package profile
 
 import (
@@ -14,20 +14,20 @@ import (
 	"time"
 )
 
-// NamePattern — каноническая форма имени Profile: kebab-case, длина 1..63.
-// То же, что CHECK profiles_name_format в 020-миграции.
+// NamePattern is the canonical Profile name form: kebab-case, length 1..63. Same
+// as CHECK profiles_name_format in migration 020.
 const NamePattern = `^[a-z0-9-]{1,63}$`
 
 var nameRe = regexp.MustCompile(NamePattern)
 
-// ValidName проверяет соответствие name канонической форме (kebab 1..63).
+// ValidName checks that name matches the canonical form (kebab 1..63).
 func ValidName(name string) bool { return nameRe.MatchString(name) }
 
-// Profile — runtime-представление строки реестра `profiles`.
+// Profile is the runtime representation of a `profiles` registry row.
 //
-// Params — `map[string]any` для freeform VM-spec; типизация по конкретному
-// CloudDriver-у живёт в его schema, не в этом слое. CloudInit nil → колонка
-// NULL (userdata отсутствует).
+// Params is `map[string]any` for freeform VM spec; concrete CloudDriver typing
+// lives in its schema, not in this layer. CloudInit nil means NULL column (userdata
+// absent).
 type Profile struct {
 	Name         string         `json:"name"`
 	Provider     string         `json:"provider"`

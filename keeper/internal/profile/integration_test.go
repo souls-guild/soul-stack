@@ -1,7 +1,7 @@
 //go:build integration
 
-// Integration-тесты CRUD profile через testcontainers-go.
-// Паттерн совпадает с keeper/internal/provider/integration_test.go.
+// Integration tests for profile CRUD through testcontainers-go.
+// The pattern matches keeper/internal/provider/integration_test.go.
 
 package profile
 
@@ -70,8 +70,8 @@ func run(m *testing.M) int {
 	return m.Run()
 }
 
-// setupProvider — TRUNCATE + seed оператора + один Provider, к которому
-// привязываются Profile-ы (FK profiles_provider_fk).
+// setupProvider truncates tables, seeds an operator, and creates one Provider
+// referenced by Profiles (FK profiles_provider_fk).
 func setupProvider(t *testing.T) {
 	t.Helper()
 	ctx := context.Background()
@@ -167,8 +167,8 @@ func TestIntegration_Insert_CreatedByFKViolation(t *testing.T) {
 }
 
 func TestIntegration_ProviderDelete_Restricted(t *testing.T) {
-	// PM-decision: FK ON DELETE RESTRICT — нельзя удалить Provider с
-	// зависимыми Profile-ями.
+	// PM decision: FK ON DELETE RESTRICT means Provider cannot be deleted while
+	// dependent Profiles exist.
 	setupProvider(t)
 	ctx := context.Background()
 	if err := Insert(ctx, integrationPool, newProfile("web-small", "aws-eu", "archon-alice")); err != nil {
@@ -178,7 +178,7 @@ func TestIntegration_ProviderDelete_Restricted(t *testing.T) {
 	if err == nil {
 		t.Fatal("DELETE provider with dependent profile: expected RESTRICT violation")
 	}
-	// Profile должен остаться.
+	// Profile must remain.
 	if _, err := SelectByName(ctx, integrationPool, "web-small"); err != nil {
 		t.Errorf("profile gone after blocked provider delete: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestIntegration_SelectByName_NotFound(t *testing.T) {
 func TestIntegration_SelectAll_AndByProvider(t *testing.T) {
 	setupProvider(t)
 	ctx := context.Background()
-	// Второй Provider для проверки фильтра.
+	// Second Provider for filter verification.
 	aid := "archon-alice"
 	if err := provider.Insert(ctx, integrationPool, &provider.Provider{
 		Name: "yc-ru", Type: "yc", Region: "ru-central1",
@@ -234,7 +234,7 @@ func TestIntegration_SelectAll_AndByProvider(t *testing.T) {
 		}
 	}
 
-	// Несуществующий Provider → пустая страница, total=0.
+	// Missing Provider returns an empty page, total=0.
 	empty, total, err := SelectByProvider(ctx, integrationPool, "ghost", 0, 50)
 	if err != nil {
 		t.Fatalf("SelectByProvider(ghost): %v", err)

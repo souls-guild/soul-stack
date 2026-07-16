@@ -12,8 +12,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// fakeDB — ExecQueryRower-stub для unit-тестов. Паттерн совпадает с
-// provider.fakeDB / incarnation.fakeDB.
+// fakeDB is an ExecQueryRower stub for unit tests. Pattern matches provider.fakeDB
+// / incarnation.fakeDB.
 type fakeDB struct {
 	queryRowSQL   string
 	queryRowArgs  []any
@@ -429,7 +429,7 @@ func TestSelectAll_RejectsZeroLimit(t *testing.T) {
 
 // --- Delete ------------------------------------------------------------
 
-// execDB — fakeDB-вариант с управляемым результатом Exec (Delete-тесты).
+// execDB is a fakeDB variant with controlled Exec result for Delete tests.
 type execDB struct {
 	tag pgconn.CommandTag
 	err error

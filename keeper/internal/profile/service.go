@@ -6,19 +6,19 @@ import (
 	"fmt"
 )
 
-// Service — бизнес-логика CRUD реестра `profiles` (ADR-017,
-// docs/keeper/cloud.md). Один источник правды для HTTP-handler-ов и
-// MCP-tool-handler-ов (симметрично provider.Service / pushprovider.Service).
+// Service contains CRUD business logic for the `profiles` registry (ADR-017,
+// docs/keeper/cloud.md). It is the single source of truth for HTTP handlers and
+// MCP tool handlers, symmetric to provider.Service / pushprovider.Service.
 //
-// Profile — VM-spec поверх Provider-а: `Params` (jsonb, freeform VM-spec) +
-// optional `CloudInit`. Валидация Params против CloudDriver.Schema —
-// scenario-слой (Cloud.CRUD.b), не CRUD. `provider`-FK на существующий
-// Provider проверяет БД ([ErrProviderNotFound] → 422).
+// Profile is a VM spec on top of a Provider: `Params` (jsonb, freeform VM spec) +
+// optional `CloudInit`. Params validation against CloudDriver.Schema belongs to
+// the scenario layer (Cloud.CRUD.b), not CRUD. DB checks the `provider` FK to an
+// existing Provider ([ErrProviderNotFound] -> 422).
 type Service struct {
 	pool ExecQueryRower
 }
 
-// NewService собирает service. pool обязателен.
+// NewService builds a service. pool is required.
 func NewService(pool ExecQueryRower) (*Service, error) {
 	if pool == nil {
 		return nil, errors.New("profile: NewService: pool is nil")
@@ -26,7 +26,7 @@ func NewService(pool ExecQueryRower) (*Service, error) {
 	return &Service{pool: pool}, nil
 }
 
-// CreateInput — параметры [Service.Create].
+// CreateInput contains [Service.Create] parameters.
 type CreateInput struct {
 	Name      string
 	Provider  string
@@ -35,13 +35,13 @@ type CreateInput struct {
 	CallerAID string
 }
 
-// Create вставляет новый Profile.
+// Create inserts a new Profile.
 //
-// Валидация name/provider выполняется в [Insert]. Возврат:
-//   - [ErrProfileAlreadyExists] на UNIQUE по name;
-//   - [ErrProviderNotFound] на FK-violation (ссылка на несуществующий
-//     Provider) → handler маппит в 422;
-//   - доменная ошибка валидации (invalid name/provider).
+// name/provider validation is done in [Insert]. Returns:
+//   - [ErrProfileAlreadyExists] on UNIQUE by name;
+//   - [ErrProviderNotFound] on FK violation (reference to a missing Provider) ->
+//     handler maps it to 422;
+//   - domain validation error (invalid name/provider).
 func (s *Service) Create(ctx context.Context, in CreateInput) (*Profile, error) {
 	var createdBy *string
 	if in.CallerAID != "" {
@@ -61,7 +61,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Profile, error) 
 	return p, nil
 }
 
-// Get читает один Profile по PK. [ErrProfileNotFound] при отсутствии.
+// Get reads one Profile by PK. [ErrProfileNotFound] when absent.
 func (s *Service) Get(ctx context.Context, name string) (*Profile, error) {
 	if !ValidName(name) {
 		return nil, fmt.Errorf("profile: invalid name %q (must match %s)", name, NamePattern)
@@ -69,13 +69,13 @@ func (s *Service) Get(ctx context.Context, name string) (*Profile, error) {
 	return SelectByName(ctx, s.pool, name)
 }
 
-// Delete удаляет Profile по PK. [ErrProfileNotFound] при отсутствии.
+// Delete removes a Profile by PK. [ErrProfileNotFound] when absent.
 func (s *Service) Delete(ctx context.Context, name string) error {
 	return Delete(ctx, s.pool, name)
 }
 
-// List возвращает страницу Profile-ей и общее количество. providerName
-// непуст → фильтр по Provider-у (SelectByProvider).
+// List returns a page of Profiles and total count. Non-empty providerName filters
+// by Provider (SelectByProvider).
 func (s *Service) List(ctx context.Context, providerName string, offset, limit int) ([]*Profile, int, error) {
 	if providerName != "" {
 		return SelectByProvider(ctx, s.pool, providerName, offset, limit)

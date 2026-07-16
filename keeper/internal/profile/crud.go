@@ -11,11 +11,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Sentinel-ошибки CRUD-слоя. Handler-сторона (Cloud.CRUD.b) маппит:
-//   - ErrProfileAlreadyExists → 409 profile-already-exists.
-//   - ErrProfileNotFound      → 404 not-found.
-//   - ErrProviderNotFound     → 422 unprocessable (ссылка на несуществующий
-//     Provider в `provider`-поле; FK profiles_provider_fk).
+// Sentinel errors for the CRUD layer. Handler side (Cloud.CRUD.b) maps:
+//   - ErrProfileAlreadyExists -> 409 profile-already-exists.
+//   - ErrProfileNotFound      -> 404 not-found.
+//   - ErrProviderNotFound     -> 422 unprocessable (reference to a missing
+//     Provider in the `provider` field; FK profiles_provider_fk).
 var (
 	ErrProfileAlreadyExists = errors.New("profile: name already exists")
 	ErrProfileNotFound      = errors.New("profile: name not found")
@@ -28,14 +28,14 @@ const (
 	pgErrCodeCheckViolation      = "23514"
 )
 
-// providerFKConstraint — имя FK-constraint-а `profiles.provider →
-// providers(name)` из 020-миграции. Нарушение этого FK (несуществующий
-// Provider) маппится в [ErrProviderNotFound]; нарушение остальных FK
-// (created_by_aid) — в generic FK-error.
+// providerFKConstraint is the FK constraint name `profiles.provider ->
+// providers(name)` from migration 020. This FK violation (missing Provider) maps
+// to [ErrProviderNotFound]; other FK violations (created_by_aid) map to a generic
+// FK error.
 const providerFKConstraint = "profiles_provider_fk"
 
-// ExecQueryRower — узкое подмножество pgxpool.Pool, нужное CRUD-у.
-// Симметрично provider/incarnation/operator.
+// ExecQueryRower is the narrow pgxpool.Pool subset required by CRUD. Symmetric to
+// provider/incarnation/operator.
 type ExecQueryRower interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
@@ -49,7 +49,7 @@ var (
 	_ ExecQueryRower = (pgx.Tx)(nil)
 )
 
-// insertSQL — INSERT с RETURNING для server-side created_at одной round-trip-ой.
+// insertSQL is INSERT with RETURNING for server-side created_at in one round trip.
 const insertSQL = `
 INSERT INTO profiles (name, provider, params, cloud_init, created_by_aid)
 VALUES ($1, $2, $3, $4, $5)
@@ -66,19 +66,19 @@ WHERE name = $1
 
 const deleteSQL = `DELETE FROM profiles WHERE name = $1`
 
-// Insert вставляет новый Profile.
+// Insert inserts a new Profile.
 //
 // Pre-conditions:
-//   - p.Name соответствует [NamePattern];
-//   - p.Provider соответствует [NamePattern] (имя существующего Provider-а;
-//     существование проверяет FK).
+//   - p.Name matches [NamePattern];
+//   - p.Provider matches [NamePattern] (name of an existing Provider; existence is
+//     checked by FK).
 //
-// Возврат:
-//   - [ErrProfileAlreadyExists] на UNIQUE по PK.
-//   - [ErrProviderNotFound] на FK-violation по `provider` (Provider не
-//     существует).
-//   - wrapped fmt.Errorf на прочих FK-violation (`created_by_aid`) и
-//     CHECK-violation (name format).
+// Returns:
+//   - [ErrProfileAlreadyExists] on UNIQUE by PK.
+//   - [ErrProviderNotFound] on FK violation by `provider` (Provider does not
+//     exist).
+//   - wrapped fmt.Errorf on other FK violations (`created_by_aid`) and CHECK
+//     violation (name format).
 func Insert(ctx context.Context, db ExecQueryRower, p *Profile) error {
 	if p == nil {
 		return fmt.Errorf("profile: nil profile")
@@ -132,7 +132,7 @@ func mapInsertError(err error) error {
 	return fmt.Errorf("profile: insert: %w", err)
 }
 
-// SelectByName читает Profile по PK. [ErrProfileNotFound] при pgx.ErrNoRows.
+// SelectByName reads a Profile by PK. [ErrProfileNotFound] on pgx.ErrNoRows.
 func SelectByName(ctx context.Context, db ExecQueryRower, name string) (*Profile, error) {
 	row := db.QueryRow(ctx, selectByNameSQL, name)
 	return scanProfile(row)
@@ -167,9 +167,9 @@ func scanProfile(row pgx.Row) (*Profile, error) {
 	return &p, nil
 }
 
-// Delete удаляет Profile по PK. [ErrProfileNotFound], если запись
-// отсутствует (RowsAffected==0). Profile-ы — листовые записи (на них FK не
-// ссылается), поэтому FK-violation-ветки delete-у не нужно.
+// Delete removes a Profile by PK. [ErrProfileNotFound] when the row is absent
+// (RowsAffected==0). Profiles are leaf records with no inbound FK references, so
+// delete does not need an FK-violation branch.
 func Delete(ctx context.Context, db ExecQueryRower, name string) error {
 	if !ValidName(name) {
 		return fmt.Errorf("profile: invalid name %q (must match %s)", name, NamePattern)
@@ -184,22 +184,22 @@ func Delete(ctx context.Context, db ExecQueryRower, name string) error {
 	return nil
 }
 
-// SelectAll возвращает страницу Profile-ей и общее количество (без
-// offset/limit). Сортировка — `created_at DESC, name ASC`. Total
-// **eventually consistent**, симметрично provider/incarnation.SelectAll.
+// SelectAll returns a page of Profiles and the total count without offset/limit.
+// Sort order is `created_at DESC, name ASC`. Total is eventually consistent,
+// symmetric to provider/incarnation.SelectAll.
 func SelectAll(ctx context.Context, db ExecQueryRower, offset, limit int) ([]*Profile, int, error) {
 	return selectPage(ctx, db, "", offset, limit)
 }
 
-// SelectByProvider возвращает страницу Profile-ей конкретного Provider-а
-// (та же сортировка / семантика total). Имя Provider-а в фильтр НЕ
-// валидируется: несуществующий Provider даёт пустую страницу, total=0.
+// SelectByProvider returns a page of Profiles for a concrete Provider (same sort /
+// total semantics). Provider name in the filter is not validated: a missing
+// Provider returns an empty page, total=0.
 func SelectByProvider(ctx context.Context, db ExecQueryRower, providerName string, offset, limit int) ([]*Profile, int, error) {
 	return selectPage(ctx, db, providerName, offset, limit)
 }
 
-// selectPage — общая реализация SelectAll / SelectByProvider. Пустой
-// providerName означает «без фильтра».
+// selectPage is the shared implementation of SelectAll / SelectByProvider. Empty
+// providerName means no filter.
 func selectPage(ctx context.Context, db ExecQueryRower, providerName string, offset, limit int) ([]*Profile, int, error) {
 	if offset < 0 {
 		return nil, 0, fmt.Errorf("profile: offset must be >= 0, got %d", offset)
@@ -247,8 +247,8 @@ func selectPage(ctx context.Context, db ExecQueryRower, providerName string, off
 	return out, total, nil
 }
 
-// marshalJSONB сериализует map в bytes для JSONB-колонки. nil → `{}`,
-// симметрично incarnation.marshalJSONB.
+// marshalJSONB serializes a map into bytes for a JSONB column. nil -> `{}`,
+// symmetric to incarnation.marshalJSONB.
 func marshalJSONB(m map[string]any) ([]byte, error) {
 	if m == nil {
 		return []byte("{}"), nil
@@ -256,7 +256,7 @@ func marshalJSONB(m map[string]any) ([]byte, error) {
 	return json.Marshal(m)
 }
 
-// unmarshalJSONB парсит JSONB-bytes в map. Пустые байты / `null` → nil-map.
+// unmarshalJSONB parses JSONB bytes into a map. Empty bytes / `null` -> nil-map.
 func unmarshalJSONB(b []byte) (map[string]any, error) {
 	if len(b) == 0 {
 		return nil, nil
