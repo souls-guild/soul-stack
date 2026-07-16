@@ -14,8 +14,8 @@ func newTestLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// recordingPublisher — fake Publisher: фиксирует все вызовы PublishDisconnect,
-// опционально возвращает ошибку.
+// recordingPublisher — fake Publisher: captures all PublishDisconnect calls,
+// optionally returns error.
 type recordingPublisher struct {
 	mu    sync.Mutex
 	calls []publishCall
@@ -69,10 +69,10 @@ func TestWatcher_WarmupImmunity_SkipsPublish(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWatcher: %v", err)
 	}
-	// startedAt = NOW по конструктору — warmup активен.
+	// startedAt = NOW from constructor — warmup active.
 	w.NotifyDisconnect(context.Background(), "host-1", "production", false)
 	if got := pub.callsCount(); got != 0 {
-		t.Fatalf("warmup-immunity: ожидался 0 publish, got %d", got)
+		t.Fatalf("warmup-immunity: expected 0 publish, got %d", got)
 	}
 }
 
@@ -82,11 +82,11 @@ func TestWatcher_WarmupExpired_Publishes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWatcher: %v", err)
 	}
-	// Сдвигаем startedAt в прошлое — warmup истёк.
+	// Shift startedAt to past — warmup expired.
 	w.setStartedAt(time.Now().Add(-10 * time.Minute))
 	w.NotifyDisconnect(context.Background(), "host-1", "production", false)
 	if got := pub.callsCount(); got != 1 {
-		t.Fatalf("warmup expired: ожидался 1 publish, got %d", got)
+		t.Fatalf("warmup expired: expected 1 publish, got %d", got)
 	}
 	last, _ := pub.last()
 	if last.sid != "host-1" || last.kid != "kid-1" || last.coven != "production" {
@@ -100,10 +100,10 @@ func TestWatcher_GracefulShutdown_SkipsPublish(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWatcher: %v", err)
 	}
-	w.setStartedAt(time.Now().Add(-time.Hour)) // warmup истёк
+	w.setStartedAt(time.Now().Add(-time.Hour)) // warmup expired
 	w.NotifyDisconnect(context.Background(), "host-1", "", true)
 	if got := pub.callsCount(); got != 0 {
-		t.Fatalf("graceful shutdown: ожидался 0 publish, got %d", got)
+		t.Fatalf("graceful shutdown: expected 0 publish, got %d", got)
 	}
 }
 
@@ -116,11 +116,11 @@ func TestWatcher_EmptyCoven_PublishesWithEmptyLabel(t *testing.T) {
 	w.setStartedAt(time.Now().Add(-time.Hour))
 	w.NotifyDisconnect(context.Background(), "host-x", "", false)
 	if got := pub.callsCount(); got != 1 {
-		t.Fatalf("ожидался 1 publish, got %d", got)
+		t.Fatalf("expected 1 publish, got %d", got)
 	}
 	last, _ := pub.last()
 	if last.coven != "" {
-		t.Fatalf("ожидался пустой coven, got %q", last.coven)
+		t.Fatalf("expected empty coven, got %q", last.coven)
 	}
 }
 
@@ -131,27 +131,27 @@ func TestWatcher_PublisherError_NotFatal(t *testing.T) {
 		t.Fatalf("NewWatcher: %v", err)
 	}
 	w.setStartedAt(time.Now().Add(-time.Hour))
-	// Не должен паниковать или блокировать.
+	// Should not panic or block.
 	w.NotifyDisconnect(context.Background(), "host-x", "production", false)
 	if got := pub.callsCount(); got != 1 {
-		t.Fatalf("ожидался 1 publish-попытка, got %d", got)
+		t.Fatalf("expected 1 publish attempt, got %d", got)
 	}
 }
 
 func TestWatcher_NilReceiver_Safe(t *testing.T) {
 	var w *Watcher
-	// Не должно паниковать.
+	// Should not panic.
 	w.NotifyDisconnect(context.Background(), "x", "", false)
 }
 
 func TestEncodeDisconnect_UniqueAcrossCalls(t *testing.T) {
 	at := time.Unix(1_700_000_000, 0)
 	a := EncodeDisconnect("host-1", "kid-A", "prod", at)
-	// Тот же тайм-стэмп, тот же набор полей: разница только в UnixNano-суффиксе
-	// (он берёт реальный clock в encode-е). Здесь at одинаковый, но at.UnixNano
-	// одинаковый — получим тот же member. Это by design: уникальность достигается
-	// через at-time, а не через random-suffix; разные вызовы за одну секунду
-	// получат разный UnixNano (sub-ns clock granularity Go).
+	// Same timestamp, same field set: difference only in UnixNano suffix
+	// (takes real clock in encode). Here at same, and at.UnixNano
+	// same — get same member. By design: uniqueness achieved
+	// via at-time, not random-suffix; different calls in one second
+	// get different UnixNano (sub-ns clock granularity in Go).
 	b := EncodeDisconnect("host-1", "kid-A", "prod", at)
 	if a != b {
 		t.Fatalf("same at → same encoding: got %q vs %q", a, b)

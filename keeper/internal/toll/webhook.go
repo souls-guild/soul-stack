@@ -13,33 +13,33 @@ import (
 	"time"
 )
 
-// VaultReader — узкая поверхность чтения Vault KV для резолва URLRef webhook-а
-// (ADR-038 amendment, extensions). Реализация — *vault.Client.ReadKV в daemon-
-// wire-up; fake в unit-тестах. Контракт: возвращает поле `url` (или path-
-// специфичное поле — оператор сам кладёт url в KV под этим ключом, симметрично
-// signing_key/public_key конвенциям существующих vault-ref-ов).
+// VaultReader — narrow interface for reading Vault KV to resolve webhook URLRef
+// (ADR-038 amendment, extensions). Implementation — *vault.Client.ReadKV in daemon
+// wire-up; fake in unit-tests. Contract: returns `url` field (or path-
+// specific field — operator puts url in KV under this key, symmetric to
+// signing_key/public_key conventions of existing vault-refs).
 type VaultReader interface {
 	ReadKV(ctx context.Context, path string) (map[string]any, error)
 }
 
-// urlFieldName — имя поля в Vault KV, где лежит webhook-URL. Конвенция
-// «секрет = одно поле в KV под known-name»; симметрия с
-// `signing_key`/`public_key`/`password` other vault-ref-ов.
+// urlFieldName — name of field in Vault KV where webhook-URL lives. Convention
+// «secret = one field in KV under known-name»; symmetry with
+// `signing_key`/`public_key`/`password` of other vault-refs.
 const urlFieldName = "url"
 
-// vaultRefPrefix — префикс `url_ref`-а, по которому WebhookNotifier
-// различает vault-ref (резолв через VaultReader) от inline-URL.
+// vaultRefPrefix — prefix of `url_ref` by which WebhookNotifier
+// distinguishes vault-ref (resolution via VaultReader) from inline-URL.
 const vaultRefPrefix = "vault:"
 
-// WebhookNotifier — реализация [Notifier] для HTTP-POST alert-канала. Один
-// экземпляр на keeper-процесс; thread-safe (HTTP-client + immutable cfg/vault).
+// WebhookNotifier — implementation of [Notifier] for HTTP-POST alert channel. One
+// instance per keeper process; thread-safe (HTTP-client + immutable cfg/vault).
 //
-// БЕЗОПАСНОСТЬ: webhook-URL — секрет (раскрывает pager-integration). Для prod
-// — vault-ref; inline-URL допустим, но не рекомендуется.
+// SECURITY: webhook-URL is a secret (reveals pager-integration). For prod
+// use vault-ref; inline-URL allowed but not recommended.
 //
-// Lifecycle: Notify вызывается только под leader-lease-ом (single-winner,
-// инвариант ADR-038). Нет ретраев — best-effort: тайм-аут / non-2xx / DNS-error
-// логируется, наружу ошибка не возвращается ([Notifier]-контракт).
+// Lifecycle: Notify called only under leader-lease (single-winner,
+// ADR-038 invariant). No retries — best-effort: timeout / non-2xx / DNS-error
+// logged, error not returned to caller ([Notifier] contract).
 type WebhookNotifier struct {
 	cfg    WebhookConfig
 	client *http.Client
@@ -47,31 +47,31 @@ type WebhookNotifier struct {
 	logger *slog.Logger
 }
 
-// WebhookConfig — параметры [WebhookNotifier]. Резолвится daemon-ом из
-// config.KeeperTollWebhook + дефолтов.
+// WebhookConfig — [WebhookNotifier] parameters. Resolved by daemon from
+// config.KeeperTollWebhook + defaults.
 type WebhookConfig struct {
-	// URLRef — `vault:<mount>/<path>` (поле `url` в KV) либо inline URL
-	// (`http(s)://...`). Различение — по префиксу `vault:`.
+	// URLRef — `vault:<mount>/<path>` (`url` field in KV) or inline URL
+	// (`http(s)://...`). Distinction — by `vault:` prefix.
 	URLRef string
-	// Format — один из [TollWebhookFormat*]-констант (config-пакет).
-	// Резолвится daemon-ом: пустое → generic.
+	// Format — one of [TollWebhookFormat*] constants (config package).
+	// Resolved by daemon: empty → generic.
 	Format string
-	// Timeout — потолок одного POST-вызова. <=0 → дефолт
+	// Timeout — ceiling for one POST call. <=0 → default
 	// [DefaultWebhookTimeout] (10s).
 	Timeout time.Duration
 }
 
 const (
-	// DefaultWebhookTimeout — дефолт WebhookConfig.Timeout. Совпадает с
-	// shared/config.DefaultTollWebhookTimeout; дублируется здесь, чтобы
-	// пакет toll не тянул shared/config (направление зависимости
-	// daemon → toll, не наоборот).
+	// DefaultWebhookTimeout — default for WebhookConfig.Timeout. Matches
+	// shared/config.DefaultTollWebhookTimeout; duplicated here so
+	// toll package doesn't pull shared/config (dependency direction
+	// daemon → toll, not reversed).
 	DefaultWebhookTimeout = 10 * time.Second
 )
 
-// NewWebhookNotifier валидирует cfg и собирает notifier. vault может быть nil
-// при inline-URL; обязателен при URLRef с префиксом `vault:` — иначе резолв
-// упадёт в Notify.
+// NewWebhookNotifier validates cfg and builds notifier. vault may be nil
+// for inline-URL; required for URLRef with `vault:` prefix — otherwise resolution
+// fails in Notify.
 func NewWebhookNotifier(cfg WebhookConfig, vault VaultReader, logger *slog.Logger) (*WebhookNotifier, error) {
 	if strings.TrimSpace(cfg.URLRef) == "" {
 		return nil, errors.New("toll.NewWebhookNotifier: empty URLRef")
@@ -101,14 +101,14 @@ func NewWebhookNotifier(cfg WebhookConfig, vault VaultReader, logger *slog.Logge
 	}, nil
 }
 
-// Notify — best-effort POST. Ошибки логируются, наружу не возвращаются.
+// Notify — best-effort POST. Errors logged, not returned to caller.
 //
-// Шаги:
-//  1. Резолв URL (Vault либо inline).
-//  2. Сборка payload-а по [WebhookConfig.Format] (включая routing_key, который
-//     при PagerDuty тянется из того же KV под полем `routing_key`).
-//  3. POST с тайм-аутом cfg.Timeout.
-//  4. Non-2xx → лог error (с body, обрезанным до 256 байт для диагностики).
+// Steps:
+//  1. URL resolution (Vault or inline).
+//  2. Payload assembly per [WebhookConfig.Format] (including routing_key which
+//     for PagerDuty pulled from same KV under `routing_key` field).
+//  3. POST with cfg.Timeout.
+//  4. Non-2xx → error log (with body trimmed to 256 bytes for diagnostics).
 func (n *WebhookNotifier) Notify(ctx context.Context, event TollEvent) {
 	if n == nil {
 		return
@@ -139,8 +139,8 @@ func (n *WebhookNotifier) Notify(ctx context.Context, event TollEvent) {
 
 	resp, err := n.client.Do(req)
 	if err != nil {
-		// Транспорт / DNS / тайм-аут — лог Warn (не Error: webhook временно
-		// недоступен — не повод поднимать pager у self-monitoring-а).
+		// Transport / DNS / timeout — Warn log (not Error: webhook temporarily
+		// unavailable — not reason to page self-monitoring).
 		n.logger.Warn("toll.webhook: POST failed",
 			slog.Any("error", err),
 			slog.String("format", n.cfg.Format),
@@ -157,7 +157,7 @@ func (n *WebhookNotifier) Notify(ctx context.Context, event TollEvent) {
 			slog.String("format", n.cfg.Format))
 		return
 	}
-	// Drain remaining body для connection-reuse.
+	// Drain remaining body for connection-reuse.
 	_, _ = io.Copy(io.Discard, resp.Body)
 
 	n.logger.Debug("toll.webhook: delivered",
@@ -166,8 +166,8 @@ func (n *WebhookNotifier) Notify(ctx context.Context, event TollEvent) {
 		slog.Int("status", resp.StatusCode))
 }
 
-// resolveSecret возвращает (url, extra-fields, err). Для inline URL — extra
-// nil. Для vault-ref — KV-map (caller достанет routing_key для PagerDuty).
+// resolveSecret returns (url, extra-fields, err). For inline URL — extra
+// nil. For vault-ref — KV-map (caller extracts routing_key for PagerDuty).
 func (n *WebhookNotifier) resolveSecret(ctx context.Context) (string, map[string]any, error) {
 	if !strings.HasPrefix(n.cfg.URLRef, vaultRefPrefix) {
 		return n.cfg.URLRef, nil, nil
@@ -188,13 +188,13 @@ func (n *WebhookNotifier) resolveSecret(ctx context.Context) (string, map[string
 	return rawURL, kv, nil
 }
 
-// buildPayload сериализует event в JSON в соответствии с format.
+// buildPayload serializes event to JSON per format.
 //
-// Generic — плоский snake_case (event_type/leader_kid/rate/...) + опц. coven_name.
-// PagerDuty v2 — формат `https://developer.pagerduty.com/docs/events-api-v2`:
-// dedup_key=`cluster:degraded` (одинаковый для set/clear → trigger+resolve
-// в одной incident), event_action=trigger/resolve.
-// Slack — incoming webhook: text + attachment с цветом (red/green) и полями.
+// Generic — flat snake_case (event_type/leader_kid/rate/...) + opt. coven_name.
+// PagerDuty v2 — format `https://developer.pagerduty.com/docs/events-api-v2`:
+// dedup_key=`cluster:degraded` (same for set/clear → trigger+resolve
+// in one incident), event_action=trigger/resolve.
+// Slack — incoming webhook: text + attachment with color (red/green) and fields.
 func buildPayload(format string, ev TollEvent, vaultKV map[string]any) ([]byte, error) {
 	switch format {
 	case "generic":
@@ -224,11 +224,11 @@ func marshalGeneric(ev TollEvent) ([]byte, error) {
 	return json.Marshal(body)
 }
 
-// marshalPagerDuty — Events API v2 enqueue schema. `routing_key` —
-// integration-key, читается из vault KV (поле `routing_key`); при inline-URL
-// или отсутствии поля — пустая строка (PagerDuty отвергнет 400, об этом
-// узнает оператор по non-2xx-логу — лучше шумно отказать, чем тихо отдать
-// событие на /dev/null).
+// marshalPagerDuty — Events API v2 enqueue schema. `routing_key` is
+// integration-key, read from vault KV (`routing_key` field); for inline-URL
+// or missing field — empty string (PagerDuty rejects with 400, operator learns
+// from non-2xx log — better to fail loudly than silently drop
+// event to /dev/null).
 func marshalPagerDuty(ev TollEvent, vaultKV map[string]any) ([]byte, error) {
 	routingKey := ""
 	if vaultKV != nil {
@@ -274,7 +274,7 @@ func marshalPagerDuty(ev TollEvent, vaultKV map[string]any) ([]byte, error) {
 }
 
 // marshalSlack — incoming webhook schema (`https://api.slack.com/messaging/webhooks`).
-// Color attachment: red для set, green для cleared.
+// Color attachment: red for set, green for cleared.
 func marshalSlack(ev TollEvent) ([]byte, error) {
 	color := "danger"
 	text := fmt.Sprintf(":rotating_light: *Soul Stack cluster degraded* (leader=`%s`)", ev.LeaderKID)

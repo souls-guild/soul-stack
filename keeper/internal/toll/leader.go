@@ -12,9 +12,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// sortedKeys возвращает отсортированные ключи map[string]float64 — общий
-// helper для детерминированного per-coven перебора (без него map-итерация
-// даёт нестабильный выбор coven при множественных одновременных trigger-ах).
+// sortedKeys returns the sorted keys of map[string]float64 — a shared
+// helper for deterministic per-coven iteration (without it, map iteration
+// would give an unstable coven choice under multiple simultaneous triggers).
 func sortedKeys(m map[string]float64) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
@@ -24,142 +24,142 @@ func sortedKeys(m map[string]float64) []string {
 	return out
 }
 
-// SortedSetReader — узкая поверхность чтения disconnect-окна из общего
-// sorted-set + чистки старых записей. Сужение даёт fake для unit-тестов
-// Leader-а без живого Redis-а.
+// SortedSetReader — narrow surface for reading the disconnect window from the
+// shared sorted-set + trimming old entries. Narrowing it enables a fake for
+// Leader unit tests without a live Redis.
 type SortedSetReader interface {
-	// CountInWindow — ZCOUNT sorted-set по range [fromUnix, toUnix].
+	// CountInWindow — ZCOUNT the sorted-set over range [fromUnix, toUnix].
 	CountInWindow(ctx context.Context, fromUnix, toUnix int64) (int64, error)
 	// TrimBelow — ZREMRANGEBYSCORE [-inf, beforeUnix]. Idempotent.
 	TrimBelow(ctx context.Context, beforeUnix int64) error
 }
 
-// CovenAwareReader — опц. расширение [SortedSetReader] для per-coven
-// группировки (ADR-038 amendment, extensions). Реализуется только в
-// production-адаптере keeperRedisTollSortedSetReader; в unit-fake-ах не
-// обязателен (Leader получает nil-counters → per-coven trigger no-op).
+// CovenAwareReader — optional extension of [SortedSetReader] for per-coven
+// grouping (ADR-038 amendment, extensions). Implemented only in the
+// production adapter keeperRedisTollSortedSetReader; not required in
+// unit fakes (the Leader gets nil-counters → per-coven trigger is a no-op).
 //
-// Возвращает count disconnect-ов в окне сгруппированно по coven-метке
-// (extract по последнему `|`-сегменту member-value, ADR-038 schema
-// `sid|kid|coven|nano`). Пустой coven попадает в ключ "" (тот же стиль,
-// что у Prometheus counter-а disconnectsTotal{coven=""}).
+// Returns the disconnect count in the window grouped by coven label
+// (extracted from the last `|`-segment of member-value, ADR-038 schema
+// `sid|kid|coven|nano`). An empty coven falls into the "" key (the same style
+// as the Prometheus counter disconnectsTotal{coven=""}).
 type CovenAwareReader interface {
 	// CountByCovenInWindow — ZRANGEBYSCORE [fromUnix, toUnix] → group-by coven.
-	// Используется только при заданном per_coven_thresholds (иначе один
-	// лишний round-trip за окно). Возвращает map[coven]count.
+	// Used only when per_coven_thresholds is configured (otherwise it's one
+	// extra round-trip per window). Returns map[coven]count.
 	CountByCovenInWindow(ctx context.Context, fromUnix, toUnix int64) (map[string]int64, error)
 }
 
-// LeaseAcquirer — узкая поверхность Redis-lease (Acquire/Renew/Release). В
-// production обёрнут [keeperredis.Lease]; unit-тесты Leader-а подменяют на
-// fake. Метод Acquire возвращает «лидер? либо причина» — ErrLeaseTaken
-// должен быть распознан caller-ом (Leader делает sleep и ретраит).
+// LeaseAcquirer — narrow surface for the Redis lease (Acquire/Renew/Release). In
+// production wrapped by [keeperredis.Lease]; Leader unit tests swap in a
+// fake. The Acquire method returns "leader? or the reason not" — ErrLeaseTaken
+// must be recognized by the caller (the Leader sleeps and retries).
 type LeaseAcquirer interface {
 	Acquire(ctx context.Context, key, holder string, ttl time.Duration) (Lease, error)
 }
 
-// Lease — held lease handle. Renew возвращает ErrLeaseLost при переходе
-// lease-а к другому holder-у. Release всегда idempotent.
+// Lease — held lease handle. Renew returns ErrLeaseLost when the lease
+// transitions to another holder. Release is always idempotent.
 type Lease interface {
 	Renew(ctx context.Context) error
 	Release(ctx context.Context) error
 }
 
-// ErrLeaseTaken / ErrLeaseLost — sentinel, переброшенные из keeperredis-пакета
-// для общего API Leader-а (тесты сравнивают через errors.Is без импорта
-// keeperredis).
+// ErrLeaseTaken / ErrLeaseLost — sentinels re-exported from the keeperredis
+// package for the Leader's common API (tests compare via errors.Is without
+// importing keeperredis).
 var (
 	ErrLeaseTaken = errors.New("toll: lease already taken")
 	ErrLeaseLost  = errors.New("toll: lease lost (no longer leader)")
 )
 
-// Notifier — узкая поверхность alert-out-а на set/clear cluster:degraded
-// (ADR-038 amendment, extensions). Реализация — [WebhookNotifier] в
-// webhook.go; fake-ы в leader_test.go. Notify вызывается best-effort:
-// ошибка логируется внутри реализации, наружу не возвращается (Leader
-// не должен прерывать loop из-за webhook-flap-а; symmetric с audit.Writer
-// failure-handling).
+// Notifier — narrow surface for alerting out on set/clear cluster:degraded
+// (ADR-038 amendment, extensions). Implementation — [WebhookNotifier] in
+// webhook.go; fakes in leader_test.go. Notify is called best-effort:
+// the error is logged inside the implementation, not returned to the caller
+// (the Leader must not interrupt its loop because of a webhook flap; symmetric
+// with audit.Writer failure-handling).
 type Notifier interface {
-	// Notify отправляет один alert-event. Реализация сама определяет
-	// формат сериализации (generic / pagerduty_v2 / slack) — Leader
-	// передаёт нормализованную TollEvent.
+	// Notify sends a single alert event. The implementation determines the
+	// serialization format itself (generic / pagerduty_v2 / slack) — the Leader
+	// passes a normalized TollEvent.
 	Notify(ctx context.Context, event TollEvent)
 }
 
-// TollEvent — нормализованная форма event-а для Notifier. Подмножество
-// audit-payload-а без операторских полей.
+// TollEvent — normalized event form for the Notifier. A subset of the
+// audit payload without operator fields.
 type TollEvent struct {
 	// Type — "degraded_set" / "degraded_cleared".
 	Type string
-	// LeaderKID — KID инстанса, взведшего/снявшего флаг.
+	// LeaderKID — KID of the instance that raised/cleared the flag.
 	LeaderKID string
-	// Rate — disconnect_rate / baseline на момент events.
+	// Rate — disconnect_rate / baseline at the moment of the event.
 	Rate float64
 	// BaselineConnected — `souls.status='connected'` snapshot.
 	BaselineConnected int64
-	// Threshold — порог, который пересёк rate (top-level или per-coven).
+	// Threshold — the threshold that rate crossed (top-level or per-coven).
 	Threshold float64
-	// WindowSeconds — длина sliding-окна, в секундах.
+	// WindowSeconds — length of the sliding window, in seconds.
 	WindowSeconds int
-	// CovenName — имя coven при per-coven trigger-е; пусто при global.
+	// CovenName — coven name for a per-coven trigger; empty for global.
 	CovenName string
-	// Timestamp — момент срабатывания (UTC).
+	// Timestamp — moment the trigger fired (UTC).
 	Timestamp time.Time
 }
 
-// EventTypeDegradedSet / EventTypeDegradedCleared — closed-enum значения
-// [TollEvent.Type]. Используются и реализациями Notifier-а, и тестами.
+// EventTypeDegradedSet / EventTypeDegradedCleared — closed-enum values for
+// [TollEvent.Type]. Used by both Notifier implementations and tests.
 const (
 	EventTypeDegradedSet     = "degraded_set"
 	EventTypeDegradedCleared = "degraded_cleared"
 )
 
-// LeaderConfig — параметры Leader-loop-а.
+// LeaderConfig — parameters for the Leader loop.
 type LeaderConfig struct {
-	// KID — идентификатор инстанса (holder lease-а, leader_kid в audit-payload).
+	// KID — instance identifier (lease holder, leader_kid in the audit payload).
 	KID string
 
-	// LeaseTTL — TTL lease-ключа cluster:toll:leader. Renew каждые LeaseTTL/3.
+	// LeaseTTL — TTL of the cluster:toll:leader lease key. Renewed every LeaseTTL/3.
 	LeaseTTL time.Duration
-	// AcquireRetry — пауза между попытками Acquire (когда другой инстанс
-	// держит lease). <=0 → дефолт [defaultAcquireRetry] (5s).
+	// AcquireRetry — pause between Acquire attempts (when another instance
+	// holds the lease). <=0 → defaults to [defaultAcquireRetry] (5s).
 	AcquireRetry time.Duration
-	// TickInterval — период aggregation-тика leader-а (как часто читать
-	// sorted-set + compute rate). <=0 → дефолт [defaultTickInterval] (5s).
+	// TickInterval — period of the leader's aggregation tick (how often to read
+	// the sorted-set + compute rate). <=0 → defaults to [defaultTickInterval] (5s).
 	TickInterval time.Duration
 
-	// WindowSize — sliding-окно, по которому считается rate (ADR-038(d)).
+	// WindowSize — sliding window over which the rate is computed (ADR-038(d)).
 	WindowSize time.Duration
-	// Threshold — порог rate-а от baseline (0.20 = 20%).
+	// Threshold — rate threshold relative to baseline (0.20 = 20%).
 	Threshold float64
-	// DegradedTTL — TTL Redis-ключа cluster:degraded.
+	// DegradedTTL — TTL of the cluster:degraded Redis key.
 	DegradedTTL time.Duration
-	// ClearGrace — устойчивое окно низкого rate-а до clearing (asymmetric
+	// ClearGrace — sustained window of low rate before clearing (asymmetric
 	// hysteresis).
 	ClearGrace time.Duration
-	// BaselineCacheTTL — TTL кеша baseline-snapshot-а (refresh каждые ttl).
+	// BaselineCacheTTL — TTL of the baseline-snapshot cache (refreshed every ttl).
 	BaselineCacheTTL time.Duration
 
-	// PerCovenThresholds — опц. per-coven threshold overrides (ADR-038
-	// amendment, extensions). Если непуст и [LeaderDeps.SortedSet] реализует
-	// [CovenAwareReader], leader дополнительно считает per-coven rate-ы и
-	// взводит cluster:degraded при превышении ЛЮБОГО per-coven threshold-а.
-	// Trigger по per-coven сохраняет имя coven в audit-payload (поле
-	// coven_name); global-trigger остаётся без coven_name.
+	// PerCovenThresholds — optional per-coven threshold overrides (ADR-038
+	// amendment, extensions). If non-empty and [LeaderDeps.SortedSet] implements
+	// [CovenAwareReader], the leader additionally computes per-coven rates and
+	// raises cluster:degraded when ANY per-coven threshold is exceeded.
+	// A per-coven trigger stores the coven name in the audit payload (the
+	// coven_name field); a global trigger stays without coven_name.
 	//
-	// Семантика OR (global ИЛИ per-coven) сознательная: global-уровень
-	// продолжает реагировать на широкий отток (multiple coven понемногу),
-	// per-coven — на локальные инциденты (один DC уехал в split).
+	// The OR semantics (global OR per-coven) is deliberate: the global level
+	// keeps reacting to broad drain (multiple covens draining a bit each),
+	// per-coven catches local incidents (one DC split off).
 	PerCovenThresholds map[string]float64
 
-	// Notifier — опц. webhook alert-канал (ADR-038 amendment, extensions).
-	// nil → degraded set/clear идёт без alert-out-а (audit + gauge + metrics
-	// как было). Best-effort: ошибка Notify логируется, но Set/Clear не
-	// блокирует (cluster degraded — primary goal).
+	// Notifier — optional webhook alert channel (ADR-038 amendment, extensions).
+	// nil → degraded set/clear proceeds without alerting out (audit + gauge +
+	// metrics as before). Best-effort: a Notify error is logged, but doesn't
+	// block Set/Clear (cluster degraded is the primary goal).
 	Notifier Notifier
 }
 
-// LeaderDeps — wire-up Leader-loop-а.
+// LeaderDeps — wiring for the Leader loop.
 type LeaderDeps struct {
 	Lease          LeaseAcquirer
 	SortedSet      SortedSetReader
@@ -175,38 +175,38 @@ const (
 	defaultTickInterval = 5 * time.Second
 )
 
-// Leader — фоновая goroutine, проводящая aggregation-тик при удержании
-// Redis-lease (single-leader-инвариант, ADR-038).
+// Leader — background goroutine that runs an aggregation tick while holding
+// the Redis lease (single-leader invariant, ADR-038).
 //
-// Жизненный цикл [Leader.Run]:
-//  1. Try Acquire `cluster:toll:leader`. Конфликт → sleep AcquireRetry, retry.
-//  2. После acquire — параллельный renew-loop (Renew каждые LeaseTTL/3).
-//  3. Aggregation-loop: каждые TickInterval — ZCOUNT в окне, baseline, rate,
-//     set/clear `cluster:degraded` с asymmetric hysteresis.
-//  4. На ErrLeaseLost (renew) → выход из aggregation-loop, попытка повторного
-//     acquire (мог быть split-brain / leader-flap).
-//  5. На ctx.Done() → release lease, выход.
+// [Leader.Run] lifecycle:
+//  1. Try Acquire `cluster:toll:leader`. Conflict → sleep AcquireRetry, retry.
+//  2. After acquire — parallel renew-loop (Renew every LeaseTTL/3).
+//  3. Aggregation loop: every TickInterval — ZCOUNT over the window, baseline, rate,
+//     set/clear `cluster:degraded` with asymmetric hysteresis.
+//  4. On ErrLeaseLost (renew) → exit the aggregation loop, attempt to re-acquire
+//     (could be split-brain / leader flap).
+//  5. On ctx.Done() → release the lease, exit.
 type Leader struct {
-	// cfgMu защищает hot-reload-able поля cfg (см. [Leader.UpdateConfig]).
-	// Tick читает значения под RLock; UpdateConfig подменяет под Lock. Поля
-	// KID/LeaseTTL/AcquireRetry/TickInterval/BaselineCacheTTL — startup-only
-	// (sleep-таймеры renew-loop / leader-election уже сидят в захваченных
-	// duration-копиях), на hot-reload они НЕ применяются: рестарт-required
-	// поля по [ADR-021(e)], симметрично policy `logging.file`.
+	// cfgMu guards the hot-reload-able cfg fields (see [Leader.UpdateConfig]).
+	// Tick reads values under RLock; UpdateConfig swaps them under Lock. The
+	// KID/LeaseTTL/AcquireRetry/TickInterval/BaselineCacheTTL fields are
+	// startup-only (the renew-loop / leader-election sleep timers already hold
+	// captured duration copies), they are NOT applied on hot-reload: restart-required
+	// fields per [ADR-021(e)], symmetric with the `logging.file` policy.
 	cfgMu sync.RWMutex
 	cfg   LeaderConfig
 	deps  LeaderDeps
 
-	// Состояние asymmetric hysteresis (только в leader-loop горутине, без
-	// мьютекса; единственная писательница — sameg).
+	// Asymmetric hysteresis state (leader-loop goroutine only, no mutex;
+	// the only writer is that same goroutine).
 	degradedSet     bool
-	belowSince      time.Time // момент, с которого rate ≤ threshold непрерывно
+	belowSince      time.Time // moment since which rate ≤ threshold continuously
 	lastClearedRate float64
 	lastBaseline    int64
 }
 
-// NewLeader валидирует Config/Deps и собирает Leader. Caller (daemon)
-// запускает [Leader.Run] в отдельной goroutine.
+// NewLeader validates Config/Deps and assembles a Leader. The caller (daemon)
+// runs [Leader.Run] in a separate goroutine.
 func NewLeader(cfg LeaderConfig, deps LeaderDeps) (*Leader, error) {
 	if cfg.KID == "" {
 		return nil, errors.New("toll.NewLeader: empty KID")
@@ -253,24 +253,24 @@ func NewLeader(cfg LeaderConfig, deps LeaderDeps) (*Leader, error) {
 	return &Leader{cfg: cfg, deps: deps}, nil
 }
 
-// UpdateConfig атомарно подменяет hot-reload-able поля Leader-конфига
-// ([ADR-021](docs/architecture.md) hot-reload). Безопасен для конкурентного
-// вызова с tick-loop-ом: tick читает snapshot своих полей под RLock, новый
-// snapshot увидит уже обновлённые значения.
+// UpdateConfig atomically swaps the hot-reload-able fields of the Leader config
+// ([ADR-021](docs/architecture.md) hot-reload). Safe to call concurrently
+// with the tick-loop: the tick reads a snapshot of its fields under RLock, the
+// next snapshot will see the already-updated values.
 //
-// Обновляются: Threshold, WindowSize, DegradedTTL, ClearGrace, PerCovenThresholds,
-// Notifier. KID/LeaseTTL/AcquireRetry/TickInterval/BaselineCacheTTL —
-// restart-required (захвачены в renew-loop / leader-election sleep-таймерах),
-// конфиг-валидация на reload их сравнивает с текущими и игнорирует тихо.
+// Updated fields: Threshold, WindowSize, DegradedTTL, ClearGrace, PerCovenThresholds,
+// Notifier. KID/LeaseTTL/AcquireRetry/TickInterval/BaselineCacheTTL are
+// restart-required (captured in the renew-loop / leader-election sleep timers),
+// the reload config-validation compares them to the current values and silently ignores them.
 //
-// Notifier подменяется по pointer-у: caller (daemon) собирает новый
-// [WebhookNotifier] при mutation `toll.webhook.*` (vault-resolve, URL и т.п.) и
-// передаёт его сюда. Старый notifier GC-ится естественно (нет ресурсов,
-// требующих явного Close: http.Client держит только idle-conn pool).
+// Notifier is swapped by pointer: the caller (daemon) assembles a new
+// [WebhookNotifier] on a `toll.webhook.*` mutation (vault-resolve, URL, etc.) and
+// passes it here. The old notifier is GC'd naturally (no resources require
+// an explicit Close: http.Client only holds an idle-conn pool).
 //
-// Валидация полей повторяет [NewLeader]: невалидное значение возвращает error
-// БЕЗ применения swap-а (старый снимок остаётся актуальным — параллель с
-// [Store.Reload]-семантикой).
+// Field validation mirrors [NewLeader]: an invalid value returns an error
+// WITHOUT applying the swap (the old snapshot remains current — a parallel to
+// [Store.Reload] semantics).
 func (l *Leader) UpdateConfig(newCfg LeaderConfig) error {
 	if newCfg.WindowSize <= 0 {
 		return errors.New("toll.Leader.UpdateConfig: WindowSize must be > 0")
@@ -296,17 +296,17 @@ func (l *Leader) UpdateConfig(newCfg LeaderConfig) error {
 	return nil
 }
 
-// CurrentNotifier возвращает текущий [Notifier] под RLock. Нужен caller-у
-// (daemon-applyTollReload), который пропускает webhook-recycle при отсутствии
-// diff-а и передаёт обратно тот же notifier в [Leader.UpdateConfig].
+// CurrentNotifier returns the current [Notifier] under RLock. Needed by the
+// caller (daemon-applyTollReload), which skips the webhook recycle when there's
+// no diff and passes the same notifier back into [Leader.UpdateConfig].
 func (l *Leader) CurrentNotifier() Notifier {
 	l.cfgMu.RLock()
 	defer l.cfgMu.RUnlock()
 	return l.cfg.Notifier
 }
 
-// Run — блокирующий leader-loop. Завершается по ctx.Done(). Caller (daemon)
-// gate-ит cleanup-стеком LIFO: cancel ctx → join goroutine.
+// Run — the blocking leader loop. Exits on ctx.Done(). The caller (daemon)
+// gates cleanup with a LIFO stack: cancel ctx → join goroutine.
 func (l *Leader) Run(ctx context.Context) {
 	baseline := newCachedBaseline(l.deps.Baseline, l.cfg.BaselineCacheTTL)
 	for {
@@ -336,21 +336,21 @@ func (l *Leader) Run(ctx context.Context) {
 
 		l.runAsLeader(ctx, lease, baseline)
 		l.deps.Metrics.SetLeaderActive(false)
-		// На любом выходе из runAsLeader: сбрасываем gauge cluster_degraded
-		// в 0 (этот инстанс больше не leader, нечего set-ить). Реальный флаг
-		// в Redis либо стоит (TTL гасит) либо снят (наш ClearDegraded ниже).
+		// On any exit from runAsLeader: reset the cluster_degraded gauge
+		// to 0 (this instance is no longer leader, nothing to set). The actual flag
+		// in Redis either still stands (TTL will expire it) or was cleared (our ClearDegraded below).
 		l.deps.Metrics.SetClusterDegraded(false)
 	}
 }
 
-// runAsLeader — внутренний цикл при удержании lease. Завершается на:
+// runAsLeader — internal loop while holding the lease. Exits on:
 //   - ctx.Done() (graceful shutdown) → Release + return;
-//   - ErrLeaseLost от renew (split-brain) → Release + return (внешний Run
-//     попробует re-acquire).
+//   - ErrLeaseLost from renew (split-brain) → Release + return (the outer Run
+//     will attempt to re-acquire).
 func (l *Leader) runAsLeader(ctx context.Context, lease Lease, baseline *cachedBaseline) {
 	defer func() {
-		// Detached release-ctx (как в keeperredis.eventstream): stream-ctx
-		// мог уже отмениться (graceful shutdown), но lease отдать надо.
+		// Detached release-ctx (as in keeperredis.eventstream): the stream-ctx
+		// may already be cancelled (graceful shutdown), but the lease still needs to be released.
 		relCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 		defer cancel()
 		if err := lease.Release(relCtx); err != nil {
@@ -359,8 +359,8 @@ func (l *Leader) runAsLeader(ctx context.Context, lease Lease, baseline *cachedB
 		}
 	}()
 
-	// Renew-goroutine: периодически Renew. На ErrLeaseLost сигналит main-loop
-	// через cancel renewCtx → внутренний select выйдет.
+	// Renew goroutine: periodically calls Renew. On ErrLeaseLost it signals the
+	// main loop by cancelling renewCtx → the inner select will exit.
 	renewCtx, cancelRenew := context.WithCancel(ctx)
 	defer cancelRenew()
 	renewDone := make(chan error, 1)
@@ -392,8 +392,8 @@ func (l *Leader) runAsLeader(ctx context.Context, lease Lease, baseline *cachedB
 	tick := time.NewTicker(l.cfg.TickInterval)
 	defer tick.Stop()
 
-	// Первый тик сразу: оператор не должен ждать TickInterval-а после
-	// leader-election-а (важно при failover).
+	// First tick immediately: the operator shouldn't have to wait TickInterval
+	// after leader election (important during failover).
 	l.aggregationTick(ctx, baseline)
 
 	for {
@@ -411,9 +411,9 @@ func (l *Leader) runAsLeader(ctx context.Context, lease Lease, baseline *cachedB
 	}
 }
 
-// tickSnapshot — snapshot hot-reload-able cfg-полей на момент tick-а. Снимается
-// один раз в начале [Leader.aggregationTick]; tick работает с локальными
-// копиями, не блокируя [Leader.UpdateConfig] во время Redis/audit-вызовов.
+// tickSnapshot — snapshot of the hot-reload-able cfg fields at tick time. Taken
+// once at the start of [Leader.aggregationTick]; the tick works with local
+// copies, without blocking [Leader.UpdateConfig] during Redis/audit calls.
 type tickSnapshot struct {
 	windowSize         time.Duration
 	threshold          float64
@@ -424,10 +424,10 @@ type tickSnapshot struct {
 	kid                string
 }
 
-// snapshotCfg возвращает snapshot hot-reload-able полей под RLock. Map
-// PerCovenThresholds shallow-copy НЕ делается: UpdateConfig подменяет ссылку
-// атомарно (старый Leader-тик видит старую map, новый — новую), мутаций map
-// в-месте не происходит.
+// snapshotCfg returns a snapshot of the hot-reload-able fields under RLock. The
+// PerCovenThresholds map is NOT shallow-copied: UpdateConfig swaps the reference
+// atomically (an old Leader tick sees the old map, a new one sees the new one),
+// no in-place map mutation occurs.
 func (l *Leader) snapshotCfg() tickSnapshot {
 	l.cfgMu.RLock()
 	defer l.cfgMu.RUnlock()
@@ -442,7 +442,7 @@ func (l *Leader) snapshotCfg() tickSnapshot {
 	}
 }
 
-// aggregationTick — один проход aggregation-loop-а: ZCOUNT за окно, baseline,
+// aggregationTick — one pass of the aggregation loop: ZCOUNT over the window, baseline,
 // rate, set/clear cluster:degraded.
 func (l *Leader) aggregationTick(ctx context.Context, baseline *cachedBaseline) {
 	snap := l.snapshotCfg()
@@ -460,28 +460,28 @@ func (l *Leader) aggregationTick(ctx context.Context, baseline *cachedBaseline) 
 	base, baseErr := baseline.get(ctx, now)
 	if baseErr != nil {
 		if base == 0 {
-			// Нет stale-значения — пропускаем тик (false-positive хуже, чем
-			// одна потеря тика).
+			// No stale value — skip the tick (a false-positive is worse than
+			// losing one tick).
 			l.deps.Logger.Warn("toll: baseline fetch failed and no stale — skipping tick",
 				slog.Any("error", baseErr))
 			return
 		}
-		// Stale-fallback: продолжаем, но логируем.
+		// Stale-fallback: continue, but log it.
 		l.deps.Logger.Warn("toll: baseline fetch failed — using stale",
 			slog.Any("error", baseErr),
 			slog.Int64("stale_baseline", base))
 	}
 
-	// Trim — лучше делать ПОСЛЕ ZCOUNT (если ZCOUNT упал на флапе, окно ещё
-	// нетронуто, следующий тик повторит). Идемпотентно.
+	// Trim — better to do AFTER ZCOUNT (if ZCOUNT fails during a flap, the window is
+	// still untouched, the next tick will retry). Idempotent.
 	if err := l.deps.SortedSet.TrimBelow(ctx, from); err != nil {
 		l.deps.Logger.Debug("toll: ZREMRANGEBYSCORE failed (non-fatal)",
 			slog.Any("error", err))
 	}
 
-	// Защита от деления на ноль: baseline=0 → не оцениваем (свежий кластер
-	// без зарегистрированных Souls, либо все в pending). ratio=0 трактуем
-	// как «не превышен» (никаких degraded-флагов).
+	// Protection against division by zero: baseline=0 → don't evaluate (a fresh
+	// cluster with no registered Souls, or all of them pending). We treat ratio=0
+	// as "not exceeded" (no degraded flags).
 	var rate float64
 	if base > 0 {
 		rate = float64(count) / float64(base)
@@ -489,11 +489,11 @@ func (l *Leader) aggregationTick(ctx context.Context, baseline *cachedBaseline) 
 	l.lastClearedRate = rate
 	l.lastBaseline = base
 
-	// Per-coven trigger проверяется при наличии конфигурации И при способности
-	// reader-а группировать по coven. Если global уже превысил threshold —
-	// per-coven анализ необязателен (cluster:degraded и так будет set), но мы
-	// его всё равно делаем для уточнения coven_name в audit/webhook payload
-	// (per-coven trigger даёт более точную диагностику оператору).
+	// Per-coven trigger is checked when configuration is present AND the reader
+	// is able to group by coven. If global already exceeded the threshold,
+	// the per-coven analysis isn't strictly necessary (cluster:degraded will be
+	// set anyway), but we still do it to refine coven_name in the audit/webhook
+	// payload (a per-coven trigger gives the operator a more precise diagnosis).
 	triggeredCoven, triggeredThr := l.maybePerCovenTrigger(ctx, snap.perCovenThresholds, from, to, base)
 
 	exceededGlobal := rate > snap.threshold
@@ -501,8 +501,8 @@ func (l *Leader) aggregationTick(ctx context.Context, baseline *cachedBaseline) 
 
 	switch {
 	case exceededAny:
-		// Превышен порог — set/refresh degraded. belowSince ресетим (grace-окно
-		// перестало накапливаться).
+		// Threshold exceeded — set/refresh degraded. Reset belowSince (the grace
+		// window stops accumulating).
 		l.belowSince = time.Time{}
 		if err := l.deps.DegradedWriter.SetDegraded(ctx, snap.kid, snap.degradedTTL); err != nil {
 			l.deps.Logger.Warn("toll: SET cluster:degraded failed",
@@ -512,10 +512,10 @@ func (l *Leader) aggregationTick(ctx context.Context, baseline *cachedBaseline) 
 		l.deps.Metrics.SetClusterDegraded(true)
 		if !l.degradedSet {
 			l.degradedSet = true
-			// Выбираем «причинный» порог и coven для diag/audit/webhook:
-			// global-trigger перевешивает per-coven, чтобы при двойном
-			// превышении в логах фигурировал global-rate. Per-coven trigger
-			// выводится только если global не сработал (локальный инцидент).
+			// Pick the "causal" threshold and coven for diag/audit/webhook:
+			// a global trigger outweighs per-coven, so that on a double
+			// breach the logs show the global rate. The per-coven trigger
+			// is surfaced only if global didn't fire (a local incident).
 			triggerThreshold := snap.threshold
 			triggerCoven := ""
 			if !exceededGlobal {
@@ -543,9 +543,9 @@ func (l *Leader) aggregationTick(ctx context.Context, baseline *cachedBaseline) 
 			})
 		}
 	default:
-		// rate ≤ threshold: если degraded был set, копим grace-окно.
+		// rate ≤ threshold: if degraded was set, accumulate the grace window.
 		if !l.degradedSet {
-			// Нечего снимать; belowSince держим неактивным.
+			// Nothing to clear; keep belowSince inactive.
 			return
 		}
 		if l.belowSince.IsZero() {
@@ -557,12 +557,12 @@ func (l *Leader) aggregationTick(ctx context.Context, baseline *cachedBaseline) 
 			return
 		}
 		if now.Sub(l.belowSince) < snap.clearGrace {
-			// Grace ещё не истёк — не снимаем (но degraded TTL в Redis всё
-			// равно гаснет естественно через DegradedTTL — это by design
-			// fail-safe, leader не обязан удерживать его явно).
+			// Grace hasn't expired yet — don't clear (but the degraded TTL in
+			// Redis will still expire naturally via DegradedTTL — this is a
+			// by-design fail-safe, the leader isn't required to hold it explicitly).
 			return
 		}
-		// Grace выдержан — clearing.
+		// Grace period elapsed — clearing.
 		if err := l.deps.DegradedWriter.ClearDegraded(ctx); err != nil {
 			l.deps.Logger.Warn("toll: DEL cluster:degraded failed",
 				slog.Any("error", err))
@@ -589,16 +589,16 @@ func (l *Leader) aggregationTick(ctx context.Context, baseline *cachedBaseline) 
 	}
 }
 
-// maybePerCovenTrigger — опц. per-coven анализ (ADR-038 amendment, extensions).
-// Возвращает (coven, threshold) первой найденной coven, чьё rate превысило
-// конфигурированный per-coven threshold; ("", 0) — никакой trigger / per-coven
-// не сконфигурирован / SortedSet не поддерживает группировку.
+// maybePerCovenTrigger — optional per-coven analysis (ADR-038 amendment, extensions).
+// Returns (coven, threshold) for the first found coven whose rate exceeded
+// the configured per-coven threshold; ("", 0) — no trigger / per-coven isn't
+// configured / SortedSet doesn't support grouping.
 //
-// Никаких ошибок наружу: per-coven trigger — дополнение, не должен ломать
-// global-loop при Redis-флапе на ZRANGEBYSCORE.
+// No errors surface outward: per-coven trigger is an addition, it must not break
+// the global loop on a Redis flap during ZRANGEBYSCORE.
 //
-// perCovenThresholds передаётся через tick-snapshot (см. [tickSnapshot]): чтение
-// прямого `l.cfg.PerCovenThresholds` тут было бы race с [Leader.UpdateConfig].
+// perCovenThresholds is passed via the tick-snapshot (see [tickSnapshot]): reading
+// `l.cfg.PerCovenThresholds` directly here would race with [Leader.UpdateConfig].
 func (l *Leader) maybePerCovenTrigger(ctx context.Context, perCovenThresholds map[string]float64, from, to int64, base int64) (string, float64) {
 	if len(perCovenThresholds) == 0 || base <= 0 {
 		return "", 0
@@ -613,11 +613,11 @@ func (l *Leader) maybePerCovenTrigger(ctx context.Context, perCovenThresholds ma
 			slog.Any("error", err))
 		return "", 0
 	}
-	// Детерминированный порядок при множественных triggered-coven (multiple
-	// одновременно превысили): берём в порядке config-ключей-сортированно.
-	// Без сортировки — выбор зависит от map-итерации, что нестабильно для
-	// тестов и логов. Перебираем threshold-ы (узкий набор), сверяемся со
-	// counts.
+	// Deterministic order when multiple coven triggers happen simultaneously
+	// (several exceed at once): iterate in sorted config-key order.
+	// Without sorting, the choice would depend on map iteration, which is
+	// unstable for tests and logs. We iterate over the thresholds (a small
+	// set) and check against counts.
 	for _, coven := range sortedKeys(perCovenThresholds) {
 		thr := perCovenThresholds[coven]
 		c, present := counts[coven]
@@ -632,9 +632,9 @@ func (l *Leader) maybePerCovenTrigger(ctx context.Context, perCovenThresholds ma
 	return "", 0
 }
 
-// notifyWith — best-effort wrapper: nil-safe + recover на panic из реализации
-// (Webhook-side bug не должен ронять leader-loop). notifier передаётся через
-// tick-snapshot, чтобы избежать race с [Leader.UpdateConfig].
+// notifyWith — best-effort wrapper: nil-safe + recovers from a panic in the
+// implementation (a webhook-side bug must not crash the leader loop). notifier
+// is passed via the tick-snapshot to avoid a race with [Leader.UpdateConfig].
 func (l *Leader) notifyWith(ctx context.Context, n Notifier, ev TollEvent) {
 	if n == nil {
 		return
@@ -649,8 +649,8 @@ func (l *Leader) notifyWith(ctx context.Context, n Notifier, ev TollEvent) {
 	n.Notify(ctx, ev)
 }
 
-// sleepCtx спит указанное время, прерывается по ctx.Done(). Возвращает true,
-// если sleep дошёл до конца; false — если ctx отменён.
+// sleepCtx sleeps for the given duration, interruptible via ctx.Done(). Returns
+// true if the sleep ran to completion; false if ctx was cancelled.
 func sleepCtx(ctx context.Context, d time.Duration) bool {
 	if d <= 0 {
 		return ctx.Err() == nil

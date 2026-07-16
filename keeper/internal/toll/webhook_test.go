@@ -13,8 +13,8 @@ import (
 	"time"
 )
 
-// fakeVault — минимальный [VaultReader] для unit-тестов: возвращает заранее
-// заданную map по path-ключу.
+// fakeVault — minimal [VaultReader] for unit-tests: returns pre-
+// configured map by path-key.
 type fakeVault struct {
 	mu    sync.Mutex
 	data  map[string]map[string]any
@@ -36,15 +36,15 @@ func (v *fakeVault) ReadKV(_ context.Context, path string) (map[string]any, erro
 	return d, nil
 }
 
-// receivedRequest — снимок одного POST-вызова webhook-receiver-ом.
+// receivedRequest — snapshot of one POST call by webhook receiver.
 type receivedRequest struct {
 	headers http.Header
 	body    map[string]any
 	method  string
 }
 
-// newRecordingServer запускает httptest-сервер, фиксирующий все POST-запросы
-// и отвечающий заданным status-ом. Возвращает (url, accessor для requests).
+// newRecordingServer starts httptest server capturing all POST requests
+// and responding with given status. Returns (url, accessor for requests).
 func newRecordingServer(t *testing.T, status int) (string, func() []receivedRequest) {
 	t.Helper()
 	var (
@@ -111,14 +111,14 @@ func TestWebhook_Generic_PostsFlatJSON(t *testing.T) {
 	n.Notify(context.Background(), sampleEvent())
 	reqs := getReqs()
 	if len(reqs) != 1 {
-		t.Fatalf("ожидался 1 POST, got %d", len(reqs))
+		t.Fatalf("expected 1 POST, got %d", len(reqs))
 	}
 	r := reqs[0]
 	if r.method != http.MethodPost {
-		t.Fatalf("ожидался POST, got %s", r.method)
+		t.Fatalf("expected POST, got %s", r.method)
 	}
 	if ct := r.headers.Get("Content-Type"); ct != "application/json" {
-		t.Fatalf("ожидался Content-Type application/json, got %q", ct)
+		t.Fatalf("expected Content-Type application/json, got %q", ct)
 	}
 	if r.body["event_type"] != EventTypeDegradedSet {
 		t.Fatalf("event_type mismatch: %v", r.body["event_type"])
@@ -126,7 +126,7 @@ func TestWebhook_Generic_PostsFlatJSON(t *testing.T) {
 	if r.body["leader_kid"] != "kid-A" {
 		t.Fatalf("leader_kid mismatch: %v", r.body["leader_kid"])
 	}
-	// JSON-числа десериализуются в float64.
+	// JSON numbers deserialize to float64.
 	if r.body["rate"].(float64) < 0.34 || r.body["rate"].(float64) > 0.36 {
 		t.Fatalf("rate mismatch: %v", r.body["rate"])
 	}
@@ -137,7 +137,7 @@ func TestWebhook_Generic_PostsFlatJSON(t *testing.T) {
 		t.Fatalf("window_seconds mismatch: %v", r.body["window_seconds"])
 	}
 	if _, has := r.body["coven_name"]; has {
-		t.Fatalf("coven_name не должен присутствовать при global-trigger-е, got %v", r.body["coven_name"])
+		t.Fatalf("coven_name should not be present on global-trigger, got %v", r.body["coven_name"])
 	}
 }
 
@@ -149,7 +149,7 @@ func TestWebhook_Generic_IncludesCovenWhenSet(t *testing.T) {
 	n.Notify(context.Background(), ev)
 	reqs := getReqs()
 	if len(reqs) != 1 {
-		t.Fatalf("ожидался 1 POST")
+		t.Fatalf("expected 1 POST")
 	}
 	if reqs[0].body["coven_name"] != "production-eu" {
 		t.Fatalf("coven_name mismatch: %v", reqs[0].body["coven_name"])
@@ -170,7 +170,7 @@ func TestWebhook_PagerDuty_v2Shape(t *testing.T) {
 	n.Notify(context.Background(), sampleEvent())
 	reqs := getReqs()
 	if len(reqs) != 1 {
-		t.Fatalf("ожидался 1 POST, got %d", len(reqs))
+		t.Fatalf("expected 1 POST, got %d", len(reqs))
 	}
 	body := reqs[0].body
 	if body["routing_key"] != "R0utin9-K3y" {
@@ -190,7 +190,7 @@ func TestWebhook_PagerDuty_v2Shape(t *testing.T) {
 		t.Fatalf("severity mismatch (set→error): %v", payload["severity"])
 	}
 	if !strings.Contains(payload["summary"].(string), "kid-A") {
-		t.Fatalf("summary должен включать leader_kid: %v", payload["summary"])
+		t.Fatalf("summary should include leader_kid: %v", payload["summary"])
 	}
 	customDetails, ok := payload["custom_details"].(map[string]any)
 	if !ok {
@@ -212,14 +212,14 @@ func TestWebhook_PagerDuty_ResolveOnCleared(t *testing.T) {
 	n.Notify(context.Background(), ev)
 	reqs := getReqs()
 	if len(reqs) != 1 {
-		t.Fatalf("ожидался 1 POST")
+		t.Fatalf("expected 1 POST")
 	}
 	if reqs[0].body["event_action"] != "resolve" {
-		t.Fatalf("ожидался event_action=resolve, got %v", reqs[0].body["event_action"])
+		t.Fatalf("expected event_action=resolve, got %v", reqs[0].body["event_action"])
 	}
 	payload := reqs[0].body["payload"].(map[string]any)
 	if payload["severity"] != "info" {
-		t.Fatalf("ожидалась severity=info на resolve, got %v", payload["severity"])
+		t.Fatalf("expected severity=info on resolve, got %v", payload["severity"])
 	}
 }
 
@@ -229,7 +229,7 @@ func TestWebhook_Slack_Shape(t *testing.T) {
 	n.Notify(context.Background(), sampleEvent())
 	reqs := getReqs()
 	if len(reqs) != 1 {
-		t.Fatalf("ожидался 1 POST")
+		t.Fatalf("expected 1 POST")
 	}
 	body := reqs[0].body
 	if _, ok := body["text"].(string); !ok {
@@ -241,11 +241,11 @@ func TestWebhook_Slack_Shape(t *testing.T) {
 	}
 	att := atts[0].(map[string]any)
 	if att["color"] != "danger" {
-		t.Fatalf("color должен быть 'danger' при degraded_set, got %v", att["color"])
+		t.Fatalf("color should be 'danger' on degraded_set, got %v", att["color"])
 	}
 	fields, _ := att["fields"].([]any)
 	if len(fields) < 4 {
-		t.Fatalf("ожидалось >=4 fields (rate/threshold/baseline/window), got %d", len(fields))
+		t.Fatalf("expected >=4 fields (rate/threshold/baseline/window), got %d", len(fields))
 	}
 }
 
@@ -257,45 +257,45 @@ func TestWebhook_Slack_GreenOnCleared(t *testing.T) {
 	n.Notify(context.Background(), ev)
 	reqs := getReqs()
 	if len(reqs) != 1 {
-		t.Fatalf("ожидался 1 POST")
+		t.Fatalf("expected 1 POST")
 	}
 	att := reqs[0].body["attachments"].([]any)[0].(map[string]any)
 	if att["color"] != "good" {
-		t.Fatalf("color должен быть 'good' при degraded_cleared, got %v", att["color"])
+		t.Fatalf("color should be 'good' on degraded_cleared, got %v", att["color"])
 	}
 }
 
 func TestWebhook_NonRecoverableHTTPError_Logs(t *testing.T) {
 	url, getReqs := newRecordingServer(t, http.StatusInternalServerError)
 	n, _ := NewWebhookNotifier(WebhookConfig{URLRef: url, Format: "generic"}, nil, newTestLogger())
-	// Не должен паниковать.
+	// Should not panic.
 	n.Notify(context.Background(), sampleEvent())
 	if len(getReqs()) != 1 {
-		t.Fatalf("ожидался 1 POST даже на 500-ответ")
+		t.Fatalf("expected 1 POST even on 500 response")
 	}
 }
 
 func TestWebhook_VaultError_NoPost(t *testing.T) {
 	v := &fakeVault{err: errors.New("vault down")}
 	n, _ := NewWebhookNotifier(WebhookConfig{URLRef: "vault:secret/x", Format: "generic"}, v, newTestLogger())
-	// Не должен паниковать.
+	// Should not panic.
 	n.Notify(context.Background(), sampleEvent())
-	// Vault упал → POST не делается, проверяем что fakeVault был вызван.
+	// Vault down → POST not made, check fakeVault was called.
 	if v.calls != 1 {
-		t.Fatalf("ожидался 1 ReadKV-вызов, got %d", v.calls)
+		t.Fatalf("expected 1 ReadKV call, got %d", v.calls)
 	}
 }
 
 func TestWebhook_VaultMissingURLField_NoPost(t *testing.T) {
 	v := &fakeVault{
 		data: map[string]map[string]any{
-			"secret/keeper/wh": {"routing_key": "rk"}, // нет поля `url`
+			"secret/keeper/wh": {"routing_key": "rk"}, // no `url` field
 		},
 	}
 	n, _ := NewWebhookNotifier(WebhookConfig{URLRef: "vault:secret/keeper/wh", Format: "generic"}, v, newTestLogger())
 	n.Notify(context.Background(), sampleEvent())
-	// Должен залогировать ошибку и не упасть — проверяем что вызвался Vault,
-	// но POST не пошёл (если бы пошёл, упал бы на DNS/невалидном URL=="").
+	// Should log error and not panic — check Vault was called,
+	// but POST not made (if it was, would fail on DNS/invalid URL=="").
 }
 
 func TestWebhook_Timeout_LogsNoPanic(t *testing.T) {
@@ -310,7 +310,7 @@ func TestWebhook_Timeout_LogsNoPanic(t *testing.T) {
 		Format:  "generic",
 		Timeout: 50 * time.Millisecond,
 	}, nil, newTestLogger())
-	// Не должен паниковать / зависнуть.
+	// Should not panic / hang.
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -319,12 +319,12 @@ func TestWebhook_Timeout_LogsNoPanic(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		t.Fatal("Notify завис на timeout-server-е (timeout не сработал)")
+		t.Fatal("Notify hung on timeout-server (timeout did not work)")
 	}
 }
 
 func TestWebhook_NilNotifier_Safe(t *testing.T) {
 	var n *WebhookNotifier
-	// Не должен паниковать.
+	// Should not panic.
 	n.Notify(context.Background(), sampleEvent())
 }

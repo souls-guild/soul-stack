@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-// fakeDegradedReader — controllable [DegradedReader] для middleware-тестов.
+// fakeDegradedReader — controllable [DegradedReader] for middleware tests.
 type fakeDegradedReader struct {
 	degraded bool
 	err      error
@@ -32,10 +32,10 @@ func TestDegradedMiddleware_Passthrough_WhenNotDegraded(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations/foo/scenarios/run", nil)
 	mw.ServeHTTP(rec, req)
 	if !called {
-		t.Fatal("next handler не вызван при !degraded")
+		t.Fatal("next handler not called when !degraded")
 	}
 	if rec.Code != http.StatusNoContent {
-		t.Fatalf("ожидался %d, got %d", http.StatusNoContent, rec.Code)
+		t.Fatalf("expected %d, got %d", http.StatusNoContent, rec.Code)
 	}
 }
 
@@ -49,28 +49,28 @@ func TestDegradedMiddleware_Blocks503_WhenDegraded(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/push/apply", nil)
 	mw.ServeHTTP(rec, req)
 	if called {
-		t.Fatal("next handler не должен вызываться при degraded")
+		t.Fatal("next handler should not be called when degraded")
 	}
 	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("ожидался 503, got %d", rec.Code)
+		t.Fatalf("expected 503, got %d", rec.Code)
 	}
 	if got := rec.Header().Get("Retry-After"); got == "" {
-		t.Fatal("ожидался заголовок Retry-After")
+		t.Fatal("expected Retry-After header")
 	} else if _, err := strconv.Atoi(got); err != nil {
-		t.Fatalf("Retry-After должен быть числом, got %q", got)
+		t.Fatalf("Retry-After should be number, got %q", got)
 	}
 	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/problem+json") {
-		t.Fatalf("ожидался Content-Type application/problem+json, got %q", ct)
+		t.Fatalf("expected Content-Type application/problem+json, got %q", ct)
 	}
 	var body map[string]any
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("body decode: %v", err)
 	}
 	if body["type"] != "https://soul-stack.io/errors/cluster-degraded" {
-		t.Fatalf("ожидался type cluster-degraded, got %v", body["type"])
+		t.Fatalf("expected type cluster-degraded, got %v", body["type"])
 	}
 	if body["status"].(float64) != 503 {
-		t.Fatalf("ожидался status 503 в теле, got %v", body["status"])
+		t.Fatalf("expected status 503 in body, got %v", body["status"])
 	}
 }
 
@@ -85,10 +85,10 @@ func TestDegradedMiddleware_ReaderError_FailOpen(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations/foo/scenarios/run", nil)
 	mw.ServeHTTP(rec, req)
 	if !called {
-		t.Fatal("на reader-error ожидался fail-open (next вызван)")
+		t.Fatal("on reader-error expected fail-open (next called)")
 	}
 	if rec.Code != http.StatusOK {
-		t.Fatalf("ожидался 200 fail-open, got %d", rec.Code)
+		t.Fatalf("expected 200 fail-open, got %d", rec.Code)
 	}
 }
 
@@ -103,10 +103,10 @@ func TestDegradedMiddleware_NilReader_Passthrough(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/push/apply", nil)
 	mw.ServeHTTP(rec, req)
 	if !called {
-		t.Fatal("nil-reader → middleware должен быть no-op")
+		t.Fatal("nil-reader → middleware should be no-op")
 	}
 	if rec.Code != http.StatusAccepted {
-		t.Fatalf("ожидался 202, got %d", rec.Code)
+		t.Fatalf("expected 202, got %d", rec.Code)
 	}
 }
 
@@ -117,6 +117,6 @@ func TestNoopDegradedReader_AlwaysFalse(t *testing.T) {
 		t.Fatalf("err: %v", err)
 	}
 	if got {
-		t.Fatal("NoopDegradedReader должен возвращать false")
+		t.Fatal("NoopDegradedReader should return false")
 	}
 }

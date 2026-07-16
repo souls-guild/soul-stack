@@ -7,33 +7,33 @@ import (
 	"strconv"
 )
 
-// retryAfterSeconds — Retry-After-заголовок для 503-ответа degraded-middleware.
-// Совпадает с DegradedTTL по дефолту (60s): клиент может ретраить после
-// estimated max-окна. ADR-038 не фиксирует точное значение — берём симметрично
-// окну.
+// retryAfterSeconds — Retry-After header for 503 response from degraded-middleware.
+// Matches DegradedTTL by default (60s): client can retry after
+// estimated max-window. ADR-038 does not fix exact value — we choose symmetrically
+// to the window.
 const retryAfterSeconds = 60
 
-// DegradedMiddleware возвращает chi/net-http-совместимый middleware. На каждом
-// blocked-запросе (определяется через [BlockedRoute]) middleware читает
-// cluster:degraded через [DegradedReader] и при выставленном флаге отвечает
-// 503 + Retry-After + application/problem+json, иначе пропускает дальше.
+// DegradedMiddleware returns chi/net-http-compatible middleware. On each
+// blocked request (determined via [BlockedRoute]) middleware reads
+// cluster:degraded via [DegradedReader] and on set flag responds
+// 503 + Retry-After + application/problem+json, otherwise passes through.
 //
-// reader=nil → middleware no-op (просто passthrough). Это удобно для wire-up-а
-// в daemon: при отсутствии Redis (single-instance/dev) middleware не блокирует
-// ничего, и тесты роутера, которым Toll не нужен, не получают сюрпризов.
+// reader=nil → middleware no-op (just passthrough). Convenient for wire-up
+// in daemon: without Redis (single-instance/dev) middleware blocks nothing
+// and router tests that don't need Toll don't get surprises.
 //
-// Логика блокировки:
-//  1. Если route НЕ blocked (read-API, RBAC, destroy, Errand) → passthrough.
-//     Cheap check FIRST, чтобы не дёргать Redis на каждом GET.
-//  2. Read cluster:degraded через DegradedReader. Ошибка → fail-OPEN (пропускаем
-//     запрос): доступность важнее перестраховки, флаг гаснет через DegradedTTL
-//     если leader умер, а блокировать на флапе Redis — хуже false-negative.
+// Blocking logic:
+//  1. If route NOT blocked (read-API, RBAC, destroy, Errand) → passthrough.
+//     Cheap check FIRST to avoid hitting Redis on every GET.
+//  2. Read cluster:degraded via DegradedReader. Error → fail-OPEN (pass
+//     request): availability more important than safety, flag expires via DegradedTTL
+//     if leader dies, blocking on Redis flap is worse than false-negative.
 //  3. degraded=true → 503 + Retry-After 60 + problem+json.
 //
-// Middleware сам решает blocked-route по path+method. Точнее (route-pattern
-// matcher) делать НЕЛЬЗЯ на уровне middleware — chi RouteContext доступен
-// только под `r.Route(...)`. Поэтому используем явное оборачивание точных
-// блокируемых routes в router-е (см. wire-up в api/router.go).
+// Middleware decides blocked-route by path+method itself. More precise (route-pattern
+// matcher) CANNOT be done at middleware level — chi RouteContext accessible
+// only under `r.Route(...)`. So we use explicit wrapping of exact
+// blocked routes in router (see wire-up in api/router.go).
 func DegradedMiddleware(reader DegradedReader, logger *slog.Logger) func(http.Handler) http.Handler {
 	if reader == nil {
 		return func(next http.Handler) http.Handler { return next }
@@ -42,7 +42,7 @@ func DegradedMiddleware(reader DegradedReader, logger *slog.Logger) func(http.Ha
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			degraded, err := reader.IsDegraded(r.Context())
 			if err != nil {
-				// Fail-OPEN: лог debug (Redis-флап — частое явление), пропускаем.
+				// Fail-OPEN: debug log (Redis flap — common phenomenon), pass through.
 				logger.Debug("toll: degraded check failed — fail-open",
 					slog.Any("error", err),
 					slog.String("path", r.URL.Path),
@@ -59,12 +59,12 @@ func DegradedMiddleware(reader DegradedReader, logger *slog.Logger) func(http.Ha
 	}
 }
 
-// writeDegraded503 пишет RFC 7807 problem+json с Retry-After. Format строго
-// согласован с keeper/internal/api/problem/TypeClusterDegraded (там же
-// зафиксирован status 503 и title). Локальная сборка без зависимости на пакет
-// problem — middleware живёт в `keeper/internal/toll/` и не должна тянуть
-// `keeper/internal/api/problem/` (циклов нет, но direction зависимости
-// `api → toll`, не наоборот).
+// writeDegraded503 writes RFC 7807 problem+json with Retry-After. Format strictly
+// aligned with keeper/internal/api/problem/TypeClusterDegraded (status 503 and title
+// fixed there too). Local assembly without dependency on problem package —
+// middleware lives in `keeper/internal/toll/` and should not pull
+// `keeper/internal/api/problem/` (no cycles, but dependency direction
+// `api → toll`, not reversed).
 func writeDegraded503(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds))
 	w.Header().Set("Content-Type", "application/problem+json")

@@ -1,26 +1,26 @@
-// Package toll — cluster-wide detector массового оттока Soul-ов (ADR-038).
+// Package toll — cluster-wide detector of mass Soul churn (ADR-038).
 //
-// Архитектура (ADR-038(2)):
+// Architecture (ADR-038(2)):
 //
-//   - [Watcher] — per-Keeper-инстанс goroutine-источник: gRPC EventStream-handler
-//     зовёт [Watcher.NotifyDisconnect] при выходе из receive-loop-а. Watcher
-//     фильтрует graceful-shutdown / warmup-immunity и публикует выживший
-//     disconnect-event в общий Redis sorted-set (через [Publisher]).
-//   - [Publisher] — тонкий ZADD-adapter поверх *redis.Client (sorted-set
+//   - [Watcher] — per-Keeper-instance goroutine source: gRPC EventStream handler
+//     calls [Watcher.NotifyDisconnect] on receive-loop exit. Watcher
+//     filters graceful-shutdown / warmup-immunity and publishes surviving
+//     disconnect-event to common Redis sorted-set (via [Publisher]).
+//   - [Publisher] — thin ZADD-adapter over *redis.Client (sorted-set
 //     `toll:disconnects`, score = unix-timestamp, value = `<sid>|<kid>|<coven>`).
-//     Disconnect-события публикуются СО ВСЕХ инстансов в общий ключ.
-//   - [Leader] — фоновая goroutine, выигравшая Redis-lease `cluster:toll:leader`
-//     (по аналогии с Reaper). Периодически читает sorted-set за окно, сравнивает
-//     с baseline `souls.status='connected'` (cached), выставляет/снимает
-//     Redis-ключ `cluster:degraded` с asymmetric hysteresis.
-//   - [DegradedReader] — read-only поверхность для HTTP-middleware: проверяет
-//     наличие ключа `cluster:degraded` на каждом write-API запросе.
-//   - [DegradedMiddleware] — chi-совместимый middleware: блокирует POST
-//     scenarios/push-apply при degraded (503 + Retry-After), всё прочее
-//     пропускает.
+//     Disconnect events published FROM ALL instances to common key.
+//   - [Leader] — background goroutine winning Redis-lease `cluster:toll:leader`
+//     (similar to Reaper). Periodically reads sorted-set over window, compares
+//     with baseline `souls.status='connected'` (cached), sets/clears
+//     Redis key `cluster:degraded` with asymmetric hysteresis.
+//   - [DegradedReader] — read-only surface for HTTP-middleware: checks
+//     presence of key `cluster:degraded` on each write-API request.
+//   - [DegradedMiddleware] — chi-compatible middleware: blocks POST
+//     scenarios/push-apply when degraded (503 + Retry-After), passes
+//     everything else.
 //
-// Инвариант ADR-038(c): Toll — passive observer. Не закрывает стримы (это
-// работа Watchman), не делает recovery actions, только наблюдает + блокирует
+// Invariant ADR-038(c): Toll is passive observer. Does not close streams (that is
+// Watchman's job), does not perform recovery actions, only observes + blocks
 // write-API.
 package toll
 
@@ -31,35 +31,35 @@ import (
 	"time"
 )
 
-// SortedSetKey — Redis sorted-set, в который все per-instance Watcher-ы
-// публикуют disconnect-события. score = unix-секунды, value = `<sid>|<kid>|<coven>`.
-// Coven опционален (Watcher может не знать его на cleanup-handler-е — пустой
-// сегмент допустим). Записи старше окна Leader чистит через ZREMRANGEBYSCORE.
+// SortedSetKey — Redis sorted-set to which all per-instance Watchers
+// publish disconnect events. score = unix-seconds, value = `<sid>|<kid>|<coven>`.
+// Coven optional (Watcher may not know it on cleanup-handler — empty
+// segment allowed). Leader cleans records older than window via ZREMRANGEBYSCORE.
 const SortedSetKey = "toll:disconnects"
 
-// LeaseKey — Redis-lease `cluster:toll:leader` для leader-election Leader-loop-а.
-// Holder = `kid` keeper-инстанса (read-friendly для логов).
+// LeaseKey — Redis-lease `cluster:toll:leader` for leader-election of Leader-loop.
+// Holder = `kid` of keeper instance (read-friendly for logs).
 const LeaseKey = "cluster:toll:leader"
 
-// DegradedKey — Redis-ключ-флаг cluster:degraded (set leader-ом, TTL =
-// DegradedTTL). Read на каждом write-API запросе через [DegradedReader].
+// DegradedKey — Redis key-flag cluster:degraded (set by leader, TTL =
+// DegradedTTL). Read on each write-API request via [DegradedReader].
 const DegradedKey = "cluster:degraded"
 
-// Publisher — узкая поверхность для Watcher-а: ZADD одного disconnect-event-а
-// в общий sorted-set. Daemon оборачивает [keeperredis.PublishTollDisconnect]
-// в реализацию; интерфейс позволяет fake в unit-тестах ([Watcher]-tests
-// проверяют фильтрацию warmup/graceful без живого Redis-а).
+// Publisher — narrow surface for Watcher: ZADD one disconnect-event
+// to common sorted-set. Daemon wraps [keeperredis.PublishTollDisconnect]
+// in implementation; interface allows fake in unit-tests ([Watcher]-tests
+// check warmup/graceful filtering without live Redis).
 type Publisher interface {
 	PublishDisconnect(ctx context.Context, sid, kid, coven string, at time.Time) error
 }
 
-// EncodeDisconnect формирует value-строку sorted-set-записи. Включает
-// `at.UnixNano` суффиксом для уникальности member-а: ZADD по правилам
-// sorted-set обновляет score существующего member-а, и два disconnect-а
-// «sid=foo|kid=A|coven=` за одну секунду от одного и того же набора полей
-// слились бы в одну запись. UnixNano-суффикс гарантирует уникальность
-// без побочных последствий для агрегации (Leader парсит prefix, суффикс
-// игнорирует).
+// EncodeDisconnect builds value-string of sorted-set record. Includes
+// `at.UnixNano` as suffix for member uniqueness: ZADD by sorted-set rules
+// updates score of existing member, and two disconnects
+// «sid=foo|kid=A|coven=» in one second from same field set
+// would merge into one record. UnixNano-suffix guarantees uniqueness
+// without side effects for aggregation (Leader parses prefix, ignores
+// suffix).
 func EncodeDisconnect(sid, kid, coven string, at time.Time) string {
 	var sb strings.Builder
 	sb.Grow(len(sid) + len(kid) + len(coven) + 32)
@@ -73,18 +73,18 @@ func EncodeDisconnect(sid, kid, coven string, at time.Time) string {
 	return sb.String()
 }
 
-// DegradedReader — read-only поверхность cluster:degraded флага. Middleware
-// зовёт IsDegraded на каждом запросе блокируемого endpoint-а; cost = один
-// Redis EXISTS, без round-trip за чтением value. Daemon оборачивает
-// [keeperredis.TollIsDegraded] в реализацию; для single-instance/dev без
-// Redis — [NoopDegradedReader] (всегда false).
+// DegradedReader — read-only surface of cluster:degraded flag. Middleware
+// calls IsDegraded on each blocked endpoint request; cost = one
+// Redis EXISTS, no round-trip for reading value. Daemon wraps
+// [keeperredis.TollIsDegraded] in implementation; for single-instance/dev without
+// Redis — [NoopDegradedReader] (always false).
 type DegradedReader interface {
 	IsDegraded(ctx context.Context) (bool, error)
 }
 
-// NoopDegradedReader — fallback для single-instance/dev без Redis. Всегда
-// возвращает false: блокировки нет, middleware пропускает все запросы.
+// NoopDegradedReader — fallback for single-instance/dev without Redis. Always
+// returns false: no blocking, middleware passes all requests.
 type NoopDegradedReader struct{}
 
-// IsDegraded — всегда false.
+// IsDegraded — always false.
 func (NoopDegradedReader) IsDegraded(context.Context) (bool, error) { return false, nil }

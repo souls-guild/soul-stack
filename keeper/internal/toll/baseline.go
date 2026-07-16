@@ -10,27 +10,28 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// BaselineReader — узкая поверхность для Leader: вернуть текущий снимок числа
-// `souls.status='connected'`. Реализация по умолчанию — [PGBaselineReader]
-// поверх pgxpool; интерфейс позволяет fake-у в unit-тестах Leader-а без живого
-// PG (см. leader_test.go::fakeBaseline).
+// BaselineReader — narrow surface for the Leader: return the current snapshot
+// count of `souls.status='connected'`. Default implementation — [PGBaselineReader]
+// on top of pgxpool; the interface lets Leader unit tests use a fake instead
+// of a live PG (see leader_test.go::fakeBaseline).
 type BaselineReader interface {
 	BaselineConnected(ctx context.Context) (int64, error)
 }
 
-// PGQuerier — узкий контракт `QueryRow` поверх *pgxpool.Pool / pgx.Conn.
-// Сужение до одного метода держит [PGBaselineReader] лёгким на test-fake и
-// принимает любой источник pgx (pool/conn/tx). Соответствует сигнатуре
+// PGQuerier — narrow `QueryRow` contract on top of *pgxpool.Pool / pgx.Conn.
+// Narrowing to one method keeps [PGBaselineReader] lightweight to test-fake
+// and lets it accept any pgx source (pool/conn/tx). Matches the signature of
 // pgxpool.Pool.QueryRow.
 type PGQuerier interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
-// cachedBaseline — Leader-side кеш с TTL. SELECT COUNT(*) FROM souls дёшев
-// (индекс по status), но Leader тикает каждые 5s — кеш на 60s ([Config.WindowSize])
-// уменьшает PG-нагрузку в 12 раз. Мутекс — потому что кеш живёт между тиками
-// (один Leader-loop), но Leader-loop одна горутина, мутекс — на случай
-// расширения (например, expose чтения baseline на /metrics).
+// cachedBaseline — Leader-side cache with a TTL. SELECT COUNT(*) FROM souls is
+// cheap (indexed on status), but the Leader ticks every 5s — a 60s cache
+// ([Config.WindowSize]) cuts PG load by a factor of 12. Mutex — because the cache
+// lives across ticks (a single Leader loop), but the Leader loop is one goroutine;
+// the mutex is there in case of future extension (e.g. exposing baseline reads
+// on /metrics).
 type cachedBaseline struct {
 	reader BaselineReader
 	ttl    time.Duration
@@ -45,10 +46,11 @@ func newCachedBaseline(reader BaselineReader, ttl time.Duration) *cachedBaseline
 	return &cachedBaseline{reader: reader, ttl: ttl}
 }
 
-// get возвращает cached-значение если оно свежее, иначе делает fetch. На
-// ошибке fetch-а — возвращает err И stale-значение (если есть): leader сам
-// решит, использовать stale (лучше, чем баг false-positive на пустом baseline-е)
-// или пропустить тик. Параметр now — для тестируемости (test инжектит clock).
+// get returns the cached value if it's still fresh, otherwise fetches. On a
+// fetch error — returns err AND the stale value (if any): the leader itself
+// decides whether to use the stale value (better than a false-positive bug on
+// an empty baseline) or skip the tick. The now parameter is for testability
+// (tests inject the clock).
 func (c *cachedBaseline) get(ctx context.Context, now time.Time) (int64, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -58,8 +60,8 @@ func (c *cachedBaseline) get(ctx context.Context, now time.Time) (int64, error) 
 	}
 	v, err := c.reader.BaselineConnected(ctx)
 	if err != nil {
-		// Stale-fallback: если уже было значение — возвращаем его И ошибку.
-		// Caller (Leader) различит по err != nil и решит сам.
+		// Stale-fallback: if a value already existed — return it AND the error.
+		// The caller (Leader) tells by err != nil and decides for itself.
 		if c.hasValue {
 			return c.value, err
 		}
@@ -71,17 +73,18 @@ func (c *cachedBaseline) get(ctx context.Context, now time.Time) (int64, error) 
 	return v, nil
 }
 
-// PGBaselineReader — production-impl поверх pgxpool. SELECT COUNT(*) FROM
-// souls WHERE status='connected'. Колонка status — read-only в этой query
-// (ADR-006 amend: presence теперь Redis-lease, но souls.status последний
-// known-good — достаточная аппроксимация baseline для cluster-level metric-а).
+// PGBaselineReader — production impl on top of pgxpool. SELECT COUNT(*) FROM
+// souls WHERE status='connected'. The status column is read-only in this query
+// (ADR-006 amend: presence is now a Redis lease, but souls.status as the last
+// known-good is a good enough approximation of the baseline for a cluster-level
+// metric).
 type PGBaselineReader struct {
 	pool PGQuerier
 }
 
-// NewPGBaselineReader собирает reader поверх pgxpool (через адаптер pgxToQuerier).
-// Принимает узкий [PGQuerier]: caller (daemon) оборачивает *pgxpool.Pool через
-// тривиальный adapter, чтобы пакет toll не тянул pgx как direct dep.
+// NewPGBaselineReader assembles a reader on top of pgxpool (via the pgxToQuerier adapter).
+// Accepts a narrow [PGQuerier]: the caller (daemon) wraps *pgxpool.Pool with a
+// trivial adapter so the toll package doesn't pull in pgx as a direct dep.
 func NewPGBaselineReader(pool PGQuerier) (*PGBaselineReader, error) {
 	if pool == nil {
 		return nil, errors.New("toll.NewPGBaselineReader: nil pool")
@@ -91,9 +94,9 @@ func NewPGBaselineReader(pool PGQuerier) (*PGBaselineReader, error) {
 
 // BaselineConnected — SELECT COUNT(*) FROM souls WHERE status='connected'.
 //
-// Возвращает 0 без ошибки на пустой таблице (нормальный путь для свежего
-// кластера) — Leader интерпретирует baseline=0 как «делить не на что, ratio
-// неопределённый, degraded не взводим» (ADR-038 защита от деления на ноль).
+// Returns 0 without an error on an empty table (the normal path for a fresh
+// cluster) — the Leader interprets baseline=0 as "nothing to divide by, ratio
+// is undefined, don't raise degraded" (ADR-038 protection against division by zero).
 func (r *PGBaselineReader) BaselineConnected(ctx context.Context) (int64, error) {
 	var n int64
 	row := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM souls WHERE status = 'connected'`)

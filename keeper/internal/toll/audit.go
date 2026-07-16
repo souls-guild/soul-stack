@@ -7,13 +7,13 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// auditDegradedSet пишет cluster.degraded_set audit-event. Single-winner —
-// только leader зовёт (инвариант ADR-038). Best-effort: ошибка лога, не fatal
-// (Leader не должен останавливать loop из-за audit-flap-а).
+// auditDegradedSet writes a cluster.degraded_set audit event. Single-winner —
+// only the leader calls it (invariant ADR-038). Best-effort: logs the error, not
+// fatal (the Leader must not stop its loop because of an audit flap).
 //
-// Source=keeper_internal (cluster-инициированный, не оператор), archon_aid
-// остаётся пустой (write-path добавит NULL). Payload — численные параметры,
-// секретов нет.
+// Source=keeper_internal (cluster-initiated, not an operator), archon_aid
+// stays empty (the write-path fills in NULL). Payload — numeric parameters,
+// no secrets.
 func auditDegradedSet(
 	ctx context.Context,
 	writer audit.Writer,
@@ -35,10 +35,10 @@ func auditDegradedSet(
 		"threshold":          threshold,
 		"window_seconds":     windowSeconds,
 	}
-	// coven_name — опц. (ADR-038 amendment, extensions): пишется только при
-	// per-coven trigger-е; при global-trigger-е поле отсутствует. Так
-	// потребители payload-а (alert-receiver, UI) различают «cluster-wide
-	// отток» (без coven_name) от «локального split в coven=X» (с coven_name).
+	// coven_name — optional (ADR-038 amendment, extensions): written only for a
+	// per-coven trigger; for a global trigger the field is absent. This lets
+	// payload consumers (alert-receiver, UI) distinguish a "cluster-wide
+	// drain" (no coven_name) from a "local split in coven=X" (with coven_name).
 	if covenName != "" {
 		payload["coven_name"] = covenName
 	}
@@ -53,9 +53,9 @@ func auditDegradedSet(
 	}
 }
 
-// auditDegradedCleared — симметрично auditDegradedSet, но для terminal-snap-а
-// «снят». Пишется только после устойчивого grace-окна низкого rate-а (ADR-038
-// asymmetric hysteresis).
+// auditDegradedCleared — symmetric to auditDegradedSet, but for the terminal
+// "cleared" snapshot. Written only after a stable grace window of low rate
+// (ADR-038 asymmetric hysteresis).
 func auditDegradedCleared(
 	ctx context.Context,
 	writer audit.Writer,

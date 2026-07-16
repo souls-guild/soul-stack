@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-// TestLeader_UpdateConfig_RejectsInvalid — UpdateConfig валидирует те же
-// диапазоны, что [NewLeader]: невалидный newCfg → error БЕЗ swap-а.
+// TestLeader_UpdateConfig_RejectsInvalid — UpdateConfig validates the same
+// ranges as [NewLeader]: invalid newCfg → error without swap.
 func TestLeader_UpdateConfig_RejectsInvalid(t *testing.T) {
 	t.Parallel()
 	_, _, _, _, deps := newTestLeaderDeps()
@@ -25,20 +25,20 @@ func TestLeader_UpdateConfig_RejectsInvalid(t *testing.T) {
 	}
 	for i, c := range cases {
 		if err := l.UpdateConfig(c); err == nil {
-			t.Fatalf("case %d: ожидался error на невалидном newCfg %+v", i, c)
+			t.Fatalf("case %d: expected error on invalid newCfg %+v", i, c)
 		}
 	}
 }
 
-// TestLeader_UpdateConfig_SwapsThresholds — повышаем threshold так, чтобы
-// прежний rate перестал быть «превышением». Степ-down: до UpdateConfig leader
-// SetDegraded зовёт, после — должен прекратить (новый порог выше rate-а).
+// TestLeader_UpdateConfig_SwapsThresholds — raise threshold so the former
+// rate ceases to be an "exceedance". Step-down: before UpdateConfig leader
+// calls SetDegraded, after — should stop (new threshold above rate).
 func TestLeader_UpdateConfig_SwapsThresholds(t *testing.T) {
 	t.Parallel()
 	acq, ss, dw, bl, deps := newTestLeaderDeps()
 	acq.script = []acquireResult{{lease: &fakeLease{}}}
 	bl.value = 100
-	ss.setCount(15) // 0.15 — выше 0.10, ниже 0.50
+	ss.setCount(15) // 0.15 — above 0.10, below 0.50
 
 	cfg := newTestLeaderCfg()
 	cfg.Threshold = 0.10
@@ -48,8 +48,8 @@ func TestLeader_UpdateConfig_SwapsThresholds(t *testing.T) {
 		t.Fatalf("NewLeader: %v", err)
 	}
 
-	// На середине пути — поднимаем порог до 0.50; новые тики не должны
-	// продолжать SetDegraded (rate=0.15 < новый threshold=0.50).
+	// Midway — raise threshold to 0.50; new ticks should not
+	// continue SetDegraded (rate=0.15 < new threshold=0.50).
 	go func() {
 		time.Sleep(50 * time.Millisecond)
 		newCfg := cfg
@@ -67,36 +67,36 @@ func TestLeader_UpdateConfig_SwapsThresholds(t *testing.T) {
 	setCallsBefore := dw.setCalls
 	dw.mu.Unlock()
 	if setCallsBefore == 0 {
-		t.Fatal("ожидался ≥1 SetDegraded до UpdateConfig (rate=0.15 > 0.10)")
+		t.Fatal("expected ≥1 SetDegraded before UpdateConfig (rate=0.15 > 0.10)")
 	}
-	// Если UpdateConfig корректно поднял threshold, переход в grace-фазу
-	// произойдёт; ClearDegraded после grace 50ms.
+	// If UpdateConfig correctly raised threshold, transition to grace-phase
+	// will occur; ClearDegraded after grace 50ms.
 	dw.mu.Lock()
 	clearCalls := dw.clearCalls
 	dw.mu.Unlock()
 	if clearCalls == 0 {
-		t.Fatal("ожидался ≥1 ClearDegraded после UpdateConfig (новый threshold выше rate-а)")
+		t.Fatal("expected ≥1 ClearDegraded after UpdateConfig (new threshold above rate)")
 	}
 }
 
-// TestLeader_UpdateConfig_PerCovenThresholdsUpdated — добавляем новый
-// per-coven threshold через UpdateConfig; на следующем тике leader должен
-// триггерить по нему.
+// TestLeader_UpdateConfig_PerCovenThresholdsUpdated — add a new
+// per-coven threshold via UpdateConfig; on the next tick leader should
+// trigger on it.
 func TestLeader_UpdateConfig_PerCovenThresholdsUpdated(t *testing.T) {
 	t.Parallel()
 	acq, ss, dw, bl, deps := newTestLeaderDeps()
 	acq.script = []acquireResult{{lease: &fakeLease{}}}
 	bl.value = 100
-	// Global rate 5/100=0.05 — ниже 0.20, не сработает.
+	// Global rate 5/100=0.05 — below 0.20, won't trigger.
 	ss.setCount(5)
-	// Per-coven: production-eu выше будущего порога 0.10.
+	// Per-coven: production-eu above future threshold 0.10.
 	ss.setCovenCounts(map[string]int64{"production-eu": 15})
 
 	notifier := &recordingNotifier{}
 	cfg := newTestLeaderCfg()
 	cfg.TickInterval = 20 * time.Millisecond
 	cfg.Notifier = notifier
-	// Сразу — без per-coven thresholds (триггера не будет).
+	// Initially — without per-coven thresholds (no trigger).
 	l, err := NewLeader(cfg, deps)
 	if err != nil {
 		t.Fatalf("NewLeader: %v", err)
@@ -119,25 +119,25 @@ func TestLeader_UpdateConfig_PerCovenThresholdsUpdated(t *testing.T) {
 	setCalls := dw.setCalls
 	dw.mu.Unlock()
 	if setCalls == 0 {
-		t.Fatalf("ожидался ≥1 SetDegraded после добавления per-coven threshold через UpdateConfig")
+		t.Fatalf("expected ≥1 SetDegraded after adding per-coven threshold via UpdateConfig")
 	}
 	events := notifier.snapshot()
 	if len(events) == 0 {
-		t.Fatal("ожидался ≥1 Notify после UpdateConfig")
+		t.Fatal("expected ≥1 Notify after UpdateConfig")
 	}
 	if events[0].CovenName != "production-eu" {
-		t.Fatalf("ожидался coven_name=production-eu, got %q", events[0].CovenName)
+		t.Fatalf("expected coven_name=production-eu, got %q", events[0].CovenName)
 	}
 }
 
-// TestLeader_UpdateConfig_NotifierRecycled — подменяем Notifier через
-// UpdateConfig; следующий trigger должен идти к новому, не к старому.
+// TestLeader_UpdateConfig_NotifierRecycled — swap Notifier via
+// UpdateConfig; next trigger should go to the new one, not the old.
 func TestLeader_UpdateConfig_NotifierRecycled(t *testing.T) {
 	t.Parallel()
 	acq, ss, _, bl, deps := newTestLeaderDeps()
 	acq.script = []acquireResult{{lease: &fakeLease{}}}
 	bl.value = 100
-	ss.setCount(30) // > threshold, постоянный trigger
+	ss.setCount(30) // > threshold, constant trigger
 
 	oldNotifier := &recordingNotifier{}
 	newNotifier := &recordingNotifier{}
@@ -149,32 +149,32 @@ func TestLeader_UpdateConfig_NotifierRecycled(t *testing.T) {
 		t.Fatalf("NewLeader: %v", err)
 	}
 
-	// Дадим первому тику дойти до oldNotifier; затем подменим (degraded_set
-	// уже выставлен — повторные tick-и Notify не зовут до cleared).
-	// Поэтому проверяем на cleared-event: после reset-а rate-а cleared
-	// должен прилететь в newNotifier.
+	// Let first tick reach oldNotifier; then swap (degraded_set
+	// already set — subsequent ticks don't call Notify until cleared).
+	// So we check for cleared-event: after rate reset, cleared
+	// should arrive at newNotifier.
 	go func() {
 		time.Sleep(40 * time.Millisecond)
-		// Сначала дать первый trigger на oldNotifier (он будет в snapshot-е).
+		// First let the first trigger reach oldNotifier (it will be in snapshot).
 		newCfg := cfg
 		newCfg.Notifier = newNotifier
 		if err := l.UpdateConfig(newCfg); err != nil {
 			t.Errorf("UpdateConfig: %v", err)
 		}
-		// Затем опускаем rate ниже threshold — cleared прилетит к newNotifier.
+		// Then drop rate below threshold — cleared will arrive at newNotifier.
 		time.Sleep(20 * time.Millisecond)
 		ss.setCount(5)
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 350*time.Millisecond)
 	defer cancel()
-	// ClearGrace в leader-конфиге уже из newTestLeaderCfg (50ms), хватит.
+	// ClearGrace in leader config already from newTestLeaderCfg (50ms), sufficient.
 	l.Run(ctx)
 
 	oldEvents := oldNotifier.snapshot()
 	newEvents := newNotifier.snapshot()
 
-	// Старый должен был получить хотя бы degraded_set (первый tick до swap-а).
+	// Old should have received at least degraded_set (first tick before swap).
 	gotSetOnOld := false
 	for _, e := range oldEvents {
 		if e.Type == EventTypeDegradedSet {
@@ -182,9 +182,9 @@ func TestLeader_UpdateConfig_NotifierRecycled(t *testing.T) {
 		}
 	}
 	if !gotSetOnOld {
-		t.Fatalf("ожидался degraded_set на oldNotifier (до swap-а), got %+v", oldEvents)
+		t.Fatalf("expected degraded_set on oldNotifier (before swap), got %+v", oldEvents)
 	}
-	// Новый должен получить degraded_cleared (после swap-а и drop rate-а).
+	// New should have received degraded_cleared (after swap and rate drop).
 	gotClearedOnNew := false
 	for _, e := range newEvents {
 		if e.Type == EventTypeDegradedCleared {
@@ -192,18 +192,18 @@ func TestLeader_UpdateConfig_NotifierRecycled(t *testing.T) {
 		}
 	}
 	if !gotClearedOnNew {
-		t.Fatalf("ожидался degraded_cleared на newNotifier (после UpdateConfig), got %+v", newEvents)
+		t.Fatalf("expected degraded_cleared on newNotifier (after UpdateConfig), got %+v", newEvents)
 	}
-	// И на старом cleared НЕ должен прилететь (swap произошёл до drop-а).
+	// And on old, cleared should NOT arrive (swap happened before drop).
 	for _, e := range oldEvents {
 		if e.Type == EventTypeDegradedCleared {
-			t.Fatalf("на oldNotifier не должен был прилететь cleared после swap-а: %+v", oldEvents)
+			t.Fatalf("cleared should not have arrived on oldNotifier after swap: %+v", oldEvents)
 		}
 	}
 }
 
-// TestLeader_UpdateConfig_DisableNotifier — nil-notifier в UpdateConfig
-// отключает alert-канал; cleared-event через grace не должен пропагироваться.
+// TestLeader_UpdateConfig_DisableNotifier — nil-notifier in UpdateConfig
+// disables alert channel; cleared-event after grace should not propagate.
 func TestLeader_UpdateConfig_DisableNotifier(t *testing.T) {
 	t.Parallel()
 	acq, ss, _, bl, deps := newTestLeaderDeps()
@@ -222,15 +222,15 @@ func TestLeader_UpdateConfig_DisableNotifier(t *testing.T) {
 	}
 
 	go func() {
-		// Подменяем notifier на nil после первого тика.
+		// Swap notifier to nil after first tick.
 		time.Sleep(40 * time.Millisecond)
 		newCfg := cfg
 		newCfg.Notifier = nil
 		if err := l.UpdateConfig(newCfg); err != nil {
 			t.Errorf("UpdateConfig: %v", err)
 		}
-		// Drop rate — должен пойти cleared-flow, но notifier=nil → ничего
-		// не записывается.
+		// Drop rate — cleared-flow should start, but notifier=nil → nothing
+		// is recorded.
 		time.Sleep(20 * time.Millisecond)
 		ss.setCount(5)
 	}()
@@ -240,16 +240,16 @@ func TestLeader_UpdateConfig_DisableNotifier(t *testing.T) {
 	l.Run(ctx)
 
 	events := notifier.snapshot()
-	// Только set, без cleared (cleared прилетел бы, если бы notifier остался).
+	// Only set, no cleared (cleared would arrive if notifier remained).
 	for _, e := range events {
 		if e.Type == EventTypeDegradedCleared {
-			t.Fatalf("ожидался 0 cleared-event после nil-Notifier, got %+v", events)
+			t.Fatalf("expected 0 cleared-event after nil-Notifier, got %+v", events)
 		}
 	}
 }
 
-// TestLeader_UpdateConfig_ConcurrentWithTick — race-detector гарантия: tick
-// и UpdateConfig запускаются параллельно, читают/пишут cfg-поля.
+// TestLeader_UpdateConfig_ConcurrentWithTick — race-detector guarantee: tick
+// and UpdateConfig run concurrently, read/write cfg fields.
 func TestLeader_UpdateConfig_ConcurrentWithTick(t *testing.T) {
 	t.Parallel()
 	acq, ss, _, bl, deps := newTestLeaderDeps()
@@ -295,8 +295,8 @@ func TestLeader_UpdateConfig_ConcurrentWithTick(t *testing.T) {
 	wg.Wait()
 }
 
-// TestLeader_UpdateConfig_BeforeRun — UpdateConfig работает и до запуска
-// Run (start-up-time apply): значения должны быть подхвачены первым тиком.
+// TestLeader_UpdateConfig_BeforeRun — UpdateConfig works before
+// Run starts (start-up-time apply): values should be picked up by first tick.
 func TestLeader_UpdateConfig_BeforeRun(t *testing.T) {
 	t.Parallel()
 	acq, ss, dw, bl, deps := newTestLeaderDeps()
@@ -305,13 +305,13 @@ func TestLeader_UpdateConfig_BeforeRun(t *testing.T) {
 	ss.setCount(15) // 0.15
 
 	cfg := newTestLeaderCfg()
-	cfg.Threshold = 0.50 // изначально rate ниже
+	cfg.Threshold = 0.50 // initially rate below
 	l, err := NewLeader(cfg, deps)
 	if err != nil {
 		t.Fatalf("NewLeader: %v", err)
 	}
 
-	// До Run опускаем порог до 0.10 → 0.15 > 0.10 → должен сработать.
+	// Before Run, drop threshold to 0.10 → 0.15 > 0.10 → should trigger.
 	newCfg := cfg
 	newCfg.Threshold = 0.10
 	if err := l.UpdateConfig(newCfg); err != nil {
@@ -326,11 +326,11 @@ func TestLeader_UpdateConfig_BeforeRun(t *testing.T) {
 	setCalls := dw.setCalls
 	dw.mu.Unlock()
 	if setCalls == 0 {
-		t.Fatal("ожидался ≥1 SetDegraded — UpdateConfig до Run должен примениться к первому тику")
+		t.Fatal("expected ≥1 SetDegraded — UpdateConfig before Run should apply to first tick")
 	}
 }
 
-// TestLeader_CurrentNotifier_ReturnsActive — sanity-check helper-а для
+// TestLeader_CurrentNotifier_ReturnsActive — sanity-check helper for
 // daemon-applyTollReload.
 func TestLeader_CurrentNotifier_ReturnsActive(t *testing.T) {
 	t.Parallel()
@@ -353,9 +353,9 @@ func TestLeader_CurrentNotifier_ReturnsActive(t *testing.T) {
 		t.Fatalf("NewLeader: %v", err)
 	}
 	if l2.CurrentNotifier() != nil {
-		t.Fatal("ожидался nil CurrentNotifier при отсутствии notifier-а в cfg")
+		t.Fatal("expected nil CurrentNotifier when notifier absent in cfg")
 	}
-	// После UpdateConfig nil-notifier — снова nil.
+	// After UpdateConfig with nil-notifier — nil again.
 	if err := l.UpdateConfig(LeaderConfig{
 		WindowSize: cfg.WindowSize, Threshold: cfg.Threshold,
 		DegradedTTL: cfg.DegradedTTL, ClearGrace: cfg.ClearGrace,
@@ -364,6 +364,6 @@ func TestLeader_CurrentNotifier_ReturnsActive(t *testing.T) {
 		t.Fatalf("UpdateConfig: %v", err)
 	}
 	if l.CurrentNotifier() != nil {
-		t.Fatal("ожидался nil CurrentNotifier после UpdateConfig с nil-notifier")
+		t.Fatal("expected nil CurrentNotifier after UpdateConfig with nil-notifier")
 	}
 }

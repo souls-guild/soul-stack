@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// fakeLease — held lease handle для fakeLeaseAcquirer.
+// fakeLease — held lease handle for fakeLeaseAcquirer.
 type fakeLease struct {
 	mu       sync.Mutex
 	renewErr error
@@ -30,8 +30,8 @@ func (l *fakeLease) Release(_ context.Context) error {
 	return nil
 }
 
-// fakeLeaseAcquirer — controllable acquirer. Возвращает заранее заданные
-// результаты по order-у; после исчерпания — конечный ответ.
+// fakeLeaseAcquirer — controllable acquirer. Returns pre-defined
+// results in order; after exhaustion — final answer.
 type fakeLeaseAcquirer struct {
 	mu        sync.Mutex
 	script    []acquireResult
@@ -50,7 +50,7 @@ func (a *fakeLeaseAcquirer) Acquire(_ context.Context, _, _ string, _ time.Durat
 	defer a.mu.Unlock()
 	a.calls++
 	if a.idx >= len(a.script) {
-		// После скрипта — упорно держим last (или ErrLeaseTaken если ничего нет).
+		// After script — stubbornly hold last (or ErrLeaseTaken if nothing).
 		if len(a.script) > 0 {
 			r := a.script[len(a.script)-1]
 			if r.lease != nil {
@@ -76,12 +76,12 @@ func (a *fakeLeaseAcquirer) callsCount() int {
 	return a.calls
 }
 
-// fakeSortedSet — controllable [SortedSetReader]: возвращает заданное count
-// либо ошибку. Поддерживает мутацию из теста (между тиками меняется rate).
+// fakeSortedSet — controllable [SortedSetReader]: returns given count
+// or error. Supports mutation from test (rate changes between ticks).
 //
-// Также реализует [CovenAwareReader] (per-coven trigger, ADR-038 amendment,
-// extensions): при заданной covenCounts возвращает map. nil-map → reader
-// возвращает (nil, nil) — leader интерпретирует как «нет данных, no trigger».
+// Also implements [CovenAwareReader] (per-coven trigger, ADR-038 amendment,
+// extensions): with given covenCounts returns map. nil-map → reader
+// returns (nil, nil) — leader interprets as «no data, no trigger».
 type fakeSortedSet struct {
 	mu          sync.Mutex
 	count       int64
@@ -185,7 +185,7 @@ func newTestLeaderDeps() (*fakeLeaseAcquirer, *fakeSortedSet, *fakeDegradedWrite
 	acq := &fakeLeaseAcquirer{}
 	ss := &fakeSortedSet{}
 	dw := &fakeDegradedWriter{}
-	bl := &fakeBaseline{value: 100} // 100 connected souls baseline по дефолту
+	bl := &fakeBaseline{value: 100} // 100 connected souls baseline by default
 	deps := LeaderDeps{
 		Lease:          acq,
 		SortedSet:      ss,
@@ -239,7 +239,7 @@ func TestLeader_AcquireRetryThenSucceed(t *testing.T) {
 	defer cancel()
 	l.Run(ctx)
 	if acq.callsCount() < 3 {
-		t.Fatalf("ожидался ≥3 acquire (2 conflict + 1 success), got %d", acq.callsCount())
+		t.Fatalf("expected ≥3 acquire (2 conflict + 1 success), got %d", acq.callsCount())
 	}
 }
 
@@ -263,10 +263,10 @@ func TestLeader_SetDegradedWhenRateExceedsThreshold(t *testing.T) {
 	clearCalls := dw.clearCalls
 	dw.mu.Unlock()
 	if calls == 0 {
-		t.Fatal("ожидался ≥1 SetDegraded при rate > threshold")
+		t.Fatal("expected ≥1 SetDegraded when rate > threshold")
 	}
 	if clearCalls > 0 {
-		t.Fatalf("ожидался 0 ClearDegraded, got %d", clearCalls)
+		t.Fatalf("expected 0 ClearDegraded, got %d", clearCalls)
 	}
 }
 
@@ -289,10 +289,10 @@ func TestLeader_NoActionWhenBelowThreshold(t *testing.T) {
 	clearCalls := dw.clearCalls
 	dw.mu.Unlock()
 	if calls != 0 {
-		t.Fatalf("ожидался 0 SetDegraded при rate < threshold, got %d", calls)
+		t.Fatalf("expected 0 SetDegraded when rate < threshold, got %d", calls)
 	}
 	if clearCalls != 0 {
-		t.Fatalf("ожидался 0 ClearDegraded (никогда не было set), got %d", clearCalls)
+		t.Fatalf("expected 0 ClearDegraded (never set), got %d", clearCalls)
 	}
 }
 
@@ -310,7 +310,7 @@ func TestLeader_ClearDegraded_RequiresGrace(t *testing.T) {
 		t.Fatalf("NewLeader: %v", err)
 	}
 
-	// Run-сценарий: первые 50ms — high rate; затем — drop; ждём grace; затем — clear.
+	// Run scenario: first 50ms — high rate; then drop; wait grace; then clear.
 	go func() {
 		time.Sleep(50 * time.Millisecond)
 		ss.setCount(5) // rate=0.05 < threshold
@@ -325,17 +325,17 @@ func TestLeader_ClearDegraded_RequiresGrace(t *testing.T) {
 	clearCalls := dw.clearCalls
 	dw.mu.Unlock()
 	if setCalls == 0 {
-		t.Fatal("ожидался ≥1 SetDegraded (high rate в первые 50ms)")
+		t.Fatal("expected ≥1 SetDegraded (high rate in first 50ms)")
 	}
 	if clearCalls == 0 {
-		t.Fatal("ожидался ≥1 ClearDegraded после grace и устойчивого low rate")
+		t.Fatal("expected ≥1 ClearDegraded after grace and stable low rate")
 	}
 }
 
 func TestLeader_BaselineZero_NoDegraded(t *testing.T) {
 	acq, ss, dw, bl, deps := newTestLeaderDeps()
 	acq.script = []acquireResult{{lease: &fakeLease{}}}
-	bl.value = 0 // пустой кластер
+	bl.value = 0 // empty cluster
 	ss.setCount(100)
 
 	l, err := NewLeader(newTestLeaderCfg(), deps)
@@ -350,7 +350,7 @@ func TestLeader_BaselineZero_NoDegraded(t *testing.T) {
 	calls := dw.setCalls
 	dw.mu.Unlock()
 	if calls != 0 {
-		t.Fatalf("ожидался 0 SetDegraded при baseline=0, got %d", calls)
+		t.Fatalf("expected 0 SetDegraded when baseline=0, got %d", calls)
 	}
 }
 
@@ -364,7 +364,7 @@ func TestLeader_LeaseLost_StepDownAndReAcquire(t *testing.T) {
 	}
 
 	cfg := newTestLeaderCfg()
-	cfg.LeaseTTL = 30 * time.Millisecond // быстрые renew-ы
+	cfg.LeaseTTL = 30 * time.Millisecond // fast renews
 	l, err := NewLeader(cfg, deps)
 	if err != nil {
 		t.Fatalf("NewLeader: %v", err)
@@ -374,10 +374,10 @@ func TestLeader_LeaseLost_StepDownAndReAcquire(t *testing.T) {
 	l.Run(ctx)
 
 	if acq.callsCount() < 2 {
-		t.Fatalf("ожидался ≥2 Acquire после ErrLeaseLost, got %d", acq.callsCount())
+		t.Fatalf("expected ≥2 Acquire after ErrLeaseLost, got %d", acq.callsCount())
 	}
 	if !lostLease.released {
-		t.Fatal("ErrLeaseLost-lease должен быть Release-нут на step-down")
+		t.Fatal("ErrLeaseLost-lease should be Released on step-down")
 	}
 }
 
@@ -399,11 +399,11 @@ func TestLeader_SortedSetError_SkipsTick(t *testing.T) {
 	clearCalls := dw.clearCalls
 	dw.mu.Unlock()
 	if setCalls != 0 || clearCalls != 0 {
-		t.Fatalf("на ZCOUNT-ошибке тик должен пропускаться, got set=%d clear=%d", setCalls, clearCalls)
+		t.Fatalf("on ZCOUNT error tick should be skipped, got set=%d clear=%d", setCalls, clearCalls)
 	}
 }
 
-// recordingNotifier — fake [Notifier], собирает все вызовы Notify.
+// recordingNotifier — fake [Notifier], captures all Notify calls.
 type recordingNotifier struct {
 	mu     sync.Mutex
 	events []TollEvent
@@ -427,9 +427,9 @@ func TestLeader_PerCovenTrigger_SetsDegradedWithCovenName(t *testing.T) {
 	acq, ss, dw, bl, deps := newTestLeaderDeps()
 	acq.script = []acquireResult{{lease: &fakeLease{}}}
 	bl.value = 100
-	// Global rate 5/100 = 0.05 < 0.20 → global не сработает.
+	// Global rate 5/100 = 0.05 < 0.20 → global won't trigger.
 	ss.setCount(5)
-	// Per-coven: production-eu = 15/100 = 0.15 > 0.10 → должно сработать.
+	// Per-coven: production-eu = 15/100 = 0.15 > 0.10 → should trigger.
 	ss.setCovenCounts(map[string]int64{
 		"production-us": 3,
 		"production-eu": 15,
@@ -455,33 +455,33 @@ func TestLeader_PerCovenTrigger_SetsDegradedWithCovenName(t *testing.T) {
 	setCalls := dw.setCalls
 	dw.mu.Unlock()
 	if setCalls == 0 {
-		t.Fatalf("ожидался ≥1 SetDegraded из-за per-coven trigger")
+		t.Fatalf("expected ≥1 SetDegraded from per-coven trigger")
 	}
 
 	events := notifier.snapshot()
 	if len(events) == 0 {
-		t.Fatalf("ожидался ≥1 Notify-вызов")
+		t.Fatalf("expected ≥1 Notify call")
 	}
 	first := events[0]
 	if first.Type != EventTypeDegradedSet {
-		t.Fatalf("ожидался EventTypeDegradedSet, got %q", first.Type)
+		t.Fatalf("expected EventTypeDegradedSet, got %q", first.Type)
 	}
 	if first.CovenName != "production-eu" {
-		t.Fatalf("ожидался coven_name=production-eu, got %q", first.CovenName)
+		t.Fatalf("expected coven_name=production-eu, got %q", first.CovenName)
 	}
 	if first.Threshold != 0.10 {
-		t.Fatalf("ожидался threshold=0.10 (per-coven), got %v", first.Threshold)
+		t.Fatalf("expected threshold=0.10 (per-coven), got %v", first.Threshold)
 	}
 }
 
 func TestLeader_PerCovenTrigger_GlobalTrumpsCoven(t *testing.T) {
-	// При global-trigger-е coven_name должен быть пустым (cluster-wide отток).
+	// On global-trigger coven_name should be empty (cluster-wide churn).
 	acq, ss, dw, bl, deps := newTestLeaderDeps()
 	acq.script = []acquireResult{{lease: &fakeLease{}}}
 	bl.value = 100
-	ss.setCount(30) // 30/100 = 0.30 > 0.20 (global сработает)
+	ss.setCount(30) // 30/100 = 0.30 > 0.20 (global triggers)
 	ss.setCovenCounts(map[string]int64{
-		"production-eu": 25, // 25/100 = 0.25 > 0.10 (per-coven тоже сработал)
+		"production-eu": 25, // 25/100 = 0.25 > 0.10 (per-coven triggered too)
 	})
 
 	notifier := &recordingNotifier{}
@@ -500,13 +500,13 @@ func TestLeader_PerCovenTrigger_GlobalTrumpsCoven(t *testing.T) {
 	_ = dw
 	events := notifier.snapshot()
 	if len(events) == 0 {
-		t.Fatalf("ожидался ≥1 Notify")
+		t.Fatalf("expected ≥1 Notify")
 	}
 	if events[0].CovenName != "" {
-		t.Fatalf("при global-trigger-е coven_name должен быть пустым, got %q", events[0].CovenName)
+		t.Fatalf("on global-trigger coven_name should be empty, got %q", events[0].CovenName)
 	}
 	if events[0].Threshold != 0.20 {
-		t.Fatalf("при global-trigger-е threshold должен быть global, got %v", events[0].Threshold)
+		t.Fatalf("on global-trigger threshold should be global, got %v", events[0].Threshold)
 	}
 }
 
@@ -528,12 +528,12 @@ func TestLeader_PerCovenTrigger_NoTrigger_NoNotify(t *testing.T) {
 	l.Run(ctx)
 
 	if len(notifier.snapshot()) != 0 {
-		t.Fatalf("ожидался 0 Notify (rate ниже всех порогов)")
+		t.Fatalf("expected 0 Notify (rate below all thresholds)")
 	}
 	dw.mu.Lock()
 	defer dw.mu.Unlock()
 	if dw.setCalls != 0 {
-		t.Fatalf("ожидался 0 SetDegraded, got %d", dw.setCalls)
+		t.Fatalf("expected 0 SetDegraded, got %d", dw.setCalls)
 	}
 }
 
@@ -560,10 +560,10 @@ func TestLeader_Notifier_OnClearedAfterGrace(t *testing.T) {
 
 	events := notifier.snapshot()
 	if len(events) < 2 {
-		t.Fatalf("ожидалось ≥2 Notify (set + cleared), got %d", len(events))
+		t.Fatalf("expected ≥2 Notify (set + cleared), got %d", len(events))
 	}
 	if events[0].Type != EventTypeDegradedSet {
-		t.Fatalf("первый event должен быть set, got %q", events[0].Type)
+		t.Fatalf("first event should be set, got %q", events[0].Type)
 	}
 	gotCleared := false
 	for _, e := range events {
@@ -573,7 +573,7 @@ func TestLeader_Notifier_OnClearedAfterGrace(t *testing.T) {
 		}
 	}
 	if !gotCleared {
-		t.Fatalf("ожидался cleared-event после grace, не нашлось в %+v", events)
+		t.Fatalf("expected cleared-event after grace, not found in %+v", events)
 	}
 	_ = dw
 }
@@ -590,7 +590,7 @@ func TestLeader_NotifierPanic_DoesNotCrashLoop(t *testing.T) {
 	l, _ := NewLeader(cfg, deps)
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	// Не должен паниковать наружу: recover внутри l.notify.
+	// Should not panic outside: recover inside l.notify.
 	l.Run(ctx)
 }
 
@@ -601,7 +601,7 @@ func (panickyNotifier) Notify(context.Context, TollEvent) {
 }
 
 func TestLeader_CachedBaseline_AvoidsRefetch(t *testing.T) {
-	// Direct test cachedBaseline без Leader-loop-а.
+	// Direct test of cachedBaseline without Leader-loop.
 	bl := &fakeBaseline{value: 100}
 	c := newCachedBaseline(bl, time.Second)
 	ctx := context.Background()
@@ -613,14 +613,14 @@ func TestLeader_CachedBaseline_AvoidsRefetch(t *testing.T) {
 		}
 	}
 	if got := bl.callsCount(); got != 1 {
-		t.Fatalf("ожидался 1 fetch (cached), got %d", got)
+		t.Fatalf("expected 1 fetch (cached), got %d", got)
 	}
-	// После TTL — refresh.
+	// After TTL — refresh.
 	v, err := c.get(ctx, now.Add(2*time.Second))
 	if err != nil || v != 100 {
 		t.Fatalf("post-TTL get: v=%d err=%v", v, err)
 	}
 	if got := bl.callsCount(); got != 2 {
-		t.Fatalf("ожидался 2 fetch после TTL, got %d", got)
+		t.Fatalf("expected 2 fetch after TTL, got %d", got)
 	}
 }

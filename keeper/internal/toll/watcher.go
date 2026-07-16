@@ -7,26 +7,26 @@ import (
 	"time"
 )
 
-// Watcher — per-Keeper-инстанс наблюдатель disconnect-событий gRPC EventStream-а
-// (ADR-038(b)). НЕ goroutine: пассивный объект, методы которого зовут
-// EventStream-handler-ы при выходе из receive-loop-а. Состояния не держит
-// (`StartedAt` для warmup-окна — единственное поле); один экземпляр на keeper
-// process разделяется между всеми стримами.
+// Watcher — per-Keeper-instance observer of gRPC EventStream disconnect events
+// (ADR-038(b)). NOT a goroutine: passive object whose methods are called
+// by EventStream handlers on receive-loop exit. Holds no state
+// (`StartedAt` for warmup-window — only field); one instance per keeper
+// process shared among all streams.
 //
-// Фильтрация (ADR-038(c)):
-//  1. Warmup-immunity: первые [Config.WarmupDelay] после старта инстанса
-//     disconnect-ы НЕ публикуются (cluster cold-start защита). Метрика
-//     [Metrics.IncWarmupSkipped] всё равно растёт — оператор видит факт.
-//  2. Graceful-shutdown: если caller указывает gracefulShutdown=true (отмена
-//     ctx по shutdown-у самого инстанса), disconnect отбрасывается. Метрика
+// Filtering (ADR-038(c)):
+//  1. Warmup-immunity: first [Config.WarmupDelay] after instance start
+//     disconnects NOT published (cluster cold-start protection). Metric
+//     [Metrics.IncWarmupSkipped] still grows — operator sees the fact.
+//  2. Graceful-shutdown: if caller specifies gracefulShutdown=true (context
+//     cancelled on instance shutdown), disconnect rejected. Metric
 //     [Metrics.IncGracefulSkipped].
-//  3. Live disconnect: после фильтров — ZADD в общий Redis sorted-set
+//  3. Live disconnect: after filters — ZADD to common Redis sorted-set
 //     ([Publisher]) + [Metrics.IncDisconnect].
 //
-// Per-coven counter инкрементируется ВСЕГДА (включая отбракованные), чтобы
-// counter был наблюдательным rate-источником, не фильтрованным leader-ом.
-// Wait — поправка: ADR-038(g) описывает counter как «не-graceful disconnect-ы»;
-// держим counter ПОСЛЕ фильтров (graceful + warmup отброшены, см. NotifyDisconnect).
+// Per-coven counter incremented ALWAYS (including rejected ones) so
+// counter is observation rate source, not filtered by leader.
+// Note: ADR-038(g) describes counter as «non-graceful disconnects»;
+// counter kept AFTER filtering (graceful + warmup rejected, see NotifyDisconnect).
 type Watcher struct {
 	kid       string
 	publisher Publisher
@@ -36,25 +36,25 @@ type Watcher struct {
 	warmup    time.Duration
 }
 
-// Config — параметры Watcher-а.
+// Config — Watcher parameters.
 type Config struct {
-	// KID — идентификатор keeper-инстанса (пишется в member-value sorted-set-а
-	// для логирования / диагностики leader-агрегатора).
+	// KID — keeper instance identifier (written to sorted-set member-value
+	// for logging / diagnostics of leader-aggregator).
 	KID string
-	// WarmupDelay — окно immunity после старта инстанса. <=0 → дефолт (60s),
-	// чтобы fake-watcher в тестах не зависел от config-резолва.
+	// WarmupDelay — immunity window after instance start. <=0 → default (60s),
+	// so fake-watcher in tests doesn't depend on config resolution.
 	WarmupDelay time.Duration
 }
 
-// defaultWarmupDelay — резерв на случай WarmupDelay<=0 (unit-тесты могут
-// передать 0 и явно сбросить StartedAt). 60s соответствует ADR-038.
+// defaultWarmupDelay — reserve if WarmupDelay<=0 (unit-tests may
+// pass 0 and explicitly reset StartedAt). 60s matches ADR-038.
 const defaultWarmupDelay = 60 * time.Second
 
-// NewWatcher собирает Watcher. publisher / logger обязательны; metrics
-// опционален (nil → счётчики выключены, nil-safe методы [Metrics]).
+// NewWatcher builds Watcher. publisher / logger required; metrics
+// optional (nil → counters disabled, nil-safe methods [Metrics]).
 //
-// startedAt = NOW: warmup отсчитывается от construction-а, не от первого
-// disconnect-а. Для unit-тестов есть [Watcher.setStartedAt] (test-helper).
+// startedAt = NOW: warmup counted from construction, not from first
+// disconnect. For unit-tests there is [Watcher.setStartedAt] (test-helper).
 func NewWatcher(cfg Config, publisher Publisher, metrics *Metrics, logger *slog.Logger) (*Watcher, error) {
 	if cfg.KID == "" {
 		return nil, errors.New("toll.NewWatcher: empty KID")
@@ -79,21 +79,21 @@ func NewWatcher(cfg Config, publisher Publisher, metrics *Metrics, logger *slog.
 	}, nil
 }
 
-// NotifyDisconnect — hook для gRPC EventStream-cleanup-а. Caller передаёт
-// SID отвалившегося Soul-а, его covens (если известны; пустая строка
-// допустима) и флаг gracefulShutdown (true → инициированное самим инстансом
-// закрытие, например Watchman-shedding или graceful keeper-shutdown).
+// NotifyDisconnect — hook for gRPC EventStream cleanup. Caller passes
+// SID of disconnected Soul, its covens (if known; empty string
+// allowed) and gracefulShutdown flag (true → closure initiated by the instance
+// itself, e.g. Watchman-shedding or graceful keeper-shutdown).
 //
-// Метод non-blocking: на любой проблеме (Publisher-error, ctx.Done) логирует
-// debug и продолжает — disconnect-флоу EventStream-handler-а не должен
-// зависеть от живости Toll-инфраструктуры. Publisher-error не fatal
-// (Redis temporarily down — Leader всё равно проигнорирует пустое окно и
-// не сбросит false-positive).
+// Method non-blocking: on any problem (Publisher-error, ctx.Done) logs
+// debug and continues — disconnect flow of EventStream handler should not
+// depend on Toll infrastructure liveness. Publisher-error not fatal
+// (Redis temporarily down — Leader will ignore empty window anyway and
+// not set false-positive).
 func (w *Watcher) NotifyDisconnect(ctx context.Context, sid, coven string, gracefulShutdown bool) {
 	if w == nil {
 		return
 	}
-	// Warmup-immunity: первые WarmupDelay disconnect-ы не публикуем.
+	// Warmup-immunity: first WarmupDelay disconnects not published.
 	if time.Since(w.startedAt) < w.warmup {
 		w.metrics.IncWarmupSkipped()
 		w.logger.Debug("toll: disconnect skipped (warmup immunity)",
@@ -102,7 +102,7 @@ func (w *Watcher) NotifyDisconnect(ctx context.Context, sid, coven string, grace
 		)
 		return
 	}
-	// Graceful-shutdown: не считаем плановое закрытие за отток.
+	// Graceful-shutdown: don't count planned closure as churn.
 	if gracefulShutdown {
 		w.metrics.IncGracefulSkipped()
 		w.logger.Debug("toll: disconnect skipped (graceful shutdown)",
@@ -110,12 +110,12 @@ func (w *Watcher) NotifyDisconnect(ctx context.Context, sid, coven string, grace
 		)
 		return
 	}
-	// Post-filter: counter растёт + публикация в общий sorted-set.
+	// Post-filter: counter grows + publish to common sorted-set.
 	w.metrics.IncDisconnect(coven)
 	if err := w.publisher.PublishDisconnect(ctx, sid, w.kid, coven, time.Now()); err != nil {
-		// Не fatal: Leader на следующем тике проигнорирует пустое окно. Лог
-		// уровня debug, потому что Redis-флапы могут быть частыми, а сам
-		// disconnect уже отражён в counter.
+		// Not fatal: Leader on next tick will ignore empty window. Debug-level
+		// log because Redis flaps can be frequent, and the disconnect is already
+		// reflected in counter.
 		w.logger.Debug("toll: publish disconnect failed",
 			slog.String("sid", sid),
 			slog.Any("error", err),
@@ -123,7 +123,7 @@ func (w *Watcher) NotifyDisconnect(ctx context.Context, sid, coven string, grace
 	}
 }
 
-// setStartedAt — test-helper для unit-тестов: позволяет сдвинуть startedAt
-// в прошлое (warmup истёк) либо в будущее (warmup ещё активен) без sleep-ов
-// и без зависимости от реального clock-а.
+// setStartedAt — test-helper for unit-tests: allows shifting startedAt
+// to the past (warmup expired) or to the future (warmup still active) without sleeps
+// and without dependence on real clock.
 func (w *Watcher) setStartedAt(t time.Time) { w.startedAt = t }

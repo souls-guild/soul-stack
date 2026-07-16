@@ -5,16 +5,16 @@ import (
 	"time"
 )
 
-// degradedWriter — узкая поверхность мутации cluster:degraded флага, нужная
-// Leader-у. Сужение делает Leader тестируемым без живого Redis-а (см.
-// leader_test.go::fakeDegradedWriter). Daemon оборачивает
-// [keeperredis.TollSetDegraded] / [keeperredis.TollClearDegraded] в реализацию.
+// degradedWriter — narrow surface for mutating the cluster:degraded flag, needed
+// by the Leader. Narrowing it makes the Leader testable without a live Redis (see
+// leader_test.go::fakeDegradedWriter). The daemon wraps
+// [keeperredis.TollSetDegraded] / [keeperredis.TollClearDegraded] into an implementation.
 type degradedWriter interface {
-	// SetDegraded — выставляет ключ cluster:degraded со значением holder (KID
-	// leader-а) и TTL. Использует SET без NX — на каждый тик leader освежает
-	// TTL (re-arm). Возврат err — Redis-проблема.
+	// SetDegraded — sets the cluster:degraded key to the holder value (the
+	// leader's KID) with a TTL. Uses SET without NX — on every tick the leader
+	// refreshes the TTL (re-arm). A returned err means a Redis problem.
 	SetDegraded(ctx context.Context, holder string, ttl time.Duration) error
-	// ClearDegraded — DEL cluster:degraded. Idempotent (DEL на отсутствующий
-	// ключ — no-op).
+	// ClearDegraded — DEL cluster:degraded. Idempotent (DEL on a missing
+	// key is a no-op).
 	ClearDegraded(ctx context.Context) error
 }
