@@ -9,35 +9,35 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// DefaultRuleCacheTTL — TTL снимка enabled-Tiding-правил в кэше dispatcher-а.
-// Dispatcher НЕ ходит в PG на каждое событие (горячий путь audit write-path):
-// держит снимок правил, обновляя его не чаще раза в TTL (ADR-052(c) —
-// «dispatcher матчит против включённых правил»).
+// DefaultRuleCacheTTL is TTL of enabled-Tiding rules snapshot in dispatcher cache.
+// Dispatcher does NOT go to PG on each event (hot path of audit write-path):
+// keeps rule snapshot, updating it no more than once per TTL (ADR-052(c) —
+// "dispatcher matches against enabled rules").
 //
-// 15s — компромисс MVP: правки Tiding редки (CRUD-API появляется только в S4),
-// 15-секундный лаг применения нового правила приемлем. Inline-инвалидация по
-// CRUD-хуку того же процесса — [Dispatcher.InvalidateRules] (S4 дёргает её из
-// CRUD-handler-ов). Cross-keeper-инвалидация (другой Keeper создал Tiding) —
-// открытый вопрос S4 (Redis pub/sub, паттерн RBAC/service-registry
-// invalidation); в S2 не блокирует: TTL гарантирует сходимость за ≤15s.
+// 15s is MVP compromise: Tiding edits rare (CRUD-API appears only in S4),
+// 15-second lag of new rule application acceptable. Inline invalidation by
+// CRUD hook in same process — [Dispatcher.InvalidateRules] (S4 calls it from
+// CRUD handlers). Cross-keeper invalidation (other Keeper created Tiding) —
+// open question S4 (Redis pub/sub, pattern RBAC/service-registry
+// invalidation); in S2 doesn't block: TTL guarantees convergence in ≤15s.
 const DefaultRuleCacheTTL = 15 * time.Second
 
-// RuleSource — источник включённых Tiding-правил для dispatcher-а. В проде —
-// адаптер над CRUD-слоем (SELECT ... WHERE enabled=true, partial-индекс
-// tidings_enabled_idx). Узкий интерфейс ради unit-тестируемости матчинга без
-// PG (как ExecQueryRower в CRUD).
+// RuleSource is source of enabled Tiding rules for dispatcher. In production —
+// adapter over CRUD layer (SELECT ... WHERE enabled=true, partial index
+// tidings_enabled_idx). Narrow interface for unit-testable matching without
+// PG (like ExecQueryRower in CRUD).
 type RuleSource interface {
-	// EnabledTidings возвращает текущий снимок ВКЛЮЧЁННЫХ Tiding-правил.
+	// EnabledTidings returns current snapshot of ENABLED Tiding rules.
 	EnabledTidings(ctx context.Context) ([]*Tiding, error)
 }
 
-// Dispatcher матчит audit-событие прогона против включённых Tiding-правил и
-// на каждый матч ставит [DeliveryJob] в [DeliveryQueue] (ADR-052(c), S2 — без
-// доставки). Снимок правил кэшируется с TTL ([DefaultRuleCacheTTL]) — горячий
-// путь матча не ходит в PG.
+// Dispatcher matches run audit event against enabled Tiding rules and
+// enqueues [DeliveryJob] to [DeliveryQueue] on each match (ADR-052(c), S2 — without
+// delivery). Rule snapshot cached with TTL ([DefaultRuleCacheTTL]) — hot
+// match path doesn't go to PG.
 //
-// Потокобезопасен: Dispatch вызывается из tap-горутины (одной), но кэш под
-// RWMutex на случай параллельной InvalidateRules из CRUD-handler-ов (S4).
+// Thread-safe: Dispatch called from tap goroutine (single), but cache under
+// RWMutex for parallel InvalidateRules from CRUD handlers (S4).
 type Dispatcher struct {
 	source RuleSource
 	queue  DeliveryQueue
@@ -53,16 +53,16 @@ type Dispatcher struct {
 	metrics *DispatcherMetrics
 }
 
-// DispatcherConfig — параметры сборки [Dispatcher].
+// DispatcherConfig are [Dispatcher] construction parameters.
 type DispatcherConfig struct {
 	Source RuleSource
 	Queue  DeliveryQueue
 	Logger *slog.Logger
-	// TTL снимка правил; <= 0 → [DefaultRuleCacheTTL].
+	// TTL of rule snapshot; <= 0 → [DefaultRuleCacheTTL].
 	TTL time.Duration
 }
 
-// NewDispatcher собирает Dispatcher. Source и Queue обязательны.
+// NewDispatcher constructs Dispatcher. Source and Queue are required.
 func NewDispatcher(cfg DispatcherConfig) *Dispatcher {
 	ttl := cfg.TTL
 	if ttl <= 0 {
@@ -81,12 +81,12 @@ func NewDispatcher(cfg DispatcherConfig) *Dispatcher {
 	}
 }
 
-// SetQueue late-binding-подмена очереди доставки. Init-order keeper-а: tap+
-// dispatcher собираются в setupAudit (с fallback-LogDeliveryQueue), а Redis
-// поднимается позже (setupRedis); реальная [RedisDeliveryQueue] прокидывается
-// сюда после — тем же приёмом late-binding, что SetMetrics. Под write-lock
-// кэша (тот же mu) — Dispatch читает queue без отдельной синхронизации, поэтому
-// подмену сериализуем с rules-кэшем. nil-receiver / nil-queue → no-op.
+// SetQueue does late-binding substitution of delivery queue. Init-order of keeper:
+// tap + dispatcher built in setupAudit (with fallback LogDeliveryQueue), Redis
+// starts later (setupRedis); real [RedisDeliveryQueue] passed here after — with same
+// late-binding technique as SetMetrics. Under cache write-lock (same mu) — Dispatch
+// reads queue without separate sync, so substitution serialized with rules cache.
+// nil-receiver / nil-queue → no-op.
 func (d *Dispatcher) SetQueue(q DeliveryQueue) {
 	if d == nil || q == nil {
 		return
@@ -96,9 +96,9 @@ func (d *Dispatcher) SetQueue(q DeliveryQueue) {
 	d.mu.Unlock()
 }
 
-// SetMetrics late-binding-инъекция метрик dispatcher-а. Порядок init keeper-а:
-// audit-writer (с tap) собирается ДО metrics-registry, поэтому метрики
-// прокидываются после (паттерн vault.SetMetrics / rbacHolder.SetMetrics).
+// SetMetrics does late-binding injection of dispatcher metrics. Init-order of keeper:
+// audit-writer (with tap) built before metrics-registry, so metrics
+// passed after (pattern vault.SetMetrics / rbacHolder.SetMetrics).
 // nil-receiver / nil-metrics — no-op.
 func (d *Dispatcher) SetMetrics(m *DispatcherMetrics) {
 	if d == nil {
@@ -107,9 +107,9 @@ func (d *Dispatcher) SetMetrics(m *DispatcherMetrics) {
 	d.metrics = m
 }
 
-// InvalidateRules сбрасывает кэш правил — следующий Dispatch перечитает
-// снимок из source. Дёргается CRUD-handler-ами Tiding/Herald (S4) после
-// create/update/delete для немедленного применения изменения в этом процессе.
+// InvalidateRules flushes rule cache — next Dispatch will reread
+// snapshot from source. Called by CRUD handlers of Tiding/Herald (S4) after
+// create/update/delete for immediate change application in this process.
 func (d *Dispatcher) InvalidateRules() {
 	if d == nil {
 		return
@@ -120,21 +120,21 @@ func (d *Dispatcher) InvalidateRules() {
 	d.mu.Unlock()
 }
 
-// Dispatch матчит событие против включённых правил и ставит DeliveryJob на
-// каждый матч. Best-effort: ошибки источника правил / постановки в очередь
-// логируются, но не пробрасываются (tap не должен влиять на audit write-path).
+// Dispatch matches event against enabled rules and enqueues DeliveryJob on
+// each match. Best-effort: errors from rule source / enqueue
+// logged but not propagated (tap shouldn't affect audit write-path).
 //
-// Не run-scope-событие (любой keeper-event вне областей прогона) отсеивается
-// дёшево до загрузки правил: matchEventType на нём не сработает, но проверка
-// области экономит лишний проход по правилам для CRUD/lifecycle-шума.
+// Non-run-scope event (any keeper-event outside run scopes) filtered
+// cheaply before rule load: matchEventType won't fire, but area check
+// saves extra rule traversal for CRUD/lifecycle noise.
 func (d *Dispatcher) Dispatch(ctx context.Context, event *audit.Event) {
 	if d == nil || event == nil {
 		return
 	}
-	// Loop-guard (ADR-052(d)): собственные терминалы доставки `herald.*` сами
-	// проходят через audit-writer → tap → сюда. Отсекаем их ДО загрузки правил —
-	// «уведомление об уведомлении» не должно стать петлёй (страховка поверх
-	// CRUD-валидации, см. isHeraldOwnEvent).
+	// Loop-guard (ADR-052(d)): own delivery terminals `herald.*` themselves
+	// go through audit-writer → tap → here. Filter them before rule load —
+	// "notification about notification" shouldn't become loop (guard over
+	// CRUD validation, see isHeraldOwnEvent).
 	if isHeraldOwnEvent(event.EventType) {
 		return
 	}
@@ -147,7 +147,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, event *audit.Event) {
 		return
 	}
 
-	// Снимок queue под RLock — late-binding SetQueue (setupRedis) может подменить
+	// Snapshot queue under RLock — late-binding SetQueue (setupRedis) may substitute
 	// её конкурентно с Dispatch (tap-consumer-горутина).
 	d.mu.RLock()
 	queue := d.queue

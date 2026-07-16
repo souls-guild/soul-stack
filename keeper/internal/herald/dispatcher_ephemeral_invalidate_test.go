@@ -9,9 +9,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// mutableSource — снимок enabled-правил, который можно дополнить «на лету»
-// (имитирует появление ephemeral-Tiding в БД после commit voyage-tx, в обход
-// herald.Service-инвалидации). Под mutex — add конкурентен с EnabledTidings.
+// mutableSource snapshot of enabled rules that can be extended on-the-fly (mimics
+// ephemeral-Tiding appearing in DB after voyage-tx commit, bypassing herald.Service
+// invalidation). add is concurrent with EnabledTidings under mutex.
 type mutableSource struct {
 	mu    sync.Mutex
 	rules []*Tiding
@@ -31,24 +31,23 @@ func (s *mutableSource) add(t *Tiding) {
 	s.mu.Unlock()
 }
 
-// TestEphemeralTiding_InvalidateDeliversWithWarmCache — guard B (race-fix
-// ADR-052(g), integration с инъекцией clock — детерминированно, без ожидания
-// TTL=15s).
+// TestEphemeralTiding_InvalidateDeliversWithWarmCache guard B (race-fix
+// ADR-052(g), integrated with clock injection — deterministic, no TTL=15s wait).
 //
-// Воспроизводит баг и фикс на горячем кэше:
-//   - кэш «тёплый» (cachedAt свежий, TTL=1h не истёк), ephemeral-правила в
-//     снимке НЕТ (вставлено позже, в обход herald.Service-инвалидации);
-//   - без явной инвалидации эмит scenario_run.completed этого voyage НЕ ставит
-//     DeliveryJob (dispatcher держит устаревший снимок) — детерминированный
-//     повтор бага;
-//   - после InvalidateRules (то, что persist делает после commit) снимок
-//     перечитывается, ephemeral-правило подхватывается → DeliveryJob ставится.
+// Reproduces bug and fix on warm cache:
+//   - cache is "warm" (cachedAt fresh, TTL=1h not expired), ephemeral rules absent
+//     from snapshot (inserted later, bypassing herald.Service invalidation);
+//   - without explicit invalidation, scenario_run.completed emit of this voyage
+//     does not enqueue DeliveryJob (dispatcher holds stale snapshot) —
+//     deterministic bug reproduction;
+//   - after InvalidateRules (what persist does post-commit), snapshot re-reads,
+//     ephemeral rule is picked up → DeliveryJob enqueued.
 func TestEphemeralTiding_InvalidateDeliversWithWarmCache(t *testing.T) {
 	src := &mutableSource{}
 	q := &fakeQueue{}
 	d := NewDispatcher(DispatcherConfig{Source: src, Queue: q, TTL: time.Hour})
 
-	// Фиксируем часы — TTL заведомо не истекает сам по себе (изоляция от 15s).
+	// Fix clock — TTL does not expire on its own (isolation from 15s).
 	now := time.Now()
 	d.clock = func() time.Time { return now }
 
@@ -62,17 +61,17 @@ func TestEphemeralTiding_InvalidateDeliversWithWarmCache(t *testing.T) {
 		},
 	}
 
-	// 1. Прогреваем кэш событием другого voyage — снимок пуст, job нет, cacheInit=true.
+	// 1. Warm cache with event of different voyage — snapshot empty, no job, cacheInit=true.
 	d.Dispatch(context.Background(), &audit.Event{
 		EventType:     audit.EventScenarioRunCompleted,
 		CorrelationID: "vy_other",
 		Payload:       map[string]any{"voyage_id": "vy_other"},
 	})
 	if n := len(q.snapshot()); n != 0 {
-		t.Fatalf("прогрев: job-ов быть не должно, got %d", n)
+		t.Fatalf("warmup: no jobs expected, got %d", n)
 	}
 
-	// 2. Ephemeral-Tiding появляется в БД (insert в voyage-tx, обход инвалидации).
+	// 2. Ephemeral-Tiding appears in DB (insert in voyage-tx, bypass invalidation).
 	src.add(&Tiding{
 		Name:       "eph-vy-fast",
 		Herald:     "ops-webhook",
@@ -82,19 +81,19 @@ func TestEphemeralTiding_InvalidateDeliversWithWarmCache(t *testing.T) {
 		Enabled:    true,
 	})
 
-	// 3. Терминал быстрого прогона ПРОТИВ ТЁПЛОГО снимка (без инвалидации) →
-	//    job НЕ ставится (воспроизводит баг детерминированно).
+	// 3. Fast-run terminal against warm snapshot (no invalidation) →
+	//    job not enqueued (deterministically reproduces bug).
 	d.Dispatch(context.Background(), completed)
 	if n := len(q.snapshot()); n != 0 {
-		t.Fatalf("без инвалидации тёплый снимок не видит ephemeral — job не должно быть, got %d (баг не воспроизведён)", n)
+		t.Fatalf("without invalidation, warm snapshot does not see ephemeral — no job expected, got %d (bug not reproduced)", n)
 	}
 
-	// 4. persist после commit инвалидирует снимок (фикс) → refresh подхватывает eph.
+	// 4. persist post-commit invalidates snapshot (fix) → refresh picks up ephemeral.
 	d.InvalidateRules()
 	d.Dispatch(context.Background(), completed)
 	jobs := q.snapshot()
 	if len(jobs) != 1 {
-		t.Fatalf("после инвалидации ephemeral должен дать ровно 1 DeliveryJob, got %d", len(jobs))
+		t.Fatalf("after invalidation ephemeral must yield exactly 1 DeliveryJob, got %d", len(jobs))
 	}
 	if jobs[0].Tiding != "eph-vy-fast" || jobs[0].Herald != "ops-webhook" {
 		t.Errorf("job = {tiding:%s herald:%s}, want {eph-vy-fast ops-webhook}", jobs[0].Tiding, jobs[0].Herald)

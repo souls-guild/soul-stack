@@ -12,59 +12,58 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Sentinel-ошибки CRUD-слоя. Handler-сторона (OpenAPI/MCP, слайс S4) маппит:
+// Sentinel errors of CRUD layer. Handler-side (OpenAPI/MCP, slice S4) maps:
 //   - ErrHeraldExists    → 409.
 //   - ErrHeraldNotFound  → 404.
 //   - ErrTidingExists    → 409.
 //   - ErrTidingNotFound  → 404.
 //
-// ErrHeraldInUse НЕ вводится: tidings.herald — ON DELETE CASCADE (ADR-052(a),
-// naming-rules.md), удаление Herald-а уносит его Tiding-подписки, а не
-// блокируется (отличие от RESTRICT-409).
+// ErrHeraldInUse is NOT introduced: tidings.herald is ON DELETE CASCADE (ADR-052(a),
+// naming-rules.md), deleting Herald removes its Tiding subscriptions, not
+// blocked (difference from RESTRICT-409).
 var (
 	ErrHeraldExists   = errors.New("herald: name already exists")
 	ErrHeraldNotFound = errors.New("herald: name not found")
 	ErrTidingExists   = errors.New("herald: tiding name already exists")
 	ErrTidingNotFound = errors.New("herald: tiding name not found")
 
-	// ErrValidation — обёртка над любой service-валидацией CRUD-входа (битый
-	// name/type/config/secret_ref/event_types/projection). Handler-сторона
-	// (OpenAPI/MCP) маппит её в 422 validation-failed; public-detail безопасен
-	// (формируется валидаторами без internal SQL/stack — см. [PublicMessage]).
+	// ErrValidation is wrapper over any service validation of CRUD input (broken
+	// name/type/config/secret_ref/event_types/projection). Handler-side
+	// (OpenAPI/MCP) maps it to 422 validation-failed; public-detail is safe
+	// (formed by validators without internal SQL/stack — see [PublicMessage]).
 	ErrValidation = errors.New("herald: validation failed")
 
-	// ErrEphemeralRequiresVoyage — нарушен инвариант ephemeral⟺voyage_id
-	// (ADR-052(g)): разовое правило обязано нести voyage_id, постоянное — не
-	// должно. Дублирует CHECK tidings_ephemeral_voyage_consistent (defence in
-	// depth + дружелюбная ошибка до похода в БД). Заворачивается в [ErrValidation].
+	// ErrEphemeralRequiresVoyage signals invariant violation ephemeral⟺voyage_id
+	// (ADR-052(g)): ephemeral rule must carry voyage_id, persistent must not.
+	// Duplicates CHECK tidings_ephemeral_voyage_consistent (defence in depth +
+	// friendly error before DB call). Wrapped in [ErrValidation].
 	ErrEphemeralRequiresVoyage = errors.New("herald: ephemeral tiding requires voyage_id (and non-ephemeral must not set it)")
 )
 
-// IsValidationError — true, если err — service-валидация CRUD-входа
-// ([ErrValidation]-обёртка). Используется handler-ами для маппинга в 422.
+// IsValidationError returns true if err is service validation of CRUD input
+// ([ErrValidation] wrapper). Used by handlers to map to 422.
 func IsValidationError(err error) bool {
 	return errors.Is(err, ErrValidation)
 }
 
-// PublicMessage возвращает безопасный для клиента текст валидационной ошибки:
-// trim обёртки `herald: validation failed: ` и внутреннего pkg-префикса
-// `herald: `. На не-валидационных ошибках caller их сюда не передаёт (проверяет
-// IsValidationError первым).
+// PublicMessage returns client-safe text of validation error: trims wrapper
+// `herald: validation failed: ` and internal pkg-prefix `herald: `. For non-validation
+// errors caller does not pass them here (checks IsValidationError first).
 func PublicMessage(err error) string {
 	if err == nil {
 		return ""
 	}
-	// ErrValidation обёрнут как fmt.Errorf("%w: <validator-msg>", ErrValidation),
-	// поэтому err.Error() = "herald: validation failed: <validator-msg>". Берём
-	// исходный validator-msg (он уже public), убирая обёртку и pkg-префикс.
+	// ErrValidation is wrapped as fmt.Errorf("%w: <validator-msg>", ErrValidation),
+	// so err.Error() = "herald: validation failed: <validator-msg>". Take
+	// original validator-msg (already public), removing wrapper and pkg-prefix.
 	msg := strings.TrimPrefix(err.Error(), "herald: validation failed: ")
 	return strings.TrimPrefix(msg, "herald: ")
 }
 
-// wrapValidation оборачивает валидационную ошибку в [ErrValidation], сохраняя
-// исходное сообщение для public-detail И цепочку errors.Is до вложенного
-// sentinel-а (например [ErrEphemeralRequiresVoyage]). nil → nil. Двойной %w
-// (Go 1.20+) делает результат сопоставимым и с ErrValidation, и с обёрнутым err.
+// wrapValidation wraps validation error in [ErrValidation], preserving
+// original message for public-detail AND errors.Is chain to wrapped sentinel
+// (e.g. [ErrEphemeralRequiresVoyage]). nil → nil. Double %w
+// (Go 1.20+) makes result comparable with both ErrValidation and wrapped err.
 func wrapValidation(err error) error {
 	if err == nil {
 		return nil
@@ -78,9 +77,9 @@ const (
 	pgErrCodeCheckViolation      = "23514"
 )
 
-// ExecQueryRower — узкое подмножество pgxpool.Pool, нужное CRUD-у. Симметрично
-// augur/pushprovider: unit-тесты ходят через fake без подъёма PG, production
-// даёт реальный pool / Conn / Tx.
+// ExecQueryRower is narrow subset of pgxpool.Pool needed by CRUD. Symmetric
+// to augur/pushprovider: unit tests go through fake without PG, production
+// provides real pool / Conn / Tx.
 type ExecQueryRower interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
@@ -120,15 +119,15 @@ SET type = $2,
 WHERE name = $1
 `
 
-// InsertHerald вставляет новый Herald-канал.
+// InsertHerald inserts new Herald channel.
 //
-// Pre-conditions (service-валидация):
-//   - h.Name матчит [NamePattern];
+// Pre-conditions (service validation):
+//   - h.Name matches [NamePattern];
 //   - h.Type ∈ closed enum ([ValidHeraldType]);
-//   - h.Config валиден для типа ([ValidateConfig] — webhook url + SSRF-контур);
-//   - h.SecretRef (если задан) — vault-ref ([ValidateSecretRef]).
+//   - h.Config is valid for type ([ValidateConfig] — webhook url + SSRF circuit);
+//   - h.SecretRef (if set) is vault-ref ([ValidateSecretRef]).
 //
-// Возврат [ErrHeraldExists] на UNIQUE по PK; wrapped fmt.Errorf на FK-/CHECK-
+// Returns [ErrHeraldExists] on UNIQUE PK; wrapped fmt.Errorf on FK-/CHECK-
 // violation.
 func InsertHerald(ctx context.Context, db ExecQueryRower, h *Herald) error {
 	if h == nil {
@@ -167,7 +166,7 @@ func mapHeraldInsertError(err error) error {
 	return fmt.Errorf("herald: insert herald: %w", err)
 }
 
-// SelectHeraldByName читает Herald по PK. [ErrHeraldNotFound] при pgx.ErrNoRows.
+// SelectHeraldByName reads Herald by PK. [ErrHeraldNotFound] on pgx.ErrNoRows.
 func SelectHeraldByName(ctx context.Context, db ExecQueryRower, name string) (*Herald, error) {
 	return scanHerald(db.QueryRow(ctx, heraldSelectByNameSQL, name))
 }
@@ -201,11 +200,11 @@ func scanHerald(row pgx.Row) (*Herald, error) {
 	return &h, nil
 }
 
-// SelectAllHeralds возвращает страницу Herald-ов и общее количество.
+// SelectAllHeralds returns page of Heralds and total count.
 //
-// Сортировка — `updated_at DESC, name ASC` (свежие выше; tie-break по имени для
-// устойчивой пагинации). Total и items — двумя запросами вне общей транзакции
-// (eventually consistent, как augur/pushprovider).
+// Sorting is `updated_at DESC, name ASC` (fresh above; tie-break by name for
+// stable pagination). Total and items by two queries outside transaction
+// (eventually consistent, like augur/pushprovider).
 func SelectAllHeralds(ctx context.Context, db ExecQueryRower, offset, limit int) ([]*Herald, int, error) {
 	if offset < 0 {
 		return nil, 0, fmt.Errorf("herald: offset must be >= 0, got %d", offset)
@@ -243,8 +242,8 @@ OFFSET $1 LIMIT $2`
 	return out, total, nil
 }
 
-// UpdateHerald заменяет mutable-поля Herald-а (type/config/secret_ref/enabled,
-// replace-семантика). name (PK) immutable. [ErrHeraldNotFound] если PK не найден.
+// UpdateHerald replaces mutable fields of Herald (type/config/secret_ref/enabled,
+// replace semantics). name (PK) is immutable. [ErrHeraldNotFound] if PK not found.
 func UpdateHerald(ctx context.Context, db ExecQueryRower, h *Herald) error {
 	if h == nil {
 		return fmt.Errorf("herald: nil herald")
@@ -274,8 +273,8 @@ func UpdateHerald(ctx context.Context, db ExecQueryRower, h *Herald) error {
 	return nil
 }
 
-// DeleteHerald удаляет Herald по PK. Все его Tiding-ы уходят каскадом (ON DELETE
-// CASCADE, ADR-052(a)). [ErrHeraldNotFound] если строки не было.
+// DeleteHerald deletes Herald by PK. All its Tidings cascade (ON DELETE
+// CASCADE, ADR-052(a)). [ErrHeraldNotFound] if row not found.
 func DeleteHerald(ctx context.Context, db ExecQueryRower, name string) error {
 	tag, err := db.Exec(ctx, "DELETE FROM heralds WHERE name = $1", name)
 	if err != nil {
@@ -322,16 +321,16 @@ SET herald = $2,
 WHERE name = $1
 `
 
-// InsertTiding вставляет новое Tiding-правило.
+// InsertTiding inserts new Tiding rule.
 //
-// Pre-conditions (service-валидация):
-//   - t.Name матчит [NamePattern];
-//   - t.Herald непустой (FK на heralds — на existence проверяет БД);
-//   - t.EventTypes валиден ([ValidateEventTypes] — непустой + run-scope).
+// Pre-conditions (service validation):
+//   - t.Name matches [NamePattern];
+//   - t.Herald is non-empty (FK to heralds — existence checked by DB);
+//   - t.EventTypes is valid ([ValidateEventTypes] — non-empty + run-scope).
 //
-// Возврат [ErrTidingExists] на UNIQUE по PK; [ErrHeraldNotFound] если Herald
-// по FK не существует (FK-violation на tidings_herald_fk); wrapped fmt.Errorf
-// на прочие FK-/CHECK-violation.
+// Returns [ErrTidingExists] on UNIQUE PK; [ErrHeraldNotFound] if Herald
+// by FK does not exist (FK-violation on tidings_herald_fk); wrapped fmt.Errorf
+// on other FK-/CHECK-violation.
 func InsertTiding(ctx context.Context, db ExecQueryRower, t *Tiding) error {
 	if t == nil {
 		return fmt.Errorf("herald: nil tiding")
@@ -376,7 +375,7 @@ func mapTidingInsertError(err error) error {
 	return fmt.Errorf("herald: insert tiding: %w", err)
 }
 
-// SelectTidingByName читает Tiding по PK. [ErrTidingNotFound] при pgx.ErrNoRows.
+// SelectTidingByName reads Tiding by PK. [ErrTidingNotFound] on pgx.ErrNoRows.
 func SelectTidingByName(ctx context.Context, db ExecQueryRower, name string) (*Tiding, error) {
 	return scanTiding(db.QueryRow(ctx, tidingSelectByNameSQL, name))
 }
@@ -434,16 +433,15 @@ func collectTidings(rows pgx.Rows) ([]*Tiding, error) {
 	return out, nil
 }
 
-// SelectAllTidings возвращает страницу Tiding-ов и общее количество. Сортировка
-// `updated_at DESC, name ASC`. Total и items — двумя запросами (eventually
+// SelectAllTidings returns page of Tidings and total count. Sorting is
+// `updated_at DESC, name ASC`. Total and items by two queries (eventually
 // consistent).
 //
-// includeEphemeral=false (default) скрывает разовые правила (ADR-052(g)):
-// listing отражает только постоянные подписки, управляемые оператором, а
-// привязанные к прогону ephemeral-правила — деталь реализации (ADR-042 «тупой
-// фронт»: фильтрация на бэке, не клиентская). total считается под тем же
-// предикатом, чтобы пагинация не «теряла» страницы. includeEphemeral=true
-// возвращает все (отладка).
+// includeEphemeral=false (default) hides ephemeral rules (ADR-052(g)):
+// listing shows only persistent subscriptions managed by operator; ephemeral rules
+// tied to runs are implementation detail (ADR-042 "dumb frontend": filtering on backend,
+// not client-side). total computed under same predicate so pagination doesn't "lose"
+// pages. includeEphemeral=true returns all (debugging).
 func SelectAllTidings(ctx context.Context, db ExecQueryRower, includeEphemeral bool, offset, limit int) ([]*Tiding, int, error) {
 	if offset < 0 {
 		return nil, 0, fmt.Errorf("herald: offset must be >= 0, got %d", offset)
@@ -452,9 +450,9 @@ func SelectAllTidings(ctx context.Context, db ExecQueryRower, includeEphemeral b
 		return nil, 0, fmt.Errorf("herald: limit must be >= 1, got %d", limit)
 	}
 
-	// Предикат скрытия ephemeral. Partial-индекс tidings_ephemeral_voyage_idx
-	// покрывает только ephemeral-строки; для default-ветки (NOT ephemeral)
-	// БД делает seq-scan по небольшой таблице правил — приемлемо.
+	// Predicate for ephemeral hiding. Partial index tidings_ephemeral_voyage_idx
+	// covers only ephemeral rows; for default branch (NOT ephemeral)
+	// DB does seq-scan over small rules table — acceptable.
 	where := ""
 	if !includeEphemeral {
 		where = " WHERE NOT ephemeral"
@@ -480,8 +478,8 @@ OFFSET $1 LIMIT $2`
 	return tidings, total, nil
 }
 
-// SelectTidingsByHerald возвращает все Tiding-правила одного Herald-а (CRUD
-// list-by-herald). Сортировка `updated_at DESC, name ASC`.
+// SelectTidingsByHerald returns all Tiding rules of one Herald (CRUD
+// list-by-herald). Sorting `updated_at DESC, name ASC`.
 func SelectTidingsByHerald(ctx context.Context, db ExecQueryRower, herald string) ([]*Tiding, error) {
 	const sql = `SELECT ` + tidingColumns + `
 FROM tidings
@@ -494,9 +492,9 @@ ORDER BY updated_at DESC, name ASC`
 	return collectTidings(rows)
 }
 
-// UpdateTiding заменяет mutable-поля Tiding-а (replace-семантика). name (PK)
-// immutable. [ErrTidingNotFound] если PK не найден; [ErrHeraldNotFound] если
-// новый herald по FK не существует.
+// UpdateTiding replaces mutable fields of Tiding (replace semantics). name (PK)
+// is immutable. [ErrTidingNotFound] if PK not found; [ErrHeraldNotFound] if
+// new herald by FK does not exist.
 func UpdateTiding(ctx context.Context, db ExecQueryRower, t *Tiding) error {
 	if t == nil {
 		return fmt.Errorf("herald: nil tiding")
@@ -538,7 +536,7 @@ func UpdateTiding(ctx context.Context, db ExecQueryRower, t *Tiding) error {
 	return nil
 }
 
-// DeleteTiding удаляет Tiding по PK. [ErrTidingNotFound] если строки не было.
+// DeleteTiding deletes Tiding by PK. [ErrTidingNotFound] if row not found.
 func DeleteTiding(ctx context.Context, db ExecQueryRower, name string) error {
 	tag, err := db.Exec(ctx, "DELETE FROM tidings WHERE name = $1", name)
 	if err != nil {
@@ -552,9 +550,9 @@ func DeleteTiding(ctx context.Context, db ExecQueryRower, name string) error {
 
 // --- helpers ----------------------------------------------------------
 
-// validateHerald — service-валидация полей Herald до записи. Все ошибки
-// заворачиваются в [ErrValidation] (handler → 422). Каждая под-проверка несёт
-// public-message (без internal SQL/stack).
+// validateHerald does service validation of Herald fields before write. All errors
+// wrapped in [ErrValidation] (handler → 422). Each sub-check carries
+// public-message (no internal SQL/stack).
 func validateHerald(h *Herald) error {
 	if !ValidName(h.Name) {
 		return wrapValidation(fmt.Errorf("invalid name %q (must match %s)", h.Name, NamePattern))
@@ -571,26 +569,26 @@ func validateHerald(h *Herald) error {
 	return nil
 }
 
-// validateTiding — service-валидация полей Tiding до записи. Ошибки в
-// [ErrValidation]. existence Herald-а по FK проверяет БД (см. mapTidingInsertError).
+// validateTiding does service validation of Tiding fields before write. Errors wrapped
+// in [ErrValidation]. Herald existence by FK is checked by DB (see mapTidingInsertError).
 func validateTiding(t *Tiding) error {
-	// Пустую строку VoyageID нормализуем к nil ДО маппинга, чтобы domain-guard и
-	// SQL-arg (optStrArg) согласованно трактовали её как NULL: иначе guard ниже
-	// пропускал бы non-ephemeral+&"" (как «не задан»), а optStrArg писал бы ''
-	// → CHECK tidings_ephemeral_voyage_consistent падал бы 500-ой (симметрично
-	// тому, как aidArg трактует пустой AID как NULL).
+	// Normalize empty VoyageID string to nil BEFORE mapping so domain-guard and
+	// SQL-arg (optStrArg) consistently treat it as NULL: otherwise guard below
+	// would pass non-ephemeral+&"" (as "not set"), and optStrArg would write ''
+	// → CHECK tidings_ephemeral_voyage_consistent would fail with 500 (symmetric
+	// to how aidArg treats empty AID as NULL).
 	if t.VoyageID != nil && *t.VoyageID == "" {
 		t.VoyageID = nil
 	}
-	// Пустую строку task-селектора нормализуем к nil: nil = «без фильтра», а
-	// пустой адрес changed_tasks им матчиться не должен (ADR-052 §l). Без этого
-	// optStrArg писал бы `''` в колонку — мёртвый селектор, не матчащий ничего.
+	// Normalize empty task-selector string to nil: nil = "no filter", empty
+	// address should not match changed_tasks (ADR-052 §l). Without this
+	// optStrArg would write `''` to column — dead selector matching nothing.
 	if t.Task != nil && *t.Task == "" {
 		t.Task = nil
 	}
-	// Пустую строку origin-маркера нормализуем к nil: nil = «заведено не формой
-	// Cadence», пустой '' в TEXT-колонке нарушил бы FK на cadences(id) (parity
-	// VoyageID/Task). Непустое значение проверит БД (FK existence на cadences).
+	// Normalize empty origin-marker string to nil: nil = "not created by Cadence form",
+	// empty '' in TEXT column would violate FK on cadences(id) (parity
+	// VoyageID/Task). Non-empty value checked by DB (FK existence on cadences).
 	if t.CreatedFromCadenceID != nil && *t.CreatedFromCadenceID == "" {
 		t.CreatedFromCadenceID = nil
 	}
@@ -603,10 +601,10 @@ func validateTiding(t *Tiding) error {
 	if err := ValidateEventTypes(t.EventTypes); err != nil {
 		return wrapValidation(err)
 	}
-	// Инвариант ephemeral⟺voyage_id (ADR-052(g), defence in depth поверх CHECK):
-	// разовое правило обязано нести voyage_id, постоянное — не должно. VoyageID
-	// здесь уже нормализован (nil вместо пустой строки), поэтому `!= nil`
-	// достаточно — `*t.VoyageID != ""` тут уже инвариантно истинно.
+	// Invariant ephemeral⟺voyage_id (ADR-052(g), defence in depth over CHECK):
+	// ephemeral rule must carry voyage_id, persistent must not. VoyageID
+	// is already normalized here (nil instead of empty string), so `!= nil`
+	// is sufficient — `*t.VoyageID != ""` is invariantly true here.
 	if t.Ephemeral != (t.VoyageID != nil) {
 		return wrapValidation(ErrEphemeralRequiresVoyage)
 	}
@@ -616,7 +614,7 @@ func validateTiding(t *Tiding) error {
 	return nil
 }
 
-// secretRefArg — nil-string → NULL для nullable secret_ref-колонки.
+// secretRefArg maps nil-string → NULL for nullable secret_ref column.
 func secretRefArg(ref *string) any {
 	if ref == nil {
 		return nil
@@ -624,7 +622,7 @@ func secretRefArg(ref *string) any {
 	return *ref
 }
 
-// optStrArg — nil-string → NULL для опц. селекторов incarnation/cadence/voyage_id.
+// optStrArg maps nil-string → NULL for optional selectors incarnation/cadence/voyage_id.
 func optStrArg(s *string) any {
 	if s == nil {
 		return nil
@@ -632,8 +630,8 @@ func optStrArg(s *string) any {
 	return *s
 }
 
-// projectionArg — nil/пустой slice → пустой TEXT[] (колонка NOT NULL DEFAULT '{}',
-// pgx требует не-nil). Непустой передаётся как есть.
+// projectionArg maps nil/empty slice → empty TEXT[] (column NOT NULL DEFAULT '{}',
+// pgx requires non-nil). Non-empty passed as-is.
 func projectionArg(p []string) []string {
 	if p == nil {
 		return []string{}
@@ -641,8 +639,8 @@ func projectionArg(p []string) []string {
 	return p
 }
 
-// aidArg — nil/пустой AID → NULL для nullable created_by_aid (FK ON DELETE SET
-// NULL). Пустую строку трактуем как NULL: пустой AID нарушил бы FK на operators.
+// aidArg maps nil/empty AID → NULL for nullable created_by_aid (FK ON DELETE SET
+// NULL). Treat empty string as NULL: empty AID would violate FK on operators.
 func aidArg(aid *string) any {
 	if aid == nil || *aid == "" {
 		return nil

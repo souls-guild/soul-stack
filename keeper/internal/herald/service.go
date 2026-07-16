@@ -6,64 +6,64 @@ import (
 	"log/slog"
 )
 
-// Service — бизнес-логика CRUD реестров `heralds`/`tidings` + инвалидация
-// снимка правил dispatcher-а (ADR-052, S4). Один источник правды для
-// HTTP-handler-ов (OpenAPI) и MCP-tool-handler-ов: transport-фасад только
-// декодирует input и кодирует output, инварименты и инвалидация живут здесь.
+// Service is business logic for CRUD of `heralds`/`tidings` registries + invalidation
+// of dispatcher rule snapshot (ADR-052, S4). Single source of truth for
+// HTTP handlers (OpenAPI) and MCP tool handlers: transport facade only
+// decodes input and encodes output, invariants and invalidation live here.
 //
-// Инвалидация двухуровневая (как pushprovider.Service):
-//   - in-process — [Invalidator.InvalidateRules] (тот же процесс мгновенно
-//     перечитывает enabled-Tiding-снимок dispatcher-а на ближайшем матче);
-//   - cross-keeper — [RedisInvalidator.PublishHeraldInvalidate] (другая нода
-//     по подписке `herald:invalidate` дёргает свой InvalidateRules).
+// Invalidation is two-level (like pushprovider.Service):
+//   - in-process — [Invalidator.InvalidateRules] (same process immediately
+//     rereads enabled-Tiding snapshot of dispatcher on next match);
+//   - cross-keeper — [RedisInvalidator.PublishHeraldInvalidate] (other node
+//     by subscription `herald:invalidate` triggers its InvalidateRules).
 //
-// Mutations, влияющие на матч (любой CRUD Herald/Tiding), сбрасывают кэш:
-// disabled→enabled-переход, смена event_types/фильтров/herald-привязки —
-// всё видно dispatcher-у сразу, а не через TTL DefaultRuleCacheTTL.
+// Mutations affecting match (any CRUD Herald/Tiding) flush cache:
+// disabled→enabled transition, change event_types/filters/herald-binding —
+// all visible to dispatcher immediately, not via TTL DefaultRuleCacheTTL.
 type Service struct {
 	pool        ExecQueryRower
 	invalidator Invalidator
 	redis       RedisInvalidator
 	logger      *slog.Logger
-	// secretWriter/acceptPlaintext — dual-mode приём plaintext-секрета (ADR-064,
-	// NIM-11). secretWriter=nil ИЛИ acceptPlaintext=false → plaintext отвергается,
-	// принимаются только *_ref (secure default).
+	// secretWriter/acceptPlaintext — dual-mode ingestion of plaintext secret (ADR-064,
+	// NIM-11). secretWriter=nil OR acceptPlaintext=false → plaintext rejected,
+	// only *_ref accepted (secure default).
 	secretWriter    SecretWriter
 	acceptPlaintext bool
 }
 
-// Invalidator — узкая поверхность in-process-сброса кэша правил dispatcher-а.
-// Реализуется [*Dispatcher] (метод InvalidateRules). nil-safe nop по умолчанию.
+// Invalidator is narrow surface for in-process cache flush of dispatcher rules.
+// Implemented by [*Dispatcher] (InvalidateRules method). nil-safe nop by default.
 type Invalidator interface {
 	InvalidateRules()
 }
 
-// RedisInvalidator — узкая поверхность cross-keeper-публикации invalidate-
-// сигнала. Реализуется keeperredis-обёрткой (метод-адаптер в daemon, чтобы
-// herald-пакет не зависел напрямую от keeperredis). nil → no-op (Redis
-// выключен / unit-тест без брокера): single-instance деградирует на TTL+
-// in-process invalidate, кластерная сходимость — через DefaultRuleCacheTTL.
+// RedisInvalidator is narrow surface for cross-keeper publication of invalidate
+// signal. Implemented by keeperredis wrapper (method adapter in daemon so
+// herald package doesn't depend directly on keeperredis). nil → no-op (Redis
+// disabled / unit-test without broker): single-instance degrades to TTL+
+// in-process invalidate, cluster convergence via DefaultRuleCacheTTL.
 type RedisInvalidator interface {
 	PublishHeraldInvalidate(ctx context.Context, name string) error
 }
 
-// ServiceDeps — зависимости [Service]. Pool обязателен; Invalidator/Redis
-// опциональны (nil → no-op-инвалидация, сходимость через TTL).
+// ServiceDeps are dependencies for [Service]. Pool is required; Invalidator/Redis
+// optional (nil → no-op invalidation, convergence via TTL).
 type ServiceDeps struct {
 	Pool        ExecQueryRower
 	Invalidator Invalidator
 	Redis       RedisInvalidator
 	Logger      *slog.Logger
-	// SecretWriter — материализация plaintext-секрета в Vault (dual-mode, ADR-064).
-	// nil → plaintext-приём недоступен (принимаются только *_ref).
+	// SecretWriter materializes plaintext secret to Vault (dual-mode, ADR-064).
+	// nil → plaintext ingestion unavailable (only *_ref accepted).
 	SecretWriter SecretWriter
-	// AcceptPlaintext — разрешён ли приём plaintext (ADR-064 митигация a: TLS-фронт).
-	// false (default) → plaintext отвергается 422.
+	// AcceptPlaintext allows plaintext ingestion (ADR-064 mitigation a: TLS-front).
+	// false (default) → plaintext rejected 422.
 	AcceptPlaintext bool
 }
 
-// NewService собирает service. Pool обязателен (nil → ошибка). nil Invalidator/
-// Redis подменяются no-op-реализациями.
+// NewService constructs service. Pool is required (nil → error). nil Invalidator/
+// Redis are substituted with no-op implementations.
 func NewService(d ServiceDeps) (*Service, error) {
 	if d.Pool == nil {
 		return nil, errors.New("herald: ServiceDeps.Pool is nil")
@@ -92,13 +92,13 @@ func NewService(d ServiceDeps) (*Service, error) {
 
 // --- Herald ----------------------------------------------------------
 
-// CreateHerald вставляет Herald-канал + инвалидирует снимок правил.
-// Возвращает заполненную запись (с created_at/updated_at). Sentinel-ошибки —
-// [ErrHeraldExists] (409). Валидация name/type/config/secret_ref — внутри
-// [InsertHerald] (до записи).
+// CreateHerald inserts Herald channel + invalidates rule snapshot.
+// Returns populated record (with created_at/updated_at). Sentinel errors —
+// [ErrHeraldExists] (409). Validation of name/type/config/secret_ref is inside
+// [InsertHerald] (before write).
 func (s *Service) CreateHerald(ctx context.Context, h *Herald) (*Herald, error) {
-	// Dual-mode: plaintext-секреты → Vault, замена на внутренний ref (ADR-064).
-	// ДО Insert (в PG идёт только ref); plaintext стирается из h.
+	// Dual-mode: plaintext secrets → Vault, replace with internal ref (ADR-064).
+	// Before Insert (only ref goes to PG); plaintext erased from h.
 	if err := materializeHeraldSecrets(ctx, s.secretWriter, s.acceptPlaintext, h); err != nil {
 		return nil, err
 	}
@@ -109,20 +109,20 @@ func (s *Service) CreateHerald(ctx context.Context, h *Herald) (*Herald, error) 
 	return h, nil
 }
 
-// GetHerald читает Herald по PK. [ErrHeraldNotFound] при отсутствии.
+// GetHerald reads Herald by PK. [ErrHeraldNotFound] if missing.
 func (s *Service) GetHerald(ctx context.Context, name string) (*Herald, error) {
 	return SelectHeraldByName(ctx, s.pool, name)
 }
 
-// ListHeralds — страница каналов + total.
+// ListHeralds returns page of channels + total.
 func (s *Service) ListHeralds(ctx context.Context, offset, limit int) ([]*Herald, int, error) {
 	return SelectAllHeralds(ctx, s.pool, offset, limit)
 }
 
-// UpdateHerald заменяет mutable-поля канала (replace). Перечитывает запись после
-// апдейта, чтобы отдать актуальные timestamps. [ErrHeraldNotFound] при отсутствии.
+// UpdateHerald replaces mutable fields of channel (replace). Rereads record after
+// update to return current timestamps. [ErrHeraldNotFound] if missing.
 func (s *Service) UpdateHerald(ctx context.Context, h *Herald) (*Herald, error) {
-	// Dual-mode: plaintext → Vault (idempotent-write по тому же пути), ADR-064.
+	// Dual-mode: plaintext → Vault (idempotent write to same path), ADR-064.
 	if err := materializeHeraldSecrets(ctx, s.secretWriter, s.acceptPlaintext, h); err != nil {
 		return nil, err
 	}
@@ -133,13 +133,13 @@ func (s *Service) UpdateHerald(ctx context.Context, h *Herald) (*Herald, error) 
 	if err != nil {
 		return nil, err
 	}
-	updated.SecretWritten = h.SecretWritten // маркер write-path переживает re-read
+	updated.SecretWritten = h.SecretWritten // write-path marker survives re-read
 	s.invalidate(ctx, h.Name)
 	return updated, nil
 }
 
-// DeleteHerald удаляет канал (его Tiding-ы уходят каскадом) + инвалидирует.
-// [ErrHeraldNotFound] при отсутствии.
+// DeleteHerald deletes channel (its Tidings cascade delete) + invalidates.
+// [ErrHeraldNotFound] if missing.
 func (s *Service) DeleteHerald(ctx context.Context, name string) error {
 	if err := DeleteHerald(ctx, s.pool, name); err != nil {
 		return err
@@ -150,9 +150,9 @@ func (s *Service) DeleteHerald(ctx context.Context, name string) error {
 
 // --- Tiding ----------------------------------------------------------
 
-// CreateTiding вставляет Tiding-правило + инвалидирует. Sentinel-ошибки —
-// [ErrTidingExists] (409), [ErrHeraldNotFound] (404 — FK на несуществующий
-// herald). Валидация name/herald/event_types — внутри [InsertTiding].
+// CreateTiding inserts Tiding rule + invalidates. Sentinel errors —
+// [ErrTidingExists] (409), [ErrHeraldNotFound] (404 — FK to nonexistent
+// herald). Validation of name/herald/event_types is inside [InsertTiding].
 func (s *Service) CreateTiding(ctx context.Context, t *Tiding) (*Tiding, error) {
 	if err := InsertTiding(ctx, s.pool, t); err != nil {
 		return nil, err
@@ -161,20 +161,20 @@ func (s *Service) CreateTiding(ctx context.Context, t *Tiding) (*Tiding, error) 
 	return t, nil
 }
 
-// GetTiding читает Tiding по PK. [ErrTidingNotFound] при отсутствии.
+// GetTiding reads Tiding by PK. [ErrTidingNotFound] if missing.
 func (s *Service) GetTiding(ctx context.Context, name string) (*Tiding, error) {
 	return SelectTidingByName(ctx, s.pool, name)
 }
 
-// ListTidings — страница правил + total. includeEphemeral=false (default)
-// скрывает разовые правила (ADR-052(g)); true — отдаёт все (отладка).
+// ListTidings returns page of rules + total. includeEphemeral=false (default)
+// hides ephemeral rules (ADR-052(g)); true returns all (debug).
 func (s *Service) ListTidings(ctx context.Context, includeEphemeral bool, offset, limit int) ([]*Tiding, int, error) {
 	return SelectAllTidings(ctx, s.pool, includeEphemeral, offset, limit)
 }
 
-// UpdateTiding заменяет mutable-поля правила (replace). Перечитывает запись.
-// [ErrTidingNotFound] (404) при отсутствии PK; [ErrHeraldNotFound] (404) при
-// FK на несуществующий herald.
+// UpdateTiding replaces mutable fields of rule (replace). Rereads record.
+// [ErrTidingNotFound] (404) if PK missing; [ErrHeraldNotFound] (404) if
+// FK to nonexistent herald.
 func (s *Service) UpdateTiding(ctx context.Context, t *Tiding) (*Tiding, error) {
 	if err := UpdateTiding(ctx, s.pool, t); err != nil {
 		return nil, err
@@ -187,7 +187,7 @@ func (s *Service) UpdateTiding(ctx context.Context, t *Tiding) (*Tiding, error) 
 	return updated, nil
 }
 
-// DeleteTiding удаляет правило + инвалидирует. [ErrTidingNotFound] при отсутствии.
+// DeleteTiding deletes rule + invalidates. [ErrTidingNotFound] if missing.
 func (s *Service) DeleteTiding(ctx context.Context, name string) error {
 	if err := DeleteTiding(ctx, s.pool, name); err != nil {
 		return err
@@ -196,13 +196,13 @@ func (s *Service) DeleteTiding(ctx context.Context, name string) error {
 	return nil
 }
 
-// InvalidateTidings — публичная точка двухуровневой инвалидации для внешних
-// пишущих путей, которые создают Tiding-правила В ОБХОД CRUD этого Service
-// (voyage.create вставляет ephemeral-Tiding-и прямым herald.InsertTiding в свою
-// voyage-tx — ADR-052(g)). Без этого вызова dispatcher диспетчит терминал
-// быстрого прогона против устаревшего TTL-снимка, и разовое уведомление молча
-// промахивается. Звать СТРОГО ПОСЛЕ tx.Commit (при rollback правила в БД нет —
-// инвалидировать нечего). Best-effort, nil-safe (см. invalidate).
+// InvalidateTidings is public entry point for two-level invalidation for external
+// write paths that create Tiding rules BYPASSING this Service's CRUD
+// (voyage.create inserts ephemeral-Tidings via direct herald.InsertTiding in its
+// voyage-tx — ADR-052(g)). Without this call, dispatcher dispatches terminal
+// of quick run against stale TTL snapshot, and ephemeral notification silently
+// misses. Call STRICTLY AFTER tx.Commit (on rollback rule is not in DB —
+// nothing to invalidate). Best-effort, nil-safe (see invalidate).
 func (s *Service) InvalidateTidings(ctx context.Context, name string) {
 	if s == nil {
 		return
@@ -212,10 +212,10 @@ func (s *Service) InvalidateTidings(ctx context.Context, name string) {
 
 // --- helpers ---------------------------------------------------------
 
-// invalidate сбрасывает кэш правил в этом процессе и публикует cross-keeper-
-// сигнал. Обе операции best-effort: мутация уже committed, потеря invalidate
-// компенсируется TTL-сходимостью (DefaultRuleCacheTTL). Redis-ошибка
-// логируется, но не возвращается caller-у.
+// invalidate flushes rule cache in this process and publishes cross-keeper
+// signal. Both operations best-effort: mutation already committed, loss of invalidate
+// is compensated by TTL convergence (DefaultRuleCacheTTL). Redis error
+// is logged but not returned to caller.
 func (s *Service) invalidate(ctx context.Context, name string) {
 	s.invalidator.InvalidateRules()
 	if err := s.redis.PublishHeraldInvalidate(ctx, name); err != nil {
@@ -224,8 +224,8 @@ func (s *Service) invalidate(ctx context.Context, name string) {
 	}
 }
 
-// nopInvalidator / nopRedisInvalidator — no-op-реализации для случаев без
-// dispatcher-а / без Redis (unit-тест / single-instance dev).
+// nopInvalidator / nopRedisInvalidator are no-op implementations for cases without
+// dispatcher / without Redis (unit-test / single-instance dev).
 type nopInvalidator struct{}
 
 func (nopInvalidator) InvalidateRules() {}
@@ -234,5 +234,5 @@ type nopRedisInvalidator struct{}
 
 func (nopRedisInvalidator) PublishHeraldInvalidate(context.Context, string) error { return nil }
 
-// compile-time check: *Dispatcher удовлетворяет Invalidator.
+// compile-time check: *Dispatcher satisfies Invalidator.
 var _ Invalidator = (*Dispatcher)(nil)

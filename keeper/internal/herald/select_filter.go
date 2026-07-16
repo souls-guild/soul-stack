@@ -2,24 +2,24 @@ package herald
 
 import "github.com/souls-guild/soul-stack/shared/audit"
 
-// matchIncarnation проверяет опц. селектор Tiding.Incarnation против события.
-// nil-селектор → true (без фильтра). Иначе событие проходит, только если в
-// его payload есть привязка к инкарнации, равная селектору.
+// matchIncarnation checks optional Tiding.Incarnation selector against event.
+// nil-selector → true (no filter). Otherwise event passes only if its payload
+// carries incarnation binding equal to selector.
 //
-// Источник привязки по фактическим payload-формам run-scope-эмиттеров:
+// Binding source from actual payload forms of run-scope emitters:
 //   - incarnation.drift_checked → payload["name"] (incarnation.go/reaper.scry).
 //
-// Прочие run-события привязки к ОДНОЙ инкарнации в payload НЕ несут: Voyage
-// (scenario_run.*/command_run.*/voyage.*) исполняется над МНОЖЕСТВОМ
-// инкарнаций (scope), единственного incarnation-поля у его событий нет
-// (voyageorch.emitCreated/emitFinalized — есть scope_size/target, не одно имя).
-// cadence.* привязан к cadence_id, не к incarnation.
+// Other run events do NOT carry binding to ONE incarnation: Voyage
+// (scenario_run.*/command_run.*/voyage.*) executes over MULTIPLE
+// incarnations (scope), no single incarnation field in its events
+// (voyageorch.emitCreated/emitFinalized have scope_size/target, not one name).
+// cadence.* bound to cadence_id, not incarnation.
 //
-// Следствие (документированный trade-off): Tiding с заданным `incarnation`-
-// селектором матчит ТОЛЬКО drift_checked-события этой инкарнации; на
-// scenario_run/command_run/voyage/cadence-события incarnation-селектор не
-// срабатывает (нет поля → не матч). Это консервативно: лучше не уведомить,
-// чем уведомить о событии, чья привязка к инкарнации в payload не выражена.
+// Consequence (documented trade-off): Tiding with `incarnation` selector
+// matches ONLY drift_checked events of that incarnation; on
+// scenario_run/command_run/voyage/cadence events incarnation selector doesn't
+// fire (no field → no match). Conservative: better not notify than notify
+// about event whose incarnation binding isn't expressed in payload.
 func matchIncarnation(sel *string, et audit.EventType, payload map[string]any) bool {
 	if sel == nil {
 		return true
@@ -28,22 +28,22 @@ func matchIncarnation(sel *string, et audit.EventType, payload map[string]any) b
 	return v != "" && v == *sel
 }
 
-// matchCadence проверяет опц. селектор Tiding.Cadence против события.
-// nil-селектор → true. Иначе требует payload-привязку к cadence, равную
-// селектору.
+// matchCadence checks optional Tiding.Cadence selector against event.
+// nil-selector → true. Otherwise requires payload binding to cadence equal
+// to selector.
 //
-// Источник привязки по фактическим payload-формам:
+// Binding source from actual payload forms:
 //   - cadence.spawned / cadence.skipped_overlap → payload["cadence_id"]
 //     (conductor.cadence_spawn).
 //
-// После BUG-1-фикса (ADR-052 §l amend) cadence-селектор матчит НЕ только
-// cadence.*-события: Voyage-терминалы scenario_run.*/command_run.* и
-// per-incarnation incarnation.run_completed, спавненные расписанием, несут
-// cadence_id в payload прогона. Источник привязки — [eventCadence], который
-// извлекает cadence_id из всех этих event_type'ов. Поэтому Tiding с
-// cadence-селектором ловит и терминалы расписанных прогонов, а не только
-// служебные cadence.spawned/cadence.skipped_overlap. Ручной прогон cadence_id
-// не несёт → "" → не матч.
+// After BUG-1 fix (ADR-052 §l amend) cadence selector matches NOT only
+// cadence.* events: Voyage terminals scenario_run.*/command_run.* and
+// per-incarnation incarnation.run_completed spawned by schedule carry
+// cadence_id in run payload. Binding source is [eventCadence], which
+// extracts cadence_id from all these event_types. So Tiding with
+// cadence selector catches terminal of scheduled runs, not only
+// service cadence.spawned/cadence.skipped_overlap. Manual run carries no
+// cadence_id → "" → no match.
 func matchCadence(sel *string, et audit.EventType, payload map[string]any) bool {
 	if sel == nil {
 		return true
@@ -52,17 +52,17 @@ func matchCadence(sel *string, et audit.EventType, payload map[string]any) bool 
 	return v != "" && v == *sel
 }
 
-// matchVoyage проверяет привязку ephemeral-Tiding к конкретному прогону
-// (ADR-052(g)): разовое правило матчит ТОЛЬКО события СВОЕГО Voyage. sel — это
-// Tiding.VoyageID (для ephemeral-правил гарантированно непустой, инвариант
-// ephemeral⟺voyage_id). Для постоянных правил эта проверка не вызывается (sel nil).
+// matchVoyage checks binding of ephemeral-Tiding to concrete run
+// (ADR-052(g)): ephemeral rule matches ONLY events of its Voyage. sel is
+// Tiding.VoyageID (guaranteed non-empty for ephemeral rules, invariant
+// ephemeral⟺voyage_id). For permanent rules this check not called (sel nil).
 //
-// Источник voyage_id события — payload["voyage_id"] (его несут все run-scope-
-// эмиттеры: voyageorch.emitFinalized/emitLeg*/emitLeaseLost кладут voyage_id и в
-// payload, и в CorrelationID). Fallback на correlation_id (для событий, чей
-// payload voyage_id не несёт, но correlation_id = voyage_id — например
-// reaper.voyage_reclaim). Совпадения нет → не матч (разовое правило не должно
-// сработать на чужой прогон).
+// Event voyage_id source is payload["voyage_id"] (carried by all run-scope
+// emitters: voyageorch.emitFinalized/emitLeg*/emitLeaseLost put voyage_id in both
+// payload and CorrelationID). Fallback to correlation_id (for events whose
+// payload doesn't carry voyage_id but correlation_id = voyage_id — e.g.
+// reaper.voyage_reclaim). No match → no match (ephemeral rule shouldn't
+// fire on foreign run).
 func matchVoyage(sel *string, correlationID string, payload map[string]any) bool {
 	if sel == nil {
 		return true
@@ -73,8 +73,8 @@ func matchVoyage(sel *string, correlationID string, payload map[string]any) bool
 	return correlationID != "" && correlationID == *sel
 }
 
-// eventIncarnation извлекает имя инкарнации из payload run-события или "" если
-// событие привязки к одной инкарнации не несёт (см. [matchIncarnation]).
+// eventIncarnation extracts incarnation name from run event payload or ""
+// if event doesn't carry binding to one incarnation (see [matchIncarnation]).
 func eventIncarnation(et audit.EventType, payload map[string]any) string {
 	if et == audit.EventIncarnationDriftChecked {
 		return payloadStr(payload, "name")
@@ -82,19 +82,19 @@ func eventIncarnation(et audit.EventType, payload map[string]any) string {
 	return ""
 }
 
-// eventCadence извлекает cadence_id из payload cadence-события или "".
+// eventCadence extracts cadence_id from cadence event payload or "".
 //
-// incarnation.run_completed (T4b): per-incarnation прогон, заспавненный
-// Cadence-расписанием, несёт cadence_id в payload (scenario.Runner кладёт его
-// при spec.CadenceID != nil, ADR-052 §k). Нужен task-селектору «алерт на
-// таску X» (matchTask матчит только incarnation.run_completed).
+// incarnation.run_completed (T4b): per-incarnation run spawned by
+// Cadence schedule carries cadence_id in payload (scenario.Runner puts it
+// if spec.CadenceID != nil, ADR-052 §k). Needed for task selector "alert on
+// task X" (matchTask matches only incarnation.run_completed).
 //
-// Voyage-терминалы scenario_run.*/command_run.* (ADR-052 §l amend): Voyage,
-// спавненный расписанием, несёт cadence_id на терминале прогона
-// (voyageorch.emitFinalized при run.CadenceID != nil). Поэтому cadence-селектор
-// Tiding ловит ОДНО агрегированное уведомление на спавн расписания — а не
-// рассыпается на per-incarnation incarnation.run_completed. Ручной Voyage
-// cadence_id не несёт → "" → не матч (консервативно).
+// Voyage terminals scenario_run.*/command_run.* (ADR-052 §l amend): Voyage
+// spawned by schedule carries cadence_id on run terminal
+// (voyageorch.emitFinalized if run.CadenceID != nil). So cadence selector
+// of Tiding catches ONE aggregated notification on schedule spawn — not
+// dispersed to per-incarnation incarnation.run_completed. Manual Voyage
+// carries no cadence_id → "" → no match (conservative).
 func eventCadence(et audit.EventType, payload map[string]any) string {
 	switch et {
 	case audit.EventCadenceSpawned, audit.EventCadenceSkippedOverlap,
@@ -110,29 +110,29 @@ func eventCadence(et audit.EventType, payload map[string]any) string {
 	}
 }
 
-// matchTask проверяет опц. селектор Tiding.Task против события (ADR-052 §l).
-// nil-селектор → true (без фильтра). Иначе матчит ТОЛЬКО incarnation.run_completed,
-// в payload changed_tasks которого есть запись с register == *sel ИЛИ id == *sel.
+// matchTask checks optional Tiding.Task selector against event (ADR-052 §l).
+// nil-selector → true (no filter). Otherwise matches ONLY incarnation.run_completed
+// whose payload changed_tasks has entry with register == *sel OR id == *sel.
 //
-// changed_tasks — массив map'ов адресов задач (форма changedTasksPayload,
-// scenario/run.go): каждый элемент несёт register/id + метаданные/counts.
-// Присутствие адреса в changed_tasks = задача изменилась хотя бы на одном хосте
-// (ADR-052 §j), поэтому task-селектор самодостаточен — отдельной проверки
-// «изменилась» не нужно.
+// changed_tasks is array of maps of task addresses (changedTasksPayload form,
+// scenario/run.go): each element carries register/id + metadata/counts.
+// Address presence in changed_tasks = task changed on at least one host
+// (ADR-052 §j), so task selector is self-sufficient — no separate "changed"
+// check needed.
 //
-// Терпим к обоим представлениям массива: in-process эмиссия даёт
-// []map[string]any (tap видит сырой payload эмиттера, не маскированную копию),
-// JSON round-trip — []any из map'ов. Пустой адрес (register=="" и id=="") *sel
-// не матчит: *sel непуст (validateTiding нормализует ""→nil), равенство ниже это
-// отсекает само. Любой иной event_type (нет changed_tasks) → не матч.
+// Tolerant to both array representations: in-process emission gives
+// []map[string]any (tap sees raw emitter payload, not masked copy),
+// JSON round-trip gives []any of maps. Empty address (register=="" and id=="")
+// doesn't match *sel: *sel non-empty (validateTiding normalizes ""→nil),
+// equality below filters it. Any other event_type (no changed_tasks) → no match.
 func matchTask(sel *string, et audit.EventType, payload map[string]any) bool {
 	if sel == nil {
 		return true
 	}
-	// Defence-in-depth: пустой селектор не матчит пустой адрес неадресуемой задачи
-	// (register=="" && id==""). validateTiding нормализует ""→nil ДО записи, поэтому
-	// сюда *sel="" просочиться не должен; страховка отсекает мёртвый случай явно,
-	// не полагаясь только на CRUD-нормализацию.
+	// Defence-in-depth: empty selector doesn't match empty address of unaddressable task
+	// (register=="" && id==""). validateTiding normalizes ""→nil before write, so
+	// *sel="" shouldn't leak here; guard filters dead case explicitly,
+	// not relying only on CRUD normalization.
 	if *sel == "" {
 		return false
 	}
@@ -147,12 +147,12 @@ func matchTask(sel *string, et audit.EventType, payload map[string]any) bool {
 	return false
 }
 
-// changedTasksEntries извлекает записи changed_tasks из payload
-// incarnation.run_completed как срез map'ов. Терпим к фактическим типам массива:
-//   - []map[string]any — in-process эмиссия (changedTasksPayload, scenario/run.go);
-//   - []any из map'ов   — после JSON round-trip (теоретический десериализованный payload).
+// changedTasksEntries extracts changed_tasks entries from
+// incarnation.run_completed payload as slice of maps. Tolerant to actual array types:
+//   - []map[string]any — in-process emission (changedTasksPayload, scenario/run.go);
+//   - []any of maps     — after JSON round-trip (theoretical deserialized payload).
 //
-// Отсутствие/иная форма → nil (len 0). Элементы не-map в []any-форме пропускаются.
+// Missing/other form → nil (len 0). Non-map elements in []any form skipped.
 func changedTasksEntries(payload map[string]any) []map[string]any {
 	switch raw := payload["changed_tasks"].(type) {
 	case []map[string]any:
@@ -170,7 +170,7 @@ func changedTasksEntries(payload map[string]any) []map[string]any {
 	}
 }
 
-// payloadStr читает строковое поле payload (отсутствие/не-строка → "").
+// payloadStr reads string field from payload (missing/non-string → "").
 func payloadStr(m map[string]any, key string) string {
 	s, _ := m[key].(string)
 	return s

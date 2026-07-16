@@ -1,10 +1,10 @@
-// Package herald — реестры Herald (каналы доставки) и Tiding (правила
-// подписки) уведомлений о событиях прогонов в Postgres (ADR-052, слайс S1).
+// Package herald provides registries of Herald (delivery channels) and Tiding (subscription
+// rules) for notifications about run events in Postgres (ADR-052, slice S1).
 //
-// Herald — куда слать (webhook-канал в MVP), Tiding — на что реагировать и
-// каким Herald-ом. Доставка / tap-декоратор поверх audit.Writer /
-// notification-dispatcher — следующие слайсы (S2-S4); здесь только типы,
-// валидации и CRUD-слой (паттерн keeper/internal/augur omens/rites).
+// Herald is where to send (webhook channel in MVP), Tiding is what to react to and
+// with which Herald. Delivery / tap decorator over audit.Writer /
+// notification dispatcher are following slices (S2-S4); here only types,
+// validation and CRUD layer (pattern keeper/internal/augur omens/rites).
 package herald
 
 import (
@@ -19,9 +19,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/netguard"
 )
 
-// NamePattern — каноническая форма имени Herald/Tiding: kebab-case, длина
-// 1..63. То же, что CHECK heralds_name_format / tidings_name_format в миграции
-// 071 (как omens.NamePattern).
+// NamePattern is canonical form of Herald/Tiding name: kebab-case, length
+// 1..63. Same as CHECK heralds_name_format / tidings_name_format in migration
+// 071 (like omens.NamePattern).
 const NamePattern = `^[a-z0-9-]{1,63}$`
 
 var nameRe = regexp.MustCompile(NamePattern)
@@ -29,16 +29,16 @@ var nameRe = regexp.MustCompile(NamePattern)
 // ValidName проверяет соответствие name канонической форме.
 func ValidName(name string) bool { return nameRe.MatchString(name) }
 
-// HeraldType — closed-enum типа канала (ADR-052 amendment). Канонический набор
-// известных типов — реестр драйверов [channelDrivers] (HTTP-класс) + email
-// (SMTP-класс); единый источник — [AllHeraldTypes]. Добавление HTTP-типа — одна
-// запись в channelDrivers + CHECK-миграция + huma-enum (сверяются guard-тестом
-// с AllHeraldTypes).
+// HeraldType is closed-enum of channel type (ADR-052 amendment). Canonical set
+// of known types is driver registry [channelDrivers] (HTTP-class) + email
+// (SMTP-class); single source is [AllHeraldTypes]. Adding HTTP type is one
+// entry in channelDrivers + CHECK migration + huma-enum (verified by guard-test
+// with AllHeraldTypes).
 //
-// Классы: webhook — HTTP с HMAC-подписью (top-level secret_ref); telegram/slack/
-// mattermost/discord — HTTP-мессенджеры (auth через vault-ref-поле в config,
-// человекочитаемый текст); custom — HTTP с фиксированным телом webhookPayload;
-// email — SMTP (отдельная ось, НЕ channelDrivers).
+// Classes: webhook is HTTP with HMAC signature (top-level secret_ref); telegram/slack/
+// mattermost/discord are HTTP messengers (auth via vault-ref field in config,
+// human-readable text); custom is HTTP with fixed webhookPayload body;
+// email is SMTP (separate axis, not channelDrivers).
 type HeraldType string
 
 const (
@@ -51,8 +51,8 @@ const (
 	HeraldEmail      HeraldType = "email"
 )
 
-// ValidHeraldType — true для известного типа канала: HTTP-драйвер в
-// [channelDrivers] ИЛИ email (SMTP-ось). Единый источник — [AllHeraldTypes].
+// ValidHeraldType returns true for known channel type: HTTP-driver in
+// [channelDrivers] OR email (SMTP-axis). Single source is [AllHeraldTypes].
 func ValidHeraldType(t HeraldType) bool {
 	if _, ok := driverFor(t); ok {
 		return true
@@ -60,26 +60,26 @@ func ValidHeraldType(t HeraldType) bool {
 	return t == HeraldEmail
 }
 
-// Herald — runtime-представление строки реестра `heralds`.
+// Herald is runtime representation of `heralds` registry row.
 //
-// Config — per-type конфигурация канала (для webhook — url + опц. headers +
-// опц. opt-out флаги http_allowed/allow_private). SecretRef — vault-ref секрета
-// канала (signing-token), nullable: не каждому webhook нужна подпись.
+// Config is per-type channel configuration (for webhook — url + opt. headers +
+// opt. opt-out flags http_allowed/allow_private). SecretRef is vault-ref of
+// channel secret (signing-token), nullable: not every webhook needs signature.
 type Herald struct {
 	Name      string         `json:"name"`
 	Type      HeraldType     `json:"type"`
 	Config    map[string]any `json:"config"`
 	SecretRef *string        `json:"secret_ref,omitempty"`
-	// Secret — plaintext webhook signing-secret (dual-mode, ADR-064): оператор
-	// передаёт значение вместо SecretRef; Service материализует его в Vault
-	// ([materializeHeraldSecrets]) и заменяет на внутренний SecretRef. json:"-" —
-	// НИКОГДА не сериализуется (не в PG/View/audit), request-scoped, стирается
-	// после записи. XOR с SecretRef. Аналогично для config-полей канала (<base>
-	// plaintext XOR <base>_ref) — их plaintext живёт в Config до материализации.
+	// Secret is plaintext webhook signing-secret (dual-mode, ADR-064): operator
+	// passes value instead of SecretRef; Service materializes it to Vault
+	// ([materializeHeraldSecrets]) and replaces with internal SecretRef. json:"-"
+	// NEVER serialized (not in PG/View/audit), request-scoped, erased
+	// after write. XOR with SecretRef. Similarly for channel config fields (<base>
+	// plaintext XOR <base>_ref) — their plaintext lives in Config until materialization.
 	Secret *string `json:"-"`
-	// SecretWritten — request-scoped маркер: keeper записал plaintext-секрет в
-	// Vault на этой операции (ADR-064 audit-event). json:"-"; читается audit-
-	// payload-ом (ключ plaintext_ingested), в PG/View не попадает.
+	// SecretWritten is request-scoped marker: keeper wrote plaintext secret to
+	// Vault in this operation (ADR-064 audit-event). json:"-"; read by audit
+	// payload (key plaintext_ingested), doesn't go to PG/View.
 	SecretWritten bool      `json:"-"`
 	Enabled       bool      `json:"enabled"`
 	CreatedAt     time.Time `json:"created_at"`
@@ -87,37 +87,37 @@ type Herald struct {
 	CreatedByAID  *string   `json:"created_by_aid,omitempty"`
 }
 
-// Tiding — runtime-представление строки реестра `tidings`.
+// Tiding is runtime representation of `tidings` registry row.
 //
-// EventTypes — непустой список audit event-types с поддержкой area-glob
-// (`scenario_run.*`); валидируется [ValidateEventTypes]. Incarnation/Cadence —
-// опц. селекторы привязки к источнику прогона (nil = без фильтра).
+// EventTypes is non-empty list of audit event-types with area-glob support
+// (`scenario_run.*`); validated by [ValidateEventTypes]. Incarnation/Cadence are
+// opt. selectors for binding to run source (nil = no filter).
 //
-// Ephemeral/VoyageID (ADR-052(g)) — разовое правило, привязанное к одному
-// прогону: Ephemeral=true ⟺ VoyageID != nil (инвариант [ErrEphemeralRequiresVoyage],
-// дублируется CHECK tidings_ephemeral_voyage_consistent). Постоянное правило —
+// Ephemeral/VoyageID (ADR-052(g)) is ephemeral rule bound to one
+// run: Ephemeral=true ⟺ VoyageID != nil (invariant [ErrEphemeralRequiresVoyage],
+// duplicated by CHECK tidings_ephemeral_voyage_consistent). Permanent rule is
 // Ephemeral=false, VoyageID=nil.
 //
-// Annotations/Projection (ADR-052(h)) — управление телом webhook-доставки.
-// Annotations — статические поля оператора (JSON-объект верхнего уровня),
-// мержатся ключом `annotations` в тело. Projection — allow-list путей payload
-// (пусто = полная форма). Оба применяет worker доставки off-path (N3); domain
-// (N1) только хранит + валидирует синтаксис.
+// Annotations/Projection (ADR-052(h)) control webhook delivery body.
+// Annotations are static operator fields (top-level JSON object),
+// merged by key `annotations` to body. Projection is allow-list of payload
+// paths (empty = full form). Both applied by delivery worker off-path (N3); domain
+// (N1) only stores + validates syntax.
 //
-// Task (ADR-052 §l) — опц. селектор подписки на КОНКРЕТНУЮ задачу прогона по её
-// адресу (register ∪ id из changed_tasks события incarnation.run_completed,
-// ADR-052 §j). nil = без фильтра. Непустое значение → правило матчит
-// incarnation.run_completed, только если в его changed_tasks есть запись с
-// register == *Task ИЛИ id == *Task ([matchTask]). Самодостаточен: присутствие
-// адреса в changed_tasks = задача изменилась хотя бы на одном хосте.
+// Task (ADR-052 §l) is opt. selector for subscription to SPECIFIC run task by
+// address (register ∪ id from changed_tasks of incarnation.run_completed,
+// ADR-052 §j). nil = no filter. Non-empty value → rule matches
+// incarnation.run_completed only if its changed_tasks has entry with
+// register == *Task OR id == *Task ([matchTask]). Self-sufficient: address
+// presence in changed_tasks = task changed on at least one host.
 //
-// CreatedFromCadenceID (ADR-052 §m / ADR-046 §9) — маркер ПРОИСХОЖДЕНИЯ: правило
-// рождено блоком notify[] формы Cadence (POST /v1/cadences). nil = заведено иначе
-// (CRUD Tiding вручную / ephemeral от Voyage). Непустое → FK на cadences(id) ON
-// DELETE CASCADE: снос Cadence уносит порождённые правила. Ортогонален селектору
-// Cadence (фильтр подписки «слать только про прогоны этого расписания»): каскад
-// сносит ТОЛЬКО форм-правила, не трогая руками заведённые с тем же cadence-
-// селектором. Привязка по ULID (cadences.id), а не имени — rename-safe.
+// CreatedFromCadenceID (ADR-052 §m / ADR-046 §9) is origin marker: rule
+// born from Cadence notify[] block (POST /v1/cadences). nil = created otherwise
+// (CRUD Tiding manually / ephemeral from Voyage). Non-empty → FK to cadences(id) ON
+// DELETE CASCADE: Cadence deletion removes born rules. Orthogonal to Cadence
+// selector (subscription filter "send only for runs of this schedule"): cascade
+// removes ONLY form-rules, not manually created with same cadence
+// selector. Binding by ULID (cadences.id), not name — rename-safe.
 type Tiding struct {
 	Name                 string         `json:"name"`
 	Herald               string         `json:"herald"`
@@ -138,15 +138,15 @@ type Tiding struct {
 	CreatedByAID         *string        `json:"created_by_aid,omitempty"`
 }
 
-// ValidateConfig проверяет config канала по его типу (то, что БД-CHECK не
-// покрывает — JSONB shape зависит от type). Диспетчер по классу: HTTP-типы
-// валидирует их [channelDriver.validateConfig] (generic-обход дескриптора полей
-// + доменные инварианты — SSRF-контур URL webhook/custom, chat_id telegram);
-// email — [validateEmailConfig] (SMTP-ось). Единый источник валидатора и
-// каталога — те же дескрипторы полей.
+// ValidateConfig validates channel config by type (what DB-CHECK doesn't
+// cover — JSONB shape depends on type). Dispatcher by class: HTTP types
+// validated by their [channelDriver.validateConfig] (generic descriptor
+// field traversal + domain invariants — SSRF guard URL webhook/custom, chat_id telegram);
+// email by [validateEmailConfig] (SMTP-axis). Single validator source and
+// catalog — same field descriptors.
 //
-// fail-closed: неизвестный тип / битый config отвергается на CRUD-этапе, до
-// записи.
+// fail-closed: unknown type / corrupt config rejected at CRUD stage, before
+// write.
 func ValidateConfig(t HeraldType, config map[string]any) error {
 	if d, ok := driverFor(t); ok {
 		return d.validateConfig(config)
@@ -157,12 +157,12 @@ func ValidateConfig(t HeraldType, config map[string]any) error {
 	return fmt.Errorf("herald: unknown type %q (known: %v)", t, AllHeraldTypes())
 }
 
-// validateWebhookURL — доменный SSRF-контур URL для HTTP-типов с оператор-заданным
-// url (webhook/custom). Дефолтный контур (оба opt-out false): https-only +
-// literal-private-IP блок ([netguard.ValidateEndpoint]). При opt-out — поэлементно,
-// чтобы не снимать лишнего (http:// только при http_allowed; private-IP покрывает
-// dial-guard на доставке). Присутствие/форму url уже проверил generic-обход
-// дескриптора — здесь только транспорт-контур.
+// validateWebhookURL is domain SSRF guard for URL of HTTP types with operator-specified
+// url (webhook/custom). Default guard (both opt-out false): https-only +
+// literal-private-IP block ([netguard.ValidateEndpoint]). On opt-out — per-element,
+// not to over-restrict (http:// only if http_allowed; private-IP covered by
+// dial guard at delivery). Presence/form of url already checked by generic
+// descriptor traversal — here only transport guard.
 func validateWebhookURL(config map[string]any) error {
 	urlStr, _ := config["url"].(string)
 	if urlStr == "" {
@@ -192,22 +192,22 @@ func validateWebhookURL(config map[string]any) error {
 	return nil
 }
 
-// configBool читает bool-флаг из config (отсутствие/не-bool → false). JSON-числа
-// и строки флагом не считаются — флаг безопасности взводится только явным `true`.
+// configBool reads bool flag from config (missing/non-bool → false). JSON numbers
+// and strings are not flags — safety flag set only by explicit `true`.
 func configBool(config map[string]any, key string) bool {
 	v, ok := config[key].(bool)
 	return ok && v
 }
 
-// ValidateSecretRef проверяет top-level secret_ref канала. Семантика (ADR-052
-// amendment, разводка секрета): secret_ref — СТРОГО HMAC signing-token; его
-// использует только тип, чей драйвер объявил [channelDriver.secretRequired]
-// (webhook). У прочих типов auth-credential — vault-ref-поле ВНУТРИ config (напр.
-// telegram bot_token_ref), а top-level secret_ref обязан быть ПУСТ. Правила:
-//   - nil/пусто — всегда ок (подпись опциональна);
-//   - тип без secret-поддержки + непустой secret_ref → ошибка (поле не для типа);
-//   - тип c secret-поддержкой + непустой secret_ref → обязан быть корректным
-//     vault-ref (`vault:<mount>/<path>`), тем же парсером, что omens.auth_ref.
+// ValidateSecretRef validates channel top-level secret_ref. Semantics (ADR-052
+// amendment, secret routing): secret_ref is STRICTLY HMAC signing-token; only
+// used by type whose driver declared [channelDriver.secretRequired]
+// (webhook). For other types auth-credential is vault-ref field INSIDE config (e.g.
+// telegram bot_token_ref), and top-level secret_ref must be EMPTY. Rules:
+//   - nil/empty — always ok (signature optional);
+//   - type without secret support + non-empty secret_ref → error (field not for type);
+//   - type with secret support + non-empty secret_ref → must be valid
+//     vault-ref (`vault:<mount>/<path>`), parsed by same parser as omens.auth_ref.
 func ValidateSecretRef(t HeraldType, ref *string) error {
 	if ref == nil || *ref == "" {
 		return nil
@@ -222,8 +222,8 @@ func ValidateSecretRef(t HeraldType, ref *string) error {
 	return nil
 }
 
-// marshalConfig сериализует config в JSON-bytes для JSONB-колонки. nil → `{}`
-// (схема несёт DEFAULT, но pgx требует не-nil для NOT NULL). Симметрично
+// marshalConfig serializes config to JSON bytes for JSONB column. nil → `{}`
+// (schema has DEFAULT, but pgx requires non-nil for NOT NULL). Symmetrical to
 // pushprovider.marshalParams.
 func marshalConfig(config map[string]any) ([]byte, error) {
 	if config == nil {
@@ -232,26 +232,26 @@ func marshalConfig(config map[string]any) ([]byte, error) {
 	return json.Marshal(config)
 }
 
-// projectionSegmentRe — допустимый сегмент projection-пути: непустой,
-// строчные/цифры/`_`. Полный путь — сегменты через `.` (`summary.succeeded`).
+// projectionSegmentRe allows projection path segment: non-empty,
+// lowercase/digits/`_`. Full path is segments via `.` (`summary.succeeded`).
 var projectionSegmentRe = regexp.MustCompile(`^[a-z0-9_]+$`)
 
-// ValidateProjection проверяет СИНТАКСИС allow-list путей projection (ADR-052(h)):
-// каждый путь — непустые сегменты `[a-z0-9_]`, разделённые `.`; запрещены пустые
-// сегменты (ведущая/двойная/хвостовая точка → `..`/`.x`/`x.`) и сам `..`.
+// ValidateProjection validates SYNTAX of projection allow-list paths (ADR-052(h)):
+// each path is non-empty `[a-z0-9_]` segments separated by `.`; empty
+// segments forbidden (leading/double/trailing dot → `..`/`.x`/`x.`) and `..` itself.
 //
-// Глубокая проверка пути ПРОТИВ payload-формы события здесь НЕ делается —
-// allow-list резолвится лениво в worker-е доставки (N3): несуществующий путь
-// просто не попадёт в тело, а каталог payload-форм эволюционирует и хрупкого
-// статического матча против него тут быть не должно. nil/пустой projection
-// допустим (= полная форма payload).
+// Deep check of path AGAINST event payload form NOT done here —
+// allow-list resolved lazily in delivery worker (N3): nonexistent path
+// simply won't go to body, payload form catalog evolves and brittle
+// static match against it shouldn't exist. nil/empty projection
+// allowed (= full payload form).
 func ValidateProjection(paths []string) error {
 	for _, p := range paths {
 		if p == "" {
 			return fmt.Errorf("herald: projection path is empty")
 		}
-		// strings.Split с пустым сегментом ловит ведущую/двойную/хвостовую точку
-		// (включая литеральный `..` → два пустых соседа) одним проходом.
+		// strings.Split catches empty segment with leading/double/trailing dot
+		// (including literal `..` → two empty neighbors) in one pass.
 		for _, seg := range strings.Split(p, ".") {
 			if seg == "" {
 				return fmt.Errorf("herald: invalid projection path %q (empty segment — no leading/trailing/double dot)", p)
@@ -264,14 +264,14 @@ func ValidateProjection(paths []string) error {
 	return nil
 }
 
-// ValidateAnnotationsJSON проверяет, что сырой JSON annotations — ОБЪЕКТ
-// верхнего уровня (ADR-052(h)/(i)): мержится в тело webhook ключом `annotations`,
-// поэтому массив/скаляр/строка на верхнем уровне недопустимы. Зовётся handler/
-// MCP-стороной (N2), декодирующей пользовательский JSON, ДО построения [Tiding]
-// (где annotations уже типизирован map). Пустой/`null` JSON допустим (= нет
-// статических полей). При нарушении возвращается обычная ошибка (без sentinel-а):
-// handler-сторона (N2) оборачивает её в [ErrValidation] → 422. Отдельный sentinel
-// здесь не нужен — N2 не различает причину невалидного annotations.
+// ValidateAnnotationsJSON validates that raw annotations JSON is top-level
+// OBJECT (ADR-052(h)/(i)): merged to webhook body by key `annotations`,
+// so array/scalar/string at top level not allowed. Called by handler/
+// MCP side (N2) decoding user JSON, before [Tiding] construction
+// (where annotations already typed as map). Empty/`null` JSON allowed (= no
+// static fields). On violation returns plain error (no sentinel):
+// handler side (N2) wraps it in [ErrValidation] → 422. Separate sentinel
+// not needed here — N2 doesn't distinguish cause of invalid annotations.
 func ValidateAnnotationsJSON(raw json.RawMessage) error {
 	trimmed := strings.TrimSpace(string(raw))
 	if trimmed == "" || trimmed == "null" {
@@ -287,8 +287,8 @@ func ValidateAnnotationsJSON(raw json.RawMessage) error {
 	return nil
 }
 
-// marshalAnnotations сериализует annotations в JSON-bytes для JSONB-колонки.
-// nil → `{}` (NOT NULL DEFAULT, как marshalConfig).
+// marshalAnnotations serializes annotations to JSON bytes for JSONB column.
+// nil → `{}` (NOT NULL DEFAULT, like marshalConfig).
 func marshalAnnotations(annotations map[string]any) ([]byte, error) {
 	if annotations == nil {
 		return []byte("{}"), nil

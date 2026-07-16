@@ -1,16 +1,16 @@
 package herald
 
-// HTTP-класс драйверы каналов Herald (ADR-052 amendment): webhook / telegram /
-// slack / mattermost / discord / custom. Каждый реализует [channelDriver]:
-// validateConfig (по своему [HeraldFieldSpec]-дескриптору + доменные инварианты),
-// secretRequired (только webhook), resolveDelivery (готовый [httpDelivery]).
+// HTTP-class channel drivers for Herald (ADR-052 amendment): webhook / telegram /
+// slack / mattermost / discord / custom. Each implements [channelDriver]:
+// validateConfig (per its [HeraldFieldSpec] descriptor + domain invariants),
+// secretRequired (webhook only), resolveDelivery (ready [httpDelivery]).
 //
-// Мессенджеры (telegram/slack/mattermost/discord) шлют ЧЕЛОВЕКОЧИТАЕМЫЙ текст
-// ([messageText] — event_type + herald/tiding + компактный payload-digest), а не
-// сырой webhookPayload. webhook/custom шлют структурный webhookPayload
-// (projection/annotations). Секрет (bot_token/webhook_url) — vault-ref внутри
-// config, резолвится из Vault на доставке ([resolveVaultString]); в текст ошибок
-// не утекает.
+// Messengers (telegram/slack/mattermost/discord) send HUMAN-READABLE text
+// ([messageText] — event_type + herald/tiding + compact payload-digest), not
+// raw webhookPayload. webhook/custom send structured webhookPayload
+// (projection/annotations). Secret (bot_token/webhook_url) is vault-ref inside
+// config, resolved from Vault at delivery ([resolveVaultString]); does not leak
+// into error text.
 
 import (
 	"bytes"
@@ -23,23 +23,23 @@ import (
 )
 
 const (
-	// telegramAPIBase — фиксированный базовый URL Bot API (публичный → SSRF-guard
-	// тривиально проходит). Вынесен константой ради теста собранного URL.
+	// telegramAPIBase is fixed base URL for Bot API (public → SSRF-guard trivially passes).
+	// Extracted as constant for testing the built URL.
 	telegramAPIBase = "https://api.telegram.org"
 
-	// discordContentLimit — жёсткий лимит поля content Discord webhook (2000 симв.,
-	// иначе 400 от API). Текст обрезается до лимита.
+	// discordContentLimit is hard limit for Discord webhook content field (2000 chars,
+	// otherwise 400 from API). Text is truncated to limit.
 	discordContentLimit = 2000
 
-	// userAgent — единый User-Agent исходящих HTTP-доставок Herald.
+	// userAgent is the unified User-Agent for outgoing Herald HTTP deliveries.
 	userAgent = "soul-stack-keeper/herald"
 )
 
 // --- webhook ------------------------------------------------------------------
 
-// webhookChannel — драйвер webhook-канала. ПОВЕДЕНИЕ бит-в-бит прежнее (тот же
-// [webhookTarget]-резолв, тот же [webhookPayload], тот же [SignatureHeader], те
-// же opt-out-флаги). Единственный тип с top-level secret_ref (HMAC-подпись).
+// webhookChannel is the driver for webhook channel. BEHAVIOR is bit-for-bit previous
+// (same [webhookTarget]-resolution, same [webhookPayload], same [SignatureHeader],
+// same opt-out flags). Only type with top-level secret_ref (HMAC signature).
 type webhookChannel struct{}
 
 func (webhookChannel) fields() []HeraldFieldSpec {
@@ -63,8 +63,8 @@ func (c webhookChannel) validateConfig(config map[string]any) error {
 func (webhookChannel) resolveDelivery(ctx context.Context, h *Herald, job *DeliveryJob, kv KVReader) (*httpDelivery, error) {
 	target, err := resolveWebhookTarget(ctx, h, kv)
 	if err != nil {
-		// Битый config / Vault-сбой signing-token-а. Vault-сбой может быть
-		// транзиентным — оставляем retry (НЕ terminal-no-retry).
+		// Broken config / Vault failure for signing-token. Vault failure can be
+		// transient — leaving retry (NOT terminal-no-retry).
 		return nil, err
 	}
 	body, err := buildPayload(job)
@@ -85,12 +85,12 @@ func (webhookChannel) resolveDelivery(ctx context.Context, h *Herald, job *Deliv
 
 // --- telegram -----------------------------------------------------------------
 
-// telegramChannel — драйвер telegram-канала. URL — https://api.telegram.org/
-// bot<token>/sendMessage (токен из config.bot_token_ref через Vault), тело —
-// {chat_id, text[, parse_mode]}. Endpoint публичный → opt-out-флаги false.
+// telegramChannel is the driver for telegram channel. URL is https://api.telegram.org/
+// bot<token>/sendMessage (token from config.bot_token_ref via Vault), body is
+// {chat_id, text[, parse_mode]}. Endpoint is public → opt-out flags false.
 type telegramChannel struct{}
 
-// telegramMessage — тело POST sendMessage. parse_mode опускается при plain.
+// telegramMessage is POST body for sendMessage. parse_mode is omitted for plain.
 type telegramMessage struct {
 	ChatID    string `json:"chat_id"`
 	Text      string `json:"text"`
@@ -129,7 +129,7 @@ func (telegramChannel) resolveDelivery(ctx context.Context, h *Herald, job *Deli
 	}
 	parseMode, _ := h.Config["parse_mode"].(string)
 
-	// Токен бота — секрет через Vault; Vault-сбой транзиентен (retry).
+	// Bot token is secret via Vault; Vault failure is transient (retry).
 	token, err := resolveVaultString(ctx, kv, tokenRef)
 	if err != nil {
 		return nil, err
@@ -145,8 +145,8 @@ func (telegramChannel) resolveDelivery(ctx context.Context, h *Herald, job *Deli
 
 // --- slack --------------------------------------------------------------------
 
-// slackChannel — драйвер Slack incoming-webhook. URL целиком секрет (содержит
-// токен) → config.webhook_url_ref из Vault. Тело — {text}.
+// slackChannel is the driver for Slack incoming-webhook. URL is entirely secret
+// (contains token) → config.webhook_url_ref from Vault. Body is {text}.
 type slackChannel struct{}
 
 func (slackChannel) fields() []HeraldFieldSpec {
@@ -175,13 +175,13 @@ func (slackChannel) resolveDelivery(ctx context.Context, h *Herald, job *Deliver
 
 // --- mattermost ---------------------------------------------------------------
 
-// mattermostChannel — драйвер Mattermost incoming-webhook (Slack-совместимое
-// тело). URL секрет (config.webhook_url_ref). Опц. channel/username переопределяют
-// назначение/имя отправителя.
+// mattermostChannel is the driver for Mattermost incoming-webhook (Slack-compatible
+// body). URL is secret (config.webhook_url_ref). Optional channel/username override
+// destination/sender name.
 type mattermostChannel struct{}
 
-// mattermostMessage — тело POST incoming-webhook Mattermost. channel/username
-// опускаются при пустых (omitempty).
+// mattermostMessage is POST body for Mattermost incoming-webhook. channel/username
+// are omitted when empty (omitempty).
 type mattermostMessage struct {
 	Text     string `json:"text"`
 	Channel  string `json:"channel,omitempty"`
@@ -218,11 +218,11 @@ func (mattermostChannel) resolveDelivery(ctx context.Context, h *Herald, job *De
 
 // --- discord ------------------------------------------------------------------
 
-// discordChannel — драйвер Discord-webhook. URL секрет (config.webhook_url_ref).
-// Тело — {content[, username]}; content <= 2000 символов (обрезается).
+// discordChannel is the driver for Discord webhook. URL is secret (config.webhook_url_ref).
+// Body is {content[, username]}; content <= 2000 chars (truncated).
 type discordChannel struct{}
 
-// discordMessage — тело POST Discord-webhook. username опускается при пустом.
+// discordMessage is POST body for Discord webhook. username is omitted when empty.
 type discordMessage struct {
 	Content  string `json:"content"`
 	Username string `json:"username,omitempty"`
@@ -256,12 +256,12 @@ func (discordChannel) resolveDelivery(ctx context.Context, h *Herald, job *Deliv
 
 // --- custom -------------------------------------------------------------------
 
-// customChannel — драйвер произвольного HTTP-endpoint-а с ФИКСИРОВАННЫМ телом
-// (webhookPayload — как webhook, с projection/annotations). НЕТ произвольного
-// body_template (конфликт ADR-052(h) — форма тела фиксирована). Отличия от
-// webhook: (1) настраиваемый метод (POST/PUT/PATCH), (2) опц. header_secret_ref —
-// значение из Vault кладётся в Authorization (bearer-стиль), (3) НЕ использует
-// top-level secret_ref (нет HMAC-подписи).
+// customChannel is the driver for arbitrary HTTP endpoint with FIXED body
+// (webhookPayload — like webhook, with projection/annotations). NO arbitrary
+// body_template (conflicts with ADR-052(h) — body form is fixed). Differences from
+// webhook: (1) configurable method (POST/PUT/PATCH), (2) optional header_secret_ref —
+// value from Vault placed in Authorization (bearer-style), (3) does NOT use
+// top-level secret_ref (no HMAC signature).
 type customChannel struct{}
 
 func (customChannel) fields() []HeraldFieldSpec {
@@ -300,8 +300,8 @@ func (customChannel) resolveDelivery(ctx context.Context, h *Herald, job *Delive
 	}
 	headers := configHeaders(h.Config)
 
-	// header_secret_ref (опц.): значение из Vault → Authorization. Vault-сбой
-	// транзиентен (retry). Копируем headers, чтобы не мутировать общий config-map.
+	// header_secret_ref (optional): value from Vault → Authorization. Vault failure
+	// is transient (retry). Copy headers to avoid mutating shared config map.
 	if ref, ok := configString(h.Config, "header_secret_ref"); ok {
 		secret, err := resolveVaultString(ctx, kv, ref)
 		if err != nil {
@@ -326,13 +326,13 @@ func (customChannel) resolveDelivery(ctx context.Context, h *Herald, job *Delive
 	}, nil
 }
 
-// --- общие хелперы HTTP-класса ------------------------------------------------
+// --- HTTP-class common helpers ------------------------------------------------
 
-// messageText собирает человекочитаемую сводку события для мессенджеров
-// (telegram/slack/mattermost/discord). Форма: event_type + tiding/herald + время
-// + компактный payload-digest (уже замаскированный/суженный projection-ом через
-// [buildPayload], инвариант A ADR-027). Текст plain — форматирование (parse_mode)
-// решает оператор.
+// messageText assembles human-readable event summary for messengers
+// (telegram/slack/mattermost/discord). Form: event_type + tiding/herald + time
+// + compact payload-digest (already masked/narrowed by projection via
+// [buildPayload], invariant A ADR-027). Text is plain — operator decides formatting
+// (parse_mode).
 func messageText(job *DeliveryJob) string {
 	var b strings.Builder
 	b.WriteString(string(job.EventType))
@@ -355,8 +355,8 @@ func messageText(job *DeliveryJob) string {
 	return b.String()
 }
 
-// payloadDigest сериализует payload-часть события в компактную строку (тот же
-// маскинг/projection-контур, что [buildPayload], но без webhook-обёртки). Пустой
+// payloadDigest serializes payload part of event to compact string (same
+// masking/projection circuit as [buildPayload], but without webhook wrapper). Empty
 // payload → "".
 func payloadDigest(job *DeliveryJob) string {
 	body, err := buildPayload(job)
@@ -374,9 +374,9 @@ func payloadDigest(job *DeliveryJob) string {
 	return string(digest)
 }
 
-// resolveWebhookURLRef резолвит секретный webhook-URL канала (slack/mattermost/
-// discord) из config.webhook_url_ref через Vault. Отсутствие ref в config
-// (изменён после create) → terminal-no-retry; Vault-сбой → transient (retry).
+// resolveWebhookURLRef resolves secret webhook URL of channel (slack/mattermost/
+// discord) from config.webhook_url_ref via Vault. Absence of ref in config
+// (changed after create) → terminal-no-retry; Vault failure → transient (retry).
 func resolveWebhookURLRef(ctx context.Context, h *Herald, kv KVReader) (string, error) {
 	ref, ok := configString(h.Config, "webhook_url_ref")
 	if !ok {
@@ -389,7 +389,7 @@ func resolveWebhookURLRef(ctx context.Context, h *Herald, kv KVReader) (string, 
 	return url, nil
 }
 
-// truncateRunes обрезает s до max рун (не байт — чтобы не разрубить UTF-8).
+// truncateRunes truncates s to max runes (not bytes — to not break UTF-8).
 func truncateRunes(s string, max int) string {
 	r := []rune(s)
 	if len(r) <= max {
@@ -398,8 +398,8 @@ func truncateRunes(s string, max int) string {
 	return string(r[:max])
 }
 
-// configString читает непустую строку из config. ok=false — отсутствует, не
-// строка или пуста.
+// configString reads non-empty string from config. ok=false — absent, not a string,
+// or empty.
 func configString(config map[string]any, key string) (string, bool) {
 	s, ok := config[key].(string)
 	if !ok || s == "" {
@@ -408,11 +408,11 @@ func configString(config map[string]any, key string) (string, bool) {
 	return s, true
 }
 
-// buildHTTPRequest строит *http.Request из httpDelivery: метод (пуст → POST),
-// тело, Content-Type (пуст → application/json), заголовки канала, User-Agent и
-// опц. HMAC-подпись (signingKey). Единый билдер для всех HTTP-типов; зовётся из
-// [DeliveryWorker.deliver] ПОСЛЕ SSRF-guard. Заголовки канала выставляются ПОСЛЕ
-// служебных — оператор может переопределить Content-Type/User-Agent при нужде.
+// buildHTTPRequest builds *http.Request from httpDelivery: method (empty → POST),
+// body, Content-Type (empty → application/json), channel headers, User-Agent and
+// optional HMAC signature (signingKey). Single builder for all HTTP types; called from
+// [DeliveryWorker.deliver] AFTER SSRF-guard. Channel headers set AFTER service headers —
+// operator may override Content-Type/User-Agent if needed.
 func buildHTTPRequest(ctx context.Context, hd *httpDelivery) (*http.Request, error) {
 	method := hd.method
 	if method == "" {

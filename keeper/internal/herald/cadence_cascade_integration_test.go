@@ -1,10 +1,10 @@
 //go:build integration
 
-// Integration-guard каскад-сноса постоянных notify-правил Cadence (ADR-052 §m /
-// ADR-046 §9): DELETE cadence уносит Tiding-и с created_from_cadence_id == id
-// (FK ON DELETE CASCADE, миграция 074), но НЕ трогает правила с тем же
-// cadence-СЕЛЕКТОРОМ и created_from_cadence_id == NULL (вручную заведённые).
-// Требует реального FK CASCADE → только под docker (testcontainers).
+// Integration-guard cascade deletion of persistent notify-rules from Cadence (ADR-052 §m /
+// ADR-046 §9): DELETE cadence removes Tiding records with created_from_cadence_id == id
+// (FK ON DELETE CASCADE, migration 074), but does NOT touch rules with the same
+// cadence-SELECTOR and created_from_cadence_id == NULL (manually created).
+// Requires real FK CASCADE → only under docker (testcontainers).
 
 package herald
 
@@ -14,9 +14,9 @@ import (
 	"testing"
 )
 
-// insertCadence вставляет минимальную строку cadences напрямую (herald-пакет не
-// импортирует cadence — для FK-цели достаточно raw INSERT обязательных колонок
-// миграции 066: id/name/schedule_kind/overlap_policy/kind/target/created_by_aid).
+// insertCadence inserts a minimal cadences row directly (herald package does not
+// import cadence — for FK purposes raw INSERT of migration 066 mandatory columns suffices:
+// id/name/schedule_kind/overlap_policy/kind/target/created_by_aid).
 func insertCadence(t *testing.T, id, aid string) {
 	t.Helper()
 	_, err := integrationPool.Exec(context.Background(),
@@ -28,9 +28,9 @@ func insertCadence(t *testing.T, id, aid string) {
 	}
 }
 
-// cleanCadences чистит cadences (resetAll их не трогает напрямую; зависимые
-// tidings уйдут каскадом за этим DELETE — что и есть предмет соседнего теста, но
-// здесь — финальная уборка фикстуры).
+// cleanCadences cleans up cadences (resetAll does not touch them directly; dependent
+// tidings will be removed by cascade on this DELETE — which is the subject of the neighbor test, but
+// here — final cleanup of the fixture).
 func cleanCadences(t *testing.T) {
 	t.Helper()
 	if _, err := integrationPool.Exec(context.Background(), `DELETE FROM cadences`); err != nil {
@@ -44,18 +44,18 @@ func TestIntegration_Cadence_DeleteCascadesFormRules_NotManual(t *testing.T) {
 	seedOperator(t, "archon-alice")
 	ctx := context.Background()
 
-	// Канал доставки (FK tidings.herald).
+	// Delivery channel (FK tidings.herald).
 	if err := InsertHerald(ctx, integrationPool, newWebhookHerald("ops-webhook", "archon-alice")); err != nil {
 		t.Fatalf("InsertHerald: %v", err)
 	}
 
-	// Расписание-цель каскада.
+	// Cascade target schedule.
 	const cadID = "01J0CADENCE000000000000001"
 	insertCadence(t, cadID, "archon-alice")
 	defer cleanCadences(t)
 
-	// (1) Форм-правило: создано из notify[] формы Cadence — selector cadence +
-	// origin-маркер created_from_cadence_id == cadID. Должно уйти каскадом.
+	// (1) Form-rule: created from notify[] of Cadence form — cadence selector +
+	// origin-marker created_from_cadence_id == cadID. Must be removed by cascade.
 	formRule := &Tiding{
 		Name:                 "nightly-notify",
 		Herald:               "ops-webhook",
@@ -69,9 +69,9 @@ func TestIntegration_Cadence_DeleteCascadesFormRules_NotManual(t *testing.T) {
 		t.Fatalf("InsertTiding form-rule: %v", err)
 	}
 
-	// (2) Вручную созданное правило с ТЕМ ЖЕ cadence-СЕЛЕКТОРОМ, но БЕЗ
-	// origin-маркера (created_from_cadence_id == NULL). НЕ должно удаляться при
-	// DELETE cadence — оператор завёл его руками, оно переживает снос расписания.
+	// (2) Manually created rule with the SAME cadence-SELECTOR, but WITHOUT
+	// origin-marker (created_from_cadence_id == NULL). Must NOT be deleted on
+	// DELETE cadence — operator created it manually, it survives schedule deletion.
 	manualRule := &Tiding{
 		Name:         "manual-watch",
 		Herald:       "ops-webhook",
@@ -84,28 +84,28 @@ func TestIntegration_Cadence_DeleteCascadesFormRules_NotManual(t *testing.T) {
 		t.Fatalf("InsertTiding manual-rule: %v", err)
 	}
 
-	// DELETE cadence → FK ON DELETE CASCADE сносит form-rule.
+	// DELETE cadence → FK ON DELETE CASCADE removes form-rule.
 	if _, err := integrationPool.Exec(ctx, `DELETE FROM cadences WHERE id = $1`, cadID); err != nil {
 		t.Fatalf("DELETE cadence: %v", err)
 	}
 
-	// Форм-правило удалено каскадом.
+	// Form-rule removed by cascade.
 	if _, err := SelectTidingByName(ctx, integrationPool, "nightly-notify"); !errors.Is(err, ErrTidingNotFound) {
-		t.Errorf("form-rule после DELETE cadence: err = %v, want ErrTidingNotFound (каскад)", err)
+		t.Errorf("form-rule after DELETE cadence: err = %v, want ErrTidingNotFound (cascade)", err)
 	}
-	// Вручную созданное правило (created_from_cadence_id == NULL) ВЫЖИЛО, несмотря
-	// на тот же cadence-селектор.
+	// Manually created rule (created_from_cadence_id == NULL) SURVIVED, despite
+	// having the same cadence-selector.
 	survived, err := SelectTidingByName(ctx, integrationPool, "manual-watch")
 	if err != nil {
-		t.Fatalf("manual-rule после DELETE cadence удалено по ошибке: %v", err)
+		t.Fatalf("manual-rule wrongly deleted after DELETE cadence: %v", err)
 	}
 	if survived.CreatedFromCadenceID != nil {
-		t.Errorf("manual-rule.CreatedFromCadenceID = %v, want nil (вручную созданное)", survived.CreatedFromCadenceID)
+		t.Errorf("manual-rule.CreatedFromCadenceID = %v, want nil (manually created)", survived.CreatedFromCadenceID)
 	}
 }
 
-// Round-trip created_from_cadence_id через Insert/Select (ADR-052 §m): маркер
-// корректно пишется и читается из колонки 074.
+// Round-trip created_from_cadence_id via Insert/Select (ADR-052 §m): marker
+// is correctly written to and read from column 074.
 func TestIntegration_Tiding_CreatedFromCadenceRoundTrip(t *testing.T) {
 	resetAll(t)
 	cleanCadences(t)

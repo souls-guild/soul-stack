@@ -1,13 +1,13 @@
 package herald
 
-// SSRF egress-guard webhook-доставки Herald (ADR-052(e): URL канала —
-// оператор-заданный → исходящий HTTP с keeper-а → SSRF-вектор).
+// SSRF egress guard for Herald webhook delivery (ADR-052(e): channel URL is
+// operator-specified → outgoing HTTP from keeper → SSRF vector).
 //
-// Общая SSRF-guard-логика (resolve-then-check-then-dial по фактическому IP,
-// rebind-safe; CheckRedirect-downgrade-защита; https-only; классификатор
-// заблокированных IP) — в shared/netguard (тот же guard, что у augur/core.url).
-// Здесь — herald-специфика: per-Herald opt-out (http_allowed/allow_private),
-// конфигурируемый timeout, конструктор клиента под конкретный канал.
+// Common SSRF guard logic (resolve-then-check-then-dial by actual IP,
+// rebind-safe; CheckRedirect downgrade guard; https-only; blocked IP
+// classifier) is in shared/netguard (same guard as augur/core.url).
+// Here — Herald-specific: per-Herald opt-out (http_allowed/allow_private),
+// configurable timeout, client constructor for specific channel.
 
 import (
 	"fmt"
@@ -21,31 +21,31 @@ import (
 )
 
 const (
-	// maxDeliveryRedirects — жёсткий лимит редиректов webhook-POST-а. Каждый hop
-	// проверяется на https и по фактическому IP (netguard).
+	// maxDeliveryRedirects is hard limit on webhook POST redirects. Each hop
+	// checked for https and actual IP (netguard).
 	maxDeliveryRedirects = 5
 
-	// deliveryDialTimeout — таймаут установления TCP-соединения.
+	// deliveryDialTimeout is TCP connection setup timeout.
 	deliveryDialTimeout = 10 * time.Second
 
-	// DefaultDeliveryTimeout — дефолтный общий таймаут одного webhook-POST-а
-	// (dial + TLS + запись + чтение ответа). Оператор-заданный endpoint
-	// НЕдоверен: медленный/злой хост не должен держать worker-горутину дольше.
-	// Конфигурируемый (keeper.yml::herald.delivery_timeout, ADR-052(e) «timeout»).
+	// DefaultDeliveryTimeout is default total timeout for one webhook POST
+	// (dial + TLS + write + read response). Operator-specified endpoint
+	// is untrusted: slow/malicious host shouldn't hold worker goroutine longer.
+	// Configurable (keeper.yml::herald.delivery_timeout, ADR-052(e) "timeout").
 	DefaultDeliveryTimeout = 10 * time.Second
 )
 
-// validateDeliveryEndpoint — проверка URL канала ПЕРЕД запросом (ADR-052(e)):
-// config мог измениться после create (или create прошёл по другому opt-out-у),
-// поэтому валидируем на каждой доставке, а не доверяем CRUD-времени.
+// validateDeliveryEndpoint checks channel URL BEFORE request (ADR-052(e)):
+// config may have changed after create (or create passed with different opt-out),
+// so validate on each delivery, not trusting CRUD time.
 //
-// allowPrivate / httpAllowed — per-Herald opt-out-ы (config.allow_private /
-// config.http_allowed). Дефолтный контур (оба false): https-only + литеральный
-// private-IP в host блокируется (netguard.ValidateEndpoint). DNS-резолв в
-// приватный IP ловится на dial-фазе (guardedDeliveryClient).
+// allowPrivate / httpAllowed are per-Herald opt-outs (config.allow_private /
+// config.http_allowed). Default guard (both false): https-only + literal
+// private IP in host blocked (netguard.ValidateEndpoint). DNS resolve to
+// private IP caught at dial phase (guardedDeliveryClient).
 //
-// При allow_private dial-guard не ставится вовсе (см. guardedDeliveryClient),
-// поэтому здесь литеральный private-IP при allow_private не отвергаем.
+// When allow_private, dial guard not set at all (see guardedDeliveryClient),
+// so literal private IP with allow_private not rejected here.
 func validateDeliveryEndpoint(rawURL string, httpAllowed, allowPrivate bool) error {
 	if !httpAllowed && !allowPrivate {
 		return netguard.ValidateEndpoint(rawURL)
@@ -63,23 +63,23 @@ func validateDeliveryEndpoint(rawURL string, httpAllowed, allowPrivate bool) err
 	if u.Scheme != "" && !strings.EqualFold(u.Scheme, "https") && !strings.EqualFold(u.Scheme, "http") {
 		return fmt.Errorf("herald: unsupported webhook url scheme %q", u.Scheme)
 	}
-	// allow_private=false + http_allowed=true: приватку всё равно режем (dial-guard
-	// в guardedDeliveryClient). Литеральный private-IP здесь не валидируем —
-	// dial-фаза покроет (и литерал, и DNS-резолв).
+	// allow_private=false + http_allowed=true: still block private (dial-guard
+	// in guardedDeliveryClient). Literal private IP not validated here —
+	// dial phase will cover (both literal and DNS resolve).
 	return nil
 }
 
-// guardedDeliveryClient собирает *http.Client под конкретный канал:
-//   - системный TLS trust store (никакого InsecureSkipVerify);
-//   - общий timeout запроса;
-//   - redirect-downgrade-защита + лимит (netguard.NewCheckRedirect);
-//   - SSRF dial-guard по фактическому IP (netguard.GuardedDialContext), ЕСЛИ
-//     allowPrivate=false. При allowPrivate=true (явный opt-out оператора)
-//     dial-guard НЕ ставится — приватные IP разрешены (на свой риск, ADR-052(e)
-//     «allow_private — явный opt-out как core.url»).
+// guardedDeliveryClient constructs *http.Client for specific channel:
+//   - system TLS trust store (no InsecureSkipVerify);
+//   - total request timeout;
+//   - redirect downgrade guard + limit (netguard.NewCheckRedirect);
+//   - SSRF dial guard by actual IP (netguard.GuardedDialContext), IF
+//     allowPrivate=false. When allowPrivate=true (explicit operator opt-out)
+//     dial guard NOT set — private IPs allowed (at own risk, ADR-052(e)
+//     "allow_private — explicit opt-out like core.url").
 //
-// resolver инжектируется для тестируемости guard-а (DNS-rebind/multi-IP без
-// настоящего DNS); в проде — netguard.DefaultResolver.
+// resolver injected for guard testability (DNS-rebind/multi-IP without
+// real DNS); in production — netguard.DefaultResolver.
 func guardedDeliveryClient(resolver netguard.Resolver, allowPrivate bool, timeout time.Duration) *http.Client {
 	if timeout <= 0 {
 		timeout = DefaultDeliveryTimeout

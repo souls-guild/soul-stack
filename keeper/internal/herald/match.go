@@ -6,9 +6,9 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// eventArea возвращает область `<area>` события `<area>.<action>`. Для
-// бездотового/пустого типа — весь тип (на практике все audit-event-types
-// дотовые, см. naming-rules.md → Audit-events).
+// eventArea returns `<area>` portion of event `<area>.<action>`. For
+// non-dotted/empty type returns whole type (in practice all audit-event-types
+// are dotted, see naming-rules.md → Audit-events).
 func eventArea(et audit.EventType) string {
 	s := string(et)
 	if i := strings.IndexByte(s, '.'); i > 0 {
@@ -17,11 +17,11 @@ func eventArea(et audit.EventType) string {
 	return s
 }
 
-// matchEventType — true, если pattern (элемент Tiding.EventTypes) покрывает
-// тип события et. pattern — либо точный `<area>.<action>`, либо area-glob
-// `<area>.*` (семантика [validateEventType]: единственная допустимая форма
-// wildcard — суффикс `.*` всей области). Произвольный wildcard в pattern не
-// попадает сюда — он отсекается на CRUD-валидации ([ValidateEventTypes]).
+// matchEventType returns true if pattern (Tiding.EventTypes element) covers
+// event type et. pattern is either exact `<area>.<action>` or area-glob
+// `<area>.*` (semantics per [validateEventType]: only allowed wildcard
+// form is `.*` suffix of whole area). Arbitrary wildcard in pattern doesn't
+// reach here — filtered at CRUD validation ([ValidateEventTypes]).
 func matchEventType(pattern string, et audit.EventType) bool {
 	if strings.HasSuffix(pattern, ".*") {
 		area := pattern[:len(pattern)-2]
@@ -30,18 +30,17 @@ func matchEventType(pattern string, et audit.EventType) bool {
 	return pattern == string(et)
 }
 
-// isFailureEvent классифицирует событие прогона как «провал» для фильтра
-// only_failures (ADR-052(c)). Провалом считаются терминалы прогона с
-// ненулевым failed-исходом:
+// isFailureEvent classifies run event as "failure" for only_failures filter
+// (ADR-052(c)). Failures are run terminals with non-zero failed outcome:
 //   - scenario_run.failed / scenario_run.partial_failed,
 //   - command_run.failed / command_run.partial_failed,
-//   - scenario_run.lease_lost (прогон сорвался — failover-исход),
-//   - voyage.reclaimed (протухший lease возвращён Reaper-ом — аномалия).
+//   - scenario_run.lease_lost (run crashed — failover outcome),
+//   - voyage.reclaimed (stale lease returned by Reaper — anomaly).
 //
-// drift_checked провалом по статусу НЕ считается (drift = расхождение, не
-// сбой прогона) — для него отбор делает only_changes. cadence.skipped_overlap
-// — не провал (штатный skip). started/invoked/created/leg_*/completed — не
-// провал. Маппинг построен по фактическим event-types-эмиттерам
+// drift_checked is NOT failure by status (drift = divergence, not
+// run failure) — filtering for it is done by only_changes. cadence.skipped_overlap
+// is not failure (normal skip). started/invoked/created/leg_*/completed are not
+// failures. Mapping built from actual event-type emitters
 // (voyageorch.emitFinalized / emitLeaseLost, reaper.voyage_reclaim).
 func isFailureEvent(et audit.EventType) bool {
 	switch et {
@@ -87,7 +86,7 @@ func hasChanges(et audit.EventType, payload map[string]any) bool {
 
 	case audit.EventScenarioRunCompleted,
 		audit.EventScenarioRunPartialFailed:
-		// scenario несёт succeeded во вложенном summary.
+		// scenario carries succeeded in nested summary.
 		if s, ok := payload["summary"].(map[string]any); ok {
 			return payloadInt(s, "succeeded") > 0
 		}
@@ -95,7 +94,7 @@ func hasChanges(et audit.EventType, payload map[string]any) bool {
 
 	case audit.EventCommandRunCompleted,
 		audit.EventCommandRunPartialFailed:
-		// command несёт succeeded в корне payload.
+		// command carries succeeded at root of payload.
 		return payloadInt(payload, "succeeded") > 0
 
 	case audit.EventIncarnationRunCompleted:
@@ -113,9 +112,8 @@ func hasChanges(et audit.EventType, payload map[string]any) bool {
 	}
 }
 
-// driftHostsDrifted извлекает drift_summary.hosts_drifted из payload
-// drift_checked-события (incarnation.go / reaper.scry). Отсутствие/иная форма
-// → 0.
+// driftHostsDrifted extracts drift_summary.hosts_drifted from payload of
+// drift_checked event (incarnation.go / reaper.scry). Missing/other form → 0.
 func driftHostsDrifted(payload map[string]any) int {
 	ds, ok := payload["drift_summary"].(map[string]any)
 	if !ok {
@@ -124,10 +122,10 @@ func driftHostsDrifted(payload map[string]any) int {
 	return payloadInt(ds, "hosts_drifted")
 }
 
-// payloadInt читает целочисленное поле из payload-map. Терпим к фактическим
-// числовым типам, которыми его кладут эмиттеры (int — прямой эмит) и которыми
-// оно может прийти после JSON round-trip (float64) — dispatcher матчит как
-// in-process map от эмиттера, так и теоретически десериализованный payload.
+// payloadInt reads integer field from payload map. Tolerant to actual
+// numeric types emitters use (int — direct emit) and types after JSON
+// round-trip (float64) — dispatcher matches both in-process map from
+// emitter and theoretically deserialized payload.
 func payloadInt(m map[string]any, key string) int {
 	switch v := m[key].(type) {
 	case int:

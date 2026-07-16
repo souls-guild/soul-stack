@@ -1,10 +1,10 @@
 package herald
 
-// Резолв конфигурации Herald-канала и его signing-секрета для доставки
-// (ADR-052(a)/(e)). Herald-запись резолвится по имени из реестра `heralds` на
-// каждую доставку (config мог измениться после постановки job-а в очередь);
-// secret_ref (если задан) резолвится из Vault — signing-token в PG cleartext НЕ
-// хранится (паттерн omens.auth_ref).
+// Resolution of Herald channel configuration and its signing-secret for delivery
+// (ADR-052(a)/(e)). Herald record is resolved by name from `heralds` registry on
+// each delivery (config could have changed after job queued);
+// secret_ref (if set) is resolved from Vault — signing-token is NOT stored
+// cleartext in PG (pattern omens.auth_ref).
 
 import (
 	"context"
@@ -14,33 +14,33 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/vault"
 )
 
-// HeraldReader — узкая поверхность реестра heralds, нужная worker-у: резолв
-// канала по имени на момент доставки. Реальная реализация — замыкание над
-// [SelectHeraldByName]; узкий интерфейс даёт fake в unit-тестах без PG.
+// HeraldReader is narrow surface of heralds registry, needed by worker: resolution
+// of channel by name at delivery time. Real implementation is closure over
+// [SelectHeraldByName]; narrow interface allows fake in unit tests without PG.
 type HeraldReader interface {
 	HeraldByName(ctx context.Context, name string) (*Herald, error)
 }
 
-// KVReader — узкая поверхность Vault-чтения для резолва signing-token (тот же
-// ReadKV, что у augur-брокера / render-pipeline). *vault.Client удовлетворяет.
+// KVReader is narrow surface of Vault reading for signing-token resolution (same
+// ReadKV as augur broker / render pipeline). *vault.Client satisfies it.
 type KVReader interface {
 	ReadKV(ctx context.Context, path string) (map[string]any, error)
 }
 
-// webhookTarget — резолвнутые параметры доставки одного webhook-а.
+// webhookTarget is resolved delivery parameters of one webhook.
 type webhookTarget struct {
 	url          string
 	headers      map[string]string
 	httpAllowed  bool
 	allowPrivate bool
-	// signingKey — резолвленный из Vault signing-token (nil → подпись не ставится).
+	// signingKey is resolved signing-token from Vault (nil → signature not applied).
 	signingKey []byte
 }
 
-// resolveWebhookTarget извлекает параметры доставки webhook-канала из Herald-
-// записи: url, headers, opt-out-флаги и (если задан secret_ref) signing-token из
-// Vault. Ошибка — канал не webhook / битый config / Vault-сбой (caller трактует
-// как terminal-fail доставки этого job-а, секрет в текст ошибки не утекает).
+// resolveWebhookTarget extracts delivery parameters of webhook channel from Herald
+// record: url, headers, opt-out flags and (if secret_ref is set) signing-token from
+// Vault. Error — channel is not webhook / broken config / Vault failure (caller treats
+// as terminal-fail of this job delivery, secret does not leak into error text).
 func resolveWebhookTarget(ctx context.Context, h *Herald, kv KVReader) (*webhookTarget, error) {
 	if h.Type != HeraldWebhook {
 		return nil, fmt.Errorf("herald: channel %q is not webhook (type %q)", h.Name, h.Type)
@@ -65,9 +65,9 @@ func resolveWebhookTarget(ctx context.Context, h *Herald, kv KVReader) (*webhook
 	return t, nil
 }
 
-// configHeaders извлекает опц. webhook-заголовки из config.headers (map строк).
-// Не-строковые значения отбрасываются (defensive: JSONB мог прийти из ручной
-// правки). nil → пустая map.
+// configHeaders extracts optional webhook headers from config.headers (map of strings).
+// Non-string values are discarded (defensive: JSONB could come from manual edit).
+// nil → empty map.
 func configHeaders(config map[string]any) map[string]string {
 	raw, ok := config["headers"].(map[string]any)
 	if !ok {
@@ -82,9 +82,9 @@ func configHeaders(config map[string]any) map[string]string {
 	return out
 }
 
-// resolveSigningKey читает signing-token webhook-канала из Vault по secret_ref.
-// Тонкая обёртка над [resolveVaultString] (общий резолв одиночного vault-ref-
-// поля), возвращает raw-байты ключа для HMAC-подписи.
+// resolveSigningKey reads signing-token of webhook channel from Vault by secret_ref.
+// Thin wrapper over [resolveVaultString] (common resolution of single vault-ref
+// field), returns raw key bytes for HMAC signature.
 func resolveSigningKey(ctx context.Context, kv KVReader, secretRef string) ([]byte, error) {
 	s, err := resolveVaultString(ctx, kv, secretRef)
 	if err != nil {
@@ -93,21 +93,21 @@ func resolveSigningKey(ctx context.Context, kv KVReader, secretRef string) ([]by
 	return []byte(s), nil
 }
 
-// resolveVaultString читает одиночное строковое значение секрета из Vault по
-// vault-ref — общий резолвер для всех секрет-полей каналов (webhook secret_ref,
+// resolveVaultString reads single string value of secret from Vault by
+// vault-ref — common resolver for all secret fields of channels (webhook secret_ref,
 // telegram bot_token_ref, slack/mattermost/discord webhook_url_ref, custom
 // header_secret_ref, email password_ref).
 //
-// Формат ref: `vault:<mount>/<path>` с опц. суффиксом `#<field>` (симметрия
-// vault()/readVaultRef). Выбор поля:
-//   - `#field` задан → берётся именно оно;
-//   - `#field` опущен И в секрете ровно одно поле → берётся оно (удобный
-//     дефолт для секрета-на-один-ключ);
-//   - `#field` опущен И полей несколько → ошибка (неоднозначно; оператор обязан
-//     указать `#field`).
+// Ref format: `vault:<mount>/<path>` with optional suffix `#<field>` (symmetry
+// vault()/readVaultRef). Field selection:
+//   - `#field` is set → use exactly it;
+//   - `#field` is omitted AND secret has exactly one field → use it (convenient
+//     default for single-key secret);
+//   - `#field` is omitted AND multiple fields → error (ambiguous; operator must
+//     specify `#field`).
 //
-// БЕЗОПАСНОСТЬ: значение секрета в текст ошибок НЕ попадает; ref маскируется
-// caller-ом через MaskSecrets при логировании error-message.
+// SECURITY: secret value does NOT go into error text; ref is masked by caller
+// via MaskSecrets when logging error message.
 func resolveVaultString(ctx context.Context, kv KVReader, secretRef string) (string, error) {
 	if kv == nil {
 		return "", fmt.Errorf("herald: secret ref set but no Vault client configured")

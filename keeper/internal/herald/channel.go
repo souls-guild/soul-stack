@@ -1,27 +1,27 @@
 package herald
 
-// Двухклассовая channel-модель доставки Herald (ADR-052 amendment, вердикт
-// architect). HTTP-класс (webhook/telegram/slack/mattermost/discord/custom):
-// каждый тип — [channelDriver] с тремя обязанностями: (1) валидация config по
-// его дескриптору полей, (2) объявление, использует ли он top-level secret_ref
-// (только webhook), (3) резолв доставки в готовый [httpDelivery] (URL + метод +
-// тело + заголовки + опц. подпись + SSRF-opt-out-флаги). SMTP-класс (email) —
-// НЕ channelDriver (нет httpDelivery/HTTP-транспорта), живёт отдельной осью
-// ([email.go], своя ветка в [DeliveryWorker.deliver]).
+// Dual-class channel model for Herald delivery (ADR-052 amendment, architect decision).
+// HTTP-class (webhook/telegram/slack/mattermost/discord/custom):
+// each type is a [channelDriver] with three responsibilities: (1) config validation per
+// its field descriptor, (2) declare whether it uses top-level secret_ref
+// (webhook only), (3) resolve delivery into ready [httpDelivery] (URL + method +
+// body + headers + opt. signature + SSRF-opt-out-flags). SMTP-class (email) is
+// NOT a channelDriver (no httpDelivery/HTTP-transport), lives on separate axis
+// ([email.go], its own branch in [DeliveryWorker.deliver]).
 //
-// ЕДИНЫЙ SSRF-контур: driver ТОЛЬКО строит httpDelivery, а guard
-// (validateDeliveryEndpoint + guardedDeliveryClient, egress.go) и client.Do
-// зовёт сам [DeliveryWorker.deliver]. Новый HTTP-тип НЕ может обойти SSRF-guard
+// UNIFIED SSRF circuit: driver ONLY builds httpDelivery, guard
+// (validateDeliveryEndpoint + guardedDeliveryClient, egress.go) and client.Do
+// called by [DeliveryWorker.deliver]. New HTTP-type CANNOT bypass SSRF-guard
 // by construction.
 //
-// ЕДИНЫЙ источник типов: [channelDrivers] (+ HeraldEmail) — из него выводятся
-// (1) generic-валидатор config по дескриптору, (2) список типов для huma-enum,
-// (3) PG-CHECK-сверка, (4) каталог GET /v1/herald-types. Добавление HTTP-типа —
-// одна запись в [channelDrivers] (+ CHECK-миграция + huma-enum, сверяются
-// guard-тестом с [AllHeraldTypes]).
+// UNIFIED source of types: [channelDrivers] (+ HeraldEmail) — from it derived
+// (1) generic-validator of config per descriptor, (2) list of types for huma-enum,
+// (3) PG-CHECK-validation, (4) catalog GET /v1/herald-types. Adding HTTP-type is
+// one entry in [channelDrivers] (+ CHECK-migration + huma-enum, verified
+// by guard-test with [AllHeraldTypes]).
 //
-// Имена channelDriver / httpDelivery / HeraldFieldSpec / FieldKind закреплены
-// в naming-rules (ADR-052 amendment).
+// Names channelDriver / httpDelivery / HeraldFieldSpec / FieldKind are fixed
+// in naming-rules (ADR-052 amendment).
 
 import (
 	"context"
@@ -31,36 +31,36 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/vault"
 )
 
-// channelDriver — драйвер одного HTTP-класс-типа канала. validateConfig
-// проверяет config на CRUD-этапе (форма полей + доменные инварианты), не
-// читая Vault (секрет держится как vault-ref, резолвится только на доставке).
-// secretRequired — использует ли тип top-level secret_ref (HMAC signing-token);
-// true только у webhook, у прочих credential — vault-ref-поле ВНУТРИ config
-// (разводка ADR-052 amendment). resolveDelivery резолвит канал в готовый
-// httpDelivery на момент доставки (config мог измениться после create).
+// channelDriver is a driver for one HTTP-class-type channel. validateConfig
+// checks config at CRUD phase (field form + domain invariants), without
+// reading Vault (secret held as vault-ref, resolved only at delivery time).
+// secretRequired returns whether type uses top-level secret_ref (HMAC signing-token);
+// true only for webhook, for others credential is a vault-ref-field INSIDE config
+// (split ADR-052 amendment). resolveDelivery resolves channel into ready
+// httpDelivery at delivery time (config may have changed after create).
 type channelDriver interface {
-	// validateConfig — CRUD-валидация config по типу (форма + доменные инварианты).
+	// validateConfig is CRUD-validation of config per type (form + domain invariants).
 	validateConfig(config map[string]any) error
-	// secretRequired — true, если тип использует top-level secret_ref (webhook).
+	// secretRequired returns true if type uses top-level secret_ref (webhook).
 	secretRequired() bool
-	// resolveDelivery — сборка httpDelivery на момент доставки. Ошибка резолва
-	// секрета из Vault пробрасывается как есть (caller сохраняет terminal/transient
-	// классификацию: Vault-сбой transient, битый config — terminal).
+	// resolveDelivery builds httpDelivery at delivery time. Errors from secret
+	// resolution from Vault are passed through (caller preserves terminal/transient
+	// classification: Vault failure is transient, bad config is terminal).
 	resolveDelivery(ctx context.Context, h *Herald, job *DeliveryJob, kv KVReader) (*httpDelivery, error)
-	// fields — дескриптор config-полей типа (единый источник для generic-валидатора
-	// и каталога GET /v1/herald-types; каталог и валидация НЕ разъезжаются).
+	// fields returns descriptor of config-fields for type (single source for generic-validator
+	// and catalog GET /v1/herald-types; catalog and validation do NOT diverge).
 	fields() []HeraldFieldSpec
 }
 
-// httpDelivery — готовый результат резолва доставки HTTP-класса: request-заготовка
-// (url + метод + тело + заголовки) + SSRF-opt-out-флаги + опц. signing-key для
-// HMAC-подписи. [DeliveryWorker.deliver] строит *http.Request из этих полей,
-// прогоняет ЕДИНЫЙ SSRF-guard по url и опционально подписывает тело.
+// httpDelivery is the result of resolved HTTP-class delivery: request template
+// (url + method + body + headers) + SSRF-opt-out-flags + opt. signing-key for
+// HMAC-signature. [DeliveryWorker.deliver] builds *http.Request from these fields,
+// runs UNIFIED SSRF-guard on url and optionally signs the body.
 //
-// httpAllowed/allowPrivate — per-Herald opt-out (webhook — из config; фиксированные
-// публичные endpoint-ы telegram/slack/… — оба false). signingKey nil → подпись не
-// ставится (только webhook с secret_ref). method пуст → POST; contentType пуст →
-// application/json (нормализует deliver()).
+// httpAllowed/allowPrivate are per-Herald opt-out (webhook from config; fixed
+// public endpoints telegram/slack/… have both false). signingKey nil means no
+// signature (webhook only with secret_ref). method empty defaults to POST; contentType empty defaults to
+// application/json (normalized by deliver()).
 type httpDelivery struct {
 	url          string
 	method       string
@@ -72,10 +72,10 @@ type httpDelivery struct {
 	signingKey   []byte
 }
 
-// channelDrivers — канонический реестр драйверов HTTP-класса, ЕДИНЫЙ источник
-// HTTP-типов. email — НЕ здесь (SMTP-класс, отдельная ось). Новый HTTP-тип
-// добавляется ОДНОЙ записью сюда (+ CHECK-миграция + huma-enum, оба сверяются
-// guard-тестом с AllHeraldTypes).
+// channelDrivers is the canonical registry of HTTP-class drivers, SINGLE source
+// of HTTP types. email is NOT here (SMTP-class, separate axis). New HTTP type
+// is added with ONE entry here (+ CHECK-migration + huma-enum, both verified
+// by guard-test with AllHeraldTypes).
 var channelDrivers = map[HeraldType]channelDriver{
 	HeraldWebhook:    webhookChannel{},
 	HeraldTelegram:   telegramChannel{},
@@ -85,18 +85,18 @@ var channelDrivers = map[HeraldType]channelDriver{
 	HeraldCustom:     customChannel{},
 }
 
-// driverFor возвращает драйвер HTTP-класса для типа. ok=false — тип не
-// HTTP-класса (email) или неизвестен. caller ([DeliveryWorker.deliver]) для
-// email идёт своей SMTP-веткой ДО driverFor; для неизвестного — terminal-fail.
+// driverFor returns the HTTP-class driver for a type. ok=false means type is not
+// HTTP-class (email) or unknown. Caller ([DeliveryWorker.deliver]) for email
+// takes its own SMTP branch before driverFor; for unknown — terminal-fail.
 func driverFor(t HeraldType) (channelDriver, bool) {
 	d, ok := channelDrivers[t]
 	return d, ok
 }
 
-// resolveDelivery диспетчеризует резолв доставки HTTP-класса по типу канала.
-// Единая точка входа для [DeliveryWorker.deliver] (HTTP-ветка). Неизвестный /
-// не-HTTP-тип → terminal-no-retry (доставлять нечем). Email сюда не попадает
-// (deliver отводит его в SMTP-ветку раньше).
+// resolveDelivery dispatches HTTP-class delivery resolution by channel type.
+// Single entry point for [DeliveryWorker.deliver] (HTTP branch). Unknown /
+// non-HTTP type → terminal-no-retry (nothing to deliver). Email does not reach
+// here (deliver routes it to SMTP branch first).
 func resolveDelivery(ctx context.Context, h *Herald, job *DeliveryJob, kv KVReader) (*httpDelivery, error) {
 	d, ok := driverFor(h.Type)
 	if !ok {
@@ -105,13 +105,13 @@ func resolveDelivery(ctx context.Context, h *Herald, job *DeliveryJob, kv KVRead
 	return d.resolveDelivery(ctx, h, job, kv)
 }
 
-// --- дескриптор config-полей (единый источник валидации + каталога) ----------
+// --- config field descriptor (unified source of validation + catalog) ----------
 
-// FieldKind — вид значения config-поля для generic-валидатора и каталога
-// (имя на подтверждении). string/int/bool/enum — скаляры; map/list —
-// контейнеры; url — строка-URL (SSRF-guard живёт в доставке, здесь — «строка»);
-// list_string — список строк (email to); vault_ref — строка-vault-ref
-// (значение обязано парситься vault.ParseRef, секрет в PG cleartext не хранится).
+// FieldKind is the kind of config field value for generic validator and catalog
+// (name under confirmation). string/int/bool/enum are scalars; map/list are
+// containers; url is URL string (SSRF guard lives in delivery, here — "string");
+// list_string is list of strings (email to); vault_ref is vault-ref string
+// (value must parse via vault.ParseRef, secret is not stored cleartext in PG).
 type FieldKind string
 
 const (
@@ -126,11 +126,11 @@ const (
 	KindVaultRef   FieldKind = "vault_ref"
 )
 
-// HeraldFieldSpec — описание одного config-поля типа (имя на подтверждении).
-// Secret=true ⟹ поле держит vault-ref (Kind обязан быть KindVaultRef; секрет
-// в config, не в top-level secret_ref — разводка ADR-052 amendment). EnumValues
-// заполняется только для Kind==KindEnum (допустимый набор строк; пустой элемент
-// "" в наборе = «поле опущено/plain» разрешён).
+// HeraldFieldSpec describes one config field of a type (name under confirmation).
+// Secret=true ⟹ field holds vault-ref (Kind must be KindVaultRef; secret
+// in config, not in top-level secret_ref — ADR-052 amendment routing). EnumValues
+// filled only for Kind==KindEnum (allowed set of strings; empty element
+// "" in set = "field omitted/plain" is allowed).
 type HeraldFieldSpec struct {
 	Name       string
 	Label      string
@@ -140,10 +140,10 @@ type HeraldFieldSpec struct {
 	EnumValues []string
 }
 
-// validateBySpec — generic-обход дескриптора полей: required-присутствие + kind-
-// соответствие + secret-поле → валидный vault-ref. Неизвестные ключи config НЕ
-// отвергаются (forward-compat: JSONB мог прийти из более новой версии; huma-
-// уровень режет unknown-поля на wire, domain остаётся терпимым).
+// validateBySpec is a generic traversal of field descriptors: required-presence +
+// kind-match + secret-field → valid vault-ref. Unknown config keys are NOT
+// rejected (forward-compat: JSONB may come from newer version; huma-level
+// strips unknown fields on wire, domain remains tolerant).
 func validateBySpec(t HeraldType, fields []HeraldFieldSpec, config map[string]any) error {
 	for _, f := range fields {
 		raw, present := config[f.Name]
@@ -160,10 +160,10 @@ func validateBySpec(t HeraldType, fields []HeraldFieldSpec, config map[string]an
 	return nil
 }
 
-// checkFieldKind проверяет одно присутствующее поле по его Kind. Пустая строка в
-// required-поле трактуется как отсутствие значения (required нарушен). Для
-// vault_ref дополнительно проверяется vault.ParseRef (секрет-поле обязано быть
-// vault-ref, не plaintext).
+// checkFieldKind checks one present field by its Kind. Empty string in
+// required field is treated as missing (required violated). For
+// vault_ref, additionally checks vault.ParseRef (secret-field must be
+// vault-ref, not plaintext).
 func checkFieldKind(t HeraldType, f HeraldFieldSpec, raw any) error {
 	switch f.Kind {
 	case KindString, KindURL:
@@ -221,8 +221,8 @@ func checkFieldKind(t HeraldType, f HeraldFieldSpec, raw any) error {
 	return nil
 }
 
-// isJSONInt — JSON-число (float64 из decode, либо native int/int64). Целостность
-// не проверяем строго (порты валидируются доменным хуком email отдельно).
+// isJSONInt is JSON number (float64 from decode, or native int/int64). We don't
+// strictly check integrity (ports are validated by domain hook for email separately).
 func isJSONInt(raw any) bool {
 	switch raw.(type) {
 	case float64, int, int64:
@@ -241,10 +241,10 @@ func containsString(xs []string, s string) bool {
 	return false
 }
 
-// AllHeraldTypes — отсортированный список ВСЕХ известных типов канала (HTTP-класс
-// из channelDrivers + email). ЕДИНЫЙ источник для huma-enum-сверки, PG-CHECK-
-// сверки и каталога; guard-тест ловит расхождение мест. Сортировка детерминирует
-// enum-строку.
+// AllHeraldTypes returns sorted list of ALL known channel types (HTTP-class
+// from channelDrivers + email). SINGLE source for huma-enum verification, PG-CHECK
+// verification and catalog; guard-test catches divergence. Sorting determines
+// enum string.
 func AllHeraldTypes() []HeraldType {
 	out := make([]HeraldType, 0, len(channelDrivers)+1)
 	for t := range channelDrivers {
@@ -255,9 +255,9 @@ func AllHeraldTypes() []HeraldType {
 	return out
 }
 
-// fieldsFor возвращает дескриптор config-полей типа для каталога GET /v1/herald-
-// types. HTTP-класс берёт из драйвера; email — из [emailFields] (SMTP-ось вне
-// channelDrivers). ok=false — неизвестный тип.
+// fieldsFor returns config field descriptor for a type for catalog GET /v1/herald-
+// types. HTTP-class takes from driver; email from [emailFields] (SMTP axis outside
+// channelDrivers). ok=false means unknown type.
 func fieldsFor(t HeraldType) ([]HeraldFieldSpec, bool) {
 	if d, ok := channelDrivers[t]; ok {
 		return d.fields(), true
@@ -268,24 +268,24 @@ func fieldsFor(t HeraldType) ([]HeraldFieldSpec, bool) {
 	return nil, false
 }
 
-// HeraldTypeDescriptor — публичный дескриптор одного типа канала для каталог-
-// эндпоинта GET /v1/herald-types: тип + его config-поля + признак top-level
-// secret_ref. ЕДИНЫЙ источник с валидацией (те же [HeraldFieldSpec], что
-// валидирует CRUD; SecretRequired — тот же [channelDriver.secretRequired], что
-// сверяет [ValidateSecretRef]) — каталог и валидация не разъезжаются.
-// SecretRequired=true ⟹ у типа есть top-level secret_ref (HMAC signing-token,
-// только webhook); UI показывает поле secret_ref по этому признаку, не по
-// хардкоду типа.
+// HeraldTypeDescriptor is public descriptor of one channel type for catalog
+// endpoint GET /v1/herald-types: type + its config fields + top-level
+// secret_ref indicator. SINGLE source with validation (same [HeraldFieldSpec]
+// that CRUD validates; SecretRequired is same [channelDriver.secretRequired]
+// that [ValidateSecretRef] checks) — catalog and validation don't diverge.
+// SecretRequired=true ⟹ type has top-level secret_ref (HMAC signing-token,
+// webhook only); UI shows secret_ref field by this indicator, not by type
+// hardcode.
 type HeraldTypeDescriptor struct {
 	Type           HeraldType
 	Fields         []HeraldFieldSpec
 	SecretRequired bool
 }
 
-// TypeCatalog собирает дескрипторы ВСЕХ известных типов канала (отсортированы как
-// [AllHeraldTypes]) для каталог-эндпоинта. Источник полей — драйверы (HTTP-класс)
-// и [emailFields] (SMTP); тот же набор, что валидирует CRUD. SecretRequired берётся
-// из драйвера (email — не channelDriver, top-level secret_ref не использует → false).
+// TypeCatalog collects descriptors of ALL known channel types (sorted as
+// [AllHeraldTypes]) for catalog endpoint. Field source is drivers (HTTP-class)
+// and [emailFields] (SMTP); same set that CRUD validates. SecretRequired taken
+// from driver (email is not channelDriver, doesn't use top-level secret_ref → false).
 func TypeCatalog() []HeraldTypeDescriptor {
 	types := AllHeraldTypes()
 	out := make([]HeraldTypeDescriptor, 0, len(types))

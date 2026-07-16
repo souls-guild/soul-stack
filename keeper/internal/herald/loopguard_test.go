@@ -7,7 +7,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// TestIsHeraldOwnEvent — классификатор собственных терминалов доставки.
+// TestIsHeraldOwnEvent classifies own delivery terminals.
 func TestIsHeraldOwnEvent(t *testing.T) {
 	cases := []struct {
 		et   audit.EventType
@@ -27,11 +27,11 @@ func TestIsHeraldOwnEvent(t *testing.T) {
 	}
 }
 
-// TestDispatch_HeraldOwnEvents_NoLoop — guard-тест на петлю: терминалы доставки
-// (`herald.delivered`/`herald.failed`) сами идут через audit-writer → tap →
-// Dispatch. Даже при правиле, матчащем их, dispatcher обязан отсечь их ДО матча,
-// иначе уведомление об уведомлении зациклится. Конструируем «дырявое» правило с
-// herald.*-scope (недопустим на CRUD) и проверяем: ни одного job-а на herald.*.
+// TestDispatch_HeraldOwnEvents_NoLoop guard test against loop: delivery terminals
+// (`herald.delivered`/`herald.failed`) go through audit-writer → tap → Dispatch themselves.
+// Even with rule matching them, dispatcher must filter them before match, else
+// notification about notification loops. Construct "leaky" rule with herald.*-scope
+// (invalid on CRUD) and verify: no jobs on herald.*.
 func TestDispatch_HeraldOwnEvents_NoLoop(t *testing.T) {
 	q := &fakeQueue{}
 	rule := &Tiding{Name: "evil-loop", Herald: "ch", EventTypes: []string{"herald.*"}, Enabled: true}
@@ -46,8 +46,8 @@ func TestDispatch_HeraldOwnEvents_NoLoop(t *testing.T) {
 	}
 }
 
-// TestDispatch_RunEvent_StillMatches — контроль: loop-guard НЕ глушит обычные
-// run-события (регресс-страховка, что guard не слишком широк).
+// TestDispatch_RunEvent_StillMatches control: loop-guard does not mute normal
+// run events (regression safety: guard is not too broad).
 func TestDispatch_RunEvent_StillMatches(t *testing.T) {
 	q := &fakeQueue{}
 	rule := &Tiding{Name: "ok", Herald: "ch", EventTypes: []string{"scenario_run.*"}, Enabled: true}

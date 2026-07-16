@@ -1,12 +1,12 @@
 package herald
 
-// Dual-mode приём секрета Herald (ADR-064, NIM-11). Оператор передаёт секрет
-// значением (plaintext) вместо vault-ref: top-level webhook signing-secret
-// (Secret XOR SecretRef) и config-поля канала (<base> XOR <base>_ref для каждого
-// Secret-поля дескриптора типа — telegram bot_token, slack/discord webhook_url,
-// custom header_secret). Keeper пишет plaintext в Vault по детерминированному
-// пути secret/herald/<name>/<field> и заменяет на внутренний ref; plaintext в
-// PG/логи/audit/View НЕ попадает.
+// Dual-mode ingestion of Herald secret (ADR-064, NIM-11). Operator passes secret
+// by value (plaintext) instead of vault-ref: top-level webhook signing-secret
+// (Secret XOR SecretRef) and channel config fields (<base> XOR <base>_ref for each
+// Secret field of type descriptor — telegram bot_token, slack/discord webhook_url,
+// custom header_secret). Keeper writes plaintext to Vault at deterministic
+// path secret/herald/<name>/<field> and replaces with internal ref; plaintext does NOT
+// go to PG/logs/audit/View.
 
 import (
 	"context"
@@ -17,33 +17,33 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/secretwrite"
 )
 
-// SecretWriter — узкая поверхность материализации plaintext-секрета в Vault
-// (реализуется *secretwrite.Writer). nil → dual-mode plaintext недоступен.
+// SecretWriter is narrow surface for materializing plaintext secret to Vault
+// (implemented by *secretwrite.Writer). nil → dual-mode plaintext unavailable.
 type SecretWriter interface {
 	WriteString(ctx context.Context, domain, entity, field, value string) (string, error)
 }
 
-// ErrPlaintextDisabled — оператор передал plaintext-секрет, но приём выключен
-// (ADR-064 митигация a: требуется TLS-фронт Operator API/MCP + secret_ingest.
-// accept_plaintext). Заворачивается в [ErrValidation] → 422.
+// ErrPlaintextDisabled is returned when operator passes plaintext secret but ingestion
+// is disabled (ADR-064 mitigation a: requires TLS-front Operator API/MCP + secret_ingest.
+// accept_plaintext). Wrapped in [ErrValidation] → 422.
 var ErrPlaintextDisabled = errors.New("plaintext secret ingestion disabled (enable secret_ingest.accept_plaintext on a TLS-fronted Operator API, or provide a *_ref)")
 
-// materializeHeraldSecrets переводит plaintext-секреты Herald-записи в Vault по
-// детерминированному пути secret/herald/<name>/<field>, заменяя их внутренним
-// vault-ref (ADR-064). Обрабатывает top-level Secret и config-поля <base> для
-// каждого Secret-поля <base>_ref типа канала. plaintext после записи стирается
-// из h (в PG/audit/View не попадает). XOR-инвариант: ровно один из value/ref на
-// каждое секрет-поле.
+// materializeHeraldSecrets converts Herald record plaintext secrets to Vault at
+// deterministic path secret/herald/<name>/<field>, replacing with internal
+// vault-ref (ADR-064). Processes top-level Secret and config fields <base> for
+// each Secret field <base>_ref of channel type. plaintext erased from h after
+// write (doesn't go to PG/audit/View). XOR invariant: exactly one of value/ref for
+// each secret field.
 //
-// Вызывается Service-ом ДО Insert/Update. plaintext + accept=false (или w=nil)
-// → [ErrPlaintextDisabled]. Ошибки не несут значения секрета.
+// Called by Service before Insert/Update. plaintext + accept=false (or w=nil)
+// → [ErrPlaintextDisabled]. Errors don't carry secret value.
 func materializeHeraldSecrets(ctx context.Context, w SecretWriter, accept bool, h *Herald) error {
 	if h == nil {
 		return fmt.Errorf("herald: nil herald")
 	}
-	// entity=<name> обязан быть безопасным сегментом пути ДО записи в Vault
-	// (materializeField пишет secret/herald/<name>/…). Формат имени тут же
-	// проверит validateHerald при Insert, но для write-path нужна проверка ДО.
+	// entity=<name> must be safe path segment before Vault write
+	// (materializeField writes secret/herald/<name>/…). Name format checked
+	// here before write; validateHerald at Insert will check again, but write-path needs it first.
 	if !ValidName(h.Name) {
 		return wrapValidation(fmt.Errorf("invalid name %q (must match %s)", h.Name, NamePattern))
 	}
@@ -57,10 +57,10 @@ func materializeHeraldSecrets(ctx context.Context, w SecretWriter, accept bool, 
 	if err != nil {
 		return err
 	}
-	h.Secret = nil // plaintext стёрт
+	h.Secret = nil // plaintext erased
 	wrote = wrote || did
 
-	// --- config-поля канала (<base> XOR <base>_ref для каждого Secret-поля) ---
+	// --- config fields of channel (<base> XOR <base>_ref for each Secret-field) ---
 	fields, ok := fieldsFor(h.Type)
 	if ok {
 		for _, f := range fields {
@@ -69,7 +69,7 @@ func materializeHeraldSecrets(ctx context.Context, w SecretWriter, accept bool, 
 			}
 			base := strings.TrimSuffix(f.Name, "_ref") // bot_token_ref → bot_token
 			if base == f.Name {
-				continue // не *_ref-поле (защита; все Secret-поля дескриптора — *_ref)
+				continue // not *_ref field (guard; all Secret fields of descriptor are *_ref)
 			}
 			plainVal, _ := h.Config[base].(string)
 			refVal, _ := h.Config[f.Name].(string)
@@ -80,7 +80,7 @@ func materializeHeraldSecrets(ctx context.Context, w SecretWriter, accept bool, 
 			if err != nil {
 				return err
 			}
-			delete(h.Config, base) // plaintext стёрт из config (даже junk-значение)
+			delete(h.Config, base) // plaintext erased from config (even junk value)
 			wrote = wrote || did
 		}
 	}
@@ -89,11 +89,11 @@ func materializeHeraldSecrets(ctx context.Context, w SecretWriter, accept bool, 
 	return nil
 }
 
-// materializeField обрабатывает одно секрет-поле: value(plaintext) XOR ref.
-// Задан value → пишет в Vault (secret/herald/<entity>/<field>) и вызывает
-// setRef(ref); возвращает did=true. Пусто/только ref — no-op (существующее
-// поведение). Оба заданы → [ErrValidation]. plaintext + !accept (или w=nil) →
-// [ErrPlaintextDisabled]. Значение секрета в ошибку не попадает.
+// materializeField processes one secret field: value(plaintext) XOR ref.
+// value set → writes to Vault (secret/herald/<entity>/<field>) and calls
+// setRef(ref); returns did=true. Empty/ref only → no-op (existing behavior). Both set
+// → [ErrValidation]. plaintext + !accept (or w=nil) → [ErrPlaintextDisabled].
+// Secret value doesn't leak to error.
 func materializeField(ctx context.Context, w SecretWriter, accept bool, entity, field, value, ref string, setRef func(string)) (bool, error) {
 	hasValue := value != ""
 	hasRef := ref != ""
@@ -108,14 +108,14 @@ func materializeField(ctx context.Context, w SecretWriter, accept bool, entity, 
 	}
 	newRef, err := w.WriteString(ctx, secretwrite.DomainHerald, entity, field, value)
 	if err != nil {
-		// err от secretwrite не несёт значения секрета.
+		// err from secretwrite doesn't carry secret value.
 		return false, fmt.Errorf("herald: materialize %s secret: %w", field, err)
 	}
 	setRef(newRef)
 	return true, nil
 }
 
-// ptrStr разыменовывает *string в "" при nil.
+// ptrStr dereferences *string to "" if nil.
 func ptrStr(p *string) string {
 	if p == nil {
 		return ""

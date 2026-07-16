@@ -6,33 +6,33 @@ import (
 	"github.com/souls-guild/soul-stack/shared/obs"
 )
 
-// DispatcherMetrics — Prometheus-collector-ы notification-dispatcher-а и tap-а
-// (ADR-052(c)). Регистрируется поверх компонент-агностичного [obs.Registry]
-// тем же паттерном, что [scenario.RegisterScenarioMetrics] (ADR-024 §4.0).
+// DispatcherMetrics are Prometheus collectors for notification dispatcher and tap
+// (ADR-052(c)). Registered over component-agnostic [obs.Registry]
+// with same pattern as [scenario.RegisterScenarioMetrics] (ADR-024 §4.0).
 //
-// Наблюдаемость S2-точки: сколько событий обработано/сматчено, сколько
-// дропнуто из-за полного буфера tap-а (сигнал «consumer не успевает»),
-// сколько ошибок матча/постановки.
+// Observability of S2 point: how many events processed/matched, how many
+// dropped due to full tap buffer (signal "consumer can't keep up"),
+// how many match/enqueue errors.
 type DispatcherMetrics struct {
-	// keeper_herald_tap_dropped_total — событий дропнуто tap-ом из-за полного
-	// буфера (drop-counter, ADR-052(c) «неблокирующая передача в bounded-
-	// буфер»). Рост → consumer/PG-кэш правил не успевает за write-path-ом.
+	// keeper_herald_tap_dropped_total is events dropped by tap due to full
+	// buffer (drop-counter, ADR-052(c) "non-blocking transfer to bounded
+	// buffer"). Growth → consumer/PG rule cache can't keep up with write-path.
 	tapDropped prometheus.Counter
-	// keeper_herald_dispatch_total — событий обработано dispatcher-ом,
-	// разрезано по факту матча (matched/unmatched). Без cardinality по
-	// event_type — держим низкую размерность.
+	// keeper_herald_dispatch_total is events processed by dispatcher,
+	// sliced by match result (matched/unmatched). No cardinality by
+	// event_type — keep low dimensionality.
 	dispatchTotal *prometheus.CounterVec
-	// keeper_herald_matches_total — сматченных (event×Tiding) пар суммарно
-	// (одно событие может сматчить несколько правил → несколько jobs).
+	// keeper_herald_matches_total is matched (event×Tiding) pairs total
+	// (one event can match multiple rules → multiple jobs).
 	matchesTotal prometheus.Counter
-	// keeper_herald_dispatch_errors_total — ошибок загрузки правил / постановки
-	// job-а в очередь (best-effort, не валят write-path).
+	// keeper_herald_dispatch_errors_total is errors loading rules / enqueuing
+	// job (best-effort, doesn't kill write-path).
 	errorsTotal prometheus.Counter
 }
 
-// RegisterDispatcherMetrics создаёт herald-dispatcher-collector-ы и
-// регистрирует их в [obs.Registry]. MustRegister: дубликат-регистрация —
-// programmer error (паттерн RegisterScenarioMetrics).
+// RegisterDispatcherMetrics creates herald-dispatcher collectors and
+// registers them in [obs.Registry]. MustRegister: duplicate registration is
+// programmer error (pattern RegisterScenarioMetrics).
 func RegisterDispatcherMetrics(reg *obs.Registry) *DispatcherMetrics {
 	m := &DispatcherMetrics{
 		tapDropped: prometheus.NewCounter(prometheus.CounterOpts{
@@ -56,8 +56,8 @@ func RegisterDispatcherMetrics(reg *obs.Registry) *DispatcherMetrics {
 	return m
 }
 
-// observeDrop инкрементирует drop-счётчик. nil-receiver → no-op (tap может
-// подниматься без observability — unit-тесты).
+// observeDrop increments drop counter. nil-receiver → no-op (tap can
+// start without observability — unit-tests).
 func (m *DispatcherMetrics) observeDrop() {
 	if m == nil {
 		return
@@ -65,8 +65,8 @@ func (m *DispatcherMetrics) observeDrop() {
 	m.tapDropped.Inc()
 }
 
-// observeDispatch фиксирует обработку одного события: matched-bucket при
-// matched>0, иначе unmatched; плюс число сматченных правил в matchesTotal.
+// observeDispatch records processing of one event: matched-bucket if
+// matched>0, else unmatched; plus number of matched rules to matchesTotal.
 func (m *DispatcherMetrics) observeDispatch(matched int) {
 	if m == nil {
 		return
@@ -79,7 +79,7 @@ func (m *DispatcherMetrics) observeDispatch(matched int) {
 	}
 }
 
-// observeError инкрементирует счётчик ошибок dispatch-а.
+// observeError increments dispatch error counter.
 func (m *DispatcherMetrics) observeError() {
 	if m == nil {
 		return
@@ -87,28 +87,28 @@ func (m *DispatcherMetrics) observeError() {
 	m.errorsTotal.Inc()
 }
 
-// DeliveryMetrics — Prometheus-collector-ы claim-queue worker-а доставки
-// (ADR-052(d), S3). Наблюдаемость: сколько попыток/успехов/провалов/retry.
+// DeliveryMetrics are Prometheus collectors for delivery claim-queue worker
+// (ADR-052(d), S3). Observability: how many attempts/successes/failures/retries.
 //
-// Кардинальность: лейбл `herald` — имя канала из реестра `heralds`. Реестр
-// оператор-управляемый и мал (единицы–десятки каналов), это НЕ unbounded
-// user-input (в отличие от `event_type`, которого нет в лейблах). 4 серии ×
-// число каналов — контролируемо. Если число каналов когда-нибудь станет
-// большим, лейбл можно будет снять без смены имён метрик.
+// Cardinality: label `herald` is channel name from `heralds` registry. Registry
+// is operator-managed and small (units–tens of channels), NOT unbounded
+// user-input (unlike `event_type` which isn't in labels). 4 series ×
+// number of channels is manageable. If channel count ever grows large,
+// label can be removed without changing metric names.
 type DeliveryMetrics struct {
-	// keeper_herald_delivery_attempts_total — попыток доставки (каждый claim+POST).
+	// keeper_herald_delivery_attempts_total is delivery attempts (each claim+POST).
 	attempts *prometheus.CounterVec
-	// keeper_herald_delivery_succeeded_total — успешных терминалов (2xx).
+	// keeper_herald_delivery_succeeded_total is successful terminals (2xx).
 	succeeded *prometheus.CounterVec
-	// keeper_herald_delivery_failed_total — терминальных провалов (исчерпан retry
-	// / no-retry-ошибка).
+	// keeper_herald_delivery_failed_total is terminal failures (retry exhausted
+	// / no-retry error).
 	failed *prometheus.CounterVec
-	// keeper_herald_delivery_retries_total — перепостановок на повтор (backoff).
+	// keeper_herald_delivery_retries_total is requeues for retry (backoff).
 	retries *prometheus.CounterVec
 }
 
-// RegisterDeliveryMetrics создаёт delivery-collector-ы и регистрирует их в
-// [obs.Registry]. MustRegister: дубликат — programmer error (паттерн
+// RegisterDeliveryMetrics creates delivery collectors and registers them in
+// [obs.Registry]. MustRegister: duplicate is programmer error (pattern
 // RegisterDispatcherMetrics).
 func RegisterDeliveryMetrics(reg *obs.Registry) *DeliveryMetrics {
 	m := &DeliveryMetrics{

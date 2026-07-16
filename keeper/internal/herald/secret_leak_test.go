@@ -1,8 +1,8 @@
 package herald
 
-// Guard-leak тесты dual-mode приёма секрета (ADR-064 митигация b, NIM-11):
-// plaintext-секрет НЕ утекает ни в один sink (PG-args / возвращаемый View /
-// текст ошибки), пишется ТОЛЬКО в Vault; XOR/disabled отвергаются.
+// Guard-leak tests dual-mode secret handling (ADR-064 mitigation b, NIM-11):
+// plaintext secret must not leak into any sink (PG args / returned View /
+// error text), written only to Vault; XOR/disabled modes are rejected.
 
 import (
 	"context"
@@ -22,7 +22,7 @@ const (
 	leakToken   = "PLAINTEXT-BOT-TOKEN-7c2b1d"
 )
 
-// capturingVault — SecretWriter-фейк: запоминает записанные plaintext-значения.
+// capturingVault mock SecretWriter that records plaintext values written.
 type capturingVault struct {
 	writes []string
 	fail   bool
@@ -36,8 +36,8 @@ func (c *capturingVault) WriteString(_ context.Context, domain, entity, field, v
 	return "vault:secret/" + domain + "/" + entity + "/" + field + "#" + field, nil
 }
 
-// capturingPool — ExecQueryRower-фейк: запоминает args INSERT/UPDATE, отдаёт
-// scannable-row для created_at/updated_at.
+// capturingPool mock ExecQueryRower that records INSERT/UPDATE args and
+// returns scannable rows for created_at/updated_at.
 type capturingPool struct {
 	queryArgs [][]any
 	execArgs  [][]any
@@ -57,7 +57,7 @@ func (p *capturingPool) Query(_ context.Context, _ string, _ ...any) (pgx.Rows, 
 	return nil, errors.New("herald secret_leak_test: Query not stubbed")
 }
 
-// tsRow сканит любые *time.Time (created_at/updated_at) успешно.
+// tsRow successfully scans any *time.Time (created_at/updated_at).
 type tsRow struct{}
 
 func (tsRow) Scan(dst ...any) error {
@@ -69,9 +69,9 @@ func (tsRow) Scan(dst ...any) error {
 	return nil
 }
 
-// argsBlob стрингифицирует все PG-args в один blob для leak-проверки. []byte
-// (configBytes — marshaled JSONB) декодируется в строку: иначе `%v` печатает
-// байты-числа и substring-скан пропустил бы plaintext в config.
+// argsBlob stringifies all PG args into a single blob for leak checking.
+// []byte (configBytes = marshaled JSONB) is decoded as string; otherwise %v
+// prints byte numbers and substring scan would miss plaintext in config.
 func argsBlob(rows [][]any) string {
 	var b string
 	for _, r := range rows {
@@ -86,8 +86,8 @@ func argsBlob(rows [][]any) string {
 	return b
 }
 
-// assertNoLeak — plaintext НЕ присутствует ни в PG-args, ни в JSON возвращаемого
-// Herald-а (source для View/wire).
+// assertNoLeak verifies plaintext is absent from both PG args and JSON
+// returned by Herald (source for View/wire).
 func assertNoLeak(t *testing.T, plaintext string, pool *capturingPool, h *Herald) {
 	t.Helper()
 	blob := argsBlob(pool.queryArgs) + argsBlob(pool.execArgs)
@@ -109,8 +109,8 @@ func newLeakService(t *testing.T, vault SecretWriter, pool *capturingPool, accep
 	return svc
 }
 
-// TestWebhookSecretNoLeak — top-level webhook signing-secret (plaintext) → Vault,
-// в PG только ref, plaintext нигде не персистится.
+// TestWebhookSecretNoLeak verifies top-level webhook signing secret (plaintext)
+// goes to Vault only; PG stores only ref, plaintext persists nowhere.
 func TestWebhookSecretNoLeak(t *testing.T) {
 	vault := &capturingVault{}
 	pool := &capturingPool{}
@@ -127,17 +127,17 @@ func TestWebhookSecretNoLeak(t *testing.T) {
 		t.Fatalf("CreateHerald: %v", err)
 	}
 
-	// plaintext записан в Vault.
+	// Plaintext written to Vault.
 	if len(vault.writes) != 1 || vault.writes[0] != leakSigning {
 		t.Fatalf("vault writes=%v, want [%q]", vault.writes, leakSigning)
 	}
-	// В PG secret_ref = vault:… , НЕ plaintext.
+	// PG secret_ref = vault:…, not plaintext.
 	if created.SecretRef == nil || *created.SecretRef == leakSigning {
-		t.Fatalf("secret_ref=%v — должен быть vault-ref", created.SecretRef)
+		t.Fatalf("secret_ref=%v — must be vault-ref", created.SecretRef)
 	}
-	// Secret-поле стёрто, маркер записи взведён.
+	// Secret field cleared, write marker set.
 	if created.Secret != nil {
-		t.Fatal("Secret plaintext не стёрт после материализации")
+		t.Fatal("Secret plaintext not cleared after materialization")
 	}
 	if !created.SecretWritten {
 		t.Fatal("SecretWritten не взведён")
@@ -145,8 +145,8 @@ func TestWebhookSecretNoLeak(t *testing.T) {
 	assertNoLeak(t, leakSigning, pool, created)
 }
 
-// TestChannelTokenNoLeak — config-секрет канала (telegram bot_token plaintext) →
-// Vault, config[bot_token_ref]=ref, config[bot_token] удалён.
+// TestChannelTokenNoLeak verifies channel config secret (telegram bot_token plaintext)
+// goes to Vault; config[bot_token_ref]=ref, config[bot_token] is removed.
 func TestChannelTokenNoLeak(t *testing.T) {
 	vault := &capturingVault{}
 	pool := &capturingPool{}
@@ -168,9 +168,9 @@ func TestChannelTokenNoLeak(t *testing.T) {
 	if len(vault.writes) != 1 || vault.writes[0] != leakToken {
 		t.Fatalf("vault writes=%v, want [%q]", vault.writes, leakToken)
 	}
-	// plaintext-поле удалено, ref-поле проставлено.
+	// Plaintext field removed, ref field set.
 	if _, ok := created.Config["bot_token"]; ok {
-		t.Fatal("config[bot_token] plaintext не удалён")
+		t.Fatal("config[bot_token] plaintext not removed")
 	}
 	ref, ok := created.Config["bot_token_ref"].(string)
 	if !ok || ref == leakToken {
@@ -182,10 +182,10 @@ func TestChannelTokenNoLeak(t *testing.T) {
 	assertNoLeak(t, leakToken, pool, created)
 }
 
-// TestSlackWebhookURLNoLeak — config-секрет `webhook_url` (slack) plaintext → Vault.
-// ★Особый кейс: `webhook_url` НЕ содержит sensitive-фрагмента → MaskSecrets по
-// имени ключа его НЕ маскирует, поэтому удаление из config (materialize) —
-// ЕДИНСТВЕННАЯ защита. Проверяем, что plaintext не остаётся в config/PG/View.
+// TestSlackWebhookURLNoLeak verifies config secret `webhook_url` (slack plaintext)
+// goes to Vault. Note: `webhook_url` lacks a sensitive fragment, so MaskSecrets
+// does not mask it by key name — removal from config (materialize) is the only
+// protection. Verifies plaintext does not remain in config/PG/View.
 func TestSlackWebhookURLNoLeak(t *testing.T) {
 	vault := &capturingVault{}
 	pool := &capturingPool{}
@@ -205,7 +205,7 @@ func TestSlackWebhookURLNoLeak(t *testing.T) {
 		t.Fatalf("vault writes=%v, want [%q]", vault.writes, leakURL)
 	}
 	if _, ok := created.Config["webhook_url"]; ok {
-		t.Fatal("config[webhook_url] plaintext не удалён (masking его не ловит!)")
+		t.Fatal("config[webhook_url] plaintext not removed (masking does not catch it!)")
 	}
 	if ref, _ := created.Config["webhook_url_ref"].(string); ref == "" || ref == leakURL {
 		t.Fatalf("config[webhook_url_ref]=%v — должен быть vault-ref", created.Config["webhook_url_ref"])
@@ -213,7 +213,7 @@ func TestSlackWebhookURLNoLeak(t *testing.T) {
 	assertNoLeak(t, leakURL, pool, created)
 }
 
-// TestUpdateMaterializesSecret — update-путь тоже материализует plaintext (idempotent-write).
+// TestUpdateMaterializesSecret verifies update path also materializes plaintext (idempotent-write).
 func TestUpdateMaterializesSecret(t *testing.T) {
 	vault := &capturingVault{}
 	pool := &capturingPool{}
@@ -230,15 +230,15 @@ func TestUpdateMaterializesSecret(t *testing.T) {
 		t.Fatalf("UpdateHerald: %v", err)
 	}
 	if len(vault.writes) != 1 || vault.writes[0] != leakSigning {
-		t.Fatalf("update не записал plaintext в Vault: %v", vault.writes)
+		t.Fatalf("update did not write plaintext to Vault: %v", vault.writes)
 	}
 	if !updated.SecretWritten {
-		t.Fatal("SecretWritten не переживает re-read на update")
+		t.Fatal("SecretWritten does not survive re-read on update")
 	}
 	assertNoLeak(t, leakSigning, pool, updated)
 }
 
-// TestSecretRefModeUnchanged — ref-режим (существующее поведение) без записи в Vault.
+// TestSecretRefModeUnchanged verifies ref-mode (existing behavior) without Vault write.
 func TestSecretRefModeUnchanged(t *testing.T) {
 	vault := &capturingVault{}
 	pool := &capturingPool{}
@@ -255,15 +255,15 @@ func TestSecretRefModeUnchanged(t *testing.T) {
 		t.Fatalf("CreateHerald: %v", err)
 	}
 	if len(vault.writes) != 0 {
-		t.Fatalf("ref-режим не должен писать в Vault, writes=%v", vault.writes)
+		t.Fatalf("ref-mode must not write to Vault, writes=%v", vault.writes)
 	}
 	if created.SecretWritten {
-		t.Fatal("SecretWritten не должен быть взведён в ref-режиме")
+		t.Fatal("SecretWritten must not be set in ref-mode")
 	}
 }
 
-// TestXORRejected — заданы и secret, и secret_ref → 422, БЕЗ записи в Vault, БЕЗ
-// plaintext в тексте ошибки.
+// TestXORRejected verifies when both secret and secret_ref are set → 422 without
+// Vault write and without plaintext in error text.
 func TestXORRejected(t *testing.T) {
 	vault := &capturingVault{}
 	pool := &capturingPool{}
@@ -281,14 +281,14 @@ func TestXORRejected(t *testing.T) {
 		t.Fatalf("XOR: err=%v, want ErrValidation", err)
 	}
 	if strings.Contains(err.Error(), leakSigning) {
-		t.Fatalf("plaintext утёк в текст ошибки: %v", err)
+		t.Fatalf("plaintext leaked into error text: %v", err)
 	}
 	if len(vault.writes) != 0 || len(pool.queryArgs) != 0 {
-		t.Fatal("при XOR-отказе не должно быть записи в Vault/PG")
+		t.Fatal("XOR rejection must not write to Vault/PG")
 	}
 }
 
-// TestPlaintextDisabled — accept=false → plaintext отвергается (ADR-064 митигация a).
+// TestPlaintextDisabled verifies plaintext is rejected when accept=false (ADR-064 mitigation a).
 func TestPlaintextDisabled(t *testing.T) {
 	vault := &capturingVault{}
 	pool := &capturingPool{}
@@ -305,11 +305,12 @@ func TestPlaintextDisabled(t *testing.T) {
 		t.Fatalf("disabled: err=%v, want ErrPlaintextDisabled", err)
 	}
 	if len(vault.writes) != 0 || len(pool.queryArgs) != 0 {
-		t.Fatal("при disabled не должно быть записи в Vault/PG")
+		t.Fatal("disabled mode must not write to Vault/PG")
 	}
 }
 
-// TestVaultFailureNoLeak — сбой Vault-записи → ошибка БЕЗ plaintext, БЕЗ записи в PG.
+// TestVaultFailureNoLeak verifies Vault write failure returns error without plaintext
+// and without PG write.
 func TestVaultFailureNoLeak(t *testing.T) {
 	vault := &capturingVault{fail: true}
 	pool := &capturingPool{}
@@ -323,12 +324,12 @@ func TestVaultFailureNoLeak(t *testing.T) {
 	}
 	_, err := svc.CreateHerald(context.Background(), h)
 	if err == nil {
-		t.Fatal("ожидалась ошибка при сбое Vault")
+		t.Fatal("expected error on Vault failure")
 	}
 	if strings.Contains(err.Error(), leakSigning) {
-		t.Fatalf("plaintext утёк в текст ошибки Vault-сбоя: %v", err)
+		t.Fatalf("plaintext leaked into Vault failure error text: %v", err)
 	}
 	if len(pool.queryArgs) != 0 {
-		t.Fatal("при сбое Vault не должно быть INSERT в PG")
+		t.Fatal("Vault failure must not INSERT into PG")
 	}
 }

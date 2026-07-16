@@ -1,11 +1,11 @@
 package herald
 
-// Guard-тесты channel-типов Herald (ADR-052 amendment): валидация config,
-// resolveDelivery-сборка (URL/тело/заголовки/подпись) с МОКНУТЫМ KVReader БЕЗ
-// реальных сетевых вызовов, SSRF-инвариант HTTP-типов, deliverEmail SSRF-guard,
-// секрет-разводка (secret_ref только webhook), секрет не в ошибках, единый
-// источник типов (AllHeraldTypes ↔ PG-CHECK). Table-driven, БЕЗ client.Do /
-// реального SMTP-dial.
+// Guard tests for Herald channel types (ADR-052 amendment): config validation,
+// resolveDelivery assembly (URL/body/headers/signature) with mocked KVReader without
+// real network calls, SSRF invariant for HTTP types, deliverEmail SSRF guard,
+// secret dispatch (secret_ref webhook-only), secret not in errors, single source
+// of truth for types (AllHeraldTypes ↔ PG-CHECK). Table-driven, without client.Do /
+// real SMTP dial.
 
 import (
 	"context"
@@ -22,7 +22,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// staticKV — KVReader, отдающий фиксированный секрет. Без Vault/сети.
+// staticKV KVReader returning fixed secret. No Vault/network.
 type staticKV struct {
 	data map[string]any
 	err  error

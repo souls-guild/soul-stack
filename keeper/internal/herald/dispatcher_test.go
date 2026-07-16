@@ -10,10 +10,10 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// strPtr — хелпер для опц. селекторов.
+// strPtr helper for optional selectors.
 func strPtr(s string) *string { return &s }
 
-// fakeQueue — собирает поставленные DeliveryJob-ы.
+// fakeQueue collects enqueued DeliveryJobs.
 type fakeQueue struct {
 	mu   sync.Mutex
 	jobs []*DeliveryJob
@@ -38,7 +38,7 @@ func (q *fakeQueue) snapshot() []*DeliveryJob {
 	return out
 }
 
-// staticSource — фиксированный набор правил (минует PG).
+// staticSource fixed set of rules (bypasses PG).
 type staticSource struct {
 	rules []*Tiding
 	err   error
@@ -53,7 +53,7 @@ func (s *staticSource) EnabledTidings(_ context.Context) ([]*Tiding, error) {
 	return s.rules, nil
 }
 
-// dispatchOne матчит одно событие против одного правила синхронно.
+// dispatchOne synchronously matches one event against one rule.
 func dispatchOne(t *testing.T, rule *Tiding, event *audit.Event) []*DeliveryJob {
 	t.Helper()
 	q := &fakeQueue{}
@@ -70,7 +70,7 @@ func ev(et audit.EventType, payload map[string]any) *audit.Event {
 }
 
 func TestMatchTiding_Table(t *testing.T) {
-	// Реальные payload-формы (см. voyageorch.emitFinalized / emitLegCompleted,
+	// Real payload forms (see voyageorch.emitFinalized / emitLegCompleted,
 	// incarnation.go drift_checked, conductor.cadence_spawn).
 	scenarioCompletedChanged := ev(audit.EventScenarioRunCompleted, map[string]any{
 		"voyage_id": "vy_1", "kind": "scenario", "total_batches": 1,
@@ -105,7 +105,7 @@ func TestMatchTiding_Table(t *testing.T) {
 		"voyage_id": "vy_1", "kind": "scenario", "leg_index": 0, "terminal": "success",
 		"total": 2, "succeeded": 2, "failed": 0, "cancelled": 0,
 	})
-	// Вне scope прогонов — не должно матчить даже area-glob соседней области.
+	// Out of scope for runs — must not match even area-glob of neighboring area.
 	heraldCreated := ev(audit.EventType("herald.created"), map[string]any{"name": "x"})
 
 	rule := func(mut func(*Tiding)) *Tiding {
@@ -183,8 +183,8 @@ func TestMatchTiding_Table(t *testing.T) {
 
 		{"out-of-scope event never matches", rule(func(t *Tiding) { t.EventTypes = []string{"scenario_run.*"} }), heraldCreated, false},
 
-		// Ephemeral (ADR-052(g)): voyage_id-селектор сужает правило до СВОЕГО
-		// прогона. ev() кладёт payload["voyage_id"]="vy_1" и CorrelationID="vy_1".
+		// Ephemeral (ADR-052(g)): voyage_id selector narrows rule to its own run.
+		// ev() sets payload["voyage_id"]="vy_1" and CorrelationID="vy_1".
 		{"ephemeral matches own voyage (payload voyage_id)", rule(func(t *Tiding) {
 			t.Ephemeral = true
 			t.VoyageID = strPtr("vy_1")
@@ -196,7 +196,7 @@ func TestMatchTiding_Table(t *testing.T) {
 		{"ephemeral matches own voyage via correlation_id fallback", rule(func(t *Tiding) {
 			t.Ephemeral = true
 			t.VoyageID = strPtr("vy_1")
-		}), ev(audit.EventScenarioRunCompleted, map[string]any{ // payload без voyage_id, но CorrelationID=vy_1
+		}), ev(audit.EventScenarioRunCompleted, map[string]any{ // payload without voyage_id, but CorrelationID=vy_1
 			"summary": map[string]any{"succeeded": 1},
 		}), true},
 		{"persistent rule unaffected (voyage_id nil) still matches any voyage", rule(nil), scenarioCompletedChanged, true},
@@ -213,8 +213,8 @@ func TestMatchTiding_Table(t *testing.T) {
 }
 
 func TestDispatch_DisabledRuleNotInSource(t *testing.T) {
-	// Source отдаёт только enabled (PG WHERE enabled=true). Disabled-правило
-	// просто отсутствует в снимке — матча нет.
+	// Source returns only enabled (PG WHERE enabled=true). Disabled rule
+	// simply absent from snapshot — no match.
 	disabled := &Tiding{Name: "off", Herald: "h", EventTypes: []string{"scenario_run.*"}, Enabled: false}
 	q := &fakeQueue{}
 	d := NewDispatcher(DispatcherConfig{
@@ -224,7 +224,7 @@ func TestDispatch_DisabledRuleNotInSource(t *testing.T) {
 	_ = disabled
 	d.Dispatch(context.Background(), ev(audit.EventScenarioRunCompleted, map[string]any{"summary": map[string]any{"succeeded": 1}}))
 	if jobs := q.snapshot(); len(jobs) != 0 {
-		t.Fatalf("disabled-правило (отсутствует в source) не должно порождать job-ы, получил %d", len(jobs))
+		t.Fatalf("disabled rule (absent from source) must not generate jobs, got %d", len(jobs))
 	}
 }
 
@@ -243,10 +243,10 @@ func TestDispatch_MultipleMatches_OneJobPerRule(t *testing.T) {
 	}))
 	jobs := q.snapshot()
 	if len(jobs) != 2 {
-		t.Fatalf("ожидалось 2 job-а (правила a,b), получил %d", len(jobs))
+		t.Fatalf("expected 2 jobs (rules a,b), got %d", len(jobs))
 	}
 	if jobs[0].Herald != "h1" || jobs[1].Herald != "h2" {
-		t.Fatalf("неверные heralds в job-ах: %q, %q", jobs[0].Herald, jobs[1].Herald)
+		t.Fatalf("wrong heralds in jobs: %q, %q", jobs[0].Herald, jobs[1].Herald)
 	}
 }
 
@@ -264,27 +264,27 @@ func TestDispatch_JobCarriesPayloadCopy(t *testing.T) {
 
 	jobs := q.snapshot()
 	if len(jobs) != 1 {
-		t.Fatalf("ожидался 1 job, получил %d", len(jobs))
+		t.Fatalf("expected 1 job, got %d", len(jobs))
 	}
 	job := jobs[0]
-	// Копия, не тот же указатель.
+	// Copy, not same pointer.
 	if &job.PayloadCopy == &event.Payload {
-		t.Fatal("PayloadCopy должен быть копией map, не тем же значением")
+		t.Fatal("PayloadCopy must be copy of map, not same value")
 	}
-	// Мутация копии не задевает оригинал.
+	// Mutation of copy does not affect original.
 	job.PayloadCopy["injected"] = true
 	if _, exists := event.Payload["injected"]; exists {
-		t.Fatal("мутация PayloadCopy просочилась в исходный payload")
+		t.Fatal("PayloadCopy mutation leaked into original payload")
 	}
 	if job.CorrelationID != "vy_1" {
-		t.Fatalf("CorrelationID не перенесён: %q", job.CorrelationID)
+		t.Fatalf("CorrelationID not carried over: %q", job.CorrelationID)
 	}
 }
 
-// TestDispatch_JobCarriesAnnotationsProjection — dispatcher ПЕРЕНОСИТ
-// Annotations/Projection из Tiding в DeliveryJob (ADR-052(h) N1), но НЕ применяет
-// их к payload (это off-path в worker-е, N3). Здесь фиксируем перенос полей и то,
-// что PayloadCopy остаётся ПОЛНОЙ копией (projection не сужает payload в N1).
+// TestDispatch_JobCarriesAnnotationsProjection verifies dispatcher carries
+// Annotations/Projection from Tiding to DeliveryJob (ADR-052(h) N1) but does not
+// apply them to payload (that is off-path in worker, N3). Verifies field transfer
+// and that PayloadCopy remains full copy (projection does not narrow payload in N1).
 func TestDispatch_JobCarriesAnnotationsProjection(t *testing.T) {
 	q := &fakeQueue{}
 	d := NewDispatcher(DispatcherConfig{
@@ -303,26 +303,26 @@ func TestDispatch_JobCarriesAnnotationsProjection(t *testing.T) {
 
 	jobs := q.snapshot()
 	if len(jobs) != 1 {
-		t.Fatalf("ожидался 1 job, получил %d", len(jobs))
+		t.Fatalf("expected 1 job, got %d", len(jobs))
 	}
 	job := jobs[0]
 	if job.Annotations["team"] != "ops" || job.Annotations["severity"] != "high" {
-		t.Errorf("Annotations не перенесены: %+v", job.Annotations)
+		t.Errorf("Annotations not carried: %+v", job.Annotations)
 	}
 	if len(job.Projection) != 2 || job.Projection[0] != "event_type" {
-		t.Errorf("Projection не перенесён: %+v", job.Projection)
+		t.Errorf("Projection not carried: %+v", job.Projection)
 	}
-	// N1: dispatcher НЕ сужает payload по projection (это N3). Полная копия цела.
+	// N1: dispatcher does not narrow payload by projection (that is N3). Full copy intact.
 	if _, ok := job.PayloadCopy["summary"]; !ok {
-		t.Error("dispatcher не должен применять projection в N1 — payload должен быть полным")
+		t.Error("dispatcher must not apply projection in N1 — payload must be full")
 	}
 }
 
-// TestDispatch_PayloadCopy_ShallowByDesign документирует осознанный trade-off
-// copyPayload (review S2, нит-4): копируется ТОЛЬКО верхний уровень. Глубокая
-// мутация вложенного map видна и через PayloadCopy, и через оригинал — это
-// допустимо (payload замаскирован, downstream read-only). Тест фиксирует
-// поведение, чтобы случайный переход на deep-copy не прошёл молча.
+// TestDispatch_PayloadCopy_ShallowByDesign documents intentional trade-off in
+// copyPayload (review S2, item 4): only top level is copied. Deep mutation of
+// nested map is visible through both PayloadCopy and original — this is acceptable
+// (payload is masked, downstream read-only). Test fixes behavior so accidental
+// deep-copy switch does not go unnoticed.
 func TestDispatch_PayloadCopy_ShallowByDesign(t *testing.T) {
 	q := &fakeQueue{}
 	d := NewDispatcher(DispatcherConfig{
@@ -338,13 +338,13 @@ func TestDispatch_PayloadCopy_ShallowByDesign(t *testing.T) {
 
 	jobs := q.snapshot()
 	if len(jobs) != 1 {
-		t.Fatalf("ожидался 1 job, получил %d", len(jobs))
+		t.Fatalf("expected 1 job, got %d", len(jobs))
 	}
-	// Вложенный map — тот же указатель (shallow): мутация через копию видна в
-	// оригинале. НЕ изолировано — by design.
+	// Nested map is same pointer (shallow): mutation through copy visible in
+	// original. Not isolated — by design.
 	jobs[0].PayloadCopy["summary"].(map[string]any)["succeeded"] = 999
 	if got := orig["summary"].(map[string]any)["succeeded"]; got != 999 {
-		t.Fatalf("ожидалась shared вложенная map (shallow copy), но мутация не просочилась: succeeded=%v", got)
+		t.Fatalf("expected shared nested map (shallow copy), but mutation did not leak: succeeded=%v", got)
 	}
 }
 
@@ -356,7 +356,7 @@ func TestDispatch_SourceError_NoPanicNoJob(t *testing.T) {
 	})
 	d.Dispatch(context.Background(), ev(audit.EventScenarioRunCompleted, nil))
 	if len(q.snapshot()) != 0 {
-		t.Fatal("при ошибке source job-ов быть не должно")
+		t.Fatal("source error must not generate jobs")
 	}
 }
 
@@ -383,14 +383,14 @@ func TestRuleCache_TTLAndInvalidation(t *testing.T) {
 	d.Dispatch(context.Background(), event)
 	d.Dispatch(context.Background(), event)
 	if src.calls != 1 {
-		t.Fatalf("в пределах TTL source должен читаться 1 раз, прочитан %d", src.calls)
+		t.Fatalf("within TTL source must be read once, read %d times", src.calls)
 	}
 
-	// Инвалидация форсирует перечитывание.
+	// Invalidation forces re-read.
 	d.InvalidateRules()
 	d.Dispatch(context.Background(), event)
 	if src.calls != 2 {
-		t.Fatalf("после InvalidateRules source должен перечитаться, calls=%d", src.calls)
+		t.Fatalf("after InvalidateRules source must re-read, calls=%d", src.calls)
 	}
 }
 
@@ -403,20 +403,20 @@ func TestRuleCache_TTLExpiry(t *testing.T) {
 	event := ev(audit.EventScenarioRunCompleted, nil)
 	d.Dispatch(context.Background(), event)
 	if src.calls != 1 {
-		t.Fatalf("первый Dispatch должен загрузить правила, calls=%d", src.calls)
+		t.Fatalf("first Dispatch must load rules, calls=%d", src.calls)
 	}
-	// Перематываем часы за TTL.
+	// Fast-forward clock past TTL.
 	now = now.Add(20 * time.Millisecond)
 	d.Dispatch(context.Background(), event)
 	if src.calls != 2 {
-		t.Fatalf("после истечения TTL source должен перечитаться, calls=%d", src.calls)
+		t.Fatalf("after TTL expiry source must re-read, calls=%d", src.calls)
 	}
 }
 
-// TestDispatch_OccurredAt_FallbackToMatchTime — guard на баг live-smoke Herald:
-// event.CreatedAt нулевой (инициатор опёрся на PG DEFAULT NOW(), tap наблюдает
-// указатель ДО заполнения времени) → job.OccurredAt должен быть НЕ нулевым,
-// проставленным временем матча (d.clock), а не 0001-01-01.
+// TestDispatch_OccurredAt_FallbackToMatchTime guard against live-smoke Herald bug:
+// event.CreatedAt is zero (initiator relied on PG DEFAULT NOW(), tap observes
+// pointer before time is filled) → job.OccurredAt must be non-zero, set to match time
+// (d.clock), not 0001-01-01.
 func TestDispatch_OccurredAt_FallbackToMatchTime(t *testing.T) {
 	q := &fakeQueue{}
 	d := NewDispatcher(DispatcherConfig{
@@ -428,24 +428,24 @@ func TestDispatch_OccurredAt_FallbackToMatchTime(t *testing.T) {
 
 	event := ev(audit.EventScenarioRunFailed, map[string]any{"voyage_id": "v1"})
 	if !event.CreatedAt.IsZero() {
-		t.Fatal("предусловие: event.CreatedAt должен быть нулевым (воспроизводит баг)")
+		t.Fatal("precondition: event.CreatedAt must be zero (reproduces bug)")
 	}
 	d.Dispatch(context.Background(), event)
 
 	jobs := q.snapshot()
 	if len(jobs) != 1 {
-		t.Fatalf("ожидался 1 job, получил %d", len(jobs))
+		t.Fatalf("expected 1 job, got %d", len(jobs))
 	}
 	if jobs[0].OccurredAt.IsZero() {
-		t.Fatal("job.OccurredAt нулевой — баг occurred_at=0001-01-01 не закрыт")
+		t.Fatal("job.OccurredAt is zero — occurred_at=0001-01-01 bug not fixed")
 	}
 	if !jobs[0].OccurredAt.Equal(matchTime) {
-		t.Fatalf("job.OccurredAt = %v, want время матча %v", jobs[0].OccurredAt, matchTime)
+		t.Fatalf("job.OccurredAt = %v, want match time %v", jobs[0].OccurredAt, matchTime)
 	}
 }
 
-// TestDispatch_OccurredAt_PrefersExplicitCreatedAt — если инициатор проставил
-// event.CreatedAt явно, job.OccurredAt берёт именно его (UTC), а не время матча.
+// TestDispatch_OccurredAt_PrefersExplicitCreatedAt if initiator set event.CreatedAt
+// explicitly, job.OccurredAt takes it (UTC), not match time.
 func TestDispatch_OccurredAt_PrefersExplicitCreatedAt(t *testing.T) {
 	q := &fakeQueue{}
 	d := NewDispatcher(DispatcherConfig{
@@ -461,9 +461,9 @@ func TestDispatch_OccurredAt_PrefersExplicitCreatedAt(t *testing.T) {
 
 	jobs := q.snapshot()
 	if len(jobs) != 1 {
-		t.Fatalf("ожидался 1 job, получил %d", len(jobs))
+		t.Fatalf("expected 1 job, got %d", len(jobs))
 	}
 	if !jobs[0].OccurredAt.Equal(created) {
-		t.Fatalf("job.OccurredAt = %v, want явный CreatedAt %v", jobs[0].OccurredAt, created)
+		t.Fatalf("job.OccurredAt = %v, want explicit CreatedAt %v", jobs[0].OccurredAt, created)
 	}
 }

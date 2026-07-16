@@ -18,17 +18,16 @@ import (
 	"github.com/souls-guild/soul-stack/shared/netguard"
 )
 
-// privateResolver — netguard.Resolver, резолвящий любое имя в private-IP (10.x):
-// имитирует DNS-rebind на внутренний адрес. dial-guard должен отвергнуть.
+// privateResolver netguard.Resolver that resolves any name to private IP (10.x);
+// mimics DNS rebind to internal address. dial-guard must reject.
 type privateResolver struct{}
 
 func (privateResolver) LookupIPAddr(_ context.Context, _ string) ([]net.IPAddr, error) {
 	return []net.IPAddr{{IP: net.ParseIP("10.0.0.7")}}, nil
 }
 
-// runWorkerOnce клеймит один job и обрабатывает его (без полного Run-loop-а:
-// детерминированно, без фоновых горутин-спанов кроме renewLease, который
-// останавливается defer-ом handle).
+// runWorkerOnce claims one job and handles it (without full Run loop: deterministic,
+// without background goroutine spawns except renewLease which is stopped by handle defer).
 func runWorkerOnce(t *testing.T, w *DeliveryWorker) {
 	t.Helper()
 	if err := w.validate(); err != nil {
@@ -90,8 +89,8 @@ func TestDelivery_Success_PostsSignedPayload(t *testing.T) {
 	if gotCT != "application/json" {
 		t.Errorf("Content-Type = %q", gotCT)
 	}
-	// occurred_at в теле — ненулевой валидный RFC3339 (guard на баг live-smoke:
-	// доставка не должна слать occurred_at=0001-01-01).
+	// occurred_at in body is non-zero valid RFC3339 (guard against live-smoke bug:
+	// delivery must not send occurred_at=0001-01-01).
 	var bodyOut webhookPayload
 	if err := json.Unmarshal(gotBody, &bodyOut); err != nil {
 		t.Fatalf("webhook body не парсится как JSON: %v", err)
@@ -106,7 +105,7 @@ func TestDelivery_Success_PostsSignedPayload(t *testing.T) {
 	if !parsed.Equal(occurred) {
 		t.Errorf("occurred_at = %v, want %v", parsed, occurred)
 	}
-	// Подпись валидна над фактически полученным телом.
+	// Signature is valid over the actual received body.
 	mac := hmac.New(sha256.New, []byte("sign-key"))
 	mac.Write(gotBody)
 	want := "sha256=" + hex.EncodeToString(mac.Sum(nil))
@@ -174,7 +173,7 @@ func TestDelivery_AnnotationsProjection_SignedFinalBody(t *testing.T) {
 	if err := json.Unmarshal(gotBody, &body); err != nil {
 		t.Fatalf("webhook body не парсится: %v", err)
 	}
-	// projection: payload сужен (voyage_id + summary.failed), исходный drop ушёл.
+	// Projection: payload narrowed (voyage_id + summary.failed), original drop removed.
 	if body.Payload["voyage_id"] != "v1" {
 		t.Errorf("payload.voyage_id = %v", body.Payload["voyage_id"])
 	}
@@ -188,11 +187,11 @@ func TestDelivery_AnnotationsProjection_SignedFinalBody(t *testing.T) {
 	if _, present := summary["succeeded"]; present {
 		t.Errorf("summary.succeeded leaked (not in projection)")
 	}
-	// annotations верхнеуровневые.
+	// Annotations are top-level.
 	if body.Annotations["team"] != "ops" || body.Annotations["severity"] != "high" {
 		t.Errorf("annotations = %v", body.Annotations)
 	}
-	// подпись валидна над фактически полученным (финальным) телом.
+	// Signature is valid over the actual (final) received body.
 	mac := hmac.New(sha256.New, []byte("sign-key"))
 	mac.Write(gotBody)
 	want := "sha256=" + hex.EncodeToString(mac.Sum(nil))
@@ -205,8 +204,8 @@ func TestDelivery_AnnotationsProjection_SignedFinalBody(t *testing.T) {
 	}
 }
 
-// TestDelivery_5xx_Retries — приёмник отвечает 500 → доставка не финализируется
-// успехом, job перепоставлен на retry с инкрементом attempt.
+// TestDelivery_5xx_Retries verifies receiver returning 500 means delivery does not
+// finalize successfully; job is requeued for retry with incremented attempt.
 func TestDelivery_5xx_Retries(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
@@ -241,8 +240,8 @@ func TestDelivery_5xx_Retries(t *testing.T) {
 	}
 }
 
-// TestDelivery_4xx_TerminalNoRetry — приёмник отвечает 401 (устойчивая клиентская
-// ошибка) → терминал herald.failed сразу, без retry, даже на первой попытке.
+// TestDelivery_4xx_TerminalNoRetry verifies receiver returning 401 (stable client error)
+// means terminal herald.failed immediately, no retry, even on first attempt.
 func TestDelivery_4xx_TerminalNoRetry(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
@@ -274,8 +273,8 @@ func TestDelivery_4xx_TerminalNoRetry(t *testing.T) {
 	}
 }
 
-// TestDelivery_429_Retries — 429 Too Many Requests — транзиентный rate-limit:
-// ретраится (исключение из «4xx → terminal»), job перепоставлен.
+// TestDelivery_429_Retries verifies 429 Too Many Requests is transient rate-limit:
+// retried (exception to "4xx→terminal"), job requeued.
 func TestDelivery_429_Retries(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
@@ -303,8 +302,8 @@ func TestDelivery_429_Retries(t *testing.T) {
 	}
 }
 
-// TestDelivery_Timeout_Retries — приёмник висит дольше delivery-timeout-а →
-// доставка падает по таймауту → retry.
+// TestDelivery_Timeout_Retries verifies receiver hanging longer than delivery timeout
+// means delivery times out → retry.
 func TestDelivery_Timeout_Retries(t *testing.T) {
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
@@ -335,13 +334,13 @@ func TestDelivery_Timeout_Retries(t *testing.T) {
 	}
 }
 
-// TestDelivery_SSRF_PrivateIPRejectedBeforeRequest — webhook на private-IP БЕЗ
-// allow_private отвергается SSRF-guard-ом ДО HTTP-запроса (терминал без retry,
-// приёмник не вызывается).
+// TestDelivery_SSRF_PrivateIPRejectedBeforeRequest verifies webhook to private-IP
+// without allow_private is rejected by SSRF guard before HTTP request (terminal,
+// no retry, receiver not called).
 func TestDelivery_SSRF_PrivateIPRejectedBeforeRequest(t *testing.T) {
 	var hits atomic.Int32
-	// Поднимаем реальный сервер, но URL подменяем на private-IP — guard должен
-	// отрезать ДО соединения, поэтому сервер не получит запрос.
+	// Spin up real server but swap URL to private-IP — guard must cut off before
+	// connection, so server never receives request.
 	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)
 		rw.WriteHeader(http.StatusOK)
@@ -350,7 +349,7 @@ func TestDelivery_SSRF_PrivateIPRejectedBeforeRequest(t *testing.T) {
 
 	backend := newFakeBackend()
 	rec := &recordingAudit{}
-	// Литеральный private-IP, allow_private НЕ задан → guard отвергает.
+	// Literal private-IP, allow_private not set → guard rejects.
 	h := &Herald{Name: "ssrf", Type: HeraldWebhook, Config: map[string]any{"url": "https://10.0.0.1/hook"}, Enabled: true}
 	w := &DeliveryWorker{Queue: backend, Heralds: recordingHeralds{herald: h}, Audit: rec, Logger: discardLogger()}
 
@@ -372,9 +371,9 @@ func TestDelivery_SSRF_PrivateIPRejectedBeforeRequest(t *testing.T) {
 	}
 }
 
-// TestDelivery_SSRF_DNSResolvedToPrivate_RejectedAtDial — host резолвится в
-// private-IP (через инжектированный резолвер) → отказ на dial-фазе, приёмник не
-// вызывается. Проверяет, что dial-guard работает не только на литеральном IP.
+// TestDelivery_SSRF_DNSResolvedToPrivate_RejectedAtDial verifies host resolving to
+// private-IP (via injected resolver) means rejection at dial phase, receiver not called.
+// Verifies dial-guard works not only on literal IP.
 func TestDelivery_SSRF_DNSResolvedToPrivate_RejectedAtDial(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
@@ -389,7 +388,7 @@ func TestDelivery_SSRF_DNSResolvedToPrivate_RejectedAtDial(t *testing.T) {
 	w := &DeliveryWorker{
 		Queue: backend, Heralds: recordingHeralds{herald: h},
 		Audit: rec, Logger: discardLogger(),
-		Resolver: privateResolver{}, // имя резолвится в 10.x
+		Resolver: privateResolver{}, // name resolves to 10.x
 	}
 
 	job := &DeliveryJob{ID: "j-rebind", Attempt: 0, Herald: "rebind", EventType: audit.EventScenarioRunFailed}
@@ -401,8 +400,8 @@ func TestDelivery_SSRF_DNSResolvedToPrivate_RejectedAtDial(t *testing.T) {
 	if hits.Load() != 0 {
 		t.Fatalf("rebind target must not be contacted, hits=%d", hits.Load())
 	}
-	// DNS-резолв в private — транзиентно-похожая ошибка (dial), поэтому это retry,
-	// не terminal-no-retry: guard отверг на dial, а не на pre-валидации.
+	// DNS resolve to private looks like transient error (dial), so it retries,
+	// not terminal-no-retry: guard rejected at dial, not pre-validation.
 	if backend.requeues != 1 {
 		t.Fatalf("dial-guard rejection retries, requeues=%d", backend.requeues)
 	}
