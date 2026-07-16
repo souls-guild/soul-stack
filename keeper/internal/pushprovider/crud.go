@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Sentinel-ошибки CRUD-слоя. Handler-сторона маппит:
+// Sentinel errors of CRUD layer. Handler side maps:
 //   - ErrPushProviderAlreadyExists → 409 push-provider-already-exists.
 //   - ErrPushProviderNotFound      → 404 not-found.
 var (
@@ -25,9 +25,9 @@ const (
 	pgErrCodeCheckViolation      = "23514"
 )
 
-// ExecQueryRower — узкое подмножество pgxpool.Pool, нужное CRUD-у.
-// Симметрично provider/operator: unit-тесты ходят через fake без
-// подъёма PG, production даёт реальный pool / Conn / Tx.
+// ExecQueryRower is a minimal interface of pgxpool.Pool required by CRUD.
+// Symmetric to provider/operator: unit tests use fake without PG,
+// production provides real pool / Conn / Tx.
 type ExecQueryRower interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
@@ -41,11 +41,11 @@ var (
 	_ ExecQueryRower = (pgx.Tx)(nil)
 )
 
-// ListFilter — параметры `GET /v1/push-providers`. Пустые поля = «без
-// фильтра».
+// ListFilter is the filter parameters for GET /v1/push-providers.
+// Empty fields mean no filter.
 type ListFilter struct {
-	// NamePattern — LIKE-форма префиксной фильтрации по имени
-	// (например, "vault%"). Пустая строка → без фильтра.
+	// NamePattern is the LIKE form for prefix filtering by name
+	// (e.g., "vault%"). Empty string means no filter.
 	NamePattern string
 }
 
@@ -73,16 +73,16 @@ WHERE name = $1
 
 const deleteSQL = `DELETE FROM push_providers WHERE name = $1`
 
-// Insert вставляет новую запись Push-Provider-а.
+// Insert inserts a new PushProvider record.
 //
 // Pre-conditions:
-//   - p.Name матчит [NamePattern];
-//   - p.CreatedByAID непустой (NOT NULL в схеме).
+//   - p.Name matches [NamePattern].
+//   - p.CreatedByAID is not empty (NOT NULL in schema).
 //
-// Возврат:
-//   - [ErrPushProviderAlreadyExists] на UNIQUE по PK.
-//   - wrapped fmt.Errorf на FK-violation (`created_by_aid` ссылается на
-//     несуществующий AID) и CHECK-violation (битый name-format).
+// Returns:
+//   - [ErrPushProviderAlreadyExists] on UNIQUE constraint violation.
+//   - wrapped fmt.Errorf on FK violation (created_by_aid references
+//     non-existent AID) and CHECK violation (invalid name-format).
 func Insert(ctx context.Context, db ExecQueryRower, p *PushProvider) error {
 	if p == nil {
 		return fmt.Errorf("pushprovider: nil push provider")
@@ -122,7 +122,7 @@ func mapInsertError(err error) error {
 	return fmt.Errorf("pushprovider: insert: %w", err)
 }
 
-// SelectByName читает запись по PK. [ErrPushProviderNotFound] при pgx.ErrNoRows.
+// SelectByName reads a record by PK. Returns [ErrPushProviderNotFound] on pgx.ErrNoRows.
 func SelectByName(ctx context.Context, db ExecQueryRower, name string) (*PushProvider, error) {
 	row := db.QueryRow(ctx, selectByNameSQL, name)
 	return scanPushProvider(row)
@@ -157,9 +157,9 @@ func scanPushProvider(row pgx.Row) (*PushProvider, error) {
 	return &p, nil
 }
 
-// Update заменяет params существующей записи (replace-семантика).
+// Update replaces params of an existing record (replace semantics).
 //
-// Возврат [ErrPushProviderNotFound], если PK не найден (RowsAffected==0).
+// Returns [ErrPushProviderNotFound] if PK is not found (RowsAffected==0).
 func Update(ctx context.Context, db ExecQueryRower, name string, params map[string]any, updatedByAID string) error {
 	if !ValidName(name) {
 		return fmt.Errorf("pushprovider: invalid name %q (must match %s)", name, NamePattern)
@@ -186,8 +186,8 @@ func Update(ctx context.Context, db ExecQueryRower, name string, params map[stri
 	return nil
 }
 
-// Delete удаляет запись по PK. [ErrPushProviderNotFound], если запись
-// отсутствует (RowsAffected==0).
+// Delete removes a record by PK. Returns [ErrPushProviderNotFound] if the record
+// does not exist (RowsAffected==0).
 func Delete(ctx context.Context, db ExecQueryRower, name string) error {
 	if !ValidName(name) {
 		return fmt.Errorf("pushprovider: invalid name %q (must match %s)", name, NamePattern)
@@ -202,14 +202,14 @@ func Delete(ctx context.Context, db ExecQueryRower, name string) error {
 	return nil
 }
 
-// SelectAll возвращает страницу записей и общее количество (без
+// SelectAll returns a page of records and total count (excluding
 // offset/limit).
 //
-// Сортировка — `updated_at DESC, name ASC` (свежие выше; tie-break по
-// имени, иначе пагинация неустойчива при одинаковом таймстемпе).
+// Sorting is updated_at DESC, name ASC (recent first; tie-break by
+// name to ensure stable pagination at identical timestamps).
 //
-// Total и items получаются двумя запросами вне общей транзакции — total
-// **eventually consistent**, симметрично provider.SelectAll.
+// Total and items are fetched in separate queries outside a transaction—total is
+// eventually consistent, symmetric to provider.SelectAll.
 func SelectAll(ctx context.Context, db ExecQueryRower, f ListFilter, offset, limit int) ([]*PushProvider, int, error) {
 	if offset < 0 {
 		return nil, 0, fmt.Errorf("pushprovider: offset must be >= 0, got %d", offset)
@@ -258,9 +258,9 @@ func buildWhere(f ListFilter) (string, []any) {
 	return " WHERE name LIKE $1", []any{f.NamePattern}
 }
 
-// marshalParams сериализует params в JSON-bytes для прямой подстановки
-// в JSONB-колонку. nil → `{}` (схема несёт DEFAULT, но pgx требует не-nil
-// для NOT NULL). Симметрично operator.marshalMetadata.
+// marshalParams serializes params to JSON bytes for direct insertion
+// into JSONB column. nil becomes {} (schema carries DEFAULT, but pgx requires non-nil
+// for NOT NULL). Symmetric to operator.marshalMetadata.
 func marshalParams(params map[string]any) ([]byte, error) {
 	if params == nil {
 		return []byte("{}"), nil
@@ -268,9 +268,9 @@ func marshalParams(params map[string]any) ([]byte, error) {
 	return json.Marshal(params)
 }
 
-// itoa — мелкий helper для построения $N плейсхолдеров без strconv-импорта.
-// Симметрично operator.intToString. Только non-negative-ветка (offset/limit
-// гарантированы non-negative-валидацией выше).
+// itoa is a small helper to build $N placeholders without strconv import.
+// Symmetric to operator.intToString. Only handles non-negative (offset/limit
+// are guaranteed non-negative by validation above).
 func itoa(n int) string {
 	if n == 0 {
 		return "0"

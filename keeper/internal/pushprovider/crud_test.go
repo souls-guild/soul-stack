@@ -12,8 +12,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// fakeDB — мок ExecQueryRower для unit-тестов. Захватывает аргументы
-// последнего Exec/QueryRow.
+// fakeDB is a mock ExecQueryRower for unit tests. Captures arguments
+// from the last Exec/QueryRow call.
 type fakeDB struct {
 	execCalls    int
 	lastExecSQL  string
@@ -57,8 +57,8 @@ type errRow struct{ err error }
 
 func (r errRow) Scan(_ ...any) error { return r.err }
 
-// staticRow — pgx.Row, копирующий values в Scan-аргументы. Поддерживает
-// только типы, реально используемые в pushprovider.scanPushProvider
+// staticRow is a pgx.Row implementation that copies values into Scan arguments.
+// Supports only types actually used in pushprovider.scanPushProvider
 // (string, time.Time, *string, []byte).
 type staticRow struct {
 	values []any
@@ -107,7 +107,7 @@ func assign(dest, src any) {
 	}
 }
 
-// fakeRows — pgx.Rows-stub.
+// fakeRows is a pgx.Rows stub.
 type fakeRows struct {
 	rows [][]any
 	idx  int
@@ -402,7 +402,7 @@ func TestSelectAll_RejectsInvalidBounds(t *testing.T) {
 	}
 }
 
-// countRow — pgx.Row-stub для COUNT(*)-запросов. Scan(&total int) кладёт n.
+// countRow is a pgx.Row stub for COUNT(*) queries. Scan(&total int) sets it to n.
 type countRow struct{ n int }
 
 func (r countRow) Scan(dest ...any) error {

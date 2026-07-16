@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// recordingPublisher — мок Publisher-а, фиксирующий вызовы.
+// recordingPublisher is a Publisher mock that records calls.
 type recordingPublisher struct {
 	calls []string
 	err   error
@@ -109,7 +109,7 @@ func TestService_Update_PublishesInvalidate(t *testing.T) {
 	f := &fakeDB{
 		execTag: pgconn.NewCommandTag("UPDATE 1"),
 	}
-	// QueryRow для select-after-update.
+	// QueryRow for select-after-update.
 	f.rowFunc = func() pgx.Row {
 		selectCalled++
 		return staticRow{values: []any{
