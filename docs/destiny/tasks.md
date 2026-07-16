@@ -51,7 +51,7 @@ Pivot table. Semantics, validation and examples are in §4-§8.
 
 Any other key is a validation error.
 
-> Keys `serial:` / `run_once:` - **scenario-only**: in destiny (`tasks/main.yml`) are not valid (see [`docs/scenario/orchestration.md §2`](../scenario/orchestration.md#2-дельта-scenario-относительно-dsl-ядра)).
+> Keys `serial:` / `run_once:` - **scenario-only**: in destiny (`tasks/main.yml`) are not valid (see [`docs/scenario/orchestration.md §2`](../scenario/orchestration.md)).
 
 ## 4. Basic blocks
 
@@ -67,7 +67,7 @@ Any other key is a validation error.
 
 - **Type:** string.
 - **Applies to:** module task.
-- **Semantics:** full 3-level module name `<namespace>.<module>.<state>` (see [architecture.md → "Addressing modules"](../architecture.md#адресация-модулей)).
+- **Semantics:** full 3-level module name `<namespace>.<module>.<state>` (see [architecture.md → "Addressing modules"](../architecture.md)).
 - **Validation (static, `soul-lint`):**
   - format `<ns>.<module>.<state>`;
   - namespace either `core` or mentioned in `required_modules:` destiny;
@@ -88,7 +88,7 @@ Any other key is a validation error.
 - **Semantics:** file name from the same folder `tasks/` (without slashes). Expands inline, without a separate scope.
 - **Expansion - before render, into a flat list.** within-destiny `include:`
 is expanded when the destiny artifact is loaded (before the render phase), just like
-scenario-include ([scenario/orchestration.md §6](../scenario/orchestration.md#6-двухуровневый-резолв-ресурсов)):
+scenario-include ([scenario/orchestration.md §6](../scenario/orchestration.md)):
 include-task is replaced by tasks of the included inline file in their place;
 render gets a flat list without `include:` nodes. After flattening the keeper-side
 `registerIndex` and the stratifier are flat: `register:` is addressed by index in the plan.
@@ -136,7 +136,7 @@ groups - **separate for each pass** (destiny id groups do not intersect with
 cross-file register link is already rejected by the per-file linter (see rule below),
 so the drop does not leave dangling register links.
 
-> **In the scenario the rule `include:` is different.** The behavior for **destiny** is described here: `include:` is strictly a neighbor in the same folder `tasks/`. In scenario, the resolution is two-level (locally → service-level, fallback is done by the engine, `../` is still prohibited in the syntax) - see [`docs/scenario/orchestration.md §6`](../scenario/orchestration.md#6-двухуровневый-резолв-ресурсов). This rule §4 for destiny **does not change**; the difference in scenario is fixed in the scenario spec.
+> **In the scenario the rule `include:` is different.** The behavior for **destiny** is described here: `include:` is strictly a neighbor in the same folder `tasks/`. In scenario, the resolution is two-level (locally → service-level, fallback is done by the engine, `../` is still prohibited in the syntax) - see [`docs/scenario/orchestration.md §6`](../scenario/orchestration.md). This rule §4 for destiny **does not change**; the difference in scenario is fixed in the scenario spec.
 
 ### `block:`
 
@@ -447,10 +447,10 @@ All three blocks refer to `register:` names of other tasks. `register:` therefor
 
 - **Type:** string (identifier, `[a-z][a-z0-9_]*` - same format as `register:`).
 - **Applies to:** module-task *(pilot-constraint; on `block:`/`include:` not yet supported)*.
-- **Semantics:** **address only** of the task for subscribing to "this task has changed state" alerts (per-task-changed-notifications, [ADR-009 amendment](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация)). Unlike `register:`, `id:` **doesn't** capture the output of the task and **doesn't** create the variable `register.<name>` - it is an extremely stable selector for subscription.
+- **Semantics:** **address only** of the task for subscribing to "this task has changed state" alerts (per-task-changed-notifications, [ADR-009 amendment](../adr/0009-scenario-dsl.md)). Unlike `register:`, `id:` **doesn't** capture the output of the task and **doesn't** create the variable `register.<name>` - it is an extremely stable selector for subscription.
 - **Optional.** Absence of `id:` is normal; most tasks don't have it.
 - **Mutually exclusive with `register:`.** The task with `register:` is already addressable by it, so `id:` is redundant and prohibited on it (validation error). `id:` is needed for tasks **without** `register:` that still want to be addressable for alerts. Single format - because `register` and `id` live in the same subscription address space.
-- **Works for keeper-side tasks (`on: keeper`).** The address `register ∪ id` of the keeper-side task (`core.cloud.provisioned`/`core.vault.kv-read`/`core.soul.registered`, [docs/keeper/modules.md](../keeper/modules.md)) is also included in the `changed_tasks` terminal event run, and the subscription-alert for it is working. A typical case is `provision_vm` with `id:` without `register:` (see [ADR-052 amend §k/§l](../adr/0052-herald-notifications.md#amend-kl-t4-fix-2026-06-12-changed_tasks-и-task-подписка-покрывают-keeper-side-задачи)).
+- **Works for keeper-side tasks (`on: keeper`).** The address `register ∪ id` of the keeper-side task (`core.cloud.provisioned`/`core.vault.kv-read`/`core.soul.registered`, [docs/keeper/modules.md](../keeper/modules.md)) is also included in the `changed_tasks` terminal event run, and the subscription-alert for it is working. A typical case is `provision_vm` with `id:` without `register:` (see [ADR-052 amend §k/§l](../adr/0052-herald-notifications.md)).
 
 ```yaml
 - name: Reload sysctl after tuning
@@ -543,7 +543,7 @@ By default, the run operates in **fail-stop** mode: the first failed task (`fail
 
 ### `when:`
 
-- **Type:** CEL expression, the entire line is treated as a CEL without the wrapper `${ … }` ([ADR-010](../adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов), [`docs/templating.md §2.1`](../templating.md#21-top-level-expression-ключи)). The result is converted to bool.
+- **Type:** CEL expression, the entire line is treated as a CEL without the wrapper `${ … }` ([ADR-010](../adr/0010-templating.md), [`docs/templating.md §2.1`](../templating.md)). The result is converted to bool.
 - **Applies to:** all types of problems.
 - **Semantics:** the task is executed only if the expression is truthy. Falsy → the task is skipped with the mark `skipped: when`.
 - **Combination with requisites:** all conditions are summed by AND. First, requisites (`onchanges`, `onfail`, `require`) are checked, then `when:`.
@@ -604,11 +604,11 @@ A task is considered finally-failed if all `count` attempts failed/timed out (wi
 
 - **Type:** map (name → template-expr).
 - **Applies to:** module task.
-- **Semantics:** values that destiny publishes externally as its result. Task-level `output:` **writes to declared top-level `output:` fields** destiny (see [destiny/output.md](output.md)); names not declared in top-level `output:` destiny - validation error. Used by `expect:` in tests and `register:` caller chains (`register.<applier>.<output field>` - [scenario/orchestration.md §2](../scenario/orchestration.md#2-дельта-scenario-относительно-dsl-ядра)).
+- **Semantics:** values that destiny publishes externally as its result. Task-level `output:` **writes to declared top-level `output:` fields** destiny (see [destiny/output.md](output.md)); names not declared in top-level `output:` destiny - validation error. Used by `expect:` in tests and `register:` caller chains (`register.<applier>.<output field>` - [scenario/orchestration.md §2](../scenario/orchestration.md)).
 
 ### `changed_when:`
 
-- **Type:** CEL expression, whole line = CEL without wrapper `${ … }` (top-level expression-key, [ADR-010](../adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов)).
+- **Type:** CEL expression, whole line = CEL without wrapper `${ … }` (top-level expression-key, [ADR-010](../adr/0010-templating.md)).
 - **Applies to:** module task.
 - **Semantics:** overrides how the framework considers `register.<name>.changed`. By default, the module itself reports its `changed` (for example, `core.file.present` compares desired vs actual). For modules that always return `changed=true` (typically `core.exec.run`), `changed_when:` allows you to give a custom criterion.
 
@@ -629,7 +629,7 @@ Inside the expression, `register.self.*` is available—the fields of the task's
 
 ### `failed_when:`
 
-- **Type:** CEL expression, whole line = CEL without wrapper `${ … }` (top-level expression-key, [ADR-010](../adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов)).
+- **Type:** CEL expression, whole line = CEL without wrapper `${ … }` (top-level expression-key, [ADR-010](../adr/0010-templating.md)).
 - **Applies to:** module task.
 - **Semantics:** overrides how the framework considers `register.<name>.failed`. The default is exit_code != 0 (for exec modules) or the module itself reports failure. `failed_when:` gives a custom criterion.
 
@@ -679,7 +679,7 @@ In this problem, `${ vars.redis_unit_name }` → `redis-server-staging`. In neig
 
 Dry-run is a **mode for running the entire destiny**, not a flag for a separate task. Enabled by the operator at `keeper.incarnation.run --dry-run` or via MCP/API. In this mode:
 
-- The framework calls `Plan(...)` RPC for each module instead of `Apply(...)`. Contract `SoulModule` - see [architecture.md → "Modules Protocol"](../architecture.md#протокол-модулей--grpc-over-stdio-hashicorp-style).
+- The framework calls `Plan(...)` RPC for each module instead of `Apply(...)`. Contract `SoulModule` - see [architecture.md → "Modules Protocol"](../architecture.md).
 - **Every module must implement `Plan`.** This is part of the SoulModule contract, not an optional feature. If a module cannot actually schedule (for example, a custom module with non-specific logic), it implements `Plan` **as a stub** that returns "no changes / unknown". The stub is valid and acceptable, but the module MUST respond to `Plan`.
 - There are no side-effects on the host - modules in `Plan` only read/parse.
 - Render templates, validation `input:` / `params:`, verification `when:` / `onchanges:` - performed as in a real run.
@@ -690,7 +690,7 @@ There is no special field for dry-run at the task level. If a task needs the beh
 
 ## 10. Template context
 
-Template engine - CEL for YAML expressions ([ADR-010](../adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов), [`docs/templating.md`](../templating.md)). Two positions:
+Template engine - CEL for YAML expressions ([ADR-010](../adr/0010-templating.md), [`docs/templating.md`](../templating.md)). Two positions:
 
 - **Top-level expression-keys** (`when:`, `changed_when:`, `failed_when:`, `until:`; in scenario also `where:`) - entire line = CEL **without wrapper**.
 - **String interpolation** in `params:`, `output:`, `loop.*:`, `vars.yml` values, task-level `vars:`, `apply: input:` - via the `${ … }` marker.
@@ -701,27 +701,27 @@ Available in both positions:
 |---|---|
 | `input.<name>` | Destiny parameters from the caller, declared in `destiny.yml → input:` and validated ([input.md](input.md)). |
 | `vars.<name>` | Destiny locals. Resolves according to the rule **task-level `vars:` beats file-level `vars.yml`** - the more local scope wins. More details: [vars.md](vars.md), task-level - §9. |
-| `soulprint.self.<…>` | Facts about the current host: `soulprint.self.os.family`, `soulprint.self.network.primary_ip`, `soulprint.self.memory.total_mb`, … ([ADR-018](../adr/0018-soulprint-typed.md#adr-018-soulprint-typed-схема-mvp), [`docs/soul/soulprint.md`](../soul/soulprint.md)). Bare `soulprint.<path>` without `.self` - validation error `soul-lint`. Cross-host requests (`soulprint.where(...)`, `soulprint.hosts`) - scenario level, **not destiny**. |
-| `register.<name>.*` | Results of previous tasks (per `register:`). Standard fields: `.changed`, `.failed`, `.timed_out` + fields from `output:` task. On a parallel task, calling `register.<name>` creates an **implicit barrier** (see §6). In a scenario, the probe step is executed on each target host → `register.<name>` is a per-host **map** `sid → payload`, not a scalar; convolution to one value - [scenario/orchestration.md §4.3](../scenario/orchestration.md#43-свёртка-агрегатного-register-к-одному-значению). |
-| `register.self.*` | Own result of the task. Available **in all expression-key task contexts** - `changed_when:` / `failed_when:` / `until:` (destiny + scenario), as well as `where:` (scenario-only, see [orchestration.md §4](../scenario/orchestration.md#4-волатильный-предикат--where)). |
-| `soulprint.hosts` | **Scenario-only.** List of run hosts; element - stable facts `sid` / `role` (declared) / `network` / `os` / `covens`. `.where("<pred>")` filters by any attribute (predicate-string). In destiny **not available** (like any cross-host `soulprint` request); destiny receives topology only through `apply: input:`. Specification - [scenario/orchestration.md §4.1](../scenario/orchestration.md#41-soulprinthosts--список-хостов-прогона-scenario-only-аксессор). |
-| `incarnation.host_count` | **Scenario-only.** Number of hosts in the run target. Used in the probe idiom of completeness (`failed_when: size(register.<p>) < incarnation.host_count`, [scenario/orchestration.md §5](../scenario/orchestration.md#5-probe-идиома-и-обработка-ошибок)). Not available in destiny (part of `incarnation.*`, scenario-scope). The formal definition is [`docs/scenario/orchestration.md §4.2`](../scenario/orchestration.md#42-incarnationhost_count--размер-таргета-прогона). |
+| `soulprint.self.<…>` | Facts about the current host: `soulprint.self.os.family`, `soulprint.self.network.primary_ip`, `soulprint.self.memory.total_mb`, … ([ADR-018](../adr/0018-soulprint-typed.md), [`docs/soul/soulprint.md`](../soul/soulprint.md)). Bare `soulprint.<path>` without `.self` - validation error `soul-lint`. Cross-host requests (`soulprint.where(...)`, `soulprint.hosts`) - scenario level, **not destiny**. |
+| `register.<name>.*` | Results of previous tasks (per `register:`). Standard fields: `.changed`, `.failed`, `.timed_out` + fields from `output:` task. On a parallel task, calling `register.<name>` creates an **implicit barrier** (see §6). In a scenario, the probe step is executed on each target host → `register.<name>` is a per-host **map** `sid → payload`, not a scalar; convolution to one value - [scenario/orchestration.md §4.3](../scenario/orchestration.md). |
+| `register.self.*` | Own result of the task. Available **in all expression-key task contexts** - `changed_when:` / `failed_when:` / `until:` (destiny + scenario), as well as `where:` (scenario-only, see [orchestration.md §4](../scenario/orchestration.md)). |
+| `soulprint.hosts` | **Scenario-only.** List of run hosts; element - stable facts `sid` / `role` (declared) / `network` / `os` / `covens`. `.where("<pred>")` filters by any attribute (predicate-string). In destiny **not available** (like any cross-host `soulprint` request); destiny receives topology only through `apply: input:`. Specification - [scenario/orchestration.md §4.1](../scenario/orchestration.md). |
+| `incarnation.host_count` | **Scenario-only.** Number of hosts in the run target. Used in the probe idiom of completeness (`failed_when: size(register.<p>) < incarnation.host_count`, [scenario/orchestration.md §5](../scenario/orchestration.md)). Not available in destiny (part of `incarnation.*`, scenario-scope). The formal definition is [`docs/scenario/orchestration.md §4.2`](../scenario/orchestration.md). |
 | `<as>` / `<index_as>` | The current item/index of the active `loop:` (names are configured in `loop:`). |
 
 ### Context depends on the calling entity (destiny = host / scenario = cluster)
 
-The DSL core of the tasks above is common to destiny and scenario ([ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация)). But **the template context is different** because the scope is different (one host vs one cluster):
+The DSL core of the tasks above is common to destiny and scenario ([ADR-009](../adr/0009-scenario-dsl.md)). But **the template context is different** because the scope is different (one host vs one cluster):
 
 | | destiny (single host) | scenario (one cluster) |
 |---|---|---|
 | `essence.*` | **NO** - destiny is isolated, sees only `input:`. Service inserts values into `input:` when `apply:` is called. | **is** - merged essence (default → os → coven → spec) is available directly. |
 | `incarnation.*` / `scenario.*` / `state.*` | **NO** - destiny does not know about the database and who called it. | **is** - attributes of the calling scenario / incarnation, current `state` from the database. |
-| `soulprint.where(<predicate>)` | **NO** - cross-host requests are a scenario level. | **is** - cross-host lookup by string predicate (`"'db' in covens"`, `"coven == 'prod'"`); in detail - [templating.md §2.3](../templating.md#23-зарегистрированные-cel-функции-стартовый-минимум). |
+| `soulprint.where(<predicate>)` | **NO** - cross-host requests are a scenario level. | **is** - cross-host lookup by string predicate (`"'db' in covens"`, `"coven == 'prod'"`); in detail - [templating.md §2.3](../templating.md). |
 | `vars.*` | destiny-locals from [`vars.yml`](vars.md) + task-level | scenario-locals (scenario-`vars.yml`) + task-level - two-level resolution, see [scenario/orchestration.md](../scenario/orchestration.md). |
 
 The listed "NO" refers specifically to the destiny context. Scenario context, orchestration keys (`on:`/`where:`/`apply:`) and cross-host mechanisms are specified in [`docs/scenario/`](../scenario/README.md) - are not duplicated here.
 
-The exact template engine is fixed [ADR-010](../adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов): CEL for YAML expressions (top-level expression-keys without wrapper + `${ … }`-interpolation in lines), Go text/template + sprig-allowlist for files `.tmpl` (rendering via `core.file.rendered`). Regulatory specification - [`docs/templating.md`](../templating.md). The same engine also serves scenario ([ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация)).
+The exact template engine is fixed [ADR-010](../adr/0010-templating.md): CEL for YAML expressions (top-level expression-keys without wrapper + `${ … }`-interpolation in lines), Go text/template + sprig-allowlist for files `.tmpl` (rendering via `core.file.rendered`). Regulatory specification - [`docs/templating.md`](../templating.md). The same engine also serves scenario ([ADR-009](../adr/0009-scenario-dsl.md)).
 
 ## 11. Full composite example
 
@@ -821,7 +821,7 @@ include groups by `loop:` (symmetry with `loop:` on the module task).
 
 ### Dry-run
 - **Variable `run.mode`.** Do we need to give tasks a way to know that the run is dry-run (via `when: run.mode == 'dry_run'` in templates)? This is a backdoor for custom behavior, but useful for destiny with critical operations.
-- **`Plan`-RPC API.** The exact contract between the host and the module is described in [architecture.md](../architecture.md#протокол-модулей--grpc-over-stdio-hashicorp-style), but the details (event-streaming, prediction format, how the stub should respond) are open Q.
+- **`Plan`-RPC API.** The exact contract between the host and the module is described in [architecture.md](../architecture.md), but the details (event-streaming, prediction format, how the stub should respond) are open Q.
 - **Dry-run for requisites.** In dry-run, `register.<name>.changed` is a **planned** change, not an actual one. Does this trigger onchanges-handler? Most likely yes - the operator should see "restart redis scheduled".
 
 ### Changed_when / failed_when
@@ -832,7 +832,7 @@ include groups by `loop:` (symmetry with `loop:` on the module task).
 - **Composition with `loop:` - CLOSED.** Task-level `vars:` are recalculated at **each** loop iteration and can refer to the loop variable `<as>`/`<index_as>` (vars are resolved within the iteration, after loop expansion). Captured in §9 "Links within `vars:`".
 
 ### Output
-- **Output at the destiny level is CLOSED.** Top-level `output:` in `destiny.yml` (scheme declaration, symmetrical to `input:`) + task-level `output:` (filling declared fields) are accepted as a general mechanism. Specification - [destiny/output.md](output.md); reading from scenario via `register:` on the applier task - [scenario/orchestration.md §2](../scenario/orchestration.md#2-дельта-scenario-относительно-dsl-ядра).
+- **Output at the destiny level is CLOSED.** Top-level `output:` in `destiny.yml` (scheme declaration, symmetrical to `input:`) + task-level `output:` (filling declared fields) are accepted as a general mechanism. Specification - [destiny/output.md](output.md); reading from scenario via `register:` on the applier task - [scenario/orchestration.md §2](../scenario/orchestration.md).
 - **Output via `include:`.** Is `output:` visible to tasks from the included file in the caller?
 
 ### `name:` as lint rule
@@ -845,5 +845,5 @@ include groups by `loop:` (symmetry with `loop:` on the module task).
 - [input.md](input.md) - `input:`-contract.
 - [vars.md](vars.md) - `vars.yml`-destiny locals.
 - [testing.md](testing.md) - molecule-style testing (including coverage).
-- [architecture.md → "Addressing modules"](../architecture.md#адресация-модулей) - format `<namespace>.<module>.<state>`.
-- [architecture.md → "Module Manifest"](../architecture.md#манифест-модуля) - where the `params:` schema for each `module:` comes from.
+- [architecture.md → "Addressing modules"](../architecture.md) - format `<namespace>.<module>.<state>`.
+- [architecture.md → "Module Manifest"](../architecture.md) - where the `params:` schema for each `module:` comes from.

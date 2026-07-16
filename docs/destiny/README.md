@@ -17,11 +17,11 @@ Documentation on destiny - the atomic declarative brick of the Soul Stack ("how 
 
 ## Related Documents
 
-- [`docs/scenario/`](../scenario/README.md) - layer above destiny: orchestration, `on:`/`where:`-targeting, `apply: { destiny: … }`. After [ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация), the scenario inherits the task DSL core from [tasks.md](tasks.md); destiny/scenario boundary - recommendation.
+- [`docs/scenario/`](../scenario/README.md) - layer above destiny: orchestration, `on:`/`where:`-targeting, `apply: { destiny: … }`. After [ADR-009](../adr/0009-scenario-dsl.md), the scenario inherits the task DSL core from [tasks.md](tasks.md); destiny/scenario boundary - recommendation.
 - [`docs/architecture.md`](../architecture.md) - layers above and below destiny:
-  - [Addressing modules](../architecture.md#адресация-модулей), [Module manifest](../architecture.md#манифест-модуля) - layer under destiny.
-  - [Service - structure and manifest](../architecture.md#service--структура-и-manifest), [Targeting and host communication](../architecture.md#targeting-и-связь-хостов) - layer above destiny.
-  - [ADR-007](../adr/0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте) - why is there no `version:` field in `destiny.yml`.
+  - [Addressing modules](../architecture.md), [Module manifest](../architecture.md) - layer under destiny.
+  - [Service - structure and manifest](../architecture.md), [Targeting and host communication](../architecture.md) - layer above destiny.
+  - [ADR-007](../adr/0007-versioning-git-ref.md) - why is there no `version:` field in `destiny.yml`.
 - [`docs/input.md`](../input.md) - **general** format standard for `input:` (applies to destiny, scenario and module manifest).
 - [`docs/templating.md`](../templating.md) - template engine spec (ADR-010): CEL for expressions in destiny tasks, Go text/template for `templates/*.tmpl`, marker `${ … }`, `core.file.rendered` as a render module.
 - [`docs/soul-lint.md`](../soul-lint.md) - static checks of destiny at the CI/IDE stage.

@@ -2,13 +2,13 @@
 
 Soulprint is our analogue of Salt grains: facts about the host that the Soul agent collects and periodically pushes to Keeper. They are used in scenario targeting, in the essence pipeline, in core modules for abstraction via the native pkg-mgr/init-system, and in the template rendering of configs.
 
-**The source of truth on the schema is [ADR-018](../adr/0018-soulprint-typed.md#adr-018-soulprint-typed-схема-mvp).** This document is a detailed spec of the fields, semantics, collection algorithms, and use-cases.
+**The source of truth on the schema is [ADR-018](../adr/0018-soulprint-typed.md).** This document is a detailed spec of the fields, semantics, collection algorithms, and use-cases.
 
 ## Delivery contract
 
-- The Soul agent periodically collects facts (`refresh_interval` in `soul.yml`, default `5m` — see [`soul/config.md`](config.md)) and sends `SoulprintReport` over the EventStream ([ADR-012](../adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add)).
+- The Soul agent periodically collects facts (`refresh_interval` in `soul.yml`, default `5m` — see [`soul/config.md`](config.md)) and sends `SoulprintReport` over the EventStream ([ADR-012](../adr/0012-keeper-soul-grpc.md)).
 - `SoulprintReport.collected_at` — the Soul-side timestamp of the moment of collection. On unmarshal, Keeper additionally sets `received_at` in Postgres (not part of the wire format). On a divergence > 10 minutes — a warn in the OTel trace.
-- `SoulprintReport.facts` (`google.protobuf.Struct`) — a **deprecated** stub from the era of [ADR-012(g)](../adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add). Kept for wire-compat (forward-compat only-add); Soul agents of newer versions do not fill it, Keeper is tolerant.
+- `SoulprintReport.facts` (`google.protobuf.Struct`) — a **deprecated** stub from the era of [ADR-012(g)](../adr/0012-keeper-soul-grpc.md). Kept for wire-compat (forward-compat only-add); Soul agents of newer versions do not fill it, Keeper is tolerant.
 - `SoulprintReport.typed_facts` (`SoulprintFacts`) — the main channel, see below.
 
 ## The full SoulprintFacts schema
@@ -17,7 +17,7 @@ Soulprint is our analogue of Salt grains: facts about the host that the Soul age
 
 | Field | Type | Semantics |
 |---|---|---|
-| `sid` | string | Echo SID for logs. **The authority is the mTLS peer cert** (see [ADR-012(i)](../adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add)), not an identity claim. |
+| `sid` | string | Echo SID for logs. **The authority is the mTLS peer cert** (see [ADR-012(i)](../adr/0012-keeper-soul-grpc.md)), not an identity claim. |
 | `hostname` | string | The short name (without the domain), the result of `uname -n` / `gethostname()`. Differs from `network.fqdn` (the full FQDN). |
 | `os` | [OsFacts](#osfacts) | The operating system. |
 | `kernel` | [KernelFacts](#kernelfacts) | The kernel. |
@@ -31,7 +31,7 @@ Soulprint is our analogue of Salt grains: facts about the host that the Soul age
 
 | Field | Type | Example | Semantics |
 |---|---|---|---|
-| `family` | string | `debian` / `rhel` / `alpine` / `windows` / `darwin` | Used in the essence pipeline (the `os/<family>.yaml` step, see [ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация)). |
+| `family` | string | `debian` / `rhel` / `alpine` / `windows` / `darwin` | Used in the essence pipeline (the `os/<family>.yaml` step, see [ADR-009](../adr/0009-scenario-dsl.md)). |
 | `distro` | string | `ubuntu` / `rocky` / `alpine` | The concrete distribution. |
 | `version` | string | `22.04` / `9.3` / `3.19` | The distribution version as a string (not SemVer). |
 | `codename` | string | `jammy` / `bookworm` / `""` | Optional (not present in all distros). |
@@ -122,23 +122,23 @@ From destiny and scenario:
 
 **The bare form `soulprint.<path>` without `.self`** is a **`soul-lint` validation error**. The canonical form is mandatory.
 
-**`soulprint.self.sid` / `.covens` / `.choirs` / `.traits` / `.role` are a registry projection, available ALWAYS**, regardless of whether Soul has sent a `SoulprintReport`. The source is Keeper's roster (`souls.sid` / `souls.coven[]` / `incarnation_choir_voices` / `souls.traits` / the role from a Voice or `incarnation.spec.hosts[].role`), not collected facts: `sid` is authoritative via the mTLS peer cert. Keeper mixes them into `soulprint.self` when resolving CEL even with NULL reported facts (a freshly connected host / the collector is not yet implemented). Registry fields **overwrite** identically named reported keys if those happen to be in the push (the registry is the source of truth, [ADR-018](../adr/0018-soulprint-typed.md#adr-018-soulprint-typed-схема-mvp)). The other branches (`os` / `network` / `kernel` / `cpu` / `memory`) are available only when Soul has sent them — otherwise an access gives the ordinary `no such key`.
+**`soulprint.self.sid` / `.covens` / `.choirs` / `.traits` / `.role` are a registry projection, available ALWAYS**, regardless of whether Soul has sent a `SoulprintReport`. The source is Keeper's roster (`souls.sid` / `souls.coven[]` / `incarnation_choir_voices` / `souls.traits` / the role from a Voice or `incarnation.spec.hosts[].role`), not collected facts: `sid` is authoritative via the mTLS peer cert. Keeper mixes them into `soulprint.self` when resolving CEL even with NULL reported facts (a freshly connected host / the collector is not yet implemented). Registry fields **overwrite** identically named reported keys if those happen to be in the push (the registry is the source of truth, [ADR-018](../adr/0018-soulprint-typed.md)). The other branches (`os` / `network` / `kernel` / `cpu` / `memory`) are available only when Soul has sent them — otherwise an access gives the ordinary `no such key`.
 
 ### Scenario-only accessors
 
-These are available **only from a scenario**, not from a destiny (see [destiny/tasks.md §10](../destiny/tasks.md#10-шаблонный-контекст)):
+These are available **only from a scenario**, not from a destiny (see [destiny/tasks.md §10](../destiny/tasks.md)):
 
 | Path | Type | Semantics |
 |---|---|---|
-| `soulprint.hosts` | list<HostFacts> | All hosts of the current run with their stable facts (see [scenario/orchestration.md §4.1](../scenario/orchestration.md#41-soulprinthosts--список-хостов-прогона-scenario-only-аксессор)). |
+| `soulprint.hosts` | list<HostFacts> | All hosts of the current run with their stable facts (see [scenario/orchestration.md §4.1](../scenario/orchestration.md)). |
 | `soulprint.hosts.where(<predicate>)` | list<HostFacts> | A filter by a **CEL predicate string** (`"'db' in covens"`, `"'replicas' in choirs"`, `"os.family == 'debian'"`, `"sid == soulprint.self.sid"`). The attributes — covens / choirs / sid / network.* / os.* / role. |
-| `soulprint.where(<predicate>)` | list<HostFacts> | The list of hosts of the **current run** satisfying a CEL predicate string over the stable facts. Coincides with `soulprint.hosts.where(<predicate>)` in semantics and data source — it is a synonym for the frequent case when the full `soulprint.hosts` list is not intermediately needed. **Scenario-only**, like `soulprint.hosts` ([orchestration.md §4.1](../scenario/orchestration.md#41-soulprinthosts--список-хостов-прогона-scenario-only-аксессор)). Keyword-args (`coven=...`) are not supported (CEL has no keyword-args). |
+| `soulprint.where(<predicate>)` | list<HostFacts> | The list of hosts of the **current run** satisfying a CEL predicate string over the stable facts. Coincides with `soulprint.hosts.where(<predicate>)` in semantics and data source — it is a synonym for the frequent case when the full `soulprint.hosts` list is not intermediately needed. **Scenario-only**, like `soulprint.hosts` ([orchestration.md §4.1](../scenario/orchestration.md)). Keyword-args (`coven=...`) are not supported (CEL has no keyword-args). |
 
 The structure of a `HostFacts` element coincides with `SoulprintFacts` + `covens`, `choirs`, `traits` are added (all three are Keeper-registry projections; `traits` are operator-set key-value labels, ADR-060) and `role` (a Keeper-registry projection, available on any run). `role` is filled by the topology resolver for each host of the roster with precedence **Choir Voice > spec**: the source is the Voice's role from `incarnation_choir_voices` (ADR-044, S-T6), and `incarnation.spec.hosts[].role` is a fallback for hosts without a Voice (including bootstrap-create, where there are no Choir memberships yet). If neither the Voice nor the spec gives a role — `role` is empty.
 
 ### Text/template context (for .tmpl)
 
-Inside `.tmpl` files (rendered via `core.file.rendered`, [ADR-010](../adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов)) there is a fixed set of system fields:
+Inside `.tmpl` files (rendered via `core.file.rendered`, [ADR-010](../adr/0010-templating.md)) there is a fixed set of system fields:
 
 - `.self.sid` — string
 - `.self.hostname` — string
@@ -196,8 +196,8 @@ These fields are available without explicitly passing them in `vars:` — this i
 
 ## Related documents
 
-- [ADR-018 in `docs/architecture.md`](../adr/0018-soulprint-typed.md#adr-018-soulprint-typed-схема-mvp) — the decision record.
-- [ADR-012(g) in `docs/architecture.md`](../adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add) — the `facts: Struct` stub (now deprecated).
+- [ADR-018 in `docs/architecture.md`](../adr/0018-soulprint-typed.md) — the decision record.
+- [ADR-012(g) in `docs/architecture.md`](../adr/0012-keeper-soul-grpc.md) — the `facts: Struct` stub (now deprecated).
 - [`docs/soul/config.md`](config.md) — the `soulprint:` block (`refresh_interval`).
 - [`docs/keeper/storage.md`](../keeper/storage.md) — where Soulprint lives in Postgres.
 - [`docs/keeper/modules.md`](../keeper/modules.md) — `core.soul.registered` (Keeper-registry covens).

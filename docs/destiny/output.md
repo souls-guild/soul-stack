@@ -17,7 +17,7 @@ At the root `destiny.yml` (see [manifest.md](manifest.md) → field `output:`). 
 `output:` - **giving** one's own result to destiny outward. This is **not** a mechanism for reading someone else's state:
 
 - destiny **publishes** its run result through the declared `output:` fields.
-- destiny **never reads** the caller's context (scenario / other destiny / state). Destiny isolation is not broken ([ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация)).
+- destiny **never reads** the caller's context (scenario / other destiny / state). Destiny isolation is not broken ([ADR-009](../adr/0009-scenario-dsl.md)).
 
 The symmetry is obvious: `input:` is from outside to inside destiny, `output:` is from inside to outside. Both contracts are declared by destiny, both are validated by the engine, and neither allows destiny to spy on someone else's context.
 
@@ -43,7 +43,7 @@ Same two rounds, same principle as `input:` (see [destiny/input.md → Where is 
 
 ## How the caller reads - `register:` on the applier task
 
-Scenario calls destiny via `apply: { destiny: ..., input: { ... } }` ([scenario/orchestration.md §2.1.1](../scenario/orchestration.md#211-register-на-applier-задаче--чтение-результата-destiny)). The scenario's Applier task sets `register: <name>`, and `register.<name>` has two parts with different implementation status:
+Scenario calls destiny via `apply: { destiny: ..., input: { ... } }` ([scenario/orchestration.md §2.1.1](../scenario/orchestration.md)). The scenario's Applier task sets `register: <name>`, and `register.<name>` has two parts with different implementation status:
 
 - **DSL core `.changed` / `.failed` / `.timed_out` - implemented.** These fields are materialized as **aggregate `OR`** for all child applier tasks (`changed = OR(child.changed)`, similar to `failed` / `timed_out`; `skipped` - always `false`). External `onchanges: [<name>]` / `onfail: [<name>]` / `when: register.<name>.changed` resolves for this unit. The DSL core fields are present **regardless** of whether destiny top-level `output:` is declared.
 - **`.<output field>` according to the announced top-level `output:` contract - PLANNED.** Forwarding application fields of destiny from its `output:` block to `register.<name>.<output field>` has not yet been **implemented** (a separate future slice - see note below).
@@ -67,15 +67,15 @@ Scenario calls destiny via `apply: { destiny: ..., input: { ... } }` ([scenario/
 
 ## `output:` ≠ artifact version
 
-The appearance/expansion of the `output:` contract destiny is an evolution of the contract, **not** a reason to introduce the `version:` field into `destiny.yml`. The destiny version is git ref, under which the file is committed ([ADR-007](../adr/0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте)); the rule applies to `output:` in exactly the same way as to `input:` and the rest of the manifest.
+The appearance/expansion of the `output:` contract destiny is an evolution of the contract, **not** a reason to introduce the `version:` field into `destiny.yml`. The destiny version is git ref, under which the file is committed ([ADR-007](../adr/0007-versioning-git-ref.md)); the rule applies to `output:` in exactly the same way as to `input:` and the rest of the manifest.
 
 ## Communication with `output:` scenario
 
-Scenario `output:` block **no**: scenario writes the result to `incarnation.state` via `state_changes` ([architecture.md → Incarnation](../architecture.md#incarnation--runtime-инстанс-сервиса)), rather than returning values to the caller. Top-level `output:` is a destiny-entity, symmetrical to destiny-`input:`. The scenario only has task-level `output:` (part of the task DSL core, [destiny/tasks.md §9](tasks.md#9-strength-and-control-of-execution)) for internal `register:` chains.
+Scenario `output:` block **no**: scenario writes the result to `incarnation.state` via `state_changes` ([architecture.md → Incarnation](../architecture.md)), rather than returning values to the caller. Top-level `output:` is a destiny-entity, symmetrical to destiny-`input:`. The scenario only has task-level `output:` (part of the task DSL core, [destiny/tasks.md §9](tasks.md#9-strength-and-control-of-execution)) for internal `register:` chains.
 
 > **`register:` as the source of `state_changes`.** `state_changes.sets` can
 > read `register.<task>.<field>` probe-run tasks
-> ([scenario/orchestration.md §7.1](../scenario/orchestration.md#71-грамматика-state_changes--список-crud-операций)).
+> ([scenario/orchestration.md §7.1](../scenario/orchestration.md)).
 > `TaskEvent.register_data` accumulates on the Keeper side (table
 > `apply_task_register`), after the barrier scenario-runner builds per-host
 > register map and renders `sets`. Register keeper-side tasks (`on: keeper`,
@@ -98,5 +98,5 @@ Scenario `output:` block **no**: scenario writes the result to `incarnation.stat
 - [`docs/destiny/input.md`](input.md) - destiny specificity of the input contract (symmetric document).
 - [manifest.md](manifest.md) - where `output:` lives in `destiny.yml`.
 - [tasks.md §9](tasks.md#9-strength-and-control-of-execution) — task-level `output:` (fills the declared top-level fields).
-- [scenario/orchestration.md §2.1.1](../scenario/orchestration.md#211-register-на-applier-задаче--чтение-результата-destiny) - `register:` on the applier task: implemented aggregate `.changed`/`.failed`/`.timed_out` vs planned output projection.
-- [ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) - destiny isolation: `output:` (giving your own) does not break it.
+- [scenario/orchestration.md §2.1.1](../scenario/orchestration.md) - `register:` on the applier task: implemented aggregate `.changed`/`.failed`/`.timed_out` vs planned output projection.
+- [ADR-009](../adr/0009-scenario-dsl.md) - destiny isolation: `output:` (giving your own) does not break it.

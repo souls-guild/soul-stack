@@ -22,9 +22,9 @@ The `soul` binary is the agent daemon on a managed host. It receives from Keeper
         + soul_seeds                    no soul_seeds
 ```
 
-On the left is Keeper (the central server, see [architecture.md → Topology](../architecture.md#топология)). To the right of Keeper is the Destiny / Service / Incarnation registry in Postgres. Soul sits "below Destiny": it receives an atomic brick and applies it on a single host through [modules](../architecture.md#модель-модулей).
+On the left is Keeper (the central server, see [architecture.md → Topology](../architecture.md)). To the right of Keeper is the Destiny / Service / Incarnation registry in Postgres. Soul sits "below Destiny": it receives an atomic brick and applies it on a single host through [modules](../architecture.md).
 
-The detailed definition of the binaries is in [architecture.md → Binary roles](../architecture.md#роли-бинарей).
+The detailed definition of the binaries is in [architecture.md → Binary roles](../architecture.md).
 
 ## Two transports
 
@@ -49,8 +49,8 @@ A push host can migrate to pull at any time (a daemon is installed, the operator
 - **No outbound traffic beyond Keeper.** On its own initiative Soul reaches only its Keeper cluster (and the resources explicitly allowed within a Destiny). No telemetry calls, no automatic updates that bypass Keeper.
 - **One binary — two modes.** The pull daemon and the push one-shot are `soul` with a different entry point (`soul` as a service vs `soul apply` as a command). The module set, step execution, and event format are identical.
 - **One `souls` record per host, a different `transport`.** Push and pull are a field in `souls`, not separate entities. This yields a single registry, a single audit, a single RBAC, and the ability to switch modes without losing history.
-- **Identity is decoupled from the transport.** SoulSeed is needed only by the pull mode (there Soul initiates the connection and must authorize itself). In push, the host identity is its SSH side; see [keeper/push.md → SSH authentication](../keeper/push.md#аутентификация-ssh--pluggable-provider).
-- **The local admin endpoint is not defined yet.** Whether a separate socket/port on the host is needed for status, force-resync, or a Soulprint dump is an open question (see [architecture.md → Open questions](../architecture.md#открытые-вопросы), the item "Локальный admin-эндпоинт на Soul").
+- **Identity is decoupled from the transport.** SoulSeed is needed only by the pull mode (there Soul initiates the connection and must authorize itself). In push, the host identity is its SSH side; see [keeper/push.md → SSH authentication](../keeper/push.md).
+- **The local admin endpoint is not defined yet.** Whether a separate socket/port on the host is needed for status, force-resync, or a Soulprint dump is an open question (see [architecture.md → Open questions](../architecture.md), the item "Local admin endpoint on Soul").
 
 ## See also
 
@@ -59,6 +59,6 @@ A push host can migrate to pull at any time (a daemon is installed, the operator
 - [connection.md](connection.md) — `priority + failback` for the pull mode.
 - [config.md](config.md) — the `soul.yml` format.
 - [modules.md](modules.md) — the module cache on the host.
-- [architecture.md → Binary roles](../architecture.md#роли-бинарей) — the definition of `soul` in the context of the three binaries.
-- [architecture.md → Push mode](../architecture.md#push-режим-keeperpush) — the push specification.
-- [architecture.md → Module model](../architecture.md#модель-модулей) — what Soul executes.
+- [architecture.md → Binary roles](../architecture.md) — the definition of `soul` in the context of the three binaries.
+- [architecture.md → Push mode](../architecture.md) — the push specification.
+- [architecture.md → Module model](../architecture.md) — what Soul executes.

@@ -1,6 +1,6 @@
 # Soul identity and registries
 
-An architectural overview and the relation to other sections are in [architecture.md → Soul lifecycle and the soul registry](../architecture.md#жизненный-цикл-soul-и-реестр-душ). Here is the assembled picture from the Soul's point of view: "who am I in Keeper's DB and by which fields am I described there".
+An architectural overview and the relation to other sections are in [architecture.md → Soul lifecycle and the soul registry](../architecture.md). Here is the assembled picture from the Soul's point of view: "who am I in Keeper's DB and by which fields am I described there".
 
 ## Identity
 
@@ -30,7 +30,7 @@ A table in Postgres with the following fields (simplified schema, without operat
 
 ## The bootstrap_tokens registry
 
-A separate table: a Soul can have **one active (unused) token** at a time. After use the record remains in the table for audit, cleaned up by the Reaper (see [architecture.md → Reaper](../architecture.md#reaper--жнец)).
+A separate table: a Soul can have **one active (unused) token** at a time. After use the record remains in the table for audit, cleaned up by the Reaper (see [architecture.md → Reaper](../architecture.md)).
 
 For push hosts (`transport: ssh`) records in `bootstrap_tokens` are **not created** — they have no bootstrap phase, symmetrically with `soul_seeds` (see below).
 
@@ -47,7 +47,7 @@ For push hosts (`transport: ssh`) records in `bootstrap_tokens` are **not create
 
 **Invariant:** `UNIQUE (sid) WHERE used_at IS NULL` — a Soul can have only one unused token at a time.
 
-**Cascade on cloud-destroy ([ADR-017](../adr/0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read)):** if a SID is deleted via `core.cloud.provisioned destroyed`, the not-yet-used tokens of this SID are marked `used_at = NOW()`, `used_by_kid = 'system-cloud-destroy'` (a special marker, **not** a real KID and **not** an AID; it protects the anti-replay invariant).
+**Cascade on cloud-destroy ([ADR-017](../adr/0017-keeper-side-core.md)):** if a SID is deleted via `core.cloud.provisioned destroyed`, the not-yet-used tokens of this SID are marked `used_at = NOW()`, `used_by_kid = 'system-cloud-destroy'` (a special marker, **not** a real KID and **not** an AID; it protects the anti-replay invariant).
 
 The lifecycle (issue → delivery → CSR → burn) and the presentation SQL transaction are in [onboarding.md](onboarding.md).
 
@@ -76,9 +76,9 @@ A separate table: one SID — many seeds (the rotation history). One active at a
 - `superseded` — replaced by a rotation, a new seed is already active.
 - `expired` — moved by the Reaper / Vault PKI after `not_after`.
 - `revoked` — the operator revoked it (security incident, compromise). Audit semantics: "the operator made a decision".
-- `orphaned` — the host was cascade-deleted from `core.cloud.provisioned destroyed` ([ADR-017](../adr/0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read)). Audit semantics: "the VM lifecycle ended". The cascade applies only to `active` seeds; `revoked` is NOT overwritten (precedence revoked > orphaned).
+- `orphaned` — the host was cascade-deleted from `core.cloud.provisioned destroyed` ([ADR-017](../adr/0017-keeper-side-core.md)). Audit semantics: "the VM lifecycle ended". The cascade applies only to `active` seeds; `revoked` is NOT overwritten (precedence revoked > orphaned).
 
-For push hosts (`transport: ssh`) `soul_seeds` is **not used** — they have no mTLS identity, see [concept.md → Two transports](concept.md#два-транспорта).
+For push hosts (`transport: ssh`) `soul_seeds` is **not used** — they have no mTLS identity, see [concept.md → Two transports](concept.md).
 
 ## Soul statuses and transitions
 
@@ -87,11 +87,11 @@ For push hosts (`transport: ssh`) `soul_seeds` is **not used** — they have no 
 - **`disconnected`** — a legacy lifecycle snapshot "last known: the stream was closed/lost". Soul may return; presence (online) will then be restored via lease capture, regardless of whether the Reaper managed to reconcile the snapshot back to `connected`.
 - **`revoked`** — the operator revoked it. The certificate in `soul_seeds` is marked `revoked`, new connections from this SID are rejected at the TLS level.
 - **`expired`** — the Reaper moved `pending` after the bootstrap-token TTL (Soul never arrived).
-- **`destroyed`** — a terminal state ([ADR-017](../adr/0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read) cascade): the host was physically deleted via `core.cloud.provisioned destroyed`. There are no outgoing transitions — the record remains as a forensic object and **is not part of** the default set `purge_souls.statuses` ([keeper/reaper.md](../keeper/reaper.md)). The operator may delete it manually.
+- **`destroyed`** — a terminal state ([ADR-017](../adr/0017-keeper-side-core.md) cascade): the host was physically deleted via `core.cloud.provisioned destroyed`. There are no outgoing transitions — the record remains as a forensic object and **is not part of** the default set `purge_souls.statuses` ([keeper/reaper.md](../keeper/reaper.md)). The operator may delete it manually.
 
 ### Presence (online/offline) = the Redis SID lease, not souls.status
 
-**The authority for "Soul online" is a live Redis SID lease** `soul:<sid>:lock` (the value = the `kid` of the owning Keeper instance, [ADR-006(a)/(b)](../adr/0006-cache-redis.md#adr-006-кэш-и-координация--redis)). The lease is captured on EventStream session-open (after handshake) and renewed by a renewal goroutine while the stream is alive; it goes out on a normal Release (teardown) or by TTL after an instance crash. **There is NO synchronous write of presence into `souls.status` on connect/disconnect** — at the 100k VM target this would be a hot path of PG writes; presence is held in the hot Redis layer.
+**The authority for "Soul online" is a live Redis SID lease** `soul:<sid>:lock` (the value = the `kid` of the owning Keeper instance, [ADR-006(a)/(b)](../adr/0006-cache-redis.md)). The lease is captured on EventStream session-open (after handshake) and renewed by a renewal goroutine while the stream is alive; it goes out on a normal Release (teardown) or by TTL after an instance crash. **There is NO synchronous write of presence into `souls.status` on connect/disconnect** — at the 100k VM target this would be a hot path of PG writes; presence is held in the hot Redis layer.
 
 **The run's target resolver derives online from the lease**, not from `souls.status`: in two phases — (1) SQL candidates by Coven membership + status NOT terminal/onboarding (`pending`/`revoked`/`expired`/`destroyed` excluded), (2) filtering out candidates without a live SID lease (batch EXISTS). So a Soul that reconnected after a Keeper restart is visible to the resolver immediately upon lease capture — even if the `souls.status` snapshot is still `disconnected`. An idle Soul (sends only soulprint once per `refresh_interval`, no app messages in the window) remains online as long as the renewal holds the lease. Without a configured Redis (single-instance dev / unit) the resolver degrades to the SQL snapshot (`status='connected'`).
 
@@ -200,6 +200,6 @@ In-place SID rename is not supported. If the host's FQDN changed — this is a *
 - [onboarding.md](onboarding.md) — the bootstrap-token lifecycle, the presentation SQL transaction, delivery.
 - [connection.md](connection.md) — how a Soul with an already-issued SoulSeed connects to Keeper.
 - [config.md](config.md) — where `paths.seed` and `tls.ca` live on the host.
-- [architecture.md → Soul lifecycle and the soul registry](../architecture.md#жизненный-цикл-soul-и-реестр-душ) — the architectural overview.
-- [architecture.md → Reaper](../architecture.md#reaper--жнец) — the registry GC rules.
+- [architecture.md → Soul lifecycle and the soul registry](../architecture.md) — the architectural overview.
+- [architecture.md → Reaper](../architecture.md) — the registry GC rules.
 - [naming-rules.md](../naming-rules.md) — the vocabulary of names (SID, KID, SoulSeed, Coven).

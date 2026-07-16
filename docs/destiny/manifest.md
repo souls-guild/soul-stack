@@ -36,13 +36,13 @@ The root file is **only** the manifest. There is no list of tasks in it; he live
 | `description:` | recommended | One or two phrases in English: what destiny does on the host. Visible in UI Keeper, MCP directory, output `soul-lint`. |
 | `input:` | yes (if there are parameters) | Entry contract. Format - general standard [`docs/input.md`](../input.md); destiny-specifics - in [input.md](input.md). |
 | `output:` | no (yes = destiny returns the result to the caller) | Exit contract. **Symmetrical to `input:`** in shape - same general standard [`docs/input.md`](../input.md); destiny-specifics - in [output.md](output.md). Optional: if destiny doesn't publish anything to the outside, the block is omitted. |
-| `required_modules:` | no | List of **custom** modules (two-level form `<namespace>.<module>`) required by tasks. Core modules **are not listed** - they are always available. See [architecture.md → "Addressing modules"](../architecture.md#адресация-модулей). |
+| `required_modules:` | no | List of **custom** modules (two-level form `<namespace>.<module>`) required by tasks. Core modules **are not listed** - they are always available. See [architecture.md → "Addressing modules"](../architecture.md). |
 
 ### What is NOT in `destiny.yml`
 
 - **The task list itself.** Located in `tasks/main.yml` as a top-level YAML list (see [tasks.md](tasks.md)). If you see `tasks:` or `steps:` as a key in `destiny.yml`, this is an outdated format.
 - **Destiny locals (`vars:`).** They are located in `vars.yml` next to `destiny.yml` as a top-level YAML-map (see [vars.md](vars.md)).
-- **`version:`.** The destiny version is git ref, under which the file is committed. See [ADR-007](../adr/0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте). The extension of the `output:` contract is an evolution of the contract, **not** a reason to introduce `version:`; rule ADR-007 applies to `output:` in the same way as to `input:`.
+- **`version:`.** The destiny version is git ref, under which the file is committed. See [ADR-007](../adr/0007-versioning-git-ref.md). The extension of the `output:` contract is an evolution of the contract, **not** a reason to introduce `version:`; rule ADR-007 applies to `output:` in the same way as to `input:`.
 - **`templates:` / `tests:` sections.** These are **folders** on disk, not manifest fields. The content is picked up according to convention.
 
 ### Example
@@ -104,4 +104,4 @@ One `tasks/main.yml` copes as long as destiny remains an atomic brick. If the fi
 - [output.md](output.md) - destiny-specific `output:` (symmetric document).
 - [testing.md](testing.md) — `tests/<case>/` layout.
 - [../service/manifest.md](../service/manifest.md) - format `service.yml` (level above destiny: service type, scenario operations, state_schema, migrations).
-- [ADR-007](../adr/0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте) - why is `version:` missing.
+- [ADR-007](../adr/0007-versioning-git-ref.md) - why is `version:` missing.

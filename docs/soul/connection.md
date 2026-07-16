@@ -1,6 +1,6 @@
 # Connecting Soul to the Keeper cluster
 
-The specification of the `priority + failback` algorithm for the pull mode (`transport: agent`). In the push mode (`transport: ssh`) the algorithm **does not apply** — Keeper itself initiates the SSH session to the host, see [architecture.md → Push mode](../architecture.md#push-режим-keeperpush).
+The specification of the `priority + failback` algorithm for the pull mode (`transport: agent`). In the push mode (`transport: ssh`) the algorithm **does not apply** — Keeper itself initiates the SSH session to the host, see [architecture.md → Push mode](../architecture.md).
 
 ## Conventions
 
@@ -122,7 +122,7 @@ A separate branch of the reconnect backoff, **inside** the algorithm above — n
 - do not hammer the surviving Keepers with log noise and churn for the whole presence window;
 - reconnect within seconds after the lease is released, instead of waiting out the inflated general cap.
 
-The lease is released by the **keeper side**: after the presence of the former holder expires, a surviving Keeper does a presence-gated force-release of the SID lease (a provably-dead holder → a CAS takeover of the key by a new KID). The Soul side is complementary — it patiently retries with a modest backoff until the keeper releases the key. The keeper-side details (presence gate, split-brain safety, the residual window ≤Conclave-TTL) are in [recovery-reclaim-apply-runs.md → presence-gated force-release SID-lease](../operations/recovery-reclaim-apply-runs.md#presence-gated-force-release-sid-lease--сокращение-окна-невидимости-soul-а).
+The lease is released by the **keeper side**: after the presence of the former holder expires, a surviving Keeper does a presence-gated force-release of the SID lease (a provably-dead holder → a CAS takeover of the key by a new KID). The Soul side is complementary — it patiently retries with a modest backoff until the keeper releases the key. The keeper-side details (presence gate, split-brain safety, the residual window ≤Conclave-TTL) are in [recovery-reclaim-apply-runs.md → presence-gated force-release SID-lease](../operations/recovery-reclaim-apply-runs.md).
 
 **Spray is not affected.** `AlreadyExists` on **one** endpoint does not break the fallback-list traversal — the next endpoint may already have taken over the lease after the force-release. The modest cap kicks in only when **all** tried endpoints returned `AlreadyExists` (meaning the lease is still held everywhere); if at least one failure is not `AlreadyExists`, it is a transport failure → the general exponential up to `retry.backoff.max`.
 
@@ -137,6 +137,6 @@ The lease is released by the **keeper side**: after the presence of the former h
 
 - [config.md](config.md) — the full `soul.yml` layout, including the `keeper:` block.
 - [onboarding.md](onboarding.md) — `soul init` uses the same algorithm on the first CSR.
-- [architecture.md → Soul connection: priority and failback](../architecture.md#подключение-soul-priority-и-failback) — a short architectural overview and the relation to the push mode.
+- [architecture.md → Soul connection: priority and failback](../architecture.md) — a short architectural overview and the relation to the push mode.
 - [architecture.md → ADR-002](../adr/0002-transport-grpc-ha.md#adr-002-transport-keeper--souls--grpc-bidirectional-stream-over-mtls-ha-keeper-cluster) — the rationale for the bidi stream and the HA Keeper cluster.
 - [`examples/soul/soul.yml`](../../examples/soul/soul.yml) — a working config example.

@@ -57,7 +57,7 @@ Not to be confused:
 | | `input.<name>` | `params.<name>` |
 |---|---|---|
 | **What** | Destiny parameter declared in `destiny.yml → input:` | Module-specific argument passed in step `tasks/main.yml` |
-| **Where is the schema from** | [`docs/input.md`](../input.md) - general standard | Module manifest for a specific state (see [architecture.md → "Module Manifest"](../architecture.md#манифест-модуля)) |
+| **Where is the schema from** | [`docs/input.md`](../input.md) - general standard | Module manifest for a specific state (see [architecture.md → "Module Manifest"](../architecture.md)) |
 | **Who validates** | Keeper + Soul (see above) | Soul on apply; `soul-lint` statically by module manifest |
 | **Access in templates** | `${ input.action }` (or naked `input.action` in top-level expression-keys) | internal task value, not visible outside |
 
@@ -65,7 +65,7 @@ The names are intentionally different: `input` - *outside inside destiny*; `para
 
 ## Destiny-specific rules and tips
 
-Basic tips for schematic authors can be found in [`docs/input.md` → "Hints for Authors"](../input.md#подсказки-авторам). Destiny-specific additions:
+Basic tips for schematic authors can be found in [`docs/input.md` → "Hints for Authors"](../input.md). Destiny-specific additions:
 
 - **`action:` parameter is almost always there.** Destiny usually declares a top-level `action: { type: string, enum: [...] }` - it determines which tasks `tasks/main.yml` will be executed through `when:`. This is the point at which "one destiny - several operating modes" (apply / restart / ping / status-check) rests.
 - **All secrets are via `secret: true`.** Passwords, tokens, private keys and vault links. Without this, the value will appear in the apply logs when the task fails; such incidents are the cheapest class of leaks.
@@ -86,4 +86,4 @@ Scenario calculates destiny-`input:` from its scenario-`input:`, `vars` (essence
 - [`docs/input.md`](../input.md) is a general standard for the `input:` format.
 - [manifest.md](manifest.md) - where `input:` lies in `destiny.yml`.
 - [tasks.md](tasks.md) - how `input.<name>` is used in tasks.
-- [architecture.md → "Destiny: input contract and validation"](../architecture.md#destiny-входной-контракт-и-валидация) — validation rounds and connection with soul-lint.
+- [architecture.md → "Destiny: input contract and validation"](../architecture.md) — validation rounds and connection with soul-lint.

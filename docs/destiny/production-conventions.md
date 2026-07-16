@@ -6,7 +6,7 @@ Checklist "production-grade destiny" - what distinguishes the reference producti
 
 > **DynamicUser remains a valid choice** for **stateless** daemons (§2, stateless branch) - it's just that the current standard does not illustrate it, because node-exporter stateful (textfile directory, see §2). The rule for selecting an account (DynamicUser vs manual uid) is normative and does not depend on which example shows it.
 
-They rely on [ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) (destiny isolation), [ADR-015](../adr/0015-core-modules-mvp.md#adr-015-core-модули-mvp-точный-список) (a set of core modules) and the ["safety first"](../requirements.md) invariant from requirements.md.
+They rely on [ADR-009](../adr/0009-scenario-dsl.md) (destiny isolation), [ADR-015](../adr/0015-core-modules-mvp.md) (a set of core modules) and the ["safety first"](../requirements.md) invariant from requirements.md.
 
 ## 1. Passthrough flags and config
 
@@ -99,7 +99,7 @@ Differences from the stateless block and their reasons:
 
 **daemon-reload + restart to change drop-in.** Drop-in changes an already loaded unit, so `core.service.restarted` alone is not enough - systemd must first re-read the configuration.
 
-> **From the version with centralized daemon-reload in `core.service` ([ADR-015 Amendment 2026-06-18](../adr/0015-core-modules-mvp.md#adr-015-core-модули-mvp-точный-список)), the separate step `core.exec.run systemctl daemon-reload` for restart has become OPTIONAL.** `core.service.restarted`/`running`/`enabled` by default (`daemon_reload: auto`) themselves check the systemd flag `NeedDaemonReload` and re-read unit before action - the changed drop-in has already been taken into account. **It is preferable to rely on the built-in `auto`** and not duplicate reload as a separate task. See [docs/module/core/service/README.md → daemon_reload](../module/core/service/README.md#daemon_reload--перечитывание-unit-файлов).
+> **From the version with centralized daemon-reload in `core.service` ([ADR-015 Amendment 2026-06-18](../adr/0015-core-modules-mvp.md)), the separate step `core.exec.run systemctl daemon-reload` for restart has become OPTIONAL.** `core.service.restarted`/`running`/`enabled` by default (`daemon_reload: auto`) themselves check the systemd flag `NeedDaemonReload` and re-read unit before action - the changed drop-in has already been taken into account. **It is preferable to rely on the built-in `auto`** and not duplicate reload as a separate task. See [docs/module/core/service/README.md → daemon_reload](../module/core/service/README.md).
 
 The manual pattern below remains valid (for example, when reload is needed explicitly outside of the service restart, or for historical destiny). Reactive and idempotent chaining:
 
@@ -129,14 +129,14 @@ Reason: web-config is a secret-carrying artifact with its own life cycle (certif
 
 ## 5. arch / os - from `soulprint.self`
 
-The architecture (and any stable os fact of the target host) is read by destiny **directly** from `soulprint.self.os.arch`. After amendment 2026-06-18 ([ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) / [ADR-010](../adr/0010-templating.md), see [`docs/templating.md`](../templating.md)) the stable self-layer `soulprint.self.*` is also available in the CEL pass destiny - this is a per-host property, not a scenario-scope. The reference `node-exporter` does just that: in `input:` fields `arch` **no**, the tarball URL is collected directly from the fact:
+The architecture (and any stable os fact of the target host) is read by destiny **directly** from `soulprint.self.os.arch`. After amendment 2026-06-18 ([ADR-009](../adr/0009-scenario-dsl.md) / [ADR-010](../adr/0010-templating.md), see [`docs/templating.md`](../templating.md)) the stable self-layer `soulprint.self.*` is also available in the CEL pass destiny - this is a per-host property, not a scenario-scope. The reference `node-exporter` does just that: in `input:` fields `arch` **no**, the tarball URL is collected directly from the fact:
 
 ```yaml
 # tasks/install.yml node-exporter reference
 url: "${ input.base_url + '/v' + input.version + '/node_exporter-' + input.version + '.linux-' + soulprint.self.os.arch + '.tar.gz' }"
 ```
 
-- The destiny isolation boundary ([ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация), §8) runs along **self vs run topology**: `soulprint.self.*` (stable fact of the current host) is available, and cross-host `soulprint.hosts`/`soulprint.where(...)` is scenario-only, cut off in destiny. One incarnation can mix amd64/arm64 hosts - each host gets its own `soulprint.self.os.arch`, so a separate `input: arch` is not needed (it would make the architecture the same for the entire run).
+- The destiny isolation boundary ([ADR-009](../adr/0009-scenario-dsl.md), §8) runs along **self vs run topology**: `soulprint.self.*` (stable fact of the current host) is available, and cross-host `soulprint.hosts`/`soulprint.where(...)` is scenario-only, cut off in destiny. One incarnation can mix amd64/arm64 hosts - each host gets its own `soulprint.self.os.arch`, so a separate `input: arch` is not needed (it would make the architecture the same for the entire run).
 - `apply: input:` remains a channel for values that destiny **not** can derive from its self-layer: caller-derived data, cross-host facts (`soulprint.where(...)`), `vault(...)`/`essence.*` - their scenario resolves them in itself and transmits them ready.
 - soulprint already gives the value in release notation (`amd64`/`arm64`, see [`docs/soul/soulprint.md`](../soul/soulprint.md)) - mapping is not needed.
 
@@ -222,7 +222,7 @@ This is an invariant, not a recommendation: it keeps destiny reusable and indepe
 - [output.md](output.md) - how destiny gives the result to the caller.
 - [`docs/templating.md`](../templating.md) — CEL + Go text/template, `${…}` marker, `core.file.rendered`, non-string CEL cell rule.
 - [`docs/soul/soulprint.md`](../soul/soulprint.md) - `soulprint.self.os.arch` and other host facts.
-- [ADR-015](../adr/0015-core-modules-mvp.md#adr-015-core-модули-mvp-точный-список) - a set of MVP core modules (`core.url`/`core.archive`/`core.cmd`/`core.file`/`core.service`/`core.user`/`core.group`).
+- [ADR-015](../adr/0015-core-modules-mvp.md) - a set of MVP core modules (`core.url`/`core.archive`/`core.cmd`/`core.file`/`core.service`/`core.user`/`core.group`).
 - [`examples/destiny/node-exporter/`](../../examples/destiny/node-exporter/) - convention standard: binary `node_exporter`, stateful account `node_exporter` (§2 stateful branch), version-aware install (`unless --version`, §6), systemd-hardening (§3), privileged textfile collectors smartmon/nvme/ipmi for systemd-sandbox (§3b), optional `sha256` for mirrors (§7 relaxation).
 
 ## Folder naming convention in `examples/`

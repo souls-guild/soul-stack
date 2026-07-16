@@ -34,7 +34,7 @@ redis_group:     redis
 acl_file_path: "/etc/redis/users/${ input.user }.acl"
 ```
 
-Valid value types: the same as in `input:` ([docs/input.md](../input.md)) - string / integer / number / boolean / array / object. Template expressions `"${ … }"` ([ADR-010](../adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов), [docs/templating.md](../templating.md)) resolve **only when the entire value of var is a string** (top level value). non-string values (map / list / number / bool) pass **literally through** - CEL does not touch them.
+Valid value types: the same as in `input:` ([docs/input.md](../input.md)) - string / integer / number / boolean / array / object. Template expressions `"${ … }"` ([ADR-010](../adr/0010-templating.md), [docs/templating.md](../templating.md)) resolve **only when the entire value of var is a string** (top level value). non-string values (map / list / number / bool) pass **literally through** - CEL does not touch them.
 
 > **Limitation (known): `${ … }` inside map/list values are NOT resolved.** If the var value is map or list, nested `${ … }` within its elements remain **raw text** and are not resolved. Resolve is applied to the entire string value, not recursively by structure.
 >
@@ -91,10 +91,10 @@ Valid value types: the same as in `input:` ([docs/input.md](../input.md)) - stri
 
 ## What is available inside `vars` via templates
 
-In the expressions `"${ … }"` (CEL interpolation, see [ADR-010](../adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов)) on the right side of `vars.yml` the following is available:
+In the expressions `"${ … }"` (CEL interpolation, see [ADR-010](../adr/0010-templating.md)) on the right side of `vars.yml` the following is available:
 
 - `input.<name>` - validated destiny parameters.
-- `soulprint.self.<name>` - current host facts ([ADR-018](../adr/0018-soulprint-typed.md#adr-018-soulprint-typed-схема-mvp): `soulprint.self.os.family`, `soulprint.self.network.primary_ip`, `soulprint.self.memory.total_mb`, …).
+- `soulprint.self.<name>` - current host facts ([ADR-018](../adr/0018-soulprint-typed.md): `soulprint.self.os.family`, `soulprint.self.network.primary_ip`, `soulprint.self.memory.total_mb`, …).
 - **`vars.<other>`** is another variable `vars.yml` of the SAME layer (see "var → var" below).
 
 Not available (intentionally):
