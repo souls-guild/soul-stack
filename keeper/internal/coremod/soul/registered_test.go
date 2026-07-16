@@ -217,7 +217,7 @@ func TestApply_RefreshSoulprint_OutputTrue(t *testing.T) {
 	}
 	out := stream.Last().Output.AsMap()
 	if out["refreshed"] != true {
-		t.Errorf("refreshed=%v, want true (ADR-061 §S3: флаг оживлён)", out["refreshed"])
+		t.Errorf("refreshed=%v, want true (ADR-061 §S3: flag revived)", out["refreshed"])
 	}
 }
 
@@ -238,7 +238,7 @@ func TestApply_NoRefreshSoulprint_OutputFalse(t *testing.T) {
 	}
 	out := stream.Last().Output.AsMap()
 	if out["refreshed"] != false {
-		t.Errorf("refreshed=%v, want false (нет refresh_soulprint)", out["refreshed"])
+		t.Errorf("refreshed=%v, want false (no refresh_soulprint)", out["refreshed"])
 	}
 }
 
