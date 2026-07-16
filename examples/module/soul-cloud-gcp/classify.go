@@ -7,25 +7,25 @@ import (
 	"google.golang.org/api/googleapi"
 )
 
-// classifyGCP — per-provider [clouddriver.ClassifyFunc] для GCP: маппит
-// googleapi.Error по HTTP-status в общую таксономию SDK. Это единственная
-// provider-specific часть error-обработки; backoff/retry/маппинг-в-event
-// делает SDK (sdk/clouddriver), общий для всех драйверов тиража.
+// classifyGCP is a per-provider [clouddriver.ClassifyFunc] for GCP: maps
+// googleapi.Error by HTTP status to the SDK's common taxonomy. This is the only
+// provider-specific part of error handling; backoff/retry/event-mapping
+// is done by the SDK (sdk/clouddriver), common to all drivers.
 //
-// GCP-ошибки приходят как *googleapi.Error с заполненным HTTP Code; reason-коды
-// внутри ErrorItem.Reason есть, но для MVP-таксономии достаточно HTTP-статуса
-// (granularity по reason можно добавить позднее без breaking change).
+// GCP errors arrive as *googleapi.Error with HTTP Code populated; reason codes
+// inside ErrorItem.Reason exist, but for MVP taxonomy HTTP status is sufficient
+// (finer-grained reason discrimination can be added later without breaking changes).
 func classifyGCP(err error) clouddriver.FailClass {
 	var apiErr *googleapi.Error
 	if !errors.As(err, &apiErr) {
-		// Не-API ошибка (сеть/DNS/EOF/timeout) — транзиентна: ретрай оправдан.
+		// Non-API error (network/DNS/EOF/timeout) — transient: retry is justified.
 		return clouddriver.FailTransient
 	}
 	switch apiErr.Code {
 	case 401, 403:
-		// 401 Unauthorized / 403 Forbidden — битые/без-прав credentials.
-		// Quota-exceeded GCP тоже возвращает 403 с reason="quotaExceeded" —
-		// различаем по reason-у первой error-item.
+		// 401 Unauthorized / 403 Forbidden — invalid/insufficient credentials.
+		// Quota-exceeded in GCP also returns 403 with reason="quotaExceeded" —
+		// we distinguish by the reason of the first error-item.
 		if hasReason(apiErr, "quotaExceeded", "rateLimitExceeded") {
 			if hasReason(apiErr, "rateLimitExceeded") {
 				return clouddriver.FailTransient
@@ -36,8 +36,8 @@ func classifyGCP(err error) clouddriver.FailClass {
 	case 404:
 		return clouddriver.FailNotFound
 	case 409:
-		// 409 Conflict — обычно alreadyExists/resourceInUse: invalid_params
-		// для нашего идемпотентного flow (мы должны были найти VM раньше).
+		// 409 Conflict — usually alreadyExists/resourceInUse: invalid_params
+		// for our idempotent flow (we should have found the VM earlier).
 		return clouddriver.FailInvalidParams
 	case 400, 412:
 		return clouddriver.FailInvalidParams
@@ -50,8 +50,8 @@ func classifyGCP(err error) clouddriver.FailClass {
 	return clouddriver.FailUnknown
 }
 
-// hasReason проверяет, что хотя бы один ErrorItem.Reason из apiErr.Errors
-// совпадает с одним из переданных reason-ов.
+// hasReason checks if at least one ErrorItem.Reason from apiErr.Errors
+// matches one of the provided reasons.
 func hasReason(apiErr *googleapi.Error, reasons ...string) bool {
 	for _, item := range apiErr.Errors {
 		for _, r := range reasons {

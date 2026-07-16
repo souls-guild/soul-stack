@@ -9,14 +9,14 @@ import (
 	"google.golang.org/api/option"
 )
 
-// gcpInstancesAPI — узкое подмножество compute Instances-клиента, которое
-// использует драйвер. Сужение (а не *compute.InstancesClient напрямую) даёт
-// mockability для L0-unit-тестов без сети: тест подсовывает fake-реализацию
-// (см. driver_test.go).
+// gcpInstancesAPI is the narrow subset of the compute Instances client used by the driver.
+// Narrowing (instead of *compute.InstancesClient directly) gives
+// mockability for offline L0 unit tests: tests inject a fake implementation
+// (see driver_test.go).
 //
-// Сигнатуры повторяют compute.InstancesClient-методы по форме, но возвращают
-// gcpOperation (interface) вместо *compute.Operation, чтобы fake мог отдавать
-// синтетическую operation без zone/region-операционного клиента.
+// Signatures match compute.InstancesClient methods by shape, but return
+// gcpOperation (interface) instead of *compute.Operation, so fake can return
+// a synthetic operation without a zone/region operation client.
 type gcpInstancesAPI interface {
 	Insert(ctx context.Context, in *computepb.InsertInstanceRequest) (gcpOperation, error)
 	Delete(ctx context.Context, in *computepb.DeleteInstanceRequest) (gcpOperation, error)
@@ -24,30 +24,30 @@ type gcpInstancesAPI interface {
 	List(ctx context.Context, in *computepb.ListInstancesRequest) ([]*computepb.Instance, error)
 }
 
-// gcpOperation — узкий handle над long-running compute Operation. Нужен метод
-// Wait для блокировки до DONE; в реале — обёртка над *compute.Operation.Wait,
-// в тестах — синхронный фейк.
+// gcpOperation is a narrow handle over long-running compute Operation. It needs
+// Wait to block until DONE; in production it wraps *compute.Operation.Wait,
+// in tests it is a synchronous fake.
 type gcpOperation interface {
 	Wait(ctx context.Context) error
 }
 
-// gcpCredentials — credentials провайдера, переданные Keeper-ом в
-// CreateRequest.credentials / DestroyRequest.credentials (A-flow). Драйвер в
-// Vault НЕ ходит — Keeper уже резолвил секрет за него.
+// gcpCredentials are provider credentials passed by Keeper in
+// CreateRequest.credentials / DestroyRequest.credentials (A-flow). The driver does
+// NOT call Vault — Keeper has already resolved the secret for it.
 //
-// service_account_key — JSON-blob сервис-аккаунта (полный JSON-файл от GCP IAM,
-// тот же, что выдают `gcloud iam service-accounts keys create`). project и
-// zone лежат рядом с ключом (provider-specific, см. docs/keeper/cloud.md →
+// service_account_key is a service-account JSON blob (full JSON file from GCP IAM,
+// same as emitted by `gcloud iam service-accounts keys create`). project and
+// zone sit next to the key (provider-specific, see docs/keeper/cloud.md →
 // Credentials-flow).
 type gcpCredentials struct {
 	ServiceAccountKey []byte // JSON service-account key
 	Project           string
 	Zone              string
-	Endpoint          string // override base-URL Compute (test/emulator); пусто = GCP-дефолт
+	Endpoint          string // override base-URL Compute (test/emulator); empty = GCP default
 }
 
-// credKeys — имена полей credentials-Struct (контракт с Keeper-side
-// CredentialsResolverPG: значения из Vault KV + project/zone из Provider-реестра).
+// credKeys are credentials-Struct field names (contract with Keeper-side
+// CredentialsResolverPG: values from Vault KV + project/zone from Provider registry).
 const (
 	credServiceAccountKey = "service_account_key"
 	credProject           = "project"
@@ -55,7 +55,7 @@ const (
 	credEndpoint          = "endpoint"
 )
 
-// credsFromMap извлекает [gcpCredentials] из decoded credentials-Struct.
+// credsFromMap extracts [gcpCredentials] from decoded credentials-Struct.
 func credsFromMap(m map[string]any) gcpCredentials {
 	c := gcpCredentials{
 		Project:  stringField(m, credProject),
@@ -78,22 +78,22 @@ func stringField(m map[string]any, key string) string {
 	return ""
 }
 
-// newGcpInstancesClient конструирует реальный compute-клиент из credentials.
-// Static-провайдер (не дефолтная application-default chain): credentials
-// приходят от Keeper-а явно, драйвер НЕ должен подхватывать ambient-окружение
-// (GOOGLE_APPLICATION_CREDENTIALS / metadata-server / gcloud-config) — один
-// драйвер не должен использовать чужие/host-credentials (безопасность).
+// newGcpInstancesClient constructs a real compute client from credentials.
+// Static provider (not the default application-default chain): credentials
+// come from Keeper explicitly, and the driver MUST NOT pick up ambient environment
+// (GOOGLE_APPLICATION_CREDENTIALS / metadata-server / gcloud-config) — one
+// driver must not use foreign/host credentials (security).
 //
-// Вынесен в переменную, чтобы L0-тесты подменяли fake-фабрикой без поднятия
-// реальной библиотеки (см. driver_test.go).
+// Kept in a variable so L0 tests can replace it with a fake factory without loading
+// the real library (see driver_test.go).
 var newGcpInstancesClient = func(ctx context.Context, c gcpCredentials) (gcpInstancesAPI, error) {
 	opts := []option.ClientOption{}
 	if len(c.ServiceAccountKey) > 0 {
 		opts = append(opts, option.WithCredentialsJSON(c.ServiceAccountKey))
 	} else {
-		// Пустые credentials — явно отключаем подхват ambient-auth, иначе
-		// GCP-client пойдёт по application-default chain. Падение «no creds»
-		// классификатор переведёт в FailAuth.
+		// Empty credentials — explicitly disable ambient-auth pickup, otherwise
+		// GCP client will use the application-default chain. The "no creds" failure
+		// is converted to FailAuth by the classifier.
 		opts = append(opts, option.WithoutAuthentication())
 	}
 	if c.Endpoint != "" {
@@ -106,10 +106,10 @@ var newGcpInstancesClient = func(ctx context.Context, c gcpCredentials) (gcpInst
 	return &realInstancesClient{cli: cli}, nil
 }
 
-// realInstancesClient — production-обёртка [*compute.InstancesClient] под
-// [gcpInstancesAPI]. Тонкий адаптер: Insert/Delete заворачивают возвращаемую
-// *compute.Operation в realOperation; List собирает iterator в slice (так нам
-// проще — мы фильтруем по labels на стороне драйвера, страниц не ждём).
+// realInstancesClient is a production wrapper of [*compute.InstancesClient] for
+// [gcpInstancesAPI]. Thin adapter: Insert/Delete wrap returned
+// *compute.Operation into realOperation; List collects iterator into a slice (simpler
+// for us — labels are filtered on the driver side, no page streaming needed).
 type realInstancesClient struct {
 	cli *compute.InstancesClient
 }
@@ -149,7 +149,7 @@ func (r *realInstancesClient) List(ctx context.Context, in *computepb.ListInstan
 	}
 }
 
-// realOperation — production-обёртка [*compute.Operation] под [gcpOperation].
+// realOperation is a production wrapper of [*compute.Operation] for [gcpOperation].
 type realOperation struct {
 	op *compute.Operation
 }

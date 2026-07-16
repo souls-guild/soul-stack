@@ -16,14 +16,14 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// L1 — driver-as-plugin через РЕАЛЬНЫЙ gRPC server+client (тот же
-// RegisterCloudDriverServer, что sdk/clouddriver.Serve навешивает после
-// handshake). Проверяет, что GcpDriver корректно работает по proto-контракту
-// CloudDriver — включая credentials/userdata — поверх настоящего gRPC-стрима,
-// а не in-proc вызова метода. Симметрично AWS-пилоту.
+// L1 — driver-as-plugin through a REAL gRPC server+client (the same
+// RegisterCloudDriverServer that sdk/clouddriver.Serve attaches after
+// handshake). Verifies that GcpDriver works correctly through the CloudDriver
+// proto contract, including credentials/userdata, over a real gRPC stream
+// rather than an in-proc method call. Symmetric to the AWS pilot.
 
-// serveDriverGRPC поднимает CloudDriver-сервис на TCP-loopback и возвращает
-// клиент + teardown.
+// serveDriverGRPC starts CloudDriver service on TCP-loopback and returns
+// client + teardown.
 func serveDriverGRPC(t *testing.T, impl *GcpDriver) (pluginv1.CloudDriverClient, func()) {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
@@ -45,8 +45,8 @@ func serveDriverGRPC(t *testing.T, impl *GcpDriver) (pluginv1.CloudDriverClient,
 	return pluginv1.NewCloudDriverClient(conn), teardown
 }
 
-// l1Adapter — мост impl→CloudDriverServer (embed Unimplemented для forward-compat),
-// идентичный sdk/clouddriver.serverAdapter (тот неэкспортирован).
+// l1Adapter is bridge impl→CloudDriverServer (embed Unimplemented for forward-compat),
+// identical to sdk/clouddriver.serverAdapter (which is unexported).
 type l1Adapter struct {
 	pluginv1.UnimplementedCloudDriverServer
 	impl *GcpDriver
@@ -124,7 +124,7 @@ func TestL1_CreateOverGRPC(t *testing.T) {
 	if len(lastVms) != 1 || lastVms[0].VmId != "soul-l1-0" || lastVms[0].Fqdn == "" {
 		t.Errorf("vms over gRPC = %+v", lastVms)
 	}
-	// userdata доехал через proto-стрим до драйвера и осел в metadata.items.
+	// userdata reached the driver through the proto stream and landed in metadata.items.
 	if f.lastInsertReq == nil {
 		t.Fatal("Insert not called over gRPC")
 	}

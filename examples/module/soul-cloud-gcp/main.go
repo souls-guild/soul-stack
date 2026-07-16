@@ -1,20 +1,20 @@
-// soul-cloud-gcp — реальный CloudDriver-плагин Soul Stack для Google Cloud
-// Compute Engine (ADR-016 Фаза 4 cloud parity; тираж по docs/keeper/plugins.md
-// после AWS-пилота).
+// soul-cloud-gcp is a real CloudDriver plugin for Soul Stack on Google Cloud
+// Compute Engine (ADR-016 Phase 4 cloud parity; rollout per docs/keeper/plugins.md
+// after the AWS pilot).
 //
-// Собирается в статический бинарь `soul-cloud-gcp`. Keeper-side модуль
-// `core.cloud.provisioned` (ADR-017) запускает его как sub-process, делает
-// gRPC-stdio handshake (sdk/handshake) и зовёт RPC CloudDriver.
+// Builds into a static binary `soul-cloud-gcp`. The Keeper-side module
+// `core.cloud.provisioned` (ADR-017) runs it as a sub-process, performs
+// the gRPC-stdio handshake (sdk/handshake), and calls CloudDriver RPC.
 //
-// Credentials (A-flow, docs/keeper/cloud.md): Keeper резолвит сервис-аккаунт
-// JSON-key из Vault и кладёт plain в CreateRequest.credentials /
-// DestroyRequest.credentials; драйвер в Vault НЕ ходит. Cloud-init userdata для
-// bootstrap soul-агента приходит в CreateRequest.userdata и пробрасывается в
-// metadata-item `user-data` (GCP-convention для cloud-init).
+// Credentials (A-flow, docs/keeper/cloud.md): Keeper resolves the service-account
+// JSON key from Vault and puts plain values into CreateRequest.credentials /
+// DestroyRequest.credentials; the driver does NOT call Vault. Cloud-init userdata for
+// Soul agent bootstrap arrives in CreateRequest.userdata and is passed through as
+// metadata item `user-data` (GCP convention for cloud-init).
 //
-// Shared-каркас (error-таксономия / wait-until-ready / retry-backoff) — из
-// sdk/clouddriver, общий для всех драйверов тиража. Provider-specific здесь —
-// только вызовы Compute Engine API и GCP-классификатор ошибок (classify.go).
+// Shared framework (error taxonomy / wait-until-ready / retry-backoff) comes from
+// sdk/clouddriver and is common to all rollout drivers. Provider-specific code here is
+// limited to Compute Engine API calls and the GCP error classifier (classify.go).
 package main
 
 import (
@@ -35,36 +35,36 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// profileSchemaJSON — profile_schema (JSON Schema draft 2020-12), embedded
-// рядом с бинарём. Приём из AWS-пилота: схема — отдельный файл, не хардкод в
-// Go (легче держать в синхроне с manifest.spec.profile_schema).
+// profileSchemaJSON is profile_schema (JSON Schema draft 2020-12), embedded
+// next to the binary. Approach from the AWS pilot: schema is a separate file,
+// not hardcoded in Go (easier to keep in sync with manifest.spec.profile_schema).
 //
 //go:embed schema.json
 var profileSchemaJSON []byte
 
-// runLabelKey — label идемпотентности: значение = идентификатор прогона/
-// incarnation (из profile.labels). Повторный Create по тому же label не плодит
-// дубли — существующие живые VM переиспользуются. GCP-labels ограничены
-// `[a-z0-9_-]{0,63}` (slash недопустим, в отличие от AWS-tag), поэтому ключ —
-// `soulstack_run` без двоеточия/слэша.
+// runLabelKey is the idempotency label: value = run/incarnation identifier
+// (from profile.labels). Repeated Create with the same label does not create
+// duplicates — existing live VMs are reused. GCP labels are limited to
+// `[a-z0-9_-]{0,63}` (slash is not allowed, unlike AWS tags), so the key is
+// `soulstack_run` without colon/slash.
 const runLabelKey = "soulstack_run"
 
-// userDataMetadataKey — стандартное имя metadata-item, которое cloud-init
-// читает на GCP-VM (https://cloudinit.readthedocs.io → DataSourceGCE).
+// userDataMetadataKey is the standard metadata-item name that cloud-init
+// reads on GCP VMs (https://cloudinit.readthedocs.io → DataSourceGCE).
 const userDataMetadataKey = "user-data"
 
-// defaultBackoff — фабрика [clouddriver.BackoffConfig] для wait/retry-фаз.
-// Вынесена в переменную, чтобы L0-тесты подменяли (быстрый MaxAttempts,
-// короткие задержки) без поднятия таймера 1s→2s→4s. Та же техника, что и
-// `newGcpInstancesClient` (см. gcpapi.go).
+// defaultBackoff is the [clouddriver.BackoffConfig] factory for wait/retry phases.
+// Kept in a variable so L0 tests can replace it (small MaxAttempts,
+// short delays) without waiting through 1s→2s→4s timers. Same technique as
+// `newGcpInstancesClient` (see gcpapi.go).
 var defaultBackoff = clouddriver.DefaultBackoff
 
-// GcpDriver — реализация CloudDriver для Google Compute Engine.
+// GcpDriver is the CloudDriver implementation for Google Compute Engine.
 type GcpDriver struct {
 	clouddriver.BaseDriver
 }
 
-// Schema публикует embedded profile_schema.
+// Schema publishes the embedded profile_schema.
 func (g *GcpDriver) Schema(_ context.Context, _ *pluginv1.SchemaRequest) (*pluginv1.SchemaReply, error) {
 	var raw map[string]any
 	if err := json.Unmarshal(profileSchemaJSON, &raw); err != nil {
@@ -77,8 +77,8 @@ func (g *GcpDriver) Schema(_ context.Context, _ *pluginv1.SchemaRequest) (*plugi
 	return &pluginv1.SchemaReply{ProfileSchema: s}, nil
 }
 
-// Validate не несёт credentials (ValidateProfileRequest), structural-проверки
-// здесь; auth — на фазе Create.
+// Validate does not carry credentials (ValidateProfileRequest), so only structural checks
+// happen here; auth is checked during Create.
 func (g *GcpDriver) Validate(_ context.Context, req *pluginv1.ValidateProfileRequest) (*pluginv1.ValidateProfileReply, error) {
 	p := req.GetProfile().AsMap()
 	var errs []string
@@ -97,7 +97,7 @@ func (g *GcpDriver) Validate(_ context.Context, req *pluginv1.ValidateProfileReq
 	return &pluginv1.ValidateProfileReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
 
-// vmProfile — параметры профиля, разобранные для Insert.
+// vmProfile contains profile parameters parsed for Insert.
 type vmProfile struct {
 	project     string
 	zone        string
@@ -140,9 +140,9 @@ func parseProfile(p map[string]any) vmProfile {
 	return prof
 }
 
-// Create: проверка идемпотентности по label → Insert N штук → wait-until-ready →
-// финальное событие с VmInfo (fqdn=GCP internal DNS, основной идентификатор).
-// См. doc-комментарий пакета.
+// Create: idempotency check by label → Insert N VMs → wait-until-ready →
+// final event with VmInfo (fqdn=GCP internal DNS, primary identifier).
+// See the package doc comment.
 func (g *GcpDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerStreamingServer[pluginv1.CreateEvent]) error {
 	ctx := stream.Context()
 	count := req.GetCount()
@@ -151,15 +151,15 @@ func (g *GcpDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerStream
 	}
 	prof := parseProfile(req.GetProfile().AsMap())
 	creds := credsFromMap(req.GetCredentials().AsMap())
-	// project/zone могут быть в profile или в credentials — credentials имеют
-	// приоритет (точно та же модель, что в AWS region).
+	// project/zone may come from profile or credentials; credentials have
+	// priority (same model as AWS region).
 	if creds.Project == "" {
 		creds.Project = prof.project
 	}
 	if creds.Zone == "" {
 		creds.Zone = prof.zone
 	}
-	// profile project/zone тоже подменяем (Insert берёт их из profile).
+	// Replace profile project/zone as well (Insert takes them from profile).
 	if prof.project == "" {
 		prof.project = creds.Project
 	}
@@ -174,9 +174,9 @@ func (g *GcpDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerStream
 
 	backoff := defaultBackoff()
 
-	// Идемпотентность: если по runTag уже есть живые VM — переиспользуем их,
-	// добиваем только недостающие. Без runTag idempotency-проверку не делаем
-	// (некому соотнести прогон).
+	// Idempotency: if live VMs already exist for runTag, reuse them
+	// and only create the missing count. Without runTag, no idempotency check is possible
+	// (nothing to correlate the run with).
 	var existing []*computepb.Instance
 	if prof.runTag != "" {
 		existing, err = g.findByRunLabel(ctx, cli, backoff, prof, prof.runTag)
@@ -198,9 +198,9 @@ func (g *GcpDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerStream
 		return err
 	}
 
-	// Имена новых VM: детерминированные от runTag (для безопасной retry-логики),
-	// либо timestamp-based если runTag пуст. Существующие VM продолжают свой
-	// индекс (offset = len(existing)).
+	// New VM names: deterministic from runTag (for safe retry logic),
+	// or timestamp-based if runTag is empty. Existing VMs continue their
+	// index sequence (offset = len(existing)).
 	offset := int32(len(existing))
 	newNames := generateVMNames(prof.runTag, offset, count)
 	for _, name := range newNames {
@@ -213,9 +213,9 @@ func (g *GcpDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerStream
 	return g.finalizeCreate(ctx, cli, stream, backoff, prof, allNames)
 }
 
-// finalizeCreate ждёт готовности VM (RUNNING + internal IP) и шлёт финальное
-// событие. Anti-orphan: при ctx-cancel/timeout недоехавшие VM попадают в
-// финальное событие с failed=true, но с заполненным vm_id — Keeper сможет их
+// finalizeCreate waits for VM readiness (RUNNING + internal IP) and sends the final
+// event. Anti-orphan: on ctx-cancel/timeout, unfinished VMs appear in the
+// final event with failed=true and vm_id filled, so Keeper can
 // Destroy.
 func (g *GcpDriver) finalizeCreate(ctx context.Context, cli gcpInstancesAPI, stream grpc.ServerStreamingServer[pluginv1.CreateEvent], backoff clouddriver.BackoffConfig, prof vmProfile, vmNames []string) error {
 	probe := func(pctx context.Context, name string) clouddriver.ProbeResult {
@@ -225,7 +225,7 @@ func (g *GcpDriver) finalizeCreate(ctx context.Context, cli gcpInstancesAPI, str
 			Instance: name,
 		})
 		if perr != nil {
-			// Транзиентную ошибку опроса глотаем — поллер повторит.
+			// Swallow transient probe errors; the poller will retry.
 			if clouddriver.Classify(classifyGCP, perr).Transient() {
 				return clouddriver.ProbeResult{}
 			}
@@ -241,7 +241,7 @@ func (g *GcpDriver) finalizeCreate(ctx context.Context, cli gcpInstancesAPI, str
 		case "TERMINATED", "STOPPING", "STOPPED", "SUSPENDED", "SUSPENDING":
 			return clouddriver.ProbeResult{Err: fmt.Errorf("instance %s entered terminal state %q", name, status)}
 		default:
-			// PROVISIONING / STAGING / REPAIRING — ждём дальше.
+			// PROVISIONING / STAGING / REPAIRING — keep waiting.
 			return clouddriver.ProbeResult{}
 		}
 	}
@@ -269,8 +269,8 @@ func (g *GcpDriver) finalizeCreate(ctx context.Context, cli gcpInstancesAPI, str
 	}
 
 	if waitErr != nil {
-		// ctx-cancel / deadline: финальное событие НЕСЁТ vm_id всех созданных VM
-		// с failed=true (anti-orphan) — Keeper увидит instance-name и сможет Destroy.
+		// ctx-cancel / deadline: final event carries vm_id for all created VMs
+		// with failed=true (anti-orphan), so Keeper sees instance-name and can Destroy.
 		return stream.Send(&pluginv1.CreateEvent{
 			Message: clouddriver.FailMessage(clouddriver.Classify(classifyGCP, waitErr), "wait-until-ready", waitErr),
 			Vms:     vms,
@@ -284,8 +284,8 @@ func (g *GcpDriver) finalizeCreate(ctx context.Context, cli gcpInstancesAPI, str
 	})
 }
 
-// insertOne собирает Instance-resource и вызывает Insert + Operation.Wait для
-// одной VM. Insert обёрнут в retry/backoff (throttling-safe).
+// insertOne builds Instance resource and calls Insert + Operation.Wait for
+// one VM. Insert is wrapped in retry/backoff (throttling-safe).
 func (g *GcpDriver) insertOne(ctx context.Context, cli gcpInstancesAPI, backoff clouddriver.BackoffConfig, prof vmProfile, userdata, name string) error {
 	inst := buildInstance(prof, userdata, name)
 	in := &computepb.InsertInstanceRequest{
@@ -301,12 +301,12 @@ func (g *GcpDriver) insertOne(ctx context.Context, cli gcpInstancesAPI, backoff 
 	}); err != nil {
 		return err
 	}
-	// Wait блокирует до DONE; ошибку Operation возвращает как googleapi.Error.
+	// Wait blocks until DONE; Operation error is returned as googleapi.Error.
 	return op.Wait(ctx)
 }
 
-// findByRunLabel перечисляет живые (не terminated) VM с заданным runTag.
-// GCP-filter-синтаксис: `labels.<k>=<v> AND (status="RUNNING" OR status="PROVISIONING"…)`.
+// findByRunLabel lists live (non-terminated) VMs with the given runTag.
+// GCP filter syntax: `labels.<k>=<v> AND (status="RUNNING" OR status="PROVISIONING"…)`.
 func (g *GcpDriver) findByRunLabel(ctx context.Context, cli gcpInstancesAPI, backoff clouddriver.BackoffConfig, prof vmProfile, runTag string) ([]*computepb.Instance, error) {
 	filter := fmt.Sprintf(`labels.%s=%s`, runLabelKey, runTag)
 	in := &computepb.ListInstancesRequest{
@@ -323,8 +323,8 @@ func (g *GcpDriver) findByRunLabel(ctx context.Context, cli gcpInstancesAPI, bac
 	if err != nil {
 		return nil, err
 	}
-	// Фильтруем terminal-VM на стороне клиента (GCP filter синтаксис для OR
-	// громоздкий, дешевле отфильтровать после List).
+	// Filter terminal VMs client-side (GCP filter syntax for OR
+	// is bulky; filtering after List is cheaper).
 	alive := out[:0]
 	for _, inst := range out {
 		switch inst.GetStatus() {
@@ -337,8 +337,8 @@ func (g *GcpDriver) findByRunLabel(ctx context.Context, cli gcpInstancesAPI, bac
 	return alive, nil
 }
 
-// Destroy: Delete для каждой VM, стрим per-vm событий. Идемпотентность: 404
-// (NotFound) для отдельной VM — это «уже нет», шлём успешное событие.
+// Destroy: Delete for each VM, streaming per-VM events. Idempotency: 404
+// (NotFound) for an individual VM means "already gone", so send a success event.
 func (g *GcpDriver) Destroy(req *pluginv1.DestroyRequest, stream grpc.ServerStreamingServer[pluginv1.DestroyEvent]) error {
 	ctx := stream.Context()
 	creds := credsFromMap(req.GetCredentials().AsMap())
@@ -364,7 +364,7 @@ func (g *GcpDriver) Destroy(req *pluginv1.DestroyRequest, stream grpc.ServerStre
 		if err != nil {
 			class := clouddriver.Classify(classifyGCP, err)
 			if class == clouddriver.FailNotFound {
-				// not_found на Destroy — это успех-как-таковой (идемпотентность).
+				// not_found on Destroy is success by definition (idempotency).
 				_ = stream.Send(&pluginv1.DestroyEvent{VmId: name, Message: "already absent"})
 				continue
 			}
@@ -380,8 +380,8 @@ func (g *GcpDriver) Destroy(req *pluginv1.DestroyRequest, stream grpc.ServerStre
 	return nil
 }
 
-// Status — опрос одной VM (Get). credentials приходят отдельным полем
-// StatusRequest.credentials (A-flow, симметрично Create/Destroy).
+// Status polls one VM (Get). credentials arrive through the separate
+// StatusRequest.credentials field (A-flow, symmetric with Create/Destroy).
 func (g *GcpDriver) Status(ctx context.Context, req *pluginv1.StatusRequest) (*pluginv1.StatusReply, error) {
 	creds := credsFromMap(req.GetCredentials().AsMap())
 	cli, err := newGcpInstancesClient(ctx, creds)
@@ -400,9 +400,9 @@ func (g *GcpDriver) Status(ctx context.Context, req *pluginv1.StatusRequest) (*p
 	}, nil
 }
 
-// List — стрим инвентаря VM по фильтру. credentials приходят отдельным полем
-// ListRequest.credentials (A-flow, симметрично Create/Destroy/Status). Фильтр-
-// поле `soulstack_run` поднимается до GCP-filter `labels.soulstack_run=<v>`.
+// List streams VM inventory by filter. credentials arrive through the separate
+// ListRequest.credentials field (A-flow, symmetric with Create/Destroy/Status). Filter
+// field `soulstack_run` is promoted to GCP filter `labels.soulstack_run=<v>`.
 func (g *GcpDriver) List(req *pluginv1.ListRequest, stream grpc.ServerStreamingServer[pluginv1.VmInfo]) error {
 	ctx := stream.Context()
 	creds := credsFromMap(req.GetCredentials().AsMap())
@@ -449,10 +449,10 @@ func sendCreateFailed(stream grpc.ServerStreamingServer[pluginv1.CreateEvent], c
 	return stream.Send(&pluginv1.CreateEvent{Message: clouddriver.FailMessage(class, op, err), Failed: true})
 }
 
-// buildInstance собирает Instance-resource из profile + userdata. machineType
-// и sourceImage могут прийти короткой или полной формой; для machineType
-// GCP-API требует полный путь `zones/<zone>/machineTypes/<type>` — нормализуем
-// здесь.
+// buildInstance builds Instance resource from profile + userdata. machineType
+// and sourceImage may arrive in short or full form; for machineType
+// GCP API requires full path `zones/<zone>/machineTypes/<type>`, so normalize
+// here.
 func buildInstance(prof vmProfile, userdata, name string) *computepb.Instance {
 	mt := prof.machineType
 	if !strings.Contains(mt, "/") {
@@ -481,8 +481,8 @@ func buildInstance(prof vmProfile, userdata, name string) *computepb.Instance {
 	if prof.subnet != "" {
 		sn := prof.subnet
 		if !strings.Contains(sn, "/") {
-			// Subnet регионален, но zone-region строго детерминирован: regional-
-			// часть = zone без суффикса `-<letter>`.
+			// Subnet is regional, but zone-region is strictly deterministic: regional
+			// part = zone without suffix `-<letter>`.
 			region := zoneRegion(prof.zone)
 			sn = fmt.Sprintf("regions/%s/subnetworks/%s", region, sn)
 		}
@@ -500,9 +500,9 @@ func buildInstance(prof vmProfile, userdata, name string) *computepb.Instance {
 			inst.Labels[k] = v
 		}
 	}
-	// cloud-init userdata: GCP-convention — metadata-item с ключом `user-data`
-	// (cloud-init DataSourceGCE). НЕ base64 (в отличие от EC2): GCP передаёт
-	// metadata как plain string.
+	// cloud-init userdata: GCP convention is metadata-item with key `user-data`
+	// (cloud-init DataSourceGCE). NOT base64 (unlike EC2): GCP passes
+	// metadata as a plain string.
 	if userdata != "" {
 		inst.Metadata = &computepb.Metadata{
 			Items: []*computepb.Items{{
@@ -514,13 +514,13 @@ func buildInstance(prof vmProfile, userdata, name string) *computepb.Instance {
 	return inst
 }
 
-// generateVMNames — детерминированные имена для VM в одном прогоне. При retry
-// после crash-а Keeper-а имена совпадут с предыдущими, и findByRunLabel
-// найдёт существующие. Если runTag пуст — используем timestamp (одноразовый
-// прогон без idempotency-гарантии).
+// generateVMNames creates deterministic names for VMs in one run. On retry
+// after Keeper crash, names match previous ones and findByRunLabel
+// finds existing VMs. If runTag is empty, use timestamp (one-shot
+// run without idempotency guarantee).
 //
-// GCP-name требования: lowercase letters/digits/hyphens, начинается с буквы,
-// заканчивается буквой/цифрой, max 63 символа.
+// GCP name requirements: lowercase letters/digits/hyphens, starts with a letter,
+// ends with a letter/digit, max 63 characters.
 func generateVMNames(runTag string, offset, count int32) []string {
 	out := make([]string, 0, count)
 	prefix := "soul-" + sanitizeName(runTag)
@@ -533,8 +533,8 @@ func generateVMNames(runTag string, offset, count int32) []string {
 	return out
 }
 
-// sanitizeName приводит произвольную строку к GCP-name-формату: lowercase,
-// hyphen-separated, max 50 символов (резерв на суффикс-индекс).
+// sanitizeName converts arbitrary string to GCP name format: lowercase,
+// hyphen-separated, max 50 characters (reserve for suffix index).
 func sanitizeName(s string) string {
 	s = strings.ToLower(s)
 	var b strings.Builder
@@ -557,7 +557,7 @@ func sanitizeName(s string) string {
 	return out
 }
 
-// zoneRegion возвращает GCP-регион для зоны (europe-west1-b → europe-west1).
+// zoneRegion returns GCP region for a zone (europe-west1-b → europe-west1).
 func zoneRegion(zone string) string {
 	if i := strings.LastIndex(zone, "-"); i > 0 {
 		return zone[:i]
@@ -565,13 +565,13 @@ func zoneRegion(zone string) string {
 	return zone
 }
 
-// internalFQDN — GCP internal DNS-имя VM. Используется как SID.
+// internalFQDN is the GCP internal DNS name of VM. Used as SID.
 func internalFQDN(name, zone, project string) string {
 	return fmt.Sprintf("%s.%s.c.%s.internal", name, zone, project)
 }
 
-// primaryIP — первый internal-IP VM (private IP первого NIC); если пусто —
-// первый external (access-config NatIP).
+// primaryIP is the first internal IP of VM (private IP of first NIC); if empty,
+// use the first external IP (access-config NatIP).
 func primaryIP(inst *computepb.Instance) string {
 	for _, ni := range inst.NetworkInterfaces {
 		if ip := ni.GetNetworkIP(); ip != "" {
@@ -622,7 +622,7 @@ func instanceAttributes(inst *computepb.Instance) *structpb.Struct {
 	return s
 }
 
-// shortRef обрезает GCP-resource URL до последнего сегмента (полный URL вида
+// shortRef trims GCP resource URL to its last segment (full URL form
 // `https://www.googleapis.com/compute/v1/projects/p/zones/europe-west1-b` →
 // `europe-west1-b`).
 func shortRef(s string) string {

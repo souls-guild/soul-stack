@@ -16,9 +16,9 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// withFastBackoff подменяет defaultBackoff на «нулевые» задержки + указанный
-// MaxAttempts. Используется в wait-deadline / transient-probe тестах, где
-// дефолтный 1s→2s→4s сделал бы тест медленным.
+// withFastBackoff replaces defaultBackoff with "zero" delays + the specified
+// MaxAttempts. Used in wait-deadline / transient-probe tests where
+// the default 1s→2s→4s would make the test slow.
 func withFastBackoff(t *testing.T, maxAttempts int) {
 	t.Helper()
 	orig := defaultBackoff
@@ -33,20 +33,20 @@ func withFastBackoff(t *testing.T, maxAttempts int) {
 	t.Cleanup(func() { defaultBackoff = orig })
 }
 
-// fakeOperation — синтетический gcpOperation, опционально возвращающий ошибку
-// из Wait.
+// fakeOperation is a synthetic gcpOperation that optionally returns an error
+// from Wait.
 type fakeOperation struct{ waitErr error }
 
 func (f *fakeOperation) Wait(_ context.Context) error { return f.waitErr }
 
-// fakeInstances — mock gcpInstancesAPI для L0-unit-тестов (без сети). Поведение
-// настраивается per-метод; getSeq позволяет смоделировать переход
-// PROVISIONING→RUNNING между раундами поллера.
+// fakeInstances is a mock gcpInstancesAPI for L0-unit tests (offline). Behavior
+// is configured per-method; getSeq allows modeling the transition from
+// PROVISIONING→RUNNING between poller rounds.
 //
-// getFn — опциональный override: получает 0-based номер вызова и волен
-// вернуть свою пару (instance, err) — для тестов transient-probe-error
-// (ошибка классифицирована Transient → поллер проглатывает) и сценариев, где
-// плоского getSeq не хватает.
+// getFn is an optional override: receives 0-based call count and can
+// return its own (instance, err) pair — for transient-probe-error tests
+// (error classified as Transient → poller swallows it) and scenarios where
+// flat getSeq is insufficient.
 type fakeInstances struct {
 	insertOp      gcpOperation
 	insertErr     error
@@ -120,7 +120,7 @@ func (f *fakeInstances) List(_ context.Context, in *computepb.ListInstancesReque
 	return f.listOut, nil
 }
 
-// withFakeInstances подменяет фабрику клиента на возврат f, восстанавливает после теста.
+// withFakeInstances replaces the client factory to return f, restoring after the test.
 func withFakeInstances(t *testing.T, f *fakeInstances) {
 	t.Helper()
 	orig := newGcpInstancesClient
@@ -179,7 +179,7 @@ func mustStruct(t *testing.T, m map[string]any) *structpb.Struct {
 	return s
 }
 
-// runningInstance собирает VM в состоянии RUNNING с заданным внутренним IP.
+// runningInstance builds a VM in RUNNING state with the specified internal IP.
 func runningInstance(name, ip string) *computepb.Instance {
 	return &computepb.Instance{
 		Name:        proto.String(name),
@@ -192,7 +192,7 @@ func runningInstance(name, ip string) *computepb.Instance {
 	}
 }
 
-// validProfile — минимально валидный profile для тестов (project/zone/
+// validProfile is a minimally valid profile for tests (project/zone/
 // machine_type/source_image).
 func validProfile(extra map[string]any) map[string]any {
 	p := map[string]any{
@@ -276,8 +276,8 @@ func TestCreate_HappyPath(t *testing.T) {
 	if vm.PrimaryIp != "10.0.0.5" {
 		t.Errorf("primary_ip=%q", vm.PrimaryIp)
 	}
-	// userdata прокинут в Insert как metadata.items[user-data]. GCP передаёт
-	// metadata plain (НЕ base64, в отличие от EC2).
+	// userdata is passed to Insert as metadata.items[user-data]. GCP transmits
+	// metadata plain (NOT base64, unlike EC2).
 	if f.lastInsertReq == nil {
 		t.Fatal("Insert not called")
 	}
@@ -303,9 +303,9 @@ func TestCreate_WaitsForRunning(t *testing.T) {
 	withFastBackoff(t, 5)
 	f := &fakeInstances{
 		getSeq: []*computepb.Instance{
-			// раунд 1: PROVISIONING без IP
+			// round 1: PROVISIONING without IP
 			{Name: proto.String("soul-w-0"), Status: proto.String("PROVISIONING")},
-			// раунд 2: RUNNING с IP
+			// round 2: RUNNING with IP
 			runningInstance("soul-w-0", "10.0.0.9"),
 		},
 	}
@@ -357,7 +357,7 @@ func TestCreate_Idempotent_ReusesExisting(t *testing.T) {
 	existing := runningInstance("soul-run-42-0", "10.1.1.1")
 	f := &fakeInstances{
 		listOut: []*computepb.Instance{existing},
-		// после findByRunLabel finalizeCreate вызывает Get для VmInfo.Fqdn:
+		// after findByRunLabel, finalizeCreate calls Get for VmInfo.Fqdn:
 		getSeq: []*computepb.Instance{existing},
 	}
 	withFakeInstances(t, f)
@@ -386,11 +386,11 @@ func TestCreate_Idempotent_ReusesExisting(t *testing.T) {
 func TestCreate_CtxCancel_AntiOrphan(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	f := &fakeInstances{
-		// always PROVISIONING → поллер крутится, пока ctx не отменят
+		// always PROVISIONING → poller spins until ctx is cancelled
 		getSeq: []*computepb.Instance{{Name: proto.String("soul-orphan-0"), Status: proto.String("PROVISIONING")}},
 	}
 	withFakeInstances(t, f)
-	cancel() // отменяем сразу — поллер уйдёт в sleepCtx и вернёт ctx.Err
+	cancel() // cancel immediately — poller goes into sleepCtx and returns ctx.Err
 
 	d := &GcpDriver{}
 	s := &createStream{ctx: ctx}
@@ -412,9 +412,9 @@ func TestCreate_CtxCancel_AntiOrphan(t *testing.T) {
 	}
 }
 
-// TestCreate_WaitDeadline_AntiOrphan — wait-поллер упирается в MaxAttempts
-// (НЕ ctx-cancel) → возврат ErrWaitDeadline → failed-event с заполненным vm_id
-// (anti-orphan ветка, отличная от ctx-cancel).
+// TestCreate_WaitDeadline_AntiOrphan tests wait-poller hitting MaxAttempts
+// (NOT ctx-cancel) → ErrWaitDeadline returned → failed-event with vm_id filled
+// (anti-orphan branch, different from ctx-cancel).
 func TestCreate_WaitDeadline_AntiOrphan(t *testing.T) {
 	withFastBackoff(t, 2)
 	f := &fakeInstances{
@@ -445,9 +445,9 @@ func TestCreate_WaitDeadline_AntiOrphan(t *testing.T) {
 	}
 }
 
-// TestCreate_TerminalStateProbe — VM во время wait уходит в terminal-state →
-// probe возвращает ProbeResult{Err} → поллер прекращает опрос этой VM,
-// finalizeCreate шлёт failed-event с vm_id и описательным сообщением.
+// TestCreate_TerminalStateProbe tests VM entering terminal-state during wait →
+// probe returns ProbeResult{Err} → poller stops polling that VM,
+// finalizeCreate sends failed-event with vm_id and descriptive message.
 func TestCreate_TerminalStateProbe(t *testing.T) {
 	withFastBackoff(t, 4)
 	cases := []struct {
@@ -489,9 +489,9 @@ func TestCreate_TerminalStateProbe(t *testing.T) {
 	}
 }
 
-// TestCreate_TransientProbeError_SwallowAndRetry — Get между раундами
-// возвращает классифицируемую как Transient() ошибку → probe-обёртка глотает
-// её (ProbeResult{}) → следующий round успешен.
+// TestCreate_TransientProbeError_SwallowAndRetry tests Get between rounds
+// returning an error classified as Transient() → probe wrapper swallows
+// it (ProbeResult{}) → next round succeeds.
 func TestCreate_TransientProbeError_SwallowAndRetry(t *testing.T) {
 	withFastBackoff(t, 8)
 	f := &fakeInstances{}
@@ -500,7 +500,7 @@ func TestCreate_TransientProbeError_SwallowAndRetry(t *testing.T) {
 		case 0:
 			return &computepb.Instance{Name: proto.String("soul-trans-0"), Status: proto.String("PROVISIONING")}, nil
 		case 1:
-			// 503 — transient: probe должен проглотить и продолжить.
+			// 503 — transient: probe should swallow and continue.
 			return nil, &googleapi.Error{Code: 503, Message: "service unavailable"}
 		default:
 			return runningInstance("soul-trans-0", "10.5.5.5"), nil
@@ -528,9 +528,9 @@ func TestCreate_TransientProbeError_SwallowAndRetry(t *testing.T) {
 	}
 }
 
-// TestCreate_Idempotent_OverCount — findByRunLabel вернул БОЛЬШЕ VM, чем
-// запрошенный count. Драйвер обязан вернуть все найденные (не падать, не
-// плодить дубли).
+// TestCreate_Idempotent_OverCount covers findByRunLabel returning MORE VMs than
+// requested count. The driver must return all found VMs (not fail, not create
+// duplicates).
 func TestCreate_Idempotent_OverCount(t *testing.T) {
 	withFastBackoff(t, 2)
 	existing := []*computepb.Instance{
@@ -540,14 +540,14 @@ func TestCreate_Idempotent_OverCount(t *testing.T) {
 	}
 	f := &fakeInstances{
 		listOut: existing,
-		getSeq:  existing, // последовательные Get для finalizeCreate VmInfo-заполнения
+		getSeq:  existing, // sequential Get calls for finalizeCreate VmInfo population
 	}
 	withFakeInstances(t, f)
 
 	d := &GcpDriver{}
 	s := &createStream{}
 	if err := d.Create(&pluginv1.CreateRequest{
-		Count: 2, // меньше реального инвентаря
+		Count: 2, // lower than the real inventory
 		Profile: mustStruct(t, validProfile(map[string]any{
 			"labels": map[string]any{runLabelKey: "over"},
 		})),
@@ -567,9 +567,9 @@ func TestCreate_Idempotent_OverCount(t *testing.T) {
 	}
 }
 
-// TestStatus_UsesCredentials — Status с credentials в StatusRequest-поле
-// успешно опрашивает VM (не возвращает «requires credentials»-ошибку
-// workaround-версии).
+// TestStatus_UsesCredentials verifies that Status with credentials in StatusRequest field
+// polls a VM successfully (does not return the workaround version's
+// "requires credentials" error).
 func TestStatus_UsesCredentials(t *testing.T) {
 	inst := runningInstance("soul-stat-0", "10.6.6.6")
 	f := &fakeInstances{getSeq: []*computepb.Instance{inst}}
@@ -595,7 +595,7 @@ func TestStatus_UsesCredentials(t *testing.T) {
 	}
 }
 
-// TestList_UsesCredentialsField — List с credentials в ListRequest-поле.
+// TestList_UsesCredentialsField verifies List with credentials in ListRequest field.
 func TestList_UsesCredentialsField(t *testing.T) {
 	f := &fakeInstances{
 		listOut: []*computepb.Instance{
@@ -620,7 +620,7 @@ func TestList_UsesCredentialsField(t *testing.T) {
 	if len(s.sent) != 2 {
 		t.Errorf("list events=%d, want 2", len(s.sent))
 	}
-	// filter поднят до GCP-filter-синтаксиса `labels.<k>=<v>`.
+	// filter is promoted to GCP filter syntax `labels.<k>=<v>`.
 	if f.lastListIn == nil || f.lastListIn.GetFilter() != `labels.soulstack_run=run-list` {
 		t.Errorf("List filter=%q, want labels.soulstack_run=run-list", f.lastListIn.GetFilter())
 	}
@@ -690,7 +690,7 @@ func TestClassifyGCP_Codes(t *testing.T) {
 			}
 		})
 	}
-	// не-API ошибка → transient
+	// non-API error → transient
 	if got := classifyGCP(errors.New("dial tcp: timeout")); got != clouddriver.FailTransient {
 		t.Errorf("non-API err class=%v, want transient", got)
 	}
