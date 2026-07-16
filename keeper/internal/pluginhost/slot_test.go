@@ -59,7 +59,7 @@ func TestReadSlot_Success(t *testing.T) {
 		t.Errorf("BinarySHA256 = %q, want %q", got.BinarySHA256, hex.EncodeToString(wantDigest[:]))
 	}
 	if string(got.ManifestBytes) != validCloudManifest {
-		t.Errorf("ManifestBytes отличается от записанных сырых байтов manifest.yaml")
+		t.Errorf("ManifestBytes differs from written raw manifest.yaml bytes")
 	}
 	if filepath.Base(got.BinaryPath) != "soul-cloud-hetzner" {
 		t.Errorf("BinaryPath = %q, want suffix soul-cloud-hetzner", got.BinaryPath)
@@ -184,6 +184,6 @@ func TestSlotCommitSHA_CurrentNotSymlink(t *testing.T) {
 	}
 	_, err := SlotCommitSHA(root, "cloud", "hetzner")
 	if !errors.Is(err, ErrSlotNotFound) {
-		t.Fatalf("current не symlink: err = %v, want ErrSlotNotFound", err)
+		t.Fatalf("current is not a symlink: err = %v, want ErrSlotNotFound", err)
 	}
 }
