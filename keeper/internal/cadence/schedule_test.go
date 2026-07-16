@@ -71,7 +71,7 @@ func TestNextRun_Cron_BrokenExpr(t *testing.T) {
 	t.Parallel()
 	c := &Cadence{ScheduleKind: ScheduleKindCron, CronExpr: strptr("not a cron")}
 	if _, err := NextRun(c, time.Now()); err == nil {
-		t.Fatal("ожидалась ошибка для битого cron_expr")
+		t.Fatal("expected error for broken cron_expr")
 	}
 }
 
@@ -95,7 +95,7 @@ func TestValidate_RejectsBrokenCron(t *testing.T) {
 	c := cronCadence()
 	c.CronExpr = strptr("not valid")
 	if err := validate(c); err == nil {
-		t.Fatal("validate должна отвергнуть битый cron_expr")
+		t.Fatal("validate must reject broken cron_expr")
 	}
 }
 
@@ -105,7 +105,7 @@ func TestValidate_AcceptsValidCron(t *testing.T) {
 	c := cronCadence()
 	c.CronExpr = strptr("*/15 * * * *")
 	if err := validate(c); err != nil {
-		t.Fatalf("validate валидного cron: %v", err)
+		t.Fatalf("validate valid cron: %v", err)
 	}
 }
 
@@ -129,7 +129,7 @@ func TestNextRunAnchored_Interval_GridAligned(t *testing.T) {
 	}
 	want := t0.Add(10 * time.Second) // grid-aligned, NOT now+10s
 	if !got.Equal(want) {
-		t.Errorf("NextRunAnchored = %v, want %v (grid-aligned, не now-anchored %v)",
+		t.Errorf("NextRunAnchored = %v, want %v (grid-aligned, not now-anchored %v)",
 			got, want, now.Add(10*time.Second))
 	}
 }
@@ -151,14 +151,14 @@ func TestNextRunAnchored_Interval_MissedSlot(t *testing.T) {
 	}
 	want := time.Date(2026, 6, 1, 11, 10, 0, 0, time.UTC) // first slot > 11:07, aligned to :00
 	if !got.Equal(want) {
-		t.Errorf("NextRunAnchored = %v, want %v (первый будущий grid-слот)", got, want)
+		t.Errorf("NextRunAnchored = %v, want %v (first future grid slot)", got, want)
 	}
 	if !got.After(now) {
-		t.Errorf("NextRunAnchored = %v не строго > now %v", got, now)
+		t.Errorf("NextRunAnchored = %v is not strictly > now %v", got, now)
 	}
 	// grid-aligned: the difference (got - scheduledFor) is a multiple of the interval.
 	if d := got.Sub(scheduledFor) % (600 * time.Second); d != 0 {
-		t.Errorf("результат не grid-aligned к scheduledFor: остаток %v", d)
+		t.Errorf("result is not grid-aligned to scheduledFor: remainder %v", d)
 	}
 }
 
@@ -177,10 +177,10 @@ func TestNextRunAnchored_Interval_BoundaryStrictlyAfter(t *testing.T) {
 	}
 	want := t0.Add(20 * time.Second) // step further: strictly > now
 	if !got.Equal(want) {
-		t.Errorf("NextRunAnchored = %v, want %v (строго > now при равенстве)", got, want)
+		t.Errorf("NextRunAnchored = %v, want %v (strictly > now on equality)", got, want)
 	}
 	if !got.After(now) {
-		t.Errorf("результат %v не строго > now %v", got, now)
+		t.Errorf("result %v is not strictly > now %v", got, now)
 	}
 }
 
@@ -217,7 +217,7 @@ func TestNextRunAnchored_Cron_MissedSlot(t *testing.T) {
 	}
 	want := time.Date(2026, 6, 1, 15, 0, 0, 0, time.UTC) // first :00 > 14:30
 	if !got.Equal(want) {
-		t.Errorf("NextRunAnchored = %v, want %v (первый будущий cron-момент)", got, want)
+		t.Errorf("NextRunAnchored = %v, want %v (first future cron moment)", got, want)
 	}
 }
 
@@ -235,7 +235,7 @@ func TestNextRunAnchored_Cron_BoundaryStrictlyAfter(t *testing.T) {
 	}
 	want := time.Date(2026, 6, 1, 10, 10, 0, 0, time.UTC) // step further
 	if !got.Equal(want) {
-		t.Errorf("NextRunAnchored = %v, want %v (строго > now при равенстве)", got, want)
+		t.Errorf("NextRunAnchored = %v, want %v (strictly > now on equality)", got, want)
 	}
 }
 
@@ -245,7 +245,7 @@ func TestNextRunAnchored_BrokenCron(t *testing.T) {
 	c := &Cadence{ScheduleKind: ScheduleKindCron, CronExpr: strptr("not a cron")}
 	now := time.Now().UTC()
 	if _, err := NextRunAnchored(c, now, now); err == nil {
-		t.Fatal("ожидалась ошибка для битого cron_expr")
+		t.Fatal("expected error for broken cron_expr")
 	}
 }
 
@@ -259,7 +259,7 @@ func TestNextRunAnchored_Cron_NoFutureSlot(t *testing.T) {
 	t.Parallel()
 	// Sanity: the expression parses validly (zero comes from Next, not from Parse).
 	if _, err := ParseCron("0 0 30 2 *"); err != nil {
-		t.Fatalf("0 0 30 2 * должно парситься валидно: %v", err)
+		t.Fatalf("0 0 30 2 * must parse as valid: %v", err)
 	}
 	c := &Cadence{ScheduleKind: ScheduleKindCron, CronExpr: strptr("0 0 30 2 *")}
 	scheduledFor := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
@@ -278,9 +278,9 @@ func TestNextRunAnchored_Cron_NoFutureSlot(t *testing.T) {
 	select {
 	case r := <-done:
 		if r.err == nil {
-			t.Fatalf("ожидалась ошибка для cron без будущего слота, получили %v", r.t)
+			t.Fatalf("expected error for cron without a future slot, got %v", r.t)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("NextRunAnchored зависла на cron без будущего слота (нет IsZero-guard)")
+		t.Fatal("NextRunAnchored hung on cron without a future slot (missing IsZero guard)")
 	}
 }

@@ -2,13 +2,14 @@
 
 package cadence_test
 
-// Integration round-trip колонки cadences.fail_threshold_percent (миграция 070,
-// ADR-043 amendment 2026-06-09, Cadence-recipe S3). Под тем же testcontainers-PG,
-// что min_period_integration_test.go (общий integrationPool/TestMain). Проверяет:
-//   - миграция 070 применилась (колонка существует, Insert percent проходит);
-//   - round-trip Insert→Get сохраняет fail_threshold_percent;
-//   - CHECK cadences_fail_threshold_percent_range отвергает percent вне [1, 100]
-//     на DB-уровне (defence-in-depth поверх handler-валидации).
+// Integration round-trip for the cadences.fail_threshold_percent column
+// (migration 070, ADR-043 amendment 2026-06-09, Cadence-recipe S3). Uses the
+// same testcontainers-PG as min_period_integration_test.go (shared
+// integrationPool/TestMain). Verifies:
+//   - migration 070 applied (column exists, Insert percent succeeds);
+//   - round-trip Insert->Get preserves fail_threshold_percent;
+//   - CHECK cadences_fail_threshold_percent_range rejects percent outside
+//     [1, 100] at DB level (defence-in-depth over handler validation).
 
 import (
 	"context"
@@ -35,8 +36,8 @@ func newPercentCadence(percent *int) *cadence.Cadence {
 	}
 }
 
-// TestFailThresholdPercent_RoundTrip — Insert с percent → Get возвращает то же
-// значение (колонка 070 реально хранит и читается через scanCadence).
+// TestFailThresholdPercent_RoundTrip checks Insert with percent -> Get returns
+// the same value (column 070 is really stored and read through scanCadence).
 func TestFailThresholdPercent_RoundTrip(t *testing.T) {
 	clearCadences(t)
 	ctx := context.Background()
@@ -54,12 +55,12 @@ func TestFailThresholdPercent_RoundTrip(t *testing.T) {
 		t.Errorf("fail_threshold_percent round-trip = %v, want 25", got.FailThresholdPercent)
 	}
 	if got.FailThreshold != nil {
-		t.Errorf("fail_threshold = %v, want nil (percent-only рецепт)", got.FailThreshold)
+		t.Errorf("fail_threshold = %v, want nil (percent-only recipe)", got.FailThreshold)
 	}
 }
 
-// TestFailThresholdPercent_AbsoluteRoundTrip — backcompat: рецепт с абсолютным
-// fail_threshold (без percent) → percent-колонка NULL.
+// TestFailThresholdPercent_AbsoluteRoundTrip checks backcompat: a recipe with
+// absolute fail_threshold (without percent) leaves the percent column NULL.
 func TestFailThresholdPercent_AbsoluteRoundTrip(t *testing.T) {
 	clearCadences(t)
 	ctx := context.Background()
@@ -78,13 +79,13 @@ func TestFailThresholdPercent_AbsoluteRoundTrip(t *testing.T) {
 		t.Errorf("fail_threshold = %v, want 4", got.FailThreshold)
 	}
 	if got.FailThresholdPercent != nil {
-		t.Errorf("fail_threshold_percent = %v, want nil (абсолютный рецепт)", got.FailThresholdPercent)
+		t.Errorf("fail_threshold_percent = %v, want nil (absolute recipe)", got.FailThresholdPercent)
 	}
 }
 
 // TestFailThresholdPercent_CheckRejectsOutOfRange — DB-CHECK
-// cadences_fail_threshold_percent_range отвергает percent=101 на INSERT. Вставляем
-// в обход cadence.validate (raw SQL), чтобы дойти именно до CHECK-а PG.
+// cadences_fail_threshold_percent_range rejects percent=101 on INSERT. Insert
+// around cadence.validate (raw SQL) to reach the PG CHECK specifically.
 func TestFailThresholdPercent_CheckRejectsOutOfRange(t *testing.T) {
 	clearCadences(t)
 	ctx := context.Background()
@@ -97,9 +98,9 @@ func TestFailThresholdPercent_CheckRejectsOutOfRange(t *testing.T) {
 		    'scenario', 'converge', '{"coven":"prod"}'::jsonb, 101, $2)`,
 		nextID(), testAID)
 	if err == nil {
-		t.Fatal("INSERT с fail_threshold_percent=101 прошёл, ожидался CHECK-violation")
+		t.Fatal("INSERT with fail_threshold_percent=101 succeeded, expected CHECK violation")
 	}
 	if !strings.Contains(err.Error(), "cadences_fail_threshold_percent_range") {
-		t.Errorf("ожидался cadences_fail_threshold_percent_range violation, got: %v", err)
+		t.Errorf("expected cadences_fail_threshold_percent_range violation, got: %v", err)
 	}
 }

@@ -2,10 +2,11 @@
 
 package cadence_test
 
-// Integration-тесты адаптивного min-period резолвера Conductor (ADR-048 «Adaptive
-// interval»). Под testcontainers-PG: SelectMinPeriod агрегирует enabled-реестр
-// (MIN(interval_seconds) + bool_or(cron)), DerivedMinPeriod/Clamp выводят шаг
-// опроса. Включается build-tag-ом `integration`.
+// Integration tests for the Conductor adaptive min-period resolver (ADR-048
+// "Adaptive interval"). Under testcontainers-PG: SelectMinPeriod aggregates the
+// enabled registry (MIN(interval_seconds) + bool_or(cron)), and
+// DerivedMinPeriod/Clamp derive the polling step. Enabled by the `integration`
+// build tag.
 
 import (
 	"context"
@@ -91,8 +92,9 @@ func seedOperator(ctx context.Context, pool *pgxpool.Pool) {
 
 func clearCadences(t *testing.T) {
 	t.Helper()
-	// DELETE, не TRUNCATE: voyages.cadence_id FK ссылается на cadences (TRUNCATE
-	// падает на referenced-table). voyages в этом тесте пусты — DELETE безопасен.
+	// DELETE, not TRUNCATE: voyages.cadence_id FK references cadences (TRUNCATE
+	// fails on the referenced table). voyages are empty in this test, so DELETE
+	// is safe.
 	if _, err := integrationPool.Exec(context.Background(), `DELETE FROM cadences`); err != nil {
 		t.Fatalf("delete cadences: %v", err)
 	}
@@ -105,7 +107,7 @@ var ulidCounter int
 
 func nextID() string {
 	ulidCounter++
-	// 26-символьный ULID-подобный суррогат (CRUD проверяет только непустоту).
+	// 26-character ULID-like surrogate (CRUD only checks non-emptiness).
 	return "01H000000000000000000CAD" + string(rune('A'+ulidCounter/10)) + string(rune('0'+ulidCounter%10))
 }
 
@@ -147,8 +149,8 @@ func insertCron(t *testing.T, enabled bool, expr string) {
 	}
 }
 
-// TestSelectMinPeriod_Integration — derivedMinPeriod + Clamp по реальному реестру
-// в PG (профиль «Спокойный» 30s/60s/120s).
+// TestSelectMinPeriod_Integration checks derivedMinPeriod + Clamp against the
+// real registry in PG ("Calm" profile 30s/60s/120s).
 func TestSelectMinPeriod_Integration(t *testing.T) {
 	const (
 		floor   = 30 * time.Second
@@ -160,23 +162,23 @@ func TestSelectMinPeriod_Integration(t *testing.T) {
 	type step struct {
 		name      string
 		seed      func(t *testing.T)
-		wantStep  time.Duration // итоговый clamp/idle шаг
+		wantStep  time.Duration // final clamp/idle step
 		wantEmpty bool
 	}
 	steps := []step{
 		{
-			name:      "пусто → idle 120 (сигнал empty)",
+			name:      "empty → idle 120 (empty signal)",
 			seed:      func(*testing.T) {},
 			wantStep:  idle,
 			wantEmpty: true,
 		},
 		{
-			name:     "interval 30 (частое) → floor-bound 30",
+			name:     "interval 30 (frequent) → floor-bound 30",
 			seed:     func(t *testing.T) { insertInterval(t, true, 30) },
 			wantStep: 30 * time.Second,
 		},
 		{
-			name:     "interval 3600 (редкое) → ceiling-cap 60",
+			name:     "interval 3600 (rare) → ceiling-cap 60",
 			seed:     func(t *testing.T) { insertInterval(t, true, 3600) },
 			wantStep: 60 * time.Second,
 		},
@@ -186,7 +188,7 @@ func TestSelectMinPeriod_Integration(t *testing.T) {
 			wantStep: 60 * time.Second,
 		},
 		{
-			name: "смешанное interval 45 + cron → 45",
+			name: "mixed interval 45 + cron → 45",
 			seed: func(t *testing.T) {
 				insertInterval(t, true, 45)
 				insertCron(t, true, "*/2 * * * *")
@@ -194,27 +196,27 @@ func TestSelectMinPeriod_Integration(t *testing.T) {
 			wantStep: 45 * time.Second,
 		},
 		{
-			// Внутри коридора (30 < 31 < 60): ни floor-, ни ceiling-границей не
-			// зажимается — Clamp обязан вернуть derived как есть. Суб-floor значения
-			// (interval < 30) DB-CHECK 068 Pass B отвергает на INSERT; clamp-floor для
-			// derived < floor покрыт pure TestClamp (defence-in-depth: Clamp страхует,
-			// если строка обошла CHECK).
-			name:     "interval 31 (в коридоре) → derived 31 без clamp",
+			// Inside the corridor (30 < 31 < 60): neither the floor nor the ceiling
+			// clamps it; Clamp must return derived as-is. Sub-floor values
+			// (interval < 30) are rejected by DB-CHECK 068 Pass B on INSERT;
+			// clamp-floor for derived < floor is covered by pure TestClamp
+			// (defence-in-depth: Clamp protects if a row bypassed CHECK).
+			name:     "interval 31 (inside corridor) → derived 31 without clamp",
 			seed:     func(t *testing.T) { insertInterval(t, true, 31) },
 			wantStep: 31 * time.Second,
 		},
 		{
-			name: "disabled interval 30 + enabled cron → cron 60 (disabled не учитывается)",
+			name: "disabled interval 30 + enabled cron → cron 60 (disabled ignored)",
 			seed: func(t *testing.T) {
-				insertInterval(t, false, 30) // disabled — в MIN не попадает
+				insertInterval(t, false, 30) // disabled, excluded from MIN
 				insertCron(t, true, "0 0 * * *")
 			},
 			wantStep: 60 * time.Second,
 		},
 		{
-			name: "только disabled → пусто → idle 120",
+			name: "only disabled → empty → idle 120",
 			seed: func(t *testing.T) {
-				insertInterval(t, false, 30) // disabled (>= floor по DB-CHECK 068)
+				insertInterval(t, false, 30) // disabled (>= floor by DB-CHECK 068)
 				insertCron(t, false, "* * * * *")
 			},
 			wantStep:  idle,

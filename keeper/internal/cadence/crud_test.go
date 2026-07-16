@@ -12,7 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// fakeDB — ExecQueryRower-stub (parity voyage::fakeDB, без CopyFrom).
+// fakeDB is an ExecQueryRower stub (parity with voyage::fakeDB, without CopyFrom).
 type fakeDB struct {
 	execCalls  int
 	execSQL    string
@@ -73,7 +73,7 @@ type errRow struct{ err error }
 
 func (r errRow) Scan(_ ...any) error { return r.err }
 
-// timestampsRow — RETURNING (created_at, updated_at) для Insert/Update.
+// timestampsRow is RETURNING (created_at, updated_at) for Insert/Update.
 type timestampsRow struct {
 	created time.Time
 	updated time.Time
@@ -133,8 +133,9 @@ func cronCadence() *Cadence {
 	}
 }
 
-// TestValidateIntervalFloor — floor-лимит периода interval-Cadence (ADR-046 Pass
-// B). floor=0 → выключено; cron/non-interval не затрагивается; граница 29/30.
+// TestValidateIntervalFloor covers the floor limit for interval-Cadence periods
+// (ADR-046 Pass B). floor=0 means disabled; cron/non-interval are unaffected;
+// boundary 29/30.
 func TestValidateIntervalFloor(t *testing.T) {
 	t.Parallel()
 	mk := func(sec int) *Cadence {
@@ -148,25 +149,25 @@ func TestValidateIntervalFloor(t *testing.T) {
 		floor     int
 		wantError bool
 	}{
-		{"floor=0 выключено (interval 5)", mk(5), 0, false},
+		{"floor=0 disabled (interval 5)", mk(5), 0, false},
 		{"interval 5 < floor 30 → reject", mk(5), 30, true},
-		{"interval 29 (граница) < 30 → reject", mk(29), 30, true},
-		{"interval 30 (граница) == 30 → ok", mk(30), 30, false},
+		{"interval 29 (boundary) < 30 → reject", mk(29), 30, true},
+		{"interval 30 (boundary) == 30 → ok", mk(30), 30, false},
 		{"interval 300 >= 30 → ok", mk(300), 30, false},
-		{"cron-Cadence не затрагивается", cronCadence(), 30, false},
+		{"cron-Cadence unaffected", cronCadence(), 30, false},
 		{"nil cadence → ok", nil, 30, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			err := ValidateIntervalFloor(tc.c, tc.floor)
 			if tc.wantError && err == nil {
-				t.Fatal("ожидалась floor-ошибка, got nil")
+				t.Fatal("expected floor error, got nil")
 			}
 			if !tc.wantError && err != nil {
-				t.Fatalf("неожиданная ошибка: %v", err)
+				t.Fatalf("unexpected error: %v", err)
 			}
 			if tc.wantError && !strings.Contains(err.Error(), "Beacons") {
-				t.Errorf("floor-ошибка должна подсказывать Beacons; got %v", err)
+				t.Errorf("floor error should suggest Beacons; got %v", err)
 			}
 		})
 	}
@@ -227,13 +228,13 @@ func TestInsert_ValidationErrors(t *testing.T) {
 		{"empty name", func(c *Cadence) { c.Name = "" }, "empty name"},
 		{"empty aid", func(c *Cadence) { c.CreatedByAID = "" }, "empty created_by_aid"},
 		{"invalid schedule_kind", func(c *Cadence) { c.ScheduleKind = "rate" }, "invalid schedule_kind"},
-		{"interval without seconds", func(c *Cadence) { c.IntervalSeconds = nil }, "schedule_kind=interval требует"},
+		{"interval without seconds", func(c *Cadence) { c.IntervalSeconds = nil }, "schedule_kind=interval requires"},
 		{"interval seconds zero", func(c *Cadence) { c.IntervalSeconds = intptr(0) }, "interval_seconds must be > 0"},
-		{"interval with cron", func(c *Cadence) { c.CronExpr = strptr("* * * * *") }, "не должен нести cron_expr"},
+		{"interval with cron", func(c *Cadence) { c.CronExpr = strptr("* * * * *") }, "must not carry cron_expr"},
 		{"invalid overlap", func(c *Cadence) { c.OverlapPolicy = "drop" }, "invalid overlap_policy"},
 		{"invalid kind", func(c *Cadence) { c.Kind = "bogus" }, "invalid kind"},
-		{"scenario without name", func(c *Cadence) { c.ScenarioName = nil }, "kind=scenario требует"},
-		{"scenario with module", func(c *Cadence) { c.Module = strptr("core.cmd.shell") }, "не должен нести module"},
+		{"scenario without name", func(c *Cadence) { c.ScenarioName = nil }, "kind=scenario requires"},
+		{"scenario with module", func(c *Cadence) { c.Module = strptr("core.cmd.shell") }, "must not carry module"},
 		{"empty target", func(c *Cadence) { c.Target = nil }, "empty target"},
 		{"invalid batch_mode", func(c *Cadence) { m := BatchMode("turbo"); c.BatchMode = &m }, "invalid batch_mode"},
 		{"batch_size zero", func(c *Cadence) { c.BatchSize = intptr(0) }, "batch_size must be > 0"},
@@ -242,7 +243,7 @@ func TestInsert_ValidationErrors(t *testing.T) {
 		{"fail_threshold zero", func(c *Cadence) { c.FailThreshold = intptr(0) }, "fail_threshold must be > 0"},
 		{"fail_threshold_percent out of range high", func(c *Cadence) { c.FailThresholdPercent = intptr(101) }, "fail_threshold_percent must be in [1, 100]"},
 		{"fail_threshold_percent out of range low", func(c *Cadence) { c.FailThresholdPercent = intptr(0) }, "fail_threshold_percent must be in [1, 100]"},
-		{"fail_threshold + percent XOR", func(c *Cadence) { c.FailThreshold = intptr(2); c.FailThresholdPercent = intptr(50) }, "fail_threshold и fail_threshold_percent взаимоисключающи"},
+		{"fail_threshold + percent XOR", func(c *Cadence) { c.FailThreshold = intptr(2); c.FailThresholdPercent = intptr(50) }, "fail_threshold and fail_threshold_percent are mutually exclusive"},
 		{"invalid on_failure", func(c *Cadence) { f := OnFailure("noop"); c.OnFailure = &f }, "invalid on_failure"},
 	}
 	for _, tc := range cases {
@@ -275,11 +276,11 @@ func TestInsert_CronValidationErrors(t *testing.T) {
 		mut  func(*Cadence)
 		want string
 	}{
-		{"cron without expr", func(c *Cadence) { c.CronExpr = nil }, "schedule_kind=cron требует"},
-		{"cron empty expr", func(c *Cadence) { c.CronExpr = strptr("") }, "schedule_kind=cron требует"},
-		{"cron with interval", func(c *Cadence) { c.IntervalSeconds = intptr(60) }, "не должен нести interval_seconds"},
-		{"command without module", func(c *Cadence) { c.Module = nil }, "kind=command требует"},
-		{"command with scenario", func(c *Cadence) { c.ScenarioName = strptr("converge") }, "не должен нести scenario_name"},
+		{"cron without expr", func(c *Cadence) { c.CronExpr = nil }, "schedule_kind=cron requires"},
+		{"cron empty expr", func(c *Cadence) { c.CronExpr = strptr("") }, "schedule_kind=cron requires"},
+		{"cron with interval", func(c *Cadence) { c.IntervalSeconds = intptr(60) }, "must not carry interval_seconds"},
+		{"command without module", func(c *Cadence) { c.Module = nil }, "kind=command requires"},
+		{"command with scenario", func(c *Cadence) { c.ScenarioName = strptr("converge") }, "must not carry scenario_name"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -314,7 +315,7 @@ func TestInsert_HappyPath_Interval(t *testing.T) {
 	if !strings.Contains(fdb.queryRowSQL, "INSERT INTO cadences") {
 		t.Errorf("unexpected SQL: %.200s", fdb.queryRowSQL)
 	}
-	// id + 24 рецепт/расписание-аргумента = 25 (синхронно с insertSQL $1..$25).
+	// id + 24 recipe/schedule arguments = 25 (in sync with insertSQL $1..$25).
 	if got := len(fdb.queryRowArgs); got != 25 {
 		t.Errorf("queryRowArgs len = %d, want 25", got)
 	}
@@ -341,11 +342,11 @@ func TestInsert_AutoFillInput(t *testing.T) {
 		return timestampsRow{created: time.Now().UTC(), updated: time.Now().UTC()}
 	}}
 	c := intervalCadence()
-	c.Input = nil // должен подставиться `{}`
+	c.Input = nil // should be filled with `{}`
 	if err := Insert(ctx, fdb, c); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	// Аргумент input — 11-й позиционный (индекс 11: id, name, enabled, sk, iv,
+	// input argument is the 11th positional one (index 11: id, name, enabled, sk, iv,
 	// cron, overlap, kind, scenario, module, target, input).
 	if got, ok := fdb.queryRowArgs[11].([]byte); !ok || string(got) != "{}" {
 		t.Errorf("input arg = %v, want []byte(`{}`)", fdb.queryRowArgs[11])
@@ -395,9 +396,10 @@ func TestGet_EmptyID(t *testing.T) {
 	}
 }
 
-// fullCadenceRow — pgx.Row, отдающий полный набор 26 колонок selectColumns в
-// порядке scanCadence. Позволяет проверить round-trip Insert-форму → scan без
-// реального PG. interBatchSecs/interUnitSecs — float-секунды (как EXTRACT EPOCH).
+// fullCadenceRow is a pgx.Row returning the full set of 26 selectColumns
+// columns in scanCadence order. It lets us verify Insert form -> scan
+// round-trip without a real PG. interBatchSecs/interUnitSecs are float seconds
+// (as EXTRACT EPOCH).
 type fullCadenceRow struct {
 	id                   string
 	name                 string
@@ -462,8 +464,9 @@ func (r fullCadenceRow) Scan(dest ...any) error {
 	return nil
 }
 
-// TestGet_ScanRoundTrip — полная строка проходит через scanCadence: enum-ы,
-// nullable-поля, INTERVAL float→Duration, jsonb-bytes восстанавливаются в Cadence.
+// TestGet_ScanRoundTrip checks that a full row passes through scanCadence:
+// enums, nullable fields, INTERVAL float->Duration, and jsonb bytes are restored
+// into Cadence.
 func TestGet_ScanRoundTrip(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -511,7 +514,7 @@ func TestGet_ScanRoundTrip(t *testing.T) {
 		t.Errorf("batch_mode = %v, want window", c.BatchMode)
 	}
 	if c.FailThresholdPercent == nil || *c.FailThresholdPercent != 40 {
-		t.Errorf("fail_threshold_percent = %v, want 40 (round-trip колонки)", c.FailThresholdPercent)
+		t.Errorf("fail_threshold_percent = %v, want 40 (column round-trip)", c.FailThresholdPercent)
 	}
 	if c.InterBatchInterval == nil || *c.InterBatchInterval != 30*time.Second {
 		t.Errorf("inter_batch_interval = %v, want 30s", c.InterBatchInterval)
@@ -530,10 +533,11 @@ func TestGet_ScanRoundTrip(t *testing.T) {
 	}
 }
 
-// TestGet_ScanRoundTrip_Nulls — cron-кейс с NULL во всех nullable-полях:
-// interval_seconds=NULL (cron не несёт interval), batch_*/inter_*/require_alive/
-// on_failure/next_run_at/last_run_at=NULL → соответствующие *поля Cadence остаются
-// nil (хрупкий nil-маппинг указателей в scanCadence).
+// TestGet_ScanRoundTrip_Nulls covers a cron case with NULL in all nullable
+// fields: interval_seconds=NULL (cron does not carry interval),
+// batch_*/inter_*/require_alive/on_failure/next_run_at/last_run_at=NULL, so the
+// corresponding *fields in Cadence remain nil (fragile nil pointer mapping in
+// scanCadence).
 func TestGet_ScanRoundTrip_Nulls(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -549,7 +553,7 @@ func TestGet_ScanRoundTrip_Nulls(t *testing.T) {
 		module:        strptr("core.cmd.shell"),
 		target:        []byte(`["a.example"]`),
 		input:         []byte(`{}`),
-		// все nullable-поля оставлены nil (zero-value полей структуры).
+		// all nullable fields are left nil (structure fields' zero values).
 		createdByAID: "archon-bob",
 		createdAt:    created,
 		updatedAt:    created,
@@ -564,7 +568,7 @@ func TestGet_ScanRoundTrip_Nulls(t *testing.T) {
 		t.Errorf("schedule = %q/%v, want cron/expr", c.ScheduleKind, c.CronExpr)
 	}
 	if c.IntervalSeconds != nil {
-		t.Errorf("IntervalSeconds = %v, want nil (cron-кейс)", c.IntervalSeconds)
+		t.Errorf("IntervalSeconds = %v, want nil (cron case)", c.IntervalSeconds)
 	}
 	if c.BatchMode != nil || c.BatchSize != nil || c.BatchPercent != nil ||
 		c.Concurrency != nil || c.FailThreshold != nil {
@@ -622,7 +626,7 @@ func TestUpdate_HappyPath(t *testing.T) {
 	if !strings.Contains(fdb.queryRowSQL, "UPDATE cadences") {
 		t.Errorf("unexpected SQL: %.200s", fdb.queryRowSQL)
 	}
-	// UPDATE не пишет created_by_aid: id + 23 рецепт/расписание = 24 ($1..$24).
+	// UPDATE does not write created_by_aid: id + 23 recipe/schedule args = 24 ($1..$24).
 	if got := len(fdb.queryRowArgs); got != 24 {
 		t.Errorf("queryRowArgs len = %d, want 24 (id + 23)", got)
 	}
@@ -648,7 +652,7 @@ func TestSetEnabled(t *testing.T) {
 			t.Fatalf("SetEnabled: %v", err)
 		}
 		if !strings.Contains(fdb.execSQL, "enabled    = $2") {
-			t.Errorf("SQL без enabled-set: %.200s", fdb.execSQL)
+			t.Errorf("SQL without enabled-set: %.200s", fdb.execSQL)
 		}
 		if fdb.execArgs[1] != false {
 			t.Errorf("enabled arg = %v, want false", fdb.execArgs[1])
@@ -694,8 +698,8 @@ func TestList_CountError(t *testing.T) {
 func TestList_FilterArgs(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	// COUNT отдаёт total через queryRowFunc; Query сам отдаёт ошибку (rows не
-	// сконфигурированы) — нам достаточно проверить переданные фильтр-аргументы.
+	// COUNT returns total through queryRowFunc; Query itself returns an error
+	// (rows are not configured), which is enough to verify passed filter args.
 	fdb := &fakeDB{queryRowFunc: func(string) pgx.Row { return countRow{n: 0} }}
 	_, _, _ = List(ctx, fdb, ListFilter{EnabledOnly: true, Kind: KindCommand}, 5, 20)
 	if fdb.queryArgs[0] != true {
@@ -716,14 +720,15 @@ func (r countRow) Scan(dest ...any) error {
 	return nil
 }
 
-// cadenceScanColumns — эталонный порядок колонок строки `cadences` в том виде,
-// в каком scanCadence присваивает row.Scan-аргументы (crud.go). Это единственный
-// источник правды для guard-а ниже: при добавлении/перестановке колонки в
-// insertSQL/selectColumns/scanCadence без синхронизации этого списка — тест
-// падает (хрупкий позиционный паттерн, parity guard-059 voyage_targets).
+// cadenceScanColumns is the reference column order for a `cadences` row as
+// scanCadence assigns row.Scan arguments (crud.go). This is the only source of
+// truth for the guard below: if a column is added/reordered in
+// insertSQL/selectColumns/scanCadence without syncing this list, the test fails
+// (fragile positional pattern, parity guard-059 voyage_targets).
 //
-// insertSQL пишет все колонки кроме DB-managed created_at/updated_at (RETURNING),
-// причём в том же относительном порядке → проверяем как префикс эталона.
+// insertSQL writes all columns except DB-managed created_at/updated_at
+// (RETURNING), in the same relative order, so we check it as a prefix of the
+// reference.
 var cadenceScanColumns = []string{
 	"id", "name", "enabled",
 	"schedule_kind", "interval_seconds", "cron_expr", "overlap_policy",
@@ -734,37 +739,38 @@ var cadenceScanColumns = []string{
 	"created_by_aid", "created_at", "updated_at",
 }
 
-// TestColumnsMatchScanOrder — guard от рассинхрона ПОРЯДКА позиционных колонок.
-// Существующий len(dest)!=26 ловит только число; этот тест ловит перестановку:
-// сверяет имена колонок из selectColumns (полный набор) и из insertSQL (префикс
-// без RETURNING-колонок) против [cadenceScanColumns] по составу И порядку.
+// TestColumnsMatchScanOrder guards against positional column ORDER drift. The
+// existing len(dest)!=26 only catches the count; this test catches reordering:
+// it compares column names from selectColumns (full set) and insertSQL (prefix
+// without RETURNING columns) against [cadenceScanColumns] by content AND order.
 func TestColumnsMatchScanOrder(t *testing.T) {
 	t.Parallel()
 
 	sel := parseColumnList(selectColumns)
 	if len(sel) != len(cadenceScanColumns) {
-		t.Fatalf("selectColumns = %d колонок %v, want %d %v", len(sel), sel, len(cadenceScanColumns), cadenceScanColumns)
+		t.Fatalf("selectColumns = %d columns %v, want %d %v", len(sel), sel, len(cadenceScanColumns), cadenceScanColumns)
 	}
 	for i, want := range cadenceScanColumns {
 		if sel[i] != want {
-			t.Errorf("selectColumns[%d] = %q, want %q (рассинхрон со scanCadence)", i, sel[i], want)
+			t.Errorf("selectColumns[%d] = %q, want %q (drift with scanCadence)", i, sel[i], want)
 		}
 	}
 
 	ins := parseInsertColumns(insertSQL)
-	if len(ins) != len(cadenceScanColumns)-2 { // минус created_at, updated_at (RETURNING)
-		t.Fatalf("insertSQL = %d колонок %v, want %d", len(ins), ins, len(cadenceScanColumns)-2)
+	if len(ins) != len(cadenceScanColumns)-2 { // minus created_at, updated_at (RETURNING)
+		t.Fatalf("insertSQL = %d columns %v, want %d", len(ins), ins, len(cadenceScanColumns)-2)
 	}
 	for i, c := range ins {
 		if c != cadenceScanColumns[i] {
-			t.Errorf("insertSQL колонка[%d] = %q, want %q (рассинхрон с selectColumns/scanCadence)", i, c, cadenceScanColumns[i])
+			t.Errorf("insertSQL column[%d] = %q, want %q (drift with selectColumns/scanCadence)", i, c, cadenceScanColumns[i])
 		}
 	}
 }
 
-// parseColumnList разбирает SELECT-список колонок (selectColumns-константа) в
-// имена по порядку: split по запятым + распаковка `EXTRACT(EPOCH FROM x)::float8`
-// → x. Прочие выражения/касты не ожидаются (если появятся — guard заметит мусор).
+// parseColumnList parses a SELECT column list (the selectColumns constant) into
+// names in order: split by commas + unpack `EXTRACT(EPOCH FROM x)::float8` -> x.
+// Other expressions/casts are not expected; if they appear, the guard will catch
+// the noise.
 func parseColumnList(list string) []string {
 	parts := strings.Split(list, ",")
 	out := make([]string, 0, len(parts))
@@ -777,8 +783,9 @@ func parseColumnList(list string) []string {
 	return out
 }
 
-// parseInsertColumns вытаскивает имена колонок из INSERT INTO t (...) VALUES (...):
-// берёт содержимое первой пары скобок (column-list) и разбирает как список.
+// parseInsertColumns extracts column names from INSERT INTO t (...) VALUES (...):
+// it takes the contents of the first pair of parentheses (column-list) and
+// parses it as a list.
 func parseInsertColumns(sql string) []string {
 	open := strings.Index(sql, "(")
 	close := strings.Index(sql, ")")
@@ -788,8 +795,8 @@ func parseInsertColumns(sql string) []string {
 	return parseColumnList(sql[open+1 : close])
 }
 
-// normalizeColumn приводит один элемент column-списка к голому имени:
-// EXTRACT(EPOCH FROM x)::float8 → x; иначе trim + отброс хвостовых ::cast.
+// normalizeColumn converts one column-list item to the bare name:
+// EXTRACT(EPOCH FROM x)::float8 -> x; otherwise trim and drop trailing ::cast.
 func normalizeColumn(s string) string {
 	s = strings.TrimSpace(s)
 	if s == "" {

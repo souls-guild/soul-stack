@@ -77,7 +77,7 @@ func TestResolveScope_Command(t *testing.T) {
 		t.Errorf("scope = %v, want 1", got)
 	}
 	if !cr.gotAlive {
-		t.Error("require_alive не проброшен в command-резолвер")
+		t.Error("require_alive was not passed to the command resolver")
 	}
 	if cr.gotWhere != "x" || len(cr.gotCovens) != 1 {
 		t.Errorf("command filter: where=%q covens=%v", cr.gotWhere, cr.gotCovens)
@@ -112,7 +112,7 @@ func TestBuildVoyage_ScenarioBarrier(t *testing.T) {
 		t.Errorf("cadence_id back-link = %v, want %q", v.CadenceID, c.ID)
 	}
 	if v.StartedByAID != c.CreatedByAID {
-		t.Errorf("started_by_aid = %q, want %q (создатель Cadence)", v.StartedByAID, c.CreatedByAID)
+		t.Errorf("started_by_aid = %q, want %q (Cadence creator)", v.StartedByAID, c.CreatedByAID)
 	}
 	if v.Kind != voyage.KindScenario {
 		t.Errorf("kind = %q", v.Kind)
@@ -162,7 +162,7 @@ func TestBuildVoyage_CommandWindow(t *testing.T) {
 		t.Errorf("batch_mode = %v, want window", v.BatchMode)
 	}
 	if v.BatchSize != nil {
-		t.Errorf("window: batch_size должен быть nil, got %v", v.BatchSize)
+		t.Errorf("window: batch_size must be nil, got %v", v.BatchSize)
 	}
 	if v.TotalBatches != 1 { // window → one wave
 		t.Errorf("total_batches = %d, want 1", v.TotalBatches)
@@ -186,7 +186,7 @@ func TestBuildVoyage_BatchPercent(t *testing.T) {
 
 	v, _ := BuildVoyage(c, "VOY03", resolved)
 	if v.BatchSize == nil || *v.BatchSize != 2 {
-		t.Errorf("effective batch_size = %v, want 2 (50%% от 4)", v.BatchSize)
+		t.Errorf("effective batch_size = %v, want 2 (50%% of 4)", v.BatchSize)
 	}
 	if v.TotalBatches != 2 { // ceil(4/2)
 		t.Errorf("total_batches = %d, want 2", v.TotalBatches)
@@ -207,7 +207,7 @@ func TestBuildVoyage_FailThresholdPercent(t *testing.T) {
 
 	v, _ := BuildVoyage(c, "VOY04", resolved)
 	if v.FailThreshold == nil || *v.FailThreshold != 3 { // ceil(10*25/100)=3
-		t.Errorf("effective fail_threshold = %v, want 3 (25%% от 10)", v.FailThreshold)
+		t.Errorf("effective fail_threshold = %v, want 3 (25%% of 10)", v.FailThreshold)
 	}
 }
 
@@ -254,7 +254,7 @@ func TestBuildVoyage_FailThresholdAbsolute(t *testing.T) {
 
 	v, _ := BuildVoyage(c, "VOY05", resolved)
 	if v.FailThreshold == nil || *v.FailThreshold != 5 {
-		t.Errorf("fail_threshold = %v, want 5 (абсолют как есть)", v.FailThreshold)
+		t.Errorf("fail_threshold = %v, want 5 (absolute as-is)", v.FailThreshold)
 	}
 }
 
@@ -269,12 +269,12 @@ func TestEffectiveFailThreshold(t *testing.T) {
 		scope     int
 		want      *int
 	}{
-		{"percent nil → absolute как есть", intptr(7), nil, 10, intptr(7)},
-		{"both nil → nil (без порога)", nil, nil, 10, nil},
-		{"percent резолвится → ceil", nil, intptr(50), 8, intptr(4)},
-		{"percent round-up малый → clamp 1", nil, intptr(1), 5, intptr(1)}, // ceil(5*1/100)=1
-		{"percent 100 → весь scope", nil, intptr(100), 6, intptr(6)},
-		{"scope=0 → absolute (резолв невозможен)", intptr(3), intptr(50), 0, intptr(3)},
+		{"percent nil → absolute as-is", intptr(7), nil, 10, intptr(7)},
+		{"both nil → nil (no threshold)", nil, nil, 10, nil},
+		{"percent resolves → ceil", nil, intptr(50), 8, intptr(4)},
+		{"small percent round-up → clamp 1", nil, intptr(1), 5, intptr(1)}, // ceil(5*1/100)=1
+		{"percent 100 → full scope", nil, intptr(100), 6, intptr(6)},
+		{"scope=0 → absolute (cannot resolve)", intptr(3), intptr(50), 0, intptr(3)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

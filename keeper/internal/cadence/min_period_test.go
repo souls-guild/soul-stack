@@ -102,7 +102,7 @@ func TestClamp(t *testing.T) {
 		{"at floor", floor, floor},
 		{"inside corridor", 45 * time.Second, 45 * time.Second},
 		{"at ceiling", ceiling, ceiling},
-		{"above ceiling → ceiling (редкое 1h)", time.Hour, ceiling},
+		{"above ceiling → ceiling (rare 1h)", time.Hour, ceiling},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

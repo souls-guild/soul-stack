@@ -112,7 +112,7 @@ func NextRunAnchored(c *Cadence, scheduledFor, now time.Time) (time.Time, error)
 		// infinite loop under the PG lock (wedges the conductor-tx). We reject
 		// zero as an error.
 		if next.IsZero() {
-			return time.Time{}, fmt.Errorf("cadence: cron %q не даёт будущего слота", *c.CronExpr)
+			return time.Time{}, fmt.Errorf("cadence: cron %q does not yield a future slot", *c.CronExpr)
 		}
 		for !next.After(now) { // next <= now
 			next, err = NextRun(c, next)
@@ -120,7 +120,7 @@ func NextRunAnchored(c *Cadence, scheduledFor, now time.Time) (time.Time, error)
 				return time.Time{}, err
 			}
 			if next.IsZero() {
-				return time.Time{}, fmt.Errorf("cadence: cron %q не даёт будущего слота", *c.CronExpr)
+				return time.Time{}, fmt.Errorf("cadence: cron %q does not yield a future slot", *c.CronExpr)
 			}
 		}
 		return next, nil
