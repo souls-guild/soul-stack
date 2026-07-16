@@ -1,26 +1,26 @@
-// soul-mod-community-redis — реальный SoulModule-плагин Soul Stack
-// (community.redis): ОСНОВНОЙ интерфейс к живому Redis в redis-консолидации
-// (концепция Ansible-роли). Scenario сервиса оркеструет порядок/таргетинг,
-// плагин исполняет ОДНУ операцию над одним инстансом.
+// soul-mod-community-redis is a real SoulModule plugin for Soul Stack
+// (community.redis): PRIMARY interface to live Redis in redis consolidation
+// (Ansible role concept). Service scenario orchestrates order/targeting,
+// plugin executes ONE operation on one instance.
 //
-// States: `command` (raw verb-state, changed=false по умолчанию), `pinged` /
-// `role` / `replica-synced` (read-probe, changed=false конструктивно, см.
-// probe.go), `config` (CONFIG SET из map), `acl` (ACL LOAD — hot-reload aclfile,
-// changed по diff ACL LIST до/после), `cluster` (см. cluster.go), `replica`
-// (REPLICAOF, см. replica.go), `sentinel` (SENTINEL MONITOR/SET reconcile, см.
-// sentinel.go). failover — следующий батч.
+// States: `command` (raw verb-state, changed=false by default), `pinged` /
+// `role` / `replica-synced` (read probe, changed=false by design, see
+// probe.go), `config` (CONFIG SET from map), `acl` (ACL LOAD — hot reload of aclfile,
+// changed by diff of ACL LIST before/after), `cluster` (see cluster.go), `replica`
+// (REPLICAOF, see replica.go), `sentinel` (SENTINEL MONITOR/SET reconcile, see
+// sentinel.go). failover — next batch.
 //
-// СОЗНАТЕЛЬНО без dry-run preview: плагин на BaseModule НЕ реализует PlanReadSafe
-// → host применяет default-deny (на dry_run задача получает честный «drift не
-// поддержан», не ложное «нет дрифта»). Решение пользователя 2026-06-22.
+// Intentionally without dry-run preview: plugin on BaseModule does NOT implement PlanReadSafe
+// → host applies default-deny (on dry_run task gets honest "drift not
+// supported", not false "no drift"). User decision 2026-06-22.
 //
-// Backend — github.com/redis/go-redis/v9. Адрес + пароль приходят от Keeper:
-// пароль уже отрезолвлен render-фазой из vault-ref (ADR-012), плагин свой
-// Vault-клиент НЕ тянет (capability — только network_outbound).
+// Backend — github.com/redis/go-redis/v9. Address + password come from Keeper:
+// password already resolved by render phase from vault-ref (ADR-012), plugin does NOT
+// pull its own Vault client (capability — network_outbound only).
 //
-// КРИТ ИБ (ADR-010): params["password"] НИКОГДА не попадает в ApplyEvent.Message,
-// .Output, в текст ошибок или в stderr. Все коннект-ошибки санитизируются
-// (redactError), вывод команд — нет (это ответ Redis, не секрет оператора).
+// CRITICAL SECURITY (ADR-010): params["password"] NEVER goes into ApplyEvent.Message,
+// .Output, error text, or stderr. All connect-level errors are sanitized
+// (redactError), command output is not (this is Redis response, not operator secret).
 package main
 
 import (
@@ -36,60 +36,60 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// RedisModule — реализация SoulModule community.redis.
+// RedisModule is the SoulModule implementation for community.redis.
 //
-// BaseModule даёт no-op Plan (без PlanReadSafe → default-deny на dry_run) и
-// СОЗНАТЕЛЬНО НЕ реализует ErrandReadSafe (default-deny на Errand): оба
-// поведения осознанны для этого плагина. Переопределяем Validate и Apply.
+// BaseModule provides no-op Plan (without PlanReadSafe → default-deny on dry_run) and
+// intentionally does NOT implement ErrandReadSafe (default-deny on Errand): both
+// behaviors are deliberate for this plugin. We override Validate and Apply.
 type RedisModule struct {
 	module.BaseModule
 
-	// connect — точка инъекции для L0. nil → реальный redis.NewClient.
+	// connect is an injection point for L0. nil → real redis.NewClient.
 	connect func(ctx context.Context, cfg connConfig) (redisConn, error)
 }
 
-// redisConn — узкий интерфейс над *redis.Client (для L0-фейка).
+// redisConn is a narrow interface over *redis.Client (for L0 fake).
 type redisConn interface {
-	// Do выполняет произвольную команду и возвращает строковое представление
-	// ответа Redis (или ошибку). Строка идёт в ApplyEvent.Output — это ответ
-	// сервера, не секрет оператора.
+	// Do executes an arbitrary command and returns string representation of
+	// Redis response (or error). The string goes to ApplyEvent.Output — this is
+	// server response, not operator secret.
 	Do(ctx context.Context, args ...any) (string, error)
-	// ConfigGet читает CONFIG GET <param> через ТИПИЗИРОВАННЫЙ путь драйвера
-	// (go-redis отдаёт map[string]string нативно). НЕ через Do+strings.Fields:
-	// многословные значения (напр. save "900 1 300 10 60 10000") при space-join +
-	// Fields рассыпаются в перепутанные пары → ложный CONFIG SET, потеря
-	// идемпотентности на day-2 update_config.
+	// ConfigGet reads CONFIG GET <param> through the driver's TYPED path
+	// (go-redis natively returns map[string]string). NOT through Do+strings.Fields:
+	// multi-word values (for example save "900 1 300 10 60 10000") would be split
+	// into mismatched pairs after space-join + Fields → false CONFIG SET and loss
+	// of idempotency on day-2 update_config.
 	ConfigGet(ctx context.Context, param string) (map[string]string, error)
-	// GetKeysInSlot читает CLUSTER GETKEYSINSLOT <slot> <count> через
-	// ТИПИЗИРОВАННЫЙ путь драйвера ([]string нативно). НЕ через Do+strings.Fields:
-	// ключ Redis — произвольная байт-строка и может содержать пробел/\t/\n; при
-	// space-join + Fields ключ "user 42" рассыпался бы в два токена → MIGRATE по
-	// несуществующим ключам → ключ НЕ переносится, а SETSLOT NODE всё равно отдаёт
-	// слот → ПОТЕРЯ ДАННЫХ. Native-path сохраняет разделители (симметрия с ConfigGet).
+	// GetKeysInSlot reads CLUSTER GETKEYSINSLOT <slot> <count> through
+	// the driver's TYPED path ([]string natively). NOT through Do+strings.Fields:
+	// Redis key is an arbitrary byte string and may contain space/\t/\n; after
+	// space-join + Fields key "user 42" would split into two tokens → MIGRATE
+	// nonexistent keys → key is NOT migrated, while SETSLOT NODE still gives away
+	// the slot → DATA LOSS. Native path preserves separators (symmetry with ConfigGet).
 	GetKeysInSlot(ctx context.Context, slot, count int) ([]string, error)
-	// AclList читает ACL LIST через ТИПИЗИРОВАННЫЙ путь драйвера ([]string — по
-	// строке на пользователя). Используется для diff до/после ACL LOAD (changed-
-	// детекция acl-state). НЕ через Do+strings.Fields: каждая строка ACL — целое
-	// правило ("user alice on >hash ~* +@all") с пробелами; space-join + Fields
-	// рассыпали бы её в токены → ложный diff. Native-path сохраняет строки целиком
-	// (симметрия с ConfigGet/GetKeysInSlot).
+	// AclList reads ACL LIST through the driver's TYPED path ([]string — one
+	// line per user). Used for diff before/after ACL LOAD (changed detection
+	// for acl-state). NOT through Do+strings.Fields: each ACL line is a whole
+	// rule ("user alice on >hash ~* +@all") with spaces; space-join + Fields
+	// would split it into tokens → false diff. Native path preserves whole lines
+	// (symmetry with ConfigGet/GetKeysInSlot).
 	AclList(ctx context.Context) ([]string, error)
 	Close() error
 }
 
-// connConfig — параметры коннекта. password и tls.*PEM держатся отдельно и
-// НИКОГДА не логируются / не кладутся в события (ИБ-инвариант ADR-010).
+// connConfig is connection parameters. password and tls.*PEM are kept separate and
+// NEVER logged or placed in events (security invariant ADR-010).
 type connConfig struct {
-	addr     string // host:port или unix:/path
+	addr     string // host:port or unix:/path
 	username string
 	password string
 	db       int
-	tls      tlsParams // TLS-параметры (enabled=false → plaintext-коннект)
+	tls      tlsParams // TLS parameters (enabled=false → plaintext connection)
 }
 
-// Validate — runtime-проверки поверх статических от soul-lint. Возвращает
-// ValidateReply с errors (не error) — это контракт Validate. Тексты ошибок НЕ
-// содержат пароль.
+// Validate performs runtime checks on top of static checks from soul-lint. Returns
+// ValidateReply with errors (not error) — this is the Validate contract. Error text
+// does NOT contain the password.
 func (m *RedisModule) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
 	var errs []string
 	f := req.GetParams().GetFields()
@@ -101,8 +101,8 @@ func (m *RedisModule) Validate(_ context.Context, req *pluginv1.ValidateRequest)
 			errs = append(errs, "params.args: must be a non-empty list (e.g. [\"PING\"])")
 		}
 	case "pinged", "role", "replica-synced", "detached":
-		// Read-probe + detached: единственное обязательное — addr (PING / INFO
-		// replication / REPLICAOF NO ONE доп. аргументов не требуют).
+		// Read-probe + detached: only addr is required (PING / INFO
+		// replication / REPLICAOF NO ONE require no additional arguments).
 		errs = append(errs, validateAddr(f)...)
 	case "offset-synced":
 		errs = append(errs, validateOffsetSynced(f)...)
@@ -112,12 +112,12 @@ func (m *RedisModule) Validate(_ context.Context, req *pluginv1.ValidateRequest)
 			errs = append(errs, "params.config: must be a non-empty map of directives")
 		}
 	case "acl":
-		// acl приводит ЖИВОЙ инстанс к уже отрендеренному aclfile командой ACL LOAD
-		// — никаких params кроме коннекта (addr + опц. auth/TLS). Единственное
-		// обязательное — addr (как у read-probe).
+		// acl reconciles a LIVE instance to already rendered aclfile with ACL LOAD
+		// command — no params except connection (addr + optional auth/TLS). The only
+		// required one is addr (same as read-probe).
 		errs = append(errs, validateAddr(f)...)
 	case "cluster":
-		// cluster коннектится к нодам из nodes-map, единый addr не требуется.
+		// cluster connects to nodes from nodes-map, no single addr is required.
 		errs = append(errs, validateCluster(f)...)
 	case "replica":
 		errs = append(errs, validateReplica(f)...)
@@ -133,14 +133,14 @@ func (m *RedisModule) Validate(_ context.Context, req *pluginv1.ValidateRequest)
 	return &pluginv1.ValidateReply{Ok: true}, nil
 }
 
-// Apply — диспетчеризация по state. Финальное событие переносит changed/failed +
-// output (ADR-012). Ошибки коннекта санитизируются (redactError) — адрес
-// сохраняем для диагностики, пароль вырезаем.
+// Apply dispatches by state. The final event carries changed/failed +
+// output (ADR-012). Connection errors are sanitized (redactError) — address
+// is preserved for diagnostics, password is stripped.
 func (m *RedisModule) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
 	ctx := stream.Context()
 
-	// cluster управляет НЕСКОЛЬКИМИ нодами (коннект к каждой из nodes-map), а не
-	// одним addr — у него собственный жизненный цикл коннектов.
+	// cluster manages MULTIPLE nodes (connection to each from nodes-map), not
+	// one addr — it has its own connection lifecycle.
 	if req.GetState() == "cluster" {
 		return m.applyCluster(ctx, stream, req.GetParams())
 	}
@@ -151,8 +151,8 @@ func (m *RedisModule) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStream
 	}
 	conn, err := m.openConn(ctx, cfg)
 	if err != nil {
-		// Редактируем И пароль, И PEM client-key: TLS-handshake-ошибка теоретически
-		// может нести client-key (ИБ-инвариант ADR-010, как пароль).
+		// Redact BOTH password and PEM client-key: TLS handshake error could theoretically
+		// carry client-key (security invariant ADR-010, same as password).
 		return sendFailure(stream, "connect: "+redactError(err, cfg.password, cfg.tls.keyPEM))
 	}
 	defer func() { _ = conn.Close() }()
@@ -183,9 +183,9 @@ func (m *RedisModule) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStream
 	}
 }
 
-// applyCommand — raw-команда. changed берётся из params.changed (default false,
-// probe-семантика). Output несёт result (ответ Redis). Пароль в события не
-// попадает (args оператора + result сервера).
+// applyCommand executes raw command. changed is taken from params.changed (default false,
+// probe semantics). Output carries result (Redis response). Password does not go into
+// events (operator args + server result).
 func (m *RedisModule) applyCommand(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], conn redisConn, params *structpb.Struct) error {
 	f := params.GetFields()
 	args := stringList(f["args"])
@@ -200,10 +200,10 @@ func (m *RedisModule) applyCommand(ctx context.Context, stream grpc.ServerStream
 	}
 	res, err := conn.Do(ctx, cmdArgs...)
 	if err != nil {
-		// Ошибка Redis на саму команду — это её вывод, не секрет; но коннект-уровень
-		// мог нести пароль — на всякий случай редактируем по cfg.password нельзя
-		// (его тут нет), поэтому редактируем только wrap-текст. err от Do — ответ
-		// сервера (WRONGPASS/ERR ...) безопасен.
+		// Redis error on command itself is its output, not a secret; but connection level
+		// could carry password. We cannot redact by cfg.password here
+		// (not available here), so redact only wrapper text. err from Do is server
+		// response (WRONGPASS/ERR ...) and is safe.
 		return sendFailure(stream, fmt.Sprintf("command %s: %v", args[0], err))
 	}
 
@@ -213,16 +213,16 @@ func (m *RedisModule) applyCommand(ctx context.Context, stream grpc.ServerStream
 	})
 }
 
-// startupOnlyDirectives — директивы redis.conf, которые задаются ТОЛЬКО при старте
-// процесса: CONFIG SET их отвергает («Unknown option or number of arguments» /
-// «can't set ... at runtime»). day-2 update_config рендерит ПОЛНЫЙ redis.conf
-// (включая такие директивы — они нужны при следующем рестарте процесса), но к
-// ЖИВОМУ инстансу их применить нельзя. Чтобы CONFIG SET не падал на них, плагин их
-// ПРОПУСКАЕТ (skip-счётчик в Output) — hot-settable применяются как обычно. Смена
-// startup-only-директивы вступит в силу при следующем рестарте процесса (его
-// триггерит смена hardening-юнита, destiny redis server.yml). Набор — известные
-// startup-only Redis (порт/listener/threading/cluster-bootstrap/file-layout/
-// persistence-имена/modules/daemon/syslog/databases/logo).
+// startupOnlyDirectives are redis.conf directives set ONLY at process startup:
+// CONFIG SET rejects them ("Unknown option or number of arguments" /
+// "can't set ... at runtime"). day-2 update_config renders FULL redis.conf
+// (including these directives, needed on next process restart), but they cannot
+// be applied to a LIVE instance. To avoid CONFIG SET failure, plugin
+// SKIPS them (skip counter in Output) — hot-settable directives apply as usual. Changing
+// startup-only directive takes effect on next process restart (triggered by
+// hardening unit change, destiny redis server.yml). Set contains known
+// startup-only Redis directives (port/listener/threading/cluster-bootstrap/file-layout/
+// persistence names/modules/daemon/syslog/databases/logo).
 var startupOnlyDirectives = map[string]bool{
 	"port":                true,
 	"tls-port":            true,
@@ -251,20 +251,20 @@ var startupOnlyDirectives = map[string]bool{
 	"socket-mark-id":      true,
 }
 
-// applyConfig — честный diff: CONFIG GET текущего значения каждой директивы,
-// CONFIG SET только реально отличающихся (no-op → changed=false, идемпотентно как
-// reconcileGlobals / cluster / replica / sentinel). Порядок детерминированный
-// (отсортированные ключи) ради воспроизводимого вывода. Опц. CONFIG REWRITE
-// выполняется только если хоть одна директива применена (нет дрифта между live и
-// redis.conf, который надо персистить). Значения директив в Output идут — это
-// конфиг redis, не пароль; но error-path санитизируется redactError по значению
-// директивы (defense-in-depth: значение могло прийти из vault, напр. requirepass).
+// applyConfig performs an honest diff: CONFIG GET current value of each directive,
+// CONFIG SET only truly differing values (no-op → changed=false, idempotent like
+// reconcileGlobals / cluster / replica / sentinel). Order is deterministic
+// (sorted keys) for reproducible output. Optional CONFIG REWRITE
+// runs only if at least one directive was applied (no drift between live and
+// redis.conf that needs persistence). Directive values go into Output — this is
+// redis config, not password; but error-path is sanitized with redactError by directive
+// value (defense-in-depth: value could come from vault, e.g. requirepass).
 //
-// ★ Startup-only-директивы (startupOnlyDirectives) ПРОПУСКАЮТСЯ: CONFIG SET их
-// отвергает, а day-2 рендерит ПОЛНЫЙ redis.conf (включая их — для следующего
-// рестарта). Без skip CONFIG SET dir/port/... падал бы и рвал прогон. Hot-settable
-// директивы того же вызова применяются нормально; число пропущенных — в Output
-// (skipped), их имена — отдельным полем для аудита.
+// ★ Startup-only directives (startupOnlyDirectives) are SKIPPED: CONFIG SET rejects
+// them, while day-2 renders FULL redis.conf (including them for next
+// restart). Without skip, CONFIG SET dir/port/... would fail and break the run. Hot-settable
+// directives from the same call apply normally; number skipped goes into Output
+// (skipped), names go into a separate field for audit.
 func (m *RedisModule) applyConfig(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], conn redisConn, params *structpb.Struct) error {
 	f := params.GetFields()
 	directives := stringMap(f["config"])
@@ -277,21 +277,21 @@ func (m *RedisModule) applyConfig(ctx context.Context, stream grpc.ServerStreami
 	skipped := make([]string, 0)
 	for _, key := range sortedKeys(directives) {
 		if startupOnlyDirectives[key] {
-			// startup-only: CONFIG SET отвергнет → пропускаем (вступит в силу при
-			// рестарте процесса; см. startupOnlyDirectives).
+			// startup-only: CONFIG SET would reject → skip (takes effect on
+			// process restart; see startupOnlyDirectives).
 			skipped = append(skipped, key)
 			continue
 		}
 		want := directives[key]
 		current, err := configGet(ctx, conn, key)
 		if err != nil {
-			// redactError по значению директивы: defense-in-depth — значение могло
-			// прийти из vault (requirepass/masterauth), а текст ошибки драйвера его
-			// эхать (симметрия с replica/cluster/sentinel error-path).
+			// redactError by directive value: defense-in-depth — value may have
+			// come from vault (requirepass/masterauth), and driver error text may
+			// echo it (symmetry with replica/cluster/sentinel error-path).
 			return sendFailure(stream, fmt.Sprintf("CONFIG GET %s: %s", key, redactError(err, want)))
 		}
 		if current == want {
-			continue // no-op: live уже на желаемом значении
+			continue // no-op: live already has the desired value
 		}
 		if _, err := conn.Do(ctx, "CONFIG", "SET", key, want); err != nil {
 			return sendFailure(stream, fmt.Sprintf("CONFIG SET %s: %s", key, redactError(err, want)))
@@ -314,29 +314,29 @@ func (m *RedisModule) applyConfig(ctx context.Context, stream grpc.ServerStreami
 	})
 }
 
-// applyACL — hot-reload ACL: ACL LOAD заставляет Redis перечитать aclfile
-// целиком (фундамент волны hot-reload; aclfile уже отрендерен destiny до этого
-// шага). Идемпотентно ПО КОНСТРУКЦИИ: ACL LOAD приводит живой инстанс к
-// декларированному файлу независимо от текущего состояния.
+// applyACL hot-reloads ACL: ACL LOAD forces Redis to reread aclfile
+// in full (foundation of hot-reload wave; aclfile is already rendered by destiny before this
+// step). Idempotent BY CONSTRUCTION: ACL LOAD reconciles live instance to
+// declared file regardless of current state.
 //
-// changed-семантика: сама ACL LOAD «changed» не сообщает, поэтому делаем дешёвый
-// честный diff — ACL LIST до и после LOAD (типизированный путь, []string по
-// правилу на пользователя). Совпали → changed=false (живой инстанс уже совпадал
-// с файлом, no-op как config/cluster/sentinel); отличаются → changed=true.
-// Симметрия с config: тоже сверяем live и приводим к желаемому.
+// changed semantics: ACL LOAD itself does not report "changed", so we do a cheap
+// honest diff — ACL LIST before and after LOAD (typed path, []string with one
+// rule per user). Equal → changed=false (live instance already matched
+// file, no-op like config/cluster/sentinel); different → changed=true.
+// Symmetry with config: compare live and reconcile to desired.
 //
-// ИБ: ACL-правила (вывод ACL LIST) НЕ кладём в Output — строка пользователя
-// может нести password-hash (>hash / #sha256). Output несёт только число
-// затронутых пользователей и факт changed. error-path санитизируется
-// (redactError) по cfg.* через общий путь Apply; внутри — без секретов.
+// Security: ACL rules (ACL LIST output) are NOT placed into Output — user line
+// may carry password-hash (>hash / #sha256). Output carries only number of
+// affected users and changed flag. error-path is sanitized
+// (redactError) by cfg.* through the common Apply path; inside, no secrets.
 func (m *RedisModule) applyACL(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], conn redisConn, _ *structpb.Struct) error {
 	before, err := conn.AclList(ctx)
 	if err != nil {
 		return sendFailure(stream, fmt.Sprintf("ACL LIST (before): %v", err))
 	}
 	if _, err := conn.Do(ctx, "ACL", "LOAD"); err != nil {
-		// ACL LOAD фейлит при битом aclfile / aclfile не сконфигурирован — это ответ
-		// Redis (не секрет оператора), но коннект-уровень секретов тут уже нет.
+		// ACL LOAD fails on broken aclfile / aclfile not configured — this is
+		// Redis response (not operator secret), and connection-level secrets are already gone here.
 		return sendFailure(stream, fmt.Sprintf("ACL LOAD: %v", err))
 	}
 	after, err := conn.AclList(ctx)
@@ -350,9 +350,9 @@ func (m *RedisModule) applyACL(ctx context.Context, stream grpc.ServerStreamingS
 	})
 }
 
-// aclListEqual — посимвольное сравнение двух ACL LIST (порядок значим: ACL LIST
-// возвращает пользователей детерминированно, по порядку загрузки из файла, и
-// после LOAD порядок отражает файл). Любое расхождение → ACL изменился.
+// aclListEqual compares two ACL LIST outputs byte-for-byte (order matters: ACL LIST
+// returns users deterministically in file load order, and after LOAD
+// order reflects file). Any difference → ACL changed.
 func aclListEqual(before, after []string) bool {
 	if len(before) != len(after) {
 		return false
@@ -365,10 +365,10 @@ func aclListEqual(before, after []string) bool {
 	return true
 }
 
-// configGet читает CONFIG GET <param> → текущее значение или "" (параметр пуст/нет).
-// Использует ТИПИЗИРОВАННЫЙ ConfigGet драйвера (map[string]string), а НЕ
-// Do+strings.Fields: многословные значения (save "900 1 300 10 60 10000") при
-// space-join + Fields рассыпались бы в перепутанные пары → ложный CONFIG SET.
+// configGet reads CONFIG GET <param> → current value or "" (parameter empty/missing).
+// Uses driver's TYPED ConfigGet (map[string]string), NOT
+// Do+strings.Fields: multi-word values (save "900 1 300 10 60 10000") would
+// split into mismatched pairs after space-join + Fields → false CONFIG SET.
 func configGet(ctx context.Context, conn redisConn, param string) (string, error) {
 	m, err := conn.ConfigGet(ctx, param)
 	if err != nil {
@@ -390,7 +390,7 @@ func defaultConnect(ctx context.Context, cfg connConfig) (redisConn, error) {
 		Password: cfg.password,
 		DB:       cfg.db,
 	}
-	// unix:-префикс → unix-сокет; иначе TCP host:port.
+	// unix: prefix → unix socket; otherwise TCP host:port.
 	if path, ok := strings.CutPrefix(cfg.addr, "unix:"); ok {
 		opts.Network = "unix"
 		opts.Addr = path
@@ -398,9 +398,9 @@ func defaultConnect(ctx context.Context, cfg connConfig) (redisConn, error) {
 		opts.Network = "tcp"
 		opts.Addr = cfg.addr
 	}
-	// TLS: при tls=true go-redis коннектится по TLS (RootCAs/client-cert/
-	// skip_verify из cfg.tls). Это ОБЯЗАТЕЛЬНО для only-TLS (port 0): без
-	// tls.Config go-redis шлёт plaintext и упирается в закрытый plain-порт.
+	// TLS: with tls=true go-redis connects over TLS (RootCAs/client-cert/
+	// skip_verify from cfg.tls). This is REQUIRED for only-TLS (port 0): without
+	// tls.Config go-redis sends plaintext and hits closed plain port.
 	tlsCfg, err := buildTLSConfig(cfg.tls)
 	if err != nil {
 		return nil, err
@@ -414,7 +414,7 @@ func defaultConnect(ctx context.Context, cfg connConfig) (redisConn, error) {
 	return &realConn{c: c}, nil
 }
 
-// realConn — обёртка *redis.Client под redisConn.
+// realConn is a wrapper of *redis.Client for redisConn.
 type realConn struct {
 	c *redis.Client
 }
@@ -430,9 +430,9 @@ func (r *realConn) Do(ctx context.Context, args ...any) (string, error) {
 	return stringifyResult(res), nil
 }
 
-// ConfigGet — типизированный CONFIG GET через go-redis (map[string]string).
-// Значения сохраняются целиком, включая многословные (save). redis.Nil →
-// пустой map (параметр без значения).
+// ConfigGet is typed CONFIG GET through go-redis (map[string]string).
+// Values are preserved whole, including multi-word ones (save). redis.Nil →
+// empty map (parameter without value).
 func (r *realConn) ConfigGet(ctx context.Context, param string) (map[string]string, error) {
 	m, err := r.c.ConfigGet(ctx, param).Result()
 	if err != nil {
@@ -444,9 +444,9 @@ func (r *realConn) ConfigGet(ctx context.Context, param string) (map[string]stri
 	return m, nil
 }
 
-// GetKeysInSlot — типизированный CLUSTER GETKEYSINSLOT через go-redis ([]string).
-// Ключи возвращаются целиком, включая пробельные символы в имени. redis.Nil →
-// пустой срез (слот опустошён).
+// GetKeysInSlot is typed CLUSTER GETKEYSINSLOT through go-redis ([]string).
+// Keys are returned whole, including whitespace in name. redis.Nil →
+// empty slice (slot emptied).
 func (r *realConn) GetKeysInSlot(ctx context.Context, slot, count int) ([]string, error) {
 	keys, err := r.c.ClusterGetKeysInSlot(ctx, slot, count).Result()
 	if err != nil {
@@ -458,9 +458,9 @@ func (r *realConn) GetKeysInSlot(ctx context.Context, slot, count int) ([]string
 	return keys, nil
 }
 
-// AclList — типизированный ACL LIST через go-redis ([]string, по строке на
-// пользователя). Строки сохраняются целиком (правило ACL содержит пробелы).
-// redis.Nil → пустой срез (ACL не сконфигурирован).
+// AclList is typed ACL LIST through go-redis ([]string, one line per
+// user). Lines are preserved whole (ACL rule contains spaces).
+// redis.Nil → empty slice (ACL not configured).
 func (r *realConn) AclList(ctx context.Context) ([]string, error) {
 	users, err := r.c.ACLList(ctx).Result()
 	if err != nil {
@@ -474,9 +474,9 @@ func (r *realConn) AclList(ctx context.Context) ([]string, error) {
 
 func (r *realConn) Close() error { return r.c.Close() }
 
-// stringifyResult приводит ответ Redis к строке для Output. Скаляр → как есть,
-// массив → join пробелом (best-effort; команды command/config возвращают простые
-// ответы: OK / PONG / значение).
+// stringifyResult converts Redis response to string for Output. Scalar → as-is,
+// array → join with space (best-effort; command/config commands return simple
+// responses: OK / PONG / value).
 func stringifyResult(res any) string {
 	switch v := res.(type) {
 	case nil:

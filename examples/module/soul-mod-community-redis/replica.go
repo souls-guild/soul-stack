@@ -1,42 +1,42 @@
-// replica-state плагина community.redis — привязка Redis-инстанса к master-у
-// (REPLICAOF) ЦЕЛИКОМ через go-redis: INFO replication (диагностика и
-// идемпотентность) → REPLICAOF host port + CONFIG SET masterauth. НИКАКОГО
-// redis-cli/shell — capability плагина остаётся только network_outbound.
+// replica-state of the community.redis plugin binds a Redis instance to a master
+// (REPLICAOF) entirely via go-redis: INFO replication (diagnostics and
+// idempotency) → REPLICAOF host port + CONFIG SET masterauth. No
+// redis-cli/shell — the plugin's capability remains network_outbound only.
 //
-// Идемпотентен: если инстанс УЖЕ реплицирует нужный master (role:slave,
-// master_host/master_port совпали, master_link_status:up) → changed=false, no-op.
+// Idempotent: if the instance is already replicating the desired master (role:slave,
+// master_host/master_port match, master_link_status:up) → changed=false, no-op.
 //
-// addr == master_addr → no-op (guard В ПЛАГИНЕ) — defense-in-depth. РЕАЛЬНАЯ
-// защита от «master реплицирует сам себя» — scenario `where:` (sentinel.yml шаг
-// 4): задача рендерится ТОЛЬКО на репликах (master исключён по SID). В prod
-// addr=127.0.0.1:6379, master_addr=primary_ip (напр. 10.0.0.1) — addr НИКОГДА не
-// равен master_addr ни на одном хосте, поэтому этот guard в prod не срабатывает;
-// он ловит только вырожденную addr==master_addr-комбинацию (тест
-// TestApplyReplica_SelfIsMasterNoOp), которая в сценарии не возникает.
+// addr == master_addr → no-op (guard IN PLUGIN) — defense-in-depth. REAL
+// protection from "master replicating itself" is in the scenario `where:` (sentinel.yml step
+// 4): the task is rendered ONLY on replicas (master excluded by SID). In prod,
+// addr=127.0.0.1:6379, master_addr=primary_ip (e.g. 10.0.0.1) — addr is NEVER equal
+// to master_addr on any host, so this guard does not trigger in prod;
+// it catches only the degenerate addr==master_addr combination (test
+// TestApplyReplica_SelfIsMasterNoOp), which does not occur in the scenario.
 //
-// source_external — привязка к ВНЕШНЕМУ master-у (миграция из чужой инкарнации):
-// self-guard отключён, masterauth/masteruser берутся из master_password/
-// master_username (реквизиты источника).
+// source_external — binding to an EXTERNAL master (migration from another incarnation):
+// self-guard is disabled, masterauth/masteruser are taken from master_password/
+// master_username (source credentials).
 //
-// TLS-к-источнику (master_tls=true): репликационный линк к master-у источника
-// идёт по TLS. На стороне Redis это управляется директивой `tls-replication yes`
-// — она переводит ИСХОДЯЩИЙ replication-коннект реплики в TLS-режим. Директива
-// hot-settable, поэтому плагин ставит её CONFIG SET-ом ДО REPLICAOF (рядом с
-// masterauth/masteruser): тогда последующий REPLICAOF поднимает TLS-линк, а не
-// plaintext. Без `tls-replication yes` REPLICAOF к TLS-master-у источника
-// упёрся бы в TLS-only-листенер источника (handshake-фейл) — TODO S-batch снят.
+// TLS-to-source (master_tls=true): the replication link to the source master
+// uses TLS. On the Redis side this is controlled by the directive `tls-replication yes`
+// — it switches the replica's OUTGOING replication connection to TLS mode. The directive
+// is hot-settable, so the plugin sets it via CONFIG SET BEFORE REPLICAOF (alongside
+// masterauth/masteruser): then the subsequent REPLICAOF establishes a TLS link, not
+// plaintext. Without `tls-replication yes`, REPLICAOF to the TLS master of the source
+// would fail against the source's TLS-only listener (handshake failure) — TODO S-batch removed.
 //
-// ★ Зависимость от render/scenario (НЕ делается этим state-ом): доверие к серверному
-// сертификату ИСТОЧНИКА. Для верификации server-cert источника при handshake реплика
-// читает CA источника (master_tls_ca) с ДИСКА — Redis-директивы tls-ca-cert-file /
-// tls-ca-cert-dir принимают ПУТЬ, не inline-PEM, а CONFIG SET tls-ca-cert-file <путь>
-// требует, чтобы файл УЖЕ лежал на диске. Плагин файлы не пишет (capability —
-// network_outbound), поэтому CA источника на диск кладёт render (core.file.rendered)
-// ДО replica-шага, и он же указывает Redis-у путь через config-state (CONFIG SET
-// tls-ca-cert-file). Контракт для scenario-dev — в заголовке шага и в README S3.
-// master_tls_cert/master_tls_key (mTLS-cert реплики на линке) аналогично читаются
-// Redis-ом по пути (tls-cert-file/tls-key-file своего инстанса) — их кладёт тот же
-// render; этот state их значениями не оперирует, только включает tls-replication.
+// ★ Dependency on render/scenario (NOT handled by this state):trust of the source server
+// certificate. To verify the source's server-cert during handshake, the replica
+// reads the source's CA (master_tls_ca) from DISK — Redis directives tls-ca-cert-file /
+// tls-ca-cert-dir accept a PATH, not inline-PEM, and CONFIG SET tls-ca-cert-file <path>
+// requires the file to already be on disk. The plugin does not write files (capability —
+// network_outbound), so the render (core.file.rendered) puts the source's CA on disk
+// BEFORE the replica step, and also tells Redis the path via config-state (CONFIG SET
+// tls-ca-cert-file). Contract for scenario-dev — in the step header and in README S3.
+// master_tls_cert/master_tls_key (mTLS cert of the replica on the link) are similarly read
+// by Redis from a path (tls-cert-file/tls-key-file of its own instance) — they are placed there by the same
+// render; this state does not operate with their values, only enables tls-replication.
 package main
 
 import (
@@ -51,7 +51,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// validateReplica — статические проверки replica-params (тексты без пароля).
+// validateReplica performs static validation of replica params (text without passwords).
 func validateReplica(f map[string]*structpb.Value) []string {
 	var errs []string
 	errs = append(errs, validateAddr(f)...)
@@ -61,19 +61,19 @@ func validateReplica(f map[string]*structpb.Value) []string {
 	return errs
 }
 
-// applyReplica приводит инстанс к роли реплики указанного master-а. addr — этот
-// инстанс (на redis-хосте локальный, 127.0.0.1:6379); master_addr — host-
-// инвариантный адрес master-а кластера (один на кластер). master НЕ реплицирует
-// себя: addr == master_addr → no-op.
+// applyReplica sets an instance to be a replica of the specified master. addr is this
+// instance (local on the redis host, 127.0.0.1:6379); master_addr is the host-
+// invariant address of the cluster master (one per cluster). The master does NOT replicate
+// itself: addr == master_addr → no-op.
 //
-// source_external=true (master_addr — ВНЕШНИЙ источник, не своя инкарнация):
-// (1) self-guard addr==master_addr ОТКЛЮЧЁН (внешний master никогда не совпадает
-// со своим addr по смыслу, а если случайно совпал — это ошибка ввода, а не
-// штатный no-op, который тихо «съел» бы привязку); (2) идемпотентность сверяется
-// по master_host/master_port внешнего источника (как и для своей инкарнации —
-// поля INFO replication одинаковы); (3) masterauth берётся из master_password
-// (пароль ИСТОЧНИКА), masteruser — из master_username; своё password/username к
-// внешнему источнику не относятся.
+// source_external=true (master_addr is an EXTERNAL source, not own incarnation):
+// (1) self-guard addr==master_addr is DISABLED (external master never coincides
+// with its own addr by design, and if it coincidentally matches — that's user error, not
+// the intended no-op that would silently ignore the binding); (2) idempotency is checked
+// against the external source's master_host/master_port (same as for own incarnation —
+// INFO replication fields are identical); (3) masterauth is taken from master_password
+// (SOURCE password), masteruser from master_username; own password/username do not apply
+// to the external source.
 func (m *RedisModule) applyReplica(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], conn redisConn, params *structpb.Struct) error {
 	f := params.GetFields()
 	password := stringOrEmpty(f["password"])
@@ -89,11 +89,11 @@ func (m *RedisModule) applyReplica(ctx context.Context, stream grpc.ServerStream
 		return sendFailure(stream, fmt.Sprintf("params.master_addr %q: invalid port", masterAddr))
 	}
 
-	// master НЕ реплицирует сам себя: scenario зовёт replica на ВСЕХ хостах
-	// (включая выбранный master), guard здесь делает master-вызов no-op. Для
-	// внешнего источника (source_external) этот guard ОТКЛЮЧЁН: master_addr —
-	// чужой инстанс, не один из своих хостов, no-op по совпадению адресов был бы
-	// семантически неверен.
+	// master does NOT replicate itself: scenario calls replica on ALL hosts
+	// (including the selected master), guard here makes the master call a no-op. For
+	// external sources (source_external), this guard is DISABLED: master_addr is
+	// an external instance, not one of our hosts, a no-op based on address match would be
+	// semantically incorrect.
 	if !sourceExternal {
 		selfAddr := strings.TrimSpace(stringOrEmpty(f["addr"]))
 		if sameRedisEndpoint(selfAddr, masterAddr) {
@@ -104,10 +104,10 @@ func (m *RedisModule) applyReplica(ctx context.Context, stream grpc.ServerStream
 		}
 	}
 
-	// masterauth/masteruser: для внешнего источника — реквизиты ИСТОЧНИКА
-	// (master_password/master_username); для своей инкарнации — общие
-	// password/username (master тот же сервис, те же креды). redactError по
-	// ВСЕМ паролям из контекста (свой + master_password) — ИБ-инвариант ADR-010.
+	// masterauth/masteruser: for external sources — SOURCE credentials
+	// (master_password/master_username); for own incarnation — shared
+	// password/username (master is the same service, same creds). redactError for
+	// ALL passwords in context (own + master_password) — security invariant ADR-010.
 	masterAuth := password
 	masterUser := stringOrEmpty(f["username"])
 	masterPass := stringOrEmpty(f["master_password"])
@@ -116,7 +116,7 @@ func (m *RedisModule) applyReplica(ctx context.Context, stream grpc.ServerStream
 		masterUser = stringOrEmpty(f["master_username"])
 	}
 
-	// Идемпотентность: уже реплицируем нужный master со здоровым линком → no-op.
+	// Idempotency: already replicating the desired master with healthy link → no-op.
 	info, err := conn.Do(ctx, "INFO", "replication")
 	if err != nil {
 		return sendFailure(stream, "INFO replication: "+redactError(err, password, masterPass))
@@ -132,22 +132,22 @@ func (m *RedisModule) applyReplica(ctx context.Context, stream grpc.ServerStream
 		})
 	}
 
-	// tls-replication ДО REPLICAOF: переводит ИСХОДЯЩИЙ replication-линк реплики в
-	// TLS. Иначе REPLICAOF к TLS-only-источнику (master_tls=true) упёрся бы в его
-	// TLS-листенер (handshake-фейл). Только source_external (свой master живёт в
-	// той же инкарнации — TLS-режим линка уже задан общим redis.conf при старте,
-	// отдельно включать не нужно). CONFIG SET идемпотентен на стороне Redis;
-	// директива hot-settable. Server-cert источника верифицируется по CA с ДИСКА
-	// (tls-ca-cert-file/-dir указывает render через config-state — см. заголовок).
+	// tls-replication BEFORE REPLICAOF: switches the replica's OUTGOING replication link to
+	// TLS. Otherwise REPLICAOF to a TLS-only source (master_tls=true) would fail against its
+	// TLS listener (handshake failure). Only for source_external (own master lives in
+	// same incarnation — TLS mode is already set by common redis.conf at startup,
+	// no need to enable it separately). CONFIG SET is idempotent on Redis side;
+	// directive is hot-settable. Source's server cert is verified via CA from DISK
+	// (tls-ca-cert-file/-dir is set by render via config-state — see header).
 	if sourceExternal && masterTLS {
 		if _, err := conn.Do(ctx, "CONFIG", "SET", "tls-replication", "yes"); err != nil {
 			return sendFailure(stream, "CONFIG SET tls-replication: "+redactError(err, password, masterPass))
 		}
 	}
 
-	// masterauth ДО REPLICAOF: реплика обязана знать пароль master-а, иначе
-	// синхронизация упадёт на AUTH. CONFIG SET идемпотентен на стороне Redis.
-	// Пустой masterAuth — нет требования AUTH у master-а: masterauth не ставим.
+	// masterauth BEFORE REPLICAOF: replica must know the master's password, otherwise
+	// synchronization fails on AUTH. CONFIG SET is idempotent on Redis side.
+	// Empty masterAuth — no AUTH requirement on master: do not set masterauth.
 	if masterAuth != "" {
 		if _, err := conn.Do(ctx, "CONFIG", "SET", "masterauth", masterAuth); err != nil {
 			return sendFailure(stream, "CONFIG SET masterauth: "+redactError(err, password, masterPass))
@@ -169,9 +169,9 @@ func (m *RedisModule) applyReplica(ctx context.Context, stream grpc.ServerStream
 	})
 }
 
-// sameRedisEndpoint — указывают ли два host:port на один и тот же Redis-инстанс.
-// Сравнение по нормализованной паре (host, port); невалидный addr → false (на
-// no-op-guard консервативно: не считаем master-ом то, что не распарсилось).
+// sameRedisEndpoint checks if two host:port addresses point to the same Redis instance.
+// Comparison is on the normalized pair (host, port); invalid addr → false (conservatively
+// for the no-op guard: do not consider as master what did not parse correctly).
 func sameRedisEndpoint(a, b string) bool {
 	ah, ap, aerr := net.SplitHostPort(a)
 	bh, bp, berr := net.SplitHostPort(b)
@@ -181,9 +181,9 @@ func sameRedisEndpoint(a, b string) bool {
 	return ah == bh && ap == bp
 }
 
-// parseInfoSection разбирает вывод INFO (или одной секции, напр. INFO
-// replication) в map "key:value" построчно. Заголовки секций (# Replication) и
-// пустые строки игнорируются. CRLF-окончания Redis обрезаются.
+// parseInfoSection parses INFO output (or a single section, e.g., INFO
+// replication) into a "key:value" map line by line. Section headers (# Replication) and
+// empty lines are ignored. CRLF line endings from Redis are trimmed.
 func parseInfoSection(s string) map[string]string {
 	out := map[string]string{}
 	for _, line := range strings.Split(s, "\n") {
