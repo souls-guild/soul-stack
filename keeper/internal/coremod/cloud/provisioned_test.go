@@ -214,14 +214,6 @@ func (t *fakeTokens) DeleteByTokenID(_ context.Context, tokenID string) error {
 	return nil
 }
 
-func (t *fakeTokens) DeleteByTokenID(_ context.Context, tokenID string) error {
-	if t.deleteErr != nil {
-		return t.deleteErr
-	}
-	t.deleted = append(t.deleted, tokenID)
-	return nil
-}
-
 type fakeCascade struct {
 	lastSids      []string
 	lastUsedByKID string
