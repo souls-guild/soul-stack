@@ -1,16 +1,16 @@
-# Food Convention destiny
+# Destiny production conventions
 
-Checklist "product-grade destiny" - what distinguishes the reference production-ready destiny from the draft one. These are **normative** rules for destiny, which install and maintain a system service on the host (daemons under systemd: exporters, redis, postgres, etc.). Reference source - [`examples/destiny/node-exporter/`](../../examples/destiny/node-exporter/); other service-destinies are reduced to the same pattern.
+Checklist "production-grade destiny" - what distinguishes the reference production-ready destiny from the draft one. These are **normative** rules for destiny, which install and maintain a system service on the host (daemons under systemd: exporters, redis, postgres, etc.). Reference source - [`examples/destiny/node-exporter/`](../../examples/destiny/node-exporter/); other service-destinies are reduced to the same pattern.
 
 **There is only one standard - `node-exporter` (stateful branch).** In `examples/destiny/node-exporter/` there is a generic-destiny Prometheus node_exporter: the binary, user, group and unit are called `node_exporter`, the daemon works under a **manual stable system account `node_exporter`** (stateful branch §2 — the textfile directory of hardware metrics survives restarts and is read by root collectors, a stable uid owner is needed), carries systemd-hardening (§3), **version-aware install** (`unless --version` → upgrading the binary will restart the service, §6), optional `checksum` for mirrors (§7) and **privileged textfile collectors** smartmon / nvme / ipmi with separate oneshot timers under a hard systemd-sandbox (§3b). The name "node-exporter" in `apply: { destiny: node-exporter }` below refers specifically to this standard.
 
 > **DynamicUser remains a valid choice** for **stateless** daemons (§2, stateless branch) - it's just that the current standard does not illustrate it, because node-exporter stateful (textfile directory, see §2). The rule for selecting an account (DynamicUser vs manual uid) is normative and does not depend on which example shows it.
 
-They rely on [ADR-009](../adr/0009-scenario-dsl.md) (destiny isolation), [ADR-015](../adr/0015-core-modules-mvp.md) (a set of core modules) and the ["safety first"](../requirements.md) invariant from requirements.md.
+They rely on [ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) (destiny isolation), [ADR-015](../adr/0015-core-modules-mvp.md#adr-015-core-модули-mvp-точный-список) (a set of core modules) and the ["safety first"](../requirements.md) invariant from requirements.md.
 
 ## 1. Passthrough flags and config
 
-Don't put a closed list of demon flags into destiny. Declare `extra_args` (`type: array`, `items: { type: string }`, `default: []`) as an end-to-end channel for any flags beyond the basic ones.
+Don't hardcode a closed list of daemon flags into destiny. Declare `extra_args` (`type: array`, `items: { type: string }`, `default: []`) as an end-to-end channel for any flags beyond the basic ones.
 
 - Passed to the template as a native list: the entire cell `vars` = one `${ input.extra_args }` → according to rule ADR-010 "non-string CEL result, entire cell = `${…}`" a real list is received, not a string.
 - In `.tmpl` the `range` is expanded, each element is a separate `ExecStart` token, not separated by spaces:
@@ -21,15 +21,15 @@ Don't put a closed list of demon flags into destiny. Declare `extra_args` (`type
 
 - The value-with-space is passed as a single list element: `["--web.config.file=/etc/x.yml"]`, not `["--web.config.file", "/etc/x.yml"]` via template concatenation.
 
-This allows the operator to expand the behavior of the daemon (collectors, textfile-dir, TLS config) without editing destiny itself. Working illustration - `redis_exporter_extra_args` in the inline block `redis_exporter` of the script [`monitoring/scenario/create`](../../examples/service/monitoring/scenario/create/main.yml) (goes to `redis_exporter.service.tmpl` through `range`). The reference `node-exporter` itself does not declare `extra_args` - it instead puts specific settings into named `input` parameters (`listen`/`collectors`/`bin_dir`/`user`/`textfile_dir`/...); both approaches are valid, the choice is between "an open channel of any flags" and "an explicit typed contract".
+This allows the operator to expand the behavior of the daemon (collectors, textfile-dir, TLS config) without editing destiny itself. Working illustration - `redis_exporter_extra_args` in the inline block `redis_exporter` of the scenario [`monitoring/scenario/create`](../../examples/service/monitoring/scenario/create/main.yml) (goes to `redis_exporter.service.tmpl` through `range`). The reference `node-exporter` itself does not declare `extra_args` - it instead puts specific settings into named `input` parameters (`listen`/`collectors`/`bin_dir`/`user`/`textfile_dir`/...); both approaches are valid, the choice is between "an open channel of any flags" and "an explicit typed contract".
 
 ## 2. Service account - hybrid rule
 
-**Regulatory rule** how a service gets an unprivileged account. The choice is determined by whether the daemon owns stable state on the disk:
+**Normative rule** for how a service obtains an unprivileged account. The choice is determined by whether the daemon owns stable state on the disk:
 
-| Service type | Sign | Account |
+| Service type | Indicator | Account |
 |---|---|---|
-| **Stateless-demon** | no owned data-dir, does not write anything under a fixed uid (exporters, proxies without local state) | `DynamicUser=yes` in unit. systemd itself creates a locked transient user for the lifetime of the process. Manual `core.user`/`core.group` **WILL NOT start.** |
+| **Stateless-daemon** | no owned data-dir, does not write anything under a fixed uid (exporters, proxies without local state) | `DynamicUser=yes` in unit. systemd itself creates a locked transient user for the lifetime of the process. Manual `core.user`/`core.group` **WILL NOT start.** |
 | **Stateful-service** | owns the data directory, needs a stable uid for file rights between restarts and upgrades (redis, postgres) | Manual system-uid via `core.user.present`/`core.group.present` (no-login shell, no home, no gid/uid - system range). It is referenced by `User=`/`Group=` in unit. |
 
 Why this way:
@@ -39,9 +39,9 @@ Why this way:
 
 Do not mix: stateless-destiny with `DynamicUser` should not have a manual user "just in case", stateful should not rely on `DynamicUser` for data-dir.
 
-Illustrations from both threads:
+Illustrations of both branches:
 
-- **Stateful + manual system account** - reference [`node-exporter/`](../../examples/destiny/node-exporter/): `core.group.present` + `core.user.present` (`system: true`, `shell: /usr/sbin/nologin`, `home: /`) starts `node_exporter`, which is referenced `User=`/`Group=` in unit. A stable uid is needed because... the textfile directory `--collector.textfile.directory` (`/var/lib/node_exporter`) is owned by this account and survives restarts, and privileged oneshot collectors write to it (§3b); the group is created **before** the user (`core.user -g` requires an existing primary group). This is not an "account from a distribution package" (§3a, redis), but an explicitly created destiny system account - a valid stateful path when the service is installed not by a package, but from a tarball release.
+- **Stateful + manual system account** - reference [`node-exporter/`](../../examples/destiny/node-exporter/): `core.group.present` + `core.user.present` (`system: true`, `shell: /usr/sbin/nologin`, `home: /`) starts `node_exporter`, which is referenced `User=`/`Group=` in unit. A stable uid is needed because the textfile directory `--collector.textfile.directory` (`/var/lib/node_exporter`) is owned by this account and survives restarts, and privileged oneshot collectors write to it (§3b); the group is created **before** the user (`core.user -g` requires an existing primary group). This is not an "account from a distribution package" (§3a, redis), but an explicitly created destiny system account - a valid stateful path when the service is installed not by a package, but from a tarball release.
 - **Stateless + `DynamicUser`** - there is no separate destiny example in the repository now, but the branch remains normative: a stateless daemon without owned data-dir (exporter without textfile directory, proxy without local state) receives an account from systemd itself through `DynamicUser=yes` in the unit, manual `core.user`/`core.group` will not start.
 
 ## 3. systemd-hardening - required in all unit templates
@@ -72,7 +72,7 @@ Rules for setting up a specific daemon:
 The basic block above is for a daemon with **its own renderable unit** (node-exporter is installed from the tarball release and renders the entire unit). The Stateful service, which is installed by the **distribution package** (redis, postgres), differs in two things:
 
 - **Hardening arrives by drop-in, and not by its own unit.** The distribution unit cannot be replaced entirely - it carries `ExecStart`/`Type=notify`/`RuntimeDirectory` and is updated along with the package. Override is placed as a separate task `core.file.rendered` in `/etc/systemd/system/<unit>.service.d/hardening.conf` (`mode 0644`, `owner/group root` is a systemd file, not a service account). The `[Service]` directives are merged on top of the distribution ones, ours take precedence.
-- **`ProtectSystem=strict` is required to carry `ReadWritePaths`** under all directories where the service writes, otherwise strict will make them read-only and break writing - this is a **prod-incident**, not "stricter". The paths are taken from the service config (for redis - `dir`/`unixsocket`/`pidfile`/`logfile` to `redis.conf`); `ReadWritePaths` lists their **directories**, and only them.
+- **`ProtectSystem=strict` is required to carry `ReadWritePaths`** under all directories where the service writes, otherwise strict will make them read-only and break writing - this is a **production incident**, not "stricter". The paths are taken from the service config (for redis - `dir`/`unixsocket`/`pidfile`/`logfile` to `redis.conf`); `ReadWritePaths` lists their **directories**, and only them.
 
 Drop-in example for redis (`redis-server.service.d/hardening.conf`):
 
@@ -99,7 +99,7 @@ Differences from the stateless block and their reasons:
 
 **daemon-reload + restart to change drop-in.** Drop-in changes an already loaded unit, so `core.service.restarted` alone is not enough - systemd must first re-read the configuration.
 
-> **From the version with centralized daemon-reload in `core.service` ([ADR-015 Amendment 2026-06-18](../adr/0015-core-modules-mvp.md)), the separate step `core.exec.run systemctl daemon-reload` for restart has become OPTIONAL.** `core.service.restarted`/`running`/`enabled` by default (`daemon_reload: auto`) themselves check the systemd flag `NeedDaemonReload` and re-read unit before action - the changed drop-in has already been taken into account. **It is preferable to rely on the built-in `auto`** and not duplicate reload as a separate task. See [docs/module/core/service/README.md → daemon_reload](../module/core/service/README.md#daemon_reload---rereading-unit-files).
+> **From the version with centralized daemon-reload in `core.service` ([ADR-015 Amendment 2026-06-18](../adr/0015-core-modules-mvp.md#adr-015-core-модули-mvp-точный-список)), the separate step `core.exec.run systemctl daemon-reload` for restart has become OPTIONAL.** `core.service.restarted`/`running`/`enabled` by default (`daemon_reload: auto`) themselves check the systemd flag `NeedDaemonReload` and re-read unit before action - the changed drop-in has already been taken into account. **It is preferable to rely on the built-in `auto`** and not duplicate reload as a separate task. See [docs/module/core/service/README.md → daemon_reload](../module/core/service/README.md#daemon_reload--перечитывание-unit-файлов).
 
 The manual pattern below remains valid (for example, when reload is needed explicitly outside of the service restart, or for historical destiny). Reactive and idempotent chaining:
 
@@ -109,7 +109,7 @@ The manual pattern below remains valid (for example, when reload is needed expli
 
 The order is guaranteed by the position of the tasks (drop-in → daemon-reload → restart). Nothing has changed → the whole chain is no-op. Based on the built-in `auto`, step 2 is omitted: `core.service.restarted` (`daemon_reload: auto`) does the reload itself before restarting.
 
-> **★ Restart is narrowed to the unit level (§6a).** In `onchanges` restart - **only** register drop-in tasks (`<hardening>`), **not** config/ACL/TLS material registers. For a service with live-reconfig (Redis), changes to `redis.conf`/`users.acl`/TLS PEM **do not restart** the process: they are revived by the hot-reload day-2 script (`update_config`/`add_user`/`rotate_tls`, §6a). A restart remains a true case only for changing the systemd unit itself (hardening drop-in), which CONFIG SET cannot cover. Reference - [`examples/destiny/redis/tasks/server.yml`](../../examples/destiny/redis/tasks/server.yml): task `core.service.restarted` carries `onchanges: [redis_hardening]` (not the previous `[redis_conf, redis_acl, redis_hardening, redis_tls_*]`). On at-create, a restart is not needed at all - the primary `core.service.running` raises the instance with the final config/ACL/cert.
+> **★ Restart is narrowed to the unit level (§6a).** In `onchanges` restart - **only** register drop-in tasks (`<hardening>`), **not** config/ACL/TLS material registers. For a service with live-reconfig (Redis), changes to `redis.conf`/`users.acl`/TLS PEM **do not restart** the process: they are revived by the hot-reload day-2 scenario (`update_config`/`add_user`/`rotate_tls`, §6a). A restart remains a true case only for changing the systemd unit itself (hardening drop-in), which CONFIG SET cannot cover. Reference - [`examples/destiny/redis/tasks/server.yml`](../../examples/destiny/redis/tasks/server.yml): task `core.service.restarted` carries `onchanges: [redis_hardening]` (not the previous `[redis_conf, redis_acl, redis_hardening, redis_tls_*]`). On at-create, a restart is not needed at all - the primary `core.service.running` raises the instance with the final config/ACL/cert.
 
 ### 3b. Privileged oneshot collector: root + narrow sandbox + Condition-gate
 
@@ -125,24 +125,24 @@ It happens that an auxiliary task requires **more** privileges than the main dae
 
 TLS and basic-auth of Prometheus family daemons are enabled with the `--web.config.file=<path>` flag. Pass this flag through `extra_args` (item 1), `web.yml` itself (certificates, password hashes) is **a separate task or a separate destiny**, not part of the daemon's destiny.
 
-Reason: web-config is a secret-carrying artifact with its own life cycle (certificate rotation is independent of the daemon version). Sewing his render into the demon's destiny connects two independent cycles and drags secrets into someone else's area of ​​​​responsibility.
+Reason: web-config is a secret-carrying artifact with its own life cycle (certificate rotation is independent of the daemon version). Baking its render into the daemon's destiny couples two independent cycles and drags secrets into someone else's area of responsibility.
 
 ## 5. arch / os - from `soulprint.self`
 
-The architecture (and any stable os fact of the target host) is read by destiny **directly** from `soulprint.self.os.arch`. After amendment 2026-06-18 ([ADR-009](../adr/0009-scenario-dsl.md) / [ADR-010](../adr/0010-templating.md), see [`docs/templating.md`](../templating.md)) the stable self-layer `soulprint.self.*` is also available in the CEL pass destiny - this is a per-host property, not a scenario-scope. The reference `node-exporter` does just that: in `input:` fields `arch` **no**, the tarball URL is collected directly from the fact:
+The architecture (and any stable os fact of the target host) is read by destiny **directly** from `soulprint.self.os.arch`. After amendment 2026-06-18 ([ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) / [ADR-010](../adr/0010-templating.md), see [`docs/templating.md`](../templating.md)) the stable self-layer `soulprint.self.*` is also available in the CEL pass destiny - this is a per-host property, not a scenario-scope. The reference `node-exporter` does just that: in `input:` fields `arch` **no**, the tarball URL is collected directly from the fact:
 
 ```yaml
 # tasks/install.yml node-exporter reference
 url: "${ input.base_url + '/v' + input.version + '/node_exporter-' + input.version + '.linux-' + soulprint.self.os.arch + '.tar.gz' }"
 ```
 
-- The destiny isolation boundary ([ADR-009](../adr/0009-scenario-dsl.md), §8) runs along **self vs run topology**: `soulprint.self.*` (stable fact of the current host) is available, and cross-host `soulprint.hosts`/`soulprint.where(...)` is scenario-only, cut off in destiny. One incarnation can mix amd64/arm64 hosts - each host gets its own `soulprint.self.os.arch`, so a separate `input: arch` is not needed (it would make the architecture the same for the entire run).
-- `apply: input:` remains a channel for values ​​that destiny **not** can derive from its self-layer: caller-derived data, cross-host facts (`soulprint.where(...)`), `vault(...)`/`essence.*` - their scenario resolves them in itself and transmits them ready.
+- The destiny isolation boundary ([ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация), §8) runs along **self vs run topology**: `soulprint.self.*` (stable fact of the current host) is available, and cross-host `soulprint.hosts`/`soulprint.where(...)` is scenario-only, cut off in destiny. One incarnation can mix amd64/arm64 hosts - each host gets its own `soulprint.self.os.arch`, so a separate `input: arch` is not needed (it would make the architecture the same for the entire run).
+- `apply: input:` remains a channel for values that destiny **not** can derive from its self-layer: caller-derived data, cross-host facts (`soulprint.where(...)`), `vault(...)`/`essence.*` - their scenario resolves them in itself and transmits them ready.
 - soulprint already gives the value in release notation (`amd64`/`arm64`, see [`docs/soul/soulprint.md`](../soul/soulprint.md)) - mapping is not needed.
 
 ## 6. Idempotency of each step
 
-Each destiny task is a no-op when applied again with the same inputs (destiny invariant, [concept.md](concept.md)). In practice, a promotional step has a clear "already done" sign:
+Each destiny task is a no-op when applied again with the same inputs (destiny invariant, [concept.md](concept.md)). In practice, a production-grade step has a clear "already done" indicator:
 
 - `core.url.fetched` / `core.file.rendered` - checksum/contents matched → no-op.
 - `core.archive.extracted` — marker of the unpacked archive.
@@ -150,7 +150,7 @@ Each destiny task is a no-op when applied again with the same inputs (destiny in
 - `core.pkg.installed` / `core.service.running` - declarative nature of the module (`present`/`running`).
 - Restart - only reactively: `core.service.restarted` with `onchanges: [<register unit task>]`, and not unconditionally.
 
-A step without the idempotency attribute (especially `cmd`/`exec` without `creates:`) is a bug of prod-grade destiny.
+A step without the idempotency attribute (especially `cmd`/`exec` without `creates:`) is a bug in a production-grade destiny.
 
 ### 6a. Hot-reload is preferable to restart for services with live-reconfig
 
@@ -158,7 +158,7 @@ A step without the idempotency attribute (especially `cmd`/`exec` without `creat
 
 Restart remains **only** for changes that hot-reload **does not physically cover** - primarily behind the **systemd-unit-level** (hardening drop-in: `ProtectSystem`/`ReadWritePaths`/`ExecStart`-override): they take effect only after `daemon-reload` + process restart, because this is the configuration of the process itself unit, not a service runtime directive (§3a).
 
-This narrows the previous formulation of "restart reactively to a config/drop-in change": rendering the desired state to disk (`redis.conf`/`users.acl`/PEM) remains in destiny, but **revitalizing** the changes is done by the hot-reload-step of the day-2-script, rather than `core.service.restarted` by `onchanges` on these files.
+This narrows the previous formulation of "restart reactively to a config/drop-in change": rendering the desired state to disk (`redis.conf`/`users.acl`/PEM) remains in destiny, but **revitalizing** the changes is done by the hot-reload-step of the day-2-scenario, rather than `core.service.restarted` by `onchanges` on these files.
 
 Illustrations - day-2-scenarios of the service [`redis`](../../examples/service/redis/) (next to `restart`, which remains behind the unit level, §3a / §7a):
 
@@ -172,26 +172,26 @@ At the same time, the destiny rendering of these files itself remains idempotent
 
 Any artifact downloaded from the network:
 
-- **`checksum` is required and fail-closed (normative default).** In the `input:` contract, the hash field is `required: true` **without `default`**. No hash → honest refusal, not fetch with placeholder. `core.url.fetched` verifies the hash **before** the file is materialized - an incorrect hash is not sent to disk. This is done at the **service level**: the script [`monitoring`](../../examples/service/monitoring/) declares both `node_exporter_sha256` and `redis_exporter_sha256` as `required: true` without default and passes the value to destiny through `apply: input:`.
+- **`checksum` is required and fail-closed (normative default).** In the `input:` contract, the hash field is `required: true` **without `default`**. No hash → honest refusal, not fetch with placeholder. `core.url.fetched` verifies the hash **before** the file is materialized - an incorrect hash is not sent to disk. This is done at the **service level**: the scenario [`monitoring`](../../examples/service/monitoring/) declares both `node_exporter_sha256` and `redis_exporter_sha256` as `required: true` without default and passes the value to destiny through `apply: input:`.
 - **https-only.** Artifact URL is `https://` only. No `http://` for downloading binaries/archives.
 - The hash is tied to the `(version, arch)` pair - taken from the official `sha256sums` release for a specific tarball.
 
-**Documented mirror relaxation (optional `sha256`).** Reference [`node-exporter/`](../../examples/destiny/node-exporter/) declares `sha256` as `optional` with `default: ""` (`pattern: "^(sha256:[0-9a-f]{64})?$"`): defined → `core.url.fetched` verifies before publication; empty → download **without integrity check**, idempotency by SHA-256 content. This is a deliberate compromise under mirrors/nexus-proxy, where the hash may not be available in advance, and is **not** a relaxation of the rule above. The optionality of the hash in destiny itself is consistent with the fact that the fail-closed contract is kept **higher up the stack** - by the calling script (`monitoring` makes `node_exporter_sha256` mandatory). Conditions for the applicability of the relief:
+**Documented mirror relaxation (optional `sha256`).** Reference [`node-exporter/`](../../examples/destiny/node-exporter/) declares `sha256` as `optional` with `default: ""` (`pattern: "^(sha256:[0-9a-f]{64})?$"`): defined → `core.url.fetched` verifies before publication; empty → download **without integrity check**, idempotency by SHA-256 content. This is a deliberate compromise under mirrors/nexus-proxy, where the hash may not be available in advance, and is **not** a relaxation of the rule above. The optionality of the hash in destiny itself is consistent with the fact that the fail-closed contract is kept **higher up the stack** - by the calling scenario (`monitoring` makes `node_exporter_sha256` mandatory). Conditions for the applicability of the relief:
 
 - default-secure path - **set hash**; empty `sha256` increases supply-chain risk and is clearly marked with a warning in the `input:` description of destiny itself;
 - relaxation is only allowed in conjunction with `base_url`-override on a trusted internal mirror; to download directly from public GitHub Releases, keep the hash required (as the service layer does);
-- a script claiming a **strict** prod-grade contract (without clauses), declares the hash `required: true` without `default` in itself and forwards it to destiny.
+- a scenario claiming a **strict** prod-grade contract (without clauses), declares the hash `required: true` without `default` in itself and forwards it to destiny.
 
 ## 7a. Day-2: source of truth = `incarnation.state`
 
-**Normative rule for day-2 scenarios** (everything that is not `create`: `restart`, `update_config`, `add_user`, `rotate_tls`, `add_node`, `remove_node`, etc.). The Day-2 script reads the detailed fact about the service from **`incarnation.state`**, and **not** from `essence`/`input`.
+**Normative rule for day-2 scenarios** (everything that is not `create`: `restart`, `update_config`, `add_user`, `rotate_tls`, `add_node`, `remove_node`, etc.). The Day-2 scenario reads the detailed fact about the service from **`incarnation.state`**, and **not** from `essence`/`input`.
 
 Reason - `essence` and `input` for day-2 are **incomplete**:
 
 - `create` accepts the operator's `input` (for example `input.tls`, `input.memory_mb`), **translates** it into an expanded configuration and writes it to `incarnation.state` (`state_changes`, [ADR-057](../adr/0057-state-changes-crud-verbs.md)). This `input` is only available at the time `create` - day-2-run does not see it.
-- The operator on `create` can **override** the defaults of `essence` (in Soul Stack `input` beats `essence` - for example operator `input.tls.port`/`input.tls.ca_ref` over `essence.tls_*`). Day-2-script looking at `essence` will see **the author's underlay**, and not the actually deployed one - this leads to desynchronization "the script thinks one thing, but the host thinks another."
+- The operator on `create` can **override** the defaults of `essence` (in Soul Stack `input` beats `essence` - for example operator `input.tls.port`/`input.tls.ca_ref` over `essence.tls_*`). Day-2-scenario looking at `essence` will see **the author's underlay**, and not the actually deployed one - this leads to desynchronization "the scenario thinks one thing, but the host thinks another."
 
-Therefore, the day-2 script takes the detailed fact (whether TLS is enabled, on what port the service is listening, what ACL users are set up, what is the topology of the shards) from `incarnation.state` - the only place where *what is actually applied* is recorded. `essence`/`input` on day-2 are used only for things that **fundamentally do not belong in `state` (for example, secrets - see below).
+Therefore, the day-2 scenario takes the detailed fact (whether TLS is enabled, on what port the service is listening, what ACL users are set up, what is the topology of the shards) from `incarnation.state` - the only place where *what is actually applied* is recorded. `essence`/`input` on day-2 are used only for things that **fundamentally do not belong in `state` (for example, secrets - see below).
 
 **Named intent field is preferable to parsing opaque config.** When `state` carries both opaque total (`redis_config`, computed by redis.conf-map) and **named intent field** (`state.tls`, `state.persistence`, `state.install`, ...), day-2 scenario reads the **named** field. It is typed, does not require bracket notation of hyphen keys, and explicitly expresses the intent of the statement (read-model), rather than being reverse-convolved from the write-model. So in the service `redis` (`state_schema v3`) next to `redis_config` live `tls`/`install`/`persistence`/`memory_mb`/`maxmemory_policy`/`modules`/`sysctl_settings` + topology (`shards`/`replicas`/`sentinel_quorum`); both views are filled with `create` from ONE compute pass (there is no out of sync), but day-2 reads namedfield.
 
@@ -199,12 +199,12 @@ Working illustration - `restart` service [`redis`](../../examples/service/redis/
 
 Edge cases:
 
-- **There are no secrets in `state`** (IS-invariant). PEM, passwords and other secret material from `state` are deliberately excluded. Their day-2 script resolves `vault(<ref>)` in the same way as `create` - `ref` is taken from the stable author-context (`essence.<...>_ref`) or path convention (`secret/redis/<incarnation>#password`). In `state` only the **path** to the secret on the host (for example `tls-ca-cert-file: /etc/redis/tls/ca.crt`) is materialized, not its contents; path - for rendering the config, not for passing it to the plugin (a plugin that reads a secret usually waits for **content**, not the path).
+- **There are no secrets in `state`** (IS-invariant). PEM, passwords and other secret material from `state` are deliberately excluded. Their day-2 scenario resolves `vault(<ref>)` in the same way as `create` - `ref` is taken from the stable author-context (`essence.<...>_ref`) or path convention (`secret/redis/<incarnation>#password`). In `state` only the **path** to the secret on the host (for example `tls-ca-cert-file: /etc/redis/tls/ca.crt`) is materialized, not its contents; path - for rendering the config, not for passing it to the plugin (a plugin that reads a secret usually waits for **content**, not the path).
 - **Reading a key with a hyphen** (`redis_config['tls-port']` and similar redis.conf directives) - bracket notation in **access** to the value, but checking for the presence of a key - with the `'<key>' in <map>` operator, **not** `has(<map>['<key>'])`: `has()` - CEL macro that accepts only field-selection (`has(x.y)`), index argument `has(x['y'])` is rejected by the parser ("invalid argument to has() macro"). A hyphen in the key name excludes field-access, so the protection against no-such-key is `has(incarnation.state) && has(incarnation.state.<col>) && '<key>' in incarnation.state.<col>` (two stages of `has()` cover the absence of `state` in a push/trial run without State and a not-yet-materialized collection). This rule is for cases when it is the opaque config with hyphen keys that is read; **named intent field** (`state.tls.enable`, unhyphenated) does not require this binding - field-selection and `default(...)` work directly, which is the reason to prefer namedfield (see above). So `redis/restart` after v3 discriminates against `default(incarnation.state.tls.enable, false)` instead of `'tls-port' in incarnation.state.redis_config`.
 
 Checking the invariant - guard-case L0 on both paths of the discriminator: for `redis/restart` this is a pair of `rolling-restart-replicas` (state without `tls` → plaintext branch) and `rolling-restart-tls` (state with `tls.enable=true` → TLS branch, addr on `state.tls.port`, `tls_ca` = PEM from Vault).
 
-## 8. Insulation destiny (ADR-009)
+## 8. Destiny isolation (ADR-009)
 
 destiny sees **only its `input:`**. No reading someone else's context:
 
@@ -222,7 +222,7 @@ This is an invariant, not a recommendation: it keeps destiny reusable and indepe
 - [output.md](output.md) - how destiny gives the result to the caller.
 - [`docs/templating.md`](../templating.md) — CEL + Go text/template, `${…}` marker, `core.file.rendered`, non-string CEL cell rule.
 - [`docs/soul/soulprint.md`](../soul/soulprint.md) - `soulprint.self.os.arch` and other host facts.
-- [ADR-015](../adr/0015-core-modules-mvp.md) - a set of MVP core modules (`core.url`/`core.archive`/`core.cmd`/`core.file`/`core.service`/`core.user`/`core.group`).
+- [ADR-015](../adr/0015-core-modules-mvp.md#adr-015-core-модули-mvp-точный-список) - a set of MVP core modules (`core.url`/`core.archive`/`core.cmd`/`core.file`/`core.service`/`core.user`/`core.group`).
 - [`examples/destiny/node-exporter/`](../../examples/destiny/node-exporter/) - convention standard: binary `node_exporter`, stateful account `node_exporter` (§2 stateful branch), version-aware install (`unless --version`, §6), systemd-hardening (§3), privileged textfile collectors smartmon/nvme/ipmi for systemd-sandbox (§3b), optional `sha256` for mirrors (§7 relaxation).
 
 ## Folder naming convention in `examples/`

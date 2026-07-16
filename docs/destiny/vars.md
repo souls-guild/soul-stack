@@ -1,4 +1,4 @@
-# `vars.yml` - destiny locales
+# `vars.yml` - destiny locals
 
 The file `vars.yml` next to `destiny.yml` declares **destiny local variables** - static values that the author of destiny has nailed down and cannot be overridden from the outside. Available in tasks as `${ vars.<name> }` (in string interpolation; in top-level expression-keys of type `when:` - naked `vars.<name>`, see [`docs/templating.md`](../templating.md)).
 
@@ -30,13 +30,13 @@ redis_data_dir:  /var/lib/redis
 redis_user:      redis
 redis_group:     redis
 
-# Link to input is allowed.*
+# Reference to input.* is allowed
 acl_file_path: "/etc/redis/users/${ input.user }.acl"
 ```
 
-Valid value types: the same as in `input:` ([docs/input.md](../input.md)) - string / integer / number / boolean / array / object. Template expressions `"${ … }"` ([ADR-010](../adr/0010-templating.md), [docs/templating.md](../templating.md)) resolve **only when the entire value of var is a string** (top level value). non-string values ​​(map / list / number / bool) pass **literally through** - CEL does not touch them.
+Valid value types: the same as in `input:` ([docs/input.md](../input.md)) - string / integer / number / boolean / array / object. Template expressions `"${ … }"` ([ADR-010](../adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов), [docs/templating.md](../templating.md)) resolve **only when the entire value of var is a string** (top level value). non-string values (map / list / number / bool) pass **literally through** - CEL does not touch them.
 
-> **Limitation (known): `${ … }` inside map/list values ​​are NOT resolved.** If the var value is map or list, nested `${ … }` within its elements remain **raw text** and are not resolved. Resolve is applied to the entire string value, not recursively by structure.
+> **Limitation (known): `${ … }` inside map/list values are NOT resolved.** If the var value is map or list, nested `${ … }` within its elements remain **raw text** and are not resolved. Resolve is applied to the entire string value, not recursively by structure.
 >
 > ```yaml
 > base: /etc/redis # string - ok
@@ -82,25 +82,25 @@ Valid value types: the same as in `input:` ([docs/input.md](../input.md)) - stri
 |---|---|---|
 | **Source** | caller (scenario.apply.input or direct API call) | `destiny-<name>/vars.yml` |
 | **Who decides the value** | operator/service/test | by destiny |
-| **Described in the diagram?** | yes, `input:` to `destiny.yml` ([input.md](input.md)) | no, plain map |
-| **Validated?** | yes, two rounds (Keeper + Soul) | no (these are the values ​​​​from the destiny developer himself) |
+| **Described in the schema?** | yes, `input:` to `destiny.yml` ([input.md](input.md)) | no, plain map |
+| **Validated?** | yes, two rounds (Keeper + Soul) | no (these are the values from the destiny developer himself) |
 | **Overridable externally?** | yes - this is its meaning | **no** |
-| **Visible in the logs apply?** | yes (parameter values ​​are visible as part of the audit) | yes |
+| **Visible in the logs apply?** | yes (parameter values are visible as part of the audit) | yes |
 | **Masked (`secret`)?** | yes, via `secret: true` in the schema | no - secrets are not written here |
 | **Visible in API response** | like `input:` block | like `vars:` block |
 
 ## What is available inside `vars` via templates
 
-In the expressions `"${ … }"` (CEL interpolation, see [ADR-010](../adr/0010-templating.md)) on the right side of `vars.yml` the following is available:
+In the expressions `"${ … }"` (CEL interpolation, see [ADR-010](../adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов)) on the right side of `vars.yml` the following is available:
 
 - `input.<name>` - validated destiny parameters.
-- `soulprint.self.<name>` - current host facts ([ADR-018](../adr/0018-soulprint-typed.md): `soulprint.self.os.family`, `soulprint.self.network.primary_ip`, `soulprint.self.memory.total_mb`, …).
+- `soulprint.self.<name>` - current host facts ([ADR-018](../adr/0018-soulprint-typed.md#adr-018-soulprint-typed-схема-mvp): `soulprint.self.os.family`, `soulprint.self.network.primary_ip`, `soulprint.self.memory.total_mb`, …).
 - **`vars.<other>`** is another variable `vars.yml` of the SAME layer (see "var → var" below).
 
 Not available (intentionally):
 
 - **`register.<name>`** - task results. At the time of calculation `vars` there were no tasks yet.
-- **`essence.*`** - this namespace does not exist in destiny **at all**. essence - service level concept; service itself decides which values ​​to put into `input:` destiny when called.
+- **`essence.*`** - this namespace does not exist in destiny **at all**. essence - service level concept; service itself decides which values to put into `input:` destiny when called.
 - **`soulprint.hosts` / `soulprint.where(...)`** — cross-host scenario-only accessors. In the destiny pass they are cut off by isolation (error on compile). var → var does NOT open them.
 
 ### var → var (links inside the layer)
@@ -130,7 +130,7 @@ The `vars.*` namespace is shared by two sources: file-level `vars.yml` (this doc
 - **Scope isolation is preserved.** file-vars resolve inside the destiny pass (after `apply.input` validation), `register.*`/`essence.*`/`soulprint.hosts` are not available to them - just like task-vars destiny-tasks. var→var does NOT weaken the insulation. scenario-level `vars:` in destiny are NOT visible at all (only through `apply: input:`).
 - **`soul-lint` raises `warn` (`vars_collision`)** for each name declared in both `vars.yml` and task-level `vars:` of the same destiny. This is not a mistake (Option A is clear), but almost always an oversight by the author: rename one of the two or rely on the redefinition deliberately.
 
-Resolving file-vars is executed **once per destiny-pass** (per-host, because values ​​can refer to `soulprint.self`), and not per task: file-vars are invariant across tasks of the same pass.
+Resolving file-vars is executed **once per destiny-pass** (per-host, because values can refer to `soulprint.self`), and not per task: file-vars are invariant across tasks of the same pass.
 
 ## See also
 
