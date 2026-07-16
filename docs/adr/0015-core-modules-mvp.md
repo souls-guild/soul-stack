@@ -1,142 +1,142 @@
-# ADR-015. Core-модули MVP: точный список
+# ADR-015. Core modules MVP: exact list
 
-- **Контекст.** Open Q №5 содержал под-вопрос «точный набор core-модулей в MVP». В [Модели модулей](../architecture.md#модель-модулей) и [Адресации](../architecture.md#адресация-модулей) уже зафиксирована трёхуровневая форма `<namespace>.<module>.<state>`, core-namespace, прецеденты `core.pkg.installed`, `core.file.present`/`core.file.rendered`. Этот ADR закрепляет минимальный список Soul-side и Keeper-side core-модулей, без которых первый сервис E2E не работает. Критерий «MVP» — достаточно для типовой тройки проверки: Redis HA / PostgreSQL standalone / простой web-app.
-- **Решение.**
+- **Context.** Open Q #5 contained the sub-question "the exact set of core modules in MVP". The [module model](../architecture.md#модель-модулей) and [addressing](../architecture.md#адресация-модулей) already fix the three-level shape `<namespace>.<module>.<state>`, the core namespace, and the precedents `core.pkg.installed`, `core.file.present`/`core.file.rendered`. This ADR fixes the minimal list of Soul-side and Keeper-side core modules without which the first service does not work end-to-end. The "MVP" criterion — enough for the typical validation trio: Redis HA / PostgreSQL standalone / a simple web app.
+- **Decision.**
 
-  **Soul-side core MVP (17 модулей):**
+  **Soul-side core MVP (17 modules):**
 
-  | Модуль | State-формы | Назначение |
+  | Module | State forms | Purpose |
   |---|---|---|
-  | `core.pkg` | `installed` / `absent` / `latest` | Пакеты OS, абстракция через native pkg-mgr (apt/yum/dnf/pacman/apk), detection через Soulprint. |
-  | `core.file` | `present` / `absent` / `rendered` / `directory` | Файл существует с literal-content (`present`) / отсутствует (`absent`) / отрендерен из `.tmpl` (`rendered`, см. [ADR-010](0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов)) / каталог существует с owner/group/mode (`directory`, см. Amendment 2026-06-18 ниже). |
-  | `core.service` | `running` / `stopped` / `restarted` / `enabled` | Сервис, абстракция через systemd/openrc/sysv. |
-  | `core.user` | `present` / `absent` | Локальные пользователи OS. |
-  | `core.group` | `present` / `absent` | Локальные группы. |
-  | `core.exec` | `run` (verb) | Произвольная команда, exec(). Probe-идиома [ADR-008](0008-coven-stable-tags.md#adr-008-coven--только-стабильные-логические-теги) завязана на него. |
-  | `core.cmd` | `shell` (verb) | shell-команда (pipes, redirects). Отличие от `exec.run` — shell-интерпретация. |
-  | `core.cron` | `present` / `absent` | Cron-задачи в crontab-формате. |
-  | `core.mount` | `present` / `absent` / `mounted` / `unmounted` | Точки монтирования, /etc/fstab. |
-  | `core.git` | `cloned` / `pulled` | Клонирование/обновление git-репозитория на хосте. |
-  | `core.archive` | `extracted` | Распаковка архивов (tar/zip/gz/bz2). |
-  | `core.sysctl` | `present` | Kernel-параметры (`vm.overcommit_memory`, `kernel.shmmax`, и т.п.). |
-  | `core.url` | `fetched` | Загрузка файла по URL (аналог Ansible `get_url`). `https` по умолчанию; `http` / insecure-TLS / приватные IP — явный per-call opt-out (`allow_http`/`insecure_skip_verify`/`allow_private`, каждый default `false`, снятие логируется warn в output `warnings`); идемпотентность через `checksum` (`sha256`/`sha1`) или сравнение SHA-256; atomic verify-then-rename; `headers` sensitive-by-construction ([ADR-010](0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов) §7.4). |
-  | `core.line` | `present` / `absent` | In-place построчная правка существующего файла (lineinfile-эквивалент). Первый core-модуль, не перезаписывающий файл целиком. **Урезанный безопасный MVP** (см. ниже): `present`+`regexp` заменяет ПЕРВУЮ матчащую строку (+warning при >1), `present` без `regexp` добавляет точную строку по `insertafter`/`insertbefore` (литерал/EOF/BOF), `absent` удаляет все совпадения. Запись атомарна (temp+rename). |
-  | `core.repo` | `present` / `absent` | Пакетный репозиторий (apt/dnf/yum/apk; идея ansible `apt_repository`/`yum_repository`). Backend по `util.DetectPkgMgr`: apt → `/etc/apt/sources.list.d/<name>.list` + ключ в `/etc/apt/keyrings/<name>.gpg` со ссылкой `signed-by=` (современный формат, НЕ `apt-key`); dnf/yum → `/etc/yum.repos.d/<name>.repo` (ini); apk → строка в `/etc/apk/repositories`. Идемпотентность: файл + содержимое + ключ совпадают → `changed=false`. Запись через `util.AtomicWritePreserving`. **Безопасность:** `gpg_key` критичен (supply-chain) — задан → ключ реально материализуется/проверяется; `gpg_check=false` РАЗРЕШЁН (opt-out) с обязательным warning; `http://` ДОПУСТИМ (внутреннее зеркало, в отличие от https-only `core.url`) с обязательным warning. |
-  | `core.firewall` | `present` / `absent` | ОДНО правило файрвола (идея ansible `ufw`/`firewalld`). Backend по новому `util.DetectFirewall` (по установленному управляющему бинарю, НЕ по Soulprint): MVP — ufw и firewalld, iptables отложен. Идемпотентность: парсинг `ufw status` / `firewall-cmd --list-...` (хрупок между версиями — покрыт строгими unit-тестами на зафиксированных образцах). **КРИТИЧЕСКИЙ ИНВАРИАНТ БЕЗОПАСНОСТИ:** модуль НИКОГДА не трогает default policy и НИКОГДА не включает файрвол целиком (`ufw enable` / `systemctl start firewalld`) — иначе на удалённом хосте отрежет SSH и потеряем управление. Только add/delete конкретного правила (зафиксировано комментарием в коде и unit-тестом). |
-  | `core.http` | `probe` (verb) | **Read-probe HTTP** (health-check / API-readiness / чтение версии; идея ansible `uri`, сознательно сужена до чтения). Объект `http`, verb `probe` — **read-only**. `method` enum `{GET, HEAD}`, default `GET` (НЕ «любой метод» — сужение мутности ansible). `https` по умолчанию; `http` / insecure-TLS / приватные IP — явный per-call opt-out (`allow_http`/`insecure_skip_verify`/`allow_private`, каждый default `false`, снятие логируется warn в output `warnings`); reuse `util.ValidateFetchURL` + `util.CheckRedirect` downgrade-блок (как `core.url`). `status_codes` (default `[200]`; mismatch → `failed` с приложенным output для диагностики). **`changed=false` ВСЕГДА** — конструктивно и ненастраиваемо: probe не меняет состояние хоста; интерпретация результата — `changed_when:` на уровне scenario (прецедент `core.exec.run`). Output/register: `status` / `body` (cap 64 KiB по байтам с **rune-aware**-откатом до последней полной руны + `truncated`-флаг; тело санитизируется в валидный UTF-8 — probe read-only и тело может быть бинарным, не должно ронять Apply; маскируются только **vault-ref-подстроки** `vault:…` внутри тела, НЕ sensitive-целиком — ради health-ответов вида `{"status":"ok"}`. **Ограничение:** произвольные plaintext-секреты (`password: hunter2`) в теле НЕ маскируются — тело semi-trusted, оператор не должен класть в probe-эндпоинт то, что не должно светиться) / `elapsed_ms` / `headers_keys` (только ключи) / `changed=false`. `headers` — sensitive-by-construction ([ADR-010](0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов) §7.4). Мутирующие HTTP (POST/PUT/PATCH/DELETE, вероятно `core.http.request`) — **отложены post-MVP** отдельным ADR-расширением (тогда же — changed-контракт мутаций; НЕ копировать ansible «changed=true если 2xx»). |
+  | `core.pkg` | `installed` / `absent` / `latest` | OS packages, abstraction over the native pkg-mgr (apt/yum/dnf/pacman/apk), detection via Soulprint. |
+  | `core.file` | `present` / `absent` / `rendered` / `directory` | File exists with literal content (`present`) / absent (`absent`) / rendered from `.tmpl` (`rendered`, see [ADR-010](0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов)) / directory exists with owner/group/mode (`directory`, see Amendment 2026-06-18 below). |
+  | `core.service` | `running` / `stopped` / `restarted` / `enabled` | Service, abstraction over systemd/openrc/sysv. |
+  | `core.user` | `present` / `absent` | Local OS users. |
+  | `core.group` | `present` / `absent` | Local groups. |
+  | `core.exec` | `run` (verb) | An arbitrary command, exec(). The probe idiom [ADR-008](0008-coven-stable-tags.md#adr-008-coven--только-стабильные-логические-теги) is tied to it. |
+  | `core.cmd` | `shell` (verb) | A shell command (pipes, redirects). The difference from `exec.run` is shell interpretation. |
+  | `core.cron` | `present` / `absent` | Cron jobs in crontab format. |
+  | `core.mount` | `present` / `absent` / `mounted` / `unmounted` | Mount points, /etc/fstab. |
+  | `core.git` | `cloned` / `pulled` | Cloning/updating a git repository on the host. |
+  | `core.archive` | `extracted` | Extracting archives (tar/zip/gz/bz2). |
+  | `core.sysctl` | `present` | Kernel parameters (`vm.overcommit_memory`, `kernel.shmmax`, etc.). |
+  | `core.url` | `fetched` | Download a file by URL (analog of Ansible `get_url`). `https` by default; `http` / insecure-TLS / private IPs — an explicit per-call opt-out (`allow_http`/`insecure_skip_verify`/`allow_private`, each defaulting to `false`, the opt-out is logged as a warn in the output `warnings`); idempotency via `checksum` (`sha256`/`sha1`) or SHA-256 comparison; atomic verify-then-rename; `headers` sensitive-by-construction ([ADR-010](0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов) §7.4). |
+  | `core.line` | `present` / `absent` | In-place per-line editing of an existing file (lineinfile equivalent). The first core module that does not overwrite the file as a whole. **A trimmed safe MVP** (see below): `present`+`regexp` replaces the FIRST matching line (+warning when >1), `present` without `regexp` adds the exact line at `insertafter`/`insertbefore` (literal/EOF/BOF), `absent` removes all matches. Writing is atomic (temp+rename). |
+  | `core.repo` | `present` / `absent` | A package repository (apt/dnf/yum/apk; idea from ansible `apt_repository`/`yum_repository`). Backend by `util.DetectPkgMgr`: apt → `/etc/apt/sources.list.d/<name>.list` + a key in `/etc/apt/keyrings/<name>.gpg` with a `signed-by=` reference (modern format, NOT `apt-key`); dnf/yum → `/etc/yum.repos.d/<name>.repo` (ini); apk → a line in `/etc/apk/repositories`. Idempotency: file + content + key match → `changed=false`. Writing via `util.AtomicWritePreserving`. **Security:** `gpg_key` is critical (supply-chain) — if set, the key is really materialized/verified; `gpg_check=false` is ALLOWED (opt-out) with a mandatory warning; `http://` is PERMITTED (an internal mirror, unlike the https-only `core.url`) with a mandatory warning. |
+  | `core.firewall` | `present` / `absent` | ONE firewall rule (idea from ansible `ufw`/`firewalld`). Backend by the new `util.DetectFirewall` (by the installed management binary, NOT by Soulprint): MVP — ufw and firewalld, iptables deferred. Idempotency: parsing `ufw status` / `firewall-cmd --list-...` (fragile across versions — covered by strict unit tests on fixed samples). **CRITICAL SECURITY INVARIANT:** the module NEVER touches the default policy and NEVER enables the firewall as a whole (`ufw enable` / `systemctl start firewalld`) — otherwise on a remote host it would cut off SSH and we would lose control. Only add/delete of a specific rule (fixed by a comment in code and a unit test). |
+  | `core.http` | `probe` (verb) | **Read-probe HTTP** (health-check / API-readiness / reading a version; idea from ansible `uri`, deliberately narrowed to reading). Object `http`, verb `probe` — **read-only**. `method` enum `{GET, HEAD}`, default `GET` (NOT "any method" — narrowing the mutability of ansible). `https` by default; `http` / insecure-TLS / private IPs — an explicit per-call opt-out (`allow_http`/`insecure_skip_verify`/`allow_private`, each defaulting to `false`, the opt-out is logged as a warn in the output `warnings`); reuse of `util.ValidateFetchURL` + `util.CheckRedirect` downgrade-block (like `core.url`). `status_codes` (default `[200]`; mismatch → `failed` with the output attached for diagnostics). **`changed=false` ALWAYS** — by construction and non-configurable: a probe does not change host state; interpretation of the result is `changed_when:` at the scenario level (the `core.exec.run` precedent). Output/register: `status` / `body` (cap 64 KiB by bytes with a **rune-aware** fallback to the last full rune + a `truncated` flag; the body is sanitized to valid UTF-8 — the probe is read-only and the body may be binary, it must not crash Apply; only **vault-ref substrings** `vault:…` inside the body are masked, NOT the whole thing as sensitive — for the sake of health responses like `{"status":"ok"}`. **Limitation:** arbitrary plaintext secrets (`password: hunter2`) in the body are NOT masked — the body is semi-trusted, the operator must not put into a probe endpoint anything that must not be exposed) / `elapsed_ms` / `headers_keys` (keys only) / `changed=false`. `headers` — sensitive-by-construction ([ADR-010](0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов) §7.4). Mutating HTTP (POST/PUT/PATCH/DELETE, likely `core.http.request`) — **deferred post-MVP** by a separate ADR extension (and then the changed-contract of mutations too; do NOT copy ansible "changed=true if 2xx"). |
 
-  **`core.template` НЕ выделяется** отдельным модулем — рендер файлов делает `core.file.rendered` ([ADR-010](0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов)). Старое упоминание `template` в [Модели модулей](../architecture.md#модель-модулей) и [Адресации](../architecture.md#адресация-модулей) — исторический drift, исправляется этим ADR. **`core.copy` НЕ выделяется** — покрывается `core.file.present` с inline-content.
+  **`core.template` is NOT split out** as a separate module — file rendering is done by `core.file.rendered` ([ADR-010](0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов)). The old mention of `template` in the [module model](../architecture.md#модель-модулей) and [addressing](../architecture.md#адресация-модулей) is historical drift, corrected by this ADR. **`core.copy` is NOT split out** — it is covered by `core.file.present` with inline content.
 
-  **`core.line` (lineinfile-эквивалент) — принят (2026-05)** в урезанном безопасном виде: запрос поступил, выбран предсказуемый MVP вместо ansible-style вседозволенности (ровно та причина, по которой откладывали: «regex matches not what you think»). Сознательные ограничения MVP, расширяемые позже без breaking change: **backrefs НЕ поддержаны** (подстановка групп regexp в `line`); **insertafter/insertbefore — только литерал или EOF/BOF, НЕ regexp**; `present`+`regexp` заменяет только ПЕРВОЕ совпадение (остальные не трогаются + warning). Это **пилот нового паттерна** «in-place построчная правка» — на нём зафиксирован образец для in-place core; по нему реализованы `core.repo` (запись repo-файлов через `util.AtomicWritePreserving`) и `core.firewall`.
+  **`core.line` (lineinfile equivalent) — accepted (2026-05)** in a trimmed safe form: a request came in, and a predictable MVP was chosen instead of ansible-style permissiveness (exactly the reason it was deferred: "regex matches not what you think"). Deliberate MVP limitations, extensible later without a breaking change: **backrefs are NOT supported** (substitution of regexp groups into `line`); **insertafter/insertbefore — literal or EOF/BOF only, NOT regexp**; `present`+`regexp` replaces only the FIRST match (the rest are untouched + a warning). This is a **pilot of the new pattern** "in-place per-line editing" — the sample for in-place core is fixed on it; `core.repo` (writing repo files via `util.AtomicWritePreserving`) and `core.firewall` are implemented following it.
 
-  **`core.http` (read-probe HTTP) — принят (2026-05)** по реальному запросу, отдельным слайсом после `core.repo`/`core.firewall`. Scope сознательно сужен до **read-only** (verb `probe`, методы `GET`/`HEAD`): 90% кейсов «HTTP в destiny» — это health-check / API-readiness / чтение версии, они чисты и `changed=false` по природе. Это уход от ansible-style вседозволенности `uri` (любой метод + мутный «changed=true если 2xx»). Объект `http` заведён **отдельно от `core.url`** намеренно: граница — «`url` кладёт байты на диск, `http` возвращает ответ в register»; это оставляет чистое место для будущего мутирующего `core.http.request`. HTTP-инфраструктура (https-only валидация, downgrade-блок редиректов, конструктор клиента) вынесена в `util` (`util.ValidateURL`/`util.CheckRedirect`/`util.NewHTTPClient`/`util.HTTPDoer`) и переиспользуется обоими модулями — единый паттерн supply-chain-защиты. Мутирующие HTTP отложены post-MVP отдельным ADR.
+  **`core.http` (read-probe HTTP) — accepted (2026-05)** on a real request, as a separate slice after `core.repo`/`core.firewall`. The scope is deliberately narrowed to **read-only** (verb `probe`, methods `GET`/`HEAD`): 90% of "HTTP in destiny" cases are health-check / API-readiness / reading a version, they are pure and `changed=false` by nature. This is a departure from ansible-style permissiveness of `uri` (any method + a murky "changed=true if 2xx"). The object `http` is set up **separately from `core.url`** deliberately: the boundary is "`url` puts bytes on disk, `http` returns a response into a register"; this leaves a clean place for a future mutating `core.http.request`. The HTTP infrastructure (https-only validation, redirect downgrade-block, client constructor) is factored into `util` (`util.ValidateURL`/`util.CheckRedirect`/`util.NewHTTPClient`/`util.HTTPDoer`) and reused by both modules — a single supply-chain-protection pattern. Mutating HTTP is deferred post-MVP by a separate ADR.
 
-  **Preserve-by-default для in-place core-модулей (нормативно).** In-place core-модули, правящие *существующий* файл (`core.line` present/absent и будущие in-place core), **сохраняют mode/owner/group существующего файла по умолчанию**: если `mode`/`owner`/`group` не заданы в params — текущие права и владелец восстанавливаются после atomic rename (rename создаёт temp с правами процесса, поэтому preserve явный). Явно заданные `mode`/`owner`/`group` **переопределяют** (override). Создание *нового* файла (например `core.line` `create:true`) использует дефолты (`mode` → 0644, владелец — текущий процесс). Реализуется общим кирпичом `util.AtomicWritePreserving` — наследуемая точка для всех in-place core.
+  **Preserve-by-default for in-place core modules (normative).** In-place core modules that edit an *existing* file (`core.line` present/absent and future in-place core) **preserve the mode/owner/group of the existing file by default**: if `mode`/`owner`/`group` are not set in params — the current permissions and owner are restored after the atomic rename (rename creates the temp with the process's permissions, so preserve is explicit). Explicitly set `mode`/`owner`/`group` **override**. Creating a *new* file (e.g. `core.line` `create:true`) uses defaults (`mode` → 0644, owner — the current process). Implemented by the shared brick `util.AtomicWritePreserving` — an inherited point for all in-place core.
 
-  **`core.hostname` — опционален**, чаще решается cloud-init-ом. Добавим, если появится сценарий без cloud-init.
+  **`core.hostname` — optional**, more often solved by cloud-init. We will add it if a scenario without cloud-init appears.
 
-  **Keeper-side core (диспетчер `on: keeper`, см. [`docs/keeper/modules.md`](../keeper/modules.md)):**
+  **Keeper-side core (dispatcher `on: keeper`, see [`docs/keeper/modules.md`](../keeper/modules.md)):**
 
-  | Модуль | Статус | Назначение |
+  | Module | Status | Purpose |
   |---|---|---|
-  | `core.soul.registered` | уже зафиксирован | Привязка SID к coven-меткам реестра souls. |
-  | `core.cloud.provisioned` | **вводится** | CloudDriver-вызов из scenario (cloud-create). Заменяет более ранний паттерн «destiny `cloud-provision` с `on: keeper`» — см. [ADR-017](0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read). |
-  | `core.vault.kv-read` | **вводится** | Чтение секрета из Vault на keeper-стороне в момент рендера. Формализует «vault-resolve фазу» [ADR-010](0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов) как явный модульный шаг. См. [ADR-017](0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read). |
+  | `core.soul.registered` | already fixed | Binding a SID to the coven labels of the souls registry. |
+  | `core.cloud.provisioned` | **introduced** | A CloudDriver call from a scenario (cloud-create). Replaces the earlier pattern "destiny `cloud-provision` with `on: keeper`" — see [ADR-017](0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read). |
+  | `core.vault.kv-read` | **introduced** | Reading a secret from Vault on the keeper side at render time. Formalizes the "vault-resolve phase" of [ADR-010](0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов) as an explicit module step. See [ADR-017](0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read). |
 
-  **Не входит в MVP:**
-  - `core.essence.read` — implicit-доступ к `essence.*` в template-контексте покрывает; явный модуль не нужен.
-  - `core.incarnation.commit-state` — commit делается keeper-ом неявно при успехе apply ([ADR-009](0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация)).
+  **Not part of MVP:**
+  - `core.essence.read` — implicit access to `essence.*` in the template context covers it; an explicit module is not needed.
+  - `core.incarnation.commit-state` — the commit is done by the keeper implicitly on a successful apply ([ADR-009](0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация)).
 - **Consequences.**
-  - В `docs/naming-rules.md` раздел «Конкретные core-модули» дополняется полным списком.
-  - В [Модели модулей](../architecture.md#модель-модулей) и [Адресации модулей](../architecture.md#адресация-модулей) `template` убирается из примеров core (заменяется на `core.file.rendered`).
-  - Open Q №5 в части «точный набор core-модулей» закрыт; остальные под-вопросы (реестр модулей в Keeper, формат манифеста, версия handshake-протокола, политика версионирования модулей, опциональное `required_modules`) — остаются открытыми.
-  - Эти 17 Soul-side + 3 Keeper-side модулей — обязательная имплементация фазы 0; план реализации — отдельная задача (вероятно, pilot одного модуля → батч после ревью pattern-а, см. [CLAUDE.md → Массовые операции и батчинг](../../CLAUDE.md)).
-  - `core.url.fetched` добавлен пост-факто (после первых 12) как безопасная декларативная замена обхода через `core.cmd.shell creates:` для скачивания релизов/бинарей. В exporter-примерах destiny паттерн `core.cmd.shell` (curl/wget с `creates:`) заменяется на `core.url.fetched` — отдельным слайсом после ревью самого модуля (стоп-правило батчинга).
-  - Помимо 17 MVP core-модулей выше, `soul`-бинарь предоставляет **инфраструктурный** core-модуль `core.module.installed` для доставки custom-модулей на хост (Keeper → server-streaming RPC `FetchModule` → каталожный кеш `paths.modules`, Sigil-verify). Это **не входит в счёт 17**: `core.module.installed` — функция самого Soul-демона, реализованная как core-модуль для единообразия с Destiny DSL (оператор пишет явный шаг `module: core.module.installed` с `params: {name: <ns>.<имя>}` в своей Destiny, если хочет custom-модуль). Спецификация поведения и input-схема — **зафиксированы [ADR-065](0065-core-module-installed.md)** (транспорт `FetchModule`, реестр `plugins.soul_modules[]`, Sigil-верификация, hot-register).
+  - In `docs/naming-rules.md` the "Concrete core modules" section is extended with the full list.
+  - In the [module model](../architecture.md#модель-модулей) and [module addressing](../architecture.md#адресация-модулей) `template` is removed from the core examples (replaced by `core.file.rendered`).
+  - Open Q #5 in the part "the exact set of core modules" is closed; the remaining sub-questions (the module registry in the Keeper, the manifest format, the handshake protocol version, the module versioning policy, the optional `required_modules`) remain open.
+  - These 17 Soul-side + 3 Keeper-side modules are the mandatory implementation of phase 0; the implementation plan is a separate task (probably a pilot of one module → a batch after review of the pattern, see [CLAUDE.md → Mass operations and batching](../../CLAUDE.md)).
+  - `core.url.fetched` was added post-hoc (after the first 12) as a safe declarative replacement for the workaround via `core.cmd.shell creates:` for downloading releases/binaries. In the exporter destiny examples the pattern `core.cmd.shell` (curl/wget with `creates:`) is replaced by `core.url.fetched` — as a separate slice after review of the module itself (the batching stop rule).
+  - Besides the 17 MVP core modules above, the `soul` binary provides an **infrastructure** core module `core.module.installed` for delivering custom modules to the host (Keeper → server-streaming RPC `FetchModule` → the catalog cache `paths.modules`, Sigil-verify). This is **not counted among the 17**: `core.module.installed` is a function of the Soul daemon itself, implemented as a core module for uniformity with the Destiny DSL (the operator writes an explicit step `module: core.module.installed` with `params: {name: <ns>.<name>}` in their Destiny if they want a custom module). The behavior specification and input schema are **fixed by [ADR-065](0065-core-module-installed.md)** (transport `FetchModule`, the registry `plugins.soul_modules[]`, Sigil verification, hot-register).
 - **Trade-offs.**
-  - 17 Soul-side модулей — больше, чем минимум-минимум (можно ужать до 6, заменив остальное через `core.exec.run`), но плохой DX и невозможно проверить idempotency. Базовые 12 — необходимый минимум для production-ready first service; `core.url` добавлен сверху как безопасная замена `core.cmd.shell`-обхода для download, `core.line` — пост-факто по реальному запросу (урезанный безопасный MVP), `core.repo`/`core.firewall` — следующим слайсом по реальному запросу, `core.http` (read-probe) — отдельным слайсом по реальному запросу.
-  - `core.line` **принят** (урезанный безопасный MVP, без backrefs, replace первого совпадения) — пилот паттерна in-place построчной правки. `core.repo`/`core.firewall` **приняты** (2026-05) одним слайсом по образцу пилота: оба переиспользуют `util.AtomicWritePreserving`/`util.DetectPkgMgr`/новый `util.DetectFirewall`, оба `present`/`absent`. `core.http` (read-probe, verb `probe`, `changed=false`) **принят** (2026-05) отдельным слайсом: переиспользует вынесенную в `util` HTTP-инфраструктуру (`util.ValidateURL`/`util.CheckRedirect`/`util.NewHTTPClient`/`util.HTTPDoer`) совместно с `core.url`; мутирующий HTTP отложен post-MVP. Ранний кандидат-имя `core.uri` отвергнут (uri/url-путаница) — выбран объект `http`.
-  - `core.cloud.provisioned` и `core.vault.kv-read` — переоформление существующих неявных вещей; миграция примеров в `service.yml` — отдельная задача.
-- **Amendment (2026-06-18, новый state `directory` в `core.file`).** В `core.file`
-  добавлен state `directory` (`core.file.directory`) — декларативное создание
-  каталога вместо императивного `core.exec.run install -d`. Params: `path`
-  (required), `owner`, `group`, `mode` (как у `present`), `parents` (bool, default
-  `false` — семантика `mkdir -p`: создавать промежуточные каталоги). `recurse`
-  (рекурсивное выставление прав на содержимое) сознательно НЕ реализован в MVP —
-  управляется только сам каталог; добавляется позже без breaking change при
-  реальном запросе. Идемпотентность (паритет с `present`): каталог есть и
-  `owner`/`group`/`mode` совпадают → `changed=false`; каталога нет → создать →
-  `changed=true`; атрибуты дрейфят → починить (`chmod`/`chown`) → `changed=true`;
-  путь занят файлом (не каталогом) → ошибка без перезаписи. Поддержан Plan/Scry
+  - 17 Soul-side modules — more than the bare minimum (it could be squeezed to 6, replacing the rest via `core.exec.run`), but poor DX and idempotency cannot be verified. The base 12 are the necessary minimum for a production-ready first service; `core.url` was added on top as a safe replacement for the `core.cmd.shell` workaround for download, `core.line` — post-hoc on a real request (a trimmed safe MVP), `core.repo`/`core.firewall` — as the next slice on a real request, `core.http` (read-probe) — as a separate slice on a real request.
+  - `core.line` is **accepted** (a trimmed safe MVP, without backrefs, replace of the first match) — a pilot of the in-place per-line editing pattern. `core.repo`/`core.firewall` are **accepted** (2026-05) as one slice following the pilot: both reuse `util.AtomicWritePreserving`/`util.DetectPkgMgr`/the new `util.DetectFirewall`, both `present`/`absent`. `core.http` (read-probe, verb `probe`, `changed=false`) is **accepted** (2026-05) as a separate slice: it reuses the HTTP infrastructure factored into `util` (`util.ValidateURL`/`util.CheckRedirect`/`util.NewHTTPClient`/`util.HTTPDoer`) jointly with `core.url`; mutating HTTP is deferred post-MVP. The early candidate name `core.uri` was rejected (uri/url confusion) — the object `http` was chosen.
+  - `core.cloud.provisioned` and `core.vault.kv-read` are a re-framing of existing implicit things; migration of the examples in `service.yml` is a separate task.
+- **Amendment (2026-06-18, new state `directory` in `core.file`).** In `core.file`
+  a state `directory` (`core.file.directory`) was added — declarative creation of a
+  directory instead of the imperative `core.exec.run install -d`. Params: `path`
+  (required), `owner`, `group`, `mode` (as in `present`), `parents` (bool, default
+  `false` — the semantics of `mkdir -p`: create intermediate directories). `recurse`
+  (recursive setting of permissions on the contents) is deliberately NOT implemented in MVP —
+  only the directory itself is managed; it is added later without a breaking change on a
+  real request. Idempotency (parity with `present`): the directory exists and
+  `owner`/`group`/`mode` match → `changed=false`; the directory does not exist → create →
+  `changed=true`; attributes drift → fix (`chmod`/`chown`) → `changed=true`;
+  the path is occupied by a file (not a directory) → error without overwriting. Supported by Plan/Scry
   ([ADR-031](0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile)):
-  `planDirectory` — pure-read drift (тот же `changed`, что выполнил бы Apply, без
-  мутации хоста). Реализация — [`soul/internal/coremod/file/directory.go`](../../soul/internal/coremod/file/directory.go)
-  (`applyDirectory`/`planDirectory` + ветки `case "directory"` в Apply/Plan/Validate),
-  переиспользует `util.ParseMode`/`util.ApplyOwnership`/`util.OwnershipDrift`.
-  Author-манифест — блок `states.directory` в
+  `planDirectory` — pure-read drift (the same `changed` that Apply would have produced, without
+  mutating the host). Implementation — [`soul/internal/coremod/file/directory.go`](../../soul/internal/coremod/file/directory.go)
+  (`applyDirectory`/`planDirectory` + `case "directory"` branches in Apply/Plan/Validate),
+  reuses `util.ParseMode`/`util.ApplyOwnership`/`util.OwnershipDrift`.
+  The author manifest — the `states.directory` block in
   [`shared/coremanifest/file.yaml`](../../shared/coremanifest/file.yaml) (additive,
-  only-add; `soul-lint` валидирует автоматически). Additive и обратно совместимо:
-  существующие задачи `core.file` не затронуты. Документация —
+  only-add; `soul-lint` validates it automatically). Additive and backward-compatible:
+  existing `core.file` tasks are not affected. Documentation —
   [`docs/module/core/file/README.md`](../module/core/file/README.md).
-- **Amendment (2026-06-24, опциональный param `src` у `core.file.present`).** К state
-  `present` добавлен опциональный param `src` — **абсолютный путь regular-файла на
-  Soul-хосте** (типично результат `core.archive.extracted`); `present` копирует
-  СОДЕРЖИМОЕ `src` в `path`. `src` задаёт **только содержимое**, не атрибуты
-  источника — `mode`/`owner`/`group` целевого файла берутся из явных params
-  `present` как раньше. `src` и `content` **взаимоисключаются** (проверка по
-  присутствию КЛЮЧА в params, не по пустоте строки — так `content: ""` + `src` тоже
-  ловится как конфликт `content and src are mutually exclusive`); ни один не задан →
-  **сохранено legacy-поведение** (пустой файл), это обратная совместимость, не
-  ошибка. **MVP — только regular file**: каталог/симлинк/device/socket/fifo
-  explicit-reject; тип проверяется через `os.Lstat` + `IsRegular()` (ИМЕННО Lstat —
-  симлинк reject-ится, а не следуется: защита от подмены источника), отсутствие →
-  `read src %s: no such file`, не-regular → `src %s is not a regular file`, относительный →
-  `src must be absolute`. Идемпотентность по `sha256(src-байты)`: src читается в
-  память один раз, тот же буфер хэшируется и пишется (без двойного чтения — TOCTOU).
-  **Асимметрия атомарности**: src-ветка пишет атомарно (`util.AtomicWrite`, temp +
-  rename), content-ветка остаётся на `os.WriteFile` (без изменения). Поддержан
+- **Amendment (2026-06-24, optional param `src` on `core.file.present`).** To the state
+  `present` an optional param `src` was added — **an absolute path of a regular file on
+  the Soul host** (typically the result of `core.archive.extracted`); `present` copies the
+  CONTENT of `src` into `path`. `src` sets **content only**, not the attributes of the
+  source — `mode`/`owner`/`group` of the target file are taken from the explicit `present`
+  params as before. `src` and `content` are **mutually exclusive** (checked by the presence
+  of the KEY in params, not by the emptiness of the string — so `content: ""` + `src` is also
+  caught as the conflict `content and src are mutually exclusive`); if neither is set →
+  **the legacy behavior is preserved** (an empty file), this is backward compatibility, not
+  an error. **MVP — regular file only**: directory/symlink/device/socket/fifo are
+  explicitly rejected; the type is checked via `os.Lstat` + `IsRegular()` (specifically Lstat —
+  a symlink is rejected, not followed: protection against source substitution), absence →
+  `read src %s: no such file`, non-regular → `src %s is not a regular file`, relative →
+  `src must be absolute`. Idempotency by `sha256(src-bytes)`: src is read into
+  memory once, the same buffer is hashed and written (without a double read — TOCTOU).
+  **Atomicity asymmetry**: the src branch writes atomically (`util.AtomicWrite`, temp +
+  rename), the content branch stays on `os.WriteFile` (unchanged). Supported by
   Plan/Scry ([ADR-031](0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile)):
-  `planPresent` при `src` берёт желаемый хэш = `sha256(readSrc(src))`, дальше
-  pure-read сверка без записи; src отсутствует/нечитаем во время Plan → `PlanFailed`
-  (НЕ false-clean). Реализация — новый хелпер `util.ReadRegularFile` (рядом с
-  `util.AtomicWrite`) + ветки в `applyPresent`/`planPresent`/`Validate`
+  `planPresent` with `src` takes the desired hash = `sha256(readSrc(src))`, then a
+  pure-read comparison without writing; if src is absent/unreadable during Plan → `PlanFailed`
+  (NOT false-clean). Implementation — a new helper `util.ReadRegularFile` (next to
+  `util.AtomicWrite`) + branches in `applyPresent`/`planPresent`/`Validate`
   ([`soul/internal/coremod/file/file.go`](../../soul/internal/coremod/file/file.go)).
-  Author-манифест — param `src` в `states.present.input`
-  ([`shared/coremanifest/file.yaml`](../../shared/coremanifest/file.yaml)); манифест-DSL
-  не выражает взаимоисключение (нет `oneof`) — XOR живёт в `Module.Validate`, в
-  манифесте лишь описания. **Additive, proto не трогается, breaking нет**: задачи
-  `core.file.present` без `src` не затронуты. Документация —
+  The author manifest — the param `src` in `states.present.input`
+  ([`shared/coremanifest/file.yaml`](../../shared/coremanifest/file.yaml)); the manifest DSL
+  does not express mutual exclusion (there is no `oneof`) — the XOR lives in `Module.Validate`, the
+  manifest has only descriptions. **Additive, proto is untouched, no breaking**: `core.file.present`
+  tasks without `src` are not affected. Documentation —
   [`docs/module/core/file/README.md`](../module/core/file/README.md).
-- **Amendment (2026-06-24, новый state `applied` в `core.sysctl`).** В `core.sysctl`
-  добавлен state `applied` (`core.sysctl.applied`) — bulk-применение НАБОРА
-  kernel-параметров одним drop-in, в дополнение к per-key `present`. Мотивация:
-  host-tuning-наборы (Redis/ES/Kafka и т.п.) несут ~десяток параметров; отдельный
-  `core.sysctl.present` на каждый раздувает план и сдвигает индексы. Params:
-  `settings` (map `имя→значение`, required), `filename` (string, required — имя
-  drop-in в `/etc/sysctl.d/`, напр. `30-redis`; суффикс `.conf` добавляется),
-  `reload` (enum `auto|always|never`, default `auto` — **реюз словаря enum из
+- **Amendment (2026-06-24, new state `applied` in `core.sysctl`).** In `core.sysctl`
+  a state `applied` (`core.sysctl.applied`) was added — bulk application of a SET of
+  kernel parameters in one drop-in, in addition to the per-key `present`. Motivation:
+  host-tuning sets (Redis/ES/Kafka etc.) carry ~a dozen parameters; a separate
+  `core.sysctl.present` for each bloats the plan and shifts indices. Params:
+  `settings` (map `name→value`, required), `filename` (string, required — the name of the
+  drop-in in `/etc/sysctl.d/`, e.g. `30-redis`; the `.conf` suffix is added),
+  `reload` (enum `auto|always|never`, default `auto` — **reuse of the enum dictionary from
   `core.service` `daemon_reload`**, util.DaemonReloadMode), `ignore_failures` (bool,
-  default `false` → `sysctl -e -p`, глушит read-only/несуществующие ключи в
-  контейнерах). Идемпотентность: контент drop-in **детерминирован** (ключи
-  СОРТИРУЮТСЯ, формат `key = value`) → сравнение с существующим файлом, `changed=true`
-  только при diff (атомарная запись через `util.AtomicWritePreserving`); reload
-  (`sysctl -p <file>` ТОЧЕЧНО по drop-in, НЕ весь `--system`) гейтится: `never` →
-  никогда (opt-out), `always` → безусловно, `auto` → только при file-change (как
-  `daemon_reload:auto`); сам reload `changed` НЕ помечает. Поддержан Plan/Scry
+  default `false` → `sysctl -e -p`, silences read-only/non-existent keys in
+  containers). Idempotency: the drop-in content is **deterministic** (keys are
+  SORTED, format `key = value`) → comparison with the existing file, `changed=true`
+  only on a diff (atomic write via `util.AtomicWritePreserving`); reload
+  (`sysctl -p <file>` PRECISELY by the drop-in, NOT the whole `--system`) is gated: `never` →
+  never (opt-out), `always` → unconditionally, `auto` → only on a file change (like
+  `daemon_reload:auto`); the reload itself does NOT mark `changed`. Supported by Plan/Scry
   ([ADR-031](0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile)):
-  `planApplied` — pure-read drift (сравнение контента без записи/reload).
-  **Осознанное исключение из границы с `core.file`.** В отличие от per-key `present`
-  (где persist-файл — побочный продукт) и общего правила «файлы рендерит
-  `core.file.rendered`», state `applied` **сам владеет drop-in**: модуль строит
-  контент из map, пишет его и управляет reload + idempotency единым шагом. Это
-  сознательная Ansible-модель (`sysctl`-модуль владеет файлом+reload), а не drift:
-  контент drop-in тривиален (`key = value`, sorted) и не требует text/template, а
-  связка «файл↔reload↔idempotency» атомарна на уровне модуля. Реализация —
+  `planApplied` — pure-read drift (comparison of content without writing/reload).
+  **A deliberate exception to the boundary with `core.file`.** Unlike per-key `present`
+  (where the persist file is a byproduct) and the general rule "files are rendered by
+  `core.file.rendered`", the state `applied` **owns the drop-in itself**: the module builds
+  the content from the map, writes it and manages reload + idempotency in one step. This is a
+  deliberate Ansible model (the `sysctl` module owns the file+reload), not drift:
+  the drop-in content is trivial (`key = value`, sorted) and does not require text/template, and
+  the bundle "file↔reload↔idempotency" is atomic at the module level. Implementation —
   [`soul/internal/coremod/sysctl/applied.go`](../../soul/internal/coremod/sysctl/applied.go)
-  (`applyApplied`/`planApplied` + ветки `case "applied"` в Apply/Plan/Validate),
-  переиспользует `util.AtomicWritePreserving`/`util.DaemonReloadMode`. Author-манифест
-  — блок `states.applied` в
+  (`applyApplied`/`planApplied` + `case "applied"` branches in Apply/Plan/Validate),
+  reuses `util.AtomicWritePreserving`/`util.DaemonReloadMode`. The author manifest
+  — the `states.applied` block in
   [`shared/coremanifest/sysctl.yaml`](../../shared/coremanifest/sysctl.yaml) (additive,
-  only-add). Additive и обратно совместимо: задачи `core.sysctl.present` не затронуты.
-  Документация — [`docs/module/core/sysctl/README.md`](../module/core/sysctl/README.md).
-- **Amendment (2026-06-18, централизованный daemon-reload в `core.service`).** `core.service` (systemd-backend) перед мутирующими actions (`running` / `restarted` / `enabled`) проверяет systemd-флаг `NeedDaemonReload` и при рассинхроне unit-файла с загруженным определением делает `systemctl daemon-reload` ДО start/restart/enable. Закрывает баг: после правки unit-файла без reload `systemctl restart` тихо рестартует со СТАРЫМ определением (exit 0, лишь warning). Поведение управляется опциональным параметром `daemon_reload` (string enum `auto` | `always` | `never`, **default `auto`**, объявлен в `shared/coremanifest/service.yaml` на states `running`/`restarted`/`enabled`; на `stopped` НЕ объявляется — там reload не нужен): `auto` — reload только при `NeedDaemonReload=yes` (gated, идемпотентно); `always` — reload безусловно; `never` — явный opt-out. Механизм проверки — `systemctl show <unit> --property=NeedDaemonReload --value` (`yes`/`no`); на первом install нового unit флаг = `no` (systemd подхватит определение на start), reload не нужен. **reload НЕ помечает шаг `changed`** (changed остаётся функцией только start/restart/enable) — при реально выполненном reload в `output` добавляется диагностическое `reloaded: true`. `openrc`/`sysv` — **no-op** (у них нет daemon-reload). Реализация — хелпер `util.EnsureDaemonReloaded` рядом с `util.ServiceActive` (тот же mock-абельный Runner, без D-Bus/go-systemd); enum валидируется в `core.service.Validate` (неизвестное значение → ошибка валидации, не молча). Additive и обратно совместимо: существующие задачи без `daemon_reload` получают `auto`.
+  only-add). Additive and backward-compatible: `core.sysctl.present` tasks are not affected.
+  Documentation — [`docs/module/core/sysctl/README.md`](../module/core/sysctl/README.md).
+- **Amendment (2026-06-18, centralized daemon-reload in `core.service`).** `core.service` (systemd backend) before mutating actions (`running` / `restarted` / `enabled`) checks the systemd flag `NeedDaemonReload` and, on a desync of the unit file with the loaded definition, runs `systemctl daemon-reload` BEFORE start/restart/enable. Closes a bug: after editing a unit file without a reload, `systemctl restart` silently restarts with the OLD definition (exit 0, only a warning). The behavior is controlled by the optional parameter `daemon_reload` (string enum `auto` | `always` | `never`, **default `auto`**, declared in `shared/coremanifest/service.yaml` on the states `running`/`restarted`/`enabled`; on `stopped` it is NOT declared — a reload is not needed there): `auto` — reload only when `NeedDaemonReload=yes` (gated, idempotent); `always` — reload unconditionally; `never` — an explicit opt-out. The check mechanism — `systemctl show <unit> --property=NeedDaemonReload --value` (`yes`/`no`); on the first install of a new unit the flag = `no` (systemd will pick up the definition on start), a reload is not needed. **The reload does NOT mark the step as `changed`** (changed remains a function only of start/restart/enable) — on an actually performed reload a diagnostic `reloaded: true` is added to `output`. `openrc`/`sysv` — a **no-op** (they have no daemon-reload). Implementation — the helper `util.EnsureDaemonReloaded` next to `util.ServiceActive` (the same mock-able Runner, without D-Bus/go-systemd); the enum is validated in `core.service.Validate` (an unknown value → a validation error, not silently). Additive and backward-compatible: existing tasks without `daemon_reload` get `auto`.

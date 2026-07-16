@@ -1,61 +1,61 @@
-# ADR-020. Plugin-инфраструктура: формат manifest, handshake, lifecycle
+# ADR-020. Plugin Infrastructure: manifest format, handshake, lifecycle
 
-- **Контекст.** В Soul Stack три категории плагинов с разными service-контрактами (`SoulModule`, `CloudDriver`, `SshProvider`), но **единая инфраструктура** — handshake, способ запуска, формат манифеста, версионирование (см. раздел [«Plugin-инфраструктура»](../architecture.md#plugin-инфраструктура), [ADR-011](0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам)). На момент фиксации эта инфраструктура описана только эскизно:
-  - [§«Манифест модуля»](../architecture.md#манифест-модуля) приведён как пример-черновик, с явной open под-Q «отдельный `manifest.yaml` рядом с бинарём vs первый RPC-метод `Manifest()`».
-  - [§«Протокол модулей — gRPC over stdio (HashiCorp-style)»](../architecture.md#протокол-модулей--grpc-over-stdio-hashicorp-style) — общая ссылка на модель HashiCorp `go-plugin`, с open под-Q «имя файла и точная версия протокола».
-  - Формат handshake-строки, перечень `required_capabilities`, грамматика `side_effects`, lifecycle плагина, путь к сокету, политика TLS — нормативно нигде не зафиксированы.
+- **Context.** Soul Stack has three categories of plugins with different service contracts (`SoulModule`, `CloudDriver`, `SshProvider`), but a **single infrastructure** — handshake, launch method, manifest format, versioning (see the ["Plugin infrastructure"](../architecture.md#plugin-инфраструктура) section, [ADR-011](0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам)). At the time of this fixation, this infrastructure was only described in sketch form:
+  - [§"Module manifest"](../architecture.md#манифест-модуля) is given as a draft example, with an explicit open sub-Q of "a separate `manifest.yaml` next to the binary vs the first RPC method `Manifest()`".
+  - [§"Module protocol — gRPC over stdio (HashiCorp-style)"](../architecture.md#протокол-модулей--grpc-over-stdio-hashicorp-style) — a general reference to the HashiCorp `go-plugin` model, with an open sub-Q of "file name and exact protocol version".
+  - The handshake-string format, the list of `required_capabilities`, the `side_effects` grammar, plugin lifecycle, the socket path, and the TLS policy are nowhere normatively fixed.
 
-  Без нормативной фиксации нельзя ни закрыть `proto/plugin/v1/*.proto` (следующая задача после этого ADR), ни написать единый handshake-helper в `sdk/handshake/`, ни реализовать статическую валидацию destiny в `soul-lint` (последнее — требование [ADR-009](0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация)).
+  Without a normative fixation, we can neither finalize `proto/plugin/v1/*.proto` (the next task after this ADR), nor write a unified handshake helper in `sdk/handshake/`, nor implement static destiny validation in `soul-lint` (the latter being a requirement of [ADR-009](0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация)).
 
-- **Решение.**
+- **Decision.**
 
-  **(a) Manifest — статический `manifest.yaml` в репо плагина.** Файл лежит в корне репозитория плагина и поставляется рядом с бинарём (в кеше Keeper-а / на хосте Soul). `soul-lint` парсит его **без запуска бинаря** — это прямое требование [ADR-009](0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) (статическая валидация destiny без поднятия плагин-процесса).
+  **(a) Manifest — a static `manifest.yaml` in the plugin's repo.** The file sits at the root of the plugin's repository and ships alongside the binary (in Keeper's cache / on the Soul host). `soul-lint` parses it **without running the binary** — this is a direct requirement of [ADR-009](0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) (static validation of destiny without bringing up the plugin process).
 
-  Альтернатива «RPC-only через метод `Manifest()`» отвергнута: ломает offline-валидацию `soul-lint` (нужно сначала закачать и запустить плагин). Альтернатива «гибрид» отвергнута как переусложнение без выгоды.
+  The alternative "RPC-only via a `Manifest()` method" is rejected: it breaks `soul-lint`'s offline validation (the plugin would need to be downloaded and started first). The "hybrid" alternative is rejected as over-engineering with no benefit.
 
-  Drift «manifest рассинхронизирован с реальным кодом плагина» — реальный риск; снижается через self-test плагина (вызов `Apply` с параметрами вне input-схемы должен возвращать `INVALID_ARGUMENT`) и опциональным generated manifest (`soul-mod gen-manifest --check`) — расширение SDK post-MVP без breaking changes.
+  Drift "the manifest is out of sync with the plugin's actual code" is a real risk; it is mitigated via a plugin self-test (calling `Apply` with parameters outside the input schema must return `INVALID_ARGUMENT`) and an optional generated manifest (`soul-mod gen-manifest --check`) — an SDK extension post-MVP, without breaking changes.
 
-  **(b) Handshake — JSON в одну строку с магическим префикс-полем.** Плагин при запуске пишет в stdout **ровно одну строку**:
+  **(b) Handshake — a single-line JSON with a magic prefix field.** On startup the plugin writes **exactly one line** to stdout:
 
   ```json
   {"soul_stack":"plugin-v1","protocol_version":1,"kind":"soul_module","network":"unix","address":"/var/run/soul-stack/plugins/wb-haproxy-12345.sock","server_cert":""}
   ```
 
-  - Магическое поле `"soul_stack":"plugin-v1"` — sanity-check. Host игнорирует все строки в stdout до первой строки с этим полем (защита от случайного `fmt.Println` в `init()` плагина или вывода библиотек).
-  - Поля: `soul_stack` (constant string, `"plugin-v1"`), `protocol_version` (int), `kind` (enum, см. (e)), `network` (enum `unix`, расширение до `named_pipe` / `tcp` — post-MVP), `address` (path к сокету), `server_cert` (base64-PEM или пустая строка; зарезервировано под опциональный mTLS post-MVP, см. (h)).
-  - Расширение через новые **опциональные** ключи (`features`, `capabilities`, …) — без breaking changes.
-  - **Не используем `hashicorp/go-plugin` библиотеку как зависимость.** Их формат 6-полевой pipe-строки избыточен и негибок; MPL-2.0 копилефт не нужен (см. [ADR-016](0016-parity-license.md#adr-016-стратегия-parity-с-saltstackansible-и-лицензия-soul-stack)). Заимствуется только модель «one-line handshake → gRPC-over-socket».
+  - The magic field `"soul_stack":"plugin-v1"` is a sanity check. The host ignores all stdout lines before the first line with this field (protection against an accidental `fmt.Println` in the plugin's `init()` or output from libraries).
+  - Fields: `soul_stack` (a constant string, `"plugin-v1"`), `protocol_version` (int), `kind` (an enum, see (e)), `network` (an enum `unix`, extended to `named_pipe` / `tcp` post-MVP), `address` (the socket path), `server_cert` (base64-PEM or an empty string; reserved for optional post-MVP mTLS, see (h)).
+  - Extension via new **optional** keys (`features`, `capabilities`, …) — without breaking changes.
+  - **We do not use the `hashicorp/go-plugin` library as a dependency.** Its 6-field pipe-string format is excessive and inflexible; the MPL-2.0 copyleft is not needed (see [ADR-016](0016-parity-license.md#adr-016-стратегия-parity-с-saltstackansible-и-лицензия-soul-stack)). Only the "one-line handshake → gRPC-over-socket" model is borrowed.
 
-  Отвергнуты: (а) HashiCorp 6-полевая pipe-строка (избыточные поля + жёсткий формат), (в) минимальный pipe (расширение = breaking), (г) framed-обмен (нечитаемо, не ложится на модель one-line handshake).
+  Rejected: (a) the HashiCorp 6-field pipe string (excessive fields + a rigid format), (b) a minimal pipe (extension = breaking), (c) framed exchange (unreadable, doesn't fit the one-line-handshake model).
 
-  **(c) Versioning — `protocol_version` дублируется в manifest и handshake.** Один int, два места:
-  - В `manifest.yaml` — для статического `soul-lint` (без запуска плагина).
-  - В JSON-handshake-строке — для runtime sanity-check **до** открытия gRPC-канала.
+  **(c) Versioning — `protocol_version` is duplicated in the manifest and in the handshake.** One int, two places:
+  - In `manifest.yaml` — for static `soul-lint` (without running the plugin).
+  - In the JSON handshake string — for a runtime sanity check **before** opening the gRPC channel.
 
-  Host (`keeper` / `soul` / `soul-lint`) держит константу `SupportedProtocolVersions = [1]`. Три cross-check-а:
-  - `handshake.protocol_version != manifest.protocol_version` → плагин некорректен, отказ запуска (drift внутри плагина).
-  - `protocol_version` вне `SupportedProtocolVersions` → hard fail с сообщением `protocol_version=N, host supports [...]`.
-  - `manifest.kind != handshake.kind` → отказ запуска (drift).
+  The host (`keeper` / `soul` / `soul-lint`) holds the constant `SupportedProtocolVersions = [1]`. Three cross-checks:
+  - `handshake.protocol_version != manifest.protocol_version` → the plugin is invalid, refuse to start (drift inside the plugin).
+  - `protocol_version` outside `SupportedProtocolVersions` → a hard fail with the message `protocol_version=N, host supports [...]`.
+  - `manifest.kind != handshake.kind` → refuse to start (drift).
 
-  Жёсткое соответствие **`protocol_version: N` ↔ `proto/plugin/vN/`** (один go.mod-подмодуль по [ADR-011](0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам)). Эволюция: добавление `proto/plugin/v2/` → host версии N+1 поддерживает `[1, 2]` (forward-compat only-add, аналог [ADR-012(g)](0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add) для plugin-протокола; никогда не удалять/не reuse field-номера в `proto/plugin/v1/`).
+  A strict correspondence between **`protocol_version: N` ↔ `proto/plugin/vN/`** (one go.mod submodule per [ADR-011](0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам)). Evolution: adding `proto/plugin/v2/` → a host of version N+1 supports `[1, 2]` (forward-compat only-add, the plugin-protocol analog of [ADR-012(g)](0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add); never delete/reuse field numbers in `proto/plugin/v1/`).
 
-  `protocol_version` — **compat-флаг API, не версия артефакта**. Это уже артикулированное исключение `protocol_version` в [ADR-007](0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте); ADR-020 не вводит новое исключение, а только фиксирует его место в plugin-инфраструктуре.
+  `protocol_version` is a **compat API flag, not an artifact version**. This is the exception for `protocol_version` already articulated in [ADR-007](0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте); ADR-020 does not introduce a new exception, it only fixes its place within the plugin infrastructure.
 
-  Отвергнуты: (а) только handshake / (г) gRPC reflection — оба ломают [ADR-009](0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) (offline-валидация); (б) только manifest — drift не ловится.
+  Rejected: (a) handshake-only / (d) gRPC reflection — both break [ADR-009](0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) (offline validation); (b) manifest-only — drift is not caught.
 
   **(d) Socket + lifecycle.**
-  - **Тип сокета:** Unix domain socket only в MVP. Поле `network` в handshake-JSON допускает расширение enum-а (`unix | named_pipe | tcp`) — Windows-поддержка post-MVP без breaking changes.
-  - **Путь к сокету:** host передаёт через env-var **`SOUL_PLUGIN_SOCKET`**. Директория — `/var/run/soul-stack/plugins/<namespace>-<name>-<pid>.sock` для Soul-host-а, `/var/run/soul-stack-keeper/plugins/<namespace>-<name>-<pid>.sock` для Keeper-host-а; mode `0700`, owned by service user (`soul` или `keeper`). SDK тривиально читает env-var и открывает сокет.
-  - **Запуск:** host fork-ает плагин-процесс, передаёт `SOUL_PLUGIN_SOCKET`, читает stdout до первой строки с `"soul_stack":"plugin-v1"`. Все строки до этой — игнорируются (но логируются на debug-уровне).
-  - **Shutdown:** host шлёт SIGTERM; SDK предоставляет signal-handler-helper, плагин завершает текущие RPC и выходит. RPC `Shutdown()` в proto-контракт MVP не вводится (расширение в `proto/plugin/v2/` если понадобится). Grace 10s — если плагин не завершился — SIGKILL.
-  - **Lifecycle:** **one-shot** — запуск на каждый Apply, выход после. Long-lived (один процесс на серию вызовов) — отдельным ADR при необходимости (профилирование cold-start или появление CloudDriver с батч-операциями к одному cloud-API-токену).
-  - **Timeouts (defaults):** startup `10s` (handshake-строка должна появиться), shutdown grace `10s` (после SIGTERM → SIGKILL). Конкретные значения настраиваются через `keeper.yml` / `soul.yml` блок `plugin_runtime:` — нормативная спецификация в [`docs/keeper/config.md → plugin_runtime`](../keeper/config.md#plugin_runtime) и [`docs/soul/config.md → plugin_runtime`](../soul/config.md#plugin_runtime).
+  - **Socket type:** Unix domain socket only in the MVP. The `network` field in the handshake JSON allows extending the enum (`unix | named_pipe | tcp`) — Windows support post-MVP without breaking changes.
+  - **Socket path:** the host passes it via the env var **`SOUL_PLUGIN_SOCKET`**. The directory is `/var/run/soul-stack/plugins/<namespace>-<name>-<pid>.sock` for a Soul host, `/var/run/soul-stack-keeper/plugins/<namespace>-<name>-<pid>.sock` for a Keeper host; mode `0700`, owned by the service user (`soul` or `keeper`). The SDK trivially reads the env var and opens the socket.
+  - **Startup:** the host forks the plugin process, passes `SOUL_PLUGIN_SOCKET`, reads stdout until the first line with `"soul_stack":"plugin-v1"`. All lines before that are ignored (but logged at debug level).
+  - **Shutdown:** the host sends SIGTERM; the SDK provides a signal-handler helper, the plugin finishes its current RPCs and exits. A `Shutdown()` RPC is not introduced into the MVP proto contract (an extension in `proto/plugin/v2/` if needed). Grace period 10s — if the plugin has not exited — SIGKILL.
+  - **Lifecycle:** **one-shot** — started for each Apply, exits afterward. Long-lived (one process for a series of calls) — a separate ADR if needed (profiling shows a cold-start cost, or a CloudDriver with batched operations against a single cloud-API token appears).
+  - **Timeouts (defaults):** startup `10s` (the handshake string must appear), shutdown grace `10s` (SIGTERM → SIGKILL). Specific values are configured via the `keeper.yml` / `soul.yml` block `plugin_runtime:` — the normative specification is in [`docs/keeper/config.md → plugin_runtime`](../keeper/config.md#plugin_runtime) and [`docs/soul/config.md → plugin_runtime`](../soul/config.md#plugin_runtime).
 
-  **(e) Manifest формат — единая схема с `kind:`-дискриминатором.** Один и тот же YAML-формат для всех трёх типов плагинов; различия в `spec:`-секции:
+  **(e) Manifest format — a single schema with a `kind:` discriminator.** The same YAML format for all three plugin types; differences live in the `spec:` section:
 
   ```yaml
   # soul-mod-haproxy/manifest.yaml
-  kind: soul_module                 # дискриминатор: soul_module | cloud_driver | ssh_provider
+  kind: soul_module                 # discriminator: soul_module | cloud_driver | ssh_provider
   protocol_version: 1
   namespace: wb
   name: haproxy
@@ -63,7 +63,7 @@
   side_effects:
     - { service: haproxy }
     - { file: /etc/haproxy/haproxy.cfg }
-  spec:                             # kind-specific блок
+  spec:                             # kind-specific block
     states:
       running:
         input:
@@ -74,90 +74,90 @@
           name: { type: string, required: true }
   ```
 
-  Общие поля в корне: `kind`, `protocol_version`, `namespace`, `name`, `required_capabilities`, `side_effects`. Kind-specific — в `spec:`:
-  - `spec.states` (map<state-name, {input}>) — для `kind: soul_module`.
-  - `spec.profile_schema` (JSON Schema) — для `kind: cloud_driver` (схема VM-профиля, см. [`docs/keeper/cloud.md`](../keeper/cloud.md)).
-  - `spec.provider_kind` (enum / string) — для `kind: ssh_provider` (Vault SSH CA / static / Teleport / ...).
+  Common root-level fields: `kind`, `protocol_version`, `namespace`, `name`, `required_capabilities`, `side_effects`. Kind-specific — in `spec:`:
+  - `spec.states` (map<state-name, {input}>) — for `kind: soul_module`.
+  - `spec.profile_schema` (JSON Schema) — for `kind: cloud_driver` (the VM-profile schema, see [`docs/keeper/cloud.md`](../keeper/cloud.md)).
+  - `spec.provider_kind` (enum / string) — for `kind: ssh_provider` (Vault SSH CA / static / Teleport / ...).
 
-  В `sdk/handshake/` — один Go-тип `Manifest` с `oneof` подсообщениями `SoulModuleSpec` / `CloudDriverSpec` / `SshProviderSpec` (proto-стиль). Эволюция новых kind-ов (`secrets_provider` и т.п.) — добавление варианта в enum без breaking changes.
+  In `sdk/handshake/` — a single Go type `Manifest` with `oneof` sub-messages `SoulModuleSpec` / `CloudDriverSpec` / `SshProviderSpec` (proto-style). Evolving new kinds (`secrets_provider` etc.) — adding a variant to the enum without breaking changes.
 
-  Имя бинаря (`soul-mod-*` / `soul-cloud-*` / `soul-ssh-*`) — **convention, не контракт**. Cross-check `manifest.kind == "soul_module"` && имя бинаря `soul-mod-*` → warn в лог при расхождении, не fail (alias/symlink — допустимы).
+  The binary name (`soul-mod-*` / `soul-cloud-*` / `soul-ssh-*`) is a **convention, not a contract**. A cross-check `manifest.kind == "soul_module"` && the binary name is `soul-mod-*` → warns in the log on mismatch, does not fail (aliases/symlinks are acceptable).
 
-  Отвергнуты: три отдельных формата (drift общих полей при эволюции); гибрид (эквивалент (е)); имя бинаря-дискриминатор (слабый дискриминатор).
+  Rejected: three separate formats (drift of common fields as they evolve); a hybrid (equivalent to (e)); the binary name as a discriminator (a weak discriminator).
 
-  **(f) `required_capabilities` — enum с фиксированным стартовым набором.** Плагин декларирует, что ему нужно от системы host-а. `soul-lint` статически проверяет: `required_capabilities` плагина ⊆ `plugin_runtime.allowed_capabilities` host-а ([`docs/keeper/config.md → plugin_runtime`](../keeper/config.md#plugin_runtime) / [`docs/soul/config.md → plugin_runtime`](../soul/config.md#plugin_runtime)). Mismatch → ошибка валидации destiny **до запуска**.
+  **(f) `required_capabilities` — an enum with a fixed starting set.** A plugin declares what it needs from the host system. `soul-lint` statically checks: the plugin's `required_capabilities` ⊆ the host's `plugin_runtime.allowed_capabilities` ([`docs/keeper/config.md → plugin_runtime`](../keeper/config.md#plugin_runtime) / [`docs/soul/config.md → plugin_runtime`](../soul/config.md#plugin_runtime)). A mismatch → a destiny validation error **before launch**.
 
-  Стартовый набор (closed enum, MVP):
-  | Capability | Смысл |
+  Starting set (closed enum, MVP):
+  | Capability | Meaning |
   |---|---|
-  | `run_as_root` | Host-процесс (`soul` / `keeper`) должен иметь UID 0 при запуске плагина. |
-  | `network_outbound` | Плагин делает исходящие сетевые вызовы (cloud API, vault, package mirror). |
-  | `network_inbound` | Плагин слушает порт (редкий случай, для тестовых helper-плагинов). |
-  | `vault_access` | Плагин обращается к Vault через клиентский helper SDK. |
-  | `fs_write_root` | Плагин пишет за пределы `/var/lib/soul-stack/`. |
-  | `exec_subprocess` | Плагин запускает внешние команды через `os/exec`. |
+  | `run_as_root` | The host process (`soul` / `keeper`) must have UID 0 when launching the plugin. |
+  | `network_outbound` | The plugin makes outbound network calls (cloud API, vault, package mirror). |
+  | `network_inbound` | The plugin listens on a port (a rare case, for test helper plugins). |
+  | `vault_access` | The plugin talks to Vault via the client helper SDK. |
+  | `fs_write_root` | The plugin writes outside `/var/lib/soul-stack/`. |
+  | `exec_subprocess` | The plugin runs external commands via `os/exec`. |
 
-  Расширение списка — через PR в `proto/plugin/vN/manifest.proto`, не breaking. Freeform-extensions с префиксом `x-` (open-ended capabilities) **в MVP отвергнуты** — добавится при первом реальном запросе.
+  Extending the list is done via a PR to `proto/plugin/vN/manifest.proto`, not breaking. Freeform extensions with an `x-` prefix (open-ended capabilities) are **rejected in the MVP** — will be added on the first real request.
 
-  **(g) `side_effects` — strict-контракт.** Плагин обязан перечислить **все ресурсы**, которые он трогает (touched resources). Грамматика: список записей вида `{<resource-type>: <value>}`, где `<resource-type>` — closed enum:
+  **(g) `side_effects` — a strict contract.** A plugin must list **all resources** it touches (touched resources). Grammar: a list of entries of the form `{<resource-type>: <value>}`, where `<resource-type>` is a closed enum:
 
-  | Resource type | Значение |
+  | Resource type | Meaning |
   |---|---|
-  | `service` | имя сервиса (`haproxy`, `redis-server`). |
-  | `file` | абсолютный путь к файлу (`/etc/haproxy/haproxy.cfg`). |
-  | `package` | имя пакета OS (`haproxy`, `nginx`). |
-  | `port` | tcp/udp-порт как int (`80`, `443`). |
-  | `user` | имя пользователя OS (`postgres`). |
-  | `group` | имя группы OS. |
-  | `directory` | абсолютный путь к директории. |
-  | `cron` | имя cron-задачи. |
-  | `mount` | mountpoint (`/var/lib/data`). |
+  | `service` | a service name (`haproxy`, `redis-server`). |
+  | `file` | an absolute path to a file (`/etc/haproxy/haproxy.cfg`). |
+  | `package` | an OS package name (`haproxy`, `nginx`). |
+  | `port` | a tcp/udp port as an int (`80`, `443`). |
+  | `user` | an OS username (`postgres`). |
+  | `group` | an OS group name. |
+  | `directory` | an absolute path to a directory. |
+  | `cron` | a cron-job name. |
+  | `mount` | a mountpoint (`/var/lib/data`). |
 
-  Расширение enum-а — через PR в `proto/plugin/vN/`, не breaking. Поведение host-а:
-  - **Audit-trail:** каждый touched ресурс пишется в audit-event с указанием плагина и `apply_id`.
-  - **Conflict detection:** два плагина в одном прогоне, претендующие на тот же ресурс, → warning или fail (политика resolution — `plugin_runtime.conflict_policy`, нормативно: [`docs/keeper/config.md → plugin_runtime`](../keeper/config.md#plugin_runtime) и [`docs/soul/config.md → plugin_runtime`](../soul/config.md#plugin_runtime)).
-  - **Runtime-нарушение:** плагин трогает ресурс, не объявленный в `side_effects` → шаг помечается `failed`, причина `policy_violation` отражается в диагностическом канале `TaskEvent` / `RunResult` (точная форма поля — отдельная задача, см. backlog), и event `task.policy_violation` пишется в общий audit-pipeline ([ADR-022](0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention) — нормирует storage / schema / write-path для всех audit-событий, включая `side_effects`-нарушения). В этом ADR ввод нового поля или нового статуса в [ADR-012](0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add) **не закрепляется** — это изменение proto-контракта, отдельное propose-and-wait при закрытии `proto/plugin/v1/`.
+  Extending the enum is done via a PR to `proto/plugin/vN/`, not breaking. Host behavior:
+  - **Audit trail:** each touched resource is written to an audit event naming the plugin and the `apply_id`.
+  - **Conflict detection:** two plugins in the same run claiming the same resource → a warning or a fail (the resolution policy is `plugin_runtime.conflict_policy`, normalized in [`docs/keeper/config.md → plugin_runtime`](../keeper/config.md#plugin_runtime) and [`docs/soul/config.md → plugin_runtime`](../soul/config.md#plugin_runtime)).
+  - **Runtime violation:** a plugin touches a resource not declared in `side_effects` → the step is marked `failed`, the reason `policy_violation` is reflected in the diagnostic channel `TaskEvent` / `RunResult` (the exact field form is a separate task, see backlog), and the event `task.policy_violation` is written to the shared audit pipeline ([ADR-022](0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention) — normalizes storage / schema / write-path for all audit events, including `side_effects` violations). Introducing a new field or a new status in [ADR-012](0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add) is **not fixed here** — that is a change to the proto contract, a separate propose-and-wait when `proto/plugin/v1/` is finalized.
 
-  Wildcard-значения (`file: /etc/haproxy/**`) и условные `side_effects` (`when: …`) **в MVP отвергнуты** — добавится при первом реальном запросе.
+  Wildcard values (`file: /etc/haproxy/**`) and conditional `side_effects` (`when: …`) are **rejected in the MVP** — will be added on the first real request.
 
-  **(h) TLS на plugin-сокете — нет в MVP.** Безопасность через file-permissions: Unix domain socket в host-managed директории mode `0700`, owned by service user. Другие процессы физически не могут открыть сокет.
+  **(h) TLS on the plugin socket — not in the MVP.** Security via file permissions: the Unix domain socket sits in a host-managed directory, mode `0700`, owned by the service user. Other processes physically cannot open the socket.
 
-  HashiCorp использует mTLS на TCP-loopback — там это оправдано (любой процесс на хосте может connect к loopback-порту). У нас Unix-socket — этой угрозы нет. Цена mTLS на каждый одноразовый плагин-запуск: +50–150 ms на TLS-handshake, без выгоды над file-permissions.
+  HashiCorp uses mTLS over TCP-loopback — there it is justified (any process on the host can connect to a loopback port). We use a Unix socket — that threat does not exist for us. The cost of mTLS on every one-shot plugin launch: +50–150 ms for the TLS handshake, with no benefit over file permissions.
 
-  Расширение к mTLS post-MVP — **без breaking changes**: поле `server_cert` (base64-PEM) уже зарезервировано в JSON-handshake; включение через `plugin_runtime.enable_tls: true` ([`docs/keeper/config.md → plugin_runtime`](../keeper/config.md#plugin_runtime) / [`docs/soul/config.md → plugin_runtime`](../soul/config.md#plugin_runtime)).
+  Extension to mTLS post-MVP — **without breaking changes**: the `server_cert` field (base64-PEM) is already reserved in the JSON handshake; enabled via `plugin_runtime.enable_tls: true` ([`docs/keeper/config.md → plugin_runtime`](../keeper/config.md#plugin_runtime) / [`docs/soul/config.md → plugin_runtime`](../soul/config.md#plugin_runtime)).
 
 - **Consequences.**
-  - **`proto/plugin/v1/*.proto`** заводится с пятью файлами: `handshake.proto` (формат JSON-строки как proto-стиль message, для генерации Go-структуры в `sdk/handshake/`), `manifest.proto` (typed `Manifest` с `oneof spec`), и три service-файла — `soulmodule.proto`, `clouddriver.proto`, `sshprovider.proto`. **В этом ADR — не закрывается**, отдельная задача после ADR-020.
-  - **`sdk/handshake/`** — единый Go-helper для всех трёх kind-ов: читает env-var `SOUL_PLUGIN_SOCKET`, пишет JSON-handshake в stdout, открывает Unix-socket, регистрирует gRPC-server, обрабатывает SIGTERM.
-  - **`soul-lint`** обязан понимать manifest для статической валидации destiny: неизвестный модуль, неизвестное `state`, неверные параметры (`input`-schema), `required_capabilities` ⊄ host's `allowed_capabilities`, неизвестный `kind`.
-  - В **`keeper.yml`** / **`soul.yml`** появляется блок `plugin_runtime:` (`socket_dir`, `startup_timeout`, `shutdown_grace`, `allowed_capabilities`, `conflict_policy`, опц. `enable_tls`) — нормирован в [`docs/keeper/config.md → plugin_runtime`](../keeper/config.md#plugin_runtime) и [`docs/soul/config.md → plugin_runtime`](../soul/config.md#plugin_runtime), с per-поле hot-reload-политикой.
-  - **`docs/keeper/plugins.md`** переписывается нормативно: таблицы полей manifest, JSON-схема handshake, диаграмма lifecycle, enum-таблицы capabilities и side_effects, полные примеры manifest для трёх kind-ов.
-  - **`docs/soul/modules.md`** дополняется кратким разделом про SoulModule manifest, cross-link на `docs/keeper/plugins.md` как нормативный источник.
-  - **`docs/naming-rules.md`** дополняется именами `kind`, `Manifest`, `Handshake`, capabilities-enum, resource-types-enum, `plugin_runtime`.
-  - Закрывает две open под-Q в [§«Модель модулей»](../architecture.md#модель-модулей): «отдельный `manifest.yaml` vs RPC `Manifest()`» (в [§«Манифест модуля»](../architecture.md#манифест-модуля)) и «имя файла и точная версия протокола» (в [§«Протокол модулей — gRPC over stdio (HashiCorp-style)»](../architecture.md#протокол-модулей--grpc-over-stdio-hashicorp-style)).
-  - `examples/` — обновляются после закрытия `proto/plugin/v1/*.proto` (не в этом ADR).
+  - **`proto/plugin/v1/*.proto`** is set up with five files: `handshake.proto` (the JSON string format expressed proto-style, for generating the Go struct in `sdk/handshake/`), `manifest.proto` (a typed `Manifest` with `oneof spec`), and three service files — `soulmodule.proto`, `clouddriver.proto`, `sshprovider.proto`. **Not finalized in this ADR** — a separate task after ADR-020.
+  - **`sdk/handshake/`** — a single Go helper for all three kinds: reads the env var `SOUL_PLUGIN_SOCKET`, writes the JSON handshake to stdout, opens the Unix socket, registers the gRPC server, handles SIGTERM.
+  - **`soul-lint`** must understand the manifest for static destiny validation: unknown module, unknown `state`, wrong parameters (the `input` schema), `required_capabilities` ⊄ the host's `allowed_capabilities`, unknown `kind`.
+  - A `plugin_runtime:` block appears in **`keeper.yml`** / **`soul.yml`** (`socket_dir`, `startup_timeout`, `shutdown_grace`, `allowed_capabilities`, `conflict_policy`, opt. `enable_tls`) — normalized in [`docs/keeper/config.md → plugin_runtime`](../keeper/config.md#plugin_runtime) and [`docs/soul/config.md → plugin_runtime`](../soul/config.md#plugin_runtime), with a per-field hot-reload policy.
+  - **`docs/keeper/plugins.md`** is rewritten normatively: manifest field tables, the handshake JSON schema, a lifecycle diagram, capabilities and side_effects enum tables, complete manifest examples for all three kinds.
+  - **`docs/soul/modules.md`** gains a brief section on the SoulModule manifest, cross-linking to `docs/keeper/plugins.md` as the normative source.
+  - **`docs/naming-rules.md`** gains the names `kind`, `Manifest`, `Handshake`, the capabilities enum, the resource-types enum, `plugin_runtime`.
+  - Closes two open sub-Q's in [§"Module model"](../architecture.md#модель-модулей): "a separate `manifest.yaml` vs an RPC `Manifest()`" (in [§"Module manifest"](../architecture.md#манифест-модуля)) and "file name and exact protocol version" (in [§"Module protocol — gRPC over stdio (HashiCorp-style)"](../architecture.md#протокол-модулей--grpc-over-stdio-hashicorp-style)).
+  - `examples/` are updated after `proto/plugin/v1/*.proto` is finalized (not in this ADR).
 
 - **Trade-offs.**
-  - **Drift manifest ↔ код плагина.** Реальный риск: автор плагина забывает обновить `manifest.yaml` после правки `Apply`. Mitigation — self-test (запуск с invalid input → `INVALID_ARGUMENT`) и post-MVP `soul-mod gen-manifest --check` из SDK. Альтернатива «RPC-only Manifest()» убирает drift, но ломает offline-валидацию `soul-lint` — это более дорогая цена.
-  - **One-shot lifecycle vs cold-start cost.** Каждый Apply поднимает плагин-процесс с нуля; для long-running scenarios с десятками вызовов одного плагина это overhead 50–200 ms × N. Приемлемо для MVP; long-lived — отдельным ADR при первом профиле производительности, который упрётся в это.
-  - **`server_cert` в handshake-JSON всегда пустая в MVP.** Cruft (одно неиспользуемое поле), но обеспечивает forward-compat для будущего mTLS без правки proto/JSON-формата.
-  - **Closed enums capabilities / side_effects.** Любой новый capability или resource-type требует PR в proto-контракт. Это сознательная плата за статическую валидацию `soul-lint` (open-ended `x-` ключи делают валидацию бессмысленной). Расширение enum — minor по [ADR-007](0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте) (Go-library tag), не breaking.
-  - **File-permissions вместо mTLS.** На multi-tenant хостах с непривилегированными процессами от других пользователей — file-perms эквивалентен mTLS (никто не откроет сокет 0700 от чужого user). На root-compromise — оба варианта проиграны одинаково. Соответствие угрозам Soul Stack — корректно.
+  - **Manifest ↔ plugin-code drift.** A real risk: a plugin author forgets to update `manifest.yaml` after changing `Apply`. Mitigation — a self-test (running with invalid input → `INVALID_ARGUMENT`) and a post-MVP `soul-mod gen-manifest --check` from the SDK. The alternative "RPC-only Manifest()" removes the drift but breaks `soul-lint`'s offline validation — a more expensive price.
+  - **One-shot lifecycle vs cold-start cost.** Every Apply spins up the plugin process from scratch; for long-running scenarios with dozens of calls to the same plugin this is 50–200 ms × N overhead. Acceptable for the MVP; long-lived — a separate ADR once the first performance profile hits this wall.
+  - **`server_cert` in the handshake JSON is always empty in the MVP.** Cruft (one unused field), but it provides forward-compat for future mTLS without changing the proto/JSON format.
+  - **Closed enums for capabilities / side_effects.** Any new capability or resource-type requires a PR to the proto contract. This is a deliberate price for `soul-lint`'s static validation (open-ended `x-` keys would make the validation meaningless). Extending the enum is minor per [ADR-007](0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте) (a Go-library tag), not breaking.
+  - **File permissions instead of mTLS.** On multi-tenant hosts with unprivileged processes from other users, file perms are equivalent to mTLS (nobody can open a 0700 socket owned by another user). Under a root compromise, both options lose equally. This matches Soul Stack's threat model — correctly.
 
-- **Amendment (2026-05-26, SshProvider — MVP-набор закрыт).** По итогам пилотов `keeper.push` зафиксирован финальный набор SSH-провайдеров и решения по трём общим механикам (credentials-flow, key-ownership, params-delivery). Решения приняты пользователем 2026-05-26.
-  - **(i) MVP-набор `SshProvider` — три плагина, закоммичены и работают.** `soul-ssh-static` (commit `4f95ef6`) — reference; `soul-ssh-vault` (commit `3642520`, dispatcher S2 ephemeral keypair); `soul-ssh-teleport` (commit `af27678`, only-add в proto: `SignReply.proxy_jump` field 4). Бинари — `soul-ssh-{static,vault,teleport}`, имена `kind: ssh_provider` в manifest, поле `spec.provider_kind ∈ {static_key, vault_ssh_ca, teleport}` (closed enum для `kind: ssh_provider`, симметрично [ADR-026(c)](0026-sigil.md#adr-026-sigil--целостность-плагинов-keeper-signed-digest-индекс) для cloud-driver-ов). Расширение enum — propose-and-wait + PR в [keeper/plugins.md → Manifest](../keeper/plugins.md#manifest) и [naming-rules.md](../naming-rules.md).
-  - **(j) Credentials-flow для Vault SSH CA — Вариант B (плагин сам ходит в Vault через `vault_access` capability).** Расходится с cloud-Вариантом A ([ADR-017 amendment (d)](0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read)) **сознательно**: cloud-creds — это **static KV-секрет** (Keeper резолвит KV → плагин получает plaintext), для которого Variant A корректен. `ssh/sign` — это **операция Vault** (минт сертификата по pubkey оператором), не чтение значения; Вариант A для операции означал бы, что Keeper становится Vault-SSH-proxy, дублирующим логику Vault SSH-engine. Вариант B оставляет операцию там, где она нативна. Capability `vault_access` остаётся в манифесте `soul-ssh-vault` (в отличие от cloud-плагинов, где она снята).
-  - **(k) Key-ownership для Vault SSH CA / Teleport — Keeper-ephemeral (приватник не покидает Keeper).** Keeper-side (`keeper.push`-dispatcher) генерит ephemeral SSH-keypair per-session, шлёт **только public key** в `SignRequest.public_key`. Плагин подписывает pubkey в Vault SSH-CA / Teleport-CA и возвращает только `certificate` (+ опц. `proxy_jump` для Teleport, см. (i)); поле `private_key` в `SignReply` — **всегда пустое** для CA-провайдеров (заполняется только `static_key`, который сам — материал ключа). Обоснование — security-first (CLAUDE.md): чем меньше точек, через которые проходит приватник, тем меньше поверхность утечки; провайдер вообще не видит приватник пользователя.
-  - **(l) Params-delivery — env-convention per-plugin.** Параметры провайдера (Vault mount-path, Teleport-proxy URL, …) host передаёт в плагин через env-переменные с зафиксированными именами:
-    - `SOUL_SSH_STATIC_PARAMS` — для `soul-ssh-static` (JSON, форма провайдера).
-    - `SOUL_SSH_VAULT_PARAMS` — для `soul-ssh-vault` (JSON, `{mount, role, ttl, ...}`).
-    - `SOUL_SSH_TELEPORT_PARAMS` — для `soul-ssh-teleport` (JSON, `{proxy_addr, role, ...}`).
+- **Amendment (2026-05-26, SshProvider — the MVP set is closed).** Following the `keeper.push` pilots, the final set of SSH providers is fixed along with decisions on three shared mechanics (credentials-flow, key-ownership, params-delivery). Decisions made by the user on 2026-05-26.
+  - **(i) The `SshProvider` MVP set — three plugins, committed and working.** `soul-ssh-static` (commit `4f95ef6`) — the reference; `soul-ssh-vault` (commit `3642520`, dispatcher S2 ephemeral keypair); `soul-ssh-teleport` (commit `af27678`, only-add in proto: `SignReply.proxy_jump` field 4). Binaries — `soul-ssh-{static,vault,teleport}`, `kind: ssh_provider` names in the manifest, field `spec.provider_kind ∈ {static_key, vault_ssh_ca, teleport}` (a closed enum for `kind: ssh_provider`, symmetric to [ADR-026(c)](0026-sigil.md#adr-026-sigil--целостность-плагинов-keeper-signed-digest-индекс) for cloud drivers). Extending the enum — propose-and-wait + a PR to [keeper/plugins.md → Manifest](../keeper/plugins.md#manifest) and [naming-rules.md](../naming-rules.md).
+  - **(j) Credentials-flow for Vault SSH CA — Variant B (the plugin itself talks to Vault via the `vault_access` capability).** This diverges from cloud-Variant A ([ADR-017 amendment (d)](0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read)) **deliberately**: cloud creds are a **static KV secret** (Keeper resolves the KV → the plugin receives plaintext), for which Variant A is correct. `ssh/sign` is a **Vault operation** (minting a certificate from the operator's pubkey), not reading a value; Variant A for an operation would mean Keeper becomes a Vault-SSH proxy duplicating the Vault SSH engine's logic. Variant B leaves the operation where it is native. The `vault_access` capability stays in the `soul-ssh-vault` manifest (unlike cloud plugins, where it is removed).
+  - **(k) Key-ownership for Vault SSH CA / Teleport — Keeper-ephemeral (the private key never leaves Keeper).** Keeper-side (the `keeper.push` dispatcher) generates an ephemeral SSH keypair per session, sends **only the public key** in `SignRequest.public_key`. The plugin signs the pubkey via the Vault SSH CA / Teleport CA and returns only `certificate` (+ opt. `proxy_jump` for Teleport, see (i)); the `private_key` field in `SignReply` is **always empty** for CA providers (only filled by `static_key`, which is itself key material). Rationale — security-first (CLAUDE.md): the fewer points the private key passes through, the smaller the leak surface; the provider never sees the user's private key at all.
+  - **(l) Params-delivery — a per-plugin env convention.** The host passes provider parameters (Vault mount-path, Teleport-proxy URL, …) to the plugin via env variables with fixed names:
+    - `SOUL_SSH_STATIC_PARAMS` — for `soul-ssh-static` (JSON, the provider's own form).
+    - `SOUL_SSH_VAULT_PARAMS` — for `soul-ssh-vault` (JSON, `{mount, role, ttl, ...}`).
+    - `SOUL_SSH_TELEPORT_PARAMS` — for `soul-ssh-teleport` (JSON, `{proxy_addr, role, ...}`).
 
-    Generic-механизм (handshake-`PluginParams`-поле в JSON-handshake) **отложен post-MVP** — пилоты не показали необходимости (формы параметров расходятся между провайдерами, типовой JSON-blob в env проще, чем доводить общий schema-валидатор). При появлении четвёртого провайдера с пересекающимися параметрами — возврат к решению через propose-and-wait.
-  - **(m) Открытое (S3 dispatcher `proxy_jump` support).** Teleport-пилот возвращает в `SignReply.proxy_jump` адрес bastion-а, через который ставится SSH-сессия, но dispatcher (`keeper/internal/push`) поле **ИГНОРИРУЕТ** — `net.Dial(host:port)` идёт **напрямую**. Полный Teleport-через-bastion флоу требует dispatcher proxy_jump support (отдельный слайс в работе параллельно этой канон-фиксации). Пока пилот применим **только к хостам с прямой SSH-доступностью**; Teleport-через-bastion станет рабочим после dispatcher-слайса. Это **не Sshprovider-проблема** — плагин корректно возвращает поле, контракт only-add закрыт; вопрос — в hosts-side флоу `keeper.push`.
+    A generic mechanism (a handshake `PluginParams` field in the JSON handshake) is **deferred post-MVP** — the pilots did not show a need for it (parameter shapes diverge between providers, a typical JSON blob in an env var is simpler than building out a shared schema validator). Once a fourth provider with overlapping parameters appears — revisit through propose-and-wait.
+  - **(m) Open item (S3 dispatcher `proxy_jump` support).** The Teleport pilot returns the bastion address to route the SSH session through in `SignReply.proxy_jump`, but the dispatcher (`keeper/internal/push`) **IGNORES** the field — `net.Dial(host:port)` goes **directly**. A full Teleport-via-bastion flow requires dispatcher proxy_jump support (a separate slice worked on in parallel with this canon fixation). Until then the pilot only applies to **hosts with direct SSH reachability**; Teleport-via-bastion will become functional after the dispatcher slice. This is **not an SshProvider problem** — the plugin correctly returns the field, the only-add contract is finalized; the open question is in `keeper.push`'s host-side flow.
 
-- **Amendment ([ADR-065](0065-core-module-installed.md), каталог `plugins.soul_modules[]` + доставка SoulModule на Soul-хосты).** Config-каталог `keeper.yml::plugins` расширяется третьим родом записей — **`soul_modules[]`** (`{name, source, ref}`, формат тот же, что `cloud_drivers`/`ssh_providers`): до этого git-резолв каталога ([ADR-026(g)](0026-sigil.md), `keeper/internal/plugingit`) обслуживал только keeper-side kinds. SoulModule-записи резолвятся **тем же резолвером** в тот же `cache_root` (реюз hardening: scheme-allowlist / size-limits / fail-closed per-entry) и допускаются **тем же Sigil-флоу** (`plugin.allow` → `plugin_sigils`). Доставка байтов на Soul-хост — новый server-streaming RPC `FetchModule` ([ADR-012 amendment](0012-keeper-soul-grpc.md)) + Soul-side шаг `core.module.installed` (allow-check ДО fetch, полный verify `shared/pluginhost` перед atomic rename, hot-register без рестарта демона). Lifecycle-модель (d) (one-shot sub-process) и manifest-формат (e) НЕ меняются; manifest на Soul-е материализуется из `PluginSigil.manifest_raw` (раздача `SigilSnapshot`-ом), не из git-checkout-а. Раскладка кеша Soul — каталожная `<paths.modules>/<ns>-<name>/{manifest.yaml, soul-mod-<name>}` ([soul/modules.md](../soul/modules.md)). Полная фиксация — [ADR-065](0065-core-module-installed.md).
+- **Amendment ([ADR-065](0065-core-module-installed.md), the `plugins.soul_modules[]` catalog + delivery of SoulModule to Soul hosts).** The config catalog `keeper.yml::plugins` is extended with a third kind of entry — **`soul_modules[]`** (`{name, source, ref}`, the same format as `cloud_drivers`/`ssh_providers`): previously, the catalog's git resolution ([ADR-026(g)](0026-sigil.md), `keeper/internal/plugingit`) only served keeper-side kinds. SoulModule entries are resolved by **the same resolver** into the same `cache_root` (reusing the hardening: scheme allowlist / size limits / fail-closed per entry) and go through **the same Sigil flow** (`plugin.allow` → `plugin_sigils`). Delivery of the bytes to the Soul host is a new server-streaming RPC `FetchModule` ([ADR-012 amendment](0012-keeper-soul-grpc.md)) + a Soul-side step `core.module.installed` (an allow-check BEFORE fetch, a full verify by `shared/pluginhost` before an atomic rename, hot-register without restarting the daemon). The lifecycle model (d) (one-shot sub-process) and the manifest format (e) are NOT changed; the manifest on the Soul side is materialized from `PluginSigil.manifest_raw` (delivered via a `SigilSnapshot`), not from a git checkout. The Soul-side cache layout is catalog-style, `<paths.modules>/<ns>-<name>/{manifest.yaml, soul-mod-<name>}` ([soul/modules.md](../soul/modules.md)). Full fixation — [ADR-065](0065-core-module-installed.md).
 
-- **Amendment (2026-07-03, разводка Teleport-путей: bootstrap-доставка идёт МИМО plugin-инфраструктуры).** Уточняет (i)/(m) после ввода Teleport-транспорта bootstrap-доставки ([ADR-063](0063-bootstrap-token-delivery.md) amendment «Teleport by-name transport», live-доказано прогоном-23; прод-профиль — [ADR-066](0066-teleport-onboarding-profile.md)). Teleport в Soul Stack существует в **двух независимых ролях**, и они не должны путаться:
-  - **`core.bootstrap.delivered` `transport: teleport`** — keeper-side Teleport-Dialer на **identity-file** (`keeper.yml::push.teleport`): транспорт + user-auth + host-verify целиком через Teleport; **плагин `soul-ssh-teleport` в этом флоу НЕ участвует**, `Authorize`/`Sign` не вызываются (имя `ssh_provider` идёт только в audit-payload). Plugin-контракт `SshProvider` (i)–(l) этим НЕ меняется.
-  - **`soul-ssh-teleport` (SshProvider-плагин)** — остаётся провайдером подписи для push-прогонов Destiny (`SshDispatcher.SendApply`). Ограничение (m) — dispatcher игнорирует `SignReply.proxy_jump`, «Teleport-через-bastion станет рабочим после dispatcher-слайса» — **остаётся открытым только для этого пути** и НЕ блокирует bootstrap-доставку/онбординг (у той свой Dialer). Приоритет dispatcher-слайса соответственно понижен: единственный известный live-кейс Teleport-доступа (WB) закрыт bootstrap-путём.
+- **Amendment (2026-07-03, separating Teleport paths: bootstrap delivery bypasses the plugin infrastructure).** Clarifies (i)/(m) after the introduction of the Teleport transport for bootstrap delivery ([ADR-063](0063-bootstrap-token-delivery.md) amendment "Teleport by-name transport", live-proven by run-23, production profile — [ADR-066](0066-teleport-onboarding-profile.md)). Teleport exists in Soul Stack in **two independent roles**, and they must not be confused:
+  - **`core.bootstrap.delivered` `transport: teleport`** — a keeper-side Teleport Dialer on an **identity file** (`keeper.yml::push.teleport`): transport + user-auth + host-verify go entirely through Teleport; **the `soul-ssh-teleport` plugin does NOT participate in this flow**, `Authorize`/`Sign` are not called (the `ssh_provider` name only appears in the audit payload). The `SshProvider` contract (i)–(l) is NOT changed by this.
+  - **`soul-ssh-teleport` (the SshProvider plugin)** — remains the signing provider for push runs of Destiny (`SshDispatcher.SendApply`). Limitation (m) — the dispatcher ignores `SignReply.proxy_jump`, "Teleport-via-bastion will become functional after the dispatcher slice" — **remains open only for this path** and does NOT block bootstrap delivery/onboarding (that has its own Dialer). The priority of the dispatcher slice is accordingly lowered: the one known live case of Teleport access (WB) is closed via the bootstrap path.

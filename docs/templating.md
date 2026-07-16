@@ -23,7 +23,7 @@ The limit is strict on the file extension: `.yml` → CEL, `.tmpl` → text/temp
 
 ### 2.1. Top-level expression keys
 
-These switches accept **a string treated entirely as a CEL expression** - without the `${ … }` wrapper. All return `bool` (except `until:`, see below).
+These keys accept **a string treated entirely as a CEL expression** - without the `${ … }` wrapper. All return `bool` (except `until:`, see below).
 
 Column **"Side"** - where the expression is calculated along the boundary [ADR-012(d)](adr/0012-keeper-soul-grpc.md) "by external access": `where:` and `assert.that[]` - Keeper (calculated in the render phase; both have access to the full scenario context, including `soulprint.hosts` - `AllowHosts=true`); `when:`/`changed_when:`/`failed_when:`/`until:` - **Soul** (flow-control: depend on `register.*` - results of previous tasks known only on Soul during the run; calculated by sandboxed cel-go sandbox `shared/cel.NewFlowControl`, see [§4](#4-yaml-processing-phase-relationship) and [§7.1](#71-cel--sandbox-by-design)).
 
@@ -40,10 +40,10 @@ Column **"Side"** - where the expression is calculated along the boundary [ADR-0
 >
 > **Semantics `changed_when:`/`failed_when:`** (Soul, AFTER Apply; order - first `changed_when`, then `failed_when`):
 > - `changed_when:` → override `changed`: was CHANGED + predicate `false` → OK; was OK + predicate `true` → CHANGED. Does not touch `failed`. `changed_when: false` on probe - the task never `changed` (does not trigger `onchanges:`).
-> - `failed_when:` → override `failed`: `true` with OK module → FAILED (artificial failure due to business condition, e.g. `failed_when: register.self.exit_code != 0`); **`failed_when: false` with a fallen module = ignore_errors** - the status is NOT FAILED (OK/CHANGED), the run is NOT stopped (fail-stop does not work), and the original module error is SAVED as informational (`register.<name>.ignored_error` + `TaskEvent.error` without FAILED status). `failed` takes precedence over `changed` (FAILED overrides CHANGED).
-> - **Does NOT apply to `TIMED_OUT`:** infrastructure timeout, remains terminal fail-stop; `failed_when: false` does NOT jam it.
+> - `failed_when:` → override `failed`: `true` with OK module → FAILED (artificial failure due to business condition, e.g. `failed_when: register.self.exit_code != 0`); **`failed_when: false` with a failed module = ignore_errors** - the status is NOT FAILED (OK/CHANGED), the run is NOT stopped (fail-stop does not work), and the original module error is SAVED as informational (`register.<name>.ignored_error` + `TaskEvent.error` without FAILED status). `failed` takes precedence over `changed` (FAILED overrides CHANGED).
+> - **Does NOT apply to `TIMED_OUT`:** infrastructure timeout, remains terminal fail-stop; `failed_when: false` does NOT suppress it.
 >
-> **Semantics of `until:`** (Soul, AFTER `changed_when`/`failed_when` each retry loop attempt; full spec - [destiny/tasks.md §9](destiny/tasks.md)): `until:` - **condition for exiting retry**, not override status. `until`-true → exit, the status of the attempt remains as is (`until` DO NOT override `failed`: truthy-until on a FAILED attempt → final FAILED). `until`-false → pause `retry.delay` → next attempt; after `count` attempts with `until`-false → task FAILED (`flowcontrol.until_exhausted`), even if the attempt is OK/CHANGED. On a **TIMED_OUT** attempt, `until` is NOT calculated (the attempt is retraced if there are still attempts left). Activation is the same as for `failed_when` (`flow_context` + `register.*` previous + `register.self.*` fresh attempt with `changed`/`failed` applied).
+> **Semantics of `until:`** (Soul, AFTER `changed_when`/`failed_when` each retry loop attempt; full spec - [destiny/tasks.md §9](destiny/tasks.md)): `until:` - **condition for exiting retry**, not override status. `until`-true → exit, the status of the attempt remains as is (`until` DO NOT override `failed`: truthy-until on a FAILED attempt → final FAILED). `until`-false → pause `retry.delay` → next attempt; after `count` attempts with `until`-false → task FAILED (`flowcontrol.until_exhausted`), even if the attempt is OK/CHANGED. On a **TIMED_OUT** attempt, `until` is NOT calculated (the attempt is retried if there are still attempts left). Activation is the same as for `failed_when` (`flow_context` + `register.*` previous + `register.self.*` fresh attempt with `changed`/`failed` applied).
 
 Example:
 
@@ -64,7 +64,7 @@ In any YAML string fields (`params:`, `vars:`, `apply: input:`, `on:` literals, 
 - The opening marker is **exactly** the sequence `${`. A single `$` is not a marker and does not go into further processing (`price: "$100"` remains a literal).
 - The closing marker is the first `}` at the same parenthesis level of the CEL expression. The brackets `()`, `[]`, `{}` inside `${ … }` are balanced by the CEL parser, not the text scanner.
 - Inside `${ … }` the CEL string literals are **single quotes** (`'primary'`) because the outer YAML wrapper takes double quotes.
-- Multiline values ​​with CEL - via the YAML block `>` or `|`, or via an explicit join in `vars:`.
+- Multiline values with CEL - via the YAML block `>` or `|`, or via an explicit join in `vars:`.
 
 Example:
 
@@ -79,7 +79,7 @@ params:
 
 Starting minimum - the exact list is maturing along with pilot implementations. **List expansion - via issue / ADR, not silently.** Third party custom functions - deferred (see [§11](#11-see-also)).
 
-| Signature | Destination | Example |
+| Signature | Purpose | Example |
 |---|---|---|
 | `size(x) -> int` | Size of string/list/map. | `size(input.hosts) > 0` |
 | `contains(s, sub) -> bool` | A substring in a string or an element in a list. | `contains(register.role.stdout, "master")` |
@@ -96,7 +96,7 @@ Starting minimum - the exact list is maturing along with pilot implementations. 
 | `soulprint.where(<predicate>) -> list` | Hosts satisfying predicate-**string** (CEL over stable layer - `covens`/`os.*`/`network.*`); role - declared, available via `soulprint.hosts.where(...)` and only in bootstrap-create, see [orchestration.md §4.1](scenario/orchestration.md). A predicate is a **static string literal**, expanded at the compile phase into the built-in CEL filter-comprehension (not runtime execution of the string). Keyword-args (`coven=...`) are not supported (CEL does not have keyword-args). | `soulprint.where("'db' in covens")[0].network.primary_ip` |
 | `register.<name>.<path>` | Results `register:` of previous steps; `register.self.*` is the current host in the scenario context. | `register.probe.exit_code == 0` |
 | `input.<path>` | `input:` script/destiny block values. | `input.replicas` |
-| `essence.<path>` | The values ​​of the collected essence. | `essence.redis.maxmemory` |
+| `essence.<path>` | The values of the collected essence. | `essence.redis.maxmemory` |
 | `incarnation.<path>` | Incarnation fields (`name`, `service_version`, `spec.*`). | `incarnation.name` |
 | `vars.<path>` | Local task-level and destiny-level `vars:`. | `vars.master_ip` |
 
@@ -113,10 +113,10 @@ CEL compiles with known context variable types - this is the basis of static che
 | Context | Type Source |
 |---|---|
 | `input.*` | block `input:` destiny/scenario ([docs/input.md](input.md)) |
-| `essence.*` | essence service diagram |
-| `incarnation.spec.*` | `state_schema` to `service.yml` |
-| `register.<name>.*` | for core - built-in output circuits of modules; for custom - module manifest |
-| `soulprint.self.*`, `soulprint.hosts[].*` | spec Soulprint (open Q No. 6 - before its closure types `dyn`, after - specific) |
+| `essence.*` | essence service schema |
+| `incarnation.spec.*` | `state_schema` in `service.yml` |
+| `register.<name>.*` | for core - built-in output schemas of modules; for custom - module manifest |
+| `soulprint.self.*`, `soulprint.hosts[].*` | Soulprint spec (open Q No. 6 - before its closure types `dyn`, after - specific) |
 | `vars.*` | type inference from an RHS expression that declared `vars:` |
 
 If there is no type information, the node receives the type `dyn`. This is not an error: CEL continues to compile and work, but static checking for that node is lost. `soul-lint` raises the warn level.
@@ -133,17 +133,17 @@ text/template - **only** for rendering files in `templates/<path>.tmpl` by the `
 
 ### 3.1. Strict mode
 
-Render starts with `template.Option("missingkey=error")`. Accessing a missing field (`{{ .vars.missing }}`) - **rendering error**, the step drops normally. Strict-mode - protection against typos in field names (missing field in the context → rendering error, not an empty string). For contributions to SSTI protection, see [§7.3](#73-ssti-through-data).
+Render starts with `template.Option("missingkey=error")`. Accessing a missing field (`{{ .vars.missing }}`) - **rendering error**, the step drops normally. Strict-mode - protection against typos in field names (missing field in the context → rendering error, not an empty string). For contributions to SSTI protection, see [§7.3](#73-ssti-via-data).
 
 ### 3.2. Render context
 
-The `.tmpl` rendering context is **isolated**, not global. text/template does not see `essence.*`, `register.*`, `soulprint.*`, `input.*` directly - only the values ​​explicitly raised by the author (`params.vars`) plus a fixed set of system fields.
+The `.tmpl` rendering context is **isolated**, not global. text/template does not see `essence.*`, `register.*`, `soulprint.*`, `input.*` directly - only the values explicitly raised by the author (`params.vars`) plus a fixed set of system fields.
 
 **Context root** is `{ vars, self, role, essence }` plus **conditional** `input` (referring to something else in the root → strict-mode error). This root collects **Keeper-side, per-host** and delivers next to `template_content` (see [§4](#4-yaml-processing-phase-relationship) and [ADR-012(d)](adr/0012-keeper-soul-grpc.md)); Soul passes it to the engine **root**, so the template accesses `.vars.<name>`, `.self.<path>`, `.role`, `.essence.<path>` (and `.input.<name>` when the template reads it).
 
 | Root field | Contents |
 |---|---|
-| `vars.*` | CEL-rendered values ​​explicitly raised by the author in `params.vars` step `core.file.rendered` ([§6](#6-data-transfer-between-engines-pipeline)). Channel "pass a DERIVATIVE value into the template" (calculated by CEL, which is not in operator-input as is). |
+| `vars.*` | CEL-rendered values explicitly raised by the author in `params.vars` step `core.file.rendered` ([§6](#6-data-transfer-between-engines-pipeline)). Channel "pass a DERIVATIVE value into the template" (calculated by CEL, which is not in operator-input as is). |
 | `input.*` (conditional) | Resolved operator-input pass (Option B). The template reads `.input.<name>` **directly**, without a passthrough wrapper `params.vars` for each input field. Host-invariant (shared run context). **★Conditionally:** Keeper puts the `input` key **only when the template actually accesses `.input.*`** (parse-AST bypass detection `.tmpl`, not string-search - mentioning `.input` in a body comment is not considered an access). Templates on some `.vars` (for example, redis) DO NOT receive `input`, their `render_context` remains `{ vars, self, role, essence }`. ★Secret masking: the secret field in `render_context.input` is sealed according to the pass-through scheme (mechanism S-1, [§7.4](#74-secret-masking)) - also when injecting `input`. |
 | `self.network.*` | host network facts (addresses, interfaces): `self.network.primary_ip`, `self.network.interfaces[]` |
 | `self.os.*` | os.family, os.version, distribution; composite keys **snake_case**: `self.os.pkg_mgr`, `self.os.init_system` |
@@ -216,7 +216,7 @@ extra_settings:
 
 ### 3.4. The `.tmpl` extension is required
 
-The file sent to `core.file.rendered.params.template` must have the extension `.tmpl`. Without extension - destiny validation error on `soul-lint`. The extension serves as both a "this is a template" marker for the statement and a filter when scanning the repo.
+The file sent to `core.file.rendered.params.template` must have the extension `.tmpl`. Without extension - destiny validation error on `soul-lint`. The extension serves as both a "this is a template" marker for the operator and a filter when scanning the repo.
 
 Historical `.j2` is not used. Sweep by examples - a separate stage after ADR-010.
 
@@ -226,7 +226,7 @@ All YAML sources (scenario, destiny, essence, keeper.yml, migrations) go through
 
 Phase boundary - **by external access** ([ADR-012(d)](adr/0012-keeper-soul-grpc.md)): who accesses external systems (Vault/registry/CEL-context) - Keeper; local compute without I/O - Soul. Phases 1–3 + delivery literal `.tmpl` - **Keeper-side**; phases 4 (text/template-COMPUTE) and 4a (flow-control CEL) - **Soul-side**.
 
-1. **vault-resolve** (Keeper). All `vault:`-line-references in params are replaced with values ​​**before** CEL entry. `${ … }` in vault links themselves **disabled**: vault link is a string literal, resolves in a phase before CEL. Any `vault: "secret/foo/${ … }"` is a validation error. (This is the `vault:`-**ref** form; the CEL function `vault(...)` is a separate phase 3 mechanism, see below.)
+1. **vault-resolve** (Keeper). All `vault:`-line-references in params are replaced with values **before** CEL entry. `${ … }` in vault links themselves is **forbidden**: vault link is a string literal, resolves in a phase before CEL. Any `vault: "secret/foo/${ … }"` is a validation error. (This is the `vault:`-**ref** form; the CEL function `vault(...)` is a separate phase 3 mechanism, see below.)
 2. **input-resolve** (Keeper). Effective operator-`input` under the destiny/scenario contract, sub-order strictly: **merge defaults + required → scoped input-vault-resolve → value-validation**. Step scoped input-vault-resolve - **separate from the author's (phase 1) limited channel**: the value of the secret field with declared `vault_scope` can be `vault:`-ref, which Keeper resolves keeper-side with the scope + hard deny-list check (`secret/keeper/*`/`secret/internal/*`), the resolve is audited (`input.vault_resolved`), value The secret is not logged. Default-deny: `vault:`-ref in a field without `vault_scope` is an error. `pattern`/`enum`/`min_length` are checked on an **already resolved** value (that's why value validation comes after vault-resolve). Full spec - [docs/input.md → "vault_scope"](input.md#vault_scope-scoped-resolve-vault-ref-in-operator-input). Channel boundary: the author's `vault:`-ref in `params:` (phase 1) and `${ vault(...) }` (phase 3) are the trusted channel of the service author, they do not need `vault_scope` and the deny-list of the operator channel does not apply to them.
 3. **CEL-render** (Keeper). Top-level expression key `where:` (target resolution) and all interpolations `${ … }` (params/vars/on) are calculated. Non-string results are substituted according to the rule [§5](#5-non-string-cel-result-in-yaml). Here the **CEL function `vault(path)`** ([§2.3](#23-registered-cel-functions-starting-minimum)) is resolved - keeper-side reading of Vault KV: the real value of the secret is substituted in params and goes to Soul (it is masked only at the output - logs/OTel/UI). Unlike `vault:`-ref (phase 1, static string), `vault(...)` accepts the path as a CEL expression from the trusted context and is accessible in any `${ … }` cell. External access (Vault) - entirely Keeper-side. Flow-control keys `when:`/`changed_when:`/`failed_when:` are **NOT calculated here** - Keeper pulls them into `RenderedTask` as CEL strings (eval - phase 4a, Soul); Keeper also collects `flow_context` (see below).
    - **Template delivery + context root assembly** (Keeper, between phases 3 and 4). For step `core.file.rendered` Keeper: (1) reads the literal content of `templates/<path>.tmpl` from the snapshot (two-level resolve scenario-local→service-level, [ADR-009](adr/0009-scenario-dsl.md)) and puts it in `params.template_content`; (2) collects the **per-host** root of the text/template context `{ vars, self, role, essence }` ([§3.2](#32-render-context)) and puts it in `params.render_context`. The path-key `template` and the flat `vars`-key from params are **removed** (Soul only reads the root from `render_context`). text/template here **not executed** - Keeper delivers the template as-is. A1-option: both `template_content` and `render_context` ride inside `RenderedTask.params`, without proto changes. `render_context` host-variant (`self` per-host) - it is excluded from the per-host params host-invariance check.
@@ -240,7 +240,7 @@ Phase boundary - **by external access** ([ADR-012(d)](adr/0012-keeper-soul-grpc.
 > **Pilot constraint (flow-control host-invariance).** Flow-control predicates (`when:`/`changed_when:`/`failed_when:`) must be host-**invariant** on a multi-host target. Reason: the pilot dispatch model distributes ONE `RenderedTask` (with the `flow_context` of the first host) to the entire targeted group, so the host variable predicate would be silently calculated based on the facts of the first host for all. Protection - **two fail-closed circuits**, both temporary until per-host dispatch (separate ADR):
 >
 > 1. **Direct reference to `soulprint.self` in the predicate text** - regex-guard is cut off by the text `when:`/`changed_when:`/`failed_when:`. A link to `soulprint.self` is valid **only** for a single-host target; on multi-host the render fails-closed. Host-invariant links (`register.*`/`input.*`/`essence.*`/`incarnation.*`) always work. Symmetrical to constraint `loop.when` (`reLoopWhenSoulprint`).
-> 2. **Derived host-variable `vars`** - first loop bypass: the value `vars`, derived from `soulprint.self` (for example `vars: { is_debian: "${ soulprint.self.os.family == 'debian' }" }` + `when: vars.is_debian`), flows into `flow_context.vars`, and the text of the soulprint predicate does not contain - regex-guard does not catch it. It is caught by checking the collected `flow_context`-**minus-`self`** between targeted hosts: `input`/`essence`/`incarnation` host-invariant by construction, `self` host-variant by nature (it is covered by circuit 1), `vars` remains - if it differs between hosts, the render fails-closed. Reconciliation is active only if there is a non-empty flow-control predicate (without it, Soul `flow_context` does not read; host-variant `vars`-in-params without `when` crashes on a separate params host-invariance check).
+> 2. **Derived host-variable `vars`** - first circuit bypass: the value `vars`, derived from `soulprint.self` (for example `vars: { is_debian: "${ soulprint.self.os.family == 'debian' }" }` + `when: vars.is_debian`), flows into `flow_context.vars`, and the text of the soulprint predicate does not contain - regex-guard does not catch it. It is caught by checking the collected `flow_context`-**minus-`self`** between targeted hosts: `input`/`essence`/`incarnation` host-invariant by construction, `self` host-variant by nature (it is covered by circuit 1), `vars` remains - if it differs between hosts, the render fails-closed. Reconciliation is active only if there is a non-empty flow-control predicate (without it, Soul `flow_context` does not read; host-variant `vars`-in-params without `when` crashes on a separate params host-invariance check).
 
 > **Caveat (path-injection into `vault()`).** The function path `vault(path)` must come from a **trusted** context (literal, `incarnation`, `vars`). A path concatenated from operator-`input` - for example `vault('secret/' + input.tenant + '/db')` - allows the operator to point `vault()` to an **arbitrary** KV secret, which according to the contract he should not have access to. This is a **contractual assumption, not a bug**: according to the accepted option (a), the responsibility for ensuring that the path is not derived from `input` lies with the scenario/destiny author, plus RBAC on the secret path in the Vault itself (narrow Keeper token policies). Statically prohibiting input-derived paths in `vault()` is a separate task (if security deems it necessary to strengthen it). There is no text injection into the Vault request: the path is a CEL value calculated before `ReadKV`, and not a string concatenation into the Vault protocol.
 
@@ -263,7 +263,7 @@ redis_config: "${ merge(essence.redis.defaults, input.redis_settings) }"
 
 The result of `merge(...)` is **map**, so it obeys rule (a): in a single cell it is substituted by the native structure; merging a map with a string according to rule (b) is an error (you need to move it to a separate cell).
 
-**(b) The cell has text next to `${ … }`.** The result is **stringed** and concatenated to the string.
+**(b) The cell has text next to `${ … }`.** The result is **stringified** and concatenated to the string.
 
 ```yaml
 command: "redis-cli replicaof ${ register.master.stdout } 6379"
@@ -379,11 +379,11 @@ Case: A CEL expression returns an externally controlled value (for example, `${ 
 - Strict mode will not allow access to a global variable (barrier 1).
 - The render context does not contain sensitive data accessible through the random access-name (barrier 3).
 
-The CEL result hitting `vars` is treated as text/template **as a text literal** and not as a template. text/template does not parse `vars` values ​​recursively - it substitutes them as `.vars.<name>`.
+The CEL result hitting `vars` is treated as text/template **as a text literal** and not as a template. text/template does not parse `vars` values recursively - it substitutes them as `.vars.<name>`.
 
 ### 7.4. Secret masking
 
-CEL processes values ​​with `secret: true` (from `input:`/essence-standard, [docs/input.md](input.md)) **as usual** - without special processing inside the engine. This is critical: a legitimate "pass secret to `params: { password: \"${ input.password }\" }`" case should work. CEL has no right to refuse.
+CEL processes values with `secret: true` (from `input:`/essence-standard, [docs/input.md](input.md)) **as usual** - without special processing inside the engine. This is critical: a legitimate "pass secret to `params: { password: \"${ input.password }\" }`" case should work. CEL has no right to refuse.
 
 Masking is applied **at the output** - at the output boundaries:
 
@@ -403,7 +403,7 @@ Output masking is done by **three declarative layers + regex-last-resort**, comb
 2. **vault-origin** (by content) - the string value contains `vault:<mount>/` (any mount token) → masked entirely. Masking by the CONTENT of the value (vault-ref leaked to the logs/error line), and not by the key name.
 
 3. **seal / sealed-paths** (render-time provenance/taint, central mechanics) - Keeper in the render phase marks the path of the cell `params` **sealed** when its CEL expression reads the secret source:
-   - `input.<name>`, where `<name>` is declared by `secret: true` in the active pass input circuit (scenario-input on scenario, destiny-input on destiny);
+   - `input.<name>`, where `<name>` is declared by `secret: true` in the active pass input schema (scenario-input on scenario, destiny-input on destiny);
    - `vault(...)`;
    - transitive - `vars.<x>`/`compute.<x>`, whose value is itself sealed;
    - **source `render_context.input.<secret>` (mechanism S-1, Option B)** - for step `core.file.rendered` operator-input reaches the template via `render_context.input` directly, without passthrough `params.vars`; The raw `${ input.<secret> }` expression is no longer in params, so the AST crawl does not see it. Provenance is restored **declaratively**: Keeper marks the sealed path `render_context.input.<name>` for each input field declared `secret: true` (or carrying `vault_scope`) in the active pass schema. The source of the list is the input pass scheme (names of secret fields), **not** the presence of the expression in params.
@@ -414,7 +414,7 @@ Detection - **AST traversal** expressions (not single-ident match): ternary `has
 
 4. **regex-last-resort** (`sensitiveKeyRe` by key name) - NOT deleted, left as the last frontier. Catches the sensitive-by-name class not covered by a declarative (internal `bootstrap_token`/`jwt`/credentials without a schema). When the secret was caught **only** by regex (schema/vault/seal were silent along this path) - the `keeper_mask_regex_fallback_total` metric is incremented + warn-log: declarative space signal to close the class structurally, and not rely on the key name.
 
-CEL processes sealed values ​​normally (resolves the secret, substitutes it in params, gives Soul to the real ones) - taint only marks the path for the output layer, does not change the wire value `ApplyRequest.params`.
+CEL processes sealed values normally (resolves the secret, substitutes it in params, gives Soul to the real ones) - taint only marks the path for the output layer, does not change the wire value `ApplyRequest.params`.
 
 #### Sensitive-by-construction params
 
@@ -422,8 +422,8 @@ In addition to `secret: true`-masking according to the source scheme, there is a
 
 Current list:
 
-- **`core.url.fetched` → `headers`** (`map[string]string`). Request headers normally carry `Authorization: Bearer …` / `Cookie` / API tokens. The module can log only **keys** of headers (not values) when diagnostics are needed; the values ​​and the `headers` block itself in output are excluded by design (see [ADR-015 → `core.url`](adr/0015-core-modules-mvp.md)).
-- **`core.http.probe` → `headers`** (`map[string]string`). Same category and same reason as `core.url`: probe request headers carry `Authorization`/`Cookie`/API tokens. The output contains only the list of keys of the requested headers (`headers_keys`); the values ​​and the `headers` block itself are excluded by design (see [ADR-015 → `core.http`](adr/0015-core-modules-mvp.md)). The response body (`body`) is **not** sensitive in its entirety - it goes through the usual `audit.MaskSecrets` (health endpoints return useful readable JSON).
+- **`core.url.fetched` → `headers`** (`map[string]string`). Request headers normally carry `Authorization: Bearer …` / `Cookie` / API tokens. The module can log only **keys** of headers (not values) when diagnostics are needed; the values and the `headers` block itself in output are excluded by design (see [ADR-015 → `core.url`](adr/0015-core-modules-mvp.md)).
+- **`core.http.probe` → `headers`** (`map[string]string`). Same category and same reason as `core.url`: probe request headers carry `Authorization`/`Cookie`/API tokens. The output contains only the list of keys of the requested headers (`headers_keys`); the values and the `headers` block itself are excluded by design (see [ADR-015 → `core.http`](adr/0015-core-modules-mvp.md)). The response body (`body`) is **not** sensitive in its entirety - it goes through the usual `audit.MaskSecrets` (health endpoints return useful readable JSON).
 
 Difference from `secret: true`: masking by scheme depends on the source markup and can be forgotten by the operator; sensitive-by-construction is hardwired into the module implementation and cannot be disabled. A new param of this category is added to the list above when entered.
 
