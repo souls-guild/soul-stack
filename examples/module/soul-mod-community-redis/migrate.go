@@ -120,7 +120,7 @@ func (m *RedisModule) applyClusterJoinExternal(ctx context.Context, stream grpc.
 	// topology), so the assert is here.
 	if len(srcMasters) != shardsDest {
 		return sendFailure(stream, fmt.Sprintf(
-			"source cluster has %d masters, dest expects %d shards — 1:1 mapping impossible (align shards_dest with source master count)",
+			"source cluster has %d masters, dest expects %d shards - 1:1 mapping impossible (align shards_dest with source master count)",
 			len(srcMasters), shardsDest))
 	}
 
@@ -467,7 +467,7 @@ func nodeSyncReady(ctx context.Context, connect func(clusterNode) (redisConn, er
 		// The replica has not yet caught up with its old master. An early failover would have lost
 		// replication tail - we refuse BEFORE the first failover (fail-closed).
 		return false, fmt.Errorf(
-			"new node %s not synced before failover: master_link_status=%q (want \"up\") — replica has not caught up, refusing to fail over",
+			"new node %s not synced before failover: master_link_status=%q (want \"up\") - replica has not caught up, refusing to fail over",
 			node.addr, repl["master_link_status"])
 	}
 	return false, nil
@@ -523,7 +523,7 @@ func waitNodePromoted(ctx context.Context, conn redisConn, node clusterNode) err
 		case <-time.After(gossipPollInterval):
 		}
 	}
-	return fmt.Errorf("graceful CLUSTER FAILOVER did not complete after %d attempts (node not master with slots) — NOT escalating to FORCE/TAKEOVER (split-brain risk); resolve manually", gossipPollAttempts)
+	return fmt.Errorf("graceful CLUSTER FAILOVER did not complete after %d attempts (node not master with slots) - NOT escalating to FORCE/TAKEOVER (split-brain risk); resolve manually", gossipPollAttempts)
 }
 
 // ============================== forget-external ==============================

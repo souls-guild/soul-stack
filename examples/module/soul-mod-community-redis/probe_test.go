@@ -79,7 +79,7 @@ func TestValidate_ReplicaSyncedHappyPath(t *testing.T) {
 
 // --- Apply: pinged ---
 
-// TestApplyPinged_HappyPath_PongChangedFalse — PING → Output.result == PONG,
+// TestApplyPinged_HappyPath_PongChangedFalse - PING -> Output.result == PONG,
 // changed=false CONSTRUCTIVE (probe semantics). The result field is compatible with the previous one
 // community.redis.command args:[PING] (register.self.result in health-gate).
 func TestApplyPinged_HappyPath_PongChangedFalse(t *testing.T) {
@@ -162,7 +162,7 @@ func TestApplyPinged_ConnectFailure_DoesNotLeakPassword(t *testing.T) {
 
 // --- Apply: role ---
 
-// TestApplyRole_Master — INFO replication role:master → Output.role == master,
+// TestApplyRole_Master - INFO replication role:master -> Output.role == master,
 // changed=false. Proves the where-targeting of the rolling-restart master branch.
 func TestApplyRole_Master(t *testing.T) {
 	conn := &fakeConn{results: map[string]string{
@@ -199,7 +199,7 @@ func TestApplyRole_Master(t *testing.T) {
 	}
 }
 
-// TestApplyRole_Slave — INFO replication role:slave → Output.role == slave
+// TestApplyRole_Slave - INFO replication role:slave -> Output.role == slave
 // (value Redis; redis-cli role-shell gave the same). Proves the slave branch.
 func TestApplyRole_Slave(t *testing.T) {
 	conn := &fakeConn{results: map[string]string{
@@ -295,7 +295,7 @@ func TestApplyRole_InfoErrorRedactsPassword(t *testing.T) {
 
 // --- Apply: replica-synced ---
 
-// TestApplyReplicaSynced_LinkUp — master_link_status:up → synced=true,
+// TestApplyReplicaSynced_LinkUp - master_link_status:up -> synced=true,
 // changed=false. Strict resink gate of the replica (the replica caught up with the master after
 // restart); until: register.self.synced == true passes.
 func TestApplyReplicaSynced_LinkUp(t *testing.T) {

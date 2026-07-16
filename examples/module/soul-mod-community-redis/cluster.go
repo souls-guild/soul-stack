@@ -177,7 +177,7 @@ func validateTopology(v *structpb.Value, nodes map[string]map[string]*structpb.V
 		// replicas_per_shard conflict gate: shard size must be 1+replicas.
 		if replicas > 0 && len(members) != 1+replicas {
 			errs = append(errs, fmt.Sprintf(
-				"params.topology[%d]: shard has %d nodes but replicas_per_shard=%d requires %d (1 master + %d replicas) — drop replicas_per_shard or fix the shard",
+				"params.topology[%d]: shard has %d nodes but replicas_per_shard=%d requires %d (1 master + %d replicas) - drop replicas_per_shard or fix the shard",
 				i, len(members), replicas, 1+replicas, replicas))
 		}
 		for _, m := range members {
@@ -424,7 +424,7 @@ func (m *RedisModule) applyClusterCreate(ctx context.Context, stream grpc.Server
 //	  transfers a SEPARATE operation reshard (follow-up); add-node does NOT move them.
 //
 // Idempotent: if new_node is already in the cluster (CLUSTER NODES seed contains it
-// ip:port) → changed=false, no-op.
+// ip:port) -> changed=false, no-op.
 func (m *RedisModule) applyClusterAddNode(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], params *structpb.Struct) error {
 	f := params.GetFields()
 	password := stringOrEmpty(f["password"])

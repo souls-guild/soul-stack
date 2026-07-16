@@ -153,7 +153,7 @@ func applyOffset(t *testing.T, m *RedisModule, extra map[string]any) *pluginv1.A
 	return stream.final()
 }
 
-// TestApplyOffsetSynced_CaughtUp — link up + sync done + lag<=thr → caught_up=true,
+// TestApplyOffsetSynced_CaughtUp - link up + sync done + lag<=thr -> caught_up=true,
 // changed=false is constructive. Main happy-path safety-gate.
 func TestApplyOffsetSynced_CaughtUp(t *testing.T) {
 	self := &offsetConn{infoReply: selfReplInfo(1000, "up", 0), dbsize: 42}
@@ -179,7 +179,7 @@ func TestApplyOffsetSynced_CaughtUp(t *testing.T) {
 	}
 }
 
-// TestApplyOffsetSynced_LagExceedsThreshold — lag > lag_threshold → caught_up=false
+// TestApplyOffsetSynced_LagExceedsThreshold - lag > lag_threshold -> caught_up=false
 // (link up, sync done, but the data has not yet been caught up). Key case gate.
 func TestApplyOffsetSynced_LagExceedsThreshold(t *testing.T) {
 	// master is 500 bytes ahead, threshold 100 -> not caught up.
@@ -197,7 +197,7 @@ func TestApplyOffsetSynced_LagExceedsThreshold(t *testing.T) {
 	}
 }
 
-// TestApplyOffsetSynced_LagWithinThreshold — lag <= lag_threshold → caught_up=true
+// TestApplyOffsetSynced_LagWithinThreshold - lag <= lag_threshold -> caught_up=true
 // (lag tolerance is accepted by the operator via lag_threshold).
 func TestApplyOffsetSynced_LagWithinThreshold(t *testing.T) {
 	self := &offsetConn{infoReply: selfReplInfo(1000, "up", 0)}
@@ -210,7 +210,7 @@ func TestApplyOffsetSynced_LagWithinThreshold(t *testing.T) {
 	}
 }
 
-// TestApplyOffsetSynced_SyncInProgress — master_sync_in_progress==1 → caught_up=false
+// TestApplyOffsetSynced_SyncInProgress - master_sync_in_progress==1 -> caught_up=false
 // EVEN if the offset agrees (full-sync is in progress, the data is not consistent).
 func TestApplyOffsetSynced_SyncInProgress(t *testing.T) {
 	self := &offsetConn{infoReply: selfReplInfo(1000, "up", 1)} // sync is in progress
@@ -227,7 +227,7 @@ func TestApplyOffsetSynced_SyncInProgress(t *testing.T) {
 	}
 }
 
-// TestApplyOffsetSynced_LinkDown — master_link_status:down → caught_up=false.
+// TestApplyOffsetSynced_LinkDown - master_link_status:down -> caught_up=false.
 func TestApplyOffsetSynced_LinkDown(t *testing.T) {
 	self := &offsetConn{infoReply: selfReplInfo(1000, "down", 0)}
 	source := &offsetConn{infoReply: sourceReplInfo(1000)}
@@ -300,7 +300,7 @@ func TestApplyOffsetSynced_SecondConnectUsesSourceSecrets(t *testing.T) {
 	}
 }
 
-// TestApplyOffsetSynced_SourceTLS_SecondConnectUsesTLS — source_tls=true:
+// TestApplyOffsetSynced_SourceTLS_SecondConnectUsesTLS - source_tls=true:
 // The SECOND connection (to an external source) goes via TLS with source_tls_ca, and the connection to
 // YOUR OWN instance - according to its tls parameters. Proves brought TLS-to-origin
 // to offset-synced: source-secrets and source-TLS are isolated from their own.

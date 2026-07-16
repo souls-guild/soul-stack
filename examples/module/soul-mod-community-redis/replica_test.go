@@ -294,7 +294,7 @@ func TestApplyReplica_ConnectFailureNoLeak(t *testing.T) {
 	assertEventsNoSecret(t, stream)
 }
 
-// --- Apply replica: username → CONFIG SET masteruser ---
+// --- Apply replica: username -> CONFIG SET masteruser ---
 
 func TestApplyReplica_SetsMasteruserWhenUsernameGiven(t *testing.T) {
 	conn := &replConn{infoReply: "role:master\r\n"}
@@ -441,7 +441,7 @@ func TestApplyReplica_NoPasswordSkipsMasterauth(t *testing.T) {
 // and NOT from your password. It also shouldn't leak into events.
 const masterSourcePass = "vault-resolved-external-source-7b2d9e4a1c"
 
-// TestApplyReplica_SourceExternal_MasterauthFromMasterPassword — source_external:
+// TestApplyReplica_SourceExternal_MasterauthFromMasterPassword - source_external:
 // masterauth is set from master_password (NOT from password). Proves (3)th
 // contract clause source_external.
 func TestApplyReplica_SourceExternal_MasterauthFromMasterPassword(t *testing.T) {
@@ -522,7 +522,7 @@ func TestApplyReplica_SourceExternal_SelfGuardDisabled(t *testing.T) {
 	}
 }
 
-// TestApplyReplica_SourceExternal_MasteruserFromMasterUsername — masteruser
+// TestApplyReplica_SourceExternal_MasteruserFromMasterUsername - masteruser
 // taken from master_username (NOT from its username) with source_external.
 func TestApplyReplica_SourceExternal_MasteruserFromMasterUsername(t *testing.T) {
 	conn := &replConn{infoReply: "# Replication\r\nrole:master\r\n"}
@@ -549,7 +549,7 @@ func TestApplyReplica_SourceExternal_MasteruserFromMasterUsername(t *testing.T) 
 	}
 }
 
-// TestApplyReplica_SourceExternal_MasterTLS_SetsReplicationDirective —
+// TestApplyReplica_SourceExternal_MasterTLS_SetsReplicationDirective -
 // source_external + master_tls=true: the plugin sets CONFIG SET tls-replication yes
 // (the outgoing replication link of the replica goes to TLS) BEFORE REPLICAOF. Proves
 // brought TLS-to-origin (TODO S-batch removed): without REPLICAOF directive to
@@ -594,7 +594,7 @@ func TestApplyReplica_SourceExternal_MasterTLS_SetsReplicationDirective(t *testi
 	assertEventsNoSecret(t, stream)
 }
 
-// TestApplyReplica_SourceExternal_NoMasterTLS_SkipsReplicationDirective —
+// TestApplyReplica_SourceExternal_NoMasterTLS_SkipsReplicationDirective -
 // source_external WITHOUT master_tls (plaintext source): tls-replication is NOT installed
 // (enabling a TLS link there would be harmful - the source listens to plaintext).
 func TestApplyReplica_SourceExternal_NoMasterTLS_SkipsReplicationDirective(t *testing.T) {
@@ -621,7 +621,7 @@ func TestApplyReplica_SourceExternal_NoMasterTLS_SkipsReplicationDirective(t *te
 	}
 }
 
-// TestApplyReplica_MasterTLSWithoutSourceExternal_NoDirective — master_tls=true,
+// TestApplyReplica_MasterTLSWithoutSourceExternal_NoDirective - master_tls=true,
 // but source_external is NOT set (its own master): tls-replication is NOT set by the plugin -
 // The TLS mode of the link in its incarnation is set by the general redis.conf at startup, separately
 // does not need to be enabled (the directive applies only to an external source).

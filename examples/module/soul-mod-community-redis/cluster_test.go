@@ -68,7 +68,7 @@ func (c *clusterConn) Do(_ context.Context, args ...any) (string, error) {
 				return "OK", nil
 			}
 		}
-		// INFO replication — sync-gate failover-takeover (master_link_status/role).
+		// INFO replication - sync-gate failover-takeover (master_link_status/role).
 		if strings.EqualFold(v0, "INFO") && strings.EqualFold(v1, "replication") {
 			return c.infoRepl, nil
 		}

@@ -32,7 +32,7 @@ func TestValidate_DetachedHappyPath(t *testing.T) {
 	}
 }
 
-// --- Apply detached: slave → master (REPLICAOF NO ONE, changed=true) ---
+// --- Apply detached: slave -> master (REPLICAOF NO ONE, changed=true) ---
 
 // TestApplyDetached_SlavePromotedToMaster - the instance was a replica -> REPLICAOF NO
 // ONE, changed=true, previous_master carries the previous master host:port.
