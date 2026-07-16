@@ -10,13 +10,13 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// stubTemplate — fake DestinyTemplateSource с фиксированным шаблоном.
+// stubTemplate is a fake DestinyTemplateSource with a fixed template.
 type stubTemplate string
 
 func (s stubTemplate) DefaultDestinySource() string { return string(s) }
 
-// stubLoader — fake DestinyArtifactLoader: фиксирует последний вызов и
-// возвращает заданный артефакт.
+// stubLoader is a fake DestinyArtifactLoader: records the last call and
+// returns the given artifact.
 type stubLoader struct {
 	lastRef artifact.DestinyRef
 	out     *artifact.DestinyArtifact

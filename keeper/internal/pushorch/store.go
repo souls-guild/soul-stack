@@ -11,8 +11,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// PushRunStatus — терминальные/in-flight статусы записи `push_runs`
-// (миграция 051). Синхронизировано с CHECK push_runs_status_valid.
+// PushRunStatus is the set of terminal/in-flight statuses for `push_runs` record
+// (migration 051). Synchronized with CHECK push_runs_status_valid.
 type PushRunStatus string
 
 const (
@@ -24,9 +24,9 @@ const (
 	StatusCancelled     PushRunStatus = "cancelled"
 )
 
-// PushRunRow — read-проекция строки `push_runs` (для GET /v1/push/{apply_id}).
-// summary хранится как map[string]any (jsonb) — caller сам сериализует в ответ.
-// inventory_sids — TEXT[]; ssh_provider/started_by_aid — nullable.
+// PushRunRow is a read projection of `push_runs` record (for GET /v1/push/{apply_id}).
+// summary is stored as map[string]any (jsonb) — caller serializes to response.
+// inventory_sids is TEXT[]; ssh_provider/started_by_aid are nullable.
 type PushRunRow struct {
 	ApplyID       string
 	InventorySIDs []string
@@ -42,22 +42,22 @@ type PushRunRow struct {
 	Summary       map[string]any
 }
 
-// ExecQueryRower — узкая поверхность pgxpool.Pool, нужная Store-у. Симметрично
-// soul.ExecQueryRower / topology.Querier: позволяет fake в unit-тестах без PG.
+// ExecQueryRower is a narrow interface of pgxpool.Pool needed by Store. Symmetric to
+// soul.ExecQueryRower / topology.Querier: allows mocking in unit tests without PG.
 type ExecQueryRower interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
-// ErrNotFound — запись push_runs по apply_id не найдена (GET handler).
+// ErrNotFound is returned when a push_runs record by apply_id is not found (GET handler).
 var ErrNotFound = errors.New("pushorch: push_run not found")
 
-// Store — read/write CRUD-поверхность над таблицей `push_runs`.
+// Store is a read/write CRUD interface to `push_runs` table.
 //
-// Concurrent-safe: каждый метод — один запрос; собственного in-memory-состояния
-// не держит. БД-уровень атомарности (single UPDATE с RowsAffected) служит
-// барьером single-winner-а между orchestrator-горутиной и Reaper-purge-ом.
+// Concurrent-safe: each method is one query; holds no in-memory state. Database-level
+// atomicity (single UPDATE with RowsAffected) serves as barrier for single-winner
+// between orchestrator goroutine and Reaper purge.
 type Store struct {
 	db ExecQueryRower
 }
@@ -77,11 +77,10 @@ INSERT INTO push_runs (
 )
 `
 
-// Insert вставляет новую запись push_runs со статусом `pending`. apply_id — ULID,
-// валидируется caller-ом (audit.IsValidULID). Сохраняется ровно один раз
-// (orchestrator стартует goroutine после успешного INSERT-а). input/summary —
-// jsonb; пустой input → пустой объект (DEFAULT '{}'::jsonb выставит сам PG, но
-// мы шлём явно для предсказуемости).
+// Insert creates a new push_runs record with status `pending`. apply_id is ULID,
+// validated by caller (audit.IsValidULID). Stored exactly once (orchestrator spawns
+// goroutine after successful INSERT). input/summary are jsonb; empty input → empty
+// object (PG DEFAULT '{}'::jsonb would set it, but we send explicitly for predictability).
 func (s *Store) Insert(ctx context.Context, row PushRunRow) error {
 	inputJSON, err := marshalJSONB(row.Input)
 	if err != nil {
@@ -116,7 +115,7 @@ FROM push_runs
 WHERE apply_id = $1
 `
 
-// Get читает строку по apply_id. ErrNotFound — записи нет (caller → 404).
+// Get reads a record by apply_id. ErrNotFound means record does not exist (caller → 404).
 func (s *Store) Get(ctx context.Context, applyID string) (*PushRunRow, error) {
 	row := s.db.QueryRow(ctx, selectPushRunSQL, applyID)
 	var (
@@ -166,9 +165,8 @@ SET status = $2
 WHERE apply_id = $1
 `
 
-// MarkRunning переводит pending → running. Идемпотентный single-step без
-// guard-а на текущий статус — orchestrator вызывает строго один раз ПОСЛЕ
-// успешного Insert-а.
+// MarkRunning transitions pending → running. Idempotent single-step without guard
+// on current status — orchestrator calls exactly once AFTER successful Insert.
 func (s *Store) MarkRunning(ctx context.Context, applyID string) error {
 	if _, err := s.db.Exec(ctx, updateStatusRunningSQL, applyID, string(StatusRunning)); err != nil {
 		return fmt.Errorf("pushorch: mark running: %w", err)
@@ -184,8 +182,8 @@ SET status      = $2,
 WHERE apply_id = $1
 `
 
-// MarkTerminal проставляет финальный статус (success/failed/partial_failed/
-// cancelled), summary и finished_at=NOW(). Один UPDATE одной транзакцией.
+// MarkTerminal sets final status (success/failed/partial_failed/cancelled),
+// summary, and finished_at=NOW(). Single UPDATE in one transaction.
 func (s *Store) MarkTerminal(ctx context.Context, applyID string, status PushRunStatus, summary map[string]any) error {
 	summaryJSON, err := marshalJSONB(summary)
 	if err != nil {
@@ -209,11 +207,10 @@ WHERE apply_id = $1
   AND status IN ('pending', 'running')
 `
 
-// CancelOrphan переводит in-flight (pending/running) запись в `cancelled` с
-// пометкой orphan_purged в summary. Используется Reaper-rule purge_orphan_push_runs
-// для прогонов, чей Keeper-инстанс умер во время выполнения. WHERE-guard
-// (status IN pending/running) — single-winner: гонка с реальным MarkTerminal
-// проигрывает (rows_affected==0).
+// CancelOrphan transitions in-flight (pending/running) record to `cancelled` with
+// orphan_purged marker in summary. Used by Reaper rule purge_orphan_push_runs for
+// runs whose Keeper instance died during execution. WHERE-guard (status IN pending/running)
+// — single-winner: race with real MarkTerminal loses (rows_affected==0).
 func (s *Store) CancelOrphan(ctx context.Context, applyID, reason string) (bool, error) {
 	tag, err := s.db.Exec(ctx, cancelOrphanSQL, applyID, reason)
 	if err != nil {
@@ -231,9 +228,9 @@ ORDER BY started_at ASC
 LIMIT $2
 `
 
-// ListOrphans возвращает apply_id-ы in-flight прогонов старше maxAge (TTL для
-// purge_orphan_push_runs). Симметрично reaper-purger-функциям: один батч,
-// LIMIT $2. Используется Reaper для последующего CancelOrphan по каждому.
+// ListOrphans returns apply_id values of in-flight runs older than maxAge (TTL for
+// purge_orphan_push_runs). Symmetric to reaper-purger functions: one batch, LIMIT $2.
+// Used by Reaper for subsequent CancelOrphan on each.
 func (s *Store) ListOrphans(ctx context.Context, maxAge time.Duration, batchSize int) ([]string, error) {
 	rows, err := s.db.Query(ctx, listOrphansSQL, maxAge, batchSize)
 	if err != nil {
@@ -255,7 +252,7 @@ func (s *Store) ListOrphans(ctx context.Context, maxAge time.Duration, batchSize
 	return out, nil
 }
 
-// marshalJSONB кодирует map в jsonb-bytes. nil → "{}".
+// marshalJSONB encodes map to jsonb-bytes. nil → "{}".
 func marshalJSONB(m map[string]any) ([]byte, error) {
 	if m == nil {
 		return []byte(`{}`), nil
@@ -263,25 +260,24 @@ func marshalJSONB(m map[string]any) ([]byte, error) {
 	return json.Marshal(m)
 }
 
-// ListFilter — фильтры [Store.SelectAll] глобального list-эндпоинта
-// `GET /v1/push-runs` (UI-4). Statuses — multi-value-фильтр (несколько
-// значений объединяются через OR); пустой слайс — без фильтрации по статусу.
-// SSHProvider — exact-match; пустая строка — все провайдеры. Невалидный статус —
-// caller-handler отказывает на 422 до вызова CRUD.
+// ListFilter is a set of filters for [Store.SelectAll] global list endpoint
+// `GET /v1/push-runs` (UI-4). Statuses is multi-value filter (multiple values
+// combined via OR); empty slice means no status filter. SSHProvider is exact-match;
+// empty string means all providers. Invalid status — caller-handler rejects with 422
+// before calling CRUD.
 type ListFilter struct {
 	Statuses    []PushRunStatus
 	SSHProvider string
 }
 
-// SQL глобального list-эндпоинта `GET /v1/push-runs` (UI-4). Параметры:
+// SQL for global list endpoint `GET /v1/push-runs` (UI-4). Parameters:
 //
-//	$1 — text[] статусов (NULL/empty → не фильтруем; non-empty → status = ANY($1));
-//	$2 — ssh_provider (NULL/empty → не фильтруем; non-empty → exact match);
+//	$1 — text[] of statuses (NULL/empty → no filter; non-empty → status = ANY($1));
+//	$2 — ssh_provider (NULL/empty → no filter; non-empty → exact match);
 //	$3 — limit, $4 — offset.
 //
-// `cardinality($1::text[]) = 0` — каноническая «multi-value-фильтр опционален»
-// форма (та же, что у tide.SelectAll): пустой массив трактуется как «не задан»,
-// не «не матчит ничего».
+// `cardinality($1::text[]) = 0` is canonical "multi-value filter is optional" form
+// (same as tide.SelectAll): empty array means "not specified", not "matches nothing".
 const selectAllPushRunsSQL = `
 SELECT apply_id, inventory_sids, destiny_ref, COALESCE(ssh_provider, ''),
        input, cleanup_stale, status, started_at, finished_at,
@@ -299,15 +295,15 @@ WHERE ($1::text[] IS NULL OR cardinality($1::text[]) = 0 OR status = ANY($1::tex
   AND ($2::text IS NULL OR ssh_provider = $2)
 `
 
-// SelectAll возвращает страницу push_runs-строк для глобального list-эндпоинта
-// `GET /v1/push-runs` (UI-4). Сортировка — `started_at DESC` (свежие первыми).
+// SelectAll returns a page of push_runs records for the global list endpoint
+// `GET /v1/push-runs` (UI-4). Sorted by `started_at DESC` (fresh first).
 //
-// Total — общее число строк под фильтр (отдельный COUNT). limit/offset не
-// валидируются — caller-handler уже прогнал через sharedapi.ParsePage.
+// Total is the total count of records matching the filter (separate COUNT). limit/offset
+// are not validated — caller-handler already passed through sharedapi.ParsePage.
 //
-// summary в результирующих строках присутствует целиком (forward-compat: list-
-// эндпоинт ещё не отрезает hosts[] на client-side; ТЗ UI-4 обещает «subset без
-// summary.hosts», но это видимая часть DTO-маппинга в handler-е, не SQL-проекции).
+// summary is present in full in result rows (forward-compat: list endpoint does not
+// yet trim hosts[] on client-side; UI-4 spec promises "subset without summary.hosts",
+// but that is visible part of DTO mapping in handler, not SQL projection).
 func (s *Store) SelectAll(ctx context.Context, filter ListFilter, offset, limit int) ([]*PushRunRow, int, error) {
 	var statusesArg any
 	if len(filter.Statuses) > 0 {
@@ -378,9 +374,8 @@ func (s *Store) SelectAll(ctx context.Context, filter ListFilter, offset, limit 
 	return out, total, nil
 }
 
-// ValidStatus сообщает, входит ли статус в [PushRunStatus]-enum. Используется
-// caller-handler-ом `GET /v1/push-runs` для валидации query-фильтра до вызова
-// CRUD (422 ДО SQL-обращения).
+// ValidStatus reports whether status is in [PushRunStatus] enum. Used by caller-handler
+// for `GET /v1/push-runs` to validate query filter before CRUD call (422 before SQL access).
 func ValidStatus(s PushRunStatus) bool {
 	switch s {
 	case StatusPending, StatusRunning, StatusSuccess, StatusPartialFailed, StatusFailed, StatusCancelled:

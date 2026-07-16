@@ -15,73 +15,73 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// syntheticScenarioName — имя scenario, скомпонованного pushorch вокруг
-// единственной apply-задачи. Префикс `_` сигналит «не из пользовательского
-// service-репо»; имя транзитное (попадает только в логи render-pipeline).
+// syntheticScenarioName is the name of the scenario assembled by pushorch around
+// a single apply task. Prefix `_` signals "not from user service repo"; name is
+// transient (appears only in render pipeline logs).
 const syntheticScenarioName = "_push"
 
-// syntheticTaskName — имя единственной apply-задачи в синтетическом scenario.
-// То же: транзитное, нужно только для диагностики render-фаз.
+// syntheticTaskName is the name of the single apply task in the synthetic scenario.
+// Same: transient, needed only for render phase diagnostics.
 const syntheticTaskName = "push.apply"
 
-// orchestratorContextTimeout — потолок длительности async-execution prepare-фазы
-// (LoadByInventory + render). Жёсткий cap, чтобы зависший git-fetch / SQL не
-// держал goroutine бесконечно при отсутствии request-ctx (HTTP-handler уже
-// вернул 202). dispatch-фаза имеет собственный per-host timeout.
+// orchestratorContextTimeout is the ceiling for async-execution prepare phase
+// duration (LoadByInventory + render). Hard cap to prevent hung git-fetch / SQL
+// from holding goroutine indefinitely when request-ctx is absent (HTTP handler
+// already returned 202). Dispatch phase has its own per-host timeout.
 const orchestratorContextTimeout = 30 * time.Minute
 
-// SshDispatcher — узкая поверхность [push.SshDispatcher] для orchestrator-а.
-// per-host SendApply возвращает RunResult синхронно (push S1+S5, oneshot).
-// `providerName` — имя SshProvider-плагина, выбранное ProviderRouter-ом
-// (ADR-032 amendment 2026-05-27, P2 W-2/W-3 multi-provider routing); пустая
-// строка / неизвестное имя → push.ErrProviderUnknown.
+// SshDispatcher is a narrow interface of [push.SshDispatcher] for the orchestrator.
+// per-host SendApply returns RunResult synchronously (push S1+S5, oneshot).
+// `providerName` is the name of the SshProvider plugin selected by ProviderRouter
+// (ADR-032 amendment 2026-05-27, P2 W-2/W-3 multi-provider routing); empty string
+// or unknown name → push.ErrProviderUnknown.
 type SshDispatcher interface {
 	SendApply(ctx context.Context, sid string, providerName string, req *keeperv1.ApplyRequest) (*keeperv1.RunResult, error)
 }
 
-// Cleaner — узкая поверхность [push.SshDispatcher.Cleanup] для best-effort
-// post-success-чистки устаревших версий (`cleanup_stale_versions: true`).
-// Тот же *push.SshDispatcher удовлетворяет обоим интерфейсам — wire-up
-// передаёт его в оба поля. `providerName` — то же, что использовалось в
-// предшествующем SendApply (caller хранит per-SID решение).
+// Cleaner is a narrow interface of [push.SshDispatcher.Cleanup] for best-effort
+// post-success cleanup of stale versions (`cleanup_stale_versions: true`).
+// The same *push.SshDispatcher satisfies both interfaces — wire-up passes it to
+// both fields. `providerName` is the same one used in the preceding SendApply
+// (caller maintains per-SID decision).
 type Cleaner interface {
 	Cleanup(ctx context.Context, sid string, providerName string) error
 }
 
-// ProviderRouter — узкая поверхность [push.ProviderRouter] для orchestrator-а.
-// Зависимость сужена до одного метода ради лёгкого fake-а в unit-тестах.
+// ProviderRouter is a narrow interface of [push.ProviderRouter] for the orchestrator.
+// Dependency narrowed to one method for easy mocking in unit tests.
 type ProviderRouter interface {
 	RouteFor(ctx context.Context, sid string) (providerName string, source push.RouteSource, err error)
 }
 
-// ProviderMetricsObserver — узкая поверхность [push.Metrics.ObserveProviderRouted]
-// (P2 W-4). nil — no-op (push-без-observability стенды).
+// ProviderMetricsObserver is a narrow interface of [push.Metrics.ObserveProviderRouted]
+// (P2 W-4). nil → no-op (push without observability setups).
 type ProviderMetricsObserver interface {
 	ObserveProviderRouted(providerName, decisionSource string)
 }
 
-// AuditWriter — узкая поверхность shared/audit.Writer (тот же интерфейс, что
-// keeper/internal/mcp.AuditWriter). Сужение для unit-mock-ов.
+// AuditWriter is a narrow interface of shared/audit.Writer (same interface as
+// keeper/internal/mcp.AuditWriter). Narrowed for unit mocks.
 type AuditWriter interface {
 	Write(ctx context.Context, event *audit.Event) error
 }
 
-// InventoryResolver — узкая поверхность [topology.Resolver.LoadByInventory] для
-// PushRun-а. Сужение позволяет fake в unit-тестах без подъёма PG+Redis.
+// InventoryResolver is a narrow interface of [topology.Resolver.LoadByInventory] for
+// PushRun. Narrowing allows mocking in unit tests without raising PG+Redis.
 type InventoryResolver interface {
 	LoadByInventory(ctx context.Context, sids []string) ([]*topology.HostFacts, error)
 }
 
-// RenderPipeline — узкая поверхность [render.Pipeline.Render] (без зависимости
-// от *render.Pipeline в подписи Deps). *render.Pipeline удовлетворяет ему.
+// RenderPipeline is a narrow interface of [render.Pipeline.Render] (no dependency
+// on *render.Pipeline in Deps signature). *render.Pipeline satisfies it.
 type RenderPipeline interface {
 	Render(ctx context.Context, in render.RenderInput) ([]*render.RenderedTask, []render.DispatchPlan, error)
 }
 
-// Deps — внешние зависимости PushRun-а. Все non-Audit поля обязательны;
-// AuditWriter опционален (nil → audit-events не пишутся, диагностика остаётся
-// в логах). KID — идентификатор Keeper-инстанса для started_by_kid (Reaper
-// purge_orphan_push_runs фильтрует осиротевшие прогоны по нему).
+// Deps are external dependencies of PushRun. All non-Audit fields are required;
+// AuditWriter is optional (nil → audit events not written, diagnostics remain
+// in logs). KID is the Keeper instance identifier for started_by_kid (Reaper
+// purge_orphan_push_runs filters orphaned runs by it).
 type Deps struct {
 	Store         *Store
 	Topology      InventoryResolver
@@ -90,61 +90,61 @@ type Deps struct {
 	Template      DestinyTemplateSource
 	Dispatcher    SshDispatcher
 	Cleaner       Cleaner
-	// Router — 3-tier ProviderRouter (P2 W-3). Обязателен в multi-provider
-	// раскладке. Резолв per-SID идёт до dispatch-фазы; ошибка резолва
-	// (ErrProviderNotRouted) маппится в per-host status="error" +
+	// Router is a 3-tier ProviderRouter (P2 W-3). Required in multi-provider setup.
+	// Per-SID resolution happens before dispatch phase; resolution error
+	// (ErrProviderNotRouted) maps to per-host status="error" +
 	// error_code="provider_not_routed".
 	Router ProviderRouter
-	// ProviderMetrics — счётчик routing-decisions (P2 W-4). nil → no-op.
+	// ProviderMetrics is the counter for routing decisions (P2 W-4). nil → no-op.
 	ProviderMetrics ProviderMetricsObserver
 	Audit           AuditWriter
 	Logger          *slog.Logger
 	KID             string
 
-	// Now — источник текущего времени для тестов; production-wire-up передаёт
-	// time.Now. nil → используется time.Now.
+	// Now is the current time source for tests; production wire-up passes time.Now.
+	// nil → time.Now is used.
 	Now func() time.Time
 }
 
-// PushRun — multi-host orchestrator push-прогона (Variant C).
+// PushRun is a multi-host orchestrator for push runs (Variant C).
 //
-// Один экземпляр на процесс; concurrent-safe (собственного изменяемого
-// состояния не держит, всё через Store + per-Apply goroutine). Apply async:
-// возвращает apply_id и спавнит goroutine с executeAsync под собственным ctx
-// (НЕ HTTP-request-ctx — он отменится после 202).
+// One instance per process; concurrent-safe (holds no mutable state, everything
+// through Store + per-Apply goroutine). Apply is async: returns apply_id and spawns
+// goroutine with executeAsync under its own ctx (NOT HTTP request-ctx — it will be
+// cancelled after 202).
 type PushRun struct {
 	deps Deps
 }
 
-// NewPushRun валидирует зависимости и возвращает orchestrator. Возврат ошибки —
-// программная неконфигурация caller-а (wire-up).
+// NewPushRun validates dependencies and returns the orchestrator. Error return
+// indicates misconfiguration by caller (wire-up).
 func NewPushRun(deps Deps) (*PushRun, error) {
 	if deps.Store == nil {
-		return nil, errors.New("pushorch: Store обязателен")
+		return nil, errors.New("pushorch: Store is required")
 	}
 	if deps.Topology == nil {
-		return nil, errors.New("pushorch: Topology обязателен")
+		return nil, errors.New("pushorch: Topology is required")
 	}
 	if deps.Render == nil {
-		return nil, errors.New("pushorch: Render обязателен")
+		return nil, errors.New("pushorch: Render is required")
 	}
 	if deps.DestinyLoader == nil {
-		return nil, errors.New("pushorch: DestinyLoader обязателен")
+		return nil, errors.New("pushorch: DestinyLoader is required")
 	}
 	if deps.Template == nil {
-		return nil, errors.New("pushorch: DestinyTemplateSource обязателен")
+		return nil, errors.New("pushorch: DestinyTemplateSource is required")
 	}
 	if deps.Dispatcher == nil {
-		return nil, errors.New("pushorch: Dispatcher обязателен")
+		return nil, errors.New("pushorch: Dispatcher is required")
 	}
 	if deps.Router == nil {
-		return nil, errors.New("pushorch: Router обязателен (multi-provider routing, ADR-032 amendment 2026-05-27)")
+		return nil, errors.New("pushorch: Router is required (multi-provider routing, ADR-032 amendment 2026-05-27)")
 	}
 	if deps.Logger == nil {
-		return nil, errors.New("pushorch: Logger обязателен")
+		return nil, errors.New("pushorch: Logger is required")
 	}
 	if deps.KID == "" {
-		return nil, errors.New("pushorch: KID обязателен")
+		return nil, errors.New("pushorch: KID is required")
 	}
 	if deps.Now == nil {
 		deps.Now = time.Now
@@ -164,12 +164,11 @@ type ApplyRequest struct {
 	StartedByAID  string
 }
 
-// Apply принимает push-прогон, делает Insert(pending) и спавнит async-goroutine
-// с executeAsync. Возвращает apply_id (ULID) для 202 ответа.
+// Apply receives a push run, performs Insert(pending), and spawns an async goroutine
+// with executeAsync. Returns apply_id (ULID) for 202 response.
 //
-// Валидация — на HTTP/MCP-границе (parse destiny, inventory non-empty); здесь
-// делаем defense-in-depth: ParseDestinyRef падает sentinel-ом → caller
-// мапит в 422.
+// Validation is at the HTTP/MCP boundary (parse destiny, inventory non-empty); here
+// we do defense-in-depth: ParseDestinyRef fails with sentinel → caller maps to 422.
 func (r *PushRun) Apply(ctx context.Context, req ApplyRequest) (applyID string, err error) {
 	if len(req.InventorySIDs) == 0 {
 		return "", errors.New("pushorch: inventory must be non-empty")
@@ -195,10 +194,10 @@ func (r *PushRun) Apply(ctx context.Context, req ApplyRequest) (applyID string, 
 		return "", err
 	}
 
-	// Audit-event push.applied (старт прогона) — параллель с
-	// incarnation.scenario_started: пишется при приёме запроса, до начала
-	// executeAsync. payload не несёт inventory целиком (может быть огромным);
-	// чисел достаточно для корреляции с GET /v1/push/{apply_id}.
+	// Audit event push.applied (run start) — parallel to incarnation.scenario_started:
+	// written on request receipt, before executeAsync starts. Payload does not carry
+	// full inventory (may be huge); numbers are enough for correlation with
+	// GET /v1/push/{apply_id}.
 	r.writeAudit(ctx, audit.EventPushApplied, req.StartedByAID, map[string]any{
 		"apply_id":       applyID,
 		"destiny":        req.DestinyRef,
@@ -207,10 +206,10 @@ func (r *PushRun) Apply(ctx context.Context, req ApplyRequest) (applyID string, 
 		"cleanup_stale":  req.CleanupStale,
 	})
 
-	// goroutine ведёт собственный bg-ctx с timeout-cap: HTTP-ctx отменится сразу
-	// после 202. orchestratorContextTimeout — потолок prepare-фазы; per-host
-	// dispatch использует тот же bg-ctx без дополнительного слоя cancel-а
-	// (SshDispatcher изнутри держит DialTimeout).
+	// Goroutine runs its own bg-ctx with timeout-cap: HTTP-ctx will be cancelled
+	// right after 202. orchestratorContextTimeout is the ceiling for prepare phase;
+	// per-host dispatch uses the same bg-ctx without additional cancel layer
+	// (SshDispatcher holds DialTimeout internally).
 	go func() {
 		bgCtx, cancel := context.WithTimeout(context.Background(), orchestratorContextTimeout)
 		defer cancel()
@@ -220,37 +219,37 @@ func (r *PushRun) Apply(ctx context.Context, req ApplyRequest) (applyID string, 
 	return applyID, nil
 }
 
-// GetRow читает текущее состояние push-прогона по apply_id из push_runs.
-// Тонкая обёртка над Store.Get — оставлена методом PushRun для симметрии
-// с Apply (handler и MCP-tool работают через один объект).
+// GetRow reads the current state of a push run by apply_id from push_runs.
+// Thin wrapper over Store.Get — left as PushRun method for symmetry with Apply
+// (handler and MCP-tool work through one object).
 func (r *PushRun) GetRow(ctx context.Context, applyID string) (*PushRunRow, error) {
 	return r.deps.Store.Get(ctx, applyID)
 }
 
-// ListRows — глобальный list push-прогонов (`GET /v1/push-runs`, UI-4). Тонкая
-// обёртка над Store.SelectAll, симметрично GetRow: handler и MCP-tool ходят в
-// orchestrator-объект, не в Store напрямую.
+// ListRows is a global list of push runs (`GET /v1/push-runs`, UI-4). Thin wrapper
+// over Store.SelectAll, symmetric to GetRow: handler and MCP-tool go through the
+// orchestrator object, not Store directly.
 func (r *PushRun) ListRows(ctx context.Context, filter ListFilter, offset, limit int) ([]*PushRunRow, int, error) {
 	return r.deps.Store.SelectAll(ctx, filter, offset, limit)
 }
 
-// executeAsync — основной поток прогона. Шаги:
+// executeAsync is the main execution flow of a run. Steps:
 //
 //  1. MarkRunning;
-//  2. LoadByInventory (filter terminal/онбординг + lease-presence);
-//  3. собрать синтетический ScenarioManifest + pushDestinyResolver, прогнать
-//     через render.Pipeline.Render (destinyIsolated по конструкции изоляции
-//     destiny — register/state/essence/soulprint.hosts ей недоступны);
-//  4. ToProtoTasks + ApplyRequest на каждый таргетированный SID;
-//  5. per-host SendApply через SshDispatcher (concurrent, см. fanOut);
-//  6. собрать summary {hosts: [{sid, status, error?}], total, success_count,
-//     fail_count} + терминал (success/partial_failed/failed);
+//  2. LoadByInventory (filter terminal/onboarding + lease-presence);
+//  3. assemble synthetic ScenarioManifest + pushDestinyResolver, run through
+//     render.Pipeline.Render (destinyIsolated by design — register/state/essence/
+//     soulprint.hosts are unavailable);
+//  4. ToProtoTasks + ApplyRequest for each targeted SID;
+//  5. per-host SendApply via SshDispatcher (concurrent, see fanOut);
+//  6. assemble summary {hosts: [{sid, status, error?}], total, success_count,
+//     fail_count} + terminal state (success/partial_failed/failed);
 //  7. cleanup_stale_versions=true → best-effort Cleanup per-host.
 func (r *PushRun) executeAsync(ctx context.Context, applyID, name, ref string, req ApplyRequest) {
 	log := r.deps.Logger.With(slog.String("apply_id", applyID), slog.String("destiny", req.DestinyRef))
 
 	if err := r.deps.Store.MarkRunning(ctx, applyID); err != nil {
-		log.Error("pushorch: mark running failed — прогон не стартовал", slog.Any("error", err))
+		log.Error("pushorch: mark running failed — run did not start", slog.Any("error", err))
 		r.finalize(ctx, applyID, StatusFailed, map[string]any{
 			"error": "mark_running_failed: " + err.Error(),
 		}, req.StartedByAID, req)
@@ -266,7 +265,7 @@ func (r *PushRun) executeAsync(ctx context.Context, applyID, name, ref string, r
 		return
 	}
 	if len(hosts) == 0 {
-		log.Warn("pushorch: no live hosts in inventory — прогон отменён",
+		log.Warn("pushorch: no live hosts in inventory — run cancelled",
 			slog.Int("requested", len(req.InventorySIDs)))
 		r.finalize(ctx, applyID, StatusFailed, map[string]any{
 			"error":     "no_live_hosts",
@@ -293,9 +292,9 @@ func (r *PushRun) executeAsync(ctx context.Context, applyID, name, ref string, r
 		Input:    req.Input,
 		Hosts:    hosts,
 		Destiny:  resolver,
-		// Essence/Register/RegisterByHost — пусты: push-прогон не привязан к
-		// incarnation, scenario-scope недоступен (та же логика, что destiny-фаза
-		// scenario-runner-а: render-pipeline сам гарантирует изоляцию destiny).
+		// Essence/Register/RegisterByHost are empty: push run is not tied to
+		// an incarnation, scenario-scope is unavailable (same logic as destiny phase
+		// of scenario-runner: render-pipeline itself guarantees destiny isolation).
 		Incarnation: render.IncarnationMeta{Name: syntheticScenarioName},
 	}
 
@@ -308,21 +307,21 @@ func (r *PushRun) executeAsync(ctx context.Context, applyID, name, ref string, r
 		return
 	}
 	if len(tasks) == 0 {
-		// destiny без задач — формально корректный артефакт, но push смысл теряет.
-		log.Warn("pushorch: destiny отрендерилась в пустой план — нечего диспатчить")
+		// Destiny without tasks — formally correct artifact, but push loses its purpose.
+		log.Warn("pushorch: destiny rendered to empty plan — nothing to dispatch")
 		r.finalize(ctx, applyID, StatusFailed, map[string]any{
 			"error": "empty_plan",
 		}, req.StartedByAID, req)
 		return
 	}
 
-	// Таргетинг push-прогона: union по всем планам (in pilot — обычно один план
-	// на одну apply-задачу). Если несколько task-ов в destiny таргетят разные
-	// подмножества — берём union (push семантика: «прогон по инвентарю», не per-task
-	// orchestration). plan.TargetSIDs уже sorted (resolveTargets).
+	// Push run targeting: union across all plans (in pilot — usually one plan per
+	// apply task). If multiple tasks in destiny target different subsets — take union
+	// (push semantics: "run over inventory", not per-task orchestration). plan.TargetSIDs
+	// already sorted (resolveTargets).
 	target := unionTargetSIDs(plans)
 	if len(target) == 0 {
-		log.Warn("pushorch: после where-фильтра ни один хост не остался — прогон пропущен")
+		log.Warn("pushorch: no host remained after where-filter — run skipped")
 		r.finalize(ctx, applyID, StatusFailed, map[string]any{
 			"error": "no_targets_after_where",
 		}, req.StartedByAID, req)
@@ -331,15 +330,15 @@ func (r *PushRun) executeAsync(ctx context.Context, applyID, name, ref string, r
 
 	protoTasks := render.ToProtoTasks(tasks)
 
-	// P2 W-3 routing-фаза. Идёт ДО fanOut: routing-промах per-SID не должен
-	// открывать SSH-сессию и не должен расходовать env-payload плагина.
-	// α-compat (PM-decision): req.SSHProvider непустой → per-job preset
-	// применяется КО ВСЕМ SID-ам, перебивает router. Иначе router.RouteFor
-	// per-SID; ошибка → per-host status="error" + error_code="provider_not_routed".
+	// P2 W-3 routing phase. Runs BEFORE fanOut: per-SID routing miss must not open
+	// SSH session and must not consume plugin env-payload.
+	// α-compat (PM-decision): non-empty req.SSHProvider → per-job preset applied to
+	// ALL SIDs, overrides router. Otherwise router.RouteFor per-SID; error → per-host
+	// status="error" + error_code="provider_not_routed".
 	sidProvider, routingResults := r.resolveProviders(ctx, target, req, log)
 
-	// hostResults собираются по target; для SID-ов, на которых routing провалился,
-	// уже стоит entry в routingResults (мы их вычеркнем из dispatch-списка).
+	// hostResults are collected by target; for SIDs where routing failed, there's
+	// already an entry in routingResults (we exclude them from dispatch list).
 	dispatchTargets := make([]string, 0, len(target))
 	for _, sid := range target {
 		if _, failed := routingResults[sid]; failed {
@@ -349,55 +348,55 @@ func (r *PushRun) executeAsync(ctx context.Context, applyID, name, ref string, r
 	}
 
 	hostResults := r.fanOut(ctx, applyID, dispatchTargets, sidProvider, protoTasks, log)
-	// Слияние: routing-fail-ы (без dispatch) + dispatch-результаты.
+	// Merge: routing failures (no dispatch) + dispatch results.
 	if len(routingResults) > 0 {
 		for sid, hr := range routingResults {
 			_ = sid
 			hostResults = append(hostResults, hr)
 		}
-		// Детерминированный порядок per-SID в summary.hosts — повторно сортируем.
+		// Deterministic per-SID order in summary.hosts — re-sort.
 		sortHostResults(hostResults)
 	}
 
 	status, summary := summarize(hostResults)
 	r.finalize(ctx, applyID, status, summary, req.StartedByAID, req)
 
-	// Best-effort cleanup устаревших версий на хостах (cleanup_stale_versions).
-	// Запускается ПОСЛЕ финализации, чтобы terminate-статус прогона не блокировался
-	// SSH-roundtrip-ами cleanup-а. Все ошибки идут в логи, не в summary.
+	// Best-effort cleanup of stale versions on hosts (cleanup_stale_versions).
+	// Runs AFTER finalization so run terminate status is not blocked by
+	// SSH roundtrips of cleanup. All errors go to logs, not summary.
 	if req.CleanupStale && r.deps.Cleaner != nil {
 		go r.cleanupHosts(dispatchTargets, sidProvider, log)
 	}
 }
 
-// resolveProviders резолвит provider-имя для каждого SID из inventory.
+// resolveProviders resolves provider name for each SID in inventory.
 //
-// α-compat (PM-decision P2 W-3): если req.SSHProvider непустое — preset
-// применяется КО ВСЕМ SID-ам, ProviderRouter НЕ вызывается. Источник в audit-
-// summary помечается как "soul" (per-job override семантически эквивалентен
-// per-SID explicit для всех таргетов).
+// α-compat (PM-decision P2 W-3): if req.SSHProvider is non-empty — preset is
+// applied to ALL SIDs, ProviderRouter is NOT called. Source in audit summary
+// is marked as "soul" (per-job override is semantically equivalent to per-SID
+// explicit for all targets).
 //
-// Без preset-а: для каждого SID зовём router.RouteFor. ErrProviderNotRouted →
-// в routingResults[sid] кладётся hostResult с status="error" +
-// errText="provider_not_routed". Real PG-ошибка → то же, errText содержит
-// underlying-сообщение (transient — оператор retry).
+// Without preset: for each SID call router.RouteFor. ErrProviderNotRouted →
+// hostResult with status="error" + errText="provider_not_routed" placed in
+// routingResults[sid]. Real PG error → same, errText contains underlying message
+// (transient — operator retries).
 //
-// Возврат:
-//   - sidProvider — map[sid]provider, заполнена для УСПЕШНО зарезолвенных SID-ов
-//     (включая α-compat preset);
-//   - routingResults — map[sid]hostResult для SID-ов, у которых routing
-//     провалился (caller добавит их в final hosts[] без dispatch).
+// Return:
+//   - sidProvider: map[sid]provider, populated for SUCCESSFULLY resolved SIDs
+//     (including α-compat preset);
+//   - routingResults: map[sid]hostResult for SIDs where routing failed
+//     (caller adds them to final hosts[] without dispatch).
 func (r *PushRun) resolveProviders(ctx context.Context, target []string, req ApplyRequest, log *slog.Logger) (map[string]string, map[string]hostResult) {
 	sidProvider := make(map[string]string, len(target))
 	routingResults := make(map[string]hostResult)
 
 	if req.SSHProvider != "" {
-		// α-compat: per-job preset, единый provider на все SID-ы.
+		// α-compat: per-job preset, single provider for all SIDs.
 		for _, sid := range target {
 			sidProvider[sid] = req.SSHProvider
 			observeRouted(r.deps.ProviderMetrics, req.SSHProvider, push.SourceSoul.String())
 		}
-		log.Info("pushorch: α-compat ssh_provider preset применён ко всем SID-ам",
+		log.Info("pushorch: α-compat ssh_provider preset applied to all SIDs",
 			slog.String("provider", req.SSHProvider),
 			slog.Int("count", len(target)))
 		return sidProvider, routingResults
@@ -427,14 +426,14 @@ func (r *PushRun) resolveProviders(ctx context.Context, target []string, req App
 	return sidProvider, routingResults
 }
 
-// fanOut запускает per-host SendApply параллельно (по хосту = одна goroutine),
-// собирает hostResult-ы в детерминированном порядке (по SID). Конкурентность —
-// без ограничения (push-инвентарь обычно мал; large-scale rolling — отдельный
-// slice через render.DispatchPlan.SerialWidth, в pilot не используется).
+// fanOut runs per-host SendApply in parallel (one goroutine per host), collects
+// hostResults in deterministic order (by SID). Concurrency is unlimited (push
+// inventory is usually small; large-scale rolling is a separate slice via
+// render.DispatchPlan.SerialWidth, not used in pilot).
 //
-// sidProvider — карта sid → provider-имя (P2 W-3 multi-provider routing).
-// SID без записи в карте — invariant violation (resolveProviders уже
-// отфильтровал такие), defensive guard внутри.
+// sidProvider is map sid → provider name (P2 W-3 multi-provider routing).
+// SID without entry in map is invariant violation (resolveProviders already
+// filtered such), defensive guard inside.
 func (r *PushRun) fanOut(ctx context.Context, applyID string, sids []string, sidProvider map[string]string, tasks []*keeperv1.RenderedTask, log *slog.Logger) []hostResult {
 	results := make([]hostResult, len(sids))
 	var wg sync.WaitGroup
@@ -455,7 +454,7 @@ func (r *PushRun) fanOut(ctx context.Context, applyID string, sids []string, sid
 					slog.String("ssh_provider", providerName),
 					slog.Any("error", err))
 			} else {
-				log.Info("pushorch: per-host прогон завершён",
+				log.Info("pushorch: per-host run completed",
 					slog.String("sid", sid),
 					slog.String("ssh_provider", providerName),
 					slog.String("status", rr.GetStatus().String()))
@@ -466,12 +465,11 @@ func (r *PushRun) fanOut(ctx context.Context, applyID string, sids []string, sid
 	return results
 }
 
-// cleanupHosts проходит per-host Cleanup; best-effort, ошибки → лог-warn, не
-// влияют на статус прогона. Используется собственный bg-ctx с тем же
-// cap-таймаутом, что и executeAsync.
+// cleanupHosts runs per-host Cleanup; best-effort, errors → log-warn, do not
+// affect run status. Uses its own bg-ctx with the same cap-timeout as executeAsync.
 //
-// sidProvider — карта sid → provider, заполненная resolveProviders. SID без
-// записи (failed routing) сюда не попадает (cleanupHosts получает только
+// sidProvider is map sid → provider, populated by resolveProviders. SID without
+// entry (failed routing) does not reach here (cleanupHosts receives only
 // dispatchTargets).
 func (r *PushRun) cleanupHosts(sids []string, sidProvider map[string]string, log *slog.Logger) {
 	ctx, cancel := context.WithTimeout(context.Background(), orchestratorContextTimeout)
@@ -497,12 +495,12 @@ func (r *PushRun) cleanupHosts(sids []string, sidProvider map[string]string, log
 	wg.Wait()
 }
 
-// finalize пишет терминал в push_runs + audit-event. Если MarkTerminal сам
-// упал — логируем, audit не пишем (event с ложным состоянием хуже его
-// отсутствия). После орфанизации Reaper догонит запись через purge_orphan_push_runs.
+// finalize writes terminal state to push_runs + audit event. If MarkTerminal fails
+// — log it, don't write audit (event with wrong state is worse than its absence).
+// After orphaning, Reaper will catch the record via purge_orphan_push_runs.
 func (r *PushRun) finalize(ctx context.Context, applyID string, status PushRunStatus, summary map[string]any, startedByAID string, req ApplyRequest) {
 	if err := r.deps.Store.MarkTerminal(ctx, applyID, status, summary); err != nil {
-		r.deps.Logger.Error("pushorch: mark terminal failed — запись осталась running (Reaper подберёт)",
+		r.deps.Logger.Error("pushorch: mark terminal failed — record remains running (Reaper will pick it up)",
 			slog.String("apply_id", applyID),
 			slog.String("status", string(status)),
 			slog.Any("error", err))
@@ -518,20 +516,20 @@ func (r *PushRun) finalize(ctx context.Context, applyID string, status PushRunSt
 	case StatusFailed:
 		eventType = audit.EventPushFailed
 	case StatusCancelled:
-		// Cancelled — пишется Reaper-ом, не orchestrator-ом (этот путь
-		// недостижим из executeAsync). Защитный fallback.
+		// Cancelled — written by Reaper, not orchestrator (this path is unreachable
+		// from executeAsync). Defensive fallback.
 		eventType = audit.EventPushFailed
 	}
 	r.writeAudit(ctx, eventType, startedByAID, terminalAuditPayload(applyID, req, status, summary))
 }
 
-// writeAudit пишет audit-event best-effort: ошибку логирует, прогон не
-// прерывает (audit не критичен для функциональности push-а).
+// writeAudit writes audit event best-effort: logs errors, does not interrupt run
+// (audit is not critical for push functionality).
 func (r *PushRun) writeAudit(ctx context.Context, eventType audit.EventType, aid string, payload map[string]any) {
 	if r.deps.Audit == nil {
 		return
 	}
-	src := audit.SourceAPI // push.apply вызывается только из API/MCP — source детерминирован.
+	src := audit.SourceAPI // push.apply is called only from API/MCP — source is deterministic.
 	ev := &audit.Event{
 		EventType: eventType,
 		Source:    src,
@@ -545,10 +543,10 @@ func (r *PushRun) writeAudit(ctx context.Context, eventType audit.EventType, aid
 	}
 }
 
-// terminalAuditPayload собирает payload финального audit-event-а. Прозрачно
-// несёт сводные числа per-host исходов из summary (success_count/fail_count) +
-// destiny-ref + размер инвентаря. inventory целиком НЕ кладётся (может быть
-// большой); подробности — в push_runs.summary через GET /v1/push/{apply_id}.
+// terminalAuditPayload assembles the final audit event payload. Transparently
+// carries aggregate numbers of per-host outcomes from summary (success_count/fail_count) +
+// destiny-ref + inventory size. Full inventory is NOT included (may be large);
+// details are in push_runs.summary via GET /v1/push/{apply_id}.
 func terminalAuditPayload(applyID string, req ApplyRequest, status PushRunStatus, summary map[string]any) map[string]any {
 	p := map[string]any{
 		"apply_id":       applyID,
@@ -568,13 +566,13 @@ func terminalAuditPayload(applyID string, req ApplyRequest, status PushRunStatus
 	return p
 }
 
-// hostResult — итог одного per-host SendApply: status либо «error» (доставка
-// провалена), либо RunStatus (Soul вернул RunResult, status в protobuf-enum).
+// hostResult is the outcome of one per-host SendApply: status is either "error"
+// (delivery failed) or RunStatus (Soul returned RunResult, status in protobuf enum).
 //
-// `provider` — имя SshProvider, который реально использовался для этого SID
-// (Multi-provider routing, P2 W-3). Записывается в push_runs.summary.hosts[]
-// для audit-trail (architect-decision: routing-decision сохраняется в
-// summary, без отдельного per-routing event).
+// `provider` is the name of the SshProvider actually used for this SID
+// (Multi-provider routing, P2 W-3). Written to push_runs.summary.hosts[] for
+// audit trail (architect decision: routing decision is saved in summary,
+// no separate per-routing event).
 type hostResult struct {
 	sid      string
 	provider string
@@ -583,13 +581,13 @@ type hostResult struct {
 	errText  string // ненулевое только при ok=false; SendApply error, либо причина не-SUCCESS статуса
 }
 
-// buildHostResult классифицирует SendApply-возврат:
-//   - err != nil → ok=false, status="error" (доставка/connect не дошла до RunResult);
+// buildHostResult classifies SendApply return:
+//   - err != nil → ok=false, status="error" (delivery/connect did not reach RunResult);
 //   - rr.Status == SUCCESS → ok=true;
-//   - rr.Status иной → ok=false, status — строка enum-а.
+//   - rr.Status other → ok=false, status is enum string.
 //
-// provider запоминается всегда (даже на error-пути), чтобы summary показал,
-// на каком SshProvider произошёл fail.
+// Provider is always remembered (even on error path) so summary shows
+// which SshProvider the fail occurred on.
 func buildHostResult(sid string, providerName string, rr *keeperv1.RunResult, err error) hostResult {
 	if err != nil {
 		return hostResult{sid: sid, provider: providerName, status: "error", errText: err.Error()}
@@ -606,8 +604,8 @@ func buildHostResult(sid string, providerName string, rr *keeperv1.RunResult, er
 	}
 }
 
-// runStatusLabel — короткий kebab-case label RunStatus для summary (без префикса
-// `RUN_STATUS_`, lowercase). Симметрично status-полю summary в audit-event-ах.
+// runStatusLabel is short kebab-case label of RunStatus for summary (no `RUN_STATUS_`
+// prefix, lowercase). Symmetric to status field in summary of audit events.
 func runStatusLabel(st keeperv1.RunStatus) string {
 	switch st {
 	case keeperv1.RunStatus_RUN_STATUS_SUCCESS:
@@ -623,12 +621,12 @@ func runStatusLabel(st keeperv1.RunStatus) string {
 	}
 }
 
-// summarize классифицирует agregated-исход прогона:
-//   - все ok        → success;
-//   - все не-ok     → failed;
-//   - смешанный исход → partial_failed.
+// summarize classifies the aggregated run outcome:
+//   - all ok          → success;
+//   - all not-ok      → failed;
+//   - mixed outcome   → partial_failed.
 //
-// Summary-форма (jsonb в push_runs.summary):
+// Summary form (jsonb in push_runs.summary):
 //
 //	{
 //	  "hosts":         [ {sid, status, error?}, … ],
@@ -637,7 +635,7 @@ func runStatusLabel(st keeperv1.RunStatus) string {
 //	  "fail_count":    <int>
 //	}
 //
-// Порядок hosts — по позициям в fanOut (= sids; уже sorted via union).
+// Hosts order is by fanOut positions (= sids; already sorted via union).
 func summarize(results []hostResult) (PushRunStatus, map[string]any) {
 	hostsArr := make([]map[string]any, 0, len(results))
 	success := 0
@@ -647,8 +645,8 @@ func summarize(results []hostResult) (PushRunStatus, map[string]any) {
 			"status": h.status,
 		}
 		if h.provider != "" {
-			// P2 W-3: routing-decision сохраняется в push_runs.summary.hosts[sid]
-			// (architect-decision: без отдельного per-routing event-а в audit_log).
+			// P2 W-3: routing decision is saved in push_runs.summary.hosts[sid]
+			// (architect decision: no separate per-routing event in audit_log).
 			entry["ssh_provider"] = h.provider
 		}
 		if h.errText != "" {
@@ -678,10 +676,10 @@ func summarize(results []hostResult) (PushRunStatus, map[string]any) {
 	}
 }
 
-// unionTargetSIDs строит отсортированный uniq-список SID-ов из всех планов
-// (объединение по задачам). В pilot scenario из одной apply-задачи план обычно
-// один → план.TargetSIDs прямо проходит; для пары задач с разными where:
-// получаем union, что и нужно push-семантике «прогон по инвентарю».
+// unionTargetSIDs builds a sorted unique list of SIDs from all plans (union by tasks).
+// In pilot scenario with one apply task, plan is usually one → plan.TargetSIDs passed
+// through directly; for a pair of tasks with different where: get union, which is
+// what push semantics needs "run over inventory".
 func unionTargetSIDs(plans []render.DispatchPlan) []string {
 	if len(plans) == 0 {
 		return nil
@@ -699,18 +697,17 @@ func unionTargetSIDs(plans []render.DispatchPlan) []string {
 	for sid := range seen {
 		out = append(out, sid)
 	}
-	// Детерминизм per-host dispatch-а: sort по SID. Лексикографически (через
-	// готовый sort из stdlib — sort.Strings) даёт ту же раскладку, что
-	// LoadByInventory.
+	// Determinism of per-host dispatch: sort by SID. Lexicographically (via
+	// stdlib sort — sort.Strings) gives the same layout as LoadByInventory.
 	sortStrings(out)
 	return out
 }
 
-// sortStrings — упрощённая обёртка вокруг sort.Strings, чтобы run.go не тянул
-// import "sort" в основном пути.
+// sortStrings is a simplified wrapper around sort.Strings so run.go does not need
+// to import "sort" in the main path.
 func sortStrings(s []string) {
-	// inlined insertion-sort: на push-инвентарях <=100 элементов это
-	// быстрее sort.Strings (нет overhead-а интерфейса), а аллокаций НЕТ.
+	// inlined insertion-sort: on push inventories of <=100 elements this is
+	// faster than sort.Strings (no interface overhead), no allocations.
 	for i := 1; i < len(s); i++ {
 		j := i
 		for j > 0 && s[j-1] > s[j] {
@@ -720,9 +717,9 @@ func sortStrings(s []string) {
 	}
 }
 
-// sortHostResults — детерминированный порядок hosts[] в summary (по SID).
-// После слияния routing-failures с dispatch-результатами порядок ломается;
-// inline insertion-sort на короткой выборке (<=100 SID).
+// sortHostResults ensures deterministic order of hosts[] in summary (by SID).
+// After merging routing failures with dispatch results, order is broken;
+// inline insertion-sort on short selection (<=100 SID).
 func sortHostResults(s []hostResult) {
 	for i := 1; i < len(s); i++ {
 		j := i
@@ -733,9 +730,9 @@ func sortHostResults(s []hostResult) {
 	}
 }
 
-// observeRouted — nil-safe wrapper над ProviderMetricsObserver. Free-функция
-// (на interface нельзя навесить метод), чтобы pushorch не повторял nil-проверку
-// на каждый вызов resolveProviders.
+// observeRouted is a nil-safe wrapper around ProviderMetricsObserver. Free function
+// (cannot add method to interface) so pushorch does not repeat nil-check on each
+// resolveProviders call.
 func observeRouted(o ProviderMetricsObserver, providerName, decisionSource string) {
 	if o == nil {
 		return

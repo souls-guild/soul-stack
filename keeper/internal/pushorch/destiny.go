@@ -9,39 +9,39 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
 )
 
-// destinyNamePlaceholder — маркер `{name}` в `default_destiny_source`. Дублирует
-// scenario/destiny.go::destinyNamePlaceholder (нестабильный экспорт между
-// пакетами; держим локально, защищено тестом на совпадение строки).
+// destinyNamePlaceholder is the marker `{name}` in `default_destiny_source`. Duplicates
+// scenario/destiny.go::destinyNamePlaceholder (unstable export between packages;
+// held locally, protected by test for string equivalence).
 const destinyNamePlaceholder = "{name}"
 
-// DestinyTemplateSource — источник шаблона URL `default_destiny_source` (тот же
-// интерфейс, что scenario/destiny.go::DestinyTemplateSource). Прод-реализация —
-// snapshot-чтение serviceregistry.Holder; шаблон читается ЛЕНИВО при каждом
-// резолве, hot-reload скаляра keeper_settings прозрачен. Декларирован здесь
-// (а не импортируется из scenario), чтобы pushorch не тянул scenario-pkg —
-// семантика одна.
+// DestinyTemplateSource is a source of the `default_destiny_source` URL template
+// (same interface as scenario/destiny.go::DestinyTemplateSource). Production
+// implementation reads snapshot from serviceregistry.Holder; template is read
+// lazily on each resolve, hot-reload of keeper_settings scalar is transparent.
+// Declared here (not imported from scenario) so pushorch does not pull scenario
+// package — semantics are identical.
 type DestinyTemplateSource interface {
 	DefaultDestinySource() string
 }
 
-// DestinyArtifactLoader — узкая поверхность [artifact.DestinyLoader] для
-// pushDestinyResolver. Сужено до Load — позволяет fake в unit-тестах без подъёма
-// git. *artifact.DestinyLoader удовлетворяет автоматически.
+// DestinyArtifactLoader is a narrow interface of [artifact.DestinyLoader] for
+// pushDestinyResolver. Narrowed to Load only — allows mocking in unit tests
+// without raising git. *artifact.DestinyLoader satisfies it automatically.
 type DestinyArtifactLoader interface {
 	Load(ctx context.Context, ref artifact.DestinyRef) (*artifact.DestinyArtifact, error)
 }
 
-// pushDestinyResolver — push-сторонняя реализация [render.DestinyResolver].
+// pushDestinyResolver is the push-side implementation of [render.DestinyResolver].
 //
-// ОТЛИЧИЕ от scenario/destiny.go::destinyResolver: scenario-сторона резолвит
-// destiny через `service.yml::destiny[]` зависимости (ref+опц.git-override),
-// здесь destiny задаётся напрямую `<name>@<ref>` из запроса push.apply, и
-// git-URL вытягивается ТОЛЬКО через `default_destiny_source` (per-entry
-// git-override не применим — нет service-снапшота-источника).
+// DIFFERENCE from scenario/destiny.go::destinyResolver: the scenario side resolves
+// destiny via `service.yml::destiny[]` dependencies (ref + optional git-override);
+// here destiny is specified directly as `<name>@<ref>` from push.apply request, and
+// git-URL is retrieved ONLY through `default_destiny_source` (per-entry git-override
+// does not apply — no service-snapshot source available).
 //
-// Render зовёт Resolve(ctx, name) ровно с тем `name`, который пришёл в
-// синтетическом scenario {apply.destiny}. Проверяем равенство: разойтись они
-// могут только при программной ошибке (caller передал чужой resolver).
+// Render calls Resolve(ctx, name) with exactly the `name` that came in the synthetic
+// scenario {apply.destiny}. We verify equality: they can only diverge on programmer
+// error (caller passed wrong resolver).
 type pushDestinyResolver struct {
 	loader   DestinyArtifactLoader
 	template DestinyTemplateSource
@@ -49,17 +49,17 @@ type pushDestinyResolver struct {
 	ref      string
 }
 
-// newPushDestinyResolver конструирует резолвер для одного push-прогона. Все
-// поля обязательны: loader/template — runtime-зависимости daemon-а (production),
-// name/ref — распарсенный `<name>@<ref>` запроса.
+// newPushDestinyResolver constructs a resolver for one push run. All fields are
+// required: loader/template are runtime dependencies of the daemon (production),
+// name/ref are parsed `<name>@<ref>` from the request.
 func newPushDestinyResolver(loader DestinyArtifactLoader, template DestinyTemplateSource, name, ref string) *pushDestinyResolver {
 	return &pushDestinyResolver{loader: loader, template: template, name: name, ref: ref}
 }
 
-// Resolve реализует [render.DestinyResolver.Resolve]. Render-сторона передаёт
-// `name` синтетического apply: ожидается совпадение с зафиксированным при
-// конструкторе (defense-in-depth: подмена destiny из другого прогона = bug в
-// orchestrator-е). git-URL — `default_destiny_source` + замена `{name}`.
+// Resolve implements [render.DestinyResolver.Resolve]. Render side passes the
+// `name` of the synthetic apply: it must match the one fixed at constructor
+// time (defense-in-depth: substituting destiny from another run would be a bug
+// in the orchestrator). git-URL is `default_destiny_source` with `{name}` replaced.
 func (r *pushDestinyResolver) Resolve(ctx context.Context, name string) (*render.ResolvedDestiny, error) {
 	if name != r.name {
 		return nil, fmt.Errorf("pushorch: destiny resolver invoked with name %q, expected %q (programmer error)", name, r.name)
@@ -75,8 +75,8 @@ func (r *pushDestinyResolver) Resolve(ctx context.Context, name string) (*render
 		return nil, fmt.Errorf("pushorch: load destiny %q@%s: %w", name, r.ref, err)
 	}
 
-	// .tmpl-файлы destiny лежат в её собственном снапшоте (одноуровневый резолв
-	// без scenario-local-слоя; параллель с scenario/destiny.go).
+	// .tmpl files of destiny are in its own snapshot (single-level resolve without
+	// scenario-local layer; parallel to scenario/destiny.go).
 	localDir := art.LocalDir
 	templates := render.NewSnapshotTemplateReader(
 		func(rel string) ([]byte, error) { return artifact.ReadSnapshotFile(localDir, rel) },
@@ -90,10 +90,10 @@ func (r *pushDestinyResolver) Resolve(ctx context.Context, name string) (*render
 	}, nil
 }
 
-// resolveGitURL вытягивает git-URL destiny из `default_destiny_source` через
-// шаблон-источник. nil/пустой шаблон / отсутствие `{name}`-плейсхолдера —
-// validation-failed: push-прогон без per-entry git-override (как в
-// service.yml::destiny[]) не может резолвить destiny.
+// resolveGitURL pulls destiny git-URL from `default_destiny_source` via the template
+// source. nil/empty template / missing `{name}` placeholder — validation failed:
+// a push run without per-entry git-override (as in service.yml::destiny[])
+// cannot resolve destiny.
 func (r *pushDestinyResolver) resolveGitURL() (string, error) {
 	var template string
 	if r.template != nil {

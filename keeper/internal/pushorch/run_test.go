@@ -20,8 +20,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// fakeStore — in-memory Store-substitute через fake-DB. Хранит per-applyID
-// статусы/summary, регистрирует терминальный коммит для assert-ов.
+// fakeStore is an in-memory Store substitute via fake-DB. Stores per-applyID
+// statuses/summaries, records terminal commit for assertions.
 type fakeStore struct {
 	mu       sync.Mutex
 	inserts  []PushRunRow
@@ -78,7 +78,7 @@ func (f *fakeStore) Get(ctx context.Context, applyID string) (*PushRunRow, error
 	return nil, ErrNotFound
 }
 
-// fakeTopology — фиксированный roster по InventorySIDs.
+// fakeTopology is a fixed roster by InventorySIDs.
 type fakeTopology struct {
 	hosts []*topology.HostFacts
 	err   error
@@ -88,7 +88,7 @@ func (f *fakeTopology) LoadByInventory(_ context.Context, _ []string) ([]*topolo
 	return f.hosts, f.err
 }
 
-// fakeRender — фиксированный план (один таск, таргет на всех hosts).
+// fakeRender is a fixed plan (one task, target all hosts).
 type fakeRender struct {
 	plan  []*render.RenderedTask
 	plans []render.DispatchPlan
@@ -99,7 +99,7 @@ func (f *fakeRender) Render(_ context.Context, in render.RenderInput) ([]*render
 	return f.plan, f.plans, f.err
 }
 
-// fakeDispatcher — параметризованный SendApply: per-SID можно задать исход.
+// fakeDispatcher is a parametrized SendApply: per-SID outcome can be set.
 type fakeDispatcher struct {
 	mu       sync.Mutex
 	calls    int32
@@ -129,8 +129,8 @@ func (f *fakeDispatcher) SendApply(_ context.Context, sid string, _ string, req 
 	return &keeperv1.RunResult{ApplyId: req.GetApplyId(), Status: keeperv1.RunStatus_RUN_STATUS_SUCCESS}, nil
 }
 
-// fakeRouter — стат-провайдер, возвращает фиксированное имя для любого SID.
-// Используется в unit-тестах NewPushRun-валидации (Router-deps required).
+// fakeRouter is a static provider, returns fixed name for any SID.
+// Used in unit tests of NewPushRun validation (Router-deps required).
 type fakeRouter struct {
 	name   string
 	source push.RouteSource
@@ -144,7 +144,7 @@ func (r *fakeRouter) RouteFor(_ context.Context, _ string) (string, push.RouteSo
 	return r.name, r.source, nil
 }
 
-// fakeAudit — собирает события.
+// fakeAudit collects events.
 type fakeAudit struct {
 	mu     sync.Mutex
 	events []*audit.Event
@@ -166,29 +166,28 @@ func newTestPushRun(t *testing.T, store *fakeStore, topo *fakeTopology, rend *fa
 		Manifest: &config.DestinyManifest{Name: "redis-base"},
 		Tasks:    []config.Task{},
 	}}
-	// Реальный *Store не нужен, передаём подмену через own интерфейс. PushRun
-	// валидирует non-nil Store, но в фейке мы используем интерфейс с теми же
-	// именами методов. Подкладываем real-NewStore с nil-DB; в тестах executeAsync
-	// дёргает только store-методы, которые мы переопределяем через embed-обёртку.
-	// Чтобы оставаться внутри текущего кода без рефакторинга интерфейсов,
-	// собираем PushRun со ссылкой на realStore, но реальные вызовы перехватим
-	// через fakeStore. Поскольку PushRun.deps.Store имеет конкретный тип *Store,
-	// делаем shim: используем real NewStore поверх wrappedDB, который вызывает
-	// fakeStore-методы. Проще — расширить Deps на DB-uninvolved test mode:
-	// здесь test обходит, передавая *Store со специальным fakeDB и embedded
-	// behavior. Чтобы не плодить shim-ы, делаем PushRun с deps.Store=
-	// realStore поверх fakeDB, который только PushRun не читает (UpdateStatus
-	// идут через fakeDB.Exec, который вернёт ok).
+	// Real *Store is not needed, we pass a substitute via own interface. PushRun
+	// validates non-nil Store, but in the fake we use an interface with the same
+	// method names. We lay down real-NewStore with nil-DB; in tests executeAsync
+	// only calls store methods we redefine via embed wrapper. To stay within current
+	// code without interface refactoring, we assemble PushRun with reference to
+	// realStore, but actual calls are intercepted via fakeStore. Since PushRun.deps.Store
+	// has concrete type *Store, we make shim: use real NewStore over wrappedDB which
+	// calls fakeStore methods. Better: extend Deps to DB-uninvolved test mode:
+	// here test bypasses by passing *Store with special fakeDB and embedded behavior.
+	// To avoid multiplying shims, we make PushRun with deps.Store = realStore over
+	// fakeDB, which PushRun only reads (UpdateStatus calls go through fakeDB.Exec
+	// which returns ok).
 	//
-	// Упрощение: тесты executeAsync проверяют ОБЩУЮ цепочку через статусы
-	// fakeStore. Чтобы это работало, мы используем NewPushRun с deps.Store
-	// = реальный Store поверх fakeDB-имитации. Но проще: вместо моков Store
-	// через интерфейс — embed *Store в PushRun, и подмешаем in-memory PG-мок.
-	// Это уходит за рамки текущего слайса (нужна testcontainers).
+	// Simplification: executeAsync tests check the full chain via fakeStore statuses.
+	// For this to work, we use NewPushRun with deps.Store = real Store over fakeDB
+	// imitation. But simpler: instead of Store mocks via interface — embed *Store
+	// in PushRun and mix in in-memory PG mock. This exceeds current slice scope
+	// (needs testcontainers).
 	//
-	// Поэтому unit-тесты executeAsync проверяют детерминистические части (parse,
-	// summarize, fanOut) напрямую, а end-to-end Apply прогон поверх PG отложен
-	// в integration_test.go (S4-integration).
+	// So unit tests of executeAsync check deterministic parts (parse, summarize, fanOut)
+	// directly, while end-to-end Apply run over PG is deferred to integration_test.go
+	// (S4-integration).
 	_ = store
 	_ = topo
 	_ = rend
@@ -265,12 +264,12 @@ func TestSummarize_PartialFailed(t *testing.T) {
 }
 
 func TestSummarize_Empty(t *testing.T) {
-	// Защита от nil-slice / zero-host: total=0 ⇒ status=success (вырожденный
-	// случай: 0 ok == 0 total).
+	// Guard against nil-slice / zero-host: total=0 ⇒ status=success (degenerate
+	// case: 0 ok == 0 total).
 	status, summary := summarize(nil)
 	if status != StatusSuccess {
 		// total=0, success=0 → формула success==total срабатывает.
-		t.Errorf("empty summarize: status = %s, want success (0==0)", status)
+		t.Errorf("empty summarize: status = %s, want success (0 == 0)", status)
 	}
 	if summary["total"] != 0 {
 		t.Errorf("total = %v, want 0", summary["total"])
@@ -313,13 +312,13 @@ func TestBuildHostResult_RunFailed(t *testing.T) {
 	}
 }
 
-// TestResolveProviders_AlphaCompatPreset — α-compat: req.SSHProvider непустой
-// → preset применяется ко ВСЕМ SID-ам, router НЕ вызывается.
+// TestResolveProviders_AlphaCompatPreset is α-compat: non-empty req.SSHProvider
+// → preset applied to ALL SIDs, router NOT called.
 func TestResolveProviders_AlphaCompatPreset(t *testing.T) {
 	calledRouter := false
 	r := &fakeRouter{name: "should-not-be-used", source: push.SourceCluster}
 	r.err = nil
-	// Подсаживаем wrapper, чтобы детектить вызов router-а.
+	// Wire wrapper to detect router call.
 	routerWrap := &trackingRouter{inner: r, called: &calledRouter}
 
 	run := &PushRun{
@@ -331,10 +330,10 @@ func TestResolveProviders_AlphaCompatPreset(t *testing.T) {
 	sids := []string{"sid-1", "sid-2", "sid-3"}
 	sidProv, fails := run.resolveProviders(context.Background(), sids, ApplyRequest{SSHProvider: "preset-provider"}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
 	if calledRouter {
-		t.Error("router был вызван при заданном α-compat preset")
+		t.Error("router was called with α-compat preset set")
 	}
 	if len(fails) != 0 {
-		t.Errorf("fails = %d, want 0 (preset не должен фейлить)", len(fails))
+		t.Errorf("fails = %d, want 0 (preset should not fail)", len(fails))
 	}
 	for _, sid := range sids {
 		if sidProv[sid] != "preset-provider" {
@@ -343,8 +342,8 @@ func TestResolveProviders_AlphaCompatPreset(t *testing.T) {
 	}
 }
 
-// TestResolveProviders_RouterNotRouted_FailPerHost — router возвращает
-// ErrProviderNotRouted → SID попадает в routingResults с error_code.
+// TestResolveProviders_RouterNotRouted_FailPerHost — router returns ErrProviderNotRouted
+// → SID ends up in routingResults with error_code.
 func TestResolveProviders_RouterNotRouted_FailPerHost(t *testing.T) {
 	r := &fakeRouter{err: push.ErrProviderNotRouted}
 	run := &PushRun{
@@ -356,7 +355,7 @@ func TestResolveProviders_RouterNotRouted_FailPerHost(t *testing.T) {
 	sids := []string{"sid-1", "sid-2"}
 	sidProv, fails := run.resolveProviders(context.Background(), sids, ApplyRequest{}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
 	if len(sidProv) != 0 {
-		t.Errorf("sidProv must be empty on all-fail, got %d", len(sidProv))
+		t.Errorf("sidProv must be empty on all fail, got %d", len(sidProv))
 	}
 	if len(fails) != 2 {
 		t.Fatalf("fails len = %d, want 2", len(fails))
@@ -376,8 +375,7 @@ func TestResolveProviders_RouterNotRouted_FailPerHost(t *testing.T) {
 	}
 }
 
-// TestResolveProviders_RouterHappyPath — router возвращает разные provider
-// для разных SID-ов.
+// TestResolveProviders_RouterHappyPath — router returns different providers for different SIDs.
 func TestResolveProviders_RouterHappyPath(t *testing.T) {
 	r := &perSIDRouter{
 		out: map[string]struct {
@@ -403,7 +401,7 @@ func TestResolveProviders_RouterHappyPath(t *testing.T) {
 	}
 }
 
-// trackingRouter — wrapper для проверки факта вызова RouteFor.
+// trackingRouter is a wrapper to verify RouteFor was called.
 type trackingRouter struct {
 	inner  ProviderRouter
 	called *bool
