@@ -1,6 +1,6 @@
 # Incarnation - endpoints of the life cycle of runtime instances
 
-Domain section [Operator API](../operator-api.md): endpoints `/v1/incarnations*` (creating / running scripts / reading / unlock / upgrade / drift / destroy, [ADR-009](../../adr/0009-scenario-dsl.md)) + global read-view of runs `/v1/runs*` (page "All Runs"; runs belong to incarnations - handler and permission from the incarnation domain). Conventions, error-format, pagination, secret-masking (including masking `state`/`spec` in GET responses), mapping table - in the root [operator-api.md](../operator-api.md). MCP side - [mcp-tools/incarnations.md](../mcp-tools/incarnations.md).
+Domain section [Operator API](../operator-api.md): endpoints `/v1/incarnations*` (creating / running scenarios / reading / unlock / upgrade / drift / destroy, [ADR-009](../../adr/0009-scenario-dsl.md)) + global read-view of runs `/v1/runs*` (page "All Runs"; runs belong to incarnations - handler and permission from the incarnation domain). Conventions, error-format, pagination, secret-masking (including masking `state`/`spec` in GET responses), mapping table - in the root [operator-api.md](../operator-api.md). MCP side - [mcp-tools/incarnations.md](../mcp-tools/incarnations.md).
 
 ## Endpoint sections
 
@@ -10,7 +10,7 @@ Mapping endpoint ↔ MCP-tool ↔ permission (table of 17 routes) - in the root 
 
 Permission: `incarnation.create`. MCP-tool: `keeper.incarnation.create`.
 
-Runs the selected bootstrap script for the specified service; creates an entry `incarnation` in Postgres ([architecture.md → Incarnation](../../architecture.md)). The starting script is specified by the `create_scenario` field (a mechanism for several create scripts - any script with top-level `create: true` is valid, see § Selecting a starting script and bare-incarnation below). Asynchronous operation (for bare-incarnation - synchronous, without running).
+Runs the selected bootstrap scenario for the specified service; creates an entry `incarnation` in Postgres ([architecture.md → Incarnation](../../architecture.md)). The starting scenario is specified by the `create_scenario` field (a mechanism for several create scenarios - any scenario with top-level `create: true` is valid, see § Selecting a starting scenario and bare-incarnation below). Asynchronous operation (for bare-incarnation - synchronous, without running).
 
 **Request `IncarnationCreateRequest`:**
 
@@ -20,8 +20,8 @@ Runs the selected bootstrap script for the specified service; creates an entry `
 | `service` | `string` | yes | Service name from `keeper.yml → services[].name` ([config.md → services](../config.md#services--default_destiny_source--default_module_source)). |
 | `covens` | `list<string>` | optional | Declared environment tags incarnation ([ADR-008](../../adr/0008-coven-stable-tags.md) amendment a). The format of each tag is `^[a-z][a-z0-9]*(-[a-z0-9]+)*$` (same as Soul tags). Default is `[]`. Carry RBAC coven-scope incarnation operations (see below). |
 | `traits` | `object` | optional | Operator-set key-value incarnation trait marks ([ADR-060](../../adr/0060-traits.md) R1 slice a): key → value `scalar` OR `list of scalars` (`{"owner": "alice", "owners": ["alice", "bob"]}`). Placed in `incarnation.traits` (source of truth) and materialized into `souls.traits` member hosts. Nested object/array-within-array → `422`. Default is `{}` (no labels). Day-2 replacement - `PUT /v1/incarnations/{name}/traits`. |
-| `create_scenario` | `string` | conditional | The name of the starting (bootstrap) script - a script with top-level `create: true` in `scenario/<name>/main.yml` (a mechanism for several create scripts; the name `create` is NOT privileged, only the key `create: true` gives validity). Format `^[a-z][a-z0-9_]*$`. **Required, if the service offers ≥1 create script**: empty field → `422 validation-failed` with text listing valid scripts. Value outside the create set (operational script, e.g. `add_user`, or non-existent name) → `422 validation-failed`. **For a service without create scripts, the field is ignored** - a bare incarnation is created (see below). Saved in `incarnation.created_scenario`; `rerun-last` uses it on the create path (when the last one to fall was the start script). |
-| `input` | `object` | optional | Input for the selected startup script, is validated against the `scenario/<create_scenario>/input:` service schema (NOT necessarily `create`). For bare-incarnation it is not validated (there is no run). Default is `{}`. |
+| `create_scenario` | `string` | conditional | The name of the starting (bootstrap) scenario - a scenario with top-level `create: true` in `scenario/<name>/main.yml` (a mechanism for several create scenarios; the name `create` is NOT privileged, only the key `create: true` gives validity). Format `^[a-z][a-z0-9_]*$`. **Required, if the service offers ≥1 create scenario**: empty field → `422 validation-failed` with text listing valid scenarios. Value outside the create set (operational scenario, e.g. `add_user`, or non-existent name) → `422 validation-failed`. **For a service without create scenarios, the field is ignored** - a bare incarnation is created (see below). Saved in `incarnation.created_scenario`; `rerun-last` uses it on the create path (when the last one to fall was the start scenario). |
+| `input` | `object` | optional | Input for the selected startup scenario, is validated against the `scenario/<create_scenario>/input:` service schema (NOT necessarily `create`). For bare-incarnation it is not validated (there is no run). Default is `{}`. |
 
 ```json
 {
@@ -53,27 +53,27 @@ Runs the selected bootstrap script for the specified service; creates an entry `
 
 **Errors:** `403 forbidden`, `409 incarnation-already-exists`, `422 service-not-registered`, `422 validation-failed`.
 
-**Manifest `lifecycle.auto_create` ([architecture.md → Service](../../architecture.md)).** If `manifest.lifecycle.auto_create: false`, `POST /v1/incarnations` creates an entry in `ready` **without** running the start script - `apply_id` is not in the response, the operator runs the selected script manually from Run-forms. By default (`true`, backcompat), the startup script runs immediately. Resolved from a snapshot of the deployed service-ref at the time of the request. This is **not** a bare incarnation: the bootstrap script is selected (`created_scenario` non-empty), the run is just postponed.
+**Manifest `lifecycle.auto_create` ([architecture.md → Service](../../architecture.md)).** If `manifest.lifecycle.auto_create: false`, `POST /v1/incarnations` creates an entry in `ready` **without** running the start scenario - `apply_id` is not in the response, the operator runs the selected scenario manually from Run-forms. By default (`true`, backcompat), the startup scenario runs immediately. Resolved from a snapshot of the deployed service-ref at the time of the request. This is **not** a bare incarnation: the bootstrap scenario is selected (`created_scenario` non-empty), the run is just postponed.
 
-##### Selecting a starting script and bare-incarnation
+##### Selecting a starting scenario and bare-incarnation
 
-Starting set of service = **exactly** scripts with top-level `create: true` in `scenario/<name>/main.yml` (auto-discover, [service/manifest.md → Starting script](../../service/manifest.md)). The name `create` is NOT privileged - it is included in the set only if `scenario/create/main.yml` itself carries `create: true`. Three branches depend on the value of `create_scenario` and the composition of this set:
+Starting set of service = **exactly** scenarios with top-level `create: true` in `scenario/<name>/main.yml` (auto-discover, [service/manifest.md → Starting scenario](../../service/manifest.md)). The name `create` is NOT privileged - it is included in the set only if `scenario/create/main.yml` itself carries `create: true`. Three branches depend on the value of `create_scenario` and the composition of this set:
 
-- **The service offers ≥1 create-script + `create_scenario` non-empty and in the set** → the selected script is launched, `input` is validated against ITS `input:`-schema, `created_scenario` = selected name. Async run (`202` + `apply_id`).
-- **Service offers ≥1 create-script + `create_scenario` empty** → `422 validation-failed` (`create_scenario_required`): selection is required because `input` is validated against the schema of a SPECIFIC script, and Keeper does not guess which one. `detail` lists valid scripts.
-- **Service without a single create script + `create_scenario` empty** → **bare incarnation**: record is created in `ready` **synchronously, without running**, `apply_id` is not in the response, `created_scenario` = `null`. Ready for day-2 operations via `POST /v1/incarnations/{name}/scenarios/{scenario}`. Non-empty `create_scenario` for such a service → `422 validation-failed` (name not in the set).
+- **The service offers ≥1 create-scenario + `create_scenario` non-empty and in the set** → the selected scenario is launched, `input` is validated against ITS `input:`-schema, `created_scenario` = selected name. Async run (`202` + `apply_id`).
+- **Service offers ≥1 create-scenario + `create_scenario` empty** → `422 validation-failed` (`create_scenario_required`): selection is required because `input` is validated against the schema of a SPECIFIC scenario, and Keeper does not guess which one. `detail` lists valid scenarios.
+- **Service without a single create scenario + `create_scenario` empty** → **bare incarnation**: record is created in `ready` **synchronously, without running**, `apply_id` is not in the response, `created_scenario` = `null`. Ready for day-2 operations via `POST /v1/incarnations/{name}/scenarios/{scenario}`. Non-empty `create_scenario` for such a service → `422 validation-failed` (name not in the set).
 
-A `create_scenario` value that is not included in the starter set (an operational script like `add_user` or a non-existent name) is always → `422 validation-failed`, the incarnation is not created (failure at the model stage). A name that is invalid in format (`^[a-z][a-z0-9_]*$`, path-traversal guard) is repelled with the same `422` until the set is resolved.
+A `create_scenario` value that is not included in the starter set (an operational scenario like `add_user` or a non-existent name) is always → `422 validation-failed`, the incarnation is not created (failure at the model stage). A name that is invalid in format (`^[a-z][a-z0-9_]*$`, path-traversal guard) is repelled with the same `422` until the set is resolved.
 
-Example (redis carries three create scripts - `create` / `create_from_souls` / `migrate_cluster`): to raise a cluster from scratch, the operator passes `"create_scenario": "create"`; to upload data from an external cluster when creating - `"create_scenario": "migrate_cluster"`.
+Example (redis carries three create scenarios - `create` / `create_from_souls` / `migrate_cluster`): to raise a cluster from scratch, the operator passes `"create_scenario": "create"`; to upload data from an external cluster when creating - `"create_scenario": "migrate_cluster"`.
 
-#### `POST /v1/incarnations/{name}/rerun-last` - restart the last crashed script from `error_locked`
+#### `POST /v1/incarnations/{name}/rerun-last` - restart the last crashed scenario from `error_locked`
 
 Permission: `incarnation.rerun-last`. MCP-tool: `keeper.incarnation.rerun-last`. Path-param: `name`. OperationID: `rerunLastIncarnation`.
 
-Atomically removes the `error_locked` block and **with the same action** restarts **the last fallen script** incarnation ([architecture.md → Atomicity and `error_locked`](../../architecture.md)) - this can be like a bootstrap script (`create`/..., if the creation failed), as well as any day-2 operation (`add_user`, `restart`, ...). The name of the failed script reads under `FOR UPDATE` (create-path is `incarnation.created_scenario`, day-2-path is the script of the last failed run). Under one `FOR UPDATE`: `error_locked → applying` bypassing `ready` (race-free), `state` is NOT touched (last known-good is saved, the snapshot of the transition is written to `state_history` with the general `apply_id`). Difference from `unlock`: `unlock` only clears the block (the operator decides what to do next), and `rerun-last` clears the block and restarts the fallen script with one confirmed action. Asynchronous operation - `202` + `apply_id`, status polling via `GET /v1/incarnations/{name}`.
+Atomically removes the `error_locked` block and **with the same action** restarts **the last fallen scenario** incarnation ([architecture.md → Atomicity and `error_locked`](../../architecture.md)) - this can be like a bootstrap scenario (`create`/..., if the creation failed), as well as any day-2 operation (`add_user`, `restart`, ...). The name of the failed scenario reads under `FOR UPDATE` (create-path is `incarnation.created_scenario`, day-2-path is the scenario of the last failed run). Under one `FOR UPDATE`: `error_locked → applying` bypassing `ready` (race-free), `state` is NOT touched (last known-good is saved, the snapshot of the transition is written to `state_history` with the general `apply_id`). Difference from `unlock`: `unlock` only clears the block (the operator decides what to do next), and `rerun-last` clears the block and restarts the fallen scenario with one confirmed action. Asynchronous operation - `202` + `apply_id`, status polling via `GET /v1/incarnations/{name}`.
 
-**Recovering the input of a crashed run.** The script is restarted with the SAME input values ​​that the crashed run had (and not with defaults) - otherwise rerun with required fields (for example, redis cluster: `version`/`shards`) would have failed on input validations or applied defaults. Source input:
+**Recovering the input of a crashed run.** The scenario is restarted with the SAME input values ​​that the crashed run had (and not with defaults) - otherwise rerun with required fields (for example, redis cluster: `version`/`shards`) would have failed on input validations or applied defaults. Source input:
 
 - **create-path** - `incarnation.spec.input` (what the operator declared when creating);
 - **day-2-path** - recipe for the failed run `apply_runs.recipe.input` (read from `apply_id` of the last snapshot of the same `FOR UPDATE`; vault-refs are stored in strings, secrets are not revealed).
@@ -81,7 +81,7 @@ Atomically removes the `error_locked` block and **with the same action** restart
 Works **only from status `error_locked`**. Two failure cases - **different problem-type** (both `409 Conflict`, machine-readable difference for UI/SDK):
 
 - **status not `error_locked`** (nothing to restart - no run in error) → `409 incarnation-locked`;
-- **input of the failed run is not available** (fail-closed), `recipe IS NULL` for one of three reasons: the run fell **before dispatch** (render_failed / no_hosts / pre-flight - terminal line `apply_runs` was written without a recipe); recipe **cleaned up with retention** Reaper (`purge_apply_runs`); **legacy-run** without saved recipe → `409 rerun-input-unavailable` ([§ Error types](../operator-api.md)). The transaction is NOT committed; the operator removes the block with the usual `unlock` and runs the desired script manually with an explicit input.
+- **input of the failed run is not available** (fail-closed), `recipe IS NULL` for one of three reasons: the run fell **before dispatch** (render_failed / no_hosts / pre-flight - terminal line `apply_runs` was written without a recipe); recipe **cleaned up with retention** Reaper (`purge_apply_runs`); **legacy-run** without saved recipe → `409 rerun-input-unavailable` ([§ Error types](../operator-api.md)). The transaction is NOT committed; the operator removes the block with the usual `unlock` and runs the desired scenario manually with an explicit input.
 
 The same `apply_id` goes both in the `state_history`-snapshot of the unlock transition and in the restarted run - the snapshot correlates with the run.
 
@@ -95,7 +95,7 @@ The same `apply_id` goes both in the `state_history`-snapshot of the unlock tran
 { "reason": "fixed network ACL — retry failed scenario on redis-prod" }
 ```
 
-**Response `202 Accepted`:** `{"apply_id": "<ULID>", "incarnation": "redis-prod", "scenario": "add_user"}` - `scenario` echoes the name of the restarted (crashed) script.
+**Response `202 Accepted`:** `{"apply_id": "<ULID>", "incarnation": "redis-prod", "scenario": "add_user"}` - `scenario` echoes the name of the restarted (crashed) scenario.
 
 **Errors:** `403 forbidden` (no `incarnation.rerun-last`), `404 not-found` (incarnation does not exist), `409 incarnation-locked` (status not `error_locked`), `409 rerun-input-unavailable` (input of the failed day-2 run is not available - the run fell to dispatch and the recipe was not written / the recipe was cleared retention / legacy run without a prescription; see above), `422 validation-failed` (empty `reason` / `reason` longer than 500 characters / invalid path-`name` / incarnation service is not registered in the Service registry), `500 internal-error` (runner not configured / transaction / run launch).
 
@@ -103,13 +103,13 @@ The same `apply_id` goes both in the `state_history`-snapshot of the unlock tran
 
 **Audit:** `incarnation.rerun_last` (`source: api` / `mcp`, `correlation_id=apply_id`, payload `{name, reason, scenario, previous_status, apply_id}`) - written by the handler after a successful unlock transition (`previous_status` is known only after it), does NOT reuse `incarnation.unlocked`.
 
-#### `POST /v1/incarnations/{name}/scenarios/{scenario}` — run a custom script
+#### `POST /v1/incarnations/{name}/scenarios/{scenario}` — run a custom scenario
 
 Permission: `incarnation.run`. MCP-tool: `keeper.incarnation.run`. Path-params: `name`, `scenario`.
 
 Runs scenario `<scenario>` against an existing incarnation. Asynchronous operation, response `202` + `apply_id`. The long path was chosen deliberately - RESTful (scenario as a sub-resource incarnation).
 
-**The existence of a script is an async contract.** Keeper synchronously checks only the grammar of the name (`scenario.ScenarioNamePattern`), not its existence: scripts live in the service git repo (`scenario/<name>/main.yml`) and are resolved only after git-load inside the run, not in the registry. So the **unknown-but-grammatically-valid** script name gives `202 Accepted`, and the run then goes to `error_locked` from `scenario_load_failed` to `status_details`. This is a conscious async contract, consistent with `POST /v1/incarnations` (Create): the operator learns the result through `GET /v1/incarnations/{name}` (`status: applying` → `ready` or `error_locked`), and not from the synchronous `404`/`422`. Synchronous `422 validation-failed` returns only on a name that fails `ScenarioNamePattern` (path-traversal guard).
+**The existence of a scenario is an async contract.** Keeper synchronously checks only the grammar of the name (`scenario.ScenarioNamePattern`), not its existence: scenarios live in the service git repo (`scenario/<name>/main.yml`) and are resolved only after git-load inside the run, not in the registry. So the **unknown-but-grammatically-valid** scenario name gives `202 Accepted`, and the run then goes to `error_locked` from `scenario_load_failed` to `status_details`. This is a conscious async contract, consistent with `POST /v1/incarnations` (Create): the operator learns the result through `GET /v1/incarnations/{name}` (`status: applying` → `ready` or `error_locked`), and not from the synchronous `404`/`422`. Synchronous `422 validation-failed` returns only on a name that fails `ScenarioNamePattern` (path-traversal guard).
 
 **Request:**
 
@@ -130,7 +130,7 @@ Runs scenario `<scenario>` against an existing incarnation. Asynchronous operati
 - Classic single-run (without `wave`): `{"apply_id": "<ULID>", "incarnation": "redis-prod", "scenario": "add-user"}`.
 - Batch (several incarnations) - separate endpoint `POST /v1/voyages` (`kind=scenario`): per-incarnation `apply_id` are linked to Voyage via `voyage_targets.apply_id` (back-link lives in the orchestrator table, not in `apply_runs`). Progress - `GET /v1/voyages/{voyage_id}` ([ADR-043](../../adr/0043-voyage.md)).
 
-**Errors:** `403 forbidden`, `404 not-found` (incarnation does not exist), `409 incarnation-locked`, `409 migration-failed`, `422 validation-failed` (script name did not pass `ScenarioNamePattern`). A non-existent-but-valid script is a **not** error for this endpoint: `202` → `error_locked` (see async contract above).
+**Errors:** `403 forbidden`, `404 not-found` (incarnation does not exist), `409 incarnation-locked`, `409 migration-failed`, `422 validation-failed` (scenario name did not pass `ScenarioNamePattern`). A non-existent-but-valid scenario is a **not** error for this endpoint: `202` → `error_locked` (see async contract above).
 
 #### `GET /v1/incarnations/{name}` - read spec + state + status
 
@@ -145,7 +145,7 @@ Permission: `incarnation.get`. MCP-tool: `keeper.incarnation.get`. Path-param: `
 | `service_version` | `string` (git-ref) | Pin version of the service. |
 | `state_schema_version` | `int` | state_schema version ([ADR-019](../../adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)). |
 | `covens` | `list<string>` | Declared environment tags ([ADR-008](../../adr/0008-coven-stable-tags.md) amendment a). Source RBAC coven-scope (`covens ∪ {name}`). Always an array (empty if there are no tags). |
-| `created_scenario` | `string` (optional) | The name of the starting (bootstrap) script that created the incarnation (the mechanism of several create scripts). `rerun-last` uses it on the create path (when the last one to fall was the start script). For **bare incarnation** (created without bootstrap script) - `null`/omitted (field with `omitempty`). |
+| `created_scenario` | `string` (optional) | The name of the starting (bootstrap) scenario that created the incarnation (the mechanism of several create scenarios). `rerun-last` uses it on the create path (when the last one to fall was the start scenario). For **bare incarnation** (created without bootstrap scenario) - `null`/omitted (field with `omitempty`). |
 | `spec` | `object` | jsonb is what the operator declared ([architecture.md → Incarnation](../../architecture.md)). Sensitive values ​​are masked (`***MASKED***`, see [§ Masking state/spec in GET responses](../operator-api.md)). |
 | `state` | `object` | jsonb - current structured configuration. Sensitive values ​​are masked (see ibid.). |
 | `status` | `enum` | `provisioning` / `ready` / `applying` / `error_locked` / `migration_failed` / `drift` / `destroying`. |
@@ -183,7 +183,7 @@ Permission: `incarnation.history`. MCP-tool: `keeper.incarnation.history`. Path-
 | Field | Type | Meaning |
 |---|---|---|
 | `history_id` | `string` (UUID) | PK. |
-| `scenario` | `string` | The name of the script that caused the change (`"migration"` for migration steps). |
+| `scenario` | `string` | The name of the scenario that caused the change (`"migration"` for migration steps). |
 | `state_before` | `object` | jsonb state before. Sensitive values ​​are masked (`***MASKED***`, see [§ Masking state/spec in GET responses](../operator-api.md)). |
 | `state_after` | `object` | jsonb state after. Sensitive values ​​are masked (see ibid.). |
 | `changed_by_aid` | `string` | FK on `operators(aid)`. |
@@ -194,7 +194,7 @@ Permission: `incarnation.history`. MCP-tool: `keeper.incarnation.history`. Path-
 
 Permission: `incarnation.history` (reuse read-tier: whoever sees the history of the incarnation also sees its runs; separate permission is not entered). **REST-only - MCP-tool - but not.** Path-param: `name`. OperationID: `listIncarnationRuns`.
 
-Read-view of runs (convolution of `apply_runs` by `apply_id`), under the UI "execution status / current job". Run (apply_run) - **NOT Voyage**: a single run of the script has its own read-view (closes UI bug `apply_id`→`/voyages/` 404). Difference from `GET …/history`: history is a log of **state changes** (`state_history`, the entry appears after a successful commit), runs is a log of **the runs themselves** (including running `applying` and failed ones that did not have a state commit).
+Read-view of runs (convolution of `apply_runs` by `apply_id`), under the UI "execution status / current job". Run (apply_run) - **NOT Voyage**: a single run of the scenario has its own read-view (closes UI bug `apply_id`→`/voyages/` 404). Difference from `GET …/history`: history is a log of **state changes** (`state_history`, the entry appears after a successful commit), runs is a log of **the runs themselves** (including running `applying` and failed ones that did not have a state commit).
 
 **Data boundary.** `apply_runs` stores the status on the **host line** (planned...orphaned), not per-task progress (`TaskEvent` is aggregated on Soul, [ADR-012](../../adr/0012-keeper-soul-grpc.md)). The only per-task detail is the address of the failed task on the failed line (see detail endpoint below).
 
@@ -205,7 +205,7 @@ Read-view of runs (convolution of `apply_runs` by `apply_id`), under the UI "exe
 | Field | Type | Meaning |
 |---|---|---|
 | `apply_id` | `string` (ULID) | Run ID. |
-| `scenario` | `string` | Run script name. |
+| `scenario` | `string` | Run scenario name. |
 | `status` | `enum` | Aggregate status of the ENTIRE run - convolution of host lines: `applying` (at least one line is not terminal), `failed` (all are terminal, there is `failed`/`orphaned` - priority is given to `cancelled`), `cancelled` (all are terminal, there is `cancelled`, none `failed`/`orphaned`), `success` (`success`/`no_match` only). |
 | `started_at` | `string` (RFC 3339) | `MIN(started_at)` by host lines. |
 | `finished_at` | `string` (RFC 3339, optional) | `MAX(finished_at)`, only when ALL host lines have finished; otherwise the key is omitted (run still `applying`). |
@@ -240,7 +240,7 @@ Slice of one run by hosts: header (`apply_id`/`scenario`/`status`/`started_at`/`
 
 Permission: `incarnation.history` (same read-tier as RunDetail - **NOT** `audit.read`). **REST-only - MCP-tool, but not.** Path-params: `name`, `apply_id` (ULID; non-ULID → `400 malformed-request`). OperationID: `getIncarnationRunTasks`.
 
-**Per-task** run slice (unlike the detail endpoint above - it gives the host lines `apply_runs`): task plan (`apply_run_plan`) + the result of each task on each host from the audit log (`task.executed`), join by `plan_index`. Under the UI tab is the "run progress": which script was used, from which tasks, what changed. `hosts[]` carries only hosts with a result in audit (pending is not included - the front will finish it off).
+**Per-task** run slice (unlike the detail endpoint above - it gives the host lines `apply_runs`): task plan (`apply_run_plan`) + the result of each task on each host from the audit log (`task.executed`), join by `plan_index`. Under the UI tab is the "run progress": which scenario was used, from which tasks, what changed. `hosts[]` carries only hosts with a result in audit (pending is not included - the front will finish it off).
 
 **Response `200 RunTasksReply`:** `{tasks: [RunTaskEntry]}` (empty plan → `[]`), order - `plan_index`:
 
@@ -379,7 +379,7 @@ Permission: `incarnation.upgrade`. MCP-tool: `keeper.incarnation.upgrade`. Path-
 
 Starts state migration by [ADR-019](../../adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl) + switches `service_version`. One PG transaction ([migrations.md](../../migrations.md)).
 
-With [ADR-0068](../../adr/0068-service-upgrade-v2.md) upgrade - two-phase: if the target version has an upgrade script (`upgrade/<slug>/` with `from:` ⊇ current pin, mode `found`) - after the migration, host orchestration of the transition is automatically started (`status: applying` → `ready`); otherwise (`legacy`) - the same behavior (pin change + state migration + `drift`, the operator finishes with the usual apply). The paired READ endpoint `GET /v1/incarnations/{name}/upgrade-paths` ("where and how can I update": cheap - registry tags + `is_current`; `?to=` - `direction`/`mode`/`reachable`) is described in a separate section below.
+With [ADR-0068](../../adr/0068-service-upgrade-v2.md) upgrade - two-phase: if the target version has an upgrade scenario (`upgrade/<slug>/` with `from:` ⊇ current pin, mode `found`) - after the migration, host orchestration of the transition is automatically started (`status: applying` → `ready`); otherwise (`legacy`) - the same behavior (pin change + state migration + `drift`, the operator finishes with the usual apply). The paired READ endpoint `GET /v1/incarnations/{name}/upgrade-paths` ("where and how can I update": cheap - registry tags + `is_current`; `?to=` - `direction`/`mode`/`reachable`) is described in a separate section below.
 
 **Request:**
 
@@ -390,7 +390,7 @@ With [ADR-0068](../../adr/0068-service-upgrade-v2.md) upgrade - two-phase: if th
 **Response `202 Accepted`:** `{"apply_id": "<ULID>", "run_apply_id": "<ULID>"}` - two ULIDs = two-phase ([ADR-0068 §5](../../adr/0068-service-upgrade-v2.md)):
 
 - `apply_id` (M) — state migration ULID, always present.
-- `run_apply_id` (R) — ULID of the Runner for the upgrade script; **only in the found branch** (there is an upgrade script for the transition → autorun). In the legacy branch (no script → `drift`), the field is omitted (`omitempty`). Poll run - `GET .../runs/{run_apply_id}`.
+- `run_apply_id` (R) — ULID of the Runner for the upgrade scenario; **only in the found branch** (there is an upgrade scenario for the transition → autorun). In the legacy branch (no scenario → `drift`), the field is omitted (`omitempty`). Poll run - `GET .../runs/{run_apply_id}`.
 
 Incarnation status poll - `GET /v1/incarnations/{name}` (`status: applying` → `ready` or `migration_failed`).
 
@@ -412,8 +412,8 @@ Two mutually exclusive blocks (`paths` without `?to=` / `target` with `?to=`) + 
 | `to` / `resolved_commit` / `target_state_schema_version` | `string` / `string` / `int` | Requested snapshot ref, sha1, state_schema of target. |
 | `direction` | `enum` | `no-op` \| `downgrade` \| `forward` \| `same-schema` (ref-bump without schema change). |
 | `mode` | `enum` | `found` \| `legacy` - only for `forward`/`same-schema` (if downgrade/no-op is omitted). |
-| `slug` | `string` | slug upgrade script at `found` (omitted otherwise). |
-| `downgrade` | `bool` | The target is below in the diagram (the chain is not loaded, forward-only). |
+| `slug` | `string` | slug upgrade scenario at `found` (omitted otherwise). |
+| `downgrade` | `bool` | The target is below in the schema (the chain is not loaded, forward-only). |
 | `reachable` | `bool` | The goal is achievable with an upgrade. `false` only if the migration chain is broken. |
 | `unreachable_reason` | `string` | Human-readable reason for unreachability (at `reachable: false`), e.g. `migration chain to <to> is broken: <details>`. Omitted if reachable. |
 | `state_migrations[]` | `array` | Applicable chain `{from, to, path}` ([ADR-019](../../adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)); empty if downgrade/broken chain. |
@@ -426,7 +426,7 @@ Permission: `incarnation.check-drift`. MCP-tool: `keeper.incarnation.check-drift
 
 Implements the on-demand pilot [ADR-031](../../adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile). Keeper parses `scenario/converge/main.yml` from the current git snapshot of the service, renders the plan as for a regular apply, but sends `ApplyRequest{dry_run:true}` to all hosts via work-queue (Acolyte). Soul calls `mod.Plan` (pure-read) instead of `mod.Apply`, returns native `changed` for each task. Keeper collects per-host aggregates and generates `DriftReport`. The information status `drift` is set to post-check if there is hosts_drifted/hosts_failed > 0 (NOT blocking, [ADR-031(d)](../../adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile)).
 
-**Input-resolve convention.** converge-script declares `input:` schema; for each parameter the value is taken:
+**Input-resolve convention.** converge-scenario declares `input:` schema; for each parameter the value is taken:
 1. from `input.<name>` body of the request if the operator passed override;
 2. else from `incarnation.state.<name>` ("by name" convention);
 3. else from `default:` schema;
@@ -475,17 +475,17 @@ Implements the on-demand pilot [ADR-031](../../adr/0031-scry-drift.md#adr-031-sc
 
 Permission: `incarnation.destroy`. MCP-tool: `keeper.incarnation.destroy`. Path-param: `name`.
 
-Demolishes instance. Operator-facing flag `allow_destroy` is mapped to internal `force` (unification force↔allow_destroy): `false` - regular destroy via teardown script `destroy` service (with tombstone period for cloud VMs, [cloud.md → Security destroy](../cloud.md)); `true` - demolition without teardown (DELETE lines directly, escape-hatch for instance without external resources, warning in audit). Asynchronous operation.
+Demolishes instance. Operator-facing flag `allow_destroy` is mapped to internal `force` (unification force↔allow_destroy): `false` - regular destroy via teardown scenario `destroy` service (with tombstone period for cloud VMs, [cloud.md → Security destroy](../cloud.md)); `true` - demolition without teardown (DELETE lines directly, escape-hatch for instance without external resources, warning in audit). Asynchronous operation.
 
 **Query:**
 
 | Param | Type | Required | Meaning |
 |---|---|---|---|
-| `allow_destroy` | `bool` | yes | Mandatory confirmation flag (absent or non-boolean → `400 malformed-request`). `false` - destroy via teardown script `destroy`; if there is no script in the service snapshot `destroy` → `422 validation-failed` (there is nothing to perform teardown with, pass `true`). `true` - demolition without teardown (force). Mapped to internal `force` (status `destroying`, [`status_details.force`]). Symmetry with MCP-tool [`keeper.incarnation.destroy`](../mcp-tools/incarnations.md#keeperincarnationdestroy). |
+| `allow_destroy` | `bool` | yes | Mandatory confirmation flag (absent or non-boolean → `400 malformed-request`). `false` - destroy via teardown scenario `destroy`; if there is no scenario in the service snapshot `destroy` → `422 validation-failed` (there is nothing to perform teardown with, pass `true`). `true` - demolition without teardown (force). Mapped to internal `force` (status `destroying`, [`status_details.force`]). Symmetry with MCP-tool [`keeper.incarnation.destroy`](../mcp-tools/incarnations.md#keeperincarnationdestroy). |
 
-**Response `202 Accepted`:** `{"apply_id": "<ULID>"}`. **Errors:** `400 malformed-request` (`allow_destroy` is missing/not a boolean), `404 not-found`, `409 incarnation-locked` (status does not allow destroy - `applying` / `destroying`), `422 validation-failed` (`allow_destroy=false` and no script `destroy`).
+**Response `202 Accepted`:** `{"apply_id": "<ULID>"}`. **Errors:** `400 malformed-request` (`allow_destroy` is missing/not a boolean), `404 not-found`, `409 incarnation-locked` (status does not allow destroy - `applying` / `destroying`), `422 validation-failed` (`allow_destroy=false` and no scenario `destroy`).
 
-**Manifest `lifecycle.auto_destroy` ([architecture.md → Service](../../architecture.md)).** If `manifest.lifecycle.auto_destroy: false`, deletion is **always** direct (DELETE without teardown), priority over `allow_destroy` - even `allow_destroy=false` does not run a teardown script and does not run into `422` "no script `destroy`." By default (`true`, backcompat), deletion follows the usual `allow_destroy` logic. Resolved from a snapshot of the deployed service-ref.
+**Manifest `lifecycle.auto_destroy` ([architecture.md → Service](../../architecture.md)).** If `manifest.lifecycle.auto_destroy: false`, deletion is **always** direct (DELETE without teardown), priority over `allow_destroy` - even `allow_destroy=false` does not run a teardown scenario and does not run into `422` "no scenario `destroy`." By default (`true`, backcompat), deletion follows the usual `allow_destroy` logic. Resolved from a snapshot of the deployed service-ref.
 
 #### `PATCH /v1/incarnations/{name}/hosts` — edit declared `spec.hosts[]`
 
