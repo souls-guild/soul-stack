@@ -72,9 +72,9 @@ func (r insertRow) Scan(dest ...any) error {
 // --- FingerprintFromCert ---
 
 func TestFingerprintFromCert_StableAndHexFormat(t *testing.T) {
-	// Минимальный «сертификат» c заполненным RawSubjectPublicKeyInfo.
-	// Не нужен валидный ASN.1 для нашего теста — функция считает SHA-256
-	// от bytes этого поля.
+	// Minimal "certificate" with RawSubjectPublicKeyInfo filled.
+	// Valid ASN.1 is not needed for this test; the function computes SHA-256
+	// over bytes of this field.
 	cert := &x509.Certificate{
 		RawSubjectPublicKeyInfo: []byte("public-key-bytes"),
 		SerialNumber:            big.NewInt(1),
@@ -97,7 +97,7 @@ func TestValidFingerprintFormat(t *testing.T) {
 		"",
 		strings.Repeat("0", 63),
 		strings.Repeat("0", 65),
-		strings.Repeat("Z", 64), // не hex.
+		strings.Repeat("Z", 64), // not hex.
 		strings.Repeat("A", 64), // uppercase.
 	}
 	for _, s := range good {

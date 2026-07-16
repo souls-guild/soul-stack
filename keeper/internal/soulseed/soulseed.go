@@ -1,12 +1,12 @@
-// Package soulseed — типы реестра выпущенных SoulSeed-сертификатов
-// (`soul_seeds`) под docs/soul/identity.md.
+// Package soulseed contains registry types for issued SoulSeed certificates
+// (`soul_seeds`) under docs/soul/identity.md.
 //
-// В БД хранится только fingerprint (SHA-256 публичного ключа сертификата,
-// hex). PEM, приватный ключ, серийник CA — не дублируются (главная защита —
-// приватный ключ CA в Vault PKI).
+// DB stores only fingerprint (certificate public-key SHA-256, hex). PEM,
+// private key, CA serial are not duplicated (primary protection is the CA
+// private key in Vault PKI).
 //
-// M2.1.a: типы + CRUD (Insert / SelectActiveBySID / SupersedeBySID / List).
-// Vault PKI integration (signing CSR) и gRPC Bootstrap-handler — M2.1.b.
+// M2.1.a: types + CRUD (Insert / SelectActiveBySID / SupersedeBySID / List).
+// Vault PKI integration (signing CSR) and gRPC Bootstrap handler are M2.1.b.
 package soulseed
 
 import (
@@ -17,16 +17,16 @@ import (
 	"time"
 )
 
-// Status — состояние сертификата в реестре. Совпадает с CHECK
-// `soul_seeds_status_valid` из 009_create_soul_seeds.up.sql
-// (расширен миграцией 017 — добавлен `orphaned`).
+// Status is certificate state in registry. It matches CHECK
+// `soul_seeds_status_valid` from 009_create_soul_seeds.up.sql (extended by
+// migration 017 with `orphaned`).
 //
-//   - `active` — текущий выпущенный сертификат, ровно один per SID.
-//   - `superseded` — заменён ротацией, новый seed уже active.
-//   - `expired` — двинут Жнецом / Vault PKI после not_after.
-//   - `revoked` — оператор отозвал (compromise), новые подключения отказываются.
-//   - `orphaned` — хост cascade-удалён из `core.cloud.provisioned destroyed`
-//     (ADR-017). Не перетирает `revoked` (приоритет revoked > orphaned).
+//   - `active` is current issued certificate, exactly one per SID.
+//   - `superseded` was replaced by rotation, new seed is already active.
+//   - `expired` was moved by Reaper / Vault PKI after not_after.
+//   - `revoked` was revoked by operator (compromise), new connections are denied.
+//   - `orphaned` means host was cascade-deleted from `core.cloud.provisioned destroyed`
+//     (ADR-017). It does not overwrite `revoked` (revoked > orphaned priority).
 type Status string
 
 const (
@@ -37,17 +37,17 @@ const (
 	StatusOrphaned   Status = "orphaned"
 )
 
-// FingerprintHexLen — длина hex-представления SHA-256 fingerprint-а (64).
+// FingerprintHexLen is length of SHA-256 fingerprint hex representation (64).
 const FingerprintHexLen = 64
 
-// Sentinel-ошибки для CRUD-слоя.
+// Sentinel errors for the CRUD layer.
 var (
-	// ErrSeedInvalidFingerprint — fingerprint не соответствует формату
-	// (64 lower-hex). Дублирует CHECK `soul_seeds_fingerprint_format`.
+	// ErrSeedInvalidFingerprint means fingerprint does not match format
+	// (64 lower-hex). It duplicates CHECK `soul_seeds_fingerprint_format`.
 	ErrSeedInvalidFingerprint = errors.New("soulseed: fingerprint format invalid (must be 64 lower-hex chars)")
 )
 
-// SoulSeed — runtime-представление строки реестра `soul_seeds`.
+// SoulSeed is runtime representation of a `soul_seeds` registry row.
 type SoulSeed struct {
 	SeedID           string    `json:"seed_id"`
 	SID              string    `json:"sid"`
@@ -60,19 +60,19 @@ type SoulSeed struct {
 	RevocationReason *string   `json:"revocation_reason,omitempty"`
 }
 
-// FingerprintFromCert вычисляет SHA-256 fingerprint публичного ключа
-// сертификата (DER form of SubjectPublicKeyInfo).
+// FingerprintFromCert computes SHA-256 fingerprint of certificate public key
+// (DER form of SubjectPublicKeyInfo).
 //
-// Симметрично с тем, как `openssl x509 -pubkey | openssl dgst -sha256` —
-// fingerprint привязан к ключу, а не к DER-сертификату целиком (последний
-// меняется при перевыпуске того же ключа).
+// Symmetric with `openssl x509 -pubkey | openssl dgst -sha256`: fingerprint is
+// bound to key, not to the full DER certificate (the latter changes when the
+// same key is reissued).
 func FingerprintFromCert(cert *x509.Certificate) string {
 	sum := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
 	return hex.EncodeToString(sum[:])
 }
 
-// ValidFingerprintFormat — проверка формата (64 lower-hex). Caller
-// валидирует до round-trip-а; PG CHECK страхует на стороне БД.
+// ValidFingerprintFormat checks format (64 lower-hex). Caller validates before
+// round trip; PG CHECK guards DB side.
 func ValidFingerprintFormat(fp string) bool {
 	if len(fp) != FingerprintHexLen {
 		return false

@@ -85,8 +85,8 @@ func seedSoul(t *testing.T, sid string) {
 }
 
 func uniqueFingerprint(c byte) string {
-	// 64 hex (c-byte powered) — каждый тест получает свой fingerprint,
-	// иначе UNIQUE по fingerprint роняет parallel-tests.
+	// 64 hex (c-byte powered): each test gets its own fingerprint, otherwise
+	// UNIQUE on fingerprint breaks parallel tests.
 	return strings.Repeat(string(c), 64)
 }
 
@@ -155,7 +155,7 @@ func TestIntegration_SupersedeAndInsertNewActive(t *testing.T) {
 	if err := Insert(ctx, integrationPool, s1); err != nil {
 		t.Fatalf("first Insert: %v", err)
 	}
-	// Ротация: supersede + insert нового active.
+	// Rotation: supersede + insert new active.
 	if err := SupersedeBySID(ctx, integrationPool, "host1.example.com"); err != nil {
 		t.Fatalf("SupersedeBySID: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestIntegration_SupersedeAndInsertNewActive(t *testing.T) {
 		t.Errorf("active serial = %q, want 02", got.SerialNumber)
 	}
 
-	// История содержит оба seed-а.
+	// History contains both seeds.
 	all, total, err := SelectAll(ctx, integrationPool, ListFilter{SID: "host1.example.com"}, 0, 10)
 	if err != nil {
 		t.Fatalf("SelectAll: %v", err)
@@ -232,11 +232,11 @@ func TestIntegration_Revoke(t *testing.T) {
 	if n != 1 {
 		t.Errorf("affected = %d, want 1", n)
 	}
-	// active больше нет.
+	// active no longer exists.
 	if _, err := SelectActiveBySID(ctx, integrationPool, "host1.example.com"); !errors.Is(err, ErrSeedNotFound) {
 		t.Errorf("err = %v, want ErrSeedNotFound after revoke", err)
 	}
-	// Запись по fingerprint осталась со status='revoked'.
+	// Record by fingerprint remained with status='revoked'.
 	got, err := SelectByFingerprint(ctx, integrationPool, s.Fingerprint)
 	if err != nil {
 		t.Fatalf("SelectByFingerprint: %v", err)
@@ -250,8 +250,8 @@ func TestIntegration_Revoke(t *testing.T) {
 }
 
 func TestIntegration_OrphanActiveBySID(t *testing.T) {
-	// ADR-017 cascade: active-seed переводится в `orphaned`, revoked НЕ
-	// перетирается (precedence revoked > orphaned).
+	// ADR-017 cascade: active seed moves to `orphaned`, revoked is NOT
+	// overwritten (precedence revoked > orphaned).
 	resetAll(t)
 	seedSoul(t, "host-active.example.com")
 	seedSoul(t, "host-revoked.example.com")
