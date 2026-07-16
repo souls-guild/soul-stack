@@ -1,96 +1,96 @@
-# ADR-016. Стратегия parity с SaltStack/Ansible и лицензия Soul Stack
+# ADR-016. Parity strategy with SaltStack/Ansible and the Soul Stack license
 
-- **Контекст.** В мае 2026 пользователь сформулировал требование: «реализовать все актуальные модули из SaltStack и Ansible, чтобы экосистема была как минимум не хуже». Это **направление работ на месяцы**, требующее декомпозиции и фиксации стратегии до старта. Параллельно вскрыт блокер: лицензия Soul Stack не была явно установлена, без неё нельзя принимать решения по wrapper-возможности (GPLv3 Ansible — copyleft-риск) и нельзя выкладывать SDK для авторов плагинов.
-- **Решение.**
+- **Context.** In May 2026 the user formulated a requirement: "implement all the current modules from SaltStack and Ansible, so that the ecosystem is at least no worse." This is a **direction of work spanning months**, requiring decomposition and fixing the strategy before the start. In parallel a blocker was uncovered: the Soul Stack license had not been explicitly set, and without it decisions on the wrapper option cannot be made (GPLv3 Ansible — copyleft risk) and the SDK for plugin authors cannot be published.
+- **Decision.**
 
-  **(a) Лицензия Soul Stack — Apache 2.0.** OSI-approved, permissive, patent grant. Стандарт для современной Go-инфраструктуры (Kubernetes, Vault, Terraform, Prometheus, etcd). Не препятствует корпоративным усыновлениям. Файл [`LICENSE`](../../LICENSE) в корне репозитория. Copyright header — `Copyright 2026 Soul Stack Authors` в каждом файле кода (через линтер при появлении первого исходника). **Open core / freemium**-монетизация: дополнительные платные продукты (enterprise SSO, audit-exports, managed HA, premium support) — **отдельные репозитории** под отдельной коммерческой лицензией, тянут Apache 2.0 ядро как зависимость. Это не часть данного репозитория и не часть Apache 2.0 кодовой базы.
+  **(a) Soul Stack license — Apache 2.0.** OSI-approved, permissive, patent grant. The standard for modern Go infrastructure (Kubernetes, Vault, Terraform, Prometheus, etcd). Does not impede corporate adoptions. File [`LICENSE`](../../LICENSE) at the root of the repository. Copyright header — `Copyright 2026 Soul Stack Authors` in every code file (via the linter once the first source appears). **Open core / freemium** monetization: additional paid products (enterprise SSO, audit-exports, managed HA, premium support) — **separate repositories** under a separate commercial license, pulling the Apache 2.0 core as a dependency. This is not part of this repository and not part of the Apache 2.0 codebase.
 
-  CLA (Contributor License Agreement) — заводится при появлении **первого внешнего contributor-а**, не сейчас. До тех пор copyright holder — единый, лицензия меняется свободно (если когда-нибудь понадобится).
+  CLA (Contributor License Agreement) — set up when the **first external contributor** appears, not now. Until then the copyright holder is single, and the license changes freely (should it ever be needed).
 
-  **(b) Стратегия parity — гибрид без wrapper-а.** Никакого встраивания Ansible/Salt-кода в Soul Stack ни в каком виде. Парности добиваемся через:
-  - **Core MVP — наш рерайт на Go** (см. [ADR-015](0015-core-modules-mvp.md#adr-015-core-модули-mvp-точный-список)). Статически встроен в `soul`-бинарь.
-  - **Экзотика — community-плагины** `soul-mod-*` / `soul-cloud-*` / `soul-ssh-*` в отдельных репозиториях через наш Go SDK ([ADR-011](0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам), `sdk/`). Авторы плагинов сами решают: написать с нуля, портировать из Salt (Apache 2.0 — лицензионно ok), портировать из Ansible (GPLv3 — нельзя в плагин для нашей Apache-системы, нужен рерайт).
-  - **Wrapper Ansible-модулей запрещён** — GPLv3 copyleft-риск контаминации, Python-runtime +attack surface противоречит «безопасность на первом месте», шаблонизаторы не совпадают (Jinja2 vs CEL+Go text/template).
-  - **Wrapper Salt-модулей не рекомендуется** — лицензионно ok (Apache 2.0), но Python-runtime тот же риск, и Salt-модули завязаны на Salt grains/pillars/loader — wrapper становится half-rewrite.
+  **(b) Parity strategy — a hybrid without a wrapper.** No embedding of Ansible/Salt code into Soul Stack in any form. Parity is achieved through:
+  - **Core MVP — our rewrite in Go** (see [ADR-015](0015-core-modules-mvp.md#adr-015-core-modules-mvp-exact-list)). Statically built into the `soul` binary.
+  - **Exotics — community plugins** `soul-mod-*` / `soul-cloud-*` / `soul-ssh-*` in separate repositories via our Go SDK ([ADR-011](0011-go-layout.md#adr-011-go-code-layout-gowork-with-per-side-modules), `sdk/`). Plugin authors decide for themselves: write from scratch, port from Salt (Apache 2.0 — license-wise ok), port from Ansible (GPLv3 — not allowed in a plugin for our Apache system, a rewrite is needed).
+  - **Wrapping Ansible modules is forbidden** — GPLv3 copyleft contamination risk, Python-runtime +attack surface contradicts "security first," the templating engines do not match (Jinja2 vs CEL+Go text/template).
+  - **Wrapping Salt modules is not recommended** — license-wise ok (Apache 2.0), but the Python-runtime is the same risk, and Salt modules are tied to Salt grains/pillars/loader — the wrapper becomes a half-rewrite.
 
-  Принцип «безопасность на первом месте» здесь означает **безопасный default + аудируемый opt-out под ответственность оператора**, а не вечный запрет возможностей: контур (например https-only / SSRF-guard / TLS-verify в `core.url`/`core.http`, [ADR-015](0015-core-modules-mvp.md#adr-015-core-модули-mvp-точный-список)) взведён по умолчанию и снимается явным per-call-флагом с warning в output `warnings` — оператор осознанно ослабляет защиту и видит это в `RunResult`.
+  The "security first" principle here means **a safe default + an auditable opt-out under the operator's responsibility**, not a permanent ban on capabilities: the safeguard (for example https-only / SSRF-guard / TLS-verify in `core.url`/`core.http`, [ADR-015](0015-core-modules-mvp.md#adr-015-core-modules-mvp-exact-list)) is armed by default and is lifted by an explicit per-call flag with a warning in the `warnings` output — the operator deliberately weakens the protection and sees it in the `RunResult`.
 
-  **(c) Поэтапная карта parity:**
+  **(c) Phased parity roadmap:**
 
-  1. **Фаза 0 (сейчас).** Core MVP по [ADR-015](0015-core-modules-mvp.md#adr-015-core-модули-mvp-точный-список). Первый сервис E2E.
-  2. **Фаза 1.** SDK для авторов плагинов (`sdk/module/`, `sdk/clouddriver/`, `sdk/sshprovider/` — уже в [ADR-011](0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам)). Шаблон-репо `soul-mod-template`. Документация «как написать модуль за час».
-  3. **Фаза 2.** Первые ~10 official `soul-mod-*` для горячих кейсов: `postgresql_user`, `redis_acl`, `nginx_vhost`, `docker_container`, `k8s_namespace`, `certbot`, `haproxy`, `mysql_user`, `rabbitmq_user`, `vault_kv`.
-  4. **Фаза 3.** Community-onboarding. Имя «коллекция модулей» (open Q в [module-collections.md](../module-collections.md)) — отдельная задача.
-  5. **Фаза 4 (cloud parity).** 3 CloudDriver в MVP (AWS / GCP / Azure — приоритет open Q №13), остальное — community.
+  1. **Phase 0 (now).** Core MVP per [ADR-015](0015-core-modules-mvp.md#adr-015-core-modules-mvp-exact-list). The first service E2E.
+  2. **Phase 1.** SDK for plugin authors (`sdk/module/`, `sdk/clouddriver/`, `sdk/sshprovider/` — already in [ADR-011](0011-go-layout.md#adr-011-go-code-layout-gowork-with-per-side-modules)). Template repo `soul-mod-template`. Documentation "how to write a module in an hour."
+  3. **Phase 2.** The first ~10 official `soul-mod-*` for hot cases: `postgresql_user`, `redis_acl`, `nginx_vhost`, `docker_container`, `k8s_namespace`, `certbot`, `haproxy`, `mysql_user`, `rabbitmq_user`, `vault_kv`.
+  4. **Phase 3.** Community onboarding. The name "module collection" (open Q in [module-collections.md](../module-collections.md)) — a separate task.
+  5. **Phase 4 (cloud parity).** 3 CloudDriver in MVP (AWS / GCP / Azure — priority open Q #13), the rest — community.
 
-  **(d) Не покрывается этим направлением:**
-  - ~~Event-driven контур (Salt beacons/engines-эквивалент) — нет в Soul Stack, отдельный новый ADR-кандидат на будущее. Backlog.~~ **Закрыт [ADR-030](0030-vigil-oracle.md#adr-030-vigil--oracle--event-driven-мониторинг-beacons--reactor):** beacons-контур введён (Vigil/Portent/Oracle/Decree); community-проверки — через 4-й plugin-kind `soul_beacon`. Engines-эквивалент (long-running на хосте/Keeper-е) ADR-030 **не** вводит — остаётся backlog.
-  - Network-OS / proxy-minions — отдельная развилка, когда появится сценарий.
-  - Windows-поддержка — отдельная развилка, когда появится сценарий.
+  **(d) Not covered by this direction:**
+  - ~~Event-driven contour (a Salt beacons/engines equivalent) — not in Soul Stack, a separate new ADR candidate for the future. Backlog.~~ **Closed by [ADR-030](0030-vigil-oracle.md#adr-030-vigil--oracle--event-driven-monitoring-beacons--reactor):** the beacons contour is introduced (Vigil/Portent/Oracle/Decree); community checks — via the 4th plugin kind `soul_beacon`. The engines equivalent (long-running on a host/Keeper) ADR-030 does **not** introduce — it remains backlog.
+  - Network-OS / proxy-minions — a separate fork when a scenario appears.
+  - Windows support — a separate fork when a scenario appears.
 
-  **(e) Документ-стратегия.** Детальная раскладка (инвентарь, категории, маппинг на 3 плагин-контракта, поэтапную карту) предполагалась отдельным документом `docs/ecosystem-parity.md` — он не создавался; стратегия parity зафиксирована здесь, в [ADR-016](#adr-016-стратегия-parity-с-saltstackansible-и-лицензия-soul-stack) (раздел Decision/Consequences). Этот ADR — единый источник правды решения.
+  **(e) Strategy document.** The detailed breakdown (inventory, categories, mapping onto the 3 plugin contracts, the phased roadmap) was assumed to be a separate document `docs/ecosystem-parity.md` — it was not created; the parity strategy is fixed here, in [ADR-016](#adr-016-parity-strategy-with-saltstackansible-and-the-soul-stack-license) (the Decision/Consequences section). This ADR is the single source of truth for the decision.
 
 - **Consequences.**
-  - В корне репо файл [`LICENSE`](../../LICENSE) (Apache 2.0).
-  - В [`docs/architecture.md`](../architecture.md) появляется новый раздел «Лицензия» (или ссылка на LICENSE) — отдельная задача.
-  - Любой плагин в `soul-mod-*` / `soul-cloud-*` / `soul-ssh-*` репозитории, использующий код под GPLv3, **не может быть включён в official-список Soul Stack** без переписки. Community-плагины под любой совместимой лицензией принимаются как community.
-  - Wrapper Ansible-модулей не рассматривается как опция ни на каком этапе.
-  - Open Q №5 в части стратегии — закрыт. Open Q «Лицензия Soul Stack» — не появляется (закрыт сразу).
+  - At the repo root the file [`LICENSE`](../../LICENSE) (Apache 2.0).
+  - In [`docs/architecture.md`](../architecture.md) a new "License" section appears (or a link to LICENSE) — a separate task.
+  - Any plugin in a `soul-mod-*` / `soul-cloud-*` / `soul-ssh-*` repository that uses code under GPLv3 **cannot be included in the official Soul Stack list** without a rewrite. Community plugins under any compatible license are accepted as community.
+  - Wrapping Ansible modules is not considered as an option at any stage.
+  - Open Q #5 in the strategy part — closed. The open Q "Soul Stack license" — does not arise (closed immediately).
 - **Trade-offs.**
-  - Parity достигается медленнее, чем при wrapper-варианте (годы community-работы vs мгновенный охват). Принимаем — безопасность + лицензионная чистота критичнее.
-  - Apache 2.0 не блокирует AWS-Soul-as-a-service конкурентов. Если в будущем это станет проблемой — миграция на BSL/SUL возможна для **новых версий**, но потребует CLA от всех contributors (поэтому CLA лучше завести до того, как pool contributors вырастет — отдельная operational задача).
-  - Open core разделение требует дисциплины: enterprise-фичи должны жить в отдельном репозитории под другой лицензией, не в этом. Случайный contribution enterprise-фичи в Apache-ядро рискует «случайно» сделать её open source — нужен явный gate (review).
+  - Parity is achieved more slowly than with the wrapper variant (years of community work vs instant coverage). Accepted — security + license cleanliness are more critical.
+  - Apache 2.0 does not block AWS-Soul-as-a-service competitors. If in the future this becomes a problem — a migration to BSL/SUL is possible for **new versions**, but it will require a CLA from all contributors (therefore it is better to set up the CLA before the contributor pool grows — a separate operational task).
+  - The open core split requires discipline: enterprise features must live in a separate repository under a different license, not in this one. An accidental contribution of an enterprise feature into the Apache core risks "accidentally" making it open source — an explicit gate (review) is needed.
 
-- **Amendment (2026-05-27, Plugin SDK Фаза 2 — closure).** Фаза 2 ((c).2 поэтапной карты) фиксируется готовой к старту. PM-decisions, закрывающие развилки списка/namespace/template-механизма/repos/coverage:
+- **Amendment (2026-05-27, Plugin SDK Phase 2 — closure).** Phase 2 ((c).2 of the phased roadmap) is fixed as ready to start. The PM decisions closing the forks of list/namespace/template-mechanism/repos/coverage:
 
-  - **(f) Десять первых official `soul-mod-*` (final list, namespace `official`):**
+  - **(f) Ten first official `soul-mod-*` (final list, namespace `official`):**
 
-    | # | Binary | Назначение |
+    | # | Binary | Purpose |
     |---|---|---|
-    | 1 | `soul-mod-official-postgres-user` | PostgreSQL роли (parity-pair к `postgres-db`) |
-    | 2 | `soul-mod-official-postgres-db` | PostgreSQL базы |
-    | 3 | `soul-mod-official-mysql-user` | MySQL/MariaDB пользователи |
-    | 4 | `soul-mod-official-mysql-db` | MySQL/MariaDB базы |
+    | 1 | `soul-mod-official-postgres-user` | PostgreSQL roles (parity pair to `postgres-db`) |
+    | 2 | `soul-mod-official-postgres-db` | PostgreSQL databases |
+    | 3 | `soul-mod-official-mysql-user` | MySQL/MariaDB users |
+    | 4 | `soul-mod-official-mysql-db` | MySQL/MariaDB databases |
     | 5 | `soul-mod-official-nginx-vhost` | nginx virtual hosts |
     | 6 | `soul-mod-official-haproxy-backend` | HAProxy backend / server |
-    | 7 | `soul-mod-official-docker-container` | Docker контейнер |
-    | 8 | `soul-mod-official-letsencrypt-cert` | Let's Encrypt / certbot сертификат |
+    | 7 | `soul-mod-official-docker-container` | Docker container |
+    | 8 | `soul-mod-official-letsencrypt-cert` | Let's Encrypt / certbot certificate |
     | 9 | `soul-mod-official-redis-acl` | Redis ACL |
-    | 10 | `soul-mod-official-rabbitmq-user` | RabbitMQ пользователи |
+    | 10 | `soul-mod-official-rabbitmq-user` | RabbitMQ users |
 
-    Замещает черновой список из ADR-016 (c).Фаза 2 (`k8s_namespace` отвергнут — это CloudDriver-параллель, не SoulModule; `vault_kv` покрыт keeper-side `core.vault.kv-read` в [ADR-017](0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read); добавлены parity-pair `postgres-user`+`postgres-db` и `letsencrypt-cert`).
+    Supersedes the draft list from ADR-016 (c).Phase 2 (`k8s_namespace` rejected — it is a CloudDriver parallel, not a SoulModule; `vault_kv` is covered by keeper-side `core.vault.kv-read` in [ADR-017](0017-keeper-side-core.md#adr-017-keeper-side-core-modules-extended-corecloudprovisioned-corevaultkv-read); the parity pair `postgres-user`+`postgres-db` and `letsencrypt-cert` are added).
 
-  - **(g) Reserved namespace `official`.** Manifest-имя плагина: `<namespace>.<name>` = `official.postgres-user` (валидируется существующими regex-ами `shared/plugin` — `namespace` и `name` оба `^[a-z][a-z0-9-]{0,62}$`, см. [naming-rules.md → Plugin manifest: regex имён](../naming-rules.md#plugin-manifest-regex-имён)). Binary-name pattern — `soul-mod-official-<name>`. Sigil-trust под namespace `official` подписывается keeper-cluster-issuing-key.
+  - **(g) Reserved namespace `official`.** Plugin manifest name: `<namespace>.<name>` = `official.postgres-user` (validated by the existing `shared/plugin` regexes — `namespace` and `name` are both `^[a-z][a-z0-9-]{0,62}$`, see [naming-rules.md → Plugin manifest: regex of names](../naming-rules.md#plugin-manifest-regex-of-names)). Binary-name pattern — `soul-mod-official-<name>`. Sigil-trust under the namespace `official` is signed by the keeper-cluster-issuing-key.
 
-  - **(h) Template-механизм — гибрид.** Шаблон-репо `soul-stack-plugins/soul-mod-template/` (clone-and-modify) **И** CLI `soul-lint plugin-init <namespace>/<name>` (embed-uses static template через `go:embed`). Оба пути выдают идентичное дерево. Первичный источник правды — embed в `soul-lint/internal/plugininit/template/`; копия в companion-репо синхронизируется вручную (sync-job — backlog). `soul-lint` расширяется новым subcommand-ом — формальное расширение scope офлайн-линтера на init-tooling зафиксировано здесь (propose-and-wait пройден решением пользователя).
+  - **(h) Template mechanism — a hybrid.** Template repo `soul-stack-plugins/soul-mod-template/` (clone-and-modify) **AND** the CLI `soul-lint plugin-init <namespace>/<name>` (embed-uses a static template via `go:embed`). Both paths produce an identical tree. The primary source of truth is the embed in `soul-lint/internal/plugininit/template/`; the copy in the companion repo is synchronized manually (sync-job — backlog). `soul-lint` is extended with a new subcommand — the formal extension of the offline linter's scope to init-tooling is fixed here (propose-and-wait passed by the user's decision).
 
-  - **(i) Repos structure.** Pilot monorepo `soul-stack-plugins/` для SDK-1 (этот amend) + SDK-2 (3 pilot модуля) + SDK-3 (тираж 7). После SDK-2 review (стоп-гейт) — extract per-module через `git filter-repo`. Цель к концу SDK-3: каждый плагин = свой git-репо для clean release-cycle.
+  - **(i) Repos structure.** A pilot monorepo `soul-stack-plugins/` for SDK-1 (this amend) + SDK-2 (3 pilot modules) + SDK-3 (rollout of 7). After the SDK-2 review (a stop-gate) — extract per-module via `git filter-repo`. Goal by the end of SDK-3: each plugin = its own git repo for a clean release cycle.
 
-  - **(j) L3b coverage strategy.** 5 flagship модулей идут под full L3b live-test: `postgres-user` / `nginx-vhost` / `docker-container` / `letsencrypt-cert` / `haproxy-backend`. Остальные 5 — L0 + L1 (testcontainers). Дисбаланс осознанный: cost-of-L3b runtime высок (privileged Debian-12 + bootstrap depend-сервисов), flagship-набор покрывает 3 категории (relational DB + reverse proxy + container-runtime).
+  - **(j) L3b coverage strategy.** 5 flagship modules go under a full L3b live-test: `postgres-user` / `nginx-vhost` / `docker-container` / `letsencrypt-cert` / `haproxy-backend`. The other 5 — L0 + L1 (testcontainers). The imbalance is deliberate: the cost-of-L3b runtime is high (a privileged Debian-12 + bootstrap of dependent services), and the flagship set covers 3 categories (relational DB + reverse proxy + container-runtime).
 
-  - **(k) state_schema у плагинов.** Плагины НЕ владеют `state_schema` (это атрибут service-уровня, [ADR-019](0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)). Плагин может **читать** `incarnation.state` через `register`-механизм service.yml, но не вводит свои version-цепочки.
+  - **(k) state_schema for plugins.** Plugins do NOT own `state_schema` (this is a service-level attribute, [ADR-019](0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)). A plugin may **read** `incarnation.state` through the `register` mechanism of service.yml, but does not introduce its own version chains.
 
-  - **(l) Slice-карта.** SDK-1 (template + CLI + amend, этот commit) → SDK-2 (3 pilot модуля postgres-user/nginx-vhost/docker-container — full pipeline) → SDK-3 (тираж 7 в 2-3 параллельных батчах) → SDK-4 (community-onboarding: Sigil-flow, listing).
+  - **(l) Slice map.** SDK-1 (template + CLI + amend, this commit) → SDK-2 (3 pilot modules postgres-user/nginx-vhost/docker-container — full pipeline) → SDK-3 (rollout of 7 in 2-3 parallel batches) → SDK-4 (community onboarding: Sigil-flow, listing).
 
-  - **(m) Companion-репо `soul-stack-plugins/`.** Parity с `soul-stack-web` extraction — отдельный git-репо, не входит в core go.work. Apache 2.0 [LICENSE](https://github.com/co-cy/soul-stack-plugins/blob/main/LICENSE) (parity с core). Содержимое: `soul-mod-template/` + `docs/module-author-guide.md` + (от SDK-2) каталоги плагинов.
+  - **(m) Companion repo `soul-stack-plugins/`.** In parity with the `soul-stack-web` extraction — a separate git repo, not part of the core go.work. Apache 2.0 [LICENSE](https://github.com/co-cy/soul-stack-plugins/blob/main/LICENSE) (parity with core). Contents: `soul-mod-template/` + `docs/module-author-guide.md` + (from SDK-2) plugin directories.
 
-- **Amendment (2026-05-27, SDK-2 pilot — closure).** SDK-2 завершён: первые 3 official `soul-mod-*` модуля готовы как pattern-fixture для SDK-3-тиража 7 модулей.
-  - **Что готово.** В `soul-stack-plugins/` (отдельный git-репо, не в core go.work):
-    - `soul-mod-official-postgres-user/` — idempotent CREATE/ALTER/DROP ROLE через `pgx/v5` + probe `pg_roles`.
-    - `soul-mod-official-nginx-vhost/` — render vhost-config (Go `text/template`) + `nginx -t` validate ДО write + symlink `sites-enabled/` + `nginx -s reload`. Plan + `PlanReadSafe` ([ADR-031](0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile)) реализованы (drift-detect через сравнение content + symlink target).
-    - `soul-mod-official-docker-container/` — трёхсостояная `running`/`stopped`/`absent` через docker-CLI + drift-detect (image/env/ports/volumes/networks/restart_policy → recreate stop+rm+create+start). Plan + `PlanReadSafe`.
-  - **Pattern fixture (фиксируется для SDK-3 тиража).**
-    - Scaffold через `soul-lint plugin-init official/<name>` ([Amendment 2026-05-27, SDK-1](#adr-016-стратегия-parity-с-saltstackansible-и-лицензия-soul-stack)). После scaffold — handler.go в `internal/<name_snake>/`, не в `internal/` (исправление scaffold-drift, см. observations SDK-2 review).
-    - State-semantics: `present`/`absent` (постоянные ресурсы) или `running`/`stopped`/`absent` (контейнеры/процессы). Стратегия — естественная семантика ресурса, не догма «всегда present/absent».
-    - Уровни тестов: **L0** (in-memory fake-runner + fake stream через `grpc.ServerStreamingServer[ApplyEvent]`, покрытие create/alter/idempotent/drop/unknown-state/error-paths) + **L1** (testcontainers или real-daemon с build-tag `integration`, full-lifecycle) + **L3b** (skeleton с `t.Skip`, build-tag `live`, ждёт Vigil-extension L3b-harness в core-repo).
-    - DI через optional-поля модуля (`connect func(...)` / `runner dockerRunner` / `fs vfs`+`runner cmdRunner`) — nil → real-impl, L0 подсовывает fake.
-    - Secret-input ([shared/plugin.input_secret_without_vault_pattern](https://github.com/co-cy/soul-stack/blob/main/shared/plugin/manifest.go)) — `secret: true` + `pattern: "^vault:.*"`. Keeper-side vault-resolve ([ADR-010](0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов)) резолвит `vault:`-ref в реальное значение ДО Apply — плагин видит резолвлённое.
-    - manifest.yaml формат `side_effects[]` — `[{<resource-type>: <name>}]` (`user`/`file`/`service`/...), closed enum.
-  - **L3b harness Vigil-extension в core-repo** — отдельный slice пост-SDK-2 (skeleton-тесты `t.Skip` ждут).
-  - **Sigil-подпись плагинов** ([ADR-026](0026-sigil.md#adr-026-sigil--целостность-плагинов-keeper-signed-digest-индекс)) — пока НЕ требуется (pilot dev-cycle). Production signing flow — SDK-4.
-  - **Per-module repo extraction** — отдельный slice post-SDK-2-review через `git filter-repo`.
-  - Закрывает SDK-2 ((l) Slice-карта).
+- **Amendment (2026-05-27, SDK-2 pilot — closure).** SDK-2 completed: the first 3 official `soul-mod-*` modules are ready as a pattern-fixture for the SDK-3 rollout of 7 modules.
+  - **What is ready.** In `soul-stack-plugins/` (a separate git repo, not in the core go.work):
+    - `soul-mod-official-postgres-user/` — idempotent CREATE/ALTER/DROP ROLE via `pgx/v5` + a `pg_roles` probe.
+    - `soul-mod-official-nginx-vhost/` — render vhost-config (Go `text/template`) + `nginx -t` validate BEFORE write + symlink `sites-enabled/` + `nginx -s reload`. Plan + `PlanReadSafe` ([ADR-031](0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile)) implemented (drift-detect via comparison of content + symlink target).
+    - `soul-mod-official-docker-container/` — a three-state `running`/`stopped`/`absent` via docker-CLI + drift-detect (image/env/ports/volumes/networks/restart_policy → recreate stop+rm+create+start). Plan + `PlanReadSafe`.
+  - **Pattern fixture (fixed for the SDK-3 rollout).**
+    - Scaffold via `soul-lint plugin-init official/<name>` ([Amendment 2026-05-27, SDK-1](#adr-016-parity-strategy-with-saltstackansible-and-the-soul-stack-license)). After scaffold — handler.go in `internal/<name_snake>/`, not in `internal/` (a scaffold-drift fix, see the observations of the SDK-2 review).
+    - State semantics: `present`/`absent` (persistent resources) or `running`/`stopped`/`absent` (containers/processes). The strategy is the natural semantics of the resource, not the dogma "always present/absent."
+    - Test levels: **L0** (in-memory fake-runner + a fake stream via `grpc.ServerStreamingServer[ApplyEvent]`, coverage of create/alter/idempotent/drop/unknown-state/error-paths) + **L1** (testcontainers or a real-daemon with the build-tag `integration`, full-lifecycle) + **L3b** (skeleton with `t.Skip`, build-tag `live`, awaits the Vigil-extension L3b-harness in the core repo).
+    - DI via optional module fields (`connect func(...)` / `runner dockerRunner` / `fs vfs`+`runner cmdRunner`) — nil → real-impl, L0 substitutes a fake.
+    - Secret-input ([shared/plugin.input_secret_without_vault_pattern](https://github.com/co-cy/soul-stack/blob/main/shared/plugin/manifest.go)) — `secret: true` + `pattern: "^vault:.*"`. Keeper-side vault-resolve ([ADR-010](0010-templating.md#adr-010-templating-engine-cel-for-yaml-expressions-go-texttemplate-for-files)) resolves the `vault:` ref into the real value BEFORE Apply — the plugin sees the resolved one.
+    - The manifest.yaml format `side_effects[]` — `[{<resource-type>: <name>}]` (`user`/`file`/`service`/...), a closed enum.
+  - **L3b harness Vigil-extension in the core repo** — a separate slice post-SDK-2 (the `t.Skip` skeleton tests await it).
+  - **Sigil signature of plugins** ([ADR-026](0026-sigil.md#adr-026-sigil--plugin-integrity-keeper-signed-digest-index)) — not required yet (a pilot dev-cycle). The production signing flow — SDK-4.
+  - **Per-module repo extraction** — a separate slice post-SDK-2-review via `git filter-repo`.
+  - Closes SDK-2 ((l) Slice map).
 
-- **Amendment (2026-06-22, фаза дистрибуции закрытой беты).** Рассматривался выпуск закрытой беты под проприетарной лицензией (all rights reserved + beta-EULA «только для оценки») с последующим ручным переключением на Apache 2.0 на GA.
+- **Amendment (2026-06-22, closed-beta distribution phase).** The release of a closed beta under a proprietary license was considered (all rights reserved + a beta-EULA "for evaluation only") with a subsequent manual switch to Apache 2.0 at GA.
 
-  - **(n) Проприетарная бета-лицензия — отвергнута.** Решение в пользу более простого и менее рискованного варианта: лицензия **остаётся Apache 2.0 на всём протяжении жизненного цикла** — решение (a) в силе без изменений. «Закрытость» беты обеспечивается **операционно** — приватными репозиториями (org `souls-guild`) и доступом по приглашению, а не лицензией. «Переход в публичную фазу» на GA означает **открытие репозиториев** (public), а не смену лицензии. Следствия: править `LICENSE`-файлы, лицензионные метки в nfpm-манифестах (`license: Apache-2.0` корректна) и лицензионные заявления в публичной доке **не требуется**. SDK и community-плагины также остаются Apache 2.0 (как в (a)). Отдельный beta-EULA как артефакт **не вводится**.
+  - **(n) A proprietary beta license — rejected.** The decision favors the simpler and less risky variant: the license **remains Apache 2.0 throughout the entire lifecycle** — decision (a) stands unchanged. The "closedness" of the beta is provided **operationally** — by private repositories (org `souls-guild`) and access by invitation, not by the license. The "transition to the public phase" at GA means **opening the repositories** (public), not a change of license. Consequences: editing the `LICENSE` files, the license labels in the nfpm manifests (`license: Apache-2.0` is correct) and the license statements in the public docs is **not required**. The SDK and community plugins also remain Apache 2.0 (as in (a)). A separate beta-EULA as an artifact is **not introduced**.

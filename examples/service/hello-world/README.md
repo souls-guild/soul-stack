@@ -32,15 +32,15 @@ hello-world/
   сценарий, файл на хосте создан, Keeper зафиксировал greeting_file в Postgres».
 - **Демонстрация CEL-интерполяции input.** `content: "${ input.greeting }"` —
   значение приходит из scenario-`input:` и подставляется на CEL-фазе рендера
-  ([ADR-010](../../../docs/adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов)).
+  ([ADR-010](../../../docs/adr/0010-templating.md#adr-010-templating-engine-cel-for-yaml-expressions-go-texttemplate-for-files)).
 - **Соответствие spec-ам.**
   - `service.yml` — по [docs/service/manifest.md](../../../docs/service/manifest.md).
   - `scenario/create/main.yml` — по [docs/scenario/orchestration.md](../../../docs/scenario/orchestration.md)
     и DSL-ядру задач [docs/destiny/tasks.md](../../../docs/destiny/tasks.md).
   - `input:` — общий стандарт [docs/input.md](../../../docs/input.md).
-  - `core.file.present` с inline-`content` — [ADR-015](../../../docs/adr/0015-core-modules-mvp.md#adr-015-core-модули-mvp-точный-список)
+  - `core.file.present` с inline-`content` — [ADR-015](../../../docs/adr/0015-core-modules-mvp.md#adr-015-core-modules-mvp-exact-list)
     (`core.copy` сознательно не выделяется — покрывается `core.file.present`).
-  - `state_changes.sets` — формат [ADR-009](../../../docs/adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) /
+  - `state_changes.sets` — формат [ADR-009](../../../docs/adr/0009-scenario-dsl.md#adr-009-scenario--the-full-destiny-task-dsl-the-boundary-with-destiny-is-a-recommendation) /
     [ADR-019](../../../docs/adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl).
 
 ## Валидация

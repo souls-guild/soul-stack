@@ -8,13 +8,13 @@
 
 - **scenario-include:** `scenario/create/main.yml` подключает соседний
   `marker.yml` через `include:` — он раскрывается ДО render (двухуровневый резолв
-  scenario-локально → service-level, [orchestration.md §6](../../../docs/scenario/orchestration.md#6-двухуровневый-резолв-ресурсов)).
+  scenario-локально → service-level, [orchestration.md §6](../../../docs/scenario/orchestration.md#6-two-level-resource-resolution)).
   Внутри `marker.yml` — задача `apply: { destiny: pilot-flat, input: {…} }`.
 - **apply:destiny:** apply-задача раскрывается в задачи destiny (вклеиваются в
   общий план со сквозными индексами).
 - **within-destiny include:** `pilot-flat/tasks/main.yml` подключает
   `record.yml` через `include:` — within-destiny include раскрывается при загрузке
-  destiny ([destiny/tasks.md §4](../../../docs/destiny/tasks.md#4-базовые-блоки)).
+  destiny ([destiny/tasks.md §4](../../../docs/destiny/tasks.md#4-basic-blocks)).
   Итоговый плоский список — `core.file.present` (0) + `core.exec.run` (1).
 - **Изоляция:** destiny видит ТОЛЬКО свой `input:` (`marker_file`/`marker_payload`),
   переданный через `apply.input`. scenario-scope (`input.path`/`input.content`,

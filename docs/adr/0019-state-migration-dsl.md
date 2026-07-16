@@ -25,13 +25,13 @@
   5. `UPDATE incarnation SET state, state_schema_version, service_version`.
   6. `COMMIT`.
 
-  On failure — `ROLLBACK`, `incarnation.status: migration_failed` ([§"Versioning and state_schema migrations"](../architecture.md#versioning-and-migrations-state_schema)).
+  On failure — `ROLLBACK`, `incarnation.status: migration_failed` ([§"Versioning and state_schema migrations"](../architecture.md#versioning-and-state_schema-migrations)).
 
   The final status on a successful upgrade is **`drift`, not `ready`** (see the [amendment below](#amendment-upgrade--drift-the-final-status-2026-06-27); the migration changes the DB state, but not the hosts' rollout).
 
   **(d) Reverse — forward-only in the MVP.** A `down:` block is not supported. Recovery in an incident goes through a `state_history` snapshot. Extending to an optional `down:` post-MVP — with no breaking change (a new optional top-level file key).
 
-  **(e) An escape module (`state.migrate` / `core.incarnation.state-migrate`) — not introduced in the MVP.** The old reference in [§"Versioning and state_schema migrations"](../architecture.md#versioning-and-migrations-state_schema) to a "destiny module `state.migrate`" is rejected: the name is outside the dictionary (not in [naming-rules.md](../naming-rules.md)), and the real complex cases (which per the exploration make up <10%) are covered by grammar (a). If it's ever needed — a separate ADR with a propose-and-wait on the name (`core.incarnation.state-migrate` — a candidate modeled on `core.soul.registered`).
+  **(e) An escape module (`state.migrate` / `core.incarnation.state-migrate`) — not introduced in the MVP.** The old reference in [§"Versioning and state_schema migrations"](../architecture.md#versioning-and-state_schema-migrations) to a "destiny module `state.migrate`" is rejected: the name is outside the dictionary (not in [naming-rules.md](../naming-rules.md)), and the real complex cases (which per the exploration make up <10%) are covered by grammar (a). If it's ever needed — a separate ADR with a propose-and-wait on the name (`core.incarnation.state-migrate` — a candidate modeled on `core.soul.registered`).
 
   **(f) Migration tests — in `migrations/<NNN_to_MMM>/tests/<case>.yml`.** Format: `state_before` → migration → assert `state_after`. Symmetric to the destiny/scenario convention (tests next to the artifact under test). The full format — in [`docs/migrations.md`](../migrations.md).
 

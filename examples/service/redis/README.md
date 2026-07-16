@@ -788,7 +788,7 @@ master — **отдельной задачей после всех реплик*
 backlog (плагинный verb `failover`), пока master рестартится напрямую (краткая
 недоступность на рестарт). См. [«В работе»](#в-работе).
 
-> **★ `restart` — за systemd-unit-уровнем, не за конфигом** ([production-conventions §6a](../../../docs/destiny/production-conventions.md#6a-hot-reload-предпочтительнее-рестарта-для-сервисов-с-live-reconfig)).
+> **★ `restart` — за systemd-unit-уровнем, не за конфигом** ([production-conventions §6a](../../../docs/destiny/production-conventions.md#6a-hot-reload-is-preferable-to-restart-for-services-with-live-reconfig)).
 > Изменения `redis.conf`/`users.acl`/TLS-материала **не** требуют рестарта — их
 > применяют day-2 hot-reload-сценарии ниже (`update_config`/`add_user`/`rotate_tls`).
 > `restart` нужен только когда меняется сам systemd-юнит (hardening drop-in) или для
@@ -803,7 +803,7 @@ backlog (плагинный verb `failover`), пока master рестартит
 (`memory_mb`/`maxmemory_policy`/`persistence`/`redis_settings`); сценарий
 **перевычисляет** итоговый `redis_config` тем же compute-переводом, что `create`, но с
 подложкой из `incarnation.state` (не заданное оператором сохраняет ранее
-развёрнутое — day-2 источник истины = `state`, [§7a](../../../docs/destiny/production-conventions.md#7a-day-2-источник-истины--incarnationstate)). Два шага:
+развёрнутое — day-2 источник истины = `state`, [§7a](../../../docs/destiny/production-conventions.md#7a-day-2-source-of-truth--incarnationstate)). Два шага:
 
 1. **re-render** `redis.conf` на диск с новым merged config (полный файл — desired
    state для следующего рестарта процесса). Тот же destiny-кирпич перерендеривает и

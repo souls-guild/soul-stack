@@ -11,7 +11,7 @@
 | Point | What breaks without Vault | Confirmation |
 |---|---|---|
 | **vault client at startup** | `setupVault` brings up a client via `NewClient`, which ends with `Ping(ctx)`; any error (addr empty / auth failed / ping did not arrive) → `errSetupFailed`, the process does not start | `keeper/cmd/keeper/daemon.go` (`setupVault`), `keeper/internal/vault/client.go` (`NewClient` → `cl.Ping(ctx)`) |
-| **JWT signing-key (operator auth)** | Signing/verification of operator JWTs takes the HS256 key from `secret/keeper/jwt-signing-key` ([ADR-014](0014-operator-identity.md#adr-014-identity-модель-оператора-archon)). No Vault → no key → no authentication of Archons → the control plane is unavailable | `keeper/internal/jwt/verifier.go`, `keeper/internal/bootstrap/signing_key.go` |
+| **JWT signing-key (operator auth)** | Signing/verification of operator JWTs takes the HS256 key from `secret/keeper/jwt-signing-key` ([ADR-014](0014-operator-identity.md#adr-014-operator-identity-model-archon)). No Vault → no key → no authentication of Archons → the control plane is unavailable | `keeper/internal/jwt/verifier.go`, `keeper/internal/bootstrap/signing_key.go` |
 | **souls-PKI (mTLS identity of the Souls)** | Issuance and rotation of SoulSeed — signing a Soul agent's CSR via Vault PKI (`pki/sign/<pki_role>`). No Vault → cannot onboard new Souls and rotate existing mTLS pairs | `keeper/internal/vault/pki.go`, `keeper/internal/soulseed/soulseed.go`, `keeper/internal/grpc/bootstrap.go` |
 
 These are not a "convenient integration" but load-bearing nodes: operator auth and the mTLS identity of the Souls. Both are tied to Vault by design ([security premise](../requirements.md): "secrets do not materialize on the disk of the Keeper cluster").
@@ -23,7 +23,7 @@ These are not a "convenient integration" but load-bearing nodes: operator auth a
 | Component | Role | Behavior without it |
 |---|---|---|
 | **PostgreSQL** | cold storage of state ([ADR-005](0005-storage-postgres.md#adr-005-keeper-state-storage--postgres)) | startup fails |
-| **Redis** | hot layer: presence, lease, pub/sub, leader election ([ADR-006](0006-cache-redis.md#adr-006-кэш-и-координация--redis)) | startup fails |
+| **Redis** | hot layer: presence, lease, pub/sub, leader election ([ADR-006](0006-cache-redis.md#adr-006-cache-and-coordination--redis)) | startup fails |
 | **Vault** | secret-store + auth (JWT signing-key) + souls-PKI | startup fails (`setupVault` ping) |
 
 **OPTIONAL-with-degradation — the absence is configurable, the feature turns off clearly, Keeper does not fall:**
@@ -51,12 +51,12 @@ These are not a "convenient integration" but load-bearing nodes: operator auth a
 - **(a) No-Vault mode** (auth key from a file/env + a built-in CA instead of Vault PKI). Breaks the security premise: the CA private key ends up on the Keeper's disk or in PG; in a multi-keeper HA ([ADR-002](0002-transport-grpc-ha.md#adr-002-transport-keeper--souls--grpc-bidirectional-stream-over-mtls-ha-keeper-cluster)) this private key would have to be spread across all nodes of the cluster — an expansion of the attack surface onto every node. **Rejected by the user (2026-06-11).**
 - **(b) A SecretProvider abstraction** (an interface with pluggable backends: Vault / file / cloud-KMS). Premature — there is no multi-backend requirement; an abstraction for the sake of "what if a second backend is needed" is over-engineering. Introduced only on a real requirement.
 
-**Operations note.** "Mandatory Vault" ≠ "a heavy Vault cluster is needed". For a small installation a single-binary Vault with file-storage is enough — operationally this is comparable to running Redis (one process, local storage). The recipe — [`docs/operations/infra.md` → Lightweight Vault for small installations](../operations/infra.md#лёгкий-vault-для-малых-инсталляций). **dev-mode Vault is unsuitable for production** (it loses data on restart) — this is explicitly noted in the recipe.
+**Operations note.** "Mandatory Vault" ≠ "a heavy Vault cluster is needed". For a small installation a single-binary Vault with file-storage is enough — operationally this is comparable to running Redis (one process, local storage). The recipe — [`docs/operations/infra.md` → Lightweight Vault for small installations](../operations/infra.md#lightweight-vault-for-small-installations). **dev-mode Vault is unsuitable for production** (it loses data on restart) — this is explicitly noted in the recipe.
 
 **Relation to ADRs.**
-- **[ADR-005](0005-storage-postgres.md#adr-005-keeper-state-storage--postgres)** / **[ADR-006](0006-cache-redis.md#adr-006-кэш-и-координация--redis)** — the two other REQUIRED components.
-- **[ADR-014](0014-operator-identity.md#adr-014-identity-модель-оператора-archon)** — the JWT signing-key from Vault (one of the hard-required points).
-- **[ADR-026](0026-sigil.md#adr-026-sigil--целостность-плагинов-keeper-signed-digest-индекс)** — the Sigil signing-key (OPTIONAL, fail-closed degradation).
+- **[ADR-005](0005-storage-postgres.md#adr-005-keeper-state-storage--postgres)** / **[ADR-006](0006-cache-redis.md#adr-006-cache-and-coordination--redis)** — the two other REQUIRED components.
+- **[ADR-014](0014-operator-identity.md#adr-014-operator-identity-model-archon)** — the JWT signing-key from Vault (one of the hard-required points).
+- **[ADR-026](0026-sigil.md#adr-026-sigil--plugin-integrity-keeper-signed-digest-index)** — the Sigil signing-key (OPTIONAL, fail-closed degradation).
 - **[ADR-050](0050-tempo.md#adr-050-tempo--per-aid-rate-limiting-write-api)** — an example of a conscious fail-open on degradation (a contrast with fail-closed).
-- **[ADR-052](0052-herald-notifications.md#adr-052-herald--tiding--уведомления-о-событиях-прогонов)** — Herald `secret_ref` (OPTIONAL, delivery without a signature when absent).
+- **[ADR-052](0052-herald-notifications.md#adr-052-herald--tiding--notifications-about-run-events)** — Herald `secret_ref` (OPTIONAL, delivery without a signature when absent).
 - **[ADR-059](0059-audit-sink-pluggable.md)** — Kafka audit-sink (OPTIONAL, **fail-closed** degradation; default `audit.sink: pg` — the mandatory contour is intact, Kafka does NOT become a 4th required).

@@ -130,7 +130,7 @@ L3a/L3b/L3c — **независимые test-frequencies** (PR / nightly / week
 
 ## См. также
 
-- [ADR-039](../../docs/adr/0039-e2e-testing.md#adr-039-e2e-тестирование--три-уровня-без-новой-сущности-словаря) — E2E три уровня.
+- [ADR-039](../../docs/adr/0039-e2e-testing.md#adr-039-e2e-testing--three-levels-without-a-new-dictionary-entity) — E2E три уровня.
 - Architect-вердикт `a241beb181086d7a7` — 5-slice карта L3c.
 - [docs/testing/README.md](../../docs/testing/README.md) — индекс L0/L1/L2/L3a/L3b/L3c.
 - [tests/e2e/README.md](../e2e/README.md) — L3a quickstart.

@@ -167,7 +167,7 @@ slice-ом.
 
 ## Source of truth
 
-- [ADR-039 § E2E три уровня](../../docs/adr/0039-e2e-testing.md#adr-039-e2e-тестирование--три-уровня-без-новой-сущности-словаря).
+- [ADR-039 § E2E три уровня](../../docs/adr/0039-e2e-testing.md#adr-039-e2e-testing--three-levels-without-a-new-dictionary-entity).
 - Architect-консультация `a0af3d90ec118aafd` (5-slice карта L3b).
 - [docs/testing/e2e.md](../../docs/testing/e2e.md) — L3a-канон fixtures/expectations
   (L3b-формат симметричный + container-side ожидания).

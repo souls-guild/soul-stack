@@ -1,6 +1,6 @@
 # ADR-039. E2E testing — three levels without a new dictionary entity
 
-**Context.** The existing test levels cover L0 (unit), L1 (testcontainers per-package integration, `-tags=integration`), L2 ([Trial](0023-trial-test-runner.md#adr-023-тест-раннер-trial-soul-trial-и-dsl-coverage) — hermetic render+migration via `soul-trial` on fixtures). The gap is L3: a reproducible run of a full feature flow on a live Keeper instance with a real bidi stream to Soul agents. Without L3, each feature is tested in parts but not as a whole; regressions at the layer seams (apply_runs lifecycle ↔ RBAC ↔ audit ↔ scenario-runner) slip through.
+**Context.** The existing test levels cover L0 (unit), L1 (testcontainers per-package integration, `-tags=integration`), L2 ([Trial](0023-trial-test-runner.md#adr-023-test-runner-trial-soul-trial-and-dsl-coverage) — hermetic render+migration via `soul-trial` on fixtures). The gap is L3: a reproducible run of a full feature flow on a live Keeper instance with a real bidi stream to Soul agents. Without L3, each feature is tested in parts but not as a whole; regressions at the layer seams (apply_runs lifecycle ↔ RBAC ↔ audit ↔ scenario-runner) slip through.
 
 **Decision.**
 
@@ -33,7 +33,7 @@
 
 - (a) **A new binary `cmd/soul-stub/`** — redundant vs a helper package ([ADR-004](0004-binaries.md#adr-004-binary-layout--keeper-soul-soul-lint-push-mode-as-a-module-inside-keeper) treats a binary as an operator tool, not a test fixture).
 - (b) **A new name for the L3 entity (`Pilgrimage`/`Crucible`)** — propose-and-wait for a single test feature = dictionary bloat; a build tag needs no name.
-- (c) **Extending Trial to L3** — Trial = hermetic by definition ([ADR-023](0023-trial-test-runner.md#adr-023-тест-раннер-trial-soul-trial-и-dsl-coverage)), an L3 live Keeper process → blurs the definition of Trial.
+- (c) **Extending Trial to L3** — Trial = hermetic by definition ([ADR-023](0023-trial-test-runner.md#adr-023-test-runner-trial-soul-trial-and-dsl-coverage)), an L3 live Keeper process → blurs the definition of Trial.
 - (d) **A full YAML DSL with `steps[]`/`inject_fault`/cross-step refs** — a path to a home-grown language; we already have Go tests for logic.
 - (e) **A gitea / git-daemon testcontainer as the default** — heavy; a bare repo in `$TMP` is simpler and sufficient for the Keeper's file:// loader.
 - (f) **GitHub Actions yaml inside this ADR** — contradicts the "CI local in the Makefile" invariant (the repo is still local/private), the workflow is added as a separate task.

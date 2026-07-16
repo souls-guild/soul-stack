@@ -2,7 +2,7 @@
 
 Клиентский CLI оператора Soul Stack — тонкая обёртка над Operator API Keeper-а
 (парный к агенту `soul`, как `kubectl` ↔ `kubelet`). По
-[ADR-004](../docs/adr/0004-binaries.md#adr-004-раскладка-бинарей--keeper-soul-soul-lint-push-режим--модуль-внутри-keeper)
+[ADR-004](../docs/adr/0004-binaries.md#adr-004-binary-layout--keeper-soul-soul-lint-push-mode-as-a-module-inside-keeper)
 первичный интерфейс оператора — OpenAPI и MCP; CLI допустим как тонкая
 обёртка над OpenAPI, не как отдельный поведенческий контракт.
 

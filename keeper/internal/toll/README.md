@@ -1,6 +1,6 @@
 # Toll — cluster-wide detector массового оттока Souls
 
-Реализация [ADR-038](../../../docs/adr/0038-toll.md#adr-038-toll--cluster-wide-detector-массового-оттока-souls).
+Реализация [ADR-038](../../../docs/adr/0038-toll.md#adr-038-toll--a-cluster-wide-detector-of-mass-souls-attrition).
 
 ## Назначение
 

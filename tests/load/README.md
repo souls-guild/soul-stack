@@ -44,7 +44,7 @@ docker-compose. Таргет проверяет `/healthz` до сборки; п
 
 Часть величин метрик не имеет (Redis lease, PG claim/audit-INSERT, Conclave
 live-count) — soul-legion печатает готовые CLI-команды для ручного замера снаружи
-(см. [load-testing.md §4.2](../../docs/testing/load-testing.md#42-наблюдательные-пробелы--метрик-нет-мерить-снаружи-на-1-й-фазе)).
+(см. [load-testing.md §4.2](../../docs/testing/load-testing.md#42-observational-gaps---no-metrics-measure-from-outside-in-the-1st-phase)).
 
 ## ENV-переменные `make stress`
 

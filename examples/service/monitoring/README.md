@@ -5,7 +5,7 @@
 - **node-exporter** — системные метрики, слушает стандартный `:9100` по умолчанию.
   Делегируется в переиспользуемую standalone-destiny
   [`node-exporter`](../../destiny/node-exporter/) через
-  `apply:destiny` (изоляция input, [ADR-009](../../../docs/adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация)):
+  `apply:destiny` (изоляция input, [ADR-009](../../../docs/adr/0009-scenario-dsl.md#adr-009-scenario--the-full-destiny-task-dsl-the-boundary-with-destiny-is-a-recommendation)):
   бинарь `node_exporter` под **стабильным system-аккаунтом `node_exporter`**
   (stateful-ветка), version-aware install + hardened-unit, `arch` из soulprint.
   Опциональные textfile-коллекторы железа (smartmon/nvme/ipmi) выключены здесь
@@ -16,7 +16,7 @@
   (least-privilege доступ к сокету). **Остаётся ИНЛАЙН** (не `apply:destiny`)
   осознанно — см. «Допущения» ниже.
 
-Авторинг на существующих core-модулях MVP ([ADR-015](../../../docs/adr/0015-core-modules-mvp.md#adr-015-core-модули-mvp-точный-список)),
+Авторинг на существующих core-модулях MVP ([ADR-015](../../../docs/adr/0015-core-modules-mvp.md#adr-015-core-modules-mvp-exact-list)),
 без нового Go-кода ядра.
 
 > **Почему redis_exporter — инлайн, а node-exporter — destiny.** Прод-destiny

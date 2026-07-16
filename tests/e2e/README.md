@@ -1,6 +1,6 @@
 # tests/e2e — L3a контракт-тир (fast-loop)
 
-L3a-уровень E2E-тестирования по [ADR-039](../../docs/adr/0039-e2e-testing.md#adr-039-e2e-тестирование--три-уровня-без-новой-сущности-словаря).
+L3a-уровень E2E-тестирования по [ADR-039](../../docs/adr/0039-e2e-testing.md#adr-039-e2e-testing--three-levels-without-a-new-dictionary-entity).
 
 **Статус:** harness рабочий. Каждый тест поднимает изолированный стенд через
 testcontainers (PG / Redis / Vault), запускает **реальный `keeper`-процесс**
@@ -201,7 +201,7 @@ tests/e2e/
 
 ## Source of truth
 
-- [ADR-039](../../docs/adr/0039-e2e-testing.md#adr-039-e2e-тестирование--три-уровня-без-новой-сущности-словаря) — три уровня E2E.
+- [ADR-039](../../docs/adr/0039-e2e-testing.md#adr-039-e2e-testing--three-levels-without-a-new-dictionary-entity) — три уровня E2E.
 - [docs/testing/README.md](../../docs/testing/README.md) — индекс L0/L1/L2/L3a/L3b/L3c.
 - [docs/testing/e2e.md](../../docs/testing/e2e.md) — нормативная спека формата fixtures/expectations.
 - [tests/e2e-live/README.md](../e2e-live/README.md) — L3b live-тир.

@@ -1,6 +1,6 @@
 # smoke-nginx
 
-Минимальный service для L3a E2E pilot ([ADR-039](../../../docs/adr/0039-e2e-testing.md#adr-039-e2e-тестирование--три-уровня-без-новой-сущности-словаря)).
+Минимальный service для L3a E2E pilot ([ADR-039](../../../docs/adr/0039-e2e-testing.md#adr-039-e2e-testing--three-levels-without-a-new-dictionary-entity)).
 
 ## Что демонстрирует
 

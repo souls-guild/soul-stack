@@ -32,6 +32,6 @@ push:
 
 ## См. также
 
-- [ADR-017(h) amendment 2026-05-27](../../../docs/adr/0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read) — нормативное решение.
+- [ADR-017(h) amendment 2026-05-27](../../../docs/adr/0017-keeper-side-core.md#adr-017-keeper-side-core-modules-extended-corecloudprovisioned-corevaultkv-read) — нормативное решение.
 - [docs/keeper/cloud.md → Cloud-init bootstrap (MVP)](../../../docs/keeper/cloud.md#cloud-init-bootstrap-mvp) — оператор-документация.
 - [keeper/internal/cloudinit/](../../../keeper/internal/cloudinit/) — реализация рендера.

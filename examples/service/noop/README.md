@@ -31,7 +31,7 @@ noop/
   - `scenario/create/main.yml` — по [docs/scenario/orchestration.md](../../../docs/scenario/orchestration.md)
     и DSL-ядру задач [docs/destiny/tasks.md](../../../docs/destiny/tasks.md).
   - Параметры модуля `core.exec.run` — `cmd:` (имя бинаря) + `args:` (argv-список,
-    без shell), см. [ADR-015](../../../docs/adr/0015-core-modules-mvp.md#adr-015-core-модули-mvp-точный-список).
+    без shell), см. [ADR-015](../../../docs/adr/0015-core-modules-mvp.md#adr-015-core-modules-mvp-exact-list).
 
 ## Валидация
 

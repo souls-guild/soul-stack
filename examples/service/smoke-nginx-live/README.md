@@ -1,6 +1,6 @@
 # smoke-nginx-live — L3b flagship-smoke
 
-L3b real-soul-in-container smoke ([ADR-039](../../../docs/adr/0039-e2e-testing.md#adr-039-e2e-тестирование--три-уровня-без-новой-сущности-словаря)).
+L3b real-soul-in-container smoke ([ADR-039](../../../docs/adr/0039-e2e-testing.md#adr-039-e2e-testing--three-levels-without-a-new-dictionary-entity)).
 
 Параллель с [smoke-nginx](../smoke-nginx/README.md) (L3a): тот же end-to-end
 сценарий «install nginx → render config → start service», но идущий через
