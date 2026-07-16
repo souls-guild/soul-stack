@@ -20,7 +20,7 @@ The service itself declares WHAT of its incarnations is revealable (not a redis 
 ```yaml
 revealable_secrets:
   - id: redis-users                                            # declaration address (lowercase ident, unique)
-    label: "Пароли Redis-пользователей"                        # caption for the UI
+    label: "Redis user passwords"                                # caption for the UI
     enumerate: state.users                                     # state-path of an array of objects; key = element.name
     vault_ref: "secret/{service}/{incarnation}/users/{key}#password"
 ```

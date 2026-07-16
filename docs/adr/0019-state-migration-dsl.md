@@ -1,53 +1,53 @@
 # ADR-019. State_schema migration DSL
 
-- **Контекст.** [ADR-009](0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) упоминает «плоский DSL: `rename`/`set`/`delete`/`move`» как формат `migrations/<NNN>_to_<MMM>.yml`. Но прежний пример migration-файла redis-сервиса использовал `{% for %}` (Jinja2-стиль из эпохи до ADR-010) — что **не помещается в плоский DSL**. Этот пример был сознательно НЕ тронут во время массовой миграции под ADR-010 (помечен «out of scope, open Q №18»). Реальные сценарии state_schema-миграций включают преобразование коллекций, вычисления от старых полей, splits/merges структур — плоского DSL не хватает.
-- **Решение.**
+- **Context.** [ADR-009](0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) mentions a "flat DSL: `rename`/`set`/`delete`/`move`" as the format of `migrations/<NNN>_to_<MMM>.yml`. But the previous redis-service migration-file example used `{% for %}` (a Jinja2 style from the era before ADR-010) — which **doesn't fit into a flat DSL**. This example was deliberately left untouched during the mass migration under ADR-010 (marked "out of scope, open Q No. 18"). Real state_schema-migration scenarios include collection transforms, computations from old fields, structure splits/merges — a flat DSL isn't enough.
+- **Decision.**
 
-  **(a) Грамматика DSL — плоский + CEL-выражения + структурный `foreach` (MVP).**
+  **(a) DSL grammar — flat + CEL expressions + a structural `foreach` (MVP).**
 
-  Операции (закрытый список в MVP): **`rename`** (move без переименования места), **`set`** (запись значения; `value:` может быть YAML-литералом или CEL-выражением через `${ … }`), **`delete`** (удаление по `path:`), **`move`** (алиас `rename`), **`foreach`** (структурный цикл: `in: <CEL-list/map>`, `as: <var>`, `do: [<operation>, ...]`).
+  Operations (a closed list in the MVP): **`rename`** (a move without renaming the location), **`set`** (writing a value; `value:` can be a YAML literal or a CEL expression via `${ … }`), **`delete`** (removal by `path:`), **`move`** (an alias for `rename`), **`foreach`** (a structural loop: `in: <CEL-list/map>`, `as: <var>`, `do: [<operation>, ...]`).
 
-  Условный `if:`-ключ — **не в MVP** (рекомендуемый таргет (c) по разведке). Расширение до (c) — без breaking change через добавление optional ключа.
+  A conditional `if:` key — **not in the MVP** (the recommended target (c) per the exploration). Extending to (c) — with no breaking change, via adding an optional key.
 
-  Полная грамматика, конвенция тестов, примеры — в [`docs/migrations.md`](../migrations.md).
+  The full grammar, test convention, examples — in [`docs/migrations.md`](../migrations.md).
 
-  **(b) CEL — единый движок выражений (как и весь Soul Stack по [ADR-010](0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов)).** В migration-CEL-контексте:
-  - **Доступно:** `state.*` (текущая мутируемая версия), `<as-name>` внутри `foreach.do[*]`, стандартные CEL-функции (`int`/`string`/`size`/`has`/`keys`/`values`, comprehensions `map`/`filter`/`all`/`exists`).
-  - **Запрещено:** `vault(...)` (не тянуть секреты), `now()` (воспроизводимость тестов), `register.*` / `soulprint.*` / `essence.*` / `input.*` (миграция — чистая функция от старого state, без хост-контекста и без оператор-параметров), user-defined CEL-функции.
+  **(b) CEL — the unified expression engine (like all of Soul Stack per [ADR-010](0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов)).** In the migration-CEL context:
+  - **Available:** `state.*` (the current mutable version), `<as-name>` inside `foreach.do[*]`, standard CEL functions (`int`/`string`/`size`/`has`/`keys`/`values`, comprehensions `map`/`filter`/`all`/`exists`).
+  - **Forbidden:** `vault(...)` (don't pull secrets), `now()` (test reproducibility), `register.*` / `soulprint.*` / `essence.*` / `input.*` (a migration is a pure function of the old state, with no host context and no operator parameters), user-defined CEL functions.
 
-  Это закрывает поверхность исполнения миграции: пасс side-effect-free function `state→state` в sandbox CEL.
+  This closes off the migration's execution surface: a side-effect-free `state→state` pass in a CEL sandbox.
 
-  **(c) Атомарность — одна PG-транзакция на всю цепочку миграций.** При `keeper.incarnation.upgrade name=X to_version=v3.0` (с `state_schema_version: 1` → `3`) keeper:
+  **(c) Atomicity — one PG transaction for the entire migration chain.** On `keeper.incarnation.upgrade name=X to_version=v3.0` (with `state_schema_version: 1` → `3`), keeper:
   1. `BEGIN`.
   2. `SELECT state, state_schema_version FROM incarnation WHERE name = ? FOR UPDATE`.
-  3. Применить `001_to_002` → `002_to_003` последовательно in-memory (in-Go).
-  4. На каждом шаге `INSERT INTO state_history` с `scenario: "migration"`, `state_before` / `state_after`, `changed_by_aid`.
+  3. Apply `001_to_002` → `002_to_003` sequentially in-memory (in-Go).
+  4. At every step, `INSERT INTO state_history` with `scenario: "migration"`, `state_before` / `state_after`, `changed_by_aid`.
   5. `UPDATE incarnation SET state, state_schema_version, service_version`.
   6. `COMMIT`.
-  
-  При фейле — `ROLLBACK`, `incarnation.status: migration_failed` ([§«Versioning и миграции state_schema»](../architecture.md#versioning-и-миграции-state_schema)).
 
-  Финальный статус по успешному upgrade — **`drift`, не `ready`** (см. [Amendment ниже](#amendment-upgrade--drift-финальный-статус-2026-06-27); миграция меняет БД-state, но не раскатку на хостах).
+  On failure — `ROLLBACK`, `incarnation.status: migration_failed` ([§"Versioning and state_schema migrations"](../architecture.md#versioning-и-миграции-state_schema)).
 
-  **(d) Reverse — только forward в MVP.** `down:`-блок не поддерживается. Восстановление при инциденте — через `state_history` snapshot. Расширение до optional `down:` post-MVP — без breaking change (новый optional ключ верхнего уровня файла).
+  The final status on a successful upgrade is **`drift`, not `ready`** (see the [amendment below](#amendment-upgrade--drift-финальный-статус-2026-06-27); the migration changes the DB state, but not the hosts' rollout).
 
-  **(e) Escape-модуль (`state.migrate` / `core.incarnation.state-migrate`) — не вводится в MVP.** Старая ссылка в [§«Versioning и миграции state_schema»](../architecture.md#versioning-и-миграции-state_schema) на «destiny-модуль `state.migrate`» — отвергается: имя вне словаря (не в [naming-rules.md](../naming-rules.md)), и реальные сложные случаи (which согласно разведке составляют <10%) покрываются грамматикой (a). Если когда-нибудь понадобится — отдельный ADR с propose-and-wait по имени (`core.incarnation.state-migrate` — кандидат по образцу `core.soul.registered`).
+  **(d) Reverse — forward-only in the MVP.** A `down:` block is not supported. Recovery in an incident goes through a `state_history` snapshot. Extending to an optional `down:` post-MVP — with no breaking change (a new optional top-level file key).
 
-  **(f) Тесты миграций — в `migrations/<NNN_to_MMM>/tests/<case>.yml`.** Формат: `state_before` → migration → assert `state_after`. Симметрия с конвенцией destiny/scenario (тесты рядом с тестируемым артефактом). Полный формат — в [`docs/migrations.md`](../migrations.md).
+  **(e) An escape module (`state.migrate` / `core.incarnation.state-migrate`) — not introduced in the MVP.** The old reference in [§"Versioning and state_schema migrations"](../architecture.md#versioning-и-миграции-state_schema) to a "destiny module `state.migrate`" is rejected: the name is outside the dictionary (not in [naming-rules.md](../naming-rules.md)), and the real complex cases (which per the exploration make up <10%) are covered by grammar (a). If it's ever needed — a separate ADR with a propose-and-wait on the name (`core.incarnation.state-migrate` — a candidate modeled on `core.soul.registered`).
 
-  **(g) Связь с ADR-009 и ADR-010.** Этот ADR — явное **расширение** «плоского DSL» из ADR-009 на грамматику (a). ADR-009 в части migration-DSL отсылает сюда. Использование CEL — соответствие ADR-010 (один движок выражений на весь Soul Stack).
+  **(f) Migration tests — in `migrations/<NNN_to_MMM>/tests/<case>.yml`.** Format: `state_before` → migration → assert `state_after`. Symmetric to the destiny/scenario convention (tests next to the artifact under test). The full format — in [`docs/migrations.md`](../migrations.md).
+
+  **(g) Relation to ADR-009 and ADR-010.** This ADR is an explicit **extension** of the "flat DSL" from ADR-009 into grammar (a). ADR-009, for the migration-DSL part, refers here. Using CEL — consistent with ADR-010 (one expression engine across all of Soul Stack).
 
 - **Consequences.**
-  - `docs/migrations.md` — новый файл (нормативная спецификация формата).
-  - `docs/architecture.md` § «Versioning и миграции state_schema» — обновляется ссылкой на ADR-019 (старое описание «плоский DSL» → «по ADR-019»).
-  - Пример migration-файла redis-сервиса переписывается под грамматику (a) (вместо `{% for %}`-Jinja — структурный `foreach`). Реализован в [`examples/service/redis/migrations/001_to_002.yml`](../../examples/service/redis/migrations/001_to_002.yml) после redis-консолидации (`redis_users` из списка имён в map `name → {perms, state}`).
-  - Open Q №18 закрыт.
-  - Соул-side изоляция: миграция = keeper-side, никаких изменений в `proto/keeper/v1/`.
+  - `docs/migrations.md` — a new file (the normative format spec).
+  - `docs/architecture.md` § "Versioning and state_schema migrations" — updated with a reference to ADR-019 (the old "flat DSL" description → "per ADR-019").
+  - The redis-service migration-file example is rewritten for grammar (a) (a structural `foreach` instead of `{% for %}` Jinja). Implemented in [`examples/service/redis/migrations/001_to_002.yml`](../../examples/service/redis/migrations/001_to_002.yml) after the redis consolidation (`redis_users` from a list of names to a map `name → {perms, state}`).
+  - Open Q No. 18 is closed.
+  - Soul-side isolation: a migration is keeper-side, no changes to `proto/keeper/v1/`.
 - **Trade-offs.**
-  - Грамматика чуть шире плоского DSL — нужно специфицировать `foreach` (один новый ключ). Это компенсируется симметрией с essence-pipeline (`foreach: + as: + when:` уже зафиксированы) — оператор узнаёт паттерн.
-  - `if`-ключ отложен — условные миграции записей делаются через `foreach + filter` в CEL (`in: ${ state.users.filter(u, u.flag) }`). Менее очевидно, чем явный `if`-в-DSL, но покрывает кейсы. Расширение до (c) — при первом запросе.
-  - Forward-only — оператор не может откатить миграцию декларативно. Принимаем: восстановление через `state_history` — рабочий путь, mandatory `down:` — overkill для редкой операции.
+  - The grammar is a bit wider than a flat DSL — `foreach` needs specifying (one new key). This is offset by symmetry with the essence pipeline (`foreach: + as: + when:` are already fixed) — the operator recognizes the pattern.
+  - The `if` key is deferred — conditional record migrations are done via `foreach + filter` in CEL (`in: ${ state.users.filter(u, u.flag) }`). Less obvious than an explicit `if` in the DSL, but covers the cases. Extending to (c) — on first request.
+  - Forward-only — the operator cannot declaratively roll back a migration. Accepted: recovery via `state_history` is a working path, a mandatory `down:` is overkill for a rare operation.
 
-### Amendment: upgrade → drift (финальный статус, 2026-06-27)
+### Amendment: upgrade → drift (the final status, 2026-06-27)
 
-По успешному `keeper.incarnation.upgrade` (шаг 5 в (c)) финальный `UPDATE incarnation` ставит **`status = drift`, не `ready`**. Причина: upgrade-транзакция мигрировала `incarnation.state` + сменила `state_schema_version`/`service_version` в БД, но **хосты остались на старой раскатке** — реальное состояние расходится с новым state, и без сигнала рассинхрон state↔факт копился бы тихо до следующего apply. `drift` здесь — тот же информационный, не блокирующий статус, что у Scry ([ADR-031(d)](0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile)): сигнал оператору «накати новую версию сервиса на хосты»; remediation — **обычный apply** (`drift → ready`), отдельной команды не требуется. Переход фиксируется отдельной zero-diff `state_history`-записью со `scenario: upgrade-pending-apply` (после step-снимков миграции; `state_before == state_after` = пост-миграционный state), чтобы триаж отличал upgrade-drift от drift, найденного Scry-сканом. Gate upgrade-tx пропускает в финальный `UPDATE` только из `ready`/`drift` (`applying → Busy`, `error_locked`/`migration_failed → Locked` — не перетираются). Реализовано в [`keeper/internal/incarnation/crud.go`](../../keeper/internal/incarnation/crud.go) (`upgradeTx`, `writeUpgradeDriftHistory`, `upgradeDriftScenarioLabel`).
+On a successful `keeper.incarnation.upgrade` (step 5 in (c)), the final `UPDATE incarnation` sets **`status = drift`, not `ready`**. Reason: the upgrade transaction migrated `incarnation.state` + changed `state_schema_version`/`service_version` in the DB, but **the hosts stayed on the old rollout** — the real state diverges from the new state, and without a signal, the state↔fact desync would accumulate silently until the next apply. `drift` here is the same informational, non-blocking status as Scry's ([ADR-031(d)](0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile)): a signal to the operator "roll the new service version onto the hosts"; remediation is a **normal apply** (`drift → ready`), no separate command is needed. The transition is recorded by a separate zero-diff `state_history` entry with `scenario: upgrade-pending-apply` (after the migration's step snapshots; `state_before == state_after` = the post-migration state), so triage can distinguish upgrade-drift from drift found by the Scry scan. The upgrade-tx gate only lets the final `UPDATE` through from `ready`/`drift` (`applying → Busy`, `error_locked`/`migration_failed → Locked` are not overwritten). Implemented in [`keeper/internal/incarnation/crud.go`](../../keeper/internal/incarnation/crud.go) (`upgradeTx`, `writeUpgradeDriftHistory`, `upgradeDriftScenarioLabel`).
