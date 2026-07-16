@@ -13,16 +13,16 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// L1 — provider-as-plugin через РЕАЛЬНЫЙ gRPC server+client (тот же
-// RegisterSshProviderServer, что sdk/sshprovider.Serve навешивает после
-// handshake). Проверяет, что StaticProvider корректно работает по proto-контракту
-// SshProvider поверх настоящего gRPC-стрима, а не in-proc вызова метода. Это L1
-// для пилота: handshake-spawn под Sigil-gate покрыт на keeper/host-стороне
-// (общий pluginhost); здесь — RPC-контракт самого провайдера, симметрично
-// soul-cloud-aws/plugin_l1_test.go.
+// L1 is provider-as-plugin through a REAL gRPC server+client (the same
+// RegisterSshProviderServer that sdk/sshprovider.Serve attaches after
+// handshake). It verifies that StaticProvider correctly works through the
+// SshProvider proto contract over a real gRPC stream, not an in-proc method
+// call. This is L1 for the pilot: handshake-spawn under Sigil-gate is covered on
+// the keeper/host side (shared pluginhost); here we cover the provider RPC
+// contract itself, symmetrically with soul-cloud-aws/plugin_l1_test.go.
 
-// serveProviderGRPC поднимает SshProvider-сервис на TCP-loopback, возвращает
-// клиент + teardown.
+// serveProviderGRPC starts the SshProvider service on TCP loopback and returns a
+// client + teardown.
 func serveProviderGRPC(t *testing.T, impl *StaticProvider) (pluginv1.SshProviderClient, func()) {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
@@ -43,8 +43,8 @@ func serveProviderGRPC(t *testing.T, impl *StaticProvider) (pluginv1.SshProvider
 	}
 }
 
-// l1Adapter — мост impl→SshProviderServer (embed Unimplemented для forward-compat),
-// идентичный sdk/sshprovider.serverAdapter (тот неэкспортирован).
+// l1Adapter bridges impl -> SshProviderServer (embedding Unimplemented for
+// forward compatibility), matching sdk/sshprovider.serverAdapter (not exported).
 type l1Adapter struct {
 	pluginv1.UnimplementedSshProviderServer
 	impl *StaticProvider
@@ -69,12 +69,13 @@ func TestL1_SignOverGRPC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Sign rpc: %v", err)
 	}
-	// private_key доехал через proto-стрим byte-exact и парсится keeper.push-ом.
+	// private_key arrived through the proto stream byte-exact and can be parsed by
+	// keeper.push.
 	if reply.GetPrivateKey() != keyPEM {
-		t.Errorf("private_key изменился при marshaling по gRPC")
+		t.Errorf("private_key changed during gRPC marshaling")
 	}
 	if _, perr := ssh.ParsePrivateKey([]byte(reply.GetPrivateKey())); perr != nil {
-		t.Errorf("private_key не парсится после gRPC: %v", perr)
+		t.Errorf("private_key is not parseable after gRPC: %v", perr)
 	}
 }
 
@@ -93,10 +94,10 @@ func TestL1_AuthorizeDenyOverGRPC(t *testing.T) {
 		t.Fatalf("Authorize rpc: %v", err)
 	}
 	if deny.GetAllowed() {
-		t.Fatal("ждали deny по gRPC")
+		t.Fatal("expected deny over gRPC")
 	}
 	if deny.GetReason() == "" || deny.GetReason()[:len(sshprovider.DenyExplicitDeny)] != string(sshprovider.DenyExplicitDeny) {
-		t.Errorf("reason=%q, ждали %q-префикс по gRPC", deny.GetReason(), sshprovider.DenyExplicitDeny)
+		t.Errorf("reason=%q, expected %q prefix over gRPC", deny.GetReason(), sshprovider.DenyExplicitDeny)
 	}
 
 	allow, err := client.Authorize(ctx, &pluginv1.AuthorizeRequest{Host: "prod-1", User: "soul"})
@@ -104,6 +105,6 @@ func TestL1_AuthorizeDenyOverGRPC(t *testing.T) {
 		t.Fatalf("Authorize rpc: %v", err)
 	}
 	if !allow.GetAllowed() {
-		t.Errorf("ждали allow для user вне deny-list по gRPC")
+		t.Errorf("expected allow for user outside deny-list over gRPC")
 	}
 }

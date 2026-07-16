@@ -15,9 +15,9 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// writeKey генерирует ed25519-приватник в OpenSSH-PEM и кладёт в temp-файл,
-// возвращает путь + PEM (ssh.ParsePrivateKey должен его распарсить — тот же
-// формат, что ждёт keeper.push).
+// writeKey generates an ed25519 private key in OpenSSH PEM and writes it to a
+// temp file, returning path + PEM (ssh.ParsePrivateKey must parse it - the same
+// format keeper.push expects).
 func writeKey(t *testing.T) (path, pemStr string) {
 	t.Helper()
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -45,15 +45,15 @@ func TestSignReturnsKeyPairFromFile(t *testing.T) {
 		t.Fatalf("Sign: %v", err)
 	}
 	if reply.GetPrivateKey() != keyPEM {
-		t.Errorf("private_key не совпал с файлом")
+		t.Errorf("private_key did not match the file")
 	}
 	if reply.GetCertificate() != "" {
-		t.Errorf("certificate=%q, static-провайдер не подписывает (ждём пусто)", reply.GetCertificate())
+		t.Errorf("certificate=%q, static provider does not sign (expected empty)", reply.GetCertificate())
 	}
-	// keeper.push парсит private_key через ssh.ParsePrivateKey — проверяем, что
-	// возвращённый материал валиден (fail-closed-инвариант пройден).
+	// keeper.push parses private_key through ssh.ParsePrivateKey; verify the
+	// returned material is valid (fail-closed invariant passed).
 	if _, perr := ssh.ParsePrivateKey([]byte(reply.GetPrivateKey())); perr != nil {
-		t.Errorf("возвращённый private_key не парсится: %v", perr)
+		t.Errorf("returned private_key is not parseable: %v", perr)
 	}
 }
 
@@ -61,10 +61,10 @@ func TestSignFailClosedOnMissingFile(t *testing.T) {
 	p := &StaticProvider{cfg: params{KeyPath: filepath.Join(t.TempDir(), "absent")}}
 	_, err := p.Sign(context.Background(), &pluginv1.SignRequest{Host: "h", User: "u"})
 	if err == nil {
-		t.Fatal("ждали ошибку на отсутствующий ключ (fail-closed)")
+		t.Fatal("expected error for missing key (fail-closed)")
 	}
 	if !strings.HasPrefix(err.Error(), string(sshprovider.SignFailReadKey)+": ") {
-		t.Errorf("reason-код=%q, ждали префикс %q", err.Error(), sshprovider.SignFailReadKey)
+		t.Errorf("reason code=%q, expected prefix %q", err.Error(), sshprovider.SignFailReadKey)
 	}
 }
 
@@ -76,21 +76,21 @@ func TestSignFailClosedOnCorruptKey(t *testing.T) {
 	p := &StaticProvider{cfg: params{KeyPath: path}}
 	_, err := p.Sign(context.Background(), &pluginv1.SignRequest{Host: "h", User: "u"})
 	if err == nil {
-		t.Fatal("ждали ошибку на битый ключ (fail-closed)")
+		t.Fatal("expected error for corrupt key (fail-closed)")
 	}
 	if !strings.HasPrefix(err.Error(), string(sshprovider.SignFailReadKey)+": ") {
-		t.Errorf("reason-код=%q, ждали префикс %q", err.Error(), sshprovider.SignFailReadKey)
+		t.Errorf("reason code=%q, expected prefix %q", err.Error(), sshprovider.SignFailReadKey)
 	}
 }
 
 func TestAuthorizeAllowByDefault(t *testing.T) {
-	p := &StaticProvider{cfg: params{KeyPath: "/x"}} // пустой deny
+	p := &StaticProvider{cfg: params{KeyPath: "/x"}} // empty deny
 	reply, err := p.Authorize(context.Background(), &pluginv1.AuthorizeRequest{Host: "web-1", User: "soul"})
 	if err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}
 	if !reply.GetAllowed() {
-		t.Errorf("ждали allow при пустом deny-list")
+		t.Errorf("expected allow with empty deny-list")
 	}
 }
 
@@ -102,24 +102,24 @@ func TestAuthorizeDenyExplicit(t *testing.T) {
 		t.Fatalf("Authorize: %v", err)
 	}
 	if deny.GetAllowed() {
-		t.Fatal("ждали deny для пары из deny-list")
+		t.Fatal("expected deny for deny-list pair")
 	}
 	if !strings.HasPrefix(deny.GetReason(), string(sshprovider.DenyExplicitDeny)) {
-		t.Errorf("reason=%q, ждали префикс %q", deny.GetReason(), sshprovider.DenyExplicitDeny)
+		t.Errorf("reason=%q, expected prefix %q", deny.GetReason(), sshprovider.DenyExplicitDeny)
 	}
 
-	// Другой user на том же host — не задет правилом {host, user}.
+	// Another user on the same host is not affected by the {host, user} rule.
 	allow, err := p.Authorize(context.Background(), &pluginv1.AuthorizeRequest{Host: "prod-1", User: "soul"})
 	if err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}
 	if !allow.GetAllowed() {
-		t.Errorf("ждали allow для user вне правила")
+		t.Errorf("expected allow for user outside the rule")
 	}
 }
 
 func TestAuthorizeDenyWildcard(t *testing.T) {
-	// host:"" → wildcard по host: root запрещён везде.
+	// host:"" -> wildcard by host: root is denied everywhere.
 	p := &StaticProvider{cfg: params{Deny: []denyRule{{User: "root"}}}}
 	for _, host := range []string{"web-1", "db-2", "any"} {
 		reply, err := p.Authorize(context.Background(), &pluginv1.AuthorizeRequest{Host: host, User: "root"})
@@ -127,7 +127,7 @@ func TestAuthorizeDenyWildcard(t *testing.T) {
 			t.Fatalf("Authorize %s: %v", host, err)
 		}
 		if reply.GetAllowed() {
-			t.Errorf("ждали deny root на %s (wildcard host)", host)
+			t.Errorf("expected deny for root on %s (wildcard host)", host)
 		}
 	}
 }
@@ -146,25 +146,25 @@ func TestLoadParams(t *testing.T) {
 	t.Run("empty env fail-closed", func(t *testing.T) {
 		t.Setenv(paramsEnv, "")
 		if _, err := loadParams(); err == nil {
-			t.Error("ждали ошибку на пустой env (fail-closed)")
+			t.Error("expected error for empty env (fail-closed)")
 		}
 	})
 	t.Run("no key source fail-closed", func(t *testing.T) {
 		t.Setenv(paramsEnv, `{"deny":[]}`)
 		if _, err := loadParams(); err == nil {
-			t.Error("ждали ошибку без key_path/vault_ref")
+			t.Error("expected error without key_path/vault_ref")
 		}
 	})
 	t.Run("vault_ref without key_path fail-closed", func(t *testing.T) {
 		t.Setenv(paramsEnv, `{"vault_ref":"secret/k"}`)
 		if _, err := loadParams(); err == nil {
-			t.Error("ждали ошибку: vault_ref резолвится keeper.push в key_path до запуска")
+			t.Error("expected error: vault_ref is resolved by keeper.push into key_path before startup")
 		}
 	})
 	t.Run("bad json fail-closed", func(t *testing.T) {
 		t.Setenv(paramsEnv, `{not json`)
 		if _, err := loadParams(); err == nil {
-			t.Error("ждали ошибку на битый JSON")
+			t.Error("expected error for bad JSON")
 		}
 	})
 }
