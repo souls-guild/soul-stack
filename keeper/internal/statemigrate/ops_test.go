@@ -26,7 +26,7 @@ func mustApply(t *testing.T, ops []Op, state map[string]any) map[string]any {
 	return out
 }
 
-// TestDelete_NonexistentNoOp — delete несуществующего пути = no-op (не ошибка).
+// TestDelete_NonexistentNoOp — delete of a non-existent path = no-op (not an error).
 func TestDelete_NonexistentNoOp(t *testing.T) {
 	out := mustApply(t, []Op{
 		{Delete: &DeleteOp{Path: "state.does.not.exist"}},
@@ -35,7 +35,7 @@ func TestDelete_NonexistentNoOp(t *testing.T) {
 	assertDeepEqualJSON(t, out, map[string]any{"keep": 1})
 }
 
-// TestRename_Basic — перенос значения, источник удаляется.
+// TestRename_Basic — moves the value, the source is removed.
 func TestRename_Basic(t *testing.T) {
 	out := mustApply(t, []Op{
 		{Rename: &RenameOp{From: "state.old", To: "state.new"}},
@@ -43,7 +43,7 @@ func TestRename_Basic(t *testing.T) {
 	assertDeepEqualJSON(t, out, map[string]any{"new": "v"})
 }
 
-// TestRename_ToExists — rename в существующий to = ошибка ClassRenameToExists.
+// TestRename_ToExists — rename into an existing to = ClassRenameToExists error.
 func TestRename_ToExists(t *testing.T) {
 	_, err := apply(t, []Op{
 		{Rename: &RenameOp{From: "state.a", To: "state.b"}},
@@ -54,7 +54,7 @@ func TestRename_ToExists(t *testing.T) {
 	}
 }
 
-// TestRename_SourceMissingNoOp — rename несуществующего источника = no-op.
+// TestRename_SourceMissingNoOp — rename of a non-existent source = no-op.
 func TestRename_SourceMissingNoOp(t *testing.T) {
 	out := mustApply(t, []Op{
 		{Rename: &RenameOp{From: "state.missing", To: "state.new"}},
@@ -62,10 +62,10 @@ func TestRename_SourceMissingNoOp(t *testing.T) {
 	assertDeepEqualJSON(t, out, map[string]any{"keep": 1})
 }
 
-// TestMove_AliasOfRename — move = rename (общий code-path).
+// TestMove_AliasOfRename — move = rename (shared code path).
 func TestMove_AliasOfRename(t *testing.T) {
-	// move парсится в Op.Rename — проверяем через parse, что дискриминатор move
-	// даёт тот же тип.
+	// move parses into Op.Rename — verify via parse that the move discriminator
+	// produces the same type.
 	mig, err := Parse([]byte("from_version: 1\nto_version: 2\ntransform:\n  - move: { from: state.a, to: state.b }\n"))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -77,7 +77,7 @@ func TestMove_AliasOfRename(t *testing.T) {
 	assertDeepEqualJSON(t, out, map[string]any{"b": "x"})
 }
 
-// TestSet_CELIntMath — set.value с ${ int(...) * ... } даёт нативное число.
+// TestSet_CELIntMath — set.value with ${ int(...) * ... } yields a native number.
 func TestSet_CELIntMath(t *testing.T) {
 	out := mustApply(t, []Op{
 		{Set: &SetOp{Path: "state.bytes", Value: "${ int(state.mb) * 1048576 }"}},
@@ -87,8 +87,8 @@ func TestSet_CELIntMath(t *testing.T) {
 	}
 }
 
-// TestSet_NestedStructInterpolation — вложенная структура value со встроенными
-// ${ … } в листьях резолвится по-листно.
+// TestSet_NestedStructInterpolation — a nested value structure with embedded
+// ${ … } in the leaves is resolved leaf-by-leaf.
 func TestSet_NestedStructInterpolation(t *testing.T) {
 	out := mustApply(t, []Op{
 		{Set: &SetOp{Path: "state.cfg", Value: map[string]any{
@@ -114,7 +114,7 @@ func TestSet_NestedStructInterpolation(t *testing.T) {
 	}
 }
 
-// TestSet_CreatesIntermediateMaps — set создаёт промежуточные map.
+// TestSet_CreatesIntermediateMaps — set creates intermediate maps.
 func TestSet_CreatesIntermediateMaps(t *testing.T) {
 	out := mustApply(t, []Op{
 		{Set: &SetOp{Path: "state.a.b.c", Value: "deep"}},
@@ -122,7 +122,7 @@ func TestSet_CreatesIntermediateMaps(t *testing.T) {
 	assertDeepEqualJSON(t, out, map[string]any{"a": map[string]any{"b": map[string]any{"c": "deep"}}})
 }
 
-// TestForeach_OverMapBindsValue — foreach по map биндит <as> к ЗНАЧЕНИЮ.
+// TestForeach_OverMapBindsValue — foreach over a map binds <as> to the VALUE.
 func TestForeach_OverMapBindsValue(t *testing.T) {
 	out := mustApply(t, []Op{
 		{Foreach: &ForeachOp{
@@ -142,7 +142,7 @@ func TestForeach_OverMapBindsValue(t *testing.T) {
 	}
 }
 
-// TestForeach_OverListBindsElement — foreach по списку биндит <as> к ЭЛЕМЕНТУ.
+// TestForeach_OverListBindsElement — foreach over a list binds <as> to the ELEMENT.
 func TestForeach_OverListBindsElement(t *testing.T) {
 	out := mustApply(t, []Op{
 		{Foreach: &ForeachOp{
@@ -159,7 +159,7 @@ func TestForeach_OverListBindsElement(t *testing.T) {
 	}
 }
 
-// TestForeach_Nested — вложенный foreach: внешний и внутренний <as> в scope.
+// TestForeach_Nested — nested foreach: outer and inner <as> both in scope.
 func TestForeach_Nested(t *testing.T) {
 	out := mustApply(t, []Op{
 		{Foreach: &ForeachOp{
@@ -186,7 +186,7 @@ func TestForeach_Nested(t *testing.T) {
 	}
 }
 
-// TestForeach_ScalarNotIterable — foreach in: даёт скаляр → ошибка.
+// TestForeach_ScalarNotIterable — foreach in: yields a scalar → error.
 func TestForeach_ScalarNotIterable(t *testing.T) {
 	_, err := apply(t, []Op{
 		{Foreach: &ForeachOp{In: "${ state.x }", As: "i", Do: []Op{{Delete: &DeleteOp{Path: "state.x"}}}}},
@@ -197,7 +197,7 @@ func TestForeach_ScalarNotIterable(t *testing.T) {
 	}
 }
 
-// TestSet_TraverseThroughScalar — промежуточный сегмент пути — скаляр → ошибка.
+// TestSet_TraverseThroughScalar — intermediate path segment is a scalar → error.
 func TestSet_TraverseThroughScalar(t *testing.T) {
 	_, err := apply(t, []Op{
 		{Set: &SetOp{Path: "state.a.b", Value: 1}},
@@ -208,8 +208,8 @@ func TestSet_TraverseThroughScalar(t *testing.T) {
 	}
 }
 
-// TestSet_PathWithInterpolatedMiddleSegment — ${ … }-сегмент в середине пути
-// (state.users.${ name }.acl) резолвится и навигирует дальше.
+// TestSet_PathWithInterpolatedMiddleSegment — a ${ … } segment in the middle of a path
+// (state.users.${ name }.acl) is resolved and navigation continues.
 func TestSet_PathWithInterpolatedMiddleSegment(t *testing.T) {
 	out := mustApply(t, []Op{
 		{Foreach: &ForeachOp{
@@ -227,7 +227,7 @@ func TestSet_PathWithInterpolatedMiddleSegment(t *testing.T) {
 	}
 }
 
-// TestOps_AppliedInOrder — операции видят state, мутированный предыдущими.
+// TestOps_AppliedInOrder — operations see the state as mutated by previous ones.
 func TestOps_AppliedInOrder(t *testing.T) {
 	out := mustApply(t, []Op{
 		{Rename: &RenameOp{From: "state.a", To: "state.tmp"}},

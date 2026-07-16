@@ -6,40 +6,40 @@ import (
 	"github.com/souls-guild/soul-stack/shared/cel"
 )
 
-// Evaluator резолвит CEL-выражения migration-контекста ([ADR-019]). Узкий
-// порт: ядро statemigrate зависит только от него, не от конкретного движка.
-// scope — текущий state (мутируемый) плюс foreach-переменные (`as:`); как они
-// прокидываются — деталь реализации.
+// Evaluator resolves CEL expressions in the migration context ([ADR-019]). A narrow
+// port: the statemigrate core depends only on it, not on a specific engine.
+// scope — the current state (mutable) plus foreach variables (`as:`); how they
+// are threaded through is an implementation detail.
 type Evaluator interface {
-	// Eval вычисляет выражение БЕЗ обёртки `${ }` (вся строка = CEL).
-	// Используется для foreach.in и для `${ … }`-сегментов адреса path.
-	// Возвращает нативное Go-значение (map[string]any/[]any/скаляр).
+	// Eval evaluates an expression WITHOUT the `${ }` wrapper (the whole string = CEL).
+	// Used for foreach.in and for `${ … }` segments of a path address.
+	// Returns a native Go value (map[string]any/[]any/scalar).
 	Eval(expr string, scope Scope) (any, error)
 
-	// Interpolate резолвит строку set.value со встроенными `${ … }`-блоками
-	// (литерал + блоки, [docs/migrations.md] set). Ровно один блок без
-	// окружающего текста → нативный тип; иначе склейка через стрингификацию.
+	// Interpolate resolves a set.value string with embedded `${ … }` blocks
+	// (literal + blocks, [docs/migrations.md] set). Exactly one block with no
+	// surrounding text → native type; otherwise concatenation via stringification.
 	Interpolate(raw string, scope Scope) (any, error)
 }
 
-// Scope — переменные одной CEL-оценки в миграции: корневой State и набор
-// активных foreach-переменных (имя `as:` → текущий элемент/значение).
-// Loop — плоская карта; вложенные foreach добавляют свои имена поверх.
+// Scope — variables for a single CEL evaluation in a migration: the root State and a set
+// of active foreach variables (`as:` name → current element/value).
+// Loop is a flat map; nested foreach blocks add their names on top.
 type Scope struct {
 	State map[string]any
 	Loop  map[string]any
 }
 
-// celEvaluator — реализация Evaluator поверх cel.Engine в migration-режиме
-// ([cel.NewMigration]). Один Engine переиспользуется всеми операциями цепочки
-// (compile-cache горячий путь).
+// celEvaluator — an Evaluator implementation on top of cel.Engine in migration mode
+// ([cel.NewMigration]). A single Engine is reused by all operations in the chain
+// (compile-cache hot path).
 type celEvaluator struct {
 	engine *cel.Engine
 }
 
-// NewEvaluator собирает Evaluator на migration-движке shared/cel: объявлена
-// только переменная `state`, прочий контекст недоступен (sandbox by
-// undeclaration), vault()/now() отсекаются guard-ами ([cel.NewMigration]).
+// NewEvaluator builds an Evaluator on the shared/cel migration engine: only
+// the `state` variable is declared, other context is unavailable (sandbox by
+// undeclaration), vault()/now() are blocked by guards ([cel.NewMigration]).
 func NewEvaluator() (Evaluator, error) {
 	engine, err := cel.NewMigration()
 	if err != nil {
@@ -48,17 +48,17 @@ func NewEvaluator() (Evaluator, error) {
 	return &celEvaluator{engine: engine}, nil
 }
 
-// Eval компилирует и вычисляет голое expr против migration-env. State →
-// Vars.State; foreach-переменные → Vars.Loop (тот же механизм Extend, что у
-// loop:). Результат нормализуется в чистые Go-данные (оборачиваем выражение в
-// маркер, чтобы переиспользовать toNative/развёртку cel-контейнеров shared/cel).
+// Eval compiles and evaluates the bare expr against the migration-env. State →
+// Vars.State; foreach variables → Vars.Loop (the same Extend mechanism used by
+// loop:). The result is normalized to plain Go data (we wrap the expression in
+// the marker to reuse shared/cel's toNative/cel-container unwrapping).
 func (e *celEvaluator) Eval(expr string, scope Scope) (any, error) {
 	return e.engine.EvalInterpolation("${ "+expr+" }", e.vars(scope))
 }
 
-// Interpolate резолвит строку set.value с произвольными `${ … }`-блоками через
-// штатный EvalInterpolation shared/cel (литерал+блоки, нативный тип при одном
-// блоке без текста).
+// Interpolate resolves a set.value string with arbitrary `${ … }` blocks via
+// shared/cel's standard EvalInterpolation (literal+blocks, native type for a single
+// block with no surrounding text).
 func (e *celEvaluator) Interpolate(raw string, scope Scope) (any, error) {
 	return e.engine.EvalInterpolation(raw, e.vars(scope))
 }

@@ -6,12 +6,12 @@ import (
 	"strings"
 )
 
-// deepCopyMap делает глубокую копию map[string]any через JSON round-trip.
-// Значения incarnation.state — JSON-safe (читались из JSONB / YAML-фикстур),
-// поэтому marshal не падает. nil/пустой → пустой map (state ядра не nil).
+// deepCopyMap makes a deep copy of map[string]any via a JSON round-trip.
+// incarnation.state values are JSON-safe (read from JSONB / YAML fixtures),
+// so marshal doesn't fail. nil/empty → empty map (the core's state is never nil).
 //
-// Узкая копия паттерна keeper/internal/scenario/state.deepCopyMap: ядро
-// statemigrate не тянет зависимость от scenario-пакета.
+// A narrow copy of the keeper/internal/scenario/state.deepCopyMap pattern: the
+// statemigrate core doesn't pull in a dependency on the scenario package.
 func deepCopyMap(m map[string]any) map[string]any {
 	if len(m) == 0 {
 		return map[string]any{}
@@ -27,8 +27,8 @@ func deepCopyMap(m map[string]any) map[string]any {
 	return out
 }
 
-// sortedKeys возвращает ключи map в лексикографическом порядке (детерминизм
-// foreach-итерации над map: миграция — воспроизводимая функция).
+// sortedKeys returns map keys in lexicographic order (determinism for
+// foreach iteration over a map: a migration is a reproducible function).
 func sortedKeys(m map[string]any) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
@@ -38,8 +38,8 @@ func sortedKeys(m map[string]any) []string {
 	return keys
 }
 
-// joinKeys собирает плоский список ключей в человекочитаемый адрес (для
-// диагностики путей). Сегменты в state JSON-safe строковые.
+// joinKeys assembles a flat list of keys into a human-readable address (for
+// path diagnostics). Segments in state are JSON-safe strings.
 func joinKeys(keys []string) string {
 	return "state." + strings.Join(keys, ".")
 }

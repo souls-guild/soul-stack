@@ -17,8 +17,8 @@ func parseErr(t *testing.T, src string) *ParseError {
 	return pe
 }
 
-// TestParse_RealFixture — реальный файл миграции парсится без ошибок и даёт
-// ожидаемую форму операций.
+// TestParse_RealFixture — a real migration file parses without errors and yields
+// the expected operation shape.
 func TestParse_RealFixture(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(fixtureDir, "001_to_002.yml"))
 	if err != nil {

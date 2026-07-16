@@ -6,9 +6,9 @@ import (
 	"github.com/goccy/go-yaml"
 )
 
-// rawMigration — промежуточная форма файла миграции до дискриминации операций.
-// transform хранится как []map[string]any: дискриминатор операции (ровно один
-// ключ из набора) проверяется вручную в toOps (паттерн config/destiny_tasks.go).
+// rawMigration — an intermediate form of the migration file before operation discrimination.
+// transform is stored as []map[string]any: the operation discriminator (exactly one
+// key from the set) is checked manually in toOps (the config/destiny_tasks.go pattern).
 type rawMigration struct {
 	FromVersion *int             `yaml:"from_version"`
 	ToVersion   *int             `yaml:"to_version"`
@@ -16,9 +16,9 @@ type rawMigration struct {
 	Transform   []map[string]any `yaml:"transform"`
 }
 
-// Parse разбирает содержимое одного `NNN_to_MMM.yml` в *Migration. Возвращает
-// ParseError при невалидном YAML / отсутствии версий / нарушении дискриминатора
-// операции. Чистая функция: I/O (чтение файла) — на вызывающей стороне.
+// Parse parses the contents of a single `NNN_to_MMM.yml` into a *Migration. Returns
+// a ParseError on invalid YAML / missing versions / a violated operation
+// discriminator. A pure function: I/O (reading the file) is the caller's responsibility.
 func Parse(data []byte) (*Migration, error) {
 	if len(data) == 0 {
 		return nil, &ParseError{Code: CodeEmptyDocument, Msg: "пустой файл миграции"}
@@ -49,16 +49,16 @@ func Parse(data []byte) (*Migration, error) {
 	}, nil
 }
 
-// opKeys — известные дискриминатор-ключи операции. foreach допускает соседние
-// ключи as/do, поэтому в строгой «ровно один из набора» проверке участвуют
-// только дискриминаторы; siblings foreach обрабатываются отдельно.
+// opKeys — the known operation discriminator keys. foreach allows sibling
+// keys as/do, so only discriminators participate in the strict "exactly one
+// of the set" check; foreach siblings are handled separately.
 var opKeys = []string{"rename", "set", "delete", "move", "foreach"}
 
 var foreachSiblings = map[string]bool{"as": true, "do": true, "in": true}
 
-// toOps дискриминирует список raw-операций в типизированный []Op. Каждая
-// операция — map с ровно одним ключом-дискриминатором (+ для foreach допустимы
-// соседи as/do/in).
+// toOps discriminates a list of raw operations into a typed []Op. Each
+// operation is a map with exactly one discriminator key (+ for foreach, sibling
+// as/do/in keys are allowed).
 func toOps(raw []map[string]any) ([]Op, error) {
 	ops := make([]Op, 0, len(raw))
 	for i, item := range raw {
@@ -85,8 +85,8 @@ func toOp(item map[string]any) (Op, error) {
 		return Op{}, &ParseError{Code: CodeOpDiscriminator, Msg: fmt.Sprintf("операция без ключа-дискриминатора; ожидается ровно один из %v", opKeys)}
 	}
 
-	// Для не-foreach операций посторонние ключи (кроме самого дискриминатора)
-	// запрещены; для foreach допустимы as/do/in.
+	// For non-foreach operations, extraneous keys (other than the discriminator itself)
+	// are forbidden; for foreach, as/do/in are allowed.
 	if disc != "foreach" {
 		for k := range item {
 			if k != disc {
@@ -109,7 +109,7 @@ func toOp(item map[string]any) (Op, error) {
 	}
 }
 
-// toRename разбирает { from: <path>, to: <path> } (общая форма rename/move).
+// toRename parses { from: <path>, to: <path> } (the shared rename/move form).
 func toRename(v any) (Op, error) {
 	m, ok := v.(map[string]any)
 	if !ok {
@@ -123,8 +123,8 @@ func toRename(v any) (Op, error) {
 	return Op{Rename: &RenameOp{From: from, To: to}}, nil
 }
 
-// toSet разбирает { path: <path>, value: <yaml> }. value — произвольное
-// значение (литерал/${ … }/вложенная структура), интерполяция — на apply.
+// toSet parses { path: <path>, value: <yaml> }. value is an arbitrary
+// value (literal/${ … }/nested structure), interpolation happens at apply time.
 func toSet(v any) (Op, error) {
 	m, ok := v.(map[string]any)
 	if !ok {
@@ -141,7 +141,7 @@ func toSet(v any) (Op, error) {
 	return Op{Set: &SetOp{Path: path, Value: val}}, nil
 }
 
-// toDelete разбирает { path: <path> }.
+// toDelete parses { path: <path> }.
 func toDelete(v any) (Op, error) {
 	m, ok := v.(map[string]any)
 	if !ok {
@@ -154,13 +154,13 @@ func toDelete(v any) (Op, error) {
 	return Op{Delete: &DeleteOp{Path: path}}, nil
 }
 
-// toForeach разбирает обе формы:
-//   - краткая: `foreach: <expr>` + соседние `as:` / `do:`;
-//   - структурная: `foreach: { in: <expr>, as:, do: }`.
+// toForeach parses both forms:
+//   - short: `foreach: <expr>` + sibling `as:` / `do:`;
+//   - structural: `foreach: { in: <expr>, as:, do: }`.
 //
-// in берётся из значения foreach-скаляра ИЛИ из вложенного in:.
+// in is taken from the foreach scalar value OR from the nested in:.
 func toForeach(item map[string]any) (Op, error) {
-	// Посторонние ключи на уровне item: только foreach + as/do/in.
+	// Extraneous keys at the item level: only foreach + as/do/in.
 	for k := range item {
 		if k != "foreach" && !foreachSiblings[k] {
 			return Op{}, &ParseError{Code: CodeOpDiscriminator, Msg: fmt.Sprintf("foreach: посторонний ключ %q", k)}
@@ -191,7 +191,7 @@ func toForeach(item map[string]any) (Op, error) {
 		return Op{}, &ParseError{Code: CodeOpFieldMissing, Msg: "foreach: ожидается выражение-строка или { in:, as:, do: }"}
 	}
 
-	// Структурная форма может класть in через сосед-ключ in: (если foreach-скаляр пуст).
+	// The structural form can place in via the sibling in: key (if the foreach scalar is empty).
 	if in == "" {
 		in, _ = stringField(item, "in")
 	}
@@ -209,8 +209,8 @@ func toForeach(item map[string]any) (Op, error) {
 	return Op{Foreach: &ForeachOp{In: in, As: as, Do: doItems}}, nil
 }
 
-// toDoList приводит do: к []map[string]any и рекурсивно дискриминирует во
-// вложенный []Op (вложенность foreach допустима).
+// toDoList coerces do: to []map[string]any and recursively discriminates it into
+// a nested []Op (nested foreach is allowed).
 func toDoList(v any) ([]Op, error) {
 	if v == nil {
 		return nil, &ParseError{Code: CodeOpFieldMissing, Msg: "foreach: обязателен do (список операций)"}
@@ -230,7 +230,7 @@ func toDoList(v any) ([]Op, error) {
 	return toOps(raw)
 }
 
-// stringField извлекает строковое поле map. (значение, найдено-и-строка).
+// stringField extracts a string field from a map. (value, found-and-is-string).
 func stringField(m map[string]any, key string) (string, bool) {
 	v, ok := m[key]
 	if !ok {

@@ -1,17 +1,17 @@
-// Package statemigrate — чистое ядро executor-а миграций state_schema
-// ([ADR-019], нормативная спека [docs/migrations.md]). Применяет цепочку
-// миграций к incarnation.state как чистую функцию state_v<N> → state_v<M>:
-// БЕЗ Postgres, БЕЗ host-side эффектов, БЕЗ хостового контекста (миграция —
-// keeper-side операция над одним state-объектом).
+// Package statemigrate — a pure core of the state_schema migration executor
+// ([ADR-019], normative spec [docs/migrations.md]). Applies a chain of
+// migrations to incarnation.state as a pure function state_v<N> → state_v<M>:
+// NO Postgres, NO host-side effects, NO host context (a migration is a
+// keeper-side operation on a single state object).
 //
-// Грамматика transform: rename / set / delete / move(=rename) / foreach
-// ([dsl.go]). CEL-выражения в set.value / foreach.in / ${ … }-сегментах path
-// резолвятся через migration-CEL движок ([eval.go], shared/cel.NewMigration):
-// объявлена только переменная `state`, прочий контекст недоступен (sandbox by
-// undeclaration), vault()/now() отсекаются guard-ами.
+// transform grammar: rename / set / delete / move(=rename) / foreach
+// ([dsl.go]). CEL expressions in set.value / foreach.in / ${ … } path segments
+// are resolved via the migration-CEL engine ([eval.go], shared/cel.NewMigration):
+// only the `state` variable is declared, other context is unavailable (sandbox by
+// undeclaration), vault()/now() are blocked by guards.
 //
-// Транзакционная обвязка (PG SELECT FOR UPDATE → state_history snapshot per-step
-// → COMMIT) и L1 trial-раннер — НЕ здесь (отдельные задачи поверх этого ядра).
+// The transactional wrapper (PG SELECT FOR UPDATE → state_history snapshot per-step
+// → COMMIT) and the L1 trial runner are NOT here (separate tasks on top of this core).
 package statemigrate
 
 import (
@@ -19,18 +19,18 @@ import (
 	"fmt"
 )
 
-// Result — итог применения цепочки миграций. FinalState — состояние после
-// последнего шага (новый map, входной caller-ский не мутируется). Steps —
-// snapshot до/после каждого шага (для записи в state_history транзакционным
-// слоем поверх ядра).
+// Result — the outcome of applying a migration chain. FinalState — the state after
+// the last step (a new map, the caller's input is not mutated). Steps —
+// per-step before/after snapshots (for writing to state_history by the transactional
+// layer on top of the core).
 type Result struct {
 	FinalState map[string]any
 	Steps      []StepSnapshot
 }
 
-// StepSnapshot — снимок одного шага цепочки: версии и state до/после. StateBefore
-// и StateAfter — независимые deep-copy (caller волен сериализовать их в
-// state_history без риска общих ссылок).
+// StepSnapshot — a snapshot of a single chain step: versions and state before/after. StateBefore
+// and StateAfter are independent deep-copies (the caller is free to serialize them into
+// state_history without risking shared references).
 type StepSnapshot struct {
 	FromVersion int
 	ToVersion   int
@@ -38,19 +38,19 @@ type StepSnapshot struct {
 	StateAfter  map[string]any
 }
 
-// Apply прогоняет цепочку миграций chain поверх state, возвращая итоговый
-// state и per-step снимки. Чистая функция: входной state НЕ мутируется
-// (deep-copy на входе), Postgres не затрагивается.
+// Apply runs the chain of migrations over state, returning the final
+// state and per-step snapshots. A pure function: the input state is NOT mutated
+// (deep-copy on entry), Postgres is not touched.
 //
-// Цепочка валидируется на непрерывность версий: ToVersion шага i должен равняться
-// FromVersion шага i+1 (разрыв → EvalError ClassChainVersion). Пустая chain →
-// FinalState = deep-copy входа, Steps пуст.
+// The chain is validated for version continuity: the ToVersion of step i must equal
+// the FromVersion of step i+1 (a gap → EvalError ClassChainVersion). An empty chain →
+// FinalState = deep-copy of the input, Steps is empty.
 //
-// ev — Evaluator над migration-CEL ([NewEvaluator]); переиспользуется всеми
-// шагами (compile-cache). Ошибка любого шага прерывает цепочку и возвращается
-// как есть (транзакционный слой делает ROLLBACK / status: migration_failed).
+// ev — an Evaluator over migration-CEL ([NewEvaluator]); reused by all
+// steps (compile-cache). An error in any step aborts the chain and is returned
+// as-is (the transactional layer performs the ROLLBACK / status: migration_failed).
 func Apply(ctx context.Context, state map[string]any, chain Chain, ev Evaluator) (Result, error) {
-	_ = ctx // зарезервировано: ядро синхронно; ctx прокидывается для симметрии с PG-слоем
+	_ = ctx // reserved: the core is synchronous; ctx is threaded through for symmetry with the PG layer
 
 	cur := deepCopyMap(state)
 	steps := make([]StepSnapshot, 0, len(chain))

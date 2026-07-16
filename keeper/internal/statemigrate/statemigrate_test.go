@@ -12,9 +12,9 @@ import (
 	"github.com/goccy/go-yaml"
 )
 
-// fixtureDir — путь к реальным фикстурам консолидированного redis (авторитет
-// над docs-примерами). Миграция 001_to_002 — демо грамматики DSL (rename + set +
-// foreach + delete), перенос инварианта из прежнего redis-cluster.
+// fixtureDir is the path to real consolidated Redis fixtures (authoritative
+// over docs examples). Migration 001_to_002 is a DSL grammar demo (rename + set +
+// foreach + delete), moving an invariant from the previous redis-cluster.
 const fixtureDir = "../../../examples/service/redis/migrations"
 
 func mustEvaluator(t *testing.T) Evaluator {
@@ -39,7 +39,7 @@ func mustParseFile(t *testing.T, path string) *Migration {
 	return m
 }
 
-// migrationTestCase — формат tests/<case>.yml (state_before → migration →
+// migrationTestCase is the format of tests/<case>.yml (state_before → migration →
 // assert state_after).
 type migrationTestCase struct {
 	Name        string         `yaml:"name"`
@@ -47,15 +47,15 @@ type migrationTestCase struct {
 	StateAfter  map[string]any `yaml:"state_after"`
 }
 
-// TestApply_AllFixtures — GENERIC-обход всех фикстур миграций redis-сервиса. Для
-// каждой пары «файл миграции <N>_to_<M>.yml + каталог <N>_to_<M>/tests/*.yml»
-// прогоняет ОДИН шаг <N>→<M> на state_before и сверяет с state_after. Это гейт от
-// молчаливой регрессии: любая существующая фикстура (вкл. 4 шт. 005_to_006)
-// исполняется без ручного хардкода пути. Авторитет над docs-примерами.
+// TestApply_AllFixtures runs generic traversal of all Redis service migration fixtures.
+// For each pair of "migration file <N>_to_<M>.yml + directory <N>_to_<M>/tests/*.yml"
+// it executes ONE step <N>→<M> on state_before and compares with state_after.
+// This gates against silent regression: any existing fixture (incl. 4 of 005_to_006)
+// runs without manual path hardcoding. Authoritative over docs examples.
 //
-// Каждый каталог тестов привязан к одношаговой миграции (имя каталога = имя файла
-// без .yml), а версии шага берутся из самого файла (Parse). Поэтому достаточно
-// одношаговой Chain — multi-step цепочки покрываются step-снапшот-тестами ниже.
+// Each test directory is tied to a one-step migration (directory name = filename
+// without .yml), and step versions come from the file itself (Parse). Therefore
+// a one-step Chain suffices — multi-step chains are covered by step-snapshot tests below.
 func TestApply_AllFixtures(t *testing.T) {
 	ev := mustEvaluator(t)
 
@@ -69,14 +69,14 @@ func TestApply_AllFixtures(t *testing.T) {
 
 	var totalCases int
 	for _, migFile := range migFiles {
-		stepName := strings.TrimSuffix(filepath.Base(migFile), ".yml") // напр. 005_to_006
+		stepName := strings.TrimSuffix(filepath.Base(migFile), ".yml") // e.g. 005_to_006
 		caseFiles, err := filepath.Glob(filepath.Join(fixtureDir, stepName, "tests", "*.yml"))
 		if err != nil {
 			t.Fatalf("glob cases %s: %v", stepName, err)
 		}
 		if len(caseFiles) == 0 {
-			// Миграция без фикстур — потенциальная дыра покрытия, но не падение
-			// (некоторые шаги могут быть тривиальными). Помечаем явно.
+			// Migration without fixtures is a potential coverage gap but not a failure
+			// (some steps may be trivial). Mark explicitly.
 			t.Logf("миграция %s: тест-фикстур нет", stepName)
 			continue
 		}
@@ -107,10 +107,10 @@ func TestApply_AllFixtures(t *testing.T) {
 	t.Logf("прогнано миграций: %d, тест-кейсов: %d", len(migFiles), totalCases)
 }
 
-// TestApply_RealFixture_EmptyUsers — пустой список пользователей даёт пустой map.
-// Миграция 001_to_002 явным `set state.redis_users {}` ПЕРЕД foreach
-// материализует целевой ключ (intent «список стал map»), поэтому foreach по []
-// (no-op) оставляет redis_users: {}, а не отсутствие ключа.
+// TestApply_RealFixture_EmptyUsers: empty user list yields empty map.
+// Migration 001_to_002 explicitly materializes the target key with `set state.redis_users {}`
+// before foreach (intent "list became map"), so foreach over [] (no-op) leaves
+// redis_users: {} rather than key absence.
 func TestApply_RealFixture_EmptyUsers(t *testing.T) {
 	mig := mustParseFile(t, filepath.Join(fixtureDir, "001_to_002.yml"))
 	ev := mustEvaluator(t)
@@ -126,10 +126,9 @@ func TestApply_RealFixture_EmptyUsers(t *testing.T) {
 	})
 }
 
-// TestApply_EmptyForeachNoMaterialize — engine-инвариант: foreach по пустому
-// списку сам по себе ключ не создаёт (no-op без тела). Проверяется на
-// синтетической миграции БЕЗ предварительного set, чтобы зафиксировать
-// поведение движка независимо от intent конкретной фикстуры.
+// TestApply_EmptyForeachNoMaterialize: engine invariant — foreach over empty
+// list doesn't create the key by itself (no-op without body). Checked on synthetic
+// migration WITHOUT prior set to fix engine behavior independent of fixture intent.
 func TestApply_EmptyForeachNoMaterialize(t *testing.T) {
 	ev := mustEvaluator(t)
 	mig := &Migration{FromVersion: 1, ToVersion: 2, Transform: []Op{
@@ -148,7 +147,7 @@ func TestApply_EmptyForeachNoMaterialize(t *testing.T) {
 	assertDeepEqualJSON(t, res.FinalState, map[string]any{"redis_type": "cluster"})
 }
 
-// TestApply_DoesNotMutateInput — входной state caller-а не мутируется.
+// TestApply_DoesNotMutateInput: caller's input state is not mutated.
 func TestApply_DoesNotMutateInput(t *testing.T) {
 	mig := mustParseFile(t, filepath.Join(fixtureDir, "001_to_002.yml"))
 	ev := mustEvaluator(t)
@@ -164,7 +163,7 @@ func TestApply_DoesNotMutateInput(t *testing.T) {
 	}
 }
 
-// TestApply_StepSnapshots — snapshot до/после на каждый шаг цепочки.
+// TestApply_StepSnapshots: before/after snapshot per chain step.
 func TestApply_StepSnapshots(t *testing.T) {
 	ev := mustEvaluator(t)
 	chain := Chain{
@@ -183,7 +182,7 @@ func TestApply_StepSnapshots(t *testing.T) {
 		t.Fatalf("Steps = %d, want 2", len(res.Steps))
 	}
 	if _, ok := res.Steps[0].StateBefore["a"]; ok {
-		t.Errorf("step0.StateBefore не должен содержать a")
+		t.Errorf("step0.StateBefore should not contain a")
 	}
 	if res.Steps[0].StateAfter["a"] != float64(1) && res.Steps[0].StateAfter["a"] != 1 {
 		t.Errorf("step0.StateAfter[a] = %v", res.Steps[0].StateAfter["a"])
@@ -193,12 +192,12 @@ func TestApply_StepSnapshots(t *testing.T) {
 	}
 }
 
-// TestApply_ChainVersionGap — разрыв версий в цепочке → ошибка.
+// TestApply_ChainVersionGap: version gap in chain → error.
 func TestApply_ChainVersionGap(t *testing.T) {
 	ev := mustEvaluator(t)
 	chain := Chain{
 		{FromVersion: 1, ToVersion: 2},
-		{FromVersion: 3, ToVersion: 4}, // разрыв 2 != 3
+		{FromVersion: 3, ToVersion: 4}, // gap: 2 != 3
 	}
 	_, err := Apply(context.Background(), map[string]any{}, chain, ev)
 	var ee *EvalError
@@ -209,8 +208,8 @@ func TestApply_ChainVersionGap(t *testing.T) {
 
 func assertDeepEqualJSON(t *testing.T, got, want map[string]any) {
 	t.Helper()
-	// Нормализуем числовые типы через JSON round-trip (YAML int vs Apply
-	// сохраняет cel int64 — сравниваем в единой форме).
+	// Normalize numeric types through JSON round-trip (YAML int vs Apply
+	// preserves cel int64 — compare in unified form).
 	if !reflect.DeepEqual(normalizeJSON(t, got), normalizeJSON(t, want)) {
 		t.Errorf("state mismatch:\n got = %#v\nwant = %#v", got, want)
 	}

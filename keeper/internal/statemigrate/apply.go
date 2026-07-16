@@ -5,12 +5,12 @@ import (
 	"strings"
 )
 
-// applyOps применяет список операций последовательно к мутируемому state.
-// Каждая операция видит state, изменённый предыдущими (та же миграция/тот же
-// foreach-do). scope несёт корневой state и активные foreach-переменные.
+// applyOps applies a list of operations sequentially to the mutable state.
+// Each operation sees the state as modified by previous ones (same migration/same
+// foreach-do). scope carries the root state and active foreach variables.
 //
-// state — корень incarnation.state (мутируется на месте; deep-copy сделан в
-// [Apply] до первой операции, caller-ский map не затрагивается).
+// state — root of incarnation.state (mutated in place; deep-copy is done in
+// [Apply] before the first operation, the caller's map is not touched).
 func applyOps(ops []Op, state map[string]any, ev Evaluator, loop map[string]any) error {
 	scope := Scope{State: state, Loop: loop}
 	for i := range ops {
@@ -21,7 +21,7 @@ func applyOps(ops []Op, state map[string]any, ev Evaluator, loop map[string]any)
 	return nil
 }
 
-// applyOp диспетчеризует одну операцию по дискриминатору.
+// applyOp dispatches a single operation by its discriminator.
 func applyOp(op Op, state map[string]any, ev Evaluator, scope Scope) error {
 	switch {
 	case op.Rename != nil:
@@ -33,14 +33,14 @@ func applyOp(op Op, state map[string]any, ev Evaluator, scope Scope) error {
 	case op.Foreach != nil:
 		return applyForeach(op.Foreach, state, ev, scope)
 	default:
-		// Дискриминатор гарантирован парсером; защита от программной ошибки.
+		// Discriminator is guaranteed by the parser; this guards against a programming error.
 		return &EvalError{Class: ClassPathSegment, Msg: "пустая операция (нет дискриминатора)"}
 	}
 }
 
-// applyRename переносит значение from → to (move = тот же code-path). Источник
-// отсутствует → ничего не переносим (нечего двигать); существующий to → ошибка
-// (явный delete перед rename, [docs/migrations.md]).
+// applyRename moves a value from → to (move = the same code path). Missing
+// source → nothing to move (no-op); existing to → error
+// (explicit delete before rename, [docs/migrations.md]).
 func applyRename(op *RenameOp, state map[string]any, ev Evaluator, scope Scope) error {
 	fromKeys, err := resolvePath(op.From, ev, scope)
 	if err != nil {
@@ -56,7 +56,7 @@ func applyRename(op *RenameOp, state map[string]any, ev Evaluator, scope Scope) 
 		return err
 	}
 	if !ok {
-		// Источника нет — нечего переносить (no-op, симметрично delete).
+		// No source — nothing to move (no-op, symmetric to delete).
 		return nil
 	}
 
@@ -72,9 +72,9 @@ func applyRename(op *RenameOp, state map[string]any, ev Evaluator, scope Scope) 
 	return deletePath(state, fromKeys)
 }
 
-// applySet записывает value в path (с перезаписью). value рекурсивно
-// интерполируется: каждый строковый лист со встроенными `${ … }` резолвится
-// через Evaluator (узкая копия логики render-pipeline, ядро остаётся чистым).
+// applySet writes value to path (with overwrite). value is recursively
+// interpolated: each string leaf with embedded `${ … }` is resolved
+// via Evaluator (a narrow copy of the render-pipeline logic, keeping the core clean).
 func applySet(op *SetOp, state map[string]any, ev Evaluator, scope Scope) error {
 	keys, err := resolvePath(op.Path, ev, scope)
 	if err != nil {
@@ -87,7 +87,7 @@ func applySet(op *SetOp, state map[string]any, ev Evaluator, scope Scope) error 
 	return setPath(state, keys, val)
 }
 
-// applyDelete удаляет значение по path. Несуществующий путь → no-op.
+// applyDelete removes the value at path. Non-existent path → no-op.
 func applyDelete(op *DeleteOp, state map[string]any, ev Evaluator, scope Scope) error {
 	keys, err := resolvePath(op.Path, ev, scope)
 	if err != nil {
@@ -96,9 +96,9 @@ func applyDelete(op *DeleteOp, state map[string]any, ev Evaluator, scope Scope) 
 	return deletePath(state, keys)
 }
 
-// applyForeach итерирует по результату In (список → элемент, map → значение),
-// биндит As и рекурсивно применяет Do с обновлённым scope. Вложенные foreach
-// добавляют свои As поверх внешних (новый loop-map на итерацию).
+// applyForeach iterates over the result of In (list → element, map → value),
+// binds As, and recursively applies Do with the updated scope. Nested foreach
+// blocks add their As on top of the outer ones (a new loop map per iteration).
 func applyForeach(op *ForeachOp, state map[string]any, ev Evaluator, scope Scope) error {
 	if op.As == "" {
 		return &EvalError{Class: ClassForeachType, Msg: "foreach без as:"}
@@ -125,10 +125,10 @@ func applyForeach(op *ForeachOp, state map[string]any, ev Evaluator, scope Scope
 	return nil
 }
 
-// evalCollection вычисляет foreach.in. Выражение коллекции в фикстурах несёт
-// маркер `${ … }` (docs/migrations.md), поэтому при его наличии резолвим через
-// Interpolate (литерал+блок, нативный тип). Без маркера трактуем всю строку как
-// голый CEL (Eval) — толерантность к обеим формам записи.
+// evalCollection evaluates foreach.in. The collection expression in fixtures carries
+// the `${ … }` marker (docs/migrations.md), so when present we resolve it via
+// Interpolate (literal+block, native type). Without the marker we treat the whole string as
+// bare CEL (Eval) — tolerating both forms of notation.
 func evalCollection(in string, ev Evaluator, scope Scope) (any, error) {
 	if strings.Contains(in, "${") {
 		return ev.Interpolate(in, scope)
@@ -136,12 +136,12 @@ func evalCollection(in string, ev Evaluator, scope Scope) (any, error) {
 	return ev.Eval(in, scope)
 }
 
-// iterItems раскладывает результат foreach.in в упорядоченный список
-// итерируемых значений: список → его элементы (порядок сохранён); map → её
-// ЗНАЧЕНИЯ. Прочие типы (скаляр/null) → ошибка ClassForeachType.
+// iterItems unpacks the result of foreach.in into an ordered list of
+// iterable values: list → its elements (order preserved); map → its
+// VALUES. Other types (scalar/null) → ClassForeachType error.
 //
-// Над map порядок значений детерминирован сортировкой ключей (миграция —
-// чистая воспроизводимая функция; map-итерация в Go недетерминирована).
+// For a map, value order is made deterministic by sorting keys (a migration is
+// a pure reproducible function; map iteration in Go is non-deterministic).
 func iterItems(coll any, expr string) ([]any, error) {
 	switch t := coll.(type) {
 	case []any:
@@ -158,7 +158,7 @@ func iterItems(coll any, expr string) ([]any, error) {
 	}
 }
 
-// resolvePath парсит и резолвит ${ … }-сегменты адреса в плоский список ключей.
+// resolvePath parses and resolves ${ … } segments of the address into a flat list of keys.
 func resolvePath(raw string, ev Evaluator, scope Scope) ([]string, error) {
 	segs, err := parsePath(raw)
 	if err != nil {
@@ -170,9 +170,9 @@ func resolvePath(raw string, ev Evaluator, scope Scope) ([]string, error) {
 	return resolveSegments(segs, ev, scope)
 }
 
-// getPath навигирует state по keys. Возвращает (значение, найдено, ошибка).
-// Промежуточный сегмент не-map (скаляр/список) при ещё не пройденном пути →
-// ошибка ClassPathTraverse. Отсутствие ключа → (nil, false, nil).
+// getPath navigates state by keys. Returns (value, found, error).
+// An intermediate non-map segment (scalar/list) on a not-yet-fully-traversed path →
+// ClassPathTraverse error. Missing key → (nil, false, nil).
 func getPath(state map[string]any, keys []string) (any, bool, error) {
 	cur := state
 	for i, k := range keys {
@@ -192,9 +192,9 @@ func getPath(state map[string]any, keys []string) (any, bool, error) {
 	return nil, false, nil
 }
 
-// setPath записывает val по keys, создавая промежуточные map при отсутствии.
-// Промежуточный существующий не-map → ошибка ClassPathTraverse (не молчаливая
-// перезапись чужой структуры).
+// setPath writes val at keys, creating intermediate maps where missing.
+// An existing intermediate non-map → ClassPathTraverse error (no silent
+// overwrite of foreign structure).
 func setPath(state map[string]any, keys []string, val any) error {
 	cur := state
 	for i, k := range keys {
@@ -218,9 +218,9 @@ func setPath(state map[string]any, keys []string, val any) error {
 	return nil
 }
 
-// deletePath удаляет значение по keys. Отсутствие любого сегмента → no-op
-// (не ошибка, [docs/migrations.md]). Промежуточный не-map → no-op (раз пути
-// нет — нечего удалять).
+// deletePath removes the value at keys. Any missing segment → no-op
+// (not an error, [docs/migrations.md]). Intermediate non-map → no-op (since the path
+// doesn't exist, there's nothing to delete).
 func deletePath(state map[string]any, keys []string) error {
 	cur := state
 	for i, k := range keys {
@@ -230,7 +230,7 @@ func deletePath(state map[string]any, keys []string) error {
 		}
 		next, ok := cur[k].(map[string]any)
 		if !ok {
-			return nil // путь не существует целиком — no-op
+			return nil // path doesn't exist at all — no-op
 		}
 		cur = next
 	}

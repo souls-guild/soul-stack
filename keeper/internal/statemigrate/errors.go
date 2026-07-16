@@ -2,32 +2,32 @@ package statemigrate
 
 import "fmt"
 
-// ParseError — ошибка разбора файла миграции (`NNN_to_MMM.yml`): синтаксис
-// YAML, отсутствие/конфликт дискриминатора операции, неверная форма поля.
-// Code — snake_case-идентификатор класса (стабилен для тестов/диагностики),
-// симметрично error-кодам config-слоя ([destiny_tasks.go]).
+// ParseError — a migration file parse error (`NNN_to_MMM.yml`): YAML
+// syntax, missing/conflicting operation discriminator, invalid field shape.
+// Code — a snake_case class identifier (stable for tests/diagnostics),
+// symmetric with the config layer's error codes ([destiny_tasks.go]).
 type ParseError struct {
-	Code string // migration_* (см. константы ниже)
+	Code string // migration_* (see constants below)
 	Msg  string
 }
 
 func (e *ParseError) Error() string { return fmt.Sprintf("%s: %s", e.Code, e.Msg) }
 
-// Коды ParseError. Все с префиксом migration_ (область DSL миграций).
+// ParseError codes. All prefixed with migration_ (the migration DSL domain).
 const (
-	CodeYAMLParse        = "migration_yaml_parse_error"   // невалидный YAML
-	CodeEmptyDocument    = "migration_empty_document"     // пустой файл
-	CodeVersionMissing   = "migration_version_missing"    // нет from_version/to_version
-	CodeVersionInvalid   = "migration_version_invalid"    // to_version != from_version+1 и т.п.
-	CodeOpDiscriminator  = "migration_op_discriminator"   // не ровно один ключ операции
-	CodeOpFieldMissing   = "migration_op_field_missing"   // у операции нет обязательного поля
-	CodeForeachMissingAs = "migration_foreach_missing_as" // foreach без as:
+	CodeYAMLParse        = "migration_yaml_parse_error"   // invalid YAML
+	CodeEmptyDocument    = "migration_empty_document"     // empty file
+	CodeVersionMissing   = "migration_version_missing"    // missing from_version/to_version
+	CodeVersionInvalid   = "migration_version_invalid"    // to_version != from_version+1, etc.
+	CodeOpDiscriminator  = "migration_op_discriminator"   // not exactly one operation key
+	CodeOpFieldMissing   = "migration_op_field_missing"   // operation is missing a required field
+	CodeForeachMissingAs = "migration_foreach_missing_as" // foreach without as:
 )
 
-// EvalError — ошибка применения операции к state: непереносимый путь,
-// конфликт rename-to, нерезолвимая CEL-интерполяция, неитерируемый foreach.
-// Class — snake_case-класс; Path — адрес операции (для диагностики); Err —
-// обёрнутая первопричина (CEL-ошибка и т.п.), может быть nil.
+// EvalError — an error applying an operation to state: an untraversable path,
+// a rename-to conflict, an unresolvable CEL interpolation, a non-iterable foreach.
+// Class — a snake_case class; Path — the operation's address (for diagnostics); Err —
+// the wrapped root cause (a CEL error, etc.), may be nil.
 type EvalError struct {
 	Class string
 	Path  string
@@ -44,12 +44,12 @@ func (e *EvalError) Error() string {
 
 func (e *EvalError) Unwrap() error { return e.Err }
 
-// Классы EvalError.
+// EvalError classes.
 const (
-	ClassRenameToExists = "migration_rename_to_exists" // rename/move в уже существующий to
-	ClassPathTraverse   = "migration_path_traverse"    // промежуточный сегмент пути — не map
-	ClassPathSegment    = "migration_path_segment"     // невалидный/нерезолвимый сегмент пути
-	ClassForeachType    = "migration_foreach_type"     // in: дал не список и не map
-	ClassCELInterp      = "migration_cel_interp"       // ошибка резолва ${ … }
-	ClassChainVersion   = "migration_chain_version"    // разрыв версий в цепочке
+	ClassRenameToExists = "migration_rename_to_exists" // rename/move into an already-existing to
+	ClassPathTraverse   = "migration_path_traverse"    // intermediate path segment is not a map
+	ClassPathSegment    = "migration_path_segment"     // invalid/unresolvable path segment
+	ClassForeachType    = "migration_foreach_type"     // in: yielded neither a list nor a map
+	ClassCELInterp      = "migration_cel_interp"       // ${ … } resolution error
+	ClassChainVersion   = "migration_chain_version"    // version gap in the chain
 )

@@ -5,31 +5,31 @@ import (
 	"strings"
 )
 
-// pathSegment — один сегмент адреса state-пути: либо литерал (буквы/цифры/
-// `_`/`-`), либо `${ <CEL> }`-интерполяция, резолвимая в строку до навигации.
+// pathSegment — a single segment of a state-path address: either a literal (letters/digits/
+// `_`/`-`), or a `${ <CEL> }` interpolation, resolved to a string before navigation.
 type pathSegment struct {
-	literal string // непустой, если сегмент литеральный
-	expr    string // непустой, если сегмент = ${ <expr> }
+	literal string // non-empty if the segment is a literal
+	expr    string // non-empty if the segment = ${ <expr> }
 }
 
-// parsePath разбивает адрес вида `state.foo.bar.${ name }` на сегменты ПОСЛЕ
-// корневого `state.` ([docs/migrations.md §«Адресация — path:»]). Префикс
-// `state.` обязателен. Сегментация по `.` на верхнем уровне; точки внутри
-// `${ … }` принадлежат выражению, а не разделяют сегменты.
+// parsePath splits an address like `state.foo.bar.${ name }` into segments AFTER
+// the root `state.` ([docs/migrations.md §"Addressing — path:"]). The prefix
+// `state.` is required. Segmentation happens on `.` at the top level; dots inside
+// `${ … }` belong to the expression and don't separate segments.
 //
-// Возвращает ParseError (некорректная форма пути — ошибка автора миграции,
-// ловится на разборе/применении, не на каждом state-объекте).
+// Returns a ParseError (a malformed path is a migration author's mistake,
+// caught at parse/apply time, not per state object).
 func parsePath(raw string) ([]pathSegment, error) {
 	const prefix = "state"
 	trimmed := strings.TrimSpace(raw)
 	switch {
 	case trimmed == prefix:
-		// Голый `state` — корень целиком; сегментов нет. set/rename/delete
-		// на корень не поддерживаются (нет смысла) — пустой путь отсекается
-		// вызывающим (apply.go).
+		// Bare `state` — the whole root; no segments. set/rename/delete
+		// on the root are unsupported (no point) — an empty path is rejected
+		// by the caller (apply.go).
 		return nil, nil
 	case strings.HasPrefix(trimmed, prefix+"."):
-		// ок, режем тело после `state.`
+		// ok, cut the body after `state.`
 	default:
 		return nil, &ParseError{Code: CodeOpFieldMissing, Msg: fmt.Sprintf("path %q должен начинаться с 'state.'", raw)}
 	}
@@ -53,7 +53,7 @@ func parsePath(raw string) ([]pathSegment, error) {
 	}
 
 	for i < len(body) {
-		// Начало `${ … }`-блока: целый сегмент-интерполяция.
+		// Start of a `${ … }` block: the whole segment is an interpolation.
 		if body[i] == '$' && i+1 < len(body) && body[i+1] == '{' {
 			if cur.Len() != 0 {
 				return nil, &ParseError{Code: CodeOpFieldMissing, Msg: fmt.Sprintf("path %q: ${…} должен быть отдельным сегментом (между точками)", raw)}
@@ -69,12 +69,12 @@ func parsePath(raw string) ([]pathSegment, error) {
 			}
 			segs = append(segs, pathSegment{expr: expr})
 			i = end + 1
-			// После блока ждём либо конец, либо разделитель `.`.
+			// After the block we expect either the end or a `.` separator.
 			if i < len(body) {
 				if body[i] != '.' {
 					return nil, &ParseError{Code: CodeOpFieldMissing, Msg: fmt.Sprintf("path %q: после ${…} ожидается '.' или конец", raw)}
 				}
-				i++ // съели разделитель; следующий сегмент обязателен
+				i++ // consumed the separator; the next segment is required
 				if i >= len(body) {
 					return nil, &ParseError{Code: CodeOpFieldMissing, Msg: fmt.Sprintf("path %q: путь оканчивается на '.'", raw)}
 				}
@@ -102,10 +102,10 @@ func parsePath(raw string) ([]pathSegment, error) {
 	return segs, nil
 }
 
-// resolveSegments резолвит ${ … }-сегменты в строковые ключи через Evaluator,
-// возвращая плоский список итоговых ключей навигации. Литералы проходят как
-// есть; expr-сегменты вычисляются и стрингифицируются. scope несёт state +
-// активные foreach-переменные.
+// resolveSegments resolves ${ … } segments into string keys via the Evaluator,
+// returning a flat list of final navigation keys. Literals pass through as
+// is; expr segments are evaluated and stringified. scope carries state +
+// active foreach variables.
 func resolveSegments(segs []pathSegment, ev Evaluator, scope Scope) ([]string, error) {
 	out := make([]string, 0, len(segs))
 	for _, s := range segs {
@@ -126,8 +126,8 @@ func resolveSegments(segs []pathSegment, ev Evaluator, scope Scope) ([]string, e
 	return out, nil
 }
 
-// stringKey приводит результат CEL-сегмента к строковому ключу map. Строки —
-// как есть; целые/uint — десятичная форма (ключи map в state JSON-safe строковые).
+// stringKey coerces a CEL segment's result into a string map key. Strings pass
+// through as is; ints/uints use decimal form (map keys in state are JSON-safe strings).
 func stringKey(v any) (string, bool) {
 	switch t := v.(type) {
 	case string:

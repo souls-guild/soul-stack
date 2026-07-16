@@ -2,16 +2,16 @@ package statemigrate
 
 import "strings"
 
-// interpolateValue рекурсивно обходит value-дерево set.value и резолвит
-// `${ … }`-CEL-интерполяцию в каждом строковом листе ([docs/migrations.md
-// §«Операции transform:» set]). Узкая копия логики render-pipeline
-// (keeper/internal/render.renderValue) — ядро statemigrate не тянет зависимость
-// от render-пакета, чтобы остаться чистым.
+// interpolateValue recursively traverses the value-tree of set.value and resolves
+// `${ … }`-CEL interpolation in each string leaf ([docs/migrations.md
+// §"Operations transform:" set]). Narrow copy of render-pipeline logic
+// (keeper/internal/render.renderValue) — statemigrate core doesn't depend on
+// render package to stay clean.
 //
-// Семантика интерполяции наследует shared/cel: строка-лист с ровно одним
-// `${ }`-блоком даёт нативный тип результата (число/map/list), иначе — склейку
-// через стрингификацию. Строки без `${ }` проходят как литералы (Eval вернёт
-// их без изменений). Non-string листья (числа/bool/nil) — насквозь.
+// Interpolation semantics inherit shared/cel: a string leaf with exactly one
+// `${ }` block yields native result type (number/map/list); otherwise
+// concatenation via stringification. Strings without `${ }` pass as literals (Eval
+// returns them unchanged). Non-string leaves (numbers/bool/nil) pass through.
 func interpolateValue(v any, ev Evaluator, scope Scope) (any, error) {
 	switch t := v.(type) {
 	case map[string]any:
@@ -35,8 +35,7 @@ func interpolateValue(v any, ev Evaluator, scope Scope) (any, error) {
 		}
 		return out, nil
 	case string:
-		// Нет маркера — литерал (не гоняем CEL впустую, set чаще пишет
-		// статические ACL-строки).
+		// No marker — literal (don't run CEL idly; set usually writes static ACL strings).
 		if !strings.Contains(t, "${") {
 			return t, nil
 		}
