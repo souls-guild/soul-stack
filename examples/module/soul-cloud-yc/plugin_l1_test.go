@@ -16,14 +16,14 @@ import (
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 )
 
-// L1 — driver-as-plugin через РЕАЛЬНЫЙ gRPC server+client (тот же
-// RegisterCloudDriverServer, что sdk/clouddriver.Serve навешивает после
-// handshake). Проверяет, что YcDriver корректно работает по proto-контракту
-// CloudDriver — включая поля credentials/userdata — поверх настоящего
-// gRPC-стрима, а не in-proc вызова метода.
+// L1 is driver-as-plugin through a REAL gRPC server+client (the same
+// RegisterCloudDriverServer that sdk/clouddriver.Serve attaches after
+// handshake). It verifies that YcDriver works correctly through the CloudDriver
+// proto contract, including credentials/userdata fields, over a real gRPC
+// stream rather than an in-proc method call.
 
-// serveDriverGRPC поднимает CloudDriver-сервис на TCP-loopback и возвращает
-// клиент + teardown.
+// serveDriverGRPC starts a CloudDriver service on TCP loopback and returns a
+// client plus teardown.
 func serveDriverGRPC(t *testing.T, impl *YcDriver) (pluginv1.CloudDriverClient, func()) {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
@@ -45,8 +45,8 @@ func serveDriverGRPC(t *testing.T, impl *YcDriver) (pluginv1.CloudDriverClient, 
 	return pluginv1.NewCloudDriverClient(conn), teardown
 }
 
-// l1Adapter — мост impl→CloudDriverServer (embed Unimplemented для forward-
-// compat), идентичный sdk/clouddriver.serverAdapter (тот неэкспортирован).
+// l1Adapter bridges impl to CloudDriverServer (embed Unimplemented for forward
+// compatibility), identical to sdk/clouddriver.serverAdapter (unexported).
 type l1Adapter struct {
 	pluginv1.UnimplementedCloudDriverServer
 	impl *YcDriver
@@ -91,7 +91,7 @@ func TestL1_CreateOverGRPC(t *testing.T) {
 		Profile:     l1Struct(t, validProfile()),
 		Credentials: l1Struct(t, validCredsIAM()),
 		Userdata:    "#cloud-config\n",
-		Name:        "soul-l1", // NIM-16: идентичность — иначе Create fail-closed
+		Name:        "soul-l1", // NIM-16: identity; otherwise Create fails closed
 	})
 	if err != nil {
 		t.Fatalf("Create rpc: %v", err)
@@ -118,8 +118,8 @@ func TestL1_CreateOverGRPC(t *testing.T) {
 	if len(lastVms) != 1 || lastVms[0].VmId != "epd-l1" || lastVms[0].Fqdn == "" {
 		t.Errorf("vms over gRPC = %+v", lastVms)
 	}
-	// userdata доехал через proto-стрим и попал в metadata["user-data"]
-	// (YC-конвенция, plain string без base64).
+	// userdata went through the proto stream and reached metadata["user-data"]
+	// (YC convention, plain string without base64).
 	if got := f.lastCreateInput.GetMetadata()[userdataMetaKey]; got != "#cloud-config\n" {
 		t.Errorf("userdata lost over gRPC marshaling: metadata[user-data]=%q", got)
 	}

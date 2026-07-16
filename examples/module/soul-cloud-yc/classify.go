@@ -8,18 +8,18 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// classifyYC — per-provider [clouddriver.ClassifyFunc] для Yandex Cloud:
-// маппит grpc-status-ошибки YC в общую таксономию SDK по grpc.Code +
-// эвристикам по тексту message-а (YC не публикует closed-enum ErrorCode-ов,
-// как AWS — используем grpc-канон + подстроки).
+// classifyYC is the per-provider [clouddriver.ClassifyFunc] for Yandex Cloud:
+// it maps YC grpc-status errors into the common SDK taxonomy by grpc.Code plus
+// message-text heuristics (YC does not publish closed-enum ErrorCodes like AWS,
+// so we use the grpc canon plus substrings).
 //
-// Это единственная provider-specific часть error-обработки;
-// backoff/retry/маппинг-в-event делает SDK (sdk/clouddriver), общий для всех
-// драйверов тиража.
+// This is the only provider-specific part of error handling; backoff/retry and
+// event mapping are done by the SDK (sdk/clouddriver), shared by all drivers in
+// the rollout.
 func classifyYC(err error) clouddriver.FailClass {
 	st, ok := status.FromError(err)
 	if !ok {
-		// Не-grpc ошибка (сеть/DNS/EOF/TLS) — транзиентна: ретрай оправдан.
+		// Non-grpc error (network/DNS/EOF/TLS) is transient: retry is justified.
 		return clouddriver.FailTransient
 	}
 	switch st.Code() {
@@ -28,9 +28,9 @@ func classifyYC(err error) clouddriver.FailClass {
 	case codes.NotFound:
 		return clouddriver.FailNotFound
 	case codes.ResourceExhausted:
-		// YC: и rate-limit (429), и исчерпание квот возвращаются как
-		// ResourceExhausted. Различаем по подстроке в message: throttling-
-		// формулировки → transient, всё остальное → quota.
+		// YC returns ResourceExhausted for both rate-limit (429) and quota
+		// exhaustion. Distinguish by message substring: throttling wording means
+		// transient, everything else means quota.
 		if isThrottleMsg(st.Message()) {
 			return clouddriver.FailTransient
 		}
@@ -38,9 +38,9 @@ func classifyYC(err error) clouddriver.FailClass {
 	case codes.InvalidArgument, codes.FailedPrecondition, codes.OutOfRange:
 		return clouddriver.FailInvalidParams
 	case codes.AlreadyExists:
-		// Бывает при идемпотент-create по name. Не auth, не quota — относим к
-		// invalid_params: оператор обязан выбрать другое имя либо удалить
-		// конфликтующую VM.
+		// Happens during idempotent create by name. It is neither auth nor quota,
+		// so classify it as invalid_params: the operator must choose another name
+		// or delete the conflicting VM.
 		return clouddriver.FailInvalidParams
 	case codes.Unavailable, codes.DeadlineExceeded, codes.Aborted, codes.Internal:
 		return clouddriver.FailTransient
@@ -51,11 +51,11 @@ func classifyYC(err error) clouddriver.FailClass {
 	}
 }
 
-// isThrottleMsg — YC возвращает ResourceExhausted как для rate-limit, так и
-// для исчерпания квоты. По публичной документации API-rate-limit-сообщения
-// содержат подстроки «throttl», «too many», «rate limit». Эвристика
-// сознательно широкая: ложноположительный throttle ведёт к ретраю
-// transient-операции, что безопаснее, чем не-ретраить исчерпание квоты.
+// isThrottleMsg checks whether ResourceExhausted is a rate-limit case. YC also
+// uses ResourceExhausted for quota exhaustion. Per public docs, API rate-limit
+// messages contain "throttl", "too many", or "rate limit". The heuristic is
+// deliberately broad: a false-positive throttle causes a retry of a transient
+// operation, which is safer than not retrying quota exhaustion.
 func isThrottleMsg(msg string) bool {
 	low := strings.ToLower(msg)
 	return strings.Contains(low, "throttl") ||

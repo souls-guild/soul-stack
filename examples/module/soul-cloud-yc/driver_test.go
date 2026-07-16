@@ -17,9 +17,9 @@ import (
 	"github.com/souls-guild/soul-stack/sdk/clouddriver"
 )
 
-// withFastBackoff подменяет defaultBackoff на «нулевые» задержки + указанный
-// MaxAttempts. Используется в wait-deadline / transient-probe тестах, где
-// дефолтный 1s→2s→4s сделал бы тест медленным.
+// withFastBackoff replaces defaultBackoff with near-zero delays plus the given
+// MaxAttempts. Used in wait-deadline / transient-probe tests where the default
+// 1s->2s->4s backoff would make the test slow.
 func withFastBackoff(t *testing.T, maxAttempts int) {
 	t.Helper()
 	orig := defaultBackoff
@@ -34,9 +34,9 @@ func withFastBackoff(t *testing.T, maxAttempts int) {
 	t.Cleanup(func() { defaultBackoff = orig })
 }
 
-// fakeYC — mock ycAPI для L0-unit-тестов (без сети). Поведение настраивается
-// per-метод; getSeq моделирует переход PROVISIONING→RUNNING между раундами
-// поллера. getFn — override для тестов transient-probe-error.
+// fakeYC is a mock ycAPI for L0 unit tests (no network). Behavior is configured
+// per method; getSeq models a PROVISIONING->RUNNING transition between poller
+// rounds. getFn is an override for transient-probe-error tests.
 type fakeYC struct {
 	createOut  *computev1.Instance
 	createErr  error
@@ -67,11 +67,11 @@ func (f *fakeYC) CreateInstance(_ context.Context, in *computev1.CreateInstanceR
 		return nil, f.createErr
 	}
 	if f.createOut != nil {
-		// Сохраняем ID, который CREATE-вызов выдал — для последующих Get-ов
-		// callers заполняют getSeq отдельно (моделируют lifecycle).
+		// Keep the ID returned by the CREATE call for later Get calls.
+		// Callers fill getSeq separately to model the lifecycle.
 		return f.createOut, nil
 	}
-	// Default: фабрикуем уникальный ID по имени запроса.
+	// Default: fabricate a unique ID from the request name.
 	return &computev1.Instance{Id: in.GetName()}, nil
 }
 
@@ -112,7 +112,7 @@ func (f *fakeYC) ListInstances(_ context.Context, in *computev1.ListInstancesReq
 	return f.listOut, nil
 }
 
-// withFakeYC подменяет фабрику клиента на возврат f.
+// withFakeYC replaces the client factory so it returns f.
 func withFakeYC(t *testing.T, f *fakeYC) {
 	t.Helper()
 	orig := newYcClient
@@ -174,7 +174,7 @@ func mustStruct(t *testing.T, m map[string]any) *structpb.Struct {
 func runningInstance(id, ip, fqdn string) *computev1.Instance {
 	return &computev1.Instance{
 		Id:     id,
-		Name:   id, // имя = id: gap-fill (NIM-16) считает занятость по GetName()
+		Name:   id, // name = id: gap-fill (NIM-16) computes occupancy via GetName()
 		Fqdn:   fqdn,
 		Status: computev1.Instance_RUNNING,
 		ZoneId: "ru-central1-a",
@@ -202,17 +202,18 @@ func validCredsIAM() map[string]any {
 	}
 }
 
-// labeledProfile — validProfile + run-label идентичности (Create fail-closed без
-// name и без label, NIM-16).
+// labeledProfile is validProfile plus the identity run-label (Create fails
+// closed without name and label, NIM-16).
 func labeledProfile(run string) map[string]any {
 	p := validProfile()
 	p["labels"] = map[string]any{runLabelKey: run}
 	return p
 }
 
-// TestVmName_Precedence — детерминированное имя (NIM-16): nameBase из
-// CreateRequest.name даёт `<nameBase>-<seq>` (keeper предсказывает FQDN по нему),
-// побеждая runLabel; без nameBase — `soul-<runLabel>-<seq>` (anon-ветка удалена).
+// TestVmName_Precedence checks deterministic naming (NIM-16): nameBase from
+// CreateRequest.name yields `<nameBase>-<seq>` (Keeper predicts FQDN from it)
+// and wins over runLabel; without nameBase it is `soul-<runLabel>-<seq>` (anon
+// branch removed).
 func TestVmName_Precedence(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -313,8 +314,8 @@ func TestCreate_HappyPath(t *testing.T) {
 	if vm.PrimaryIp != "10.0.0.5" {
 		t.Errorf("primary_ip=%q", vm.PrimaryIp)
 	}
-	// userdata прокинут в Metadata["user-data"] (YC-конвенция, plain string,
-	// без base64 в отличие от EC2).
+	// userdata is passed into Metadata["user-data"] (YC convention, plain
+	// string, no base64 unlike EC2).
 	if f.lastCreateInput == nil {
 		t.Fatal("CreateInstance not called")
 	}
@@ -396,9 +397,9 @@ func TestCreate_WaitsForRunning(t *testing.T) {
 	f := &fakeYC{
 		createOut: &computev1.Instance{Id: "epd-bbb"},
 		getSeq: []*computev1.Instance{
-			// раунд 1: PROVISIONING, без fqdn
+			// round 1: PROVISIONING, no fqdn
 			{Id: "epd-bbb", Status: computev1.Instance_PROVISIONING},
-			// раунд 2: RUNNING с fqdn
+			// round 2: RUNNING with fqdn
 			runningInstance("epd-bbb", "10.0.0.9", "soul-run-0.ru-central1.internal"),
 		},
 	}
@@ -421,9 +422,9 @@ func TestCreate_WaitsForRunning(t *testing.T) {
 }
 
 func TestCreate_AuthError(t *testing.T) {
-	// Auth-фейл проявляется на этапе newYcClient: пустые credentials →
-	// resolveCredentials возвращает «no credentials provided». Подменяем
-	// фабрику клиента так, чтобы она прогоняла реальную resolve-ветку.
+	// Auth failure surfaces at newYcClient: empty credentials make
+	// resolveCredentials return "no credentials provided". Replace the client
+	// factory so it runs the real resolve branch.
 	orig := newYcClient
 	newYcClient = func(ctx context.Context, c ycCredentials) (ycAPI, error) {
 		_, err := resolveCredentials(c)
@@ -482,18 +483,18 @@ func TestCreate_AmbiguousCredentials(t *testing.T) {
 	}
 }
 
-// TestCreate_NoIdentity_FailsClosed — ★ NIM-16: без name и без run-label прогон
-// неотличим от предыдущих → повторный Create плодил бы orphan-VM. Fail-closed ДО
-// любого вызова YC API (ни create, ни list).
+// TestCreate_NoIdentity_FailsClosed - NIM-16: without name and run-label the
+// run is indistinguishable from previous runs, so a repeated Create would spawn
+// orphan VMs. Fail closed before any YC API call (neither create nor list).
 func TestCreate_NoIdentity_FailsClosed(t *testing.T) {
-	withFastBackoff(t, 2) // регресс-страховка: без guard тест не должен спать до дедлайна
+	withFastBackoff(t, 2) // regression guard: without the guard the test must not sleep until deadline
 	f := &fakeYC{}
 	withFakeYC(t, f)
 	d := &YcDriver{}
 	s := &createStream{}
 	if err := d.Create(&pluginv1.CreateRequest{
 		Count:       1,
-		Profile:     mustStruct(t, validProfile()), // без labels, Name пуст
+		Profile:     mustStruct(t, validProfile()), // no labels, Name is empty
 		Credentials: mustStruct(t, validCredsIAM()),
 	}, s); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -513,10 +514,10 @@ func TestCreate_NoIdentity_FailsClosed(t *testing.T) {
 	}
 }
 
-// TestCreate_HonorsRequestName — ★ NIM-16: CreateRequest.name доходит до
-// CreateInstance как `<name>-<seq>` (драйвер соблюдает keeper-заданное имя для
-// предсказуемого FQDN) И штампуется в labels[soulstack-run] (будущие прогоны
-// матчатся по label, а не только по имени).
+// TestCreate_HonorsRequestName - NIM-16: CreateRequest.name reaches
+// CreateInstance as `<name>-<seq>` (the driver honors the Keeper-provided name
+// for predictable FQDN) and is stamped into labels[soulstack-run] (future runs
+// match by label, not only by name).
 func TestCreate_HonorsRequestName(t *testing.T) {
 	f := &fakeYC{
 		createOut: &computev1.Instance{Id: "epd-1"},
@@ -546,11 +547,11 @@ func TestCreate_HonorsRequestName(t *testing.T) {
 	}
 }
 
-// TestCreate_NameDerivedRerun_ReusesExisting — ★ NIM-16 центральный сценарий:
-// rerun по name-derived идентичности. VM первого прогона несёт стампованный
-// labels[soulstack-run]="redis"; повторный Create{Name:"redis"} без labels обязан
-// сканировать по этому label (ассерт фильтра — guard на откат стампа: fake сам
-// не фильтрует) и переиспользовать живую VM, а не плодить дубль.
+// TestCreate_NameDerivedRerun_ReusesExisting - NIM-16 central scenario: rerun
+// by name-derived identity. The first run's VM carries stamped
+// labels[soulstack-run]="redis"; repeated Create{Name:"redis"} without labels
+// must scan by this label (filter assert guards against stamp rollback: fake
+// does not filter itself) and reuse the live VM instead of creating a duplicate.
 func TestCreate_NameDerivedRerun_ReusesExisting(t *testing.T) {
 	existing := runningInstance("redis-0", "10.0.0.5", "redis-0.ru-central1.internal")
 	existing.Labels = map[string]string{runLabelKey: "redis"}
@@ -563,7 +564,7 @@ func TestCreate_NameDerivedRerun_ReusesExisting(t *testing.T) {
 	s := &createStream{}
 	if err := d.Create(&pluginv1.CreateRequest{
 		Count:       1,
-		Profile:     mustStruct(t, validProfile()), // без labels — идентичность из Name
+		Profile:     mustStruct(t, validProfile()), // no labels; identity comes from Name
 		Credentials: mustStruct(t, validCredsIAM()),
 		Name:        "redis",
 	}, s); err != nil {
@@ -585,9 +586,9 @@ func TestCreate_NameDerivedRerun_ReusesExisting(t *testing.T) {
 	}
 }
 
-// TestCreate_PartialRerun_NoIndexCollision — ★ NIM-16: label-путь, частичный
-// rerun. existing "soul-run-delta-0" (индекс 0 занят), count=2 → новая VM берёт
-// первый свободный индекс "soul-run-delta-1", а не дубль "-0".
+// TestCreate_PartialRerun_NoIndexCollision - NIM-16: label path, partial rerun.
+// Existing "soul-run-delta-0" (index 0 is occupied), count=2 means the new VM
+// takes the first free index "soul-run-delta-1", not a duplicate "-0".
 func TestCreate_PartialRerun_NoIndexCollision(t *testing.T) {
 	withFastBackoff(t, 2)
 	existing := runningInstance("soul-run-delta-0", "10.1.0.1", "soul-run-delta-0.ru-central1.internal")
@@ -666,7 +667,7 @@ func TestCreate_Idempotent_OverCount(t *testing.T) {
 	prof := validProfile()
 	prof["labels"] = map[string]any{runLabelKey: "run-over"}
 	if err := d.Create(&pluginv1.CreateRequest{
-		Count:       2, // меньше, чем реальное число существующих VM
+		Count:       2, // less than the actual number of existing VMs
 		Profile:     mustStruct(t, prof),
 		Credentials: mustStruct(t, validCredsIAM()),
 	}, s); err != nil {
@@ -681,12 +682,12 @@ func TestCreate_Idempotent_OverCount(t *testing.T) {
 }
 
 func TestCreate_Idempotent_FilterIgnoresDeadStatuses(t *testing.T) {
-	// List вернул и живые, и DELETING — драйвер обязан отфильтровать.
+	// List returned both live and DELETING VMs; the driver must filter them.
 	live := runningInstance("epd-live", "10.2.0.1", "soul-mix-0.ru-central1.internal")
 	dead := &computev1.Instance{Id: "epd-dead", Status: computev1.Instance_DELETING}
 	f := &fakeYC{
 		listOut: &computev1.ListInstancesResponse{Instances: []*computev1.Instance{live, dead}},
-		// после фильтрации останется только live; для него поллер сразу видит RUNNING.
+		// After filtering only live remains; for it the poller immediately sees RUNNING.
 		getSeq: []*computev1.Instance{live},
 	}
 	withFakeYC(t, f)
@@ -714,7 +715,7 @@ func TestCreate_CtxCancel_AntiOrphan(t *testing.T) {
 	f := &fakeYC{
 		createOut: &computev1.Instance{Id: "epd-orphan"},
 		getSeq: []*computev1.Instance{
-			// всегда PROVISIONING → поллер крутится, пока ctx не отменят
+			// Always PROVISIONING: the poller loops until ctx is canceled.
 			{Id: "epd-orphan", Status: computev1.Instance_PROVISIONING},
 		},
 	}
@@ -818,8 +819,8 @@ func TestCreate_TransientProbeError_SwallowAndRetry(t *testing.T) {
 	f := &fakeYC{
 		createOut: &computev1.Instance{Id: "epd-trans"},
 	}
-	// call 0 — PROVISIONING (первый probe round);
-	// call 1 — Unavailable (transient grpc, проглатывается);
+	// call 0 - PROVISIONING (first probe round);
+	// call 1 - Unavailable (transient grpc, swallowed);
 	// call 2 — RUNNING + IP/FQDN → Ready.
 	f.getFn = func(call int) (*computev1.Instance, error) {
 		switch call {
@@ -897,7 +898,7 @@ func TestList_RequiresFolderID(t *testing.T) {
 	withFakeYC(t, &fakeYC{})
 	d := &YcDriver{}
 	s := &listStream{ctx: context.Background()}
-	// folder_id отсутствует и в filter, и в credentials → ошибка.
+	// folder_id is absent from both filter and credentials, so this errors.
 	if err := d.List(&pluginv1.ListRequest{
 		Filter:      mustStruct(t, map[string]any{}),
 		Credentials: mustStruct(t, map[string]any{"iam_token": "t1.x"}),

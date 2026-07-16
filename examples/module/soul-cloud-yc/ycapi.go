@@ -10,14 +10,15 @@ import (
 	"google.golang.org/grpc"
 )
 
-// ycAPI — узкое подмножество yandex-cloud SDK, которое использует драйвер.
-// Сужение (а не *ycsdk.SDK напрямую) даёт mockability для L0-unit-тестов без
-// сети: тест подсовывает fake-реализацию (см. driver_test.go).
+// ycAPI is the narrow subset of the yandex-cloud SDK used by the driver.
+// Narrowing it (instead of using *ycsdk.SDK directly) gives mockability for L0
+// unit tests without network: tests provide a fake implementation (see
+// driver_test.go).
 //
-// WaitOperation — отдельный метод: yandex-cloud-операции возвращаются как
-// *operation.Operation, у которого свой Wait(ctx). Чтобы fake мог симулировать
-// мгновенное завершение (или ошибку), Wait вынесен в интерфейс. Реальная
-// реализация просто делегирует op.Wait и распаковывает op.Response().
+// WaitOperation is a separate method: yandex-cloud operations are returned as
+// *operation.Operation with their own Wait(ctx). To let fake simulate instant
+// completion (or an error), Wait is moved into the interface. The real
+// implementation simply delegates to op.Wait and unwraps op.Response().
 type ycAPI interface {
 	CreateInstance(ctx context.Context, in *computev1.CreateInstanceRequest, opts ...grpc.CallOption) (*computev1.Instance, error)
 	GetInstance(ctx context.Context, id string, opts ...grpc.CallOption) (*computev1.Instance, error)
@@ -25,33 +26,32 @@ type ycAPI interface {
 	ListInstances(ctx context.Context, in *computev1.ListInstancesRequest, opts ...grpc.CallOption) (*computev1.ListInstancesResponse, error)
 }
 
-// ycCredentials — credentials провайдера, переданные Keeper-ом в
-// CreateRequest.credentials / DestroyRequest.credentials (A-flow). Драйвер в
-// Vault НЕ ходит — Keeper уже резолвил секрет.
+// ycCredentials are provider credentials passed by Keeper in
+// CreateRequest.credentials / DestroyRequest.credentials (A-flow). The driver
+// does not call Vault; Keeper has already resolved the secret.
 //
-// Yandex Cloud поддерживает три формы аутентификации (стр. документации
-// «authorization»):
-//   - IAMToken      — короткоживущий (≤12h) bearer-токен, выпускается через
-//     yc iam create-token или ServiceAccountKey-flow;
-//   - OAuthToken    — токен Яндекс-паспорта пользователя;
-//   - ServiceAccountKey — JSON-key файла сервис-аккаунта (id+private_key+
-//     service_account_id+key_algorithm).
+// Yandex Cloud supports three authentication forms (the "authorization" docs):
+//   - IAMToken is a short-lived (<=12h) bearer token issued by
+//     `yc iam create-token` or the ServiceAccountKey flow;
+//   - OAuthToken is a user Yandex Passport token;
+//   - ServiceAccountKey is a service-account JSON key file
+//     (id+private_key+service_account_id+key_algorithm).
 //
-// Поля XOR: ровно одно из iam_token / oauth_token / service_account_key должно
-// быть непусто. FolderID / Zone — provider-specific метаданные, лежат рядом с
-// auth-полями для симметрии с awsCredentials.Region.
+// XOR fields: exactly one of iam_token / oauth_token / service_account_key must
+// be non-empty. FolderID / Zone are provider-specific metadata placed next to
+// auth fields for symmetry with awsCredentials.Region.
 type ycCredentials struct {
 	IAMToken          string
 	OAuthToken        string
-	ServiceAccountKey []byte // JSON-байты iamkey.Key
+	ServiceAccountKey []byte // JSON bytes of iamkey.Key
 	FolderID          string
 	Zone              string
-	Endpoint          string // override базового endpoint-а для тестов; пусто = YC-дефолт
+	Endpoint          string // base endpoint override for tests; empty = YC default
 }
 
-// credKeys — имена полей credentials-Struct (контракт с Keeper-side
-// CredentialsResolverPG: значения из Vault KV + folder_id/zone из Provider-
-// реестра).
+// credKeys are credentials Struct field names (contract with the Keeper-side
+// CredentialsResolverPG: values from Vault KV plus folder_id/zone from the
+// Provider registry).
 const (
 	credIAMToken          = "iam_token"
 	credOAuthToken        = "oauth_token"
@@ -61,9 +61,9 @@ const (
 	credEndpoint          = "endpoint"
 )
 
-// credsFromMap извлекает [ycCredentials] из decoded credentials-Struct.
-// service_account_key принимается либо как string (JSON-blob), либо как
-// уже декодированный объект (map[string]any → json-marshal обратно).
+// credsFromMap extracts [ycCredentials] from the decoded credentials Struct.
+// service_account_key is accepted either as a string (JSON blob) or as an
+// already decoded object (map[string]any marshaled back to JSON).
 func credsFromMap(m map[string]any) ycCredentials {
 	c := ycCredentials{
 		IAMToken:   stringField(m, credIAMToken),
@@ -90,8 +90,8 @@ func saKeyBytes(v any) []byte {
 	case []byte:
 		return t
 	default:
-		// map/struct варианты будем перекодировать в JSON; неподдерживаемые
-		// типы — игнорим (validate-фаза вернёт «no credentials provided»).
+		// Map/struct variants will be re-encoded as JSON; unsupported types are
+		// ignored (the validate phase returns "no credentials provided").
 		return nil
 	}
 }
@@ -106,9 +106,9 @@ func stringField(m map[string]any, key string) string {
 	return ""
 }
 
-// resolveCredentials — выбор XOR-ветки auth (IAM-token / OAuth / SA-key) и
-// конструирование ycsdk.Credentials. Возвращает ошибку, если не указано ни
-// одной из трёх форм либо указано больше одной.
+// resolveCredentials selects the XOR auth branch (IAM-token / OAuth / SA-key)
+// and builds ycsdk.Credentials. It returns an error if none of the three forms
+// is specified or more than one is specified.
 func resolveCredentials(c ycCredentials) (ycsdk.Credentials, error) {
 	n := 0
 	if c.IAMToken != "" {
@@ -147,12 +147,12 @@ func resolveCredentials(c ycCredentials) (ycsdk.Credentials, error) {
 	}
 }
 
-// newYcClient конструирует ycAPI из переданных credentials. Static-провайдер
-// (не дефолтная chain): credentials приходят от Keeper-а явно, драйвер НЕ
-// должен подхватывать ambient-окружение/IAM-token хоста.
+// newYcClient builds ycAPI from the passed credentials. Static provider, not
+// the default chain: credentials come explicitly from Keeper, and the driver
+// must not pick up the host ambient environment / IAM-token.
 //
-// newYcClient вынесен в переменную, чтобы L0-тесты подменяли его fake-фабрикой
-// без поднятия yc-config (см. driver_test.go).
+// newYcClient is a variable so L0 tests can replace it with a fake factory
+// without bringing up yc-config (see driver_test.go).
 var newYcClient = func(ctx context.Context, c ycCredentials) (ycAPI, error) {
 	creds, err := resolveCredentials(c)
 	if err != nil {
@@ -169,9 +169,9 @@ var newYcClient = func(ctx context.Context, c ycCredentials) (ycAPI, error) {
 	return &ycRealClient{sdk: sdk}, nil
 }
 
-// ycRealClient — реальная реализация ycAPI поверх *ycsdk.SDK. Делегирует в
-// Compute().Instance() и распаковывает Operation: для Create — возвращает
-// *Instance из response, для Delete — игнорирует пустой response.
+// ycRealClient is the real ycAPI implementation on top of *ycsdk.SDK. It
+// delegates to Compute().Instance() and unwraps Operation: for Create it returns
+// *Instance from response, for Delete it ignores the empty response.
 type ycRealClient struct {
 	sdk *ycsdk.SDK
 }
