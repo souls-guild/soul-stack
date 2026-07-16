@@ -8,29 +8,29 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// Bulk trait-assign (`POST /v1/souls/traits`, ADR-060) — операторская мутация
-// jsonb-колонки `souls.traits` массово по selector ∩ scope. Симметрична bulk
-// coven-assign ([BulkAssignCoven]/[BulkReplaceCoven] в crud.go): тот же каркас
-// (keyset-чанкинг по PK + коммит на чанк + partial-семантика без отката +
-// scope-intersection), отличается только set-выражением (jsonb-операторы вместо
-// array_append/remove) и тем, что гейт (b) на trait-ключи НЕ навешивается —
-// trait-ключ не является RBAC-измерением scope (в отличие от Coven-метки),
-// поэтому least-privilege держится одним гейтом (a): целевые хосты ⊆ coven-scope
-// оператора (тот же [BulkScope]). Ослаблять гейт (a) нельзя — без него bulk =
-// privilege-escalation.
+// Bulk trait-assign (`POST /v1/souls/traits`, ADR-060) — an operator mutation of the
+// jsonb column `souls.traits` in bulk over selector ∩ scope. Symmetric to bulk
+// coven-assign ([BulkAssignCoven]/[BulkReplaceCoven] in crud.go): the same skeleton
+// (keyset chunking by PK + commit per chunk + partial semantics without rollback +
+// scope-intersection), differs only in the set expression (jsonb operators instead of
+// array_append/remove) and in that gate (b) is NOT applied to trait keys —
+// a trait key is not an RBAC scope dimension (unlike a Coven label),
+// so least-privilege rests on a single gate (a): target hosts ⊆ the operator's
+// coven-scope (the same [BulkScope]). Gate (a) must not be relaxed — without it bulk =
+// privilege escalation.
 
-// BulkAssignTraits применяет mode=merge (set/overwrite переданные ключи,
-// остальные сохранить) либо mode=remove (удалить переданные ключи) к хостам под
+// BulkAssignTraits applies mode=merge (set/overwrite the given keys,
+// keep the rest) or mode=remove (delete the given keys) to hosts under
 // selector ∩ scope.
 //
-//   - merge:  delta — map (key → scalar|list); SET `traits = traits || $delta`,
-//     идемпотентный отсев `traits IS DISTINCT FROM (traits || $delta)`.
-//   - remove: keys — список имён; SET `traits = traits - $keys`, идемпотентный
-//     отсев `traits ?| $keys` (хотя бы один ключ присутствует).
+//   - merge:  delta — a map (key → scalar|list); SET `traits = traits || $delta`,
+//     idempotent filter `traits IS DISTINCT FROM (traits || $delta)`.
+//   - remove: keys — a list of names; SET `traits = traits - $keys`, idempotent
+//     filter `traits ?| $keys` (at least one key present).
 //
-// Чанкинг, partial-семантика и scope-intersection (гейт a) — те же, что у
-// [BulkAssignCoven]. Валидацию delta/keys (формат ключа, scalar-значение) делает
-// caller (handler/MCP) до вызова; здесь — defensive re-check режима.
+// Chunking, partial semantics, and scope-intersection (gate a) — the same as
+// [BulkAssignCoven]. Validation of delta/keys (key format, scalar value) is done by the
+// caller (handler/MCP) before the call; here — a defensive re-check of the mode.
 func BulkAssignTraits(ctx context.Context, db BulkPool, sel BulkSelector, scope BulkScope, mode TraitMode, delta map[string]any, keys []string) (Report, error) {
 	switch mode {
 	case TraitMerge:
@@ -72,13 +72,13 @@ func BulkAssignTraits(ctx context.Context, db BulkPool, sel BulkSelector, scope 
 	return rep, nil
 }
 
-// BulkReplaceTraits заменяет ВЕСЬ traits-map хоста на `traits` целиком (выкидывая
-// существующие ключи) для хостов под selector ∩ scope. Пустой/nil map допустим —
-// это «очистить все traits» (jsonb `{}`). Идемпотентный отсев — `traits IS
-// DISTINCT FROM $new` (jsonb-равенство порядко-независимо, канонизация не нужна).
+// BulkReplaceTraits replaces the ENTIRE traits map of a host with `traits` wholesale
+// (discarding existing keys) for hosts under selector ∩ scope. An empty/nil map is
+// allowed — it means "clear all traits" (jsonb `{}`). The idempotent filter is `traits IS
+// DISTINCT FROM $new` (jsonb equality is order-independent, no canonicalization needed).
 //
-// Гейт (a) scope-intersection обязателен и для replace: coven-scoped оператор не
-// затрёт traits на чужих хостах.
+// Gate (a) scope-intersection is mandatory for replace too: a coven-scoped operator must not
+// overwrite traits on hosts outside their scope.
 func BulkReplaceTraits(ctx context.Context, db BulkPool, sel BulkSelector, scope BulkScope, traits map[string]any) (Report, error) {
 	if err := ValidateTraitDelta(traits); err != nil {
 		return Report{}, err
@@ -111,19 +111,19 @@ func BulkReplaceTraits(ctx context.Context, db BulkPool, sel BulkSelector, scope
 	return rep, nil
 }
 
-// bulkTraitChunk выполняет один чанк trait-мутации в собственной транзакции:
-// keyset-окно `sid > cursor ORDER BY sid LIMIT chunk` под selector ∩ scope +
-// jsonb-set-выражение + идемпотентный отсев. Каркас CTE идентичен
-// [bulkUpdateChunk]/[bulkReplaceChunk] (coven), отличается set/idem-выражением
-// по mode:
+// bulkTraitChunk executes one chunk of the trait mutation in its own transaction:
+// a keyset window `sid > cursor ORDER BY sid LIMIT chunk` under selector ∩ scope +
+// the jsonb set expression + an idempotent filter. The CTE skeleton is identical to
+// [bulkUpdateChunk]/[bulkReplaceChunk] (coven), differing only in the set/idem expression
+// per mode:
 //
 //   - merge:   SET traits = traits || $j::jsonb; idem traits IS DISTINCT FROM (traits || $j::jsonb)
 //   - replace: SET traits = $j::jsonb;           idem traits IS DISTINCT FROM $j::jsonb
 //   - remove:  SET traits = traits - $k::text[]; idem traits ?| $k
 //
-// Возвращает (changedRows, lastSID, scannedRows, err); условие выхода — по
-// размеру keyset-окна (scannedRows), а не по changedRows (чанк, где все ключи
-// уже на месте, не должен обрывать итерацию).
+// Returns (changedRows, lastSID, scannedRows, err); the exit condition is based on the
+// keyset window size (scannedRows), not changedRows (a chunk where all keys are
+// already in place must not break the iteration).
 func bulkTraitChunk(ctx context.Context, db BulkPool, sel BulkSelector, scope BulkScope, mode TraitMode, delta map[string]any, keys []string, cursor string) (changed int64, lastSID string, scanned int, err error) {
 	tx, err := db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -159,8 +159,8 @@ func bulkTraitChunk(ctx context.Context, db BulkPool, sel BulkSelector, scope Bu
 		setExpr = fmt.Sprintf("$%d::jsonb", pos)
 		idemPred = fmt.Sprintf("traits IS DISTINCT FROM $%d::jsonb", pos)
 	case TraitRemove:
-		// pgx маппит nil-slice в NULL; пустой набор ключей — пустой text[]
-		// (`traits ?| ARRAY[]` = false → idem-отсев пропустит все строки).
+		// pgx maps a nil slice to NULL; an empty key set — an empty text[]
+		// (`traits ?| ARRAY[]` = false → the idem filter would skip all rows).
 		canonical := keys
 		if canonical == nil {
 			canonical = []string{}
@@ -210,10 +210,10 @@ SELECT
 	return changedN, last, scannedN, nil
 }
 
-// marshalTraitPayload сериализует trait-map в JSON-байты для jsonb-аргумента
-// (паттерн [Insert] — pgx-codec-auto для jsonb сознательно не используется,
-// единообразно с прочими jsonb-колонками). nil/пустой map → `{}` (валидный
-// пустой jsonb-объект, нужный для replace=«очистить» и merge без ключей).
+// marshalTraitPayload serializes a trait map into JSON bytes for the jsonb argument
+// (the [Insert] pattern — the pgx auto-codec for jsonb is deliberately not used,
+// for consistency with the other jsonb columns). nil/empty map → `{}` (a valid
+// empty jsonb object, needed for replace="clear" and merge with no keys).
 func marshalTraitPayload(m map[string]any) ([]byte, error) {
 	if len(m) == 0 {
 		return []byte("{}"), nil

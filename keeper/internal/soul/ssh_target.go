@@ -9,22 +9,22 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// SSHTarget — типизированная форма jsonb-колонки souls.ssh_target (ADR-032
-// amendment 2026-05-26, S7-1; расширено amendment 2026-05-27, P2 W-1). Хранит
-// per-host SSH-реквизиты push-flow прямо в реестре souls, заменяя pilot-форму
-// `keeper.yml::push.targets[]` (S6).
+// SSHTarget is the typed form of the souls.ssh_target jsonb column (ADR-032
+// amendment 2026-05-26, S7-1; extended by amendment 2026-05-27, P2 W-1). Holds
+// per-host SSH credentials for the push flow directly in the souls registry,
+// replacing the pilot form `keeper.yml::push.targets[]` (S6).
 //
-// Дефолты опущенных полей (port 22 / user root / soul-path /usr/local/bin/soul)
-// резолвятся НЕ здесь, а в keeper/internal/push.PGFallbackTargetResolver:
-// storage хранит ТОЛЬКО то, что явно задал оператор (NULL/0/"" → дефолт при
-// резолве). Это позволяет в будущем менять дефолты централизованно без
-// миграции данных.
+// Defaults for omitted fields (port 22 / user root / soul-path /usr/local/bin/soul)
+// are resolved NOT here but in keeper/internal/push.PGFallbackTargetResolver:
+// storage holds ONLY what the operator explicitly set (NULL/0/"" → default at
+// resolve time). This lets defaults change centrally in the future without a
+// data migration.
 //
-// `SSHProvider` (P2 W-1) — optional per-SID explicit выбор SshProvider-плагина
-// (Level 1 в 3-tier resolve: per-SID → per-coven → cluster-default). nil →
-// routing идёт по уровням 2/3 (см. keeper/internal/push/router.go::PGRouter).
-// Формат имени тот же, что у push_providers.name (regex `^[a-z][a-z0-9-]{0,62}$`),
-// валидируется CHECK `souls_ssh_target_shape` (миграция 056).
+// `SSHProvider` (P2 W-1) — an optional per-SID explicit choice of SshProvider
+// plugin (Level 1 of the 3-tier resolve: per-SID → per-coven → cluster-default).
+// nil → routing falls to levels 2/3 (see keeper/internal/push/router.go::PGRouter).
+// Same name format as push_providers.name (regex `^[a-z][a-z0-9-]{0,62}$`),
+// validated by CHECK `souls_ssh_target_shape` (migration 056).
 type SSHTarget struct {
 	SSHPort     int     `json:"ssh_port"`
 	SSHUser     string  `json:"ssh_user"`
@@ -45,19 +45,19 @@ FROM souls
 WHERE sid = $1
 `
 
-// UpdateSshTarget обновляет souls.ssh_target по sid. target==nil → пишет
-// NULL в колонку (снять настроенный target → fallback на keeper.yml под
-// флагом push.allow_legacy_push_targets).
+// UpdateSshTarget updates souls.ssh_target by sid. target==nil writes
+// NULL to the column (clear a configured target → fall back to keeper.yml
+// under the push.allow_legacy_push_targets flag).
 //
-// Audit-event и RBAC-permission проверяются caller-ом (handler / MCP-tool) —
-// слой soul.* остаётся storage-нейтральным к authz, симметрично UpdateCoven /
+// Audit-event and RBAC-permission are checked by the caller (handler / MCP tool) —
+// the soul.* layer stays storage-neutral to authz, symmetric with UpdateCoven /
 // UpdateStatus.
 //
-// Возвращает [ErrSoulNotFound], если SID не существует. Невалидный shape
-// jsonb отвергается PG-CHECK souls_ssh_target_shape (миграция 053) — придёт
-// CHECK violation, обёрнутая в общий error; handler-сторона матчит на текст
-// constraint, но в нормальном flow невалидный shape невозможен (caller
-// маршалит из типизированного SSHTarget).
+// Returns [ErrSoulNotFound] if the SID doesn't exist. An invalid jsonb shape
+// is rejected by the PG CHECK souls_ssh_target_shape (migration 053) — this
+// surfaces as a CHECK violation wrapped in a generic error; the handler side
+// matches on the constraint text, but in normal flow an invalid shape is
+// impossible (the caller marshals from a typed SSHTarget).
 func UpdateSshTarget(ctx context.Context, db ExecQueryRower, sid string, target *SSHTarget) error {
 	if !ValidSID(sid) {
 		return fmt.Errorf("soul: invalid SID %q (must match %s)", sid, SIDPattern)
@@ -81,17 +81,17 @@ func UpdateSshTarget(ctx context.Context, db ExecQueryRower, sid string, target 
 	return nil
 }
 
-// SelectSshTarget читает souls.ssh_target по SID. Возвращает:
+// SelectSshTarget reads souls.ssh_target by SID. Returns:
 //
-//   - (target, nil) — запись Soul-а есть, ssh_target проставлен;
-//   - (nil, nil) — запись Soul-а есть, ssh_target IS NULL (target не настроен —
-//     fallback на keeper.yml в PGFallbackTargetResolver);
-//   - (nil, ErrSoulNotFound) — записи Soul-а нет в реестре;
-//   - (nil, fmt.Errorf-wrapped) — ошибка БД или битый JSONB в колонке
-//     (CHECK souls_ssh_target_shape делает это невозможным, но guard оставляем).
+//   - (target, nil) — the Soul record exists, ssh_target is set;
+//   - (nil, nil) — the Soul record exists, ssh_target IS NULL (target not
+//     configured — falls back to keeper.yml in PGFallbackTargetResolver);
+//   - (nil, ErrSoulNotFound) — no Soul record in the registry;
+//   - (nil, fmt.Errorf-wrapped) — a DB error or malformed JSONB in the column
+//     (CHECK souls_ssh_target_shape makes this impossible, but the guard stays).
 //
-// Это hot-path метод (зовётся из SshDispatcher.SendApply на каждом push-е),
-// поэтому без round-trip-ов сверх одного SELECT.
+// This is a hot-path method (called from SshDispatcher.SendApply on every push),
+// hence no round-trips beyond one SELECT.
 func SelectSshTarget(ctx context.Context, db ExecQueryRower, sid string) (*SSHTarget, error) {
 	if !ValidSID(sid) {
 		return nil, fmt.Errorf("soul: invalid SID %q (must match %s)", sid, SIDPattern)

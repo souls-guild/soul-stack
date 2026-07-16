@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// fake-ы (fakeDB / staticRow / errRow) определены в crud_test.go — переиспользуем.
+// Fakes (fakeDB / staticRow / errRow) are defined in crud_test.go - reuse them.
 
 // --- UpdateSshTarget ---
 
@@ -28,8 +28,8 @@ func TestUpdateSshTarget_HappyPath(t *testing.T) {
 	if f.queryCalls != 1 {
 		t.Errorf("queryCalls = %d, want 1", f.queryCalls)
 	}
-	// $2 — payload JSON ([]byte). Защита от регрессии: если кто-то перепишет
-	// payload в map[string]any, jsonb-cast в SQL отвалится — проверяем форму.
+	// $2 is payload JSON ([]byte). Regression guard: if someone rewrites
+	// payload to map[string]any, jsonb-cast in SQL will fail - check form.
 	args := f.lastExecArgs
 	if args != nil {
 		t.Fatalf("lastExecArgs = %v, want nil (QueryRow path)", args)
@@ -37,8 +37,8 @@ func TestUpdateSshTarget_HappyPath(t *testing.T) {
 }
 
 func TestUpdateSshTarget_NilTarget_WritesNull(t *testing.T) {
-	// nil target → payload передаётся как nil → пишется PG NULL (снятие
-	// настроенного target-а).
+	// nil target → payload is passed as nil → PG writes NULL (removal
+	// of configured target).
 	const sid = "host.example.com"
 	f := &fakeDB{
 		rowFunc: func() pgx.Row {
@@ -102,8 +102,8 @@ func TestSelectSshTarget_HappyPath(t *testing.T) {
 }
 
 func TestSelectSshTarget_NullColumn(t *testing.T) {
-	// soul-row есть, но ssh_target IS NULL — caller получает (nil, nil) и
-	// фолбэчит на keeper.yml::push.targets[] (allow_legacy=true) либо
+	// Soul row exists, but ssh_target IS NULL - caller gets (nil, nil) and
+	// falls back to keeper.yml::push.targets[] (allow_legacy=true) or
 	// ErrTargetNotConfigured (allow_legacy=false).
 	f := &fakeDB{
 		rowFunc: func() pgx.Row {
@@ -144,8 +144,8 @@ func TestSelectSshTarget_InvalidSID(t *testing.T) {
 
 // --- SSHProvider field (P2 W-1) ---
 
-// TestSshTarget_WithSSHProvider — round-trip с проставленным per-SID
-// `ssh_provider`. JSON-омит при nil проверяет, что старые тесты не сломаются.
+// TestSshTarget_WithSSHProvider tests round-trip with per-SID
+// `ssh_provider` set. JSON-omit on nil checks that old tests don't break.
 func TestSshTarget_WithSSHProvider(t *testing.T) {
 	sp := "vault-bastion"
 	want := SSHTarget{
@@ -158,7 +158,7 @@ func TestSshTarget_WithSSHProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	// omitempty работает для *string — поле должно присутствовать в JSON.
+	// omitempty works for *string - field should be present in JSON.
 	if !bytes.Contains(b, []byte(`"ssh_provider":"vault-bastion"`)) {
 		t.Errorf("ssh_provider не сериализовался: %s", string(b))
 	}
@@ -171,8 +171,8 @@ func TestSshTarget_WithSSHProvider(t *testing.T) {
 	}
 }
 
-// TestSshTarget_OmitSSHProvider_BackCompat — nil SSHProvider не должен
-// присутствовать в JSON (старые consumers не падают на unknown поле).
+// TestSshTarget_OmitSSHProvider_BackCompat ensures nil SSHProvider is not
+// present in JSON (old consumers don't fail on unknown field).
 func TestSshTarget_OmitSSHProvider_BackCompat(t *testing.T) {
 	target := SSHTarget{SSHPort: 22, SSHUser: "root", SoulPath: "/usr/local/bin/soul"}
 	b, err := json.Marshal(target)

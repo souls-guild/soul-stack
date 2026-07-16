@@ -1,10 +1,10 @@
 //go:build integration
 
-// Integration-тесты bulk trait-assign (BulkAssignTraits / BulkReplaceTraits)
-// против реального Postgres (jsonb-операторы ||/-/?|, keyset-чанкинг,
-// идемпотентность, scope-intersection — SQL-driven, на fake-pool-е не
-// проверить). Используют общий harness integration_test.go (integrationPool /
-// resetAll) и seedBulkSoul/equalStr из bulk_coven_integration_test.go.
+// Integration tests for bulk trait-assign (BulkAssignTraits / BulkReplaceTraits)
+// against real Postgres (jsonb operators ||/-/?|, keyset chunking, idempotency,
+// scope-intersection — SQL-driven, can't be verified on a fake pool). Use the
+// shared integration_test.go harness (integrationPool / resetAll) and
+// seedBulkSoul/equalStr from bulk_coven_integration_test.go.
 
 package soul
 
@@ -15,7 +15,7 @@ import (
 	"testing"
 )
 
-// seedTraitSoul вставляет хост с заданным набором traits (status pending).
+// seedTraitSoul inserts a host with the given traits set (status pending).
 func seedTraitSoul(t *testing.T, sid string, traits map[string]any) {
 	t.Helper()
 	s := &Soul{SID: sid, Status: StatusPending, Coven: []string{"dev"}, Traits: traits}
@@ -33,8 +33,8 @@ func traitsOf(t *testing.T, sid string) map[string]any {
 	return got.Traits
 }
 
-// TestIntegration_BulkTraits_Merge_OverwritesAndKeeps — merge перетирает
-// переданные ключи, остальные сохраняет.
+// TestIntegration_BulkTraits_Merge_OverwritesAndKeeps — merge overwrites the
+// given keys, keeps the rest.
 func TestIntegration_BulkTraits_Merge_OverwritesAndKeeps(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -60,7 +60,7 @@ func TestIntegration_BulkTraits_Merge_OverwritesAndKeeps(t *testing.T) {
 		t.Errorf("tier = %v, want 1 (added)", got["tier"])
 	}
 
-	// Idem: повтор того же merge → 0 changed.
+	// Idem: repeating the same merge → 0 changed.
 	rep2, err := BulkAssignTraits(ctx, integrationPool, BulkSelector{All: true},
 		BulkScope{Unrestricted: true}, TraitMerge,
 		map[string]any{"namespace": "new", "tier": float64(1)}, nil)
@@ -72,8 +72,8 @@ func TestIntegration_BulkTraits_Merge_OverwritesAndKeeps(t *testing.T) {
 	}
 }
 
-// TestIntegration_BulkTraits_Merge_ListValue — list-of-scalars значение
-// сериализуется как jsonb-массив и читается обратно.
+// TestIntegration_BulkTraits_Merge_ListValue — a list-of-scalars value is
+// serialized as a jsonb array and reads back correctly.
 func TestIntegration_BulkTraits_Merge_ListValue(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -92,8 +92,8 @@ func TestIntegration_BulkTraits_Merge_ListValue(t *testing.T) {
 	}
 }
 
-// TestIntegration_BulkTraits_Remove — remove удаляет переданные ключи,
-// отсутствующие игнорирует; idem на повторе.
+// TestIntegration_BulkTraits_Remove — remove deletes the given keys, ignores
+// absent ones; idem on repeat.
 func TestIntegration_BulkTraits_Remove(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -125,8 +125,8 @@ func TestIntegration_BulkTraits_Remove(t *testing.T) {
 	}
 }
 
-// TestIntegration_BulkTraits_Replace — replace задаёт map ровно, выкидывая
-// существующие ключи; пустой map очищает.
+// TestIntegration_BulkTraits_Replace — replace sets the map exactly, dropping
+// existing keys; an empty map clears it.
 func TestIntegration_BulkTraits_Replace(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -145,7 +145,7 @@ func TestIntegration_BulkTraits_Replace(t *testing.T) {
 		t.Errorf("traits = %#v, want {namespace:fresh} (old keys dropped)", got)
 	}
 
-	// Пустой replace = очистить.
+	// Empty replace = clear.
 	repEmpty, err := BulkReplaceTraits(ctx, integrationPool, BulkSelector{All: true},
 		BulkScope{Unrestricted: true}, map[string]any{})
 	if err != nil {
@@ -159,12 +159,13 @@ func TestIntegration_BulkTraits_Replace(t *testing.T) {
 	}
 }
 
-// TestIntegration_BulkTraits_Scope_HostsSubset — гейт (a) least-privilege:
-// coven-scoped оператор не трогает traits хостов вне scope даже при all=true.
+// TestIntegration_BulkTraits_Scope_HostsSubset — gate (a) least-privilege: a
+// coven-scoped operator doesn't touch traits of hosts outside scope even with
+// all=true.
 func TestIntegration_BulkTraits_Scope_HostsSubset(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
-	// dev-host в scope, prod-host вне (его coven перекрываем явно).
+	// dev-host is in scope, prod-host is outside (its coven is set explicitly).
 	seedTraitSoul(t, "dev-host.example.com", map[string]any{"x": "1"})
 	prod := &Soul{SID: "prod-host.example.com", Status: StatusPending, Coven: []string{"prod"}, Traits: map[string]any{"x": "1"}}
 	if err := Insert(ctx, integrationPool, prod); err != nil {
@@ -187,7 +188,7 @@ func TestIntegration_BulkTraits_Scope_HostsSubset(t *testing.T) {
 	}
 }
 
-// TestIntegration_BulkTraits_Replace_Scope_HostsSubset — гейт (a) на replace.
+// TestIntegration_BulkTraits_Replace_Scope_HostsSubset — gate (a) on replace.
 func TestIntegration_BulkTraits_Replace_Scope_HostsSubset(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()

@@ -19,9 +19,9 @@ func TestValidTraitMode(t *testing.T) {
 }
 
 func TestValidTraitKey(t *testing.T) {
-	// NIM-67: `_` разрешён как внутренний разделитель (kebab/snake), но не
-	// ведущий/хвостовой/сдвоенный (симметрично `-`); заглавные/цифра-первой/точка
-	// остаются невалидны.
+	// NIM-67: `_` is allowed as an internal separator (kebab/snake), but not
+	// as a leading/trailing/doubled one (symmetric with `-`); uppercase/leading-digit/dot
+	// remain invalid.
 	good := []string{"namespace", "dc-eu", "tier-1", "a", "x9-y9", "dc_eu", "owner_team", "product_id", "a_b"}
 	for _, k := range good {
 		if !ValidTraitKey(k) {
@@ -53,13 +53,13 @@ func TestValidTraitValue_ListOfScalars(t *testing.T) {
 	}
 }
 
-// TestValidTraitValue_RejectsNested — вложенный map / список-в-списке / null
-// отвергаются (depth > 1 запрещён, ADR-060).
+// TestValidTraitValue_RejectsNested — a nested map / list-in-list / null
+// are rejected (depth > 1 is forbidden, ADR-060).
 func TestValidTraitValue_RejectsNested(t *testing.T) {
 	cases := []any{
-		map[string]any{"k": "v"},        // вложенный объект
-		[]any{[]any{"x"}},               // список в списке
-		[]any{map[string]any{"k": "v"}}, // объект в списке
+		map[string]any{"k": "v"},        // nested object
+		[]any{[]any{"x"}},               // list in a list
+		[]any{map[string]any{"k": "v"}}, // object in a list
 		nil,                             // null
 	}
 	for _, v := range cases {
@@ -80,7 +80,7 @@ func TestValidateTraitDelta(t *testing.T) {
 	if err := ValidateTraitDelta(map[string]any{"k": map[string]any{"nested": 1}}); err == nil {
 		t.Error("ValidateTraitDelta(nested value) = nil, want error")
 	}
-	// nil/пустой map допустим (replace = «очистить»).
+	// nil/empty map is allowed (replace = "clear").
 	if err := ValidateTraitDelta(nil); err != nil {
 		t.Errorf("ValidateTraitDelta(nil) = %v, want nil", err)
 	}
@@ -157,8 +157,8 @@ func TestBulkReplaceTraits_RejectsBadKey_NoDB(t *testing.T) {
 	}
 }
 
-// TestBulkAssignTraits_EmptySelector — пустой selector → ErrBulkEmptySelector
-// (тот же гейт, что у coven; проверяется CountBulkMatched через buildBulkWhere).
+// TestBulkAssignTraits_EmptySelector — an empty selector → ErrBulkEmptySelector
+// (the same gate as for coven; checked via CountBulkMatched through buildBulkWhere).
 func TestBulkAssignTraits_EmptySelector(t *testing.T) {
 	f := &fakeDB{}
 	_, err := BulkAssignTraits(nil, bulkFakePool{f}, BulkSelector{},

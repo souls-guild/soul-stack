@@ -1,9 +1,9 @@
 //go:build integration
 
-// Integration-тесты bulk coven-assign (BulkAssignCoven / CountBulkMatched)
-// против реального Postgres (keyset-чанкинг, идемпотентность, scope-
-// intersection не проверить на fake-pool-е — они SQL-driven). Используют
-// общий harness integration_test.go (integrationPool / resetAll).
+// Integration tests for bulk coven-assign (BulkAssignCoven / CountBulkMatched)
+// against real Postgres (keyset chunking, idempotency, scope-intersection can't
+// be verified on a fake pool — they're SQL-driven). Use the shared
+// integration_test.go harness (integrationPool / resetAll).
 
 package soul
 
@@ -18,7 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// seedBulkSoul вставляет хост с заданным набором coven (status pending).
+// seedBulkSoul inserts a host with the given coven set (status pending).
 func seedBulkSoul(t *testing.T, sid string, coven []string) {
 	t.Helper()
 	s := &Soul{SID: sid, Status: StatusPending, Coven: coven}
@@ -57,7 +57,7 @@ func TestIntegration_Bulk_Append_All_Idempotent(t *testing.T) {
 	if rep.Matched != 2 {
 		t.Errorf("matched = %d, want 2", rep.Matched)
 	}
-	// b уже имеет edge → идемпотентный отсев → меняется только a.
+	// b already has edge → idempotent filtering → only a changes.
 	if rep.Changed != 1 {
 		t.Errorf("changed = %d, want 1 (b already has edge)", rep.Changed)
 	}
@@ -65,7 +65,7 @@ func TestIntegration_Bulk_Append_All_Idempotent(t *testing.T) {
 		t.Errorf("a.coven = %v, want [dev edge]", got)
 	}
 
-	// Повторный вызов = no-op (оба уже имеют edge).
+	// Repeat call = no-op (both already have edge).
 	rep2, err := BulkAssignCoven(ctx, integrationPool, sel, scope, "edge", CovenAppend)
 	if err != nil {
 		t.Fatalf("BulkAssignCoven repeat: %v", err)
@@ -104,13 +104,13 @@ func TestIntegration_Bulk_Remove_Idempotent(t *testing.T) {
 	}
 }
 
-// TestIntegration_Bulk_Chunking — >bulkChunkSize хостов: keyset-итерация
-// должна пройти все строки в нескольких чанках без пропусков/дублей.
+// TestIntegration_Bulk_Chunking — >bulkChunkSize hosts: keyset iteration must
+// walk all rows across multiple chunks without skips/dupes.
 func TestIntegration_Bulk_Chunking(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
 
-	const n = bulkChunkSize + 137 // > 1 чанка
+	const n = bulkChunkSize + 137 // > 1 chunk
 	for i := 0; i < n; i++ {
 		seedBulkSoul(t, fmt.Sprintf("h%05d.example.com", i), []string{"dev"})
 	}
@@ -131,7 +131,7 @@ func TestIntegration_Bulk_Chunking(t *testing.T) {
 		t.Errorf("chunksCommitted = %d, want >= 2 (>1 chunk)", rep.ChunksCommitted)
 	}
 
-	// Контрольная сверка: все хосты получили метку.
+	// Sanity check: all hosts got the label.
 	var withBatch int
 	if err := integrationPool.QueryRow(ctx,
 		"SELECT COUNT(*) FROM souls WHERE 'batch' = ANY(coven)").Scan(&withBatch); err != nil {
@@ -158,7 +158,7 @@ func TestIntegration_Bulk_DryRun_NoWrite(t *testing.T) {
 	if matched != 2 {
 		t.Errorf("matched = %d, want 2", matched)
 	}
-	// dry_run не должен ничего записать.
+	// dry_run must write nothing.
 	if got := covenOf(t, "a.example.com"); !equalStr(got, []string{"dev"}) {
 		t.Errorf("a.coven mutated by dry_run: %v", got)
 	}
@@ -193,7 +193,7 @@ func TestIntegration_Bulk_Selector_Status(t *testing.T) {
 	if err := UpdateStatus(ctx, integrationPool, "a.example.com", StatusConnected, &kid); err != nil {
 		t.Fatalf("UpdateStatus: %v", err)
 	}
-	seedBulkSoul(t, "b.example.com", []string{"dev"}) // остаётся pending
+	seedBulkSoul(t, "b.example.com", []string{"dev"}) // stays pending
 
 	sel := BulkSelector{All: true, Status: StatusConnected}
 	scope := BulkScope{Unrestricted: true}
@@ -215,10 +215,10 @@ func TestIntegration_Bulk_EmptySelector(t *testing.T) {
 	}
 }
 
-// --- scope-intersection (КРИТИЧНО) ---
+// --- scope-intersection (CRITICAL) ---
 
-// TestIntegration_Bulk_Scope_HostsSubset — гейт (a): целевые хосты ⊆ scope.
-// Оператор с coven=dev не трогает хосты вне dev даже при all=true.
+// TestIntegration_Bulk_Scope_HostsSubset — gate (a): target hosts ⊆ scope. An
+// operator with coven=dev doesn't touch hosts outside dev even with all=true.
 func TestIntegration_Bulk_Scope_HostsSubset(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -232,8 +232,8 @@ func TestIntegration_Bulk_Scope_HostsSubset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BulkAssignCoven: %v", err)
 	}
-	// Только dev-host попадает под scope; prod-host исключён предикатом
-	// coven && ARRAY['dev']. append-метка 'dev' ∈ scope — допустима.
+	// Only dev-host falls under scope; prod-host is excluded by the
+	// coven && ARRAY['dev'] predicate. append label 'dev' ∈ scope — allowed.
 	if rep.Matched != 1 {
 		t.Errorf("matched = %d, want 1 (prod-host out of scope)", rep.Matched)
 	}
@@ -242,8 +242,8 @@ func TestIntegration_Bulk_Scope_HostsSubset(t *testing.T) {
 	}
 }
 
-// TestIntegration_Bulk_Scope_HostsSubset_ViaSIDs — гейт (a) обходить через
-// явный sids-список нельзя: хост вне scope всё равно не попадает в UPDATE.
+// TestIntegration_Bulk_Scope_HostsSubset_ViaSIDs — gate (a) can't be bypassed
+// via an explicit sids list: a host outside scope still doesn't reach the UPDATE.
 func TestIntegration_Bulk_Scope_HostsSubset_ViaSIDs(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -252,7 +252,7 @@ func TestIntegration_Bulk_Scope_HostsSubset_ViaSIDs(t *testing.T) {
 	sel := BulkSelector{SIDs: []string{"prod-host.example.com"}}
 	scope := BulkScope{Covens: []string{"dev"}}
 
-	// label 'dev' ∈ scope (проходит гейт b), но целевой хост вне scope.
+	// label 'dev' ∈ scope (passes gate b), but the target host is outside scope.
 	rep, err := BulkAssignCoven(ctx, integrationPool, sel, scope, "dev", CovenAppend)
 	if err != nil {
 		t.Fatalf("BulkAssignCoven: %v", err)
@@ -265,8 +265,8 @@ func TestIntegration_Bulk_Scope_HostsSubset_ViaSIDs(t *testing.T) {
 	}
 }
 
-// TestIntegration_Bulk_Scope_LabelOutOfScope — гейт (b): нельзя навесить
-// метку вне scope (privilege-escalation на чужой таргет).
+// TestIntegration_Bulk_Scope_LabelOutOfScope — gate (b): can't attach a label
+// outside scope (privilege escalation onto someone else's target).
 func TestIntegration_Bulk_Scope_LabelOutOfScope(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -275,7 +275,7 @@ func TestIntegration_Bulk_Scope_LabelOutOfScope(t *testing.T) {
 	sel := BulkSelector{All: true}
 	scope := BulkScope{Covens: []string{"dev"}}
 
-	// Оператор с coven=dev пытается навесить 'prod' — отказ ДО UPDATE.
+	// An operator with coven=dev tries to attach 'prod' — rejected BEFORE UPDATE.
 	_, err := BulkAssignCoven(ctx, integrationPool, sel, scope, "prod", CovenAppend)
 	if !errors.Is(err, ErrBulkLabelOutOfScope) {
 		t.Fatalf("err = %v, want ErrBulkLabelOutOfScope", err)
@@ -285,9 +285,9 @@ func TestIntegration_Bulk_Scope_LabelOutOfScope(t *testing.T) {
 	}
 }
 
-// TestIntegration_Bulk_Scope_RemoveOutOfScopeLabel_Allowed — remove метки вне
-// scope не расширяет таргет (снятие — не эскалация); гейт (b) на remove не
-// действует, но гейт (a) всё равно ограничивает целевые хосты scope-ом.
+// TestIntegration_Bulk_Scope_Remove_HostsSubset — removing a label outside
+// scope doesn't expand the target (removal isn't escalation); gate (b) doesn't
+// apply to remove, but gate (a) still restricts target hosts by scope.
 func TestIntegration_Bulk_Scope_Remove_HostsSubset(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -301,7 +301,7 @@ func TestIntegration_Bulk_Scope_Remove_HostsSubset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BulkAssignCoven: %v", err)
 	}
-	// Только dev-host в scope → снимаем shared только с него.
+	// Only dev-host is in scope → shared is removed only from it.
 	if rep.Changed != 1 {
 		t.Errorf("changed = %d, want 1 (prod-host out of scope)", rep.Changed)
 	}
@@ -310,44 +310,47 @@ func TestIntegration_Bulk_Scope_Remove_HostsSubset(t *testing.T) {
 	}
 }
 
-// --- partial-семантика (путь «без отката») ---
+// --- partial semantics (no-rollback path) ---
 
-// cancelAfterChunkPool оборачивает реальный *pgxpool.Pool и отменяет общий
-// cancellable-context ПЕРЕД K-м BeginTx. Тогда чанки 1..K-1 коммитятся
-// нормально, а на K-м BeginTx(ctx) pgx возвращает context.Canceled →
-// bulkUpdateChunk фейлится → BulkAssignCoven отдаёт BulkPartial без отката
-// закоммиченных чанков. Test-only seam: production-код не трогаем, инъекция
-// сбоя — через cancel переданного контекста, а не через хук в BulkAssignCoven.
+// cancelAfterChunkPool wraps a real *pgxpool.Pool and cancels the shared
+// cancellable context BEFORE the K-th BeginTx. Chunks 1..K-1 commit normally,
+// then on the K-th BeginTx(ctx) pgx returns context.Canceled → bulkUpdateChunk
+// fails → BulkAssignCoven returns BulkPartial without rolling back
+// already-committed chunks. Test-only seam: production code stays untouched,
+// failure injection goes through cancelling the passed context rather than a
+// hook in BulkAssignCoven.
 //
-// CountBulkMatched (первый round-trip в BulkAssignCoven) ходит через QueryRow,
-// а не BeginTx, поэтому счётчик BeginTx прямо соответствует номеру чанка.
+// CountBulkMatched (the first round-trip in BulkAssignCoven) goes through
+// QueryRow, not BeginTx, so the BeginTx counter maps directly to the chunk
+// number.
 type cancelAfterChunkPool struct {
 	*pgxpool.Pool
 	cancel   context.CancelFunc
-	failOn   int // номер чанка (1-based), на BeginTx которого отменяем ctx.
+	failOn   int // chunk number (1-based) whose BeginTx cancels ctx.
 	beginCnt int
 }
 
 func (p *cancelAfterChunkPool) BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, error) {
 	p.beginCnt++
 	if p.beginCnt == p.failOn {
-		// Отменяем ДО передачи в реальный пул: BeginTx с отменённым ctx
-		// вернёт ошибку, и этот чанк (K) не закоммитится.
+		// Cancel BEFORE delegating to the real pool: BeginTx with a cancelled ctx
+		// returns an error, so this chunk (K) won't commit.
 		p.cancel()
 	}
 	return p.Pool.BeginTx(ctx, opts)
 }
 
-// TestIntegration_Bulk_Partial_NoRollback — чанк K падает в середине большой
-// выборки: чанки 1..K-1 закоммичены (метка на их строках), возврат partial с
-// Err и changed < matched; идемпотентный повтор добивает остаток без дублей.
+// TestIntegration_Bulk_Partial_NoRollback — chunk K fails midway through a
+// large selection: chunks 1..K-1 are committed (label on their rows), returns
+// partial with Err and changed < matched; an idempotent retry finishes the
+// remainder without dupes.
 func TestIntegration_Bulk_Partial_NoRollback(t *testing.T) {
 	resetAll(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// 3 полных чанка + хвост: достаточно, чтобы упасть на 2-м чанке и иметь
-	// непустой остаток (чанки 2..3 + хвост) для до-повтора.
+	// 3 full chunks + tail: enough to fail on chunk 2 and leave a non-empty
+	// remainder (chunks 2..3 + tail) for the follow-up retry.
 	const n = bulkChunkSize*3 + 91
 	for i := 0; i < n; i++ {
 		seedBulkSoul(t, fmt.Sprintf("h%05d.example.com", i), []string{"dev"})
@@ -356,7 +359,7 @@ func TestIntegration_Bulk_Partial_NoRollback(t *testing.T) {
 	sel := BulkSelector{All: true}
 	scope := BulkScope{Unrestricted: true}
 
-	const failChunk = 2 // упасть на BeginTx 2-го чанка → закоммичен ровно 1.
+	const failChunk = 2 // fail on chunk 2's BeginTx → exactly 1 committed.
 	pool := &cancelAfterChunkPool{Pool: integrationPool, cancel: cancel, failOn: failChunk}
 
 	rep, err := BulkAssignCoven(ctx, pool, sel, scope, "batch", CovenAppend)
@@ -382,7 +385,7 @@ func TestIntegration_Bulk_Partial_NoRollback(t *testing.T) {
 		t.Errorf("changed = %d, want %d (ровно 1 закоммиченный чанк)", rep.Changed, bulkChunkSize)
 	}
 
-	// Чанки 1..K-1 ДЕЙСТВИТЕЛЬНО закоммичены в реальном PG (метка на строках).
+	// Chunks 1..K-1 are ACTUALLY committed in real PG (label present on rows).
 	var withBatch int
 	if err := integrationPool.QueryRow(context.Background(),
 		"SELECT COUNT(*) FROM souls WHERE 'batch' = ANY(coven)").Scan(&withBatch); err != nil {
@@ -392,7 +395,7 @@ func TestIntegration_Bulk_Partial_NoRollback(t *testing.T) {
 		t.Errorf("hosts with 'batch' after partial = %d, want %d (commit чанка 1 уцелел)", withBatch, bulkChunkSize)
 	}
 
-	// Идемпотентный повтор ДОБИВАЕТ остаток (свежий неотменённый ctx).
+	// Idempotent retry FINISHES the remainder (fresh, non-cancelled ctx).
 	rep2, err := BulkAssignCoven(context.Background(), integrationPool, sel, scope, "batch", CovenAppend)
 	if err != nil {
 		t.Fatalf("BulkAssignCoven repeat: %v", err)
@@ -400,12 +403,12 @@ func TestIntegration_Bulk_Partial_NoRollback(t *testing.T) {
 	if rep2.Status != BulkCompleted {
 		t.Errorf("repeat status = %q, want completed", rep2.Status)
 	}
-	// Повтор трогает только ещё-не-помеченные строки (idem-отсев): n - уже-помеченные.
+	// Retry touches only not-yet-labeled rows (idem-filtering): n - already-labeled.
 	if rep2.Changed != n-bulkChunkSize {
 		t.Errorf("repeat changed = %d, want %d (только остаток)", rep2.Changed, n-bulkChunkSize)
 	}
 
-	// Итог консистентен: метка ровно у всех n, без дублей в массиве.
+	// Final state is consistent: label present on exactly all n, no dupes in the array.
 	if err := integrationPool.QueryRow(context.Background(),
 		"SELECT COUNT(*) FROM souls WHERE 'batch' = ANY(coven)").Scan(&withBatch); err != nil {
 		t.Fatalf("final count: %v", err)
@@ -415,7 +418,7 @@ func TestIntegration_Bulk_Partial_NoRollback(t *testing.T) {
 	}
 	var dupHosts int
 	if err := integrationPool.QueryRow(context.Background(),
-		// cardinality(array) > длины множества уникальных → дубль метки в массиве.
+		// cardinality(array) > size of the unique set → duplicate label in the array.
 		`SELECT COUNT(*) FROM souls
 		 WHERE cardinality(coven) <> cardinality(ARRAY(SELECT DISTINCT unnest(coven)))`).Scan(&dupHosts); err != nil {
 		t.Fatalf("dup-check: %v", err)
@@ -425,15 +428,16 @@ func TestIntegration_Bulk_Partial_NoRollback(t *testing.T) {
 	}
 }
 
-// TestIntegration_Bulk_ExactMultipleOfChunk — число подходящих строк ТОЧНО
-// кратно bulkChunkSize: проверка off-by-one в keyset-итерации. Последнее
-// keyset-окно ровно заполнено (scanned == chunk), поэтому итерация делает ещё
-// один проход с пустым окном и корректно выходит — без лишних изменений/паники.
+// TestIntegration_Bulk_ExactMultipleOfChunk — number of matching rows is
+// EXACTLY a multiple of bulkChunkSize: checks for an off-by-one in keyset
+// iteration. The last keyset window is exactly full (scanned == chunk), so
+// iteration makes one more pass with an empty window and exits cleanly — no
+// extra changes/panic.
 func TestIntegration_Bulk_ExactMultipleOfChunk(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
 
-	const n = bulkChunkSize * 2 // ровно 2 полных чанка.
+	const n = bulkChunkSize * 2 // exactly 2 full chunks.
 	for i := 0; i < n; i++ {
 		seedBulkSoul(t, fmt.Sprintf("h%05d.example.com", i), []string{"dev"})
 	}
@@ -447,9 +451,9 @@ func TestIntegration_Bulk_ExactMultipleOfChunk(t *testing.T) {
 	if rep.Matched != n || rep.Changed != n {
 		t.Errorf("matched/changed = %d/%d, want %d/%d", rep.Matched, rep.Changed, n, n)
 	}
-	// 2 полных чанка → 2-й чанк имеет scanned == chunk, значит цикл делает 3-й
-	// проход с пустым окном (scanned 0 < chunk → выход). ChunksCommitted
-	// считает и пустой финальный проход (он коммитит no-op-транзакцию).
+	// 2 full chunks → chunk 2 has scanned == chunk, so the loop makes a 3rd
+	// pass with an empty window (scanned 0 < chunk → exit). ChunksCommitted
+	// also counts the empty final pass (it commits a no-op transaction).
 	if rep.ChunksCommitted != 3 {
 		t.Errorf("chunksCommitted = %d, want 3 (2 полных + пустой финальный)", rep.ChunksCommitted)
 	}
@@ -478,8 +482,8 @@ func equalStr(a, b []string) bool {
 
 // --- mode=replace integration ---
 
-// TestIntegration_Bulk_Replace_MutatesSet — replace задаёт coven ровно как
-// набор, выкидывая существующие метки.
+// TestIntegration_Bulk_Replace_MutatesSet — replace sets coven to exactly the
+// given set, dropping existing labels.
 func TestIntegration_Bulk_Replace_MutatesSet(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -506,8 +510,8 @@ func TestIntegration_Bulk_Replace_MutatesSet(t *testing.T) {
 		t.Errorf("b.coven = %v, want [edge prod]", got)
 	}
 
-	// Idem: повтор с тем же набором → 0 changed (coven IS DISTINCT FROM
-	// $labels = false на каждом хосте).
+	// Idem: repeat with the same set → 0 changed (coven IS DISTINCT FROM
+	// $labels = false on every host).
 	rep2, err := BulkReplaceCoven(ctx, integrationPool, sel, scope, []string{"prod", "edge"})
 	if err != nil {
 		t.Fatalf("BulkReplaceCoven repeat: %v", err)
@@ -517,8 +521,8 @@ func TestIntegration_Bulk_Replace_MutatesSet(t *testing.T) {
 	}
 }
 
-// TestIntegration_Bulk_Replace_EmptySet_ClearsAll — replace с пустым набором
-// чистит coven у хостов под selector.
+// TestIntegration_Bulk_Replace_EmptySet_ClearsAll — replace with an empty set
+// clears coven for hosts under the selector.
 func TestIntegration_Bulk_Replace_EmptySet_ClearsAll(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -537,8 +541,8 @@ func TestIntegration_Bulk_Replace_EmptySet_ClearsAll(t *testing.T) {
 	}
 }
 
-// TestIntegration_Bulk_Replace_ScopeIntersection — гейт (a) на replace:
-// хосты вне scope не попадают в UPDATE даже при all=true.
+// TestIntegration_Bulk_Replace_ScopeIntersection — gate (a) on replace: hosts
+// outside scope don't reach the UPDATE even with all=true.
 func TestIntegration_Bulk_Replace_ScopeIntersection(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -550,8 +554,8 @@ func TestIntegration_Bulk_Replace_ScopeIntersection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BulkReplaceCoven: %v", err)
 	}
-	// Только dev-host попадает под scope; набор {dev} равен текущему {dev} →
-	// idem-отсев → 0 changed, но matched=1.
+	// Only dev-host falls under scope; the set {dev} equals current {dev} →
+	// idem-filtering → 0 changed, but matched=1.
 	if rep.Matched != 1 {
 		t.Errorf("matched = %d, want 1 (prod-host out of scope)", rep.Matched)
 	}
@@ -560,8 +564,8 @@ func TestIntegration_Bulk_Replace_ScopeIntersection(t *testing.T) {
 	}
 }
 
-// TestIntegration_Bulk_Replace_LabelOutOfScope — гейт (b) на replace: набор
-// с меткой вне scope отвергнут ДО UPDATE.
+// TestIntegration_Bulk_Replace_LabelOutOfScope — gate (b) on replace: a set
+// containing a label outside scope is rejected BEFORE UPDATE.
 func TestIntegration_Bulk_Replace_LabelOutOfScope(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -579,8 +583,8 @@ func TestIntegration_Bulk_Replace_LabelOutOfScope(t *testing.T) {
 
 // --- selector.incarnation integration ---
 
-// TestIntegration_Bulk_Selector_Incarnation_Match — bulk по incarnation матчит
-// её хосты через `incarnation-name = ANY(coven)`.
+// TestIntegration_Bulk_Selector_Incarnation_Match — bulk by incarnation matches
+// its hosts via `incarnation-name = ANY(coven)`.
 func TestIntegration_Bulk_Selector_Incarnation_Match(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -602,8 +606,8 @@ func TestIntegration_Bulk_Selector_Incarnation_Match(t *testing.T) {
 	}
 }
 
-// TestIntegration_Bulk_Selector_Incarnation_NoMatch — несуществующая
-// incarnation → 0 matched/changed.
+// TestIntegration_Bulk_Selector_Incarnation_NoMatch — nonexistent incarnation
+// → 0 matched/changed.
 func TestIntegration_Bulk_Selector_Incarnation_NoMatch(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -621,11 +625,11 @@ func TestIntegration_Bulk_Selector_Incarnation_NoMatch(t *testing.T) {
 }
 
 // TestIntegration_Bulk_Selector_Incarnation_ScopeIntersection — incarnation
-// + scope (a): scope продолжает резать целевые хосты.
+// + scope (a): scope still trims target hosts.
 func TestIntegration_Bulk_Selector_Incarnation_ScopeIntersection(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
-	// redis-incarnation охватывает оба хоста, но prod-host ВНЕ scope=dev.
+	// redis-incarnation covers both hosts, but prod-host is OUTSIDE scope=dev.
 	seedBulkSoul(t, "redis-dev.example.com", []string{"redis", "dev"})
 	seedBulkSoul(t, "redis-prod.example.com", []string{"redis", "prod"})
 

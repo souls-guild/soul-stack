@@ -2,8 +2,8 @@ package soul
 
 import "os"
 
-// requireDocker — true, если CI требует обязательного docker-а
-// (SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1|true). Поведение симметрично
+// requireDocker reports whether CI requires docker
+// (SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1|true). Mirrors
 // keeper/internal/operator/require_docker_test.go.
 func requireDocker() bool {
 	v := os.Getenv("SOUL_STACK_INTEGRATION_REQUIRE_DOCKER")

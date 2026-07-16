@@ -2,43 +2,43 @@ package soul
 
 import "sort"
 
-// CovenMode — режим применения Coven-метки(меток) к набору хоста. Единый
-// словарь для обоих путей мутации coven: keeper-side core-модуль
-// `core.soul.registered` (scenario-путь) и bulk-API `POST /v1/souls/coven`.
+// CovenMode — mode for applying Coven label(s) to a host set. A single
+// vocabulary for both coven mutation paths: the keeper-side core module
+// `core.soul.registered` (scenario path) and the bulk API `POST /v1/souls/coven`.
 //
-// Значения совпадают с docs/keeper/modules.md → семантика mode. Bulk-API
-// в пилоте принимает только append/remove (одна метка за вызов);
-// replace-набор — отдельный будущий слайс, но enum здесь полный, чтобы
-// core.soul.registered и bulk делили один источник истины.
+// Values match docs/keeper/modules.md → mode semantics. In the pilot the bulk
+// API only accepts append/remove (one label per call); replace-set is a
+// separate future slice, but the enum here is complete so
+// core.soul.registered and bulk share one source of truth.
 type CovenMode string
 
 const (
-	// CovenAppend — existing ∪ переданные (idempotent).
+	// CovenAppend — existing ∪ given (idempotent).
 	CovenAppend CovenMode = "append"
-	// CovenReplace — переданные набор целиком (footgun: пустой = ошибка на
-	// границе caller-а, ApplyCovenMode её не форсит — это чистая функция).
+	// CovenReplace — the given set entirely (footgun: empty = an error at the
+	// caller's boundary, ApplyCovenMode doesn't enforce it — it's a pure function).
 	CovenReplace CovenMode = "replace"
-	// CovenRemove — existing \ переданные.
+	// CovenRemove — existing \ given.
 	CovenRemove CovenMode = "remove"
 )
 
-// CovenLabelValidator — хук валидации назначаемой Coven-метки за пределами
-// формата (под будущий справочник окружений Q1 — ADR-008 amend). Вызывается
-// Service-слоем bulk coven-assign ДО UPDATE. В пилоте — [NoopCovenLabelValidator]
-// (format-only: формат уже проверяет [ValidCoven]). Когда появится справочник —
-// его реализация подменяется без изменения API.
+// CovenLabelValidator — a validation hook for an assigned Coven label beyond
+// format (for the future environment directory Q1 — ADR-008 amend). Called by
+// the Service layer's bulk coven-assign BEFORE the UPDATE. In the pilot it's
+// [NoopCovenLabelValidator] (format-only: format is already checked by [ValidCoven]).
+// When the directory appears, its implementation is swapped without changing the API.
 type CovenLabelValidator interface {
 	Validate(label string) error
 }
 
-// NoopCovenLabelValidator — пилотная no-op-имплементация [CovenLabelValidator].
-// Формат метки проверяется отдельно [ValidCoven]; здесь — место под справочник.
+// NoopCovenLabelValidator — the pilot no-op implementation of [CovenLabelValidator].
+// Label format is checked separately by [ValidCoven]; this is the slot for the directory.
 type NoopCovenLabelValidator struct{}
 
-// Validate всегда пропускает (format-only — формат уже проверен ValidCoven).
+// Validate always passes (format-only — format is already checked by ValidCoven).
 func (NoopCovenLabelValidator) Validate(string) error { return nil }
 
-// ValidCovenMode — closed-enum проверка режима.
+// ValidCovenMode — closed-enum check of the mode.
 func ValidCovenMode(m CovenMode) bool {
 	switch m {
 	case CovenAppend, CovenReplace, CovenRemove:
@@ -47,17 +47,17 @@ func ValidCovenMode(m CovenMode) bool {
 	return false
 }
 
-// ApplyCovenMode — чистая функция применения режима к существующему набору
-// Coven-меток. Возвращает (final, removed):
+// ApplyCovenMode — a pure function applying a mode to an existing set of
+// Coven labels. Returns (final, removed):
 //
-//   - final   — итоговый набор, отсортированный и дедуплицированный;
-//   - removed — метки, фактически убранные (только для CovenRemove;
-//     отсортированы; nil для append/replace).
+//   - final   — the resulting set, sorted and deduplicated;
+//   - removed — labels actually removed (only for CovenRemove;
+//     sorted; nil for append/replace).
 //
-// Единый источник set-семантики для core.soul.registered (per-host) и
-// bulk-API. Вынесен из coremod/soul/registered.go (рефактор ТЗ-пилота),
-// чтобы оба пути не расходились в трактовке режимов. На неизвестный режим
-// возвращает (existing, nil) — валидацию режима делает caller до вызова.
+// A single source of set semantics for core.soul.registered (per-host) and
+// the bulk API. Extracted from coremod/soul/registered.go (pilot-spec refactor)
+// so the two paths don't diverge in how they interpret modes. For an unknown
+// mode it returns (existing, nil) — mode validation is the caller's job before the call.
 func ApplyCovenMode(existing, wanted []string, mode CovenMode) (final, removed []string) {
 	switch mode {
 	case CovenAppend:
@@ -83,9 +83,9 @@ func ApplyCovenMode(existing, wanted []string, mode CovenMode) (final, removed [
 	return existing, nil
 }
 
-// CovenSetEqual — порядок-независимое сравнение двух наборов Coven-меток
-// (после дедупликации). Используется, чтобы избежать лишнего UPDATE и
-// эфемерного changed=true, когда новый набор совпадает с текущим.
+// CovenSetEqual performs order-independent comparison of two sets of Coven tags
+// (after deduplication). Used to avoid unnecessary UPDATE and
+// spurious changed=true when the new set matches the current one.
 func CovenSetEqual(a, b []string) bool {
 	sa, sb := covenSetOf(a), covenSetOf(b)
 	if len(sa) != len(sb) {

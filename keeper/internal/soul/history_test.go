@@ -11,9 +11,9 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// historyFakeDB — fake [ExecQueryRower] для SelectHistory: QueryRow обслуживает
-// count-SQL (отдаёт total), Query — page-SQL (отдаёт строки). Захватывает SQL и
-// args обоих вызовов для проверки фильтров/UNION-формы.
+// historyFakeDB — a fake [ExecQueryRower] for SelectHistory: QueryRow serves the
+// count SQL (returns total), Query — the page SQL (returns rows). Captures the SQL and
+// args of both calls for checking filters/the UNION form.
 type historyFakeDB struct {
 	total int
 
@@ -46,13 +46,13 @@ func (f *historyFakeDB) Query(_ context.Context, sql string, args ...any) (pgx.R
 	return &fakeRows{rows: f.pageRows, err: f.rowsErr}, nil
 }
 
-// scenarioStaticRow / errandStaticRow — конструкторы staticRow под
-// 9-колоночную проекцию SelectHistory (type,id,incarnation,scenario,module,
-// status,started_at,finished_at,voyage_id). nullable-колонки —
-// бара string или nil (assign оборачивает в **string), finished — бара
-// time.Time или nil (assign оборачивает в **time.Time). voyage_id всегда
-// присутствует (nilStr → NULL вне Voyage) — обёртки с явным voyage в
-// scenarioVoyageStaticRow/errandVoyageStaticRow ниже.
+// scenarioStaticRow / errandStaticRow — staticRow constructors for the
+// 9-column SelectHistory projection (type,id,incarnation,scenario,module,
+// status,started_at,finished_at,voyage_id). Nullable columns are
+// either a string or nil (assign wraps it into **string), finished is either
+// a time.Time or nil (assign wraps it into **time.Time). voyage_id is always
+// present (nilStr → NULL outside a Voyage) — wrappers with an explicit voyage are
+// scenarioVoyageStaticRow/errandVoyageStaticRow below.
 func scenarioStaticRow(id, incarnation, scenario, status string, started time.Time, finished any) staticRow {
 	return scenarioVoyageStaticRow(id, incarnation, scenario, status, started, finished, "")
 }
@@ -61,8 +61,8 @@ func errandStaticRow(id, module, status string, started time.Time, finished any)
 	return errandVoyageStaticRow(id, module, status, started, finished, "")
 }
 
-// scenarioVoyageStaticRow / errandVoyageStaticRow — варианты с явным voyage_id
-// (пустая строка → SQL NULL).
+// scenarioVoyageStaticRow / errandVoyageStaticRow — variants with an explicit voyage_id
+// (an empty string → SQL NULL).
 func scenarioVoyageStaticRow(id, incarnation, scenario, status string, started time.Time, finished any, voyageID string) staticRow {
 	return staticRow{values: []any{
 		"scenario", id, incarnation, scenario, nilStr(""),
@@ -77,8 +77,8 @@ func errandVoyageStaticRow(id, module, status string, started time.Time, finishe
 	}}
 }
 
-// nilStr возвращает nil (→ SQL NULL) для пустой строки, иначе бару string —
-// assign-helper мапит string→**string-указатель, nil→nil-указатель.
+// nilStr returns nil (→ SQL NULL) for an empty string, otherwise the string itself —
+// the assign-helper maps string→**string pointer, nil→nil pointer.
 func nilStr(s string) any {
 	if s == "" {
 		return nil
@@ -95,9 +95,9 @@ func TestSelectHistory_RequiresSID(t *testing.T) {
 
 func TestSelectHistory_MergeOrder(t *testing.T) {
 	t0 := time.Date(2026, 5, 28, 10, 0, 0, 0, time.UTC)
-	// Возвращаем строки уже в DESC-порядке (как сделал бы ORDER BY в БД) —
-	// SelectHistory не пересортировывает, лишь маппит. Проверяем, что merge
-	// scenario+errand вперемешку сохраняется и поля разнесены корректно.
+	// Return rows already in DESC order (as ORDER BY in the DB would) —
+	// SelectHistory does not re-sort, it only maps. Checks that the interleaved
+	// scenario+errand merge is preserved and fields are split out correctly.
 	db := &historyFakeDB{
 		total: 3,
 		pageRows: []staticRow{
@@ -143,7 +143,7 @@ func TestSelectHistory_MergeOrder(t *testing.T) {
 		t.Errorf("item2 terminal должен иметь FinishedAt")
 	}
 
-	// UNION ALL обоих источников + ORDER BY started_at DESC в page-SQL.
+	// UNION ALL of both sources + ORDER BY started_at DESC in the page SQL.
 	if !strings.Contains(db.querySQL, "FROM apply_runs") || !strings.Contains(db.querySQL, "FROM errands") {
 		t.Errorf("page SQL должен включать оба источника: %s", db.querySQL)
 	}
@@ -222,7 +222,7 @@ func TestSelectHistory_Pagination(t *testing.T) {
 	if total != 137 {
 		t.Errorf("total = %d, want 137", total)
 	}
-	// args без since: $1=sid, $2=limit, $3=offset.
+	// args without since: $1=sid, $2=limit, $3=offset.
 	if len(db.queryArgs) != 3 {
 		t.Fatalf("queryArgs len = %d, want 3: %v", len(db.queryArgs), db.queryArgs)
 	}
@@ -268,20 +268,20 @@ func TestValidHistoryType(t *testing.T) {
 	}
 }
 
-// TestSelectHistory_VoyageBacklink — voyage_id резолвится через voyage_targets:
-// scenario (через apply_id), command/errand (через errand_id) и NULL для прямого
-// прогона без Voyage. Проверяет и SQL-форму (LEFT JOIN voyage_targets), и маппинг
-// колонки в HistoryItem.VoyageID.
+// TestSelectHistory_VoyageBacklink — voyage_id is resolved via voyage_targets:
+// scenario (via apply_id), command/errand (via errand_id), and NULL for a direct
+// run without a Voyage. Checks both the SQL form (LEFT JOIN voyage_targets) and the
+// mapping of the column into HistoryItem.VoyageID.
 func TestSelectHistory_VoyageBacklink(t *testing.T) {
 	t0 := time.Date(2026, 5, 30, 9, 0, 0, 0, time.UTC)
 	db := &historyFakeDB{
 		total: 3,
 		pageRows: []staticRow{
-			// scenario с Voyage (vt.apply_id матч).
+			// scenario with a Voyage (vt.apply_id match).
 			scenarioVoyageStaticRow("a1", "web-prod", "deploy", "success", t0.Add(2*time.Hour), t0.Add(2*time.Hour+time.Minute), "vy-1"),
-			// errand с Voyage (vt.errand_id матч).
+			// errand with a Voyage (vt.errand_id match).
 			errandVoyageStaticRow("e1", "core.cmd.run", "success", t0.Add(time.Hour), t0.Add(time.Hour+time.Minute), "vy-2"),
-			// прямой incarnation.run без Voyage → NULL.
+			// a direct incarnation.run without a Voyage → NULL.
 			scenarioVoyageStaticRow("a2", "db-prod", "restart", "success", t0, t0.Add(time.Minute), ""),
 		},
 	}
@@ -303,7 +303,7 @@ func TestSelectHistory_VoyageBacklink(t *testing.T) {
 		t.Errorf("item2 (direct run) VoyageID = %v, want nil", items[2].VoyageID)
 	}
 
-	// SQL-форма: оба плеча LEFT JOIN-ят voyage_targets по своим dispatch-ссылкам.
+	// SQL form: both arms LEFT JOIN voyage_targets on their own dispatch references.
 	if !strings.Contains(db.querySQL, "LEFT JOIN voyage_targets vt ON vt.apply_id = apply_runs.apply_id") {
 		t.Errorf("scenario-плечо должно LEFT JOIN-ить voyage_targets по apply_id: %s", db.querySQL)
 	}

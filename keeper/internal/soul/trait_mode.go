@@ -6,27 +6,27 @@ import (
 	"sort"
 )
 
-// TraitMode — режим применения операторских trait-меток (ADR-060) к набору
-// хостов через bulk-API `POST /v1/souls/traits`. Traits — это map (key → scalar
-// | list-of-scalar), в отличие от плоского списка Coven-меток, поэтому словарь
-// режимов адаптирован под map-семантику (Coven-аналог — [CovenMode]):
+// TraitMode — mode for applying operator trait labels (ADR-060) to a set of
+// hosts via the bulk API `POST /v1/souls/traits`. Traits is a map (key →
+// scalar | list-of-scalar), unlike the flat Coven label list, so the mode
+// vocabulary is adapted for map semantics (Coven counterpart — [CovenMode]):
 //
-//   - merge   — set/overwrite переданные ключи, остальные сохранить;
-//   - replace — заменить ВЕСЬ traits-map целиком (footgun: пустой = очистить);
-//   - remove  — удалить переданные ключи (по списку имён).
+//   - merge   — set/overwrite the given keys, keep the rest;
+//   - replace — replace the WHOLE traits map (footgun: empty = clear all);
+//   - remove  — delete the given keys (by name).
 type TraitMode string
 
 const (
-	// TraitMerge — existing-map ⊕ переданные ключи (overwrite по ключу,
-	// остальные ключи сохранены). Дефолтный режим bulk-API.
+	// TraitMerge — existing map ⊕ given keys (overwrite by key, other keys
+	// kept). Default mode of the bulk API.
 	TraitMerge TraitMode = "merge"
-	// TraitReplace — переданный map целиком (пустой = очистить все traits).
+	// TraitReplace — the given map wholesale (empty = clear all traits).
 	TraitReplace TraitMode = "replace"
-	// TraitRemove — existing-map без переданных ключей (по списку имён).
+	// TraitRemove — existing map minus the given keys (by name).
 	TraitRemove TraitMode = "remove"
 )
 
-// ValidTraitMode — closed-enum проверка режима.
+// ValidTraitMode — closed-enum mode check.
 func ValidTraitMode(m TraitMode) bool {
 	switch m {
 	case TraitMerge, TraitReplace, TraitRemove:
@@ -35,17 +35,17 @@ func ValidTraitMode(m TraitMode) bool {
 	return false
 }
 
-// TraitKeyPattern — форма ключа trait-метки: kebab-ИЛИ-snake-case (`-`/`_` как
-// внутренние разделители). Отличие от [CovenPattern] (только `-`): trait-ключ —
-// свободное имя атрибута оператора (`owner_team`), `_` разрешён (NIM-67, ADR-060
-// «произвольные строковые ключи»). Грамматика = reScenarioName.
+// TraitKeyPattern — trait label key shape: kebab OR snake_case (`-`/`_` as
+// internal separators). Differs from [CovenPattern] (`-` only): a trait key
+// is a free-form operator attribute name (`owner_team`), `_` is allowed
+// (NIM-67, ADR-060 "arbitrary string keys"). Grammar = reScenarioName.
 const TraitKeyPattern = `^[a-z][a-z0-9]*([_-][a-z0-9]+)*$`
 
 var traitKeyRe = regexp.MustCompile(TraitKeyPattern)
 
 const traitKeyMaxLen = covenMaxLen
 
-// ValidTraitKey проверяет один ключ trait-метки (kebab/snake-case, 1..63 символа).
+// ValidTraitKey validates one trait label key (kebab/snake_case, 1..63 chars).
 func ValidTraitKey(key string) bool {
 	if len(key) == 0 || len(key) > traitKeyMaxLen {
 		return false
@@ -53,15 +53,15 @@ func ValidTraitKey(key string) bool {
 	return traitKeyRe.MatchString(key)
 }
 
-// ValidTraitValue проверяет значение trait-метки: допустим скаляр
-// (string/number/bool) либо список скаляров (depth ≤ 1). Вложенные map и
-// списки-в-списках отвергаются — trait-значение остаётся «плоским» (read/target
-// пилот проецирует его в `soulprint.self.traits.<key>` для CEL-таргетинга, где
-// вложенность не нужна и усложнила бы предикаты).
+// ValidTraitValue validates a trait label value: a scalar (string/number/
+// bool) or a list of scalars (depth ≤ 1) is allowed. Nested maps and
+// lists-in-lists are rejected — a trait value stays "flat" (the read/target
+// path projects it into `soulprint.self.traits.<key>` for CEL targeting,
+// where nesting isn't needed and would complicate predicates).
 //
-// JSON-декодер huma/encoding отдаёт числа как float64, поэтому числовой случай
-// покрыт ветками float64/int/int64; nil-значение под ключом отвергается
-// (двусмысленно с «удалить» — для удаления есть mode=remove).
+// huma/encoding's JSON decoder returns numbers as float64, so the numeric
+// case covers the float64/int/int64 branches; a nil value under a key is
+// rejected (ambiguous with "delete" — use mode=remove to delete instead).
 func ValidTraitValue(v any) error {
 	switch val := v.(type) {
 	case string, bool, float64, int, int64:
@@ -80,8 +80,8 @@ func ValidTraitValue(v any) error {
 	}
 }
 
-// isScalar — допустимый элемент списка-значения (скаляр; вложенные list/map
-// запрещены, depth ≤ 1).
+// isScalar — a valid list-value element (scalar; nested list/map forbidden,
+// depth ≤ 1).
 func isScalar(v any) bool {
 	switch v.(type) {
 	case string, bool, float64, int, int64:
@@ -90,9 +90,9 @@ func isScalar(v any) bool {
 	return false
 }
 
-// ValidateTraitDelta проверяет набор (ключ → значение) для mode=merge/replace:
-// каждый ключ — [ValidTraitKey], каждое значение — [ValidTraitValue]. Возвращает
-// первую найденную ошибку; nil-map допустим (для replace = «очистить»).
+// ValidateTraitDelta validates a (key → value) set for mode=merge/replace:
+// each key via [ValidTraitKey], each value via [ValidTraitValue]. Returns
+// the first error found; a nil map is allowed (replace = "clear").
 func ValidateTraitDelta(delta map[string]any) error {
 	for _, key := range sortedTraitKeys(delta) {
 		if !ValidTraitKey(key) {
@@ -105,8 +105,8 @@ func ValidateTraitDelta(delta map[string]any) error {
 	return nil
 }
 
-// ValidateTraitKeys проверяет список ключей для mode=remove: каждый —
-// [ValidTraitKey]. Возвращает первую ошибку.
+// ValidateTraitKeys validates a key list for mode=remove: each key via
+// [ValidTraitKey]. Returns the first error.
 func ValidateTraitKeys(keys []string) error {
 	for _, key := range keys {
 		if !ValidTraitKey(key) {
@@ -116,8 +116,8 @@ func ValidateTraitKeys(keys []string) error {
 	return nil
 }
 
-// sortedTraitKeys — детерминированный обход ключей map (стабильные сообщения об
-// ошибках валидации).
+// sortedTraitKeys — deterministic map key iteration (stable validation
+// error messages).
 func sortedTraitKeys(m map[string]any) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {

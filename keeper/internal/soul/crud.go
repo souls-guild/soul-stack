@@ -12,14 +12,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Sentinel-ошибки CRUD-слоя. Handler-сторона маппит:
-//   - ErrSoulAlreadyExists  → 409 soul-already-exists.
-//   - ErrSoulNotFound       → 404 not-found.
-//   - ErrSoulCreatorNotFound → 422 validation-failed (AID создателя отсутствует
-//     в реестре operators). Симметрично bootstraptoken.ErrTokenSoulNotFound.
+// Sentinel errors of the CRUD layer. Handler side maps:
+//   - ErrSoulAlreadyExists   → 409 soul-already-exists.
+//   - ErrSoulNotFound        → 404 not-found.
+//   - ErrSoulCreatorNotFound → 422 validation-failed (creator AID missing
+//     from the operators registry). Symmetric to bootstraptoken.ErrTokenSoulNotFound.
 //   - ErrSoulprintNotReceived → 410 gone (`GET /v1/souls/{sid}/soulprint`):
-//     запись Soul-а есть, но SoulprintReport ещё ни разу не приходил — пустая
-//     запись `soulprint_facts IS NULL`. Различение от 404: сам Soul существует.
+//     the Soul record exists but SoulprintReport has never arrived — empty
+//     `soulprint_facts IS NULL`. Distinct from 404: the Soul itself exists.
 var (
 	ErrSoulAlreadyExists    = errors.New("soul: SID already exists")
 	ErrSoulNotFound         = errors.New("soul: SID not found")
@@ -33,10 +33,9 @@ const (
 	pgErrCodeCheckViolation      = "23514"
 )
 
-// ExecQueryRower — узкое подмножество интерфейса pgxpool.Pool, нужное
-// CRUD-у. Симметрично [operator.ExecQueryRower] / [incarnation.ExecQueryRower]:
-// unit-тесты ходят через fake без подъёма PG, production — через реальный
-// pool / Conn / Tx.
+// ExecQueryRower — narrow subset of pgxpool.Pool needed by CRUD. Symmetric
+// to [operator.ExecQueryRower] / [incarnation.ExecQueryRower]: unit tests use
+// a fake without spinning up PG, production uses the real pool / Conn / Tx.
 type ExecQueryRower interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
@@ -73,9 +72,9 @@ DELETE FROM souls
 WHERE sid = $1
 `
 
-// updateStatusSQL — атомарный UPDATE статуса с фиксацией last_seen_by_kid
-// (для аудита «какой Keeper последним держал стрим»). last_seen_at пишется
-// в Redis, в PG — flush; здесь не трогаем.
+// updateStatusSQL — atomic status UPDATE that also records last_seen_by_kid
+// (audit: which Keeper last held the stream). last_seen_at is written to
+// Redis and flushed to PG separately; untouched here.
 const updateStatusSQL = `
 UPDATE souls
 SET status = $2,
@@ -83,10 +82,10 @@ SET status = $2,
 WHERE sid = $1
 `
 
-// updateCovenSQL — UPDATE набора стабильных Coven-меток. Используется
-// keeper-side core-модулем `core.soul.registered` (docs/keeper/modules.md).
-// Возвращает финальный набор coven одной round-trip-ой; RETURNING избавляет
-// от лишнего SelectBySID для построения output-а модуля.
+// updateCovenSQL — UPDATE of the stable Coven label set. Used by the
+// keeper-side core module `core.soul.registered` (docs/keeper/modules.md).
+// Returns the final coven set in one round trip; RETURNING avoids an extra
+// SelectBySID to build the module output.
 const updateCovenSQL = `
 UPDATE souls
 SET coven = $2
@@ -94,13 +93,13 @@ WHERE sid = $1
 RETURNING coven
 `
 
-// updateLastSeenSQL — точечный UPDATE `last_seen_at`/`last_seen_by_kid`
-// (ADR-006(a) flush из Redis-кэша; авторитетное значение — в Redis,
-// PG — снимок). Вызывается из throttled-flush в touchSeen на каждое
-// app-сообщение EventStream, но не чаще stale_after/3 (см. fix 89b4f0a):
-// частые heartbeat-ы держат Redis, в PG прилетает прорежённый снимок.
+// updateLastSeenSQL — targeted UPDATE of `last_seen_at`/`last_seen_by_kid`
+// (ADR-006(a) flush from the Redis cache; Redis is authoritative, PG is a
+// snapshot). Called from the throttled flush in touchSeen on every
+// EventStream app message, but no more often than stale_after/3 (fix
+// 89b4f0a): frequent heartbeats stay in Redis, PG gets a decimated snapshot.
 //
-// status НЕ трогаем — UpdateStatus оставлен под bootstrap/Reaper.
+// status is untouched here — UpdateStatus is reserved for bootstrap/Reaper.
 const updateLastSeenSQL = `
 UPDATE souls
 SET last_seen_at     = $2,
@@ -108,10 +107,10 @@ SET last_seen_at     = $2,
 WHERE sid = $1
 `
 
-// updateSoulprintSQL — UPDATE typed-soulprint полей (миграция 015).
-// `facts` JSON-сериализован вызывающей стороной (proto → Struct → JSON).
-// `received_at` — Keeper-side timestamp, отдельный от `collected_at`
-// (последний приходит от Soul-а в `SoulprintReport.collected_at`).
+// updateSoulprintSQL — UPDATE of the typed-soulprint fields (migration 015).
+// `facts` is JSON-serialized by the caller (proto → Struct → JSON).
+// `received_at` is a Keeper-side timestamp, distinct from `collected_at`
+// (the latter comes from the Soul in `SoulprintReport.collected_at`).
 const updateSoulprintSQL = `
 UPDATE souls
 SET soulprint_facts        = $2,
@@ -120,24 +119,24 @@ SET soulprint_facts        = $2,
 WHERE sid = $1
 `
 
-// Insert вставляет нового Soul-а в реестр. Используется Operator API при
-// выписке bootstrap-токена (создаёт строку в статусе `pending`).
+// Insert inserts a new Soul into the registry. Used by the Operator API when
+// issuing a bootstrap token (creates a row with status `pending`).
 //
 // Pre-conditions:
-//   - s.SID соответствует [SIDPattern];
-//   - s.Transport / s.Status — допустимые enum-значения.
+//   - s.SID matches [SIDPattern];
+//   - s.Transport / s.Status are valid enum values.
 //
-// Возврат:
-//   - [ErrSoulAlreadyExists] на UNIQUE по PK.
-//   - [ErrSoulCreatorNotFound] на FK-violation по `souls_created_by_aid_fk`
-//     (`created_by_aid` указывает на несуществующего operator-а).
-//   - wrapped fmt.Errorf на прочие FK-violation и CHECK-violation
-//     (status / transport / sid-format).
+// Returns:
+//   - [ErrSoulAlreadyExists] on UNIQUE violation of the PK.
+//   - [ErrSoulCreatorNotFound] on FK violation of `souls_created_by_aid_fk`
+//     (`created_by_aid` points at a nonexistent operator).
+//   - wrapped fmt.Errorf for other FK/CHECK violations (status / transport /
+//     sid format).
 //
-// `requested_at` проставляется на стороне PG (`COALESCE($9, NOW())`), если
-// caller не задал s.RequestedAt — нормативная семантика pending-записи
-// (docs/soul/onboarding.md). После Insert s.RequestedAt содержит фактическое
-// значение (`RETURNING requested_at`).
+// `requested_at` defaults on the PG side (`COALESCE($9, NOW())`) when the
+// caller leaves s.RequestedAt unset — normative pending-record semantics
+// (docs/soul/onboarding.md). After Insert, s.RequestedAt holds the actual
+// value (`RETURNING requested_at`).
 func Insert(ctx context.Context, db ExecQueryRower, s *Soul) error {
 	if s == nil {
 		return fmt.Errorf("soul: nil soul")
@@ -163,10 +162,10 @@ func Insert(ctx context.Context, db ExecQueryRower, s *Soul) error {
 		coven = []string{}
 	}
 
-	// traits — jsonb (миграция 087, ADR-060): сериализуем map в []byte
-	// (паттерн incarnation marshalJSONB; pgx-codec-auto для jsonb здесь
-	// сознательно не используется, единообразно с прочими jsonb-колонками).
-	// nil/пустой → arg=nil, COALESCE($5,'{}') в SQL даёт пустой объект.
+	// traits is jsonb (migration 087, ADR-060): marshal the map to []byte
+	// (incarnation marshalJSONB pattern; pgx codec-auto for jsonb is
+	// deliberately skipped, consistent with the other jsonb columns).
+	// nil/empty → arg=nil, SQL's COALESCE($5,'{}') yields an empty object.
 	var traitsArg any
 	if len(s.Traits) > 0 {
 		b, err := json.Marshal(s.Traits)
@@ -220,14 +219,13 @@ func Insert(ctx context.Context, db ExecQueryRower, s *Soul) error {
 	return nil
 }
 
-// DeleteBySID удаляет запись souls по SID. FK bootstrap_tokens.sid и
-// soul_seeds.sid объявлены ON DELETE CASCADE (миграции 008/009) — связанные
-// токены и seed-записи уходят вместе с Soul-ом. Возвращает [ErrSoulNotFound],
-// если строки с таким SID нет (идемпотентно для caller-а, который откатывает
-// только что вставленную запись).
+// DeleteBySID deletes a souls row by SID. FK bootstrap_tokens.sid and
+// soul_seeds.sid are ON DELETE CASCADE (migrations 008/009) — related tokens
+// and seed records go with the Soul. Returns [ErrSoulNotFound] if no row
+// matches (idempotent for a caller rolling back a just-inserted record).
 //
-// Точечный откат по SID; batch-GC просроченных Soul-ов — отдельная Reaper-
-// функция purge_souls (миграция 012), она статус-фильтрованная.
+// Single-SID rollback only; batch GC of expired Souls is the separate,
+// status-filtered Reaper function purge_souls (migration 012).
 func DeleteBySID(ctx context.Context, db ExecQueryRower, sid string) error {
 	if !ValidSID(sid) {
 		return fmt.Errorf("soul: invalid SID %q", sid)
@@ -262,23 +260,24 @@ func mapInsertError(err error) error {
 	return fmt.Errorf("soul: insert: %w", err)
 }
 
-// SelectBySID читает Soul по PK. [ErrSoulNotFound] при pgx.ErrNoRows.
+// SelectBySID reads a Soul by PK. Returns [ErrSoulNotFound] on pgx.ErrNoRows.
 func SelectBySID(ctx context.Context, db ExecQueryRower, sid string) (*Soul, error) {
 	row := db.QueryRow(ctx, selectBySIDSQL, sid)
 	return scanSoul(row)
 }
 
-// SoulprintRecord — последний полученный SoulprintReport одного хоста
-// (`GET /v1/souls/{sid}/soulprint`). FactsJSON — сырой JSONB, ровно тот, что
-// собирает eventstream через `protojson.Marshal(SoulprintFacts)` с
-// `UseProtoNames` (snake_case ключи `pkg_mgr`/`init_system` и т.д., ADR-018).
-// Парсинг — на стороне consumer-а (handler отдаёт как `map[string]any` для
-// UI-симметрии с другими jsonb-полями вроде `incarnation.state`).
+// SoulprintRecord — last received SoulprintReport for one host
+// (`GET /v1/souls/{sid}/soulprint`). FactsJSON is raw JSONB, exactly what
+// eventstream collects via `protojson.Marshal(SoulprintFacts)` with
+// `UseProtoNames` (snake_case keys like `pkg_mgr`/`init_system`, ADR-018).
+// Parsing is left to the consumer (handler returns it as `map[string]any`
+// for UI symmetry with other jsonb fields like `incarnation.state`).
 //
-// CollectedAt — Soul-side timestamp сбора (из proto `SoulprintReport.collected_at`),
-// ReceivedAt — Keeper-side momentum приёма стрима (см. [UpdateSoulprint]).
-// Различие — диагностика skew, при > 10 минут eventstream пишет warn в OTel
-// (docs/soul/soulprint.md → §`received_at`/`collected_at`).
+// CollectedAt is the Soul-side collection timestamp (from proto
+// `SoulprintReport.collected_at`), ReceivedAt is the Keeper-side moment the
+// stream received it (see [UpdateSoulprint]). The gap is a skew diagnostic:
+// eventstream logs an OTel warn past 10 minutes (docs/soul/soulprint.md →
+// §`received_at`/`collected_at`).
 type SoulprintRecord struct {
 	SID         string
 	FactsJSON   []byte
@@ -292,17 +291,17 @@ FROM souls
 WHERE sid = $1
 `
 
-// SelectSoulprint читает последний typed-SoulprintReport одного Soul-а.
+// SelectSoulprint reads the latest typed SoulprintReport for one Soul.
 //
-// Возврат:
-//   - [ErrSoulNotFound] — записи в реестре `souls` нет.
-//   - [ErrSoulprintNotReceived] — запись есть, но SoulprintReport ни разу не
-//     приходил (`soulprint_facts IS NULL`). Маппится handler-ом в HTTP 410.
+// Returns:
+//   - [ErrSoulNotFound] — no record in the `souls` registry.
+//   - [ErrSoulprintNotReceived] — record exists but SoulprintReport never
+//     arrived (`soulprint_facts IS NULL`). Mapped by the handler to HTTP 410.
 //
-// FactsJSON отдаётся как есть, без unmarshal-а: storage-инвариант — JSONB
-// уже в форме proto-snake_case ключей; handler пробрасывает в JSON-ответ
-// через `json.RawMessage`/decoded `map[string]any`, не дублируя proto-схему
-// на Go-сторону Keeper-а.
+// FactsJSON is returned as-is, without unmarshaling: the storage invariant
+// is that the JSONB is already proto-snake_case; the handler forwards it via
+// `json.RawMessage`/decoded `map[string]any` rather than duplicating the
+// proto schema on the Keeper's Go side.
 func SelectSoulprint(ctx context.Context, db ExecQueryRower, sid string) (*SoulprintRecord, error) {
 	if !ValidSID(sid) {
 		return nil, fmt.Errorf("soul: invalid SID %q", sid)
@@ -321,8 +320,8 @@ func SelectSoulprint(ctx context.Context, db ExecQueryRower, sid string) (*Soulp
 		return nil, fmt.Errorf("soul: soulprint select: %w", err)
 	}
 	if len(factsJSON) == 0 {
-		// Запись Soul-а есть, но фактов нет: typed-SoulprintReport ещё не
-		// присылался (Soul только что прошёл онбординг либо transport: ssh).
+		// Soul record exists but no facts yet: typed SoulprintReport
+		// hasn't been sent (fresh onboarding, or transport: ssh).
 		return nil, ErrSoulprintNotReceived
 	}
 	rec.FactsJSON = factsJSON
@@ -341,11 +340,11 @@ FROM souls
 WHERE sid = ANY($1) AND soulprint_facts IS NOT NULL
 `
 
-// SelectSoulsWithSoulprint возвращает подмножество sids, у которых записан
-// typed soulprint (`souls.soulprint_facts IS NOT NULL`). Batch-чек для барьера
-// онбординга `core.soul.registered` (ADR-061 amendment: presence + first
-// soulprint при refresh_soulprint); форма результата симметрична
-// redis.SoulsStreamAlive. Неизвестные SID просто отсутствуют в результате.
+// SelectSoulsWithSoulprint returns the subset of sids with a typed soulprint
+// recorded (`souls.soulprint_facts IS NOT NULL`). Batch check for the
+// `core.soul.registered` onboarding barrier (ADR-061 amendment: presence +
+// first soulprint on refresh_soulprint); result shape mirrors
+// redis.SoulsStreamAlive. Unknown SIDs are simply absent from the result.
 func SelectSoulsWithSoulprint(ctx context.Context, db ExecQueryRower, sids []string) (map[string]struct{}, error) {
 	res := make(map[string]struct{}, len(sids))
 	if len(sids) == 0 {
@@ -402,7 +401,7 @@ func scanSoul(row pgx.Row) (*Soul, error) {
 	}
 	s.Transport = Transport(transportStr)
 	s.Status = Status(statusStr)
-	// traits jsonb (ADR-060): '{}' (NOT NULL DEFAULT) → пустой map, не nil.
+	// traits jsonb (ADR-060): '{}' (NOT NULL DEFAULT) → empty map, not nil.
 	if len(traitsJSON) > 0 {
 		if err := json.Unmarshal(traitsJSON, &s.Traits); err != nil {
 			return nil, fmt.Errorf("soul: unmarshal traits for %q: %w", s.SID, err)
@@ -418,13 +417,13 @@ func scanSoul(row pgx.Row) (*Soul, error) {
 	return &s, nil
 }
 
-// UpdateStatus переводит Soul в новый status и обновляет last_seen_by_kid.
-// kid — указатель: nil сохраняет старое значение (PG `COALESCE`),
-// non-nil перетирает (типичный путь после `Bootstrap`-RPC или
-// EventStream-handshake).
+// UpdateStatus transitions a Soul to a new status and updates
+// last_seen_by_kid. kid is a pointer: nil keeps the old value (PG
+// `COALESCE`), non-nil overwrites it (typical after a `Bootstrap` RPC or
+// EventStream handshake).
 //
-// Возвращает [ErrSoulNotFound], если SID не существует или UPDATE не
-// затронул строк.
+// Returns [ErrSoulNotFound] if the SID doesn't exist or UPDATE touched no
+// rows.
 func UpdateStatus(ctx context.Context, db ExecQueryRower, sid string, newStatus Status, kid *string) error {
 	if !ValidSID(sid) {
 		return fmt.Errorf("soul: invalid SID %q", sid)
@@ -446,15 +445,15 @@ func UpdateStatus(ctx context.Context, db ExecQueryRower, sid string, newStatus 
 	return nil
 }
 
-// UpdateCoven — атомарный UPDATE набора стабильных Coven-меток. Используется
-// keeper-side core-модулем `core.soul.registered` (docs/keeper/modules.md).
+// UpdateCoven — atomic UPDATE of the stable Coven label set. Used by the
+// keeper-side core module `core.soul.registered` (docs/keeper/modules.md).
 //
-// Caller сам считает финальный набор по `mode` (`append`/`replace`/`remove`):
-// эта функция выполняет только сам UPDATE. Возвращает фактически сохранённый
-// набор (PG `RETURNING coven`) — гарантирует, что output модуля построен
-// на actual, а не на пере-вычисленном клиентом значении.
+// The caller computes the final set per `mode` (`append`/`replace`/`remove`);
+// this function only performs the UPDATE. Returns the actually saved set
+// (PG `RETURNING coven`) so the module output is built from the actual
+// value, not a client-recomputed one.
 //
-// Возвращает [ErrSoulNotFound], если SID не существует.
+// Returns [ErrSoulNotFound] if the SID doesn't exist.
 func UpdateCoven(ctx context.Context, db ExecQueryRower, sid string, coven []string) ([]string, error) {
 	if !ValidSID(sid) {
 		return nil, fmt.Errorf("soul: invalid SID %q", sid)
@@ -473,11 +472,12 @@ func UpdateCoven(ctx context.Context, db ExecQueryRower, sid string, coven []str
 	return saved, nil
 }
 
-// UpdateLastSeen — flush last_seen_at/last_seen_by_kid в PG (ADR-006(a)).
-// real-time значение живёт в Redis-heartbeat-кэше; в PG — snapshot,
-// нужный Reaper-у (`mark_disconnected`) и Operator API (`GET /v1/souls`).
+// UpdateLastSeen flushes last_seen_at/last_seen_by_kid to PG (ADR-006(a)).
+// The real-time value lives in the Redis heartbeat cache; PG holds a
+// snapshot needed by the Reaper (`mark_disconnected`) and the Operator API
+// (`GET /v1/souls`).
 //
-// Возвращает [ErrSoulNotFound], если SID не существует.
+// Returns [ErrSoulNotFound] if the SID doesn't exist.
 func UpdateLastSeen(ctx context.Context, db ExecQueryRower, sid, kid string, at time.Time) error {
 	if !ValidSID(sid) {
 		return fmt.Errorf("soul: invalid SID %q", sid)
@@ -495,16 +495,16 @@ func UpdateLastSeen(ctx context.Context, db ExecQueryRower, sid, kid string, at 
 	return nil
 }
 
-// UpdateSoulprint фиксирует typed-facts в PG (миграция 015 → колонки
+// UpdateSoulprint persists typed facts to PG (migration 015 → columns
 // `soulprint_facts`/`soulprint_collected_at`/`soulprint_received_at`).
 //
-// `factsJSON` — заранее marshal-ленные байты proto `SoulprintFacts`,
-// caller вызывает [protojson.Marshal] (форвард-compat — proto-default
-// сериализация). nil / пустой slice разрешён: при первом подключении
-// Soul-а ещё нет SoulprintReport-а, и мы хотим уметь обнулять колонку
-// (тесты, ручной reset).
+// `factsJSON` is pre-marshaled proto `SoulprintFacts` bytes; the caller
+// calls [protojson.Marshal] (forward-compat proto-default serialization).
+// nil / empty slice is allowed: on first connection a Soul has no
+// SoulprintReport yet, and we want to be able to clear the column (tests,
+// manual reset).
 //
-// Возвращает [ErrSoulNotFound], если SID не существует.
+// Returns [ErrSoulNotFound] if the SID doesn't exist.
 func UpdateSoulprint(ctx context.Context, db ExecQueryRower, sid string, factsJSON []byte, collectedAt, receivedAt time.Time) error {
 	if !ValidSID(sid) {
 		return fmt.Errorf("soul: invalid SID %q", sid)
@@ -531,34 +531,34 @@ func UpdateSoulprint(ctx context.Context, db ExecQueryRower, sid string, factsJS
 	return nil
 }
 
-// BulkPool — поверхность над pgxpool.Pool, нужная [BulkAssignCoven]:
-// ExecQueryRower (count + per-chunk UPDATE/Scan) + BeginTx (коммит на чанк).
-// `*pgxpool.Pool` удовлетворяет автоматически; unit-тесты — fake.
+// BulkPool — the pgxpool.Pool surface [BulkAssignCoven] needs:
+// ExecQueryRower (count + per-chunk UPDATE/Scan) + BeginTx (commit per
+// chunk). `*pgxpool.Pool` satisfies it automatically; unit tests use a fake.
 type BulkPool interface {
 	ExecQueryRower
 	BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, error)
 }
 
-// BulkSelector — подмножество словаря таргетинга `soul.*` для bulk-операций
-// (`POST /v1/souls/coven`). НЕ topology.Resolver: чистый PG-предикат по
-// холодным колонкам `souls`, без presence/soulprint.
+// BulkSelector — subset of the `soul.*` targeting vocabulary for bulk
+// operations (`POST /v1/souls/coven`). NOT topology.Resolver: a pure PG
+// predicate over cold `souls` columns, no presence/soulprint.
 //
-//   - All         — без host-фильтра (весь реестр; пересекается со scope).
-//   - SIDs        — точечный список хостов (`sid = ANY($n)`).
-//   - Coven       — хосты, у которых УЖЕ есть эта метка (`$n = ANY(coven)`).
-//   - Incarnation — хосты этой incarnation: матчатся по совпадению её имени
-//     с одной из coven-меток хоста (`incarnation.name` — корневая Coven-метка
-//     по ADR-008), `$n = ANY(coven)`. Семантически отличается от Coven (имя
-//     incarnation vs произвольная stable-метка), хотя SQL-предикат тот же.
-//   - Status      — фильтр по статусу.
+//   - All         — no host filter (whole registry; still intersects scope).
+//   - SIDs        — explicit host list (`sid = ANY($n)`).
+//   - Coven       — hosts that already carry this label (`$n = ANY(coven)`).
+//   - Incarnation — hosts of this incarnation: matched by its name against
+//     one of the host's coven labels (`incarnation.name` is the root Coven
+//     label per ADR-008), `$n = ANY(coven)`. Semantically distinct from
+//     Coven (incarnation name vs. an arbitrary stable label) despite the
+//     identical SQL predicate.
+//   - Status      — filter by status.
 //
-// Пустые SIDs/Coven/Incarnation/Status — «не фильтровать». All=false при
-// пустых остальных критериях даёт пустой host-набор (caller обязан задать
-// хотя бы один критерий — иначе bulk без таргета).
+// Empty SIDs/Coven/Incarnation/Status means "don't filter". All=false with
+// every other criterion empty yields an empty host set (the caller must set
+// at least one criterion — no bulk without a target).
 //
-// Комбинации критериев соединяются AND-ом (ужесточение). Например,
-// {Incarnation: "redis", Status: connected} матчит только connected-хосты
-// incarnation `redis`.
+// Criteria combine with AND (narrowing). E.g. {Incarnation: "redis", Status:
+// connected} matches only connected hosts of incarnation `redis`.
 type BulkSelector struct {
 	All         bool
 	SIDs        []string
@@ -567,33 +567,33 @@ type BulkSelector struct {
 	Status      Status
 }
 
-// BulkScope — coven-scope оператора для `soul.coven-assign` (из
-// rbac.Enforcer.CovenScope). Unrestricted=true (bare/`*`) снимает оба
-// ограничения scope-intersection-а.
+// BulkScope — operator's coven scope for `soul.coven-assign` (from
+// rbac.Enforcer.CovenScope). Unrestricted=true (bare/`*`) lifts both
+// scope-intersection constraints.
 type BulkScope struct {
 	Covens       []string
 	Unrestricted bool
 }
 
-// BulkStatus — терминальный статус bulk-операции.
+// BulkStatus — terminal status of a bulk operation.
 type BulkStatus string
 
 const (
-	// BulkCompleted — все чанки закоммичены (или dry_run).
+	// BulkCompleted — all chunks committed (or dry_run).
 	BulkCompleted BulkStatus = "completed"
-	// BulkPartial — чанк K упал; 1..K-1 закоммичены и не откатываются
-	// (идемпотентно до-повторяется оператором).
+	// BulkPartial — chunk K failed; 1..K-1 are committed and not rolled
+	// back (idempotently retried by the operator).
 	BulkPartial BulkStatus = "partial"
 )
 
-// Report — итог bulk coven-assign.
+// Report — outcome of a bulk coven-assign.
 //
-//   - Matched         — сколько хостов попало под selector ∩ scope.
-//   - Changed         — сколько строк фактически изменено (сумма RowsAffected
-//     по чанкам; идемпотентный отсев не считается).
-//   - ChunksCommitted — число успешно закоммиченных чанков.
+//   - Matched         — hosts matching selector ∩ scope.
+//   - Changed         — rows actually changed (sum of RowsAffected across
+//     chunks; idempotent no-ops don't count).
+//   - ChunksCommitted — number of successfully committed chunks.
 //   - Status          — completed | partial.
-//   - Err             — причина partial-фейла (nil для completed).
+//   - Err             — reason for a partial failure (nil for completed).
 type Report struct {
 	Matched         int
 	Changed         int
@@ -602,23 +602,25 @@ type Report struct {
 	Err             error
 }
 
-// bulkChunkSize — размер чанка keyset-итерации (ТЗ: 1–2k SID, коммит на чанк).
-// Меньше — больше round-trip-ов; больше — дольше держится row-lock на `souls`,
-// блокируя горячий heartbeat-flush UpdateLastSeen. 2000 — верх рекомендованного
-// окна.
+// bulkChunkSize — keyset iteration chunk size (spec: 1-2k SIDs, commit per
+// chunk). Smaller means more round trips; larger holds the `souls` row lock
+// longer, blocking the hot UpdateLastSeen heartbeat flush. 2000 is the top
+// of the recommended window.
 const bulkChunkSize = 2000
 
-// ErrBulkEmptySelector — selector без единого критерия (All=false и пусто всё
-// остальное): bulk без таргета — почти всегда ошибка вызова, отвергаем.
+// ErrBulkEmptySelector — selector has no criteria at all (All=false and
+// everything else empty): a targetless bulk call is almost always a caller
+// bug, so it's rejected.
 var ErrBulkEmptySelector = errors.New("soul: bulk selector matches no hosts (set all/sids/coven/status)")
 
-// ErrBulkLabelOutOfScope — назначаемая (append) метка вне coven-scope
-// оператора. Privilege-escalation-гейт (b): оператор не может навесить метку,
-// которой не владеет в своём scope.
+// ErrBulkLabelOutOfScope — the label being appended is outside the
+// operator's coven scope. Privilege-escalation gate (b): an operator can't
+// attach a label it doesn't own within its scope.
 var ErrBulkLabelOutOfScope = errors.New("soul: label is outside operator coven-scope")
 
-// CountBulkMatched считает хосты под selector ∩ scope без мутации (dry_run и
-// предрасчёт Matched). Возвращает [ErrBulkEmptySelector] на пустой selector.
+// CountBulkMatched counts hosts matching selector ∩ scope without mutating
+// anything (dry_run and Matched precomputation). Returns
+// [ErrBulkEmptySelector] on an empty selector.
 func CountBulkMatched(ctx context.Context, db ExecQueryRower, sel BulkSelector, scope BulkScope) (int, error) {
 	where, args, err := buildBulkWhere(sel, scope)
 	if err != nil {
@@ -631,25 +633,27 @@ func CountBulkMatched(ctx context.Context, db ExecQueryRower, sel BulkSelector, 
 	return n, nil
 }
 
-// BulkAssignCoven массово добавляет (append) или снимает (remove) ОДНУ
-// Coven-метку с хостов под selector ∩ scope (`POST /v1/souls/coven`).
+// BulkAssignCoven bulk-adds (append) or removes ONE Coven label on hosts
+// matching selector ∩ scope (`POST /v1/souls/coven`).
 //
-// Инварианты:
-//   - Coven — ХОЛОДНАЯ PG-метка: чистый UPDATE souls, никаких записей в Redis.
-//   - Keyset-итерация по PK (`sid > cursor ORDER BY sid LIMIT chunk`, НЕ
-//     OFFSET) + коммит на чанк: одна гигантская транзакция держала бы row-lock
-//     на `souls` десятки секунд, блокируя heartbeat-flush UpdateLastSeen.
-//   - Идемпотентный отсев в WHERE: append не трогает хост, где метка уже есть;
-//     remove — где метки нет. Нетронутая строка lock не берёт.
-//   - scope-intersection: целевые хосты ⊆ scope (предикат coven && ARRAY[scope]);
-//     для append назначаемая метка ∈ scope (иначе [ErrBulkLabelOutOfScope]).
-//     Unrestricted-scope (bare/`*`) снимает оба ограничения.
-//   - При фейле чанка K: 1..K-1 закоммичены, Status=partial — НЕ откатываем
-//     (идемпотентно до-повторяется оператором).
+// Invariants:
+//   - Coven is a COLD PG label: a plain UPDATE souls, no Redis writes.
+//   - Keyset iteration over the PK (`sid > cursor ORDER BY sid LIMIT chunk`,
+//     NOT OFFSET) + commit per chunk: one giant transaction would hold the
+//     `souls` row lock for tens of seconds, blocking the UpdateLastSeen
+//     heartbeat flush.
+//   - Idempotent filtering in WHERE: append skips hosts that already carry
+//     the label; remove skips hosts that don't. An untouched row takes no lock.
+//   - scope-intersection: target hosts ⊆ scope (predicate
+//     coven && ARRAY[scope]); for append, the label itself ∈ scope (else
+//     [ErrBulkLabelOutOfScope]). Unrestricted scope (bare/`*`) lifts both
+//     constraints.
+//   - On chunk K failure: 1..K-1 stay committed, Status=partial — no
+//     rollback (idempotently retried by the operator).
 //
-// label обязан быть валиден ([ValidCoven]) и mode ∈ {append, remove} — caller
-// (handler) проверяет до вызова; здесь — defensive re-check. Для mode=replace
-// используется [BulkReplaceCoven] с набором меток.
+// label must be valid ([ValidCoven]) and mode ∈ {append, remove} — the
+// caller (handler) checks before calling; this is a defensive re-check.
+// mode=replace uses [BulkReplaceCoven] with a label set instead.
 func BulkAssignCoven(ctx context.Context, db BulkPool, sel BulkSelector, scope BulkScope, label string, mode CovenMode) (Report, error) {
 	if !ValidCoven(label) {
 		return Report{}, fmt.Errorf("soul: invalid coven label %q (must match %s)", label, CovenPattern)
@@ -657,7 +661,7 @@ func BulkAssignCoven(ctx context.Context, db BulkPool, sel BulkSelector, scope B
 	if mode != CovenAppend && mode != CovenRemove {
 		return Report{}, fmt.Errorf("soul: bulk mode %q unsupported (want append/remove; use BulkReplaceCoven for replace)", mode)
 	}
-	// Гейт (b): append-метку вне scope назначать нельзя.
+	// Gate (b): an append label outside scope cannot be assigned.
 	if mode == CovenAppend && !scope.Unrestricted && !covenInScope(label, scope.Covens) {
 		return Report{}, fmt.Errorf("%w: %q", ErrBulkLabelOutOfScope, label)
 	}
@@ -689,26 +693,26 @@ func BulkAssignCoven(ctx context.Context, db BulkPool, sel BulkSelector, scope B
 	return rep, nil
 }
 
-// BulkReplaceCoven массово ЗАМЕНЯЕТ набор Coven-меток хоста на `labels`
-// ровно (выкидывая существующие) для хостов под selector ∩ scope.
+// BulkReplaceCoven bulk-REPLACES a host's Coven label set with `labels`
+// exactly (dropping the existing set) for hosts matching selector ∩ scope.
 //
-// Семантические отличия от [BulkAssignCoven]:
-//   - mode подразумевается replace; SET `coven = $labels` целиком, не
-//     array_append/array_remove над одной меткой.
-//   - Гейт (b) проверяет КАЖДУЮ метку набора (любая вне scope →
-//     [ErrBulkLabelOutOfScope]). Иначе scope-bypass: оператор с scope `dev`
-//     передал бы [dev, prod] и навесил `prod` чужим хостам внутри `dev`.
-//   - Идемпотентный отсев: `coven IS DISTINCT FROM $labels` (PG-предикат,
-//     корректный для NULL и для массивов; учитывает порядок элементов — поэтому
-//     caller обязан передать набор в КАНОНИЧНОЙ форме через [covenUniqueSorted],
-//     иначе одинаковый по множеству, но разный по порядку набор будет писаться
-//     повторно).
-//   - Пустой набор (`labels = []`) допустим — это «снять все метки». Гейт (b)
-//     для пустого набора вырождается в no-op (нет ни одной out-of-scope метки),
-//     но гейт (a) WHERE-предикат scope-intersection обязательно прогоняется:
-//     coven-scoped оператор не вычистит метки с чужих хостов.
+// Semantic differences from [BulkAssignCoven]:
+//   - mode is implicitly replace; SET `coven = $labels` wholesale, not
+//     array_append/array_remove on a single label.
+//   - Gate (b) checks EVERY label in the set (any label outside scope →
+//     [ErrBulkLabelOutOfScope]). Otherwise it'd be a scope bypass: an
+//     operator scoped to `dev` could pass [dev, prod] and attach `prod` to
+//     someone else's hosts within `dev`.
+//   - Idempotent filtering: `coven IS DISTINCT FROM $labels` (a PG predicate
+//     that's NULL- and array-safe; order-sensitive — so the caller must pass
+//     the set in CANONICAL form via [covenUniqueSorted], otherwise a
+//     set-equal but differently ordered list gets rewritten every time).
+//   - An empty set (`labels = []`) is allowed — "clear all labels". Gate (b)
+//     degenerates to a no-op for an empty set (no out-of-scope label to
+//     check), but gate (a)'s scope-intersection WHERE predicate still runs:
+//     a coven-scoped operator can't wipe labels off someone else's hosts.
 //
-// Чанкинг, partial-семантика и общий каркас итерации — те же, что у
+// Chunking, partial semantics, and the iteration skeleton are shared with
 // [BulkAssignCoven].
 func BulkReplaceCoven(ctx context.Context, db BulkPool, sel BulkSelector, scope BulkScope, labels []string) (Report, error) {
 	canonical := covenUniqueSorted(labels)
@@ -717,9 +721,9 @@ func BulkReplaceCoven(ctx context.Context, db BulkPool, sel BulkSelector, scope 
 			return Report{}, fmt.Errorf("soul: invalid coven label %q (must match %s)", l, CovenPattern)
 		}
 	}
-	// Гейт (b): КАЖДАЯ метка набора обязана быть в scope. Симметрично
-	// append-у, но проверка циклом — расширение «privilege-escalation-гейта»
-	// на replace-набор.
+	// Gate (b): EVERY label in the set must be in scope. Symmetric to
+	// append, but looped — extends the privilege-escalation gate to a
+	// replace set.
 	if !scope.Unrestricted {
 		for _, l := range canonical {
 			if !covenInScope(l, scope.Covens) {
@@ -755,20 +759,21 @@ func BulkReplaceCoven(ctx context.Context, db BulkPool, sel BulkSelector, scope 
 	return rep, nil
 }
 
-// bulkUpdateChunk выполняет один чанк в собственной транзакции: keyset-окно
-// `sid > cursor ORDER BY sid LIMIT chunk` под selector ∩ scope + идемпотентный
-// отсев. Возвращает (changedRows, lastSID, scannedRows, err):
+// bulkUpdateChunk runs one chunk in its own transaction: a keyset window
+// `sid > cursor ORDER BY sid LIMIT chunk` under selector ∩ scope, plus
+// idempotent filtering. Returns (changedRows, lastSID, scannedRows, err):
 //
-//   - changedRows — RETURNING-строки (фактически изменённые в этом чанке);
-//   - lastSID     — макс. sid в окне (следующий cursor); пуст, если окно пусто;
-//   - scannedRows — число строк в keyset-окне ДО идемпотентного отсева
-//     (для условия выхода: scannedRows < chunk → последний чанк).
+//   - changedRows — RETURNING rows (actually changed in this chunk);
+//   - lastSID     — max sid in the window (next cursor); empty if the
+//     window is empty;
+//   - scannedRows — rows in the keyset window BEFORE idempotent filtering
+//     (exit condition: scannedRows < chunk → last chunk).
 //
-// Идемпотентный отсев и keyset-окно совмещены: RETURNING даёт changedRows,
-// но условие выхода — по размеру keyset-окна, а не по changedRows (иначе чанк,
-// где все метки уже на месте, оборвал бы итерацию преждевременно). Поэтому
-// окно отбирается отдельным keyset-предикатом, а UPDATE применяется к его
-// подмножеству.
+// Idempotent filtering and the keyset window are kept separate on purpose:
+// RETURNING gives changedRows, but the exit condition is the keyset window
+// size, not changedRows (otherwise a chunk where every label is already set
+// would end iteration prematurely). So the window is selected by its own
+// keyset predicate, and UPDATE applies to a subset of it.
 func bulkUpdateChunk(ctx context.Context, db BulkPool, sel BulkSelector, scope BulkScope, label string, mode CovenMode, cursor string) (changed int64, lastSID string, scanned int, err error) {
 	tx, err := db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -782,8 +787,8 @@ func bulkUpdateChunk(ctx context.Context, db BulkPool, sel BulkSelector, scope B
 	}()
 
 	where, args := buildBulkWhereWithCursor(sel, scope, cursor)
-	// $label — последний позиционный аргумент (для array_append/remove и
-	// идемпотентного предиката).
+	// $label is the last positional argument (used by array_append/remove
+	// and the idempotent predicate).
 	labelPos := len(args) + 1
 	args = append(args, label)
 
@@ -797,9 +802,9 @@ func bulkUpdateChunk(ctx context.Context, db BulkPool, sel BulkSelector, scope B
 		idemPred = fmt.Sprintf("$%d = ANY(coven)", labelPos)
 	}
 
-	// CTE: keyset-окно (window) фиксирует chunk хостов по PK; scanned — его
-	// размер (для условия выхода); upd мутирует только подмножество с
-	// идемпотентным отсевом и возвращает изменённые sid.
+	// CTE: the keyset window (window) pins one chunk of hosts by PK; scanned
+	// is its size (exit condition); upd mutates only the idempotently
+	// filtered subset and returns the changed sids.
 	sql := fmt.Sprintf(`
 WITH chunk AS (
     SELECT sid FROM souls%s
@@ -837,10 +842,10 @@ SELECT
 	return changedN, last, scannedN, nil
 }
 
-// bulkReplaceChunk выполняет один чанк replace-режима: тот же CTE-каркас, что
-// [bulkUpdateChunk], но UPDATE заменяет весь набор `coven = $labels` с
-// идемпотентным отсевом `coven IS DISTINCT FROM $labels` (PG-форма «не равно»,
-// безопасная для NULL и для массивов).
+// bulkReplaceChunk runs one chunk of replace mode: the same CTE skeleton as
+// [bulkUpdateChunk], but UPDATE replaces the whole set (`coven = $labels`)
+// with idempotent filtering `coven IS DISTINCT FROM $labels` (PG's
+// NULL/array-safe "not equal").
 func bulkReplaceChunk(ctx context.Context, db BulkPool, sel BulkSelector, scope BulkScope, labels []string, cursor string) (changed int64, lastSID string, scanned int, err error) {
 	tx, err := db.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -855,9 +860,9 @@ func bulkReplaceChunk(ctx context.Context, db BulkPool, sel BulkSelector, scope 
 
 	where, args := buildBulkWhereWithCursor(sel, scope, cursor)
 	labelsPos := len(args) + 1
-	// pgx маппит nil-slice в NULL; для replace на пустой набор хотим пустой
-	// массив (`coven = ARRAY[]::text[]`), иначе нарушится NOT NULL-ожидание
-	// колонки. Симметрично [UpdateCoven] выше.
+	// pgx maps a nil slice to NULL; replacing with an empty set must yield
+	// an empty array (`coven = ARRAY[]::text[]`) or it breaks the column's
+	// NOT NULL expectation. Symmetric to [UpdateCoven] above.
 	canonical := labels
 	if canonical == nil {
 		canonical = []string{}
@@ -901,9 +906,9 @@ SELECT
 	return changedN, last, scannedN, nil
 }
 
-// buildBulkWhere строит WHERE для selector ∩ scope (без keyset-cursor) —
-// используется count-ом (Matched/dry_run). Возвращает [ErrBulkEmptySelector],
-// если selector не задаёт ни одного критерия (All=false и пусто остальное).
+// buildBulkWhere builds the WHERE for selector ∩ scope (no keyset cursor) —
+// used by the count path (Matched/dry_run). Returns [ErrBulkEmptySelector]
+// if the selector sets no criteria (All=false and everything else empty).
 func buildBulkWhere(sel BulkSelector, scope BulkScope) (string, []any, error) {
 	clauses, args := bulkSelectorClauses(sel)
 	if len(clauses) == 0 && !sel.All {
@@ -913,9 +918,9 @@ func buildBulkWhere(sel BulkSelector, scope BulkScope) (string, []any, error) {
 	return joinWhere(clauses), args, nil
 }
 
-// buildBulkWhereWithCursor — то же, плюс keyset-предикат `sid > $cursor`
-// (пустой cursor = первый чанк, без предиката). Не возвращает ошибку:
-// selector уже провалидирован buildBulkWhere в CountBulkMatched до итерации.
+// buildBulkWhereWithCursor — same, plus the keyset predicate `sid > $cursor`
+// (empty cursor = first chunk, no predicate). Returns no error: the selector
+// was already validated by buildBulkWhere in CountBulkMatched before iteration.
 func buildBulkWhereWithCursor(sel BulkSelector, scope BulkScope, cursor string) (string, []any) {
 	clauses, args := bulkSelectorClauses(sel)
 	clauses, args = appendScopeClause(clauses, args, scope)
@@ -926,13 +931,14 @@ func buildBulkWhereWithCursor(sel BulkSelector, scope BulkScope, cursor string) 
 	return joinWhere(clauses), args
 }
 
-// bulkSelectorClauses переводит BulkSelector в SQL-clauses + args. All сам по
-// себе clause не добавляет (он означает «без host-фильтра»).
+// bulkSelectorClauses turns a BulkSelector into SQL clauses + args. All adds
+// no clause by itself (it means "no host filter").
 //
-// Coven и Incarnation формируют одинаковый SQL-предикат `$n = ANY(coven)`:
-// имя incarnation — корневая Coven-метка по ADR-008. Семантически они различны
-// (Coven — произвольная stable-метка, Incarnation — имя из реестра
-// `incarnation`), потому разнесены на уровне API/audit; на SQL-уровне сливаются.
+// Coven and Incarnation produce the same SQL predicate `$n = ANY(coven)`:
+// an incarnation's name is the root Coven label per ADR-008. They're
+// semantically distinct (Coven is an arbitrary stable label, Incarnation is
+// a name from the `incarnation` registry) and kept separate at the
+// API/audit level, but collapse at the SQL level.
 func bulkSelectorClauses(sel BulkSelector) ([]string, []any) {
 	var (
 		clauses []string
@@ -957,17 +963,17 @@ func bulkSelectorClauses(sel BulkSelector) ([]string, []any) {
 	return clauses, args
 }
 
-// appendScopeClause добавляет scope-предикат (a): целевые хосты ⊆ scope
-// оператора (`coven && ARRAY[scope...]`). Unrestricted — без ограничения.
-// Пустой Covens при non-unrestricted даёт `coven && ARRAY[]::text[]` —
-// заведомо false (оператор не вправе трогать ни один coven) — это корректно.
+// appendScopeClause adds scope predicate (a): target hosts ⊆ operator scope
+// (`coven && ARRAY[scope...]`). Unrestricted skips the constraint. Empty
+// Covens with non-unrestricted yields `coven && ARRAY[]::text[]` — always
+// false (the operator may touch no coven at all), which is correct.
 func appendScopeClause(clauses []string, args []any, scope BulkScope) ([]string, []any) {
 	if scope.Unrestricted {
 		return clauses, args
 	}
 	covens := scope.Covens
 	if covens == nil {
-		covens = []string{} // NULL && coven = NULL; пустой массив = детерминированный false.
+		covens = []string{} // NULL && coven = NULL; an empty array is a deterministic false.
 	}
 	args = append(args, covens)
 	clauses = append(clauses, fmt.Sprintf("coven && $%d", len(args)))
@@ -994,36 +1000,37 @@ func covenInScope(label string, scope []string) bool {
 	return false
 }
 
-// ListFilter — фильтры для [SelectAll]. Пустые поля означают «не фильтровать».
+// ListFilter — filters for [SelectAll]. Empty fields mean "don't filter".
 type ListFilter struct {
 	Status    Status
 	Transport Transport
-	Coven     string // ANY одной метки; пусто = без фильтра.
+	Coven     string // ANY of one label; empty = no filter.
 }
 
-// ListScope — RBAC scope-граница видимости (`GET /v1/souls`, ADR-047 S3b),
-// ОТДЕЛЬНАЯ от пользовательских [ListFilter]: filter — что оператор попросил
-// показать (query-params), scope — что ему вообще ПОЛОЖЕНО видеть (из JWT,
-// резолвится keeper/internal/soulpurview). Оба пересекаются AND-ом в WHERE
-// (фильтр сужает внутри scope, не наоборот).
+// ListScope — RBAC scope visibility boundary (`GET /v1/souls`, ADR-047 S3b),
+// SEPARATE from user-facing [ListFilter]: filter is what the operator asked
+// to see (query params), scope is what they're ALLOWED to see at all (from
+// the JWT, resolved by keeper/internal/soulpurview). Both intersect with AND
+// in the WHERE (filter narrows within scope, not the other way around).
 //
-// Семантика — fail-closed (ADR-047): пустой Covens при !Unrestricted даёт
-// `coven && ARRAY[]::text[]` = заведомо false (ни одного хоста), а НЕ весь флот.
-// Симметрично [BulkScope] / [appendScopeClause]. Unrestricted=true снимает
-// scope-фильтр (весь список).
+// Semantics are fail-closed (ADR-047): empty Covens with !Unrestricted
+// yields `coven && ARRAY[]::text[]` — deliberately false (zero hosts), NOT
+// the entire registry. Symmetric to [BulkScope] / [appendScopeClause].
+// Unrestricted=true lifts the scope filter (full list).
 type ListScope struct {
 	Covens       []string
 	Unrestricted bool
 }
 
-// ScopeEvalRow — полная строка карточки `souls` для Go-side scope-eval-а
-// (ADR-047 S3b-2a keyset-режим). Несёт ВСЕ колонки [soulListItem] (как
-// [SelectAll]) — keyset-карточка обязана быть формо-идентична offset-карточке,
-// иначе presence-overlay не флипнёт status (он опускается на пустом снимке) и
-// `GET /v1/souls` отдавал бы разную форму карточки по Purview оператора.
-// union-фильтр `covenMatch OR regexMatch` использует SID + Coven; RegisteredAt
-// — для composite-курсора. soulprint_facts сюда НЕ тянется — soulprint-измерение
-// в этом срезе не вычисляется (S3b-2b).
+// ScopeEvalRow — full `souls` card row for Go-side scope eval (ADR-047
+// S3b-2a keyset mode). Carries ALL [soulListItem] columns (same as
+// [SelectAll]) — the keyset card must match the offset card's shape exactly,
+// or the presence overlay won't flip status (it's skipped on an empty
+// snapshot) and `GET /v1/souls` would return a different card shape
+// depending on operator Purview. The union filter `covenMatch OR
+// regexMatch` uses SID + Coven; RegisteredAt feeds the composite cursor.
+// soulprint_facts is NOT pulled here — the soulprint dimension isn't
+// computed in this slice (S3b-2b).
 type ScopeEvalRow struct {
 	SID           string
 	Transport     Transport
@@ -1038,42 +1045,45 @@ type ScopeEvalRow struct {
 	Note          string
 }
 
-// KeysetCursorBound — composite-граница keyset-окна `(registered_at, sid)` для
-// [ListForScopeEval]. nil = первая страница (без нижней границы). Голый sid дал
-// бы дыры на равных registered_at, поэтому граница composite.
+// KeysetCursorBound — composite `(registered_at, sid)` keyset window bound
+// for [ListForScopeEval]. nil means the first page (no lower bound). A bare
+// sid would leave gaps on equal registered_at, hence the composite bound.
 type KeysetCursorBound struct {
 	RegisteredAt time.Time
 	SID          string
 }
 
-// scopeEvalSelectSQL — проекция keyset-окна (полная карточка, как [SelectAll]).
-// WHERE/ORDER/LIMIT достраиваются [buildScopeEvalSQL] динамически: user-filter
-// (status/transport/coven) комбинируется с keyset-предикатом через AND.
+// scopeEvalSelectSQL — keyset window projection (full card, same as
+// [SelectAll]). WHERE/ORDER/LIMIT are appended dynamically by
+// [buildScopeEvalSQL]: the user filter (status/transport/coven) combines
+// with the keyset predicate via AND.
 const scopeEvalSelectSQL = `SELECT sid, transport, status, coven, traits,
        registered_at, last_seen_at, last_seen_by_kid,
        created_by_aid, requested_at, note
 FROM souls`
 
-// scopeEvalMaxPageSize — верхняя граница ВНУТРЕННЕГО page-size keyset-eval-а
-// (НЕ клиентский limit). Защита от чтения всего флота одной выборкой: handler
-// читает внутренние страницы окном ~2000 и применяет Go-OR-постфильтр поверх,
-// набирая клиентский limit (симметрично [bulkChunkSize]).
+// scopeEvalMaxPageSize — upper bound on the INTERNAL keyset-eval page size
+// (NOT the client limit). Guards against reading the entire registry in one
+// query: the handler reads internal pages in a ~2000 window and applies a
+// Go OR post-filter on top, accumulating up to the client limit (symmetric
+// to [bulkChunkSize]).
 const scopeEvalMaxPageSize = 2000
 
-// buildScopeEvalSQL собирает keyset-страницу: user-filter (status/transport/
-// coven) как SQL WHERE, скомбинированный с keyset-предикатом `(registered_at,
-// sid)`. Семантика видимости = (user-filter в SQL) AND (scope-union в Go-eval
-// поверх) — фильтр сужает ВНУТРИ scope (ADR-047 S3b-2a, AND), а scope-union
-// (covenMatch OR regexMatch) считается в Go, поэтому coven-scope-pushdown сюда
-// НЕ добавляется (иначе сузил бы видимость ниже Purview).
+// buildScopeEvalSQL builds one keyset page: user filter (status/transport/
+// coven) as SQL WHERE, combined with the keyset predicate `(registered_at,
+// sid)`. Visibility = (user filter in SQL) AND (scope union in the Go eval
+// on top) — the filter narrows WITHIN scope (ADR-047 S3b-2a, AND), while the
+// scope union (covenMatch OR regexMatch) is computed in Go, so no
+// coven-scope pushdown is added here (it would narrow visibility below
+// Purview).
 //
-// User-filter применяется в SQL ДО Go-eval, что сужает page-scan: меньше
-// внутренних страниц проходит через keyset-добор (бонус к перфу). Курсор-
-// инвариант сохраняется — `(registered_at, sid)`-окно идёт поверх отфильтрованного
-// набора, ORDER BY совпадает с [SelectAll] (registered_at DESC, sid ASC).
+// The user filter runs in SQL before the Go eval, shrinking the page scan
+// (fewer internal pages needed to fill the keyset page — a perf bonus). The
+// cursor invariant holds: the `(registered_at, sid)` window sits on top of
+// the filtered set, ORDER BY matches [SelectAll] (registered_at DESC, sid ASC).
 //
-// Порядок аргументов: сначала filter-clauses ($1..), затем keyset-границы
-// (curAt, curSid) при наличии cursor, затем pageSize — последним.
+// Argument order: filter clauses first ($1..), then keyset bounds (curAt,
+// curSid) if a cursor is set, then pageSize last.
 func buildScopeEvalSQL(filter ListFilter, cursor *KeysetCursorBound, pageSize int) (string, []any) {
 	clauses, args := listFilterClauses(filter)
 	if cursor != nil {
@@ -1090,24 +1100,24 @@ func buildScopeEvalSQL(filter ListFilter, cursor *KeysetCursorBound, pageSize in
 	return sql, args
 }
 
-// ListForScopeEval читает ОДНУ внутреннюю keyset-страницу `souls` (полная
-// карточка, как [SelectAll]) для Go-side scope-eval-а (ADR-047 S3b-2a).
+// ListForScopeEval reads ONE internal `souls` keyset page (full card, same
+// as [SelectAll]) for Go-side scope eval (ADR-047 S3b-2a).
 //
-// scope-фильтр (`covenMatch OR regexMatch`) применяется в Go ПОВЕРХ возвращённых
-// строк (наличие regex отключает coven-SQL-pushdown — иначе AND сузил бы
-// видимость ниже Purview). А вот пользовательский `filter` (status/transport/
-// coven из query-params) ПРИМЕНЯЕТСЯ ЗДЕСЬ как SQL WHERE: он сужает ВНУТРИ scope
-// (AND), не расширяет — поэтому корректно pushdown-ить его в БД (он не зависит
-// от scope-union и заодно режет page-scan). Итоговая видимость хоста ⟺
-// (filter в SQL) AND (scope-union в Go).
+// The scope filter (`covenMatch OR regexMatch`) is applied in Go ON TOP of
+// the returned rows (a regex present disables coven SQL pushdown — an AND
+// there would narrow visibility below Purview). The user `filter`
+// (status/transport/coven from query params) IS pushed down as SQL WHERE
+// here: it narrows WITHIN scope (AND), never widens, so pushing it to the
+// DB is safe (independent of the scope union, and it shrinks the page
+// scan). Final host visibility ⟺ (filter in SQL) AND (scope union in Go).
 //
-// Проекция полная (а не sid/coven/registered_at), чтобы keyset-карточка несла
-// status/transport/last_seen — иначе presence-overlay не флипнул бы status, и
-// карточка отличалась бы от offset-режима. Стоимость лишних колонок ничтожна
-// (страница ≤ 2000 строк).
+// The projection is full (not sid/coven/registered_at) so the keyset card
+// carries status/transport/last_seen — otherwise the presence overlay
+// couldn't flip status, and the card would differ from offset mode. The
+// cost of the extra columns is negligible (page ≤ 2000 rows).
 //
-// cursor=nil → первая страница; иначе строго ПОСЛЕ composite-границы
-// `(registered_at, sid)`. pageSize клампится в [1, scopeEvalMaxPageSize].
+// cursor=nil means the first page; otherwise strictly AFTER the composite
+// `(registered_at, sid)` bound. pageSize is clamped to [1, scopeEvalMaxPageSize].
 func ListForScopeEval(ctx context.Context, db ExecQueryRower, filter ListFilter, cursor *KeysetCursorBound, pageSize int) ([]ScopeEvalRow, error) {
 	if pageSize < 1 {
 		pageSize = 1
@@ -1141,8 +1151,8 @@ func ListForScopeEval(ctx context.Context, db ExecQueryRower, filter ListFilter,
 		}
 		r.Transport = Transport(transportStr)
 		r.Status = Status(statusStr)
-		// traits jsonb (ADR-060): '{}' (NOT NULL DEFAULT) → пустой map, не nil
-		// (симметрично scanSoul).
+		// traits jsonb (ADR-060): '{}' (NOT NULL DEFAULT) → empty map, not nil
+		// (symmetric to scanSoul).
 		if len(traitsJSON) > 0 {
 			if err := json.Unmarshal(traitsJSON, &r.Traits); err != nil {
 				return nil, fmt.Errorf("soul: scope-eval unmarshal traits for %q: %w", r.SID, err)
@@ -1159,17 +1169,17 @@ func ListForScopeEval(ctx context.Context, db ExecQueryRower, filter ListFilter,
 	return out, nil
 }
 
-// SelectAll возвращает страницу Soul-ов с применённым пользовательским фильтром
-// (filter) ∩ RBAC scope-границей (scope) и общее количество.
+// SelectAll returns a page of Souls with the user filter (filter) ∩ RBAC
+// scope boundary (scope) applied, plus the total count.
 //
-// scope-предикат идёт в WHERE ОБОИХ запросов (COUNT и SELECT) — total
-// когерентен выдаче (не считает хосты вне scope). Coven-pushdown полон для
-// offset-пагинации: дрейфа total нет (в отличие от Go-постфильтра, который
-// потребует keyset — S3b-2).
+// The scope predicate is in the WHERE of BOTH queries (COUNT and SELECT) —
+// total stays coherent with the results (never counts out-of-scope hosts).
+// Coven pushdown is complete for offset pagination: no total drift (unlike
+// a Go post-filter, which would need keyset — S3b-2).
 //
-// Сортировка — `registered_at DESC, sid ASC` (поздние выше; tie-break по
-// SID, иначе пагинация неустойчива при одинаковом таймстемпе — симметрично
-// incarnation.SelectAll).
+// Sort order is `registered_at DESC, sid ASC` (newest first; SID as
+// tie-break, otherwise pagination is unstable on equal timestamps —
+// symmetric to incarnation.SelectAll).
 func SelectAll(ctx context.Context, db ExecQueryRower, filter ListFilter, scope ListScope, offset, limit int) ([]*Soul, int, error) {
 	if offset < 0 {
 		return nil, 0, fmt.Errorf("soul: offset must be >= 0, got %d", offset)
@@ -1213,21 +1223,22 @@ FROM souls` + whereSQL +
 	return out, total, nil
 }
 
-// buildListWhere строит WHERE для пользовательского фильтра ∩ RBAC scope.
-// scope-предикат (`coven && ARRAY[scope]`) переиспользует [appendScopeClause] —
-// единый источник scope-intersection-семантики с bulk coven-assign (одна форма
-// fail-closed для всего souls-слоя). joinWhere — общий с bulk-веткой.
+// buildListWhere builds the WHERE for user filter ∩ RBAC scope. The scope
+// predicate (`coven && ARRAY[scope]`) reuses [appendScopeClause] — a single
+// source of scope-intersection semantics shared with bulk coven-assign (one
+// fail-closed form for the whole souls layer). joinWhere is shared with the
+// bulk path too.
 func buildListWhere(f ListFilter, scope ListScope) (string, []any) {
 	clauses, args := listFilterClauses(f)
 	clauses, args = appendScopeClause(clauses, args, BulkScope(scope))
 	return joinWhere(clauses), args
 }
 
-// listFilterClauses переводит пользовательский [ListFilter] (status/transport/
-// coven) в SQL-clauses + позиционные args. Пустые поля = «не фильтровать».
-// Единый источник filter-семантики: offset-путь ([buildListWhere]) и keyset-путь
-// ([buildScopeEvalSQL]) применяют один и тот же фильтр одинаково — иначе keyset-
-// режим молча игнорировал бы фильтр (ADR-047 S3b-2a fix).
+// listFilterClauses turns a user [ListFilter] (status/transport/coven) into
+// SQL clauses + positional args. Empty fields mean "don't filter". Single
+// source of filter semantics: the offset path ([buildListWhere]) and the
+// keyset path ([buildScopeEvalSQL]) apply the exact same filter — otherwise
+// keyset mode would silently ignore the filter (ADR-047 S3b-2a fix).
 func listFilterClauses(f ListFilter) ([]string, []any) {
 	var (
 		clauses []string
@@ -1248,22 +1259,23 @@ func listFilterClauses(f ListFilter) ([]string, []any) {
 	return clauses, args
 }
 
-// Stats — агрегированная сводка реестра `souls` в границах Purview-scope
-// оператора (`GET /v1/souls/stats`, Souls Overview UI). Считается ОДНИМ
-// round-trip-ом ([SelectStats]) поверх того же scope-предиката, что и
-// [SelectAll]: агрегат не включает хосты вне видимости оператора (иначе цифры
-// на дашборде расходились бы со scoped-списком).
+// Stats — aggregated summary of the `souls` registry within the operator's
+// Purview scope (`GET /v1/souls/stats`, Souls Overview UI). Computed in ONE
+// round trip ([SelectStats]) over the same scope predicate as [SelectAll]:
+// the aggregate excludes hosts outside operator visibility (otherwise
+// dashboard numbers would diverge from the scoped list).
 //
-//   - ByStatus / ByTransport / ByCoven — плотные карты «значение оси → число
-//     хостов». Пустые оси (нет ни одного хоста) → пустые (не nil) карты.
-//     Transport в модели — agent/ssh (НЕ pull/push): UI сам маппит на pull/push-
-//     лейблы, storage-слой отдаёт доменные значения как есть.
-//   - Total — всего видимых хостов (= сумма ByStatus).
-//   - StaleCount — сколько видимых хостов «протухли» по `last_seen_at`
-//     (< now()-staleThreshold). Порог — тот же `mark_disconnected.stale_after`
-//     Reaper-а (reaper.ResolveMarkDisconnectedStale), чтобы цифра совпадала с
-//     фактом перевода в disconnected. Хост без `last_seen_at` (только-что
-//     pending, ни разу не подключался) в StaleCount НЕ попадает (NULL < X = NULL).
+//   - ByStatus / ByTransport / ByCoven — dense "axis value → host count"
+//     maps. An empty axis (no hosts) still yields an empty (not nil) map.
+//     Transport in the model is agent/ssh (NOT pull/push): the UI maps to
+//     pull/push labels itself, the storage layer returns domain values as-is.
+//   - Total — all visible hosts (= sum of ByStatus).
+//   - StaleCount — visible hosts stale by `last_seen_at`
+//     (< now()-staleThreshold). Same threshold as the Reaper's
+//     `mark_disconnected.stale_after` (reaper.ResolveMarkDisconnectedStale),
+//     so the number matches the actual disconnected transition. A host
+//     without `last_seen_at` (freshly pending, never connected) is excluded
+//     from StaleCount (NULL < X = NULL).
 type Stats struct {
 	ByStatus    map[Status]int
 	ByTransport map[Transport]int
@@ -1272,15 +1284,16 @@ type Stats struct {
 	StaleCount  int
 }
 
-// statsAxisSQL — единый CTE-запрос агрегата: `scoped` фиксирует набор видимых
-// хостов ОДИН раз (scope-WHERE подставляется в %s), далее оси считаются
-// UNION ALL-ом с дискриминатором `axis`. Строка axis='stale' несёт единственный
-// bucket=COUNT протухших (last_seen_at < now()-$stale); прочие оси группируются.
-// Один плейсхолдер stale-порога — последний позиционный аргумент ($%d).
+// statsAxisSQL — single CTE aggregate query: `scoped` pins the visible host
+// set ONCE (scope WHERE is substituted into %s), then each axis is computed
+// via UNION ALL with an `axis` discriminator. The axis='stale' row carries a
+// single bucket=COUNT of stale hosts (last_seen_at < now()-$stale); the
+// other axes are grouped. One stale-threshold placeholder, last positional
+// arg ($%d).
 //
-// unnest(coven) для by_coven: хост с N метками даёт N строк оси coven (сумма
-// by_coven >= total — это ожидаемо, метки пересекаются). Хост без меток в
-// by_coven не участвует (unnest пустого массива = 0 строк).
+// unnest(coven) for by_coven: a host with N labels yields N coven-axis rows
+// (sum of by_coven >= total is expected — labels overlap). A host with no
+// labels doesn't appear in by_coven (unnest of an empty array = 0 rows).
 const statsAxisSQLTemplate = `
 WITH scoped AS (
     SELECT status, transport, coven, last_seen_at
@@ -1295,20 +1308,21 @@ UNION ALL
 SELECT 'stale'     AS axis, ''                         AS bucket, COUNT(*) AS n FROM scoped WHERE last_seen_at < now() - $%d::interval
 `
 
-// SelectStats считает агрегированную сводку реестра `souls` в границах RBAC
-// scope-а оператора (`GET /v1/souls/stats`). Один round-trip: все оси
-// (status/transport/coven) + stale-count объединены UNION ALL-ом поверх общего
-// scope-CTE.
+// SelectStats computes an aggregated summary of the `souls` registry within
+// the operator's RBAC scope (`GET /v1/souls/stats`). One round trip: all
+// axes (status/transport/coven) + stale count are combined with UNION ALL
+// over a shared scope CTE.
 //
-// scope-предикат — тот же [appendScopeClause], что у [SelectAll]/bulk: единый
-// источник scope-intersection-семантики fail-closed (пустой scope без
-// Unrestricted → `coven && ARRAY[]::text[]` = ноль хостов, а НЕ весь флот).
+// The scope predicate is the same [appendScopeClause] as [SelectAll]/bulk: a
+// single fail-closed source of scope-intersection semantics (empty scope
+// without Unrestricted → `coven && ARRAY[]::text[]` = zero hosts, NOT the
+// entire registry).
 //
-// staleThreshold — cutoff для StaleCount (хост «протух», если
-// `last_seen_at < now()-staleThreshold`); передаётся из
-// reaper.ResolveMarkDisconnectedStale, чтобы цифра совпала с disconnect-порогом.
-// <= 0 отвергается (иначе cutoff в будущем/сейчас — бессмысленный агрегат;
-// caller обязан передать реальный порог).
+// staleThreshold is the StaleCount cutoff (a host is "stale" if
+// `last_seen_at < now()-staleThreshold`); passed in from
+// reaper.ResolveMarkDisconnectedStale so the number matches the disconnect
+// threshold. <= 0 is rejected (a cutoff in the present/future is a
+// meaningless aggregate; the caller must pass a real threshold).
 func SelectStats(ctx context.Context, db ExecQueryRower, scope ListScope, staleThreshold time.Duration) (Stats, error) {
 	if staleThreshold <= 0 {
 		return Stats{}, fmt.Errorf("soul: stale threshold must be > 0, got %v", staleThreshold)
@@ -1321,8 +1335,9 @@ func SelectStats(ctx context.Context, db ExecQueryRower, scope ListScope, staleT
 
 	clauses, args := appendScopeClause(nil, nil, BulkScope(scope))
 	whereSQL := joinWhere(clauses)
-	// stale-порог — последний позиционный аргумент; PG-interval из Go-duration
-	// через строку "<seconds> seconds" (устойчиво к суб-секундным порогам).
+	// stale threshold is the last positional argument; Go duration → PG
+	// interval via the string "<seconds> seconds" (safe for sub-second
+	// thresholds).
 	args = append(args, fmt.Sprintf("%d seconds", int64(staleThreshold.Seconds())))
 	sql := fmt.Sprintf(statsAxisSQLTemplate, whereSQL, len(args))
 

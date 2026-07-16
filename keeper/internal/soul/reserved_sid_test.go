@@ -7,8 +7,9 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 )
 
-// TestIsReservedSID — reserved-набор ловит ТОЧНО синтетические keeper/__run__ и
-// не задевает реальные Soul-sid, включая keeper-подобные имена (NIM-36).
+// TestIsReservedSID — the reserved set catches EXACTLY the synthetic
+// keeper/__run__ and doesn't touch real Soul SIDs, including keeper-like
+// names (NIM-36).
 func TestIsReservedSID(t *testing.T) {
 	cases := []struct {
 		sid  string
@@ -29,9 +30,9 @@ func TestIsReservedSID(t *testing.T) {
 	}
 }
 
-// TestReservedSIDs_MatchRenderConstants — drift-guard: литералы ReservedSIDs
-// обязаны совпадать с render-константами (soul дублирует их, т.к. render не
-// импортируется leaf-пакетом soul). Расхождение = баг (NIM-36).
+// TestReservedSIDs_MatchRenderConstants — drift guard: ReservedSIDs literals
+// must match the render constants (soul duplicates them since render isn't
+// imported by the leaf package soul). A mismatch = a bug (NIM-36).
 func TestReservedSIDs_MatchRenderConstants(t *testing.T) {
 	if !soul.IsReservedSID(render.KeeperTargetSID) {
 		t.Errorf("ReservedSIDs не содержит render.KeeperTargetSID=%q", render.KeeperTargetSID)

@@ -102,7 +102,7 @@ func TestBuildBulkWhere_AllWithScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildBulkWhere: %v", err)
 	}
-	// All сам clause не добавляет; scope добавляет coven && $1.
+	// All by itself adds no clause; scope adds coven && $1.
 	if where != " WHERE coven && $1" {
 		t.Errorf("where = %q, want ' WHERE coven && $1'", where)
 	}
@@ -125,7 +125,7 @@ func TestBuildBulkWhere_Unrestricted_NoScopeClause(t *testing.T) {
 }
 
 func TestBulkAssignCoven_LabelOutOfScope_NoDB(t *testing.T) {
-	// Гейт (b) проверяется ДО любого обращения к БД — fakeDB с нулём вызовов.
+	// Gate (b) is checked BEFORE any DB access — fakeDB sees zero calls.
 	f := &fakeDB{}
 	_, err := BulkAssignCoven(nil, bulkFakePool{f}, BulkSelector{All: true},
 		BulkScope{Covens: []string{"dev"}}, "prod", CovenAppend)
@@ -155,11 +155,11 @@ func TestBulkAssignCoven_RejectsReplaceMode(t *testing.T) {
 	}
 }
 
-// --- BulkReplaceCoven scope-гейт (b): каждая метка набора ∈ scope ---
+// --- BulkReplaceCoven scope gate (b): every label in the set ∈ scope ---
 
-// Гейт (b) на replace должен отвергнуть набор, в котором ХОТЯ БЫ ОДНА метка
-// вне scope (privilege-escalation вектор: `[dev, prod]` с scope=dev). Проверка
-// — ДО любых обращений к БД.
+// Gate (b) on replace must reject a set where AT LEAST ONE label is
+// out of scope (privilege-escalation vector: `[dev, prod]` with scope=dev).
+// The check runs BEFORE any DB access.
 func TestBulkReplaceCoven_RejectsLabelOutOfScope_NoDB(t *testing.T) {
 	f := &fakeDB{}
 	_, err := BulkReplaceCoven(nil, bulkFakePool{f}, BulkSelector{All: true},
@@ -172,9 +172,9 @@ func TestBulkReplaceCoven_RejectsLabelOutOfScope_NoDB(t *testing.T) {
 	}
 }
 
-// Гейт (b) на replace: каждая метка набора в scope → проходит гейт и доходит
-// до CountBulkMatched (который fakeDB возвращает ErrNoRows на пустой rowFunc
-// → ошибка count-а, но не ErrBulkLabelOutOfScope).
+// Gate (b) on replace: every label in the set is in scope → passes the gate and
+// reaches CountBulkMatched (which fakeDB returns ErrNoRows on an empty rowFunc
+// → a count error, but not ErrBulkLabelOutOfScope).
 func TestBulkReplaceCoven_AllLabelsInScope_PassesGateB(t *testing.T) {
 	f := &fakeDB{}
 	_, err := BulkReplaceCoven(nil, bulkFakePool{f}, BulkSelector{All: true},
@@ -182,7 +182,7 @@ func TestBulkReplaceCoven_AllLabelsInScope_PassesGateB(t *testing.T) {
 	if errors.Is(err, ErrBulkLabelOutOfScope) {
 		t.Fatalf("err = %v, all labels in scope must NOT trigger gate (b)", err)
 	}
-	// CountBulkMatched будет вызван → queryCalls > 0.
+	// CountBulkMatched gets called → queryCalls > 0.
 	if f.queryCalls == 0 {
 		t.Errorf("queryCalls = 0, want >0 (gate b passed, count must run)")
 	}
@@ -200,7 +200,7 @@ func TestBulkReplaceCoven_RejectsBadLabel(t *testing.T) {
 	}
 }
 
-// Unrestricted-scope: любой набор меток проходит гейт (b), включая пустой.
+// Unrestricted scope: any label set passes gate (b), including empty.
 func TestBulkReplaceCoven_Unrestricted_PassesAnyLabels(t *testing.T) {
 	for _, labels := range [][]string{
 		{"prod", "edge"},
@@ -216,10 +216,10 @@ func TestBulkReplaceCoven_Unrestricted_PassesAnyLabels(t *testing.T) {
 	}
 }
 
-// --- Incarnation-селектор ---
+// --- Incarnation selector ---
 
-// Incarnation-селектор должен генерировать предикат `$n = ANY(coven)` —
-// идентично Coven-полю. Comb с другими критериями = AND.
+// The Incarnation selector must generate the predicate `$n = ANY(coven)` —
+// identical to the Coven field. Combined with other criteria = AND.
 func TestBulkSelector_IncarnationOnly(t *testing.T) {
 	where, args, err := buildBulkWhere(BulkSelector{Incarnation: "redis"},
 		BulkScope{Unrestricted: true})
@@ -234,7 +234,7 @@ func TestBulkSelector_IncarnationOnly(t *testing.T) {
 	}
 }
 
-// Incarnation+Status: AND-комбинация двух предикатов.
+// Incarnation+Status: AND-combination of two predicates.
 func TestBulkSelector_IncarnationPlusStatus(t *testing.T) {
 	where, args, err := buildBulkWhere(BulkSelector{Incarnation: "redis", Status: StatusConnected},
 		BulkScope{Unrestricted: true})
@@ -250,9 +250,9 @@ func TestBulkSelector_IncarnationPlusStatus(t *testing.T) {
 	}
 }
 
-// Incarnation+Coven: оба генерируют `$n = ANY(coven)`; AND-комбинация даёт
-// двойной предикат (хост обязан содержать ОБЕ метки). На SQL — `coven && ANY`
-// для двух отдельных скаляров через AND, что эквивалентно пересечению.
+// Incarnation+Coven: both generate `$n = ANY(coven)`; the AND-combination
+// produces a double predicate (the host must carry BOTH labels). In SQL — two
+// separate `$n = ANY(coven)` scalars ANDed together, equivalent to an intersection.
 func TestBulkSelector_IncarnationPlusCoven(t *testing.T) {
 	where, args, err := buildBulkWhere(BulkSelector{Coven: "stage", Incarnation: "redis"},
 		BulkScope{Unrestricted: true})
@@ -267,7 +267,7 @@ func TestBulkSelector_IncarnationPlusCoven(t *testing.T) {
 	}
 }
 
-// Пустой Incarnation не должен добавлять clause (single-criterion empty
+// An empty Incarnation must not add a clause (single-criterion empty
 // selector → ErrBulkEmptySelector).
 func TestBulkSelector_EmptyIncarnation_NoSelector(t *testing.T) {
 	_, _, err := buildBulkWhere(BulkSelector{}, BulkScope{Unrestricted: true})

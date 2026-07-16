@@ -11,9 +11,9 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// Тестовые fake-ы повторяют паттерн из keeper/internal/operator/crud_test.go.
-// Не объединяем в общий test-only helper-пакет: API CRUD у каждого реестра
-// своё, single-pattern мутирует случайно при общем helper-е.
+// Test fakes follow the pattern from keeper/internal/operator/crud_test.go.
+// Not combined in a shared test-only helper package: each registry's CRUD API
+// is different, single-pattern mutates randomly with shared helper.
 
 type fakeDB struct {
 	execCalls    int
@@ -52,9 +52,9 @@ func (f *fakeDB) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error
 	return &fakeRows{}, nil
 }
 
-// bulkFakePool оборачивает fakeDB в BulkPool. BeginTx не вызывается тестами,
-// проверяющими отказ ДО БД (out-of-scope label / bad label / replace mode) —
-// поэтому возвращает ошибку: реальный чанк-путь в этих тестах недостижим.
+// bulkFakePool wraps fakeDB in BulkPool. BeginTx is not called by tests
+// checking rejection BEFORE DB (out-of-scope label / bad label / replace mode) —
+// so it returns error: real chunk path is not reachable in these tests.
 type bulkFakePool struct {
 	*fakeDB
 }
@@ -86,8 +86,8 @@ func (r staticRow) Scan(dest ...any) error {
 }
 
 func assign(dest, src any) {
-	// Нормализуем typed-nil (например, (*time.Time)(nil) из теста) в untyped nil,
-	// чтобы case-ы ниже не пытались type-assert на конкретный тип nil-значения.
+	// Normalize typed-nil (e.g., (*time.Time)(nil) from test) to untyped nil,
+	// so switches below don't attempt type-assert on specific nil type.
 	if v, ok := src.(*time.Time); ok && v == nil {
 		src = nil
 	}
@@ -220,8 +220,8 @@ func TestInsert_HappyPath_Pending(t *testing.T) {
 	if s.RegisteredAt.IsZero() {
 		t.Errorf("RegisteredAt not populated from RETURNING")
 	}
-	// requested_at должен заполниться из RETURNING (PG проставляет NOW(),
-	// если caller не задал) — нужен Reaper-правилу pending→expired.
+	// RequestedAt should be populated from RETURNING (PG sets NOW() if
+	// caller didn't set it) - needed for Reaper rule pending→expired.
 	if s.RequestedAt == nil || s.RequestedAt.IsZero() {
 		t.Errorf("RequestedAt not populated from RETURNING: %v", s.RequestedAt)
 	}
@@ -350,9 +350,9 @@ func TestSelectBySID_HappyPath(t *testing.T) {
 				"agent",                // transport
 				"connected",            // status
 				[]string{"prod", "db"}, // coven
-				[]byte(nil),            // traits (jsonb '{}' / NULL → пустой map)
+				[]byte(nil),            // traits (jsonb '{}' / NULL → empty map)
 				now,                    // registered_at
-				(*time.Time)(nil),      // last_seen_at — передаём как nil-указатель
+				(*time.Time)(nil),      // last_seen_at - pass as nil pointer
 				(*string)(nil),         // last_seen_by_kid
 				(*string)(nil),         // created_by_aid
 				(*time.Time)(nil),      // requested_at
@@ -360,9 +360,9 @@ func TestSelectBySID_HappyPath(t *testing.T) {
 			}}
 		},
 	}
-	// Дальше нам нужен Scan, который умеет переключать на nil; адаптируем
-	// staticRow.assign: ниже отдельный helper rows-builder, но пока тест
-	// читает только заполненные поля.
+	// Next we need Scan that can switch to nil; we adapt
+	// staticRow.assign: below is a separate helper rows-builder, but for now test
+	// reads only populated fields.
 	got, err := SelectBySID(context.Background(), f, "host.example.com")
 	if err != nil {
 		t.Fatalf("SelectBySID: %v", err)
@@ -413,9 +413,9 @@ func TestUpdateStatus_RowsAffectedZero_NotFound(t *testing.T) {
 }
 
 func TestUpdateStatus_NilKidKeepsExisting(t *testing.T) {
-	// Защита от регрессии: nil-kid должен передаваться как nil-argument
-	// (PG COALESCE сохранит старое значение), а не как пустая строка
-	// (которая перетёрла бы значение).
+	// Regression guard: nil-kid must be passed as nil-argument
+	// (PG COALESCE preserves old value), not as empty string
+	// (which would overwrite value).
 	f := &fakeDB{execTag: pgconn.NewCommandTag("UPDATE 1")}
 	if err := UpdateStatus(context.Background(), f, "host.example.com", StatusDisconnected, nil); err != nil {
 		t.Fatalf("UpdateStatus: %v", err)
@@ -541,7 +541,7 @@ func TestSelectSoulprint_HappyPath(t *testing.T) {
 	facts := []byte(`{"sid":"soul.example.com","os":{"family":"debian"}}`)
 	f := &fakeDB{
 		rowFunc: func() pgx.Row {
-			// **time.Time dest: assign() ожидает либо nil, либо time.Time (не *time.Time).
+			// **time.Time dest: assign() expects either nil or time.Time (not *time.Time).
 			return staticRow{values: []any{"soul.example.com", facts, collected, received}}
 		},
 	}
@@ -571,8 +571,8 @@ func TestSelectSoulprint_NotFound(t *testing.T) {
 func TestSelectSoulprint_NotReceived(t *testing.T) {
 	f := &fakeDB{
 		rowFunc: func() pgx.Row {
-			// soulprint_facts IS NULL, collected/received NULL — запись Soul
-			// есть, фактов нет.
+			// soulprint_facts IS NULL, collected/received NULL - Soul record
+			// exists, no facts.
 			return staticRow{values: []any{"soul.example.com", []byte(nil), (*time.Time)(nil), (*time.Time)(nil)}}
 		},
 	}
