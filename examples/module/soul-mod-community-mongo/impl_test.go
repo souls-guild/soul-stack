@@ -9,9 +9,9 @@ import (
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 )
 
-// newModule собирает MongoModule, отдающий один и тот же fakeConn на любой
-// коннект (для pinged/command — single-connect states). cfg последнего коннекта
-// фиксируется в conn.cfg (проверка, что пароль доехал до коннекта).
+// newModule builds MongoModule that returns the same fakeConn for any connection
+// (for pinged/command single-connect states). Last connection cfg is recorded in
+// conn.cfg (checks that password reached the connection).
 func newModule(conn *fakeConn) *MongoModule {
 	return &MongoModule{
 		connect: func(_ context.Context, cfg connConfig) (mongoConn, error) {
@@ -30,7 +30,7 @@ func TestValidate_PingedRejectsEmptyAddr(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"addr": ""}),
 	})
 	if reply.Ok {
-		t.Fatal("ждали Ok=false на пустой addr (pinged)")
+		t.Fatal("expected Ok=false for empty addr (pinged)")
 	}
 }
 
@@ -41,7 +41,7 @@ func TestValidate_PingedHappyPath(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"addr": "127.0.0.1:27017"}),
 	})
 	if !reply.Ok || len(reply.Errors) != 0 {
-		t.Fatalf("ждали Ok=true без ошибок, got %+v", reply)
+		t.Fatalf("expected Ok=true without errors, got %+v", reply)
 	}
 }
 
@@ -52,7 +52,7 @@ func TestValidate_UserRejectsEmptyName(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"addr": "127.0.0.1:27017", "name": ""}),
 	})
 	if reply.Ok {
-		t.Fatal("ждали Ok=false на пустое name (user)")
+		t.Fatal("expected Ok=false for empty name (user)")
 	}
 }
 
@@ -63,7 +63,7 @@ func TestValidate_UserRejectsUnknownState(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"addr": "127.0.0.1:27017", "name": "alice", "state": "weird"}),
 	})
 	if reply.Ok {
-		t.Fatal("ждали Ok=false на неизвестный state юзера")
+		t.Fatal("expected Ok=false for unknown user state")
 	}
 }
 
@@ -74,7 +74,7 @@ func TestValidate_UserHappyPath(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"addr": "127.0.0.1:27017", "name": "alice", "state": "present"}),
 	})
 	if !reply.Ok || len(reply.Errors) != 0 {
-		t.Fatalf("ждали Ok=true без ошибок, got %+v", reply)
+		t.Fatalf("expected Ok=true without errors, got %+v", reply)
 	}
 }
 
@@ -85,7 +85,7 @@ func TestValidate_CommandRejectsEmptyCommand(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"addr": "127.0.0.1:27017", "command": map[string]any{}}),
 	})
 	if reply.Ok {
-		t.Fatal("ждали Ok=false на пустой command")
+		t.Fatal("expected Ok=false for empty command")
 	}
 }
 
@@ -96,7 +96,7 @@ func TestValidate_CommandHappyPath(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"addr": "127.0.0.1:27017", "command": map[string]any{"ping": 1}}),
 	})
 	if !reply.Ok || len(reply.Errors) != 0 {
-		t.Fatalf("ждали Ok=true без ошибок, got %+v", reply)
+		t.Fatalf("expected Ok=true without errors, got %+v", reply)
 	}
 }
 
@@ -107,14 +107,14 @@ func TestValidate_RejectsUnknownState(t *testing.T) {
 		Params: mustStruct(t, map[string]any{"addr": "127.0.0.1:27017"}),
 	})
 	if reply.Ok {
-		t.Fatal("ждали Ok=false на нереализованный state")
+		t.Fatal("expected Ok=false for unimplemented state")
 	}
 }
 
 // --- Apply: pinged ---
 
 // TestApplyPinged_HappyPath_ChangedFalse — Ping ok → Output.ok=true, changed=false
-// КОНСТРУКТИВНО (probe-семантика).
+// CONSTRUCTIVELY (probe semantics).
 func TestApplyPinged_HappyPath_ChangedFalse(t *testing.T) {
 	conn := &fakeConn{}
 	m := newModule(conn)
@@ -134,29 +134,29 @@ func TestApplyPinged_HappyPath_ChangedFalse(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed {
-		t.Fatalf("ждали успешное финальное событие, got %+v", fin)
+		t.Fatalf("expected successful final event, got %+v", fin)
 	}
 	if fin.Changed {
-		t.Error("pinged: changed обязан быть false конструктивно (probe, не изменение)")
+		t.Error("pinged: changed must be false constructively (probe, not a change)")
 	}
 	if !fin.GetOutput().GetFields()["ok"].GetBoolValue() {
-		t.Error("Output.ok=false, ждали true")
+		t.Error("Output.ok=false, expected true")
 	}
 	if !conn.pinged {
-		t.Error("Ping не вызван")
+		t.Error("Ping not called")
 	}
-	// Пароль ушёл в коннект, но НЕ в события.
+	// Password went into connection, but NOT into events.
 	if conn.cfg.password != secretPass {
-		t.Errorf("пароль не доехал до коннекта: %q", conn.cfg.password)
+		t.Errorf("password did not reach connection: %q", conn.cfg.password)
 	}
 	assertEventsNoSecret(t, stream)
 	if !conn.closed {
-		t.Error("соединение не закрыто")
+		t.Error("connection not closed")
 	}
 }
 
-// TestApplyPinged_PingErrorIsFailure — Ping с ошибкой → failed=true (health-gate
-// увидит провал через failed_when/until).
+// TestApplyPinged_PingErrorIsFailure - Ping with error -> failed=true (health-gate
+// sees failure through failed_when/until).
 func TestApplyPinged_PingErrorIsFailure(t *testing.T) {
 	conn := &fakeConn{pingErr: errors.New("server selection timeout")}
 	m := newModule(conn)
@@ -168,12 +168,12 @@ func TestApplyPinged_PingErrorIsFailure(t *testing.T) {
 	}, stream)
 
 	if fin := stream.final(); fin == nil || !fin.Failed {
-		t.Fatalf("ждали failed=true на ошибку Ping, got %+v", fin)
+		t.Fatalf("expected failed=true on Ping error, got %+v", fin)
 	}
 }
 
-// TestApplyPinged_ConnectFailure_DoesNotLeakPassword — коннект-ошибка с паролем в
-// тексте санитизируется (redactError) — ИБ-инвариант ADR-010.
+// TestApplyPinged_ConnectFailure_DoesNotLeakPassword - connection error with
+// password in text is sanitized (redactError), security invariant ADR-010.
 func TestApplyPinged_ConnectFailure_DoesNotLeakPassword(t *testing.T) {
 	m := &MongoModule{
 		connect: func(_ context.Context, cfg connConfig) (mongoConn, error) {
@@ -191,13 +191,13 @@ func TestApplyPinged_ConnectFailure_DoesNotLeakPassword(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || !fin.Failed {
-		t.Fatalf("ждали failed=true, got %+v", fin)
+		t.Fatalf("expected failed=true, got %+v", fin)
 	}
 	assertEventsNoSecret(t, stream)
 }
 
-// TestApplyPinged_PingErrorRedactsPassword — ошибка на самом Ping (драйвер эхнул
-// пароль из коннекта) редактируется через redactError по password.
+// TestApplyPinged_PingErrorRedactsPassword - error from Ping itself (driver echoed
+// connection password) is redacted through redactError by password.
 func TestApplyPinged_PingErrorRedactsPassword(t *testing.T) {
 	conn := &fakeConn{pingErr: errors.New("context for AUTH " + secretPass)}
 	m := newModule(conn)
@@ -213,17 +213,17 @@ func TestApplyPinged_PingErrorRedactsPassword(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || !fin.Failed {
-		t.Fatalf("ждали failed=true, got %+v", fin)
+		t.Fatalf("expected failed=true, got %+v", fin)
 	}
 	if strings.Contains(fin.GetMessage(), secretPass) {
-		t.Errorf("пароль утёк в Message ошибки Ping: %q", fin.GetMessage())
+		t.Errorf("password leaked into Ping error Message: %q", fin.GetMessage())
 	}
 }
 
 // --- Apply: command ---
 
-// TestApplyCommand_HappyPath_ChangedFalseByDefault — raw-команда → Output.ok=true,
-// changed=false по умолчанию (probe-семантика). db дефолт admin.
+// TestApplyCommand_HappyPath_ChangedFalseByDefault - raw command -> Output.ok=true,
+// changed=false by default (probe semantics). Default db is admin.
 func TestApplyCommand_HappyPath_ChangedFalseByDefault(t *testing.T) {
 	conn := &fakeConn{}
 	m := newModule(conn)
@@ -243,21 +243,21 @@ func TestApplyCommand_HappyPath_ChangedFalseByDefault(t *testing.T) {
 
 	fin := stream.final()
 	if fin == nil || fin.Failed {
-		t.Fatalf("ждали успех, got %+v", fin)
+		t.Fatalf("expected success, got %+v", fin)
 	}
 	if fin.Changed {
-		t.Error("command: changed=false по умолчанию (probe)")
+		t.Error("command: changed=false by default (probe)")
 	}
 	if !hasCommand(conn.calls, "serverStatus") {
-		t.Errorf("ждали вызов serverStatus, got %v", conn.calls)
+		t.Errorf("expected serverStatus call, got %v", conn.calls)
 	}
 	assertEventsNoSecret(t, stream)
 	if !conn.closed {
-		t.Error("соединение не закрыто")
+		t.Error("connection not closed")
 	}
 }
 
-// TestApplyCommand_ChangedTrueWhenRequested — changed=true при changed:true в params.
+// TestApplyCommand_ChangedTrueWhenRequested - changed=true when params has changed:true.
 func TestApplyCommand_ChangedTrueWhenRequested(t *testing.T) {
 	conn := &fakeConn{}
 	m := newModule(conn)
@@ -273,12 +273,12 @@ func TestApplyCommand_ChangedTrueWhenRequested(t *testing.T) {
 	}, stream)
 
 	if fin := stream.final(); fin == nil || !fin.Changed {
-		t.Fatalf("ждали changed=true при changed:true в params, got %+v", fin)
+		t.Fatalf("expected changed=true when params has changed:true, got %+v", fin)
 	}
 }
 
-// TestApplyCommand_TargetsRequestedDB — db из params используется как целевая БД
-// runCommand (не всегда admin).
+// TestApplyCommand_TargetsRequestedDB - db from params is used as runCommand
+// target DB (not always admin).
 func TestApplyCommand_TargetsRequestedDB(t *testing.T) {
 	conn := &fakeConn{}
 	m := newModule(conn)
@@ -294,11 +294,11 @@ func TestApplyCommand_TargetsRequestedDB(t *testing.T) {
 	}, stream)
 
 	if len(conn.calls) == 0 || conn.calls[0].db != "appdb" {
-		t.Fatalf("ждали runCommand в БД appdb, got %+v", conn.calls)
+		t.Fatalf("expected runCommand in DB appdb, got %+v", conn.calls)
 	}
 }
 
-// TestApplyCommand_ErrorIsFailure — ошибка команды сервера → failed=true.
+// TestApplyCommand_ErrorIsFailure - server command error -> failed=true.
 func TestApplyCommand_ErrorIsFailure(t *testing.T) {
 	conn := &fakeConn{cmdErrByName: map[string]error{"serverStatus": errors.New("not authorized on admin")}}
 	m := newModule(conn)
@@ -313,6 +313,6 @@ func TestApplyCommand_ErrorIsFailure(t *testing.T) {
 	}, stream)
 
 	if fin := stream.final(); fin == nil || !fin.Failed {
-		t.Fatalf("ждали failed=true на ошибку команды, got %+v", fin)
+		t.Fatalf("expected failed=true on command error, got %+v", fin)
 	}
 }

@@ -1,10 +1,10 @@
-// Реальный коннект плагина community.mongo через go-mongo-driver. Отделён от
-// impl.go, чтобы L0-тесты работали с фейковым mongoConn (без живого mongod).
+// Real connection for the community.mongo plugin via go-mongo-driver. Split from
+// impl.go so L0 tests can use a fake mongoConn (without a live mongod).
 //
-// URI собирается ПРОГРАММНО через options (НЕ строковая интерполяция credential —
-// пароль в URI-строке требовал бы URL-экранирования и рисковал утечь в лог
-// драйвера). host:port — options.SetHosts; auth — options.SetAuth; TLS —
-// options.SetTLSConfig из buildTLSConfig.
+// URI is built PROGRAMMATICALLY through options (NOT string interpolation of
+// credentials: password in a URI string would require URL escaping and risk
+// leaking into driver logs). host:port is options.SetHosts; auth is
+// options.SetAuth; TLS is options.SetTLSConfig from buildTLSConfig.
 package main
 
 import (
@@ -16,13 +16,13 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/readpref"
 )
 
-// defaultConnect открывает реальный коннект к mongod и сразу пингует primary
-// (быстрый fail на недоступном инстансе, симметрия с redis defaultConnect).
+// defaultConnect opens a real connection to mongod and immediately pings primary
+// (fast fail on unavailable instance, symmetric with redis defaultConnect).
 func defaultConnect(ctx context.Context, cfg connConfig) (mongoConn, error) {
 	opts := options.Client().SetHosts([]string{cfg.addr})
 
-	// Auth только при заданных кредлах: пустой username/password → анонимный
-	// коннект (localhost-exception bootstrap первого admin — см. user.go).
+	// Auth only when credentials are set: empty username/password -> anonymous
+	// connection (localhost-exception bootstrap of first admin; see user.go).
 	if cfg.username != "" || cfg.password != "" {
 		authDB := cfg.authDB
 		if authDB == "" {
@@ -35,8 +35,8 @@ func defaultConnect(ctx context.Context, cfg connConfig) (mongoConn, error) {
 		})
 	}
 
-	// TLS: при tls=true драйвер коннектится по TLS. buildTLSConfig возвращает
-	// nil,nil когда TLS выключен → SetTLSConfig(nil) оставляет plaintext.
+	// TLS: when tls=true the driver connects over TLS. buildTLSConfig returns
+	// nil,nil when TLS is disabled -> SetTLSConfig(nil) leaves plaintext.
 	tlsCfg, err := buildTLSConfig(cfg.tls)
 	if err != nil {
 		return nil, err
@@ -49,8 +49,8 @@ func defaultConnect(ctx context.Context, cfg connConfig) (mongoConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Ping primary: подтверждает TCP + (при auth) handshake. На localhost-exception
-	// no-auth-коннекте Ping проходит (сам ping auth не требует).
+	// Ping primary: confirms TCP + (with auth) handshake. On localhost-exception
+	// no-auth connection, Ping succeeds (ping itself does not require auth).
 	if err := client.Ping(ctx, readpref.Primary()); err != nil {
 		_ = client.Disconnect(ctx)
 		return nil, err
@@ -58,7 +58,7 @@ func defaultConnect(ctx context.Context, cfg connConfig) (mongoConn, error) {
 	return &realConn{c: client}, nil
 }
 
-// realConn — обёртка *mongo.Client под mongoConn.
+// realConn wraps *mongo.Client as mongoConn.
 type realConn struct {
 	c *mongo.Client
 }
@@ -67,9 +67,9 @@ func (r *realConn) Ping(ctx context.Context) error {
 	return r.c.Ping(ctx, readpref.Primary())
 }
 
-// RunCommand выполняет команду в БД db, возвращает сырой bson-ответ. Ошибка
-// команды (напр. Unauthorized) приходит как mongo.CommandError — сохраняется
-// типизированной (errors.As в isAuthError её распознаёт).
+// RunCommand executes a command in db and returns raw bson response. Command error
+// (for example Unauthorized) arrives as mongo.CommandError and stays typed
+// (errors.As in isAuthError recognizes it).
 func (r *realConn) RunCommand(ctx context.Context, db string, cmd bson.D) (bson.Raw, error) {
 	return r.c.Database(db).RunCommand(ctx, cmd).Raw()
 }

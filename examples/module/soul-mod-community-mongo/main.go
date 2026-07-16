@@ -1,6 +1,6 @@
-// Entry-point плагина soul-mod-community-mongo. Собирается в один статический
-// бинарь через `go build`; Soul запускает его как sub-process, делает
-// gRPC-stdio handshake (sdk/handshake) и зовёт RPC SoulModule. Логика — impl.go.
+// Entry point of the soul-mod-community-mongo plugin. Built into a single static
+// binary with `go build`; Soul starts it as a subprocess, performs gRPC-stdio
+// handshake (sdk/handshake), and calls SoulModule RPC. Logic lives in impl.go.
 package main
 
 import (

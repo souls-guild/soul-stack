@@ -7,10 +7,10 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// redactError вырезает секреты из текста ошибки. mongo-driver формирует ошибки
-// коннекта/команд, чей текст на некоторых путях (auth-failure, URI-parse) может
-// содержать пароль — fail-safe заменяем подстроку каждого секрета на "***".
-// Вариадик: пустые секреты — no-op.
+// redactError removes secrets from error text. mongo-driver builds connection/
+// command errors whose text on some paths (auth-failure, URI-parse) can contain
+// passwords; fail-safe replaces each secret substring with "***".
+// Variadic: empty secrets are no-op.
 func redactError(err error, secrets ...string) string {
 	msg := err.Error()
 	for _, s := range secrets {
@@ -33,7 +33,7 @@ func stringValue(v *structpb.Value) (string, bool) {
 	return "", false
 }
 
-// stringOrEmpty — строковое значение или "" (для опциональных полей).
+// stringOrEmpty returns string value or "" (for optional fields).
 func stringOrEmpty(v *structpb.Value) string {
 	s, _ := stringValue(v)
 	return s
@@ -59,8 +59,8 @@ func intOrDefault(v *structpb.Value, def int) int {
 	return def
 }
 
-// structField — вложенный struct как map полей ({role, db} у элемента roles).
-// nil / не-struct → nil (caller трактует как «не задано»).
+// structField returns nested struct as field map ({role, db} for roles element).
+// nil / non-struct -> nil (caller treats as "not set").
 func structField(v *structpb.Value) map[string]*structpb.Value {
 	if v == nil {
 		return nil
@@ -72,7 +72,7 @@ func structField(v *structpb.Value) map[string]*structpb.Value {
 	return sv.StructValue.GetFields()
 }
 
-// listField — элементы list-значения ({role, db}-массив roles). nil / не-list → nil.
+// listField returns list-value elements ({role, db} roles array). nil / non-list -> nil.
 func listField(v *structpb.Value) []*structpb.Value {
 	if v == nil {
 		return nil
@@ -84,10 +84,10 @@ func listField(v *structpb.Value) []*structpb.Value {
 	return lv.ListValue.GetValues()
 }
 
-// valueToNative приводит structpb.Value к нативному Go-значению для передачи в
-// bson-документ raw-команды (command-state). Числа без дробной части — int64
-// (mongo различает int/double: значение 1.0 из YAML не должно стать double там,
-// где ждётся int). Вложенные struct/list рекурсивно.
+// valueToNative converts structpb.Value to native Go value for passing into a
+// bson document of a raw command (command-state). Numbers without a fractional
+// part become int64 (mongo distinguishes int/double: YAML value 1.0 must not
+// become double where int is expected). Nested struct/list recurse.
 func valueToNative(v *structpb.Value) any {
 	if v == nil {
 		return nil
@@ -122,7 +122,7 @@ func valueToNative(v *structpb.Value) any {
 	}
 }
 
-// validateAddr — общая проверка непустого params.addr.
+// validateAddr is the shared non-empty params.addr validation.
 func validateAddr(f map[string]*structpb.Value) []string {
 	if s, _ := stringValue(f["addr"]); strings.TrimSpace(s) == "" {
 		return []string{"params.addr: must be a non-empty string"}
@@ -130,7 +130,7 @@ func validateAddr(f map[string]*structpb.Value) []string {
 	return nil
 }
 
-// requireString — вспомогалка для Validate: поле обязано быть непустой строкой.
+// requireString is a Validate helper: field must be a non-empty string.
 func requireString(f map[string]*structpb.Value, key string) []string {
 	if s, _ := stringValue(f[key]); strings.TrimSpace(s) == "" {
 		return []string{fmt.Sprintf("params.%s: must be a non-empty string", key)}

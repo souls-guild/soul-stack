@@ -1,33 +1,34 @@
-// user-state плагина community.mongo — createUser/dropUser (upsert) над живым
-// mongod ЦЕЛИКОМ через go-mongo-driver. Юзеры MongoDB живут в admin.system.users
-// (imperative), НЕ в конфиг-файле (в отличие от redis users.acl) — поэтому это
-// verb-state, а не рендер файла.
+// user-state of the community.mongo plugin: createUser/dropUser (upsert) against
+// live mongod ENTIRELY through go-mongo-driver. MongoDB users live in
+// admin.system.users (imperative), NOT in a config file (unlike redis users.acl),
+// so this is verb-state, not file rendering.
 //
-// ★★ LOCALHOST-EXCEPTION BOOTSTRAP (mongo-механика, аналог redis default_admin):
-// mongod с security.authorization: enabled разрешает коннект БЕЗ auth ТОЛЬКО через
-// loopback (localhost) и ТОЛЬКО пока в admin-БД нет ни одного юзера. Первый admin
-// (default_admin) создаётся именно так: коннект с auth ещё невозможен (юзера нет),
-// поэтому плагин делает fallback на no-auth localhost-коннект. Как только первый
-// юзер создан, exception закрывается — дальнейшие коннекты идут с auth.
+// LOCALHOST-EXCEPTION BOOTSTRAP (mongo mechanics, analogous to redis default_admin):
+// mongod with security.authorization: enabled allows connection WITHOUT auth ONLY
+// through loopback (localhost) and ONLY while admin DB has no users. The first
+// admin (default_admin) is created this way: auth connection is not possible yet
+// (no user exists), so plugin falls back to no-auth localhost connection. As soon
+// as the first user is created, exception closes and further connections use auth.
 //
-// Механика fallback (внутри плагина, не в render — render передаёт addr+username+
-// password, плагин решает auth-путь ПО ФАКТУ live-состояния, параллель с redis-
-// плагином, решающим по INFO/CONFIG GET):
-//   1. present + заданы username/password → пробуем коннект С AUTH;
-//   2. коннект/usersInfo падает auth-ошибкой (Unauthorized/AuthenticationFailed) →
-//      это ожидаемо для ПЕРВОГО admin (admin-БД пуста, auth ещё нет) → fallback на
-//      NO-AUTH коннект (localhost-exception отработает, если addr — loopback);
-//   3. createUser первого admin проходит по no-auth localhost-коннекту.
-// Для НЕ-первых юзеров (admin уже есть) auth-коннект успешен → fallback не нужен.
+// Fallback mechanics (inside plugin, not in render: render passes addr+username+
+// password, plugin decides auth path from actual live state, parallel with redis
+// plugin deciding by INFO/CONFIG GET):
+//  1. present + username/password set -> try connection WITH AUTH;
+//  2. connection/usersInfo fails with auth error (Unauthorized/AuthenticationFailed)
+//     -> expected for FIRST admin (admin DB empty, no auth yet) -> fallback to
+//     NO-AUTH connection (localhost-exception works if addr is loopback);
+//  3. createUser of first admin succeeds over no-auth localhost connection.
 //
-// Идемпотентность: usersInfo(name) до операции. present + юзер есть → no-op
-// (changed=false; смена пароля/ролей — day-2 update, вне PILOT). present + нет →
-// createUser (changed=true). absent + есть → dropUser (changed=true). absent +
-// нет → no-op.
+// For non-first users (admin already exists), auth connection succeeds -> no fallback.
 //
-// КРИТ ИБ (ADR-010): params.password НИКОГДА не попадает в события/ошибки. Пароль
-// уходит ТОЛЬКО в createUser-документ (pwd) и в коннект-кредлы; ошибки
-// санитизируются redactError.
+// Idempotency: usersInfo(name) before operation. present + user exists -> no-op
+// (changed=false; password/roles change is day-2 update, outside PILOT).
+// present + absent -> createUser (changed=true). absent + exists -> dropUser
+// (changed=true). absent + absent -> no-op.
+//
+// SECURITY CRITICAL (ADR-010): params.password NEVER reaches events/errors.
+// Password goes ONLY into createUser document (pwd) and connection credentials;
+// errors are sanitized by redactError.
 package main
 
 import (
@@ -43,16 +44,16 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// mongoRole — одна роль юзера ({role, db}). db пустой → роль в БД самого юзера
-// (createUser выполняется в контексте database, роль без db наследует его).
+// mongoRole is one user role ({role, db}). Empty db -> role in user's own DB
+// (createUser runs in database context, role without db inherits it).
 type mongoRole struct {
 	role string
 	db   string
 }
 
-// applyUser — createUser/dropUser с localhost-exception bootstrap. Открывает
-// коннект САМ (с auth → fallback no-auth для первого admin), поэтому не идёт через
-// общий openConn Apply.
+// applyUser is createUser/dropUser with localhost-exception bootstrap. It opens
+// connection ITSELF (with auth -> fallback no-auth for first admin), so it does
+// not go through shared Apply openConn.
 func (m *MongoModule) applyUser(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], params *structpb.Struct) error {
 	f := params.GetFields()
 	name := stringOrEmpty(f["name"])
@@ -64,10 +65,11 @@ func (m *MongoModule) applyUser(ctx context.Context, stream grpc.ServerStreaming
 	if state == "" {
 		state = "present"
 	}
-	// pwd СОЗДАВАЕМОГО юзера — отдельно от коннект-пароля (admin). user_password задан →
-	// он; иначе fallback на password (bootstrap-случай, где admin создаёт САМ СЕБЯ под тем
-	// же паролем, что и коннект). Разведение нужно для operator-юзеров: коннект под admin-
-	// паролем, а createUser — с паролем нового юзера.
+	// pwd of the CREATED user is separate from connection password (admin). If
+	// user_password is set, use it; otherwise fallback to password (bootstrap case
+	// where admin creates ITSELF with the same password as connection). Separation
+	// is needed for operator users: connect with admin password, createUser with
+	// new user's password.
 	newUserPwd := stringOrEmpty(f["user_password"])
 	if newUserPwd == "" {
 		newUserPwd = stringOrEmpty(f["password"])
@@ -78,9 +80,9 @@ func (m *MongoModule) applyUser(ctx context.Context, stream grpc.ServerStreaming
 		return sendFailure(stream, err.Error())
 	}
 
-	// Коннект с localhost-exception fallback: present-путь допускает no-auth
-	// bootstrap первого admin. absent-путь fallback НЕ делает (снятие юзера
-	// требует прав — если auth не проходит, это не bootstrap-случай).
+	// Connection with localhost-exception fallback: present path allows no-auth
+	// bootstrap of first admin. absent path does NOT fallback (removing a user
+	// requires privileges; if auth fails, this is not a bootstrap case).
 	conn, usedLocalhost, err := m.openUserConn(ctx, cfg, state == "present")
 	if err != nil {
 		return sendFailure(stream, "connect: "+redactError(err, cfg.password, cfg.tls.keyPEM))
@@ -95,7 +97,7 @@ func (m *MongoModule) applyUser(ctx context.Context, stream grpc.ServerStreaming
 	switch state {
 	case "present":
 		if exists {
-			// Юзер уже есть — no-op (смена пароля/ролей — day-2 update, вне PILOT).
+			// User already exists - no-op (password/roles change is day-2 update, outside PILOT).
 			return sendOutcome(stream, false, fmt.Sprintf("user %q already present", name), map[string]any{
 				"present":         true,
 				"changed":         false,
@@ -135,16 +137,16 @@ func (m *MongoModule) applyUser(ctx context.Context, stream grpc.ServerStreaming
 	}
 }
 
-// openUserConn открывает коннект для user-state с localhost-exception fallback.
-// Возвращает (conn, usedLocalhost, err): usedLocalhost=true когда сработал no-auth
-// bootstrap-путь (первый admin). Алгоритм:
-//   - auth заданы → пробуем коннект С AUTH + дешёвый usersInfo-ping (проверка, что
-//     auth реально работает, а не только TCP-коннект);
-//   - allowBootstrap И auth-коннект падает auth-ошибкой → fallback на NO-AUTH
-//     коннект (localhost-exception отработает на loopback + пустой admin-БД);
-//   - auth не заданы → сразу no-auth коннект (localhost-exception ожидаема).
+// openUserConn opens connection for user-state with localhost-exception fallback.
+// Returns (conn, usedLocalhost, err): usedLocalhost=true when no-auth bootstrap
+// path fired (first admin). Algorithm:
+//   - auth set -> try connection WITH AUTH + cheap usersInfo ping (checks that
+//     auth actually works, not just TCP connection);
+//   - allowBootstrap AND auth connection fails with auth error -> fallback to
+//     NO-AUTH connection (localhost-exception works on loopback + empty admin DB);
+//   - auth not set -> immediately use no-auth connection (localhost-exception expected).
 func (m *MongoModule) openUserConn(ctx context.Context, cfg connConfig, allowBootstrap bool) (mongoConn, bool, error) {
-	// Нет кредлов → сразу no-auth (оператор рассчитывает на localhost-exception).
+	// No credentials -> straight to no-auth (operator relies on localhost-exception).
 	if cfg.username == "" && cfg.password == "" {
 		conn, err := m.openConn(ctx, connConfig{addr: cfg.addr, authDB: cfg.authDB, tls: cfg.tls})
 		return conn, true, err
@@ -152,9 +154,9 @@ func (m *MongoModule) openUserConn(ctx context.Context, cfg connConfig, allowBoo
 
 	authConn, authErr := m.openConn(ctx, cfg)
 	if authErr == nil {
-		// TCP-коннект открылся, но authorization enabled может отвергнуть auth
-		// лениво (при первой команде). Дешёвый пробный usersInfo подтверждает, что
-		// auth реально работает; auth-ошибка → fallback (bootstrap-случай).
+		// TCP connection opened, but authorization enabled can reject auth lazily
+		// (on first command). Cheap probe usersInfo confirms auth actually works;
+		// auth error -> fallback (bootstrap case).
 		if _, probeErr := authConn.RunCommand(ctx, cfg.authDB, bson.D{{Key: "usersInfo", Value: 1}}); probeErr == nil {
 			return authConn, false, nil
 		} else if allowBootstrap && isAuthError(probeErr) {
@@ -162,14 +164,14 @@ func (m *MongoModule) openUserConn(ctx context.Context, cfg connConfig, allowBoo
 			noAuth, err := m.openConn(ctx, connConfig{addr: cfg.addr, authDB: cfg.authDB, tls: cfg.tls})
 			return noAuth, true, err
 		} else {
-			// Не auth-ошибка (или bootstrap запрещён) — коннект валиден, отдаём как есть
-			// (последующая операция вернёт честную ошибку).
+			// Not an auth error (or bootstrap disabled) - connection is valid, return as is
+			// (subsequent operation will return the real error).
 			return authConn, false, nil
 		}
 	}
 
-	// TCP/auth-коннект не открылся. Если это auth-ошибка и bootstrap разрешён —
-	// пробуем no-auth localhost-путь.
+	// TCP/auth connection did not open. If this is an auth error and bootstrap is
+	// allowed, try no-auth localhost path.
 	if allowBootstrap && isAuthError(authErr) {
 		noAuth, err := m.openConn(ctx, connConfig{addr: cfg.addr, authDB: cfg.authDB, tls: cfg.tls})
 		return noAuth, true, err
@@ -177,11 +179,10 @@ func (m *MongoModule) openUserConn(ctx context.Context, cfg connConfig, allowBoo
 	return nil, false, authErr
 }
 
-// isAuthError распознаёт ошибку авторизации mongo (для localhost-exception
-// fallback). mongo возвращает codeName Unauthorized (13) / AuthenticationFailed
-// (18) на попытку auth к пустой admin-БД или с неверными кредлами. Проверяем
-// типизированный mongo.CommandError по коду, с fallback на текст (для не-command
-// путей коннекта).
+// isAuthError recognizes mongo authorization error (for localhost-exception
+// fallback). mongo returns codeName Unauthorized (13) / AuthenticationFailed (18)
+// on auth attempt against empty admin DB or with wrong credentials. Check typed
+// mongo.CommandError by code, with text fallback (for non-command connection paths).
 func isAuthError(err error) bool {
 	if err == nil {
 		return false
@@ -204,8 +205,8 @@ func isAuthError(err error) bool {
 		strings.Contains(msg, "not authorized")
 }
 
-// userExists проверяет наличие юзера через usersInfo. Возвращает true, если в
-// ответе непустой массив users.
+// userExists checks user presence via usersInfo. Returns true when response has
+// non-empty users array.
 func userExists(ctx context.Context, conn mongoConn, db, name string) (bool, error) {
 	raw, err := conn.RunCommand(ctx, db, bson.D{{Key: "usersInfo", Value: name}})
 	if err != nil {
@@ -226,8 +227,8 @@ func userExists(ctx context.Context, conn mongoConn, db, name string) (bool, err
 	return len(vals) > 0, nil
 }
 
-// createUser выполняет команду createUser с ролями и паролем. pwd уходит в
-// bson-документ (createUser-контракт mongo); в события/логи он не попадает.
+// createUser executes createUser command with roles and password. pwd goes into
+// bson document (mongo createUser contract); it does not reach events/logs.
 func createUser(ctx context.Context, conn mongoConn, db, name, pwd string, roles []mongoRole) error {
 	cmd := bson.D{
 		{Key: "createUser", Value: name},
@@ -238,15 +239,15 @@ func createUser(ctx context.Context, conn mongoConn, db, name, pwd string, roles
 	return err
 }
 
-// dropUser выполняет команду dropUser.
+// dropUser executes dropUser command.
 func dropUser(ctx context.Context, conn mongoConn, db, name string) error {
 	_, err := conn.RunCommand(ctx, db, bson.D{{Key: "dropUser", Value: name}})
 	return err
 }
 
-// rolesToBSON конвертирует роли в bson-массив createUser-контракта: каждая роль —
-// {role, db}. Роль без db наследует БД юзера (createUser-контекст), но mongo
-// требует явный db в документе роли → подставляем БД юзера при пустом db.
+// rolesToBSON converts roles into bson array of createUser contract: each role is
+// {role, db}. Role without db inherits user's DB (createUser context), but mongo
+// requires explicit db in role document -> substitute user DB when db is empty.
 func rolesToBSON(roles []mongoRole) bson.A {
 	arr := bson.A{}
 	for _, r := range roles {
@@ -258,8 +259,8 @@ func rolesToBSON(roles []mongoRole) bson.A {
 	return arr
 }
 
-// parseRoles разбирает params.roles — массив {role, db}. Пустой db наследует БД
-// юзера (userDB). Пустой массив на present → ошибка (юзер без ролей бессмыслен).
+// parseRoles parses params.roles: array of {role, db}. Empty db inherits user's DB
+// (userDB). Empty array on present -> error (user without roles is meaningless).
 func parseRoles(v *structpb.Value, userDB string) ([]mongoRole, error) {
 	items := listField(v)
 	if len(items) == 0 {
@@ -284,9 +285,9 @@ func parseRoles(v *structpb.Value, userDB string) ([]mongoRole, error) {
 	return out, nil
 }
 
-// validateUser — статические проверки user-state: addr + name обязательны, state
-// (если задан) ∈ {present, absent}. roles/password проверяются в Apply (зависят
-// от state present).
+// validateUser performs static checks for user-state: addr + name are required,
+// state (if set) is in {present, absent}. roles/password are checked in Apply
+// (depend on state present).
 func validateUser(f map[string]*structpb.Value) []string {
 	var errs []string
 	errs = append(errs, validateAddr(f)...)

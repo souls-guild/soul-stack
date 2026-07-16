@@ -11,20 +11,20 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// secretPass — пароль, который НИКОГДА не должен утечь в события/ошибки/stderr
-// (ИБ-инвариант ADR-010). Длинный/уникальный, чтобы поиск подстроки был надёжен.
+// secretPass is a password that must NEVER leak into events/errors/stderr
+// (security invariant ADR-010). Long/unique so substring search is reliable.
 const secretPass = "vault-resolved-supersecret-9f3a7c1e2b"
 
-// cmdCall — записанный вызов RunCommand (db + документ команды) для проверки
-// порядка/наличия команд и того, что пароль не утёк в аргументы.
+// cmdCall records a RunCommand call (db + command document) to check command
+// order/presence and that password did not leak into arguments.
 type cmdCall struct {
 	db  string
 	cmd bson.D
 }
 
-// fakeConn — in-memory mongoConn: пишет каждый вызов, отдаёт скриптованные
-// ответы. Позволяет доказать localhost-exception fallback, идемпотентность и
-// секрет-инварианты без живого mongod.
+// fakeConn is an in-memory mongoConn: records every call and returns scripted
+// responses. Lets tests prove localhost-exception fallback, idempotency, and
+// secret invariants without a live mongod.
 type fakeConn struct {
 	cfg    connConfig
 	calls  []cmdCall
@@ -32,9 +32,9 @@ type fakeConn struct {
 	closed bool
 
 	pingErr error
-	// cmdErrByName — ошибка на команду с данным первым ключом (usersInfo/createUser/…).
+	// cmdErrByName is the error for a command with this first key (usersInfo/createUser/...).
 	cmdErrByName map[string]error
-	// rawByName — сырой ответ на команду с данным первым ключом.
+	// rawByName is the raw response for a command with this first key.
 	rawByName map[string]bson.Raw
 }
 
@@ -59,19 +59,19 @@ func (f *fakeConn) RunCommand(_ context.Context, db string, cmd bson.D) (bson.Ra
 			return raw, nil
 		}
 	}
-	// Дефолт — успешный {ok: 1}.
+	// Default is successful {ok: 1}.
 	return okRaw(), nil
 }
 
 func (f *fakeConn) Close(_ context.Context) error { f.closed = true; return nil }
 
-// okRaw — bson-ответ {ok: 1} (успешная команда).
+// okRaw is bson response {ok: 1} (successful command).
 func okRaw() bson.Raw {
 	b, _ := bson.Marshal(bson.D{{Key: "ok", Value: int32(1)}})
 	return b
 }
 
-// usersRaw — ответ usersInfo с массивом users указанной длины (n>0 → юзер есть).
+// usersRaw is usersInfo response with users array of given length (n>0 -> user exists).
 func usersRaw(n int) bson.Raw {
 	arr := bson.A{}
 	for i := 0; i < n; i++ {
@@ -81,7 +81,7 @@ func usersRaw(n int) bson.Raw {
 	return b
 }
 
-// applyStream — локальный fake grpc-stream (паритет с sdk fakeApplyStream).
+// applyStream is a local fake grpc-stream (parity with sdk fakeApplyStream).
 type applyStream struct {
 	grpc.ServerStreamingServer[pluginv1.ApplyEvent]
 	sent []*pluginv1.ApplyEvent
@@ -106,7 +106,7 @@ func mustStruct(t *testing.T, m map[string]any) *structpb.Struct {
 	return s
 }
 
-// hasCommand — был ли вызов RunCommand с первым ключом name (в любой БД).
+// hasCommand reports whether RunCommand was called with first key name (in any DB).
 func hasCommand(calls []cmdCall, name string) bool {
 	for _, c := range calls {
 		if len(c.cmd) > 0 && c.cmd[0].Key == name {
@@ -116,7 +116,7 @@ func hasCommand(calls []cmdCall, name string) bool {
 	return false
 }
 
-// commandValue — значение первого поля команды name (напр. имя юзера в createUser).
+// commandValue is the first field value of command name (for example user name in createUser).
 func commandValue(calls []cmdCall, name string) (any, bool) {
 	for _, c := range calls {
 		if len(c.cmd) > 0 && c.cmd[0].Key == name {
@@ -126,8 +126,8 @@ func commandValue(calls []cmdCall, name string) (any, bool) {
 	return nil, false
 }
 
-// commandField — значение поля field команды с первым ключом cmdName (напр. pwd в
-// createUser-документе). Для проверки, что pwd = пароль СОЗДАВАЕМОГО юзера.
+// commandField is field value of command with first key cmdName (for example pwd
+// in createUser document). Used to check pwd = password of the CREATED user.
 func commandField(calls []cmdCall, cmdName, field string) (any, bool) {
 	for _, c := range calls {
 		if len(c.cmd) == 0 || c.cmd[0].Key != cmdName {
@@ -142,25 +142,26 @@ func commandField(calls []cmdCall, cmdName, field string) (any, bool) {
 	return nil, false
 }
 
-// assertEventsNoSecret — ни в одном событии (Message/сериализованный Output) нет
-// пароля (ИБ-инвариант ADR-010).
+// assertEventsNoSecret verifies no event (Message/serialized Output) contains
+// password (security invariant ADR-010).
 func assertEventsNoSecret(t *testing.T, s *applyStream) {
 	t.Helper()
 	for _, e := range s.sent {
 		if strings.Contains(e.GetMessage(), secretPass) {
-			t.Errorf("пароль утёк в Message события: %q", e.GetMessage())
+			t.Errorf("password leaked into event Message: %q", e.GetMessage())
 		}
 		if e.GetOutput() != nil {
 			if strings.Contains(e.GetOutput().String(), secretPass) {
-				t.Errorf("пароль утёк в Output события: %q", e.GetOutput().String())
+				t.Errorf("password leaked into event Output: %q", e.GetOutput().String())
 			}
 		}
 	}
 }
 
-// commandCarriesSecretExcept — есть ли пароль в АРГУМЕНТАХ какой-либо команды,
-// КРОМЕ createUser (где pwd — легитимная часть контракта mongo, но она уходит на
-// провод, а НЕ в события). Для проверки «пароль не течёт в неожиданные места».
+// commandCarriesSecretExcept checks whether password appears in ARGUMENTS of any
+// command EXCEPT createUser (where pwd is a legitimate part of mongo contract, but
+// goes over the wire, NOT into events). Used to check "password does not leak into
+// unexpected places".
 func commandCarriesSecretOutsideCreateUser(calls []cmdCall, secret string) bool {
 	for _, c := range calls {
 		name := ""
@@ -168,7 +169,7 @@ func commandCarriesSecretOutsideCreateUser(calls []cmdCall, secret string) bool 
 			name = c.cmd[0].Key
 		}
 		if name == "createUser" {
-			continue // pwd тут ожидаем (createUser-контракт)
+			continue // pwd is expected here (createUser contract)
 		}
 		for _, e := range c.cmd {
 			if s, ok := e.Value.(string); ok && strings.Contains(s, secret) {
