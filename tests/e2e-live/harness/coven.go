@@ -8,25 +8,27 @@ import (
 	"time"
 )
 
-// AddSoulToCoven добавляет Coven-метку в `souls.coven` i-го soul-контейнера.
+// AddSoulToCoven adds a Coven label to `souls.coven` for the i-th soul
+// container.
 //
-// Зачем: roster прогона scenario резолвится по Coven-членству
-// (`WHERE <incarnation.name> = ANY(coven)`, ADR-008 — incarnation.name есть
-// корневая Coven-метка; keeper/internal/topology/resolver.go::rosterSQL). Без
-// этого incarnation «не имеет connected-хостов» → run.go abort `no_hosts` ДО
-// dispatch-фазы → НИ ОДНОЙ строки apply_runs (run.go §3) → WaitApplySuccess
-// крутится до timeout. Симметрично L3a-harness (tests/e2e/harness/cert.go::
-// AddSoulToCoven).
+// Why: the scenario run's roster is resolved by Coven membership
+// (`WHERE <incarnation.name> = ANY(coven)`, ADR-008 — incarnation.name is
+// the root Coven label; keeper/internal/topology/resolver.go::rosterSQL).
+// Without this the incarnation "has no connected hosts" -> run.go aborts
+// with `no_hosts` BEFORE the dispatch phase -> zero apply_runs rows (run.go
+// §3) -> WaitApplySuccess spins until timeout. Symmetric with the L3a
+// harness (tests/e2e/harness/cert.go::AddSoulToCoven).
 //
-// IssueBootstrapToken создаёт строку `souls` с пустым coven, а Bootstrap-flow
-// апгрейдит только status — coven остаётся пустым. Этот шаг закрывает разрыв
-// «connected, но не в roster-е incarnation».
+// IssueBootstrapToken creates a `souls` row with an empty coven, and the
+// Bootstrap flow only upgrades status — coven stays empty. This step closes
+// the gap of "connected, but not in the incarnation's roster".
 //
-// Идемпотентно (array_append только если метки ещё нет). Fatal при ошибке.
+// Idempotent (array_append only if the label isn't there yet). Fatal on
+// error.
 func (s *Stack) AddSoulToCoven(t *testing.T, soulIndex int, coven string) {
 	t.Helper()
 	if soulIndex < 0 || soulIndex >= len(s.SoulContainers) {
-		t.Fatalf("AddSoulToCoven(%d): out of range (создано %d soul-контейнеров)", soulIndex, len(s.SoulContainers))
+		t.Fatalf("AddSoulToCoven(%d): out of range (%d soul containers created)", soulIndex, len(s.SoulContainers))
 	}
 	sid := s.SoulContainers[soulIndex].SID
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -40,21 +42,23 @@ func (s *Stack) AddSoulToCoven(t *testing.T, soulIndex int, coven string) {
 	}
 }
 
-// WaitSoulprintReported блокируется до появления непустого souls.soulprint_facts
-// у i-го soul-контейнера.
+// WaitSoulprintReported blocks until souls.soulprint_facts becomes non-empty
+// for the i-th soul container.
 //
-// Зачем: сервисы с keeper-side soulprint-резолвом (redis-create читает
-// soulprint.self.os.arch при рендере URL release-tarball-ов redis-exporter/
-// node-exporter, ADR-018) требуют, чтобы факты хоста уже были в БД к render-фазе
-// create-прогона. Реальный soul шлёт первый SoulprintReport СРАЗУ при установке
-// сессии (soul/cmd/soul/main.go::handleSession), но это отдельное сообщение ПОСЛЕ
-// status='connected' — между connected и обработкой SoulprintReport есть окно.
-// Без ожидания первый CreateIncarnation может попасть в render с пустым
-// soulprint_facts → «no such key: arch». Ждём непустые факты ДО Create.
+// Why: services with keeper-side soulprint resolution (redis-create reads
+// soulprint.self.os.arch when rendering the redis-exporter/node-exporter
+// release-tarball URLs, ADR-018) require host facts to already be in the DB
+// by render time of the create run. A real soul sends its first
+// SoulprintReport IMMEDIATELY on session establishment
+// (soul/cmd/soul/main.go::handleSession), but that's a separate message
+// AFTER status='connected' — there's a window between connected and
+// SoulprintReport being processed. Without waiting, the first
+// CreateIncarnation could hit render with empty soulprint_facts -> "no such
+// key: arch". We wait for non-empty facts BEFORE Create.
 func (s *Stack) WaitSoulprintReported(t *testing.T, soulIndex int, timeoutSec int) {
 	t.Helper()
 	if soulIndex < 0 || soulIndex >= len(s.SoulContainers) {
-		t.Fatalf("WaitSoulprintReported(%d): out of range (создано %d soul-контейнеров)", soulIndex, len(s.SoulContainers))
+		t.Fatalf("WaitSoulprintReported(%d): out of range (%d soul containers created)", soulIndex, len(s.SoulContainers))
 	}
 	sid := s.SoulContainers[soulIndex].SID
 	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
@@ -72,5 +76,5 @@ func (s *Stack) WaitSoulprintReported(t *testing.T, soulIndex int, timeoutSec in
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
-	t.Fatalf("WaitSoulprintReported(%s): soulprint_facts не заполнен за %ds", sid, timeoutSec)
+	t.Fatalf("WaitSoulprintReported(%s): soulprint_facts not populated within %ds", sid, timeoutSec)
 }

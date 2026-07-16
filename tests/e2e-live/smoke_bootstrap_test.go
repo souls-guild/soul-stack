@@ -10,44 +10,44 @@ import (
 	"github.com/souls-guild/soul-stack/tests/e2e-live/harness"
 )
 
-// TestL3bBootstrap_OneSoul — минимальный smoke L3b-2: реальный Bootstrap-flow
-// одного soul-контейнера. Проверяет:
-//   - soul init (CSR → Keeper.Bootstrap) проходит без ошибок;
-//   - soul run выходит на souls.status='connected' (waitForSoulConnected внутри
+// TestL3bBootstrap_OneSoul - minimal smoke L3b-2: a real Bootstrap flow for
+// one soul container. Checks:
+//   - soul init (CSR -> Keeper.Bootstrap) completes without errors;
+//   - soul run reaches souls.status='connected' (waitForSoulConnected inside
 //     SpawnSoulContainer);
-//   - audit-event `soul.bootstrapped` записан Keeper-handler-ом (это
-//     покрытие, которое L3a со stub-soul-ом не даёт — там Bootstrap RPC не
-//     вызывается).
+//   - the `soul.bootstrapped` audit event is recorded by the Keeper handler (this
+//     is coverage L3a with a stub-soul doesn't give - there the Bootstrap RPC isn't
+//     called).
 //
-// Дальнейшие L3b-slice-ы (3+) поднимут на этой инфре реальный apply (nginx и
-// т.п.); тут останавливаемся на онбординге.
+// Further L3b slices (3+) will bring up a real apply (nginx etc.) on this infra;
+// here we stop at onboarding.
 func TestL3bBootstrap_OneSoul(t *testing.T) {
 	stack := harness.NewStack(t, harness.Config{
-		// ExamplePath не нужен на L3b-2 (apply не запускаем); поле останется
-		// пустым — git-seed скипается каноном NewStack.
+		// ExamplePath is not needed for L3b-2 (we don't run apply); the field stays
+		// empty - git-seed is skipped by NewStack's default.
 		Souls: 1,
 	})
 	defer stack.Cleanup()
 
 	if got := len(stack.SoulContainers); got != 1 {
-		t.Fatalf("ожидался 1 soul-контейнер, получено %d", got)
+		t.Fatalf("expected 1 soul container, got %d", got)
 	}
 	sc := stack.SoulContainers[0]
 	const wantSID = "soul-live-a.example.com"
 	if sc.SID != wantSID {
-		t.Errorf("SoulContainer.SID = %q, ожидалось %q", sc.SID, wantSID)
+		t.Errorf("SoulContainer.SID = %q, expected %q", sc.SID, wantSID)
 	}
 
-	// soul.bootstrapped — пишется keeper-side bootstrapHandler-ом после
-	// успешного COMMIT-а транзакции «burn token + insert seed + status flip».
-	// Subset включает SID (стабильное поле payload-а).
+	// soul.bootstrapped is written by the keeper-side bootstrapHandler after
+	// a successful COMMIT of the "burn token + insert seed + status flip" transaction.
+	// The subset includes SID (a stable payload field).
 	stack.AssertAuditEvent(t, "soul.bootstrapped", map[string]any{
 		"sid": wantSID,
 	})
 
-	// Sanity-check: souls-строка в connected-статусе видна напрямую (waitFor*
-	// внутри Spawn уже проверил, дополнительная гарантия после full-Cleanup-
-	// gate-а: snapshot снят до teardown-а).
+	// Sanity-check: the souls row's connected status is visible directly (waitFor*
+	// inside Spawn already checked it, this is an extra guarantee after the full-Cleanup
+	// gate: the snapshot is taken before teardown).
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var status string
@@ -56,6 +56,6 @@ func TestL3bBootstrap_OneSoul(t *testing.T) {
 		t.Fatalf("SELECT souls.status: %v", err)
 	}
 	if status != "connected" {
-		t.Errorf("souls.status = %q, ожидался connected", status)
+		t.Errorf("souls.status = %q, expected connected", status)
 	}
 }

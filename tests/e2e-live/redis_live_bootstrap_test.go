@@ -1,18 +1,18 @@
 //go:build e2e_live
 
-// Общие live-redis-bootstrap-хелперы для L3b-тестов пакета e2e_live_test.
+// Common live-redis-bootstrap helpers for the L3b tests in package e2e_live_test.
 //
-// Поднимают standalone-репликацию (host-0 master, host-1/2 REPLICAOF host-0)
-// прямым Exec-ом в soul-контейнерах — НЕ через scenario-apply: нужен лишь
-// дискриминатор `redis-cli role` master vs slave для probe→where / when-gating
-// тестов (fc5_when_gating_test.go). Это standalone replication (REPLICAOF), НЕ
+// Bring up standalone replication (host-0 master, host-1/2 REPLICAOF host-0)
+// via a direct Exec in the soul containers - NOT via scenario-apply: only the
+// `redis-cli role` master vs slave discriminator is needed for probe->where / when-gating
+// tests (fc5_when_gating_test.go). This is standalone replication (REPLICAOF), NOT
 // cluster-mode.
 //
-// Вынесено в отдельный файл при redis-консолидации (.pm/tasks/2026-06-22-redis-
-// consolidation): прежние tests, державшие эти хелперы (redis_cluster_update_acl /
-// redis_cluster_create на удалённом сервисе redis-cluster), сняты — но
-// bootstrapLiveRedis/registerStdout переиспользует FC-5. Стоп-правило «не плодим
-// второй redis-bootstrap».
+// Factored into a separate file during the redis consolidation (.pm/tasks/2026-06-22-redis-
+// consolidation): the earlier tests that held these helpers (redis_cluster_update_acl /
+// redis_cluster_create on the now-removed redis-cluster service) were removed - but
+// bootstrapLiveRedis/registerStdout is reused by FC-5. Stop-rule: don't grow a
+// second redis-bootstrap.
 package e2e_live_test
 
 import (
@@ -25,23 +25,23 @@ import (
 	"github.com/souls-guild/soul-stack/tests/e2e-live/harness"
 )
 
-// bootstrapLiveRedis ставит redis-server на все три контейнера и поднимает
-// standalone-репликацию: host-0 — master, host-1/2 — REPLICAOF host-0. Возвращает
-// IP host-0 (master). Идемпотентно по шагам (повторный nohup/REPLICAOF безвреден).
+// bootstrapLiveRedis installs redis-server on all three containers and brings up
+// standalone replication: host-0 - master, host-1/2 - REPLICAOF host-0. Returns
+// host-0's (master) IP. Idempotent per step (a repeated nohup/REPLICAOF is harmless).
 func bootstrapLiveRedis(t *testing.T, stack *harness.Stack) (masterIP string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 
-	// apt install на всех трёх (redis-server + redis-tools/redis-cli).
+	// apt install on all three (redis-server + redis-tools/redis-cli).
 	for i := range stack.SoulContainers {
 		execOK(t, ctx, stack, i, []string{"sh", "-c",
 			"apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq redis-server"},
 			"apt install redis-server")
 	}
 
-	// Запуск redis-server в фоне на каждой ноде (bind 0.0.0.0, protected-mode no
-	// для cross-container replication). Idempotent: unless ping PONG.
+	// Start redis-server in the background on each node (bind 0.0.0.0, protected-mode no
+	// for cross-container replication). Idempotent: unless ping PONG.
 	for i := range stack.SoulContainers {
 		execOK(t, ctx, stack, i, []string{"sh", "-c",
 			"redis-cli -p 6379 ping 2>/dev/null | grep -q PONG || " +
@@ -49,22 +49,22 @@ func bootstrapLiveRedis(t *testing.T, stack *harness.Stack) (masterIP string) {
 			"start redis-server")
 	}
 
-	// Health-gate: redis отвечает PONG на каждой ноде.
+	// Health-gate: redis responds PONG on every node.
 	for i := range stack.SoulContainers {
 		waitRedisPong(t, ctx, stack, i)
 	}
 
-	// IP мастера (host-0) — REPLICAOF целевой адрес для реплик.
+	// Master (host-0) IP - the REPLICAOF target address for replicas.
 	out, code, err := stack.SoulContainers[0].Exec(ctx, []string{"sh", "-c", "hostname -i | awk '{print $1}'"})
 	if err != nil || code != 0 {
-		t.Fatalf("bootstrapLiveRedis: hostname -i на master: code=%d err=%v out=%s", code, err, out)
+		t.Fatalf("bootstrapLiveRedis: hostname -i on master: code=%d err=%v out=%s", code, err, out)
 	}
 	masterIP = strings.TrimSpace(out)
 	if masterIP == "" {
-		t.Fatalf("bootstrapLiveRedis: пустой master IP (hostname -i = %q)", out)
+		t.Fatalf("bootstrapLiveRedis: empty master IP (hostname -i = %q)", out)
 	}
 
-	// host-1/2 → REPLICAOF host-0. Дожидаемся master_link_status:up.
+	// host-1/2 -> REPLICAOF host-0. Wait for master_link_status:up.
 	for i := 1; i < len(stack.SoulContainers); i++ {
 		execOK(t, ctx, stack, i, []string{"sh", "-c",
 			fmt.Sprintf("redis-cli -p 6379 replicaof %s 6379", masterIP)},
@@ -75,7 +75,7 @@ func bootstrapLiveRedis(t *testing.T, stack *harness.Stack) (masterIP string) {
 	return masterIP
 }
 
-// execOK выполняет команду в i-м контейнере и фейлит при exit!=0.
+// execOK runs a command in the i-th container and fails on exit!=0.
 func execOK(t *testing.T, ctx context.Context, stack *harness.Stack, soulIdx int, cmd []string, desc string) {
 	t.Helper()
 	out, code, err := stack.SoulContainers[soulIdx].Exec(ctx, cmd)
@@ -87,7 +87,7 @@ func execOK(t *testing.T, ctx context.Context, stack *harness.Stack, soulIdx int
 	}
 }
 
-// waitRedisPong поллит redis-cli ping до PONG (cold-start redis-server ~1-3s).
+// waitRedisPong polls redis-cli ping until PONG (cold-start redis-server ~1-3s).
 func waitRedisPong(t *testing.T, ctx context.Context, stack *harness.Stack, soulIdx int) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
@@ -98,11 +98,11 @@ func waitRedisPong(t *testing.T, ctx context.Context, stack *harness.Stack, soul
 		}
 		time.Sleep(time.Second)
 	}
-	t.Fatalf("waitRedisPong[%d]: redis не ответил PONG за 30s", soulIdx)
+	t.Fatalf("waitRedisPong[%d]: redis did not respond PONG within 30s", soulIdx)
 }
 
-// waitReplicaLinkUp поллит master_link_status:up в `redis-cli info replication`
-// на реплике (REPLICAOF-handshake + initial sync).
+// waitReplicaLinkUp polls master_link_status:up in `redis-cli info replication`
+// on the replica (REPLICAOF handshake + initial sync).
 func waitReplicaLinkUp(t *testing.T, ctx context.Context, stack *harness.Stack, soulIdx int) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
@@ -117,12 +117,12 @@ func waitReplicaLinkUp(t *testing.T, ctx context.Context, stack *harness.Stack, 
 		}
 		time.Sleep(time.Second)
 	}
-	t.Fatalf("waitReplicaLinkUp[%d]: master_link_status:up не достигнут за 30s\nlast info:\n%s", soulIdx, last)
+	t.Fatalf("waitReplicaLinkUp[%d]: master_link_status:up not reached within 30s\nlast info:\n%s", soulIdx, last)
 }
 
-// registerStdout читает register_data->>'stdout' probe-задачи (Passage 0,
-// plan_index 0) хоста sid. Доказывает, что реальный soul вернул TaskEvent с
-// register-данными probe-роли, а keeper их персистил в apply_task_register.
+// registerStdout reads register_data->>'stdout' from the probe task (Passage 0,
+// plan_index 0) of host sid. Proves that the real soul returned a TaskEvent with
+// the probe role's register data, and keeper persisted it into apply_task_register.
 func registerStdout(t *testing.T, stack *harness.Stack, applyID, sid string) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -133,7 +133,7 @@ func registerStdout(t *testing.T, stack *harness.Stack, applyID, sid string) str
 		 WHERE apply_id = $1 AND sid = $2 AND passage = 0
 		 ORDER BY plan_index ASC LIMIT 1`, applyID, sid).Scan(&stdout)
 	if err != nil {
-		t.Fatalf("registerStdout(%s): нет register probe-задачи passage=0 (реальный soul не вернул register?): %v", sid, err)
+		t.Fatalf("registerStdout(%s): no register probe task passage=0 (real soul didn't return register?): %v", sid, err)
 	}
 	return stdout
 }

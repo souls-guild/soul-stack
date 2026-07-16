@@ -10,10 +10,11 @@ import (
 	"time"
 )
 
-// DriftReport — read-проекция 200-body POST /v1/incarnations/{name}/check-drift
-// (scenario.DriftReport, ADR-031 Slice B). Поля — публичный JSON-контракт; типы
-// keeper-side не импортируем (E2E тестирует OpenAPI как чёрный ящик). Порт
-// tests/e2e/harness/drift.go под L3b (тот же direct-HTTP opClient.post).
+// DriftReport — read projection of the 200 body of POST
+// /v1/incarnations/{name}/check-drift (scenario.DriftReport, ADR-031 Slice
+// B). Fields are the public JSON contract; keeper-side types are not
+// imported (E2E tests OpenAPI as a black box). Port of
+// tests/e2e/harness/drift.go for L3b (same direct-HTTP opClient.post).
 type DriftReport struct {
 	CheckedAt   time.Time         `json:"checked_at"`
 	Incarnation string            `json:"incarnation"`
@@ -22,14 +23,14 @@ type DriftReport struct {
 	Summary     DriftSummary      `json:"summary"`
 }
 
-// DriftHostReport — per-host агрегат DriftReport.Hosts[].
+// DriftHostReport — per-host aggregate of DriftReport.Hosts[].
 type DriftHostReport struct {
 	SID    string            `json:"sid"`
 	Status string            `json:"status"` // drifted | clean | unsupported | failed.
 	Tasks  []DriftTaskResult `json:"tasks"`
 }
 
-// DriftTaskResult — per-task результат внутри DriftHostReport.Tasks[].
+// DriftTaskResult — per-task result within DriftHostReport.Tasks[].
 type DriftTaskResult struct {
 	Idx     int    `json:"idx"`
 	Module  string `json:"module"`
@@ -38,7 +39,7 @@ type DriftTaskResult struct {
 	Message string `json:"message,omitempty"`
 }
 
-// DriftSummary — counts-агрегат DriftReport.Summary.
+// DriftSummary — counts aggregate of DriftReport.Summary.
 type DriftSummary struct {
 	HostsDrifted     int `json:"hosts_drifted"`
 	HostsClean       int `json:"hosts_clean"`
@@ -46,14 +47,16 @@ type DriftSummary struct {
 	HostsFailed      int `json:"hosts_failed"`
 }
 
-// CheckDrift вызывает POST /v1/incarnations/{name}/check-drift (sync, ADR-031
-// Slice B) и возвращает разобранный DriftReport. input — converge-input-override
-// (nil = auto-from-state по конвенции имени). Любой не-200 — t.Fatal с телом.
+// CheckDrift calls POST /v1/incarnations/{name}/check-drift (sync, ADR-031
+// Slice B) and returns the decoded DriftReport. input is the converge input
+// override (nil = auto-from-state by naming convention). Any non-200 is a
+// t.Fatal with the body.
 //
-// L3b-контракт (отличие от L3a): drift собирается из РЕАЛЬНОГО SoulModule.Plan
-// core-модуля внутри soul-контейнера (а не stub.SetDryRunPlan) — Keeper рендерит
-// converge, рассылает ApplyRequest{dry_run:true}, Soul зовёт core.file.Plan
-// (read-safe) и отдаёт per-task changed.
+// L3b contract (difference from L3a): drift is collected from the REAL
+// SoulModule.Plan of the core module inside the soul container (not
+// stub.SetDryRunPlan) — Keeper renders the converge, sends
+// ApplyRequest{dry_run:true}, Soul calls core.file.Plan (read-safe) and
+// returns per-task changed.
 func (s *Stack) CheckDrift(t *testing.T, incarnationName string, input map[string]any) DriftReport {
 	t.Helper()
 	c := s.opClient(t)
@@ -67,7 +70,7 @@ func (s *Stack) CheckDrift(t *testing.T, incarnationName string, input map[strin
 		t.Fatalf("CheckDrift %s: http: %v", incarnationName, err)
 	}
 	if status != http.StatusOK {
-		t.Fatalf("CheckDrift %s: status %d, ожидался 200; body=%s", incarnationName, status, string(resp))
+		t.Fatalf("CheckDrift %s: status %d, expected 200; body=%s", incarnationName, status, string(resp))
 	}
 	var rep DriftReport
 	if err := json.Unmarshal(resp, &rep); err != nil {

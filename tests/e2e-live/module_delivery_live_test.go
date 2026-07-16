@@ -1,26 +1,27 @@
 //go:build e2e_live
 
-// L3b live-гейт доставки SoulModule-плагинов (NIM-32 S2, ADR-065 S5, живая
-// гарантия NIM-8 auto-синтеза). Главный тест инициативы: доказывает НА ЖИВОМ
-// стенде (keeper + PG/Redis/Vault + подлинный soul-контейнер) весь путь
-// core.module.installed, который L0/integration покрывают только keeper-side
-// (module_installs_integration_test.go — dispatched-план без реального Soul).
+// L3b live gate for SoulModule plugin delivery (NIM-32 S2, ADR-065 S5, a live
+// guarantee for NIM-8 auto-synthesis). The initiative's main test: proves ON A
+// LIVE stand (keeper + PG/Redis/Vault + a genuine soul container) the full
+// core.module.installed path, which L0/integration only cover keeper-side
+// (module_installs_integration_test.go - a dispatched plan without a real Soul).
 //
-// Fixture tests/e2e-live/module-delivery-live: service.yml декларирует
-// community.redis в modules[] и НЕ содержит явного install-шага. Синтез, fetch,
-// verify, atomic-rename в host-слот и hot-register — всё наблюдается на wire.
+// Fixture tests/e2e-live/module-delivery-live: service.yml declares
+// community.redis in modules[] and does NOT contain an explicit install step.
+// Synthesis, fetch, verify, atomic-rename into the host slot, and hot-register
+// are all observed on the wire.
 //
-// Порядок (он же — цепочка ассертов):
+// Order (also the assert chain):
 //
-//	create(assert 1) → verify_live до allow(assert 2) → allow+unlock →
-//	verify_live(assert 3,4) → host-слот(assert 5) → verify_live повтор(assert 6).
+//	create(assert 1) -> verify_live before allow(assert 2) -> allow+unlock ->
+//	verify_live(assert 3,4) -> host slot(assert 5) -> verify_live repeat(assert 6).
 //
-// Per-task статусы читаются из audit_log (event_type=task.executed) по
-// ГЛОБАЛЬНОМУ plan_index — единственная per-task persistence-поверхность keeper-а
-// (см. harness/asserts.go doc-блок FC-0). Идентичность синтез-шага доказывается
-// error.module=core.module в негативе (assert 2): plan_index 0 = синтезированный
-// core.module.installed, plan_index 1 = потребитель (структуру подтверждает
-// module_installs_integration_test.go::TestIntegration_ModuleInstallSynthesis).
+// Per-task statuses are read from audit_log (event_type=task.executed) by
+// GLOBAL plan_index - the only per-task persistence surface of keeper (see the
+// harness/asserts.go doc block FC-0). Synthesis-step identity is proved by
+// error.module=core.module in the negative case (assert 2): plan_index 0 = the
+// synthesized core.module.installed, plan_index 1 = the consumer (structure
+// confirmed by module_installs_integration_test.go::TestIntegration_ModuleInstallSynthesis).
 package e2e_live_test
 
 import (
@@ -35,9 +36,9 @@ import (
 const (
 	moduleDeliverySID  = "soul-live-a.example.com"
 	moduleDeliverySlot = "/var/lib/soul-stack/modules/community-redis" // ADR-065(g) <paths.modules>/<ns>-<name>
-	// createAuthoredTasks — число авторских задач scenario/create (pkg+service),
-	// база assert 1 (create-план без синтеза). Поднять при добавлении задачи в
-	// scenario/create/main.yml.
+	// createAuthoredTasks - number of authored tasks in scenario/create (pkg+service),
+	// baseline for assert 1 (create plan without synthesis). Bump when adding a
+	// task to scenario/create/main.yml.
 	createAuthoredTasks = 2
 )
 
@@ -55,120 +56,122 @@ func TestL3bModuleDeliveryLive_SynthesisFetchHotRegister(t *testing.T) {
 	defer stack.Cleanup()
 
 	if got := len(stack.SoulContainers); got != 1 {
-		t.Fatalf("ожидался 1 soul-контейнер, получено %d", got)
+		t.Fatalf("expected 1 soul container, got %d", got)
 	}
 	sid := stack.SoulContainers[0].SID
 	if sid != moduleDeliverySID {
-		t.Fatalf("SoulContainers[0].SID = %q, ожидалось %q", sid, moduleDeliverySID)
+		t.Fatalf("SoulContainers[0].SID = %q, expected %q", sid, moduleDeliverySID)
 	}
 
 	const incName = "module-delivery"
 
-	// Coven-членство ДО create: roster резолвится по incarnation.name ∈ coven[]
-	// (ADR-008). WaitSoulprintReported — soul полностью онлайн до day-2 roster-резолва.
+	// Coven membership BEFORE create: the roster resolves via incarnation.name ∈ coven[]
+	// (ADR-008). WaitSoulprintReported - soul fully online before the day-2 roster resolve.
 	stack.AddSoulToCoven(t, 0, incName)
 	stack.WaitSoulprintReported(t, 0, 60)
 
-	// ── create: redis core-модулями, БЕЗ community.redis-потребителя ──────────
-	// 300 c — apt-get update + install redis-server в свежем Debian-12 (как redis-live).
+	// -- create: redis via core modules, WITHOUT the community.redis consumer --
+	// 300s - apt-get update + install redis-server on a fresh Debian-12 (like redis-live).
 	inc, createApply := stack.CreateIncarnationWithApply(t, incName, "module-delivery-live@main", nil)
 	stack.WaitApplySuccess(t, createApply, 300)
 	stack.WaitIncarnationReady(t, inc, 30)
 
-	// ── АССЕРТ 1: create-план БЕЗ синтез-шага (ADR-065(e)) ────────────────────
-	// modules[] объявлен, но create не использует community.redis → синтеза нет.
-	// Прямая проверка «в плане нет core.module.installed» НЕВОЗМОЖНА: имя/адрес
-	// модуля в audit_log task.executed есть ТОЛЬКО внутри error{} (заполняется на
-	// FAILED, shared/audit.BuildTaskExecutedPayload), а create весь SUCCESS → у его
-	// задач module-поля нет. Поэтому считаем задачи: create = РОВНО
-	// createAuthoredTasks (pkg+service), синтез добавил бы третий distinct
-	// plan_index. Транзитивная страховка: синтез в create → install без активного
-	// допуска фейл-клоузнулся бы module_not_allowed → error_locked →
-	// WaitApplySuccess выше уже упал бы.
+	// -- ASSERT 1: create plan WITHOUT a synthesis step (ADR-065(e)) ----------
+	// modules[] is declared, but create doesn't use community.redis -> no synthesis.
+	// A direct check "no core.module.installed in the plan" is IMPOSSIBLE: the
+	// module name/address in audit_log task.executed only appears inside error{}
+	// (filled on FAILED, shared/audit.BuildTaskExecutedPayload), and create is
+	// all SUCCESS -> its tasks have no module fields. So we count tasks: create
+	// = EXACTLY createAuthoredTasks (pkg+service), synthesis would add a third
+	// distinct plan_index. Transitive safety net: synthesis in create -> install
+	// without an active allow would fail-close with module_not_allowed ->
+	// error_locked -> WaitApplySuccess above would already have failed.
 	if n := distinctTaskCount(t, stack, createApply, sid); n != createAuthoredTasks {
-		t.Fatalf("assert1: create-прогон = %d distinct plan_index, ожидалось %d (лишний = впрыснутый core.module.installed без потребителя)", n, createAuthoredTasks)
+		t.Fatalf("assert1: create run = %d distinct plan_index, expected %d (extra = injected core.module.installed without a consumer)", n, createAuthoredTasks)
 	}
 
-	// ── АССЕРТ 2: fail-closed ДО allow (ADR-065(f)) ───────────────────────────
-	// verify_live зовёт community.redis.command → keeper синтезирует
-	// core.module.installed (plan_index 0) ПЕРЕД потребителем (plan_index 1) и
-	// диспатчит план БЕЗ активного Sigil (keeper не fail-fast-ит, ADR-065(e)).
-	// Soul-side allow-check фейлит install-шаг module_not_allowed ДО единого байта.
+	// -- ASSERT 2: fail-closed BEFORE allow (ADR-065(f)) ----------------------
+	// verify_live calls community.redis.command -> keeper synthesizes
+	// core.module.installed (plan_index 0) BEFORE the consumer (plan_index 1)
+	// and dispatches the plan WITHOUT an active Sigil (keeper doesn't fail-fast,
+	// ADR-065(e)). The soul-side allow-check fails the install step with
+	// module_not_allowed before a single byte moves.
 	failApply := stack.RunScenario(t, incName, "verify_live", nil)
 	stack.WaitIncarnationStatus(t, incName, "error_locked", 120)
 
 	code, mod, msg := taskErrorByPlan(t, stack, failApply, sid, 0)
-	// module Failed-событие → TaskError.Code=module.failed, Module=core.module
-	// (SplitModuleAddr отрезает state), reason module_not_allowed — префикс message
-	// (applyrunner.go, installed.go). error.module=core.module доказывает: plan_index
-	// 0 = синтезированный core.module.installed.
+	// module Failed event -> TaskError.Code=module.failed, Module=core.module
+	// (SplitModuleAddr strips state), reason module_not_allowed - prefix of
+	// message (applyrunner.go, installed.go). error.module=core.module proves:
+	// plan_index 0 = the synthesized core.module.installed.
 	if code != "module.failed" {
-		t.Fatalf("assert2: install-шаг (plan_index 0) error.code=%q, ожидался module.failed (fail-closed)", code)
+		t.Fatalf("assert2: install step (plan_index 0) error.code=%q, expected module.failed (fail-closed)", code)
 	}
 	if mod != "core.module" {
-		t.Fatalf("assert2: install-шаг error.module=%q, ожидался core.module (это и есть синтез-шаг)", mod)
+		t.Fatalf("assert2: install step error.module=%q, expected core.module (this is the synthesis step)", mod)
 	}
 	if !strings.Contains(msg, "module_not_allowed") || !strings.Contains(msg, "community.redis") {
-		t.Fatalf("assert2: install-шаг error.message=%q, ожидалось module_not_allowed + community.redis", msg)
+		t.Fatalf("assert2: install step error.message=%q, expected module_not_allowed + community.redis", msg)
 	}
-	// БЕЗ fetch-байт: allow-check ДО fetch → host-слот НЕ материализован.
+	// NO fetch bytes: allow-check happens BEFORE fetch -> the host slot is NOT materialized.
 	assertHostFileAbsent(t, stack, 0, moduleDeliverySlot)
 
-	// ── allow + unlock + повтор verify_live ──────────────────────────────────
-	// AllowSoulModule (keeper-side seal) → активный Sigil. Unlock снимает
-	// error_locked после намеренного fail (иначе lockRun отклонит повтор).
+	// -- allow + unlock + repeat verify_live -----------------------------------
+	// AllowSoulModule (keeper-side seal) -> active Sigil. Unlock clears
+	// error_locked after the intentional failure (otherwise lockRun rejects the repeat).
 	stack.AllowSoulModule(t, "community", "redis", harness.CommunityRedisPluginRef)
-	stack.Unlock(t, incName, "e2e NIM-32: разблокировать после негативного fail-closed")
+	stack.Unlock(t, incName, "e2e NIM-32: unlock after negative fail-closed")
 
 	okApply := stack.RunScenario(t, incName, "verify_live", nil)
-	// 180 c — FetchModule (bytes Keeper→Soul) + verify + hot-register + go-plugin
-	// PING. Быстрее create (без apt), но с запасом на go-plugin cold-start.
+	// 180s - FetchModule (bytes Keeper->Soul) + verify + hot-register + go-plugin
+	// PING. Faster than create (no apt), but with margin for the go-plugin cold start.
 	stack.WaitApplySuccess(t, okApply, 180)
 	stack.WaitIncarnationReady(t, inc, 30)
 
-	// ── АССЕРТ 3: install-шаг ПЕРЕД потребителем, changed=true (первая установка) ─
-	// plan_index 0 = синтез-install (идентичность — assert 2: error.module=core.module
-	// на том же plan_index); стоит ПЕРЕД потребителем (plan_index 1). Первая
-	// установка (sha256 диска ≠ допуск) → CHANGED.
+	// -- ASSERT 3: install step BEFORE the consumer, changed=true (first install) --
+	// plan_index 0 = synthesis-install (identity - assert 2: error.module=core.module
+	// on the same plan_index); comes BEFORE the consumer (plan_index 1). First
+	// install (disk sha256 != allow) -> CHANGED.
 	if st := taskStatusByPlan(t, stack, okApply, sid, 0); st != "TASK_STATUS_CHANGED" {
-		t.Fatalf("assert3: install-шаг (plan_index 0) status=%q, ожидался TASK_STATUS_CHANGED (первая установка)", st)
+		t.Fatalf("assert3: install step (plan_index 0) status=%q, expected TASK_STATUS_CHANGED (first install)", st)
 	}
 
-	// ── АССЕРТ 4: потребитель SUCCESS в ТОМ ЖЕ прогоне (hot-register), PONG ────
-	// community.redis.command (plan_index 1) исполнился ПОСЛЕ install в этом же
-	// прогоне без рестарта демона (ADR-065(d)). changed=false → OK; register
-	// result=PONG доказывает, что живой Redis ответил (failed_when-гейт пропустил).
+	// -- ASSERT 4: consumer SUCCESS in the SAME run (hot-register), PONG -------
+	// community.redis.command (plan_index 1) ran AFTER install in the same run
+	// without a daemon restart (ADR-065(d)). changed=false -> OK; register
+	// result=PONG proves the live Redis responded (the failed_when gate passed).
 	if st := taskStatusByPlan(t, stack, okApply, sid, 1); st != "TASK_STATUS_OK" {
-		t.Fatalf("assert4: потребитель community.redis.command (plan_index 1) status=%q, ожидался TASK_STATUS_OK", st)
+		t.Fatalf("assert4: consumer community.redis.command (plan_index 1) status=%q, expected TASK_STATUS_OK", st)
 	}
 	stack.AssertTaskRegisterField(t, okApply, sid, 1, "result", "PONG")
 
-	// ── АССЕРТ 5: host-слот раскладки ADR-065(g) ──────────────────────────────
-	// <paths.modules>/community-redis/{manifest.yaml, soul-mod-redis}; бинарь исполняемый.
+	// -- ASSERT 5: host slot layout ADR-065(g) ---------------------------------
+	// <paths.modules>/community-redis/{manifest.yaml, soul-mod-redis}; the binary is executable.
 	stack.AssertHostFileExists(t, 0, moduleDeliverySlot+"/manifest.yaml")
 	stack.AssertHostFileExists(t, 0, moduleDeliverySlot+"/soul-mod-redis")
 	assertHostFileExecutable(t, stack, 0, moduleDeliverySlot+"/soul-mod-redis")
 
-	// ── АССЕРТ 6: идемпотентность повторного прогона (ADR-065(c)) ─────────────
-	// sha256 установленного == активный допуск → install changed=false, fetch НЕ
-	// выполняется; потребитель снова SUCCESS. incarnation ready после okApply →
-	// обычный RunScenario (без unlock).
+	// -- ASSERT 6: idempotency of a repeat run (ADR-065(c)) --------------------
+	// sha256 of the installed binary == active allow -> install changed=false,
+	// fetch does NOT run; consumer SUCCESS again. incarnation ready after
+	// okApply -> a regular RunScenario (no unlock).
 	idemApply := stack.RunScenario(t, incName, "verify_live", nil)
 	stack.WaitApplySuccess(t, idemApply, 120)
 	stack.WaitIncarnationReady(t, inc, 30)
 
 	if st := taskStatusByPlan(t, stack, idemApply, sid, 0); st != "TASK_STATUS_OK" {
-		t.Fatalf("assert6: install-шаг (plan_index 0) при повторе status=%q, ожидался TASK_STATUS_OK (идемпотентно, changed=false)", st)
+		t.Fatalf("assert6: install step (plan_index 0) on repeat status=%q, expected TASK_STATUS_OK (idempotent, changed=false)", st)
 	}
 	if st := taskStatusByPlan(t, stack, idemApply, sid, 1); st != "TASK_STATUS_OK" {
-		t.Fatalf("assert6: потребитель (plan_index 1) при повторе status=%q, ожидался TASK_STATUS_OK", st)
+		t.Fatalf("assert6: consumer (plan_index 1) on repeat status=%q, expected TASK_STATUS_OK", st)
 	}
 	stack.AssertTaskRegisterField(t, idemApply, sid, 1, "result", "PONG")
 }
 
-// distinctTaskCount — число РАЗНЫХ plan_index в task.executed прогона (= число
-// исполненных задач). Больше числа авторских задач сценария означает впрыснутый
-// синтез-шаг. Читает audit_log — единственную per-task persistence keeper-а.
+// distinctTaskCount - number of DISTINCT plan_index values in task.executed for
+// a run (= number of executed tasks). More than the scenario's authored task
+// count means an injected synthesis step. Reads audit_log - keeper's only
+// per-task persistence.
 func distinctTaskCount(t *testing.T, s *harness.Stack, applyID, sid string) int {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -186,9 +189,9 @@ func distinctTaskCount(t *testing.T, s *harness.Stack, applyID, sid string) int 
 	return n
 }
 
-// taskStatusByPlan — литерал TaskStatus задачи по (applyID, sid, plan_index),
-// последняя по created_at (retry/cross-keeper дубль). plan_index глобально
-// уникален сквозь Passage (миграция 079) → разрез по passage не нужен.
+// taskStatusByPlan - the TaskStatus literal for a task by (applyID, sid,
+// plan_index), latest by created_at (retry/cross-keeper duplicate). plan_index
+// is globally unique across Passage (migration 079) -> no per-passage filter needed.
 func taskStatusByPlan(t *testing.T, s *harness.Stack, applyID, sid string, planIdx int) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -203,7 +206,7 @@ func taskStatusByPlan(t *testing.T, s *harness.Stack, applyID, sid string, planI
 		ORDER BY created_at DESC LIMIT 1
 	`, applyID, sid, planIdx).Scan(&status)
 	if err != nil {
-		t.Fatalf("taskStatusByPlan(apply=%s sid=%s plan_index=%d): нет task.executed-строки: %v", applyID, sid, planIdx, err)
+		t.Fatalf("taskStatusByPlan(apply=%s sid=%s plan_index=%d): no task.executed row: %v", applyID, sid, planIdx, err)
 	}
 	return status
 }

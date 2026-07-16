@@ -12,29 +12,31 @@ import (
 	"testing"
 )
 
-// Service-fixture L3b: per-test working-tree git-репо в $TMP + регистрация в
-// реестре сервисов через Operator API (POST /v1/services). Service-loader
-// Keeper-а клонирует file://-URL как обычный remote (go-git PlainCloneContext,
-// ref=main); SOUL_STACK_ALLOW_FILE_REPOS=1 уже выставлен NewStack-ом на
-// keeper init/run (см. stack.go::runKeeperInit/startKeeperRun).
+// L3b service fixture: a per-test working-tree git repo under $TMP +
+// registration in the service registry via the Operator API (POST
+// /v1/services). Keeper's service loader clones the file://-URL as a
+// regular remote (go-git PlainCloneContext, ref=main);
+// SOUL_STACK_ALLOW_FILE_REPOS=1 is already set by NewStack on keeper
+// init/run (see stack.go::runKeeperInit/startKeeperRun).
 //
-// Зачем: NewStack поднимает PG/Redis/Vault/keeper + soul-контейнеры, но без
-// записи в service_registry POST /v1/incarnations отвечает 422 «service <name>
-// is not registered» (ADR-029, incarnation_typed.go::ErrServiceNotRegistered).
-// registerExampleService закрывает разрыв ДО CreateIncarnation в потоке теста.
+// Why: NewStack brings up PG/Redis/Vault/keeper + soul containers, but
+// without a service_registry entry POST /v1/incarnations responds 422
+// "service <name> is not registered" (ADR-029,
+// incarnation_typed.go::ErrServiceNotRegistered). registerExampleService
+// closes that gap BEFORE CreateIncarnation in the test flow.
 //
-// Universal: материализуется cfg.ExamplePath под именем cfg.ServiceName —
-// никакого хардкода nginx (drift/redis-cluster-live/пользовательский
-// node-exporter подхватываются тем же путём).
+// Universal: materializes cfg.ExamplePath under the name cfg.ServiceName —
+// no hardcoded nginx (drift/redis-cluster-live/a custom node-exporter are
+// all handled by the same path).
 //
-// Паттерн (working-tree-репо, не bare) и детерминированный fixture-env —
-// дословный порт L3a (tests/e2e/harness/git.go): go-git клонирует из
-// working-tree-репо штатно, bare не требуется; фиксированные author/date дают
-// стабильный commit-SHA → keeper переиспользует snapshot-cache, а не плодит
-// сироты на каждый прогон.
+// Pattern (working-tree repo, not bare) and the deterministic fixture env
+// are a verbatim port of L3a (tests/e2e/harness/git.go): go-git clones from
+// a working-tree repo just fine, bare isn't required; a fixed author/date
+// gives a stable commit SHA -> keeper reuses the snapshot cache instead of
+// spawning orphans on every run.
 
-// gitFixtureEnv — фиксированное окружение git-commit-а (детерминированный SHA,
-// parity с dev/provision.sh и L3a-harness-ом).
+// gitFixtureEnv — fixed git commit environment (deterministic SHA, parity
+// with dev/provision.sh and the L3a harness).
 var gitFixtureEnv = []string{
 	"GIT_AUTHOR_NAME=soul-stack-e2e",
 	"GIT_AUTHOR_EMAIL=e2e@soul-stack.local",
@@ -44,11 +46,12 @@ var gitFixtureEnv = []string{
 	"GIT_COMMITTER_DATE=2020-01-01T00:00:00Z",
 }
 
-// registerExampleService материализует cfg.ExamplePath в per-test git-репо под
-// $TMP и регистрирует его в реестре сервисов Keeper-а под cfg.ServiceName на
-// ветке `main`. Вызывается NewStack-ом после готовности keeper-HTTP, до spawn-а
-// soul-контейнеров (порядок к CreateIncarnation роли не играет — соул не нужен
-// для регистрации). No-op при пустом ServiceName/ExamplePath.
+// registerExampleService materializes cfg.ExamplePath into a per-test git
+// repo under $TMP and registers it in Keeper's service registry under
+// cfg.ServiceName on the `main` branch. Called by NewStack after
+// keeper-HTTP is ready, before soul containers are spawned (the order
+// doesn't matter for CreateIncarnation — a soul isn't needed for
+// registration). No-op if ServiceName/ExamplePath is empty.
 func (s *Stack) registerExampleService(t *testing.T) {
 	t.Helper()
 	if s.cfg.ServiceName == "" || s.cfg.ExamplePath == "" {
@@ -80,8 +83,9 @@ func (s *Stack) registerExampleService(t *testing.T) {
 	t.Logf("registerExampleService: registered name=%s git=%s ref=%s (status=%d)", out.Name, gitURL, out.Ref, status)
 }
 
-// materializeServiceRepo копирует example-каталог в per-test git-репо под $TMP
-// и делает один детерминированный commit на ветке main. Возвращает file://-URL.
+// materializeServiceRepo copies the example directory into a per-test git
+// repo under $TMP and makes one deterministic commit on the main branch.
+// Returns the file://-URL.
 func (s *Stack) materializeServiceRepo(t *testing.T, serviceName, relativePath string) string {
 	t.Helper()
 
@@ -95,23 +99,24 @@ func (s *Stack) materializeServiceRepo(t *testing.T, serviceName, relativePath s
 		t.Fatalf("materializeServiceRepo %s: mkdir %s: %v", serviceName, repoDir, err)
 	}
 
-	// init working-tree-репо на ветке main, скопировать содержимое example-а
-	// (без корневого каталога, parity с provision.sh `cp -R src/. dest/`),
-	// зафиксировать одним детерминированным commit-ом.
+	// Init a working-tree repo on the main branch, copy the example
+	// contents (without the root directory, parity with provision.sh
+	// `cp -R src/. dest/`), commit with one deterministic commit.
 	runGit(t, "", "init", "-q", "-b", "main", repoDir)
 	copyTree(t, srcDir, repoDir)
 	runGit(t, repoDir, "add", "-A")
-	// commit.gpgsign=false локально к вызову: глобальный ~/.gitconfig оператора
-	// может требовать подпись (gpg/ssh-ключ), которого в среде прогона нет —
-	// fixture обязан быть герметичным и не зависеть от настроек хоста.
+	// commit.gpgsign=false is local to the call: the operator's global
+	// ~/.gitconfig may require a signature (gpg/ssh key) that isn't
+	// available in the run environment — the fixture must be hermetic
+	// and not depend on host settings.
 	runGit(t, repoDir, "-c", "commit.gpgsign=false",
 		"commit", "-q", "-m", "e2e-live service snapshot from "+relativePath)
 
 	return "file://" + repoDir
 }
 
-// runGit выполняет git-команду в dir (пустой dir → cwd по аргументам) с
-// детерминированным fixture-env. Fatal при ошибке (с stdout+stderr).
+// runGit runs a git command in dir (empty dir -> cwd from args) with the
+// deterministic fixture env. Fatal on error (with stdout+stderr).
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)
@@ -124,9 +129,10 @@ func runGit(t *testing.T, dir string, args ...string) {
 	}
 }
 
-// copyTree рекурсивно копирует содержимое src в dst (без корневого каталога src
-// и без .git). Симметрично `cp -R src/. dst/`; symlink-ов в example-сервисах
-// нет, достаточно для маленьких example-каталогов.
+// copyTree recursively copies the contents of src into dst (without src's
+// root directory and without .git). Symmetric with `cp -R src/. dst/`; there
+// are no symlinks in example services, this is enough for small example
+// directories.
 func copyTree(t *testing.T, src, dst string) {
 	t.Helper()
 	entries, err := os.ReadDir(src)
@@ -156,8 +162,8 @@ func copyTree(t *testing.T, src, dst string) {
 	}
 }
 
-// repoRoot возвращает корень репозитория (tests/e2e-live/<test>.go → wd/../..),
-// симметрично locateKeeperBinary.
+// repoRoot returns the repository root (tests/e2e-live/<test>.go ->
+// wd/../..), symmetric with locateKeeperBinary.
 func repoRoot(t *testing.T) string {
 	t.Helper()
 	wd, err := os.Getwd()

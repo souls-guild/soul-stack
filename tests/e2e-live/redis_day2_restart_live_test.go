@@ -1,8 +1,8 @@
 //go:build e2e_live
 
-// L3b E2E day-2: examples/service/redis::restart на ЖИВОМ Redis — rolling-restart
-// демона без изменения конфига. Доказывает: uptime сброшен (рестарт реально
-// произошёл), роль master (0 реплик), конфиг пережил рестарт.
+// L3b E2E day-2: examples/service/redis::restart on a LIVE Redis - rolling-restart
+// of the daemon without a config change. Proves: uptime was reset (restart actually
+// happened), role is master (0 replicas), config survived the restart.
 package e2e_live_test
 
 import "testing"
@@ -15,10 +15,10 @@ func TestL3bRedisLive_Day2Restart(t *testing.T) {
 	stack.WaitApplySuccess(t, rst, 300)
 	stack.WaitIncarnationReady(t, inc, 60)
 
-	// До рестарта redis жил весь create+ready (>180с); порог 120с ловит сброс uptime.
+	// Before the restart, redis had been up through the whole create+ready (>180s); a 120s threshold catches the uptime reset.
 	stack.AssertRedisUptimeBelow(t, c, 120)
-	// 0 реплик → одиночный узел остаётся master (INFO replication role probe).
+	// 0 replicas -> the single node remains master (INFO replication role probe).
 	stack.AssertRedisRole(t, c, "master")
-	// Конфиг (политика вытеснения из create) пережил рестарт.
+	// The config (eviction policy from create) survived the restart.
 	stack.AssertRedisConfigGet(t, c, "maxmemory-policy", "volatile-lru")
 }

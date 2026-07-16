@@ -14,42 +14,42 @@ import (
 	"testing"
 )
 
-// Plugin-канал SoulModule (NIM-32 S1, ADR-065(b)/(f)/(g)): helpers доставки
-// плагина `community.redis` на стенд ШТАТНЫМ путём — сборка бинаря →
-// per-test git-репо в layout-е plugingit-резолвера → каталог
-// `plugins.soul_modules[]` (Config.SoulModules) → Sigil-allow через Operator
-// API. Trust-механизм не изобретается: allow — keeper-side seal (Signer
-// подписывает бинарь из слота cache_root при POST /v1/plugins/sigils),
-// seal-артефакт в git-репо плагина НЕ нужен.
+// SoulModule plugin channel (NIM-32 S1, ADR-065(b)/(f)/(g)): helpers to deliver
+// the `community.redis` plugin to the stand via the REGULAR path - build the
+// binary -> per-test git repo in the layout the plugingit resolver expects ->
+// `plugins.soul_modules[]` catalog (Config.SoulModules) -> Sigil-allow via the
+// Operator API. No trust mechanism is invented: allow is a keeper-side seal
+// (the Signer signs the binary from the cache_root slot on POST
+// /v1/plugins/sigils), no seal artifact is needed in the plugin git repo.
 
-// communityRedisPluginDir — исходники плагина относительно корня репо.
+// communityRedisPluginDir - plugin sources relative to the repo root.
 const communityRedisPluginDir = "examples/module/soul-mod-community-redis"
 
-// CommunityRedisPluginRef — тег, под которым harness публикует плагин в
-// per-test git-репо; ref для записи каталога и Sigil-allow.
+// CommunityRedisPluginRef - tag under which the harness publishes the plugin
+// in the per-test git repo; ref for the catalog entry and Sigil-allow.
 const CommunityRedisPluginRef = "v1.0.0"
 
-// communityRedisBinaryName — конвенция kind=soul_module для manifest.name=redis
+// communityRedisBinaryName - kind=soul_module convention for manifest.name=redis
 // (shared/plugin::Manifest.BinaryName).
 const communityRedisBinaryName = "soul-mod-redis"
 
-// Кэш сборки — раз на процесс (go build плагина небыстрый; build-cache Go
-// делает повторные процессы дешёвыми, но в одном прогоне не пересобираем).
+// Build cache - once per process (go build of the plugin isn't fast; Go's
+// build cache makes repeated processes cheap, but we don't rebuild within one run).
 var (
 	communityRedisBuildOnce sync.Once
 	communityRedisBinPath   string
 	communityRedisBuildErr  error
 )
 
-// BuildCommunityRedisPlugin собирает soul-mod-community-redis (linux/amd64,
-// кэш пер-процесс) и материализует per-test git-репо в layout-е, который
-// ожидает plugingit-резолвер (ADR-026(g) F-fetch, parity fixtureRepo из
-// keeper/internal/plugingit/resolver_test.go): manifest.yaml в корне +
-// dist/soul-mod-redis, один коммит на main, тег [CommunityRedisPluginRef].
+// BuildCommunityRedisPlugin builds soul-mod-community-redis (linux/amd64,
+// per-process cache) and materializes a per-test git repo in the layout the
+// plugingit resolver expects (ADR-026(g) F-fetch, parity with fixtureRepo in
+// keeper/internal/plugingit/resolver_test.go): manifest.yaml at the root +
+// dist/soul-mod-redis, one commit on main, tag [CommunityRedisPluginRef].
 //
-// Возвращает file://-URL репо для Config.SoulModules[].Source — file://-scheme
-// у plugingit работает под SOUL_STACK_ALLOW_FILE_REPOS=1, который NewStack уже
-// выставляет keeper-процессам (stack.go::runKeeperInit/startKeeperRun).
+// Returns the file:// URL of the repo for Config.SoulModules[].Source - the
+// file:// scheme works for plugingit under SOUL_STACK_ALLOW_FILE_REPOS=1, which
+// NewStack already sets for keeper processes (stack.go::runKeeperInit/startKeeperRun).
 func BuildCommunityRedisPlugin(t *testing.T) string {
 	t.Helper()
 	bin := buildCommunityRedisBinary(t)
@@ -79,16 +79,17 @@ func BuildCommunityRedisPlugin(t *testing.T) string {
 	runGit(t, repoDir, "add", "-A")
 	runGit(t, repoDir, "-c", "commit.gpgsign=false",
 		"commit", "-q", "-m", "community.redis plugin snapshot")
-	// tag.gpgsign=false локально к вызову (как commit.gpgsign выше): глобальный
-	// tag.gpgsign=true превращает lightweight-тег в annotated и требует message.
+	// tag.gpgsign=false is scoped to this call (like commit.gpgsign above): a
+	// global tag.gpgsign=true would turn the lightweight tag into annotated and
+	// require a message.
 	runGit(t, repoDir, "-c", "tag.gpgsign=false", "tag", CommunityRedisPluginRef)
 
 	return "file://" + repoDir
 }
 
-// buildCommunityRedisBinary — `GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64
-// go build` исходников плагина (replace-директивы go.mod резолвятся внутри
-// репо). Выход — вне репо (MkdirTemp), путь кэшируется на процесс.
+// buildCommunityRedisBinary - `GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64
+// go build` of the plugin sources (go.mod replace directives resolve inside the
+// repo). Output goes outside the repo (MkdirTemp), path is cached per process.
 func buildCommunityRedisBinary(t *testing.T) string {
 	t.Helper()
 	communityRedisBuildOnce.Do(func() {
@@ -115,14 +116,15 @@ func buildCommunityRedisBinary(t *testing.T) string {
 	return communityRedisBinPath
 }
 
-// AllowSoulModule допускает плагин (namespace, name, ref) через Operator API
-// POST /v1/plugins/sigils (ADR-026 S4a): keeper читает бинарь+manifest из
-// слота `<cache_root>/<ns>-<name>/current/`, подписывает Signer-ом и пишет
-// допуск в plugin_sigils. Возвращает sha256 допущенного бинаря из 201-ответа.
+// AllowSoulModule allows a plugin (namespace, name, ref) via Operator API
+// POST /v1/plugins/sigils (ADR-026 S4a): keeper reads the binary+manifest from
+// the `<cache_root>/<ns>-<name>/current/` slot, signs it with the Signer, and
+// writes the allow entry to plugin_sigils. Returns the sha256 of the allowed
+// binary from the 201 response.
 //
-// Слот обязан быть материализован ДО вызова — штатно это делает `keeper run`
-// на старте (plugingit.ResolveCatalog по `plugins.soul_modules[]`), т.е.
-// достаточно передать запись в Config.SoulModules.
+// The slot must be materialized BEFORE this call - normally `keeper run` does
+// this at startup (plugingit.ResolveCatalog over `plugins.soul_modules[]`), so
+// it's enough to pass the entry in Config.SoulModules.
 func (s *Stack) AllowSoulModule(t *testing.T, namespace, name, ref string) string {
 	t.Helper()
 	c := s.opClient(t)
@@ -144,13 +146,13 @@ func (s *Stack) AllowSoulModule(t *testing.T, namespace, name, ref string) strin
 		t.Fatalf("AllowSoulModule %s/%s/%s: decode: %v (body=%s)", namespace, name, ref, err, string(resp))
 	}
 	if out.SHA256 == "" {
-		t.Fatalf("AllowSoulModule %s/%s/%s: пустой sha256 в 201 body=%s", namespace, name, ref, string(resp))
+		t.Fatalf("AllowSoulModule %s/%s/%s: empty sha256 in 201 body=%s", namespace, name, ref, string(resp))
 	}
 	return out.SHA256
 }
 
-// PluginSigilItem — элемент items[] GET /v1/plugins/sigils (подмножество
-// wire-полей PluginSigilView, нужное assert-ам).
+// PluginSigilItem - an items[] element of GET /v1/plugins/sigils (subset of
+// PluginSigilView wire fields needed by the asserts).
 type PluginSigilItem struct {
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
@@ -158,7 +160,7 @@ type PluginSigilItem struct {
 	SHA256    string `json:"sha256"`
 }
 
-// ListPluginSigils возвращает активные Sigil-допуски через Operator API
+// ListPluginSigils returns active Sigil allows via Operator API
 // GET /v1/plugins/sigils.
 func (s *Stack) ListPluginSigils(t *testing.T) []PluginSigilItem {
 	t.Helper()

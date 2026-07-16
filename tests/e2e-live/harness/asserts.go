@@ -17,17 +17,18 @@ import (
 	"time"
 )
 
-// validApplyRunsStatus — закрытое множество значений apply_runs.status,
-// разрешённых harness-у в YAML expectations.
+// validApplyRunsStatus — closed set of apply_runs.status values allowed to
+// the harness in YAML expectations.
 //
-// Источник правды — keeper/internal/applyrun/applyrun.go (Status const-ы +
-// ValidStatus). Дублируется здесь литералом потому, что tests/e2e-live —
-// отдельный go-модуль без зависимости на keeper/ (deps testcontainers в pilot
-// не утекают в основные модули). Drift между ними ловится в smoke-тестах
-// L3a/L3b — TestValidApplyRunsStatusInSyncWithKeeper.
+// Source of truth — keeper/internal/applyrun/applyrun.go (Status consts +
+// ValidStatus). Duplicated here as a literal because tests/e2e-live is a
+// separate go module without a dependency on keeper/ (testcontainers deps
+// used by the pilot must not leak into the main modules). Drift between them
+// is caught by the L3a/L3b smoke tests — TestValidApplyRunsStatusInSyncWithKeeper.
 //
-// ADR-039(4): fail-early на старте теста, если expectation указывает невалидный
-// status (опечатка вроде "succeeded" / "done" сразу видна, не на assert-фазе).
+// ADR-039(4): fail-early at test start if an expectation specifies an invalid
+// status (a typo like "succeeded" / "done" is visible immediately, not at
+// assert time).
 var validApplyRunsStatus = map[string]struct{}{
 	"planned":    {},
 	"claimed":    {},
@@ -40,25 +41,25 @@ var validApplyRunsStatus = map[string]struct{}{
 	"no_match":   {},
 }
 
-// CheckApplyRunsStatusValid валидирует, что строка из YAML-expectation —
-// разрешённое enum-значение apply_runs.status; фейлит t, если нет. Не выполняет
-// assert против БД (для этого AssertApplyRunsStatus).
+// CheckApplyRunsStatusValid validates that a value from a YAML expectation
+// is an allowed apply_runs.status enum value; fails t if not. Does not run
+// an assert against the DB (for that, AssertApplyRunsStatus).
 func CheckApplyRunsStatusValid(t *testing.T, status string) {
 	t.Helper()
 	if !IsValidApplyRunsStatus(status) {
 		known := ValidApplyRunsStatuses()
-		t.Fatalf("неизвестное значение apply_runs.status %q в expectations; разрешены: %v", status, known)
+		t.Fatalf("unknown apply_runs.status value %q in expectations; allowed: %v", status, known)
 	}
 }
 
-// IsValidApplyRunsStatus — pure-проверка без testing.TB.
+// IsValidApplyRunsStatus — pure check without testing.TB.
 func IsValidApplyRunsStatus(status string) bool {
 	_, ok := validApplyRunsStatus[status]
 	return ok
 }
 
-// ValidApplyRunsStatuses возвращает копию map-а валидных значений для
-// drift-теста.
+// ValidApplyRunsStatuses returns a copy of the valid-values map for the
+// drift test.
 func ValidApplyRunsStatuses() []string {
 	out := make([]string, 0, len(validApplyRunsStatus))
 	for k := range validApplyRunsStatus {
@@ -67,12 +68,13 @@ func ValidApplyRunsStatuses() []string {
 	return out
 }
 
-// AssertApplyRunsStatus читает строки apply_runs по applyID из PG и фейлит,
-// если хотя бы одна не равна expected.
+// AssertApplyRunsStatus reads apply_runs rows by applyID from PG and fails
+// if any of them is not equal to expected.
 //
-// PK apply_runs = (apply_id, sid) → один прогон даёт N строк (по числу Soul-
-// хостов). harness требует success ВСЕХ — half-applied result в expectations
-// MVP не моделируется (multi-host фейлы оставляют сразу error_locked).
+// PK apply_runs = (apply_id, sid) → one run gives N rows (one per Soul
+// host). The harness requires success for ALL — half-applied results aren't
+// modeled in MVP expectations (multi-host failures leave error_locked
+// immediately).
 func (s *Stack) AssertApplyRunsStatus(t *testing.T, applyID string, expected string) {
 	t.Helper()
 	CheckApplyRunsStatusValid(t, expected)
@@ -99,21 +101,21 @@ func (s *Stack) AssertApplyRunsStatus(t *testing.T, applyID string, expected str
 		t.Fatalf("AssertApplyRunsStatus %s: rows.Err: %v", applyID, err)
 	}
 	if len(statuses) == 0 {
-		t.Fatalf("AssertApplyRunsStatus %s: ни одной строки apply_runs", applyID)
+		t.Fatalf("AssertApplyRunsStatus %s: no apply_runs rows", applyID)
 	}
 	for sid, st := range statuses {
 		if st != expected {
-			t.Fatalf("AssertApplyRunsStatus %s: sid=%s status=%q, ожидался %q (полная матрица=%v)",
+			t.Fatalf("AssertApplyRunsStatus %s: sid=%s status=%q, expected %q (full matrix=%v)",
 				applyID, sid, st, expected, statuses)
 		}
 	}
 }
 
-// AssertApplyHostStatus проверяет статус apply_runs КОНКРЕТНОГО хоста (sid) —
-// в отличие от AssertApplyRunsStatus, требующего единый статус ВСЕХ строк.
-// Нужен прогонам с per-host-where: таргетом ОДНОГО хоста (split-brain guard,
-// failed_when fail-stop): целевой хост = failed, прочие roster-хосты, у которых
-// after on:/where: осталось 0 задач = no_match (не failed).
+// AssertApplyHostStatus checks the apply_runs status of a SPECIFIC host (sid) —
+// unlike AssertApplyRunsStatus, which requires a single status across ALL
+// rows. Needed for runs with per-host where: targeting ONE host (split-brain
+// guard, failed_when fail-stop): the target host = failed, other roster hosts
+// that ended up with 0 tasks after on:/where: = no_match (not failed).
 func (s *Stack) AssertApplyHostStatus(t *testing.T, applyID, sid, expected string) {
 	t.Helper()
 	CheckApplyRunsStatusValid(t, expected)
@@ -125,15 +127,15 @@ func (s *Stack) AssertApplyHostStatus(t *testing.T, applyID, sid, expected strin
 	err := s.db.QueryRow(ctx,
 		"SELECT status FROM apply_runs WHERE apply_id = $1 AND sid = $2", applyID, sid).Scan(&status)
 	if err != nil {
-		t.Fatalf("AssertApplyHostStatus(apply=%s sid=%s): нет строки apply_runs: %v", applyID, sid, err)
+		t.Fatalf("AssertApplyHostStatus(apply=%s sid=%s): no apply_runs row: %v", applyID, sid, err)
 	}
 	if status != expected {
-		t.Fatalf("AssertApplyHostStatus(apply=%s sid=%s): status=%q, ожидался %q", applyID, sid, status, expected)
+		t.Fatalf("AssertApplyHostStatus(apply=%s sid=%s): status=%q, expected %q", applyID, sid, status, expected)
 	}
 }
 
-// AssertIncarnationState читает incarnation.state из БД и фейлит, если
-// jsonb-payload не содержит expectedSubset (deep-subset сравнение).
+// AssertIncarnationState reads incarnation.state from the DB and fails if
+// the jsonb payload does not contain expectedSubset (deep-subset comparison).
 func (s *Stack) AssertIncarnationState(t *testing.T, name string, expectedSubset map[string]any) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -146,29 +148,30 @@ func (s *Stack) AssertIncarnationState(t *testing.T, name string, expectedSubset
 		t.Fatalf("AssertIncarnationState %s: query: %v", name, err)
 	}
 	if len(stateJSON) == 0 || string(stateJSON) == "null" {
-		t.Fatalf("AssertIncarnationState %s: state пуст, ожидался subset=%v", name, expectedSubset)
+		t.Fatalf("AssertIncarnationState %s: state is empty, expected subset=%v", name, expectedSubset)
 	}
 	var actual map[string]any
 	if err := json.Unmarshal(stateJSON, &actual); err != nil {
 		t.Fatalf("AssertIncarnationState %s: unmarshal state: %v (raw=%s)", name, err, string(stateJSON))
 	}
 	if !subsetMatches(actual, expectedSubset) {
-		t.Fatalf("AssertIncarnationState %s: state не содержит subset\nactual=%v\nexpected_subset=%v",
+		t.Fatalf("AssertIncarnationState %s: state does not contain subset\nactual=%v\nexpected_subset=%v",
 			name, actual, expectedSubset)
 	}
 }
 
-// AssertAuditEvent ищет в audit_log хотя бы одну строку с event_type=eventType
-// и payload, содержащим expectedPayload subset. Если ни одной — фейлит.
+// AssertAuditEvent looks in audit_log for at least one row with
+// event_type=eventType and a payload containing the expectedPayload subset.
+// Fails if none found.
 func (s *Stack) AssertAuditEvent(t *testing.T, eventType string, expectedPayload map[string]any) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Пустой/nil payload (fixture `audit_events: [{type: ...}]` без payload) —
-	// presence-проверка только по event_type. `payload @> 'null'::jsonb` не
-	// матчит объект-payload и дал бы ложный fail; для «событие такого типа есть»
-	// фильтр по payload не нужен.
+	// Empty/nil payload (fixture `audit_events: [{type: ...}]` without a
+	// payload) — presence check by event_type only. `payload @> 'null'::jsonb`
+	// wouldn't match an object payload and would give a false fail; for
+	// "an event of this type exists" no payload filter is needed.
 	var (
 		count int
 		err   error
@@ -180,7 +183,7 @@ func (s *Stack) AssertAuditEvent(t *testing.T, eventType string, expectedPayload
 			t.Fatalf("AssertAuditEvent %s: query: %v", eventType, err)
 		}
 		if count == 0 {
-			t.Fatalf("AssertAuditEvent %s: ни одного события такого типа", eventType)
+			t.Fatalf("AssertAuditEvent %s: no event of this type", eventType)
 		}
 		return
 	}
@@ -211,17 +214,17 @@ func (s *Stack) AssertAuditEvent(t *testing.T, eventType string, expectedPayload
 				}
 			}
 		}
-		t.Fatalf("AssertAuditEvent %s: payload subset не найден\nexpected=%s\nrecent_events=%v",
+		t.Fatalf("AssertAuditEvent %s: payload subset not found\nexpected=%s\nrecent_events=%v",
 			eventType, string(subsetJSON), dumps)
 	}
 }
 
-// AssertMetricGE скрейпит /metrics Keeper-а (отдельный listener,
-// Stack.MetricsURL) и проверяет, что значение метрики `metric` >= минимума.
+// AssertMetricGE scrapes Keeper's /metrics (separate listener,
+// Stack.MetricsURL) and checks that the `metric` value is >= minimum.
 func (s *Stack) AssertMetricGE(t *testing.T, metric string, minimum float64) {
 	t.Helper()
 	if s.MetricsURL == "" {
-		t.Fatal("AssertMetricGE: Stack.MetricsURL пуст (NewStack не отработал?)")
+		t.Fatal("AssertMetricGE: Stack.MetricsURL is empty (NewStack did not run?)")
 	}
 	resp, err := http.Get(s.MetricsURL + "/metrics")
 	if err != nil {
@@ -235,15 +238,15 @@ func (s *Stack) AssertMetricGE(t *testing.T, metric string, minimum float64) {
 	}
 	actual, found := parsePrometheusSum(body, metric)
 	if !found {
-		t.Fatalf("AssertMetricGE %s: метрика не найдена в /metrics", metric)
+		t.Fatalf("AssertMetricGE %s: metric not found in /metrics", metric)
 	}
 	if actual < minimum {
-		t.Fatalf("AssertMetricGE %s = %v, ожидалось >= %v", metric, actual, minimum)
+		t.Fatalf("AssertMetricGE %s = %v, expected >= %v", metric, actual, minimum)
 	}
 }
 
-// readAllLimited читает body до limitBytes. Защита от случайного скрейпа
-// гигантского /metrics в тестовой среде.
+// readAllLimited reads the body up to limitBytes. Protects against
+// accidentally scraping a giant /metrics in the test environment.
 func readAllLimited(r interface{ Read(p []byte) (int, error) }, limit int64) ([]byte, error) {
 	var buf bytes.Buffer
 	chunk := make([]byte, 4096)
@@ -480,27 +483,27 @@ func sortedKeys(m map[string]any) []string {
 	return out
 }
 
-var _ = sortedKeys // зарезервировано под диагностику будущих assert-ов
+var _ = sortedKeys // reserved for diagnostics of future asserts
 
 // Container-side asserts (L3b-4 implementation).
 //
-// Все четыре assert-а выполняют команды внутри privileged Debian-12 systemd-soul
-// контейнера через SoulContainer.Exec. SoulContainer.Exec возвращает combined
-// stdout+stderr (testcontainers-go multiplexed reader), поэтому harness не
-// разделяет потоки: для assert-а достаточно exit-code, тело используется только
-// в diag-сообщениях.
+// All four asserts run commands inside a privileged Debian-12 systemd-soul
+// container via SoulContainer.Exec. SoulContainer.Exec returns combined
+// stdout+stderr (testcontainers-go multiplexed reader), so the harness does
+// not split the streams: the exit code is enough for the assert, the body is
+// only used in diag messages.
 //
-// hostExecTimeout — верхний потолок на один Exec. Команды дёшевые (dpkg-query,
-// systemctl is-active, stat, cat | grep) → 30s с запасом, на медленных CI
-// systemd может тянуть до 1-2s даже на is-active.
+// hostExecTimeout — the upper cap on one Exec. Commands are cheap (dpkg-query,
+// systemctl is-active, stat, cat | grep) → 30s with margin; on slow CI
+// systemd can take up to 1-2s even for is-active.
 const hostExecTimeout = 30 * time.Second
 
-// soulContainerByIdx возвращает SoulContainer по индексу или фейлит t с
-// диагностическим out-of-range. Внутренний хелпер для AssertHost*.
+// soulContainerByIdx returns a SoulContainer by index or fails t with a
+// diagnostic out-of-range message. Internal helper for AssertHost*.
 func (s *Stack) soulContainerByIdx(t *testing.T, soulIdx int) *SoulContainer {
 	t.Helper()
 	if soulIdx < 0 || soulIdx >= len(s.SoulContainers) {
-		t.Fatalf("soulIdx %d out of range (have %d soul-контейнеров)",
+		t.Fatalf("soulIdx %d out of range (have %d soul containers)",
 			soulIdx, len(s.SoulContainers))
 	}
 	sc := s.SoulContainers[soulIdx]
@@ -510,12 +513,12 @@ func (s *Stack) soulContainerByIdx(t *testing.T, soulIdx int) *SoulContainer {
 	return sc
 }
 
-// AssertHostPkgInstalled проверяет, что Debian-package реально установлен в
-// soul-контейнере. Через `dpkg-query -W -f=${Status} <pkg>`: status строки
-// `install ok installed` — единственное валидное значение для «полностью
-// установлен» (есть промежуточные: `deinstall ok config-files`, `purge ok
-// not-installed` и т.п.). Контейнер всегда debian-12 (см. container.go), rpm-
-// ветка не нужна.
+// AssertHostPkgInstalled checks that a Debian package is actually installed
+// in the soul container. Via `dpkg-query -W -f=${Status} <pkg>`: a status
+// string of `install ok installed` is the only valid value for "fully
+// installed" (there are intermediate states: `deinstall ok config-files`,
+// `purge ok not-installed`, etc). The container is always debian-12 (see
+// container.go), no rpm branch needed.
 func (s *Stack) AssertHostPkgInstalled(t *testing.T, soulIdx int, pkg string) {
 	t.Helper()
 	sc := s.soulContainerByIdx(t, soulIdx)
@@ -534,15 +537,15 @@ func (s *Stack) AssertHostPkgInstalled(t *testing.T, soulIdx int, pkg string) {
 	}
 	status := strings.TrimSpace(out)
 	if !strings.Contains(status, "install ok installed") {
-		t.Fatalf("AssertHostPkgInstalled(soulIdx=%d pkg=%s): пакет не установлен корректно, status=%q",
+		t.Fatalf("AssertHostPkgInstalled(soulIdx=%d pkg=%s): package not installed correctly, status=%q",
 			soulIdx, pkg, status)
 	}
 }
 
-// AssertHostServiceActive проверяет, что systemd-unit active через
-// `systemctl is-active <svc>`. is-active возвращает exit=0 если active,
-// иначе ненулевой (3 для inactive/failed/unknown). На assert-фазе нам важно
-// именно текстовое значение stdout (`active`), exit-code дублирует.
+// AssertHostServiceActive checks that a systemd unit is active via
+// `systemctl is-active <svc>`. is-active returns exit=0 if active, otherwise
+// nonzero (3 for inactive/failed/unknown). At assert time what matters is
+// the textual stdout value (`active`), the exit code is just a duplicate.
 func (s *Stack) AssertHostServiceActive(t *testing.T, soulIdx int, svc string) {
 	t.Helper()
 	sc := s.soulContainerByIdx(t, soulIdx)
@@ -557,16 +560,16 @@ func (s *Stack) AssertHostServiceActive(t *testing.T, soulIdx int, svc string) {
 	}
 	status := strings.TrimSpace(out)
 	if status != "active" {
-		t.Fatalf("AssertHostServiceActive(soulIdx=%d svc=%s): status=%q (exit=%d), ожидалось 'active'",
+		t.Fatalf("AssertHostServiceActive(soulIdx=%d svc=%s): status=%q (exit=%d), expected 'active'",
 			soulIdx, svc, status, code)
 	}
 }
 
-// AssertHostFileExists проверяет, что файл/каталог по path существует внутри
-// soul-контейнера. Используем `stat -c %F <path>` — exit=0 и непустой stdout
-// (тип объекта: `regular file`/`directory`/…). Чисто наличие, без проверки
-// типа: для проверки type/perm caller вызовет дополнительные assert-ы (пока
-// L3b-4 их не вводит).
+// AssertHostFileExists checks that a file/directory at path exists inside
+// the soul container. Uses `stat -c %F <path>` — exit=0 and non-empty stdout
+// (object type: `regular file`/`directory`/…). Existence only, no type check:
+// for type/perm checks the caller should invoke additional asserts (not yet
+// introduced by L3b-4).
 func (s *Stack) AssertHostFileExists(t *testing.T, soulIdx int, path string) {
 	t.Helper()
 	sc := s.soulContainerByIdx(t, soulIdx)
@@ -584,15 +587,15 @@ func (s *Stack) AssertHostFileExists(t *testing.T, soulIdx int, path string) {
 			soulIdx, path, code, out)
 	}
 	if strings.TrimSpace(out) == "" {
-		t.Fatalf("AssertHostFileExists(soulIdx=%d path=%s): stat вернул пустой результат",
+		t.Fatalf("AssertHostFileExists(soulIdx=%d path=%s): stat returned an empty result",
 			soulIdx, path)
 	}
 }
 
-// AssertHostFileContent проверяет, что файл по path содержит подстроку substr.
-// Команда: `cat <path> | grep -F -- <substr>`; grep exit=0 — substring найден,
-// 1 — нет, >=2 — ошибка. Аргументы шеллу передаём через single-quote-escape
-// (shellQuote), произвольный user-input в test-fixtures не предполагается.
+// AssertHostFileContent checks that a file at path contains substring substr.
+// Command: `cat <path> | grep -F -- <substr>`; grep exit=0 — substring found,
+// 1 — not found, >=2 — error. Shell arguments are passed via single-quote
+// escaping (shellQuote); arbitrary user input in test fixtures is not expected.
 func (s *Stack) AssertHostFileContent(t *testing.T, soulIdx int, path, substr string) {
 	t.Helper()
 	sc := s.soulContainerByIdx(t, soulIdx)
@@ -607,24 +610,24 @@ func (s *Stack) AssertHostFileContent(t *testing.T, soulIdx int, path, substr st
 			soulIdx, path, substr, err, out)
 	}
 	if code != 0 {
-		t.Fatalf("AssertHostFileContent(soulIdx=%d path=%s substr=%q): подстрока не найдена (grep exit=%d)\noutput=%s",
+		t.Fatalf("AssertHostFileContent(soulIdx=%d path=%s substr=%q): substring not found (grep exit=%d)\noutput=%s",
 			soulIdx, path, substr, code, out)
 	}
 }
 
-// AssertHostHTTPContains делает HTTP GET по url ВНУТРИ soul-контейнера (curl,
-// присутствует в L3b-Dockerfile) и проверяет, что тело ответа содержит substr.
-// Поллит до retrySec секунд: сетевой сервис (node_exporter :9100/metrics)
-// поднимается асинхронно после systemctl start — exporter-у нужно секунду на
-// bind listen-сокета.
+// AssertHostHTTPContains does an HTTP GET on url INSIDE the soul container
+// (curl, present in the L3b Dockerfile) and checks that the response body
+// contains substr. Polls for up to retrySec seconds: the network service
+// (node_exporter :9100/metrics) comes up asynchronously after systemctl
+// start — the exporter needs a second to bind the listen socket.
 //
-// Это и есть piggyback-проверка node-exporter: url=http://127.0.0.1:9100/metrics,
-// substr="node_" (любая node_exporter-метрика) подтверждает, что бинарь
-// разложен, systemd-unit активен И порт реально слушает + отдаёт /metrics —
-// чего services/files-проверки по отдельности не доказывают.
+// This is the piggyback check for node-exporter: url=http://127.0.0.1:9100/metrics,
+// substr="node_" (any node_exporter metric) confirms that the binary is
+// deployed, the systemd unit is active AND the port is actually listening
+// and serving /metrics — which the services/files checks alone don't prove.
 //
-// curl -fsS: -f → ненулевой exit на HTTP >= 400, -s → без прогресс-бара, -S →
-// показать ошибку. exit 0 + substr в теле = успех.
+// curl -fsS: -f → nonzero exit on HTTP >= 400, -s → no progress bar, -S →
+// show the error. exit 0 + substr in the body = success.
 func (s *Stack) AssertHostHTTPContains(t *testing.T, soulIdx int, url, substr string, retrySec int) {
 	t.Helper()
 	sc := s.soulContainerByIdx(t, soulIdx)
@@ -650,12 +653,13 @@ func (s *Stack) AssertHostHTTPContains(t *testing.T, soulIdx int, url, substr st
 		}
 		time.Sleep(1 * time.Second)
 	}
-	t.Fatalf("AssertHostHTTPContains(soulIdx=%d url=%s substr=%q): не получено за %ds (curl|grep exit=%d)\noutput=%s",
+	t.Fatalf("AssertHostHTTPContains(soulIdx=%d url=%s substr=%q): not received within %ds (curl|grep exit=%d)\noutput=%s",
 		soulIdx, url, substr, retrySec, lastCode, lastOut)
 }
 
-// AssertRedisACLUser проверяет, что юзер виден в ЖИВОМ redis через redis-cli ACL
-// LIST (AUTH admin) — живой эффект community.redis.acl, а не только state.
+// AssertRedisACLUser checks that a user is visible in the LIVE redis via
+// redis-cli ACL LIST (AUTH admin) — a live effect of community.redis.acl,
+// not just state.
 func (s *Stack) AssertRedisACLUser(t *testing.T, soulIdx int, host string, port int, adminUser, adminPass, wantUser string) {
 	t.Helper()
 	sc := s.soulContainerByIdx(t, soulIdx)
@@ -663,8 +667,9 @@ func (s *Stack) AssertRedisACLUser(t *testing.T, soulIdx int, host string, port 
 	ctx, cancel := context.WithTimeout(context.Background(), hostExecTimeout)
 	defer cancel()
 
-	// --no-auth-warning глушит stderr про пароль в argv (Exec склеивает stdout+stderr).
-	// `^user <name> ` — чёткая граница (не цепляет однопрефиксного соседа).
+	// --no-auth-warning silences the stderr warning about a password in argv
+	// (Exec merges stdout+stderr). `^user <name> ` — a clean boundary (doesn't
+	// match a same-prefix neighbor).
 	script := fmt.Sprintf("redis-cli -h %s -p %d --user %s --pass %s --no-auth-warning ACL LIST | grep -E %s",
 		shellQuote(host), port, shellQuote(adminUser), shellQuote(adminPass), shellQuote("^user "+wantUser+" "))
 	out, code, err := sc.Exec(ctx, []string{"/bin/sh", "-c", script})
@@ -672,32 +677,34 @@ func (s *Stack) AssertRedisACLUser(t *testing.T, soulIdx int, host string, port 
 		t.Fatalf("AssertRedisACLUser(soulIdx=%d user=%s): exec: %v\noutput=%s", soulIdx, wantUser, err, out)
 	}
 	if code != 0 {
-		t.Fatalf("AssertRedisACLUser(soulIdx=%d user=%s): нет в живом ACL LIST (redis-cli|grep exit=%d) — community.redis.acl не применил юзера?\noutput=%s",
+		t.Fatalf("AssertRedisACLUser(soulIdx=%d user=%s): not in the live ACL LIST (redis-cli|grep exit=%d) — did community.redis.acl fail to apply the user?\noutput=%s",
 			soulIdx, wantUser, code, out)
 	}
 }
 
-// shellQuote оборачивает строку в одинарные кавычки, экранируя внутренние
-// одинарные кавычки по шаблону POSIX `'\”`. Используется только для путей и
-// substring-ов из тест-fixtures (контролируемый input, не user-data).
+// shellQuote wraps a string in single quotes, escaping internal single
+// quotes per the POSIX `'\”` pattern. Used only for paths and substrings
+// from test fixtures (controlled input, not user data).
 func shellQuote(s string) string {
 	return `'` + strings.ReplaceAll(s, `'`, `'\''`) + `'`
 }
 
 // ── Redis day-2 asserts (NIM-54, L3b) ───────────────────────────────────────
 //
-// Живые redis-cli/openssl-ассерты day-2-сценариев (update_config / restart /
-// rotate_tls / update_users) поверх soul-контейнера. Единый описатель коннекта
-// RedisConn (plain XOR server-only-TLS) + приватный билдер redisCLIPrefix — все
-// публичные ассерты строятся поверх него одним sc.Exec. redis-cli присутствует
-// после установки redis-server сценарием create (как у AssertRedisACLUser);
-// openssl — в L3b-Dockerfile (нужен AssertRedisTLSCertServed).
+// Live redis-cli/openssl asserts for day-2 scenarios (update_config / restart /
+// rotate_tls / update_users) on top of the soul container. A single connection
+// descriptor RedisConn (plain XOR server-only-TLS) + a private redisCLIPrefix
+// builder — all public asserts are built on top of it with a single sc.Exec.
+// redis-cli is present after the create scenario installs redis-server (same
+// as AssertRedisACLUser); openssl is in the L3b Dockerfile (needed by
+// AssertRedisTLSCertServed).
 
-// defaultRedisCACertPath — дефолтный путь ca.crt внутри soul-контейнера при TLS
-// (essence.conf_dir=/etc/redis, PEM рендерится core.file.present в ${conf_dir}/tls).
+// defaultRedisCACertPath — default ca.crt path inside the soul container for
+// TLS (essence.conf_dir=/etc/redis, the PEM is rendered by core.file.present
+// into ${conf_dir}/tls).
 const defaultRedisCACertPath = "/etc/redis/tls/ca.crt"
 
-// RedisConn — параметры redis-cli-коннекта из soul-контейнера (plain или TLS).
+// RedisConn — redis-cli connection parameters from the soul container (plain or TLS).
 type RedisConn struct {
 	SoulIdx    int
 	Host       string
@@ -705,13 +712,14 @@ type RedisConn struct {
 	User       string
 	Pass       string
 	TLS        bool
-	CACertPath string // ca.crt внутри контейнера при TLS; пусто → defaultRedisCACertPath
+	CACertPath string // ca.crt inside the container for TLS; empty → defaultRedisCACertPath
 }
 
-// redisCLIPrefix собирает `redis-cli …`-префикс из RedisConn: server-only-TLS
-// (--tls --cacert) при TLS, аутентификация (--user/--pass), -h/-p и
-// --no-auth-warning (глушит stderr про пароль в argv — Exec склеивает
-// stdout+stderr). Значения shell-quoted; caller дописывает redis-команду.
+// redisCLIPrefix builds the `redis-cli …` prefix from RedisConn: server-only
+// TLS (--tls --cacert) when TLS is on, authentication (--user/--pass), -h/-p
+// and --no-auth-warning (silences the stderr password-in-argv warning — Exec
+// merges stdout+stderr). Values are shell-quoted; the caller appends the
+// redis command.
 func (c RedisConn) redisCLIPrefix() string {
 	var b strings.Builder
 	b.WriteString("redis-cli --no-auth-warning")
@@ -733,8 +741,8 @@ func (c RedisConn) redisCLIPrefix() string {
 	return b.String()
 }
 
-// nonEmptyLines разбивает combined-output redis-cli на строки, тримит пробелы/CR
-// (redis INFO — CRLF) и выкидывает пустые.
+// nonEmptyLines splits redis-cli combined output into lines, trims
+// whitespace/CR (redis INFO uses CRLF), and drops empty ones.
 func nonEmptyLines(s string) []string {
 	var out []string
 	for _, ln := range strings.Split(s, "\n") {
@@ -745,9 +753,9 @@ func nonEmptyLines(s string) []string {
 	return out
 }
 
-// AssertRedisConfigGet проверяет живое значение `CONFIG GET <param>` == want
-// (maxmemory / maxmemory-policy / appendonly и т.п.). redis-cli в raw-режиме
-// (не-TTY pipe) отдаёт две строки — имя параметра и значение; сравниваем вторую.
+// AssertRedisConfigGet checks the live value of `CONFIG GET <param>` == want
+// (maxmemory / maxmemory-policy / appendonly, etc). redis-cli in raw mode
+// (non-TTY pipe) returns two lines — parameter name and value; we compare the second.
 func (s *Stack) AssertRedisConfigGet(t *testing.T, c RedisConn, param, want string) {
 	t.Helper()
 	sc := s.soulContainerByIdx(t, c.SoulIdx)
@@ -765,17 +773,17 @@ func (s *Stack) AssertRedisConfigGet(t *testing.T, c RedisConn, param, want stri
 	}
 	lines := nonEmptyLines(out)
 	if len(lines) < 2 {
-		t.Fatalf("AssertRedisConfigGet(soulIdx=%d param=%s): CONFIG GET вернул <2 строк (параметр неизвестен redis?)\noutput=%q", c.SoulIdx, param, out)
+		t.Fatalf("AssertRedisConfigGet(soulIdx=%d param=%s): CONFIG GET returned <2 lines (parameter unknown to redis?)\noutput=%q", c.SoulIdx, param, out)
 	}
 	if got := lines[1]; got != want {
-		t.Fatalf("AssertRedisConfigGet(soulIdx=%d param=%s): значение=%q, ожидалось %q\noutput=%q", c.SoulIdx, param, got, want, out)
+		t.Fatalf("AssertRedisConfigGet(soulIdx=%d param=%s): value=%q, expected %q\noutput=%q", c.SoulIdx, param, got, want, out)
 	}
 }
 
-// AssertRedisConfFileDirective читает redis.conf в контейнере (cat <confPath>) и
-// проверяет наличие строки `<directive> <want>`. Для startup-only-директив
-// (io-threads и пр. — startupOnlyDirectives community.redis), которые видны
-// только НА ДИСКЕ, а не через CONFIG GET. confPath обычно /etc/redis/redis.conf.
+// AssertRedisConfFileDirective reads redis.conf in the container (cat <confPath>)
+// and checks for a line `<directive> <want>`. For startup-only directives
+// (io-threads etc — community.redis startupOnlyDirectives), which are only
+// visible ON DISK, not through CONFIG GET. confPath is usually /etc/redis/redis.conf.
 func (s *Stack) AssertRedisConfFileDirective(t *testing.T, soulIdx int, confPath, directive, want string) {
 	t.Helper()
 	sc := s.soulContainerByIdx(t, soulIdx)
@@ -788,7 +796,7 @@ func (s *Stack) AssertRedisConfFileDirective(t *testing.T, soulIdx int, confPath
 		t.Fatalf("AssertRedisConfFileDirective(soulIdx=%d conf=%s directive=%s): cat: %v\noutput=%s", soulIdx, confPath, directive, err, out)
 	}
 	if code != 0 {
-		t.Fatalf("AssertRedisConfFileDirective(soulIdx=%d conf=%s directive=%s): cat exit=%d (нет файла?)\noutput=%s", soulIdx, confPath, directive, code, out)
+		t.Fatalf("AssertRedisConfFileDirective(soulIdx=%d conf=%s directive=%s): cat exit=%d (file missing?)\noutput=%s", soulIdx, confPath, directive, code, out)
 	}
 	for _, ln := range nonEmptyLines(out) {
 		if strings.HasPrefix(ln, "#") {
@@ -802,12 +810,12 @@ func (s *Stack) AssertRedisConfFileDirective(t *testing.T, soulIdx int, confPath
 			return
 		}
 	}
-	t.Fatalf("AssertRedisConfFileDirective(soulIdx=%d conf=%s): директива `%s %s` не найдена на диске", soulIdx, confPath, directive, want)
+	t.Fatalf("AssertRedisConfFileDirective(soulIdx=%d conf=%s): directive `%s %s` not found on disk", soulIdx, confPath, directive, want)
 }
 
-// redisInfoField выполняет `INFO <section>` и возвращает значение поля
-// `<field>:<value>` (redis INFO — CRLF-разделённые `k:v`). Фейлит t, если
-// redis-cli упал или поле отсутствует. Общий низ AssertRedisRole/UptimeBelow.
+// redisInfoField runs `INFO <section>` and returns the value of field
+// `<field>:<value>` (redis INFO — CRLF-separated `k:v`). Fails t if redis-cli
+// crashed or the field is missing. Shared bottom for AssertRedisRole/UptimeBelow.
 func (s *Stack) redisInfoField(t *testing.T, c RedisConn, section, field string) string {
 	t.Helper()
 	sc := s.soulContainerByIdx(t, c.SoulIdx)
@@ -829,35 +837,35 @@ func (s *Stack) redisInfoField(t *testing.T, c RedisConn, section, field string)
 			return strings.TrimPrefix(ln, prefix)
 		}
 	}
-	t.Fatalf("redisInfoField(soulIdx=%d section=%s): поле %q не найдено\noutput=%q", c.SoulIdx, section, field, out)
+	t.Fatalf("redisInfoField(soulIdx=%d section=%s): field %q not found\noutput=%q", c.SoulIdx, section, field, out)
 	return ""
 }
 
-// AssertRedisRole проверяет роль узла (`INFO replication` → role:) == wantRole
-// ("master"/"slave"). Для restart/failover-сценариев.
+// AssertRedisRole checks the node's role (`INFO replication` → role:) == wantRole
+// ("master"/"slave"). For restart/failover scenarios.
 func (s *Stack) AssertRedisRole(t *testing.T, c RedisConn, wantRole string) {
 	t.Helper()
 	if got := s.redisInfoField(t, c, "replication", "role"); got != wantRole {
-		t.Fatalf("AssertRedisRole(soulIdx=%d): role=%q, ожидалось %q", c.SoulIdx, got, wantRole)
+		t.Fatalf("AssertRedisRole(soulIdx=%d): role=%q, expected %q", c.SoulIdx, got, wantRole)
 	}
 }
 
-// AssertRedisUptimeBelow проверяет `INFO server` uptime_in_seconds < maxSec —
-// доказательство рестарта (uptime сброшен). Для restart-сценария.
+// AssertRedisUptimeBelow checks `INFO server` uptime_in_seconds < maxSec —
+// proof of a restart (uptime reset). For the restart scenario.
 func (s *Stack) AssertRedisUptimeBelow(t *testing.T, c RedisConn, maxSec int) {
 	t.Helper()
 	raw := s.redisInfoField(t, c, "server", "uptime_in_seconds")
 	uptime, err := strconv.Atoi(strings.TrimSpace(raw))
 	if err != nil {
-		t.Fatalf("AssertRedisUptimeBelow(soulIdx=%d): uptime_in_seconds=%q не число: %v", c.SoulIdx, raw, err)
+		t.Fatalf("AssertRedisUptimeBelow(soulIdx=%d): uptime_in_seconds=%q not a number: %v", c.SoulIdx, raw, err)
 	}
 	if uptime >= maxSec {
-		t.Fatalf("AssertRedisUptimeBelow(soulIdx=%d): uptime=%ds >= %ds — рестарт не произошёл?", c.SoulIdx, uptime, maxSec)
+		t.Fatalf("AssertRedisUptimeBelow(soulIdx=%d): uptime=%ds >= %ds — restart did not happen?", c.SoulIdx, uptime, maxSec)
 	}
 }
 
-// AssertRedisACLUserAbsent проверяет, что юзера НЕТ в живом `ACL LIST`
-// (инверсия AssertRedisACLUser) — для update_users, где старый юзер удалён.
+// AssertRedisACLUserAbsent checks that a user is NOT in the live `ACL LIST`
+// (inverse of AssertRedisACLUser) — for update_users, where the old user was removed.
 func (s *Stack) AssertRedisACLUserAbsent(t *testing.T, c RedisConn, user string) {
 	t.Helper()
 	sc := s.soulContainerByIdx(t, c.SoulIdx)
@@ -865,8 +873,9 @@ func (s *Stack) AssertRedisACLUserAbsent(t *testing.T, c RedisConn, user string)
 	ctx, cancel := context.WithTimeout(context.Background(), hostExecTimeout)
 	defer cancel()
 
-	// Без пайпа в grep: сначала убеждаемся, что redis-cli отработал (exit 0),
-	// потом проверяем строки — иначе «grep не нашёл» неотличимо от «redis-cli упал».
+	// No pipe into grep: first make sure redis-cli succeeded (exit 0), then
+	// check the lines — otherwise "grep found nothing" is indistinguishable
+	// from "redis-cli crashed".
 	script := c.redisCLIPrefix() + " ACL LIST"
 	out, code, err := sc.Exec(ctx, []string{"/bin/sh", "-c", script})
 	if err != nil {
@@ -878,14 +887,15 @@ func (s *Stack) AssertRedisACLUserAbsent(t *testing.T, c RedisConn, user string)
 	prefix := "user " + user + " "
 	for _, ln := range nonEmptyLines(out) {
 		if strings.HasPrefix(ln, prefix) {
-			t.Fatalf("AssertRedisACLUserAbsent(soulIdx=%d user=%s): юзер всё ещё в ACL LIST (не удалён?)\nстрока=%q", c.SoulIdx, user, ln)
+			t.Fatalf("AssertRedisACLUserAbsent(soulIdx=%d user=%s): user still in ACL LIST (not removed?)\nline=%q", c.SoulIdx, user, ln)
 		}
 	}
 }
 
-// AssertRedisACLUserPerms проверяет, что `ACL GETUSER <user>` содержит подстроку
-// прав wantPermsSubstr (напр. "+@read") — для update_users, где юзеру назначен
-// новый набор прав. Отсутствующий юзер → `(nil)`, подстрока не найдена → fail.
+// AssertRedisACLUserPerms checks that `ACL GETUSER <user>` contains the
+// permissions substring wantPermsSubstr (e.g. "+@read") — for update_users,
+// where the user was assigned a new permission set. A missing user → `(nil)`,
+// substring not found → fail.
 func (s *Stack) AssertRedisACLUserPerms(t *testing.T, c RedisConn, user, wantPermsSubstr string) {
 	t.Helper()
 	sc := s.soulContainerByIdx(t, c.SoulIdx)
@@ -902,23 +912,24 @@ func (s *Stack) AssertRedisACLUserPerms(t *testing.T, c RedisConn, user, wantPer
 		t.Fatalf("AssertRedisACLUserPerms(soulIdx=%d user=%s): redis-cli ACL GETUSER exit=%d\noutput=%s", c.SoulIdx, user, code, out)
 	}
 	if !strings.Contains(out, wantPermsSubstr) {
-		t.Fatalf("AssertRedisACLUserPerms(soulIdx=%d user=%s): права %q не найдены (юзер отсутствует / другой набор?)\noutput=%s", c.SoulIdx, user, wantPermsSubstr, out)
+		t.Fatalf("AssertRedisACLUserPerms(soulIdx=%d user=%s): permissions %q not found (user missing / different permission set?)\noutput=%s", c.SoulIdx, user, wantPermsSubstr, out)
 	}
 }
 
-// AssertRedisTLSCertServed вытаскивает SHA-256-fingerprint серверного cert,
-// который redis реально ОТДАЁТ по TLS, и сравнивает с ожидаемым. Для rotate_tls
-// (fingerprint ДО/ПОСЛЕ ротации доказывает смену ЖИВОГО cert-а, а не только
-// файла на диске). Реализация — openssl s_client (redis server-only-TLS,
-// tls-auth-clients no → клиентский cert не нужен) | openssl x509 -fingerprint.
-// openssl присутствует в L3b-Dockerfile. Регистр/двоеточия нормализуются.
+// AssertRedisTLSCertServed extracts the SHA-256 fingerprint of the server
+// cert that redis actually SERVES over TLS, and compares it against the
+// expected one. For rotate_tls (fingerprint BEFORE/AFTER rotation proves the
+// LIVE cert changed, not just the file on disk). Implementation — openssl
+// s_client (redis server-only-TLS, tls-auth-clients no → client cert not
+// needed) | openssl x509 -fingerprint. openssl is present in the L3b
+// Dockerfile. Case/colons are normalized.
 func (s *Stack) AssertRedisTLSCertServed(t *testing.T, c RedisConn, wantFingerprintSHA256 string) {
 	t.Helper()
 	sc := s.soulContainerByIdx(t, c.SoulIdx)
 
 	want := normalizeHexFingerprint(wantFingerprintSHA256)
 	if want == "" {
-		t.Fatalf("AssertRedisTLSCertServed(soulIdx=%d): пустой ожидаемый fingerprint", c.SoulIdx)
+		t.Fatalf("AssertRedisTLSCertServed(soulIdx=%d): empty expected fingerprint", c.SoulIdx)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), hostExecTimeout)
@@ -934,16 +945,17 @@ func (s *Stack) AssertRedisTLSCertServed(t *testing.T, c RedisConn, wantFingerpr
 	}
 	got := normalizeHexFingerprint(out)
 	if code != 0 || got == "" {
-		t.Fatalf("AssertRedisTLSCertServed(soulIdx=%d %s): openssl не вернул fingerprint (redis не слушает TLS / нет openssl? exit=%d)\noutput=%s", c.SoulIdx, endpoint, code, out)
+		t.Fatalf("AssertRedisTLSCertServed(soulIdx=%d %s): openssl did not return a fingerprint (redis not listening on TLS / no openssl? exit=%d)\noutput=%s", c.SoulIdx, endpoint, code, out)
 	}
 	if got != want {
-		t.Fatalf("AssertRedisTLSCertServed(soulIdx=%d %s): served fingerprint=%s, ожидался %s", c.SoulIdx, endpoint, got, want)
+		t.Fatalf("AssertRedisTLSCertServed(soulIdx=%d %s): served fingerprint=%s, expected %s", c.SoulIdx, endpoint, got, want)
 	}
 }
 
-// normalizeHexFingerprint выделяет hex-часть fingerprint-а (после '=', если
-// есть — форма `sha256 Fingerprint=AA:BB:…`) и оставляет только hex-цифры в
-// верхнем регистре: «AA:BB», «aabb», openssl-строка приводятся к одному виду.
+// normalizeHexFingerprint extracts the hex part of the fingerprint (after
+// '=' if present — form `sha256 Fingerprint=AA:BB:…`) and keeps only hex
+// digits in upper case: "AA:BB", "aabb", the openssl string are all reduced
+// to one form.
 func normalizeHexFingerprint(s string) string {
 	if i := strings.IndexByte(s, '='); i >= 0 {
 		s = s[i+1:]
@@ -960,38 +972,40 @@ func normalizeHexFingerprint(s string) string {
 
 // ── Per-task flow-control asserts (FC-0) ────────────────────────────────────
 //
-// ★ РАЗВЕДКА FC-0. Per-task TaskStatus (SKIPPED/OK/CHANGED/FAILED/TIMED_OUT/
-// CANCELLED) и error.code (flowcontrol.failed_when / flowcontrol.until_exhausted
-// / …) keeper НЕ персистит в отдельную task-таблицу и НЕ кладёт колонкой в
-// apply_runs. Единственная per-task persistence-поверхность — audit_log:
+// ★ FC-0 EXPLORATION. Per-task TaskStatus (SKIPPED/OK/CHANGED/FAILED/TIMED_OUT/
+// CANCELLED) and error.code (flowcontrol.failed_when / flowcontrol.until_exhausted
+// / …) are NOT persisted by keeper in a separate task table and are NOT
+// stored as a column in apply_runs. The only per-task persistence surface is
+// audit_log:
 //
 //   keeper/internal/grpc/events_taskevent.go → handleTaskEvent → AuditWriter.Write(
 //       EventType = "task.executed", Source = "soul_grpc",
 //       CorrelationID = apply_id,
 //       Payload = shared/audit.BuildTaskExecutedPayload{...})
 //
-// Каждая задача (включая SKIPPED — soul эмитит skippedTaskEvent,
-// applyrunner.go) даёт одну строку audit_log. Форма payload зафиксирована
+// Every task (including SKIPPED — soul emits skippedTaskEvent,
+// applyrunner.go) produces one audit_log row. The payload shape is fixed by
 // shared/audit.BuildTaskExecutedPayload:
 //
 //   {sid, apply_id, task_idx, plan_index, status, passage,
 //    error?:{code, module, message?}, register_data?, suppressed?}
 //
-// где status = keeperv1.TaskStatus.String() (литерал "TASK_STATUS_SKIPPED" и
-// т.п.), error.code = TaskError.code (для no_log error опускает message, но code
-// и module кладёт). Поэтому FC-ассерты per-task читают audit_log, НЕ apply_runs.
+// where status = keeperv1.TaskStatus.String() (literal "TASK_STATUS_SKIPPED"
+// etc), error.code = TaskError.code (for no_log errors the message is
+// omitted but code and module are kept). Hence per-task FC asserts read
+// audit_log, NOT apply_runs.
 //
-// КЛЮЧ КОРРЕЛЯЦИИ — plan_index (ГЛОБАЛЬНЫЙ сквозной индекс задачи по всему
-// плану, миграции 079/081, ADR-056 §S1). Локальный task_idx неуникален между
-// Passage и между хостами одного Passage (per-host where:), поэтому per-task
-// ассерты ключуются по plan_index. N=1-прогон → plan_index == task_idx.
+// CORRELATION KEY — plan_index (GLOBAL end-to-end task index across the
+// whole plan, migrations 079/081, ADR-056 §S1). The local task_idx is not
+// unique across Passage or across hosts within the same Passage (per-host
+// where:), so per-task asserts key on plan_index. N=1 run → plan_index == task_idx.
 
-// taskStatusLiteralByEnum — закрытое множество строковых литералов
-// keeperv1.TaskStatus.String(), которые audit-payload несёт в payload->>'status'.
-// Источник правды — proto/keeper/v1/apply.proto (enum TaskStatus). Дублируется
-// здесь литералом: tests/e2e-live — отдельный go-модуль без зависимости на
-// proto/gen. Fail-early на опечатку в expectation (ADR-039(4), как у
-// validApplyRunsStatus).
+// taskStatusLiteralByEnum — closed set of keeperv1.TaskStatus.String()
+// string literals that the audit payload carries in payload->>'status'.
+// Source of truth — proto/keeper/v1/apply.proto (enum TaskStatus). Duplicated
+// here as a literal: tests/e2e-live is a separate go module without a
+// dependency on proto/gen. Fail-early on a typo in an expectation
+// (ADR-039(4), same as validApplyRunsStatus).
 var taskStatusLiteralByEnum = map[string]struct{}{
 	"TASK_STATUS_UNSPECIFIED": {},
 	"TASK_STATUS_OK":          {},
@@ -1002,33 +1016,33 @@ var taskStatusLiteralByEnum = map[string]struct{}{
 	"TASK_STATUS_CANCELLED":   {},
 }
 
-// IsValidTaskStatus — pure-проверка строкового литерала per-task статуса.
+// IsValidTaskStatus — pure check of a per-task status string literal.
 func IsValidTaskStatus(status string) bool {
 	_, ok := taskStatusLiteralByEnum[status]
 	return ok
 }
 
-// AssertTaskStatus проверяет, что per-task статус задачи (apply_id, sid,
-// plan_index, passage) равен wantStatus. Читает audit_log (event_type=
-// task.executed, correlation_id=apply_id), а не apply_runs — keeper персистит
-// per-task TaskStatus ТОЛЬКО в audit (см. doc-comment блока).
+// AssertTaskStatus checks that the per-task status of a task (apply_id, sid,
+// plan_index, passage) equals wantStatus. Reads audit_log (event_type=
+// task.executed, correlation_id=apply_id), not apply_runs — keeper persists
+// per-task TaskStatus ONLY in audit (see the block doc comment above).
 //
-// planIdx — ГЛОБАЛЬНЫЙ сквозной plan_index задачи (не локальный task_idx); для
-// N=1-прогона совпадает с позицией задачи в плане. passage — индекс Passage
-// staged-render (0 = единственный).
+// planIdx — the task's GLOBAL end-to-end plan_index (not the local task_idx);
+// for an N=1 run it matches the task's position in the plan. passage — the
+// staged-render Passage index (0 = the only one).
 //
-// wantStatus — строковый литерал keeperv1.TaskStatus.String(), например
-// "TASK_STATUS_SKIPPED" / "TASK_STATUS_FAILED" / "TASK_STATUS_CHANGED". Невалидный
-// литерал в expectation → fail-early (опечатка видна сразу).
+// wantStatus — a keeperv1.TaskStatus.String() string literal, e.g.
+// "TASK_STATUS_SKIPPED" / "TASK_STATUS_FAILED" / "TASK_STATUS_CHANGED". An
+// invalid literal in an expectation → fail-early (typo visible immediately).
 //
-// Берём ПОСЛЕДНЮЮ по created_at строку: retry той же задачи эмитит TaskEvent
-// последней попытки (один TaskEvent на task — см. runTaskWithRetry), но дубль
-// под cross-Keeper-роутинг возможен; «последняя побеждает» совпадает с
-// register-семантикой.
+// We take the LATEST row by created_at: a retry of the same task emits a
+// TaskEvent for the last attempt (one TaskEvent per task — see
+// runTaskWithRetry), but a duplicate under cross-Keeper routing is possible;
+// "last wins" matches register semantics.
 func (s *Stack) AssertTaskStatus(t *testing.T, applyID, sid string, planIdx, passage int, wantStatus string) {
 	t.Helper()
 	if !IsValidTaskStatus(wantStatus) {
-		t.Fatalf("AssertTaskStatus: неизвестный TaskStatus-литерал %q (разрешены: TASK_STATUS_OK/CHANGED/FAILED/TIMED_OUT/SKIPPED/CANCELLED/UNSPECIFIED)", wantStatus)
+		t.Fatalf("AssertTaskStatus: unknown TaskStatus literal %q (allowed: TASK_STATUS_OK/CHANGED/FAILED/TIMED_OUT/SKIPPED/CANCELLED/UNSPECIFIED)", wantStatus)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1048,28 +1062,28 @@ func (s *Stack) AssertTaskStatus(t *testing.T, applyID, sid string, planIdx, pas
 	`, applyID, sid, planIdx, passage).Scan(&status)
 	if err != nil {
 		s.dumpTaskEvents(ctx, t, applyID, sid)
-		t.Fatalf("AssertTaskStatus(apply=%s sid=%s plan_index=%d passage=%d): нет task.executed-строки в audit_log (задача не исполнялась / TaskEvent не дошёл?): %v",
+		t.Fatalf("AssertTaskStatus(apply=%s sid=%s plan_index=%d passage=%d): no task.executed row in audit_log (task not executed / TaskEvent did not arrive?): %v",
 			applyID, sid, planIdx, passage, err)
 	}
 	if status != wantStatus {
 		s.dumpTaskEvents(ctx, t, applyID, sid)
-		t.Fatalf("AssertTaskStatus(apply=%s sid=%s plan_index=%d passage=%d): status=%q, ожидался %q",
+		t.Fatalf("AssertTaskStatus(apply=%s sid=%s plan_index=%d passage=%d): status=%q, expected %q",
 			applyID, sid, planIdx, passage, status, wantStatus)
 	}
 }
 
-// AssertTaskErrorCode проверяет error.code per-task задачи (apply_id, sid,
-// plan_index, passage). Доказывает класс падения: flowcontrol.failed_when (бизнес-
-// провал по CEL-предикату) vs flowcontrol.until_exhausted vs модульная ошибка
-// (например "pkg.not_found"). error.code персистится в audit_log payload->'error'
-// ->>'code' (см. shared/audit.BuildTaskExecutedPayload); apply_runs хранит лишь
-// composed error_summary-ТЕКСТ, не структурный code.
+// AssertTaskErrorCode checks the error.code of a task (apply_id, sid,
+// plan_index, passage). Proves the failure class: flowcontrol.failed_when
+// (business failure by a CEL predicate) vs flowcontrol.until_exhausted vs a
+// module error (e.g. "pkg.not_found"). error.code is persisted in audit_log
+// payload->'error'->>'code' (see shared/audit.BuildTaskExecutedPayload);
+// apply_runs stores only a composed error_summary TEXT, not a structured code.
 //
-// Для no_log-задачи error.message подавлен, но code и module кладутся — этот
-// assert работает и на no_log-задачах.
+// For no_log tasks error.message is suppressed, but code and module are
+// still stored — this assert works on no_log tasks too.
 //
-// wantCode — точный литерал TaskError.code, например "flowcontrol.failed_when".
-// Если у задачи нет error (OK/CHANGED/SKIPPED) → error.code отсутствует → fail.
+// wantCode — the exact TaskError.code literal, e.g. "flowcontrol.failed_when".
+// If the task has no error (OK/CHANGED/SKIPPED) → error.code is missing → fail.
 func (s *Stack) AssertTaskErrorCode(t *testing.T, applyID, sid string, planIdx, passage int, wantCode string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1089,30 +1103,30 @@ func (s *Stack) AssertTaskErrorCode(t *testing.T, applyID, sid string, planIdx, 
 	`, applyID, sid, planIdx, passage).Scan(&code)
 	if err != nil {
 		s.dumpTaskEvents(ctx, t, applyID, sid)
-		t.Fatalf("AssertTaskErrorCode(apply=%s sid=%s plan_index=%d passage=%d): нет task.executed-строки в audit_log: %v",
+		t.Fatalf("AssertTaskErrorCode(apply=%s sid=%s plan_index=%d passage=%d): no task.executed row in audit_log: %v",
 			applyID, sid, planIdx, passage, err)
 	}
 	if code != wantCode {
 		s.dumpTaskEvents(ctx, t, applyID, sid)
-		t.Fatalf("AssertTaskErrorCode(apply=%s sid=%s plan_index=%d passage=%d): error.code=%q, ожидался %q",
+		t.Fatalf("AssertTaskErrorCode(apply=%s sid=%s plan_index=%d passage=%d): error.code=%q, expected %q",
 			applyID, sid, planIdx, passage, code, wantCode)
 	}
 }
 
-// AssertTaskRegisterField читает одно поле register_data задачи из
-// apply_task_register (PK apply_id, sid, plan_index — миграция 079). Возвращает
-// JSON-скаляр поля как строку (register_data->>'<field>'); для stdout / exit_code
-// / ignored_error / changed / failed нужен FC-1/FC-4 (доказать, что register
-// flow-control-задачи несёт ожидаемое значение).
+// AssertTaskRegisterField reads a single register_data field of a task from
+// apply_task_register (PK apply_id, sid, plan_index — migration 079). Returns
+// the field's JSON scalar as a string (register_data->>'<field>'); for
+// stdout / exit_code / ignored_error / changed / failed we'll need FC-1/FC-4
+// (to prove the register of a flow-control task carries the expected value).
 //
-// register_data — то, что РЕАЛЬНЫЙ soul эмитил в TaskEvent.register_data и keeper
-// собрал (accumulateRegister). НЕ персистируется для задачи без register: (nil
-// register_data → строки нет, UpsertTaskRegister no-op) → assert зафейлит «нет
-// строки».
+// register_data — what the REAL soul emitted in TaskEvent.register_data and
+// keeper accumulated (accumulateRegister). NOT persisted for a task without
+// register: (nil register_data → no row, UpsertTaskRegister is a no-op) →
+// the assert will fail with "no row".
 //
-// planIdx — ГЛОБАЛЬНЫЙ сквозной plan_index (ключ корреляции, не локальный
-// task_idx). Без разреза по passage: PK уже уникален по plan_index сквозь все
-// Passage (та же находка, что закрыла миграция 079).
+// planIdx — the GLOBAL end-to-end plan_index (correlation key, not the local
+// task_idx). No split by passage: the PK is already unique by plan_index
+// across all Passages (the same finding that migration 079 closed).
 func (s *Stack) AssertTaskRegisterField(t *testing.T, applyID, sid string, planIdx int, field, want string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1125,18 +1139,19 @@ func (s *Stack) AssertTaskRegisterField(t *testing.T, applyID, sid string, planI
 		WHERE apply_id = $1 AND sid = $2 AND plan_index = $3
 	`, applyID, sid, planIdx, field).Scan(&got)
 	if err != nil {
-		t.Fatalf("AssertTaskRegisterField(apply=%s sid=%s plan_index=%d field=%s): нет register-строки (задача без register:/реальный soul не вернул register?): %v",
+		t.Fatalf("AssertTaskRegisterField(apply=%s sid=%s plan_index=%d field=%s): no register row (task without register:/real soul didn't return a register?): %v",
 			applyID, sid, planIdx, field, err)
 	}
 	if got != want {
-		t.Fatalf("AssertTaskRegisterField(apply=%s sid=%s plan_index=%d field=%s): %q, ожидалось %q",
+		t.Fatalf("AssertTaskRegisterField(apply=%s sid=%s plan_index=%d field=%s): %q, expected %q",
 			applyID, sid, planIdx, field, got, want)
 	}
 }
 
-// dumpTaskEvents печатает диагностику: все task.executed-строки прогона по хосту
-// (plan_index/task_idx/passage/status/error.code). Зовётся на фейл per-task
-// assert-ов — без неё «нет строки» немой, видно ли вообще TaskEvent-ы дошли.
+// dumpTaskEvents prints diagnostics: all task.executed rows for the run on a
+// host (plan_index/task_idx/passage/status/error.code). Called on a per-task
+// assert failure — without it, "no row" is silent about whether TaskEvents
+// arrived at all.
 func (s *Stack) dumpTaskEvents(ctx context.Context, t *testing.T, applyID, sid string) {
 	t.Helper()
 	rows, err := s.db.Query(ctx, `
@@ -1167,7 +1182,7 @@ func (s *Stack) dumpTaskEvents(ctx context.Context, t *testing.T, applyID, sid s
 			planIdx, taskIdx, passage, status, code))
 	}
 	if len(lines) == 0 {
-		t.Logf("dumpTaskEvents(apply=%s sid=%s): НИ ОДНОЙ task.executed-строки", applyID, sid)
+		t.Logf("dumpTaskEvents(apply=%s sid=%s): NO task.executed rows at all", applyID, sid)
 		return
 	}
 	t.Logf("dumpTaskEvents(apply=%s sid=%s) task.executed:\n  %s", applyID, sid, strings.Join(lines, "\n  "))

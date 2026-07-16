@@ -9,21 +9,23 @@ import (
 	"time"
 )
 
-// Direct-seed helpers L3b: запись incarnation/soulprint напрямую в Postgres,
-// минуя Operator API. Дословный (адаптированный под SoulContainers) порт
-// L3a-harness (tests/e2e/harness/stack.go::SeedIncarnationReady,
-// cert.go::SeedSoulprint). Дублирование санкционировано architect-вердиктом
-// `a0af3d90ec118aafd`: L3a/L3b — независимые test-frequencies (stub vs real soul),
-// общий harness недоступен через module-границу.
+// Direct-seed helpers L3b: write incarnation/soulprint directly to Postgres,
+// bypassing the Operator API. A verbatim (adapted for SoulContainers) port of
+// the L3a harness (tests/e2e/harness/stack.go::SeedIncarnationReady,
+// cert.go::SeedSoulprint). Duplication is sanctioned by architect verdict
+// `a0af3d90ec118aafd`: L3a/L3b are independent test frequencies (stub vs real
+// soul), the shared harness is unreachable across the module boundary.
 //
-// Зачем seed нужен на L3b: некоторые сервисы имеют create-сценарий, неприменимый
-// офлайн (cloud-spawn / declared-primary / probe на ещё-не-запущенном демоне),
-// поэтому incarnation засевается напрямую с baseline state, а тестируется
-// мутирующий сценарий поверх живого демона, поднятого отдельно.
+// Why seeding is needed on L3b: some services have a create scenario that
+// isn't applicable offline (cloud-spawn / declared-primary / probe on a
+// not-yet-running daemon), so the incarnation is seeded directly with a
+// baseline state, and the mutating scenario is tested on top of a live daemon
+// started separately.
 
-// SeedIncarnationReady вставляет готовую (status='ready') incarnation с baseline
-// state напрямую в Postgres. spec — пустой `{}` (для мутирующих сценариев spec
-// не читается). Используется, когда штатный create-flow на L3b недоступен.
+// SeedIncarnationReady inserts a ready (status='ready') incarnation with a
+// baseline state directly into Postgres. spec is an empty `{}` (mutating
+// scenarios don't read spec). Used when the regular create flow is unavailable
+// on L3b.
 func (s *Stack) SeedIncarnationReady(t *testing.T, name, service, serviceVersion string, state map[string]any) {
 	t.Helper()
 	stateJSON, err := json.Marshal(state)
@@ -40,29 +42,32 @@ func (s *Stack) SeedIncarnationReady(t *testing.T, name, service, serviceVersion
 	}
 }
 
-// SpecHostDecl — declared-запись `incarnation.spec.hosts[]` для
-// [Stack.SeedIncarnationForCreate]. Форма зеркалит парсер
-// topology.parseDeclaredRoles (`{sid, role}`, ADR-008); role kebab-case
-// (`primary`/`replica`/...), пустая допустима (хост вне declared-роли).
+// SpecHostDecl - a declared entry of `incarnation.spec.hosts[]` for
+// [Stack.SeedIncarnationForCreate]. The shape mirrors the
+// topology.parseDeclaredRoles parser (`{sid, role}`, ADR-008); role is
+// kebab-case (`primary`/`replica`/...), empty is allowed (host outside the
+// declared role).
 type SpecHostDecl struct {
 	SID  string
 	Role string
 }
 
-// SeedIncarnationForCreate вставляет incarnation в status='ready' с ПУСТЫМ state
-// (`{}`) и declared `spec.hosts[]` (роли host-0/host-1/...). Отличие от
-// [Stack.SeedIncarnationReady]: state пуст (create наполнит его сам через
-// state_changes), а spec несёт declared-роли — их читает topology.parseDeclaredRoles
-// при резолве `soulprint.hosts.where("role == 'primary'")` в create-scenario.
+// SeedIncarnationForCreate inserts an incarnation in status='ready' with an
+// EMPTY state (`{}`) and declared `spec.hosts[]` (roles host-0/host-1/...).
+// Difference from [Stack.SeedIncarnationReady]: state is empty (create fills
+// it itself via state_changes), while spec carries the declared roles - read by
+// topology.parseDeclaredRoles when resolving
+// `soulprint.hosts.where("role == 'primary'")` in the create scenario.
 //
-// Зачем отдельный helper: POST /v1/incarnations НЕ принимает declared spec.hosts
-// (ADR-008, ровно как поясняет ТЗ), а bootstrap-create-сценарии, таргетящие
-// primary по `soulprint.hosts.where("role == 'primary'")[0]`, этим declared-ролям
-// обязаны. Прямой SQL-seed spec.hosts ДО RunScenario(create) закрывает разрыв
-// «declared-роль недоступна офлайн».
+// Why a separate helper: POST /v1/incarnations does NOT accept declared
+// spec.hosts (ADR-008, exactly as the spec explains), yet bootstrap-create
+// scenarios that target primary via
+// `soulprint.hosts.where("role == 'primary'")[0]` depend on these declared
+// roles. A direct SQL seed of spec.hosts BEFORE RunScenario(create) closes the
+// gap of "declared role unavailable offline".
 //
-// status='ready' → штатный RunScenario(create) проходит lock-gate (lockRun
-// стартует обычный прогон из ready, run.go), без FromLocked-хака.
+// status='ready' -> the regular RunScenario(create) passes the lock gate
+// (lockRun starts a normal run from ready, run.go), no FromLocked hack needed.
 func (s *Stack) SeedIncarnationForCreate(t *testing.T, name, service, serviceVersion string, hosts []SpecHostDecl) {
 	t.Helper()
 	specHosts := make([]map[string]any, 0, len(hosts))
@@ -87,16 +92,17 @@ func (s *Stack) SeedIncarnationForCreate(t *testing.T, name, service, serviceVer
 	}
 }
 
-// SeedSoulprint записывает soulprint-факты i-го soul-контейнера напрямую в
-// `souls.soulprint_facts` (форма SoulprintFacts-JSON, CEL `soulprint.self.<path>`,
-// ADR-018). На L3b реальный soul шлёт собственный SoulprintReport при установке
-// сессии (см. WaitSoulprintReported) — seed нужен лишь когда тесту требуется
-// детерминированный факт (например стабильный primary_ip), не зависящий от
-// сетевого адреса контейнера. SID берётся из SoulContainers[soulIndex].
+// SeedSoulprint writes the soulprint facts of the i-th soul container directly
+// to `souls.soulprint_facts` (SoulprintFacts-JSON shape, CEL
+// `soulprint.self.<path>`, ADR-018). On L3b the real soul sends its own
+// SoulprintReport when the session is established (see
+// WaitSoulprintReported) - seeding is only needed when a test requires a
+// deterministic fact (e.g. a stable primary_ip) independent of the
+// container's network address. SID is taken from SoulContainers[soulIndex].
 func (s *Stack) SeedSoulprint(t *testing.T, soulIndex int, facts map[string]any) {
 	t.Helper()
 	if soulIndex < 0 || soulIndex >= len(s.SoulContainers) {
-		t.Fatalf("SeedSoulprint(%d): out of range (создано %d soul-контейнеров)", soulIndex, len(s.SoulContainers))
+		t.Fatalf("SeedSoulprint(%d): out of range (%d soul containers created)", soulIndex, len(s.SoulContainers))
 	}
 	sid := s.SoulContainers[soulIndex].SID
 	factsJSON, err := json.Marshal(facts)

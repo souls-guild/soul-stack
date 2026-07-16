@@ -1,22 +1,22 @@
 //go:build e2e_live
 
-// Package harness — reusable test-helpers для L3b E2E-тестирования
+// Package harness - reusable test-helpers for L3b E2E testing
 // (real-soul-in-container, ADR-039).
 //
-// L3b отличается от L3a тем, что вместо soul-stub-helper-пакета поднимает
-// реальный soul-binary в Linux-контейнере (Debian-12 systemd-PID-1) и проходит
-// реальный CSR-Bootstrap-flow. См. tests/e2e-live/README.md.
+// L3b differs from L3a in that, instead of the soul-stub-helper package, it
+// spins up a real soul binary in a Linux container (Debian-12 systemd-PID-1)
+// and goes through the real CSR-Bootstrap flow. See tests/e2e-live/README.md.
 //
-// Stack — единица изоляции теста: один тест = один Stack = свой PG / Redis /
-// Vault + свой Keeper-процесс + N soul-контейнеров. NewStack блокируется до
-// полной готовности инфры. soul-container spawn появится в L3b-2-slice.
+// Stack - the unit of test isolation: one test = one Stack = its own PG / Redis /
+// Vault + its own Keeper process + N soul containers. NewStack blocks until the
+// infra is fully ready. soul-container spawn arrives in the L3b-2 slice.
 //
-// Архитектурные инварианты (ADR-039 Amendment 2026-05-26):
-//   - harness НЕ импортирует `keeper/internal/*` (Go internal-rules);
-//   - все DB-операции — direct SQL через pgx;
-//   - все Vault-операции — direct HTTP API (см. vault.go);
-//   - Keeper-процесс — sub-process реального бинаря, не in-process импорт;
-//   - soul — реальный binary в privileged-контейнере, cross-compiled `make build-linux`.
+// Architectural invariants (ADR-039 Amendment 2026-05-26):
+//   - harness does NOT import `keeper/internal/*` (Go internal rules);
+//   - all DB operations are direct SQL via pgx;
+//   - all Vault operations are direct HTTP API (see vault.go);
+//   - the Keeper process is a sub-process of the real binary, not an in-process import;
+//   - soul is a real binary in a privileged container, cross-compiled via `make build-linux`.
 package harness
 
 import (
@@ -40,22 +40,22 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// Config — параметры конструирования Stack-а.
+// Config - parameters for constructing a Stack.
 //
-// ExamplePath — относительный путь к каталогу service-а в репо (например
-// "examples/service/smoke-nginx-live"). Harness читает его, делает snapshot и
-// заводит per-test bare git-repo в $TMP (L3b-3).
+// ExamplePath - relative path to the service directory in the repo (e.g.
+// "examples/service/smoke-nginx-live"). The harness reads it, takes a snapshot,
+// and sets up a per-test bare git repo in $TMP (L3b-3).
 //
-// Souls — количество soul-контейнеров, спавнящихся через SpawnSoulContainer
-// (L3b-2+). 0 — keeper-only стенд (без soul-контейнеров и без pre-flight
-// требования soul-linux-бинаря): лёгкие тесты keeper-side поверхностей
-// (plugin-канал NIM-32 S1 и т.п.).
+// Souls - number of soul containers spawned via SpawnSoulContainer
+// (L3b-2+). 0 means a keeper-only stand (no soul containers and no pre-flight
+// requirement for the soul-linux binary): light tests of keeper-side surfaces
+// (plugin channel NIM-32 S1 etc).
 //
-// SoulModules — каталог `plugins.soul_modules[]` keeper.yml (ADR-065(b)):
-// SoulModule-плагины, которые keeper при старте git-резолвит в cache_root
-// (plugingit, слот `<ns>-<name>/current/`). Непустой список автоматически
-// включает Sigil (config_builder пишет sigil-блок, NewStack сеет
-// ed25519-ключ подписи в Vault) — без Signer-а allow-флоу не поднимается.
+// SoulModules - the `plugins.soul_modules[]` catalog of keeper.yml (ADR-065(b)):
+// SoulModule plugins that keeper git-resolves into cache_root at startup
+// (plugingit, slot `<ns>-<name>/current/`). A non-empty list automatically
+// enables Sigil (config_builder writes the sigil block, NewStack seeds an
+// ed25519 signing key into Vault) - without a Signer the allow flow doesn't come up.
 type Config struct {
 	ExamplePath string
 	ServiceName string
@@ -63,57 +63,58 @@ type Config struct {
 	SoulModules []SoulModuleEntry
 }
 
-// SoulModuleEntry — одна запись каталога `plugins.soul_modules[]`
-// (`{name, source, ref}`, зеркало config.PluginCatalogEntry — harness не
-// импортирует shared/config, публичный контракт тестируется как чёрный ящик).
+// SoulModuleEntry - one entry of the `plugins.soul_modules[]` catalog
+// (`{name, source, ref}`, mirrors config.PluginCatalogEntry - the harness does
+// not import shared/config, the public contract is tested as a black box).
 type SoulModuleEntry struct {
 	Name   string
 	Source string
 	Ref    string
 }
 
-// Stack — изолированный E2E-стенд одного теста.
+// Stack - the isolated E2E stand for a single test.
 type Stack struct {
 	t *testing.T
 
 	cfg Config
 
-	// Resolved endpoints (заполняются NewStack-ом после spawn-а).
+	// Resolved endpoints (filled in by NewStack after spawning).
 	PGURL               string
 	RedisAddr           string
 	VaultAddr           string
 	KeeperHTTPURL       string
 	KeeperGRPCAddr      string
 	KeeperBootstrapGRPC string
-	// MetricsURL — Prometheus-эндпоинт keeper-а (отдельный listener, ADR-024).
+	// MetricsURL - keeper's Prometheus endpoint (separate listener, ADR-024).
 	MetricsURL string
 
-	// JWT — credential первого Архонта, прочитанный из credential-файла
-	// `keeper init --credential-out=...`.
+	// JWT - the first Archon's credential, read from the credential file
+	// produced by `keeper init --credential-out=...`.
 	JWT string
 
-	// SoulContainers — populated SpawnSoulContainer-ом в L3b-2+; nil/empty на L3b-1.
+	// SoulContainers - populated by SpawnSoulContainer in L3b-2+; nil/empty on L3b-1.
 	SoulContainers []*SoulContainer
 
-	// PluginCacheRoot — `plugins.cache_root` keeper.yml (заполняется
-	// buildKeeperYAML-ом): сюда plugingit-резолвер материализует слоты
-	// `<ns>-<name>/current/` каталога плагинов (ADR-065(b)/(g)). Тесты
-	// plugin-канала ассертят слот по этому пути.
+	// PluginCacheRoot - `plugins.cache_root` from keeper.yml (filled in by
+	// buildKeeperYAML): the plugingit resolver materializes the plugin catalog
+	// slots `<ns>-<name>/current/` here (ADR-065(b)/(g)). Plugin-channel tests
+	// assert the slot at this path.
 	PluginCacheRoot string
 
-	// caBundle — PEM-bundle Vault PKI root CA, выданный IssueKeeperServerCert-ом.
-	// soul-контейнер mount-ит его как `/etc/soul/ca.pem`, чтобы верифицировать
-	// keeper-server-cert при server-only TLS-handshake-е (`soul init`).
+	// caBundle - PEM bundle of the Vault PKI root CA issued by IssueKeeperServerCert.
+	// The soul container mounts it as `/etc/soul/ca.pem` to verify the
+	// keeper-server cert during the server-only TLS handshake (`soul init`).
 	caBundle []byte
 
-	// Порты keeper-gRPC-listener-ов. YAML биндит на `0.0.0.0:<port>` (доступно
-	// host-side-probe + контейнеру через host.docker.internal), а Stack-поля
-	// KeeperBootstrapGRPC/KeeperGRPCAddr — `127.0.0.1:<port>` (host-side).
+	// Ports of the keeper gRPC listeners. YAML binds them on `0.0.0.0:<port>`
+	// (reachable by the host-side probe + the container via host.docker.internal),
+	// while the Stack fields KeeperBootstrapGRPC/KeeperGRPCAddr hold
+	// `127.0.0.1:<port>` (host-side).
 	bootstrapPort   int
 	eventStreamPort int
 
-	// dockerNetwork — user-defined bridge для soul-контейнеров. nil на L3a-style
-	// прогонах (cfg.Souls=0); создаётся при первом SpawnSoulContainer-е.
+	// dockerNetwork - user-defined bridge for soul containers. nil on L3a-style
+	// runs (cfg.Souls=0); created on the first SpawnSoulContainer call.
 	dockerNetwork *testcontainers.DockerNetwork
 
 	// Internal state.
@@ -126,42 +127,42 @@ type Stack struct {
 
 	containers []testcontainers.Container
 
-	// Cleanup-shutdown order: LIFO через cleanups (как defer-ы); NewStack
-	// аккумулирует teardown-handler-ы по мере поднятия зависимостей, Cleanup
-	// сливает в обратном порядке.
+	// Cleanup shutdown order: LIFO via cleanups (like defers); NewStack
+	// accumulates teardown handlers as dependencies come up, Cleanup drains
+	// them in reverse order.
 	cleanups []func()
 }
 
-// NewStack поднимает изолированный стенд и блокируется до готовности.
+// NewStack brings up an isolated stand and blocks until it's ready.
 //
-// L3b-1: поднимает PG/Redis/Vault/keeper тем же путём, что L3a (копия harness-а).
-// soul-container spawn deferred to L3b-2 slice — параметр cfg.Souls на L3b-1
-// логируется warn-ом, но никакие контейнеры не поднимаются.
+// L3b-1: brings up PG/Redis/Vault/keeper the same way as L3a (a copy of the harness).
+// soul-container spawn is deferred to the L3b-2 slice - the cfg.Souls parameter
+// on L3b-1 is logged as a warning, but no containers come up.
 //
 // Pre-flight (L3b-specific):
-//   - keeper-бинарь (env `KEEPER_BIN` или дефолтный `./keeper/bin/keeper`);
-//     `make build` собирает нативный бинарь (host-arch), L3b-1 запускает
-//     keeper НА ХОСТЕ (не в контейнере) — нативный keeper подходит.
-//   - soul-linux-binary (env `SOUL_BIN_LINUX` или дефолтный
-//     `./soul/bin/soul-linux-amd64`) — нужен в L3b-2+ для mount в контейнер.
-//     L3b-1 пока только проверяет наличие (skip-тест если не собран).
+//   - keeper binary (env `KEEPER_BIN` or default `./keeper/bin/keeper`);
+//     `make build` builds a native binary (host-arch), L3b-1 runs keeper ON
+//     THE HOST (not in a container) - a native keeper works fine.
+//   - soul-linux binary (env `SOUL_BIN_LINUX` or default
+//     `./soul/bin/soul-linux-amd64`) - needed in L3b-2+ to mount into the
+//     container. L3b-1 for now only checks its presence (skips the test if not built).
 //
-// Без любого из бинарей — t.Skip с подсказкой про `make build` / `make build-linux`.
+// Missing either binary - t.Skip with a hint about `make build` / `make build-linux`.
 func NewStack(t *testing.T, cfg Config) *Stack {
 	t.Helper()
 	if cfg.Souls < 0 {
 		cfg.Souls = 0
 	}
 
-	// Pre-flight: keeper-бинарь (нативный, host-arch).
+	// Pre-flight: keeper binary (native, host-arch).
 	if _, err := locateKeeperBinary(); err != nil {
-		t.Skipf("L3b: keeper-бинарь не найден (%v); экспортируй KEEPER_BIN или сделай `make build`", err)
+		t.Skipf("L3b: keeper binary not found (%v); export KEEPER_BIN or run `make build`", err)
 	}
-	// Pre-flight: linux-soul-бинарь (для L3b-2+). Keeper-only стенд (Souls=0)
-	// его не монтирует — не требуем.
+	// Pre-flight: linux-soul binary (for L3b-2+). A keeper-only stand (Souls=0)
+	// doesn't mount it - not required.
 	if cfg.Souls > 0 {
 		if _, err := locateLinuxSoulBinary(); err != nil {
-			t.Skipf("L3b: soul-linux-amd64 не найден (%v); экспортируй SOUL_BIN_LINUX или сделай `make build-linux`", err)
+			t.Skipf("L3b: soul-linux-amd64 not found (%v); export SOUL_BIN_LINUX or run `make build-linux`", err)
 		}
 	}
 
@@ -187,17 +188,18 @@ func NewStack(t *testing.T, cfg Config) *Stack {
 		t.Fatalf("NewStack: vault: %v", err)
 	}
 
-	// Vault test-secrets: PKI + JWT signing-key. Симметрично provision.sh.
+	// Vault test-secrets: PKI + JWT signing-key. Symmetric with provision.sh.
 	InitVaultTestSecrets(t, s)
 
-	// Sigil-ключ подписи — только при непустом каталоге SoulModules: keeper с
-	// sigil-блоком в конфиге падает на старте без Vault-секрета (buildSigilSigner
-	// cfg-fallback), а без sigil-блока plugin.allow-роуты не регистрируются.
+	// Sigil signing key - only when the SoulModules catalog is non-empty:
+	// keeper with a sigil block in the config fails at startup without a Vault
+	// secret (buildSigilSigner cfg-fallback), and without a sigil block the
+	// plugin.allow routes aren't registered.
 	if len(cfg.SoulModules) > 0 {
 		SeedSigilSigningKey(t, s)
 	}
 
-	// Outgoing-TLS material для keeper-server listener-ов.
+	// Outgoing TLS material for the keeper-server listeners.
 	keeperCertPEM, keeperKeyPEM, caPEM := IssueKeeperServerCert(t, s)
 	s.caBundle = caPEM
 	tlsDir := filepath.Join(s.tmpDir, "tls")
@@ -217,14 +219,14 @@ func NewStack(t *testing.T, cfg Config) *Stack {
 		t.Fatalf("NewStack: write vault-ca.crt: %v", err)
 	}
 
-	// keeper.yml — рендерится в tmpDir.
+	// keeper.yml - rendered into tmpDir.
 	keeperYAML := s.buildKeeperYAML(certPath, keyPath, caPath)
 	keeperYAMLPath := filepath.Join(s.tmpDir, "keeper.yml")
 	if err := os.WriteFile(keeperYAMLPath, []byte(keeperYAML), 0o600); err != nil {
 		t.Fatalf("NewStack: write keeper.yml: %v", err)
 	}
 
-	// PG connection pool — для direct SQL после bootstrap.
+	// PG connection pool - for direct SQL after bootstrap.
 	pool, err := pgxpool.New(ctx, s.PGURL)
 	if err != nil {
 		s.runCleanups()
@@ -248,15 +250,15 @@ func NewStack(t *testing.T, cfg Config) *Stack {
 		t.Fatalf("NewStack: keeper run: %v", err)
 	}
 
-	// Service-registration (L3b-3): материализует cfg.ExamplePath в per-test
-	// git-репо и регистрирует cfg.ServiceName@main через POST /v1/services. Без
-	// этого CreateIncarnation отвечает 422 «service is not registered» (ADR-029).
-	// Порядок к soul-spawn-у не привязан — соул для регистрации не нужен.
+	// Service registration (L3b-3): materializes cfg.ExamplePath into a per-test
+	// git repo and registers cfg.ServiceName@main via POST /v1/services. Without
+	// this, CreateIncarnation responds 422 "service is not registered" (ADR-029).
+	// Not tied to soul-spawn order - the soul isn't needed for registration.
 	s.registerExampleService(t)
 
-	// soul-container spawn (L3b-2): по одному privileged Debian-12 systemd-PID-1
-	// контейнеру на каждый запрошенный Soul. Имена детерминированные —
-	// `soul-live-<idx>.example.com` (PKI-role soul-seed разрешает example.com).
+	// soul-container spawn (L3b-2): one privileged Debian-12 systemd-PID-1
+	// container per requested Soul. Names are deterministic -
+	// `soul-live-<idx>.example.com` (PKI role soul-seed allows example.com).
 	for i := 0; i < cfg.Souls; i++ {
 		sid := fmt.Sprintf("soul-live-%c.example.com", 'a'+i)
 		token := IssueBootstrapToken(t, s, sid)
@@ -267,7 +269,7 @@ func NewStack(t *testing.T, cfg Config) *Stack {
 	return s
 }
 
-// Cleanup гасит весь стенд. Безопасен к повторному вызову.
+// Cleanup tears down the whole stand. Safe to call repeatedly.
 func (s *Stack) Cleanup() {
 	if s == nil {
 		return
@@ -289,7 +291,7 @@ func (s *Stack) runCleanups() {
 	s.cleanups = nil
 }
 
-// startPostgres поднимает PG-контейнер через testcontainers-go/modules/postgres.
+// startPostgres brings up a PG container via testcontainers-go/modules/postgres.
 func (s *Stack) startPostgres(ctx context.Context) error {
 	pgC, err := tcpostgres.RunContainer(ctx,
 		testcontainers.WithImage("postgres:16-alpine"),
@@ -338,8 +340,8 @@ func (s *Stack) startRedis(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("redis addr: %w", err)
 	}
-	// ConnectionString отдаёт `redis://host:port`. Для keeper.yml::redis.addr
-	// нужен host:port без схемы.
+	// ConnectionString returns `redis://host:port`. keeper.yml::redis.addr
+	// needs host:port without the scheme.
 	addr = strings.TrimPrefix(addr, "redis://")
 	s.RedisAddr = addr
 	return nil
@@ -383,8 +385,8 @@ func (s *Stack) startVault(ctx context.Context) error {
 	return nil
 }
 
-// runKeeperInit вызывает `keeper init` с каноническими флагами и возвращает
-// путь к credential-файлу (JWT первого Архонта).
+// runKeeperInit calls `keeper init` with the canonical flags and returns the
+// path to the credential file (JWT of the first Archon).
 func (s *Stack) runKeeperInit(keeperYAMLPath string) string {
 	s.t.Helper()
 	binaryPath := keeperBinaryPath(s.t)
@@ -404,17 +406,18 @@ func (s *Stack) runKeeperInit(keeperYAMLPath string) string {
 	return credentialPath
 }
 
-// startKeeperRun спавнит `keeper run` как sub-process. Блокируется до того,
-// как HTTP-listener начнёт отвечать (поллинг /readyz).
+// startKeeperRun spawns `keeper run` as a sub-process. Blocks until the
+// HTTP listener starts responding (polling /readyz).
 func (s *Stack) startKeeperRun(keeperYAMLPath string) error {
 	binaryPath := keeperBinaryPath(s.t)
-	// Service/destiny git-снапшоты artifact-loader-а кешируются в каталоге,
-	// дефолт которого `/var/lib/soul-stack-keeper/...` (не writable: keeper в L3b
-	// бежит на ХОСТЕ под обычным юзером). Перенаправляем в tmpDir через env-
-	// override (KEEPER_SERVICE_CACHE_DIR / KEEPER_DESTINY_CACHE_DIR /
-	// KEEPER_PLUGIN_WORK_DIR — см. cmd/keeper/main.go). Без этого load service
-	// при CreateIncarnation падает 500 «mkdir /var/lib/...: permission denied»
-	// на материализации service-снапшота из file://-репо (parity L3a).
+	// Service/destiny git snapshots of the artifact loader are cached in a
+	// directory that defaults to `/var/lib/soul-stack-keeper/...` (not writable:
+	// keeper in L3b runs ON THE HOST under a regular user). Redirect to tmpDir
+	// via env override (KEEPER_SERVICE_CACHE_DIR / KEEPER_DESTINY_CACHE_DIR /
+	// KEEPER_PLUGIN_WORK_DIR - see cmd/keeper/main.go). Without this, loading
+	// the service on CreateIncarnation fails with 500 "mkdir /var/lib/...:
+	// permission denied" when materializing the service snapshot from a
+	// file:// repo (parity with L3a).
 	serviceCacheDir := filepath.Join(s.tmpDir, "service-cache")
 	destinyCacheDir := filepath.Join(s.tmpDir, "destiny-cache")
 	pluginWorkDir := filepath.Join(s.tmpDir, "plugin-src")
@@ -457,8 +460,8 @@ func (s *Stack) startKeeperRun(keeperYAMLPath string) error {
 	return errors.New("keeper run: /readyz did not become healthy in 60s")
 }
 
-// keeperBinaryPath — путь к keeper-бинарю для exec-вызова. Fatal-fail при
-// отсутствии (pre-flight в NewStack уже сделал Skip раньше).
+// keeperBinaryPath - path to the keeper binary for exec calls. Fatal-fails if
+// missing (pre-flight in NewStack already Skipped earlier).
 func keeperBinaryPath(t *testing.T) string {
 	t.Helper()
 	path, err := locateKeeperBinary()
@@ -468,9 +471,9 @@ func keeperBinaryPath(t *testing.T) string {
 	return path
 }
 
-// locateKeeperBinary возвращает путь к keeper-бинарю без testing.TB-зависимости.
-// Источник: env KEEPER_BIN (приоритет), иначе `$REPO/keeper/bin/keeper`
-// (Makefile-таргет `make build`).
+// locateKeeperBinary returns the keeper binary path without a testing.TB dependency.
+// Source: env KEEPER_BIN (priority), else `$REPO/keeper/bin/keeper`
+// (Makefile target `make build`).
 func locateKeeperBinary() (string, error) {
 	if v := os.Getenv("KEEPER_BIN"); v != "" {
 		if _, err := os.Stat(v); err != nil {
@@ -482,7 +485,7 @@ func locateKeeperBinary() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("getwd: %w", err)
 	}
-	// tests/e2e-live/<test>.go → repo-root = wd/../..
+	// tests/e2e-live/<test>.go -> repo-root = wd/../..
 	repoRoot := filepath.Clean(filepath.Join(wd, "..", ".."))
 	candidate := filepath.Join(repoRoot, "keeper", "bin", "keeper")
 	if _, err := os.Stat(candidate); err != nil {
@@ -491,12 +494,12 @@ func locateKeeperBinary() (string, error) {
 	return candidate, nil
 }
 
-// locateLinuxSoulBinary — путь к cross-compiled soul-linux-amd64 для mount в
-// soul-контейнер (L3b-2+). Источник: env SOUL_BIN_LINUX (приоритет), иначе
-// `$REPO/soul/bin/soul-linux-amd64` (Makefile-таргет `make build-linux`).
+// locateLinuxSoulBinary - path to the cross-compiled soul-linux-amd64 for
+// mounting into the soul container (L3b-2+). Source: env SOUL_BIN_LINUX
+// (priority), else `$REPO/soul/bin/soul-linux-amd64` (Makefile target `make build-linux`).
 //
-// На L3b-1 функция только вызывается в pre-flight (Skip при отсутствии); сам
-// mount контейнером — в L3b-2-slice.
+// On L3b-1 the function is only called in pre-flight (Skip if missing); the
+// actual container mount is in the L3b-2 slice.
 func locateLinuxSoulBinary() (string, error) {
 	if v := os.Getenv("SOUL_BIN_LINUX"); v != "" {
 		if _, err := os.Stat(v); err != nil {
@@ -516,7 +519,7 @@ func locateLinuxSoulBinary() (string, error) {
 	return candidate, nil
 }
 
-// testLogWriter форвардит stdout/stderr keeper-процесса в t.Log.
+// testLogWriter forwards the keeper process stdout/stderr to t.Log.
 type testLogWriter struct {
 	t      *testing.T
 	prefix string
@@ -532,22 +535,23 @@ func (w *testLogWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// CreateIncarnation создаёт incarnation через Operator API Keeper-а.
+// CreateIncarnation creates an incarnation via the Keeper Operator API.
 //
-// serviceRef — `<service>@<ref>`; harness отрезает суффикс `@<ref>`
-// (ADR-029: POST /v1/incarnations принимает только bare service-name).
+// serviceRef - `<service>@<ref>`; the harness strips the `@<ref>` suffix
+// (ADR-029: POST /v1/incarnations only accepts a bare service name).
 //
-// 202 → возвращает имя incarnation. Любая другая статус-страница — t.Fatal
-// с телом ответа.
+// 202 -> returns the incarnation name. Any other status - t.Fatal with the
+// response body.
 //
-// Retry на 422 «service is not registered»: реестр сервисов резолвится из
-// in-memory Holder-snapshot (serviceregistry.Holder), который обновляется TTL-
-// poll-ом (10s) + Redis pub/sub-инвалидацией. registerExampleService публикует
-// сервис прямо перед потоком теста, и первый CreateIncarnation может прилететь
-// в окне до того, как snapshot подхватил новую запись (POST вернул 201, но
-// snapshot ещё устаревший). Это гонка регистрация↔snapshot-refresh, а не
-// отсутствие сервиса — короткий retry закрывает её герметично, не трогая
-// публичный контракт. На уже-видимом сервисе первый запрос проходит сразу.
+// Retry on 422 "service is not registered": the service registry resolves from
+// an in-memory Holder snapshot (serviceregistry.Holder), refreshed via a TTL
+// poll (10s) + Redis pub/sub invalidation. registerExampleService publishes
+// the service right before the test flow, and the first CreateIncarnation may
+// land in the window before the snapshot has picked up the new entry (POST
+// returned 201, but the snapshot is still stale). This is a
+// registration<->snapshot-refresh race, not a missing service - a short retry
+// closes it hermetically without touching the public contract. Once the
+// service is visible, the first request goes through immediately.
 func (s *Stack) CreateIncarnation(t *testing.T, name string, serviceRef string, spec map[string]any) string {
 	t.Helper()
 	c := s.opClient(t)
@@ -590,20 +594,21 @@ func (s *Stack) CreateIncarnation(t *testing.T, name string, serviceRef string, 
 	return out.Incarnation
 }
 
-// CreateIncarnationWithApply — как CreateIncarnation, но возвращает и apply_id
-// авто-запущенного scenario `create`. POST /v1/incarnations сразу запускает
-// create-прогон и переводит incarnation в `applying` (incarnation.go). Поэтому
-// отдельный RunScenario(create) сразу после Create отвергается lock-gate-ом
-// («incarnation уже в статусе applying» — run.go), и ожидание его apply_id
-// зависает в WaitApplySuccess до timeout. Использовать этот метод вместо пары
-// CreateIncarnation + RunScenario(create). Симметрично L3a-harness
+// CreateIncarnationWithApply - like CreateIncarnation, but also returns the
+// apply_id of the auto-started `create` scenario. POST /v1/incarnations
+// immediately starts the create run and moves the incarnation to `applying`
+// (incarnation.go). So a separate RunScenario(create) right after Create is
+// rejected by the lock gate ("incarnation already in status applying" -
+// run.go), and waiting for its apply_id hangs in WaitApplySuccess until
+// timeout. Use this method instead of the CreateIncarnation +
+// RunScenario(create) pair. Symmetric with the L3a harness
 // (tests/e2e/harness/stack.go::CreateIncarnationWithApply).
 //
-// create_scenario=`create` — Фаза-2 контракт (2026-06-29): выбор стартового
-// сценария обязателен при непустом create-наборе сервиса; scenario обязан нести
-// `create: true`. Bare-путь (без прогона) — CreateIncarnation.
+// create_scenario=`create` - Phase-2 contract (2026-06-29): choosing the
+// starting scenario is mandatory when the service has a non-empty create set;
+// the scenario must carry `create: true`. Bare path (no run) - CreateIncarnation.
 //
-// Возвращает (incarnationName, applyID авто-create-прогона).
+// Returns (incarnationName, applyID of the auto-create run).
 func (s *Stack) CreateIncarnationWithApply(t *testing.T, name string, serviceRef string, spec map[string]any) (string, string) {
 	t.Helper()
 	c := s.opClient(t)
@@ -645,14 +650,15 @@ func (s *Stack) CreateIncarnationWithApply(t *testing.T, name string, serviceRef
 		t.Fatalf("CreateIncarnationWithApply %s: decode: %v (body=%s)", name, err, string(resp))
 	}
 	if out.ApplyID == "" {
-		t.Fatalf("CreateIncarnationWithApply %s: пустой apply_id в 202 body=%s (create-scenario не запущен?)", name, string(resp))
+		t.Fatalf("CreateIncarnationWithApply %s: empty apply_id in 202 body=%s (create scenario not started?)", name, string(resp))
 	}
 	return out.Incarnation, out.ApplyID
 }
 
-// CreateIncarnationWithApplyScenario — как CreateIncarnationWithApply, но
-// create-сценарий выбирается явно (сервисы с несколькими `create: true`, напр.
-// redis create/create_from_souls/migrate_cluster, иначе POST → 422).
+// CreateIncarnationWithApplyScenario - like CreateIncarnationWithApply, but
+// the create scenario is chosen explicitly (services with multiple `create:
+// true`, e.g. redis create/create_from_souls/migrate_cluster, otherwise
+// POST -> 422).
 func (s *Stack) CreateIncarnationWithApplyScenario(t *testing.T, name, serviceRef, createScenario string, spec map[string]any) (string, string) {
 	t.Helper()
 	c := s.opClient(t)
@@ -693,14 +699,14 @@ func (s *Stack) CreateIncarnationWithApplyScenario(t *testing.T, name, serviceRe
 		t.Fatalf("CreateIncarnationWithApplyScenario %s: decode: %v (body=%s)", name, err, string(resp))
 	}
 	if out.ApplyID == "" {
-		t.Fatalf("CreateIncarnationWithApplyScenario %s: пустой apply_id (create-scenario %q не запущен?) body=%s", name, createScenario, string(resp))
+		t.Fatalf("CreateIncarnationWithApplyScenario %s: empty apply_id (create scenario %q not started?) body=%s", name, createScenario, string(resp))
 	}
 	return out.Incarnation, out.ApplyID
 }
 
-// RunScenario запускает scenario на существующей incarnation.
+// RunScenario runs a scenario on an existing incarnation.
 //
-// 202 → возвращает apply_id. Другая статус-страница — t.Fatal.
+// 202 -> returns apply_id. Any other status - t.Fatal.
 func (s *Stack) RunScenario(t *testing.T, incarnationName string, scenarioName string, input map[string]any) string {
 	t.Helper()
 	c := s.opClient(t)
@@ -728,15 +734,16 @@ func (s *Stack) RunScenario(t *testing.T, incarnationName string, scenarioName s
 	return out.ApplyID
 }
 
-// WaitApplySuccess блокируется до УСПЕШНОГО терминала прогона: все строки
-// apply_runs (PK = apply_id+sid, N строк на прогон) в success И apply-брекет
-// incarnation.applying_apply_id снят с этого applyID.
+// WaitApplySuccess blocks until the SUCCESSFUL terminal state of the run: all
+// apply_runs rows (PK = apply_id+sid, N rows per run) are success AND the
+// apply bracket incarnation.applying_apply_id has been cleared for this applyID.
 //
-// Брекет обязателен (NIM-46): keeper-строка (sid="keeper") завершается success
-// СТРОГО ДО планирования soul-строк, поэтому «все видимые строки success» без
-// снятого брекета — ложное «готово» (NIM-45-гонка). Решение — [applySettled].
+// The bracket is mandatory (NIM-46): the keeper row (sid="keeper") reaches
+// success STRICTLY BEFORE the soul rows are planned, so "all visible rows
+// success" without a cleared bracket is a false "done" (the NIM-45 race). The
+// fix is [applySettled].
 //
-// Терминальный ≠ success — немедленный t.Fatal с дампом матрицы статусов.
+// Terminal != success - an immediate t.Fatal with a dump of the status matrix.
 func (s *Stack) WaitApplySuccess(t *testing.T, applyID string, timeoutSec int) {
 	t.Helper()
 	const q = `
@@ -770,30 +777,30 @@ WHERE ar.apply_id = $1`
 		lastSnap, lastInFlight = snap, inFlight
 		done, failSID, failStatus := applySettled(snap, inFlight)
 		if failSID != "" {
-			t.Fatalf("WaitApplySuccess %s: sid=%s reached terminal %q (строки=%v)", applyID, failSID, failStatus, snap)
+			t.Fatalf("WaitApplySuccess %s: sid=%s reached terminal %q (rows=%v)", applyID, failSID, failStatus, snap)
 		}
 		if done {
 			return
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
-	t.Fatalf("WaitApplySuccess %s: success не достигнут за %ds (applyInFlight=%v, строки=%v)", applyID, timeoutSec, lastInFlight, lastSnap)
+	t.Fatalf("WaitApplySuccess %s: success not reached in %ds (applyInFlight=%v, rows=%v)", applyID, timeoutSec, lastInFlight, lastSnap)
 }
 
-// WaitIncarnationReady блокируется до перехода incarnation.status в `ready`.
+// WaitIncarnationReady blocks until incarnation.status transitions to `ready`.
 //
-// Зачем отдельно от WaitApplySuccess: `apply_runs.status=success` (per-host
-// терминал задач) выставляется РАНЬШЕ, чем коммит state_changes в
-// incarnation.state. commitSuccess (run.go §8) пишет state + status='ready'
-// одной PG-транзакцией ПОСЛЕ барьера всех хостов — т.е. между «apply_runs
-// success» и «state закоммичен» есть окно. На L3a (soul-stub отвечает мгновенно)
-// окно микроскопическое; на L3b (реальный soul + gRPC round-trip) тест успевает
-// прочитать incarnation.state как пустой `{}` → AssertIncarnationState флапает.
-// Ждём именно status='ready' — это единственная точка, гарантирующая, что
-// state_changes уже в БД.
+// Why separate from WaitApplySuccess: `apply_runs.status=success` (per-host
+// task terminal) is set EARLIER than the state_changes commit into
+// incarnation.state. commitSuccess (run.go §8) writes state + status='ready'
+// in one PG transaction AFTER the barrier for all hosts - i.e. there's a
+// window between "apply_runs success" and "state committed". On L3a
+// (soul-stub responds instantly) the window is microscopic; on L3b (real soul
+// + gRPC round-trip) the test can read incarnation.state as empty `{}` ->
+// AssertIncarnationState flakes. We wait specifically for status='ready' -
+// the only point that guarantees state_changes are already in the DB.
 //
-// Терминальный ≠ ready (error_locked / migration_failed / destroy_failed) —
-// немедленный t.Fatal с текущим статусом.
+// Terminal != ready (error_locked / migration_failed / destroy_failed) - an
+// immediate t.Fatal with the current status.
 func (s *Stack) WaitIncarnationReady(t *testing.T, incarnationName string, timeoutSec int) {
 	t.Helper()
 	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
@@ -810,28 +817,28 @@ func (s *Stack) WaitIncarnationReady(t *testing.T, incarnationName string, timeo
 		case "ready":
 			return
 		case "error_locked", "migration_failed", "destroy_failed", "destroyed":
-			t.Fatalf("WaitIncarnationReady %s: достигнут терминальный статус %q вместо ready", incarnationName, status)
+			t.Fatalf("WaitIncarnationReady %s: reached terminal status %q instead of ready", incarnationName, status)
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
-	t.Fatalf("WaitIncarnationReady %s: status=ready не достигнут за %ds (последний статус=%q)",
+	t.Fatalf("WaitIncarnationReady %s: status=ready not reached in %ds (last status=%q)",
 		incarnationName, timeoutSec, last)
 }
 
-// WaitIncarnationStatus блокируется до перехода incarnation.status в wantStatus.
+// WaitIncarnationStatus blocks until incarnation.status transitions to wantStatus.
 //
-// Зеркало WaitIncarnationReady для НЕ-ready-исходов (split-brain guard, failed_when
-// fail-stop): прогон, который ДОЛЖЕН упасть, оставляет incarnation в
-// `error_locked` (run.go §7 — state_changes не коммитятся при terminal-failed
-// барьере).
+// Mirrors WaitIncarnationReady for NON-ready outcomes (split-brain guard,
+// failed_when fail-stop): a run that SHOULD fail leaves the incarnation in
+// `error_locked` (run.go §7 - state_changes aren't committed at the
+// terminal-failed barrier).
 //
-// ★ Гонка с seeded-ready. SeedIncarnationReady кладёт incarnation сразу в `ready`;
-// RunScenario возвращает apply_id асинхронно, ПЕРЕД тем как lockRun переведёт
-// `ready → applying → (terminal)`. Наивный поллер ловил начальный `ready` и
-// принимал его за «достигнут не тот терминал». Поэтому ждём в два этапа:
-// сначала наблюдаем `applying` (прогон стартовал и снял начальный статус), и
-// только ПОСЛЕ этого терминал ≠ wantStatus трактуем как регресс flow-control.
-// Если wantStatus == applying — первый этап и есть результат.
+// * Race with seeded-ready. SeedIncarnationReady puts the incarnation directly
+// into `ready`; RunScenario returns apply_id asynchronously, BEFORE lockRun
+// transitions `ready -> applying -> (terminal)`. A naive poller would catch
+// the initial `ready` and mistake it for "wrong terminal reached". So we wait
+// in two stages: first observe `applying` (the run started and cleared the
+// initial status), and only AFTER that treat terminal != wantStatus as a
+// flow-control regression. If wantStatus == applying, the first stage is the result.
 func (s *Stack) WaitIncarnationStatus(t *testing.T, incarnationName, wantStatus string, timeoutSec int) {
 	t.Helper()
 	terminal := map[string]bool{
@@ -839,7 +846,7 @@ func (s *Stack) WaitIncarnationStatus(t *testing.T, incarnationName, wantStatus 
 		"destroy_failed": true, "destroyed": true,
 	}
 	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
-	started := false // прогон снял начальный статус (наблюдён applying или сразу терминал)
+	started := false // the run cleared the initial status (observed applying or an immediate terminal)
 	var last string
 	for time.Now().Before(deadline) {
 		var status string
@@ -855,22 +862,23 @@ func (s *Stack) WaitIncarnationStatus(t *testing.T, incarnationName, wantStatus 
 		if status == "applying" {
 			started = true
 		}
-		// Терминал-мисматч считаем регрессом ТОЛЬКО после старта прогона: до старта
-		// это ещё seeded-исходный статус (обычно ready), а не исход прогона.
+		// A terminal mismatch is treated as a regression ONLY after the run
+		// started: before that it's still the seeded initial status (usually
+		// ready), not the run's outcome.
 		if started && terminal[status] {
-			t.Fatalf("WaitIncarnationStatus %s: достигнут терминальный %q, ожидался %q (flow-control исход разошёлся)",
+			t.Fatalf("WaitIncarnationStatus %s: reached terminal %q, expected %q (flow-control outcome diverged)",
 				incarnationName, status, wantStatus)
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	t.Fatalf("WaitIncarnationStatus %s: status=%q не достигнут за %ds (последний=%q)",
+	t.Fatalf("WaitIncarnationStatus %s: status=%q not reached in %ds (last=%q)",
 		incarnationName, wantStatus, timeoutSec, last)
 }
 
-// DeleteIncarnation сносит incarnation через Operator API (DELETE
-// /v1/incarnations/<name>?allow_destroy=<bool>). allow_destroy=true →
-// force-DELETE без teardown-сценария (синхронный каскад ON DELETE CASCADE в том
-// же запросе, incarnation_typed.go §DestroyTyped). Ассерт 2xx (роут → 202).
+// DeleteIncarnation tears down an incarnation via the Operator API (DELETE
+// /v1/incarnations/<name>?allow_destroy=<bool>). allow_destroy=true ->
+// force-DELETE without a teardown scenario (synchronous ON DELETE CASCADE in
+// the same request, incarnation_typed.go §DestroyTyped). Asserts 2xx (route -> 202).
 func (s *Stack) DeleteIncarnation(t *testing.T, name string, allowDestroy bool) {
 	t.Helper()
 	c := s.opClient(t)
@@ -884,11 +892,11 @@ func (s *Stack) DeleteIncarnation(t *testing.T, name string, allowDestroy bool) 
 	}
 }
 
-// AssertIncarnationAbsent — teardown-ассерт destroy-теста: GET incarnation → 404
-// И каскад ON DELETE CASCADE отработал (apply_runs / state_history по инкарнации
-// = 0 ЖИВЫХ строк; snapshot до удаления сохраняется в *_archive, migrations
-// 018/006). GET поллится: force-DELETE синхронен, но teardown-путь удаляет
-// строку асинхронно после 202.
+// AssertIncarnationAbsent - teardown assert for the destroy test: GET
+// incarnation -> 404 AND the ON DELETE CASCADE ran (apply_runs / state_history
+// for the incarnation = 0 LIVE rows; the pre-delete snapshot is preserved in
+// *_archive, migrations 018/006). GET is polled: force-DELETE is synchronous,
+// but the teardown path removes the row asynchronously after 202.
 func (s *Stack) AssertIncarnationAbsent(t *testing.T, name string) {
 	t.Helper()
 	c := s.opClient(t)
@@ -906,7 +914,7 @@ func (s *Stack) AssertIncarnationAbsent(t *testing.T, name string) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("AssertIncarnationAbsent %s: GET status=%d, ожидался 404 (инкарнация не снесена)\nbody=%s", name, lastStatus, string(lastBody))
+			t.Fatalf("AssertIncarnationAbsent %s: GET status=%d, expected 404 (incarnation not destroyed)\nbody=%s", name, lastStatus, string(lastBody))
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
@@ -915,19 +923,19 @@ func (s *Stack) AssertIncarnationAbsent(t *testing.T, name string) {
 	defer cancel()
 	for _, tbl := range []string{"apply_runs", "state_history"} {
 		var n int
-		// Имя таблицы — литерал из закрытого списка (не user-input), format безопасен.
+		// Table name is a literal from a closed list (not user input), format is safe.
 		q := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE incarnation_name = $1", tbl)
 		if err := s.db.QueryRow(ctx, q, name).Scan(&n); err != nil {
 			t.Fatalf("AssertIncarnationAbsent %s: count %s: %v", name, tbl, err)
 		}
 		if n != 0 {
-			t.Fatalf("AssertIncarnationAbsent %s: каскад не отработал — в %s осталось %d строк", name, tbl, n)
+			t.Fatalf("AssertIncarnationAbsent %s: cascade did not run - %s still has %d rows", name, tbl, n)
 		}
 	}
 }
 
-// stripServiceRef отрезает `@<ref>` (если есть). Operator API создаёт
-// incarnation по bare service-name (ADR-029).
+// stripServiceRef strips `@<ref>` (if present). The Operator API creates
+// incarnations by bare service name (ADR-029).
 func stripServiceRef(ref string) string {
 	if i := strings.IndexByte(ref, '@'); i >= 0 {
 		return ref[:i]
@@ -935,8 +943,8 @@ func stripServiceRef(ref string) string {
 	return ref
 }
 
-// DB возвращает pool для теста (read-only для assert-ов). Не Close-ит caller-у:
-// pool управляется Cleanup-ом.
+// DB returns the pool for the test (read-only for asserts). Does not Close for
+// the caller: the pool is managed by Cleanup.
 func (s *Stack) DB() *pgxpool.Pool {
 	return s.db
 }

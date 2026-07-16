@@ -1,9 +1,9 @@
 //go:build e2e_live
 
-// Общий setup L3b day-2-тестов redis на PLAIN-инкарнации (NIM-54): один живой
-// Redis в standalone-эквиваленте (sentinel + 0 реплик, provision off = деплой на
-// готовый soul-roster) под update_config / restart / update_users / destroy.
-// Повторяет цепочку redis_day2_adduser_live_test.go, вынесенную в setupRedisStandalone.
+// Common setup for L3b redis day-2 tests on a PLAIN incarnation (NIM-54): one live
+// Redis in standalone-equivalent mode (sentinel + 0 replicas, provision off = deploy onto a
+// ready soul-roster) under update_config / restart / update_users / destroy.
+// Repeats the chain from redis_day2_adduser_live_test.go, factored into setupRedisStandalone.
 package e2e_live_test
 
 import (
@@ -17,11 +17,11 @@ const (
 	redisDay2AdminPass = "e2e-default-admin-secret"
 )
 
-// setupRedisStandalone поднимает L3b-стек с ЖИВЫМ Redis (sentinel, 0 реплик =
-// standalone-эквивалент), plain-коннект (6379 без TLS), допущенным community.redis
-// и создаёт инкарнацию create-прогоном до status=ready. Возвращает стек, имя
-// инкарнации и пароль default_admin (AUTH day-2-ассертов). Cleanup регистрируется
-// через t.Cleanup — вызывающему defer не нужен.
+// setupRedisStandalone brings up an L3b stack with a LIVE Redis (sentinel, 0 replicas =
+// standalone-equivalent), a plain connection (6379 without TLS), an allowlisted community.redis,
+// and creates the incarnation via a create run through to status=ready. Returns the stack, the
+// incarnation name, and the default_admin password (for day-2 assert AUTH). Cleanup is registered
+// via t.Cleanup - the caller doesn't need a defer.
 func setupRedisStandalone(t *testing.T, persistence, maxmemoryPolicy string, memoryMB int) (stack *harness.Stack, inc, adminPass string) {
 	t.Helper()
 
@@ -39,8 +39,8 @@ func setupRedisStandalone(t *testing.T, persistence, maxmemoryPolicy string, mem
 
 	const incName = "redis"
 
-	// Vault-seed: главный пароль инкарнации + default_admin (AUTH community.redis.* и
-	// redis-cli-ассертов). Прочие системные юзеры create генерит сам.
+	// Vault seed: incarnation's main password + default_admin (used by community.redis.* AUTH and
+	// by redis-cli asserts). create generates other system users itself.
 	harness.SeedVaultKV(t, stack, "redis/"+incName, map[string]any{"password": "e2e-redis-main"})
 	harness.SeedVaultKV(t, stack, "redis/"+incName+"/users/"+redisDay2AdminUser, map[string]any{"password": redisDay2AdminPass})
 
@@ -66,7 +66,7 @@ func setupRedisStandalone(t *testing.T, persistence, maxmemoryPolicy string, mem
 	return stack, inc, redisDay2AdminPass
 }
 
-// plainConn — plain (без TLS) redis-cli-коннект к standalone-инстансу day-2-тестов.
+// plainConn - a plain (no TLS) redis-cli connection to the day-2 tests' standalone instance.
 func plainConn(adminPass string) harness.RedisConn {
 	return harness.RedisConn{SoulIdx: 0, Host: "127.0.0.1", Port: 6379, User: redisDay2AdminUser, Pass: adminPass}
 }

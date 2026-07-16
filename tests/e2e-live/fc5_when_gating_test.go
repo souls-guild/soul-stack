@@ -1,48 +1,48 @@
 //go:build e2e_live
 
-// FC-5 L3b real-apply: per-task `when:` register-gating на ПОДЛИННОМ register,
-// исполняемом реальным soul против ЖИВОГО redis в трёх Debian-12-контейнерах.
+// FC-5 L3b real-apply: per-task `when:` register-gating on GENUINE register,
+// executed by a real soul against a LIVE redis in three Debian-12 containers.
 //
-// ЗАЧЕМ (gap, который закрываем). L3a-stub НЕ вычисляет when (soul-stub отдаёт
-// заранее заданный статус, не прогоняя flow-control-движок), поэтому
-// register-зависимый `when:`-gating — Soul-side per-task решение ДО Apply — не
-// доказан на реальном register. FC-1 (redis_cluster_update_acl_test.go) доказал
-// СИММЕТРИЧНЫЙ, но ДРУГОЙ путь — `where:`-targeting:
+// WHY (the gap we're closing). L3a-stub does NOT evaluate when (soul-stub returns
+// a predetermined status without running the flow-control engine), so
+// register-dependent `when:` gating - a Soul-side per-task decision BEFORE Apply - is
+// not proven on real register. FC-1 (redis_cluster_update_acl_test.go) proved the
+// SYMMETRIC but DIFFERENT path - `where:` targeting:
 //
-//   where = Keeper-side targeting. Хост, у которого where:false, ВООБЩЕ не
-//           получает задачу: на уровне apply_runs он либо без passage-строки,
-//           либо no_match. Задача на нём не существует.
-//   when  = Soul-side per-task gating. Задача БЕЗ where: уходит на ВСЕ хосты
-//           прогона; Soul вычисляет when sandboxed-cel-движком и при when:false
-//           эмитит skippedTaskEvent → TASK_STATUS_SKIPPED (mod.Apply не зовётся),
-//           отдельной task.executed-строкой в audit_log.
+//   where = Keeper-side targeting. A host with where:false gets NO task at all:
+//           at the apply_runs level it either has no passage row,
+//           or no_match. The task doesn't exist on it.
+//   when  = Soul-side per-task gating. A task WITHOUT where: goes to ALL hosts
+//           of the run; Soul evaluates when via the sandboxed-cel engine and on
+//           when:false emits skippedTaskEvent -> TASK_STATUS_SKIPPED (mod.Apply is not called),
+//           as a separate task.executed row in audit_log.
 //
-// Это и есть наблюдаемое отличие, которое тест доказывает на real-apply:
-// register-gated when даёт per-task SKIPPED-СОБЫТИЕ (audit_log), а НЕ no_match на
-// уровне apply_runs (как where).
+// This is exactly the observable difference the test proves on real-apply:
+// register-gated when produces a per-task SKIPPED EVENT (audit_log), NOT no_match at
+// the apply_runs level (like where).
 //
-// СЦЕНАРИЙ (tests/e2e-live/when-gate-live, локальная fixture в зоне теста, НЕ
-// правит committed examples/):
-//   probe   — `redis-cli role | head -1 | tr -d '\n'` → register: redis_role
-//             (ЖИВОЙ redis: host-0 master, host-1/2 REPLICAOF host-0 → role
-//             master vs slave). tr -d '\n' — register.stdout без trailing \n.
-//   действие — задача БЕЗ where:, `when: register.redis_role.stdout == 'master'`,
-//             core.cmd.shell пишет маркер-файл, changed_when: false. ОБА шага в
-//             ОДНОМ Passage 0: register-зависимый `when:` НЕ расщепляет Passage
-//             (FC-5 narrow-fix, ADR-056:85 — flow-control НЕ passage-определяющий;
-//             soul-lint passage_plan = single-passage, НЕ [1 1] как до фикса).
-//             keeper протягивает when КАК CEL-СТРОКУ в RenderedTask.when (НЕ
-//             вычисляет — register известен только Soul-у), Soul видит register
-//             same-passage в своём ApplyRequest. Soul: master → OK, реплики → SKIPPED.
+// SCENARIO (tests/e2e-live/when-gate-live, a local fixture in the test's own scope, does NOT
+// touch committed examples/):
+//   probe   - `redis-cli role | head -1 | tr -d '\n'` -> register: redis_role
+//             (LIVE redis: host-0 master, host-1/2 REPLICAOF host-0 -> role
+//             master vs slave). tr -d '\n' - register.stdout without a trailing \n.
+//   action  - a task WITHOUT where:, `when: register.redis_role.stdout == 'master'`,
+//             core.cmd.shell writes a marker file, changed_when: false. BOTH steps in
+//             ONE Passage 0: register-dependent `when:` does NOT split the Passage
+//             (FC-5 narrow-fix, ADR-056:85 - flow-control is NOT passage-defining;
+//             soul-lint passage_plan = single-passage, NOT [1 1] as before the fix).
+//             keeper carries when AS A CEL STRING in RenderedTask.when (does NOT
+//             evaluate it - register is known only to Soul), Soul sees the register
+//             same-passage in its ApplyRequest. Soul: master -> OK, replicas -> SKIPPED.
 //
-// ★ trim: probe-cmd несёт `tr -d '\n'` (cmd-модуль stdout НЕ тримит — та же
-// находка, что у FC-1 update_acl). Без него register.redis_role.stdout = "master\n"
-// и when:=='master' не сматчился бы → master скипнулся бы как реплика (ложный
-// «gating работает наоборот»). Регресс-guard ниже фейлит на \n в register-stdout.
+// * trim: the probe-cmd carries `tr -d '\n'` (the cmd module does NOT trim stdout - the same
+// finding as FC-1 update_acl). Without it register.redis_role.stdout = "master\n"
+// and when:=='master' would not match -> master would be skipped as a replica (a false
+// "gating works inverted"). The regression guard below fails on \n in register-stdout.
 //
-// Live-bootstrap живого redis (bootstrapLiveRedis) переиспользуется из
-// redis_cluster_update_acl_test.go (один пакет e2e_live_test) — стоп-правило
-// «цепочка → карта»: не плодим второй redis-bootstrap.
+// Live-bootstrap of live redis (bootstrapLiveRedis) is reused from
+// redis_cluster_update_acl_test.go (one package e2e_live_test) - stop-rule
+// "chain -> map": don't proliferate a second redis-bootstrap.
 package e2e_live_test
 
 import (
@@ -58,13 +58,13 @@ const (
 	wgService     = "when-gate-live"
 	wgExamplePath = "tests/e2e-live/when-gate-live"
 
-	// План when_role_gate: probe + when-gated действие — ОБА в Passage 0 (FC-5
-	// narrow-fix, ADR-056:85): register-зависимый `when:` НЕ расщепляет Passage
-	// (flow-control НЕ passage-определяющий), действие без своего where: остаётся
-	// same-passage с probe → Soul видит register same-passage → when работает.
-	// plan_index — ГЛОБАЛЬНЫЙ сквозной индекс по всему плану (миграция 079, §S1):
-	// probe = 0, действие = 1; ОБА passage = 0 (один Passage, soul-lint passage_plan
-	// = single-passage, НЕ [1 1] как до narrow-fix).
+	// Plan when_role_gate: probe + the when-gated action - BOTH in Passage 0 (FC-5
+	// narrow-fix, ADR-056:85): register-dependent `when:` does NOT split the Passage
+	// (flow-control is NOT passage-defining), the action without its own where: stays
+	// same-passage with probe -> Soul sees register same-passage -> when works.
+	// plan_index - a GLOBAL cross-plan index over the whole plan (migration 079, §S1):
+	// probe = 0, action = 1; BOTH passage = 0 (one Passage, soul-lint passage_plan
+	// = single-passage, NOT [1 1] as before the narrow-fix).
 	wgProbePlanIdx   = 0
 	wgProbePassage   = 0
 	wgActionPlanIdx  = 1
@@ -73,13 +73,13 @@ const (
 )
 
 func TestFC5WhenGating_LiveRegister(t *testing.T) {
-	// FC-5 narrow-fix (ADR-056:85, вариант c): register-зависимый `when:` БОЛЬШЕ НЕ
-	// расщепляет Passage (flow-control убран из collectTaskReads). probe + when-gated
-	// действие (БЕЗ своего where:) теперь SAME-passage (Passage 0) → Soul видит
-	// register same-passage в своём ApplyRequest → when работает: master → OK, реплики
-	// → SKIPPED. Genuinely cross-passage when (probe в раннем Passage по ДРУГОЙ
-	// причине) — UNSUPPORTED, ловится soul-lint/keeper `cross_passage_when_unsupported`
-	// (unit-guard в shared/config + soul-lint testdata, НЕ этот live-сценарий).
+	// FC-5 narrow-fix (ADR-056:85, variant c): register-dependent `when:` NO LONGER
+	// splits the Passage (flow-control removed from collectTaskReads). probe + the when-gated
+	// action (WITHOUT its own where:) is now SAME-passage (Passage 0) -> Soul sees
+	// the register same-passage in its ApplyRequest -> when works: master -> OK, replicas
+	// -> SKIPPED. Genuinely cross-passage when (probe in an earlier Passage for a DIFFERENT
+	// reason) - UNSUPPORTED, caught by soul-lint/keeper `cross_passage_when_unsupported`
+	// (a unit-guard in shared/config + soul-lint testdata, NOT this live scenario).
 	stack := harness.NewStack(t, harness.Config{
 		ExamplePath: wgExamplePath,
 		ServiceName: wgService,
@@ -88,7 +88,7 @@ func TestFC5WhenGating_LiveRegister(t *testing.T) {
 	defer stack.Cleanup()
 
 	if got := len(stack.SoulContainers); got != 3 {
-		t.Fatalf("ожидалось 3 soul-контейнера, получено %d", got)
+		t.Fatalf("expected 3 soul containers, got %d", got)
 	}
 	const (
 		masterSID   = "soul-live-a.example.com"
@@ -98,24 +98,24 @@ func TestFC5WhenGating_LiveRegister(t *testing.T) {
 	wantSIDs := []string{masterSID, replica1SID, replica2SID}
 	for i, want := range wantSIDs {
 		if got := stack.SoulContainers[i].SID; got != want {
-			t.Fatalf("SoulContainers[%d].SID = %q, ожидалось %q", i, got, want)
+			t.Fatalf("SoulContainers[%d].SID = %q, expected %q", i, got, want)
 		}
 	}
 
 	const incName = "when-gate-live-run"
 
-	// Coven-членство ДО запуска scenario: roster резолвится по incarnation.name ∈
-	// coven[] (ADR-008). Без него no_hosts → ноль строк apply_runs.
+	// Coven membership BEFORE running the scenario: the roster resolves via incarnation.name ∈
+	// coven[] (ADR-008). Without it no_hosts -> zero apply_runs rows.
 	for i := range stack.SoulContainers {
 		stack.AddSoulToCoven(t, i, incName)
 	}
 
-	// Прямой seed ready-incarnation (state_schema пуст, фокус — gating, не state).
+	// Direct seed of a ready incarnation (state_schema is empty, the focus is gating, not state).
 	stack.SeedIncarnationReady(t, incName, wgService, "main", map[string]any{})
 
-	// ── Bootstrap ЖИВОГО redis: host-0 master, host-1/2 REPLICAOF host-0 ───────
-	// Делает probe `redis-cli role` различимым (master vs slave) на реальном
-	// apply. Переиспользуется из redis_cluster_update_acl_test.go (один пакет).
+	// ── Bootstrap LIVE redis: host-0 master, host-1/2 REPLICAOF host-0 ────────
+	// Makes the probe `redis-cli role` distinguishable (master vs slave) on a real
+	// apply. Reused from redis_cluster_update_acl_test.go (one package).
 	bootstrapLiveRedis(t, stack)
 
 	applyID := stack.RunScenario(t, incName, "when_role_gate", nil)
@@ -123,28 +123,28 @@ func TestFC5WhenGating_LiveRegister(t *testing.T) {
 	stack.WaitApplySuccess(t, applyID, 180)
 	stack.WaitIncarnationReady(t, incName, 30)
 
-	// ── (1) probe-register: реальный soul вернул роль каждого хоста ────────────
-	// Passage 0, plan_index 0. register stdout — то, что реальный soul напечатал
-	// на `redis-cli role | head -1 | tr -d '\n'`.
+	// ── (1) probe-register: the real soul returned each host's role ────────────
+	// Passage 0, plan_index 0. register stdout - what the real soul printed
+	// from `redis-cli role | head -1 | tr -d '\n'`.
 	masterRole := registerStdout(t, stack, applyID, masterSID)
 	r1Role := registerStdout(t, stack, applyID, replica1SID)
 	r2Role := registerStdout(t, stack, applyID, replica2SID)
 	t.Logf("probe register: master=%q replica1=%q replica2=%q", masterRole, r1Role, r2Role)
 
-	// ★ trim-регресс-guard: register.redis_role.stdout с trailing \n сломал бы
-	// when:=='master' (master скипнулся бы как реплика — ложный «gating инверсно»).
+	// * trim regression guard: register.redis_role.stdout with a trailing \n would break
+	// when:=='master' (master would be skipped as a replica - a false "gating is inverted").
 	if strings.Contains(masterRole, "\n") {
-		t.Fatalf("★ probe-newline-регресс: master register stdout = %q содержит \\n — probe `redis-cli role | head -1 | tr -d '\\n'` потерял trim; when:=='master' не сматчит на реальном register (восстановить tr -d в tests/e2e-live/when-gate-live/scenario/when_role_gate/main.yml)", masterRole)
+		t.Fatalf("* probe-newline regression: master register stdout = %q contains \\n - probe `redis-cli role | head -1 | tr -d '\\n'` lost the trim; when:=='master' won't match on real register (restore tr -d in tests/e2e-live/when-gate-live/scenario/when_role_gate/main.yml)", masterRole)
 	}
 	if strings.TrimSpace(masterRole) != "master" {
-		t.Fatalf("probe: master-хост вернул role=%q, ожидалось master (redis-bootstrap некорректен?)", masterRole)
+		t.Fatalf("probe: master host returned role=%q, expected master (redis-bootstrap incorrect?)", masterRole)
 	}
 	if strings.TrimSpace(r1Role) != "slave" || strings.TrimSpace(r2Role) != "slave" {
-		t.Fatalf("probe: реплики вернули role r1=%q r2=%q, ожидалось slave (REPLICAOF не сошёлся?)", r1Role, r2Role)
+		t.Fatalf("probe: replicas returned role r1=%q r2=%q, expected slave (REPLICAOF didn't converge?)", r1Role, r2Role)
 	}
 
-	// FC-0 канонический ключ: probe register stdout по plan_index 0 == 'master'/'slave'.
-	// Это и есть вход, по которому Soul вычислил when: register.redis_role.stdout.
+	// FC-0 canonical key: probe register stdout at plan_index 0 == 'master'/'slave'.
+	// This is exactly the input Soul used to evaluate when: register.redis_role.stdout.
 	stack.AssertTaskRegisterField(t, applyID, masterSID, wgProbePlanIdx, "stdout", "master")
 	stack.AssertTaskRegisterField(t, applyID, replica1SID, wgProbePlanIdx, "stdout", "slave")
 	stack.AssertTaskRegisterField(t, applyID, replica2SID, wgProbePlanIdx, "stdout", "slave")

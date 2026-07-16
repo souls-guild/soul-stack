@@ -1,32 +1,32 @@
 //go:build e2e_live
 
-// L3b E2E pilot: examples/service/redis::create (режим standalone) —
-// real-soul-in-container (redis-консолидация концепции Ansible-роли, ADR-039 /
+// L3b E2E pilot: examples/service/redis::create (standalone mode) -
+// real-soul-in-container (redis consolidation of the Ansible role concept, ADR-039 /
 // .pm/tasks/2026-06-22-redis-consolidation).
 //
-// Параллель с tests/e2e/redis_test.go (L3a, soul-stub отвечает scripted), но
-// идущая через РЕАЛЬНЫЙ apt-install redis-server + render redis.conf внутри
-// Debian-12-systemd-soul-container. Диспетчер create инклудит ветку standalone
-// (cluster/sentinel/sentinel_only гасятся static-when), которая раскрывает
-// режим-агностичный destiny `redis`.
+// A parallel to tests/e2e/redis_test.go (L3a, soul-stub answers scripted), but
+// going through a REAL apt-install redis-server + render redis.conf inside a
+// Debian-12-systemd soul container. The create dispatcher includes the standalone
+// branch (cluster/sentinel/sentinel_only are gated off by static-when), which unfolds
+// the mode-agnostic `redis` destiny.
 //
-// Экспортеры (redis_exporter/node_exporter) ВЫНЕСЕНЫ из service/redis: мониторинг —
-// отдельная сущность. Прежний exporter-coupled pilot заменён на чистый
+// Exporters (redis_exporter/node_exporter) are FACTORED OUT of service/redis: monitoring is a
+// separate entity. The former exporter-coupled pilot is replaced by a clean
 // standalone-redis live-create.
 //
-// Покрытие, которого L3a не даёт: Keeper render → ApplyRequest на wire → реальный
-// soul Apply (core.pkg / core.file.rendered / core.service) → RunResult →
-// apply_runs success + redis.conf реально отрендерен с merged-директивами.
+// Coverage L3a doesn't give: Keeper render -> ApplyRequest on the wire -> real
+// soul Apply (core.pkg / core.file.rendered / core.service) -> RunResult ->
+// apply_runs success + redis.conf actually rendered with merged directives.
 //
-// Harness-механики (см. tests/e2e-live/harness):
-//   - SeedVaultKV: redis-пароль keeper-side через vault('secret/redis/<inc>#password');
+// Harness mechanics (see tests/e2e-live/harness):
+//   - SeedVaultKV: redis password keeper-side via vault('secret/redis/<inc>#password');
 //   - MaterializeDestinies + default_destiny_source: apply:destiny resolve git-URL;
-//   - WaitSoulprintReported: redis.conf.tmpl биндит на soulprint.self.network.primary_ip;
+//   - WaitSoulprintReported: redis.conf.tmpl binds to soulprint.self.network.primary_ip;
 //   - AssertExpectations: apply_runs / incarnation_state / host_state (redis.conf
-//     отрендерен, redis-server active).
+//     rendered, redis-server active).
 //
-// Timeout 300s — apt-update + apt-get install redis-server + render + systemctl
-// start. На холодном CI медленно.
+// Timeout 300s - apt-update + apt-get install redis-server + render + systemctl
+// start. Slow on cold CI.
 package e2e_live_test
 
 import (
@@ -36,7 +36,7 @@ import (
 )
 
 func TestL3bRedisLive_CreateStandalone(t *testing.T) {
-	t.Skip("redis-паритет доказывается стендовым live-прогоном (ФАЗА 2, образец прогон-23), а не локальным гейтом: input version=Nexus-enum, standalone-режим удалён 2026-06-25, install_method=binary требует Nexus, exporter/vector-destinies требуют egress. Локальный гейт гарантирует МЕХАНИКУ доставки модулей — tests/e2e-live/module-delivery-live (NIM-32). Симметрично redis_cluster_live_test.go::t.Skip.")
+	t.Skip("redis parity is proven by a stand live-run (PHASE 2, run-23 sample), not a local gate: input version=Nexus-enum, standalone mode removed 2026-06-25, install_method=binary requires Nexus, exporter/vector destinies require egress. The local gate guarantees module-delivery MECHANICS - tests/e2e-live/module-delivery-live (NIM-32). Symmetric to redis_cluster_live_test.go::t.Skip.")
 
 	stack := harness.NewStack(t, harness.Config{
 		ExamplePath: "examples/service/redis",
@@ -46,19 +46,19 @@ func TestL3bRedisLive_CreateStandalone(t *testing.T) {
 	defer stack.Cleanup()
 
 	if got := len(stack.SoulContainers); got != 1 {
-		t.Fatalf("ожидался 1 soul-контейнер, получено %d", got)
+		t.Fatalf("expected 1 soul container, got %d", got)
 	}
 	const wantSID = "soul-live-a.example.com"
 	if sc := stack.SoulContainers[0]; sc.SID != wantSID {
-		t.Errorf("SoulContainers[0].SID = %q, ожидалось %q", sc.SID, wantSID)
+		t.Errorf("SoulContainers[0].SID = %q, expected %q", sc.SID, wantSID)
 	}
 
 	const incName = "redis"
 
-	// Vault-seed redis-пароля: standalone create читает его keeper-side через
-	// vault('secret/redis/'+incarnation.name+'#password'); per-user пароль —
-	// vault('secret/redis/'+incarnation.name+'/users/<name>#password'). rel БЕЗ
-	// mount/`data/`-префикса (SeedVaultKV добавляет их, KV v2).
+	// Vault seed of the redis password: standalone create reads it keeper-side via
+	// vault('secret/redis/'+incarnation.name+'#password'); per-user password -
+	// vault('secret/redis/'+incarnation.name+'/users/<name>#password'). rel WITHOUT
+	// mount/`data/` prefix (SeedVaultKV adds them, KV v2).
 	harness.SeedVaultKV(t, stack, "redis/"+incName, map[string]any{
 		"password": "e2e-redis-secret",
 	})
@@ -66,21 +66,21 @@ func TestL3bRedisLive_CreateStandalone(t *testing.T) {
 		"password": "e2e-app-user-secret",
 	})
 
-	// Coven-членство ДО Create: roster резолвится по `incarnation.name ∈ coven[]`
-	// (ADR-008). Bootstrap-flow выставил status='connected', но coven пуст.
+	// Coven membership BEFORE Create: the roster is resolved by `incarnation.name in coven[]`
+	// (ADR-008). The bootstrap flow set status='connected', but coven is empty.
 	stack.AddSoulToCoven(t, 0, incName)
 
-	// Ждём первый SoulprintReport реального soul-а: redis.conf.tmpl биндит на
-	// soulprint.self.network.primary_ip keeper-side при рендере.
+	// Wait for the real soul's first SoulprintReport: redis.conf.tmpl binds to
+	// soulprint.self.network.primary_ip keeper-side during render.
 	stack.WaitSoulprintReported(t, 0, 60)
 
-	// Материализуем режим-агностичный destiny `redis` под git-тегом v1.0.0 (ref из
-	// service.yml::destiny[]) + ставим default_destiny_source (SeedDefaultDestinySource
-	// блокируется на holderRefreshGrace — Holder подхватит значение ДО create-render).
+	// Materialize the mode-agnostic `redis` destiny at git tag v1.0.0 (ref from
+	// service.yml::destiny[]) + set default_destiny_source (SeedDefaultDestinySource
+	// is gated on holderRefreshGrace - Holder will pick up the value BEFORE create-render).
 	stack.MaterializeDestinies(t, "v1.0.0", "redis")
 
-	// Простой типизированный ввод: version (distro-native пин), memory_mb +
-	// persistence + maxmemory_policy → merge-трансляция в redis.conf; users — typed-map.
+	// Simple typed input: version (distro-native pin), memory_mb +
+	// persistence + maxmemory_policy -> merge-translated into redis.conf; users - typed-map.
 	inc, applyID := stack.CreateIncarnationWithApply(t, incName, "redis@main", map[string]any{
 		"version":          "5:7.0.15-1~deb12u7",
 		"memory_mb":        1024,
@@ -95,13 +95,13 @@ func TestL3bRedisLive_CreateStandalone(t *testing.T) {
 	})
 
 	stack.WaitApplySuccess(t, applyID, 300)
-	// apply_runs success ≠ state закоммичен — ждём ready перед чтением state.
+	// apply_runs success != state committed - wait for ready before reading state.
 	stack.WaitIncarnationReady(t, inc, 30)
 
 	exp := harness.LoadExpectations(t, "redis/expectations/after-create.yaml")
 	stack.AssertExpectations(t, exp, applyID, inc)
 
-	// apply_id в payload audit-event-а — runtime-значение, отдельно от YAML-fixture.
+	// apply_id in the audit event payload is a runtime value, separate from the YAML fixture.
 	stack.AssertAuditEvent(t, "incarnation.created", map[string]any{
 		"apply_id": applyID,
 	})

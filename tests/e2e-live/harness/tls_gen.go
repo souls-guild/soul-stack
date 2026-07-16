@@ -15,18 +15,20 @@ import (
 	"time"
 )
 
-// GenerateRedisTLSMaterial генерит self-signed CA + серверный cert/key, подписанный
-// им (все три — PEM). Вызывается ДВАЖДЫ (CA1, CA2 — независимые) для CA-rollover-
-// ротации rotate_tls (находка #4).
+// GenerateRedisTLSMaterial generates a self-signed CA + a server cert/key signed
+// by it (all three as PEM). Called TWICE (CA1, CA2 - independent) for the
+// rotate_tls CA-rollover rotation (finding #4).
 //
-// ★ Серверный cert несёт IPAddresses=[127.0.0.1] (SAN): плагин community.redis и
-// health-probe create коннектятся go-tls на 127.0.0.1:<tls_port>, а go-tls по
-// умолчанию проверяет ServerName против SAN — без IP-SAN 127.0.0.1 коннект упёрся бы
-// в «certificate is valid for … not 127.0.0.1». DNSNames=[localhost] — на всякий.
+// * The server cert carries IPAddresses=[127.0.0.1] (SAN): the community.redis
+// plugin and the create health-probe connect via go-tls to 127.0.0.1:<tls_port>,
+// and go-tls by default validates ServerName against SAN - without an IP SAN for
+// 127.0.0.1 the connection would fail with "certificate is valid for ... not
+// 127.0.0.1". DNSNames=[localhost] is added just in case.
 //
-// fingerprintSHA256 — sha256 от DER серверного cert в hex; после
-// normalizeHexFingerprint совпадает с выводом `openssl x509 -fingerprint -sha256`
-// (тот же нормализатор в AssertRedisTLSCertServed: регистр/двоеточия отбрасываются).
+// fingerprintSHA256 - sha256 of the server cert DER in hex; after
+// normalizeHexFingerprint it matches the output of `openssl x509 -fingerprint
+// -sha256` (same normalizer used in AssertRedisTLSCertServed: case/colons
+// stripped).
 func GenerateRedisTLSMaterial(t *testing.T) (caPEM, certPEM, keyPEM, fingerprintSHA256 string) {
 	t.Helper()
 
@@ -56,7 +58,7 @@ func GenerateRedisTLSMaterial(t *testing.T) (caPEM, certPEM, keyPEM, fingerprint
 		t.Fatalf("GenerateRedisTLSMaterial: parse CA cert: %v", err)
 	}
 
-	// Серверный leaf-cert, подписанный CA.
+	// Server leaf cert, signed by the CA.
 	srvKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("GenerateRedisTLSMaterial: server key: %v", err)
@@ -84,13 +86,13 @@ func GenerateRedisTLSMaterial(t *testing.T) (caPEM, certPEM, keyPEM, fingerprint
 	certPEM = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srvDER}))
 	keyPEM = string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: srvKeyDER}))
 
-	// fingerprint = sha256(DER серверного cert) — ровно то, что отдаёт openssl по wire.
+	// fingerprint = sha256(server cert DER) - exactly what openssl reports over the wire.
 	sum := sha256.Sum256(srvDER)
 	fingerprintSHA256 = hex.EncodeToString(sum[:])
 	return
 }
 
-// randSerial — случайный 128-битный серийник сертификата.
+// randSerial - random 128-bit certificate serial number.
 func randSerial(t *testing.T) *big.Int {
 	t.Helper()
 	n, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))

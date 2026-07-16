@@ -10,44 +10,49 @@ import (
 	"time"
 )
 
-// Destiny-fixture L3b: материализация standalone-destiny из examples/destiny/<name>
-// в per-test file://-git-репо под git-тегом + установка
-// keeper_settings[default_destiny_source].
+// L3b destiny fixture: materializes a standalone destiny from
+// examples/destiny/<name> into a per-test file://-git repo under a git tag +
+// sets keeper_settings[default_destiny_source].
 //
-// Зачем: service-композиция через apply:destiny (ADR-009) — например
-// examples/service/redis — ссылается на standalone-destiny по имени; keeper-side
-// scenario-резолвер тянет git-URL каждой из keeper_settings[default_destiny_source]
-// с подстановкой {name} (ADR-029). Service-fixture-репо (git.go) этих destiny НЕ
-// содержит — они живут отдельными каталогами examples/destiny/<name>. Без
-// materialize+seed apply:destiny падает «default_destiny_source не задан» либо
-// «ref не резолвится».
+// Why: service composition via apply:destiny (ADR-009) — e.g.
+// examples/service/redis — references a standalone destiny by name; the
+// keeper-side scenario resolver pulls the git URL from
+// keeper_settings[default_destiny_source] with {name} substitution
+// (ADR-029). The service fixture repo (git.go) doesn't contain these
+// destinies — they live in separate examples/destiny/<name> directories.
+// Without materialize+seed, apply:destiny fails with "default_destiny_source
+// not set" or "ref does not resolve".
 //
-// keeper_settings — direct SQL upsert (harness уже работает через pgxpool, как
-// AddSoulToCoven): OpenAPI-эндпоинта для этого скаляра нет (ADR-029). Вызывать ДО
-// registerExampleService — invalidate от POST /v1/services тем же снимком
-// подтянет уже-записанную настройку без ожидания 10s TTL-poll-а Holder-а.
+// keeper_settings — direct SQL upsert (the harness already talks to pgxpool,
+// like AddSoulToCoven): there's no OpenAPI endpoint for this scalar
+// (ADR-029). Call BEFORE registerExampleService — invalidation from POST
+// /v1/services will pick up the already-written setting in the same
+// snapshot without waiting on the Holder's 10s TTL poll.
 
 const settingDefaultDestinySource = "default_destiny_source"
 
 const destinyURLPlaceholder = "{name}"
 
-// MaterializeDestinies материализует каждую destiny из examples/destiny/<name> в
-// отдельный file://-git-репо ($TMP/destiny-repos/<name>) под git-тегом ref и
-// ставит keeper_settings[default_destiny_source] = file://$TMP/destiny-repos/{name}.
+// MaterializeDestinies materializes each destiny from
+// examples/destiny/<name> into a separate file://-git repo
+// ($TMP/destiny-repos/<name>) under the git tag ref, and sets
+// keeper_settings[default_destiny_source] = file://$TMP/destiny-repos/{name}.
 //
-// ref — git-тег из service.yml::destiny[] (ADR-007: версия зависимости = git-ref);
-// резолвер артефактов чекаутит destiny именно по ref (НЕ main). Для
-// examples/service/redis все три destiny объявлены ref:v1.0.0.
+// ref is a git tag from service.yml::destiny[] (ADR-007: dependency version =
+// git ref); the artifact resolver checks out the destiny by exactly that ref
+// (NOT main). All three destinies of examples/service/redis are declared as
+// ref:v1.0.0.
 //
-// Вызывать ДО registerExampleService (NewStack делает регистрацию сам — на L3b
-// MaterializeDestinies вызывается тестом ПОСЛЕ NewStack, поэтому полагается на
-// TTL-poll/последующий invalidate; первый CreateIncarnation ретраит транзиентный
-// «not registered», а резолв default_destiny_source происходит на render-фазе
-// create-прогона — к тому моменту Holder снимок уже свежий).
+// Call BEFORE registerExampleService (NewStack does the registration itself
+// — in L3b MaterializeDestinies is called by the test AFTER NewStack, so it
+// relies on the TTL poll / a later invalidate; the first CreateIncarnation
+// retries the transient "not registered", and default_destiny_source is
+// resolved at render time of the create run — by then the Holder snapshot is
+// already fresh).
 func (s *Stack) MaterializeDestinies(t *testing.T, ref string, names ...string) {
 	t.Helper()
 	if len(names) == 0 {
-		t.Fatal("MaterializeDestinies: пустой список имён destiny")
+		t.Fatal("MaterializeDestinies: empty destiny name list")
 	}
 
 	destinyRoot := filepath.Join(s.tmpDir, "destiny-repos")
@@ -60,20 +65,22 @@ func (s *Stack) MaterializeDestinies(t *testing.T, ref string, names ...string) 
 	s.SeedDefaultDestinySource(t, tmpl)
 }
 
-// holderRefreshGrace — окно ожидания TTL-перечита снимка serviceregistry.Holder
-// после SQL-записи keeper_settings. = serviceregistry.DefaultRefreshInterval(10s)
-// + буфер. На L3b registerExampleService уже отработал в NewStack (его invalidate
-// прошёл ДО seed-а), а из harness нет доступа к Redis-pub/sub-каналу
-// `service:invalidate` (harness ходит только в PG/Vault). Поэтому полагаемся на
-// TTL-poll: ждём, пока Holder гарантированно перечитал снимок с новым
-// default_destiny_source. Для L3b (медленный тир, тест и так минуты) приемлемо.
+// holderRefreshGrace — wait window for the TTL re-read of the
+// serviceregistry.Holder snapshot after the keeper_settings SQL write. =
+// serviceregistry.DefaultRefreshInterval(10s) + buffer. In L3b
+// registerExampleService already ran inside NewStack (its invalidate
+// happened BEFORE the seed), and the harness has no access to the Redis
+// pub/sub channel `service:invalidate` (the harness only talks to PG/Vault).
+// So we rely on the TTL poll: wait until the Holder has definitely re-read
+// the snapshot with the new default_destiny_source. Acceptable for L3b (slow
+// tier, the test already runs for minutes anyway).
 const holderRefreshGrace = 12 * time.Second
 
-// SeedDefaultDestinySource записывает keeper_settings[default_destiny_source]
-// прямым SQL-upsert-ом и блокируется на holderRefreshGrace, чтобы Holder
-// гарантированно подхватил значение через TTL-poll ДО первого create-render-а
-// (apply:destiny резолвит шаблон на render-фазе). updated_by_aid = NULL
-// (системная установка fixture-а).
+// SeedDefaultDestinySource writes keeper_settings[default_destiny_source]
+// via a direct SQL upsert and blocks for holderRefreshGrace so the Holder is
+// guaranteed to have picked up the value via the TTL poll BEFORE the first
+// create render (apply:destiny resolves the template at render time).
+// updated_by_aid = NULL (system-installed fixture).
 func (s *Stack) SeedDefaultDestinySource(t *testing.T, template string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -90,10 +97,11 @@ func (s *Stack) SeedDefaultDestinySource(t *testing.T, template string) {
 	time.Sleep(holderRefreshGrace)
 }
 
-// materializeRepoAt — как materializeServiceRepo (git.go), но в произвольный
-// repoDir и с git-тегом ref: destiny-репо живут под destiny-repos/<name>, чтобы
-// {name}-подстановка в default_destiny_source указывала на них, и резолвятся по
-// ref из service.yml::destiny[] (а не main).
+// materializeRepoAt — like materializeServiceRepo (git.go), but into an
+// arbitrary repoDir and with a git tag ref: destiny repos live under
+// destiny-repos/<name> so the {name} substitution in
+// default_destiny_source points at them, and are resolved by the ref from
+// service.yml::destiny[] (not main).
 func (s *Stack) materializeRepoAt(t *testing.T, repoDir, relativePath, ref string) {
 	t.Helper()
 	srcDir := filepath.Join(repoRoot(t), relativePath)

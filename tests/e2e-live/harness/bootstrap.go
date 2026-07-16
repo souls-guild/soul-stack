@@ -12,29 +12,29 @@ import (
 	"time"
 )
 
-// IssueBootstrapToken — harness-помощник L3b. Заводит запись в `souls`
-// (status='pending', transport='agent') + `bootstrap_tokens` (active) через
-// прямой SQL, минуя Operator API.
+// IssueBootstrapToken — an L3b harness helper. Creates a row in `souls`
+// (status='pending', transport='agent') + `bootstrap_tokens` (active) via
+// direct SQL, bypassing the Operator API.
 //
-// Почему direct SQL, а не POST /v1/souls/{sid}/issue-token: L3b-цикл проверяет
-// именно gRPC Bootstrap-flow (CSR → Keeper.Bootstrap → leaf-cert + audit
-// `soul.bootstrapped`); RBAC/admin-API — отдельная сфера, проверяемая L2-
-// тестами Operator API. Сам keeper-handler читает `bootstrap_tokens` и
-// апгрейдит `souls.status pending → connected` — это и есть тестируемое
-// поведение.
+// Why direct SQL and not POST /v1/souls/{sid}/issue-token: the L3b cycle
+// specifically tests the gRPC Bootstrap flow (CSR → Keeper.Bootstrap →
+// leaf-cert + audit `soul.bootstrapped`); RBAC/admin API is a separate area
+// covered by L2 Operator API tests. The keeper handler itself reads
+// `bootstrap_tokens` and upgrades `souls.status pending → connected` — that
+// is the behavior under test.
 //
-// Plain-token возвращается caller-у (передаётся в env soul-контейнера).
-// В БД хранится только SHA-256 hex от plain (`token_hash`), симметрично
-// keeper/internal/bootstraptoken.HashToken.
+// The plain token is returned to the caller (passed into the soul
+// container's env). Only the SHA-256 hex of the plain value is stored in the
+// DB (`token_hash`), symmetric with keeper/internal/bootstraptoken.HashToken.
 //
-// Side effect: `created_by_aid = NULL` (FK на operators SET NULL — оставляем
-// запись без инициатора, т.к. оператор harness-у формально не известен).
-// `requested_at = NOW()`, `expires_at = NOW() + 1h` (внутри MVP-стандарта
-// DefaultTokenTTL=24h, для теста 1ч с большим запасом).
+// Side effect: `created_by_aid = NULL` (FK to operators SET NULL — the row
+// is left without an initiator since no operator is formally known to the
+// harness). `requested_at = NOW()`, `expires_at = NOW() + 1h` (within the
+// MVP standard DefaultTokenTTL=24h; 1h for the test with plenty of margin).
 func IssueBootstrapToken(t *testing.T, stack *Stack, sid string) string {
 	t.Helper()
 	if stack == nil || stack.db == nil {
-		t.Fatal("IssueBootstrapToken: stack.db nil (NewStack не отработал?)")
+		t.Fatal("IssueBootstrapToken: stack.db is nil (NewStack did not run?)")
 	}
 
 	plain := generatePlainToken(t)
@@ -43,10 +43,10 @@ func IssueBootstrapToken(t *testing.T, stack *Stack, sid string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// 1. souls (pending). bootstrap_tokens.sid → souls.sid (FK), поэтому
-	//    souls-строка должна существовать до INSERT в bootstrap_tokens.
-	//    transport='agent' — pull-режим (push был бы 'ssh', там
-	//    bootstrap_tokens не создаются).
+	// 1. souls (pending). bootstrap_tokens.sid → souls.sid (FK), so the souls
+	//    row must exist before the INSERT into bootstrap_tokens.
+	//    transport='agent' — pull mode (push would be 'ssh', where
+	//    bootstrap_tokens aren't created).
 	if _, err := stack.db.Exec(ctx, `
 		INSERT INTO souls (sid, transport, status, requested_at, registered_at)
 		VALUES ($1, 'agent', 'pending', NOW(), NOW())
@@ -68,9 +68,9 @@ func IssueBootstrapToken(t *testing.T, stack *Stack, sid string) string {
 	return plain
 }
 
-// generatePlainToken возвращает 32 байта crypto-random в base64url-no-padding.
-// Формат идентичен bootstraptoken.Generate (keeper-side канон); хеш считается
-// той же SHA-256, что и HashToken.
+// generatePlainToken returns 32 bytes of crypto-random data in
+// base64url-no-padding. The format matches bootstraptoken.Generate
+// (keeper-side canon); the hash uses the same SHA-256 as HashToken.
 func generatePlainToken(t *testing.T) string {
 	t.Helper()
 	buf := make([]byte, 32)
@@ -80,7 +80,7 @@ func generatePlainToken(t *testing.T) string {
 	return base64.RawURLEncoding.EncodeToString(buf)
 }
 
-// sha256HexLower — SHA-256(plain) в lower-hex (64 символа). Симметрично
+// sha256HexLower — SHA-256(plain) as lower-hex (64 chars). Symmetric with
 // bootstraptoken.HashToken.
 func sha256HexLower(plain string) string {
 	sum := sha256.Sum256([]byte(plain))

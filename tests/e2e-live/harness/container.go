@@ -21,35 +21,35 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// SoulContainer — обёртка над testcontainers.Container для real-soul instance.
+// SoulContainer — a wrapper over testcontainers.Container for a real-soul instance.
 //
-// SpawnSoulContainer заполняет SID/BootstrapToken/Container и регистрирует
-// контейнер в Stack.SoulContainers + LIFO-cleanup. Дальше Exec используется
-// для container-side asserts (L3b-4, заглушки в asserts.go).
+// SpawnSoulContainer fills in SID/BootstrapToken/Container and registers the
+// container in Stack.SoulContainers + LIFO cleanup. Exec is then used for
+// container-side asserts (L3b-4, stubs in asserts.go).
 type SoulContainer struct {
-	// SID — FQDN-имя Soul-а (например `soul-live-a.example.com`). Echo в
-	// gRPC payload; авторитет — mTLS peer cert.
+	// SID — the Soul's FQDN name (e.g. `soul-live-a.example.com`). Echoed in
+	// the gRPC payload; the authority is the mTLS peer cert.
 	SID string
 
-	// Container — handle на testcontainers.Container. Используется для Exec
-	// (container-side asserts L3b-4) и Terminate (через Stack.Cleanup).
+	// Container — a handle to testcontainers.Container. Used for Exec
+	// (container-side asserts L3b-4) and Terminate (via Stack.Cleanup).
 	Container testcontainers.Container
 
-	// BootstrapToken — plain SoulSeed-токен, выданный harness-ом до spawn-а.
-	// Передаётся в soul.yml внутри контейнера; soul-агент при первом старте
-	// делает CSR через Keeper.Bootstrap RPC (mTLS server-only).
+	// BootstrapToken — the plain SoulSeed token issued by the harness before
+	// spawn. Passed into soul.yml inside the container; on first start the
+	// soul agent does a CSR via the Keeper.Bootstrap RPC (mTLS server-only).
 	BootstrapToken string
 }
 
-// Exec выполняет команду внутри soul-контейнера. Используется container-side
+// Exec runs a command inside the soul container. Used by container-side
 // asserts (AssertHostPkgInstalled / AssertHostServiceActive / ...) — L3b-4.
 //
-// Возвращает (stdout+stderr, exitCode, err). tcexec.Multiplexed демультиплексирует
-// docker-stream (8-байтные frame-header-ы) в чистый текст — без него reader
-// содержит сырые header-байты (`\x01\x00…\x07active`), и assert-ы с точным
-// сравнением stdout (например AssertHostServiceActive: `== "active"`) ложно
-// падают. stdout и stderr склеиваются в один поток (caller-у достаточно exit-
-// кода + текста для diag).
+// Returns (stdout+stderr, exitCode, err). tcexec.Multiplexed demultiplexes
+// the docker stream (8-byte frame headers) into plain text — without it the
+// reader contains raw header bytes (`\x01\x00…\x07active`), and asserts that
+// do an exact stdout comparison (e.g. AssertHostServiceActive: `== "active"`)
+// would falsely fail. stdout and stderr are merged into one stream (the
+// caller only needs the exit code + text for diagnostics).
 func (sc *SoulContainer) Exec(ctx context.Context, cmd []string) (combined string, exitCode int, err error) {
 	if sc == nil || sc.Container == nil {
 		return "", -1, errors.New("SoulContainer.Exec: nil container")
@@ -65,27 +65,27 @@ func (sc *SoulContainer) Exec(ctx context.Context, cmd []string) (combined strin
 	return string(body), code, nil
 }
 
-// soulStartupTimeout — окно от spawn-а контейнера до souls.status='connected'.
-// docker build (~60s холодного билда) + systemd-PID-1 boot (~3-10s) + soul init
+// soulStartupTimeout — the window from container spawn to souls.status='connected'.
+// docker build (~60s cold build) + systemd-PID-1 boot (~3-10s) + soul init
 // (CSR/Vault round-trip ~1s) + soul run dial (~1s) + first connect commit ~ 90s
-// верхний потолок; обычно 30-40s.
+// upper cap; usually 30-40s.
 const soulStartupTimeout = 120 * time.Second
 
-// SpawnSoulContainer поднимает один real-soul container (Debian-12 systemd-PID-1),
-// mount-ит soul-binary с хоста, кладёт soul.yml + CA-bundle, выполняет
-// `soul init` (CSR Bootstrap-flow → leaf-cert), стартует `soul run` в фоне и
-// ждёт регистрации в keeper-е (souls.status='connected').
+// SpawnSoulContainer brings up one real-soul container (Debian-12 systemd-PID-1),
+// mounts the soul binary from the host, drops soul.yml + CA bundle, runs
+// `soul init` (CSR Bootstrap flow → leaf cert), starts `soul run` in the
+// background, and waits for keeper registration (souls.status='connected').
 //
-// Параметры:
-//   - sid — FQDN, должен матчить CN cert-а;
-//   - bootstrapToken — plain SoulSeed-токен (issued IssueBootstrapToken-ом до spawn-а).
+// Parameters:
+//   - sid — FQDN, must match the cert's CN;
+//   - bootstrapToken — a plain SoulSeed token (issued by IssueBootstrapToken before spawn).
 //
 // Side effects:
-//   - первая инвокация создаёт docker user-bridge `soul-stack-e2e-live-*`
-//     (используется для inter-soul-связи в multi-host L3b-5; в одиночных L3b-2
-//     сценариях достаточно host.docker.internal до keeper-а);
-//   - контейнер регистрируется в Stack.cleanups (LIFO), Terminate вызывается
-//     в Stack.Cleanup до Postgres-tearown-а.
+//   - the first invocation creates a docker user-bridge `soul-stack-e2e-live-*`
+//     (used for inter-soul connectivity in multi-host L3b-5; in single-host
+//     L3b-2 scenarios host.docker.internal to keeper is enough);
+//   - the container is registered in Stack.cleanups (LIFO), Terminate is
+//     called in Stack.Cleanup before the Postgres teardown.
 func SpawnSoulContainer(t *testing.T, stack *Stack, sid, bootstrapToken string) *SoulContainer {
 	t.Helper()
 	if stack == nil {
@@ -95,13 +95,13 @@ func SpawnSoulContainer(t *testing.T, stack *Stack, sid, bootstrapToken string) 
 	ctx, cancel := context.WithTimeout(context.Background(), soulStartupTimeout)
 	defer cancel()
 
-	// 1. Pre-flight: soul-linux binary должен быть собран (`make build-linux`).
+	// 1. Pre-flight: the soul-linux binary must be built (`make build-linux`).
 	soulBinPath, err := locateLinuxSoulBinary()
 	if err != nil {
 		t.Fatalf("SpawnSoulContainer: %v", err)
 	}
 
-	// 2. Lazy-create общий user-bridge для всех soul-контейнеров этого Stack-а.
+	// 2. Lazy-create a shared user-bridge for all soul containers of this Stack.
 	if stack.dockerNetwork == nil {
 		nw, err := tcnetwork.New(ctx)
 		if err != nil {
@@ -115,7 +115,7 @@ func SpawnSoulContainer(t *testing.T, stack *Stack, sid, bootstrapToken string) 
 		})
 	}
 
-	// 3. Раскладка bind-mount-ов на хосте: soul-binary + CA + soul.yml.
+	// 3. Lay out host-side bind mounts: soul binary + CA + soul.yml.
 	mountRoot := filepath.Join(stack.tmpDir, "soul-"+sanitizeSID(sid))
 	if err := os.MkdirAll(mountRoot, 0o755); err != nil {
 		t.Fatalf("SpawnSoulContainer: mkdir mountRoot: %v", err)
@@ -129,8 +129,8 @@ func SpawnSoulContainer(t *testing.T, stack *Stack, sid, bootstrapToken string) 
 		t.Fatalf("SpawnSoulContainer: write soul.yml: %v", err)
 	}
 
-	// 4. ContainerRequest: privileged systemd-PID-1, /sys/fs/cgroup из хоста,
-	//    soul-binary read-only mount, soul.yml + CA через /etc/soul/.
+	// 4. ContainerRequest: privileged systemd-PID-1, /sys/fs/cgroup from the
+	//    host, soul-binary read-only mount, soul.yml + CA via /etc/soul/.
 	dockerfilePath, err := findDockerfile(t)
 	if err != nil {
 		t.Fatalf("SpawnSoulContainer: %v", err)
@@ -140,7 +140,7 @@ func SpawnSoulContainer(t *testing.T, stack *Stack, sid, bootstrapToken string) 
 			Context:       filepath.Dir(dockerfilePath),
 			Dockerfile:    filepath.Base(dockerfilePath),
 			PrintBuildLog: false,
-			KeepImage:     true, // одинаковый Dockerfile для всех L3b-тестов — переиспользуем слои.
+			KeepImage:     true, // same Dockerfile for all L3b tests — reuse layers.
 		},
 		Name:       fmt.Sprintf("soul-live-%s-%d", sanitizeSID(sid), time.Now().UnixNano()),
 		Hostname:   sid,
@@ -153,8 +153,8 @@ func SpawnSoulContainer(t *testing.T, stack *Stack, sid, bootstrapToken string) 
 		},
 		HostConfigModifier: func(hc *dockercontainer.HostConfig) {
 			hc.Privileged = true
-			// systemd-PID-1 требует tmpfs /run + /run/lock; CgroupnsMode=host —
-			// чтобы systemd видел cgroup-fs хоста (необходимо для systemctl).
+			// systemd-PID-1 requires tmpfs /run + /run/lock; CgroupnsMode=host —
+			// so systemd sees the host's cgroup fs (needed for systemctl).
 			hc.CgroupnsMode = "host"
 			if hc.Tmpfs == nil {
 				hc.Tmpfs = map[string]string{}
@@ -162,15 +162,15 @@ func SpawnSoulContainer(t *testing.T, stack *Stack, sid, bootstrapToken string) 
 			hc.Tmpfs["/run"] = "rw"
 			hc.Tmpfs["/run/lock"] = "rw"
 		},
-		// WaitingFor: systemd-готовность — пишется в stdout при boot-е PID-1.
-		// "Started" подходит для большинства unit-ов; нам важно дождаться
-		// именно того, что systemd принимает команды (потом сами вызываем
-		// Exec для soul init/run, см. ниже).
+		// WaitingFor: systemd readiness — written to stdout during PID-1 boot.
+		// "Started" fits most units; what we need is to wait until systemd
+		// actually accepts commands (we then call Exec ourselves for
+		// soul init/run, see below).
 		WaitingFor: wait.ForExec([]string{"systemctl", "is-system-running", "--wait"}).
 			WithExitCodeMatcher(func(code int) bool {
-				// is-system-running возвращает 0 при `running`, 1 при `degraded`
-				// (нам ок: degraded в slim-Debian без unit-ов нормально), 2 при
-				// `initializing` (ещё ждём). Принимаем 0 и 1.
+				// is-system-running returns 0 for `running`, 1 for `degraded`
+				// (fine for us: degraded on a slim Debian without units is
+				// normal), 2 for `initializing` (still waiting). Accept 0 and 1.
 				return code == 0 || code == 1
 			}).
 			WithStartupTimeout(60 * time.Second),
@@ -196,7 +196,7 @@ func SpawnSoulContainer(t *testing.T, stack *Stack, sid, bootstrapToken string) 
 		BootstrapToken: bootstrapToken,
 	}
 
-	// 5. soul init — реальный CSR Bootstrap-flow.
+	// 5. soul init — a real CSR Bootstrap flow.
 	initOut, initCode, err := sc.Exec(ctx, []string{
 		"/usr/local/bin/soul", "init",
 		"--config", "/etc/soul/soul.yml",
@@ -207,9 +207,9 @@ func SpawnSoulContainer(t *testing.T, stack *Stack, sid, bootstrapToken string) 
 		t.Fatalf("SpawnSoulContainer: soul init: code=%d err=%v output=%s", initCode, err, initOut)
 	}
 
-	// 6. soul run — фоновый daemon. testcontainers Exec не поддерживает detach,
-	//    поэтому запускаем через nohup внутри shell-а; stdout/stderr уходят в
-	//    /var/log/soul.log для последующего разбора при фейле connect-а.
+	// 6. soul run — a background daemon. testcontainers Exec doesn't support
+	//    detach, so we launch it via nohup inside a shell; stdout/stderr go to
+	//    /var/log/soul.log for later inspection if the connect fails.
 	runOut, runCode, err := sc.Exec(ctx, []string{
 		"/bin/sh", "-c",
 		"nohup /usr/local/bin/soul run --config /etc/soul/soul.yml " +
@@ -221,7 +221,7 @@ func SpawnSoulContainer(t *testing.T, stack *Stack, sid, bootstrapToken string) 
 
 	// 7. Wait souls.status='connected'.
 	if err := waitForSoulConnected(ctx, stack, sid, 60*time.Second); err != nil {
-		// Дамп /var/log/soul.log в test-лог для диагностики.
+		// Dump /var/log/soul.log to the test log for diagnostics.
 		dump, _, _ := sc.Exec(context.Background(),
 			[]string{"/bin/sh", "-c", "cat /var/log/soul.log 2>/dev/null | tail -n 100"})
 		t.Fatalf("SpawnSoulContainer: %v\nsoul.log tail:\n%s", err, dump)
@@ -230,9 +230,9 @@ func SpawnSoulContainer(t *testing.T, stack *Stack, sid, bootstrapToken string) 
 	return sc
 }
 
-// waitForSoulConnected поллит `souls.status` для sid, возвращает nil при
-// первом 'connected'. Терминальные статусы (revoked/expired/destroyed) →
-// немедленный fail, не ждём timeout.
+// waitForSoulConnected polls `souls.status` for sid, returns nil on the
+// first 'connected'. Terminal statuses (revoked/expired/destroyed) → an
+// immediate fail, don't wait for the timeout.
 func waitForSoulConnected(ctx context.Context, stack *Stack, sid string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -258,26 +258,30 @@ func waitForSoulConnected(ctx context.Context, stack *Stack, sid string, timeout
 	return fmt.Errorf("soul %s did not reach status=connected within %v", sid, timeout)
 }
 
-// defaultKeeperHost — host, на который соул-контейнер дозванивается к keeper-у
-// по умолчанию. На native-Linux-CI резолвится через ExtraHosts host-gateway
-// (см. SpawnSoulContainer); это рабочий дефолт, ломать его нельзя.
+// defaultKeeperHost — the host the soul container dials to reach keeper by
+// default. On native-Linux CI it's resolved via the ExtraHosts host-gateway
+// (see SpawnSoulContainer); this is the working default, don't break it.
 const defaultKeeperHost = "host.docker.internal"
 
-// keeperEndpointHostEnv — env-override host-а keeper-эндпоинта для соул-контейнера.
+// keeperEndpointHostEnv — env override for the keeper-endpoint host used by
+// the soul container.
 //
-// Зачем: на WSL2 + Docker-Desktop контейнеры живут в DD-VM, а keeper-процесс —
-// в WSL2-дистре (разные network-namespace). Из контейнера `host.docker.internal`
-// резолвится в DD-VM-шлюз (192.168.65.254), где keeper НЕ слушает → bootstrap
-// падает на `connection refused`. Реальный WSL2-хост-IP (`hostname -I` первый,
-// напр. 172.27.x.x) из контейнера достижим. Override прописывает этот IP в
-// soul.yml::keeper.endpoints[].host + добавляет его же в TLS-SAN keeper-серта.
+// Why: on WSL2 + Docker Desktop, containers live in the DD VM while the
+// keeper process runs in the WSL2 distro (different network namespaces).
+// From inside the container, `host.docker.internal` resolves to the DD VM
+// gateway (192.168.65.254), where keeper is NOT listening → bootstrap fails
+// with `connection refused`. The real WSL2 host IP (first `hostname -I`,
+// e.g. 172.27.x.x) is reachable from the container. The override writes this
+// IP into soul.yml::keeper.endpoints[].host + adds it to the keeper cert's
+// TLS SAN as well.
 //
-// Если env не задан — дефолт host.docker.internal (native-Linux-CI не ломается).
-// Гонять на WSL2: `E2E_KEEPER_HOST=$(hostname -I | awk '{print $1}') go test ...`.
+// If the env var is unset — default to host.docker.internal (native-Linux CI
+// isn't broken). Run on WSL2 as:
+// `E2E_KEEPER_HOST=$(hostname -I | awk '{print $1}') go test ...`.
 const keeperEndpointHostEnv = "E2E_KEEPER_HOST"
 
-// keeperEndpointHost возвращает host, на который соул-контейнер дозванивается к
-// keeper-у: значение env E2E_KEEPER_HOST либо дефолт host.docker.internal.
+// keeperEndpointHost returns the host the soul container dials to reach
+// keeper: the E2E_KEEPER_HOST env value, or default host.docker.internal.
 func keeperEndpointHost() string {
 	if v := strings.TrimSpace(os.Getenv(keeperEndpointHostEnv)); v != "" {
 		return v
@@ -285,13 +289,14 @@ func keeperEndpointHost() string {
 	return defaultKeeperHost
 }
 
-// keeperExtraHosts возвращает ExtraHosts-маппинг для соул-контейнера.
+// keeperExtraHosts returns the ExtraHosts mapping for the soul container.
 //
-// Дефолтный `host.docker.internal:host-gateway` держим всегда — на native-Linux
-// docker-desktop-alias штатно не настроен, и keeper-эндпоинт по умолчанию его и
-// использует. При override именем (не IP) добавляем `<host>:host-gateway`, чтобы
-// имя резолвилось в шлюз. IP-override (WSL2-кейс) в ExtraHosts не нуждается —
-// контейнер маршрутизирует к хост-IP напрямую.
+// We always keep the default `host.docker.internal:host-gateway` — on
+// native-Linux the docker-desktop alias isn't set up by default, and the
+// keeper endpoint uses it by default. On a name override (not an IP) we add
+// `<host>:host-gateway` so the name resolves to the gateway. An IP override
+// (the WSL2 case) doesn't need ExtraHosts — the container routes to the host
+// IP directly.
 func keeperExtraHosts() []string {
 	hosts := []string{defaultKeeperHost + ":host-gateway"}
 	if override := strings.TrimSpace(os.Getenv(keeperEndpointHostEnv)); override != "" &&
@@ -301,15 +306,16 @@ func keeperExtraHosts() []string {
 	return hosts
 }
 
-// buildSoulYAML рендерит soul.yml для запуска внутри контейнера. Все пути —
-// container-side; keeper-endpoint — <host>:<port>, где host берётся из
-// keeperEndpointHost() (дефолт host.docker.internal, резолвится через
-// ExtraHosts host-gateway; на WSL2 — реальный хост-IP через E2E_KEEPER_HOST).
+// buildSoulYAML renders soul.yml to run inside the container. All paths are
+// container-side; the keeper endpoint is <host>:<port>, where host comes
+// from keeperEndpointHost() (default host.docker.internal, resolved via the
+// ExtraHosts host-gateway; on WSL2 — the real host IP via E2E_KEEPER_HOST).
 func buildSoulYAML(stack *Stack) string {
-	// metrics.enabled=true → soul поднимает /metrics на loopback 127.0.0.1:9091
-	// (default listen). Порт наружу НЕ публикуется (нет ports-mapping) — scrape
-	// только container-side через Exec(curl). Нужен FC-3-тесту, который читает
-	// soul_apply_task_retries_total; остальным тестам безвреден (loopback-bind).
+	// metrics.enabled=true → soul brings up /metrics on loopback 127.0.0.1:9091
+	// (default listen). The port is NOT published externally (no port
+	// mapping) — scraped only container-side via Exec(curl). Needed by the
+	// FC-3 test, which reads soul_apply_task_retries_total; harmless for the
+	// other tests (loopback bind).
 	const tmpl = `paths:
   seed: /var/lib/soul-stack/seed
   modules: /var/lib/soul-stack/modules
@@ -333,15 +339,15 @@ hot_reload:
 	return fmt.Sprintf(tmpl, keeperEndpointHost(), stack.bootstrapPort, stack.eventStreamPort)
 }
 
-// findDockerfile возвращает абсолютный путь к L3b-Dockerfile-у. Относительный
-// поиск: `tests/e2e-live/dockerfiles/debian-12.Dockerfile` от cwd теста.
+// findDockerfile returns the absolute path to the L3b Dockerfile. Relative
+// lookup: `tests/e2e-live/dockerfiles/debian-12.Dockerfile` from the test's cwd.
 func findDockerfile(t *testing.T) (string, error) {
 	t.Helper()
 	wd, err := os.Getwd()
 	if err != nil {
 		return "", fmt.Errorf("findDockerfile: getwd: %w", err)
 	}
-	// Walk вверх: тест может лежать в `tests/e2e-live/` или в подпакете.
+	// Walk upward: the test may live in `tests/e2e-live/` or a subpackage.
 	dir := wd
 	for i := 0; i < 5; i++ {
 		candidate := filepath.Join(dir, "dockerfiles", "debian-12.Dockerfile")
@@ -354,11 +360,11 @@ func findDockerfile(t *testing.T) (string, error) {
 		}
 		dir = parent
 	}
-	return "", fmt.Errorf("findDockerfile: debian-12.Dockerfile не найден (wd=%s)", wd)
+	return "", fmt.Errorf("findDockerfile: debian-12.Dockerfile not found (wd=%s)", wd)
 }
 
-// sanitizeSID превращает FQDN в slug, годный для docker-имени контейнера
-// (длина <128, [a-z0-9_.-]).
+// sanitizeSID turns an FQDN into a slug suitable for a docker container name
+// (length <128, [a-z0-9_.-]).
 func sanitizeSID(sid string) string {
 	s := strings.ReplaceAll(sid, ".", "-")
 	s = strings.ReplaceAll(s, ":", "-")

@@ -1,26 +1,26 @@
 //go:build e2e_live
 
-// FC-4 L3b: failed_when:false = ignore_errors на РЕАЛЬНОМ падении модуля при
-// real-apply. L3a-stub не вычисляет failed_when → best-effort-семантика
-// (ignore_errors) и mapping реального провала в register.<name>.ignored_error
-// там НЕ доказаны. Этот тест гоняет ПОДЛИННЫЙ soul-бинарь в Debian-12-контейнере.
+// FC-4 L3b: failed_when:false = ignore_errors on a REAL module failure during
+// real-apply. L3a-stub doesn't evaluate failed_when -> the best-effort semantics
+// (ignore_errors) and mapping a real failure into register.<name>.ignored_error
+// are NOT proven there. This test runs a GENUINE soul binary in a Debian-12 container.
 //
-// Service tests/e2e-live/fc4-ignore-errors-live (НЕ examples/** — WIP-зона):
-// core.exec.run несуществующего бинаря РЕАЛЬНО падает на Soul-е (fork/exec: file
-// not found → util.SendFailed → last.failed=true). Два сценария-зеркала:
-//   - create:    падающая задача + failed_when:false → прогон SUCCESS, исходная
-//                ошибка уходит в register.fail_probe.ignored_error (НЕ теряется).
-//   - fail_hard: ТА ЖЕ задача БЕЗ failed_when → прогон FAILED → error_locked.
+// Service tests/e2e-live/fc4-ignore-errors-live (NOT examples/** - WIP zone):
+// core.exec.run of a nonexistent binary REALLY fails on Soul (fork/exec: file
+// not found -> util.SendFailed -> last.failed=true). Two mirror scenarios:
+//   - create:    failing task + failed_when:false -> run SUCCESS, the original
+//     error goes into register.fail_probe.ignored_error (NOT lost).
+//   - fail_hard: THE SAME task WITHOUT failed_when -> run FAILED -> error_locked.
 //
-// ASSERT (★ ignore_errors proof на real-apply):
-//  1. create: apply_runs success на хосте (failed_when:false подавил провал).
-//  2. ★ register.fail_probe.ignored_error персистится с РЕАЛЬНОЙ ошибкой модуля
-//     (непусто + содержит сигнатуру exec-провала). Имя поля сверено по
+// ASSERT (* ignore_errors proof on real-apply):
+//  1. create: apply_runs success on the host (failed_when:false suppressed the failure).
+//  2. * register.fail_probe.ignored_error persists with the REAL module error
+//     (non-empty + contains the exec-failure signature). Field name checked against
 //     soul/internal/runtime/applyrunner.go (ev.RegisterData["ignored_error"],
-//     ignore_errors-аудит, ~:959). register.failed == false (провал подавлен).
-//  3. ★ Контраст: fail_hard (та же задача без failed_when) → прогон FAILED,
-//     incarnation error_locked. Доказывает, что success в (1) — заслуга именно
-//     failed_when:false, а не «модуль не падает».
+//     ignore_errors audit, ~:959). register.failed == false (failure suppressed).
+//  3. * Contrast: fail_hard (same task without failed_when) -> run FAILED,
+//     incarnation error_locked. Proves success in (1) is due specifically to
+//     failed_when:false, not "the module doesn't fail".
 package e2e_live_test
 
 import (
@@ -41,72 +41,72 @@ func TestL3bFC4IgnoreErrorsLive_SuppressesRealModuleFailure(t *testing.T) {
 	defer stack.Cleanup()
 
 	if got := len(stack.SoulContainers); got != 1 {
-		t.Fatalf("ожидался 1 soul-контейнер, получено %d", got)
+		t.Fatalf("expected 1 soul container, got %d", got)
 	}
 	const sid = "soul-live-a.example.com"
 	if got := stack.SoulContainers[0].SID; got != sid {
-		t.Fatalf("SoulContainers[0].SID = %q, ожидалось %q", got, sid)
+		t.Fatalf("SoulContainers[0].SID = %q, expected %q", got, sid)
 	}
 
 	const incName = "test-fc4-ignore-errors"
 
-	// Coven-членство ДО Create: roster резолвится по `incarnation.name ∈ coven[]`
-	// (ADR-008). Без него scenario видит no_hosts → ноль строк apply_runs.
+	// Coven membership BEFORE Create: the roster resolves via `incarnation.name ∈ coven[]`
+	// (ADR-008). Without it the scenario sees no_hosts -> zero apply_runs rows.
 	stack.AddSoulToCoven(t, 0, incName)
 
-	// ── (1) create: реальный провал модуля + failed_when:false → SUCCESS ─────
-	// POST /v1/incarnations авто-запускает create-scenario. На single-host задача
-	// core.exec.run падает (binary not found), failed_when "false" перекрывает
-	// провал → задача OK → прогон success.
+	// ── (1) create: real module failure + failed_when:false -> SUCCESS ─────
+	// POST /v1/incarnations auto-runs the create scenario. On the single host, the
+	// core.exec.run task fails (binary not found), failed_when "false" overrides the
+	// failure -> task OK -> run succeeds.
 	inc, createApplyID := stack.CreateIncarnationWithApply(t, incName, "fc4-ignore-errors-live@main", nil)
 
-	// 120 c с запасом на cold-start контейнера (сама задача мгновенная — exec
-	// падает на старте процесса, никакой apt/network).
+	// 120 s with margin for container cold-start (the task itself is instant - exec
+	// fails right at process start, no apt/network involved).
 	stack.WaitApplySuccess(t, createApplyID, 120)
 	stack.WaitIncarnationReady(t, inc, 30)
 
-	// ★ apply_runs хоста = success: failed_when:false подавил реальный провал.
+	// * apply_runs host status = success: failed_when:false suppressed the real failure.
 	stack.AssertApplyHostStatus(t, createApplyID, sid, "success")
 
-	// ── (2) ★ register.fail_probe.ignored_error несёт РЕАЛЬНУЮ ошибку ────────
-	// Имя поля — ignored_error (applyrunner.go ignore_errors-аудит): при
-	// !failed && moduleErr != nil исходная ошибка кладётся в register_data.
-	// Единственная задача плана → plan_index=0. Точное значение — текст
-	// exec-провала Go runtime (хрупко для ==), поэтому проверяем непусто +
-	// сигнатуру.
+	// ── (2) * register.fail_probe.ignored_error carries the REAL error ────────
+	// Field name is ignored_error (applyrunner.go ignore_errors audit): when
+	// !failed && moduleErr != nil the original error is put into register_data.
+	// The single task in the plan -> plan_index=0. Exact value is the text of the
+	// exec failure from the Go runtime (brittle for ==), so we check non-empty +
+	// signature.
 	const planIdx = 0
 	assertRegisterFieldContains(t, stack, createApplyID, sid, planIdx, "ignored_error",
 		"/nonexistent/fc4-deliberate-fail")
 
-	// failed=false в register — провал подавлен, итоговый flow-control-исход OK.
-	// Это точное значение, безопасно для ==.
+	// failed=false in register - the failure is suppressed, the final flow-control outcome is OK.
+	// This is an exact value, safe for ==.
 	stack.AssertTaskRegisterField(t, createApplyID, sid, planIdx, "failed", "false")
 
-	// ── (3) ★ Контраст: fail_hard (та же задача без failed_when) → FAILED ────
-	// Инкарнация в ready после create. Запускаем fail_hard — та же падающая
-	// задача, но без failed_when:false. Реальный провал НЕ подавлен → прогон
-	// FAILED → incarnation error_locked. Без этого контраста success в (1) можно
-	// было бы списать на «модуль не падает» — а он падает (доказано здесь).
+	// ── (3) * Contrast: fail_hard (same task without failed_when) -> FAILED ────
+	// The incarnation is ready after create. Run fail_hard - the same failing
+	// task, but without failed_when:false. The real failure is NOT suppressed -> run
+	// FAILED -> incarnation error_locked. Without this contrast, success in (1) could
+	// have been chalked up to "the module doesn't fail" - but it does (proven here).
 	failApplyID := stack.RunScenario(t, inc, "fail_hard", nil)
 
-	// fail_hard оставляет incarnation в error_locked (run.go §7: state_changes не
-	// коммитятся при terminal-failed барьере). WaitIncarnationStatus фейлит, если
-	// достигнут любой ДРУГОЙ терминал (в т.ч. ready — это была бы регрессия
-	// ignore_errors: провал НЕ должен подавляться без флага).
+	// fail_hard leaves the incarnation in error_locked (run.go §7: state_changes aren't
+	// committed on the terminal-failed barrier). WaitIncarnationStatus fails if
+	// any OTHER terminal is reached (including ready - which would be an
+	// ignore_errors regression: the failure must NOT be suppressed without the flag).
 	stack.WaitIncarnationStatus(t, inc, "error_locked", 120)
 
-	// ★ apply_runs хоста fail_hard = failed: тот же модуль, та же ошибка, но без
-	// failed_when:false прогон валится. Контраст с (1) доказывает, что подавление
-	// делает именно failed_when, а не сам модуль.
+	// * apply_runs host status for fail_hard = failed: same module, same error, but without
+	// failed_when:false the run fails. The contrast with (1) proves the suppression comes
+	// specifically from failed_when, not from the module itself.
 	stack.AssertApplyHostStatus(t, failApplyID, sid, "failed")
 }
 
-// assertRegisterFieldContains — register_data->>field хоста (plan_index)
-// непуст и содержит want-подстроку. AssertTaskRegisterField делает точное ==,
-// но ignored_error = текст exec-провала Go runtime (зависит от версии/ОС),
-// поэтому для него нужна проверка «непусто + сигнатура», не точное равенство.
-// Доказывает, что реальный stderr/диагностика провала реально доехала в
-// register, а не пустая заглушка.
+// assertRegisterFieldContains - register_data->>field for a host (plan_index)
+// must be non-empty and contain the want substring. AssertTaskRegisterField does an exact ==,
+// but ignored_error is the text of the Go runtime exec failure (depends on version/OS),
+// so it needs a "non-empty + signature" check, not an exact match.
+// Proves the real stderr/diagnostic of the failure actually made it into
+// register, not an empty stub.
 func assertRegisterFieldContains(t *testing.T, stack *harness.Stack, applyID, sid string, planIdx int, field, want string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -119,15 +119,15 @@ func assertRegisterFieldContains(t *testing.T, stack *harness.Stack, applyID, si
 		WHERE apply_id = $1 AND sid = $2 AND plan_index = $3
 	`, applyID, sid, planIdx, field).Scan(&got)
 	if err != nil {
-		t.Fatalf("assertRegisterFieldContains(apply=%s sid=%s plan_index=%d field=%s): нет register-строки (задача без register:/реальный soul не вернул register?): %v",
+		t.Fatalf("assertRegisterFieldContains(apply=%s sid=%s plan_index=%d field=%s): no register row (task without register:/real soul didn't return register?): %v",
 			applyID, sid, planIdx, field, err)
 	}
 	if got == "" || got == "<null>" {
-		t.Fatalf("★ assertRegisterFieldContains(apply=%s sid=%s plan_index=%d field=%s): поле ПУСТО (%q) — ignored_error не персистнут / реальный провал не доехал в register",
+		t.Fatalf("* assertRegisterFieldContains(apply=%s sid=%s plan_index=%d field=%s): field is EMPTY (%q) - ignored_error was not persisted / the real failure never made it into register",
 			applyID, sid, planIdx, field, got)
 	}
 	if !strings.Contains(got, want) {
-		t.Fatalf("★ assertRegisterFieldContains(apply=%s sid=%s plan_index=%d field=%s): %q НЕ содержит %q — register несёт не ту ошибку",
+		t.Fatalf("* assertRegisterFieldContains(apply=%s sid=%s plan_index=%d field=%s): %q does NOT contain %q - register carries the wrong error",
 			applyID, sid, planIdx, field, got, want)
 	}
 }

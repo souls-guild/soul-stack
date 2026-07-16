@@ -1,10 +1,10 @@
 //go:build e2e_live
 
-// L3b E2E day-2: examples/service/redis::update_config на ЖИВОМ Redis — hot-reload
-// директив без рестарта процесса. Закрывает находки NIM-53: #1 persistence-enum
-// aof_1sec — валидный ключ essence.persistence_presets (render не крашит на «no such
-// key»); #2 io-threads — startup-only директива (CONFIG SET её пропускает, денилист
-// плагина) → ложится НА ДИСК, rewrite:false не затирает.
+// L3b E2E day-2: examples/service/redis::update_config on a LIVE Redis - hot-reload
+// of directives without a process restart. Closes NIM-53 findings: #1 persistence-enum
+// aof_1sec - a valid essence.persistence_presets key (render doesn't crash on "no such
+// key"); #2 io-threads - a startup-only directive (CONFIG SET skips it, plugin denylist)
+// -> lands ON DISK, rewrite:false doesn't erase it.
 package e2e_live_test
 
 import "testing"
@@ -13,8 +13,8 @@ func TestL3bRedisLive_Day2UpdateConfig(t *testing.T) {
 	stack, inc, adminPass := setupRedisStandalone(t, "rdb", "volatile-lru", 1024)
 	c := plainConn(adminPass)
 
-	// Смена бюджета памяти, политики вытеснения, режима persistence и io-threads одним
-	// прогоном (CONFIG SET hot-settable + CONFIG REWRITE, io-threads пропускается).
+	// Change memory budget, eviction policy, persistence mode and io-threads in one
+	// run (CONFIG SET hot-settable + CONFIG REWRITE, io-threads skipped).
 	upd := stack.RunScenario(t, inc, "update_config", map[string]any{
 		"memory_mb":        512,
 		"maxmemory_policy": "allkeys-lru",
@@ -24,19 +24,19 @@ func TestL3bRedisLive_Day2UpdateConfig(t *testing.T) {
 	stack.WaitApplySuccess(t, upd, 300)
 	stack.WaitIncarnationReady(t, inc, 60)
 
-	// (а) hot-settable директивы ожили на инстансе (CONFIG GET).
+	// (a) hot-settable directives came alive on the instance (CONFIG GET).
 	stack.AssertRedisConfigGet(t, c, "maxmemory-policy", "allkeys-lru")
-	// aof_1sec → appendonly yes: находка #1 — aof_1sec валидный enum presets, render не крашит.
+	// aof_1sec -> appendonly yes: finding #1 - aof_1sec is a valid enum preset, render doesn't crash.
 	stack.AssertRedisConfigGet(t, c, "appendonly", "yes")
 
-	// (б) startup-only io-threads видно ТОЛЬКО на диске (CONFIG SET его пропускает):
-	// находка #2 — rewrite:false не затирает директиву в redis.conf.
+	// (b) startup-only io-threads is visible ONLY on disk (CONFIG SET skips it):
+	// finding #2 - rewrite:false doesn't erase the directive in redis.conf.
 	stack.AssertRedisConfFileDirective(t, 0, "/etc/redis/redis.conf", "io-threads", "2")
-	// memory_mb=512 транслируется в maxmemory 384mb (reserve 75%, essence) на диске —
-	// CONFIG GET maxmemory вернул бы байты, сверяем детерминированный рендер conf-файла.
+	// memory_mb=512 translates to maxmemory 384mb (reserve 75%, essence) on disk -
+	// CONFIG GET maxmemory would return bytes, so we check the deterministic conf-file render.
 	stack.AssertRedisConfFileDirective(t, 0, "/etc/redis/redis.conf", "maxmemory", "384mb")
 
-	// (в) read-model: state несёт новые простые понятия (update_config state_changes).
+	// (c) read-model: state carries the new simple values (update_config state_changes).
 	stack.AssertIncarnationState(t, inc, map[string]any{
 		"persistence":      "aof_1sec",
 		"maxmemory_policy": "allkeys-lru",

@@ -10,29 +10,31 @@ import (
 	"time"
 )
 
-// buildKeeperYAML рендерит keeper.yml для test-сценария: подставляет адреса
-// testcontainer-ов (PG/Redis/Vault), пути к TLS-материалу и канонический
-// signing_key_ref.
+// buildKeeperYAML renders keeper.yml for the test scenario: substitutes
+// testcontainer addresses (PG/Redis/Vault), TLS material paths, and the
+// canonical signing_key_ref.
 //
-// Не используется templating-движок — keeper.yml фиксирован по форме (см.
-// dev/keeper.dev.yml), все динамические значения — fmt.Sprintf. CEL/Go-template
-// здесь были бы over-engineering.
+// No templating engine is used — keeper.yml is fixed in shape (see
+// dev/keeper.dev.yml), all dynamic values go through fmt.Sprintf. CEL/Go
+// text/template would be over-engineering here.
 //
-// Side effect: после рендера YAML caller обязан запушить PG DSN в Vault
-// (`secret/keeper/postgres`, поле `dsn`). Делаем это здесь же — buildKeeperYAML
-// логически фиксирует контракт `dsn_ref: vault:secret/keeper/postgres`, и
-// держать соответствующий secret-write в этой же точке проще, чем разводить.
+// Side effect: after rendering the YAML the caller must push the PG DSN into
+// Vault (`secret/keeper/postgres`, field `dsn`). We do this right here —
+// buildKeeperYAML logically fixes the `dsn_ref: vault:secret/keeper/postgres`
+// contract, and it's simpler to keep the matching secret write at the same
+// point than to split it out.
 //
-// L3b-отличие от L3a: gRPC-listener-ы (bootstrap + event_stream) биндятся на
-// `0.0.0.0:<port>`, чтобы соул-контейнер мог достучаться к keeper-у через
-// `host.docker.internal:<port>` (на Linux — через ExtraHosts host-gateway).
-// HTTP/MCP/metrics остаются на 127.0.0.1 — к ним из контейнера не ходим, а
-// держать всё на 0.0.0.0 без auth — лишняя поверхность.
+// L3b difference from L3a: the gRPC listeners (bootstrap + event_stream)
+// bind on `0.0.0.0:<port>` so the soul container can reach keeper via
+// `host.docker.internal:<port>` (on Linux — via the ExtraHosts host-gateway).
+// HTTP/MCP/metrics stay on 127.0.0.1 — we don't reach them from the
+// container, and binding everything on 0.0.0.0 without auth would be extra
+// surface.
 func (s *Stack) buildKeeperYAML(certPath, keyPath, caPath string) string {
-	// Динамические TCP-порты: выделяем заранее, чтобы Stack-поля и YAML
-	// согласованно указывали на одни и те же номера. probeReady и
-	// host-side-asserts ходят на 127.0.0.1:<port> (loopback), а
-	// keeper-yml слушает на 0.0.0.0:<port> для gRPC-listener-ов.
+	// Dynamic TCP ports: allocate up front so Stack fields and YAML
+	// consistently point at the same numbers. probeReady and host-side asserts
+	// hit 127.0.0.1:<port> (loopback), while keeper.yml listens on
+	// 0.0.0.0:<port> for the gRPC listeners.
 	bootstrapPort := allocPort(s.t)
 	eventStreamPort := allocPort(s.t)
 	httpAddr := allocLoopback(s.t)
@@ -147,12 +149,13 @@ reaper:
 	return yaml
 }
 
-// buildPluginsSection рендерит блок `plugins:` (+ опциональный `sigil:`).
-// Непустой cfg.SoulModules добавляет каталог `soul_modules[]` (ADR-065(b),
-// flow-форма записей как в docs/keeper/plugins.md) и включает Sigil:
-// без sigil.signing_key_ref keeper не регистрирует plugin.allow/revoke/list
-// (setupSigil), и допускать материализованный слот было бы нечем. Ключ в
-// Vault сеет NewStack (SeedSigilSigningKey) ДО keeper run.
+// buildPluginsSection renders the `plugins:` block (+ optional `sigil:`).
+// A non-empty cfg.SoulModules adds a `soul_modules[]` catalog (ADR-065(b),
+// flow-form entries as in docs/keeper/plugins.md) and enables Sigil: without
+// sigil.signing_key_ref keeper does not register plugin.allow/revoke/list
+// (setupSigil), and there would be nothing to admit a materialized slot
+// with. The Vault key is seeded by NewStack (SeedSigilSigningKey) BEFORE the
+// keeper run.
 func (s *Stack) buildPluginsSection(cacheDir string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "plugins:\n  cache_root: %s\n", cacheDir)
@@ -167,8 +170,8 @@ func (s *Stack) buildPluginsSection(cacheDir string) string {
 	return b.String()
 }
 
-// seedPostgresDSN кладёт PG DSN в Vault KV `secret/keeper/postgres` (поле `dsn`).
-// keeper.yml::postgres.dsn_ref ссылается именно сюда.
+// seedPostgresDSN writes the PG DSN into Vault KV `secret/keeper/postgres`
+// (field `dsn`). keeper.yml::postgres.dsn_ref points exactly here.
 func (s *Stack) seedPostgresDSN() {
 	vc := newVaultClient(s.VaultAddr, s.vaultToken)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -180,10 +183,10 @@ func (s *Stack) seedPostgresDSN() {
 	}
 }
 
-// allocLoopback резервирует свободный TCP-порт на 127.0.0.1 и возвращает
-// `127.0.0.1:<port>`. Listener закрывается сразу — есть малый race (порт
-// может быть занят между alloc и фактическим bind), для test-окружения
-// приемлемо.
+// allocLoopback reserves a free TCP port on 127.0.0.1 and returns
+// `127.0.0.1:<port>`. The listener is closed immediately — there's a small
+// race (the port could get taken between alloc and the actual bind), which
+// is acceptable for a test environment.
 func allocLoopback(t interface {
 	Fatalf(format string, args ...any)
 }) string {
@@ -199,10 +202,10 @@ func allocLoopback(t interface {
 	return addr
 }
 
-// allocPort резервирует свободный TCP-порт (через bind на 127.0.0.1:0) и
-// возвращает только номер порта. Используется для listener-ов, которые
-// YAML биндит на `0.0.0.0:<port>` (gRPC bootstrap+event_stream — доступны и
-// host-side-probe-у, и контейнеру через host.docker.internal).
+// allocPort reserves a free TCP port (via bind on 127.0.0.1:0) and returns
+// just the port number. Used for listeners that the YAML binds on
+// `0.0.0.0:<port>` (gRPC bootstrap+event_stream — reachable both by the
+// host-side probe and by the container via host.docker.internal).
 func allocPort(t interface {
 	Fatalf(format string, args ...any)
 }) int {
