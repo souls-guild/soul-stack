@@ -11,8 +11,8 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/voyage"
 )
 
-// fakeOrphanReleaser — stub [OrphanLockReleaser]: фиксирует переданные аргументы
-// и возвращает заранее заданный (released, err).
+// fakeOrphanReleaser — stub [OrphanLockReleaser]: captures passed arguments
+// and returns pre-set (released, err).
 type fakeOrphanReleaser struct {
 	released bool
 	err      error
@@ -35,7 +35,7 @@ func (f *fakeOrphanReleaser) ReleaseOrphanLock(_ context.Context, voyageID, name
 	return f.released, f.err
 }
 
-// targetRows — fake pgx.Rows над срезом voyage_targets-строк (8 колонок порядка
+// targetRows — fake pgx.Rows over slice of voyage_targets rows (8 columns in order of
 // selectTargetsSQL: voyage_id, target_kind, target_id, batch_index, status,
 // apply_id, errand_id, finished_at).
 type targetRows struct {
@@ -64,7 +64,7 @@ func (r *targetRows) Scan(dest ...any) error {
 		case *int:
 			*p = v.(int)
 		default:
-			// finished_at (**time.Time) — всегда nil в этих тестах.
+			// finished_at (**time.Time) — always nil in these tests.
 			if v != nil {
 				return errors.New("targetRows: unexpected non-nil for unsupported dest")
 			}
@@ -81,7 +81,7 @@ func (r *targetRows) Values() ([]any, error)                       { return nil,
 func (r *targetRows) RawValues() [][]byte                          { return nil }
 func (r *targetRows) Conn() *pgx.Conn                              { return nil }
 
-// targetRow — одна строка voyage_targets для fake-Query.
+// targetRow — one row of voyage_targets for fake-Query.
 func targetRow(voyageID, kind, targetID, status string, applyID *string) []any {
 	var ap any
 	if applyID != nil {
@@ -92,19 +92,19 @@ func targetRow(voyageID, kind, targetID, status string, applyID *string) []any {
 
 func strptr(s string) *string { return &s }
 
-// withTargets конфигурирует fakeDB.Query на возврат заданных voyage_targets.
+// withTargets configures fakeDB.Query to return specified voyage_targets.
 func withTargets(f *fakeDB, rows ...[]any) {
 	f.queryFn = func(_ string, _ []any) (pgx.Rows, error) {
 		return &targetRows{rows: rows}, nil
 	}
 }
 
-// TestReconcileOrphanLock_NilReleaser — детект выключен (OrphanReleaser=nil):
-// reconcileOrphanLock — no-op, SelectTargets даже не вызывается (Query не
-// сконфигурирован → если бы вызвался, был бы error). nil-ошибка.
+// TestReconcileOrphanLock_NilReleaser — detection disabled (OrphanReleaser=nil):
+// reconcileOrphanLock — no-op, SelectTargets not even called (Query not
+// configured → if called, would error). nil error.
 func TestReconcileOrphanLock_NilReleaser(t *testing.T) {
 	t.Parallel()
-	fdb := &fakeDB{} // Query "not configured" — упадёт, если детект его дёрнет
+	fdb := &fakeDB{} // Query "not configured" — will error if detection calls it
 	w := &VoyageWorker{KID: "k", Pool: fdb, Logger: quietLogger()}
 	run := &voyage.Voyage{VoyageID: "v1", Attempt: 2}
 
@@ -113,9 +113,9 @@ func TestReconcileOrphanLock_NilReleaser(t *testing.T) {
 	}
 }
 
-// TestReconcileOrphanLock_OrphanRunning_Released — orphan от прошлого attempt
-// (target в running с back-link apply_id) → releaser вызван с этим apply_id,
-// voyage_id, attempt, kid; released=true → nil-ошибка.
+// TestReconcileOrphanLock_OrphanRunning_Released — orphan from previous attempt
+// (target in running with back-link apply_id) → releaser called with this apply_id,
+// voyage_id, attempt, kid; released=true → nil error.
 func TestReconcileOrphanLock_OrphanRunning_Released(t *testing.T) {
 	t.Parallel()
 	fdb := &fakeDB{}
@@ -140,8 +140,8 @@ func TestReconcileOrphanLock_OrphanRunning_Released(t *testing.T) {
 	}
 }
 
-// TestReconcileOrphanLock_TerminalTarget_NoOp — target уже терминален
-// (succeeded): инкарнация не висит → releaser НЕ вызван (нечего снимать).
+// TestReconcileOrphanLock_TerminalTarget_NoOp — target already terminal
+// (succeeded): incarnation not hanging → releaser NOT called (nothing to release).
 func TestReconcileOrphanLock_TerminalTarget_NoOp(t *testing.T) {
 	t.Parallel()
 	fdb := &fakeDB{}
@@ -155,12 +155,12 @@ func TestReconcileOrphanLock_TerminalTarget_NoOp(t *testing.T) {
 		t.Fatalf("reconcileOrphanLock: %v", err)
 	}
 	if rel.calls != 0 {
-		t.Errorf("releaser calls = %d, want 0 (terminal target — нечего снимать)", rel.calls)
+		t.Errorf("releaser calls = %d, want 0 (terminal target — nothing to release)", rel.calls)
 	}
 }
 
-// TestReconcileOrphanLock_NoBacklink_NoOp — target в awaiting без apply_id
-// (спавн прошлого attempt не дошёл до MarkTargetRunning): releaser НЕ вызван.
+// TestReconcileOrphanLock_NoBacklink_NoOp — target in awaiting without apply_id
+// (spawn of previous attempt did not reach MarkTargetRunning): releaser NOT called.
 func TestReconcileOrphanLock_NoBacklink_NoOp(t *testing.T) {
 	t.Parallel()
 	fdb := &fakeDB{}
@@ -174,46 +174,46 @@ func TestReconcileOrphanLock_NoBacklink_NoOp(t *testing.T) {
 		t.Fatalf("reconcileOrphanLock: %v", err)
 	}
 	if rel.calls != 0 {
-		t.Errorf("releaser calls = %d, want 0 (нет back-link — не наш orphan)", rel.calls)
+		t.Errorf("releaser calls = %d, want 0 (no back-link — not our orphan)", rel.calls)
 	}
 }
 
-// TestReconcileOrphanLock_LegitInLockWindow_NotPickedUp — guard на «reaudit
-// minor»: legit-прогон (прямой run / ЧУЖОЙ Voyage), попавший в окно
-// lockRun→Insert(apply_runs) — applying закоммичен, apply_runs ещё нет, его
-// apply_id=ap-legit — НЕ снимается orphan-швом. Причина: reconcileOrphanLock
-// берёт orphan-кандидата ТОЛЬКО из voyage_targets ЭТОГО Voyage (back-link
-// прошлого attempt). voyage_targets нашего Voyage НЕ содержит строки инкарнации
-// "a" с apply_id=ap-legit (она принадлежит чужому прогону — у нас здесь строка
-// другой инкарнации "b") → orphanApplyID не найден → releaser НЕ вызван. Защита
-// держится на связке FENCING-2/3 (back-link под attempt-CAS), а не на одном
-// FENCING-1 (live-rival apply_runs-EXISTS): даже если apply_runs ещё пуст
-// (окно до Insert), отсутствие back-link под нашим voyage_id уже отсекает чужой
-// lock на стадии детекта, до обращения к releaser-у.
+// TestReconcileOrphanLock_LegitInLockWindow_NotPickedUp — guard on "reaudit
+// minor": legit-run (direct run / FOREIGN Voyage), caught in window of
+// lockRun→Insert(apply_runs) — applying committed, apply_runs not yet, its
+// apply_id=ap-legit — NOT released by orphan-seam. Reason: reconcileOrphanLock
+// takes orphan-candidate ONLY from voyage_targets of THIS Voyage (back-link of
+// previous attempt). voyage_targets of our Voyage does NOT contain row of incarnation
+// "a" with apply_id=ap-legit (it belongs to foreign run — here we have row of
+// different incarnation "b") → orphanApplyID not found → releaser NOT called. Protection
+// depends on FENCING-2/3 pairing (back-link under attempt-CAS), not just
+// FENCING-1 (live-rival apply_runs-EXISTS): even if apply_runs still empty
+// (window before Insert), absence of back-link under our voyage_id already cuts off foreign
+// lock at detection stage, before reaching releaser.
 func TestReconcileOrphanLock_LegitInLockWindow_NotPickedUp(t *testing.T) {
 	t.Parallel()
 	fdb := &fakeDB{}
-	// В voyage_targets ЭТОГО Voyage есть только строка инкарнации "b". Инкарнация
-	// "a" (на которой висит legit-прогон с ap-legit) в targets нашего Voyage НЕ
-	// фигурирует — back-link под нашим voyage_id для "a" отсутствует.
+	// voyage_targets of THIS Voyage contains only row of incarnation "b". Incarnation
+	// "a" (where legit-run with ap-legit hangs) in targets of our Voyage does NOT
+	// appear — back-link under our voyage_id for "a" absent.
 	withTargets(fdb, targetRow("v1", string(voyage.TargetKindIncarnation), "b",
 		string(voyage.TargetStatusRunning), strptr("ap-legit")))
 	rel := &fakeOrphanReleaser{released: true}
 	w := &VoyageWorker{KID: "k", Pool: fdb, Logger: quietLogger(), OrphanReleaser: rel}
 	run := &voyage.Voyage{VoyageID: "v1", Attempt: 2}
 
-	// Реконсиляция для "a" (наш re-run метит её) — у "a" нет back-link → no-op.
+	// Reconciliation for "a" (our re-run targets it) — "a" has no back-link → no-op.
 	if err := w.reconcileOrphanLock(context.Background(), run, "a"); err != nil {
 		t.Fatalf("reconcileOrphanLock: %v", err)
 	}
 	if rel.calls != 0 {
-		t.Errorf("releaser calls = %d, want 0 (legit-прогон чужого apply_id без back-link под нашим voyage НЕ снимается)", rel.calls)
+		t.Errorf("releaser calls = %d, want 0 (legit-run of foreign apply_id without back-link under our voyage NOT released)", rel.calls)
 	}
 }
 
-// TestReconcileOrphanLock_ReleaserError_Propagates — CRUD-сбой releaser-а
-// (например VerifyOwnership транзиент) пробрасывается caller-у (→ fail-closed
-// по инкарнации в runOneIncarnation).
+// TestReconcileOrphanLock_ReleaserError_Propagates — CRUD failure of releaser
+// (e.g. VerifyOwnership transient) propagated to caller (→ fail-closed
+// per incarnation in runOneIncarnation).
 func TestReconcileOrphanLock_ReleaserError_Propagates(t *testing.T) {
 	t.Parallel()
 	fdb := &fakeDB{}
@@ -229,9 +229,9 @@ func TestReconcileOrphanLock_ReleaserError_Propagates(t *testing.T) {
 	}
 }
 
-// TestReconcileOrphanLock_ReleaserNoOp_NoError — releaser вернул released=false
-// (fenced no-op: не applying / нас реклеймнули / apply_id-mismatch) → nil-ошибка,
-// caller продолжает re-run (lockRun сам отбракует, если не runnable).
+// TestReconcileOrphanLock_ReleaserNoOp_NoError — releaser returned released=false
+// (fenced no-op: not applying / we reclaimed / apply_id-mismatch) → nil error,
+// caller continues re-run (lockRun will reject if not runnable).
 func TestReconcileOrphanLock_ReleaserNoOp_NoError(t *testing.T) {
 	t.Parallel()
 	fdb := &fakeDB{}

@@ -8,9 +8,9 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/voyage"
 )
 
-// Прогресс батчей (current_batch_index) инкрементится по ОДНОМУ за каждый
-// завершённый Leg: legIdx+1. 5 инкарнаций, batch_size=2 → 3 Leg-а → 1,2,3.
-// Терминал current_batch_index == total_batches (3/3 = 100%).
+// Batch progress (current_batch_index) increments ONE per completed Leg:
+// legIdx+1. 5 incarnations, batch_size=2 → 3 Legs → 1,2,3.
+// Terminal current_batch_index == total_batches (3/3 = 100%).
 func TestExecuteScenario_BatchProgress_MultiBatch(t *testing.T) {
 	t.Parallel()
 	fdb := &fakeDB{}
@@ -26,8 +26,8 @@ func TestExecuteScenario_BatchProgress_MultiBatch(t *testing.T) {
 	}
 }
 
-// Один Leg (batch_size=NULL → весь прогон одним Leg) → current_batch_index 1.
-// Терминал 1/1.
+// One Leg (batch_size=NULL → all run as one Leg) → current_batch_index 1.
+// Terminal 1/1.
 func TestExecuteScenario_BatchProgress_SingleBatch(t *testing.T) {
 	t.Parallel()
 	fdb := &fakeDB{}
@@ -38,12 +38,12 @@ func TestExecuteScenario_BatchProgress_SingleBatch(t *testing.T) {
 	w.executeScenarioVoyage(context.Background(), v, make(chan struct{}))
 
 	if got := fdb.batchProgressSeq(); !reflect.DeepEqual(got, []int{1}) {
-		t.Fatalf("batch progress = %v, want [1] (один Leg)", got)
+		t.Fatalf("batch progress = %v, want [1] (one Leg)", got)
 	}
 }
 
-// window-режим: НЕ Leg-овый, прогресс НЕ инкрементится (остаётся 0, UI считает
-// по targets). UpdateBatchProgress в окне не вызывается.
+// window-mode: NOT Leg-based, progress does NOT increment (stays 0, UI counts
+// by targets). UpdateBatchProgress not called in window.
 func TestExecuteScenario_BatchProgress_WindowNotIncremented(t *testing.T) {
 	t.Parallel()
 	fdb := &fakeDB{}
@@ -54,12 +54,12 @@ func TestExecuteScenario_BatchProgress_WindowNotIncremented(t *testing.T) {
 	w.executeScenarioVoyage(context.Background(), v, make(chan struct{}))
 
 	if got := fdb.batchProgressSeq(); len(got) != 0 {
-		t.Fatalf("window-режим НЕ должен инкрементить current_batch_index, got %v", got)
+		t.Fatalf("window-mode must NOT increment current_batch_index, got %v", got)
 	}
 }
 
-// abort посреди (fail_threshold): current_batch_index = число ЗАВЕРШЁННЫХ Leg-ов
-// ДО abort. Leg0=[a,b] завершён (→1), порог достигнут, Leg1 не стартует.
+// abort mid (fail_threshold): current_batch_index = count of COMPLETED Legs
+// BEFORE abort. Leg0=[a,b] completed (→1), threshold reached, Leg1 does not start.
 func TestExecuteScenario_BatchProgress_AbortMid(t *testing.T) {
 	t.Parallel()
 	fdb := &fakeDB{}
@@ -71,14 +71,14 @@ func TestExecuteScenario_BatchProgress_AbortMid(t *testing.T) {
 	v := scenarioVoyage([]string{"a", "b", "c", "d"}, intp(2), nil, &abort, nil)
 	w.executeScenarioVoyage(context.Background(), v, make(chan struct{}))
 
-	// Leg0 завершён → progress 1; abort до Leg1 → больше нет.
+	// Leg0 completed → progress 1; abort before Leg1 → no more.
 	if got := fdb.batchProgressSeq(); !reflect.DeepEqual(got, []int{1}) {
-		t.Fatalf("abort-progress = %v, want [1] (только завершённый Leg0)", got)
+		t.Fatalf("abort-progress = %v, want [1] (only completed Leg0)", got)
 	}
 }
 
-// kind=command, барьерный multi-batch: симметрия со scenario. 4 SID, batch_size=2
-// → 2 Leg-а → 1,2.
+// kind=command, barrier multi-batch: symmetry with scenario. 4 SID, batch_size=2
+// → 2 Legs → 1,2.
 func TestExecuteCommand_BatchProgress_MultiBatch(t *testing.T) {
 	t.Parallel()
 	fdb := &fakeDB{}
@@ -93,7 +93,7 @@ func TestExecuteCommand_BatchProgress_MultiBatch(t *testing.T) {
 	}
 }
 
-// kind=command window: прогресс НЕ инкрементится.
+// kind=command window: progress does NOT increment.
 func TestExecuteCommand_BatchProgress_WindowNotIncremented(t *testing.T) {
 	t.Parallel()
 	fdb := &fakeDB{}
@@ -104,6 +104,6 @@ func TestExecuteCommand_BatchProgress_WindowNotIncremented(t *testing.T) {
 	w.executeCommandVoyage(context.Background(), v, make(chan struct{}))
 
 	if got := fdb.batchProgressSeq(); len(got) != 0 {
-		t.Fatalf("command window НЕ должен инкрементить current_batch_index, got %v", got)
+		t.Fatalf("command window must NOT increment current_batch_index, got %v", got)
 	}
 }

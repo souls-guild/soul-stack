@@ -9,7 +9,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// capturingWriter — захватывает записанные audit-события для проверки payload.
+// capturingWriter — captures written audit events for payload verification.
 type capturingWriter struct {
 	mu     sync.Mutex
 	events []*audit.Event
@@ -33,9 +33,9 @@ func (w *capturingWriter) last() *audit.Event {
 
 func strPtr(s string) *string { return &s }
 
-// TestEmitFinalized_CadenceID — ядро фикса (ADR-052 §l amend, Вариант б):
-// emitFinalized несёт cadence_id в payload терминала, когда Voyage спавнен
-// расписанием (run.CadenceID != nil), и НЕ несёт для ручного Voyage (nil).
+// TestEmitFinalized_CadenceID — core of fix (ADR-052 §l amend, Variant b):
+// emitFinalized carries cadence_id in terminal payload when Voyage spawned by
+// schedule (run.CadenceID != nil), and does NOT carry for manual Voyage (nil).
 func TestEmitFinalized_CadenceID(t *testing.T) {
 	const cadenceULID = "01JZZZZ0CADENCE000000000000"
 
@@ -45,14 +45,14 @@ func TestEmitFinalized_CadenceID(t *testing.T) {
 		status        voyage.Status
 		cadenceID     *string
 		wantEvent     audit.EventType
-		wantCadenceID string // "" → ключ отсутствует
+		wantCadenceID string // "" → key absent
 	}{
 		{"scenario completed by cadence", voyage.KindScenario, voyage.StatusSucceeded, strPtr(cadenceULID), audit.EventScenarioRunCompleted, cadenceULID},
 		{"scenario failed by cadence", voyage.KindScenario, voyage.StatusFailed, strPtr(cadenceULID), audit.EventScenarioRunFailed, cadenceULID},
 		{"scenario partial by cadence", voyage.KindScenario, voyage.StatusPartialFailed, strPtr(cadenceULID), audit.EventScenarioRunPartialFailed, cadenceULID},
 		{"command completed by cadence", voyage.KindCommand, voyage.StatusSucceeded, strPtr(cadenceULID), audit.EventCommandRunCompleted, cadenceULID},
 		{"command failed by cadence", voyage.KindCommand, voyage.StatusFailed, strPtr(cadenceULID), audit.EventCommandRunFailed, cadenceULID},
-		// Ручной Voyage (CadenceID nil) — ключ cadence_id отсутствует.
+		// Manual Voyage (CadenceID nil) — key cadence_id absent.
 		{"scenario manual", voyage.KindScenario, voyage.StatusSucceeded, nil, audit.EventScenarioRunCompleted, ""},
 		{"command manual", voyage.KindCommand, voyage.StatusSucceeded, nil, audit.EventCommandRunCompleted, ""},
 	}
@@ -73,7 +73,7 @@ func TestEmitFinalized_CadenceID(t *testing.T) {
 
 			ev := cw.last()
 			if ev == nil {
-				t.Fatal("emitFinalized не записал событие")
+				t.Fatal("emitFinalized did not write event")
 			}
 			if ev.EventType != c.wantEvent {
 				t.Fatalf("event_type = %q, want %q", ev.EventType, c.wantEvent)
@@ -81,12 +81,12 @@ func TestEmitFinalized_CadenceID(t *testing.T) {
 			got, present := ev.Payload["cadence_id"]
 			if c.wantCadenceID == "" {
 				if present {
-					t.Fatalf("ручной Voyage не должен нести cadence_id, получил %v", got)
+					t.Fatalf("manual Voyage must not carry cadence_id, got %v", got)
 				}
 				return
 			}
 			if !present {
-				t.Fatal("cadence-Voyage должен нести cadence_id в payload терминала")
+				t.Fatal("cadence-Voyage must carry cadence_id in terminal payload")
 			}
 			if got != c.wantCadenceID {
 				t.Fatalf("cadence_id = %v, want %q", got, c.wantCadenceID)

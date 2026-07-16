@@ -1,27 +1,18 @@
-// Package voyageorch — pool VoyageWorker-ов, исполняющих Voyage-прогоны
-// (ADR-043, S1). Worker крутит claim-loop: атомарно подбирает один pending
-// Voyage через [voyage.ClaimNext], запускает renewal-goroutine через
-// [voyage.RenewLease], исполняет работу прогона и финализирует через
-// [voyage.Finalize] под CAS-guard-ом ownership.
-//
-// Pattern copy из [tideorch]/[errandrunorch] — `claim → renew → execute →
-// finalize-with-ownership`. execute ветвится по kind:
-//   - kind=scenario (S2) — реальный батчевый прогон scenario поверх N
-//     инкарнаций (см. scenario.go, executeScenarioVoyage); подход B1 ADR-043:
-//     batch (Leg) = N инкарнаций, каждая = полноценный per-incarnation
-//     scenario-run со своим state-commit-ом (делает сам scenario-runner);
-//   - kind=command (S3) — пока NOOP-заглушка (фундамент S1): finalize succeeded.
-//
-// config-gated OFF по умолчанию (см. daemon.setupVoyageWorker); production
-// wire-up Spawner/Awaiter для kind=scenario — S5.
-//
-// Failover-resilience: при смерти инстанса протухший claim возвращается
-// Reaper-правилом обратно в `pending` (тираж — пост-S1); другой Keeper подбирает
-// Voyage через ClaimNext.
-//
-// TODO(post-S1): claim+lease helpers дублируют tide/errandrun (architect-decision
-// γ 2026-05-27 об extract в shared `claimlease/` отложен). Реальное исполнение —
-// S2 (scenario fan-out per-incarnation) / S3 (command fan-out per-host).
+// Package voyageorch orchestrates a pool of VoyageWorkers executing Voyage runs
+// (ADR-043, S1). Each worker runs a claim-loop: atomically claims one pending
+// Voyage via [voyage.ClaimNext], spawns a renewal goroutine via
+// [voyage.RenewLease], executes the run, and finalizes via [voyage.Finalize]
+// under CAS-guard of ownership. Pattern mirrors [tideorch]/[errandrunorch]:
+// claim → renew → execute → finalize-with-ownership. Execution branches by kind:
+//   - kind=scenario (S2): real batched scenario run over N incarnations per
+//     batch (Leg); each incarnation gets its own scenario-run + state-commit.
+//   - kind=command (S3): NOOP stub (S1 foundation); finalize succeeds.
+// Config-gated OFF by default (see daemon.setupVoyageWorker); production
+// wire-up of Spawner/Awaiter for kind=scenario is S5.
+// Failover-resilience: on instance death, Reaper returns stale claim to
+// pending; another Keeper picks it up via ClaimNext.
+// TODO(post-S1): claim+lease helpers duplicate tide/errandrun; extract to
+// shared `claimlease/` deferred (architect decision 2026-05-27).
 package voyageorch
 
 import (
@@ -35,13 +26,11 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// VoyageWorker — claim+execute loop для Voyage-прогонов. Один Worker — одна
-// goroutine; в daemon (setupVoyageWorker) поднимается несколько (cfg.Voyage.Workers).
-//
-// Lifecycle:
-//   - Run(ctx) крутит loop до отмены ctx.
-//   - graceful-shutdown: cancel ctx → текущий executeVoyage добегает до конца
-//     (на S1 — мгновенно: NOOP-finalize); renewLoop останавливается на ctx.Done.
+// VoyageWorker runs a claim+execute loop for Voyage runs. One Worker per goroutine;
+// daemon spawns multiple (cfg.Voyage.Workers).
+// Lifecycle: Run(ctx) loops until ctx cancellation; graceful-shutdown:
+// cancel ctx → current executeVoyage finishes (S1: immediate NOOP-finalize);
+// renewLoop exits on ctx.Done.
 type VoyageWorker struct {
 	KID           string
 	Pool          voyage.ExecQueryRower
@@ -50,38 +39,36 @@ type VoyageWorker struct {
 	PollInterval  time.Duration
 	Logger        *slog.Logger
 
-	// ScenarioSpawner / ScenarioAwaiter — DI kind=scenario исполнения (S2):
-	// спавн per-incarnation scenario-run-а + ожидание его терминала (parity
-	// tideorch.SurgeSpawner/TerminalAwaiter). nil → claim-нутый scenario-Voyage
-	// финализируется failed (fail-closed; production wire-up — S5). kind=command
-	// (S3) их не использует.
+	// ScenarioSpawner / ScenarioAwaiter DI for kind=scenario execution (S2):
+	// spawn per-incarnation scenario-run + await its terminal (parity
+	// tideorch.SurgeSpawner/TerminalAwaiter). nil → claimed scenario-Voyage
+	// finalizes failed (fail-closed; production wire-up S5). kind=command (S3)
+	// does not use.
 	ScenarioSpawner ScenarioSpawner
 	ScenarioAwaiter IncarnationAwaiter
 
-	// OrphanReleaser — recovery-шов ADR-027(k): ПЕРЕД повторным спавном per-
-	// incarnation scenario-run реклеймнутого Voyage снимает осиротевший
-	// applying-lock инкарнации, оставшийся от scenario-run мёртвого прошлого
-	// владельца (FENCED single-winner). nil → детект выключен (поведение как до
-	// фикса; unit-сборка без recovery-шва). Только kind=scenario (S2).
+	// OrphanReleaser recovery-patch (ADR-027(k)): before respawning per-
+	// incarnation scenario-run of reclaimed Voyage, releases stale applying-lock
+	// left by dead prior owner (FENCED single-winner). nil → detection off (pre-fix
+	// behavior; unit-test without recovery). kind=scenario (S2) only.
 	OrphanReleaser OrphanLockReleaser
 
-	// CommandSpawner — DI kind=command исполнения (S3): блокирующий спавн
-	// Errand-а на один SID (reuse errand-машинерии, parity
-	// errandrunorch.ErrandSpawner). nil → claim-нутый command-Voyage
-	// финализируется failed (fail-closed; production wire-up — S5). kind=scenario
-	// (S2) его не использует.
+	// CommandSpawner DI for kind=command execution (S3): blocking Errand spawn
+	// per SID (reuse errand machinery, parity errandrunorch.ErrandSpawner).
+	// nil → claimed command-Voyage finalizes failed (fail-closed; production
+	// wire-up S5). kind=scenario (S2) does not use.
 	CommandSpawner CommandSpawner
 
-	// Audit — writer finalize-audit-семейства (ADR-043, A3): per-Leg
-	// (scenario_run.leg_*) + терминал (scenario_run/command_run.{completed|
-	// partial_failed|failed}) + lease_lost (scenario_run.lease_lost) +
-	// voyage.reclaimed пишет Reaper отдельно. nil-safe: dev-без-audit живёт,
-	// эмит только при Audit != nil; validate() поле НЕ требует.
+	// Audit writer for finalize-audit family (ADR-043, A3): per-Leg
+	// (scenario_run.leg_*) + terminal (scenario_run/command_run.{completed|
+	// partial_failed|failed}) + lease_lost + voyage.reclaimed (written by Reaper
+	// separately). nil-safe: dev without audit works; emit only if Audit != nil;
+	// validate() does not require.
 	Audit audit.Writer
 }
 
-// validate проверяет обязательные поля. Вызывается на старте Run; ошибка —
-// программная (caller setupVoyageWorker должен был передать все deps).
+// validate checks required fields. Called at Run start; error is
+// programmatic (caller setupVoyageWorker should have provided all deps).
 func (w *VoyageWorker) validate() error {
 	if w.KID == "" {
 		return errors.New("voyageorch: KID is required")
@@ -104,9 +91,9 @@ func (w *VoyageWorker) validate() error {
 	return nil
 }
 
-// Run крутит claim-loop до отмены ctx. Возвращает на ctx.Done без ошибки —
-// штатный graceful-shutdown. На invalid-config (validate fail) — error для
-// caller-а (программная ошибка setup-а).
+// Run loops claim-loop until ctx cancellation. Returns on ctx.Done with nil —
+// normal graceful-shutdown. On invalid config (validate fail) returns error
+// for caller (programmatic setup error).
 func (w *VoyageWorker) Run(ctx context.Context) error {
 	if err := w.validate(); err != nil {
 		return err
@@ -167,9 +154,9 @@ func (w *VoyageWorker) sleep(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// renewLoop CAS-продлевает lease каждые RenewInterval. На [voyage.ErrLeaseLost]
-// закрывает leaseLost-канал — executeVoyage увидит, что lease ушёл, и не будет
-// финализировать Voyage (его подбирает другой Keeper). Parity errandrunorch.
+// renewLoop CAS-renews lease every RenewInterval. On [voyage.ErrLeaseLost]
+// closes leaseLost channel — executeVoyage sees lease lost and skips finalize
+// (another Keeper picks it up). Parity errandrunorch.
 func (w *VoyageWorker) renewLoop(ctx context.Context, runID string, leaseLost chan<- struct{}) {
 	ticker := time.NewTicker(w.RenewInterval)
 	defer ticker.Stop()
@@ -192,7 +179,7 @@ func (w *VoyageWorker) renewLoop(ctx context.Context, runID string, leaseLost ch
 				continue
 			}
 			if errors.Is(err, voyage.ErrLeaseLost) {
-				w.Logger.Warn("voyageorch: lease lost — другой Keeper подобрал Voyage",
+				w.Logger.Warn("voyageorch: lease lost — another Keeper claimed Voyage",
 					slog.String("voyage_id", runID),
 					slog.String("kid", w.KID),
 				)
@@ -211,15 +198,13 @@ func (w *VoyageWorker) renewLoop(ctx context.Context, runID string, leaseLost ch
 	}
 }
 
-// executeVoyage — исполнитель одного Voyage-захвата. Ветвится по kind:
-// scenario (S2, реальный батчевый прогон) / command (S3, пока NOOP-stub).
-// Финализирует Voyage под ownership-guard-ом; при потере lease посреди прогона
-// (executeScenarioVoyage вернул "") — НЕ финализирует (другой Keeper подберёт).
-//
-// renewCtx производный от ctx — на ctx.Done renewal остановится. Defer-обёртка
-// гарантирует ПОРЯДОК: сначала cancelRenew() (renewLoop увидит ctx.Done и
-// выйдет), затем renewWG.Wait() (дождёмся выхода renewLoop). Голый
-// `defer renewWG.Wait()` без cancel дал бы deadlock (parity errandrunorch).
+// executeVoyage executes one Voyage claim. Branches by kind: scenario (S2,
+// real batched run) / command (S3, NOOP-stub). Finalizes under ownership-guard;
+// if lease lost mid-run (executeScenarioVoyage returns ""), skips finalize
+// (another Keeper picks it up).
+// renewCtx derived from ctx — renewal stops on ctx.Done. Defer wrapper
+// guarantees order: cancelRenew() first (renewLoop sees ctx.Done and exits),
+// then renewWG.Wait(). Bare `defer renewWG.Wait()` without cancel deadlocks.
 func (w *VoyageWorker) executeVoyage(ctx context.Context, run *voyage.Voyage) {
 	renewCtx, cancelRenew := context.WithCancel(ctx)
 	var renewWG sync.WaitGroup
@@ -242,22 +227,18 @@ func (w *VoyageWorker) executeVoyage(ctx context.Context, run *voyage.Voyage) {
 		slog.Int("attempt", run.Attempt),
 	)
 
-	// Ветвление по kind:
-	//   - scenario (S2): реальный батчевый прогон scenario поверх N инкарнаций.
-	//   - command (S3): реальный батчевый прогон whitelisted-модуля поверх N
-	//     хостов (поглощает ErrandRun, ADR-043).
-	//
-	// Оба executeXxxVoyage возвращают ("", nil) при потере lease / ctx.Done
-	// посреди прогона — тогда finalize НЕ делаем (Reaper-reclaim вернёт в
-	// pending, подберёт другой Keeper).
+	// Branch by kind: scenario (S2) real batched run over N incarnations;
+	// command (S3) real batched run over N hosts (absorbs ErrandRun, ADR-043).
+	// Both executeXxxVoyage return ("", nil) on lease lost / ctx.Done mid-run —
+	// skip finalize (Reaper-reclaim returns to pending; another Keeper picks up).
 	var (
 		finalStatus voyage.Status
 		summary     *voyage.Summary
-		// errCode — машинный код причины fail-closed-провала (до старта
-		// единиц): spawner_not_configured / empty_scenario_name / empty_module /
-		// target_resolve_failed. Пуст для happy-path и для «все единицы failed»
-		// (там провал — фактический исход прогона, а не setup-ошибка). Кладётся
-		// в payload терминального failed-события (см. emitFinalized).
+		// errCode machine code for fail-closed-failure reason (pre-start):
+		// spawner_not_configured / empty_scenario_name / empty_module /
+		// target_resolve_failed. Empty for happy-path or "all units failed"
+		// (failure is actual outcome, not setup error). Written to terminal
+		// failed-event payload (see emitFinalized).
 		errCode string
 	)
 	switch run.Kind {
@@ -273,15 +254,15 @@ func (w *VoyageWorker) executeVoyage(ctx context.Context, run *voyage.Voyage) {
 		errCode = "unknown_kind"
 	}
 	if finalStatus == "" {
-		// lease lost / прерывание посреди прогона — не финализируем.
+		// lease lost / interruption mid-run — skip finalize.
 		return
 	}
 
-	// Перед финализацией проверяем, не ушёл ли lease (renewLoop успел закрыть
-	// канал) — тогда другой Keeper уже владеет Voyage, финализировать нельзя.
+	// Before finalize, check if lease lost (renewLoop closed channel) —
+	// another Keeper now owns Voyage, cannot finalize.
 	select {
 	case <-leaseLost:
-		w.Logger.Warn("voyageorch: lease lost до финализации — пропускаем finalize",
+		w.Logger.Warn("voyageorch: lease lost before finalize — skipping",
 			slog.String("voyage_id", run.VoyageID),
 			slog.String("kid", w.KID),
 		)
@@ -293,7 +274,7 @@ func (w *VoyageWorker) executeVoyage(ctx context.Context, run *voyage.Voyage) {
 	err := voyage.Finalize(ctx, w.Pool, run.VoyageID, w.KID, finalStatus, summary)
 	if err != nil {
 		if errors.Is(err, voyage.ErrLeaseLost) {
-			w.Logger.Warn("voyageorch: finalize — lease lost, финализирует новый владелец",
+			w.Logger.Warn("voyageorch: finalize — lease lost, new owner finalizes",
 				slog.String("voyage_id", run.VoyageID),
 				slog.String("kid", w.KID),
 			)
@@ -317,12 +298,12 @@ func (w *VoyageWorker) executeVoyage(ctx context.Context, run *voyage.Voyage) {
 	w.emitFinalized(run, finalStatus, summary, errCode)
 }
 
-// emitFinalized пишет терминальное finalize-событие прогона по kind+status
-// (ADR-043, A3). source=keeper_internal, archon_aid="" (NULL), correlation_id=
-// voyage_id. nil-safe: эмит только при Audit != nil. scenario → scenario_run.*,
-// command → command_run.*; payload-форма различается (scenario несёт
-// total_batches+summary, command — total+succeeded из Summary, parity
-// errand_run.*). errCode кладётся только в failed-событие fail-closed-путей.
+// emitFinalized writes terminal finalize-event by kind+status (ADR-043, A3).
+// source=keeper_internal, archon_aid="" (NULL), correlation_id=voyage_id.
+// nil-safe: emit only if Audit != nil. scenario → scenario_run.*,
+// command → command_run.*; payload form varies (scenario carries
+// total_batches+summary, command carries total+succeeded from Summary, parity
+// errand_run.*). errCode written only to failed-event of fail-closed paths.
 func (w *VoyageWorker) emitFinalized(run *voyage.Voyage, status voyage.Status, summary *voyage.Summary, errCode string) {
 	if w.Audit == nil {
 		return
@@ -336,12 +317,12 @@ func (w *VoyageWorker) emitFinalized(run *voyage.Voyage, status voyage.Status, s
 		"voyage_id": run.VoyageID,
 		"kind":      string(run.Kind),
 	}
-	// cadence_id на Voyage-терминале (ADR-052 §l amend): Voyage, спавненный
-	// расписанием (run.CadenceID != nil, claim селектит cadence_id —
-	// voyage.ClaimNext), несёт cadence_id в payload терминала прогона, чтобы
-	// cadence-селектор Tiding поймал ОДНО агрегированное уведомление на спавн.
-	// nil-guarded симметрично scenario/run.go emitRunCompleted: ручной Voyage
-	// (CadenceID nil) поля не несёт → cadence-селектор не матчит.
+	// cadence_id on Voyage terminal (ADR-052 §l amend): Voyage spawned by
+	// schedule (run.CadenceID != nil, claim selects cadence_id via
+	// voyage.ClaimNext) carries cadence_id in terminal payload so cadence
+	// selector Tiding catches ONE aggregated notification. nil-guarded symmetric
+	// to scenario/run.go emitRunCompleted: manual Voyage (CadenceID nil) omits
+	// field → cadence-selector won't match.
 	if run.CadenceID != nil {
 		payload["cadence_id"] = *run.CadenceID
 	}
@@ -383,10 +364,10 @@ func (w *VoyageWorker) emitFinalized(run *voyage.Voyage, status voyage.Status, s
 	w.writeAudit(eventType, run.VoyageID, payload)
 }
 
-// emitLeaseLost пишет scenario_run.lease_lost (ADR-043, A3): VoyageWorker
-// потерял lease посреди прогона / перед finalize. Только для kind=scenario
-// (parity tide.lease_lost); command-семейство lease_lost НЕ имеет (parity
-// errand_run.*) — прогон молча подберёт другой Keeper. phase ∈ leg/finalize.
+// emitLeaseLost writes scenario_run.lease_lost (ADR-043, A3): VoyageWorker
+// lost lease mid-run or before finalize. kind=scenario only (parity
+// tide.lease_lost); command family has no lease_lost (parity errand_run.*) —
+// run silently picked up by another Keeper. phase ∈ leg/finalize.
 func (w *VoyageWorker) emitLeaseLost(run *voyage.Voyage, phase string) {
 	if w.Audit == nil || run.Kind != voyage.KindScenario {
 		return
@@ -399,9 +380,9 @@ func (w *VoyageWorker) emitLeaseLost(run *voyage.Voyage, phase string) {
 	})
 }
 
-// emitLegStarted пишет scenario_run.leg_started ПЕРЕД fan-out-ом Leg-а
-// kind=scenario (ADR-043, A3, parity tide.surge_started). command-семейство
-// leg-событий НЕ имеет (плоский fan-out).
+// emitLegStarted writes scenario_run.leg_started before Leg fan-out for
+// kind=scenario (ADR-043, A3, parity tide.surge_started). command family
+// has no leg-events (flat fan-out).
 func (w *VoyageWorker) emitLegStarted(run *voyage.Voyage, legIndex, incarnationsInLeg int) {
 	if w.Audit == nil {
 		return
@@ -414,9 +395,9 @@ func (w *VoyageWorker) emitLegStarted(run *voyage.Voyage, legIndex, incarnations
 	})
 }
 
-// emitLegCompleted пишет scenario_run.leg_completed после терминала всех
-// инкарнаций Leg-а + агрегации Summary-дельты (ADR-043, A3, parity
-// tide.surge_completed). terminal — терминальный статус Leg-а из исходов.
+// emitLegCompleted writes scenario_run.leg_completed after all incarnations
+// in Leg terminal + Summary-delta aggregation (ADR-043, A3, parity
+// tide.surge_completed). terminal is Leg terminal status from outcomes.
 func (w *VoyageWorker) emitLegCompleted(run *voyage.Voyage, legIndex int, leg legOutcome) {
 	if w.Audit == nil {
 		return
@@ -433,26 +414,25 @@ func (w *VoyageWorker) emitLegCompleted(run *voyage.Voyage, legIndex int, leg le
 	})
 }
 
-// advanceBatchProgress продвигает current_batch_index Voyage-а до числа
-// завершённых Leg-ов (completedBatches) — UI-индикатор «Batch N/total».
-// Barrier-only: window-путь (runSlidingWindow/runScenarioSlidingWindow) этот
-// метод НЕ зовёт (там батчей нет, total_batches=1, прогресс по targets).
-//
-// Best-effort (voyage.UpdateBatchProgress, ownership-guarded): ошибка/0-rows
-// (lease потеряна, Reaper-reclaim) логируется warn и НЕ валит прогон — источник
-// правды о ходе прогона — voyage_targets, прогресс лишь подсказка для UI.
+// advanceBatchProgress advances Voyage current_batch_index to completed Leg
+// count (completedBatches) — UI indicator "Batch N/total". Barrier-only:
+// window path (runSlidingWindow/runScenarioSlidingWindow) does not call
+// (no batches, total_batches=1, progress by targets).
+// Best-effort (voyage.UpdateBatchProgress, ownership-guarded): error/0-rows
+// (lease lost, Reaper-reclaim) logged as warn, does not fail run — source of
+// truth is voyage_targets, progress is UI hint only.
 func (w *VoyageWorker) advanceBatchProgress(ctx context.Context, run *voyage.Voyage, completedBatches int) {
 	if err := voyage.UpdateBatchProgress(ctx, w.Pool, run.VoyageID, w.KID, run.Attempt, completedBatches); err != nil {
-		w.Logger.Warn("voyageorch: не удалось обновить current_batch_index (best-effort)",
+		w.Logger.Warn("voyageorch: failed to update current_batch_index (best-effort)",
 			slog.String("voyage_id", run.VoyageID), slog.Int("completed_batches", completedBatches),
 			slog.Any("error", err))
 	}
 }
 
-// writeAudit — общий best-effort эмит keeper_internal-события прогона.
-// Background-ctx: эмит вне apply-ctx, чтобы запись прошла даже при отмене
-// исходного ctx (graceful-shutdown). Ошибка PG логируется warn — finalize уже
-// зафиксирован в БД, audit-trail вторичен.
+// writeAudit generic best-effort emit of keeper_internal event for run.
+// Background ctx: emit outside apply-ctx so write succeeds even if original
+// ctx canceled (graceful-shutdown). PG error logged as warn — finalize
+// already committed to DB, audit-trail is secondary.
 func (w *VoyageWorker) writeAudit(eventType audit.EventType, voyageID string, payload map[string]any) {
 	ev := &audit.Event{
 		EventType:     eventType,
@@ -468,7 +448,7 @@ func (w *VoyageWorker) writeAudit(eventType audit.EventType, voyageID string, pa
 	}
 }
 
-// summaryPayload проецирует [voyage.Summary] в audit-payload-форму (no_match
+// summaryPayload projects [voyage.Summary] to audit-payload form (no_match
 // omitempty parity voyageSummaryDTO).
 func summaryPayload(s *voyage.Summary) map[string]any {
 	out := map[string]any{
@@ -483,7 +463,7 @@ func summaryPayload(s *voyage.Summary) map[string]any {
 	return out
 }
 
-// derefOnFailure возвращает строковую форму on_failure (пусто при nil).
+// derefOnFailure returns string form of on_failure (empty if nil).
 func derefOnFailure(p *voyage.OnFailure) string {
 	if p == nil {
 		return ""
@@ -491,7 +471,7 @@ func derefOnFailure(p *voyage.OnFailure) string {
 	return string(*p)
 }
 
-// legOutcome — агрегаты исходов одного Leg-а для scenario_run.leg_completed.
+// legOutcome aggregates outcomes of one Leg for scenario_run.leg_completed.
 type legOutcome struct {
 	total     int
 	succeeded int
@@ -499,9 +479,9 @@ type legOutcome struct {
 	cancelled int
 }
 
-// terminal классифицирует терминал Leg-а (parity SurgeRecord.Terminal):
-// failed (был провал, успеха нет) / partial (провал + успех) / cancelled
-// (только cancelled, без провала и успеха) / success.
+// terminal classifies Leg terminal (parity SurgeRecord.Terminal): failed
+// (failure, no success) / partial (failure + success) / cancelled (cancelled
+// only, no failure/success) / success.
 func (l legOutcome) terminal() string {
 	if l.failed > 0 {
 		if l.succeeded > 0 {

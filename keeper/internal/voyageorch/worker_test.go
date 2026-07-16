@@ -18,7 +18,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/voyage"
 )
 
-// fakeDB — stub под [voyage.ExecQueryRower] (parity errandrunorch::fakeDB).
+// fakeDB stub for [voyage.ExecQueryRower] (parity errandrunorch::fakeDB).
 type fakeDB struct {
 	mu sync.Mutex
 
@@ -28,37 +28,37 @@ type fakeDB struct {
 	finalCallCount atomic.Int64
 	finalStatusArg atomic.Value // string
 
-	// targetUpdates — захват MarkTargetTerminal: по target_id (args[2]) →
-	// последний записанный статус (args[3]). Под mu.
+	// targetUpdates capture MarkTargetTerminal: by target_id (args[2]) →
+	// last written status (args[3]). Protected by mu.
 	targetUpdates map[string]string
 
-	// recordRunningArgs — включает захват MarkTargetRunning (running-перевод):
-	// runningSQL = SQL, runningBacklink = back-link arg ($4). Под mu.
+	// recordRunningArgs enables capture of MarkTargetRunning (running-transition):
+	// runningSQL = SQL, runningBacklink = back-link arg ($4). Protected by mu.
 	recordRunningArgs bool
 	runningSQL        string
 	runningBacklink   string
 
-	// verifyLeaseLost — VerifyOwnership (verifyOwnershipSQL) вернёт ErrNoRows
-	// (→ ErrLeaseLost). Управляет fencing-проверкой перед dispatch-ем (S-med-2).
-	// При false — VerifyOwnership успешен (воркер всё ещё владелец).
+	// verifyLeaseLost VerifyOwnership (verifyOwnershipSQL) returns ErrNoRows
+	// (→ ErrLeaseLost). Controls fencing-check before dispatch (S-med-2).
+	// false → VerifyOwnership succeeds (worker still owner).
 	verifyLeaseLost atomic.Bool
-	// verifyCalls — счётчик вызовов VerifyOwnership (per-unit fencing, S-med-2):
-	// один dispatch единицы = одна проверка владения.
+	// verifyCalls count of VerifyOwnership calls (per-unit fencing, S-med-2):
+	// one dispatch of unit = one ownership check.
 	verifyCalls atomic.Int64
 
-	// batchProgress — захват UpdateBatchProgress: упорядоченный список
-	// completedBatches-аргументов (current_batch_index) каждого UPDATE-а. Под mu.
+	// batchProgress capture UpdateBatchProgress: ordered list of
+	// completedBatches args (current_batch_index) of each UPDATE. Protected by mu.
 	batchProgress []int
 
-	// queryFn — опциональный hook для Query (SelectTargets в reconcileOrphanLock).
-	// nil → дефолтный "not configured"-error (executeScenario-тесты Query не
-	// используют). Под mu при установке из теста до запуска.
+	// queryFn optional hook for Query (SelectTargets in reconcileOrphanLock).
+	// nil → default "not configured"-error (executeScenario-tests don't use Query).
+	// Protected by mu when set from test before run.
 	queryFn func(sql string, args []any) (pgx.Rows, error)
 }
 
 func (f *fakeDB) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	// UpdateBatchProgress (updateBatchProgressSQL): UPDATE voyages SET
-	// current_batch_index. Отличается от Finalize (finished_at) и MarkTarget*
+	// current_batch_index. Differs from Finalize (finished_at) and MarkTarget*
 	// (UPDATE voyage_targets). args = (id, kid, attempt, completedBatches).
 	if strings.Contains(sql, "current_batch_index") && strings.Contains(sql, "UPDATE voyages") {
 		f.mu.Lock()
@@ -81,7 +81,7 @@ func (f *fakeDB) Exec(_ context.Context, sql string, args ...any) (pgconn.Comman
 		f.mu.Lock()
 		switch {
 		case strings.Contains(sql, "finished_at = NOW()"):
-			// MarkTargetTerminal: args[3] = терминальный статус.
+			// MarkTargetTerminal: args[3] = terminal status.
 			if f.targetUpdates == nil {
 				f.targetUpdates = map[string]string{}
 			}
@@ -104,14 +104,14 @@ func (f *fakeDB) Exec(_ context.Context, sql string, args ...any) (pgconn.Comman
 	return pgconn.NewCommandTag("UPDATE 1"), nil
 }
 
-// targetStatus читает захваченный последний статус target-а (потокобезопасно).
+// targetStatus reads captured last status of target (thread-safe).
 func (f *fakeDB) targetStatus(tid string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.targetUpdates[tid]
 }
 
-// batchProgressSeq возвращает копию последовательности current_batch_index-апдейтов.
+// batchProgressSeq returns copy of current_batch_index-update sequence.
 func (f *fakeDB) batchProgressSeq() []int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -123,9 +123,9 @@ func (f *fakeDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 		f.claimCallCount.Add(1)
 	}
 	// verifyOwnershipSQL (VerifyOwnership, S-med-2 fencing): `SELECT 1 ... WHERE
-	// claimed_by_kid = ...`. Под verifyLeaseLost — no-rows (→ ErrLeaseLost),
-	// иначе строка-владелец (Scan 1). Идёт раньше queryRowFn: claim-loop-фейк его
-	// не моделирует.
+	// claimed_by_kid = ...`. Under verifyLeaseLost → no-rows (→ ErrLeaseLost),
+	// else owner-row (Scan 1). Checked before queryRowFn: claim-loop-fake does not
+	// model it.
 	if strings.Contains(sql, "SELECT 1") && strings.Contains(sql, "claimed_by_kid") {
 		f.verifyCalls.Add(1)
 		return ownerScanRow{noRows: f.verifyLeaseLost.Load()}
@@ -139,8 +139,8 @@ func (f *fakeDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 	return errRow{err: pgx.ErrNoRows}
 }
 
-// ownerScanRow — pgx.Row для VerifyOwnership: Scan(*int)=1 (владелец) либо
-// pgx.ErrNoRows (noRows — реклейм/lease lost).
+// ownerScanRow pgx.Row for VerifyOwnership: Scan(*int)=1 (owner) or
+// pgx.ErrNoRows (noRows — reclaim/lease lost).
 type ownerScanRow struct{ noRows bool }
 
 func (r ownerScanRow) Scan(dest ...any) error {
@@ -165,8 +165,8 @@ func (f *fakeDB) Query(_ context.Context, sql string, args ...any) (pgx.Rows, er
 	return nil, errors.New("fakeDB: Query not configured")
 }
 
-// CopyFrom не вызывается оркестратором (InsertTargets делает S5-handler через
-// свою tx), но требуется для удовлетворения voyage.ExecQueryRower (S-med-3).
+// CopyFrom not called by orchestrator (InsertTargets done by S5-handler via
+// own tx), but required for voyage.ExecQueryRower interface (S-med-3).
 func (f *fakeDB) CopyFrom(context.Context, pgx.Identifier, []string, pgx.CopyFromSource) (int64, error) {
 	return 0, errors.New("fakeDB: CopyFrom not configured")
 }
@@ -175,8 +175,8 @@ type errRow struct{ err error }
 
 func (r errRow) Scan(_ ...any) error { return r.err }
 
-// scanRow — pgx.Row на основе массива значений (одна строка scanVoyage:
-// 26 колонок в порядке RETURNING claimNextSQL).
+// scanRow pgx.Row based on values array (one scanVoyage row:
+// 26 columns per RETURNING claimNextSQL order).
 type scanRow struct{ values []any }
 
 func (r scanRow) Scan(dest ...any) error {
@@ -197,8 +197,8 @@ func (r scanRow) Scan(dest ...any) error {
 	return nil
 }
 
-// claimedVoyageRow — 31 значение в порядке scanVoyage (26 базовых + 4 S-W3/S-W4
-// + cadence_id back-link ADR-046). NULL-поля = nil.
+// claimedVoyageRow 31 values in scanVoyage order (26 base + 4 S-W3/S-W4
+// + cadence_id back-link ADR-046). NULL fields = nil.
 func claimedVoyageRow(id, kind, status string) scanRow {
 	return scanRow{values: []any{
 		id,                // 1  voyage_id
@@ -278,10 +278,10 @@ func TestWorker_Validate(t *testing.T) {
 	}
 }
 
-// TestWorker_DispatchCommandKind — claim одного pending Voyage kind=command (S3
-// реальное исполнение) → fan-out Errand-ов через CommandSpawner → Finalize.
-// После первого claim фейк отдаёт ErrNoRows, worker уходит в poll-sleep, тест
-// отменяет ctx. (kind=scenario — см. TestWorker_DispatchScenarioKind.)
+// TestWorker_DispatchCommandKind claim one pending Voyage kind=command (S3
+// real execution) → fan-out Errands via CommandSpawner → Finalize.
+// After first claim fake returns ErrNoRows, worker goes to poll-sleep, test
+// cancels ctx. (kind=scenario see TestWorker_DispatchScenarioKind.)
 func TestWorker_DispatchCommandKind(t *testing.T) {
 	t.Parallel()
 	var claimedOnce atomic.Bool
@@ -315,7 +315,7 @@ func TestWorker_DispatchCommandKind(t *testing.T) {
 		select {
 		case <-deadline:
 			cancel()
-			t.Fatal("Finalize не вызван в пределах дедлайна")
+			t.Fatal("Finalize not called within deadline")
 		case <-time.After(2 * time.Millisecond):
 		}
 	}
@@ -331,6 +331,6 @@ func TestWorker_DispatchCommandKind(t *testing.T) {
 	calls := len(sp.calls)
 	sp.mu.Unlock()
 	if calls != 2 {
-		t.Errorf("spawn calls = %d, want 2 (два хоста в target_resolved)", calls)
+		t.Errorf("spawn calls = %d, want 2 (two hosts in target_resolved)", calls)
 	}
 }

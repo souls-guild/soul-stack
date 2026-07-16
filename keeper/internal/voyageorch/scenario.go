@@ -13,93 +13,93 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/voyage"
 )
 
-// kind=scenario исполнение (ADR-043 S2, подход B1).
+// kind=scenario execution (ADR-043 S2, approach B1).
 //
-// Batch (Leg) = N ИНКАРНАЦИЙ. Каждая инкарнация в Leg-е — полноценный
-// scenario-run со своим cross-host barrier и per-incarnation state-commit; этот
-// commit делает САМ scenario-runner (ADR-009 §7), voyageorch его НЕ дублирует —
-// он лишь оркестрирует N независимых scenario-run-ов и трекает их через
+// Batch (Leg) = N incarnations. Each incarnation in Leg is a full
+// scenario-run with its own cross-host barrier and per-incarnation state-commit; this
+// commit is done BY scenario-runner itself (ADR-009 §7), voyageorch does NOT duplicate it —
+// it only orchestrates N independent scenario-run-s and tracks them through
 // `voyage_targets`.
 //
-// Алгоритм (executeScenarioVoyage):
-//  1. target_resolved → []incarnationName (JSONB-массив имён).
-//  2. chunkIncarnations(names, batch_size) → Leg-и (NULL/0 → один Leg = все).
-//  3. Per Leg: параллельный fan-out по инкарнациям под semaphore-cap
-//     (concurrency, parity errandrunorch.runFanOut). На каждую инкарнацию:
+// Algorithm (executeScenarioVoyage):
+//  1. target_resolved → []incarnationName (JSONB array of names).
+//  2. chunkIncarnations(names, batch_size) → Legs (NULL/0 → one Leg = all).
+//  3. Per Leg: parallel fan-out across incarnations under semaphore-cap
+//     (concurrency, parity errandrunorch.runFanOut). Per incarnation:
 //     SpawnScenarioRun (= scenario-runner per-incarnation) → MarkTargetRunning →
 //     Await terminal → MarkTargetTerminal.
-//  4. on_failure=abort → первый провалившийся Leg останавливает переход к
-//     следующему; on_failure=continue → идём до конца.
-//  5. Между Leg-ами — пауза inter_batch_interval (контролируемая выкатка).
-//  6. После всех Leg-ов — Finalize voyage (succeeded / partial_failed / failed)
-//     + Summary под ownership-guard-ом.
+//  4. on_failure=abort → first failed Leg stops transition to
+//     next; on_failure=continue → continue to end.
+//  5. Between Legs — pause inter_batch_interval (controlled rollout).
+//  6. After all Legs — Finalize voyage (succeeded / partial_failed / failed)
+//     + Summary under ownership-guard.
 
-// ScenarioSpawner — спавн одного per-incarnation scenario-run-а. Изолирует
-// voyageorch от scenario-runner / ServiceRegistry / incarnation-CRUD (parity
+// ScenarioSpawner spawns one per-incarnation scenario-run. Isolates
+// voyageorch from scenario-runner / ServiceRegistry / incarnation-CRUD (parity
 // tideorch.SurgeSpawner / errandrunorch.ErrandSpawner): production wire-up (S5)
-// подставит адаптер, который резолвит ServiceRef (incarnation.SelectByName →
-// ServiceRegistry.Resolve) и вызывает scenario.Runner.Start; unit-тесты — fake
-// без зависимостей.
+// provides adapter that resolves ServiceRef (incarnation.SelectByName →
+// ServiceRegistry.Resolve) and calls scenario.Runner.Start; unit-tests use fake
+// without dependencies.
 //
-// Контракт:
-//   - возвращает applyID запущенного прогона (ULID, для back-link на apply_runs
-//     и последующего [IncarnationAwaiter.Await]);
-//   - вызов async: scenario.Runner.Start возвращается сразу (прогон живёт в своей
-//     goroutine), терминал доезжает через apply_runs; ожидание — отдельной фазой
-//     через Awaiter;
-//   - err != nil — прогон не удалось даже запустить (incarnation не найдена /
-//     error_locked / ServiceRef не резолвится / Runner.Start отверг). Caller
-//     зачитывает target как failed без applyID.
+// Contract:
+//   - returns applyID of spawned run (ULID, for back-link to apply_runs
+//     and subsequent [IncarnationAwaiter.Await]);
+//   - async call: scenario.Runner.Start returns immediately (run lives in own
+//     goroutine), terminal arrives via apply_runs; awaiting is separate phase
+//     via Awaiter;
+//   - err != nil — run could not even start (incarnation not found /
+//     error_locked / ServiceRef does not resolve / Runner.Start rejected). Caller
+//     records target as failed without applyID.
 //
-// cadenceID — back-link на Cadence-расписание (voyages.cadence_id, ADR-046 §2):
-// nil ⇒ ручной Voyage; populated ⇒ дочерний Voyage расписания. Production-spawner
-// кладёт его в RunSpec.CadenceID, чтобы терминальное событие прогона
-// (incarnation.run_completed) несло cadence_id для постоянных Tiding-правил с
-// cadence-селектором (T4b).
+// cadenceID — back-link to Cadence schedule (voyages.cadence_id, ADR-046 §2):
+// nil ⇒ manual Voyage; populated ⇒ Voyage spawned by schedule. Production-spawner
+// puts it in RunSpec.CadenceID so terminal event of run
+// (incarnation.run_completed) carries cadence_id for persistent Tiding rules with
+// cadence selector (T4b).
 type ScenarioSpawner interface {
 	SpawnScenarioRun(ctx context.Context, voyageID, incarnationName, scenarioName string, input []byte, startedByAID string, cadenceID *string) (applyID string, err error)
 }
 
-// OrphanLockReleaser снимает осиротевший applying-lock инкарнации, оставшийся от
-// scenario-run мёртвого Keeper-владельца ЭТОГО Voyage прошлого attempt (recovery-
-// шов, ADR-027(k)). Изолирует voyageorch от incarnation/applyrun-CRUD (parity
-// ScenarioSpawner): production wire-up (daemon) даёт адаптер поверх
-// incarnation.ReleaseApplyingOrphan; unit-тесты — fake.
+// OrphanLockReleaser releases orphaned applying-lock of incarnation left from
+// scenario-run of dead Keeper owner of this Voyage from previous attempt (recovery
+// seam, ADR-027(k)). Isolates voyageorch from incarnation/applyrun-CRUD (parity
+// ScenarioSpawner): production wire-up (daemon) provides adapter over
+// incarnation.ReleaseApplyingOrphan; unit-tests use fake.
 //
-// orphanApplyID — back-link apply_id осиротевшего прогона из voyage_targets ЭТОГО
-// Voyage (от прошлого attempt). Реализация обязана быть FENCED single-winner:
-// снимает lock ТОЛЬКО когда инкарнация в applying И orphanApplyID ей принадлежит
+// orphanApplyID — back-link apply_id of orphaned run from voyage_targets of this
+// Voyage (from previous attempt). Implementation must be FENCED single-winner:
+// releases lock ONLY when incarnation is applying AND orphanApplyID belongs to it
 // (incarnation.ReleaseApplyingOrphan: FOR UPDATE + apply_id-match + CAS).
 //
-// Контракт возврата:
-//   - released=true  — lock снят (applying → ready), re-run может стартовать;
-//   - released=false, err=nil — снимать нечего (не applying / orphan apply_id не
-//     наш / honest-финал прошлого владельца уже выиграл строку): caller продолжает
-//     re-run БЕЗ снятия (lockRun сам отбракует, если состояние всё ещё не runnable);
-//   - err != nil — CRUD-сбой PG: caller логирует и НЕ спавнит (fail-closed по
-//     инкарнации, не abort всего Voyage).
+// Return contract:
+//   - released=true  — lock released (applying → ready), re-run can start;
+//   - released=false, err=nil — nothing to release (not applying / orphan apply_id not
+//     ours / honest finalization of previous owner already won row): caller continues
+//     re-run WITHOUT release (lockRun will reject if state still not runnable);
+//   - err != nil — PG CRUD failure: caller logs and does NOT spawn (fail-closed per
+//     incarnation, not abort entire Voyage).
 //
-// nil-поле → детект осиротевшего lock выключен (unit-тест без recovery-шва /
-// dev-сборка): runOneIncarnation идёт сразу к спавну как до фикса.
+// nil field → orphaned lock detection disabled (unit test without recovery seam /
+// dev build): runOneIncarnation goes straight to spawn as before fix.
 type OrphanLockReleaser interface {
 	ReleaseOrphanLock(ctx context.Context, voyageID, incarnationName string, attempt int, kid string, orphanApplyID string) (released bool, err error)
 }
 
-// IncarnationAwaiter — ждёт terminal-статус одного per-incarnation scenario-run-а
-// по applyID. Production wire-up (S5) даёт реализацию поверх
-// applyrun.SelectStatusesByApplyID (poll до терминала всех хостов инкарнации,
-// parity tideorch.PgApplyTerminalAwaiter); unit-тесты — fake.
+// IncarnationAwaiter waits for terminal status of one per-incarnation scenario-run
+// by applyID. Production wire-up (S5) provides implementation over
+// applyrun.SelectStatusesByApplyID (poll until terminal for all incarnation hosts,
+// parity tideorch.PgApplyTerminalAwaiter); unit-tests use fake.
 //
-// Блокируется до terminal либо ctx.Done. Возвращает [TargetOutcome] (succeeded /
-// failed / cancelled / no_match). ctx.Err при отмене (graceful-shutdown /
-// on_failure abort) — caller трактует target как cancelled.
+// Blocks until terminal or ctx.Done. Returns [TargetOutcome] (succeeded /
+// failed / cancelled / no_match). ctx.Err on cancellation (graceful-shutdown /
+// on_failure abort) — caller records target as cancelled.
 type IncarnationAwaiter interface {
 	Await(ctx context.Context, applyID string) (TargetOutcome, error)
 }
 
-// TargetOutcome — терминальный исход одного per-incarnation scenario-run-а,
-// проецируется в [voyage.TargetStatus]. Closed-set значений совпадает с
-// CHECK voyage_targets_status_valid (terminal-подмножество).
+// TargetOutcome — terminal outcome of one per-incarnation scenario-run,
+// projected to [voyage.TargetStatus]. Closed-set of values matches
+// CHECK voyage_targets_status_valid (terminal subset).
 type TargetOutcome string
 
 const (
@@ -109,8 +109,8 @@ const (
 	OutcomeNoMatch   TargetOutcome = "no_match"
 )
 
-// toTargetStatus переводит TargetOutcome в voyage.TargetStatus для записи в
-// voyage_targets. Неизвестное значение → failed (fail-closed: не молча success).
+// toTargetStatus translates TargetOutcome to voyage.TargetStatus for writing to
+// voyage_targets. Unknown value → failed (fail-closed: not silently success).
 func (o TargetOutcome) toTargetStatus() voyage.TargetStatus {
 	switch o {
 	case OutcomeSucceeded:
@@ -124,17 +124,17 @@ func (o TargetOutcome) toTargetStatus() voyage.TargetStatus {
 	}
 }
 
-// isFailure сообщает, считается ли исход провалом для decision-gate on_failure и
-// подсчёта Summary.Failed. cancelled/no_match — НЕ провал (cancelled — следствие
-// abort/shutdown, no_match — benign «инкарнация вне scope», parity
+// isFailure reports whether outcome is considered failure for decision-gate on_failure and
+// Summary.Failed count. cancelled/no_match — NOT failure (cancelled — consequence of
+// abort/shutdown, no_match — benign "incarnation out of scope", parity
 // tideorch.classifyApplyOutcome).
 func (o TargetOutcome) isFailure() bool { return o == OutcomeFailed }
 
-// parseIncarnationTargets разбирает target_resolved (kind=scenario): JSONB-массив
-// имён инкарнаций (snapshot набора от старта прогона, ADR-043). Пустой массив /
-// невалидный JSON — ошибка (Voyage без целей — программная ошибка S5-handler-а,
-// Insert требует непустой target_resolved). Дубликаты и пустые строки
-// отвергаются (UNIQUE PK voyage_targets и невалидный target_id).
+// parseIncarnationTargets parses target_resolved (kind=scenario): JSONB array
+// of incarnation names (snapshot of set from run start, ADR-043). Empty array /
+// invalid JSON — error (Voyage without targets — programmer error in S5 handler,
+// Insert requires non-empty target_resolved). Duplicates and empty strings
+// rejected (UNIQUE PK voyage_targets and invalid target_id).
 func parseIncarnationTargets(raw json.RawMessage) ([]string, error) {
 	if len(raw) == 0 {
 		return nil, fmt.Errorf("voyageorch: empty target_resolved")
@@ -159,11 +159,11 @@ func parseIncarnationTargets(raw json.RawMessage) ([]string, error) {
 	return names, nil
 }
 
-// chunkIncarnations режет плоский список инкарнаций на последовательные Leg-и
-// размером не более batchSize. batchSize <= 0 → один Leg на всё (NULL/0
-// batch_size = «весь прогон одним Leg», ADR-043). batch_index 0-based (CHECK
-// voyage_targets_batch_index_non_negative; первый Leg = 0, parity Insert-у
-// targets). Пустой вход → пустой результат (caller финализирует succeeded).
+// chunkIncarnations splits flat incarnation list into sequential Legs
+// of size at most batchSize. batchSize <= 0 → one Leg for all (NULL/0
+// batch_size = "entire run in one Leg", ADR-043). batch_index 0-based (CHECK
+// voyage_targets_batch_index_non_negative; first Leg = 0, parity to Insert
+// targets). Empty input → empty result (caller finalizes succeeded).
 func chunkIncarnations(names []string, batchSize int) [][]string {
 	if len(names) == 0 {
 		return nil
@@ -182,37 +182,37 @@ func chunkIncarnations(names []string, batchSize int) [][]string {
 	return legs
 }
 
-// targetResult — runtime-исход одной инкарнации в Leg-е, собирается в per-target
-// goroutine и складывается под mutex. ApplyID пуст, если spawn упал до старта
-// прогона (тогда Status=failed без back-link-а).
+// targetResult — runtime outcome of one incarnation in Leg, collected in per-target
+// goroutine and merged under mutex. ApplyID empty if spawn failed before run start
+// (then Status=failed without back-link).
 type targetResult struct {
 	IncarnationName string
 	ApplyID         string
 	Outcome         TargetOutcome
 }
 
-// executeScenarioVoyage — S2-исполнитель kind=scenario: батчевый прогон scenario
-// поверх N инкарнаций (B1). Вызывается из [VoyageWorker.executeVoyage] после
-// claim-а; renewal-goroutine уже держит lease (leaseLost закрывается при потере).
+// executeScenarioVoyage — S2 executor for kind=scenario: batch run of scenario
+// over N incarnations (B1). Called from [VoyageWorker.executeVoyage] after
+// claim; renewal-goroutine already holds lease (leaseLost closed on loss).
 //
-// Возвращает финальный [voyage.Status] + [*voyage.Summary] + error_code для
-// Finalize/finalize-audit. error_code непуст только для fail-closed-путей до
-// старта инкарнаций (spawner_not_configured / empty_scenario_name /
-// target_resolve_failed); для happy-path и «все инкарнации failed» — пуст. На
-// потерю lease / ctx.Done посреди прогона возвращает ("", nil, "") — caller НЕ
-// финализирует (Reaper-reclaim вернёт Voyage в pending, другой Keeper подберёт).
+// Returns final [voyage.Status] + [*voyage.Summary] + error_code for
+// Finalize/finalize-audit. error_code non-empty only for fail-closed paths before
+// incarnation start (spawner_not_configured / empty_scenario_name /
+// target_resolve_failed); empty for happy-path and "all incarnations failed". On
+// lease loss / ctx.Done mid-run returns ("", nil, "") — caller does NOT
+// finalize (Reaper-reclaim returns Voyage to pending, other Keeper picks it up).
 func (w *VoyageWorker) executeScenarioVoyage(ctx context.Context, run *voyage.Voyage, leaseLost <-chan struct{}) (voyage.Status, *voyage.Summary, string) {
 	if w.ScenarioSpawner == nil || w.ScenarioAwaiter == nil {
-		// Production wire-up (S5) обязан передать оба; их отсутствие при
-		// claim-нутом scenario-Voyage — программная ошибка setup-а. Fail-closed:
-		// финализируем failed, не молча succeeded.
+		// Production wire-up (S5) must provide both; their absence with
+		// claimed scenario-Voyage — programmer error in setup. Fail-closed:
+		// finalize failed, not silently succeeded.
 		w.Logger.Error("voyageorch: scenario execution requested but Spawner/Awaiter not configured",
 			slog.String("voyage_id", run.VoyageID),
 		)
 		return voyage.StatusFailed, &voyage.Summary{Total: run.TotalBatches}, "spawner_not_configured"
 	}
 	if run.ScenarioName == nil || *run.ScenarioName == "" {
-		w.Logger.Error("voyageorch: kind=scenario без scenario_name", slog.String("voyage_id", run.VoyageID))
+		w.Logger.Error("voyageorch: kind=scenario without scenario_name", slog.String("voyage_id", run.VoyageID))
 		return voyage.StatusFailed, &voyage.Summary{}, "empty_scenario_name"
 	}
 
@@ -228,18 +228,18 @@ func (w *VoyageWorker) executeScenarioVoyage(ctx context.Context, run *voyage.Vo
 		concurrency = *run.Concurrency
 	}
 
-	// failThreshold — обобщённый abort-gate (ADR-043 amendment §3): порог
-	// абсолютного числа провалов → стоп. abort ≡ 1 (backcompat: первый провал →
-	// стоп); continue/nil без fail_threshold ≡ 0 (без порога); явный N → N.
-	// 0 = «без порога».
+	// failThreshold — generalized abort-gate (ADR-043 amendment §3): threshold of
+	// absolute number of failures → stop. abort ≡ 1 (backcompat: first failure →
+	// stop); continue/nil without fail_threshold ≡ 0 (no threshold); explicit N → N.
+	// 0 = "no threshold".
 	failThreshold := voyage.ResolveFailThreshold(run.FailThreshold, run.OnFailure)
 
-	// batch_mode=window → скользящее окно по ИНКАРНАЦИЯМ (ADR-043 amendment §1,
-	// S-W2): общий пул concurrency воркеров из единой очереди инкарнаций, без
-	// Leg-ов/барьеров МЕЖДУ инкарнациями. §7-инвариант: окно режет только между
-	// инкарнациями — ВНУТРИ инкарнации scenario-runner сохраняет cross-host barrier
-	// + per-incarnation state-commit (единица окна = целый scenario-run одной
-	// инкарнации). barrier (NULL) → существующий chunk+runLeg путь ниже.
+	// batch_mode=window → sliding window across INCARNATIONS (ADR-043 amendment §1,
+	// S-W2): shared pool of concurrency workers from single incarnation queue, without
+	// Legs/barriers BETWEEN incarnations. §7-invariant: window splits only between
+	// incarnations — INSIDE incarnation scenario-runner preserves cross-host barrier
+	// + per-incarnation state-commit (unit of window = whole scenario-run of one
+	// incarnation). barrier (NULL) → existing chunk+runLeg path below.
 	if voyage.ResolveBatchMode(run.BatchMode) == voyage.BatchModeWindow {
 		return w.runScenarioSlidingWindow(ctx, run, names, concurrency, failThreshold, leaseLost)
 	}
@@ -256,26 +256,26 @@ func (w *VoyageWorker) executeScenarioVoyage(ctx context.Context, run *voyage.Vo
 	)
 
 	for legIdx, leg := range legs {
-		// Раннее обнаружение потери lease / отмены — до спавна нового Leg-а
-		// (иначе MarkTarget*/Finalize упрутся в ownership-guard).
+		// Early detection of lease loss / cancellation — before spawning new Leg
+		// (otherwise MarkTarget*/Finalize will hit ownership-guard).
 		select {
 		case <-leaseLost:
-			w.Logger.Warn("voyageorch: lease lost между Leg-ами — другой Keeper подберёт Voyage",
+			w.Logger.Warn("voyageorch: lease lost between Legs — other Keeper will pick up Voyage",
 				slog.String("voyage_id", run.VoyageID), slog.Int("batch_index", legIdx))
 			w.emitLeaseLost(run, "leg")
 			return "", nil, ""
 		case <-ctx.Done():
-			w.Logger.Info("voyageorch: scenario-loop прерван ctx.Done",
+			w.Logger.Info("voyageorch: scenario-loop interrupted by ctx.Done",
 				slog.String("voyage_id", run.VoyageID), slog.Any("reason", ctx.Err()))
 			return "", nil, ""
 		default:
 		}
 
-		// Пауза перед каждым Leg-ом, кроме первого (inter_batch_interval —
-		// контролируемая выкатка, ADR-043). Прерывается ctx.Done / leaseLost.
+		// Pause before each Leg except first (inter_batch_interval —
+		// controlled rollout, ADR-043). Interrupted by ctx.Done / leaseLost.
 		if legIdx > 0 && run.InterBatchInterval != nil && *run.InterBatchInterval > 0 {
 			if !w.interBatchPause(ctx, *run.InterBatchInterval, leaseLost) {
-				w.Logger.Warn("voyageorch: прерван на inter_batch_interval — не финализируем",
+				w.Logger.Warn("voyageorch: interrupted on inter_batch_interval — not finalizing",
 					slog.String("voyage_id", run.VoyageID), slog.Int("batch_index", legIdx))
 				return "", nil, ""
 			}
@@ -285,13 +285,13 @@ func (w *VoyageWorker) executeScenarioVoyage(ctx context.Context, run *voyage.Vo
 
 		results := w.runLeg(ctx, run, legIdx, leg, concurrency, leaseLost)
 
-		// Потеря lease ПОСРЕДИ Leg-а: runLeg остановил spawn-loop и прервал
-		// in-flight Await-ы через отменённый fanCtx, оставшиеся инкарнации помечены
-		// cancelled. НЕ финализируем (Reaper-reclaim вернёт Voyage в pending,
-		// другой Keeper подберёт), как и при потере lease между Leg-ами.
+		// Lease lost MID-Leg: runLeg stopped spawn-loop and interrupted
+		// in-flight Await-s via cancelled fanCtx, remaining incarnations marked
+		// cancelled. NOT finalizing (Reaper-reclaim returns Voyage to pending,
+		// other Keeper picks it up), same as lease loss between Legs.
 		select {
 		case <-leaseLost:
-			w.Logger.Warn("voyageorch: lease lost посреди Leg-а — другой Keeper подберёт Voyage",
+			w.Logger.Warn("voyageorch: lease lost mid-Leg — other Keeper will pick up Voyage",
 				slog.String("voyage_id", run.VoyageID), slog.Int("batch_index", legIdx))
 			w.emitLeaseLost(run, "leg")
 			return "", nil, ""
@@ -322,16 +322,16 @@ func (w *VoyageWorker) executeScenarioVoyage(ctx context.Context, run *voyage.Vo
 
 		w.emitLegCompleted(run, legIdx, legAgg)
 
-		// Прогресс батчей для UI: Leg legIdx ЗАВЕРШЁН → current_batch_index =
-		// legIdx+1 (best-effort, ownership-guarded). Ошибка/0-rows не валит прогон
-		// (правда о ходе — в voyage_targets), только warn.
+		// Batch progress for UI: Leg legIdx COMPLETED → current_batch_index =
+		// legIdx+1 (best-effort, ownership-guarded). Error/0-rows doesn't fail run
+		// (truth about progress — in voyage_targets), only warn.
 		w.advanceBatchProgress(ctx, run, legIdx+1)
 
-		// Обобщённый abort-gate (ADR-043 amendment §3): достигнут порог числа
-		// провалов → прекращаем переход к следующему Leg. threshold=0 → без порога
-		// (continue). summary.Failed — кумулятив провалов по всем Leg-ам.
+		// Generalized abort-gate (ADR-043 amendment §3): reached failure count threshold
+		// → stop transition to next Leg. threshold=0 → no threshold
+		// (continue). summary.Failed — cumulative failures across all Legs.
 		if failThreshold > 0 && summary.Failed >= failThreshold {
-			w.Logger.Info("voyageorch: достигнут fail_threshold — оставшиеся Leg-и пропущены",
+			w.Logger.Info("voyageorch: fail_threshold reached — remaining Legs skipped",
 				slog.String("voyage_id", run.VoyageID), slog.Int("batch_index", legIdx),
 				slog.Int("failed", summary.Failed), slog.Int("fail_threshold", failThreshold))
 			break
@@ -341,29 +341,29 @@ func (w *VoyageWorker) executeScenarioVoyage(ctx context.Context, run *voyage.Vo
 	return scenarioFinalStatus(summary, anyFailure), summary, ""
 }
 
-// runLeg исполняет один Leg: параллельный fan-out по инкарнациям под
+// runLeg executes one Leg: parallel fan-out across incarnations under
 // semaphore-cap (concurrency). Per-incarnation: spawn → MarkTargetRunning →
-// Await → MarkTargetTerminal. Возвращает срез исходов (для агрегации Summary +
+// Await → MarkTargetTerminal. Returns slice of outcomes (for Summary aggregation +
 // decision-gate).
 //
-// leaseLost (parity errandrunorch.runFanOut): renewal-goroutine может потерять
-// lease ПОСРЕДИ длинного серийного Leg-а (batch_size=NULL → один Leg=все N
-// инкарнаций, concurrency=1). Тогда продолжать spawn нельзя — Voyage уже мог
-// быть переподобран другим Keeper-ом (runaway-спавн + дубль-спавны). Поэтому
-// производный fanCtx отменяется goroutine-наблюдателем при закрытии leaseLost:
-//   - spawn-loop останавливается (acquire-select ловит fanCtx.Done);
-//   - оставшиеся инкарнации помечаются cancelled (отчётность «не успели»);
-//   - in-flight Await-ы прерываются через отменённый fanCtx.
+// leaseLost (parity errandrunorch.runFanOut): renewal-goroutine can lose
+// lease MID-long serial Leg (batch_size=NULL → one Leg=all N
+// incarnations, concurrency=1). Then spawn must stop — Voyage could have been
+// reclaimed by other Keeper (runaway-spawn + duplicate spawns). So
+// derived fanCtx cancelled by goroutine-watcher on leaseLost close:
+//   - spawn-loop stops (acquire-select catches fanCtx.Done);
+//   - remaining incarnations marked cancelled (reporting "did not make it");
+//   - in-flight Await-s interrupted via cancelled fanCtx.
 //
-// Финализацию при потере lease НЕ делаем — это решает caller
-// (executeScenarioVoyage проверяет leaseLost после runLeg, Reaper-reclaim).
+// We do NOT finalize on lease loss — caller decides that
+// (executeScenarioVoyage checks leaseLost after runLeg, Reaper-reclaim).
 func (w *VoyageWorker) runLeg(ctx context.Context, run *voyage.Voyage, batchIndex int, leg []string, concurrency int, leaseLost <-chan struct{}) []targetResult {
 	fanCtx, cancelFan := context.WithCancel(ctx)
 	defer cancelFan()
 
-	// goroutine-наблюдатель за leaseLost: на сигнал отменяет fanCtx, чтобы
-	// остановить spawn-loop до старта оставшихся инкарнаций. На happy-path
-	// (wg.Wait → defer cancelFan) выходит через fanCtx.Done.
+	// goroutine-watcher for leaseLost: on signal cancels fanCtx to
+	// stop spawn-loop before start of remaining incarnations. On happy-path
+	// (wg.Wait → defer cancelFan) exits via fanCtx.Done.
 	watcherDone := make(chan struct{})
 	go func() {
 		defer close(watcherDone)
@@ -381,10 +381,10 @@ func (w *VoyageWorker) runLeg(ctx context.Context, run *voyage.Voyage, batchInde
 		results = make([]targetResult, 0, len(leg))
 	)
 
-	// markRemainingCancelled — оставшаяся инкарнация не стартует (fanCtx отменён:
-	// lease lost / ctx.Done). Помечаем cancelled (отчётность «не успели»);
-	// MarkTargetTerminal под parent ctx, чтобы запись прошла даже при
-	// graceful-shutdown отмене fanCtx.
+	// markRemainingCancelled — remaining incarnation does not start (fanCtx cancelled:
+	// lease lost / ctx.Done). Mark cancelled (reporting "did not make it");
+	// MarkTargetTerminal under parent ctx so write succeeds even on
+	// graceful-shutdown cancellation of fanCtx.
 	markRemainingCancelled := func(name string) {
 		mu.Lock()
 		results = append(results, targetResult{IncarnationName: name, Outcome: OutcomeCancelled})
@@ -393,11 +393,10 @@ func (w *VoyageWorker) runLeg(ctx context.Context, run *voyage.Voyage, batchInde
 	}
 
 	for _, name := range leg {
-		// Приоритетный pre-check отмены: при освобождении semaphore завершившейся
-		// инкарнацией и одновременно отменённом fanCtx `select` ниже выбрал бы
-		// ветку acquire случайно (Go-семантика равноготовых case) и заспавнил бы
-		// лишнюю инкарнацию после потери lease. Явная проверка делает остановку
-		// детерминированной.
+		// Priority pre-check for cancellation: when semaphore freed by completed
+		// incarnation and fanCtx cancelled simultaneously, `select` below might pick
+		// acquire branch randomly (Go semantics of ready cases) and spawn extra
+		// incarnation after lease loss. Explicit check makes stop deterministic.
 		select {
 		case <-fanCtx.Done():
 			markRemainingCancelled(name)
@@ -425,39 +424,39 @@ func (w *VoyageWorker) runLeg(ctx context.Context, run *voyage.Voyage, batchInde
 	}
 
 	wg.Wait()
-	cancelFan() // happy-path: разбудить watcher через fanCtx.Done.
+	cancelFan() // happy-path: wake watcher via fanCtx.Done.
 	<-watcherDone
-	_ = batchIndex // batch_index уже зафиксирован в voyage_targets при Insert (S5); здесь только трекаем статус.
+	_ = batchIndex // batch_index already fixed in voyage_targets on Insert (S5); here only track status.
 	return results
 }
 
-// runScenarioSlidingWindow — S-W2 исполнитель batch_mode=window для kind=scenario
-// (ADR-043 amendment §1). Полное скользящее окно по ИНКАРНАЦИЯМ: пул
-// `concurrency` воркеров тянет имена инкарнаций из ОДНОЙ общей очереди прогона;
-// вернулся воркер → берёт следующую. Постоянно держится ≤ concurrency активных
-// scenario-run-ов. Нет Leg-ов / барьеров МЕЖДУ инкарнациями — прогон плоский
-// (batch_index=0 у всех целей зафиксирован при Insert-е, ADR-043 amendment §7).
+// runScenarioSlidingWindow — S-W2 executor for batch_mode=window of kind=scenario
+// (ADR-043 amendment §1). Full sliding window across INCARNATIONS: pool of
+// `concurrency` workers pull incarnation names from ONE shared run queue;
+// worker returns → picks next. Always maintains ≤ concurrency active
+// scenario-run-s. No Legs / barriers BETWEEN incarnations — run flat
+// (batch_index=0 for all targets fixed on Insert, ADR-043 amendment §7).
 //
-// §7-инвариант (КРИТИЧНО): окно режет только МЕЖДУ инкарнациями. ВНУТРИ
-// инкарнации scenario-runner сохраняет cross-host barrier + per-incarnation
-// state-commit — единица окна = целый scenario-run одной инкарнации, который
-// SpawnScenarioRun запускает, а Await ждёт до терминала. scenario-runner НЕ
-// трогается: voyageorch лишь оркестрирует N независимых scenario-run-ов.
+// §7-invariant (CRITICAL): window splits only BETWEEN incarnations. INSIDE
+// incarnation scenario-runner preserves cross-host barrier + per-incarnation
+// state-commit — unit of window = whole scenario-run of one incarnation, which
+// SpawnScenarioRun starts and Await waits for terminal. scenario-runner untouched:
+// voyageorch only orchestrates N independent scenario-run-s.
 //
-// Lease-fencing на каждую инкарнацию (parity command runOneCommand, S-med-2):
-// перед спавном КАЖДОЙ инкарнации [runOneIncarnationFenced] делает
-// VerifyOwnership — мы всё ещё владелец Voyage с моим claim-epoch (run.Attempt).
-// При потере lease (Reaper-reclaim) НЕ спавним scenario-run (иначе дубль), хост
-// помечается cancelled, поднимается fenceLost и через cancelFan останавливается
-// окно. barrier-путь scenario (runLeg/runOneIncarnation) НЕ трогается.
+// Lease-fencing per incarnation (parity command runOneCommand, S-med-2):
+// before spawning EACH incarnation [runOneIncarnationFenced] does
+// VerifyOwnership — we still own Voyage with my claim-epoch (run.Attempt).
+// On lease loss (Reaper-reclaim) do NOT spawn scenario-run (else duplicate), host
+// marked cancelled, fenceLost raised and cancelFan stops
+// window. barrier-path of scenario (runLeg/runOneIncarnation) untouched.
 //
-// failThreshold / inter_unit_interval / отмена окна / дренаж очереди — parity
-// command.runSlidingWindow. require_alive для scenario НЕ применяется (единица =
-// инкарнация, presence-фильтр осмыслен для хостов; поле хранится, не применяется).
+// failThreshold / inter_unit_interval / window cancellation / queue drain — parity
+// command.runSlidingWindow. require_alive for scenario NOT applied (unit =
+// incarnation, presence-filter meaningful for hosts; field stored, not applied).
 //
-// Возврат симметричен [executeScenarioVoyage]: ("", nil, "") при потере lease /
-// ctx.Done посреди окна (caller не финализирует — Reaper-reclaim); иначе
-// финальный статус + summary.
+// Return symmetric to [executeScenarioVoyage]: ("", nil, "") on lease loss /
+// ctx.Done mid-window (caller does not finalize — Reaper-reclaim); else
+// final status + summary.
 func (w *VoyageWorker) runScenarioSlidingWindow(
 	ctx context.Context, run *voyage.Voyage, names []string, concurrency int,
 	failThreshold int, leaseLost <-chan struct{},
@@ -465,8 +464,8 @@ func (w *VoyageWorker) runScenarioSlidingWindow(
 	fanCtx, cancelFan := context.WithCancel(ctx)
 	defer cancelFan()
 
-	// watcher: потеря lease (renew-тик) отменяет fanCtx → воркеры перестают тянуть
-	// очередь и in-flight Await-ы прерываются. На happy-path выходит через fanCtx.Done.
+	// watcher: lease loss (renew-tick) cancels fanCtx → workers stop pulling
+	// queue and in-flight Await-s interrupted. On happy-path exits via fanCtx.Done.
 	watcherDone := make(chan struct{})
 	go func() {
 		defer close(watcherDone)
@@ -477,8 +476,8 @@ func (w *VoyageWorker) runScenarioSlidingWindow(
 		}
 	}()
 
-	// queue — единая очередь инкарнаций окна; буфер на всё, чтобы заполнить без
-	// блокировки, далее воркеры тянут из неё (вернулся → следующая).
+	// queue — single incarnation queue for window; buffer for all to fill without
+	// blocking, then workers pull from it (returned → next).
 	queue := make(chan string, len(names))
 	for _, name := range names {
 		queue <- name
@@ -490,7 +489,7 @@ func (w *VoyageWorker) runScenarioSlidingWindow(
 		results   = make([]targetResult, 0, len(names))
 		wg        sync.WaitGroup
 		fenceLost atomic.Bool
-		failCount atomic.Int64 // кумулятив провалов окна (обобщённый abort-gate §3).
+		failCount atomic.Int64 // cumulative window failures (generalized abort-gate §3).
 	)
 
 	appendResult := func(res targetResult) {
@@ -499,7 +498,7 @@ func (w *VoyageWorker) runScenarioSlidingWindow(
 		mu.Unlock()
 	}
 
-	// interUnit — per-unit пауза throttle (ADR-043 amendment §4). 0 → нет паузы.
+	// interUnit — per-unit pause throttle (ADR-043 amendment §4). 0 → no pause.
 	var interUnit time.Duration
 	if run.InterUnitInterval != nil && *run.InterUnitInterval > 0 {
 		interUnit = *run.InterUnitInterval
@@ -510,10 +509,10 @@ func (w *VoyageWorker) runScenarioSlidingWindow(
 		go func() {
 			defer wg.Done()
 			for {
-				// Приоритетный pre-check отмены: при одновременной готовности
-				// queue-recv и fanCtx.Done Go выбрал бы ветку случайно и заспавнил
-				// бы лишний scenario-run после потери lease / abort. Явная проверка
-				// делает остановку детерминированной (parity runLeg).
+				// Priority pre-check for cancellation: when queue-recv and fanCtx.Done
+				// both ready simultaneously Go would pick branch randomly and spawn
+				// extra scenario-run after lease loss / abort. Explicit check makes
+				// stop deterministic (parity runLeg).
 				select {
 				case <-fanCtx.Done():
 					return
@@ -529,13 +528,13 @@ func (w *VoyageWorker) runScenarioSlidingWindow(
 					return
 				case name, ok = <-queue:
 					if !ok {
-						return // очередь выработана
+						return // queue exhausted
 					}
 				}
 
-				// inter_unit_interval (§4): per-unit throttle перед спавном единицы.
-				// Прерывается fanCtx (lease lost / abort / ctx.Done) — тогда инкарнация
-				// уже снята с очереди, помечаем cancelled (не успела стартовать).
+				// inter_unit_interval (§4): per-unit throttle before unit spawn.
+				// Interrupted by fanCtx (lease lost / abort / ctx.Done) — then incarnation
+				// already off queue, mark cancelled (did not make it to start).
 				if interUnit > 0 {
 					t := time.NewTimer(interUnit)
 					select {
@@ -550,11 +549,11 @@ func (w *VoyageWorker) runScenarioSlidingWindow(
 				res := w.runOneIncarnationFenced(fanCtx, run, name, cancelFan, &fenceLost)
 				appendResult(res)
 
-				// Обобщённый abort-gate (§3): достигнут порог провалов → прекращаем
-				// СПАВН новых из очереди (cancelFan останавливает выборку у всех
-				// воркеров); текущие активные доработают свой scenario-run.
-				// threshold=0 → без порога. fenceLost-путь уже дёрнул cancelFan
-				// внутри runOneIncarnationFenced — здесь дублируется безопасно.
+				// Generalized abort-gate (§3): failure threshold reached → stop
+				// SPAWNing new from queue (cancelFan stops pull by all
+				// workers); current active finish their scenario-run.
+				// threshold=0 → no threshold. fenceLost-path already pulled cancelFan
+				// inside runOneIncarnationFenced — here duplicated safely.
 				if res.Outcome.isFailure() {
 					n := failCount.Add(1)
 					if failThreshold > 0 && n >= int64(failThreshold) {
@@ -567,31 +566,31 @@ func (w *VoyageWorker) runScenarioSlidingWindow(
 	}
 
 	wg.Wait()
-	cancelFan() // happy-path: разбудить watcher через fanCtx.Done.
+	cancelFan() // happy-path: wake watcher via fanCtx.Done.
 	<-watcherDone
 
-	// Потеря lease посреди окна → НЕ финализируем (Reaper-reclaim). Два детектора,
-	// как в barrier-пути: renewLoop-канал leaseLost И fenceLost (VerifyOwnership-CAS
-	// поймал реклейм раньше renew-тика). Раньше пометки cancelled остатка очереди:
-	// при reclaim владелец сменился, мы не пишем в его voyage_targets.
+	// Lease loss mid-window → NOT finalize (Reaper-reclaim). Two detectors,
+	// like in barrier-path: renewLoop-channel leaseLost AND fenceLost (VerifyOwnership-CAS
+	// caught reclaim before renew-tick). Before marking cancelled rest of queue:
+	// on reclaim owner changed, we do not write to its voyage_targets.
 	select {
 	case <-leaseLost:
-		w.Logger.Warn("voyageorch: lease lost посреди scenario-window — другой Keeper подберёт Voyage",
+		w.Logger.Warn("voyageorch: lease lost mid-scenario-window — other Keeper will pick up Voyage",
 			slog.String("voyage_id", run.VoyageID))
 		return "", nil, ""
 	default:
 	}
 	if fenceLost.Load() {
-		w.Logger.Warn("voyageorch: ownership-fence потерян посреди scenario-window — другой Keeper подберёт Voyage",
+		w.Logger.Warn("voyageorch: ownership-fence lost mid-scenario-window — other Keeper will pick up Voyage",
 			slog.String("voyage_id", run.VoyageID))
 		return "", nil, ""
 	}
 
-	// abort мог оборвать окно до выработки очереди (cancelFan остановил выборку):
-	// инкарнации, оставшиеся в буфере queue, никто не тянул. Помечаем cancelled —
-	// как barrier-путь (markRemainingCancelled), чтобы Total = succeeded+failed+
-	// cancelled совпадал в обоих режимах. Воркеры уже завершены (wg.Wait), дренаж
-	// closed-буфера безопасен; на happy-path очередь пуста — цикл no-op.
+	// abort could stop window before queue exhaustion (cancelFan stopped pulling):
+	// incarnations remaining in queue buffer nobody pulled. Mark cancelled —
+	// like barrier-path (markRemainingCancelled), so Total = succeeded+failed+
+	// cancelled matches in both modes. Workers already done (wg.Wait), drain of
+	// closed-buffer safe; on happy-path queue empty — loop no-op.
 	for name := range queue {
 		results = append(results, w.cancelIncarnation(ctx, run.VoyageID, name))
 	}
@@ -600,10 +599,10 @@ func (w *VoyageWorker) runScenarioSlidingWindow(
 	return scenarioFinalStatus(summary, anyFailure), summary, ""
 }
 
-// summarizeIncarnations агрегирует исходы инкарнаций в [voyage.Summary] (Total =
-// полный scope прогона, передаётся отдельно — results может быть короче при
-// abort до дренажа). Возвращает также anyFailure для выбора финального статуса.
-// Используется только window-каркасом; barrier-путь агрегирует инлайн (legAgg).
+// summarizeIncarnations aggregates incarnation outcomes to [voyage.Summary] (Total =
+// full scope of run, passed separately — results may be shorter on
+// abort before drain). Also returns anyFailure for final status selection.
+// Used only by window-framework; barrier-path aggregates inline (legAgg).
 func summarizeIncarnations(results []targetResult, total int) (*voyage.Summary, bool) {
 	summary := &voyage.Summary{Total: total}
 	var anyFailure bool
@@ -626,31 +625,31 @@ func summarizeIncarnations(results []targetResult, total int) (*voyage.Summary, 
 	return summary, anyFailure
 }
 
-// cancelIncarnation помечает не-стартовавшую инкарнацию cancelled (abort оборвал
-// выборку из очереди window-окна / inter_unit прерван отменой): пишет терминал в
-// voyage_targets (best-effort, под parent ctx) и возвращает [targetResult].
-// Parity command.cancelRemaining; обёртка над markTargetCancelled для возврата
-// targetResult одним вызовом.
+// cancelIncarnation marks non-started incarnation cancelled (abort stopped
+// pull from queue of window / inter_unit interrupted by cancellation): writes terminal to
+// voyage_targets (best-effort, under parent ctx) and returns [targetResult].
+// Parity command.cancelRemaining; wrapper over markTargetCancelled to return
+// targetResult in single call.
 func (w *VoyageWorker) cancelIncarnation(ctx context.Context, voyageID, name string) targetResult {
 	_ = w.markTargetCancelled(ctx, voyageID, name)
 	return targetResult{IncarnationName: name, Outcome: OutcomeCancelled}
 }
 
-// runOneIncarnationFenced — window-вариант [runOneIncarnation] с lease-fencing
-// перед спавном (parity command.runOneCommand, S-med-2). barrier-путь использует
-// runOneIncarnation БЕЗ fencing (там потерю lease ловит acquire-select runLeg по
-// fanCtx); window-воркер тянет очередь напрямую, поэтому fencing нужен per-unit.
+// runOneIncarnationFenced — window variant of [runOneIncarnation] with lease-fencing
+// before spawn (parity command.runOneCommand, S-med-2). barrier-path uses
+// runOneIncarnation WITHOUT fencing (there lease loss caught by acquire-select in runLeg on
+// fanCtx); window-worker pulls queue directly, so fencing needed per-unit.
 //
-// VerifyOwnership: воркер всё ещё владелец Voyage с моим claim-epoch
-// (run.Attempt). Если lease потеряна (Reaper-reclaim, attempt++) — scenario-run
-// НЕ спавним (иначе дубль-исполнение), инкарнация cancelled, fenceLost=true, и
-// cancelFan останавливает окно. Транзиентная PG-ошибка (не ErrLeaseLost) —
-// не подтверждённый реклейм: fail-closed по одной инкарнации (не спавним, failed),
-// без abort всего окна.
+// VerifyOwnership: worker still owns Voyage with my claim-epoch
+// (run.Attempt). If lease lost (Reaper-reclaim, attempt++) — do NOT spawn scenario-run
+// (else duplicate execution), incarnation cancelled, fenceLost=true, and
+// cancelFan stops window. Transient PG error (not ErrLeaseLost) —
+// unconfirmed reclaim: fail-closed per incarnation (no spawn, failed),
+// without abort of whole window.
 func (w *VoyageWorker) runOneIncarnationFenced(ctx context.Context, run *voyage.Voyage, name string, cancelFan context.CancelFunc, fenceLost *atomic.Bool) targetResult {
 	if err := voyage.VerifyOwnership(ctx, w.Pool, run.VoyageID, w.KID, run.Attempt); err != nil {
 		if errors.Is(err, voyage.ErrLeaseLost) {
-			w.Logger.Warn("voyageorch: ownership-fence lost перед spawn scenario-run — не отправлен",
+			w.Logger.Warn("voyageorch: ownership-fence lost before spawn scenario-run — not sent",
 				slog.String("voyage_id", run.VoyageID), slog.String("incarnation", name),
 				slog.String("kid", w.KID), slog.Int("attempt", run.Attempt))
 			fenceLost.Store(true)
@@ -658,7 +657,7 @@ func (w *VoyageWorker) runOneIncarnationFenced(ctx context.Context, run *voyage.
 			w.trackTerminal(ctx, run.VoyageID, name, OutcomeCancelled)
 			return targetResult{IncarnationName: name, Outcome: OutcomeCancelled}
 		}
-		w.Logger.Warn("voyageorch: ownership-fence check failed (transient) — scenario-run не отправлен",
+		w.Logger.Warn("voyageorch: ownership-fence check failed (transient) — scenario-run not sent",
 			slog.String("voyage_id", run.VoyageID), slog.String("incarnation", name), slog.Any("error", err))
 		w.trackTerminal(ctx, run.VoyageID, name, OutcomeFailed)
 		return targetResult{IncarnationName: name, Outcome: OutcomeFailed}
@@ -666,18 +665,18 @@ func (w *VoyageWorker) runOneIncarnationFenced(ctx context.Context, run *voyage.
 	return w.runOneIncarnation(ctx, run, name)
 }
 
-// runOneIncarnation запускает per-incarnation scenario-run и ждёт его терминал,
-// обновляя voyage_targets. Ошибки трекинга (MarkTarget*) логируются, но не валят
-// прогон инкарнации — авторитет исхода = Await (фактический статус apply_runs).
+// runOneIncarnation spawns per-incarnation scenario-run and waits for its terminal,
+// updating voyage_targets. Tracking errors (MarkTarget*) logged but do not fail
+// incarnation run — authority of outcome = Await (actual status in apply_runs).
 func (w *VoyageWorker) runOneIncarnation(ctx context.Context, run *voyage.Voyage, name string) targetResult {
-	// Recovery-шов (ADR-027(k)): если на инкарнации висит МОЙ осиротевший
-	// applying-lock от прошлого attempt ЭТОГО Voyage (scenario-run мёртвого
-	// прежнего владельца не доехал до state-commit-а), снимаем его FENCED перед
-	// re-run — иначе lockRun отвергнет спавн («incarnation уже applying») и Voyage
-	// зависнет навсегда. CRUD-сбой реконсиляции → fail-closed по инкарнации (не
-	// спавним, failed), без abort всего Voyage.
+	// Recovery seam (ADR-027(k)): if incarnation has MY orphaned
+	// applying-lock from previous attempt of this Voyage (scenario-run of dead
+	// previous owner did not reach state-commit), release it FENCED before
+	// re-run — else lockRun rejects spawn ("incarnation already applying") and Voyage
+	// hangs forever. CRUD failure in reconciliation → fail-closed per incarnation (no
+	// spawn, failed), without abort of entire Voyage.
 	if rerr := w.reconcileOrphanLock(ctx, run, name); rerr != nil {
-		w.Logger.Warn("voyageorch: реконсиляция осиротевшего applying-lock провалена — scenario-run не отправлен",
+		w.Logger.Warn("voyageorch: reconciliation of orphaned applying-lock failed — scenario-run not sent",
 			slog.String("voyage_id", run.VoyageID), slog.String("incarnation", name), slog.Any("error", rerr))
 		w.trackTerminal(ctx, run.VoyageID, name, OutcomeFailed)
 		return targetResult{IncarnationName: name, Outcome: OutcomeFailed}
@@ -698,9 +697,9 @@ func (w *VoyageWorker) runOneIncarnation(ctx context.Context, run *voyage.Voyage
 
 	outcome, awerr := w.ScenarioAwaiter.Await(ctx, applyID)
 	if awerr != nil {
-		// ctx.Done / await-ошибка: scenario-run сам доедет до терминала через
-		// apply_runs, но мы его не дождались. cancelled на ctx-отмене (abort/
-		// shutdown), иначе failed (не молча success).
+		// ctx.Done / await error: scenario-run will reach terminal via
+		// apply_runs anyway, but we did not wait. cancelled on ctx cancellation (abort/
+		// shutdown), else failed (not silently success).
 		if errors.Is(awerr, context.Canceled) || errors.Is(awerr, context.DeadlineExceeded) {
 			outcome = OutcomeCancelled
 		} else {
@@ -715,42 +714,42 @@ func (w *VoyageWorker) runOneIncarnation(ctx context.Context, run *voyage.Voyage
 	return targetResult{IncarnationName: name, ApplyID: applyID, Outcome: outcome}
 }
 
-// reconcileOrphanLock — recovery-шов ADR-027(k): детект + FENCED снятие
-// осиротевшего applying-lock инкарнации перед повторным спавном scenario-run
-// реклеймнутого Voyage. Возвращает error ТОЛЬКО на CRUD-сбое PG (caller →
-// fail-closed по инкарнации); «нечего снимать» / «снято» — оба nil.
+// reconcileOrphanLock — recovery seam ADR-027(k): detect + FENCED release of
+// orphaned applying-lock of incarnation before re-spawn of scenario-run
+// of reclaimed Voyage. Returns error ONLY on PG CRUD failure (caller →
+// fail-closed per incarnation); "nothing to release" / "released" — both nil.
 //
-// ТРИ FENCING-условия (все обязательны перед снятием, иначе двойной apply на
-// живом):
+// THREE FENCING conditions (all required before release, else double apply on
+// live):
 //
-//  1. ДЕТЕКТ + apply_id-match: в voyage_targets ЭТОГО voyage_id есть строка
-//     инкарнации с записанным back-link apply_id и НЕ-терминальным статусом
-//     (running/awaiting). Этот apply_id — orphan прошлого attempt ПО ПОСТРОЕНИЮ:
-//     MarkTargetRunning пишет back-link ПОСЛЕ спавна под CAS `v.attempt=$attempt`,
-//     а мы СЕЙЧАС ДО спавна нашего attempt — значит записанный apply_id не наш,
-//     он от прошлого прохода (attempt < run.Attempt). Финальную привязку apply_id
-//     ↔ инкарнация проверяет incarnation.ReleaseApplyingOrphan (apply_runs-EXISTS).
+//  1. DETECT + apply_id-match: voyage_targets of this voyage_id contains row of
+//     incarnation with recorded back-link apply_id and NON-terminal status
+//     (running/awaiting). This apply_id — orphan of previous attempt BY CONSTRUCTION:
+//     MarkTargetRunning writes back-link AFTER spawn under CAS `v.attempt=$attempt`,
+//     and we NOW BEFORE spawn of our attempt — so recorded apply_id is not ours,
+//     it from previous pass (attempt < run.Attempt). Final binding apply_id
+//     ↔ incarnation checked by incarnation.ReleaseApplyingOrphan (apply_runs-EXISTS).
 //  2. reclaimed-attempt + self-ownership: VerifyOwnership(voyage_id, KID,
-//     run.Attempt) — мы текущий владелец Voyage с claim-epoch run.Attempt. Если
-//     нас самих реклеймнули (ErrLeaseLost) — НЕ трогаем lock (его снимет реальный
-//     новый владелец); транзиентная PG-ошибка — fail-closed. Сам факт, что мы в
-//     этой точке как ВЛАДЕЛЕЦ run.Attempt, а back-link уже стоял от чужого
-//     apply_id — подтверждает re-claim (прошлый владелец потерял Voyage, его
-//     RunResult fenced на уровне apply_runs.attempt, ADR-027(g)).
-//  3. single-winner CAS: снятие atomic через incarnation.ReleaseApplyingOrphan
-//     (FOR UPDATE + guard status='applying'). Если честный RunResult прошлого
-//     владельца уже финализировал инкарнацию — снятие no-op (released=false).
+//     run.Attempt) — we current owner of Voyage with claim-epoch run.Attempt. If
+//     we ourselves reclaimed (ErrLeaseLost) — NOT touch lock (actual
+//     new owner will release it); transient PG error — fail-closed. The fact itself that we
+//     at this point as OWNER run.Attempt and back-link already from foreign
+//     apply_id — confirms re-claim (previous owner lost Voyage, its
+//     RunResult fenced at apply_runs.attempt level, ADR-027(g)).
+//  3. single-winner CAS: release atomic via incarnation.ReleaseApplyingOrphan
+//     (FOR UPDATE + guard status='applying'). If honest RunResult of previous
+//     owner already finalized incarnation — release no-op (released=false).
 func (w *VoyageWorker) reconcileOrphanLock(ctx context.Context, run *voyage.Voyage, name string) error {
 	if w.OrphanReleaser == nil {
-		return nil // детект выключен (unit / dev без recovery-шва)
+		return nil // detection disabled (unit / dev without recovery seam)
 	}
 
-	// ДЕТЕКТ: back-link orphan apply_id из voyage_targets ЭТОГО Voyage. scope мал
-	// (N инкарнаций одного Voyage) — полный SelectTargets + фильтр дешевле узкого
-	// селектора. Нет строки / нет apply_id / target уже терминал → нечего снимать.
+	// DETECT: back-link orphan apply_id from voyage_targets of this Voyage. scope small
+	// (N incarnations of one Voyage) — full SelectTargets + filter cheaper than narrow
+	// selector. No row / no apply_id / target already terminal → nothing to release.
 	targets, err := voyage.SelectTargets(ctx, w.Pool, run.VoyageID)
 	if err != nil {
-		return fmt.Errorf("voyageorch: select targets для orphan-детекта: %w", err)
+		return fmt.Errorf("voyageorch: select targets for orphan-detect: %w", err)
 	}
 	orphanApplyID := ""
 	for i := range targets {
@@ -758,10 +757,10 @@ func (w *VoyageWorker) reconcileOrphanLock(ctx context.Context, run *voyage.Voya
 		if t.TargetKind != voyage.TargetKindIncarnation || t.TargetID != name {
 			continue
 		}
-		// Только running/awaiting с записанным back-link — orphan-кандидат.
-		// Терминальный target (succeeded/failed/cancelled/no_match) уже доехал —
-		// инкарнация не висит. ApplyID==nil — спавн прошлого attempt не дошёл до
-		// MarkTargetRunning, lock не выставлен этим Voyage → не наш orphan.
+		// Only running/awaiting with recorded back-link — orphan candidate.
+		// Terminal target (succeeded/failed/cancelled/no_match) already reached —
+		// incarnation not hanging. ApplyID==nil — spawn of previous attempt did not reach
+		// MarkTargetRunning, lock not set by this Voyage → not our orphan.
 		if t.ApplyID != nil && *t.ApplyID != "" &&
 			(t.Status == voyage.TargetStatusRunning || t.Status == voyage.TargetStatusAwaiting) {
 			orphanApplyID = *t.ApplyID
@@ -769,23 +768,23 @@ func (w *VoyageWorker) reconcileOrphanLock(ctx context.Context, run *voyage.Voya
 		break
 	}
 	if orphanApplyID == "" {
-		return nil // нет back-link прошлого attempt — нечего снимать
+		return nil // no back-link from previous attempt — nothing to release
 	}
 
-	// FENCING-2/3 + single-winner снятие. ReleaseOrphanLock сначала
-	// VerifyOwnership (мы владелец run.Attempt; ErrLeaseLost → released=false,
-	// err=nil — нас реклеймнули, lock не трогаем), затем atomic CAS снятия.
+	// FENCING-2/3 + single-winner release. ReleaseOrphanLock first
+	// VerifyOwnership (we owner run.Attempt; ErrLeaseLost → released=false,
+	// err=nil — we reclaimed, lock not touched), then atomic CAS release.
 	released, rerr := w.OrphanReleaser.ReleaseOrphanLock(ctx, run.VoyageID, name, run.Attempt, w.KID, orphanApplyID)
 	if rerr != nil {
 		return rerr
 	}
 	if released {
-		w.Logger.Info("voyageorch: осиротевший applying-lock снят перед re-run (recovery-шов ADR-027(k))",
+		w.Logger.Info("voyageorch: orphaned applying-lock released before re-run (recovery seam ADR-027(k))",
 			slog.String("voyage_id", run.VoyageID), slog.String("incarnation", name),
 			slog.String("orphan_apply_id", orphanApplyID),
 			slog.String("kid", w.KID), slog.Int("attempt", run.Attempt))
 	} else {
-		w.Logger.Info("voyageorch: осиротевший applying-lock НЕ снят (fenced no-op: не applying / orphan apply_id не наш / нас реклеймнули)",
+		w.Logger.Info("voyageorch: orphaned applying-lock NOT released (fenced no-op: not applying / orphan apply_id not ours / we reclaimed)",
 			slog.String("voyage_id", run.VoyageID), slog.String("incarnation", name),
 			slog.String("orphan_apply_id", orphanApplyID),
 			slog.String("kid", w.KID), slog.Int("attempt", run.Attempt))
@@ -793,8 +792,8 @@ func (w *VoyageWorker) reconcileOrphanLock(ctx context.Context, run *voyage.Voya
 	return nil
 }
 
-// trackTerminal best-effort фиксирует терминал target-а в voyage_targets. Ошибка
-// PG логируется warn — исход уже зафиксирован в targetResult (авторитет finalize).
+// trackTerminal best-effort records target terminal in voyage_targets. PG
+// error logged as warn — outcome already fixed in targetResult (authority for finalize).
 func (w *VoyageWorker) trackTerminal(ctx context.Context, voyageID, name string, outcome TargetOutcome) {
 	if err := voyage.MarkTargetTerminal(ctx, w.Pool, voyageID, voyage.TargetKindIncarnation, name, outcome.toTargetStatus()); err != nil {
 		w.Logger.Warn("voyageorch: MarkTargetTerminal failed (best-effort)",
@@ -803,8 +802,8 @@ func (w *VoyageWorker) trackTerminal(ctx context.Context, voyageID, name string,
 	}
 }
 
-// markTargetCancelled best-effort помечает не-стартовавший target cancelled
-// (ctx.Done во время раздачи Leg-а). Ошибка PG логируется warn.
+// markTargetCancelled best-effort marks non-started target cancelled
+// (ctx.Done during Leg distribution). PG error logged as warn.
 func (w *VoyageWorker) markTargetCancelled(ctx context.Context, voyageID, name string) error {
 	if err := voyage.MarkTargetTerminal(ctx, w.Pool, voyageID, voyage.TargetKindIncarnation, name, voyage.TargetStatusCancelled); err != nil {
 		w.Logger.Warn("voyageorch: MarkTargetTerminal(cancelled) failed (best-effort)",
@@ -814,8 +813,8 @@ func (w *VoyageWorker) markTargetCancelled(ctx context.Context, voyageID, name s
 	return nil
 }
 
-// interBatchPause ждёт duration между Leg-ами. Возвращает false при прерывании
-// (ctx.Done / leaseLost) — caller тогда не финализирует.
+// interBatchPause waits duration between Legs. Returns false on interruption
+// (ctx.Done / leaseLost) — caller then does not finalize.
 func (w *VoyageWorker) interBatchPause(ctx context.Context, d time.Duration, leaseLost <-chan struct{}) bool {
 	t := time.NewTimer(d)
 	defer t.Stop()
@@ -829,13 +828,13 @@ func (w *VoyageWorker) interBatchPause(ctx context.Context, d time.Duration, lea
 	}
 }
 
-// scenarioFinalStatus выбирает терминальный статус Voyage по Summary:
-//   - все success (или no_match)         → succeeded;
-//   - был хоть один fail, но и успех есть → partial_failed;
-//   - все failed (никто не success)      → failed.
+// scenarioFinalStatus selects terminal status of Voyage by Summary:
+//   - all success (or no_match)         → succeeded;
+//   - at least one fail but success too → partial_failed;
+//   - all failed (nobody success)       → failed.
 //
-// cancelled-only (abort до единого успеха) трактуется как failed —
-// был провал, который и вызвал abort.
+// cancelled-only (abort before any success) treated as failed —
+// failure occurred that triggered abort.
 func scenarioFinalStatus(s *voyage.Summary, anyFailure bool) voyage.Status {
 	if !anyFailure && s.Cancelled == 0 {
 		return voyage.StatusSucceeded
