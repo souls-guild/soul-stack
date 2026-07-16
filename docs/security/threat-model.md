@@ -1,92 +1,92 @@
 # Threat-model Soul Stack
 
-Зафиксированная модель угроз кластера Keeper + флота Souls. Reference для оператора и команды разработки: что считается активом, какие актёры и поверхности рассматриваются, что закрыто механизмом и что остаётся остаточным риском. **Не маркетинг и не туториал** — нормативная фиксация security-границ на путь к бете.
+Fixed threat model for the Keeper cluster + Souls fleet. Reference for the operator and development team: what is considered an asset, what actors and surfaces are considered, what is covered by the mechanism and what remains a residual risk. **Not marketing and not a tutorial** - a regulatory fixation of security boundaries on the path to beta.
 
-Документ зафиксирован по итогам security-аудита 2026-06-12 (verdict PASS). Он не вводит новых решений — описывает уже-реализованные механизмы; каждый пункт отсылает к коду/ADR-источнику. Расхождение между этим документом и фактическим поведением кода — баг (заводить как security-issue, а не править доку под код).
+The document was recorded based on the results of the security audit 2026-06-12 (verdict PASS). He does not introduce new solutions - he describes already implemented mechanisms; Each item refers to a code/ADR source. The discrepancy between this document and the actual behavior of the code is a bug (create it as a security-issue, and do not edit the document for the code).
 
-См. также: [`../keeper/rbac.md`](../keeper/rbac.md) (RBAC/Purview/least-privilege), [`../operations/bootstrap-rbac.md`](../operations/bootstrap-rbac.md) (Bootstrap Архонта), [`../keeper/prod-setup.md`](../keeper/prod-setup.md) (прод-Vault: AppRole/auto-unseal/signing-key), [ADR-026 → Sigil](../adr/0026-sigil.md#adr-026-sigil--целостность-плагинов-keeper-signed-digest-индекс), [ADR-047 → Purview](../adr/0047-purview.md#adr-047-purview--scoped-rbac-видимость-узлов-role-default_scope--расширенный-селектор).
+See also: [`../keeper/rbac.md`](../keeper/rbac.md) (RBAC/Purview/least-privilege), [`../operations/bootstrap-rbac.md`](../operations/bootstrap-rbac.md) (Archon Bootstrap), [`../keeper/prod-setup.md`](../keeper/prod-setup.md) (prod-Vault: AppRole/auto-unseal/signing-key), [ADR-026 → Sigil](../adr/0026-sigil.md), [ADR-047 → Purview](../adr/0047-purview.md).
 
-## Активы
+## Assets
 
-Что защищаем и почему компрометация критична.
+What we protect and why compromise is critical.
 
-| Актив | Где живёт | Почему критичен |
+| Active | Where does he live | Why is it critical |
 |---|---|---|
-| **Vault-секреты** (Essence/пароли) | Vault KV, резолвятся в CEL-фазе рендера на Keeper | Параметры конфигов хостов, пароли БД/сервисов. Утечка = компрометация управляемых сервисов. Никогда не должны попадать в наблюдаемые каналы (см. инвариант ниже). |
-| **mTLS-CA** (корень доверия SoulSeed) | Vault PKI root | Подписывает каждый SoulSeed. Компрометация CA = возможность выпустить валидный клиентский сертификат и выдать себя за любой Soul или влиться в EventStream. |
-| **JWT signing-key** | Vault KV `secret/keeper/jwt-signing-key` ([ADR-014](../adr/0014-operator-identity.md#adr-014-identity-модель-оператора-archon)) | Подписывает JWT всех Архонтов. Компрометация = выпуск токена с любыми ролями (полный обход RBAC). |
-| **Sigil trust-anchor** (ed25519 plugin-signing) | приватник — Vault KV `secret/keeper/sigil-keys/<key_id>`; публичный набор едет Soul-у в `BootstrapReply` ([ADR-026(d)/(h)](../adr/0026-sigil.md#adr-026-sigil--целостность-плагинов-keeper-signed-digest-индекс)) | Подписывает допущенные digest-ы плагинов. Компрометация = возможность подписать произвольный бинарь плагина (RCE на флоте через подделанный `soul-mod-*`). |
-| **Флот Souls** | `soul`-демоны на хостах | RCE-поверхность: модули исполняются на хосте. Компрометация Keeper-управления = исполнение произвольного кода на всём парке. |
-| **Postgres** | реестры (`souls`/`operators`/`voyages`/…) + audit | Холодное состояние кластера и audit-журнал. Компрометация = подмена реестров, стирание следов. |
-| **Redis** | presence/lease/leader | Горячий слой: presence Souls, SID-lease, leader-election Reaper/Conductor. Компрометация = ложная presence, угон lease, split-brain. |
+| **Vault-secrets** (Essence/passwords) | Vault KV, resolved in the CEL rendering phase on Keeper | Host config parameters, database/service passwords. Leak = compromise of managed services. Should never fall into observable channels (see invariant below). |
+| **mTLS-CA** (SoulSeed Trust Root) | Vault PKI root | Every SoulSeed subscribes. CA compromise = the ability to issue a valid client certificate and impersonate any Soul or join EventStream. |
+| **JWT signing-key** | Vault KV `secret/keeper/jwt-signing-key` ([ADR-014](../adr/0014-operator-identity.md)) | Signs the JWT of all Archons. Compromise = issuing a token with any roles (full RBAC bypass). |
+| **Sigil trust-anchor** (ed25519 plugin-signing) | private - Vault KV `secret/keeper/sigil-keys/<key_id>`; public recruitment goes to Soul in `BootstrapReply` ([ADR-026(d)/(h)](../adr/0026-sigil.md)) | Signs accepted plugin digests. Compromise = ability to sign an arbitrary plugin binary (RCE on the fleet via a forged `soul-mod-*`). |
+| **Souls Fleet** | `soul`-daemons on hosts | RCE surface: modules are executed on the host. Compromise of Keeper management = execution of arbitrary code throughout the fleet. |
+| **Postgres** | registries (`souls`/`operators`/`voyages`/…) + audit | Cold state of the cluster and audit log. Compromise = substitution of registries, erasing traces. |
+| **Redis** | presence/lease/leader | Hot layer: presence Souls, SID-lease, leader-election Reaper/Conductor. Compromise = false presence, lease hijacking, split-brain. |
 
-## Актёры, поверхности и границы (что закрыто)
+## Actors, surfaces and boundaries (which is closed)
 
-Для каждого актёра: точка входа (поверхность), механизм закрытия и **остаточный риск** (что осознанно не закрыто).
+For each actor: entry point (surface), closing mechanism and **residual risk** (what is not deliberately closed).
 
-### Внешний оператор (semi-trusted)
+### External operator (semi-trusted)
 
-- **Поверхность:** Operator API — OpenAPI (HTTP/JSON) / MCP / CLI как тонкая обёртка. Включая served-спеку (`GET /openapi.yaml` + `GET /openapi.json`) и визуальный вьювер `GET /docs` (RapiDoc) — см. ниже про их доступ.
-- **Закрыто:**
-  - JWT-аутентификация (claims `iss`/`sub`/`exp`/`roles`, подпись JWT signing-key из Vault, [ADR-014](../adr/0014-operator-identity.md#adr-014-identity-модель-оператора-archon)). Применяется к `/v1/*` **и** к served-спеке `/openapi.yaml`/`/openapi.json` (тот же `RequireJWT`, см. ниже).
-  - RBAC **default-deny** — каждый эндпоинт требует явный permission ([ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres), [`../keeper/rbac.md`](../keeper/rbac.md)).
-  - **Purview-scope** — видимость узлов ограничена scope роли (coven/regex/soulprint/state-селектор); fail-closed (пустой Purview → пустой список, не весь флот) ([ADR-047](../adr/0047-purview.md#adr-047-purview--scoped-rbac-видимость-узлов-role-default_scope--расширенный-селектор)).
-  - **Least-privilege subset** — Архон не может выдать роль с правами шире собственных (`keeper/internal/rbac`, subset-инвариант учитывает роли через Synod, [ADR-049 §f](../adr/0049-synod.md#adr-049-synod--группа-архонов)).
-  - Закрыты: **privilege-escalation** (через subset-проверку), **обход через MCP** (MCP-tools идут через тот же enforcer, что и REST), **self-lockout** (нельзя удалить последнего оператора с `*`-permission, [ADR-013](../adr/0013-bootstrap-archon.md#adr-013-bootstrap-первого-архонта)).
-- **Раскрытие API-поверхности (served-спека и вьювер, ADR-054 code-first):**
-  - **Спека генерится из кода (huma-агрегатор), не из committed-рукописи.** `/openapi.yaml` и `/openapi.json` отдают runtime-дамп одного source-of-truth (huma-spec, OpenAPI 3.1) — «правда в коде». Committed `docs/keeper/openapi.yaml` — производный генерат для UI-vendor (`make gen-openapi`), он НЕ served. Drift код↔спека ловится тестом `TestFullSpec_CoversAllRoutes` (`keeper/internal/api/huma_full_spec_test.go`: множество роутов спеки == множество реальных chi-роутов).
-  - **`/openapi.yaml` + `/openapi.json` — ЗА JWT.** Оба требуют Bearer (тот же `RequireJWT`, что и `/v1`), но смонтированы ВНЕ `/v1` и без `/v1`-обвязки (maxBody/metrics/audit/RBAC): спека статична. Раньше served-спека была публичной — раскрывала полную API-поверхность анонимно; теперь анонимный доступ к перечню эндпоинтов закрыт (`keeper/internal/api/router.go`).
-  - **`/docs` (RapiDoc) — публичный shell без раскрытия API (механизм A, ADR-054 doc-viewer).** Сам `/docs` и статика `/docs/assets/*` публичны и не несут данных/описания API — это пустая HTML-страница + web-component RapiDoc. Чувствительное (полная спека) приходит только ПОСЛЕ того, как оператор ввёл JWT: страница фетчит `/openapi.json` с `Authorization: Bearer` и рендерит объект инлайн. Токен держится в `sessionStorage` вкладки (XSS-гигиена, не переживает закрытие вкладки). Ассеты RapiDoc вшиты через `go:embed` (`docsassets`) — без CDN, offline-render, нет загрузки стороннего JS.
-- **Остаточный риск:** не выделен сверх покрытого выше; основной — инсайдер-оператор (см. ниже).
+- **Surface:** Operator API - OpenAPI (HTTP/JSON) / MCP / CLI as a thin wrapper. Including the served spec (`GET /openapi.yaml` + `GET /openapi.json`) and the visual viewer `GET /docs` (RapiDoc) - see below for their access.
+- **Closed:**
+  - JWT authentication (claims `iss`/`sub`/`exp`/`roles`, JWT signing-key from Vault, [ADR-014](../adr/0014-operator-identity.md)). Applies to `/v1/*` **and** to the service spec `/openapi.yaml`/`/openapi.json` (same `RequireJWT`, see below).
+  - RBAC **default-deny** - each endpoint requires explicit permission ([ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres), [`../keeper/rbac.md`](../keeper/rbac.md)).
+  - **Purview-scope** — the visibility of nodes is limited by the scope of the role (coven/regex/soulprint/state-selector); fail-closed (empty Purview → empty list, not the entire fleet) ([ADR-047](../adr/0047-purview.md)).
+  - **Least-privilege subset** — Archon cannot issue a role with rights greater than his own (`keeper/internal/rbac`, subset-invariant takes into account roles via Synod, [ADR-049 §f](../adr/0049-synod.md)).
+  - Closed: **privilege-escalation** (via subset check), **bypass via MCP** (MCP-tools go through the same enforcer as REST), **self-lockout** (you cannot remove the last statement with `*`-permission, [ADR-013](../adr/0013-bootstrap-archon.md)).
+- **API surface disclosure (served spec and viewer, ADR-054 code-first):**
+  - **Spec is generated from code (huma-aggregator), not from a committed manuscript.** `/openapi.yaml` and `/openapi.json` give a runtime dump of one source-of-truth (huma-spec, OpenAPI 3.1) - "truth in code". Committed `docs/keeper/openapi.yaml` is a derived generator for UI-vendor (`make gen-openapi`), it is NOT served. Drift code↔spec is caught by the test `TestFullSpec_CoversAllRoutes` (`keeper/internal/api/huma_full_spec_test.go`: set of spec routes == set of real chi-routes).
+  - **`/openapi.yaml` + `/openapi.json` - FOR JWT.** Both require Bearer (same `RequireJWT` as `/v1`), but mounted OUTSIDE `/v1` and without `/v1`-binding (maxBody/metrics/audit/RBAC): the sinter is static. Previously, the service spec was public - it revealed the full API surface anonymously; anonymous access to the list of endpoints is now closed (`keeper/internal/api/router.go`).
+  - **`/docs` (RapiDoc) - public shell without API disclosure (mechanism A, ADR-054 doc-viewer).** `/docs` itself and static `/docs/assets/*` are public and do not carry data/API description - this is an empty HTML page + web-component RapiDoc. The sensitive (full spec) comes only AFTER the operator has entered the JWT: the page fetches `/openapi.json` with `Authorization: Bearer` and renders the object inline. The token is kept in the tab's `sessionStorage` (XSS hygiene, does not survive tab closing). RapiDoc assets are embedded via `go:embed` (`docsassets`) - no CDN, offline-render, no loading of third-party JS.
+- **Residual risk:** not highlighted above what is covered above; the main one is the insider operator (see below).
 
-### Скомпрометированный Soul
+### Compromised Soul
 
-- **Поверхность:** долгоживущий bidi `EventStream` поверх mTLS ([ADR-012](../adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add)).
-- **Закрыто:**
-  - Аутентификация **fingerprint → SID** по peer-сертификату: SID берётся из mTLS peer cert (`keeper/internal/grpc/peer.go`), **не из payload** — echo SID в сообщениях идёт только для логов, авторитет — сертификат.
-  - **Seed-rotation только своего SID** — Soul не может ротировать чужой SoulSeed.
-  - **Augur default-deny** — внешний доступ Soul-а (Vault/Prometheus/ELK) разрешён только явным grant-ом (`rites`, [ADR-025](../adr/0025-augur.md#adr-025-augur--keeper-side-брокер-внешнего-доступа-soul)); по умолчанию ничего.
-- **Остаточный риск (by-design):** модули исполняются на хосте с правами service-user. Это свойство pull-модели (Soul применяет Destiny локально) — Keeper не доверяет хосту больше, чем правам этого процесса. Blast radius компрометации одного Soul ограничен этим хостом; cross-host эскалации через EventStream нет (SID-auth + Augur default-deny).
+- **Surface:** long-lived bidi `EventStream` over mTLS ([ADR-012](../adr/0012-keeper-soul-grpc.md)).
+- **Closed:**
+  - Authentication **fingerprint → SID** by peer certificate: SID is taken from mTLS peer cert (`keeper/internal/grpc/peer.go`), **not from payload** - echo SID in messages is only for logs, authority is the certificate.
+  - **Seed-rotation of only your own SID** - Soul cannot rotate someone else's SoulSeed.
+  - **Augur default-deny** — external access of Soul (Vault/Prometheus/ELK) is allowed only by an explicit grant (`rites`, [ADR-025](../adr/0025-augur.md)); default is nothing.
+- **Residual risk (by-design):** modules are executed on the host with service-user rights. This is a property of the pull model (Soul applies Destiny locally) - Keeper does not trust the host more than the rights of this process. The Blast radius of compromising one Soul is limited to that host; There is no cross-host escalation via EventStream (SID-auth + Augur default-deny).
 
-### Сетевой атакующий (MITM / SSRF)
+### Network attacker (MITM / SSRF)
 
-- **Поверхность:** транспорт Keeper↔Soul и **исходящие** соединения Keeper-а к недоверенным целям (webhook-доставка Herald, `core.url`/`core.http` через Augur-делегацию).
-- **Закрыто:**
-  - **TLS 1.3 + `RequireAndVerifyClientCert`** на EventStream (`shared/tlsx`, `keeper/internal/grpc/auth.go`) — нет downgrade и нет skip-verify в проде.
-  - **SSRF-guard** на всех исходящих к недоверенным: `shared/netguard` — **resolve-then-dial, rebind-safe** (`ValidateEndpoint` → `GuardedDialContext` коннектит по уже-проверенному IP, между проверкой и dial нет второго резолва; `NewCheckRedirect` гейтит redirect-hop-ы). Закрывает прямой доступ к приватным IP и DNS-rebind.
-- **Остаточный риск:** корректность зависит от правильно сконфигурированной Vault PKI role (`enforce_hostnames`/`allowed_domains`) — см. [требования к окружению](#требования-к-окружению-оператора).
+- **Surface:** Keeper↔Soul transport and **outgoing** Keeper connections to untrusted targets (Herald webhook delivery, `core.url`/`core.http` via Augur delegation).
+- **Closed:**
+  - **TLS 1.3 + `RequireAndVerifyClientCert`** on EventStream (`shared/tlsx`, `keeper/internal/grpc/auth.go`) - no downgrade and no skip-verify in production.
+  - **SSRF-guard** on all outgoing to untrusted ones: `shared/netguard` - **resolve-then-dial, rebind-safe** (`ValidateEndpoint` → `GuardedDialContext` connects via an already verified IP, there is no second resolve between the check and dial; `NewCheckRedirect` gates redirect hops). Blocks direct access to private IPs and DNS rebind.
+- **Residual risk:** Correctness depends on correctly configured Vault PKI role (`enforce_hostnames`/`allowed_domains`) - see environment requirements.
 
-### Инсайдер-оператор
+### Insider Operator
 
-- **Поверхность:** легитимный Архон с выданными правами.
-- **Закрыто:**
-  - Ограничен **RBAC-scope + least-privilege** (видит и трогает только узлы своего Purview, прав не больше выданных).
-  - **Audit с masked-payload** — каждое write-действие пишется в `audit_log`; параметры маскируются на выходе (`shared/audit/mask.go`), секреты в журнал не попадают. Полнота audit-покрытия write-роутов держится агрегатным structural-guard-ом (см. инвариант ниже про анти-S6).
-- **Остаточный риск (by-design):** `cluster-admin` (`*`-permission) имеет полный доступ — это необходимая роль (bootstrap, recovery). Минимизация риска: держать минимум `*`-операторов, self-lockout защищает от случайного удаления последнего admin-а, короткий JWT-TTL ограничивает окно компрометации украденного токена.
+- **Surface:** legitimate Archon with issued rights.
+- **Closed:**
+  - Limited by **RBAC-scope + least-privilege** (sees and touches only nodes of its PurView, no more rights than issued).
+  - **Audit with masked-payload** - each write action is written to `audit_log`; parameters are masked at the output (`shared/audit/mask.go`), secrets are not included in the log. The completeness of audit coverage of write routes is maintained by the aggregate structural guard (see the invariant below about anti-S6).
+- **Residual risk (by-design):** `cluster-admin` (`*`-permission) has full access - this is a required role (bootstrap, recovery). Minimizing risk: keep a minimum of `*` operators, self-lockout protects against accidental deletion of the last admin, short JWT-TTL limits the window for compromising a stolen token.
 
-## Остаточные low-риски (backlog)
+## Residual low-risks (backlog)
 
-Осознанно не закрытые низкоприоритетные риски. Не блокеры беты; кандидаты на defense-in-depth.
+Low-priority risks not deliberately closed. Not beta blockers; candidates for defense-in-depth.
 
-- **CSR CN/SAN не валидируется до `SignCSR`.** Онбординг подписывает CSR без проверки CN/SAN на соответствие заявленному SID. Не критично: аутентификация якорится на **registry-fingerprint** (а не на CN сертификата), поэтому подделка CN не даёт привилегий — но валидация CN/SAN добавила бы defense-in-depth (раннее отсечение мусорных CSR).
-- **Name-based secret-masking хрупок к новым код-путям.** Маскирование секретов в наблюдаемых каналах работает по именам полей (`shared/audit/mask.go`). Новый код-путь, логирующий `params` напрямую (минуя маскер), может протечь секрет. Защита — инвариант ниже + ревью на каждом новом логирующем пути; кандидат на устранение — taint-tracking секретов вместо name-based.
+- **CSR CN/SAN is not validated until `SignCSR`.** Onboarding signs the CSR without checking the CN/SAN against the declared SID. Not critical: authentication is anchored on the **registry-fingerprint** (and not on the certificate's CN), so spoofing the CN does not give privileges - but CN/SAN validation would add defense-in-depth (early cutting off of junk CSRs).
+- **Name-based secret-masking is fragile to new code-paths.** Secret masking in observable channels works by field names (`shared/audit/mask.go`). A new path code that logs `params` directly (bypassing the masker) may leak the secret. Protection - invariant below + review on each new logging path; A candidate for elimination is taint-tracking of secrets instead of name-based.
 
-## Статус внешнего аудита / pentest
+## External audit status / pentest
 
-Внешний независимый pentest на момент закрытой малой беты **не проводился**. Решением от 2026-06-15 для беты признан достаточным **внутренний security-gate**, в который входит:
+External independent pentest at the time of the closed small beta **was not carried out**. By decision dated 2026-06-15, the **internal security-gate**, which includes:
 
-- **Deep ИБ-аудит 2026-06-12** — verdict PASS, **0 critical / 0 high** (этот документ — его фиксация).
-- **Threat-model** — настоящий документ: активы, актёры, закрытые поверхности и остаточные риски.
-- **`govulncheck` чист по всем модулям** — supply-chain-скан зашит в `make check` (см. [требования к окружению](#требования-к-окружению-оператора), таргет `make check-vuln` по всем go.work-модулям).
-- **Security-ревалидация OpenAPI-пивота — PASS** — 0 блокеров; аудит-полнота write-роутов (анти-S6), RBAC default-deny + Purview-scope и JWT-enforcement доказаны (см. [Инсайдер-оператор](#инсайдер-оператор) и [требования к окружению](#требования-к-окружению-оператора)).
+- **Deep IS audit 2026-06-12** — verdict PASS, **0 critical / 0 high** (this document is its fixation).
+- **Threat-model** - this document: assets, actors, closed surfaces and residual risks.
+- **`govulncheck` is clean for all modules** - supply-chain scan is embedded in `make check` (see environment requirements, target `make check-vuln` for all go.work modules).
+- **Security revalidation of OpenAPI pivot - PASS** - 0 blockers; audit-completeness of write routes (anti-S6), RBAC default-deny + Purview-scope and JWT-enforcement are proven (see Insider operator and environment requirements).
 
-Внешний независимый pentest запланирован **пост-бета / перед GA** — закрытая малая бета (единицы операторов, флот до сотен хостов) даёт ограниченную поверхность, при которой внутренний gate соразмерен риску; на пути к GA с ростом аудитории внешняя проверка обязательна. Граница гарантий для бета-тестера зафиксирована в [`../known-limitations.md`](../known-limitations.md).
+External independent pentest planned **post-beta / before GA** - closed small beta (single operators, fleet of up to hundreds of hosts) provides a limited surface area in which the internal gate is commensurate with the risk; On the path to GA as the audience grows, external verification is mandatory. The guarantee limit for a beta tester is fixed at [`../known-limitations.md`](../known-limitations.md).
 
-## Требования к окружению оператора
+## Operator environment requirements
 
-Инварианты, которые **не обеспечиваются кодом автоматически** и должны быть выдержаны при развёртывании. Нарушение любого из них ослабляет модель.
+Invariants that **are not automatically provided by the code** and must be maintained during deployment. Violation of any of them weakens the model.
 
-- **Vault PKI role с `enforce_hostnames` + `allowed_domains`.** SSRF-guard и mTLS-валидация полагаются на то, что PKI role не выпускает сертификаты на произвольные домены. Конфигурация role — на операторе ([`../keeper/prod-setup.md`](../keeper/prod-setup.md), [`../operations/infra.md`](../operations/infra.md)).
-- **Инвариант: `RenderedTask.Params` никогда не попадает в наблюдаемые каналы.** Отрендеренные параметры задачи (потенциально содержат секреты после CEL-резолва Vault) не должны утекать в audit / OTel / SSE / логи в plaintext. Маскирование — на выходе (`shared/audit/mask.go`); каждый новый код-путь, касающийся `Params`, обязан проходить маскер. Это нормативное требование к коду (ловится ревью), не опция конфига.
-- **Инвариант: каждый мутирующий `/v1`-роут пишет audit-event (анти-S6).** Множество write-роутов ⊆ множество audit-покрытых роутов. Держится двухуровневым гейтом в коде, не ревью: агрегатный structural-guard (`keeper/internal/api/audit_completeness_guard_test.go`) — декларативный реестр write-роутов из топологии `buildRouter`, новый write-роут без записи в реестр краснит тест; per-domain `*_RecordsOnSuccess`-тесты — доказывают, что event реально пишется на 2xx (урок S6: «middleware навешан» ≠ «audit пишет» — bridge перехватывал ResponseWriter ДО рекордера, запись молча терялась). Это нормативное требование к коду.
-- **Регулярный `govulncheck`.** Supply-chain-скан зависимостей зашит в `make check` через таргет `make check-vuln` (прогон `govulncheck ./...` по всем 5 go.work-модулям; offline-graceful — `SKIP_VULNCHECK=1` пропускает без сети). На момент фиксации govulncheck чист по всем модулям. Запуск перед релизом — часть `make check`; периодический повтор для свежей vuln-DB — операционная гигиена.
+- **Vault PKI role with `enforce_hostnames` + `allowed_domains`.** SSRF-guard and mTLS validation rely on the PKI role not issuing certificates for arbitrary domains. Role configuration - on the operator ([`../keeper/prod-setup.md`](../keeper/prod-setup.md), [`../operations/infra.md`](../operations/infra.md)).
+- **Invariant: `RenderedTask.Params` never gets into observable channels.** Rendered task parameters (potentially containing secrets after Vault CEL resolution) should not leak to audit / OTel / SSE / plaintext logs. Masking - output (`shared/audit/mask.go`); Each new path code touching `Params` must pass the masker. This is a regulatory requirement for the code (caught by the review), not a config option.
+- **Invariant: every mutating `/v1`-route writes an audit-event (anti-S6).** A set of write-routes ⊆ a set of audit-covered routes. Maintained by a two-level gate in the code, no review: aggregate structural-guard (`keeper/internal/api/audit_completeness_guard_test.go`) - a declarative registry of write routes from the `buildRouter` topology, a new write route without writing to the registry makes the test red; per-domain `*_RecordsOnSuccess` tests - prove that event is actually written on 2xx (lesson S6: "middleware is hung" ≠ "audit writes" - the bridge intercepted the ResponseWriter BEFORE the recorder, the recording was silently lost). This is a regulatory requirement for code.
+- **Regular `govulncheck`.** Supply-chain scan of dependencies is embedded in `make check` through the target `make check-vuln` (running `govulncheck ./...` across all 5 go.work modules; offline-graceful - `SKIP_VULNCHECK=1` passes without a network). At the time of fixation, govulncheck is clear in all modules. Pre-release launch - part of `make check`; periodic repeat for fresh vuln-DB - operational hygiene.

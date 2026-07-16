@@ -1,142 +1,142 @@
 # Deployment
 
-Раскатка бинарей Soul Stack на прод-хосты. Минимальный single-keeper, HA multi-keeper, требования к ОС, systemd-юниты, конфиги.
+Rolling out Soul Stack binaries to production hosts. Minimum single-keeper, HA multi-keeper, OS requirements, systemd units, configs.
 
-## Бинари
+## Binari
 
-Соответственно [ADR-004](../adr/0004-binaries.md#adr-004-раскладка-бинарей--keeper-soul-soul-lint-push-режим--модуль-внутри-keeper) — **три операторских бинаря** (`keeper` / `soul` / `soul-lint`), раскатываемых на инфраструктуру. Четвёртый артефакт `soul-trial` — офлайн тест-раннер ([ADR-023](../adr/0023-trial-test-runner.md#adr-023-тест-раннер-trial-soul-trial-и-dsl-coverage)) authoring-цикла (CI / dev-машина), на прод-хосты не ставится:
+Accordingly, [ADR-004](../adr/0004-binaries.md#adr-004-binary-layout--keeper-soul-soul-lint-push-mode-as-a-module-inside-keeper) - **three operator binaries** (`keeper` / `soul` / `soul-lint`), rolled out to the infrastructure. The fourth artifact `soul-trial` is an offline test runner ([ADR-023](../adr/0023-trial-test-runner.md)) of the authoring cycle (CI / dev machine), not installed on production hosts:
 
-| Бинарь | Роль | Что | Где запускается |
+| Binar | Role | What | Where does it start |
 |---|---|---|---|
-| `keeper` | операторский | Центральный сервер (gRPC bidi к Soul, OpenAPI, MCP, push-модуль, Reaper). | Keeper-хост (`/usr/local/bin/keeper`). |
-| `soul` | операторский | Демон-агент. В push-режиме — тот же бинарь, запускается `soul apply` через SSH. | Управляемый хост (`/usr/local/bin/soul`). |
-| `soul-lint` | операторский | Офлайн-линтер Destiny / Service / Manifest / Scenario. | CI / dev-машина. |
-| `soul-trial` | тест-инструмент | Офлайн-раннер испытаний destiny/scenario/миграций ([ADR-023](../adr/0023-trial-test-runner.md#adr-023-тест-раннер-trial-soul-trial-и-dsl-coverage)). Не операторский артефакт. | CI / dev-машина. |
+| `keeper` | operator | Central server (gRPC bidi to Soul, OpenAPI, MCP, push module, Reaper). | Keeper host (`/usr/local/bin/keeper`). |
+| `soul` | operator | Agent daemon. In push mode - the same binary, launched `soul apply` via SSH. | Managed host (`/usr/local/bin/soul`). |
+| `soul-lint` | operator | Offline linter Destiny/Service/Manifest/Scenario. | CI / dev machine. |
+| `soul-trial` | test tool | Offline destiny/scenario/migration challenge runner ([ADR-023](../adr/0023-trial-test-runner.md)). Not a camera artifact. | CI / dev machine. |
 
-### Где взять артефакты
+### Where to get artifacts
 
-| Способ | Команда / источник | Когда |
+| Method | Team/source | When |
 |---|---|---|
-| Из исходников | `make build` ([`Makefile`](../../Makefile)) | dev / staging. Бинари в `<module>/bin/<name>`. |
-| Нативные пакеты deb / rpm | `make pkg` (требует `nfpm`, см. [`deploy/README.md`](../../deploy/README.md)). Артефакты в `dist/pkg/`. | Прод-инсталляция на Linux. Конфиги nfpm — [`deploy/nfpm/`](../../deploy/nfpm/). |
-| Docker-образы | `docker build -f deploy/docker/<name>.Dockerfile -t soul-stack/<name> --build-arg VERSION=$(git describe …) .` (multi-stage, distroless runtime; см. [`deploy/README.md`](../../deploy/README.md)). | Контейнерная раскатка. |
-| SBOM | `make sbom` (CycloneDX через `cyclonedx-gomod`, режим `app`). Артефакты в `dist/sbom/`. | Требования compliance / supply-chain audit. |
+| From sources | `make build` ([`Makefile`](../../Makefile)) | dev / staging. Binary in `<module>/bin/<name>`. |
+| Native deb/rpm packages | `make pkg` (requires `nfpm`, see [`deploy/README.md`](../../deploy/README.md)). Artifacts in `dist/pkg/`. | Prod installation on Linux. nfpm configs - [`deploy/nfpm/`](../../deploy/nfpm/). |
+| Docker images | `docker build -f deploy/docker/<name>.Dockerfile -t soul-stack/<name> --build-arg VERSION=$(git describe …) .` (multi-stage, distroless runtime; see [`deploy/README.md`](../../deploy/README.md)). | Container rolling. |
+| SBOM | `make sbom` (CycloneDX via `cyclonedx-gomod`, mode `app`). Artifacts in `dist/sbom/`. | Compliance / supply-chain audit requirements. |
 
-`make pkg` пересобирает Linux-бинари под `PKG_ARCH` (`amd64` default, переопределяется `make pkg PKG_ARCH=arm64`) с `CGO_ENABLED=0 -trimpath -ldflags '-s -w'` и инжектит `VERSION` ldflags-ом (см. [`Makefile`](../../Makefile)).
+`make pkg` rebuilds Linux binaries under `PKG_ARCH` (`amd64` default, overridden by `make pkg PKG_ARCH=arm64`) with `CGO_ENABLED=0 -trimpath -ldflags '-s -w'` and injects `VERSION` ldflags (see [`Makefile`](../../Makefile)).
 
-Подпись образов (cosign / sigstore) — отложена до появления CI + registry (`make sign` — documented stub), см. [`deploy/README.md` § «Подпись образов»](../../deploy/README.md).
+Signing images (cosign / sigstore) - postponed until the appearance of CI + registry (`make sign` - documented stub), see [`deploy/README.md` § "Signing images"](../../deploy/README.md).
 
-## Системные требования
+## System Requirements
 
-### Keeper-хост
+### Keeper host
 
-| Параметр | Минимум | Рекомендуется |
+| Parameter | Minimum | Recommended |
 |---|---|---|
-| ОС | Linux x86_64 / arm64, kernel 5.10+ | RHEL/Alma/Rocky 9, Debian 12, Ubuntu 22.04 LTS |
+| OS | Linux x86_64 / arm64, kernel 5.10+ | RHEL/Alma/Rocky 9, Debian 12, Ubuntu 22.04 LTS |
 | systemd | 245+ (ProtectSystem=strict + LoadCredential) | 252+ |
-| CPU | 2 vCPU | 4-8 vCPU per-keeper-инстанс |
-| RAM | 1 GB | 4 GB per-keeper-инстанс (зависит от размера флота и Acolyte-пула) |
-| Диск (root FS) | 5 GB | 20 GB |
-| Диск `/var/lib/keeper` | 1 GB | 10 GB (TLS-материал, кеш плагинов, work-root git-резолва) |
-| Сетевые порты | см. [§ Сетевые порты](#сетевые-порты) | — |
+| CPU | 2 vCPU | 4-8 vCPU per-keeper instance |
+| RAM | 1 GB | 4 GB per-keeper instance (depending on the size of the fleet and Acolyte pool) |
+| Disk (root FS) | 5 GB | 20 GB |
+| Drive `/var/lib/keeper` | 1 GB | 10 GB (TLS material, plugin cache, git-resolve work root) |
+| Network Ports | see § Network ports | — |
 
-Хост запускается под отдельным системным пользователем `soul-stack` (см. шапку [`deploy/systemd/keeper.service`](../../deploy/systemd/keeper.service)). Hardening — жёсткий профиль (`ProtectSystem=strict`, `MemoryDenyWriteExecute`, `PrivateDevices`, …) — Keeper не меняет хост, ему изоляция не мешает.
+The host is launched under a separate system user `soul-stack` (see header [`deploy/systemd/keeper.service`](../../deploy/systemd/keeper.service)). Hardening - hard profile (`ProtectSystem=strict`, `MemoryDenyWriteExecute`, `PrivateDevices`, ...) - Keeper does not change the host, isolation does not interfere with it.
 
-### Soul-хост (управляемый)
+### Soul host (managed)
 
-| Параметр | Минимум | Рекомендуется |
+| Parameter | Minimum | Recommended |
 |---|---|---|
-| ОС | Linux x86_64 / arm64, kernel 5.4+ | любая поддерживаемая в [Soulprint OsFacts](../soul/soulprint.md) дистрибуция (debian/ubuntu/redhat-family/alpine) |
-| systemd | 245+ | по дистро |
+| OS | Linux x86_64 / arm64, kernel 5.4+ | any distribution supported in [Soulprint OsFacts](../soul/soulprint.md) (debian/ubuntu/redhat-family/alpine) |
+| systemd | 245+ | by distro |
 | CPU | 1 vCPU | 2 vCPU |
-| RAM | 256 MB | 1 GB (на момент apply больше — зависит от модулей) |
-| Диск `/var/lib/soul-stack` | 200 MB | 2 GB (кеш модулей по SHA-256, SoulSeed) |
-| Сетевые порты | egress к Keeper EventStream + bootstrap-listener-у | — |
+| RAM | 256 MB | 1 GB (more at the time of apply - depends on the modules) |
+| Drive `/var/lib/soul-stack` | 200 MB | 2 GB (module cache by SHA-256, SoulSeed) |
+| Network Ports | egress to Keeper EventStream + bootstrap-listener | — |
 
-Hardening Soul — **мягкий профиль** (см. [`deploy/systemd/soul.service`](../../deploy/systemd/soul.service)): Soul применяет Destiny (ставит пакеты, правит файлы, управляет сервисами), поэтому запись в систему НЕ запрещена. **Не ужесточать** `ProtectSystem=strict` без проверки apply-цикла — сломает core-модули.
+Hardening Soul - **soft profile** (see [`deploy/systemd/soul.service`](../../deploy/systemd/soul.service)): Soul uses Destiny (installs packages, edits files, manages services), so writing to the system is NOT prohibited. **Do not tighten** `ProtectSystem=strict` without checking the apply loop - it will break core modules.
 
-### Soul-host в push-режиме (без агента)
+### Soul-host in push mode (without agent)
 
-- SSH-доступ от Keeper-хоста.
-- Linux + base utilities (bash, coreutils, систем-pkg-mgr).
-- Каталог `/var/lib/soul-stack/{bin,modules}/` — Keeper кеширует там бинарь `soul` и модули по SHA-256, повторный прогон не докачивает (см. [`docs/keeper/push.md`](../keeper/push.md)).
-- Кеш-каталог чистится опциональным шагом в той же SSH-сессии (см. [`docs/keeper/push.md`](../keeper/push.md)), не Reaper-ом.
+- SSH access from Keeper host.
+- Linux + base utilities (bash, coreutils, systems-pkg-mgr).
+- Directory `/var/lib/soul-stack/{bin,modules}/` - Keeper caches the `soul` binary and SHA-256 modules there; a second run does not download it (see [`docs/keeper/push.md`](../keeper/push.md)).
+- The cache directory is cleared by an optional step in the same SSH session (see [`docs/keeper/push.md`](../keeper/push.md)), not by Reaper.
 
-## Сетевые порты
+## Network ports
 
-### Keeper (default listen-адреса из [config.md](../keeper/config.md#listen))
+### Keeper (default listen addresses from [config.md](../keeper/config.md#listen))
 
-| Порт | Назначение | Listener | TLS |
+| Port | Destination | Listener | TLS |
 |---|---|---|---|
-| `9442` | Bootstrap-RPC (онбординг Soul-ов) | `listen.grpc.bootstrap.addr` | server-only TLS |
-| `8443` | EventStream Keeper↔Soul (долгоживущий bidi) | `listen.grpc.event_stream.addr` | mTLS (валидация SoulSeed-сертификатов по `tls.ca`) |
-| `8080` | OpenAPI Operator API | `listen.openapi.addr` | поверх HTTPS (терминируется LB или прямо Keeper-ом, зависит от инсталляции) |
-| `8081` | MCP-сервер | `listen.mcp.addr` | то же |
-| `9090` | Prometheus `/metrics` | `listen.metrics.addr` | без TLS; защита — Basic-auth (`metrics.auth.basic`) опционально |
+| `9442` | Bootstrap-RPC (Soul onboarding) | `listen.grpc.bootstrap.addr` | server-only TLS |
+| `8443` | EventStream Keeper↔Soul (long-lived bidi) | `listen.grpc.event_stream.addr` | mTLS (validation of SoulSeed certificates according to `tls.ca`) |
+| `8080` | OpenAPI Operator API | `listen.openapi.addr` | over HTTPS (terminated by LB or directly by Keeper, depending on the installation) |
+| `8081` | MCP server | `listen.mcp.addr` | same |
+| `9090` | Prometheus `/metrics` | `listen.metrics.addr` | without TLS; protection - Basic-auth (`metrics.auth.basic`) optional |
 
-В прод-инсталляции — обычно за L4-LB / VIP (см. [`scaling.md`](scaling.md)). Bootstrap-listener (`9442`) и EventStream (`8443`) **обязательно** проброшены до Soul-флота с правильным TLS-материалом.
+In a production installation - usually for L4-LB / VIP (see [`scaling.md`](scaling.md)). Bootstrap-listener (`9442`) and EventStream (`8443`) are **required** forwarded to the Soul fleet with the correct TLS material.
 
 ### Soul
 
-| Порт | Назначение | Listener |
+| Port | Destination | Listener |
 |---|---|---|
-| `9091` (default) | Soul-side `/metrics` | `metrics.listen` — **по умолчанию loopback `127.0.0.1`** ([config.md → metrics](../soul/config.md#metrics)). Защита — Basic-auth опционально, источник пароля — `password_file` (у Soul нет vault-клиента). |
+| `9091` (default) | Soul-side `/metrics` | `metrics.listen` - **default loopback `127.0.0.1`** ([config.md → metrics](../soul/config.md#metrics)). Security - Basic-auth optional, password source - `password_file` (Soul does not have a vault client). |
 
-Soul **никогда не слушает входящие соединения от Keeper-а** — все коммуникации инициирует Soul через EventStream к Keeper-у ([ADR-002](../adr/0002-transport-grpc-ha.md#adr-002-транспорт-keeper--souls--grpc-bidirectional-stream-поверх-mtls-ha-кластер-keeper)). Никаких inbound-портов на управляемых хостах открывать не нужно.
+Soul **never listens to incoming connections from Keeper** - all communications are initiated by Soul via EventStream to Keeper ([ADR-002](../adr/0002-transport-grpc-ha.md#adr-002-transport-keeper--souls--grpc-bidirectional-stream-over-mtls-ha-keeper-cluster)). There is no need to open any inbound ports on managed hosts.
 
-## Раскладка файловой системы
+## File system layout
 
-### Keeper-хост
+### Keeper host
 
 ```
 /etc/keeper/
-  keeper.yml                      # рабочий конфиг (mode 0640, owner soul-stack)
+  keeper.yml                      # working config (mode 0640, owner soul-stack)
   keeper.env                      # KEEPER_CONFIG=/etc/keeper/keeper.yml (EnvironmentFile)
-  vault-secret-id                 # ТОЛЬКО при vault.auth.method=approle, mode 0400
+  vault-secret-id                 # ONLY with vault.auth.method=approle, mode 0400
   tls/
-    server.crt                    # серверный сертификат Keeper (Bootstrap + EventStream)
-    server.key                    # приватник
-    ca.crt                        # CA для валидации SoulSeed входящих Souls
+    server.crt                    # Keeper server certificate (Bootstrap + EventStream)
+    server.key                    # private
+    ca.crt                        # CA for SoulSeed validation of incoming Souls
 
-/var/lib/keeper/                  # ReadWritePaths systemd-юнита
-  state/                          # кеш / временные TLS-материалы (если используется)
+/var/lib/keeper/                  # ReadWritePaths systemd unit
+  state/                          # cache/temporary TLS stuff (if used)
 
 /var/lib/soul-stack-keeper/
-  plugins/                        # plugin cache_root (commit_sha-слоты резолвенных бинарей)
-  plugin-src/                     # plugin work_root (git-клоны резолвера); СТРОГО вне plugins/
+  plugins/                        # plugin cache_root (commit_sha slots of resolved binaries)
+  plugin-src/                     # plugin work_root (git resolver clones); STRICTLY out of plugins/
 
 /var/run/soul-stack-keeper/
-  plugins/                        # Unix-domain сокеты плагинов (mode 0700)
+  plugins/                        # Unix-domain plugin sockets (mode 0700)
 
 /var/log/keeper/
-  keeper.log                      # при logging.file задан; ротация встроенная
-  keeper-<timestamp>.log.gz       # архивы (rotation.max_files / max_age_days)
+  keeper.log                      # when logging.file is specified; rotation built-in
+  keeper-<timestamp>.log.gz       # archives (rotation.max_files / max_age_days)
 ```
 
-### Soul-хост
+### Soul host
 
 ```
 /etc/soul/
-  soul.yml                        # рабочий конфиг
+  soul.yml                        # working config
   soul.env                        # SOUL_CONFIG=/etc/soul/soul.yml
-  bootstrap-token                 # одноразовый, ПОСЛЕ онбординга удаляется (см. soul/onboarding.md)
+  bootstrap-token                 # one-time use, deleted AFTER onboarding (see soul/onboarding.md)
   seed/
-    soul.crt                      # SoulSeed (выпускается через CSR; приватник не покидает хост)
+    soul.crt                      # SoulSeed (released via CSR; private does not leave host)
     soul.key
 
 /var/lib/soul-stack/              # ReadWritePaths
-  bin/                            # кеш бинарей по SHA-256
-  modules/                        # кеш модулей по SHA-256
+  bin/                            # SHA-256 binary cache
+  modules/                        # SHA-256 module cache
 ```
 
-## SystemD-юниты
+## SystemD units
 
-Готовые юниты — в [`deploy/systemd/`](../../deploy/systemd/). Установка (одна за один к одному с инструкцией в шапке юнита):
+Ready units are in [`deploy/systemd/`](../../deploy/systemd/). Installation (one by one with instructions in the unit header):
 
 ```sh
-# на Keeper-хосте
+# on Keeper host
 useradd --system --no-create-home --shell /usr/sbin/nologin soul-stack
-install -m0755 dist/keeper /usr/local/bin/keeper           # или из deb/rpm
+install -m0755 dist/keeper /usr/local/bin/keeper           # or from deb/rpm
 install -d -o soul-stack -g soul-stack /etc/keeper /var/lib/keeper
 install -m0640 keeper.yml /etc/keeper/keeper.yml
 install -m0644 deploy/systemd/keeper.service /etc/systemd/system/keeper.service
@@ -144,22 +144,22 @@ install -m0644 deploy/systemd/keeper.env     /etc/keeper/keeper.env
 systemctl daemon-reload && systemctl enable --now keeper
 ```
 
-Соответственно для Soul-хоста с `deploy/systemd/soul.service`.
+Accordingly for the Soul host with `deploy/systemd/soul.service`.
 
-Юниты вынесли путь к конфигу в `EnvironmentFile` (`/etc/keeper/keeper.env` → `KEEPER_CONFIG=…`) — оператор меняет файл, не правит юнит. `Restart=on-failure` + `StartLimit{IntervalSec=60s,Burst=5}` — перезапуск при падении, не зацикливаемся при битом конфиге.
+Units have moved the path to the config to `EnvironmentFile` (`/etc/keeper/keeper.env` → `KEEPER_CONFIG=…`) - the operator changes the file, does not edit the unit. `Restart=on-failure` + `StartLimit{IntervalSec=60s,Burst=5}` - restart if it crashes, don't get stuck in a broken config.
 
-### Hot-reload через SIGHUP
+### Hot-reload via SIGHUP
 
-Изменения конфига применяются на лету через `systemctl reload keeper` ([ADR-021](../adr/0021-hot-reload-config.md#adr-021-hot-reload-конфига-с-write-back-yaml)). Per-блок политика — какие поля reload-able, какие требуют рестарта — в [`docs/keeper/config.md` → Hot-reload](../keeper/config.md#hot-reload).
+Config changes are applied on the fly via `systemctl reload keeper` ([ADR-021](../adr/0021-hot-reload-config.md)). Per-block policy - which fields are reloadable and which require a restart - in [`docs/keeper/config.md` → Hot-reload](../keeper/config.md#hot-reload).
 
-При успешном reload — audit-event `config.reload_succeeded` (`source=signal`), при провале — `config.reload_failed` (старый снимок остаётся активным, ошибка в логах).
+If the reload is successful - audit-event `config.reload_succeeded` (`source=signal`), if it fails - `config.reload_failed` (the old snapshot remains active, error in the logs).
 
-## Конфиг `keeper.yml` — обязательный минимум
+## Config `keeper.yml` - required minimum
 
-Полный контракт — [`docs/keeper/config.md`](../keeper/config.md). Минимум для прод-инсталляции:
+Full contract - [`docs/keeper/config.md`](../keeper/config.md). Minimum for production installation:
 
 ```yaml
-kid: keeper-prod-01                       # стабильный человекочитаемый ID инстанса
+kid: keeper-prod-01                       # stable human-readable instance ID
 
 listen:
   grpc:
@@ -174,7 +174,7 @@ listen:
   metrics: { addr: "0.0.0.0:9090" }
 
 postgres:
-  dsn_ref: vault:secret/keeper/postgres   # plaintext DSN запрещён, см. config.md
+  dsn_ref: vault:secret/keeper/postgres   # plaintext DSN is disabled, see config.md
   pool: { min: 5, max: 50 }
 
 redis:
@@ -184,7 +184,7 @@ redis:
 vault:
   addr: "https://vault.internal:8200"
   auth:
-    method: approle                       # прод — НЕ token, см. docs/keeper/prod-setup.md
+    method: approle                       # prod - NOT token, see docs/keeper/prod-setup.md
     role_id: keeper-prod
     secret_id_file: /etc/keeper/vault-secret-id
   pki_mount: "pki/soulstack"
@@ -219,25 +219,25 @@ reaper:
     purge_apply_runs:     { enabled: true, max_age: 30d, action: delete }
     purge_apply_task_register: { enabled: true, max_age: 1h, action: delete }
     archive_state_history: { enabled: true, keep_last_n: 50, keep_version_bump_snapshots: true, action: soft_delete }
-    # reclaim_apply_runs — ВЫКЛЮЧЕНО, включается только после раскатки fencing-Soul + acolytes>0,
-    # см. docs/keeper/reaper.md → Включение recovery
-    # reap_orphan_vault_keys — выключено, report-only; включать только при настроенном Vault list-policy
+    # reclaim_apply_runs — DISABLED, turns on only after rolling fencing-Soul + acolytes>0,
+    # see docs/keeper/reaper.md → Enabling recovery
+    # reap_orphan_vault_keys — disabled, report-only; enable only when Vault list-policy is configured
 ```
 
-Полный эталонный пример — [`examples/keeper/keeper.yml`](../../examples/keeper/keeper.yml). Vault AppRole + persistent storage + auto-unseal + JWT signing-key rotation подробно — [`docs/keeper/prod-setup.md`](../keeper/prod-setup.md).
+The complete reference example is [`examples/keeper/keeper.yml`](../../examples/keeper/keeper.yml). Vault AppRole + persistent storage + auto-unseal + JWT signing-key rotation details - [`docs/keeper/prod-setup.md`](../keeper/prod-setup.md).
 
-## Конфиг `soul.yml` — обязательный минимум
+## Config `soul.yml` - required minimum
 
-Полный контракт — [`docs/soul/config.md`](../soul/config.md). Минимум:
+Full contract - [`docs/soul/config.md`](../soul/config.md). Minimum:
 
 ```yaml
-sid: host-01.example.com                  # SID = FQDN, по умолчанию резолвится через hostname -f
+sid: host-01.example.com                  # SID = FQDN, resolves via hostname -f by default
 
 keeper:
   endpoints:
     - { addr: "keeper-1.internal:8443", priority: 1 }
-    - { addr: "keeper-2.internal:8443", priority: 1 }   # внутри priority — shuffle
-    - { addr: "keeper-3.internal:8443", priority: 2 }   # резерв (другой DC)
+    - { addr: "keeper-2.internal:8443", priority: 1 }   # inside priority - shuffle
+    - { addr: "keeper-3.internal:8443", priority: 2 }   # reserve (other DC)
   failback:
     interval: 1h
     spray: 5m
@@ -245,9 +245,9 @@ keeper:
 tls:
   cert: /etc/soul/seed/soul.crt
   key:  /etc/soul/seed/soul.key
-  ca:   /etc/soul/seed/ca.crt              # CA Keeper-а
+  ca:   /etc/soul/seed/ca.crt              # CA Keeper
 
-bootstrap_token_file: /etc/soul/bootstrap-token  # удаляется после онбординга
+bootstrap_token_file: /etc/soul/bootstrap-token  # is removed after onboarding
 
 metrics:
   listen: "127.0.0.1:9091"
@@ -263,11 +263,11 @@ logging:
   rotation: { max_size_mb: 50, max_age_days: 7, max_files: 5 }
 ```
 
-Алгоритм подключения (priority + failback + shuffle) — [`docs/soul/connection.md`](../soul/connection.md).
+Connection algorithm (priority + failback + shuffle) - [`docs/soul/connection.md`](../soul/connection.md).
 
-## Multi-keeper HA — топология
+## Multi-keeper HA - topology
 
-Несколько Keeper-инстансов с разным `kid` поверх общей Postgres + Redis ([ADR-002](../adr/0002-transport-grpc-ha.md#adr-002-транспорт-keeper--souls--grpc-bidirectional-stream-поверх-mtls-ha-кластер-keeper)). Stateless — любой инстанс обслуживает любой запрос.
+Several Keeper instances with different `kid` on top of the common Postgres + Redis ([ADR-002](../adr/0002-transport-grpc-ha.md#adr-002-transport-keeper--souls--grpc-bidirectional-stream-over-mtls-ha-keeper-cluster)). Stateless - any instance serves any request.
 
 ```
                     ┌────────────── L4-LB / VIP ──────────────┐
@@ -290,50 +290,50 @@ logging:
                       └──────────┘        └──────────┘
 ```
 
-Раскатка multi-keeper подробно — [`scaling.md`](scaling.md). Главные инварианты:
+Rolling out multi-keeper in detail - [`scaling.md`](scaling.md). Main invariants:
 
-- **Каждый инстанс — свой `kid`** (kebab-case, уникален в кластере; конфликт → `ErrConclaveKIDTaken`, см. [Conclave](../adr/0006-cache-redis.md#adr-006-кэш-и-координация--redis)).
-- **`acolytes > 0` ОБЯЗАТЕЛЬНО** при N > 1 живых Keeper-инстансов ([ADR-027](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim)). Refuse-guard отказывается стартовать при нарушении.
-- **JWT signing-key, mTLS-материал, Vault-конфигурация — одинаковы на всех инстансах** (signing-key из общего Vault KV, mTLS — один issuing CA).
-- **`tls.cert` / `tls.key` могут отличаться** между инстансами, если за разными VIP-ами стоят разные SAN-ы, но обычно один wildcard-сертификат на весь кластер.
+- **Each instance has its own `kid`** (kebab-case, unique in the cluster; conflict → `ErrConclaveKIDTaken`, see [Conclave](../adr/0006-cache-redis.md)).
+- **`acolytes > 0` MANDATORY** for N > 1 live Keeper instances ([ADR-027](../adr/0027-apply-work-queue.md)). Refuse-guard refuses to start if violated.
+- **JWT signing-key, mTLS material, Vault configuration are the same on all instances** (signing-key from the common Vault KV, mTLS - one issuing CA).
+- **`tls.cert` / `tls.key` may differ** between instances if different VIPs have different SANs, but usually there is one wildcard certificate for the entire cluster.
 
-## L4 балансировщик
+## L4 balancer
 
-EventStream — долгоживущий gRPC bidi-стрим (часы / дни). Поэтому:
+EventStream - long-lived gRPC bidi stream (hours/days). Therefore:
 
-- **L4-балансировщик (TCP)**, не L7. gRPC через L7-proxy (envoy / haproxy в HTTP-mode) терпит, но не даёт ничего сверх — для bidi нужен прозрачный TCP.
-- **least-connections** распределяет нагрузку EventStream равномерно при scale-out.
-- **Sticky-session НЕ нужен** — присоединение Soul-а через SID-lease в Redis ([ADR-006](../adr/0006-cache-redis.md#adr-006-кэш-и-координация--redis)) уже даёт «один Soul → один инстанс» на стороне Soul-Stack, инвариант не зависит от LB.
-- **Health-check** — `/readyz` Keeper-а (зависит от listener-а `openapi.addr`; для L4-LB достаточно TCP-probe порта `8443`).
-- **Drain при scale-down** — graceful shutdown Keeper-а отдаст SIGTERM (`shutdown_grace`); Conclave-presence снимается → Watchman-cascade на других инстансах НЕ срабатывает (Watchman реагирует только на изоляцию). Soul-ы получают EOF на текущем EventStream → failback на следующий endpoint из priority-листа.
+- **L4 load balancer (TCP)**, not L7. gRPC via L7-proxy (envoy / haproxy in HTTP mode) tolerates, but does not give anything extra - bidi requires transparent TCP.
+- **least-connections** distributes the EventStream load evenly at scale-out.
+- **Sticky-session is NOT needed** - joining Soul via SID-lease in Redis ([ADR-006](../adr/0006-cache-redis.md)) already gives "one Soul → one instance" on the Soul-Stack side, the invariant does not depend on LB.
+- **Health-check** — `/readyz` Keeper (depends on listener `openapi.addr`; for L4-LB the TCP-probe port `8443` is sufficient).
+- **Drain with scale-down** — graceful shutdown Keeper will give SIGTERM (`shutdown_grace`); Conclave-presence is removed → Watchman-cascade does NOT work on other instances (Watchman only responds to isolation). Souls receive EOF on the current EventStream → failback to the next endpoint from the priority list.
 
-OpenAPI / MCP (`8080` / `8081`) можно класть за L7-proxy (TLS termination + HTTP routing). Bootstrap-RPC (`9442`) — единичный unary, можно и за L4, и за L7.
+OpenAPI / MCP (`8080` / `8081`) can be placed behind L7-proxy (TLS termination + HTTP routing). Bootstrap-RPC (`9442`) - single unary, possible for both L4 and L7.
 
-## Раскатка по шагам — single-keeper (минимум для smoke)
+## Rolling out step by step - single-keeper (minimum for smoke)
 
-1. **Инфра:** поднять Postgres + Redis + Vault (по [`infra.md`](infra.md)).
-2. **Vault provision:** записать `secret/keeper/postgres` (поле `dsn`), `secret/keeper/jwt-signing-key` (поле `signing_key`), `secret/keeper/redis` (поле `password`). Создать AppRole `keeper-prod` + policy ([`docs/keeper/prod-setup.md`](../keeper/prod-setup.md)).
-3. **TLS:** выпустить серверный сертификат Keeper и CA для SoulSeed.
-4. **Keeper-хост:** установить deb/rpm, создать `/etc/keeper/keeper.yml` (минимум выше), запустить через systemd.
-5. **Bootstrap первого Архонта:** `keeper init --archon=archon-alice --config=/etc/keeper/keeper.yml --credential-out=/etc/keeper/archon-alice.jwt` ([`bootstrap-rbac.md`](bootstrap-rbac.md)).
-6. **Smoke:** `curl -H "Authorization: Bearer $(cat /etc/keeper/archon-alice.jwt)" https://keeper-1.internal:8080/v1/operators` — должен вернуть `200` со списком Архонтов.
+1. **Infra:** raise Postgres + Redis + Vault (by [`infra.md`](infra.md)).
+2. **Vault provision:** write `secret/keeper/postgres` (field `dsn`), `secret/keeper/jwt-signing-key` (field `signing_key`), `secret/keeper/redis` (field `password`). Create AppRole `keeper-prod` + policy ([`docs/keeper/prod-setup.md`](../keeper/prod-setup.md)).
+3. **TLS:** issue Keeper and CA server certificate for SoulSeed.
+4. **Keeper host:** install deb/rpm, create `/etc/keeper/keeper.yml` (minimum above), run via systemd.
+5. **Bootstrap of the first Archon:** `keeper init --archon=archon-alice --config=/etc/keeper/keeper.yml --credential-out=/etc/keeper/archon-alice.jwt` ([`bootstrap-rbac.md`](bootstrap-rbac.md)).
+6. **Smoke:** `curl -H "Authorization: Bearer $(cat /etc/keeper/archon-alice.jwt)" https://keeper-1.internal:8080/v1/operators` - should return `200` with a list of Archons.
 
-## Раскатка по шагам — multi-keeper HA
+## Rolling out step by step - multi-keeper HA
 
-После single-keeper:
+After single-keeper:
 
-1. **Подготовить N-1 хостов** — те же требования, тот же deb/rpm, та же `keeper.yml` (с разным `kid:` на каждом).
-2. **acolytes > 0** в `keeper.yml` всех инстансов (см. [`scaling.md`](scaling.md)).
-3. **L4-LB** перед EventStream / Bootstrap-портами + L7-proxy перед OpenAPI / MCP. Health-check — TCP-probe `8443`.
-4. **Soul-конфиги** — указать все Keeper-endpoint-ы (можно через LB VIP, можно прямые адреса с priority). Зависит от модели failover в инсталляции.
-5. **Conclave-проверка:** `redis-cli KEYS 'keeper:instance:*'` показывает N ключей через 10s после старта последнего инстанса (TTL 30s, renew 10s).
-6. **Reaper-leader unique:** `sum(keeper_reaper_lease_held) == 1` в Prometheus (см. [`monitoring.md`](monitoring.md)).
+1. **Prepare N-1 hosts** - same requirements, same deb/rpm, same `keeper.yml` (with different `kid:` on each).
+2. **acolytes > 0** in `keeper.yml` of all instances (see [`scaling.md`](scaling.md)).
+3. **L4-LB** before EventStream / Bootstrap ports + L7-proxy before OpenAPI / MCP. Health-check - TCP-probe `8443`.
+4. **Soul-configs** — specify all Keeper-endpoints (you can use LB VIP, you can direct addresses with priority). Depends on the failover model in the installation.
+5. **Conclave check:** `redis-cli KEYS 'keeper:instance:*'` shows N keys 10s after the start of the last instance (TTL 30s, renew 10s).
+6. **Reaper-leader unique:** `sum(keeper_reaper_lease_held) == 1` in Prometheus (see [`monitoring.md`](monitoring.md)).
 
-## См. также
+## See also
 
 - [`docs/keeper/prod-setup.md`](../keeper/prod-setup.md) — Vault AppRole + persistent + auto-unseal + JWT signing-key rotation.
-- [`docs/keeper/config.md`](../keeper/config.md) — полный нормативный контракт `keeper.yml`.
+- [`docs/keeper/config.md`](../keeper/config.md) - complete regulatory contract `keeper.yml`.
 - [`docs/soul/config.md`](../soul/config.md) — `soul.yml`.
 - [`deploy/README.md`](../../deploy/README.md) — Docker / systemd / nfpm.
 - [`scaling.md`](scaling.md) — multi-keeper / Acolyte / Conclave / Watchman.
-- [`bootstrap-rbac.md`](bootstrap-rbac.md) — `keeper init`, второй+ Архонт, RBAC.
+- [`bootstrap-rbac.md`](bootstrap-rbac.md) - `keeper init`, second+ Archon, RBAC.

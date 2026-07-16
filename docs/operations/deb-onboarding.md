@@ -1,207 +1,207 @@
-# Онбординг кластера из deb-пакетов
+# Onboarding a cluster from deb packages
 
-Этот гайд — пошаговая инструкция «с нуля до connected Soul» для оператора, который ставит Soul Stack из наших deb-пакетов на свою инфраструктуру. Он покрывает установку, провижининг Vault, выпуск TLS-материала Keeper-а, заполнение конфигов, bootstrap первого Архонта и онбординг первого Soul.
+This guide is a step-by-step instruction "from scratch to connected Soul" for an operator who installs Soul Stack from our deb packages on his infrastructure. It covers installation, Vault provisioning, release of Keeper TLS material, filling out configs, bootstrap of the first Archon and onboarding of the first Soul.
 
-Это **операционный туториал**, не reference-спека. Где нужна полная грамматика конфига или контракт RPC — даю ссылку на нормативный документ. Сам гайд держится на реальных файлах репозитория: пакеты — [`deploy/nfpm/`](../../deploy/nfpm/), юниты — [`deploy/systemd/`](../../deploy/systemd/), примеры конфигов — [`examples/keeper/keeper.yml`](../../examples/keeper/keeper.yml) / [`examples/soul/soul.yml`](../../examples/soul/soul.yml).
+This is an **operational tutorial**, not a reference spec. Where a complete config grammar or RPC contract is needed, I provide a link to the regulatory document. The guide itself is based on real repository files: packages - [`deploy/nfpm/`](../../deploy/nfpm/), units - [`deploy/systemd/`](../../deploy/systemd/), example configs - [`examples/keeper/keeper.yml`](../../examples/keeper/keeper.yml) / [`examples/soul/soul.yml`](../../examples/soul/soul.yml).
 
-> **Рамка пакетов.** Наши deb-пакеты несут **только** бинари (`keeper` / `soul` / `soul-lint`), systemd-юниты и примеры конфигов. **Postgres, Redis и Vault мы НЕ пакуем** — это внешняя инфраструктура, которую оператор поднимает и эксплуатирует сам. Гайд предполагает, что они уже доступны. Прод-требования к ним — [infra.md](infra.md); отличия dev↔прод — [keeper/prod-setup.md](../keeper/prod-setup.md).
+> **Package frame.** Our deb packages carry **only** binaries (`keeper` / `soul` / `soul-lint`), systemd units and example configs. **We DO NOT package Postgres, Redis and Vault** - this is an external infrastructure that the operator raises and operates himself. The guide assumes that they are already available. Product requirements for them - [infra.md](infra.md); differences dev↔prod - [keeper/prod-setup.md](../keeper/prod-setup.md).
 
-Связанные документы: общая дока развёртывания (топологии, LB, HA) — [deployment.md](deployment.md); прод-настройка Vault/AppRole/policy — [keeper/prod-setup.md](../keeper/prod-setup.md); RBAC и первый Архонт — [bootstrap-rbac.md](bootstrap-rbac.md); механизм bootstrap-токена и `soul init` — [soul/onboarding.md](../soul/onboarding.md).
+Related documents: general deployment dock (topologies, LB, HA) - [deployment.md](deployment.md); prod-setup Vault/AppRole/policy - [keeper/prod-setup.md](../keeper/prod-setup.md); RBAC and the first Archon - [bootstrap-rbac.md](bootstrap-rbac.md); bootstrap token mechanism and `soul init` - [soul/onboarding.md](../soul/onboarding.md).
 
-## 1. Предпосылки
+## 1. Prerequisites
 
-### Внешняя инфраструктура
+### External infrastructure
 
-Прежде чем ставить пакеты, у оператора должны быть доступны три внешних компонента. Минимальный обязательный контур — **Postgres + Redis**; Vault в проде нужен для PKI (SoulSeed) и хранения секретов.
+Before installing packages, the operator must have three external components available. The minimum required loop is **Postgres + Redis**; Vault in production is needed for PKI (SoulSeed) and storing secrets.
 
-| Компонент | Зачем | Чек-лист готовности |
+| Component | Why | Readiness checklist |
 |---|---|---|
-| **Postgres** | Единственное холодное хранилище Keeper-кластера ([ADR-005](../adr/0005-storage-postgres.md#adr-005-хранилище-состояния-keeper--postgres)): реестры `souls` / `operators`, Destiny-каталог, журналы | Доступен по сети с keeper-хостов; есть БД + роль с правами на DDL (миграции применяются идемпотентно при старте Keeper-а); снят DSN-строкой |
-| **Redis** | Heartbeat-кэш, lease на SID, pub/sub между Keeper-инстансами, лидер Reaper ([ADR-006](../adr/0006-cache-redis.md#adr-006-кэш-и-координация--redis)) | Доступен по сети; известны `addr` и пароль |
-| **Vault** | PKI для выпуска SoulSeed (mTLS), хранение KV-секретов (DSN / Redis-пароль / JWT signing-key), persistent backend + auto-unseal | Unsealed, доступен по HTTPS; есть права завести PKI mount + AppRole (см. шаг 3) |
+| **Postgres** | The only cold storage of the Keeper cluster ([ADR-005](../adr/0005-storage-postgres.md#adr-005-keeper-state-storage--postgres)): registries `souls` / `operators`, Destiny directory, logs | Accessible over the network from keeper hosts; there is a database + role with rights to DDL (migrations are applied idempotently when Keeper starts); removed by DSN string |
+| **Redis** | Heartbeat cache, lease on SID, pub/sub between Keeper instances, leader Reaper ([ADR-006](../adr/0006-cache-redis.md)) | Available online; known `addr` and password |
+| **Vault** | PKI for SoulSeed release (mTLS), storing KV secrets (DSN / Redis password / JWT signing-key), persistent backend + auto-unseal | Unsealed, available via HTTPS; you have the rights to create a PKI mount + AppRole (see step 3) |
 
-Прод-требования к каждому (версии, persistent backend, auto-unseal, least-privilege policy) — нормативно в [infra.md](infra.md) и [keeper/prod-setup.md → Vault](../keeper/prod-setup.md#vault-approle--persistent--auto-unseal). Здесь они уже подняты вашей командой эксплуатации.
+Prod requirements for each (versions, persistent backend, auto-unseal, least-privilege policy) - normative in [infra.md](infra.md) and [keeper/prod-setup.md → Vault](../keeper/prod-setup.md#vault-approle--persistent--auto-unseal). Here they are already raised by your operations team.
 
-### Порты и firewall
+### Ports and firewall
 
-Keeper слушает несколько listener-ов на разных портах (значения из [`examples/keeper/keeper.yml`](../../examples/keeper/keeper.yml) — оператор может изменить):
+Keeper listens to several listeners on different ports (values from [`examples/keeper/keeper.yml`](../../examples/keeper/keeper.yml) - the operator can change):
 
-| Порт | Listener | Протокол | Кто ходит |
+| Port | Listener | Protocol | Who's walking |
 |---|---|---|---|
-| `9442` | `listen.grpc.bootstrap` | server-only TLS | Soul на фазе `soul init` (bootstrap-токен + CSR) |
-| `8443` | `listen.grpc.event_stream` | mTLS | Soul на фазе `soul run` (долгоживущий EventStream-стрим) |
-| `8080` | `listen.openapi` | HTTP | Операторы (Operator API), health-check (`/readyz`) |
-| `8081` | `listen.mcp` | HTTP | MCP-клиенты |
+| `9442` | `listen.grpc.bootstrap` | server-only TLS | Soul at phase `soul init` (bootstrap token + CSR) |
+| `8443` | `listen.grpc.event_stream` | mTLS | Soul on phase `soul run` (long-lived EventStream stream) |
+| `8080` | `listen.openapi` | HTTP | Operators (Operator API), health-check (`/readyz`) |
+| `8081` | `listen.mcp` | HTTP | MCP clients |
 | `9090` | `listen.metrics` | HTTP | Prometheus scrape (`/metrics`) |
 
-На Soul-хостах наружу слушает только метрики-listener (`metrics.listen`, по умолчанию `127.0.0.1:9091` в [`examples/soul/soul.yml`](../../examples/soul/soul.yml) — локально, не наружу). Соединение к Keeper-у Soul инициирует сам ([ADR-002](../adr/0002-transport-grpc-ha.md#adr-002-транспорт-keeper--souls--grpc-bidirectional-stream-поверх-mtls-ha-кластер-keeper)).
+On Soul hosts, only metrics-listeners listen outside (`metrics.listen`, by default `127.0.0.1:9091` in [`examples/soul/soul.yml`](../../examples/soul/soul.yml) - locally, not outside). Soul initiates the connection to the Keeper itself ([ADR-002](../adr/0002-transport-grpc-ha.md#adr-002-transport-keeper--souls--grpc-bidirectional-stream-over-mtls-ha-keeper-cluster)).
 
-Firewall-правила:
+Firewall rules:
 
-- **На keeper-хостах** — открыть входящие `9442` и `8443` для подсети управляемых хостов; `8080` / `8081` — для операторской/MCP-сети; `9090` — для Prometheus.
-- **С keeper-хостов наружу** — доступ к Postgres / Redis / Vault и (для git-резолва сервисов/плагинов) к git-хостингу.
-- **С soul-хостов наружу** — доступ к keeper-ам на `9442` и `8443`.
+- **On keeper hosts** — open incoming `9442` and `8443` for the subnet of managed hosts; `8080` / `8081` - for operator/MCP network; `9090` - for Prometheus.
+- **From keeper hosts to the outside** - access to Postgres / Redis / Vault and (for git resolution of services/plugins) to git hosting.
+- **From soul hosts to the outside** - access to keepers on `9442` and `8443`.
 
-Полная сетевая топология (LB, L4-probe `8443`, разнесение портов) — [deployment.md](deployment.md).
+Full network topology (LB, L4-probe `8443`, port spacing) - [deployment.md](deployment.md).
 
-### FQDN и SID
+### FQDN and SID
 
-`SID` управляемого хоста = его **FQDN** (Идентичность Soul, [soul/identity.md](../soul/identity.md)). `soul init` по умолчанию берёт SID из `os.Hostname()`, приводя к lower-case. Требования:
+`SID` managed host = its **FQDN** (Soul Identity, [soul/identity.md](../soul/identity.md)). `soul init` by default takes the SID from `os.Hostname()`, resulting in lower-case. Requirements:
 
-- FQDN хостов должны резолвиться (DNS / `/etc/hosts`) и матчить `^[a-z0-9][a-z0-9.-]{0,253}$` — иначе `soul init` упадёт с `invalid sid`.
-- FQDN-ы keeper-ов, которые вы кладёте в `soul.yml::keeper.endpoints[].host`, должны входить в SAN серверного сертификата Keeper-а (см. шаг 4) — иначе TLS-верификация на bootstrap не пройдёт.
+- FQDN of hosts must resolve (DNS / `/etc/hosts`) and match `^[a-z0-9][a-z0-9.-]{0,253}$` - otherwise `soul init` will fall from `invalid sid`.
+- The keeper FQDNs that you put in `soul.yml::keeper.endpoints[].host` must be included in the SAN of the Keeper server certificate (see step 4) - otherwise TLS verification on bootstrap will not work.
 
-## 2. Установка пакетов
+## 2. Installing packages
 
-Три пакета (`make pkg` собирает deb + rpm в `dist/`):
+Three packages (`make pkg` builds deb + rpm into `dist/`):
 
-| Пакет | Куда ставить | Что несёт |
+| Package | Where to put | What does it carry |
 |---|---|---|
-| `soul-stack-keeper` | центральный узел (1+ инстанс) | `keeper` + systemd-юнит + env + пример конфига |
-| `soul-stack-soul` | каждый управляемый хост | `soul` + systemd-юнит + env + пример конфига |
-| `soul-stack-soul-lint` | рабочая станция оператора / CI | только `soul-lint` (CLI, без демона/конфига) |
+| `soul-stack-keeper` | central node (1+ instance) | `keeper` + systemd-unit + env + example config |
+| `soul-stack-soul` | each managed host | `soul` + systemd-unit + env + example config |
+| `soul-stack-soul-lint` | operator/CI workstation | `soul-lint` only (CLI, no daemon/config) |
 
-### Keeper (на центральном узле)
+### Keeper (on the central node)
 
 ```sh
 sudo dpkg -i soul-stack-keeper_<version>_amd64.deb
 ```
 
-Пакет ([`deploy/nfpm/keeper.yaml`](../../deploy/nfpm/keeper.yaml)) раскладывает:
+Package ([`deploy/nfpm/keeper.yaml`](../../deploy/nfpm/keeper.yaml)) decomposes:
 
-| Путь | Что | Заметка |
+| Path | What | Note |
 |---|---|---|
-| `/usr/local/bin/keeper` | бинарь, `0755` | — |
-| `/etc/systemd/system/keeper.service` | systemd-юнит | `Type=exec`, `User=soul-stack`, hardening (`ProtectSystem=strict`, единственный writable `/var/lib/keeper`) |
-| `/etc/keeper/keeper.env` | env-файл, `config|noreplace` | задаёт `KEEPER_CONFIG=/etc/keeper/keeper.yml`; upgrade его не перетирает |
-| `/etc/keeper/keeper.yml.example` | пример конфига, `0640` | **рабочий конфиг создаёт оператор** копированием (шаг 5) |
+| `/usr/local/bin/keeper` | binary, `0755` | — |
+| `/etc/systemd/system/keeper.service` | systemd-unit | `Type=exec`, `User=soul-stack`, hardening (`ProtectSystem=strict`, single writable `/var/lib/keeper`) |
+| `/etc/keeper/keeper.env` | env file, `config|noreplace` | sets `KEEPER_CONFIG=/etc/keeper/keeper.yml`; upgrade doesn't erase it |
+| `/etc/keeper/keeper.yml.example` | example config, `0640` | **working config is created by operator** by copying (step 5) |
 
-> **Почему `.yml.example`, а не `.yml`.** Пакет намеренно кладёт пример отдельным именем, чтобы `dpkg upgrade` никогда не трогал ваш рабочий `/etc/keeper/keeper.yml`. Первичную копию делаете руками.
+> **Why `.yml.example` and not `.yml`.** The package deliberately puts the example in a separate name so that `dpkg upgrade` never touches your worker `/etc/keeper/keeper.yml`. You make the primary copy by hand.
 
-### Soul (на каждом управляемом хосте)
+### Soul (on each managed host)
 
 ```sh
 sudo dpkg -i soul-stack-soul_<version>_amd64.deb
 ```
 
-Пакет ([`deploy/nfpm/soul.yaml`](../../deploy/nfpm/soul.yaml)) раскладывает симметрично: `/usr/local/bin/soul`, `/etc/systemd/system/soul.service`, `/etc/soul/soul.env` (`SOUL_CONFIG=/etc/soul/soul.yml`), `/etc/soul/soul.yml.example`.
+Package ([`deploy/nfpm/soul.yaml`](../../deploy/nfpm/soul.yaml)) decomposes symmetrically: `/usr/local/bin/soul`, `/etc/systemd/system/soul.service`, `/etc/soul/soul.env` (`SOUL_CONFIG=/etc/soul/soul.yml`), `/etc/soul/soul.yml.example`.
 
-> **Hardening soul-юнита мягче keeper-а.** Soul применяет Destiny (ставит пакеты, правит файлы, управляет сервисами) — это требует реальных привилегий на хосте, поэтому жёсткие `ProtectSystem=strict` / `MemoryDenyWriteExecute` для него **не** ставятся ([`deploy/systemd/soul.service`](../../deploy/systemd/soul.service), комментарий в шапке). Единственный writable-путь — `/var/lib/soul-stack` (кеш модулей по SHA-256 + SoulSeed).
+> **Hardening soul unit is softer than keeper.** Soul uses Destiny (installs packages, edits files, manages services) - this requires real privileges on the host, so hard `ProtectSystem=strict` / `MemoryDenyWriteExecute` are **not** set for it ([`deploy/systemd/soul.service`](../../deploy/systemd/soul.service), comment in the header). The only writable path is `/var/lib/soul-stack` (SHA-256 + SoulSeed module cache).
 
-### Системный пользователь и каталоги
+### System user and directories
 
-Оба юнита работают под системным пользователем `soul-stack`. Пакет тянет `adduser` (deb) как зависимость, но **создание пользователя и каталогов состояния — за оператором** (юниты ожидают их готовыми). На каждом хосте один раз:
+Both units are running under the system user `soul-stack`. The package pulls `adduser` (deb) as a dependency, but **creation of the user and state directories is up to the operator** (units expect them ready). Once on each host:
 
-**На keeper-хосте:**
+**On keeper host:**
 
 ```sh
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin soul-stack
 sudo install -d -o soul-stack -g soul-stack /etc/keeper /var/lib/keeper
 ```
 
-**На soul-хосте:**
+**On soul host:**
 
 ```sh
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin soul-stack
 sudo install -d -o soul-stack -g soul-stack /etc/soul /var/lib/soul-stack
 ```
 
-(Конкретные команды — в шапках [`deploy/systemd/keeper.service`](../../deploy/systemd/keeper.service) и [`deploy/systemd/soul.service`](../../deploy/systemd/soul.service).)
+(Specific commands are in the [`deploy/systemd/keeper.service`](../../deploy/systemd/keeper.service) and [`deploy/systemd/soul.service`](../../deploy/systemd/soul.service) headers.)
 
-`soul-lint` — просто CLI без демона, ставится одним `dpkg -i`, никакой настройки не требует.
+`soul-lint` - just a CLI without a daemon, installed by one `dpkg -i`, does not require any configuration.
 
-## 3. Провижининг Vault
+## 3. Vault provisioning
 
-Эти шаги оператор выполняет **на своём проде-Vault** (под токеном/политикой с правами на mount-ы). Команды переложены с реального dev-провижининга [`dev/provision.sh`](../../dev/provision.sh) на прод — в dev там dev-mode Vault и root-токен, в проде те же операции делаются под админ-доступом к Vault с persistent backend и auto-unseal.
+The operator performs these steps **on his product Vault** (under a token/policy with rights to mounts). The commands have been transferred from real dev provisioning [`dev/provision.sh`](../../dev/provision.sh) to prod - in dev there is a dev-mode Vault and a root token, in prod the same operations are done under admin access to Vault with persistent backend and auto-unseal.
 
-> **dev↔прод.** В dev `provision.sh` пишет секреты под `root`-токеном в dev-mode (секреты в RAM). В проде: persistent backend, auto-unseal, узкая least-privilege policy для самого Keeper-а ([`examples/keeper/vault-policy.hcl`](../../examples/keeper/vault-policy.hcl)). Провижининг ниже — разовая admin-операция, отдельная от рантайм-доступа Keeper-а.
+> **dev↔cont.** In dev `provision.sh` writes secrets under the `root` token in dev-mode (secrets in RAM). In production: persistent backend, auto-unseal, narrow least-privilege policy for Keeper itself ([`examples/keeper/vault-policy.hcl`](../../examples/keeper/vault-policy.hcl)). Provisioning below is a one-time admin operation, separate from Keeper runtime access.
 
-### 3.1. KV-секреты
+### 3.1. KV secrets
 
-Keeper резолвит DSN Postgres, пароль Redis и JWT signing-key через `vault:`-ref-ы из конфига. Записать их в KV (mount `secret/`):
+Keeper resolves Postgres DSN, Redis password and JWT signing-key via `vault:`-refs from the config. Write them to KV (mount `secret/`):
 
 ```sh
-# DSN внешнего Postgres оператора (поле `dsn`)
+# DSN of external Postgres operator (field `dsn`)
 vault kv put secret/keeper/postgres \
   dsn="postgres://keeper:<password>@pg.internal:5432/keeper?sslmode=require"
 
-# Пароль внешнего Redis оператора (поле, на которое указывает redis.password_ref)
+# External Redis operator password (field pointed to by redis.password_ref)
 vault kv put secret/keeper/redis \
   password="<redis-password>"
 
-# JWT signing-key операторов (поле `signing_key`) — 32 байта рандома, base64.
-# Сгенерировать ОДИН раз и зафиксировать: смена ключа инвалидирует все живые JWT.
+# JWT signing-key operators (field `signing_key`) - 32 bytes of random, base64.
+# Generate ONCE and commit: changing the key invalidates all live JWTs.
 vault kv put secret/keeper/jwt-signing-key \
   signing_key="$(openssl rand -base64 32)"
 ```
 
-> **JWT signing-key не перегенерировать.** Если ключ уже записан — не трогать. Любая смена инвалидирует все ранее выпущенные операторские JWT (подпись не сойдётся). Ротация — отдельная плановая процедура ([keeper/prod-setup.md → Ротация signing-key](../keeper/prod-setup.md#jwt-signing-key-прод)).
+> **JWT signing-key should not be regenerated.** If the key has already been written down, do not touch it. Any change invalidates all previously issued operator JWTs (the signature will not match). Rotation is a separate planned procedure ([keeper/prod-setup.md → Rotation signing-key](../keeper/prod-setup.md)).
 
-### 3.2. PKI: mount + root + роль `soul-seed`
+### 3.2. PKI: mount + root + role `soul-seed`
 
-PKI выпускает SoulSeed-сертификаты (mTLS-пары Soul ↔ Keeper). В [`examples/keeper/keeper.yml`](../../examples/keeper/keeper.yml) mount — `pki/soulstack`; ниже для примера используем `pki/` (как в dev), под свой mount поправьте пути.
+PKI issues SoulSeed certificates (mTLS Soul ↔ Keeper pairs). In [`examples/keeper/keeper.yml`](../../examples/keeper/keeper.yml) mount is `pki/soulstack`; Below, for example, we use `pki/` (as in dev), correct the paths to suit your mount.
 
 ```sh
-# 1. Включить PKI-engine и поднять max-lease-ttl
+# 1. Enable PKI-engine and raise max-lease-ttl
 vault secrets enable -path=pki pki
 vault secrets tune -max-lease-ttl=87600h pki
 
-# 2. Сгенерировать root-сертификат (CN — общий якорь доверия для всех SoulSeed
-#    и серверного cert-а Keeper-а; см. шаг 4)
+# 2. Generate a root certificate (CN - common trust anchor for all SoulSeed
+#    and Keeper server cert; see step 4)
 vault write pki/root/generate/internal \
   common_name="soul-stack" ttl=87600h
 
-# 3. Роль soul-seed: домены/SAN, разрешённые для выпускаемых сертификатов.
-#    allowed_domains — под FQDN-схему ваших хостов (НЕ example.com/test из dev).
+# 3. Soul-seed role: domains/SANs allowed for issued certificates.
+#    allowed_domains - for the FQDN scheme of your hosts (NOT example.com/test from dev).
 vault write pki/roles/soul-seed \
   allowed_domains="internal,<your-domain>" \
   allow_subdomains=true \
   max_ttl=720h
 ```
 
-### 3.3. AppRole для рантайм-доступа Keeper-а
+### 3.3. AppRole for Keeper runtime access
 
-В проде Keeper аутентифицируется в Vault через AppRole (не root-токен). Создать роль, привязав least-privilege policy:
+In production, Keeper authenticates to Vault via an AppRole (not a root token). Create a role by binding least-privilege policy:
 
 ```sh
-# Узкая policy (шаблон с покомментированными путями — examples/keeper/vault-policy.hcl)
+# Narrow policy (template with commented paths - examples/keeper/vault-policy.hcl)
 vault policy write keeper-prod examples/keeper/vault-policy.hcl
 
-# Роль с привязкой policy
+# Role with policy binding
 vault write auth/approle/role/keeper-prod \
   token_policies=keeper-prod \
   secret_id_ttl=720h token_ttl=1h token_max_ttl=24h
 
-# role_id — НЕ секрет, пойдёт в keeper.yml::vault.auth.role_id
+# role_id - NOT a secret, will go to keeper.yml::vault.auth.role_id
 vault read auth/approle/role/keeper-prod/role-id
 
-# secret_id — СЕКРЕТ, положить в файл mode 0400 (шаг 5)
+# secret_id — SECRET, put mode 0400 in file (step 5)
 vault write -f auth/approle/role/keeper-prod/secret-id
 ```
 
-`role_id` — идентификатор роли, не секрет (хранится открыто в `keeper.yml`). `secret_id` — секрет, в конфиге plaintext-ом **не хранится**, источник — локальный файл `secret_id_file` (`mode 0400`) или env `secret_id_env`. AppRole-credentials намеренно НЕ читаются из Vault (chicken-egg: именно ими Keeper логинится). Контракт — [keeper/prod-setup.md → AppRole](../keeper/prod-setup.md#approle-аутентификация-keeper-а).
+`role_id` - role identifier, not secret (stored openly in `keeper.yml`). `secret_id` - secret, **not stored in the plaintext config**, source - local file `secret_id_file` (`mode 0400`) or env `secret_id_env`. AppRole-credentials are intentionally NOT read from Vault (chicken-egg: this is what Keeper logs in with). Contract - [keeper/prod-setup.md → AppRole](../keeper/prod-setup.md).
 
-## 4. TLS-материал Keeper-а
+## 4. Keeper TLS material
 
-Это **самое аккуратное место онбординга** — описано явно, потому что здесь сходятся две независимые цепочки доверия.
+This is the **neatest place onboarding** - described explicitly because two independent chains of trust converge here.
 
-### Что нужно положить
+### What to put
 
-Keeper слушает оба gRPC-listener-а (bootstrap `9442` и event_stream `8443`) с серверным сертификатом. По [`examples/keeper/keeper.yml`](../../examples/keeper/keeper.yml) файлы лежат в `/etc/keeper/tls/`:
+Keeper listens to both gRPC listeners (bootstrap `9442` and event_stream `8443`) with the server certificate. According to [`examples/keeper/keeper.yml`](../../examples/keeper/keeper.yml), the files are located in `/etc/keeper/tls/`:
 
-| Файл | Роль |
+| File | Role |
 |---|---|
-| `/etc/keeper/tls/server.crt` | серверный leaf-cert Keeper-а (предъявляется на bootstrap + event_stream) |
-| `/etc/keeper/tls/server.key` | приватный ключ leaf-а |
-| `/etc/keeper/tls/ca.crt` | CA для валидации **клиентских** SoulSeed-сертификатов на mTLS event_stream (`event_stream.tls.ca` = ClientCAs) |
+| `/etc/keeper/tls/server.crt` | server leaf-cert Keeper (presented on bootstrap + event_stream) |
+| `/etc/keeper/tls/server.key` | leaf's private key |
+| `/etc/keeper/tls/ca.crt` | CA for validating **client** SoulSeed certificates on mTLS event_stream (`event_stream.tls.ca` = ClientCAs) |
 
-### Почему один PKI-корень для всего
+### Why one PKI root for everything
 
-Серверный cert Keeper-а **обязан цепляться к тому же PKI-корню**, что и SoulSeed-сертификаты. Иначе на EventStream (mTLS) Soul не доверяет серверному cert-у Keeper-а, а Keeper не доверяет клиентскому cert-у Soul-а. Поэтому серверный leaf Keeper-а выпускается из той же роли `pki/issue/soul-seed`, что и SoulSeed (см. комментарий в [`dev/provision.sh`](../../dev/provision.sh), функция `issue_keeper_cert`).
+Keeper's server cert **must cling to the same PKI root** as SoulSeed certificates. Otherwise, on EventStream (mTLS), Soul does not trust Keeper's server cert, and Keeper does not trust Soul's client cert. Therefore, the server leaf Keeper is released from the same role `pki/issue/soul-seed` as SoulSeed (see comment in [`dev/provision.sh`](../../dev/provision.sh), function `issue_keeper_cert`).
 
-### Процедура выпуска
+### Release Procedure
 
-Выпустить leaf из своего Vault PKI и разложить по файлам (по аналогии с `issue_keeper_cert` в [`dev/provision.sh`](../../dev/provision.sh), переложено на прод-FQDN keeper-а; `keeper.internal` — пример, подставьте реальный FQDN, под которым Soul-ы будут адресовать этот Keeper в `soul.yml::keeper.endpoints[].host`):
+Release leaf from your Vault PKI and distribute it into files (by analogy with `issue_keeper_cert` in [`dev/provision.sh`](../../dev/provision.sh), transferred to the keeper's prod-FQDN; `keeper.internal` is an example, substitute the real FQDN under which Souls will address this Keeper in `soul.yml::keeper.endpoints[].host`):
 
 ```sh
 vault write -format=json pki/issue/soul-seed \
@@ -211,7 +211,7 @@ vault write -format=json pki/issue/soul-seed \
   ttl=720h > /tmp/keeper-issue.json
 ```
 
-Из JSON-ответа разложить три поля в файлы (`certificate` → `server.crt`, `private_key` → `server.key`, `issuing_ca` → `ca.crt`) и выставить права:
+From the JSON response, decompose the three fields into files (`certificate` → `server.crt`, `private_key` → `server.key`, `issuing_ca` → `ca.crt`) and set the permissions:
 
 ```sh
 sudo install -d -o soul-stack -g soul-stack -m 0750 /etc/keeper/tls
@@ -221,13 +221,13 @@ sudo install -o soul-stack -g soul-stack -m 0600 server.key /etc/keeper/tls/serv
 sudo install -o soul-stack -g soul-stack -m 0640 ca.crt    /etc/keeper/tls/ca.crt
 ```
 
-> **SAN обязателен.** Серверный cert должен содержать в SAN тот FQDN (или IP), который Soul-ы кладут в `keeper.endpoints[].host` — Soul проверяет hostname серверного cert-а на bootstrap-фазе. Несоответствие → `certificate validation failed` (см. шаг 9).
+> **SAN is required.** The server cert must contain in the SAN the FQDN (or IP) that Souls put in `keeper.endpoints[].host` - Soul checks the hostname of the server cert in the bootstrap phase. Mismatch → `certificate validation failed` (see step 9).
 
-> **Ротация.** Leaf истекает по `ttl` (выше — 720h). Перевыпуск — повтор этой процедуры + рестарт keeper-а; CA-корень при этом не меняется, поэтому уже онбордженные Soul-ы не затрагиваются. Политика ротации — на стороне команды эксплуатации PKI.
+> **Rotation.** Leaf expires at `ttl` (above - 720h). Re-release - repeat this procedure + restart the keeper; The CA root does not change, so already onboarded Souls are not affected. The rotation policy is on the side of the PKI operations team.
 
-## 5. Конфиг `keeper.yml`
+## 5. Config `keeper.yml`
 
-Скопировать пример в рабочий путь и заполнить:
+Copy the example to the working path and fill in:
 
 ```sh
 sudo cp /etc/keeper/keeper.yml.example /etc/keeper/keeper.yml
@@ -235,10 +235,10 @@ sudo chown soul-stack:soul-stack /etc/keeper/keeper.yml
 sudo chmod 0640 /etc/keeper/keeper.yml
 ```
 
-Обязательные к проверке/правке блоки (полный пример — [`examples/keeper/keeper.yml`](../../examples/keeper/keeper.yml), нормативный контракт — [keeper/config.md](../keeper/config.md)):
+Required blocks to check/edit (full example - [`examples/keeper/keeper.yml`](../../examples/keeper/keeper.yml), regulatory contract - [keeper/config.md](../keeper/config.md)):
 
 ```yaml
-# Идентичность инстанса — уникальна в кластере (несколько keeper-ов = разные kid)
+# Instance identity is unique in the cluster (several keepers = different kids)
 kid: keeper-eu-west-01
 
 listen:
@@ -253,23 +253,23 @@ listen:
   mcp:     { addr: "0.0.0.0:8081" }
   metrics: { addr: "0.0.0.0:9090" }
 
-# Внешние хранилища оператора — через vault:-ref (значения положены на шаге 3.1)
+# External operator storage - via vault:-ref (values are set in step 3.1)
 postgres:
   dsn_ref: vault:secret/keeper/postgres
 redis:
   addr: "redis.internal:6379"
   password_ref: vault:secret/keeper/redis
 
-# Vault — AppRole (шаг 3.3) + PKI-mount (шаг 3.2)
+# Vault - AppRole (step 3.3) + PKI-mount (step 3.2)
 vault:
   addr: "https://vault.internal:8200"
   auth:
     method: approle
-    role_id: keeper-prod                        # role_id из шага 3.3 (не секрет)
-    secret_id_file: /etc/keeper/vault-secret-id # secret_id, файл mode 0400
-  pki_mount: "pki/soulstack"                    # ваш PKI-mount (в dev — pki/)
+    role_id: keeper-prod                        # role_id from step 3.3 (not a secret)
+    secret_id_file: /etc/keeper/vault-secret-id # secret_id, file mode 0400
+  pki_mount: "pki/soulstack"                    # your PKI-mount (in dev - pki/)
 
-# JWT операторов (signing-key положен на шаге 3.1)
+# JWT operators (signing-key was set in step 3.1)
 auth:
   jwt:
     signing_key_ref: vault:secret/keeper/jwt-signing-key
@@ -278,44 +278,44 @@ auth:
     ttl_bootstrap: 30d
 ```
 
-Положить `secret_id` (из шага 3.3) в файл, на который указывает `secret_id_file`:
+Put `secret_id` (from step 3.3) in the file pointed to by `secret_id_file`:
 
 ```sh
-# вывод `vault write -f auth/approle/role/keeper-prod/secret-id` → поле secret_id
+# output `vault write -f auth/approle/role/keeper-prod/secret-id` → secret_id field
 echo -n "<secret_id>" | sudo tee /etc/keeper/vault-secret-id >/dev/null
 sudo chown soul-stack:soul-stack /etc/keeper/vault-secret-id
 sudo chmod 0400 /etc/keeper/vault-secret-id
 ```
 
-> Реестр сервисов и RBAC-каталог в `keeper.yml` **не настраиваются** — они живут в Postgres и управляются через Operator API / MCP после старта ([ADR-029](../adr/0029-service-registry.md), [ADR-028](../adr/0028-rbac-storage.md)). Появление ключей `services:` / `rbac:` в конфиге отвергается как `unknown_key`.
+> The service registry and RBAC directory in `keeper.yml` **are not configurable** - they live in Postgres and are managed via the Operator API / MCP after startup ([ADR-029](../adr/0029-service-registry.md), [ADR-028](../adr/0028-rbac-storage.md)). The appearance of the `services:` / `rbac:` keys in the config is rejected as `unknown_key`.
 
-Прежде чем стартовать, можно проверить путь к конфигу в env-файле `/etc/keeper/keeper.env` (`KEEPER_CONFIG=/etc/keeper/keeper.yml`) — юнит читает путь оттуда.
+Before starting, you can check the path to the config in the env file `/etc/keeper/keeper.env` (`KEEPER_CONFIG=/etc/keeper/keeper.yml`) - the unit reads the path from there.
 
-## 6. Запуск Keeper
+## 6. Launch Keeper
 
-Каталоги и пользователь уже созданы (шаг 2). Включить и запустить:
+Directories and user have already been created (step 2). Enable and run:
 
 ```sh
 sudo systemctl daemon-reload
 sudo systemctl enable --now keeper
 ```
 
-Проверить:
+Check:
 
 ```sh
 systemctl status keeper
 journalctl -u keeper -n 100 --no-pager
-# health-check (listener openapi.addr): 200 при готовности к приёму трафика
+# health-check (listener openapi.addr): 200 when ready to receive traffic
 curl -fsS http://127.0.0.1:8080/readyz && echo OK
 ```
 
-`/readyz` зависит от Postgres + Redis (и пишется заново при рестарте) — 200 означает, что инстанс готов принимать трафик. Для L4-балансировщика достаточно TCP-probe порта `8443` ([deployment.md](deployment.md)).
+`/readyz` depends on Postgres + Redis (and is written again upon restart) - 200 means that the instance is ready to receive traffic. For an L4 balancer, a TCP probe of port `8443` ([deployment.md](deployment.md)) is sufficient.
 
-> **Keeper откажется стартовать**, если реестр `operators` пуст и не передан `--initialize`: `operators registry is empty; run 'keeper init …'`. Это нормально на самом первом запуске — выполните шаг 7. Семантика рестарта (`--initialize` / `KEEPER_INITIALIZE`) — [bootstrap-rbac.md → Restart-семантика](bootstrap-rbac.md#restart-семантика).
+> **Keeper will refuse to start** if the registry `operators` is empty and not passed to `--initialize`: `operators registry is empty; run 'keeper init …'`. This is normal on the very first launch - follow step 7. Restart semantics (`--initialize` / `KEEPER_INITIALIZE`) - [bootstrap-rbac.md → Restart semantics](bootstrap-rbac.md).
 
-## 7. Bootstrap первого Архонта
+## 7. Bootstrap of the first Archon
 
-Реестр операторов в свежей БД пуст — все API вернут 403, пока не создан первый Архонт. Bootstrap — administrative subcommand самого `keeper`-бинаря (не отдельный режим). Запускается **один раз на одном инстансе** ([ADR-013](../adr/0013-bootstrap-archon.md#adr-013-bootstrap-первого-архонта)):
+The operator registry in the fresh database is empty - all APIs will return 403 until the first Archon is created. Bootstrap is an administrative subcommand of the `keeper` binary itself (not a separate mode). Runs **once on one instance** ([ADR-013](../adr/0013-bootstrap-archon.md)):
 
 ```sh
 sudo -u soul-stack keeper init \
@@ -324,27 +324,27 @@ sudo -u soul-stack keeper init \
   --credential-out=/etc/keeper/archon-alice.jwt
 ```
 
-Что происходит ([bootstrap-rbac.md → `keeper init`](bootstrap-rbac.md#keeper-init--первый-архонт)): под PG advisory lock проверяется, что `operators` пуст; создаётся первый Архонт с ролью `cluster-admin` (`permissions: ["*"]`); выпускается JWT (TTL = `auth.jwt.ttl_bootstrap`, default 30 дней) и пишется в `--credential-out` с `mode 0400`.
+What's happening ([bootstrap-rbac.md → `keeper init`](bootstrap-rbac.md)): under PG advisory lock it is checked that `operators` is empty; the first Archon is created with the role `cluster-admin` (`permissions: ["*"]`); is issued JWT (TTL = `auth.jwt.ttl_bootstrap`, default 30 days) and written to `--credential-out` with `mode 0400`.
 
-> **AID-формат.** `--archon` — kebab-case `^archon-[a-z0-9-]{1,62}$` (`archon-alice`, `archon-ops-01`). См. [naming-rules.md](../naming-rules.md).
+> **AID format.** `--archon` - kebab-case `^archon-[a-z0-9-]{1,62}$` (`archon-alice`, `archon-ops-01`). See [naming-rules.md](../naming-rules.md).
 
-> **Хранение bootstrap-JWT.** Файл `--credential-out` — исходный материал для первой настройки, не долговременное хранилище. Немедленно перенести в password manager / Vault оператора и **не оставлять** в `/etc/keeper/` надолго: это admin-credential с правами `*`. Дальнейших Архонтов (для людей, CI, machine-identity) создавать через Operator API — [bootstrap-rbac.md → Выпуск дополнительных Архонтов](bootstrap-rbac.md).
+> **Bootstrap-JWT storage.** The `--credential-out` file is the raw material for the first setup, not long-term storage. Immediately transfer to the password manager / Vault operator and **do not leave** in `/etc/keeper/` for a long time: this is an admin-credential with `*` rights. Further Archons (for people, CI, machine-identity) can be created via the Operator API - [bootstrap-rbac.md → Release of additional Archons](bootstrap-rbac.md).
 
-После этого Keeper стартует штатно (если был запущен с `--initialize` в read-only — начнёт обслуживать API; иначе — `systemctl restart keeper`).
+After this, Keeper starts normally (if it was launched with `--initialize` in read-only mode, it will start servicing the API; otherwise, `systemctl restart keeper`).
 
-Сохранить токен в переменную для следующих шагов:
+Save the token into a variable for the next steps:
 
 ```sh
 TOKEN=$(sudo cat /etc/keeper/archon-alice.jwt)
 ```
 
-## 8. Онбординг Soul
+## 8. Onboarding Soul
 
-Онбординг душ — двусторонний: оператор регистрирует хост в Keeper-е и получает одноразовый bootstrap-токен; на хосте `soul init` обменивает токен + CSR на SoulSeed (mTLS-пару). Полная механика — [soul/onboarding.md](../soul/onboarding.md).
+Soul onboarding is two-way: the operator registers the host in Keeper and receives a one-time bootstrap token; on the host `soul init` exchanges the token + CSR for SoulSeed (mTLS pair). Full mechanics - [soul/onboarding.md](../soul/onboarding.md).
 
-### 8.1. Регистрация хоста и выпуск токена
+### 8.1. Host registration and token issuance
 
-На стороне Keeper-а (через Operator API; SID = FQDN будущего Soul-хоста):
+On the Keeper side (via Operator API; SID = FQDN of the future Soul host):
 
 ```sh
 curl -s -X POST http://keeper.internal:8080/v1/souls \
@@ -353,27 +353,27 @@ curl -s -X POST http://keeper.internal:8080/v1/souls \
   -d '{"sid": "host01.dc1.internal", "covens": ["demo"], "transport": "agent"}'
 ```
 
-> **`transport` обязателен.** Поле `transport` должно быть `agent` (демон-онбординг, pull-режим) или `ssh` (push-режим по SSH). При отсутствии вернётся 422 Unprocessable Entity. В примере выше — `agent` (Soul-демон инициирует соединение к Keeper-у).
+> **`transport` is required.** The `transport` field must be `agent` (onboarding daemon, pull mode) or `ssh` (SSH push mode). If absent, 422 Unprocessable Entity will be returned. In the example above - `agent` (Soul daemon initiates a connection to Keeper).
 
-Запись в `souls` появляется в статусе `pending`; в ответе **один раз** возвращается plain bootstrap-токен (одноразовый, TTL по умолчанию 24h). Потеряли — не восстановить, только перевыпустить через `POST /v1/souls/{sid}/issue-token` ([onboarding.md → Восстановление](../soul/onboarding.md#восстановление-потерян-токен)).
+The entry in `souls` appears in status `pending`; in the response **one time** a plain bootstrap token is returned (one-time, default TTL 24h). Lost - cannot be restored, only re-issued via `POST /v1/souls/{sid}/issue-token` ([onboarding.md → Recovery](../soul/onboarding.md)).
 
-### 8.2. Trust-материал на хосте: как Soul доверяет Keeper-у до `soul init`
+### 8.2. Trust material on the host: how Soul trusts Keeper up to `soul init`
 
-Перед `soul init` Soul ещё не имеет SoulSeed, но bootstrap-фаза (`9442`) идёт по **server-only TLS** — Soul обязан проверить серверный cert Keeper-а. Доверие здесь устанавливается **не TOFU**, а явной предзагрузкой CA: Soul верифицирует серверный cert Keeper-а против CA-файла из `soul.yml::keeper.tls.ca` (в коде — `bootstrap.Run` → `tlsx.LoadClientTLS{CAPath: keeper.tls.ca}`, [`soul/internal/bootstrap/bootstrap.go`](../../soul/internal/bootstrap/bootstrap.go)). Если файл пуст/не указан — `soul init` падает с `keeper.tls.ca is empty`.
+Before `soul init` Soul does not yet have SoulSeed, but the bootstrap phase (`9442`) goes via **server-only TLS** - Soul is required to check the Keeper's server cert. Trust here is established **not TOFU**, but by explicit preloading of the CA: Soul verifies the Keeper server cert against the CA file from `soul.yml::keeper.tls.ca` (in the code - `bootstrap.Run` → `tlsx.LoadClientTLS{CAPath: keeper.tls.ca}`, [`soul/internal/bootstrap/bootstrap.go`](../../soul/internal/bootstrap/bootstrap.go)). If the file is empty/not specified, `soul init` falls from `keeper.tls.ca is empty`.
 
-Поэтому **оператор обязан заранее положить на хост PKI-корень** (тот же `ca.crt` / `issuing_ca`, что и серверный cert Keeper-а, шаг 4) по пути из `soul.yml::keeper.tls.ca`:
+Therefore **the operator is obliged to put a PKI root** on the host in advance** (the same `ca.crt` / `issuing_ca` as the Keeper server cert, step 4) along the path from `soul.yml::keeper.tls.ca`:
 
 ```sh
 sudo install -d -o soul-stack -g soul-stack -m 0750 /var/lib/soul-stack/seed
-# CA из шага 4 (issuing_ca PKI-корня) — например, скопировать ca.crt с keeper-хоста
+# CA from step 4 (issuing_ca PKI root) - for example, copy ca.crt from the keeper host
 sudo install -o soul-stack -g soul-stack -m 0644 ca.crt /var/lib/soul-stack/seed/ca.crt
 ```
 
-> **Две цепочки доверия — две роли одного CA.** `keeper.tls.ca` (предзагруженный файл) валидирует серверный cert Keeper-а на **bootstrap**-фазе. После успешного `soul init` Keeper возвращает PKI-цепочку (`BootstrapReply.ca_chain_pem`), которую Soul сохраняет в SoulSeed-каталог (`paths.seed/current/ca.pem`) и использует для верификации сервера на **EventStream**-фазе. Это разные файлы, оба от одного PKI-корня. Предзагруженный `ca.crt` нужен только до первого `soul init`; дальше Soul опирается на seed-CA.
+> **Two chains of trust - two roles of one CA.** `keeper.tls.ca` (preloaded file) validates the Keeper server cert in the **bootstrap** phase. After a successful `soul init`, Keeper returns a PKI chain (`BootstrapReply.ca_chain_pem`), which Soul stores in the SoulSeed directory (`paths.seed/current/ca.pem`) and uses to verify the server in the **EventStream** phase. These are different files, both from the same PKI root. The preloaded `ca.crt` is needed only before the first `soul init`; Further, Soul relies on seed-CA.
 
-### 8.3. Конфиг `soul.yml` и доставка токена
+### 8.3. Config `soul.yml` and token delivery
 
-Скопировать пример и заполнить:
+Copy the example and fill in:
 
 ```sh
 sudo cp /etc/soul/soul.yml.example /etc/soul/soul.yml
@@ -381,36 +381,36 @@ sudo chown soul-stack:soul-stack /etc/soul/soul.yml
 sudo chmod 0640 /etc/soul/soul.yml
 ```
 
-Минимум, что правится (полный контракт — [soul/config.md](../soul/config.md)):
+Minimum that can be corrected (full contract - [soul/config.md](../soul/config.md)):
 
 ```yaml
 keeper:
   endpoints:
-    - host: keeper.internal       # FQDN из SAN серверного cert-а (шаг 4)
-      event_stream_port: 8443     # mTLS, фаза `soul run`
-      bootstrap_port: 9442        # server-only TLS, фаза `soul init`
+    - host: keeper.internal       # FQDN from SAN server cert (step 4)
+      event_stream_port: 8443     # mTLS, phase `soul run`
+      bootstrap_port: 9442        # server-only TLS, phase `soul init`
   tls:
-    ca: /var/lib/soul-stack/seed/ca.crt   # предзагружен на шаге 8.2
+    ca: /var/lib/soul-stack/seed/ca.crt   # preloaded in step 8.2
 
 paths:
-  seed: /var/lib/soul-stack/seed          # сюда `soul init` положит SoulSeed
+  seed: /var/lib/soul-stack/seed          # here `soul init` will put SoulSeed
 ```
 
-> `event_stream_port` и `bootstrap_port` **оба обязательны** и оба явные — молчаливого ухода bootstrap на event-stream-порт нет ([ADR-012(b)](../adr/0012-keeper-soul-grpc.md), [config.md → keeper.endpoints](../soul/config.md)). Несколько keeper-ов перечисляются как несколько записей `endpoints[]` с `priority`.
+> `event_stream_port` and `bootstrap_port` **both are required** and both are explicit - there is no silent leaving of bootstrap to the event-stream port ([ADR-012(b)](../adr/0012-keeper-soul-grpc.md), [config.md → keeper.endpoints](../soul/config.md)). Multiple keepers are listed as multiple `endpoints[]` entries with `priority`.
 
-**Доставка токена.** Способ физической доставки bootstrap-токена на хост — выбор оператора ([onboarding.md → Способы доставки](../soul/onboarding.md#способы-доставки-токена)): шаг сценария `core.bootstrap.delivered`, Ansible-role, SSH/SCP, CI/CD, cloud-init. Рекомендация по безопасности: файл токена `mode 0400` owner `soul-stack`, директория `mode 0700`; на systemd ≥ 250 — `LoadCredential=` (токен в tmpfs, не на диск).
+**Token delivery.** The method of physical delivery of the bootstrap token to the host is the choice of operator ([onboarding.md → Delivery methods](../soul/onboarding.md)): script step `core.bootstrap.delivered`, Ansible-role, SSH/SCP, CI/CD, cloud-init. Security Advisory: token file `mode 0400` owner `soul-stack`, directory `mode 0700`; on systemd ≥ 250 - `LoadCredential=` (token in tmpfs, not to disk).
 
-### 8.4. `soul init` — обмен токена на SoulSeed
+### 8.4. `soul init` - token exchange for SoulSeed
 
-`soul init` берёт токен из флага `--token` или из env `SOUL_BOOTSTRAP_TOKEN` (флаг побеждает env; stdin не читается). Env-форма предпочтительнее — значение `--token` светилось бы в `ps`/shell-history:
+`soul init` takes the token from the `--token` flag or from the env `SOUL_BOOTSTRAP_TOKEN` (flag beats env; stdin is not readable). The Env form is preferable - the value `--token` would appear in `ps`/shell-history:
 
 ```sh
 sudo -u soul-stack sh -c 'SOUL_BOOTSTRAP_TOKEN="$(cat /run/soul-bootstrap-token)" soul init --config=/etc/soul/soul.yml'
 ```
 
-Команда: определяет SID (= FQDN), генерирует приватный ключ + CSR (ключ **никогда не покидает хост**), подключается к bootstrap-listener-у Keeper-а, предъявляет токен + CSR, получает подписанный SoulSeed и атомарно раскладывает его в `paths.seed`. Если SoulSeed уже есть — `init` падает (защита от случайного перевыпуска); перевыпуск — отдельная процедура ([identity.md → Ротация SoulSeed](../soul/identity.md#ротация-soulseed)).
+Command: determines SID (= FQDN), generates private key + CSR (key **never leaves host**), connects to Keeper's bootstrap-listener, presents token + CSR, gets signed SoulSeed and atomically distributes it to `paths.seed`. If SoulSeed is already available, `init` crashes (protection against accidental re-release); re-release is a separate procedure ([identity.md → SoulSeed Rotation](../soul/identity.md)).
 
-### 8.5. Запуск демона и проверка
+### 8.5. Start the daemon and verify
 
 ```sh
 sudo systemctl daemon-reload
@@ -419,39 +419,39 @@ systemctl status soul
 journalctl -u soul -n 100 --no-pager
 ```
 
-Soul инициирует EventStream-стрим к Keeper-у (mTLS, порт `8443`). Проверить, что хост перешёл в `connected`, со стороны Keeper-а:
+Soul initiates an EventStream stream to Keeper (mTLS, port `8443`). Check that the host has moved to `connected` from the Keeper side:
 
 ```sh
 curl -s http://keeper.internal:8080/v1/souls/host01.dc1.internal \
   -H "Authorization: Bearer $TOKEN"
-# в ответе status: connected
+# response contains status: connected
 ```
 
-После этого хост готов получать Destiny. Сборка первого сервиса end-to-end — [guides/first-service.md](../guides/first-service.md).
+After this, the host is ready to receive Destiny. Building the first end-to-end service - [guides/first-service.md](../guides/first-service.md).
 
 ## 9. Troubleshooting
 
-| Симптом | Вероятная причина | Что проверить |
+| Symptom | Probable Cause | What to check |
 |---|---|---|
-| `soul init`: **connection refused** | Keeper не слушает bootstrap-порт / firewall режет `9442` | Keeper запущен (`systemctl status keeper`); открыт входящий `9442` с soul-хоста; `host`/`bootstrap_port` в `soul.yml` указывают на правильный keeper |
-| `soul init`: **certificate validation failed** / x509 hostname mismatch | предзагруженный `keeper.tls.ca` не от того PKI-корня, что серверный cert; или FQDN keeper-а не в SAN серверного cert-а | `keeper.tls.ca` = `issuing_ca` PKI (шаг 8.2); FQDN из `endpoints[].host` входит в SAN серверного cert-а (шаг 4) |
-| `soul init`: **keeper.tls.ca is empty** | не указан/не предзагружен CA-файл | заполнить `keeper.tls.ca` в `soul.yml` и положить файл (шаг 8.2) |
-| `soul init`: **bootstrap token invalid / expired / used** (403) | токен сожжён (уже использован), истёк (TTL 24h) или SID не совпал | перевыпустить токен `POST /v1/souls/{sid}/issue-token` (`force` при активном); сверить SID = FQDN хоста |
-| `soul init`: **invalid sid** | FQDN не матчит `^[a-z0-9][a-z0-9.-]{0,253}$` | привести hostname к валидному lower-case FQDN либо задать `sid:` явно в `soul.yml` |
-| Keeper при старте: **Vault unreachable** / sealed | Vault недоступен по HTTPS, sealed, или неверные AppRole-credentials | Vault unsealed и доступен по `vault.addr`; `secret_id_file` существует с `mode 0400`; `role_id`/policy на месте (шаг 3.3) |
-| Keeper: **operators registry is empty; refusing to start** | первый запуск без bootstrap-а | выполнить `keeper init` (шаг 7) |
-| Keeper не стартует, **apply migrations** в логах | нет прав на DDL / Postgres недоступен | роль в DSN имеет права на DDL; Postgres доступен по `dsn_ref` |
-| Soul стартует, но `status` остаётся `pending`/не `connected` | EventStream-фаза не проходит (mTLS на `8443`) | открыт входящий `8443`; SoulSeed разложен (`paths.seed/current/`); серверный cert и SoulSeed от одного PKI-корня (шаг 4) |
+| `soul init`: **connection refused** | Keeper does not listen to the bootstrap port / firewall cuts `9442` | Keeper is running (`systemctl status keeper`); incoming `9442` from the soul host is open; `host`/`bootstrap_port` in `soul.yml` point to the correct keeper |
+| `soul init`: **certificate validation failed** / x509 hostname mismatch | preloaded `keeper.tls.ca` from a different PKI root than the server cert; or FQDN of the keeper and not in the SAN of the server cert | `keeper.tls.ca` = `issuing_ca` PKI (step 8.2); FQDN from `endpoints[].host` is included in the SAN of the server cert (step 4) |
+| `soul init`: **keeper.tls.ca is empty** | CA file not specified/preloaded | fill `keeper.tls.ca` into `soul.yml` and put the file (step 8.2) |
+| `soul init`: **bootstrap token invalid / expired / used** (403) | token is burned (already used), expired (TTL 24h) or SID does not match | reissue token `POST /v1/souls/{sid}/issue-token` (`force` if active); verify SID = host FQDN |
+| `soul init`: **invalid sid** | FQDN does not match `^[a-z0-9][a-z0-9.-]{0,253}$` | set hostname to a valid lower-case FQDN or set `sid:` explicitly to `soul.yml` |
+| Keeper at startup: **Vault unreachable** / sealed | Vault unavailable via HTTPS, sealed, or invalid AppRole-credentials | Vault is unsealed and accessible by `vault.addr`; `secret_id_file` exists with `mode 0400`; `role_id`/policy in place (step 3.3) |
+| Keeper: **operators registry is empty; refusing to start** | first launch without bootstrap | run `keeper init` (step 7) |
+| Keeper does not start, **apply migrations** in logs | no DDL rights / Postgres unavailable | role in DSN has DDL rights; Postgres is reachable through `dsn_ref` |
+| Soul starts, but `status` remains `pending`/not `connected` | EventStream phase fails (mTLS on `8443`) | incoming `8443` is open; SoulSeed is laid out (`paths.seed/current/`); server cert and SoulSeed are from one PKI root (step 4) |
 
-Расширенный набор инцидентов и метрик — [faq.md](faq.md) и [monitoring.md](monitoring.md).
+Extended set of incidents and metrics - [faq.md](faq.md) and [monitoring.md](monitoring.md).
 
-## 10. Обновление
+## 10. Upgrade
 
-Пакеты обновляются обычным `dpkg -i` новой версии. Что важно знать:
+Packages are updated with the usual `dpkg -i` new version. What is important to know:
 
-- **Рабочие конфиги не перетираются.** `*.yml.example` приходит из пакета, но ваш `/etc/keeper/keeper.yml` и `/etc/soul/soul.yml` создавали вы сами — upgrade их не трогает. Env-файлы помечены `config|noreplace`. После апгрейда стоит сверить свой конфиг с новым `*.yml.example` на предмет новых ключей.
-- **DDL-миграции схемы БД Keeper-а** применяются идемпотентно при старте Keeper-а (на `keeper run`, а также в `keeper init` перед bootstrap-ом — накат автоматический при рестарте демона новой версии, `migrate.Apply` в daemon.go:600). Перед upgrade Keeper-а — backup Postgres и проверка changelog на breaking-миграции.
-- **state_schema-миграции инкарнаций** (ADR-019) — это **отдельная** оператор-инициированная операция через Operator API (`POST /v1/incarnations/{name}/upgrade`), forward-only, не запускается автоматически при рестарте Keeper-а. Не путать с миграциями схемы БД.
-- **Hot-reload конфигурации.** Часть ключей `keeper.yml` перечитывается без рестарта; часть требует рестарта (TLS-файлы, listener-ы, подсистемы стартуют один раз). Карта «hot-reload / restart-required» по каждому ключу — [keeper/config.md](../keeper/config.md).
+- **Working configs are not overwritten.** `*.yml.example` comes from the package, but your `/etc/keeper/keeper.yml` and `/etc/soul/soul.yml` were created by you - upgrade does not affect them. Env files are marked `config|noreplace`. After the upgrade, you should check your config with the new `*.yml.example` for new keys.
+- **DDL migrations of the Keeper database schema** are applied idempotently when Keeper starts (on `keeper run`, as well as in `keeper init` before bootstrap - automatic rollover when restarting the daemon of a new version, `migrate.Apply` in daemon.go:600). Before upgrading Keeper, backup Postgres and check the changelog for breaking migration.
+- **state_schema-incarnation migrations** (ADR-019) is a **separate** operator-initiated operation via the Operator API (`POST /v1/incarnations/{name}/upgrade`), forward-only, does not start automatically when Keeper is restarted. Not to be confused with database schema migrations.
+- **Hot-reload configuration.** Part of the `keeper.yml` keys is reread without restart; some require a restart (TLS files, listeners, subsystems start once). The "hot-reload/restart-required" map for each key is [keeper/config.md](../keeper/config.md).
 
-Полная процедура rolling-upgrade Keeper-кластера без downtime (drain LB, по одному инстансу, verify-метрики) и Soul-флота — нормативно в [upgrade.md](upgrade.md). Откат пакета: `dpkg -i` предыдущей версии + `systemctl restart`; учесть, что прошедшие state_schema-миграции назад не откатываются ([upgrade.md → Откат](upgrade.md#откат-state_schema)).
+The complete procedure for a rolling-upgrade Keeper cluster without downtime (drain LB, one instance at a time, verify metrics) and Soul fleet is standard in [upgrade.md](upgrade.md). Rollback package: `dpkg -i` previous version + `systemctl restart`; Please note that past state_schema migrations are not rolled back ([upgrade.md → Rollback](upgrade.md)).

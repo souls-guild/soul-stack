@@ -1,36 +1,36 @@
-# Инфра-зависимости: Postgres, Redis, Vault
+# Infra-dependencies: Postgres, Redis, Vault
 
-Soul Stack эксплуатирует три обязательные внешние зависимости ([ADR-005](../adr/0005-storage-postgres.md#adr-005-хранилище-состояния-keeper--postgres) / [ADR-006](../adr/0006-cache-redis.md#adr-006-кэш-и-координация--redis) / [requirements.md](../requirements.md)). Прод-инсталляция должна поднять их **отдельно** от Keeper-кластера — Soul Stack их не управляет, только потребляет.
+Soul Stack exploits three required external dependencies ([ADR-005](../adr/0005-storage-postgres.md#adr-005-keeper-state-storage--postgres) / [ADR-006](../adr/0006-cache-redis.md) / [requirements.md](../requirements.md)). The production installation must raise them **separately** from the Keeper cluster - Soul Stack does not manage them, only consumes them.
 
-Эта зона документации фокусируется на **операционной части**: что бэкапить, как восстанавливать, какие настройки критичны для корректной работы Keeper-а. Архитектурное «зачем» — в соответствующих ADR.
+This documentation area focuses on the **operational part**: what to backup, how to restore, what settings are critical for Keeper to work correctly. The architectural "why" is in the corresponding ADRs.
 
 ## Postgres
 
-Source of truth Keeper-кластера. Stateless Keeper-инстансы пишут сюда всё, что переживает рестарт: реестры (`souls` / `operators` / `rbac_*` / `service_registry` / …), `incarnation.state` + `state_history`, `apply_runs`, `audit_log`, `plugin_sigils`. Полный каталог таблиц — [`docs/keeper/storage.md`](../keeper/storage.md).
+Source of truth Keeper cluster. Stateless Keeper instances write here everything that survives the restart: registries (`souls` / `operators` / `rbac_*` / `service_registry` / ...), `incarnation.state` + `state_history`, `apply_runs`, `audit_log`, `plugin_sigils`. The full catalog of tables is [`docs/keeper/storage.md`](../keeper/storage.md).
 
-### Версия и режим
+### Version and mode
 
-| Параметр | Минимум | Рекомендуется |
+| Parameter | Minimum | Recommended |
 |---|---|---|
-| Версия PostgreSQL | 14 | 16 (LTS-окно длиннее) |
-| Connection-encryption | TLS (`sslmode=require`) — обязательно в прод | `sslmode=verify-full` с server-cert от внутренней PKI |
+| PostgreSQL version | 14 | 16 (LTS window longer) |
+| Connection-encryption | TLS (`sslmode=require`) - required in prod | `sslmode=verify-full` with server-cert from internal PKI |
 | Search path | default `public` | default `public` |
 | Encoding | `UTF8` | `UTF8` |
-| Locale | `C` / `en_US.UTF-8` | `en_US.UTF-8` (для текстового поиска) |
+| Locale | `C` / `en_US.UTF-8` | `en_US.UTF-8` (for text search) |
 
-DSN передаётся через Vault KV (`postgres.dsn_ref: vault:secret/keeper/postgres`, поле `dsn`) — plaintext-DSN в `keeper.yml` запрещён парсером ([`docs/keeper/config.md` → postgres](../keeper/config.md#postgres)).
+DSN is transmitted via Vault KV (`postgres.dsn_ref: vault:secret/keeper/postgres`, field `dsn`) - plaintext-DSN in `keeper.yml` is prohibited by the parser ([`docs/keeper/config.md` → postgres](../keeper/config.md#postgres)).
 
-### HA-топология
+### HA topology
 
-| Решение | Когда |
+| Solution | When |
 |---|---|
-| **Single instance** + регулярный backup | dev / staging. Прод **не рекомендуется** — single-point-of-failure. |
-| **Patroni** (streaming replication + automated failover через etcd/consul/raft) | Прод on-premise. Промоут реплики при отказе primary — автоматический, Keeper-инстансы переподключаются (пул `postgres.pool.min/max`). |
-| **Managed**: RDS PostgreSQL (Multi-AZ), Cloud SQL (regional), Yandex Managed PG, Azure Database (zone-redundant) | Прод в облаке. Failover управляется провайдером. |
+| **Single instance** + regular backup | dev/staging. Cont **not recommended** - single-point-of-failure. |
+| **Patroni** (streaming replication + automated failover via etcd/consul/raft) | Prod on-premise. Promotion of replicas when the primary fails is automatic, Keeper instances are reconnected (pool `postgres.pool.min/max`). |
+| **Managed**: RDS PostgreSQL (Multi-AZ), Cloud SQL (regional), Yandex Managed PG, Azure Database (zone-redundant) | Prod in the cloud. Failover is managed by the provider. |
 
-**Промоут реплики — вне Soul Stack** ([ADR-027(k)](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim)). Keeper не управляет своей БД-топологией — при отказе PG-primary failover делает Patroni / managed-сервис, Keeper-инстансы реконнектятся на новый primary (пул пересоздаётся). Изолированные от PG Keeper-инстансы — Watchman ([scaling.md](scaling.md)) сбросит их Soul-стримы → Soul-ы failback-ом перейдут на здоровые инстансы.
+**Promote lines - outside Soul Stack** ([ADR-027(k)](../adr/0027-apply-work-queue.md)). Keeper does not manage its database topology - if the PG-primary failover is done by Patroni / managed service, Keeper instances reconnect to a new primary (the pool is recreated). Keeper instances isolated from PG - Watchman ([scaling.md](scaling.md)) will reset their Soul streams → Souls will failback to healthy instances.
 
-### Пул соединений
+### Connection pool
 
 ```yaml
 postgres:
@@ -38,36 +38,36 @@ postgres:
   pool: { min: 5, max: 50 }
 ```
 
-Общий поток в PG = `pool.max × N_keeper_инстансов`. Например, кластер из 3 инстансов с `pool.max: 50` потенциально удерживает **150** активных соединений к PG. PG `max_connections` должен быть выше с запасом на бэкап-инструменты + сторонние клиенты (минимум `150 × 1.5 = 225`, default PG 100 — слишком мало).
+Total flow in PG = `pool.max × N_keeper_instances`. For example, a cluster of 3 instances with `pool.max: 50` potentially holds **150** active connections to the PG. PG `max_connections` should be higher with a reserve for backup tools + third-party clients (minimum `150 × 1.5 = 225`, default PG 100 - too little).
 
-### Размер таблиц (приблизительная оценка)
+### Table size (estimate)
 
-Расчёт под целевой масштаб ([многократно упоминается в ADR](../adr/0002-transport-grpc-ha.md#adr-002-транспорт-keeper--souls--grpc-bidirectional-stream-поверх-mtls-ha-кластер-keeper) — invariant «100k VM»):
+Calculation for target scale ([mentioned many times in ADR](../adr/0002-transport-grpc-ha.md#adr-002-transport-keeper--souls--grpc-bidirectional-stream-over-mtls-ha-keeper-cluster) - invariant "100k VM"):
 
-| Таблица | Строк на инсталляцию | Размер строки | Объём (примерно) |
+| Table | Lines per installation | Line Size | Volume (approx.) |
 |---|---|---|---|
-| `souls` | ~ число управляемых хостов (1k…100k) | ~ 200 B | 200 KB … 20 MB |
-| `soul_seeds` | ~3-5× строк `souls` (история ротаций SoulSeed) | ~ 200 B | ~ 100 MB на 100k VM |
-| `operators` + `rbac_*` | десятки строк | малый | <1 MB |
-| `service_registry` | десятки строк | малый | <1 MB |
-| `incarnation` | ~ число развёрнутых сервисов (десятки-сотни) | ~ 5-50 KB (jsonb `spec`/`state`) | до сотен MB |
-| `state_history` | active snapshots × incarnation; **archive_state_history** держит keep_last_n=50 на incarnation | ~ 5-50 KB | до GB на больших инсталляциях |
-| `apply_runs` | per-(apply_id, sid) на каждый прогон; retention 30d (`purge_apply_runs`) | ~ 500 B | сотни MB при активной эксплуатации |
-| `apply_task_register` | per-(apply_id, sid, task_idx); retention 1h (`purge_apply_task_register`) | jsonb register_data, переменно | 10s-100s MB |
-| `audit_log` | все Архонт-действия + Reaper + push + cloud + soul_grpc; retention 365d (`purge_audit_old`) | ~ 1 KB + jsonb payload | GBs при активной эксплуатации |
-| `plugin_sigils` | единицы-десятки записей | ~ 1 KB | <1 MB |
+| `souls` | ~ number of managed hosts (1k…100k) | ~200 V | 200 KB … 20 MB |
+| `soul_seeds` | ~3-5× lines `souls` (SoulSeed rotation history) | ~200 V | ~ 100 MB per 100k VM |
+| `operators` + `rbac_*` | tens of lines | small | <1 MB |
+| `service_registry` | tens of lines | small | <1 MB |
+| `incarnation` | ~ number of deployed services (tens-hundreds) | ~ 5-50 KB (jsonb `spec`/`state`) | up to hundreds of MB |
+| `state_history` | active snapshots × incarnation; **archive_state_history** keeps keep_last_n=50 on incarnation | ~ 5-50 KB | up to GB on large installations |
+| `apply_runs` | per-(apply_id, sid) per run; retention 30d (`purge_apply_runs`) | ~500 V | hundreds of MB during active use |
+| `apply_task_register` | per-(apply_id, sid, task_idx); retention 1h (`purge_apply_task_register`) | jsonb register_data, variable | 10s-100s MB |
+| `audit_log` | all Archon actions + Reaper + push + cloud + soul_grpc; retention 365d (`purge_audit_old`) | ~ 1 KB + jsonb payload | GBs during active use |
+| `plugin_sigils` | units to tens of records | ~ 1 KB | <1 MB |
 
-**Дисковый sizing**: 20-50 GB достаточно для типичной инсталляции до 10k VM; 100k VM — планировать 100-200 GB с запасом на audit-log за год.
+**Disk sizing**: 20-50 GB is enough for a typical installation of up to 10k VM; 100k VM - plan 100-200 GB with a reserve for audit-log for the year.
 
-`audit_log` — главный потребитель объёма при росте. Партиционирование по `created_at` (BRIN-индекс или declarative partitioning по месяцам) — расширение post-MVP ([ADR-022 trade-offs](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)), не breaking.
+`audit_log` is the main consumer of volume during growth. Partitioning by `created_at` (BRIN index or declarative partitioning by month) - post-MVP extension ([ADR-022 trade-offs](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)), without breaking.
 
 ### Backup / Restore
 
-**Source of truth — всё в PG**, поэтому регулярный backup критичен. Восстановление из бэкапа возвращает кластер к момента snapshot-а.
+**Source of truth is all in PG**, so regular backup is critical. Restoring from a backup returns the cluster to the moment of the snapshot.
 
-#### Логический backup (pg_dump)
+#### Logical backup (pg_dump)
 
-Для совместимости с инструментами CI / cold-archive:
+For compatibility with CI/cold-archive tools:
 
 ```sh
 PGPASSWORD=$(vault kv get -field=password secret/keeper/postgres-backup) \
@@ -80,17 +80,17 @@ pg_dump \
   keeper
 ```
 
-- Формат `custom` (бинарный, сжатый) — быстрее восстанавливается, поддерживает `pg_restore -j`.
-- Отдельный read-only пользователь `keeper_backup` (`GRANT pg_read_all_data`) — не использовать app-пользователя `keeper`.
-- **Регулярность**: ежечасно для активной инсталляции, ежесуточно для статичной.
-- **Retention**: 30 дней локально + 1 год в холодном архиве (S3 / GCS / Yandex Object Storage) — соответствует `audit_log.purge_audit_old.max_age` по умолчанию.
+- `custom` format (binary, compressed) - faster recovery, supports `pg_restore -j`.
+- Separate read-only user `keeper_backup` (`GRANT pg_read_all_data`) - do not use app-user `keeper`.
+- **Regularity**: hourly for active installation, daily for static installation.
+- **Retention**: 30 days locally + 1 year in cold archive (S3 / GCS / Yandex Object Storage) - corresponds to `audit_log.purge_audit_old.max_age` by default.
 
-#### Физический backup (pgBackRest / barman)
+#### Physical backup (pgBackRest / barman)
 
-Рекомендуется для прод-инсталляции — WAL-archive + point-in-time recovery (PITR):
+Recommended for production installation - WAL-archive + point-in-time recovery (PITR):
 
 ```ini
-# /etc/pgbackrest/pgbackrest.conf (примерная конфигурация)
+# /etc/pgbackrest/pgbackrest.conf (sample configuration)
 [global]
 repo1-path=/var/lib/pgbackrest
 repo1-retention-full=7
@@ -104,197 +104,197 @@ pg1-user=postgres
 ```
 
 ```sh
-# Полный бэкап раз в сутки
+# Full backup once a day
 pgbackrest --stanza=keeper backup --type=full
-# Инкрементальный — каждый час
+# Incremental - every hour
 pgbackrest --stanza=keeper backup --type=incr
 ```
 
-Преимущество — **PITR**: восстановление на конкретный timestamp до момента инцидента (например, до случайного `DELETE` через API). Без PITR оператор теряет всё после последнего snapshot-а.
+Advantage - **PITR**: restore to a specific timestamp before the incident (for example, to a random `DELETE` via API). Without PITR, the operator loses everything after the last snapshot.
 
-#### Restore-процедура
+#### Restore procedure
 
-1. **Остановить весь Keeper-кластер** — иначе восстановленный PG будет писаться поверх (split state):
+1. **Stop the entire Keeper cluster** - otherwise the restored PG will be written on top (split state):
    ```sh
    for h in keeper-1 keeper-2 keeper-3; do ssh $h systemctl stop keeper; done
    ```
-2. **Восстановить PG** из выбранного backup-а:
-   - Физический (pgBackRest):
+2. **Restore PG** from the selected backup:
+   - Physical (pgBackRest):
      ```sh
      pgbackrest --stanza=keeper --type=time --target="2026-05-26 14:30:00" restore
      ```
-   - Логический (pg_dump):
+   - Boolean (pg_dump):
      ```sh
      dropdb keeper && createdb keeper
      pg_restore -d keeper -j 4 /backup/keeper-2026-05-26.dump
      ```
-3. **Очистить Redis** — кэшированный presence Souls / Conclave / SID-lease ссылается на pre-restore состояние и может рассинхронить:
+3. **Clear Redis** - cached presence Souls / Conclave / SID-lease refers to the pre-restore state and may desync:
    ```sh
    redis-cli FLUSHDB
    ```
-   Это безопасно — все ключи Redis эфемерны (presence восстановится при reconnect Souls), см. [§ Redis](#redis).
-4. **Поднять Keeper-кластер** обратно:
+It's safe - all Redis keys are ephemeral (presence will be restored when reconnecting Souls), see [§ Redis](#redis).
+4. **Raise the Keeper cluster** back:
    ```sh
    for h in keeper-1 keeper-2 keeper-3; do ssh $h systemctl start keeper; done
    ```
-5. **Souls сами переподключатся** (failback-loop в `soul.yml::keeper.endpoints`). После переподключения SID-lease восстанавливается, `souls.status` приходит в `connected` через `mark_disconnected`-reconcile (двунаправленный, ADR-006 amendment).
-6. **Verify**: `keeper_grpc_streams_active` (Prometheus) на каждом инстансе должен расти до ожидаемого числа Souls. `apply_runs.status = 'running'` строк до восстановления — могут зависнуть в `dispatched`/`claimed`; recovery-scan Reaper их подберёт (если `reclaim_apply_runs` включён) или администратор перезапустит вручную.
+5. **Souls will reconnect themselves** (failback-loop in `soul.yml::keeper.endpoints`). After reconnection, SID-lease is restored, `souls.status` comes to `connected` via `mark_disconnected`-reconcile (bidirectional, ADR-006 amendment).
+6. **Verify**: `keeper_grpc_streams_active` (Prometheus) on each instance should grow to the expected number of Souls. `apply_runs.status = 'running'` lines before recovery - may hang in `dispatched`/`claimed`; recovery-scan Reaper will pick them up (if `reclaim_apply_runs` is enabled) or the administrator will restart them manually.
 
-#### Что **не** восстанавливается из PG-backup-а
+#### What is **not** restored from PG backup
 
-- **Vault-секреты** (JWT signing-key, DSN, SoulSeed CA приватник, Sigil signing-key) — отдельный бэкап Vault (см. [§ Vault](#vault)).
-- **Redis-состояние** — by design (эфемерно, восстанавливается естественно).
-- **mTLS-материал на хостах** (`/etc/keeper/tls/`, `/var/lib/soul-stack/seed/`) — бэкапить через стандартные file-backup-инструменты или ротировать заново через Vault PKI после restore.
+- **Vault secrets** (JWT signing-key, DSN, SoulSeed CA private, Sigil signing-key) - separate Vault backup (see [§ Vault](#vault)).
+- **Redis state** — by design (ephemeral, restored naturally).
+- **mTLS material on hosts** (`/etc/keeper/tls/`, `/var/lib/soul-stack/seed/`) - backup via standard file-backup tools or rotate again via Vault PKI after restore.
 
-### Retention и housekeeping
+### Retention and housekeeping
 
-Keeper сам чистит свои таблицы через Reaper-правила ([`docs/keeper/reaper.md`](../keeper/reaper.md)):
+Keeper cleans its tables itself via Reaper rules ([`docs/keeper/reaper.md`](../keeper/reaper.md)):
 
-| Таблица | Правило | Default `max_age` |
+| Table | Rule | Default `max_age` |
 |---|---|---|
 | `bootstrap_tokens` (pending) | `expire_pending_seeds` | 24h |
 | `bootstrap_tokens` (used) | `purge_used_tokens` | 90d |
 | `souls` (disconnected/expired) | `purge_souls` | 30d |
 | `soul_seeds` (superseded/expired/revoked) | `purge_old_seeds` | 90d |
 | `audit_log` | `purge_audit_old` | 365d |
-| `apply_runs` (терминальные) | `purge_apply_runs` | 30d |
-| `apply_task_register` (после терминала) | `purge_apply_task_register` | 1h (grace) |
-| `state_history` (активные) | `archive_state_history` (`soft_delete`) | `keep_last_n: 50` на incarnation; миграционные snapshots не архивируются |
+| `apply_runs` (terminal) | `purge_apply_runs` | 30d |
+| `apply_task_register` (after terminal) | `purge_apply_task_register` | 1h (grace) |
+| `state_history` (active) | `archive_state_history` (`soft_delete`) | `keep_last_n: 50` on incarnation; migration snapshots are not archived |
 
-Дополнительно вручную (вне Reaper-а):
+Additionally manually (outside of Reaper):
 
-- **`VACUUM ANALYZE`** — autovacuum в PG включён по умолчанию; для больших таблиц (`audit_log`, `state_history`) при долгой эксплуатации можно запускать `VACUUM FULL` в окно обслуживания для дефрагментации.
-- **Soft-deleted `state_history` (archived_at IS NOT NULL)** — Keeper их не удаляет физически. Если место кончается — отдельный bulk-выгрузчик в S3 + DELETE (см. [ADR-Q19](../architecture.md#открытые-вопросы)).
+- **`VACUUM ANALYZE`** — autovacuum in PG is enabled by default; for large tables (`audit_log`, `state_history`) during long-term operation, you can run `VACUUM FULL` in the maintenance window for defragmentation.
+- **Soft-deleted `state_history` (archived_at IS NOT NULL)** - Keeper does not physically delete them. If space runs out, use a separate bulk unloader in S3 + DELETE (see [ADR-Q19](../architecture.md)).
 
 ## Redis
 
-Горячий слой и координационная шина Keeper-кластера. **Эфемерное хранилище** — все ключи восстановимы естественно при reconnect Souls и продлении lease-renew goroutine-ами.
+Hot layer and coordination bus of the Keeper cluster. **Ephemeral storage** - all keys are naturally restored when reconnecting Souls and extending lease-renew goroutines.
 
-### Версия и режим
+### Version and mode
 
-| Параметр | Минимум | Рекомендуется |
+| Parameter | Minimum | Recommended |
 |---|---|---|
-| Версия Redis | 6.2 | 7.x (улучшен ACL, доп. команды) |
-| Топология | single instance + AOF (`redis.mode: standalone`) | Sentinel (рекомендуемый HA on-premise) или Cluster (горизонтальное масштабирование) — см. [§ HA Redis](#ha-redis) |
-| Authentication | пароль через `redis.password_ref` в `keeper.yml` (vault-ref или plaintext) | vault-ref `vault:secret/keeper/redis` (резолв из Vault) + ACL-пользователь с минимальным набором команд (post-MVP) |
-| Persistence | AOF (everysec) или RDB-snapshot | AOF — лишнее: данные эфемерны, восстановятся через reconnect |
-| TLS | опционально | желательно — Redis ⇄ Keeper по TLS, особенно cross-DC |
+| Redis version | 6.2 | 7.x (improved ACL, additional commands) |
+| Topology | single instance + AOF (`redis.mode: standalone`) | Sentinel (recommended HA on-premise) or Cluster (horizontal scaling) - see [§ HA Redis](#ha-redis) |
+| Authentication | password via `redis.password_ref` to `keeper.yml` (vault-ref or plaintext) | vault-ref `vault:secret/keeper/redis` (resolved from Vault) + user ACL with minimal command set (post-MVP) |
+| Persistence | AOF (everysec) or RDB-snapshot | AOF - superfluous: data is ephemeral, will be restored via reconnect |
+| TLS | optional | preferably Redis ⇄ Keeper over TLS, especially cross-DC |
 
-Пароль Redis (`redis.password_ref`) поддерживает обе формы (см. [config.md → redis](../keeper/config.md#redis)):
+Redis password (`redis.password_ref`) supports both forms (see [config.md → redis](../keeper/config.md#redis)):
 
-- **vault-ref** `vault:secret/keeper/redis[#field]` — резолвится из Vault keeper-vault-клиентом на старте (как `postgres.dsn_ref` / `auth.jwt.signing_key_ref`). Default-поле KV-секрета — `password`; другое поле выбирается суффиксом `#field`. Это рекомендуемая прод-форма.
-- **plaintext-строка** — работает как есть (dev / тесты без Vault-fixture).
-- **пустое** — подключение к Redis без пароля.
+- **vault-ref** `vault:secret/keeper/redis[#field]` - resolved from Vault by the keeper-vault-client at start (as `postgres.dsn_ref` / `auth.jwt.signing_key_ref`). Default KV secret field - `password`; the other field is selected with the suffix `#field`. This is the recommended product form.
+- **plaintext-string** - works as is (dev/tests without Vault-fixture).
+- **empty** - connect to Redis without a password.
 
-Записанный ниже в Vault KV `secret/keeper/redis` (шаг bootstrap, таблица ротации) — **действующая ссылка**: достаточно указать в `keeper.yml` `password_ref: vault:secret/keeper/redis`.
+Recorded below in Vault KV `secret/keeper/redis` (bootstrap step, rotation table) - **valid link**: just specify `password_ref: vault:secret/keeper/redis` in `keeper.yml`.
 
-### Что лежит в Redis
+### What's in Redis
 
-| Префикс ключа | Что | TTL | Когда обновляется |
+| Key prefix | What | TTL | When is it updated |
 |---|---|---|---|
-| `soul:<sid>:lock` | SID-lease (какой Keeper-инстанс держит EventStream данного Soul-а) | 30s | renew каждые 10s renew-goroutine-ой handler-а; гаснет при `Release` (graceful) или TTL (crash). |
-| `keeper:instance:<kid>` | [Conclave](../adr/0006-cache-redis.md#adr-006-кэш-и-координация--redis) — presence Keeper-инстанса | 30s (`DefaultConclaveTTL`) | renew каждые 10s (`DefaultConclaveRenewInterval`); снимается на graceful-shutdown. |
-| `reaper:leader` | Лидерский lease Reaper-а | `reaper.lock_ttl` (default 5m) | renew переизбирается по TTL; один live-Reaper в кластере. |
-| `apply:summons` | pub/sub-сигнал «появились planned-задания» ([ADR-027](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim)) | без TTL (pub/sub) | Эфемерный сигнал; потеря компенсируется poll-fallback Acolyte-ов. |
-| `events:shard:<n>` | cluster-routing apply/run-событий (`TaskEvent`/`RunResult`/`ErrandResult`) между Keeper-инстансами ([ADR-006(c.1)](../adr/0006-cache-redis.md#adr-006-кэш-и-координация--redis), `applybus`) | без TTL (pub/sub) | Эфемерный; фикс. множество из 256 шардов (`n = fnv32a(apply_id) % 256`), bridge per-shard. Потеря событий допустима (fire-and-forget SSE). |
-| `sigil:anchors-changed` | pub/sub-сигнал «trust-anchor-набор обновился» ([ADR-026(h)](../adr/0026-sigil.md#adr-026-sigil--целостность-плагинов-keeper-signed-digest-индекс)) | без TTL | Эфемерный; потеря компенсируется TTL-fallback-перечитом (`sigil_anchors_reload_interval`, default 30s). |
-| `rbac:invalidate` | pub/sub-сигнал «RBAC-снимок обновился» ([ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)) | без TTL | TTL-poll fallback на стороне `Holder`. |
-| `service:invalidate` | pub/sub-сигнал «реестр Service-ов обновился» ([ADR-029](../adr/0029-service-registry.md#adr-029-реестр-service-ов--postgres)) | без TTL | TTL-poll fallback. |
-| `cancel:<apply_id>` | cluster-wide cancel-сигнал прогона ([cluster-wide cancel](../keeper/storage.md#cluster-wide-cancel-прогона)) | короткий TTL | при `POST /v1/incarnations/{name}/cancel`. |
+| `soul:<sid>:lock` | SID-lease (which Keeper instance holds the EventStream of this Soul) | 30s | renew every 10s renew-goroutine handler; goes out at `Release` (graceful) or TTL (crash). |
+| `keeper:instance:<kid>` | [Conclave](../adr/0006-cache-redis.md) - presence of Keeper instance | 30s (`DefaultConclaveTTL`) | renew every 10s (`DefaultConclaveRenewInterval`); filmed on graceful-shutdown. |
+| `reaper:leader` | Reaper's leadership lease | `reaper.lock_ttl` (default 5m) | renew is re-elected by TTL; one live-Reaper per cluster. |
+| `apply:summons` | pub/sub-signal "planned tasks have appeared" ([ADR-027](../adr/0027-apply-work-queue.md)) | without TTL (pub/sub) | Ephemeral signal; the loss is compensated by poll-fallback Acolytes. |
+| `events:shard:<n>` | cluster-routing apply/run events (`TaskEvent`/`RunResult`/`ErrandResult`) between Keeper instances ([ADR-006(p.1)](../adr/0006-cache-redis.md), `applybus`) | without TTL (pub/sub) | Ephemeral; fixed set of 256 shards (`n = fnv32a(apply_id) % 256`), bridge per-shard. Event loss is acceptable (fire-and-forget SSE). |
+| `sigil:anchors-changed` | pub/sub-signal "trust-anchor-set updated" ([ADR-026(h)](../adr/0026-sigil.md)) | no TTL | Ephemeral; the loss is compensated by TTL-fallback-reread (`sigil_anchors_reload_interval`, default 30s). |
+| `rbac:invalidate` | pub/sub-signal "RBAC snapshot updated" ([ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)) | no TTL | TTL-poll fallback on the `Holder` side. |
+| `service:invalidate` | pub/sub-signal "Service registry has been updated" ([ADR-029](../adr/0029-service-registry.md)) | no TTL | TTL-poll fallback. |
+| `cancel:<apply_id>` | cluster-wide cancel-run signal ([cluster-wide cancel](../keeper/storage.md)) | short TTL | at `POST /v1/incarnations/{name}/cancel`. |
 
-Все ключи имеют **fallback-механизм** в коде ([ADR-006](../adr/0006-cache-redis.md#adr-006-кэш-и-координация--redis), [ADR-027](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim), [ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)): потеря pub/sub-сигнала покрывается TTL-poll-ом, потеря lease — TTL и переизбранием.
+All keys have a **fallback mechanism** in the code ([ADR-006](../adr/0006-cache-redis.md), [ADR-027](../adr/0027-apply-work-queue.md), [ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)): loss of a pub/sub signal is covered by TTL-poll, loss of lease is covered by TTL and re-election.
 
-### Параметры
+### Parameters
 
 ```redis.conf
-# Persistence — лёгкая, нужна только для перезапуска Redis без потери lease-окна.
+# Persistence is lightweight, only needed to restart Redis without losing the lease window.
 appendonly yes
 appendfsync everysec
 
-# Память — нет жёсткого ограничения, но безопасно ограничить, чтобы не вытеснить OS:
+# Memory - no hard limit, but it's safe to limit so as not to crowd out the OS:
 maxmemory 1gb
 maxmemory-policy noeviction
 ```
 
-**Eviction policy — `noeviction`**, не `allkeys-lru`. Обоснование: каждый ключ Redis в Soul Stack имеет **собственный TTL** и **смысловой fallback** в коде; eviction LRU вытеснил бы lease посреди жизни (split-brain Reaper / двойной handler одного SID). `noeviction` + `maxmemory` достаточно с большим запасом — суммарный объём всех ключей на 100k VM:
+**Eviction policy is `noeviction`**, not `allkeys-lru`. Rationale: Each Redis key in Soul Stack has **its own TTL** and **semantic fallback** in the code; eviction LRU would supplant lease mid-life (split-brain Reaper / double handler of one SID). `noeviction` + `maxmemory` is enough with a large margin - the total volume of all keys per 100k VM:
 
 - `soul:<sid>:lock` × 100k = ~10 MB
-- `keeper:instance:<kid>` × десятки = <1 KB
-- `apply:summons` / `events:shard:*` / `cancel:*` — pub/sub, в Redis не хранятся (только трансляция)
-- pub/sub-каналы — не хранятся, только трансляция
+- `keeper:instance:<kid>` × tens = <1 KB
+- `apply:summons` / `events:shard:*` / `cancel:*` - pub/sub, not stored in Redis (broadcast only)
+- pub/sub channels - not stored, broadcast only
 
-**1 GB `maxmemory` с большим запасом** для целевого масштаба.
+**1 GB `maxmemory` with plenty of headroom** for target scale.
 
 ### HA Redis
 
-Клиент Keeper-а поддерживает все три топологии **нативно** через `redis.mode` (slot-routing для Cluster, master-discovery для Sentinel — на стороне клиента, без внешней прокси). Полная нормативная схема полей блока — [config.md → redis](../keeper/config.md#redis).
+The Keeper client supports all three topologies **natively** via `redis.mode` (slot-routing for Cluster, master-discovery for Sentinel - on the client side, without an external proxy). The complete normative scheme of block fields is [config.md → redis](../keeper/config.md#redis).
 
-| Решение | `redis.mode` | Обязательные поля | Когда |
+| Solution | `redis.mode` | Required fields | When |
 |---|---|---|---|
-| **Single instance** + AOF | `standalone` (default) | `addr` | dev / staging, малые инсталляции, один узел. |
-| **Sentinel** (1 master + N replica + Sentinel quorum) | `sentinel` | `master_name` + `sentinels[]` | **Рекомендуемый HA-путь для типового on-premise** — автоматический failover; single-master, проще и безопаснее Cluster. |
-| **Cluster** (sharded, 3+ master + replicas) | `cluster` | `nodes[]` | Горизонтальное масштабирование под большой объём ключей. См. кавеат про pub/sub ниже. |
-| **Managed**: ElastiCache, Cloud Memorystore, Yandex Managed Redis | `standalone` (за единым endpoint-ом) или `cluster`/`sentinel` по форме managed-сервиса | по выбранному `mode` | Прод в облаке. |
+| **Single instance** + AOF | `standalone` (default) | `addr` | dev/staging, small installations, one node. |
+| **Sentinel** (1 master + N replica + Sentinel quorum) | `sentinel` | `master_name` + `sentinels[]` | **Recommended HA path for typical on-premise** - automatic failover; single-master, simpler and safer than Cluster. |
+| **Cluster** (sharded, 3+ master + replicas) | `cluster` | `nodes[]` | Horizontal scaling for a large volume of keys. See the pub/sub cover below. |
+| **Managed**: ElastiCache, Cloud Memorystore, Yandex Managed Redis | `standalone` (behind a single endpoint) or `cluster`/`sentinel` in the form of a managed service | by selected `mode` | Prod in the cloud. |
 
-Cluster validated на мега-приёмке 2026-05-25 (3 keeper + 9-нодовый реальный redis-cluster): leader-failover Reaper-а по TTL без split-brain, presence Souls / Conclave, реальные сценарии прогонов.
+Cluster validated at mega-reception 2026-05-25 (3 keeper + 9-node real redis-cluster): leader-failover Reaper by TTL without split-brain, presence Souls / Conclave, real run scenarios.
 
-!!! note "Рекомендация: Sentinel для типового HA"
-    Для типового on-premise HA выбирайте **Sentinel**, а не Cluster. Sentinel — single-master с автоматическим failover: проще в эксплуатации, без шардирования и slot-rebalance, и снимает кавеат про cluster pub/sub (ниже). Cluster берите осознанно — когда объём ключей перерос один master.
+!!! note "Recommendation: Sentinel for generic HA"
+For typical on-premise HA, choose **Sentinel** rather than Cluster. Sentinel is a single-master with automatic failover: easier to operate, without sharding and slot-rebalance, and removes the caveat about cluster pub/sub (below). Choose Cluster consciously - when the volume of keys has outgrown one master.
 
-!!! warning "Cluster pub/sub: broadcast на очень больших флотах"
-    В режиме `cluster` Redis-pub/sub — классический broadcast (сообщение доходит до всех узлов кластера). Это **корректно** (координационные сигналы доезжают), но на **очень больших флотах** broadcast не снимает известный bottleneck pub/sub-нагрузки. Sharded pub/sub — план на GA. Для типового масштаба и для on-premise-HA через Sentinel этот кавеат не актуален.
+!!! warning "Cluster pub/sub: broadcast on very large fleets"
+In `cluster` mode Redis-pub/sub is a classic broadcast (the message reaches all nodes in the cluster). This is **correct** (coordination signals get through), but on **very large fleets** broadcast does not remove the well-known bottleneck pub/sub-load. Sharded pub/sub - GA plan. For standard scale and for on-premise-HA via Sentinel, this caveat is not relevant.
 
 ### Backup / restore Redis
 
-**Не нужен** в нормальной операционной модели. Все ключи восстановимы:
+**Not needed** in a normal operating model. All keys are recoverable:
 
-- SID-lease — renew-goroutine handler-а; на reconnect Soul-а lease создаётся заново.
-- Conclave — на старте Keeper-инстанса `RegisterInstance` пишет presence заново.
-- Reaper-leader — переизбрание по TTL.
-- pub/sub — эфемерный, потеря компенсируется fallback.
+- SID-lease — renew-goroutine handler; on reconnect Soul, the lease is created anew.
+- Conclave - at the start of the Keeper instance, `RegisterInstance` writes presence again.
+- Reaper-leader - re-election by TTL.
+- pub/sub - ephemeral, loss is compensated by fallback.
 
-**Восстановление инфраструктуры** — поднять новый Redis, направить туда блок `keeper.yml::redis` (`addr` для `standalone`, `sentinels[]`/`nodes[]` для `sentinel`/`cluster`) через hot-reload или systemd reload. Souls продолжают работать, presence пере-фиксируется в новом Redis за TTL (~30s).
+**Infrastructure restoration** - raise a new Redis, send the `keeper.yml::redis` block there (`addr` for `standalone`, `sentinels[]`/`nodes[]` for `sentinel`/`cluster`) via hot-reload or systemd reload. Souls continues to work, presence is re-fixed in the new Redis for TTL (~30s).
 
 ## Vault
 
-Хранилище **всех секретов** инсталляции: PG DSN, JWT signing-key, mTLS PKI (Keeper-side + SoulSeed), SSH-CA (для `keeper.push` через Vault SSH provider), Sigil signing-key, Essence-секреты сервисов, credentials cloud-driver-ов. **Обязательная зависимость** ([requirements.md](../requirements.md), [ADR-014](../adr/0014-operator-identity.md#adr-014-identity-модель-оператора-archon)).
+Storage of **all secrets** of the installation: PG DSN, JWT signing-key, mTLS PKI (Keeper-side + SoulSeed), SSH-CA (for `keeper.push` via Vault SSH provider), Sigil signing-key, Essence-secrets of services, credentials of cloud-drivers. **Required dependency** ([requirements.md](../requirements.md), [ADR-014](../adr/0014-operator-identity.md)).
 
-Прод-настройка Vault (AppRole + persistent backend + auto-unseal + least-privilege policy) подробно описана в [`docs/keeper/prod-setup.md`](../keeper/prod-setup.md). Здесь — операционная часть.
+Vault prod configuration (AppRole + persistent backend + auto-unseal + least-privilege policy) is described in detail in [`docs/keeper/prod-setup.md`](../keeper/prod-setup.md). Here is the operational part.
 
-### Engines Keeper-а
+### Engines Keeper
 
-| Engine | Mount | Что хранится | Использование |
+| Engine | Mount | What is stored | Usage |
 |---|---|---|---|
-| KV (v1/v2) | `secret/` | `keeper/postgres` (DSN), `keeper/jwt-signing-key`, `keeper/redis` (password), `keeper/sigil-signing-key`, `keeper/sigil-keys/<key_id>` (R3 multi-anchor), Essence-секреты сервисов | резолв `vault:` ref в конфиге и в CEL `vault(...)`. Версия KV mount-а определяется автоматически (probe), работают v1 и v2; провижининг ниже поднимает v2 как рекомендованный дефолт. **Sigil multi-anchor (R3, `sigil-keys/<key_id>`) — list/metadata-операции, требуют KV v2.** |
-| PKI | `pki/` (или `pki/soulstack/`) | Root + intermediate CA для SoulSeed mTLS | `Bootstrap`-RPC подписывает CSR Soul-агента через `pki/sign/<pki_role>` |
-| SSH | `ssh/` (опционально) | SSH CA для `keeper.push` через `soul-ssh-vault` provider | `keeper.push` запрашивает signed SSH cert на конкретный хост перед SSH-сессией |
-| Transit | (опционально) | Подпись JWT без экспорта ключа | post-MVP, см. [ADR-014(b)](../adr/0014-operator-identity.md#adr-014-identity-модель-оператора-archon) |
+| KV (v1/v2) | `secret/` | `keeper/postgres` (DSN), `keeper/jwt-signing-key`, `keeper/redis` (password), `keeper/sigil-signing-key`, `keeper/sigil-keys/<key_id>` (R3 multi-anchor), Essence-service secrets | resolve `vault:` ref in the config and in CEL `vault(...)`. The KV mount version is detected automatically (probe), v1 and v2 work; Provisioning below raises v2 as the recommended default. **Sigil multi-anchor (R3, `sigil-keys/<key_id>`) - list/metadata operations, require KV v2.** |
+| PKI | `pki/` (or `pki/soulstack/`) | Root + intermediate CA for SoulSeed mTLS | `Bootstrap`-RPC signs Soul Agent CSR via `pki/sign/<pki_role>` |
+| SSH | `ssh/` (optional) | SSH CA for `keeper.push` via `soul-ssh-vault` provider | `keeper.push` requests a signed SSH cert for a specific host before an SSH session |
+| Transit | (optional) | JWT signing without key export | post-MVP, see [ADR-014(b)](../adr/0014-operator-identity.md) |
 
-!!! note "TLS к Vault: custom-CA bundle в конфиге не параметризован (post-MVP)"
-    HTTPS к Vault (`vault.addr: https://…`) работает, **если серверный сертификат Vault цепляется к системному trust-store** хоста Keeper-а (либо передан Vault SDK через стандартные переменные окружения, напр. `VAULT_CACERT`). Отдельного поля под кастомный CA-bundle для Vault в `keeper.yml` сейчас **нет** — клиент строится через `vaultapi.DefaultConfig()`. Параметризация custom-CA для Vault — post-MVP; пока вносите CA Vault-а в системный trust-store хоста.
+!!! note "TLS to Vault: custom-CA bundle is not parameterized in the config (post-MVP)"
+HTTPS to Vault (`vault.addr: https://…`) works **if the Vault server certificate clings to the system trust-store** of the Keeper host (or is passed to the Vault SDK through standard environment variables, e.g. `VAULT_CACERT`). There is currently **no** a separate field for a custom CA-bundle for Vault in `keeper.yml` - the client is built through `vaultapi.DefaultConfig()`. Custom-CA parameterization for Vault - post-MVP; For now, add CA Vault to the host's system trust-store.
 
-### Bootstrap Vault для Keeper
+### Bootstrap Vault for Keeper
 
-Минимальный набор операций — провижининг секретов и engines:
+Minimum set of operations - provisioning secrets and engines:
 
 ```sh
 export VAULT_ADDR=https://vault.internal:8200
 export VAULT_TOKEN=<root-or-admin-token>
 
-# KV — клиент Keeper-а работает и с v1, и с v2 (версия определяется автоматически).
-# v2 рекомендован (versioning + metadata; Sigil multi-anchor list/metadata требует v2)
-# и в dev-mode активен по умолчанию на mount `secret`.
+# KV - the Keeper client works with both v1 and v2 (the version is detected automatically).
+# v2 recommended (versioning + metadata; Sigil multi-anchor list/metadata requires v2)
+# and in dev-mode it is active by default on mount `secret`.
 vault secrets enable -version=2 -path=secret kv 2>/dev/null || true
 
-# Записать обязательные секреты Keeper-а
+# Write down mandatory Keeper secrets
 vault kv put secret/keeper/postgres \
   dsn="postgres://keeper:<password>@pg.internal:5432/keeper?sslmode=verify-full"
-# Redis: пароль читается из Vault (keeper.yml::redis.password_ref:
-# vault:secret/keeper/redis). Default-поле KV-секрета — `password`.
+# Redis: password is read from Vault (keeper.yml::redis.password_ref:
+# vault:secret/keeper/redis). The default field of the KV secret is `password`.
 vault kv put secret/keeper/redis password="<redis-password>"
 vault kv put secret/keeper/jwt-signing-key signing_key="$(openssl rand -base64 32)"
 
-# PKI engine для SoulSeed
+# PKI engine for SoulSeed
 vault secrets enable -path=pki/soulstack pki
 vault secrets tune -max-lease-ttl=87600h pki/soulstack
 vault write -field=certificate pki/soulstack/root/generate/internal \
@@ -304,7 +304,7 @@ vault write pki/soulstack/roles/soul-seed \
     allow_subdomains=true \
     max_ttl=720h
 
-# AppRole для Keeper (прод)
+# AppRole for Keeper (cont.)
 vault auth enable approle
 vault policy write keeper-prod /path/to/vault-policy.hcl   # see examples/keeper/vault-policy.hcl
 vault write auth/approle/role/keeper-prod \
@@ -314,59 +314,59 @@ vault read auth/approle/role/keeper-prod/role-id           # role_id → keeper.
 vault write -f auth/approle/role/keeper-prod/secret-id     # secret_id → /etc/keeper/vault-secret-id mode 0400
 ```
 
-Полный шаблон policy с покомментированными путями — [`examples/keeper/vault-policy.hcl`](../../examples/keeper/vault-policy.hcl). Подробности AppRole — [`docs/keeper/prod-setup.md`](../keeper/prod-setup.md).
+The full policy template with commented paths is [`examples/keeper/vault-policy.hcl`](../../examples/keeper/vault-policy.hcl). AppRole Details - [`docs/keeper/prod-setup.md`](../keeper/prod-setup.md).
 
-### Лёгкий Vault для малых инсталляций
+### Lightweight Vault for small installations
 
-Vault — обязательная зависимость ([ADR-053](../adr/0053-dependency-tiers.md#adr-053-tier-ы-инфраструктурных-зависимостей)), но это **не значит «нужен тяжёлый Vault-кластер»**. Для малой инсталляции достаточно одного процесса Vault с file-storage — операционно это сопоставимо с эксплуатацией Redis (один бинарь, локальный каталог под данные).
+Vault is a required dependency ([ADR-053](../adr/0053-dependency-tiers.md)), but this **does not mean "a heavy Vault cluster is needed"**. For a small installation, one Vault process with file-storage is enough - operationally this is comparable to using Redis (one binary, local directory for data).
 
 ```hcl
 # /etc/vault/vault.hcl — single-binary, file-storage
 storage "file" { path = "/var/lib/vault/data" }
 listener "tcp" {
   address     = "127.0.0.1:8200"
-  tls_disable = false              # прод: реальный TLS, не disable
+  tls_disable = false              # cont: real TLS, not disable
 }
 api_addr = "https://vault.internal:8200"
 ```
 
-Первый запуск — `vault operator init` (сохранить unseal-keys и root-token в безопасном месте), затем `vault operator unseal` нужным числом ключей. Дальше — секреты и engines по разделу [Bootstrap Vault для Keeper](#bootstrap-vault-для-keeper) выше.
+First run - `vault operator init` (save unseal-keys and root-token in a safe place), then `vault operator unseal` with the required number of keys. Next are the secrets and engines from the Bootstrap Vault for Keeper section above.
 
-**dev-mode (`vault server -dev`) для прода непригоден** — он держит данные только в памяти и **теряет их при каждом рестарте** (а также unseal-ит сам себя и слушает по HTTP). Годится только для локальных экспериментов. Для прода — **file- или raft-storage + явный unseal** (в проде — [auto-unseal](#backup--restore-vault), иначе каждый рестарт требует ручного ввода кворума ключей).
+**dev-mode (`vault server -dev`) is not suitable for sale** - it keeps data only in memory and **loses it on every restart** (and also unseals itself and listens via HTTP). Suitable only for local experiments. For sales - **file- or raft-storage + explicit unseal** (in production - [auto-unseal](#backup--restore-vault), otherwise each restart requires manual entry of a quorum of keys).
 
-Детали single-binary-конфигурации, raft-storage и auto-unseal — в [официальной документации Vault](https://developer.hashicorp.com/vault/docs/configuration); прод-настройка для Keeper — [`docs/keeper/prod-setup.md`](../keeper/prod-setup.md).
+Details of single-binary-configuration, raft-storage and auto-unseal are in [official Vault documentation](https://developer.hashicorp.com/vault/docs/configuration); prod setting for Keeper - [`docs/keeper/prod-setup.md`](../keeper/prod-setup.md).
 
 ### Backup / restore Vault
 
-Vault бэкапит **storage backend**, не сам бинарь. Зависит от выбранного backend-а:
+Vault backs up the **storage backend**, not the binary itself. Depends on the selected backend:
 
-- **Raft** (рекомендуется): `vault operator raft snapshot save /backup/vault-$(date -u +%Y%m%dT%H%M%SZ).snap`. Снимок включает все KV, политики, токены, конфигурацию engines.
-- **Consul / etcd**: бэкап соответствующего storage по их инструментам.
-- **Cloud-managed (HCP Vault, AWS Secrets Manager, …)**: бэкап управляется провайдером.
+- **Raft** (recommended): `vault operator raft snapshot save /backup/vault-$(date -u +%Y%m%dT%H%M%SZ).snap`. The snapshot includes all KVs, policies, tokens, engines configuration.
+- **Consul / etcd**: backup of the corresponding storage according to their tools.
+- **Cloud-managed (HCP Vault, AWS Secrets Manager, ...)**: backup is managed by the provider.
 
-**Ротация unseal-keys / recovery-keys** — по политике безопасности организации, обычно ежегодно. См. [Vault docs → Key rotation](https://developer.hashicorp.com/vault/docs/concepts/rotation).
+**Rotation of unseal-keys / recovery-keys** - according to the organization's security policy, usually annually. See [Vault docs → Key rotation](https://developer.hashicorp.com/vault/docs/concepts/rotation).
 
-**Auto-unseal** ([ADR в prod-setup](../keeper/prod-setup.md)) обязателен в прод — иначе каждый рестарт Vault требует ручного unseal с кворумом ключей. Cloud KMS (AWS KMS / GCP KMS / Azure Key Vault) или HSM — стандартные варианты.
+**Auto-unseal** ([ADR in prod-setup](../keeper/prod-setup.md)) is required in prod - otherwise, each Vault restart requires manual unseal with a quorum of keys. Cloud KMS (AWS KMS / GCP KMS / Azure Key Vault) or HSM are standard options.
 
-### Ротация секретов
+### Rotation of secrets
 
-| Секрет | Как часто | Процедура |
+| Secret | How often | Procedure |
 |---|---|---|
-| JWT signing-key (`secret/keeper/jwt-signing-key`) | По компрометации / по политике (раз в 6-12 мес) | `vault kv put` → `systemctl reload keeper` → перевыпуск всех JWT (старые невалидны). См. [§ Ротация signing-key в prod-setup.md](../keeper/prod-setup.md#jwt-signing-key-прод). |
-| PG password (`secret/keeper/postgres`) | По политике (раз в 90 дней) | `ALTER USER keeper PASSWORD …` в PG → `vault kv put secret/keeper/postgres dsn=…` → `systemctl reload keeper` (пул пересоздаётся с новым DSN). Окно атомарности — кратковременный `connection failed` пока пул переcoздаётся. |
-| Redis password (`secret/keeper/redis`) | По политике | `CONFIG SET requirepass …` в Redis → `vault kv put secret/keeper/redis password=…` (если `redis.password_ref` — vault-ref) → `systemctl reload keeper`. Резолв пароля Redis из Vault реализован — `password_ref: vault:secret/keeper/redis` действует. |
-| SoulSeed (mTLS-cert Soul-а) | Регулярно (TTL `pki/soulstack/roles/soul-seed`, до 30d) | автоматически по живому стриму ([`docs/soul/onboarding.md`](../soul/onboarding.md)). |
-| Vault AppRole `secret_id` | По TTL `secret_id_ttl` (default 720h в нашем шаблоне) | `vault write -f auth/approle/role/keeper-prod/secret-id` → переписать `/etc/keeper/vault-secret-id` (mode 0400) → `systemctl reload keeper` (или restart — auth-блок reload-able? см. [config.md hot-reload](../keeper/config.md#hot-reload)). |
-| Vault root-token | По завершении bootstrap | `vault token revoke <root-token>` — после настройки AppRole не нужен; для plurpose `keeper init` уже отработал. |
-| Sigil signing-key (`secret/keeper/sigil-signing-key`) | По компрометации (редко) | R3 multi-anchor allows graceful rotation: добавить новый ключ → re-broadcast trust-anchors → Retire старого; см. [ADR-026(h)](../adr/0026-sigil.md#adr-026-sigil--целостность-плагинов-keeper-signed-digest-индекс). |
+| JWT signing-key (`secret/keeper/jwt-signing-key`) | By compromise / by policy (every 6-12 months) | `vault kv put` → `systemctl reload keeper` → reissue of all JWTs (old ones are invalid). See [§ Rotation of signing-key in prod-setup.md](../keeper/prod-setup.md). |
+| PG password (`secret/keeper/postgres`) | By policy (once every 90 days) | `ALTER USER keeper PASSWORD …` in PG → `vault kv put secret/keeper/postgres dsn=…` → `systemctl reload keeper` (the pool is recreated with a new DSN). The atomicity window is short-term `connection failed` while the pool is being recreated. |
+| Redis password (`secret/keeper/redis`) | By politics | `CONFIG SET requirepass …` in Redis → `vault kv put secret/keeper/redis password=…` (if `redis.password_ref` is vault-ref) → `systemctl reload keeper`. The Redis password resolution from Vault has been implemented - `password_ref: vault:secret/keeper/redis` is valid. |
+| SoulSeed (mTLS-cert Soul) | Regularly (TTL `pki/soulstack/roles/soul-seed`, up to 30d) | automatically via live stream ([`docs/soul/onboarding.md`](../soul/onboarding.md)). |
+| Vault AppRole `secret_id` | By TTL `secret_id_ttl` (default 720h in our template) | `vault write -f auth/approle/role/keeper-prod/secret-id` → rewrite `/etc/keeper/vault-secret-id` (mode 0400) → `systemctl reload keeper` (or restart - reload-able auth block? see [config.md hot-reload](../keeper/config.md#hot-reload)). |
+| Vault root-token | Upon completion of bootstrap | `vault token revoke <root-token>` - after configuration, AppRole is not needed; for plurpose `keeper init` has already worked. |
+| Sigil signing-key (`secret/keeper/sigil-signing-key`) | By compromise (rarely) | R3 multi-anchor allows graceful rotation: add a new key → re-broadcast trust-anchors → Retire the old one; See [ADR-026(h)](../adr/0026-sigil.md). |
 
-**Sealed Vault → Keeper fail-closed.** При запечатанном Vault Keeper не резолвит ни `vault:` ref (DSN / signing-key / passwords), ни выпустит SoulSeed через PKI. Существующие сессии (с уже резолвленными секретами и активным PG-пулом) продолжают работать; новые операции, требующие Vault, падают. Это часть инварианта «безопасность на первом месте» — `KEEPER_ALLOW_VAULT_DOWN`-флага нет и не планируется.
+**Sealed Vault → Keeper fail-closed.** When sealed, Vault Keeper will neither resolve `vault:` ref (DSN/signing-key/passwords) nor release SoulSeed via PKI. Existing sessions (with already resolved secrets and an active PG pool) continue to work; new operations that require Vault fail. This is part of the "safety first" invariant - there is no `KEEPER_ALLOW_VAULT_DOWN` flag and there are no plans to do so.
 
-## См. также
+## See also
 
-- [`docs/keeper/storage.md`](../keeper/storage.md) — полный каталог таблиц Postgres + ключей Redis.
+- [`docs/keeper/storage.md`](../keeper/storage.md) - complete catalog of Postgres tables + Redis keys.
 - [`docs/keeper/prod-setup.md`](../keeper/prod-setup.md) — Vault AppRole, least-privilege policy, persistent + auto-unseal, JWT signing-key rotation.
-- [`docs/keeper/reaper.md`](../keeper/reaper.md) — Reaper-правила (retention).
-- [`docs/architecture.md` → ADR-005 / ADR-006 / ADR-022 / ADR-026 / ADR-029](../architecture.md) — обоснования.
-- [`examples/keeper/vault-policy.hcl`](../../examples/keeper/vault-policy.hcl) — шаблон policy.
-- [`disaster-recovery.md`](disaster-recovery.md) — сценарии полной катастрофы (PG+Redis+Vault+Keeper).
+- [`docs/keeper/reaper.md`](../keeper/reaper.md) — Reaper rules (retention).
+- [`docs/architecture.md` → ADR-005 / ADR-006 / ADR-022 / ADR-026 / ADR-029](../architecture.md) - justifications.
+- [`examples/keeper/vault-policy.hcl`](../../examples/keeper/vault-policy.hcl) - policy template.
+- [`disaster-recovery.md`](disaster-recovery.md) - complete disaster scenarios (PG+Redis+Vault+Keeper).

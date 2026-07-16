@@ -1,67 +1,67 @@
-# FAQ — типичные проблемы и триаж
+# FAQ - typical problems and triage
 
-Самые частые операционные ситуации и их быстрый разбор. Подробности — по cross-link-ам в архитектурную / нормативную документацию.
+The most common operational situations and their quick analysis. Details - according to cross-links in the architectural / regulatory documentation.
 
-## «Souls в `disconnected`, хотя процессы живы»
+## "Souls in `disconnected`, although the processes are alive"
 
-**Симптомы.** В реестре `souls` через Operator API хост в `disconnected`, но `systemctl status soul` на хосте говорит `active (running)`, и `soul`-логи не показывают разрыва стрима.
+**Symptoms.** In the registry `souls` through the Operator API the host is in `disconnected`, but `systemctl status soul` on the host says `active (running)`, and `soul` logs do not show a stream break.
 
-**Корень.** `souls.status` — **ленивый snapshot** для Operator API, не источник presence ([ADR-006(a)](../adr/0006-cache-redis.md#adr-006-кэш-и-координация--redis) amendment). Авторитет «Soul online» — живой SID-lease в Redis. Snapshot отстаёт от факта и должен подтягиваться `mark_disconnected` Reaper-правилом (двунаправленный reconcile, включая `disconnected → connected` для случая, когда lease живой а snapshot отстал).
+**Root.** `souls.status` - **lazy snapshot** for Operator API, not presence source ([ADR-006(a)](../adr/0006-cache-redis.md) amendment). The authority of "Soul online" is a live SID-lease in Redis. Snapshot lags behind the fact and must be pulled up by the `mark_disconnected` Reaper rule (bidirectional reconcile, including `disconnected → connected` for the case when the lease is alive and the snapshot is behind).
 
-**Триаж:**
+**Triage:**
 
-1. Проверить, что `mark_disconnected` правило **включено** в `keeper.yml::reaper.rules.mark_disconnected.enabled: true`.
-2. Проверить, что Reaper лидер вообще работает: `sum(keeper_reaper_lease_held) == 1`. Если 0 — никто не делает reconcile, snapshot латчится.
-3. Проверить SID-lease в Redis напрямую:
+1. Check that the `mark_disconnected` rule is **enabled** in `keeper.yml::reaper.rules.mark_disconnected.enabled: true`.
+2. Check that the Reaper leader is working at all: `sum(keeper_reaper_lease_held) == 1`. If 0 - no one does a reconcile, the snapshot is patched.
+3. Check SID-lease in Redis directly:
    ```sh
    redis-cli EXISTS soul:host-01.example.com:lock
-   # (integer) 1   — lease есть, Soul реально online
+   # (integer) 1 — lease is available, Soul is really online
    ```
-4. Если lease есть, а snapshot `disconnected` — ждать следующего Reaper-цикла (`reaper.interval`, default 1h). Для ускорения — `keeper.yml::reaper.interval: 5m` через hot-reload.
-5. Если lease нет, а процесс живой — Soul не подключён к Keeper (TCP / mTLS / SoulSeed-проблема). Проверять Soul-логи на errors соединения.
+4. If there is a lease and a snapshot `disconnected` — wait for the next Reaper cycle (`reaper.interval`, default 1h). For acceleration - `keeper.yml::reaper.interval: 5m` via hot-reload.
+5. If there is no lease and the process is alive, Soul is not connected to Keeper (TCP / mTLS / SoulSeed problem). Check Soul logs for connection errors.
 
-См. также: [`docs/keeper/reaper.md` → `mark_disconnected`](../keeper/reaper.md), [`docs/architecture.md` → ADR-006 amendment](../adr/0006-cache-redis.md#adr-006-кэш-и-координация--redis).
+See also: [`docs/keeper/reaper.md` → `mark_disconnected`](../keeper/reaper.md), [`docs/architecture.md` → ADR-006 amendment](../adr/0006-cache-redis.md).
 
-## «Apply висит в `applying` 30 минут+»
+## "Apply hangs in `applying` for 30 minutes+"
 
-**Симптомы.** `GET /v1/incarnations/{name}` показывает `status: applying`, висит долго. Прогон вроде должен был завершиться.
+**Symptoms.** `GET /v1/incarnations/{name}` shows `status: applying`, hangs for a long time. The run seemed to have to end.
 
-**Возможные причины:**
+**Possible reasons:**
 
-### Случай 1: `acolytes: 0` в HA-кластере (footgun)
+### Case 1: `acolytes: 0` in HA cluster (footgun)
 
-Прогон, созданный на keeper-A, но Soul-агент на стриме keeper-B. Keeper-A держит in-memory run-goroutine, ждёт `RunResult`; `RunResult` приходит на keeper-B (тот, кто держит EventStream Soul-а); keeper-B его не знает, что делать (нет в-memory владельца), молча игнорит. incarnation висит в `applying`.
+Run created on keeper-A, but Soul agent on keeper-B stream. Keeper-A holds in-memory run-goroutine, waits for `RunResult`; `RunResult` comes to keeper-B (the one who holds EventStream Soul); keeper-B does not know what to do (there is no owner in memory), silently ignores it. incarnation hangs in `applying`.
 
-> **Авто-recovery, если владелец прогона МЁРТВ.** Если keeper-владелец прямого `incarnation.run` крашнулся (а не просто молча проигнорил `RunResult`), осиротевший `applying`-lock снимает Reaper-правило `reconcile_orphan_applying` (default-ON, presence-gated, [reaper.md](../keeper/reaper.md#правила)): через ≈`stale_after`+presence-чек оно вернёт incarnation в `ready` без ручного SQL. Ручные шаги ниже нужны, только когда владелец **жив** (`applying_by_kid` ещё в Conclave) — например молчаливый-игнор при `acolytes:0` на живом keeper-B — либо когда epoch неизвестен (`applying_by_kid IS NULL`, см. known-gap в reaper.md).
+> **Auto-recovery if the owner of the run is DEAD.** If the keeper owner of the direct `incarnation.run` crashes (and not just silently ignored `RunResult`), the orphaned `applying`-lock removes the Reaper rule `reconcile_orphan_applying` (default-ON, presence-gated, [reaper.md](../keeper/reaper.md)): through ≈`stale_after`+presence check it will return incarnation to `ready` without manual SQL. The manual steps below are only needed when the owner is **alive** (`applying_by_kid` still in Conclave) - for example silent-ignore with `acolytes:0` on a living keeper-B - or when the epoch is unknown (`applying_by_kid IS NULL`, see known-gap in reaper.md).
 
-**Verify через SQL:**
+**Verify via SQL:**
 
 ```sql
--- Найти strung-up incarnation + epoch владельца (миграция 082)
+-- Find strung-up incarnation + owner epoch (migration 082)
 SELECT name, applying_since, applying_by_kid, started_by_aid FROM incarnation
 WHERE status = 'applying' AND NOW() - applying_since > '15 minutes';
 
--- Найти apply_id и его хосты
+-- Find apply_id and its hosts
 SELECT apply_id, sid, status FROM apply_runs
 WHERE apply_id = (SELECT apply_id FROM apply_runs ORDER BY created_at DESC LIMIT 1);
 
--- Если status = 'success' на всех — это case 1; incarnation не закрылся при `acolytes: 0`
+-- If status = 'success' for all, this is case 1; incarnation did not close at `acolytes: 0`
 ```
 
 **Action:**
 
-1. Проверить, что Refuse-guard не сработал (`acolytes: 0` + multi-keeper → должен был отказаться стартовать; если стартовал — значит `allow_unsafe_single_path_multi_keeper: true`).
-2. Зафиксировать `acolytes: > 0` в `keeper.yml` всех инстансов — это не reload-able изменение, требует restart Keeper-кластера ([scaling.md](scaling.md)).
-3. Закрыть зависший прогон. Эндпоинт `POST /v1/incarnations/{name}/unlock` здесь **не подходит** — он снимает только `error_locked` (`409`, если статус `applying`, [operator-api/incarnations.md → unlock](../keeper/operator-api/incarnations.md#post-v1incarnationsnameunlock--снять-error_locked)). Для висящего `applying` живого владельца API-перехода нет — крайняя мера прямым SQL:
+1. Check that Refuse-guard did not work (`acolytes: 0` + multi-keeper → should have refused to start; if it started, then `allow_unsafe_single_path_multi_keeper: true`).
+2. Commit `acolytes: > 0` to `keeper.yml` of all instances - this is not a reload-able change, it requires a restart of the Keeper cluster ([scaling.md](scaling.md)).
+3. Close stuck run. Endpoint `POST /v1/incarnations/{name}/unlock` is **not suitable** here - it only removes `error_locked` (`409`, if the status is `applying`, [operator-api/incarnations.md → unlock](../keeper/operator-api/incarnations.md)). For the hanging `applying` live owner there is no API transition - the last resort is direct SQL:
    ```sql
    UPDATE incarnation SET status = 'ready' WHERE name = '<name>' AND status = 'applying';
    ```
-   (Если владелец прогона мёртв — этого делать не нужно, `reconcile_orphan_applying` снимет lock сам, см. врезку выше.)
-4. Investigate через audit-log — кто и когда выставил `allow_unsafe_single_path_multi_keeper`.
+(If the owner of the run is dead, there is no need to do this, `reconcile_orphan_applying` will release the lock itself, see sidebar above.)
+4. Investigate via audit-log - who posted `allow_unsafe_single_path_multi_keeper` and when.
 
-### Случай 2: `claimed`/`dispatched` Ward после crash инстанса
+### Case 2: `claimed`/`dispatched` Ward after instance crash
 
-Acolyte клеймил задание, инстанс умер. С включённым `reclaim_apply_runs` — recovery подберёт. Без — зависание.
+Acolyte branded the task, the instance died. With `reclaim_apply_runs` enabled - recovery will pick it up. Without - freeze.
 
 **Verify:**
 
@@ -70,214 +70,214 @@ SELECT apply_id, sid, status, claim_by_kid, claim_at, claim_expires_at, attempt
 FROM apply_runs WHERE status IN ('claimed', 'dispatched');
 ```
 
-**Action:** включить `reclaim_apply_runs` по процедуре в [`docs/keeper/reaper.md` → recovery-enable](../keeper/reaper.md#включение-recovery-recovery-enable). Требует раскатки fencing-Soul (есть в коде) + `acolytes > 0`. Перед включением — architect re-review (см. ADR-027 amend).
+**Action:** enable `reclaim_apply_runs` according to the procedure in [`docs/keeper/reaper.md` → recovery-enable](../keeper/reaper.md). Requires fencing-Soul rollout (available in the code) + `acolytes > 0`. Before switching on - architect re-review (see ADR-027 amend).
 
-### Случай 3: длинный прогон с `serial:` барьером и медленным хостом
+### Case 3: long run with `serial:` barrier and slow host
 
-Если scenario использует `serial:` — Acolyte клеймит весь serial-blok одним воркером, держит барьер. Один медленный хост может вытянуть длительность всего прогона.
+If the scenario uses `serial:` - Acolyte brands the entire serial-blok with one worker, maintaining a barrier. One slow host can take out the entire run.
 
-**Verify:** OTel-трейсы (`scenario.run` span с child `apply.run` на каждый хост — найти медленный).
+**Verify:** OTel traces (`scenario.run` span from child `apply.run` to each host - find the slow one).
 
-**Action:** оптимизировать scenario или принять, что прогон long-running.
+**Action:** optimize the scenario or accept that the run is long-running.
 
-## «check-drift возвращает `422 ErrConvergeMissing`»
+## "check-drift returns `422 ErrConvergeMissing`"
 
-**Симптомы.** `POST /v1/incarnations/{name}/check-drift` возвращает 422 с `"type": "/errors/converge-missing"`.
+**Symptoms.** `POST /v1/incarnations/{name}/check-drift` returns 422 from `"type": "/errors/converge-missing"`.
 
-**Корень.** Сервис не поддерживает drift-детект — нет файла `scenario/converge/main.yml` в service-репо ([ADR-031 Slice B](../adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile)).
+**Root.** The service does not support drift detection - there is no `scenario/converge/main.yml` file in the service repo ([ADR-031 Slice B](../adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile)).
 
-**Action:** в service-репо добавить `scenario/converge/main.yml`, который реализует idempotent-проверку текущего состояния (типичный destiny-style scenario). После merge + service-ref bump — check-drift станет доступен.
+**Action:** add `scenario/converge/main.yml` to the service repo, which implements an idempotent check of the current state (a typical destiny-style scenario). After merge + service-ref bump - check-drift will become available.
 
-См. [`docs/architecture.md` → ADR-031 Slice B](../adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile).
+See [`docs/architecture.md` → ADR-031 Slice B](../adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile).
 
-## «check-drift возвращает `422 ErrDriftInputMissing`»
+## "check-drift returns `422 ErrDriftInputMissing`"
 
-**Симптомы.** `POST /v1/incarnations/{name}/check-drift` возвращает 422 с `"type": "/errors/drift-input-missing"`.
+**Symptoms.** `POST /v1/incarnations/{name}/check-drift` returns 422 from `"type": "/errors/drift-input-missing"`.
 
-**Корень.** Converge-scenario требует input-параметр, который нельзя авто-резолвить из `incarnation.state` (нет такого имени) и нет значения в override-body запроса.
+**Root.** Converge-scenario requires an input parameter that cannot be auto-resolved from `incarnation.state` (there is no such name) and there is no value in the override-body of the request.
 
 **Action:**
 
-- Либо передать override в body запроса:
+- Or pass override in the body of the request:
   ```sh
   curl -X POST .../check-drift -d '{"<param-name>": "<value>"}'
   ```
-- Либо изменить converge-scenario, чтобы input-параметр имел default или брался из state по другому имени.
+- Either change converge-scenario so that the input parameter has default or is taken from state with a different name.
 
-## «`Holder.Refresh` errors / RBAC snapshot stale»
+## "`Holder.Refresh` errors / RBAC snapshot stale"
 
-**Симптомы.** Алерт `time() - keeper_rbac_snapshot_last_success_timestamp_seconds > 300`. Возможно `keeper_rbac_snapshot_rebuild_errors_total{kind=...}` растёт.
+**Symptoms.** Alert `time() - keeper_rbac_snapshot_last_success_timestamp_seconds > 300`. Perhaps `keeper_rbac_snapshot_rebuild_errors_total{kind=...}` is growing.
 
-**Корень `kind=load`.** БД недоступна / ошибка SELECT-ов в `rbac_*`-таблицах. Investigate PG-связность.
+**Root `kind=load`.** DB unavailable / SELECT error in `rbac_*` tables. Investigate PG-connectivity.
 
-**Корень `kind=parse`.** Невалидная permission в `rbac_role_permissions.permission` (рассинхрон версий каталога). Investigate последние записи в `rbac_role_permissions`:
+**Root `kind=parse`.** Invalid permission in `rbac_role_permissions.permission` (out of sync with directory versions). Investigate latest entries in `rbac_role_permissions`:
 
 ```sql
 SELECT role_name, permission FROM rbac_role_permissions ORDER BY role_name;
 ```
 
-Найти permission, не соответствующий грамматике ([`docs/keeper/rbac.md` → Формат permissions](../keeper/rbac.md#формат-permissions)).
+Find permission that does not match the grammar ([`docs/keeper/rbac.md` → Format permissions](../keeper/rbac.md)).
 
 **Action:**
 
-- `kind=load`: чинить PG.
-- `kind=parse`: удалить / поправить невалидную permission через `role.update` (или прямой SQL после анализа).
+- `kind=load`: repair PG.
+- `kind=parse`: remove / correct invalid permission via `role.update` (or direct SQL after analysis).
 
-После fix — `keeper_rbac_invalidations_received_total` rate растёт (через pub/sub `rbac:invalidate`), snapshot пересобирается.
+After fix - `keeper_rbac_invalidations_received_total` rate increases (via pub/sub `rbac:invalidate`), snapshot is rebuilt.
 
-## «Vault unreachable — что упадёт?»
+## "Vault unreachable - what will fall?"
 
-**Симптомы.** `keeper_vault_read_errors_total{kind="error"}` растёт. Apply начинают падать на render-фазе.
+**Symptoms.** `keeper_vault_read_errors_total{kind="error"}` is growing. Apply starts to fall during the render phase.
 
-**Что продолжает работать:**
+**What keeps working:**
 
-- Existing EventStream-стримы (TCP уже установлен, in-memory кэш зарезолвенных секретов жив).
+- Existing EventStream streams (TCP is already installed, the in-memory cache of resolved secrets is alive).
 - Reaper, Conclave, Watchman.
-- Operator API на read-операциях не требующих Vault (`GET /v1/operators`, `GET /v1/incarnations` без `state_history`-включения секретов).
+- Operator API on read operations that do not require Vault (`GET /v1/operators`, `GET /v1/incarnations` without `state_history`-inclusion of secrets).
 
-**Что упадёт:**
+**What will fall:**
 
-- Старт нового Keeper-инстанса — на резолве `postgres.dsn_ref`. Если есть AppRole login — он сам не пройдёт без Vault.
-- Любой apply, требующий `vault(...)` в CEL или `${ vault:... }` в шаблоне — render fail.
-- Bootstrap нового Soul-а — PKI недоступен.
-- `operator.issue-token` — JWT signing-key из Vault может уже быть закэширован, поэтому может работать; но `auth.jwt.signing_key_ref` resolve на старте Keeper уже сделан — должен работать.
+- Start of a new Keeper instance - at resolution `postgres.dsn_ref`. If there is an AppRole login, it will not work without Vault.
+- Any apply that requires `vault(...)` in CEL or `${ vault:... }` in template is render fail.
+- Bootstrap of the new Soul - PKI is not available.
+- `operator.issue-token` - JWT signing-key from Vault may already be cached, so it may work; but `auth.jwt.signing_key_ref` resolve has already been done at the start of Keeper - it should work.
 
-**Action:** поднять Vault. Существующие сессии переживут (token-renewer прервётся, попытается перевыпустить токен; если Vault вернётся быстро — пользователи могут вообще не заметить).
+**Action:** raise Vault. Existing sessions will survive (token-renewer will interrupt and try to re-issue the token; if Vault returns quickly, users may not notice at all).
 
-## «Reaper не работает — `keeper_reaper_lease_held` везде 0»
+## "Reaper does not work - `keeper_reaper_lease_held` is 0 everywhere"
 
-**Симптомы.** Метрика 0 на всех инстансах, `apply_runs` / `audit_log` / `souls` начинают разрастаться.
+**Symptoms.** Metric 0 on all instances, `apply_runs` / `audit_log` / `souls` are starting to grow.
 
-**Корень.** Никто не держит Redis-lease `reaper:leader`. Причины:
+**Root.** No one is holding Redis-lease `reaper:leader`. Reasons:
 
-1. Redis недоступен (см. [§ Redis outage](#redis-outage)).
-2. `reaper.enabled: false` на всех инстансах.
-3. Bug в Reaper-loop (рестарт инстанса должен помочь).
+1. Redis is not available (see [§ Redis outage](#redis-outage)).
+2. `reaper.enabled: false` on all instances.
+3. Bug in Reaper-loop (restarting the instance should help).
 
 **Triage:**
 
-1. `redis-cli GET reaper:leader` — должно вернуть `<kid>`, если кто-то лидер.
-2. Если nil и Redis жив — investigate `journalctl -u keeper -n 200 | grep -i reaper`.
-3. Проверить, что `reaper.enabled: true` в `keeper.yml`.
+1. `redis-cli GET reaper:leader` - should return `<kid>` if someone is the leader.
+2. If nil and Redis is alive - investigate `journalctl -u keeper -n 200 | grep -i reaper`.
+3. Check that `reaper.enabled: true` is in `keeper.yml`.
 
 **Action:**
 
-- Перезапустить любой Keeper-инстанс — следующий цикл должен взять lease (`SET reaper:leader <kid> NX EX <lock_ttl>`).
-- Если все инстансы запускались в `reaper.enabled: false` — поменять через hot-reload.
+- Restart any Keeper instance - the next cycle should take lease (`SET reaper:leader <kid> NX EX <lock_ttl>`).
+- If all instances were launched in `reaper.enabled: false` - change via hot-reload.
 
-## «Soul падает с `bootstrap token already used`»
+## "Soul drops from `bootstrap token already used`"
 
-**Симптомы.** При первом старте Soul-агента на новом хосте: `error: bootstrap token already used`.
+**Symptoms.** When starting Soul Agent for the first time on a new host: `error: bootstrap token already used`.
 
-**Корень.** Bootstrap-токен одноразовый — после успешного онбординга `bootstrap_tokens.used_at` выставляется, повторный запрос rejected ([`docs/soul/onboarding.md`](../soul/onboarding.md), [`docs/soul/identity.md`](../soul/identity.md)).
+**Root.** The Bootstrap token is one-time use - after successful onboarding, `bootstrap_tokens.used_at` is set, the repeated request is rejected ([`docs/soul/onboarding.md`](../soul/onboarding.md), [`docs/soul/identity.md`](../soul/identity.md)).
 
-Возможные причины:
+Possible reasons:
 
-1. Токен реально использован — Soul-агент уже онбордился, file `/etc/soul/seed/soul.crt` существует.
-2. Race-условие — два процесса параллельно пытаются провести bootstrap.
+1. The token is actually used - the Soul agent has already boarded, file `/etc/soul/seed/soul.crt` exists.
+2. Race condition - two processes are trying to run bootstrap in parallel.
 
 **Action:**
 
-1. Если `/etc/soul/seed/soul.crt` существует — bootstrap уже прошёл; удалить файл `bootstrap-token` (он больше не нужен) и перезапустить `soul`.
-2. Если нужно повторно онбордить — выпустить новый токен через Operator API:
+1. If `/etc/soul/seed/soul.crt` exists, bootstrap has already passed; delete the file `bootstrap-token` (it is no longer needed) and restart `soul`.
+2. If you need to re-onboard, issue a new token via the Operator API:
    ```sh
    curl -X POST https://keeper.internal:8080/v1/souls/host-01.example.com/issue-token \
      -H "Authorization: Bearer $(cat /etc/keeper/archon.jwt)"
    ```
 
-   Положить новый токен в `/etc/soul/bootstrap-token` (mode 0400).
+Place a new token in `/etc/soul/bootstrap-token` (mode 0400).
 
-## «Hot-reload `keeper.yml` упал»
+## "Hot-reload `keeper.yml` has fallen"
 
-**Симптомы.** `systemctl reload keeper` отработал без ошибки, но audit-event `config.reload_failed` появился, метрика подсказывает.
+**Symptoms.** `systemctl reload keeper` worked without an error, but the audit-event `config.reload_failed` appeared, the metric tells us.
 
-**Корень.** Невалидный конфиг в новой `keeper.yml` (синтаксис / диагностика парсера / некорректное значение в reload-able блоке).
+**Root.** Invalid config in the new `keeper.yml` (syntax / parser diagnostics / incorrect value in the reload-able block).
 
-**Поведение Keeper-а:** старый снимок конфига **остаётся активным** ([ADR-021](../adr/0021-hot-reload-config.md#adr-021-hot-reload-конфига-с-write-back-yaml)) — Keeper не сломается, продолжит работать на старой конфигурации.
+**Keeper behavior:** old config snapshot **remains active** ([ADR-021](../adr/0021-hot-reload-config.md)) - Keeper will not break, will continue to work on the old configuration.
 
 **Action:**
 
-1. `journalctl -u keeper -n 50 --no-pager` — найти конкретную ошибку парсера (diagnostic-имя из [`docs/keeper/config.md`](../keeper/config.md)).
-2. Исправить `keeper.yml`.
-3. `systemctl reload keeper` снова. Audit-event `config.reload_succeeded` — verify.
+1. `journalctl -u keeper -n 50 --no-pager` — find a specific parser error (diagnostic name from [`docs/keeper/config.md`](../keeper/config.md)).
+2. Fix `keeper.yml`.
+3. `systemctl reload keeper` again. Audit-event `config.reload_succeeded` - verify.
 
-## «Soul-стрим обрывается каждые 30 секунд»
+## "Soul stream ends every 30 seconds"
 
-**Симптомы.** `keeper_grpc_streams_active` колеблется, `soul_eventstream_reconnects_total` rate высокий.
+**Symptoms.** `keeper_grpc_streams_active` fluctuates, `soul_eventstream_reconnects_total` rate is high.
 
-**Возможные причины:**
+**Possible reasons:**
 
-1. **L4-LB сбрасывает по idle-таймауту.** gRPC keepalive должен держать соединение, но если LB агрессивный — обрывает. Проверить `timeout server 24h` в haproxy (см. [`scaling.md` → L4-LB](scaling.md#l4-балансировщик-настройки)).
-2. **NAT / firewall** между Soul и Keeper — стейт NAT-таблиц истекает, соединение обрывается.
-3. **gRPC keepalive** на стороне сервера / клиента misconfigured.
+1. **L4-LB resets due to idle timeout.** gRPC keepalive should keep the connection, but if the LB is aggressive, it breaks. Check `timeout server 24h` in haproxy (see [`scaling.md` → L4-LB](scaling.md)).
+2. **NAT / firewall** between Soul and Keeper - the state of the NAT tables expires, the connection is terminated.
+3. **gRPC keepalive** server/client side misconfigured.
 
 **Triage:**
 
-1. На Soul-хосте — `ss -t -o state established | grep keeper-endpoint-port` показывает живые TCP-соединения и timer keepalive.
-2. На Keeper — `keeper_grpc_messages_total{direction="from_soul"}` rate — есть ли app-сообщения по стриму? Если 0, и стрим всё-таки активен — Soul только держит keepalive, нет app-трафика.
+1. On Soul host - `ss -t -o state established | grep keeper-endpoint-port` shows live TCP connections and timer keepalive.
+2. On Keeper - `keeper_grpc_messages_total{direction="from_soul"}` rate - are there any app messages about the stream? If 0, and the stream is still active, Soul only keeps a keepalive, there is no app traffic.
 
-**Action:** настроить LB / NAT под gRPC long-running streams (`timeout server 24h`+; NAT keepalive: increase TCP keepalive timeout на хостах).
+**Action:** configure LB/NAT under gRPC long-running streams (`timeout server 24h`+; NAT keepalive: increase TCP keepalive timeout on hosts).
 
-## «Souls делают много reconnect-ов после rolling-restart Keeper»
+## "Souls do a lot of reconnects after rolling-restart Keeper"
 
-**Симптомы.** При rolling-restart `soul_eventstream_reconnects_total` rate спайк, потом нормализуется.
+**Symptoms.** With rolling-restart `soul_eventstream_reconnects_total` rate spikes, then returns to normal.
 
-**Это нормальное поведение.** Soul-агенты перенаправляются по failback на новые / другие инстансы. Спайк длится секунды-минуты. После завершения rolling-upgrade — стрим-counts re-distribute.
+**This is normal behavior.** Soul agents are redirected via failback to new/different instances. The spike lasts for seconds to minutes. After rolling-upgrade is completed, stream-counts re-distribute.
 
-**Если спайк затягивается** (>5 минут) — investigate:
+**If the spike is delayed** (>5 minutes) - investigate:
 
-- Conclave-presence новых инстансов не появляется в Redis — restart prereqs не пройдены.
-- `keeper.yml` нового инстанса невалиден — fail-stop при старте.
-- L4-LB не возвращает новый инстанс в backend (health-check fails).
+- Conclave-presence of new instances does not appear in Redis - restart prereqs failed.
+- `keeper.yml` of the new instance is invalid - fail-stop at startup.
+- L4-LB does not return a new instance to the backend (health-check fails).
 
-См. [`upgrade.md` → Rolling upgrade Keeper](upgrade.md#rolling-upgrade-keeper).
+See [`upgrade.md` → Rolling upgrade Keeper](upgrade.md#rolling-upgrade-keeper).
 
-## «`incarnation.run` возвращает `409 incarnation already applying`»
+## "`incarnation.run` returns `409 incarnation already applying`"
 
-**Симптомы.** Запрос `POST /v1/incarnations/{name}/run` возвращает 409.
+**Symptoms.** Request `POST /v1/incarnations/{name}/run` returns 409.
 
-**Корень.** Атомарность модели apply ([architecture.md → Атомарность и error_locked](../architecture.md)): нельзя запустить новый apply на incarnation, пока предыдущий не завершился.
-
-**Action:**
-
-1. Проверить статус: `GET /v1/incarnations/{name}` → `status: applying`. Если так — ждать завершения.
-2. Если висит долго — см. [§ Apply висит в applying](#apply-висит-в-applying-30-минут).
-3. Если статус `error_locked` — investigate последний `state_history.changed_by_aid` и причину; обычно требует ручного решения (см. [ADR-027 trade-offs](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim)).
-
-## «`POST /v1/operators` возвращает 409 `would lock out`»
-
-**Симптомы.** Попытка ревокации Архонта возвращает 409 с `would lock out the cluster`.
-
-**Корень.** Инвариант [ADR-013(c)](../adr/0013-bootstrap-archon.md#adr-013-bootstrap-первого-архонта) — нельзя удалить последнего оператора с `*`-permission.
-
-**Action:** сначала создать другого Архонта с `cluster-admin`, потом ревокать старого. См. [`bootstrap-rbac.md` → Защита от self-lockout](bootstrap-rbac.md#защита-от-self-lockout).
-
-## «Sigil verify failed — плагин не запускается»
-
-**Симптомы.** Apply, использующий community-плагин (`soul-mod-*` / `soul-cloud-*` / `soul-ssh-*`), падает с `sigil verify failed`. Audit-event `plugin.verify_failed`.
-
-**Корень.** Sigil-подпись плагина не сошлась — либо плагин не допущен через `plugin.allow`, либо был отозван (`revoked_at`), либо SHA-256 бинаря не совпадает с записью в `plugin_sigils`.
+**Root.** Atomicity of the apply model ([architecture.md → Atomicity and error_locked](../architecture.md)): You cannot run a new apply on an incarnation until the previous one has completed.
 
 **Action:**
 
-1. Verify запись в `plugin_sigils`:
+1. Check status: `GET /v1/incarnations/{name}` → `status: applying`. If so, wait for completion.
+2. If it hangs for a long time, see § Apply hangs in applying.
+3. If the status is `error_locked` - investigate the last `state_history.changed_by_aid` and the reason; usually requires a manual solution (see [ADR-027 trade-offs](../adr/0027-apply-work-queue.md)).
+
+## "`POST /v1/operators` returns 409 `would lock out`"
+
+**Symptoms.** Attempting to revoke an Archon returns 409 with `would lock out the cluster`.
+
+**Root.** Invariant [ADR-013(c)](../adr/0013-bootstrap-archon.md) - you cannot delete the last statement with `*`-permission.
+
+**Action:** first create another Archon with `cluster-admin`, then revoke the old one. See [`bootstrap-rbac.md` → Self-lockout protection](bootstrap-rbac.md).
+
+## "Sigil verify failed - the plugin does not start"
+
+**Symptoms.** Apply using community plugin (`soul-mod-*` / `soul-cloud-*` / `soul-ssh-*`) crashes with `sigil verify failed`. Audit-event `plugin.verify_failed`.
+
+**Root.** The plugin's Sigil signature did not match - either the plugin is not allowed through `plugin.allow`, or has been revoked (`revoked_at`), or the SHA-256 of the binary does not match the entry in `plugin_sigils`.
+
+**Action:**
+
+1. Verify entry in `plugin_sigils`:
    ```sql
    SELECT namespace, name, ref, sha256, revoked_at FROM plugin_sigils
    WHERE namespace = 'cloud' AND name = 'soul-cloud-aws' AND revoked_at IS NULL;
    ```
-2. Verify SHA-256 фактического бинаря:
+2. Verify SHA-256 of the actual binary:
    ```sh
    sha256sum /var/lib/soul-stack-keeper/plugins/cloud/soul-cloud-aws/<commit_sha>/soul-cloud-aws
    ```
-3. Если совпадение есть — verify trust-anchor-набор на Soul (re-broadcast мог не дойти). См. [`docs/observability.md` → keeper_sigil_anchors_last_delivered](../observability.md).
-4. Если плагин обновился и SHA изменился — нужно явно допустить новый через Operator API (`plugin.allow`).
+3. If there is a match, verify the trust-anchor set on Soul (re-broadcast may not have reached). See [`docs/observability.md` → keeper_sigil_anchors_last_delivered](../observability.md).
+4. If the plugin has been updated and the SHA has changed, you need to explicitly allow the new one via the Operator API (`plugin.allow`).
 
-См. [ADR-026](../adr/0026-sigil.md#adr-026-sigil--целостность-плагинов-keeper-signed-digest-индекс), [`docs/keeper/plugins.md` → Integrity-model](../keeper/plugins.md).
+See [ADR-026](../adr/0026-sigil.md), [`docs/keeper/plugins.md` → Integrity-model](../keeper/plugins.md).
 
-## См. также
+## See also
 
-- [`disaster-recovery.md`](disaster-recovery.md) — сценарии полного отказа компонентов.
-- [`monitoring.md`](monitoring.md) — какие метрики смотреть в каждом сценарии.
-- [`docs/architecture.md`](../architecture.md) — обоснования всех описанных инвариантов.
-- [`docs/keeper/reaper.md`](../keeper/reaper.md) — Reaper-правила (включая `reclaim_apply_runs`).
+- [`disaster-recovery.md`](disaster-recovery.md) - scenarios of complete component failure.
+- [`monitoring.md`](monitoring.md) - what metrics to look at in each scenario.
+- [`docs/architecture.md`](../architecture.md) - justifications for all the described invariants.
+- [`docs/keeper/reaper.md`](../keeper/reaper.md) - Reaper rules (including `reclaim_apply_runs`).
 - [`docs/keeper/rbac.md`](../keeper/rbac.md) — RBAC.

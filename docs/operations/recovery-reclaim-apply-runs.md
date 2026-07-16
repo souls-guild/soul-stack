@@ -1,79 +1,79 @@
-# Включение `reclaim_apply_runs` в проде
+# Enabling `reclaim_apply_runs` in production
 
-Операционализация GATE-1 (deliver-once recovery) из [ADR-027](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim). Не отдельный ADR — переключение уже реализованного правила, по списку прод-гейтов.
+Operationalization of GATE-1 (deliver-once recovery) from [ADR-027](../adr/0027-apply-work-queue.md). Not a separate ADR - switching an already implemented rule, according to the list of product gates.
 
-**Что делает.** Reaper-правило `reclaim_apply_runs` ([keeper/internal/reaper/runner.go](../../keeper/internal/reaper/runner.go)) реклеймит зависшие `apply_runs.status='claimed'` обратно в `planned`, если `claim_expires_at < NOW()`. Закрывает дыру «висячий applying» на фазе **до отдачи** (Keeper умер на рендере/claim, задание Soul-у ещё не ушло): живой Acolyte подхватит строку с инкрементом `attempt`, а Soul-side fencing отсечёт устаревший дубль прежнего владельца. Фаза **`dispatched`** (после отдачи) правилом **не трогается** — пере-claim уже отданного = двойной apply.
+**What it does.** Reaper rule `reclaim_apply_runs` ([keeper/internal/reaper/runner.go](../../keeper/internal/reaper/runner.go)) rebrands stuck `apply_runs.status='claimed'` back to `planned` if `claim_expires_at < NOW()`. Closes the "hanging applying" hole in the **before recoil** phase (Keeper died on render/claim, Soul's task has not yet left): the living Acolyte will pick up the line with the increment `attempt`, and Soul-side fencing will cut off the outdated take of the previous owner. Phase **`dispatched`** (after the return) is **not affected by the rule** - re-claim what has already been given = double apply.
 
-Без правила Keeper-инстанс, упавший в фазе `claimed`, оставляет `apply_run` застрявшим навсегда — operator должен снимать вручную.
+Without the rule, a Keeper instance that crashes in the `claimed` phase leaves `apply_run` stuck forever - the operator must remove it manually.
 
-**По дефолту `enabled: false`** (ADR-027 amend (e), [docs/keeper/reaper.md → Конфиг](../keeper/reaper.md#конфиг)). Включение — операционный шаг под гейтом, не одиночный `enabled: true`.
+**By default `enabled: false`** (ADR-027 amend (e), [docs/keeper/reaper.md → Config](../keeper/reaper.md)). Turning on is an operational step under the gate, not a single `enabled: true`.
 
-## Прод-гейты (все три обязательны)
+## Product gates (all three are required)
 
-### 1. Fencing-Soul раскатан на весь флот
+### 1. Fencing-Soul rolled out to the entire fleet
 
-ADR-027 amend GATE-1 + (g) + (e). Все `soul`-агенты должны нести attempt-fencing: Soul-guard по `ApplyRequest.attempt` на исполнении + эхо `RunResult.attempt` для epoch-check на приёме. Без этого пере-claim протухшего Ward отправит второй `ApplyRequest` на хост, а не-fenced Soul не отсечёт устаревший дубль.
+ADR-027 amend GATE-1 + (g) + (e). All `soul` agents must carry attempt-fencing: Soul-guard by `ApplyRequest.attempt` at execution + echo `RunResult.attempt` for epoch-check at reception. Without this re-claim, the stale Ward will send a second `ApplyRequest` to the host, and the non-fenced Soul will not cut off the stale take.
 
-**Текущий `soul`-билд несёт fencing** (gate-1 attempt-fencing уже в бинаре, [ADR-027](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim) amend (b)/(g) реализован). Достаточно убедиться, что **на весь парк** раскатан этот билд (а не легаси без attempt-поля).
+**The current `soul` build carries fencing** (gate-1 attempt-fencing is already in the binary, [ADR-027](../adr/0027-apply-work-queue.md) amend (b)/(g) is implemented). It is enough to make sure that this build is rolled out **to the entire park** (and not a legacy build without an attempt field).
 
-**Проверка:** под flood-тестом устаревших `RunResult` метрика `keeper_runresult_stale_total` стабильно ненулевая — epoch-check на приёме отсекает stale-`RunResult`. Если 0 при заведомых stale-сценариях — fencing раскатан не везде.
+**Check:** under the flood test of outdated `RunResult` metric `keeper_runresult_stale_total` is consistently non-zero - epoch-check cuts off stale-`RunResult` at reception. If 0 in obvious stale scenarios, fencing is not rolled out everywhere.
 
-### 2. `acolytes > 0` на ВСЕХ Keeper-инстансах
+### 2. `acolytes > 0` on ALL Keeper instances
 
-ADR-027 amend (f) + (e). `reclaim_apply_runs` и `acolytes > 0` — **связанная пара**. При `acolytes: 0` задания исполняются старым синхронным путём и пишутся прямо в `running`; reclaim на не-fenced пути без epoch-защиты задвоит apply.
+ADR-027 amend (f) + (e). `reclaim_apply_runs` and `acolytes > 0` are a **related pair**. With `acolytes: 0`, jobs are executed in the old synchronous way and written directly to `running`; reclaim on a non-fenced path without epoch protection will double apply.
 
-**Проверка:** на каждом keeper-узле кластера `keeper.yml::acolyte.workers > 0` (см. [config.md → acolytes](../keeper/config.md#acolytes)). Через [Conclave](../adr/0006-cache-redis.md#adr-006-кэш-и-координация--redis): refuse-startup-guard уже отказывается стартовать в опасном `acolytes:0 + CountLive>1`-сетапе ([ADR-027(h)/(k)](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim)), но оператор всё равно подтверждает явно.
+**Check:** on each keeper node of the cluster `keeper.yml::acolyte.workers > 0` (see [config.md → acolytes](../keeper/config.md#acolytes)). Through [Conclave](../adr/0006-cache-redis.md): refuse-startup-guard already refuses to start in the dangerous `acolytes:0 + CountLive>1` setup ([ADR-027(h)/(k)](../adr/0027-apply-work-queue.md)), but the operator still confirms explicitly.
 
-### 3. Soul-reconcile (S6) активен для `dispatched`-сирот
+### 3. Soul-reconcile (S6) active for `dispatched` orphans
 
-ADR-027 amend (g), реализован 2026-05-25 — `WardRoster` ([ADR-012(k)](../adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add)). Закрывает окно «Keeper и Soul оба мертвы после отдачи»: Soul на (re)connect шлёт `WardRoster` (ReplaceAll-снимок ведомых `apply_id`+attempt), Keeper в `OrphanDispatched` epoch-fenced single-winner-сверкой терминалит `dispatched`-строки этого SID, которых нет в наборе → новый терминал `orphaned` (миграция 044).
+ADR-027 amend (g), implemented 2026-05-25 - `WardRoster` ([ADR-012(k)](../adr/0012-keeper-soul-grpc.md)). Closes the window "Keeper and Soul are both dead after recoil": Soul on (re)connect sends `WardRoster` (ReplaceAll-snapshot of slaves `apply_id`+attempt), Keeper in `OrphanDispatched` epoch-fenced single-winner-reconciliation terminalit `dispatched`-lines of this SID, which are not in the set → new terminal `orphaned` (migration 044).
 
-Без этого `dispatched`-строки на флоте с убитыми парами Keeper+Soul зависали бы навсегда — `reclaim` их не трогает by design.
+Without this, `dispatched` lines in the fleet with killed Keeper+Soul pairs would hang forever - `reclaim` does not touch them by design.
 
-**Проверка:** алерт **dispatched stuck (post-recovery-enable)** ([monitoring.md](monitoring.md)) — SQL `COUNT(*) FROM apply_runs WHERE status = 'dispatched' AND claim_at < NOW() - INTERVAL '1 hour'` должен оставаться около 0 на стенде с симулированным kill keeper+soul. Если копит — Soul-reconcile не работает (старый `soul`-билд без `WardRoster`, форвард-compat no-op fail-safe).
+**Check:** alert **dispatched stuck (post-recovery-enable)** ([monitoring.md](monitoring.md)) - SQL `COUNT(*) FROM apply_runs WHERE status = 'dispatched' AND claim_at < NOW() - INTERVAL '1 hour'` should remain around 0 on a stand with a simulated kill keeper+soul. If it saves, Soul-reconcile does not work (old `soul` build without `WardRoster`, forward-compat no-op fail-safe).
 
-### Без гейтов — НЕ включать
+### Without gates - DO NOT enable
 
-- Без шага 1 (fencing-Soul) → race-condition «два Keeper-а параллельно выкатывают один apply_run на хост».
-- Без шага 2 (`acolytes > 0`) → reclaim возвращает в `planned`, но никто не подберёт; на не-fenced пути reclaim вообще небезопасен.
-- Без шага 3 (`WardRoster`) → `dispatched`-сироты копят бесконечно.
+- Without step 1 (fencing-Soul) → race-condition "two Keepers simultaneously roll out one apply_run to the host."
+- Without step 2 (`acolytes > 0`) → reclaim returns to `planned`, but no one will pick it up; on a non-fenced path, reclaim is generally unsafe.
+- Without step 3 (`WardRoster`) → `dispatched`-orphans save indefinitely.
 
-## Включение
+## Enable
 
-В `keeper.yml`:
+In `keeper.yml`:
 
 ```yaml
 reaper:
-  interval: 30s              # tick-частота Reaper-цикла; рекомендуется <= acolyte.claim_lease / 2
+  interval: 30s              # tick-Reaper-cycle frequency; recommended <= acolyte.claim_lease / 2
   rules:
     reclaim_apply_runs:
       enabled: true          # default false
-      stale_after: 1m        # формальный lease-аргумент action-схемы; в SQL-предикат НЕ входит
+      stale_after: 1m        # formal lease argument of the action scheme; NOT included in the SQL predicate
       action: set_status
       target_status: planned
 ```
 
-`acolyte_lease > max-РЕНДЕР` — дефолт `30s` ок (lease-инвариант **ослаблен** после GATE-1, [ADR-027 amend (e)](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim)). `acolyte_lease > max(время-apply-одного-хоста)` и Acolyte lease-renew — **больше не требуются** для recovery-границы.
+`acolyte_lease > max-render` — default `30s` ok (lease invariant **weakened** after GATE-1, [ADR-027 amend (e)](../adr/0027-apply-work-queue.md)). `acolyte_lease > max(single-host apply time)` and Acolyte lease-renew - **no longer required** for the recovery boundary.
 
-Применить через hot-reload (`SIGHUP` или API/MCP-мутация конфига, [config.md → Hot-reload](../keeper/config.md#hot-reload)) — без рестарта keeper-процесса.
+Apply via hot-reload (`SIGHUP` or API/MCP config mutation, [config.md → Hot-reload](../keeper/config.md#hot-reload)) - without restarting the keeper process.
 
-## Валидация после включения
+## Validation after enable
 
-1. **Метрики Reaper-правила** ([reaper.md → Метрики](../keeper/reaper.md#метрики)):
-   - `keeper_reaper_rule_executions_total{rule="reclaim_apply_runs"}` — растёт по tick-у Reaper-цикла (правило вызывается). Это «сколько раз вызывалось», не «сколько раз сработало».
-   - `keeper_reaper_rule_purged_total{rule="reclaim_apply_runs"}` — суммарное число реклеймнутых строк (set_status → planned). Под нагрузкой с симулированными kill-Keeper во время `claimed` — растёт. На стабильном кластере без kill — должна быть около 0.
-   - `keeper_reaper_dispatch_errors_total{rule="reclaim_apply_runs"}` — должна быть 0. Рост = PG-сбой при reclaim.
+1. **Reaper rule metrics** ([reaper.md → Metrics](../keeper/reaper.md)):
+   - `keeper_reaper_rule_executions_total{rule="reclaim_apply_runs"}` — grows by the tick of the Reaper cycle (the rule is called). It's "how many times it was called", not "how many times it worked".
+   - `keeper_reaper_rule_purged_total{rule="reclaim_apply_runs"}` — total number of advertised rows (set_status → planned). Under load with simulated kill-Keeper during `claimed` - it grows. On a stable cluster without kill, it should be about 0.
+   - `keeper_reaper_dispatch_errors_total{rule="reclaim_apply_runs"}` - should be 0. Growth = PG failure on reclaim.
 
-2. **Audit-events** ([naming-rules.md → Audit-events](../naming-rules.md#audit-events), область `reaper.*`):
-   - `reaper.reclaim_apply_runs.executed` — пишется при срабатывании. SQL: `SELECT * FROM audit_log WHERE event_type = 'reaper.reclaim_apply_runs.executed' ORDER BY created_at DESC LIMIT 20`.
+2. **Audit-events** ([naming-rules.md → Audit-events](../naming-rules.md#audit-events), area `reaper.*`):
+   - `reaper.reclaim_apply_runs.executed` - written when triggered. SQL: `SELECT * FROM audit_log WHERE event_type = 'reaper.reclaim_apply_runs.executed' ORDER BY created_at DESC LIMIT 20`.
 
-3. **Epoch-check на приёме** ([monitoring.md](monitoring.md)):
-   - `keeper_runresult_stale_total` — всплески при пере-claim прежнего Ward (Soul прислал устаревший `RunResult` с прежним `attempt`). Это **ожидаемо** и означает, что fencing работает.
-   - **Линейный рост числа повторных apply на одних хостах без stale-отсечки** = тревога: fencing раскатан не на весь флот, вернуться к гейту 1.
+3. **Epoch-check at reception** ([monitoring.md](monitoring.md)):
+   - `keeper_runresult_stale_total` - spikes when re-claiming the old Ward (Soul sent the outdated `RunResult` with the old `attempt`). This is **expected** and means fencing is working.
+   - **Linear increase in the number of repeated apply on the same hosts without stale cutoff** = alarm: fencing is not rolled out to the entire fleet, return to gate 1.
 
-4. **Алерт `dispatched stuck`** — Soul-reconcile должен орфанить `dispatched`-строки после смерти Soul-владельца ([monitoring.md → Warning](monitoring.md#warning-триаж-в-рабочее-время)). Рост — Soul-reconcile не активен.
+4. **Alert `dispatched stuck`** — Soul-reconcile should orphan `dispatched`-lines after the death of the Soul-owner ([monitoring.md → Warning](monitoring.md)). Growth - Soul-reconcile is not active.
 
-## Откат (rollback)
+## Rollback
 
 ```yaml
 reaper:
@@ -82,83 +82,83 @@ reaper:
       enabled: false
 ```
 
-Hot-reload. Безопасно в любой момент — правило идемпотентно (только status-update `claimed → planned`, не data-mutation, не удаление). После отката `claimed`-строки протухшего владельца снова застревают, пока правило выключено.
+Hot-reload. Safe at any time - the rule is idempotent (only status-update `claimed → planned`, not data-mutation, not deletion). After rolling back the `claimed` rows of the rotten owner are stuck again while the rule is disabled.
 
-## Voyage-orphan-lock-release — тот же double-apply класс, включён иначе
+## Voyage-orphan-lock-release - the same double-apply class, enabled differently
 
-Этот runbook — про `reclaim_apply_runs` (per-host Ward, default-OFF, гейт выше). Рядом живёт **второй recovery-механизм** с тем же приемлемым double-apply классом, но **включённый принципиально иначе** — оператор обязан понимать разницу.
+This runbook is about `reclaim_apply_runs` (per-host Ward, default-OFF, gate above). Nearby there lives a **second recovery mechanism** with the same acceptable double-apply class, but **enabled in a fundamentally different way** - the operator must understand the difference.
 
-**Что это.** `reclaim_voyages` ([ADR-043 §8](../adr/0043-voyage.md#adr-043-voyage--унифицированный-батчевый-прогон), [reaper.md → Конфиг](../keeper/reaper.md#конфиг)) возвращает осиротевший `running`-Voyage (владелец-Keeper умер до финализации, lease протух) обратно в `pending`; другой Keeper-инстанс пере-claim-ит его и доисполняет с сохранённого `current_batch_index`. Для `kind=scenario`-Voyage при re-run leg-а реклеймнутый VoyageWorker сталкивается с осиротевшим `incarnation.status='applying'`, оставленным крашнутым прошлым владельцем (single-winner state-commit `applying`→терминал у него не отработал — он умер). **Voyage-orphan-lock-release** ([ADR-027(l)](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim)) — шов, которым VoyageWorker **снимает СВОЙ осиротевший `applying`** перед re-run. Без него reclaimed Voyage зависает («incarnation уже applying»), и сам `reclaim_voyages` оказывается нерабочим.
+**What is this.** `reclaim_voyages` ([ADR-043 §8](../adr/0043-voyage.md), [reaper.md → Config](../keeper/reaper.md)) returns the orphaned `running`-Voyage (owner-Keeper died before finalization, lease is rotten) back to `pending`; another Keeper instance reclaims it and completes it from the saved `current_batch_index`. For `kind=scenario`-Voyage, when re-running a leg, the branded VoyageWorker encounters the orphaned `incarnation.status='applying'`, left by the crashed previous owner (single-winner state-commit `applying`→the terminal did not work for him - he died). **Voyage-orphan-lock-release** ([ADR-027(l)](../adr/0027-apply-work-queue.md)) - the seam that VoyageWorker **removes ITS orphaned `applying`** before re-run. Without it, reclaimed Voyage freezes ("incarnation is already applying"), and `reclaim_voyages` itself turns out to be inoperative.
 
-**Включается иначе, чем `reclaim_apply_runs`:**
+**Enabled differently than `reclaim_apply_runs`:**
 
-| | `reclaim_apply_runs` (этот runbook) | Voyage-orphan-lock-release |
+| | `reclaim_apply_runs` (this runbook) | Voyage-orphan-lock-release |
 |---|---|---|
-| Default | **OFF** (map-driven, нужен явный `enabled: true`) | **ON всегда** — встроенный re-run-путь `reclaim_voyages`, нет отдельного выключателя |
-| Гейт перед включением | да, три прод-гейта выше | нет — приходит вместе с `reclaim_voyages` (тот сам default-ON, path-defaulting) |
-| Кто включил на проде | оператор сознательно, под гейтом | **уже включено по умолчанию** |
+| Default | **OFF** (map-driven, needs explicit `enabled: true`) | **ON always** - built-in re-run path `reclaim_voyages`, no separate switch |
+| Gate before switching on | yes, three product gates above | no - comes with `reclaim_voyages` (the same default-ON, path-defaulting) |
+| Who included on the prod | operator deliberately, under the gate | **already enabled by default** |
 
-`reclaim_voyages` default-ON осознанно (целевой масштаб 100k Souls, рестарт/замена Keeper-инстанса — штатное событие, осиротевшие Voyage регулярны → recovery не должен зависеть от ручной записи правила). А раз без orphan-lock-release Voyage-recovery сломан — шов не имеет собственного opt-in.
+`reclaim_voyages` default-ON deliberately (target scale 100k Souls, restart/replacement of Keeper instance is a regular event, orphaned Voyages are regular → recovery should not depend on manually writing the rule). And since Voyage-recovery is broken without orphan-lock-release, the seam does not have its own opt-in.
 
-**Тот же double-apply класс.** При network-partition (живой, но партиционированный прошлый владелец продолжает свой apply, пока наш re-run шлёт второй) на хост может уйти **двойная отправка задания** — ровно как у `reclaim_apply_runs`. От **порчи `incarnation.state`** защищают те же два барьера, что описаны в этом runbook-е для per-host reclaim:
+**The same double-apply class.** With network-partition (the living but partitioned previous owner continues to apply while our re-run sends the second one) the host can receive **double job submission** - exactly like `reclaim_apply_runs`. **damage to `incarnation.state`** is protected by the same two barriers that are described in this runbook for per-host reclaim:
 
-1. **gate-1 attempt-fencing `RunResult`** — stale-`RunResult` прежнего владельца отсекается на приёме по `apply_runs.attempt` (epoch вырос при пере-claim), всплеск `keeper_runresult_stale_total` (см. [Валидация → Epoch-check](#валидация-после-включения)) при failover Voyage ожидаем и означает, что fencing работает;
-2. **идемпотентность модулей** — повторная отправка того же задания на хост не меняет результат при корректно написанном модуле (та же рекомендация, что для command-Voyage в [ADR-043 §8(d)](../adr/0043-voyage.md#adr-043-voyage--унифицированный-батчевый-прогон)).
+1. **gate-1 attempt-fencing `RunResult`** — stale-`RunResult` of the previous owner is cut off at the reception by `apply_runs.attempt` (epoch increased during re-claim), a surge of `keeper_runresult_stale_total` (see Validation → Epoch-check) with failover Voyage is expected and means fencing is working;
+2. **idempotency of modules** - resending the same job to the host does not change the result if the module is written correctly (same recommendation as for command-Voyage in [ADR-043 §8(d)](../adr/0043-voyage.md)).
 
-**Практический вывод оператору.** Этот double-apply класс присутствует на проде **независимо от того, включил ли ты `reclaim_apply_runs`** — он приходит вместе с default-ON `reclaim_voyages`. Раскатка fencing-Soul (гейт 1 выше) и идемпотентность модулей — условие корректности **обоих** механизмов, не только per-host reclaim. Если `reclaim_voyages` по какой-то причине выключен явным `reaper.rules.reclaim_voyages.enabled: false` — orphan-lock-release уходит вместе с ним, но тогда осиротевшие Voyage зависают без recovery (нежелательно на проде).
+**Practical conclusion to the operator.** This double-apply class is present in the product **regardless of whether you have enabled `reclaim_apply_runs`** - it comes along with default-ON `reclaim_voyages`. Rolling out fencing-Soul (gate 1 above) and idempotency of modules is a condition for the correctness of **both** mechanisms, not only per-host reclaim. If `reclaim_voyages` is disabled for some reason by an explicit `reaper.rules.reclaim_voyages.enabled: false` - orphan-lock-release goes away with it, but then orphaned Voyages hang without recovery (undesirable on production).
 
-Нормативная фиксация — [reaper.md → блок Voyage-orphan-lock-release](../keeper/reaper.md#конфиг) и [ADR-027(l)](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim).
+Regulatory lock - [reaper.md → Voyage-orphan-lock-release block](../keeper/reaper.md) and [ADR-027(l)](../adr/0027-apply-work-queue.md).
 
-## standalone-orphan reconcile — тот же класс для прямого run-а
+## standalone-orphan reconcile - the same class for direct run
 
-Voyage-orphan-lock-release (выше) закрывает осиротевший `applying` только для прогонов **под Voyage** — у них есть back-link `voyage_targets.apply_id`. **Прямой (standalone) `incarnation.run`** — запуск сценария без батч-обёртки Voyage — строки `voyage_targets` не имеет, поэтому крах его Keeper-владельца оставлял бы `incarnation.status='applying'` навсегда. Этот шов закрывает Reaper-правило **`reconcile_orphan_applying`** ([ADR-027(m)](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim), recovery-completeness backstop).
+Voyage-orphan-lock-release (above) closes the orphaned `applying` for **Voyage runs only** - they have a backlink `voyage_targets.apply_id`. **Direct (standalone) `incarnation.run`** - running the script without the Voyage batch wrapper - the line `voyage_targets` does not have, so the crash of its Keeper owner would leave `incarnation.status='applying'` forever. This seam is closed by the Reaper rule **`reconcile_orphan_applying`** ([ADR-027(m)](../adr/0027-apply-work-queue.md), recovery-completeness backstop).
 
-**Что делает.** Снимает осиротевший прямой applying-lock: `applying → ready`, после чего incarnation снова запускаема. Детект двухфазный — (1) SQL-кандидаты: stale applying-строки (`applying_since` старше `stale_after`, 90s по умолчанию) с НЕпустым epoch (`applying_by_kid`); (2) presence-чек: жив ли `applying_by_kid` в Conclave (`InstanceAlive`). Lock снимается **только** если владелец доказанно мёртв (presence=false); живой владелец (прогон реально идёт) пропускается, ошибка presence-чека (флап Redis) — fail-safe skip (живой прогон не срывается).
+**What it does.** Removes the orphaned direct applying-lock: `applying → ready`, after which incarnation is launched again. Two-phase detection - (1) SQL candidates: stale applying lines (`applying_since` older than `stale_after`, 90s by default) with a NOT empty epoch (`applying_by_kid`); (2) presence check: whether `applying_by_kid` is alive in Conclave (`InstanceAlive`). Lock is removed **only** if the owner is proven dead (presence=false); the live owner (the run is actually running) is skipped, the presence check error (Redis flap) is fail-safe skip (the live run does not fail).
 
-**default-ON, как `reclaim_voyages`** (path-defaulting): работает при отсутствии ключа в `reaper.rules`, выключается только явным `reconcile_orphan_applying.enabled: false`. Отдельного прод-гейта (в отличие от `reclaim_apply_runs`) у него нет.
+**default-ON, like `reclaim_voyages`** (path-defaulting): works if there is no key in `reaper.rules`, disabled only by explicit `reconcile_orphan_applying.enabled: false`. It does not have a separate product gate (unlike `reclaim_apply_runs`).
 
-**Чем отличается от соседних recovery-правил:**
+**How it differs from neighboring recovery rules:**
 
-| Правило | Что реклеймит | Default |
+| Rule | What does it advertise | Default |
 |---|---|---|
-| `reclaim_apply_runs` | протухший `claimed`-Ward в `apply_runs` (фаза до отдачи на хост) | **OFF**, три прод-гейта |
-| `reclaim_voyages` (+ Voyage-orphan-lock-release) | осиротевший `running`-Voyage → `pending`; реклеймнутый воркер снимает `applying` под-Voyage | **ON** (path-defaulting) |
-| `reconcile_orphan_applying` | осиротевший `applying`-lock **прямого** `incarnation.run` (вне Voyage) → `ready` | **ON** (path-defaulting) |
+| `reclaim_apply_runs` | rancid `claimed`-Ward in `apply_runs` (phase before sending to host) | **OFF**, three food gates |
+| `reclaim_voyages` (+ Voyage-orphan-lock-release) | orphaned `running`-Voyage → `pending`; advertised worker removes `applying` under-Voyage | **ON** (path-defaulting) |
+| `reconcile_orphan_applying` | orphaned `applying`-lock **direct** `incarnation.run` (outside Voyage) → `ready` | **ON** (path-defaulting) |
 
-**Known-gap — NULL-epoch + FromLocked-микроокно → ручной `unlock`.** Правило реклеймит только строки с известным epoch (`applying_by_kid IS NOT NULL`). Два класса остаются за бортом:
+**Known-gap - NULL-epoch + FromLocked-microwindow → manual `unlock`.** The rule advertises only lines with a known epoch (`applying_by_kid IS NOT NULL`). Two classes are left behind:
 
-- **legacy/pre-082** — applying-строки, поставленные до миграции 082 (epoch-колонок ещё не было), несут NULL `applying_by_kid`;
-- **rerun-last микроокно** — `UnlockForRerun` транзитит `error_locked → applying` БЕЗ epoch, epoch дописывается следующей tx; краш точно в зазоре между этими двумя tx оставляет NULL-epoch.
+- **legacy/pre-082** — applying lines supplied before migration 082 (there were no epoch columns yet) carry NULL `applying_by_kid`;
+- **rerun-last microwindow** — `UnlockForRerun` transit `error_locked → applying` WITHOUT epoch, epoch is appended to the next tx; The crash exactly in the gap between these two tx leaves a NULL-epoch.
 
-Без presence-свидетеля смерти владельца (нет `applying_by_kid`) снятие небезопасно — такой lock правило сознательно НЕ трогает. Снимается оператором вручную: `POST /v1/incarnations/{name}/unlock` ([operator-api/incarnations.md → unlock](../keeper/operator-api/incarnations.md#post-v1incarnationsnameunlock--снять-error_locked)) после разбора, что прогон действительно мёртв. Диагностика `applying`-stuck — [faq.md](faq.md).
+Without a presence witness to the death of the owner (no `applying_by_kid`), withdrawal is unsafe - such a lock rule is deliberately NOT touched. Removed manually by the operator: `POST /v1/incarnations/{name}/unlock` ([operator-api/incarnations.md → unlock](../keeper/operator-api/incarnations.md)) after analyzing that the run is really dead. Diagnostics `applying`-stuck - [faq.md](faq.md).
 
-**Residual double-apply класс — тот же, что у `reclaim_apply_runs`.** При network-partition (живой, но партиционированный владелец продолжает apply, пока reconcile снял lock и incarnation перезапустили) на хост может уйти второй прогон. От порчи `incarnation.state` защищают те же два барьера: gate-1 attempt-fencing `RunResult` + идемпотентность модулей (см. [Voyage-orphan-lock-release](#voyage-orphan-lock-release--тот-же-double-apply-класс-включён-иначе) выше). Раскатка fencing-Soul (гейт 1) — условие корректности и этого механизма.
+**Residual double-apply class is the same as `reclaim_apply_runs`.** With network-partition (a live, but partitioned owner continues to apply while reconcile has removed the lock and incarnation has been restarted) a second run may take the host. The same two barriers protect `incarnation.state` from corruption: gate-1 attempt-fencing `RunResult` + module idempotency (see Voyage-orphan-lock-release above). Rolling out fencing-Soul (gate 1) is a condition for the correctness of this mechanism.
 
-Нормативная фиксация — [reaper.md → `reconcile_orphan_applying`](../keeper/reaper.md#правила) и [ADR-027(m)](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim).
+Regulatory fixation - [reaper.md → `reconcile_orphan_applying`](../keeper/reaper.md) and [ADR-027(m)](../adr/0027-apply-work-queue.md).
 
-## presence-gated force-release SID-lease — сокращение окна невидимости Soul-а
+## presence-gated force-release SID-lease - shortening Soul's invisibility window
 
-Отдельный recovery-backstop ([ADR-027(n)](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim), S2) — **не Reaper-правило**, а шов в EventStream-handler-е reconnect-а Soul-а. Касается не applying-lock-а инкарнации, а SID-lease стрима (`soul:<sid>:lock`).
+Separate recovery-backstop ([ADR-027(n)](../adr/0027-apply-work-queue.md), S2) - **not a Reaper rule**, but a seam in the EventStream handler of Soul's reconnect. This does not apply to the applying-lock of the incarnation, but to the SID-lease of the stream (`soul:<sid>:lock`).
 
-**Проблема.** Soul переподключается к **другому** Keeper-инстансу после смерти прежнего holder-а. SID-lease прежнего holder-а ещё держится (TTL **60s**), и без шва новый Keeper отдавал бы Soul-у `AlreadyExists` — Soul ретраил бы до истечения TTL, оставаясь **невидимым** для флота всё это окно (до 60s).
+**Problem.** Soul reconnects to **another** Keeper instance after the death of the previous holder. The SID-lease of the previous holder still holds (TTL **60s**), and without a seam the new Keeper would give Soul to `AlreadyExists` - Soul would retrail until the TTL expires, remaining **invisible** to the fleet this entire window (up to 60s).
 
-**Что делает шов.** Вместо отказа handler presence-gated перехватывает lease у **доказанно-мёртвого** prev-holder-а: проверяет `InstanceAlive(prev_kid)` в Conclave (presence-ключ keeper-инстанса, TTL **30s**); если prev-holder мёртв (`InstanceAlive=false`) — CAS-by-prev-holder `ForceAcquireSoulLease` перезахватывает ключ на новый KID. Окно невидимости сокращается с **60s** (ждать TTL SID-lease) до **≤30s** (TTL Conclave-presence — пока прежний holder не отвалится из Conclave, он считается живым). Security-event `eventstream.lease_force_released {sid, prev_kid, new_kid}` (`source: soul_grpc`) — на каждый успешный перехват.
+**What the seam does.** Instead of failure, the handler presence-gated intercepts the lease from the **proven-dead** prev-holder: checks `InstanceAlive(prev_kid)` in Conclave (presence key of the keeper instance, TTL **30s**); if prev-holder is dead (`InstanceAlive=false`) - CAS-by-prev-holder `ForceAcquireSoulLease` recaptures the key to a new KID. The invisibility window is reduced from **60s** (wait for TTL SID-lease) to **≤30s** (TTL Conclave-presence - until the previous holder falls off the Conclave, he is considered alive). Security-event `eventstream.lease_force_released {sid, prev_kid, new_kid}` (`source: soul_grpc`) - for each successful interception.
 
-**Split-brain-безопасность через presence-gate.** Перехват происходит **только** при `InstanceAlive=false` (prev-holder доказанно мёртв). Если prev-holder жив, presence-чек упал (флап Redis), prev-holder == self (reconnect к тому же keeper-у) или ключ сменился на третьего между чеком и CAS — шов **не** перехватывает, отдаёт Soul-у `AlreadyExists` (тот ретраит). Эти отказы НЕ аудируются — это штатное «отдать Soul-у ретраить», не инцидент. Поэтому два живых Keeper-а не могут одновременно держать один SID-lease: владение получает ровно один, через presence-доказательство смерти другого.
+**Split-brain security via presence-gate.** Interception occurs **only** when `InstanceAlive=false` (prev-holder is proven dead). If the prev-holder is alive, the presence check has fallen (Redis flap), prev-holder == self (reconnect to the same keeper) or the key has changed to a third one between the check and CAS - the seam **doesn't** intercept, gives Soul to `AlreadyExists` (that retrait). These refusals are NOT audited - this is a standard "give Soul a retrain", not an incident. Therefore, two living Keepers cannot simultaneously hold one SID-lease: exactly one gets ownership through the presence-proof of the death of the other.
 
-**Residual — окно ≤Conclave-TTL не ноль.** Шов сокращает окно невидимости, но не обнуляет: prev-holder остаётся «живым» в Conclave до истечения его presence-TTL (30s), и до этого момента новый Keeper честно отдаёт `AlreadyExists`. Это by-design — раньше доказать смерть нельзя без риска split-brain.
+**Residual - the window ≤Conclave-TTL is not zero.** The seam reduces the invisibility window, but does not reset it to zero: the prev-holder remains "alive" in the Conclave until its presence-TTL expires (30s), and until that point the new Keeper honestly gives `AlreadyExists`. This is by-design - it is impossible to prove death earlier without the risk of split-brain.
 
-**Soul-сторона комплементарна.** Пока keeper отдаёт `AlreadyExists` (lease ещё держится), Soul различает этот lease-held soft-failure от transport-сбоя и ретраит с модест-backoff-cap-ом (3s), а не общим transport-cap-ом (30s) — чтобы переподключиться в пределах секунд после force-release, а не долбить выживших keeper-ов всё presence-окно. См. [docs/soul/connection.md → Lease-held soft-failure](../soul/connection.md#lease-held-soft-failure-reconnect-после-краха-holder-а).
+**Soul-side is complementary.** While the keeper gives `AlreadyExists` (lease is still holding), Soul distinguishes this lease-held soft-failure from a transport failure and retraits with a modest-backoff-cap (3s), and not a common transport-cap (30s) - in order to reconnect within seconds after the force-release, and not to hammer the surviving keepers the entire presence window. See [docs/soul/connection.md → Lease-held soft-failure](../soul/connection.md).
 
-Нормативная фиксация — [naming-rules.md → `eventstream.lease_force_released`](../naming-rules.md#audit-events) и [ADR-027(n)](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim).
+Regulatory fixation - [naming-rules.md → `eventstream.lease_force_released`](../naming-rules.md#audit-events) and [ADR-027(n)](../adr/0027-apply-work-queue.md).
 
-## Связанное
+## Related
 
-- [ADR-027 — Acolyte / Ward / recovery](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim), amend GATE-1 (deliver-once recovery, 2026-05-25); (l) — Voyage-orphan-lock-release.
-- [ADR-043 §8 — Voyage failover / `reclaim_voyages` default-ON](../adr/0043-voyage.md#adr-043-voyage--унифицированный-батчевый-прогон).
-- [docs/keeper/reaper.md → Включение recovery](../keeper/reaper.md#включение-recovery-recovery-enable) — нормативная фиксация гейта, источник правды.
-- [docs/keeper/reaper.md → Метрики](../keeper/reaper.md#метрики) — canonical-имена метрик Reaper.
-- Параллельные Reaper-правила, которые **не блокируют** включение этого: `mark_disconnected` (Soul heartbeat-выпадение, 90s), `reconcile_orphan_applying` (standalone-orphan applying-lock, default-ON, см. раздел выше), `purge_audit_old`, `purge_apply_runs` (30d retention завершённых), `purge_apply_task_register` (1h grace), `purge_old_errands`.
-- [ADR-027(m)/(n)](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim) — recovery-completeness backstop: standalone-orphan reconcile (`reconcile_orphan_applying`) + presence-gated force-release SID-lease (`eventstream.lease_force_released`).
-- [monitoring.md](monitoring.md) — алерт `dispatched stuck (post-recovery-enable)`.
-- [faq.md](faq.md) — диагностика `applying`-stuck.
+- [ADR-027 - Acolyte / Ward / recovery](../adr/0027-apply-work-queue.md), amend GATE-1 (deliver-once recovery, 2026-05-25); (l) - Voyage-orphan-lock-release.
+- [ADR-043 §8 - Voyage failover / `reclaim_voyages` default-ON](../adr/0043-voyage.md).
+- [docs/keeper/reaper.md → Enabling recovery](../keeper/reaper.md) - regulatory gate fixation, source of truth.
+- [docs/keeper/reaper.md → Metrics](../keeper/reaper.md) - canonical names of Reaper metrics.
+- Parallel Reaper rules that **do not block** enabling this: `mark_disconnected` (Soul heartbeat drop, 90s), `reconcile_orphan_applying` (standalone-orphan applying-lock, default-ON, see section above), `purge_audit_old`, `purge_apply_runs` (30d retention completed), `purge_apply_task_register` (1h grace), `purge_old_errands`.
+- [ADR-027(m)/(n)](../adr/0027-apply-work-queue.md) — recovery-completeness backstop: standalone-orphan reconcile (`reconcile_orphan_applying`) + presence-gated force-release SID-lease (`eventstream.lease_force_released`).
+- [monitoring.md](monitoring.md) — alert `dispatched stuck (post-recovery-enable)`.
+- [faq.md](faq.md) - diagnostics `applying`-stuck.

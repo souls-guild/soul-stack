@@ -1,53 +1,53 @@
-# Локальный dev-стек
+# Local dev stack
 
-Локальная инфраструктура для разработки и интерактивной отладки Keeper-а.
-Поднимается через docker-compose, persistent volume. Для автоматизированных
-integration-тестов используется отдельный механизм — testcontainers-go
-(см. [Integration tests](#integration-tests) ниже), он поднимает свой
-эфемерный контейнер per-package, не пересекаясь с `dev-up`.
+Local infrastructure for development and interactive debugging of Keeper.
+Raised via docker-compose, persistent volume. For automated
+integration tests use a separate mechanism - testcontainers-go
+(see [Integration tests](#integration-tests) below), he raises his
+ephemeral per-package container, not intersecting with `dev-up`.
 
-## Что поднимается
+## What rises
 
-| Компонент | Назначение | ADR |
+| Component | Destination | ADR |
 |---|---|---|
-| **postgres:16-alpine** | Холодное хранилище Keeper-а (`audit_log`, далее `souls`/`operators`/`incarnation`). | [ADR-005](../adr/0005-storage-postgres.md#adr-005-хранилище-состояния-keeper--postgres) |
-| **hashicorp/vault:1.18** | Vault в dev-режиме для чтения JWT signing key (`secret/keeper/jwt-signing-key`, ADR-014) и других KV. Root token = `root`. | [ADR-014](../adr/0014-operator-identity.md#adr-014-identity-модель-оператора-archon), [ADR-017](../adr/0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read) |
-| **redis:7-alpine** | Reaper-lease, SoulLease, Outbound pub/sub между Keeper-инстансами. Без пароля в dev. | [ADR-006](../adr/0006-cache-redis.md#adr-006-кэш-и-координация--redis) |
-| **otel/opentelemetry-collector-contrib** | Приём OTLP gRPC (`:4317`) трейсов от keeper/soul → экспорт в Jaeger + debug-лог. Конфиг pipeline-а — [`dev/otel-collector.yaml`](../../dev/otel-collector.yaml). | [ADR-024](../adr/0024-observability.md#adr-024-observability-prometheus-primary--otel-bridge) |
-| **jaegertracing/all-in-one** | Хранилище + UI трейсов (`:16686`, in-memory storage). Принимает от коллектора OTLP внутри docker-сети. | [ADR-024](../adr/0024-observability.md#adr-024-observability-prometheus-primary--otel-bridge) |
+| **postgres:16-alpine** | Keeper cold storage (`audit_log`, hereinafter `souls`/`operators`/`incarnation`). | [ADR-005](../adr/0005-storage-postgres.md#adr-005-keeper-state-storage--postgres) |
+| **hashicorp/vault:1.18** | Vault in dev mode for reading JWT signing key (`secret/keeper/jwt-signing-key`, ADR-014) and other KVs. Root token = `root`. | [ADR-014](../adr/0014-operator-identity.md), [ADR-017](../adr/0017-keeper-side-core.md) |
+| **redis:7-alpine** | Reaper-lease, SoulLease, Outbound pub/sub between Keeper instances. No password in dev. | [ADR-006](../adr/0006-cache-redis.md) |
+| **otel/opentelemetry-collector-contrib** | Receiving OTLP gRPC (`:4317`) traces from keeper/soul → export to Jaeger + debug log. The pipeline config is [`dev/otel-collector.yaml`](../../dev/otel-collector.yaml). | [ADR-024](../adr/0024-observability.md#adr-024-observability-prometheus-primary--otel-bridge) |
+| **jaegertracing/all-in-one** | Storage + UI traces (`:16686`, in-memory storage). Receives from the OTLP collector inside the docker network. | [ADR-024](../adr/0024-observability.md#adr-024-observability-prometheus-primary--otel-bridge) |
 
-Backlog для следующих slice-ов: Vault PKI (Keeper-side issuance mTLS,
-отдельный mount от `secret/`), `audit.otel_export`
+Backlog for the following slices: Vault PKI (Keeper-side issuance mTLS,
+separate mount from `secret/`), `audit.otel_export`
 ([ADR-022](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)).
 
-## Команды
+## Teams
 
-| Команда | Что делает |
+| Team | What does |
 |---|---|
-| `make dev-up` | `docker compose up -d` в `dev/`. Данные persist в named volume `postgres_data`. |
-| `make dev-stop` | Останавливает локальные `keeper run`/`soul run`-демоны dev-воркфлоу (foreground-процессы из [Smoke recipe](#smoke-recipe-e2e)). Pidfile не пишется — матчит по `pkill -f` со специфичным паттерном dev-конфига (`keeper.dev.yml`/`soul.dev.yml`), чужие keeper/soul не задевает; не падает, если процессов нет. |
-| `make dev-down` | `make dev-stop` (гасит локальные демоны) → `docker compose down` без `-v` — контейнер останавливается, данные сохраняются. |
-| `make dev-reset` | `docker compose down -v && docker compose up -d` — полный сброс с потерей данных. |
-| `make dev-provision` | Idempotent bootstrap: Vault KV (`secret/keeper/postgres`, `secret/keeper/jwt-signing-key`) + Vault PKI (`pki/` engine, root cert, role `soul-seed`) + TLS-материал из Vault PKI в `/tmp/keeper-dev/tls/` + каталоги `plugins/`, `plugin-sockets/` + **git-репо service/destiny-артефактов** из `examples/` под file://-URL-ами из `keeper.dev.yml` (см. [Артефакты service/destiny](#артефакты-servicedestiny-для-резолва)). Скрипт — [`dev/provision.sh`](../../dev/provision.sh), безопасен к повторному запуску. |
-| `make dev-smoke` | Полный цикл: `dev-up` → `dev-provision` → собрать `keeper` → `keeper init --archon=archon-alice`. JWT-файл оператора → `/tmp/keeper-dev/archon-alice.jwt`. Повторный прогон требует `make dev-reset && make dev-smoke` (operators registry уже не пуст). |
-| `make dev-keeper` | Рестарт keeper в фоне с ПОЛНЫМ dev-env (см. [Фоновые dev-демоны](#фоновые-dev-демоны-обёртка-над-keeper-runsoul-run)): гасит старый процесс по паттерну `keeper.dev.yml`, чистит leader-leases в Redis (`conductor:leader`/`reaper:leader`), создаёт cache-каталоги, выставляет `VAULT_ADDR`/`VAULT_TOKEN`/`KEEPER_SERVICE_CACHE_DIR`/`KEEPER_DESTINY_CACHE_DIR`/`SOUL_STACK_ALLOW_FILE_REPOS=1`, поднимает `nohup keeper run` и ждёт healthz 200 на `:8080`. Нет бинаря — собирает; нет TLS — подсказывает `dev-provision`. Лог → `/tmp/keeper-dev/keeper.log`. Скрипт — [`dev/keeper-run.sh`](../../dev/keeper-run.sh). |
-| `make dev-jwt [AID=… ROLES=… TTL=…]` | Печатает в stdout HS256-JWT Архонта для ad-hoc API-вызовов **без** `keeper init`. Ключ берётся из того же Vault KV, что и у keeper (`secret/keeper/jwt-signing-key`, поле `signing_key`, base64-decode), `iss=keeper-dev-01`. Дефолты: `AID=archon-alice`, `ROLES='["cluster-admin"]'`, `TTL=43200` (12h). Только токен в stdout (служебное — в stderr) → `TOKEN=$(make dev-jwt)`. Требует python3 + поднятый Vault. Скрипт — [`dev/mint-jwt.sh`](../../dev/mint-jwt.sh). |
-| `make dev-souls` | Переподнимает локальный флот souls по реестру БД (`SELECT sid FROM souls`): на каждый sid пишет per-sid `soul.yml` (если нет), онбордит (`issue-token?force=true` → `soul init`) ТОЛЬКО при отсутствии валидного seed (три файла `cert/key/ca.pem` по `seed/current`), (пере)запускает `soul run`. Covens в БД сохраняются — заново НЕ регистрирует. В конце печатает `SELECT status, count(*) FROM souls`. Чинит «все souls disconnected». Скрипт — [`dev/souls-up.sh`](../../dev/souls-up.sh). |
-| `make dev-web [WEB_DIR=…]` | Vite dev-сервер companion-репо (`WEB_DIR`, default `../soul-stack-web`) с обязательным `--host` — иначе vite биндится только на IPv6 `[::1]` и `http://127.0.0.1:5173` отказывает. Гасит старый vite этого репо, поднимает `nohup npm run dev -- --host`, ждёт 200 на `:5173`. Лог → `/tmp/keeper-dev/web-dev.log`. Скрипт — [`dev/web-run.sh`](../../dev/web-run.sh). |
-| `make dev-stand` | Полный подъём стенда одной командой: `dev-provision` → `dev-keeper` → `dev-souls` → `dev-web` + сводка адресов и напоминание про `make dev-jwt`. Применять после рестарта / смены суток (см. [Быстрое восстановление стенда](#быстрое-восстановление-стенда-после-tmp-чистки)). |
+| `make dev-up` | `docker compose up -d` to `dev/`. persist data in named volume `postgres_data`. |
+| `make dev-stop` | Stops local `keeper run`/`soul run` dev-workflow daemons (foreground processes from [Smoke recipe](#smoke-recipe-e2e)). Pidfile is not written - matches `pkill -f` with a specific dev-config pattern (`keeper.dev.yml`/`soul.dev.yml`), does not affect other people's keeper/soul; does not crash if there are no processes. |
+| `make dev-down` | `make dev-stop` (extinguishes local daemons) → `docker compose down` without `-v` - the container stops, the data is saved. |
+| `make dev-reset` | `docker compose down -v && docker compose up -d` - full reset with data loss. |
+| `make dev-provision` | Idempotent bootstrap: Vault KV (`secret/keeper/postgres`, `secret/keeper/jwt-signing-key`) + Vault PKI (`pki/` engine, root cert, role `soul-seed`) + TLS stuff from Vault PKI to `/tmp/keeper-dev/tls/` + directories `plugins/`, `plugin-sockets/` + **git repo service/destiny-artifacts** from `examples/` under file://-URLs from `keeper.dev.yml` (see Service/destiny artifacts). The script is [`dev/provision.sh`](../../dev/provision.sh), safe to run again. |
+| `make dev-smoke` | Full cycle: `dev-up` → `dev-provision` → assemble `keeper` → `keeper init --archon=archon-alice`. Operator JWT file → `/tmp/keeper-dev/archon-alice.jwt`. A second run requires `make dev-reset && make dev-smoke` (operators registry is no longer empty). |
+| `make dev-keeper` | Restarting keeper in the background with a FULL dev-env (see Background dev-daemons): extinguishes the old process using the `keeper.dev.yml` pattern, clears leader-leases in Redis (`conductor:leader`/`reaper:leader`), creates cache directories, exposes `VAULT_ADDR`/`VAULT_TOKEN`/`KEEPER_SERVICE_CACHE_DIR`/`KEEPER_DESTINY_CACHE_DIR`/`SOUL_STACK_ALLOW_FILE_REPOS=1`, picks up `nohup keeper run` and waits for healthz 200 on `:8080`. No binary - collects; no TLS - prompts `dev-provision`. Log → `/tmp/keeper-dev/keeper.log`. Script - [`dev/keeper-run.sh`](../../dev/keeper-run.sh). |
+| `make dev-jwt [AID=… ROLES=… TTL=…]` | Prints to stdout HS256-JWT Archon for ad-hoc API calls **without** `keeper init`. The key is taken from the same Vault KV as keeper (`secret/keeper/jwt-signing-key`, field `signing_key`, base64-decode), `iss=keeper-dev-01`. Defaults: `AID=archon-alice`, `ROLES='["cluster-admin"]'`, `TTL=43200` (12h). Only the token in stdout (service - in stderr) → `TOKEN=$(make dev-jwt)`. Requires python3 + raised Vault. Script - [`dev/mint-jwt.sh`](../../dev/mint-jwt.sh). |
+| `make dev-souls` | Re-raises the local fleet of souls according to the database registry (`SELECT sid FROM souls`): for each sid writes per-sid `soul.yml` (if not), onboards (`issue-token?force=true` → `soul init`) ONLY in the absence of a valid seed (three files `cert/key/ca.pem` by `seed/current`), (re)launch `soul run`. Covens are saved in the database - they do NOT register again. At the end it prints `SELECT status, count(*) FROM souls`. Repairs "all souls disconnected". Script - [`dev/souls-up.sh`](../../dev/souls-up.sh). |
+| `make dev-web [WEB_DIR=…]` | Vite dev-server companion-repo (`WEB_DIR`, default `../soul-stack-web`) with the required `--host` - otherwise vite binds only to IPv6 `[::1]` and `http://127.0.0.1:5173` fails. Extinguishes the old vite of this repo, raises `nohup npm run dev -- --host`, waits for 200 on `:5173`. Log → `/tmp/keeper-dev/web-dev.log`. Script - [`dev/web-run.sh`](../../dev/web-run.sh). |
+| `make dev-stand` | Full rise of the stand with one command: `dev-provision` → `dev-keeper` → `dev-souls` → `dev-web` + address summary and reminder about `make dev-jwt`. Use after restart/change of day (see Quick stand recovery). |
 
-> **Два UI: dev vite-сервер vs embed на keeper — не путать.** UI с [ADR-055](../adr/0055-embed-ui-bundle.md#adr-055-embed-ui-bundle--опциональный-single-binary-keeper-с-ui-на-ui) встроен в `keeper`-бинарь (`go:embed`) и в проде/бете отдаётся самим keeper-ом на **`http://<keeper>:8080/ui`** (тоггл [`web_ui_enabled`](../keeper/config.md#web_ui_enabled-top-level), default-ON). Для **разработки фронта** `make dev-web` поднимает живой vite dev-сервер с HMR на **`http://127.0.0.1:5173/ui/`** (отдельный процесс, hot-reload исходников из companion `soul-stack-web`) — это «настоящий» UI при работе над фронтом. Embed на `:8080/ui` показывает **завендоренный снапшот** (`keeper/internal/webui/assets/`, обновляется `make sync-webui`) — он может отставать от исходников companion-а, пока снапшот не пере-синкнут. То есть: фронт правишь и смотришь на `:5173/ui/`; «как увидит пользователь беты» проверяешь на `:8080/ui` после `make sync-webui`. Подробнее про вендоринг — [docs/web/README.md](../web/README.md).
+> **Two UI: dev vite server vs embed on the keeper - do not confuse it.** UI with [ADR-055](../adr/0055-embed-ui-bundle.md) is built into the `keeper` binary (`go:embed`) and in prod/beta it is given by the keeper itself on **`http://<keeper>:8080/ui`** (toggle [`web_ui_enabled`](../keeper/config.md#web_ui_enabled-top-level), default-ON). For **front development** `make dev-web` raises a live vite dev server from HMR to **`http://127.0.0.1:5173/ui/`** (separate process, hot-reload sources from companion `soul-stack-web`) - this is the "real" UI when working on the front. Embed on `:8080/ui` shows a **vendored snapshot** (`keeper/internal/webui/assets/`, updated by `make sync-webui`) - it may lag behind the companion source until the snapshot is re-synced. That is: you correct the front and look at `:5173/ui/`; "as the beta user sees" you check for `:8080/ui` after `make sync-webui`. More information about vendoring - [docs/web/README.md](../web/README.md).
 
 ## Connection details
 
-Порты выбраны так, чтобы не конфликтовать с типичными пользовательскими
-docker-стеками (`agent-platform-postgres:5432`, `agent-platform-valkey:6380`,
-`dba-salt-redis:6379`). Если занят и `5434`/`6381`/`8200` — см.
+Ports are chosen so as not to conflict with typical user
+docker-stacks (`agent-platform-postgres:5432`, `agent-platform-valkey:6380`,
+`dba-salt-redis:6379`). If `5434`/`6381`/`8200` is busy - see
 [Troubleshooting](#troubleshooting).
 
 ### Postgres
 
-| Параметр | Значение |
+| Parameter | Meaning |
 |---|---|
 | Host / port | `127.0.0.1:5434` |
 | Database | `keeper` |
@@ -56,113 +56,113 @@ docker-стеками (`agent-platform-postgres:5432`, `agent-platform-valkey:63
 
 ### Vault
 
-| Параметр | Значение |
+| Parameter | Meaning |
 |---|---|
 | Host / port | `127.0.0.1:8200` |
 | UI | http://127.0.0.1:8200/ui |
 | Root token | `root` |
-| KV mount | `secret` (v2, активирован автоматически в dev-режиме) |
-| Vault address для CLI | `export VAULT_ADDR=http://127.0.0.1:8200` |
-| Vault token для CLI | `export VAULT_TOKEN=root` |
+| KV mount | `secret` (v2, activated automatically in dev mode) |
+| Vault address for CLI | `export VAULT_ADDR=http://127.0.0.1:8200` |
+| Vault token for CLI | `export VAULT_TOKEN=root` |
 
 ### Redis
 
-| Параметр | Значение |
+| Parameter | Meaning |
 |---|---|
 | Host / port | `127.0.0.1:6381` |
-| Password | пусто (dev) |
-| URL для CLI | `redis-cli -h 127.0.0.1 -p 6381 ping` |
+| Password | empty (dev) |
+| URL for CLI | `redis-cli -h 127.0.0.1 -p 6381 ping` |
 
-### OTel-стек (трейсы)
+### OTel stack (traces)
 
-| Параметр | Значение |
+| Parameter | Meaning |
 |---|---|
-| OTLP gRPC (приём от keeper/soul) | `127.0.0.1:4317` (insecure, без TLS) |
+| OTLP gRPC (reception from keeper/soul) | `127.0.0.1:4317` (insecure, no TLS) |
 | Jaeger UI | http://127.0.0.1:16686 |
-| Конфиг collector-а | [`dev/otel-collector.yaml`](../../dev/otel-collector.yaml) |
+| collector config | [`dev/otel-collector.yaml`](../../dev/otel-collector.yaml) |
 
-dev-конфиги keeper и soul уже указывают на коллектор: `otel.enabled: true`,
+dev-configs keeper and soul already point to the collector: `otel.enabled: true`,
 `endpoint: 127.0.0.1:4317` ([`dev/keeper.dev.yml`](../../dev/keeper.dev.yml) /
 [`dev/soul.dev.yml`](../../dev/soul.dev.yml)).
 
-**Посмотреть трейсы:**
+**View traces:**
 
-1. Подними стек (`make dev-up`) — коллектор и Jaeger стартуют вместе с PG/Vault/Redis.
-2. Прогони keeper/soul через dev-конфиги (см. [Smoke recipe](#smoke-recipe-e2e)).
-3. Открой Jaeger UI http://127.0.0.1:16686, выбери service `keeper` или `soul`,
-   нажми **Find Traces**. Сквозная трасса оператор → Keeper → Soul видна как один
-   trace (trace-context едет в `ApplyRequest.trace_context`, [observability.md §4](../observability.md)).
-4. Без UI — `docker compose -f dev/docker-compose.yml logs -f otel-collector`
-   печатает принятые спаны (debug-exporter).
+1. Raise the stack (`make dev-up`) - Collector and Jaeger start with PG/Vault/Redis.
+2. Run keeper/soul through dev configs (see [Smoke recipe](#smoke-recipe-e2e)).
+3. Open Jaeger UI http://127.0.0.1:16686, select service `keeper` or `soul`,
+click **Find Traces**. The through route operator → Keeper → Soul is visible as one
+trace (trace-context goes to `ApplyRequest.trace_context`, [observability.md §4](../observability.md)).
+4. Without UI - `docker compose -f dev/docker-compose.yml logs -f otel-collector`
+prints accepted spans (debug-exporter).
 
-> **Прод — не этот стек.** all-in-one Jaeger хранит трейсы in-memory (теряются
-> при restart) и принимает OTLP без TLS — только для локалки. Прод-`keeper.yml`
-> ([`examples/keeper/keeper.yml`](../../examples/keeper/keeper.yml)) оставляет
-> `otel:`-блок конфигурируемым (endpoint реального коллектора + TLS),
-> dev-эндпоинт туда не хардкодится.
+> **Prod - not this stack.** all-in-one Jaeger stores traces in-memory (lost
+> upon restart) and accepts OTLP without TLS - for local only. Prod-`keeper.yml`
+> ([`examples/keeper/keeper.yml`](../../examples/keeper/keeper.yml)) leaves
+> `otel:`-block configurable (endpoint of real collector + TLS),
+> dev endpoint is not hardcoded there.
 
-Bootstrap-провижининг секретов для local-dev (ADR-014/M0.5b/M0.5d) — после
-`make dev-up` одной командой:
+Bootstrap provisioning of secrets for local-dev (ADR-014/M0.5b/M0.5d) - after
+`make dev-up` with one command:
 
 ```sh
 make dev-provision
 ```
 
-Скрипт [`dev/provision.sh`](../../dev/provision.sh) идемпотентен и сам
-делает следующие шаги (то же, что раньше выполнялось вручную):
+The script [`dev/provision.sh`](../../dev/provision.sh) is idempotent itself
+does the following steps (same as done manually before):
 
 ```sh
 export VAULT_ADDR=http://127.0.0.1:8200
 export VAULT_TOKEN=root
 
-# JWT signing-key (auth.jwt.signing_key_ref → secret/keeper/jwt-signing-key, поле `signing_key`)
+# JWT signing-key (auth.jwt.signing_key_ref → secret/keeper/jwt-signing-key, field `signing_key`)
 vault kv put secret/keeper/jwt-signing-key signing_key="$(openssl rand -base64 32)"
 
-# Postgres DSN (postgres.dsn_ref → secret/keeper/postgres, поле `dsn`)
+# Postgres DSN (postgres.dsn_ref → secret/keeper/postgres, field `dsn`)
 vault kv put secret/keeper/postgres \
   dsn="postgres://keeper:keeper@127.0.0.1:5434/keeper?sslmode=disable"
 ```
 
-При отсутствии `vault`-CLI на хосте скрипт прозрачно проксирует команды
-через `docker exec soul-stack-vault vault ...`.
+If there is no `vault`-CLI on the host, the script transparently proxies commands
+via `docker exec soul-stack-vault vault ...`.
 
-После `make dev-down`/`dev-reset` запустить `make dev-provision` снова —
-dev-mode Vault хранит секреты только в RAM.
+After `make dev-down`/`dev-reset` run `make dev-provision` again -
+dev-mode Vault stores secrets only in RAM.
 
-Vault-ссылки `vault:secret/...` в `keeper.yml` резолвятся на старте бинаря
+Vault links `vault:secret/...` to `keeper.yml` are resolved at the start of the binary
 keeper (M0.5b — `auth.jwt.signing_key_ref`, M0.5d — `postgres.dsn_ref`).
-Convention имени поля внутри KV: короткое (`signing_key` / `dsn`), документировано
-в [docs/keeper/config.md](../keeper/config.md). Остальные `_ref`-поля
-(`redis.password_ref`, AppRole credentials) — отложены на следующие slice-ы.
+Convention of field name inside KV: short (`signing_key` / `dsn`), documented
+in [docs/keeper/config.md](../keeper/config.md). Other `_ref` fields
+(`redis.password_ref`, AppRole credentials) - postponed to the next slices.
 
-## Параллельные стенды (`DEV_STAND`)
+## Parallel stands (`DEV_STAND`)
 
-По умолчанию все dev-цели работают с **одним** стендом на фиксированных портах
-(`8080`/`8081`/`9090`/`9442`/`9443`, web `5173`) и каталогом `/tmp/keeper-dev/`.
-Пока стенд занят (правило validating требует **живого** локального стенда — keeper
-поднят, данные засеяны), взять второй тикет/фичу в работу нельзя: коллизия портов,
-БД и dev-каталога. Механизм `DEV_STAND` (NIM-25) разводит **2–4 стенда** параллельно
-— у каждого свои порты, БД и Vault-префикс поверх общих контейнеров инфраструктуры.
+By default, all dev targets work with **one** stand on fixed ports
+(`8080`/`8081`/`9090`/`9442`/`9443`, web `5173`) and directory `/tmp/keeper-dev/`.
+While the stand is busy (the validating rule requires a **live** local stand - keeper
+raised, data seeded), it is impossible to take the second ticket/feature into work: port collision,
+DB and dev directory. Mechanism `DEV_STAND` (NIM-25) places **2–4 stands** in parallel
+- each has its own ports, database and Vault prefix on top of common infrastructure containers.
 
-### Как задать стенд
+### How to set a stand
 
-Стенд выбирается переменной окружения `DEV_STAND=<slug>` перед любой dev-целью
-(`slug` — тикет/фича, напр. `nim30`; валидация `^[a-z0-9][a-z0-9-]{0,30}$`):
+The stand is selected by the environment variable `DEV_STAND=<slug>` before any dev target
+(`slug` - ticket/feature, e.g. `nim30`; validation `^[a-z0-9][a-z0-9-]{0,30}$`):
 
-- **Пусто (`DEV_STAND` не задан)** — стенд по умолчанию, всё байт-в-байт как
-  исторически: slot `0`, offset `0`, каталог `/tmp/keeper-dev`, порты `8080…`, БД
-  `keeper`, KV `secret/keeper`. Ни одна существующая команда не меняет поведения.
-- **Непустой** — второй+ стенд: свой каталог `/tmp/keeper-dev-<slug>`, БД
-  `keeper_<slug>`, Vault-префикс `secret/keeper/<slug>/`, свои порты.
+- **Empty (`DEV_STAND` not specified)** - default stand, everything is byte-by-byte as
+historically: slot `0`, offset `0`, directory `/tmp/keeper-dev`, ports `8080…`, database
+`keeper`, KV `secret/keeper`. No existing command is changing behavior.
+- **Non-empty** - second+ stand: own catalog `/tmp/keeper-dev-<slug>`, DB
+`keeper_<slug>`, Vault prefix `secret/keeper/<slug>/`, custom ports.
 
-**Слот** (`1..3`) выделяется автоматически из файла-реестра
-`/tmp/soul-stack-stands.tsv` (строки `slug<TAB>slot`, read-modify-write под `flock`
-— параллельный первый запуск разных слагов не заберёт один слот). Слот слага
-переиспользуется между запусками, пока не освобождён (см.
-[Освобождение слота](#освобождение-слота)). Override — `DEV_STAND_SLOT=<1..3>`.
-Offset всех портов стенда = `slot × 10`.
+**Slot** (`1..3`) is allocated automatically from the registry file
+`/tmp/soul-stack-stands.tsv` (lines `slug<TAB>slot`, read-modify-write under `flock`
+- ​​parallel first launch of different slugs will not take one slot). Slug slot
+is reused between runs until released (see
+Release slot). Override - `DEV_STAND_SLOT=<1..3>`.
+Offset of all stand ports = `slot × 10`.
 
-Первый запуск любой стенд-aware цели печатает сводку стенда:
+The first run of any stand-aware target prints a stand summary:
 
 ```
 [stand] slug=nim30 slot=1 offset=10 dir=/tmp/keeper-dev-nim30 dedicated=0
@@ -170,15 +170,15 @@ Offset всех портов стенда = `slot × 10`.
 [stand] ports: openapi=8090 mcp=8091 metrics=9100 bootstrap=9452 es=9453 web=5183 soul-metrics=9201
 ```
 
-Единый источник derived-переменных — sourced-хелпер
-[`dev/stand-env.sh`](../../dev/stand-env.sh) (читается каждой `make dev-*`-целью и
-`dev/*.sh`-скриптом; напрямую не запускается).
+Single source of derived variables - sourced helper
+[`dev/stand-env.sh`](../../dev/stand-env.sh) (read by each `make dev-*` target and
+`dev/*.sh`-script; does not run directly).
 
-### Офсет портов
+### Port offset
 
-Все порты стенда = базовый порт `+ slot×10`. База (slot 0) — исторические значения:
+All bench ports = base port `+ slot×10`. Base (slot 0) - historical values:
 
-| Порт | Переменная | slot 0 (default) | slot 1 | slot 2 | slot 3 |
+| Port | Variable | slot 0 (default) | slot 1 | slot 2 | slot 3 |
 |---|---|---|---|---|---|
 | OpenAPI | `OPENAPI_PORT` | `8080` | `8090` | `8100` | `8110` |
 | MCP | `MCP_PORT` | `8081` | `8091` | `8101` | `8111` |
@@ -188,48 +188,48 @@ Offset всех портов стенда = `slot × 10`.
 | Web (vite) | `WEB_PORT` | `5173` | `5183` | `5193` | `5203` |
 | Soul-metrics | `SOUL_METRICS_PORT` | `9191` | `9201` | `9211` | `9221` |
 
-Пример — стенд `nim30` (slot 1): keeper на `http://127.0.0.1:8090`, MCP `:8091`,
+Example - stand `nim30` (slot 1): keeper on `http://127.0.0.1:8090`, MCP `:8091`,
 web `http://127.0.0.1:5183/ui/`, soul-metrics `:9201`.
 
-### Что разводится, что общее (лёгкий режим, default)
+### What is divorced, what is general (easy mode, default)
 
-Лёгкий режим (`DEDICATED_INFRA=0`, по умолчанию) разводит только **бесплатное**,
-переиспользуя один комплект контейнеров:
+Easy mode (`DEDICATED_INFRA=0`, default) only disables **free**,
+reusing one set of containers:
 
-| Ресурс | Стенд по умолчанию | Стенд `<slug>` |
+| Resource | Default Stand | Stand `<slug>` |
 |---|---|---|
-| Каталог dev-материала | `/tmp/keeper-dev` | `/tmp/keeper-dev-<slug>` |
-| БД (в общем PG) | `keeper` | `keeper_<slug>` |
-| Vault KV-префикс (в общем Vault) | `secret/keeper/` | `secret/keeper/<slug>/` |
-| KID keeper-а | `keeper-dev-01` | `keeper-dev-<slug>` |
-| SID эталонной soul | `web-01.example.com` | `web-01.<slug>.example.com` |
-| Порты keeper/web/soul | `8080…` | `+ slot×10` |
-| Контейнеры PG / Vault / Redis | общий комплект `soul-stack-*` | тот же общий комплект |
+| Directory of dev-material | `/tmp/keeper-dev` | `/tmp/keeper-dev-<slug>` |
+| DB (Generally PG) | `keeper` | `keeper_<slug>` |
+| Vault KV-prefix (generally Vault) | `secret/keeper/` | `secret/keeper/<slug>/` |
+| KID keeper | `keeper-dev-01` | `keeper-dev-<slug>` |
+| Reference soul SID | `web-01.example.com` | `web-01.<slug>.example.com` |
+| Ports keeper/web/soul | `8080…` | `+ slot×10` |
+| PG/Vault/Redis Containers | general kit `soul-stack-*` | the same general set |
 
-Контейнеры PG, Vault и Redis — **общие**. Для PG и Vault это безвредно: разные БД
-(`keeper_<slug>`) и KV-префиксы (`secret/keeper/<slug>/`) полностью изолируют данные
-стендов. **Redis — общий и НЕ разводится** в лёгком режиме, и это граница:
+PG, Vault and Redis containers are **shared**. This is harmless for PG and Vault: different databases
+(`keeper_<slug>`) and KV prefixes (`secret/keeper/<slug>/`) completely isolate data
+stands. **Redis is generic and NOT bred** in easy mode, and this is the border:
 
-> **Граница лёгкого режима: общий Redis.** Фоновая координация keeper-а живёт в
-> Redis: лидерство Conductor/Reaper (единые ключи `conductor:leader`/`reaper:leader`),
-> presence-реестр Conclave, SoulLease, pub/sub между инстансами (термины — в
-> [словаре имён](../naming-rules.md)). На общем Redis эта фоновая жизнь **шарится
-> между стендами**: лидером Conductor/Reaper становится keeper только одного стенда,
-> а Conclave считает keeper-ы разных стендов инстансами одного кластера. Для
-> UI-работы, просмотра данных и ручных API-вызовов это нормально. Но **параллельные
-> apply-прогоны** и **HA/failover-демо** (два keeper, soul-shedding) в лёгком режиме
-> **не поддержаны** — для них берите `DEDICATED_INFRA=1`.
+> **Light mode boundary: shared Redis.** Background keeper coordination lives in
+> Redis: Conductor/Reaper leadership (single keys `conductor:leader`/`reaper:leader`),
+> presence-registry Conclave, SoulLease, pub/sub between instances (terms in
+> [name dictionary](../naming-rules.md)). On the general Redis this background life is rummaging around
+> between stands**: the leader of Conductor/Reaper becomes the keeper of only one stand,
+> and Conclave considers keepers of different stands to be instances of the same cluster. For
+> UI work, data browsing and manual API calls are fine. But **parallel
+> apply runs** and **HA/failover demo** (two keeper, soul-shedding) in easy mode
+> **not supported** - for them take `DEDICATED_INFRA=1`.
 
-### Полная изоляция: `DEDICATED_INFRA=1`
+### Full isolation: `DEDICATED_INFRA=1`
 
-`DEDICATED_INFRA=1` даёт стенду **свой комплект контейнеров** — полная развязка,
-включая Redis:
+`DEDICATED_INFRA=1` gives the stand **its own set of containers** - a complete solution,
+including Redis:
 
-- отдельный `docker compose`-проект `COMPOSE_PROJECT_NAME=soul-stack-<slug>` (свои
-  контейнеры, тома, сеть); `dev-up`/`dev-down`/`dev-reset` бьют **именно его**;
-- инфра-порты тоже сдвигаются на `slot×10` (в лёгком режиме — общие, без сдвига):
+- separate `docker compose`-project `COMPOSE_PROJECT_NAME=soul-stack-<slug>` (own
+containers, volumes, network); `dev-up`/`dev-down`/`dev-reset` they beat **him**;
+- infra-ports are also shifted by `slot×10` (in easy mode - general, without shift):
 
-| Инфра-порт | default (общий) | dedicated slot 1 |
+| Infra-port | default (general) | dedicated slot 1 |
 |---|---|---|
 | Postgres | `5434` | `5444` |
 | Vault | `8200` | `8210` |
@@ -237,112 +237,112 @@ web `http://127.0.0.1:5183/ui/`, soul-metrics `:9201`.
 | OTLP gRPC | `4317` | `4327` |
 | Jaeger UI | `16686` | `16696` |
 
-Для dedicated-стенда `make dev-up` обязателен — он поднимает свой compose-проект. В
-лёгком режиме второй стенд переиспользует уже поднятую общую инфру, `dev-up` для него
-не нужен.
+For a dedicated stand, `make dev-up` is required - it raises its own compose project. B
+in easy mode, the second stand reuses the already raised common infrastructure, `dev-up` for it
+not needed.
 
-### Рецепты
+### Recipes
 
 ```sh
-# Стенд по умолчанию (как исторически) — общая инфра поднимается один раз.
+# Default stand (as historically) - total infra goes up once.
 make dev-up dev-provision dev-keeper dev-web
 
-# Второй стенд nim30 параллельно (лёгкий режим, общая инфра уже поднята):
+# Second nim30 stand in parallel (easy mode, general infra is already raised):
 DEV_STAND=nim30 make dev-provision \
   && DEV_STAND=nim30 make dev-keeper \
   && DEV_STAND=nim30 make dev-web \
   && DEV_STAND=nim30 make dev-souls-docker
 
-# Полностью изолированный стенд (свои контейнеры, свой Redis — для apply/HA-демо):
+# Completely isolated stand (its own containers, its own Redis - for apply/HA demo):
 DEV_STAND=big DEDICATED_INFRA=1 make dev-up dev-provision dev-keeper
 
-# Снос стенда nim30 (души → демоны → освобождение слота):
+# Demolition of nim30 stand (souls → demons → slot free):
 DEV_STAND=nim30 make dev-souls-docker-down \
   && DEV_STAND=nim30 make dev-stop \
   && DEV_STAND=nim30 make dev-stand-free
 ```
 
-`make dev-stop` гасит демоны **только** своего стенда (keeper/web по pidfile в
-`/tmp/keeper-dev-<slug>/`, souls по stand-scoped паттерну) — соседние стенды не
-задевает. Токен для API-вызовов стенда — `TOKEN=$(DEV_STAND=nim30 make dev-jwt)`.
+`make dev-stop` extinguishes demons **only** of his stand (keeper/web by pidfile in
+`/tmp/keeper-dev-<slug>/`, souls according to stand-scoped pattern) - adjacent stands are not
+hurts. The token for stand API calls is `TOKEN=$(DEV_STAND=nim30 make dev-jwt)`.
 
-### WSL2: docker-души на нестандартном стенде
+### WSL2: docker souls on a custom stand
 
-Docker-души (`dev-souls-docker`) дозваниваются к keeper-у по host-IP, и на WSL2
-`host.docker.internal` из Docker-Desktop-VM до keeper-а не достаёт (общий разбор — в
-[Docker-души](#docker-души-изолированный-флот)). Для нестандартного стенда те же три
-условия, но с `DEV_STAND`:
+Docker souls (`dev-souls-docker`) call the keeper via host-IP, and on WSL2
+`host.docker.internal` from Docker-Desktop-VM does not reach the keeper (general analysis - in
+Docker-soul). For a non-standard stand the same three
+conditions, but with `DEV_STAND`:
 
 ```sh
-make build-linux                              # свежий soul-бинарь (bind-mount ro в контейнер)
+make build-linux                              # fresh soul binary (bind-mount ro into container)
 IP=$(hostname -I | awk '{print $1}')
-DEV_STAND=nim30 DEV_KEEPER_EXTRA_IP=$IP make dev-provision   # host-IP в ip_sans серта стенда
+DEV_STAND=nim30 DEV_KEEPER_EXTRA_IP=$IP make dev-provision   # host-IP in ip_sans stand certificate
 DEV_STAND=nim30 make dev-keeper
-DEV_STAND=nim30 KEEPER_HOST=$IP make dev-souls-docker         # души дозваниваются на host-IP
+DEV_STAND=nim30 KEEPER_HOST=$IP make dev-souls-docker         # souls dial to host-IP
 ```
 
-Контейнеры стенда именуются `soul-docker-<slug>-1..N` (sid == имя контейнера), не
-пересекаясь с душами других стендов. `make build-linux` перед `dev-souls-docker`
-обязателен — контейнер монтирует свежий `soul/bin/soul-linux-amd64` ro.
+Stand containers are named `soul-docker-<slug>-1..N` (sid == container name), not
+intersecting with the souls of other stands. `make build-linux` before `dev-souls-docker`
+is required - the container mounts a fresh `soul/bin/soul-linux-amd64` ro.
 
-### Освобождение слота
+### Freeing a slot
 
-Слот держится в реестре `/tmp/soul-stack-stands.tsv`, пока его явно не освободить:
+The slot is held in the `/tmp/soul-stack-stands.tsv` registry until it is explicitly released:
 
 ```sh
-DEV_STAND=nim30 make dev-stand-free   # убрать строку слага из реестра (идемпотентно)
+DEV_STAND=nim30 make dev-stand-free   # remove the slug line from the registry (idempotent)
 ```
 
-После этого порты слота снова доступны следующему стенду. Альтернатива — вручную
-убрать строку `nim30<TAB>…` из `/tmp/soul-stack-stands.tsv`. Реестр живёт в `/tmp` и
-очищается при перезагрузке (на macOS — при смене суток) вместе с dev-материалом; при
-DEDICATED_INFRA снос контейнеров стенда — `DEV_STAND=<slug> make dev-down`.
+After this, the slot ports are again available to the next stand. Alternative - manually
+remove the line `nim30<TAB>…` from `/tmp/soul-stack-stands.tsv`. The registry lives in `/tmp` and
+is cleared upon reboot (on macOS - when the day changes) along with dev material; at
+DEDICATED_INFRA demolition of stand containers - `DEV_STAND=<slug> make dev-down`.
 
-## Готовый dev-конфиг
+## Ready dev-config
 
-Для smoke-прогона Keeper-а есть закоммиченный конфиг
-[`dev/keeper.dev.yml`](../../dev/keeper.dev.yml) — пристрелян под compose-стек
-выше (PG 5434, Redis 6381, Vault 8200, root-token, TLS из
-`/tmp/keeper-dev/tls/`, OTel-трейсы в collector на `127.0.0.1:4317`,
-plugin-кэш в `/tmp/keeper-dev/`).
-`services[]` зарегистрированы два сервиса — `hello-world` и `redis` (оба по
-file://-репо из `/tmp/keeper-dev/repos/`, ref `main`);
-`default_destiny_source` — `file:///tmp/keeper-dev/destiny/{name}`. Сами репо
-создаёт `make dev-provision` (см. [Артефакты
-service/destiny](#артефакты-servicedestiny-для-резолва)). Запуск:
+There is a committed config for the smoke run of Keeper
+[`dev/keeper.dev.yml`](../../dev/keeper.dev.yml) - targeted at the compose stack
+above (PG 5434, Redis 6381, Vault 8200, root-token, TLS from
+`/tmp/keeper-dev/tls/`, OTel traces to collector on `127.0.0.1:4317`,
+plugin cache in `/tmp/keeper-dev/`).
+`services[]` two services are registered - `hello-world` and `redis` (both
+file://-repo from `/tmp/keeper-dev/repos/`, ref `main`);
+`default_destiny_source` — `file:///tmp/keeper-dev/destiny/{name}`. The repo themselves
+creates `make dev-provision` (see Artifacts
+service/destiny). Launch:
 
 ```sh
 ./keeper/bin/keeper init --archon=archon-alice \
   --config=dev/keeper.dev.yml \
   --credential-out=/tmp/keeper-dev/archon-alice.jwt
 
-# CACHE_DIR-ы по умолчанию указывают на /var/lib/soul-stack-keeper/ (не
-# writable в локалке); file://-репо требуют явного флага. См. раздел ниже.
+# CACHE_DIRs point to /var/lib/soul-stack-keeper/ by default (not
+# writable in LAN); file:// repos require an explicit flag. See section below.
 export KEEPER_SERVICE_CACHE_DIR=/tmp/keeper-dev/services
 export KEEPER_DESTINY_CACHE_DIR=/tmp/keeper-dev/destiny-cache
 export SOUL_STACK_ALLOW_FILE_REPOS=1
 ./keeper/bin/keeper run --config=dev/keeper.dev.yml
 ```
 
-Отличия от `examples/keeper/keeper.yml`: dev-shortcut `vault.token: "root"`
-вместо AppRole; HTTP-Vault без TLS; TLS-leaf из Vault PKI в
-`/tmp/keeper-dev/tls/`; `otel.endpoint` указывает на dev-collector
-(`127.0.0.1:4317`, insecure); `services[]` указывают на локальные file://-репо.
-Для прод-конфигурации использовать example, не dev-копию.
+Differences from `examples/keeper/keeper.yml`: dev-shortcut `vault.token: "root"`
+instead of AppRole; HTTP-Vault without TLS; TLS-leaf from Vault PKI to
+`/tmp/keeper-dev/tls/`; `otel.endpoint` points to dev-collector
+(`127.0.0.1:4317`, insecure); `services[]` point to local file:// repo.
+For prod configuration use example, not dev copy.
 
-Полный разбор прод-отличий (AppRole вместо root-токена, persistent Vault +
-auto-unseal, least-privilege policy, ротация JWT signing-key) — в
+Full analysis of product differences (AppRole instead of root token, persistent Vault +
+auto-unseal, least-privilege policy, JWT signing-key rotation) - in
 [prod-setup.md](../keeper/prod-setup.md).
 
-## Артефакты service/destiny для резолва
+## Service/destiny artifacts for resolution
 
-Прод-резолв Keeper-а (`artifact.ServiceLoader` / `DestinyLoader`,
-ADR-007/ADR-009) тянет service- и destiny-артефакты как **git-репозитории по
-ref**, а не из локальной директории. `make dev-provision` материализует эти
-репо из `examples/` под file://-URL-ами, на которые указывает
+Keeper prod-resolve (`artifact.ServiceLoader` / `DestinyLoader`,
+ADR-007/ADR-009) pulls service and destiny artifacts as **git repositories by
+ref**, not from the local directory. `make dev-provision` materializes these
+repo from `examples/` under file://-URLs pointed to
 `dev/keeper.dev.yml`:
 
-| Артефакт | git-URL (из `keeper.dev.yml`) | ref | источник в `examples/` |
+| Artifact | git-URL (from `keeper.dev.yml`) | ref | source in `examples/` |
 |---|---|---|---|
 | service `hello-world` | `file:///tmp/keeper-dev/repos/hello-world` | `main` | `examples/service/hello-world` |
 | service `redis` | `file:///tmp/keeper-dev/repos/redis` | `main` | `examples/service/redis` |
@@ -350,316 +350,316 @@ ref**, а не из локальной директории. `make dev-provision
 | destiny `redis-exporter` | `file:///tmp/keeper-dev/destiny/redis-exporter` | `v1.0.0` | `examples/destiny/redis-exporter` |
 | destiny `node-exporter` | `file:///tmp/keeper-dev/destiny/node-exporter` | `v1.0.0` | `examples/destiny/node-exporter` |
 
-destiny-URL — это `default_destiny_source` (`file:///tmp/keeper-dev/destiny/{name}`)
-с подстановкой `{name}` из `redis/service.yml::destiny[]`; ref `v1.0.0`
-там же объявлен. Каталог destiny-репо называется по `{name}` (`redis`), и каталог
-в `examples/` теперь тоже голый `{name}` (`redis`, без приставки `destiny-`).
+destiny-URL is `default_destiny_source` (`file:///tmp/keeper-dev/destiny/{name}`)
+with substitution `{name}` from `redis/service.yml::destiny[]`; ref `v1.0.0`
+announced there. The destiny-repo directory is named `{name}` (`redis`), and the directory
+in `examples/` is now also naked `{name}` (`redis`, without the prefix `destiny-`).
 
-Provision создаёт репо детерминированно (фиксированные author/date → стабильный
-commit-SHA при неизменном содержимом): повторный `make dev-provision` не плодит
-сироты в snapshot-кеше Keeper-а.
+Provision creates a repo deterministically (fixed author/date → stable
+commit-SHA with unchanged content): repeated `make dev-provision` does not produce results
+orphans in Keeper's snapshot cache.
 
-Чтобы Keeper смог их склонировать в локалке, нужны два env при `keeper run`:
+For Keeper to be able to clone them locally, two envs are needed at `keeper run`:
 
-| Env | Зачем | Значение для dev |
+| Env | Why | Value for dev |
 |---|---|---|
-| `SOUL_STACK_ALLOW_FILE_REPOS` | `file://`-репо запрещены в проде (`artifact/scheme.go`) — флаг включает их для dev/test. | `1` |
-| `KEEPER_SERVICE_CACHE_DIR` | snapshot-кеш service-репо. Default `/var/lib/soul-stack-keeper/services` не writable в локалке. | `/tmp/keeper-dev/services` |
-| `KEEPER_DESTINY_CACHE_DIR` | snapshot-кеш destiny-репо. Default `/var/lib/soul-stack-keeper/destiny` не writable. | `/tmp/keeper-dev/destiny-cache` |
+| `SOUL_STACK_ALLOW_FILE_REPOS` | `file://`-repos are prohibited in production (`artifact/scheme.go`) - the flag enables them for dev/test. | `1` |
+| `KEEPER_SERVICE_CACHE_DIR` | snapshot-cache service-repo. Default `/var/lib/soul-stack-keeper/services` is not writable in LAN. | `/tmp/keeper-dev/services` |
+| `KEEPER_DESTINY_CACHE_DIR` | snapshot-cache destiny-repo. Default `/var/lib/soul-stack-keeper/destiny` is not writable. | `/tmp/keeper-dev/destiny-cache` |
 
-> `KEEPER_DESTINY_CACHE_DIR` НЕ совпадает с каталогом destiny-**репо**
-> (`/tmp/keeper-dev/destiny/`): первый — кеш снапшотов Keeper-а, второй —
-> исходные git-репо, куда указывает `default_destiny_source`. Разные пути
-> намеренно, чтобы кеш не затирал исходники.
+> `KEEPER_DESTINY_CACHE_DIR` is NOT the same as the destiny-**repo** directory
+> (`/tmp/keeper-dev/destiny/`): the first is the Keeper snapshot cache, the second is
+> source git repos where `default_destiny_source` points to. Different paths
+> intentionally so that the cache does not overwrite the sources.
 
-## Фоновые dev-демоны (обёртка над `keeper run`/`soul run`)
+## Background dev daemons (wrapper over `keeper run`/`soul run`)
 
-Ручные `keeper run` / `soul run` / `npm run dev` из smoke-рецепта ниже остаются
-как **low-level альтернатива** (полезны, когда нужен foreground-лог в терминале
-или нестандартный конфиг). Для повседневной отладки те же запуски обёрнуты в
-dev-таргеты — это **обёртка над теми же бинарями**, добавляющая три вещи поверх
-ручного шага:
+Manual `keeper run` / `soul run` / `npm run dev` from the smoke recipe below remain
+as a **low-level alternative** (useful when you need a foreground log in the terminal
+or non-standard config). For everyday debugging, the same runs are wrapped in
+dev targets are a **wrapper over the same binaries** that adds three things on top
+manual step:
 
-1. **фоновый запуск** (`nohup … &`, лог в `/tmp/keeper-dev/`), не занимающий терминал;
-2. **healthz-wait** — таргет не возвращается, пока компонент не ответит 200
-   (keeper `:8080/healthz`, web `:5173`), иначе печатает хвост лога и фейлится;
-3. **правильный env** — выверенный набор переменных, который при ручном запуске
-   постоянно теряется (особенно `SOUL_STACK_ALLOW_FILE_REPOS=1` + writable
-   cache-dirs для file://-резолва, см. [Артефакты
-   service/destiny](#артефакты-servicedestiny-для-резолва)).
+1. **background launch** (`nohup … &`, log in `/tmp/keeper-dev/`), not occupying a terminal;
+2. **healthz-wait** - the target is not returned until the component responds 200
+(keeper `:8080/healthz`, web `:5173`), otherwise it prints the tail of the log and fails;
+3. **correct env** - a verified set of variables that, when run manually
+gets lost all the time (especially `SOUL_STACK_ALLOW_FILE_REPOS=1` + writable
+cache-dirs for file://-resolution, see Artifacts
+service/destiny).
 
-| Таргет | Обёртка над | Что добавляет |
+| Target | Wrap over | What adds |
 |---|---|---|
-| `make dev-keeper` | `keeper run --config=dev/keeper.dev.yml` | kill старого по паттерну `keeper.dev.yml` → DEL leader-leases (`conductor:leader`/`reaper:leader`) → wait `:9090` свободен → full dev-env → `nohup` → wait healthz `:8080`. Бинаря нет — собирает; TLS нет — подсказывает `dev-provision`. |
-| `make dev-souls` | `soul init` + `soul run` на каждый sid | онбординг только при невалидном seed, covens из БД не трогает, сводка `status, count(*)` в конце. |
-| `make dev-web` | `npm run dev -- --host` | обязательный `--host` (IPv4-loopback) + wait `:5173`. |
-| `make dev-stand` | всё сразу | `dev-provision` → `dev-keeper` → `dev-souls` → `dev-web`. |
+| `make dev-keeper` | `keeper run --config=dev/keeper.dev.yml` | kill the old one using the pattern `keeper.dev.yml` → DEL leader-leases (`conductor:leader`/`reaper:leader`) → wait `:9090` free → full dev-env → `nohup` → wait healthz `:8080`. There is no binary - it collects; There is no TLS - `dev-provision` suggests. |
+| `make dev-souls` | `soul init` + `soul run` for each sid | onboarding only if the seed is invalid, does not touch covens from the database, summary `status, count(*)` at the end. |
+| `make dev-web` | `npm run dev -- --host` | mandatory `--host` (IPv4-loopback) + wait `:5173`. |
+| `make dev-stand` | all at once | `dev-provision` → `dev-keeper` → `dev-souls` → `dev-web`. |
 
-`make dev-stop` гасит фоновые keeper/soul-демоны, поднятые как этими таргетами,
-так и вручную (матч по паттерну dev-конфига).
+`make dev-stop` extinguishes background keeper/soul-demons raised by both these targets,
+and manually (match according to the dev-config pattern).
 
-**Пример `dev-jwt`** — токен для ad-hoc вызовов Operator API без `keeper init`:
+**Example `dev-jwt`** - token for ad-hoc Operator API calls without `keeper init`:
 
 ```sh
-# admin-токен по дефолту (archon-alice / cluster-admin / 12h):
+# admin-token by default (archon-alice / cluster-admin / 12h):
 TOKEN=$(make dev-jwt)
 curl -H "Authorization: Bearer ${TOKEN}" 127.0.0.1:8080/v1/souls
 
-# произвольный субъект и роли (например, для RBAC-демо keyset):
+# arbitrary subject and roles (for example, for the RBAC keyset demo):
 make dev-jwt AID=archon-keyset ROLES='["keyset-demo"]'
 ```
 
-## Docker-души (изолированный флот)
+## Docker-souls (isolated fleet)
 
-Host-флот (`make dev-souls`) поднимает души как процессы на хосте — все они делят
-ФС, пакеты и сервисы машины разработчика. Для **day-2 сценариев** (установка
-пакетов, `core.service.*`, правка файлов) и UI-тестов без облака нужна изоляция:
-каждая душа — свой privileged Debian-12 systemd-контейнер с отдельной ФС.
+Host fleet (`make dev-souls`) raises souls as processes on the host - they all share
+FS, packages and services of the developer's machine. For **day-2 scenarios** (installation
+packages, `core.service.*`, editing files) and UI tests without the cloud need isolation:
+each soul is its own privileged Debian-12 systemd container with a separate FS.
 
-`make dev-souls-docker` поднимает `N` таких контейнеров (`SOULS_COUNT`, default 3)
-с предсказуемыми именами `soul-docker-1..N` (sid == имя контейнера), онбордит их к
-keeper-процессу на хосте и ждёт `connected`. `make dev-souls-docker-down` сносит
-контейнеры, чистит их из реестра (каскадный psql-DELETE — DELETE-эндпоинта в
-Operator API нет) и удаляет per-soul dev-каталоги.
+`make dev-souls-docker` raises `N` such containers (`SOULS_COUNT`, default 3)
+with predictable names `soul-docker-1..N` (sid == container name), onboards them to
+keeper process on the host and waits for `connected`. `make dev-souls-docker-down` demolishes
+containers, cleans them from the registry (cascaded psql-DELETE - DELETE endpoint in
+Operator API no) and deletes per-soul dev directories.
 
 ```sh
-make build-linux          # обязательно: свежий soul/bin/soul-linux-amd64 (bind-mount ro в контейнер)
-make dev-souls-docker              # поднять SOULS_COUNT душ (default 3)
+make build-linux          # required: fresh soul/bin/soul-linux-amd64 (bind-mount ro into container)
+make dev-souls-docker              # raise SOULS_COUNT soul (default 3)
 make dev-souls-docker SOULS_COUNT=5
-bash dev/souls-docker-up.sh 5      # то же напрямую, N позиционным аргументом
-make dev-souls-docker-down         # снести всё
+bash dev/souls-docker-up.sh 5      # the same directly, N as a positional argument
+make dev-souls-docker-down         # demolish everything
 ```
 
-Образ переиспользует базовый Dockerfile e2e-live (`tests/e2e-live/dockerfiles/`);
-свежий бинарь монтируется ro, поэтому ребилд образа после `make build-linux` не
-нужен. Флаги контейнера (privileged, `--cgroupns=host`, tmpfs `/run`,
-`/sys/fs/cgroup`) — паритет с e2e-live harness.
+The image reuses the base Dockerfile e2e-live (`tests/e2e-live/dockerfiles/`);
+the fresh binary is mounted ro, so rebuilding the image after `make build-linux` is not possible
+needed. Container flags (privileged, `--cgroupns=host`, tmpfs `/run`,
+`/sys/fs/cgroup`) - parity with e2e-live harness.
 
-**Keeper слушает gRPC на `0.0.0.0`.** Контейнер дозванивается к keeper по адресу
-host-gateway (нативный Linux: docker-bridge ~172.17.0.1) или host-IP (WSL2) — на
-loopback `127.0.0.1` keeper для контейнера недостижим в **любом** окружении. Поэтому
-`dev/keeper.dev.yml` биндит bootstrap/event_stream на `0.0.0.0` (openapi/mcp/metrics
-остаются на loopback). Прецедент — `tests/e2e-live/harness/config_builder.go`.
+**Keeper listens to gRPC on `0.0.0.0`.** The container calls keeper at
+host-gateway (native Linux: docker-bridge ~172.17.0.1) or host-IP (WSL2) - on
+loopback `127.0.0.1` keeper for container is not reachable in **any** environment. Therefore
+`dev/keeper.dev.yml` binds bootstrap/event_stream to `0.0.0.0` (openapi/mcp/metrics
+remain on loopback). The use case is `tests/e2e-live/harness/config_builder.go`.
 
-**Зависимость на re-provision (SAN).** Docker-душа дозванивается к keeper по
-`host.docker.internal` (или host-IP), поэтому этот SAN должен быть в keeper-серте.
-Он добавлен в `dev/provision.sh` — после обновления provision-скрипта нужен один
-раз `make dev-provision` (перевыпуск серта) + `make dev-keeper` (рестарт). Скрипт
-сам предупредит, если серт устарел.
+**Dependency on re-provision (SAN).** Docker soul dials to keeper via
+`host.docker.internal` (or host-IP), so this SAN must be in the keeper certificate.
+It is added to `dev/provision.sh` - after updating the provision script, one is needed
+times `make dev-provision` (cert re-release) + `make dev-keeper` (restart). Script
+will warn you if the certificate is outdated.
 
-**WSL2.** Из Docker-Desktop-VM `host.docker.internal` резолвится в DD-VM-шлюз, где
-keeper НЕ слушает → bootstrap падает. На WSL2 keeper-эндпоинт должен быть host-IP,
-и его же надо добавить в SAN серта:
+**WSL2.** From Docker-Desktop-VM `host.docker.internal` resolves to DD-VM gateway, where
+keeper does NOT listen → bootstrap crashes. On WSL2, the keeper endpoint must be host-IP,
+and it must be added to the SAN of the server:
 
 ```sh
 IP=$(hostname -I | awk '{print $1}')
-DEV_KEEPER_EXTRA_IP=$IP make dev-provision   # host-IP в ip_sans keeper-серта
+DEV_KEEPER_EXTRA_IP=$IP make dev-provision   # host-IP in ip_sans keeper-cert
 make dev-keeper
-KEEPER_HOST=$IP make dev-souls-docker         # души дозваниваются на host-IP
+KEEPER_HOST=$IP make dev-souls-docker         # souls dial to host-IP
 ```
 
-## Быстрое восстановление стенда после /tmp-чистки
+## Fast recovery of the stand after /tmp cleaning
 
-На macOS смена суток (а также reboot) **чистит `/tmp`** — исчезает весь
-dev-материал под `/tmp/keeper-dev/`: TLS (`tls/`), плагины (`plugins/`) и
-per-soul seed (`<sid>/seed/*.pem`). Стенд после этого выглядит «сломанным»,
-хотя ни код, ни БД не пострадали.
+On macOS, day change (as well as reboot) **cleans `/tmp`** - all disappears
+dev-stuff under `/tmp/keeper-dev/`: TLS (`tls/`), plugins (`plugins/`) and
+per-soul seed (`<sid>/seed/*.pem`). After this the stand looks "broken"
+although neither the code nor the database were affected.
 
-**Типичные симптомы:**
+**Typical symptoms:**
 
-| Симптом | Что потерялось |
+| Symptom | What's Lost |
 |---|---|
-| keeper падает на старте `load bootstrap TLS … no such file or directory` | `/tmp/keeper-dev/tls/` (TLS-leaf из Vault PKI) |
-| souls в `disconnected`, `soul run` падает `SoulSeed not found` | `/tmp/keeper-dev/<sid>/seed/` (mTLS-пары) |
-| сценарии резолвятся в 502 `file:// запрещён` | `SOUL_STACK_ALLOW_FILE_REPOS=1` в env keeper-процесса (env, не файл — теряется при ручном перезапуске) |
+| keeper crashes at start `load bootstrap TLS … no such file or directory` | `/tmp/keeper-dev/tls/` (TLS-leaf from Vault PKI) |
+| souls in `disconnected`, `soul run` drops `SoulSeed not found` | `/tmp/keeper-dev/<sid>/seed/` (mTLS pairs) |
+| scripts resolve to 502 `file:// forbidden` | `SOUL_STACK_ALLOW_FILE_REPOS=1` in the env of the keeper process (env, not a file - lost when manually restarted) |
 
-**Рецепт восстановления** — переразложить материал и переподнять демоны:
+**Recovery recipe** - re-decompose the material and re-raise the demons:
 
 ```sh
-make dev-provision   # tls/ + plugins/ + git-репо артефактов из Vault PKI/examples
-make dev-keeper      # keeper с полным dev-env (включая SOUL_STACK_ALLOW_FILE_REPOS=1)
-make dev-souls       # переонбордит souls с битым/исчезнувшим seed и переподнимет run
+make dev-provision   # tls/ + plugins/ + git repo of artifacts from Vault PKI/examples
+make dev-keeper      # keeper with full dev-env (including SOUL_STACK_ALLOW_FILE_REPOS=1)
+make dev-souls       # will re-board souls with a broken/disappeared seed and re-raise run
 ```
 
-Либо одной командой — `make dev-stand` (делает то же `dev-provision → dev-keeper
-→ dev-souls` + поднимает web). БД (`souls`/`operators`/`incarnation`, covens)
-переживает /tmp-чистку — `keeper init` повторять НЕ нужно (operators registry не
-пуст); `dev-souls` восстанавливает только seed и run, реестр sid и их covens
-берёт из БД.
+Or with one command - `make dev-stand` (does the same `dev-provision → dev-keeper
+→ dev-souls` + raises web). The DB (`souls`/`operators`/`incarnation`, covens)
+is experiencing /tmp cleanup - `keeper init` does NOT need to be repeated (operators registry does not
+empty); `dev-souls` restores only seed and run, registry sid and their covens
+takes from the database.
 
-> Если потеряна сама **БД** (после `make dev-reset` или `docker compose down -v`)
-> — это другой случай: нужен полный `make dev-smoke` (с `keeper init`), а не
-> восстановление /tmp. /tmp-чистка БД не трогает.
+> If the **DB** itself is lost (after `make dev-reset` or `docker compose down -v`)
+> is a different case: you need the full `make dev-smoke` (with `keeper init`), not
+> restore /tmp. /tmp-database cleaning does not affect it.
 
 ## Smoke recipe (E2E)
 
-Воспроизводимая последовательность для полного smoke-прогона. Шаги 1–4
-автоматизированы через `make dev-smoke` (поднимает стек, провижининг,
-собирает `keeper`, делает `keeper init`); `keeper run` остаётся как
-отдельный foreground-шаг — он не должен запускаться из `dev-smoke`.
+Reproducible sequence for a full smoke run. Steps 1–4
+are automated via `make dev-smoke` (raises stack, provisioning,
+collects `keeper`, makes `keeper init`); `keeper run` remains as
+separate foreground step - it should not be launched from `dev-smoke`.
 
-> Foreground-`keeper run` ниже — low-level вариант. Для фонового запуска с
-> healthz-wait и тем же dev-env есть обёртка `make dev-keeper` (см. [Фоновые
-> dev-демоны](#фоновые-dev-демоны-обёртка-над-keeper-runsoul-run)) — она делает
-> ровно эти три `export` + сам `run` за один шаг.
+> Foreground-`keeper run` below is a low-level option. To run in the background with
+> healthz-wait and the same dev-env there is a wrapper `make dev-keeper` (see Background
+> dev-demons) - she does
+> exactly these three `export` + `run` itself in one step.
 
 ```sh
 make dev-smoke
 
-# keeper run — отдельным foreground-шагом, с dev-env для file://-резолва
-# service/destiny-артефактов (см. «Артефакты service/destiny»):
+# keeper run - a separate foreground step, with dev-env for file:// resolution
+# service/destiny artifacts (see "Service/destiny artifacts"):
 export KEEPER_SERVICE_CACHE_DIR=/tmp/keeper-dev/services
 export KEEPER_DESTINY_CACHE_DIR=/tmp/keeper-dev/destiny-cache
 export SOUL_STACK_ALLOW_FILE_REPOS=1
 ./keeper/bin/keeper run --config=dev/keeper.dev.yml
 
-# Когда наигрался — остановить локальный keeper (Ctrl-C во foreground), либо,
-# если демон ушёл в фон/осиротел:
+# When you've had enough of playing, stop the local keeper (Ctrl-C in the foreground), or
+# if the demon has gone into the background/orphaned:
 make dev-stop
 ```
 
-`make dev-smoke` под капотом запускает `make dev-provision`
-([`dev/provision.sh`](../../dev/provision.sh)) — единый источник правды по
-шагам provisioning (Vault KV + PKI + TLS-leaf из Vault PKI + git-репо
-артефактов). Раскладка вручную больше не дублируется здесь, чтобы doc и скрипт
-не расходились; читать актуальные шаги — в самом скрипте.
+`make dev-smoke` runs `make dev-provision` under the hood
+([`dev/provision.sh`](../../dev/provision.sh)) - single source of truth for
+provisioning steps (Vault KV + PKI + TLS-leaf from Vault PKI + git repo
+artifacts). Manual layout is no longer duplicated here to doc and script
+did not disperse; read the actual steps in the script itself.
 
-> **Foot-gun: `dev-provision` на свежей БД нужен ДВАЖДЫ.** `make dev-smoke`
-> делает это сам (`dev-provision` → `keeper init` → `dev-provision`), но при
-> ручном прогоне порядок важен: схему БД (`service_registry`/`keeper_settings`)
-> создаёт `keeper init` (`migrate.Apply`), поэтому **первый** provision-проход
-> на свежей БД (`dev-reset`) пропускает seed service-реестра — таблиц ещё нет.
-> Реестр сервисов сеется только **вторым** проходом, после `keeper init`.
-> `provision.sh` идемпотентен — двойной вызов безопасен; без второго прохода
-> резолв читает пустой service-реестр (`services[]` убраны из `keeper.dev.yml`).
+> **Foot-gun: `dev-provision` is needed TWICE on a fresh database.** `make dev-smoke`
+> does it itself (`dev-provision` → `keeper init` → `dev-provision`), but when
+> manual run, the order is important: database schema (`service_registry`/`keeper_settings`)
+> creates `keeper init` (`migrate.Apply`), so the **first** provision pass
+> on a fresh database (`dev-reset`) skips the seed service registry - there are no tables yet.
+> The service registry is seeded only in the **second** pass, after `keeper init`.
+> `provision.sh` is idempotent - the double call is safe; no second pass
+> resolve reads an empty service registry (`services[]` removed from `keeper.dev.yml`).
 >
-> `keeper init` при успехе печатает `Bootstrap complete. Token written to
-> <path>` (JWT первого Архонта в файле `mode 0400`).
+> `keeper init` prints `Bootstrap complete. Token written to
+> <path>` (the first Archon's JWT in a file with `mode 0400`).
 
-Проверяемые манипуляции после `run`:
+Verified manipulations after `run`:
 
 - `curl 127.0.0.1:8080/healthz`, `/readyz`, `/openapi.yaml`, `/metrics` → 200.
-- `POST /v1/operators` с Bearer JWT первого Архонта → 201 + JWT нового
-  оператора; повтор → 409 `operator-already-exists`.
-- `POST /v1/incarnations` для `service: redis` / `scenario: create` → 202 +
-  `apply_id`. redis + 3 destiny резолвятся из file://-репо
-  (созданы `dev-provision`), рендерятся Keeper-side (CEL + text/template).
+- `POST /v1/operators` with Bearer JWT of the first Archon → 201 + JWT of the new one
+operator; repeat → 409 `operator-already-exists`.
+- `POST /v1/incarnations` for `service: redis` / `scenario: create` → 202 +
+`apply_id`. redis + 3 destiny resolves from file://-repo
+(created by `dev-provision`), rendered by Keeper-side (CEL + text/template).
 - `POST /v1/operators/archon-alice/revoke` → 409 `would-lock-out-cluster`
-  (инвариант ADR-013: последнего `*`-permission удалить нельзя).
-- MCP на `127.0.0.1:8081`, эндпоинт `POST /mcp` (JSON-RPC 2.0; корень `/`
-  отдаёт 404) — `initialize` → `tools/list` (41 tool, число закреплено тестом
+(invariant ADR-013: the last `*`-permission cannot be deleted).
+- MCP on `127.0.0.1:8081`, endpoint `POST /mcp` (JSON-RPC 2.0; root `/`
+gives 404) — `initialize` → `tools/list` (41 tool, the number is fixed by test
   `mcp.TestCatalog_TotalCount`) → `tools/call`.
-- `audit_log` (psql или `GET /v1/audit`) содержит записи трёх `source`:
+- `audit_log` (psql or `GET /v1/audit`) contains records of three `source`:
   `keeper_internal` / `api` / `mcp` (ADR-022b).
-- Повтор `keeper init` → exit 1 `ErrAlreadyInitialized`.
-- Graceful shutdown по `SIGTERM` — 5 listeners stopped clean.
+- Repeat `keeper init` → exit 1 `ErrAlreadyInitialized`.
+- Graceful shutdown by `SIGTERM` — 5 listeners stopped clean.
 
-Полная цепочка вместе с примерными commit-полями зафиксирована в
+The complete chain along with example commit fields is recorded in
 commit-message `97c67e2`.
 
-## Soul-failover демо (два keeper)
+## Soul-failover demo (two keeper)
 
-Ручная процедура для проверки **soul-failover вживую**: soul, потеряв
-priority-1-keeper, переподключается к priority-2 и возвращается обратно при
-восстановлении (ADR-002 multi-endpoint + failback). Продакшен-код Soul-failback
+Manual procedure to check **soul-failover live**: soul, having lost
+priority-1-keeper, reconnects to priority-2 and returns back when
+recovery (ADR-002 multi-endpoint + failback). Production code Soul-failback
 (`soul/internal/grpc` DialPriority/orderedEndpoints + `soul/cmd/soul` reconnect/
-failback-loop) покрыт unit- и integration-тестами; эта процедура валидирует его
-на двух **реальных** keeper-процессах — закрывает прежнее стенд-ограничение
-мега-теста (раньше `dev/soul.dev.yml` хардкодил один endpoint и
-`failback.enabled: false`, поэтому live-failover не воспроизводился).
+failback-loop) is covered with unit and integration tests; this procedure validates it
+on two **real** keeper processes - closes the previous stand-limitation
+mega-test (previously `dev/soul.dev.yml` hardcoded one endpoint and
+`failback.enabled: false`, so live-failover did not play).
 
-Конфиги:
+Configs:
 
-| Файл | kid | bootstrap | event_stream | openapi | mcp | metrics |
+| File | kid | bootstrap | event_stream | openapi | mcp | metrics |
 |---|---|---|---|---|---|---|
 | [`dev/keeper.dev.yml`](../../dev/keeper.dev.yml) | `keeper-dev-01` | 9442 | 9443 | 8080 | 8081 | 9090 |
 | [`dev/keeper-b.dev.yml`](../../dev/keeper-b.dev.yml) | `keeper-dev-b` | 9542 | 9543 | 8082 | 8083 | 9092 |
 
-Оба keeper делят PG/Redis/Vault и тот же TLS из `/tmp/keeper-dev/tls/`. **Оба**
-с `acolytes: 2` — симметричные HA-участники work-queue (ADR-027). Это
-обязательно: при двух живых инстансах в Conclave refuse-guard soul-shedding
-(S3, `allow_unsafe_single_path_multi_keeper: false`) откажет в старте инстансу
-с `acolytes: 0` на single-path. С `acolytes: 0` на keeper-a демо сломалась бы на
-**фазе 4** (рестарт keeper-a при живом keeper-b → `CountLive=2` → refuse);
-`acolytes>0` на обоих снимает guard на всех фазах. `dev/soul.dev.yml`
-перечисляет оба keeper в `keeper.endpoints` (priority 1 = keeper-a, 2 =
-keeper-b) и включает `keeper.failback.enabled: true`.
+Both keepers share PG/Redis/Vault and the same TLS from `/tmp/keeper-dev/tls/`. **Both**
+with `acolytes: 2` - symmetrical HA work-queue participants (ADR-027). This
+mandatory: with two live instances in Conclave refuse-guard soul-shedding
+(S3, `allow_unsafe_single_path_multi_keeper: false`) will refuse to start the instance
+with `acolytes: 0` on single-path. With `acolytes: 0` on keeper the demo would have broken on
+**phase 4** (restart keeper-a while keeper-b is alive → `CountLive=2` → refuse);
+`acolytes>0` on both removes guard on all phases. `dev/soul.dev.yml`
+lists both keeper in `keeper.endpoints` (priority 1 = keeper-a, 2 =
+keeper-b) and includes `keeper.failback.enabled: true`.
 
-> **Быстрая демо: сократи `failback.interval`.** В `dev/soul.dev.yml` interval
-> опущен → дефолт `loadFailback` = **1h** (на проде failback намеренно ленивый,
-> чтобы не дёргать сессию). Чтобы failback-возврат (фаза 4) случился за секунды,
-> в локальной копии конфига добавь под `failback:` строки
-> `interval: 5s` и `spray: 0s`. Fallback (фаза 2) от interval не зависит —
-> срабатывает сразу на разрыве priority-1.
+> **Quick demo: shorten `failback.interval`.** In `dev/soul.dev.yml` interval
+> omitted → default `loadFailback` = **1h** (in production failback is intentionally lazy,
+> so as not to disrupt the session). For failback (phase 4) to happen in seconds,
+> in the local copy of the config add under `failback:` lines
+> `interval: 5s` and `spray: 0s`. Fallback (phase 2) does not depend on interval -
+> is triggered immediately on the priority-1 break.
 
-### Процедура
+### Procedure
 
 ```sh
-# 0. Стек + provision + keeper init (как в Smoke recipe). Один раз.
+# 0. Stack + provision + keeper init (as in Smoke recipe). Once.
 make dev-smoke
 
-# dev-env для file://-резолва — общий для обоих keeper-процессов.
+# dev-env for file://-resolve - common to both keeper processes.
 export KEEPER_SERVICE_CACHE_DIR=/tmp/keeper-dev/services
 export KEEPER_DESTINY_CACHE_DIR=/tmp/keeper-dev/destiny-cache
 export SOUL_STACK_ALLOW_FILE_REPOS=1
 
-# 1. keeper-a (priority 1) — терминал A.
+# 1. keeper-a (priority 1) - terminal A.
 ./keeper/bin/keeper run --config=dev/keeper.dev.yml
 
-# 2. keeper-b (priority 2) — терминал B.
+# 2. keeper-b (priority 2) - terminal B.
 ./keeper/bin/keeper run --config=dev/keeper-b.dev.yml
 
-# 3. soul init + run — терминал C. init идёт на priority-1 bootstrap (9442);
-#    при недоступном priority-1 онбординг сам уходит на priority-2 (9542).
+# 3. soul init + run — terminal C. init goes to priority-1 bootstrap (9442);
+#    if priority-1 is unavailable, onboarding itself goes to priority-2 (9542).
 ./soul/bin/soul init --config=dev/soul.dev.yml
 ./soul/bin/soul run  --config=dev/soul.dev.yml
 ```
 
-**Фаза 1 — initial connect.** В логе soul:
-`eventstream: connected ... priority=1 kid=keeper-dev-01`. Soul ведёт сессию на
+**Phase 1 - initial connect.** In the soul log:
+`eventstream: connected ... priority=1 kid=keeper-dev-01`. Soul leads a session on
 keeper-a.
 
-**Фаза 2 — падение keeper-a → fallback на keeper-b.** Убей keeper-a — Ctrl-C в
-терминале A (`make dev-stop` матчит только `keeper.dev.yml`, keeper-b с
-`keeper-b.dev.yml` под этот паттерн не попадает — гаси его Ctrl-C отдельно).
-Soul теряет стрим, reconnect-loop дайлит по приоритету: priority-1 недоступен →
-берёт priority-2. В логе:
+**Phase 2 - fall of keeper-a → fallback to keeper-b.** Kill keeper-a - Ctrl-C in
+terminal A (`make dev-stop` matches only `keeper.dev.yml`, keeper-b with
+`keeper-b.dev.yml` does not fall under this pattern - extinguish it with Ctrl-C separately).
+Soul loses stream, reconnect-loop dials by priority: priority-1 unavailable →
+takes priority-2. In the log:
 `eventstream: connected ... priority=2 kid=keeper-dev-b`.
-Проверка по реестру/apply — soul виден через keeper-b:
+Registry check/apply - soul is visible through keeper-b:
 
 ```sh
-curl 127.0.0.1:8082/metrics | grep soul   # keeper-b openapi/metrics живы
-# либо POST /v1/incarnations на keeper-b (8082) → apply доезжает до soul
+curl 127.0.0.1:8082/metrics | grep soul   # keeper-b openapi/metrics live
+# or POST /v1/incarnations to keeper-b (8082) → apply reaches soul
 ```
 
-**Фаза 3 — Watchman-вариант (без kill).** Альтернатива фазе 2: НЕ убивая
-keeper-a, изолируй его от PG/Redis (например, `docker stop soul-stack-redis`).
-Watchman keeper-a (probe-интервал 5s, порог 3 подряд-провала) детектит потерю
-зависимости и **сам** закрывает локальные EventStream-стримы (soul-shedding S2).
-Soul видит разрыв и уходит на keeper-b так же, как в фазе 2 — но keeper-a при
-этом остаётся «жив» как процесс. Верни Redis (`docker start soul-stack-redis`),
-чтобы keeper-a снова принимал стримы.
+**Phase 3 - Watchman option (no kill).** Alternative to phase 2: NOT killing
+keeper-a, isolate it from PG/Redis (for example, `docker stop soul-stack-redis`).
+Watchman keeper-a (probe interval 5s, threshold of 3 consecutive failures) detects loss
+dependencies and **itself** closes local EventStream streams (soul-shedding S2).
+Soul sees the gap and goes to keeper-b just like in phase 2 - but keeper-a at
+this remains "alive" as a process. Return Redis (`docker start soul-stack-redis`),
+for keeper to host streams again.
 
-**Фаза 4 — восстановление keeper-a → failback.** Подними keeper-a заново
-(шаг 1). Failback-loop soul (с сокращённым `interval`, см. врезку выше) проактивно
-дайлит higher-priority endpoint, открывает новую сессию на keeper-a и
-gracefully закрывает старую на keeper-b (zero-downtime swap). В логе:
-`eventstream: connected ... priority=1 kid=keeper-dev-01` — снова на keeper-a.
+**Phase 4 - restore keeper → failback.** Raise keeper again
+(step 1). Failback-loop soul (abbreviated `interval`, see sidebar above) proactively
+dials higher-priority endpoint, opens a new session on keeper and
+gracefully closes the old one on keeper-b (zero-downtime swap). In the log:
+`eventstream: connected ... priority=1 kid=keeper-dev-01` - again on keeper.
 
 ```sh
-# когда наигрался: soul (терминал C) и keeper-a (терминал A) — Ctrl-C либо
-# `make dev-stop` (матчит keeper.dev.yml + soul.dev.yml). keeper-b
-# (keeper-b.dev.yml) под паттерн dev-stop не попадает — Ctrl-C в терминале B.
+# when you've played enough: soul (terminal C) and keeper-a (terminal A) - Ctrl-C or
+# `make dev-stop` (matches keeper.dev.yml + soul.dev.yml). keeper-b
+# (keeper-b.dev.yml) does not fall under the dev-stop pattern - Ctrl-C in terminal B.
 make dev-stop
 ```
 
 ### Vault PKI
 
-PKI-backend нужен для выпуска SoulSeed-сертификатов через gRPC `Bootstrap`-RPC
-(ADR-012, ADR-014). Поднимается отдельно от KV — на mount-е, заданном в
-`keeper.yml::vault.pki_mount` (например, `pki/`), с PKI role
-`soul-seed` (`vault.pki_role`). `make dev-provision` делает это
-автоматически; ниже — шаги в виде ручных команд для справки:
+PKI-backend is needed to issue SoulSeed certificates via gRPC `Bootstrap`-RPC
+(ADR-012, ADR-014). Raises separately from KV - on the mount specified in
+`keeper.yml::vault.pki_mount` (e.g. `pki/`), with PKI role
+`soul-seed` (`vault.pki_role`). `make dev-provision` does this
+automatically; Below are the steps in the form of manual commands for your reference:
 
 ```sh
 export VAULT_ADDR=http://127.0.0.1:8200
@@ -673,10 +673,10 @@ vault secrets tune -max-lease-ttl=87600h pki
 vault write pki/root/generate/internal \
   common_name="soul-stack" ttl=87600h
 
-# Role `soul-seed` — выпускает SoulSeed-сертификаты для домена(ов)
-# тестовых хостов. В проде `allowed_domains` совпадает с FQDN-конвенцией
-# организации. Через PKI_ROLE_DOMAINS можно переопределить список доменов
-# для `make dev-provision`.
+# Role `soul-seed` - issues SoulSeed certificates for domain(s)
+# test hosts. In production, `allowed_domains` coincides with the FQDN convention
+# organizations. Through PKI_ROLE_DOMAINS you can override the list of domains
+# for `make dev-provision`.
 vault write pki/roles/soul-seed \
   allowed_domains=example.com,test,localhost \
   allow_subdomains=true \
@@ -684,126 +684,126 @@ vault write pki/roles/soul-seed \
   max_ttl=720h
 ```
 
-После `make dev-down`/`dev-reset` запустить `make dev-provision` снова.
+After `make dev-down`/`dev-reset` run `make dev-provision` again.
 
-`dev-reset` пересоздаёт Vault dev-сервер, а значит и PKI root (новый serial).
-Шаг выпуска TLS в `provision.sh` reset-aware: он скипает перевыпуск только
-если `tls/vault-ca.crt` всё ещё совпадает с текущим `vault read pki/cert/ca`
-и `keeper.crt` цепляется к нему; иначе серты перевыпускаются. Это держит
-ClientCAs Keeper-а (`event_stream.tls.ca`) синхронными с SoulSeed-ами, которые
-подписаны актуальным root — иначе mTLS-онбординг нового Soul после reset ломался бы.
+`dev-reset` recreates the Vault dev server, and therefore the PKI root (new serial).
+TLS release step in `provision.sh` reset-aware: it skips re-release only
+if `tls/vault-ca.crt` is still the same as the current `vault read pki/cert/ca`
+and `keeper.crt` cling to it; otherwise the certificates are reissued. It holds
+ClientCAs Keeper (`event_stream.tls.ca`) synchronous with SoulSeeds, which
+are signed by the current root - otherwise mTLS onboarding of the new Soul would break after reset.
 
-## Логи и состояние
+## Logs and status
 
-| Действие | Команда |
+| Action | Team |
 |---|---|
-| Логи Postgres | `docker compose -f dev/docker-compose.yml logs -f postgres` |
-| psql внутрь контейнера | `docker exec -it soul-stack-postgres psql -U keeper -d keeper` |
-| Список таблиц | `\dt` в psql |
-| Просмотр `audit_log` | `SELECT audit_id, event_type, source, created_at FROM audit_log ORDER BY created_at DESC LIMIT 20;` |
-| Логи Vault | `docker compose -f dev/docker-compose.yml logs -f vault` |
-| Vault status внутри контейнера | `docker exec soul-stack-vault vault status` (Sealed: false в dev-режиме) |
-| Vault CLI внутри контейнера | `docker exec -it -e VAULT_TOKEN=root soul-stack-vault vault kv list secret/` |
-| Логи Redis | `docker compose -f dev/docker-compose.yml logs -f redis` |
-| Redis CLI внутри контейнера | `docker exec -it soul-stack-redis redis-cli` |
-| Ping Redis с хоста | `redis-cli -h 127.0.0.1 -p 6381 ping` |
-| Логи OTel-collector (принятые спаны) | `docker compose -f dev/docker-compose.yml logs -f otel-collector` |
-| Логи Jaeger | `docker compose -f dev/docker-compose.yml logs -f jaeger` |
+| Postgres logs | `docker compose -f dev/docker-compose.yml logs -f postgres` |
+| psql inside the container | `docker exec -it soul-stack-postgres psql -U keeper -d keeper` |
+| List of tables | `\dt` in psql |
+| View `audit_log` | `SELECT audit_id, event_type, source, created_at FROM audit_log ORDER BY created_at DESC LIMIT 20;` |
+| Vault logs | `docker compose -f dev/docker-compose.yml logs -f vault` |
+| Vault status inside the container | `docker exec soul-stack-vault vault status` (Sealed: false in dev mode) |
+| Vault CLI inside a container | `docker exec -it -e VAULT_TOKEN=root soul-stack-vault vault kv list secret/` |
+| Redis logs | `docker compose -f dev/docker-compose.yml logs -f redis` |
+| Redis CLI inside a container | `docker exec -it soul-stack-redis redis-cli` |
+| Ping Redis from Host | `redis-cli -h 127.0.0.1 -p 6381 ping` |
+| OTel-collector logs (accepted spans) | `docker compose -f dev/docker-compose.yml logs -f otel-collector` |
+| Jaeger logs | `docker compose -f dev/docker-compose.yml logs -f jaeger` |
 | Jaeger UI | http://127.0.0.1:16686 (service `keeper` / `soul`) |
 
 ## Troubleshooting
 
-### Конфликт портов с другими docker-стеками
+### Port conflict with other docker stacks
 
-Compose-стек намеренно использует не-default-порты:
+The Compose stack intentionally uses non-default ports:
 
-| Сервис | Порт хоста | Default | Причина |
+| Service | Host port | Default | Reason |
 |---|---|---|---|
-| Postgres | `5434` | `5432` | избегает `agent-platform-postgres:5432` |
-| Redis | `6381` | `6379` | избегает `dba-salt-redis:6379` и `agent-platform-valkey:6380` |
-| Vault | `8200` | `8200` | без изменений |
-| OTLP gRPC (collector) | `4317` | `4317` | стандартный OTLP-порт |
-| Jaeger UI | `16686` | `16686` | стандартный Jaeger UI-порт |
+| Postgres | `5434` | `5432` | avoids `agent-platform-postgres:5432` |
+| Redis | `6381` | `6379` | avoids `dba-salt-redis:6379` and `agent-platform-valkey:6380` |
+| Vault | `8200` | `8200` | no changes |
+| OTLP gRPC (collector) | `4317` | `4317` | standard OTLP port |
+| Jaeger UI | `16686` | `16686` | standard Jaeger UI port |
 
-Если занят и `5434` / `6381` / `8200` / `4317` / `16686` (`docker compose up`
-падает с `bind: address already in use`):
+If busy and `5434` / `6381` / `8200` / `4317` / `16686` (`docker compose up`
+drops from `bind: address already in use`):
 
-1. Найти процесс — `lsof -nP -iTCP:5434 -sTCP:LISTEN` (или `:6381` / `:8200` /
+1. Find process - `lsof -nP -iTCP:5434 -sTCP:LISTEN` (or `:6381` / `:8200` /
    `:4317` / `:16686`).
-2. Остановить конфликтующий контейнер (`docker stop <name>`), либо
-   поменять port-mapping в `dev/docker-compose.yml` (только левую часть —
-   `"5435:5432"`) и параллельно поправить связанные конфиги: для Redis —
-   `dev/keeper.dev.yml` (`redis.addr`) + Vault KV (`postgres.dsn`); для OTLP —
-   `otel.endpoint` в `dev/keeper.dev.yml` и `dev/soul.dev.yml` (Jaeger UI-порт
-   нигде в конфигах не зашит — только в compose).
+2. Stop the conflicting container (`docker stop <name>`), or
+change port-mapping to `dev/docker-compose.yml` (only the left part -
+`"5435:5432"`) and at the same time correct the related configs: for Redis -
+`dev/keeper.dev.yml` (`redis.addr`) + Vault KV (`postgres.dsn`); for OTLP -
+`otel.endpoint` to `dev/keeper.dev.yml` and `dev/soul.dev.yml` (Jaeger UI port
+is not programmed anywhere in the configs - only in compose).
 
-Изменять правую часть mapping-а (внутрь контейнера) не нужно — `dsn` и
-healthcheck-и оперируют внутренним портом.
+There is no need to change the right side of the mapping (inside the container) - `dsn` and
+healthcheck-and operate the internal port.
 
-### `keeper init` падает `pq: connection refused`
+### `keeper init` falls `pq: connection refused`
 
-`POSTGRES_DSN` в Vault указывает не на тот порт. После `make dev-reset`
-секреты теряются — запустить `make dev-provision` снова.
+`POSTGRES_DSN` in Vault is pointing to the wrong port. After `make dev-reset`
+secrets are lost - run `make dev-provision` again.
 
-### `keeper run` падает на TLS-сертификате
+### `keeper run` crashes on TLS certificate
 
-Сертификат в `/tmp/keeper-dev/tls/` не сгенерирован или удалён (на macOS
-`/tmp` чистится при reboot **и при смене суток**). Перегенерировать —
-`make dev-provision`. Если разом слетели и souls, и file://-резолв — это та же
-/tmp-чистка целиком, см. [Быстрое восстановление
-стенда](#быстрое-восстановление-стенда-после-tmp-чистки) (`make dev-stand`).
+Certificate in `/tmp/keeper-dev/tls/` not generated or deleted (on macOS
+`/tmp` is cleaned during reboot **and when the day changes**). Regenerate -
+`make dev-provision`. If both souls and file://-resolve fail at once, it's the same
+/tmp cleanup entirely, see Quick recovery
+stand (`make dev-stand`).
 
-### Резолв service/destiny падает на git-клоне или `file:// запрещён`
+### Resolve service/destiny crashes on git clone or `file:// forbidden`
 
-- `file:// запрещён в проде (выставьте SOUL_STACK_ALLOW_FILE_REPOS=1 …)` —
-  забыт env-флаг при `keeper run`. См. [Артефакты
-  service/destiny](#артефакты-servicedestiny-для-резолва).
-- `permission denied` / `mkdir /var/lib/soul-stack-keeper/...` — не выставлены
-  `KEEPER_SERVICE_CACHE_DIR` / `KEEPER_DESTINY_CACHE_DIR` на `/tmp/keeper-dev/`.
-- `ref "v1.0.0" не резолвится` / репо не найдено — не запущен
-  `make dev-provision` (или `/tmp` почистился при reboot). Перезапустить.
+- `file:// forbidden in prod (set SOUL_STACK_ALLOW_FILE_REPOS=1 …)` —
+env flag forgotten at `keeper run`. See Artifacts
+service/destiny.
+- `permission denied` / `mkdir /var/lib/soul-stack-keeper/...` - not set
+`KEEPER_SERVICE_CACHE_DIR` / `KEEPER_DESTINY_CACHE_DIR` to `/tmp/keeper-dev/`.
+- `ref "v1.0.0" does not resolve` / repo not found - not running
+`make dev-provision` (or `/tmp` was cleaned during reboot). Restart.
 
 ## Integration tests
 
-Автоматизированные тесты, которым нужен реальный Postgres, гоняются через
-[testcontainers-go](https://golang.testcontainers.org/). Каждый
-`internal/<pkg>/integration_test.go` поднимает `postgres:16-alpine` на
-эфемерном порту, применяет миграции из `keeper/migrations/`, прогоняет
-write/read round-trip и удаляет контейнер по выходу `TestMain`.
+Automated tests that need real Postgres are raced through
+[testcontainers-go](https://golang.testcontainers.org/). Everyone
+`internal/<pkg>/integration_test.go` raises `postgres:16-alpine` to
+ephemeral port, applies migrations from `keeper/migrations/`, drives
+write/read round-trip and deletes the container on exit `TestMain`.
 
-| Команда | Что делает |
+| Team | What does |
 |---|---|
-| `make test-integration` | `go test -tags=integration -race -count=1 ./...` по всем модулям. Default-сценарий. |
-| `cd keeper && go test -tags=integration -race -count=1 ./internal/auditpg/` | Прицельно один пакет. |
+| `make test-integration` | `go test -tags=integration -race -count=1 ./...` for all modules. Default script. |
+| `cd keeper && go test -tags=integration -race -count=1 ./internal/auditpg/` | Sighting one package. |
 
-Требования:
+Requirements:
 
-- **Docker**. Testcontainers использует docker-sock; на macOS — Docker
-  Desktop / OrbStack / Colima; на Linux — `dockerd` + права на сокет.
-- `make test` / `make test-race` (без `-integration`) **не требуют docker** —
-  файлы под `//go:build integration` исключаются из обычной сборки.
-- `SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1` (или `true`) — переменная для
-  CI-режима: если testcontainers не смог стартовать, тесты **fail-ятся** с
-  `log.Fatalf`, а не skip-ятся. Локально переменную не ставят, тогда при
-  недоступном docker `TestMain` логирует причину и возвращает exit 0
-  (тесты считаются пропущенными).
+- **Docker**. Testcontainers uses docker-sock; on macOS - Docker
+Desktop / OrbStack / Colima; on Linux - `dockerd` + rights to the socket.
+- `make test` / `make test-race` (without `-integration`) **do not require docker** -
+files under `//go:build integration` are excluded from the normal build.
+- `SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1` (or `true`) - variable for
+CI mode: if testcontainers could not start, the tests **fail** with
+`log.Fatalf`, not skip. The variable is not set locally, then when
+unavailable docker `TestMain` logs the reason and returns exit 0
+(tests are considered missed).
 
 ### Build-tags
 
-| Tag | Где | Зачем |
+| Tag | Where | Why |
 |---|---|---|
-| `integration` | `keeper/internal/*/integration_test.go` | testcontainers-go; default путь для CI и локальной проверки. |
-| `smoke` | `keeper/internal/migrate/smoke_test.go` | Manual fallback на случай, когда docker-sock недоступен (Codespaces, restricted CI). Запускается с `SOUL_STACK_SMOKE_DSN=postgres://... go test -tags=smoke ./internal/migrate/`. Свой `make dev-up` поднимаешь сам. |
+| `integration` | `keeper/internal/*/integration_test.go` | testcontainers-go; default path for CI and local verification. |
+| `smoke` | `keeper/internal/migrate/smoke_test.go` | Manual fallback in case docker-sock is not available (Codespaces, restricted CI). Starts with `SOUL_STACK_SMOKE_DSN=postgres://... go test -tags=smoke ./internal/migrate/`. You raise your `make dev-up` yourself. |
 
 ### CI
 
-В репозитории пока нет GitHub Actions / GitLab CI. При первой настройке
-pipeline-а:
+There is no GitHub Actions / GitLab CI in the repository yet. When setting up for the first time
+pipeline:
 
-- В большинстве GitHub Actions runner-ов (`ubuntu-latest`) docker daemon
-  доступен из коробки; на restricted runners — настроить
-  Docker-in-Docker или `DOCKER_HOST`. В GitLab — явный `DOCKER_HOST` или
+- In most GitHub Actions runners (`ubuntu-latest`) docker daemon
+available out of the box; on restricted runners - configure
+Docker-in-Docker or `DOCKER_HOST`. In GitLab - explicit `DOCKER_HOST` or
   privileged runner.
-- В CI-job environment установить `SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1`,
-  чтобы интеграционные тесты были обязательными (без флага молчаливо
-  skip-ятся при недоступном docker — недопустимо для CI).
+- Set `SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1` in the CI-job environment,
+so that integration tests are required (without the flag silently
+skip when docker is not available - unacceptable for CI).

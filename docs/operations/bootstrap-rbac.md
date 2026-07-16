@@ -1,10 +1,10 @@
-# Bootstrap первого Архонта и RBAC
+# First Archon Bootstrap and RBAC
 
-Процедура первой инициализации кластера, выпуск дополнительных Архонтов через API/MCP, базовые RBAC-операции. Подробности дизайна — [ADR-013](../adr/0013-bootstrap-archon.md#adr-013-bootstrap-первого-архонта), [ADR-014](../adr/0014-operator-identity.md#adr-014-identity-модель-оператора-archon), [ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres); каталог permissions, формат строк и встроенные роли — [`docs/keeper/rbac.md`](../keeper/rbac.md).
+The procedure for the first cluster initialization, releasing additional Archons via API/MCP, basic RBAC operations. Design Details - [ADR-013](../adr/0013-bootstrap-archon.md), [ADR-014](../adr/0014-operator-identity.md), [ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres); the permissions directory, string format and built-in roles are [`docs/keeper/rbac.md`](../keeper/rbac.md).
 
-## `keeper init` — первый Архонт
+## `keeper init` - first Archon
 
-При первой инициализации реестр `operators` в Postgres пуст; без специального механизма все API/MCP вернут 403 (`default_policy: deny`, [ADR-013](../adr/0013-bootstrap-archon.md#adr-013-bootstrap-первого-архонта)). Bootstrap — administrative subcommand самого `keeper`-бинаря:
+On first initialization, the `operators` registry in Postgres is empty; without a special mechanism, all APIs/MCPs will return 403 (`default_policy: deny`, [ADR-013](../adr/0013-bootstrap-archon.md)). Bootstrap - administrative subcommand of the `keeper` binary itself:
 
 ```sh
 keeper init \
@@ -13,41 +13,41 @@ keeper init \
   --credential-out=/etc/keeper/archon-alice.jwt
 ```
 
-Что происходит:
+What's happening:
 
-1. Берётся **PG advisory lock** на bootstrap-lock-id ([ADR-013(e)](../adr/0013-bootstrap-archon.md#adr-013-bootstrap-первого-архонта)). Race между несколькими `keeper init` решается на уровне БД.
-2. Проверяется, что `operators` пуст. Если не пуст — отказ с сообщением `cluster already initialized; archon <aid> exists since <ts>`, exit != 0.
-3. Создаётся запись `operators(aid=archon-alice, created_by_aid=NULL, bootstrap_initial=true)` ([ADR-014(a)](../adr/0014-operator-identity.md#adr-014-identity-модель-оператора-archon)). Инвариант — ровно одна запись с `created_by_aid IS NULL` (partial unique index).
-4. Привязывается роль `cluster-admin` (seed-роль из миграции, `permissions: ["*"]`) — строка `rbac_role_operators(cluster-admin, archon-alice)` ([ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)).
-5. Выпускается JWT с TTL = `auth.jwt.ttl_bootstrap` (default 30 дней; настраивается в `keeper.yml`).
-6. JWT пишется в `--credential-out` с **`mode 0400`**, owner — пользователь, запустивший `keeper init`.
+1. Take **PG advisory lock** on bootstrap-lock-id ([ADR-013(e)](../adr/0013-bootstrap-archon.md)). Race between several `keeper init` is resolved at the database level.
+2. Checks that `operators` is empty. If not empty, it will fail with the message `cluster already initialized; archon <aid> exists since <ts>`, exit != 0.
+3. Record `operators(aid=archon-alice, created_by_aid=NULL, bootstrap_initial=true)` ([ADR-014(a)](../adr/0014-operator-identity.md)) is created. The invariant is exactly one record with `created_by_aid IS NULL` (partial unique index).
+4. Role `cluster-admin` (seed role from migration, `permissions: ["*"]`) is bound - line `rbac_role_operators(cluster-admin, archon-alice)` ([ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)).
+5. Issued JWT with TTL = `auth.jwt.ttl_bootstrap` (default 30 days; configured in `keeper.yml`).
+6. JWT is written to `--credential-out` with **`mode 0400`**, owner is the user running `keeper init`.
 7. Audit: `operator.created` (`source=keeper_internal`, `archon_aid=NULL`, `payload={bootstrap_initial: true, ...}`).
 
-### Restart-семантика
+### Restart semantics
 
-После catastrophic wipe Postgres (truncate `operators`) Keeper **не делает re-bootstrap автоматически** — это защита от случайного выпуска admin-token-а в логах ([ADR-013(d)](../adr/0013-bootstrap-archon.md#adr-013-bootstrap-первого-архонта)):
+After the catastrophic wipe Postgres (truncate `operators`) Keeper **does not re-bootstrap automatically** - this is protection against accidental release of the admin token in the logs ([ADR-013(d)](../adr/0013-bootstrap-archon.md)):
 
-| Условие | Поведение |
+| Condition | Behavior |
 |---|---|
-| `operators` пуст + **нет** `--initialize` (или env `KEEPER_INITIALIZE=true`) | Keeper отказывается стартовать: `operators registry is empty; run 'keeper init --archon=<aid>' before starting the cluster`. Exit != 0. |
-| `operators` пуст + `--initialize` | Стартует в read-only-режиме: listeners поднимаются, но все API/MCP-вызовы возвращают `503 cluster awaiting first archon`, пока `keeper init` не отработает. |
-| `operators` непуст | Стартует штатно (read-only-проверка). |
+| `operators` empty + **no** `--initialize` (or env `KEEPER_INITIALIZE=true`) | Keeper refuses to start: `operators registry is empty; run 'keeper init --archon=<aid>' before starting the cluster`. Exit != 0. |
+| `operators` empty + `--initialize` | Starts in read-only mode: listeners are raised, but all API/MCP calls return `503 cluster awaiting first archon` until `keeper init` finishes. |
+| `operators` is not empty | Starts normally (read-only check). |
 
-В HA-кластере `keeper init` запускается **один раз** на одном инстансе. Остальные одновременные `keeper init` ждут advisory lock, видят непустой реестр и отказываются с указанием уже созданного Архонта.
+In an HA cluster, `keeper init` runs **once** on one instance. The remaining simultaneous `keeper init` wait for the advisory lock, see a non-empty registry and refuse, indicating the already created Archon.
 
-### Хранение bootstrap JWT
+### Bootstrap JWT storage
 
-Файл `--credential-out` — **исходный материал для первой настройки**, не «долговременное хранилище токена»:
+File `--credential-out` - **source material for first setup**, not "long-term token storage":
 
-- `mode 0400`, owner — оператор-человек (не `soul-stack`). Прячется в password manager / Vault оператора немедленно после bootstrap.
-- TTL 30 дней — окно, чтобы успеть настроить дальнейшее администрирование (выпустить токены для CI, machine-identity, дополнительных людей). После использования первого Архонта для создания второго — изначальный JWT можно отозвать (см. [§ Ревокация](#ревокация-архонта)) или дать истечь.
-- В git, в /etc/keeper/, в systemd-credential-store — **не класть** долго. Это admin-credential с правами `*`.
+- `mode 0400`, owner is a human operator (not `soul-stack`). Hides in the password manager / Vault operator immediately after bootstrap.
+- TTL 30 days - a window to have time to set up further administration (issue tokens for CI, machine-identity, additional people). After using the first Archon to create a second, the original JWT can be revoked (see § Revocation) or allowed to expire.
+- In git, in /etc/keeper/, in systemd-credential-store - **do not put** for a long time. This is an admin-credential with `*` rights.
 
-## Второй+ Архонт через Operator API
+## Second+ Archon via Operator API
 
-После bootstrap единственный путь создания Архонтов — Operator API (`POST /v1/operators`) или MCP-tool `keeper.operator.create` с permission `operator.create` ([`docs/keeper/rbac.md` → каталог permissions](../keeper/rbac.md#каталог-permissions)).
+After bootstrap, the only way to create Archons is the Operator API (`POST /v1/operators`) or MCP-tool `keeper.operator.create` with permission `operator.create` ([`docs/keeper/rbac.md` → permissions directory](../keeper/rbac.md)).
 
-### Создание Архонта
+### Creation of the Archon
 
 ```sh
 curl -X POST https://keeper.internal:8080/v1/operators \
@@ -56,7 +56,7 @@ curl -X POST https://keeper.internal:8080/v1/operators \
   -d '{"aid": "archon-bob", "display_name": "Bob"}'
 ```
 
-Ответ — JSON с полями созданного Архонта. Сам JWT для нового Архонта возвращает **отдельный endpoint** `operator.issue-token` (permission `operator.issue-token`):
+The answer is JSON with the fields of the created Archon. The JWT itself for the new Archon returns **separate endpoint** `operator.issue-token` (permission `operator.issue-token`):
 
 ```sh
 curl -X POST https://keeper.internal:8080/v1/operators/archon-bob/issue-token \
@@ -65,11 +65,11 @@ curl -X POST https://keeper.internal:8080/v1/operators/archon-bob/issue-token \
   -d '{"ttl": "24h"}'
 ```
 
-Ответ: `{"jwt": "eyJ…", "exp": "2026-05-26T15:30:00Z"}`. JWT — единственный момент, когда оператор-исполнитель его видит; Keeper не хранит выпущенные токены (только signing-key и реестр Архонтов).
+Answer: `{"jwt": "eyJ…", "exp": "2026-05-26T15:30:00Z"}`. JWT is the only time the operator sees it; Keeper does not store issued tokens (only signing-key and the Archon registry).
 
-### Назначение роли
+### Role assignment
 
-После создания Архонт сам по себе **не имеет ни одного permission** (default-deny). Привязка к роли — отдельная операция (permission `role.grant-operator`):
+After creation, the Archon itself **does not have a single permission** (default-deny). Binding to a role is a separate operation (permission `role.grant-operator`):
 
 ```sh
 curl -X POST https://keeper.internal:8080/v1/roles/db-operator/operators \
@@ -78,7 +78,7 @@ curl -X POST https://keeper.internal:8080/v1/roles/db-operator/operators \
   -d '{"aid": "archon-bob"}'
 ```
 
-Если роли `db-operator` ещё нет — её создаёт `role.create`:
+If the role `db-operator` does not exist yet, it is created by `role.create`:
 
 ```sh
 curl -X POST https://keeper.internal:8080/v1/roles \
@@ -93,110 +93,110 @@ curl -X POST https://keeper.internal:8080/v1/roles \
   }'
 ```
 
-Грамматика permission-строки — [`docs/keeper/rbac.md` → Формат permissions](../keeper/rbac.md#формат-permissions). Селектор `on <key>=<values>` поддерживает ключи `service` / `coven` / `incarnation` / `host`.
+The permission string grammar is [`docs/keeper/rbac.md` → permissions format](../keeper/rbac.md). The `on <key>=<values>` selector supports the `service` / `coven` / `incarnation` / `host` keys.
 
-## RBAC: scope по coven / service / incarnation
+## RBAC: scope by coven / service / incarnation
 
-Permission-строка с селектором — единственный механизм узкого scope-а ([rbac.md → Формат permissions](../keeper/rbac.md#формат-permissions)). Примеры из реальной инсталляции:
+Permission string with a selector is the only mechanism for a narrow scope ([rbac.md → Permissions format](../keeper/rbac.md)). Examples from a real installation:
 
-| Задача | Permission |
+| Problem | Permission |
 |---|---|
-| Полный admin кластера | `*` |
-| Только чтение всех Souls | `soul.list` |
-| Apply на конкретный coven | `incarnation.run on coven=prod-eu-west` |
-| Apply на конкретный сервис в любом coven | `incarnation.* on service=redis` |
-| Создание / отзыв Архонтов | `operator.create`, `operator.revoke`, `operator.issue-token` |
-| Управление ролями | `role.create`, `role.delete`, `role.update`, `role.grant-operator`, `role.revoke-operator` |
-| Чтение audit-log (когда `GET /v1/audit` появится) | `audit.read` |
-| Push на хосты | `push.apply on coven=<coven>` |
+| Full cluster admin | `*` |
+| Read only all Souls | `soul.list` |
+| Apply to a specific coven | `incarnation.run on coven=prod-eu-west` |
+| Apply to a specific service in any coven | `incarnation.* on service=redis` |
+| Creation/review of Archons | `operator.create`, `operator.revoke`, `operator.issue-token` |
+| Role management | `role.create`, `role.delete`, `role.update`, `role.grant-operator`, `role.revoke-operator` |
+| Reading audit-log (when `GET /v1/audit` appears) | `audit.read` |
+| Push to hosts | `push.apply on coven=<coven>` |
 | Service-registry CRUD | `service.create`, `service.list`, `service.update`, `service.delete` |
 | Drift-check ([ADR-031](../adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile)) | `incarnation.check-drift on service=<svc>` |
 
-`cluster-admin` — встроенная роль с `*`, удалить её через `role.delete` нельзя (`builtin=true` в `rbac_roles`).
+`cluster-admin` is a built-in role with `*`, it cannot be deleted via `role.delete` (`builtin=true` in `rbac_roles`).
 
-### Защита от self-lockout
+### Self-lockout protection
 
-Инвариант ([ADR-013(c)](../adr/0013-bootstrap-archon.md#adr-013-bootstrap-первого-архонта)): **нельзя удалить последнего оператора с активным `*`-permission** (через `cluster-admin` или через явную роль с `permissions: ["*"]`). Попытка через API — `409 Conflict` с `would lock out the cluster`.
+Invariant ([ADR-013(c)](../adr/0013-bootstrap-archon.md)): **You cannot remove the last operator with `*`-permission** active (via `cluster-admin` or via an explicit role with `permissions: ["*"]`). Trying via API - `409 Conflict` with `would lock out the cluster`.
 
-То же для `revoked_at`: попытка ревокации последнего `*`-Архонта — 409. Реальное «отозвать всех админов» = «сначала создать нового, потом отзывать старых».
+Same for `revoked_at`: attempt to revoke the last `*`-Archon - 409. Real "recall all admins" = "first create a new one, then recall the old ones."
 
-## Ревокация Архонта
+## Archon Revocation
 
 ```sh
 curl -X POST https://keeper.internal:8080/v1/operators/archon-old/revoke \
   -H "Authorization: Bearer $(cat /etc/keeper/archon-alice.jwt)"
 ```
 
-Что происходит:
+What's happening:
 
-- Устанавливается `operators.revoked_at = NOW()`. Архонт остаётся в реестре для аудита, новые JWT для него больше не выпускаются.
-- **Активные JWT отозванного Архонта продолжают работать до своего `exp`** ([ADR-014(d)](../adr/0014-operator-identity.md#adr-014-identity-модель-оператора-archon)). Короткий TTL (`ttl_default: 24h`) — естественная защита.
-- Принудительный отзыв «всех живых JWT» — отдельная задача post-MVP (требует JWT-blocklist / session-store, не часть MVP).
+- `operators.revoked_at = NOW()` is installed. The Archon remains on the registry for auditing, and new JWTs for it are no longer released.
+- **Active JWTs of a recalled Archon continue to operate until their `exp`** ([ADR-014(d)](../adr/0014-operator-identity.md)). Short TTL (`ttl_default: 24h`) is a natural protection.
+- Forced revocation of "all live JWTs" is a separate post-MVP task (requires JWT-blocklist/session-store, not part of MVP).
 
-### Аварийный отзыв всех JWT — ротация signing-key
+### Emergency recall of all JWTs - signing-key rotation
 
-Если живой JWT компрометирован и ждать `exp` нельзя — единственный надёжный способ в MVP: **ротация JWT signing-key** ([`docs/keeper/prod-setup.md` → Ротация signing-key](../keeper/prod-setup.md#jwt-signing-key-прод)). Сразу инвалидирует **все** живые JWT (подпись не сойдётся) — потребуется заново выпустить токены всем Архонтам.
+If the live JWT is compromised and you can't wait for `exp`, the only reliable way in MVP is: **JWT signing-key rotation** ([`docs/keeper/prod-setup.md` → Signing-key rotation](../keeper/prod-setup.md)). Immediately invalidates **all** living JWTs (the signature will not match) - you will need to re-issue tokens to all Archons.
 
 ```sh
 vault kv put secret/keeper/jwt-signing-key signing_key="$(openssl rand -base64 32)"
-systemctl reload keeper  # hot-reload перечитает ключ
+systemctl reload keeper  # hot-reload will reread the key
 ```
 
-После этого — пере-issue JWT через `operator.issue-token` для всех активных Архонтов (старые Bearer'ы → 401).
+After this, re-issue JWT via `operator.issue-token` for all active Archons (old Bearers → 401).
 
-## Аудит RBAC-операций
+## Audit RBAC operations
 
-Все RBAC-операции пишутся в `audit_log` ([ADR-022](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)) с конкретным `event_type`:
+All RBAC operations are written to `audit_log` ([ADR-022](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)) with a specific `event_type`:
 
 | Operation | `event_type` |
 |---|---|
-| Создание Архонта | `operator.created` |
-| Ревокация Архонта | `operator.revoked` |
-| Выпуск JWT для Архонта | `operator.token_issued` |
-| Создание роли | `role.created` |
-| Удаление роли | `role.deleted` |
-| Привязка Архонта к роли | `role.operator_granted` |
-| Отвязка | `role.operator_revoked` |
+| Creation of the Archon | `operator.created` |
+| Revocation of the Archon | `operator.revoked` |
+| Archon JWT Release | `operator.token_issued` |
+| Create a role | `role.created` |
+| Delete a role | `role.deleted` |
+| Linking the Archon to the role | `role.operator_granted` |
+| Decoupling | `role.operator_revoked` |
 
-`source` — `api` или `mcp` (зависит от транспорта вызова), `archon_aid` — кто инициировал (бутстрапный `operator.created` — `NULL`, `payload={bootstrap_initial: true}`). Retention — `purge_audit_old` (default 365 дней). Просмотр audit-log через `GET /v1/audit` — отдельная задача (см. [ADR-022(j)](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)); пока — прямой SQL-запрос в PG.
+`source` - `api` or `mcp` (depending on the call transport), `archon_aid` - who initiated (bootstrap `operator.created` - `NULL`, `payload={bootstrap_initial: true}`). Retention - `purge_audit_old` (default 365 days). Viewing audit-log via `GET /v1/audit` is a separate task (see [ADR-022(j)](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)); for now - a direct SQL query in PG.
 
-## Сценарии операционного администрирования
+## Operational Administration Scenarios
 
-### Передача доступа от увольняющегося Архонта
+### Transfer of access from the retiring Archon
 
-1. Текущий Архонт (или другой `cluster-admin`) создаёт нового: `POST /v1/operators` + `role.grant-operator`.
-2. Выпускает JWT новому: `POST /v1/operators/archon-new/issue-token`.
-3. **Через пересечение TTL** старый Архонт ревокается: `POST /v1/operators/archon-old/revoke`.
-4. Живые JWT старого работают до `exp` (`ttl_default: 24h`) — оператор использует прежний токен до его истечения, потом перестаёт. Если нужно отозвать **немедленно** — ротация signing-key (см. выше).
+1. The current Archon (or another `cluster-admin`) creates a new one: `POST /v1/operators` + `role.grant-operator`.
+2. Issues JWT to new: `POST /v1/operators/archon-new/issue-token`.
+3. **Across the TTL** intersection the old Archon roars: `POST /v1/operators/archon-old/revoke`.
+4. Live old JWTs work until `exp` (`ttl_default: 24h`) - the operator uses the old token until it expires, then stops. If you need to revoke **immediately**, rotate the signing-key (see above).
 
 ### Machine-identity (CI / scripts)
 
-MVP — JWT с длинным TTL (отдельный Архонт `archon-ci-deployer`, узкая роль с нужным набором permissions). Хранится в CI secret-store как Bearer-токен. Пере-выпуск по расписанию (короче `ttl_default` — например, 7 дней) — через `operator.issue-token` от admin-Архонта или скриптом, использующим прежний JWT до его `exp`.
+MVP - JWT with a long TTL (separate Archon `archon-ci-deployer`, narrow role with the required set of permissions). Stored in CI secret-store as a Bearer token. Scheduled re-release (in short `ttl_default` - for example, 7 days) - through `operator.issue-token` from the admin-Archon or by a script using the previous JWT before its `exp`.
 
-mTLS-cert-форма Архонта для machine-identity — post-MVP ([ADR-014(b)](../adr/0014-operator-identity.md#adr-014-identity-модель-оператора-archon)), расширение через `auth_method` enum без breaking changes.
+mTLS-cert-form of Archon for machine-identity - post-MVP ([ADR-014(b)](../adr/0014-operator-identity.md)), extension via `auth_method` enum without breaking changes.
 
-### Сброс к «единственному админу» (catastrophic recovery)
+### Reset to "single admin" (catastrophic recovery)
 
-Случай: потеря всех живых JWT, забыли credentials, оператор-человек ушёл. **Без доступа к Keeper-хосту** — никак (`keeper init` требует физического доступа).
+Case: loss of all living JWTs, credentials forgotten, human operator left. **Without access to the Keeper host** - no way (`keeper init` requires physical access).
 
-С физическим доступом:
+With physical access:
 
-1. **НЕ truncate `operators`** — это сломает FK-цепочки (`created_by_aid`, `state_history.changed_by_aid`, аудит).
-2. Создать **временного admin-а** через SQL прямо в PG:
+1. **DO NOT truncate `operators`** - this will break FK chains (`created_by_aid`, `state_history.changed_by_aid`, audit).
+2. Create a **temporary admin** via SQL directly in PG:
    ```sql
    INSERT INTO operators (aid, display_name, auth_method, created_at, created_by_aid)
    VALUES ('archon-recovery', 'recovery', 'jwt', NOW(), NULL);
    INSERT INTO rbac_role_operators (role_name, aid, granted_at, granted_by_aid)
    VALUES ('cluster-admin', 'archon-recovery', NOW(), NULL);
    ```
-3. Выпустить JWT для `archon-recovery` админ-утилитой (см. [open question в `disaster-recovery.md`](disaster-recovery.md#open-questions-runbook) — нужен ли отдельный subcommand `keeper issue-token`; на момент написания — задача post-MVP, делается через ротацию signing-key + повторный bootstrap-like процесс при необходимости).
+3. Issue JWT for `archon-recovery` by the admin utility (see [open question in `disaster-recovery.md`](disaster-recovery.md#open-questions-runbook) - is a separate subcommand `keeper issue-token` needed; at the time of writing - a post-MVP task, done through signing-key rotation + repeated bootstrap-like process if necessary).
 
-Это **аварийная процедура**, требует audit-trail и доступа к PG. В штатной операционной модели — иметь минимум 2 `cluster-admin`-Архонтов и хранить их JWT в раздельных password manager-ах.
+This is an **emergency procedure**, requires audit-trail and access to PG. In the standard operating model, have at least 2 `cluster-admin`-Archons and store their JWTs in separate password managers.
 
-## См. также
+## See also
 
-- [`docs/keeper/rbac.md`](../keeper/rbac.md) — полный каталог permissions, грамматика, встроенные роли.
-- [`docs/keeper/operator-api.md`](../keeper/operator-api.md) — REST-endpoint-ы, JWT-claims, RFC 7807 errors.
-- [`docs/keeper/mcp-tools.md`](../keeper/mcp-tools.md) — MCP-tools (1:1 с REST-endpoint-ами).
-- [`docs/keeper/prod-setup.md`](../keeper/prod-setup.md) — JWT signing-key, ротация.
+- [`docs/keeper/rbac.md`](../keeper/rbac.md) - full permissions directory, grammar, built-in roles.
+- [`docs/keeper/operator-api.md`](../keeper/operator-api.md) - REST endpoints, JWT claims, RFC 7807 errors.
+- [`docs/keeper/mcp-tools.md`](../keeper/mcp-tools.md) - MCP-tools (1:1 with REST endpoints).
+- [`docs/keeper/prod-setup.md`](../keeper/prod-setup.md) - JWT signing-key, rotation.
 - [`docs/architecture.md` → ADR-022](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention) — audit-pipeline.
