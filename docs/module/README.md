@@ -1,132 +1,132 @@
-# Каталог core-модулей
+# Directory of core modules
 
-Per-module справочник реализованных core-модулей Soul Stack: каноническое имя,
-поддерживаемые states, параметры каждого state, идемпотентность, side-effects,
-пример задачи destiny.
+Per-module directory of implemented Soul Stack core modules: canonical name,
+supported states, parameters of each state, idempotency, side-effects,
+example of the destiny task.
 
-Каталог документирует **только** то, что реально есть в коде
-(`soul/internal/coremod/`, `keeper/internal/coremod/`). Это справочник по
-поведению, а не нормативный источник дизайна — за дизайн отвечают
-[ADR-015](../adr/0015-core-modules-mvp.md#adr-015-core-модули-mvp-точный-список) (Soul-side
-core), [ADR-017](../adr/0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read)
-(Keeper-side core), [ADR-010](../adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов)
-(рендер `core.file.rendered`).
+The directory documents **only** what is actually in the code
+(`soul/internal/coremod/`, `keeper/internal/coremod/`). This is a guide to
+behavior, not the normative source of design - design is responsible
+[ADR-015](../adr/0015-core-modules-mvp.md) (Soul-side
+core), [ADR-017](../adr/0017-keeper-side-core.md)
+(Keeper-side core), [ADR-010](../adr/0010-templating.md)
+(render `core.file.rendered`).
 
-Каталог покрывает **core-модули** (`core.*`, встроены в бинарь). Плагины —
-отдельные namespace-каталоги: [official/README.md](official/README.md) (`official.*`)
-и [community/README.md](community/README.md) (`community.*`, вкл.
-[`community.redis`](community/redis/README.md) и
+The directory covers **core modules** (`core.*`, built into the binary). Plugins -
+individual namespace directories: [official/README.md](official/README.md) (`official.*`)
+and [community/README.md](community/README.md) (`community.*`, incl.
+[`community.redis`](community/redis/README.md) and
 [`community.mongo`](community/mongo/README.md)).
 
-Соседние документы (намеренно не дублируются здесь):
+Related documents (intentionally not duplicated here):
 
-- [soul/modules.md](../soul/modules.md) — хостовая сторона модулей: где лежат,
-  как кешируются, cleanup; manifest custom-модулей и `spec.states`.
-- [keeper/modules.md](../keeper/modules.md) — спецификация Keeper-side core-модулей
-  (диспетчер `on: keeper`).
-- [naming-rules.md → Модули Destiny](../naming-rules.md#модули-destiny) — словарь
-  имён и сводная таблица всех core-модулей.
+- [soul/modules.md](../soul/modules.md) - host side of the modules: where are they located,
+how they are cached, cleanup; manifest custom modules and `spec.states`.
+- [keeper/modules.md](../keeper/modules.md) - specification of Keeper-side core modules
+(dispatcher `on: keeper`).
+- [naming-rules.md → Destiny Modules](../naming-rules.md) - dictionary
+names and a summary table of all core modules.
 
-## Адресация
+## Addressing
 
-Шаг destiny адресуется как `core.<module>.<state>` — например
-`core.pkg.installed`, `core.file.rendered`. Верхняя часть (`core.<module>`) —
-имя модуля в Registry; `<state>`-суффикс приходит модулю в `ApplyRequest.state`
-и диспетчится внутри реализации. Verb-формы (`run`, `shell`, `probe`, `fetched`,
-`extracted`) — тот же механизм, просто без declarative-семантики «привести к
-состоянию».
+The destiny step is addressed as `core.<module>.<state>` - for example
+`core.pkg.installed`, `core.file.rendered`. Top (`core.<module>`) —
+module name in Registry; `<state>`-suffix comes to the module in `ApplyRequest.state`
+and dispatched within the implementation. Verb-forms (`run`, `shell`, `probe`, `fetched`,
+`extracted`) - the same mechanism, just without the declarative semantics "lead to
+condition."
 
-Диспетчер Soul-side / Keeper-side — scenario-ключ `on:`
-([scenario/orchestration.md §3](../scenario/orchestration.md#3-таргет-шага--on)):
-Soul-side core применяются на хостах (`on:` опущен или coven-метки), Keeper-side
-core — только `on: keeper`.
+Soul-side / Keeper-side dispatcher - scenario-key `on:`
+([scenario/orchestration.md §3](../scenario/orchestration.md#3-step-target---on)):
+Soul-side core are used on hosts (`on:` omitted or coven tags), Keeper-side
+core - `on: keeper` only.
 
-## Soul-side core-модули
+## Soul-side core modules
 
-Статически встроены в `soul`-бинарь. Применяются одинаково в pull (демон) и push
+Statically built into the `soul` binary. Apply the same in pull (daemon) and push
 (oneshot).
 
-| Модуль | States | Назначение |
+| Module | States | Destination |
 |---|---|---|
-| [`core.pkg`](core/pkg/README.md) | `installed` / `absent` / `latest` | Пакеты OS через native pkg-mgr (apt/dnf/yum/apk). |
-| [`core.file`](core/file/README.md) | `present` / `absent` / `rendered` | Файл с literal-content / отсутствует / отрендерен из `.tmpl`. |
-| [`core.service`](core/service/README.md) | `running` / `stopped` / `restarted` / `enabled` | Сервис через systemd/openrc/sysv. |
-| [`core.user`](core/user/README.md) | `present` / `absent` | Локальные пользователи OS. |
-| [`core.group`](core/group/README.md) | `present` / `absent` | Локальные группы OS. |
-| [`core.exec`](core/exec/README.md) | `run` (verb) | Произвольная команда через exec() (без shell). |
-| [`core.cmd`](core/cmd/README.md) | `shell` (verb) | shell-команда (pipes, redirects). |
-| [`core.cron`](core/cron/README.md) | `present` / `absent` | Cron-задачи. |
-| [`core.mount`](core/mount/README.md) | `present` / `absent` / `mounted` / `unmounted` | Точки монтирования и /etc/fstab. |
-| [`core.git`](core/git/README.md) | `cloned` / `pulled` | Клонирование / обновление git-репозитория на хосте. |
-| [`core.archive`](core/archive/README.md) | `extracted` | Распаковка архивов (tar/tar.gz/tar.bz2/zip). |
-| [`core.sysctl`](core/sysctl/README.md) | `present` / `applied` | Kernel-параметры (`vm.*`, `kernel.*`): `present` — один ключ, `applied` — bulk-набор одним drop-in + reload. |
-| [`core.url`](core/url/README.md) | `fetched` | Загрузка файла по URL (только `https://`, idempotency через checksum). |
-| [`core.line`](core/line/README.md) | `present` / `absent` | In-place построчная правка файла (lineinfile-эквивалент). |
-| [`core.repo`](core/repo/README.md) | `present` / `absent` | Пакетный репозиторий (apt/dnf/yum/apk). |
-| [`core.firewall`](core/firewall/README.md) | `present` / `absent` | Одно правило файрвола (ufw/firewalld). |
+| [`core.pkg`](core/pkg/README.md) | `installed` / `absent` / `latest` | OS packages via native pkg-mgr (apt/dnf/yum/apk). |
+| [`core.file`](core/file/README.md) | `present` / `absent` / `rendered` | File with literal-content / missing / rendered from `.tmpl`. |
+| [`core.service`](core/service/README.md) | `running` / `stopped` / `restarted` / `enabled` | Service via systemd/openrc/sysv. |
+| [`core.user`](core/user/README.md) | `present` / `absent` | Local OS users. |
+| [`core.group`](core/group/README.md) | `present` / `absent` | OS local groups. |
+| [`core.exec`](core/exec/README.md) | `run` (verb) | Arbitrary command via exec() (without shell). |
+| [`core.cmd`](core/cmd/README.md) | `shell` (verb) | shell command (pipes, redirects). |
+| [`core.cron`](core/cron/README.md) | `present` / `absent` | Cron tasks. |
+| [`core.mount`](core/mount/README.md) | `present` / `absent` / `mounted` / `unmounted` | Mount points and /etc/fstab. |
+| [`core.git`](core/git/README.md) | `cloned` / `pulled` | Cloning/updating a git repository on the host. |
+| [`core.archive`](core/archive/README.md) | `extracted` | Unpacking archives (tar/tar.gz/tar.bz2/zip). |
+| [`core.sysctl`](core/sysctl/README.md) | `present` / `applied` | Kernel parameters (`vm.*`, `kernel.*`): `present` - one key, `applied` - bulk set with one drop-in + reload. |
+| [`core.url`](core/url/README.md) | `fetched` | Uploading a file via URL (only `https://`, idempotency via checksum). |
+| [`core.line`](core/line/README.md) | `present` / `absent` | In-place line-by-line editing of a file (lineinfile equivalent). |
+| [`core.repo`](core/repo/README.md) | `present` / `absent` | Batch repository (apt/dnf/yum/apk). |
+| [`core.firewall`](core/firewall/README.md) | `present` / `absent` | One firewall rule (ufw/firewalld). |
 | [`core.http`](core/http/README.md) | `probe` (verb) | Read-probe HTTP (health-check / readiness, `changed=false`). |
-| [`core.augur`](core/augur/README.md) | `fetch` (verb) | Read-probe живого доступа к внешней системе (Vault/Prometheus/ELK) через брокер Augur ([ADR-025](../adr/0025-augur.md#adr-025-augur--keeper-side-брокер-внешнего-доступа-soul), `changed=false`). |
+| [`core.augur`](core/augur/README.md) | `fetch` (verb) | Read-probe of live access to an external system (Vault/Prometheus/ELK) via the Augur broker ([ADR-025](../adr/0025-augur.md), `changed=false`). |
 
-## Keeper-side core-модули
+## Keeper-side core modules
 
-Диспетчер `on: keeper` — выполняются на стороне Keeper-а, не на хосте. Спека —
+Dispatcher `on: keeper` - executed on the Keeper side, not on the host. Specka -
 [keeper/modules.md](../keeper/modules.md).
 
-| Модуль | States | Назначение |
+| Module | States | Destination |
 |---|---|---|
-| [`core.soul.registered`](core/soul/README.md) | `registered` | Привязка SID к coven-меткам реестра souls. |
-| [`core.cloud.provisioned`](core/cloud/README.md) | `created` / `destroyed` | Cloud-инстанс через CloudDriver-плагин. |
-| [`core.choir`](core/choir/README.md) | `present` / `absent` | Членство Voice-а (SID) в Choir-е инкарнации (ADR-044). |
-| [`core.vault`](core/vault/README.md) (author-адреса `core.vault.kv-read` / `core.vault.kv-present`) | `kv-read` (verb) / `kv-present` | `kv-read` — чтение секрета из Vault KV (v1/v2, auto-detect) на keeper-стороне; `kv-present` — generate-if-absent (сгенерировать недостающий секрет по password-policy, [ADR-017 amend 2026-06-28](../adr/0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read)). |
+| [`core.soul.registered`](core/soul/README.md) | `registered` | Linking SID to coven tags of the souls registry. |
+| [`core.cloud.provisioned`](core/cloud/README.md) | `created` / `destroyed` | Cloud instance via CloudDriver plugin. |
+| [`core.choir`](core/choir/README.md) | `present` / `absent` | Voice membership (SID) in the Choir incarnation (ADR-044). |
+| [`core.vault`](core/vault/README.md) (author-addresses `core.vault.kv-read` / `core.vault.kv-present`) | `kv-read` (verb) / `kv-present` | `kv-read` — reading the secret from Vault KV (v1/v2, auto-detect) on the keeper side; `kv-present` — generate-if-absent (generate the missing secret using password-policy, [ADR-017 amend 2026-06-28](../adr/0017-keeper-side-core.md)). |
 
 ## core-beacon
 
-Встроенные **core-beacon** ([ADR-030](../adr/0030-vigil-oracle.md#adr-030-vigil--oracle--event-driven-мониторинг-beacons--reactor))
-— это тело [Vigil](../naming-rules.md#сущности-предметной-области) (Soul-side
-event-driven мониторинг), а **НЕ** apply-модуль: beacon **наблюдает** состояние
-хоста (read-only по конструкции) и при его смене поднимает Portent. У них нет
-`states` и они не приводят хост к состоянию — поэтому они вынесены из таблиц
-core-модулей выше. Адресуются как `core.beacon.<name>` в поле `VigilDef.check`.
-Per-beacon справочник — [`core/beacon/README.md`](core/beacon/README.md).
+Built-in **core-beacon** ([ADR-030](../adr/0030-vigil-oracle.md))
+is the body of [Vigil](../naming-rules.md) (Soul-side
+event-driven monitoring), and **NOT** apply-module: beacon **observes** state
+host (read-only by design) and when it is changed, it raises Portent. They don't have
+`states` and they do not bring the host into a state - that's why they are removed from the tables
+core modules above. Addressed as `core.beacon.<name>` in field `VigilDef.check`.
+Per-beacon reference - [`core/beacon/README.md`](core/beacon/README.md).
 
-## Плагины (не-core)
+## Plugins (non-core)
 
-Помимо встроенных `core.*`, шаги destiny могут адресовать плагины через
-SoulModule-контракт ([ADR-020](../adr/0020-plugin-infrastructure.md#adr-020-plugin-инфраструктура-формат-manifest-handshake-lifecycle),
-gRPC-over-stdio). У каждого namespace — свой per-module справочник:
+In addition to the built-in `core.*`, destiny steps can address plugins via
+SoulModule-contract ([ADR-020](../adr/0020-plugin-infrastructure.md),
+gRPC-over-stdio). Each namespace has its own per-module directory:
 
-| Namespace | Индекс | Что это |
+| Namespace | Index | What is this |
 |---|---|---|
-| `official.*` | [official/README.md](official/README.md) | Плагины команды Soul Stack (`soul-mod-official-*`), companion-репо `soul-stack-plugins`. |
-| `community.*` | [community/README.md](community/README.md) | Third-party плагины (`soul-mod-community-*`). Реализованы [`community.redis`](community/redis/README.md) — интерфейс к живому Redis (12 states) и [`community.mongo`](community/mongo/README.md) — интерфейс к живому MongoDB (3 states, PILOT standalone). |
+| `official.*` | [official/README.md](official/README.md) | Soul Stack team plugins (`soul-mod-official-*`), companion repo `soul-stack-plugins`. |
+| `community.*` | [community/README.md](community/README.md) | Third-party plugins (`soul-mod-community-*`). Implemented [`community.redis`](community/redis/README.md) - interface to live Redis (12 states) and [`community.mongo`](community/mongo/README.md) - interface to live MongoDB (3 states, PILOT standalone). |
 
-## Статус каталога
+## Catalog status
 
-Каталог укомплектован. Что считаем (источник правды — registry в коде,
-`soul/internal/coremod/registry.go` и `keeper/internal/coremod/registry.go`):
+The catalog is complete. What we think (the source of truth is the registry in the code,
+`soul/internal/coremod/registry.go` and `keeper/internal/coremod/registry.go`):
 
-- **18 Soul-side core** — 17 по [ADR-015](../adr/0015-core-modules-mvp.md#adr-015-core-модули-mvp-точный-список)
-  (12 исходных MVP + пост-MVP `url` / `line` / `repo` / `firewall` / `http`,
-  приняты по реальным запросам) + `augur` по [ADR-025](../adr/0025-augur.md#adr-025-augur--keeper-side-брокер-внешнего-доступа-soul)
-  (read-probe через брокер Augur). Таблица «Soul-side core-модули» выше.
-- **4 Keeper-side core** — `core.soul` / `core.cloud` / `core.vault` по
-  [ADR-017](../adr/0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read)
-  + `core.choir` по [ADR-044](../adr/0044-choir.md) (регистрируется при наличии
-  `Deps.ChoirStore`). `core.vault` — один модуль с двумя state (`kv-read` +
-  `kv-present`, generate-if-absent по [ADR-017 amend 2026-06-28](../adr/0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read)).
-  Таблица «Keeper-side core-модули» выше.
+- **18 Soul-side core** - 17 by [ADR-015](../adr/0015-core-modules-mvp.md)
+(12 original MVPs + post-MVP `url` / `line` / `repo` / `firewall` / `http`,
+accepted based on real requests) + `augur` by [ADR-025](../adr/0025-augur.md)
+(read-probe via Augur broker). Table "Soul-side core modules" above.
+- **4 Keeper-side core** - `core.soul` / `core.cloud` / `core.vault` by
+[ADR-017](../adr/0017-keeper-side-core.md)
+  + `core.choir` by [ADR-044](../adr/0044-choir.md) (registered if available
+`Deps.ChoirStore`). `core.vault` - one module with two states (`kv-read` +
+`kv-present`, generate-if-absent by [ADR-017 amend 2026-06-28](../adr/0017-keeper-side-core.md)).
+"Keeper-side core modules" table above.
 
-Итого **22 apply-модуля** (18 + 4). В `docs/module/core/` — **23 каталога**: эти
-22 модуля плюс `core-beacon` (тело Vigil, read-only наблюдатель — не apply-модуль,
-вынесен из таблиц, см. раздел «core-beacon»).
+Total **22 apply modules** (18 + 4). In `docs/module/core/` - **23 directories**: these
+22 modules plus `core-beacon` (Vigil body, read-only observer - not apply module,
+removed from tables, see "core-beacon" section).
 
-Эталоны (pilot) — [`core/pkg/README.md`](core/pkg/README.md) и
-[`core/file/README.md`](core/file/README.md). Все ссылки в таблицах выше ведут на
-существующие документы.
+Standards (pilot) - [`core/pkg/README.md`](core/pkg/README.md) and
+[`core/file/README.md`](core/file/README.md). All links in the tables above lead to
+existing documents.
 
-## См. также
+## See also
 
-- [ADR-015](../adr/0015-core-modules-mvp.md#adr-015-core-модули-mvp-точный-список) — точный список Soul-side core MVP.
-- [ADR-017](../adr/0017-keeper-side-core.md#adr-017-keeper-side-core-модули-расширены-corecloudprovisioned-corevaultkv-read) — Keeper-side core расширения.
-- [ADR-010](../adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов) — шаблонизатор и `core.file.rendered`.
-- [naming-rules.md → Модули Destiny](../naming-rules.md#модули-destiny) — словарь имён.
+- [ADR-015](../adr/0015-core-modules-mvp.md) - exact list of Soul-side core MVPs.
+- [ADR-017](../adr/0017-keeper-side-core.md) - Keeper-side core extensions.
+- [ADR-010](../adr/0010-templating.md) - template engine and `core.file.rendered`.
+- [naming-rules.md → Destiny Modules](../naming-rules.md) - a dictionary of names.

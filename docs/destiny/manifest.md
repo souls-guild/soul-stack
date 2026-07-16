@@ -1,51 +1,51 @@
-# Раскладка папки destiny и формат `destiny.yml`
+# Destiny folder layout and format `destiny.yml`
 
-Описывает физическую раскладку одного destiny-репо и поля корневого манифеста. Содержательную сторону (что такое destiny, как соотносится с соседями) см. в [concept.md](concept.md); формат задач — в [tasks.md](tasks.md); `input:`-контракт — в [input.md](input.md); `vars:`-локалы — в [vars.md](vars.md).
+Describes the physical layout of one destiny repo and root manifest fields. For the content side (what destiny is, how it relates to its neighbors), see [concept.md](concept.md); task format - in [tasks.md](tasks.md); `input:`-contract - in [input.md](input.md); `vars:` locales - in [vars.md](vars.md).
 
-## Раскладка папки
+## Folder layout
 
 ```
 destiny-<name>/
-├── destiny.yml                     # манифест (этот документ)
-├── vars.yml                        # ОПЦ.: destiny-локалы (см. vars.md)
+├── destiny.yml                     # manifest (this document)
+├── vars.yml                        # OPC.: destiny-locales (see vars.md)
 ├── tasks/
-│   ├── main.yml                    # точка входа; см. tasks.md
-│   ├── install.yml                 # ОПЦ.: include-соседи main.yml
-│   └── restart.yml                 # ОПЦ.
-├── templates/                      # ОПЦ.: text/template-шаблоны для core.file.rendered (ADR-010)
+│   ├── main.yml                    # entry point; see tasks.md
+│   ├── install.yml                 # OPTS: include-neighbors main.yml
+│   └── restart.yml                 # OPC.
+├── templates/                      # OPTS: text/template templates for core.file.rendered (ADR-010)
 │   └── *.tmpl
-└── tests/                          # ОПЦ.: molecule-style тесты
+└── tests/                          # OPT: molecule-style tests
     └── <case-name>/
         ├── case.yml
-        ├── prepare.yml             # ОПЦ.
-        ├── verify.yml              # ОПЦ.
-        └── cleanup.yml             # ОПЦ.
+        ├── prepare.yml             # OPC.
+        ├── verify.yml              # OPC.
+        └── cleanup.yml             # OPC.
 ```
 
-Обязательны только `destiny.yml` и `tasks/main.yml`. Всё остальное появляется по мере необходимости.
+Only `destiny.yml` and `tasks/main.yml` are required. Everything else appears as needed.
 
-## `destiny.yml` — манифест
+## `destiny.yml` - manifest
 
-Корневой файл — **только** манифест. Список задач в нём не лежит; он живёт в [`tasks/main.yml`](tasks.md). Это сделано сознательно: `destiny.yml` остаётся коротким — name, описание, контракт на входы и зависимости от custom-модулей; читается за один взгляд при ревью.
+The root file is **only** the manifest. There is no list of tasks in it; he lives in [`tasks/main.yml`](tasks.md). This is done deliberately: `destiny.yml` remains short - name, description, contract for inputs and dependencies on custom modules; can be read in one glance during review.
 
-### Поля
+### Fields
 
-| Поле | Обяз. | Смысл |
+| Field | Obligation | Meaning |
 |---|---|---|
-| `name:` | да | Короткое kebab-case имя destiny (`redis`, `haproxy`, `cert-rotation`). Совпадает с именем папки `destiny-<name>/` без префикса. |
-| `description:` | рекомендуется | Одна-две фразы на английском: что destiny делает на хосте. Видно в UI Keeper-а, MCP-каталоге, выводе `soul-lint`. |
-| `input:` | да (если есть параметры) | Входной контракт. Формат — общий стандарт [`docs/input.md`](../input.md); destiny-специфика — в [input.md](input.md). |
-| `output:` | нет (есть = destiny возвращает результат caller-у) | Выходной контракт. **Симметричен `input:`** по форме — тот же общий стандарт [`docs/input.md`](../input.md); destiny-специфика — в [output.md](output.md). Опциональный: если destiny ничего не публикует наружу, блок опускается. |
-| `required_modules:` | нет | Список **custom**-модулей (двухуровневая форма `<namespace>.<module>`), нужных задачам. Core-модули **не перечисляются** — они всегда доступны. См. [architecture.md → «Адресация модулей»](../architecture.md#адресация-модулей). |
+| `name:` | yes | Short kebab-case name destiny (`redis`, `haproxy`, `cert-rotation`). Same as folder name `destiny-<name>/` without prefix. |
+| `description:` | recommended | One or two phrases in English: what destiny does on the host. Visible in UI Keeper, MCP directory, output `soul-lint`. |
+| `input:` | yes (if there are parameters) | Entry contract. Format - general standard [`docs/input.md`](../input.md); destiny-specifics - in [input.md](input.md). |
+| `output:` | no (yes = destiny returns the result to the caller) | Exit contract. **Symmetrical to `input:`** in shape - same general standard [`docs/input.md`](../input.md); destiny-specifics - in [output.md](output.md). Optional: if destiny doesn't publish anything to the outside, the block is omitted. |
+| `required_modules:` | no | List of **custom** modules (two-level form `<namespace>.<module>`) required by tasks. Core modules **are not listed** - they are always available. See [architecture.md → "Addressing modules"](../architecture.md). |
 
-### Что в `destiny.yml` НЕ лежит
+### What is NOT in `destiny.yml`
 
-- **Сам список задач.** Лежит в `tasks/main.yml` как top-level YAML-список (см. [tasks.md](tasks.md)). Если видишь `tasks:` или `steps:` ключом в `destiny.yml` — это устаревший формат.
-- **Destiny-локалы (`vars:`).** Лежат в `vars.yml` рядом с `destiny.yml` как top-level YAML-map (см. [vars.md](vars.md)).
-- **`version:`.** Версия destiny — git ref, под которым закоммичен файл. См. [ADR-007](../adr/0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте). Расширение `output:`-контракта — это эволюция контракта, **не** повод вводить `version:`; правило ADR-007 применяется к `output:` так же, как к `input:`.
-- **`templates:` / `tests:` секции.** Это **папки** на диске, не поля манифеста. Содержимое подхватывается по convention.
+- **The task list itself.** Located in `tasks/main.yml` as a top-level YAML list (see [tasks.md](tasks.md)). If you see `tasks:` or `steps:` as a key in `destiny.yml`, this is an outdated format.
+- **Destiny locales (`vars:`).** They are located in `vars.yml` next to `destiny.yml` as a top-level YAML-map (see [vars.md](vars.md)).
+- **`version:`.** The destiny version is git ref, under which the file is committed. See [ADR-007](../adr/0007-versioning-git-ref.md). The extension of the `output:` contract is an evolution of the contract, **not** a reason to introduce `version:`; rule ADR-007 applies to `output:` in the same way as to `input:`.
+- **`templates:` / `tests:` sections.** These are **folders** on disk, not manifest fields. The content is picked up according to convention.
 
-### Пример
+### Example
 
 ```yaml
 # redis/destiny.yml
@@ -64,29 +64,29 @@ input:
     type: string
     secret: true
     min_length: 16
-  # … остальные параметры — см. examples/destiny/redis/destiny.yml
+  # ... other parameters - see examples/destiny/redis/destiny.yml
 
-# Эта destiny использует только core-модули → required_modules не нужен.
-# Появляется только когда нужны custom-модули из сторонних коллекций:
+# This destiny uses only core modules → required_modules is not needed.
+# Appears only when custom modules from third-party collections are needed:
 #
 # required_modules: [wb.haproxy, wb.myapp]
 ```
 
-Рабочий пример с полным `input:`-блоком — в [examples/destiny/redis/destiny.yml](../../examples/destiny/redis/destiny.yml).
+A working example with a complete `input:` block is in [examples/destiny/redis/destiny.yml](../../examples/destiny/redis/destiny.yml).
 
-## Когда нужны соседи `tasks/main.yml`
+## When you need neighbors `tasks/main.yml`
 
-Один `tasks/main.yml` справляется до тех пор, пока destiny остаётся атомарным кирпичиком. Если файл уходит за ~150 строк или внутри явно выделяются логические подразделы — выносим их в соседей `tasks/<sub>.yml` и подключаем через `include:`. Сравнение со scenario, где `scenario/<name>/main.yml` сразу проектируется на include-соседей (`install.yml`, `replication.yml` и т.п.):
+One `tasks/main.yml` copes as long as destiny remains an atomic brick. If the file goes beyond ~150 lines or logical subsections are clearly allocated inside, we move them to the neighbors of `tasks/<sub>.yml` and connect them through `include:`. Comparison with the scenario, where `scenario/<name>/main.yml` is immediately projected onto its include neighbors (`install.yml`, `replication.yml`, etc.):
 
 ```yaml
-# tasks/main.yml — top-level список задач, без обёртки.
+# tasks/main.yml — top-level list of tasks, without a wrapper.
 - name: Install redis-server package
   module: core.pkg.installed
   when: input.action == 'apply'
   params: { name: redis-server, version: "${ input.version }" }
 
 - name: Apply Redis configuration
-  include: configure.yml             # подключает соседний tasks/configure.yml
+  include: configure.yml             # connects neighboring tasks/configure.yml
   when: input.action == 'apply'
 
 - name: Restart redis-server
@@ -95,13 +95,13 @@ input:
   params: { name: redis-server }
 ```
 
-`include:` подключает файл из той же папки `tasks/`. Точный синтаксис include (вычисление `when:`, scope переменных, обработка `register:` через границу) — см. [tasks.md](tasks.md). Глубина вложенности — по убеждению, без жёсткого лимита; на практике 1 уровень покрывает все реалистичные сценарии.
+`include:` includes a file from the same folder `tasks/`. The exact syntax of include (calculation of `when:`, scope of variables, processing of `register:` across the border) - see [tasks.md](tasks.md). Depth of nesting - according to conviction, without a hard limit; in practice, level 1 covers all realistic scenarios.
 
-## См. также
+## See also
 
-- [tasks.md](tasks.md) — формат `tasks/main.yml`.
-- [input.md](input.md) — destiny-специфика `input:`.
-- [output.md](output.md) — destiny-специфика `output:` (симметричный документ).
-- [testing.md](testing.md) — раскладка `tests/<case>/`.
-- [../service/manifest.md](../service/manifest.md) — формат `service.yml` (уровень выше destiny: тип сервиса, scenario-операции, state_schema, миграции).
-- [ADR-007](../adr/0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте) — почему `version:` отсутствует.
+- [tasks.md](tasks.md) - format `tasks/main.yml`.
+- [input.md](input.md) - destiny-specific `input:`.
+- [output.md](output.md) - destiny-specific `output:` (symmetric document).
+- [testing.md](testing.md) — `tests/<case>/` layout.
+- [../service/manifest.md](../service/manifest.md) - format `service.yml` (level above destiny: service type, scenario operations, state_schema, migrations).
+- [ADR-007](../adr/0007-versioning-git-ref.md) - why is `version:` missing.

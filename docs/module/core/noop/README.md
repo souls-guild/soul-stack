@@ -1,63 +1,63 @@
 # core.noop
 
-No-op-шаг: ничего не делает и всегда возвращает успех без изменения состояния
-(`changed = false`). **Soul-side**, статически встроен в `soul`-бинарь.
-Реализация — [`soul/internal/coremod/noop/noop.go`](../../../../soul/internal/coremod/noop/noop.go).
+No-op step: does nothing and always returns success without changing state
+(`changed = false`). **Soul-side**, statically built into the `soul` binary.
+Implementation - [`soul/internal/coremod/noop/noop.go`](../../../../soul/internal/coremod/noop/noop.go).
 
-Это verb-модуль: единственное состояние — `run` (без declarative-семантики
-«привести к состоянию»). `params:` не имеют схемы — модуль существует как
-синтаксический якорь, а не как операция над ресурсом.
+This is a verb module: the only state is `run` (without declarative semantics
+"lead to state"). `params:` do not have a schema - the module exists as
+is a syntactic anchor, not as an operation on a resource.
 
-## Назначение
+## Purpose
 
-- **barrier-якорь.** Задача `core.noop.run`, обращающаяся к `register.*`
-  нескольких предыдущих задач, даёт точку, в которой фреймворк дожидается их
-  завершения. Сам барьер обеспечивает не модуль, а граф зависимостей (`require:`
-  / register-ссылки) — `core.noop.run` лишь пустое тело такой задачи.
-- **placeholder.** Пустой шаг в каркасе destiny/scenario до появления реальной
-  логики, либо носитель `output:`-проекции: `output:` читает `register.*`
-  предыдущих задач, собственной работы шаг не выполняет.
+- **barrier anchor.** Task `core.noop.run` accessing `register.*`
+several previous tasks, gives the point at which the framework waits for them
+completion. The barrier itself is provided not by the module, but by the dependency graph (`require:`
+/ register-links) - `core.noop.run` is just an empty body of such a task.
+- **placeholder.** An empty step in the destiny/scenario framework before the real one appears
+logic, or the `output:`-projection carrier: `output:` reads `register.*`
+the previous tasks, the step does not perform its own work.
 
-## Read-only: ничего не меняет
+## Read-only: doesn't change anything
 
-`changed = false` **всегда**, конструктивно и ненастраиваемо — no-op не меняет
-состояние хоста. Прецедент — read-probe-модули ([`core.http`](../http/README.md),
-[`core.exec`](../exec/README.md)): модуль не объявляет drift, интерпретацию
-задаёт scenario. Идемпотентность — по природе (пустая операция).
+`changed = false` **always**, constructive and non-configurable - no-op does not change
+host status. Use case - read-probe modules ([`core.http`](../http/README.md),
+[`core.exec`](../exec/README.md)): module does not declare drift, interpretation
+specifies scenario. Idempotency is by nature (empty operation).
 
 ## States
 
-| State (verb) | Назначение | `changed` |
+| State (verb) | Destination | `changed` |
 |---|---|---|
-| `run` | No-op: ничего не делает, успех без change. | `false` всегда. |
+| `run` | No-op: does nothing, success without change. | `false` always. |
 
 ## run — params
 
-Схемы нет: `params:` отсутствует или `{}`. Любые ключи принимаются и
-игнорируются — задача-якорь не имеет входов.
+No schematic: `params:` missing or `{}`. Any keys are accepted and
+are ignored - the anchor task has no inputs.
 
 ## Capabilities / side-effects
 
-- **Ничего не выполняет и не пишет.** В манифесте
+- **Does not execute or write anything.** In the manifest
   ([`noop.yaml`](../../../../shared/coremanifest/noop.yaml)) `required_capabilities`
-  пуст: нет ни `exec_subprocess`, ни `fs_write_root`, ни `network_outbound`.
-- **`changed = false` конструктивно** (см. «Read-only: ничего не меняет»).
-- **Errand-safe** ([ADR-033](../../../adr/0033-errand.md)): no-op безопасен к
-  ad-hoc invocation через Errand pull-контур (модуль реализует `ErrandReadSafe`).
+empty: there is no `exec_subprocess`, `fs_write_root`, or `network_outbound`.
+- **`changed = false` constructive** (see "Read-only: doesn't change anything").
+- **Errand-safe** ([ADR-033](../../../adr/0033-errand.md)): no-op is safe to
+ad-hoc invocation via Errand pull loop (the module implements `ErrandReadSafe`).
 
 ## Output / register
 
-`{ changed: false }`. Собственного output шаг не отдаёт; полезные данные
-собираются на уровне задачи через `output:`-проекцию `register.*` предыдущих
-задач (см. «placeholder»).
+`{ changed: false }`. The step does not produce its own output; useful data
+are collected at the task level through the `output:` projection of `register.*` previous
+tasks (see "placeholder").
 
-## Примеры
+## Examples
 
-### Barrier через register-зависимости
+### Barrier via register dependencies
 
-Три параллельных probe-задачи, затем `core.noop.run` собирает их результаты —
-обращение к `register.ping`/`register.repl`/`register.mem` создаёт implicit
-barrier (фреймворк ждёт завершения всех трёх перед стартом якоря):
+Three parallel probe tasks, then `core.noop.run` collects their results -
+calling `register.ping`/`register.repl`/`register.mem` creates implicit
+barrier (the framework waits for all three to complete before starting the anchor):
 
 ```yaml
 - name: Collect diagnose result
@@ -70,10 +70,10 @@ barrier (фреймворк ждёт завершения всех трёх пе
     used_memory:       "${ register.mem.stdout }"
 ```
 
-### Placeholder-якорь
+### Placeholder-anchor
 
-Барьер, который дожидается набора предыдущих задач через `require:` и ничего не
-делает сам:
+Barrier that waits for a set of previous tasks through `require:` and does nothing
+does it himself:
 
 ```yaml
 - name: barrier

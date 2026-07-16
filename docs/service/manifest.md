@@ -1,142 +1,142 @@
-# Раскладка папки сервиса и формат `service.yml`
+# Service folder layout and format `service.yml`
 
-Этот документ описывает раскладку git-репозитория сервиса и поля корневого манифеста `service.yml`. Соседние темы вынесены в отдельные нормативные документы:
+This document describes the layout of the service's git repository and the `service.yml` root manifest fields. Related topics are included in separate regulatory documents:
 
-- Концепция Service (что это в общей картине, граница с destiny / scenario) — [`docs/destiny/concept.md`](../destiny/concept.md) и [`docs/architecture.md → Service`](../architecture.md#service--структура-и-manifest).
-- Формат scenario — [`docs/scenario/`](../scenario/README.md).
-- Стандарт `input:`-блока для scenario — [`docs/input.md`](../input.md).
-- Миграции state_schema — [`docs/migrations.md`](../migrations.md), [ADR-019](../adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl).
+- The concept of Service (what is it in the big picture, the border with destiny / scenario) - [`docs/destiny/concept.md`](../destiny/concept.md) and [`docs/architecture.md → Service`](../architecture.md).
+- scenario format is [`docs/scenario/`](../scenario/README.md).
+- The standard `input:` block for scenario is [`docs/input.md`](../input.md).
+- Migrations state_schema - [`docs/migrations.md`](../migrations.md), [ADR-019](../adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl).
 
-## Что такое сервис
+## What is a service
 
-Сервис — это **тип сервиса** (Redis HA, PostgreSQL, Vector-collector). Один сервис — один git-репозиторий со своим manifest, набором операций (сценариев), параметрами по умолчанию (essence), миграциями state и тестами.
+Service is a **service type** (Redis HA, PostgreSQL, Vector-collector). One service - one git repository with its own manifest, set of operations (scenarios), default parameters (essence), state migrations and tests.
 
-Версия сервиса как артефакта — это git tag, под которым закоммичен манифест ([ADR-007](../adr/0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте)). Поле `version:` верхнего уровня в `service.yml` намеренно отсутствует.
+The version of the service as an artifact is the git tag under which the manifest is committed ([ADR-007](../adr/0007-versioning-git-ref.md)). The top-level `version:` field in `service.yml` is intentionally missing.
 
-## Раскладка репозитория
+## Repository layout
 
 ```
 service-<name>/
-├── service.yml                         # манифест (этот документ)
-├── essence/                            # параметры в иерархии — см. architecture.md → Essence
-│   ├── _default.yaml                   # baseline для всех incarnation
-│   ├── _stack.yaml                     # ОПЦ.: декларативный pipeline сборки
-│   ├── coven/                          # ОПЦ.: параметры по Coven-меткам
+├── service.yml                         # manifest (this document)
+├── essence/                            # parameters in the hierarchy - see architecture.md → Essence
+│   ├── _default.yaml                   # baseline for all incarnation
+│   ├── _stack.yaml                     # OPTS: declarative assembly pipeline
+│   ├── coven/                          # OPT.: parameters by Coven tags
 │   │   ├── prod.yaml
 │   │   └── dev.yaml
-│   └── os/                             # ОПЦ.: параметры по soulprint.os.family
+│   └── os/                             # OPC: parameters by soulprint.os.family
 │       ├── ubuntu.yaml
 │       └── debian.yaml
-├── scenario/                           # операции; auto-discover из директории
+├── scenario/                           # operations; auto-discover from directory
 │   ├── create/
-│   │   ├── main.yml                    # точка входа: input + state_changes + tasks
-│   │   ├── install.yml                 # ОПЦ.: include-соседи main.yml
-│   │   ├── vars.yml                    # ОПЦ.: scenario-локалы
-│   │   ├── templates/                  # ОПЦ.: scenario-локальные шаблоны
-│   │   └── tests/                      # ОПЦ.: тесты сценария
+│   │   ├── main.yml                    # entry point: input + state_changes + tasks
+│   │   ├── install.yml                 # OPTS: include-neighbors main.yml
+│   │   ├── vars.yml                    # OPTS: scenario-locals
+│   │   ├── templates/                  # OPTS: scenario-local templates
+│   │   └── tests/                      # OPT: script tests
 │   ├── add_user/
 │   │   └── main.yml
 │   ├── update_acl/
 │   │   └── main.yml
 │   └── restart/
 │       └── main.yml
-├── upgrade/                            # ОПЦ.: version-к-версии upgrade-сценарии (2-й канал авто-дискавери — ADR-0068)
+├── upgrade/                            # OPTs.: version-to-version upgrade scenarios (2nd auto-discovery channel - ADR-0068)
 │   └── v2/
-│       └── main.yml                    # top-level from: [<исходные теги>] + задачи host-перехода
-├── types.yml                           # ОПЦ.: переиспользуемые именованные input-типы (секция types:, $type-ссылка — ADR-062)
-├── migrations/                         # ОПЦ.: state_schema миграции (если state_schema_version > 1)
+│       └── main.yml                    # top-level from: [<source tags>] + host transition tasks
+├── types.yml                           # OPTS: reused named input types (section types:, $type-link - ADR-062)
+├── migrations/                         # OPTS: migration state_schema (if state_schema_version > 1)
 │   ├── 001_to_002.yml
 │   ├── 001_to_002/
-│   │   └── tests/                      # тесты миграции (state_before → state_after)
+│   │   └── tests/                      # migration tests (state_before → state_after)
 │   └── 002_to_003.yml
-└── tests/                              # ОПЦ.: service-level тесты (smoke, chaos)
+└── tests/                              # OPT.: service-level tests (smoke, chaos)
     ├── smoke.yml
     └── chaos.yml
 ```
 
-Обязательны только `service.yml` и хотя бы один сценарий (`scenario/<name>/main.yml`). Всё остальное появляется по мере необходимости.
+Only `service.yml` and at least one script (`scenario/<name>/main.yml`) are required. Everything else appears as needed.
 
-Сценарии перечислять в `service.yml` не нужно — keeper находит их auto-discover-ом по каталогу `scenario/`.
+There is no need to list scripts in `service.yml` - keeper finds them with auto-discover in the `scenario/` directory.
 
-Второй канал авто-дискавери — каталог `upgrade/<slug>/` рядом со `scenario/`: version-к-версии upgrade-сценарии с self-describing top-level ключом `from:` (версии-источники). Их запускает `POST /v1/incarnations/{name}/upgrade`, а в обычных day-2-списках сценариев они не показываются. Дизайн — [ADR-0068](../adr/0068-service-upgrade-v2.md), имена — [naming-rules.md → Upgrade v2](../naming-rules.md#upgrade-v2-каталог-upgrade-ключ-from-upgrade-paths).
+The second auto-discovery channel is the `upgrade/<slug>/` directory next to `scenario/`: version-to-version upgrade scripts with self-describing top-level key `from:` (source versions). They are launched by `POST /v1/incarnations/{name}/upgrade`, and are not shown in regular day-2 script lists. Design - [ADR-0068](../adr/0068-service-upgrade-v2.md), names - [naming-rules.md → Upgrade v2](../naming-rules.md).
 
-## `service.yml` — манифест
+## `service.yml` - manifest
 
-Корневой файл содержит только метаданные сервиса и контракт на структуру runtime-state. Сценарии и destiny-задачи живут в соседних файлах. Это сделано сознательно: `service.yml` остаётся коротким и читается за один взгляд при ревью.
+The root file contains only the service metadata and the contract for the runtime-state structure. Scenarios and destiny tasks live in adjacent files. This is done deliberately: `service.yml` remains short and can be read in one glance during review.
 
-### Поля
+### Fields
 
-| Поле | Обяз. | Тип | Смысл |
+| Field | Obligation | Type | Meaning |
 |---|---|---|---|
-| `name` | да | string (kebab-case) | Имя типа сервиса (`redis`, `postgres-ha`). Совпадает с именем папки сервиса (в `examples/service/<name>/` — голое имя без приставки `service-`). Regex `^[a-z][a-z0-9-]*$`. |
-| `description` | рекомендуется | string | Одна-две фразы: что это за сервис. Видно в UI Keeper-а, MCP-каталоге, выводе `soul-lint`. |
-| `state_schema_version` | да | integer (≥1) | Версия структуры `incarnation.state` в Postgres. **НЕ** версия сервиса (это git tag по [ADR-007](../adr/0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте)). Инкрементируется явно при breaking-изменениях schema; требует соответствующей миграции в `migrations/`. |
-| `state_schema` | да | JSON Schema object | Структура `incarnation.state` JSONB-поля в Postgres. Формат — JSON Schema (`type: object` на корне), draft-07-совместимый. См. [«Формат `state_schema`»](#формат-state_schema) ниже. |
-| `destiny` | да (если есть зависимости) | array<{name, ref, git?}> | Список destiny-зависимостей. Каждая запись: `{ name: <kebab-case>, ref: <git-tag-или-branch> }` + опц. `git: <полный-URL>` (override источника, см. ниже). Core-модули **не перечисляются** — они всегда доступны ([ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация)). |
-| `modules` | да (если есть зависимости) | array<{name, ref}> | Список custom-модулей `{ name: <namespace>.<module>, ref: <git-tag-или-branch> }`. Core-модули **не перечисляются** ([ADR-015](../adr/0015-core-modules-mvp.md#adr-015-core-модули-mvp-точный-список)). Из записей Keeper **авто-синтезирует** install-шаги `core.module.installed` в план прогона — см. [ниже](#modules--источник-авто-синтеза-install-шагов-adr-065). |
+| `name` | yes | string (kebab-case) | Service type name (`redis`, `postgres-ha`). Coincides with the name of the service folder (in `examples/service/<name>/` - a bare name without the prefix `service-`). Regex `^[a-z][a-z0-9-]*$`. |
+| `description` | recommended | string | One or two phrases: what kind of service is this? Visible in UI Keeper, MCP directory, output `soul-lint`. |
+| `state_schema_version` | yes | integer (≥1) | Structure version `incarnation.state` in Postgres. **NOT** version of the service (this is the git tag by [ADR-007](../adr/0007-versioning-git-ref.md)). Increments explicitly when breaking schema changes; requires appropriate migration to `migrations/`. |
+| `state_schema` | yes | JSON Schema object | Structure of `incarnation.state` JSONB fields in Postgres. Format - JSON Schema (`type: object` at root), draft-07 compatible. See "`state_schema` Format" below. |
+| `destiny` | yes (if there are dependencies) | array<{name, ref, git?}> | List of destiny dependencies. Each entry: `{ name: <kebab-case>, ref: <git-tag-or-branch> }` + opt. `git: <full-URL>` (override source, see below). Core modules **are not listed** - they are always available ([ADR-009](../adr/0009-scenario-dsl.md)). |
+| `modules` | yes (if there are dependencies) | array<{name, ref}> | List of custom modules `{ name: <namespace>.<module>, ref: <git-tag-or-branch> }`. Core modules **not listed** ([ADR-015](../adr/0015-core-modules-mvp.md)). From the Keeper entries **auto-synthesizes** install steps `core.module.installed` into the run plan - see below. |
 
-### Что в `service.yml` НЕ лежит
+### What is NOT in `service.yml`
 
-- **`version`** — версия сервиса = git tag, под которым закоммичен файл ([ADR-007](../adr/0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте)). Любое появление `version:` в `service.yml` — ошибка валидации с hint про ADR-007.
-- **`tasks:` / `steps:`** — это destiny/scenario-уровень. В `service.yml` задачи не перечисляются.
-- **`input:`** — это scenario-уровень (`scenario/<name>/main.yml`). В `service.yml` `input:` нет.
-- **`scenarios[]`** — сценарии auto-discover-ятся по каталогу. Перечислять их в манифесте не нужно.
+- **`version`** — service version = git tag under which the file is committed ([ADR-007](../adr/0007-versioning-git-ref.md)). Any appearance of `version:` in `service.yml` is a validation error with a hint about ADR-007.
+- **`tasks:` / `steps:`** is a destiny/scenario level. `service.yml` does not list tasks.
+- **`input:`** is the scenario level (`scenario/<name>/main.yml`). There is no `service.yml` `input:`.
+- **`scenarios[]`** - auto-discover scripts are located in the directory. There is no need to list them in the manifest.
 
-### Формат `state_schema`
+### Format `state_schema`
 
-`state_schema` — это JSON Schema-документ, описывающий ожидаемую структуру JSONB-поля `incarnation.state` в Postgres. На корне всегда `type: object` с описанием полей.
+`state_schema` is a JSON Schema document that describes the expected structure of the JSONB field `incarnation.state` in Postgres. At the root there is always `type: object` with a description of the fields.
 
-Поддерживаются стандартные JSON Schema draft-07-конструкции:
+Standard JSON Schema draft-07 constructs are supported:
 
 - `type` — `object` / `array` / `string` / `integer` / `number` / `boolean`.
-- `required` — список обязательных ключей.
-- `properties` — карта поля → схема.
-- `additionalProperties` — bool или вложенная схема.
-- `enum`, `pattern`, `min`/`max`, `items` для массивов.
+- `required` - list of required keys.
+- `properties` — field map → diagram.
+- `additionalProperties` - bool or nested schema.
+- `enum`, `pattern`, `min`/`max`, `items` for arrays.
 
-Keeper валидирует `incarnation.state` против `state_schema` при создании incarnation и при upgrade на новую версию schema через миграцию (см. [`docs/migrations.md`](../migrations.md)).
+Keeper validates `incarnation.state` against `state_schema` when creating an incarnation and when upgrading to a new version of schema via migration (see [`docs/migrations.md`](../migrations.md)).
 
-### Формат `destiny[]` и `modules[]`
+### Format `destiny[]` and `modules[]`
 
-Каждая запись — объект:
+Each record is an object:
 
-| Поле | Обяз. | Тип | Смысл |
+| Field | Obligation | Type | Meaning |
 |---|---|---|---|
-| `name` | да | string | Имя destiny (для `destiny:`) или `<namespace>.<module>` (для `modules:`). |
-| `ref` | да | string | Git ref — tag (`v2.0.0`) или branch (`main`). Никаких semver-range — точный ref ([ADR-007](../adr/0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте)). |
-| `git` | нет | string (полный git-URL) | **Только `destiny[]`.** Per-entry override источника. При заданном `git:` Keeper грузит destiny напрямую по этому URL, игнорируя `default_destiny_source` (keeper.yml). В `modules[]` поле запрещено — парсер отвергает с `unknown_key`. |
+| `name` | yes | string | Name destiny (for `destiny:`) or `<namespace>.<module>` (for `modules:`). |
+| `ref` | yes | string | Git ref - tag (`v2.0.0`) or branch (`main`). No semver-range - exact ref ([ADR-007](../adr/0007-versioning-git-ref.md)). |
+| `git` | no | string (full git-URL) | **`destiny[]` only.** Per-entry override source. When `git:` is specified, Keeper loads destiny directly from this URL, ignoring `default_destiny_source` (keeper.yml). In `modules[]` the field is prohibited - the parser rejects with `unknown_key`. |
 
-Формат `name`:
-- `destiny[].name` — kebab-case одноуровневое имя destiny, regex `^[a-z][a-z0-9-]*$`.
-- `modules[].name` — strict двухуровневая форма `<namespace>.<module>`, regex `^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*$`. Симметрично `destiny.yml → required_modules[]` (см. [`docs/destiny/manifest.md`](../destiny/manifest.md)). Core-модули в `modules:` не перечисляются.
+`name` format:
+- `destiny[].name` - kebab-case single-level name destiny, regex `^[a-z][a-z0-9-]*$`.
+- `modules[].name` — strict two-level form `<namespace>.<module>`, regex `^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*$`. Symmetrical to `destiny.yml → required_modules[]` (see [`docs/destiny/manifest.md`](../destiny/manifest.md)). Core modules are not listed in `modules:`.
 
-**Гибрид источника destiny** (как Keeper выводит git-URL для зависимости):
-- запись **без** `git:` → стандартный путь: git-URL = `default_destiny_source` (keeper.yml) с подстановкой `{name}`;
-- запись **с** `git:` → override: git-URL берётся из `git:` напрямую, шаблон не используется.
+**Hybrid of destiny source** (how Keeper outputs git-URL for dependency):
+- entry **without** `git:` → standard path: git-URL = `default_destiny_source` (keeper.yml) with `{name}` substitution;
+- entry **with** `git:` → override: git-URL is taken from `git:` directly, no template is used.
 
-`ref` берётся из записи в обоих случаях. Полный алгоритм резолва — [`docs/keeper/config.md → default_destiny_source`](../keeper/config.md#services--default_destiny_source--default_module_source).
+`ref` is taken from the record in both cases. The full resolution algorithm is [`docs/keeper/config.md → default_destiny_source`](../keeper/config.md#services--default_destiny_source--default_module_source).
 
-Прочее расширение полей (`enabled`, `optional` и т.п.) — отдельный propose-and-wait.
+Other field extensions (`enabled`, `optional`, etc.) are a separate propose-and-wait.
 
-### `modules[]` — источник авто-синтеза install-шагов (ADR-065)
+### `modules[]` - source of auto-synthesis of install steps (ADR-065)
 
-`modules[]` — не только декларация зависимостей для валидации и UI. Keeper из каждой записи **синтезирует** Soul-side шаг `core.module.installed` с `params: {name, ref}` и вставляет его в план прогона непосредственно перед первой задачей-потребителем модуля (задача `module: <ns>.<module>.<state>`; потребитель внутри `block:` → вставка перед block-ом целиком). Зависимость декларируется один раз на сервис — install-boilerplate в каждом сценарии не нужен ([ADR-065 amendment 2026-07-03](../adr/0065-core-module-installed.md)).
+`modules[]` is not just a dependency declaration for validation and UI. Keeper from each record **synthesizes** Soul-side step `core.module.installed` with `params: {name, ref}` and inserts it into the run plan immediately before the first consumer task of the module (task `module: <ns>.<module>.<state>`; consumer inside `block:` → insertion before the entire block). The dependency is declared once per service - install-boilerplate is not needed in each scenario ([ADR-065 amendment 2026-07-03](../adr/0065-core-module-installed.md)).
 
-- **Модуль без задач-потребителей в сценарии не синтезируется.**
-- **Takeover:** явный шаг `core.module.installed` с тем же литеральным `params.name` отключает синтез этого имени — оператор сам управляет позицией, `ref` и `when:`.
-- `ref` записи уходит в params синтез-шага как **pin-сверка**: активный Sigil-допуск обязан быть на этом ref.
-- **Ограничение MVP:** потребители определяются по `module:`-задачам сценария; модуль, используемый только внутри destiny (через `apply:`), потребителем не считается — ему нужен явный install-шаг.
+- **A module without consumer tasks is not synthesized in the script.**
+- **Takeover:** an explicit step `core.module.installed` with the same literal `params.name` disables the synthesis of this name - the operator itself controls the position, `ref` and `when:`.
+- `ref` records go into the params of the synthesis step as **pin-verification**: the active Sigil tolerance must be on this ref.
+- **MVP limitation:** consumers are defined by `module:` script tasks; a module used only inside destiny (via `apply:`) is not considered a consumer - it requires an explicit install step.
 
-Полная механика (точки синтеза, позиция, имя-маркер, идемпотентность) — [`docs/keeper/modules.md → Авто-синтез`](../keeper/modules.md#авто-синтез-coremoduleinstalled-из-serviceymlmodules).
+Full mechanics (synthesis points, position, token name, idempotency) - [`docs/keeper/modules.md → Auto-synthesis`](../keeper/modules.md).
 
-### Пример
+### Example
 
 ```yaml
 name: redis
 state_schema_version: 2
-description: Redis по концепции Ansible-роли (standalone/sentinel/cluster/sentinel_only)
+description: Redis based on the Ansible role concept (standalone/sentinel/cluster/sentinel_only)
 
-# Структура incarnation.state в БД
+# Structure of incarnation.state in the database
 state_schema:
   type: object
   required: [redis_type, redis_config]
@@ -162,33 +162,33 @@ state_schema:
           sid:  { type: string }
           role: { type: string, enum: [primary, replica, sentinel] }
 
-# Артефакты-зависимости — ref: git tag/branch (см. ADR-007)
+# Dependency artifacts - ref: git tag/branch (see ADR-007)
 destiny:
-  - { name: redis, ref: v1.0.0 }      # режим-агностичный кирпич: install + render redis.conf
+  - { name: redis, ref: v1.0.0 }      # mode-agnostic brick: install + render redis.conf
 
-# Custom-модули, нужные сценариям (двухуровневая форма <namespace>.<module>).
-# Keeper синтезирует из записи install-шаг core.module.installed перед первым
-# потребителем в плане прогона (ADR-065) — явный шаг в сценарии не нужен.
+# Custom modules needed by scripts (two-level form <namespace>.<module>).
+# Keeper synthesizes from the entry the install step core.module.installed before the first
+# by the consumer in the run plan (ADR-065) - an explicit step in the script is not needed.
 modules:
-  - { name: community.redis, ref: v1.0.0 }  # живой Redis-рантайм (CONFIG SET, ACL, cluster, sentinel)
+  - { name: community.redis, ref: v1.0.0 }  # live Redis runtime (CONFIG SET, ACL, cluster, sentinel)
 ```
 
-Рабочий пример с полной раскладкой папки — [`examples/service/redis/`](../../examples/service/redis/).
+Working example with full folder layout - [`examples/service/redis/`](../../examples/service/redis/).
 
-## Сценарии
+## Scripts
 
-Каждая папка `scenario/<name>/` — отдельная операция над сервисом (CRUD-style: `create`/`add_user`/`restart`/...). `main.yml` — точка входа сценария: содержит inline `input:` (контракт входов по [`docs/input.md`](../input.md)), `state_changes:` (какие поля `incarnation.state` сценарий обновит при успехе), `tasks:` (шаги).
+Each folder `scenario/<name>/` is a separate operation on the service (CRUD-style: `create`/`add_user`/`restart`/...). `main.yml` - script entry point: contains inline `input:` (input contract for [`docs/input.md`](../input.md)), `state_changes:` (which fields `incarnation.state` the script will update upon success), `tasks:` (steps).
 
-Полная нормативная спека scenario-DSL — [`docs/scenario/`](../scenario/README.md).
+The full regulatory specification of scenario-DSL is [`docs/scenario/`](../scenario/README.md).
 
-### Стартовый сценарий — `create: true`
+### Starting script - `create: true`
 
-Стартовый (bootstrap) сценарий — тот, которым оператор создаёт новую incarnation (`POST /v1/incarnations`, поле `create_scenario`). Сценарий объявляет эту способность top-level ключом `create: true` в своём `scenario/<name>/main.yml`:
+The bootstrap script is the one with which the operator creates a new incarnation (`POST /v1/incarnations`, field `create_scenario`). The script declares this top-level ability with the key `create: true` in its `scenario/<name>/main.yml`:
 
 ```yaml
 # scenario/create/main.yml
 name: create
-create: true          # сценарий годен как стартовый (bootstrap новой incarnation)
+create: true          # script is valid as a starter script (bootstrap of new incarnation)
 input:
   # ...
 state_changes:
@@ -197,77 +197,77 @@ tasks:
   # ...
 ```
 
-Правила:
+Rules:
 
-- **Декларация — в сценарии, не в манифесте.** Стартовый набор сервиса keeper выводит **auto-discover-ом**: сканирует `scenario/`, в набор попадают **ровно** сценарии с `create: true`. В `service.yml` стартовые сценарии не перечисляются (как и любые другие — keeper находит их по каталогу `scenario/`, см. [«Раскладка репозитория»](#раскладка-репозитория)).
-- **Имя `create` НЕ привилегировано.** Сценарий с именем `create` попадает в набор, только если сам несёт `create: true` — ровно как любой другой. Магического дефолтного `create` больше нет.
-- **Несколько create-сценариев — норма.** Сервис может предлагать несколько стартовых путей (например redis: `create` — с нуля, `create_from_souls` — на готовых хостах, `migrate_cluster` — с заливкой данных из внешнего источника). Оператор выбирает один полем `create_scenario`; если у сервиса ≥1 create-сценарий, выбор **обязателен** (пустой → `422`, input валидируется против схемы конкретного сценария).
-- **Сервис без `create: true`-сценариев → bare-инкарнация.** Если ни один сценарий не несёт `create: true`, `POST /v1/incarnations` создаёт **bare-инкарнацию**: запись в `ready` без прогона и без `apply_id` (`incarnation.created_scenario` = `null`). Дальше работа — через day-2-операции (`POST /v1/incarnations/{name}/scenarios/{scenario}`). Такой сервис состоит только из day-2-сценариев и не умеет «поднимать себя с нуля» одним вызовом — это валидный паттерн.
+- **The declaration is in the script, not in the manifest.** The starting set of the keeper service is output by **auto-discover**: scans `scenario/`, the set includes **exactly** scripts with `create: true`. In `service.yml`, startup scripts are not listed (like any others - keeper finds them in the `scenario/` directory, see "Repository Layout").
+- **The name `create` is NOT privileged.** A script with the name `create` is included in the set only if it itself carries `create: true` - just like any other. The magical default `create` is no longer there.
+- **Several create scripts are the norm.** The service can offer several starting paths (for example, redis: `create` - from scratch, `create_from_souls` - on ready-made hosts, `migrate_cluster` - with data filled from an external source). The operator selects one by field `create_scenario`; if the service has ≥1 create script, the selection is **required** (empty → `422`, input is validated against the schema of a specific script).
+- **Service without `create: true` scripts → bare incarnation.** If no script carries `create: true`, `POST /v1/incarnations` creates a **bare incarnation**: write to `ready` without running and without `apply_id` (`incarnation.created_scenario` = `null`). Further work is done through day-2 operations (`POST /v1/incarnations/{name}/scenarios/{scenario}`). Such a service consists only of day-2 scenarios and does not know how to "raise itself from scratch" with one call - this is a valid pattern.
 
-Семантика выбора, три ветви контракта и bare-инкарнация со стороны API — [`docs/keeper/operator-api/incarnations.md → Выбор стартового сценария и bare-инкарнация`](../keeper/operator-api/incarnations.md#выбор-стартового-сценария-и-bare-инкарнация).
+Choice semantics, three branches of the contract and bare-incarnation on the API side - [`docs/keeper/operator-api/incarnations.md → Startup scenario selection and bare-incarnation`](../keeper/operator-api/incarnations.md).
 
-### Когда нужны соседи `main.yml`
+### When you need neighbors `main.yml`
 
-Один `main.yml` справляется, пока сценарий остаётся обозримым (~150 строк). Если внутри явно выделяются логические подразделы — выносим их в `scenario/<name>/<sub>.yml` и подключаем через `include:`. Аналогично [`docs/destiny/manifest.md → Когда нужны соседи tasks/main.yml`](../destiny/manifest.md#когда-нужны-соседи-tasksmainyml).
+One `main.yml` copes as long as the script remains visible (~150 lines). If logical subsections are clearly identified inside, we move them to `scenario/<name>/<sub>.yml` and connect them through `include:`. Same as [`docs/destiny/manifest.md -> When tasks/main.yml needs neighbors`](../destiny/manifest.md#when-you-need-neighbors-tasksmainyml).
 
-## Переиспользуемые именованные input-типы — `types.yml`
+## Reusable named input types - `types.yml`
 
-Опциональный service-level файл `types.yml` объявляет **переиспользуемые именованные input-схемы** — секция `types:` с map `<PascalCase>` → схема в том же input-DSL ([`docs/input.md`](../input.md)). Сценарий ссылается на тип директивой `$type: <Имя>` (как самостоятельное поле или `items: {$type: <Имя>}` для массива) — так составной тип (например запись пользователя `{name, perms, state}`) не дублируется inline в каждом сценарии. Резолв — service-level (только этот сервис), с обязательным cycle-detection. Полный формат, резолв, классы ошибок и границы MVP — [`docs/input.md → «Переиспользуемые именованные типы»`](../input.md#переиспользуемые-именованные-типы-types--type), [ADR-062](../adr/0062-input-types.md). Прежний нереализованный задел `$ref` на внешний JSON-Schema-файл в `schemas/` им заменён.
+The optional service-level file `types.yml` declares **reusable named input schemes** - section `types:` with map `<PascalCase>` → scheme in the same input-DSL ([`docs/input.md`](../input.md)). The script refers to the type with the `$type: <Name>` directive (as an independent field or `items: {$type: <Name>}` for an array) - this way a complex type (for example, user record `{name, perms, state}`) is not duplicated inline in each script. Resolve - service-level (only this service), with mandatory cycle-detection. The full format, resolution, error classes and MVP boundaries are [`docs/input.md → "Reusable named types"`](../input.md), [ADR-062](../adr/0062-input-types.md). The previous unrealized provision `$ref` for an external JSON-Schema file in `schemas/` has been replaced by it.
 
 ## Essence
 
-Иерархическая сборка параметров (Salt-pillar + PillarStack аналог). `essence/_default.yaml` — baseline для всех incarnation; опциональные подкаталоги `coven/<label>.yaml` и `os/<family>.yaml` добавляют overlay'и по Coven-меткам и `soulprint.os.family`. Опциональный `_stack.yaml` — декларативный pipeline сборки (сложные условия и итерации).
+Hierarchical assembly of parameters (Salt-pillar + PillarStack analogue). `essence/_default.yaml` — baseline for all incarnations; optional subdirectories `coven/<label>.yaml` and `os/<family>.yaml` add overlays based on Coven tags and `soulprint.os.family`. Optional `_stack.yaml` - declarative assembly pipeline (complex conditions and iterations).
 
-Полная нормативная спека — [`docs/architecture.md → Essence: pipeline сборки`](../architecture.md#essence-pipeline-сборки). Essence — role-agnostic ([ADR-008](../adr/0008-coven-stable-tags.md#adr-008-coven--только-стабильные-логические-теги)): ступени `role/<Y>.yaml` в pipeline НЕТ.
+Full regulatory spec - [`docs/architecture.md → Essence: assembly pipeline`](../architecture.md). Essence - role-agnostic ([ADR-008](../adr/0008-coven-stable-tags.md)): there is NO stage `role/<Y>.yaml` in the pipeline.
 
-## Миграции state_schema
+## Migrations state_schema
 
-Если `state_schema_version > 1`, в репозитории должен быть каталог `migrations/` с цепочкой миграций. Формат — плоский DSL + CEL-выражения + `foreach` ([ADR-019](../adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)).
+If `state_schema_version > 1`, the repository must have a directory `migrations/` with the migration chain. Format - flat DSL + CEL expressions + `foreach` ([ADR-019](../adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)).
 
-Полная нормативная спека — [`docs/migrations.md`](../migrations.md).
+Full regulatory spec - [`docs/migrations.md`](../migrations.md).
 
-Соглашения:
+Agreements:
 
-- `migrations/<NNN>_to_<MMM>.yml` — миграция с версии NNN на MMM.
-- `migrations/<NNN>_to_<MMM>/tests/<case>.yml` — тесты миграции (state_before → migration → assert state_after).
-- Цепочка должна быть полной: миграции `1→2`, `2→3`, …, `(N-1)→N` — без пропусков.
-- Forward-only в MVP (`down:` не поддерживается, восстановление через `state_history`).
+- `migrations/<NNN>_to_<MMM>.yml` - migration from NNN to MMM version.
+- `migrations/<NNN>_to_<MMM>/tests/<case>.yml` - migration tests (state_before → migration → assert state_after).
+- The chain must be complete: migrations `1→2`, `2→3`, …, `(N-1)→N` - without gaps.
+- Forward-only in MVP (`down:` not supported, recovery via `state_history`).
 
-Миграция запускается явной операцией оператора (`keeper.incarnation.upgrade to_version=N`), не автоматически при apply сценария.
+Migration is triggered by an explicit operator operation (`keeper.incarnation.upgrade to_version=N`), not automatically by the apply script.
 
-## Валидация `soul-lint validate-service`
+## Validation `soul-lint validate-service`
 
-`soul-lint validate-service <path>` — статическая проверка корневого `service.yml` и связанных файлов. В MVP проверяется:
+`soul-lint validate-service <path>` - static check of root `service.yml` and related files. The MVP checks:
 
-- **`service.yml` манифест:**
-  - `name` regex `^[a-z][a-z0-9-]*$`, непустой.
-  - `description` — string (если есть).
+- **`service.yml` manifest:**
+  - `name` regex `^[a-z][a-z0-9-]*$`, non-empty.
+  - `description` — string (if any).
   - `state_schema_version` — integer ≥1.
-  - `state_schema` — валидный JSON Schema; `type: object` на корне.
-  - `destiny[]` / `modules[]` — каждая запись имеет `name` + `ref`, оба непустые. `name` matches kebab-case; для `modules:` — двухуровневая форма `<namespace>.<module>`. Опц. `destiny[].git` — override источника; в `modules[]` поле `git:` отвергается (`unknown_key`).
-  - Unknown top-level keys → `unknown_key` с hint про deprecated (`version` → ADR-007; `tasks`/`steps`/`scenarios` → auto-discover/destiny-level; `input` → scenario-level).
+  - `state_schema` - valid JSON Schema; `type: object` on the root.
+  - `destiny[]` / `modules[]` - each entry has `name` + `ref`, both non-empty. `name` matches kebab-case; for `modules:` - two-level form `<namespace>.<module>`. Opt. `destiny[].git` — source override; in `modules[]` the `git:` field is rejected (`unknown_key`).
+  - Unknown top-level keys → `unknown_key` with hint about deprecated (`version` → ADR-007; `tasks`/`steps`/`scenarios` → auto-discover/destiny-level; `input` → scenario-level).
 
-- **Соответствие `state_schema_version` и `migrations/`:**
-  - Если `state_schema_version == 1` — каталог `migrations/` не обязателен.
-  - Если `state_schema_version > 1` — должна быть полная цепочка миграций `1→2`, …, `(N-1)→N` без пропусков.
-  - Каждый файл `migrations/<NNN>_to_<MMM>.yml` валидируется отдельно (формат миграции — [`docs/migrations.md`](../migrations.md)).
+- **Correspondence between `state_schema_version` and `migrations/`:**
+  - If `state_schema_version == 1` - the `migrations/` directory is optional.
+  - If `state_schema_version > 1` - there must be a complete chain of migrations `1→2`, ..., `(N-1)→N` without gaps.
+  - Each `migrations/<NNN>_to_<MMM>.yml` file is validated separately (migration format is [`docs/migrations.md`](../migrations.md)).
 
-Расширенные проверки (cross-file refs: каждый `apply: destiny: <name>` в сценариях ссылается на запись в `service.yml → destiny:`; каждый `module: <ns>.<mod>.<state>` существует в `modules:` или в core-модулях; и т.д.) — отложены в M1.5 ([`docs/soul-lint.md`](../soul-lint.md)).
+Extended checks (cross-file refs: every `apply: destiny: <name>` in scripts references an entry in `service.yml → destiny:`; every `module: <ns>.<mod>.<state>` exists in `modules:` or core modules; etc.) - deferred in M1.5 ([`docs/soul-lint.md`](../soul-lint.md)).
 
 ## Open Q
 
-- **Strict-валидация `incarnation.state` против `state_schema` при apply сценария** — обязательная check перед каждым apply, или только при создании incarnation/upgrade? Связано с runtime-pipeline-ом Keeper-а (post-MVP).
-- **Дополнительные поля в `destiny[]` / `modules[]`** (`enabled`/`optional`/...) — `destiny[]` уже несёт опц. `git:` (override источника), прочие расширения через propose-and-wait.
-- **Cross-file refs валидация** (apply: destiny ⊆ service.yml destiny) — отложена в M1.5.
+- **Strict validation of `incarnation.state` against `state_schema` when applying script** - a mandatory check before each apply, or only when creating an incarnation/upgrade? Associated with Keeper's runtime pipeline (post-MVP).
+- **Additional fields in `destiny[]` / `modules[]`** (`enabled`/`optional`/...) - `destiny[]` already carries opt. `git:` (override source), other extensions via propose-and-wait.
+- **Cross-file refs validation** (apply: destiny ⊆ service.yml destiny) - postponed in M1.5.
 
-## См. также
+## See also
 
-- [`docs/destiny/manifest.md`](../destiny/manifest.md) — формат `destiny.yml`.
-- [`docs/destiny/concept.md`](../destiny/concept.md) — концепция destiny и Service-слой в общей картине.
-- [`docs/scenario/`](../scenario/README.md) — формат scenario.
-- [`docs/input.md`](../input.md) — стандарт `input:`-блока (для сценариев).
-- [`docs/migrations.md`](../migrations.md) — формат миграций.
-- [`docs/architecture.md → Service`](../architecture.md#service--структура-и-manifest) — архитектурный summary.
-- [ADR-007](../adr/0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте) — версионирование через git ref.
-- [ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) — граница scenario/destiny.
+- [`docs/destiny/manifest.md`](../destiny/manifest.md) - format `destiny.yml`.
+- [`docs/destiny/concept.md`](../destiny/concept.md) - the concept of destiny and the Service layer in the big picture.
+- [`docs/scenario/`](../scenario/README.md) — scenario format.
+- [`docs/input.md`](../input.md) - `input:` block standard (for scripts).
+- [`docs/migrations.md`](../migrations.md) - migration format.
+- [`docs/architecture.md → Service`](../architecture.md) - architectural summary.
+- [ADR-007](../adr/0007-versioning-git-ref.md) - versioning via git ref.
+- [ADR-009](../adr/0009-scenario-dsl.md) - scenario/destiny boundary.
 - [ADR-019](../adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl) — Migration DSL.

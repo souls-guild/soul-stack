@@ -1,29 +1,29 @@
-# Scenario — индекс
+# Scenario - index
 
-Документация по scenario — оркестрационному слою Soul Stack-а («как провести одну операцию над целым кластером»: `create`, `add_user`, `restart`, `add_replica`, …).
+Documentation for the scenario - the orchestration layer of the Soul Stack ("how to perform one operation on an entire cluster": `create`, `add_user`, `restart`, `add_replica`, …).
 
-Scenario — единица операции над [Incarnation](../architecture.md#incarnation--runtime-инстанс-сервиса). Папка `scenario/<name>/` в git-репо сервиса, точка входа `main.yml`. Версия — git ref service-репо ([ADR-007](../adr/0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте)).
+Scenario - unit of operation on [Incarnation](../architecture.md). Folder `scenario/<name>/` in the service git repo, entry point `main.yml`. Version - git ref service-repo ([ADR-007](../adr/0007-versioning-git-ref.md)).
 
-## С чего начать
+## Where to start
 
-| Документ | О чём |
+| Document | What about |
 |---|---|
-| [concept.md](concept.md) | Что такое scenario в новой модели, граница с destiny (рекомендация, не стена), declared-роль vs actual-роль, role-agnostic essence. |
-| [orchestration.md](orchestration.md) | **Нормативная спецификация** оркестрационного слоя: `on:`/`where:`-таргетинг, probe-идиома, двухуровневый резолв ресурсов, тесты сценария, barrier/state-commit инвариант. DSL-ядро задач — делегировано в [destiny/tasks.md](../destiny/tasks.md). |
-| [ADR-043 §7/§8](../adr/0043-voyage.md#adr-043-voyage--унифицированный-батчевый-прогон) | Политика state-commit при батчевом scenario-прогоне: **per-incarnation state-commit** (батч = N инкарнаций по Leg-ам, B1). Преемник удалённого Tide per-Surge state-commit. | Семантика commit-а БД при Voyage `kind=scenario`. |
+| [concept.md](concept.md) | What is a scenario in the new model, the boundary with destiny (a recommendation, not a wall), declared role vs actual role, role-agnostic essence. |
+| [orchestration.md](orchestration.md) | **Normative specification** orchestration layer: `on:`/`where:`-targeting, probe-idiom, two-level resource resolution, script tests, barrier/state-commit invariant. DSL task core - delegated to [destiny/tasks.md](../destiny/tasks.md). |
+| [ADR-043 §7/§8](../adr/0043-voyage.md) | State-commit policy for a batch scenario run: **per-incarnation state-commit** (batch = N incarnations by Legs, B1). Successor to the removed Tide per-Surge state-commit. | Semantics of database commit for Voyage `kind=scenario`. |
 
-## Связанные документы
+## Related Documents
 
-- [`docs/destiny/tasks.md`](../destiny/tasks.md) — **полная спецификация DSL-ядра задач** (`module`, `include`, `block`, `parallel`, `loop`, `register`, `onchanges`/`onfail`/`require`, `retry`, `timeout`, `changed_when`/`failed_when`, шаблонный контекст). Scenario наследует это ядро целиком; [orchestration.md](orchestration.md) описывает только дельту scenario поверх него.
+- [`docs/destiny/tasks.md`](../destiny/tasks.md) - **full specification of the DSL task core** (`module`, `include`, `block`, `parallel`, `loop`, `register`, `onchanges`/`onfail`/`require`, `retry`, `timeout`, `changed_when`/`failed_when`, template context). Scenario inherits this core entirely; [orchestration.md](orchestration.md) describes only the delta scenario on top of it.
 - [`docs/architecture.md`](../architecture.md):
-  - [ADR-008](../adr/0008-coven-stable-tags.md#adr-008-coven--только-стабильные-логические-теги) — Coven как стабильные логические теги (не роль).
-  - [ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) — scenario получает полную DSL задач destiny; граница с destiny — рекомендация.
-  - [Service — структура и manifest](../architecture.md#service--структура-и-manifest) — раскладка service-репо, где живёт `scenario/`.
-  - [Targeting и связь хостов](../architecture.md#targeting-и-связь-хостов) — `on:`/`where:`, контракт резолвера, probe как механизм волатильной роли.
-  - [Incarnation — runtime-инстанс сервиса](../architecture.md#incarnation--runtime-инстанс-сервиса) — над чем работает scenario, `state`/`status`/`error_locked`.
-- [`docs/destiny/concept.md`](../destiny/concept.md) — что такое destiny, чем отличается от scenario.
-- [`docs/destiny/testing.md`](../destiny/testing.md) — разграничение scenario-тестов, destiny-molecule и service-smoke.
-- [`docs/input.md`](../input.md) — **общий** стандарт формата `input:` (применяется к destiny, scenario и манифесту модуля).
-- [`docs/templating.md`](../templating.md) — спека шаблонизатора (ADR-010): CEL для всех scenario-выражений (`where:`/`when:`/`changed_when:`/`failed_when:`/`until:`, `params:`, `apply: input:`, `on:`-литералы), маркер `${ … }`, граница с Go text/template, footgun-ы `soulprint.where(...)` vs `soulprint.hosts.where(...)`.
-- [`docs/soul-lint.md`](../soul-lint.md) — статические проверки (в т.ч. backlog для scenario-специфики).
-- [`examples/service/redis/`](../../examples/service/redis/) — рабочий пример service-репо с раскладкой `scenario/` (create + day-2 `add_node`/`remove_node`/`reshard`/`restart`).
+  - [ADR-008](../adr/0008-coven-stable-tags.md) - Coven as stable boolean tags (not role).
+  - [ADR-009](../adr/0009-scenario-dsl.md) - scenario receives the full DSL of destiny tasks; border with destiny - recommendation.
+  - [Service - structure and manifest](../architecture.md) - layout of the service repo where `scenario/` lives.
+  - [Targeting and host communication](../architecture.md) - `on:`/`where:`, resolver contract, probe as a volatile role mechanism.
+  - [Incarnation - runtime service instance](../architecture.md) - what the scenario, `state`/`status`/`error_locked` is working on.
+- [`docs/destiny/concept.md`](../destiny/concept.md) - what is destiny, how does it differ from scenario.
+- [`docs/destiny/testing.md`](../destiny/testing.md) - differentiation between scenario tests, destiny-molecule and service-smoke.
+- [`docs/input.md`](../input.md) - **general** format standard for `input:` (applies to destiny, scenario and module manifest).
+- [`docs/templating.md`](../templating.md) — template engine spec (ADR-010): CEL for all scenario expressions (`where:`/`when:`/`changed_when:`/`failed_when:`/`until:`, `params:`, `apply: input:`, `on:`-literals), marker `${ … }`, border with Go text/template, footguns `soulprint.where(...)` vs `soulprint.hosts.where(...)`.
+- [`docs/soul-lint.md`](../soul-lint.md) - static checks (including backlog for scenario specifics).
+- [`examples/service/redis/`](../../examples/service/redis/) - working example of a service repo with layout `scenario/` (create + day-2 `add_node`/`remove_node`/`reshard`/`restart`).

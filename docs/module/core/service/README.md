@@ -1,128 +1,128 @@
 # core.service
 
-Управление сервисами OS (активность + автозапуск). **Soul-side**, статически
-встроен в `soul`-бинарь. Реализация — [`soul/internal/coremod/service/service.go`](../../../../soul/internal/coremod/service/service.go).
+Management of OS services (activity + autostart). **Soul-side**, static
+is built into the `soul` binary. Implementation - [`soul/internal/coremod/service/service.go`](../../../../soul/internal/coremod/service/service.go).
 
-Backend берётся из soulprint-факта `os.init_system` (**primary**, [ADR-018(b)](../../../adr/0018-soulprint-typed.md#adr-018-soulprint-typed-схема-mvp));
-**fallback** при пустом/unknown факте — рантайм-детект `util.DetectInitSystem`: **systemd**
+Backend is taken from the soulprint fact `os.init_system` (**primary**, [ADR-018(b)](../../../adr/0018-soulprint-typed.md));
+**fallback** for an empty/unknown fact - runtime detection `util.DetectInitSystem`: **systemd**
 (`systemctl --version`) → **openrc** (`rc-service --version`) → **sysv**
-(`service --version`), в этом порядке. systemd проверяется первым: `systemctl
---version` отрабатывает и на minimal-системах, где systemd установлен, но не PID 1
-(chroot/container) — модуль идёт в systemd-ветку. Если ни факт, ни детект не дали init —
-шаг падает (`no supported init system detected (systemd/openrc/sysv)`).
+(`service --version`), in that order. systemd is checked first: `systemctl
+--version` also works on minimal systems where systemd is installed, but not PID 1
+(chroot/container) - the module goes to the systemd branch. If neither the fact nor the detection was given init -
+step falls (`no supported init system detected (systemd/openrc/sysv)`).
 
 ## States
 
-| State | Назначение | Идемпотентность (когда `changed=true`) |
+| State | Destination | Idempotency (when `changed=true`) |
 |---|---|---|
-| `running` | Сервис активен. Опциональный param `enabled` (tri-state) одним шагом управляет автозапуском. | `changed=true`, если сервис был неактивен и запущен, ИЛИ если `enabled` задан и autostart-состояние пришлось изменить. Уже активен и (при `enabled`) autostart совпадает — `changed=false`. |
-| `stopped` | Сервис остановлен. | `changed=true`, если был активен и остановлен. Уже неактивен — `changed=false`. |
-| `restarted` | Безусловный restart. | **Всегда `changed=true`** — пользователь явно попросил рестарт (например после изменения конфига). Идемпотентности здесь нет намеренно. |
-| `enabled` | Автозапуск при загрузке системы (ortho к активности). | `changed=true`, если autostart был выключен и включён. Уже включён — `changed=false`. |
+| `running` | The service is active. The optional param `enabled` (tri-state) controls autorun in one step. | `changed=true` if the service was inactive and started, OR if `enabled` was set and the autostart state had to be changed. Already active and (with `enabled`) autostart matches - `changed=false`. |
+| `stopped` | The service has stopped. | `changed=true` if active and stopped. No longer active - `changed=false`. |
+| `restarted` | Unconditional restart. | **Always `changed=true`** - the user explicitly asked for a restart (for example, after changing the config). There is no idempotency here intentionally. |
+| `enabled` | Autostart when system boots (ortho to activity). | `changed=true` if autostart was disabled and enabled. Already enabled - `changed=false`. |
 
-Мутирующие states (`running` / `restarted` / `enabled`, **НЕ** `stopped`) перед своим
-action на systemd-backend выполняют `systemctl daemon-reload` — поведением управляет
-опциональный param [`daemon_reload`](#daemon_reload--перечитывание-unit-файлов) (см. ниже).
-Сам reload **не** влияет на `changed` шага.
+Mutating states (`running` / `restarted` / `enabled`, **NOT** `stopped`) before its
+action on systemd-backend execute `systemctl daemon-reload` - controls behavior
+optional param `daemon_reload` (see below).
+reload itself **doesn't** affect the `changed` step.
 
 ## running — params
 
-| Param | Тип | Required / default | Смысл |
+| Param | Type | Required/default | Meaning |
 |---|---|---|---|
-| `name` | string | required | Имя сервиса/юнита. |
-| `enabled` | bool | optional (tri-state) | Управление автозапуском **одним шагом** (параллель Ansible `service state=started enabled=yes`): **опущено** — autostart не трогаем (управляем только активностью); **`true`** — дополнительно `enable`; **`false`** — дополнительно `disable`. enable/disable идемпотентны (сверка через `is-enabled`). |
-| `daemon_reload` | string enum | optional, default `auto` | `auto` \| `always` \| `never`. Управляет `systemctl daemon-reload` перед start (systemd). См. [§ daemon_reload](#daemon_reload--перечитывание-unit-файлов). |
+| `name` | string | required | Service/unit name. |
+| `enabled` | bool | optional (tri-state) | Managing autostart **in one step** (Ansible parallel `service state=started enabled=yes`): **omitted** — do not touch autostart (we only control activity); **`true`** - additionally `enable`; **`false`** - additionally `disable`. enable/disable are idempotent (check via `is-enabled`). |
+| `daemon_reload` | string enum | optional, default `auto` | `auto` \| `always` \| `never`. Controls `systemctl daemon-reload` before start (systemd). See § daemon_reload. |
 
 ## stopped — params
 
-| Param | Тип | Required / default | Смысл |
+| Param | Type | Required/default | Meaning |
 |---|---|---|---|
-| `name` | string | required | Имя сервиса/юнита. |
+| `name` | string | required | Service/unit name. |
 
 ## restarted — params
 
-| Param | Тип | Required / default | Смысл |
+| Param | Type | Required/default | Meaning |
 |---|---|---|---|
-| `name` | string | required | Имя сервиса/юнита. (`enabled` для `restarted` не применяется — state только рестартит.) |
-| `daemon_reload` | string enum | optional, default `auto` | `auto` \| `always` \| `never`. Управляет `systemctl daemon-reload` перед restart (systemd). См. [§ daemon_reload](#daemon_reload--перечитывание-unit-файлов). |
+| `name` | string | required | Service/unit name. (`enabled` for `restarted` does not apply - state only restarts.) |
+| `daemon_reload` | string enum | optional, default `auto` | `auto` \| `always` \| `never`. Manages `systemctl daemon-reload` before restart (systemd). See § daemon_reload. |
 
 ## enabled — params
 
-| Param | Тип | Required / default | Смысл |
+| Param | Type | Required/default | Meaning |
 |---|---|---|---|
-| `name` | string | required | Имя сервиса/юнита. |
-| `daemon_reload` | string enum | optional, default `auto` | `auto` \| `always` \| `never`. Управляет `systemctl daemon-reload` перед enable (systemd). См. [§ daemon_reload](#daemon_reload--перечитывание-unit-файлов). |
+| `name` | string | required | Service/unit name. |
+| `daemon_reload` | string enum | optional, default `auto` | `auto` \| `always` \| `never`. Controls `systemctl daemon-reload` before enable (systemd). See § daemon_reload. |
 
-## daemon_reload — перечитывание unit-файлов
+## daemon_reload - rereading unit files
 
-Опциональный param на states `running` / `restarted` / `enabled` (на `stopped`
-**не** объявлен — там reload не нужен). Управляет тем, перечитает ли systemd unit-файлы
-(`systemctl daemon-reload`) **перед** мутирующим action.
+Optional param on states `running` / `restarted` / `enabled` (on `stopped`
+**not** declared - reload is not needed there). Controls whether systemd rereads unit files
+(`systemctl daemon-reload`) **before** mutating action.
 
-**Зачем.** systemd держит unit-определения в памяти. После того как unit-файл (или
-drop-in) на диске изменили — например `core.file.rendered` отрендерил новый
-`redis-server.service.d/hardening.conf` — старое определение в памяти ещё актуально,
-пока не сделан `daemon-reload`. Если в этот момент вызвать `systemctl restart`, systemd
-**тихо рестартует сервис со СТАРЫМ unit-определением** (команда отрабатывает с exit 0,
-лишь warning `Unit file changed on disk, recommend reloading`) — изменения unit-файла
-не применяются, и расхождение «на диске одно, в памяти другое» можно не заметить. Чтобы
-не приходилось вручную ставить `core.exec.run systemctl daemon-reload` перед каждым
-`restarted` (см. [прод-конвенции §3a](../../../destiny/production-conventions.md)),
-`core.service` делает reload сам.
+**Why.** systemd keeps unit definitions in memory. After the unit file (or
+drop-in) on the disk was changed - for example, `core.file.rendered` rendered a new one
+`redis-server.service.d/hardening.conf` - the old definition is still relevant in memory,
+`daemon-reload` has not yet been made. If you call `systemctl restart` at this point, systemd
+**quietly restarts the service with the OLD unit definition** (the command runs with exit 0,
+only warning `Unit file changed on disk, recommend reloading`) - unit file changes
+do not apply, and the discrepancy "on disk is one thing, in memory is different" may not be noticed. To
+you didn't have to manually put `core.exec.run systemctl daemon-reload` in front of each
+`restarted` (see [conventions §3a](../../../destiny/production-conventions.md)),
+`core.service` does the reload itself.
 
-**Значения** (`string`, closed-set; неизвестное значение отвергается на Validate, не молча):
+**Values** (`string`, closed-set; unknown value rejected on Validate, not silent):
 
-| Значение | Поведение (systemd-backend) |
+| Meaning | Behavior (systemd-backend) |
 |---|---|
-| `auto` (**default**) | Gated по systemd-флагу: модуль читает `systemctl show <unit> --property=NeedDaemonReload --value`; если `yes` — делает `systemctl daemon-reload`, иначе ничего. Идемпотентно: reload только при реальном рассинхроне unit-файла с загруженным определением. |
-| `always` | `systemctl daemon-reload` безусловно перед action. |
-| `never` | Явный opt-out — reload не делается никогда. |
+| `auto` (**default**) | Gated by systemd flag: module reads `systemctl show <unit> --property=NeedDaemonReload --value`; if `yes` - does `systemctl daemon-reload`, otherwise nothing. Idempotent: reload only when the unit file is actually out of sync with the loaded definition. |
+| `always` | `systemctl daemon-reload` unconditionally before action. |
+| `never` | Explicit opt-out - reload is never done. |
 
-**Граничные случаи:**
+**Edge cases:**
 
-- **Первый install нового unit-файла** → `NeedDaemonReload=no` → при `auto` reload
-  **не** выполняется (это корректно: systemd подхватит ещё не загруженное определение
-  на самом `start`). reload нужен именно при *изменении* уже загруженного unit-а.
-- **non-systemd init** (`openrc` / `sysv` / launchd) — daemon-reload **no-op** при любом
-  значении param: у этих init-систем нет аналога `daemon-reload`.
-- **reload НЕ влияет на `changed` шага.** `changed` остаётся функцией только
-  start/restart/enable (для `restarted` — всегда `true`). reload — это побочное условие
-  применения, не самостоятельное изменение состояния сервиса. Факт реально выполненного
-  reload отражается **только** диагностическим output-полем `reloaded: true` (см.
+- **First install of a new unit file** → `NeedDaemonReload=no` → with `auto` reload
+**not** executed (this is correct: systemd will pick up the definition that has not yet been loaded
+on `start` itself). reload is needed precisely when *changing* an already loaded unit.
+- **non-systemd init** (`openrc` / `sysv` / launchd) - daemon-reload **no-op** for any
+param value: these init systems do not have an equivalent to `daemon-reload`.
+- **reload does NOT affect the `changed` step.** `changed` remains a function only
+start/restart/enable (for `restarted` - always `true`). reload is a side condition
+applications, not independent change of service state. The fact that it was actually accomplished
+reload is reflected **only** by the diagnostic output field `reloaded: true` (see
   [Output / register](#output--register)).
 
-Existing-задачи без `daemon_reload` получают `auto` — additive и обратно совместимо.
+Existing tasks without `daemon_reload` receive `auto` - additive and backwards compatible.
 
 ## Capabilities / side-effects
 
-- **Требует root** (`run_as_root`): start/stop/restart/enable/disable через
-  init-систему.
-- **Выполняет подпроцессы** (`exec_subprocess`): детект init
-  (`systemctl`/`rc-service`/`service` `--version`), проверки состояния
+- **Requires root** (`run_as_root`): start/stop/restart/enable/disable via
+init system.
+- **Executes subprocesses** (`exec_subprocess`): detect init
+(`systemctl`/`rc-service`/`service` `--version`), status checks
   (`is-active`/`is-enabled`, `rc-service status`, `rc-update show`, `chkconfig
   --list`), daemon-reload (`systemctl show <unit> --property=NeedDaemonReload
-  --value` при `auto`, затем `systemctl daemon-reload`) и действия
+--value` with `auto`, then `systemctl daemon-reload`) and actions
   (`systemctl start|stop|restart|enable|disable`, `rc-service`/`rc-update`,
   `service`/`chkconfig`).
-- **Меняет систему:** активность сервиса и/или его autostart.
+- **Changes the system:** service activity and/or its autostart.
 
 ## Output / register
 
-`running` отдаёт `{ name, active: true }` (+ `enabled: <bool>`, если param
-`enabled` был задан). `stopped` — `{ name, active: false }`. `restarted` —
+`running` returns `{ name, active: true }` (+ `enabled: <bool>` if param
+`enabled` was specified). `stopped` - `{ name, active: false }`. `restarted` —
 `{ name, active: true }`. `enabled` — `{ name, enabled: true }`.
 
-Если на этом шаге реально выполнился `daemon-reload` (см.
-[§ daemon_reload](#daemon_reload--перечитывание-unit-файлов)), в output добавляется
-диагностическое поле `reloaded: true`. Поле появляется **только** при фактически
-выполненном reload (на `stopped`, на non-systemd, при `never` и при `auto` без
-`NeedDaemonReload` его нет) и предназначено для диагностики — на `changed` шага оно
-не влияет.
+If `daemon-reload` was actually executed at this step (see.
+§ daemon_reload), is added to output
+diagnostic field `reloaded: true`. The field appears **only** when actually
+performed reload (on `stopped`, on non-systemd, with `never` and with `auto` without
+`NeedDaemonReload` it is not) and is intended for diagnostics - at `changed` step it
+has no effect.
 
-## Примеры
+## Examples
 
-`running` + `enabled` одним шагом, затем реактивный `restarted` через `onchanges`
-на изменение конфига/unit-а:
+`running` + `enabled` one step, then reactive `restarted` through `onchanges`
+to change the config/unit:
 
 ```yaml
 - name: Ensure node_exporter is running and enabled at boot
@@ -139,14 +139,14 @@ Existing-задачи без `daemon_reload` получают `auto` — additiv
     name: node_exporter
 ```
 
-(дидактический срез связки `running` + `onchanges`-`restarted`; аналогичная связка для redis-server — в [`examples/destiny/redis/tasks/server.yml`](../../../../examples/destiny/redis/tasks/server.yml))
+(didactic summary of the link `running` + `onchanges`-`restarted`; a similar link for redis-server is in [`examples/destiny/redis/tasks/server.yml`](../../../../examples/destiny/redis/tasks/server.yml))
 
-`onchanges:` принимает **список** register-ов — рестарт триггерится, если изменился **хотя бы один** из них. Так демон перезапускается и на изменение unit-файла, и на апгрейд бинаря:
+`onchanges:` accepts a **list** of registers - a restart is triggered if **at least one** of them has changed. So the daemon is restarted to both change the unit file and upgrade the binary:
 
 ```yaml
-# node_exporter_unit — register render-задачи unit-а;
-# node_exporter_bin  — register version-aware install-задачи (core.cmd.shell с unless).
-# Апгрейд версии (install changed) рестартит сервис так же, как правка unit-а.
+# node_exporter_unit — register unit render tasks;
+# node_exporter_bin — register version-aware install tasks (core.cmd.shell with unless).
+# Upgrading the version (install changed) will restart the service in the same way as editing a unit.
 - name: Restart node_exporter because unit or binary changed
   module: core.service.restarted
   onchanges: [node_exporter_unit, node_exporter_bin]
@@ -155,14 +155,14 @@ Existing-задачи без `daemon_reload` получают `auto` — additiv
     name: node_exporter
 ```
 
-(из [`examples/destiny/node-exporter/tasks/service.yml`](../../../../examples/destiny/node-exporter/tasks/service.yml) — фактический рестарт-шаг эталона объединяет оба register-а в один `onchanges`-список)
+(from [`examples/destiny/node-exporter/tasks/service.yml`](../../../../examples/destiny/node-exporter/tasks/service.yml) - the actual restart step of the standard combines both registers into one `onchanges` list)
 
-В обоих примерах `daemon_reload` не задан → действует `auto`: если `onchanges`-триггер
-был изменением unit-файла, systemd увидит `NeedDaemonReload=yes` и модуль сам перечитает
-unit перед рестартом. Отдельный шаг `core.exec.run systemctl daemon-reload` перед
-`restarted` для этого больше не нужен (см.
-[прод-конвенции §3a](../../../destiny/production-conventions.md)). Безусловный reload —
-`daemon_reload: always`; отключить — `daemon_reload: never`:
+In both examples `daemon_reload` is not set → `auto` is valid: if `onchanges` is a trigger
+was a change to the unit file, systemd will see `NeedDaemonReload=yes` and the module will re-read it
+unit before restart. Separate step `core.exec.run systemctl daemon-reload` before
+`restarted` is no longer needed for this (see
+[convention §3a](../../../destiny/production-conventions.md)). Unconditional reload -
+`daemon_reload: always`; disable - `daemon_reload: never`:
 
 ```yaml
 - name: Restart redis after drop-in change (force daemon-reload)
@@ -173,48 +173,48 @@ unit перед рестартом. Отдельный шаг `core.exec.run sys
     daemon_reload: always
 ```
 
-## Безопасность
+## Security
 
-- **Модуль не исполняет произвольный код, но изменение состояния сервиса —
-  реальный side-effect, который может уронить доступность хоста.** `core.service`
-  лишь вызывает команды init-системы
-  (`systemctl start|stop|restart|enable|disable` и эквиваленты OpenRC/sysv,
+- **The module does not execute arbitrary code, but changing the state of the service is
+real side-effect that can reduce host availability.** `core.service`
+only calls init system commands
+(`systemctl start|stop|restart|enable|disable` and OpenRC/sysv equivalents,
   [`svcAction`/`enable`/`disable`](../../../../soul/internal/coremod/service/service.go))
-  — он **не** запускает shell и не передаёт произвольную строку. Однако `stopped`
-  останавливает сервис, а `restarted` **всегда** рестартит (намеренно не
-  идемпотентен): на критичном сервисе это управляемый, но реальный обрыв
-  обслуживания. Имя `name` должно приходить от автора Destiny/scenario — остановка
-  не того юнита из недоверенного `name` = отказ в обслуживании.
-- **Что именно стартует — определяет unit-файл, а не модуль.** `running`/`enabled`
-  запускают и ставят в автозапуск юнит с именем `name`; **какой код** при этом
-  исполнится, задаётся unit-файлом сервиса на хосте (его `ExecStart` и т.п.).
-  Связка с [`core.file`](../file/README.md) опасна: если автозапускаемый юнит или
-  бинарь под ним пишется недоверенным `core.file`-шагом, то `core.service.enabled`
-  закрепляет его исполнение при каждой загрузке. Контролируйте источник unit-файла
-  ровно как источник любого исполняемого артефакта.
-- **`enabled` ortho активности.** Параметр/state `enabled` управляет автозапуском
-  и идемпотентен (сверка через `is-enabled`), но `enable` сам по себе сервис не
-  стартует, а `disable` не останавливает уже запущенный — это разные оси. Не
-  полагайтесь на `disabled` как на гарантию, что сервис сейчас не работает
-  (нужен `stopped`).
-- **Привилегии.** Манифест
-  [`service.yaml`](../../../../shared/coremanifest/service.yaml) объявляет
+- it **doesn't** launch a shell and doesn't pass an arbitrary string. However, `stopped`
+stops the service, and `restarted` **always** restarts (not intentionally
+idempotent): on a critical service this is a manageable but real breakage
+service. The name `name` must come from the author of Destiny/scenario - stop
+wrong unit from untrusted `name` = denial of service.
+- **What exactly starts is determined by the unit file, not the module.** `running`/`enabled`
+launch and put into autorun a unit with the name `name`; **what is the code** for this
+will be executed, specified by the service unit file on the host (its `ExecStart`, etc.).
+Linking with [`core.file`](../file/README.md) is dangerous: if the autostart unit or
+the binary under it is written in an untrusted `core.file` step, then `core.service.enabled`
+pins its execution on every boot. Control the source of the unit file
+exactly like the source of any executable artifact.
+- **`enabled` ortho activity.** The /state `enabled` parameter controls autorun
+and is idempotent (reconciliation via `is-enabled`), but `enable` itself is not a service
+starts, but `disable` does not stop an already running one - these are different axes. Not
+rely on `disabled` as a guarantee that the service is currently down
+(needs `stopped`).
+- **Privileges.** Manifest
+[`service.yaml`](../../../../shared/coremanifest/service.yaml) announces
   `required_capabilities: [run_as_root, exec_subprocess]` —
-  start/stop/restart/enable/disable через init-систему всегда требуют root и
-  запуска подпроцессов (`systemctl`/`rc-service`/`service`/`rc-update`/`chkconfig`,
-  плюс детект init и проверки `is-active`/`is-enabled`). Это **декларация** для
-  статической сверки `soul-lint` с `allowed_capabilities` хоста (см.
+start/stop/restart/enable/disable via init system always require root and
+launch subprocesses (`systemctl`/`rc-service`/`service`/`rc-update`/`chkconfig`,
+plus init detection and `is-active`/`is-enabled` checks). This is a **declaration** for
+static reconciliation of `soul-lint` with `allowed_capabilities` host (see
   [docs/keeper/plugins.md →
-  required_capabilities](../../../keeper/plugins.md#required_capabilities-таблица)),
-  а **не** runtime-повышение прав: операция исполняется с привилегиями процесса
-  `soul`-агента (под root), без повышения прав внутри модуля.
+required_capabilities](../../../keeper/plugins.md)),
+and **not** runtime elevation: the operation is executed with the privileges of the process
+`soul` agent (as root), without elevation of rights inside the module.
 
-## См. также
+## See also
 
-- [README.md](../../README.md) — каталог core-модулей.
-- [core/file/README.md](../file/README.md) — `core.file.rendered` (типичный источник `onchanges:` для `restarted`).
-- [soul/modules.md](../../../soul/modules.md) — хостовая сторона модулей и кеш.
-- [naming-rules.md → Модули Destiny](../../../naming-rules.md#модули-destiny) — словарь имён.
-- [ADR-015](../../../adr/0015-core-modules-mvp.md#adr-015-core-модули-mvp-точный-список) — список core MVP; **Amendment 2026-06-18** — централизованный daemon-reload (`daemon_reload`).
-- [destiny/production-conventions.md §3a](../../../destiny/production-conventions.md) — ручной daemon-reload-паттерн (теперь покрыт встроенным `auto`).
-- [ADR-018(b)](../../../adr/0018-soulprint-typed.md#adr-018-soulprint-typed-схема-mvp) — `SoulprintFacts.os.init_system` как **primary** источник backend-а; рантайм-детект — fallback.
+- [README.md](../../README.md) - directory of core modules.
+- [core/file/README.md](../file/README.md) - `core.file.rendered` (typical source `onchanges:` for `restarted`).
+- [soul/modules.md](../../../soul/modules.md) - host side of modules and cache.
+- [naming-rules.md → Destiny Modules](../../../naming-rules.md) - a dictionary of names.
+- [ADR-015](../../../adr/0015-core-modules-mvp.md) - list of core MVPs; **Amendment 2026-06-18** - centralized daemon-reload (`daemon_reload`).
+- [destiny/production-conventions.md §3a](../../../destiny/production-conventions.md) - manual daemon-reload pattern (now covered by built-in `auto`).
+- [ADR-018(b)](../../../adr/0018-soulprint-typed.md) — `SoulprintFacts.os.init_system` as **primary** backend source; runtime detection - fallback.

@@ -1,57 +1,57 @@
 # core.git
 
-Клонирование и обновление git-репозитория на хосте. **Soul-side**, статически
-встроен в `soul`-бинарь. Реализация — [`soul/internal/coremod/git/git.go`](../../../../soul/internal/coremod/git/git.go).
+Cloning and updating the git repository on the host. **Soul-side**, static
+is built into the `soul` binary. Implementation - [`soul/internal/coremod/git/git.go`](../../../../soul/internal/coremod/git/git.go).
 
-Вызывает системный `git` как подпроцесс (clone / pull / rev-parse); собственного
-git-клиента модуль не содержит. MVP сознательно **не** покрывает смену remote URL,
-submodule, lfs и sparse-checkout — слишком много развилок для первой версии.
+Calls system `git` as a subprocess (clone / pull / rev-parse); own
+the module does not contain a git client. MVP deliberately **doesn't** cover remote URL changes,
+submodule, lfs and sparse-checkout - too many forks for the first version.
 
 ## States
 
-| State | Назначение | Идемпотентность (когда `changed=true`) |
+| State | Destination | Idempotency (when `changed=true`) |
 |---|---|---|
-| `cloned` | По пути `path` лежит git-репо. | `changed=true`, если `path/.git` отсутствовал и репозиторий был склонирован. Если `path/.git` уже есть — `changed=false` (содержимое не трогается, новый pull не выполняется). |
-| `pulled` | По пути `path` лежит git-репо, подтянутый до remote (`git pull --ff-only`). | Если `path/.git` отсутствует — clone, `changed=true`. Если репо есть — `git pull --ff-only`; `changed=true` только когда `HEAD` сдвинулся (сверка `rev-parse HEAD` до и после). |
+| `cloned` | There is a git repo along the path `path`. | `changed=true` if `path/.git` was missing and the repository was cloned. If `path/.git` already exists - `changed=false` (the contents are not touched, a new pull is not performed). |
+| `pulled` | Along the path `path` there is a git repo, pulled up to remote (`git pull --ff-only`). | If `path/.git` is missing, clone, `changed=true`. If there is a repo - `git pull --ff-only`; `changed=true` only when `HEAD` has moved (checking `rev-parse HEAD` before and after). |
 
 ## cloned — params
 
-| Param | Тип | Required / default | Смысл |
+| Param | Type | Required/default | Meaning |
 |---|---|---|---|
-| `repo` | string | required | URL/адрес репозитория. Передаётся в `git clone` после `--` (репо, начинающийся с `-`, не распарсится как опция — argument-injection guard, security). |
-| `path` | string | required | Целевой каталог клона. Наличие `path/.git` — критерий идемпотентности. |
-| `branch` | string | optional (default `main`) | Ветка для `--branch`. Если не задан — `main`. |
-| `depth` | int | optional | Глубина shallow-клона (`--depth`). Применяется только при `depth > 0`; не задан → полный клон. |
+| `repo` | string | required | Repository URL/address. Passed to `git clone` after `--` (repo starting with `-` will not be parsed as an option - argument-injection guard, security). |
+| `path` | string | required | Clone target directory. The presence of `path/.git` is a criterion for idempotency. |
+| `branch` | string | optional (default `main`) | Branch for `--branch`. If not specified - `main`. |
+| `depth` | int | optional | Shallow clone depth (`--depth`). Applies only to `depth > 0`; not specified → full clone. |
 
 ## pulled — params
 
-| Param | Тип | Required / default | Смысл |
+| Param | Type | Required/default | Meaning |
 |---|---|---|---|
-| `repo` | string | required | URL/адрес репозитория. Используется при clone-if-missing (тот же `--`-guard). |
-| `path` | string | required | Каталог репо. Если `path/.git` отсутствует — сначала clone, затем семантика «обновлено». |
-| `branch` | string | optional (default `main`) | Ветка для clone-if-missing. На сам `git pull --ff-only` не передаётся. |
-| `depth` | int | optional | Глубина shallow-клона при clone-if-missing (`--depth`, только при `depth > 0`). |
+| `repo` | string | required | Repository URL/address. Used for clone-if-missing (same `--`-guard). |
+| `path` | string | required | Repo directory. If `path/.git` is missing, clone first, then the "updated" semantics. |
+| `branch` | string | optional (default `main`) | Branch for clone-if-missing. `git pull --ff-only` itself is not transmitted. |
+| `depth` | int | optional | Shallow clone depth with clone-if-missing (`--depth`, only with `depth > 0`). |
 
 ## Capabilities / side-effects
 
-- **Выполняет подпроцессы:** `git clone` / `git pull --ff-only` / `git rev-parse HEAD`.
-- **Меняет файловую систему:** создаёт/обновляет каталог `path`. Для системных
-  путей требует соответствующих прав.
-- **Сетевой доступ:** clone/pull ходят на remote `repo`. Транспорт и аутентификация —
-  на стороне системного `git` (ssh-agent, credential helper, `~/.netrc` и т.п.);
-  модуль их не настраивает.
-- **`pull` — только fast-forward** (`--ff-only`): расходящаяся локальная история не
-  мёржится силой, шаг падает (защита от потери локальных коммитов на хосте).
+- **Executes subprocesses:** `git clone` / `git pull --ff-only` / `git rev-parse HEAD`.
+- **Changes the file system:** creates/updates the `path` directory. For system
+paths requires appropriate permissions.
+- **Network access:** clone/pull go to remote `repo`. Transport and Authentication -
+on the system side `git` (ssh-agent, credential helper, `~/.netrc`, etc.);
+the module does not configure them.
+- **`pull` - fast-forward only** (`--ff-only`): divergent local history is not
+blinks with force, the step drops (protection against the loss of local commits on the host).
 
 ## Output / register
 
-`cloned`/`pulled` отдают `{ path, cloned: true, head }`, где `head` — текущий
-`HEAD` (sha из `git rev-parse HEAD`). `head` — best-effort: если `rev-parse` не
-отдал sha, поле пустое (на основной flow это не влияет).
+`cloned`/`pulled` give `{ path, cloned: true, head }`, where `head` is the current
+`HEAD` (sha from `git rev-parse HEAD`). `head` — best-effort: if `rev-parse` is not
+gave sha, the field is empty (this does not affect the main flow).
 
-## Пример
+## Example
 
-`cloned` — выложить репозиторий на хост (минимальный пример):
+`cloned` — upload the repository to the host (minimal example):
 
 ```yaml
 - name: Clone deploy repo
@@ -63,8 +63,8 @@ submodule, lfs и sparse-checkout — слишком много развилок
     depth: 1
 ```
 
-`pulled` — держать рабочую копию синхронной с remote; `register` — чтобы
-рестартить сервис только при сдвиге `HEAD`:
+`pulled` - keep the working copy synchronous with the remote; `register` - to
+restart the service only when shifting `HEAD`:
 
 ```yaml
 - name: Keep deploy repo up to date
@@ -76,34 +76,34 @@ submodule, lfs и sparse-checkout — слишком много развилок
     branch: main
 ```
 
-(в [`examples/`](../../../../examples/) задач с `core.git` пока нет — пример минимальный.)
+(in [`examples/`](../../../../examples/) there are no tasks with `core.git` yet - the example is minimal.)
 
-## Безопасность
+## Security
 
-- **`clone`/`pull` исполняют код из репозитория — главный риск модуля.** Системный
-  `git` при checkout прогоняет хуки репозитория (`.git/hooks/*`: `post-checkout`,
-  `post-merge` и т.п.), а transport-параметры могут запустить произвольную команду
-  на хосте. Модуль вызывает `git clone` / `git pull --ff-only` через подпроцесс
-  ([`runClone` / `runPull`](../../../../soul/internal/coremod/git/git.go)) и **не**
-  отключает хуки и не песочит git. Следствие: **`repo` обязан указывать на
-  доверенный источник** — клонирование недоверенного репозитория = исполнение
-  кода его автора с привилегиями процесса `soul`. Аутентификация и transport
-  (ssh-agent, credential helper, `~/.netrc`) — на стороне системного `git`, модуль
-  их не настраивает.
-- **Argument-injection guard `--` есть, но прикрывает только `repo`/`path`.**
-  Перед позиционными аргументами стоит разделитель `--`
+- **`clone`/`pull` execute code from the repository - the main risk of the module.** System
+`git` runs repository hooks during checkout (`.git/hooks/*`: `post-checkout`,
+`post-merge`, etc.), and transport parameters can run an arbitrary command
+on the host. The module calls `git clone` / `git pull --ff-only` through a subprocess
+([`runClone` / `runPull`](../../../../soul/internal/coremod/git/git.go)) and **not**
+disables hooks and does not sand git. Consequence: **`repo` must point to
+trusted source** - clone untrusted repository = execute
+the code of its author with the privileges of the process `soul`. Authentication and transport
+(ssh-agent, credential helper, `~/.netrc`) - on the system side `git`, module
+does not configure them.
+- **Argument-injection guard `--` exists, but only covers `repo`/`path`.**
+Positional arguments are preceded by the delimiter `--`
   (`args = append(args, "--", repo, path)`,
-  [`runClone`](../../../../soul/internal/coremod/git/git.go)): `repo`, начинающийся
-  с `-` (например `--upload-pack=<cmd>`), не распарсится git как опция. Однако
-  `branch` подставляется в `--branch <branch>` **до** `--` и без валидации
-  (`OptStringParam`, default `main`): недоверенное значение в `branch` может
-  поменять смысл вызова. Держите `branch` под контролем автора Destiny/scenario,
-  как и `repo`.
-- **Опасно vs. правильно.** Подстановка недоверенного источника в `repo`:
+[`runClone`](../../../../soul/internal/coremod/git/git.go)): `repo`, starting
+with `-` (for example `--upload-pack=<cmd>`), will not be parsed by git as an option. However
+`branch` is substituted into `--branch <branch>` **before** `--` and without validation
+(`OptStringParam`, default `main`): The untrusted value in `branch` may
+change the meaning of the call. Keep `branch` under control by Destiny/scenario author,
+like `repo`.
+- **Dangerous vs. correct.** Substitution of untrusted source in `repo`:
 
   ```yaml
-  # ОПАСНО: repo из внешнего ввода → клонируется чужой репозиторий, его
-  # .git/hooks исполнятся при checkout под привилегиями soul-агента.
+  # DANGER: repo from external input → someone else's repository is cloned, its
+  # .git/hooks will be executed during checkout under the privileges of a soul agent.
   - name: Clone user-supplied repo
     module: core.git.cloned
     params:
@@ -112,8 +112,8 @@ submodule, lfs и sparse-checkout — слишком много развилок
   ```
 
   ```yaml
-  # БЕЗОПАСНО: repo — фиксированный доверенный адрес, автор Destiny отвечает
-  # за его содержимое; branch тоже литерал.
+  # SECURE: repo is a fixed trusted address, Destiny author replies
+  # for its content; branch is also a literal.
   - name: Clone vetted deploy repo
     module: core.git.cloned
     params:
@@ -122,22 +122,22 @@ submodule, lfs и sparse-checkout — слишком много развилок
       branch: main
   ```
 
-- **Привилегии.** Модуль **не** объявляет `run_as_root` — в манифесте
-  ([`git.yaml`](../../../../shared/coremanifest/git.yaml)) только
-  [`exec_subprocess`](../../../naming-rules.md#required_capabilities-enum) (вызов
-  `git`) и [`network_outbound`](../../../naming-rules.md#required_capabilities-enum)
-  (clone/pull ходят на remote). Файловая запись и сам `git` идут с привилегиями
-  процесса `soul`-агента; запись в системные пути (`/opt/...`, `/etc/...`) на
-  практике требует root — тогда хуки недоверенного репо исполнятся под root, что
-  усиливает цену доверия к `repo`, а не смягчает её.
-- **`pull` — только fast-forward** (`--ff-only`,
-  [`runPull`](../../../../soul/internal/coremod/git/git.go)): расходящаяся локальная
-  история не мёржится силой, шаг падает. Это защита от тихой потери локальных
-  коммитов на хосте, а не security-граница против недоверенного remote.
+- **Privileges.** The module **doesn't** declare `run_as_root` - in the manifest
+([`git.yaml`](../../../../shared/coremanifest/git.yaml)) only
+[`exec_subprocess`](../../../naming-rules.md#required_capabilities-enum) (call
+`git`) and [`network_outbound`](../../../naming-rules.md#required_capabilities-enum)
+(clone/pull go to remote). The file entry and `git` itself come with privileges
+process `soul`-agent; writing to system paths (`/opt/...`, `/etc/...`) on
+practice requires root - then the hooks of the untrusted repo will be executed under root, which
+amplifies the trust cost of `repo` rather than softening it.
+- **`pull` - fast-forward only** (`--ff-only`,
+[`runPull`](../../../../soul/internal/coremod/git/git.go)): divergent local
+history does not freeze with strength, the pace falls. This is protection against silent loss of local
+commits on the host, not a security boundary against an untrusted remote.
 
-## См. также
+## See also
 
-- [README.md](../../README.md) — каталог core-модулей.
-- [soul/modules.md](../../../soul/modules.md) — хостовая сторона модулей и кеш.
-- [naming-rules.md → Модули Destiny](../../../naming-rules.md#модули-destiny) — словарь имён.
-- [ADR-015](../../../adr/0015-core-modules-mvp.md#adr-015-core-модули-mvp-точный-список) — список core MVP.
+- [README.md](../../README.md) - directory of core modules.
+- [soul/modules.md](../../../soul/modules.md) - host side of modules and cache.
+- [naming-rules.md → Destiny Modules](../../../naming-rules.md) - a dictionary of names.
+- [ADR-015](../../../adr/0015-core-modules-mvp.md) - list of core MVPs.

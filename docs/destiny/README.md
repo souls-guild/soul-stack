@@ -1,29 +1,29 @@
-# Destiny — индекс
+# Destiny - index
 
-Документация по destiny — атомарному декларативному кирпичику Soul Stack-а («как привести один хост в нужное состояние»).
+Documentation on destiny - the atomic declarative brick of the Soul Stack ("how to bring one host to the desired state").
 
-## С чего начать
+## Where to start
 
-| Документ | О чём |
+| Document | What about |
 |---|---|
-| [concept.md](concept.md) | Что такое destiny, как соотносится с service / scenario / module, чем отличается от соседей. |
-| [manifest.md](manifest.md) | Раскладка папки destiny-репо, формат `destiny.yml` (только манифест), правила про `version:` и `tasks:`. |
-| [tasks.md](tasks.md) | **Полная спецификация** формата задач: все блоки (`module`, `include`, `parallel`, `loop`, `register`, `onchanges`, `onfail`, `require`, `retry`, `timeout`, …), соглашения об именовании, шаблонный контекст. Источник правды для имплементации DSL. |
-| [input.md](input.md) | `input:`-контракт destiny: где валидируется, как используется, соотношение с общим стандартом [`docs/input.md`](../input.md). |
-| [output.md](output.md) | `output:`-контракт destiny (top-level): симметричный `input:` блок-декларация того, какой результат destiny публикует caller-у; читается из scenario через `register:` на applier-задаче. |
-| [vars.md](vars.md) | `vars.yml` — destiny-локалы. Жёсткие значения автора destiny; снаружи не переопределяются; могут ссылаться на `input.*`. |
-| [testing.md](testing.md) | Molecule-style тестирование destiny на эфемерном стенде; раскладка `tests/<case>/`; open Q вокруг coverage-инструмента. |
-| [production-conventions.md](production-conventions.md) | Чек-лист «прод-grade destiny»: passthrough-флаги, гибрид-правило сервис-аккаунта (DynamicUser vs ручной uid), обязательный systemd-hardening, supply-chain, изоляция. Эталон — `node-exporter` (stateful-аккаунт + supply-chain + привилегированные textfile-коллекторы). |
+| [concept.md](concept.md) | What is destiny, how does it relate to service / scenario / module, how does it differ from its neighbors. |
+| [manifest.md](manifest.md) | Destiny-repo folder layout, format `destiny.yml` (manifest only), rules about `version:` and `tasks:`. |
+| [tasks.md](tasks.md) | **Full specification** of the task format: all blocks (`module`, `include`, `parallel`, `loop`, `register`, `onchanges`, `onfail`, `require`, `retry`, `timeout`, …), agreements about naming, template context. Source of truth for DSL implementation. |
+| [input.md](input.md) | `input:`-destiny contract: where it is validated, how it is used, the relationship with the general standard [`docs/input.md`](../input.md). |
+| [output.md](output.md) | `output:`-destiny contract (top-level): symmetrical `input:` block declaration of what result destiny publishes to the caller; read from scenario via `register:` on the applier task. |
+| [vars.md](vars.md) | `vars.yml` - destiny locales. Hard meanings of the author destiny; outside are not overridden; may refer to `input.*`. |
+| [testing.md](testing.md) | Molecule-style testing of destiny on an ephemeral stand; layout `tests/<case>/`; open Q around the coverage tool. |
+| [production-conventions.md](production-conventions.md) | "Product-grade destiny" checklist: passthrough flags, hybrid service account rule (DynamicUser vs manual uid), mandatory systemd-hardening, supply-chain, isolation. The standard is `node-exporter` (stateful account + supply-chain + privileged textfile collectors). |
 
-## Связанные документы
+## Related Documents
 
-- [`docs/scenario/`](../scenario/README.md) — слой над destiny: оркестрация, `on:`/`where:`-таргетинг, `apply: { destiny: … }`. После [ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) scenario наследует DSL-ядро задач из [tasks.md](tasks.md); граница destiny/scenario — рекомендация.
-- [`docs/architecture.md`](../architecture.md) — слои выше и ниже destiny:
-  - [Адресация модулей](../architecture.md#адресация-модулей), [Манифест модуля](../architecture.md#манифест-модуля) — слой под destiny.
-  - [Service — структура и manifest](../architecture.md#service--структура-и-manifest), [Targeting и связь хостов](../architecture.md#targeting-и-связь-хостов) — слой над destiny.
-  - [ADR-007](../adr/0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте) — почему в `destiny.yml` нет поля `version:`.
-- [`docs/input.md`](../input.md) — **общий** стандарт формата `input:` (применяется к destiny, scenario и манифесту модуля).
-- [`docs/templating.md`](../templating.md) — спека шаблонизатора (ADR-010): CEL для выражений в задачах destiny, Go text/template для `templates/*.tmpl`, маркер `${ … }`, `core.file.rendered` как рендер-модуль.
-- [`docs/soul-lint.md`](../soul-lint.md) — статические проверки destiny на этапе CI/IDE.
-- [`docs/module-collections.md`](../module-collections.md) — namespace-префикс в адресации модулей.
-- [`examples/destiny/redis/`](../../examples/destiny/redis/) — рабочий пример полной раскладки.
+- [`docs/scenario/`](../scenario/README.md) - layer above destiny: orchestration, `on:`/`where:`-targeting, `apply: { destiny: … }`. After [ADR-009](../adr/0009-scenario-dsl.md), the scenario inherits the task DSL core from [tasks.md](tasks.md); destiny/scenario boundary - recommendation.
+- [`docs/architecture.md`](../architecture.md) - layers above and below destiny:
+  - [Addressing modules](../architecture.md), [Module manifest](../architecture.md) - layer under destiny.
+  - [Service - structure and manifest](../architecture.md), [Targeting and host communication](../architecture.md) - layer above destiny.
+  - [ADR-007](../adr/0007-versioning-git-ref.md) - why is there no `version:` field in `destiny.yml`.
+- [`docs/input.md`](../input.md) - **general** format standard for `input:` (applies to destiny, scenario and module manifest).
+- [`docs/templating.md`](../templating.md) - template engine spec (ADR-010): CEL for expressions in destiny tasks, Go text/template for `templates/*.tmpl`, marker `${ … }`, `core.file.rendered` as a render module.
+- [`docs/soul-lint.md`](../soul-lint.md) - static checks of destiny at the CI/IDE stage.
+- [`docs/module-collections.md`](../module-collections.md) — namespace prefix in module addressing.
+- [`examples/destiny/redis/`](../../examples/destiny/redis/) is a working example of a full layout.

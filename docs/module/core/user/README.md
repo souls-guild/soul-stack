@@ -1,90 +1,90 @@
 # core.user
 
-Управление локальными пользователями OS. **Soul-side**, статически встроен в
-`soul`-бинарь. Реализация — [`soul/internal/coremod/user/user.go`](../../../../soul/internal/coremod/user/user.go).
+Managing local OS users. **Soul-side**, statically built into
+`soul`-binary. Implementation - [`soul/internal/coremod/user/user.go`](../../../../soul/internal/coremod/user/user.go).
 
-Backend — `useradd` / `userdel` (busybox-совместимое подмножество; на Alpine это
-пакет `shadow` или busybox-built-ins — оба понимают используемые флаги). Семантика
-`present` — **present-or-create** (MVP): существующий пользователь **не
-реконсилится**, опциональные params действуют только при создании. `usermod` в MVP
-не вызывается.
+Backend - `useradd` / `userdel` (busybox-compatible subset; on Alpine this is
+package `shadow` or busybox-built-ins - both understand the flags used). Semantics
+`present` - **present-or-create** (MVP): existing user **not
+reconciled**, optional params are only valid when created. `usermod` in MVP
+is not called.
 
 ## States
 
-| State | Назначение | Идемпотентность (когда `changed=true`) |
+| State | Destination | Idempotency (when `changed=true`) |
 |---|---|---|
-| `present` | Пользователь существует (создаётся через `useradd`, если его нет). | `changed=true`, если пользователя не было и он создан. Если пользователь уже есть — `changed=false` (reconcile uid/shell/home/groups/system/group **не выполняется**, см. вводный абзац). |
-| `absent` | Пользователь удалён. | `changed=true`, если пользователь был и удалён (`userdel`). Пользователя нет — `changed=false`. |
+| `present` | The user exists (created via `useradd` if it does not exist). | `changed=true` if there was no user and it was created. If the user already exists - `changed=false` (reconcile uid/shell/home/groups/system/group **not executed**, see introductory paragraph). |
+| `absent` | The user has been deleted. | `changed=true`, if the user has been deleted (`userdel`). There is no user - `changed=false`. |
 
 ## present — params
 
-| Param | Тип | Required / default | Смысл |
+| Param | Type | Required/default | Meaning |
 |---|---|---|---|
-| `name` | string | required | Имя пользователя. |
-| `uid` | int | optional | Явный uid (`useradd -u`). Если не задан — uid выбирает `useradd`. |
-| `shell` | string | optional | Login shell (`useradd -s`). Пусто/не задан → дефолт `useradd`. |
-| `home` | string | optional | Домашний каталог (`useradd -d`). Создаётся с флагом `-M` (без авто-создания home), как реализовано в коде. Пусто/не задан → дефолт `useradd`. |
-| `groups` | []string | optional | Supplementary-группы (`useradd -G a,b`). Группы должны существовать. |
-| `system` | bool | optional (default `false`) | Системный аккаунт (`useradd -r`): uid из системного диапазона, для сервис-аккаунтов stateful-сервисов (например `redis`). |
-| `group` | string | optional | Primary-группа (`useradd -g`). Группа **должна уже существовать** — caller создаёт её через `core.group` ДО. Отличается от `groups` (supplementary, `-G`). |
+| `name` | string | required | Username. |
+| `uid` | int | optional | Explicit uid (`useradd -u`). If not specified, uid selects `useradd`. |
+| `shell` | string | optional | Login shell (`useradd -s`). Empty/not specified → default `useradd`. |
+| `home` | string | optional | Home directory (`useradd -d`). Created with the `-M` flag (without home auto-creation), as implemented in the code. Empty/not set → default `useradd`. |
+| `groups` | []string | optional | Supplementary groups (`useradd -G a,b`). Groups must exist. |
+| `system` | bool | optional (default `false`) | System account (`useradd -r`): uid from the system range, for service accounts of stateful services (for example `redis`). |
+| `group` | string | optional | Primary group (`useradd -g`). The group **must already exist** - the caller creates it via `core.group` BEFORE. Different from `groups` (supplementary, `-G`). |
 
-Все опциональные params (`uid`/`shell`/`home`/`groups`/`system`/`group`)
-применяются **только при создании**. Для уже существующего пользователя они
-no-op — не триггерят `usermod`/reconcile.
+All optional params (`uid`/`shell`/`home`/`groups`/`system`/`group`)
+are applied **only during creation**. For an existing user they
+no-op - do not trigger `usermod`/reconcile.
 
-## Валидация ввода и формат params
+## Input validation and params format
 
-Это **input-validation/safety нашего кода**, а не ограничение оператора: проверки
-отсекают инъекции (ведущий `-` → argument confusion в argv `useradd`) и
-заведомо-битый ввод с понятной ошибкой, **не** ужесточая реальные ограничения
-`useradd`. Срабатывают на `Validate` (ранний отказ `soul-lint` / фаза валидации) и
-повторно в `Apply` (если шаг вызван без предшествующей `Validate`-фазы — битое имя
-не должно дойти до `useradd`/`userdel`).
+This is the **input-validation/safety of our code**, not the restriction of the :validation operator
+cut off injections (leading `-` → argument confusion in argv `useradd`) and
+deliberately broken input with an understandable error, **not** tightening the real restrictions
+`useradd`. Triggered on `Validate` (early failure `soul-lint` / validation phase) and
+again in `Apply` (if the step is called without a previous `Validate` phase - broken name
+should not reach `useradd`/`userdel`).
 
-| Param | Правило | Мотивация |
+| Param | Rule | Motivation |
 |---|---|---|
-| `name` | `NAME_REGEX` shadow-utils по умолчанию: `^[a-z_][a-z0-9_-]*\$?$` (финальный `$` — литерал Samba/NIS-суффикса машинного аккаунта), длина ≤ 32, не пустой. Это конвенция самого `useradd` (с `--badnames` он её ослабляет — мы держим дефолт). | Имя обязано начинаться с буквы/`_` → ведущий `-` исключён (arg-injection guard на уровне формата). Слэш/пробел/спецсимволы не проходят regex. |
-| `uid` | целое в диапазоне `[0, 2147483647]` (uid_t — знаковый 32-бит на Linux). | Range-guard от заведомо-битого ввода до запуска подпроцесса; тип уже проверяет `OptIntParam`. |
-| `shell` | если задан — **абсолютный путь** (начинается с `/`), без ведущего `-`. Существование файла **не** проверяется. | `useradd` не требует существования shell (гибрид-правило гибкости — как в Ansible); абсолютность + запрет `-` отсекают argument confusion. |
-| `home` | если задан — **абсолютный путь** (начинается с `/`), без ведущего `-`. Каталог **не** создаётся (флаг `-M`). | Симметрично `shell`: путь к home должен быть абсолютным, инъекционная форма отсекается. |
-| `group` (primary) | то же `NAME_REGEX`, что и `name`. | Уходит в `useradd -g <group>`: ведущий `-` иначе распарсился бы как опция. |
-| каждый из `groups` | то же `NAME_REGEX`, что и `name`. | Уходит в `useradd -G a,b`: каждое имя валидируется отдельно. |
+| `name` | `NAME_REGEX` shadow-utils default: `^[a-z_][a-z0-9_-]*\$?$` (final `$` is the machine account Samba/NIS suffix literal), length ≤ 32, not empty. This is the convention of `useradd` itself (with `--badnames` he weakens it - we are in default). | The name must begin with a letter/`_` → leading `-` is excluded (arg-injection guard at the format level). Slash/space/special characters do not pass regex. |
+| `uid` | an integer in the range `[0, 2147483647]` (uid_t is signed 32-bit on Linux). | Range-guard from known-bit input to subprocess launch; the type is already checking `OptIntParam`. |
+| `shell` | if specified - **absolute path** (starting with `/`), without leading `-`. The existence of the file is **not** checked. | `useradd` does not require the existence of a shell (hybrid flexibility rule - like in Ansible); absoluteness + prohibition `-` cut off argument confusion. |
+| `home` | if specified - **absolute path** (starting with `/`), without leading `-`. The directory is **not** created (flag `-M`). | Symmetrical `shell`: the path to home must be absolute, the injection form is cut off. |
+| `group` (primary) | same `NAME_REGEX` as `name`. | Goes to `useradd -g <group>`: leading `-` otherwise it would be parsed as an option. |
+| each of `groups` | same `NAME_REGEX` as `name`. | Goes to `useradd -G a,b`: each name is validated separately. |
 
-**Arg-injection guard в argv.** Поверх формат-проверки имени модуль ставит `--`
-перед позиционным `name`: `useradd … -- <name>` и `userdel -- <name>`. `useradd`
-парсит опции через `getopt_long`, который понимает `--` как конец опций (man
-useradd) — это defense-in-depth: даже если имя-опция как-то прошло бы формат-чек,
-оно не будет интерпретировано как флаг. (`core.user` строит argv напрямую, без
-`sh` — shell-injection не релевантен; релевантна именно arg-confusion позиционного
-аргумента.)
+**Arg-injection guard in argv.** The module puts `--` on top of the name format check
+before positional `name`: `useradd … -- <name>` and `userdel -- <name>`. `useradd`
+parses options via `getopt_long`, which understands `--` as the end of options (man
+useradd) is defense-in-depth: even if the option-name would somehow pass the format-check,
+it will not be interpreted as a flag. (`core.user` builds argv directly, without
+`sh` - shell-injection is not relevant; it is the arg-confusion of the positional that is relevant
+argument.)
 
 ## absent — params
 
-| Param | Тип | Required / default | Смысл |
+| Param | Type | Required/default | Meaning |
 |---|---|---|---|
-| `name` | string | required | Имя удаляемого пользователя. |
+| `name` | string | required | The name of the user to be deleted. |
 
 ## Capabilities / side-effects
 
-- **Требует root** (`run_as_root`): `useradd` / `userdel` правят `/etc/passwd`,
+- **Requires root** (`run_as_root`): `useradd` / `userdel` rule `/etc/passwd`,
   `/etc/shadow`, `/etc/group`.
-- **Выполняет подпроцессы** (`exec_subprocess`): `useradd` (present) / `userdel`
-  (absent). Проверка существования — in-process через `user.Lookup` (без
-  подпроцесса).
-- **Меняет систему:** набор локальных пользователей.
+- **Executes subprocesses** (`exec_subprocess`): `useradd` (present) / `userdel`
+(absent). Existence check - in-process via `user.Lookup` (without
+subprocess).
+- **Changes the system:** set of local users.
 
 ## Output / register
 
-`present` отдаёт `{ name, exists: true, created }`, где `created` = `true`, если
-пользователь был создан этим шагом, и `false`, если уже существовал. `absent` —
+`present` returns `{ name, exists: true, created }`, where `created` = `true` if
+the user was created by this step, and `false` if it already existed. `absent` —
 `{ name, exists: false }`.
 
-## Пример
+## Example
 
-Выбор «`core.user.present` vs `DynamicUser=yes`» — это [гибрид-правило прод-конвенции §2](../../../destiny/production-conventions.md#2-сервис-аккаунт--гибрид-правило): **stateless**-демон без owned data-dir получает эфемерный аккаунт от systemd (`DynamicUser=yes`, ручной `core.user` не нужен), а **stateful**-сервису нужен стабильный uid-владелец каталога — его заводит `core.user.present`. Рабочий пример stateful-аккаунта — `node_exporter` в эталонной destiny [`node-exporter`](../../../../examples/destiny/node-exporter/tasks/account.yml) (textfile-каталог железных метрик переживает рестарты, нужен стабильный владелец); инлайн-redis_exporter в [`monitoring`](../../../../examples/service/monitoring/scenario/create/main.yml) — другой полюс: least-privilege `core.user.present` без стабильного state. Минимальный шаблон:
+The choice "`core.user.present` vs `DynamicUser=yes`" is [hybrid rule of the food convention §2](../../../destiny/production-conventions.md#2-service-account---hybrid-rule): **stateless**-daemon without owned data-dir receives an ephemeral account from systemd (`DynamicUser=yes`, manual `core.user` is not needed), and **stateful**-service needs a stable one uid is the owner of the directory - it is started by `core.user.present`. A working example of a stateful account is `node_exporter` in the reference destiny [`node-exporter`](../../../../examples/destiny/node-exporter/tasks/account.yml) (the textfile directory of hardware metrics is experiencing restarts, a stable owner is needed); inline-redis_exporter in [`monitoring`](../../../../examples/service/monitoring/scenario/create/main.yml) - another pole: least-privilege `core.user.present` without stable state. Minimal template:
 
 ```yaml
-# Primary-группа создаётся ДО пользователя (core.user -g требует существующую).
+# The primary group is created BEFORE the user (core.user -g requires an existing one).
 - name: Ensure the node_exporter system group exists
   module: core.group.present
   params:
@@ -101,52 +101,52 @@ useradd) — это defense-in-depth: даже если имя-опция как
     home: /
 ```
 
-(из [`examples/destiny/node-exporter/tasks/main.yml`](../../../../examples/destiny/node-exporter/tasks/main.yml))
+(from [`examples/destiny/node-exporter/tasks/main.yml`](../../../../examples/destiny/node-exporter/tasks/main.yml))
 
-## Безопасность
+## Security
 
-- **Формат/инъекции проверяются, привилегированность смысла — нет.** Модуль
-  валидирует **форму** ввода ([`Validate`](../../../../soul/internal/coremod/user/user.go)
-  + повтор в `applyPresent`): `name`/`group`/`groups` по `NAME_REGEX`, `uid` в
-  диапазоне, `shell`/`home` — абсолютный путь, и ставит `--` перед позиционным
-  именем в argv (см. раздел «Валидация ввода»). Это закрывает **arg-injection** и
-  заведомо-битый ввод. Но модуль **не** оценивает, насколько создаваемый аккаунт
-  привилегирован: `uid: 0` создаёт второго пользователя с правами root (uid 0 — это
-  и есть «root» для ядра, имя роли не важно — `0` проходит range-проверку как
-  валидное значение), а `groups: ["sudo"]` / `["wheel"]` / `["docker"]` даёт
-  носителю фактический путь к root (имена групп валидны по формату). Эти значения —
-  часть attack surface: если они приходят из `input.*` / `register.*` /
-  `soulprint.*`, им должен доверять автор Destiny/scenario, а не внешний ввод.
-  Формат-валидация ≠ авторизация: она ловит инъекцию, не «опасный, но валидный»
-  смысл.
-- **Привилегии.** Манифест
-  [`user.yaml`](../../../../shared/coremanifest/user.yaml) объявляет
+- **Format/injections are checked, sense privilege is not.** Module
+validates the **form** input ([`Validate`](../../../../soul/internal/coremod/user/user.go)
+  + repeat in `applyPresent`): `name`/`group`/`groups` by `NAME_REGEX`, `uid` by
+range, `shell`/`home` is an absolute path, and puts `--` before the positional one
+name in argv (see Input Validation section). This closes **arg-injection** and
+deliberately broken input. But the module **doesn't** evaluate how much the account being created
+privileged: `uid: 0` creates a second user with root rights (uid 0 is
+is the "root" for the kernel, the role name is not important - `0` passes the range check as
+is a valid value), and `groups: ["sudo"]` / `["wheel"]` / `["docker"]` gives
+the media is the actual path to root (group names are format-valid). These values ​​are
+attack surface part: if they come from `input.*` / `register.*` /
+`soulprint.*`, they should be trusted by the Destiny/scenario author, not external input.
+Format-validation ≠ authorization: it catches the injection, not "dangerous, but valid"
+meaning.
+- **Privileges.** Manifest
+[`user.yaml`](../../../../shared/coremanifest/user.yaml) announces
   `required_capabilities: [run_as_root, exec_subprocess]` — `useradd` / `userdel`
-  правят `/etc/passwd`, `/etc/shadow`, `/etc/group` и без UID 0 не сработают, а
-  оба действия — запуск подпроцессов. Это **декларация** для статической сверки
-  `soul-lint` с `allowed_capabilities` хоста (см. [docs/keeper/plugins.md →
-  required_capabilities](../../../keeper/plugins.md#required_capabilities-таблица)),
-  а **не** runtime-повышение прав: операция исполняется с привилегиями процесса
-  `soul`-агента (под root), повышения прав внутри модуля нет — под тем же root
-  идут и `useradd`, и `userdel`.
-- **Семантику значений не проверяем — держите ввод доверенным.** Формат — да (см.
-  «Валидация ввода»), но смысл — нет. `shell` уходит в `useradd -s` буквально:
-  абсолютность проверяется, **существование** файла login-shell — нет (это решает
-  сам `useradd`, либо остаётся валидный, но «нерабочий» shell — гибрид-правило
-  гибкости). `home` передаётся через `-d` совместно с `-M` (каталог **не**
-  создаётся модулем). `group` обязан существовать заранее — модуль его не создаёт
-  (его создаёт [`core.group`](../group/README.md) отдельным шагом ДО; формат имени
-  модуль проверяет, наличие группы в системе — нет). Идемпотентность present —
-  present-or-create: уже
-  существующий пользователь **не** реконсилится, поэтому понизить привилегии
-  ранее созданного аккаунта повторным applyPresent **нельзя** (uid/groups не
-  правятся) — это снижает риск случайной правки, но и не лечит ошибочно выданные
-  привилегии. Удаление — через `absent` (`userdel`).
-- **Опасно vs. правильно.** Привилегированные значения из недоверенного источника:
+rules `/etc/passwd`, `/etc/shadow`, `/etc/group` and without UID 0 will not work, but
+both actions are launching subprocesses. This is a **declaration** for static reconciliation
+`soul-lint` from `allowed_capabilities` host (see [docs/keeper/plugins.md →
+required_capabilities](../../../keeper/plugins.md)),
+and **not** runtime elevation: the operation is executed with the privileges of the process
+`soul` agent (under root), there is no elevation of rights inside the module - under the same root
+both `useradd` and `userdel` go.
+- **We do not check the semantics of values - keep the input trusted.** Format - yes (see.
+"Input Validation"), but the meaning is not. `shell` goes to `useradd -s` literally:
+absoluteness is checked, **existence** of the login-shell file is not (this solves
+`useradd` itself, or a valid but "non-working" shell remains - a hybrid rule
+flexibility). `home` is transmitted through `-d` together with `-M` (directory **not**
+is created by the module). `group` must exist in advance - the module does not create it
+(it is created by [`core.group`](../group/README.md) in a separate step BEFORE; name format
+the module checks whether the group is present in the system - not). Idempotency present -
+present-or-create: already
+existing user will **not** reconsider, so lower privileges
+a previously created account can not be reapplyPresent **not** (uid/groups not
+edits) - this reduces the risk of accidental edits, but also does not cure erroneously issued
+privileges. Removal - via `absent` (`userdel`).
+- **Dangerous vs. correct.** Privileged values ​​from an untrusted source:
 
   ```yaml
-  # ОПАСНО: uid/groups из внешнего ввода создают root-эквивалентный аккаунт.
-  # input.uid = 0 → второй root; input.extra_groups = ["sudo"] → путь к root.
+  # DANGER: uid/groups from external input creates a root-equivalent account.
+  # input.uid = 0 → second root; input.extra_groups = ["sudo"] → path to root.
   - name: Create app user
     module: core.user.present
     params:
@@ -155,11 +155,11 @@ useradd) — это defense-in-depth: даже если имя-опция как
       groups: "${ input.extra_groups }"
   ```
 
-  Для сервис-аккаунта фиксируйте безопасные значения в авторе Destiny и не
-  кладите его в привилегированные группы:
+For a service account, fix secure values in the Destiny author and not
+put it in privileged groups:
 
   ```yaml
-  # БЕЗОПАСНО: system-аккаунт без login и без sudo/wheel/docker.
+  # SAFE: system account without login and without sudo/wheel/docker.
   - name: Ensure the app system user exists
     module: core.user.present
     params:
@@ -170,10 +170,10 @@ useradd) — это defense-in-depth: даже если имя-опция как
       home: /var/lib/appsvc
   ```
 
-## См. также
+## See also
 
-- [README.md](../../README.md) — каталог core-модулей.
-- [core/group/README.md](../group/README.md) — `core.group` (primary-группа `-g` создаётся ею).
-- [soul/modules.md](../../../soul/modules.md) — хостовая сторона модулей и кеш.
-- [naming-rules.md → Модули Destiny](../../../naming-rules.md#модули-destiny) — словарь имён.
-- [ADR-015](../../../adr/0015-core-modules-mvp.md#adr-015-core-модули-mvp-точный-список) — список core MVP.
+- [README.md](../../README.md) - directory of core modules.
+- [core/group/README.md](../group/README.md) - `core.group` (primary group `-g` is created by it).
+- [soul/modules.md](../../../soul/modules.md) - host side of modules and cache.
+- [naming-rules.md → Destiny Modules](../../../naming-rules.md) - a dictionary of names.
+- [ADR-015](../../../adr/0015-core-modules-mvp.md) - list of core MVPs.

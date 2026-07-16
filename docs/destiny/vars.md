@@ -1,26 +1,26 @@
-# `vars.yml` — destiny-локалы
+# `vars.yml` - destiny locales
 
-Файл `vars.yml` рядом с `destiny.yml` объявляет **локальные переменные destiny** — статичные значения, которые автор destiny прибил гвоздями и которые недоступны для переопределения снаружи. В задачах доступны как `${ vars.<name> }` (в строковой интерполяции; в top-level expression-keys типа `when:` — голая `vars.<name>`, см. [`docs/templating.md`](../templating.md)).
+The file `vars.yml` next to `destiny.yml` declares **destiny local variables** - static values that the author of destiny has nailed down and cannot be overridden from the outside. Available in tasks as `${ vars.<name> }` (in string interpolation; in top-level expression-keys of type `when:` - naked `vars.<name>`, see [`docs/templating.md`](../templating.md)).
 
-## Зачем
+## Why
 
-Без `vars:` у destiny есть две крайности:
+Without `vars:`, destiny has two extremes:
 
-- **Захардкодить** пути/имена/префиксы прямо в задачи (`params: { path: "/etc/redis/redis.conf", ... }`) — копипаст по всем задачам, ад при изменении.
-- **Прокидывать** их через `input:` — но тогда они входят во **внешний контракт** и кто-то снаружи может (а значит, обязательно сделает) их переопределить. А автор имел в виду, что это инвариант destiny, а не точка вариативности.
+- **Hardcode** paths/names/prefixes directly into tasks (`params: { path: "/etc/redis/redis.conf", ... }`) - copy-paste for all tasks, hell when changed.
+- **Pass** them through `input:` - but then they are included in the **external contract** and someone outside can (and therefore will definitely do) redefine them. And the author meant that this is an invariant of destiny, and not a point of variability.
 
-`vars:` — третий путь: переменные есть, использовать удобно, но снаружи их не видно и не передёрнуть.
+`vars:` - the third way: the variables are there, it's convenient to use, but they are not visible from the outside and cannot be distorted.
 
-## Семантика
+## Semantics
 
-- **Source of truth — `destiny-<name>/vars.yml`** (рядом с `destiny.yml`).
-- **Изолированы в destiny.** Ни scenario, ни оператор через API, ни essence service-а **не** перебивают значения. Если оператору нужна возможность подмены — соответствующее значение должно быть в `input:`, не в `vars:`.
-- **Могут ссылаться на `input.*`.** Vars вычисляются **после** валидации input — то есть выражение `"/etc/redis/users/${ input.user }.acl"` валидно. Обратное (input ссылается на vars) — нет: input приходит снаружи, до того, как vars вообще существуют.
-- **Доступны во всех задачах** одного destiny — в `tasks/main.yml` и в любом подключаемом через `include:` соседе.
+- **Source of truth - `destiny-<name>/vars.yml`** (next to `destiny.yml`).
+- **Isolated in destiny.** Neither the scenario, nor the operator via the API, nor the essence service **do** interrupt the values. If the operator needs the ability to substitute, the corresponding value should be in `input:`, not in `vars:`.
+- **Can refer to `input.*`.** Vars are calculated **after** input validation - that is, the expression `"/etc/redis/users/${ input.user }.acl"` is valid. The reverse (input refers to vars) is not: input comes from outside, before vars even exist.
+- **Available in all tasks** of the same destiny - in `tasks/main.yml` and in any neighbor connected via `include:`.
 
-## Формат файла
+## File format
 
-Top-level YAML-map. Никакой обёртки (`vars:` ключом верхнего уровня внутри файла — тавтологично, путь к файлу и так сообщает контекст).
+Top-level YAML-map. No wrapper (`vars:` with a top-level key inside the file - tautological, the path to the file already informs the context).
 
 ```yaml
 # redis/vars.yml
@@ -30,31 +30,31 @@ redis_data_dir:  /var/lib/redis
 redis_user:      redis
 redis_group:     redis
 
-# Допускается ссылка на input.*
+# Link to input is allowed.*
 acl_file_path: "/etc/redis/users/${ input.user }.acl"
 ```
 
-Допустимые value-типы: те же, что и в `input:` ([docs/input.md](../input.md)) — string / integer / number / boolean / array / object. Шаблонные выражения `"${ … }"` ([ADR-010](../adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов), [docs/templating.md](../templating.md)) резолвятся **только когда всё значение var — строка** (верхний уровень значения). non-string значения (map / list / число / bool) проходят **литералом насквозь** — CEL их не трогает.
+Valid value types: the same as in `input:` ([docs/input.md](../input.md)) - string / integer / number / boolean / array / object. Template expressions `"${ … }"` ([ADR-010](../adr/0010-templating.md), [docs/templating.md](../templating.md)) resolve **only when the entire value of var is a string** (top level value). non-string values ​​(map / list / number / bool) pass **literally through** - CEL does not touch them.
 
-> **Ограничение (известное): `${ … }` внутри map/list-значений НЕ разворачивается.** Если значение var — map или list, вложенные `${ … }` в его элементах остаются **сырым текстом**, а не резолвятся. Резолв применяется к строковому значению целиком, не рекурсивно по структуре.
+> **Limitation (known): `${ … }` inside map/list values ​​are NOT resolved.** If the var value is map or list, nested `${ … }` within its elements remain **raw text** and are not resolved. Resolve is applied to the entire string value, not recursively by structure.
 >
 > ```yaml
-> base: /etc/redis                       # string — ок
-> conf_path: "${ vars.base }/redis.conf" # string — резолвится в "/etc/redis/redis.conf"
+> base: /etc/redis # string - ok
+> conf_path: "${ vars.base }/redis.conf" # string - resolves to "/etc/redis/redis.conf"
 >
-> paths:                                  # map-значение — НЕ резолвится
->   conf: "${ vars.base }/redis.conf"     # останется литералом "${ vars.base }/redis.conf"
+> paths: # map value - NOT resolved
+>   conf: "${ vars.base }/redis.conf" # will remain the literal "${ vars.base }/redis.conf"
 > ```
 >
-> Если нужна сборка вложенной структуры из других vars — собирай каждый строковый лист отдельным var, либо строй map целиком одним `${ … }`-выражением (вся ячейка = один маркер → нативный тип, см. [templating.md](../templating.md)). Рекурсивный рендер по глубине map/list — не реализован.
+> If you need to assemble a nested structure from other vars, assemble each line sheet as a separate var, or build the entire map with one `${ … }` expression (entire cell = one marker → native type, see [templating.md](../templating.md)). Recursive rendering based on map/list depth - not implemented.
 
-## Что НЕ лежит в `vars.yml`
+## What is NOT in `vars.yml`
 
-- **Переопределяемые снаружи параметры.** Если оператор должен иметь возможность подменить значение — это `input:`-параметр, а не `vars`-локал. Граница между ними — это граница «контракт vs внутренности».
-- **Секреты.** Vault-ссылки и пароли приходят через `input:` с `secret: true` (см. [input.md](input.md) → раздел про `secret:`). В `vars.yml` секретов быть не должно — он закоммичен в git destiny-репо.
-- **Значения, специфичные для конкретного incarnation.** Имена кластеров, FQDN мастеров, capacity-цифры — это `input:`, потому что они **меняются** между incarnation-ами одного и того же сервиса. `vars:` — про инварианты, одинаковые для всех incarnation.
+- **Externally overridable parameters.** If the operator should be able to override the value, this is the `input:` parameter, not the `vars` local. The border between them is the "contract vs internals" border.
+- **Secrets.** Vault links and passwords come through `input:` from `secret: true` (see [input.md](input.md) → section about `secret:`). There should be no secrets in `vars.yml` - it is committed to the git destiny repo.
+- **Incarnation-specific values.** Cluster names, master FQDNs, capacity numbers are `input:` because they **change** between incarnations of the same service. `vars:` - about invariants that are the same for all incarnations.
 
-## Использование в задачах
+## Use in tasks
 
 ```yaml
 # redis/tasks/apply.yml
@@ -62,10 +62,10 @@ acl_file_path: "/etc/redis/users/${ input.user }.acl"
   module: core.pkg.installed
   params:
     name: "${ vars.redis_unit_name }"   # "redis-server"
-    version: "${ input.version }"       # параметр от caller
+    version: "${ input.version }"       # parameter from caller
 
 - name: Render redis.conf from template
-  module: core.file.rendered             # ADR-010: рендер делает core.file.rendered, не core.file.present + render()
+  module: core.file.rendered             # ADR-010: rendering is done by core.file.rendered, not core.file.present + render()
   params:
     path: "${ vars.redis_conf_path }"
     template: templates/redis.conf.tmpl
@@ -76,64 +76,64 @@ acl_file_path: "/etc/redis/users/${ input.user }.acl"
     group: "${ vars.redis_group }"
 ```
 
-## `vars` vs `input` — таблица отличий
+## `vars` vs `input` - table of differences
 
 | | `input.<name>` | `vars.<name>` |
 |---|---|---|
-| **Источник** | caller (scenario.apply.input или прямой API-вызов) | `destiny-<name>/vars.yml` |
-| **Кто решает значение** | оператор / service / тест | автор destiny |
-| **Описано в схеме?** | да, `input:` в `destiny.yml` ([input.md](input.md)) | нет, plain map |
-| **Валидируется?** | да, два раунда (Keeper + Soul) | нет (это значения от самого destiny-разработчика) |
-| **Переопределяется снаружи?** | да — это и есть его смысл | **нет** |
-| **Видно в логах apply?** | да (значения параметров видны как часть аудита) | да |
-| **Маскируется (`secret`)?** | да, через `secret: true` в схеме | нет — секреты сюда не пишутся |
-| **Видно в API-ответе** | как `input:` блок | как `vars:` блок |
+| **Source** | caller (scenario.apply.input or direct API call) | `destiny-<name>/vars.yml` |
+| **Who decides the value** | operator/service/test | by destiny |
+| **Described in the diagram?** | yes, `input:` to `destiny.yml` ([input.md](input.md)) | no, plain map |
+| **Validated?** | yes, two rounds (Keeper + Soul) | no (these are the values ​​​​from the destiny developer himself) |
+| **Overridable externally?** | yes - this is its meaning | **no** |
+| **Visible in the logs apply?** | yes (parameter values ​​are visible as part of the audit) | yes |
+| **Masked (`secret`)?** | yes, via `secret: true` in the schema | no - secrets are not written here |
+| **Visible in API response** | like `input:` block | like `vars:` block |
 
-## Что доступно внутри `vars` через шаблоны
+## What is available inside `vars` via templates
 
-В выражениях `"${ … }"` (CEL-интерполяция, см. [ADR-010](../adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов)) на правой стороне `vars.yml` доступно:
+In the expressions `"${ … }"` (CEL interpolation, see [ADR-010](../adr/0010-templating.md)) on the right side of `vars.yml` the following is available:
 
-- `input.<name>` — провалидированные параметры destiny.
-- `soulprint.self.<name>` — факты текущего хоста ([ADR-018](../adr/0018-soulprint-typed.md#adr-018-soulprint-typed-схема-mvp): `soulprint.self.os.family`, `soulprint.self.network.primary_ip`, `soulprint.self.memory.total_mb`, …).
-- **`vars.<other>`** — другая переменная `vars.yml` ТОГО ЖЕ слоя (см. ниже «var → var»).
+- `input.<name>` - validated destiny parameters.
+- `soulprint.self.<name>` - current host facts ([ADR-018](../adr/0018-soulprint-typed.md): `soulprint.self.os.family`, `soulprint.self.network.primary_ip`, `soulprint.self.memory.total_mb`, …).
+- **`vars.<other>`** is another variable `vars.yml` of the SAME layer (see "var → var" below).
 
-Не доступно (намеренно):
+Not available (intentionally):
 
-- **`register.<name>`** — результаты задач. На момент вычисления `vars` задач ещё не было.
-- **`essence.*`** — этого пространства имён в destiny **нет вообще**. essence — концепция уровня service; service сам решает, какие значения подкладывать в `input:` destiny при вызове.
-- **`soulprint.hosts` / `soulprint.where(...)`** — cross-host scenario-only аксессоры. В destiny-проходе отсекаются изоляцией (ошибка на compile). var → var их НЕ открывает.
+- **`register.<name>`** - task results. At the time of calculation `vars` there were no tasks yet.
+- **`essence.*`** - this namespace does not exist in destiny **at all**. essence - service level concept; service itself decides which values ​​to put into `input:` destiny when called.
+- **`soulprint.hosts` / `soulprint.where(...)`** — cross-host scenario-only accessors. In the destiny pass they are cut off by isolation (error on compile). var → var does NOT open them.
 
-### var → var (ссылки внутри слоя)
+### var → var (links inside the layer)
 
-`vars.yml`-переменная **может** ссылаться на другую переменную ТОГО ЖЕ `vars.yml` через `${ vars.<other> }` (ADR-009 / ADR-010 amendment 2026-06-24). Резолв **eager-topological**:
+`vars.yml`-variable **may** refer to another variable of the SAME `vars.yml` via `${ vars.<other> }` (ADR-009 / ADR-010 amendment 2026-06-24). Resolve **eager-topological**:
 
-- Зависимости извлекаются из CEL-AST (не regex): `${ vars.X }` в значении → ребро на `X`.
-- Слой резолвится в **топологическом порядке** — переменная видит уже вычисленные зависимости. **Порядок объявления в файле безразличен**:
+- Dependencies are extracted from CEL-AST (not regex): `${ vars.X }` in value → edge on `X`.
+- The layer is resolved in **topological order** - the variable sees the dependencies that have already been calculated. **The order of the declaration in the file does not matter**:
 
   ```yaml
-  # эквивалентно при любом порядке строк
+  # is equivalent in any order of strings
   root_owner: root
-  root_group: "${ vars.root_owner }"   # резолвится в "root"
+  root_group: "${ vars.root_owner }"   # resolves to "root"
   ```
 
-- **Цикл** (`a → b → c → a`, в т.ч. самоссылка `a → a`) → ошибка рендера `var_cycle` с трассой цикла.
-- **Ссылка на несуществующий ключ слоя** (`vars.z`, которого нет) → ошибка рендера `var_unknown_ref`. Проверка **eager**: ошибка поднимается, даже если сам ссылающийся var нигде не используется (битая ссылка = опечатка автора, не «отложенный» var).
-- **Только внутри своего слоя.** var→var НЕ ослабляет изоляцию: ссылка по-прежнему не достаёт `register.*`/`essence.*`/`soulprint.hosts`. Цепочка между file-слоем и task-слоем недоступна (см. ниже).
-- Index-форма `vars['key']` не поддерживается — используй select-форму `vars.key` (имя ключа должно быть статически известно из AST).
+- **Cycle** (`a → b → c → a`, including self-reference `a → a`) → render error `var_cycle` with cycle trace.
+- **Reference to a non-existent layer key** (`vars.z`, which does not exist) → render error `var_unknown_ref`. **eager** check: the error is raised even if the referencing var itself is not used anywhere (broken link = typo by the author, not a "deferred" var).
+- **Only inside its own layer.** var→var does NOT weaken the isolation: the link is still missing `register.*`/`essence.*`/`soulprint.hosts`. The chain between the file layer and the task layer is not available (see below).
+- Index form `vars['key']` is not supported - use select form `vars.key` (the key name must be statically known from the AST).
 
-## Слияние file-vars ↔ task-vars (Вариант A)
+## Merge file-vars ↔ task-vars (Option A)
 
-Пространство имён `vars.*` делят два источника: file-level `vars.yml` (этот документ) и task-level `vars:` на отдельной задаче ([tasks.md §9](tasks.md)). Когда имя объявлено в обоих — действует **Вариант A**:
+The `vars.*` namespace is shared by two sources: file-level `vars.yml` (this document) and task-level `vars:` on a separate task ([tasks.md §9](tasks.md)). When the name is declared in both, **Option A** applies:
 
-- **task-level `vars:` переопределяет одноимённый file-level var.** File-vars — базовый слой, task-vars кладутся поверх. Исход детерминирован: на задаче с собственным `vars: { redis_unit_name: … }` именно task-значение попадёт в `${ vars.redis_unit_name }`, а file-level — нет.
-- **var → var работает ВНУТРИ каждого слоя, но НЕ между слоями.** file-var может ссылаться на другой **file-var** (eager-topological, см. «var → var» выше); task-var — на другой **task-var** того же слоя. А вот **межслойно** ссылки запрещены: file-var не видит task-var, task-var не видит file-var (`${ vars.<чужой_слой> }` даёт `var_unknown_ref`). task-vars резолвятся над тем же базовым контекстом (`input.*` + `soulprint.self.*` + `incarnation.*`), что и file-vars, и file-слой подкладывается под них только ПОСЛЕ резолва (override) — поэтому task-var не может сослаться на file-var.
-- **Изоляция scope сохраняется.** file-vars резолвятся внутри destiny-прохода (после валидации `apply.input`), `register.*`/`essence.*`/`soulprint.hosts` им недоступны — как и task-vars destiny-задачи. var→var изоляцию НЕ ослабляет. scenario-level `vars:` в destiny НЕ видны вовсе (только через `apply: input:`).
-- **`soul-lint` поднимает `warn` (`vars_collision`)** на каждое имя, объявленное и в `vars.yml`, и в task-level `vars:` той же destiny. Это не ошибка (Вариант A однозначен), но почти всегда — недосмотр автора: переименуй один из двух или полагайся на переопределение осознанно.
+- **task-level `vars:` overrides the file-level var of the same name.** File-vars is the base layer, task-vars are placed on top. The outcome is deterministic: on a task with its own `vars: { redis_unit_name: … }`, it is the task value that will end up in `${ vars.redis_unit_name }`, but the file-level will not.
+- **var → var works WITHIN each layer, but NOT between layers.** file-var can refer to another **file-var** (eager-topological, see "var → var" above); task-var - to another **task-var** of the same layer. But **interlayer** links are prohibited: file-var does not see task-var, task-var does not see file-var (`${ vars.<foreign_layer> }` gives `var_unknown_ref`). task-vars resolve over the same base context (`input.*` + `soulprint.self.*` + `incarnation.*`) as file-vars, and the file layer is placed under them only AFTER the resolve (override) - so task-var cannot refer to file-var.
+- **Scope isolation is preserved.** file-vars resolve inside the destiny pass (after `apply.input` validation), `register.*`/`essence.*`/`soulprint.hosts` are not available to them - just like task-vars destiny-tasks. var→var does NOT weaken the insulation. scenario-level `vars:` in destiny are NOT visible at all (only through `apply: input:`).
+- **`soul-lint` raises `warn` (`vars_collision`)** for each name declared in both `vars.yml` and task-level `vars:` of the same destiny. This is not a mistake (Option A is clear), but almost always an oversight by the author: rename one of the two or rely on the redefinition deliberately.
 
-Резолв file-vars выполняется **один раз на destiny-проход** (per-host, потому что значения могут ссылаться на `soulprint.self`), а не на каждую задачу: file-vars инвариантны по задачам одного прохода.
+Resolving file-vars is executed **once per destiny-pass** (per-host, because values ​​can refer to `soulprint.self`), and not per task: file-vars are invariant across tasks of the same pass.
 
-## См. также
+## See also
 
-- [manifest.md](manifest.md) — раскладка папки destiny, где лежит `vars.yml`.
-- [input.md](input.md) — внешний контракт destiny.
-- [tasks.md](tasks.md) — template-контекст задач, где `vars.*` доступны.
+- [manifest.md](manifest.md) - layout of the destiny folder, where `vars.yml` is located.
+- [input.md](input.md) - external contract destiny.
+- [tasks.md](tasks.md) - template task context, where `vars.*` are available.

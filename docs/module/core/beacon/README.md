@@ -1,30 +1,30 @@
 # core-beacon
 
-Встроенные **core-beacon** — тело [Vigil](../../../naming-rules.md#сущности-предметной-области)
-(Soul-side event-driven мониторинг, [ADR-030](../../../adr/0030-vigil-oracle.md#adr-030-vigil--oracle--event-driven-мониторинг-beacons--reactor)).
-Beacon наблюдает состояние хоста и при его смене (**edge-triggered**) поднимает
-[Portent](../../../naming-rules.md#сущности-предметной-области) Soul → Keeper.
+Built-in **core-beacon** - body [Vigil](../../../naming-rules.md)
+(Soul-side event-driven monitoring, [ADR-030](../../../adr/0030-vigil-oracle.md)).
+Beacon observes the state of the host and when it changes (**edge-triggered**) it raises
+[Portent](../../../naming-rules.md) Soul → Keeper.
 
-**Read-only по конструкции** — beacon наблюдает, но **НЕ мутирует** хост (инвариант
-[ADR-030](../../../adr/0030-vigil-oracle.md#adr-030-vigil--oracle--event-driven-мониторинг-beacons--reactor)).
-Это отличает beacon от core-модулей (`core.<module>.<state>` приводят хост к
-состоянию). Beacon адресуется как `core.beacon.<name>` в поле `VigilDef.check`.
+**Read-only by design** - the beacon observes, but **DOES NOT mutate** the host (invariant
+[ADR-030](../../../adr/0030-vigil-oracle.md)).
+This distinguishes beacons from core modules (`core.<module>.<state>` leads the host to
+condition). The Beacon is addressed as `core.beacon.<name>` in the `VigilDef.check` field.
 
-Реализация — [`soul/internal/beacon/`](../../../../soul/internal/beacon/); реестр
-встроенных beacon собирает `beacon.Default()`
+Implementation - [`soul/internal/beacon/`](../../../../soul/internal/beacon/); register
+built-in beacon collects `beacon.Default()`
 ([`beacon.go`](../../../../soul/internal/beacon/beacon.go)). Plugin-beacon
-(kind `soul_beacon`, ADR-030 V5-2) — см. раздел [Custom soul_beacon plugins](#custom-soul_beacon-plugins)
-ниже; их реестр поверх pluginhost собирает `beacon.NewPluginRegistry`,
-соединение с core — `beacon.NewCompositeRegistry`.
+(kind `soul_beacon`, ADR-030 V5-2) - see section [Custom soul_beacon plugins](#custom-soul_beacon-plugins)
+below; their registry on top of pluginhost collects `beacon.NewPluginRegistry`,
+connection to core - `beacon.NewCompositeRegistry`.
 
 ## Typed PortentPayload (V5-1)
 
-С V5-1 ([ADR-030 amendment 2026-05-26](../../../adr/0030-vigil-oracle.md#adr-030-vigil--oracle--event-driven-мониторинг-beacons--reactor))
-встроенные core-beacon выставляют **типизированный payload** в `PortentEvent.payload`
-(oneof) параллельно с legacy `PortentEvent.data` (Struct). Каждому встроенному
-beacon-у соответствует typed-message:
+With V5-1 ([ADR-030 amendment 2026-05-26](../../../adr/0030-vigil-oracle.md))
+built-in core-beacons expose **typed payload** to `PortentEvent.payload`
+(oneof) in parallel with legacy `PortentEvent.data` (Struct). Each built-in
+beacon corresponds to typed-message:
 
-| Beacon | Typed-message | Где-CEL access |
+| Beacon | Typed-message | Where-CEL access |
 |---|---|---|
 | `core.beacon.file_changed` | `FileChangedPortent` | `event.file_changed.<field>` |
 | `core.beacon.service_down` | `ServiceDownPortent` | `event.service_down.<field>` |
@@ -33,291 +33,291 @@ beacon-у соответствует typed-message:
 | `core.beacon.process_absent` | `ProcessAbsentPortent` | `event.process_absent.<field>` |
 | `core.beacon.http_unhealthy` | `HttpUnhealthyPortent` | `event.http_unhealthy.<field>` |
 | `core.beacon.inotify` | `InotifyPortent` | `event.inotify.<field>` |
-| plugin-beacon (V5-2, `soul_beacon.*`) | `Struct` в `event.custom` | `event.custom.<field>` |
+| plugin-beacon (V5-2, `soul_beacon.*`) | `Struct` to `event.custom` | `event.custom.<field>` |
 
-Точные shape-ы — таблицы «**Typed-payload**» в разделах ниже.
+The exact shapes are the "**Typed-payload**" tables in the sections below.
 
 ### Deprecation `PortentEvent.data` (Struct)
 
-Поле `data` помечено `[deprecated = true]` в proto. План перехода
-(**1-release WARN → hard-cut**, parity с push S7-decision):
+The `data` field is marked `[deprecated = true]` in proto. Transition plan
+(**1-release WARN → hard-cut**, parity with push S7-decision):
 
-1. **V5-1 (сейчас) — hand-off-период.** Soul-side эмит-mapper заполняет
-   **ОБЕ** ветки: typed `payload` + legacy `data`. Один WARN-лог на процесс
-   при первой эмиссии. Where-CEL работает в обоих стилях:
-   `event.data.<field>` и `event.<typed_branch>.<field>` равноценны.
-2. **V5-2…V5-3.** Same hand-off; новые where-CEL — только typed-форма.
-3. **S5-final (один production-релиз спустя).** Hard-cut: `data` удаляется
-   из proto-схемы, Soul-side эмит только typed `payload`, where-CEL
-   `event.data.*` перестаёт компилироваться (compile-ошибка в Decree).
+1. **V5-1 (now) - hand-off period.** Soul-side emitter-mapper fills
+**BOTH** branches: typed `payload` + legacy `data`. One WARN log per process
+at the first issue. Where-CEL works in both styles:
+`event.data.<field>` and `event.<typed_branch>.<field>` are equivalent.
+2. **V5-2…V5-3.** Same hand-off; new where-CEL - only typed form.
+3. **S5-final (one production release later).** Hard-cut: `data` removed
+from proto-scheme, Soul-side emits only typed `payload`, where-CEL
+`event.data.*` stops compiling (compile error in Decree).
 
-Type-mismatch (where-CEL ожидает `event.file_changed`, прилетел `service_down`)
-→ fail-safe **no-match** (default-deny): отсутствующая ветка даёт
-no-such-key, cel-go возвращает runtime-error, Oracle трактует как «не сматчило».
+Type-mismatch (where-CEL is expecting `event.file_changed`, arrived `service_down`)
+→ fail-safe **no-match** (default-deny): missing branch gives
+no-such-key, cel-go returns runtime-error, Oracle interprets it as "not matched".
 
-Контракт реализации — [`soul/internal/beacon/typed_payload.go`](../../../../soul/internal/beacon/typed_payload.go)
-(`fillTypedPayload`); CEL-активация на Keeper-стороне —
+Implementation contract - [`soul/internal/beacon/typed_payload.go`](../../../../soul/internal/beacon/typed_payload.go)
+(`fillTypedPayload`); CEL activation on the Keeper side -
 [`keeper/internal/oracle/where.go`](../../../../keeper/internal/oracle/where.go)
 (`buildEventActivation`).
 
-## Контракт `State`
+## Contract `State`
 
-`Check` возвращает `State` — **смысловую строку состояния хоста**. Scheduler
-сравнивает её с предыдущим значением (edge-triggered): смена `State` → один
-`Portent`. Семантика строки — на усмотрение конкретного beacon-а. Beacon **не**
-эмитит событие сам и **не** хранит baseline — это делает scheduler.
+`Check` returns `State` - **meaningful host status string**. Scheduler
+compares it with the previous value (edge-triggered): change `State` → one
+`Portent`. The semantics of the string is at the discretion of the specific beacon. Beacon **not**
+emits the event itself and **doesn't** store the baseline - the scheduler does that.
 
-`data` — `Struct` с деталями для `PortentEvent.data` (без секретов/тел/заголовков —
-beacon не светит payload в Portent/логи/OTel). Невалидные params → **ошибка**
-`Check` (scheduler пропускает тик, baseline не трогается, Portent не эмитится:
-ошибка проверки ≠ смена состояния хоста). «Недоступно с точки зрения наблюдателя»
-(refused/timeout/нет init-системы) — это **валидное состояние**, а не ошибка.
+`data` - `Struct` with details for `PortentEvent.data` (no secrets/bodies/headers -
+beacon does not show payload in Portent/logs/OTel). Invalid params → **error**
+`Check` (scheduler skips a tick, baseline is not touched, Portent is not issued:
+validation error ≠ host state change). "Inaccessible from the observer's point of view"
+(refused/timeout/no init system) is a **valid state**, not an error.
 
-## Встроенные beacon
+## Built-in beacons
 
-| Beacon | State | Назначение |
+| Beacon | State | Destination |
 |---|---|---|
-| `core.beacon.service_down` | `up` / `down` | Активность сервиса (опрос is-active, без start/stop). Pilot — см. [`service_down.go`](../../../../soul/internal/beacon/service_down.go). |
-| `core.beacon.file_changed` | хеш SHA-256 / `missing` | Изменение содержимого файла (правка/ротация/удаление). Pilot — см. [`file_changed.go`](../../../../soul/internal/beacon/file_changed.go). |
-| `core.beacon.port_closed` | `open` / `closed` | Доступность TCP-порта (один dial, без отправки данных). |
-| `core.beacon.disk_full` | `ok` / `full` | Заполнение файловой системы по порогу (statfs). |
-| `core.beacon.process_absent` | `present` / `absent` | Наличие процесса по паттерну (`pgrep`). |
-| `core.beacon.http_unhealthy` | `healthy` / `unhealthy` | Здоровье HTTP-эндпоинта по статус-коду (один GET). |
-| `core.beacon.inotify` | `quiet` / `events` | Kernel-уровневые FS-события через inotify (Linux-only). Pilot — см. [`inotify_linux.go`](../../../../soul/internal/beacon/inotify_linux.go). |
+| `core.beacon.service_down` | `up` / `down` | Service activity (poll is-active, without start/stop). Pilot - see [`service_down.go`](../../../../soul/internal/beacon/service_down.go). |
+| `core.beacon.file_changed` | hash SHA-256 / `missing` | Changing file contents (editing/rotating/deleting). Pilot - see [`file_changed.go`](../../../../soul/internal/beacon/file_changed.go). |
+| `core.beacon.port_closed` | `open` / `closed` | Availability of TCP port (one dial, no data sending). |
+| `core.beacon.disk_full` | `ok` / `full` | Filling the file system by threshold (statfs). |
+| `core.beacon.process_absent` | `present` / `absent` | Availability of a process according to the pattern (`pgrep`). |
+| `core.beacon.http_unhealthy` | `healthy` / `unhealthy` | HTTP endpoint health by status code (one GET). |
+| `core.beacon.inotify` | `quiet` / `events` | Kernel-level FS events via inotify (Linux-only). Pilot - see [`inotify_linux.go`](../../../../soul/internal/beacon/inotify_linux.go). |
 
 ---
 
 ## core.beacon.service_down
 
-Наблюдает активность сервиса. Только опрос статуса (`is-active` / эквивалент),
-без `start`/`stop` (read-only). Логику определения активности и backend-detection
-переиспользует у [`core.service`](../service/README.md) через общий `util.Runner`
-/ `util.DetectInitSystem` (systemd / OpenRC / SysV). Реализация —
+Observes service activity. Status poll only (`is-active`/equivalent),
+without `start`/`stop` (read-only). Activity detection and backend-detection logic
+reuses from [`core.service`](../service/README.md) via the common `util.Runner`
+/ `util.DetectInitSystem` (systemd / OpenRC / SysV). Implementation -
 [`service_down.go`](../../../../soul/internal/beacon/service_down.go).
 
-**State:** `up` — сервис активен; `down` — сервис остановлен **или** init-систему
-определить нельзя (с точки зрения наблюдателя сервис недоступен — это и есть
-событие интереса, а не ошибка `Check`).
+**State:** `up` - service is active; `down` - service stopped **or** init system
+cannot be determined (from the observer's point of view, the service is unavailable - this is
+event of interest, not error `Check`).
 
-| Param | Тип | Required / default | Смысл |
+| Param | Type | Required/default | Meaning |
 |---|---|---|---|
-| `service` | string | required | Имя юнита (как в `core.service`). |
+| `service` | string | required | Unit name (as in `core.service`). |
 
-**data:** `{ service, active, init_system }`. `active` — bool результата опроса;
-`init_system` — определённая init-система (`systemd` / `openrc` / `sysv` /
-`unknown`). При неопределённой init-системе `active=false`, `init_system=unknown`.
+**data:** `{ service, active, init_system }`. `active` — bool poll result;
+`init_system` - specific init system (`systemd` / `openrc` / `sysv` /
+`unknown`). When the init system is undefined, `active=false`, `init_system=unknown`.
 
 **Typed-payload:** `ServiceDownPortent { service, active, init_system }` (V5-1,
-ADR-030 amendment 2026-05-26). Где-CEL — `event.service_down.service` и т.д.
+ADR-030 amendment 2026-05-26). Where-CEL is `event.service_down.service`, etc.
 
 ---
 
 ## core.beacon.file_changed
 
-Наблюдает изменение содержимого файла. Считает SHA-256 содержимого потоково
-(`io.Copy`, без загрузки целиком в память — наблюдаемый файл может быть крупным),
-без записи (read-only). Реализация —
+Observes a change in the contents of the file. Counts SHA-256 content streamed
+(`io.Copy`, without loading the entire file into memory - the observed file may be large),
+without writing (read-only). Implementation -
 [`file_changed.go`](../../../../soul/internal/beacon/file_changed.go).
 
-**State:** hex-хеш SHA-256 содержимого файла; `missing` — файла нет. Смена State
-(правка / ротация / появление / удаление) edge-triggered → `Portent`. Появление
-и исчезновение файла так же edge-triggered, как смена содержимого (переход
+**State:** SHA-256 hex hash of the file contents; `missing` - no file. Change State
+(edit / rotate / appear / delete) edge-triggered → `Portent`. Appearance
+and file disappearance is just as edge-triggered as changing content (transition
 hash↔`missing`).
 
-| Param | Тип | Required / default | Смысл |
+| Param | Type | Required/default | Meaning |
 |---|---|---|---|
-| `path` | string | required | Абсолютный путь к наблюдаемому файлу. |
+| `path` | string | required | The absolute path to the observed file. |
 
-**data:** `{ path, sha256 }` для существующего файла; `{ path, state: "missing" }`
-для отсутствующего (поле `sha256` тогда не выставляется).
+**data:** `{ path, sha256 }` for existing file; `{ path, state: "missing" }`
+for absent (the `sha256` field is then not set).
 
 **Typed-payload:** `FileChangedPortent { path, sha256 }` (V5-1, ADR-030 amendment
-2026-05-26; `path` строка, `sha256` пусто, если файла нет). Где-CEL читает
+2026-05-26; `path` string, `sha256` empty if there is no file). Where-CEL reads
 `event.file_changed.path` / `event.file_changed.sha256`.
 
 ---
 
 ## core.beacon.port_closed
 
-Наблюдает доступность TCP-порта. Один `dial` без отправки данных в сокет
-(read-only). Реализация — [`port_closed.go`](../../../../soul/internal/beacon/port_closed.go).
+Observes the availability of a TCP port. One `dial` without sending data to the socket
+(read-only). Implementation - [`port_closed.go`](../../../../soul/internal/beacon/port_closed.go).
 
-**State:** `open` — соединение установилось; `closed` — порт не принял
-(connection refused / timeout / host недоступен). С точки зрения наблюдателя
-недоступный порт = `closed` (событие интереса, а не ошибка `Check`).
+**State:** `open` - connection established; `closed` - port not accepted
+(connection refused / timeout / host unavailable). From the observer's point of view
+unreachable port = `closed` (event of interest, not error `Check`).
 
-| Param | Тип | Required / default | Смысл |
+| Param | Type | Required/default | Meaning |
 |---|---|---|---|
-| `port` | int | required | TCP-порт `1..65535`. Принимается как число или строка (на случай `${…}`-интерполяции). |
-| `host` | string | optional (default `127.0.0.1`) | Целевой хост/IP. Дефолт — локальный демон на своём порту. |
-| `timeout` | string (duration) | optional (default `3s`) | Таймаут dial (convention `duration`: `time.ParseDuration` + суффикс `<N>d`). Висящий dial — это уже наблюдаемое «недоступно». |
+| `port` | int | required | TCP port `1..65535`. Accepted as a number or string (in case of `${…}` interpolation). |
+| `host` | string | optional (default `127.0.0.1`) | Target Host/IP. Default is a local daemon on its own port. |
+| `timeout` | string (duration) | optional (default `3s`) | Dial timeout (convention `duration`: `time.ParseDuration` + suffix `<N>d`). A hanging dial is an already observed "unavailable". |
 
 **data:** `{ host, port }`.
 
 **Typed-payload:** `PortClosedPortent { host, port }` (V5-1, ADR-030 amendment
-2026-05-26). Где-CEL — `event.port_closed.host` / `event.port_closed.port`.
+2026-05-26). Where-CEL is `event.port_closed.host` / `event.port_closed.port`.
 
 ---
 
 ## core.beacon.disk_full
 
-Наблюдает заполнение файловой системы. Один `statfs`-вызов (read-only syscall),
-без парсинга вывода `df` — точнее и без зависимости от локали/формата утилиты.
-Реализация — [`disk_full.go`](../../../../soul/internal/beacon/disk_full.go).
+Watches the file system become full. One `statfs` call (read-only syscall),
+without parsing the output of `df` - more precisely and without dependence on the locale/format of the utility.
+Implementation - [`disk_full.go`](../../../../soul/internal/beacon/disk_full.go).
 
-**State:** `full` — использование ФС `≥ threshold_percent` (граница
-**включающая**); иначе `ok`.
+**State:** `full` - use of FS `≥ threshold_percent` (border
+**inclusive**); otherwise `ok`.
 
-`used_percent` считается как `(Blocks - Bavail) / Blocks`, где `Bavail` — блоки,
-доступные **непривилегированному** процессу: root-reserved (`~5%` по умолчанию у
-ext-семейства) учитывается как занятый, ровно как в обычном `df`. Расчёт через
-`Bfree` завышал бы used против `df` и взводил `full` ложно-рано.
+`used_percent` is counted as `(Blocks - Bavail) / Blocks`, where `Bavail` are blocks,
+available to **unprivileged** process: root-reserved (`~5%` by default
+ext-family) is counted as busy, just like in a regular `df`. Calculation via
+`Bfree` would overestimate used against `df` and cock `full` falsely early.
 
-| Param | Тип | Required / default | Смысл |
+| Param | Type | Required/default | Meaning |
 |---|---|---|---|
-| `path` | string | required | Точка монтирования либо любой путь внутри наблюдаемой ФС. |
-| `threshold_percent` | int | optional (default `90`) | Порог `full`, `1..100`. `full` при использовании `≥` порога. |
+| `path` | string | required | Mount point or any path within the monitored file system. |
+| `threshold_percent` | int | optional (default `90`) | Threshold `full`, `1..100`. `full` when using `≥` threshold. |
 
 **data:** `{ path, used_percent, threshold }`.
 
 **Typed-payload:** `DiskFullPortent { path, used_percent, threshold }` (V5-1,
-ADR-030 amendment 2026-05-26). Где-CEL — `event.disk_full.used_percent` и т.д.
+ADR-030 amendment 2026-05-26). Where-CEL is `event.disk_full.used_percent`, etc.
 
 ---
 
 ## core.beacon.process_absent
 
-Наблюдает наличие процесса. Опрос через `pgrep` (нет kill/signal). `pgrep` выбран
-вместо скана `/proc`: OS-агностичен (Linux/BSD) и мок-абелен в unit-тестах через
-`util.Runner` (как `core.service` / `core.beacon.service_down`). Реализация —
+Observes the presence of a process. Poll via `pgrep` (no kill/signal). `pgrep` selected
+instead of scanning `/proc`: OS-agnostic (Linux/BSD) and mockable in unit tests via
+`util.Runner` (as `core.service` / `core.beacon.service_down`). Implementation -
 [`process_absent.go`](../../../../soul/internal/beacon/process_absent.go).
 
-**State:** `present` — `pgrep` нашёл совпадение (exit 0); `absent` — совпадений
-нет (exit 1). Ошибка самого `pgrep` (битый паттерн / нет бинаря, exit ≥2) →
-ошибка `Check`.
+**State:** `present` - `pgrep` found a match (exit 0); `absent` - matches
+no (exit 1). Error `pgrep` itself (broken pattern / no binary, exit ≥2) →
+error `Check`.
 
-| Param | Тип | Required / default | Смысл |
+| Param | Type | Required/default | Meaning |
 |---|---|---|---|
-| `pattern` | string | required | Имя / ERE-паттерн процесса (matches против имени процесса, как `pgrep <pattern>`). |
+| `pattern` | string | required | Process name/ERE pattern (matches against process name, like `pgrep <pattern>`). |
 
 **data:** `{ pattern }`.
 
 **Typed-payload:** `ProcessAbsentPortent { pattern }` (V5-1, ADR-030 amendment
-2026-05-26). Где-CEL — `event.process_absent.pattern`.
+2026-05-26). Where-CEL is `event.process_absent.pattern`.
 
 ---
 
 ## core.beacon.http_unhealthy
 
-Наблюдает здоровье HTTP-эндпоинта. Один `GET`, **без чтения тела** (read-only).
-Безопасность переиспользуется у [`core.http`](../http/README.md) (тот же паттерн
+Monitors the health of the HTTP endpoint. One `GET`, **without body reading** (read-only).
+Security is reused from [`core.http`](../http/README.md) (same pattern
 opt-out security-vs-flexibility): `util.ValidateFetchURL` + `util.NewHTTPClient`
-(SSRF-guard на dial-фазе, downgrade-защита редиректов, системный TLS trust store).
-Реализация — [`http_unhealthy.go`](../../../../soul/internal/beacon/http_unhealthy.go).
+(SSRF-guard on the dial phase, downgrade-redirect protection, system TLS trust store).
+Implementation - [`http_unhealthy.go`](../../../../soul/internal/beacon/http_unhealthy.go).
 
-**State:** `healthy` — статус-код входит в `status_codes`; `unhealthy` — код вне
-набора **или** транспортная ошибка (DNS/TLS/timeout/недоступен/заблокированный
-SSRF-guard-ом dial, `status` = 0). Недоступный эндпоинт = `unhealthy` (событие
-интереса, а не ошибка `Check`).
+**State:** `healthy` - the status code is included in `status_codes`; `unhealthy` - code out
+dial **or** transport error (DNS/TLS/timeout/unreachable/blocked
+SSRF-guard dial, `status` = 0). Unreachable endpoint = `unhealthy` (event
+of interest, not the error `Check`).
 
-**Дефолт максимально безопасный** (https + SSRF-guard + TLS-верификация). Для
-внутреннего health-check (`https://127.0.0.1:8443/health`, RFC1918) — где
-secure-дефолт даёт ложный `unhealthy` (dial заблокирован netguard-ом) — оператор
-явно поднимает opt-out-флаги в `VigilDef.params`. warn при снятии guard здесь
-**не** эмитится (в отличие от apply-модулей): beacon — read-probe по расписанию
-без output-warnings-канала, явный флаг в `Vigil.params` и есть согласие оператора.
+**Default is as secure as possible** (https + SSRF-guard + TLS verification). For
+internal health-check (`https://127.0.0.1:8443/health`, RFC1918) - where
+secure-default gives false `unhealthy` (dial blocked by netguard) - operator
+explicitly raises the opt-out flags in `VigilDef.params`. warn when removing guard here
+**not** emitted (unlike apply modules): beacon - read-probe on schedule
+without an output-warnings channel, an explicit flag in `Vigil.params` is the operator's consent.
 
-| Param | Тип | Required / default | Смысл |
+| Param | Type | Required/default | Meaning |
 |---|---|---|---|
-| `url` | string | required | Целевой эндпоинт. **`https://`** по умолчанию; `http://` — только с `allow_http`; прочие схемы (`file://` …) отвергаются на `Check` всегда. |
-| `status_codes` | list of int | optional (default `[200]`) | «Здоровые» статус-коды. Код вне набора → `unhealthy`. |
-| `timeout` | string (duration) | optional (default `30s`) | Таймаут запроса (convention `duration`). Должен быть положительным. |
-| `allow_http` | bool | optional (default `false`) | Принять `http://` (снимает https-only и downgrade-защиту редиректов). **Не** открывает SSRF — dial-guard живёт отдельно. |
-| `insecure_skip_verify` | bool | optional (default `false`) | Не верифицировать TLS-сертификат (self-signed / internal CA). MITM-риск. |
-| `allow_private` | bool | optional (default `false`) | Снять SSRF dial-guard — разрешить dial в loopback / RFC1918 (internal-эндпоинт). |
+| `url` | string | required | Target endpoint. **`https://`** default; `http://` - only with `allow_http`; other schemes (`file://` ...) are always rejected on `Check`. |
+| `status_codes` | list of ints | optional (default `[200]`) | "Healthy" status codes. Code out of set → `unhealthy`. |
+| `timeout` | string (duration) | optional (default `30s`) | Request timeout (convention `duration`). Must be positive. |
+| `allow_http` | bool | optional (default `false`) | Accept `http://` (removes https-only and downgrade protection for redirects). **Not** opens SSRF - dial-guard lives separately. |
+| `insecure_skip_verify` | bool | optional (default `false`) | Do not verify the TLS certificate (self-signed / internal CA). MITM risk. |
+| `allow_private` | bool | optional (default `false`) | Remove SSRF dial-guard - allow dial in loopback / RFC1918 (internal endpoint). |
 
-Три opt-out-контура ортогональны (`allow_http` не открывает SSRF, и т.д.); каждый
-снимается только явным флагом.
+The three opt-out loops are orthogonal (`allow_http` does not open SSRF, etc.); everyone
+is cleared only by an explicit flag.
 
-**data:** `{ url, status }` — **только** URL и статус-код. Тело и заголовки ответа
-сюда **не** попадают: sensitive-by-construction
-([ADR-010 §7.4](../../../templating.md)) — beacon не светит payload в Portent.
-`status` = 0 означает транспортную ошибку (эндпоинт недоступен либо dial
-заблокирован SSRF-guard-ом при `allow_private:false`).
+**data:** `{ url, status }` - **only** URL and status code. Response body and headers
+**doesn't** go here: sensitive-by-construction
+([ADR-010 §7.4](../../../templating.md)) - beacon does not show payload in Portent.
+`status` = 0 means transport error (endpoint unavailable or dial
+blocked by SSRF guard at `allow_private:false`).
 
 **Typed-payload:** `HttpUnhealthyPortent { url, status }` (V5-1, ADR-030
-amendment 2026-05-26). Где-CEL — `event.http_unhealthy.url` /
+amendment 2026-05-26). Where-CEL is `event.http_unhealthy.url` /
 `event.http_unhealthy.status`.
 
 ---
 
 ## core.beacon.inotify
 
-Наблюдает FS-события через **kernel inotify** syscall — без поллинга и хеша,
-beacon будит scheduler только при реальной активности FS. **Linux-only**: на
-non-Linux платформах сам beacon отдаёт ошибку `platform not supported`, реестр
-этим не падает (адрес-константа доступна везде ради общего keeper-enum /
-soul-registry). Реализация — [`inotify_linux.go`](../../../../soul/internal/beacon/inotify_linux.go);
+Observes FS events via **kernel inotify** syscall - without polling and hash,
+beacon wakes up the scheduler only when FS is actually active. **Linux-only**: on
+non-Linux platforms the beacon itself gives the error `platform not supported`, registry
+this does not crash (the constant address is available everywhere for the sake of the common keeper-enum /
+soul-registry). Implementation - [`inotify_linux.go`](../../../../soul/internal/beacon/inotify_linux.go);
 stub — [`inotify_other.go`](../../../../soul/internal/beacon/inotify_other.go).
 
 **Fold-adapter** (V5-3, ADR-030 amendment 2026-05-26): background-goroutine
-читает inotify-fd между тиками scheduler-а и накапливает события в буфер;
-Check на каждом тике возвращает «окно» событий за интервал. State `events`
-взводится, если в окне ≥ 1 события, иначе `quiet`. Сравнение state edge-triggered
-(quiet → events / events → quiet) — один Portent на каждое «появление активности»
-и один на «затихание», а не лавину Portent-ов по одному на event.
+reads inotify-fd between scheduler ticks and accumulates events into a buffer;
+Check on each tick returns a "window" of events for the interval. State `events`
+is armed if there are ≥ 1 events in the window, otherwise `quiet`. Comparison of state edge-triggered
+(quiet → events / events → quiet) - one Portent for each "activity occurrence"
+and one for "fading", and not an avalanche of Portents, one per event.
 
-В отличие от `core.beacon.file_changed` (поллинг + SHA-256 содержимого) —
-`inotify` не считает хеш и не открывает файлы: kernel шлёт событие на любое
-изменение метаданных/содержимого, beacon только проецирует его в Portent. Это
-дешевле по CPU/IO на больших каталогах, но не отлавливает «фантомные» правки
-без kernel-события (NFS / снапшоты без inotify-форварда).
+Unlike `core.beacon.file_changed` (polling + SHA-256 content) -
+`inotify` does not calculate the hash and does not open files: the kernel sends an event to any
+metadata/content change, beacon only projects it to Portent. This
+cheaper in terms of CPU/IO on large directories, but does not catch "phantom" edits
+without kernel event (NFS / snapshots without inotify forward).
 
-**State:** `events` — в окне есть ≥ 1 события (`InotifyPortent.count > 0`);
-`quiet` — окно пусто (был тик scheduler-а, но kernel не прислал ничего).
+**State:** `events` - there are ≥ 1 events in the window (`InotifyPortent.count > 0`);
+`quiet` - the window is empty (there was a scheduler tick, but the kernel did not send anything).
 
-| Param | Тип | Required / default | Смысл |
+| Param | Type | Required/default | Meaning |
 |---|---|---|---|
-| `path` | string | required | Абсолютный путь к файлу или каталогу. Watch на каталог ловит события внутри (одного уровня — без рекурсии); watch на файл — события самого файла. |
-| `events` | list of string | optional (default — все 5) | Фильтр типов событий: `created` / `modified` / `deleted` / `moved` / `attrib`. Преобразуется в kernel-маску (IN_CREATE / IN_MODIFY / IN_DELETE / IN_MOVED_* / IN_ATTRIB); kernel сам фильтрует — не из фильтра не доходят до beacon-а. Неизвестный элемент игнорируется (forward-compat). |
-| `recursive` | bool | optional (default `false`) | **MVP принимает только `false`.** `true` → beacon отвергает Vigil ошибкой (потенциальный источник багов с walk-mount-point / symlink — отложен до явного запроса). |
-| `throttle` | string (duration) | optional | Принимается грамматикой для forward-compat, в MVP **игнорируется**; все события эмитятся как есть. Throttle планируется отдельным slice-ом. |
+| `path` | string | required | The absolute path to the file or directory. Watch on the directory catches events inside (one level - without recursion); watch on a file - events of the file itself. |
+| `events` | list of strings | optional (default - all 5) | Event type filter: `created` / `modified` / `deleted` / `moved` / `attrib`. Converted to a kernel mask (IN_CREATE / IN_MODIFY / IN_DELETE / IN_MOVED_* / IN_ATTRIB); The kernel itself filters - the filter does not reach the beacon. The unknown element is ignored (forward-compat). |
+| `recursive` | bool | optional (default `false`) | **MVP only accepts `false`.** `true` → beacon rejects Vigil with an error (potential source of bugs with walk-mount-point / symlink - deferred until explicitly requested). |
+| `throttle` | string (duration) | optional | Accepted by the forward-compat grammar, **ignored** in MVP; all events are issued as is. Throttle is planned as a separate slice. |
 
-**data:** `{ path, count, events: [{type, file, at}, …] }` для `events`-state;
-`{ path, count: 0 }` для `quiet`. `file` — имя в каталоге (для directory-watch);
-пусто, если watch на отдельный файл (kernel не выставляет name). `at` —
-Soul-side unix-seconds регистрации (НЕ kernel-time — inotify не даёт времени
-события).
+**data:** `{ path, count, events: [{type, file, at}, …] }` for `events`-state;
+`{ path, count: 0 }` for `quiet`. `file` - name in the directory (for directory-watch);
+is empty if the watch is on a separate file (the kernel does not set the name). `at` —
+Soul-side unix-seconds registration (NOT kernel-time - inotify does not give time
+events).
 
 **Typed-payload:** `InotifyPortent { path, events: [{type, file, at}], count }`
-(V5-3, ADR-030 amendment 2026-05-26). Где-CEL —
-`event.inotify.path == "/etc/audit"` или
-`event.inotify.events.exists(e, e.type == "created")` (CEL `exists` по
-repeated-полю проектируется как list-of-maps на activation).
+(V5-3, ADR-030 amendment 2026-05-26). Where-CEL -
+`event.inotify.path == "/etc/audit"` or
+`event.inotify.events.exists(e, e.type == "created")` (CEL `exists` by
+repeated-field is designed as list-of-maps on activation).
 
 ### Edge cases
 
-- **`max_user_watches` исчерпан** (`fs.inotify.max_user_watches` sysctl). Kernel
-  возвращает `ENOSPC` на `inotify_add_watch`. beacon конвертирует в понятную
-  ошибку Vigil оператору; scheduler логирует и пропускает тик (baseline не
-  установится, Portent не эмитится). Решение — поднять sysctl
+- **`max_user_watches` exhausted** (`fs.inotify.max_user_watches` sysctl). Kernel
+returns `ENOSPC` to `inotify_add_watch`. beacon converts to understandable
+Vigil error to operator; scheduler logs and skips the tick (baseline does not
+will be installed, Portent will not be issued). The solution is to raise sysctl
   `fs.inotify.max_user_watches`.
-- **Отсутствующий path.** `inotify_add_watch` вернёт `ENOENT`; beacon отдаёт
-  ошибку (scheduler пропускает тик). После создания path при следующем тике
-  watch установится.
-- **Permission denied.** Если у Soul-агента нет read-доступа к watch-target —
-  `EACCES`; та же семантика (ошибка → пропуск тика, scheduler логирует).
-- **Watch на отдельный файл vs каталог.** В первом случае `events[].file` пуст
-  (kernel не шлёт name), во втором — содержит относительное имя.
-- **Удаление наблюдаемой цели.** Kernel шлёт `IN_DELETE_SELF` → beacon
-  проецирует в `type=deleted`, и **watch автоматически прекращается** (kernel
-  снимает wd). Поведение re-add после re-create отложено до явного запроса
-  оператора.
+- **Missing path.** `inotify_add_watch` will return `ENOENT`; beacon gives away
+error (scheduler skips tick). After creating the path at the next tick
+watch will be installed.
+- **Permission denied.** If the Soul agent does not have read access to watch-target -
+`EACCES`; same semantics (error → missed tick, scheduler logs).
+- **Watch for a separate file vs directory.** In the first case, `events[].file` is empty
+(kernel does not send name), in the second it contains a relative name.
+- **Deleting an observed target.** Kernel sends `IN_DELETE_SELF` → beacon
+projects to `type=deleted` and **watch automatically stops** (kernel
+removes wd). Re-add behavior after re-create is deferred until explicitly requested
+operator.
 
-### Пример Vigil + Decree
+### Example Vigil + Decree
 
 ```yaml
-# vigils-реестр (managed OpenAPI/MCP, ADR-030):
+# vigils-registry (managed OpenAPI/MCP, ADR-030):
 - name: audit-log-tamper
   check: core.beacon.inotify
   interval: "5s"
@@ -326,7 +326,7 @@ repeated-полю проектируется как list-of-maps на activation
     events: [modified, deleted, moved]
   coven: [prod]
 
-# decree-реестр:
+# decree-registry:
 - name: alert-on-audit-tamper
   on_vigil: audit-log-tamper
   where_cel: "event.inotify.count > 0"
@@ -336,39 +336,39 @@ repeated-полю проектируется как list-of-maps на activation
       reason: "audit log tamper"
 ```
 
-### Lifecycle и known trade-offs MVP
+### Lifecycle and known trade-offs MVP
 
-- **Singleton-семантика.** Один экземпляр `InotifyBeacon` обслуживает все
-  Vigil-ы процесса; per-path watches хранятся в map внутри beacon-а. Несколько
-  Vigil-ов с разными `path` — независимые kernel-fd и независимые буферы.
-- **Fd-leak при удалении Vigil.** Scheduler не сигнализирует beacon-у об
-  удалении Vigil-а (ReplaceAll), поэтому kernel-fd для исчезнувших path
-  остаются открытыми до завершения процесса (kernel сам освободит).
-  Ограниченный leak (множество уникальных path конечно); explicit lifecycle
-  hook на интерфейсе `Beacon` — отложен.
+- **Singleton semantics.** One instance of `InotifyBeacon` serves everything
+Process Vigils; per-path watches are stored in a map inside a beacon. Several
+Vigils with different `path` - independent kernel-fd and independent buffers.
+- **Fd-leak when deleting Vigil.** Scheduler does not signal the beacon about
+removing Vigil (ReplaceAll), so kernel-fd for the disappeared path
+remain open until the process is completed (the kernel itself will release).
+Limited leak (many unique paths of course); explicit lifecycle
+hook on interface `Beacon` - deferred.
 
 ## Custom `soul_beacon` plugins
 
-Помимо встроенных `core.beacon.*` оператор может добавить собственные beacon-плагины
-([ADR-030 V5-2](../../../adr/0030-vigil-oracle.md#adr-030-vigil--oracle--event-driven-мониторинг-beacons--reactor)).
-4-й kind в plugin-инфре (parity с `soul_module` / `cloud_driver` / `ssh_provider`):
+In addition to the built-in `core.beacon.*`, the operator can add his own beacon plugins
+([ADR-030 V5-2](../../../adr/0030-vigil-oracle.md)).
+4th kind in plugin-infra (parity with `soul_module` / `cloud_driver` / `ssh_provider`):
 
-- бинарь `soul-beacon-<name>`, manifest [`kind: soul_beacon`](../../../keeper/plugins.md#spec-для-kind-soul_beacon);
-- SDK — [`sdk/beacon`](../../../../sdk/beacon/beacon.go), интерфейс `Beacon` с двумя RPC:
-  - `Validate(params) → ok+errors[]` — runtime-проверки `params` Vigil (то, что не выражается JSON Schema manifest-а);
-  - `Check(params, state_cookie) → state + payload + state_cookie + error` — один тик опроса.
-- адресация Vigil — `<namespace>.<name>` (например `community.zfs-degraded`); диспетчер Soul-side различает встроенные `core.beacon.*` от plugin-beacon по namespace.
-- lifecycle — **one-shot per Spawn** ([ADR-020(d)](../../../adr/0020-plugin-infrastructure.md#adr-020-plugin-инфраструктура-формат-manifest-handshake-lifecycle)): scheduler делает Spawn → Check → Close на каждом тике; для частых тиков плагин может сохранять in-memory state через `state_cookie` (passback).
-- security — fail-closed Sigil-verify перед Spawn ([ADR-026](../../../adr/0026-sigil.md#adr-026-sigil--целостность-плагинов-keeper-signed-digest-индекс)): без активного допуска (`keeper.plugin.allow ns=<ns> name=<name> ref=<ref>`) плагин НЕ запускается.
+- binary `soul-beacon-<name>`, manifest [`kind: soul_beacon`](../../../keeper/plugins.md);
+- SDK - [`sdk/beacon`](../../../../sdk/beacon/beacon.go), `Beacon` interface with two RPCs:
+  - `Validate(params) → ok+errors[]` — runtime checks `params` Vigil (what is not expressed in the JSON Schema manifest);
+  - `Check(params, state_cookie) → state + payload + state_cookie + error` - one poll tick.
+- Vigil addressing - `<namespace>.<name>` (for example `community.zfs-degraded`); The Soul-side dispatcher distinguishes built-in `core.beacon.*` from plugin-beacon by namespace.
+- lifecycle — **one-shot per Spawn** ([ADR-020(d)](../../../adr/0020-plugin-infrastructure.md)): scheduler makes Spawn → Check → Close on every tick; for frequent ticks, the plugin can save in-memory state via `state_cookie` (passback).
+- security - fail-closed Sigil-verify before Spawn ([ADR-026](../../../adr/0026-sigil.md)): without active permission (`keeper.plugin.allow ns=<ns> name=<name> ref=<ref>`) the plugin will NOT run.
 
-Payload plugin-beacon — `PortentEvent.payload.custom` (Struct, oneof-ветка). Where-CEL Decree читает `event.custom.<field>`. Точная shape `payload` — на усмотрение автора (plugin-specific).
+Payload plugin-beacon - `PortentEvent.payload.custom` (Struct, oneof-branch). Where-CEL Decree reads `event.custom.<field>`. The exact shape of `payload` is at the discretion of the author (plugin-specific).
 
-Пример минимального плагина — см. [`docs/keeper/plugins.md#kind-soul_beacon-zfs-pool-health-adr-030-v5-2`](../../../keeper/plugins.md#kind-soul_beacon-zfs-pool-health-adr-030-v5-2).
+For an example of a minimal plugin - see [`docs/keeper/plugins.md#kind-soul_beacon-zfs-pool-health-adr-030-v5-2`](../../../keeper/plugins.md#kind-soul_beacon-zfs-pool-health-adr-030-v5-2).
 
-## См. также
+## See also
 
-- [ADR-030](../../../adr/0030-vigil-oracle.md#adr-030-vigil--oracle--event-driven-мониторинг-beacons--reactor) — Vigil / Oracle / event-driven мониторинг (beacons + reactor).
-- [naming-rules.md → Сущности предметной области](../../../naming-rules.md#сущности-предметной-области) — Vigil / Portent / Oracle / Decree.
-- [core/http/README.md](../http/README.md) — read-probe HTTP (откуда переиспользуется https-only + SSRF-guard).
-- [core/service/README.md](../service/README.md) — управление сервисами (откуда `core.beacon.service_down` берёт detection активности).
-- [keeper/plugins.md → `kind: soul_beacon`](../../../keeper/plugins.md#spec-для-kind-soul_beacon) — manifest-схема plugin-beacon.
+- [ADR-030](../../../adr/0030-vigil-oracle.md) - Vigil / Oracle / event-driven monitoring (beacons + reactor).
+- [naming-rules.md → Domain Entities](../../../naming-rules.md) - Vigil / Portent / Oracle / Decree.
+- [core/http/README.md](../http/README.md) - read-probe HTTP (from where https-only + SSRF-guard is reused).
+- [core/service/README.md](../service/README.md) - service management (from where `core.beacon.service_down` gets activity detection).
+- [keeper/plugins.md → `kind: soul_beacon`](../../../keeper/plugins.md) — plugin-beacon manifest schema.

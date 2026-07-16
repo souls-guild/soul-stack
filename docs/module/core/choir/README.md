@@ -1,131 +1,131 @@
 # core.choir.present / core.choir.absent
 
-Правка членства Voice-а в Choir-е инкарнации (ADR-044): декларируемая сущность —
-«SID является Voice-ом указанного Choir-а данной инкарнации» (declared-партия
-хора). **Keeper-side**, диспетчер `on: keeper` — шаг исполняется на самом
-Keeper-е, не на хосте (в отличие от Soul-side core вроде `core.pkg`/`core.file`).
-Запуск без `on: keeper` — ошибка валидации scenario. Реализация —
+Editing Voice's membership in the Choir incarnation (ADR-044): declared entity -
+"SID is the Voice of the specified Choir of this incarnation" (declared part
+choir). **Keeper-side**, dispatcher `on: keeper` - the step is executed on the actual
+Keeper, not on the host (unlike Soul-side core like `core.pkg`/`core.file`).
+Launch without `on: keeper` - scenario validation error. Implementation -
 [`keeper/internal/coremod/choir/member.go`](../../../../keeper/internal/coremod/choir/member.go).
 
-Author-форма адреса задачи — `core.choir.present` / `core.choir.absent`
-(base `core.choir` + state, симметрично `core.file.present`/`core.file.absent`
-Soul-side). State приходит модулю в `ApplyRequest.state` через `SplitModuleAddr`
-и диспетчится внутри реализации (см.
-[keeper/modules.md → «Регистрация и диспетчеризация»](../../../keeper/modules.md#регистрация-и-диспетчеризация-по-адресу-base--state)).
-Модуль регистрируется в keeper-side Registry **только при наличии** зависимости
-`Deps.ChoirStore`; в сборке без choir-сценариев шаг падает «unknown keeper-side
-module» (как любой не подключённый).
+Author form of task address - `core.choir.present` / `core.choir.absent`
+(base `core.choir` + state, symmetrical `core.file.present`/`core.file.absent`
+Soul-side). State comes to the module in `ApplyRequest.state` via `SplitModuleAddr`
+and dispatched within the implementation (see
+[keeper/modules.md → "Registration and dispatching"](../../../keeper/modules.md)).
+The module is registered in the keeper-side Registry **only if there is a** dependency
+`Deps.ChoirStore`; in a build without choir scripts the step drops to "unknown keeper-side"
+module" (like any unconnected one).
 
 ## States
 
-| State | Действие | Идемпотентность (когда `changed=true`) |
+| State | Action | Idempotency (when `changed=true`) |
 |---|---|---|
-| `present` (default при пустом state) | `AddVoice` — SID становится Voice-ом Choir-а. | `changed=true`, если Voice добавлен. Voice уже есть (`ErrVoiceExists`) → `changed=false`, не ошибка. |
-| `absent` | `RemoveVoice` — членство снимается. | `changed=true`, если Voice снят. Voice-а нет (`ErrVoiceNotFound`) → `changed=false`, не ошибка. |
+| `present` (default if state is empty) | `AddVoice` - SID becomes the Voice of the Choir. | `changed=true` if Voice is added. Voice already exists (`ErrVoiceExists`) → `changed=false`, not an error. |
+| `absent` | `RemoveVoice` - membership is canceled. | `changed=true` if Voice is removed. There is no voice (`ErrVoiceNotFound`) → `changed=false`, not an error. |
 
-Неизвестный state (не `present`/`absent`) — шаг падает. До мутации модуль
-валидирует существование инкарнации (`IncarnationExists`); отсутствует — шаг
-падает (иначе `absent` на опечатке имени инкарнации тихо вернул бы
+Unknown state (not `present`/`absent`) - step drops. Before mutation module
+validates the existence of incarnation (`IncarnationExists`); missing - step
+falls (otherwise `absent` on the typo of the incarnation name would have been quietly returned
 `ErrVoiceNotFound`).
 
 ## present — params
 
-| Param | Тип | Required / default | Смысл |
+| Param | Type | Required/default | Meaning |
 |---|---|---|---|
-| `incarnation` | string | required | Имя инкарнации, которой принадлежит Choir. Проверяется на существование. |
-| `choir` | string | required | Имя Choir-а. Валидируется `ValidChoirName`; мусор — шаг падает. |
-| `sid` | string | required | `SID` хоста-Voice (FQDN). Валидируется `ValidSID`; невалидный — шаг падает. |
-| `role` | string | optional | Партия Voice-а в Choir-е. |
-| `position` | int (≥ 0) | optional | Позиция Voice-а. Отрицательная — шаг падает. |
+| `incarnation` | string | required | The name of the incarnation to which Choir belongs. Checks for existence. |
+| `choir` | string | required | Choir's name. Validated by `ValidChoirName`; garbage - the step falls. |
+| `sid` | string | required | `SID` host-Voice (FQDN). Validated by `ValidSID`; invalid - the step falls. |
+| `role` | string | optional | Voice part in Choir. |
+| `position` | int (≥ 0) | optional | Voice position. Negative - the step decreases. |
 
 ## absent — params
 
-| Param | Тип | Required / default | Смысл |
+| Param | Type | Required/default | Meaning |
 |---|---|---|---|
-| `incarnation` | string | required | Имя инкарнации. Проверяется на существование. |
-| `choir` | string | required | Имя Choir-а. Валидируется `ValidChoirName`. |
-| `sid` | string | required | `SID` хоста-Voice (FQDN). Валидируется `ValidSID`. |
+| `incarnation` | string | required | Incarnation name. Checks for existence. |
+| `choir` | string | required | Choir's name. Validated by `ValidChoirName`. |
+| `sid` | string | required | `SID` host-Voice (FQDN). Validated by `ValidSID`. |
 
-`role` / `position` для `absent` не используются (снятие — по тройке
+`role` / `position` for `absent` are not used (withdrawal - in threes
 `incarnation`/`choir`/`sid`).
 
 ## Capabilities / side-effects
 
-- **Keeper-side, не трогает хост.** Все side-effect-ы — в реестре Keeper-а
-  (Postgres `incarnation_choir_voices`), не в файловой системе/процессах Soul-а.
-- **Меняет реестр Choir-членства:** `AddVoice` (`present`) / `RemoveVoice`
-  (`absent`) через `Store` (прод — `choir.NewPGStore`). Это правка членства
-  Voice-а, не создание самого Choir-а или инкарнации.
-- **Не выполняет подпроцессов** и не доставляет ничего на Soul.
-- **Идемпотентность по конструкции:** повторный `present` уже-Voice-а
-  (`ErrVoiceExists`) и `absent` отсутствующего Voice-а (`ErrVoiceNotFound`) —
-  `changed=false`, не ошибка.
+- **Keeper-side, does not touch the host.** All side-effects are in the Keeper registry
+(Postgres `incarnation_choir_voices`), not on Soul's filesystem/processes.
+- **Changes the Choir membership registry:** `AddVoice` (`present`) / `RemoveVoice`
+(`absent`) via `Store` (cont. - `choir.NewPGStore`). This is a membership edit.
+Voice, not the creation of the Choir itself or the incarnation.
+- **Does not execute subprocesses** and does not deliver anything to Soul.
+- **Idempotency by design:** repeated `present` already-Voice
+(`ErrVoiceExists`) and `absent` missing Voice (`ErrVoiceNotFound`) -
+`changed=false`, not an error.
 
-## Безопасность
+## Security
 
-- **Keeper-side, не Soul-side — `root`/capability-семантика неприменима.** Шаг
-  исполняется в процессе Keeper-а (диспетчер `on: keeper`), а не `soul`-агентом
-  на хосте. Манифеста с `required_capabilities` у модуля нет — это
-  keeper-internal операция над Postgres, не host-плагин.
-- **Правка членства — привилегированная операция Keeper-а.** Доступ к запуску
-  scenario с этим шагом регулируется RBAC оператора на уровне scenario-прогона
-  ([rbac.md](../../../keeper/rbac.md)); сам core-модуль отдельного permission не
-  объявляет.
-- **Инвариант членства (ADR-044) переиспользуется, не дублируется.** Voice можно
-  добавить только для SID, уже являющегося членом инкарнации — это гарантирует
-  choir-CRUD (`AddVoice → ErrNotMembers`), не данный модуль. `ErrNotMembers` →
-  `failed`-событие (прогон уходит в onfail / `error_locked`).
-- **Валидация входа против инъекции мусора в реестр.** `choir` проверяется
-  `ValidChoirName`, `sid` — `ValidSID` (FQDN); невалидное — шаг падает, в реестр
-  не попадает. Существование инкарнации проверяется до мутации.
+- **Keeper-side, not Soul-side - `root`/capability semantics are not applicable.** Step
+is executed in the Keeper process (`on: keeper` dispatcher), and not by the `soul` agent
+on the host. The module does not have a manifest with `required_capabilities` - this is
+keeper-internal operation on Postgres, not a host plugin.
+- **Edit membership is a privileged Keeper operation.** Launch access
+scenario with this step is regulated by the RBAC operator at the level of the scenario run
+([rbac.md](../../../keeper/rbac.md)); the core module itself does not have a separate permission
+announces.
+- **Membership invariant (ADR-044) is reused, not duplicated.** Voice can
+add only for a SID that is already a member of the incarnation - this guarantees
+choir-CRUD (`AddVoice → ErrNotMembers`), not this module. `ErrNotMembers` →
+`failed`-event (the run goes to onfail / `error_locked`).
+- **Login validation against garbage injection into the registry.** `choir` is checked
+`ValidChoirName`, `sid` - `ValidSID` (FQDN); invalid - the step falls, to the register
+doesn't hit. The existence of an incarnation is verified before mutation.
 
-## Ограничения (S-T5, future — не реализовано)
+## Limitations (S-T5, future - not implemented)
 
-- **Cross-incarnation guard** (`param.incarnation` == инкарнация текущего
-  прогона): run-context модулю недоступен (ADR-044 / architect A1). Модуль
-  доверяет param `incarnation` и лишь валидирует его существование. Жёсткий
-  guard — отдельная задача (RunContext-инъекция в keeper-dispatch).
-- **Roster-growth** (новый Voice виден следующему шагу прогона) — не реализовано.
+- **Cross-incarnation guard** (`param.incarnation` == incarnation of the current
+run): run-context is not available to the module (ADR-044 / architect A1). Module
+trusts param `incarnation` and only validates its existence. Hard
+guard is a separate task (RunContext injection into keeper-dispatch).
+- **Roster-growth** (new Voice visible to next run step) - not implemented.
 
 ## Output / register
 
-`present` отдаёт в `register.<name>.*`:
+`present` returns to `register.<name>.*`:
 
-| Поле | Тип | Описание |
+| Field | Type | Description |
 |---|---|---|
-| `incarnation` | string | Эхо `params.incarnation`. |
-| `choir` | string | Эхо `params.choir`. |
-| `sid` | string | Эхо `params.sid`. |
+| `incarnation` | string | Echo `params.incarnation`. |
+| `choir` | string | Echo `params.choir`. |
+| `sid` | string | Echo `params.sid`. |
 | `state` | string | `present`. |
-| `added` | bool | `true`, если Voice был добавлен; `false`, если уже существовал. |
+| `added` | bool | `true` if Voice was added; `false` if it already existed. |
 
-`absent` отдаёт:
+`absent` gives:
 
-| Поле | Тип | Описание |
+| Field | Type | Description |
 |---|---|---|
-| `incarnation` | string | Эхо `params.incarnation`. |
-| `choir` | string | Эхо `params.choir`. |
-| `sid` | string | Эхо `params.sid`. |
+| `incarnation` | string | Echo `params.incarnation`. |
+| `choir` | string | Echo `params.choir`. |
+| `sid` | string | Echo `params.sid`. |
 | `state` | string | `absent`. |
-| `removed` | bool | `true`, если Voice был снят; `false`, если его не было. |
+| `removed` | bool | `true` if Voice was removed; `false` if it was not there. |
 
-Плюс стандартные `.changed` / `.failed` DSL-ядра.
+Plus standard `.changed` / `.failed` DSL cores.
 
-## Связь с soulprint
+## Contact soulprint
 
-После `present`/`absent` Choir-членство хоста проецируется в CEL как
-registry-проекция `soulprint.self.choirs` и `soulprint.hosts[].choirs`
-(зеркало `covens`, источник — `incarnation_choir_voices`, не collected-факт
-`SoulprintFacts`; см.
-[soul/soulprint.md → «Граница Soulprint ↔ souls-registry»](../../../soul/soulprint.md#граница-soulprint--souls-registry)).
-Roster-growth в пределах одного прогона пока не реализован (см. ограничения
-выше): новый Voice виден последующим прогонам.
+After `present`/`absent` the host's Choir membership is mapped to CEL as
+registry projection `soulprint.self.choirs` and `soulprint.hosts[].choirs`
+(mirror `covens`, source - `incarnation_choir_voices`, not collected fact
+`SoulprintFacts`; see
+[soul/soulprint.md → "Soulprint border ↔ souls-registry"](../../../soul/soulprint.md)).
+Roster-growth within one run has not yet been implemented (see restrictions
+above): the new Voice is visible to subsequent runs.
 
-## Пример
+## Example
 
 ```yaml
-# Добавляем хост в Choir 'replicas' инкарнации (present default).
-# on: keeper обязателен — это keeper-side шаг.
+# Add a host to the Choir 'replicas' incarnations (present default).
+# on: keeper is required - this is a keeper-side step.
 - name: Add the new replica to the replicas choir
   on: keeper
   module: core.choir.present
@@ -137,7 +137,7 @@ Roster-growth в пределах одного прогона пока не ре
 ```
 
 ```yaml
-# Снятие членства при выводе хоста из роли.
+# Removing membership when a host is removed from a role.
 - name: Remove the host from the replicas choir
   on: keeper
   module: core.choir.absent
@@ -147,15 +147,15 @@ Roster-growth в пределах одного прогона пока не ре
     sid:         "${ input.target_sid }"
 ```
 
-> **Deferred (backlog).** Вызова `core.choir.present`/`absent` в `examples/`
-> пока нет — примеры выше составлены как минимальные валидные по контракту кода.
-> Замена на ссылку на реальный scenario-example отложена до появления
-> соответствующего use-case.
+> **Deferred (backlog).** Call `core.choir.present`/`absent` to `examples/`
+> not yet - the examples above are compiled as minimal valid code under the contract.
+> Replacement with a link to a real scenario-example has been postponed until it becomes available
+> corresponding use-case.
 
-## См. также
+## See also
 
-- [README.md](../../README.md) — каталог core-модулей.
-- [keeper/modules.md](../../../keeper/modules.md) — нормативная спека Keeper-side core-модулей (диспетчер `on: keeper`, разбор `base`+`state`).
-- [scenario/orchestration.md §3](../../../scenario/orchestration.md#3-таргет-шага--on) — `on:`, диспетчер шага между Soul-стороной и Keeper-стороной.
-- [soul/soulprint.md](../../../soul/soulprint.md) — registry-проекция `soulprint.self.choirs` / `soulprint.hosts[].choirs`.
-- [naming-rules.md → Модули Destiny](../../../naming-rules.md#модули-destiny) — словарь имён.
+- [README.md](../../README.md) - directory of core modules.
+- [keeper/modules.md](../../../keeper/modules.md) - regulatory spec of Keeper-side core modules (dispatcher `on: keeper`, parsing `base`+`state`).
+- [scenario/orchestration.md §3](../../../scenario/orchestration.md#3-step-target---on) - `on:`, step manager between the Soul side and the Keeper side.
+- [soul/soulprint.md](../../../soul/soulprint.md) - registry projection `soulprint.self.choirs` / `soulprint.hosts[].choirs`.
+- [naming-rules.md → Destiny Modules](../../../naming-rules.md) - a dictionary of names.

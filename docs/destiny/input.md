@@ -1,27 +1,27 @@
-# `input:` в destiny
+# `input:` in destiny
 
-Этот документ описывает **destiny-специфику** блока `input:`. Сам формат — общий стандарт для destiny / scenario / манифеста модуля и описан в [`docs/input.md`](../input.md). Здесь — где `input:` валидируется, как используется внутри destiny и какие специфичные правила и подсказки применяются к destiny-параметрам.
+This document describes the **destiny-specifics** of the `input:` block. The format itself is a common standard for a destiny/scenario/module manifest and is described in [`docs/input.md`](../input.md). Here is where `input:` is validated, how it is used within destiny, and what specific rules and hints apply to destiny parameters.
 
-## Источник правды на формат
+## Source of truth on the format
 
-Точные ключи (`type`, `enum`, `pattern`, `format`, `min_length`, `secret`, …), типы (`string`, `integer`, `number`, `boolean`, `array`, `object`) и правила валидации — в [`docs/input.md`](../input.md). При расхождениях приоритет за тем документом. Любой новый ключ — propose-and-wait → правка [`docs/input.md`](../input.md) → потом этот файл и примеры.
+Exact keys (`type`, `enum`, `pattern`, `format`, `min_length`, `secret`, ...), types (`string`, `integer`, `number`, `boolean`, `array`, `object`) and validation rules - in [`docs/input.md`](../input.md). In case of discrepancies, priority goes to that document. Any new key - propose-and-wait → edit [`docs/input.md`](../input.md) → then this file and examples.
 
-## Где блок живёт
+## Where the block lives
 
-В корне `destiny.yml` (см. [manifest.md](manifest.md) → поле `input:`). Не в `tasks/main.yml`. Один destiny — один блок `input:`. Все задачи `tasks/main.yml` читают значения из общего набора параметров.
+At the root `destiny.yml` (see [manifest.md](manifest.md) → field `input:`). Not in `tasks/main.yml`. One destiny - one block `input:`. All `tasks/main.yml` tasks read values ​​from a common set of parameters.
 
-## Где валидируется
+## Where is validated
 
-Defense in depth — два независимых раунда валидации, оба обязательны:
+Defense in depth - two independent rounds of validation, both are required:
 
-1. **Keeper при инвокации.** Когда scenario или прямой API-вызов запускает destiny, Keeper читает `input:` destiny и проверяет переданные значения **до** того, как что-либо уйдёт на Souls. Ошибка → fail fast, диагностика оператору, нулевой трафик к хостам.
-2. **Soul перед apply.** Получив destiny + значения от Keeper-а (или от `keeper.push`), Soul валидирует их повторно. Страхует от рассинхронизации версий, ручной инъекции и багов в Keeper-е.
+1. **Keeper on invocation.** When a scenario or direct API call triggers destiny, Keeper reads `input:` destiny and checks the passed values **before** anything goes to Souls. Error → fail fast, operator diagnostics, zero traffic to hosts.
+2. **Soul before apply.** Having received the destiny + values ​​from the Keeper (or from `keeper.push`), Soul re-validates them. Protects against version desynchronization, manual injection and bugs in Keeper.
 
-См. также [`docs/input.md`](../input.md) — общий стандарт формата (где `input:` живёт в каждом артефакте).
+See also [`docs/input.md`](../input.md) - a general format standard (where `input:` lives in every artifact).
 
-## Как используется внутри destiny
+## How it is used inside destiny
 
-В `tasks/main.yml`, в шаблонах `templates/*.tmpl` и в условиях `when:` значения referenced как `input.<name>` (через `${ ... }` в строковой интерполяции, голая форма в top-level expression-keys — см. [`docs/templating.md`](../templating.md)):
+In `tasks/main.yml`, in `templates/*.tmpl` templates and in `when:` conditions referenced values as `input.<name>` (via `${ ... }` in string interpolation, bare form in top-level expression-keys - see [`docs/templating.md`](../templating.md)):
 
 ```yaml
 # destiny.yml
@@ -50,40 +50,40 @@ tasks:
       name: redis-server
 ```
 
-## `input.<name>` vs `params:` задачи
+## `input.<name>` vs `params:` tasks
 
-Не путать:
+Not to be confused:
 
 | | `input.<name>` | `params.<name>` |
 |---|---|---|
-| **Что** | Параметр destiny, объявленный в `destiny.yml → input:` | Аргумент конкретного модуля, передаваемый в шаге `tasks/main.yml` |
-| **Откуда схема** | [`docs/input.md`](../input.md) — общий стандарт | Манифест модуля для конкретного состояния (см. [architecture.md → «Манифест модуля»](../architecture.md#манифест-модуля)) |
-| **Кто валидирует** | Keeper + Soul (см. выше) | Soul при apply; `soul-lint` статически по манифесту модуля |
-| **Доступ в шаблонах** | `${ input.action }` (или голая `input.action` в top-level expression-keys) | внутреннее значение задачи, не visible снаружи |
+| **What** | Destiny parameter declared in `destiny.yml → input:` | Module-specific argument passed in step `tasks/main.yml` |
+| **Where is the diagram from** | [`docs/input.md`](../input.md) - general standard | Module manifest for a specific state (see [architecture.md → "Module Manifest"](../architecture.md)) |
+| **Who validates** | Keeper + Soul (see above) | Soul on apply; `soul-lint` statically by module manifest |
+| **Access in templates** | `${ input.action }` (or naked `input.action` in top-level expression-keys) | internal task value, not visible outside |
 
-Имена намеренно разные: `input` — *снаружи внутрь destiny*; `params` — *внутрь модуля*.
+The names are intentionally different: `input` - *outside inside destiny*; `params` - *inside the module*.
 
-## Destiny-специфичные правила и подсказки
+## Destiny-specific rules and tips
 
-Базовые подсказки для авторов схем — в [`docs/input.md` → «Подсказки авторам»](../input.md#подсказки-авторам). Дополнения, специфичные для destiny:
+Basic tips for schematic authors can be found in [`docs/input.md` → "Hints for Authors"](../input.md). Destiny-specific additions:
 
-- **`action:`-параметр почти всегда есть.** Destiny обычно объявляет верх-уровневый `action: { type: string, enum: [...] }` — он определяет, какие задачи `tasks/main.yml` исполнятся через `when:`. Это та точка, в которую упирается «один destiny — несколько режимов работы» (apply / restart / ping / status-check).
-- **Все секреты — через `secret: true`.** Пароли, токены, приватные ключи и vault-ссылки. Без этого значение засветится в логах apply при ошибке задачи; такие инциденты — самый дешёвый класс утечек.
-- **Vault-ссылки — `pattern: "^vault:.*"`**, а не «строка как строка». Резолв в реальное значение делает Keeper перед отправкой destiny на Soul; до тех пор destiny оперирует ссылкой, не значением.
-- **`enum:` важнее `pattern:`.** Конечный список значений (`apply | restart | ping`) гораздо лучше регулярки `^(apply|restart|ping)$` — лучше читается, валидируется линтером, доступен в UI/MCP-каталоге как dropdown.
+- **`action:` parameter is almost always there.** Destiny usually declares a top-level `action: { type: string, enum: [...] }` - it determines which tasks `tasks/main.yml` will be executed through `when:`. This is the point at which "one destiny - several operating modes" (apply / restart / ping / status-check) rests.
+- **All secrets are via `secret: true`.** Passwords, tokens, private keys and vault links. Without this, the value will appear in the apply logs when the task fails; such incidents are the cheapest class of leaks.
+- **Vault references are `pattern: "^vault:.*"`**, not "string as string". The resolution to real value is done by Keeper before sending destiny to Soul; Until then, destiny operates by reference, not by meaning.
+- **`enum:` is more important than `pattern:`.** The finite list of values ​​(`apply | restart | ping`) is much better than the regex `^(apply|restart|ping)$` - better readable, validated by a linter, available in the UI/MCP directory as a dropdown.
 
-## Связь с `input:` scenario
+## Communication with `input:` scenario
 
-Scenario тоже имеет блок `input:` (того же формата). Но это **разные** контракты:
+Scenario also has a `input:` block (same format). But these are **different** contracts:
 
-- Scenario `input:` — что оператор передал при запуске сценария (`keeper.incarnation.run scenario=add_user inputs={...}`).
-- Destiny `input:` — что scenario передал destiny через `apply: { destiny: ..., params: { ... } }`.
+- Scenario `input:` - what the operator passed when running the script (`keeper.incarnation.run scenario=add_user inputs={...}`).
+- Destiny `input:` - that scenario passed destiny through `apply: { destiny: ..., params: { ... } }`.
 
-Scenario вычисляет destiny-`input:` из своего scenario-`input:`, `vars` (essence) и `state` — и передаёт в destiny. Внутри destiny scenario-`input:` **не виден** — destiny знает только то, что пришло на её `input:`.
+Scenario calculates destiny-`input:` from its scenario-`input:`, `vars` (essence) and `state` - and passes it to destiny. Inside destiny scenario-`input:` **not visible** - destiny knows only what came to its `input:`.
 
-## См. также
+## See also
 
-- [`docs/input.md`](../input.md) — общий стандарт формата `input:`.
-- [manifest.md](manifest.md) — где `input:` лежит в `destiny.yml`.
-- [tasks.md](tasks.md) — как `input.<name>` используется в задачах.
-- [architecture.md → «Destiny: входной контракт и валидация»](../architecture.md#destiny-входной-контракт-и-валидация) — раунды валидации и связь с soul-lint.
+- [`docs/input.md`](../input.md) is a general standard for the `input:` format.
+- [manifest.md](manifest.md) - where `input:` lies in `destiny.yml`.
+- [tasks.md](tasks.md) - how `input.<name>` is used in tasks.
+- [architecture.md → "Destiny: input contract and validation"](../architecture.md) — validation rounds and connection with soul-lint.

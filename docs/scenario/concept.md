@@ -1,66 +1,66 @@
-# Scenario — концепция
+# Scenario - concept
 
-Scenario — **оркестрационный слой** Soul Stack-а: одна операция над целым кластером (`create`, `add_user`, `update_acl`, `add_replica`, `restart`, …). В Soul Stack-словаре scenario соответствует комбинации Salt Orchestration + State, но в одном языке и в одном месте.
+Scenario - **orchestration layer** Soul Stack: one operation on the whole cluster (`create`, `add_user`, `update_acl`, `add_replica`, `restart`, ...). In the Soul Stack dictionary, scenario corresponds to the combination of Salt Orchestration + State, but in one language and in one place.
 
-Папка `scenario/<name>/` в git-репо сервиса, точка входа `main.yml`. Версия — git ref service-репо ([ADR-007](../adr/0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте)).
+Folder `scenario/<name>/` in the service git repo, entry point `main.yml`. Version - git ref service-repo ([ADR-007](../adr/0007-versioning-git-ref.md)).
 
-> **Второй канал авто-дискавери — `upgrade/`.** Version-к-версии upgrade-сценарии живут в отдельном каталоге `upgrade/<slug>/` рядом со `scenario/` (self-describing ключ `from:` — версии-источники), запускаются апгрейдом (`POST /v1/incarnations/{name}/upgrade`) и в обычных day-2-списках сценариев не показываются. Дизайн — [ADR-0068](../adr/0068-service-upgrade-v2.md).
+> **The second auto-discovery channel is `upgrade/`.** Version-to-version upgrade scripts live in a separate directory `upgrade/<slug>/` next to `scenario/` (self-describing key `from:` - source versions), are launched by the upgrade (`POST /v1/incarnations/{name}/upgrade`) and in regular day-2 script lists are not shown. Design - [ADR-0068](../adr/0068-service-upgrade-v2.md).
 
-## Что такое scenario в новой модели
+## What is scenario in the new model
 
-До [ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) действовал инвариант «scenario только `apply: { destiny: … }`, без `module:`». **Этот инвариант снят.** Scenario получает:
+Before [ADR-009](../adr/0009-scenario-dsl.md), the invariant "scenario only `apply: { destiny: … }`, without `module:`" was in effect. **This invariant has been removed.** Scenario receives:
 
-- **Полное DSL-ядро задач destiny** — целиком из [destiny/tasks.md](../destiny/tasks.md): `module:` (включая изменяющие модули, не только read-only), `templates`, task-level `vars:`, `register:`, `loop:`, `block:`, `parallel:`, `onchanges:`/`onfail:`/`require:`, `changed_when:`/`failed_when:`, `retry:`, `timeout:`. Это ядро **не дублируется** в scenario-спеке — источник правды один.
-- **Оркестрационный слой сверху** — то, чего у destiny нет: таргетинг (`on:`/`where:`), кросс-хостовая координация, `apply: { destiny: … }`, запись `incarnation.state` через `state_changes`. Нормативная спецификация дельты — [orchestration.md](orchestration.md).
+- **Complete DSL core of destiny tasks** - entirely from [destiny/tasks.md](../destiny/tasks.md): `module:` (including modifying modules, not only read-only), `templates`, task-level `vars:`, `register:`, `loop:`, `block:`, `parallel:`, `onchanges:`/`onfail:`/`require:`, `changed_when:`/`failed_when:`, `retry:`, `timeout:`. This kernel is **not duplicated** in the scenario spec - there is only one source of truth.
+- **The orchestration layer on top** is something that destiny doesn't have: targeting (`on:`/`where:`), cross-host coordination, `apply: { destiny: … }`, writing `incarnation.state` via `state_changes`. The delta regulatory specification is [orchestration.md](orchestration.md).
 
-destiny при этом **остаётся** самостоятельной сущностью (см. границу ниже): переиспользуемый, независимо-версионируемый (git ref, [ADR-007](../adr/0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте)), изолированный, molecule-тестируемый кирпич «как привести один хост в состояние X».
+destiny **remains** an independent entity (see border below): reusable, independently-versionable (git ref, [ADR-007](../adr/0007-versioning-git-ref.md)), isolated, molecule-testable brick of "how to bring one host into state X".
 
-## Граница destiny / scenario — рекомендация, не стена
+## Destiny / scenario boundary - recommendation, not a wall
 
-Раньше граница была инвариантом изоляции. Теперь это **рекомендация**: «переиспользуемое или критичное — выноси в destiny». Критерий выноса в destiny — три «да»:
+Boundary used to be an isolation invariant. Now this is a **recommendation**: "what is reused or critical, put it in destiny." The criterion for inclusion in destiny is three "yes":
 
-1. **Переиспользование.** Эта логика нужна больше чем одному сценарию (или больше чем одному сервису).
-2. **Нужна molecule-идемпотентность.** Логику стоит покрыть отдельным destiny-molecule-тестом с гарантией повторного прогона без изменений ([destiny/testing.md](../destiny/testing.md)).
-3. **Изолируемо.** Логику можно описать как «привести один хост в состояние X», не зная про БД Keeper-а, топологию кластера и других Souls.
+1. **Reuse.** More than one script (or more than one service) needs this logic.
+2. **Molecular-idempotency is needed.** The logic should be covered with a separate destiny-molecule test with a guarantee of re-running without changes ([destiny/testing.md](../destiny/testing.md)).
+3. **isolable.** The logic can be described as "bring one host to state X", without knowing about the Keeper database, cluster topology and other Souls.
 
-Все три «да» → выноси в destiny, вызывай через `apply: { destiny: … }`. Иначе допустима инлайн-реализация `module:`-шагами прямо в scenario.
+All three "yes" → take it to destiny, call via `apply: { destiny: … }`. Otherwise, inline implementation of `module:` steps directly in the scenario is acceptable.
 
-> **Изоляция и `output:` destiny.** destiny публикует собственный результат через декларированный top-level `output:` (симметрично `input:`, чтение caller-ом — `register:` на applier-задаче). Изоляцию это **не** нарушает: destiny отдаёт своё, не читает чужое. Подробнее — [destiny/output.md](../destiny/output.md), [ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация).
+> **Isolation and `output:` destiny.** destiny publishes its own result through the declared top-level `output:` (symmetrically `input:`, read by the caller - `register:` on the applier task). This **doesn't** violate isolation: destiny gives away its own, does not read someone else's. More details - [destiny/output.md](../destiny/output.md), [ADR-009](../adr/0009-scenario-dsl.md).
 
-> **Риск и его смягчение.** Инлайн-`module:`-мутации в scenario не проходят через независимое git-версионирование destiny ([ADR-007](../adr/0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте)) — точечная правка в `scenario/<name>/main.yml` минует ревью и тегирование, которое получил бы отдельный destiny-репо. Смягчение: рекомендация выше + backlog lint-warn в [soul-lint.md](../soul-lint.md) («инлайн-мутация в scenario без выноса в destiny»). Это эрозия дисциплины ADR-007, осознанно принятая ради простоты типовых операций — см. [ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация).
+> **Risk and its mitigation.** Inline `module:` mutations in scenario do not go through independent git versioning of destiny ([ADR-007](../adr/0007-versioning-git-ref.md)) - a point edit in `scenario/<name>/main.yml` bypasses the review and tagging that a separate destiny repo would receive. Mitigation: recommendation above + backlog lint-warn in [soul-lint.md](../soul-lint.md) ("inline mutation in scenario without removal to destiny"). This is an erosion of the ADR-007 discipline, deliberately adopted for the sake of simplicity of typical operations - see [ADR-009](../adr/0009-scenario-dsl.md).
 
 | | Destiny | Scenario |
 |---|---|---|
-| **Уровень** | один хост | один кластер (один incarnation) |
-| **Знает про другие хосты?** | нет | да (через `on:`/`where:` и `soulprint.where`) |
-| **Пишет state в БД?** | нет | да (`state_changes`) |
-| **Доступ к `essence.*` в шаблонах** | нет (только `input:`) | да (merged essence после pipeline) |
-| **DSL задач** | [destiny/tasks.md](../destiny/tasks.md) | то же ядро + оркестрационная дельта ([orchestration.md](orchestration.md)) |
-| **Версия** | git ref destiny-репо | git ref service-репо |
-| **Тестирование** | molecule на эфемерном стенде (один хост) | свой механизм: multi-host стенд + ассерты на топологию/`incarnation.state` ([orchestration.md](orchestration.md), [destiny/testing.md](../destiny/testing.md)) |
+| **Level** | one host | one cluster (one incarnation) |
+| **Knows about other hosts?** | no | yes (via `on:`/`where:` and `soulprint.where`) |
+| **Writes state to the database?** | no | yes (`state_changes`) |
+| **Access `essence.*` in templates** | no (`input:` only) | yes (merged essence after pipeline) |
+| **Task DSL** | [destiny/tasks.md](../destiny/tasks.md) | same core + orchestration delta ([orchestration.md](orchestration.md)) |
+| **Version** | git ref destiny-repo | git ref service-repo |
+| **Testing** | molecule on an ephemeral stand (one host) | your own mechanism: multi-host stand + topology assertions/`incarnation.state` ([orchestration.md](orchestration.md), [destiny/testing.md](../destiny/testing.md)) |
 
-## declared-роль vs actual-роль
+## declared-role vs actual-role
 
-Роль хоста (master / replica) в Soul Stack-е — **не Coven** ([ADR-008](../adr/0008-coven-stable-tags.md#adr-008-coven--только-стабильные-логические-теги)). Существует две концептуально разные роли:
+The role of the host (master / replica) in the Soul Stack is **not Coven** ([ADR-008](../adr/0008-coven-stable-tags.md)). There are two conceptually different roles:
 
-- **declared-роль** — задекларированная оператором, живёт **только** в `incarnation.spec.hosts[].role`. Используется на bootstrap-операции `create`, когда Redis ещё не запущен и probe-ить нечего: первый master / первые replica берутся из `spec`. Также служит для топологии и аудита. essence её **не потребляет** (см. ниже). В scenario declared-топология прогона доступна аксессором `soulprint.hosts` (список хостов со стабильными фактами, scenario-only; спецификация — [orchestration.md §4.1](orchestration.md#41-soulprinthosts--список-хостов-прогона-scenario-only-аксессор)); destiny получает её только через явный `apply: input:`.
-- **actual-роль** — фактическая роль в данный момент (кто сейчас реально master по `redis-cli role`). **Волатильна**, меняется при failover. Не хранится нигде стабильно: получается **живым probe-шагом** непосредственно перед использованием (`module: core.exec.run` + `register:`), таргетинг следующего шага идёт по `where:` от этого `register:` ([orchestration.md](orchestration.md)). После failover — просто новый probe, никакого кэша и механизма свежести.
+- **declared-role** - declared by the operator, lives **only** in `incarnation.spec.hosts[].role`. Used in the bootstrap operation `create`, when Redis is not yet running and there is nothing to probe: the first master / first replicas are taken from `spec`. Also serves for topology and auditing. essence **does not consume it** (see below). In the scenario declared-run topology is available by the accessor `soulprint.hosts` (list of hosts with stable facts, scenario-only; specification - [orchestration.md §4.1](orchestration.md#41-soulprinthosts---list-of-run-hosts-scenario-only-accessor)); destiny receives it only through an explicit `apply: input:`.
+- **actual-role** - the actual role at the moment (who is now the real master of `redis-cli role`). **Volatile**, changes during failover. It is not stored anywhere stably: it is obtained by a **live probe step** immediately before use (`module: core.exec.run` + `register:`), the targeting of the next step follows `where:` from this `register:` ([orchestration.md](orchestration.md)). After failover - just a new probe, no cache or freshness mechanism.
 
-> Волатильное (роль) **не живёт в Soulprint**. Soulprint — только стабильные и медленно меняющиеся факты хоста. Нет волатильных soulprint-фактов, нет коллектора роли, нет механизма свежести. Это следствие [ADR-008](../adr/0008-coven-stable-tags.md#adr-008-coven--только-стабильные-логические-теги) и зафиксировано там же.
+> Volatile (role) **does not live in Soulprint**. Soulprint - only stable and slowly changing host facts. There are no volatile soulprint facts, no role collector, no freshness mechanism. This is a consequence of [ADR-008](../adr/0008-coven-stable-tags.md) and was recorded there.
 
 ## Essence role-agnostic
 
-Essence-слой по роли **удалён**: иерархия pipeline-а больше **не содержит** ступени `role/<Y>.yaml`. Порядок сборки — `default → os → coven → incarnation.spec` (см. [architecture.md → «Essence: pipeline сборки»](../architecture.md#essence-pipeline-сборки)). essence не потребляет declared-роль и не слоится по роли вовсе.
+Essence layer by role **removed**: the pipeline hierarchy no longer **contains** the `role/<Y>.yaml` stage. The build order is `default → os → coven → incarnation.spec` (see [architecture.md → "Essence: build pipeline"](../architecture.md)). essence does not consume the declared role and does not layer by role at all.
 
-Параметры, которые раньше зависели от роли (то, что было в `role/master.yaml` / `role/replica.yaml`), переезжают в **destiny** и передаются через `input:` по результату probe-роли. То есть scenario сначала probe-ит actual-роль, затем вызывает `apply: { destiny: …, input: { … } }` с разными значениями для master- и replica-хостов — а не подкладывает их через essence-слой.
+Parameters that previously depended on the role (what was in `role/master.yaml` / `role/replica.yaml`) move to **destiny** and are passed through `input:` as a result of the probe role. That is, the scenario first probes the actual role, then calls `apply: { destiny: …, input: { … } }` with different values ​​for the master and replica hosts - rather than putting them through the essence layer.
 
-> Перенос конкретных значений `role/*.yaml` в destiny-`input:` — отдельная задача имплементации, см. упоминание в [orchestration.md](orchestration.md). Здесь фиксируется только модель: essence role-agnostic, роль-зависимость переезжает в destiny по probe.
+> Transferring specific values ​​of `role/*.yaml` to destiny-`input:` is a separate implementation task, see the mention in [orchestration.md](orchestration.md). Here only the model is fixed: essence role-agnostic, the role-dependency moves to destiny using probe.
 
-## См. также
+## See also
 
-- [orchestration.md](orchestration.md) — нормативная спецификация оркестрационной дельты scenario.
-- [destiny/tasks.md](../destiny/tasks.md) — DSL-ядро задач (наследуется scenario целиком).
-- [destiny/concept.md](../destiny/concept.md) — что такое destiny, чем отличается от scenario.
-- [architecture.md → ADR-008](../adr/0008-coven-stable-tags.md#adr-008-coven--только-стабильные-логические-теги), [ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) — закрепляющие решения.
-- [architecture.md → «Targeting и связь хостов»](../architecture.md#targeting-и-связь-хостов) — `on:`/`where:`, контракт резолвера.
-- [destiny/testing.md](../destiny/testing.md) — разграничение scenario-тестов / destiny-molecule / service-smoke.
+- [orchestration.md](orchestration.md) - regulatory specification of the orchestration delta scenario.
+- [destiny/tasks.md](../destiny/tasks.md) - DSL task core (inherited entirely by the scenario).
+- [destiny/concept.md](../destiny/concept.md) - what is destiny, how does it differ from scenario.
+- [architecture.md → ADR-008](../adr/0008-coven-stable-tags.md), [ADR-009](../adr/0009-scenario-dsl.md) - fixing solutions.
+- [architecture.md → "Targeting and host communication"](../architecture.md) - `on:`/`where:`, resolver contract.
+- [destiny/testing.md](../destiny/testing.md) - differentiation between scenario tests / destiny-molecule / service-smoke.

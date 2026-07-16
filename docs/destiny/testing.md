@@ -1,22 +1,22 @@
-# Тестирование destiny
+# Testing destiny
 
-> **Форма инструмента закреплена в [ADR-023](../adr/0023-trial-test-runner.md#adr-023-тест-раннер-trial-soul-trial-и-dsl-coverage)** (2026-05-22): раннер — **Trial**, бинарь `soul-trial` (отдельный артефакт в модуле `keeper`, `keeper/cmd/soul-trial`). Две метрики: **`trial coverage`** (DSL — задачи/CEL-ветки/`enum`/`state_changes`) и **`code coverage`** (Go). Уровни **L0 render-only + L1 migration — MVP**; **L2 single-host (docker) — реализован test-only** (Вариант A, build-tag `integration`, см. ADR-023); **L3 multi-host — отложен**. DSL-coverage hook — `CoverageSink` в `shared/cel` на `Engine.EvalExpression`. ADR-023 закрыл open Q №1/6/7/8 ниже; с реализацией L2 закрыты **№4** (real-only) и **№5** (идемпотентность с opt-out), **№3** (sandbox) — закрыт **частично** (single-host docker; multi-host `stand:` для L3 остаётся открытым). Развилки и решения — `.pm/tasks/2026-05-22-testing-framework/`.
+> **Tool form is fixed in [ADR-023](../adr/0023-trial-test-runner.md)** (2026-05-22): runner - **Trial**, binary `soul-trial` (separate artifact in module `keeper`, `keeper/cmd/soul-trial`). Two metrics: **`trial coverage`** (DSL - tasks/CEL branches/`enum`/`state_changes`) and **`code coverage`** (Go). Levels **L0 render-only + L1 migration - MVP**; **L2 single-host (docker) - implemented test-only** (Option A, build-tag `integration`, see ADR-023); **L3 multi-host - deferred**. DSL-coverage hook - `CoverageSink` to `shared/cel` to `Engine.EvalExpression`. ADR-023 closed open Q No. 1/6/7/8 below; with the implementation of L2, **No. 4** (real-only) and **No. 5** (idempotency with opt-out) are closed, **No. 3** (sandbox) is closed **partially** (single-host docker; multi-host `stand:` for L3 remains open). Forks and solutions - `.pm/tasks/2026-05-22-testing-framework/`.
 
-Тестирование destiny на эфемерном стенде с измерением coverage. Раскладка и формат тест-кейсов закреплены (см. ниже); детали L0-фикстур/assert и L2/L3-sandbox — в проработке.
+Testing destiny on an ephemeral stand with coverage measurement. The layout and format of test cases are fixed (see below); details of L0-fixtures/assert and L2/L3-sandbox are being worked out.
 
-Это **не** часть `soul-lint`. По [ADR-004](../adr/0004-binaries.md#adr-004-раскладка-бинарей--keeper-soul-soul-lint-push-режим--модуль-внутри-keeper) `soul-lint` строго офлайн и статический (не исполняет); `soul-trial` — прогон. Линия раздела: «не исполняет → soul-lint, исполняет → soul-trial».
+This is **not** part of `soul-lint`. According to [ADR-004](../adr/0004-binaries.md#adr-004-binary-layout--keeper-soul-soul-lint-push-mode-as-a-module-inside-keeper) `soul-lint` is strictly offline and static (does not execute); `soul-trial` - run. The dividing line: "does not perform → soul-lint, performs → soul-trial."
 
-## Замысел (грубо)
+## Intent (rude)
 
-- К каждому destiny прикладывается набор тест-кейсов: входные параметры, ожидания на `output` / state хоста, возможно последовательности нескольких прогонов разными action.
-- По умолчанию исполнение — на эфемерном стенде в docker: контейнер с настоящим `soul`-бинарём и core-модулями + sandbox-контейнер как «целевой хост». Per-test изоляция.
-- Задачи и выражения `when` инструментированы — собирается trace: какие задачи выполнялись, какие условия сработали, какие модули были вызваны.
-- По итогам прогона публикуется coverage-отчёт. Цель — 100% покрытие; дыра — повод дописать тест-кейс.
-- Visualization в UI Keeper-а (когда он появится — см. open Q «UI Keeper-а» в [architecture.md](../architecture.md#открытые-вопросы)) — список destiny / service / роли с цифрами покрытия и подсветкой непокрытых задач и веток.
+- Each destiny comes with a set of test cases: input parameters, expectations on `output` / state of the host, possibly a sequence of several runs with different actions.
+- By default, execution is on an ephemeral stand in docker: a container with a real `soul` binary and core modules + a sandbox container as the "target host". Per-test isolation.
+- Tasks and expressions `when` are instrumented - a trace is collected: which tasks were executed, which conditions were triggered, which modules were called.
+- Based on the results of the run, a coverage report is published. The goal is 100% coverage; a hole is a reason to add a test case.
+- Visualization in UI Keeper (when it appears - see open Q "UI Keeper" in [architecture.md](../architecture.md)) - a list of destiny / service / roles with coverage numbers and highlighting of uncovered tasks and branches.
 
-## Раскладка тест-кейсов рядом с destiny
+## Test case layout next to destiny
 
-Формат закреплён: тесты для destiny живут в подкаталоге `tests/` рядом с `destiny.yml`. Один тест — одна папка с произвольным человекочитаемым именем; точка входа — `case.yml`. Этот выбор закрывает open Q №2 (см. ниже).
+The format is fixed: tests for destiny live in the `tests/` subdirectory next to `destiny.yml`. One test - one folder with an arbitrary human-readable name; entry point is `case.yml`. This selection closes open Q #2 (see below).
 
 ```
 destiny-<name>/
@@ -24,126 +24,126 @@ destiny-<name>/
 ├── tasks/
 │   └── main.yml
 ├── templates/
-└── tests/                              # все тесты этого destiny
-    ├── install-and-ping/               # один тест-кейс
-    │   ├── case.yml                    # обязательная точка входа
-    │   ├── prepare.yml                 # ОПЦ.: задачи до основного apply
-    │   ├── verify.yml                  # ОПЦ.: если ассерций много — выносить сюда
-    │   └── cleanup.yml                 # ОПЦ.: задачи после verify (внешние ресурсы)
+└── tests/                              # all tests of this destiny
+    ├── install-and-ping/               # one test case
+    │   ├── case.yml                    # required entry point
+    │   ├── prepare.yml                 # OPT.: tasks before the main apply
+    │   ├── verify.yml                  # OPC: if there are a lot of assertions, put them here
+    │   └── cleanup.yml                 # OPTS: tasks after verify (external resources)
     └── failover-restart/
         └── case.yml
 ```
 
-Рабочий пример с пояснениями к каждому блоку — в [examples/destiny/redis/tests/install-and-ping/case.yml](../../examples/destiny/redis/tests/install-and-ping/case.yml).
+A working example with explanations for each block is in [examples/destiny/redis/tests/install-and-ping/case.yml](../../examples/destiny/redis/tests/install-and-ping/case.yml).
 
-### Что декларирует `case.yml`
+### What `case.yml` declares
 
-Минимальный кейс описывает четыре вещи:
+The minimal case describes four things:
 
-1. **`stand:`** — эфемерное окружение (`driver` / `image` / `mode: push` / `init`). **Single-host формат закрыт** (open Q №3 частично): ephemeral docker-container per-case, `mode: push` (Keeper-side render → oneshot `soul apply` в контейнере). Digest-pin образа (`image: name@sha256:…`) разрешён и поощряется (воспроизводимость). Сеть включена по умолчанию (нужна для `core.pkg`), отключается явно `stand.network: none`. Тип init-системы контейнера задаётся `stand.init` (см. ниже). **Multi-host `stand:` (топология кластера) — остаётся открытым** (расширение для L3, propose-and-wait по формату топологии — см. open Q №3 ниже).
-2. **`input:`** — значения параметров destiny для прогона. Имя destiny указывать не нужно: фреймворк берёт его из `../../destiny.yml`, рядом с которым лежат `tests/`.
-3. **`expect_idempotent:`** — флаг двойного прогона, **по умолчанию `true`** (open Q №5 закрыт: идемпотентность обязательна с opt-out). Второй apply того же `input` → все `register.changed == false`; иначе кейс падает. Кейс с осознанно-неидемпотентным шагом отключает проверку явным `expect_idempotent: false`.
-4. **`verify:`** — проверки результата.
+1. **`stand:`** - ephemeral environment (`driver` / `image` / `mode: push` / `init`). **Single-host format closed** (open Q No. 3 partially): ephemeral docker-container per-case, `mode: push` (Keeper-side render → oneshot `soul apply` in container). Image digest pin (`image: name@sha256:…`) is allowed and encouraged (reproducibility). The network is enabled by default (needed for `core.pkg`), disabled explicitly `stand.network: none`. The container init system type is set by `stand.init` (see below). **Multi-host `stand:` (cluster topology) - remains open** (extension for L3, propose-and-wait on topology format - see open Q No. 3 below).
+2. **`input:`** — values ​​of the destiny parameters for the run. There is no need to specify the name destiny: the framework takes it from `../../destiny.yml`, next to which are `tests/`.
+3. **`expect_idempotent:`** - double pass flag, **default `true`** (open Q No. 5 is closed: idempotency is required with opt-out). Second apply the same `input` → all `register.changed == false`; otherwise the case will fall. A case with a consciously non-idempotent step disables the check with an explicit `expect_idempotent: false`.
+4. **`verify:`** — checking the result.
 
-### `stand.init` — init-система контейнера-стенда
+### `stand.init` — init system of the stand container
 
-Опциональное поле `stand.init` задаёт, что запускается как PID 1 внутри L2-стенда. Enum, по умолчанию `none`:
+The optional field `stand.init` specifies what runs as PID 1 inside the L2 stand. Enum, default `none`:
 
-| Значение | Что даёт |
+| Meaning | What gives |
 |---|---|
-| `none` (или отсутствие поля) | Лёгкий контейнер без init: процесс `sleep infinity` как PID 1, `soul apply` гоняется поверх. Подходит большинству L2-кейсов — пакеты, файлы, exec-проверки. Это прежнее поведение, дефолт. |
-| `systemd` | Контейнер с настоящим `systemd` как PID 1 (`/sbin/init`, `privileged` + `cgroupns=host` + tmpfs на `/run` и `/run/lock`). Нужен L2-кейсам, которые реально дёргают `systemctl` и юниты. |
+| `none` (or no field) | Lightweight container without init: process `sleep infinity` as PID 1, `soul apply` runs on top. Suitable for most L2 cases - packages, files, exec checks. This is the previous behavior, a default. |
+| `systemd` | Container with real `systemd` as PID 1 (`/sbin/init`, `privileged` + `cgroupns=host` + tmpfs on `/run` and `/run/lock`). Need L2 cases that really pull `systemctl` and units. |
 
-**Когда нужен `systemd`.** Только если кейс проверяет поведение, требующее живой init-системы:
+**When `systemd` is needed.** Only if the case tests behavior that requires a live init system:
 
-- `core.service.restarted` с `daemon_reload`: перезаписали unit-файл (`core.file.present`) → `systemd` выставляет `NeedDaemonReload=yes` → рестарт обязан подхватить новое определение юнита;
-- `enable`/`start` реальных сервисов (а не stub-процессов) и проверка `systemctl is-active` / `is-enabled`;
-- systemd-таймеры и прочие юниты, чьё состояние спрашивают через `systemctl show`.
+- `core.service.restarted` with `daemon_reload`: overwritten the unit file (`core.file.present`) → `systemd` sets `NeedDaemonReload=yes` → the restart must pick up the new unit definition;
+- `enable`/`start` real services (not stub processes) and checking `systemctl is-active` / `is-enabled`;
+- systemd timers and other units whose status is asked via `systemctl show`.
 
-Для всего остального `init: systemd` избыточен — берёт `privileged` и тяжелее стартует, поэтому дефолт `none`.
+For everything else, `init: systemd` is redundant - it takes `privileged` and starts harder, so `none` defaults.
 
-**Требования и skip.** Режим `systemd` запускается **только** под build-tag `integration` и требует `docker` + `privileged`. На окружении без них (или без docker вообще) кейс делает **skip, а не fatal** — непрогон не считается регрессом (дефолтный `make test` помечает такие кейсы `Skipped`, как и всю L2-форму). Образ стенда переиспользует общий **debian-12 systemd-профиль** (тот же `debian-12.Dockerfile`, что у e2e-live): стенд собирается из этого Dockerfile с `Entrypoint /sbin/init`. Поле `image` при `init: systemd` по схеме обязательно, но фактически игнорируется (стенд берётся из Dockerfile) — в кейсе указывают эталонный тег для читаемости.
+**Requirements and skip.** Mode `systemd` runs **only** under build-tag `integration` and requires `docker` + `privileged`. In an environment without them (or without Docker at all), the case does **skip, not fatal** - failure to run is not considered a regression (the default `make test` marks such cases `Skipped`, as well as the entire L2 form). The stand image reuses the common **debian-12 systemd profile** (same `debian-12.Dockerfile` as e2e-live): the stand is built from this Dockerfile with `Entrypoint /sbin/init`. The `image` field with `init: systemd` is required according to the scheme, but is actually ignored (the stand is taken from the Dockerfile) - the reference tag for readability is indicated in the case.
 
-Краткий пример стенда с реальным systemd:
+Brief example of a bench with real systemd:
 
 ```yaml
 stand:
   driver: docker
-  image:  debian:12-slim    # обязателен по схеме; при init: systemd фактически игнорируется
+  image:  debian:12-slim    # is required by the scheme; at init: systemd is actually ignored
   mode:   push
   init:   systemd
 ```
 
-Рабочий кейс целиком (доказывает `daemon_reload=auto`: переписанный unit → `NeedDaemonReload` → рестарт применяет v2) — [`examples/destiny/service-reload/_trial/scenario/verify-l2/tests/auto-reload/case.yml`](../../examples/destiny/service-reload/_trial/scenario/verify-l2/tests/auto-reload/case.yml).
+The entire working case (proves `daemon_reload=auto`: rewritten unit → `NeedDaemonReload` → restart applies v2) - [`examples/destiny/service-reload/_trial/scenario/verify-l2/tests/auto-reload/case.yml`](../../examples/destiny/service-reload/_trial/scenario/verify-l2/tests/auto-reload/case.yml).
 
-### Verify — через те же destiny, что и в проде
+### Verify - through the same destiny as in production
 
-Verify-блок устроен как последовательность задач, каждая из которых исполняет destiny/модуль и сравнивает поля их `output:` с ожидаемыми через блок `expect:` (см. рабочий пример [`examples/destiny/redis/tests/install-and-ping/case.yml`](../../examples/destiny/redis/tests/install-and-ping/case.yml) — `verify:` с `expect: { stdout_contains: PONG }` и т.п.). Отдельного DSL-я ассерций **нет** — это сознательное решение:
+Verify block is structured as a sequence of tasks, each of which executes a destiny/module and compares the fields of their `output:` with those expected through the `expect:` block (see working example [`examples/destiny/redis/tests/install-and-ping/case.yml`](../../examples/destiny/redis/tests/install-and-ping/case.yml) - `verify:` with `expect: { stdout_contains: PONG }`, etc.). There is **no** separate DSL assertions - this is a conscious decision:
 
-- Если состояние хоста проверяется через `redis-cli ping` или `systemctl is-active` — пишем это явно через `core.exec.run` и сверяем `output.stdout`.
-- Если проверка повторяет то, что умеет сам destiny (`action: ping`, `action: replication_status`) — переиспользуем его. Самосогласованная проверка: destiny одновременно и реализация, и часть контракта.
-- Если нужен особенный «file_present» / «service_running» — это означает, что в core-модулях не хватает соответствующего `state` (или его `output:`-полей), и проблему надо решать там, а не дублировать в отдельном DSL для тестов.
+- If the host state is checked through `redis-cli ping` or `systemctl is-active`, we write this explicitly through `core.exec.run` and check `output.stdout`.
+- If the check repeats what destiny itself can do (`action: ping`, `action: replication_status`) - reuse it. Self-consistent verification: destiny is both an implementation and part of a contract.
+- If you need a special "file_present" / "service_running", this means that the core modules lack the corresponding `state` (or its `output:` fields), and the problem should be solved there, and not duplicated in a separate DSL for tests.
 
-Конкретный набор ключей `expect:` (`stdout`, `stdout_contains`, `exit_code`, `output_equals`, …) пока **не зафиксирован** — это пересекается с **open Q №8** (что именно измерять). На уровне примеров используем минимум `stdout` / `stdout_contains` / `exit_code`; полный список зафиксируется отдельно, до начала реализации фреймворка.
+The specific set of keys `expect:` (`stdout`, `stdout_contains`, `exit_code`, `output_equals`, ...) is not yet **fixed** - this intersects with **open Q No. 8** (what exactly to measure). At the example level we use at least `stdout` / `stdout_contains` / `exit_code`; the complete list will be recorded separately, before the implementation of the framework begins.
 
-### Опциональные соседи
+### Optional neighbors
 
-Все три файла рядом с `case.yml` опциональные; кейс прогоняется и без них:
+All three files next to `case.yml` are optional; the case runs without them:
 
-| Файл | Когда нужен |
+| File | When needed |
 |---|---|
-| `prepare.yml` | preconditions до основного `input` apply: поднять Vault-stub с тестовыми секретами, скачать fixture-файлы, развернуть зависимый сервис в side-контейнере. |
-| `verify.yml` | если ассерций становится много, выносим их из `case.yml` и подключаем как `verify: !include verify.yml` (точный синтаксис include — backlog test-фреймворка; шаблонизатор выражений зафиксирован [ADR-010](../adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов), [`docs/templating.md`](../templating.md)). |
-| `cleanup.yml` | задачи после verify, нужны если кейс подложил внешние ресурсы (S3-объекты, DNS-записи, реальные cloud-VM через cloud-driver). При driver=docker обычно не нужен — снос контейнера уничтожает всё. |
+| `prepare.yml` | preconditions to main `input` apply: raise Vault-stub with test secrets, download fixture files, deploy dependent service in side container. |
+| `verify.yml` | if there are a lot of assertions, we remove them from `case.yml` and connect them as `verify: !include verify.yml` (the exact syntax of include is the backlog test framework; the expression template engine is fixed [ADR-010](../adr/0010-templating.md), [`docs/templating.md`](../templating.md)). |
+| `cleanup.yml` | tasks after verify are needed if the case has enclosed external resources (S3 objects, DNS records, real cloud-VMs via cloud-driver). When driver=docker is usually not needed - demolishing the container destroys everything. |
 
-### Где НЕ живут тесты
+### Where tests do NOT live
 
-- **service-уровневые `tests/*.yml`** (smoke/system-test после успешного `incarnation.create`) — это **другая** сущность: прогоняются на реальных Souls в реальной incarnation, не на эфемерном стенде. Совпадение имени папки `tests/` намеренное. В примерах сервисов сейчас используются тесты **уровня сценария** — `scenario/<name>/tests/<case>/case.yml` (L0-испытания с `fixtures:`, см. [`examples/service/redis/scenario/create/tests/`](../../examples/service/redis/scenario/create/tests/)) — и тесты миграций (`migrations/<NNN>_to_<MMM>/tests/`).
-- **Coverage-метрики и инструмент-прогона** — не часть тест-файлов. Тесты декларативны; что собирается с прогона и в каком виде хранится — отдельный слой (open Q №6, №8).
+- **service-level `tests/*.yml`** (smoke/system-test after successful `incarnation.create`) is a **different** entity: run on real Souls in a real incarnation, not on an ephemeral stand. The folder name `tests/` is intentional. The sample services currently use **script level** tests - `scenario/<name>/tests/<case>/case.yml` (L0 tests with `fixtures:`, see [`examples/service/redis/scenario/create/tests/`](../../examples/service/redis/scenario/create/tests/)) - and migration tests (`migrations/<NNN>_to_<MMM>/tests/`).
+- **Coverage-metrics and run-tool** are not part of the test files. Tests are declarative; what is collected from the run and in what form is stored - a separate layer (open Q No. 6, No. 8).
 
-### Три уровня тестов: destiny-molecule vs scenario-тест vs service-smoke
+### Three levels of tests: destiny-molecule vs scenario-test vs service-smoke
 
-После [ADR-009](../adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) у scenario появился собственный механизм тестов — это **третья** сущность, отдельная от двух выше:
+After [ADR-009](../adr/0009-scenario-dsl.md), scenario has its own test mechanism - this is a **third** entity, separate from the two above:
 
-| | destiny-molecule | scenario-тест | service-smoke |
+| | destiny-molecule | scenario test | service-smoke |
 |---|---|---|---|
-| **Что тестирует** | один destiny на одном хосте | одну операцию сценария на топологии кластера | работающую incarnation после `create` |
-| **Раскладка** | `destiny-<name>/tests/<case>/case.yml` | `scenario/<name>/tests/<case>/case.yml` | `service-<x>/tests/<name>.yml` (плоский) |
-| **Стенд** | эфемерный, **один** хост | эфемерный, **multi-host** (топология) | реальные Souls, реальная incarnation |
-| **Ассерты** | `output:`/state хоста, идемпотентность | + топология (кто master/replica), `incarnation.state` после коммита | smoke/system-проверки |
-| **Формат `case.yml`/`verify:`/`expect:`** | этот документ | **переиспользует** этот формат, `stand:` расширен на multi-host | плоский `tests/<name>.yml` |
+| **What does it test** | one destiny on one host | one script operation on a cluster topology | running incarnation after `create` |
+| **Layout** | `destiny-<name>/tests/<case>/case.yml` | `scenario/<name>/tests/<case>/case.yml` | `service-<x>/tests/<name>.yml` (flat) |
+| **Stand** | ephemeral, **single** host | ephemeral, **multi-host** (topology) | real Souls, real incarnation |
+| **Asserts** | `output:`/state host, idempotency | + topology (who is master/replica), `incarnation.state` after commit | smoke/system-checks |
+| **Format `case.yml`/`verify:`/`expect:`** | this document | **reuses** this format, `stand:` extended to multi-host | flat `tests/<name>.yml` |
 
-Формат `case.yml` / `verify:` / `expect:` для scenario-теста **переиспользуется отсюда** без отдельного DSL ассерций. Дельта scenario-теста (multi-host `stand:`, ассерты на топологию и `incarnation.state`) — в [`docs/scenario/orchestration.md §6`](../scenario/orchestration.md#6-двухуровневый-резолв-ресурсов).
+Format `case.yml` / `verify:` / `expect:` for scenario testing **reused from here** without separate DSL assertions. Delta scenario test (multi-host `stand:`, topology assertions and `incarnation.state`) - in [`docs/scenario/orchestration.md §6`](../scenario/orchestration.md#6-two-level-resource-resolution).
 
-> **Расширение open Q №3 (sandbox).** Single-host `stand:` (destiny-molecule, L2) **закрыт** (ephemeral docker, `mode: push`). Multi-host `stand:` для scenario-теста и ассерты на топологию/`incarnation.state` cross-host — **расширение** для L3, остаётся открытым (формат топологии — propose-and-wait), а не закрытое решение. Не закрывается молча; до решения multi-host scenario-кейсы — declarative-stub `stand:`.
+> **Open Q extension #3 (sandbox).** Single-host `stand:` (destiny-molecule, L2) **closed** (ephemeral docker, `mode: push`). Multi-host `stand:` for scenario test and topology assertions/`incarnation.state` cross-host - **extension** for L3, remains open (topology format - propose-and-wait), and not a closed solution. Does not close silently; before solving multi-host scenario cases - declarative-stub `stand:`.
 
-### Уровни форматов case.yml: L0 vs L2
+### Case.yml format levels: L0 vs L2
 
-В `case.yml` сосуществуют **две формы**, отвечающие разным уровням теста ([ADR-023](../adr/0023-trial-test-runner.md#adr-023-тест-раннер-trial-soul-trial-и-dsl-coverage)). Они различаются составом ключей:
+In `case.yml`, **two forms** coexist, corresponding to different test levels ([ADR-023](../adr/0023-trial-test-runner.md)). They differ in the composition of the keys:
 
-| Форма | Уровень | Состав | Статус |
+| Form | Level | Composition | Status |
 |---|---|---|---|
-| `fixtures:` (input/essence/soulprint/vault/state + `default_destiny_source` для apply:destiny) / `mocks:` / `assert.{rendered_tasks,state_changes,state_after}` | **L0** (render-only, hermetic, single-host сахар) | fixtures для render-пайплайна + ожидаемый план задач / дельта sets / итоговый `incarnation.state` | **MVP, исполняется** `soul-trial run` |
-| `fixtures.hosts: [...]` (roster из N хостов) вместо `fixtures.soulprint` + те же `assert.*` | **L0** (render-only, hermetic, multi-host roster) | roster хостов прогона → `soulprint.hosts`-проекция / `.where(...)` / `size()` / nodes-детерминизм / `state_changes` на multi-host | **закрыт** (amendment 2026-06-22, ADR-023), исполняется `soul-trial run` |
-| `stand:` / `verify:` / `expect:` (+ `input:` без `fixtures:`) | **L2** (docker single-host, реальные модули; опц. `stand.init: systemd` — стенд с реальным systemd как PID 1) | эфемерный стенд + проверки через `core.exec.run` | **реализован test-only** (build-tag `integration`); прод-`soul-trial run` его **пропускает** (`Skipped`) до отдельной задачи прод-CLI-включения |
-| `assert.dispatch` + committed cross-host `incarnation.state` + multi-host `stand:` | **L3** (multi-host dispatch/оркестрация) | кто реально master исполняет, cross-host committed state, топология стенда | **отложен** (Phase 3 ADR-027 + multi-host `stand:`, open Q №3) |
+| `fixtures:` (input/essence/soulprint/vault/state + `default_destiny_source` for apply:destiny) / `mocks:` / `assert.{rendered_tasks,state_changes,state_after}` | **L0** (render-only, hermetic, single-host sugar) | fixtures for the render pipeline + expected task plan / delta sets / final `incarnation.state` | **MVP, executing** `soul-trial run` |
+| `fixtures.hosts: [...]` (roster of N hosts) instead of `fixtures.soulprint` + the same `assert.*` | **L0** (render-only, hermetic, multi-host roster) | list of run hosts → `soulprint.hosts`-projection / `.where(...)` / `size()` / nodes-determinism / `state_changes` on multi-host | **closed** (amendment 2026-06-22, ADR-023), in progress `soul-trial run` |
+| `stand:` / `verify:` / `expect:` (+ `input:` without `fixtures:`) | **L2** (docker single-host, real modules; opt. `stand.init: systemd` - stand with real systemd as PID 1) | ephemeral stand + checks via `core.exec.run` | **implemented test-only** (build-tag `integration`); prod-`soul-trial run` it **skips** (`Skipped`) to a separate task prod-CLI-enable |
+| `assert.dispatch` + committed cross-host `incarnation.state` + multi-host `stand:` | **L3** (multi-host dispatch/orchestration) | who is the real master, cross-host committed state, stand topology | **postponed** (Phase 3 ADR-027 + multi-host `stand:`, open Q #3) |
 
-`assert.state_after` — L0-секция: ожидаемый итоговый `incarnation.state` = базовый `fixtures.state` + отрендеренные `state_changes.sets` (зеркало прод-коммита), полная сверка (лишний ключ в итоге — расхождение). `assert.dispatch` — L3-секция (осмыслена только на multi-host), L0-загрузчик отвергает её strict-декодом.
+`assert.state_after` — L0 section: expected final `incarnation.state` = base `fixtures.state` + rendered `state_changes.sets` (product commit mirror), full reconciliation (an extra key in the end is a discrepancy). `assert.dispatch` - L3 section (meant only on multi-host), the L0 loader rejects it with a strict decode.
 
 #### L0 multi-host roster — `fixtures.hosts`
 
-`fixtures.soulprint` (single map) описывает **один** синтетический хост прогона — это сахар для single-host L0-кейсов (большинство destiny-molecule). Для multi-host render-инвариантов (`size(soulprint.hosts)`-guard, `soulprint.hosts.where(...)`-проекция, nodes-детерминизм master/replica) кейс задаёт **roster** через `fixtures.hosts` — список host-записей:
+`fixtures.soulprint` (single map) describes a **single** synthetic run host - this is sugar for single-host L0 cases (most destiny-molecules). For multi-host render-invariants (`size(soulprint.hosts)`-guard, `soulprint.hosts.where(...)`-projection, nodes-determinism master/replica), the case specifies **roster** via `fixtures.hosts` — a list of host records:
 
 ```yaml
 fixtures:
   hosts:
     - sid: node-1.example.com
-      covens: [prod, redis]          # обязан включать incarnation.name-метку (см. ниже)
-      role: primary                  # опц.: declared-роль (bootstrap-create)
-      soulprint:                     # опц.: per-host факты (soulprint.self.* этого хоста)
+      covens: [prod, redis]          # must include the incarnation.name tag (see below)
+      role: primary                  # opt: declared-role (bootstrap-create)
+      soulprint:                     # opt: per-host facts (soulprint.self.* of this host)
         network: { primary_ip: 10.0.0.1 }
         os:      { family: debian }
-      choirs: [voters]               # опц.: членства в Choir-ах (ADR-044)
+      choirs: [voters]               # optional: Choir membership (ADR-044)
     - sid: node-2.example.com
       covens: [prod, redis]
       role: replica
@@ -151,82 +151,82 @@ fixtures:
         network: { primary_ip: 10.0.0.2 }
 ```
 
-Поля host-записи:
+Host record fields:
 
-| Ключ | Обяз. | Что задаёт |
+| Key | Obligation | What sets |
 |---|---|---|
-| `sid` | да | SID хоста (FQDN). Порядок roster-а в `soulprint.hosts` детерминирован сортировкой по `sid` (независимо от порядка в YAML). |
-| `covens` | да | Coven-метки хоста. **Обязан содержать `incarnation.name`-метку** (имя сценария кейса) — зеркало прод-roster (`rosterSQL WHERE $1 = ANY(coven)`); без неё хост не попадёт в таргет `on:`/`where:` и выпадет из прогона. |
-| `role` | нет | Declared-роль (`soulprint.hosts[].role`), доступна только в bootstrap-create (ADR-008). |
-| `soulprint` | нет | Per-host факты (`soulprint.self.<path>` этого хоста и `soulprint.hosts[].network/os`). Отсутствует → пустой контекст фактов. |
-| `choirs` | нет | Имена Choir-ов хоста (`soulprint.hosts[].choirs`, ADR-044). |
+| `sid` | yes | Host SID (FQDN). The roster order in `soulprint.hosts` is determined by sorting by `sid` (regardless of the order in YAML). |
+| `covens` | yes | Host Coven Tags. **Must contain `incarnation.name`-label** (case scenario name) - mirror of the prod-roster (`rosterSQL WHERE $1 = ANY(coven)`); without it, the host will not hit the target `on:`/`where:` and will fall out of the run. |
+| `role` | no | Declared role (`soulprint.hosts[].role`), available only in bootstrap-create (ADR-008). |
+| `soulprint` | no | Per-host facts (`soulprint.self.<path>` of this host and `soulprint.hosts[].network/os`). Missing → empty fact context. |
+| `choirs` | no | Host Choir names (`soulprint.hosts[].choirs`, ADR-044). |
 
-`fixtures.soulprint` и `fixtures.hosts` **взаимоисключены** — оба в одном кейсе → strict-ошибка декода (в духе strict-декода harness, как unknown-key/`assert.dispatch`). Single-host кейсы продолжают использовать `fixtures.soulprint` без изменений.
+`fixtures.soulprint` and `fixtures.hosts` **mutually exclusive** - both in the same case → strict decode error (in the spirit of a strict harness decode, like unknown-key/`assert.dispatch`). Single-host cases continue to use `fixtures.soulprint` without changes.
 
-**Граница уровня.** `fixtures.hosts` остаётся **L0 render-only**: проверяется Keeper-side render-план и `soulprint.hosts`-проекции на roster-е, без реального исполнения per-host. Кто из хостов реально master исполняет (`assert.dispatch`), committed cross-host `incarnation.state` после барьера и multi-host docker `stand:` — **L3, отложен** (ADR-023 amendment 2026-06-22).
+**Level boundary.** `fixtures.hosts` remains **L0 render-only**: Keeper-side render-plan and `soulprint.hosts`-projections on the roster are checked, without actual per-host execution. Which host actually executes the master (`assert.dispatch`), committed cross-host `incarnation.state` after the barrier and multi-host docker `stand:` - **L3, deferred** (ADR-023 amendment 2026-06-22).
 
-L2-форма исполняется **в Go-тестах keeper-модуля** (testcontainers, oneshot `soul apply`, in-process Keeper-side render — тот же `renderCase`, что у L0). Примеры с `stand:`/`verify:` (напр. [`redis/tests/install-and-ping/case.yml`](../../examples/destiny/redis/tests/install-and-ping/case.yml)) помечены в шапке `# L2 fixture (docker-стенд)`; прод-`soul-trial run` их пропускает (`Skipped`), не принимая непрогон за регресс. L0-форма — действующий пилот фреймворка, исполняется всегда.
+The L2 form is executed **in Go tests of the keeper module** (testcontainers, oneshot `soul apply`, in-process Keeper-side render - the same `renderCase` as L0). Examples with `stand:`/`verify:` (e.g. [`redis/tests/install-and-ping/case.yml`](../../examples/destiny/redis/tests/install-and-ping/case.yml)) are marked in the header `# L2 fixture (docker stand)`; prod-`soul-trial run` skips them (`Skipped`), not taking non-passing as a regression. The L0-form is the current pilot of the framework and is always executed.
 
-#### L0-molecule для standalone destiny — scenario-обёртка `apply:destiny`
+#### L0-molecule for standalone destiny - scenario wrapper `apply:destiny`
 
-`soul-trial` L0 рендерит **scenario** (harness завязан на `scenario/<name>/main.yml`), а не standalone destiny напрямую. Для переиспользуемой (standalone) destiny L0-molecule — это **минимальная scenario-обёртка с единственной задачей `apply:destiny`** на эту же destiny. destiny не рендерится отдельным путём: единственная точка инвокации (scenario `apply:` / Keeper) сохраняется и в тестах.
+`soul-trial` L0 renders **scenario** (harness is tied to `scenario/<name>/main.yml`), and not standalone destiny directly. For a reusable (standalone) destiny L0-molecule is a **minimal scenario wrapper with a single task `apply:destiny`** for the same destiny. destiny is not rendered in a separate way: the single invocation point (scenario `apply:` / Keeper) is preserved in tests.
 
-Каноническая раскладка обёртки — подкаталог самой destiny, чтобы каждая destiny владела своим L0-харнессом:
+The canonical wrapper layout is a subdirectory of destiny itself, so that each destiny has its own L0-harness:
 
 ```
 destiny-<name>/
 ├── destiny.yml
 ├── tasks/
 ├── templates/
-└── _trial/                                   # L0-харнесс этой destiny
-    ├── service.yml                            # объявляет destiny[]: [{name: <name>, ref}] — зеркало прода
+└── _trial/                                   # L0-harness of this destiny
+    ├── service.yml                            # announces destiny[]: [{name: <name>, ref}] - sales mirror
     └── scenario/
         └── apply/
-            ├── main.yml                       # scenario: одна задача apply:destiny <name>
+            ├── main.yml                       # scenario: one task apply:destiny <name>
             └── tests/
                 └── render-defaults/
                     └── case.yml               # L0-form: fixtures (+ default_destiny_source) + assert.rendered_tasks
 ```
 
-**Резолв `apply:destiny` в L0 зеркалит прод-модель** ([slice A](../scenario/orchestration.md), [ADR-023](../adr/0023-trial-test-runner.md#adr-023-тест-раннер-trial-soul-trial-и-dsl-coverage)), а не перебирает каталоги эвристикой:
+**Resolve `apply:destiny` in L0 mirrors the product model** ([slice A](../scenario/orchestration.md), [ADR-023](../adr/0023-trial-test-runner.md)), and does not iterate through directories using heuristics:
 
-1. **`apply:destiny`-имя → `service.yml::destiny[]`.** Имя должно быть объявлено в `destiny[]` сервиса кейса (для standalone-обёртки — её `_trial/service.yml`). **Необъявленная зависимость отвергается** той же ошибкой, что в проде (`apply:destiny` ссылается только на декларированную зависимость, ADR-007).
-2. **URL → герметичный `file://`.** `case.yml::fixtures` несёт ключ **`default_destiny_source`** (то же имя, что у `keeper.yml`) — шаблон URL со схемой `file://` и подстановкой `{name}`, путь относительно service-root кейса (напр. `file://../../destiny/{name}` для cross-location, `file://destiny-{name}` для destiny внутри сервиса). Per-entry `destiny[].git` override побеждает шаблон, но в L0 тоже обязан быть `file://`. Любая не-`file://` схема → явная ошибка «L0 герметичен». `{name}` обязан жить в последнем сегменте пути; граница securejoin проходит по destiny-root (часть URL до `{name}`), так что `{name}` не вырвется через `../` за объявленный каталог destiny.
+1. **`apply:destiny`-name → `service.yml::destiny[]`.** The name must be declared in `destiny[]` of the case service (for a standalone wrapper - its `_trial/service.yml`). **An undeclared dependency is rejected** with the same error as in production (`apply:destiny` only references a declared dependency, ADR-007).
+2. **URL → sealed `file://`.** `case.yml::fixtures` carries the key **`default_destiny_source`** (same name as `keeper.yml`) - URL template with scheme `file://` and substitution `{name}`, path relative to the service-root of the case (e.g. `file://../../destiny/{name}` for cross-location, `file://destiny-{name}` for destiny within the service). Per-entry `destiny[].git` override defeats the template, but L0 must also have `file://`. Any non-`file://` circuit → obvious error "L0 is sealed." `{name}` must live in the last segment of the path; The securejoin boundary is at destiny-root (the part of the URL before `{name}`), so `{name}` will not break through `../` beyond the declared directory of destiny.
 
-Прежняя формулировка «резолвер поднимается на пару уровней вверх к каталогу destiny» снята: эвристический перебор `[serviceRoot, parent, grandparent]` не отражал прод и врал на cross-location раскладке (сервис и standalone destiny в разных поддеревьях). Рабочие примеры — [`examples/destiny/node-exporter/_trial/`](../../examples/destiny/node-exporter/_trial/scenario/apply/main.yml), `redis-exporter/_trial/`, `service-reload/_trial/` (cross-location: service-root = `_trial/`, сама destiny уровнем выше в `examples/destiny/`); cross-location сервис → [`examples/service/redis/`](../../examples/service/redis/service.yml) (destiny в `examples/destiny/`). Запуск: `soul-trial run examples/destiny/<name>/_trial`.
+The previous wording "the resolver goes up a couple of levels to the destiny directory" has been removed: the heuristic search `[serviceRoot, parent, grandparent]` did not reflect the product and lied on the cross-location layout (service and standalone destiny in different subtrees). Working examples - [`examples/destiny/node-exporter/_trial/`](../../examples/destiny/node-exporter/_trial/scenario/apply/main.yml), `redis-exporter/_trial/`, `service-reload/_trial/` (cross-location: service-root = `_trial/`, destiny itself is a higher level in `examples/destiny/`); cross-location service → [`examples/service/redis/`](../../examples/service/redis/service.yml) (destiny in `examples/destiny/`). Launch: `soul-trial run examples/destiny/<name>/_trial`.
 
-## Идеи метрик coverage (тоже на проработку)
+## Ideas for coverage metrics (also for development)
 
-Грубый список — что *вероятно* стоит измерять, состав пересматривается при дизайне:
+Rough list - what is *probably* worth measuring, composition revised during design:
 
-- **Task coverage** — каждая задача destiny (`tasks:` элемент) выполнена хотя бы в одном кейсе.
-- **Branch coverage по `when`** — для каждого выражения собраны и truthy-, и falsy-результат (или все ветви, если это switch по enum).
-- **Enum-value coverage** — каждое значение `enum:` входного параметра задействовано хотя бы в одном кейсе. Дополняет статическую проверку №1 в [soul-lint.md](../soul-lint.md): статика говорит «литерал в выражении легален», runtime говорит «значение реально прогнано на стенде».
-- **Module coverage** — каждый custom-модуль из `required_modules:` хотя бы раз вызывался хотя бы в одном из своих state-форм. Если нет — либо запись лишняя, либо есть непокрытый сценарий. (Core-модули в `required_modules:` не декларируются — см. [«Адресация модулей»](../architecture.md#адресация-модулей).)
-- **Output coverage** — каждое поле, объявленное в `output:` какой-то задачи, реально присвоено хотя бы в одном прогоне.
+- **Task coverage** — each task destiny (`tasks:` element) is completed in at least one case.
+- **Branch coverage by `when`** - for each expression, both truthy- and falsy-results are collected (or all branches, if this is a switch by enum).
+- **Enum-value coverage** — each value of the `enum:` input parameter is used in at least one case. Complements static check No. 1 in [soul-lint.md](../soul-lint.md): statics says "the literal in the expression is legal", runtime says "the value was actually tested on the bench".
+- **Module coverage** — each custom module from `required_modules:` was called at least once in at least one of its state forms. If not, either the entry is redundant or there is an uncovered scenario. (Core modules are not declared in `required_modules:` - see ["Addressing modules"](../architecture.md).)
+- **Output coverage** - each field declared in `output:` of some task is actually assigned in at least one run.
 
-## Открытые вопросы
+## Open questions
 
-Все нужно решить **перед** реализацией.
+Everything needs to be decided **before** implementation.
 
-1. **Форма инструмента и имя.** Отдельный бинарь? Подкоманда `keeper`? Часть тулинга вокруг `soul`? Имя — под propose-and-wait, не закрепляется молча.
-2. ~~**Формат тест-кейсов.** Отдельные YAML рядом с destiny vs встроенный раздел внутри destiny.~~ **Закрыто:** отдельные файлы, раскладка `destiny-<name>/tests/<case-name>/case.yml` (+ опц. `prepare.yml` / `verify.yml` / `cleanup.yml`). См. раздел «Раскладка тест-кейсов рядом с destiny» выше.
-3. **Sandbox-контейнер.** **Single-host — ЗАКРЫТ** (L2 Вариант A, [ADR-023](../adr/0023-trial-test-runner.md#adr-023-тест-раннер-trial-soul-trial-и-dsl-coverage)): ephemeral docker-container per-case, `stand: {driver, image, mode: push}`; digest-pin образа разрешён/поощряется (герметичность), сеть включена по умолчанию (нужна для `core.pkg`), `stand.network: none` — явный opt-out. **L0 render-multi-host (`fixtures.hosts`) — ЗАКРЫТ** (amendment 2026-06-22, ADR-023): roster из N хостов гоняется штатным harness-ом, проверяются render-инварианты (`size(soulprint.hosts)`-guard, `soulprint.hosts`-проекция, nodes-детерминизм, `state_changes`) — это герметичный render-уровень, без docker и без dispatch. **Multi-host `stand:` (L3-dispatch) — ОСТАЁТСЯ ОТКРЫТЫМ:** docker-стенд на топологии, `assert.dispatch` (кто реально master исполняет) и ассерты на committed `incarnation.state` cross-host — расширение для L3, фиксируется отдельно через propose-and-wait по формату топологии, **не закрывается молча** (см. [`docs/scenario/orchestration.md §8`](../scenario/orchestration.md#8-открытые-вопросы-расширения-не-закрывать-молча)).
-4. ~~**Real vs mock модули.**~~ **Закрыто: real-only.** L2 гоняет реальные модули в docker; быстрый «mock-режим» отдельной сущностью не вводится — его роль выполняет **L0 render-only** (assert на плане задач / state без хоста). Один mock-уровень (L0), один real-уровень (L2), без третьего промежуточного.
-5. ~~**Идемпотентность.**~~ **Закрыто: обязательна с opt-out.** `expect_idempotent` по умолчанию `true` — второй apply того же `input` обязан дать все `register.changed == false`. Кейс с осознанно-неидемпотентным шагом отключает проверку явным `expect_idempotent: false`.
-6. **Хранение coverage.** Postgres (часть Keeper) vs только CI-артефакт vs оба. Определяет, доступны ли в UI история и сравнение между ранами.
-7. **CI gate.** Порог покрытия по умолчанию (warn / fail) и его область действия (per destiny / per service / глобально).
-8. **Что именно измерять.** Список метрик выше — стартовая точка, не финальный набор.
+1. **Tool form and name.** Separate binary? Subcommand `keeper`? Part of the tuling around `soul`? The name is proposed-and-wait and is not fixed silently.
+2. ~~**Test case format.** Separate YAML next to destiny vs built-in section inside destiny.~~ **Closed:** separate files, layout `destiny-<name>/tests/<case-name>/case.yml` (+ opt. `prepare.yml` / `verify.yml` / `cleanup.yml`). See the section "Test case layout next to destiny" above.
+3. **Sandbox container.** **Single-host - CLOSED** (L2 Option A, [ADR-023](../adr/0023-trial-test-runner.md)): ephemeral docker-container per-case, `stand: {driver, image, mode: push}`; image digest-pin is allowed/encouraged (tightness), network is enabled by default (needed for `core.pkg`), `stand.network: none` is an explicit opt-out. **L0 render-multi-host (`fixtures.hosts`) - CLOSED** (amendment 2026-06-22, ADR-023): a roster of N hosts is driven by a standard harness, render invariants are checked (`size(soulprint.hosts)`-guard, `soulprint.hosts`-projection, nodes-determinism, `state_changes`) - this hermetically sealed render layer, without docker and without dispatch. **Multi-host `stand:` (L3-dispatch) - REMAINS OPEN:** docker stand on the topology, `assert.dispatch` (who actually executes the master) and assertions on committed `incarnation.state` cross-host - extension for L3, fixed separately through propose-and-wait according to the topology format, **does not close silently** (see. [`docs/scenario/orchestration.md §8`](../scenario/orchestration.md#8-open-questions-extensions-do-not-close-silently)).
+4. ~~**Real vs mock modules.**~~ **Closed: real-only.** L2 runs real modules in docker; the fast "mock mode" is not introduced by a separate entity - its role is played by **L0 render-only** (assert on the task plan / state without a host). One mock level (L0), one real level (L2), without a third intermediate one.
+5. ~~**Idempotency.**~~ **Closed: required with opt-out.** `expect_idempotent` defaults to `true` - the second apply of the same `input` must give all `register.changed == false`. A case with a consciously non-idempotent step disables the check with an explicit `expect_idempotent: false`.
+6. **Storage coverage.** Postgres (part of Keeper) vs CI artifact only vs both. Determines whether history and comparison between wounds are available in the UI.
+7. **CI gate.** Default coverage threshold (warn / fail) and its scope (per destiny / per service / globally).
+8. **What exactly to measure.** The list of metrics above is a starting point, not a final set.
 
-## Зависимости
+## Dependencies
 
-- Шаблонизатор выражений зафиксирован [ADR-010](../adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов), нормативная спека — [`docs/templating.md`](../templating.md): инструментирование `when:` опирается на CEL (тот же engine, что и статические проверки `soul-lint`).
-- Open Q «UI Keeper-а» — определяет, появится ли визуализация coverage в составе релиза.
-- Связано со статическими проверками `soul-lint` (см. [soul-lint.md](../soul-lint.md)): статический и runtime-coverage — разные слои, нужны оба. Статика ловит мёртвые литералы и опечатки; runtime ловит непокрытые сценарии.
+- The expression template engine is fixed [ADR-010](../adr/0010-templating.md), the normative spec is [`docs/templating.md`](../templating.md): instrumentation `when:` is based on CEL (the same engine as static checks `soul-lint`).
+- Open Q "UI Keeper" - determines whether coverage visualization will appear as part of the release.
+- Related to static checks `soul-lint` (see [soul-lint.md](../soul-lint.md)): static and runtime-coverage are different layers, both are needed. Statics catches dead literals and typos; runtime catches uncovered scripts.
 
-## См. также
+## See also
 
-- [concept.md](concept.md) — что такое destiny.
-- [tasks.md](tasks.md) — формат `tasks/main.yml`, который тестируется.
-- [input.md](input.md) — destiny-`input:`, значения которого передаются в `case.yml`.
-- [`docs/scenario/orchestration.md`](../scenario/orchestration.md) — scenario-тесты: multi-host `stand:`, ассерты на топологию/`incarnation.state`.
+- [concept.md](concept.md) - what is destiny.
+- [tasks.md](tasks.md) - `tasks/main.yml` format that is being tested.
+- [input.md](input.md) - destiny-`input:`, the values ​​of which are passed to `case.yml`.
+- [`docs/scenario/orchestration.md`](../scenario/orchestration.md) - scenario tests: multi-host `stand:`, topology assertions/`incarnation.state`.

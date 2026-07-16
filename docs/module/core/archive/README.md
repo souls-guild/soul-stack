@@ -1,57 +1,57 @@
 # core.archive
 
-Распаковка архивов в каталог. **Soul-side**, статически встроен в `soul`-бинарь.
-Реализация — [`soul/internal/coremod/archive/archive.go`](../../../../soul/internal/coremod/archive/archive.go).
+Unpacking archives into a directory. **Soul-side**, statically built into the `soul` binary.
+Implementation - [`soul/internal/coremod/archive/archive.go`](../../../../soul/internal/coremod/archive/archive.go).
 
-Поддерживаемые форматы: **tar** / **tar.gz** (`.tgz`) / **tar.bz2** (`.tbz2`) /
-**zip**. `format` опционален — auto-detect по расширению `path`. Распаковка идёт
-**in-process** средствами Go stdlib (`archive/tar`, `archive/zip`,
-`compress/gzip`, `compress/bzip2`) — без внешних утилит (`tar` / `unzip`) и без
-порождения подпроцессов. Это снимает зависимость от хостовых бинарей и даёт
-per-entry контроль безопасности (zip-slip / zip-bomb / symlink-политика),
-недоступный backend-утилитам. tar.bz2 — только распаковка (bzip2 в stdlib
-decompress-only; для MVP этого достаточно).
+Supported formats: **tar** / **tar.gz** (`.tgz`) / **tar.bz2** (`.tbz2`) /
+**zip**. `format` is optional - auto-detect by extension `path`. Unpacking in progress
+**in-process** using Go stdlib (`archive/tar`, `archive/zip`,
+`compress/gzip`, `compress/bzip2`) - without external utilities (`tar` / `unzip`) and without
+spawning subprocesses. This removes the dependence on host binaries and gives
+per-entry security control (zip-slip / zip-bomb / symlink-policy),
+not available to backend utilities. tar.bz2 - unpacking only (bzip2 to stdlib
+decompress-only; this is enough for MVP).
 
 ## States
 
-| State | Назначение | Идемпотентность (когда `changed=true`) |
+| State | Destination | Idempotency (when `changed=true`) |
 |---|---|---|
-| `extracted` | Архив `path` распакован в каталог `dest`. | После распаковки SHA-256 исходного архива пишется в `<dest>/.soul-archive.sha256`. `changed=true`, если маркера нет либо его хэш ≠ хэшу текущего архива. Совпал — `changed=false` (no-op). Это grounded-проверка «архив тот же», а не «все файлы внутри `dest` на месте». |
+| `extracted` | The `path` archive has been unpacked into the `dest` directory. | After unpacking, the SHA-256 of the source archive is written to `<dest>/.soul-archive.sha256`. `changed=true`, if there is no marker or its hash ≠ the hash of the current archive. Matched - `changed=false` (no-op). This is a grounded check "the archive is the same", and not "all files inside `dest` are in place". |
 
 ## extracted — params
 
-| Param | Тип | Required / default | Смысл |
+| Param | Type | Required/default | Meaning |
 |---|---|---|---|
-| `path` | string | required | Путь к архиву-источнику. |
-| `dest` | string | required | Каталог назначения. Создаётся (`MkdirAll`, mode `0755`), если не существует. |
-| `format` | string | optional (default — auto-detect) | Принудительный формат: `tar` / `tar.gz` (`tgz`) / `tar.bz2` (`tbz2`) / `zip`. Пусто/не задан → формат определяется по суффиксу `path`; если суффикс не распознан — шаг падает (`cannot auto-detect format`). |
-| `max_size` | string | optional (default `1GiB`) | Потолок **суммарного распакованного** размера (zip-bomb-защита). Голое число = байты, либо число с бинарным суффиксом `KiB` / `MiB` / `GiB` (регистр суффикса не важен). Десятичные SI-суффиксы (`KB` / `MB` / `GB`) и дроби **не поддерживаются** — нераспознанный суффикс или мусор → явная ошибка конфигурации (`invalid size`), а не тихий отброс хвоста. Значение `≤ 0` тоже отвергается. Превышение → шаг падает (`exceeded max_size`). Ratio-лимита нет — только абсолютный потолок. |
-| `max_entries` | integer | optional (default `100000`) | Потолок числа записей в архиве (zip-bomb-защита). Превышение → шаг падает (`exceeded max_entries`). |
+| `path` | string | required | Path to the source archive. |
+| `dest` | string | required | Destination directory. Created (`MkdirAll`, mode `0755`) if does not exist. |
+| `format` | string | optional (default - auto-detect) | Forced format: `tar` / `tar.gz` (`tgz`) / `tar.bz2` (`tbz2`) / `zip`. Empty/not specified → format is determined by the suffix `path`; if the suffix is ​​not recognized, the step drops (`cannot auto-detect format`). |
+| `max_size` | string | optional (default `1GiB`) | Ceiling of **total unpacked** size (zip-bomb protection). Naked number = bytes, or a number with a binary suffix `KiB` / `MiB` / `GiB` (suffix case is not important). Decimal SI suffixes (`KB` / `MB` / `GB`) and fractions are **not supported** - unrecognized suffix or garbage → a clear configuration error (`invalid size`), not a silent tail drop. The value `≤ 0` is also rejected. Excess → step falls (`exceeded max_size`). There is no ratio limit - only an absolute ceiling. |
+| `max_entries` | integer | optional (default `100000`) | Limit on the number of records in the archive (zip-bomb protection). Excess → step falls (`exceeded max_entries`). |
 
 ## Capabilities / side-effects
 
-- **Меняет файловую систему:** создаёт каталог `dest`, распаковывает в него
-  содержимое архива, пишет маркер `.soul-archive.sha256` в `dest`. Для системных
-  путей требует соответствующих прав (на практике — root, см.
+- **Changes the file system:** creates a directory `dest`, unpacks it into
+archive contents, writes the marker `.soul-archive.sha256` to `dest`. For system
+paths requires appropriate rights (in practice - root, see.
   [`run_as_root`](../../../naming-rules.md#required_capabilities-enum)).
-- **Не порождает подпроцессов.** Распаковка — in-process на Go stdlib; манифест
-  объявляет только [`fs_write_root`](../../../naming-rules.md#required_capabilities-enum),
-  `exec_subprocess` **снят** (внешние `tar`/`unzip` больше не вызываются).
-  Хостовые утилиты распаковки не нужны.
-- Маркер-файл лежит **внутри** `dest` — учитывайте при последующей сверке
-  содержимого каталога другими шагами.
+- **Does not spawn subprocesses.** Unpacking - in-process on Go stdlib; manifesto
+declares only [`fs_write_root`](../../../naming-rules.md#required_capabilities-enum),
+`exec_subprocess` **removed** (external `tar`/`unzip` are no longer called).
+Host decompression utilities are not needed.
+- The marker file is **inside** `dest` - take it into account during subsequent verification
+directory contents using other steps.
 
 ## Output / register
 
-`extracted` отдаёт `{ path, dest, sha256, extracted: true }`, где `sha256` —
-хэш исходного архива (он же содержимое маркера). На no-op (хэш совпал) набор
-полей тот же, отличается только `changed=false`.
+`extracted` returns `{ path, dest, sha256, extracted: true }`, where `sha256` —
+hash of the source archive (aka the contents of the marker). On no-op (hash matched) set
+fields are the same, only `changed=false` is different.
 
-## Пример
+## Example
 
 ```yaml
-# Распаковать скачанный tarball в каталог. format auto-detect по .tar.gz.
-# Идемпотентно: core.archive пишет marker и повторно не распаковывает тот же архив.
+# Unpack the downloaded tarball into a directory. format auto-detect by .tar.gz.
+# Idempotent: core.archive writes a marker and does not unpack the same archive again.
 - name: Extract node_exporter tarball
   module: core.archive.extracted
   params:
@@ -59,75 +59,75 @@ decompress-only; для MVP этого достаточно).
     dest: "${ '/tmp/node_exporter-' + input.version }"
 ```
 
-(из [`examples/destiny/node-exporter/tasks/install.yml`](../../../../examples/destiny/node-exporter/tasks/install.yml))
+(from [`examples/destiny/node-exporter/tasks/install.yml`](../../../../examples/destiny/node-exporter/tasks/install.yml))
 
-## Безопасность
+## Security
 
-Распаковка in-process даёт per-entry контроль над каждой записью архива до её
-материализации. Инварианты ниже жёсткие — поведением backend-утилиты не
-определяются и (кроме лимитов zip-bomb) флагами не отключаются.
+In-process unpacking gives per-entry control over each archive entry before it
+materialization. The invariants below are strict - the behavior of the backend utility is not
+are determined and (except for zip-bomb limits) are not disabled by flags.
 
-- **zip-slip / path-traversal — fail-fast.** Для каждой записи целевой путь
-  строится через [`filepath-securejoin`](https://github.com/cyphar/filepath-securejoin)
-  относительно `dest`, плюс лексический детект escape. Запись с `..` либо
-  абсолютным путём, выводящая за пределы `dest`, → шаг **падает целиком**
-  (`archive: entry %q escapes dest`), уже распакованные файлы остаются, маркер
-  `.soul-archive.sha256` **не** пишется (повтор не считается успешным). Это
-  fail-fast, а **не** тихий clamp: запись наружу не создаётся ни в `dest`, ни вне
-  него.
-- **zip-bomb — абсолютные лимиты.** Суммарный распакованный размер ограничен
-  `max_size` (дефолт `1GiB`), число записей — `max_entries` (дефолт `100000`).
-  Размер считается через `io.LimitReader` на каждую запись + аккумулятор;
-  превышение любого лимита → `failed` с указанием, какой лимит пробит
-  (`exceeded max_size` / `exceeded max_entries`). Ratio-лимита (степень сжатия)
-  нет — только абсолютные потолки. Оба настраиваются параметрами.
-- **symlink — within-dest only.** Symlink из архива создаётся **только** если его
-  target (резолвнутый относительно директории самого symlink-а) остаётся внутри
-  `dest`. Абсолютный target или относительный, выводящий за `dest`, →
-  `archive: symlink %q target escapes dest`, шаг падает. Это закрывает symlink-
-  vector обхода zip-slip (symlink наружу + последующая запись «сквозь» него).
-- **Запись через symlink-каталог, созданный внутри того же архива, не
-  поддерживается.** Если архив содержит symlink-каталог *внутри* `dest`
-  (within-dest, легитимный сам по себе), а затем запись по пути «сквозь» этот
-  symlink (`alias/file.txt`, где `alias` → существующий каталог) — шаг падает с
-  `escapes dest`. Это **fail-closed**: `securejoin` резолвит symlink по уже
-  лежащему на диске пути, резолвнутый результат ≠ наивного `filepath.Join`, и
-  модуль отвергает запись. Проверка идёт по **резолвнутому** пути, а не лексически
-  — наивная замена `securejoin` лексическим `Join` сломала бы эту защиту. Цена —
-  легитимный «запиши через свой же symlink-каталог» в одном архиве не работает;
-  это сознательный безопасный отказ, target-каталог нужно адресовать напрямую.
-- **setuid / setgid / sticky маскируются всегда.** mode записи применяется как
-  `entry.Mode() & 0o777` — биты `setuid`/`setgid`/`sticky` снимаются безусловно
-  (anti-privesc: архив не может протащить setuid-root-бинарь). Это жёсткий
-  инвариант, не флаг. owner/group из архива **не** берутся — файлы получают
-  владельца процесса `soul`-агента.
-- **Неподдерживаемые типы записей — явная ошибка.** hardlink (`TypeLink`),
-  устройства (`TypeBlock`/`TypeChar`), fifo (`TypeFifo`), socket → шаг падает
-  (`archive: entry %q: unsupported type`), а не молча пропускается. В MVP эти типы
-  не материализуются. Служебные PAX/GNU-заголовки и sparse-метаданные молча
-  игнорируются — они не добавляют файлов в дерево.
-- **Checksum — для идемпотентности, не для верификации источника.** SHA-256 в
-  `register.<name>.sha256` и маркере считается по **уже** лежащему на диске
-  файле-источнике (`hashFile`) — это «тот же ли архив, что в прошлый раз», а не
-  «совпал ли он с ожидаемым доверенным хэшем». Верификации против эталонного
-  чексумма/подписи модуль не делает; если она нужна — сверяйте хэш отдельным
-  шагом (например `register` + `failed_when:`) до распаковки.
-- **Привилегии.** Манифест
-  ([`archive.yaml`](../../../../shared/coremanifest/archive.yaml)) объявляет
-  только [`fs_write_root`](../../../naming-rules.md#required_capabilities-enum)
-  (запись за пределы `/var/lib/soul-stack/`), но **не** `run_as_root` и больше
-  **не** `exec_subprocess` (подпроцессы не порождаются). Модуль выполняется с
-  привилегиями процесса `soul`-агента; для распаковки в системные пути агент на
-  практике работает под root — поэтому setuid-маскинг и within-dest-инварианты
-  тем ценнее.
-- **Доверие к источнику всё ещё уместно.** Инварианты выше закрывают
-  zip-slip / zip-bomb / privesc-через-setuid, но модуль не верифицирует **подпись
-  / происхождение** архива. Для недоверенных артефактов (upload, сторонний build)
-  по-прежнему предпочтителен изолированный непривилегированный каталог `dest` и
-  отдельная проверка подписи/хэша до распаковки:
+- **zip-slip / path-traversal - fail-fast.** For each entry, the target path
+is built via [`filepath-securejoin`](https://github.com/cyphar/filepath-securejoin)
+regarding `dest`, plus lexical escape detection. Entry with `..` either
+in an absolute way, leading beyond `dest`, → step **falls entirely**
+(`archive: entry %q escapes dest`), already unpacked files remain, marker
+`.soul-archive.sha256` **not** written (retry is not considered successful). This
+fail-fast, but **not** quiet clamp: outward recording is not created either in `dest` or outside
+him.
+- **zip-bomb - absolute limits.** The total unpacked size is limited
+`max_size` (default `1GiB`), number of records - `max_entries` (default `100000`).
+The size is calculated using `io.LimitReader` for each record + accumulator;
+exceeding any limit → `failed` indicating which limit is broken
+(`exceeded max_size` / `exceeded max_entries`). Ratio limit (compression rate)
+no - only absolute ceilings. Both are configurable with parameters.
+- **symlink — within-dest only.** Symlink from the archive is created **only** if it
+target (resolved relative to the symlink directory itself) remains inside
+`dest`. Absolute target or relative, outputting beyond `dest`, →
+`archive: symlink %q target escapes dest`, the step is falling. This closes symlink-
+zip-slip bypass vector (symlink out + subsequent write "through" it).
+- **Writing through a symlink directory created inside the same archive does not
+supported.** If the archive contains a symlink directory *inside* `dest`
+(within-dest, legitimate in itself), and then write along the path "through" this
+symlink (`alias/file.txt`, where `alias` → existing directory) - step drops from
+`escapes dest`. This is **fail-closed**: `securejoin` resolves symlink by already
+to the path on disk, the resolved result ≠ naive `filepath.Join`, and
+module rejects the entry. The check goes along the **resolved** path, and not lexically
+- naively replacing `securejoin` with lexical `Join` would break this protection. Price -
+the legitimate "write through your own symlink directory" does not work in one archive;
+this is a deliberate safe disclaimer, the target directory must be addressed directly.
+- **setuid / setgid / sticky are always masked.** record mode is applied as
+`entry.Mode() & 0o777` — bits `setuid`/`setgid`/`sticky` are unconditionally cleared
+(anti-privesc: the archive cannot push the setuid-root binary). It's tough
+invariant, not a flag. owner/group from the archive are **not** taken - the files are received
+owner of the `soul`-agent process.
+- **Unsupported post types are a clear error.** hardlink (`TypeLink`),
+devices (`TypeBlock`/`TypeChar`), fifo (`TypeFifo`), socket → step drops
+(`archive: entry %q: unsupported type`), rather than silently skipping. In MVP these types
+do not materialize. Service PAX/GNU headers and sparse metadata silently
+are ignored - they do not add files to the tree.
+- **Checksum - for idempotency, not for source verification.** SHA-256 in
+`register.<name>.sha256` and the marker is calculated based on the one **already** on the disk
+source file (`hashFile`) - this is "is the archive the same as last time", and not
+"did it match the expected trusted hash." Verifications against reference
+the module does not do checksum/signatures; if you need it, check the hash separately
+step (for example `register` + `failed_when:`) before unpacking.
+- **Privileges.** Manifest
+([`archive.yaml`](../../../../shared/coremanifest/archive.yaml)) announces
+only [`fs_write_root`](../../../naming-rules.md#required_capabilities-enum)
+(write beyond `/var/lib/soul-stack/`), but **not** `run_as_root` and more
+**not** `exec_subprocess` (subprocesses are not spawned). The module runs with
+process privileges `soul`-agent; for unpacking into system paths agent on
+in practice it works as root - that's why setuid masking and within-dest invariants
+the more valuable.
+- **Trusting the source is still appropriate.** The invariants above close
+zip-slip / zip-bomb / privesc-via-setuid, but the module does not verify the **signature
+/ origin** archive. For untrusted artifacts (upload, third-party build)
+the isolated unprivileged directory `dest` is still preferred and
+separate signature/hash check before unpacking:
 
   ```yaml
-  # Доверенный tarball, известный из самого Destiny, в свой каталог.
+  # Trusted tarball known from Destiny itself to its directory.
   - name: Extract node_exporter tarball
     module: core.archive.extracted
     params:
@@ -136,11 +136,11 @@ decompress-only; для MVP этого достаточно).
       max_size: "500MiB"
   ```
 
-## См. также
+## See also
 
-- [README.md](../../README.md) — каталог core-модулей.
-- [core/url/README.md](../url/README.md) — загрузка архива по URL перед распаковкой.
-- [core/cmd/README.md](../cmd/README.md) — раскладка распакованного бинаря (`install`).
-- [soul/modules.md](../../../soul/modules.md) — хостовая сторона модулей и кеш.
-- [naming-rules.md → Модули Destiny](../../../naming-rules.md#модули-destiny) — словарь имён.
-- [ADR-015](../../../adr/0015-core-modules-mvp.md#adr-015-core-модули-mvp-точный-список) — список core MVP.
+- [README.md](../../README.md) - directory of core modules.
+- [core/url/README.md](../url/README.md) - download the archive by URL before unpacking.
+- [core/cmd/README.md](../cmd/README.md) — layout of the unpacked binary (`install`).
+- [soul/modules.md](../../../soul/modules.md) - host side of modules and cache.
+- [naming-rules.md → Destiny Modules](../../../naming-rules.md) - a dictionary of names.
+- [ADR-015](../../../adr/0015-core-modules-mvp.md) - list of core MVPs.

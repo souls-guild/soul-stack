@@ -1,59 +1,59 @@
 # core.cmd
 
-Запуск shell-строки через `sh -c "<cmd>"` — с обработкой pipes, redirects, glob,
-переменных. **Soul-side**, статически встроен в `soul`-бинарь. Реализация —
+Launching a shell line via `sh -c "<cmd>"` - with processing pipes, redirects, glob,
+variables. **Soul-side**, statically built into the `soul` binary. Implementation -
 [`soul/internal/coremod/cmd/cmd.go`](../../../../soul/internal/coremod/cmd/cmd.go).
 
-Это verb-модуль: единственное состояние — `shell`. В отличие от
-[`core.exec`](../exec/README.md) (argv, без shell) здесь строка интерпретируется
-shell-ом. **Модуль TRUSTED-ONLY**: `cmd`-строка уходит в `sh -c` без escape —
-это shell by design; любая интерполяция (CEL-render, register, soulprint) внутри
-`cmd` исполняется shell-ом как код, поэтому источник строки должен быть
-доверенным (автор Destiny/scenario), а не внешним вводом. Где shell-семантика не
-нужна — используйте `core.exec`.
+This is a verb module: the only state is `shell`. Unlike
+[`core.exec`](../exec/README.md) (argv, no shell) here the string is interpreted
+shell. **Module TRUSTED-ONLY**: `cmd`-line goes to `sh -c` without escape -
+this is shell by design; any interpolation (CEL-render, register, soulprint) inside
+`cmd` is executed by the shell as code, so the source of the string must be
+trusted (by Destiny/scenario) rather than external input. Where shell semantics fail
+needed - use `core.exec`.
 
 ## States
 
-| State | Назначение | Идемпотентность (когда `changed=true`) |
+| State | Destination | Idempotency (when `changed=true`) |
 |---|---|---|
-| `shell` | Выполнить `sh -c "<cmd>"`. | По умолчанию `changed=true` (verb «выполнить»). Понизить до no-op можно guard-параметрами `creates` / `unless` / `onlyif` (порядок проверки: creates → unless → onlyif, первый сработавший выигрывает): при срабатывании команда **не** запускается, `changed=false`, output `{ skipped: true, reason, exit_code: 0 }`. |
+| `shell` | Execute `sh -c "<cmd>"`. | Defaults to `changed=true` (verb "execute"). You can downgrade to no-op using the guard parameters `creates` / `unless` / `onlyif` (check order: creates → unless → onlyif, the first one to fire wins): when triggered, the **not** command is launched, `changed=false`, output `{ skipped: true, reason, exit_code: 0 }`. |
 
 ## shell — params
 
-| Param | Тип | Required / default | Смысл |
+| Param | Type | Required/default | Meaning |
 |---|---|---|---|
-| `cmd` | string | required | Shell-строка. Выполняется как `sh -c "<cmd>"`; pipes, redirects, glob, подстановки работают. |
-| `cwd` | string | optional | Рабочий каталог процесса `sh`. |
-| `env` | map&lt;string,string&gt; | optional | Переменные окружения процесса (`KEY=VALUE`). |
-| `creates` | string | optional | Guard: если файл по этому пути **существует** — пропуск (`changed=false`, `reason: creates`). |
-| `unless` | string | optional | Guard: выполнить `sh -c "<unless>"`; если её exit **= 0** — пропуск (`reason: unless`). |
-| `onlyif` | string | optional | Guard: выполнить `sh -c "<onlyif>"`; если её exit **≠ 0** — пропуск (`reason: onlyif`). |
+| `cmd` | string | required | Shell string. Executed as `sh -c "<cmd>"`; pipes, redirects, glob, substitutions work. |
+| `cwd` | string | optional | The working directory of the process is `sh`. |
+| `env` | map&lt;string,string&gt; | optional | Process environment variables (`KEY=VALUE`). |
+| `creates` | string | optional | Guard: if the file at this path **exists** - skip (`changed=false`, `reason: creates`). |
+| `unless` | string | optional | Guard: execute `sh -c "<unless>"`; if its exit **= 0** - skip (`reason: unless`). |
+| `onlyif` | string | optional | Guard: execute `sh -c "<onlyif>"`; if its exit **≠ 0** - skip (`reason: onlyif`). |
 
 ## Capabilities / side-effects
 
-- **Выполняет подпроцессы** ([`exec_subprocess`](../../../naming-rules.md#required_capabilities-enum)):
-  основная команда (`sh -c "<cmd>"`), а также guard-команды `unless` / `onlyif`
-  (тоже через `sh -c`).
-- **Меняет систему ровно настолько, насколько меняет shell-строка** — модуль сам
-  по себе ничего не пишет. Для системных операций требует соответствующих прав
-  (на практике — root, [`run_as_root`](../../../naming-rules.md#required_capabilities-enum)).
-- `creates` использует `os.Stat` (существование пути), `unless`/`onlyif` —
-  вспомогательные shell-вызовы.
+- **Executes subprocesses** ([`exec_subprocess`](../../../naming-rules.md#required_capabilities-enum)):
+main command (`sh -c "<cmd>"`), as well as guard commands `unless` / `onlyif`
+(also via `sh -c`).
+- **Changes the system exactly as much as the shell line changes** - the module itself
+doesn't write anything on its own. Requires appropriate rights for system operations
+(in practice - root, [`run_as_root`](../../../naming-rules.md#required_capabilities-enum)).
+- `creates` uses `os.Stat` (path existence), `unless`/`onlyif` -
+auxiliary shell calls.
 
 ## Output / register
 
-`shell` отдаёт `{ stdout, stderr, exit_code }` (exit_code — число). При
-срабатывании guard-а — `{ skipped: true, reason, exit_code: 0 }` с `changed=false`.
-Как и у `core.exec`, non-zero exit основной команды сам по себе не делает шаг
-failed — решает `failed_when:` в scenario.
+`shell` returns `{ stdout, stderr, exit_code }` (exit_code is a number). When
+when the guard is triggered - `{ skipped: true, reason, exit_code: 0 }` with `changed=false`.
+Like `core.exec`, the main command's non-zero exit does not take a step by itself
+failed - solves `failed_when:` in scenario.
 
-## Примеры
+## Examples
 
-**`creates`-guard** — install пропускается, если файл-результат уже на месте (простейшая идемпотентность, но **не** ловит апгрейд версии: путь тот же → шаг no-op даже когда содержимое устарело):
+**`creates`-guard** — install is skipped if the result file is already in place (the simplest idempotency, but **doesn't** catch version upgrades: the path is the same → no-op step even when the contents are outdated):
 
 ```yaml
-# Разложить бинарь из распакованного каталога: install -m 0755 — локальный shell,
-# без сети. Идемпотентность — через creates: бинарь на месте → no-op.
+# Expand the binary from the unpacked directory: install -m 0755 - local shell,
+# without network. Idempotency - through creates: binary in place → no-op.
 - name: Install redis_exporter binary
   module: core.cmd.shell
   params:
@@ -64,14 +64,14 @@ failed — решает `failed_when:` в scenario.
       '${ input.bin_dir + '/redis_exporter' }'
 ```
 
-(из инлайн-блока redis_exporter в [`examples/service/monitoring/scenario/create/main.yml`](../../../../examples/service/monitoring/scenario/create/main.yml). Эталонный `node-exporter` install-шаг идёт **не** через `creates`, а version-aware `unless` — см. ниже: `creates` не ловит апгрейд версии, поэтому бинарь под пин-версию лучше ставить через `unless`)
+(from the redis_exporter inline block in [`examples/service/monitoring/scenario/create/main.yml`](../../../../examples/service/monitoring/scenario/create/main.yml). The reference `node-exporter` install step goes **not** through `creates`, but the version-aware `unless` - see below: `creates` does not catch the version upgrade, so It is better to install the binary for the pin version via `unless`)
 
-**Version-aware `unless`-guard** — install пропускается ТОЛЬКО когда на месте уже стоит бинарь нужной версии. В отличие от `creates`, это позволяет **апгрейд**: другая версия → `unless` не satisfied → install выполняется и перезаписывает старый бинарь. `unless` satisfied = exit 0 (`--version`-вывод содержит ожидаемую версию):
+**Version-aware `unless`-guard** — install is skipped ONLY when the binary of the required version is already in place. Unlike `creates`, this allows **upgrade**: another version → `unless` not satisfied → install is executed and overwrites the old binary. `unless` satisfied = exit 0 (`--version` - the output contains the expected version):
 
 ```yaml
-# install пропускается, только если уже стоит node_exporter нужной версии;
-# любая другая версия (или отсутствие бинаря) → unless не satisfied → переустановка.
-# register: install-шаг подключён к onchanges рестарта — апгрейд рестартит сервис.
+# install is skipped only if node_exporter of the required version is already installed;
+# any other version (or lack of binary) → unless not satisfied → reinstall.
+# register: the install step is connected to the onchanges of the restart - the upgrade will restart the service.
 - name: Install node_exporter binary
   module: core.cmd.shell
   register: node_exporter_bin
@@ -83,45 +83,45 @@ failed — решает `failed_when:` в scenario.
       '${ input.bin_dir + '/node_exporter' }'
 ```
 
-(из [`examples/destiny/node-exporter/tasks/service.yml`](../../../../examples/destiny/node-exporter/tasks/service.yml). `grep`-паттерн `'version <X> '` — в одинарных кавычках, с пробелами по обе стороны версии. `node_exporter --version` печатает строку `node_exporter, version <X> (...)` — пробел перед `(` есть всегда; ведущий пробел отделяет токен `version`, **trailing-пробел обязателен**, чтобы паттерн `'version 1.9.0 '` НЕ дал ложный матч на выводе `version 1.9.01 ` (без trailing-пробела `grep -qF 'version 1.9.0'` совпал бы и с `1.9.01`). `input.version` под semver-`pattern`, в кавычках injection невозможна. `arch` берётся из `soulprint.self.os.arch` — стабильный self-факт хоста, доступный в CEL-проходе destiny.)
+(from [`examples/destiny/node-exporter/tasks/service.yml`](../../../../examples/destiny/node-exporter/tasks/service.yml). `grep`-pattern `'version <X> '` - in single quotes, with spaces on both sides of the version. `node_exporter --version` prints the string `node_exporter, version <X> (...)` - there is always a space before `(`; a leading space separates the token `version`, **trailing space is required** so that the pattern `'version 1.9.0 '` does NOT give a false match on the output of `version 1.9.01 ` (without the trailing space `grep -qF 'version 1.9.0'` would also match `1.9.01` under semver-`pattern`, in quotes injection). is not possible. `arch` is taken from `soulprint.self.os.arch` - a stable host self-fact available in the destiny CEL pass.)
 
-## Безопасность
+## Security
 
-- **TRUSTED-ONLY — главный инвариант модуля.** `cmd`-строка уходит в shell как
-  `sh -c "<cmd>"` без какого-либо escape (`util.RunOpts{Name: "sh", Args:
+- **TRUSTED-ONLY is the main invariant of the module.** `cmd`-string goes to the shell as
+`sh -c "<cmd>"` without any escape (`util.RunOpts{Name: "sh", Args:
   ["-c", shellCmd]}`, [`cmd.go`](../../../../soul/internal/coremod/cmd/cmd.go)).
-  Это shell by design: pipes/redirects/glob/подстановки нужны самому модулю.
-  Следствие — **любая интерполяция недоверенного в `cmd` = shell-injection**.
-  Значения из CEL-render, `register.*`, `soulprint.*`, `input.*` попадают в строку
-  и исполняются shell-ом как код через метасимволы `$`, `` ` ``, `|`, `&`, `;`,
-  `>`, `<`, `(`, `*`. Источник `cmd`-строки должен быть автором Destiny/scenario,
-  а не внешним вводом. Те же guard-команды `unless` / `onlyif` тоже идут через
-  `sh -c` — на них распространяется ровно тот же запрет на недоверенную
-  интерполяцию.
-- **Привилегии.** Модуль **не** объявляет `run_as_root` — в манифесте
-  ([`cmd.yaml`](../../../../shared/coremanifest/cmd.yaml)) только
+This is shell by design: pipes/redirects/glob/substitutions are needed by the module itself.
+Consequence - **any untrusted interpolation in `cmd` = shell-injection**.
+Values from CEL-render, `register.*`, `soulprint.*`, `input.*` fall into the string
+and are executed by the shell as code through the metacharacters `$`, `` ` ``, `|`, `&`, `;`,
+`>`, `<`, `(`, `*`. The source of the `cmd`-string must be the author of Destiny/scenario,
+and not external input. The same guard commands `unless` / `onlyif` also go through
+`sh -c` - they are subject to exactly the same prohibition on untrusted
+interpolation.
+- **Privileges.** The module **doesn't** declare `run_as_root` - in the manifest
+([`cmd.yaml`](../../../../shared/coremanifest/cmd.yaml)) only
   [`exec_subprocess`](../../../naming-rules.md#required_capabilities-enum).
-  Команда исполняется с привилегиями процесса `soul`-агента, без повышения прав
-  внутри модуля; для системных операций агент на практике работает под root, и
-  тогда `sh -c` тоже идёт под root — это усиливает цену injection, а не смягчает.
-- **Опасно vs. правильно.** Подстановка недоверенного значения прямо в shell-строку:
+The command is executed with the privileges of the `soul`-agent process, without elevation
+inside the module; for system operations the agent in practice runs as root, and
+then `sh -c` also runs under root - this increases the price of injection, and does not soften it.
+- **Dangerous vs. correct.** Substituting an untrusted value directly into the shell string:
 
   ```yaml
-  # ОПАСНО: filename из недоверенного источника интерпретируется shell-ом.
-  # filename = "x; rm -rf /var/lib/app" → выполнится rm.
+  # DANGER: filename from an untrusted source is interpreted by the shell.
+  # filename = "x; rm -rf /var/lib/app" → rm will be executed.
   - name: Remove uploaded file
     module: core.cmd.shell
     params:
       cmd: "rm -f /srv/uploads/${ input.filename }"
   ```
 
-  Если shell-семантика (pipes/redirects/glob) не нужна — переписать на
-  [`core.exec.run`](../exec/README.md), где argv-форма передаёт значение отдельным
-  токеном и метасимволы **не** интерпретируются (сверено: `core.exec` запускает
-  `exec.CommandContext(cmd, args...)` без `sh -c`):
+If shell semantics (pipes/redirects/glob) are not needed, rewrite them to
+[`core.exec.run`](../exec/README.md), where the argv form passes the value to individual
+token and metacharacters are **not** interpreted (verified: `core.exec` runs
+`exec.CommandContext(cmd, args...)` without `sh -c`):
 
   ```yaml
-  # БЕЗОПАСНО: filename — отдельный argv-токен, shell не участвует.
+  # SAFE: filename is a separate argv token, the shell is not involved.
   - name: Remove uploaded file
     module: core.exec.run
     params:
@@ -129,17 +129,17 @@ failed — решает `failed_when:` в scenario.
       args: ["-f", "/srv/uploads/${ input.filename }"]
   ```
 
-  Если shell-семантика действительно нужна и часть `cmd` приходит из CEL-render —
-  значение обязано квотироваться helper-ом `${ q(...) }` (квотинг для shell,
-  **post-MVP**: пока недоступен — см. package-doc
-  [`cmd.go`](../../../../soul/internal/coremod/cmd/cmd.go); до его появления
-  держите такие шаги полностью под контролем автора Destiny).
+If shell semantics are really needed and the `cmd` part comes from CEL-render -
+value must be quoted by helper `${ q(...) }` (quoting for shell,
+**post-MVP**: not available yet - see package-doc
+[`cmd.go`](../../../../soul/internal/coremod/cmd/cmd.go); before he appeared
+keep such steps entirely under the control of the Destiny author).
 
-## См. также
+## See also
 
-- [README.md](../../README.md) — каталог core-модулей.
-- [core/exec/README.md](../exec/README.md) — argv-вариант без shell (TRUSTED-ONLY не нужен); те же guard-флаги.
-- [core/archive/README.md](../archive/README.md) — распаковка перед install-шагом.
-- [soul/modules.md](../../../soul/modules.md) — хостовая сторона модулей и кеш.
-- [naming-rules.md → Модули Destiny](../../../naming-rules.md#модули-destiny) — словарь имён.
-- [ADR-015](../../../adr/0015-core-modules-mvp.md#adr-015-core-модули-mvp-точный-список) — список core MVP.
+- [README.md](../../README.md) - directory of core modules.
+- [core/exec/README.md](../exec/README.md) - argv option without shell (TRUSTED-ONLY is not needed); the same guard flags.
+- [core/archive/README.md](../archive/README.md) - unpacking before the install step.
+- [soul/modules.md](../../../soul/modules.md) - host side of modules and cache.
+- [naming-rules.md → Destiny Modules](../../../naming-rules.md) - a dictionary of names.
+- [ADR-015](../../../adr/0015-core-modules-mvp.md) - list of core MVPs.
