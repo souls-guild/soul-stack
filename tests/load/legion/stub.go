@@ -18,20 +18,22 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
-// stubKeepalive — те же параметры, что у настоящего Soul-клиента
-// (soul/internal/grpc/client.go): ping каждые 30s после idle, PermitWithoutStream.
-// 30s > server MinTime 10s (eventStreamKeepaliveMinTime) — too_many_pings GOAWAY
-// исключён. Под N стримов это и есть оси-A presence-нагрузка (gRPC keepalive +
-// app-сообщение обновляют last_seen_at, ADR-012).
+// stubKeepalive -- the same parameters as the real Soul client
+// (soul/internal/grpc/client.go): ping every 30s after idle,
+// PermitWithoutStream. 30s > server MinTime 10s (eventStreamKeepaliveMinTime)
+// -- too_many_pings GOAWAY is excluded. Across N streams this is exactly
+// axis-A presence load (gRPC keepalive + app message update last_seen_at,
+// ADR-012).
 var stubKeepalive = keepalive.ClientParameters{
 	Time:                30 * time.Second,
 	Timeout:             10 * time.Second,
 	PermitWithoutStream: true,
 }
 
-// Stub — один fake-Soul: держит долгоживущий EventStream к Keeper-у, шлёт Hello +
-// (опц.) SoulprintReport, отвечает scripted RunResult{SUCCESS, changed=false} на
-// ApplyRequest. НЕ парсит Destiny, НЕ применяет (load-контракт).
+// Stub -- one fake-Soul: holds a long-lived EventStream to Keeper, sends
+// Hello + (optional) SoulprintReport, replies with a scripted
+// RunResult{SUCCESS, changed=false} to ApplyRequest. Does NOT parse Destiny,
+// does NOT apply (load contract).
 type Stub struct {
 	id         Identity
 	keeperAddr string
@@ -42,19 +44,20 @@ type Stub struct {
 	conn     *grpc.ClientConn
 	stream   keeperv1.Keeper_EventStreamClient
 	cancel   context.CancelFunc
-	helloAck bool   // получен HelloReply
-	applies  int    // сколько ApplyRequest обработано
-	errands  int    // сколько ErrandRequest обработано (command-Voyage, ось C)
-	recvErr  string // непустая только при НЕштатном обрыве recv-loop (не EOF/Canceled)
+	helloAck bool   // HelloReply received
+	applies  int    // number of ApplyRequests handled
+	errands  int    // number of ErrandRequests handled (command Voyage, axis C)
+	recvErr  string // non-empty only on an abnormal recv-loop break (not EOF/Canceled)
 }
 
-// NewStub собирает stub. caBundle — root CA Keeper-server-cert-а (верификация
-// server-cert-а на handshake-е); serverName — SNI/верификация (на dev-стенде
-// keeper-cert выписан на CN=localhost, SAN localhost+127.0.0.1).
+// NewStub assembles a stub. caBundle -- root CA of the Keeper server cert
+// (server-cert verification on handshake); serverName -- SNI/verification
+// (on the dev stand the keeper-cert is issued for CN=localhost, SAN
+// localhost+127.0.0.1).
 func NewStub(id Identity, keeperAddr, serverName string, caBundle []byte) (*Stub, error) {
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(caBundle) {
-		return nil, fmt.Errorf("legion: не удалось добавить CA в pool")
+		return nil, fmt.Errorf("legion: failed to add CA to pool")
 	}
 	return &Stub{
 		id:         id,
@@ -64,10 +67,11 @@ func NewStub(id Identity, keeperAddr, serverName string, caBundle []byte) (*Stub
 	}, nil
 }
 
-// Open подключается по mTLS, открывает EventStream, шлёт Hello, запускает
-// recv-loop. Блокирует до подтверждения HelloReply (или ошибки/таймаута ctx) —
-// HelloReply Keeper шлёт ПОСЛЕ захвата Redis SID-lease, что и есть «стрим реально
-// учтён» (keeper_grpc_streams_active.Inc). Возвращает ошибку handshake-а.
+// Open connects over mTLS, opens the EventStream, sends Hello, starts the
+// recv-loop. Blocks until HelloReply is confirmed (or ctx error/timeout) --
+// Keeper sends HelloReply AFTER acquiring the Redis SID-lease, which is
+// exactly "the stream is really accounted for" (keeper_grpc_streams_active.Inc).
+// Returns a handshake error.
 func (s *Stub) Open(ctx context.Context) error {
 	clientCert, err := tls.X509KeyPair(s.id.CertPEM, s.id.KeyPEM)
 	if err != nil {
@@ -118,8 +122,9 @@ func (s *Stub) Open(ctx context.Context) error {
 
 	go s.recvLoop()
 
-	// Ждём HelloReply: Keeper присылает его после захвата SID-lease (presence
-	// online). До этого момента стрим не считается «реально подключённым».
+	// Wait for HelloReply: Keeper sends it after acquiring the SID-lease
+	// (presence online). Before that the stream is not considered "really
+	// connected".
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		s.mu.Lock()
@@ -130,28 +135,29 @@ func (s *Stub) Open(ctx context.Context) error {
 			return nil
 		}
 		if closed {
-			return fmt.Errorf("legion(%s): стрим закрылся до HelloReply", s.id.SID)
+			return fmt.Errorf("legion(%s): stream closed before HelloReply", s.id.SID)
 		}
 		select {
 		case <-ctx.Done():
 			s.Close()
-			return fmt.Errorf("legion(%s): ctx отменён до HelloReply: %w", s.id.SID, ctx.Err())
+			return fmt.Errorf("legion(%s): ctx canceled before HelloReply: %w", s.id.SID, ctx.Err())
 		case <-time.After(25 * time.Millisecond):
 		}
 	}
 	s.Close()
-	return fmt.Errorf("legion(%s): HelloReply не получен за 10s", s.id.SID)
+	return fmt.Errorf("legion(%s): HelloReply not received within 10s", s.id.SID)
 }
 
-// SendSoulprint шлёт минимальный typed-SoulprintReport (как настоящий Soul на
-// refresh_interval) — нагружает Keeper-side soulprint-upsert в PG. Best-effort:
-// ошибка send-а возвращается, не фатальна для удержания стрима.
+// SendSoulprint sends a minimal typed SoulprintReport (like a real Soul on
+// refresh_interval) -- loads the keeper-side soulprint-upsert into PG.
+// Best-effort: send errors are returned but are not fatal for holding the
+// stream.
 func (s *Stub) SendSoulprint() error {
 	s.mu.Lock()
 	stream := s.stream
 	s.mu.Unlock()
 	if stream == nil {
-		return errors.New("legion: стрим закрыт")
+		return errors.New("legion: stream closed")
 	}
 	return stream.Send(&keeperv1.FromSoul{
 		Payload: &keeperv1.FromSoul_SoulprintReport{
@@ -174,11 +180,11 @@ func (s *Stub) SendSoulprint() error {
 	})
 }
 
-// recvLoop читает сообщения Keeper-а. На HelloReply ставит ack; на ApplyRequest
-// отвечает RunResult{SUCCESS} (scenario-Voyage); на ErrandRequest — ErrandResult
-// {SUCCESS} (command-Voyage, ось C run-нагрузки). Прочие сообщения игнорируются
-// (load НЕ реализует Vigil/Sigil/Augur — мерим dispatch-нагрузку на Keeper, не
-// реализм apply, docs/testing/load-testing.md §3).
+// recvLoop reads Keeper's messages. On HelloReply sets ack; on ApplyRequest
+// replies with RunResult{SUCCESS} (scenario Voyage); on ErrandRequest --
+// ErrandResult{SUCCESS} (command Voyage, axis C load). Other messages are
+// ignored (load does NOT implement Vigil/Sigil/Augur -- we measure dispatch
+// load on Keeper, not apply realism, docs/testing/load-testing.md §3).
 func (s *Stub) recvLoop() {
 	for {
 		s.mu.Lock()
@@ -189,10 +195,10 @@ func (s *Stub) recvLoop() {
 		}
 		frame, err := stream.Recv()
 		if err != nil {
-			// EOF/Canceled — штатное закрытие (CloseSend/Close-teardown). Любая
-			// другая ошибка — НЕштатный обрыв стрима Keeper-ом (RST/GOAWAY/
-			// Unavailable): фиксируем, чтобы отличить «держим N» от «Keeper
-			// сбросил часть стримов под нагрузкой».
+			// EOF/Canceled -- normal close (CloseSend/Close teardown). Any
+			// other error -- an abnormal stream break by Keeper
+			// (RST/GOAWAY/Unavailable): recorded to distinguish "holding N"
+			// from "Keeper dropped some streams under load".
 			if !errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) {
 				s.mu.Lock()
 				if s.recvErr == "" {
@@ -225,9 +231,10 @@ func (s *Stub) markStreamClosed() {
 	s.mu.Unlock()
 }
 
-// respondApply шлёт агрегированный RunResult{SUCCESS} без state_changes
-// (changed=false). НЕ исполняет задачи — мерим keeper-side dispatch→RunResult, а
-// не реализм apply (load-контракт, docs/testing/load-testing.md §3).
+// respondApply sends an aggregated RunResult{SUCCESS} with no state_changes
+// (changed=false). Does NOT execute tasks -- we measure keeper-side
+// dispatch->RunResult, not apply realism (load contract,
+// docs/testing/load-testing.md §3).
 func (s *Stub) respondApply(req *keeperv1.ApplyRequest) {
 	s.mu.Lock()
 	stream := s.stream
@@ -247,10 +254,11 @@ func (s *Stub) respondApply(req *keeperv1.ApplyRequest) {
 	})
 }
 
-// respondErrand отвечает на ErrandRequest (command-Voyage, ADR-033/043)
-// ErrandResult{SUCCESS, exit_code=0} — эхо errand_id из запроса. НЕ исполняет
-// shell/exec: мерим keeper-side dispatch→ErrandResult→voyage-target-terminal→
-// audit, а не реализм исполнения модуля (load-контракт, эталон —
+// respondErrand replies to an ErrandRequest (command Voyage, ADR-033/043)
+// with ErrandResult{SUCCESS, exit_code=0} -- echoes errand_id from the
+// request. Does NOT execute shell/exec: we measure keeper-side
+// dispatch->ErrandResult->voyage-target-terminal->audit, not module
+// execution realism (load contract, reference implementation --
 // tests/e2e/internal/soulstub::respondToErrand).
 func (s *Stub) respondErrand(req *keeperv1.ErrandRequest) {
 	s.mu.Lock()
@@ -273,39 +281,40 @@ func (s *Stub) respondErrand(req *keeperv1.ErrandRequest) {
 	})
 }
 
-// Connected — учтён ли стрим (HelloReply получен и стрим ещё жив).
+// Connected -- whether the stream is accounted for (HelloReply received and
+// the stream is still alive).
 func (s *Stub) Connected() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.helloAck && s.stream != nil
 }
 
-// Applies — сколько ApplyRequest обработано (для report-а оси C-lite).
+// Applies -- number of ApplyRequests handled (for the axis C-lite report).
 func (s *Stub) Applies() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.applies
 }
 
-// Errands — сколько ErrandRequest обработано (command-Voyage, ось C run-нагрузки).
+// Errands -- number of ErrandRequests handled (command Voyage, axis C load).
 func (s *Stub) Errands() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.errands
 }
 
-// RecvErr — текст НЕштатного обрыва recv-loop-а (не EOF/Canceled), или "" если
-// стрим закрыт штатно либо ещё жив.
+// RecvErr -- text of an abnormal recv-loop break (not EOF/Canceled), or ""
+// if the stream closed normally or is still alive.
 func (s *Stub) RecvErr() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.recvErr
 }
 
-// SID — идентификатор стаба.
+// SID -- the stub's identifier.
 func (s *Stub) SID() string { return s.id.SID }
 
-// Close — graceful-shutdown стрима. Безопасен к повторному вызову.
+// Close -- graceful shutdown of the stream. Safe to call repeatedly.
 func (s *Stub) Close() {
 	s.mu.Lock()
 	cancel := s.cancel

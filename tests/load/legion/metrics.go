@@ -9,21 +9,23 @@ import (
 	"strings"
 )
 
-// MetricsSnapshot — срез интересных Keeper-метрик из /metrics для cliff-анализа
-// (docs/testing/load-testing.md §4.1). Все поля — gauge/counter в моменте.
+// MetricsSnapshot -- snapshot of interesting Keeper metrics from /metrics for
+// cliff analysis (docs/testing/load-testing.md §4.1). All fields are
+// gauge/counter at a point in time.
 type MetricsSnapshot struct {
 	StreamsActive  float64 // keeper_grpc_streams_active
 	GoGoroutines   float64 // go_goroutines
 	ResidentBytes  float64 // process_resident_memory_bytes
 	HeapInUseBytes float64 // go_memstats_heap_inuse_bytes
-	BootstrapTotal float64 // sum(keeper_grpc_bootstrap_total) — все label-ы
-	Found          bool    // удалось ли скрейпнуть хоть что-то
+	BootstrapTotal float64 // sum(keeper_grpc_bootstrap_total) -- all labels
+	Found          bool    // whether anything was scraped at all
 }
 
-// ScrapeMetrics тянет /metrics Keeper-а (отдельный listener, ADR-024) и
-// парсит интересные семейства. Минимальный prom-парсер: построчно, без зависимости
-// от prometheus client_golang (tests/load — тонкий модуль). Игнорирует метрики
-// с лейблами кроме сумм по семейству, где это явно указано.
+// ScrapeMetrics pulls Keeper's /metrics (separate listener, ADR-024) and
+// parses the families of interest. Minimal prom parser: line by line,
+// without a dependency on prometheus client_golang (tests/load is a thin
+// module). Ignores labeled metrics except family sums where explicitly
+// stated.
 func ScrapeMetrics(ctx context.Context, metricsURL string) (MetricsSnapshot, error) {
 	var snap MetricsSnapshot
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(metricsURL, "/")+"/metrics", nil)
@@ -74,11 +76,12 @@ func ScrapeMetrics(ctx context.Context, metricsURL string) (MetricsSnapshot, err
 	return snap, nil
 }
 
-// parseSample разбирает строку `metric{labels} value [ts]` в (name, value).
-// name отсекается до первого '{' или пробела; value — последний токен (минус
-// опц. timestamp prometheus не пишет в exposition без ts — берём поле после имени).
+// parseSample parses a line `metric{labels} value [ts]` into (name, value).
+// name is cut at the first '{' or space; value is the last token (an
+// optional timestamp -- prometheus does not write one in exposition without
+// ts -- we take the field after the name).
 func parseSample(line string) (name string, value float64, ok bool) {
-	// Разрез имени: до '{' (с лейблами) или до первого пробела (без).
+	// Cut the name: up to '{' (with labels) or up to the first space (without).
 	brace := strings.IndexByte(line, '{')
 	space := strings.IndexByte(line, ' ')
 	if brace >= 0 && (space < 0 || brace < space) {
@@ -94,7 +97,7 @@ func parseSample(line string) (name string, value float64, ok bool) {
 	}
 	v, err := strconv.ParseFloat(fields[len(fields)-1], 64)
 	if err != nil {
-		// последний токен может быть timestamp; попробуем предпоследний
+		// the last token may be a timestamp; try the second-to-last
 		if len(fields) >= 3 {
 			if v2, err2 := strconv.ParseFloat(fields[len(fields)-2], 64); err2 == nil {
 				return name, v2, true

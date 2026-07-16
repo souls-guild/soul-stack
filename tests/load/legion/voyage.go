@@ -10,8 +10,9 @@ import (
 	"time"
 )
 
-// voyageTerminalStatuses — терминальные статусы Voyage (ADR-043): прогон завершён,
-// poll прекращается. running/pending/scheduled — нетерминальные (ждём дальше).
+// voyageTerminalStatuses -- terminal Voyage statuses (ADR-043): the run is
+// finished, polling stops. running/pending/scheduled are non-terminal (keep
+// waiting).
 var voyageTerminalStatuses = map[string]struct{}{
 	"succeeded":      {},
 	"failed":         {},
@@ -19,49 +20,51 @@ var voyageTerminalStatuses = map[string]struct{}{
 	"cancelled":      {},
 }
 
-// VoyageRunOptions — параметры одного command-Voyage по флоту (ось C run-нагрузки,
-// docs/testing/load-testing.md §2). command выбран над scenario: единица батча
-// command = ХОСТ (резолв coven→souls.sid напрямую), поэтому Keeper диспетчит
-// ErrandRequest на ВЕСЬ N-флот — прямая dispatch-нагрузка по всем стабам. scenario-
-// Voyage по coven резолвит coven в ИНКАРНАЦИИ (единица = инкарнация), что не
-// нагружает dispatch по флоту и требует засева инкарнации + привязки хостов.
+// VoyageRunOptions -- parameters for one command Voyage against the fleet
+// (axis C load, docs/testing/load-testing.md §2). command is chosen over
+// scenario: the command batch unit = HOST (resolves coven->souls.sid
+// directly), so Keeper dispatches ErrandRequest to the WHOLE N-fleet --
+// direct dispatch load across all stubs. A scenario Voyage by coven resolves
+// coven into INCARNATIONS (unit = incarnation), which does not load dispatch
+// across the fleet and would require seeding an incarnation + host binding.
 type VoyageRunOptions struct {
-	BaseURL      string         // http://127.0.0.1:8080 (OpenAPI-listener)
-	JWT          string         // admin-Archon-токен (errand.run)
-	Coven        string         // target coven (= --coven легиона)
-	Module       string         // command-модуль (default core.cmd.shell)
-	Input        map[string]any // params модуля (CEL-rendered на Keeper-side)
-	Concurrency  int            // top-level voyage.concurrency: >0 → кладётся в тело create; 0 → НЕ слать (keeper-дефолт=1+один Leg)
-	PollInterval time.Duration  // период опроса GET /v1/voyages/{id}
-	Timeout      time.Duration  // макс ожидание терминала
+	BaseURL      string         // http://127.0.0.1:8080 (OpenAPI listener)
+	JWT          string         // admin-Archon token (errand.run)
+	Coven        string         // target coven (= legion --coven)
+	Module       string         // command module (default core.cmd.shell)
+	Input        map[string]any // module params (CEL-rendered keeper-side)
+	Concurrency  int            // top-level voyage.concurrency: >0 -> included in the create body; 0 -> do NOT send (keeper default=1+one Leg)
+	PollInterval time.Duration  // GET /v1/voyages/{id} poll period
+	Timeout      time.Duration  // max wait for terminal
 }
 
-// VoyageRunReport — итог одного command-Voyage.
+// VoyageRunReport -- outcome of one command Voyage.
 type VoyageRunReport struct {
 	VoyageID    string
-	ScopeSize   int           // сколько единиц (хостов) резолвлено в snapshot
-	CreateLat   time.Duration // латентность POST /v1/voyages (приём + резолв + persist)
-	EndToEnd    time.Duration // от POST до терминального статуса (dispatch→ErrandResult→commit→audit)
+	ScopeSize   int           // number of units (hosts) resolved into the snapshot
+	CreateLat   time.Duration // POST /v1/voyages latency (accept + resolve + persist)
+	EndToEnd    time.Duration // from POST to terminal status (dispatch->ErrandResult->commit->audit)
 	FinalStatus string
 	Succeeded   int
 	Failed      int
-	Polls       int // сколько раз опрошен GET /v1/voyages/{id} до терминала
+	Polls       int // number of GET /v1/voyages/{id} polls until terminal
 }
 
-// RunCommandVoyage создаёт ОДИН command-Voyage по coven легиона и polls до
-// терминального статуса, замеряя end-to-end латентность оркестрации (POST →
-// dispatch ErrandRequest по N stub-ам → N ErrandResult → voyage-target-terminal →
-// audit-INSERT). Возвращает VoyageID для cleanup даже при ошибке poll-а (caller
-// обязан снести Voyage из PG — DELETE через API недоступен для терминальных).
+// RunCommandVoyage creates ONE command Voyage against the legion's coven and
+// polls until terminal status, measuring end-to-end orchestration latency
+// (POST -> dispatch ErrandRequest to N stubs -> N ErrandResult ->
+// voyage-target-terminal -> audit-INSERT). Returns VoyageID for cleanup even
+// on a poll error (caller must remove the Voyage from PG -- DELETE via API
+// is unavailable for terminal Voyages).
 func RunCommandVoyage(ctx context.Context, opts VoyageRunOptions) (*VoyageRunReport, error) {
 	if opts.BaseURL == "" {
-		return nil, fmt.Errorf("legion: пустой BaseURL для Voyage")
+		return nil, fmt.Errorf("legion: empty BaseURL for Voyage")
 	}
 	if opts.JWT == "" {
-		return nil, fmt.Errorf("legion: пустой JWT для Voyage (admin-токен обязателен)")
+		return nil, fmt.Errorf("legion: empty JWT for Voyage (admin token required)")
 	}
 	if opts.Coven == "" {
-		return nil, fmt.Errorf("legion: пустой coven для Voyage (нечего таргетить)")
+		return nil, fmt.Errorf("legion: empty coven for Voyage (nothing to target)")
 	}
 	module := opts.Module
 	if module == "" {
@@ -82,9 +85,10 @@ func RunCommandVoyage(ctx context.Context, opts VoyageRunOptions) (*VoyageRunRep
 		"input":  opts.Input,
 		"target": map[string]any{"coven": []string{opts.Coven}},
 	}
-	// concurrency=0 → поле НЕ слать (keeper-дефолт concurrency=1 + один Leg на весь
-	// scope = последовательно, форма поля — top-level "concurrency" *int omitempty,
-	// huma_voyage_op.go:47, minimum:1 maximum:500).
+	// concurrency=0 -> do NOT send the field (keeper default concurrency=1 +
+	// one Leg over the whole scope = sequential, field shape -- top-level
+	// "concurrency" *int omitempty, huma_voyage_op.go:47, minimum:1
+	// maximum:500).
 	if opts.Concurrency > 0 {
 		reqBody["concurrency"] = opts.Concurrency
 	}
@@ -106,7 +110,8 @@ func RunCommandVoyage(ctx context.Context, opts VoyageRunOptions) (*VoyageRunRep
 		CreateLat: time.Since(createStart),
 	}
 
-	// Poll до терминала: end-to-end = от приёма create до терминального статуса.
+	// Poll until terminal: end-to-end = from accepting create to terminal
+	// status.
 	deadline := time.Now().Add(timeout)
 	for {
 		if ctx.Err() != nil {
@@ -119,14 +124,15 @@ func RunCommandVoyage(ctx context.Context, opts VoyageRunOptions) (*VoyageRunRep
 			if rep.FinalStatus == "" {
 				rep.FinalStatus = "timeout"
 			}
-			return rep, fmt.Errorf("legion: Voyage %s не достиг терминала за %s (последний статус %q)",
+			return rep, fmt.Errorf("legion: Voyage %s did not reach terminal within %s (last status %q)",
 				rep.VoyageID, timeout, rep.FinalStatus)
 		}
 
 		status, succeeded, failed, gerr := getVoyageStatus(ctx, client, opts.BaseURL, opts.JWT, rep.VoyageID)
 		rep.Polls++
 		if gerr != nil {
-			// Транзиентная ошибка GET — ретраим до deadline (не валим прогон).
+			// Transient GET error -- retry until deadline (does not abort
+			// the run).
 			select {
 			case <-ctx.Done():
 			case <-time.After(poll):
@@ -147,7 +153,8 @@ func RunCommandVoyage(ctx context.Context, opts VoyageRunOptions) (*VoyageRunRep
 	}
 }
 
-// voyageCreateResp — поля 202-тела POST /v1/voyages, нужные легиону.
+// voyageCreateResp -- fields of the 202 body of POST /v1/voyages that the
+// legion needs.
 type voyageCreateResp struct {
 	VoyageID  string `json:"voyage_id"`
 	ScopeSize int    `json:"scope_size"`
@@ -175,12 +182,13 @@ func createVoyage(ctx context.Context, client *http.Client, base, jwt string, bo
 		return out, fmt.Errorf("legion: decode create voyage: %w", err)
 	}
 	if out.VoyageID == "" {
-		return out, fmt.Errorf("legion: POST /v1/voyages: пустой voyage_id в ответе: %s", truncate(raw, 400))
+		return out, fmt.Errorf("legion: POST /v1/voyages: empty voyage_id in response: %s", truncate(raw, 400))
 	}
 	return out, nil
 }
 
-// voyageGetResp — поля GET /v1/voyages/{id}, нужные легиону (status + summary).
+// voyageGetResp -- fields of GET /v1/voyages/{id} that the legion needs
+// (status + summary).
 type voyageGetResp struct {
 	Status  string `json:"status"`
 	Summary *struct {

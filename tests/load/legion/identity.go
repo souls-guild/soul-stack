@@ -1,13 +1,14 @@
-// Package legion — нагрузочный stub-генератор soul-legion (Ф0, см.
-// docs/testing/load-testing.md §3 «компонент 1»). Поднимает N одновременных
-// fake-Soul-стримов (gRPC bidi поверх mTLS) к живому Keeper-у, чтобы измерить
-// пропускную способность по оси A (стримы) и сверить с расчётной таблицей
-// scaling.md.
+// Package legion -- load stub generator soul-legion (Phase 0, see
+// docs/testing/load-testing.md §3 "component 1"). Brings up N concurrent
+// fake-Soul streams (gRPC bidi over mTLS) to a live Keeper to measure
+// throughput on axis A (streams) and compare against the scaling.md
+// projection table.
 //
-// Test-only: НЕ поставочный бинарь (ADR-004). Контракт эмуляции тот же, что у
-// tests/e2e/internal/soulstub: Hello → удержание стрима → keepalive →
-// SoulprintReport → RunResult на ApplyRequest. soul-legion НЕ парсит Destiny и
-// НЕ применяет — нагрузка мерится на Keeper, а не на нагрузочном хосте.
+// Test-only: NOT a shipped binary (ADR-004). The emulation contract is the
+// same as tests/e2e/internal/soulstub: Hello -> hold the stream -> keepalive
+// -> SoulprintReport -> RunResult on ApplyRequest. soul-legion does NOT parse
+// Destiny and does NOT apply -- the load is measured on Keeper, not on the
+// load-generating host.
 package legion
 
 import (
@@ -24,9 +25,10 @@ import (
 	"time"
 )
 
-// Identity — mTLS-материал одной fake-Soul: SID + leaf-cert/key из dev-CA +
-// fingerprint (SHA-256 над SubjectPublicKeyInfo, ключ авторизации Keeper-а в
-// soul_seeds) + serial (уникальный серийник из PKI-ответа для soul_seeds).
+// Identity -- mTLS material of one fake-Soul: SID + leaf-cert/key from
+// dev-CA + fingerprint (SHA-256 over SubjectPublicKeyInfo, Keeper's
+// authorization key in soul_seeds) + serial (unique serial from the PKI
+// response for soul_seeds).
 type Identity struct {
 	SID         string
 	CertPEM     []byte
@@ -35,9 +37,9 @@ type Identity struct {
 	Serial      string
 }
 
-// VaultPKI — минимальный HTTP-клиент над Vault PKI (issue leaf-cert). Прямой
-// HTTP, как tests/e2e/harness/vault.go: tests/load — отдельный go-модуль, ему
-// нельзя импортировать keeper/internal/* (Go internal-rules).
+// VaultPKI -- minimal HTTP client over Vault PKI (issue leaf-cert). Direct
+// HTTP, like tests/e2e/harness/vault.go: tests/load is a separate Go module,
+// it cannot import keeper/internal/* (Go internal rules).
 type VaultPKI struct {
 	addr       string // http://127.0.0.1:8200
 	token      string // dev root token
@@ -46,8 +48,8 @@ type VaultPKI struct {
 	httpClient *http.Client
 }
 
-// NewVaultPKI собирает клиент. mount/role — по dev-стенду (pki / soul-seed,
-// см. dev/provision.sh шаги 3–5).
+// NewVaultPKI assembles the client. mount/role -- per the dev stand
+// (pki / soul-seed, see dev/provision.sh steps 3-5).
 func NewVaultPKI(addr, token, mount, role string) *VaultPKI {
 	return &VaultPKI{
 		addr:       addr,
@@ -58,9 +60,9 @@ func NewVaultPKI(addr, token, mount, role string) *VaultPKI {
 	}
 }
 
-// Issue выпускает leaf-cert на CN=sid через `<mount>/issue/<role>`. Возвращает
-// готовую Identity с вычисленным fingerprint-ом (ключ авторизации Keeper-а в
-// soul_seeds) и серийником из PKI-ответа.
+// Issue issues a leaf-cert with CN=sid via `<mount>/issue/<role>`. Returns a
+// ready Identity with the computed fingerprint (Keeper's authorization key in
+// soul_seeds) and the serial from the PKI response.
 func (v *VaultPKI) Issue(ctx context.Context, sid string, ttl string) (Identity, error) {
 	body, _ := json.Marshal(map[string]any{
 		"common_name": sid,
@@ -103,8 +105,8 @@ func (v *VaultPKI) Issue(ctx context.Context, sid string, ttl string) (Identity,
 	if err != nil {
 		return Identity{}, fmt.Errorf("legion: fingerprint %s: %w", sid, err)
 	}
-	// serial_number от Vault — формат "3a:5f:..."; soul_seeds.serial_number
-	// уникален и произволен по форме, кладём как есть.
+	// serial_number from Vault -- format "3a:5f:..."; soul_seeds.serial_number
+	// is unique and free-form, store it as-is.
 	return Identity{
 		SID:         sid,
 		CertPEM:     certPEM,
@@ -114,13 +116,14 @@ func (v *VaultPKI) Issue(ctx context.Context, sid string, ttl string) (Identity,
 	}, nil
 }
 
-// fingerprintFromPEM вычисляет fingerprint ровно как keeper-side
-// soulseed.FingerprintFromCert: SHA-256 над RawSubjectPublicKeyInfo (НЕ над
-// PEM-байтами). Расхождение → Keeper отвергает стрим «unknown soul seed».
+// fingerprintFromPEM computes the fingerprint exactly like the keeper-side
+// soulseed.FingerprintFromCert: SHA-256 over RawSubjectPublicKeyInfo (NOT
+// over the PEM bytes). Mismatch -> Keeper rejects the stream "unknown soul
+// seed".
 func fingerprintFromPEM(certPEM []byte) (string, error) {
 	block, _ := pem.Decode(certPEM)
 	if block == nil {
-		return "", fmt.Errorf("cert не PEM-блок")
+		return "", fmt.Errorf("cert is not a PEM block")
 	}
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {

@@ -14,51 +14,53 @@ import (
 	"time"
 )
 
-// APILoadOptions — параметры оси B (docs/testing/load-testing.md §2): concurrent-
-// гон флот-зависимых /v1-ручек поверх фона из N подключённых stub-ов. Стоимость
-// этих ручек растёт с размером реестра souls (presence-резолв на list, roster-
-// резолв coven на preview), поэтому гонять их имеет смысл только при живом легионе.
+// APILoadOptions -- axis B parameters (docs/testing/load-testing.md §2):
+// concurrent run over fleet-dependent /v1 handlers on top of a background of
+// N connected stubs. The cost of these handlers grows with souls registry
+// size (presence resolve on list, roster resolve of coven on preview), so
+// running them only makes sense against a live legion.
 type APILoadOptions struct {
-	BaseURL     string        // http://127.0.0.1:8080 (OpenAPI-listener, plain HTTP в dev)
-	JWT         string        // admin-Archon-токен (Authorization: Bearer ...)
-	Coven       string        // target coven для POST /v1/voyages/preview (= --coven легиона)
-	Concurrency int           // число параллельных воркеров-клиентов
-	Duration    time.Duration // длительность гона
+	BaseURL     string        // http://127.0.0.1:8080 (OpenAPI listener, plain HTTP in dev)
+	JWT         string        // admin-Archon token (Authorization: Bearer ...)
+	Coven       string        // target coven for POST /v1/voyages/preview (= legion --coven)
+	Concurrency int           // number of parallel worker clients
+	Duration    time.Duration // run duration
 }
 
-// endpoint — описание одной молотимой ручки в таблице оси B. Безопасные для
-// гона ручки: read-only GET-collection (молотить без мутации реестра) +
-// единственный read-like POST /v1/voyages/preview (dry-resolve, без создания
-// Voyage и без audit). method+path фиксированы; body непустой только у preview.
+// endpoint -- description of one hammered handler in the axis B table. Safe
+// handlers for the run: read-only GET-collection (hammer without mutating
+// the registry) + the single read-like POST /v1/voyages/preview (dry-resolve,
+// no Voyage creation, no audit). method+path are fixed; body is non-empty
+// only for preview.
 type endpoint struct {
-	name   string // человекочитаемое имя (метод+путь) для отчёта/FirstErr
+	name   string // human-readable name (method+path) for report/FirstErr
 	method string
-	path   string // относительно BaseURL (с query при пагинации)
-	body   []byte // nil для GET
+	path   string // relative to BaseURL (with query for pagination)
+	body   []byte // nil for GET
 }
 
-// EndpointStat — агрегат латентности по одной ручке за гон оси B.
+// EndpointStat -- latency aggregate for one handler over an axis B run.
 type EndpointStat struct {
-	Name       string        // человекочитаемое имя (метод+путь)
-	Requests   int           // успешных (2xx) запросов
-	Errors     int           // не-2xx / транспортных ошибок
-	P50        time.Duration // медиана латентности успешных
+	Name       string        // human-readable name (method+path)
+	Requests   int           // successful (2xx) requests
+	Errors     int           // non-2xx / transport errors
+	P50        time.Duration // median latency of successful requests
 	P99        time.Duration
 	Max        time.Duration
-	Throughput float64 // успешных req/s за фактическую длительность
+	Throughput float64 // successful req/s over the actual duration
 }
 
-// APILoadReport — итог оси B: per-endpoint статистика + первая ошибка.
-// Skipped — пути ручек, исключённых стартовым probe-ом (вернули 404 «no such
-// endpoint» — не смонтированы в этом keeper-конфиге, нечего мерить).
+// APILoadReport -- axis B outcome: per-endpoint stats + first error.
+// Skipped -- handler paths excluded by the start probe (returned 404 "no such
+// endpoint" -- not mounted in this keeper config, nothing to measure).
 type APILoadReport struct {
 	Endpoints []EndpointStat
-	Skipped   []string      // пути ручек, исключённых probe-ом (404, не смонтированы)
-	Wall      time.Duration // фактическая длительность гона
-	FirstErr  string        // первая ошибка по любой ручке (с её именем)
+	Skipped   []string      // handler paths excluded by the probe (404, not mounted)
+	Wall      time.Duration // actual run duration
+	FirstErr  string        // first error on any handler (with its name)
 }
 
-// endpointAcc — потокобезопасный аккумулятор замеров одной ручки.
+// endpointAcc -- thread-safe accumulator of measurements for one handler.
 type endpointAcc struct {
 	mu           sync.Mutex
 	lat          []time.Duration
@@ -104,11 +106,12 @@ func (a *endpointAcc) finalize(name string, wall time.Duration) EndpointStat {
 	return st
 }
 
-// safeEndpoints собирает таблицу безопасных для гона ручек: 24 read-only GET-
-// collection (молотить без мутации реестра) + единственный read-like POST
-// /v1/voyages/preview (dry-resolve по coven легиона — НЕ создаёт Voyage и не
-// пишет audit). На list-ручках с пагинацией стоит ?limit=100, каталоги/me —
-// bare. Пути сверены с /openapi.json. previewBody — тело dry-resolve.
+// safeEndpoints assembles the table of handlers safe to run: 24 read-only
+// GET-collections (hammer without mutating the registry) + the single
+// read-like POST /v1/voyages/preview (dry-resolve by the legion's coven --
+// does NOT create a Voyage and does not write audit). List handlers with
+// pagination get ?limit=100, catalogs/me are bare. Paths checked against
+// /openapi.json. previewBody -- the dry-resolve body.
 func safeEndpoints(baseURL string, previewBody []byte) []endpoint {
 	get := []string{
 		"/v1/souls?limit=100",
@@ -127,9 +130,9 @@ func safeEndpoints(baseURL string, previewBody []byte) []endpoint {
 		"/v1/vigils",
 		"/v1/tidings",
 		"/v1/augur/omens",
-		// rites требует обязательный query-параметр omen (валиден по
-		// ^[a-z0-9-]{1,63}$); без него ручка 422-ит. load-probe — фиксированный
-		// валидный omen, вернёт 200 с (возможно пустым) списком rites.
+		// rites requires a mandatory omen query param (valid per
+		// ^[a-z0-9-]{1,63}$); without it the handler 422s. load-probe -- a
+		// fixed valid omen, returns 200 with a (possibly empty) rites list.
 		"/v1/augur/rites?omen=load-probe",
 		"/v1/sigil/keys",
 		"/v1/plugins/sigils",
@@ -156,26 +159,28 @@ func safeEndpoints(baseURL string, previewBody []byte) []endpoint {
 	return eps
 }
 
-// RunAPILoad гонит все безопасные флот-зависимые ручки (см. safeEndpoints)
-// параллельно в Concurrency воркеров на протяжении Duration. Каждый воркер по
-// кругу проходит весь список ручек (round-robin), поэтому каждая ручка получает
-// ~равную долю нагрузки. Замеряет per-endpoint p50/p99/throughput. Не-2xx ответ
-// (напр. выключенная фича) учитывается в Errors своей строки и НЕ роняет гон;
-// dry-resolve preview НЕ создаёт Voyage (read-like, без audit) — гон безопасен.
+// RunAPILoad runs all safe fleet-dependent handlers (see safeEndpoints) in
+// parallel across Concurrency workers for Duration. Each worker cycles
+// through the whole handler list (round-robin), so each handler gets ~equal
+// load share. Measures per-endpoint p50/p99/throughput. A non-2xx response
+// (e.g. a disabled feature) is counted in that handler's Errors and does NOT
+// abort the run; dry-resolve preview does NOT create a Voyage (read-like, no
+// audit) -- the run is safe.
 func RunAPILoad(ctx context.Context, opts APILoadOptions) (*APILoadReport, error) {
 	if opts.BaseURL == "" {
-		return nil, fmt.Errorf("legion: пустой BaseURL для API-нагрузки")
+		return nil, fmt.Errorf("legion: empty BaseURL for API load")
 	}
 	if opts.JWT == "" {
-		return nil, fmt.Errorf("legion: пустой JWT для API-нагрузки (admin-токен обязателен)")
+		return nil, fmt.Errorf("legion: empty JWT for API load (admin token required)")
 	}
 	conc := opts.Concurrency
 	if conc <= 0 {
 		conc = 16
 	}
 
-	// Тело preview: kind=command, target по coven легиона. Read-like dry-resolve —
-	// та же валидация/резолв, что create, но без создания Voyage и без audit.
+	// Preview body: kind=command, target by the legion's coven. Read-like
+	// dry-resolve -- same validation/resolve as create, but without creating
+	// a Voyage and without audit.
 	previewBody, err := json.Marshal(map[string]any{
 		"kind":   "command",
 		"module": "core.cmd.shell",
@@ -188,8 +193,8 @@ func RunAPILoad(ctx context.Context, opts APILoadOptions) (*APILoadReport, error
 
 	allEps := safeEndpoints(opts.BaseURL, previewBody)
 
-	// Пул переиспользуемых соединений: API-нагрузка не должна упираться в TCP-
-	// handshake/conn-churn (мерим Keeper, не клиента).
+	// Pool of reusable connections: API load must not bottleneck on TCP
+	// handshake/conn churn (we measure Keeper, not the client).
 	client := &http.Client{
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
@@ -200,11 +205,12 @@ func RunAPILoad(ctx context.Context, opts APILoadOptions) (*APILoadReport, error
 		},
 	}
 
-	// Стартовый probe: один запрос на ручку. Часть /v1-ручек монтируется на
-	// роутер условно (при non-nil Deps своего сервиса); в dev-конфиге их сервисы
-	// могут быть не прокинуты — тогда роутер отдаёт 404 «no such endpoint». Это
-	// норма конфига, не баг харнеса: такие ручки исключаем из нагрузки. Прочие
-	// статусы (422/403/5xx) — реальные сигналы, их меряет load-цикл, не исключаем.
+	// Start probe: one request per handler. Some /v1 handlers are mounted on
+	// the router conditionally (when their service's Deps is non-nil); in
+	// dev config their services may not be wired -- then the router returns
+	// 404 "no such endpoint". This is a config norm, not a harness bug: such
+	// handlers are excluded from the load. Other statuses (422/403/5xx) are
+	// real signals, measured by the load loop, not excluded.
 	eps, skipped := probeEndpoints(ctx, client, allEps, opts.JWT)
 	accs := make([]endpointAcc, len(eps))
 
@@ -248,13 +254,14 @@ func RunAPILoad(ctx context.Context, opts APILoadOptions) (*APILoadReport, error
 	return rep, nil
 }
 
-// probeEndpoints делает ОДИН пробный запрос на каждую ручку до load-цикла и
-// делит таблицу на смонтированные (mounted) и пропущенные (skipped). Критерий
-// пропуска — ровно HTTP 404 (ручка условно не смонтирована в этом keeper-
-// конфиге). Любой другой исход (2xx/422/403/5xx/транспортная ошибка) → ручка
-// считается смонтированной и идёт в нагрузку: не-404-статусы — реальные сигналы,
-// глушить их нельзя (принцип «no silent cap»). Пропуск логируется явно одной
-// строкой [api] probe: ... с перечнем путей.
+// probeEndpoints sends ONE probe request per handler before the load loop
+// and splits the table into mounted and skipped. The skip criterion is
+// exactly HTTP 404 (the handler is conditionally not mounted in this keeper
+// config). Any other outcome (2xx/422/403/5xx/transport error) -> the
+// handler is considered mounted and goes into the load: non-404 statuses are
+// real signals, must not be silenced (the "no silent cap" principle). The
+// skip is logged explicitly in one [api] probe: ... line with the list of
+// paths.
 func probeEndpoints(ctx context.Context, client *http.Client, eps []endpoint, jwt string) (mounted []endpoint, skipped []string) {
 	mounted = make([]endpoint, 0, len(eps))
 	for i := range eps {
@@ -265,16 +272,17 @@ func probeEndpoints(ctx context.Context, client *http.Client, eps []endpoint, jw
 		mounted = append(mounted, eps[i])
 	}
 	if len(skipped) > 0 {
-		fmt.Printf("[api] probe: пропущено %d не-смонтированных ручек (404): %s\n",
+		fmt.Printf("[api] probe: skipped %d unmounted handler(s) (404): %s\n",
 			len(skipped), strings.Join(skipped, ", "))
 	}
 	return mounted, skipped
 }
 
-// probeStatus шлёт один пробный запрос и возвращает HTTP-статус. Транспортная
-// ошибка/таймаут возвращает 0 (≠ 404 → ручка не исключается: load-цикл сам
-// учтёт обрывы в Errors). Probe-запрос ходит с тем же телом, что и load (preview
-// требует валидное тело для резолва, иначе вернул бы 4xx не из-за монтирования).
+// probeStatus sends one probe request and returns the HTTP status. A
+// transport error/timeout returns 0 (!= 404 -> the handler is not excluded:
+// the load loop will account for drops in Errors itself). The probe request
+// uses the same body as load (preview requires a valid body to resolve,
+// otherwise it would return 4xx not because of mounting).
 func probeStatus(ctx context.Context, client *http.Client, ep endpoint, jwt string) int {
 	var rdr io.Reader
 	if ep.body != nil {
@@ -297,8 +305,9 @@ func probeStatus(ctx context.Context, client *http.Client, ep endpoint, jwt stri
 	return resp.StatusCode
 }
 
-// doRequest шлёт один запрос и записывает латентность/ошибку в acc. Контекст-
-// отмена (истёк Duration) не считается ошибкой ручки — это штатный конец гона.
+// doRequest sends one request and records latency/error into acc. Context
+// cancellation (Duration expired) is not counted as a handler error -- it's
+// the normal end of the run.
 func doRequest(ctx context.Context, client *http.Client, method, url, jwt string, body []byte, acc *endpointAcc) {
 	var rdr io.Reader
 	if body != nil {
@@ -316,12 +325,12 @@ func doRequest(ctx context.Context, client *http.Client, method, url, jwt string
 	resp, err := client.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
-			return // штатное завершение гона
+			return // normal end of the run
 		}
 		acc.recordErr(err.Error())
 		return
 	}
-	// Дренируем тело: без этого keep-alive-соединение не переиспользуется.
+	// Drain the body: without this, the keep-alive connection won't be reused.
 	_, _ = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
