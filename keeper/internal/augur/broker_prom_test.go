@@ -56,7 +56,7 @@ func TestBrokerPrometheus_HTTPEndpointDenied(t *testing.T) {
 		t.Fatalf("expected denial of http endpoint")
 	}
 	if doer.gotReq != nil {
-		t.Errorf("запрос не должен был уйти при http-endpoint")
+		t.Errorf("request should not have been sent for http-endpoint")
 	}
 }
 
@@ -70,7 +70,7 @@ func TestBrokerPrometheus_MetadataLiteralDenied(t *testing.T) {
 		t.Fatalf("expected denial of metadata literal IP")
 	}
 	if doer.gotReq != nil {
-		t.Errorf("запрос не должен был уйти при metadata-endpoint")
+		t.Errorf("request should not have been sent for metadata-endpoint")
 	}
 }
 
@@ -83,7 +83,7 @@ func TestBrokerPrometheus_Non2xx_NoBodyLeak(t *testing.T) {
 		t.Fatalf("expected error on 403")
 	}
 	if strings.Contains(err.Error(), "secret-internal-detail") {
-		t.Errorf("тело ответа не должно течь в ошибку: %v", err)
+		t.Errorf("response body should not leak into error: %v", err)
 	}
 }
 
@@ -97,7 +97,7 @@ func TestBrokerPrometheus_CredentialNotInError(t *testing.T) {
 		t.Fatalf("expected request error")
 	}
 	if strings.Contains(err.Error(), "super-secret-token") {
-		t.Errorf("credential не должен течь в ошибку: %v", err)
+		t.Errorf("credential should not leak into error: %v", err)
 	}
 }
 
@@ -110,6 +110,6 @@ func TestBuildPromURL(t *testing.T) {
 		t.Errorf("url = %q", got)
 	}
 	if strings.Contains(got, "//api/v1/query") {
-		t.Errorf("trailing slash endpoint не нормализован: %q", got)
+		t.Errorf("trailing slash endpoint not normalized: %q", got)
 	}
 }

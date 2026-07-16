@@ -25,7 +25,7 @@ func TestWrapInlineData_ArrayWrappedInValue(t *testing.T) {
 	}
 	lv := s.GetFields()["value"].GetListValue()
 	if lv == nil || len(lv.GetValues()) != 2 {
-		t.Errorf("array должен лечь в ключ value: %v", s.AsMap())
+		t.Errorf("array should be placed under key value: %v", s.AsMap())
 	}
 }
 
@@ -35,7 +35,7 @@ func TestWrapInlineData_ScalarWrappedInValue(t *testing.T) {
 		t.Fatalf("wrapInlineData: %v", err)
 	}
 	if s.GetFields()["value"].GetNumberValue() != 42 {
-		t.Errorf("скаляр должен лечь в ключ value: %v", s.AsMap())
+		t.Errorf("scalar should be placed under key value: %v", s.AsMap())
 	}
 }
 
@@ -59,7 +59,7 @@ func TestCredentialFromKV(t *testing.T) {
 	// non-string values are ignored
 	c = credentialFromKV(map[string]any{"token": 123})
 	if c.bearer != "" {
-		t.Errorf("нестроковый token не должен попасть в bearer: %+v", c)
+		t.Errorf("non-string token should not reach bearer: %+v", c)
 	}
 }
 
@@ -99,7 +99,7 @@ func TestDoJSONStruct_BodyLimit(t *testing.T) {
 		t.Fatalf("expected body-limit error")
 	}
 	if !strings.Contains(err.Error(), "limit") {
-		t.Errorf("ожидалась limit-ошибка, got %v", err)
+		t.Errorf("expected limit-error, got %v", err)
 	}
 }
 

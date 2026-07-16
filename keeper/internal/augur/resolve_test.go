@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// --- fakes под reader-интерфейсы Resolve ------------------------------
+// --- fakes for Resolve reader interfaces ------------------------------
 
 type fakeOmens struct {
 	byName map[string]*Omen
@@ -28,8 +28,8 @@ func (f fakeOmens) OmenByName(_ context.Context, name string) (*Omen, error) {
 type fakeRites struct {
 	rites []*Rite
 	err   error
-	// gotCovens фиксирует covens, переданные в RitesBySubject (проверка, что
-	// covens пришли из registry, а не из payload).
+	// gotCovens captures covens passed to RitesBySubject (verification that
+	// covens came from registry, not from payload).
 	gotCovens []string
 	gotSID    string
 }
@@ -114,7 +114,7 @@ func TestResolve_OmenNotFound_Denied(t *testing.T) {
 func TestResolve_NoRite_Denied(t *testing.T) {
 	dec, err := Resolve(context.Background(),
 		fakeOmens{byName: map[string]*Omen{"vault-prod": vaultOmen("vault-prod")}},
-		&fakeRites{rites: nil}, // нет ни одного Rite
+		&fakeRites{rites: nil}, // no rites at all
 		fakeCovens{bySID: map[string][]string{"host.example.com": {"prod"}}},
 		"host.example.com", "vault-prod", "secret/keeper/x",
 	)
@@ -164,10 +164,10 @@ func TestResolve_QueryNotInAllow_Denied(t *testing.T) {
 	}
 }
 
-// TestResolve_DoubleSlashNormalized_Denied — `secret//db` НЕ должен матчить
-// allow `secret/keeper/db` после нормализации (это другой путь), но и не должен
-// «обойти» allow за счёт ненормализованного сравнения. Здесь проверяем, что
-// `secret//other` (нормализуется в `secret/other`) не попадает в allow
+// TestResolve_DoubleSlashNormalized_Denied verifies that `secret//db` does NOT match
+// allow `secret/keeper/db` after normalization (it is a different path), and also
+// cannot bypass allow through unnormalized comparison. Here we check that
+// `secret//other` (normalized to `secret/other`) does not match allow
 // `secret/keeper/db` → denied.
 func TestResolve_DoubleSlashNormalized_Denied(t *testing.T) {
 	rites := &fakeRites{rites: []*Rite{covenRite("vault-prod", "prod", "secret/keeper/db")}}
@@ -185,10 +185,10 @@ func TestResolve_DoubleSlashNormalized_Denied(t *testing.T) {
 	}
 }
 
-// TestResolve_DoubleSlashMatchesAfterNormalize — `secret//keeper/db`
-// нормализуется в `secret/keeper/db` и ДОЛЖЕН совпасть с allow `secret/keeper/db`
-// (нормализация симметрична с обеих сторон — без неё `secret//keeper/db` НЕ
-// совпал бы с allow, но ReadKV свёл бы его к запрещённому пути: это обход).
+// TestResolve_DoubleSlashMatchesAfterNormalize verifies that `secret//keeper/db`
+// normalizes to `secret/keeper/db` and SHOULD match allow `secret/keeper/db`
+// (normalization is symmetric on both sides — without it `secret//keeper/db` would
+// not match allow, but ReadKV would reduce it to a forbidden path: a bypass).
 func TestResolve_DoubleSlashMatchesAfterNormalize(t *testing.T) {
 	rites := &fakeRites{rites: []*Rite{covenRite("vault-prod", "prod", "secret/keeper/db")}}
 	dec, err := Resolve(context.Background(),
@@ -208,8 +208,8 @@ func TestResolve_DoubleSlashMatchesAfterNormalize(t *testing.T) {
 	}
 }
 
-// TestResolve_DotDotSegment_Denied — сегмент `..` отвергается нормализацией
-// (вектор обхода scope), резолв → denied.
+// TestResolve_DotDotSegment_Denied verifies that the `..` segment is rejected by
+// normalization (scope bypass vector), resolve → denied.
 func TestResolve_DotDotSegment_Denied(t *testing.T) {
 	rites := &fakeRites{rites: []*Rite{covenRite("vault-prod", "prod", "secret/keeper/db")}}
 	dec, err := Resolve(context.Background(),
@@ -226,9 +226,9 @@ func TestResolve_DotDotSegment_Denied(t *testing.T) {
 	}
 }
 
-// TestResolve_CovensFromRegistryNotPayload — covens, по которым ищутся Rite-ы,
-// приходят из CovenReader (registry), а не из запроса. Проверяем, что
-// RitesBySubject получил именно registry-covens.
+// TestResolve_CovensFromRegistryNotPayload verifies that covens used to search for Rites
+// come from CovenReader (registry), not from the request. We check that
+// RitesBySubject received exactly the registry-covens.
 func TestResolve_CovensFromRegistryNotPayload(t *testing.T) {
 	rites := &fakeRites{rites: []*Rite{covenRite("vault-prod", "prod", "secret/keeper/db")}}
 	registryCovens := []string{"prod", "eu-west"}
@@ -256,7 +256,7 @@ func TestResolve_SubjectUnknown_Denied(t *testing.T) {
 	dec, err := Resolve(context.Background(),
 		fakeOmens{byName: map[string]*Omen{"vault-prod": vaultOmen("vault-prod")}},
 		&fakeRites{},
-		fakeCovens{bySID: map[string][]string{}}, // SID нет в registry
+		fakeCovens{bySID: map[string][]string{}}, // SID not in registry
 		"unknown.example.com", "vault-prod", "secret/keeper/db",
 	)
 	if err != nil {
@@ -267,8 +267,8 @@ func TestResolve_SubjectUnknown_Denied(t *testing.T) {
 	}
 }
 
-// TestResolve_Prometheus_AllowExactMatch_Pass — promQL ∈ allow.queries (exact) →
-// allowed, Query несёт сырой promQL (без vault-нормализации).
+// TestResolve_Prometheus_AllowExactMatch_Pass verifies that promQL ∈ allow.queries (exact)
+// → allowed; Query carries raw promQL (without vault normalization).
 func TestResolve_Prometheus_AllowExactMatch_Pass(t *testing.T) {
 	r := &Rite{ID: 10, Omen: "prom-main", Coven: ptr("prod"), Allow: allowQueries("up", "rate(http_requests_total[5m])")}
 	dec, err := Resolve(context.Background(),
@@ -291,7 +291,7 @@ func TestResolve_Prometheus_AllowExactMatch_Pass(t *testing.T) {
 	}
 }
 
-// TestResolve_Prometheus_NotInAllow_Denied — promQL вне allow.queries → denied.
+// TestResolve_Prometheus_NotInAllow_Denied verifies that promQL outside allow.queries → denied.
 func TestResolve_Prometheus_NotInAllow_Denied(t *testing.T) {
 	r := &Rite{ID: 11, Omen: "prom-main", Coven: ptr("prod"), Allow: allowQueries("up")}
 	dec, err := Resolve(context.Background(),
@@ -308,7 +308,7 @@ func TestResolve_Prometheus_NotInAllow_Denied(t *testing.T) {
 	}
 }
 
-// TestResolve_ELK_AllowExactMatch_Pass — index ∈ allow.indices (exact) → allowed.
+// TestResolve_ELK_AllowExactMatch_Pass verifies that index ∈ allow.indices (exact) → allowed.
 func TestResolve_ELK_AllowExactMatch_Pass(t *testing.T) {
 	r := &Rite{ID: 20, Omen: "elk-logs", Coven: ptr("prod"), Allow: allowIndices("logs-app", "logs-audit")}
 	dec, err := Resolve(context.Background(),
@@ -328,7 +328,7 @@ func TestResolve_ELK_AllowExactMatch_Pass(t *testing.T) {
 	}
 }
 
-// TestResolve_ELK_NotInAllow_Denied — index вне allow.indices → denied.
+// TestResolve_ELK_NotInAllow_Denied verifies that index outside allow.indices → denied.
 func TestResolve_ELK_NotInAllow_Denied(t *testing.T) {
 	r := &Rite{ID: 21, Omen: "elk-logs", Coven: ptr("prod"), Allow: allowIndices("logs-app")}
 	dec, err := Resolve(context.Background(),
@@ -345,7 +345,7 @@ func TestResolve_ELK_NotInAllow_Denied(t *testing.T) {
 	}
 }
 
-// TestResolve_Prometheus_EmptyQuery_Denied — пустой promQL отвергается.
+// TestResolve_Prometheus_EmptyQuery_Denied verifies that empty promQL is rejected.
 func TestResolve_Prometheus_EmptyQuery_Denied(t *testing.T) {
 	r := &Rite{ID: 12, Omen: "prom-main", Coven: ptr("prod"), Allow: allowQueries("up")}
 	dec, err := Resolve(context.Background(),
@@ -396,9 +396,9 @@ func TestResolve_SIDRiteMatch_Pass(t *testing.T) {
 	}
 }
 
-// TestResolve_RiteForOtherOmen_Denied — Rite на другой Omen не должен
-// авторизовать запрос (RitesBySubject может вернуть Rite-ы по всем Omen-ам
-// субъекта; фильтр по omen в резолве обязателен).
+// TestResolve_RiteForOtherOmen_Denied verifies that a Rite for a different Omen must not
+// authorize a request (RitesBySubject may return Rites for all Omens of a subject;
+// filtering by omen in resolve is mandatory).
 func TestResolve_RiteForOtherOmen_Denied(t *testing.T) {
 	rites := &fakeRites{rites: []*Rite{covenRite("vault-other", "prod", "secret/keeper/db")}}
 	dec, err := Resolve(context.Background(),

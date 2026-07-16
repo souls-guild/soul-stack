@@ -36,7 +36,7 @@ func TestBrokerELK_HTTPEndpointDenied(t *testing.T) {
 		t.Fatalf("expected denial of http endpoint")
 	}
 	if doer.gotReq != nil {
-		t.Errorf("запрос не должен был уйти при http-endpoint")
+		t.Errorf("request should not have been sent for http-endpoint")
 	}
 }
 
@@ -48,7 +48,7 @@ func TestBrokerELK_LoopbackLiteralDenied(t *testing.T) {
 		t.Fatalf("expected denial of loopback literal IP")
 	}
 	if doer.gotReq != nil {
-		t.Errorf("запрос не должен был уйти при loopback-endpoint")
+		t.Errorf("request should not have been sent for loopback-endpoint")
 	}
 }
 
@@ -60,7 +60,7 @@ func TestBrokerELK_Non2xx_NoBodyLeak(t *testing.T) {
 		t.Fatalf("expected error on 401")
 	}
 	if strings.Contains(err.Error(), "index-internal-detail") {
-		t.Errorf("тело ответа не должно течь в ошибку: %v", err)
+		t.Errorf("response body should not leak into error: %v", err)
 	}
 }
 
@@ -73,7 +73,7 @@ func TestBuildELKURL_PathEscape(t *testing.T) {
 		t.Errorf("url = %q", got)
 	}
 	if strings.Contains(got, "//logs") {
-		t.Errorf("trailing slash endpoint не нормализован: %q", got)
+		t.Errorf("trailing slash endpoint not normalized: %q", got)
 	}
 }
 
@@ -85,6 +85,6 @@ func TestBuildELKURL_NoPathInjection(t *testing.T) {
 		t.Fatalf("buildELKURL: %v", err)
 	}
 	if strings.Contains(got, "/_cluster/health/_search") && !strings.Contains(got, "%2F") {
-		t.Errorf("index не экранирован, возможна path-инъекция: %q", got)
+		t.Errorf("index not escaped, path injection possible: %q", got)
 	}
 }

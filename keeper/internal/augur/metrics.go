@@ -95,14 +95,14 @@ func RegisterBrokerMetrics(reg *obs.Registry) *BrokerMetrics {
 		fetchTotal: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "keeper_augur_fetch_total",
-				Help: "Количество обработанных AugurRequest-ов, разрезанное по source (vault/prometheus/elk/unknown) и decision (ok/denied/error).",
+				Help: "Count of handled AugurRequests, split by source (vault/prometheus/elk/unknown) and decision (ok/denied/error).",
 			},
 			[]string{"source", "decision"},
 		),
 		fetchDuration: prometheus.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Name:    "keeper_augur_fetch_duration_seconds",
-				Help:    "Длительность обработки AugurRequest в секундах (резолв + fetch), по source.",
+				Help:    "Duration of AugurRequest handling in seconds (resolve + fetch), by source.",
 				Buckets: prometheus.DefBuckets,
 			},
 			[]string{"source"},

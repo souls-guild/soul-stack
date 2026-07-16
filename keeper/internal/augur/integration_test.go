@@ -1,7 +1,7 @@
 //go:build integration
 
-// Integration-тесты CRUD Augur (omens / rites) через testcontainers-go.
-// Паттерн совпадает с keeper/internal/provider/integration_test.go.
+// Integration tests for Augur CRUD (omens / rites) using testcontainers-go.
+// Pattern matches keeper/internal/provider/integration_test.go.
 
 package augur
 
@@ -148,7 +148,7 @@ func TestIntegration_Omen_SourceTypeCHECK(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	ctx := context.Background()
-	// Прямой INSERT в обход Go-валидации: SQL CHECK должен отбить bad enum.
+	// Direct INSERT bypassing Go validation: SQL CHECK should reject bad enum.
 	_, err := integrationPool.Exec(ctx,
 		`INSERT INTO omens (name, source_type, endpoint, auth_ref, created_by_aid)
 		 VALUES ($1, 'mysql', 'e', 'vault:secret/x', $2)`,
@@ -228,7 +228,7 @@ func TestIntegration_Rite_OmenCascadeDelete(t *testing.T) {
 	if err := InsertRite(ctx, integrationPool, r); err != nil {
 		t.Fatalf("InsertRite: %v", err)
 	}
-	// Удаление Omen-а каскадом убирает Rite-ы.
+	// Deleting an Omen cascades to remove its Rites.
 	if err := DeleteOmen(ctx, integrationPool, "vault-prod"); err != nil {
 		t.Fatalf("DeleteOmen: %v", err)
 	}
@@ -248,13 +248,13 @@ func TestIntegration_Rite_SubjectXORCHECK(t *testing.T) {
 	if err := InsertOmen(ctx, integrationPool, newVaultOmen("vault-prod", "archon-alice")); err != nil {
 		t.Fatalf("InsertOmen: %v", err)
 	}
-	// Прямой INSERT в обход Go-валидации: оба субъекта → CHECK rites_subject_xor.
+	// Direct INSERT bypassing Go validation: both subjects → CHECK rites_subject_xor.
 	_, err := integrationPool.Exec(ctx,
 		`INSERT INTO rites (omen, coven, sid, allow) VALUES ('vault-prod', 'web', 'host', '{"paths":["x"]}')`)
 	if err == nil {
 		t.Fatal("expected XOR CHECK violation for both coven and sid")
 	}
-	// Ни одного субъекта → CHECK тоже отбивает.
+	// No subject → CHECK also rejects.
 	_, err = integrationPool.Exec(ctx,
 		`INSERT INTO rites (omen, allow) VALUES ('vault-prod', '{"paths":["x"]}')`)
 	if err == nil {
@@ -269,7 +269,7 @@ func TestIntegration_Rite_TokenFieldsCHECK(t *testing.T) {
 	if err := InsertOmen(ctx, integrationPool, newVaultOmen("vault-prod", "archon-alice")); err != nil {
 		t.Fatalf("InsertOmen: %v", err)
 	}
-	// Прямой INSERT: token_ttl при delegate=false → CHECK rites_token_fields_vault_only.
+	// Direct INSERT: token_ttl with delegate=false → CHECK rites_token_fields_vault_only.
 	_, err := integrationPool.Exec(ctx,
 		`INSERT INTO rites (omen, coven, allow, delegate, token_ttl)
 		 VALUES ('vault-prod', 'web', '{"paths":["x"]}', false, '5m')`)
@@ -285,7 +285,7 @@ func TestIntegration_Rite_BySubject(t *testing.T) {
 	if err := InsertOmen(ctx, integrationPool, newVaultOmen("vault-prod", "archon-alice")); err != nil {
 		t.Fatalf("InsertOmen: %v", err)
 	}
-	// coven-Rite + sid-Rite на один Omen.
+	// coven-Rite + sid-Rite on one Omen.
 	covenRite := &Rite{Omen: "vault-prod", Coven: ptr("web"), Allow: json.RawMessage(`{"paths":["c"]}`)}
 	sidRite := &Rite{Omen: "vault-prod", SID: ptr("host.example.com"), Allow: json.RawMessage(`{"paths":["s"]}`)}
 	if err := InsertRite(ctx, integrationPool, covenRite); err != nil {
@@ -295,7 +295,7 @@ func TestIntegration_Rite_BySubject(t *testing.T) {
 		t.Fatalf("InsertRite sid: %v", err)
 	}
 
-	// Субъект host.example.com с covens [web] → должен матчить оба Rite-а.
+	// Subject host.example.com with covens [web] → should match both Rites.
 	got, err := SelectRitesBySubject(ctx, integrationPool, "host.example.com", []string{"web"})
 	if err != nil {
 		t.Fatalf("SelectRitesBySubject: %v", err)
@@ -304,7 +304,7 @@ func TestIntegration_Rite_BySubject(t *testing.T) {
 		t.Fatalf("len = %d, want 2 (coven + sid)", len(got))
 	}
 
-	// Субъект без матчащего coven и sid → пусто.
+	// Subject with no matching coven or sid → empty.
 	none, err := SelectRitesBySubject(ctx, integrationPool, "other.host", []string{"db"})
 	if err != nil {
 		t.Fatalf("SelectRitesBySubject none: %v", err)

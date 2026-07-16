@@ -12,8 +12,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// fakeDB — ExecQueryRower-stub. queryRowFunc получает SQL и порядковый номер
-// вызова (InsertRite делает два QueryRow: SelectOmenByName, потом INSERT).
+// fakeDB is an ExecQueryRower stub. queryRowFunc receives SQL and call ordinal number.
+// InsertRite makes two QueryRow calls: SelectOmenByName, then INSERT.
 type fakeDB struct {
 	queryRowSQL   string
 	queryRowArgs  []any
@@ -143,7 +143,7 @@ func ptr[T any](v T) *T { return &v }
 
 var testNow = time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
 
-// omenRow — значения SELECT-строки omens в порядке omenColumns.
+// omenRow returns SELECT-row values for omens in omenColumns order.
 func omenRow(name, src, endpoint, authRef string, aid any) []any {
 	return []any{name, src, endpoint, authRef, aid, testNow}
 }
@@ -338,8 +338,8 @@ func vaultRite() *Rite {
 	}
 }
 
-// insertRiteFake — fakeDB, у которого первый QueryRow отдаёт Omen с заданным
-// source_type, а второй (INSERT) — RETURNING id/created_at.
+// insertRiteFake returns a fakeDB where first QueryRow returns an Omen with given
+// source_type, and the second (INSERT) returns id/created_at via RETURNING.
 func insertRiteFake(src string) *fakeDB {
 	return &fakeDB{queryRowFunc: func(call int, _ string) pgx.Row {
 		if call == 1 {
@@ -372,14 +372,14 @@ func TestInsertRite_OmenNotFound(t *testing.T) {
 
 func TestInsertRite_RejectsSubjectXOR(t *testing.T) {
 	f := &fakeDB{}
-	// оба субъекта заданы
+	// both subjects specified
 	r := vaultRite()
 	r.SID = ptr("host.example.com")
 	if err := InsertRite(context.Background(), f, r); err == nil ||
 		!strings.Contains(err.Error(), "XOR") {
 		t.Fatalf("both-subject err = %v, want XOR", err)
 	}
-	// ни одного субъекта
+	// no subjects
 	r2 := vaultRite()
 	r2.Coven = nil
 	if err := InsertRite(context.Background(), f, r2); err == nil ||
@@ -402,7 +402,7 @@ func TestInsertRite_RejectsBadCovenFormat(t *testing.T) {
 }
 
 func TestInsertRite_TokenFieldsRequireVault(t *testing.T) {
-	// Omen — prometheus, но Rite несёт token-поля → service-слой ловит ⇒vault.
+	// Omen is prometheus, but Rite carries token-fields → service layer catches this as vault-only.
 	f := insertRiteFake("prometheus")
 	r := &Rite{
 		Omen:     "vault-prod",
@@ -443,7 +443,7 @@ func TestInsertRite_RejectsBadTokenTTL(t *testing.T) {
 }
 
 func TestInsertRite_RejectsAllowShapeMismatch(t *testing.T) {
-	// Omen vault, но allow в форме prometheus → ValidateAllow ловит.
+	// Omen is vault, but allow is in prometheus form → ValidateAllow catches this.
 	f := insertRiteFake("vault")
 	r := &Rite{
 		Omen:  "vault-prod",

@@ -19,7 +19,7 @@ func newSvc(t *testing.T, db ExecQueryRower) *Service {
 	return svc
 }
 
-// --- CreateOmen: валидация → ErrValidation ---
+// --- CreateOmen: validation → ErrValidation ---
 
 func TestService_CreateOmen_ValidationErrors(t *testing.T) {
 	cases := []struct {
@@ -72,7 +72,7 @@ func TestService_CreateOmen_Duplicate(t *testing.T) {
 	}
 }
 
-// --- CreateRite: валидация → ErrValidation; not-found пробрасывается ---
+// --- CreateRite: validation → ErrValidation; not-found is propagated ---
 
 func TestService_CreateRite_EmptyOmen(t *testing.T) {
 	svc := newSvc(t, &fakeDB{})
@@ -96,7 +96,7 @@ func TestService_CreateRite_SubjectXOR(t *testing.T) {
 }
 
 func TestService_CreateRite_OmenNotFound(t *testing.T) {
-	// QueryRow default → ErrNoRows на резолве Omen-а внутри InsertRite.
+	// QueryRow default → ErrNoRows on Omen resolve inside InsertRite.
 	svc := newSvc(t, &fakeDB{})
 	_, err := svc.CreateRite(context.Background(), CreateRiteInput{
 		Omen: "ghost", Coven: ptr("web"), Allow: json.RawMessage(`{"paths":["x"]}`),
@@ -107,8 +107,8 @@ func TestService_CreateRite_OmenNotFound(t *testing.T) {
 }
 
 func TestService_CreateRite_BadAllowShape(t *testing.T) {
-	// vault-Omen, allow с prometheus-формой → InsertRite.ValidateAllow отвергает;
-	// Service маппит в ErrValidation.
+	// vault-Omen, allow in prometheus form → InsertRite.ValidateAllow rejects;
+	// Service maps to ErrValidation.
 	svc := newSvc(t, insertRiteFake("vault"))
 	_, err := svc.CreateRite(context.Background(), CreateRiteInput{
 		Omen: "vault-prod", Coven: ptr("web"), Allow: json.RawMessage(`{"queries":["up"]}`),
@@ -132,7 +132,7 @@ func TestService_CreateRite_HappyPath(t *testing.T) {
 	}
 }
 
-// --- Delete: not-found проброс ---
+// --- Delete: not-found propagation ---
 
 func TestService_DeleteOmen_NotFound(t *testing.T) {
 	db := &fakeDB{execTag: pgconn.NewCommandTag("DELETE 0")}

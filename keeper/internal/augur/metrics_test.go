@@ -16,8 +16,8 @@ func TestRegisterBrokerMetrics_RegistersFamilies(t *testing.T) {
 		t.Fatal("RegisterBrokerMetrics returned nil")
 	}
 
-	// Vec/Histogram без первого Observe семейство не публикуют — прогоняем
-	// ObserveFetch, затем сверяем присутствие семейств.
+	// Vec/Histogram families are not published without first Observe; run
+	// ObserveFetch then check for family presence.
 	m.ObserveFetch(string(SourceVault), DecisionOK, time.Millisecond)
 
 	families, err := reg.Gatherer().Gather()
@@ -49,8 +49,8 @@ func TestRegisterBrokerMetrics_PanicsOnDoubleRegister(t *testing.T) {
 	RegisterBrokerMetrics(reg)
 }
 
-// TestBrokerMetrics_FetchBySourceDecision — разрез fetch_total по source и
-// decision: closed-enum значения, без omen_name/query/sid в label-ах.
+// TestBrokerMetrics_FetchBySourceDecision tests fetch_total split by source and
+// decision with closed-enum values, without omen_name/query/sid in labels.
 func TestBrokerMetrics_FetchBySourceDecision(t *testing.T) {
 	reg := obs.NewRegistry()
 	m := RegisterBrokerMetrics(reg)
@@ -74,8 +74,8 @@ func TestBrokerMetrics_FetchBySourceDecision(t *testing.T) {
 	}
 }
 
-// TestBrokerMetrics_NoSecretLabels — лейблы fetch_total ограничены closed-enum
-// source/decision; omen_name/query/sid/apply_id в exposition отсутствуют.
+// TestBrokerMetrics_NoSecretLabels verifies that fetch_total labels are limited to
+// closed-enum source/decision; omen_name/query/sid/apply_id are not in exposition.
 func TestBrokerMetrics_NoSecretLabels(t *testing.T) {
 	reg := obs.NewRegistry()
 	m := RegisterBrokerMetrics(reg)
@@ -90,16 +90,16 @@ func TestBrokerMetrics_NoSecretLabels(t *testing.T) {
 }
 
 func TestBrokerMetrics_NilReceiver_NoOp(t *testing.T) {
-	// Брокер может подниматься без obs-стека (unit-тесты, сборки без Augur-wire-up).
-	// Метод на nil-получателе — no-op без паники.
+	// Broker may start without obs-stack (unit tests, builds without Augur wiring).
+	// Method on nil receiver is a no-op without panic.
 	var m *BrokerMetrics
 	m.ObserveFetch(string(SourceVault), DecisionOK, time.Second)
 	m.ObserveFetch(SourceUnknown, DecisionError, 0)
 }
 
 func TestTracer_NotNil(t *testing.T) {
-	// Tracer() отдаёт пакетный tracer для grpc-handler-а; при OTel disabled это
-	// no-op tracer (не nil), Start/End бесплатны.
+	// Tracer() returns a package-level tracer for the gRPC handler; when OTel is disabled
+	// it is a no-op tracer (not nil), Start/End are free.
 	if Tracer() == nil {
 		t.Fatal("Tracer() returned nil")
 	}

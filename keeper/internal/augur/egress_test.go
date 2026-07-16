@@ -62,13 +62,13 @@ func TestNewEgressClient_GuardWiring(t *testing.T) {
 
 	tr, ok := c.Transport.(*http.Transport)
 	if !ok {
-		t.Fatalf("Transport не *http.Transport: %T", c.Transport)
+		t.Fatalf("Transport not *http.Transport: %T", c.Transport)
 	}
 	if tr.DialContext == nil {
-		t.Fatal("DialContext не выставлен — SSRF-guard отключён")
+		t.Fatal("DialContext not set — SSRF-guard disabled")
 	}
 	if c.CheckRedirect == nil {
-		t.Fatal("CheckRedirect не выставлен — downgrade-защита отключена")
+		t.Fatal("CheckRedirect not set — downgrade protection disabled")
 	}
 	if c.Timeout != egressRequestTimeout {
 		t.Errorf("client.Timeout = %v, want %v", c.Timeout, egressRequestTimeout)
@@ -78,6 +78,6 @@ func TestNewEgressClient_GuardWiring(t *testing.T) {
 	bad := newEgressClient(blockResolver{addrs: []string{"169.254.169.254"}})
 	badTr := bad.Transport.(*http.Transport)
 	if _, err := badTr.DialContext(context.Background(), "tcp", "evil.example:443"); err == nil {
-		t.Fatal("dial в metadata через резолв не заблокирован")
+		t.Fatal("dial to metadata via resolver not blocked")
 	}
 }
