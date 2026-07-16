@@ -1,128 +1,128 @@
-# ADR-0068. Апгрейд инкарнаций до новой версии сервиса — `upgrade/`-папка + upgrade-paths API
+# ADR-0068. Upgrading incarnations to a new service version — `upgrade/` directory + upgrade-paths API
 
-> **Статус: accepted (реализован — NIM-34, влит на канон 2026-07-05).** Дизайн утверждён пользователем (2026-07-03). Расширяет существующий `POST /v1/incarnations/{name}/upgrade` (сегодня — смена пина + state-миграции [ADR-019](0019-state-migration-dsl.md) → `drift`) опциональной оркестрацией перехода на хостах. **Amends [ADR-019](0019-state-migration-dsl.md)** (upgrade получает вторую фазу — host-side upgrade-сценарий) **/ [ADR-009](0009-scenario-dsl.md)** (второй канал авто-дискавери сценариев: каталог `upgrade/`). Related: [ADR-007](0007-versioning-git-ref.md) (версия = git-ref), [ADR-057](0057-state-changes-crud-verbs.md) (истина day-2 = `incarnation.state`), [ADR-065](0065-core-module-installed.md) (симметрия `create: true` / self-describing манифест), [ADR-043](0043-voyage.md) (массовый апгрейд — future work). Impl — тикет NIM-34.
+> **Status: accepted (implemented — NIM-34, merged to canon 2026-07-05).** Design approved by the user (2026-07-03). Extends the existing `POST /v1/incarnations/{name}/upgrade` (today — pin change + state migrations [ADR-019](0019-state-migration-dsl.md) → `drift`) with optional orchestration of the transition on hosts. **Amends [ADR-019](0019-state-migration-dsl.md)** (upgrade gains a second phase — a host-side upgrade scenario) **/ [ADR-009](0009-scenario-dsl.md)** (a second auto-discovery channel for scenarios: the `upgrade/` directory). Related: [ADR-007](0007-versioning-git-ref.md) (version = git-ref), [ADR-057](0057-state-changes-crud-verbs.md) (day-2 truth = `incarnation.state`), [ADR-065](0065-core-module-installed.md) (symmetry `create: true` / self-describing manifest), [ADR-043](0043-voyage.md) (bulk upgrade — future work). Impl — ticket NIM-34.
 
-## Контекст
+## Context
 
-Версионирование Soul Stack уже полностью ref-based ([ADR-007](0007-versioning-git-ref.md)): версия сервиса — git-tag, поле `version:` в манифестах запрещено. Пин конкретной инкарнации — `incarnation.service_version` — **захватывается на create** из резолвнутого `service_registry.ref` ([`keeper/internal/api/handlers/incarnation_typed.go:141`](../../keeper/internal/api/handlers/incarnation_typed.go), [`keeper/internal/mcp/incarnation_create.go:179`](../../keeper/internal/mcp/incarnation_create.go)) и **форсится вместо HEAD реестра во все run/render-пути** ([`scenario/run.go:297`](../../keeper/internal/scenario/run.go), [`scenario/checkdrift.go:288`](../../keeper/internal/scenario/checkdrift.go), [`scenario/render_host.go:128`](../../keeper/internal/scenario/render_host.go), [`render/cel_render.go:161`](../../keeper/internal/render/cel_render.go), [`render/dispatch.go:152`](../../keeper/internal/render/dispatch.go), teardown — [`incarnation/destroy_prepare.go:92`](../../keeper/internal/incarnation/destroy_prepare.go)). Кеш артефактов sha1-адресуемый → версии сосуществуют. Выбор версии на create/day-2-формах запрещён (**анти-version-craft** инвариант: формы всегда на `inc.ServiceVersion`, [`api/huma_incarnation_formprefill.go:23`](../../keeper/internal/api/huma_incarnation_formprefill.go), [`api/handlers/incarnation_formprefill.go:53`](../../keeper/internal/api/handlers/incarnation_formprefill.go)).
+Soul Stack versioning is already fully ref-based ([ADR-007](0007-versioning-git-ref.md)): the service version is a git-tag, and the `version:` field in manifests is forbidden. The pin of a concrete incarnation — `incarnation.service_version` — is **captured on create** from the resolved `service_registry.ref` ([`keeper/internal/api/handlers/incarnation_typed.go:141`](../../keeper/internal/api/handlers/incarnation_typed.go), [`keeper/internal/mcp/incarnation_create.go:179`](../../keeper/internal/mcp/incarnation_create.go)) and is **forced instead of the registry HEAD in all run/render paths** ([`scenario/run.go:297`](../../keeper/internal/scenario/run.go), [`scenario/checkdrift.go:288`](../../keeper/internal/scenario/checkdrift.go), [`scenario/render_host.go:128`](../../keeper/internal/scenario/render_host.go), [`render/cel_render.go:161`](../../keeper/internal/render/cel_render.go), [`render/dispatch.go:152`](../../keeper/internal/render/dispatch.go), teardown — [`incarnation/destroy_prepare.go:92`](../../keeper/internal/incarnation/destroy_prepare.go)). The artifact cache is sha1-addressable → versions coexist. Choosing a version on create/day-2 forms is forbidden (**anti-version-craft** invariant: forms always use `inc.ServiceVersion`, [`api/huma_incarnation_formprefill.go:23`](../../keeper/internal/api/huma_incarnation_formprefill.go), [`api/handlers/incarnation_formprefill.go:53`](../../keeper/internal/api/handlers/incarnation_formprefill.go)).
 
-**Апгрейд сегодня.** `POST /v1/incarnations/{name}/upgrade` с `to_version` ([`api/handlers/incarnation_typed.go:449`](../../keeper/internal/api/handlers/incarnation_typed.go) `UpgradeTyped`, роут [`api/huma_incarnation.go:118`](../../keeper/internal/api/huma_incarnation.go)): `PrepareUpgrade` резолвит целевой снапшот, ловит no-op/downgrade, собирает цепочку state-миграций ([`incarnation/upgrade_prepare.go:74`](../../keeper/internal/incarnation/upgrade_prepare.go)) → `UpgradeStateSchema`/`upgradeTx` одной PG-tx применяет миграции + меняет `service_version` + ставит `status=drift` ([`incarnation/crud.go:1505`](../../keeper/internal/incarnation/crud.go), финальный UPDATE — `crud.go:1635`). **Хосты при этом не трогаются**: upgrade заканчивается в информационном `drift` (ADR-031, amendment 2026-06-27, `crud.go:1443` `upgrade-pending-apply`), а раскатку новой версии оператор доводит **обычным apply** вручную. Возвращаемый `apply_id` — ULID upgrade-операции для истории миграции, а **не** реальный Runner-прогон.
+**Upgrade today.** `POST /v1/incarnations/{name}/upgrade` with `to_version` ([`api/handlers/incarnation_typed.go:449`](../../keeper/internal/api/handlers/incarnation_typed.go) `UpgradeTyped`, route [`api/huma_incarnation.go:118`](../../keeper/internal/api/huma_incarnation.go)): `PrepareUpgrade` resolves the target snapshot, catches no-op/downgrade, assembles the chain of state migrations ([`incarnation/upgrade_prepare.go:74`](../../keeper/internal/incarnation/upgrade_prepare.go)) → `UpgradeStateSchema`/`upgradeTx` applies the migrations + changes `service_version` + sets `status=drift` in a single PG tx ([`incarnation/crud.go:1505`](../../keeper/internal/incarnation/crud.go), final UPDATE — `crud.go:1635`). **Hosts are not touched in the process**: the upgrade ends in an informational `drift` (ADR-031, amendment 2026-06-27, `crud.go:1443` `upgrade-pending-apply`), and the operator rolls out the new version **with an ordinary apply** manually. The returned `apply_id` is the ULID of the upgrade operation for migration history, and **not** an actual Runner run.
 
-Пробел: для нетривиальных переходов между версиями (смена схемы деплоя, переезд данных, изменение раскладки) «оператор сам накатит apply» — недостаточно. Нужен **специализированный, версия-к-версии, оркестрируемый переход**, запускаемый апгрейдом, но при этом не пугающий оператора в обычных day-2-списках и удобный для ретрая. Это расширение и фиксирует ADR.
+Gap: for nontrivial transitions between versions (change of deployment scheme, data relocation, layout change) "the operator will roll out the apply themselves" is not enough. What's needed is a **specialized, version-to-version, orchestrated transition**, triggered by the upgrade, yet without alarming the operator in ordinary day-2 lists and convenient to retry. This extension is what the ADR fixes.
 
-## Решение
+## Decision
 
-### 1. Что НЕ делаем (границы, сохранённые инварианты)
+### 1. What we do NOT do (boundaries, preserved invariants)
 
-- **Semver-парсинг тегов — нет.** Резолвер версий остаётся `git checkout <ref>` ([ADR-007](0007-versioning-git-ref.md)); никаких range/`>=`.
-- **Double-pin commit-sha — нет.** Пин = git-ref, как есть.
-- **Выбор версии при create — нет.** Анти-version-craft инвариант сохраняется: create/day-2-формы всегда на `inc.ServiceVersion`. Единственное легальное место смены версии — **действие upgrade** (и его discovery — §6), а не создание.
+- **Semver parsing of tags — no.** The version resolver remains `git checkout <ref>` ([ADR-007](0007-versioning-git-ref.md)); no ranges/`>=`.
+- **Double-pin commit-sha — no.** The pin = git-ref, as is.
+- **Choosing a version on create — no.** The anti-version-craft invariant is preserved: create/day-2 forms always use `inc.ServiceVersion`. The only legal place to change the version is the **upgrade action** (and its discovery — §6), not creation.
 
-### 2. Upgrade-сценарий опционален
+### 2. The upgrade scenario is optional
 
-Апгрейд работает и без единого upgrade-сценария. Если для перехода `from→to` upgrade-сценарий не найден — поведение **ровно сегодняшнее** (§5, ветвь legacy): смена пина + state-миграции [ADR-019](0019-state-migration-dsl.md) + `drift`. Upgrade-сценарий — это **дополнительная** способность автора сервиса, не обязательство.
+Upgrade works even without a single upgrade scenario. If no upgrade scenario is found for the `from→to` transition — the behavior is **exactly today's** (§5, legacy branch): pin change + state migrations [ADR-019](0019-state-migration-dsl.md) + `drift`. An upgrade scenario is an **additional** capability of the service author, not an obligation.
 
-### 3. Upgrade-сценарий живёт в отдельной папке `upgrade/<slug>/`, self-describing `from:`
+### 3. The upgrade scenario lives in a separate directory `upgrade/<slug>/`, self-describing `from:`
 
-Файлы апгрейд-сценариев — в **отдельном top-level каталоге сервис-репо** `upgrade/<slug>/main.yml` в дереве **НОВОЙ** версии, НЕ в общем `scenario/`. Причины: (а) в day-2-списках сценариев они пугали бы оператора («что это за операция, можно ли её запускать руками?»); (б) отдельная папка даёт естественное разделение и удобный ретрай.
+Upgrade scenario files live in a **separate top-level directory of the service repo** `upgrade/<slug>/main.yml` in the tree of the **NEW** version, NOT in the common `scenario/`. Reasons: (a) in day-2 scenario lists they would alarm the operator ("what is this operation, can it be run by hand?"); (b) a separate directory gives natural separation and convenient retry.
 
-Манифест `upgrade/<slug>/main.yml` — **self-describing**: top-level поле `from:` — список исходных версий-тегов, из которых этот сценарий умеет апгрейдить:
+The `upgrade/<slug>/main.yml` manifest is **self-describing**: the top-level field `from:` is a list of source version-tags this scenario knows how to upgrade from:
 
 ```yaml
-# upgrade/v2/main.yml  (в дереве версии v2.x)
+# upgrade/v2/main.yml  (in the tree of version v2.x)
 from: ["v1.0.0", "v1.2.0"]
-description: Переход redis sentinel→cluster при апгрейде на v2
-# ... обычные задачи сценария: module: / apply: / state_changes / on: / where: ...
+description: Transition redis sentinel→cluster on upgrade to v2
+# ... ordinary scenario tasks: module: / apply: / state_changes / on: / where: ...
 ```
 
-- **Симметрия с `create: true`** ([ADR-065](0065-core-module-installed.md)-стиль self-describing манифеста): как `create: true` объявляет «этот сценарий годен как стартовый», так `from: [...]` объявляет «этот сценарий годен как переход из этих версий». Дискриминатор живёт **в самом файле сценария**, а не в реестре.
-- **Блока `upgrade:` в `service.yml` НЕТ.** Работает канон авто-дискавери [ADR-009](0009-scenario-dsl.md): сценарии не перечисляются в манифесте, keeper находит их сканом каталога. upgrade/-сценарии — второй такой каталог рядом со `scenario/`.
-- **upgrade/ не показывается в обычных day-2-списках** (`GET /v1/services/{name}/scenarios`, [`api/handlers/service.go:481`](../../keeper/internal/api/handlers/service.go)) — они видны только через upgrade-контур (§6).
+- **Symmetry with `create: true`** ([ADR-065](0065-core-module-installed.md)-style self-describing manifest): just as `create: true` declares "this scenario is suitable as a starter", so `from: [...]` declares "this scenario is suitable as a transition from these versions". The discriminator lives **in the scenario file itself**, not in the registry.
+- **There is NO `upgrade:` block in `service.yml`.** The auto-discovery canon [ADR-009](0009-scenario-dsl.md) applies: scenarios are not listed in the manifest, keeper finds them by scanning the directory. upgrade/ scenarios are a second such directory alongside `scenario/`.
+- **upgrade/ is not shown in ordinary day-2 lists** (`GET /v1/services/{name}/scenarios`, [`api/handlers/service.go:481`](../../keeper/internal/api/handlers/service.go)) — they are visible only through the upgrade contour (§6).
 
-### 4. Направление «`from` в новой версии», а не «`to` в старой»
+### 4. Direction "`from` in the new version", not "`to` in the old one"
 
-`from:` объявляется в **новой** версии (куда апгрейдим), перечисляя старые версии-источники. Обоснование:
+`from:` is declared in the **new** version (the one we upgrade to), listing the old source versions. Rationale:
 
-- **Теги immutable** ([ADR-007](0007-versioning-git-ref.md)): в момент выпуска `v1.0.0` будущие версии неизвестны — задекларировать «`to: v2`» в старом теге физически нельзя, тег уже заморожен. Новая версия же знает все свои валидные источники.
-- **Симметрия с forward-only** [ADR-019](0019-state-migration-dsl.md): миграции пишутся вперёд (`<NNN>_to_<MMM>`, from<to), апгрейд — тоже forward. `upgrade/` наследует ту же ось «новое знает про старое».
+- **Tags are immutable** ([ADR-007](0007-versioning-git-ref.md)): at the moment `v1.0.0` is released, future versions are unknown — declaring "`to: v2`" in the old tag is physically impossible, the tag is already frozen. The new version, on the other hand, knows all its valid sources.
+- **Symmetry with forward-only** [ADR-019](0019-state-migration-dsl.md): migrations are written forward (`<NNN>_to_<MMM>`, from<to), and upgrade is likewise forward. `upgrade/` inherits the same "new knows about old" axis.
 
-### 5. Апгрейд — 2 ветви по факту наличия upgrade-сценария для `from→to`
+### 5. Upgrade — 2 branches based on whether an upgrade scenario exists for `from→to`
 
-Резолв: в фазе `PrepareUpgrade` (до смены пина, пока `inc.ServiceVersion` = старая версия) просканировать `upgrade/*/main.yml` **целевого** снапшота и найти сценарий, чей `from:` содержит текущий `inc.ServiceVersion`.
+Resolution: in the `PrepareUpgrade` phase (before the pin change, while `inc.ServiceVersion` = the old version) scan `upgrade/*/main.yml` of the **target** snapshot and find the scenario whose `from:` contains the current `inc.ServiceVersion`.
 
-- **found** → сменить пин + прогнать state-миграции ([ADR-019](0019-state-migration-dsl.md), существующий `upgradeTx`) + **автозапуск** найденного upgrade-сценария через `Runner.Start` ([`scenario/runner.go:25`](../../keeper/internal/scenario/runner.go), `RunSpec` — [`scenario/scenario.go:211`](../../keeper/internal/scenario/scenario.go)) с `ServiceRef`, запиненным на **новый** `to_version`. Upgrade-сценарий раскатывает переход на хостах и своими `state_changes` доводит `incarnation.state`. Успех → `ready`. **Падение → `error_locked` → разблокировка через `rerun-last`** (как обычный сценарий: `UnlockForRerun` → `RunSpec.FromLocked`, [`scenario/scenario.go:225`](../../keeper/internal/scenario/scenario.go)); ретрай гоняет тот же upgrade-сценарий против уже-поднятого пина.
-- **not-found** → **legacy**: только смена пина + state-миграции [ADR-019](0019-state-migration-dsl.md) + **WARN** в лог/ответ + `drift` (ровно сегодняшнее поведение). Оператор доводит раскаткой обычным apply.
+- **found** → change the pin + run the state migrations ([ADR-019](0019-state-migration-dsl.md), existing `upgradeTx`) + **auto-launch** the found upgrade scenario via `Runner.Start` ([`scenario/runner.go:25`](../../keeper/internal/scenario/runner.go), `RunSpec` — [`scenario/scenario.go:211`](../../keeper/internal/scenario/scenario.go)) with `ServiceRef` pinned to the **new** `to_version`. The upgrade scenario rolls out the transition on the hosts and drives `incarnation.state` with its own `state_changes`. Success → `ready`. **Failure → `error_locked` → unblock via `rerun-last`** (like an ordinary scenario: `UnlockForRerun` → `RunSpec.FromLocked`, [`scenario/scenario.go:225`](../../keeper/internal/scenario/scenario.go)); the retry runs the same upgrade scenario against the already-raised pin.
+- **not-found** → **legacy**: only pin change + state migrations [ADR-019](0019-state-migration-dsl.md) + **WARN** in the log/response + `drift` (exactly today's behavior). The operator finishes the rollout with an ordinary apply.
 
-**★ Fail-closed (422 на незадекларированный переход) — ОТБРОШЕН осознанно.** Каталог `upgrade/` **наследуется вниз по git-дереву патчей**: тег `v2.0.1` несёт те же `upgrade/v2/` (with `from: [v1.*]`), что и `v2.0.0`. Запрет undeclared-переходов ломал бы невинные патч-апгрейды `v2.0.0→v2.0.1`, для которых никто не станет писать `from: [v2.0.0]`. Поэтому «нет upgrade-сценария → падаем» неверно; корректно «нет upgrade-сценария → legacy-путь». Плата: незадекларированный «большой» переход тихо уйдёт в legacy без host-оркестрации — это ловит WARN + upgrade-paths (§6), не 422.
+**★ Fail-closed (422 on an undeclared transition) — DELIBERATELY DISCARDED.** The `upgrade/` directory is **inherited down the git patch tree**: the tag `v2.0.1` carries the same `upgrade/v2/` (with `from: [v1.*]`) as `v2.0.0`. Forbidding undeclared transitions would break innocent patch upgrades `v2.0.0→v2.0.1`, for which no one will write `from: [v2.0.0]`. Therefore "no upgrade scenario → fail" is wrong; the correct rule is "no upgrade scenario → legacy path". The cost: an undeclared "big" transition will silently go to legacy without host orchestration — this is caught by WARN + upgrade-paths (§6), not by 422.
 
-Транзакционная граница: state-миграция ([ADR-019](0019-state-migration-dsl.md), одна PG-tx) остаётся атомарной и коммитится ПЕРВОЙ; upgrade-сценарий — отдельный последующий Runner-прогон. Если сценарий упал — пин уже поднят и state уже мигрирован; это консистентно с forward-only + `error_locked` + `rerun-last` (ретрай не откатывает пин, догоняет раскатку). Found-ветвь при этом обязана **зарезервировать `applying`** и передать управление Runner-у вместо финального `drift` (impl-развилка §Scope: `upgradeTx` в found-режиме ставит `applying`, а не `drift`).
+Transactional boundary: the state migration ([ADR-019](0019-state-migration-dsl.md), one PG tx) stays atomic and is committed FIRST; the upgrade scenario is a separate subsequent Runner run. If the scenario fails — the pin is already raised and the state is already migrated; this is consistent with forward-only + `error_locked` + `rerun-last` (the retry does not roll back the pin, it catches up the rollout). The found branch is therefore obliged to **reserve `applying`** and hand control to the Runner instead of the final `drift` (impl fork §Scope: `upgradeTx` in found mode sets `applying`, not `drift`).
 
-### 6. Discoverability — keeper перечисляет, а не оператор: `GET /v1/incarnations/{name}/upgrade-paths`
+### 6. Discoverability — keeper enumerates, not the operator: `GET /v1/incarnations/{name}/upgrade-paths`
 
-Возражение к §4 «`from` в новой версии не даёт видимости, куда переходить» снимается тем, что **версии перечисляет keeper**, а не оператор наизусть.
+The objection to §4 "`from` in the new version does not give visibility into where to transition" is removed by the fact that **the versions are enumerated by keeper**, not by the operator from memory.
 
-**Выбранный путь — incarnation-scoped: `GET /v1/incarnations/{name}/upgrade-paths`** (обоснование выбора — ниже).
+**Chosen path — incarnation-scoped: `GET /v1/incarnations/{name}/upgrade-paths`** (justification for the choice — below).
 
-- **Без `?to=` — дёшево**: перечисление тегов реестра сервиса (реюз `ls-remote`, тот же источник, что `GET /v1/services/{name}/refs` → `ListRefsTyped`, [`api/handlers/service.go:430`](../../keeper/internal/api/handlers/service.go)) с пометкой `is_current` (тег == текущий пин инкарнации). **Направление (forward/downgrade) в дешёвом режиме НЕ вычисляется**: [ADR-007](0007-versioning-git-ref.md) запрещает semver-парсинг имён тегов — по именам направление недостоверно, поэтому точное направление / found-legacy / миграции вынесены в `?to=`.
-- **С `?to=<ref>` — on-demand анализ конкретной цели**: `direction` — **четыре значения** (`no-op` / `downgrade` / `forward` / `same-schema` — ref-bump без смены схемы); `mode` (found vs legacy §5) считается только для forward/same-schema; применяемые state-миграции [ADR-019](0019-state-migration-dsl.md) (реюз `LoadMigrationChain` из `PrepareUpgrade`). Дорогой per-target анализ не гоняется на весь список — только по запросу. **Битая цепочка миграций — не HTTP-ошибка (422), а `200` с `reachable: false` + `unreachable_reason`**: preview-эндпоинт отдаёт недостижимую цель как ДАННЫЕ (UI рисует серой), достижимые цели — `reachable: true`.
-- UI рисует выпадашку «на что и как могу обновиться» (метка found/legacy у цели анализируется on-demand через `?to=`).
+- **Without `?to=` — cheap**: enumeration of the service registry tags (reusing `ls-remote`, the same source as `GET /v1/services/{name}/refs` → `ListRefsTyped`, [`api/handlers/service.go:430`](../../keeper/internal/api/handlers/service.go)) with an `is_current` mark (tag == the incarnation's current pin). **Direction (forward/downgrade) is NOT computed in the cheap mode**: [ADR-007](0007-versioning-git-ref.md) forbids semver parsing of tag names — by names the direction is unreliable, so the exact direction / found-legacy / migrations are moved into `?to=`.
+- **With `?to=<ref>` — on-demand analysis of a concrete target**: `direction` — **four values** (`no-op` / `downgrade` / `forward` / `same-schema` — a ref-bump without a schema change); `mode` (found vs legacy §5) is computed only for forward/same-schema; the applicable state migrations [ADR-019](0019-state-migration-dsl.md) (reusing `LoadMigrationChain` from `PrepareUpgrade`). The expensive per-target analysis is not run over the whole list — only on request. **A broken migration chain is not an HTTP error (422), but `200` with `reachable: false` + `unreachable_reason`**: the preview endpoint returns the unreachable target as DATA (the UI renders it gray), reachable targets — `reachable: true`.
+- The UI renders a dropdown "what and how I can upgrade to" (the found/legacy label of a target is analyzed on-demand via `?to=`).
 
-**Почему incarnation-scoped, а не `/v1/services/{name}/upgrade-paths`:** ответ «куда и КАК могу перейти» неизбежно опирается на **`from` = текущий пин конкретной инкарнации** (`inc.ServiceVersion`) — у сервиса нет единой «текущей версии», у каждой инкарнации свой пин. Обе дорогие части анализа — сопоставление `from:` upgrade-сценария и расчёт применимых state-миграций — требуют `inc.ServiceVersion` + `inc.state_schema_version`, известных серверу только per-incarnation. Плюс симметрия с действием, которому upgrade-paths предшествует: `POST /v1/incarnations/{name}/upgrade` тоже incarnation-scoped, и UI Upgrade-modal открывается из инкарнации. Service-scoped вариант заставил бы клиента слать `from` query-параметром (избыточно — сервер его знает — и хрупко). Существующий `GET /v1/services/{name}/refs` (service-scoped сырое перечисление тегов, уже помечен «парный /refs для Upgrade-modal», [`api/handlers/service.go:483`](../../keeper/internal/api/handlers/service.go)) остаётся низкоуровневым строительным блоком, поверх которого upgrade-paths добавляет incarnation-контекст.
+**Why incarnation-scoped and not `/v1/services/{name}/upgrade-paths`:** the answer "where and HOW I can transition" inevitably relies on **`from` = the current pin of a concrete incarnation** (`inc.ServiceVersion`) — a service has no single "current version", each incarnation has its own pin. Both expensive parts of the analysis — matching the upgrade scenario's `from:` and computing the applicable state migrations — require `inc.ServiceVersion` + `inc.state_schema_version`, known to the server only per-incarnation. Plus symmetry with the action that upgrade-paths precedes: `POST /v1/incarnations/{name}/upgrade` is also incarnation-scoped, and the UI Upgrade modal is opened from an incarnation. A service-scoped variant would force the client to send `from` as a query parameter (redundant — the server knows it — and fragile). The existing `GET /v1/services/{name}/refs` (service-scoped raw enumeration of tags, already marked "paired /refs for the Upgrade modal", [`api/handlers/service.go:483`](../../keeper/internal/api/handlers/service.go)) remains the low-level building block on top of which upgrade-paths adds incarnation context.
 
-Permission — реюз `incarnation.upgrade` (та же операция, read-грань) либо `incarnation.get`; выбор — на impl (§Scope). READ, без audit.
+Permission — reuse `incarnation.upgrade` (the same operation, read facet) or `incarnation.get`; the choice is left to impl (§Scope). READ, without audit.
 
-> *Амендмент 2026-07-04 (NIM-34 impl): §6 сверен с реализацией.* Дешёвый режим сведён к пометке `is_current` — направление по именам тегов НЕ вычисляется ([ADR-007](0007-versioning-git-ref.md)). `?to=` даёт `direction` ∈ {`no-op`, `downgrade`, `forward`, `same-schema`}, а недостижимую по битой цепочке миграций цель сигналит `reachable: false` + `unreachable_reason` (200, не 422). Wire-контракт — [operator-api/incarnations.md](../keeper/operator-api/incarnations.md); enum-словарь — [naming-rules.md](../naming-rules.md#upgrade-v2-каталог-upgrade-ключ-from-upgrade-paths).
+> *Amendment 2026-07-04 (NIM-34 impl): §6 reconciled with the implementation.* The cheap mode is reduced to an `is_current` mark — direction by tag names is NOT computed ([ADR-007](0007-versioning-git-ref.md)). `?to=` gives `direction` ∈ {`no-op`, `downgrade`, `forward`, `same-schema`}, and a target unreachable due to a broken migration chain is signaled by `reachable: false` + `unreachable_reason` (200, not 422). The wire contract — [operator-api/incarnations.md](../keeper/operator-api/incarnations.md); the enum dictionary — [naming-rules.md](../naming-rules.md#upgrade-v2-каталог-upgrade-ключ-from-upgrade-paths).
 
-### 7. Канон input — граница: input НЕ мигрируется
+### 7. The input canon — a boundary: input is NOT migrated
 
-`spec.input` = **write-once рецепт создания** (используется `rerun-last` по create-ветке + аудит), истина желаемого состояния = `incarnation.state` (amendment [ADR-057](0057-state-changes-crud-verbs.md), day-2 читает `state`, не `input`/`essence`). **При апгрейде `input` НЕ мигрируется** и НЕ является источником day-2: он — pre-state seed момента create, а не желаемое состояние. Upgrade-сценарий работает с `incarnation.state` (читает развёрнутый факт, пишет через `state_changes`) и `essence` целевой версии — как любой day-2-сценарий. Явная граница: апгрейд может изменить форму `state` (через [ADR-019](0019-state-migration-dsl.md)-миграции) и содержимое (через `state_changes` upgrade-сценария), но `spec.input` остаётся историческим слепком create и не переписывается.
+`spec.input` = the **write-once creation recipe** (used by `rerun-last` on the create branch + audit), the truth of the desired state = `incarnation.state` (amendment [ADR-057](0057-state-changes-crud-verbs.md), day-2 reads `state`, not `input`/`essence`). **On upgrade `input` is NOT migrated** and is NOT a source of day-2: it is the pre-state seed of the create moment, not the desired state. The upgrade scenario works with `incarnation.state` (reads the deployed fact, writes via `state_changes`) and the `essence` of the target version — like any day-2 scenario. An explicit boundary: an upgrade may change the shape of `state` (via [ADR-019](0019-state-migration-dsl.md) migrations) and its content (via the upgrade scenario's `state_changes`), but `spec.input` remains a historical snapshot of create and is not rewritten.
 
-### 8. Non-goals MVP
+### 8. MVP non-goals
 
-- **Авто-чейнинг `v1→v3`** (композиция цепочки upgrade-сценариев через промежуточные версии) — нет; MVP резолвит один прямой `from→to`.
-- **glob/semver в `from:`** — нет; `from:` — точный список immutable-тегов.
-- **Массовый апгрейд скоупа** — отдельный тикет NIM-35 через Voyage `kind=upgrade` ([ADR-043](0043-voyage.md)); здесь только упоминается как future work.
+- **Auto-chaining `v1→v3`** (composing a chain of upgrade scenarios through intermediate versions) — no; the MVP resolves a single direct `from→to`.
+- **glob/semver in `from:`** — no; `from:` is an exact list of immutable tags.
+- **Bulk upgrade of a scope** — a separate ticket NIM-35 via Voyage `kind=upgrade` ([ADR-043](0043-voyage.md)); mentioned here only as future work.
 
-## Что уже существует vs что предстоит построить (scope NIM-34)
+## What already exists vs what remains to be built (scope NIM-34)
 
-**Существует и переиспользуется:**
-- `POST /v1/incarnations/{name}/upgrade` + `UpgradeTyped`/`PrepareUpgrade`/`UpgradeStateSchema`/`upgradeTx` (смена пина + [ADR-019](0019-state-migration-dsl.md)-миграции + `drift`).
-- `Runner.Start` + `RunSpec` (запуск сценария), `error_locked` + `rerun-last` (`FromLocked`) — вся machinery ветви found уже есть.
-- `ls-remote` перечисление тегов (`ListRefsTyped`) и `LoadMigrationChain` — строительные блоки upgrade-paths.
-- Авто-дискавери сценариев + self-describing флаг (`create: true` → `Create *bool`, [`artifact/scenarios.go:150`](../../keeper/internal/artifact/scenarios.go)) — образец для `from:`.
+**Exists and is reused:**
+- `POST /v1/incarnations/{name}/upgrade` + `UpgradeTyped`/`PrepareUpgrade`/`UpgradeStateSchema`/`upgradeTx` (pin change + [ADR-019](0019-state-migration-dsl.md) migrations + `drift`).
+- `Runner.Start` + `RunSpec` (launching a scenario), `error_locked` + `rerun-last` (`FromLocked`) — all the machinery of the found branch already exists.
+- `ls-remote` enumeration of tags (`ListRefsTyped`) and `LoadMigrationChain` — building blocks of upgrade-paths.
+- Scenario auto-discovery + self-describing flag (`create: true` → `Create *bool`, [`artifact/scenarios.go:150`](../../keeper/internal/artifact/scenarios.go)) — a template for `from:`.
 
-**Предстоит построить:**
-1. **Сканер `upgrade/*/main.yml`** — новый каталог рядом со `scenario/`. Сейчас `ListScenarios` жёстко сканирует `scenario/*` (`scenarioDir="scenario"`, [`artifact/scenarios.go:22`](../../keeper/internal/artifact/scenarios.go)), а Runner грузит `scenario/%s/main.yml` (`scenarioMainFile`, [`scenario/scenario.go:48`](../../keeper/internal/scenario/scenario.go)). Нужен второй discovery-путь + парс top-level `from: []string` + запуск upgrade-сценария Runner-ом по `upgrade/`-префиксу (не «дописать поле», а новый путь загрузки).
-2. **Резолв upgrade-сценария для `from→to`** в `PrepareUpgrade`: скан `upgrade/` целевого снапшота, матч `from:` ⊇ `inc.ServiceVersion`.
-3. **Found-ветвь в upgrade-флоу**: `upgradeTx` в found-режиме резервирует `applying` (не `drift`) → `Runner.Start(upgrade-сценарий, ref=to)`; not-found → сегодняшний `drift` + WARN.
-4. **Эндпоинт `GET /v1/incarnations/{name}/upgrade-paths`** (+ `?to=`): дешёвый список тегов + on-demand per-target анализ (found/legacy + state-миграции).
-5. **UI**: выпадашка upgrade-paths (companion-репо, вне core-скоупа NIM-34).
+**Remains to be built:**
+1. **Scanner for `upgrade/*/main.yml`** — a new directory alongside `scenario/`. Currently `ListScenarios` hard-scans `scenario/*` (`scenarioDir="scenario"`, [`artifact/scenarios.go:22`](../../keeper/internal/artifact/scenarios.go)), and the Runner loads `scenario/%s/main.yml` (`scenarioMainFile`, [`scenario/scenario.go:48`](../../keeper/internal/scenario/scenario.go)). A second discovery path is needed + parsing the top-level `from: []string` + launching the upgrade scenario by the Runner via the `upgrade/` prefix (not "add a field", but a new load path).
+2. **Resolving the upgrade scenario for `from→to`** in `PrepareUpgrade`: scan `upgrade/` of the target snapshot, match `from:` ⊇ `inc.ServiceVersion`.
+3. **The found branch in the upgrade flow**: `upgradeTx` in found mode reserves `applying` (not `drift`) → `Runner.Start(upgrade scenario, ref=to)`; not-found → today's `drift` + WARN.
+4. **Endpoint `GET /v1/incarnations/{name}/upgrade-paths`** (+ `?to=`): a cheap list of tags + on-demand per-target analysis (found/legacy + state migrations).
+5. **UI**: the upgrade-paths dropdown (companion repo, outside the NIM-34 core scope).
 
-## ⚠️ Обнаруженные несоответствия / принятые из-за них решения
+## ⚠️ Discovered inconsistencies / decisions made because of them
 
-1. **Каталог назван `upgrade/<slug>/`, а не `migrate/` — осознанно, во избежание тройной перегрузки слова «migrate».** В кодовой базе оно уже занято дважды: (а) `scenario/migrate_cluster/` — **существующий create-сценарий** миграции **ДАННЫХ** с внешнего redis-кластера через нативную репликацию (`create: true`, виден в day-2, [`examples/service/redis/scenario/migrate_cluster/main.yml`](../../examples/service/redis/scenario/migrate_cluster/main.yml)); (б) `migrations/<NNN>_to_<MMM>` — структурные state_schema-миграции [ADR-019](0019-state-migration-dsl.md). Третья ось «версионный апгрейд» под корнем «migrate» путалась бы с обеими. **Решение (2026-07-03): каталог `upgrade/<slug>/`** — симметрия с действием `POST /v1/incarnations/{name}/upgrade` и эндпоинтом upgrade-paths, ноль коллизий. Три термина (`upgrade/` версия, `scenario/migrate_cluster/` данные, `migrations/` схема) развести в [naming-rules.md](../naming-rules.md).
-2. **`from` занят в другом смысле**: `artifact.StateSchemaMigration.From int` ([`artifact/state_schema.go:41`](../../keeper/internal/artifact/state_schema.go)) — from-версия [ADR-019](0019-state-migration-dsl.md)-цепочки (целое). Новое top-level `from: []string` upgrade-манифеста — список git-тегов. Коллизия по имени, не по структуре; отметить в доке / развести именами полей в парсере.
-3. **Текущий upgrade НЕ запускает Runner-прогон** — заканчивается в `drift` (`crud.go:1640`), а возвращаемый `apply_id` — ULID upgrade-**операции** для истории миграции, НЕ scenario-прогон. Found-ветвь вводит настоящий Runner-прогон. Нужно решить: тот же `apply_id` на обе фазы (migration-tx + upgrade-run) или два разных — иначе `GET .../runs/{apply_id}` и триаж истории будут неоднозначны. (Симметрия: сегодня `writeUpgradeDriftHistory` пишет zero-diff запись `upgrade-pending-apply` под тем же `apply_id`.)
-4. **Анти-version-craft инвариант** ([`api/huma_incarnation_formprefill.go:23`](../../keeper/internal/api/huma_incarnation_formprefill.go)) upgrade-paths НЕ нарушает (инвариант про create/day-2-формы, всегда на `inc.ServiceVersion`), но ADR должен явно зафиксировать: upgrade-paths + действие upgrade — **единственный** легальный контур смены версии; выбор версии на create по-прежнему запрещён.
+1. **The directory is named `upgrade/<slug>/`, not `migrate/` — deliberately, to avoid the triple overloading of the word "migrate".** In the codebase it is already taken twice: (a) `scenario/migrate_cluster/` — an **existing create scenario** for migrating **DATA** from an external redis cluster via native replication (`create: true`, visible in day-2, [`examples/service/redis/scenario/migrate_cluster/main.yml`](../../examples/service/redis/scenario/migrate_cluster/main.yml)); (b) `migrations/<NNN>_to_<MMM>` — structural state_schema migrations [ADR-019](0019-state-migration-dsl.md). A third axis "version upgrade" under the "migrate" root would be confused with both. **Decision (2026-07-03): the directory `upgrade/<slug>/`** — symmetry with the action `POST /v1/incarnations/{name}/upgrade` and the upgrade-paths endpoint, zero collisions. The three terms (`upgrade/` version, `scenario/migrate_cluster/` data, `migrations/` schema) are to be disambiguated in [naming-rules.md](../naming-rules.md).
+2. **`from` is taken in another sense**: `artifact.StateSchemaMigration.From int` ([`artifact/state_schema.go:41`](../../keeper/internal/artifact/state_schema.go)) — the from-version of the [ADR-019](0019-state-migration-dsl.md) chain (an integer). The new top-level `from: []string` of the upgrade manifest is a list of git-tags. A collision by name, not by structure; to be noted in the doc / disambiguated by field names in the parser.
+3. **The current upgrade does NOT launch a Runner run** — it ends in `drift` (`crud.go:1640`), and the returned `apply_id` is the ULID of the upgrade **operation** for migration history, NOT a scenario run. The found branch introduces a real Runner run. It must be decided: the same `apply_id` for both phases (migration-tx + upgrade-run) or two different ones — otherwise `GET .../runs/{apply_id}` and history triage will be ambiguous. (Symmetry: today `writeUpgradeDriftHistory` writes a zero-diff record `upgrade-pending-apply` under the same `apply_id`.)
+4. **The anti-version-craft invariant** ([`api/huma_incarnation_formprefill.go:23`](../../keeper/internal/api/huma_incarnation_formprefill.go)) is NOT violated by upgrade-paths (the invariant is about create/day-2 forms, always on `inc.ServiceVersion`), but the ADR must explicitly fix: upgrade-paths + the upgrade action are the **only** legal contour for changing the version; choosing a version on create is still forbidden.
 
 ## Consequences
 
-- Апгрейд из «смена пина + drift» превращается в two-phase: структурная миграция ([ADR-019](0019-state-migration-dsl.md)) + опциональная host-оркестрация (upgrade-сценарий). Обратная совместимость полная: сервис без `upgrade/` работает как сегодня (ветвь legacy).
-- Второй канал авто-дискавери сценариев (`upgrade/`) — amendment [ADR-009](0009-scenario-dsl.md); `from:` пополняет [naming-rules.md](../naming-rules.md).
-- Новый роут `GET /v1/incarnations/{name}/upgrade-paths` — OpenAPI/MCP-поверхность (docs-writer, huma-native).
-- Каталог `upgrade/` требует тестовой конвенции (симметрично `scenario/<name>/tests/`, `migrations/<NNN>_to_<MMM>/tests/`).
-- Разведение перегруженного «migrate» в доке/naming — обязательный побочный эффект (см. несоответствие 1).
+- Upgrade turns from "pin change + drift" into two-phase: structural migration ([ADR-019](0019-state-migration-dsl.md)) + optional host orchestration (the upgrade scenario). Full backward compatibility: a service without `upgrade/` works as it does today (the legacy branch).
+- A second auto-discovery channel for scenarios (`upgrade/`) — an amendment to [ADR-009](0009-scenario-dsl.md); `from:` is added to [naming-rules.md](../naming-rules.md).
+- The new route `GET /v1/incarnations/{name}/upgrade-paths` — an OpenAPI/MCP surface (docs-writer, huma-native).
+- The `upgrade/` directory requires a test convention (symmetric to `scenario/<name>/tests/`, `migrations/<NNN>_to_<MMM>/tests/`).
+- Disambiguating the overloaded "migrate" in the doc/naming is a mandatory side effect (see inconsistency 1).
 
-## Отвергнутые альтернативы
+## Rejected alternatives
 
-- **`to:` в старой версии** — невозможно из-за immutable-тегов (§4).
-- **Fail-closed 422 на undeclared-переход** — ломает патч-апгрейды (§5, ★).
-- **Каталог `migrate/`** — слово трижды перегружено (см. несоответствие 1); выбран `upgrade/`.
-- **Service-scoped `/v1/services/{name}/upgrade-paths`** — `from` инкарнации серверу известен, гонять его query-параметром избыточно и хрупко (§6).
-- **upgrade-сценарии в общем `scenario/`** с дискриминатором — пугают оператора в day-2-списках, ломают удобство ретрая/разделения (§3).
-- **Массовый/цепочечный апгрейд в MVP** — вынесен в future work (§8, NIM-35/[ADR-043](0043-voyage.md)).
+- **`to:` in the old version** — impossible due to immutable tags (§4).
+- **Fail-closed 422 on an undeclared transition** — breaks patch upgrades (§5, ★).
+- **The directory `migrate/`** — the word is overloaded three times (see inconsistency 1); `upgrade/` was chosen.
+- **Service-scoped `/v1/services/{name}/upgrade-paths`** — the incarnation's `from` is known to the server, sending it as a query parameter is redundant and fragile (§6).
+- **Upgrade scenarios in the common `scenario/`** with a discriminator — they alarm the operator in day-2 lists, break the convenience of retry/separation (§3).
+- **Bulk/chained upgrade in the MVP** — moved to future work (§8, NIM-35/[ADR-043](0043-voyage.md)).
 
 ## Future work
 
-- **NIM-35**: массовый апгрейд скоупа через Voyage `kind=upgrade` ([ADR-043](0043-voyage.md)).
-- Авто-чейнинг `v1→v2→v3`, glob/semver в `from:` — при реальном запросе, без breaking change.
+- **NIM-35**: bulk upgrade of a scope via Voyage `kind=upgrade` ([ADR-043](0043-voyage.md)).
+- Auto-chaining `v1→v2→v3`, glob/semver in `from:` — upon a real request, without a breaking change.

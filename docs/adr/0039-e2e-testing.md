@@ -1,58 +1,58 @@
-# ADR-039. E2E-тестирование — три уровня без новой сущности словаря
+# ADR-039. E2E testing — three levels without a new dictionary entity
 
-**Контекст.** Существующие уровни тестов покрывают L0 (unit), L1 (testcontainers per-package integration, `-tags=integration`), L2 ([Trial](0023-trial-test-runner.md#adr-023-тест-раннер-trial-soul-trial-и-dsl-coverage) — hermetic render+migration через `soul-trial` на fixtures). Дыра — L3: воспроизводимый прогон полного feature-flow на живом Keeper-инстансе с реальным bidi-stream к Soul-агентам. Без L3 каждая фича оттестирована по частям, но не как единое целое; регрессии на стыке слоёв (apply_runs lifecycle ↔ RBAC ↔ audit ↔ scenario-runner) пропускаются.
+**Context.** The existing test levels cover L0 (unit), L1 (testcontainers per-package integration, `-tags=integration`), L2 ([Trial](0023-trial-test-runner.md#adr-023-тест-раннер-trial-soul-trial-и-dsl-coverage) — hermetic render+migration via `soul-trial` on fixtures). The gap is L3: a reproducible run of a full feature flow on a live Keeper instance with a real bidi stream to Soul agents. Without L3, each feature is tested in parts but not as a whole; regressions at the layer seams (apply_runs lifecycle ↔ RBAC ↔ audit ↔ scenario-runner) slip through.
 
-**Решение.**
+**Decision.**
 
-1. **L3 не вводит новой сущности словаря.** Harness живёт как обычные Go-tests с build-tag-ами:
-   - `tests/e2e/` + `go test -tags=e2e` — **L3a fast-loop:** soul-stub helper-пакет, testcontainers (PG+Redis+Vault), реальный Keeper-процесс. Покрывает контракт-тесты (apply_runs lifecycle, RBAC, audit, MCP). Прогон — каждый PR.
-   - `tests/e2e-live/` + `go test -tags=e2e_live` — **L3b smoke-loop:** real `soul`-бинарь в Linux-контейнере (testcontainers), Keeper отдельным контейнером, реальный mTLS-handshake, реальный apply мутирует filesystem контейнера. Покрывает flagship-сценарии (install-package, multi-host). Прогон — nightly / on-demand.
-   - `tests/e2e-k8s/` + `go test -tags=e2e_k8s` — **L3c k8s-loop:** kind-cluster ([sigs.k8s.io/kind](https://sigs.k8s.io/kind)), real K8s-deployment Keeper + Soul + Redis-Cluster + PG. Покрывает HA-кейсы (Watchman, Toll, leader-failover). Прогон — weekly / pre-release.
+1. **L3 does not introduce a new dictionary entity.** The harness lives as ordinary Go tests with build tags:
+   - `tests/e2e/` + `go test -tags=e2e` — **L3a fast-loop:** a soul-stub helper package, testcontainers (PG+Redis+Vault), a real Keeper process. Covers contract tests (apply_runs lifecycle, RBAC, audit, MCP). Run — every PR.
+   - `tests/e2e-live/` + `go test -tags=e2e_live` — **L3b smoke-loop:** a real `soul` binary in a Linux container (testcontainers), the Keeper in a separate container, a real mTLS handshake, a real apply mutates the container's filesystem. Covers flagship scenarios (install-package, multi-host). Run — nightly / on-demand.
+   - `tests/e2e-k8s/` + `go test -tags=e2e_k8s` — **L3c k8s-loop:** a kind cluster ([sigs.k8s.io/kind](https://sigs.k8s.io/kind)), a real K8s deployment of Keeper + Soul + Redis-Cluster + PG. Covers HA cases (Watchman, Toll, leader-failover). Run — weekly / pre-release.
 
-2. **Soul-stub — helper-пакет** `tests/e2e/internal/soulstub/`, не отдельный бинарь ([ADR-004](0004-binaries.md#adr-004-раскладка-бинарей--keeper-soul-soul-lint-push-режим--модуль-внутри-keeper): бинари = операторские инструменты с lifecycle; у тестового stub-а его нет). Минимальный fake-Soul: открывает gRPC-стрим, отвечает на `ApplyRequest` предзаписанным `RunResult` из fixture-файлов.
+2. **Soul-stub — a helper package** `tests/e2e/internal/soulstub/`, not a separate binary ([ADR-004](0004-binaries.md#adr-004-binary-layout--keeper-soul-soul-lint-push-mode-as-a-module-inside-keeper): binaries = operator tools with a lifecycle; a test stub has none). A minimal fake Soul: it opens a gRPC stream and answers `ApplyRequest` with a pre-recorded `RunResult` from fixture files.
 
-3. **Логика теста — Go, fixtures + expectations — YAML.** Гранулярность: Go-test определяет flow (setup → run → assert), YAML — параметры setup (souls/soulprint/incarnation/vault-secrets) и форму expectations (apply_runs row counts, incarnation.state shape, audit-events presence, soulprint.facts). **НЕ полный DSL** — никаких `steps[]` / `inject_fault` / cross-step `$state.X`. Логика, если нужна — обычный Go-код.
+3. **Test logic — Go; fixtures + expectations — YAML.** Granularity: the Go test defines the flow (setup → run → assert), YAML defines the setup parameters (souls/soulprint/incarnation/vault-secrets) and the shape of the expectations (apply_runs row counts, incarnation.state shape, audit-events presence, soulprint.facts). **NOT a full DSL** — no `steps[]` / `inject_fault` / cross-step `$state.X`. Logic, if needed, is ordinary Go code.
 
-4. **Source-of-truth для assertion-значений — code enums.** YAML expectations ссылаются на existing values из [`applyrun.Status`](../../keeper/internal/applyrun/applyrun.go) / `audit.EventType` / `incarnation.Status` etc. Harness валидирует expectations против Go-типов на старте теста (fail-early, не fail-late на assert).
+4. **Source of truth for assertion values — code enums.** YAML expectations reference existing values from [`applyrun.Status`](../../keeper/internal/applyrun/applyrun.go) / `audit.EventType` / `incarnation.Status` etc. The harness validates the expectations against the Go types at test start (fail-early, not fail-late on assert).
 
-5. **Git для service-loader** — bare repo per-example, генерируется harness-ом в `TestMain` setup: `git init --bare $TMP/<name>.git` + push снимка `examples/<name>/`. Keeper-конфиг подхватывает `file://$TMP/<name>.git`. Никакого git-daemon-контейнера в дефолте.
+5. **Git for the service loader** — a bare repo per example, generated by the harness in the `TestMain` setup: `git init --bare $TMP/<name>.git` + push of a snapshot of `examples/<name>/`. The Keeper config picks up `file://$TMP/<name>.git`. No git-daemon container by default.
 
-6. **Изоляция от dev-стенда.** Каждый E2E-тест строит свой ephemeral stack через testcontainers (своя PG, своя Redis, свой Vault). НЕ использует общий `dev/docker-compose.yml`.
+6. **Isolation from the dev stand.** Each E2E test builds its own ephemeral stack via testcontainers (its own PG, its own Redis, its own Vault). It does NOT use the shared `dev/docker-compose.yml`.
 
-7. **CI/GitHub Actions — отдельной задачей.** Сначала локальный `make e2e` (Makefile-таргет, спавнит `go test -tags=e2e ./tests/e2e/...`). Workflow yaml — после стабилизации pilot.
+7. **CI/GitHub Actions — as a separate task.** First a local `make e2e` (a Makefile target that spawns `go test -tags=e2e ./tests/e2e/...`). The workflow yaml — after the pilot stabilizes.
 
-**Инварианты.**
+**Invariants.**
 
-- Никаких новых бинарей ([ADR-004](0004-binaries.md#adr-004-раскладка-бинарей--keeper-soul-soul-lint-push-режим--модуль-внутри-keeper)).
-- Никаких новых сущностей словаря (без propose-and-wait по `Pilgrimage`/`Crucible`/`soul-stub` — это test-only-вспомогательное, не часть архитектуры).
-- DSL-значения в YAML expectations = code enums (no string drift).
-- L3a Go-test тестирует контракт keeper↔soul, **не** реальное apply (для этого L3b).
-- `examples/` остаются доменно-чистыми; тестовая обвязка живёт в `tests/e2e/<name>/`, а не в `examples/<name>/`.
+- No new binaries ([ADR-004](0004-binaries.md#adr-004-binary-layout--keeper-soul-soul-lint-push-mode-as-a-module-inside-keeper)).
+- No new dictionary entities (no propose-and-wait for `Pilgrimage`/`Crucible`/`soul-stub` — this is test-only tooling, not part of the architecture).
+- DSL values in the YAML expectations = code enums (no string drift).
+- The L3a Go test tests the keeper↔soul contract, **not** a real apply (that is what L3b is for).
+- `examples/` stay domain-clean; the test scaffolding lives in `tests/e2e/<name>/`, not in `examples/<name>/`.
 
-**Отвергнутые альтернативы.**
+**Rejected alternatives.**
 
-- (а) **Новый бинарь `cmd/soul-stub/`** — избыточно vs helper-пакет ([ADR-004](0004-binaries.md#adr-004-раскладка-бинарей--keeper-soul-soul-lint-push-режим--модуль-внутри-keeper) трактует бинарь как операторский инструмент, не test-fixture).
-- (б) **Новое имя L3-сущности (`Pilgrimage`/`Crucible`)** — propose-and-wait для одной фичи теста = bloat словаря; build-tag не требует имени.
-- (в) **Расширение Trial до L3** — Trial = hermetic by definition ([ADR-023](0023-trial-test-runner.md#adr-023-тест-раннер-trial-soul-trial-и-dsl-coverage)), L3 живой Keeper-процесс → размывает определение Trial.
-- (г) **Полный YAML-DSL со `steps[]`/`inject_fault`/cross-step refs** — путь к самописному языку, у нас уже есть Go-тесты для логики.
-- (д) **gitea / git-daemon testcontainer как default** — heavy, bare repo в `$TMP` проще и достаточен для file://-загрузчика Keeper-а.
-- (е) **GitHub Actions yaml внутри этого ADR** — противоречит инварианту «CI локально в Makefile» (репо пока локальный/приватный), workflow добавляется отдельной задачей.
+- (a) **A new binary `cmd/soul-stub/`** — redundant vs a helper package ([ADR-004](0004-binaries.md#adr-004-binary-layout--keeper-soul-soul-lint-push-mode-as-a-module-inside-keeper) treats a binary as an operator tool, not a test fixture).
+- (b) **A new name for the L3 entity (`Pilgrimage`/`Crucible`)** — propose-and-wait for a single test feature = dictionary bloat; a build tag needs no name.
+- (c) **Extending Trial to L3** — Trial = hermetic by definition ([ADR-023](0023-trial-test-runner.md#adr-023-тест-раннер-trial-soul-trial-и-dsl-coverage)), an L3 live Keeper process → blurs the definition of Trial.
+- (d) **A full YAML DSL with `steps[]`/`inject_fault`/cross-step refs** — a path to a home-grown language; we already have Go tests for logic.
+- (e) **A gitea / git-daemon testcontainer as the default** — heavy; a bare repo in `$TMP` is simpler and sufficient for the Keeper's file:// loader.
+- (f) **GitHub Actions yaml inside this ADR** — contradicts the "CI local in the Makefile" invariant (the repo is still local/private), the workflow is added as a separate task.
 
-**Что отложено.**
+**Deferred.**
 
-- **L3b real-soul-in-container** — отдельный slice после стабилизации L3a pilot.
-- **L3c kind-cluster** — отдельный slice; kind-config пока не пишется.
-- **Chaos-engineering (litmus / chaosmesh)** — отдельная подсистема.
-- **Manual-soak (L4)** — пост первой проды.
-- **Cross-keeper fault-injection** — после Toll-impl.
+- **L3b real-soul-in-container** — a separate slice after the L3a pilot stabilizes.
+- **L3c kind cluster** — a separate slice; the kind config is not written yet.
+- **Chaos engineering (litmus / chaosmesh)** — a separate subsystem.
+- **Manual soak (L4)** — post first production.
+- **Cross-keeper fault injection** — after the Toll implementation.
 
-**Amendment 2026-05-26 (L3a-impl particulars).** При переходе pilot → L3a-implementation slice зафиксированы конкретные решения, не противоречащие исходному ADR, но необходимые для воспроизводимости harness-а:
+**Amendment 2026-05-26 (L3a-impl particulars).** During the transition pilot → L3a-implementation slice, specific decisions were fixed that do not contradict the original ADR but are necessary for harness reproducibility:
 
-1. **Spawn инфры — testcontainers-go (PG/Redis/Vault),** Keeper — sub-process реального бинаря `keeper` (не in-process импорт). harness НЕ импортирует `keeper/internal/*` (Go-internal rules); все DB/Vault-операции — direct SQL / direct Vault HTTP API. Drift между harness-овским CRUD-каркасом и реальным schema-set — известный риск, синхронизация ручная при schema-change.
-2. **Keeper-server TLS cert** выпускается harness-ом из Vault PKI (`harness.IssueKeeperServerCert`), симметрично `dev/provision.sh` шаг 7. SAN: `127.0.0.1` + `localhost`, TTL 24h.
-3. **Vault test-secrets через direct HTTP API.** `harness.InitVaultTestSecrets` поднимает PKI mount + root CA + role `soul-seed` + JWT signing-key. Формат signing-key — **HS256: 32B base64-encoded string** в поле `signing_key` (см. `keeper/internal/jwt/issuer.go::minSigningKeyBytes`, `dev/provision.sh:88-92`). НЕ Ed25519 PEM. `sigil-signing-key` НЕ pre-seed-ится — `KeyService` introduces ключ runtime через свой API (см. `keeper/internal/sigil/keyservice.go`); pilot smoke-кейс использует только core-модули без plugin-Sigil-подписи.
-4. **`keeper init --credential-out=<path>`** — точная форма CLI (см. `keeper/cmd/keeper/main.go::runInit`). Флаги `--jwt-out`/`--non-interactive` НЕ существуют; init non-interactive by default. harness читает выдачу credential-файла после init для последующих Operator-API-вызовов.
-5. **`SOUL_STACK_ALLOW_FILE_REPOS=1`** в env subprocess-а keeper — обязательно для service-loader-а с `file://`-URL в test-режиме.
-6. **Pre-auth регистрация soul-stub в БД** — Vault PKI leaf-cert на SID + direct SQL INSERT в `souls`/`soul_seeds`. Минует `bootstrap.Bootstrap` (это L3b territory); audit-событие `soul.bootstrapped` НЕ пишется harness-ом.
+1. **Spawning infra — testcontainers-go (PG/Redis/Vault),** the Keeper — a sub-process of the real `keeper` binary (not an in-process import). The harness does NOT import `keeper/internal/*` (Go-internal rules); all DB/Vault operations are direct SQL / direct Vault HTTP API. Drift between the harness CRUD scaffold and the real schema set is a known risk; synchronization is manual on a schema change.
+2. **The Keeper-server TLS cert** is issued by the harness from Vault PKI (`harness.IssueKeeperServerCert`), symmetric to `dev/provision.sh` step 7. SAN: `127.0.0.1` + `localhost`, TTL 24h.
+3. **Vault test-secrets via the direct HTTP API.** `harness.InitVaultTestSecrets` brings up a PKI mount + root CA + the `soul-seed` role + a JWT signing key. The signing-key format is **HS256: a 32B base64-encoded string** in the `signing_key` field (see `keeper/internal/jwt/issuer.go::minSigningKeyBytes`, `dev/provision.sh:88-92`). NOT an Ed25519 PEM. `sigil-signing-key` is NOT pre-seeded — `KeyService` introduces the key at runtime through its own API (see `keeper/internal/sigil/keyservice.go`); the pilot smoke case uses only core modules without plugin-Sigil signing.
+4. **`keeper init --credential-out=<path>`** — the exact CLI form (see `keeper/cmd/keeper/main.go::runInit`). The flags `--jwt-out`/`--non-interactive` do NOT exist; init is non-interactive by default. The harness reads the emitted credential file after init for subsequent Operator-API calls.
+5. **`SOUL_STACK_ALLOW_FILE_REPOS=1`** in the keeper subprocess env — required for the service loader with a `file://` URL in test mode.
+6. **Pre-auth registration of the soul-stub in the DB** — a Vault PKI leaf cert for the SID + a direct SQL INSERT into `souls`/`soul_seeds`. It bypasses `bootstrap.Bootstrap` (that is L3b territory); the audit event `soul.bootstrapped` is NOT written by the harness.
 
-**Amendment 2026-07-06 (L4 — cloud live-run orchestrator, NIM-31).** L4 из «только manual-soak, пост первой проды» дополнен **повторяемым облачным оркестратором** `scripts/e2e-cloud/` — bash поверх Operator API keeper'а, гоняет create / day-2 / destroy-сценарии против **постоянного** keeper'а на VM через teleport (`EXEC_MODE=tsh`) либо локального dev-стенда (`EXEC_MODE=local`). Это **operator-tooling, не harness**: он не поднимает стенд сам и **не подпадает под ephemeral-изоляцию §6** (та про Go-тесты L3a/L3b, каждый со своим testcontainers-стеком) — оркестратор работает против уже-живого keeper'а. Единственная сетевая граница — функция `keeper_api`; классификация / опрос / ассерты чисты и покрыты docker-free guard-тестами (`make check-e2e-cloud`, входит в `check`). Успех — по apply_run (`.status==success` И хосты `success`/`no_match`), вторично `incarnation.status==ready`. Отчёты — `.pm/e2e-reports/` (gitignored, вне git). Облачный bring-up (`.pm/scripts/*`) остаётся локальным — WB-специфика, в git не коммитится. `make e2e-cloud` требует облака/teleport и **не входит** в `make check` (симметрично `e2e` / `e2e-live`). Runbook — [testing/e2e-cloud.md](../testing/e2e-cloud.md).
+**Amendment 2026-07-06 (L4 — cloud live-run orchestrator, NIM-31).** L4, from "manual soak only, post first production," is extended with a **repeatable cloud orchestrator** `scripts/e2e-cloud/` — bash on top of the keeper's Operator API, running create / day-2 / destroy scenarios against a **persistent** keeper on a VM via teleport (`EXEC_MODE=tsh`) or a local dev stand (`EXEC_MODE=local`). This is **operator tooling, not a harness**: it does not bring up the stand itself and is **not subject to the ephemeral isolation of §6** (that is about the L3a/L3b Go tests, each with its own testcontainers stack) — the orchestrator works against an already-live keeper. The only network boundary is the `keeper_api` function; classification / polling / asserts are pure and covered by docker-free guard tests (`make check-e2e-cloud`, part of `check`). Success — by apply_run (`.status==success` AND hosts `success`/`no_match`), secondarily `incarnation.status==ready`. Reports — `.pm/e2e-reports/` (gitignored, outside git). The cloud bring-up (`.pm/scripts/*`) stays local — WB-specific, not committed to git. `make e2e-cloud` requires cloud/teleport and is **not part** of `make check` (symmetric to `e2e` / `e2e-live`). Runbook — [testing/e2e-cloud.md](../testing/e2e-cloud.md).
