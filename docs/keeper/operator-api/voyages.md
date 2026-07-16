@@ -1,64 +1,64 @@
-# Voyage — endpoints унифицированного батчевого прогона
+# Voyage - endpoints of a unified batch run
 
-Доменная секция [Operator API](../operator-api.md): эндпоинты `/v1/voyages*` (батч N инкарнаций по scenario / N хостов по command, [ADR-043](../../adr/0043-voyage.md#adr-043-voyage--унифицированный-батчевый-прогон)). Conventions, error-format, pagination, mapping-таблица — в корневом [operator-api.md](../operator-api.md). MCP-сторона — [mcp-tools/voyages.md](../mcp-tools/voyages.md).
+Domain section [Operator API](../operator-api.md): endpoints `/v1/voyages*` (batch N incarnations by scenario / N hosts by command, [ADR-043](../../adr/0043-voyage.md)). Conventions, error-format, pagination, mapping table - in the root [operator-api.md](../operator-api.md). MCP side - [mcp-tools/voyages.md](../mcp-tools/voyages.md).
 
-## Endpoint-секции
+## Endpoint sections
 
-Mapping endpoint ↔ MCP-tool ↔ permission (таблица 5 роутов + RBAC-by-kind) — в корневом [operator-api.md → Voyage (5)](../operator-api.md#voyage-5--унифицированный-батчевый-прогон-adr-043).
+Mapping endpoint ↔ MCP-tool ↔ permission (table of 5 routes + RBAC-by-kind) - in the root [operator-api.md → Voyage (5)](../operator-api.md).
 
-Унифицированный батчевый прогон ([ADR-043](../../adr/0043-voyage.md#adr-043-voyage--унифицированный-батчевый-прогон)): `kind=scenario` — применить named scenario к набору ИНКАРНАЦИЙ (батч = N инкарнаций по Leg-ам); `kind=command` — выполнить whitelisted-модуль на наборе ХОСТОВ (батч = N хостов, `incarnation.state` не трогается). Полная схема request/response — [`openapi.yaml`](../openapi.yaml) (`VoyageCreateRequest` / `VoyageCreateReply` / `VoyagePreviewReply`). Ниже — нормативная семантика поведения, на которую опирается контракт.
+Unified batch run ([ADR-043](../../adr/0043-voyage.md)): `kind=scenario` — apply named scenario to a set of INCARNATIONS (batch = N incarnations by Legs); `kind=command` — execute a whitelisted module on a set of HOSTS (batch = N hosts, `incarnation.state` is not touched). The full request/response scheme is [`openapi.yaml`](../openapi.yaml) (`VoyageCreateRequest` / `VoyageCreateReply` / `VoyagePreviewReply`). Below is the normative semantics of behavior on which the contract is based.
 
-#### `POST /v1/voyages` — создать Voyage
+#### `POST /v1/voyages` - create Voyage
 
-Permission: **RBAC-by-kind** ([ADR-043 §6](../../adr/0043-voyage.md#adr-043-voyage--унифицированный-батчевый-прогон), security-критичный fail-closed guard). Permission выбирается по `kind` из тела (`scenario`→`incarnation.run`, `command`→`errand.run`) — middleware-route этого не может (kind виден только после декода body), поэтому проверка живёт внутри handler-а. MCP-tool: `keeper.voyage.start`.
+Permission: **RBAC-by-kind** ([ADR-043 §6](../../adr/0043-voyage.md), security-critical fail-closed guard). Permission is selected by `kind` from the body (`scenario`→`incarnation.run`, `command`→`errand.run`) - middleware-route cannot do this (kind is visible only after the body is decoded), so the check lives inside the handler. MCP-tool: `keeper.voyage.start`.
 
-Async-by-default: **202** + `{voyage_id, kind, scope_size, status, location}` + заголовок `Location: /v1/voyages/{id}`. VoyageWorker подбирает строку через claim-loop; прогресс — `GET /v1/voyages/{id}`.
+Async-by-default: **202** + `{voyage_id, kind, scope_size, status, location}` + header `Location: /v1/voyages/{id}`. VoyageWorker selects a string using claim-loop; progress - `GET /v1/voyages/{id}`.
 
-**Target-резолв и scope-границы:**
+**Target resolution and scope boundaries:**
 
-- **kind=scenario** — bare-check `incarnation.run` (быстрый отказ до резолва), затем per-incarnation scope-check над каждой резолвнутой инкарнацией (её covens ∪ `{name}`): старт на инкарнации вне permission-скоупа = privilege escalation → **403**.
-- **kind=command** — target ∩ Purview оператора ([ADR-047 §S4](../../adr/0047-purview.md#s4--target--purview-для-command-пути-voyage-security-fix), security-fix). См. ниже.
+- **kind=scenario** — bare-check `incarnation.run` (quick failure before resolution), then per-incarnation scope-check over each resolved incarnation (its covens ∪ `{name}`): start on incarnation outside the permission scope = privilege escalation → **403**.
+- **kind=command** - target ∩ Purview operator ([ADR-047 §S4](../../adr/0047-purview.md), security-fix). See below.
 
-**Errors:** `400` malformed JSON; `401` `unauthenticated` (нет/невалиден JWT) или `operator-revoked-token` (AID ревокнут, командный existence-gate, см. ниже); `403` RBAC deny по kind / явный чужой хост (command) / инкарнация вне scope (scenario); `404` явная инкарнация не существует (scenario); `422` невалидный `kind` / пустой `scenario_name`/`module` по kind / нет target / невалидный SID/coven/имя / `where` > 4 KiB / `on_failure` не из `{abort, continue}` / `batch_size`+`batch_percent` одновременно / `batch_size`+`batch_mode=window` / диапазоны / пустой резолв (`voyage_empty_target`) / scope > `voyage.max_scope` (`voyage_scope_too_large`) / эффективный batch выше `voyage.max_batch_size` (`voyage_batch_size_too_large`); `429` `tempo-exceeded` (rate-limit, см. ниже); `500` orchestrator не сконфигурирован / БД-сбой.
+**Errors:** `400` malformed JSON; `401` `unauthenticated` (no/invalid JWT) or `operator-revoked-token` (AID revoke, command existence-gate, see below); `403` RBAC deny by kind / explicit foreign host (command) / incarnation outside scope (scenario); `404` explicit incarnation does not exist (scenario); `422` invalid `kind` / empty `scenario_name`/`module` by kind / no target / invalid SID/coven/name / `where` > 4 KiB / `on_failure` not from `{abort, continue}` / `batch_size`+`batch_percent` at the same time / `batch_size`+`batch_mode=window` / ranges / empty resolve (`voyage_empty_target`) / scope > `voyage.max_scope` (`voyage_scope_too_large`) / effective batch above `voyage.max_batch_size` (`voyage_batch_size_too_large`); `429` `tempo-exceeded` (rate-limit, see below); `500` orchestrator not configured / DB failure.
 
-> **`input` не логируется.** Audit-события `scenario_run.started` / `command_run.invoked` не несут тело `input` (инвариант A ADR-027).
+> **`input` is not logged.** Audit events `scenario_run.started` / `command_run.invoked` do not carry the body `input` (invariant A of ADR-027).
 
-##### command ∩ Purview — security-fix с изменением поведения
+##### command ∩ Purview - security-fix with behavior change
 
-**Изменение поведения для scoped-ролей.** Раньше `kind=command` резолвил target **cluster-wide** (bare NoSelector, без пересечения с Purview): scoped-Архонт с `errand.run on coven=A` мог запустить command-Voyage на `coven=B`. Теперь резолвнутый target **пересекается с Purview** оператора через тот же `soulpurview`-резолвер, что фильтрует `GET /v1/souls` ([ADR-047 §S4](../../adr/0047-purview.md#s4--target--purview-для-command-пути-voyage-security-fix)). Покрытие = `target ∩ ResolvePurview(aid, "errand", "run")`. **Для `Unrestricted` / cluster-admin (`*`-permission) поведение не меняется** — `Unrestricted` → весь флот, как раньше. Зафиксировано как **security-fix в release-notes**.
+**Change behavior for scoped roles.** Previously, `kind=command` resolved target **cluster-wide** (bare NoSelector, no intersection with Purview): scoped-Archon with `errand.run on coven=A` could run command-Voyage on `coven=B`. Now the resolved target **intersects with the Purview** operator through the same `soulpurview` resolver that filters `GET /v1/souls` ([ADR-047 §S4](../../adr/0047-purview.md)). Coverage = `target ∩ ResolvePurview(aid, "errand", "run")`. **For `Unrestricted` / cluster-admin (`*`-permission) the behavior does not change** - `Unrestricted` → all Souls, as before. Recorded as **security-fix in release-notes**.
 
-Гибрид-семантика — три ветки по форме target-а (выбор пользователя 2026-06-09):
+Hybrid semantics - three branches in the target form (user choice 06/09/2026):
 
-1. **Явный чужой хост в `sids[]`** (оператор перечислил конкретные SID, часть вне Purview) → **403** (anti-escalation, parity со scenario-путём). Явное указание чужого хоста — попытка эскалации, а не широкий фильтр; молчаливое урезание тут было бы маскировкой.
-2. **Широкий target** (`coven=…` / `where:`-предикат, late-binding) → **урезается** до `target ∩ Purview` без отказа (как list-видимость: оператор получает то, что внутри его границы).
-3. **Пустое пересечение** (после урезания не осталось хостов) → **422 `voyage_empty_target`** (валидный запрос, нечего исполнять — отличаем от 403-эскалации).
+1. **Explicit foreign host in `sids[]`** (the operator listed specific SIDs, some outside Purview) → **403** (anti-escalation, parity with scenario path). Explicitly specifying a foreign host is an attempt at escalation, not a broad filter; silent cuts here would be a disguise.
+2. **Wide target** (`coven=…` / `where:`-predicate, late-binding) → **truncates** to `target ∩ Purview` without failure (like list-visibility: the operator gets what's inside its bound).
+3. **Empty intersection** (after pruning there are no hosts left) → **422 `voyage_empty_target`** (valid request, nothing to execute - distinguishable from 403 escalation).
 
-**Existence-gate** — единый, через `ResolvePurview("errand","run")`: «держит ли оператор право хоть в каком-то scope» проверяется тем же резолвом, что даёт scope-границу — без отдельного nil-context bare-check-а (одиночная `Check(nil)` ложно денит scoped-роль с непустым scope). Пустой Purview (`Scope.Empty`: ни одного измерения и не `Unrestricted`) → отказ ДО резолва target-а; причина классифицируется enforcer-ом: **revoked-токен → `operator-revoked-token` (401)**, no-perm → **403** (`operator lacks required permission errand.run`).
+**Existence-gate** - single, through `ResolvePurview("errand","run")`: "whether the operator holds the right in at least some scope" is checked by the same resolve that gives the scope boundary - without a separate nil-context bare-check (single `Check(nil)` falsely denies a scoped role with a non-empty scope). Empty Purview (`Scope.Empty`: no measurements and no `Unrestricted`) → failure BEFORE resolving the target; the reason is classified by the enforcer: **revoked-token → `operator-revoked-token` (401)**, no-perm → **403** (`operator lacks required permission errand.run`).
 
-> **AND-семантика `coven` для command.** `coven=[A,B]` означает хост, входящий во **ВСЕ** перечисленные covens (`souls.coven @> [A,B]`) — намеренно, в отличие от scenario-пути (где coven — один env-тег фильтра). Это AND-merge security-инвариант ([ADR-043 §5](../../adr/0043-voyage.md#adr-043-voyage--унифицированный-батчевый-прогон)): invocation сужает scope, не расширяет.
+> **AND semantics `coven` for command.** `coven=[A,B]` means a host that is included in **ALL** listed covens (`souls.coven @> [A,B]`) - intentionally, in contrast to the scenario path (where coven is one filter env tag). This is an AND-merge security invariant ([ADR-043 §5](../../adr/0043-voyage.md)): invocation narrows the scope, does not expand.
 
-> **soulprint/state-измерения Purview** в command∩Purview пока под-показ (fail-closed: при неполной поддержке измерения резолвер скорее урежет свой хост, доступный ТОЛЬКО по soulprint, чем покажет чужой); coven/regex/host работают полноценно (S3b-2b отложен).
+> **soulprint/state-measurements Purview** in command∩Purview still under-display (fail-closed: with incomplete measurement support, the resolver would rather cut down its host, accessible ONLY by soulprint, than show someone else's); coven/regex/host are working fully (S3b-2b is postponed).
 
 ##### Tempo rate-limit
 
-`POST /v1/voyages` — resolver-тяжёлый write-эндпоинт под [Tempo](../config.md#tempo) per-AID rate-limiter ([ADR-050](../../adr/0050-tempo.md#adr-050-tempo--per-aid-rate-limiting-write-api)): bucket `voyage_create` (default `10 rps`, burst `20`). Превышение → **429 `tempo-exceeded`** + `Retry-After`. При недоступном Redis лимит fail-OPEN (passthrough). GET/list/cancel не лимитятся (дёшевы).
+`POST /v1/voyages` — resolver-heavy write endpoint under [Tempo](../config.md#tempo) per-AID rate-limiter ([ADR-050](../../adr/0050-tempo.md#adr-050-tempo--per-aid-rate-limiting-write-api)): bucket `voyage_create` (default `10 rps`, burst `20`). Excess → **429 `tempo-exceeded`** + `Retry-After`. If Redis is unavailable, the limit is fail-OPEN (passthrough). GET/list/cancel are not limited (cheap).
 
-#### `POST /v1/voyages/preview` — dry-resolve scope без создания Voyage
+#### `POST /v1/voyages/preview` — dry-resolve scope without creating Voyage
 
-Permission: **RBAC-by-kind** (та же, что Create). REST-only (MCP-tool нет). Назначение — **предпоказ числа батчей в UI** для late-binding target-а (`coven` / `require_alive`, где число хостов резолвит Keeper): прогоняет тот же резолв и те же гейты, что Create, но **не пишет** в `voyages`/`voyage_targets` и **не раскрывает SID-список** — отдаёт только числа. Для snapshot-таргета (явные `incarnations[]`/`sids[]`) клиент считает число батчей сам — эндпоинт не обязателен.
+Permission: **RBAC-by-kind** (same as Create). REST-only (no MCP-tool). Purpose - **predisplay of the number of batches in the UI** for late-binding target (`coven` / `require_alive`, where the number of hosts is resolved by Keeper): runs the same resolve and the same gates as Create, but **does not write** to `voyages`/`voyage_targets` and **does not expand the SID list** - gives only numbers. For a snapshot target (explicit `incarnations[]`/`sids[]`), the client counts the number of batches itself - the endpoint is not required.
 
-**Request** — тот же body, что `POST /v1/voyages` (`VoyageCreateRequest`). Учитываются (влияют на резолв/арифметику): `target`, `kind`, `batch`/`batch_size`/`batch_percent`/`batch_mode`, `concurrency`, `max_failures`, `require_alive`. Игнорируются (не читаются в reply): `dry_run`, `schedule_at`, `inter_batch_interval_ms`, `inter_unit_interval_ms`, `on_failure`, `input`.
+**Request** - the same body as `POST /v1/voyages` (`VoyageCreateRequest`). Taken into account (affect resolution/arithmetic): `target`, `kind`, `batch`/`batch_size`/`batch_percent`/`batch_mode`, `concurrency`, `max_failures`, `require_alive`. Ignored (not read in reply): `dry_run`, `schedule_at`, `inter_batch_interval_ms`, `inter_unit_interval_ms`, `on_failure`, `input`.
 
 **Response `200 VoyagePreviewReply`:**
 
-| Поле | Тип | Смысл |
+| Field | Type | Meaning |
 |---|---|---|
-| `kind` | `string` | `scenario` / `command` (эхо). |
-| `scope_size` | `int` | Число резолвнутых единиц (инкарнаций / хостов). SID-список НЕ раскрывается. |
-| `total_batches` | `int` | Число Leg-ов (barrier) либо `1` (window). 0 невозможен — пустой scope отсечён 422 до построения reply. |
-| `batch_mode` | `string` | `barrier` / `window`. Присутствует ВСЕГДА — объясняет семантику остальных полей. |
-| `effective_batch_size` | `int?` | Резолвнутый размер Leg (barrier). **Опущен** при `batch_mode=window` (ширина окна = `concurrency`, не Leg — UI читает `concurrency`) либо если весь scope идёт одним Leg (batch не задан). |
+| `kind` | `string` | `scenario` / `command` (echo). |
+| `scope_size` | `int` | Number of resolved units (incarnations/hosts). The SID list is NOT expanded. |
+| `total_batches` | `int` | Number of Legs (barrier) or `1` (window). 0 is not possible - the empty scope is cut off 422 before the reply is built. |
+| `batch_mode` | `string` | `barrier` / `window`. ALWAYS present - explains the semantics of the remaining fields. |
+| `effective_batch_size` | `int?` | Resolved Leg (barrier) size. **Omitted** for `batch_mode=window` (window width = `concurrency`, not Leg - UI reads `concurrency`) or if the entire scope is one Leg (batch is not specified). |
 
-**Консистентность с Create** — preview отказывает РОВНО там же: тот же общий путь декода/валидации/резолва. `403`/`404`/`422` приходят при тех же условиях, что у Create (scenario — per-incarnation scope-check; command — гибрид-семантика 403/урезание/422; scope > `voyage.max_scope` → 422). Rate-limited через **собственный** Tempo-bucket `voyage_preview` ([ADR-050 amendment](../../adr/0050-tempo.md#adr-050-tempo--per-aid-rate-limiting-write-api)) — **более мягкий**, чем create (default `30 rps`, burst `60` против `10`/`20`), потому что preview по эффекту read-like (без persist/audit), но resolver-heavy по стоимости. Превышение → **429 `tempo-exceeded`** + `Retry-After`.
+**Consistency with Create** - preview fails EXACTLY in the same place: the same general decode/validation/resolve path. `403`/`404`/`422` come under the same conditions as Create (scenario - per-incarnation scope-check; command - hybrid-semantics 403/cut/422; scope > `voyage.max_scope` → 422). Rate-limited via **own** Tempo-bucket `voyage_preview` ([ADR-050 amendment](../../adr/0050-tempo.md#adr-050-tempo--per-aid-rate-limiting-write-api)) - **softer** than create (default `30 rps`, burst `60` vs `10`/`20`), because preview has a read-like effect (without persist/audit), but the resolver is heavy in cost. Excess → **429 `tempo-exceeded`** + `Retry-After`.
 
-> **Note (mapping↔router).** В [`router.go`](../../../keeper/internal/api/router.go) у Voyage есть шестой read-роут — `GET /v1/voyages/{id}/targets` (All-runs drill, ADR-043 S5), не сведённый в корневую mapping-таблицу `### Voyage (5)`. Его MCP-симметрии нет (REST-only). Сведение — отдельный doc-PR (см. отчёт docs-writer по drift).
+> **Note (mapping↔router).** In [`router.go`](../../../keeper/internal/api/router.go) Voyage has a sixth read route - `GET /v1/voyages/{id}/targets` (All-runs drill, ADR-043 S5), not reduced to the root mapping table `### Voyage (5)`. There is no MCP symmetry (REST-only). Mixing - separate doc-PR (see docs-writer's report on drift).

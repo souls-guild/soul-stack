@@ -79,9 +79,9 @@ Moved to [`docs/adr/0006-cache-redis.md`](adr/0006-cache-redis.md). Redis - hear
 
 Moved to [`docs/adr/0007-versioning-git-ref.md`](adr/0007-versioning-git-ref.md). Artifact version (Service / Destiny / Module / Plugin) = git ref, there is no `version:` field in manifests; dependencies - strictly `ref:` (tag or branch), without semver-range. Exceptions (not "artifact versions"): `state_schema_version`, `protocol_version`, `service_version`, Go modules inside a repo (shared semver tag).
 
-### [ADR-008. Coven - stable boolean tags only](adr/0008-coven-stable-tags.md)
+### [ADR-008. Coven - stable logical tags only](adr/0008-coven-stable-tags.md)
 
-Moved to [`docs/adr/0008-coven-stable-tags.md`](adr/0008-coven-stable-tags.md). Coven - only stable logical tags (cluster / project / environment / data center); `incarnation.name` remains the root Coven label; convention `{incarnation.name}-{role}` deleted; role NOT Coven (declared in spec / actual via probe); essence role-agnostic. Amendments: environment = special case Coven (first-class `Environment` rejected, per-Coven RBAC-scope implemented); cross-incarnation was filmed on the Voyage layer; Choir ≠ coven.
+Moved to [`docs/adr/0008-coven-stable-tags.md`](adr/0008-coven-stable-tags.md). Coven - only stable logical tags (cluster / project / environment / data center); `incarnation.name` remains the root Coven label; convention `{incarnation.name}-{role}` deleted; role NOT Coven (declared in spec / actual via probe); essence role-agnostic. Amendments: environment = special case Coven (first-class `Environment` rejected, per-Coven RBAC-scope implemented); cross-incarnation was lifted at the Voyage layer; Choir ≠ coven.
 
 ### [ADR-009. Scenario - a complete DSL of destiny tasks; border with destiny - recommendation](adr/0009-scenario-dsl.md)
 
@@ -105,7 +105,7 @@ Moved to [`docs/adr/0013-bootstrap-archon.md`](adr/0013-bootstrap-archon.md). Bo
 
 ### [ADR-014. Operator identity model (Archon)](adr/0014-operator-identity.md)
 
-Moved to [`docs/adr/0014-operator-identity.md`](adr/0014-operator-identity.md). Registry `operators` in Postgres (mandatory, with real FK), credential - JWT (signing key from Vault KV), identifier AID (charset `[a-z0-9._@-]`, prefix `archon-` removed by amendment); creation/revolution lifecycle via OpenAPI/MCP; near-instant revocation via RBAC snapshot (amendment).
+Moved to [`docs/adr/0014-operator-identity.md`](adr/0014-operator-identity.md). Registry `operators` in Postgres (mandatory, with real FK), credential - JWT (signing key from Vault KV), identifier AID (charset `[a-z0-9._@-]`, prefix `archon-` removed by amendment); creation/revocation lifecycle via OpenAPI/MCP; near-instant revocation via RBAC snapshot (amendment).
 
 ### [ADR-015. Core MVP modules: exact list](adr/0015-core-modules-mvp.md)
 
@@ -192,7 +192,7 @@ Moved to [`docs/adr/0038-toll.md`](adr/0038-toll.md). Passive cluster-level dete
 
 ### [ADR-039. E2E testing - three levels without new dictionary entity](adr/0039-e2e-testing.md)
 
-Moved to [`docs/adr/0039-e2e-testing.md`](adr/0039-e2e-testing.md). L3 e2e without a new dictionary entity, via build-tag Go-tests: L3a fast-loop (soul-stub helper + testcontainers + real Keeper process, every-PR), L3b smoke-loop (real `soul` binary in a container, nightly), L3c k8s-loop (kind-cluster, HA-cases, weekly); fixtures+expectations in YAML, assertion-values ​​= code enums. Amendment: L3a-impl particulars.
+Moved to [`docs/adr/0039-e2e-testing.md`](adr/0039-e2e-testing.md). L3 e2e without a new dictionary entity, via build-tag Go-tests: L3a fast-loop (soul-stub helper + testcontainers + real Keeper process, every-PR), L3b smoke-loop (real `soul` binary in a container, nightly), L3c k8s-loop (kind-cluster, HA-cases, weekly); fixtures+expectations in YAML, assertion-values = code enums. Amendment: L3a-impl particulars.
 
 ### [ADR-040. Tide — invocation-time scope chunking + target-override](adr/0040-tide.md)
 
@@ -217,17 +217,17 @@ Moved to [`docs/adr/0044-choir.md`](adr/0044-choir.md). Choir - first-class name
 ## Topology
 
 ```
-                          ┌──────────────────────────┐
-│ Operator / CI │
-                          │  OpenAPI · MCP · gRPC    │
-│ (CLI is a thin wrapper) │
-                          └──────────────┬───────────┘
-                                         │  mTLS
-                                         ▼
+                          ┌─────────────────────────┐
+                          │      Operator / CI      │
+                          │  OpenAPI · MCP · gRPC   │
+                          │ (CLI is a thin wrapper) │
+                          └─────────────┬───────────┘
+                                        │  mTLS
+                                        ▼
    ┌──────────────────────────────────────────────────────────────┐
-│ Keeper cluster (HA, stateless) │
+   │                 Keeper cluster (HA, stateless)                │
    │     ┌────────┐   ┌────────┐   ┌────────┐                     │
-│ │ keeper │ │ keeper │ │ keeper │ … N instances │
+   │     │ keeper │   │ keeper │   │ keeper │   …  N instances     │
    │     │  K1    │   │  K2    │   │  KN    │                     │
    │     │ + push │   │ + push │   │ + push │                     │
    │     └───┬────┘   └───┬────┘   └───┬────┘                     │
@@ -243,20 +243,20 @@ Moved to [`docs/adr/0044-choir.md`](adr/0044-choir.md). Choir - first-class name
    │      │ pub-sub  │         │  destiny,…  │                    │
    │      └──────────┘         └─────────────┘                    │
    └─────┬─────────────────────────────────────┬──────────────────┘
-│ pull (Soul initiates) │ push (Keeper initiates)
-         │ gRPC bidi + mTLS                    │ SSH (Vault SSH CA / static / Teleport — open Q)
-         ▼                                     ▼
+         │ pull (Soul initiates)                │ push (Keeper initiates)
+         │ gRPC bidi + mTLS                     │ SSH (Vault SSH CA / static / Teleport — open Q)
+         ▼                                      ▼
    ┌──────────┐                          ┌──────────┐
-│ soul │ │ host │ Managed hosts:
-│ (demon, │ │ (without │ same entry
-│ agent│ │ agent, │ in the registry `souls`,
-│ mode) │ │ push) │ different transport.
+   │   soul   │                          │   host   │      Managed hosts:
+   │ (daemon, │                          │ (no      │      same entry in the
+   │  agent   │                          │  agent,  │      `souls` registry,
+   │  mode)   │                          │  push)   │      different transport.
    └──────────┘                          └──────────┘
 
 In parallel:
    ┌──────────────┐
-│ soul-lint │ offline validation of Destiny + Essence
-│ (CI / dev) │ on the developer side, without Keeper
+   │  soul-lint   │  offline validation of Destiny + Essence
+   │  (CI / dev)  │  on the developer side, without Keeper
    └──────────────┘
 ```
 
@@ -408,7 +408,7 @@ Model **B (gRPC-stdio)**: same technique as Terraform providers, Vault plugins, 
   }
   ```
 
-The plugin manifest is static `manifest.yaml`, normatively described in [ADR-020(a)](#adr-020-plugin-infrastructure-manifest-handshake-lifecycle-format); RPC `Manifest()` is not included in MVP.
+  The plugin manifest is static `manifest.yaml`, normatively described in [ADR-020(a)](#adr-020-plugin-infrastructure-manifest-handshake-lifecycle-format); RPC `Manifest()` is not included in MVP.
 
 - gRPC-stream provides native progress reporting for long operations (`PlanEvent`, `ApplyEvent`).
 - The module ends with a graceful shutdown signal under the same contract.
@@ -460,7 +460,7 @@ Soul Stack accepts "an executable that does a gRPC-stdio handshake." What's unde
 
 `/var/lib/soul-stack/{bin,modules}/` layout, SHA-256 module cache, pull behavior (the daemon pulls a custom module via `core.module.installed`) and push (Keeper transfers all registered modules en masse), local cache clearing via TTL, separate operation `keeper.push.cleanup` when revoke the host - collected in [`docs/soul/modules.md`](soul/modules.md).
 
-Limit of responsibility: Reaper / Reaper on the Keeper side works **only on Postgres** and does not access hosts via SSH - otherwise you would have to give it SSH rights to the entire park (bad for blast radius). Host cleaning is the task of the Soul demon (pull) or `keeper.push` itself (push).
+Limit of responsibility: Reaper on the Keeper side works **only on Postgres** and does not access hosts via SSH - otherwise you would have to give it SSH rights to all the Souls (bad for blast radius). Host cleaning is the task of the Soul daemon (pull) or `keeper.push` itself (push).
 
 ### [ADR-046. Cadence - regular launches (scheduled/recurring Voyage)](adr/0046-cadence.md)
 
@@ -520,15 +520,15 @@ Moved to [`docs/adr/0059-audit-sink-pluggable.md`](adr/0059-audit-sink-pluggable
 
 ### [ADR-060. Trait — operator-set key-value of labels on incarnation (relocated from Soul)](adr/0060-traits.md)
 
-Moved to [`docs/adr/0060-traits.md`](adr/0060-traits.md). **Trait** - operator-set key-value of label (scalar\|list value, e.g. `namespace: dba-ns` / `owners: [alice, bob]` / `product: aboba`), **separate axis next to flat Coven** (Option B; extension `souls.coven` to key-value rejected - would break [ADR-008](#adr-008-coven---stable-boolean-tags-only) - flat label semantics, RBAC scope-pushdown `$1 = ANY(coven)` ([ADR-047](adr/0047-purview.md)) and predicates `'x' in soulprint.self.covens`). **R1 (2026-06-25): Trait RELOCATED per-soul → per-incarnation.** Source of truth - `incarnation.traits jsonb NOT NULL DEFAULT '{}'` + GIN (migration `088`, mirror `incarnation.covens`/`046`), operator-set in `incarnation.spec.traits` on create. Projected **MATERIALIZED** to `souls.traits` member hosts via **sync-hook** (`incarnation.SyncTraitsToHosts`, reuses `soul.BulkReplaceTraits`; sidebar - incarnation-create + bind host `core.soul.registered`). `souls.traits` (`087`) REMAINS as **projection target**: read layer is reused without changes - projection `soulprint.self.traits` (registry, like `covens`/`choirs`, [ADR-018](#adr-018-soulprint-typed-mvp-scheme); `SoulprintFacts` proto and registration contract Soul→Keeper **do not change**), `topology.HostFacts.Traits`, soul-lint whitelist `traits`. Targeting - `where: soulprint.self.traits.<key>` (`soulprint` declared CEL `DynType`, [ADR-010](#adr-010-template-engine-cel-for-yaml-expressions-go-texttemplate-for-files) - the key is resolved dynamically, without AST-rewrite): `traits.namespace == 'dba-ns'` / `'alice' in traits.owners`. **Transitional state:** per-soul bulk-write `POST /v1/souls/traits` (+ MCP `soul.traits-assign`) still works on `souls.traits` directly, BUT is overwritten by the projection at the next sync `incarnation.traits` - expected to relocate per-soul bulk → per-incarnation (+ deprecate, next slice). **RBAC-scope for traits on the incarnation dimension - UNLOCKED** R1 (implementation - next slice). **Amends [ADR-008](#adr-008-coven---stable-boolean-tags-only) / [ADR-018](#adr-018-soulprint-typed-mvp-scheme).**
+Moved to [`docs/adr/0060-traits.md`](adr/0060-traits.md). **Trait** - operator-set key-value of label (scalar\|list value, e.g. `namespace: dba-ns` / `owners: [alice, bob]` / `product: aboba`), **separate axis next to flat Coven** (Option B; extension `souls.coven` to key-value rejected - would break [ADR-008](#adr-008-coven---stable-logical-tags-only) - flat label semantics, RBAC scope-pushdown `$1 = ANY(coven)` ([ADR-047](adr/0047-purview.md)) and predicates `'x' in soulprint.self.covens`). **R1 (2026-06-25): Trait RELOCATED per-soul → per-incarnation.** Source of truth - `incarnation.traits jsonb NOT NULL DEFAULT '{}'` + GIN (migration `088`, mirror `incarnation.covens`/`046`), operator-set in `incarnation.spec.traits` on create. Projected **MATERIALIZED** to `souls.traits` member hosts via **sync-hook** (`incarnation.SyncTraitsToHosts`, reuses `soul.BulkReplaceTraits`; sidebar - incarnation-create + bind host `core.soul.registered`). `souls.traits` (`087`) REMAINS as **projection target**: read layer is reused without changes - projection `soulprint.self.traits` (registry, like `covens`/`choirs`, [ADR-018](#adr-018-soulprint-typed-mvp-scheme); `SoulprintFacts` proto and registration contract Soul→Keeper **do not change**), `topology.HostFacts.Traits`, soul-lint whitelist `traits`. Targeting - `where: soulprint.self.traits.<key>` (`soulprint` declared CEL `DynType`, [ADR-010](#adr-010-template-engine-cel-for-yaml-expressions-go-texttemplate-for-files) - the key is resolved dynamically, without AST-rewrite): `traits.namespace == 'dba-ns'` / `'alice' in traits.owners`. **Transitional state:** per-soul bulk-write `POST /v1/souls/traits` (+ MCP `soul.traits-assign`) still works on `souls.traits` directly, BUT is overwritten by the projection at the next sync `incarnation.traits` - expected to relocate per-soul bulk → per-incarnation (+ deprecate, next slice). **RBAC-scope for traits on the incarnation dimension - UNLOCKED** R1 (implementation - next slice). **Amends [ADR-008](#adr-008-coven---stable-logical-tags-only) / [ADR-018](#adr-018-soulprint-typed-mvp-scheme).**
 
 ### [ADR-061. Single-run provision→onboarding→role: onboarding-await + mid-run re-resolve roster](adr/0061-onboarding-await-and-midrun-reresolve.md)
 
-Moved to [`docs/adr/0061-onboarding-await-and-midrun-reresolve.md`](adr/0061-onboarding-await-and-midrun-reresolve.md). **One create-scenario** deploys an N-shard cluster from "nothing": provision N VM (`core.cloud.provisioned`, `on: keeper`, [ADR-017](#adr-017-keeper-side-core-modules-expanded-corecloudprovisioned-corevaultkv-read)) → waiting for onboarding of created Souls → mid-run roster growth → applying redis role to already online hosts. Closes the blocker "`soulprint.hosts` - snapshot at the start, mid-run does not grow; `refresh_soulprint` is ignored; there is no onboarding barrier." Two abilities on existing `core.soul.registered` (**NOT** new module - user decision: barrier adjacent to registration; separate `core.soul.online` rejected as an extra entity). **(1) onboarding-await:** new input flags `await_online` (bool) / `await_timeout` (duration, required-when `await_online`) / `await_min_count` (int, opt, default = number of registered SIDs) / `await_poll_interval` (duration, opt, ~2s) - after register+coven the step is blockingly polluted **Redis SID-lease** (`keeper/internal/redis/SoulsStreamAlive`, source of truth online - NOT PG `souls.status`, [ADR-006](#adr-006-cache-and-coordination---redis)) to `await_min_count`/timeout; **B1-strict** (online < min to timeout → step `failed` → fail-stop → `incarnation.state` not committed → `error_locked`); output `register.<name>` added `online[]`/`pending[]`/`satisfied`; ceiling `keeper.yml::max_await_timeout` (DoS-guard, fail-closed - exceeding → `failed`, not silent cutting). **list-SID:** `params.sid` accepts a string OR a list (the barrier aggregates presence across all SIDs in one step). **(2) mid-run re-resolve:** flag `refresh_soulprint` has been revived (was a stub `refreshed: false`) - after the success of the scenario-runner step, the incarnation roster will be re-solved before the NEXT Passage; **monotonous growth** (+hosts only, deleting mid-run is prohibited). The stability roster invariant is weakened: "stable within the Passage" (not the entire run). barrier/state-commit-invariant [ADR-009 §7](#adr-009-scenario---a-complete-dsl-of-destiny-tasks-border-with-destiny---recommendation) **NOT** weakened (state is committed once after the last Passage). **Stratify:** `refresh_soulprint: true` makes the task a passage-defining boundary ([ADR-056](adr/0056-staged-render-passage.md), symmetrical to the probe-emitter) - consumers `soulprint.hosts`/`on: [incarnation.name]`/`soulprint.self.*` leave for Passage strictly AFTER. **HA:** provision scripts are recommended to be run via Voyage ([ADR-043](adr/0043-voyage.md), recovery closed); standalone staged-recovery of a long barrier - open. **S1 (`await_online`) implemented; S2 (Stratify-border) / S3 (actual re-resolve in run.go) - the contract is fixed, implementation is in separate slices.** **Amends [ADR-009 §7](#adr-009-scenario---a-complete-dsl-of-destiny-tasks-border-with-destiny---recommendation) / [ADR-056](adr/0056-staged-render-passage.md) / [ADR-006](#adr-006-cache-and-coordination---redis) / [ADR-017](#adr-017-keeper-side-core-modules-expanded-corecloudprovisioned-corevaultkv-read).**
+Moved to [`docs/adr/0061-onboarding-await-and-midrun-reresolve.md`](adr/0061-onboarding-await-and-midrun-reresolve.md). **One create-scenario** deploys an N-shard cluster from "nothing": provision N VM (`core.cloud.provisioned`, `on: keeper`, [ADR-017](#adr-017-keeper-side-core-modules-expanded-corecloudprovisioned-corevaultkv-read)) → waiting for onboarding of created Souls → mid-run roster growth → applying redis role to already online hosts. Closes the blocker "`soulprint.hosts` - snapshot at the start, mid-run does not grow; `refresh_soulprint` is ignored; there is no onboarding barrier." Two abilities on existing `core.soul.registered` (**NOT** new module - user decision: barrier adjacent to registration; separate `core.soul.online` rejected as an extra entity). **(1) onboarding-await:** new input flags `await_online` (bool) / `await_timeout` (duration, required-when `await_online`) / `await_min_count` (int, opt, default = number of registered SIDs) / `await_poll_interval` (duration, opt, ~2s) - after register+coven the step blockingly polls the **Redis SID-lease** (`keeper/internal/redis/SoulsStreamAlive`, source of truth online - NOT PG `souls.status`, [ADR-006](#adr-006-cache-and-coordination---redis)) to `await_min_count`/timeout; **B1-strict** (online < min to timeout → step `failed` → fail-stop → `incarnation.state` not committed → `error_locked`); output `register.<name>` added `online[]`/`pending[]`/`satisfied`; ceiling `keeper.yml::max_await_timeout` (DoS-guard, fail-closed - exceeding → `failed`, not silent cutting). **list-SID:** `params.sid` accepts a string OR a list (the barrier aggregates presence across all SIDs in one step). **(2) mid-run re-resolve:** flag `refresh_soulprint` has been revived (was a stub `refreshed: false`) - after the success of the scenario-runner step, the incarnation roster will be re-solved before the NEXT Passage; **monotonous growth** (+hosts only, deleting mid-run is prohibited). The stability roster invariant is weakened: "stable within the Passage" (not the entire run). barrier/state-commit-invariant [ADR-009 §7](#adr-009-scenario---a-complete-dsl-of-destiny-tasks-border-with-destiny---recommendation) **NOT** weakened (state is committed once after the last Passage). **Stratify:** `refresh_soulprint: true` makes the task a passage-defining boundary ([ADR-056](adr/0056-staged-render-passage.md), symmetrical to the probe-emitter) - consumers `soulprint.hosts`/`on: [incarnation.name]`/`soulprint.self.*` leave for Passage strictly AFTER. **HA:** provision scripts are recommended to be run via Voyage ([ADR-043](adr/0043-voyage.md), recovery closed); standalone staged-recovery of a long barrier - open. **S1 (`await_online`) implemented; S2 (Stratify-border) / S3 (actual re-resolve in run.go) - the contract is fixed, implementation is in separate slices.** **Amends [ADR-009 §7](#adr-009-scenario---a-complete-dsl-of-destiny-tasks-border-with-destiny---recommendation) / [ADR-056](adr/0056-staged-render-passage.md) / [ADR-006](#adr-006-cache-and-coordination---redis) / [ADR-017](#adr-017-keeper-side-core-modules-expanded-corecloudprovisioned-corevaultkv-read).**
 
 ### [ADR-062. Named input types - reusable named input schemes via `types:` + `$type`](adr/0062-input-types.md)
 
-Moved to [`docs/adr/0062-input-types.md`](adr/0062-input-types.md). Reused named input schemas instead of duplicating inline-`object` between service scripts. Section **`types:`** in the service-level file `service/<name>/types.yml` — map `<PascalCase>` → schema in **the same** InputSchema-DSL ([docs/input.md](input.md)); reference **`$type: <Name>`** as a standalone field OR `items: {$type: <Name>}` for an array. Resolve **service-level** (NOT local-per-scenario, NOT cross-service); MVP = object + array-of-type + nesting type→type with **mandatory cycle-detection**; WITHOUT scalar-alias/generics/cross-service. Errors `input_type_unknown` / `input_type_cycle` / `input_type_duplicate` / `input_type_ref_conflict`. DTO `/v1/scenarios` resolves `$type` **backend-side BEFORE projection** (UI receives expanded inline diagram) + annotation **`x-type: <Name>`** (forward-compat UI widget). **Replaces the unrealized work `$ref`/`schemas/`** - it has been removed from this document and [service/manifest.md](service/manifest.md). **Amends affected by `$ref` in [ADR-003](#adr-003-destiny-format-is-yaml-with-typed-schema-cuejson-schema) / [ADR-009](#adr-009-scenario---a-complete-dsl-of-destiny-tasks-border-with-destiny---recommendation).**
+Moved to [`docs/adr/0062-input-types.md`](adr/0062-input-types.md). Reused named input schemas instead of duplicating inline-`object` between service scripts. Section **`types:`** in the service-level file `service/<name>/types.yml` — map `<PascalCase>` → schema in **the same** InputSchema-DSL ([docs/input.md](input.md)); reference **`$type: <Name>`** as a standalone field OR `items: {$type: <Name>}` for an array. Resolve **service-level** (NOT local-per-scenario, NOT cross-service); MVP = object + array-of-type + nesting type→type with **mandatory cycle-detection**; WITHOUT scalar-alias/generics/cross-service. Errors `input_type_unknown` / `input_type_cycle` / `input_type_duplicate` / `input_type_ref_conflict`. DTO `/v1/scenarios` resolves `$type` **backend-side BEFORE projection** (UI receives expanded inline schema) + annotation **`x-type: <Name>`** (forward-compat UI widget). **Replaces the unrealized work `$ref`/`schemas/`** - it has been removed from this document and [service/manifest.md](service/manifest.md). **Amends affected by `$ref` in [ADR-003](#adr-003-destiny-format-is-yaml-with-typed-schema-cuejson-schema) / [ADR-009](#adr-009-scenario---a-complete-dsl-of-destiny-tasks-border-with-destiny---recommendation).**
 
 ### [ADR-063. core.bootstrap.delivered — keeper-side delivery of bootstrap token via SSH](adr/0063-bootstrap-token-delivery.md)
 
@@ -594,7 +594,7 @@ The format of the block `plugins:` with all keys is in [`docs/keeper/config.md`]
 
 A clear boundary between **code** (static, versioned with git tags, reviewed via PR) and **runtime-state** (specific instances, mutations via API/MCP, source of truth - Postgres):
 
-| Artifact | Type | Where does he live | Managed as |
+| Artifact | Type | Where it lives | Managed as |
 |---|---|---|---|
 | **Service** | Definition (service type) | git, separate repo for the service | git tag → registry in master |
 | **Destiny** | Definition (atomic brick) | git, separate repo on destiny | git tag → transitively via service.yml |
@@ -796,7 +796,7 @@ tasks:
   - include: replication.yml
 ```
 
-The `on:` key decides where the step is executed: `keeper` - locally on the keeper, `[coven, …]` - intersection of covens (⊆ incarnation), omitted - the entire incarnation. Volatile per-host filter based on `register:` of the previous probe - key `where:` ([ADR-008](adr/0008-coven-stable-tags.md)). One script mixes keeper and host steps in a linear flow, in the same task language ([ADR-009](adr/0009-scenario-dsl.md)). This is similar to Salt Orchestration + State, but without two different languages ​​​​and without two places. Normative semantics - [`docs/scenario/orchestration.md`](scenario/orchestration.md).
+The `on:` key decides where the step is executed: `keeper` - locally on the keeper, `[coven, …]` - intersection of covens (⊆ incarnation), omitted - the entire incarnation. Volatile per-host filter based on `register:` of the previous probe - key `where:` ([ADR-008](adr/0008-coven-stable-tags.md)). One script mixes keeper and host steps in a linear flow, in the same task language ([ADR-009](adr/0009-scenario-dsl.md)). This is similar to Salt Orchestration + State, but without two different languages and without two places. Normative semantics - [`docs/scenario/orchestration.md`](scenario/orchestration.md).
 
 The `input:` block validates the script input parameters before running (according to the [docs/input.md](input.md) standard). `state_changes` - **ordered list of CRUD verbs** (`set`/`add`/`modify`/`remove` + `foreach`, [ADR-057](#adr-057-state_changes---ordered-list-of-crud-verbs)): declares **what** the script writes to `incarnation.state` on success and **from where** the value is taken (CEL `${ … }`, rendered by the keeper after the barrier); plurality - through `match`-predicate. Regulatory - [scenario/orchestration.md §7.1](scenario/orchestration.md).
 
@@ -838,7 +838,7 @@ The service parameters are not a flat list, but a **hierarchical assembly** in t
 
 ### Convention-based default (without `_stack.yaml`)
 
-If the `_stack.yaml` statement does not write, keeper applies the default order:
+If the operator does not write `_stack.yaml`, keeper applies the default order:
 
 1. `_default.yaml` — baseline.
 2. `os/<soulprint.os.family>.yaml` - OS family (if the file exists).
@@ -943,7 +943,7 @@ This gives: rollback to any previous state, audit of "who added user X and when,
 
 ### Atomicity and `error_locked`
 
-**The script does not write to the database until it has run on all target hosts**. If apply failed partially (for example, `add_user` passed on 2 out of 3 hosts), the state in the database **is not updated**, incarnation goes to `status: error_locked` from `status_details: { failed_hosts: [...], partial_changes: {...} }`. Any subsequent script for this incarnation is rejected until express permission from the operator.
+**The script does not write to the database until it has run on all target hosts**. If apply failed partially (for example, `add_user` passed on 2 out of 3 hosts), the state in the database **is not updated**, incarnation goes to `status: error_locked` with `status_details: { failed_hosts: [...], partial_changes: {...} }`. Any subsequent script for this incarnation is rejected until express permission from the operator.
 
 Permission:
 - `keeper.incarnation.unlock name=X reason="manual cleanup verified"` - the operator assumes that he has verified the fact on the hosts.
@@ -980,9 +980,9 @@ The same set is available through MCP-tools. The operator looks at the state obj
 
 ## Targeting and host communication
 
-Rewritten under [ADR-008](#adr-008-coven---stable-boolean-tags-only). The full regulatory targeting specification is [`docs/scenario/orchestration.md`](scenario/orchestration.md); here is the architectural summary.
+Rewritten under [ADR-008](#adr-008-coven---stable-logical-tags-only). The full regulatory targeting specification is [`docs/scenario/orchestration.md`](scenario/orchestration.md); here is the architectural summary.
 
-### Coven - stable boolean tags
+### Coven - stable logical tags
 
 Coven - **only stable** logical tags (cluster / project / environment / data center / hardware type). When an incarnation is created, its name becomes the **root Coven label** of all its hosts:
 
@@ -1043,7 +1043,7 @@ In the template context of the script, the following are always available:
 - `state` - current state from the database (for scripts that read the existing state).
 - `soulprint.hosts` - list of run hosts with stable facts (`sid`/`role`(declared)/`network`/`os`/`covens`); `.where("<predicate>")` filters by CEL predicate string. A shortened form of the same request is `soulprint.where("<predicate>")` (for example, `soulprint.where("'X' in covens")` instead of `soulprint.hosts.where("'X' in covens")`). Scenario-only; receive destiny topology only through explicit `apply: input:`. Regulatory - [`docs/scenario/orchestration.md §4.1`](scenario/orchestration.md).
 
-> **Difference from destiny template context.** In destiny, `vars.*` means [destiny locales from `vars.yml`](destiny/vars.md), and `essence.*` is **absent**: destiny is isolated, receiving only what came in `input:`. In scenario, on the contrary, `essence.*` is directly accessible (hence scenario puts values ​​in `input:` destiny when `apply:` is called), but destiny-`vars` is not visible - it is local to a specific destiny.
+> **Difference from destiny template context.** In destiny, `vars.*` means [destiny locales from `vars.yml`](destiny/vars.md), and `essence.*` is **absent**: destiny is isolated, receiving only what came in `input:`. In scenario, on the contrary, `essence.*` is directly accessible (hence scenario puts values in `input:` destiny when `apply:` is called), but destiny-`vars` is not visible - it is local to a specific destiny.
 
 ### Host communication via Soulprint
 
@@ -1053,7 +1053,7 @@ When a host needs data from another host (what is done in Salt via Mine, in Ansi
 master_addr: "${ soulprint.where(\"incarnation.name in covens\")[0].network.primary_ip }"
 ```
 
-The request goes to Postgres + Redis hot layer. Soulprint after [ADR-008](#adr-008-coven---stable-boolean-tags-only) stores **only stable** facts, so `soulprint.where(...)` operates on a stable layer; volatile role (who is now master) - exclusively through probe + `where:`-key, not through Soulprint. The predicate `.where(...)` is a static string literal, expanded at the compile phase into the native CEL filter-comprehension (not runtime; dynamic merging of the predicate is prohibited, the first element is `[0]`, see [ADR-010](#adr-010-template-engine-cel-for-yaml-expressions-go-texttemplate-for-files)). Cross-host master discovery - through the accessor `soulprint.hosts` (`soulprint.hosts.where("role == 'primary'")[0].network.primary_ip`), the declared role is taken from `incarnation.spec.hosts[].role`, a probe is defined on the runtime master (as in `restart`); normative - [`docs/scenario/orchestration.md §4.1`](scenario/orchestration.md) (the former open Q is closed there, see [§8](scenario/orchestration.md)).
+The request goes to Postgres + Redis hot layer. Soulprint after [ADR-008](#adr-008-coven---stable-logical-tags-only) stores **only stable** facts, so `soulprint.where(...)` operates on a stable layer; volatile role (who is now master) - exclusively through probe + `where:`-key, not through Soulprint. The predicate `.where(...)` is a static string literal, expanded at the compile phase into the native CEL filter-comprehension (not runtime; dynamic merging of the predicate is prohibited, the first element is `[0]`, see [ADR-010](#adr-010-template-engine-cel-for-yaml-expressions-go-texttemplate-for-files)). Cross-host master discovery - through the accessor `soulprint.hosts` (`soulprint.hosts.where("role == 'primary'")[0].network.primary_ip`), the declared role is taken from `incarnation.spec.hosts[].role`, a probe is defined on the runtime master (as in `restart`); normative - [`docs/scenario/orchestration.md §4.1`](scenario/orchestration.md) (the former open Q is closed there, see [§8](scenario/orchestration.md)).
 
 ## Versioning and state_schema migrations
 
@@ -1081,7 +1081,7 @@ In the incarnation table there is a field `state_schema_version`, fixed upon cre
 
 Full regulatory specification - [`docs/migrations.md`](migrations.md), solution commit - [ADR-019](#adr-019-state_schema-migration-dsl).
 
-MVP grammar: flat (`rename`/`set`/`delete`/`move`) + CEL expressions in `set:` values ​​via `${ … }` marker + structural `foreach` for iteration over collections. Conditional `if:` key - deferred until the first real request (extension without breaking change). Complex scenarios not covered by the grammar are not supported in MVP (escape module `state.migrate` was rejected by [ADR-019(e)](#adr-019-state_schema-migration-dsl) as not from the dictionary; candidate `core.incarnation.state-migrate` - if necessary, a separate ADR).
+MVP grammar: flat (`rename`/`set`/`delete`/`move`) + CEL expressions in `set:` values via `${ … }` marker + structural `foreach` for iteration over collections. Conditional `if:` key - deferred until the first real request (extension without breaking change). Complex scenarios not covered by the grammar are not supported in MVP (escape module `state.migrate` was rejected by [ADR-019(e)](#adr-019-state_schema-migration-dsl) as not from the dictionary; candidate `core.incarnation.state-migrate` - if necessary, a separate ADR).
 
 Example (the same `001_to_002`, rewritten for MVP grammar):
 
@@ -1121,7 +1121,7 @@ What happens in the UI/CLI:
 2. incarnation displays the current `service_version` and available updates.
 3. The operator selects `v2.0`, clicks "upgrade".
 4. Keeper in one transaction: runs migrations `001_to_002`, `002_to_003` in a chain, updates `state_schema_version` and `service_version`, writes a snapshot to `state_history` with the mark `migration`.
-5. If the migration fails - `status: migration_failed`, no changes in state are saved, incarnation is locked, the operator is parsed.
+5. If the migration fails - `status: migration_failed`, no changes in state are saved, incarnation is locked, the operator investigates.
 
 After a successful upgrade, the scripts continue to work with the new schema. The old one remains as a legacy snapshot in `state_history`.
 
@@ -1143,7 +1143,7 @@ Full breakdown of Provider/Profile, script step `core.cloud.provisioned`, coven 
 
 Background task inside `keeper`, cleaning the database from garbage and maintaining registry invariants. Not a separate binary. Works only on one Keeper instance at a time - the leader is selected via Redis-lease. Valid **only on Postgres**: it does not go to hosts via SSH, host-based module cache cleaning is described separately in [`docs/soul/modules.md`](soul/modules.md).
 
-If the scope in the future grows beyond the scope of the cleanup (table migrations, transfer of archive records, GC of cold data) - reserve the name **Charon** for a broader process; so far there is only one name - **Reaper / Reaper**.
+If the scope in the future grows beyond the scope of the cleanup (table migrations, transfer of archive records, GC of cold data) - reserve the name **Charon** for a broader process; so far there is only one name - **Reaper**.
 
 Properties, rules (`expire_pending_seeds`, `purge_used_tokens`, `purge_souls`, `purge_old_seeds`, `mark_disconnected`), complete YAML config and metrics - in [`docs/keeper/reaper.md`](keeper/reaper.md).
 
@@ -1157,11 +1157,11 @@ Full list of delivery scenarios, permission requirements and file mode, recommen
 
 ## End-to-end installation script
 
-Reference path from empty infrastructure to a managed fleet of hosts. Each step is linked to a section where it is described in detail.
+Reference path from empty infrastructure to managed Souls. Each step is linked to a section where it is described in detail.
 
 1. **Postgres and Redis are raised** - external dependencies of the Keeper cluster (see ADR-005, ADR-006).
 2. **A Keeper cluster is being raised** - one or more `keeper` instances on top of a common PG+Redis. The KID of each instance is fixed in the config.
-3. **Bootstrap of the first Archon** - the operator launches `keeper init --archon=<aid>` on the Keeper host. The command under PG advisory lock checks that the registry `operators` is empty, creates the first Archon with the role `cluster-admin` (`permissions: ["*"]`), issues a JWT token (TTL 30 days) and puts it in the file `mode 0400`. Before this step, Keeper refuses to start with =empty statements without `--initialize`. See [ADR-013](#adr-013-bootstrap-of-the-first-archon) and [ADR-014](#adr-014-operator-identity-model-archon).
+3. **Bootstrap of the first Archon** - the operator launches `keeper init --archon=<aid>` on the Keeper host. The command under PG advisory lock checks that the registry `operators` is empty, creates the first Archon with the role `cluster-admin` (`permissions: ["*"]`), issues a JWT token (TTL 30 days) and puts it in the file `mode 0400`. Before this step, Keeper refuses to start with operators=empty without `--initialize`. See [ADR-013](#adr-013-bootstrap-of-the-first-archon) and [ADR-014](#adr-014-operator-identity-model-archon).
 4. **The Archon writes out the remaining operators** - through OpenAPI/MCP with `Authorization: Bearer <jwt>`, ordinary Archons with limited rights under Covens are created (FK `created_by_aid` in the registry `operators`).
 5. **Operator adds Soul** - via OpenAPI/MCP `keeper`: specifies SID (FQDN), desired `transport` (`agent` or `ssh`), Coven tags. The entry in `souls` appears in status `pending`.
 6. **For `transport: agent`:** the operator receives a short **bootstrap token** (not a certificate, not a key - only a one-time use token). Delivers to the VM along with the `soul` binary - the target path via `keeper.push` (the same SSH mechanism as for agentless-Destiny, but with the "deploy pull agent" task); alternative paths are Ansible-role, cloud-init, regular SSH (see "Delivering a SoulSeed token to the host").
@@ -1184,17 +1184,17 @@ Reference path from empty infrastructure to a managed fleet of hosts. Each step 
 1. The operator writes Destiny/Essence in git, runs `soul-lint` locally and in CI (render → schema validation → static analysis). Without the green `soul-lint` nothing goes outside.
 2. Destiny reaches Keeper via OpenAPI or MCP. Keeper checks RBAC, re-renders and validates, puts it in the Destiny (Postgres) registry.
 3. **Pull:** Keeper pushes the command "apply such and such Destiny with such and such Essence" to the corresponding Souls (agent transport) on the live gRPC stream.
-**Push:** Keeper for each target host (`transport: ssh`) raises an SSH session through the selected provider, performs the steps, takes the result.
+   **Push:** Keeper for each target host (`transport: ssh`) raises an SSH session through the selected provider, performs the steps, takes the result.
 4. Soul (or push session) applies, reports events (start, step, success/failure).
 5. Keeper aggregates the result, exposes it externally via OpenAPI/MCP, publishes metrics and traces (OTel).
 6. Soulprint is collected by Soul periodically and on demand, stored in Keeper (Postgres), available RBAC-filtered.
 
 ## End-to-end requirements and where they land
 
-| Requirement (from [docs/requirements.md](requirements.md)) | Where does he live | Notes |
+| Requirement (from [docs/requirements.md](requirements.md)) | Where it lives | Notes |
 |---|---|---|
-| Metrics | All three binaries | Normalized [ADR-024](adr/0024-observability.md#adr-024-observability-prometheus-primary--otel-bridge): Prometheus-primary (pull `/metrics`), namespace prefixes `keeper_*` / `soul_*`. OTLP-push metrics - optional bridge. Speca - [observability.md](observability.md). |
-| OpenTelemetry | All three binaries | Normalized [ADR-024](adr/0024-observability.md#adr-024-observability-prometheus-primary--otel-bridge): OTel-bridge for traces (end-to-end operator → Keeper → Soul via gRPC metadata) + opt. push metrics; resource-attrs `service.name` + `soulstack.kid` / `soulstack.sid`. Speca - [observability.md](observability.md). |
+| Metrics | All three binaries | Normalized [ADR-024](adr/0024-observability.md#adr-024-observability-prometheus-primary--otel-bridge): Prometheus-primary (pull `/metrics`), namespace prefixes `keeper_*` / `soul_*`. OTLP-push metrics - optional bridge. Spec - [observability.md](observability.md). |
+| OpenTelemetry | All three binaries | Normalized [ADR-024](adr/0024-observability.md#adr-024-observability-prometheus-primary--otel-bridge): OTel-bridge for traces (end-to-end operator → Keeper → Soul via gRPC metadata) + opt. push metrics; resource-attrs `service.name` + `soulstack.kid` / `soulstack.sid`. Spec - [observability.md](observability.md). |
 | Hot-reload config + rewrite to disk | All three binaries | The mechanism is standardized [ADR-021](#adr-021-hot-reload-config-with-write-back-yaml): file-edit (SIGHUP) + API/MCP with write-back YAML, validation pipeline parse → schema → semantic → atomic swap, audit-events `config.reload_succeeded` / `config.reload_failed`. History - git-blame + audit (DB table `config_history` deferred). |
 | Log rotation | All three binaries | Built-in by default, without dependence on external logrotate. |
 | Vault | Keeper (full: Essence, CA for SoulSeed, SSH provider); Soul (short-lived token client only) | Soul should not have the right to read other people's Essence. |
@@ -1221,7 +1221,7 @@ Divided into those closed in previous rounds (we don't save them for history - s
    - ~~exact stdio-handshake protocol version and format (probably like `hashicorp/go-plugin`)~~ **closed ADR-020(b/c):** JSON on one line with magic prefix field `"soul_stack":"plugin-v1"`; `protocol_version` is duplicated in manifest and handshake; correspondence `protocol_version: N` ↔ `proto/plugin/vN/`. Full spec - [`docs/keeper/plugins.md`](keeper/plugins.md);
    - ~~module versioning policy and compatibility with different versions of `SoulModule` API~~ **closed ADR-020(c):** forward-compat only-add inside `proto/plugin/vN/`, host holds `SupportedProtocolVersions` (MVP `[1]`), hard fail on mismatch;
    - **optimization for later:** mandatory declaration of `required_modules: [haproxy, myapp]` in Destiny - will allow you to transfer only the necessary modules instead of all of them.
-6. ~~**Soulprint: circuit and extensions.**~~ **Closed ADR-018 (MVP typed circuit only).** Fields: `sid`/`hostname`/`os`(family/distro/version/codename/arch/pkg_mgr/init_system)/`kernel`(version/releas e)/`cpu`(count/model/vendor)/`memory`(total_mb/available_mb/swap_mb)/`network`(primary_ip/fqdn/interfaces[]). The canonical CEL form is `soulprint.self.<path>`. Covens - Keeper-registry-projection, not in Soul-side facts. The user-collectors mechanism (open Q No. 22) - **remains open** (requires decisions on sandbox/permissions/collector format, not just schema).
+6. ~~**Soulprint: schema and extensions.**~~ **Closed ADR-018 (MVP typed schema only).** Fields: `sid`/`hostname`/`os`(family/distro/version/codename/arch/pkg_mgr/init_system)/`kernel`(version/release)/`cpu`(count/model/vendor)/`memory`(total_mb/available_mb/swap_mb)/`network`(primary_ip/fqdn/interfaces[]). The canonical CEL form is `soulprint.self.<path>`. Covens - Keeper-registry-projection, not in Soul-side facts. The user-collectors mechanism (open Q No. 22) - **remains open** (requires decisions on sandbox/permissions/collector format, not just schema).
 7. ~~**Compatible version of the protobuf contract.**~~ **Closed ADR-012:** forward-compat only-add inside `proto/keeper/v1/` (never delete fields, do not reuse field numbers; breaking changes - only through a new package `v2/`). Keeper can be upgraded separately from Souls.
 8. **Local admin endpoint on Soul.** **Delayed post-MVP.** In MVP admin operations on Soul-host: `SIGHUP` for hot-reload `soul.yml`, local shell access to logs / `journalctl` / `metrics`-listener for observability, centralized rollout config via CI / Ansible / SSH. Local HTTP/MCP listener on Soul (status / force-resync / dump Soulprint without Keeper / API-driven config mutation) - if really necessary (separate ADR, propose-and-wait for transport: HTTP vs Unix socket vs FromKeeper command).
 10. **LB-1. Balancing by SID/Coven labels.** Is L4-LB sufficient (any Keeper will serve any Soul, Coven - only in application logic), or is L7-aware LB / Keeper's own routing-prefix needed. Deferred by user decision.
@@ -1235,12 +1235,12 @@ Divided into those closed in previous rounds (we don't save them for history - s
 18. ~~**DSL migrations state_schema.**~~ **Closed ADR-019:** flat (`rename`/`set`/`delete`/`move`) + CEL value expressions + structured `foreach` (MVP). Conditional `if:` - deferred until the first real request (extension without breaking change). Forward-only, no escape module is entered. Full spec - [`docs/migrations.md`](migrations.md).
 19. ~~**`state_history` retention.**~~ **Solved (2026-05-25):** **soft-delete / archiving by config, NOT hard-delete.** Store the last **N=50** snapshots on incarnation + **ALWAYS** snapshot for every `state_schema`-version-bump (migrations remain recoverable). "Excess" images are **archived** (archive table or `archived_at` flag - config-knob), not physically erased (forensic > GC). Cleans/archives **Reaper rule**. Implementation - Track 4 ([roadmap.md](roadmap.md)), not yet done.
 20. ~~**UI Keeper.**~~ **Resolved (2026-05-25): UI is a separate artifact (SPA), NOT embedded in `keeper`.** Stack - React + TypeScript + Vite + TanStack Query + React Hook Form + Zod + lucide (mirror of internal reference salt-manager). Design-system - **adaptation of `saltgui-design-system`** (CSS tokens/components, re-skin for the Soul Stack brand/dictionary). TS client + Zod types **generated from [`docs/keeper/openapi.yaml`](keeper/openapi.yaml)** (not written by hand). All UI vocabulary is strictly according to [naming-rules.md](naming-rules.md) (Keeper / Souls / Coven / Soulprint / Destiny / Archon, NOT SaltStack minion/grain/pillar). Start of development - when the API reaches almost complete readiness. Plan - [roadmap.md](roadmap.md).
-21. **`host_schema` in `service.yml` (a collection of ideas).** Declaration of the expected host topology for Incarnation: list of roles (`required_roles`) and restrictions on the number of hosts in each role (`role_constraints.<role>.count: { eq | gte | lte }`), possibly extendable to Soulprint filters (minimum CPU/RAM/OS). What would result: an early failure when creating an Incarnation with the wrong number of roles (before cloud-create), checking the declared topology (`incarnation.spec.hosts[].role`, [ADR-008](#adr-008-coven---stable-boolean-tags-only)) with the declared scheme before running, hints in the UI/MCP. Postponed until real scenarios show which checks pay off - without them the field will turn into decorative. NB: step targeting - `on:`/`where:` ([`docs/scenario/orchestration.md §4`](scenario/orchestration.md), [§4.1](scenario/orchestration.md)), role **not** Coven ([ADR-008](adr/0008-coven-stable-tags.md)); static check of `on:`/`where:` literals - backlog `soul-lint` ([soul-lint.md → B2](soul-lint.md#b2-statistical-check-of-where--and-on-literals)), not part of this clause.
+21. **`host_schema` in `service.yml` (a collection of ideas).** Declaration of the expected host topology for Incarnation: list of roles (`required_roles`) and restrictions on the number of hosts in each role (`role_constraints.<role>.count: { eq | gte | lte }`), possibly extendable to Soulprint filters (minimum CPU/RAM/OS). What would result: an early failure when creating an Incarnation with the wrong number of roles (before cloud-create), checking the declared topology (`incarnation.spec.hosts[].role`, [ADR-008](#adr-008-coven---stable-logical-tags-only)) with the declared scheme before running, hints in the UI/MCP. Postponed until real scenarios show which checks pay off - without them the field will turn into decorative. NB: step targeting - `on:`/`where:` ([`docs/scenario/orchestration.md §4`](scenario/orchestration.md), [§4.1](scenario/orchestration.md)), role **not** Coven ([ADR-008](adr/0008-coven-stable-tags.md)); static check of `on:`/`where:` literals - backlog `soul-lint` ([soul-lint.md → B2](soul-lint.md#b2-statistical-check-of-where--and-on-literals)), not part of this clause.
 22. **`soulprint.collectors` in `soul.yml` (a collection of ideas).** Explicit declaration of a set of Soulprint collectors in the agent config: built-in groups (`core` - os/kernel/network/memory/cpu/hostname, `systemd` - units) and a directory of custom detectors (`custom_dir: /etc/soul/soulprint.d/`). Now only `refresh_interval` remains in `soul.yml`; the actual set of facts is internal default. Related to open question 6 (general layout of Soulprint and extensions), but deals specifically with the form of the config on the host: is a toggle switch needed at all, or are collectors always enabled and custom detectors picked up from a fixed path by convention.
 23. ~~**Event-driven circuit (Salt beacons / engines equivalent).**~~ **Closed [ADR-030](#adr-030-vigil--oracle---event-driven-monitoring-beacons--reactor):** beacons-circuit introduced by entities **Vigil** (Soul-side check, read-only) → **Portent** (event, only-add `EventStream`-oneof) → **Oracle** (Keeper reactor router) → **Decree** (reactor rule, default-deny, action = scenario-only via work-queue [ADR-027](#adr-027-execution-model-apply---work-queue--claim-acolyte-pool-ward-claim)). The uncommitted clause `SoulBeacon` has been replaced with final names; community checks - via plugin-kind `soul_beacon` (S5). The Engines equivalent (long-running on the host/Keeper) is **not** introduced by this ADR - it remains deferred.
 24. ~~**Per-task granularity `serial:`.**~~ **Closed [ADR-056](#adr-056-staged-render---running-the-script-as-n-ordered-passages) (staged-render).** MVP was per-RUN min-width (wave width one per run = minimum positive `serial:`-width among tasks, [`docs/scenario/orchestration.md §2.2.1`](scenario/orchestration.md)), because per-task dispatch (multiple `ApplyRequest` / `apply_runs` lines per host) is not implemented. ADR-056 introduces **Passage** - run as N ordered stages (render→dispatch→barrier→register) along the task axis: per-task dispatch is now implemented as N `ApplyRequest` per host by Passage (amend [ADR-012](#adr-012-keepersoul-grpc-contract-one-eventstream-with-oneof-keeper-side-render-forward-compat-only-add) dispatch-model + only-add `passage` + PG-PK per-passage). The main driver of the ADR-056 is the implementation of probe→where (`register` in `where:`/`apply:input` of the following tasks), which the canon orchestration.md §4/§5 already promises; per-task `serial:` is a consequence of the same staged model.
 25. **Per-host `RenderedTask` dispatch (host-variable flow-control predicates on multi-host).** **render_context.self - closed by Option A** (per-host render context, `RenderContextBySID`): per-host `.self` now resolves for `templates/*.tmpl` and `core.file.rendered` in both branches dispatcher (inline tasks and Acolyte pool) - each host receives its own `soulprint.self.*` in the render file. **Remains open** (full Option B - per-host dispatch of the entire `RenderedTask`): host-variable `params:`, flow-control predicates (`when:`/`changed_when:`/`failed_when:`) and `loop:` with a link to `soulprint.self` on the multi-host target. Pilot keeps these cases under fail-closed guard: they are only allowed with a single-host target; on multi-host, the render crashes with an obvious error ([`docs/templating.md §4`](templating.md)) - guard catches an unsupported case with an obvious error, not silent-wrong. **Full Option B deferred** (decision 2026-06-29: Option A is sufficient). Will require a separate ADR (removing host invariance `params:` + changing the Keeper↔Soul dispatch boundary). **Resume condition** is the first service that needs `${ soulprint.self.* }` in module-`params:` OR `when: soulprint.self.*` on a multi-host target WITHOUT the ability to put self-variability in `.tmpl`. Until then, Option A (per-host `.self` for render files + fail-closed guards for the rest) is sufficient.
 26. **Audit-log scaling for bulk runs (100k+ hosts).** Currently `audit_log` is a PG table with INSERT per-event. One Tide run on a 100k VM with wave=1000 gives ~200k records (`tide.started` ×1 + `surge_started`/`surge_completed` ×100 each + per-apply_run `apply.dispatched`/`apply.completed` ×100k×2). Bottlenecks: INSERT-throughput PG (~5-10k INSERT/s), table size (~50MB/run → 250GB/year at 100 runs/week), full-scan reads for UI without partitioning. **Decision postponed to the backlog of future releases** (user decision 2026-05-27). Possible options for consideration: (A) semantic filter "no per-SID events if there is a Tide-aggregate" (-99% volume, source of truth - `apply_runs` table); (B) partitioning by month + retention 90/365 days; (C) hot/cold split (PG for UI, S3/parquet for long-term); (D) batched INSERT; (E) async sink via Redis Stream → separate writer (parity SaltStack returners). Up to 10k VM - the current audit works without optimization; During pilot runs, evaluate the actual load and choose an option.
-27. **UI i18n - runtime-discoverable list of languages (`manifest.json`).** UI (companion-repo `soul-stack-web`) uses hybrid lazy-load: default language `ru` bundled inline, the rest (`en`+) - static `public/locales/<lang>/<ns>.json`, fetched via `i18next-http-backend` (not Keeper - these are static SPA assets, they go with the static front host). The list of available languages ​​is now **hardcoded** in `SUPPORTED_LANGS` (TS-literal) - gives type safety `type Lang` + build-time completeness validation via ns-key-sync test. **User decision 2026-05-27: leave hardcoded, change with releases.** Idea for the future (piggy bank): add a list of languages ​​to `/locales/manifest.json`, read by the tag in runtime → adding a language without rebuilding JS, even for the switch (the translation command drops the folder + line in manifest). Trade-off: +1 network request at start, loss of TS literal type `Lang`, no build-time guarantee of completeness of translations (broken language is caught only by the user in runtime). Entering in real translation-workflow / 3+ community languages ​​is a non-breaking additive.
+27. **UI i18n - runtime-discoverable list of languages (`manifest.json`).** UI (companion-repo `soul-stack-web`) uses hybrid lazy-load: default language `ru` bundled inline, the rest (`en`+) - static `public/locales/<lang>/<ns>.json`, fetched via `i18next-http-backend` (not Keeper - these are static SPA assets, they go with the static front host). The list of available languages is now **hardcoded** in `SUPPORTED_LANGS` (TS-literal) - gives type safety `type Lang` + build-time completeness validation via ns-key-sync test. **User decision 2026-05-27: leave hardcoded, change with releases.** Idea for the future (piggy bank): add a list of languages to `/locales/manifest.json`, read by the tag in runtime → adding a language without rebuilding JS, even for the switch (the translation command drops the folder + line in manifest). Trade-off: +1 network request at start, loss of TS literal type `Lang`, no build-time guarantee of completeness of translations (broken language is caught only by the user in runtime). Entering in real translation-workflow / 3+ community languages is a non-breaking additive.
 
 Each of these items will either become a new ADR here, or (if they grow) into their own document in [docs/](.).

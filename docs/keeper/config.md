@@ -19,7 +19,7 @@ A single type dictionary is used throughout:
 | `vault-ref` | string like `vault:<path>` (`vault:secret/keeper/postgres`); read through the client Vault at the start of Keeper. |
 | `path` | absolute path in the local FS of the host on which Keeper is running. |
 | `git-url` | git-URL (`git@host:org/repo.git` / `https://…/repo.git`). |
-| `git-ref` | git tag or branch (without semver-range, [ADR-007](../adr/0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте)). |
+| `git-ref` | git tag or branch (without semver-range, [ADR-007](../adr/0007-versioning-git-ref.md)). |
 | `list<T>` / `map<K,V>` | as usual. |
 
 `default: —` denotes a required field without a default. Optional fields are marked `optional`. The values ​​of `enum{…}` are lowercase ASCII, no spaces.
@@ -32,12 +32,12 @@ kid: keeper-eu-west-01
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `kid` | `string` (kebab-case, unique in the cluster; regex `^[a-z][a-z0-9-]{0,62}$`, see [naming-rules.md → Identifiers](../naming-rules.md#идентификаторы)) | — | A stable human-readable identifier for this Keeper instance. Used in lease on SID (`SET sid:lock <kid>`), in the `last_seen_by_kid` column of the `souls` table, in audit events and metrics. See [concept.md → KID](concept.md#kid). |
+| `kid` | `string` (kebab-case, unique in the cluster; regex `^[a-z][a-z0-9-]{0,62}$`, see [naming-rules.md → Identifiers](../naming-rules.md)) | — | A stable human-readable identifier for this Keeper instance. Used in lease on SID (`SET sid:lock <kid>`), in the `last_seen_by_kid` column of the `souls` table, in audit events and metrics. See [concept.md → KID](concept.md#kid). |
 
 ## `listen`
 
 Network listeners. gRPC is formalized as two independent sub-listeners
-by [ADR-012(b)](../adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add):
+by [ADR-012(b)](../adr/0012-keeper-soul-grpc.md):
 
 - `listen.grpc.bootstrap` - Bootstrap-RPC, **server-only TLS** (Soul does not have a SoulSeed certificate before onboarding).
 - `listen.grpc.event_stream` - long-lived bidi stream, **mTLS** (SoulSeed validation of incoming Souls by `tls.ca`).
@@ -72,7 +72,7 @@ listen:
 | `listen.grpc.event_stream.tls.cert` | `path` | — | Keeper server certificate for EventStream. Matches with bootstrap are allowed. |
 | `listen.grpc.event_stream.tls.key` | `path` | — | private key to `cert`. |
 | `listen.grpc.event_stream.tls.ca` | `path` | — | CA against which SoulSeed certificates of incoming Souls are validated. |
-| `listen.grpc.event_stream.max_apply_size_mb` | `int` (MiB, ≥1) | `8` | The ceiling is the size of one outgoing FromKeeper message, primarily `ApplyRequest` with a bunch of rendered `RenderedTask` (render of Destiny - Keeper-side, [ADR-012](../adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add)). Used as `grpc.MaxSendMsgSize` on the EventStream server: when trying to send more, Keeper crashes fail-fast (`ResourceExhausted`), rather than giving Soul a message, which he will silently reject. `0`/omitted → default `8`; `<1` → diag `value_out_of_range`. **Must be ≤ soul-recv-limit** (`keeper.max_apply_size_mb` in [soul/config.md](../soul/config.md#keeper)); defaults of both parties are the same (8 MiB). This is the outgoing send limit; recv limit for incoming FromSoul is a separate internal invariant (1 MiB), not controlled by the config. |
+| `listen.grpc.event_stream.max_apply_size_mb` | `int` (MiB, ≥1) | `8` | The ceiling is the size of one outgoing FromKeeper message, primarily `ApplyRequest` with a bunch of rendered `RenderedTask` (render of Destiny - Keeper-side, [ADR-012](../adr/0012-keeper-soul-grpc.md)). Used as `grpc.MaxSendMsgSize` on the EventStream server: when trying to send more, Keeper crashes fail-fast (`ResourceExhausted`), rather than giving Soul a message, which he will silently reject. `0`/omitted → default `8`; `<1` → diag `value_out_of_range`. **Must be ≤ soul-recv-limit** (`keeper.max_apply_size_mb` in [soul/config.md](../soul/config.md#keeper)); defaults of both parties are the same (8 MiB). This is the outgoing send limit; recv limit for incoming FromSoul is a separate internal invariant (1 MiB), not controlled by the config. |
 | `listen.openapi.addr` | `string(host:port)` | — | bind address of the OpenAPI facade (primary operator interface, [ADR-004](../adr/0004-binaries.md#adr-004-binary-layout--keeper-soul-soul-lint-push-mode-as-a-module-inside-keeper)). Mandatory listener according to the end-to-end requirement "built-in OpenAPI support" ([requirements.md](../requirements.md)); disabling is prohibited by the parser grammar. |
 | `listen.mcp.addr` | `string(host:port)` | — | bind address of the MCP server (primary interface on a par with OpenAPI). Mandatory listener according to the end-to-end requirement "embedded MCP" ([requirements.md](../requirements.md)); disabling is prohibited by the parser grammar. The directory of tools available through this listener is [mcp-tools.md](mcp-tools.md). |
 | `listen.metrics.addr` | `string(host:port)` | — | bind address of the **dedicated** Prometheus-`/metrics` listener (separate port, usually `9090`, [ADR-024](../adr/0024-observability.md#adr-024-observability-prometheus-primary--otel-bridge)). The endpoint is **not** mounted on the openapi router: scrape goes here, without the auth-chain Operator API. keeper_http_* metrics are still collected by middleware on `/v1/*` and displayed here (one registry). Mandatory listener according to the end-to-end requirement "publication of metrics" ([requirements.md](../requirements.md)); disabling is prohibited by the parser grammar. Opt. protection - [`metrics.auth.basic`](#metrics). |
@@ -95,7 +95,7 @@ Connection to Postgres - the only cold state storage of the Keeper cluster ([ADR
 
 ## `redis`
 
-Connection to Redis - hot layer and coordination bus ([ADR-006](../adr/0006-cache-redis.md#adr-006-кэш-и-координация--redis), [storage.md](storage.md)). The Keeper client supports three topologies natively - `mode: standalone | sentinel | cluster`; empty/omitted `mode` is treated as `standalone` (forward-compat for configs without a field).
+Connection to Redis - hot layer and coordination bus ([ADR-006](../adr/0006-cache-redis.md), [storage.md](storage.md)). The Keeper client supports three topologies natively - `mode: standalone | sentinel | cluster`; empty/omitted `mode` is treated as `standalone` (forward-compat for configs without a field).
 
 ```yaml
 # Standalone (default): one node.
@@ -161,7 +161,7 @@ vault:
 
 Vault is a required Keeper dependency: Essence secrets, PKI for SoulSeed release, SSH-CA for `keeper.push`, signing key JWT (see [`auth:`](#auth)), cloud driver credentials ([requirements.md](../requirements.md)).
 
-`vault.auth.method` selects the Keeper authentication method in Vault ([ADR-014](../adr/0014-operator-identity.md#adr-014-identity-модель-оператора-archon)):
+`vault.auth.method` selects the Keeper authentication method in Vault ([ADR-014](../adr/0014-operator-identity.md)):
 
 - `token` (**default**) - static token from `vault.token`. Dev-shortcut: `dev/docker-compose.yml` raises Vault in dev mode with a root token. The `auth` block can be omitted entirely - this is the equivalent of `method: token` (forward-compat for existing `keeper.yml`).
 - `approle` — prod-path: Keeper does `auth/approle/login` with `role_id` + `secret_id` and receives a renewable client-token, which is further renewed in the background (token auto-renew, [requirements.md](../requirements.md)).
@@ -190,7 +190,7 @@ Vault is a required Keeper dependency: Essence secrets, PKI for SoulSeed release
 
 Operator Authentication (Archon) for OpenAPI / MCP. Subblocks:
 
-- `jwt` - internal JWT-issuer ([ADR-014](../adr/0014-operator-identity.md#adr-014-identity-модель-оператора-archon)), signature and token format (actual part; below).
+- `jwt` - internal JWT-issuer ([ADR-014](../adr/0014-operator-identity.md)), signature and token format (actual part; below).
 - `ldap` - federated LDAP authentication ([ADR-058](../adr/0058-operator-auth-ldap-oidc.md), stage 1).
 - `oidc` - federated OAuth2/OIDC authentication ([ADR-058](../adr/0058-operator-auth-ldap-oidc.md), stage 2, requires Redis).
 - `rate_limit` - anti-bruteforce login endpoints ([ADR-058(g)](../adr/0058-operator-auth-ldap-oidc.md)).
@@ -208,12 +208,12 @@ auth:
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `auth.jwt.signing_key_ref` | `vault-ref` | `vault:secret/keeper/jwt-signing-key` | Vault KV-path to signing-key, which is used to sign operator JWTs (`iss`/`sub`/`iat`/`exp`/`roles`/`bootstrap_initial`). Post-MVP - Vault Transit without key export ([ADR-014(b)](../adr/0014-operator-identity.md#adr-014-identity-модель-оператора-archon)). |
-| `auth.jwt.issuer` | `string` | `<kid>` | The value of claim is `iss` in issued JWTs. If there is no value, the parser substitutes the value of the `kid:` field of the instance ([ADR-014(b)](../adr/0014-operator-identity.md#adr-014-identity-модель-оператора-archon)). It is permissible to redefine - a single name per cluster instead of per-instance. |
-| `auth.jwt.ttl_default` | `duration` | `24h` | TTL of regular operator tokens issued through `operator.issue-token`. Short TTL is a natural defense against revocation-blocklist ([ADR-014(d)/(tradeoffs)](../adr/0014-operator-identity.md#adr-014-identity-модель-оператора-archon)). |
-| `auth.jwt.ttl_bootstrap` | `duration` | `720h` (30 days) | TTL of the first bootstrap token issued by `keeper init` ([ADR-013](../adr/0013-bootstrap-archon.md#adr-013-bootstrap-первого-архонта), [ADR-014(b)](../adr/0014-operator-identity.md#adr-014-identity-модель-оператора-archon)). |
+| `auth.jwt.signing_key_ref` | `vault-ref` | `vault:secret/keeper/jwt-signing-key` | Vault KV-path to signing-key, which is used to sign operator JWTs (`iss`/`sub`/`iat`/`exp`/`roles`/`bootstrap_initial`). Post-MVP - Vault Transit without key export ([ADR-014(b)](../adr/0014-operator-identity.md)). |
+| `auth.jwt.issuer` | `string` | `<kid>` | The value of claim is `iss` in issued JWTs. If there is no value, the parser substitutes the value of the `kid:` field of the instance ([ADR-014(b)](../adr/0014-operator-identity.md)). It is permissible to redefine - a single name per cluster instead of per-instance. |
+| `auth.jwt.ttl_default` | `duration` | `24h` | TTL of regular operator tokens issued through `operator.issue-token`. Short TTL is a natural defense against revocation-blocklist ([ADR-014(d)/(tradeoffs)](../adr/0014-operator-identity.md)). |
+| `auth.jwt.ttl_bootstrap` | `duration` | `720h` (30 days) | TTL of the first bootstrap token issued by `keeper init` ([ADR-013](../adr/0013-bootstrap-archon.md), [ADR-014(b)](../adr/0014-operator-identity.md)). |
 
-If according to `signing_key_ref` there is no key in Vault at the time Keeper starts, there is an implementation fork ([ADR-014, section Consequences](../adr/0014-operator-identity.md#adr-014-identity-модель-оператора-archon): "either Keeper generates it itself and puts it at `keeper init`, or refuses to start"). Before closing with a separate task, normative behavior was not recorded.
+If according to `signing_key_ref` there is no key in Vault at the time Keeper starts, there is an implementation fork ([ADR-014, section Consequences](../adr/0014-operator-identity.md): "either Keeper generates it itself and puts it at `keeper init`, or refuses to start"). Before closing with a separate task, normative behavior was not recorded.
 
 ### `auth.ldap` - federated LDAP authentication ([ADR-058](../adr/0058-operator-auth-ldap-oidc.md))
 
@@ -332,9 +332,9 @@ Runtime management - endpoints `GET`/`PUT /v1/provisioning-policy` (permissions 
 
 **What's NOT in `auth:`:**
 
-- Archon Registry - in Postgres (`operators`, [storage.md](storage.md), [ADR-014(a)](../adr/0014-operator-identity.md#adr-014-identity-модель-оператора-archon)).
+- Archon Registry - in Postgres (`operators`, [storage.md](storage.md), [ADR-014(a)](../adr/0014-operator-identity.md)).
 - Roles and permissions - in Postgres (`rbac_*`, ADR-028), managed via `role.*` API/MCP ([rbac.md](rbac.md)).
-- Bootstrap semantics (first Archon, `--initialize`) - [ADR-013](../adr/0013-bootstrap-archon.md#adr-013-bootstrap-первого-архонта), [rbac.md → Bootstrap of the first Archon](rbac.md#bootstrap-первого-архонта).
+- Bootstrap semantics (first Archon, `--initialize`) - [ADR-013](../adr/0013-bootstrap-archon.md), [rbac.md → Bootstrap of the first Archon](rbac.md).
 - mTLS for machine-identity and `combined` auth-method - post-MVP, extending `auth_method` enum to `operators` without breaking change.
 
 ## `metrics`
@@ -358,7 +358,7 @@ metrics:
 
 Password is compared constant-time ([`subtle.ConstantTimeCompare`](../adr/0024-observability.md#adr-024-observability-prometheus-primary--otel-bridge)). The resolved password and `password_ref` are not logged and do not end up in config-dump.
 
-> **Soul does not have symmetric auth.** The Soul agent does not have a vault client ([ADR-012](../adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add)) to resolve `password_ref`; Soul metrics are protected by loopback (`metrics.listen` = `127.0.0.1`, [soul/config.md](../soul/config.md#metrics)). Auth for Soul is a separate future task.
+> **Soul does not have symmetric auth.** The Soul agent does not have a vault client ([ADR-012](../adr/0012-keeper-soul-grpc.md)) to resolve `password_ref`; Soul metrics are protected by loopback (`metrics.listen` = `127.0.0.1`, [soul/config.md](../soul/config.md#metrics)). Auth for Soul is a separate future task.
 
 ## `otel`
 
@@ -398,7 +398,7 @@ logging:
 Behavior depends on `logging.file` (symmetrical to Soul-side, see [`../soul/config.md → logging:`](../soul/config.md#logging)):
 
 - **`logging.file` not specified** → output to `stderr` without rotation (dev mode, convenient for systemd/journald and in a container).
-- **`logging.file` set** → write to this file with built-in rotation (general builder [`shared/log`](../adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам)); archives are stacked side by side according to the pattern `<file>-<timestamp>.<ext>`.
+- **`logging.file` set** → write to this file with built-in rotation (general builder [`shared/log`](../adr/0011-go-layout.md)); archives are stacked side by side according to the pattern `<file>-<timestamp>.<ext>`.
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
@@ -414,7 +414,7 @@ Built-in default rotation ([requirements.md](../requirements.md)) - no dependenc
 
 ## Service registry and `default_destiny_source` - in Postgres
 
-Service registry (`services[]`) and scalar `default_destiny_source` **moved to Postgres** ([ADR-029](../adr/0029-service-registry.md#adr-029-реестр-service-ов--postgres)): the source of truth is tables `service_registry` + `keeper_settings` ([storage.md](storage.md)), not `keeper.yml`. Management - via `service.*` OpenAPI/MCP ([operator-api.md](operator-api.md)), and not by editing the file; runtime reads in-memory snapshot (`serviceregistry.Holder`, TTL-poll + pub/sub-invalidation). The keys `services:`, `default_destiny_source:` and `default_module_source:` in `keeper.yml` are **no longer accepted** - rejected as `unknown_key` (see section ["`services` / `default_destiny_source` / `default_module_source`"](#services--default_destiny_source--default_module_source) below).
+Service registry (`services[]`) and scalar `default_destiny_source` **moved to Postgres** ([ADR-029](../adr/0029-service-registry.md)): the source of truth is tables `service_registry` + `keeper_settings` ([storage.md](storage.md)), not `keeper.yml`. Management - via `service.*` OpenAPI/MCP ([operator-api.md](operator-api.md)), and not by editing the file; runtime reads in-memory snapshot (`serviceregistry.Holder`, TTL-poll + pub/sub-invalidation). The keys `services:`, `default_destiny_source:` and `default_module_source:` in `keeper.yml` are **no longer accepted** - rejected as `unknown_key` (see section ["`services` / `default_destiny_source` / `default_module_source`"](#services--default_destiny_source--default_module_source) below).
 
 `default_module_source` was abolished without replacement - the field did not have a consumer (resolving modules through it is not implemented).
 
@@ -426,7 +426,7 @@ Resolve `apply: { destiny: <name> }` (ADR-009, isolated render pass) does not ch
    - there is no `git:` entry → git-URL = `default_destiny_source` (from `keeper_settings`) with `{name}` substitution. Empty / not specified `default_destiny_source` at this step → resolution error (there is nowhere to put the name).
 3. destiny is loaded as a separate immutable snapshot, rendered with OWN `input:` (resolved `apply.input`), its tasks are pasted into the parent's plan. scenario-scope (input/vars/register/soulprint) is NOT visible in destiny - structural isolation boundary.
 
-See also [architecture.md → Service](../architecture.md#service--структура-и-manifest), [storage.md → service_registry / keeper_settings](storage.md).
+See also [architecture.md → Service](../architecture.md), [storage.md → service_registry / keeper_settings](storage.md).
 
 ## `plugins`
 
@@ -452,7 +452,7 @@ plugins:
   work_root: /var/lib/soul-stack-keeper/plugin-src
 ```
 
-Root of working git clones of plugin resolver ([ADR-026](../adr/0026-sigil.md#adr-026-sigil--целостность-плагинов-keeper-signed-digest-индекс) F-fetch). At startup, Keeper git resolves `plugins.{cloud_drivers,ssh_providers}` into this directory (clone/fetch + checkout via **go-git**, without depending on the system binary `git`), then extracts the collected artifact `dist/<binary-name>` into the commit_sha cache slot.
+Root of working git clones of plugin resolver ([ADR-026](../adr/0026-sigil.md) F-fetch). At startup, Keeper git resolves `plugins.{cloud_drivers,ssh_providers}` into this directory (clone/fetch + checkout via **go-git**, without depending on the system binary `git`), then extracts the collected artifact `dist/<binary-name>` into the commit_sha cache slot.
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
@@ -479,7 +479,7 @@ plugins:
   max_clone_size_mb: 1024      # clone working tree ceiling (checkout + .git), default 1024 MiB
 ```
 
-Size limits git-egress hardening ([ADR-026(g)](../adr/0026-sigil.md#adr-026-sigil--целостность-плагинов-keeper-signed-digest-индекс)). `source` directory is operator-asserted, but the repository itself is **untrusted**: `fetch_timeout` limits git-egress **by time**, but not by volume - a hostile/huge repository could clog `work_root` + `cache_root` keeper-host disk (DoS). These two fields cap **by volume**: `max_clone_size_mb` is measured against the working tree (du-like walk checkout + `.git`) **before** extracting the artifact, `max_artifact_size_mb` is measured against the `dist/<binary-name>` binary before copying to the cache. Exceeding - **fail-closed**: the slot is not created (the plugin has nothing to allow through Sigil), and for the clone limit, `work_root/<name>` is additionally cleared (sentinels `ErrCloneTooLarge` / `ErrArtifactTooLarge`).
+Size limits git-egress hardening ([ADR-026(g)](../adr/0026-sigil.md)). `source` directory is operator-asserted, but the repository itself is **untrusted**: `fetch_timeout` limits git-egress **by time**, but not by volume - a hostile/huge repository could clog `work_root` + `cache_root` keeper-host disk (DoS). These two fields cap **by volume**: `max_clone_size_mb` is measured against the working tree (du-like walk checkout + `.git`) **before** extracting the artifact, `max_artifact_size_mb` is measured against the `dist/<binary-name>` binary before copying to the cache. Exceeding - **fail-closed**: the slot is not created (the plugin has nothing to allow through Sigil), and for the clone limit, `work_root/<name>` is additionally cleared (sentinels `ErrCloneTooLarge` / `ErrArtifactTooLarge`).
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
@@ -501,7 +501,7 @@ CloudDriver plugins (`soul-cloud-<provider>`), used by [`keeper.cloud`](cloud.md
 |---|---|---|---|
 | `plugins.cloud_drivers[].name` | `string` (kebab-case) | — | Provider name to link from Provider to Postgres (`type=<name>`, [cloud.md](cloud.md)). |
 | `plugins.cloud_drivers[].source` | `git-url` | — | git-URL of the plugin repository. |
-| `plugins.cloud_drivers[].ref` | `git-ref` | — | git tag or branch ([ADR-007](../adr/0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте)). |
+| `plugins.cloud_drivers[].ref` | `git-ref` | — | git tag or branch ([ADR-007](../adr/0007-versioning-git-ref.md)). |
 
 ### `plugins.ssh_providers`
 
@@ -517,7 +517,7 @@ SshProvider plugins (`soul-ssh-<provider>`), used by [`keeper.push`](push.md).
 |---|---|---|---|
 | `plugins.ssh_providers[].name` | `string` (kebab-case) | — | The name of the provider that the push operation refers to when selecting SSH authentication ([push.md](push.md)). |
 | `plugins.ssh_providers[].source` | `git-url` | — | git-URL of the plugin repository. |
-| `plugins.ssh_providers[].ref` | `git-ref` | — | git tag or branch ([ADR-007](../adr/0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте)). |
+| `plugins.ssh_providers[].ref` | `git-ref` | — | git tag or branch ([ADR-007](../adr/0007-versioning-git-ref.md)). |
 
 ## `plugin_runtime`
 
@@ -537,20 +537,20 @@ plugin_runtime:
   enable_tls: false
 ```
 
-Lifecycle host process for plugins running on the Keeper side (`cloud_driver`, `ssh_provider`): handshake and shutdown timeouts, whitelist capabilities and resource conflict policy, optional TLS on the plugin socket. Full lifecycle semantics, handshake string format, plugin launch diagram - [plugins.md → Lifecycle](plugins.md#lifecycle); regulatory decision - [ADR-020(d/f/g/h)](../adr/0020-plugin-infrastructure.md#adr-020-plugin-инфраструктура-формат-manifest-handshake-lifecycle).
+Lifecycle host process for plugins running on the Keeper side (`cloud_driver`, `ssh_provider`): handshake and shutdown timeouts, whitelist capabilities and resource conflict policy, optional TLS on the plugin socket. Full lifecycle semantics, handshake string format, plugin launch diagram - [plugins.md → Lifecycle](plugins.md#lifecycle); regulatory decision - [ADR-020(d/f/g/h)](../adr/0020-plugin-infrastructure.md).
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `plugin_runtime.socket_dir` | `path` | `/var/run/soul-stack-keeper/plugins/` | The directory in which the host creates Unix-domain plugin sockets (`<namespace>-<name>-<pid>.sock`). Created with mode `0700`, owned by service user `keeper` ([ADR-020(d)](../adr/0020-plugin-infrastructure.md#adr-020-plugin-инфраструктура-формат-manifest-handshake-lifecycle)). The path is different for Keeper-host (`soul-stack-keeper`) and Soul-host (`soul-stack`), see [`../soul/config.md → plugin_runtime`](../soul/config.md#plugin_runtime). |
-| `plugin_runtime.startup_timeout` | `duration` | `10s` | Time from `fork()` plugin process until handshake line `"soul_stack":"plugin-v1"` appears in stdout. Exceeding - the host sends SIGTERM, then SIGKILL after `shutdown_grace` ([ADR-020(d)](../adr/0020-plugin-infrastructure.md#adr-020-plugin-инфраструктура-формат-manifest-handshake-lifecycle), [plugins.md → Host behavior during handshake](plugins.md#поведение-host-а-при-handshake)). |
-| `plugin_runtime.shutdown_grace` | `duration` | `10s` | Time from SIGTERM to SIGKILL. The SDK provides a signal-handler, the plugin must close the in-flight RPC and terminate itself within this window ([ADR-020(d)](../adr/0020-plugin-infrastructure.md#adr-020-plugin-инфраструктура-формат-manifest-handshake-lifecycle)). |
-| `plugin_runtime.allowed_capabilities` | `list<enum>` | all 6 capabilities (see YAML-block above) | Closed enum (full catalog - [plugins.md → required_capabilities-table](plugins.md#required_capabilities-таблица), [ADR-020(f)](../adr/0020-plugin-infrastructure.md#adr-020-plugin-инфраструктура-формат-manifest-handshake-lifecycle)). Whitelist: `soul-lint` rejects destiny **before launch** if `manifest.required_capabilities` plugin ⊄ this list. Default allows all six; the operator narrows it down according to security policy. The parser rejects values ​​outside the closed enum with `unknown_capability`. |
-| `plugin_runtime.conflict_policy` | `enum{warn,fail}` | `warn` | Policy for the case when two plugins in the same run claim the same resource in `side_effects` (same pair `<resource_type>:<value>`). `warn` — host writes audit-event and continues running; `fail` - the step is marked `failed`, the reason `policy_violation` is reflected in the diagnostic channel `TaskEvent` / `RunResult` ([ADR-020(g)](../adr/0020-plugin-infrastructure.md#adr-020-plugin-инфраструктура-формат-manifest-handshake-lifecycle), [plugins.md → Host behavior on side_effects](plugins.md#поведение-host-а-на-side_effects)). |
-| `plugin_runtime.enable_tls` | `bool` | `false` | Enabling mTLS on a plugin socket. In MVP - `false`: security is provided by file-permissions `0700` on Unix-socket ([ADR-020(h)](../adr/0020-plugin-infrastructure.md#adr-020-plugin-инфраструктура-формат-manifest-handshake-lifecycle)). Post-MVP - `true` uses the `server_cert` (base64-PEM) field of the handshake string, already reserved by forward-compat-reserve. Before closing a separate task, the behavior at `true` is rejected by the parser with `tls_not_implemented`. |
+| `plugin_runtime.socket_dir` | `path` | `/var/run/soul-stack-keeper/plugins/` | The directory in which the host creates Unix-domain plugin sockets (`<namespace>-<name>-<pid>.sock`). Created with mode `0700`, owned by service user `keeper` ([ADR-020(d)](../adr/0020-plugin-infrastructure.md)). The path is different for Keeper-host (`soul-stack-keeper`) and Soul-host (`soul-stack`), see [`../soul/config.md → plugin_runtime`](../soul/config.md#plugin_runtime). |
+| `plugin_runtime.startup_timeout` | `duration` | `10s` | Time from `fork()` plugin process until handshake line `"soul_stack":"plugin-v1"` appears in stdout. Exceeding - the host sends SIGTERM, then SIGKILL after `shutdown_grace` ([ADR-020(d)](../adr/0020-plugin-infrastructure.md), [plugins.md → Host behavior during handshake](plugins.md)). |
+| `plugin_runtime.shutdown_grace` | `duration` | `10s` | Time from SIGTERM to SIGKILL. The SDK provides a signal-handler, the plugin must close the in-flight RPC and terminate itself within this window ([ADR-020(d)](../adr/0020-plugin-infrastructure.md)). |
+| `plugin_runtime.allowed_capabilities` | `list<enum>` | all 6 capabilities (see YAML-block above) | Closed enum (full catalog - [plugins.md → required_capabilities-table](plugins.md), [ADR-020(f)](../adr/0020-plugin-infrastructure.md)). Whitelist: `soul-lint` rejects destiny **before launch** if `manifest.required_capabilities` plugin ⊄ this list. Default allows all six; the operator narrows it down according to security policy. The parser rejects values ​​outside the closed enum with `unknown_capability`. |
+| `plugin_runtime.conflict_policy` | `enum{warn,fail}` | `warn` | Policy for the case when two plugins in the same run claim the same resource in `side_effects` (same pair `<resource_type>:<value>`). `warn` — host writes audit-event and continues running; `fail` - the step is marked `failed`, the reason `policy_violation` is reflected in the diagnostic channel `TaskEvent` / `RunResult` ([ADR-020(g)](../adr/0020-plugin-infrastructure.md), [plugins.md → Host behavior on side_effects](plugins.md)). |
+| `plugin_runtime.enable_tls` | `bool` | `false` | Enabling mTLS on a plugin socket. In MVP - `false`: security is provided by file-permissions `0700` on Unix-socket ([ADR-020(h)](../adr/0020-plugin-infrastructure.md)). Post-MVP - `true` uses the `server_cert` (base64-PEM) field of the handshake string, already reserved by forward-compat-reserve. Before closing a separate task, the behavior at `true` is rejected by the parser with `tls_not_implemented`. |
 
 ### Hot-reload block `plugin_runtime:`
 
-Hot-reload config - end-to-end requirement ([requirements.md](../requirements.md)). The general reload mechanism is standardized in [ADR-021](../adr/0021-hot-reload-config.md#adr-021-hot-reload-конфига-с-write-back-yaml), see [§ Hot-reload](#hot-reload) below. Per-field policy block `plugin_runtime:`:
+Hot-reload config - end-to-end requirement ([requirements.md](../requirements.md)). The general reload mechanism is standardized in [ADR-021](../adr/0021-hot-reload-config.md), see [§ Hot-reload](#hot-reload) below. Per-field policy block `plugin_runtime:`:
 
 | Field | Reload without restarting the host process | Rationale |
 |---|---|---|
@@ -565,7 +565,7 @@ Rule: change-without-restart what is used as a parameter of a specific plugin ru
 
 ## `sigil`
 
-Plugin approval signature - **Sigil** trust seal ([ADR-026](../adr/0026-sigil.md#adr-026-sigil--целостность-плагинов-keeper-signed-digest-индекс), [plugins.md → Integrity-model](plugins.md#integrity-model)). Optional block: if `signing_key_ref` is missing (or empty), the signature is not available - Keeper starts normally, but the allow operation (allowing the plugin by the Archon) will return the error "sigil key not configured". Loading the nil-safe key.
+Plugin approval signature - **Sigil** trust seal ([ADR-026](../adr/0026-sigil.md), [plugins.md → Integrity-model](plugins.md#integrity-model)). Optional block: if `signing_key_ref` is missing (or empty), the signature is not available - Keeper starts normally, but the allow operation (allowing the plugin by the Archon) will return the error "sigil key not configured". Loading the nil-safe key.
 
 ```yaml
 sigil:
@@ -575,13 +575,13 @@ sigil:
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `sigil.signing_key_ref` | `vault-ref` | - (optional) | Vault KV-path to **ed25519-private**, with which Keeper signs the Sigil block (the field in Vault KV is **`signing_key`**, as in `auth.jwt.signing_key_ref`). The key is **asymmetric** (ed25519), in contrast to the HS256-symmetric JWT signing-key: the private part signs to Keeper, the public part goes to Soul in bootstrap as a trust-anchor for verify ([ADR-026(d)](../adr/0026-sigil.md#adr-026-sigil--целостность-плагинов-keeper-signed-digest-индекс)). Valid forms of the value in KV are PEM (PKCS#8), base64(DER), base64/raw 64-byte `seed‖pub` or 32-byte seed. **Plaintext key is prohibited in the config** ("security comes first"): non-vault-ref → diag `vault_ref_invalid`. The format of the signed block is [plugins.md → Format of the signed block](plugins.md#формат-подписываемого-блока-нормативный-s3). |
+| `sigil.signing_key_ref` | `vault-ref` | - (optional) | Vault KV-path to **ed25519-private**, with which Keeper signs the Sigil block (the field in Vault KV is **`signing_key`**, as in `auth.jwt.signing_key_ref`). The key is **asymmetric** (ed25519), in contrast to the HS256-symmetric JWT signing-key: the private part signs to Keeper, the public part goes to Soul in bootstrap as a trust-anchor for verify ([ADR-026(d)](../adr/0026-sigil.md)). Valid forms of the value in KV are PEM (PKCS#8), base64(DER), base64/raw 64-byte `seed‖pub` or 32-byte seed. **Plaintext key is prohibited in the config** ("security comes first"): non-vault-ref → diag `vault_ref_invalid`. The format of the signed block is [plugins.md → Format of the signed block](plugins.md). |
 
 ### `sigil_anchors_reload_interval` (top-level)
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `sigil_anchors_reload_interval` | `duration` | `30s` | **TTL-fallback-reread** period of the Sigil signature trust-anchor key set ([ADR-026(h)](../adr/0026-sigil.md#adr-026-sigil--целостность-плагинов-keeper-signed-digest-индекс), R3). Channel `sigil:anchors-changed` (Redis pub/sub) - best-effort; a missed signal would leave the lagging node with the old set of anchors until the restart (fail-open with Retire). Periodic re-read (`reloadAnchors` by ticker, sample TTL-poll RBAC / Summons poll-fallback) self-heals skipping the interval. The tick rises **independently of Redis**: when Redis is turned off (single-instance / dev), this is the only way along which the runtime rotation reaches without restarting. The format is validated in the semantic phase; empty/`0`/incorrect → default. The key is **top-level** (style `acolyte_*`), not nested in `sigil:`. |
+| `sigil_anchors_reload_interval` | `duration` | `30s` | **TTL-fallback-reread** period of the Sigil signature trust-anchor key set ([ADR-026(h)](../adr/0026-sigil.md), R3). Channel `sigil:anchors-changed` (Redis pub/sub) - best-effort; a missed signal would leave the lagging node with the old set of anchors until the restart (fail-open with Retire). Periodic re-read (`reloadAnchors` by ticker, sample TTL-poll RBAC / Summons poll-fallback) self-heals skipping the interval. The tick rises **independently of Redis**: when Redis is turned off (single-instance / dev), this is the only way along which the runtime rotation reaches without restarting. The format is validated in the semantic phase; empty/`0`/incorrect → default. The key is **top-level** (style `acolyte_*`), not nested in `sigil:`. |
 
 ## `reaper`
 
@@ -603,14 +603,14 @@ reaper:
 | `reaper.interval` | `duration` | `1h` | Passage interval. |
 | `reaper.dry_run` | `bool` | `false` | Dry run without mutations. |
 | `reaper.batch_size` | `int` | `500` | Batch size of one pass. |
-| `reaper.lock_ttl` | `duration` | `5m` | TTL Redis-lease for leadership ([ADR-006](../adr/0006-cache-redis.md#adr-006-кэш-и-координация--redis)). |
-| `reaper.rules` | `map<string, object>` | — | Cleaning rules. The structure of each rule (fields, types, conditional mandatoryness according to `action`) is normatively defined in [reaper.md → Rule structure](reaper.md#структура-правила); directory of predefined rules and binding to tables - [reaper.md → Rules](reaper.md#правила). The `reclaim_apply_runs` rule is **disabled** by default and is enabled only under the gate - see [reaper.md → Enabling recovery](reaper.md#включение-recovery-recovery-enable) (WARN: do not enable when `acolytes: 0`). Cadence spawn (`spawn_due_cadence` / `action: spawn`) **is no longer in Reaper** - it went to the [Conductor](conductor.md) subsystem ([ADR-048](../adr/0048-conductor.md#adr-048-conductor--leader-elected-исполнитель-cadence-расписаний)); see block [`cadence_scheduler`](#cadence_scheduler). |
+| `reaper.lock_ttl` | `duration` | `5m` | TTL Redis-lease for leadership ([ADR-006](../adr/0006-cache-redis.md)). |
+| `reaper.rules` | `map<string, object>` | — | Cleaning rules. The structure of each rule (fields, types, conditional mandatoryness according to `action`) is normatively defined in [reaper.md → Rule structure](reaper.md); directory of predefined rules and binding to tables - [reaper.md → Rules](reaper.md). The `reclaim_apply_runs` rule is **disabled** by default and is enabled only under the gate - see [reaper.md → Enabling recovery](reaper.md) (WARN: do not enable when `acolytes: 0`). Cadence spawn (`spawn_due_cadence` / `action: spawn`) **is no longer in Reaper** - it went to the [Conductor](conductor.md) subsystem ([ADR-048](../adr/0048-conductor.md)); see block [`cadence_scheduler`](#cadence_scheduler). |
 
 ## `cadence_scheduler`
 
-Subsystem config [Conductor](conductor.md) - leader-elected executor of [Cadence](../naming-rules.md#сущности-предметной-области)-schedules ([ADR-048](../adr/0048-conductor.md#adr-048-conductor--leader-elected-исполнитель-cadence-расписаний)). Conductor, based on its tick, selects mature Cadence and spawns a regular Voyage run; lease `conductor:leader` is independent from `reaper:leader`. Block **optional** - if absent, defaults apply + default-ON when Redis (footgun-guard) is configured. Full description of behavior, including [adaptive polling step](conductor.md#адаптивный-шаг-опроса) and [floor minimum Cadence period](conductor.md#floor-минимального-периода-cadence) - [conductor.md](conductor.md).
+Subsystem config [Conductor](conductor.md) - leader-elected executor of [Cadence](../naming-rules.md)-schedules ([ADR-048](../adr/0048-conductor.md)). Conductor, based on its tick, selects mature Cadence and spawns a regular Voyage run; lease `conductor:leader` is independent from `reaper:leader`. Block **optional** - if absent, defaults apply + default-ON when Redis (footgun-guard) is configured. Full description of behavior, including [adaptive polling step](conductor.md) and [floor minimum Cadence period](conductor.md) - [conductor.md](conductor.md).
 
-**Adaptive polling step** ([ADR-048 "Adaptive interval"](../adr/0048-conductor.md#adr-048-conductor--leader-elected-исполнитель-cadence-расписаний)), not fixed: before each tick the leader outputs a step from the Cadence enabled register - `clamp(min(periods of enabled schedules), poll_floor, poll_ceiling)`; cron rules contribute 60s; empty enabled registry → `poll_idle`. The default profile "Calm" is 30s / 60s / 120s.
+**Adaptive polling step** ([ADR-048 "Adaptive interval"](../adr/0048-conductor.md)), not fixed: before each tick the leader outputs a step from the Cadence enabled register - `clamp(min(periods of enabled schedules), poll_floor, poll_ceiling)`; cron rules contribute 60s; empty enabled registry → `poll_idle`. The default profile "Calm" is 30s / 60s / 120s.
 
 ```yaml
 cadence_scheduler:
@@ -624,16 +624,16 @@ cadence_scheduler:
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `cadence_scheduler.enabled` | `bool` (optional, tri-state) | `nil` → ON with Redis | Enable Conductor. **Omitted / `null`** → default-ON if Redis is present ([footgun-guard ADR-048 §5](../adr/0048-conductor.md#adr-048-conductor--leader-elected-исполнитель-cadence-расписаний): Cadence does not silently spawn without a running scheduler); explicit **`false`** → Conductor does not rise; explicit **`true`** → raised (requires Redis for lease leadership). Disabling an individual schedule - per-Cadence `enabled: false` ([ADR-046 §3](../adr/0046-cadence.md#adr-046-cadence--регулярные-запуски-scheduledrecurring-voyage)), not global blanking here. **Read at start** (not hot-reload) - the change requires an instance restart. |
-| `cadence_scheduler.poll_floor` | `duration` | `30s` | The lower limit of the adaptive survey step (the "Quiet" profile). Coincides with the floor-limit of the minimum period Cadence - the same key, single source 30s (write-path floor-reject `interval_seconds ≥ poll_floor` reads the same resolve, see [conductor.md → Floor](conductor.md#floor-минимального-периода-cadence)). **Absolute minimum**: `< 30s` → diag `value_out_of_range` at the start (the sub-30s period is meaningless - downstream will not work more accurately, the reactive domain is Beacons). Empty/invalid → default. **Hot-reload** (re-read at every tick from a fresh Store snapshot). |
+| `cadence_scheduler.enabled` | `bool` (optional, tri-state) | `nil` → ON with Redis | Enable Conductor. **Omitted / `null`** → default-ON if Redis is present ([footgun-guard ADR-048 §5](../adr/0048-conductor.md): Cadence does not silently spawn without a running scheduler); explicit **`false`** → Conductor does not rise; explicit **`true`** → raised (requires Redis for lease leadership). Disabling an individual schedule - per-Cadence `enabled: false` ([ADR-046 §3](../adr/0046-cadence.md)), not global blanking here. **Read at start** (not hot-reload) - the change requires an instance restart. |
+| `cadence_scheduler.poll_floor` | `duration` | `30s` | The lower limit of the adaptive survey step (the "Quiet" profile). Coincides with the floor-limit of the minimum period Cadence - the same key, single source 30s (write-path floor-reject `interval_seconds ≥ poll_floor` reads the same resolve, see [conductor.md → Floor](conductor.md)). **Absolute minimum**: `< 30s` → diag `value_out_of_range` at the start (the sub-30s period is meaningless - downstream will not work more accurately, the reactive domain is Beacons). Empty/invalid → default. **Hot-reload** (re-read at every tick from a fresh Store snapshot). |
 | `cadence_scheduler.poll_ceiling` | `duration` | `60s` | Upper bound on adaptive polling step: the sparse schedule (`interval=1h`) does not stretch the polling so that the missed-slot mechanism becomes the only insurance. Invariant `poll_floor ≤ poll_ceiling` (aka `value_out_of_range`). Empty/invalid → default. **Hot-reload**. |
 | `cadence_scheduler.poll_idle` | `duration` | `120s` | Polling step with **empty enabled registry** Cadence (there is nothing to spawn - polling is less frequent than the corridor, not in vain). Invariant `poll_idle ≥ poll_ceiling` (otherwise `value_out_of_range`: idle no more often than normal polling). Empty/invalid → default. **Hot-reload**. |
 | `cadence_scheduler.interval` | `duration` | — (alias) | **Backcompat-alias** `poll_ceiling`. Before the amendment, 2026-06-07 was a fixed tick period; Now the step is adaptive, `interval` is abandoned for the sake of the old `keeper.yml`. If `poll_ceiling` is **not** set → `poll_ceiling = max(interval, poll_floor)` (clamp up to floor). Sub-floor `interval` (for example, the previous dev-config with `5s`) **does not drop the config**: rises to floor with WARNING (`value_clamped`, a hint about Beacons for sub-30s). If `interval` and `poll_ceiling` are specified simultaneously, `poll_ceiling` wins. New configs write `poll_*`. **Hot-reload**. |
-| `cadence_scheduler.lock_ttl` | `duration` | `5m` | TTL Redis-lease `conductor:leader` ([ADR-006](../adr/0006-cache-redis.md#adr-006-кэш-и-координация--redis)), parity `reaper.lock_ttl`. Large enough to survive a leader's temporary stall; short enough for quick failover; renew to `lock_ttl/3`. Empty/`0`/invalid → default. **Hot-reload** (used between re-acquire leases). |
+| `cadence_scheduler.lock_ttl` | `duration` | `5m` | TTL Redis-lease `conductor:leader` ([ADR-006](../adr/0006-cache-redis.md)), parity `reaper.lock_ttl`. Large enough to survive a leader's temporary stall; short enough for quick failover; renew to `lock_ttl/3`. Empty/`0`/invalid → default. **Hot-reload** (used between re-acquire leases). |
 
 Format `poll_floor` / `poll_ceiling` / `poll_idle` / `interval` / `lock_ttl` passes semantic check `checkDuration` (like `reaper.interval` / `acolyte_*`): invalid duration rejects config at start, range (`>0`) achieves default. The mutual order of the corridor (`poll_floor ≥ 30s ≤ poll_ceiling ≤ poll_idle`) is checked against **resolved** values ​​(taking into account alias-clamp), therefore it also catches implicit violations through `interval`.
 
-> **The previous dev-recommendation `interval: 5s` is no longer there.** At floor 30s, sub-30s polling is unattainable by design - for a frequent rhythm, set the corridor to 30–60s, for a reaction faster than 30s, use [Beacons](../adr/0030-vigil-oracle.md#adr-030-vigil--oracle--event-driven-мониторинг-beacons--reactor) (Vigil/Oracle, ADR-030), this is not Cadence's task.
+> **The previous dev-recommendation `interval: 5s` is no longer there.** At floor 30s, sub-30s polling is unattainable by design - for a frequent rhythm, set the corridor to 30–60s, for a reaction faster than 30s, use [Beacons](../adr/0030-vigil-oracle.md) (Vigil/Oracle, ADR-030), this is not Cadence's task.
 
 ## `acolytes`
 
@@ -647,22 +647,22 @@ acolytes: 0
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `acolytes` | `int` (≥0) | `0` | Number of workers in the execution pool apply (**Acolyte**, [ADR-027](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim)). **Feature-flag**: `0` - the pool **does not rise**, execution of runs proceeds the same way (run-goroutine of the owner instance in scenario-runner); `>0` - a pool of N workers starts on the instance, each periodically brands planned tasks (`apply_runs`) through `FOR UPDATE SKIP LOCKED`. Transfer of execution to the pool (cutover, removal of run-goroutine) - step by step in [Phase 1.4 / Phase 2](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim); before this, `acolytes: 0` is the standard value. A negative value is rejected with error `value_out_of_range`. |
-| `acolyte_lease` | `duration` | `30s` | TTL Ward-capture planned-task ([ADR-027(d)](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim): `claim_expires_at = NOW()+lease`). Expired Ward will relabel the recovery scan (Phase 2). Empty → default. |
+| `acolytes` | `int` (≥0) | `0` | Number of workers in the execution pool apply (**Acolyte**, [ADR-027](../adr/0027-apply-work-queue.md)). **Feature-flag**: `0` - the pool **does not rise**, execution of runs proceeds the same way (run-goroutine of the owner instance in scenario-runner); `>0` - a pool of N workers starts on the instance, each periodically brands planned tasks (`apply_runs`) through `FOR UPDATE SKIP LOCKED`. Transfer of execution to the pool (cutover, removal of run-goroutine) - step by step in [Phase 1.4 / Phase 2](../adr/0027-apply-work-queue.md); before this, `acolytes: 0` is the standard value. A negative value is rejected with error `value_out_of_range`. |
+| `acolyte_lease` | `duration` | `30s` | TTL Ward-capture planned-task ([ADR-027(d)](../adr/0027-apply-work-queue.md): `claim_expires_at = NOW()+lease`). Expired Ward will relabel the recovery scan (Phase 2). Empty → default. |
 | `acolyte_batch` | `int` (≥0) | `10` | Maximum planned tasks captured by one claim tick (LIMIT claim request). Workers of different instances share the queue via `FOR UPDATE SKIP LOCKED` - the batch only limits the appetite of one tick. `0`/omitted → default. Negative is rejected by `value_out_of_range`. |
-| `acolyte_poll_interval` | `duration` | `2s` | The worker's poll-tick period is fallback to the Summons signal ([ADR-027(a)](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim)). Even if the pub/sub signal is lost, the task will be picked up at the nearest tick. Empty → default. |
-| `acolyte_drain_grace` | `duration` | `5s` | Graceful-drain window of the Acolyte pool when Keeper stops ([ADR-027 Phase 2](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim)): from the "no more claim" signal to the hard cancellation of claim-ctx for in-flight workers who did not have time. An interrupted claim leaves Ward in the database (`claimed`/`running`) - the lease will expire, the task will pick up a recovery scan (ADR-027(i)); commit/rollback states are NOT forced. Empty → default. |
+| `acolyte_poll_interval` | `duration` | `2s` | The worker's poll-tick period is fallback to the Summons signal ([ADR-027(a)](../adr/0027-apply-work-queue.md)). Even if the pub/sub signal is lost, the task will be picked up at the nearest tick. Empty → default. |
+| `acolyte_drain_grace` | `duration` | `5s` | Graceful-drain window of the Acolyte pool when Keeper stops ([ADR-027 Phase 2](../adr/0027-apply-work-queue.md)): from the "no more claim" signal to the hard cancellation of claim-ctx for in-flight workers who did not have time. An interrupted claim leaves Ward in the database (`claimed`/`running`) - the lease will expire, the task will pick up a recovery scan (ADR-027(i)); commit/rollback states are NOT forced. Empty → default. |
 
 > **HA invariant: `N>1` live Keeper instances require `acolytes>0`.** `acolytes: 0`
 > (run-goroutine-path) - **single-keeper-only**. In this mode, run ownership
 > lives **in-memory** in the run-goroutine of the instance that launched it, and `RunResult`
 > from Soul comes to the instance holding **EventStream** of this Soul (its SID-lease,
-> [ADR-006(b)](../adr/0006-cache-redis.md#adr-006-кэш-и-координация--redis)). On one Keeper
+> [ADR-006(b)](../adr/0006-cache-redis.md)). On one Keeper
 > it's always the same instance. In an HA cluster (≥2 live Keepers on shared PG/Redis)
 > a run created on Keeper-A, but with Soul on the Keeper-B stream, **will work on the host**
 > (`apply_runs.status=success`), however the incarnation **will forever get stuck in `applying`**:
 > owner-run on Keeper-A will never see the one left on Keeper-B `RunResult` and his
-> barrier will expire at `runTimeout`. When `acolytes>0` (work-queue, [ADR-027](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim))
+> barrier will expire at `runTimeout`. When `acolytes>0` (work-queue, [ADR-027](../adr/0027-apply-work-queue.md))
 > this is not the case: claim+dispatch go through the general queue (`apply_runs` + Summons), and completion
 > is observed through a common PG, regardless of which instance is hosting the stream.
 >
@@ -686,7 +686,7 @@ acolytes: 0
 
 ## `allow_unsafe_single_path_multi_keeper` (top-level)
 
-Explicit **opt-out** from refuse-guard soul-shedding (Finding-A, [ADR-027](../adr/0027-apply-work-queue.md#adr-027-модель-исполнения-apply--work-queue--claim-acolyte-пул-ward-claim)). By default, Keeper with `acolytes == 0` and the number of living Keeper instances in **Conclave** (presence registry in Redis, keys `keeper:instance:<kid>`, TTL 30s) is more than one - **refuses to start** (see HA invariant above). `true` removes the ban: refuse is replaced by a loud `WARN`, the start continues.
+Explicit **opt-out** from refuse-guard soul-shedding (Finding-A, [ADR-027](../adr/0027-apply-work-queue.md)). By default, Keeper with `acolytes == 0` and the number of living Keeper instances in **Conclave** (presence registry in Redis, keys `keeper:instance:<kid>`, TTL 30s) is more than one - **refuses to start** (see HA invariant above). `true` removes the ban: refuse is replaced by a loud `WARN`, the start continues.
 
 ```yaml
 # allow_unsafe_single_path_multi_keeper: false   # default (refuse); top-level
@@ -710,13 +710,13 @@ Explicit **opt-out** from refuse-guard soul-shedding (Finding-A, [ADR-027](../ad
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `watchman_interval` | `duration` | `5s` | Watchman probe tick period: how often the instance pings PG+Redis for isolation. The format is validated in the semantic phase; empty/`0`/incorrect → default (resolved in daemon, style `acolyte_*`). The key is **top-level**. |
-| `watchman_fail_threshold` | `int` (≥0) | `3` | Number of **consecutive** probe failures before isolation and shedding are announced. Debounce/flap-guard: a single network spike should not reset the entire fleet of streams at once (thundering-herd reconnect across the cluster). One successful probe resets the counter. `0`/omitted → default. Negative is rejected by `value_out_of_range`. Time until shedding ≈ `watchman_interval × watchman_fail_threshold` (default ≈ 15s). |
+| `watchman_fail_threshold` | `int` (≥0) | `3` | Number of **consecutive** probe failures before isolation and shedding are announced. Debounce/flap-guard: a single network spike should not reset all the streams at once (thundering-herd reconnect across the cluster). One successful probe resets the counter. `0`/omitted → default. Negative is rejected by `value_out_of_range`. Time until shedding ≈ `watchman_interval × watchman_fail_threshold` (default ≈ 15s). |
 
-> Probe dependencies are the same `health.Pinger`s as `/readyz` (PG is required; Redis - only with a live client: dev-fallback without Redis leaves probe only on PG). Vault in probe is **not** enabled - it is optional for serving streams and its unavailability does not equal isolation of the instance from the fleet. The "I'm isolated" solution is centralized in Watchman (not duplicated in per-stream renewal loops). The metrics are `keeper_watchman_isolated` (gauge 0/1) and `keeper_watchman_streams_shed_total`.
+> Probe dependencies are the same `health.Pinger`s as `/readyz` (PG is required; Redis - only with a live client: dev-fallback without Redis leaves probe only on PG). Vault in probe is **not** enabled - it is optional for serving streams and its unavailability does not equal isolating the instance from the Souls. The "I'm isolated" solution is centralized in Watchman (not duplicated in per-stream renewal loops). The metrics are `keeper_watchman_isolated` (gauge 0/1) and `keeper_watchman_streams_shed_total`.
 
 ## `toll`
 
-**Toll** — cluster-wide detector of Souls outflow ([ADR-038](../adr/0038-toll.md#adr-038-toll--cluster-wide-detector-массового-оттока-souls)). Per-instance Watcher watches gRPC disconnect events of the EventStream, filters graceful-shutdown / warmup-immunity and publishes the surviving event to the common Redis sorted-set. Cluster-leader (via Redis-lease `cluster:toll:leader`) every 5s aggregates the sorted-set over a sliding window of 60s, compares it with the baseline `souls.status='connected'` and, if the threshold is exceeded, sets the Redis key `cluster:degraded` (TTL 60s). Middleware on the Operator API blocks `POST /v1/incarnations/{name}/scenarios/{scenario}` and `POST /v1/push/apply` with HTTP 503 + Retry-After on each request when the flag is checked. Read-API, RBAC, unlock, destroy, Errand are NOT blocked (recovery actions).
+**Toll** — cluster-wide detector of Souls outflow ([ADR-038](../adr/0038-toll.md)). Per-instance Watcher watches gRPC disconnect events of the EventStream, filters graceful-shutdown / warmup-immunity and publishes the surviving event to the common Redis sorted-set. Cluster-leader (via Redis-lease `cluster:toll:leader`) every 5s aggregates the sorted-set over a sliding window of 60s, compares it with the baseline `souls.status='connected'` and, if the threshold is exceeded, sets the Redis key `cluster:degraded` (TTL 60s). Middleware on the Operator API blocks `POST /v1/incarnations/{name}/scenarios/{scenario}` and `POST /v1/push/apply` with HTTP 503 + Retry-After on each request when the flag is checked. Read-API, RBAC, unlock, destroy, Errand are NOT blocked (recovery actions).
 
 Opt. block: if absent - Toll is enabled with defaults; `enabled: false` - explicit opt-out. Toll only works with a live Redis client (single-instance/dev without Redis → Toll infrastructure is not raised, the flag is not set by anyone, middleware passthrough).
 
@@ -768,7 +768,7 @@ toll:
 
 > **Cardinality risk of per-coven.** ADR-038(item 5) initially postponed per-coven due to cardinality in Prometheus. After the amendment: the list of keys `per_coven_thresholds` is clearly limited by the operator in keeper.yml (a final closed set), Prometheus counter `keeper_toll_disconnects_total{coven}` itself already carries the same cardinality - adding triggers on top does not multiply the label-set.
 
-> **Hot-reload `toll.*`** ([ADR-021](../adr/0021-hot-reload-config.md#adr-021-hot-reload-конфига-с-write-back-yaml)). Reload-able without restarting Leader: `threshold`, `window_size`, `degraded_ttl`, `clear_grace`, `per_coven_thresholds`, `webhook.*`. On a successful SIGHUP / API-reload, the daemon calls `Leader.UpdateConfig` - atomic swap of fields under RWMutex (tick reads snapshot at the beginning of each aggregation tick, without blocking update during Redis calls). The webhook-notifier is recreated only when the block `webhook.*` is diffed (URLRef / Format / Timeout / Enabled) - frequent reloads with an unchanged webhook do not affect the Vault resolve; during the first mutation `url_ref` (including the inline↔vault-ref transition), a new notifier is built through `NewWebhookNotifier` (the Vault resolve is deferred to the nearest `Notify`). Restart-required (quietly ignored on reload): `enabled` (Toll infrastructure is raised/switched off only at start), `lease_ttl` (captured in renew-loop), `warmup_delay` (used by per-instance Watcher at start). These restrictions are symmetrical to policy `logging.file` / `logging.format` (writer-restart-required).
+> **Hot-reload `toll.*`** ([ADR-021](../adr/0021-hot-reload-config.md)). Reload-able without restarting Leader: `threshold`, `window_size`, `degraded_ttl`, `clear_grace`, `per_coven_thresholds`, `webhook.*`. On a successful SIGHUP / API-reload, the daemon calls `Leader.UpdateConfig` - atomic swap of fields under RWMutex (tick reads snapshot at the beginning of each aggregation tick, without blocking update during Redis calls). The webhook-notifier is recreated only when the block `webhook.*` is diffed (URLRef / Format / Timeout / Enabled) - frequent reloads with an unchanged webhook do not affect the Vault resolve; during the first mutation `url_ref` (including the inline↔vault-ref transition), a new notifier is built through `NewWebhookNotifier` (the Vault resolve is deferred to the nearest `Notify`). Restart-required (quietly ignored on reload): `enabled` (Toll infrastructure is raised/switched off only at start), `lease_ttl` (captured in renew-loop), `warmup_delay` (used by per-instance Watcher at start). These restrictions are symmetrical to policy `logging.file` / `logging.format` (writer-restart-required).
 
 ## `tempo`
 
@@ -795,17 +795,17 @@ tempo:
 | `tempo.voyage_preview.rate` | `float` | `30` | Refill bucket speed `voyage_preview`, tokens per second (rps). Omitted / `0` → default. Negative → schema error `value_out_of_range`. |
 | `tempo.voyage_preview.burst` | `int` | `60` | The depth (capacity) of the bucket `voyage_preview` is the permissible splash. Omitted / `0` → default. Negative → schema error `value_out_of_range`. |
 
-> **Two buckets - two endpoints.** `voyage_create` serves `POST /v1/voyages` (create); `voyage_preview` — `POST /v1/voyages/preview` ([ADR-043 amendment](../adr/0043-voyage.md#adr-043-voyage--унифицированный-батчевый-прогон)). Previously, preview shared bucket `voyage_create`; now it has its own, **softer** per-AID limit (`30/60` vs `10/20`), because preview is a dry-resolve scope: read-like in effect (without persist/audit), but resolver-heavy in cost, therefore not unlimited. Other write endpoints for Tempo - additive later (new bucket in the config + middleware, without breaking change). Read-API and cheap write (GET/list/cancel) are not limited.
+> **Two buckets - two endpoints.** `voyage_create` serves `POST /v1/voyages` (create); `voyage_preview` — `POST /v1/voyages/preview` ([ADR-043 amendment](../adr/0043-voyage.md)). Previously, preview shared bucket `voyage_create`; now it has its own, **softer** per-AID limit (`30/60` vs `10/20`), because preview is a dry-resolve scope: read-like in effect (without persist/audit), but resolver-heavy in cost, therefore not unlimited. Other write endpoints for Tempo - additive later (new bucket in the config + middleware, without breaking change). Read-API and cheap write (GET/list/cancel) are not limited.
 
 > **Redis key and atomicity.** Bucket state - Redis-hash `tempo:<aid>:<bucket>` (`tokens` / `last_refill_ts` + `PEXPIRE`); refill+take - with one Lua script (atomic read-modify-write, coherent limit on top of stateless-HA cluster, [ADR-050(a)](../adr/0050-tempo.md#adr-050-tempo--per-aid-rate-limiting-write-api)). In-memory per-instance was rejected (it would have multiplied ×N instances). The time bucket reads from Redis itself (`redis.call("TIME")`), not from the Go clock - the refill does not depend on clock mismatch between instances. A cold bucket (new AID) starts full - the operator is not penalized by the first request.
 
 > **Metrics.** `keeper_tempo_allowed_total{endpoint}` / `keeper_tempo_rejected_total{endpoint}` (counter; `endpoint` = bucket name - `voyage_create` or `voyage_preview`, **AID label NO** - cardinality). Who exactly exceeds is visible in the audit/logs for `claims.Subject`, not in the metrics. The complete register of Keeper metrics is [observability.md → Keeper Metrics](../observability.md). When Tempo is turned off (no Redis / `enabled: false`), counters remains at 0 - a valid signal "limiter is not active".
 
-> **Hot-reload `tempo.*`** ([ADR-021](../adr/0021-hot-reload-config.md#adr-021-hot-reload-конфига-с-write-back-yaml)). `rate` / `burst` reload-able without restart: stateless limiter, reads live `config.Store`-snapshot on **each** request - the new limit is applied from the next request, current buckets in Redis live according to their `PEXPIRE`. Invalid (≤0) values ​​from reload are interpreted as fail-OPEN passthrough (you cannot block if the config fails). Restart-required: `enabled` (Tempo-infrastructure / Redis token-bucket is raised or suppressed only at the start of `setupTempo`, symmetrically `toll.enabled`).
+> **Hot-reload `tempo.*`** ([ADR-021](../adr/0021-hot-reload-config.md)). `rate` / `burst` reload-able without restart: stateless limiter, reads live `config.Store`-snapshot on **each** request - the new limit is applied from the next request, current buckets in Redis live according to their `PEXPIRE`. Invalid (≤0) values ​​from reload are interpreted as fail-OPEN passthrough (you cannot block if the config fails). Restart-required: `enabled` (Tempo-infrastructure / Redis token-bucket is raised or suppressed only at the start of `setupTempo`, symmetrically `toll.enabled`).
 
 ## `web_ui_enabled` (top-level)
 
-Toggle the built-in operator web-UI on route `/ui` ([ADR-055](../adr/0055-embed-ui-bundle.md#adr-055-embed-ui-bundle--опциональный-single-binary-keeper-с-ui-на-ui)). The real UI **compiled into the `keeper` binary** (`go:embed` statics from the companion repo `soul-stack-web`, see [docs/web/README.md](../web/README.md)) and is given to the keeper out of the box - **does not require a separate process, port or backend**. The static is mounted on an already existing OpenAPI-listener (`listen.openapi.addr`, usually `:8080`); **does not introduce new listeners and ports `web_ui_enabled`** - the UI shares `:8080` with the Operator API (`/v1/*`) and the OpenAPI viewer (`/docs`).
+Toggle the built-in operator web-UI on route `/ui` ([ADR-055](../adr/0055-embed-ui-bundle.md)). The real UI **compiled into the `keeper` binary** (`go:embed` statics from the companion repo `soul-stack-web`, see [docs/web/README.md](../web/README.md)) and is given to the keeper out of the box - **does not require a separate process, port or backend**. The static is mounted on an already existing OpenAPI-listener (`listen.openapi.addr`, usually `:8080`); **does not introduce new listeners and ports `web_ui_enabled`** - the UI shares `:8080` with the Operator API (`/v1/*`) and the OpenAPI viewer (`/docs`).
 
 ```yaml
 # web_ui_enabled: true     # default (omitted / null → ON); false - opt-out. top-level
@@ -815,7 +815,7 @@ Toggle the built-in operator web-UI on route `/ui` ([ADR-055](../adr/0055-embed-
 |---|---|---|---|
 | `web_ui_enabled` | `*bool` | `true` | Whether to mount the embedded UI on `/ui`. **`*bool` to distinguish "not set" from an explicit `false`:** omitted / `null` → `true` (**default-ON** - beta wants a single-binary UI out of the box, footgun-guard in the spirit of [`tempo.enabled`](#tempo) / [`toll`](#toll)); explicit `false` → **opt-out**: static `/ui` is NOT mounted, API `/v1/*` and `/docs` are not affected. Unlike Tempo/Toll **does not depend on the infrastructure** - the UI is built into the binary, no external backend is needed. The key is **top-level**. Resolve effective value - method `WebUIMounted()` (`shared/config/keeper.go`): `nil` → `true`. |
 
-> **Hot-reload `web_ui_enabled`** ([ADR-021](../adr/0021-hot-reload-config.md#adr-021-hot-reload-конфига-с-write-back-yaml)). **Restart-required** (quietly ignored on reload, symmetrically [`toll.enabled`](#toll) / [`tempo.enabled`](#tempo)): the effective value is read once at startup and baked into the mounted router; SIGHUP/API-reload does not switch `/ui`-mount on the fly. To enable/disable the UI, change the key and restart `keeper`. Routing toggle does not justify the atomic re-mount of the router on a hot one: the static is built into the binary, does not carry state, switching is rare (beta-onboarding), and the disposal/swap of a chi-router under traffic is an extra risk for the sake of a binary flag. New ports do not open when turned on (static is located on the same `:8080`).
+> **Hot-reload `web_ui_enabled`** ([ADR-021](../adr/0021-hot-reload-config.md)). **Restart-required** (quietly ignored on reload, symmetrically [`toll.enabled`](#toll) / [`tempo.enabled`](#tempo)): the effective value is read once at startup and baked into the mounted router; SIGHUP/API-reload does not switch `/ui`-mount on the fly. To enable/disable the UI, change the key and restart `keeper`. Routing toggle does not justify the atomic re-mount of the router on a hot one: the static is built into the binary, does not carry state, switching is rare (beta-onboarding), and the disposal/swap of a chi-router under traffic is an extra risk for the sake of a binary flag. New ports do not open when turned on (static is located on the same `:8080`).
 
 ## `push`
 
@@ -857,9 +857,9 @@ push:
 | `push.targets[].sid` | `string` (FQDN) | — | Mandatory. The SID of the push host is the same as `souls.sid`. SID without entry in `targets[]` → `target_not_configured` on resolve in SshDispatcher. Duplicate SIDs are rejected (`duplicate_push_target_sid`). |
 | `push.targets[].ssh_port` | `int` (1..65535) | `22` | TCP port of sshd on push host. `0`/omitted → default. |
 | `push.targets[].ssh_user` | `string` | `root` | SSH user to login. Opt. (the typical value depends on the provider: vault-issued user-cert is usually the principal of a specific user). |
-| `push.targets[].soul_path` | `path` | `/usr/local/bin/soul` | The absolute path to the soul binary on the push host. Delivered by ShaDeliverer during the first push pass (see [push.md → Delivery](push.md#доставка-soul-бинаря-и-модулей-на-хост)); the path must match where Deliverer puts the binary. |
+| `push.targets[].soul_path` | `path` | `/usr/local/bin/soul` | The absolute path to the soul binary on the push host. Delivered by ShaDeliverer during the first push pass (see [push.md → Delivery](push.md)); the path must match where Deliverer puts the binary. |
 | `push.providers[].name` | `string` (kebab-case) | — | Mandatory. The name of the SshProvider plugin, references `plugins.ssh_providers[].name`. Duplicates are rejected (`duplicate_push_provider_name`). |
-| `push.providers[].params` | `map<string, any>` | — | Opaque form of provider parameters (vault_addr/role/proxy_addr/...). When the plugin is spawned, it is serialized in JSON and placed in an env variable named `SOUL_SSH_<UPPER_SNAKE(name)>_PARAMS` ([ADR-020 amendment l](../adr/0020-plugin-infrastructure.md#adr-020-plugin-инфраструктура-формат-manifest-handshake-lifecycle)): `vault-bastion` → `SOUL_SSH_VAULT_BASTION_PARAMS`. There is no entry → the plugin starts without env-payload (the behavior depends on the plugin itself: `soul-ssh-static` works with defaults, `soul-ssh-vault` without params will return an error). |
+| `push.providers[].params` | `map<string, any>` | — | Opaque form of provider parameters (vault_addr/role/proxy_addr/...). When the plugin is spawned, it is serialized in JSON and placed in an env variable named `SOUL_SSH_<UPPER_SNAKE(name)>_PARAMS` ([ADR-020 amendment l](../adr/0020-plugin-infrastructure.md)): `vault-bastion` → `SOUL_SSH_VAULT_BASTION_PARAMS`. There is no entry → the plugin starts without env-payload (the behavior depends on the plugin itself: `soul-ssh-static` works with defaults, `soul-ssh-vault` without params will return an error). |
 | `push.allow_legacy_push_targets` | `bool` | `false` | S7-1 deprecation window: PG source (`souls.ssh_target` jsonb) canonical, `push.targets[]` legacy. When `false` entry is not in PG → `target_not_configured` (fail-closed); with `true` → fallback to inline-`targets[]` + one-time WARN at start. After S8 hard-cut the field is deleted (`unknown_key`). |
 | `push.allow_legacy_push_providers` | `bool` | `false` | S7-2 deprecation window: PG source (`push_providers` table) canonical, `push.providers[]` legacy. When `false` plugin is not written to PG → the plugin starts without env-payload; at `true` → fallback to inline-`providers[]` + one-time WARN. Symmetrical `allow_legacy_push_targets`. |
 | `push.auto_import_legacy_targets` | `bool` | `false` | S7-4 opt-in one-shot migration (ADR-032 amendment 2026-05-26). When `true` daemon starts (step `runLegacyAutoImport` after `setupPushProviderSvc`) it goes through `push.targets[]`: for each SID with `souls.ssh_target IS NULL` writes data + audit-event `soul.ssh-target.imported_from_config` (`source: config_bootstrap`). Idempotent (PG-row canonical, not overwritten). PG read/write fail → start failure. Missing `souls`-row → WARN-skip. See [push.md → S7-4](push.md#s7-4-auto-import-legacy-on-start-2026-05-26). |
@@ -877,15 +877,15 @@ Regulatory description of RBAC - [rbac.md](rbac.md) (permissions format, selecto
 
 ## `reactor`
 
-**Architecturally not fixed.** The name `reactor` is not yet fixed in [`naming-rules.md`](../naming-rules.md), requires propose-and-wait the next time you enter an event-driven circuit (see [open Q No. 23](../architecture.md#текущие)). The format of the rules, triggers, actions, RBAC, restrictions, relation to the event-driven circuit - **not fixed by any ADR**.
+**Architecturally not fixed.** The name `reactor` is not yet fixed in [`naming-rules.md`](../naming-rules.md), requires propose-and-wait the next time you enter an event-driven circuit (see [open Q No. 23](../architecture.md)). The format of the rules, triggers, actions, RBAC, restrictions, relation to the event-driven circuit - **not fixed by any ADR**.
 
 Before a separate ADR by design, the block is **non-normative**: parser `keeper.yml` rejects key `reactor:` with error `unknown_key`.
 
-See [open Q #23](../architecture.md#текущие) - event-driven circuit (Salt beacons / engines equivalent) - related question.
+See [open Q #23](../architecture.md) - event-driven circuit (Salt beacons / engines equivalent) - related question.
 
 ## `services` / `default_destiny_source` / `default_module_source`
 
-**Moved to the database (ADR-029).** The Service registry and the `default_destiny_source` scalar live in Postgres (`service_registry` / `keeper_settings`, see [storage.md](storage.md)), managed through the `service.*` API/MCP ([operator-api.md](operator-api.md)); The resolution semantics are described above in the section ["Service registry and `default_destiny_source` - in Postgres"](#реестр-service-ов-и-default_destiny_source--в-postgres). `default_module_source` was canceled without replacement (there was no consumer). All three keys (`services:` / `default_destiny_source:` / `default_module_source:`) in `keeper.yml` are **not accepted**: the parser rejects each with error `unknown_key`.
+**Moved to the database (ADR-029).** The Service registry and the `default_destiny_source` scalar live in Postgres (`service_registry` / `keeper_settings`, see [storage.md](storage.md)), managed through the `service.*` API/MCP ([operator-api.md](operator-api.md)); The resolution semantics are described above in the section "Service registry and `default_destiny_source` - in Postgres". `default_module_source` was canceled without replacement (there was no consumer). All three keys (`services:` / `default_destiny_source:` / `default_module_source:`) in `keeper.yml` are **not accepted**: the parser rejects each with error `unknown_key`.
 
 ## `audit`
 
@@ -902,9 +902,9 @@ General audit-pipeline normalization - [ADR-022](../adr/0022-audit-pipeline.md#a
 |---|---|---|---|
 | `audit.enabled` | `bool` | `true` | Global switch audit-pipeline. With `false`, none of the write-path initiators (see [ADR-022(g)](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)) writes to Postgres `audit_log`; OTel dual-write (see `otel_export` below) is also disabled. Use only for development / incident investigation - the production installation must keep `true` for compliance invariants. |
 | `audit.otel_export` | `bool` | `true` | Duplicate audit-event in OTel span as attribute (transient debugging aid, Postgres - source of truth). When `false` audit is written only to `audit_log`; Keeper's OTel-spans continue to go through [`otel:`](#otel) as usual, but audit-attributes are not added to them. Useful for installations without OTel infrastructure ([ADR-022(f)](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)). |
-| `audit.retention_days` | `int` (≥1) | `365` | Record retention period is `audit_log` (days). **Alias** on `reaper.rules.purge_audit_old.max_age` ([ADR-022(d)/(i)](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)) - one source of truth for retention, a convenient form in days here and `duration` in [`reaper:`](#reaper) ([reaper.md → Rules](reaper.md#правила)). If the values ​​in two blocks diverge, the `keeper.yml` parser rejects the config with the error `audit_retention_mismatch`. |
+| `audit.retention_days` | `int` (≥1) | `365` | Record retention period is `audit_log` (days). **Alias** on `reaper.rules.purge_audit_old.max_age` ([ADR-022(d)/(i)](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)) - one source of truth for retention, a convenient form in days here and `duration` in [`reaper:`](#reaper) ([reaper.md → Rules](reaper.md)). If the values ​​in two blocks diverge, the `keeper.yml` parser rejects the config with the error `audit_retention_mismatch`. |
 
-**Soul does not have block `audit:`** - Soul does not physically have access to Postgres `audit_log` (module isolation, [ADR-011](../adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам)). Soul-side audit events (`TaskEvent` / `RunResult` / `SoulprintReport`) go through Keeper and are written by it from `source: soul_grpc` ([ADR-022(b)/(g)](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)). OTel-attributes Soul writes to its gRPC EventStream spans normally via the `otel:` block `soul.yml`.
+**Soul does not have block `audit:`** - Soul does not physically have access to Postgres `audit_log` (module isolation, [ADR-011](../adr/0011-go-layout.md)). Soul-side audit events (`TaskEvent` / `RunResult` / `SoulprintReport`) go through Keeper and are written by it from `source: soul_grpc` ([ADR-022(b)/(g)](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)). OTel-attributes Soul writes to its gRPC EventStream spans normally via the `otel:` block `soul.yml`.
 
 ### Hot-reload block `audit:`
 
@@ -925,12 +925,12 @@ hot_reload:
   audit_correlation_id: true
 ```
 
-The block regulates the activation of hot-reload mechanism triggers (`SIGHUP` / `inotify`) and the generation of `correlation_id` for audit-events `config.reload_succeeded` / `config.reload_failed`. The semantics and invariants of the mechanism itself are [ADR-021](../adr/0021-hot-reload-config.md#adr-021-hot-reload-конфига-с-write-back-yaml) and [§ Hot-reload](#hot-reload) below. The entire block is optional: if `keeper.yml` is missing, the defaults from the table are applied.
+The block regulates the activation of hot-reload mechanism triggers (`SIGHUP` / `inotify`) and the generation of `correlation_id` for audit-events `config.reload_succeeded` / `config.reload_failed`. The semantics and invariants of the mechanism itself are [ADR-021](../adr/0021-hot-reload-config.md) and [§ Hot-reload](#hot-reload) below. The entire block is optional: if `keeper.yml` is missing, the defaults from the table are applied.
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `hot_reload.enable_signal` | `bool` | `true` | Enable `SIGHUP` trigger file-edit-path: the process catches the signal, rereads `keeper.yml` from disk, runs the validation pipeline and does atomic swap ([ADR-021(b)](../adr/0021-hot-reload-config.md#adr-021-hot-reload-конфига-с-write-back-yaml)). When `false` file-edit-path is disabled (file changes are not picked up without a restart); API/MCP-path works independently. |
-| `hot_reload.enable_inotify` | `bool` | `false` | Enable auto-reload via `inotify`/`fsnotify` (Linux-only) - respond to changes in `keeper.yml` without `SIGHUP`. Post-MVP optional extension ([ADR-021(b)](../adr/0021-hot-reload-config.md#adr-021-hot-reload-конфига-с-write-back-yaml)): watch-handle overhead and Linux-only dependency - a reason not to default. |
+| `hot_reload.enable_signal` | `bool` | `true` | Enable `SIGHUP` trigger file-edit-path: the process catches the signal, rereads `keeper.yml` from disk, runs the validation pipeline and does atomic swap ([ADR-021(b)](../adr/0021-hot-reload-config.md)). When `false` file-edit-path is disabled (file changes are not picked up without a restart); API/MCP-path works independently. |
+| `hot_reload.enable_inotify` | `bool` | `false` | Enable auto-reload via `inotify`/`fsnotify` (Linux-only) - respond to changes in `keeper.yml` without `SIGHUP`. Post-MVP optional extension ([ADR-021(b)](../adr/0021-hot-reload-config.md)): watch-handle overhead and Linux-only dependency - a reason not to default. |
 | `hot_reload.audit_correlation_id` | `bool` | `true` | Generate `correlation_id` for audit-events `config.reload_succeeded` / `config.reload_failed` ([naming-rules.md → Audit-events](../naming-rules.md#audit-events)). With `true`, each reload event receives a unique id that goes into both OTel-spans and audit-trail (links file-edit-path with API-path for successive mutations). |
 
 ### Hot-reload block `hot_reload:`
@@ -945,18 +945,18 @@ All three fields **require a restart** of the `keeper` process - because they co
 
 ## Hot-reload
 
-Hot-reload of the config with rewriting the changed value back to disk - end-to-end requirement ([requirements.md](../requirements.md), [architecture.md → End-to-end requirements](../architecture.md#сквозные-требования-и-где-они-приземляются)). The mechanism is normalized **[ADR-021](../adr/0021-hot-reload-config.md#adr-021-hot-reload-конфига-с-write-back-yaml)**; implementation - package [`shared/config/`](../adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам) (Tier 2).
+Hot-reload of the config with rewriting the changed value back to disk - end-to-end requirement ([requirements.md](../requirements.md), [architecture.md → End-to-end requirements](../architecture.md)). The mechanism is normalized **[ADR-021](../adr/0021-hot-reload-config.md)**; implementation - package [`shared/config/`](../adr/0011-go-layout.md) (Tier 2).
 
 **Two ways to change the config.**
 
 | Path | Trigger | Pipeline |
 |---|---|---|
 | **File-edit** | The operator edits `keeper.yml` on the host → sends `SIGHUP` to the process. | parse → schema-validate → semantic-validate → atomic swap → audit. |
-| **API/MCP** | OpenAPI/MCP mutation of the config (specific endpoints are deferred to the Operator API, see [ADR-021 → Consequences](../adr/0021-hot-reload-config.md#adr-021-hot-reload-конфига-с-write-back-yaml)). | mutate → schema-validate → semantic-validate → atomic swap → **write-back YAML** → audit. |
+| **API/MCP** | OpenAPI/MCP mutation of the config (specific endpoints are deferred to the Operator API, see [ADR-021 → Consequences](../adr/0021-hot-reload-config.md)). | mutate → schema-validate → semantic-validate → atomic swap → **write-back YAML** → audit. |
 
-**SIGHUP - single trigger in MVP** for file-edit-path. `inotify`/`fsnotify` - post-MVP optional extension, disabled by default (see [ADR-021(b)](../adr/0021-hot-reload-config.md#adr-021-hot-reload-конфига-с-write-back-yaml)).
+**SIGHUP - single trigger in MVP** for file-edit-path. `inotify`/`fsnotify` - post-MVP optional extension, disabled by default (see [ADR-021(b)](../adr/0021-hot-reload-config.md)).
 
-**Validation pipeline** - three stages before atomic swap; any error → in-memory state is unchanged, the file is not modified (even for API-path), audit-event `config.reload_failed` with `phase ∈ {parse, schema_validate, semantic_validate}` ([ADR-021(c)](../adr/0021-hot-reload-config.md#adr-021-hot-reload-конфига-с-write-back-yaml)).
+**Validation pipeline** - three stages before atomic swap; any error → in-memory state is unchanged, the file is not modified (even for API-path), audit-event `config.reload_failed` with `phase ∈ {parse, schema_validate, semantic_validate}` ([ADR-021(c)](../adr/0021-hot-reload-config.md)).
 
 **Write-back YAML** - only for API-path: round-trip preservation (comments, key order, anchors are saved) + atomic rename (write-to-tmp in the same directory + `rename(2)`) + permissions from the source file. File-edit-path does not write anything (the file is already on disk).
 
@@ -999,13 +999,13 @@ Hot-reload of the config with rewriting the changed value back to disk - end-to-
 | **`plugin_runtime.*`** | per-field - see [§ Hot-reload block `plugin_runtime:`](#hot-reload-block-plugin_runtime) | | |
 | **`hot_reload.*`** | per-field - see [§ Hot-reload block `hot_reload:`](#hot-reload-block-hot_reload) | | (all require restart) |
 
-**Multi-host coordination** - not in MVP. Each Keeper instance of the HA cluster ([ADR-002](../adr/0002-transport-grpc-ha.md#adr-002-transport-keeper--souls--grpc-bidirectional-stream-over-mtls-ha-keeper-cluster)) reboots its `keeper.yml` independently. Cross-host "reload by cluster-wide event" via Redis pub/sub - post-MVP ([ADR-021(f)](../adr/0021-hot-reload-config.md#adr-021-hot-reload-конфига-с-write-back-yaml)).
+**Multi-host coordination** - not in MVP. Each Keeper instance of the HA cluster ([ADR-002](../adr/0002-transport-grpc-ha.md#adr-002-transport-keeper--souls--grpc-bidirectional-stream-over-mtls-ha-keeper-cluster)) reboots its `keeper.yml` independently. Cross-host "reload by cluster-wide event" via Redis pub/sub - post-MVP ([ADR-021(f)](../adr/0021-hot-reload-config.md)).
 
 **Audit-events** - two names, directory in [`docs/naming-rules.md → Audit-events`](../naming-rules.md#audit-events):
 - `config.reload_succeeded` — fields `source ∈ {signal, api}`, `archon.aid` (for API-path), `changed_paths` (list of YAML-paths), `correlation_id`.
 - `config.reload_failed` - fields `source`, `archon.aid` (if applicable), `validation_errors[]`, `phase ∈ {parse, schema_validate, semantic_validate}`.
 
-**History** - git-blame YAML (for file-edit-path) + audit-trail in Postgres (for API-path). Separate database table `config_history` with snapshots - post-MVP ([ADR-021(i)](../adr/0021-hot-reload-config.md#adr-021-hot-reload-конфига-с-write-back-yaml)).
+**History** - git-blame YAML (for file-edit-path) + audit-trail in Postgres (for API-path). Separate database table `config_history` with snapshots - post-MVP ([ADR-021(i)](../adr/0021-hot-reload-config.md)).
 
 **Optional block `hot_reload:`** in `keeper.yml` (fields `enable_signal`, `enable_inotify`, `audit_correlation_id`) - normative typing of fields in [`## hot_reload`](#hot_reload) above. If there is no block, defaults are applied from there (built into `shared/config`).
 
@@ -1138,7 +1138,7 @@ The reference example in the file is [`examples/keeper/keeper.yml`](../../exampl
 - [cloud.md](cloud.md) - consumer `plugins.cloud_drivers`.
 - [reaper.md](reaper.md) - complete description of the `reaper:` block and cleaning rules.
 - [rbac.md](rbac.md) - full description of the `rbac:` block, parsing permissions, Bootstrap of the first Archon.
-- [architecture.md → ADR-013](../adr/0013-bootstrap-archon.md#adr-013-bootstrap-первого-архонта) — bootstrap of the first Archon.
-- [architecture.md → ADR-014](../adr/0014-operator-identity.md#adr-014-identity-модель-оператора-archon) - operator identity model, source of truth according to `auth:`.
-- [architecture.md → End-to-end requirements](../architecture.md#сквозные-требования-и-где-они-приземляются) - Vault, OTel, RBAC, MCP, OpenAPI, hot-reload, log rotation as mandatory.
+- [architecture.md → ADR-013](../adr/0013-bootstrap-archon.md) — bootstrap of the first Archon.
+- [architecture.md → ADR-014](../adr/0014-operator-identity.md) - operator identity model, source of truth according to `auth:`.
+- [architecture.md → End-to-end requirements](../architecture.md) - Vault, OTel, RBAC, MCP, OpenAPI, hot-reload, log rotation as mandatory.
 - [naming-rules.md](../naming-rules.md) - dictionary of names.

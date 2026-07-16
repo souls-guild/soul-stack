@@ -33,8 +33,8 @@ from_version: 1
 to_version: 2
 
 description: >
-Transition from redis_users[] array to map redis_users{name: {acl, state}}
-to support per-user ACL and enabled/disabled flag.
+  Transition from redis_users[] array to map redis_users{name: {acl, state}}
+  to support per-user ACL and enabled/disabled flag.
 
 # List of operations. Apply in order. Each operation sees state,
 # mutated by previous operations of the same migration.
@@ -69,16 +69,16 @@ transform:
 | **`rename`** | `from: <path>`, `to: <path>` | Move the value from `from` to `to`. If `to` already exists, an error occurs (explicit `delete` before rename). |
 | **`set`** | `path: <path>`, `value: <yaml>` or `<CEL expression>` | Write `value` to `path`. If the key exists, it is overwritten. `value` can be a YAML literal (map/list/scalar) or a CEL expression via `${ … }` or a nested structure with built-in `${ … }` interpolations. |
 | **`delete`** | `path: <path>` | Remove value by `path`. If it does not exist, no-op (not an error). |
-| **`move`** | `from: <path>`, `to: <path>` | Alias ​​for `rename` (historical; same semantics). |
+| **`move`** | `from: <path>`, `to: <path>` | Alias for `rename` (historical; same semantics). |
 | **`foreach`** | `in: <CEL expression>` (or short form `foreach: <CEL expression>`), `as: <var-name>`, `do: [<operation>, ...]` | Structural loop: iteration through the list/map values, at each step `<var-name>` is bound to the current element. `do:` - nested transform list. Inside `do:`, `<var-name>` and the entire current `state.*` are available. |
 
-**Transaction list is now closed** (`rename`/`set`/`delete`/`move`/`foreach`). Conditional `if:` key - on post-MVP (see [ADR-019](adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl), option (c) target).
+**The operations list is now closed** (`rename`/`set`/`delete`/`move`/`foreach`). Conditional `if:` key - on post-MVP (see [ADR-019](adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl), option (c) target).
 
 ## Addressing - `path:`
 
 Dot notation from the root of the state object: `state.foo`, `state.bar.baz`, `state.users.${ name }.acl`.
 
-- The `state.` prefix is ​​required (explicit scope).
+- The `state.` prefix is required (explicit scope).
 - Path segments are letters/numbers/`_`/`-` or `${ <CEL> }`-interpolation.
 - Access to an array element by index: `state.hosts.0.ip` (in MVP it is not used in the examples - it will be added if necessary).
 
@@ -144,7 +144,7 @@ Migration tests live in `migrations/<NNN_to_MMM>/tests/<case>.yml`. Format:
 ```yaml
 name: redis-users-array-to-map
 description: >
-Base case: an array of names goes into a map with a per-user ACL.
+  Base case: an array of names goes into a map with a per-user ACL.
 
 state_before:
   redis_users: ["app", "monitor"]
