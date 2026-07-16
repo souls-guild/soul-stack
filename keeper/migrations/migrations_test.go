@@ -7,9 +7,9 @@ import (
 	"testing"
 )
 
-// TestEmbed_ContainsExpectedMigrations — smoke на то, что //go:embed
-// захватил up/down пары и порядок стабилен. Полная проверка применения
-// миграций — через testcontainers в M0.4.1.
+// TestEmbed_ContainsExpectedMigrations -- smoke test that //go:embed
+// captured up/down pairs and the order is stable. Full check of migration
+// application -- via testcontainers in M0.4.1.
 func TestEmbed_ContainsExpectedMigrations(t *testing.T) {
 	var names []string
 	if err := fs.WalkDir(FS, ".", func(path string, d fs.DirEntry, err error) error {
@@ -236,8 +236,8 @@ func TestEmbed_ContainsExpectedMigrations(t *testing.T) {
 	}
 }
 
-// TestEmbed_UpSQLContainsCreateTable — sanity на содержимое (предотвращает
-// пустой //go:embed, если кто-то случайно переместит .sql).
+// TestEmbed_UpSQLContainsCreateTable -- sanity on content (prevents
+// an empty //go:embed if someone accidentally moves the .sql).
 func TestEmbed_UpSQLContainsCreateTable(t *testing.T) {
 	b, err := FS.ReadFile("001_create_audit_log.up.sql")
 	if err != nil {
@@ -248,8 +248,8 @@ func TestEmbed_UpSQLContainsCreateTable(t *testing.T) {
 	}
 }
 
-// TestEmbed_PurgeAuditOldFunction — sanity на 002: //go:embed захватил
-// up-миграцию и она объявляет PL/pgSQL-функцию по ADR-022(d).
+// TestEmbed_PurgeAuditOldFunction -- sanity on 002: //go:embed captured
+// the up migration and it declares a PL/pgSQL function per ADR-022(d).
 func TestEmbed_PurgeAuditOldFunction(t *testing.T) {
 	b, err := FS.ReadFile("002_create_purge_audit_old.up.sql")
 	if err != nil {
@@ -267,9 +267,9 @@ func TestEmbed_PurgeAuditOldFunction(t *testing.T) {
 	}
 }
 
-// TestEmbed_OperatorsTable — sanity на 003: //go:embed захватил миграцию
-// реестра operators (ADR-014) с partial unique index по
-// `created_by_aid IS NULL` (инвариант единственного bootstrap-Archon-а).
+// TestEmbed_OperatorsTable -- sanity on 003: //go:embed captured the
+// operators registry migration (ADR-014) with a partial unique index on
+// `created_by_aid IS NULL` (invariant of the single bootstrap Archon).
 func TestEmbed_OperatorsTable(t *testing.T) {
 	b, err := FS.ReadFile("003_create_operators.up.sql")
 	if err != nil {
@@ -296,9 +296,9 @@ func TestEmbed_OperatorsTable(t *testing.T) {
 	}
 }
 
-// TestEmbed_OperatorsAuthMethodLDAPOIDC — sanity на 083 (ADR-058): only-add
-// расширение CHECK auth_method_valid значениями `ldap`/`oidc`. Up расширяет
-// набор, down возвращает к прежнему (jwt/mtls/combined).
+// TestEmbed_OperatorsAuthMethodLDAPOIDC -- sanity on 083 (ADR-058): only-add
+// extension of the auth_method_valid CHECK with `ldap`/`oidc` values. Up extends
+// the set, down restores the prior one (jwt/mtls/combined).
 func TestEmbed_OperatorsAuthMethodLDAPOIDC(t *testing.T) {
 	b, err := FS.ReadFile("083_operators_auth_method_ldap_oidc.up.sql")
 	if err != nil {
@@ -322,10 +322,10 @@ func TestEmbed_OperatorsAuthMethodLDAPOIDC(t *testing.T) {
 	}
 }
 
-// TestEmbed_HeraldsTypeExtended — sanity на 091 (ADR-052 amendment): only-add
-// расширение CHECK heralds_type_enum channel-типами telegram/slack/mattermost/
-// discord/custom (HTTP) и email (SMTP). Up расширяет набор всеми 7, down
-// возвращает к прежнему (только webhook).
+// TestEmbed_HeraldsTypeExtended -- sanity on 091 (ADR-052 amendment): only-add
+// extension of the heralds_type_enum CHECK with channel types telegram/slack/mattermost/
+// discord/custom (HTTP) and email (SMTP). Up extends the set with all 7, down
+// restores the prior one (webhook only).
 func TestEmbed_HeraldsTypeExtended(t *testing.T) {
 	b, err := FS.ReadFile("091_extend_heralds_type.up.sql")
 	if err != nil {
@@ -350,8 +350,8 @@ func TestEmbed_HeraldsTypeExtended(t *testing.T) {
 	}
 }
 
-// TestEmbed_OperatorsCreatedVia — sanity на 084 (ADR-058(d)): колонка
-// created_via с CHECK created_via_valid + reconcile bootstrap-строки.
+// TestEmbed_OperatorsCreatedVia -- sanity on 084 (ADR-058(d)): column
+// created_via with created_via_valid CHECK + bootstrap row reconcile.
 func TestEmbed_OperatorsCreatedVia(t *testing.T) {
 	b, err := FS.ReadFile("084_operators_created_via.up.sql")
 	if err != nil {
@@ -378,8 +378,8 @@ func TestEmbed_OperatorsCreatedVia(t *testing.T) {
 	}
 }
 
-// TestEmbed_OperatorsBootstrapIndex — sanity на 085 (ADR-058(d)): перенос
-// bootstrap-инварианта на created_via='bootstrap'; down возвращает на
+// TestEmbed_OperatorsBootstrapIndex -- sanity on 085 (ADR-058(d)): moves
+// the bootstrap invariant to created_via='bootstrap'; down restores it to
 // created_by_aid IS NULL.
 func TestEmbed_OperatorsBootstrapIndex(t *testing.T) {
 	b, err := FS.ReadFile("085_operators_bootstrap_index.up.sql")
@@ -404,8 +404,8 @@ func TestEmbed_OperatorsBootstrapIndex(t *testing.T) {
 	}
 }
 
-// TestEmbed_SeedArchonSystem — sanity на 086 (ADR-058(d)): посев
-// системного оператора archon-system (created_via='system').
+// TestEmbed_SeedArchonSystem -- sanity on 086 (ADR-058(d)): seeds
+// the system operator archon-system (created_via='system').
 func TestEmbed_SeedArchonSystem(t *testing.T) {
 	b, err := FS.ReadFile("086_seed_archon_system.up.sql")
 	if err != nil {
@@ -431,8 +431,8 @@ func TestEmbed_SeedArchonSystem(t *testing.T) {
 	}
 }
 
-// TestEmbed_IncarnationTable — sanity на 005: реестр incarnation
-// (ADR-009) c CHECK на status / name_format и FK на operators.
+// TestEmbed_IncarnationTable -- sanity on 005: incarnation registry
+// (ADR-009) with CHECK on status / name_format and FK to operators.
 func TestEmbed_IncarnationTable(t *testing.T) {
 	b, err := FS.ReadFile("005_create_incarnation.up.sql")
 	if err != nil {
@@ -460,9 +460,9 @@ func TestEmbed_IncarnationTable(t *testing.T) {
 	}
 }
 
-// TestEmbed_StateHistoryTable — sanity на 006: журнал state_history
-// (ADR-009 / ADR-019) с CASCADE-FK на incarnation и индексами для типовых
-// запросов истории.
+// TestEmbed_StateHistoryTable -- sanity on 006: state_history journal
+// (ADR-009 / ADR-019) with CASCADE FK to incarnation and indexes for typical
+// history queries.
 func TestEmbed_StateHistoryTable(t *testing.T) {
 	b, err := FS.ReadFile("006_create_state_history.up.sql")
 	if err != nil {
@@ -490,8 +490,8 @@ func TestEmbed_StateHistoryTable(t *testing.T) {
 	}
 }
 
-// TestEmbed_SoulsTable — sanity на 007: реестр souls (ADR-002 / ADR-012)
-// с CHECK на status/transport/sid-format, GIN-индексом по coven, FK на
+// TestEmbed_SoulsTable -- sanity on 007: souls registry (ADR-002 / ADR-012)
+// with CHECK on status/transport/sid format, GIN index on coven, FK to
 // operators.
 func TestEmbed_SoulsTable(t *testing.T) {
 	b, err := FS.ReadFile("007_create_souls.up.sql")
@@ -522,9 +522,9 @@ func TestEmbed_SoulsTable(t *testing.T) {
 	}
 }
 
-// TestEmbed_BootstrapTokensTable — sanity на 008: реестр одноразовых
-// SoulSeed-токенов с partial unique index по `used_at IS NULL`, FK на
-// souls (ON DELETE CASCADE) и operators (ON DELETE SET NULL).
+// TestEmbed_BootstrapTokensTable -- sanity on 008: registry of one-time
+// SoulSeed tokens with a partial unique index on `used_at IS NULL`, FK to
+// souls (ON DELETE CASCADE) and operators (ON DELETE SET NULL).
 func TestEmbed_BootstrapTokensTable(t *testing.T) {
 	b, err := FS.ReadFile("008_create_bootstrap_tokens.up.sql")
 	if err != nil {
@@ -556,9 +556,9 @@ func TestEmbed_BootstrapTokensTable(t *testing.T) {
 	}
 }
 
-// TestEmbed_SoulSeedsTable — sanity на 009: реестр выпущенных
-// SoulSeed-сертификатов с partial unique по `status='active'`,
-// FK на souls (CASCADE), CHECK на fingerprint-формате.
+// TestEmbed_SoulSeedsTable -- sanity on 009: registry of issued
+// SoulSeed certificates with a partial unique on `status='active'`,
+// FK to souls (CASCADE), CHECK on fingerprint format.
 func TestEmbed_SoulSeedsTable(t *testing.T) {
 	b, err := FS.ReadFile("009_create_soul_seeds.up.sql")
 	if err != nil {
@@ -591,19 +591,19 @@ func TestEmbed_SoulSeedsTable(t *testing.T) {
 	}
 }
 
-// TestEmbed_ReaperFunctions — sanity на 010-014: Reaper.b SQL-функции для
-// 5 правил из docs/keeper/reaper.md. Контракты:
-//   - 010 expire_pending_seeds(interval, integer) — DELETE bootstrap_tokens
-//     с used_at IS NULL и истёкшим expires_at (PM-переинтерпретация: правило
-//     стало DELETE-only, т.к. у bootstrap_tokens нет колонки status).
-//   - 011 purge_used_tokens(interval, integer) — DELETE bootstrap_tokens
-//     с used_at старше max_age.
-//   - 012 purge_souls(text[], interval, integer) — DELETE souls в указанных
-//     статусах с COALESCE(last_seen_at, registered_at) старше max_age.
-//   - 013 purge_old_seeds(text[], interval, integer) — DELETE soul_seeds
-//     в указанных статусах с issued_at старше max_age.
-//   - 014 mark_disconnected(interval, integer) — UPDATE souls
-//     connected → disconnected при stale last_seen_at.
+// TestEmbed_ReaperFunctions -- sanity on 010-014: Reaper SQL functions for
+// 5 rules from docs/keeper/reaper.md. Contracts:
+//   - 010 expire_pending_seeds(interval, integer) -- DELETE bootstrap_tokens
+//     with used_at IS NULL and expired expires_at (PM reinterpretation: the rule
+//     became DELETE-only, since bootstrap_tokens has no status column).
+//   - 011 purge_used_tokens(interval, integer) -- DELETE bootstrap_tokens
+//     with used_at older than max_age.
+//   - 012 purge_souls(text[], interval, integer) -- DELETE souls in the given
+//     statuses with COALESCE(last_seen_at, registered_at) older than max_age.
+//   - 013 purge_old_seeds(text[], interval, integer) -- DELETE soul_seeds
+//     in the given statuses with issued_at older than max_age.
+//   - 014 mark_disconnected(interval, integer) -- UPDATE souls
+//     connected -> disconnected on stale last_seen_at.
 func TestEmbed_ReaperFunctions(t *testing.T) {
 	cases := []struct {
 		file     string
@@ -656,8 +656,8 @@ func TestEmbed_ReaperFunctions(t *testing.T) {
 	}
 }
 
-// TestEmbed_SoulsSoulprintColumns — sanity на 015: добавляются три
-// колонки `souls.soulprint_*` под ADR-018 (typed-soulprint storage).
+// TestEmbed_SoulsSoulprintColumns -- sanity on 015: adds three
+// `souls.soulprint_*` columns under ADR-018 (typed-soulprint storage).
 func TestEmbed_SoulsSoulprintColumns(t *testing.T) {
 	b, err := FS.ReadFile("015_add_souls_soulprint.up.sql")
 	if err != nil {
@@ -684,8 +684,8 @@ func TestEmbed_SoulsSoulprintColumns(t *testing.T) {
 	}
 }
 
-// TestEmbed_SoulsStatusDestroyed — sanity на 016: enum souls.status
-// расширяется значением `destroyed` (ADR-017 cascade, terminal-state).
+// TestEmbed_SoulsStatusDestroyed -- sanity on 016: the souls.status enum
+// gets extended with the `destroyed` value (ADR-017 cascade, terminal state).
 func TestEmbed_SoulsStatusDestroyed(t *testing.T) {
 	b, err := FS.ReadFile("016_souls_status_destroyed.up.sql")
 	if err != nil {
@@ -711,8 +711,8 @@ func TestEmbed_SoulsStatusDestroyed(t *testing.T) {
 	}
 }
 
-// TestEmbed_SoulSeedsStatusOrphaned — sanity на 017: enum soul_seeds.status
-// расширяется значением `orphaned` (ADR-017 cascade).
+// TestEmbed_SoulSeedsStatusOrphaned -- sanity on 017: the soul_seeds.status enum
+// gets extended with the `orphaned` value (ADR-017 cascade).
 func TestEmbed_SoulSeedsStatusOrphaned(t *testing.T) {
 	b, err := FS.ReadFile("017_soulseeds_status_orphaned.up.sql")
 	if err != nil {
@@ -738,8 +738,8 @@ func TestEmbed_SoulSeedsStatusOrphaned(t *testing.T) {
 	}
 }
 
-// TestEmbed_IncarnationStatusDestroying — sanity на 031: enum
-// incarnation.status расширяется значением `destroying` (S-D1).
+// TestEmbed_IncarnationStatusDestroying -- sanity on 031: the
+// incarnation.status enum gets extended with the `destroying` value (S-D1).
 func TestEmbed_IncarnationStatusDestroying(t *testing.T) {
 	b, err := FS.ReadFile("031_incarnation_status_destroying.up.sql")
 	if err != nil {
@@ -765,10 +765,10 @@ func TestEmbed_IncarnationStatusDestroying(t *testing.T) {
 	}
 }
 
-// TestEmbed_IncarnationStatusDestroyFailed — sanity на 036 (S-D2a): enum
-// incarnation.status расширяется терминальным значением `destroy_failed`. up
-// добавляет значение в CHECK (drop+recreate, как 031); down сужает CHECK обратно
-// к форме 031 и НЕ должен упоминать `destroy_failed`.
+// TestEmbed_IncarnationStatusDestroyFailed -- sanity on 036 (S-D2a): the
+// incarnation.status enum gets extended with the terminal `destroy_failed` value. up
+// adds the value to the CHECK (drop+recreate, like 031); down narrows the CHECK back
+// to the 031 form and must NOT mention `destroy_failed`.
 func TestEmbed_IncarnationStatusDestroyFailed(t *testing.T) {
 	b, err := FS.ReadFile("036_incarnation_status_destroy_failed.up.sql")
 	if err != nil {
@@ -785,9 +785,9 @@ func TestEmbed_IncarnationStatusDestroyFailed(t *testing.T) {
 			t.Errorf("up.sql missing %q; content head: %.300s", frag, body)
 		}
 	}
-	// up расширяет, не теряя предыдущие значения (паттерн 031 + destroy_failed).
+	// up extends without losing previous values (pattern 031 + destroy_failed).
 	if !strings.Contains(body, "'destroying'") {
-		t.Errorf("up.sql must preserve 'destroying' in расширенном CHECK; content: %.300s", body)
+		t.Errorf("up.sql must preserve 'destroying' in the extended CHECK; content: %.300s", body)
 	}
 	d, err := FS.ReadFile("036_incarnation_status_destroy_failed.down.sql")
 	if err != nil {
@@ -797,15 +797,15 @@ func TestEmbed_IncarnationStatusDestroyFailed(t *testing.T) {
 	if strings.Contains(dbody, "'destroy_failed'") {
 		t.Errorf("down.sql still references 'destroy_failed'; content: %.200s", dbody)
 	}
-	// down возвращает CHECK к форме 031 (сохраняет 'destroying').
+	// down restores the CHECK to the 031 form (keeps 'destroying').
 	if !strings.Contains(dbody, "'destroying'") {
-		t.Errorf("down.sql must restore CHECK к форме 031 (с 'destroying'); content: %.200s", dbody)
+		t.Errorf("down.sql must restore CHECK to the 031 form (with 'destroying'); content: %.200s", dbody)
 	}
 }
 
-// TestEmbed_IncarnationCovens — sanity на 046 (ADR-008 amendment a): добавляет
-// колонку incarnation.covens (declared env-теги для RBAC coven-scope). up
-// добавляет TEXT[] NOT NULL DEFAULT '{}'; down дропает колонку.
+// TestEmbed_IncarnationCovens -- sanity on 046 (ADR-008 amendment a): adds
+// the incarnation.covens column (declared env tags for RBAC coven scope). up
+// adds TEXT[] NOT NULL DEFAULT '{}'; down drops the column.
 func TestEmbed_IncarnationCovens(t *testing.T) {
 	b, err := FS.ReadFile("046_add_incarnation_covens.up.sql")
 	if err != nil {
@@ -829,11 +829,11 @@ func TestEmbed_IncarnationCovens(t *testing.T) {
 	}
 }
 
-// TestEmbed_IncarnationTraits — sanity на 088 (ADR-060 amend, R1): Trait
-// релоцирован per-soul → per-incarnation. up добавляет jsonb-колонку
-// incarnation.traits (NOT NULL DEFAULT '{}', зеркало souls.traits 087) +
-// GIN-индекс; down дропает индекс и колонку. souls.traits в down НЕ упоминается
-// (эта миграция его не трогает — projection target остаётся).
+// TestEmbed_IncarnationTraits -- sanity on 088 (ADR-060 amend, R1): Trait
+// relocated per-soul -> per-incarnation. up adds a jsonb column
+// incarnation.traits (NOT NULL DEFAULT '{}', mirroring souls.traits 087) +
+// GIN index; down drops the index and column. souls.traits is NOT mentioned in
+// down (this migration doesn't touch it -- the projection target remains).
 func TestEmbed_IncarnationTraits(t *testing.T) {
 	b, err := FS.ReadFile("088_add_incarnation_traits.up.sql")
 	if err != nil {
@@ -863,9 +863,9 @@ func TestEmbed_IncarnationTraits(t *testing.T) {
 			t.Errorf("088 down.sql missing %q; content: %.200s", frag, dbody)
 		}
 	}
-	// down не ОПЕРИРУЕТ над souls (projection target, миграция 087 его и снимает);
-	// упоминание `souls.traits` в комментарии допустимо, но никаких
-	// ALTER/DROP по souls / souls_traits_idx.
+	// down does NOT operate on souls (projection target, migration 087 removes it);
+	// mentioning `souls.traits` in a comment is allowed, but no
+	// ALTER/DROP on souls / souls_traits_idx.
 	for _, bad := range []string{"ALTER TABLE souls", "souls_traits_idx"} {
 		if strings.Contains(dbody, bad) {
 			t.Errorf("088 down.sql must NOT operate on souls (%q); content: %.200s", bad, dbody)
@@ -873,10 +873,10 @@ func TestEmbed_IncarnationTraits(t *testing.T) {
 	}
 }
 
-// TestEmbed_IncarnationCreatedScenario — sanity на 089 (механизм нескольких
-// create-сценариев, Вариант A): колонка incarnation.created_scenario
-// (NOT NULL DEFAULT 'create') хранит имя стартового сценария; rerun-last
-// перезапускает именно его. up добавляет колонку с DEFAULT; down дропает.
+// TestEmbed_IncarnationCreatedScenario -- sanity on 089 (mechanism for several
+// create scenarios, Variant A): the incarnation.created_scenario column
+// (NOT NULL DEFAULT 'create') holds the starting scenario name; rerun-last
+// restarts exactly that one. up adds the column with DEFAULT; down drops it.
 func TestEmbed_IncarnationCreatedScenario(t *testing.T) {
 	b, err := FS.ReadFile("089_add_incarnation_created_scenario.up.sql")
 	if err != nil {
@@ -900,13 +900,13 @@ func TestEmbed_IncarnationCreatedScenario(t *testing.T) {
 	}
 }
 
-// TestEmbed_IncarnationCreatedScenarioNullable — sanity на 090 (Фаза 2 create-
-// вариантов): bare-инкарнация через NULL. up снимает NOT NULL + DEFAULT с
-// created_scenario (NULL = создана без bootstrap-сценария, StatusReady без прогона).
-// down возвращает к форме 089 (NOT NULL DEFAULT 'create'), но обязан СНАЧАЛА
-// прогнать backfill NULL → 'create' и ЛИШЬ ПОТОМ SET NOT NULL — иначе ALTER ...
-// SET NOT NULL упадёт на bare-строках. Порядок (backfill ПЕРЕД SET NOT NULL) —
-// самое опасное место отката; фиксируем его явно по позициям в тексте.
+// TestEmbed_IncarnationCreatedScenarioNullable -- sanity on 090 (Phase 2 of create
+// variants): a bare incarnation via NULL. up removes NOT NULL + DEFAULT from
+// created_scenario (NULL = created without a bootstrap scenario, StatusReady without a run).
+// down restores the 089 form (NOT NULL DEFAULT 'create'), but must FIRST
+// run backfill NULL -> 'create' and ONLY THEN SET NOT NULL -- otherwise ALTER ...
+// SET NOT NULL would fail on bare rows. Order (backfill BEFORE SET NOT NULL) --
+// the riskiest spot in the rollback; pin it explicitly by text position.
 func TestEmbed_IncarnationCreatedScenarioNullable(t *testing.T) {
 	b, err := FS.ReadFile("090_incarnation_created_scenario_nullable.up.sql")
 	if err != nil {
@@ -927,7 +927,7 @@ func TestEmbed_IncarnationCreatedScenarioNullable(t *testing.T) {
 		t.Fatalf("read down: %v", err)
 	}
 	dbody := string(d)
-	// down восстанавливает NOT NULL + DEFAULT (откат к 089).
+	// down restores NOT NULL + DEFAULT (rollback to 089).
 	for _, frag := range []string{
 		"SET DEFAULT 'create'",
 		"SET NOT NULL",
@@ -936,28 +936,28 @@ func TestEmbed_IncarnationCreatedScenarioNullable(t *testing.T) {
 			t.Errorf("090 down.sql missing %q; content: %.300s", frag, dbody)
 		}
 	}
-	// Backfill NULL → 'create' обязан стоять ПЕРЕД (реальным) SET NOT NULL — иначе
-	// откат рвётся на bare-строках. Сверяем порядок по позициям в тексте. `SET NOT
-	// NULL` упоминается ещё и в шапке-комментарии (выше backfill), поэтому реальный
-	// ALTER берём LastIndex-ом (DDL-стейтмент идёт последним в файле).
+	// Backfill NULL -> 'create' must precede the real SET NOT NULL -- otherwise
+	// the rollback breaks on bare rows. Compare by position in the text. `SET NOT
+	// NULL` is also mentioned in the header comment (before backfill), so the real
+	// ALTER is taken via LastIndex (the DDL statement comes last in the file).
 	backfillPos := strings.Index(dbody, "SET created_scenario = 'create'")
 	notNullPos := strings.LastIndex(dbody, "SET NOT NULL")
 	if backfillPos < 0 {
 		t.Fatalf("090 down.sql missing backfill UPDATE ... SET created_scenario = 'create'; content: %.300s", dbody)
 	}
 	if backfillPos > notNullPos {
-		t.Errorf("090 down.sql: backfill NULL→'create' (pos %d) обязан предшествовать SET NOT NULL (pos %d) — иначе ALTER упадёт на bare-строках", backfillPos, notNullPos)
+		t.Errorf("090 down.sql: backfill NULL->'create' (pos %d) must precede SET NOT NULL (pos %d) -- otherwise ALTER fails on bare rows", backfillPos, notNullPos)
 	}
-	// Backfill таргетит ИМЕННО NULL-строки (bare), не затирает существующие выборы.
+	// Backfill targets exactly the NULL rows (bare), doesn't overwrite existing choices.
 	if !strings.Contains(dbody, "WHERE created_scenario IS NULL") {
 		t.Errorf("090 down.sql backfill must target only NULL rows (WHERE created_scenario IS NULL); content: %.300s", dbody)
 	}
 }
 
-// TestEmbed_ApplyRunsTable — sanity на 018: реестр apply-прогонов
-// (M2.x scenario-runner) с composite PK (apply_id, sid), closed-CHECK на
-// status, CASCADE-FK на incarnation, SET NULL-FK на operators и тремя
-// индексами (incarnation / apply_id / partial running).
+// TestEmbed_ApplyRunsTable -- sanity on 018: registry of apply runs
+// (M2.x scenario runner) with composite PK (apply_id, sid), closed CHECK on
+// status, CASCADE FK to incarnation, SET NULL FK to operators and three
+// indexes (incarnation / apply_id / partial running).
 func TestEmbed_ApplyRunsTable(t *testing.T) {
 	b, err := FS.ReadFile("018_create_apply_runs.up.sql")
 	if err != nil {
@@ -990,9 +990,9 @@ func TestEmbed_ApplyRunsTable(t *testing.T) {
 	}
 }
 
-// TestEmbed_ProvidersTable — sanity на 019: реестр Cloud-Provider-ов
-// (ADR-017) с CHECK на name/type-формате (kebab), SET NULL-FK на operators
-// и индексом по created_by_aid.
+// TestEmbed_ProvidersTable -- sanity on 019: registry of Cloud Providers
+// (ADR-017) with CHECK on name/type format (kebab), SET NULL FK to operators
+// and an index on created_by_aid.
 func TestEmbed_ProvidersTable(t *testing.T) {
 	b, err := FS.ReadFile("019_create_providers.up.sql")
 	if err != nil {
@@ -1020,9 +1020,9 @@ func TestEmbed_ProvidersTable(t *testing.T) {
 	}
 }
 
-// TestEmbed_ProfilesTable — sanity на 020: реестр Cloud-Profile-ей
-// (ADR-017) с CHECK на name-формате, RESTRICT-FK на providers (PM-decision —
-// защита от потери данных), SET NULL-FK на operators и двумя индексами
+// TestEmbed_ProfilesTable -- sanity on 020: registry of Cloud Profiles
+// (ADR-017) with CHECK on name format, RESTRICT FK to providers (PM decision --
+// protection from data loss), SET NULL FK to operators and two indexes
 // (provider / created_by_aid).
 func TestEmbed_ProfilesTable(t *testing.T) {
 	b, err := FS.ReadFile("020_create_profiles.up.sql")
@@ -1053,10 +1053,10 @@ func TestEmbed_ProfilesTable(t *testing.T) {
 	}
 }
 
-// TestEmbed_PurgeApplyRunsFunction — sanity на 021: Reaper-правило
-// `purge_apply_runs(interval, integer)` — DELETE finished apply_runs
-// (success/failed/cancelled) с finished_at старше max_age; running не
-// трогает (фиксируем наличие фильтра по статусам и finished_at в up.sql).
+// TestEmbed_PurgeApplyRunsFunction -- sanity on 021: Reaper rule
+// `purge_apply_runs(interval, integer)` -- DELETE finished apply_runs
+// (success/failed/cancelled) with finished_at older than max_age; running is not
+// touched (pinning the status/finished_at filter in up.sql).
 func TestEmbed_PurgeApplyRunsFunction(t *testing.T) {
 	b, err := FS.ReadFile("021_create_purge_apply_runs.up.sql")
 	if err != nil {
@@ -1083,11 +1083,11 @@ func TestEmbed_PurgeApplyRunsFunction(t *testing.T) {
 	}
 }
 
-// TestEmbed_PurgeVoyagesFunction — sanity на 075: Reaper-правило
-// `purge_voyages(interval, integer)` — DELETE finished voyages
-// (succeeded/failed/partial_failed/cancelled) с finished_at старше max_age;
-// scheduled/pending/running не трогает (фиксируем фильтр по статусам и
-// finished_at + опору на ON DELETE CASCADE для voyage_targets). ADR-046 §79.
+// TestEmbed_PurgeVoyagesFunction -- sanity on 075: Reaper rule
+// `purge_voyages(interval, integer)` -- DELETE finished voyages
+// (succeeded/failed/partial_failed/cancelled) with finished_at older than max_age;
+// scheduled/pending/running is not touched (pinning the status/finished_at filter and
+// reliance on ON DELETE CASCADE for voyage_targets). ADR-046 SS79.
 func TestEmbed_PurgeVoyagesFunction(t *testing.T) {
 	b, err := FS.ReadFile("075_create_purge_voyages.up.sql")
 	if err != nil {
@@ -1114,12 +1114,12 @@ func TestEmbed_PurgeVoyagesFunction(t *testing.T) {
 	}
 }
 
-// TestEmbed_PurgePushRunsFunction — sanity на 076: Reaper-правило
-// `purge_push_runs(interval, integer)` — DELETE finished push_runs
-// (success/partial_failed/failed/cancelled) с finished_at старше max_age;
-// pending/running не трогает (это правило purge_orphan_push_runs). Дочерних
-// FK-таблиц у push_runs нет — per-host результаты inline в summary (051),
-// поэтому каскад не фиксируем. Parity purge_apply_runs / purge_voyages.
+// TestEmbed_PurgePushRunsFunction -- sanity on 076: Reaper rule
+// `purge_push_runs(interval, integer)` -- DELETE finished push_runs
+// (success/partial_failed/failed/cancelled) with finished_at older than max_age;
+// pending/running is not touched (that's the purge_orphan_push_runs rule). push_runs
+// has no child FK tables -- per-host results are inline in the summary (051),
+// so cascade isn't pinned. Parity with purge_apply_runs / purge_voyages.
 func TestEmbed_PurgePushRunsFunction(t *testing.T) {
 	b, err := FS.ReadFile("076_create_purge_push_runs.up.sql")
 	if err != nil {
@@ -1146,18 +1146,18 @@ func TestEmbed_PurgePushRunsFunction(t *testing.T) {
 	}
 }
 
-// TestEmbed_PurgeArchivesFunctions — sanity на 077: три Reaper-правила retention
-// архивных данных compliance-класса:
-//   - purge_incarnation_archive(interval, integer) — DELETE incarnation_archive
-//     по archived_at старше max_age (039);
-//   - purge_state_history_archive(interval, integer) — DELETE state_history_archive
-//     по archived_at старше max_age (039);
-//   - purge_archived_state_history(interval, integer) — DELETE soft-deleted-снимков
-//     (archived_at IS NOT NULL) из живой state_history старше max_age (048).
+// TestEmbed_PurgeArchivesFunctions -- sanity on 077: three Reaper rules for
+// retaining compliance-class archive data:
+//   - purge_incarnation_archive(interval, integer) -- DELETE incarnation_archive
+//     by archived_at older than max_age (039);
+//   - purge_state_history_archive(interval, integer) -- DELETE state_history_archive
+//     by archived_at older than max_age (039);
+//   - purge_archived_state_history(interval, integer) -- DELETE soft-deleted
+//     snapshots (archived_at IS NOT NULL) from live state_history older than max_age (048).
 //
-// Фиксируем наличие фильтра по archived_at и обязательный archived_at IS NOT NULL
-// у правила живой state_history (защита от сноса активных снимков). Все три DROP
-// в одном down.
+// Pins the archived_at filter presence and the mandatory archived_at IS NOT NULL
+// for the live state_history rule (protects active snapshots from being wiped). All three DROPs
+// in one down.
 func TestEmbed_PurgeArchivesFunctions(t *testing.T) {
 	b, err := FS.ReadFile("077_create_purge_archives.up.sql")
 	if err != nil {
@@ -1195,9 +1195,9 @@ func TestEmbed_PurgeArchivesFunctions(t *testing.T) {
 	}
 }
 
-// TestEmbed_ApplyTaskRegisterTable — sanity на 022: накопитель register-данных
-// задач прогона (state_changes слайс 2) с composite PK (apply_id, sid, task_idx)
-// и CASCADE-FK на apply_runs(apply_id, sid).
+// TestEmbed_ApplyTaskRegisterTable -- sanity on 022: accumulator of register data
+// for run tasks (state_changes slice 2) with composite PK (apply_id, sid, task_idx)
+// and CASCADE FK to apply_runs(apply_id, sid).
 func TestEmbed_ApplyTaskRegisterTable(t *testing.T) {
 	b, err := FS.ReadFile("022_create_apply_task_register.up.sql")
 	if err != nil {
@@ -1224,11 +1224,11 @@ func TestEmbed_ApplyTaskRegisterTable(t *testing.T) {
 	}
 }
 
-// TestEmbed_PurgeApplyTaskRegisterFunction — sanity на 023: Reaper-правило
-// `purge_apply_task_register(interval, integer)` — DELETE register-строк
-// прогонов в терминальном статусе (success/failed/cancelled) с finished_at
-// старше grace; register активных (running) прогонов не трогает (фиксируем
-// join к apply_runs + фильтр по status/finished_at в up.sql).
+// TestEmbed_PurgeApplyTaskRegisterFunction -- sanity on 023: Reaper rule
+// `purge_apply_task_register(interval, integer)` -- DELETE register rows
+// of runs in a terminal status (success/failed/cancelled) with finished_at
+// older than grace; register of active (running) runs is not touched (pinning the
+// join to apply_runs + status/finished_at filter in up.sql).
 func TestEmbed_PurgeApplyTaskRegisterFunction(t *testing.T) {
 	b, err := FS.ReadFile("023_create_purge_apply_task_register.up.sql")
 	if err != nil {
@@ -1256,11 +1256,11 @@ func TestEmbed_PurgeApplyTaskRegisterFunction(t *testing.T) {
 	}
 }
 
-// TestEmbed_PurgeApplyTaskRegisterPlanIndex — sanity на 080 (ADR-056 §S1 fix
-// Variant B): forward-фикс purge_apply_task_register под staged-render. up
-// переключает DELETE-join со неуникального под N>1 task_idx на стабильно-
-// уникальный plan_index (CTE-проекция + final DELETE-предикат); down возвращает
-// тело функции к форме 023 (task_idx-join), т.к. 079.down снимает plan_index.
+// TestEmbed_PurgeApplyTaskRegisterPlanIndex -- sanity on 080 (ADR-056 SsS1 fix
+// Variant B): forward fix of purge_apply_task_register for staged rendering. up
+// switches the DELETE join from a non-unique-under-N>1 task_idx to a stably
+// unique plan_index (CTE projection + final DELETE predicate); down restores
+// the function body to the 023 form (task_idx join), since 079.down removes plan_index.
 func TestEmbed_PurgeApplyTaskRegisterPlanIndex(t *testing.T) {
 	b, err := FS.ReadFile("080_purge_apply_task_register_plan_index.up.sql")
 	if err != nil {
@@ -1277,7 +1277,7 @@ func TestEmbed_PurgeApplyTaskRegisterPlanIndex(t *testing.T) {
 			t.Errorf("080 up.sql missing %q; content head: %.400s", frag, body)
 		}
 	}
-	// up НЕ должен ключевать удаление по task_idx (это и был баг).
+	// up must NOT key the delete by task_idx (that was the bug).
 	if strings.Contains(body, "t.task_idx = e.task_idx") {
 		t.Errorf("080 up.sql still keys DELETE by task_idx; content: %.400s", body)
 	}
@@ -1286,24 +1286,24 @@ func TestEmbed_PurgeApplyTaskRegisterPlanIndex(t *testing.T) {
 		t.Fatalf("read down: %v", err)
 	}
 	dbody := string(d)
-	// down восстанавливает форму 023 (task_idx-join), без ссылки на колонку
-	// plan_index в SQL (079.down её снимет). Комментарий-пояснение упоминать
-	// plan_index может — проверяем именно SQL-предикаты/проекцию.
+	// down restores the 023 form (task_idx join), without referencing the
+	// plan_index column in SQL (079.down removes it). The explanatory comment can
+	// mention plan_index -- we check exactly the SQL predicates/projection.
 	if !strings.Contains(dbody, "t.task_idx = e.task_idx") {
-		t.Errorf("080 down.sql does not restore task_idx-join (форма 023); content: %.300s", dbody)
+		t.Errorf("080 down.sql does not restore task_idx-join (form 023); content: %.300s", dbody)
 	}
 	for _, frag := range []string{"atr.plan_index", "t.plan_index", "e.plan_index"} {
 		if strings.Contains(dbody, frag) {
-			t.Errorf("080 down.sql still references column %q (079.down снимет колонку); content: %.300s", frag, dbody)
+			t.Errorf("080 down.sql still references column %q (079.down will remove the column); content: %.300s", frag, dbody)
 		}
 	}
 }
 
-// TestEmbed_ApplyRunsPassage — sanity на 078 (staged-render Passage, ADR-056
-// S1, Variant I): расширение PK apply_runs до (apply_id, sid, passage) +
-// переуказание FK apply_task_register на тройку. up добавляет колонку passage
-// (NOT NULL DEFAULT 0) обеим таблицам, дропает старые PK/FK и пересоздаёт их
-// тройными; down возвращает парные PK/FK и снимает колонки.
+// TestEmbed_ApplyRunsPassage -- sanity on 078 (staged-render Passage, ADR-056
+// S1, Variant I): extends the apply_runs PK to (apply_id, sid, passage) +
+// repoints the apply_task_register FK to the triple. up adds the passage column
+// (NOT NULL DEFAULT 0) to both tables, drops the old PK/FK and recreates them
+// as triples; down restores the paired PK/FK and drops the columns.
 func TestEmbed_ApplyRunsPassage(t *testing.T) {
 	b, err := FS.ReadFile("078_add_apply_runs_passage.up.sql")
 	if err != nil {
@@ -1337,18 +1337,18 @@ func TestEmbed_ApplyRunsPassage(t *testing.T) {
 			t.Errorf("078 down.sql missing %q; content: %.400s", frag, dbody)
 		}
 	}
-	// down не должен оставлять тройной PK (форма 018).
+	// down must not leave the triple PK (form 018).
 	if strings.Contains(dbody, "PRIMARY KEY (apply_id, sid, passage)") {
-		t.Errorf("078 down.sql still references тройной PK; content: %.300s", dbody)
+		t.Errorf("078 down.sql still references the triple PK; content: %.300s", dbody)
 	}
 }
 
-// TestEmbed_ApplyRunsFailedPlanIndex — sanity на 081 (ADR-056 §S1 fix Variant B,
-// failure-канал — последняя инстанция класса global-vs-local-task_idx): apply_runs
-// получает nullable-колонку failed_plan_index под ГЛОБАЛЬНЫЙ plan_index упавшей
-// задачи (корреляция module/action в drift-report + no_log-подавление в barrier).
-// up добавляет колонку и backfill-ит её из task_idx (N=1: локальный==глобальный);
-// down дропает колонку.
+// TestEmbed_ApplyRunsFailedPlanIndex -- sanity on 081 (ADR-056 SsS1 fix Variant B,
+// failure channel -- the last instance of the global-vs-local-task_idx class): apply_runs
+// gets a nullable failed_plan_index column for the GLOBAL plan_index of the failed
+// task (module/action correlation in the drift report + no_log suppression in the barrier).
+// up adds the column and backfills it from task_idx (N=1: local==global);
+// down drops the column.
 func TestEmbed_ApplyRunsFailedPlanIndex(t *testing.T) {
 	b, err := FS.ReadFile("081_add_apply_runs_failed_plan_index.up.sql")
 	if err != nil {
@@ -1365,10 +1365,10 @@ func TestEmbed_ApplyRunsFailedPlanIndex(t *testing.T) {
 			t.Errorf("081 up.sql missing %q; content head: %.400s", frag, body)
 		}
 	}
-	// Колонка nullable (как task_idx): неизвестна до первой упавшей задачи —
-	// NOT NULL DEFAULT здесь был бы неверной семантикой.
+	// The column is nullable (like task_idx): unknown until the first failed task --
+	// NOT NULL DEFAULT here would be the wrong semantics.
 	if strings.Contains(body, "failed_plan_index INT NOT NULL") {
-		t.Errorf("081 up.sql: failed_plan_index должна быть nullable (как task_idx); content: %.300s", body)
+		t.Errorf("081 up.sql: failed_plan_index must be nullable (like task_idx); content: %.300s", body)
 	}
 	d, err := FS.ReadFile("081_add_apply_runs_failed_plan_index.down.sql")
 	if err != nil {
@@ -1379,12 +1379,12 @@ func TestEmbed_ApplyRunsFailedPlanIndex(t *testing.T) {
 	}
 }
 
-// TestEmbed_IncarnationApplyingEpoch — sanity на 082 (ADR-027 amend (m), S0):
-// аддитивная подготовка incarnation под standalone-orphan reconcile. up
-// добавляет четыре NULLABLE applying-epoch колонки (applying_apply_id /
-// applying_attempt / applying_by_kid / applying_since) + partial-индекс под
-// Reaper-scan stale-applying. down (колонки nullable, без constraint → обратим)
-// снимает индекс и колонки.
+// TestEmbed_IncarnationApplyingEpoch -- sanity on 082 (ADR-027 amend (m), S0):
+// additive prep of incarnation for standalone-orphan reconcile. up
+// adds four NULLABLE applying-epoch columns (applying_apply_id /
+// applying_attempt / applying_by_kid / applying_since) + a partial index for
+// the Reaper stale-applying scan. down (columns nullable, no constraint -> reversible)
+// drops the index and columns.
 func TestEmbed_IncarnationApplyingEpoch(t *testing.T) {
 	b, err := FS.ReadFile("082_add_incarnation_applying_epoch.up.sql")
 	if err != nil {
@@ -1404,15 +1404,15 @@ func TestEmbed_IncarnationApplyingEpoch(t *testing.T) {
 			t.Errorf("082 up.sql missing %q; content head: %.500s", frag, body)
 		}
 	}
-	// Колонки nullable: NOT NULL / DEFAULT здесь сломал бы fail-safe (existing
-	// applying-строки с неизвестным epoch правило НЕ реклеймит по NULL by_kid).
+	// Columns are nullable: NOT NULL / DEFAULT here would break fail-safe (existing
+	// applying rows with unknown epoch must NOT be reclaimed based on a NULL by_kid).
 	for _, bad := range []string{
 		"applying_apply_id TEXT NOT NULL",
 		"applying_by_kid   TEXT NOT NULL",
 		"applying_since    TIMESTAMPTZ NOT NULL",
 	} {
 		if strings.Contains(body, bad) {
-			t.Errorf("082 up.sql: applying-epoch колонки должны быть nullable, нашёл %q", bad)
+			t.Errorf("082 up.sql: applying-epoch columns must be nullable, found %q", bad)
 		}
 	}
 	d, err := FS.ReadFile("082_add_incarnation_applying_epoch.down.sql")
@@ -1431,8 +1431,8 @@ func TestEmbed_IncarnationApplyingEpoch(t *testing.T) {
 	}
 }
 
-// TestEmbed_AuditLogOperatorFK — sanity на 004: добавляется FK
-// `audit_log.archon_aid → operators(aid)` с ON DELETE SET NULL.
+// TestEmbed_AuditLogOperatorFK -- sanity on 004: adds the FK
+// `audit_log.archon_aid -> operators(aid)` with ON DELETE SET NULL.
 func TestEmbed_AuditLogOperatorFK(t *testing.T) {
 	b, err := FS.ReadFile("004_add_audit_log_operator_fk.up.sql")
 	if err != nil {
@@ -1458,9 +1458,9 @@ func TestEmbed_AuditLogOperatorFK(t *testing.T) {
 	}
 }
 
-// TestEmbed_ApplyRunsCancelRequested — sanity на 024: cluster-wide Cancel (G1)
-// добавляет колонку apply_runs.cancel_requested (BOOLEAN NOT NULL DEFAULT
-// false) — флаг отмены, читаемый run-goroutine-ом в barrier-поллинге.
+// TestEmbed_ApplyRunsCancelRequested -- sanity on 024: cluster-wide Cancel (G1)
+// adds the apply_runs.cancel_requested column (BOOLEAN NOT NULL DEFAULT
+// false) -- a cancellation flag read by the run goroutine in barrier polling.
 func TestEmbed_ApplyRunsCancelRequested(t *testing.T) {
 	b, err := FS.ReadFile("024_add_apply_runs_cancel_requested.up.sql")
 	if err != nil {
@@ -1485,13 +1485,13 @@ func TestEmbed_ApplyRunsCancelRequested(t *testing.T) {
 	}
 }
 
-// TestEmbed_ApplyRunsWardClaim — sanity на 025 (ADR-027 Phase 0): аддитивная
-// подготовка apply_runs под work-queue + claim модель. up добавляет четыре
-// Ward-claim колонки (claim_by_kid / claim_at / claim_expires_at / attempt),
-// расширяет CHECK status значениями planned/claimed (drop+recreate, как в
-// 016/017) с сохранением running/success/failed/cancelled, и закладывает
-// partial-индекс под claim-скан. down (status — CHECK, не enum → обратим)
-// дропает индекс/колонки и возвращает CHECK к форме 018+024.
+// TestEmbed_ApplyRunsWardClaim -- sanity on 025 (ADR-027 Phase 0): additive
+// prep of apply_runs for the work-queue + claim model. up adds four
+// Ward-claim columns (claim_by_kid / claim_at / claim_expires_at / attempt),
+// extends the status CHECK with planned/claimed values (drop+recreate, as in
+// 016/017) preserving running/success/failed/cancelled, and lays a
+// partial index for the claim scan. down (status -- CHECK, not enum -> reversible)
+// drops the index/columns and restores the CHECK to the 018+024 form.
 func TestEmbed_ApplyRunsWardClaim(t *testing.T) {
 	b, err := FS.ReadFile("025_add_apply_runs_ward_claim.up.sql")
 	if err != nil {
@@ -1535,21 +1535,21 @@ func TestEmbed_ApplyRunsWardClaim(t *testing.T) {
 			t.Errorf("down.sql missing %q; content: %.300s", frag, dbody)
 		}
 	}
-	// Восстановленный в down CHECK возвращается к форме 018+024
-	// (running/success/failed/cancelled) — откат значений возможен
-	// (CHECK-constraint, не enum). Точная проверка содержимого CHECK на
-	// SQL-side — в migrate-integration (TestIntegration_ApplyRunsWardClaim_Phase0):
-	// тут sanity-grep по фрагменту, не парся весь SQL.
+	// The restored down CHECK returns to the 018+024 form
+	// (running/success/failed/cancelled) -- rolling back values is possible
+	// (CHECK constraint, not enum). Exact CHECK content check on the
+	// SQL side is in migrate-integration (TestIntegration_ApplyRunsWardClaim_Phase0):
+	// here it's a sanity grep on a fragment, not parsing the whole SQL.
 	if !strings.Contains(dbody, "CHECK (status IN ('running', 'success', 'failed', 'cancelled'))") {
-		t.Errorf("down.sql restored CHECK не в форме 018+024; content: %.300s", dbody)
+		t.Errorf("down.sql restored CHECK not in the 018+024 form; content: %.300s", dbody)
 	}
 }
 
-// TestEmbed_ApplyRunsDispatchedStatus — sanity на 040 (ADR-027 amend, S2): enum
-// apply_runs.status расширяется фазой `dispatched`. up добавляет значение в CHECK
-// (drop+recreate, как 025/036) с сохранением planned/claimed/running/success/
-// failed/cancelled; down переводит dispatched-строки в running и сужает CHECK
-// обратно к форме 025 (не должен упоминать `dispatched`).
+// TestEmbed_ApplyRunsDispatchedStatus -- sanity on 040 (ADR-027 amend, S2): the
+// apply_runs.status enum gets extended with the `dispatched` phase. up adds the value
+// to the CHECK (drop+recreate, as in 025/036) preserving planned/claimed/running/success/
+// failed/cancelled; down moves dispatched rows to running and narrows the CHECK
+// back to the 025 form (must not mention `dispatched`).
 func TestEmbed_ApplyRunsDispatchedStatus(t *testing.T) {
 	b, err := FS.ReadFile("040_add_apply_runs_dispatched_status.up.sql")
 	if err != nil {
@@ -1566,10 +1566,10 @@ func TestEmbed_ApplyRunsDispatchedStatus(t *testing.T) {
 			t.Errorf("040 up.sql missing %q; content head: %.400s", frag, body)
 		}
 	}
-	// up расширяет, не теряя предыдущие значения (running остаётся vestigial-valid).
+	// up extends without losing previous values (running stays vestigially valid).
 	for _, frag := range []string{"'planned'", "'claimed'", "'running'", "'success'", "'failed'", "'cancelled'"} {
 		if !strings.Contains(body, frag) {
-			t.Errorf("040 up.sql must preserve %q in расширенном CHECK; content: %.400s", frag, body)
+			t.Errorf("040 up.sql must preserve %q in the extended CHECK; content: %.400s", frag, body)
 		}
 	}
 	d, err := FS.ReadFile("040_add_apply_runs_dispatched_status.down.sql")
@@ -1577,22 +1577,22 @@ func TestEmbed_ApplyRunsDispatchedStatus(t *testing.T) {
 		t.Fatalf("read down: %v", err)
 	}
 	dbody := string(d)
-	// down переводит dispatched-строки в running ПЕРЕД сужением CHECK.
+	// down moves dispatched rows to running BEFORE narrowing the CHECK.
 	if !strings.Contains(dbody, "UPDATE apply_runs SET status = 'running' WHERE status = 'dispatched'") {
 		t.Errorf("040 down.sql must migrate dispatched→running before tightening CHECK; content: %.400s", dbody)
 	}
-	// Восстановленный CHECK не несёт dispatched (форма 025).
+	// The restored CHECK doesn't carry dispatched (form 025).
 	if !strings.Contains(dbody, "CHECK (status IN ('planned', 'claimed', 'running', 'success', 'failed', 'cancelled'))") {
-		t.Errorf("040 down.sql restored CHECK не в форме 025; content: %.400s", dbody)
+		t.Errorf("040 down.sql restored CHECK not in the 025 form; content: %.400s", dbody)
 	}
 }
 
-// TestEmbed_ApplyRunsOrphanedStatus — sanity на 044 (Soul-reconcile, ADR-027(g),
-// S6): enum apply_runs.status расширяется терминалом `orphaned`. up аддитивно
-// добавляет значение в CHECK (drop+recreate, как 040), сохраняя весь прежний
-// набор включая dispatched, и расширяет purge_apply_runs orphaned-ом; down
-// переводит orphaned-строки в failed и сужает CHECK обратно к форме 040 (без
-// orphaned), восстанавливая purge_apply_runs без orphaned.
+// TestEmbed_ApplyRunsOrphanedStatus -- sanity on 044 (Soul-reconcile, ADR-027(g),
+// S6): the apply_runs.status enum gets extended with the terminal `orphaned`. up additively
+// adds the value to the CHECK (drop+recreate, as in 040), preserving the entire prior
+// set including dispatched, and extends purge_apply_runs with orphaned; down
+// moves orphaned rows to failed and narrows the CHECK back to the 040 form (without
+// orphaned), restoring purge_apply_runs without orphaned.
 func TestEmbed_ApplyRunsOrphanedStatus(t *testing.T) {
 	b, err := FS.ReadFile("044_add_apply_runs_orphaned_status.up.sql")
 	if err != nil {
@@ -1609,13 +1609,13 @@ func TestEmbed_ApplyRunsOrphanedStatus(t *testing.T) {
 			t.Errorf("044 up.sql missing %q; content head: %.400s", frag, body)
 		}
 	}
-	// up аддитивен — не теряет прежний набор статусов (включая dispatched).
+	// up is additive -- doesn't lose the previous status set (including dispatched).
 	for _, frag := range []string{"'planned'", "'claimed'", "'running'", "'dispatched'", "'success'", "'failed'", "'cancelled'"} {
 		if !strings.Contains(body, frag) {
-			t.Errorf("044 up.sql must preserve %q в расширенном CHECK; content: %.400s", frag, body)
+			t.Errorf("044 up.sql must preserve %q in the extended CHECK; content: %.400s", frag, body)
 		}
 	}
-	// purge_apply_runs расширён orphaned-ом (finished-терминал).
+	// purge_apply_runs is extended with orphaned (a finished terminal).
 	if !strings.Contains(body, "status IN ('success', 'failed', 'cancelled', 'orphaned')") {
 		t.Errorf("044 up.sql must extend purge_apply_runs with orphaned; content: %.600s", body)
 	}
@@ -1625,28 +1625,28 @@ func TestEmbed_ApplyRunsOrphanedStatus(t *testing.T) {
 		t.Fatalf("read down: %v", err)
 	}
 	dbody := string(d)
-	// down переводит orphaned-строки в failed ПЕРЕД сужением CHECK.
+	// down moves orphaned rows to failed BEFORE narrowing the CHECK.
 	if !strings.Contains(dbody, "UPDATE apply_runs SET status = 'failed' WHERE status = 'orphaned'") {
 		t.Errorf("044 down.sql must migrate orphaned→failed before tightening CHECK; content: %.400s", dbody)
 	}
-	// Восстановленный CHECK не несёт orphaned (форма 040, dispatched сохранён).
+	// The restored CHECK doesn't carry orphaned (form 040, dispatched preserved).
 	if !strings.Contains(dbody, "CHECK (status IN ('planned', 'claimed', 'running', 'dispatched', 'success', 'failed', 'cancelled'))") {
-		t.Errorf("044 down.sql restored CHECK не в форме 040; content: %.400s", dbody)
+		t.Errorf("044 down.sql restored CHECK not in the 040 form; content: %.400s", dbody)
 	}
-	// purge_apply_runs сужен обратно (без orphaned).
+	// purge_apply_runs is narrowed back (without orphaned).
 	if !strings.Contains(dbody, "status IN ('success', 'failed', 'cancelled')") {
 		t.Errorf("044 down.sql must restore purge_apply_runs without orphaned; content: %.600s", dbody)
 	}
 }
 
-// TestEmbed_ApplyRunsNoMatchStatus — sanity на 045 (FINDING-01 вариант (б)):
-// enum apply_runs.status расширяется терминалом `no_match` ПОВЕРХ 044 (orphaned).
-// up аддитивно добавляет значение в CHECK (drop+recreate, как 040/044), сохраняя
-// весь прежний набор включая orphaned, и расширяет purge_apply_runs no_match-ем;
-// down переводит no_match-строки в success (дореформенный терминал нецелевого
-// хоста) и сужает CHECK обратно к форме 044 (без no_match), восстанавливая
-// purge_apply_runs без no_match. ВАЖНО: orphaned (044) не сломан — down НЕ трогает
-// orphaned-строки и сохраняет orphaned в восстановленном CHECK.
+// TestEmbed_ApplyRunsNoMatchStatus -- sanity on 045 (FINDING-01 variant (b)):
+// the apply_runs.status enum gets extended with the terminal `no_match` ON TOP OF 044 (orphaned).
+// up additively adds the value to the CHECK (drop+recreate, as in 040/044), preserving
+// the entire prior set including orphaned, and extends purge_apply_runs with no_match;
+// down moves no_match rows to success (the pre-reform terminal for a non-target
+// host) and narrows the CHECK back to the 044 form (without no_match), restoring
+// purge_apply_runs without no_match. IMPORTANT: orphaned (044) is not broken -- down does NOT touch
+// orphaned rows and keeps orphaned in the restored CHECK.
 func TestEmbed_ApplyRunsNoMatchStatus(t *testing.T) {
 	b, err := FS.ReadFile("045_add_apply_runs_no_match_status.up.sql")
 	if err != nil {
@@ -1663,13 +1663,13 @@ func TestEmbed_ApplyRunsNoMatchStatus(t *testing.T) {
 			t.Errorf("045 up.sql missing %q; content head: %.400s", frag, body)
 		}
 	}
-	// up аддитивен — не теряет прежний набор статусов (включая orphaned из 044).
+	// up is additive -- doesn't lose the previous status set (including orphaned from 044).
 	for _, frag := range []string{"'planned'", "'claimed'", "'running'", "'dispatched'", "'success'", "'failed'", "'cancelled'", "'orphaned'"} {
 		if !strings.Contains(body, frag) {
-			t.Errorf("045 up.sql must preserve %q в расширенном CHECK; content: %.400s", frag, body)
+			t.Errorf("045 up.sql must preserve %q in the extended CHECK; content: %.400s", frag, body)
 		}
 	}
-	// purge_apply_runs расширён no_match-ем (finished-терминал), orphaned сохранён.
+	// purge_apply_runs is extended with no_match (a finished terminal), orphaned is preserved.
 	if !strings.Contains(body, "status IN ('success', 'failed', 'cancelled', 'orphaned', 'no_match')") {
 		t.Errorf("045 up.sql must extend purge_apply_runs with no_match (preserving orphaned); content: %.600s", body)
 	}
@@ -1679,26 +1679,26 @@ func TestEmbed_ApplyRunsNoMatchStatus(t *testing.T) {
 		t.Fatalf("read down: %v", err)
 	}
 	dbody := string(d)
-	// down переводит no_match-строки в success ПЕРЕД сужением CHECK.
+	// down moves no_match rows to success BEFORE narrowing the CHECK.
 	if !strings.Contains(dbody, "UPDATE apply_runs SET status = 'success' WHERE status = 'no_match'") {
 		t.Errorf("045 down.sql must migrate no_match→success before tightening CHECK; content: %.400s", dbody)
 	}
-	// down НЕ трогает orphaned-строки (не сломать 044).
+	// down does NOT touch orphaned rows (to not break 044).
 	if strings.Contains(dbody, "WHERE status = 'orphaned'") {
 		t.Errorf("045 down.sql must NOT touch orphaned rows; content: %.400s", dbody)
 	}
-	// Восстановленный CHECK не несёт no_match, но СОХРАНЯЕТ orphaned (форма 044).
+	// The restored CHECK doesn't carry no_match, but KEEPS orphaned (form 044).
 	if !strings.Contains(dbody, "CHECK (status IN ('planned', 'claimed', 'running', 'dispatched', 'success', 'failed', 'cancelled', 'orphaned'))") {
-		t.Errorf("045 down.sql restored CHECK не в форме 044 (с orphaned, без no_match); content: %.400s", dbody)
+		t.Errorf("045 down.sql restored CHECK not in the 044 form (with orphaned, without no_match); content: %.400s", dbody)
 	}
-	// purge_apply_runs сужен обратно (без no_match, orphaned сохранён).
+	// purge_apply_runs is narrowed back (without no_match, orphaned preserved).
 	if !strings.Contains(dbody, "status IN ('success', 'failed', 'cancelled', 'orphaned')") {
 		t.Errorf("045 down.sql must restore purge_apply_runs without no_match (keeping orphaned); content: %.600s", dbody)
 	}
 }
 
-// TestEmbed_RBACTables — sanity на 026 (ADR-028): три таблицы rbac_* с
-// CHECK на формат имени роли, FK на operators(aid) и ON DELETE CASCADE.
+// TestEmbed_RBACTables -- sanity on 026 (ADR-028): three rbac_* tables with
+// CHECK on role name format, FK to operators(aid) and ON DELETE CASCADE.
 func TestEmbed_RBACTables(t *testing.T) {
 	b, err := FS.ReadFile("026_create_rbac.up.sql")
 	if err != nil {
@@ -1738,10 +1738,10 @@ func TestEmbed_RBACTables(t *testing.T) {
 	}
 }
 
-// TestEmbed_SynodTables — sanity на 069 (ADR-049): три таблицы synod* (Архон →
-// Synod → Роли) тем же паттерном rbac_*: CHECK на формат имени (как rbac_roles),
-// FK на operators(aid)/rbac_roles(name), ON DELETE CASCADE c обеих сторон bundle,
-// индекс synod_operators(aid) под snapshot-разворот.
+// TestEmbed_SynodTables -- sanity on 069 (ADR-049): three synod* tables (Archon ->
+// Synod -> Roles) with the same rbac_* pattern: CHECK on name format (as rbac_roles),
+// FK to operators(aid)/rbac_roles(name), ON DELETE CASCADE on both sides of the bundle,
+// index on synod_operators(aid) for snapshot unrolling.
 func TestEmbed_SynodTables(t *testing.T) {
 	b, err := FS.ReadFile("069_create_synods.up.sql")
 	if err != nil {
@@ -1785,8 +1785,8 @@ func TestEmbed_SynodTables(t *testing.T) {
 	}
 }
 
-// TestEmbed_SeedClusterAdmin — sanity на 027 (ADR-028(b), E1): идемпотентный
-// INSERT роли cluster-admin (builtin=true) + permission `*` через
+// TestEmbed_SeedClusterAdmin -- sanity on 027 (ADR-028(b), E1): idempotent
+// INSERT of the cluster-admin role (builtin=true) + `*` permission via
 // ON CONFLICT DO NOTHING.
 func TestEmbed_SeedClusterAdmin(t *testing.T) {
 	b, err := FS.ReadFile("027_seed_cluster_admin.up.sql")
@@ -1816,11 +1816,11 @@ func TestEmbed_SeedClusterAdmin(t *testing.T) {
 	}
 }
 
-// TestEmbed_PluginSigilsTable — sanity на 028 (ADR-026): реестр plugin_sigils
-// (Keeper-signed allow-list плагинов) с partial UNIQUE-индексом по активным
-// записям (namespace, name, ref WHERE revoked_at IS NULL), CHECK на
-// sha256-формате (hex), BYTEA signature + JSONB manifest, RESTRICT-FK
-// allowed_by_aid (NOT NULL) и SET NULL-FK revoked_by_aid (NULL) на operators.
+// TestEmbed_PluginSigilsTable -- sanity on 028 (ADR-026): registry of plugin_sigils
+// (Keeper-signed plugin allow-list) with a partial UNIQUE index on active
+// records (namespace, name, ref WHERE revoked_at IS NULL), CHECK on the
+// sha256 format (hex), BYTEA signature + JSONB manifest, RESTRICT FK
+// allowed_by_aid (NOT NULL) and SET NULL FK revoked_by_aid (NULL) to operators.
 func TestEmbed_PluginSigilsTable(t *testing.T) {
 	b, err := FS.ReadFile("028_create_plugin_sigils.up.sql")
 	if err != nil {
@@ -1852,9 +1852,9 @@ func TestEmbed_PluginSigilsTable(t *testing.T) {
 	}
 }
 
-// TestEmbed_ApplyRunsRecipe — sanity на 029 (ADR-027(c)(f)): аддитивная
-// nullable-колонка apply_runs.recipe (JSONB) под just-in-time-рендер задания
-// Acolyte-ом при claim. up добавляет колонку + COMMENT, down дропает её.
+// TestEmbed_ApplyRunsRecipe -- sanity on 029 (ADR-027(c)(f)): additive
+// nullable apply_runs.recipe column (JSONB) for the just-in-time rendering of
+// a job by the Acolyte on claim. up adds the column + COMMENT, down drops it.
 func TestEmbed_ApplyRunsRecipe(t *testing.T) {
 	b, err := FS.ReadFile("029_add_apply_runs_recipe.up.sql")
 	if err != nil {
@@ -1879,10 +1879,10 @@ func TestEmbed_ApplyRunsRecipe(t *testing.T) {
 	}
 }
 
-// TestEmbed_PluginSigilsManifestRaw — sanity на 030 (M1-storage): аддитивная
-// nullable-колонка plugin_sigils.manifest_raw (BYTEA) под byte-exact канон
-// подписанного manifest.yaml (verify/broadcast, ADR-026). up добавляет колонку
-// + COMMENT, down дропает её.
+// TestEmbed_PluginSigilsManifestRaw -- sanity on 030 (M1 storage): additive
+// nullable plugin_sigils.manifest_raw column (BYTEA) for the byte-exact canonical
+// signed manifest.yaml (verify/broadcast, ADR-026). up adds the column
+// + COMMENT, down drops it.
 func TestEmbed_PluginSigilsManifestRaw(t *testing.T) {
 	b, err := FS.ReadFile("030_add_plugin_sigils_manifest_raw.up.sql")
 	if err != nil {
@@ -1907,10 +1907,10 @@ func TestEmbed_PluginSigilsManifestRaw(t *testing.T) {
 	}
 }
 
-// TestEmbed_PluginSigilsCommitSha — sanity на 038 (A1-S3): аддитивная
-// nullable-колонка plugin_sigils.commit_sha (TEXT) — audit-метка происхождения
-// бинаря (git-commit, ADR-026(g)), ВНЕ подписываемого блока. up добавляет
-// колонку + COMMENT, down дропает её.
+// TestEmbed_PluginSigilsCommitSha -- sanity on 038 (A1-S3): additive
+// nullable plugin_sigils.commit_sha column (TEXT) -- audit label for the
+// binary's origin (git commit, ADR-026(g)), OUTSIDE the signed block. up adds the
+// column + COMMENT, down drops it.
 func TestEmbed_PluginSigilsCommitSha(t *testing.T) {
 	b, err := FS.ReadFile("038_add_plugin_sigils_commit_sha.up.sql")
 	if err != nil {
@@ -1935,12 +1935,12 @@ func TestEmbed_PluginSigilsCommitSha(t *testing.T) {
 	}
 }
 
-// TestEmbed_IncarnationArchiveTables — sanity на 039 (S-D3, каскад V3): две
-// archive-таблицы (incarnation_archive / state_history_archive) с колонкой
-// archived_at и БЕЗ FK на live incarnation (чтобы переживать DELETE+CASCADE).
-// up создаёт обе таблицы + индексы; в up НЕ должно быть FK на incarnation
-// (REFERENCES incarnation) — иначе архив не пережил бы каскадный снос. down
-// дропает обе.
+// TestEmbed_IncarnationArchiveTables -- sanity on 039 (S-D3, cascade V3): two
+// archive tables (incarnation_archive / state_history_archive) with an
+// archived_at column and NO FK to the live incarnation (to survive DELETE+CASCADE).
+// up creates both tables + indexes; up must NOT have an FK to incarnation
+// (REFERENCES incarnation) -- otherwise the archive wouldn't survive a cascading
+// delete. down drops both.
 func TestEmbed_IncarnationArchiveTables(t *testing.T) {
 	b, err := FS.ReadFile("039_create_incarnation_archive.up.sql")
 	if err != nil {
@@ -1958,7 +1958,7 @@ func TestEmbed_IncarnationArchiveTables(t *testing.T) {
 			t.Errorf("039 up.sql missing %q; content head: %.400s", frag, body)
 		}
 	}
-	// Инвариант каскада V3: НЕТ FK на live incarnation — архив переживает DELETE.
+	// Cascade V3 invariant: NO FK to the live incarnation -- the archive survives DELETE.
 	if strings.Contains(body, "REFERENCES incarnation") {
 		t.Errorf("039 up.sql must NOT reference live incarnation (archive survives cascade); content head: %.400s", body)
 	}
@@ -1977,10 +1977,10 @@ func TestEmbed_IncarnationArchiveTables(t *testing.T) {
 	}
 }
 
-// TestEmbed_OracleCircuitTable — sanity на 042 (ADR-030(a), circuit-breaker S4):
-// per-decree fixed-window счётчик `oracle_circuit` с PK decree, CASCADE-FK на
-// decrees (re-enable = delete+recreate чистит окно) и колонками window_start /
-// fire_count под атомарный UPSERT-инкремент.
+// TestEmbed_OracleCircuitTable -- sanity on 042 (ADR-030(a), circuit breaker S4):
+// per-decree fixed-window counter `oracle_circuit` with PK decree, CASCADE FK to
+// decrees (re-enable = delete+recreate clears the window) and window_start /
+// fire_count columns for an atomic UPSERT increment.
 func TestEmbed_OracleCircuitTable(t *testing.T) {
 	b, err := FS.ReadFile("042_create_oracle_circuit.up.sql")
 	if err != nil {
@@ -2008,10 +2008,10 @@ func TestEmbed_OracleCircuitTable(t *testing.T) {
 	}
 }
 
-// TestEmbed_OmensTable — sanity на 032 (ADR-025, Augur §4.1): реестр omens
-// (внешние системы) с CHECK на name-формате (kebab), closed-CHECK на
-// source_type enum (vault/prometheus/elk), SET NULL-FK на operators и индексом
-// по created_by_aid.
+// TestEmbed_OmensTable -- sanity on 032 (ADR-025, Augur SS4.1): registry of omens
+// (external systems) with CHECK on name format (kebab), closed CHECK on
+// the source_type enum (vault/prometheus/elk), SET NULL FK to operators and an index
+// on created_by_aid.
 func TestEmbed_OmensTable(t *testing.T) {
 	b, err := FS.ReadFile("032_create_omens.up.sql")
 	if err != nil {
@@ -2040,9 +2040,9 @@ func TestEmbed_OmensTable(t *testing.T) {
 	}
 }
 
-// TestEmbed_RitesTable — sanity на 033 (ADR-025, Augur §4.2): реестр rites
-// (grant-ы) с IDENTITY-PK, CASCADE-FK на omens, XOR-CHECK на субъекте
-// (coven/sid), CHECK token-полей ⇒delegate, JSONB allow и тремя индексами
+// TestEmbed_RitesTable -- sanity on 033 (ADR-025, Augur SS4.2): registry of rites
+// (grants) with an IDENTITY PK, CASCADE FK to omens, XOR CHECK on the subject
+// (coven/sid), CHECK on token fields implying delegate, JSONB allow and three indexes
 // (omen / partial sid / partial coven).
 func TestEmbed_RitesTable(t *testing.T) {
 	b, err := FS.ReadFile("033_create_rites.up.sql")
@@ -2081,9 +2081,9 @@ func TestEmbed_RitesTable(t *testing.T) {
 	}
 }
 
-// TestEmbed_ServiceRegistryTable — sanity на 034 (managed service-registry):
-// таблица service_registry с PK name (kebab-CHECK), nonempty-CHECK на git/ref,
-// nullable refresh и двумя FK на operators (created_by_aid / updated_by_aid).
+// TestEmbed_ServiceRegistryTable -- sanity on 034 (managed service registry):
+// the service_registry table with PK name (kebab CHECK), nonempty CHECK on git/ref,
+// nullable refresh and two FKs to operators (created_by_aid / updated_by_aid).
 func TestEmbed_ServiceRegistryTable(t *testing.T) {
 	b, err := FS.ReadFile("034_create_service_registry.up.sql")
 	if err != nil {
@@ -2112,9 +2112,9 @@ func TestEmbed_ServiceRegistryTable(t *testing.T) {
 	}
 }
 
-// TestEmbed_KeeperSettingsTable — sanity на 035 (cluster-wide key-value):
-// таблица keeper_settings с PK key (snake-CHECK), NOT NULL value и SET NULL-FK
-// updated_by_aid на operators. Well-known строки миграция НЕ вставляет.
+// TestEmbed_KeeperSettingsTable -- sanity on 035 (cluster-wide key-value):
+// the keeper_settings table with PK key (snake CHECK), NOT NULL value and SET NULL FK
+// updated_by_aid to operators. The migration does NOT insert well-known rows.
 func TestEmbed_KeeperSettingsTable(t *testing.T) {
 	b, err := FS.ReadFile("035_create_keeper_settings.up.sql")
 	if err != nil {
@@ -2131,7 +2131,7 @@ func TestEmbed_KeeperSettingsTable(t *testing.T) {
 			t.Errorf("035 up.sql missing %q; content head: %.400s", frag, body)
 		}
 	}
-	// Миграция не должна сеять well-known ключи (runtime-данные).
+	// The migration must not seed well-known keys (runtime data).
 	if strings.Contains(body, "INSERT INTO keeper_settings") {
 		t.Errorf("035 up.sql must not seed settings rows; content head: %.400s", body)
 	}
@@ -2144,12 +2144,12 @@ func TestEmbed_KeeperSettingsTable(t *testing.T) {
 	}
 }
 
-// TestEmbed_SigilSigningKeysTable — sanity на 037 (ADR-026(h), R3 multi-anchor):
-// реестр trust-anchor-ключей подписи Sigil. Инвариант "ровно один primary среди
-// active" материализован partial UNIQUE-индексом по (is_primary) WHERE
-// status='active' AND is_primary; CHECK на status-enum (active/retired); оба FK
-// (introduced_by_aid / retired_by_aid) на operators с ON DELETE SET NULL.
-// Колонки приватника НЕТ — только pubkey_pem + vault_ref (security-инвариант).
+// TestEmbed_SigilSigningKeysTable -- sanity on 037 (ADR-026(h), R3 multi-anchor):
+// registry of trust-anchor signing keys for the Sigil. The invariant "exactly one primary among
+// active" is materialized by a partial UNIQUE index on (is_primary) WHERE
+// status='active' AND is_primary; CHECK on the status enum (active/retired); both FKs
+// (introduced_by_aid / retired_by_aid) to operators with ON DELETE SET NULL.
+// There is NO private-key column -- only the public part + a vault_ref (security invariant).
 func TestEmbed_SigilSigningKeysTable(t *testing.T) {
 	b, err := FS.ReadFile("037_create_sigil_signing_keys.up.sql")
 	if err != nil {
@@ -2174,8 +2174,8 @@ func TestEmbed_SigilSigningKeysTable(t *testing.T) {
 			t.Errorf("037 up.sql missing %q; content head: %.400s", frag, body)
 		}
 	}
-	// Security-инвариант: приватник НИКОГДА не в PG. Никаких приватных-ключевых
-	// колонок (private/secret_key/privkey) — только публичная часть + Vault-ссылка.
+	// Security invariant: the private key NEVER goes into PG. No private key
+	// columns (private/secret_key/privkey) -- only the public part + a Vault reference.
 	for _, forbidden := range []string{"private_key", "privkey", "secret_key", "private_pem"} {
 		if strings.Contains(body, forbidden) {
 			t.Errorf("037 up.sql must NOT store private key material; found %q", forbidden)
@@ -2190,12 +2190,12 @@ func TestEmbed_SigilSigningKeysTable(t *testing.T) {
 	}
 }
 
-// TestEmbed_StateHistoryArchivedAt — sanity на 048 (ADR-Q19 retention):
-// аддитивная nullable-колонка `state_history.archived_at` (soft-delete-флаг)
-// + partial-индекс по WHERE archived_at IS NULL под фильтр активных снимков.
-// up добавляет колонку TIMESTAMPTZ и CREATE INDEX state_history_active_idx;
-// down дропает индекс и колонку (обратимо, soft-deleted-снимки физически
-// остаются — становятся неотличимы от активных).
+// TestEmbed_StateHistoryArchivedAt -- sanity on 048 (ADR-Q19 retention):
+// additive nullable `state_history.archived_at` column (soft-delete flag)
+// + partial index on WHERE archived_at IS NULL for filtering active snapshots.
+// up adds a TIMESTAMPTZ column and CREATE INDEX state_history_active_idx;
+// down drops the index and column (reversible, soft-deleted snapshots physically
+// remain -- become indistinguishable from active ones).
 func TestEmbed_StateHistoryArchivedAt(t *testing.T) {
 	b, err := FS.ReadFile("048_state_history_archived_at.up.sql")
 	if err != nil {
@@ -2227,12 +2227,12 @@ func TestEmbed_StateHistoryArchivedAt(t *testing.T) {
 	}
 }
 
-// TestEmbed_ArchiveStateHistoryFunction — sanity на 049 (ADR-Q19 retention):
-// SQL-функция `archive_state_history(integer, boolean, integer)` помечает
-// `archived_at = NOW()` для активных снимков `state_history` сверх N
-// последних на incarnation; при keep_version_bump=true исключает snapshots
-// шагов state_schema-миграции (scenario='migration'). up создаёт функцию;
-// down её дропает.
+// TestEmbed_ArchiveStateHistoryFunction -- sanity on 049 (ADR-Q19 retention):
+// the `archive_state_history(integer, boolean, integer)` SQL function marks
+// `archived_at = NOW()` for active state_history snapshots beyond N
+// most recent per incarnation; when keep_version_bump=true excludes snapshots
+// of state_schema migration steps (scenario='migration'). up creates the function;
+// down drops it.
 func TestEmbed_ArchiveStateHistoryFunction(t *testing.T) {
 	b, err := FS.ReadFile("049_create_archive_state_history.up.sql")
 	if err != nil {
@@ -2264,9 +2264,9 @@ func TestEmbed_ArchiveStateHistoryFunction(t *testing.T) {
 	}
 }
 
-// TestEmbed_IncarnationDriftScanColumns — sanity на 050 (ADR-031 Slice C):
-// миграция добавляет колонки `last_drift_check_at` / `last_drift_summary` в
-// `incarnation` и partial-индекс. Down дропает колонки (индекс падает с ними).
+// TestEmbed_IncarnationDriftScanColumns -- sanity on 050 (ADR-031 Slice C):
+// the migration adds `last_drift_check_at` / `last_drift_summary` columns to
+// `incarnation` and a partial index. Down drops the columns (the index goes with them).
 func TestEmbed_IncarnationDriftScanColumns(t *testing.T) {
 	b, err := FS.ReadFile("050_add_incarnation_drift_scan.up.sql")
 	if err != nil {
@@ -2299,10 +2299,10 @@ func TestEmbed_IncarnationDriftScanColumns(t *testing.T) {
 	}
 }
 
-// TestEmbed_SoulsSshTarget — sanity на 053 (ADR-032 amendment 2026-05-26, S7-1):
-// добавляется колонка souls.ssh_target (jsonb) + CHECK shape-guard
-// souls_ssh_target_shape (типы ssh_port/ssh_user/soul_path при non-NULL).
-// up создаёт колонку и constraint; down дропает constraint и колонку.
+// TestEmbed_SoulsSshTarget -- sanity on 053 (ADR-032 amendment 2026-05-26, S7-1):
+// adds the souls.ssh_target column (jsonb) + a shape-guard CHECK
+// souls_ssh_target_shape (types of ssh_port/ssh_user/soul_path when non-NULL).
+// up creates the column and constraint; down drops the constraint and column.
 func TestEmbed_SoulsSshTarget(t *testing.T) {
 	b, err := FS.ReadFile("053_add_souls_ssh_target.up.sql")
 	if err != nil {
@@ -2335,10 +2335,10 @@ func TestEmbed_SoulsSshTarget(t *testing.T) {
 	}
 }
 
-// TestEmbed_SoulsSshTarget_SSHProvider — sanity на 056 (ADR-032 amendment
-// 2026-05-27, P2 W-1): расширенный CHECK `souls_ssh_target_shape` с optional
-// `ssh_provider` (kebab-case regex). up пересоздаёт constraint с regex'ом
-// `^[a-z][a-z0-9-]{0,62}$`, down возвращает прежний (без ssh_provider).
+// TestEmbed_SoulsSshTarget_SSHProvider -- sanity on 056 (ADR-032 amendment
+// 2026-05-27, P2 W-1): extended `souls_ssh_target_shape` CHECK with an optional
+// `ssh_provider` (kebab-case regex). up recreates the constraint with the regex
+// `^[a-z][a-z0-9-]{0,62}$`, down restores the previous one (without ssh_provider).
 func TestEmbed_SoulsSshTarget_SSHProvider(t *testing.T) {
 	b, err := FS.ReadFile("056_add_ssh_provider_to_ssh_target.up.sql")
 	if err != nil {
@@ -2371,11 +2371,11 @@ func TestEmbed_SoulsSshTarget_SSHProvider(t *testing.T) {
 	}
 }
 
-// TestEmbed_TidesTable — sanity на 055 (ADR-040 amendment 2026-05-27, W-1):
-// реестр `tides` (top-level invocation-time chunking) с CHECK-инвариантами
-// (status / on_surge_failure / running⇒claim-NOT-NULL / surge_index ≤ total),
-// FK на operators(aid), двумя partial-индексами (claim_scan / pending_pickup) +
-// back-link колонки apply_runs.tide_id / surge_index с partial-индексом.
+// TestEmbed_TidesTable -- sanity on 055 (ADR-040 amendment 2026-05-27, W-1):
+// registry of `tides` (top-level invocation-time chunking) with CHECK invariants
+// (status / on_surge_failure / running implies claim-NOT-NULL / surge_index <= total),
+// FK to operators(aid), two partial indexes (claim_scan / pending_pickup) +
+// back-link columns apply_runs.tide_id / surge_index with a partial index.
 func TestEmbed_TidesTable(t *testing.T) {
 	b, err := FS.ReadFile("055_create_tides.up.sql")
 	if err != nil {
@@ -2430,9 +2430,9 @@ func TestEmbed_TidesTable(t *testing.T) {
 	}
 }
 
-// TestEmbed_DropTides — sanity на 061 (Wave 5 Pass 1): полное удаление Tide.
-// up дропает реестр `tides` + back-link-колонки apply_runs (tide_id/surge_index)
-// + partial-индекс; down пересоздаёт схему по образцу 055.
+// TestEmbed_DropTides -- sanity on 061 (Wave 5 Pass 1): full removal of Tide.
+// up drops the `tides` registry + apply_runs back-link columns (tide_id/surge_index)
+// + partial index; down recreates the schema per the 055 pattern.
 func TestEmbed_DropTides(t *testing.T) {
 	b, err := FS.ReadFile("061_drop_tides.up.sql")
 	if err != nil {
@@ -2466,11 +2466,11 @@ func TestEmbed_DropTides(t *testing.T) {
 	}
 }
 
-// TestEmbed_ErrandRuns_TableShape — sanity на 057 (ADR-041, E6-1): реестр
-// `errand_runs` (top-level multi-target pull-ad-hoc invocation) с
-// CHECK-инвариантами (status / on_failure / concurrency / total / done-bounds /
-// attempt / running⇒claim-NOT-NULL / terminal⇒finished_at-NOT-NULL), FK на
-// operators(aid) и двумя partial-индексами (pending_pickup / claim_scan).
+// TestEmbed_ErrandRuns_TableShape -- sanity on 057 (ADR-041, E6-1): registry of
+// `errand_runs` (top-level multi-target pull-ad-hoc invocation) with
+// CHECK invariants (status / on_failure / concurrency / total / done bounds /
+// attempt / running implies claim-NOT-NULL / terminal implies finished_at-NOT-NULL), FK to
+// operators(aid) and two partial indexes (pending_pickup / claim_scan).
 func TestEmbed_ErrandRuns_TableShape(t *testing.T) {
 	b, err := FS.ReadFile("057_create_errand_runs.up.sql")
 	if err != nil {
@@ -2532,10 +2532,10 @@ func TestEmbed_ErrandRuns_TableShape(t *testing.T) {
 	}
 }
 
-// TestEmbed_Errands_HasErrandRunIdColumn — sanity на 057 (ADR-041, E6-1):
-// back-link errands.errand_run_id (NULLABLE) + FK CASCADE на
-// errand_runs(errand_run_id) + partial-индекс errands_errand_run_id_idx;
-// down аккуратно дропает FK/индекс/колонку.
+// TestEmbed_Errands_HasErrandRunIdColumn -- sanity on 057 (ADR-041, E6-1):
+// back-link errands.errand_run_id (NULLABLE) + FK CASCADE to
+// errand_runs(errand_run_id) + partial index errands_errand_run_id_idx;
+// down carefully drops the FK/index/column.
 func TestEmbed_Errands_HasErrandRunIdColumn(t *testing.T) {
 	b, err := FS.ReadFile("057_create_errand_runs.up.sql")
 	if err != nil {
@@ -2569,11 +2569,11 @@ func TestEmbed_Errands_HasErrandRunIdColumn(t *testing.T) {
 	}
 }
 
-// TestEmbed_VoyagesTable — sanity на 059 (ADR-043, S1): реестр `voyages`
-// (унифицированный батчевый прогон) с дискриминатором kind=scenario|command,
-// CHECK-инвариантами (kind / status включая scheduled / on_failure /
-// kind↔payload-консистентность / running⇒claim-NOT-NULL / terminal⇒finished_at /
-// batch_index ≤ total), FK на operators(aid) и двумя partial-индексами
+// TestEmbed_VoyagesTable -- sanity on 059 (ADR-043, S1): registry of `voyages`
+// (unified batch run) with a discriminator kind=scenario|command,
+// CHECK invariants (kind / status including scheduled / on_failure /
+// kind<->payload consistency / running implies claim-NOT-NULL / terminal implies finished_at /
+// batch_index <= total), FK to operators(aid) and two partial indexes
 // (pending_pickup / claim_scan).
 func TestEmbed_VoyagesTable(t *testing.T) {
 	b, err := FS.ReadFile("059_create_voyages.up.sql")
@@ -2631,10 +2631,10 @@ func TestEmbed_VoyagesTable(t *testing.T) {
 	}
 }
 
-// TestEmbed_VoyageTargetsTable — sanity на 059 (ADR-043, S1): таблица
-// `voyage_targets` (единицы прогона / Leg-разбиение) с composite PK
-// (voyage_id, target_kind, target_id), CHECK на target_kind/status,
-// CASCADE-FK на voyages(voyage_id) и индексом (voyage_id, batch_index).
+// TestEmbed_VoyageTargetsTable -- sanity on 059 (ADR-043, S1): the
+// `voyage_targets` table (run units / Leg split) with composite PK
+// (voyage_id, target_kind, target_id), CHECK on target_kind/status,
+// CASCADE FK to voyages(voyage_id) and an index (voyage_id, batch_index).
 func TestEmbed_VoyageTargetsTable(t *testing.T) {
 	b, err := FS.ReadFile("059_create_voyages.up.sql")
 	if err != nil {
@@ -2673,10 +2673,10 @@ func TestEmbed_VoyageTargetsTable(t *testing.T) {
 	}
 }
 
-// TestEmbed_CadencesTable — sanity на 066 (ADR-046, S1): реестр `cadences`
-// (расписание, спавнящее Voyage) с CHECK-инвариантами (schedule_kind / overlap_policy
-// / kind / schedule_consistency interval↔cron XOR / kind↔payload-консистентность /
-// sane-bounds), FK на operators(aid) и partial-индексом due-скана.
+// TestEmbed_CadencesTable -- sanity on 066 (ADR-046, S1): registry of `cadences`
+// (a schedule spawning Voyage) with CHECK invariants (schedule_kind / overlap_policy
+// / kind / schedule_consistency interval<->cron XOR / kind<->payload consistency /
+// sane bounds), FK to operators(aid) and a partial index for the due scan.
 func TestEmbed_CadencesTable(t *testing.T) {
 	b, err := FS.ReadFile("066_create_cadences.up.sql")
 	if err != nil {
@@ -2728,9 +2728,9 @@ func TestEmbed_CadencesTable(t *testing.T) {
 	}
 }
 
-// TestEmbed_VoyagesCadenceBackLink — sanity на 066 (ADR-046 §2): back-link
-// voyages.cadence_id (NULLABLE) + FK ON DELETE SET NULL на cadences(id) +
-// partial-индекс voyages_cadence_id_idx; down дропает индекс/FK/колонку.
+// TestEmbed_VoyagesCadenceBackLink -- sanity on 066 (ADR-046 SS2): back-link
+// voyages.cadence_id (NULLABLE) + FK ON DELETE SET NULL to cadences(id) +
+// partial index voyages_cadence_id_idx; down drops the index/FK/column.
 func TestEmbed_VoyagesCadenceBackLink(t *testing.T) {
 	b, err := FS.ReadFile("066_create_cadences.up.sql")
 	if err != nil {
@@ -2765,12 +2765,12 @@ func TestEmbed_VoyagesCadenceBackLink(t *testing.T) {
 	}
 }
 
-// TestEmbed_CadencesIntervalFloor — sanity на 068 (ADR-046 Pass B, floor-лимит):
-// up несёт pre-flight data-guard (RAISE при interval_seconds < 30 ПЕРЕД ADD
-// CONSTRAINT), CHECK cadences_interval_seconds_floor (>= 30, отдельным именем — НЕ
-// переопределяет _positive из 066) и partial-индекс cadences_enabled_interval_idx
-// под MIN-запрос; down дропает индекс + floor-CHECK (positive/due-scan из 066 не
-// трогает).
+// TestEmbed_CadencesIntervalFloor -- sanity on 068 (ADR-046 Pass B, floor limit):
+// up carries a pre-flight data guard (RAISE when interval_seconds < 30 BEFORE ADD
+// CONSTRAINT), the cadences_interval_seconds_floor CHECK (>= 30, a separate name -- does NOT
+// redefine _positive from 066) and the cadences_enabled_interval_idx partial index
+// for the MIN query; down drops the index + the floor CHECK (does not touch
+// positive/due-scan from 066).
 func TestEmbed_CadencesIntervalFloor(t *testing.T) {
 	b, err := FS.ReadFile("068_cadences_interval_floor.up.sql")
 	if err != nil {
@@ -2791,12 +2791,12 @@ func TestEmbed_CadencesIntervalFloor(t *testing.T) {
 			t.Errorf("068 up.sql missing %q; content head: %.600s", frag, body)
 		}
 	}
-	// pre-flight data-guard должен стоять ПЕРЕД ADD CONSTRAINT (fail-fast до
-	// проверки констрейнтом — понятный RAISE вместо сырого CHECK violation).
+	// The pre-flight data guard must precede ADD CONSTRAINT (fail-fast before
+	// the constraint check -- a clear RAISE instead of a raw CHECK violation).
 	if guardIdx, addIdx := strings.Index(body, "RAISE EXCEPTION"), strings.Index(body, "ADD CONSTRAINT cadences_interval_seconds_floor"); guardIdx < 0 || addIdx < 0 || guardIdx > addIdx {
-		t.Errorf("068 up.sql: data-guard (RAISE) должен предшествовать ADD CONSTRAINT; guardIdx=%d addIdx=%d", guardIdx, addIdx)
+		t.Errorf("068 up.sql: the data guard (RAISE) must precede ADD CONSTRAINT; guardIdx=%d addIdx=%d", guardIdx, addIdx)
 	}
-	// floor-CHECK — отдельное имя, НЕ переопределяет positive из 066 (тот не дропается).
+	// floor-CHECK -- a separate name, does NOT redefine positive from 066 (that one isn't dropped).
 	if strings.Contains(body, "DROP CONSTRAINT") && strings.Contains(body, "cadences_interval_seconds_positive") {
 		t.Errorf("068 up.sql must NOT redefine cadences_interval_seconds_positive; content: %.400s", body)
 	}
@@ -2813,7 +2813,7 @@ func TestEmbed_CadencesIntervalFloor(t *testing.T) {
 			t.Errorf("068 down.sql missing %q; content: %.300s", frag, dstr)
 		}
 	}
-	// down НЕ трогает 066-объекты (positive-CHECK / due-scan-индекс / таблицу).
+	// down does NOT touch 066 objects (positive CHECK / due-scan index / table).
 	for _, forbidden := range []string{"cadences_interval_seconds_positive", "cadences_due_scan_idx", "DROP TABLE"} {
 		if strings.Contains(dstr, forbidden) {
 			t.Errorf("068 down.sql must NOT touch 066-object %q; content: %.300s", forbidden, dstr)
@@ -2821,11 +2821,11 @@ func TestEmbed_CadencesIntervalFloor(t *testing.T) {
 	}
 }
 
-// TestEmbed_CadencesFailThresholdPercent — sanity на 070 (ADR-043 amendment
-// 2026-06-09, Cadence-recipe S3): аддитивная колонка cadences.fail_threshold_percent
-// (порог провалов процентом от spawn-scope, симметрия batch_percent из 066) +
-// CHECK на диапазон [1, 100]. up — ADD COLUMN + ADD CONSTRAINT range; down —
-// DROP CONSTRAINT + DROP COLUMN, не трогая 066-объекты.
+// TestEmbed_CadencesFailThresholdPercent -- sanity on 070 (ADR-043 amendment
+// 2026-06-09, Cadence-recipe S3): additive cadences.fail_threshold_percent column
+// (failure threshold as a percentage of spawn scope, symmetric with batch_percent from 066) +
+// CHECK on the range [1, 100]. up -- ADD COLUMN + ADD CONSTRAINT range; down --
+// DROP CONSTRAINT + DROP COLUMN, not touching 066 objects.
 func TestEmbed_CadencesFailThresholdPercent(t *testing.T) {
 	b, err := FS.ReadFile("070_cadences_fail_threshold_percent.up.sql")
 	if err != nil {
@@ -2842,8 +2842,8 @@ func TestEmbed_CadencesFailThresholdPercent(t *testing.T) {
 			t.Errorf("070 up.sql missing %q; content head: %.600s", frag, body)
 		}
 	}
-	// Аддитивно (forward-compat): up НЕ дропает прежние объекты. (Имена 066-колонок
-	// допустимы в пояснительном комментарии — проверяем именно отсутствие DROP.)
+	// Additive (forward-compat): up does NOT drop prior objects. (066 column names
+	// are fine in an explanatory comment -- we check specifically for the absence of DROP.)
 	for _, forbidden := range []string{"DROP CONSTRAINT", "DROP TABLE", "DROP COLUMN"} {
 		if strings.Contains(body, forbidden) {
 			t.Errorf("070 up.sql must NOT drop prior object (%q); content: %.400s", forbidden, body)
@@ -2862,7 +2862,7 @@ func TestEmbed_CadencesFailThresholdPercent(t *testing.T) {
 			t.Errorf("070 down.sql missing %q; content: %.300s", frag, dstr)
 		}
 	}
-	// down НЕ трогает 066/068-объекты.
+	// down does NOT touch 066/068 objects.
 	for _, forbidden := range []string{"batch_percent", "cadences_interval_seconds_floor", "DROP TABLE"} {
 		if strings.Contains(dstr, forbidden) {
 			t.Errorf("070 down.sql must NOT touch prior object %q; content: %.300s", forbidden, dstr)
@@ -2870,10 +2870,10 @@ func TestEmbed_CadencesFailThresholdPercent(t *testing.T) {
 	}
 }
 
-// TestEmbed_IncarnationChoirsTable — sanity на 060 (ADR-044, S-T2): таблица
-// `incarnation_choirs` (Choir — declared-топология хостов внутри инкарнации) с
-// composite PK (incarnation_name, choir_name), CHECK на choir_name-формате и
-// min/max-size инвариантах, CASCADE-FK на incarnation(name) и SET NULL-FK на
+// TestEmbed_IncarnationChoirsTable -- sanity on 060 (ADR-044, S-T2): the
+// `incarnation_choirs` table (Choir -- declared host topology within an incarnation) with
+// composite PK (incarnation_name, choir_name), CHECK on choir_name format and
+// min/max-size invariants, CASCADE FK to incarnation(name) and SET NULL FK to
 // operators(aid).
 func TestEmbed_IncarnationChoirsTable(t *testing.T) {
 	b, err := FS.ReadFile("060_create_choirs.up.sql")
@@ -2908,11 +2908,11 @@ func TestEmbed_IncarnationChoirsTable(t *testing.T) {
 	}
 }
 
-// TestEmbed_IncarnationChoirVoicesTable — sanity на 060 (ADR-044, S-T2): таблица
-// `incarnation_choir_voices` (Voice — членство SID в Choir-е) с composite PK
-// (incarnation_name, choir_name, sid), CASCADE-FK на пару incarnation_choirs и
-// на souls(sid), SET NULL-FK на operators(aid), индексом по sid. Глобального
-// UNIQUE(sid) НЕТ намеренно (мультиинкарнационность, ADR-044 пункт 3).
+// TestEmbed_IncarnationChoirVoicesTable -- sanity on 060 (ADR-044, S-T2): the
+// `incarnation_choir_voices` table (Voice -- SID membership in a Choir) with composite PK
+// (incarnation_name, choir_name, sid), CASCADE FK to the incarnation_choirs pair and
+// to souls(sid), SET NULL FK to operators(aid), an index on sid. Deliberately
+// NO global UNIQUE(sid) (multi-incarnation, ADR-044 item 3).
 func TestEmbed_IncarnationChoirVoicesTable(t *testing.T) {
 	b, err := FS.ReadFile("060_create_choirs.up.sql")
 	if err != nil {
@@ -2935,8 +2935,8 @@ func TestEmbed_IncarnationChoirVoicesTable(t *testing.T) {
 			t.Errorf("060 up.sql missing voices %q; content head: %.500s", frag, body)
 		}
 	}
-	// Глобальный UNIQUE(sid) запрещён моделью (один SID — Voice в разных
-	// инкарнациях): фиксируем его отсутствие.
+	// A global UNIQUE(sid) is forbidden by the model (a single SID can be a Voice
+	// across different incarnations): pinning its absence.
 	if strings.Contains(body, "UNIQUE (sid)") || strings.Contains(body, "UNIQUE(sid)") {
 		t.Errorf("060 up.sql must NOT declare global UNIQUE(sid) (multi-incarnation); content: %.500s", body)
 	}
@@ -2955,11 +2955,11 @@ func TestEmbed_IncarnationChoirVoicesTable(t *testing.T) {
 	}
 }
 
-// TestEmbed_TidingEphemeralPayload — sanity на 072 (ADR-052 Amendment N1):
-// `tidings` расширяется четырьмя additive-колонками (ephemeral/voyage_id/
-// annotations/projection), CHECK-инвариантом ephemeral⟺voyage_id и partial-
-// индексом по voyage_id WHERE ephemeral. up аддитивен (не дропает прежнее);
-// down снимает индекс, CHECK и все четыре колонки.
+// TestEmbed_TidingEphemeralPayload -- sanity on 072 (ADR-052 Amendment N1):
+// `tidings` gets extended with four additive columns (ephemeral/voyage_id/
+// annotations/projection), a CHECK invariant ephemeral<->voyage_id and a partial
+// index on voyage_id WHERE ephemeral. up is additive (does not drop prior data);
+// down drops the index, CHECK and all four columns.
 func TestEmbed_TidingEphemeralPayload(t *testing.T) {
 	b, err := FS.ReadFile("072_tiding_ephemeral_payload.up.sql")
 	if err != nil {
@@ -2982,7 +2982,7 @@ func TestEmbed_TidingEphemeralPayload(t *testing.T) {
 			t.Errorf("072 up.sql missing %q; content head: %.500s", frag, body)
 		}
 	}
-	// Аддитивно (forward-compat): up НЕ дропает прежние объекты `tidings`.
+	// Additive (forward-compat): up must NOT drop prior `tidings` objects.
 	for _, forbidden := range []string{"DROP TABLE", "DROP COLUMN", "DROP INDEX"} {
 		if strings.Contains(body, forbidden) {
 			t.Errorf("072 up.sql must NOT drop prior object (%q); content: %.400s", forbidden, body)
@@ -3007,11 +3007,11 @@ func TestEmbed_TidingEphemeralPayload(t *testing.T) {
 	}
 }
 
-// TestEmbed_WarrantTable — sanity на 092 (cert-rotation Вар1): реестр warrant
-// сервисных TLS-сертов инкарнаций с partial unique по (incarnation_id, kind)
-// WHERE status='active', CASCADE-FK на incarnation(name), CHECK на kind/status/
-// fingerprint-формате, индексами по not_after (ось скана Reaper) и status
-// (retention). down дропает таблицу.
+// TestEmbed_WarrantTable -- sanity on 092 (cert-rotation Var1): registry of warrant
+// (incarnation service TLS certs) with a partial unique on (incarnation_id, kind)
+// WHERE status='active', CASCADE FK to incarnation(name), CHECK on kind/status/
+// fingerprint format, indexes on not_after (Reaper scan axis) and status
+// (retention). down drops the table.
 func TestEmbed_WarrantTable(t *testing.T) {
 	b, err := FS.ReadFile("092_create_warrant.up.sql")
 	if err != nil {
@@ -3048,10 +3048,10 @@ func TestEmbed_WarrantTable(t *testing.T) {
 	}
 }
 
-// TestEmbed_PurgeOldCertsFunction — sanity на 093 (R4, cert-rotation Вар1):
-// Reaper-правило `purge_old_certs(text[], interval, integer)` — DELETE warrant в
-// указанных статусах (superseded/expired/failed) с issued_at старше max_age;
-// active/rotating не трогает (statuses-фильтр). Parity purge_old_seeds (013).
+// TestEmbed_PurgeOldCertsFunction -- sanity on 093 (R4, cert-rotation Var1):
+// Reaper rule `purge_old_certs(text[], interval, integer)` -- DELETE warrant in
+// the given statuses (superseded/expired/failed) with issued_at older than max_age;
+// active/rotating is not touched (statuses filter). Parity with purge_old_seeds (013).
 func TestEmbed_PurgeOldCertsFunction(t *testing.T) {
 	b, err := FS.ReadFile("093_create_purge_old_certs.up.sql")
 	if err != nil {
@@ -3077,10 +3077,10 @@ func TestEmbed_PurgeOldCertsFunction(t *testing.T) {
 	}
 }
 
-// TestEmbed_RenamePermissionRerunLast — data-фикс 095: rename
-// `incarnation.create-rerun` → `incarnation.rerun-last` в rbac_role_permissions.
-// Каталог переименован без deprecated-alias — без миграции кастомная роль со
-// старой строкой молча получала бы 403 на rerun-last.
+// TestEmbed_RenamePermissionRerunLast -- data fix 095: rename
+// `incarnation.create-rerun` -> `incarnation.rerun-last` in rbac_role_permissions.
+// The catalog was renamed without a deprecated alias -- without the migration a custom role with
+// the old string would silently get a 403 on rerun-last.
 func TestEmbed_RenamePermissionRerunLast(t *testing.T) {
 	b, err := FS.ReadFile("095_rename_permission_rerun_last.up.sql")
 	if err != nil {

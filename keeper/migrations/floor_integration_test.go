@@ -2,15 +2,16 @@
 
 package migrations_test
 
-// Integration-тест миграции 068 (ADR-046 Pass B, floor-лимит): чистая БД —
-// миграция применяется (CHECK + индекс на месте); БД с уже-вставленной суб-30
-// cadence — pre-flight data-guard RAISE-ит с понятным текстом (fail-fast, НЕ
-// тихий UPDATE). Под testcontainers-PG, build-tag `integration`.
+// Integration test for migration 068 (ADR-046 Pass B, floor limit): on a
+// clean DB the migration applies (CHECK + index in place); on a DB with an
+// already-inserted sub-30 cadence, the pre-flight data guard RAISEs with a
+// clear message (fail-fast, NOT a silent UPDATE). Under testcontainers-PG,
+// build tag `integration`.
 //
-// Пошаговый apply (Migrate(67) → seed → Steps(1)) строится напрямую через
-// golang-migrate: migrate.Apply применяет ВСЕ миграции разом, а нам нужно
-// вклиниться между 067 и 068, чтобы засеять суб-30 строку до того, как
-// floor-CHECK 068 её бы отверг на INSERT.
+// The step-by-step apply (Migrate(67) -> seed -> Steps(1)) is built directly
+// via golang-migrate: migrate.Apply applies ALL migrations at once, and we
+// need to wedge in between 067 and 068 to seed the sub-30 row before the
+// floor CHECK in 068 would reject it on INSERT.
 
 import (
 	"context"
@@ -35,8 +36,9 @@ func requireDocker() bool {
 	return v == "1" || v == "true"
 }
 
-// freshContainer поднимает чистый PG-testcontainer и возвращает DSN + teardown.
-// При недоступном docker и без REQUIRE_DOCKER — skip (parity cadence integration).
+// freshContainer spins up a clean PG testcontainer and returns DSN + teardown.
+// When docker is unavailable and REQUIRE_DOCKER isn't set -- skip (parity
+// with cadence integration).
 func freshContainer(t *testing.T) (dsn string, teardown func()) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -66,7 +68,7 @@ func freshContainer(t *testing.T) (dsn string, teardown func()) {
 	}
 }
 
-// newMigrator строит *migrate.Migrate поверх embedded FS и pgx5-URL.
+// newMigrator builds *migrate.Migrate over the embedded FS and a pgx5 URL.
 func newMigrator(t *testing.T, dsn string) *migrate.Migrate {
 	t.Helper()
 	src, err := iofs.New(migrations.FS, ".")
@@ -81,8 +83,8 @@ func newMigrator(t *testing.T, dsn string) *migrate.Migrate {
 	return m
 }
 
-// TestMigration068_CleanDB_Applies — чистая БД: все миграции (включая 068)
-// применяются; floor-CHECK и MIN-индекс присутствуют в схеме.
+// TestMigration068_CleanDB_Applies -- clean DB: all migrations (including
+// 068) apply; the floor CHECK and MIN index are present in the schema.
 func TestMigration068_CleanDB_Applies(t *testing.T) {
 	dsn, teardown := freshContainer(t)
 	defer teardown()
@@ -90,7 +92,7 @@ func TestMigration068_CleanDB_Applies(t *testing.T) {
 	m := newMigrator(t, dsn)
 	defer m.Close()
 	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		t.Fatalf("Up на чистой БД: %v", err)
+		t.Fatalf("Up on a clean DB: %v", err)
 	}
 
 	ctx := context.Background()
@@ -109,7 +111,7 @@ func TestMigration068_CleanDB_Applies(t *testing.T) {
 		t.Fatalf("query constraint: %v", err)
 	}
 	if !checkExists {
-		t.Error("floor-CHECK cadences_interval_seconds_floor отсутствует после миграции")
+		t.Error("floor CHECK cadences_interval_seconds_floor is missing after the migration")
 	}
 
 	var idxExists bool
@@ -121,14 +123,15 @@ func TestMigration068_CleanDB_Applies(t *testing.T) {
 		t.Fatalf("query index: %v", err)
 	}
 	if !idxExists {
-		t.Error("MIN-индекс cadences_enabled_interval_idx отсутствует после миграции")
+		t.Error("MIN index cadences_enabled_interval_idx is missing after the migration")
 	}
 }
 
-// TestMigration068_SubFloorRow_RaisesGuard — БД с уже-вставленной суб-30 cadence
-// (напр. dev-стенд с 10s-cadence): применяем миграции до 067, сеем interval=10,
-// затем Steps(1) (=068) → pre-flight data-guard RAISE-ит. Проверяем понятный
-// текст ошибки (минимум 30s / Beacons), НЕ тихий UPDATE.
+// TestMigration068_SubFloorRow_RaisesGuard -- a DB with an already-inserted
+// sub-30 cadence (e.g. a dev stand with a 10s cadence): apply migrations up
+// to 067, seed interval=10, then Steps(1) (=068) -> the pre-flight data
+// guard RAISEs. We check for a clear error message (minimum 30s / Beacons),
+// NOT a silent UPDATE.
 func TestMigration068_SubFloorRow_RaisesGuard(t *testing.T) {
 	dsn, teardown := freshContainer(t)
 	defer teardown()
@@ -136,7 +139,7 @@ func TestMigration068_SubFloorRow_RaisesGuard(t *testing.T) {
 	m := newMigrator(t, dsn)
 	defer m.Close()
 
-	// Применяем все миграции ДО 068 (067 — последняя перед floor-лимитом).
+	// Apply all migrations UP TO 068 (067 is the last one before the floor limit).
 	if err := m.Migrate(67); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		t.Fatalf("Migrate(67): %v", err)
 	}
@@ -147,14 +150,15 @@ func TestMigration068_SubFloorRow_RaisesGuard(t *testing.T) {
 		t.Fatalf("pgxpool.New: %v", err)
 	}
 
-	// Архонт-владелец (FK cadences.created_by_aid).
+	// Owner Archon (FK cadences.created_by_aid).
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO operators (aid, display_name, auth_method, created_by_aid)
 		 VALUES ('archon-floor-it', 'Floor IT', 'jwt', NULL)
 		 ON CONFLICT (aid) DO NOTHING`); err != nil {
 		t.Fatalf("seed operator: %v", err)
 	}
-	// Суб-30 interval-cadence (до floor-CHECK 068 — INSERT проходит positive-CHECK).
+	// Sub-30 interval cadence (before the floor CHECK in 068 -- the INSERT
+	// passes the positive CHECK).
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO cadences (
 			id, name, schedule_kind, interval_seconds, overlap_policy,
@@ -167,12 +171,12 @@ func TestMigration068_SubFloorRow_RaisesGuard(t *testing.T) {
 	}
 	pool.Close()
 
-	// Steps(1) применяет 068 → pre-flight DO-guard RAISE-ит.
+	// Steps(1) applies 068 -> the pre-flight DO guard RAISEs.
 	err = m.Steps(1)
 	if err == nil {
-		t.Fatal("ожидался RAISE на суб-30 строке, но миграция 068 прошла")
+		t.Fatal("expected a RAISE on the sub-30 row, but migration 068 succeeded")
 	}
 	if !strings.Contains(err.Error(), "interval_seconds < 30") {
-		t.Errorf("ошибка миграции должна нести понятный текст data-guard; got: %v", err)
+		t.Errorf("migration error should carry a clear data-guard message; got: %v", err)
 	}
 }
