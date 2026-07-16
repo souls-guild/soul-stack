@@ -6,12 +6,11 @@ import (
 	"testing"
 )
 
-// Unit-тесты keys-CRUD-а покрывают input-guard-ы, отрабатывающие ДО обращения к
-// БД (nil-pool гарантирует: guard сработал раньше QueryRow/BeginTx — иначе
-// был бы nil-panic). Транзакционные инварианты (≥1 active, single primary,
-// partial-unique) полноценно проверяются integration-тестами через
-// testcontainers (keys_integration_test.go) — симметрично store_test.go vs
-// store_integration_test.go.
+// Unit tests for keys-CRUD cover input guards that run BEFORE database access
+// (nil-pool guarantees: guard fired before QueryRow/BeginTx — else nil-panic).
+// Transactional invariants (≥1 active, single primary, partial-unique) are
+// fully verified by integration tests via testcontainers (keys_integration_test.go)
+// — symmetrical to store_test.go vs store_integration_test.go.
 
 func TestIntroduce_GuardEmptyFields(t *testing.T) {
 	cases := []struct {
@@ -29,10 +28,10 @@ func TestIntroduce_GuardEmptyFields(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := Introduce(context.Background(), nil, tc.keyID, tc.pubkeyPEM, tc.vaultRef, false, nil)
 			if err == nil {
-				t.Fatalf("Introduce(%s) должен вернуть ошибку", tc.name)
+				t.Fatalf("Introduce(%s) should return error", tc.name)
 			}
 			if !strings.Contains(err.Error(), tc.want) {
-				t.Errorf("ошибка = %q, ожидалось упоминание %q", err, tc.want)
+				t.Errorf("error = %q, expected mention of %q", err, tc.want)
 			}
 		})
 	}
@@ -41,23 +40,23 @@ func TestIntroduce_GuardEmptyFields(t *testing.T) {
 func TestSetPrimary_GuardEmptyKeyID(t *testing.T) {
 	err := SetPrimary(context.Background(), nil, "", "archon-a")
 	if err == nil {
-		t.Fatal("SetPrimary с пустым key_id должен вернуть ошибку")
+		t.Fatal("SetPrimary with empty key_id should return error")
 	}
 	if !strings.Contains(err.Error(), "key_id") {
-		t.Errorf("ошибка = %q, ожидалось упоминание key_id", err)
+		t.Errorf("error = %q, expected mention of key_id", err)
 	}
 }
 
 func TestRetire_GuardEmptyFields(t *testing.T) {
 	if err := Retire(context.Background(), nil, "", "archon-a"); err == nil {
-		t.Fatal("Retire с пустым key_id должен вернуть ошибку")
+		t.Fatal("Retire with empty key_id should return error")
 	}
-	// callerAID обязателен (audit-инвариант).
+	// callerAID is required (audit invariant).
 	err := Retire(context.Background(), nil, "kid", "")
 	if err == nil {
-		t.Fatal("Retire с пустым callerAID должен вернуть ошибку")
+		t.Fatal("Retire with empty callerAID should return error")
 	}
 	if !strings.Contains(err.Error(), "retired_by_aid") {
-		t.Errorf("ошибка = %q, ожидалось упоминание retired_by_aid", err)
+		t.Errorf("error = %q, expected mention of retired_by_aid", err)
 	}
 }

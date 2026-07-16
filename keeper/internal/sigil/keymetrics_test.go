@@ -12,11 +12,11 @@ func TestRegisterKeyMetrics_RegistersFamilies(t *testing.T) {
 	reg := obs.NewRegistry()
 	m := RegisterKeyMetrics(reg)
 	if m == nil {
-		t.Fatal("RegisterKeyMetrics вернул nil")
+		t.Fatal("RegisterKeyMetrics returned nil")
 	}
 
-	// Gauge/Counter публикуют семейство сразу после регистрации (в отличие от
-	// Vec); прогоняем Observe-методы для надёжности и сверяем присутствие.
+	// Gauge/Counter publish the metric family immediately after registration (unlike
+	// Vec); we call Observe methods for safety and verify presence.
 	m.SetActive(2)
 	m.ObserveAnchorsRebroadcast(3)
 
@@ -34,7 +34,7 @@ func TestRegisterKeyMetrics_RegistersFamilies(t *testing.T) {
 		"keeper_sigil_anchors_last_delivered",
 	} {
 		if !seen[want] {
-			t.Errorf("MetricFamily %q не зарегистрировано", want)
+			t.Errorf("MetricFamily %q not registered", want)
 		}
 	}
 }
@@ -44,15 +44,15 @@ func TestRegisterKeyMetrics_PanicsOnDoubleRegister(t *testing.T) {
 	RegisterKeyMetrics(reg)
 	defer func() {
 		if r := recover(); r == nil {
-			t.Error("ожидалась паника на повторной регистрации, её не было")
+			t.Error("expected panic on duplicate registration, but got none")
 		}
 	}()
 	RegisterKeyMetrics(reg)
 }
 
-// TestObserveAnchorsRebroadcast — счётчик проходов растёт на каждый вызов, gauge
-// delivered отражает последнее значение (наблюдаемость доставки набора якорей,
-// ADR-026(h) R3-S7 Retire-инвариант).
+// TestObserveAnchorsRebroadcast tests that pass counter increments on each call
+// and delivered gauge reflects the latest value (observability of anchor set delivery,
+// ADR-026(h) R3-S7 Retire invariant).
 func TestObserveAnchorsRebroadcast(t *testing.T) {
 	reg := obs.NewRegistry()
 	m := RegisterKeyMetrics(reg)
@@ -61,15 +61,15 @@ func TestObserveAnchorsRebroadcast(t *testing.T) {
 	m.ObserveAnchorsRebroadcast(2)
 
 	if got := counterValue(t, reg, "keeper_sigil_anchors_rebroadcast_total"); got != 2 {
-		t.Errorf("rebroadcast_total = %v, want 2 (два прохода)", got)
+		t.Errorf("rebroadcast_total = %v, want 2 (two passes)", got)
 	}
 	if got := gaugeValue(t, reg, "keeper_sigil_anchors_last_delivered"); got != 2 {
-		t.Errorf("last_delivered = %v, want 2 (последняя раздача)", got)
+		t.Errorf("last_delivered = %v, want 2 (last broadcast)", got)
 	}
 }
 
-// TestKeyMetrics_NilSafe — методы на nil-получателе не паникуют (daemon вызывает
-// ObserveAnchorsRebroadcast до wire-up registry / при выключенной observability).
+// TestKeyMetrics_NilSafe — methods on nil receiver do not panic (daemon calls
+// ObserveAnchorsRebroadcast before registry wire-up / with observability disabled).
 func TestKeyMetrics_NilSafe(t *testing.T) {
 	var m *KeyMetrics
 	m.SetActive(1)
@@ -97,10 +97,10 @@ func metricValue(t testing.TB, reg *obs.Registry, name string, pick func(*dto.Me
 			continue
 		}
 		if len(f.GetMetric()) != 1 {
-			t.Fatalf("%q: ожидалась одна серия, получено %d", name, len(f.GetMetric()))
+			t.Fatalf("%q: expected one series, got %d", name, len(f.GetMetric()))
 		}
 		return pick(f.GetMetric()[0])
 	}
-	t.Fatalf("MetricFamily %q не найдено", name)
+	t.Fatalf("MetricFamily %q not found", name)
 	return 0
 }

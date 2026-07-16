@@ -1,8 +1,8 @@
 //go:build integration
 
-// Integration-тесты sigil.Service (Allow → cache-read → sign → Insert; Revoke;
-// List) на реальном PG (testcontainers) + temp-кеш-каталог. Делят TestMain /
-// integrationPool / reset со store_integration_test.go.
+// Integration tests for sigil.Service (Allow → cache-read → sign → Insert; Revoke;
+// List) on real PG (testcontainers) + temp cache directory. Shares TestMain /
+// integrationPool / reset with store_integration_test.go.
 
 package sigil
 
@@ -25,9 +25,9 @@ spec:
     type: object
 `
 
-// writeCacheSlot создаёт R-nested-слот (A1-S1): <root>/<ns>-<name>/<commit>/ +
-// current → <commit> с manifest.yaml и бинарём по конвенции soul-cloud-<name>.
-// ReadSlot читает активный слот через current.
+// writeCacheSlot creates an R-nested slot (A1-S1): <root>/<ns>-<name>/<commit>/ +
+// current → <commit> with manifest.yaml and binary per convention soul-cloud-<name>.
+// ReadSlot reads active slot via current.
 func writeCacheSlot(t *testing.T, root, ns, name string, manifest, binary []byte) {
 	t.Helper()
 	const commit = "0123456789abcdef0123456789abcdef01234567"
@@ -78,16 +78,16 @@ func TestIntegration_Service_Allow_List_Revoke(t *testing.T) {
 
 	svc := newIntegrationService(t, cacheRoot)
 
-	// Allow: читает слот, подписывает, вставляет; возвращает sha256.
+	// Allow: reads slot, signs, inserts; returns sha256.
 	sha, err := svc.Allow(ctx, AllowInput{Namespace: "cloud", Name: "hetzner", Ref: "v1.0.0", CallerAID: aid})
 	if err != nil {
 		t.Fatalf("Allow: %v", err)
 	}
 	if !reSHA256Hex.MatchString(sha) {
-		t.Errorf("Allow вернул невалидный sha256 %q", sha)
+		t.Errorf("Allow returned invalid sha256 %q", sha)
 	}
 
-	// List: одна активная запись, без signature/manifest в SigilView (по типу).
+	// List: one active record, no signature/manifest in SigilView (by type).
 	views, err := svc.List(ctx)
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -102,8 +102,8 @@ func TestIntegration_Service_Allow_List_Revoke(t *testing.T) {
 		t.Errorf("allowed_by_aid = %q, want %q", views[0].AllowedByAID, aid)
 	}
 
-	// Запись в БД несёт реальную подпись и manifest JSONB — проверяем напрямую
-	// через GetActive (S3 lookup-путь).
+	// DB record carries real signature and manifest JSONB — verify directly
+	// via GetActive (S3 lookup path).
 	rec, err := GetActive(ctx, integrationPool, "cloud", "hetzner", "v1.0.0")
 	if err != nil {
 		t.Fatalf("GetActive: %v", err)
@@ -112,34 +112,34 @@ func TestIntegration_Service_Allow_List_Revoke(t *testing.T) {
 		t.Errorf("signature len = %d, want %d", len(rec.Signature), ed25519.SignatureSize)
 	}
 	if len(rec.Manifest) == 0 {
-		t.Error("manifest JSONB пуст")
+		t.Error("manifest JSONB is empty")
 	}
-	// A1-S4: commit_sha из current-target слота записан в plugin_sigils
-	// (audit-метка происхождения, вне подписи).
+	// A1-S4: commit_sha from current-target slot is written to plugin_sigils
+	// (audit origin marker, outside signature).
 	if rec.CommitSHA != "0123456789abcdef0123456789abcdef01234567" {
-		t.Errorf("commit_sha = %q, want current-target слота", rec.CommitSHA)
+		t.Errorf("commit_sha = %q, want current-target slot", rec.CommitSHA)
 	}
 
-	// Re-allow без revoke → 409 (ErrSigilAlreadyActive).
+	// Re-allow without revoke → 409 (ErrSigilAlreadyActive).
 	if _, err := svc.Allow(ctx, AllowInput{Namespace: "cloud", Name: "hetzner", Ref: "v1.0.0", CallerAID: aid}); err == nil {
-		t.Error("повторный Allow активной записи должен вернуть ErrSigilAlreadyActive")
+		t.Error("repeated Allow of active record must return ErrSigilAlreadyActive")
 	}
 
-	// Revoke: активной записи больше нет → List пуст.
+	// Revoke: no active record left → List is empty.
 	if err := svc.Revoke(ctx, "cloud", "hetzner", "v1.0.0", aid); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
 	views, err = svc.List(ctx)
 	if err != nil {
-		t.Fatalf("List после Revoke: %v", err)
+		t.Fatalf("List after Revoke: %v", err)
 	}
 	if len(views) != 0 {
-		t.Errorf("после Revoke List len = %d, want 0", len(views))
+		t.Errorf("after Revoke List len = %d, want 0", len(views))
 	}
 
-	// Revoke несуществующей активной записи → ErrSigilNotFound.
+	// Revoke of non-existent active record → ErrSigilNotFound.
 	if err := svc.Revoke(ctx, "cloud", "hetzner", "v1.0.0", aid); err == nil {
-		t.Error("Revoke без активной записи должен вернуть ErrSigilNotFound")
+		t.Error("Revoke without active record must return ErrSigilNotFound")
 	}
 }
 
@@ -147,11 +147,11 @@ func TestIntegration_Service_Allow_PluginNotInCache(t *testing.T) {
 	aid := reset(t)
 	ctx := context.Background()
 
-	cacheRoot := t.TempDir() // пустой кеш, слота нет
+	cacheRoot := t.TempDir() // empty cache, no slot
 	svc := newIntegrationService(t, cacheRoot)
 
 	_, err := svc.Allow(ctx, AllowInput{Namespace: "cloud", Name: "absent", Ref: "v1.0.0", CallerAID: aid})
 	if err == nil {
-		t.Fatal("Allow при отсутствии слота должен вернуть ErrPluginNotInCache")
+		t.Fatal("Allow without slot should return ErrPluginNotInCache")
 	}
 }

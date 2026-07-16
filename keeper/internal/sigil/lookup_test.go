@@ -18,8 +18,8 @@ spec:
     pinged: {}
 `
 
-// mapSlotReader — SlotReader по ключу "<ns>-<name>" (для lookup-тестов с
-// несколькими слотами; fakeSlotReader отдаёт один фиксированный слот).
+// mapSlotReader is SlotReader keyed by "<ns>-<name>" (for lookup tests with
+// multiple slots; fakeSlotReader returns a single fixed slot).
 type mapSlotReader struct {
 	slots map[string]*pluginhost.SlotContents
 }
@@ -90,7 +90,7 @@ func TestService_LookupModuleBinary_NotAllowed(t *testing.T) {
 }
 
 func TestService_LookupModuleBinary_WrongKindRejected(t *testing.T) {
-	// Активный допуск с тем же sha, но kind=cloud_driver — НЕ модуль, отказ.
+	// Active allow with same sha but kind=cloud_driver — NOT a module, reject.
 	rec := moduleSigil(moduleSHA)
 	rec.Namespace, rec.Name = "cloud", "hetzner"
 	rec.ManifestRaw = []byte(cloudManifestYAML)
@@ -107,8 +107,8 @@ func TestService_LookupModuleBinary_WrongKindRejected(t *testing.T) {
 }
 
 func TestService_LookupModuleBinary_SlotDriftRejected(t *testing.T) {
-	// current-symlink переехал: слот несёт ДРУГОЙ бинарь → sha допуска в кеше
-	// больше нет, fail-closed.
+	// current-symlink moved: slot carries DIFFERENT binary → allow sha no longer in cache,
+	// fail-closed.
 	driftSHA := strings.Repeat("cc", 32)
 	svc := lookupService(t,
 		&fakeStore{listResult: []*Sigil{moduleSigil(moduleSHA)}},
@@ -129,8 +129,8 @@ func TestService_LookupModuleBinary_StoreError(t *testing.T) {
 	}
 }
 
-// Allow kind-agnostic (guard): допуск SoulModule-плагина работает тем же путём,
-// что cloud/ssh — kind нигде не ограничивается (live-подтверждено 201 на стенде).
+// Allow is kind-agnostic (guard): SoulModule-plugin allow follows same path
+// as cloud/ssh — kind not restricted anywhere (live-verified 201 on bench).
 func TestService_Allow_SoulModuleKindAgnostic(t *testing.T) {
 	store := &fakeStore{}
 	svc := lookupService(t, store, fakeSlotReader{slot: moduleSlot(moduleSHA), commit: testCommitSHA})

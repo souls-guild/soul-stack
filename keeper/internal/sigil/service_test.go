@@ -23,9 +23,9 @@ spec:
     type: object
 `
 
-// fakeSlotReader возвращает заранее заданный слот (или ошибку) и commit_sha
-// активного слота (или commitErr). commit / commitErr независимы от slot / err:
-// тесты A1-S4 проверяют ветку «слот читается, но current не несёт commit_sha».
+// fakeSlotReader returns a preset slot (or error) and commit_sha
+// of the active slot (or commitErr). commit / commitErr are independent of slot / err:
+// tests A1-S4 check the branch "slot reads but current does not carry commit_sha".
 type fakeSlotReader struct {
 	slot      *pluginhost.SlotContents
 	err       error
@@ -41,7 +41,7 @@ func (f fakeSlotReader) SlotCommitSHA(string, string) (string, error) {
 	return f.commit, f.commitErr
 }
 
-// fakeStore фиксирует переданную запись и отдаёт заранее заданные ошибки/ленту.
+// fakeStore captures the passed record and returns preset errors/list.
 type fakeStore struct {
 	inserted   *Sigil
 	insertErr  error
@@ -115,7 +115,7 @@ func TestService_Allow_Success(t *testing.T) {
 		t.Errorf("returned sha256 = %q, want %q", sha, slot.BinarySHA256)
 	}
 	if store.inserted == nil {
-		t.Fatal("Insert не вызван")
+		t.Fatal("Insert was not called")
 	}
 	got := store.inserted
 	if got.Namespace != "cloud" || got.Name != "hetzner" || got.Ref != "v1.0.0" {
@@ -133,31 +133,31 @@ func TestService_Allow_Success(t *testing.T) {
 	if len(got.Signature) != ed25519.SignatureSize {
 		t.Errorf("signature len = %d, want %d", len(got.Signature), ed25519.SignatureSize)
 	}
-	// Подпись A1-S4 НЕ изменилась: commit_sha вне подписываемого блока (DST v1).
-	// Подпись Allow обязана совпасть byte-в-byte с прямым Sign над тем же блоком
-	// (ns, name, ref, binary_sha256, manifest_bytes) — без commit_sha.
+	// Signature A1-S4 does NOT change: commit_sha is outside signed block (DST v1).
+	// Allow signature MUST match byte-for-byte with direct Sign over the same block
+	// (ns, name, ref, binary_sha256, manifest_bytes) — without commit_sha.
 	wantSig, err := signer.Sign("cloud", "hetzner", "v1.0.0", slot.BinarySHA256, slot.ManifestBytes)
 	if err != nil {
-		t.Fatalf("Sign (контрольная): %v", err)
+		t.Fatalf("Sign (control): %v", err)
 	}
 	if !bytes.Equal(got.Signature, wantSig) {
-		t.Error("подпись Allow разошлась с прямым Sign — commit_sha просочился в подписываемый блок")
+		t.Error("Allow signature diverged from direct Sign — commit_sha leaked into signed block")
 	}
-	// Manifest хранится JSON-ом (не сырым YAML).
+	// Manifest is stored as JSON (not raw YAML).
 	var m map[string]any
 	if err := json.Unmarshal(got.Manifest, &m); err != nil {
-		t.Fatalf("inserted manifest не JSON: %v (%q)", err, got.Manifest)
+		t.Fatalf("inserted manifest not JSON: %v (%q)", err, got.Manifest)
 	}
 	if m["kind"] != "cloud_driver" {
 		t.Errorf("manifest JSON kind = %v, want cloud_driver", m["kind"])
 	}
-	// ManifestRaw — byte-exact сырые байты слота (КАНОН), а НЕ JSONB-проекция:
-	// те же байты, что ушли в Sign (единый ReadSlot).
+	// ManifestRaw is byte-exact raw bytes of the slot (CANON), not a JSONB projection:
+	// same bytes that went into Sign (single ReadSlot).
 	if !bytes.Equal(got.ManifestRaw, slot.ManifestBytes) {
-		t.Errorf("inserted manifest_raw не byte-equal slot.ManifestBytes:\n raw=%q\nslot=%q", got.ManifestRaw, slot.ManifestBytes)
+		t.Errorf("inserted manifest_raw is not byte-equal slot.ManifestBytes:\n raw=%q\nslot=%q", got.ManifestRaw, slot.ManifestBytes)
 	}
 	if bytes.Equal(got.ManifestRaw, got.Manifest) {
-		t.Error("manifest_raw совпал с JSONB-проекцией — raw обязан нести сырой YAML, не JSON")
+		t.Error("manifest_raw matched JSONB projection — raw MUST carry raw YAML, not JSON")
 	}
 }
 
@@ -192,11 +192,11 @@ func TestService_Allow_AlreadyActive(t *testing.T) {
 	}
 }
 
-// TestService_Allow_NoCommitSHA_FailClosed — слот читается (бинарь+manifest
-// валидны), но current не несёт commit_sha (legacy-слот без current / битый
-// symlink → SlotCommitSHA даёт ErrSlotNotFound). Allow обязан fail-closed —
-// ErrPluginNotInCache, БЕЗ записи в реестр: допуск с неизвестным происхождением
-// не фиксируется (ADR-026(g), commit_sha — обязательная audit-метка при allow).
+// TestService_Allow_NoCommitSHA_FailClosed — slot reads (binary+manifest
+// are valid), but current does not carry commit_sha (legacy slot without current / broken
+// symlink → SlotCommitSHA returns ErrSlotNotFound). Allow MUST fail-closed —
+// ErrPluginNotInCache, NO registry write: permission with unknown origin
+// is not recorded (ADR-026(g), commit_sha is mandatory audit metadata on allow).
 func TestService_Allow_NoCommitSHA_FailClosed(t *testing.T) {
 	store := &fakeStore{}
 	svc, err := NewService(ServiceDeps{
@@ -214,7 +214,7 @@ func TestService_Allow_NoCommitSHA_FailClosed(t *testing.T) {
 		t.Fatalf("err = %v, want ErrPluginNotInCache", err)
 	}
 	if store.inserted != nil {
-		t.Error("Insert не должен вызываться при нерезолвленном commit_sha (fail-closed)")
+		t.Error("Insert must not be called on unresolved commit_sha (fail-closed)")
 	}
 }
 
@@ -277,10 +277,10 @@ func TestService_List_NoSignatureNoManifest(t *testing.T) {
 		t.Errorf("view = %+v", v)
 	}
 	if v.AllowedByAID != "archon-a" || !v.AllowedAt.Equal(now) {
-		t.Errorf("view audit-поля = %+v", v)
+		t.Errorf("view audit-fields = %+v", v)
 	}
-	// SigilView не несёт signature/manifest по типу — структурная гарантия. Тест
-	// фиксирует, что List возвращает именно SigilView (без этих полей).
+	// SigilView does not carry signature/manifest by design — structural guarantee. Test
+	// ensures List returns exactly SigilView (without these fields).
 }
 
 func TestService_List_NonNilEmpty(t *testing.T) {
@@ -295,12 +295,12 @@ func TestService_List_NonNilEmpty(t *testing.T) {
 		t.Fatalf("List: %v", err)
 	}
 	if views == nil {
-		t.Error("List должен возвращать non-nil slice")
+		t.Error("List must return non-nil slice")
 	}
 }
 
 // TestService_SetSigner_AllowUsesNewPrimary — keeper Signer hot-reload (R3-S6):
-// после SetSigner новые Allow подписываются СВЕЖИМ primary, а не стартовым.
+// after SetSigner, new Allow uses FRESH primary, not the initial one.
 func TestService_SetSigner_AllowUsesNewPrimary(t *testing.T) {
 	slot := slotFixture()
 	store := &fakeStore{}
@@ -329,16 +329,16 @@ func TestService_SetSigner_AllowUsesNewPrimary(t *testing.T) {
 		t.Fatalf("Sign (new): %v", err)
 	}
 	if !bytes.Equal(got, wantNew) {
-		t.Error("Allow подписал НЕ новым primary после SetSigner")
+		t.Error("Allow signed with NOT new primary after SetSigner")
 	}
 	wantOld, _ := oldSigner.Sign("cloud", "hetzner", "v1.0.0", slot.BinarySHA256, slot.ManifestBytes)
 	if bytes.Equal(got, wantOld) {
-		t.Error("Allow всё ещё подписывает старым primary — SetSigner не применился")
+		t.Error("Allow still signs with old primary — SetSigner was not applied")
 	}
 }
 
-// TestService_SetSigner_NilIgnored — подмена на nil игнорируется (Allow остаётся
-// рабочим со стартовым Signer-ом).
+// TestService_SetSigner_NilIgnored — replacement with nil is ignored (Allow remains
+// functional with the initial Signer).
 func TestService_SetSigner_NilIgnored(t *testing.T) {
 	slot := slotFixture()
 	store := &fakeStore{}
@@ -354,15 +354,15 @@ func TestService_SetSigner_NilIgnored(t *testing.T) {
 	if _, err := svc.Allow(context.Background(), AllowInput{
 		Namespace: "cloud", Name: "hetzner", Ref: "v1.0.0", CallerAID: "archon-a",
 	}); err != nil {
-		t.Fatalf("Allow после SetSigner(nil): %v", err)
+		t.Fatalf("Allow after SetSigner(nil): %v", err)
 	}
 	if store.inserted == nil || len(store.inserted.Signature) != ed25519.SignatureSize {
-		t.Error("Allow со стартовым Signer-ом сломался после SetSigner(nil)")
+		t.Error("Allow with initial Signer broke after SetSigner(nil)")
 	}
 }
 
-// TestService_SetSigner_RaceWithAllow — конкурентные SetSigner и Allow без гонок
-// данных (atomic.Pointer). Запускать с -race.
+// TestService_SetSigner_RaceWithAllow — concurrent SetSigner and Allow without data races
+// (atomic.Pointer). Run with -race.
 func TestService_SetSigner_RaceWithAllow(t *testing.T) {
 	slot := slotFixture()
 	svc, err := NewService(ServiceDeps{
@@ -399,7 +399,7 @@ func TestNewService_NilDeps(t *testing.T) {
 	for name, d := range cases {
 		t.Run(name, func(t *testing.T) {
 			if _, err := NewService(d); err == nil {
-				t.Errorf("NewService(%s) должен вернуть ошибку", name)
+				t.Errorf("NewService(%s) must return error", name)
 			}
 		})
 	}

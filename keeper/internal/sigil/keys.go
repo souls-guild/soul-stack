@@ -11,33 +11,33 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Файл keys.go — CRUD реестра sigil_signing_keys (миграция 037, ADR-026(h),
-// R3 multi-anchor). Отдельный от store.go: store.go ведёт plugin_sigils
-// (печати-допуски конкретных бинарей), keys.go — trust-anchor-ключи ПОДПИСИ
-// этих печатей. Сущности независимы, общий пакет — только потому что обе про
+// File keys.go — CRUD of sigil_signing_keys registry (migration 037, ADR-026(h),
+// R3 multi-anchor). Separate from store.go: store.go manages plugin_sigils
+// (allow/deny stamps for specific binaries), keys.go — trust-anchor keys for SIGNING
+// those stamps. Entities are independent, shared package only because both are about
 // Sigil.
 //
-// Инвариант безопасности: ПРИВАТНИК НИКОГДА не в Postgres. SigningKey несёт
-// только публичную часть (PubkeyPEM) и ссылку на приватник в Vault (VaultRef).
+// Security invariant: PRIVATE KEY NEVER in Postgres. SigningKey holds
+// only the public part (PubkeyPEM) and reference to the private key in Vault (VaultRef).
 //
-// Два инварианта целостности (держатся транзакционно, образец — operator.Revoke
-// с FOR UPDATE):
-//   - ≥1 active: нельзя [Retire] последний active-ключ ([ErrLastActiveKey]) —
-//     иначе verify Sigil-ов лишается всех якорей (симметрия self-lockout RBAC);
-//   - ровно один primary среди active: [Introduce] с makePrimary, [SetPrimary]
-//     снимают прежний primary и ставят новый в ОДНОЙ транзакции; partial unique
-//     index sigil_signing_keys_one_primary — последний рубеж против гонок.
+// Two integrity invariants (held transactionally, pattern — operator.Revoke
+// with FOR UPDATE):
+//   - ≥1 active: cannot [Retire] the last active key ([ErrLastActiveKey]) —
+//     otherwise Sigil verification loses all anchors (symmetry with self-lockout RBAC);
+//   - exactly one primary among active: [Introduce] with makePrimary, [SetPrimary]
+//     clear the old primary and set new in ONE transaction; partial unique
+//     index sigil_signing_keys_one_primary — last defense against races.
 
-// SigningKey — строка реестра sigil_signing_keys (миграция 037).
+// SigningKey — row of sigil_signing_keys registry (migration 037).
 //
-// PubkeyPEM — ПУБЛИЧНАЯ часть (SPKI PEM), едет Soul-у как trust-anchor. VaultRef
-// — где лежит приватник в Vault KV. Приватника в этой структуре нет и быть не
-// может (security-инвариант ADR-026(d)).
+// PubkeyPEM — PUBLIC part (SPKI PEM), sent to Soul as trust-anchor. VaultRef
+// — where the private key lives in Vault KV. Private key is not and cannot be
+// in this struct (security invariant ADR-026(d)).
 type SigningKey struct {
 	ID              int64
-	KeyID           string // стабильный id: SHA-256 от SPKI-DER, hex
-	PubkeyPEM       string // ТОЛЬКО публичная часть (SPKI PEM)
-	VaultRef        string // ссылка на приватник в Vault KV
+	KeyID           string // stable id: SHA-256 of SPKI-DER, hex
+	PubkeyPEM       string // PUBLIC part only (SPKI PEM)
+	VaultRef        string // reference to private key in Vault KV
 	IsPrimary       bool
 	Status          string // active | retired
 	IntroducedAt    time.Time
@@ -46,50 +46,50 @@ type SigningKey struct {
 	RetiredByAID    *string
 }
 
-// Sentinel-ошибки CRUD-а ключей.
+// Sentinel errors for key CRUD.
 var (
-	// ErrKeyNotFound — ключ с таким key_id не найден (или не active там, где
-	// операция требует active).
+	// ErrKeyNotFound — key with this key_id not found (or not active where
+	// operation requires active).
 	ErrKeyNotFound = errors.New("sigil: signing key not found")
 
-	// ErrKeyAlreadyExists — Introduce при уже существующем key_id (UNIQUE).
+	// ErrKeyAlreadyExists — Introduce with already existing key_id (UNIQUE).
 	ErrKeyAlreadyExists = errors.New("sigil: signing key with this key_id already exists")
 
-	// ErrLastActiveKey — Retire последнего active-ключа запрещён: набор
-	// trust-anchor-ов не должен опустеть (verify Sigil-ов остался бы без якорей).
-	// Симметрия self-lockout RBAC.
+	// ErrLastActiveKey — Retire of the last active key is forbidden: the set of
+	// trust-anchors must not be empty (otherwise Sigil verification loses all anchors).
+	// Symmetry with self-lockout RBAC.
 	ErrLastActiveKey = errors.New("sigil: cannot retire the last active signing key")
 
-	// ErrRetirePrimary — Retire primary-ключа запрещён напрямую: сперва нужно
-	// передать primary другому active-ключу через [SetPrimary]. Так primary
-	// никогда не «исчезает», и инвариант «ровно один primary среди active»
-	// держится без промежуточного состояния «active-ключи есть, primary нет».
+	// ErrRetirePrimary — Retire of primary key is forbidden directly: must first
+	// transfer primary to another active key via [SetPrimary]. This ensures primary
+	// never "disappears", and the invariant "exactly one primary among active"
+	// holds without an intermediate state "active keys exist but no primary".
 	ErrRetirePrimary = errors.New("sigil: cannot retire the primary key; SetPrimary to another active key first")
 
-	// ErrKeyRetired — операция требует active-ключ (SetPrimary), а целевой
-	// retired.
+	// ErrKeyRetired — operation requires an active key (SetPrimary), but the target
+	// is retired.
 	ErrKeyRetired = errors.New("sigil: signing key is retired")
 
-	// ErrConcurrentPrimary — гонка установки primary: partial unique index
-	// sigil_signing_keys_one_primary дал 23505 (две конкурентные транзакции
-	// одновременно ставили primary разным ключам — clearActivePrimary одной не
-	// видел insert/update другой до commit-а). Это НЕ ErrKeyAlreadyExists
-	// (key_id-конфликт): сам ключ валиден, конфликтует только инвариант «ровно
-	// один primary». API маппит в 409 (retry-able: повторный Introduce/SetPrimary
-	// уже увидит зафиксированный primary).
+	// ErrConcurrentPrimary — race in setting primary: partial unique index
+	// sigil_signing_keys_one_primary gave 23505 (two concurrent transactions
+	// simultaneously set primary on different keys — clearActivePrimary of one
+	// did not see the insert/update of the other before commit). This is NOT ErrKeyAlreadyExists
+	// (key_id conflict): the key itself is valid, only the "exactly one primary" invariant
+	// conflicts. API maps to 409 (retry-able: subsequent Introduce/SetPrimary
+	// will already see the fixed primary).
 	ErrConcurrentPrimary = errors.New("sigil: concurrent primary-key change (one_primary index conflict); retry")
 )
 
-// onePrimaryConstraint — имя partial unique index «ровно один primary среди
-// active» (миграция 037). По нему [mapKeyInsertError] отличает гонку primary
-// ([ErrConcurrentPrimary]) от конфликта key_id ([ErrKeyAlreadyExists]) — оба
-// дают SQLSTATE 23505.
+// onePrimaryConstraint — name of the partial unique index "exactly one primary among
+// active" (migration 037). [mapKeyInsertError] uses it to distinguish primary race
+// ([ErrConcurrentPrimary]) from key_id conflict ([ErrKeyAlreadyExists]) — both
+// give SQLSTATE 23505.
 const onePrimaryConstraint = "sigil_signing_keys_one_primary"
 
-// KeyStorePool — узкое подмножество pgxpool.Pool, нужное keys-CRUD-у: read/exec
-// плюс BeginTx для атомарных мульти-стейтментных операций (Introduce-makePrimary
-// / Retire / SetPrimary). Объявлено локально (как operator.ServicePool); реальный
-// pool и pgx.Tx удовлетворяют автоматически — тестируется через fake-pool.
+// KeyStorePool — narrow subset of pgxpool.Pool, needed for keys CRUD: read/exec
+// plus BeginTx for atomic multi-statement operations (Introduce-makePrimary
+// / Retire / SetPrimary). Declared locally (like operator.ServicePool); actual
+// pool and pgx.Tx satisfy automatically — tested via fake-pool.
 type KeyStorePool interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
@@ -106,33 +106,33 @@ VALUES ($1, $2, $3, $4, $5)
 RETURNING id, introduced_at
 `
 
-	// clearActivePrimarySQL снимает primary-флаг со ВСЕХ active-primary строк
-	// (их максимум одна по инварианту). Выполняется ПЕРЕД установкой нового
-	// primary в той же транзакции — так partial unique index не срабатывает.
+	// clearActivePrimarySQL clears the primary flag from ALL active-primary rows
+	// (at most one per invariant). Executed BEFORE setting new
+	// primary in the same transaction — so partial unique index doesn't fire.
 	clearActivePrimarySQL = `
 UPDATE sigil_signing_keys
 SET is_primary = false
 WHERE status = 'active' AND is_primary
 `
 
-	// setPrimaryByKeyIDSQL ставит primary активному ключу. WHERE status='active'
-	// — атомарная защита: retired-ключ primary стать не может (rows-affected = 0).
+	// setPrimaryByKeyIDSQL sets primary on an active key. WHERE status='active'
+	// — atomic guard: a retired key cannot become primary (rows-affected = 0).
 	setPrimaryByKeyIDSQL = `
 UPDATE sigil_signing_keys
 SET is_primary = true
 WHERE key_id = $1 AND status = 'active'
 `
 
-	// lockActiveKeysSQL блокирует все active-строки (FOR UPDATE без агрегата —
-	// PG запрещает count(*) FOR UPDATE) и отдаёт их id для подсчёта в Go.
-	// Сериализует конкурентные Retire так же, как LockEffectiveClusterAdmins в
-	// RBAC: захватывает блокировки на весь active-набор до проверки инварианта.
+	// lockActiveKeysSQL locks all active rows (FOR UPDATE without aggregate —
+	// PG forbids count(*) FOR UPDATE) and returns their ids for counting in Go.
+	// Serializes concurrent Retire the same way as LockEffectiveClusterAdmins in
+	// RBAC: acquires locks on the entire active set before checking the invariant.
 	lockActiveKeysSQL = `
 SELECT id FROM sigil_signing_keys WHERE status = 'active' FOR UPDATE
 `
 
-	// selectKeyByIDForUpdateSQL читает целевую строку под блокировкой для
-	// проверки инвариантов в той же транзакции, что и UPDATE.
+	// selectKeyByIDForUpdateSQL reads the target row under lock for
+	// checking invariants in the same transaction as UPDATE.
 	selectKeyByIDForUpdateSQL = `
 SELECT id, key_id, pubkey_pem, vault_ref, is_primary, status,
        introduced_at, introduced_by_aid, retired_at, retired_by_aid
@@ -162,26 +162,26 @@ FROM sigil_signing_keys
 WHERE status = 'active' AND is_primary
 `
 
-	// listAllKeyIDsSQL отдаёт key_id ВСЕХ строк без фильтра по status —
-	// авторитетный набор «живых» приватников для orphan-reconcile (retired
-	// тоже живой: приватник нужен для verify старых Sigil-ов).
+	// listAllKeyIDsSQL returns key_id for ALL rows without status filter —
+	// authoritative set of "live" private keys for orphan-reconcile (retired
+	// is also live: key is needed to verify old Sigils).
 	listAllKeyIDsSQL = `
 SELECT key_id FROM sigil_signing_keys
 `
 )
 
-// Introduce вводит новый trust-anchor-ключ как active. Если makePrimary —
-// прежний active-primary снимается и новый становится primary в ОДНОЙ
-// транзакции (инвариант «ровно один primary среди active»).
+// Introduce adds a new trust-anchor key as active. If makePrimary —
+// the old active primary is cleared and the new one becomes primary in ONE
+// transaction (invariant "exactly one primary among active").
 //
-// Хранится только публичная часть (pubkeyPEM) + ссылка на приватник в Vault
-// (vaultRef); приватник в Postgres не попадает.
+// Only the public part (pubkeyPEM) + reference to the private key in Vault
+// (vaultRef) is stored; private key does not enter Postgres.
 //
-// Ошибки:
-//   - keyID/pubkeyPEM/vaultRef пусты → валидационная ошибка (до запроса);
-//   - key_id уже существует → [ErrKeyAlreadyExists];
-//   - introducedByAID указывает на несуществующий оператор → FK-violation
-//     (wrapped). NULL допустим (bootstrap/seed без инициатора).
+// Errors:
+//   - keyID/pubkeyPEM/vaultRef empty → validation error (before query);
+//   - key_id already exists → [ErrKeyAlreadyExists];
+//   - introducedByAID points to non-existent operator → FK violation
+//     (wrapped). NULL is allowed (bootstrap/seed without initiator).
 func Introduce(ctx context.Context, pool KeyStorePool, keyID, pubkeyPEM, vaultRef string, makePrimary bool, introducedByAID *string) (*SigningKey, error) {
 	if keyID == "" {
 		return nil, fmt.Errorf("sigil: key_id is empty")
@@ -199,8 +199,8 @@ func Introduce(ctx context.Context, pool KeyStorePool, keyID, pubkeyPEM, vaultRe
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// makePrimary: снять прежний primary ДО вставки нового primary (иначе
-	// partial unique index sigil_signing_keys_one_primary даст 23505).
+	// makePrimary: clear old primary BEFORE inserting new primary (otherwise
+	// partial unique index sigil_signing_keys_one_primary will give 23505).
 	if makePrimary {
 		if _, err := tx.Exec(ctx, clearActivePrimarySQL); err != nil {
 			return nil, fmt.Errorf("sigil: clear active primary: %w", err)
@@ -228,12 +228,12 @@ func Introduce(ctx context.Context, pool KeyStorePool, keyID, pubkeyPEM, vaultRe
 	return key, nil
 }
 
-// SetPrimary делает active-ключ primary: снимает прежний primary и ставит новый
-// в одной транзакции. Целевой ключ обязан быть active.
+// SetPrimary makes an active key primary: clears the old primary and sets new
+// in one transaction. The target key must be active.
 //
-// Ошибки:
-//   - key_id не найден → [ErrKeyNotFound];
-//   - целевой ключ retired → [ErrKeyRetired].
+// Errors:
+//   - key_id not found → [ErrKeyNotFound];
+//   - target key is retired → [ErrKeyRetired].
 func SetPrimary(ctx context.Context, pool KeyStorePool, keyID, callerAID string) error {
 	if keyID == "" {
 		return fmt.Errorf("sigil: key_id is empty")
@@ -253,7 +253,7 @@ func SetPrimary(ctx context.Context, pool KeyStorePool, keyID, callerAID string)
 		return ErrKeyRetired
 	}
 	if target.IsPrimary {
-		// Уже primary — no-op, но валидный (идемпотентно). Коммитим пустую tx.
+		// Already primary — no-op, but valid (idempotent). Commit empty tx.
 		return tx.Commit(ctx)
 	}
 
@@ -270,16 +270,16 @@ func SetPrimary(ctx context.Context, pool KeyStorePool, keyID, callerAID string)
 	return nil
 }
 
-// Retire выводит ключ из набора trust-anchor-ов (status=retired). Два
-// инварианта, проверяемые в транзакции под FOR UPDATE:
-//   - нельзя retire последний active-ключ → [ErrLastActiveKey];
-//   - нельзя retire primary напрямую → [ErrRetirePrimary] (сперва SetPrimary
-//     на другой active-ключ).
+// Retire removes a key from the trust-anchor set (status=retired). Two
+// invariants checked in a transaction under FOR UPDATE:
+//   - cannot retire the last active key → [ErrLastActiveKey];
+//   - cannot retire primary directly → [ErrRetirePrimary] (first SetPrimary
+//     to another active key).
 //
-// Ошибки:
-//   - callerAID пуст → ошибка (audit-инвариант: кто вывел, обязателен);
-//   - key_id не найден → [ErrKeyNotFound];
-//   - ключ уже retired → [ErrKeyNotFound] (active-записи по ключу нет).
+// Errors:
+//   - callerAID empty → error (audit invariant: who retired it is required);
+//   - key_id not found → [ErrKeyNotFound];
+//   - key already retired → [ErrKeyNotFound] (no active record for this key).
 func Retire(ctx context.Context, pool KeyStorePool, keyID, callerAID string) error {
 	if keyID == "" {
 		return fmt.Errorf("sigil: key_id is empty")
@@ -294,9 +294,9 @@ func Retire(ctx context.Context, pool KeyStorePool, keyID, callerAID string) err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// Сериализуем конкурентные Retire: блокируем весь active-набор под FOR
-	// UPDATE (образец — rbac.LockEffectiveClusterAdmins). Lock-порядок
-	// детерминирован: сначала все active, затем целевая строка.
+	// Serialize concurrent Retire: lock entire active set under FOR
+	// UPDATE (pattern — rbac.LockEffectiveClusterAdmins). Lock order
+	// is deterministic: first all active, then the target row.
 	activeCount, err := countLockedActive(ctx, tx)
 	if err != nil {
 		return fmt.Errorf("sigil: lock active keys: %w", err)
@@ -307,13 +307,13 @@ func Retire(ctx context.Context, pool KeyStorePool, keyID, callerAID string) err
 		return err
 	}
 	if target.Status != "active" {
-		// retired-ключ — active-записи по ключу нет.
+		// retired key — no active record for this key.
 		return ErrKeyNotFound
 	}
 	if target.IsPrimary {
 		return ErrRetirePrimary
 	}
-	// activeCount включает target; запрет — если он единственный active.
+	// activeCount includes target; forbidden if it's the only active.
 	if activeCount <= 1 {
 		return ErrLastActiveKey
 	}
@@ -323,8 +323,8 @@ func Retire(ctx context.Context, pool KeyStorePool, keyID, callerAID string) err
 		return fmt.Errorf("sigil: retire: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		// Гонка: между select-FOR-UPDATE и UPDATE никто не мог изменить строку
-		// (она под блокировкой) — defensive, не ожидается.
+		// Race: between select-FOR-UPDATE and UPDATE no one could modify the row
+		// (it's under lock) — defensive, should not happen.
 		return ErrKeyNotFound
 	}
 
@@ -334,12 +334,12 @@ func Retire(ctx context.Context, pool KeyStorePool, keyID, callerAID string) err
 	return nil
 }
 
-// ListActiveKeys возвращает все active trust-anchor-ключи. Порядок стабилен:
-// primary первым, далее по времени ввода (introduced_at, id). Это будущий набор
-// для SigilTrustAnchors (R3-S6 broadcast).
+// ListActiveKeys returns all active trust-anchor keys. Order is stable:
+// primary first, then by introduction time (introduced_at, id). This is the future
+// set for SigilTrustAnchors (R3-S6 broadcast).
 //
-// Имя с суффиксом Keys — чтобы не пересекаться с [ListActive] для plugin_sigils
-// (store.go): в пакете живут оба реестра (печати и ключи их подписи).
+// Name with Keys suffix — to avoid collision with [ListActive] for plugin_sigils
+// (store.go): the package hosts both registries (stamps and their signing keys).
 func ListActiveKeys(ctx context.Context, db ExecQueryRower) ([]*SigningKey, error) {
 	rows, err := db.Query(ctx, listActiveKeysSQL)
 	if err != nil {
@@ -361,13 +361,13 @@ func ListActiveKeys(ctx context.Context, db ExecQueryRower) ([]*SigningKey, erro
 	return out, nil
 }
 
-// ListAllKeyIDs возвращает key_id ВСЕХ строк sigil_signing_keys независимо от
-// статуса (active И retired — retired тоже живой: его приватник нужен для verify
-// старых Sigil-ов). Это авторитетный набор «живых» для orphan-reconcile: всё, что
-// есть в Vault под `secret/keeper/sigil-keys/<key_id>`, но НЕ в этом наборе —
-// кандидат-сирота.
+// ListAllKeyIDs returns key_id for ALL rows of sigil_signing_keys regardless of
+// status (active AND retired — retired is also live: its key is needed to verify
+// old Sigils). This is the authoritative set of "live" keys for orphan-reconcile: anything
+// in Vault under `secret/keeper/sigil-keys/<key_id>` but NOT in this set —
+// is an orphan candidate.
 //
-// Возврат — set (map[string]struct{}) для O(1)-lookup в reconcile-цикле.
+// Return — set (map[string]struct{}) for O(1) lookup in reconcile loop.
 func ListAllKeyIDs(ctx context.Context, db ExecQueryRower) (map[string]struct{}, error) {
 	rows, err := db.Query(ctx, listAllKeyIDsSQL)
 	if err != nil {
@@ -389,8 +389,8 @@ func ListAllKeyIDs(ctx context.Context, db ExecQueryRower) (map[string]struct{},
 	return out, nil
 }
 
-// GetPrimaryKey возвращает active primary-ключ (тот, которым Keeper подписывает
-// новые Sigil-ы). [ErrKeyNotFound], если primary нет (набор пуст).
+// GetPrimaryKey returns the active primary key (the one Keeper uses to sign
+// new Sigils). [ErrKeyNotFound] if no primary exists (set is empty).
 func GetPrimaryKey(ctx context.Context, db ExecQueryRower) (*SigningKey, error) {
 	row := db.QueryRow(ctx, getPrimarySQL)
 	k, err := scanSigningKey(row)
@@ -403,8 +403,8 @@ func GetPrimaryKey(ctx context.Context, db ExecQueryRower) (*SigningKey, error) 
 	return k, nil
 }
 
-// countLockedActive блокирует все active-строки (FOR UPDATE) и возвращает их
-// число. Считаем в Go, т.к. PG запрещает count(*) с FOR UPDATE.
+// countLockedActive locks all active rows (FOR UPDATE) and returns their
+// count. We count in Go because PG forbids count(*) with FOR UPDATE.
 func countLockedActive(ctx context.Context, tx pgx.Tx) (int, error) {
 	rows, err := tx.Query(ctx, lockActiveKeysSQL)
 	if err != nil {
@@ -421,7 +421,7 @@ func countLockedActive(ctx context.Context, tx pgx.Tx) (int, error) {
 	return n, nil
 }
 
-// selectKeyForUpdate читает строку под FOR UPDATE; pgx.ErrNoRows → ErrKeyNotFound.
+// selectKeyForUpdate reads a row under FOR UPDATE; pgx.ErrNoRows → ErrKeyNotFound.
 func selectKeyForUpdate(ctx context.Context, tx pgx.Tx, keyID string) (*SigningKey, error) {
 	row := tx.QueryRow(ctx, selectKeyByIDForUpdateSQL, keyID)
 	k, err := scanSigningKey(row)
@@ -434,7 +434,7 @@ func selectKeyForUpdate(ctx context.Context, tx pgx.Tx, keyID string) (*SigningK
 	return k, nil
 }
 
-// scanSigningKey — общий Scan строки sigil_signing_keys.
+// scanSigningKey — common Scan for sigil_signing_keys row.
 func scanSigningKey(row pgx.Row) (*SigningKey, error) {
 	var k SigningKey
 	err := row.Scan(
@@ -458,16 +458,16 @@ func scanSigningKey(row pgx.Row) (*SigningKey, error) {
 	return &k, nil
 }
 
-// mapKeyInsertError маппит pgx-ошибки Introduce в sentinel-ы.
+// mapKeyInsertError maps pgx errors from Introduce to sentinels.
 func mapKeyInsertError(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
 		switch pgErr.Code {
 		case pgErrCodeUniqueViolation:
-			// UNIQUE(key_id) либо partial one_primary — оба SQLSTATE 23505. По
-			// имени constraint различаем: one_primary — конкурентная гонка
-			// установки primary ([ErrConcurrentPrimary], retry-able 409); иначе
-			// конфликт key_id ([ErrKeyAlreadyExists]).
+			// UNIQUE(key_id) or partial one_primary — both SQLSTATE 23505. By
+			// constraint name we distinguish: one_primary — concurrent race
+			// in setting primary ([ErrConcurrentPrimary], retry-able 409); otherwise
+			// key_id conflict ([ErrKeyAlreadyExists]).
 			if pgErr.ConstraintName == onePrimaryConstraint {
 				return fmt.Errorf("%w (constraint %s): %w", ErrConcurrentPrimary, pgErr.ConstraintName, err)
 			}
@@ -479,9 +479,9 @@ func mapKeyInsertError(err error) error {
 	return fmt.Errorf("sigil: insert signing key: %w", err)
 }
 
-// mapSetPrimaryError маппит pgx-ошибки UPDATE-а primary в sentinel-ы. Гонка
-// one_primary-index (23505) → [ErrConcurrentPrimary] (как в [mapKeyInsertError]);
-// прочее — обёрнутый err.
+// mapSetPrimaryError maps pgx errors from UPDATE of primary to sentinels. Race
+// on one_primary index (23505) → [ErrConcurrentPrimary] (like in [mapKeyInsertError]);
+// otherwise — wrapped err.
 func mapSetPrimaryError(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgErrCodeUniqueViolation &&
@@ -491,7 +491,7 @@ func mapSetPrimaryError(err error) error {
 	return fmt.Errorf("sigil: set primary: %w", err)
 }
 
-// nullableAID превращает *string в any для pgx-аргумента (nil → SQL NULL).
+// nullableAID converts *string to any for pgx argument (nil → SQL NULL).
 func nullableAID(aid *string) any {
 	if aid == nil {
 		return nil

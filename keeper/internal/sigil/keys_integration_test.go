@@ -1,9 +1,9 @@
 //go:build integration
 
-// Integration-тесты keys-CRUD-а (sigil_signing_keys, миграция 037) через
-// testcontainers-go. TestMain/run/integrationPool/requireDocker — общие на
-// пакет (объявлены в store_integration_test.go); здесь только свой reset для
-// таблицы ключей и проверки инвариантов на реальном PG.
+// Integration tests for keys CRUD (sigil_signing_keys, migration 037) via
+// testcontainers-go. TestMain/run/integrationPool/requireDocker are common
+// to the package (declared in store_integration_test.go); here only our reset
+// for keys table and real PG invariant checks.
 
 package sigil
 
@@ -13,16 +13,16 @@ import (
 	"testing"
 )
 
-// keysTestAID — bootstrap-оператор (created_by_aid IS NULL) для FK keys-тестов.
-// ОБЩИЙ с store_integration_test.go (reset): partial unique
-// operators_first_archon_idx допускает лишь ОДНУ NULL-строку на всю таблицу
-// operators, а пакетная БД одна (TestMain). Завести второй NULL-оператор нельзя
-// — поэтому keys- и store-тесты делят один bootstrap-AID (ON CONFLICT DO NOTHING
-// по PK делает оба seed-а идемпотентными независимо от порядка тестов).
+// keysTestAID is bootstrap operator (created_by_aid IS NULL) for FK keys tests.
+// SHARED with store_integration_test.go (reset): partial unique
+// operators_first_archon_idx allows only ONE NULL row per operators table,
+// and package DB is single (TestMain). Cannot create second NULL operator
+// — so keys- and store tests share one bootstrap AID (ON CONFLICT DO NOTHING
+// on PK makes both seeds idempotent regardless of test order).
 const keysTestAID = "archon-sigil-test"
 
-// resetKeys стирает sigil_signing_keys и идемпотентно гарантирует общий
-// bootstrap-оператор для FK introduced_by_aid / retired_by_aid.
+// resetKeys wipes sigil_signing_keys and idempotently ensures shared
+// bootstrap operator for FK introduced_by_aid / retired_by_aid.
 func resetKeys(t *testing.T) string {
 	t.Helper()
 	ctx := context.Background()
@@ -39,7 +39,7 @@ func resetKeys(t *testing.T) string {
 	return keysTestAID
 }
 
-// introduce — хелпер: вводит active-ключ с уникальным key_id.
+// introduce helper: introduces active key with unique key_id.
 func introduce(t *testing.T, keyID string, makePrimary bool, aid string) *SigningKey {
 	t.Helper()
 	by := aid
@@ -63,7 +63,7 @@ func TestIntegration_Introduce_Basic(t *testing.T) {
 		t.Error("Introduce did not populate IntroducedAt")
 	}
 	if !k.IsPrimary {
-		t.Error("makePrimary=true: ключ должен быть primary")
+		t.Error("makePrimary=true: key should be primary")
 	}
 	if k.Status != "active" {
 		t.Errorf("status = %q, want active", k.Status)
@@ -73,7 +73,7 @@ func TestIntegration_Introduce_Basic(t *testing.T) {
 	}
 }
 
-// TestIntegration_Introduce_Duplicate — повторный key_id → ErrKeyAlreadyExists.
+// TestIntegration_Introduce_Duplicate duplicate key_id → ErrKeyAlreadyExists.
 func TestIntegration_Introduce_Duplicate(t *testing.T) {
 	aid := resetKeys(t)
 	introduce(t, "dup", false, aid)
@@ -82,12 +82,12 @@ func TestIntegration_Introduce_Duplicate(t *testing.T) {
 	_, err := Introduce(context.Background(), integrationPool, "dup",
 		"PEM", "vault:secret/keeper/sigil-dup", false, &by)
 	if !errors.Is(err, ErrKeyAlreadyExists) {
-		t.Fatalf("повторный key_id: err = %v, want ErrKeyAlreadyExists", err)
+		t.Fatalf("duplicate key_id: err = %v, want ErrKeyAlreadyExists", err)
 	}
 }
 
-// TestIntegration_Introduce_MakePrimary_DemotesPrevious — второй makePrimary
-// снимает primary с первого: ровно один primary среди active.
+// TestIntegration_Introduce_MakePrimary_DemotesPrevious second makePrimary
+// strips primary from first: exactly one primary among active.
 func TestIntegration_Introduce_MakePrimary_DemotesPrevious(t *testing.T) {
 	aid := resetKeys(t)
 	introduce(t, "first", true, aid)
@@ -98,7 +98,7 @@ func TestIntegration_Introduce_MakePrimary_DemotesPrevious(t *testing.T) {
 		t.Fatalf("GetPrimary: %v", err)
 	}
 	if prim.KeyID != "second" {
-		t.Errorf("primary = %q, want second (последний makePrimary)", prim.KeyID)
+		t.Errorf("primary = %q, want second (last makePrimary)", prim.KeyID)
 	}
 	assertExactlyOnePrimary(t)
 }
@@ -121,7 +121,7 @@ func TestIntegration_SetPrimary_SwitchesAtomically(t *testing.T) {
 	assertExactlyOnePrimary(t)
 }
 
-// TestIntegration_SetPrimary_NotFound — несуществующий ключ → ErrKeyNotFound.
+// TestIntegration_SetPrimary_NotFound nonexistent key → ErrKeyNotFound.
 func TestIntegration_SetPrimary_NotFound(t *testing.T) {
 	aid := resetKeys(t)
 	introduce(t, "only", true, aid)
@@ -132,7 +132,7 @@ func TestIntegration_SetPrimary_NotFound(t *testing.T) {
 	}
 }
 
-// TestIntegration_SetPrimary_Retired — retired-ключ primary стать не может.
+// TestIntegration_SetPrimary_Retired retired key cannot become primary.
 func TestIntegration_SetPrimary_Retired(t *testing.T) {
 	aid := resetKeys(t)
 	introduce(t, "p", true, aid)
@@ -146,11 +146,11 @@ func TestIntegration_SetPrimary_Retired(t *testing.T) {
 	}
 }
 
-// TestIntegration_Retire_LastActive — нельзя retire последний active.
+// TestIntegration_Retire_LastActive cannot retire last active.
 func TestIntegration_Retire_LastActive(t *testing.T) {
 	aid := resetKeys(t)
-	// Единственный active, не primary (чтобы дойти до проверки last-active,
-	// а не упереться в ErrRetirePrimary).
+	// Only active, not primary (to reach last-active check,
+	// not hit ErrRetirePrimary).
 	introduce(t, "solo", false, aid)
 
 	err := Retire(context.Background(), integrationPool, "solo", aid)
@@ -159,7 +159,7 @@ func TestIntegration_Retire_LastActive(t *testing.T) {
 	}
 }
 
-// TestIntegration_Retire_Primary — нельзя retire primary напрямую.
+// TestIntegration_Retire_Primary cannot retire primary directly.
 func TestIntegration_Retire_Primary(t *testing.T) {
 	aid := resetKeys(t)
 	introduce(t, "prim", true, aid)
@@ -171,7 +171,7 @@ func TestIntegration_Retire_Primary(t *testing.T) {
 	}
 }
 
-// TestIntegration_Retire_Success — retire не-primary при наличии других active.
+// TestIntegration_Retire_Success retire non-primary with other active keys.
 func TestIntegration_Retire_Success(t *testing.T) {
 	aid := resetKeys(t)
 	introduce(t, "keep", true, aid)
@@ -185,15 +185,15 @@ func TestIntegration_Retire_Success(t *testing.T) {
 		t.Fatalf("ListActive: %v", err)
 	}
 	if len(active) != 1 || active[0].KeyID != "keep" {
-		t.Fatalf("ListActive после retire = %v, want [keep]", keyIDs(active))
+		t.Fatalf("ListActive after retire = %v, want [keep]", keyIDs(active))
 	}
-	// retired-ключ повторно retire → ErrKeyNotFound (active-записи нет).
+	// retired key re-retire → ErrKeyNotFound (no active record).
 	if err := Retire(context.Background(), integrationPool, "drop", aid); !errors.Is(err, ErrKeyNotFound) {
-		t.Errorf("повторный Retire(drop): err = %v, want ErrKeyNotFound", err)
+		t.Errorf("duplicate Retire(drop): err = %v, want ErrKeyNotFound", err)
 	}
 }
 
-// TestIntegration_ListActive_Order — primary первым, далее по introduced_at.
+// TestIntegration_ListActive_Order primary first, then by introduced_at.
 func TestIntegration_ListActive_Order(t *testing.T) {
 	aid := resetKeys(t)
 	introduce(t, "alpha", false, aid)
@@ -208,11 +208,11 @@ func TestIntegration_ListActive_Order(t *testing.T) {
 		t.Fatalf("ListActive len = %d, want 3", len(active))
 	}
 	if !active[0].IsPrimary || active[0].KeyID != "beta" {
-		t.Errorf("первый = %q (primary=%v), want beta primary", active[0].KeyID, active[0].IsPrimary)
+		t.Errorf("first = %q (primary=%v), want beta primary", active[0].KeyID, active[0].IsPrimary)
 	}
 }
 
-// TestIntegration_GetPrimary_Empty — пустой набор → ErrKeyNotFound.
+// TestIntegration_GetPrimary_Empty empty set → ErrKeyNotFound.
 func TestIntegration_GetPrimary_Empty(t *testing.T) {
 	resetKeys(t)
 	_, err := GetPrimaryKey(context.Background(), integrationPool)
@@ -221,8 +221,8 @@ func TestIntegration_GetPrimary_Empty(t *testing.T) {
 	}
 }
 
-// TestIntegration_OnePrimaryIndex — partial unique index не даёт двум active быть
-// primary одновременно (прямой INSERT в обход CRUD-tx).
+// TestIntegration_OnePrimaryIndex partial unique index prevents two active from being
+// primary simultaneously (direct INSERT bypassing CRUD-tx).
 func TestIntegration_OnePrimaryIndex(t *testing.T) {
 	aid := resetKeys(t)
 	introduce(t, "primA", true, aid)
@@ -232,16 +232,16 @@ func TestIntegration_OnePrimaryIndex(t *testing.T) {
 		`INSERT INTO sigil_signing_keys (key_id, pubkey_pem, vault_ref, is_primary)
 		 VALUES ('primB', 'PEM', 'vault:x', true)`)
 	if err == nil {
-		t.Fatal("второй active-primary должен нарушить partial unique index")
+		t.Fatal("second active-primary should violate partial unique index")
 	}
 }
 
-// TestIntegration_FK_SetNull — удаление оператора обнуляет introduced_by_aid
-// (ON DELETE SET NULL), строка ключа сохраняется.
+// TestIntegration_FK_SetNull operator deletion nullifies introduced_by_aid
+// (ON DELETE SET NULL), key row preserved.
 func TestIntegration_FK_SetNull(t *testing.T) {
-	// resetKeys сеет bootstrap-оператора (created_by_aid IS NULL). FK-оператор
-	// ссылается на него: partial unique operators_first_archon_idx допускает
-	// только ОДНУ NULL-строку, второй bootstrap здесь невозможен.
+	// resetKeys seeds bootstrap operator (created_by_aid IS NULL). FK operator
+	// references it: partial unique operators_first_archon_idx allows
+	// only ONE NULL row, second bootstrap impossible here.
 	bootstrap := resetKeys(t)
 	ctx := context.Background()
 	const aid = "archon-keys-fk"
@@ -260,14 +260,14 @@ func TestIntegration_FK_SetNull(t *testing.T) {
 		t.Fatalf("GetPrimary after operator delete: %v", err)
 	}
 	if k.KeyID != "fkkey" {
-		t.Fatalf("ключ должен пережить удаление оператора; got %q", k.KeyID)
+		t.Fatalf("key should survive operator deletion; got %q", k.KeyID)
 	}
 	if k.IntroducedByAID != nil {
 		t.Errorf("introduced_by_aid = %v, want nil (ON DELETE SET NULL)", k.IntroducedByAID)
 	}
 }
 
-// assertExactlyOnePrimary — инвариант: ровно один primary среди active.
+// assertExactlyOnePrimary invariant: exactly one primary among active.
 func assertExactlyOnePrimary(t *testing.T) {
 	t.Helper()
 	var n int

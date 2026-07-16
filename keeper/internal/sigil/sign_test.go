@@ -48,8 +48,8 @@ func TestSign_RejectsBadDigestFormat(t *testing.T) {
 	}
 }
 
-// Sign → Verify roundtrip: подпись валидна публичным ключом против блока,
-// собранного из тех же входов (тот путь, что пройдёт Soul на S6).
+// Sign → Verify roundtrip: signature is valid with public key against block
+// built from same inputs (the path Soul will take on S6).
 func TestSign_VerifyRoundtrip(t *testing.T) {
 	s, pub := newTestSigner(t)
 
@@ -66,7 +66,7 @@ func TestSign_VerifyRoundtrip(t *testing.T) {
 		t.Fatalf("signature size = %d, want %d", len(sig), ed25519.SignatureSize)
 	}
 
-	// Восстанавливаем блок ровно так, как сделал бы verifier S6.
+	// Recover block exactly as S6 verifier would.
 	manDigest := sha256.Sum256(pluginhost.NormalizeManifestBytes(manifest))
 	block := pluginhost.BuildSigilBlock(ns, name, ref, binDigest[:], manDigest[:])
 
@@ -75,7 +75,7 @@ func TestSign_VerifyRoundtrip(t *testing.T) {
 	}
 }
 
-// Подделка любого поля блока ломает verify. Покрывает все поля Sigil.
+// Tampering with any block field breaks verify. Covers all Sigil fields.
 func TestSign_VerifyFailsOnTamper(t *testing.T) {
 	s, pub := newTestSigner(t)
 
@@ -108,8 +108,8 @@ func TestSign_VerifyFailsOnTamper(t *testing.T) {
 	}
 }
 
-// PublicKeyPEM → парс обратно (SPKI) → совпадает с priv.Public(). Это путь
-// trust-anchor-а Soul-у в bootstrap (ADR-026, S6).
+// PublicKeyPEM → parse back (SPKI) → matches priv.Public(). This is the path
+// trust-anchor takes to Soul in bootstrap (ADR-026, S6).
 func TestPublicKeyPEM_RoundtripsToPublicKey(t *testing.T) {
 	s, pub := newTestSigner(t)
 

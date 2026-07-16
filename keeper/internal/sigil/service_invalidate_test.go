@@ -6,16 +6,16 @@ import (
 	"testing"
 )
 
-// countingInvalidator — тестовый [Invalidator], считающий вызовы Invalidate
-// (паттерн rbac.countingInvalidator).
+// countingInvalidator is a test [Invalidator] that counts Invalidate calls
+// (pattern rbac.countingInvalidator).
 type countingInvalidator struct {
 	calls atomic.Int64
 }
 
 func (c *countingInvalidator) Invalidate(_ context.Context) { c.calls.Add(1) }
 
-// TestService_Invalidate_NilSafe — без подключённого invalidator-а
-// Service.invalidate — no-op (single-Keeper/dev без Redis), не паникует.
+// TestService_Invalidate_NilSafe verifies that without a connected invalidator,
+// Service.invalidate is a no-op (single-Keeper/dev without Redis), does not panic.
 func TestService_Invalidate_NilSafe(t *testing.T) {
 	svc, err := NewService(ServiceDeps{
 		Signer: testSigner(t), Store: &fakeStore{}, Slots: fakeSlotReader{},
@@ -29,8 +29,8 @@ func TestService_Invalidate_NilSafe(t *testing.T) {
 	svc.invalidate(context.Background())
 }
 
-// TestService_Allow_TriggersInvalidate — успешный Allow дёргает invalidator
-// (cluster-wide re-broadcast active-набора, S6c).
+// TestService_Allow_TriggersInvalidate verifies successful Allow triggers invalidator
+// (cluster-wide re-broadcast of active set, S6c).
 func TestService_Allow_TriggersInvalidate(t *testing.T) {
 	inv := &countingInvalidator{}
 	svc, err := NewService(ServiceDeps{
@@ -51,8 +51,8 @@ func TestService_Allow_TriggersInvalidate(t *testing.T) {
 	}
 }
 
-// TestService_Allow_NoInvalidateOnError — провал Insert НЕ дёргает invalidator
-// (нет мутации → нечего re-broadcast-ить).
+// TestService_Allow_NoInvalidateOnError verifies that Insert failure does NOT
+// trigger invalidator (no mutation → nothing to re-broadcast).
 func TestService_Allow_NoInvalidateOnError(t *testing.T) {
 	inv := &countingInvalidator{}
 	svc, err := NewService(ServiceDeps{
@@ -68,14 +68,14 @@ func TestService_Allow_NoInvalidateOnError(t *testing.T) {
 	if _, err := svc.Allow(context.Background(), AllowInput{
 		Namespace: "cloud", Name: "hetzner", Ref: "v1", CallerAID: "archon-test",
 	}); err == nil {
-		t.Fatal("Allow: ожидалась ошибка ErrSigilAlreadyActive")
+		t.Fatal("Allow: expected error ErrSigilAlreadyActive")
 	}
 	if got := inv.calls.Load(); got != 0 {
 		t.Fatalf("Allow-on-error invalidate calls = %d, want 0", got)
 	}
 }
 
-// TestService_Revoke_TriggersInvalidate — успешный Revoke дёргает invalidator.
+// TestService_Revoke_TriggersInvalidate verifies successful Revoke triggers invalidator.
 func TestService_Revoke_TriggersInvalidate(t *testing.T) {
 	inv := &countingInvalidator{}
 	svc, err := NewService(ServiceDeps{
@@ -94,7 +94,8 @@ func TestService_Revoke_TriggersInvalidate(t *testing.T) {
 	}
 }
 
-// TestService_Revoke_NoInvalidateOnError — провал Revoke НЕ дёргает invalidator.
+// TestService_Revoke_NoInvalidateOnError verifies that Revoke failure does NOT
+// trigger invalidator.
 func TestService_Revoke_NoInvalidateOnError(t *testing.T) {
 	inv := &countingInvalidator{}
 	svc, err := NewService(ServiceDeps{
@@ -108,7 +109,7 @@ func TestService_Revoke_NoInvalidateOnError(t *testing.T) {
 	svc.SetInvalidator(inv)
 
 	if err := svc.Revoke(context.Background(), "cloud", "hetzner", "v1", "archon-test"); err == nil {
-		t.Fatal("Revoke: ожидалась ошибка ErrSigilNotFound")
+		t.Fatal("Revoke: expected error ErrSigilNotFound")
 	}
 	if got := inv.calls.Load(); got != 0 {
 		t.Fatalf("Revoke-on-error invalidate calls = %d, want 0", got)

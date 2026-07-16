@@ -16,11 +16,11 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// Unit-тесты KeyService покрывают operator-facing-логику ВНЕ транзакционных
-// инвариантов реестра (те — keys_integration_test.go): key-gen, Vault-write
-// (путь + содержимое), security-инвариант «приватник не утекает», порядок
-// «Vault раньше Introduce» и проброс sentinel-ов. Транзакция мокается минимальным
-// fake-pool-ом (BeginTx → QueryRow.Scan → Commit).
+// Unit tests for KeyService cover operator-facing logic OUTSIDE registry transaction
+// invariants (those are in keys_integration_test.go): key-gen, Vault write
+// (path + content), security invariant "private key doesn't leak", order
+// "Vault before Introduce", and passing sentinel errors. Transaction is mocked with minimal
+// fake-pool (BeginTx → QueryRow.Scan → Commit).
 
 // --- fake VaultWriter ---
 
@@ -43,10 +43,10 @@ func (w *captureVaultWriter) WriteKV(_ context.Context, path string, data map[st
 
 // --- fake KeyStorePool / pgx.Tx ---
 //
-// Минимальный fake под Introduce-путь keys.go: BeginTx → (опц. clearActivePrimary
-// Exec) → insert QueryRow.Scan(id, introduced_at) → Commit. Для SetPrimary/Retire
-// CRUD достаточно integration-тестов; здесь покрываем Introduce и проброс ошибки
-// BeginTx (порядок Vault→Introduce).
+// Minimal fake for Introduce path in keys.go: BeginTx → (opt. clearActivePrimary
+// Exec) → insert QueryRow.Scan(id, introduced_at) → Commit. For SetPrimary/Retire
+// CRUD, integration tests are sufficient; here we cover Introduce and propagating
+// BeginTx errors (order Vault→Introduce).
 
 type fakeKeyPool struct {
 	beginErr error
@@ -67,13 +67,13 @@ func (p *fakeKeyPool) BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error) {
 	return p.tx, nil
 }
 
-// errRow — pgx.Row, возвращающий заданную ошибку из Scan.
+// errRow is pgx.Row returning a given error from Scan.
 type errRow struct{ err error }
 
 func (r errRow) Scan(...any) error { return r.err }
 
-// fakeKeyTx — мок pgx.Tx под insert-путь Introduce: Exec — no-op (clear primary),
-// QueryRow на insert отдаёт id+introduced_at в Scan.
+// fakeKeyTx mocks pgx.Tx for Introduce insert path: Exec is no-op (clear primary),
+// QueryRow on insert returns id+introduced_at via Scan.
 type fakeKeyTx struct {
 	pgx.Tx
 	insertID   int64
@@ -93,7 +93,7 @@ func (tx *fakeKeyTx) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
 func (tx *fakeKeyTx) Commit(context.Context) error   { tx.committed = true; return nil }
 func (tx *fakeKeyTx) Rollback(context.Context) error { return nil }
 
-// insertRow отдаёт (id, introduced_at) в Scan (порядок RETURNING).
+// insertRow returns (id, introduced_at) via Scan (RETURNING order).
 type insertRow struct {
 	id int64
 	at time.Time
@@ -123,13 +123,13 @@ func TestKeyService_Introduce_KeyGenVaultWriteNoLeak(t *testing.T) {
 		t.Fatalf("Introduce: %v", err)
 	}
 
-	// key_id — 64 hex (SHA-256 SPKI) и совпадает с derive из вернувшегося pubkey.
+	// key_id is 64 hex (SHA-256 SPKI) and matches derived from returned pubkey.
 	if len(res.KeyID) != 64 {
 		t.Errorf("key_id len = %d, want 64", len(res.KeyID))
 	}
 	block, _ := pem.Decode([]byte(res.PubkeyPEM))
 	if block == nil || block.Type != "PUBLIC KEY" {
-		t.Fatalf("pubkey_pem не SPKI PEM: %q", res.PubkeyPEM)
+		t.Fatalf("pubkey_pem not SPKI PEM: %q", res.PubkeyPEM)
 	}
 	pub, perr := x509.ParsePKIXPublicKey(block.Bytes)
 	if perr != nil {
@@ -144,20 +144,20 @@ func TestKeyService_Introduce_KeyGenVaultWriteNoLeak(t *testing.T) {
 		t.Error("is_primary = false, want true (makePrimary)")
 	}
 
-	// Vault-write: ровно один секрет под `<mount>/<key_id>`, поле signing_key —
-	// валидный PKCS#8 PEM-приватник.
+	// Vault-write: exactly one secret under `<mount>/<key_id>`, field signing_key is
+	// a valid PKCS#8 PEM private key.
 	wantPath := "secret/keeper/sigil-keys/" + res.KeyID
 	data, ok := vw.writes[wantPath]
 	if !ok {
-		t.Fatalf("Vault не получил запись по %q (writes=%v)", wantPath, keysOf(vw.writes))
+		t.Fatalf("Vault did not receive write to %q (writes=%v)", wantPath, keysOf(vw.writes))
 	}
 	privVal, _ := data[vaultSigningKeyField].(string)
 	if privVal == "" {
-		t.Fatal("vault signing_key пуст")
+		t.Fatal("vault signing_key is empty")
 	}
 	pb, _ := pem.Decode([]byte(privVal))
 	if pb == nil || pb.Type != "PRIVATE KEY" {
-		t.Fatalf("vault signing_key не PKCS#8 PEM: %q", privVal)
+		t.Fatalf("vault signing_key not PKCS#8 PEM: %q", privVal)
 	}
 	priv, kerr := x509.ParsePKCS8PrivateKey(pb.Bytes)
 	if kerr != nil {
@@ -167,13 +167,13 @@ func TestKeyService_Introduce_KeyGenVaultWriteNoLeak(t *testing.T) {
 	if !ok {
 		t.Fatalf("private key type %T, want ed25519", priv)
 	}
-	// Приватник соответствует публичному (одна пара).
+	// Private key matches public key (one pair).
 	if !edPriv.Public().(ed25519.PublicKey).Equal(pub.(ed25519.PublicKey)) {
-		t.Error("приватник из Vault не соответствует pubkey из ответа")
+		t.Error("private key from Vault does not match pubkey from response")
 	}
 
-	// SECURITY: приватник НЕ присутствует в публичном результате (никакое поле
-	// IntroduceResult не несёт байт приватника).
+	// SECURITY: private key is NOT present in public result (no field of
+	// IntroduceResult carries private key bytes).
 	for _, field := range []string{res.KeyID, res.PubkeyPEM, res.Status} {
 		if strings.Contains(field, "PRIVATE KEY") {
 			t.Errorf("private key leaked into result field: %q", field)
@@ -182,8 +182,8 @@ func TestKeyService_Introduce_KeyGenVaultWriteNoLeak(t *testing.T) {
 }
 
 func TestKeyService_Introduce_VaultWriteBeforeRegistry(t *testing.T) {
-	// Vault-write падает → Introduce обязан вернуть ошибку ДО обращения к pool
-	// (Introduce-CRUD не должен вызваться). Проверяем по committed=false.
+	// Vault-write fails → Introduce must return error BEFORE calling pool
+	// (Introduce-CRUD should not be called). Check via committed=false.
 	vw := newCaptureVaultWriter()
 	vw.failErr = errors.New("vault down")
 	tx := &fakeKeyTx{insertID: 1, insertTime: time.Now()}
@@ -192,20 +192,20 @@ func TestKeyService_Introduce_VaultWriteBeforeRegistry(t *testing.T) {
 
 	_, err := svc.Introduce(context.Background(), false, "archon-a")
 	if err == nil {
-		t.Fatal("Introduce должен вернуть ошибку при сбое Vault-write")
+		t.Fatal("Introduce must return error on Vault-write failure")
 	}
 	if tx.committed {
-		t.Error("Introduce закоммитил tx несмотря на сбой Vault-write (порядок нарушен)")
+		t.Error("Introduce committed tx despite Vault-write failure (order violated)")
 	}
-	// SECURITY: текст ошибки не содержит приватник (только key_id + обёртка).
+	// SECURITY: error text does not contain private key (only key_id + wrapper).
 	if strings.Contains(err.Error(), "PRIVATE KEY") {
 		t.Errorf("private key leaked into error: %v", err)
 	}
 }
 
 func TestKeyService_Introduce_ConcurrentPrimaryMapped(t *testing.T) {
-	// Insert-QueryRow.Scan возвращает 23505 на one_primary-constraint → Introduce
-	// маппит в ErrConcurrentPrimary (mapKeyInsertError), KeyService прокидывает его.
+	// Insert-QueryRow.Scan returns 23505 on one_primary constraint → Introduce
+	// maps to ErrConcurrentPrimary (mapKeyInsertError), KeyService propagates it.
 	vw := newCaptureVaultWriter()
 	svc, _ := NewKeyService(KeyServiceDeps{Pool: &racePool{}, Vault: vw})
 
@@ -215,8 +215,8 @@ func TestKeyService_Introduce_ConcurrentPrimaryMapped(t *testing.T) {
 	}
 }
 
-// racePool — fakeKeyPool, чей insert-QueryRow возвращает 23505 на
-// one_primary-constraint (гонка primary).
+// racePool is fakeKeyPool whose insert-QueryRow returns 23505 on
+// one_primary constraint (primary race).
 type racePool struct{ fakeKeyPool }
 
 func (p *racePool) BeginTx(context.Context, pgx.TxOptions) (pgx.Tx, error) {

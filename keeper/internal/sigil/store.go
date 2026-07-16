@@ -11,61 +11,61 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// pgErrCodeUniqueViolation — SQLSTATE UNIQUE-нарушения: PK или partial unique
-// index plugin_sigils_active_idx (active-запись на (namespace, name, ref) уже
-// есть). Держим константу локально, как operator/applyrun CRUD.
+// pgErrCodeUniqueViolation is SQLSTATE for UNIQUE violations: PK or partial unique
+// index plugin_sigils_active_idx (active record on (namespace, name, ref) already
+// exists). Held locally like operator/applyrun CRUD.
 const pgErrCodeUniqueViolation = "23505"
 
-// pgErrCodeForeignKeyViolation — SQLSTATE FK-нарушения. Для plugin_sigils
-// возникает на allowed_by_aid / revoked_by_aid (ссылка на несуществующий AID).
+// pgErrCodeForeignKeyViolation is SQLSTATE for FK violations. For plugin_sigils
+// occurs on allowed_by_aid / revoked_by_aid (reference to non-existent AID).
 const pgErrCodeForeignKeyViolation = "23503"
 
-// ErrSigilAlreadyActive — Insert при уже существующей активной записи на
-// (namespace, name, ref) (partial unique index). Re-allow требует сперва
-// Revoke текущей активной записи.
+// ErrSigilAlreadyActive is returned by Insert when an active record already exists
+// on (namespace, name, ref) (partial unique index). Re-allow requires first
+// revoking the current active record.
 var ErrSigilAlreadyActive = errors.New("sigil: an active record already exists for (namespace, name, ref)")
 
-// ErrSigilNotFound — GetActive / Revoke не нашли активную запись по ключу.
+// ErrSigilNotFound is returned by GetActive / Revoke when no active record is found
+// by key.
 var ErrSigilNotFound = errors.New("sigil: no active record found")
 
-// Sigil — строка реестра plugin_sigils (миграции 028, 030, 038).
+// Sigil is a row in the plugin_sigils registry (migrations 028, 030, 038).
 //
-// ManifestRaw — byte-exact СЫРЫЕ байты manifest.yaml, над которыми поставлена
-// подпись (миграция 030). Это КАНОН для verify/broadcast: едет в
-// PluginSigil.manifest как есть, S6 re-хеширует именно их через
-// NormalizeManifestBytes (S3↔S6-инвариант).
+// ManifestRaw is byte-exact RAW bytes of manifest.yaml over which the signature was
+// placed (migration 030). This is the CANON for verify/broadcast: sent to
+// PluginSigil.manifest as-is, S6 re-hashes exactly these via NormalizeManifestBytes
+// (S3↔S6 invariant).
 //
-// Manifest хранится JSONB-ом ДЛЯ query/audit (искать по side_effects /
-// capabilities, показывать в UI). Это ПРОИЗВОДНАЯ проекция, НЕ канон для verify:
-// JSONB-роундтрип не сохраняет байты.
-// Signature — сырые байты ed25519-подписи (BYTEA, без base64).
+// Manifest is stored as JSONB FOR query/audit (search by side_effects/capabilities,
+// show in UI). This is a DERIVED projection, NOT the canon for verify: JSONB
+// round-trip does not preserve bytes.
+// Signature is raw bytes of ed25519 signature (BYTEA, no base64).
 //
-// CommitSHA — git-commit, из которого резолвлен допущенный бинарь (миграция 038,
-// ADR-026(g)). Audit-метка ПРОИСХОЖДЕНИЯ, ВНЕ подписываемого блока: authority
-// целостности — SHA256 + подпись Keeper-а, не CommitSHA. Keeper-audit-only: НЕ
-// участвует в verify (нет в shared/pluginhost.SigilRecord) и НЕ едет в
-// PluginSigil-транспорт broadcast-а. Заполняется из ResolvedSlot.CommitSHA при
-// git-verified-allow (слайс S4); пустая строка = legacy operator-asserted
-// (Вариант C) или строка до миграции 038 (NULL читается как "").
+// CommitSHA is the git commit from which the granted binary was resolved (migration 038,
+// ADR-026(g)). Audit ORIGIN marker, OUTSIDE the signed block: integrity authority is
+// SHA256 + Keeper signature, not CommitSHA. Keeper-audit-only: NOT used in verify
+// (absent from shared/pluginhost.SigilRecord) and NOT sent in PluginSigil broadcast
+// transport. Filled from ResolvedSlot.CommitSHA on git-verified-allow (S4 slice);
+// empty string = legacy operator-asserted (Variant C) or pre-038 row (NULL read as "").
 type Sigil struct {
 	ID           int64
 	Namespace    string
 	Name         string
 	Ref          string
-	SHA256       string // hex, lowercase, 64 символа
-	Signature    []byte // сырые 64 байта ed25519
-	ManifestRaw  []byte // byte-exact сырые байты manifest.yaml (КАНОН для verify)
-	Manifest     []byte // JSONB-байты (производная проекция для query/audit, не канон)
-	CommitSHA    string // git-commit происхождения (audit, вне подписи); "" = legacy/NULL
+	SHA256       string // hex, lowercase, 64 chars
+	Signature    []byte // raw 64 bytes ed25519
+	ManifestRaw  []byte // byte-exact raw bytes of manifest.yaml (CANON for verify)
+	Manifest     []byte // JSONB bytes (derived projection for query/audit, not CANON)
+	CommitSHA    string // git-commit origin (audit, outside signature); "" = legacy/NULL
 	AllowedByAID string
 	AllowedAt    time.Time
 	RevokedAt    *time.Time
 	RevokedByAID *string
 }
 
-// ExecQueryRower — узкое подмножество pgxpool.Pool, нужное CRUD-у. Сужение
-// позволяет unit-тестировать через fake-pool; реальный pool удовлетворяет
-// автоматически. Симметрично operator/applyrun CRUD.
+// ExecQueryRower is a narrow subset of pgxpool.Pool needed by CRUD. The narrowing
+// allows unit testing via fake-pool; real pool satisfies automatically. Symmetric
+// to operator/applyrun CRUD.
 type ExecQueryRower interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
@@ -78,18 +78,18 @@ var (
 	_ ExecQueryRower = (pgx.Tx)(nil)
 )
 
-// insertSigilSQL — commit_sha пишется как NULLIF($9, ”): пустая CommitSHA
-// (legacy operator-asserted / заполнение из резолвера придёт в S4) ложится в БД
-// NULL-ом, сохраняя семантику «происхождение неизвестно», а не пустой строкой.
+// insertSigilSQL writes commit_sha as NULLIF($9, “”): empty CommitSHA
+// (legacy operator-asserted / resolver fill comes in S4) is stored as NULL in DB,
+// preserving semantics of “origin unknown” rather than empty string.
 const insertSigilSQL = `
 INSERT INTO plugin_sigils (namespace, name, ref, sha256, signature, manifest, allowed_by_aid, manifest_raw, commit_sha)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9, ''))
 RETURNING id, allowed_at
 `
 
-// selectActiveByKeySQL / listActiveSQL — commit_sha читается через
-// COALESCE(..., ”) (NULL → "" для legacy/до-038-строк), чтобы скан в string-поле
-// не требовал указателя.
+// selectActiveByKeySQL / listActiveSQL reads commit_sha via
+// COALESCE(..., “”) (NULL → “” for legacy/pre-038 rows), so scanning into a string
+// field does not require a pointer.
 const selectActiveByKeySQL = `
 SELECT id, namespace, name, ref, sha256, signature, manifest, manifest_raw,
        COALESCE(commit_sha, ''), allowed_by_aid, allowed_at, revoked_at, revoked_by_aid
@@ -105,24 +105,24 @@ WHERE revoked_at IS NULL
 ORDER BY allowed_at DESC, id DESC
 `
 
-// revokeActiveByKeySQL — мягкая ревокация активной записи по ключу. WHERE
-// revoked_at IS NULL — атомарная защита от повторного revoke (rows-affected = 0
-// → активной записи нет).
+// revokeActiveByKeySQL is soft revocation of active record by key. WHERE
+// revoked_at IS NULL is atomic protection against repeated revoke (rows-affected = 0
+// → no active record).
 const revokeActiveByKeySQL = `
 UPDATE plugin_sigils
 SET revoked_at = NOW(), revoked_by_aid = $4
 WHERE namespace = $1 AND name = $2 AND ref = $3 AND revoked_at IS NULL
 `
 
-// Insert вставляет новую запись допуска (allow). ManifestRaw — byte-exact
-// сырые байты manifest.yaml (КАНОН для verify), manifest — JSONB-проекция,
-// signature — сырые байты ed25519-подписи. CommitSHA — audit-метка
-// происхождения (вне подписи); пустая допустима (NULL = legacy/неизвестно,
-// заполнение из резолвера — S4). id и allowed_at заполняются из БД (RETURNING).
+// Insert inserts a new grant record (allow). ManifestRaw is byte-exact raw bytes
+// of manifest.yaml (CANON for verify), manifest is JSONB projection, signature is
+// raw bytes of ed25519 signature. CommitSHA is audit origin marker (outside signature);
+// empty is allowed (NULL = legacy/unknown, resolver fill is S4). id and allowed_at
+// are populated from DB (RETURNING).
 //
-// Re-allow после Revoke — это чистый Insert новой записи: partial unique
-// index plugin_sigils_active_idx считает только active-строки, отозванные не
-// мешают. При уже существующей активной записи → [ErrSigilAlreadyActive].
+// Re-allow after Revoke is a clean Insert of a new record: partial unique index
+// plugin_sigils_active_idx counts only active rows, revoked ones do not interfere.
+// If an active record already exists → [ErrSigilAlreadyActive].
 func Insert(ctx context.Context, db ExecQueryRower, s *Sigil) error {
 	if s == nil {
 		return fmt.Errorf("sigil: nil sigil")
@@ -136,10 +136,9 @@ func Insert(ctx context.Context, db ExecQueryRower, s *Sigil) error {
 	if s.AllowedByAID == "" {
 		return fmt.Errorf("sigil: allowed_by_aid is empty")
 	}
-	// Пустой ManifestRaw — баг вызова (корень доверия): подпись ставится над
-	// ИМЕННО этими байтами, fallback тут невозможен (Normalize("{}") !=
-	// Normalize(""), в отличие от JSONB-колонки manifest, которая допускает
-	// "{}"-заглушку).
+	// Empty ManifestRaw is a caller bug (root of trust): signature is placed over
+	// EXACTLY these bytes, no fallback possible (Normalize("{}") !=
+	// Normalize(""), unlike JSONB column manifest which allows "{}"-stub).
 	if len(s.ManifestRaw) == 0 {
 		return fmt.Errorf("sigil: manifest_raw is empty (signed bytes must be persisted byte-exact)")
 	}
@@ -157,7 +156,7 @@ func Insert(ctx context.Context, db ExecQueryRower, s *Sigil) error {
 	return nil
 }
 
-// mapInsertError маппит pgx-ошибки Insert в sentinel-ы пакета.
+// mapInsertError maps pgx errors from Insert to package sentinels.
 func mapInsertError(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
@@ -171,9 +170,9 @@ func mapInsertError(err error) error {
 	return fmt.Errorf("sigil: insert: %w", err)
 }
 
-// GetActive читает активную (не отозванную) запись по ключу (namespace, name,
-// ref). Lookup-путь будущего S6-verify. Возвращает [ErrSigilNotFound], если
-// активной записи нет.
+// GetActive reads an active (non-revoked) record by key (namespace, name, ref).
+// Lookup path for future S6-verify. Returns [ErrSigilNotFound] if no active record
+// exists.
 func GetActive(ctx context.Context, db ExecQueryRower, namespace, name, ref string) (*Sigil, error) {
 	row := db.QueryRow(ctx, selectActiveByKeySQL, namespace, name, ref)
 	s, err := scanSigil(row)
@@ -186,8 +185,8 @@ func GetActive(ctx context.Context, db ExecQueryRower, namespace, name, ref stri
 	return s, nil
 }
 
-// ListActive возвращает все активные записи, новые первыми. Лента allow-list-а
-// для UI / audit-триажа.
+// ListActive returns all active records, newest first. Feed of allow-list for UI /
+// audit triage.
 func ListActive(ctx context.Context, db ExecQueryRower) ([]*Sigil, error) {
 	rows, err := db.Query(ctx, listActiveSQL)
 	if err != nil {
@@ -209,12 +208,12 @@ func ListActive(ctx context.Context, db ExecQueryRower) ([]*Sigil, error) {
 	return out, nil
 }
 
-// Revoke мягко отзывает активный допуск по ключу: ставит revoked_at = NOW() и
-// revoked_by_aid. Запись остаётся в реестре для аудита.
+// Revoke soft revokes an active grant by key: sets revoked_at = NOW() and
+// revoked_by_aid. Record remains in registry for audit.
 //
-// Семантика:
-//   - активной записи по ключу нет → [ErrSigilNotFound];
-//   - revokedByAID пуст → ошибка (audit-инвариант: кто отозвал, обязателен).
+// Semantics:
+//   - no active record by key → [ErrSigilNotFound];
+//   - revokedByAID is empty → error (audit invariant: who revoked is required).
 func Revoke(ctx context.Context, db ExecQueryRower, namespace, name, ref, revokedByAID string) error {
 	if revokedByAID == "" {
 		return fmt.Errorf("sigil: revoked_by_aid is empty")
@@ -229,8 +228,8 @@ func Revoke(ctx context.Context, db ExecQueryRower, namespace, name, ref, revoke
 	return nil
 }
 
-// scanSigil — общий Scan одной строки plugin_sigils. Вынесен, чтобы GetActive
-// и ListActive читали колонки одинаково.
+// scanSigil is common Scan of one plugin_sigils row. Extracted so GetActive
+// and ListActive read columns identically.
 func scanSigil(row pgx.Row) (*Sigil, error) {
 	var s Sigil
 	err := row.Scan(

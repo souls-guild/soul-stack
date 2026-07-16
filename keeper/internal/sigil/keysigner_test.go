@@ -14,8 +14,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/pluginhost"
 )
 
-// genKeyPair генерирует ed25519-пару и её SPKI PEM (как пишет реестр в
-// PubkeyPEM) + base64-raw приватник (форма Vault KV-значения).
+// genKeyPair generates ed25519 key pair and its SPKI PEM (as registry writes to
+// PubkeyPEM) and base64-raw private key (form of Vault KV value).
 func genKeyPair(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey, string, string) {
 	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(nil)
@@ -31,8 +31,8 @@ func genKeyPair(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey, string, st
 	return pub, priv, pubPEM, privB64
 }
 
-// fakeKVReader — in-memory KVReader: path → KV payload. Используется для мока
-// Vault-чтения приватника в LoadSigner/LoadSigningKey.
+// fakeKVReader is an in-memory KVReader mapping path to KV payload. Used to mock
+// Vault reading of private key in LoadSigner/LoadSigningKey.
 type fakeKVReader struct {
 	byPath map[string]map[string]any
 }
@@ -45,7 +45,7 @@ func (f *fakeKVReader) ReadKV(_ context.Context, path string) (map[string]any, e
 	return kv, nil
 }
 
-// anchorContains проверяет наличие публичного ключа в наборе якорей.
+// anchorContains checks if public key is present in anchor set.
 func anchorContains(set []ed25519.PublicKey, want ed25519.PublicKey) bool {
 	for _, a := range set {
 		if a.Equal(want) {
@@ -55,23 +55,23 @@ func anchorContains(set []ed25519.PublicKey, want ed25519.PublicKey) bool {
 	return false
 }
 
-// TestLoadSigner_MultiKey: реестр из primary + двух не-primary active-ключей →
-// подписывает PRIMARY, AnchorSet содержит публичные ключи всех трёх. Приватники
-// не-primary ключей из Vault НЕ читаются (в fake лежит только primary).
+// TestLoadSigner_MultiKey: registry with primary + two non-primary active keys →
+// signs with PRIMARY, AnchorSet contains public keys of all three. Private keys
+// of non-primary keys NOT read from Vault (fake contains only primary).
 func TestLoadSigner_MultiKey(t *testing.T) {
 	pubP, privP, pemP, privPB64 := genKeyPair(t)
 	pubA, _, pemA, _ := genKeyPair(t)
 	pubB, _, pemB, _ := genKeyPair(t)
 
-	// ListActiveKeys отдаёт primary первым (ORDER BY is_primary DESC).
+	// ListActiveKeys returns primary first (ORDER BY is_primary DESC).
 	keys := []*SigningKey{
 		{KeyID: "kid-primary", PubkeyPEM: pemP, VaultRef: "vault:secret/keeper/sigil-primary", IsPrimary: true, Status: "active"},
 		{KeyID: "kid-a", PubkeyPEM: pemA, VaultRef: "vault:secret/keeper/sigil-a", IsPrimary: false, Status: "active"},
 		{KeyID: "kid-b", PubkeyPEM: pemB, VaultRef: "vault:secret/keeper/sigil-b", IsPrimary: false, Status: "active"},
 	}
 	vc := &fakeKVReader{byPath: map[string]map[string]any{
-		// Только primary-приватник доступен — доказывает, что LoadSigner НЕ
-		// читает приватники не-primary ключей.
+		// Only primary-private key available — proves LoadSigner does NOT
+		// read private keys of non-primary keys.
 		"secret/keeper/sigil-primary": {"signing_key": privPB64},
 	}}
 
@@ -80,7 +80,7 @@ func TestLoadSigner_MultiKey(t *testing.T) {
 		t.Fatalf("LoadSigner: %v", err)
 	}
 
-	// Подпись — primary-ключом: проверяем verify публичной частью primary.
+	// Signature uses primary key: verify with primary public part.
 	if !signer.Public().Equal(pubP) {
 		t.Error("signer.Public() != primary pubkey")
 	}
@@ -97,14 +97,14 @@ func TestLoadSigner_MultiKey(t *testing.T) {
 			t.Errorf("AnchorSet missing %s pubkey", name)
 		}
 	}
-	// primary должен идти первым (порядок ListActiveKeys).
+	// primary must be first (ListActiveKeys order).
 	if !set[0].Equal(pubP) {
 		t.Error("AnchorSet[0] is not primary")
 	}
 }
 
-// TestLoadSigner_SignUsesPrimary: выпущенная подпись верифицируется ИМЕННО
-// primary-публичным ключом (а не другим anchor-ом).
+// TestLoadSigner_SignUsesPrimary: issued signature verifies EXACTLY
+// with primary-public key (not other anchor).
 func TestLoadSigner_SignUsesPrimary(t *testing.T) {
 	pubP, _, pemP, privPB64 := genKeyPair(t)
 	pubA, _, pemA, _ := genKeyPair(t)
@@ -143,8 +143,8 @@ func TestLoadSigner_SignUsesPrimary(t *testing.T) {
 	}
 }
 
-// TestLoadSigner_Empty: пустой active-набор → ErrKeyNotFound (caller-fallback на
-// cfg решается в daemon, см. buildSigilSigner).
+// TestLoadSigner_Empty: empty active set → ErrKeyNotFound (caller-fallback to
+// cfg decided in daemon, see buildSigilSigner).
 func TestLoadSigner_Empty(t *testing.T) {
 	vc := &fakeKVReader{byPath: map[string]map[string]any{}}
 	if _, err := LoadSigner(context.Background(), vc, nil); !errors.Is(err, ErrKeyNotFound) {
@@ -156,13 +156,13 @@ func TestLoadSigner_Empty(t *testing.T) {
 }
 
 // TestLoadSigner_FallbackEquivalence: single-anchor cfg-fallback ([NewSigner])
-// даёт тот же signer-контракт, что LoadSigner с единственным primary-ключом —
-// AnchorSet из одного ключа, подпись им же. Документирует решение «пустой реестр
-// → работаем от cfg как single-anchor».
+// gives same signer contract as LoadSigner with single primary key —
+// AnchorSet of one key, signed with it. Documents decision "empty registry
+// → work from cfg as single-anchor".
 func TestLoadSigner_FallbackEquivalence(t *testing.T) {
 	_, priv, pemP, privB64 := genKeyPair(t)
 
-	// Путь A: одиночный cfg-fallback.
+	// Path A: single cfg-fallback.
 	cfgSigner, err := NewSigner(priv)
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
@@ -171,7 +171,7 @@ func TestLoadSigner_FallbackEquivalence(t *testing.T) {
 		t.Fatalf("cfg-fallback AnchorSet len = %d, want 1", len(cfgSigner.AnchorSet()))
 	}
 
-	// Путь B: реестр из ровно одного primary-ключа.
+	// Path B: registry with exactly one primary key.
 	vc := &fakeKVReader{byPath: map[string]map[string]any{
 		"secret/keeper/only": {"signing_key": privB64},
 	}}
@@ -190,8 +190,8 @@ func TestLoadSigner_FallbackEquivalence(t *testing.T) {
 	}
 }
 
-// TestLoadSigner_NoPrimary: active-набор без primary → ErrKeyNotFound (некому
-// подписывать; реестр-инвариант нарушен, fail-closed).
+// TestLoadSigner_NoPrimary: active set without primary returns ErrKeyNotFound
+// (no signer; registry invariant violated, fail-closed).
 func TestLoadSigner_NoPrimary(t *testing.T) {
 	_, _, pemA, _ := genKeyPair(t)
 	vc := &fakeKVReader{byPath: map[string]map[string]any{}}
@@ -203,8 +203,8 @@ func TestLoadSigner_NoPrimary(t *testing.T) {
 	}
 }
 
-// TestLoadSigner_BadAnchorPEM: битый pubkey_pem в реестре → ErrAnchorPubkeyFormat
-// (fail-closed, не молчаливый пропуск якоря).
+// TestLoadSigner_BadAnchorPEM: malformed pubkey_pem in registry returns
+// ErrAnchorPubkeyFormat (fail-closed, no silent anchor skip).
 func TestLoadSigner_BadAnchorPEM(t *testing.T) {
 	_, _, pemP, privB64 := genKeyPair(t)
 	vc := &fakeKVReader{byPath: map[string]map[string]any{
@@ -219,14 +219,14 @@ func TestLoadSigner_BadAnchorPEM(t *testing.T) {
 	}
 }
 
-// TestNewMultiSigner_PrimaryAlwaysIncluded: даже если caller не передал
-// публичную часть primary в anchors, она добавляется (иначе Soul не верифицирует
-// свежую подпись).
+// TestNewMultiSigner_PrimaryAlwaysIncluded: even if caller does not pass
+// primary public key in anchors, it is added (otherwise Soul cannot verify
+// fresh signature).
 func TestNewMultiSigner_PrimaryAlwaysIncluded(t *testing.T) {
 	pubP, privP, _, _ := genKeyPair(t)
 	pubA, _, _, _ := genKeyPair(t)
 
-	signer, err := NewMultiSigner(privP, []ed25519.PublicKey{pubA}) // primary НЕ в списке
+	signer, err := NewMultiSigner(privP, []ed25519.PublicKey{pubA}) // primary not in list
 	if err != nil {
 		t.Fatalf("NewMultiSigner: %v", err)
 	}
@@ -242,8 +242,8 @@ func TestNewMultiSigner_PrimaryAlwaysIncluded(t *testing.T) {
 	}
 }
 
-// TestNewMultiSigner_Dedup: дубль primary в anchors (реестр держит primary
-// отдельной строкой, её pubkey уже в anchors) не двоится.
+// TestNewMultiSigner_Dedup: duplicate primary in anchors (registry holds primary
+// as separate row, its pubkey already in anchors) is not duplicated.
 func TestNewMultiSigner_Dedup(t *testing.T) {
 	pubP, privP, _, _ := genKeyPair(t)
 	signer, err := NewMultiSigner(privP, []ed25519.PublicKey{pubP, pubP})
@@ -255,14 +255,14 @@ func TestNewMultiSigner_Dedup(t *testing.T) {
 	}
 }
 
-// TestNewMultiSigner_RejectsBadPrimary: невалидный primary-приватник → ошибка.
+// TestNewMultiSigner_RejectsBadPrimary: invalid primary private key returns error.
 func TestNewMultiSigner_RejectsBadPrimary(t *testing.T) {
 	if _, err := NewMultiSigner(ed25519.PrivateKey([]byte("short")), nil); err == nil {
 		t.Error("NewMultiSigner accepted undersized primary key")
 	}
 }
 
-// TestAnchorSet_ReturnsCopy: мутация возвращённого слайса не трогает Signer.
+// TestAnchorSet_ReturnsCopy: mutating returned slice does not affect Signer.
 func TestAnchorSet_ReturnsCopy(t *testing.T) {
 	_, priv, _, _ := genKeyPair(t)
 	signer, err := NewSigner(priv)
@@ -276,9 +276,9 @@ func TestAnchorSet_ReturnsCopy(t *testing.T) {
 	}
 }
 
-// TestAnchorSetPEM_MatchesAnchorSet: PEM-набор соответствует AnchorSet по числу,
-// порядку и round-trip-у (каждый PEM парсится обратно в тот же публичный ключ).
-// Это набор для bootstrap-set и runtime SigilTrustAnchors (R3-S6).
+// TestAnchorSetPEM_MatchesAnchorSet: PEM set matches AnchorSet in count,
+// order, and round-trip (each PEM parses back to same public key).
+// This is the set for bootstrap and runtime SigilTrustAnchors (R3-S6).
 func TestAnchorSetPEM_MatchesAnchorSet(t *testing.T) {
 	pubP, privP, pemP, privPB64 := genKeyPair(t)
 	pubA, _, pemA, _ := genKeyPair(t)
@@ -321,7 +321,7 @@ func TestAnchorSetPEM_MatchesAnchorSet(t *testing.T) {
 		}
 	}
 	_ = privP
-	// primary остаётся первым и присутствует в наборе.
+	// primary remains first and present in set.
 	firstBlock, _ := pem.Decode([]byte(pemSet[0]))
 	firstParsed, _ := x509.ParsePKIXPublicKey(firstBlock.Bytes)
 	if !firstParsed.(ed25519.PublicKey).Equal(pubP) {
@@ -330,12 +330,12 @@ func TestAnchorSetPEM_MatchesAnchorSet(t *testing.T) {
 	_ = pubA
 }
 
-// TestAnchorSetPEM_PrimaryMatchesPublicKeyPEM: для primary первая PEM-строка
-// набора byte-идентична одиночному [Signer.PublicKeyPEM] (single-anchor seed и
-// первый элемент multi-набора совпадают — Soul парсит обе тем же кодом).
+// TestAnchorSetPEM_PrimaryMatchesPublicKeyPEM: for primary, first PEM string
+// of set is byte-identical to single [Signer.PublicKeyPEM] (single-anchor seed and
+// first multi-set element match; Soul parses both with same code).
 func TestAnchorSetPEM_PrimaryMatchesPublicKeyPEM(t *testing.T) {
 	_, priv, _, _ := genKeyPair(t)
-	signer, err := NewSigner(priv) // single-anchor: набор = {primary}
+	signer, err := NewSigner(priv) // single-anchor: set = {primary}
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
@@ -355,26 +355,26 @@ func TestAnchorSetPEM_PrimaryMatchesPublicKeyPEM(t *testing.T) {
 	}
 }
 
-// TestSigner_NoPrivateKeyLeak: ни AnchorSet, ни Public, ни PublicKeyPEM не
-// раскрывают приватник. Покрывает security-инвариант «приватник в памяти/Vault,
-// НЕ в публичных surface-ах» (log-leak ловится тем, что Signer не имеет String()
-// и приватник недоступен снаружи пакета).
+// TestSigner_NoPrivateKeyLeak: AnchorSet, Public, and PublicKeyPEM do not
+// expose private key. Covers security invariant «private key in memory/Vault,
+// NOT in public surfaces» (log-leak prevented by Signer lacking String() method
+// and private key not accessible outside package).
 func TestSigner_NoPrivateKeyLeak(t *testing.T) {
 	pub, priv, _, _ := genKeyPair(t)
 	signer, err := NewSigner(priv)
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
-	// Публичные accessor-ы отдают только публичный материал.
+	// Public accessors return only public material.
 	if !signer.Public().Equal(pub) {
 		t.Fatal("Public() mismatch")
 	}
 	for _, a := range signer.AnchorSet() {
-		// anchor никогда не должен совпадать по длине с приватником.
+		// anchor must never match private key size.
 		if len(a) == ed25519.PrivateKeySize {
 			t.Error("AnchorSet entry has private-key size — possible private leak")
 		}
-		// и не должен начинаться с seed-байтов приватника.
+		// and must not start with private key seed bytes.
 		seed := priv.Seed()
 		if len(a) >= len(seed) && string(a[:len(seed)]) == string(seed) {
 			t.Error("AnchorSet entry exposes private seed bytes")

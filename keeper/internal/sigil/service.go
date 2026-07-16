@@ -14,31 +14,30 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/pluginhost"
 )
 
-// ErrPluginNotInCache — допуск (allow) запрошен для плагина, которого нет в
-// кеше host-а (нет слота `<cacheRoot>/<ns>-<name>/` или в нём нет валидного
-// бинаря/manifest). Transport маппит в 404. Обёртка над
-// [pluginhost.ErrSlotNotFound] — service-граница не должна протекать
-// pluginhost-sentinel-ом в handler.
+// ErrPluginNotInCache signals an allow request for a plugin not in the host cache
+// (slot `<cacheRoot>/<ns>-<name>/` missing or invalid binary/manifest).
+// Transport maps to 404. Wraps [pluginhost.ErrSlotNotFound] — service boundary
+// must not leak pluginhost sentinels to handlers.
 var ErrPluginNotInCache = errors.New("sigil: plugin not found in host cache")
 
-// SlotReader — поверхность чтения слота плагина из кеша по (namespace, name).
-// Реализуется [cacheSlotReader] поверх [pluginhost.ReadSlot] /
-// [pluginhost.SlotCommitSHA] (с фиксированным cacheRoot); сужение до интерфейса
-// позволяет unit-тестировать Service без реального кеш-каталога. Вариант C: ref
-// в чтении НЕ участвует (single-active-слот через current-symlink).
+// SlotReader is the surface for reading plugin slots from the cache by (namespace, name).
+// Implemented by [cacheSlotReader] over [pluginhost.ReadSlot] /
+// [pluginhost.SlotCommitSHA] (with fixed cacheRoot); narrowing to interface
+// allows unit-testing Service without a real cache directory. Variant C: ref
+// does not participate in lookup (single-active slot via current-symlink).
 //
-// SlotCommitSHA возвращает commit_sha АКТИВНОГО слота (target current-symlink-а,
-// A1-S1) — audit-метку происхождения, пишущуюся в plugin_sigils при allow
-// (ADR-026(g), ВНЕ подписи). Отсутствие/повреждение current → [ErrSlotNotFound]
-// (fail-closed, симметрично ReadSlot).
+// SlotCommitSHA returns the commit_sha of the ACTIVE slot (current-symlink target,
+// A1-S1) — audit provenance marker written to plugin_sigils on allow
+// (ADR-026(g), outside signature). Missing/corrupted current → [ErrSlotNotFound]
+// (fail-closed, symmetric to ReadSlot).
 type SlotReader interface {
 	ReadSlot(namespace, name string) (*pluginhost.SlotContents, error)
 	SlotCommitSHA(namespace, name string) (string, error)
 }
 
-// cacheSlotReader адаптирует [pluginhost.ReadSlot] / [pluginhost.SlotCommitSHA]
-// (с фиксированным cacheRoot) к интерфейсу [SlotReader]. Production-wire-up в
-// `keeper run` биндит cacheRoot.
+// cacheSlotReader adapts [pluginhost.ReadSlot] / [pluginhost.SlotCommitSHA]
+// (with fixed cacheRoot) to [SlotReader]. Production wire-up in `keeper run`
+// binds cacheRoot.
 type cacheSlotReader struct {
 	cacheRoot string
 }
@@ -51,29 +50,29 @@ func (r cacheSlotReader) SlotCommitSHA(namespace, name string) (string, error) {
 	return pluginhost.SlotCommitSHA(r.cacheRoot, namespace, name)
 }
 
-// NewCacheSlotReader строит [SlotReader] поверх кеша Keeper-host-а с
-// фиксированным cacheRoot (`keeper.yml` / [pluginhost.DefaultCacheRoot]).
+// NewCacheSlotReader constructs [SlotReader] over the Keeper-host cache
+// with fixed cacheRoot (`keeper.yml` / [pluginhost.DefaultCacheRoot]).
 func NewCacheSlotReader(cacheRoot string) SlotReader {
 	return cacheSlotReader{cacheRoot: cacheRoot}
 }
 
-// Store — поверхность реестра plugin_sigils, нужная [Service]. Реализуется
-// пакетным CRUD (Insert / Revoke / ListActive) поверх pgx-pool-а через
-// [NewPGStore]; сужение до интерфейса изолирует Service от прямого pgx-pool-а
-// в unit-тестах.
+// Store is the surface for the plugin_sigils registry needed by [Service].
+// Implemented by package-level CRUD (Insert / Revoke / ListActive) over pgx-pool
+// via [NewPGStore]; narrowing to interface isolates Service from direct pgx-pool
+// in unit tests.
 type Store interface {
 	Insert(ctx context.Context, s *Sigil) error
 	Revoke(ctx context.Context, namespace, name, ref, revokedByAID string) error
 	ListActive(ctx context.Context) ([]*Sigil, error)
 }
 
-// pgStore — адаптер пакетного CRUD plugin_sigils к интерфейсу [Store]. Держит
-// pool (или tx) и делегирует в Insert / Revoke / ListActive этого пакета.
+// pgStore adapts package-level CRUD plugin_sigils to [Store].
+// Holds pool (or tx) and delegates to Insert / Revoke / ListActive.
 type pgStore struct {
 	db ExecQueryRower
 }
 
-// NewPGStore оборачивает pgx-pool (любой [ExecQueryRower]) в [Store].
+// NewPGStore wraps pgx-pool (any [ExecQueryRower]) into [Store].
 func NewPGStore(db ExecQueryRower) Store {
 	return &pgStore{db: db}
 }
@@ -90,22 +89,21 @@ func (s *pgStore) ListActive(ctx context.Context) ([]*Sigil, error) {
 	return ListActive(ctx, s.db)
 }
 
-// Invalidator — поверхность cluster-wide Sigil-инвалидации (ADR-026, S6c).
-// После успешного commit-а Allow/Revoke [Service] вызывает Invalidate, чтобы
-// КАЖДАЯ Keeper-нода (включая мутирующую) re-broadcast-ила active-набор своим
-// подключённым Soul-ам — иначе Soul на другой ноде работает с устаревшим кешем
-// (revoked-допуск ещё «доверен», новый allow ещё не доехал). Реализуется в
-// `keeper run` адаптером поверх [keeperredis.PublishSigilInvalidate]; в
-// single-Keeper/dev-режиме (без Redis) не подключён — допуски доедут на
-// connect-time broadcast при следующем reconnect Soul-а.
+// Invalidator is the surface for cluster-wide Sigil invalidation (ADR-026, S6c).
+// After successful commit of Allow/Revoke, [Service] calls Invalidate so that
+// EVERY Keeper node (including the mutating one) re-broadcasts the active set
+// to its connected Souls — otherwise Soul on another node works with stale cache
+// (revoked allow still "trusted", new allow not yet arrived). Implemented in
+// `keeper run` via adapter over [keeperredis.PublishSigilInvalidate]; in
+// single-Keeper/dev mode (no Redis) not wired — allows reach on next Soul reconnect.
 //
-// Invalidate — best-effort: ошибку публикации НЕ возвращает (мутация уже
-// зафиксирована в БД), реализация логирует и глотает.
+// Invalidate is best-effort: does not return publication errors (mutation already
+// committed to DB); implementation logs and swallows.
 type Invalidator interface {
 	Invalidate(ctx context.Context)
 }
 
-// ServiceDeps — зависимости [Service]. Все поля immutable после конструктора.
+// ServiceDeps are the dependencies for [Service]. All fields immutable after construction.
 type ServiceDeps struct {
 	Signer *Signer
 	Store  Store
@@ -113,38 +111,38 @@ type ServiceDeps struct {
 	Logger *slog.Logger
 }
 
-// Service — бизнес-логика Sigil (allow / revoke / list) поверх S3 (Signer +
-// Store) и кеша host-а (SlotReader). Один источник правды для transport-
-// фасада (OpenAPI — S4a, MCP — S4b): handler декодирует input → service-call →
-// маппит sentinel-ошибки.
+// Service implements Sigil business logic (allow / revoke / list) over S3 (Signer +
+// Store) and host cache (SlotReader). Single source of truth for transport
+// facades (OpenAPI — S4a, MCP — S4b): handler decodes input → service-call →
+// maps sentinel errors.
 //
-// Вариант C (ADR-026, operator-asserted ref): Allow читает ТЕКУЩИЙ бинарь+
-// manifest из единственного слота `<cacheRoot>/<ns>-<name>/` (ключ без ref);
-// `ref` приходит как operator-предоставленная метка и в lookup слота НЕ
-// участвует. Authority целостности — sha256+подпись, не git-verified ref.
+// Variant C (ADR-026, operator-asserted ref): Allow reads CURRENT binary+
+// manifest from the single slot `<cacheRoot>/<ns>-<name>/` (key without ref);
+// `ref` arrives as operator-provided label and does not participate in slot lookup.
+// Integrity authority: sha256+signature, not git-verified ref.
 //
-// Безопасен для конкурентного использования: deps immutable, состояние не
-// держится (ed25519.Sign не мутирует ключ; атомарность — на уровне Store/PG).
+// Concurrency-safe: deps immutable, no state held (ed25519.Sign does not mutate key;
+// atomicity at Store/PG level).
 type Service struct {
-	// signer — atomic.Pointer, потому что R3 multi-anchor ротация (S6) подменяет
-	// подписывающий Signer в рантайме (новый primary после Introduce/SetPrimary)
-	// конкурентно с Allow, который читает его в [Service.Allow]. Замена — целым
-	// указателем (Signer immutable после конструктора), lock-free чтение в hot-
-	// path-е Allow. Всегда non-nil после [NewService] (конструктор проверяет).
+	// signer is atomic.Pointer because R3 multi-anchor rotation (S6) replaces
+	// the signing Signer at runtime (new primary after Introduce/SetPrimary)
+	// concurrently with Allow, which reads it in [Service.Allow]. Replacement is
+	// whole-pointer (Signer immutable after construction), lock-free read in
+	// hot-path Allow. Always non-nil after [NewService] (constructor checks).
 	signer atomic.Pointer[Signer]
 	store  Store
 	slots  SlotReader
 	logger *slog.Logger
 
-	// inv — опциональный cluster-wide invalidator (S6c). Late-binding через
-	// [Service.SetInvalidator]: Redis-клиент в `keeper run` поднимается ПОСЛЕ
-	// NewService, поэтому инъекция отложена (паттерн rbac.Service.inv).
-	// atomic.Pointer — конкурентная запись сеттером vs. чтение из мутаций без
-	// отдельного mutex-а.
+	// inv is optional cluster-wide invalidator (S6c). Late-binding via
+	// [Service.SetInvalidator]: Redis client in `keeper run` comes up AFTER
+	// NewService, so injection is deferred (pattern rbac.Service.inv).
+	// atomic.Pointer allows concurrent write by setter vs. read from mutations
+	// without separate mutex.
 	inv atomic.Pointer[Invalidator]
 }
 
-// NewService собирает service. Signer / Store / Slots обязательны.
+// NewService constructs the service. Signer / Store / Slots required.
 func NewService(d ServiceDeps) (*Service, error) {
 	if d.Signer == nil {
 		return nil, errors.New("sigil: ServiceDeps.Signer is nil")
@@ -164,13 +162,13 @@ func NewService(d ServiceDeps) (*Service, error) {
 	return svc, nil
 }
 
-// SetSigner атомарно подменяет подписывающий Signer (R3 multi-anchor «keeper
-// Signer hot-reload», S6). Вызывается daemon-watcher-ом по cluster-сигналу
-// `sigil:anchors-changed` после ротации ключей подписи (Introduce / SetPrimary /
-// Retire): новый Signer несёт свежий primary (подпись новых допусков) и полный
-// набор active-якорей. nil-вход игнорируется (defensive: подмена на nil лишила бы
-// Allow подписи) — каждый build-Signer-путь в daemon возвращает non-nil либо
-// ошибку. Потокобезопасно для конкурентного [Service.Allow].
+// SetSigner atomically replaces the signing Signer (R3 multi-anchor "keeper
+// Signer hot-reload", S6). Called by daemon-watcher on cluster signal
+// `sigil:anchors-changed` after signing key rotation (Introduce / SetPrimary /
+// Retire): new Signer carries fresh primary (signature for new allows) and full
+// set of active anchors. nil input ignored (defensive: replacing with nil would strip
+// Allow's signature) — each build-Signer path in daemon returns non-nil or error.
+// Thread-safe for concurrent [Service.Allow].
 func (s *Service) SetSigner(signer *Signer) {
 	if signer == nil {
 		return
@@ -178,10 +176,10 @@ func (s *Service) SetSigner(signer *Signer) {
 	s.signer.Store(signer)
 }
 
-// SetInvalidator late-binding-ом подключает cluster-wide invalidator (S6c).
-// Вызывается из `keeper run` после подъёма Redis-клиента. nil — снять
-// invalidator (вернуться к чистому connect-time broadcast-у). Идемпотентен,
-// потокобезопасен. Паттерн идентичен [rbac.Service.SetInvalidator].
+// SetInvalidator late-binds cluster-wide invalidator (S6c).
+// Called from `keeper run` after Redis-client startup. nil removes
+// invalidator (revert to plain connect-time broadcast). Idempotent,
+// thread-safe. Pattern identical to [rbac.Service.SetInvalidator].
 func (s *Service) SetInvalidator(inv Invalidator) {
 	if inv == nil {
 		s.inv.Store(nil)
@@ -190,18 +188,17 @@ func (s *Service) SetInvalidator(inv Invalidator) {
 	s.inv.Store(&inv)
 }
 
-// invalidate шлёт cluster-wide invalidate-сигнал после успешного commit-а
-// allow/revoke-мутации (S6c). No-op, если invalidator не подключён
-// (single-Keeper/dev). Best-effort: реализация Invalidate сама логирует и
-// глотает ошибку publish-а — мутация уже зафиксирована, потеря сигнала
-// компенсируется connect-time broadcast-ом.
+// invalidate sends cluster-wide invalidate signal after successful commit of
+// allow/revoke mutation (S6c). No-op if invalidator not wired (single-Keeper/dev).
+// Best-effort: Invalidate implementation itself logs and swallows publish errors —
+// mutation already committed; signal loss compensated by connect-time broadcast.
 func (s *Service) invalidate(ctx context.Context) {
 	if p := s.inv.Load(); p != nil {
 		(*p).Invalidate(ctx)
 	}
 }
 
-// AllowInput — параметры [Service.Allow].
+// AllowInput are the parameters for [Service.Allow].
 type AllowInput struct {
 	Namespace string
 	Name      string
@@ -209,21 +206,21 @@ type AllowInput struct {
 	CallerAID string
 }
 
-// Allow допускает плагин (namespace, name) под operator-asserted меткой ref в
-// allow-list plugin_sigils.
+// Allow permits plugin (namespace, name) under operator-asserted label ref
+// in the allow-list plugin_sigils.
 //
-// Шаги (вариант C):
-//  1. читает текущий бинарь+manifest из слота `<cacheRoot>/<ns>-<name>/`
-//     (ref в чтении НЕ участвует); нет слота → [ErrPluginNotInCache];
-//  2. читает commit_sha АКТИВНОГО слота (target current-symlink-а) — audit-метку
-//     происхождения (ADR-026(g)); нет/битый current → [ErrPluginNotInCache]
-//     (fail-closed: происхождение допуска обязано быть зафиксировано);
-//  3. подписывает блок Sigil-а Signer-ом над (ns, name, ref, binary_sha256,
-//     manifest_bytes) — commit_sha в блок НЕ входит, подпись не меняется;
-//  4. вставляет запись в реестр (commit_sha — отдельной audit-колонкой); уже
-//     активная запись на (ns, name, ref) → [ErrSigilAlreadyActive].
+// Steps (variant C):
+//  1. reads current binary+manifest from slot `<cacheRoot>/<ns>-<name>/`
+//     (ref does not participate in lookup); no slot → [ErrPluginNotInCache];
+//  2. reads commit_sha of ACTIVE slot (current-symlink target) — audit provenance
+//     mark (ADR-026(g)); missing/corrupted current → [ErrPluginNotInCache]
+//     (fail-closed: allow provenance must be fixed);
+//  3. signs Sigil block via Signer over (ns, name, ref, binary_sha256,
+//     manifest_bytes) — commit_sha not in block, signature unchanged;
+//  4. inserts record into registry (commit_sha as separate audit column); existing
+//     active record on (ns, name, ref) → [ErrSigilAlreadyActive].
 //
-// Возвращает sha256 допущенного бинаря (hex) — handler кладёт его в 201-ответ.
+// Returns sha256 of allowed binary (hex) — handler places in 201 response.
 func (s *Service) Allow(ctx context.Context, in AllowInput) (string, error) {
 	slot, err := s.slots.ReadSlot(in.Namespace, in.Name)
 	if err != nil {
@@ -233,11 +230,10 @@ func (s *Service) Allow(ctx context.Context, in AllowInput) (string, error) {
 		return "", fmt.Errorf("sigil: read plugin slot: %w", err)
 	}
 
-	// commit_sha АКТИВНОГО слота (target current-symlink-а). Источник тот же
-	// current, что ReadSlot следует при чтении бинаря/manifest, — значит
-	// commit_sha согласован ровно с подписанным бинарём. fail-closed: legacy-слот
-	// без current даёт ErrSlotNotFound → не допускаем без зафиксированного
-	// происхождения (тот же контракт, что отсутствие самого слота).
+	// commit_sha of ACTIVE slot (current-symlink target). Source is the same
+	// current that ReadSlot follows when reading binary/manifest, so commit_sha
+	// aligns exactly with signed binary. fail-closed: legacy slot without current
+	// yields ErrSlotNotFound → reject without fixed provenance (same contract as slot absence).
 	commitSHA, err := s.slots.SlotCommitSHA(in.Namespace, in.Name)
 	if err != nil {
 		if errors.Is(err, pluginhost.ErrSlotNotFound) {
@@ -263,10 +259,10 @@ func (s *Service) Allow(ctx context.Context, in AllowInput) (string, error) {
 		SHA256:    slot.BinarySHA256,
 		CommitSHA: commitSHA,
 		Signature: signature,
-		// ManifestRaw — ТЕ ЖЕ байты, что ушли в Sign выше (единый ReadSlot),
-		// byte-exact канон для S6-verify/broadcast. Manifest — производная JSONB-
-		// проекция для query/audit. Разводить источники нельзя: инвариант
-		// «подписаны ровно эти байты» разъедется.
+		// ManifestRaw — SAME bytes that went into Sign above (single ReadSlot),
+		// byte-exact canon for S6-verify/broadcast. Manifest is derived JSONB
+		// projection for query/audit. Sources must not diverge: invariant
+		// "signed exactly these bytes" will decay.
 		ManifestRaw:  slot.ManifestBytes,
 		Manifest:     manifestJSON,
 		AllowedByAID: in.CallerAID,
@@ -274,29 +270,28 @@ func (s *Service) Allow(ctx context.Context, in AllowInput) (string, error) {
 	if err := s.store.Insert(ctx, rec); err != nil {
 		return "", err
 	}
-	// Cluster-wide re-broadcast active-набора всем подключённым Soul-ам (S6c):
-	// новый допуск должен доехать near-instant, не дожидаясь reconnect-а.
+	// Cluster-wide re-broadcast of active set to all connected Souls (S6c):
+	// new allow must arrive near-instant, not waiting for reconnect.
 	s.invalidate(ctx)
 	return slot.BinarySHA256, nil
 }
 
-// Revoke отзывает активный допуск (namespace, name, ref). Активной записи нет →
+// Revoke revokes active allow (namespace, name, ref). No active record →
 // [ErrSigilNotFound].
 func (s *Service) Revoke(ctx context.Context, namespace, name, ref, callerAID string) error {
 	if err := s.store.Revoke(ctx, namespace, name, ref, callerAID); err != nil {
 		return err
 	}
-	// Cluster-wide re-broadcast active-набора (S6c): отозванный допуск исчезает
-	// из свежего набора → fail-closed на Soul-стороне. Семантика стирания из
-	// кеша — см. ограничение в [eventStreamHandler.rebroadcastSigils] /
-	// connect-time replace.
+	// Cluster-wide re-broadcast of active set (S6c): revoked allow disappears
+	// from fresh set → fail-closed on Soul side. Cache-drop semantics —
+	// see constraint in [eventStreamHandler.rebroadcastSigils] / connect-time replace.
 	s.invalidate(ctx)
 	return nil
 }
 
-// SigilView — проекция активной записи для list-выдачи. БЕЗ signature и
-// manifest: signature — сырой крипто-материал (не для API), manifest — крупный
-// JSONB query/audit-слой (не лента allow-list-а). Симметрично rbac.RoleView.
+// SigilView is a projection of active record for list delivery. WITHOUT signature and
+// manifest: signature is raw crypto material (not for API), manifest is large
+// JSONB query/audit layer (not allow-list feed). Symmetric to rbac.RoleView.
 type SigilView struct {
 	Namespace    string
 	Name         string
@@ -307,8 +302,7 @@ type SigilView struct {
 	RevokedAt    *time.Time
 }
 
-// List возвращает ленту активных допусков (новые первыми) без signature/
-// manifest.
+// List returns feed of active allows (newest first) without signature/manifest.
 func (s *Service) List(ctx context.Context) ([]SigilView, error) {
 	recs, err := s.store.ListActive(ctx)
 	if err != nil {
@@ -329,10 +323,10 @@ func (s *Service) List(ctx context.Context) ([]SigilView, error) {
 	return out, nil
 }
 
-// manifestYAMLToJSON конвертирует сырые байты manifest.yaml в JSON для JSONB-
-// колонки plugin_sigils.manifest (query/audit-слой, НЕ канон для verify —
-// канон держится на сырых байтах через NormalizeManifestBytes, S3↔S6).
-// Используется тот же goccy/go-yaml, что и в shared/plugin-парсере.
+// manifestYAMLToJSON converts raw manifest.yaml bytes to JSON for JSONB
+// plugin_sigils.manifest column (query/audit layer, NOT canon for verify —
+// canon held on raw bytes via NormalizeManifestBytes, S3↔S6).
+// Uses same goccy/go-yaml as shared/plugin parser.
 func manifestYAMLToJSON(yamlBytes []byte) ([]byte, error) {
 	var v any
 	if err := yaml.Unmarshal(yamlBytes, &v); err != nil {

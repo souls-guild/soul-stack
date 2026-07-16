@@ -86,11 +86,11 @@ func TestExtractEd25519Key_Missing(t *testing.T) {
 	}
 }
 
-// HS256-формат (короткий симметричный raw-secret) и прочий мусор → ошибка
-// формата, не молчаливый мусорный ключ.
+// HS256 format (short symmetric raw-secret) and other junk → format error,
+// not silent garbage key.
 func TestExtractEd25519Key_InvalidFormats(t *testing.T) {
 	cases := map[string]any{
-		"hs256 raw 48 bytes":  make([]byte, 48), // не 32 и не 64
+		"hs256 raw 48 bytes":  make([]byte, 48), // not 32 and not 64
 		"hs256 base64 string": base64.StdEncoding.EncodeToString(make([]byte, 48)),
 		"plain garbage":       "not-a-key-at-all",
 		"wrong type":          123,
@@ -105,8 +105,8 @@ func TestExtractEd25519Key_InvalidFormats(t *testing.T) {
 	}
 }
 
-// RSA-ключ в PKCS#8 — валидный PKCS#8, но не ed25519 → ErrSigningKeyFormat.
-// Покрывает ветку parsePKCS8Ed25519, где ParsePKCS8 проходит, но тип ≠ ed25519.
+// RSA key in PKCS#8 — valid PKCS#8 but not ed25519 → ErrSigningKeyFormat.
+// Covers parsePKCS8Ed25519 branch where ParsePKCS8 succeeds but type ≠ ed25519.
 func TestExtractEd25519Key_RejectsNonEd25519PKCS8(t *testing.T) {
 	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -121,7 +121,7 @@ func TestExtractEd25519Key_RejectsNonEd25519PKCS8(t *testing.T) {
 		t.Errorf("PEM RSA: err = %v, want ErrSigningKeyFormat", err)
 	}
 
-	// Сломанный PKCS#8 DER (нечитаемый) → тоже ErrSigningKeyFormat.
+	// Broken PKCS#8 DER (unreadable) → also ErrSigningKeyFormat.
 	broken := append([]byte{0x30, 0x03}, 0xFF, 0xFF, 0xFF)
 	brokenPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: broken})
 	if _, err := extractEd25519Key(map[string]any{"signing_key": string(brokenPEM)}); !errors.Is(err, ErrSigningKeyFormat) {

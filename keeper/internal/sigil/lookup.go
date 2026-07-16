@@ -12,22 +12,22 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/pluginhost"
 )
 
-// ErrModuleNotAllowed — по sha256 нет активного допуска kind=soul_module либо
-// допущенных байтов уже нет в кеше (current-слот переехал). Fail-closed:
-// keeper раздаёт ТОЛЬКО sigil-allowed байты (эпик core.module.installed,
-// S2 FetchModule маппит в NotFound).
+// ErrModuleNotAllowed signals no active allow for kind=soul_module by sha256 or
+// allowed bytes no longer in cache (current slot moved). Fail-closed:
+// keeper distributes ONLY sigil-allowed bytes (epic core.module.installed,
+// S2 FetchModule maps to NotFound).
 var ErrModuleNotAllowed = errors.New("sigil: module sha256 has no active soul_module sigil")
 
-// LookupModuleBinary резолвит sha256 (hex) в путь к бинарю SoulModule-плагина
-// в кеше host-а. Content-addressed guard:
+// LookupModuleBinary resolves sha256 (hex) to SoulModule plugin binary path
+// in host cache. Content-addressed guard:
 //
-//  1. sha ищется среди АКТИВНЫХ допусков plugin_sigils с kind=soul_module
-//     (kind — из подписанных байтов manifest-а допуска, не из кеша);
-//  2. слот `<cacheRoot>/<ns>-<name>/current/` перечитывается, его текущий
-//     BinarySHA256 обязан совпасть с запрошенным sha — иначе current переехал
-//     и допущенных байтов больше нет (запись скипается, fail-closed).
+//  1. sha searched among ACTIVE allows plugin_sigils with kind=soul_module
+//     (kind from signed manifest bytes of allow, not cache);
+//  2. slot `<cacheRoot>/<ns>-<name>/current/` re-read, its current
+//     BinarySHA256 must match requested sha — else current moved and allowed
+//     bytes gone (record skipped, fail-closed).
 //
-// Не-allowed sha, revoked-допуск, чужой kind, отсутствующий/уехавший слот →
+// Disallowed sha, revoked allow, wrong kind, missing/moved slot →
 // [ErrModuleNotAllowed].
 func (s *Service) LookupModuleBinary(ctx context.Context, sha256Hex string) (string, error) {
 	sha := strings.ToLower(sha256Hex)

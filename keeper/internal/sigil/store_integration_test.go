@@ -1,7 +1,7 @@
 //go:build integration
 
-// Integration-тесты sigil-Store (CRUD plugin_sigils) через testcontainers-go
-// (postgres:16-alpine). Паттерн совпадает с keeper/internal/operator/integration_test.go.
+// Integration tests for sigil-Store (CRUD plugin_sigils) via testcontainers-go
+// (postgres:16-alpine). Pattern matches keeper/internal/operator/integration_test.go.
 
 package sigil
 
@@ -72,7 +72,7 @@ func run(m *testing.M) int {
 	return m.Run()
 }
 
-// reset стирает plugin_sigils и пере-засевает оператора, на которого ссылаются
+// reset truncates plugin_sigils and re-seeds operator referenced by
 // FK allowed_by_aid / revoked_by_aid.
 func reset(t *testing.T) string {
 	t.Helper()
@@ -92,9 +92,9 @@ func reset(t *testing.T) string {
 	return aid
 }
 
-// rawManifestYAML — сырые байты manifest.yaml (канон). Заведомо НЕ совпадают с
-// JSONB-проекцией ниже (другой синтаксис, перевод строк), чтобы round-trip
-// доказывал: manifest_raw отдаётся byte-exact, а не из JSONB-колонки.
+// rawManifestYAML is raw bytes of manifest.yaml (canon). Deliberately differ from
+// JSONB projection below (different syntax, line endings) to prove round-trip:
+// manifest_raw returned byte-exact, not from JSONB column.
 var rawManifestYAML = []byte("kind: cloud_driver\nname: hetzner\n")
 
 func newRecord(aid string) *Sigil {
@@ -141,24 +141,24 @@ func TestIntegration_Insert_GetActive(t *testing.T) {
 	if !bytes.Equal(got.Signature, rec.Signature) {
 		t.Error("signature roundtrip mismatch")
 	}
-	// manifest_raw round-trip: byte-exact исходным сырым байтам (канон verify).
+	// manifest_raw round-trip byte-exact to original raw (canon for verify).
 	if !bytes.Equal(got.ManifestRaw, rawManifestYAML) {
 		t.Errorf("manifest_raw roundtrip:\n got=%q\nwant=%q", got.ManifestRaw, rawManifestYAML)
 	}
-	// JSONB-проекция непуста и отлична от raw (производный слой, не канон).
+	// JSONB projection non-empty and differs from raw (derived layer, not canon).
 	if len(got.Manifest) == 0 {
-		t.Error("manifest JSONB пуст")
+		t.Error("manifest JSONB empty")
 	}
 	if bytes.Equal(got.ManifestRaw, got.Manifest) {
-		t.Error("manifest_raw совпал с JSONB manifest — raw обязан нести сырой YAML")
+		t.Error("manifest_raw matched JSONB manifest — raw must carry raw YAML")
 	}
 	if got.RevokedAt != nil {
 		t.Error("fresh record should be active")
 	}
 }
 
-// TestIntegration_GetActive_GuardEmptyManifestRaw — Insert на реальном PG-пути
-// отклоняет пустой ManifestRaw (guard до запроса), запись не создаётся.
+// TestIntegration_Insert_GuardEmptyManifestRaw verifies Insert on real PG path
+// rejects empty ManifestRaw (guard before query), record not created.
 func TestIntegration_Insert_GuardEmptyManifestRaw(t *testing.T) {
 	aid := reset(t)
 	ctx := context.Background()
@@ -166,15 +166,15 @@ func TestIntegration_Insert_GuardEmptyManifestRaw(t *testing.T) {
 	rec := newRecord(aid)
 	rec.ManifestRaw = nil
 	if err := Insert(ctx, integrationPool, rec); err == nil {
-		t.Fatal("Insert с пустым ManifestRaw должен вернуть ошибку")
+		t.Fatal("Insert empty ManifestRaw must return error")
 	}
 	if _, err := GetActive(ctx, integrationPool, "cloud", "hetzner", "v1.0.0"); !errors.Is(err, ErrSigilNotFound) {
-		t.Errorf("после отклонённого Insert активной записи быть не должно, err = %v", err)
+		t.Errorf("after rejected Insert no active record, err = %v", err)
 	}
 }
 
-// TestIntegration_ListActive_ManifestRaw — ListActive отдаёт manifest_raw
-// byte-exact (его читает S6-sender/broadcast).
+// TestIntegration_ListActive_ManifestRaw verifies ListActive returns manifest_raw
+// byte-exact (read by S6 sender/broadcast).
 func TestIntegration_ListActive_ManifestRaw(t *testing.T) {
 	aid := reset(t)
 	ctx := context.Background()
@@ -194,10 +194,10 @@ func TestIntegration_ListActive_ManifestRaw(t *testing.T) {
 	}
 }
 
-// TestIntegration_CommitSha_RoundTrip — non-пустая CommitSHA сохраняется и
-// читается byte-exact через GetActive/ListActive (audit-метка происхождения,
-// миграция 038 / ADR-026(g)). Verify это поле НЕ использует — здесь чисто
-// store-round-trip audit-слоя.
+// TestIntegration_CommitSha_RoundTrip verifies non-empty CommitSHA is persisted
+// and read byte-exact via GetActive/ListActive (audit origin marker,
+// migration 038 / ADR-026(g)). Verify does not use this field — pure
+// store round-trip of audit layer.
 func TestIntegration_CommitSha_RoundTrip(t *testing.T) {
 	aid := reset(t)
 	ctx := context.Background()
@@ -229,18 +229,18 @@ func TestIntegration_CommitSha_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestIntegration_CommitSha_LegacyNull — пустая CommitSHA при Insert ложится в БД
-// NULL-ом (NULLIF) и читается обратно как "" (COALESCE). Покрывает legacy
-// operator-asserted / до-S4-allow-путь: происхождение неизвестно.
+// TestIntegration_CommitSha_LegacyNull verifies empty CommitSHA on Insert goes to DB
+// as NULL (NULLIF) and reads back as "" (COALESCE). Covers legacy
+// operator-asserted / pre-S4-allow path: origin unknown.
 func TestIntegration_CommitSha_LegacyNull(t *testing.T) {
 	aid := reset(t)
 	ctx := context.Background()
 
-	rec := newRecord(aid) // CommitSHA не задан → ""
+	rec := newRecord(aid) // CommitSHA not set → ""
 	if err := Insert(ctx, integrationPool, rec); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	// На DB-уровне колонка должна быть именно NULL (а не пустая строка).
+	// At DB level column must be exactly NULL (not empty string).
 	var isNull bool
 	if err := integrationPool.QueryRow(ctx,
 		`SELECT commit_sha IS NULL FROM plugin_sigils WHERE id = $1`, rec.ID,
@@ -248,7 +248,7 @@ func TestIntegration_CommitSha_LegacyNull(t *testing.T) {
 		t.Fatalf("probe commit_sha IS NULL: %v", err)
 	}
 	if !isNull {
-		t.Error("пустая CommitSHA должна писаться в БД как NULL (NULLIF)")
+		t.Error("empty CommitSHA must be written to DB as NULL (NULLIF)")
 	}
 
 	got, err := GetActive(ctx, integrationPool, "cloud", "hetzner", "v1.0.0")
@@ -256,7 +256,7 @@ func TestIntegration_CommitSha_LegacyNull(t *testing.T) {
 		t.Fatalf("GetActive: %v", err)
 	}
 	if got.CommitSHA != "" {
-		t.Errorf("legacy NULL должен читаться как \"\", got %q", got.CommitSHA)
+		t.Errorf("legacy NULL must read as \"\", got %q", got.CommitSHA)
 	}
 }
 
@@ -283,11 +283,11 @@ func TestIntegration_Revoke(t *testing.T) {
 	if err := Revoke(ctx, integrationPool, "cloud", "hetzner", "v1.0.0", aid); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
-	// После revoke активной записи нет.
+	// After revoke no active record exists.
 	if _, err := GetActive(ctx, integrationPool, "cloud", "hetzner", "v1.0.0"); !errors.Is(err, ErrSigilNotFound) {
 		t.Errorf("GetActive after revoke err = %v, want ErrSigilNotFound", err)
 	}
-	// Повторный revoke → not found.
+	// Re-revoke → not found.
 	if err := Revoke(ctx, integrationPool, "cloud", "hetzner", "v1.0.0", aid); !errors.Is(err, ErrSigilNotFound) {
 		t.Errorf("second Revoke err = %v, want ErrSigilNotFound", err)
 	}
@@ -304,7 +304,7 @@ func TestIntegration_ReAllowAfterRevoke(t *testing.T) {
 	if err := Revoke(ctx, integrationPool, "cloud", "hetzner", "v1.0.0", aid); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
-	// Re-allow после revoke — новый INSERT, partial-unique не мешает.
+	// Re-allow after revoke — new INSERT, partial-unique does not interfere.
 	second := newRecord(aid)
 	if err := Insert(ctx, integrationPool, second); err != nil {
 		t.Fatalf("re-allow Insert: %v", err)
@@ -336,7 +336,7 @@ func TestIntegration_ListActive(t *testing.T) {
 			t.Fatalf("Insert %s: %v", r.Name, err)
 		}
 	}
-	// Отзываем один — он не должен попасть в ListActive.
+	// Revoke one — it should not appear in ListActive.
 	if err := Revoke(ctx, integrationPool, "cloud", "gcp", "v1.0.0", aid); err != nil {
 		t.Fatalf("Revoke gcp: %v", err)
 	}

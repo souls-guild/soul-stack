@@ -8,76 +8,76 @@ import (
 	"github.com/souls-guild/soul-stack/shared/obs"
 )
 
-// tracer для in-process span-ов Sigil-подсистемы. Берёт глобальный
-// TracerProvider, поднятый [obs.SetupOTel] в main; при OTel disabled провайдер
-// no-op — span-ы бесплатны и код не ветвится (ADR-024 §1.2). Используется
-// daemon-ом вокруг runtime-ротации trust-anchor-ключей подписи через [Tracer].
+// tracer is the OTel tracer for in-process spans of the Sigil subsystem. Gets the global
+// TracerProvider raised by [obs.SetupOTel] in main; when OTel is disabled the provider
+// is no-op — spans are free and code does not branch (ADR-024 §1.2). Used
+// by the daemon around runtime rotation of trust-anchor signing keys via [Tracer].
 var tracer = otel.Tracer("keeper/sigil")
 
-// SpanRotation — имя in-process span-а runtime-ротации trust-anchor-ключей
-// подписи (re-build Signer + обновление verify-наборов + re-broadcast). Вынесено
-// константой: daemon стартует span этим именем, тест сверяет его.
+// SpanRotation — name of the in-process span for runtime rotation of trust-anchor signing keys
+// (re-build Signer + update verify sets + re-broadcast). Extracted as a constant:
+// daemon starts the span with this name, test validates it.
 const SpanRotation = "sigil.anchors_reload"
 
-// Tracer отдаёт пакетный OTel-tracer Sigil-подсистемы для caller-а в другом
-// пакете (cmd/keeper daemon: reloadAnchors оркеструет несколько подсистем, но
-// span — про Sigil-ротацию), чтобы он был привязан к одному instrumentation
+// Tracer returns the OTel tracer for the Sigil subsystem for callers in other packages
+// (cmd/keeper daemon: reloadAnchors orchestrates multiple subsystems, but
+// the span is scoped to Sigil rotation), ensuring it is bound to a single instrumentation
 // scope `keeper/sigil`.
 func Tracer() trace.Tracer { return tracer }
 
-// KeyMetrics — Prometheus-метрики реестра ключей подписи Sigil (ADR-026(h),
-// R3-S7). Регистрируется helper-ом поверх компонент-агностичного [obs.Registry]
-// (паттерн [vault.RegisterVaultMetrics] / [grpc.RegisterGRPCMetrics], ADR-024 §4.0).
+// KeyMetrics — Prometheus metrics for the Sigil signing key registry (ADR-026(h),
+// R3-S7). Registered via helper over the component-agnostic [obs.Registry]
+// (pattern [vault.RegisterVaultMetrics] / [grpc.RegisterGRPCMetrics], ADR-024 §4.0).
 //
-// MVP — один gauge числа active trust-anchor-ключей: операционный сигнал состояния
-// набора (сколько якорей сейчас валидируют подписи). Полный учёт «N допусков
-// подписаны retiring-ключом» дорог без commit-time-метки ключа в plugin_sigils
-// (нечем точно сопоставить) — отложен; gauge + warn-лог при Retire (KeyService)
-// дают минимальную safety-видимость (decisions.md R3-S7 item 6).
+// MVP is a single gauge for the count of active trust-anchor keys: an operational signal
+// of set health (how many anchors currently validate signatures). Full accounting for
+// "N permissions signed by retiring-key" is expensive without commit-time key metadata in plugin_sigils
+// (no way to match precisely) — deferred; gauge + warn-log on Retire (KeyService)
+// provide minimal safety visibility (decisions.md R3-S7 item 6).
 type KeyMetrics struct {
-	// activeKeys — текущее число active-ключей подписи (status='active'). Без
-	// разреза по label-ам: closed-набор (единицы ключей на кластер). Обновляется
-	// после каждой мутации реестра ([KeyService.afterMutation]).
+	// activeKeys — current count of active signing keys (status='active'). No
+	// label cardinality: closed set (single-digit keys per cluster). Updated
+	// after each registry mutation ([KeyService.afterMutation]).
 	activeKeys prometheus.Gauge
 
-	// anchorsRebroadcastTotal — счётчик проходов re-broadcast-а набора якорей
-	// подключённым Soul-ам (ADR-026(h), R3-S6). Инкремент на КАЖДЫЙ
-	// `reloadAnchors` (и pub/sub-сигнал, и TTL-fallback-тик), независимо от того,
-	// скольким Soul-ам набор реально доехал — это сигнал «нода перечитала и
-	// разослала». Без label-ов: closed-операция (единицы проходов).
+	// anchorsRebroadcastTotal — counter for re-broadcast passes of the anchor set
+	// to connected Souls (ADR-026(h), R3-S6). Incremented on EVERY
+	// `reloadAnchors` (both pub/sub signal and TTL-fallback tick), regardless of
+	// how many Souls actually received the set — this signals "node re-read and
+	// re-broadcast". No labels: closed operation (single-digit passes).
 	anchorsRebroadcastTotal prometheus.Counter
 
-	// anchorsLastDelivered — число Soul-ов, которым последний re-broadcast набора
-	// якорей ушёл успешно ([Outbound.RebroadcastTrustAnchors] delivered).
-	// Операционный сигнал «новый набор разошёлся подключённым Soul-ам, ПЕРЕД
-	// Retire старого ключа» (Retire-инвариант, ADR-026(h), R3-S7). Gauge
-	// (мгновенное состояние последней раздачи), без label-ов.
+	// anchorsLastDelivered — count of Souls to which the last re-broadcast of the anchor set
+	// was successfully delivered ([Outbound.RebroadcastTrustAnchors] delivered).
+	// Operational signal "new set has propagated to connected Souls, BEFORE
+	// retiring old key" (Retire invariant, ADR-026(h), R3-S7). Gauge
+	// (snapshot of last broadcast state), no labels.
 	anchorsLastDelivered prometheus.Gauge
 }
 
-// RegisterKeyMetrics создаёт keeper_sigil_*-collectors и регистрирует их в
-// [obs.Registry]. MustRegister: дубликат-регистрация — programmer error.
+// RegisterKeyMetrics creates keeper_sigil_* collectors and registers them in
+// [obs.Registry]. MustRegister: duplicate registration is a programmer error.
 func RegisterKeyMetrics(reg *obs.Registry) *KeyMetrics {
 	m := &KeyMetrics{
 		activeKeys: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "keeper_sigil_signing_keys_active",
-			Help: "Текущее число active trust-anchor-ключей подписи Sigil (status='active').",
+			Help: "Current count of active Sigil signing trust-anchor keys (status='active').",
 		}),
 		anchorsRebroadcastTotal: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "keeper_sigil_anchors_rebroadcast_total",
-			Help: "Проходы re-broadcast-а набора trust-anchor-ключей подписи подключённым Soul-ам (на каждый reloadAnchors: pub/sub-сигнал + TTL-fallback-тик).",
+			Help: "Re-broadcast passes of signing trust-anchor key set to connected Souls (for each reloadAnchors: pub/sub signal + TTL-fallback tick).",
 		}),
 		anchorsLastDelivered: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "keeper_sigil_anchors_last_delivered",
-			Help: "Число Soul-ов, которым последний re-broadcast набора trust-anchor-ключей подписи ушёл успешно (delivered).",
+			Help: "Count of Souls to which the last re-broadcast of signing trust-anchor key set was successfully delivered.",
 		}),
 	}
 	reg.Registerer().MustRegister(m.activeKeys, m.anchorsRebroadcastTotal, m.anchorsLastDelivered)
 	return m
 }
 
-// SetActive проставляет gauge числа active-ключей. nil-получатель — no-op
-// (KeyService может работать без observability в unit-тестах).
+// SetActive sets the gauge for count of active keys. nil receiver — no-op
+// (KeyService can work without observability in unit tests).
 func (m *KeyMetrics) SetActive(n int) {
 	if m == nil {
 		return
@@ -85,10 +85,10 @@ func (m *KeyMetrics) SetActive(n int) {
 	m.activeKeys.Set(float64(n))
 }
 
-// ObserveAnchorsRebroadcast фиксирует один проход re-broadcast-а набора якорей:
-// инкремент счётчика проходов + проставление gauge последнего delivered.
-// Вызывается daemon-ом из `reloadAnchors` (и pub/sub-путь, и TTL-fallback-тик).
-// nil-получатель — no-op (daemon может вызывать до wire-up registry / в тестах).
+// ObserveAnchorsRebroadcast records one pass of the anchor set re-broadcast:
+// increment the pass counter + set the gauge for last delivered count.
+// Called by daemon from `reloadAnchors` (both pub/sub path and TTL-fallback tick).
+// nil receiver — no-op (daemon may call before registry wire-up / in tests).
 func (m *KeyMetrics) ObserveAnchorsRebroadcast(delivered int) {
 	if m == nil {
 		return
