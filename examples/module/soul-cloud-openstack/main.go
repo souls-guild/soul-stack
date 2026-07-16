@@ -1,22 +1,22 @@
-// soul-cloud-openstack — реальный CloudDriver-плагин Soul Stack для OpenStack
-// (ADR-016 Фаза 4 cloud parity; тираж по pattern-у soul-cloud-aws).
+// soul-cloud-openstack is a real Soul Stack CloudDriver plugin for OpenStack
+// (ADR-016 Phase 4 cloud parity; rollout by the soul-cloud-aws pattern).
 //
-// Собирается в статический бинарь `soul-cloud-openstack`. Keeper-side модуль
-// `core.cloud.provisioned` (ADR-017) запускает его как sub-process, делает
-// gRPC-stdio handshake (sdk/handshake) и зовёт RPC CloudDriver.
+// Builds into the static binary `soul-cloud-openstack`. The Keeper-side
+// `core.cloud.provisioned` module (ADR-017) starts it as a sub-process, performs
+// the gRPC-stdio handshake (sdk/handshake), and calls CloudDriver RPCs.
 //
-// Credentials (A-flow, docs/keeper/cloud.md): Keeper резолвит секрет из Vault и
-// кладёт plain в CreateRequest.credentials / DestroyRequest.credentials; драйвер
-// в Vault НЕ ходит. Auth-форма — Keystone v3 password-scoped (auth_url +
-// username + password + project + user/project domain), region опционален
-// (приватные облака без regions). Cloud-init userdata прокидывается в
-// servers.CreateOpts.UserData (gophercloud base64-кодирует сам, в отличие от
-// EC2-драйвера).
+// Credentials (A-flow, docs/keeper/cloud.md): Keeper resolves the secret from
+// Vault and places plain values in CreateRequest.credentials /
+// DestroyRequest.credentials; the driver does NOT call Vault. Auth form is
+// Keystone v3 password-scoped (auth_url + username + password + project +
+// user/project domain), region is optional (private clouds without regions).
+// Cloud-init userdata is passed into servers.CreateOpts.UserData (gophercloud
+// base64-encodes it itself, unlike the EC2 driver).
 //
-// Shared-каркас (error-таксономия / wait-until-ready / retry-backoff) — из
-// sdk/clouddriver, общий для всех драйверов тиража. Provider-specific здесь —
-// только вызовы compute/v2/servers и OpenStack-классификатор ошибок
-// (classify.go).
+// Shared framework (error taxonomy / wait-until-ready / retry-backoff) comes
+// from sdk/clouddriver and is common to all rollout drivers. Provider-specific
+// pieces here are only compute/v2/servers calls and the OpenStack error
+// classifier (classify.go).
 package main
 
 import (
@@ -35,42 +35,42 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// profileSchemaJSON — profile_schema (JSON Schema draft 2020-12), embedded
-// рядом с бинарём. Та же техника, что в soul-cloud-aws — отдельный файл,
-// не хардкод в Go (легче держать в синхроне с manifest.spec.profile_schema).
+// profileSchemaJSON is profile_schema (JSON Schema draft 2020-12), embedded next
+// to the binary. Same technique as in soul-cloud-aws - a separate file, not
+// hardcoded in Go (easier to keep in sync with manifest.spec.profile_schema).
 //
 //go:embed schema.json
 var profileSchemaJSON []byte
 
-// runMetaKey — server.metadata-ключ идемпотентности: значение = идентификатор
-// прогона (из profile.labels либо CreateRequest.name как fallback). Имя без
-// двоеточия (некоторые OpenStack-инсталляции урезают `:` в metadata-ключах).
-// Повторный Create с тем же значением переиспользует живые VM
-// (BUILD/ACTIVE/REBUILD), а не плодит дубли (NIM-16).
+// runMetaKey is the server.metadata idempotency key: value = run identifier
+// (from profile.labels or CreateRequest.name as fallback). The name has no colon
+// (some OpenStack installations trim `:` in metadata keys). A repeated Create
+// with the same value reuses live VMs (BUILD/ACTIVE/REBUILD) instead of creating
+// duplicates (NIM-16).
 const runMetaKey = "soulstack-run"
 
-// Активные/переходные статусы OpenStack-инстанса, в которых VM считается
-// «живой» для идемпотентности и list-фильтрации. Терминальные (ERROR/DELETED/
-// SHUTOFF) сюда не входят: их драйвер либо помечает failed (probe-Err), либо
-// игнорирует при поиске идемпотент-конфликта.
+// Active/transitional OpenStack instance statuses where a VM is considered
+// "live" for idempotency and list filtering. Terminal statuses (ERROR/DELETED/
+// SHUTOFF) are excluded: the driver either marks them failed (probe Err) or
+// ignores them when searching for an idempotency conflict.
 const (
 	statusActive  = "ACTIVE"
 	statusBuild   = "BUILD"
 	statusRebuild = "REBUILD"
 )
 
-// defaultBackoff — фабрика [clouddriver.BackoffConfig] для wait/retry-фаз.
-// Вынесена в переменную, чтобы L0-тесты могли подменить (быстрый MaxAttempts,
-// короткие задержки) без поднятия таймера 1s→2s→4s. Та же техника, что и
-// `newOsClient` (см. osapi.go).
+// defaultBackoff is the [clouddriver.BackoffConfig] factory for wait/retry
+// phases. It is a variable so L0 tests can replace it (fast MaxAttempts, short
+// delays) without raising the 1s->2s->4s timer. Same technique as `newOsClient`
+// (see osapi.go).
 var defaultBackoff = clouddriver.DefaultBackoff
 
-// OpenstackDriver — реализация CloudDriver для OpenStack.
+// OpenstackDriver implements CloudDriver for OpenStack.
 type OpenstackDriver struct {
 	clouddriver.BaseDriver
 }
 
-// Schema публикует embedded profile_schema.
+// Schema publishes the embedded profile_schema.
 func (o *OpenstackDriver) Schema(_ context.Context, _ *pluginv1.SchemaRequest) (*pluginv1.SchemaReply, error) {
 	var raw map[string]any
 	if err := json.Unmarshal(profileSchemaJSON, &raw); err != nil {
@@ -83,9 +83,9 @@ func (o *OpenstackDriver) Schema(_ context.Context, _ *pluginv1.SchemaRequest) (
 	return &pluginv1.SchemaReply{ProfileSchema: s}, nil
 }
 
-// Validate не несёт credentials (ValidateProfileRequest), structural-проверки
-// здесь; auth — на фазе Create. region НЕ обязательное поле — приватные облака
-// без regions запускают Keystone без `RegionName` в catalog-е.
+// Validate carries no credentials (ValidateProfileRequest), so structural checks
+// are here; auth happens in Create. region is NOT required - private clouds
+// without regions run Keystone without `RegionName` in the catalog.
 func (o *OpenstackDriver) Validate(_ context.Context, req *pluginv1.ValidateProfileRequest) (*pluginv1.ValidateProfileReply, error) {
 	p := req.GetProfile().AsMap()
 	var errs []string
@@ -101,7 +101,7 @@ func (o *OpenstackDriver) Validate(_ context.Context, req *pluginv1.ValidateProf
 	return &pluginv1.ValidateProfileReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
 
-// vmProfile — параметры профиля, разобранные для servers.Create.
+// vmProfile contains profile params parsed for servers.Create.
 type vmProfile struct {
 	region           string
 	availabilityZone string
@@ -142,13 +142,13 @@ func parseProfile(p map[string]any) vmProfile {
 	return prof
 }
 
-// Create: fail-closed без идентичности (нет name и нет run-метки — иначе rerun
-// плодит orphan-VM, NIM-16) → идемпотент-скан живых VM по metadata[runMetaKey] →
-// добор недостающих с первыми свободными индексами → wait-until-ready →
-// финальное событие с VmInfo (fqdn = server.AccessIPv4/floating IP / первый
-// адрес из server.Addresses; если ничего нет — Fqdn пустой, attributes несут
-// пометку no_address — Keeper-side увидит и решит сам). name без метки
-// становится run-меткой (стамп metadata).
+// Create: fail-closed without identity (no name and no run label - otherwise
+// rerun creates orphan VMs, NIM-16) -> idempotency scan of live VMs by
+// metadata[runMetaKey] -> fill missing instances with first free indexes ->
+// wait-until-ready -> final event with VmInfo (fqdn = server.AccessIPv4/floating
+// IP / first address from server.Addresses; if none exists, Fqdn is empty and
+// attributes carry no_address - Keeper-side will see it and decide). name without
+// a label becomes the run label (metadata stamp).
 func (o *OpenstackDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerStreamingServer[pluginv1.CreateEvent]) error {
 	ctx := stream.Context()
 	count := req.GetCount()
@@ -161,16 +161,17 @@ func (o *OpenstackDriver) Create(req *pluginv1.CreateRequest, stream grpc.Server
 		creds.Region = prof.region
 	}
 
-	// Fail-closed: без name и без run-метки прогон неотличим от предыдущих →
-	// idempotency-скан невозможен, rerun плодил бы orphan-VM (NIM-16). Guard
-	// стоит до newOsClient — Keystone-auth это уже вызов OpenStack API.
+	// Fail-closed: without name and run label the run is indistinguishable from
+	// previous ones -> idempotency scan is impossible, rerun would create orphan
+	// VMs (NIM-16). Guard is before newOsClient - Keystone auth is already an
+	// OpenStack API call.
 	nameBase := req.GetName()
 	if nameBase == "" && prof.runLabel == "" {
 		return sendCreateFailed(stream, clouddriver.FailInvalidParams, "identity",
 			fmt.Errorf("no run identity: set step param `name` or profile.labels[%q]", runMetaKey))
 	}
-	// name без явной метки становится run-меткой → создаваемые VM всегда несут
-	// metadata[runMetaKey], будущие прогоны матчатся по нему.
+	// name without an explicit label becomes the run label -> created VMs always
+	// carry metadata[runMetaKey], future runs match on it.
 	if prof.runLabel == "" {
 		prof.runLabel = nameBase
 	}
@@ -182,8 +183,8 @@ func (o *OpenstackDriver) Create(req *pluginv1.CreateRequest, stream grpc.Server
 
 	backoff := defaultBackoff()
 
-	// Идемпотентность (NIM-16): скан всегда (после guard runLabel непуст) —
-	// живые VM прогона переиспользуются, добиваются только недостающие.
+	// Idempotency (NIM-16): always scan (runLabel is non-empty after the guard) -
+	// live VMs from the run are reused, and only missing ones are added.
 	existing, err := o.findByRunLabel(ctx, cli, backoff, prof.runLabel)
 	if err != nil {
 		return sendCreateFailed(stream, clouddriver.Classify(classifyOS, err), "list-existing", err)
@@ -218,10 +219,10 @@ func (o *OpenstackDriver) Create(req *pluginv1.CreateRequest, stream grpc.Server
 	return o.finalizeCreate(ctx, cli, stream, backoff, allIDs)
 }
 
-// createServers вызывает servers.Create по одному разу на каждое имя (OpenStack
-// создаёт по одному серверу за вызов, нет batch-Create как у EC2.RunInstances).
-// Имена приходят готовыми из gap-fill — детерминированные и без коллизий с уже
-// существующими VM (NIM-16).
+// createServers calls servers.Create once for each name (OpenStack creates one
+// server per call; there is no batch Create like EC2.RunInstances). Names arrive
+// ready from gap-fill - deterministic and without collisions with existing VMs
+// (NIM-16).
 func (o *OpenstackDriver) createServers(ctx context.Context, cli osAPI, backoff clouddriver.BackoffConfig, prof vmProfile, userdata string, names []string) ([]servers.Server, error) {
 	out := make([]servers.Server, 0, len(names))
 	for _, name := range names {
@@ -242,13 +243,13 @@ func (o *OpenstackDriver) createServers(ctx context.Context, cli osAPI, backoff 
 	return out, nil
 }
 
-// buildCreateOpts формирует servers.CreateOpts с готовым именем VM
-// (детерминированное `<nameBase>-<seq>` / `soul-<runLabel>-<seq>` из gap-fill).
+// buildCreateOpts forms servers.CreateOpts with the ready VM name
+// (deterministic `<nameBase>-<seq>` / `soul-<runLabel>-<seq>` from gap-fill).
 //
-// Userdata: gophercloud servers.CreateOpts кодирует UserData в base64 САМ
-// (см. servers.CreateOpts.ToServerCreateMap → base64.StdEncoding.EncodeToString).
-// Драйвер кладёт plain []byte cloud-init blob — в отличие от EC2-драйвера,
-// где SDK НЕ кодирует и base64 делает author.
+// Userdata: gophercloud servers.CreateOpts encodes UserData in base64 ITSELF
+// (see servers.CreateOpts.ToServerCreateMap -> base64.StdEncoding.EncodeToString).
+// The driver puts a plain []byte cloud-init blob - unlike the EC2 driver, where
+// the SDK does NOT encode and author does base64.
 func buildCreateOpts(prof vmProfile, userdata, name string) servers.CreateOpts {
 	metadata := make(map[string]string, len(prof.labels)+1)
 	for k, v := range prof.labels {
@@ -272,11 +273,11 @@ func buildCreateOpts(prof vmProfile, userdata, name string) servers.CreateOpts {
 	return opts
 }
 
-// vmName — детерминированное имя i-й VM батча (NIM-16, чистая функция без
-// time-компоненты — иначе idempotency-скан не находил бы свои VM): nameBase
-// (CreateRequest.name, self-onboard «Вариант T» ADR-017(h)) → `<nameBase>-<seq>`
-// (keeper предсказал FQDN и запёк per-VM токен под ним — имя ОБЯЗАНО совпасть);
-// иначе `soul-<runLabel>-<seq>`.
+// vmName is the deterministic name of the i-th VM in the batch (NIM-16, a pure
+// function without a time component; otherwise idempotency scan would not find
+// its VMs): nameBase (CreateRequest.name, self-onboard "Variant T" ADR-017(h))
+// -> `<nameBase>-<seq>` (keeper predicted FQDN and baked a per-VM token under it
+// - the name MUST match); otherwise `soul-<runLabel>-<seq>`.
 func vmName(nameBase, runLabel string, seq int32) string {
 	if nameBase != "" {
 		return fmt.Sprintf("%s-%d", nameBase, seq)
@@ -284,12 +285,12 @@ func vmName(nameBase, runLabel string, seq int32) string {
 	return fmt.Sprintf("soul-%s-%d", runLabel, seq)
 }
 
-// gapFillNames выдаёт need имён для недостающих VM, беря первые свободные индексы
-// seq=0,1,2,… (занятые = имена existing) → при частичном rerun новые VM не
-// коллидируют по имени с уже существующими (NIM-16). Занятость считается по живым
-// existing: индекс VM в DELETING может переиспользоваться — nova, требующая
-// уникальные имена, ответит Conflict громко и без orphan-ов (дефолтная nova
-// дубли имён допускает — различение всё равно по metadata[runMetaKey]).
+// gapFillNames returns need names for missing VMs by taking the first free
+// indexes seq=0,1,2,... (occupied = existing names) -> on partial rerun, new VMs
+// do not collide by name with existing VMs (NIM-16). Occupancy is computed from
+// live existing VMs: an index of a VM in DELETING can be reused - nova requiring
+// unique names will answer Conflict loudly and without orphans (default nova
+// allows duplicate names; distinction is still by metadata[runMetaKey]).
 func gapFillNames(existing []servers.Server, nameBase, runLabel string, need int32) []string {
 	occupied := make(map[string]bool, len(existing))
 	for _, s := range existing {
@@ -306,9 +307,9 @@ func gapFillNames(existing []servers.Server, nameBase, runLabel string, need int
 	return names
 }
 
-// finalizeCreate ждёт готовности VM (ACTIVE + IP) и шлёт финальное событие.
-// Anti-orphan: при ctx-cancel/timeout недоехавшие VM попадают в финальное
-// событие с failed=true, но с заполненным vm_id — Keeper сможет их Destroy.
+// finalizeCreate waits for VM readiness (ACTIVE + IP) and sends the final event.
+// Anti-orphan: on ctx-cancel/timeout, unfinished VMs go into the final event with
+// failed=true but populated vm_id - Keeper can Destroy them.
 func (o *OpenstackDriver) finalizeCreate(ctx context.Context, cli osAPI, stream grpc.ServerStreamingServer[pluginv1.CreateEvent], backoff clouddriver.BackoffConfig, vmIDs []string) error {
 	probe := func(pctx context.Context, vmID string) clouddriver.ProbeResult {
 		srv, perr := cli.GetServer(pctx, vmID)
@@ -323,8 +324,8 @@ func (o *OpenstackDriver) finalizeCreate(ctx context.Context, cli osAPI, stream 
 			if primaryAddress(srv) != "" {
 				return clouddriver.ProbeResult{Ready: true}
 			}
-			// ACTIVE без адреса — продолжаем ждать (Neutron мог ещё не привязать
-			// порт). Не Ready и не Err: поллер повторит.
+			// ACTIVE without an address - keep waiting (Neutron may not have bound
+			// the port yet). Not Ready and not Err: poller will retry.
 			return clouddriver.ProbeResult{}
 		case statusBuild, statusRebuild:
 			return clouddriver.ProbeResult{}
@@ -355,8 +356,8 @@ func (o *OpenstackDriver) finalizeCreate(ctx context.Context, cli osAPI, stream 
 	}
 
 	if waitErr != nil {
-		// ctx-cancel / deadline: финальное событие НЕСЁТ vm_id всех созданных VM
-		// с failed=true (anti-orphan) — Keeper увидит instance-id и сможет Destroy.
+		// ctx-cancel / deadline: final event CARRIES vm_id of all created VMs with
+		// failed=true (anti-orphan) - Keeper sees instance-id and can Destroy.
 		return stream.Send(&pluginv1.CreateEvent{
 			Message: clouddriver.FailMessage(clouddriver.Classify(classifyOS, waitErr), "wait-until-ready", waitErr),
 			Vms:     vms,
@@ -370,16 +371,16 @@ func (o *OpenstackDriver) finalizeCreate(ctx context.Context, cli osAPI, stream 
 	})
 }
 
-// findByRunLabel перечисляет живые (ACTIVE/BUILD/REBUILD) VM с заданным
-// runLabel в текущем project-е. servers.List поддерживает filter по metadata
-// через ListOpts.Metadata в более новых API; в качестве переносимого варианта
-// фильтруем уже после: вытащить всё и отсеять Python-сайд.
+// findByRunLabel lists live (ACTIVE/BUILD/REBUILD) VMs with the given runLabel
+// in the current project. servers.List supports metadata filtering through
+// ListOpts.Metadata in newer APIs; as a portable fallback, fetch everything and
+// filter afterward on the Python side.
 //
-// В отличие от wb-драйвера name-матч-ветки нет: до-фиксовых unlabeled VM с
-// детерминированными именами у openstack не существует (anon-имена рандомные).
+// Unlike the wb driver, there is no name-match branch: openstack has no pre-fix
+// unlabeled VMs with deterministic names (anon names were random).
 //
-// PageSize не задаём — gophercloud Pager сам пейджит. AllTenants=false:
-// драйвер живёт в scope одного project-а (по credentials).
+// PageSize is not set - gophercloud Pager pages by itself. AllTenants=false: the
+// driver lives in the scope of one project (by credentials).
 func (o *OpenstackDriver) findByRunLabel(ctx context.Context, cli osAPI, backoff clouddriver.BackoffConfig, runLabel string) ([]servers.Server, error) {
 	var all []servers.Server
 	err := clouddriver.Retry(ctx, backoff, classifyOS, func() error {
@@ -411,8 +412,8 @@ func isLiveStatus(status string) bool {
 	return false
 }
 
-// Destroy: per-vm servers.Delete, стрим per-vm событий. OpenStack DeleteServer
-// не батчевый, поэтому идём списком; 404 (not_found) — идемпотент-успех.
+// Destroy: per-VM servers.Delete, stream per-VM events. OpenStack DeleteServer
+// is not batched, so we iterate the list; 404 (not_found) is idempotent success.
 func (o *OpenstackDriver) Destroy(req *pluginv1.DestroyRequest, stream grpc.ServerStreamingServer[pluginv1.DestroyEvent]) error {
 	ctx := stream.Context()
 	creds := credsFromMap(req.GetCredentials().AsMap())
@@ -446,8 +447,8 @@ func (o *OpenstackDriver) Destroy(req *pluginv1.DestroyRequest, stream grpc.Serv
 	return nil
 }
 
-// Status — опрос одной VM (servers.Get). credentials приходят отдельным полем
-// StatusRequest.credentials (A-flow, симметрично Create/Destroy).
+// Status polls one VM (servers.Get). credentials come in a separate
+// StatusRequest.credentials field (A-flow, symmetrical with Create/Destroy).
 func (o *OpenstackDriver) Status(ctx context.Context, req *pluginv1.StatusRequest) (*pluginv1.StatusReply, error) {
 	creds := credsFromMap(req.GetCredentials().AsMap())
 	cli, err := newOsClient(ctx, creds)
@@ -464,9 +465,9 @@ func (o *OpenstackDriver) Status(ctx context.Context, req *pluginv1.StatusReques
 	}, nil
 }
 
-// List — стрим инвентаря VM в project-е (опц. отфильтрованный по runLabel).
-// credentials приходят отдельным полем ListRequest.credentials (A-flow,
-// симметрично Create/Destroy/Status).
+// List streams VM inventory in the project (optionally filtered by runLabel).
+// credentials come in a separate ListRequest.credentials field (A-flow,
+// symmetrical with Create/Destroy/Status).
 func (o *OpenstackDriver) List(req *pluginv1.ListRequest, stream grpc.ServerStreamingServer[pluginv1.VmInfo]) error {
 	ctx := stream.Context()
 	creds := credsFromMap(req.GetCredentials().AsMap())
@@ -518,13 +519,13 @@ func serverIDs(ss []servers.Server) []string {
 	return out
 }
 
-// preferredFqdn — что использовать как Fqdn для Soul-host-а. OpenStack не
-// гарантирует FQDN в API (server.Name — короткое имя, не DNS-name), поэтому
-// fqdn-канон такой:
-//  1. AccessIPv4 (если задан floating IP) — внешне адресуемое имя/IP;
-//  2. primaryAddress() — первый IPv4 из server.Addresses, internal-сеть;
-//  3. пусто — Keeper-side примет решение (возможна ошибка provisioned, если
-//     IP не появился — задокументировано в manifest profile_schema).
+// preferredFqdn decides what to use as Fqdn for a Soul host. OpenStack does not
+// guarantee FQDN in the API (server.Name is a short name, not DNS name), so the
+// fqdn canon is:
+//  1. AccessIPv4 (if floating IP is set) - externally addressable name/IP;
+//  2. primaryAddress() - first IPv4 from server.Addresses, internal network;
+//  3. empty - Keeper-side decides (provisioned error is possible if IP did not
+//     appear; documented in manifest profile_schema).
 func preferredFqdn(s *servers.Server) string {
 	if s == nil {
 		return ""
@@ -535,10 +536,10 @@ func preferredFqdn(s *servers.Server) string {
 	return primaryAddress(s)
 }
 
-// primaryAddress — первый IPv4 из server.Addresses. Структура Addresses в
-// gophercloud — map[net-name][]Address; здесь нужен plain IPv4, не floating
-// (для floating используется AccessIPv4). Сетевое имя выбирается
-// детерминированно по сортировке ключей (стабильный inventory вывод).
+// primaryAddress returns the first IPv4 from server.Addresses. Addresses shape in
+// gophercloud is map[net-name][]Address; here plain IPv4 is needed, not floating
+// (AccessIPv4 is used for floating). Network name is chosen deterministically by
+// sorting keys (stable inventory output).
 func primaryAddress(s *servers.Server) string {
 	if s == nil || len(s.Addresses) == 0 {
 		return ""
@@ -570,9 +571,9 @@ func primaryAddress(s *servers.Server) string {
 	return ""
 }
 
-// sortStrings — компактная сортировка (без зависимости от sort.Strings, чтобы
-// helpers модуля оставались плоскими; n тут — число сетей у одной VM, обычно
-// 1-3, O(n²) безопасно).
+// sortStrings is compact sorting (without depending on sort.Strings so module
+// helpers stay flat; n here is the number of networks for one VM, usually 1-3,
+// O(n^2) is safe).
 func sortStrings(s []string) {
 	for i := 1; i < len(s); i++ {
 		for j := i; j > 0 && s[j-1] > s[j]; j-- {
@@ -607,9 +608,9 @@ func serverAttributes(s *servers.Server) *structpb.Struct {
 	return st
 }
 
-// flavorRef / imageRef — gophercloud парсит Flavor/Image как map[string]any
-// (Nova возвращает либо строковый ID, либо объект с href). Драйвер сводит к
-// плоскому "id" для attributes.
+// flavorRef / imageRef: gophercloud parses Flavor/Image as map[string]any (Nova
+// returns either a string ID or an object with href). The driver reduces this to
+// flat "id" for attributes.
 func flavorRef(s *servers.Server) string {
 	if s == nil {
 		return ""

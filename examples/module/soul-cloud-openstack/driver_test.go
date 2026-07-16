@@ -17,9 +17,9 @@ import (
 	"github.com/souls-guild/soul-stack/sdk/clouddriver"
 )
 
-// withFastBackoff подменяет defaultBackoff на «нулевые» задержки + указанный
-// MaxAttempts. Используется в wait-deadline / transient-probe тестах, где
-// дефолтный 1s→2s→4s сделал бы тест медленным.
+// withFastBackoff replaces defaultBackoff with "zero" delays + the given
+// MaxAttempts. Used in wait-deadline / transient-probe tests where the default
+// 1s->2s->4s would make the test slow.
 func withFastBackoff(t *testing.T, maxAttempts int) {
 	t.Helper()
 	orig := defaultBackoff
@@ -34,9 +34,9 @@ func withFastBackoff(t *testing.T, maxAttempts int) {
 	t.Cleanup(func() { defaultBackoff = orig })
 }
 
-// fakeOS — mock osAPI для L0-unit-тестов (без сети). Поведение настраивается
-// per-метод; getSeq моделирует переход BUILD→ACTIVE между раундами поллера.
-// getFn — override для тестов transient-probe-error.
+// fakeOS is a mock osAPI for L0 unit tests (without network). Behavior is
+// configured per method; getSeq models BUILD->ACTIVE transition between poller
+// rounds. getFn is an override for transient-probe-error tests.
 type fakeOS struct {
 	createOut  *servers.Server
 	createErr  error
@@ -68,7 +68,7 @@ func (f *fakeOS) CreateServer(_ context.Context, opts servers.CreateOptsBuilder)
 	if f.createOut != nil {
 		return f.createOut, nil
 	}
-	// Default: фабрикуем уникальный ID по имени запроса.
+	// Default: fabricate a unique ID from the request name.
 	if co, ok := opts.(servers.CreateOpts); ok {
 		return &servers.Server{ID: co.Name, Name: co.Name, Metadata: co.Metadata}, nil
 	}
@@ -108,7 +108,8 @@ func (f *fakeOS) ListServers(_ context.Context, _ servers.ListOptsBuilder) ([]se
 	return f.listOut, nil
 }
 
-// withFakeOS подменяет фабрику клиента на возврат f, восстанавливает после теста.
+// withFakeOS replaces the client factory to return f and restores it after the
+// test.
 func withFakeOS(t *testing.T, f *fakeOS) {
 	t.Helper()
 	orig := newOsClient
@@ -179,9 +180,9 @@ func validKeystoneCreds() map[string]any {
 	}
 }
 
-// activeServer — фабрика «готовой» VM с заданным ID и адресом (для probe-
-// happy-path и финального Get-а в finalizeCreate). Структура Addresses в
-// gophercloud — map[string]any → []map{addr,version,...}; повторяем её точно.
+// activeServer is a factory for a "ready" VM with the given ID and address (for
+// probe happy path and final Get in finalizeCreate). Addresses shape in
+// gophercloud is map[string]any -> []map{addr,version,...}; reproduce it exactly.
 func activeServer(id, ip string) *servers.Server {
 	return &servers.Server{
 		ID:     id,
@@ -226,13 +227,13 @@ func TestValidate_MissingFields(t *testing.T) {
 	}
 }
 
-// Validate региона НЕ требует — приватные облака без regions ок.
+// Validate does NOT require region - private clouds without regions are ok.
 func TestValidate_RegionOptional(t *testing.T) {
 	d := &OpenstackDriver{}
 	rep, err := d.Validate(context.Background(), &pluginv1.ValidateProfileRequest{
 		Profile: mustStruct(t, map[string]any{
 			"image_id": "img-1", "flavor_id": "m1.small", "network_id": "net-1",
-			// region: отсутствует
+			// region: absent
 		}),
 	})
 	if err != nil {
@@ -243,9 +244,10 @@ func TestValidate_RegionOptional(t *testing.T) {
 	}
 }
 
-// TestVmName_Precedence — детерминированное имя (NIM-16): nameBase из
-// CreateRequest.name даёт `<nameBase>-<seq>` (keeper предсказывает FQDN по нему),
-// побеждая runLabel; без nameBase — `soul-<runLabel>-<seq>` (anon-ветка удалена).
+// TestVmName_Precedence - deterministic name (NIM-16): nameBase from
+// CreateRequest.name gives `<nameBase>-<seq>` (keeper predicts FQDN from it),
+// taking precedence over runLabel; without nameBase - `soul-<runLabel>-<seq>`
+// (anon branch removed).
 func TestVmName_Precedence(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -267,9 +269,9 @@ func TestVmName_Precedence(t *testing.T) {
 	}
 }
 
-// TestCreate_HonorsRequestName — CreateRequest.name доходит до servers.Create как
-// `<name>-<seq>` + metadata-стамп runMetaKey=<name> (драйвер соблюдает
-// keeper-заданное имя для предсказуемого FQDN, self-onboard «Вариант T»).
+// TestCreate_HonorsRequestName - CreateRequest.name reaches servers.Create as
+// `<name>-<seq>` + metadata stamp runMetaKey=<name> (the driver honors the
+// keeper-provided name for predictable FQDN, self-onboard "Variant T").
 func TestCreate_HonorsRequestName(t *testing.T) {
 	f := &fakeOS{
 		createOut: &servers.Server{ID: "srv-1", Name: "redis-0", Status: statusBuild},
@@ -302,14 +304,14 @@ func TestCreate_HonorsRequestName(t *testing.T) {
 	}
 }
 
-// TestCreate_NameDerivedRerun_ReusesExisting — ★ NIM-16 центральный сценарий:
-// rerun шага с name и БЕЗ метки в профиле. Прошлый прогон застампил
-// metadata[runMetaKey]=<name> → скан (runLabel=nameBase) находит live VM и
-// переиспользует её. Регресс-страховка связки стамп+всегда-скан: красный при
-// откате фоллбека prof.runLabel=nameBase.
+// TestCreate_NameDerivedRerun_ReusesExisting - NIM-16 central scenario: rerun a
+// step with name and WITHOUT a profile label. The previous run stamped
+// metadata[runMetaKey]=<name> -> scan (runLabel=nameBase) finds a live VM and
+// reuses it. Regression guard for stamp+always-scan coupling: red on rollback of
+// fallback prof.runLabel=nameBase.
 func TestCreate_NameDerivedRerun_ReusesExisting(t *testing.T) {
 	existing := *activeServer("redis-0", "10.0.0.5")
-	existing.Metadata = map[string]string{runMetaKey: "redis"} // стамп прошлого прогона
+	existing.Metadata = map[string]string{runMetaKey: "redis"} // previous run stamp
 	f := &fakeOS{
 		listOut: []servers.Server{existing},
 		getSeq:  []*servers.Server{&existing},
@@ -320,7 +322,7 @@ func TestCreate_NameDerivedRerun_ReusesExisting(t *testing.T) {
 	s := &createStream{}
 	if err := d.Create(&pluginv1.CreateRequest{
 		Count: 1,
-		Profile: mustStruct(t, map[string]any{ // без labels — идентичность из Name
+		Profile: mustStruct(t, map[string]any{ // no labels - identity from Name
 			"image_id": "img-1", "flavor_id": "m1.small", "network_id": "net-1",
 		}),
 		Credentials: mustStruct(t, validKeystoneCreds()),
@@ -340,18 +342,19 @@ func TestCreate_NameDerivedRerun_ReusesExisting(t *testing.T) {
 	}
 }
 
-// TestCreate_NoIdentity_FailsClosed — ★ NIM-16: без name и без run-метки прогон
-// неотличим от предыдущих → повторный Create плодил бы orphan-VM. Fail-closed ДО
-// любого вызова OpenStack API (ни create, ни list, ни Keystone-auth).
+// TestCreate_NoIdentity_FailsClosed - NIM-16: without name and run label the run
+// is indistinguishable from previous ones -> repeated Create would create orphan
+// VMs. Fail-closed BEFORE any OpenStack API call (no create, no list, no
+// Keystone auth).
 func TestCreate_NoIdentity_FailsClosed(t *testing.T) {
-	withFastBackoff(t, 2) // регресс-страховка: без guard тест не должен спать до дедлайна
+	withFastBackoff(t, 2) // regression guard: without guard, test must not sleep until deadline
 	f := &fakeOS{}
 	withFakeOS(t, f)
 	d := &OpenstackDriver{}
 	s := &createStream{}
 	if err := d.Create(&pluginv1.CreateRequest{
 		Count: 1,
-		Profile: mustStruct(t, map[string]any{ // без labels, Name пуст
+		Profile: mustStruct(t, map[string]any{ // no labels, Name empty
 			"image_id": "img-1", "flavor_id": "m1.small", "network_id": "net-1",
 		}),
 		Credentials: mustStruct(t, validKeystoneCreds()),
@@ -411,7 +414,7 @@ func TestCreate_HappyPath(t *testing.T) {
 	if vm.PrimaryIp != "10.0.0.5" {
 		t.Errorf("primary_ip=%q", vm.PrimaryIp)
 	}
-	// userdata прокинут в CreateOpts plain []byte (gophercloud кодирует сам).
+	// userdata is passed into CreateOpts as plain []byte (gophercloud encodes it).
 	co, ok := f.lastCreateOpts.(servers.CreateOpts)
 	if !ok {
 		t.Fatalf("lastCreateOpts type=%T", f.lastCreateOpts)
@@ -426,9 +429,9 @@ func TestCreate_WaitsForActive(t *testing.T) {
 	f := &fakeOS{
 		createOut: &servers.Server{ID: "srv-bbb", Status: statusBuild},
 		getSeq: []*servers.Server{
-			// раунд 1: BUILD без адреса
+			// round 1: BUILD without address
 			{ID: "srv-bbb", Status: statusBuild},
-			// раунд 2: ACTIVE с IP
+			// round 2: ACTIVE with IP
 			activeServer("srv-bbb", "10.0.0.9"),
 		},
 	}
@@ -454,11 +457,11 @@ func TestCreate_WaitsForActive(t *testing.T) {
 	}
 }
 
-// Keystone-auth ошибка приходит ИЗ buildAuthOptions/newOsClient — драйвер шлёт
-// auth-event без вызова compute API. Проверяем, что путь `os-client` поднимает
-// FailAuth, не Transient.
+// Keystone auth error comes FROM buildAuthOptions/newOsClient - the driver sends
+// an auth event without calling compute API. Verify that `os-client` path raises
+// FailAuth, not Transient.
 func TestCreate_KeystoneAuthError(t *testing.T) {
-	// Подменяем фабрику на возврат ошибки (имитируем 401 от Keystone).
+	// Replace the factory to return an error (simulate 401 from Keystone).
 	orig := newOsClient
 	newOsClient = func(context.Context, osCredentials) (osAPI, error) {
 		return nil, gophercloud.ErrUnexpectedResponseCode{Actual: http.StatusUnauthorized, Body: []byte("bad creds")}
@@ -486,8 +489,8 @@ func TestCreate_KeystoneAuthError(t *testing.T) {
 	}
 }
 
-// Идемпотент-путь: findByRunLabel вернул живые VM ≥ count → драйвер НЕ зовёт
-// CreateServer, возвращает существующие.
+// Idempotent path: findByRunLabel returned live VMs >= count -> driver does NOT
+// call CreateServer, returns existing ones.
 func TestCreate_Idempotent_ReusesExisting(t *testing.T) {
 	existing := *activeServer("srv-existing", "10.1.1.1")
 	existing.Metadata = map[string]string{runMetaKey: "run-42"}
@@ -520,17 +523,17 @@ func TestCreate_Idempotent_ReusesExisting(t *testing.T) {
 	}
 }
 
-// Anti-orphan: ctx-cancel во время wait → финальное событие НЕСЁТ vm_id всех
-// созданных VM с failed=true (Keeper-side увидит и сможет Destroy).
+// Anti-orphan: ctx-cancel during wait -> final event CARRIES vm_id for all
+// created VMs with failed=true (Keeper-side will see them and can Destroy).
 func TestCreate_CtxCancel_AntiOrphan(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	f := &fakeOS{
 		createOut: &servers.Server{ID: "srv-orphan", Status: statusBuild},
-		// всегда BUILD → поллер крутится, пока ctx не отменят
+		// always BUILD -> poller runs until ctx is canceled
 		getSeq: []*servers.Server{{ID: "srv-orphan", Status: statusBuild}},
 	}
 	withFakeOS(t, f)
-	cancel() // отменяем сразу — поллер уйдёт в sleepCtx и вернёт ctx.Err
+	cancel() // cancel immediately - poller enters sleepCtx and returns ctx.Err
 
 	d := &OpenstackDriver{}
 	s := &createStream{ctx: ctx}
@@ -553,8 +556,8 @@ func TestCreate_CtxCancel_AntiOrphan(t *testing.T) {
 	}
 }
 
-// Wait-deadline (НЕ ctx-cancel): MaxAttempts исчерпался — failed-event с vm_id +
-// текстом «max attempts exhausted».
+// Wait-deadline (NOT ctx-cancel): MaxAttempts exhausted - failed event with vm_id
+// + "max attempts exhausted" text.
 func TestCreate_WaitDeadline_AntiOrphan(t *testing.T) {
 	withFastBackoff(t, 2)
 	f := &fakeOS{
@@ -584,8 +587,8 @@ func TestCreate_WaitDeadline_AntiOrphan(t *testing.T) {
 	}
 }
 
-// Терминальный статус во время wait (ERROR/SHUTOFF) — probe возвращает Err,
-// поллер прекращает опрос, финальное событие с failed=true + vm_id.
+// Terminal status during wait (ERROR/SHUTOFF) - probe returns Err, poller stops
+// polling, final event has failed=true + vm_id.
 func TestCreate_TerminalStatusProbe(t *testing.T) {
 	withFastBackoff(t, 4)
 	cases := []struct {
@@ -629,15 +632,15 @@ func TestCreate_TerminalStatusProbe(t *testing.T) {
 	}
 }
 
-// Transient probe-error (5xx во время Get) — глотается обёрткой probe,
-// следующий round успешен.
+// Transient probe-error (5xx during Get) is swallowed by the probe wrapper; next
+// round succeeds.
 func TestCreate_TransientProbeError_SwallowAndRetry(t *testing.T) {
 	withFastBackoff(t, 8)
 	f := &fakeOS{
 		createOut: &servers.Server{ID: "srv-trans", Status: statusBuild},
 	}
-	// call 0 — BUILD (первый probe round);
-	// call 1 — 503 (transient, проглатывается);
+	// call 0 - BUILD (first probe round);
+	// call 1 - 503 (transient, swallowed);
 	// call 2 — ACTIVE + IP → Ready.
 	f.getFn = func(call int) (*servers.Server, error) {
 		switch call {
@@ -672,8 +675,8 @@ func TestCreate_TransientProbeError_SwallowAndRetry(t *testing.T) {
 	}
 }
 
-// Idempotent over-count: список вернул больше VM, чем count → возвращаем все
-// найденные, без новых Create-ов.
+// Idempotent over-count: list returned more VMs than count -> return all found
+// VMs, without new Create calls.
 func TestCreate_Idempotent_OverCount(t *testing.T) {
 	withFastBackoff(t, 2)
 	existing := []servers.Server{
@@ -714,9 +717,9 @@ func TestCreate_Idempotent_OverCount(t *testing.T) {
 	}
 }
 
-// TestCreate_PartialRerun_NoIndexCollision — ★ NIM-16: частичный rerun по
-// metadata-метке. existing "soul-run-delta-0" (индекс 0 занят), count=2 → новая
-// VM берёт первый свободный индекс "soul-run-delta-1", а не дубль "-0".
+// TestCreate_PartialRerun_NoIndexCollision - NIM-16: partial rerun by metadata
+// label. existing "soul-run-delta-0" (index 0 occupied), count=2 -> new VM takes
+// first free index "soul-run-delta-1", not duplicate "-0".
 func TestCreate_PartialRerun_NoIndexCollision(t *testing.T) {
 	withFastBackoff(t, 2)
 	existing := *activeServer("soul-run-delta-0", "10.1.0.1")
@@ -797,7 +800,7 @@ func TestList_UsesCredentialsField(t *testing.T) {
 	}
 }
 
-// List с runLabel-фильтром — отбрасывает не-метчащие VM.
+// List with runLabel filter drops non-matching VMs.
 func TestList_FiltersByRunLabel(t *testing.T) {
 	a := *activeServer("srv-a", "10.7.7.1")
 	a.Metadata = map[string]string{runMetaKey: "run-x"}
@@ -862,7 +865,7 @@ func TestDestroy_NotFoundIsIdempotent(t *testing.T) {
 	}
 }
 
-// buildAuthOptions: validity-checks Keystone-credentials формы.
+// buildAuthOptions: validity-checks Keystone credentials form.
 func TestBuildAuthOptions(t *testing.T) {
 	good := osCredentials{
 		AuthURL:           "https://k/v3",
@@ -903,7 +906,7 @@ func TestBuildAuthOptions(t *testing.T) {
 	}
 }
 
-// buildAuthOptions принимает project_id вместо project_name (XOR).
+// buildAuthOptions accepts project_id instead of project_name (XOR).
 func TestBuildAuthOptions_AcceptsIDs(t *testing.T) {
 	creds := osCredentials{
 		AuthURL:         "https://k/v3",
@@ -918,7 +921,7 @@ func TestBuildAuthOptions_AcceptsIDs(t *testing.T) {
 	}
 }
 
-// classifyOS — таксономия по HTTP-кодам и эвристике.
+// classifyOS - taxonomy by HTTP codes and heuristics.
 func TestClassifyOS_HTTPCodes(t *testing.T) {
 	cases := map[int]clouddriver.FailClass{
 		http.StatusUnauthorized:          clouddriver.FailAuth,
@@ -937,11 +940,11 @@ func TestClassifyOS_HTTPCodes(t *testing.T) {
 			t.Errorf("classifyOS(%d)=%v, want %v", code, got, want)
 		}
 	}
-	// не-HTTP ошибка → transient
+	// non-HTTP error -> transient
 	if got := classifyOS(errors.New("dial tcp: timeout")); got != clouddriver.FailTransient {
 		t.Errorf("non-API err class=%v, want transient", got)
 	}
-	// эвристика по тексту: «quota exceeded» → quota; «throttling» → transient
+	// text heuristic: "quota exceeded" -> quota; "throttling" -> transient
 	if got := classifyOS(errors.New("Quota exceeded for instances")); got != clouddriver.FailQuota {
 		t.Errorf("quota heuristic class=%v, want quota", got)
 	}

@@ -10,12 +10,12 @@ import (
 	"github.com/gophercloud/gophercloud/v2/pagination"
 )
 
-// osAPI — узкое подмножество nova/servers API, которое использует драйвер.
-// Сужение (а не *gophercloud.ServiceClient напрямую) даёт mockability для
-// L0-unit-тестов без сети: тест подсовывает fake-реализацию (см.
-// driver_test.go). Сигнатуры намеренно идут «по-доменному» (Create принимает
-// уже собранные servers.CreateOpts, ExtractServers скрыт под List), чтобы
-// fake не повторял всю gophercloud-машинерию пагинации.
+// osAPI is the narrow subset of the nova/servers API used by the driver.
+// Narrowing (instead of using *gophercloud.ServiceClient directly) gives L0 unit
+// tests mockability without network access: tests provide a fake implementation
+// (see driver_test.go). Signatures are intentionally domain-oriented (Create
+// accepts already built servers.CreateOpts, ExtractServers is hidden under List)
+// so the fake does not repeat all gophercloud pagination machinery.
 type osAPI interface {
 	CreateServer(ctx context.Context, opts servers.CreateOptsBuilder) (*servers.Server, error)
 	GetServer(ctx context.Context, id string) (*servers.Server, error)
@@ -23,22 +23,22 @@ type osAPI interface {
 	ListServers(ctx context.Context, opts servers.ListOptsBuilder) ([]servers.Server, error)
 }
 
-// osCredentials — credentials провайдера, переданные Keeper-ом в
-// CreateRequest.credentials / DestroyRequest.credentials (A-flow). Драйвер в
-// Vault НЕ ходит — Keeper уже резолвил секрет.
+// osCredentials are provider credentials passed by Keeper in
+// CreateRequest.credentials / DestroyRequest.credentials (A-flow). The driver
+// does NOT call Vault - Keeper has already resolved the secret.
 //
-// OpenStack-аутентификация — Keystone v3 (identity-сервис), форма пароль+
-// domain+project. Минимальный набор полей по Keystone v3 password-scoped:
-//   - auth_url                 — endpoint identity (.../v3);
-//   - username + password      — учётка пользователя;
-//   - user_domain_name|_id     — домен учётки;
-//   - project_name|_id         — целевой project (tenant);
-//   - project_domain_name|_id  — домен проекта (часто совпадает с user-доменом).
+// OpenStack authentication is Keystone v3 (identity service), password +
+// domain + project form. Minimal field set for Keystone v3 password-scoped:
+//   - auth_url                 - identity endpoint (.../v3);
+//   - username + password      - user account;
+//   - user_domain_name|_id     - user account domain;
+//   - project_name|_id         - target project (tenant);
+//   - project_domain_name|_id  - project domain (often matches user domain).
 //
-// region — provider-specific метаданные, лежит рядом с auth-полями для симметрии
-// с awsCredentials.Region. Пустой region допустим (приватные облака без regions).
-// endpoint — override identity для тестов; в проде Keystone-каталог сам резолвит
-// compute-endpoint, override не нужен.
+// region is provider-specific metadata and lives next to auth fields for
+// symmetry with awsCredentials.Region. Empty region is valid (private clouds
+// without regions). endpoint is an identity override for tests; in prod the
+// Keystone catalog resolves compute-endpoint itself, so override is not needed.
 type osCredentials struct {
 	AuthURL           string
 	Username          string
@@ -50,11 +50,11 @@ type osCredentials struct {
 	ProjectDomainName string
 	ProjectDomainID   string
 	Region            string
-	Endpoint          string // override identity-endpoint (тесты); пусто = AuthURL
+	Endpoint          string // override identity-endpoint (tests); empty = AuthURL
 }
 
-// credKeys — имена полей credentials-Struct (контракт с Keeper-side
-// CredentialsResolverPG: значения из Vault KV + region из Provider-реестра).
+// credKeys are credentials Struct field names (contract with Keeper-side
+// CredentialsResolverPG: values from Vault KV + region from Provider registry).
 const (
 	credAuthURL           = "auth_url"
 	credUsername          = "username"
@@ -69,7 +69,7 @@ const (
 	credEndpoint          = "endpoint"
 )
 
-// credsFromMap извлекает [osCredentials] из decoded credentials-Struct.
+// credsFromMap extracts [osCredentials] from a decoded credentials Struct.
 func credsFromMap(m map[string]any) osCredentials {
 	return osCredentials{
 		AuthURL:           stringField(m, credAuthURL),
@@ -96,11 +96,11 @@ func stringField(m map[string]any, key string) string {
 	return ""
 }
 
-// buildAuthOptions конструирует gophercloud.AuthOptions из osCredentials с
-// минимальной валидацией (auth_url/username/password — обязательны; domain и
-// project — хотя бы по одному в каждой паре name|id). AllowReauth=true
-// позволяет gophercloud прозрачно перевыпускать просроченный Keystone-токен
-// внутри одного драйвер-вызова (на стыке Create+Wait).
+// buildAuthOptions constructs gophercloud.AuthOptions from osCredentials with
+// minimal validation (auth_url/username/password are required; domain and
+// project need at least one value in each name|id pair). AllowReauth=true lets
+// gophercloud transparently reissue an expired Keystone token inside one driver
+// call (around the Create+Wait boundary).
 func buildAuthOptions(c osCredentials) (gophercloud.AuthOptions, error) {
 	if c.AuthURL == "" {
 		return gophercloud.AuthOptions{}, fmt.Errorf("keystone auth_url is required")
@@ -139,13 +139,13 @@ func buildAuthOptions(c osCredentials) (gophercloud.AuthOptions, error) {
 	}, nil
 }
 
-// newOsClient конструирует osAPI из переданных credentials. credentials
-// приходят от Keeper-а явно — драйвер НЕ должен подхватывать ambient-окружение
-// (OS_* env-переменные).
+// newOsClient constructs osAPI from the supplied credentials. Credentials come
+// explicitly from Keeper - the driver must NOT pick up ambient environment
+// (OS_* env vars).
 //
-// newOsClient вынесен в переменную, чтобы L0-тесты подменяли его fake-фабрикой
-// без реального обращения к Keystone (см. driver_test.go). Аналогично
-// newEC2Client/newYcClient в соседних драйверах.
+// newOsClient is a variable so L0 tests can replace it with a fake factory
+// without a real Keystone call (see driver_test.go). Same as
+// newEC2Client/newYcClient in neighboring drivers.
 var newOsClient = func(ctx context.Context, c osCredentials) (osAPI, error) {
 	opts, err := buildAuthOptions(c)
 	if err != nil {
@@ -162,10 +162,10 @@ var newOsClient = func(ctx context.Context, c osCredentials) (osAPI, error) {
 	return &osRealClient{compute: compute}, nil
 }
 
-// osRealClient — реальная реализация osAPI поверх *gophercloud.ServiceClient
-// nova-compute. Извлекает (.Extract) из result-обёрток gophercloud, чтобы
-// драйверный код не видел gophercloud.Result. Pager для List разворачивается
-// здесь же — fake тогда возвращает плоский []servers.Server, симметрично YC-API.
+// osRealClient is the real osAPI implementation over *gophercloud.ServiceClient
+// nova-compute. It extracts (.Extract) from gophercloud result wrappers so driver
+// code does not see gophercloud.Result. Pager for List is unrolled here too, so
+// the fake returns flat []servers.Server, symmetrical with YC API.
 type osRealClient struct {
 	compute *gophercloud.ServiceClient
 }

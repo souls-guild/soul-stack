@@ -16,15 +16,16 @@ import (
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 )
 
-// L1 — driver-as-plugin через РЕАЛЬНЫЙ gRPC server+client (тот же
-// RegisterCloudDriverServer, что sdk/clouddriver.Serve навешивает после
-// handshake). Проверяет, что OpenstackDriver корректно работает по proto-
-// контракту CloudDriver — включая credentials/userdata — поверх настоящего
-// gRPC-стрима, а не in-proc вызова метода. Это L1 для тиража (симметрично
-// AWS/YC); handshake-spawn под Sigil-gate покрыт keeper-стороной отдельно.
+// L1 is driver-as-plugin through a REAL gRPC server+client (the same
+// RegisterCloudDriverServer that sdk/clouddriver.Serve attaches after
+// handshake). It verifies that OpenstackDriver correctly works through the
+// CloudDriver proto contract - including credentials/userdata - over a real gRPC
+// stream, not an in-proc method call. This is L1 for the rollout (symmetrical
+// with AWS/YC); handshake-spawn under Sigil-gate is covered separately on the
+// keeper side.
 
-// serveDriverGRPC поднимает CloudDriver-сервис на loopback и возвращает
-// клиент + teardown.
+// serveDriverGRPC starts the CloudDriver service on loopback and returns a
+// client + teardown.
 func serveDriverGRPC(t *testing.T, impl *OpenstackDriver) (pluginv1.CloudDriverClient, func()) {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
@@ -46,8 +47,8 @@ func serveDriverGRPC(t *testing.T, impl *OpenstackDriver) (pluginv1.CloudDriverC
 	return pluginv1.NewCloudDriverClient(conn), teardown
 }
 
-// l1Adapter — мост impl→CloudDriverServer (embed Unimplemented для forward-compat),
-// идентичный sdk/clouddriver.serverAdapter (тот неэкспортирован).
+// l1Adapter bridges impl -> CloudDriverServer (embedding Unimplemented for
+// forward compatibility), matching sdk/clouddriver.serverAdapter (not exported).
 type l1Adapter struct {
 	pluginv1.UnimplementedCloudDriverServer
 	impl *OpenstackDriver
@@ -119,9 +120,9 @@ func TestL1_CreateOverGRPC(t *testing.T) {
 	if len(lastVms) != 1 || lastVms[0].VmId != "srv-l1" || lastVms[0].Fqdn == "" {
 		t.Errorf("vms over gRPC = %+v", lastVms)
 	}
-	// credentials/userdata доехали через proto-стрим до драйвера. gophercloud
-	// servers.CreateOpts.UserData принимает []byte plain; драйвер кладёт его
-	// 1:1 (в отличие от EC2-варианта, где сам base64-кодирует).
+	// credentials/userdata arrived through the proto stream to the driver.
+	// gophercloud servers.CreateOpts.UserData accepts plain []byte; the driver
+	// puts it 1:1 (unlike the EC2 variant, where the driver base64-encodes it).
 	co, ok := f.lastCreateOpts.(servers.CreateOpts)
 	if !ok {
 		t.Fatalf("lastCreateOpts type=%T", f.lastCreateOpts)
