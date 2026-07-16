@@ -13,9 +13,9 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// withFastBackoff подменяет defaultBackoff на «нулевые» задержки + указанный
-// MaxAttempts. Используется в wait-deadline / transient-probe тестах, где
-// дефолтный 1s→2s→4s сделал бы тест медленным.
+// withFastBackoff replaces defaultBackoff with "zero" delays + the given
+// MaxAttempts. Used in wait-deadline / transient-probe tests where the default
+// 1s->2s->4s would make the test slow.
 func withFastBackoff(t *testing.T, maxAttempts int) {
 	t.Helper()
 	orig := defaultBackoff
@@ -30,9 +30,9 @@ func withFastBackoff(t *testing.T, maxAttempts int) {
 	t.Cleanup(func() { defaultBackoff = orig })
 }
 
-// fakePVE — mock pveAPI для L0-unit-тестов (без сети). Поведение настраивается
-// per-метод; statusSeq позволяет смоделировать переход locked→running между
-// раундами поллера, agentSeq — DHCP-handshake (сначала "", потом IP).
+// fakePVE is a mock pveAPI for L0 unit tests (without network). Behavior is
+// configured per method; statusSeq can model locked->running transition between
+// poller rounds, agentSeq models DHCP handshake (first "", then IP).
 type fakePVE struct {
 	cloneUPID  string
 	cloneErr   error
@@ -55,7 +55,7 @@ type fakePVE struct {
 	deleteErr   error
 	deleteCalls int
 
-	// statusSeq отдаёт по очереди для каждого вызова; последний элемент «залипает».
+	// statusSeq returns values in order for each call; the last element sticks.
 	statusSeq []VMStatus
 	statusErr error
 	statusIdx int
@@ -66,7 +66,7 @@ type fakePVE struct {
 	clusterErr   error
 	clusterCalls int
 
-	agentSeq   []string // primaryIP по вызовам
+	agentSeq   []string // primaryIP by call
 	agentErr   error
 	agentIdx   int
 	agentFn    func(call int, node string, vmid int) (string, error)
@@ -91,7 +91,7 @@ func (f *fakePVE) NextID(_ context.Context) (int, error) {
 		return 0, f.nextIDErr
 	}
 	id := f.nextID
-	f.nextID++ // следующий VMID при последовательном clone
+	f.nextID++ // next VMID for sequential clone
 	if id == 0 {
 		id = 10000
 		f.nextID = 10001
@@ -178,7 +178,8 @@ func (f *fakePVE) GetGuestAgentInterfaces(_ context.Context, node string, vmid i
 	return out, nil
 }
 
-// withFakePVE подменяет фабрику клиента на возврат f, восстанавливает после теста.
+// withFakePVE replaces the client factory to return f and restores it after the
+// test.
 func withFakePVE(t *testing.T, f *fakePVE) {
 	t.Helper()
 	orig := newPveClient
@@ -237,8 +238,8 @@ func mustStruct(t *testing.T, m map[string]any) *structpb.Struct {
 	return s
 }
 
-// baseProfile — минимальный валидный profile для Create. Параметризуем
-// доп-полями через add()-обёртку.
+// baseProfile is the minimal valid profile for Create. Parameterized with extra
+// fields through the add() wrapper.
 func baseProfile(extra map[string]any) map[string]any {
 	p := map[string]any{
 		"target_node":   "pve1",
@@ -250,7 +251,7 @@ func baseProfile(extra map[string]any) map[string]any {
 	return p
 }
 
-// baseCreds — минимальный валидный credentials Struct (token-based).
+// baseCreds is the minimal valid credentials Struct (token-based).
 func baseCreds() map[string]any {
 	return map[string]any{
 		"endpoint": "https://pve.example:8006",
@@ -296,7 +297,7 @@ func TestValidate_MissingFields(t *testing.T) {
 }
 
 // TestCreate_HappyPath — clone happy: NextID → CloneVM → SetVMConfig → StartVM
-// → probe возвращает running + guest-agent IP сразу.
+// -> probe returns running + guest-agent IP immediately.
 func TestCreate_HappyPath(t *testing.T) {
 	withFastBackoff(t, 4)
 	f := &fakePVE{
@@ -337,7 +338,7 @@ func TestCreate_HappyPath(t *testing.T) {
 	if vm.Fqdn != "soul-10000" {
 		t.Errorf("fqdn=%q, want VM name (soul-10000)", vm.Fqdn)
 	}
-	// CloneVM был вызван с правильными параметрами.
+	// CloneVM was called with correct params.
 	if f.cloneCalls != 1 {
 		t.Errorf("clone calls=%d, want 1", f.cloneCalls)
 	}
@@ -347,7 +348,7 @@ func TestCreate_HappyPath(t *testing.T) {
 	if !f.lastClone.FullClone {
 		t.Error("full_clone default must be true")
 	}
-	// SetVMConfig получил cores/memory/description (с base64 userdata).
+	// SetVMConfig received cores/memory/description (with base64 userdata).
 	if f.lastSetFields["cores"] != "4" || f.lastSetFields["memory"] != "4096" {
 		t.Errorf("set-config resources=%v", f.lastSetFields)
 	}
@@ -359,23 +360,23 @@ func TestCreate_HappyPath(t *testing.T) {
 	}
 }
 
-// TestCreate_WaitsForRunning — VM сначала locked (clone), потом running без
-// IP (DHCP-handshake), потом running + IP. Поллер должен переждать оба
-// промежуточных раунда без failed-event.
+// TestCreate_WaitsForRunning - VM is first locked (clone), then running without
+// IP (DHCP handshake), then running + IP. Poller must wait through both
+// intermediate rounds without a failed event.
 func TestCreate_WaitsForRunning(t *testing.T) {
 	withFastBackoff(t, 10)
 	f := &fakePVE{
 		statusSeq: []VMStatus{
-			lockedStatus("clone"),       // раунд 1: locked
-			{Status: "stopped"},         // раунд 2: не залочена, но ещё не стартанула
-			runningStatus("soul-10000"), // раунд 3+: running
+			lockedStatus("clone"),       // round 1: locked
+			{Status: "stopped"},         // round 2: not locked, but not started yet
+			runningStatus("soul-10000"), // round 3+: running
 		},
-		// agent: первый probe agent ещё не отвечает (по тексту 500 — Transient
-		// classify через pveHTTPError); потом IP.
+		// agent: first probe agent is not responding yet (500 text -> Transient
+		// classify through pveHTTPError); then IP.
 		agentFn: func(call int, _ string, _ int) (string, error) {
 			if call <= 1 {
-				// На промежуточные probe-раунды agent НЕ вызывается (status != running).
-				// На первом running-раунде вернём "" — DHCP в полёте.
+				// Agent is NOT called on intermediate probe rounds (status != running).
+				// On the first running round, return "" - DHCP in flight.
 				return "", nil
 			}
 			return "10.0.0.9", nil
@@ -401,17 +402,17 @@ func TestCreate_WaitsForRunning(t *testing.T) {
 	}
 }
 
-// TestCreate_AuthError — newPveClient падает при пустых credentials (нет ни
-// token, ни ticket-парами) → failed-event с auth-class префиксом, без clone.
+// TestCreate_AuthError - newPveClient fails on empty credentials (neither token
+// nor ticket pair) -> failed event with auth-class prefix, without clone.
 func TestCreate_AuthError(t *testing.T) {
-	// НЕ подменяем newPveClient — используем реальный, который вернёт
-	// auth-ошибку на пустых creds.
+	// Do NOT replace newPveClient - use the real one, which returns an auth error
+	// on empty creds.
 	d := &ProxmoxDriver{}
 	s := &createStream{}
 	if err := d.Create(&pluginv1.CreateRequest{
 		Count:       1,
 		Profile:     mustStruct(t, baseProfile(nil)),
-		Credentials: mustStruct(t, map[string]any{}), // никаких полей
+		Credentials: mustStruct(t, map[string]any{}), // no fields
 	}, s); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -424,8 +425,8 @@ func TestCreate_AuthError(t *testing.T) {
 	}
 }
 
-// TestCreate_Idempotent_ReusesExisting — findByRunTag вернул живые VM по тегу
-// → драйвер не зовёт Clone, идёт сразу в finalizeCreate.
+// TestCreate_Idempotent_ReusesExisting - findByRunTag returned live VMs by tag
+// -> driver does not call Clone and goes straight to finalizeCreate.
 func TestCreate_Idempotent_ReusesExisting(t *testing.T) {
 	withFastBackoff(t, 4)
 	f := &fakePVE{
@@ -461,16 +462,16 @@ func TestCreate_Idempotent_ReusesExisting(t *testing.T) {
 	}
 }
 
-// TestCreate_CtxCancel_AntiOrphan — ctx отменяется во время wait → финальный
-// failed-event несёт vm_id уже-склонированных VM, чтобы Keeper мог их Destroy.
+// TestCreate_CtxCancel_AntiOrphan - ctx is canceled during wait -> final failed
+// event carries vm_id for already cloned VMs so Keeper can Destroy them.
 func TestCreate_CtxCancel_AntiOrphan(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	f := &fakePVE{
-		// status навсегда locked (clone) — пуллер крутится, пока ctx не отменят.
+		// status forever locked (clone) - poller runs until ctx is canceled.
 		statusSeq: []VMStatus{lockedStatus("clone")},
 	}
 	withFakePVE(t, f)
-	cancel() // отменяем сразу — поллер уйдёт в sleepCtx и вернёт ctx.Err
+	cancel() // cancel immediately - poller enters sleepCtx and returns ctx.Err
 
 	d := &ProxmoxDriver{}
 	s := &createStream{ctx: ctx}
@@ -490,8 +491,8 @@ func TestCreate_CtxCancel_AntiOrphan(t *testing.T) {
 	}
 }
 
-// TestCreate_WaitDeadline_AntiOrphan — wait-поллер упирается в MaxAttempts (НЕ
-// ctx-cancel) → ErrWaitDeadline → failed-event с заполненным vm_id.
+// TestCreate_WaitDeadline_AntiOrphan - wait poller hits MaxAttempts (NOT
+// ctx-cancel) -> ErrWaitDeadline -> failed event with populated vm_id.
 func TestCreate_WaitDeadline_AntiOrphan(t *testing.T) {
 	withFastBackoff(t, 2)
 	f := &fakePVE{
@@ -520,9 +521,9 @@ func TestCreate_WaitDeadline_AntiOrphan(t *testing.T) {
 	}
 }
 
-// TestCreate_GuestAgentNotResponding — VM running, но guest-agent не настроен
-// (4xx/5xx, не-transient). Probe возвращает Err → finalizeCreate шлёт failed
-// для этой VM с заполненным vm_id (anti-orphan).
+// TestCreate_GuestAgentNotResponding - VM is running, but guest-agent is not
+// configured (4xx/5xx, non-transient). Probe returns Err -> finalizeCreate sends
+// failed for this VM with populated vm_id (anti-orphan).
 func TestCreate_GuestAgentNotResponding(t *testing.T) {
 	withFastBackoff(t, 4)
 	f := &fakePVE{
@@ -541,27 +542,27 @@ func TestCreate_GuestAgentNotResponding(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	last := s.last()
-	// 500 от Proxmox с текстом «is not running» классифицируется как not_found
-	// (см. classify.go) — это НЕ transient. Probe вернёт Err → VM helmed
-	// failed, но vm_id обязан быть.
+	// Proxmox 500 with "is not running" text classifies as not_found (see
+	// classify.go) - this is NOT transient. Probe returns Err -> VM is marked
+	// failed, but vm_id must be present.
 	if !last.Failed {
 		t.Fatal("expected failed=true when guest-agent fails fatally")
 	}
 	if len(last.Vms) != 1 || last.Vms[0].VmId != "pve1/10000" {
 		t.Errorf("anti-orphan vm_id missing: %+v", last.Vms)
 	}
-	// fqdn/primary_ip НЕ должны быть заполнены при failed probe.
+	// fqdn/primary_ip must NOT be populated on failed probe.
 	if last.Vms[0].PrimaryIp != "" {
 		t.Errorf("primary_ip=%q must be empty on probe failure", last.Vms[0].PrimaryIp)
 	}
 }
 
-// TestCreate_TransientProbeError_SwallowAndRetry — agent временно отдаёт
-// transient-ошибку (502) → probe-обёртка глотает её → следующий round успешен.
+// TestCreate_TransientProbeError_SwallowAndRetry - agent temporarily returns a
+// transient error (502) -> probe wrapper swallows it -> next round succeeds.
 func TestCreate_TransientProbeError_SwallowAndRetry(t *testing.T) {
 	withFastBackoff(t, 8)
 	f := &fakePVE{
-		// status стабильно running во всех раундах.
+		// status is steadily running in all rounds.
 		statusSeq: []VMStatus{runningStatus("soul-10000")},
 	}
 	// agent: call 0 → 502 (transient), call 1+ → IP.
@@ -591,8 +592,8 @@ func TestCreate_TransientProbeError_SwallowAndRetry(t *testing.T) {
 	}
 }
 
-// TestCreate_OverCount_Idempotent — findByRunTag вернул БОЛЬШЕ VM, чем
-// запрошенный count. Драйвер обязан вернуть всё найденное (не падать).
+// TestCreate_OverCount_Idempotent - findByRunTag returned MORE VMs than the
+// requested count. Driver must return everything found (not fail).
 func TestCreate_OverCount_Idempotent(t *testing.T) {
 	withFastBackoff(t, 4)
 	existing := []ClusterVM{
@@ -610,7 +611,7 @@ func TestCreate_OverCount_Idempotent(t *testing.T) {
 	d := &ProxmoxDriver{}
 	s := &createStream{}
 	if err := d.Create(&pluginv1.CreateRequest{
-		Count: 2, // меньше, чем реальное число существующих VM
+		Count: 2, // less than the real number of existing VMs
 		Profile: mustStruct(t, baseProfile(map[string]any{
 			"tags": map[string]any{runTagKey: "run-over"},
 		})),
@@ -630,14 +631,15 @@ func TestCreate_OverCount_Idempotent(t *testing.T) {
 	}
 }
 
-// TestCreate_NewVMIDStart — profile.new_vmid_start задан → драйвер НЕ зовёт
-// NextID, использует start+seq.
+// TestCreate_NewVMIDStart - profile.new_vmid_start is set -> driver does NOT
+// call NextID, uses start+seq.
 func TestCreate_NewVMIDStart(t *testing.T) {
 	withFastBackoff(t, 4)
 	f := &fakePVE{
 		statusSeq: []VMStatus{runningStatus("soul-15000")},
 		agentSeq:  []string{"10.0.0.5"},
-		// nextID 0 — если драйвер ошибочно вызовет, тест поймает по lastClone.NewVMID.
+		// nextID 0 - if the driver calls it by mistake, the test catches it through
+		// lastClone.NewVMID.
 	}
 	withFakePVE(t, f)
 
@@ -681,8 +683,8 @@ func TestDestroy_PerVM(t *testing.T) {
 	}
 }
 
-// TestDestroy_NotFoundIsIdempotent — Proxmox 500 «does not exist» на stop →
-// идемпотент-успех, без передачи в delete.
+// TestDestroy_NotFoundIsIdempotent - Proxmox 500 "does not exist" on stop ->
+// idempotent success, without passing to delete.
 func TestDestroy_NotFoundIsIdempotent(t *testing.T) {
 	f := &fakePVE{
 		stopErr: &pveHTTPError{Status: 500, Body: "VM 999 does not exist"},
@@ -704,8 +706,8 @@ func TestDestroy_NotFoundIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestDestroy_AlreadyStopped — Proxmox 500 «not running» на stop → драйвер
-// продолжает к delete (VM остановлена, но существует).
+// TestDestroy_AlreadyStopped - Proxmox 500 "not running" on stop -> driver
+// continues to delete (VM is stopped, but exists).
 func TestDestroy_AlreadyStopped(t *testing.T) {
 	withFastBackoff(t, 2)
 	f := &fakePVE{
@@ -728,8 +730,8 @@ func TestDestroy_AlreadyStopped(t *testing.T) {
 	}
 }
 
-// TestDestroy_InvalidVmID — vm_id не в формате `<node>/<vmid>` → invalid_params
-// per-event, остальные VM в списке продолжают обрабатываться.
+// TestDestroy_InvalidVmID - vm_id is not in `<node>/<vmid>` format ->
+// invalid_params per event, other VMs in the list continue processing.
 func TestDestroy_InvalidVmID(t *testing.T) {
 	f := &fakePVE{}
 	withFakePVE(t, f)
@@ -774,7 +776,7 @@ func TestStatus_UsesCredentials(t *testing.T) {
 	}
 }
 
-// TestStatus_InvalidVmID — Status с vm_id без `/` → ошибка invalid_params.
+// TestStatus_InvalidVmID - Status with vm_id without `/` -> invalid_params error.
 func TestStatus_InvalidVmID(t *testing.T) {
 	f := &fakePVE{}
 	withFakePVE(t, f)
@@ -793,9 +795,9 @@ func TestList_UsesCredentialsField(t *testing.T) {
 		clusterVMs: []ClusterVM{
 			{VMID: 201, Node: "pve1", Name: "soul-201", Tags: "soulstack-run=run-list;t1", Type: "qemu"},
 			{VMID: 202, Node: "pve2", Name: "soul-202", Tags: "soulstack-run=run-list", Type: "qemu"},
-			// LXC type — должен быть отфильтрован.
+			// LXC type must be filtered out.
 			{VMID: 999, Node: "pve1", Name: "ct-999", Tags: "soulstack-run=run-list", Type: "lxc"},
-			// Другой тег — не пройдёт filter.
+			// Different tag does not pass filter.
 			{VMID: 888, Node: "pve1", Name: "other", Tags: "soulstack-run=other-run", Type: "qemu"},
 		},
 	}
@@ -838,13 +840,13 @@ func TestClassifyProxmox_Codes(t *testing.T) {
 			}
 		})
 	}
-	// не-HTTP ошибка → transient (сеть/DNS/TLS)
+	// non-HTTP error -> transient (network/DNS/TLS)
 	if got := classifyProxmox(errors.New("dial tcp: timeout")); got != clouddriver.FailTransient {
 		t.Errorf("non-HTTP err class=%v, want transient", got)
 	}
 }
 
-// TestSplitFormatVmID_RoundTrip — формат vm_id `<node>/<vmid>` обратим.
+// TestSplitFormatVmID_RoundTrip - vm_id format `<node>/<vmid>` is reversible.
 func TestSplitFormatVmID_RoundTrip(t *testing.T) {
 	cases := []struct {
 		node string
@@ -866,7 +868,7 @@ func TestSplitFormatVmID_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestSplitVmID_Errors — некорректные формы vm_id отбраковываются.
+// TestSplitVmID_Errors - invalid vm_id forms are rejected.
 func TestSplitVmID_Errors(t *testing.T) {
 	bad := []string{"", "100", "pve1/", "/100", "pve1/abc", "pve1//100"}
 	for _, s := range bad {
@@ -876,8 +878,8 @@ func TestSplitVmID_Errors(t *testing.T) {
 	}
 }
 
-// TestHasTag — фильтр по теге игнорирует whitespace и принимает только точное
-// `key=value` совпадение.
+// TestHasTag - tag filter ignores whitespace and accepts only exact `key=value`
+// match.
 func TestHasTag(t *testing.T) {
 	cases := []struct {
 		tags  string

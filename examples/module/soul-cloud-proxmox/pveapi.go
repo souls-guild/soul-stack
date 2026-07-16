@@ -14,124 +14,125 @@ import (
 	"time"
 )
 
-// pveAPI — узкое подмножество Proxmox VE API v2 (REST), которое использует
-// драйвер. Сужение (а не *pveRealClient напрямую) даёт mockability для L0-unit-
-// тестов без сети: тест подсовывает fake-реализацию (см. driver_test.go).
+// pveAPI is the narrow subset of Proxmox VE API v2 (REST) used by the driver.
+// Narrowing (instead of *pveRealClient directly) gives L0 unit tests mockability
+// without network access: tests provide a fake implementation (see
+// driver_test.go).
 //
-// Сигнатуры спроектированы под фактический набор операций драйвера (clone из
-// template, статус, удаление, list по тегу, guest-agent IP), а не под полное
-// покрытие API — следуем принципу «узкий contract = простой mock».
+// Signatures are designed for the actual driver operation set (clone from
+// template, status, delete, list by tag, guest-agent IP), not full API coverage -
+// following the "narrow contract = simple mock" principle.
 //
-// Важно про vmid-paradigm: Proxmox VMID — int, существует только в контексте
-// node (clone делается на конкретной node, get/delete тоже). Поэтому почти все
-// методы принимают пару (node, vmid). Подход «глобальный vmid без node»
-// невозможен в Proxmox: один и тот же endpoint /nodes/<node>/qemu/<vmid> не
-// общий, route 404-ит при неверной node.
+// Important about the vmid paradigm: Proxmox VMID is int and exists only in the
+// context of a node (clone is done on a specific node, get/delete too). Therefore
+// almost all methods accept a (node, vmid) pair. A "global vmid without node"
+// approach is impossible in Proxmox: the same /nodes/<node>/qemu/<vmid> endpoint
+// is not shared, and the route 404s for a wrong node.
 type pveAPI interface {
-	// CloneVM делает POST /nodes/<source_node>/qemu/<template_vmid>/clone.
-	// Возвращает UPID-задачи. Source-node может отличаться от newnode — Proxmox
-	// сделает live-clone между node при наличии shared-storage.
+	// CloneVM does POST /nodes/<source_node>/qemu/<template_vmid>/clone. Returns
+	// task UPID. Source-node may differ from newnode; Proxmox performs live clone
+	// between nodes when shared storage is available.
 	CloneVM(ctx context.Context, params CloneParams) (taskUPID string, err error)
 
-	// NextID — GET /cluster/nextid: атомарно резервирует следующий свободный
-	// VMID в рамках кластера. Используется когда profile.new_vmid_start не
-	// задан (или 0).
+	// NextID is GET /cluster/nextid: atomically reserves the next free VMID in the
+	// cluster. Used when profile.new_vmid_start is not set (or 0).
 	NextID(ctx context.Context) (int, error)
 
-	// SetVMConfig — POST /nodes/<node>/qemu/<vmid>/config: задание полей
+	// SetVMConfig is POST /nodes/<node>/qemu/<vmid>/config: sets fields for
 	// cloud-init (`ciuser`/`cipassword`/`sshkeys`/`cicustom`/…), tags, name.
-	// Поля передаются map-ом → form-encoded body Proxmox-style.
+	// Fields are passed as a map -> form-encoded body, Proxmox-style.
 	SetVMConfig(ctx context.Context, node string, vmid int, fields map[string]string) error
 
-	// StartVM — POST /nodes/<node>/qemu/<vmid>/status/start. Возвращает UPID.
+	// StartVM is POST /nodes/<node>/qemu/<vmid>/status/start. Returns UPID.
 	StartVM(ctx context.Context, node string, vmid int) (taskUPID string, err error)
 
-	// StopVM — POST /nodes/<node>/qemu/<vmid>/status/stop (forced). Возвращает
-	// UPID. Если VM уже остановлена/удалена — Proxmox вернёт 500/«does not
-	// exist» (классификатор переведёт в not_found/transient).
+	// StopVM is POST /nodes/<node>/qemu/<vmid>/status/stop (forced). Returns UPID.
+	// If VM is already stopped/deleted, Proxmox returns 500/"does not exist" (the
+	// classifier maps it to not_found/transient).
 	StopVM(ctx context.Context, node string, vmid int) (taskUPID string, err error)
 
-	// DeleteVM — DELETE /nodes/<node>/qemu/<vmid>. Возвращает UPID. Не падает
-	// если VM running — Proxmox сам ругнётся 500; драйвер делает stop→delete.
+	// DeleteVM is DELETE /nodes/<node>/qemu/<vmid>. Returns UPID. It does not fail
+	// locally if VM is running; Proxmox itself returns 500, and the driver performs
+	// stop->delete.
 	DeleteVM(ctx context.Context, node string, vmid int) (taskUPID string, err error)
 
 	// GetVMStatus — GET /nodes/<node>/qemu/<vmid>/status/current.
 	GetVMStatus(ctx context.Context, node string, vmid int) (VMStatus, error)
 
-	// ListClusterVMs — GET /cluster/resources?type=vm. Используется в Create
-	// (idempotent-find по tag) и в List. tag-фильтрация на стороне драйвера —
-	// Proxmox-API не имеет server-side filter по tag в /cluster/resources.
+	// ListClusterVMs is GET /cluster/resources?type=vm. Used in Create
+	// (idempotent find by tag) and in List. Tag filtering is driver-side: Proxmox
+	// API has no server-side tag filter in /cluster/resources.
 	ListClusterVMs(ctx context.Context) ([]ClusterVM, error)
 
 	// GetGuestAgentInterfaces — POST /nodes/<node>/qemu/<vmid>/agent/network-
-	// get-interfaces. Возвращает IP первой не-loopback IPv4-интерфейс.
-	// Возвращает пустую строку (без ошибки) если guest-agent ответил, но IP
-	// ещё не назначен (DHCP-handshake в полёте); ошибку — если guest-agent не
-	// настроен/не отвечает (502/timeout от Proxmox).
+	// get-interfaces. Returns IP of the first non-loopback IPv4 interface. Returns
+	// empty string (without error) if guest-agent responded but IP is not assigned
+	// yet (DHCP handshake in flight); returns error if guest-agent is not
+	// configured/not responding (502/timeout from Proxmox).
 	GetGuestAgentInterfaces(ctx context.Context, node string, vmid int) (primaryIP string, err error)
 }
 
-// CloneParams — параметры clone-операции Proxmox.
+// CloneParams are params for the Proxmox clone operation.
 type CloneParams struct {
-	SourceNode    string // на какой node живёт template_vmid
-	TemplateVMID  int    // VMID шаблона-источника
-	NewVMID       int    // VMID новой VM (обязателен; берём NextID если 0)
-	Name          string // hostname новой VM (Proxmox /name)
-	TargetNode    string // node назначения (если отличается от SourceNode)
-	TargetStorage string // storage для full-clone
+	SourceNode    string // node where template_vmid lives
+	TemplateVMID  int    // source template VMID
+	NewVMID       int    // new VM VMID (required; take NextID if 0)
+	Name          string // new VM hostname (Proxmox /name)
+	TargetNode    string // destination node (if different from SourceNode)
+	TargetStorage string // storage for full-clone
 	FullClone     bool   // true=copy, false=linked-snapshot
 }
 
-// VMStatus — поднабор полей /status/current, который нужен драйверу.
-// Полная схема Proxmox шире (mem/cpu/uptime/…), но wait/probe нужен только
+// VMStatus is the subset of /status/current fields needed by the driver. The
+// full Proxmox schema is wider (mem/cpu/uptime/...), but wait/probe needs only
 // `status` + qmpstatus + tags + name.
 type VMStatus struct {
-	Node      string   `json:"-"` // заполняется драйвером, не приходит из API
+	Node      string   `json:"-"` // filled by driver, not from API
 	VMID      int      `json:"vmid"`
 	Status    string   `json:"status"`    // "running"|"stopped"
-	QmpStatus string   `json:"qmpstatus"` // "running"|"paused"|… (детализирует Status)
+	QmpStatus string   `json:"qmpstatus"` // "running"|"paused"|... (details Status)
 	Name      string   `json:"name"`
 	Tags      string   `json:"tags"` // semicolon-separated
 	Maxmem    int64    `json:"maxmem"`
 	Maxdisk   int64    `json:"maxdisk"`
 	Cpus      float64  `json:"cpus"`
-	Lock      string   `json:"lock"` // во время clone/migrate — "clone"/"migrate"
+	Lock      string   `json:"lock"` // during clone/migrate - "clone"/"migrate"
 	Agent     int      `json:"agent"`
 	NetIn     int64    `json:"netin"`
 	NetOut    int64    `json:"netout"`
-	IPS       []string `json:"-"` // не из API; драйвер заполняет из guest-agent отдельно
+	IPS       []string `json:"-"` // not from API; driver fills separately from guest-agent
 }
 
-// ClusterVM — элемент /cluster/resources?type=vm. У cluster-resource VMID,
-// node, status, tags доступны без per-node-вызовов.
+// ClusterVM is an item from /cluster/resources?type=vm. For cluster-resource,
+// VMID, node, status, and tags are available without per-node calls.
 type ClusterVM struct {
 	VMID   int    `json:"vmid"`
 	Node   string `json:"node"`
 	Status string `json:"status"` // "running"|"stopped"
 	Name   string `json:"name"`
 	Tags   string `json:"tags"`
-	Type   string `json:"type"` // "qemu"|"lxc"; нас интересует qemu
+	Type   string `json:"type"` // "qemu"|"lxc"; qemu is what we need
 }
 
-// pveCredentials — credentials провайдера, переданные Keeper-ом в
-// CreateRequest.credentials / DestroyRequest.credentials (A-flow). Драйвер в
-// Vault НЕ ходит — Keeper уже резолвил секрет.
+// pveCredentials are provider credentials passed by Keeper in
+// CreateRequest.credentials / DestroyRequest.credentials (A-flow). The driver
+// does NOT call Vault - Keeper has already resolved the secret.
 //
-// Proxmox VE поддерживает две формы XOR:
-//   - API-token (рекомендован, не expires): claims в одной строке формата
-//     `<user>@<realm>!<token-id>=<value>`. Кладётся в Authorization-заголовок
-//     как `PVEAPIToken=<token>`. Для read-only ролей достаточен.
-//   - Ticket-based: username+password+realm → POST /access/ticket → cookie +
-//     CSRFPreventionToken. Cookie действует 2 часа. Используется когда у
-//     оператора нет API-token (legacy / dev).
+// Proxmox VE supports two XOR forms:
+//   - API-token (recommended, does not expire): claims in one string
+//     `<user>@<realm>!<token-id>=<value>`. Placed in the Authorization header as
+//     `PVEAPIToken=<token>`. Sufficient for read-only roles.
+//   - Ticket-based: username+password+realm -> POST /access/ticket -> cookie +
+//     CSRFPreventionToken. Cookie is valid for 2 hours. Used when the operator
+//     has no API-token (legacy / dev).
 //
-// Поля XOR: либо token, либо username+password+realm. Endpoint — обязателен
-// (https://<host>:8006/api2/json). insecure_tls — для self-signed cert (по
-// умолчанию Proxmox его генерирует сам).
+// XOR fields: either token, or username+password+realm. Endpoint is required
+// (https://<host>:8006/api2/json). insecure_tls is for self-signed cert (Proxmox
+// generates one by default).
 type pveCredentials struct {
-	Endpoint    string // https://pve.example:8006 (без /api2/json — добавим сами)
-	Token       string // PVEAPIToken=<user>@<realm>!<tokenid>=<secret> (без префикса)
-	Username    string // user@realm для ticket-auth
+	Endpoint    string // https://pve.example:8006 (without /api2/json - added here)
+	Token       string // PVEAPIToken=<user>@<realm>!<tokenid>=<secret> (without prefix)
+	Username    string // user@realm for ticket auth
 	Password    string
 	Realm       string
 	InsecureTLS bool
@@ -146,7 +147,7 @@ const (
 	credInsecureTLS = "insecure_tls"
 )
 
-// credsFromMap извлекает [pveCredentials] из decoded credentials-Struct.
+// credsFromMap extracts [pveCredentials] from a decoded credentials Struct.
 func credsFromMap(m map[string]any) pveCredentials {
 	c := pveCredentials{
 		Endpoint: stringField(m, credEndpoint),
@@ -173,8 +174,8 @@ func stringField(m map[string]any, key string) string {
 	return ""
 }
 
-// resolveAuth выбирает XOR-ветку auth (token / ticket). Возвращает ошибку,
-// если не указано ни одной из форм либо указано обе.
+// resolveAuth chooses the XOR auth branch (token / ticket). Returns an error if
+// neither form is set or both are set.
 func resolveAuth(c pveCredentials) error {
 	hasToken := c.Token != ""
 	hasTicket := c.Username != "" && c.Password != "" && c.Realm != ""
@@ -190,23 +191,23 @@ func resolveAuth(c pveCredentials) error {
 	return nil
 }
 
-// newPveClient конструирует pveAPI из переданных credentials. Static-провайдер
-// (не ambient chain): драйвер НЕ должен подхватывать env / token-file хоста.
+// newPveClient constructs pveAPI from the supplied credentials. Static provider
+// (not ambient chain): the driver must NOT pick up env / token-file from host.
 //
-// newPveClient вынесен в переменную, чтобы L0-тесты подменяли его fake-фабрикой
-// без поднятия HTTP-клиента (см. driver_test.go).
+// newPveClient is a variable so L0 tests can replace it with a fake factory
+// without creating an HTTP client (see driver_test.go).
 var newPveClient = func(ctx context.Context, c pveCredentials) (pveAPI, error) {
 	if err := resolveAuth(c); err != nil {
 		return nil, err
 	}
 	tr := &http.Transport{
-		// MinVersion: TLS 1.2 — базовый floor. TLS 1.3 не выставляем —
-		// Proxmox API на старых дистрах может не поддерживать.
+		// MinVersion: TLS 1.2 is the baseline floor. TLS 1.3 is not forced because
+		// Proxmox API on older distros may not support it.
 		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: c.InsecureTLS},
 	}
 	hc := &http.Client{
 		Transport: tr,
-		Timeout:   60 * time.Second, // per-request; общий ctx ещё в драйвере
+		Timeout:   60 * time.Second, // per-request; shared ctx is still in driver
 	}
 	base := strings.TrimRight(c.Endpoint, "/")
 	if !strings.HasSuffix(base, "/api2/json") {
@@ -217,8 +218,8 @@ var newPveClient = func(ctx context.Context, c pveCredentials) (pveAPI, error) {
 		base:  base,
 		creds: c,
 	}
-	// Для ticket-flow сразу авторизуемся; для token — Authorization-заголовок
-	// формируется на каждый запрос (stateless).
+	// For ticket-flow, authorize immediately; for token, Authorization header is
+	// formed on every request (stateless).
 	if c.Token == "" {
 		if err := cli.login(ctx); err != nil {
 			return nil, fmt.Errorf("pve ticket login: %w", err)
@@ -227,20 +228,20 @@ var newPveClient = func(ctx context.Context, c pveCredentials) (pveAPI, error) {
 	return cli, nil
 }
 
-// pveRealClient — реальная реализация pveAPI поверх Proxmox VE REST API v2.
-// Документация: https://pve.proxmox.com/pve-docs/api-viewer/.
+// pveRealClient is the real pveAPI implementation over Proxmox VE REST API v2.
+// Documentation: https://pve.proxmox.com/pve-docs/api-viewer/.
 type pveRealClient struct {
 	hc    *http.Client
 	base  string // https://pve.example:8006/api2/json
 	creds pveCredentials
 
-	// ticket-flow state (пустые для token-auth):
+	// ticket-flow state (empty for token-auth):
 	ticket    string
 	csrfToken string
 }
 
-// login — POST /access/ticket для ticket-flow. Записывает ticket+csrf, которые
-// будут отправляться в Cookie/CSRFPreventionToken последующих запросов.
+// login is POST /access/ticket for ticket-flow. Stores ticket+csrf that are sent
+// in Cookie/CSRFPreventionToken on subsequent requests.
 func (c *pveRealClient) login(ctx context.Context) error {
 	form := url.Values{
 		"username": []string{c.creds.Username + "@" + c.creds.Realm},
@@ -269,7 +270,7 @@ func (c *pveRealClient) login(ctx context.Context) error {
 	return nil
 }
 
-// authHeaders проставляет Authorization (token) или Cookie+CSRF (ticket).
+// authHeaders sets Authorization (token) or Cookie+CSRF (ticket).
 func (c *pveRealClient) authHeaders(req *http.Request) {
 	if c.creds.Token != "" {
 		req.Header.Set("Authorization", "PVEAPIToken="+c.creds.Token)
@@ -282,8 +283,8 @@ func (c *pveRealClient) authHeaders(req *http.Request) {
 	}
 }
 
-// doJSON делает запрос и парсит JSON в out. При ≥400 строит pveHTTPError с
-// telmate-style code/message, чтобы classify.go мог разложить по FailClass.
+// doJSON performs the request and parses JSON into out. For >=400 it builds
+// pveHTTPError with telmate-style code/message so classify.go can map FailClass.
 func (c *pveRealClient) doJSON(req *http.Request, out any) error {
 	c.authHeaders(req)
 	resp, err := c.hc.Do(req)
@@ -301,7 +302,7 @@ func (c *pveRealClient) doJSON(req *http.Request, out any) error {
 	return json.Unmarshal(body, out)
 }
 
-// pveHTTPError — ошибка с HTTP-кодом, на которую опирается classifyProxmox.
+// pveHTTPError is an error with HTTP code that classifyProxmox relies on.
 type pveHTTPError struct {
 	Status int
 	Body   string
@@ -345,7 +346,7 @@ func (c *pveRealClient) NextID(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	// /cluster/nextid возвращает строку-VMID в .data (Proxmox-конвенция).
+	// /cluster/nextid returns string VMID in .data (Proxmox convention).
 	var reply struct {
 		Data string `json:"data"`
 	}
@@ -445,8 +446,8 @@ func (c *pveRealClient) ListClusterVMs(ctx context.Context) ([]ClusterVM, error)
 }
 
 // GetGuestAgentInterfaces — POST /nodes/<node>/qemu/<vmid>/agent/network-get-
-// interfaces. QEMU guest-agent должен быть установлен в гостевой OS И включён
-// в /config (agent=1).
+// interfaces. QEMU guest-agent must be installed in the guest OS AND enabled in
+// /config (agent=1).
 func (c *pveRealClient) GetGuestAgentInterfaces(ctx context.Context, node string, vmid int) (string, error) {
 	endpoint := fmt.Sprintf("%s/nodes/%s/qemu/%d/agent/network-get-interfaces", c.base, node, vmid)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)

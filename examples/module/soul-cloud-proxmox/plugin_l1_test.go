@@ -15,14 +15,14 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// L1 — driver-as-plugin через РЕАЛЬНЫЙ gRPC server+client (тот же
-// RegisterCloudDriverServer, что sdk/clouddriver.Serve навешивает после
-// handshake). Проверяет, что ProxmoxDriver корректно работает по proto-
-// контракту CloudDriver — включая поля credentials/userdata + composite vm_id
-// формата `<node>/<vmid>` — поверх настоящего gRPC-стрима, а не in-proc вызова.
+// L1 is driver-as-plugin through a REAL gRPC server+client (the same
+// RegisterCloudDriverServer that sdk/clouddriver.Serve attaches after
+// handshake). It verifies that ProxmoxDriver correctly works through the
+// CloudDriver proto contract - including credentials/userdata + composite vm_id
+// format `<node>/<vmid>` - over a real gRPC stream, not an in-proc method call.
 
-// serveDriverGRPC поднимает CloudDriver-сервис на TCP-loopback и возвращает
-// клиент + teardown.
+// serveDriverGRPC starts the CloudDriver service on TCP loopback and returns a
+// client + teardown.
 func serveDriverGRPC(t *testing.T, impl *ProxmoxDriver) (pluginv1.CloudDriverClient, func()) {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
@@ -44,8 +44,8 @@ func serveDriverGRPC(t *testing.T, impl *ProxmoxDriver) (pluginv1.CloudDriverCli
 	return pluginv1.NewCloudDriverClient(conn), teardown
 }
 
-// l1Adapter — мост impl→CloudDriverServer (embed Unimplemented для forward-compat),
-// идентичный sdk/clouddriver.serverAdapter (тот неэкспортирован).
+// l1Adapter bridges impl -> CloudDriverServer (embedding Unimplemented for
+// forward compatibility), matching sdk/clouddriver.serverAdapter (not exported).
 type l1Adapter struct {
 	pluginv1.UnimplementedCloudDriverServer
 	impl *ProxmoxDriver
@@ -121,7 +121,7 @@ func TestL1_CreateOverGRPC(t *testing.T) {
 	if lastVms[0].PrimaryIp != "10.2.2.2" {
 		t.Errorf("primary_ip over gRPC=%q", lastVms[0].PrimaryIp)
 	}
-	// userdata доехал — драйвер положил его в base64 в description field.
+	// userdata arrived - the driver put it in base64 in the description field.
 	if desc, ok := f.lastSetFields["description"]; !ok || !strings.Contains(desc, "soul-stack userdata") {
 		t.Errorf("userdata lost over gRPC: description=%q", desc)
 	}

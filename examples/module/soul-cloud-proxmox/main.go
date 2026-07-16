@@ -1,40 +1,42 @@
-// soul-cloud-proxmox — реальный CloudDriver-плагин Soul Stack для Proxmox VE
-// (ADR-016 Фаза 4 cloud parity; тираж по pattern-у soul-cloud-aws).
+// soul-cloud-proxmox is a real Soul Stack CloudDriver plugin for Proxmox VE
+// (ADR-016 Phase 4 cloud parity; rollout by the soul-cloud-aws pattern).
 //
-// Собирается в статический бинарь `soul-cloud-proxmox`. Keeper-side модуль
-// `core.cloud.provisioned` (ADR-017) запускает его как sub-process, делает
-// gRPC-stdio handshake (sdk/handshake) и зовёт RPC CloudDriver.
+// Builds into the static binary `soul-cloud-proxmox`. The Keeper-side
+// `core.cloud.provisioned` module (ADR-017) starts it as a sub-process, performs
+// the gRPC-stdio handshake (sdk/handshake), and calls CloudDriver RPCs.
 //
-// Credentials (A-flow, docs/keeper/cloud.md): Keeper резолвит секрет из Vault и
-// кладёт plain в CreateRequest.credentials / DestroyRequest.credentials; драйвер
-// в Vault НЕ ходит. Proxmox поддерживает две формы XOR: API-token (формата
-// `<user>@<realm>!<token-id>=<value>`) или ticket-based (username+password+
-// realm). Endpoint обязателен (https://<host>:8006). См. pveapi.go.
+// Credentials (A-flow, docs/keeper/cloud.md): Keeper resolves the secret from
+// Vault and places plain values in CreateRequest.credentials /
+// DestroyRequest.credentials; the driver does NOT call Vault. Proxmox supports
+// two XOR forms: API-token (`<user>@<realm>!<token-id>=<value>`) or ticket-based
+// (username+password+realm). Endpoint is required (https://<host>:8006). See
+// pveapi.go.
 //
-// Shared-каркас (error-таксономия / wait-until-ready / retry-backoff) — из
-// sdk/clouddriver, общий для всех драйверов тиража. Provider-specific здесь —
-// только вызовы PVE REST API и Proxmox-классификатор ошибок (classify.go).
+// Shared framework (error taxonomy / wait-until-ready / retry-backoff) comes
+// from sdk/clouddriver and is common to all rollout drivers. Provider-specific
+// pieces here are only PVE REST API calls and the Proxmox error classifier
+// (classify.go).
 //
 // # vm_id-paradigm: composite `<node>/<vmid>`
 //
-// Proxmox — НЕ облако в обычном смысле: VM живёт на конкретной node гипервизор-
-// кластера; одного и того же endpoint /qemu/<vmid> не существует — он
-// per-node (/nodes/<node>/qemu/<vmid>). Поэтому драйвер сериализует proto-
-// идентификатор VM как composite-строку `<node>/<vmid>` — это даёт самодоста-
-// точный ID для Destroy/Status без отдельного state-storage на keeper-стороне
-// (vmid→node map). Симметрично AWS instance-id (там тоже строка, но без `/`).
-// Парсинг — splitVmID(); сборка — formatVmID(). proto-поле VmInfo.vm_id (string)
-// не меняет своей формы; ограничение для оператора — никаких слешей в имени
-// node (Proxmox их и не разрешает).
+// Proxmox is NOT a cloud in the usual sense: a VM lives on a specific hypervisor
+// cluster node; the same /qemu/<vmid> endpoint does not exist globally - it is
+// per-node (/nodes/<node>/qemu/<vmid>). Therefore the driver serializes the proto
+// VM identifier as a composite string `<node>/<vmid>`; this gives a self-contained
+// ID for Destroy/Status without separate state storage on the keeper side
+// (vmid->node map). Symmetrical with AWS instance-id (also a string, but without
+// `/`). Parsing is splitVmID(); formatting is formatVmID(). The proto field
+// VmInfo.vm_id (string) keeps its shape; operator constraint: no slashes in node
+// names (Proxmox does not allow them either).
 //
-// # create-модель: clone из template, не launch image
+// # create model: clone from template, not launch image
 //
-// В отличие от AWS (RunInstances из AMI) и YC (CreateInstance из image_id),
-// Proxmox-create = `qm clone <template> <newid>`: VM создаётся как полная или
-// linked-копия предсуществующего qemu-шаблона (VMID ≥ 100). Шаблон уже несёт
-// подготовленный cloud-init (или мы дополним конфиг через SetVMConfig).
-// Параметры профиля (cores/memory/storage/bridge) применяются POST-clone-ом
-// через /config; ресурсы из шаблона перезаписываются.
+// Unlike AWS (RunInstances from AMI) and YC (CreateInstance from image_id),
+// Proxmox-create = `qm clone <template> <newid>`: the VM is created as a full or
+// linked copy of an existing qemu template (VMID >= 100). The template already
+// carries prepared cloud-init (or we extend config through SetVMConfig). Profile
+// params (cores/memory/storage/bridge) are applied post-clone through /config;
+// resources from the template are overwritten.
 package main
 
 import (
@@ -54,33 +56,33 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// profileSchemaJSON — profile_schema (JSON Schema draft 2020-12), embedded
-// рядом с бинарём. Та же техника, что в soul-cloud-aws.
+// profileSchemaJSON is profile_schema (JSON Schema draft 2020-12), embedded next
+// to the binary. Same technique as in soul-cloud-aws.
 //
 //go:embed schema.json
 var profileSchemaJSON []byte
 
-// runTagKey — тег идемпотентности (в Proxmox VM-tags). Значение = идентификатор
-// прогона/incarnation (из profile.tags). Повторный Create по тому же тегу не
-// плодит дубли — существующие живые VM (running/stopped) переиспользуются.
+// runTagKey is the idempotency tag (in Proxmox VM tags). Value = run/incarnation
+// identifier (from profile.tags). Repeated Create with the same tag does not
+// create duplicates - existing live VMs (running/stopped) are reused.
 //
-// Имя ключа должно быть kebab-case под Proxmox-tag-regex (`^[a-z0-9_-]+$`);
-// двоеточие — НЕ допустимо (отличие от AWS «soulstack:run»), поэтому используем
-// `soulstack-run` (без `:`). Зеркальное имя для YC.
+// The key name must be kebab-case for the Proxmox tag regex (`^[a-z0-9_-]+$`);
+// colon is NOT allowed (unlike AWS "soulstack:run"), so use `soulstack-run`
+// (without `:`). Mirrored name for YC.
 const runTagKey = "soulstack-run"
 
-// defaultBackoff — фабрика [clouddriver.BackoffConfig] для wait/retry-фаз.
-// Вынесена в переменную, чтобы L0-тесты могли подменить (быстрый MaxAttempts,
-// короткие задержки) без поднятия таймера 1s→2s→4s. Та же техника, что и
-// `newPveClient` (см. pveapi.go).
+// defaultBackoff is the [clouddriver.BackoffConfig] factory for wait/retry
+// phases. It is a variable so L0 tests can replace it (fast MaxAttempts, short
+// delays) without raising the 1s->2s->4s timer. Same technique as `newPveClient`
+// (see pveapi.go).
 var defaultBackoff = clouddriver.DefaultBackoff
 
-// ProxmoxDriver — реализация CloudDriver для Proxmox VE.
+// ProxmoxDriver implements CloudDriver for Proxmox VE.
 type ProxmoxDriver struct {
 	clouddriver.BaseDriver
 }
 
-// Schema публикует embedded profile_schema.
+// Schema publishes the embedded profile_schema.
 func (d *ProxmoxDriver) Schema(_ context.Context, _ *pluginv1.SchemaRequest) (*pluginv1.SchemaReply, error) {
 	var raw map[string]any
 	if err := json.Unmarshal(profileSchemaJSON, &raw); err != nil {
@@ -93,8 +95,8 @@ func (d *ProxmoxDriver) Schema(_ context.Context, _ *pluginv1.SchemaRequest) (*p
 	return &pluginv1.SchemaReply{ProfileSchema: s}, nil
 }
 
-// Validate не несёт credentials (ValidateProfileRequest), structural-проверки
-// здесь; auth — на фазе Create.
+// Validate carries no credentials (ValidateProfileRequest), so structural checks
+// are here; auth happens in Create.
 func (d *ProxmoxDriver) Validate(_ context.Context, req *pluginv1.ValidateProfileRequest) (*pluginv1.ValidateProfileReply, error) {
 	p := req.GetProfile().AsMap()
 	var errs []string
@@ -107,7 +109,7 @@ func (d *ProxmoxDriver) Validate(_ context.Context, req *pluginv1.ValidateProfil
 	return &pluginv1.ValidateProfileReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
 
-// vmProfile — параметры профиля, разобранные для clone-операции.
+// vmProfile contains profile params parsed for the clone operation.
 type vmProfile struct {
 	targetNode   string
 	templateVMID int
@@ -115,7 +117,7 @@ type vmProfile struct {
 	namePrefix   string
 	fullClone    bool
 	cores        int
-	memory       int // МБ
+	memory       int // MB
 	storage      string
 	bridge       string
 	tags         map[string]string
@@ -181,9 +183,9 @@ func intField(m map[string]any, key string) int64 {
 	return 0
 }
 
-// Create: clone из template_vmid → SetVMConfig (ресурсы + cloud-init userdata)
-// → start → wait-until-ready (running + guest-agent IP). См. doc-комментарий
-// пакета.
+// Create: clone from template_vmid -> SetVMConfig (resources + cloud-init
+// userdata) -> start -> wait-until-ready (running + guest-agent IP). See package
+// doc comment.
 func (d *ProxmoxDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerStreamingServer[pluginv1.CreateEvent]) error {
 	ctx := stream.Context()
 	count := req.GetCount()
@@ -200,8 +202,8 @@ func (d *ProxmoxDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerSt
 
 	backoff := defaultBackoff()
 
-	// Идемпотентность: если по runTag уже есть живые VM — переиспользуем,
-	// добиваем только недостающие. Без runTag idempotency-проверку не делаем.
+	// Idempotency: if live VMs already exist by runTag, reuse them and add only
+	// missing ones. Without runTag, do not perform an idempotency check.
 	var existing []ClusterVM
 	if prof.runTag != "" {
 		existing, err = d.findByRunTag(ctx, cli, backoff, prof.runTag)
@@ -226,8 +228,8 @@ func (d *ProxmoxDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerSt
 
 	newVMs, err := d.cloneInstances(ctx, cli, backoff, prof, req.GetUserdata(), count)
 	if err != nil {
-		// newVMs может содержать УЖЕ созданные (до того, как clone-цикл упал) —
-		// anti-orphan: финальное событие отдаст их с failed=true.
+		// newVMs may contain ALREADY created VMs (before the clone loop failed) -
+		// anti-orphan: the final event returns them with failed=true.
 		fail := &pluginv1.CreateEvent{
 			Message: clouddriver.FailMessage(clouddriver.Classify(classifyProxmox, err), "clone", err),
 			Failed:  true,
@@ -248,19 +250,19 @@ func (d *ProxmoxDriver) Create(req *pluginv1.CreateRequest, stream grpc.ServerSt
 	return d.finalizeCreate(ctx, cli, stream, backoff, all)
 }
 
-// createdVM — пара (node, vmid) свежесозданной VM. Драйвер копит её во время
-// цикла clone, чтобы при ctx-cancel вернуть anti-orphan-ID.
+// createdVM is a pair (node, vmid) for a freshly created VM. The driver collects
+// it during the clone loop to return anti-orphan IDs on ctx-cancel.
 type createdVM struct {
 	Node string
 	VMID int
 }
 
-// cloneInstances вызывает Clone count раз. Proxmox не имеет batch-clone, идём
-// последовательно. Имя каждой VM — `<prefix>-<vmid>`. Параллельный clone тех
-// же template-VMID Proxmox не любит (locks), поэтому строго последовательно.
+// cloneInstances calls Clone count times. Proxmox has no batch clone, so we go
+// sequentially. Each VM name is `<prefix>-<vmid>`. Proxmox dislikes parallel
+// clones of the same template VMID (locks), so it is strictly sequential.
 //
-// Антиорфан-контракт: возвращает уже-успешно-склонированные VM ДАЖЕ при
-// ошибке последующего шага — Keeper увидит их в финальном failed-event.
+// Anti-orphan contract: return already successfully cloned VMs EVEN on an error
+// in a later step - Keeper sees them in the final failed event.
 func (d *ProxmoxDriver) cloneInstances(
 	ctx context.Context, cli pveAPI, backoff clouddriver.BackoffConfig,
 	prof vmProfile, userdata string, count int32,
@@ -275,7 +277,7 @@ func (d *ProxmoxDriver) cloneInstances(
 
 		cloneErr := clouddriver.Retry(ctx, backoff, classifyProxmox, func() error {
 			_, e := cli.CloneVM(ctx, CloneParams{
-				SourceNode:    prof.targetNode, // template живёт на target_node (best-effort default)
+				SourceNode:    prof.targetNode, // template lives on target_node (best-effort default)
 				TemplateVMID:  prof.templateVMID,
 				NewVMID:       newID,
 				Name:          name,
@@ -290,8 +292,8 @@ func (d *ProxmoxDriver) cloneInstances(
 		}
 		out = append(out, createdVM{Node: prof.targetNode, VMID: newID})
 
-		// Применяем POST-clone параметры: ресурсы (cores/memory), tags, cloud-init
-		// userdata. Делаем единым POST /config, чтобы один write-lock.
+		// Apply post-clone params: resources (cores/memory), tags, cloud-init
+		// userdata. Use one POST /config to take one write lock.
 		fields := buildConfigFields(prof, userdata)
 		if err := clouddriver.Retry(ctx, backoff, classifyProxmox, func() error {
 			return cli.SetVMConfig(ctx, prof.targetNode, newID, fields)
@@ -299,7 +301,7 @@ func (d *ProxmoxDriver) cloneInstances(
 			return out, fmt.Errorf("set-config: %w", err)
 		}
 
-		// Стартуем VM.
+		// Start the VM.
 		if _, err := func() (string, error) {
 			var upid string
 			rerr := clouddriver.Retry(ctx, backoff, classifyProxmox, func() error {
@@ -315,9 +317,10 @@ func (d *ProxmoxDriver) cloneInstances(
 	return out, nil
 }
 
-// allocVMID выбирает VMID для новой VM: profile.new_vmid_start+seq если задан,
-// иначе /cluster/nextid. Берём NextID и при коллизии (race с другим оператором)
-// Retry-обёртка повторит весь clone — Proxmox вернёт 500 «VM already exists».
+// allocVMID chooses VMID for a new VM: profile.new_vmid_start+seq if set,
+// otherwise /cluster/nextid. Take NextID, and on collision (race with another
+// operator) the Retry wrapper repeats the whole clone - Proxmox returns 500 "VM
+// already exists".
 func (d *ProxmoxDriver) allocVMID(ctx context.Context, cli pveAPI, backoff clouddriver.BackoffConfig, prof vmProfile, seq int) (int, error) {
 	if prof.newVMIDStart > 0 {
 		return prof.newVMIDStart + seq, nil
@@ -331,39 +334,38 @@ func (d *ProxmoxDriver) allocVMID(ctx context.Context, cli pveAPI, backoff cloud
 	return id, err
 }
 
-// buildConfigFields — Proxmox-form-параметры для /config: ресурсы, tags,
-// сетевой bridge (поверх net0 если задан), cloud-init userdata.
+// buildConfigFields builds Proxmox form params for /config: resources, tags,
+// network bridge (over net0 if set), cloud-init userdata.
 //
-// userdata-стратегия:
-//   - Если profile.cicustom задан — используем cicustom (snippet-path) как есть.
-//     Это путь в /var/lib/vz/snippets/<…>, который должен быть подготовлен
-//     оператором заранее.
-//   - Иначе userdata из CreateRequest (cloud-init блоб) base64-кодируется и
-//     передаётся через ciuser/cipassword/ssh-keys невозможно (это поле строкой
-//     не передаётся); вместо этого Proxmox принимает userdata через `cicustom=
-//     user=<snippet>`. Альтернатива — параметр `description` или поле
-//     `serial0=socket` — но они не интерпретируются cloud-init.
+// userdata strategy:
+//   - If profile.cicustom is set, use cicustom (snippet path) as-is. This is a
+//     path in /var/lib/vz/snippets/<...> that the operator must prepare in advance.
+//   - Otherwise userdata from CreateRequest (cloud-init blob) is base64-encoded.
+//     Passing through ciuser/cipassword/ssh-keys is impossible (that field is not
+//     passed as a string); instead Proxmox accepts userdata through `cicustom=
+//     user=<snippet>`. Alternatives are `description` or `serial0=socket`, but
+//     cloud-init does not interpret them.
 //
-// Для MVP: если cicustom не задан И userdata есть, кладём userdata в
-// `description` (поле документации VM) и помечаем VM tag-ом `soulstack-needs-
-// snippet=1`, чтобы оператор увидел: автоматическая прокидка userdata в Proxmox
-// требует snippets-storage, который драйвер сам создать не может.
+// For MVP: if cicustom is not set AND userdata exists, place userdata in
+// `description` (VM documentation field) and mark the VM with the tag
+// `soulstack-needs-snippet=1` so the operator sees that automatic userdata
+// delivery in Proxmox requires snippets storage, which the driver cannot create.
 //
-// Это сознательное ограничение pilot-а — расширение через автоматическое
-// размещение snippets (через WebDAV / SSH в node) — отложено до отдельного
-// архитектурного решения (требует ssh-доступа к ноде или PVE storage API).
+// This is an intentional pilot limitation - extension through automatic snippet
+// placement (via WebDAV / SSH to node) is deferred to a separate architectural
+// decision (requires SSH access to the node or PVE storage API).
 func buildConfigFields(prof vmProfile, userdata string) map[string]string {
 	fields := map[string]string{
 		"cores":  strconv.Itoa(prof.cores),
 		"memory": strconv.Itoa(prof.memory),
 	}
 	if prof.bridge != "" {
-		// virtio + bridge. virtio — default Proxmox для cloud-init шаблонов.
+		// virtio + bridge. virtio is Proxmox default for cloud-init templates.
 		fields["net0"] = fmt.Sprintf("virtio,bridge=%s", prof.bridge)
 	}
 	if len(prof.tags) > 0 {
-		// Proxmox tags: semicolon-separated, format `key=value` или просто `key`.
-		// Для runTagKey используем `<key>=<value>`, прочие — `key=value`.
+		// Proxmox tags: semicolon-separated, format `key=value` or just `key`.
+		// For runTagKey use `<key>=<value>`, others are `key=value`.
 		var parts []string
 		for k, v := range prof.tags {
 			if v == "" {
@@ -378,21 +380,20 @@ func buildConfigFields(prof vmProfile, userdata string) map[string]string {
 	case prof.cicustom != "":
 		fields["cicustom"] = prof.cicustom
 	case userdata != "":
-		// Кладём base64-encoded userdata в description, чтобы он был доступен
-		// оператору для отладки. См. doc-комментарий buildConfigFields о
-		// ограничении: Proxmox требует snippet-файл на ноде для cloud-init
-		// user-data; полностью in-band прокидка userdata без snippet не
-		// поддерживается API.
+		// Put base64-encoded userdata into description so it is available to the
+		// operator for debugging. See buildConfigFields doc comment about the
+		// limitation: Proxmox requires a snippet file on the node for cloud-init
+		// user-data; fully in-band userdata delivery without snippet is not
+		// supported by the API.
 		fields["description"] = "soul-stack userdata (base64): " +
 			base64.StdEncoding.EncodeToString([]byte(userdata))
 	}
 	return fields
 }
 
-// finalizeCreate ждёт готовности VM (running + guest-agent IP) и шлёт финальное
-// событие. Anti-orphan: при ctx-cancel/timeout недоехавшие VM попадают в
-// финальное событие с failed=true, но с заполненным vm_id — Keeper сможет их
-// Destroy.
+// finalizeCreate waits for VM readiness (running + guest-agent IP) and sends the
+// final event. Anti-orphan: on ctx-cancel/timeout, unfinished VMs go into the
+// final event with failed=true but populated vm_id - Keeper can Destroy them.
 func (d *ProxmoxDriver) finalizeCreate(
 	ctx context.Context, cli pveAPI,
 	stream grpc.ServerStreamingServer[pluginv1.CreateEvent],
@@ -410,25 +411,24 @@ func (d *ProxmoxDriver) finalizeCreate(
 			}
 			return clouddriver.ProbeResult{Err: perr}
 		}
-		// Proxmox терминальных «error/crashed» статусов не возвращает; VM либо
-		// running, либо stopped. Long-running «stopped» во время clone/migrate
-		// нормально — это всё ещё в pipeline; распознаём по полю `lock`.
+		// Proxmox does not return terminal "error/crashed" statuses; VM is either
+		// running or stopped. Long-running "stopped" during clone/migrate is normal
+		// - it is still in pipeline; detect this by the `lock` field.
 		if st.Lock != "" {
-			// Под locked (clone/migrate/backup) — ждём дальше.
+			// Under locked (clone/migrate/backup), keep waiting.
 			return clouddriver.ProbeResult{}
 		}
 		if st.Status != "running" {
-			// VM ещё не стартовала после start-RPC — пуллим дальше; терминала нет.
+			// VM has not started after start-RPC yet - keep polling; no terminal.
 			return clouddriver.ProbeResult{}
 		}
-		// Running. Проверяем guest-agent → IP.
+		// Running. Check guest-agent -> IP.
 		ip, ipErr := cli.GetGuestAgentInterfaces(pctx, node, id)
 		if ipErr != nil {
-			// Guest-agent может быть не настроен/не отвечать. Это потенциально
-			// конфигурационная ошибка шаблона: задаём fail-closed по принципу
-			// «нет guest-agent — нет IP — VM использовать нельзя». Распознаём
-			// «не настроен» по тексту — Proxmox возвращает 500/502 в зависимости
-			// от состояния.
+			// Guest-agent may be unconfigured/not responding. This is potentially a
+			// template configuration error: fail-closed by the rule "no guest-agent -
+			// no IP - VM cannot be used". Detect "not configured" by text - Proxmox
+			// returns 500/502 depending on state.
 			class := clouddriver.Classify(classifyProxmox, ipErr)
 			if class.Transient() {
 				return clouddriver.ProbeResult{}
@@ -438,7 +438,8 @@ func (d *ProxmoxDriver) finalizeCreate(
 			}
 		}
 		if ip == "" {
-			// Guest-agent ответил, но IP ещё не назначен (DHCP-handshake в полёте).
+			// Guest-agent responded, but IP is not assigned yet (DHCP handshake in
+			// flight).
 			return clouddriver.ProbeResult{}
 		}
 		return clouddriver.ProbeResult{Ready: true}
@@ -457,7 +458,7 @@ func (d *ProxmoxDriver) finalizeCreate(
 				if st, derr := cli.GetVMStatus(ctx, node, id); derr == nil {
 					if ip, ierr := cli.GetGuestAgentInterfaces(ctx, node, id); ierr == nil && ip != "" {
 						vi.PrimaryIp = ip
-						vi.Fqdn = st.Name // Proxmox-конвенция: name = hostname (SID)
+						vi.Fqdn = st.Name // Proxmox convention: name = hostname (SID)
 					}
 					vi.Attributes = statusAttributes(st)
 				}
@@ -483,9 +484,9 @@ func (d *ProxmoxDriver) finalizeCreate(
 	})
 }
 
-// findByRunTag перечисляет живые (running/stopped, qemu-type) VM с заданным
-// runTag в кластере. Proxmox /cluster/resources не поддерживает server-side
-// filter по tag — фильтруем на стороне драйвера.
+// findByRunTag lists live (running/stopped, qemu-type) VMs with the given runTag
+// in the cluster. Proxmox /cluster/resources does not support server-side tag
+// filtering - filter on the driver side.
 func (d *ProxmoxDriver) findByRunTag(ctx context.Context, cli pveAPI, backoff clouddriver.BackoffConfig, runTag string) ([]ClusterVM, error) {
 	var out []ClusterVM
 	err := clouddriver.Retry(ctx, backoff, classifyProxmox, func() error {
@@ -507,8 +508,8 @@ func (d *ProxmoxDriver) findByRunTag(ctx context.Context, cli pveAPI, backoff cl
 	return out, err
 }
 
-// hasTag проверяет, есть ли в semicolon-separated списке тегов пара key=value.
-// Proxmox-tag-list имеет формат `t1;k=v;t2` без экранирования; ключи уникальны.
+// hasTag checks whether a key=value pair exists in the semicolon-separated tag
+// list. Proxmox tag list format is `t1;k=v;t2` without escaping; keys are unique.
 func hasTag(tags, key, value string) bool {
 	for _, t := range strings.Split(tags, ";") {
 		t = strings.TrimSpace(t)
@@ -524,9 +525,9 @@ func hasTag(tags, key, value string) bool {
 	return false
 }
 
-// Destroy: stop → delete, per-vm события. Proxmox API DELETE на running-VM
-// возвращает 500; нужно сначала stop (force). Idempotent на 404 / «does not
-// exist».
+// Destroy: stop -> delete, per-VM events. Proxmox API DELETE on a running VM
+// returns 500; stop (force) is required first. Idempotent on 404 / "does not
+// exist".
 func (d *ProxmoxDriver) Destroy(req *pluginv1.DestroyRequest, stream grpc.ServerStreamingServer[pluginv1.DestroyEvent]) error {
 	ctx := stream.Context()
 	creds := credsFromMap(req.GetCredentials().AsMap())
@@ -548,7 +549,7 @@ func (d *ProxmoxDriver) Destroy(req *pluginv1.DestroyRequest, stream grpc.Server
 			continue
 		}
 
-		// Stop. not_found на этом шаге — ок, VM уже могла быть удалена.
+		// Stop. not_found at this step is ok; VM may have already been deleted.
 		stopErr := clouddriver.Retry(ctx, backoff, classifyProxmox, func() error {
 			_, e := cli.StopVM(ctx, node, id)
 			return e
@@ -559,11 +560,11 @@ func (d *ProxmoxDriver) Destroy(req *pluginv1.DestroyRequest, stream grpc.Server
 				_ = stream.Send(&pluginv1.DestroyEvent{VmId: vmIDStr, Message: "already absent"})
 				continue
 			}
-			// Proxmox может вернуть 500 «VM is not running» — это успех для нас.
-			// Классификатор приведёт это к transient, но Retry уже исчерпал
-			// попытки; распознаём по тексту body.
+			// Proxmox may return 500 "VM is not running" - that is success for us.
+			// The classifier maps it to transient, but Retry has already exhausted
+			// attempts; recognize by body text.
 			if isNotRunning(stopErr) {
-				// продолжаем к delete
+				// continue to delete
 			} else {
 				_ = stream.Send(&pluginv1.DestroyEvent{
 					VmId:    vmIDStr,
@@ -574,7 +575,7 @@ func (d *ProxmoxDriver) Destroy(req *pluginv1.DestroyRequest, stream grpc.Server
 			}
 		}
 
-		// Delete. not_found → идемпотент-успех.
+		// Delete. not_found -> idempotent success.
 		delErr := clouddriver.Retry(ctx, backoff, classifyProxmox, func() error {
 			_, e := cli.DeleteVM(ctx, node, id)
 			return e
@@ -597,9 +598,9 @@ func (d *ProxmoxDriver) Destroy(req *pluginv1.DestroyRequest, stream grpc.Server
 	return nil
 }
 
-// isNotRunning — проверка «VM is not running» в теле ошибки stop. Proxmox
-// возвращает 500 с текстом вместо отдельного status-code. Не криминальная
-// эвристика — false-positive ведёт максимум к лишнему delete-вызову.
+// isNotRunning checks for "VM is not running" in the stop error body. Proxmox
+// returns 500 with text instead of a separate status code. This heuristic is not
+// risky: a false positive at most causes an extra delete call.
 func isNotRunning(err error) bool {
 	var hErr *pveHTTPError
 	if !errors.As(err, &hErr) {
@@ -609,8 +610,8 @@ func isNotRunning(err error) bool {
 	return strings.Contains(body, "not running") || strings.Contains(body, "is stopped")
 }
 
-// Status — опрос одной VM (GetVMStatus). credentials приходят отдельным полем
-// StatusRequest.credentials (A-flow, симметрично Create/Destroy).
+// Status polls one VM (GetVMStatus). credentials come in a separate
+// StatusRequest.credentials field (A-flow, symmetrical with Create/Destroy).
 func (d *ProxmoxDriver) Status(ctx context.Context, req *pluginv1.StatusRequest) (*pluginv1.StatusReply, error) {
 	creds := credsFromMap(req.GetCredentials().AsMap())
 	cli, err := newPveClient(ctx, creds)
@@ -631,10 +632,11 @@ func (d *ProxmoxDriver) Status(ctx context.Context, req *pluginv1.StatusRequest)
 	}, nil
 }
 
-// List — стрим инвентаря VM в кластере (опц. отфильтрованный по runTag).
-// credentials приходят отдельным полем ListRequest.credentials (A-flow,
-// симметрично Create/Destroy/Status). Per-VM IP guest-agent-ом НЕ запрашиваем
-// (дорого для большого инвентаря); primary_ip заполняется только при Create.
+// List streams VM inventory in the cluster (optionally filtered by runTag).
+// credentials come in a separate ListRequest.credentials field (A-flow,
+// symmetrical with Create/Destroy/Status). Per-VM IP is NOT requested through
+// guest-agent (expensive for large inventory); primary_ip is filled only by
+// Create.
 func (d *ProxmoxDriver) List(req *pluginv1.ListRequest, stream grpc.ServerStreamingServer[pluginv1.VmInfo]) error {
 	ctx := stream.Context()
 	creds := credsFromMap(req.GetCredentials().AsMap())
@@ -663,7 +665,7 @@ func (d *ProxmoxDriver) List(req *pluginv1.ListRequest, stream grpc.ServerStream
 		})
 		if serr := stream.Send(&pluginv1.VmInfo{
 			VmId:       formatVmID(vm.Node, vm.VMID),
-			Fqdn:       vm.Name, // Proxmox-конвенция: name = hostname (SID)
+			Fqdn:       vm.Name, // Proxmox convention: name = hostname (SID)
 			Attributes: attrs,
 		}); serr != nil {
 			return serr
@@ -685,15 +687,15 @@ func sendCreateFailed(stream grpc.ServerStreamingServer[pluginv1.CreateEvent], c
 	return stream.Send(&pluginv1.CreateEvent{Message: clouddriver.FailMessage(class, op, err), Failed: true})
 }
 
-// formatVmID собирает composite-vm_id `<node>/<vmid>` (см. doc-комментарий
-// пакета о vm_id-paradigm).
+// formatVmID builds composite vm_id `<node>/<vmid>` (see package doc comment on
+// vm_id paradigm).
 func formatVmID(node string, vmid int) string {
 	return fmt.Sprintf("%s/%d", node, vmid)
 }
 
-// splitVmID парсит composite-vm_id `<node>/<vmid>`. Возврат ошибки = vm_id
-// сформирован чужим компонентом (не наш Create) — пусть Keeper увидит явный
-// invalid_params.
+// splitVmID parses composite vm_id `<node>/<vmid>`. Returning an error means the
+// vm_id was formed by another component (not our Create) - let Keeper see
+// explicit invalid_params.
 func splitVmID(s string) (node string, vmid int, err error) {
 	parts := strings.SplitN(s, "/", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
@@ -714,7 +716,8 @@ func clusterVmIDs(vms []ClusterVM) []string {
 	return out
 }
 
-// statusAttributes — поднабор полей VMStatus, удобный оператору в proto-Struct.
+// statusAttributes is a subset of VMStatus fields useful to the operator in
+// proto Struct.
 func statusAttributes(st VMStatus) *structpb.Struct {
 	m := map[string]any{
 		"node":   st.Node,

@@ -7,27 +7,26 @@ import (
 	"github.com/souls-guild/soul-stack/sdk/clouddriver"
 )
 
-// classifyProxmox — per-provider [clouddriver.ClassifyFunc] для Proxmox VE.
-// Маппит HTTP-status REST-API в общую таксономию SDK. Proxmox не публикует
-// closed-enum ErrorCode (как AWS), но HTTP-status стабилен:
-//   - 401              → auth (нет/просрочен ticket, неверный token)
-//   - 403              → auth (нет permission на ресурс/действие)
-//   - 404              → not_found
-//   - 400              → invalid_params
-//   - 500              → разбираем по тексту body: «does not exist» → not_found,
-//     прочее → transient (Proxmox любит 500 на временные
-//     проблемы lock-контеншена и операционные конфликты)
-//   - 5xx прочее       → transient
-//   - 429              → transient (rate-limit, у Proxmox обычно нет, но на
-//     всякий случай)
+// classifyProxmox is the per-provider [clouddriver.ClassifyFunc] for Proxmox VE.
+// It maps REST API HTTP status into the shared SDK taxonomy. Proxmox does not
+// publish a closed-enum ErrorCode (unlike AWS), but HTTP status is stable:
+//   - 401              -> auth (missing/expired ticket, invalid token)
+//   - 403              -> auth (no permission on resource/action)
+//   - 404              -> not_found
+//   - 400              -> invalid_params
+//   - 500              -> parse body text: "does not exist" -> not_found,
+//     everything else -> transient (Proxmox likes 500 for temporary lock
+//     contention and operational conflicts)
+//   - other 5xx        -> transient
+//   - 429              -> transient (rate-limit; Proxmox usually does not have
+//     it, but handle defensively)
 //
-// Это единственная provider-specific часть error-обработки;
-// backoff/retry/маппинг-в-event делает SDK (sdk/clouddriver), общий для всех
-// драйверов тиража.
+// This is the only provider-specific part of error handling; backoff/retry/event
+// mapping is done by the SDK (sdk/clouddriver), shared by all rollout drivers.
 func classifyProxmox(err error) clouddriver.FailClass {
 	var hErr *pveHTTPError
 	if !errors.As(err, &hErr) {
-		// Не-HTTP ошибка (сеть/DNS/EOF/TLS-handshake) — транзиентна.
+		// Non-HTTP error (network/DNS/EOF/TLS handshake) is transient.
 		return clouddriver.FailTransient
 	}
 	body := strings.ToLower(hErr.Body)
@@ -41,16 +40,16 @@ func classifyProxmox(err error) clouddriver.FailClass {
 	case 429:
 		return clouddriver.FailTransient
 	case 500:
-		// Proxmox-конвенция: «<ресурс> does not exist» приходит как 500, а не
-		// 404. Это самый частый источник false-positive «invalid_params» в
-		// драйверах без эвристики — переводим в not_found, чтобы destroy
-		// идемпотентности работал.
+		// Proxmox convention: "<resource> does not exist" comes as 500, not 404.
+		// This is the most common source of false-positive "invalid_params" in
+		// drivers without the heuristic - map it to not_found so destroy
+		// idempotency works.
 		if strings.Contains(body, "does not exist") ||
 			strings.Contains(body, "no such") ||
 			strings.Contains(body, "not found") {
 			return clouddriver.FailNotFound
 		}
-		// Прочие 500 у Proxmox — transient (lock contention, storage I/O).
+		// Other Proxmox 500s are transient (lock contention, storage I/O).
 		return clouddriver.FailTransient
 	}
 	if hErr.Status >= 500 && hErr.Status < 600 {
