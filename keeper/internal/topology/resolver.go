@@ -423,7 +423,7 @@ func (r *Resolver) LoadByInventory(ctx context.Context, sids []string) ([]*HostF
 		if err != nil {
 			return nil, err
 		}
-		// Role="" — push не имеет declared-роли (см. doc).
+		// Role="" - push has no declared role (see doc).
 		candidates = append(candidates, h)
 	}
 	if err := rows.Err(); err != nil {

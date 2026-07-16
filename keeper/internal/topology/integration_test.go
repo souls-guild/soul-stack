@@ -298,10 +298,11 @@ func TestIntegration_FilterByCovens(t *testing.T) {
 	}
 }
 
-// TestIntegration_FilterByCovens_MultiLabelAND проверяет AND-семантику
-// multi-label фильтра поверх реальной PG-roster-выборки ([ADR-040] amendment
-// 2026-05-27; orchestration.md §3). Хост должен нести ВСЕ перечисленные метки;
-// host{prod}+host{eu} с filter [prod, eu] — пусто (раньше OR давал бы оба).
+// TestIntegration_FilterByCovens_MultiLabelAND verifies AND semantics for
+// multi-label filtering over a real PG roster query ([ADR-040] amendment
+// 2026-05-27; orchestration.md §3). The host must carry ALL listed labels;
+// host{prod}+host{eu} with filter [prod, eu] is empty (previously OR would
+// return both).
 func TestIntegration_FilterByCovens_MultiLabelAND(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -322,19 +323,19 @@ func TestIntegration_FilterByCovens_MultiLabelAND(t *testing.T) {
 		t.Fatalf("roster len = %d, want 5", len(hosts))
 	}
 
-	// [prod, eu] — пересечение, только prod-eu.example.com несёт обе метки.
+	// [prod, eu] is an intersection; only prod-eu.example.com carries both labels.
 	filtered := r.FilterByCovens(hosts, []string{"prod", "eu"})
 	if len(filtered) != 1 || filtered[0].SID != "prod-eu.example.com" {
 		t.Errorf("FilterByCovens([prod, eu]) = %v, want [prod-eu.example.com] (AND)", sids(filtered))
 	}
 
-	// [prod] — single-label AND ≡ OR на single-label: prod-only + prod-eu + prod-us.
+	// [prod] is single-label AND, equivalent to OR on one label: prod-only + prod-eu + prod-us.
 	filteredSingle := r.FilterByCovens(hosts, []string{"prod"})
 	if len(filteredSingle) != 3 {
 		t.Errorf("FilterByCovens([prod]) len = %d, want 3", len(filteredSingle))
 	}
 
-	// [prod, missing] — одна метка отсутствует у всех → пусто.
+	// [prod, missing] has one label absent from all hosts, so the result is empty.
 	filteredEmpty := r.FilterByCovens(hosts, []string{"prod", "missing"})
 	if len(filteredEmpty) != 0 {
 		t.Errorf("FilterByCovens([prod, missing]) = %v, want empty (AND fail-closed)", sids(filteredEmpty))
@@ -413,14 +414,14 @@ func TestIntegration_LeaseAware_ReconnectRetargets(t *testing.T) {
 	seedSoul(t, "host.example.com", []string{"redis-prod"}, soul.StatusConnected)
 	r := NewResolver(integrationPool, lease, nil)
 
-	// Нет lease → offline.
+	// No lease -> offline.
 	if hosts, err := r.LoadIncarnationHosts(ctx, "redis-prod"); err != nil {
 		t.Fatalf("LoadIncarnationHosts: %v", err)
 	} else if len(hosts) != 0 {
 		t.Fatalf("no-lease: got %v, want [] (offline)", sids(hosts))
 	}
 
-	// Lease взят → online.
+	// Lease acquired -> online.
 	setLease(t, mr, "host.example.com")
 	if hosts, err := r.LoadIncarnationHosts(ctx, "redis-prod"); err != nil {
 		t.Fatalf("LoadIncarnationHosts: %v", err)
@@ -428,7 +429,7 @@ func TestIntegration_LeaseAware_ReconnectRetargets(t *testing.T) {
 		t.Fatalf("with-lease: got %v, want [host] (online)", sids(hosts))
 	}
 
-	// Lease снят (стрим упал) → снова offline.
+	// Lease removed (stream dropped) -> offline again.
 	clearLease(mr, "host.example.com")
 	if hosts, err := r.LoadIncarnationHosts(ctx, "redis-prod"); err != nil {
 		t.Fatalf("LoadIncarnationHosts: %v", err)
@@ -436,7 +437,7 @@ func TestIntegration_LeaseAware_ReconnectRetargets(t *testing.T) {
 		t.Fatalf("lease-dropped: got %v, want [] (offline)", sids(hosts))
 	}
 
-	// Reconnect — lease перевзят → снова online.
+	// Reconnect: lease reacquired -> online again.
 	setLease(t, mr, "host.example.com")
 	if hosts, err := r.LoadIncarnationHosts(ctx, "redis-prod"); err != nil {
 		t.Fatalf("LoadIncarnationHosts: %v", err)
@@ -445,17 +446,18 @@ func TestIntegration_LeaseAware_ReconnectRetargets(t *testing.T) {
 	}
 }
 
-// TestIntegration_LeaseAware_IdleSoulStaysTargetable — idle-Soul (lease
-// продлевается renewal-ом, но без app-трафика) остаётся online: presence — lease,
-// не PG `last_seen_at`. Эмулируем именно lease без какого-либо PG-обновления.
+// TestIntegration_LeaseAware_IdleSoulStaysTargetable verifies that an idle Soul
+// (lease is extended by renewal, but without app traffic) stays online:
+// presence is lease, not PG `last_seen_at`. This emulates exactly the lease
+// without any PG update.
 func TestIntegration_LeaseAware_IdleSoulStaysTargetable(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
 	lease, mr := newLeaseChecker(t)
 
 	seedIncarnation(t, "redis-prod", map[string]any{})
-	// disconnected-снимок + stale last_seen: ни status, ни last_seen не делают
-	// его online; только живой lease.
+	// disconnected snapshot + stale last_seen: neither status nor last_seen makes
+	// it online; only a live lease does.
 	seedSoul(t, "idle.example.com", []string{"redis-prod"}, soul.StatusDisconnected)
 	setLease(t, mr, "idle.example.com")
 
@@ -469,9 +471,9 @@ func TestIntegration_LeaseAware_IdleSoulStaysTargetable(t *testing.T) {
 	}
 }
 
-// TestIntegration_LeaseAware_TerminalNotCandidate — terminal-status (revoked)
-// исключается ещё фазой-1 SQL, даже при живом lease (нельзя таргетить
-// отозванный Soul независимо от стрима).
+// TestIntegration_LeaseAware_TerminalNotCandidate verifies that terminal status
+// (revoked) is excluded by phase-1 SQL even with a live lease (revoked Soul
+// cannot be targeted regardless of stream state).
 func TestIntegration_LeaseAware_TerminalNotCandidate(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -480,7 +482,7 @@ func TestIntegration_LeaseAware_TerminalNotCandidate(t *testing.T) {
 	seedIncarnation(t, "redis-prod", map[string]any{})
 	seedSoul(t, "revoked.example.com", []string{"redis-prod"}, soul.StatusRevoked)
 	seedSoul(t, "ok.example.com", []string{"redis-prod"}, soul.StatusConnected)
-	setLease(t, mr, "revoked.example.com") // даже с живым lease — не кандидат
+	setLease(t, mr, "revoked.example.com") // not a candidate even with a live lease
 	setLease(t, mr, "ok.example.com")
 
 	r := NewResolver(integrationPool, lease, nil)

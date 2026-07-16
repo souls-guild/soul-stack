@@ -14,22 +14,22 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// fakePool — Querier stub. Routes QueryRow/Query by SQL content:
-// `incarnation` → spec, `souls` → roster, `incarnation_choir_voices` →
-// choir-membership (ADR-044, S-T4). Unknown SQL — panic (test bug).
+// fakePool - Querier stub. Routes QueryRow/Query by SQL content:
+// `incarnation` -> spec, `souls` -> roster, `incarnation_choir_voices` ->
+// choir-membership (ADR-044, S-T4). Unknown SQL - panic (test bug).
 type fakePool struct {
 	specJSON []byte
-	specErr  error // напр. pgx.ErrNoRows для несуществующей incarnation
+	specErr  error // e.g. pgx.ErrNoRows for a missing incarnation
 
 	rosterRows []rosterRow
-	rosterErr  error // ошибка Query или итерации
+	rosterErr  error // Query or iteration error
 
 	choirRows []choirVoiceRow
-	choirErr  error // ошибка Query choir-voices
+	choirErr  error // choir-voices Query error
 }
 
-// choirVoiceRow — one row of `incarnation_choir_voices` in order
-// of choirVoicesSQL (sid, choir_name, role). role — *string: nil emulates SQL NULL
+// choirVoiceRow is one row of `incarnation_choir_voices` in order
+// of choirVoicesSQL (sid, choir_name, role). role is *string: nil emulates SQL NULL
 // (role is nullable, migration 060), distinguishing "no role" from Go string "". This catches
 // bug of scanning NULL into plain string (pgx "cannot scan NULL into *string").
 type choirVoiceRow struct {
@@ -233,7 +233,7 @@ func TestLoadIncarnationHosts_HappyPath(t *testing.T) {
 			{
 				sid:        "b.example.com",
 				coven:      []string{"redis-prod"},
-				factsJSON:  nil, // Soul ещё не прислал soulprint
+				factsJSON:  nil, // Soul has not sent soulprint yet
 				receivedAt: nil,
 			},
 		},
@@ -699,10 +699,10 @@ func TestParseDeclaredRoles(t *testing.T) {
 func TestFilterByCovens(t *testing.T) {
 	hosts := []*HostFacts{
 		{SID: "a", Coven: []string{"redis-prod", "db", "eu"}},          // db + eu
-		{SID: "b", Coven: []string{"redis-prod", "cache"}},             // только cache
-		{SID: "c", Coven: []string{"redis-prod", "eu"}},                // только eu
+		{SID: "b", Coven: []string{"redis-prod", "cache"}},             // cache only
+		{SID: "c", Coven: []string{"redis-prod", "eu"}},                // eu only
 		{SID: "d", Coven: []string{"redis-prod", "db", "cache"}},       // db + cache
-		{SID: "e", Coven: []string{"redis-prod", "db", "cache", "eu"}}, // все три
+		{SID: "e", Coven: []string{"redis-prod", "db", "cache", "eu"}}, // all three
 	}
 	r := &Resolver{}
 

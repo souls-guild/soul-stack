@@ -1,15 +1,16 @@
 //go:build integration
 
-// Integration-тесты NULL-role Voice (Choir, ADR-044) на real-PG. Закрывают
-// поглощение declared-роли `voice.role > spec.hosts[].role` в вырожденном случае
-// voice.role IS NULL: ключевой кейс ADR-044 п.2 (a) — опущенная роль = SQL NULL
-// → fallback на spec.hosts[].role, а при отсутствии и spec-роли — пустая роль
-// (хост вне declared-spec → soulprint.hosts[].role = null, ADR-008).
+// Integration tests for NULL-role Voice (Choir, ADR-044) on real PG. They cover
+// declared-role absorption `voice.role > spec.hosts[].role` in the degenerate
+// voice.role IS NULL case: the key ADR-044 p.2(a) case where an omitted role
+// is SQL NULL -> fallback to spec.hosts[].role, or to an empty role when the
+// spec role is also absent (host outside declared spec ->
+// soulprint.hosts[].role = null, ADR-008).
 //
-// До Wave5 Pass1 этот тест был невозможен из-за import-cycle (tide_target.go);
-// после развязки резолвер topology тестируется на real-PG напрямую. Паттерн
-// (testcontainers TestMain, resetAll/seed*-хелперы) совпадает с
-// integration_test.go этого пакета.
+// Before Wave5 Pass1 this test was impossible because of the import cycle
+// (tide_target.go); after decoupling, the topology resolver is tested directly
+// on real PG. The pattern (testcontainers TestMain, resetAll/seed* helpers)
+// matches this package's integration_test.go.
 
 package topology
 
@@ -22,8 +23,9 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 )
 
-// seedChoir вставляет Choir (declared-«партию») в incarnation. Нужен из-за FK
-// incarnation_choir_voices → incarnation_choirs(incarnation_name, choir_name).
+// seedChoir inserts a Choir (declared group) into incarnation. It is needed
+// because of the FK from incarnation_choir_voices to
+// incarnation_choirs(incarnation_name, choir_name).
 func seedChoir(t *testing.T, incarnationName, choirName string) {
 	t.Helper()
 	_, err := integrationPool.Exec(context.Background(),
@@ -34,10 +36,10 @@ func seedChoir(t *testing.T, incarnationName, choirName string) {
 	}
 }
 
-// seedVoiceNullRole вставляет Voice с role IS NULL (SQL NULL, не пустая строка) —
-// эмулирует AddVoice с опущенной ролью (миграция 060: role TEXT без NOT NULL).
-// Это ровно тот NULL, который резолвер сканит в *string и трактует как «нет
-// роли» → fallback на spec.
+// seedVoiceNullRole inserts a Voice with role IS NULL (SQL NULL, not an empty
+// string) and emulates AddVoice with an omitted role (migration 060: role TEXT
+// without NOT NULL). This is exactly the NULL that the resolver scans into
+// *string and treats as "no role" -> fallback to spec.
 func seedVoiceNullRole(t *testing.T, incarnationName, choirName, sid string) {
 	t.Helper()
 	_, err := integrationPool.Exec(context.Background(),
@@ -49,9 +51,9 @@ func seedVoiceNullRole(t *testing.T, incarnationName, choirName, sid string) {
 	}
 }
 
-// seedVoiceRole вставляет Voice с явной (не-NULL) role — контроль override-ветки:
-// voice.role побеждает spec.hosts[].role (ADR-044 пункт 2). Параллель
-// seedVoiceNullRole, но role биндится непустой строкой.
+// seedVoiceRole inserts a Voice with an explicit (non-NULL) role and exercises
+// the override branch: voice.role wins over spec.hosts[].role (ADR-044 p.2).
+// It mirrors seedVoiceNullRole, but role is bound as a non-empty string.
 func seedVoiceRole(t *testing.T, incarnationName, choirName, sid, role string) {
 	t.Helper()
 	_, err := integrationPool.Exec(context.Background(),
@@ -63,10 +65,11 @@ func seedVoiceRole(t *testing.T, incarnationName, choirName, sid, role string) {
 	}
 }
 
-// assertNullRoleScannable — guard: NULL role в incarnation_choir_voices должна
-// читаться через тот же *string-скан, что в резолвере (loadChoirMemberships).
-// Если бы скан шёл в plain string, pgx падал бы «cannot scan NULL into *string»;
-// этот SELECT ловит регрессию на уровне real-PG до основного assert-а теста.
+// assertNullRoleScannable is a guard: NULL role in incarnation_choir_voices
+// must be read through the same *string scan as in the resolver
+// (loadChoirMemberships). If the scan used plain string, pgx would fail with
+// "cannot scan NULL into *string"; this SELECT catches the regression at the
+// real-PG level before the main test assertion.
 func assertNullRoleScannable(t *testing.T, incarnationName, choirName, sid string) {
 	t.Helper()
 	var role *string
@@ -76,19 +79,20 @@ func assertNullRoleScannable(t *testing.T, incarnationName, choirName, sid strin
 		incarnationName, choirName, sid).Scan(&role)
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			t.Fatalf("Voice %s/%s/%s не вставлен", incarnationName, choirName, sid)
+			t.Fatalf("Voice %s/%s/%s was not inserted", incarnationName, choirName, sid)
 		}
-		t.Fatalf("скан NULL role упал (регрессия cannot-scan-NULL): %v", err)
+		t.Fatalf("NULL role scan failed (cannot-scan-NULL regression): %v", err)
 	}
 	if role != nil {
-		t.Fatalf("role = %q, ожидали SQL NULL (nil)", *role)
+		t.Fatalf("role = %q, want SQL NULL (nil)", *role)
 	}
 }
 
-// TestIntegration_NullVoiceRole_FallbacksToSpecRole — кейс (а) ADR-044 п.2(a):
-// voice.role IS NULL, но spec.hosts[].role задан → итоговая role = spec-роль
-// (NULL-голос НЕ затирает declared-роль, fallback). На real-PG проверяется и то,
-// что NULL role не валит roster (скан в *string).
+// TestIntegration_NullVoiceRole_FallbacksToSpecRole covers case (a) from
+// ADR-044 p.2(a): voice.role IS NULL while spec.hosts[].role is set, so the
+// resulting role is the spec role (NULL Voice does NOT erase the declared role;
+// fallback applies). On real PG it also verifies that NULL role does not break
+// the roster scan (*string scan).
 func TestIntegration_NullVoiceRole_FallbacksToSpecRole(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -113,22 +117,23 @@ func TestIntegration_NullVoiceRole_FallbacksToSpecRole(t *testing.T) {
 		t.Fatalf("got %v, want [a.example.com]", sids(hosts))
 	}
 	if hosts[0].Role != "replica" {
-		t.Errorf("role = %q, want spec-роль \"replica\" (NULL voice.role → fallback на spec)", hosts[0].Role)
+		t.Errorf("role = %q, want spec role \"replica\" (NULL voice.role -> fallback to spec)", hosts[0].Role)
 	}
-	// Voice без role всё равно даёт стабильный choir-факт для where:.
+	// Voice without role still yields a stable choir fact for where:.
 	if got := hosts[0].Choirs; len(got) != 1 || got[0] != "voters" {
-		t.Errorf("Choirs = %v, want [voters] (членство есть даже при NULL role)", got)
+		t.Errorf("Choirs = %v, want [voters] (membership exists even with NULL role)", got)
 	}
 }
 
-// TestIntegration_NullVoiceRole_NoSpec_RoleEmpty — кейс (б): voice.role IS NULL
-// И spec.hosts[].role отсутствует (хост вне declared-spec) → итоговая role
-// пустая (soulprint.hosts[].role = null, ADR-008), без паники/ошибки.
+// TestIntegration_NullVoiceRole_NoSpec_RoleEmpty covers case (b):
+// voice.role IS NULL and spec.hosts[].role is absent (host outside declared
+// spec), so the resulting role is empty (soulprint.hosts[].role = null,
+// ADR-008), without panic or error.
 func TestIntegration_NullVoiceRole_NoSpec_RoleEmpty(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
 
-	// spec без hosts вовсе — хост точно вне declared-spec.
+	// spec has no hosts at all, so the host is definitely outside declared spec.
 	seedIncarnation(t, "redis-prod", map[string]any{})
 	seedSoul(t, "b.example.com", []string{"redis-prod"}, soul.StatusConnected)
 	seedChoir(t, "redis-prod", "voters")
@@ -145,23 +150,24 @@ func TestIntegration_NullVoiceRole_NoSpec_RoleEmpty(t *testing.T) {
 		t.Fatalf("got %v, want [b.example.com]", sids(hosts))
 	}
 	if hosts[0].Role != "" {
-		t.Errorf("role = %q, want \"\" (NULL voice.role + нет spec → null, хост вне declared-spec)", hosts[0].Role)
+		t.Errorf("role = %q, want \"\" (NULL voice.role + no spec -> null, host outside declared spec)", hosts[0].Role)
 	}
 	if got := hosts[0].Choirs; len(got) != 1 || got[0] != "voters" {
 		t.Errorf("Choirs = %v, want [voters]", got)
 	}
 }
 
-// TestIntegration_ExplicitVoiceRole_OverridesSpecRole — кейс (в), контроль:
-// voice.role задан явно (не NULL) И отличается от spec.hosts[].role → итоговая
-// role = voice-роль (ADR-044 пункт 2 — Choir поглощает declared-роль). Проверяет,
-// что NULL-ветка резолвера (nil *string → fallback) не сломала override: непустая
-// role из колонки должна выигрывать у spec, а не теряться.
+// TestIntegration_ExplicitVoiceRole_OverridesSpecRole covers case (c), the
+// control case: voice.role is explicit (not NULL) and differs from
+// spec.hosts[].role, so the resulting role is the Voice role (ADR-044 p.2:
+// Choir absorbs the declared role). It verifies that the resolver's NULL branch
+// (nil *string -> fallback) did not break override: the non-empty role from the
+// column must win over spec instead of being lost.
 func TestIntegration_ExplicitVoiceRole_OverridesSpecRole(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
 
-	// spec даёт хосту роль "replica" — намеренно ДРУГУЮ, чем voice.role ниже.
+	// spec gives the host role "replica", intentionally DIFFERENT from voice.role below.
 	seedIncarnation(t, "redis-prod", map[string]any{
 		"hosts": []map[string]any{
 			{"sid": "c.example.com", "role": "replica"},
@@ -180,7 +186,7 @@ func TestIntegration_ExplicitVoiceRole_OverridesSpecRole(t *testing.T) {
 		t.Fatalf("got %v, want [c.example.com]", sids(hosts))
 	}
 	if hosts[0].Role != "primary" {
-		t.Errorf("role = %q, want voice-роль \"primary\" (voice.role побеждает spec \"replica\")", hosts[0].Role)
+		t.Errorf("role = %q, want Voice role \"primary\" (voice.role wins over spec \"replica\")", hosts[0].Role)
 	}
 	if got := hosts[0].Choirs; len(got) != 1 || got[0] != "voters" {
 		t.Errorf("Choirs = %v, want [voters]", got)
