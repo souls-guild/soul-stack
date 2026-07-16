@@ -1,19 +1,17 @@
 //go:build integration
 
-// Integration-тесты Vault-клиента через testcontainers-go.
+// Integration tests for Vault client via testcontainers-go.
+// Runs hashicorp/vault in dev mode (root-token=root) on ephemeral port,
+// performs write+read round-trip via vault/api, and verifies against Client.
 //
-// Поднимают hashicorp/vault в dev-режиме (root-token=root) на эфемерном
-// порту, прогоняют write+read round-trip через vault/api напрямую и
-// сверяют с тем, что отдаёт наш Client.
-//
-// Запуск:
+// Run with:
 //
 //	make test-integration
-//	# или
+//	# or
 //	cd keeper && go test -tags=integration -race -count=1 ./internal/vault/
 //
-// Паттерн совпадает с auditpg/integration_test.go: TestMain → run() →
-// контейнер per-package, тесты используют общий integrationClient.
+// Pattern matches auditpg/integration_test.go: TestMain → run() →
+// per-package container, tests use shared integrationClient.
 package vault
 
 import (
@@ -39,17 +37,17 @@ import (
 )
 
 const (
-	// integrationToken — root-токен dev-режима, совпадает с dev/docker-compose.yml.
+	// integrationToken is dev-mode root token, matches dev/docker-compose.yml.
 	integrationToken = "root"
-	// integrationImage — version pin, совпадает с dev/docker-compose.yml.
+	// integrationImage is pinned version matching dev/docker-compose.yml.
 	integrationImage = "hashicorp/vault:1.18"
 )
 
-// integrationClient — наш Client поверх testcontainer-Vault-а.
+// integrationClient is our Client wrapping testcontainer Vault.
 var integrationClient *Client
 
-// integrationAPI — низкоуровневый vault/api клиент для write-операций в
-// тестах (наш Client read-only).
+// integrationAPI is low-level vault/api client for write operations in tests
+// (our Client is read-only).
 var integrationAPI *vaultapi.Client
 
 func TestMain(m *testing.M) {
@@ -80,7 +78,7 @@ func run(m *testing.M) int {
 		return 1
 	}
 
-	// Низкоуровневый клиент для seed-а.
+	// Low-level client for seeding.
 	apiCfg := vaultapi.DefaultConfig()
 	apiCfg.Address = addr
 	api, err := vaultapi.NewClient(apiCfg)
@@ -102,9 +100,9 @@ func run(m *testing.M) int {
 	}
 	integrationClient = cl
 
-	// PKI backend под `pki/` mount + role `soul-seed`. Зеркалит
-	// docs/dev/local-setup.md (раздел Vault PKI). Если provisioning
-	// падает — PKI-тесты будут сами skip-ить через `pkiReady`.
+	// PKI backend at `pki/` mount + role `soul-seed`. Mirrors
+	// docs/dev/local-setup.md (Vault PKI section). If provisioning fails,
+	// PKI tests will skip via `pkiReady`.
 	if err := provisionPKI(ctx, integrationAPI); err != nil {
 		log.Printf("vault integration: provisionPKI failed (PKI tests will be skipped): %v", err)
 	} else {
@@ -114,14 +112,12 @@ func run(m *testing.M) int {
 	return m.Run()
 }
 
-// pkiReady — set provisionPKI на true, если PKI backend поднят. Тесты
-// PKI используют его, чтобы skip-ить при ошибке provisioning-а
-// (например, на CI без сети, где Vault images не имеют PKI plugin-а).
+// pkiReady is set by provisionPKI if PKI backend is up. PKI tests check it to
+// skip on provisioning error (e.g., CI without network, Vault image lacks PKI).
 var pkiReady bool
 
-// provisionPKI поднимает PKI secrets engine по path `pki/`, генерирует
-// root cert и создаёт role `soul-seed`. Симметрично командам в
-// docs/dev/local-setup.md → Vault PKI.
+// provisionPKI sets up PKI secrets engine at `pki/`, generates root cert,
+// and creates role `soul-seed`. Mirrors commands in docs/dev/local-setup.md.
 func provisionPKI(ctx context.Context, api *vaultapi.Client) error {
 	if err := api.Sys().Mount("pki", &vaultapi.MountInput{
 		Type: "pki",
@@ -148,20 +144,18 @@ func provisionPKI(ctx context.Context, api *vaultapi.Client) error {
 	return nil
 }
 
-// --- KV v1/v2 прозрачность (ADR-017(b) amendment 2026-06-22) -------------
+// --- KV v1/v2 transparency (ADR-017(b) amendment 2026-06-22) -----------
 //
-// Главный guard-набор: probe-механизм читает ОБЕ версии KV прозрачно. Прежний
-// «угадывание по классу ошибки KVv2.Get» отвергнут — обычный v1-секрет был
-// неотличим от v2-missing (ErrSecretNotFound) и НИКОГДА не читался.
+// Guard suite: probe mechanism transparently reads both KV versions.
+// Previous "guess by KVv2.Get error class" rejected — plain v1 secret was
+// indistinguishable from v2-missing (ErrSecretNotFound) and never read.
 
-// mountV1 поднимает дополнительный KV v1 mount `kv-v1` (один раз) и
-// возвращает наш Client, нацеленный на него. v2-mount `secret/` поднят
-// dev-режимом по умолчанию.
+// newV1MountClient sets up additional KV v1 mount `kv-v1` (once) and returns
+// Client targeting it. v2-mount `secret/` is up by default from dev mode.
 func newV1MountClient(ctx context.Context, t *testing.T) *Client {
 	t.Helper()
 	const mount = "kv-v1"
-	// Mount идемпотентен в пределах прогона: повторный Mount даст ошибку
-	// "path is already in use" — её игнорируем (mount уже есть).
+	// Mount is idempotent: retry gives "path is already in use" which we ignore.
 	err := integrationAPI.Sys().Mount(mount, &vaultapi.MountInput{
 		Type:    "kv",
 		Options: map[string]string{"version": "1"},
@@ -181,8 +175,8 @@ func newV1MountClient(ctx context.Context, t *testing.T) *Client {
 	return cl
 }
 
-// TestReadKV_V1Mount — главный guard: обычный секрет на KV v1 читается. Ровно
-// то, что прежний дизайн НИКОГДА не читал (v1-секрет ≡ v2-missing для эвристики).
+// TestReadKV_V1Mount is the key guard: plain secret on KV v1 is read.
+// This is exactly what old design never read (v1-secret ≡ v2-missing).
 func TestReadKV_V1Mount(t *testing.T) {
 	ctx := context.Background()
 	cl := newV1MountClient(ctx, t)
@@ -199,7 +193,7 @@ func TestReadKV_V1Mount(t *testing.T) {
 	if got["password"] != "v1-secret" || got["user"] != "redis" {
 		t.Errorf("v1 payload = %v, want flat %v", got, want)
 	}
-	// Logical-форма пути — тот же результат.
+	// Logical path form gives same result.
 	got2, err := cl.ReadKV(ctx, "kv-v1/redis/admin")
 	if err != nil {
 		t.Fatalf("ReadKV v1 (logical): %v", err)
@@ -209,10 +203,10 @@ func TestReadKV_V1Mount(t *testing.T) {
 	}
 }
 
-// TestWriteKV_V1Mount — главный write-guard: запись на KV v1 ложится end-to-end
-// и читается обратно плоско. До этого v1-запись была доказана только unit-
-// роутингом (TestWriteKV_V1Routing глушит результат на mock-е); это реальный
-// путь записи приватника Sigil на v1-mount (KVv1.Put, плоский путь без /data/).
+// TestWriteKV_V1Mount is the key write guard: writes to KV v1 work end-to-end
+// and read back flat. Previously v1-write was proven only by unit routing
+// (TestWriteKV_V1Routing mocks result); this is real write path for Sigil
+// private key to v1-mount (KVv1.Put, flat path without /data/).
 func TestWriteKV_V1Mount(t *testing.T) {
 	ctx := context.Background()
 	cl := newV1MountClient(ctx, t)
@@ -222,7 +216,7 @@ func TestWriteKV_V1Mount(t *testing.T) {
 		t.Fatalf("WriteKV v1: %v", err)
 	}
 
-	// Сверка низкоуровневым клиентом — то, что реально легло на v1-mount.
+	// Verify with low-level client what actually landed on v1-mount.
 	got, err := integrationAPI.KVv1("kv-v1").Get(ctx, "sigil-keys/written-v1")
 	if err != nil {
 		t.Fatalf("low-level KVv1 Get: %v", err)
@@ -234,7 +228,7 @@ func TestWriteKV_V1Mount(t *testing.T) {
 		t.Errorf("v1 stored payload = %v, want %v", got.Data, want)
 	}
 
-	// И через наш ReadKV (round-trip целиком через клиент): плоский payload.
+	// And via our ReadKV (full round-trip through client): flat payload.
 	back, err := cl.ReadKV(ctx, "sigil-keys/written-v1")
 	if err != nil {
 		t.Fatalf("ReadKV after WriteKV v1: %v", err)
@@ -244,11 +238,10 @@ func TestWriteKV_V1Mount(t *testing.T) {
 	}
 }
 
-// TestVaultCEL_HashField_V1Mount — `#field`-селектор vault('kv-v1/x#field')
-// поверх РЕАЛЬНОГО v1-mount-а: путь splitVaultField → ReadKV (v1-routing) →
-// извлечение одного поля. До этого #field был покрыт только на v2 (version-
-// agnostic stubKV в shared/cel не моделирует routing). Здесь KVReader — наш
-// настоящий v1-Client, поэтому проверка закрывает v1-ветку end-to-end.
+// TestVaultCEL_HashField_V1Mount tests `#field` selector vault('kv-v1/x#field')
+// on REAL v1-mount: path splitVaultField → ReadKV (v1-routing) → field extract.
+// Previously #field covered only v2 (version-agnostic stubKV in shared/cel
+// doesn't model routing). Here KVReader is our real v1-Client, closing v1 e2e.
 func TestVaultCEL_HashField_V1Mount(t *testing.T) {
 	ctx := context.Background()
 	cl := newV1MountClient(ctx, t)
@@ -265,7 +258,7 @@ func TestVaultCEL_HashField_V1Mount(t *testing.T) {
 		t.Fatalf("cel.New(WithVault): %v", err)
 	}
 
-	// #field → одно поле напрямую.
+	// #field → single field directly.
 	out, err := eng.EvalInterpolation("${ vault('kv-v1/redis/hashfield#password') }", cel.Vars{Ctx: ctx})
 	if err != nil {
 		t.Fatalf("EvalInterpolation #field v1: %v", err)
@@ -274,7 +267,7 @@ func TestVaultCEL_HashField_V1Mount(t *testing.T) {
 		t.Errorf("vault(#field) on v1 = %v, want v1-hashed-secret", out)
 	}
 
-	// Без #field — весь map, доступ к полю CEL-выражением (та же v1-ветка).
+	// Without #field — whole map, access via CEL expression (same v1 path).
 	out2, err := eng.EvalInterpolation("${ vault('kv-v1/redis/hashfield').user }", cel.Vars{Ctx: ctx})
 	if err != nil {
 		t.Fatalf("EvalInterpolation .field v1: %v", err)
@@ -284,7 +277,7 @@ func TestVaultCEL_HashField_V1Mount(t *testing.T) {
 	}
 }
 
-// TestReadKV_V2Mount — регресс-guard: v2-mount продолжает читаться через probe.
+// TestReadKV_V2Mount is regression guard: v2-mount still reads via probe.
 func TestReadKV_V2Mount(t *testing.T) {
 	ctx := context.Background()
 	want := map[string]any{"signing_key": "v2-secret"}
@@ -300,21 +293,21 @@ func TestReadKV_V2Mount(t *testing.T) {
 	}
 }
 
-// TestReadKV_V2Missing_NotMaskedAsV1 — инвариант держится КОНСТРУКТИВНО:
-// missing-секрет на v2 → ErrVaultKVNotFound (а не «деградация в v1-чтение»),
-// потому что версию даёт probe sys/internal/ui/mounts, а не класс ошибки
-// KVv2.Get. Именно этот случай ломал прежнюю эвристику.
+// TestReadKV_V2Missing_NotMaskedAsV1 ensures invariant constructively:
+// missing secret on v2 → ErrVaultKVNotFound (not "degrade to v1"), because
+// version comes from probe sys/internal/ui/mounts, not KVv2.Get error class.
+// This case broke the old heuristic.
 func TestReadKV_V2Missing_NotMaskedAsV1(t *testing.T) {
 	_, err := integrationClient.ReadKV(context.Background(), "keeper/definitely-missing-v2")
 	if !errors.Is(err, ErrVaultKVNotFound) {
-		t.Fatalf("v2 missing: err=%v, want ErrVaultKVNotFound (probe резолвит v2 конструктивно)", err)
+		t.Fatalf("v2 missing: err=%v, want ErrVaultKVNotFound (probe resolves v2 constructively)", err)
 	}
 }
 
-// TestReadKV_ExplicitVersionOverride — kv_version="1" форсит v1-роутинг без
-// probe. Для жёсткой проверки «probe не вызван» поднимаем Client на mount, у
-// которого probe-endpoint вернул бы v2 (secret/), но читать его как v1 нельзя —
-// поэтому override проверяем на реальном v1-mount с принудительным kv_version.
+// TestReadKV_ExplicitVersionOverride tests kv_version="1" forces v1 routing
+// without probe. To strictly verify "probe not called", we use mount where
+// probe would return v2 (secret/), but can't read as v1, so override is
+// tested on real v1-mount with explicit kv_version.
 func TestReadKV_ExplicitVersionOverride(t *testing.T) {
 	ctx := context.Background()
 	const mount = "kv-v1"
@@ -367,7 +360,7 @@ func TestIntegration_VaultReadKV_RoundTrip(t *testing.T) {
 		t.Errorf("created_by = %v, want %v", got["created_by"], want["created_by"])
 	}
 
-	// Relative форма пути — тот же результат.
+	// Relative form of path gives same result.
 	got2, err := integrationClient.ReadKV(ctx, "keeper/jwt-signing-key")
 	if err != nil {
 		t.Fatalf("ReadKV (relative): %v", err)
@@ -391,8 +384,8 @@ func TestIntegration_Ping(t *testing.T) {
 	}
 }
 
-// TestIntegration_VaultListKV — LIST под prefix отдаёт имена секретов
-// (последний сегмент, key_id), а не полные пути.
+// TestIntegration_VaultListKV verifies LIST under prefix returns secret names
+// (last segment, key_id), not full paths.
 func TestIntegration_VaultListKV(t *testing.T) {
 	ctx := context.Background()
 	kv := integrationAPI.KVv2("secret")
@@ -416,7 +409,7 @@ func TestIntegration_VaultListKV(t *testing.T) {
 			t.Errorf("ListKV result %v missing %q (expected last-segment key_id)", got, want)
 		}
 	}
-	// Logical-форма prefix-а даёт тот же результат.
+	// Logical form of prefix gives same result.
 	got2, err := integrationClient.ListKV(ctx, "secret/keeper/sigil-keys")
 	if err != nil {
 		t.Fatalf("ListKV (logical prefix): %v", err)
@@ -426,20 +419,20 @@ func TestIntegration_VaultListKV(t *testing.T) {
 	}
 }
 
-// TestIntegration_VaultListKV_EmptyPrefix — несуществующая подпапка → (nil, nil),
-// НЕ ошибка (валидное «сирот нет»).
+// TestIntegration_VaultListKV_EmptyPrefix verifies nonexistent subfolder →
+// (nil, nil), not error (valid "no orphans").
 func TestIntegration_VaultListKV_EmptyPrefix(t *testing.T) {
 	got, err := integrationClient.ListKV(context.Background(), "keeper/never-existed-prefix")
 	if err != nil {
-		t.Fatalf("ListKV on missing prefix should not error, got: %v", err)
+		t.Fatalf("ListKV on missing prefix should not error: %v", err)
 	}
 	if got != nil {
 		t.Errorf("ListKV on missing prefix should return nil, got %v", got)
 	}
 }
 
-// TestIntegration_VaultReadKVMetadata — metadata-read отдаёт created_time, не
-// трогая data-путь секрета.
+// TestIntegration_VaultReadKVMetadata verifies metadata-read returns created_time
+// without touching secret data path.
 func TestIntegration_VaultReadKVMetadata(t *testing.T) {
 	ctx := context.Background()
 	kv := integrationAPI.KVv2("secret")
@@ -459,7 +452,7 @@ func TestIntegration_VaultReadKVMetadata(t *testing.T) {
 	}
 }
 
-// TestIntegration_VaultReadKVMetadata_NotFound — несуществующий путь →
+// TestIntegration_VaultReadKVMetadata_NotFound verifies nonexistent path →
 // ErrVaultKVNotFound.
 func TestIntegration_VaultReadKVMetadata_NotFound(t *testing.T) {
 	_, err := integrationClient.ReadKVMetadata(context.Background(), "keeper/sigil-keys/never-existed")
@@ -468,8 +461,8 @@ func TestIntegration_VaultReadKVMetadata_NotFound(t *testing.T) {
 	}
 }
 
-// TestIntegration_PKI_SignCSR — happy-path: CSR на test.example.com →
-// получили валидный PEM-cert + CA-chain + serial_number + not_after.
+// TestIntegration_PKI_SignCSR is happy-path: CSR for test.example.com →
+// get valid PEM-cert + CA-chain + serial_number + not_after.
 func TestIntegration_PKI_SignCSR(t *testing.T) {
 	if !pkiReady {
 		t.Skip("PKI backend not provisioned")
@@ -496,7 +489,7 @@ func TestIntegration_PKI_SignCSR(t *testing.T) {
 	if !res.NotAfter.After(time.Now()) {
 		t.Errorf("NotAfter %v not in the future", res.NotAfter)
 	}
-	// Парсим cert — sanity: CN совпадает с CSR.
+	// Parse cert — sanity check: CN matches CSR.
 	block, _ := pem.Decode(res.CertificatePEM)
 	if block == nil {
 		t.Fatal("pem.Decode: nil block")
@@ -510,8 +503,8 @@ func TestIntegration_PKI_SignCSR(t *testing.T) {
 	}
 }
 
-// TestIntegration_PKI_BadRole — несуществующий role в PKI mount возвращает
-// ошибку (Vault → 404 + errors).
+// TestIntegration_PKI_BadRole verifies nonexistent role in PKI mount
+// returns error (Vault → 404 + errors).
 func TestIntegration_PKI_BadRole(t *testing.T) {
 	if !pkiReady {
 		t.Skip("PKI backend not provisioned")
@@ -523,8 +516,8 @@ func TestIntegration_PKI_BadRole(t *testing.T) {
 	}
 }
 
-// TestIntegration_PKI_DomainNotAllowed — CN вне `allowed_domains` →
-// Vault отвергает (cf. provisionPKI role-конфиг).
+// TestIntegration_PKI_DomainNotAllowed verifies CN outside `allowed_domains` →
+// Vault rejects (cf. provisionPKI role config).
 func TestIntegration_PKI_DomainNotAllowed(t *testing.T) {
 	if !pkiReady {
 		t.Skip("PKI backend not provisioned")
@@ -536,12 +529,10 @@ func TestIntegration_PKI_DomainNotAllowed(t *testing.T) {
 	}
 }
 
-// mustMakeCSR генерирует RSA-2048-ключ и PEM-encoded CSR на указанный CN.
-//
-// RSA, а не ECDSA — Vault PKI role по умолчанию (`key_type: rsa`)
-// отвергает не-RSA ключи. Опция `key_type=ec` в provisionPKI оставлена
-// как future-proof, но не используется в MVP, чтобы зеркалить
-// docs/dev/local-setup.md (где key_type не указан — Vault default).
+// mustMakeCSR generates RSA-2048 key and PEM-encoded CSR for given CN.
+// Uses RSA not ECDSA — Vault PKI role defaults to `key_type: rsa` and rejects
+// non-RSA keys. Option `key_type=ec` in provisionPKI kept for future-proofing
+// but unused in MVP to mirror docs/dev/local-setup.md (key_type unspecified).
 func mustMakeCSR(t *testing.T, cn string) string {
 	t.Helper()
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)

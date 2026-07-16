@@ -9,20 +9,21 @@ import (
 	vaultapi "github.com/hashicorp/vault/api"
 )
 
-// TokenRenewer — фоновый авто-продлеватель токена keeper-а.
+// TokenRenewer is a background auto-renewer for the keeper's token.
 //
-// Без него short-lived токен (approle в staging/prod) протухает по TTL →
-// все vault-резолвы (CEL vault(), vault:-ref, core.vault.kv-read, чтение
-// JWT-signing-key) начинают падать → отказ Operator API. Watcher держит
-// токен живым, пока процесс жив.
+// Without it, a short-lived token (approle in staging/prod) expires by TTL →
+// all vault resolutions (CEL vault(), vault:-ref, core.vault.kv-read,
+// JWT-signing-key reads) start failing → Operator API outage. The watcher
+// keeps the token alive as long as the process is alive.
 //
-// Деградация: root/static dev-токен (частый случай локально) не renewable —
-// тогда watcher не стартует (warn в лог), keeper работает дальше.
+// Degradation: a root/static dev token (common locally) isn't renewable —
+// in that case the watcher doesn't start (warn in the log), and keeper
+// keeps running.
 //
-// Lifecycle: Start запускает goroutine под переданным ctx; на ctx.Done()
-// (SIGTERM) goroutine останавливает vault-watcher и выходит. Stop() даёт
-// синхронный wait — caller дожидается выхода goroutine в shutdown-defer-е,
-// симметрично reaper-runner-у в keeper run.
+// Lifecycle: Start launches a goroutine under the passed ctx; on ctx.Done()
+// (SIGTERM) the goroutine stops the vault watcher and exits. Stop() gives a
+// synchronous wait — the caller waits for the goroutine to exit in the
+// shutdown defer, symmetric with the reaper runner in keeper run.
 type TokenRenewer struct {
 	c      *vaultapi.Client
 	logger *slog.Logger
@@ -31,14 +32,16 @@ type TokenRenewer struct {
 	done    chan struct{}
 }
 
-// StartTokenRenewer проверяет renewable-флаг текущего токена и, если он
-// renewable, запускает фоновый LifetimeWatcher. Возвращает *TokenRenewer
-// с методом Stop для graceful-остановки, либо nil, если watcher не нужен
-// (non-renewable токен — штатная деградация, не ошибка).
+// StartTokenRenewer checks the renewable flag of the current token and, if
+// it's renewable, starts a background LifetimeWatcher. Returns a
+// *TokenRenewer with a Stop method for graceful shutdown, or nil if no
+// watcher is needed (a non-renewable token is normal degradation, not an
+// error).
 //
-// Ошибку возвращает только при сбое lookup-self или конструирования
-// watcher-а — caller (keeper run) решает, фатально это или warn. Сам
-// факт «токен не renewable» ошибкой НЕ считается.
+// Returns an error only on lookup-self failure or watcher construction
+// failure — the caller (keeper run) decides whether that's fatal or a
+// warning. The fact that "the token isn't renewable" is NOT considered an
+// error.
 func (c *Client) StartTokenRenewer(ctx context.Context, logger *slog.Logger) (*TokenRenewer, error) {
 	if logger == nil {
 		logger = slog.Default()
@@ -54,19 +57,20 @@ func (c *Client) StartTokenRenewer(ctx context.Context, logger *slog.Logger) (*T
 		return nil, fmt.Errorf("vault: parse token renewable flag: %w", err)
 	}
 	if !renewable {
-		// Root/static dev-токен — штатный кейс. Не падаем, просто живём
-		// без auto-renew. В проде это сигнал, что approle настроен не
-		// renewable — отсюда warn, а не info.
+		// A root/static dev token is a normal case. We don't fail, we just
+		// live without auto-renew. In prod this signals that approle is
+		// configured as not renewable — hence warn, not info.
 		logger.Warn("vault: token not renewable, auto-renew disabled")
 		return nil, nil
 	}
 
-	// LifetimeWatcher продлевает по Secret. Для токена собираем Secret с
-	// Auth.ClientToken — иначе watcher не знает, какой именно токен renew-ить.
-	// RenewBehaviorIgnoreErrors: транзиентные сетевые ошибки не валят watcher
-	// мгновенно — он добивает попытки до lifetime-threshold, после чего
-	// штатно выходит через DoneCh (caller получит warn и keeper останется на
-	// последнем валидном токене до его реального истечения).
+	// LifetimeWatcher renews based on a Secret. For a token we build a
+	// Secret with Auth.ClientToken — otherwise the watcher doesn't know
+	// which token to renew. RenewBehaviorIgnoreErrors: transient network
+	// errors don't kill the watcher instantly — it keeps retrying up to the
+	// lifetime threshold, after which it exits normally via DoneCh (the
+	// caller gets a warn and keeper stays on the last valid token until it
+	// actually expires).
 	secret := &vaultapi.Secret{
 		Auth: &vaultapi.SecretAuth{
 			ClientToken:   c.c.Token(),
@@ -94,8 +98,9 @@ func (c *Client) StartTokenRenewer(ctx context.Context, logger *slog.Logger) (*T
 	return r, nil
 }
 
-// run крутит vault-watcher до ctx.Done() либо до его собственного выхода
-// (DoneCh — токен дошёл до lifetime-threshold и продлить дальше нельзя).
+// run drives the vault watcher until ctx.Done() or until it exits on its
+// own (DoneCh — the token reached the lifetime threshold and can't be
+// renewed further).
 func (r *TokenRenewer) run(ctx context.Context) {
 	defer close(r.done)
 
@@ -105,16 +110,16 @@ func (r *TokenRenewer) run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			// Graceful shutdown: останавливаем watcher (defer) и выходим.
+			// Graceful shutdown: stop the watcher (defer) and exit.
 			r.logger.Info("vault: token auto-renew stopping (shutdown)")
 			return
 
 		case err := <-r.watcher.DoneCh():
-			// Watcher завершился сам. err != nil — продление сорвалось;
-			// err == nil — токен достиг threshold и renew не продлевает
-			// (нечего больше делать). В обоих случаях токен скоро/уже
-			// невалиден — это надо видеть в логах. Значение токена НЕ
-			// логируем.
+			// The watcher exited on its own. err != nil — renewal failed;
+			// err == nil — the token reached the threshold and renew won't
+			// extend it further (nothing more to do). Either way the token
+			// is soon/already invalid — this needs to be visible in the
+			// logs. The token value is NOT logged.
 			if err != nil {
 				r.logger.Error("vault: token auto-renew failed, token will expire", slog.Any("error", err))
 			} else {
@@ -123,16 +128,16 @@ func (r *TokenRenewer) run(ctx context.Context) {
 			return
 
 		case renewal := <-r.watcher.RenewCh():
-			// Успешное продление. Логируем только TTL, без токена.
+			// Successful renewal. We only log the TTL, not the token.
 			r.logger.Info("vault: token renewed",
 				slog.Int("lease_duration_seconds", leaseDurationSeconds(renewal.Secret)))
 		}
 	}
 }
 
-// Stop блокирует до выхода фоновой goroutine. Caller вызывает её из
-// shutdown-defer-а после отмены ctx. Безопасна при r == nil (когда
-// watcher не стартовал — non-renewable токен).
+// Stop blocks until the background goroutine exits. The caller invokes it
+// from a shutdown defer after ctx is canceled. Safe when r == nil (when the
+// watcher never started — a non-renewable token).
 func (r *TokenRenewer) Stop() {
 	if r == nil {
 		return
@@ -140,10 +145,11 @@ func (r *TokenRenewer) Stop() {
 	<-r.done
 }
 
-// leaseDurationSeconds достаёт оставшийся lease токена в секундах из
-// renew-ответа watcher-а (RenewCh): там TTL приходит в Secret.Auth.LeaseDuration
-// либо в top-level LeaseDuration. 0 — если данных нет (только лог). Для
-// lookup-self ответа TTL лежит иначе (Data["ttl"]) — см. selfTokenTTLSeconds.
+// leaseDurationSeconds extracts the token's remaining lease in seconds from
+// the watcher's renew response (RenewCh): the TTL arrives in
+// Secret.Auth.LeaseDuration or the top-level LeaseDuration. 0 if there's no
+// data (logging only). For a lookup-self response, the TTL lives elsewhere
+// (Data["ttl"]) — see selfTokenTTLSeconds.
 func leaseDurationSeconds(s *vaultapi.Secret) int {
 	if s == nil {
 		return 0
@@ -154,11 +160,12 @@ func leaseDurationSeconds(s *vaultapi.Secret) int {
 	return s.LeaseDuration
 }
 
-// selfTokenTTLSeconds достаёт оставшийся TTL токена из lookup-self ответа.
-// Vault кладёт его в Data["ttl"] (JSON number), а Auth/top-level LeaseDuration
-// в этом ответе нулевые — поэтому отдельная функция для seed-а watcher-а.
-// 0 — если поля нет/распарсить нельзя (watcher продлит по первому renew и
-// подставит реальный TTL сам, seed лишь подсказка для начального расписания).
+// selfTokenTTLSeconds extracts the token's remaining TTL from a lookup-self
+// response. Vault puts it in Data["ttl"] (JSON number), while Auth/
+// top-level LeaseDuration are zero in this response — hence a separate
+// function for seeding the watcher. 0 if the field is missing/unparseable
+// (the watcher will renew on the first cycle and fill in the real TTL
+// itself; the seed is just a hint for the initial schedule).
 func selfTokenTTLSeconds(s *vaultapi.Secret) int {
 	if s == nil || s.Data == nil {
 		return 0

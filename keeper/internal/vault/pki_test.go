@@ -14,12 +14,12 @@ import (
 	vaultapi "github.com/hashicorp/vault/api"
 )
 
-// newTestClient поднимает httptest.Server, имитирующий Vault HTTP API
-// (handler-функция отвечает на любой path), и оборачивает его в наш
-// *Client с фиксированным kvMount.
+// newTestClient spins up an httptest.Server simulating the Vault HTTP API
+// (the handler function responds to any path), and wraps it in our *Client
+// with a fixed kvMount.
 //
-// handler — функция, принимающая w/r — она интерпретирует path как
-// `/v1/<vault-path>` и решает, что вернуть.
+// handler — a function taking w/r — it interprets the path as
+// `/v1/<vault-path>` and decides what to return.
 func newTestClient(t *testing.T, handler http.HandlerFunc) (*Client, *httptest.Server) {
 	t.Helper()
 	srv := httptest.NewServer(handler)
@@ -184,8 +184,8 @@ func TestSignCSR_VaultHTTPError(t *testing.T) {
 	if err == nil {
 		t.Fatal("SignCSR: nil err, want HTTP error")
 	}
-	// Errors из vaultapi оборачиваются нашим fmt.Errorf — sentinel-теста
-	// здесь нет, проверяем только что err != nil.
+	// Errors from vaultapi are wrapped by our fmt.Errorf — there's no
+	// sentinel test here, we only check that err != nil.
 }
 
 func TestCoerceExpiration_Variants(t *testing.T) {
@@ -193,9 +193,9 @@ func TestCoerceExpiration_Variants(t *testing.T) {
 	want := time.Unix(now, 0).UTC()
 
 	type jsonNumberStub struct{ n int64 }
-	// json.Number имитируем через Stringer + Int64() — но coerceExpiration
-	// проверяет interface{ Int64() (int64, error) }, поэтому подсовываем
-	// прямой json.Number от encoding/json.
+	// We simulate json.Number via Stringer + Int64() — but coerceExpiration
+	// checks interface{ Int64() (int64, error) }, so we feed it a direct
+	// json.Number from encoding/json.
 	cases := []struct {
 		name string
 		in   any

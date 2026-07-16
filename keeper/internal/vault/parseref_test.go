@@ -14,7 +14,7 @@ func TestParseRef_HappyPath(t *testing.T) {
 		{"vault:secret/keeper/jwt-signing-key", "secret/keeper/jwt-signing-key"},
 		{"vault:kv/foo/bar/baz", "kv/foo/bar/baz"},
 		{"vault:/secret/keeper/k", "secret/keeper/k"},
-		// нормализация: повторные слэши схлопываются в один.
+		// normalization: repeated slashes collapse into one.
 		{"vault:secret//keeper/x", "secret/keeper/x"},
 		{"vault:secret///keeper//x", "secret/keeper/x"},
 		{"vault:secret/services/redis/prod", "secret/services/redis/prod"},
@@ -35,17 +35,17 @@ func TestParseRef_HappyPath(t *testing.T) {
 func TestParseRef_Errors(t *testing.T) {
 	bad := []string{
 		"",
-		"secret/keeper/x",                 // нет префикса vault:
-		"vault:",                          // пустое тело
-		"vault:keeper-only",               // нет mount-разделителя
-		"vault:/",                         // только mount-разделитель
-		"vault:secret/",                   // trailing slash без rel
-		"file:/etc/keeper/key.bin",        // другой scheme
-		"vault:secret/./keeper/x",         // сегмент `.` отвергается
-		"vault:secret/keeper/../keeper/x", // сегмент `..` отвергается (подъём)
-		"vault:secret/../keeper/x",        // `..` сразу после mount
+		"secret/keeper/x",                 // no vault: prefix
+		"vault:",                          // empty body
+		"vault:keeper-only",               // no mount separator
+		"vault:/",                         // only the mount separator
+		"vault:secret/",                   // trailing slash with no rel
+		"file:/etc/keeper/key.bin",        // different scheme
+		"vault:secret/./keeper/x",         // `.` segment is rejected
+		"vault:secret/keeper/../keeper/x", // `..` segment is rejected (climb)
+		"vault:secret/../keeper/x",        // `..` right after the mount
 		"vault:secret/keeper/..",          // trailing `..`
-		"vault:..",                        // тело только из `..`
+		"vault:..",                        // body is just `..`
 	}
 	for _, ref := range bad {
 		t.Run(ref, func(t *testing.T) {

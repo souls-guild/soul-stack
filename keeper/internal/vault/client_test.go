@@ -15,29 +15,29 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// fakeVaultMux отдаёт минимально-достаточный subset Vault HTTP API:
+// fakeVaultMux serves a minimally-sufficient subset of the Vault HTTP API:
 //
-//   - GET  /v1/sys/health            → 200 (для Ping).
-//   - GET  /v1/<mount>/data/<rel>    → KV v2 envelope или 404.
-//   - POST /v1/auth/approle/login    → client-token, если role_id/secret_id
-//     совпали с ожидаемыми; 400 иначе (имитирует Vault permission denied).
+//   - GET  /v1/sys/health            → 200 (for Ping).
+//   - GET  /v1/<mount>/data/<rel>    → KV v2 envelope or 404.
+//   - POST /v1/auth/approle/login    → client token, if role_id/secret_id
+//     match expectations; 400 otherwise (simulates Vault permission denied).
 //
-// Для тестов достаточно — KVv2.Get и approle login внутри vault/api идут так.
+// Sufficient for tests — KVv2.Get and approle login inside vault/api work this way.
 type fakeVaultMux struct {
 	mount   string
 	secrets map[string]map[string]any
 
-	// kvVersion — версия, которую probe-endpoint sys/internal/ui/mounts/<mount>
-	// сообщает для mount-а ("1"/"2"). Пусто → probe-endpoint отвечает 403
-	// (имитация ACL-deny). Управляет и тем, по какому пути отдаются секреты
-	// (v2 → /data/, v1 → плоский /<rel>).
+	// kvVersion is the version reported by probe-endpoint sys/internal/ui/mounts/<mount>
+	// for the mount ("1"/"2"). Empty → probe-endpoint responds with 403 (simulates
+	// ACL-deny). Also controls which path is used to serve secrets (v2 → /data/,
+	// v1 → flat /<rel>).
 	kvVersion string
-	// probeForbidden форсит 403 на probe-endpoint независимо от kvVersion
-	// (для теста «probe закрыт ACL»).
+	// probeForbidden forces 403 on probe-endpoint regardless of kvVersion
+	// (for testing "probe closed by ACL").
 	probeForbidden bool
 	probeRequests  int
 
-	// approle-ожидания (если wantRoleID != "" — login-handler активен).
+	// approle expectations (if wantRoleID != "" — login-handler is active).
 	wantRoleID    string
 	wantSecretID  string
 	issuedToken   string
@@ -49,14 +49,14 @@ func newFakeVault(mount string) *fakeVaultMux {
 	return &fakeVaultMux{
 		mount:     mount,
 		secrets:   make(map[string]map[string]any),
-		kvVersion: "2", // dev-default; тесты v1 переопределяют.
+		kvVersion: "2", // dev-default; v1 tests override.
 	}
 }
 
 func (f *fakeVaultMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.URL.Path == "/v1/sys/health":
-		// Vault dev возвращает 200 в active, 429 в standby. Для тестов — 200.
+		// Vault dev returns 200 in active, 429 in standby. For tests — 200.
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"initialized":true,"sealed":false,"standby":false,"version":"test"}`))
 		return
@@ -87,7 +87,7 @@ func (f *fakeVaultMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 
 	case r.URL.Path == "/v1/sys/internal/ui/mounts/"+f.mount:
-		// Probe версии KV mount-а. 403 → имитация ACL-deny / probeForbidden.
+		// Probe KV mount version. 403 → simulates ACL-deny / probeForbidden.
 		f.probeRequests++
 		if f.probeForbidden || f.kvVersion == "" {
 			w.WriteHeader(http.StatusForbidden)
@@ -106,7 +106,7 @@ func (f *fakeVaultMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 
 	case strings.HasPrefix(r.URL.Path, "/v1/"+f.mount+"/data/"):
-		// KV v2 read-путь.
+		// KV v2 read-path.
 		rel := strings.TrimPrefix(r.URL.Path, "/v1/"+f.mount+"/data/")
 		data, ok := f.secrets[rel]
 		if !ok {
@@ -126,8 +126,8 @@ func (f *fakeVaultMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// KV v1 read-путь — плоский `/v1/<mount>/<rel>` (без /data/). Проверяем
-	// последним, т.к. префикс `/v1/<mount>/` пересекается с /data/ и /metadata/.
+	// KV v1 read-path — flat `/v1/<mount>/<rel>` (no /data/). Checked last
+	// because prefix `/v1/<mount>/` overlaps with /data/ and /metadata/.
 	if strings.HasPrefix(r.URL.Path, "/v1/"+f.mount+"/") {
 		rel := strings.TrimPrefix(r.URL.Path, "/v1/"+f.mount+"/")
 		data, ok := f.secrets[rel]
@@ -190,7 +190,7 @@ func TestNewClient_DefaultMount(t *testing.T) {
 	cl, err := NewClient(context.Background(), config.KeeperVault{
 		Addr:  addr,
 		Token: "root",
-		// KVMount пуст — должен подставиться "secret".
+		// KVMount empty — should default to "secret".
 	})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
@@ -217,7 +217,7 @@ func TestReadKV_HappyPath(t *testing.T) {
 		t.Fatalf("NewClient: %v", err)
 	}
 
-	// Logical path с префиксом mount-а.
+	// Logical path with mount prefix.
 	got, err := cl.ReadKV(context.Background(), "secret/keeper/jwt-signing-key")
 	if err != nil {
 		t.Fatalf("ReadKV: %v", err)
@@ -226,7 +226,7 @@ func TestReadKV_HappyPath(t *testing.T) {
 		t.Errorf("signing_key = %v", got["signing_key"])
 	}
 
-	// Relative path без префикса — тот же результат.
+	// Relative path without prefix — same result.
 	got2, err := cl.ReadKV(context.Background(), "keeper/jwt-signing-key")
 	if err != nil {
 		t.Fatalf("ReadKV (relative): %v", err)
@@ -280,8 +280,8 @@ func TestPing(t *testing.T) {
 }
 
 func TestReadKV_TrailingSlashInMount(t *testing.T) {
-	// `KVMount: "secret/"` без нормализации даёт URL `secret//data/...`,
-	// который Vault интерпретирует как другой path → silent miss.
+	// `KVMount: "secret/"` without normalization produces URL `secret//data/...`,
+	// which Vault interprets as a different path → silent miss.
 	mux, addr := startFakeVault(t, "secret")
 	mux.secrets["keeper/jwt-signing-key"] = map[string]any{"signing_key": "trailing"}
 
@@ -303,7 +303,7 @@ func TestReadKV_TrailingSlashInMount(t *testing.T) {
 }
 
 func TestReadKV_LeadingSlashInPath(t *testing.T) {
-	// `path: "/secret/foo"` без нормализации даёт URL `secret/data//secret/foo`
+	// `path: "/secret/foo"` without normalization produces URL `secret/data//secret/foo`
 	// — silent wrong-path.
 	mux, addr := startFakeVault(t, "secret")
 	mux.secrets["keeper/jwt-signing-key"] = map[string]any{"signing_key": "leading"}
@@ -324,8 +324,8 @@ func TestReadKV_LeadingSlashInPath(t *testing.T) {
 }
 
 func TestRelativeKVPath_RejectsDotDot(t *testing.T) {
-	// Defense-in-depth: `..`-сегмент в KV-пути → fail-closed на всех
-	// KV-методах (relativeKVPath). Легитимный путь (secret/keeper/...) — ок.
+	// Defense-in-depth: `..` segment in KV path → fail-closed on all
+	// KV methods (relativeKVPath). Legitimate path (secret/keeper/...) — ok.
 	mux, addr := startFakeVault(t, "secret")
 	mux.secrets["keeper/jwt-signing-key"] = map[string]any{"signing_key": "ok"}
 
@@ -337,15 +337,15 @@ func TestRelativeKVPath_RejectsDotDot(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	// Легитимный путь не должен ломаться guard-ом.
+	// Legitimate path must not break due to guard.
 	if _, err := cl.ReadKV(ctx, "secret/keeper/jwt-signing-key"); err != nil {
 		t.Fatalf("ReadKV legit path: unexpected error %v", err)
 	}
 
 	badPaths := []string{
-		"secret/keeper/../jwt-signing-key", // `..` в середине
-		"keeper/../../etc",                 // ведущий выход за scope
-		"../keeper/jwt-signing-key",        // `..` после strip mount-prefix
+		"secret/keeper/../jwt-signing-key", // `..` in middle
+		"keeper/../../etc",                 // leading escape out of scope
+		"../keeper/jwt-signing-key",        // `..` after strip mount-prefix
 	}
 	for _, bad := range badPaths {
 		bad := bad
@@ -367,9 +367,9 @@ func TestRelativeKVPath_RejectsDotDot(t *testing.T) {
 }
 
 func TestNewClient_PingFails_OnInvalidAddr(t *testing.T) {
-	// Адрес без слушающего сокета — Ping упадёт, NewClient вернёт ошибку.
+	// Address without listening socket — Ping will fail, NewClient will return error.
 	_, err := NewClient(context.Background(), config.KeeperVault{
-		Addr:    "http://127.0.0.1:1", // зарезервированный порт, никто не слушает
+		Addr:    "http://127.0.0.1:1", // reserved port, no one listening
 		Token:   "root",
 		KVMount: "secret",
 	})
@@ -384,7 +384,7 @@ const (
 	testApproleToken    = "s.issued-client-token"
 )
 
-// writeSecretIDFile кладёт secret_id в mode-0400 файл во временной директории.
+// writeSecretIDFile writes secret_id to a mode-0400 file in a temporary directory.
 func writeSecretIDFile(t *testing.T, content string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -401,7 +401,7 @@ func TestNewClient_AppRole_FileSource(t *testing.T) {
 	mux.wantSecretID = testApproleSecretID
 	mux.issuedToken = testApproleToken
 
-	// Trailing newline в файле — типично для `echo > file`; должен сниматься.
+	// Trailing newline in file — typical from `echo > file`; should be stripped.
 	sidFile := writeSecretIDFile(t, testApproleSecretID+"\n")
 
 	cl, err := NewClient(context.Background(), config.KeeperVault{
@@ -422,7 +422,7 @@ func TestNewClient_AppRole_FileSource(t *testing.T) {
 	if cl.c.Token() != testApproleToken {
 		t.Errorf("client token not set from login response")
 	}
-	// secret_id из payload не должен случайно подмениться значением с \n.
+	// secret_id from payload must not accidentally be replaced with value containing \n.
 	if got, _ := mux.lastLoginBody["secret_id"].(string); got != testApproleSecretID {
 		t.Errorf("secret_id payload = %q, want trimmed %q", got, testApproleSecretID)
 	}
@@ -475,9 +475,9 @@ func TestNewClient_AppRole_WrongSecret_NoLeak(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected login error on wrong secret_id")
 	}
-	// Утечь в текст ошибки не должны ни secret_id, ни role_id, ни выпускаемый
-	// токен. role_id по ADR-014 не секрет, но его всё равно держим вне
-	// сообщений об ошибках (минимизация поверхности).
+	// Error text must not leak secret_id, role_id, or issued token. role_id per
+	// ADR-014 is not a secret, but we keep it out of error messages anyway
+	// (minimize surface area).
 	msg := err.Error()
 	for _, leak := range []struct{ name, val string }{
 		{"secret_id", wrongSecret},
@@ -497,7 +497,7 @@ func TestNewClient_AppRole_MissingSecretSource(t *testing.T) {
 		Auth: config.KeeperVaultAuth{
 			Method: config.AuthMethodAppRole,
 			RoleID: testApproleRoleID,
-			// ни SecretIDFile, ни SecretIDEnv.
+			// neither SecretIDFile nor SecretIDEnv.
 		},
 	})
 	if err == nil {
@@ -523,16 +523,16 @@ func TestNewClient_AppRole_EmptyFile_NoLeakPath(t *testing.T) {
 
 // --- KV version resolution (probe + override + cache) ---------------------
 //
-// Guard-набор для прозрачной поддержки KV v1/v2 (ADR-017(b) amendment
-// 2026-06-22). Прежний механизм «угадывания по классу ошибки KVv2.Get»
-// отвергнут (обычный v1-секрет неотличим от v2-missing → ErrSecretNotFound);
-// версия теперь резолвится конструктивно — probe sys/internal/ui/mounts либо
+// Guard set for transparent KV v1/v2 support (ADR-017(b) amendment
+// 2026-06-22). Previous "guess by KVv2.Get error class" mechanism rejected
+// (plain v1-secret indistinguishable from v2-missing → ErrSecretNotFound);
+// version now resolved constructively — probe sys/internal/ui/mounts or
 // explicit override vault.kv_version.
 
-// TestNewClient_NoKVGrant_StillStarts — probe строго ленивый: конструктор
-// поднимается только на Ping (sys/health, без KV-прав). Это инвариант
-// bootstrap-пути (keeper init создаёт Client до выдачи KV-доступа); probe в
-// конструкторе сломал бы его. fakeVaultMux probe-endpoint вообще не трогается.
+// TestNewClient_NoKVGrant_StillStarts — probe is strictly lazy: constructor
+// only makes Ping (sys/health, without KV permissions). This is a bootstrap-path
+// invariant (keeper init creates Client before granting KV access); probe in
+// constructor would break it. fakeVaultMux probe-endpoint is not touched at all.
 func TestNewClient_NoKVGrant_StillStarts(t *testing.T) {
 	mux, addr := startFakeVault(t, "secret")
 	cl, err := NewClient(context.Background(), config.KeeperVault{
@@ -549,15 +549,15 @@ func TestNewClient_NoKVGrant_StillStarts(t *testing.T) {
 	}
 }
 
-// TestResolveVersion_OverrideSkipsProbe — override="2"/"1" побеждает без
-// единого round-trip-а к probe-endpoint-у.
+// TestResolveVersion_OverrideSkipsProbe — override="2"/"1" wins without
+// a single round-trip to probe-endpoint.
 func TestResolveVersion_OverrideSkipsProbe(t *testing.T) {
 	for _, ver := range []string{"1", "2"} {
 		ver := ver
 		t.Run("v"+ver, func(t *testing.T) {
 			mux, addr := startFakeVault(t, "secret")
-			// probe-endpoint при попытке обращения вернул бы 403 — но к нему
-			// не должны обратиться вообще.
+			// probe-endpoint would return 403 if accessed — but it should not be
+			// accessed at all.
 			mux.probeForbidden = true
 			mux.secrets["app/cfg"] = map[string]any{"k": "v"}
 
@@ -581,8 +581,8 @@ func TestResolveVersion_OverrideSkipsProbe(t *testing.T) {
 	}
 }
 
-// TestResolveVersion_ProbeV1 / _ProbeV2 — probe options.version роутит на
-// нужную версию KV API.
+// TestResolveVersion_ProbeV1 / _ProbeV2 — probe options.version routes to
+// the correct KV API version.
 func TestResolveVersion_ProbeV2(t *testing.T) {
 	mux, addr := startFakeVault(t, "secret")
 	mux.kvVersion = "2"
@@ -626,11 +626,11 @@ func TestResolveVersion_ProbeV1(t *testing.T) {
 	}
 }
 
-// TestResolveVersion_ProbeUnexpectedValue_Fails — probe вернул mount без
-// распознаваемой версии → явная ошибка, НЕ молчаливый дефолт v2.
+// TestResolveVersion_ProbeUnexpectedValue_Fails — probe returned mount with
+// unrecognized version → explicit error, NOT silent v2 default.
 func TestResolveVersion_ProbeUnexpectedValue_Fails(t *testing.T) {
 	mux, addr := startFakeVault(t, "secret")
-	mux.kvVersion = "9" // не "1"/"2"
+	mux.kvVersion = "9" // not "1"/"2"
 	mux.secrets["app/cfg"] = map[string]any{"k": "v"}
 
 	cl, err := NewClient(context.Background(), config.KeeperVault{
@@ -651,9 +651,9 @@ func TestResolveVersion_ProbeUnexpectedValue_Fails(t *testing.T) {
 	}
 }
 
-// TestResolveVersion_ProbeForbidden_NoOverride_Fails — probe 403 (ACL закрыл
-// endpoint) + override пуст → понятная ошибка с подсказкой про override, НЕ
-// паника и НЕ молчаливый v2.
+// TestResolveVersion_ProbeForbidden_NoOverride_Fails — probe 403 (ACL closed
+// endpoint) + override empty → clear error with hint about override, NOT panic
+// or silent v2.
 func TestResolveVersion_ProbeForbidden_NoOverride_Fails(t *testing.T) {
 	mux, addr := startFakeVault(t, "secret")
 	mux.probeForbidden = true
@@ -674,8 +674,8 @@ func TestResolveVersion_ProbeForbidden_NoOverride_Fails(t *testing.T) {
 	}
 }
 
-// TestResolveVersion_Cached — второй ReadKV того же mount-а не делает
-// повторный probe (per-mount кеш).
+// TestResolveVersion_Cached — second ReadKV of same mount does not
+// make another probe (per-mount cache).
 func TestResolveVersion_Cached(t *testing.T) {
 	mux, addr := startFakeVault(t, "secret")
 	mux.secrets["app/a"] = map[string]any{"k": "a"}
@@ -699,11 +699,11 @@ func TestResolveVersion_Cached(t *testing.T) {
 	}
 }
 
-// TestResolveVersion_ConcurrentColdStart — double-checked locking в
-// resolveKVVersion схлопывает thundering-herd: N горутин одновременно бьют по
-// ХОЛОДНОМУ кешу одного mount-а, но probe-round-trip случается ровно один раз
-// (re-check под write-lock перед probe). Гонять под `go test -race` —
-// фиксирует и отсутствие гонок на kvVersions-кеше.
+// TestResolveVersion_ConcurrentColdStart — double-checked locking in
+// resolveKVVersion collapses thundering-herd: N goroutines simultaneously hit
+// COLD cache of one mount, but probe round-trip happens exactly once (re-check
+// under write-lock before probe). Run under `go test -race` — catches both
+// missing herd collapse and races on kvVersions cache.
 func TestResolveVersion_ConcurrentColdStart(t *testing.T) {
 	mux, addr := startFakeVault(t, "secret")
 	mux.kvVersion = "2"
@@ -723,7 +723,7 @@ func TestResolveVersion_ConcurrentColdStart(t *testing.T) {
 	for i := 0; i < goroutines; i++ {
 		go func() {
 			defer wg.Done()
-			<-start // синхронный старт → максимизируем шанс одновременного промаха кеша
+			<-start // synchronous start — maximize chance of concurrent cache miss
 			if _, err := cl.ReadKV(context.Background(), "app/cfg"); err != nil {
 				t.Errorf("ReadKV cold-start: %v", err)
 			}
@@ -732,18 +732,18 @@ func TestResolveVersion_ConcurrentColdStart(t *testing.T) {
 	close(start)
 	wg.Wait()
 
-	// Double-checked locking должен схлопнуть probe в один round-trip. Допускаем
-	// небольшой люфт на случай, если RLock-промах нескольких горутин успел
-	// проскочить до взятия write-lock первой из них (в текущей реализации
-	// re-check под write-lock гарантирует ровно 1, но не привязываемся к
-	// мьютекс-внутренностям планировщика жёстче, чем нужно для смысла guard-а).
+	// Double-checked locking should collapse probe to one round-trip. Allow
+	// small slack in case RLock misses by several goroutines slip through before
+	// first goroutine takes write-lock (current implementation re-check under
+	// write-lock guarantees exactly 1, but we don't want to tie ourselves to
+	// mutex-internal scheduler details more than needed for guard meaning).
 	if mux.probeRequests != 1 {
 		t.Errorf("concurrent cold-start: probe round-trips = %d, want 1 (double-checked locking should collapse thundering-herd)", mux.probeRequests)
 	}
 }
 
-// TestWriteKV_V1Routing — WriteKV на v1-mount-е идёт через KVv1.Put (плоский
-// путь без /data/). Guard на роутинг записи.
+// TestWriteKV_V1Routing — WriteKV on v1-mount goes through KVv1.Put (flat
+// path without /data/). Guard on write routing.
 func TestWriteKV_V1Routing(t *testing.T) {
 	mux, addr := startFakeVault(t, "kv-v1")
 	mux.kvVersion = "1"
@@ -754,23 +754,23 @@ func TestWriteKV_V1Routing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	// fakeVaultMux не реализует write-приём, но KVv1.Put шлёт POST на плоский
-	// путь и ждёт 200/204. Мок отвечает 404 на неизвестный POST → Put вернёт
-	// ошибку. Достаточно проверить, что роутинг выбрал v1-ветку (не /data/):
-	// при v2-роутинге запрос пошёл бы на kv-v1/data/... и тоже 404 — поэтому
-	// этот тест проверяет лишь, что версия резолвится в 1 без паники.
-	// Точный happy-path записи покрыт integration-тестом на реальном Vault.
+	// fakeVaultMux does not implement write handling, but KVv1.Put sends POST to flat
+	// path and expects 200/204. Mock responds with 404 to unknown POST → Put returns
+	// error. Sufficient to check routing selected v1 branch (not /data/): in v2 routing
+	// request would go to kv-v1/data/... and also 404 — so this test only verifies
+	// version resolves to 1 without panic. Exact happy-path write is covered by
+	// integration test on real Vault.
 	err = cl.WriteKV(context.Background(), "app/cfg", map[string]any{"k": "v"})
-	// Мок не принимает запись → ошибка ожидаема; главное — resolveKVVersion=1
-	// прошёл (probeRequests > 0) и не было паники.
+	// Mock does not accept write → error expected; main point is resolveKVVersion=1
+	// passed (probeRequests > 0) and no panic.
 	if mux.probeRequests == 0 {
 		t.Error("WriteKV did not resolve KV version (no probe)")
 	}
 	_ = err
 }
 
-// TestListKV_V1Mount_ClearError — list на v1-mount-е → понятная ошибка
-// «требует KV v2», а не молча сломанный metadata-путь.
+// TestListKV_V1Mount_ClearError — list on v1-mount → clear error
+// "requires KV v2", not silently broken metadata-path.
 func TestListKV_V1Mount_ClearError(t *testing.T) {
 	mux, addr := startFakeVault(t, "kv-v1")
 	mux.kvVersion = "1"
@@ -790,7 +790,7 @@ func TestListKV_V1Mount_ClearError(t *testing.T) {
 	}
 }
 
-// TestReadKVMetadata_V1Mount_ClearError — то же для metadata-read.
+// TestReadKVMetadata_V1Mount_ClearError — same for metadata-read.
 func TestReadKVMetadata_V1Mount_ClearError(t *testing.T) {
 	mux, addr := startFakeVault(t, "kv-v1")
 	mux.kvVersion = "1"
@@ -810,9 +810,9 @@ func TestReadKVMetadata_V1Mount_ClearError(t *testing.T) {
 	}
 }
 
-// TestNewClient_InvalidKVVersion_Fails — невалидный override отбивается
-// fail-fast в конструкторе (дублирует schema-валидацию для callers вне
-// config-load-пути).
+// TestNewClient_InvalidKVVersion_Fails — invalid override rejected
+// fail-fast in constructor (duplicates schema validation for callers outside
+// config-load path).
 func TestNewClient_InvalidKVVersion_Fails(t *testing.T) {
 	_, addr := startFakeVault(t, "secret")
 	_, err := NewClient(context.Background(), config.KeeperVault{

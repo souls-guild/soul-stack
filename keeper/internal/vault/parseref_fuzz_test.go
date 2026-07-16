@@ -5,18 +5,18 @@ import (
 	"testing"
 )
 
-// FuzzNormalizeLogical фаззит парсер недоверенного logical-path (тело
-// vault:-ref после среза префикса/leading slash). normalizeLogical — security-
-// граница: она схлопывает `//`, отвергает `.`/`..` и закрывает deny-list
-// bypass (`secret//keeper/x` → канон `secret/keeper/x`). Здесь проверяются
-// property-инварианты, не конкретные выходы.
+// FuzzNormalizeLogical fuzzes the parser of an untrusted logical path (the
+// vault:-ref body after the prefix/leading slash is stripped).
+// normalizeLogical is a security boundary: it collapses `//`, rejects
+// `.`/`..`, and closes a deny-list bypass (`secret//keeper/x` → canonical
+// `secret/keeper/x`). This checks property invariants, not specific outputs.
 //
-// Инварианты:
-//   - функция НИКОГДА не паникует на любом входе;
-//   - при успехе результат НЕ содержит сегмент `.`/`..` и не делает обход
-//     вверх (deny-list bypass не проходит);
-//   - идемпотентность: normalize(normalize(x)) == normalize(x), если первый
-//     вызов успешен.
+// Invariants:
+//   - the function NEVER panics on any input;
+//   - on success, the result does NOT contain a `.`/`..` segment and doesn't
+//     traverse upward (no deny-list bypass);
+//   - idempotence: normalize(normalize(x)) == normalize(x) if the first
+//     call succeeded.
 func FuzzNormalizeLogical(f *testing.F) {
 	seeds := []string{
 		"secret/keeper/x",
@@ -41,15 +41,15 @@ func FuzzNormalizeLogical(f *testing.F) {
 	f.Fuzz(func(t *testing.T, body string) {
 		out, err := normalizeLogical(body)
 		if err != nil {
-			// Невалидный ввод — штатно отвергнут, без паники. Выход не
-			// используется (контракт: при ошибке result пустой).
+			// Invalid input — rejected normally, no panic. The output isn't
+			// used (contract: on error, result is empty).
 			return
 		}
 
 		assertNoTraversal(t, body, out)
 
-		// Идемпотентность: повторная нормализация канона обязана дать тот же
-		// канон и не упасть в ошибку.
+		// Idempotence: re-normalizing the canonical form must yield the same
+		// canonical form and not fail with an error.
 		out2, err2 := normalizeLogical(out)
 		if err2 != nil {
 			t.Fatalf("normalizeLogical неидемпотентна: на канон %q (из %q) вернула ошибку %v", out, body, err2)
@@ -60,10 +60,10 @@ func FuzzNormalizeLogical(f *testing.F) {
 	})
 }
 
-// FuzzParseRef фаззит полный парсер vault:-ref от внешней строки (включая
-// префикс/leading slash/разделитель mount/path). Та же security-граница, но
-// через публичный API ParseRef — проверяет, что обёртка над normalizeLogical
-// не вносит собственных дыр обхода.
+// FuzzParseRef fuzzes the full vault:-ref parser starting from the external
+// string (including the prefix/leading slash/mount-path separator). The
+// same security boundary, but through the public ParseRef API — checks that
+// the wrapper around normalizeLogical doesn't introduce its own bypass holes.
 func FuzzParseRef(f *testing.F) {
 	seeds := []string{
 		"vault:secret/keeper/postgres",
@@ -93,9 +93,9 @@ func FuzzParseRef(f *testing.F) {
 		}
 		assertNoTraversal(t, ref, out)
 
-		// Результат ParseRef — уже канонический logical-path; повторная
-		// нормализация его тела обязана быть тождественной (нет остаточных
-		// `//` или dot-сегментов, протёкших мимо).
+		// The ParseRef result is already a canonical logical path;
+		// re-normalizing its body must be idempotent (no residual `//` or
+		// dot segments slipping through).
 		out2, err2 := normalizeLogical(out)
 		if err2 != nil {
 			t.Fatalf("ParseRef(%q)=%q, но normalizeLogical на результате упала: %v", ref, out, err2)
@@ -106,9 +106,9 @@ func FuzzParseRef(f *testing.F) {
 	})
 }
 
-// assertNoTraversal проверяет security-инвариант успешного результата:
-// нет dot-сегментов, нет пустых сегментов (`//`), нет leading slash —
-// то есть нет обхода scope/deny-list. src — исходный вход (для диагностики).
+// assertNoTraversal checks the security invariant of a successful result:
+// no dot segments, no empty segments (`//`), no leading slash — i.e. no
+// scope/deny-list bypass. src is the original input (for diagnostics).
 func assertNoTraversal(t *testing.T, src, out string) {
 	t.Helper()
 	if out == "" {

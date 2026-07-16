@@ -2,14 +2,15 @@ package vault
 
 import "os"
 
-// requireDocker — true, если CI требует обязательного docker-а
-// (SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1|true). Паттерн совпадает с
-// keeper/internal/auditpg/require_docker_test.go; вынесен в без-теговый
-// файл, чтобы integration_test.go под `//go:build integration` его видел,
-// а отдельные unit-тесты на этом env-разборе оставались отдельно.
+// requireDocker is true if CI requires docker to be mandatory
+// (SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1|true). The pattern matches
+// keeper/internal/auditpg/require_docker_test.go; kept in a tag-less file so
+// integration_test.go under `//go:build integration` can see it, while the
+// separate unit tests for this env parsing stay independent.
 //
-// Регрессионный test для парсинга env лежит в auditpg/require_docker_test.go;
-// здесь дублировать не нужно — единая семантика.
+// The regression test for env parsing lives in
+// auditpg/require_docker_test.go; no need to duplicate it here — the
+// semantics are shared.
 func requireDocker() bool {
 	v := os.Getenv("SOUL_STACK_INTEGRATION_REQUIRE_DOCKER")
 	return v == "1" || v == "true"

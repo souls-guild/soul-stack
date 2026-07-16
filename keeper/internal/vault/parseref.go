@@ -6,44 +6,46 @@ import (
 	"strings"
 )
 
-// ErrInvalidVaultRef — строка не соответствует формату `vault:<mount>/<path>`.
-// Sentinel позволяет вызывающему коду различать «формат сломан» от транспортных
-// ошибок Vault.
+// ErrInvalidVaultRef means the string doesn't match the
+// `vault:<mount>/<path>` format. The sentinel lets calling code distinguish
+// "format is broken" from Vault transport errors.
 var ErrInvalidVaultRef = errors.New("vault: invalid ref format (expected vault:<mount>/<path>)")
 
-// ParseRef разбирает строку `vault:<mount>/<rel>` в logical path
-// (`<mount>/<rel>`), который ожидает [Client.ReadKV].
+// ParseRef parses a `vault:<mount>/<rel>` string into the logical path
+// (`<mount>/<rel>`) expected by [Client.ReadKV].
 //
-// Используется всеми потребителями `*_ref`-полей `keeper.yml`
-// (`postgres.dsn_ref`, `auth.jwt.signing_key_ref`, и т.п.) для единой
-// нормализации. Leading `/` после `vault:` допустим (`vault:/secret/...`).
+// Used by all consumers of `*_ref` fields in `keeper.yml`
+// (`postgres.dsn_ref`, `auth.jwt.signing_key_ref`, etc.) for uniform
+// normalization. A leading `/` after `vault:` is allowed (`vault:/secret/...`).
 //
-// # Нормализация logical-path (security-инвариант)
+// # Logical path normalization (security invariant)
 //
-// Возвращаемый logical-path нормализован: повторные слэши (`//`) схлопнуты в
-// один. Это единственная точка нормализации для ОБОИХ каналов резолва —
-// авторского (render.readVaultRef) и operator-input (scenario.input_vault),
-// поэтому scope-match / deny-list / [Client.ReadKV] всегда работают по одному
-// каноническому значению. Без этого ненормализованный путь обходил hard
-// deny-list: `secret//keeper/x` не матчил префикс `secret/keeper/`, но ReadKV
-// сводил его к запрещённому `secret/keeper/x` (эскалация оператор→Vault).
+// The returned logical path is normalized: repeated slashes (`//`) are
+// collapsed into one. This is the single normalization point for BOTH
+// resolution channels — authoring (render.readVaultRef) and operator-input
+// (scenario.input_vault) — so scope-match / deny-list / [Client.ReadKV]
+// always work off one canonical value. Without this, an unnormalized path
+// could bypass the hard deny-list: `secret//keeper/x` didn't match the
+// `secret/keeper/` prefix, but ReadKV collapsed it to the forbidden
+// `secret/keeper/x` (operator→Vault escalation).
 //
-// Сегменты `.` и `..` ОТВЕРГАЮТСЯ как невалидный ref (не нормализуются молча):
-// `..` — подъём выше mount-а, для Vault KV семантики нет, это вектор обхода
-// scope. Регистр НЕ трогается — Vault paths case-sensitive.
+// `.` and `..` segments are REJECTED as an invalid ref (not silently
+// normalized): `..` climbs above the mount, has no meaning for Vault KV
+// semantics, and is a scope-bypass vector. Case is left untouched — Vault
+// paths are case-sensitive.
 //
-// Примеры:
+// Examples:
 //
 //	"vault:secret/keeper/postgres"         → "secret/keeper/postgres"
 //	"vault:secret/keeper/jwt-signing-key"  → "secret/keeper/jwt-signing-key"
 //	"vault:/secret/keeper/k"               → "secret/keeper/k"
 //	"vault:secret//keeper/x"               → "secret/keeper/x"
-//	"vault:secret/./keeper/x"              → ошибка (сегмент `.`)
-//	"vault:secret/keeper/../keeper/x"      → ошибка (сегмент `..`)
+//	"vault:secret/./keeper/x"              → error (segment `.`)
+//	"vault:secret/keeper/../keeper/x"      → error (segment `..`)
 //
-// Любое отклонение от формата (нет `vault:`-префикса, пустое тело, нет
-// `/`-разделителя между mount-ом и rel-частью, trailing slash без rel,
-// сегмент `.`/`..`) возвращает обёрнутый [ErrInvalidVaultRef].
+// Any deviation from the format (no `vault:` prefix, empty body, no `/`
+// separator between the mount and rel part, trailing slash with no rel,
+// `.`/`..` segment) returns a wrapped [ErrInvalidVaultRef].
 func ParseRef(ref string) (string, error) {
 	const prefix = "vault:"
 	if !strings.HasPrefix(ref, prefix) {
@@ -65,18 +67,19 @@ func ParseRef(ref string) (string, error) {
 	return normalized, nil
 }
 
-// normalizeLogical схлопывает повторные слэши в logical-path (`mount/rel`) и
-// отвергает сегменты `.`/`..` (обход scope/deny). Эквивалент path.Clean по
-// rel-части + явный запрет `..`, но без зависимости от path-семантики
-// (path.Clean молча схлопывает `a/../b`→`b`, а нам нужно ОТВЕРГНУТЬ `..`,
-// а не «починить» путь оператора). Регистр и сами сегменты не меняются.
+// normalizeLogical collapses repeated slashes in the logical path
+// (`mount/rel`) and rejects `.`/`..` segments (scope/deny bypass).
+// Equivalent to path.Clean on the rel part plus an explicit `..` ban, but
+// without depending on path semantics (path.Clean silently collapses
+// `a/../b`→`b`, while we need to REJECT `..`, not "fix" the operator's
+// path). Case and the segments themselves are left unchanged.
 func normalizeLogical(body string) (string, error) {
 	segments := strings.Split(body, "/")
 	out := segments[:0]
 	for _, seg := range segments {
 		switch seg {
 		case "":
-			// повторный слэш (`//`) — схлопываем, сегмент отбрасываем.
+			// repeated slash (`//`) — collapse it, drop the segment.
 			continue
 		case ".", "..":
 			return "", fmt.Errorf("сегмент %q недопустим в vault-path", seg)

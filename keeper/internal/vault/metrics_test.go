@@ -18,8 +18,8 @@ func TestRegisterVaultMetrics_RegistersFamilies(t *testing.T) {
 		t.Fatal("RegisterVaultMetrics returned nil")
 	}
 
-	// Histogram/CounterVec без первого Observe/Inc семейство не публикуют —
-	// наблюдаем ok и error, затем сверяем присутствие семейств.
+	// A Histogram/CounterVec doesn't publish its family before the first
+	// Observe/Inc — observe both ok and error, then check family presence.
 	m.ObserveRead("secret", 3*time.Millisecond, nil)
 	m.ObserveRead("secret", time.Millisecond, errors.New("transport"))
 	m.ObserveWrite("secret", time.Millisecond, nil)
@@ -53,7 +53,7 @@ func TestVaultMetrics_ListErrorsByKind(t *testing.T) {
 	reg := obs.NewRegistry()
 	m := RegisterVaultMetrics(reg)
 
-	// ObserveList использует тот же маппинг notfound/error, что ObserveRead.
+	// ObserveList uses the same notfound/error mapping as ObserveRead.
 	m.ObserveList("secret", time.Millisecond, nil)
 	m.ObserveList("secret", time.Millisecond, fmt.Errorf("%w: path", ErrVaultKVNotFound))
 	m.ObserveList("secret", time.Millisecond, errors.New("transport down"))
@@ -85,7 +85,7 @@ func TestVaultMetrics_ErrorsByKind(t *testing.T) {
 	reg := obs.NewRegistry()
 	m := RegisterVaultMetrics(reg)
 
-	// notfound маппится в ErrVaultKVNotFound (через errors.Is); прочие — error.
+	// notfound maps to ErrVaultKVNotFound (via errors.Is); everything else is error.
 	m.ObserveRead("secret", time.Millisecond, nil)
 	m.ObserveRead("secret", time.Millisecond, fmt.Errorf("%w: path", ErrVaultKVNotFound))
 	m.ObserveRead("secret", time.Millisecond, errors.New("transport down"))
@@ -97,7 +97,7 @@ func TestVaultMetrics_ErrorsByKind(t *testing.T) {
 	if !strings.Contains(body, `keeper_vault_read_errors_total{kind="error",mount="secret"} 1`) {
 		t.Errorf("error count mismatch; got=\n%s", body)
 	}
-	// Три прохода — три наблюдения латентности на mount=secret.
+	// Three calls — three latency observations for mount=secret.
 	if !strings.Contains(body, `keeper_vault_read_duration_seconds_count{mount="secret"} 3`) {
 		t.Errorf("duration count should be 3 for mount secret; got=\n%s", body)
 	}
@@ -120,8 +120,9 @@ func TestVaultMetrics_MountLabel(t *testing.T) {
 }
 
 func TestVaultMetrics_NilReceiver_NoOp(t *testing.T) {
-	// Client может подниматься без obs-стека (bootstrap-путь keeper init без
-	// registry, unit-тесты). Метод на nil-получателе — no-op без паники.
+	// Client can come up without the obs stack (keeper init bootstrap path
+	// without a registry, unit tests). A method on a nil receiver is a no-op,
+	// no panic.
 	var m *VaultMetrics
 	m.ObserveRead("secret", time.Second, nil)
 	m.ObserveRead("secret", time.Second, errors.New("x"))

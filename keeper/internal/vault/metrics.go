@@ -9,70 +9,72 @@ import (
 	"github.com/souls-guild/soul-stack/shared/obs"
 )
 
-// VaultMetrics — набор Prometheus-collector-ов keeper-side Vault-клиента
-// (чтение KV v2, ADR-017). Регистрируется отдельным helper-ом поверх
-// компонент-агностичного [obs.Registry] — тем же паттерном, что
+// VaultMetrics is a set of Prometheus collectors for the keeper-side Vault
+// client (KV v2 reads, ADR-017). Registered by a separate helper on top of
+// the component-agnostic [obs.Registry] — the same pattern as
 // [grpc.RegisterGRPCMetrics] / [scenario.RegisterScenarioMetrics] (ADR-024
-// §4.0): registry-core не знает про конкретные метрики, а keeper_vault_*-
-// метрики — частность keeper-side Vault-обёртки.
+// §4.0): registry-core doesn't know about specific metrics, and
+// keeper_vault_*-metrics are a keeper-side Vault wrapper detail.
 //
-// Метрики живут здесь (keeper/internal/vault), а не в shared/obs, потому что
-// привязаны к server-side Vault-операциям Keeper-а (ADR-011: shared/vault — это
-// только клиентская часть, server-side через shared/ не экспортируется).
+// The metrics live here (keeper/internal/vault) rather than in shared/obs
+// because they're tied to Keeper's server-side Vault operations (ADR-011:
+// shared/vault is client-only; server-side is not exported through shared/).
 //
-// БЕЗОПАСНОСТЬ (ADR-024 §2.2 + «безопасность на первом месте»): в label-ы НЕ
-// кладём ни значение секрета, ни логический KV-путь (путь часто несёт имя
-// секрета и высокую кардинальность). Разрез — только `mount` (closed enum,
-// 1-2 значения на keeper: `secret`-default) и `kind` ошибки (closed enum
-// notfound/error). Имена — Prometheus convention (snake_case, _total для
-// counter, _seconds для histogram латентности; ADR-024 §2.1).
+// SECURITY (ADR-024 §2.2 + "security first"): labels MUST NOT carry the
+// secret value or the logical KV path (the path often carries the secret's
+// name and has high cardinality). The only cut is `mount` (closed enum,
+// 1-2 values per keeper: `secret`-default) and error `kind` (closed enum
+// notfound/error). Names follow Prometheus convention (snake_case, _total
+// for counters, _seconds for histogram latency; ADR-024 §2.1).
 type VaultMetrics struct {
-	// readDuration — латентность одного [Client.ReadKV] в секундах (round-trip
-	// до Vault), разрезанная по mount. Это горячий путь резолва секретов:
-	// CEL vault(), vault:-ref, core.vault.kv-read, чтение JWT-signing-key.
+	// readDuration is the latency of a single [Client.ReadKV] in seconds
+	// (round-trip to Vault), cut by mount. This is the hot path of secret
+	// resolution: CEL vault(), vault:-ref, core.vault.kv-read, JWT-signing-key
+	// reads.
 	readDuration *prometheus.HistogramVec
 
-	// readErrorsTotal — счётчик неуспешных [Client.ReadKV], разрезанный по mount
-	// и kind ошибки (`notfound` — ErrVaultKVNotFound, путь отсутствует/удалён;
-	// `error` — транспортная/прочая ошибка чтения). Деталь причины (сам путь) —
-	// в log/trace caller-а, не в метрику.
+	// readErrorsTotal is a counter of failed [Client.ReadKV] calls, cut by
+	// mount and error kind (`notfound` — ErrVaultKVNotFound, path missing/
+	// deleted; `error` — transport/other read error). The detail of the
+	// cause (the path itself) goes in the caller's log/trace, not the metric.
 	readErrorsTotal *prometheus.CounterVec
 
-	// writeDuration — латентность одного [Client.WriteKV] в секундах, разрезанная
-	// по mount. Запись — редкий путь (ввод ключа подписи Sigil, R3-S7), но
-	// измеряется тем же разрезом, что чтение, для единообразия алертинга.
+	// writeDuration is the latency of a single [Client.WriteKV] in seconds,
+	// cut by mount. Writes are a rare path (Sigil signing-key entry, R3-S7),
+	// but are measured with the same cut as reads for alerting consistency.
 	writeDuration *prometheus.HistogramVec
 
-	// writeErrorsTotal — счётчик неуспешных [Client.WriteKV] по mount. Запись не
-	// имеет notfound-исхода, поэтому без kind-разреза (один класс — `error`).
+	// writeErrorsTotal is a counter of failed [Client.WriteKV] calls by mount.
+	// Writes have no notfound outcome, so there's no kind cut (one class — `error`).
 	writeErrorsTotal *prometheus.CounterVec
 
-	// listDuration — латентность одного [Client.ListKV] в секундах, разрезанная
-	// по mount. LIST — редкий путь (orphan-reconcile Reaper-правила
-	// reap_orphan_vault_keys), но измеряется тем же разрезом для единообразия.
+	// listDuration is the latency of a single [Client.ListKV] in seconds, cut
+	// by mount. LIST is a rare path (the Reaper rule reap_orphan_vault_keys'
+	// orphan-reconcile), but is measured with the same cut for consistency.
 	listDuration *prometheus.HistogramVec
 
-	// listErrorsTotal — счётчик неуспешных [Client.ListKV] по mount и kind.
-	// `notfound` отделён от `error` симметрично чтению: для LIST отсутствующая
-	// подпапка — НЕ ошибка (Client отдаёт nil-результат без err), поэтому
-	// notfound тут практически не встречается, но разрез держим единообразным.
+	// listErrorsTotal is a counter of failed [Client.ListKV] calls by mount
+	// and kind. `notfound` is split from `error` symmetrically with reads:
+	// for LIST, a missing subfolder is NOT an error (Client returns a nil
+	// result without err), so notfound rarely occurs here, but the cut is
+	// kept consistent.
 	listErrorsTotal *prometheus.CounterVec
 }
 
-// Виды ошибок чтения для keeper_vault_read_errors_total. Closed enum в 2
-// значения: `notfound` отделён от прочих, т.к. это штатный исход (нет ключа),
-// а не сбой транспорта — алертить на них надо по-разному.
+// Read error kinds for keeper_vault_read_errors_total. Closed enum with 2
+// values: `notfound` is split from the rest because it's a normal outcome
+// (no key), not a transport failure — they need different alerting.
 const (
 	readErrorNotFound = "notfound"
 	readErrorOther    = "error"
 )
 
-// RegisterVaultMetrics создаёт keeper_vault_*-collectors и регистрирует их в
-// [obs.Registry]. Возвращает дескриптор для wire-up через [Client.SetMetrics].
+// RegisterVaultMetrics creates the keeper_vault_*-collectors and registers
+// them in [obs.Registry]. Returns a handle for wire-up via [Client.SetMetrics].
 //
-// MustRegister: дубликат-регистрация — programmer error (вызвали дважды на
-// одном Registry); падать сразу удобнее, чем носить ленивую инициализацию
-// (паттерн идентичен [grpc.RegisterGRPCMetrics]).
+// MustRegister: a duplicate registration is a programmer error (registered
+// twice on the same Registry); failing fast is more convenient than carrying
+// lazy initialization (identical pattern to [grpc.RegisterGRPCMetrics]).
 func RegisterVaultMetrics(reg *obs.Registry) *VaultMetrics {
 	m := &VaultMetrics{
 		readDuration: prometheus.NewHistogramVec(
@@ -129,10 +131,11 @@ func RegisterVaultMetrics(reg *obs.Registry) *VaultMetrics {
 	return m
 }
 
-// ObserveRead фиксирует завершение одного [Client.ReadKV]: наблюдает латентность
-// по mount и, при err != nil, инкрементирует счётчик ошибок с разделением
-// notfound/error. nil-получатель — no-op: Client может подниматься без
-// observability (bootstrap-путь keeper init без registry, unit-тесты).
+// ObserveRead records the completion of a single [Client.ReadKV]: observes
+// latency by mount and, when err != nil, increments the error counter with
+// notfound/error split. A nil receiver is a no-op: Client can come up
+// without observability (keeper init bootstrap path without a registry,
+// unit tests).
 func (m *VaultMetrics) ObserveRead(mount string, dur time.Duration, err error) {
 	if m == nil {
 		return
@@ -147,9 +150,9 @@ func (m *VaultMetrics) ObserveRead(mount string, dur time.Duration, err error) {
 	}
 }
 
-// ObserveWrite фиксирует завершение одного [Client.WriteKV]: наблюдает латентность
-// по mount и, при err != nil, инкрементирует счётчик ошибок. nil-получатель —
-// no-op (Client может подниматься без observability).
+// ObserveWrite records the completion of a single [Client.WriteKV]: observes
+// latency by mount and, when err != nil, increments the error counter. A
+// nil receiver is a no-op (Client can come up without observability).
 func (m *VaultMetrics) ObserveWrite(mount string, dur time.Duration, err error) {
 	if m == nil {
 		return
@@ -160,9 +163,10 @@ func (m *VaultMetrics) ObserveWrite(mount string, dur time.Duration, err error) 
 	}
 }
 
-// ObserveList фиксирует завершение одного [Client.ListKV]: наблюдает латентность
-// по mount и, при err != nil, инкрементирует счётчик ошибок с разделением
-// notfound/error (тем же маппингом, что ObserveRead). nil-получатель — no-op.
+// ObserveList records the completion of a single [Client.ListKV]: observes
+// latency by mount and, when err != nil, increments the error counter with
+// notfound/error split (the same mapping as ObserveRead). A nil receiver is
+// a no-op.
 func (m *VaultMetrics) ObserveList(mount string, dur time.Duration, err error) {
 	if m == nil {
 		return

@@ -11,21 +11,21 @@ import (
 )
 
 // PKI-mount-defaults. Match keeper.yml::vault.pki_mount / pki_role
-// (см. docs/keeper/config.md → vault). При пустых значениях NewClient
-// в M2.1.b не подставляет defaults — caller (keeper run) обязан
-// передать резолвенные значения; константы оставлены для readiness-
-// проверок / документации.
+// (see docs/keeper/config.md → vault). With empty values, NewClient in
+// M2.1.b doesn't substitute defaults — the caller (keeper run) must pass
+// resolved values; the constants are kept for readiness checks /
+// documentation.
 const (
 	DefaultPKIMount = "pki"
 	DefaultPKIRole  = "soul-seed"
 )
 
-// SignedCertificate — результат подписания CSR через Vault PKI sign-RPC.
+// SignedCertificate is the result of signing a CSR via the Vault PKI sign RPC.
 //
-// CertificatePEM содержит ровно один CERTIFICATE-PEM-блок (issued cert).
-// CAChainPEM — конкатенация PEM-блоков `issuing_ca` + `ca_chain[]`
-// (если backend выдаёт цепочку), в том порядке, в каком его отдаёт
-// Vault. Не валидирует — caller передаёт клиенту as-is.
+// CertificatePEM contains exactly one CERTIFICATE PEM block (issued cert).
+// CAChainPEM is the concatenation of the `issuing_ca` + `ca_chain[]` PEM
+// blocks (if the backend returns a chain), in the order Vault returns them.
+// Not validated — the caller passes it to the client as-is.
 type SignedCertificate struct {
 	CertificatePEM []byte
 	CAChainPEM     []byte
@@ -33,38 +33,38 @@ type SignedCertificate struct {
 	NotAfter       time.Time
 }
 
-// Sentinel-ошибки PKI-flow.
+// Sentinel errors for the PKI flow.
 var (
-	// ErrPKIMountEmpty — mount пуст. Caller (gRPC handler) маппит в
-	// internal error (config-misconfig).
+	// ErrPKIMountEmpty means the mount is empty. The caller (gRPC handler)
+	// maps this to an internal error (config misconfig).
 	ErrPKIMountEmpty = errors.New("vault pki: mount is empty")
-	// ErrPKIRoleEmpty — role пуст.
+	// ErrPKIRoleEmpty means the role is empty.
 	ErrPKIRoleEmpty = errors.New("vault pki: role is empty")
-	// ErrPKICSREmpty — пустой CSR PEM (валидация ДО round-trip-а в Vault).
+	// ErrPKICSREmpty means an empty CSR PEM (validated BEFORE the round trip to Vault).
 	ErrPKICSREmpty = errors.New("vault pki: csr is empty")
-	// ErrPKIResponseInvalid — Vault вернул успешный ответ, но без
-	// полей `certificate` / `serial_number`. Кричит «PKI backend
-	// сконфигурирован странно»; caller — 500.
+	// ErrPKIResponseInvalid means Vault returned a successful response, but
+	// without the `certificate` / `serial_number` fields. This signals the
+	// PKI backend is misconfigured; the caller returns 500.
 	ErrPKIResponseInvalid = errors.New("vault pki: response missing required fields")
 )
 
-// SignCSR подписывает PEM-CSR через Vault PKI `<mount>/sign/<role>`.
+// SignCSR signs a PEM CSR via Vault PKI `<mount>/sign/<role>`.
 //
-// Не вычисляет fingerprint и не пишет в реестр — это ответственность
-// caller-а (gRPC Bootstrap-handler).
+// Doesn't compute the fingerprint or write to the registry — that's the
+// caller's responsibility (gRPC Bootstrap handler).
 //
-// Параметры:
-//   - mount — путь mount-а PKI engine (без trailing slash). Pass
-//     `cfg.Vault.PKIMount` из keeper.yml.
-//   - role — имя PKI role, под которой Vault выдаёт SoulSeed-сертификаты.
+// Parameters:
+//   - mount — path of the PKI engine mount (no trailing slash). Pass
+//     `cfg.Vault.PKIMount` from keeper.yml.
+//   - role — name of the PKI role Vault issues SoulSeed certificates under.
 //     Pass `cfg.Vault.PKIRole`.
-//   - csrPEM — PEM-encoded CSR от Soul-а (BootstrapRequest.csr_pem). Не
-//     валидируется здесь — Vault сам отвергает невалидный CSR с 400.
+//   - csrPEM — PEM-encoded CSR from the Soul (BootstrapRequest.csr_pem). Not
+//     validated here — Vault itself rejects an invalid CSR with 400.
 //
-// Возврат:
-//   - [SignedCertificate] с CertificatePEM + CAChainPEM + SerialNumber + NotAfter.
-//   - sentinel ErrPKI* на pre-flight checks.
-//   - wrapped fmt.Errorf на транспортные / Vault-ошибки.
+// Returns:
+//   - [SignedCertificate] with CertificatePEM + CAChainPEM + SerialNumber + NotAfter.
+//   - sentinel ErrPKI* on pre-flight checks.
+//   - wrapped fmt.Errorf on transport / Vault errors.
 func (c *Client) SignCSR(ctx context.Context, mount, role, csrPEM string) (*SignedCertificate, error) {
 	if mount == "" {
 		return nil, ErrPKIMountEmpty
@@ -80,8 +80,8 @@ func (c *Client) SignCSR(ctx context.Context, mount, role, csrPEM string) (*Sign
 	path := mountClean + "/sign/" + role
 
 	resp, err := c.c.Logical().WriteWithContext(ctx, path, map[string]any{
-		// `format: pem` — Vault default; явный pass убирает неоднозначность,
-		// если backend настроен с `default_format: der`.
+		// `format: pem` is the Vault default; passing it explicitly removes
+		// ambiguity if the backend is configured with `default_format: der`.
 		"format": "pem",
 		"csr":    csrPEM,
 	})
@@ -114,10 +114,10 @@ func (c *Client) SignCSR(ctx context.Context, mount, role, csrPEM string) (*Sign
 		out.NotAfter = t
 	}
 
-	// Vault PKI sign возвращает `issuing_ca` (single PEM) и `ca_chain`
-	// ([]interface{} с PEM-строками). Конкатенируем в одном поле в
-	// порядке issuing_ca → ca_chain[…], чтобы Soul мог прямо положить
-	// в TrustPool без дополнительной разборки.
+	// Vault PKI sign returns `issuing_ca` (single PEM) and `ca_chain`
+	// ([]interface{} with PEM strings). We concatenate them into one field
+	// in issuing_ca → ca_chain[…] order, so Soul can drop it straight into
+	// TrustPool without further parsing.
 	var chain strings.Builder
 	if ica, ok := resp.Data["issuing_ca"].(string); ok && ica != "" {
 		chain.WriteString(ica)
@@ -142,11 +142,11 @@ func (c *Client) SignCSR(ctx context.Context, mount, role, csrPEM string) (*Sign
 	return out, nil
 }
 
-// coerceExpiration разбирает `expiration` из Vault PKI sign-response.
+// coerceExpiration parses `expiration` from a Vault PKI sign response.
 //
-// Vault отдаёт это поле как **unix timestamp** в JSON-number
-// (decoded vaultapi-клиентом как json.Number → string). Поддерживаем
-// json.Number, числовые types и string-форму (на случай custom-backend).
+// Vault returns this field as a **unix timestamp** in a JSON number
+// (decoded by the vaultapi client as json.Number → string). We support
+// json.Number, numeric types, and the string form (for custom backends).
 func coerceExpiration(v any) (time.Time, error) {
 	switch x := v.(type) {
 	case nil:
@@ -158,9 +158,9 @@ func coerceExpiration(v any) (time.Time, error) {
 	case float64:
 		return time.Unix(int64(x), 0).UTC(), nil
 	default:
-		// json.Number / fmt.Stringer / string — единая ветка через String().
-		// vaultapi настраивает json-decoder с UseNumber, поэтому
-		// json.Number — основной кейс.
+		// json.Number / fmt.Stringer / string — a single branch via String().
+		// vaultapi configures the json decoder with UseNumber, so
+		// json.Number is the main case.
 		type numberer interface{ Int64() (int64, error) }
 		if n, ok := v.(numberer); ok {
 			i, err := n.Int64()
@@ -170,7 +170,7 @@ func coerceExpiration(v any) (time.Time, error) {
 			return time.Unix(i, 0).UTC(), nil
 		}
 		if s, ok := v.(string); ok {
-			// fallback: RFC3339 для custom-backend-ов.
+			// fallback: RFC3339 for custom backends.
 			t, err := time.Parse(time.RFC3339, s)
 			if err == nil {
 				return t.UTC(), nil
@@ -181,8 +181,8 @@ func coerceExpiration(v any) (time.Time, error) {
 	}
 }
 
-// _enforceVaultapiNumber — compile-time assertion, что vaultapi-import
-// не выкинули случайным go-mod-tidy: SignCSR использует Logical() из
-// vaultapi.Client. Без этой проверки regression «pki.go не зависит от
-// vaultapi» не ловится unit-тестами (они mock-аются на уровне Client).
+// _enforceVaultapiNumber is a compile-time assertion that the vaultapi
+// import wasn't dropped by a stray go-mod-tidy: SignCSR uses Logical() from
+// vaultapi.Client. Without this check, a "pki.go no longer depends on
+// vaultapi" regression isn't caught by unit tests (they mock at the Client level).
 var _ = (*vaultapi.Client)(nil)

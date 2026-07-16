@@ -16,12 +16,12 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// renewMux — fake Vault, добавляющий к health-эндпоинту обработку
-// auth/token/lookup-self и auth/token/renew-self под нужды TokenRenewer.
+// renewMux is a fake Vault that adds handling of auth/token/lookup-self and
+// auth/token/renew-self on top of the health endpoint, for TokenRenewer's needs.
 //
-// renewable — что вернуть в lookup-self.Data.renewable.
-// leaseSeconds — TTL токена (ttl в lookup-self, lease_duration в renew).
-// renewStatus — HTTP-код renew-self (200 = успех, иначе renew падает).
+// renewable — what to return in lookup-self.Data.renewable.
+// leaseSeconds — the token's TTL (ttl in lookup-self, lease_duration in renew).
+// renewStatus — the HTTP status of renew-self (200 = success, otherwise renew fails).
 type renewMux struct {
 	renewable    bool
 	leaseSeconds int
@@ -79,8 +79,9 @@ func startRenewVault(t *testing.T, m *renewMux) string {
 	return srv.URL
 }
 
-// captureLogger — slog.Logger, пишущий в потокобезопасный буфер. Позволяет
-// проверять, что нужное сообщение попало в лог и что токена в нём нет.
+// captureLogger is an slog.Logger writing to a thread-safe buffer. Lets us
+// check that the expected message made it into the log and that the token
+// isn't in it.
 func captureLogger() (*slog.Logger, *syncBuf) {
 	buf := &syncBuf{}
 	h := slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})
@@ -132,7 +133,7 @@ func TestStartTokenRenewer_RenewableStarts(t *testing.T) {
 		t.Fatalf("StartTokenRenewer: renewer is nil for renewable token")
 	}
 
-	// Watcher продлевает токен сразу на первой итерации loop-а.
+	// The watcher renews the token right on the first loop iteration.
 	deadline := time.After(3 * time.Second)
 	for m.renewCalls.Load() == 0 {
 		select {
@@ -168,7 +169,7 @@ func TestStartTokenRenewer_NonRenewableDegrades(t *testing.T) {
 		t.Fatalf("StartTokenRenewer non-renewable: expected nil renewer, got %v", r)
 	}
 
-	// Дать время убедиться, что renew не дёргается (watcher не стартовал).
+	// Give it time to confirm renew isn't triggered (the watcher didn't start).
 	time.Sleep(100 * time.Millisecond)
 	if n := m.renewCalls.Load(); n != 0 {
 		t.Errorf("non-renewable token: renew-self called %d times, want 0", n)
@@ -179,14 +180,14 @@ func TestStartTokenRenewer_NonRenewableDegrades(t *testing.T) {
 		t.Errorf("expected degradation warn, got:\n%s", out)
 	}
 
-	// Stop на nil-renewer не должен паниковать.
+	// Stop on a nil renewer must not panic.
 	r.Stop()
 }
 
 func TestStartTokenRenewer_RenewFailLogged(t *testing.T) {
-	// Renewable-токен с очень коротким lease и падающим renew-self.
-	// RenewBehaviorIgnoreErrors добивает backoff до исчерпания lease,
-	// затем DoneCh отдаёт ошибку → код логирует Error.
+	// A renewable token with a very short lease and a failing renew-self.
+	// RenewBehaviorIgnoreErrors keeps backing off until the lease is
+	// exhausted, then DoneCh returns an error → the code logs Error.
 	m := &renewMux{renewable: true, leaseSeconds: 1, renewStatus: http.StatusInternalServerError}
 	addr := startRenewVault(t, m)
 	cl := newRenewClient(t, addr)
@@ -203,7 +204,7 @@ func TestStartTokenRenewer_RenewFailLogged(t *testing.T) {
 		t.Fatalf("StartTokenRenewer: nil renewer")
 	}
 
-	// Ждём, пока watcher исчерпает попытки и выйдет через DoneCh.
+	// Wait for the watcher to exhaust its retries and exit via DoneCh.
 	done := make(chan struct{})
 	go func() {
 		r.Stop()
@@ -244,8 +245,8 @@ func TestStartTokenRenewer_GracefulStopOnCtx(t *testing.T) {
 		t.Fatalf("StartTokenRenewer: nil renewer")
 	}
 
-	// Долгий lease (3600s) → watcher спит, не выходит сам. Отмена ctx
-	// должна остановить goroutine; Stop вернётся быстро.
+	// A long lease (3600s) → the watcher sleeps, doesn't exit on its own.
+	// Canceling ctx should stop the goroutine; Stop should return quickly.
 	cancel()
 
 	done := make(chan struct{})

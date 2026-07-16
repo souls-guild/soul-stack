@@ -7,9 +7,9 @@ import (
 	"testing"
 )
 
-// TestGenerateServiceCSR_ValidCSRAndKey — сгенерированные CSR и приватник
-// парсятся стандартной crypto/x509, CN совпадает с запрошенным, публичный ключ
-// CSR соответствует приватнику.
+// TestGenerateServiceCSR_ValidCSRAndKey — generated CSR and private key are
+// parsed by standard crypto/x509, CN matches requested, CSR public key
+// corresponds to private key.
 func TestGenerateServiceCSR_ValidCSRAndKey(t *testing.T) {
 	const cn = "redis-prod.tls"
 	res, err := GenerateServiceCSR(CSRParams{CommonName: cn, DNSNames: []string{cn, "redis-prod"}})
@@ -17,7 +17,7 @@ func TestGenerateServiceCSR_ValidCSRAndKey(t *testing.T) {
 		t.Fatalf("GenerateServiceCSR: %v", err)
 	}
 
-	// CSR PEM парсится и CN верный.
+	// CSR PEM parses and CN is correct.
 	block, _ := pem.Decode(res.CSRPEM)
 	if block == nil || block.Type != "CERTIFICATE REQUEST" {
 		t.Fatalf("CSR PEM decode failed: block=%v", block)
@@ -33,7 +33,7 @@ func TestGenerateServiceCSR_ValidCSRAndKey(t *testing.T) {
 		t.Errorf("CSR signature invalid: %v", err)
 	}
 
-	// Приватник PEM парсится (PKCS#8).
+	// Private key PEM parses (PKCS#8).
 	keyBlock, _ := pem.Decode(res.PrivateKeyPEM)
 	if keyBlock == nil {
 		t.Fatalf("private key PEM decode failed")
@@ -43,16 +43,16 @@ func TestGenerateServiceCSR_ValidCSRAndKey(t *testing.T) {
 	}
 }
 
-// TestGenerateServiceCSR_RejectsEmptyCommonName — пустой CN отвергается до
-// генерации (сервисный серт без CN бессмыслен).
+// TestGenerateServiceCSR_RejectsEmptyCommonName — empty CN is rejected before
+// generation (service cert without CN is meaningless).
 func TestGenerateServiceCSR_RejectsEmptyCommonName(t *testing.T) {
 	if _, err := GenerateServiceCSR(CSRParams{}); err == nil {
 		t.Fatal("GenerateServiceCSR with empty CN returned nil err")
 	}
 }
 
-// TestGenerateServiceCSR_PrivateKeyNotInCSR — приватник и CSR — разные PEM-
-// блоки; приватный материал НЕ утекает в CSR (CSR несёт только публичный ключ).
+// TestGenerateServiceCSR_PrivateKeyNotInCSR — private key and CSR are different
+// PEM blocks; private material does NOT leak into CSR (CSR carries only public key).
 func TestGenerateServiceCSR_PrivateKeyNotInCSR(t *testing.T) {
 	res, err := GenerateServiceCSR(CSRParams{CommonName: "svc"})
 	if err != nil {
