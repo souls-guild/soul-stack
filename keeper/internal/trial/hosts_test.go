@@ -91,13 +91,13 @@ assert:
 		t.Fatalf("Run: %v", err)
 	}
 	if !results[0].Pass {
-		t.Fatalf(“expected PASS (where role==primary → 10.0.0.1), got: %v”, results[0].Failures)
+		t.Fatalf("expected PASS (where role==primary → 10.0.0.1), got: %v", results[0].Failures)
 	}
 }
 
 // TestRunCase_MultiHostRoster_DeterministicOrder — order of soulprint.hosts
 // is determined by SID sorting regardless of YAML entry order.
-// [0]-element after where(“role!=”) is lexicographically first SID.
+// [0]-element after where("role!=") is lexicographically first SID.
 func TestRunCase_MultiHostRoster_DeterministicOrder(t *testing.T) {
 	main := `name: create
 input: {}
@@ -105,7 +105,7 @@ tasks:
   - name: first host by sid
     module: core.exec.run
     params:
-      cmd: “first=${ soulprint.hosts[0].sid }”
+      cmd: "first=${ soulprint.hosts[0].sid }"
 `
 	// YAML order (c, a, b) is intentionally unsorted: harness must sort
 	// by SID → first = a.example.com.
@@ -123,15 +123,15 @@ assert:
     - index: 0
       module: core.exec.run
       params:
-        cmd: “first=a.example.com”
+        cmd: "first=a.example.com"
 `
 	caseDir := writeScenarioTree(t, main, caseYML)
 	results, err := Run(context.Background(), caseDir)
 	if err != nil {
-		t.Fatalf(“Run: %v”, err)
+		t.Fatalf("Run: %v", err)
 	}
 	if !results[0].Pass {
-		t.Fatalf(“expected PASS (deterministic order: first by SID = a.example.com), got: %v”, results[0].Failures)
+		t.Fatalf("expected PASS (deterministic order: first by SID = a.example.com), got: %v", results[0].Failures)
 	}
 }
 
