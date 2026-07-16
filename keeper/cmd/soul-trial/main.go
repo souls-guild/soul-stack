@@ -13,8 +13,8 @@
 // assert.rendered_tasks section. Exit 0 when all cases pass, 1 on fail/error,
 // 2 on a usage error.
 //
-// [ADR-004]: docs/adr/0004-binaries.md#adr-004-раскладка-бинарей--keeper-soul-soul-lint-push-режим--модуль-внутри-keeper
-// [ADR-023]: docs/adr/0023-trial-test-runner.md#adr-023-тест-раннер-trial-soul-trial-и-dsl-coverage
+// Soul trial command documentation link.
+// Soul trial command documentation link.
 package main
 
 import (

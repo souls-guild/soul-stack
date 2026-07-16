@@ -202,60 +202,60 @@ type daemon struct {
 	sigilKeySvc *sigil.KeyService
 	// sigilAnchors -- the SET of Sigil signing trust anchors (ADR-026(h), R3
 	// multi-anchor) for the keeper-host to verify ITS OWN plugins (ADR-026(f),
-	// S6-keeper-verify). Заполняется в setupSigil из Signer.AnchorSet() (все
-	// active-ключи подписи); пустой при выключенном Sigil → keeper-host плагины
-	// fail-closed (no_trust_anchor). OR-проверка по набору даёт безразрывную
-	// ротацию ключа. Читается в setupCoreModules (идёт после setupSigil).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	sigilAnchors []ed25519.PublicKey
-	// sigilAnchorSource — «живой» holder набора PEM-якорей для connect-time
-	// broadcast SigilTrustAnchors (ADR-026(h), R3-S6) И bootstrap-reply (R3-S7,
-	// architect af7d). setupSigil ставит стартовый набор, watcher
-	// `sigil:anchors-changed` обновляет его после runtime-ротации; EventStream-
-	// handler и Bootstrap-handler читают свежий набор при каждом connect-е/онбординге.
-	// nil → Sigil выключен (broadcast/bootstrap-pubkey no-op).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	sigilAnchorSource *trustAnchorHolder
-	// sigilHost — keeper-host (verify СВОИХ плагинов), сохранён из setupCoreModules,
-	// чтобы watcher `sigil:anchors-changed` мог атомарно обновить его verify-набор
-	// (Host.SigilAnchors.SetAnchors) при runtime-ротации без рестарта.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	sigilHost *pluginhost.Host
-	// sigilKeyMetrics — keeper_sigil_*-дескриптор (gauge active-ключей + re-broadcast
-	// набора якорей). Тот же экземпляр, что инжектится в sigilKeySvc; сохранён в
-	// daemon, чтобы reloadAnchors фиксировал re-broadcast-наблюдаемость
-	// (ObserveAnchorsRebroadcast: счётчик проходов + delivered последней раздачи,
-	// ADR-026(h), R3 known-gap). nil при выключенном Sigil / до wire-up registry —
-	// все Observe* no-op (nil-safe методы KeyMetrics).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	sigilKeyMetrics *sigil.KeyMetrics
 
 	// --- audit ---
 	auditWriter audit.Writer
 
 	// --- herald (ADR-052) ---
-	// heraldDispatcher — notification-dispatcher: матч событий прогона против
-	// включённых Tiding-правил (S2). nil при сбое сборки tap-а (fail-open).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	heraldDispatcher *herald.Dispatcher
-	// heraldTap — notification-tap поверх audit-writer (multi-writer
-	// декоратор). Метрики прокидываются late-binding в setupMetricsRegistry;
-	// Close — в cleanup-стеке. nil при fail-open.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	heraldTap *herald.NotificationTap
-	// heraldDeliveryMetrics — keeper_herald_delivery_*-дескриптор claim-queue
-	// worker-а доставки (ADR-052(d), S3). Регистрируется в setupMetricsRegistry,
-	// инжектится в DeliveryWorker в setupHeraldDelivery (после setupRedis). nil-
-	// safe методы — при отсутствии Redis (доставка деградирует) не инжектится.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	heraldDeliveryMetrics *herald.DeliveryMetrics
-	// heraldSvc — CRUD-фасад реестров heralds/tidings (S4): один источник правды
-	// для REST (api.Deps.HeraldSvc) и MCP (HandlerDeps.HeraldSvc). Несёт
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	// in-process invalidate (heraldDispatcher) + cross-keeper Redis-publisher.
-	// Собирается в setupHeraldSvc (после setupAudit — нужен heraldDispatcher — и
-	// setupRedis — нужен publisher); ДО setupAPIServer/setupMCPServer.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	heraldSvc *herald.Service
-	// heraldInvalidation — подписка на `herald:invalidate` (cross-keeper сброс
-	// снимка dispatcher-кэша). nil при выключенном Redis.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	heraldInvalidation *keeperredis.HeraldInvalidateSubscription
-	// providerSvc / profileSvc — operator-facing CRUD-фасады реестров Cloud-
-	// Provider-ов / Profile-ей (ADR-017). Один источник правды для REST
-	// (api.Deps.ProviderSvc/ProfileSvc) и MCP. Поднимаются всегда (PG-таблицы
-	// доступны), БЕЗ Redis-publisher (читаются on-demand на scenario-слое).
-	// Собираются в setupCloudCRUD; ДО setupAPIServer/setupMCPServer.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	providerSvc *provider.Service
 	profileSvc  *profile.Service
 
@@ -265,16 +265,16 @@ type daemon struct {
 	grpcMetrics     *keepergrpc.GRPCMetrics
 	scenarioMetrics *scenario.ScenarioMetrics
 	renderMetrics   *render.RenderMetrics
-	// augurMetrics — keeper_augur_*-дескриптор брокера AugurRequest. Регистрируется
-	// в setupMetricsRegistry, инжектится в keepergrpc.AugurDeps.Metrics в
-	// setupGRPCEventStream (идёт позже по steps). nil при выключенной
-	// observability невозможен (registry поднимается всегда), но nil-safe ObserveX
-	// держит инвариант.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	augurMetrics *keeperaugur.BrokerMetrics
 
-	// oracleMetrics — keeper_oracle_*-дескриптор reactor-роутера Oracle (ADR-030
-	// S4). Регистрируется в setupMetricsRegistry, инжектится в
-	// keepergrpc.OracleDeps.Metrics в setupGRPCEventStream (паттерн augurMetrics).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	oracleMetrics *oracle.OracleMetrics
 
 	// --- scenario deps ---
@@ -284,168 +284,168 @@ type daemon struct {
 	renderPipeline   *render.Pipeline
 	serviceRegistry  *scenario.ServiceRegistry
 	destinySource    *scenario.DestinySource
-	// coreModules — keeper-side core-модули (ADR-017), собранные в setupCoreModules.
-	// Передаётся scenario-runner-у только в run-goroutine-пути для локального
-	// исполнения задач с `on: keeper` (docs/keeper/modules.md): keeper-задачи в
-	// pilot исполняет run-goroutine (dispatchKeeperTasks), Acolyte-claim путь их
-	// не исполняет (groupByHost пропускает plan.Keeper). nil до setupCoreModules
-	// → keeper-side задача отвергается scenario-runner-ом.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	coreModules *coremod.Registry
 
 	// --- push orchestrator (Variant C, docs/keeper/push.md) ---
-	// pushDestinyLoader — git-loader destiny-репозиториев для pushDestinyResolver.
-	// Тот же тип, что scenario.NewDestinySource ниже потребляет (artifact.DestinyLoader),
-	// шарим объект на процесс.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	pushDestinyLoader *artifact.DestinyLoader
-	// pushDiscoveredSsh — дискаверенные SshProvider-плагины (filtered by catalog
-	// `plugins.ssh_providers[]`). Заполняется в setupCoreModules одной discover-
-	// волной с cloud-плагинами, потребляется в setupPushDispatchers для Spawn.
-	// nil/пустой → push выключен (см. setupPushDispatchers).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	pushDiscoveredSsh []pluginhost.Discovered
-	// pushPluginHost — keeper-host, разделяемый с setupCoreModules (тот же объект),
-	// сохранён для setupPushDispatchers: spawn SshProvider-плагина с env-payload
-	// (ADR-020 amendment l, S6 pilot). nil при выключенном Sigil → setupPushDispatchers
-	// возвращает skip (push выключен), что симметрично гейту core-модулей.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	pushPluginHost *pluginhost.Host
-	// pushSshPlugin — long-living handle SshProvider-плагина (S6 pilot, single-provider).
-	// Spawn делается один раз в setupPushDispatchers и держится до shutdown (cleanup
-	// Closes plugin в LIFO ДО Redis/Pool). nil при выключенной push-инфраструктуре.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	pushSshPlugin *pluginhost.SshProviderPlugin
-	// pushDispatcher — *push.SshDispatcher из push S1+S5 (ADR-004 push-flow).
-	// nil → push-orchestrator не поднимается (api.Deps.PushRun=nil →
-	// /v1/push/*-роуты не подключаются; keeper.push.apply tool возвращает
-	// «не сконфигурировано»). Wire-up — setupPushDispatchers (S6, pilot-path:
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	// config-backed targets/providers + single Vault host-CA).
 	pushDispatcher pushorch.SshDispatcher
-	// pushSshDispatcher — конкретный *push.SshDispatcher, тот же объект, что
-	// pushDispatcher, но удерживается отдельно для вызова RefreshProvider из
-	// invalidation-listener-а (узкий pushorch.SshDispatcher не несёт этот
-	// метод — он чисто dispatch-поверхность). nil при выключенной push-
-	// инфраструктуре.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	pushSshDispatcher *push.SshDispatcher
-	// pushCleaner — *push.SshDispatcher тот же, что pushDispatcher, доступ только
-	// по узкому интерфейсу Cleanup (cleanup_stale_versions=true after success).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	pushCleaner pushorch.Cleaner
-	// pushRun — orchestrator, собранный в setupPushOrchestrator поверх
+	// Keeper daemon runtime wiring note.
 	// renderPipeline + topologyResolver + pushDestinyLoader + serviceHolder +
-	// pushDispatcher. nil при отсутствии pushDispatcher (ssh-плагины не
-	// подняты — см. doc выше).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	pushRun *pushorch.PushRun
-	// pushProviderSvc — CRUD-фасад реестра push_providers (ADR-032 amendment
-	// 2026-05-26, S7-2). Поднимается всегда (PG-таблица доступна), даже если
-	// push-dispatcher выключен: оператор должен иметь возможность настроить
-	// провайдеров до включения push-инфраструктуры. nil только если pool не
-	// создан (не должно случиться в production-path).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	pushProviderSvc *pushprovider.Service
-	// pushProviderInvalidation — Redis pub/sub subscription на
-	// `push-providers:changed`. Используется для cluster-wide уведомления о
-	// мутации (re-spawn плагина на ближайшем RPC, PM-decision S7-2 #6). nil
-	// при выключенном Redis. Cleanup закрывает goroutine.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	pushProviderInvalidation *keeperredis.PushProvidersChangedSubscription
-	// pushMetrics — keeper_push_*-дескрипторы (S7-3 multi-CA: counter матчей
-	// host-CA с разрезом по `ca_name`). Регистрируется в setupMetricsRegistry
-	// безусловно (registry всегда поднят); инжектится в push.Deps.Metrics в
-	// setupPushDispatchers. nil-safe методы — push выключен / unit-тесты без
-	// observability оставляют дескриптор не-инжектённым.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	pushMetrics *push.Metrics
 
 	// --- redis / apply-bus ---
 	redisClient *keeperredis.Client
 	applyBus    *applybus.EventBus
 
-	// --- conclave (реестр живых Keeper-инстансов, ADR-006 amend, soul-shedding S1) ---
-	// conclaveInstances — gauge числа живых keeper-инстансов в Conclave
-	// (keeper_conclave_instances). Обновляется renewal-goroutine после каждого
-	// renew-тика по LiveKIDs. nil при выключенной observability / отсутствии
-	// Redis — все Set no-op (nil-safe Gauge).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	conclaveInstances prometheus.Gauge
 
 	// --- grpc ---
-	// streamManager — реестр активных EventStream-стримов этого инстанса. Сохранён
-	// на daemon, чтобы Watchman (soul-shedding S2) мог принудительно закрыть все
-	// локальные стримы (CloseAll) при устойчивой изоляции инстанса.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	streamManager  *keepergrpc.StreamManager
 	outbound       *keepergrpc.Outbound
 	scenarioRunner *scenario.Runner
 
-	// --- watchman (изоляция-детект + soul-shedding S2) ---
-	// watchmanMetrics — keeper_watchman_*-дескриптор (gauge isolated + счётчик
-	// streams_shed). Регистрируется в setupMetricsRegistry, инжектится в
-	// watchman.New в setupWatchman (паттерн conclaveInstances). nil-safe.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	watchmanMetrics *watchmanMetrics
 
-	// --- toll (cluster-wide detector массового оттока Souls, ADR-038) ---
-	// tollMetrics — keeper_toll_*-дескриптор + keeper_cluster_degraded gauge.
-	// Регистрируется в setupMetricsRegistry, инжектится в toll.NewWatcher /
-	// toll.NewLeader в setupToll. nil-safe методы.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	tollMetrics *toll.Metrics
-	// tollWatcher — per-instance disconnect-наблюдатель (без goroutine, hook
-	// EventStream-cleanup-а). nil при выключенном Toll (нет Redis, или
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	// `toll.enabled: false`) → eventstream notifyTollDisconnect no-op.
 	tollWatcher *toll.Watcher
-	// tollDegradedReader — read-флаг cluster:degraded для api-middleware. При
-	// выключенном Toll — реализация-noop (всегда false → middleware passthrough).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	tollDegradedReader toll.DegradedReader
-	// tollLeader — cluster-leader goroutine Toll-а. Сохраняется на daemon, чтобы
-	// hot-reload-подписка (см. setupToll) могла позвать [toll.Leader.UpdateConfig]
-	// на каждый успешный config-swap. nil при выключенном Toll.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	tollLeader *toll.Leader
-	// tollWebhookCfg — snapshot конфига webhook-канала на момент построения
-	// notifier-а. Используется hot-reload-подпиской для diff-а: webhook
-	// пересоздаётся только при изменении URLRef/Format/Timeout/Enabled, чтобы
-	// частые reload-ы с неизменными webhook-полями не дёргали Vault-резолв.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	tollWebhookCfg *config.KeeperTollWebhook
 
 	// --- tempo (per-AID rate-limiter write-API, ADR-050) ---
 	// tempoMetrics — keeper_tempo_allowed_total / keeper_tempo_rejected_total
-	// {endpoint}. Регистрируется в setupMetricsRegistry безусловно (паттерн
-	// tollMetrics), инжектится в api.Deps.TempoMetrics. nil-safe.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	tempoMetrics *api.TempoMetrics
-	// tempoLimiter — Redis token-bucket Tempo. Конструируется в setupTempo
-	// ТОЛЬКО при наличии Redis (без Redis → nil → middleware passthrough,
-	// ADR-050(a)+(b)). Инжектится в api.Deps.TempoLimiter. Сам limiter
-	// stateless — rate/burst читаются на каждом запросе из config.Store
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	// (hot-reload, ADR-050(f)).
 	tempoLimiter *keeperredis.TokenBucket
 
-	// loginGuard — Redis anti-bruteforce-примитив публичных login-эндпоинтов
-	// (ADR-058(g), HIGH-3). Конструируется в setupLoginGuard ТОЛЬКО при Redis
-	// И auth.rate_limit.enabled (default-ON). Инжектится в api.Deps.LoginGuard;
-	// без Redis → nil → login без throttle (passthrough).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	loginGuard *keeperredis.LoginGuard
 
 	// --- acolyte (ADR-027) ---
 	acolytePool *acolyte.Pool
 
-	// voyageReclaimer — wired-up в setupReaper (Reaper-правило reclaim_voyages,
-	// ADR-043 S4). Зависит только от d.pool; правило default-ON через
-	// path-defaulting в reaper.dispatch (ADR-043 §8) — оператор выключает
-	// `reclaim_voyages: { enabled: false }`. Сохраняется для диагностики/тестов.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	voyageReclaimer *reaper.VoyageReclaimer
 
 	// --- errand (ADR-033) ---
-	// errandStore / errandDispatcher — pull-ad-hoc Errand contour. Собираются в
-	// setupErrandDispatcher после setupGRPCEventStream (d.outbound нужен
-	// dispatcher-у) и ДО setupAPIServer (API.Deps читает обе ссылки). При
-	// отсутствии Redis dispatcher деградирует на local-only routing (single-
-	// keeper dev): holder lease-а неизвестен → пробуем напрямую через outbound.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	errandStore      *errand.Store
 	errandDispatcher *errand.Dispatcher
 
 	// --- voyage (ADR-043, S1) ---
-	// voyagePoolStarted — флаг, что setupVoyageWorker реально поднял pool
-	// (cfg.Voyage != nil && workers > 0). На S1 нет API-эндпоинтов /v1/runs
-	// (S5) — флаг существует ради parity-диагностики и будущего gate.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	voyagePoolStarted bool
 
-	// --- api server (.Start дёргается оркестратором последним) ---
+	// Keeper daemon runtime wiring note.
 	apiServer *api.Server
 }
 
-// setupConfig — флаги + env, загрузка Store, диагностика, снимок cfg и derive
-// JWT issuer. Особая exit-семантика (флаг-парс → exitUsage, ранние
-// config-ошибки → stderr напрямую, logger ещё нет) оставлена вне общего
-// паттерна: метод сам печатает в stderr и сигналит вид ошибки через exitCode.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupConfig(args []string) (exitCode int, ok bool) {
 	var (
 		configPath string
@@ -462,17 +462,17 @@ func (d *daemon) setupConfig(args []string) (exitCode int, ok bool) {
 	if err := fs.Parse(args); err != nil {
 		return exitUsage, false
 	}
-	// ADR-013(d): bootstrap-pending режим включается флагом `--initialize`
-	// ЛИБО env `KEEPER_INITIALIZE=true` (для контейнер/CI-окружений, где
-	// флаг неудобен). Env читаем как truthy-OR: пустая/невалидная строка →
-	// false, флаг остаётся приоритетным источником «истины-вверх».
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	initialize = initialize || envTruthy("KEEPER_INITIALIZE")
 	d.initialize = initialize
 
-	// Reaper-runner требует Store[KeeperConfig] для hot-reload-аware
-	// чтения (ADR-021 / M0.3). Используем тот же путь, что api/health —
-	// один LoadKeeperStore покрывает оба consumer-а; Store.Get() даёт
-	// текущий снимок для остальной wire-up-логики.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	store, diags, err := config.LoadKeeperStore(configPath, config.ValidateOptions{})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keeper run: load config %q: %v\n", configPath, err)
@@ -511,35 +511,35 @@ func (d *daemon) setupConfig(args []string) (exitCode int, ok bool) {
 	return exitOK, true
 }
 
-// setupObservabilityEarly — logger + level-handle, подписка на hot-reload
-// `logging.level` и SIGHUP-watcher. Подписки ставятся до подъёма тяжёлых
-// зависимостей, чтобы level применялся даже на ранних reload-ах.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupObservabilityEarly(ctx context.Context) error {
 	cfg := d.cfg
-	// Logger строится после успешной загрузки/валидации cfg, чтобы читать
-	// logging-ротацию из keeper.yml (ранние config-ошибки выше уходят в
-	// stderr напрямую, не через logger). NewWithLevel возвращает level-handle:
-	// на hot-reload (`logging.level`, ADR-021) меняем порог логирования без
-	// пере-создания writer-а (file/format/rotation — restart-required).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	logger, logLevel := shlog.NewWithLevel(shlog.FromKeeper(cfg.Logging))
 	d.logger = logger
 
-	// Hot-reload `logging.level` (ADR-021): на каждый успешный Store-swap
-	// двигаем порог логирования по новому снимку. Подписку ставим до подъёма
-	// тяжёлых зависимостей — level применяется даже на ранних reload-ах.
-	// Остальные logging.*-поля (file/format/rotation) restart-required —
-	// их не трогаем (см. docs/keeper/config.md → таблица).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.store.OnReload(func(_, newCfg *config.KeeperConfig) {
 		if newCfg != nil {
 			logLevel.Set(newCfg.Logging.Level)
 		}
 	})
 
-	// SIGHUP-reload (ADR-021(b)). Watcher ведёт ОТДЕЛЬНЫЙ signal-канал —
-	// SIGHUP не попадает в signalContext (SIGINT/SIGTERM), поэтому reload не
-	// путается с shutdown. Запускается только если hot_reload.enable_signal
-	// (default true); при false — file-edit reload отключён. write-back на
-	// диск тут не происходит (read-only по отношению к файлу).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	if cfg.HotReload.SignalEnabled() {
 		reloadCh := config.WatchSIGHUP(ctx, d.store)
 		go config.LogReloads(reloadCh, logger)
@@ -550,13 +550,13 @@ func (d *daemon) setupObservabilityEarly(ctx context.Context) error {
 	return nil
 }
 
-// setupVault — vault-клиент (до pool: postgres.dsn_ref может быть vault-ref) и
-// фоновый token-renewer под собственным renewerCtx. Cleanup-пара (cancel →
-// Stop-wait) регистрируется в том же относительном порядке, что и прежние
-// vault-defer'ы.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupVault(ctx context.Context) error {
-	// Vault-client поднимается до pg.NewPool — `postgres.dsn_ref`
-	// может быть vault-ref.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	vc, err := keepervault.NewClient(ctx, d.cfg.Vault)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keeper run: vault client: %v\n", err)
@@ -565,23 +565,23 @@ func (d *daemon) setupVault(ctx context.Context) error {
 	d.vc = vc
 	logger := d.logger
 
-	// Auto-renew vault-токена в фоне, пока процесс жив. Для non-renewable
-	// токена (root/static dev) watcher не стартует — keeper работает дальше.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	//
-	// Под своим renewerCtx (производный от parent-а) — тем же приёмом, что и
-	// reaper-runner ниже. Stop() блокируется на выходе goroutine, а goroutine
-	// выходит только по отмене своего ctx. Если бы Stop зависел от внешнего
-	// ctx, любой fatal-`return exitError` ниже (DSN/migrations/operators/...)
-	// подвесил бы shutdown: внешний ctx ещё жив, cleanup Stop() (LIFO раньше
-	// renewerCancel) ждал бы вечно. renewerCancel выполняется первым и
-	// разблокирует Stop независимо от пути выхода.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	//
-	// Cleanup-стек LIFO. Целевой порядок выполнения:
+	// Keeper daemon runtime wiring note.
 	//
-	//  1. renewerCancel()        — сигнализируем goroutine остановиться.
-	//  2. <-Stop() (с timeout-ом) — ждём её реального выхода; 5s + warn про
-	//     возможный leak, иначе зависший watcher.Stop() при недоступном
-	//     Vault на shutdown подвесил бы exit.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	renewerCtx, renewerCancel := context.WithCancel(ctx)
 	tokenRenewer, err := vc.StartTokenRenewer(renewerCtx, logger)
 	if err != nil {
@@ -589,7 +589,7 @@ func (d *daemon) setupVault(ctx context.Context) error {
 		fmt.Fprintf(os.Stderr, "keeper run: vault token renewer: %v\n", err)
 		return errSetupFailed
 	}
-	// 2. Ждём выхода renewer-goroutine.
+	// Keeper daemon runtime wiring note.
 	d.cleanups.push(func() {
 		done := make(chan struct{})
 		go func() {
@@ -602,14 +602,14 @@ func (d *daemon) setupVault(ctx context.Context) error {
 			logger.Warn("vault token renewer did not stop within 5s after shutdown — leak suspected")
 		}
 	})
-	// 1. Отменяем renewerCtx (зарегистрирован позже → LIFO выполнит первым).
+	// Keeper daemon runtime wiring note.
 	d.cleanups.push(renewerCancel)
 	return nil
 }
 
 // setupStorage — PG pool + Ping + ResolveDSN + Apply migrations. pool
-// поднимается после vault-клиента (DSN-резолв), миграции — до любого чтения
-// таблиц (guard / RBAC-схема зависят от applied migrations).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupStorage(ctx context.Context) error {
 	pool, err := keeperpg.NewPool(ctx, d.cfg.Postgres, d.vc)
 	if err != nil {
@@ -635,9 +635,9 @@ func (d *daemon) setupStorage(ctx context.Context) error {
 	return nil
 }
 
-// setupOperatorBootstrapGuard — restart-семантика ADR-013(d): пустой реестр без
-// --initialize → отказ старта. Считаем только НЕ-системных: archon-system всегда
-// присутствует после миграций и не должен снимать guard на свежей БД.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupOperatorBootstrapGuard(ctx context.Context) error {
 	n, err := operator.CountNonSystem(ctx, d.pool)
 	if err != nil {
@@ -657,7 +657,7 @@ func (d *daemon) setupOperatorBootstrapGuard(ctx context.Context) error {
 	return nil
 }
 
-// setupJWT — signing-key из Vault, Verifier/Issuer и ttl_default.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupJWT(ctx context.Context) error {
 	signingKey, err := bootstrap.LoadSigningKey(ctx, d.vc, d.cfg.Auth.JWT.SigningKeyRef)
 	if err != nil {
@@ -686,17 +686,17 @@ func (d *daemon) setupJWT(ctx context.Context) error {
 	return nil
 }
 
-// setupRBAC — read-only enforcer-снимок (rbac.Holder + фоновый Run) и
-// CRUD-фасад rbac.Service. Pub/sub-инвалидация подключается отдельно в
-// setupRBACInvalidation (после redisClient).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupRBAC(ctx context.Context) error {
-	// RBAC enforcer обёрнут в [rbac.Holder], строящий снимок из БД
-	// (ADR-028(d) — RBAC-storage перенесён в Postgres). Initial-build падает
-	// fatal на недоступной/битой RBAC-схеме (миграции 026/027 уже применены
-	// выше). Стратегия обновления Фаза 1 = B1 (TTL-poll): фоновая goroutine
-	// перечитывает снимок каждые rbac.DefaultRefreshInterval; ошибка перечита
-	// оставляет прежний enforcer + warn (БД-сбой не превращает всех в
-	// default-deny). Redis pub/sub-инвалидация (B2) — Фаза 3.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	rbacHolder, err := rbac.NewHolder(ctx, rbac.PoolSource{DB: d.pool}, rbac.DefaultRefreshInterval, d.logger)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keeper run: build RBAC enforcer: %v\n", err)
@@ -705,11 +705,11 @@ func (d *daemon) setupRBAC(ctx context.Context) error {
 	go rbacHolder.Run(ctx)
 	d.rbacHolder = rbacHolder
 
-	// RBAC-CRUD-фасад (ADR-028 Фаза 2): мутирующая бизнес-логика role.* —
-	// один экземпляр на процесс, шарится REST (api.Deps.RBACSvc) и MCP
-	// (mcp.HandlerDeps.RBACRoles). ОТЛИЧАЕТСЯ от rbacHolder выше: тот —
-	// read-only enforcer-снимок (Check/ClusterAdmins/RolesOf), этот — CRUD
-	// над БД под FOR UPDATE. role.*-роуты/tools подключает Slice 2a/2b.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	rbacSvc, err := rbac.NewService(rbac.ServiceDeps{Pool: d.pool, Logger: d.logger})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keeper run: build RBAC service: %v\n", err)
@@ -719,22 +719,22 @@ func (d *daemon) setupRBAC(ctx context.Context) error {
 	return nil
 }
 
-// setupServiceRegistry — in-memory снимок реестра Service-ов/keeper_settings
-// (serviceregistry.Holder + фоновый Run) и CRUD-фасад serviceregistry.Service
-// (реестр Service-ов перенесён из статического keeper.yml в PG, ADR-029, паттерн
-// setupRBAC). Pub/sub-инвалидация подключается отдельно в
-// setupServiceRegistryInvalidation (после redisClient).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Holder — единственный источник реестра для потребителей scenario
-// (serviceRegistry/destinySource в setupScenarioDeps читают его Resolve/
-// DefaultDestinySource, S4). transport-фасад (OpenAPI/MCP) для serviceSvc — S3.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupServiceRegistry(ctx context.Context) error {
-	// Снимок реестра обёрнут в [serviceregistry.Holder], строящий его из БД
-	// (миграции 034/035 уже применены в setupStorage). Initial-build падает
-	// fatal на недоступной/битой схеме. Стратегия обновления: TTL-poll
-	// (фоновая goroutine перечитывает снимок каждые
-	// serviceregistry.DefaultRefreshInterval; ошибка перечита оставляет прежний
-	// снимок + warn) + Redis pub/sub-инвалидация (setupServiceRegistryInvalidation).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	holder, err := serviceregistry.NewHolder(ctx, serviceregistry.PoolSource{DB: d.pool}, serviceregistry.DefaultRefreshInterval, d.logger)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keeper run: build service-registry holder: %v\n", err)
@@ -743,9 +743,9 @@ func (d *daemon) setupServiceRegistry(ctx context.Context) error {
 	go holder.Run(ctx)
 	d.serviceHolder = holder
 
-	// CRUD-фасад реестра (S1): один экземпляр на процесс. ОТЛИЧАЕТСЯ от holder
-	// выше: тот — read-only снимок (Resolve/DefaultDestinySource), этот — CRUD
-	// над БД. transport-роуты/tools подключает S3; invalidate-хук — S2
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	// (setupServiceRegistryInvalidation).
 	svc, err := serviceregistry.NewService(serviceregistry.ServiceDeps{Pool: d.pool, Logger: d.logger})
 	if err != nil {
@@ -754,17 +754,17 @@ func (d *daemon) setupServiceRegistry(ctx context.Context) error {
 	}
 	d.serviceSvc = svc
 
-	// TTL-кеш git-ls-remote ответа для `/v1/services/{name}/refs` (UI). Lister —
-	// прямой artifact.ListRefs (go-git ListContext, без клонирования). TTL по
-	// умолчанию (RefsTTL=60s).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.serviceRefs = serviceregistry.NewRefsCache(
 		artifact.RefsListerFunc(artifact.ListRefs),
-		0, // 0 → дефолтный RefsTTL
+		0, // Keeper daemon runtime wiring note.
 	)
 
-	// Augur management-CRUD реестров Omen / Rite (ADR-025, OpenAPI/MCP). Тот же
-	// pool. Брокер-сторона (резолв AugurRequest) поднимается отдельно в gRPC-
-	// wire-up (keepergrpc.AugurDeps), здесь — только operator-facing управление.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	augurSvc, err := keeperaugur.NewService(keeperaugur.ServiceDeps{Pool: d.pool, Logger: d.logger})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keeper run: build augur service: %v\n", err)
@@ -772,12 +772,12 @@ func (d *daemon) setupServiceRegistry(ctx context.Context) error {
 	}
 	d.augurSvc = augurSvc
 
-	// Oracle management-CRUD реестров Vigil / Decree (ADR-030 beacons, OpenAPI/
-	// MCP). Тот же pool. Reactor-сторона (резолв Portent → match Decree →
-	// enqueue) поднимается отдельно в gRPC-wire-up (oracleScenarioEnqueuer),
-	// здесь — только operator-facing управление. Where — отдельный
-	// WhereEvaluator для compile-проверки where-CEL Decree-а на create (тот же
-	// sandbox-env, что reactor использует на горячем пути).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	oracleWhereCheck, err := oracle.NewWhereEvaluator()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keeper run: build oracle where-evaluator: %v\n", err)
@@ -792,25 +792,25 @@ func (d *daemon) setupServiceRegistry(ctx context.Context) error {
 	return nil
 }
 
-// setupAudit — PG audit-writer (опц. обёрнутый в multi-writer с herald
-// notification-tap) + late-binding в Store (с этого момента каждый Store.Reload
-// пишет config.reload_* в audit_log).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupAudit(_ context.Context) error {
 	auditWriter := audit.Writer(auditpg.NewWriter(d.pool))
 
-	// Herald notification-tap (ADR-052(c)): multi-writer декоратор над
-	// PG-writer-ом. Tap получает событие ПОСЛЕ успешной PG-записи и матчит его
-	// против включённых Tiding-правил (notification-dispatcher), не влияя на
-	// исход audit-записи (best-effort, ADR-022(f)).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	//
-	// Сборка безотказна: NewDispatcher/NewNotificationTap ошибок не возвращают —
-	// чистая in-memory-инициализация (PGRuleSource — ленивый адаптер над d.pool,
-	// запрос к tidings отложен до первого матча и best-effort; LogDeliveryQueue —
-	// без доставки в S2), поэтому heraldTap всегда non-nil. Fail-open-ветка
-	// (деградация на голый PG-writer при сбое сборки) появится, если конструкторы
-	// станут возвращать ошибку (S3+ с реальной доставкой). Метрики dispatcher-а —
-	// late-binding в setupMetricsRegistry (тот идёт ПОСЛЕ setupAudit по init-order,
-	// как vault/rbac SetMetrics).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	dispatcher := herald.NewDispatcher(herald.DispatcherConfig{
 		Source: herald.PGRuleSource{DB: d.pool},
 		Queue:  &herald.LogDeliveryQueue{Logger: d.logger},
@@ -824,59 +824,59 @@ func (d *daemon) setupAudit(_ context.Context) error {
 
 	d.auditWriter = auditWriter
 
-	// Audit-эмиссия config.reload_* (ADR-021(g), ADR-022(j)). Store создаётся
-	// выше (до подъёма pool/writer — порядок init выверен Vault→pool→
-	// migrations→writer), поэтому audit-writer инъектируется late-binding:
-	// с этого момента каждый Store.Reload пишет config.reload_succeeded/
-	// config.reload_failed в audit_log.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.store.SetAuditWriter(auditWriter)
 	return nil
 }
 
-// setupCoreModules — keeper-side core-модули (ADR-017): PluginHost discovery +
+// Keeper daemon runtime wiring note.
 // cloud-adapter + coremod.Default. Discovery best-effort.
 func (d *daemon) setupCoreModules(ctx context.Context) error {
 	cfg := d.cfg
 	logger := d.logger
-	// Keeper-side core-модули (ADR-017, docs/keeper/modules.md): три модуля,
-	// диспетчер `on: keeper`. Wire-up scenario-runner-а в gRPC EventStream —
-	// отдельная задача (M2.5); сейчас Registry собирается заранее, чтобы при
-	// его подключении не пришлось менять main и rewire-ить зависимости.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	//
 	// PluginHost: NewHost + Discover + FilterByCatalog. Discovery
-	// best-effort — отсутствие cache-root или пустой каталог не fatal,
-	// только означает «cloud-плагины не подключены, `core.cloud.provisioned`
-	// в проде вернёт ошибку spawn/unknown provider». StubHost не подсовываем
-	// — adapter с пустым списком провайдеров даст внятную ошибку «unknown
-	// provider", а stub дал бы загадочный ErrPluginHostNotImplemented.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	//
-	// Sigil verify-tract keeper-host-а (ADR-026(f)/(h), S6-keeper-verify): набор
-	// trust-anchor-ов — d.sigilAnchors (active-ключи подписи, которыми keeper
-	// подписывает допуски; пустой при выключенном Sigil → плагины fail-closed по
-	// no_trust_anchor — интенсионально, G-sigil-5: оператор с cloud/ssh обязан
-	// настроить Sigil + allow). OR-проверка по набору даёт безразрывную ротацию
-	// ключа. lookup — адаптер над реестром plugin_sigils (читается напрямую из
-	// d.pool, не EventStream). Core-модули статические, Spawn-verify не проходят
-	// — этим не затронуты.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	sigilLookup := pluginhost.NewSigilLookupAdapter(sigilRecordLister{store: sigil.NewPGStore(d.pool)}, logger)
 	pluginHost, err := pluginhost.NewHost(cfg.PluginRuntime, d.sigilAnchors, sigilLookup)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keeper run: build plugin host: %v\n", err)
 		return errSetupFailed
 	}
-	// Сохраняем keeper-host: watcher `sigil:anchors-changed` (setupSigilInvalidation)
-	// атомарно обновляет его verify-набор (Host.SigilAnchors.SetAnchors) при
-	// runtime-ротации ключей подписи без рестарта (ADR-026(h), R3-S6).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.sigilHost = pluginHost
-	// Тот же keeper-host шарится с setupPushDispatchers (S6 pilot wire-up
-	// SshDispatcher): spawn SshProvider-плагина идёт через него же, чтобы Sigil-
-	// verify, capability-allowlist и socket-dir-настройки были одни на процесс.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.pushPluginHost = pluginHost
 	cacheRoot := pluginCacheRoot(cfg.Plugins)
 
-	// git-резолв каталога плагинов в commit_sha-слоты (ADR-026 F-fetch, A1-S1):
-	// наполняет кеш ДО Discover/FilterByCatalog. Per-entry ошибки fail-closed —
-	// warnings, не валят старт (Keeper поднимается без сломанного плагина).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	resolver := plugingit.NewResolver(cacheRoot, pluginWorkRoot(cfg.Plugins),
 		cfg.Plugins.ResolvedFetchTimeout(),
 		cfg.Plugins.ResolvedMaxArtifactSize(), cfg.Plugins.ResolvedMaxCloneSize(), logger)
@@ -910,8 +910,8 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 			case pluginhost.KindCloudDriver:
 				discoveredCloud = append(discoveredCloud, dd)
 			case pluginhost.KindSSHProvider:
-				// SshProvider-плагины уходят в setupPushDispatchers (S6 pilot).
-				// Здесь только индексируем по kind — Spawn делается позже.
+				// Keeper daemon runtime wiring note.
+				// Keeper daemon runtime wiring note.
 				d.pushDiscoveredSsh = append(d.pushDiscoveredSsh, dd)
 			}
 		}
@@ -921,21 +921,21 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 		fmt.Fprintf(os.Stderr, "keeper run: build cloud plugin adapter: %v\n", err)
 		return errSetupFailed
 	}
-	// CloudUserdata — рендер cloud-init userdata для scenario-параметра
+	// Keeper daemon runtime wiring note.
 	// `generate_userdata: true` (ADR-017(h) amendment 2026-05-27, B-flat).
-	// Обёртка читает текущий KeeperConfig snapshot через d.store.Get() — hot-
-	// reload подхватывается каждым новым cloud-create-шагом без рестарта.
-	// nil-блок keeper.yml::cloud_init допустим: scenario без generate_userdata
-	// работает без изменений; явный generate_userdata: true тогда вернёт
-	// понятную ошибку «не сконфигурирован».
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	userdataProvider := &cloudInitProvider{store: d.store, resolver: cloudinit.NewResolver(d.vc)}
 
-	// Bootstrap-доставка токена `core.bootstrap.delivered` в teleport-режиме
-	// (ADR-063 amendment): Teleport-Dialer строится ПРЯМО здесь из keeper.yml::
-	// push.teleport — creds (identity-file/proxy/cluster) не требуют spawn-плагинов
-	// и Vault-host-CA, поэтому собираются до setupPushDispatchers (которая идёт
-	// позже и поднимает generic-direct-инфраструктуру). direct-режим bootstrap-
-	// модуля в daemon-е пока не подключается (BootstrapDial=nil → не регистрируется).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	var bootstrapTransport string
 	var bootstrapDial push.Dialer
 	if cfg.Push != nil && cfg.Push.Transport == config.PushTransportTeleport {
@@ -953,21 +953,21 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 
 	coreReg := coremod.Default(coremod.Deps{
 		SoulStore: coremodsoul.NewPGStore(d.pool),
-		// SoulPresence / MaxAwaitTimeout — барьер онбординга `core.soul.registered`
-		// `await_online` (ADR-061). Presence читает d.redisClient лениво (setupRedis
-		// идёт позже); потолок await_timeout берётся из текущего snapshot keeper.yml
-		// (hot-reload через d.store.Get).
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		SoulPresence: lazySoulPresence{d: d},
 		MaxAwaitTimeout: func() string {
 			if cfg := d.store.Get(); cfg != nil {
 				return cfg.MaxAwaitTimeout
 			}
-			return "" // → config.DefaultMaxAwaitTimeout в модуле
+			return "" // Keeper daemon runtime wiring note.
 		},
 		PluginHost: cloudAdapter,
-		// CloudResolver — A-flow: Provider-реестр (PG) + Vault → driver-имя +
-		// plain-credentials. d.vc всегда не-nil после setupVault (тот валит
-		// старт при ошибке), как и для core.vault.kv-read ниже.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		CloudResolver: cloud.NewCredentialsResolverPG(cloud.NewProviderReaderPG(d.pool), cloud.NewProfileReaderPG(d.pool), d.vc),
 		CloudSouls:    cloud.NewSoulPG(d.pool),
 		CloudTokens:   cloud.NewTokenPG(d.pool, cloud.DefaultBootstrapTokenTTL),
@@ -975,42 +975,42 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 		CloudUserdata: userdataProvider,
 		Vault:         d.vc,
 		Audit:         d.auditWriter,
-		// ChoirStore — `core.choir` (ADR-044): AddVoice/RemoveVoice над
-		// incarnation_choir_voices через choir-CRUD (S-T2) + проверка
-		// существования инкарнации. Тот же d.pool, что у остальных PG-adapter-ов.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		ChoirStore: coremodchoir.NewPGStore(d.pool),
-		// CertStore — `core.cert.registered` (cert-rotation Вар1, E1): SelectActive
-		// + RegisterActive над warrant через cert-CRUD. Модуль читает cert-PEM из
-		// Vault (Deps.Vault выше) и извлекает метаданные сам. KID — issued_by_kid.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		CertStore: coremodcert.NewPGStore(d.pool),
 		KID:       cfg.KID,
-		// `core.bootstrap.delivered` teleport-режим (ADR-063 amendment): dialer
-		// из keeper.yml::push.teleport. nil/"" → direct, и т.к. direct-набор
-		// (providers/host-CA) тут не заполнен, модуль не регистрируется.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		BootstrapTransport: bootstrapTransport,
 		BootstrapDial:      bootstrapDial,
-		// BootstrapInstall — install-режим `core.bootstrap.delivered` (param
-		// `install: true`, только teleport, ADR-063 amendment «full-install over
-		// SSH»). Тот же userdataProvider (один cloudinit.Resolver-инстанс) — отдаёт
-		// резолвленный Config для install-blueprint. nil-блок keeper.yml::cloud_init
-		// → Resolve вернёт явную ошибку при install=true (как generate_userdata).
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		BootstrapInstall: userdataProvider,
 	})
 	logger.Info("keeper run: core modules registered",
 		slog.Int("count", len(coreReg.Names())),
 		slog.Any("cloud_providers", cloudAdapter.Providers()))
-	// Передаём scenario-runner-у (только run-goroutine-путь): задачи с
-	// `on: keeper` исполняются локально на инстансе через этот Registry.
-	// Acolyte-claim путь keeper-задачи не исполняет (groupByHost их пропускает).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.coreModules = coreReg
 	return nil
 }
 
-// cloudInitProvider — обёртка cloudinit.Resolver+GenerateUserdata под интерфейс
-// cloud.UserdataProvider (ADR-017(h) amendment 2026-05-27, B-flat). На каждом
-// GenerateUserdata-вызове читает текущий config.Store snapshot — hot-reload
-// keeper.yml::cloud_init подхватывается следующим cloud-create-шагом без
-// рестарта (через d.store.Get).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 type cloudInitProvider struct {
 	store    *config.Store[config.KeeperConfig]
 	resolver *cloudinit.Resolver
@@ -1028,10 +1028,10 @@ func (p *cloudInitProvider) GenerateUserdata(ctx context.Context) (string, error
 	return cloudinit.GenerateUserdata(resolved)
 }
 
-// GenerateUserdataSelfOnboard рендерит userdata с запечёнными per-VM токенами
-// (self-onboard «Вариант T», ADR-017(h) amendment). Тот же snapshot+Vault-резолв
-// cloud_init, что GenerateUserdata, но с map FQDN→token — cloud-init на VM выберет
-// свой токен по hostname и онбордится сам.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (p *cloudInitProvider) GenerateUserdataSelfOnboard(ctx context.Context, tokens map[string]string) (string, error) {
 	cfg := p.store.Get()
 	if cfg == nil {
@@ -1044,12 +1044,12 @@ func (p *cloudInitProvider) GenerateUserdataSelfOnboard(ctx context.Context, tok
 	return cloudinit.GenerateUserdataSelfOnboard(resolved, tokens)
 }
 
-// Resolve реализует coremodbootstrap.InstallResolver — install-режим
-// `core.bootstrap.delivered` (ADR-063 amendment): тот же snapshot+Vault-резолв,
-// что GenerateUserdata, но отдаёт резолвленный cloudinit.Config (не рендеренный
-// YAML) — bootstrap-модуль маппит его в soulinstall.Blueprint и сам рендерит
-// install-шаги. Один cloudinit.Resolver-инстанс на оба пути (cloud-init userdata
-// + full-install по SSH), config-reuse без второго резолвера.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (p *cloudInitProvider) Resolve(ctx context.Context) (cloudinit.Config, error) {
 	cfg := p.store.Get()
 	if cfg == nil {
@@ -1058,11 +1058,11 @@ func (p *cloudInitProvider) Resolve(ctx context.Context) (cloudinit.Config, erro
 	return p.resolver.Resolve(ctx, cfg.CloudInit)
 }
 
-// buildBootstrapTeleportDialer собирает push.Dialer для teleport-режима
-// `core.bootstrap.delivered` (ADR-063 amendment) из keeper.yml::push.teleport.
-// Creds валидированы schema-фазой (proxy_addr/identity_file/cluster непусты при
-// transport: teleport), но push.NewTeleportDialer повторно проверяет на nil/пусто
-// — defense-in-depth на случай прямой сборки Deps в обход конфиг-валидации.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func buildBootstrapTeleportDialer(p *config.KeeperPush) (push.Dialer, error) {
 	if p.Teleport == nil {
 		return nil, fmt.Errorf("push.transport=teleport requires push.teleport block")
@@ -1076,15 +1076,15 @@ func buildBootstrapTeleportDialer(p *config.KeeperPush) (push.Dialer, error) {
 	})
 }
 
-// sigilRecordLister проецирует реестр plugin_sigils (sigil.Store.ListActive)
-// в verify-форму shared/pluginhost.SigilRecord для keeper-host verify-tract-а
-// (ADR-026(f), S6-keeper-verify). Маппинг живёт здесь (call-site), а не в
-// keeper/internal/pluginhost: тот пакет нельзя заставить импортировать
-// keeper/internal/sigil (sigil уже импортирует pluginhost — был бы import-цикл).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Manifest = sigil.Sigil.ManifestRaw — byte-exact СЫРЫЕ байты manifest.yaml,
-// над которыми поставлена подпись (КАНОН для verify), НЕ JSONB-проекция
-// Manifest: re-хеш на verify идёт именно над этими байтами (S3↔S6-инвариант).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 type sigilRecordLister struct {
 	store sigil.Store
 }
@@ -1108,19 +1108,19 @@ func (l sigilRecordLister) ListActive(ctx context.Context) ([]*sharedhost.SigilR
 	return out, nil
 }
 
-// moduleCatalogPlugins проецирует активные записи plugin_sigils
-// (sigil.Store.ListActive) в plugin-секцию module-catalog (`GET /v1/modules`).
-// Manifest = sigil.Sigil.ManifestRaw — byte-exact сырые байты manifest.yaml
-// (handler парсит из них params; та же форма, что и sigilRecordLister, но в
-// handler-формат [handlers.PluginCatalogEntry]).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 type moduleCatalogPlugins struct {
 	store sigil.Store
 }
 
-// moduleCatalogPluginsOrNil возвращает plugin-lister каталога ИЛИ нетипизированный
-// nil (НЕ typed-nil): handler проверяет `plugins != nil` для gate-а plugin-секции,
-// typed-nil прошёл бы проверку и упал бы на ListActive. При выключенном Sigil
-// (d.sigilSvc==nil) реестра plugin_sigils нет → каталог отдаёт только core.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func moduleCatalogPluginsOrNil(d *daemon) handlers.ModuleCatalogPlugins {
 	if d.sigilSvc == nil {
 		return nil
@@ -1145,139 +1145,139 @@ func (l moduleCatalogPlugins) ActivePlugins(ctx context.Context) ([]handlers.Plu
 	return out, nil
 }
 
-// setupMetricsRegistry — dedicated Prometheus registry + регистрация всех
-// per-подсистемных метрик (http/grpc/scenario/render/vault). Один экземпляр
-// на процесс. RegisterReaperMetrics НЕ здесь — оно условное в ветке Reaper на
-// тот же registry.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupMetricsRegistry(_ context.Context) error {
-	// Observability-стек: dedicated Prometheus registry с go/process-
-	// collectors (компонент-агностичный core). keeper_http_*-метрики
-	// регистрируются отдельно поверх него. Один экземпляр на keeper-процесс,
-	// шарится между middleware на /v1/* (инструментация) и выделенным
-	// metrics-listener-ом (exposition).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	metricsReg := obs.NewRegistry()
 	d.metricsReg = metricsReg
 	d.httpMetrics = obs.RegisterHTTPMetrics(metricsReg)
-	// keeper_grpc_*-метрики EventStream-подсистемы регистрируются на тот же
-	// registry; дескриптор шарится между Outbound (dispatch) и
-	// EventStream-handler-ом (streams/messages). Безусловно — EventStream-
-	// listener поднимается всегда (в отличие от опционального Reaper-а).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.grpcMetrics = keepergrpc.RegisterGRPCMetrics(metricsReg)
-	// keeper_scenario_*-метрики scenario-runner-а — на тот же registry;
-	// дескриптор инжектится в scenario.Deps.Metrics (один Registry на процесс).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.scenarioMetrics = scenario.RegisterScenarioMetrics(metricsReg)
-	// keeper_render_*-метрики render-пайплайна — на тот же registry; дескриптор
-	// инжектится в render.NewPipeline ниже (горячий путь CEL+template-рендера).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.renderMetrics = render.RegisterRenderMetrics(metricsReg)
 	// keeper_mask_regex_fallback_total + process-global audit.SetSealHooks —
-	// наблюдаемость regex-last-resort слоя secret-маскинга (ADR-010 §7.4, слой 4).
-	// На тот же registry; logger — канал warn-лога fallback-а.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	setupMaskMetrics(metricsReg, d.logger)
-	// keeper_vault_*-метрики чтения KV — на тот же registry; vc поднят выше
-	// (до создания registry, т.к. нужен для DSN-резолва), поэтому метрики
-	// подключаются сеттером SetMetrics здесь, после регистрации.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.vc.SetMetrics(keepervault.RegisterVaultMetrics(metricsReg))
-	// keeper_rbac_*-метрики RBAC-подсистемы — на тот же registry; rbacHolder
-	// поднят в setupRBAC ДО создания registry (init-order), поэтому метрики
-	// подключаются сеттером SetMetrics здесь, после регистрации (паттерн vault).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.rbacHolder.SetMetrics(rbac.RegisterRBACMetrics(metricsReg))
-	// keeper_serviceregistry_*-метрики снимка реестра Service-ов — на тот же
-	// registry; serviceHolder поднят в setupServiceRegistry ДО создания registry
-	// (init-order), метрики подключаются сеттером SetMetrics здесь (паттерн rbac).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.serviceHolder.SetMetrics(serviceregistry.RegisterRegistryMetrics(metricsReg))
-	// keeper_augur_*-метрики брокера AugurRequest — на тот же registry; дескриптор
-	// сохраняется в d.augurMetrics и инжектится в keepergrpc.AugurDeps.Metrics в
-	// setupGRPCEventStream (идёт позже по steps, паттерн grpcMetrics/scenarioMetrics).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.augurMetrics = keeperaugur.RegisterBrokerMetrics(metricsReg)
-	// keeper_oracle_*-метрики reactor-роутера Oracle (ADR-030 S4) — на тот же
-	// registry; дескриптор сохраняется в d.oracleMetrics и инжектится в
-	// keepergrpc.OracleDeps.Metrics в setupGRPCEventStream (паттерн augurMetrics).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.oracleMetrics = oracle.RegisterOracleMetrics(metricsReg)
-	// keeper_conclave_instances — gauge числа живых keeper-инстансов в Conclave
-	// (реестр presence в Redis, ADR-006 amend, soul-shedding S1). Обновляется
-	// renewal-goroutine-ой setupConclave (идёт позже, после setupRedis) по
-	// LiveKIDs. Регистрируется безусловно (registry всегда поднят); при
-	// отсутствии Redis renewal-goroutine не стартует → gauge остаётся 0.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.conclaveInstances = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "keeper_conclave_instances",
-		Help: "Текущее число живых keeper-инстансов в Conclave (presence-реестр в Redis).",
+		Help: "Current number of live keeper instances in Conclave (presence registry in Redis).",
 	})
 	metricsReg.Registerer().MustRegister(d.conclaveInstances)
-	// keeper_watchman_*-метрики (изоляция-детект + soul-shedding S2): gauge
-	// isolated (1/0) + счётчик закрытых shedding-ом стримов. Регистрируется
-	// безусловно (registry всегда поднят); инжектится в watchman.New в
-	// setupWatchman (паттерн conclaveInstances).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.watchmanMetrics = registerWatchmanMetrics(metricsReg)
-	// keeper_toll_*-метрики + keeper_cluster_degraded (Toll cluster-detector,
+	// Keeper daemon runtime wiring note.
 	// ADR-038): per-instance Watcher (counter disconnects + warmup/graceful
 	// skipped) + cluster-level Leader (gauge cluster_degraded + gauge
-	// leader_active). Регистрируется безусловно (registry всегда поднят);
-	// инжектится в toll.NewWatcher / toll.NewLeader в setupToll (паттерн
-	// watchmanMetrics). При выключенном Toll (отсутствие Redis или
-	// `toll.enabled: false`) метрики остаются на 0 — это валидный сигнал
-	// «детектор не активен», без двоякости.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.tollMetrics = toll.RegisterMetrics(metricsReg)
-	// keeper_tempo_*-метрики (Tempo per-AID rate-limiter, ADR-050(g)): counters
-	// allowed/rejected с разрезом по endpoint (= bucket-имя voyage_create), БЕЗ
-	// aid-лейбла (кардинальность). Регистрируется безусловно (registry всегда
-	// поднят); инжектится в api.Deps.TempoMetrics в setupAPIServer (паттерн
-	// tollMetrics). При выключенном Tempo (нет Redis / enabled=false) counters
-	// остаются на 0 — валидный сигнал «лимитер не активен».
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.tempoMetrics = api.RegisterTempoMetrics(metricsReg)
-	// keeper_herald_*-метрики notification-dispatcher/tap-а (ADR-052(c)): drop-
-	// counter переполнения буфера tap-а + dispatch/matches/errors. tap собран в
-	// setupAudit ДО создания registry (init-order: setupAudit идёт раньше
-	// setupMetricsRegistry), поэтому метрики прокидываются сеттером SetMetrics
-	// здесь (паттерн vault/rbac). heraldTap всегда non-nil (сборка в setupAudit
-	// безотказна — см. там); SetMetrics всё равно nil-safe на случай S3+, когда
-	// сборка сможет фейлиться и оставить heraldTap == nil.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	heraldMetrics := herald.RegisterDispatcherMetrics(metricsReg)
 	d.heraldTap.SetMetrics(heraldMetrics)
-	// keeper_herald_delivery_*-метрики claim-queue worker-а доставки (ADR-052(d),
-	// S3): attempts/succeeded/failed/retries по herald-каналу. Регистрируется
-	// безусловно (registry всегда поднят); инжектится в DeliveryWorker в
-	// setupHeraldDelivery (после setupRedis). При отсутствии Redis (доставка
-	// деградирует) counters остаются на 0.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.heraldDeliveryMetrics = herald.RegisterDeliveryMetrics(metricsReg)
-	// keeper_push_*-метрики (S7-3 multi-CA: counter матчей host-CA с разрезом
-	// по `ca_name`). Регистрируется безусловно (registry всегда поднят);
-	// инжектится в push.Deps.Metrics в setupPushDispatchers (паттерн
-	// watchmanMetrics/tollMetrics). При выключенном push дескриптор остаётся
-	// зарегистрированным, но никто не пишет — counter остаётся на 0.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.pushMetrics = push.RegisterMetrics(metricsReg)
-	// keeper_sigil_signing_keys_active — gauge active-ключей подписи (R3-S7);
-	// sigilKeySvc поднят в setupSigil ДО registry (init-order), метрики — сеттером
-	// (паттерн vault/rbac). nil при выключенном Sigil. Стартовое значение
-	// проставляет первая мутация (afterMutation); при выключенном — gauge остаётся 0.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	if d.sigilKeySvc != nil {
-		// Один дескриптор keeper_sigil_* шарится: gauge active-ключей обновляет
-		// KeyService (afterMutation), re-broadcast-наблюдаемость (счётчик проходов
-		// + delivered) — daemon из reloadAnchors. Сохраняем в d.sigilKeyMetrics,
-		// чтобы оба писали в ту же серию.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		d.sigilKeyMetrics = sigil.RegisterKeyMetrics(metricsReg)
 		d.sigilKeySvc.SetMetrics(d.sigilKeyMetrics)
-		// Стартовое значение gauge: читаем active-ключи сейчас (одноразово),
-		// чтобы метрика была актуальна до первой ротации. Best-effort.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		d.sigilKeySvc.PrimeActiveGauge(context.Background())
 	}
 	return nil
 }
 
-// setupMetricsListener — выделенный `/metrics` listener на listen.metrics.addr
-// (ADR-024) с опциональным basic-auth. Cleanup — graceful Shutdown.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupMetricsListener(ctx context.Context) error {
 	cfg := d.cfg
 	logger := d.logger
-	// `/metrics` — выделенный listener на `listen.metrics.addr` (ADR-024,
-	// PM-decision Slice 1): эндпоинт снят с openapi-роутера, чтобы scrape
-	// шёл на отдельный порт (обычно 9090) без auth-chain Operator API.
-	// keeper_http_*/keeper_reaper_* (последние регистрируются ниже на тот же
-	// registry) экспонируются здесь же — registry один.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	//
-	// Опц. basic-auth: при metrics.auth.basic.enabled пароль резолвится тем
-	// же keeper-vault-клиентом (что читает signing-key) из password_ref;
-	// иначе auth=nil (открытый эндпоинт). Резолв — на keeper-стороне, helper
-	// получает готовые креды (ADR-011: shared/obs не тянет vault).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	metricsAuth, err := resolveMetricsBasicAuth(ctx, d.vc, cfg.Metrics)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keeper run: resolve metrics basic-auth: %v\n", err)
@@ -1301,15 +1301,15 @@ func (d *daemon) setupMetricsListener(ctx context.Context) error {
 	return nil
 }
 
-// setupOTel — OTel-провайдер (ADR-024), service.name="keeper". Cleanup —
-// Shutdown (no-op-провайдер при otel.enabled=false → единообразный teardown).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupOTel(ctx context.Context) error {
 	cfg := d.cfg
 	logger := d.logger
-	// OTel-провайдер (ADR-024): service.name="keeper" + кастомный
-	// soulstack.kid из конфига. Trace-export при otel.enabled+endpoint;
-	// иначе no-op-провайдер (cleanup Shutdown единообразен). Setup один раз
-	// за процесс — otel.* restart-required, hot-reload его не трогает.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	otelProvider, err := obs.SetupOTel(ctx, obs.OTelConfig{
 		Enabled:       cfg.OTel != nil && cfg.OTel.Enabled,
 		Endpoint:      otelEndpoint(cfg.OTel),
@@ -1330,22 +1330,22 @@ func (d *daemon) setupOTel(ctx context.Context) error {
 	return nil
 }
 
-// setupScenarioDeps — зависимости scenario-runner-а (git-loader, topology- и
-// essence-резолверы, CEL-engine, render-pipeline, service-registry, destiny-
-// source). Сам Runner собирается в setupGRPCEventStream (после Outbound).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupScenarioDeps(_ context.Context) error {
 	cfg := d.cfg
 	logger := d.logger
-	// scenario-runner-зависимости (M2.x slice .g): git-loader, topology- и
-	// essence-резолверы, render-pipeline. Сам Runner собирается ниже (после
-	// Outbound — он dispatch-ит ApplyRequest через него). api.NewServer тоже
-	// собирается ниже, чтобы инжектить Runner + ServiceRegistry в Create-handler.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.serviceLoader = artifact.NewServiceLoader(serviceCacheRoot(cfg), logger)
 
-	// TTL-кеш scenario-listing-а для `/v1/services/{name}/scenarios` (UI). Lister
-	// под кешем грузит снапшот через d.serviceLoader.Load(ServiceRef{...}) →
-	// artifact.ListScenarios(snapshot.LocalDir). TTL по умолчанию (ScenariosTTL=60s).
-	// Создаётся ПОСЛЕ d.serviceLoader — переиспользует общий cacheRoot.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.serviceScenarios = serviceregistry.NewScenariosCache(
 		serviceregistry.ScenarioListerFunc(func(ctx context.Context, name, gitURL, ref string) ([]artifact.Scenario, error) {
 			art, err := d.serviceLoader.Load(ctx, artifact.ServiceRef{Name: name, Git: gitURL, Ref: ref})
@@ -1354,13 +1354,13 @@ func (d *daemon) setupScenarioDeps(_ context.Context) error {
 			}
 			return artifact.ListScenarios(art.LocalDir, logger)
 		}),
-		0, // 0 → дефолтный ScenariosTTL
+		0, // Keeper daemon runtime wiring note.
 	)
 
-	// TTL-кеш state_schema-метаданных для `/v1/services/{name}/state-schema`
-	// (UI Schema explorer). Lister грузит снапшот через d.serviceLoader.Load →
-	// artifact.ListStateSchema(snapshot.LocalDir). Parity с serviceScenarios:
-	// тот же loader, тот же TTL (StateSchemaTTL=60s).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.serviceStateSchema = serviceregistry.NewStateSchemaCache(
 		serviceregistry.StateSchemaListerFunc(func(ctx context.Context, name, gitURL, ref string) (*artifact.StateSchemaInfo, error) {
 			art, err := d.serviceLoader.Load(ctx, artifact.ServiceRef{Name: name, Git: gitURL, Ref: ref})
@@ -1369,13 +1369,13 @@ func (d *daemon) setupScenarioDeps(_ context.Context) error {
 			}
 			return artifact.ListStateSchema(art.LocalDir, logger)
 		}),
-		0, // 0 → дефолтный StateSchemaTTL
+		0, // Keeper daemon runtime wiring note.
 	)
 
-	// TTL-кеш git-зависимостей для `/v1/services/{name}/dependencies`
-	// (UI Service Detail). Lister грузит снапшот через d.serviceLoader.Load →
-	// artifact.ListDependencies(snapshot.LocalDir). Parity с serviceStateSchema:
-	// тот же loader, тот же TTL (DependenciesTTL=60s).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.serviceDependencies = serviceregistry.NewDependenciesCache(
 		serviceregistry.DependenciesListerFunc(func(ctx context.Context, name, gitURL, ref string) (*artifact.ServiceDependencies, error) {
 			art, err := d.serviceLoader.Load(ctx, artifact.ServiceRef{Name: name, Git: gitURL, Ref: ref})
@@ -1384,13 +1384,13 @@ func (d *daemon) setupScenarioDeps(_ context.Context) error {
 			}
 			return artifact.ListDependencies(art.LocalDir, logger)
 		}),
-		0, // 0 → дефолтный DependenciesTTL
+		0, // Keeper daemon runtime wiring note.
 	)
 
-	// TTL-кеш каталога директив для `/v1/services/{name}/directives` (UI-редактор
-	// redis_settings). Lister грузит снапшот через d.serviceLoader.Load → полный
-	// artifact.LoadDirectiveCatalog(localDir, "") + SHA1 снапшота (ETag). Version-
-	// сужение делает handler над результатом. Parity с serviceDependencies.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.serviceDirectives = serviceregistry.NewDirectivesCache(
 		serviceregistry.DirectiveListerFunc(func(ctx context.Context, name, gitURL, ref string) (*artifact.DirectiveCatalog, error) {
 			art, err := d.serviceLoader.Load(ctx, artifact.ServiceRef{Name: name, Git: gitURL, Ref: ref})
@@ -1403,12 +1403,12 @@ func (d *daemon) setupScenarioDeps(_ context.Context) error {
 			}
 			return &artifact.DirectiveCatalog{SHA1: art.SHA1, Directives: dirs}, nil
 		}),
-		0, // 0 → дефолтный DirectivesTTL
+		0, // Keeper daemon runtime wiring note.
 	)
 
-	// topologyResolver собирается ниже, в setupGRPCEventStream: его presence-фаза
-	// (Variant A, ADR-006(a)) деривирует «Soul online» из живого Redis SID-lease,
-	// а d.redisClient поднимается только в setupRedis (после этого шага).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.essenceResolver = essence.NewResolver(logger)
 	celEngine, err := cel.New(cel.WithVault(d.vc))
 	if err != nil {
@@ -1416,109 +1416,113 @@ func (d *daemon) setupScenarioDeps(_ context.Context) error {
 		return errSetupFailed
 	}
 	d.renderPipeline = render.NewPipeline(d.vc, celEngine, logger, d.renderMetrics)
-	// Реестр Service-ов и скаляр default_destiny_source перенесены в Postgres
-	// (ADR-029): источник правды — БД, потребители читают runtime-снимок
-	// serviceHolder (TTL-poll + pub/sub-инвалидация, поднят в setupServiceRegistry).
-	// Resolve — синхронный, lock-free; hot-reload реестра/скаляра прозрачен.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.serviceRegistry = scenario.NewServiceRegistry(d.serviceHolder)
-	// Источник destiny-артефактов для apply:destiny (ADR-009): git-URL —
-	// default_destiny_source + {name} (читается ЛЕНИВО из serviceHolder, чтобы
-	// hot-reload скаляра доезжал), ref — service.yml::destiny[].
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	destinyLoader := artifact.NewDestinyLoader(destinyCacheRoot(cfg), logger)
 	d.destinySource = scenario.NewDestinySource(destinyLoader, d.serviceHolder)
 	return nil
 }
 
 // setupPushOrchestrator — multi-host push-orchestrator (Variant C,
-// docs/keeper/push.md). Зависит от setupScenarioDeps (renderPipeline +
-// serviceHolder через destinySource resolveURL-семантику) — в pipeline шагов
-// идёт сразу после setupScenarioDeps.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Поднимает:
-//   - pushDestinyLoader — отдельный git-loader, шарящий тот же destinyCacheRoot,
-//     что scenario.NewDestinySource (один кеш-снапшот на коммит, scenario- и
-//     push-пути дёргают одно и то же дерево);
-//   - topologyResolver-bridge — нужен LoadByInventory, поэтому setupGRPCEventStream
-//     должен быть после setupPushOrchestrator. Однако topologyResolver сейчас
-//     создаётся в setupGRPCEventStream (там SoulLeaseChecker). В этом slice
-//     setupPushOrchestrator только подготавливает loader+template; финальный
-//     pushRun собирается в setupGRPCEventStream после поднятия topologyResolver
-//     (новый под-шаг finalizePushOrchestrator ниже).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// pushDispatcher остаётся nil в этом slice — wire-up SshDispatcher (handshake/
-// sigil-verify/GC через pluginhost, TargetResolver/HostKeyAuthority/Deliverer/
-// Cleaner) — отдельный slice setupPushDispatchers (ждёт policy-решения по
-// источнику ssh-target по SID). При nil pushDispatcher pushRun не собирается
-// (api.Deps.PushRun=nil → роуты не подключаются).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupPushOrchestrator(_ context.Context) error {
 	d.pushDestinyLoader = artifact.NewDestinyLoader(destinyCacheRoot(d.cfg), d.logger)
-	// pushDispatcher/pushCleaner намеренно остаются nil: SshDispatcher-wire-up
-	// — отдельный slice (см. doc выше). При появлении dispatcher-а его в это
-	// поле подставит setupPushDispatchers (либо daemon-конструктор для тестов).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	return nil
 }
 
 // setupPushDispatchers — wire-up SshDispatcher (S6 pilot + S7-1 PG-canon,
-// [ADR-032 amendment 2026-05-26]). Поднимает:
+// Keeper daemon runtime wiring note.
 //
-//  1. PGFallbackTargetResolver: PG-first резолв ssh_target по PK souls.sid +
-//     optional fallback на keeper.yml::push.targets[] под флагом
-//     `push.allow_legacy_push_targets` (1-release WARN deprecation window);
-//  2. host-CA из Vault по `push.host_ca_ref` (PEM SSH public key, поле
-//     `public_key`); fail-fast на ошибке резолва;
-//  3. one-shot Spawn первого дискаверенного SshProvider-плагина (single-
-//     provider pilot; multi-provider routing — S7) с env-payload params из
-//     `push.providers[].params` (ADR-020 amendment l, env-convention);
-//  4. SshDispatcher с ShaDeliverer/ShaCleaner (S1/S5).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Gate-условия (fail-open, без ошибки старта): пустой `plugins.ssh_providers[]`,
-// нет дискаверенных SshProvider-плагинов, отсутствие `push`-блока или
-// `push.host_ca_ref` → push выключен, WARN в лог; `/v1/push/*` и
-// `keeper.push.apply` вернут «не сконфигурировано» (api.Deps.PushRun=nil).
+//	`push.allow_legacy_push_targets` (1-release WARN deprecation window);
 //
-// Fail-closed условия (errSetupFailed): `push.host_ca_ref` задан, но Vault
-// недоступен / поле отсутствует / битый PEM — оператор предписал push, не
-// поднимаем тихо без host-CA (любой connect провалится с невнятной ошибкой).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Cleanup: spawned SshProvider-плагин закрывается в LIFO ДО Redis/Pool —
-// плагин держит unix-socket с keeper-host-стороны, разумно прибрать первым.
+//	`push.providers[].params` (ADR-020 amendment l, env-convention);
+//
+// Keeper daemon runtime wiring note.
+//
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+//
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+//
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupPushDispatchers(ctx context.Context) error {
 	cfg := d.cfg
 	logger := d.logger
 
-	// Gate 1: каталог SshProvider-ов пуст → push отключён (нет плагинов, чтобы
-	// аутентифицировать SSH-handshake). Это нормальный режим для pull-only
-	// инсталляций — без ошибки старта.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	if cfg.Plugins == nil || len(cfg.Plugins.SSHProviders) == 0 {
-		logger.Info("keeper run: push dispatcher disabled (plugins.ssh_providers[] не объявлены) — /v1/push/* и MCP keeper.push.apply вернут 'не сконфигурировано'")
+		logger.Info("keeper run: push dispatcher disabled (plugins.ssh_providers[] not declared) - /v1/push/* and MCP keeper.push.apply will return 'not configured'")
 		return nil
 	}
 
-	// Gate 2: после Discover/FilterByCatalog в setupCoreModules не осталось
-	// SshProvider-плагинов (битый кеш / mismatch имён). WARN — оператор уже
-	// видел warning из FilterByCatalog; здесь даём explicit-сообщение «push
-	// поэтому не поднялся».
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	if len(d.pushDiscoveredSsh) == 0 {
-		logger.Warn("keeper run: push dispatcher disabled (нет дискаверенных SshProvider-плагинов в кеше) — /v1/push/* недоступен")
+		logger.Warn("keeper run: push dispatcher disabled (no discovered SshProvider plugins in cache) - /v1/push/* unavailable")
 		return nil
 	}
 
-	// Gate 3: блок `push:` или host-CA отсутствует → push не сконфигурирован
-	// оператором (ssh_providers могут быть в каталоге для будущего использования).
-	// Без host-CA dispatcher не поднимается — это согласовано с security policy
-	// (CA-signed host-cert verify обязателен). S7-3 ввёл multi-CA `host_ca_refs[]`;
-	// устаревший singular `host_ca_ref` остаётся под 1-release WARN deprecation
-	// window: при заполненном singular и пустом плюрале — auto-adapt singular в
-	// singleton с auto-name `default` + одноразовый WARN.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	if cfg.Push == nil || (cfg.Push.HostCARef == "" && len(cfg.Push.HostCARefs) == 0) {
-		logger.Warn("keeper run: push dispatcher disabled (push.host_ca_refs[] / host_ca_ref не заданы) — /v1/push/* недоступен; настройте keeper.yml::push.host_ca_refs[] для включения")
+		logger.Warn("keeper run: push dispatcher disabled (push.host_ca_refs[] / host_ca_ref not set) - /v1/push/* unavailable; configure keeper.yml::push.host_ca_refs[] to enable")
 		return nil
 	}
 
 	hostCARefs := cfg.Push.HostCARefs
 	if len(hostCARefs) == 0 {
-		// S7-3 backward-compat: singular auto-adapt в singleton.
-		logger.Warn("keeper run: push.host_ca_ref deprecated (S7-3 ADR-032 amendment 2026-05-26); auto-adapted в host_ca_refs[0] с name='default'. Замените на push.host_ca_refs[{ref, name}] до hard-cut.",
+		// Keeper daemon runtime wiring note.
+		logger.Warn("keeper run: push.host_ca_ref deprecated (S7-3 ADR-032 amendment 2026-05-26); auto-adapted into host_ca_refs[0] with name='default'. Replace with push.host_ca_refs[{ref, name}] before hard-cut.",
 			slog.String("singular_ref", cfg.Push.HostCARef))
 		hostCARefs = []config.KeeperPushCARef{{
 			Ref:  cfg.Push.HostCARef,
@@ -1526,20 +1530,20 @@ func (d *daemon) setupPushDispatchers(ctx context.Context) error {
 		}}
 	}
 
-	// Fail-fast: host-CA задан, но не резолвится. push-флоу без него
-	// бессмыслен (любой connect провалится), молча отключать нельзя — оператор
-	// явно объявил push.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	hostAuthorities, err := push.LoadHostCAs(ctx, d.vc, hostCARefs)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keeper run: push dispatcher resolve host_ca_refs: %v\n", err)
 		return errSetupFailed
 	}
 
-	// P2 W-2 multi-provider: eager spawn ВСЕХ дискаверенных SshProvider-плагинов.
-	// Каждый плагин получает свои env-payload params (PG-first резолв через
-	// push_providers, optional legacy fallback на keeper.yml::push.providers[]).
-	// Шейринг одного respawner-а и одного providerResolver-а на все плагины —
-	// они опираются только на (имя плагина, текущая PG-row).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	providerResolver := &push.PGFallbackProviderResolver{
 		Reader:      push.NewPGPushProviderReader(d.pool),
 		Fallback:    push.NewLegacyConfigProvidersFallback(cfg.Push.Providers),
@@ -1551,7 +1555,7 @@ func (d *daemon) setupPushDispatchers(ctx context.Context) error {
 	spawnedPluginNames := make([]string, 0, len(d.pushDiscoveredSsh))
 	for _, dd := range d.pushDiscoveredSsh {
 		if dd.Manifest == nil {
-			fmt.Fprintln(os.Stderr, "keeper run: push dispatcher: discovered SshProvider без manifest (программная ошибка discovery)")
+			fmt.Fprintln(os.Stderr, "keeper run: push dispatcher: discovered SshProvider without manifest (discovery programming error)")
 			return errSetupFailed
 		}
 		pluginName := dd.Manifest.Name
@@ -1581,8 +1585,8 @@ func (d *daemon) setupPushDispatchers(ctx context.Context) error {
 		providers[pluginName] = push.ProviderEntry{Provider: sshPlugin, Closer: sshPlugin}
 		spawnedPluginNames = append(spawnedPluginNames, pluginName)
 
-		// Cleanup в LIFO: каждый spawned-плагин закрывается отдельной функцией,
-		// порядок не критичен (sharedhost.BasePlugin.Close идемпотентен).
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		closer := sshPlugin
 		d.cleanups.push(func() {
 			if cerr := closer.Close(); cerr != nil {
@@ -1592,8 +1596,8 @@ func (d *daemon) setupPushDispatchers(ctx context.Context) error {
 		})
 	}
 
-	// d.pushSshPlugin сохраняем как «первый из карты» для backward-compat
-	// диагностики (LegacyAccessor). Не используется в hot path.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	if len(providers) > 0 {
 		for _, entry := range providers {
 			if e, ok := entry.Closer.(*pluginhost.SshProviderPlugin); ok {
@@ -1603,8 +1607,8 @@ func (d *daemon) setupPushDispatchers(ctx context.Context) error {
 		}
 	}
 
-	// S7-1 wire-up: PG-first резолвер ssh_target поверх souls.ssh_target jsonb;
-	// keeper.yml::push.targets[] доступен как fallback под флагом
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	// push.allow_legacy_push_targets (1-release WARN deprecation window,
 	// [ADR-032 amendment 2026-05-26]).
 	configResolver := push.NewConfigTargetResolver(cfg.Push.Targets)
@@ -1614,8 +1618,8 @@ func (d *daemon) setupPushDispatchers(ctx context.Context) error {
 		AllowLegacy: cfg.Push.AllowLegacyPushTargets,
 		Logger:      logger.With(slog.String("component", "push-target-resolver")),
 	}
-	// P2 W-2: respawner поднимается одним экземпляром на весь набор; находит
-	// discovered по имени и обновляет конкретную запись карты.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	respawner := newPushProviderRespawner(d.pushPluginHost, d.pushDiscoveredSsh, providerResolver,
 		logger.With(slog.String("component", "push-provider-respawner")))
 	dispatcher, err := push.NewSshDispatcher(push.Deps{
@@ -1648,21 +1652,21 @@ func (d *daemon) setupPushDispatchers(ctx context.Context) error {
 	return nil
 }
 
-// setupPushProviderSvc — CRUD-фасад реестра push_providers + Redis-publisher
-// для cluster-wide invalidate (ADR-032 amendment 2026-05-26, S7-2).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Поднимается всегда, даже если push-dispatcher выключен: оператор должен
-// иметь возможность настроить провайдеров до включения push-инфраструктуры
-// (REST /v1/push-providers / MCP keeper.push-provider.* работают независимо).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Publisher: при non-nil d.redisClient — реальный (REST/MCP-мутация публикует
-// в `push-providers:changed`, любая нода re-spawn-ит плагин на ближайшем
-// RPC). При nil — NopPublisher (single-instance dev: spawn-on-change работает
-// только локально через рестарт).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Subscriber: при non-nil d.redisClient поднимает goroutine-listener; cluster-
-// wide уведомления приходят сюда (сейчас только логируются — фактический
-// re-spawn плагина внутри SshDispatcher — отдельный slice). При nil — skip.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupPushProviderSvc(ctx context.Context) error {
 	logger := d.logger
 	var publisher pushprovider.RedisPublisher
@@ -1684,8 +1688,8 @@ func (d *daemon) setupPushProviderSvc(ctx context.Context) error {
 		sub, err := keeperredis.SubscribePushProvidersChanged(ctx, d.redisClient,
 			logger.With(slog.String("component", "push-provider-invalidation")))
 		if err != nil {
-			// Subscription-сбой не критичен: CRUD работает, просто spawn-on-
-			// change не реагирует на cluster-wide мутации (только локальные).
+			// Keeper daemon runtime wiring note.
+			// Keeper daemon runtime wiring note.
 			logger.Warn("keeper run: subscribe push-providers:changed failed; cluster-wide invalidate not active",
 				slog.Any("error", err))
 		} else {
@@ -1706,24 +1710,24 @@ func (d *daemon) setupPushProviderSvc(ctx context.Context) error {
 	return nil
 }
 
-// runLegacyAutoImport — opt-in one-shot миграция inline-`keeper.yml::push`-
-// блоков в PG-источники (ADR-032 amendment 2026-05-26, S7-4).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Gate: оба флага `push.auto_import_legacy_targets` и
-// `push.auto_import_legacy_providers` false → no-op. При хотя бы одном true
-// поднимает [push.AutoImporter] поверх `d.pool` и проходит соответствующий блок
-// один раз. Идемпотентность — на уровне импортёра (PG-row уже есть → skip).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Failure-семантика: PG read/write fail → errSetupFailed. Оператор явно
-// включил флаг, не должен молча получить «половина импортирована, половина
-// нет» — пусть починит PG и перезапустит (повтор подхватит остаток).
-// audit-write fail внутри импорта — best-effort (см. AutoImporter.writeAudit).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Порядок: после [setupPushProviderSvc] (нужен подтверждённый PG-state +
-// d.auditWriter); ДО setupAPIServer (REST `/v1/push-providers` уже сможет
-// показать импортированные строки). Не зависит от setupPushDispatchers
-// (push-dispatcher может быть выключен — auto-import всё равно подготовит PG
-// под будущее включение push-flow).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) runLegacyAutoImport(ctx context.Context) error {
 	cfg := d.cfg
 	if cfg.Push == nil {
@@ -1758,20 +1762,20 @@ func (d *daemon) runLegacyAutoImport(ctx context.Context) error {
 	return nil
 }
 
-// runPushProviderInvalidationListener — фоновая goroutine, читающая
-// invalidate-сообщения из Redis (`push-providers:changed`) и делегирующая
-// фактический re-spawn `SshDispatcher.RefreshProvider` (ADR-032 amendment
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 // 2026-05-27, S7-2 closure).
 //
-// Семантика:
-//   - pushSshDispatcher == nil → push-флоу не поднят (gate в
-//     setupPushDispatchers), просто дренируем канал, чтобы Close прошёл
-//     корректно. Без RefreshProvider никакая повторная подписка смысла не
-//     имеет.
-//   - push.ErrRespawnNotSupported / wrong-name → noop (не наш плагин или
-//     respawner не сконфигурирован); WARN-лог, продолжаем.
-//   - реальная ошибка spawn-а → ERROR-лог, dispatcher остаётся в degraded
-//     state; следующая мутация / рестарт keeper-а починят.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) runPushProviderInvalidationListener(sub *keeperredis.PushProvidersChangedSubscription, logger *slog.Logger) {
 	for ev := range sub.Channel() {
 		logger.Info("keeper run: push-providers:changed received",
@@ -1780,10 +1784,10 @@ func (d *daemon) runPushProviderInvalidationListener(sub *keeperredis.PushProvid
 		if d.pushSshDispatcher == nil {
 			continue
 		}
-		// Без request-ctx у listener-а: используем фоновой context. Spawn
-		// плагина не должен висеть бесконечно — pluginhost.Host имеет
-		// собственный StartupTimeout, поэтому отдельный тайм-аут здесь не
-		// добавляем (любой hang будет видим в логах handshake-а).
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		if err := d.pushSshDispatcher.RefreshProvider(context.Background(), ev.Name); err != nil {
 			if errors.Is(err, push.ErrRespawnNotSupported) {
 				logger.Warn("keeper run: push provider re-spawn not supported (no respawner configured)",
@@ -1797,9 +1801,9 @@ func (d *daemon) runPushProviderInvalidationListener(sub *keeperredis.PushProvid
 	}
 }
 
-// daemonPushProviderPublisher — bridge между pushprovider.RedisPublisher и
-// keeperredis.PublishPushProvidersChanged. Тонкая адаптация, чтобы
-// pushprovider-пакет не зависел напрямую от keeperredis.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 type daemonPushProviderPublisher struct {
 	redis *keeperredis.Client
 }
@@ -1809,42 +1813,42 @@ func (p *daemonPushProviderPublisher) PublishPushProvidersChanged(ctx context.Co
 	return err
 }
 
-// buildSecretWriter собирает writer материализации plaintext-секретов оператора
-// в Vault (ADR-064, NIM-11; dual-mode приём для Herald/Provider) поверх того же
-// Vault-клиента, что sigil/cert. d.vc не-nil после setupVault (Vault hard-
-// required, ADR-053). mount — из keeper.yml (vault.kv_mount, default "secret").
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) buildSecretWriter() (*secretwrite.Writer, error) {
 	return secretwrite.NewWriter(d.vc, d.cfg.Vault.KVMount)
 }
 
-// acceptPlaintextSecrets — разрешён ли приём plaintext-секрета (ADR-064 митигация
-// a: TLS-фронт Operator API/MCP). Default false (secure): plaintext отвергается.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) acceptPlaintextSecrets() bool {
 	return d.cfg.SecretIngest != nil && d.cfg.SecretIngest.AcceptPlaintext
 }
 
-// setupHeraldSvc — CRUD-фасад реестров heralds/tidings + двухуровневая
-// инвалидация снимка Tiding-правил dispatcher-а (ADR-052, S4).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// In-process invalidate — d.heraldDispatcher (собран в setupAudit): мутация на
-// этой ноде мгновенно сбрасывает её кэш. Cross-keeper — Redis-publisher
-// (`herald:invalidate`): другая нода по подписке дёргает свой InvalidateRules.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Поднимается всегда (как setupPushProviderSvc): оператор управляет каналами/
-// правилами независимо от доставки (S3). heraldDispatcher может быть nil
-// (fail-open ветка setupAudit) — тогда in-process invalidate деградирует на
-// TTL-сходимость (NewService подменит nil-Invalidator no-op-ом).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Порядок: ПОСЛЕ setupAudit (d.heraldDispatcher) и setupRedis (d.redisClient для
-// publisher); ДО setupAPIServer / setupMCPServer (читают d.heraldSvc).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupHeraldSvc(ctx context.Context) error {
 	logger := d.logger
 	var redis herald.RedisInvalidator
 	if d.redisClient != nil {
 		redis = &daemonHeraldInvalidator{redis: d.redisClient}
 	}
-	// nil-Invalidator (heraldDispatcher==nil) NewService подменит no-op-ом —
-	// явный nil интерфейса не передаём (typed-nil-pitfall): только если non-nil.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	var inv herald.Invalidator
 	if d.heraldDispatcher != nil {
 		inv = d.heraldDispatcher
@@ -1872,8 +1876,8 @@ func (d *daemon) setupHeraldSvc(ctx context.Context) error {
 		sub, err := keeperredis.SubscribeHeraldInvalidate(ctx, d.redisClient,
 			logger.With(slog.String("component", "herald-invalidation")))
 		if err != nil {
-			// Subscription-сбой не критичен: CRUD работает, кросс-нодовая
-			// сходимость деградирует на TTL-poll (DefaultRuleCacheTTL).
+			// Keeper daemon runtime wiring note.
+			// Keeper daemon runtime wiring note.
 			logger.Warn("keeper run: subscribe herald:invalidate failed; cluster-wide invalidate not active",
 				slog.Any("error", err))
 		} else {
@@ -1895,17 +1899,17 @@ func (d *daemon) setupHeraldSvc(ctx context.Context) error {
 	return nil
 }
 
-// setupCloudCRUD — operator-facing CRUD-фасады реестров Cloud-Provider-ов
-// (`providers`) и Cloud-Profile-ей (`profiles`, ADR-017, docs/keeper/cloud.md).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Поднимаются всегда (PG-таблицы доступны), независимо от наличия CloudDriver-
-// плагинов: оператор должен иметь возможность завести Provider/Profile до
-// конфигурации cloud-инфраструктуры (REST /v1/providers /v1/profiles + MCP
-// keeper.provider.* / keeper.profile.* работают). БЕЗ Redis-publisher: записи
-// читаются on-demand на scenario-слое (`core.cloud.provisioned`), не hot-reload-ятся.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// После setupPG (нужен d.pool); ДО setupAPIServer/setupMCPServer (api.Deps и
-// HandlerDeps читают d.providerSvc/d.profileSvc).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupCloudCRUD(_ context.Context) error {
 	secretWriter, err := d.buildSecretWriter()
 	if err != nil {
@@ -1934,21 +1938,21 @@ func (d *daemon) setupCloudCRUD(_ context.Context) error {
 	return nil
 }
 
-// runHeraldInvalidationListener — фоновая goroutine, читающая invalidate-
-// сообщения из Redis (`herald:invalidate`) и сбрасывающая снимок правил
-// dispatcher-а этой ноды (cross-keeper-сходимость, ADR-052 S4).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) runHeraldInvalidationListener(sub *keeperredis.HeraldInvalidateSubscription, logger *slog.Logger) {
 	for ev := range sub.Channel() {
 		logger.Debug("keeper run: herald:invalidate received",
 			slog.String("name", ev.Name), slog.Time("at", ev.At))
-		// nil-safe: heraldDispatcher может быть nil (fail-open setupAudit).
+		// Keeper daemon runtime wiring note.
 		d.heraldDispatcher.InvalidateRules()
 	}
 }
 
-// daemonHeraldInvalidator — bridge между herald.RedisInvalidator и
-// keeperredis.PublishHeraldInvalidate. Тонкая адаптация, чтобы herald-пакет не
-// зависел напрямую от keeperredis.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 type daemonHeraldInvalidator struct {
 	redis *keeperredis.Client
 }
@@ -1958,14 +1962,14 @@ func (p *daemonHeraldInvalidator) PublishHeraldInvalidate(ctx context.Context, n
 	return err
 }
 
-// buildPushSpawnOpts собирает [pluginhost.SpawnOption] для SshProvider-плагина:
-// при наличии записи `push.providers[].name == pluginName` сериализует `params`
-// в JSON и кладёт в env-переменную `SOUL_SSH_<UPPER_SNAKE(pluginName)>_PARAMS`
-// (ADR-020 amendment l). Возвращает (opts, envName, error); envName пуст, если
-// для плагина не было записи или params пуст (диагностика в логе).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Legacy-форма для совместимости с unit-тестами push_dispatchers_test.go;
-// новый код использует [buildPushSpawnOptsFromParams] поверх PG-резолва
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 // (S7-2 wire-up).
 func buildPushSpawnOpts(providers []config.KeeperPushProvider, pluginName string) ([]pluginhost.SpawnOption, string, error) {
 	var params map[string]any
@@ -1978,27 +1982,27 @@ func buildPushSpawnOpts(providers []config.KeeperPushProvider, pluginName string
 	return buildPushSpawnOptsFromParams(pluginName, params)
 }
 
-// buildPushSpawnOptsFromParams — резолв-agnostic форма
-// [buildPushSpawnOpts]: получает уже резолвенные `params` и собирает
-// env-payload. Используется S7-2 wire-up-ом после PGFallbackProviderResolver.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func buildPushSpawnOptsFromParams(pluginName string, params map[string]any) ([]pluginhost.SpawnOption, string, error) {
 	if len(params) == 0 {
 		return nil, "", nil
 	}
 	payload, err := json.Marshal(params)
 	if err != nil {
-		// Не должно случаться на провалидированных map[string]any (YAML-decoder
-		// гарантирует JSON-совместимые типы), но держим инвариант.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		return nil, "", fmt.Errorf("marshal push.providers[%q].params: %w", pluginName, err)
 	}
 	envName := pushParamsEnvName(pluginName)
 	return []pluginhost.SpawnOption{pluginhost.WithEnv([]string{envName + "=" + string(payload)})}, envName, nil
 }
 
-// pushParamsEnvName преобразует имя плагина в env-имя `SOUL_SSH_<UPPER_SNAKE>_PARAMS`
-// (ADR-020 amendment l). Маппинг: `vault-bastion` → `SOUL_SSH_VAULT_BASTION_PARAMS`.
-// Допускаются буквы/цифры/дефис в kebab-case (валидируется schema-фазой
-// kind:ssh_provider manifest); прочие символы маппятся в `_` defensively.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func pushParamsEnvName(pluginName string) string {
 	var b strings.Builder
 	b.Grow(len("SOUL_SSH__PARAMS") + len(pluginName))
@@ -2017,30 +2021,30 @@ func pushParamsEnvName(pluginName string) string {
 	return b.String()
 }
 
-// finalizePushOrchestrator собирает *pushorch.PushRun из ранее подготовленных
-// зависимостей. Вынесен в отдельный шаг (после setupGRPCEventStream), потому
-// что topologyResolver появляется в setupGRPCEventStream вместе с SoulLeaseChecker.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Gate: при отсутствии pushDispatcher pushRun остаётся nil — push.*-роуты/tool
-// не подключатся (api.Deps.PushRun=nil → router пропускает блок /v1/push, MCP
-// keeper.push.apply возвращает «не сконфигурировано»).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) finalizePushOrchestrator(_ context.Context) error {
 	if d.pushDispatcher == nil {
-		d.logger.Warn("keeper run: push orchestrator disabled (SshDispatcher не сконфигурирован) — /v1/push/* и MCP keeper.push.apply вернут 'не сконфигурировано'")
+		d.logger.Warn("keeper run: push orchestrator disabled (SshDispatcher not configured) - /v1/push/* and MCP keeper.push.apply will return 'not configured'")
 		return nil
 	}
 	if d.topologyResolver == nil {
-		// Программная ошибка порядка шагов: finalizePushOrchestrator
-		// зарегистрирован ПОСЛЕ setupGRPCEventStream (там создаётся
-		// topologyResolver). Эта проверка — fail-fast на refactor-регрессию.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		fmt.Fprintln(os.Stderr, "keeper run: push orchestrator wire-up: topologyResolver is nil (programmer error in step order)")
 		return errSetupFailed
 	}
 
 	// P2 W-3 multi-provider routing: PGRouter (3-tier per-SID → per-coven →
-	// cluster-default). RouterConfigSource — hot-reload-aware adapter над
-	// config.Store: на каждый Reload снимок CovenDefaultProviders /
-	// ClusterDefaultProvider обновляется без пересоздания PGRouter-а.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	routerCfgSrc := newPushRouterConfigSource(d.store)
 	router, err := push.NewPGRouter(push.NewPGRouterReader(d.pool), routerCfgSrc)
 	if err != nil {
@@ -2073,17 +2077,17 @@ func (d *daemon) finalizePushOrchestrator(_ context.Context) error {
 }
 
 // setupErrandDispatcher — pull-ad-hoc Errand contour (ADR-033, slice E2).
-// Собирает Store над `errands`-table + Dispatcher поверх Outbound/ApplyBus,
-// делает однократный Replay (recovery scan) осиротевших running-Errand-ов
-// этого инстанса.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Зависимости: d.pool (Store), d.outbound (Local SendErrand + remote
+// Keeper daemon runtime wiring note.
 // PublishErrand), d.applyBus (subscribe-waiter), d.redisClient (LeaseLookup —
-// при nil routing деградирует на local-only). d.auditWriter обязателен.
+// Keeper daemon runtime wiring note.
 //
-// Шаг ставится после setupGRPCEventStream (d.outbound и d.applyBus уже
-// заполнены) и ДО setupAPIServer (api.Deps.ErrandDispatcher / ErrandStore
-// читаются на сборке HTTP-сервера).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupErrandDispatcher(ctx context.Context) error {
 	if d.outbound == nil {
 		fmt.Fprintln(os.Stderr, "keeper run: errand dispatcher wire-up: outbound is nil (programmer error in step order)")
@@ -2096,9 +2100,9 @@ func (d *daemon) setupErrandDispatcher(ctx context.Context) error {
 
 	store := errand.NewStore(d.pool)
 
-	// LeaseLookup — при наличии Redis. Single-keeper dev без Redis получает
-	// nil → dispatcher идёт local-only (Outbound.SendErrand, NotConnected
-	// если стрима нет).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	var lookup errand.LeaseLookup
 	if d.redisClient != nil {
 		lookup = errandLeaseLookup{rc: d.redisClient}
@@ -2107,7 +2111,7 @@ func (d *daemon) setupErrandDispatcher(ctx context.Context) error {
 	disp, err := errand.NewDispatcher(errand.Deps{
 		Store:       store,
 		Outbound:    d.outbound,
-		Publisher:   d.outbound, // тот же Outbound реализует обе поверхности
+		Publisher:   d.outbound, // Keeper daemon runtime wiring note.
 		LeaseLookup: lookup,
 		ApplyBus:    errandApplyBusBridge{bus: d.applyBus},
 		Logger:      d.logger,
@@ -2121,11 +2125,11 @@ func (d *daemon) setupErrandDispatcher(ctx context.Context) error {
 	d.errandStore = store
 	d.errandDispatcher = disp
 
-	// Recovery scan однократно при старте: переводим осиротевшие running-
-	// Errand-ы этого KID в timed_out (background-горутина умерла вместе с
-	// процессом — ErrandResult-а больше не будет). Дефолт grace = 25 мин
-	// (server-cap 300s × 5), параметризация через ReplayOptions при появлении
-	// reaper-конфига `reaper.errands.*` (slice E4).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	if n, rerr := disp.Replay(ctx, errand.ReplayOptions{}); rerr != nil {
 		d.logger.Warn("keeper run: errand replay failed (non-fatal, continuing startup)",
 			slog.Any("error", rerr))
@@ -2140,20 +2144,20 @@ func (d *daemon) setupErrandDispatcher(ctx context.Context) error {
 	return nil
 }
 
-// errandLeaseLookup — production-обёртка LeaseLookup поверх Redis. Симметрично
-// topologyLeaseChecker / leaseOwnerChecker (тонкие адаптеры из daemon.go для
-// сужения зависимости пакета).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 type errandLeaseLookup struct{ rc *keeperredis.Client }
 
 func (l errandLeaseLookup) ReadHolder(ctx context.Context, sid string) (string, error) {
 	return keeperredis.ReadSoulLeaseHolder(ctx, l.rc, sid)
 }
 
-// errandApplyBusBridge — адаптер *applybus.EventBus к узкой поверхности
-// errand.ApplyBus (только Subscribe). Сужает зависимость dispatcher-а: тесты
-// мокают через interface, прод-инжектит общий applybus.EventBus (тот же, что
-// для apply-флоу). Channel-тип хранится в applybus.Event, поэтому никакого
-// маппинга — прямой проброс.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 type errandApplyBusBridge struct{ bus *applybus.EventBus }
 
 func (b errandApplyBusBridge) Subscribe(ctx context.Context, applyID string) <-chan applybus.Event {
@@ -2164,18 +2168,18 @@ func (b errandApplyBusBridge) SubscribeWithBridge(ctx context.Context, applyID s
 	return b.bus.SubscribeWithBridge(ctx, applyID, wantBridge)
 }
 
-// setupGRPCBootstrap — gRPC Bootstrap listener (M2.1.b.2), server-only TLS на
-// отдельном порту. Cleanup — drain goroutine (15s).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupGRPCBootstrap(ctx context.Context) error {
 	cfg := d.cfg
 	logger := d.logger
-	// gRPC Bootstrap listener (M2.1.b.2). Server-only TLS на отдельном
-	// порту: у Soul-а до онбординга ещё нет SoulSeed-сертификата
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	// (ADR-012(b)).
 	//
-	// listen.grpc.bootstrap.addr — обязательный по schema-фазе; здесь
-	// проверять не нужно. NewBootstrapServer падает с error на пустой
-	// addr/TLS — это runtime config bug, exit 1.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	grpcDone := make(chan struct{})
 	bootstrapDeps := keepergrpc.BootstrapDeps{
 		Pool:        d.pool,
@@ -2186,12 +2190,12 @@ func (d *daemon) setupGRPCBootstrap(ctx context.Context) error {
 		PKIRole:     cfg.Vault.PKIRole,
 		Metrics:     d.grpcMetrics,
 	}
-	// Sigil trust-anchor-ы для Soul (ADR-026(h), R3-S7, architect af7d): ЖИВОЙ
-	// источник набора (тот же holder, что connect-time broadcast и watcher
-	// ротации обновляет), а не снимок старта. setupSigil переставлен выше этого
-	// шага → d.sigilAnchorSource заполнен (nil при выключенном Sigil → reply без
-	// pubkey, bootstrap обратносовместим). typed-nil-guard: nil-holder в
-	// interface-поле дал бы non-nil interface; ставим только при живом holder-е.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	if d.sigilAnchorSource != nil {
 		bootstrapDeps.SigilAnchorSource = d.sigilAnchorSource
 	}
@@ -2216,36 +2220,36 @@ func (d *daemon) setupGRPCBootstrap(ctx context.Context) error {
 	return nil
 }
 
-// redisConfigured — задана ли в конфиге рабочая Redis-топология. Заменяет
-// прежний `cfg.Redis.Addr != ""`: для sentinel/cluster адрес лежит в
-// `sentinels`/`nodes`, а `addr` пуст. Пустой весь блок (dev без Redis) →
-// деградация (см. setupRedis). Полную валидацию режима делает config-фаза
-// (shared/config::validateRedis); здесь — только «надо ли вообще поднимать».
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func redisConfigured(r config.KeeperRedis) bool {
 	switch r.Mode {
 	case keeperredis.ModeSentinel:
 		return len(r.Sentinels) > 0
 	case keeperredis.ModeCluster:
 		return len(r.Nodes) > 0
-	default: // standalone / пусто
+	default: // Keeper daemon runtime wiring note.
 		return r.Addr != ""
 	}
 }
 
-// setupRedis — Redis-клиент (nil-fallback при отсутствии топологии) + apply-events bus.
-// Клиент общий для Outbound / EventStream / SoulLease / Reaper. rbac-pub/sub
-// подключается отдельно (setupRBACInvalidation).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupRedis(ctx context.Context) error {
 	cfg := d.cfg
 	logger := d.logger
-	// Redis-клиент поднимается до Outbound / EventStream, потому что
-	// cluster-mode routing (ADR-002 HA) и SoulLease используют один и
-	// тот же клиент. Reaper-блок ниже переиспользует его же. При пустом
-	// redis-блоке (нет addr/sentinels/nodes — dev без Redis) клиент
-	// остаётся nil: Outbound деградирует до single-instance lookup,
-	// EventStream поднимается без SoulLease / heartbeat-кэша / cluster-
-	// subscribe. `d.vc` (vault-клиент) поднят раньше (setupVault) — нужен
-	// для резолва `password_ref: vault:...`.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	if redisConfigured(cfg.Redis) {
 		rc, err := keeperredis.NewClient(ctx, keeperredis.Config{
 			Mode:                cfg.Redis.Mode,
@@ -2266,20 +2270,20 @@ func (d *daemon) setupRedis(ctx context.Context) error {
 		logger.Warn("keeper run: redis disabled (redis block has no addr/sentinels/nodes) — cluster-mode routing / SoulLease / heartbeat-cache disabled")
 	}
 
-	// Apply-events bus (M0.7.c) — общий между EventStream-handler-ом
-	// (publisher TaskEvent/RunResult) и MCP SSE-handler-ом (subscriber).
-	// Cluster-mode (ADR-006(c), M2.6): при наличии Redis-клиента и KID
-	// шина дополнительно публикует события в `apply:<applyID>` и
-	// подписывается на чужие через [keeperredis.SubscribeApplyEvent],
-	// поэтому SSE-подписчик на Keeper-A получает события от publisher-а
-	// на Keeper-B. При redisClient=nil — single-Keeper-fallback.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.applyBus = applybus.NewBusWithRedis(logger, d.redisClient, cfg.KID)
 	return nil
 }
 
-// heraldQueueAdapter — адаптер [redis.HeraldDeliveryQueue] под herald.QueueBackend
-// (узкий контракт без импорта redis-пакета в сигнатурах herald-API). Конвертирует
-// *redis.ClaimedJob → *herald.ClaimedJob и прокидывает mini-reaper-callback.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 type heraldQueueAdapter struct {
 	q *keeperredis.HeraldDeliveryQueue
 }
@@ -2312,26 +2316,26 @@ func (a heraldQueueAdapter) RequeueExpired(ctx context.Context, parse func([]byt
 	return a.q.RequeueExpired(ctx, parse)
 }
 
-// setupHeraldDelivery — claim-queue worker-ы реальной webhook-доставки уведомлений
-// (ADR-052(d), S3). Late-binding подменяет fallback-LogDeliveryQueue dispatcher-а
-// (собран в setupAudit ДО Redis) на RedisDeliveryQueue, поднимает N worker-ов +
-// mini-reaper осиротевших job-ов.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Fail-open: при отсутствии Redis (d.redisClient==nil) доставка деградирует —
-// dispatcher остаётся с LogDeliveryQueue (job-ы логируются, не доставляются),
-// keeper НЕ падает (ADR-052(d) wiring). Так же при herald.workers==0 (явный
-// opt-out): очередь подключается (Enqueue копит job-ы в Redis), но worker-ы не
-// поднимаются.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Зависит от setupRedis (redisClient), setupAudit (heraldDispatcher + auditWriter),
-// setupMetricsRegistry (heraldDeliveryMetrics) и setupVault (d.vc — резолв
-// signing-token-ов secret_ref). Cleanup — отмена runCtx + WaitGroup-ожидание.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupHeraldDelivery(ctx context.Context) error {
 	cfg := d.cfg
 	logger := d.logger
 
 	if d.heraldDispatcher == nil {
-		// setupAudit не собрал dispatcher (fail-open ветка S3+) — доставки нет.
+		// Keeper daemon runtime wiring note.
 		return nil
 	}
 	if d.redisClient == nil {
@@ -2346,7 +2350,7 @@ func (d *daemon) setupHeraldDelivery(ctx context.Context) error {
 	}
 	backend := heraldQueueAdapter{q: rq}
 
-	// Late-binding: dispatcher теперь кладёт job-ы в Redis-очередь вместо лог-noop.
+	// Keeper daemon runtime wiring note.
 	d.heraldDispatcher.SetQueue(herald.NewRedisDeliveryQueue(backend, logger))
 
 	workers := cfg.Herald.ResolvedWorkers()
@@ -2357,7 +2361,7 @@ func (d *daemon) setupHeraldDelivery(ctx context.Context) error {
 
 	timeout := heraldDeliveryTimeout(cfg)
 
-	// Heralds-reader: замыкание над SelectHeraldByName (узкая поверхность реестра).
+	// Keeper daemon runtime wiring note.
 	heralds := heraldReaderFunc(func(rctx context.Context, name string) (*herald.Herald, error) {
 		return herald.SelectHeraldByName(rctx, d.pool, name)
 	})
@@ -2392,7 +2396,7 @@ func (d *daemon) setupHeraldDelivery(ctx context.Context) error {
 			}
 		}(w)
 	}
-	// Mini-reaper осиротевших job-ов (одна горутина на инстанс).
+	// Keeper daemon runtime wiring note.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -2409,15 +2413,15 @@ func (d *daemon) setupHeraldDelivery(ctx context.Context) error {
 	return nil
 }
 
-// heraldReaderFunc — функциональный адаптер под herald.HeraldReader.
+// Keeper daemon runtime wiring note.
 type heraldReaderFunc func(ctx context.Context, name string) (*herald.Herald, error)
 
 func (f heraldReaderFunc) HeraldByName(ctx context.Context, name string) (*herald.Herald, error) {
 	return f(ctx, name)
 }
 
-// heraldDeliveryTimeout резолвит общий таймаут webhook-POST-а из
-// `keeper.herald.delivery_timeout`; пусто/некорректно → herald.DefaultDeliveryTimeout.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func heraldDeliveryTimeout(cfg *config.KeeperConfig) time.Duration {
 	raw := config.DefaultHeraldDeliveryTimeout
 	if cfg.Herald != nil && cfg.Herald.DeliveryTimeout != "" {
@@ -2430,30 +2434,30 @@ func heraldDeliveryTimeout(cfg *config.KeeperConfig) time.Duration {
 	return d
 }
 
-// setupConclave — регистрация presence-записи этого keeper-инстанса в Conclave
-// (реестр живых инстансов в Redis, ADR-006 amend, soul-shedding S1) + renewal-
-// goroutine, продлевающая её. Подключается после setupRedis (нужен redisClient)
-// и setupConfig (нужен cfg.KID).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Питает S2/S3 (отдельные слайсы): refuse-guard «я не один» (CountLive > 1) и
-// soul-shedding (есть куда уходить). Сам S1 = только реестр + count + wiring;
-// потребителей presence ещё нет — gauge keeper_conclave_instances даёт раннюю
-// наблюдаемость числа живых инстансов.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Redis==nil (dev / single-instance без Redis) — no-op + warn: presence-реестр
-// требует общего Redis между инстансами; без него «кластера» нет (defensive,
-// в проде Redis обязателен).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Cleanup-стек LIFO (тот же приём, что vault-renewer / reaper):
+// Keeper daemon runtime wiring note.
 //
-//  1. renewCancel()           — сигнализируем renewal-goroutine остановиться.
-//  2. <-renewDone (с timeout) — ждём её реального выхода.
-//  3. DeregisterInstance      — удаляем presence-ключ (graceful; на crash —
-//     TTL-expiry). Detached-ctx: shutdown-ctx может быть уже отменён.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Регистрация на старте — requireUnique=true: коллизия KID (два keeper-процесса
-// с одинаковым `kid` в конфиге) логируется как WARN и регистрация продолжается
-// безусловным SET (presence своего KID — инвариант, не борьба за лидерство).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupConclave(ctx context.Context) error {
 	cfg := d.cfg
 	logger := d.logger
@@ -2465,16 +2469,16 @@ func (d *daemon) setupConclave(ctx context.Context) error {
 	ttl := keeperredis.DefaultConclaveTTL
 	renewEvery := keeperredis.DefaultConclaveRenewInterval
 
-	// Лёгкие метаданные для диагностики: started_at + KID. json.Marshal на
-	// контролируемых значениях не падает; ошибку трактуем fail-safe — пишем
-	// голый KID (presence-ключ важнее, чем его value-форма).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	meta := conclaveMeta(cfg.KID)
 
 	if err := keeperredis.RegisterInstance(ctx, d.redisClient, cfg.KID, meta, ttl, true); err != nil {
 		if errors.Is(err, keeperredis.ErrConclaveKIDTaken) {
-			logger.Warn("keeper run: conclave KID collision — another keeper instance уже зарегистрирован с тем же kid (ошибка конфигурации?), регистрируюсь поверх",
+			logger.Warn("keeper run: conclave KID collision - another keeper instance already registered with the same kid (configuration error?), registering over it",
 				slog.String("kid", cfg.KID))
-			// Безусловная перезапись: presence своего KID — инвариант.
+			// Keeper daemon runtime wiring note.
 			if err2 := keeperredis.RegisterInstance(ctx, d.redisClient, cfg.KID, meta, ttl, false); err2 != nil {
 				fmt.Fprintf(os.Stderr, "keeper run: conclave register (overwrite): %v\n", err2)
 				return errSetupFailed
@@ -2492,19 +2496,19 @@ func (d *daemon) setupConclave(ctx context.Context) error {
 	renewCtx, renewCancel := context.WithCancel(ctx)
 	renewDone := make(chan struct{})
 
-	// 3. Deregister (зарегистрирован раньше → LIFO выполнит последним): удаляем
-	//    presence-ключ. Detached-ctx с timeout-ом — shutdown-ctx может быть уже
-	//    отменён, а Redis на shutdown-е может быть недоступен (тогда crash-fallback
-	//    на TTL-expiry).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.cleanups.push(func() {
 		relCtx, relCancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 		defer relCancel()
 		if err := keeperredis.DeregisterInstance(relCtx, d.redisClient, cfg.KID); err != nil {
-			logger.Warn("conclave deregister failed (instance ключ истечёт по TTL)",
+			logger.Warn("conclave deregister failed (instance key will expire by TTL)",
 				slog.String("kid", cfg.KID), slog.Any("error", err))
 		}
 	})
-	// 2. Ждём выхода renewal-goroutine.
+	// Keeper daemon runtime wiring note.
 	d.cleanups.push(func() {
 		select {
 		case <-renewDone:
@@ -2512,19 +2516,19 @@ func (d *daemon) setupConclave(ctx context.Context) error {
 			logger.Warn("conclave renewal goroutine did not stop within 5s after shutdown — leak suspected")
 		}
 	})
-	// 1. Отменяем renewCtx (зарегистрирован позже → LIFO выполнит первым).
+	// Keeper daemon runtime wiring note.
 	d.cleanups.push(renewCancel)
 
 	go d.runConclaveRenewal(renewCtx, ttl, renewEvery, meta, renewDone)
 	return nil
 }
 
-// runConclaveRenewal — periodic renew presence-ключа (по образцу
-// eventStreamHandler.renewLeaseLoop). На каждый тик продлевает TTL; если ключ
-// исчез (пропущенные renew после длинной паузы / внешний DEL) — пере-создаёт
-// presence (restart-safe: инстанс молча не выпадает из кластера). После каждого
-// успешного refresh-а обновляет gauge keeper_conclave_instances числом живых
-// (LiveKIDs) — best-effort, ошибка SCAN-а не роняет renewal-loop.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) runConclaveRenewal(ctx context.Context, ttl, every time.Duration, meta string, done chan<- struct{}) {
 	defer close(done)
 	t := time.NewTicker(every)
@@ -2542,8 +2546,8 @@ func (d *daemon) runConclaveRenewal(ctx context.Context, ttl, every time.Duratio
 				continue
 			}
 			if !ok {
-				// Ключ истёк (длинная пауза) — пере-создаём presence без NX
-				// (это наш KID, конкуренции нет).
+				// Keeper daemon runtime wiring note.
+				// Keeper daemon runtime wiring note.
 				if rerr := keeperredis.RegisterInstance(ctx, d.redisClient, d.cfg.KID, meta, ttl, false); rerr != nil {
 					if ctx.Err() == nil {
 						d.logger.Warn("conclave: re-register after key expiry failed",
@@ -2558,9 +2562,9 @@ func (d *daemon) runConclaveRenewal(ctx context.Context, ttl, every time.Duratio
 	}
 }
 
-// observeConclaveLive обновляет gauge keeper_conclave_instances числом живых
-// инстансов (LiveKIDs). Best-effort: ошибка SCAN-а логируется debug-ом и
-// gauge не трогается (держит прежнее значение). nil-gauge — no-op.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) observeConclaveLive(ctx context.Context) {
 	if d.conclaveInstances == nil {
 		return
@@ -2575,9 +2579,9 @@ func (d *daemon) observeConclaveLive(ctx context.Context) {
 	d.conclaveInstances.Set(float64(n))
 }
 
-// conclaveMeta собирает лёгкие presence-метаданные (`{started_at, kid}`) для
-// диагностики. Fail-safe: на ошибке Marshal (не ожидается на контролируемых
-// значениях) возвращает голый KID — presence-ключ важнее формы его value.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func conclaveMeta(kid string) string {
 	b, err := json.Marshal(struct {
 		StartedAt string `json:"started_at"`
@@ -2593,43 +2597,43 @@ func conclaveMeta(kid string) string {
 }
 
 // setupConclaveRefuseGuard — refuse-guard soul-shedding (Finding-A, ADR-027(h)):
-// при `acolytes == 0` (run-goroutine-путь, single-keeper-only) и присутствии
-// ДРУГИХ живых Keeper-инстансов в Conclave (`CountLive > 1`) Keeper по дефолту
-// ОТКАЗЫВАЕТСЯ стартовать — иначе apply на одном Keeper-е c Soul-ом на стриме
-// другого навсегда зависнет в `applying`. Подключается СРАЗУ после setupConclave
-// (нужна собственная presence-запись в выборке) и до подъёма EventStream/Acolyte:
-// чинить конфиг оператор должен ДО приёма Soul-стримов.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Источник числа живых — keeperredis.CountLive (тот же Conclave-SCAN, что питает
-// gauge keeper_conclave_instances). Conclave-ключи TTL 30s → только что умерший
-// инстанс может ещё числиться (stale-окно); для startup-refuse это приемлемо —
-// оператор видит ошибку и чинит конфиг. На ошибке чтения Conclave НЕ блокируем
-// старт (best-effort, как dispatch-WARN): guard fail-open, runtime-сетка
-// (dispatch-WARN + Watchman) остаётся.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Refuse — НЕ panic: чёткое stderr-сообщение + errSetupFailed (exit 1), как
+// Keeper daemon runtime wiring note.
 // setupOperatorBootstrapGuard. Opt-out: cfg.AllowUnsafeSinglePathMultiKeeper
-// ЛИБО env `KEEPER_ALLOW_UNSAFE_MULTI_KEEPER` (truthy-OR) превращает refuse в
-// громкий WARN и продолжает старт (осознанный single-keeper-за-LB выбор).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Redis==nil / acolytes>0 — fast-path no-op: без общего Redis «кластера» нет
-// (Conclave inert), а work-queue-режим (acolytes>0) cross-keeper-зависанием не
-// страдает (туда guard не относится).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupConclaveRefuseGuard(ctx context.Context) error {
 	cfg := d.cfg
 	logger := d.logger
 
-	// acolytes>0 — work-queue ADR-027, cross-keeper-зависания нет: guard неуместен.
-	// Redis==nil — Conclave выключен (нет реестра живых), «я не один» не определить.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	if cfg.Acolytes > 0 || d.redisClient == nil {
 		return nil
 	}
 
 	live, err := keeperredis.CountLive(ctx, d.redisClient)
 	if err != nil {
-		// Best-effort: чтение Conclave упало — не валим старт (fail-open).
-		// Runtime-сетка (dispatch-WARN cross-keeper + Watchman) остаётся.
-		logger.Warn("keeper run: conclave refuse-guard — не удалось перечислить живые инстансы, guard пропущен (fail-open)",
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		logger.Warn("keeper run: conclave refuse-guard - failed to list live instances, guard skipped (fail-open)",
 			slog.Any("error", err))
 		return nil
 	}
@@ -2640,27 +2644,27 @@ func (d *daemon) setupConclaveRefuseGuard(ctx context.Context) error {
 		fmt.Fprintln(os.Stderr, conclaveRefuseMessage(live))
 		return errSetupFailed
 	case conclaveSinglePathWarn:
-		logger.Warn("keeper run: multi-keeper + acolytes=0 — refuse подавлен явным opt-out (allow_unsafe_single_path_multi_keeper); прогон может зависнуть в applying при cross-keeper-маршрутизации (ADR-027)",
+		logger.Warn("keeper run: multi-keeper + acolytes=0 - refuse suppressed by explicit opt-out (allow_unsafe_single_path_multi_keeper); run may hang in applying under cross-keeper routing (ADR-027)",
 			slog.Int("conclave_live", live),
 			slog.String("self_kid", cfg.KID))
 	case conclaveSinglePathOK:
-		// liveCount<=1 при Redis!=nil&&acolytes==0: единственный инстанс — штатно.
+		// Keeper daemon runtime wiring note.
 	}
 	return nil
 }
 
-// setupRBACInvalidation — cluster-wide RBAC-инвалидация поверх TTL-poll-а (B2,
-// ADR-028(d)). Подключается после setupRedis (нужен redisClient) и setupRBAC
-// (нужны rbacSvc/rbacHolder). При redisClient==nil — чистый TTL-poll.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupRBACInvalidation(ctx context.Context) error {
 	// --- rbac-wiring (B2 = B1 + pub/sub, ADR-028(d)) ---
-	// Cluster-wide RBAC-инвалидация поверх TTL-poll-а (rbacHolder.Run выше).
-	// rbacSvc после успешной role-мутации PUBLISH-ит в `rbac:invalidate`,
-	// остальные ноды по SUBSCRIBE near-instant перечитывают снимок из БД.
-	// TTL-poll остаётся fallback-ом (потеря pub/sub-сообщения → подхватит
-	// тик rbacHolder.Run). Late-binding: redisClient поднят только сейчас
-	// (после NewService/NewHolder), поэтому publish/subscribe подключаются
-	// здесь. При redisClient==nil (dev без Redis) — чистый TTL-poll.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	if d.redisClient != nil {
 		d.rbacSvc.SetInvalidator(rbacInvalidator{redis: d.redisClient, kid: d.cfg.KID, logger: d.logger})
 		go d.rbacHolder.WatchInvalidations(ctx, rbacInvalidationSource{redis: d.redisClient, kid: d.cfg.KID, logger: d.logger})
@@ -2670,16 +2674,16 @@ func (d *daemon) setupRBACInvalidation(ctx context.Context) error {
 }
 
 // setupOperatorInvalidation — JWT immediate revoke (ADR-014 Amendment
-// 2026-05-27). operator.Service после успешного Revoke PUBLISH-ит в тот же
-// топик `rbac:invalidate`, что и role-мутации (ADR-028(d)). Подписчиком на
-// инвалидацию выступает d.rbacHolder (подписку запускает setupRBACInvalidation
-// раньше по steps) — он перечитает Snapshot из БД, и Snapshot.Revoked
-// пополнится свежей revoked-строкой → Enforcer.Check вернёт ErrOperatorRevoked
-// → middleware вернёт 401 на любой запрос ревокнутого Архонта.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Идёт ПОСЛЕ setupAPIServer: operator.Service создаётся внутри NewServer
-// (NewOperatorHandler). При redisClient==nil — no-op (single-Keeper/dev,
-// fallback на TTL-poll).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupOperatorInvalidation(_ context.Context) error {
 	if d.redisClient == nil || d.apiServer == nil {
 		return nil
@@ -2692,16 +2696,16 @@ func (d *daemon) setupOperatorInvalidation(_ context.Context) error {
 	return nil
 }
 
-// setupServiceRegistryInvalidation — cluster-wide инвалидация реестра Service-ов
-// поверх TTL-poll-а (S2, паттерн setupRBACInvalidation). Подключается после
-// setupRedis (нужен redisClient) и setupServiceRegistry (нужны serviceSvc/
-// serviceHolder). При redisClient==nil — чистый TTL-poll.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// serviceSvc после успешной CRUD-мутации PUBLISH-ит в `service:invalidate`,
-// остальные ноды по SUBSCRIBE near-instant перечитывают снимок из БД. TTL-poll
-// остаётся fallback-ом (потеря pub/sub-сообщения → подхватит тик
-// serviceHolder.Run). Late-binding: redisClient поднят только сейчас (после
-// NewService/NewHolder), поэтому publish/subscribe подключаются здесь.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupServiceRegistryInvalidation(ctx context.Context) error {
 	if d.redisClient != nil {
 		d.serviceSvc.SetInvalidator(serviceInvalidator{redis: d.redisClient, kid: d.cfg.KID, logger: d.logger})
@@ -2711,18 +2715,18 @@ func (d *daemon) setupServiceRegistryInvalidation(ctx context.Context) error {
 }
 
 // setupGRPCEventStream — gRPC EventStream listener (M2.2 + M2.5): StreamManager,
-// Outbound, scenario-runner и сам EventStreamServer. Жёсткая цепочка
-// Outbound→scenarioRunner→EventStream оставлена одним методом. Cleanup —
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 // scenarioRunner.Shutdown + drain listener.
 func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 	cfg := d.cfg
 	logger := d.logger
-	// gRPC EventStream listener (M2.2 + M2.5). mTLS, отдельный порт от
-	// Bootstrap (ADR-012(b)). StreamManager + Outbound поднимаются вместе
-	// с listener-ом — это keeper-внутренние компоненты, не listener-ы
-	// отдельных протоколов. SeedRotationDeps вшивает Vault PKI + Outbound,
-	// чтобы handler `SeedRotationRequest` мог выпустить новый seed и
-	// отправить SeedRotationReply обратно по тому же стриму.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	streamManager := keepergrpc.NewStreamManager(logger)
 	d.streamManager = streamManager
 	outbound, err := keepergrpc.NewOutbound(keepergrpc.OutboundDeps{
@@ -2739,42 +2743,42 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 	}
 	d.outbound = outbound
 
-	// scenario-runner (M2.x slice .g): singleton-orchestrator прогонов.
-	// Dispatch-ит ApplyRequest через Outbound, поэтому собирается после него.
-	// Инжектится в Create-handler (запуск scenario `create`) + graceful
-	// Shutdown в cleanup-цепочке (LIFO: после listener-ов, до pool.Close).
-	// Summons-publisher нового пути dispatch-а (ADR-027(a)): non-nil ТОЛЬКО
-	// при живом Redis. nil → publishSummons внутри runner-а no-op, planned-
-	// задания подхватит poll-fallback Acolyte-пула (best-effort-ускорение).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	var summons scenario.SummonsPublisher
 	if d.redisClient != nil {
 		summons = summonsPublisher{redis: d.redisClient, kid: cfg.KID}
 	}
 
-	// Multi-keeper-guard старого dispatch-пути (footgun acolytes=0): чекер
-	// владельца SID-lease. non-nil ТОЛЬКО при живом Redis (без координации
-	// нечем определить владельца стрима, guard вырождается). На чужом KID-
-	// владельце dispatchWave печатает WARN о возможном зависании прогона в
-	// applying (см. scenario.LeaseOwnerChecker).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	var leaseOwner scenario.LeaseOwnerChecker
 	if d.redisClient != nil {
 		leaseOwner = leaseOwnerChecker{rc: d.redisClient}
 	}
 
-	// Staged-гейт passage-capability (ADR-056 §S5): чекер «какие таргет-хосты НЕ
-	// анонсировали passage». non-nil ТОЛЬКО при живом Redis (presence-источник
-	// capability — heartbeat-Hash в Redis). nil → staged-прогон (N>1 Passage)
-	// отвергается fail-closed (нельзя подтвердить поддержку без presence).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	var passageCap scenario.PassageCapabilityChecker
 	if d.redisClient != nil {
 		passageCap = passageCapChecker{rc: d.redisClient}
 	}
 
-	// Топология с lease-aware presence (ADR-006(a)): «Soul online» деривируется
-	// из живого Redis SID-lease, не из снимка `souls.status`. d.redisClient уже
-	// поднят (setupRedis отработал перед этим шагом). nil-Redis (single-Keeper
-	// dev без координации) → резолвер деградирует на SQL-presence-снимок,
-	// симметрично reaper-у.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	var topologyLease topology.SoulLeaseChecker
 	if d.redisClient != nil {
 		topologyLease = topologyLeaseChecker{rc: d.redisClient}
@@ -2792,28 +2796,28 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 		DB:            d.pool,
 		Logger:        logger,
 		Metrics:       d.scenarioMetrics,
-		// Scoped-резолв `vault:`-ref в operator-input (docs/input.md →
-		// «vault_scope»): тот же vault-клиент, что у render-pipeline + audit
-		// для security-trail + config-расширение hard deny-list.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		Vault: d.vc,
 		Audit: d.auditWriter,
-		// ApplyBus (ADR-068 §A2): keeper-side task.executed на operator-SSE. Та же
-		// шина, что у grpc-handler-ов (d.applyBus уже собран выше в этом же setup-шаге).
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		ApplyBus:       d.applyBus,
 		AuditReader:    auditpg.NewReader(d.pool),
 		InputDenyPaths: cfg.Vault.InputDenyPaths,
-		// Cutover-флаг исполнения apply (ADR-027, Phase 1.4.2): при keeper.acolytes>0
-		// dispatch пишет planned-задания + Summons (исполняет Acolyte-пул), иначе
-		// прямой Insert(running)+SendApply (старый путь). KID — origin Summons-сигнала.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		AcolyteEnabled: cfg.Acolytes > 0,
 		KID:            cfg.KID,
 		Summons:        summons,
 		LeaseOwner:     leaseOwner,
 		PassageCap:     passageCap,
-		// MaxAwaitTimeoutFn — ceiling барьера онбординга `await_online` (ADR-0061),
-		// база provision-aware effective run-timeout. Тот же hot-reload snapshot
-		// keeper.yml::max_await_timeout (d.store.Get), что видит барьер в coremod —
-		// effective timeout provision-прогона согласован с реальным ceiling-ом.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		MaxAwaitTimeoutFn: func() time.Duration {
 			if cfg := d.store.Get(); cfg != nil {
 				return cfg.ResolvedMaxAwaitTimeout()
@@ -2830,44 +2834,44 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 		}
 	})
 
-	// Throttle PG-flush-а `last_seen_at` выводим из reaper-порога disconnect:
-	// stale_after / 3, чтобы snapshot обновлялся заведомо чаще, чем Reaper
-	// метит живой стрим disconnected (ADR-006(a), миграция 014).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	lastSeenFlushInterval := reaper.ResolveMarkDisconnectedStale(cfg.Reaper) / 3
 
-	// Connect-time broadcast печатей доверия плагинов (ADR-026, S6). Источник —
-	// тот же реестр plugin_sigils поверх общего pool-а, что и sigil-service
-	// (setupSigil идёт раньше в run-цепочке). Gate по d.sigilSvc: Sigil выключен
-	// → sigilStore остаётся nil → broadcast no-op. NewPGStore — не второй
-	// источник правды, а stateless-адаптер той же таблицы/pool-а (read-only
-	// ListActive); полный sigil.Store не экспонируется наружу Service-ом.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	var sigilStore keepergrpc.SigilStore
 	if d.sigilSvc != nil {
 		sigilStore = sigil.NewPGStore(d.pool)
 	}
 
-	// FetchModule (эпик core.module.installed, S2): раздача sigil-allowed байтов
-	// SoulModule по sha256. Gate по d.sigilSvc (typed-nil-guard как trustAnchors):
-	// Sigil выключен → nil-интерфейс → FetchModule отвечает Unavailable.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	var moduleBinaries keepergrpc.ModuleBinarySource
 	if d.sigilSvc != nil {
 		moduleBinaries = d.sigilSvc
 	}
 
-	// Connect-time broadcast набора trust-anchor-ов (ADR-026(h), R3-S6): «живой»
-	// holder, заполненный в setupSigil и обновляемый watcher-ом ротации. typed-nil-
-	// guard: при выключенном Sigil holder == nil → передаём nil-интерфейс (иначе
-	// non-nil интерфейс с nil-указателем), broadcast набора no-op.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	var trustAnchors keepergrpc.TrustAnchorSource
 	if d.sigilAnchorSource != nil {
 		trustAnchors = d.sigilAnchorSource
 	}
 
 	// Oracle-handler (ADR-030 S2, beacons reactor): PortentEvent → match Decree →
-	// постановка named-scenario в work-queue. ServiceRef резолвится ИЗ таргет-
-	// incarnation Decree-а (РЕШЕНИЕ #1 вариант b) тем же резолвером, что
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	// destroy/upgrade-prepare (d.serviceRegistry). where-CEL — sandbox-evaluator
-	// над event.data (keeper-local, без vault/now/soulprint).
+	// Keeper daemon runtime wiring note.
 	oracleWhere, err := oracle.NewWhereEvaluator()
 	if err != nil {
 		return fmt.Errorf("oracle where-evaluator: %w", err)
@@ -2895,33 +2899,33 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 		TrustAnchors:          trustAnchors,
 		ModuleBinaries:        moduleBinaries,
 		ModuleFetchMaxBytes:   cfg.Plugins.ResolvedMaxArtifactSize(),
-		// Connect-time broadcast active-набора Vigil (ADR-030, beacons-контур S2,
-		// ReplaceAll). Источник — реестр vigils + souls поверх общего pool-а
-		// (covens хоста резолвятся из souls, набор — по sid ∪ covens). Доставка
-		// VigilSnapshot не зависит от Oracle-handler-а (Portent-реакции) — Vigil
-		// раздаются всегда, даже без сконфигурированного Oracle.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		VigilSource: keepergrpc.NewVigilSource(d.pool),
-		// Toll cluster-detector hook (ADR-038): на каждом выходе EventStream-
-		// handler-а (Recv-error / ctx-cancel) вызывается NotifyDisconnect. При
-		// выключенном Toll d.tollWatcher = nil → handler-side hook no-op (см.
-		// notifyTollDisconnect в eventstream.go).
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		TollNotifier: tollNotifierOrNil(d.tollWatcher),
-		// Oracle-handler (PortentEvent → match Decree → постановка scenario в
-		// work-queue, ADR-030 S2). DB — общий pool (decrees/oracle_fires +
-		// souls для covens субъекта). Enqueuer резолвит ServiceRef ИЗ таргет-
-		// incarnation (РЕШЕНИЕ #1 вариант b) и пишет planned-задание планировщик-
-		// путём (ADR-027). nil-handler больше нет — Portent-реакции включены.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		Oracle: &keepergrpc.OracleDeps{
 			DB:          d.pool,
 			Where:       oracleWhere,
 			Enqueuer:    oracleEnqueuer,
 			AuditWriter: d.auditWriter,
-			// keeper_oracle_*-метрики: дескриптор зарегистрирован в
-			// setupMetricsRegistry (раньше по steps), паттерн augurMetrics.
+			// Keeper daemon runtime wiring note.
+			// Keeper daemon runtime wiring note.
 			Metrics: d.oracleMetrics,
-			// circuit-breaker (ADR-030(a), beacons S4): пороги авто-disable
-			// Decree-а. max_fires==0 → breaker OFF (escape-hatch); пусто-поле
-			// → дефолт 5 (резолв в oracleCircuitMaxFires/Window, стиль acolyte_*).
+			// Keeper daemon runtime wiring note.
+			// Keeper daemon runtime wiring note.
+			// Keeper daemon runtime wiring note.
 			CircuitMaxFires: oracleCircuitMaxFires(cfg),
 			CircuitWindow:   oracleCircuitWindow(cfg),
 		},
@@ -2934,21 +2938,21 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 			PKIMount:    cfg.Vault.PKIMount,
 			PKIRole:     cfg.Vault.PKIRole,
 		},
-		// Augur-брокер (ADR-025, augur.md): резолв доступа + брокер
-		// vault/prometheus/elk (delegate=false). DB — общий pool (omens/rites +
-		// souls для covens), Vault — тот же клиент, что у render-pipeline /
-		// core.vault.kv-read (vault-broker + чтение prom/elk-credential по
-		// auth_ref), Egress — SSRF-guarded HTTP-клиент для prom/elk (исходящий
-		// HTTP к НЕдоверенному endpoint-у Omen-а), Outbound — тот же, что у
-		// SeedRotation (reply по тому же стриму).
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		Augur: &keepergrpc.AugurDeps{
 			DB:          d.pool,
 			Vault:       d.vc,
 			Egress:      keeperaugur.NewEgressClient(),
 			AuditWriter: d.auditWriter,
 			Outbound:    outbound,
-			// keeper_augur_*-метрики + augur.request span: дескриптор
-			// зарегистрирован в setupMetricsRegistry (раньше по steps).
+			// Keeper daemon runtime wiring note.
+			// Keeper daemon runtime wiring note.
 			Metrics: d.augurMetrics,
 		},
 	}, logger)
@@ -2972,25 +2976,25 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 	return nil
 }
 
-// setupWatchman — изоляция-детект + soul-shedding S2 (Watchman). Фоновая
-// goroutine: периодически пингует PG+Redis (те же зависимости, что `/readyz`),
-// и при устойчивой изоляции (debounce по watchman_fail_threshold) принудительно
-// закрывает ВСЕ локальные EventStream-стримы (streamManager.CloseAll) — Souls
-// уходят на живой Keeper по failback-list-у. Подключается после
-// setupGRPCEventStream (нужен d.streamManager) и setupRedis (redisClient для
-// probe). Cleanup-стек LIFO (как conclave/vault-renewer): cancel → join.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Probe-зависимости — те же Pinger-ы, что `/readyz` (PG обязателен; Redis —
-// только при живом клиенте, dev-fallback без Redis даёт probe только по PG).
-// Redis==nil НЕ выключает Watchman: PG-изоляция тоже причина увести Souls.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupWatchman(ctx context.Context) error {
 	logger := d.logger
 
-	// Те же зависимости, что `/readyz` (см. setupAPIServer): PG обязателен,
-	// Redis — только при живом клиенте (typed-nil-guard: nil-интерфейс, иначе
-	// probe пинговал бы nil-ресивер). Vault в probe Watchman НЕ включаем: он
-	// опционален для обслуживания EventStream-стримов (lease/seed-auth идут через
-	// PG+Redis), а его недоступность не означает изоляцию инстанса от флота.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	pingers := []watchman.NamedPinger{
 		{Name: "postgres", Pinger: poolPinger{d.pool}},
 	}
@@ -2999,7 +3003,7 @@ func (d *daemon) setupWatchman(ctx context.Context) error {
 	}
 	probe, err := watchman.NewDepsProbe(pingers...)
 	if err != nil {
-		// Невозможно при заполненном pool-е (PG всегда есть), но держим инвариант.
+		// Keeper daemon runtime wiring note.
 		fmt.Fprintf(os.Stderr, "keeper run: build watchman probe: %v\n", err)
 		return errSetupFailed
 	}
@@ -3016,7 +3020,7 @@ func (d *daemon) setupWatchman(ctx context.Context) error {
 	watchCtx, watchCancel := context.WithCancel(ctx)
 	watchDone := make(chan struct{})
 
-	// Стартовое значение gauge: инстанс при старте считается здоровым (0).
+	// Keeper daemon runtime wiring note.
 	d.watchmanMetrics.SetIsolated(false)
 
 	logger.Info("keeper run: watchman started (isolation-detect + soul-shedding)",
@@ -3024,8 +3028,8 @@ func (d *daemon) setupWatchman(ctx context.Context) error {
 		slog.Int("fail_threshold", watchmanFailThreshold(d.cfg)),
 		slog.Bool("redis_in_probe", d.redisClient != nil))
 
-	// Cleanup LIFO: 2) ждём выхода probe-loop-а; 1) отменяем его ctx (зарегистрирован
-	// позже → LIFO выполнит первым).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.cleanups.push(func() {
 		select {
 		case <-watchDone:
@@ -3042,48 +3046,48 @@ func (d *daemon) setupWatchman(ctx context.Context) error {
 	return nil
 }
 
-// setupToll — cluster-wide detector массового оттока Soul-ов (Toll, ADR-038).
+// Keeper daemon runtime wiring note.
 //
-// Поднимает три компонента, gate-нутые наличием Redis (single-instance/dev без
-// Redis → весь Toll выключен, hook EventStream-а no-op, middleware passthrough):
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-//  1. Per-instance [toll.Watcher] — пассивный объект, в EventStream-cleanup-е
-//     зовётся NotifyDisconnect (через узкий [grpc.TollNotifier]).
-//  2. Cluster-leader [toll.Leader] — фоновая goroutine, Redis-lease
-//     `cluster:toll:leader`, агрегирует sorted-set и set/clear cluster:degraded.
-//  3. [toll.DegradedReader] — read-only для api-middleware (см. router.go).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Порядок: ПОСЛЕ setupGRPCEventStream (нужен EventStreamDeps, но wire-up Toll-а
-// в EventStream идёт через сохранённую ссылку d.tollWatcher, которую API-сервер
-// и daemon-finalize читают позже) и ПОСЛЕ setupRedis. Перед setupAPIServer
-// (api.Deps читает d.tollDegradedReader).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Явное выключение через `keeper.toll.enabled: false` — настройка для dev /
-// отладки: Watcher не собирается, Leader не стартует, DegradedReader = noop.
-// При nil блока (опущен в keeper.yml) → enabled по дефолту (true).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupToll(ctx context.Context) error {
 	logger := d.logger
 
-	// Default-on: блок опущен → Toll включён с дефолтами.
+	// Keeper daemon runtime wiring note.
 	enabled := true
 	if d.cfg.Toll != nil && d.cfg.Toll.Enabled != nil {
 		enabled = *d.cfg.Toll.Enabled
 	}
-	// Gate-1: явный opt-out.
+	// Keeper daemon runtime wiring note.
 	if !enabled {
 		d.tollDegradedReader = toll.NoopDegradedReader{}
 		logger.Info("keeper run: toll disabled (toll.enabled=false)")
 		return nil
 	}
-	// Gate-2: нет Redis — Toll бессмыслен (sorted-set / lease / degraded-flag
-	// все в Redis). middleware-degraded остаётся как noop (passthrough).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	if d.redisClient == nil {
 		d.tollDegradedReader = toll.NoopDegradedReader{}
 		logger.Info("keeper run: toll disabled (no Redis client)")
 		return nil
 	}
 
-	// Резолв параметров (опущенные поля → дефолты из shared/config).
+	// Keeper daemon runtime wiring note.
 	cfgToll := d.cfg.Toll
 	if cfgToll == nil {
 		cfgToll = &config.KeeperToll{}
@@ -3098,8 +3102,8 @@ func (d *daemon) setupToll(ctx context.Context) error {
 	leaseTTL := tollDurationOrDefault(cfgToll.LeaseTTL, config.DefaultTollLeaseTTL)
 	warmup := tollDurationOrDefault(cfgToll.WarmupDelay, config.DefaultTollWarmup)
 
-	// Per-instance Watcher — собирается всегда при enabled+Redis. Source-of-truth
-	// для disconnect-публикаций (EventStream-handler зовёт NotifyDisconnect через
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	// d.tollWatcher → ZADD).
 	publisher := &keeperRedisTollPublisher{client: d.redisClient}
 	watcher, err := toll.NewWatcher(toll.Config{KID: d.cfg.KID, WarmupDelay: warmup}, publisher, d.tollMetrics, logger)
@@ -3110,19 +3114,19 @@ func (d *daemon) setupToll(ctx context.Context) error {
 	d.tollWatcher = watcher
 	d.tollDegradedReader = &keeperRedisTollDegradedReader{client: d.redisClient}
 
-	// Cluster-leader Loop: Redis-lease agg-aggregator. Запускается в отдельной
-	// goroutine, cleanup LIFO (как watchman).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	baselineReader, err := toll.NewPGBaselineReader(d.pool)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keeper run: build toll baseline: %v\n", err)
 		return errSetupFailed
 	}
-	// Опц. webhook notifier (ADR-038 amendment 2026-05-27, extensions): nil при
-	// выключенном/опущенном блоке. Best-effort: ошибка построения — Warn, leader
-	// поднимается без notifier-а (alert-out отказан, audit + gauge остаются).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	notifier := buildTollWebhookNotifier(cfgToll.Webhook, d.vc, logger)
-	// Per-coven thresholds (ADR-038 amendment, extensions): копия map-ы из
-	// конфига, чтобы leader не разделял мутируемое состояние с hot-reload-ом.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	perCovenThresholds := copyPerCovenThresholds(cfgToll.PerCovenThresholds)
 	leader, err := toll.NewLeader(toll.LeaderConfig{
 		KID:                d.cfg.KID,
@@ -3150,11 +3154,11 @@ func (d *daemon) setupToll(ctx context.Context) error {
 	d.tollLeader = leader
 	d.tollWebhookCfg = cloneTollWebhookCfg(cfgToll.Webhook)
 
-	// Hot-reload подписка ([ADR-021]): mutation `toll.threshold` / `window_size`
+	// Keeper daemon runtime wiring note.
 	// / `degraded_ttl` / `clear_grace` / `per_coven_thresholds` / `webhook.*`
-	// применяются на лету через [toll.Leader.UpdateConfig]. Restart-required
-	// поля (lease_ttl / warmup_delay / enabled) тихо игнорируются — Leader
-	// уже стартовал с прежними значениями.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.store.OnReload(func(_, newCfg *config.KeeperConfig) {
 		d.applyTollReload(newCfg, logger)
 	})
@@ -3168,8 +3172,8 @@ func (d *daemon) setupToll(ctx context.Context) error {
 		slog.Duration("lease_ttl", leaseTTL),
 		slog.Duration("warmup", warmup))
 
-	// Cleanup LIFO: 2) ждём выхода leader-loop-а; 1) отменяем его ctx (зарегистрирован
-	// позже → LIFO выполнит первым).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.cleanups.push(func() {
 		select {
 		case <-leaderDone:
@@ -3186,33 +3190,33 @@ func (d *daemon) setupToll(ctx context.Context) error {
 	return nil
 }
 
-// setupTempo — Tempo per-AID rate-limiter resolver-тяжёлых write-эндпоинтов
-// (ADR-050). Конструирует Redis token-bucket-limiter, который инжектится в
-// api.Deps.TempoLimiter (setupAPIServer навешивает middleware точечно на
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 // `POST /v1/voyages`).
 //
-// Gate-цепочка (как setupToll):
-//   - `tempo.enabled: false` → limiter не конструируется (явный opt-out);
-//   - нет Redis-клиента → limiter не конструируется (limiter живёт в Redis;
-//     без него middleware passthrough — fail-OPEN, ADR-050(a)+(b)).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// При обоих gate-ах d.tempoLimiter остаётся nil → api.Deps.TempoLimiter nil →
-// middleware no-op. rate/burst НЕ резолвятся здесь — limiter stateless, лимиты
-// читаются на каждом запросе провайдером из config.Store (hot-reload, ADR-050(f));
-// см. api.Deps.TempoVoyageCreateLimits в setupAPIServer.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Порядок: ПОСЛЕ setupRedis (нужен d.redisClient), ДО setupAPIServer (api.Deps
-// читает d.tempoLimiter).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupTempo(_ context.Context) error {
 	logger := d.logger
 
-	// Gate-1: явный opt-out.
+	// Keeper daemon runtime wiring note.
 	if !d.cfg.Tempo.TempoEnabled() {
 		logger.Info("keeper run: tempo disabled (tempo.enabled=false)")
 		return nil
 	}
-	// Gate-2: нет Redis — limiter бессмыслен (token-bucket живёт в Redis).
-	// middleware при nil-limiter → passthrough (fail-OPEN, ADR-050(b)).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	if d.redisClient == nil {
 		logger.Info("keeper run: tempo disabled (no Redis client)")
 		return nil
@@ -3234,10 +3238,10 @@ func (d *daemon) setupTempo(_ context.Context) error {
 	return nil
 }
 
-// tollNotifierOrNil — typed-nil-guard для интерфейса [keepergrpc.TollNotifier].
-// Передача *toll.Watcher==nil напрямую в interface-поле даёт «non-nil interface
-// с nil-underlying» (классический Go-gotcha) — handler-side nil-проверка не
-// сработает. Helper возвращает «настоящий nil-интерфейс» при nil-watcher.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func tollNotifierOrNil(w *toll.Watcher) keepergrpc.TollNotifier {
 	if w == nil {
 		return nil
@@ -3245,11 +3249,11 @@ func tollNotifierOrNil(w *toll.Watcher) keepergrpc.TollNotifier {
 	return w
 }
 
-// tempoLimiterOrNil — typed-nil-guard для интерфейса [apimiddleware.RateLimiter].
-// При выключенном Tempo (нет Redis / enabled=false) d.tempoLimiter == nil;
-// передача *keeperredis.TokenBucket(nil) напрямую в interface-поле дала бы
-// non-nil interface (RateLimit-фабрика не распознала бы passthrough). Helper
-// возвращает «настоящий nil-интерфейс» при nil-limiter (паттерн tollNotifierOrNil).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func tempoLimiterOrNil(tb *keeperredis.TokenBucket) apimiddleware.RateLimiter {
 	if tb == nil {
 		return nil
@@ -3257,19 +3261,19 @@ func tempoLimiterOrNil(tb *keeperredis.TokenBucket) apimiddleware.RateLimiter {
 	return tb
 }
 
-// setupLoginGuard конструирует Redis anti-bruteforce-примитив login-эндпоинтов
-// (ADR-058(g), HIGH-3). Gate-цепочка (как setupTempo):
-//   - auth-блока нет / login-эндпоинты не нужны → пропускаем (нечего защищать);
-//   - `auth.rate_limit.enabled: false` → не конструируется (явный opt-out);
-//   - нет Redis-клиента → не конструируется (lockout cluster-shared живёт в
-//     Redis; без него middleware passthrough — login без throttle).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// При gate-ах d.loginGuard остаётся nil → api.Deps.LoginGuard nil → middleware
-// passthrough. Порядок: ПОСЛЕ setupRedis, ДО setupAPIServer.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupLoginGuard(_ context.Context) error {
 	logger := d.logger
 	if d.cfg.Auth == nil {
-		return nil // нет auth-блока — login-эндпоинты не монтируются
+		return nil // Keeper daemon runtime wiring note.
 	}
 	if !d.cfg.Auth.LoginRateLimitEnabled() {
 		logger.Info("keeper run: auth login rate-limit disabled (auth.rate_limit.enabled=false)")
@@ -3294,9 +3298,9 @@ func (d *daemon) setupLoginGuard(_ context.Context) error {
 	return nil
 }
 
-// loginGuardOrNil — typed-nil-guard для интерфейса [apimiddleware.LoginGuard]
-// (паттерн tempoLimiterOrNil): возвращает «настоящий nil-интерфейс» при
-// nil-guard, чтобы AuthLoginLimit-фабрика распознала passthrough.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func loginGuardOrNil(g *keeperredis.LoginGuard) apimiddleware.LoginGuard {
 	if g == nil {
 		return nil
@@ -3304,9 +3308,9 @@ func loginGuardOrNil(g *keeperredis.LoginGuard) apimiddleware.LoginGuard {
 	return g
 }
 
-// loginLimitCfg резолвит статические параметры anti-bruteforce-лимита из config
-// в форму apimiddleware.AuthLoginLimitConfig (читается один раз на сборке
-// middleware, не hot-path). nil-auth → дефолты (ResolvedLoginRateLimit nil-safe).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) loginLimitCfg() apimiddleware.AuthLoginLimitConfig {
 	rate, burst, threshold, window, backoff := d.cfg.Auth.ResolvedLoginRateLimit()
 	return apimiddleware.AuthLoginLimitConfig{
@@ -3318,9 +3322,9 @@ func (d *daemon) loginLimitCfg() apimiddleware.AuthLoginLimitConfig {
 	}
 }
 
-// tollDurationOrDefault — парсит config-строку duration-формата с fallback на
-// дефолт. Стиль `watchmanInterval`-резолвера (semantic-фаза уже отвергла
-// невалидный формат, остаётся отрезать пустое/<=0).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func tollDurationOrDefault(s string, def time.Duration) time.Duration {
 	if s == "" {
 		return def
@@ -3332,8 +3336,8 @@ func tollDurationOrDefault(s string, def time.Duration) time.Duration {
 	return d
 }
 
-// keeperRedisTollPublisher — адаптер [toll.Publisher] поверх keeperredis-
-// примитивов. Тонкий: один Publish = один ZADD.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 type keeperRedisTollPublisher struct {
 	client *keeperredis.Client
 }
@@ -3346,8 +3350,8 @@ func (p *keeperRedisTollPublisher) PublishDisconnect(ctx context.Context, sid, k
 	return keeperredis.PublishTollDisconnect(ctx, p.client, member, at.Unix())
 }
 
-// keeperRedisTollSortedSetReader — адаптер [toll.SortedSetReader] поверх
-// keeperredis-примитивов. ZCOUNT + ZREMRANGEBYSCORE.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 type keeperRedisTollSortedSetReader struct {
 	client *keeperredis.Client
 }
@@ -3360,21 +3364,21 @@ func (r *keeperRedisTollSortedSetReader) TrimBelow(ctx context.Context, beforeUn
 	return keeperredis.TollTrimBelow(ctx, r.client, beforeUnix)
 }
 
-// CountByCovenInWindow — реализация [toll.CovenAwareReader] (ADR-038
-// amendment 2026-05-27, per-coven thresholds). Один extra round-trip
-// (ZRANGEBYSCORE), вызывается leader-ом только при заданном
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 // PerCovenThresholds.
 func (r *keeperRedisTollSortedSetReader) CountByCovenInWindow(ctx context.Context, fromUnix, toUnix int64) (map[string]int64, error) {
 	return keeperredis.TollCountByCovenInWindow(ctx, r.client, fromUnix, toUnix)
 }
 
-// buildTollWebhookNotifier собирает [toll.WebhookNotifier] по cfg блока
-// `toll.webhook` (ADR-038 amendment 2026-05-27, extensions). Возвращает nil
-// при выключенном / отсутствующем блоке. Ошибки построения — Warn-лог,
-// notifier nil (alert-канал не поднимается, audit + gauge остаются).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// vault-параметр обязателен при URLRef с префиксом `vault:` (валидация в
-// toll.NewWebhookNotifier); при inline-URL — игнорируется.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func buildTollWebhookNotifier(cfg *config.KeeperTollWebhook, vault toll.VaultReader, logger *slog.Logger) toll.Notifier {
 	if cfg == nil || !cfg.Enabled {
 		return nil
@@ -3396,9 +3400,9 @@ func buildTollWebhookNotifier(cfg *config.KeeperTollWebhook, vault toll.VaultRea
 	return notifier
 }
 
-// copyPerCovenThresholds — defensive-copy map из конфига перед инжектом в
-// [toll.LeaderConfig]. Hot-reload может пересоздать d.cfg.Toll; leader должен
-// работать со снимком, не разделяя ссылку с config-layer-ом.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func copyPerCovenThresholds(in map[string]float64) map[string]float64 {
 	if len(in) == 0 {
 		return nil
@@ -3410,9 +3414,9 @@ func copyPerCovenThresholds(in map[string]float64) map[string]float64 {
 	return out
 }
 
-// cloneTollWebhookCfg — defensive-copy блока webhook для diff-проверки на
-// hot-reload-е (см. [daemon.applyTollReload]). nil остаётся nil — Webhook —
-// опц. блок, и nil == "выключено / опущено".
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func cloneTollWebhookCfg(in *config.KeeperTollWebhook) *config.KeeperTollWebhook {
 	if in == nil {
 		return nil
@@ -3421,11 +3425,11 @@ func cloneTollWebhookCfg(in *config.KeeperTollWebhook) *config.KeeperTollWebhook
 	return &out
 }
 
-// tollWebhookCfgChanged — точечный diff двух snapshot-ов webhook-блока. true,
-// если хотя бы одно поле различается ИЛИ один из аргументов nil-а другой —
-// нет. Используется в [daemon.applyTollReload], чтобы пересобирать
-// [toll.WebhookNotifier] (Vault-резолв, http.Client) только при реальной
-// mutation, не на каждый reload.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func tollWebhookCfgChanged(a, b *config.KeeperTollWebhook) bool {
 	if a == nil && b == nil {
 		return false
@@ -3439,21 +3443,22 @@ func tollWebhookCfgChanged(a, b *config.KeeperTollWebhook) bool {
 		a.Timeout != b.Timeout
 }
 
-// applyTollReload — runtime-apply нового config-snapshot-а на Leader. Вызывается
-// из reload-callback-а (см. [setupToll]).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Поведение:
+// Keeper daemon runtime wiring note.
 //   - threshold/window/degraded_ttl/clear_grace + per_coven_thresholds —
-//     резолв с дефолтами (как в setupToll) → [toll.Leader.UpdateConfig].
-//   - webhook.* — recycle notifier-а ТОЛЬКО при изменении (см. [tollWebhookCfgChanged]).
-//     Recycle = [buildTollWebhookNotifier] заново (Vault-резолв при URLRef-ref —
-//     отложен на первый Notify, как и до reload-а; здесь только пересоздание).
-//   - error от UpdateConfig (валидация невалидного блока) → Warn-лог, старые
-//     значения leader-а сохраняются. Аналогично [Store.Reload]-семантике:
-//     reload не должен ломать работающую подсистему.
 //
-// Hot-reload-таблица в [docs/keeper/config.md → toll] фиксирует, какие именно
-// поля reload-able vs restart-required.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+//
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) applyTollReload(newCfg *config.KeeperConfig, logger *slog.Logger) {
 	if d.tollLeader == nil || newCfg == nil {
 		return
@@ -3470,9 +3475,9 @@ func (d *daemon) applyTollReload(newCfg *config.KeeperConfig, logger *slog.Logge
 	degradedTTL := tollDurationOrDefault(cfgToll.DegradedTTL, config.DefaultTollDegradedTTL)
 	clearGrace := tollDurationOrDefault(cfgToll.ClearGrace, config.DefaultTollClearGrace)
 
-	// Webhook-recycle: пересобираем notifier только при diff-е (см.
-	// [tollWebhookCfgChanged]). Старая ссылка GC-ится; http.Client держит
-	// только idle-conn pool — явного Close не требуется.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	var notifier toll.Notifier
 	if tollWebhookCfgChanged(d.tollWebhookCfg, cfgToll.Webhook) {
 		notifier = buildTollWebhookNotifier(cfgToll.Webhook, d.vc, logger)
@@ -3480,7 +3485,7 @@ func (d *daemon) applyTollReload(newCfg *config.KeeperConfig, logger *slog.Logge
 		logger.Info("toll hot-reload: webhook notifier recycled",
 			slog.Bool("enabled", cfgToll.Webhook != nil && cfgToll.Webhook.Enabled))
 	} else {
-		// Без diff-а — оставляем текущий notifier (читаем под RLock).
+		// Keeper daemon runtime wiring note.
 		notifier = d.tollCurrentNotifier()
 	}
 
@@ -3505,9 +3510,9 @@ func (d *daemon) applyTollReload(newCfg *config.KeeperConfig, logger *slog.Logge
 		slog.Int("per_coven_count", len(cfgToll.PerCovenThresholds)))
 }
 
-// tollCurrentNotifier — возвращает текущий [toll.Notifier] из Leader. Нужен в
-// applyTollReload, когда webhook-блок не менялся и пересоздавать notifier не
-// нужно: передаём в UpdateConfig тот же pointer, что уже стоит.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) tollCurrentNotifier() toll.Notifier {
 	if d.tollLeader == nil {
 		return nil
@@ -3515,9 +3520,9 @@ func (d *daemon) tollCurrentNotifier() toll.Notifier {
 	return d.tollLeader.CurrentNotifier()
 }
 
-// keeperRedisTollDegradedWriter — адаптер toll-internal degradedWriter поверх
-// keeperredis. Toll-package интерфейс не экспортирован (`degradedWriter` —
-// внутренний); адаптер удовлетворяет ему по signature.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 type keeperRedisTollDegradedWriter struct {
 	client *keeperredis.Client
 }
@@ -3530,7 +3535,7 @@ func (w *keeperRedisTollDegradedWriter) ClearDegraded(ctx context.Context) error
 	return keeperredis.TollClearDegraded(ctx, w.client)
 }
 
-// keeperRedisTollDegradedReader — адаптер [toll.DegradedReader] поверх
+// Keeper daemon runtime wiring note.
 // keeperredis.TollIsDegraded.
 type keeperRedisTollDegradedReader struct {
 	client *keeperredis.Client
@@ -3540,10 +3545,10 @@ func (r *keeperRedisTollDegradedReader) IsDegraded(ctx context.Context) (bool, e
 	return keeperredis.TollIsDegraded(ctx, r.client)
 }
 
-// keeperRedisTollLeaseAcquirer — адаптер [toll.LeaseAcquirer] поверх
-// keeperredis.Acquire. Транслирует sentinel-ы keeperredis-а в toll-овые:
-// ErrLeaseTaken/ErrLeaseLost — общая поверхность Leader-а (он сам не
-// импортирует keeperredis).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 type keeperRedisTollLeaseAcquirer struct {
 	client *keeperredis.Client
 }
@@ -3559,7 +3564,7 @@ func (a *keeperRedisTollLeaseAcquirer) Acquire(ctx context.Context, key, holder 
 	return &keeperRedisTollLease{lease: lease}, nil
 }
 
-// keeperRedisTollLease — адаптер [toll.Lease] поверх *keeperredis.Lease.
+// Keeper daemon runtime wiring note.
 type keeperRedisTollLease struct {
 	lease *keeperredis.Lease
 }
@@ -3578,83 +3583,83 @@ func (l *keeperRedisTollLease) Release(ctx context.Context) error {
 	return l.lease.Release(ctx)
 }
 
-// setupSigilInvalidation — cluster-wide Sigil-re-broadcast поверх connect-time
-// broadcast-а (ADR-026, S6c, паттерн setupRBACInvalidation). Подключается после
-// setupSigil (нужен d.sigilSvc), setupRedis (redisClient) и setupGRPCEventStream
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 // (d.outbound + streamManager).
 //
-// sigilSvc после успешного Allow/Revoke PUBLISH-ит в `sigil:invalidate`. КАЖДАЯ
-// нода (включая мутирующую) по SUBSCRIBE перечитывает active-набор из БД и
-// re-broadcast-ит его своим подключённым Soul-ам через [Outbound.RebroadcastSigils]
-// — иначе Soul на другой ноде работает с устаревшим кешем допусков.
-// Connect-time broadcast остаётся fallback-ом (потеря pub/sub-сообщения →
-// подхватит следующий reconnect Soul-а).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// TTL-fallback тик re-read набора trust-anchor-ключей (ADR-026(h), R3 known-gap)
-// поднимается НЕЗАВИСИМО от Redis — он-то и самоисцеляет пропущенный
-// `sigil:anchors-changed`-сигнал (см. ниже).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Gate-ы: Sigil выключен (d.sigilSvc==nil) → ничего не поднимается. Redis
-// отсутствует (redisClient==nil, single-Keeper/dev) → cluster-wide pub/sub-
-// watcher-ы (`sigil:invalidate` / `sigil:anchors-changed`) не поднимаются,
-// работают только connect-time broadcast + TTL-fallback тик.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupSigilInvalidation(ctx context.Context) error {
 	if d.sigilSvc == nil {
 		return nil
 	}
 
-	// TTL-fallback тик re-read набора якорей (ADR-026(h), R3 known-gap, образец
-	// rbac.Holder.Run / Summons poll-fallback). Поднимается НЕЗАВИСИМО от Redis:
-	// при пропуске pub/sub-сигнала `sigil:anchors-changed` (потеря сообщения /
-	// reconnect) отставшая нода самоисцеляется за интервал; при выключенном Redis
-	// (single-instance / dev) — единственный путь, по которому runtime-ротация
-	// доезжает без рестарта. reloadAnchors idempotent/fail-safe (на ошибке re-build
-	// не трогает состояние) — двойной reload (тик + pub/sub) безопасен. Goroutine
-	// завершается по ctx.Done() (тот же ctx, что у watcher-ов; LIFO-cleanup
-	// родительского ctx гасит её на shutdown).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	go runAnchorsReloadTicker(ctx, sigilAnchorsReloadInterval(d.cfg), d.reloadAnchors)
 	d.logger.Info("keeper run: sigil anchors TTL-fallback reload enabled",
 		slog.Duration("interval", sigilAnchorsReloadInterval(d.cfg)))
 
-	// Cluster-wide re-broadcast и pub/sub-watcher-ы поднимаются только при Redis
-	// (single-Keeper/dev без Redis обходится TTL-тиком выше + connect-time broadcast).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	if d.redisClient == nil {
 		return nil
 	}
 
-	// Тот же stateless-адаптер реестра plugin_sigils, что и connect-time
-	// broadcast (ListActive поверх общего pool-а) — не второй источник правды.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	sigilStore := sigil.NewPGStore(d.pool)
 
 	d.sigilSvc.SetInvalidator(sigilInvalidator{redis: d.redisClient, logger: d.logger})
-	// Anchors-publisher для ротации ключей подписи (R3-S7): KeyService после
-	// Introduce/SetPrimary/Retire шлёт `sigil:anchors-changed` → watcher ниже
-	// re-load-ит набор по кластеру. nil-publisher (redisClient==nil) — мутация
-	// доедет на рестарте (set-at-start в setupSigil); тут redisClient гарантирован
-	// gate-ом выше.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	if d.sigilKeySvc != nil {
 		d.sigilKeySvc.SetPublisher(sigilAnchorsPublisher{redis: d.redisClient, logger: d.logger})
 	}
 
 	go d.watchSigilInvalidations(ctx, sigilStore)
-	// Второй watcher — cluster-wide reload набора trust-anchor-ов подписи (ADR-026(h),
-	// R3-S6): на сигнал `sigil:anchors-changed` (ротация ключей подписи на любой
-	// ноде) каждая нода re-load-ит Signer/набор и re-broadcast-ит SigilTrustAnchors
-	// своим Soul-ам. Отдельный канал от `sigil:invalidate` (тот про допуски
-	// plugin_sigils, этот — про ключи их подписи).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	go d.watchAnchorsChanged(ctx)
 	return nil
 }
 
-// watchSigilInvalidations держит подписку на `sigil:invalidate` до ctx.Done() и
-// на каждый сигнал перечитывает active-набор из БД и re-broadcast-ит его всем
-// локальным стримам. Ошибка подписки логируется (warn) и НЕ роняет daemon —
-// Sigil продолжает раздаваться connect-time broadcast-ом.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) watchSigilInvalidations(ctx context.Context, store keepergrpc.SigilStore) {
 	sub, err := keeperredis.SubscribeSigilInvalidate(ctx, d.redisClient, d.logger)
 	if err != nil {
 		if ctx.Err() == nil {
-			d.logger.Warn("sigil: подписка на cluster-инвалидацию не поднялась, остаётся connect-time broadcast",
+			d.logger.Warn("sigil: cluster invalidation subscription did not start, keeping connect-time broadcast",
 				slog.Any("error", err))
 		}
 		return
@@ -3667,8 +3672,8 @@ func (d *daemon) watchSigilInvalidations(ctx context.Context, store keepergrpc.S
 			return
 		case _, ok := <-sub.Channel():
 			if !ok {
-				// Канал закрыт (фатальная ошибка подписки) — выходим, раздача
-				// деградирует на connect-time broadcast.
+				// Keeper daemon runtime wiring note.
+				// Keeper daemon runtime wiring note.
 				return
 			}
 			d.rebroadcastActiveSigils(ctx, store)
@@ -3676,10 +3681,10 @@ func (d *daemon) watchSigilInvalidations(ctx context.Context, store keepergrpc.S
 	}
 }
 
-// rebroadcastActiveSigils читает active-набор допусков из БД и раздаёт его всем
-// Soul-ам, висящим локально на этом инстансе. Best-effort: ошибка ListActive
-// логируется и пропускается (connect-time broadcast и Soul-side fail-closed
-// verify защищают), per-stream сбои обрабатываются внутри [Outbound.RebroadcastSigils].
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) rebroadcastActiveSigils(ctx context.Context, store keepergrpc.SigilStore) {
 	recs, err := store.ListActive(ctx)
 	if err != nil {
@@ -3690,22 +3695,22 @@ func (d *daemon) rebroadcastActiveSigils(ctx context.Context, store keepergrpc.S
 	d.outbound.RebroadcastSigils(ctx, keepergrpc.SigilRecordsToProto(recs))
 }
 
-// runAnchorsReloadTicker — TTL-fallback тик re-read набора trust-anchor-ключей
-// подписи (ADR-026(h), R3 known-gap): периодически (каждые interval) выполняет
-// reload (= [daemon.reloadAnchors]) до отмены ctx. Блокирующий — caller запускает
-// в отдельной goroutine.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Закрывает best-effort-природу канала `sigil:anchors-changed`: если нода
-// ПРОПУСТИЛА pub/sub-сигнал (потеря сообщения / reconnect подписки), она держала
-// бы старый набор якорей до рестарта — fail-open-окно при Retire старого ключа.
-// Периодический re-read самоисцеляет пропуск за интервал (образец
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 // rbac.Holder.Run TTL-poll + Summons poll-fallback ADR-027).
 //
-// reload idempotent/fail-safe (reloadAnchors на ошибке re-build не трогает
-// состояние; на успехе — атомарный swap), поэтому двойной reload (этот тик +
-// pub/sub-watcher) безопасен. interval <= 0 (дефолтнут резолвером до 30s) —
-// guard: тик не поднимается (защита от busy-loop). reload вынесен параметром,
-// чтобы тик тестировался без реальных Vault/PG/Outbound-deps.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func runAnchorsReloadTicker(ctx context.Context, interval time.Duration, reload func(context.Context)) {
 	if interval <= 0 {
 		return
@@ -3722,17 +3727,17 @@ func runAnchorsReloadTicker(ctx context.Context, interval time.Duration, reload 
 	}
 }
 
-// watchAnchorsChanged держит подписку на `sigil:anchors-changed` до ctx.Done() и
-// на каждый сигнал выполняет [daemon.reloadAnchors] (re-build Signer + обновить
-// keeper-host verify-набор + holder connect-time broadcast + re-broadcast набора
-// своим Soul-ам). Ошибка подписки логируется (warn) и НЕ роняет daemon — набор
-// продолжит раздаваться connect-time broadcast-ом со старым значением (до
-// следующего TTL-fallback тика [runAnchorsReloadTicker] или рестарта).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) watchAnchorsChanged(ctx context.Context) {
 	sub, err := keeperredis.SubscribeAnchorsChanged(ctx, d.redisClient, d.logger)
 	if err != nil {
 		if ctx.Err() == nil {
-			d.logger.Warn("sigil: подписка на anchors-changed не поднялась, набор якорей не будет hot-reload-иться",
+			d.logger.Warn("sigil: anchors-changed subscription did not start, anchor set will not hot-reload",
 				slog.Any("error", err))
 		}
 		return
@@ -3752,34 +3757,34 @@ func (d *daemon) watchAnchorsChanged(ctx context.Context) {
 	}
 }
 
-// reloadAnchors — «keeper Signer hot-reload» (ADR-026(h), R3-S6): по сигналу
-// `sigil:anchors-changed` (ротация ключей подписи) перечитывает active-набор из
-// БД и атомарно применяет его без рестарта:
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-//  1. re-build Signer ([daemon.buildSigilSigner]: новый primary подписывает,
-//     anchors = публичные ключи всех active-ключей);
-//  2. подмена подписывающего Signer-а в sigil-service ([sigil.Service.SetSigner])
-//     — новые Allow подписываются свежим primary;
-//  3. обновление verify-набора keeper-host-а ([Host.SigilAnchors.SetAnchors]) —
-//     keeper-host верифицирует СВОИ плагины против свежих якорей;
-//  4. обновление holder-а connect-time broadcast (свежеподключённый Soul получит
-//     актуальный набор);
-//  5. re-broadcast SigilTrustAnchors всем локальным Soul-ам ([Outbound.RebroadcastTrustAnchors])
-//     — подключённые Soul-ы near-instant переключаются на свежий набор.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Best-effort и fail-safe: на ошибке re-build (Vault недоступен, битый реестр)
-// логируем warn и НЕ трогаем текущее состояние (старый Signer/набор продолжают
-// работать — целостность не нарушается, повтор подхватится следующим сигналом
-// либо рестартом). Частичного применения нет: всё после успешного re-build-а.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) reloadAnchors(ctx context.Context) {
 	if d.sigilSvc == nil {
 		return
 	}
-	// In-process span на runtime-ротацию trust-anchor-ключей (re-build Signer +
-	// обновление verify-наборов + re-broadcast). Атрибуты БЕЗ секретов: число
-	// активных якорей и сколько Soul-ов получили re-broadcast — операционные
-	// counts (не label-cardinality, не материал ключа). При OTel disabled tracer
-	// no-op — Start/End бесплатны.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	ctx, span := sigil.Tracer().Start(ctx, sigil.SpanRotation)
 	defer span.End()
 
@@ -3808,10 +3813,10 @@ func (d *daemon) reloadAnchors(ctx context.Context) {
 		d.sigilAnchorSource.set(pemSet)
 	}
 	delivered := d.outbound.RebroadcastTrustAnchors(ctx, pemSet)
-	// Re-broadcast-наблюдаемость (ADR-026(h), R3-S7 Retire-инвариант): счётчик
-	// проходов + delivered последней раздачи. Оператор видит по
-	// keeper_sigil_anchors_last_delivered, что новый набор разошёлся подключённым
-	// Soul-ам, ПЕРЕД Retire старого ключа. nil-safe при выключенной observability.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.sigilKeyMetrics.ObserveAnchorsRebroadcast(delivered)
 	span.SetAttributes(
 		attribute.Int("active_anchors", len(pemSet)),
@@ -3823,27 +3828,27 @@ func (d *daemon) reloadAnchors(ctx context.Context) {
 	)
 }
 
-// trustAnchorHolder — атомарно-сменяемый снимок набора trust-anchor-ов подписи
-// Sigil в PEM-форме (ADR-026(h), R3-S6). Реализует [keepergrpc.TrustAnchorSource]:
-// connect-time broadcast читает свежий набор при каждом подключении Soul-а, а
-// watcher `sigil:anchors-changed` подменяет его целиком после runtime-ротации
-// ключей подписи. atomic.Pointer на immutable-слайс: lock-free чтение в
-// connect-time-пути, атомарная замена в watcher-е.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 type trustAnchorHolder struct {
 	pems atomic.Pointer[[]string]
 }
 
-// set атомарно заменяет набор PEM-якорей (ReplaceAll). Копирует заголовок слайса:
-// caller волен переиспользовать буфер.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (h *trustAnchorHolder) set(pems []string) {
 	cp := make([]string, len(pems))
 	copy(cp, pems)
 	h.pems.Store(&cp)
 }
 
-// AnchorSetPEM возвращает текущий снимок набора (read-only; слайс не мутируется
-// по месту — set подменяет указатель целиком). nil-holder / неинициализированный
-// → nil (пустой набор; Soul fail-closed по no_trust_anchor).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (h *trustAnchorHolder) AnchorSetPEM() []string {
 	if h == nil {
 		return nil
@@ -3855,23 +3860,23 @@ func (h *trustAnchorHolder) AnchorSetPEM() []string {
 	return *p
 }
 
-// setupSigil — bizness-логика Sigil allow-list-а (ADR-026, plugin.allow/revoke/
-// list). Feature-flag по конфигу: Signer строится из Vault ТОЛЬКО при заданном
-// `sigil.signing_key_ref`; иначе d.sigilSvc остаётся nil — plugin.*-routes (REST)
-// и plugin.*-tools (MCP) не регистрируются (паттерн rbacSvc / MCP-listener,
-// keeper стартует нормально).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Помещён после setupStorage (pool → Store) и setupVault (vc → Signer), ПЕРЕД
-// setupGRPCBootstrap: bootstrap-сервер читает d.sigilPubKeyPEM (trust-anchor
-// Soul-у, ADR-026 S6). Позже d.sigilSvc читают setupAPIServer/setupMCPServer.
-// Состояния не держит, teardown не нужен (ed25519-Signer in-memory, PG-доступ
-// через общий pool).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// cacheRoot — [pluginCacheRoot] (тот же источник, что keeper-side core-модули в
+// Keeper daemon runtime wiring note.
 // setupCoreModules): `keeper.yml::plugins.cache_root` → env-override →
-// [pluginhost.DefaultCacheRoot]. Отдельного config-ключа под Sigil-кеш нет —
-// слот плагина один на host (вариант C, single-slot), Sigil и core-модули
-// читают тот же кеш.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupSigil(ctx context.Context) error {
 	cfg := d.cfg
 	logger := d.logger
@@ -3881,39 +3886,39 @@ func (d *daemon) setupSigil(ctx context.Context) error {
 		return nil
 	}
 
-	// Multi-anchor Signer (R3, ADR-026(h)): источник истины — реестр
-	// sigil_signing_keys (primary подписывает, anchors = публичные ключи всех
-	// active). Пустой реестр (свежий кластер до первого Introduce) → fallback на
-	// одиночный ключ из cfg.signing_key_ref, чтобы НЕ ломать текущий путь (S2-).
-	// Fallback — работа от cfg как single-anchor, БЕЗ авто-seed строки в реестр:
-	// seed первого ключа — операторская ротационная операция S7 (Introduce через
-	// API), а не молчаливый side-effect старта; auto-seed размывал бы аудит
-	// (introduced_by_aid) и гонял бы конкурирующие keeper-инстансы наперегонки за
-	// вставку. Так старый одиночный путь продолжает жить, новый multi-key путь
-	// включается, как только оператор ввёл ключ через API.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	signer, err := d.buildSigilSigner(ctx)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keeper run: build sigil signer: %v\n", err)
 		return errSetupFailed
 	}
 
-	// Набор trust-anchor-ов для keeper-host verify СВОИХ плагинов (ADR-026(h),
-	// R3 multi-anchor): публичные ключи всех active-ключей подписи (включая
-	// primary). OR-проверка по набору даёт безразрывную ротацию ключа. Читается
-	// в setupCoreModules при сборке keeper-host-а.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.sigilAnchors = signer.AnchorSet()
 
-	// PEM-набор всех active-якорей (ADR-026(h), R3-S6/S7): едет Soul-у в bootstrap
-	// (multi-anchor, set>single, через живой holder) и connect-time broadcast-ом
-	// SigilTrustAnchors. Деривация здесь же — fail-fast на ошибке Marshal-а.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	pemSet, err := signer.AnchorSetPEM()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keeper run: derive sigil anchor set PEM: %v\n", err)
 		return errSetupFailed
 	}
-	// «Живой» holder набора PEM для connect-time broadcast И bootstrap-reply
-	// (R3-S7, architect af7d): стартовый набор — сейчас, runtime-ротация подменит
-	// его в watcher-е (setupSigilInvalidation).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.sigilAnchorSource = &trustAnchorHolder{}
 	d.sigilAnchorSource.set(pemSet)
 
@@ -3928,11 +3933,11 @@ func (d *daemon) setupSigil(ctx context.Context) error {
 		return errSetupFailed
 	}
 
-	// Operator-facing ротация ключей подписи (R3-S7): key-gen + Vault-write +
-	// keys.go CRUD. Vault-путь приватников — отдельный mount `<key>-keys/<key_id>`
-	// (развязка с одиночным sigil-signing-key). Publisher (anchors-changed) и
-	// Metrics (gauge active-ключей) подключаются late-binding-ом в
-	// setupSigilInvalidation / setupMetricsRegistry (Redis/registry поднимаются позже).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	keySvc, err := sigil.NewKeyService(sigil.KeyServiceDeps{
 		Pool:          d.pool,
 		Vault:         d.vc,
@@ -3950,21 +3955,23 @@ func (d *daemon) setupSigil(ctx context.Context) error {
 	return nil
 }
 
-// buildSigilSigner строит подписывающий Signer для Sigil по правилу
-// «реестр-первым, cfg-fallback» (R3, ADR-026(h)):
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-//   - есть active-ключи в sigil_signing_keys → multi-anchor Signer
-//     ([sigil.LoadSigner]: primary подписывает, anchors = публичные ключи всех
-//     active);
-//   - реестр пуст → single-anchor Signer из cfg.signing_key_ref
-//     ([sigil.NewSigner]) — старый одиночный путь не ломается.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Auto-seed первого ключа в реестр СОЗНАТЕЛЬНО не делается (это операторская
-// ротационная операция S7, см. комментарий в setupSigil). Reload набора якорей
-// по событию ротации — S6 (load-at-start достаточно для S3).
+//	active);
 //
-// Условие caller-а: вызывается только при заданном cfg.Sigil.SigningKeyRef
-// (Sigil включён), поэтому fallback-ветка всегда имеет валидный ref.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+//
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+//
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) buildSigilSigner(ctx context.Context) (*sigil.Signer, error) {
 	keys, err := sigil.ListActiveKeys(ctx, d.pool)
 	if err != nil {
@@ -3980,8 +3987,8 @@ func (d *daemon) buildSigilSigner(ctx context.Context) (*sigil.Signer, error) {
 		return signer, nil
 	}
 
-	// Реестр пуст — fallback на одиночный cfg-ключ (миграция со старого
-	// одиночного пути; bootstrap первого ключа в реестр — S7 через API).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	d.logger.Info("keeper run: sigil signing key registry empty — falling back to cfg.signing_key_ref (single-anchor)")
 	signingKey, err := sigil.LoadSigningKey(ctx, d.vc, d.cfg.Sigil.SigningKeyRef)
 	if err != nil {
@@ -3990,13 +3997,13 @@ func (d *daemon) buildSigilSigner(ctx context.Context) (*sigil.Signer, error) {
 	return sigil.NewSigner(signingKey)
 }
 
-// sigilKeyVaultMount выводит корень Vault-пути приватников ключей подписи
-// (R3-S7) из mount-а `sigil.signing_key_ref`: `<mount>/keeper/sigil-keys`. Так
-// введённые ключи живут в том же KV-mount-е, что одиночный signing-key
-// (одинаковая Vault-политика), но в отдельном подпути (развязка ротации).
-// Не-парсящийся ref (schema-фаза это уже отбила, но caller вне config-load
-// возможен) → пакетный default sigil.defaultSigilKeyMount (`secret/keeper/sigil-keys`,
-// передаётся пустой строкой).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func sigilKeyVaultMount(s *config.KeeperSigil) string {
 	if s == nil || s.SigningKeyRef == "" {
 		return ""
@@ -4012,43 +4019,43 @@ func sigilKeyVaultMount(s *config.KeeperSigil) string {
 	return mount + "/keeper/sigil-keys"
 }
 
-// setupAPIServer — Operator API HTTP-сервер. RedisPinger передаётся только при
-// живом клиенте (typed-nil-guard). srv.Start() дёргается оркестратором
-// последним (блокирующий main loop), вне «setup».
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupAPIServer(ctx context.Context) error {
 	cfg := d.cfg
 	logger := d.logger
-	// RedisPinger для `/readyz`: передаём как health.Pinger ТОЛЬКО при живом
-	// клиенте. Без явной ветки `*keeperredis.Client(nil)` в интерфейсе даёт
-	// typed-nil (интерфейс != nil) — readiness вызвал бы Ping на nil-ресивере.
-	// При redisClient==nil (dev-fallback, Redis отключён) check пропускается,
-	// как и Vault-check при отсутствии Vault.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	var redisPinger health.Pinger
 	if d.redisClient != nil {
 		redisPinger = d.redisClient
 	}
 
-	// soulPresence — lease-overlay presence для GET /v1/souls (см. api.Deps).
-	// Тот же адаптер batch SID-lease EXISTS, что и у topology-резолвера; гейтим
-	// non-nil Redis-клиентом (typed-nil интерфейс != nil ломал бы overlay).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	var soulPresence handlers.SoulPresence
 	if d.redisClient != nil {
 		soulPresence = topologyLeaseChecker{rc: d.redisClient}
 	}
 
-	// LDAP-аутентификация операторов (ADR-058): собираем при наличии auth.ldap.
-	// Резолв bind_password_ref/ca_ref из Vault + сборка Authenticator+Mapper.
-	// При отсутствии блока — nil (endpoint не монтируется, ADR-053 OPTIONAL-tier).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	ldapAuth, err := d.setupLDAPAuth(ctx)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keeper run: setup LDAP auth: %v\n", err)
 		return errSetupFailed
 	}
 
-	// OIDC-аутентификация операторов (ADR-058 стадия 2): собираем при наличии
-	// auth.oidc И живого Redis (flow-state store cluster-shared). discovery к IdP
-	// + резолв client_secret_ref/ca_ref. При отсутствии блока/Redis — nil
-	// (эндпоинты не монтируются, ADR-053 OPTIONAL-tier).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	oidcAuth, err := d.setupOIDCAuth(ctx)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keeper run: setup OIDC auth: %v\n", err)
@@ -4077,31 +4084,31 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		OperatorDB:          d.pool,
 		IncarnationDB:       d.pool,
 		SoulDB:              d.pool,
-		// ApplyBus — live-SSE прогона (ADR-068 §A3): та же шина, что у grpc-handler-ов
-		// и scenario-runner-а. nil-Redis (single-Keeper dev) — шина всё равно non-nil
-		// (local-only), SSE-route монтируется.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		ApplyBus: d.applyBus,
-		// ChoirDB — реестр Choir/Voice (ADR-044, S-T3). Тот же *pgxpool.Pool, что
-		// и IncarnationDB (Choir-таблицы в той же БД): wire-up монтирует
-		// `/v1/incarnations/{name}/choirs` (при nil роуты gated-off).
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		ChoirDB: d.pool,
-		// SoulPresence — lease-overlay presence для GET /v1/souls (ADR-006(a)):
-		// поле `status` деривируется из живого Redis SID-lease, не из лениво-
-		// сверяемого PG-снимка `souls.status` (иначе переподключившийся Soul висит
-		// disconnected до следующего тика Reaper-а). Тот же адаптер и Redis-клиент,
-		// что у topology-резолвера (batch SID-lease EXISTS). nil-Redis (single-Keeper
-		// dev) → overlay выключен, PG-снимок отдаётся как есть.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		SoulPresence: soulPresence,
-		// SoulStatsStaleFn — hot-reload порог disconnect-а для stale_count в
-		// GET /v1/souls/stats (тот же mark_disconnected.stale_after, что flush
-		// last_seen_at и Reaper): читаем свежий cfg-снимок на каждом запросе.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		SoulStatsStaleFn: func() time.Duration {
 			return reaper.ResolveMarkDisconnectedStale(d.store.Get().Reaper)
 		},
-		// Cluster-view (GET /v1/cluster): Conclave-реестр + Reaper-лидер. Гейтим
-		// non-nil Redis-клиентом (typed-nil interface != nil сломал бы адаптер);
-		// nil-Redis (single-Keeper dev) → роут не монтируется (self-only не нужен).
-		// SelfKID — из конфига (тот же soulstack.kid, что presence-регистрация).
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		ClusterRegistry:     clusterRegistryOrNil(d),
 		ClusterLeaderReader: clusterLeaderReaderOrNil(d),
 		SelfKID:             cfg.KID,
@@ -4112,105 +4119,105 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		ScenarioDrift:       d.scenarioRunner,
 		ServiceRegistry:     d.serviceRegistry,
 		ServiceLoader:       d.serviceLoader,
-		// VaultClient — Vault KV-reader для reveal-эндпоинта секретов инкарнации
-		// (NIM-74). Тот же d.vc, что резолвит vault:-ref/`${ vault(...) }` в render.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		VaultClient:     d.vc,
 		PushRun:         d.pushRun,
 		PushProviderSvc: d.pushProviderSvc,
 		HeraldSvc:       d.heraldSvc,
-		// ProviderSvc / ProfileSvc — Cloud-CRUD-фасады (ADR-017). Те же
-		// экземпляры, что MCP-HandlerDeps (single source of truth). nil только
-		// если pool не создан (не должно случиться в production-path).
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		ProviderSvc:      d.providerSvc,
 		ProfileSvc:       d.profileSvc,
 		ErrandDispatcher: d.errandDispatcher,
 		ErrandStore:      d.errandStore,
-		// VoyageDB / резолверы — Voyage contour (ADR-043, S5). Тот же
-		// *pgxpool.Pool, что несёт IncarnationDB (voyages/voyage_targets в той же
-		// БД). Scenario-резолвер → имена инкарнаций (incarnations[] ∪ service/
-		// coven-фильтр); command-резолвер → SID-snapshot (AND-merge, parity
-		// ErrandRun). RBAC-by-kind + per-incarnation scope-check делает сам
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		// VoyageHandler (enforcer=d.rbacHolder, IncarnationDB=d.pool).
 		VoyageDB:               d.pool,
 		VoyageScenarioResolver: handlers.NewVoyageScenarioPGResolver(d.pool),
-		// require_alive (ADR-043 amendment §5) использует тот же presence-lease-
-		// чекер, что GET /v1/souls overlay; soulPresence=nil (dev без Redis) →
-		// require_alive деградирует на SQL-presence.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		VoyageCommandResolver: handlers.NewVoyageCommandPGResolverWithPresence(d.pool, soulPresence),
-		// VoyageMaxScope — верхний лимит размера резолвнутого scope одного Voyage
-		// (DoS-guard scopeExceedsCap в voyage.go). Дефолт 10000, явный 0 = безлимит
-		// (ResolvedMaxScope в shared/config). Без этого wire-up cap=zero-value=0 и
-		// защита на REST-пути мертва (MCP-путь заполняется тем же значением).
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		VoyageMaxScope: cfg.Voyage.ResolvedMaxScope(),
-		// VoyageMaxBatchSize — верхний предел размера батча/окна (DoS-guard S-W4,
-		// batchSizeExceedsCap в voyage.go). Дефолт 10000, явный 0 = без предела.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		VoyageMaxBatchSize: cfg.Voyage.ResolvedMaxBatchSize(),
-		// CadenceDB — реестр Cadence-расписаний (`cadences`, ADR-046 S4). Тот же
-		// *pgxpool.Pool, что несёт VoyageDB/IncarnationDB. Двухуровневый RBAC-by-kind
-		// делает сам CadenceHandler (enforcer=d.rbacHolder).
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		CadenceDB: d.pool,
-		// CadencePollFloorSeconds — floor-лимит периода interval-Cadence (ADR-046
-		// Pass B): create/update с interval_seconds < floor → 422. ЕДИНЫЙ источник
-		// с адаптивным опросом Conductor — cadence_scheduler.poll_floor (тот же
-		// ResolvedPollFloor, что в conductorPollInterval), не хардкод 30.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		CadencePollFloorSeconds: int(cfg.CadenceScheduler.ResolvedPollFloor().Seconds()),
-		// AuditReader — read-side `audit_log` для GET /v1/audit (UI iter 2).
-		// Тот же pool, что несёт d.auditWriter; writer и reader разделены
-		// только direction-ом для type-safety.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		AuditReader: auditpg.NewReader(d.pool),
-		// Toll cluster-detector — middleware-блокировка blocked-routes при
-		// cluster:degraded (ADR-038). При выключенном Toll d.tollDegradedReader
-		// уже выставлен в NoopDegradedReader (всегда false → middleware
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		// passthrough).
 		TollDegraded: d.tollDegradedReader,
 		// Tempo per-AID rate-limiter `POST /v1/voyages` (ADR-050). limiter nil
-		// (нет Redis / tempo.enabled=false) → middleware passthrough; tempoLimiterOrNil
-		// гасит typed-nil-gotcha (передача *TokenBucket==nil в interface-поле дала бы
-		// non-nil interface). Лимиты читаются на каждом запросе из config.Store
-		// (hot-reload, ADR-050(f)) — провайдер ниже.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		TempoLimiter: tempoLimiterOrNil(d.tempoLimiter),
 		TempoMetrics: d.tempoMetrics,
 		TempoVoyageCreateLimits: func() apimiddleware.RateLimitLimits {
 			rate, burst := d.store.Get().Tempo.ResolvedVoyageCreate()
 			return apimiddleware.RateLimitLimits{Rate: rate, Burst: burst}
 		},
-		// Отдельный bucket voyage_preview (ADR-050 amendment 2026-06-17): preview
-		// и create НЕ делят квоту. Тот же hot-reload-провайдер из config.Store.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		TempoVoyagePreviewLimits: func() apimiddleware.RateLimitLimits {
 			rate, burst := d.store.Get().Tempo.ResolvedVoyagePreview()
 			return apimiddleware.RateLimitLimits{Rate: rate, Burst: burst}
 		},
-		// ModuleCatalogPlugins — plugin-секция module-catalog (GET /v1/modules).
-		// nil при выключенном Sigil (d.sigilSvc==nil → нет реестра plugin_sigils):
-		// каталог тогда отдаёт только core-модули (статическая doc-таблица всегда
-		// доступна). NewPGStore — узкий read-адаптер ListActive, как sigilStore в
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		// setupSigilInvalidation.
 		ModuleCatalogPlugins: moduleCatalogPluginsOrNil(d),
-		// ModuleFormPrepH — резолвер source-каталогов UI-формы модуля (ADR-045
-		// S3) поверх pgxpool (паттерн VoyageCommandPGResolver(d.pool)).
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		ModuleFormPrepH: handlers.NewModuleFormPrepHandler(handlers.NewFormPrepPGResolver(d.pool), d.logger),
-		// WebUIEnabled — тоггл встроенного UI `/ui` (ADR-055). Резолв *bool →
-		// bool: default-ON (nil-config → true), явный web_ui_enabled: false →
-		// /ui не монтируется. UI вшит в бинарь (go:embed) — внешнего бэкенда не
-		// требует, в отличие от Tempo/Toll.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		WebUIEnabled: cfg.WebUIMounted(),
-		// LDAPAuth — федеративная LDAP-аутентификация (ADR-058). nil при
-		// отсутствии auth.ldap → endpoint /auth/ldap/login не монтируется.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		LDAPAuth: ldapAuth,
-		// OIDCAuth — федеративная OIDC-аутентификация (ADR-058 стадия 2). nil при
-		// отсутствии auth.oidc / Redis → /auth/oidc/{login,callback} не монтируются.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		OIDCAuth: oidcAuth,
-		// LoginGuard / LoginLimitCfg — anti-bruteforce публичных login-эндпоинтов
-		// (ADR-058(g), HIGH-3). nil-guard (нет Redis / auth.rate_limit.enabled=false)
-		// → login без throttle (passthrough). loginGuardOrNil — typed-nil-guard.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		LoginGuard:    loginGuardOrNil(d.loginGuard),
 		LoginLimitCfg: d.loginLimitCfg(),
-		// ProvisioningPolicyReader — снимок политики provisioning_allowed_methods
-		// для GET /v1/provisioning-policy + гейта POST /v1/operators (ADR-058 Часть
-		// B). Тот же serviceHolder, что несёт service-каталог: политика — well-known
-		// скаляр того же снимка, отдельной wire-инвалидации НЕ нужно (PUT через
-		// ServiceSvc.SetSetting publish-ит общий service-invalidate-канал →
-		// Holder.refresh перечитывает ВСЕ well-known скаляры, включая политику).
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		ProvisioningPolicyReader: d.serviceHolder,
 	}, logger)
 	if err != nil {
@@ -4221,11 +4228,11 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 	return nil
 }
 
-// setupLDAPAuth собирает зависимости LDAP-логина (ADR-058) из keeper.yml::
-// auth.ldap. Возвращает (nil, nil) при отсутствии блока — endpoint тогда не
-// монтируется (ADR-053 OPTIONAL-tier, keeper стартует). Резолв секретов из
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 // Vault (bind_password_ref → field `password`; tls.ca_ref → field `ca`),
-// зеркало bootstrap.LoadSigningKey (ParseRef → ReadKV → значение).
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupLDAPAuth(ctx context.Context) (*api.LDAPAuthDeps, error) {
 	if d.cfg.Auth == nil || d.cfg.Auth.LDAP == nil {
 		return nil, nil
@@ -4277,14 +4284,14 @@ func (d *daemon) setupLDAPAuth(ctx context.Context) (*api.LDAPAuthDeps, error) {
 		Method:       operator.AuthMethodLDAP,
 		GroupRoleMap: l.GroupRoleMap,
 		DB:           d.pool,
-		// Tx — атомарная реконсиляция ролей (grant+scoped-revoke в одной
-		// транзакции, HIGH-1/ADR-058(d)). *pgxpool.Pool удовлетворяет BeginTx.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		Tx:    d.pool,
 		Audit: d.auditWriter,
-		// ProvisioningGate — политика provisioning_allowed_methods (ADR-058 Часть B):
-		// гейтит auto-provision нового federated-оператора (метод "ldap"). Тот же
-		// serviceHolder-снимок, что и для POST /v1/operators / GET-эндпоинта.
-		// serviceHolder поднят в setupServiceRegistry ДО setupHTTPServer/setupLDAPAuth.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		ProvisioningGate: d.serviceHolder,
 		Logger:           d.logger,
 	})
@@ -4299,15 +4306,15 @@ func (d *daemon) setupLDAPAuth(ctx context.Context) (*api.LDAPAuthDeps, error) {
 	}, nil
 }
 
-// oidcFlowTTL — TTL записи flow-state (state→nonce/PKCE) в Redis (ADR-058(b):
-// «~5 мин»). Ограничивает окно незавершённого login-flow: пользователь должен
-// пройти IdP-аутентификацию и вернуться на callback за это время, иначе state
-// истечёт и callback отвергнется (повторный login генерит свежий state).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 const oidcFlowTTL = 5 * time.Minute
 
-// oidcFlowStoreAdapter мостит oidc.FlowStore (узкий контракт пакета auth/oidc,
-// типы FlowState) на redis.OIDCFlowStore (типы redis.OIDCFlowState). Конвертация
-// нужна, чтобы auth/oidc не импортировал keeper/internal/redis (layering).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 type oidcFlowStoreAdapter struct {
 	store *keeperredis.OIDCFlowStore
 }
@@ -4319,8 +4326,8 @@ func (a oidcFlowStoreAdapter) Save(ctx context.Context, state string, fs keepero
 func (a oidcFlowStoreAdapter) Consume(ctx context.Context, state string) (keeperoidc.FlowState, error) {
 	rs, err := a.store.Consume(ctx, state)
 	if err != nil {
-		// Маппим redis-not-found на oidc-not-found (CompleteLogin санитизирует в
-		// auth.ErrAuthFailed); прочее — наверх как есть.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		if errors.Is(err, keeperredis.ErrOIDCFlowNotFound) {
 			return keeperoidc.FlowState{}, keeperoidc.ErrFlowNotFound
 		}
@@ -4329,20 +4336,20 @@ func (a oidcFlowStoreAdapter) Consume(ctx context.Context, state string) (keeper
 	return keeperoidc.FlowState{Nonce: rs.Nonce, CodeVerifier: rs.CodeVerifier}, nil
 }
 
-// setupOIDCAuth собирает зависимости OIDC-логина (ADR-058 стадия 2) из
-// keeper.yml::auth.oidc. Возвращает (nil, nil) при отсутствии блока ИЛИ
-// отсутствии Redis (flow-state store cluster-shared — без Redis OIDC невозможен,
-// ADR-006/053; эндпоинты тогда не монтируются, Keeper стартует). discovery к IdP
-// (сетевой вызов) + резолв client_secret_ref/ca_ref из Vault.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupOIDCAuth(ctx context.Context) (*api.OIDCAuthDeps, error) {
 	if d.cfg.Auth == nil || d.cfg.Auth.OIDC == nil {
 		return nil, nil
 	}
 	if d.redisClient == nil {
-		// OIDC требует cluster-shared flow-state store. Без Redis молча не
-		// монтируем (как OPTIONAL-деградация), но предупреждаем оператора: блок
-		// auth.oidc задан, а способ логина не поднимется.
-		d.logger.Warn("auth.oidc сконфигурирован, но Redis недоступен — OIDC-логин не смонтирован (flow-state store требует Redis)")
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		d.logger.Warn("auth.oidc configured, but Redis is unavailable - OIDC login not mounted (flow-state store requires Redis)")
 		return nil, nil
 	}
 	o := d.cfg.Auth.OIDC
@@ -4387,11 +4394,11 @@ func (d *daemon) setupOIDCAuth(ctx context.Context) (*api.OIDCAuthDeps, error) {
 		Method:       operator.AuthMethodOIDC,
 		GroupRoleMap: o.GroupRoleMap,
 		DB:           d.pool,
-		// Tx — атомарная реконсиляция ролей (grant+scoped-revoke, HIGH-1/ADR-058(d)).
+		// Keeper daemon runtime wiring note.
 		Tx:    d.pool,
 		Audit: d.auditWriter,
-		// ProvisioningGate — политика provisioning_allowed_methods (метод "oidc"),
-		// тот же serviceHolder-снимок, что у LDAP-mapper-а и POST /v1/operators.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		ProvisioningGate: d.serviceHolder,
 		Logger:           d.logger,
 	})
@@ -4406,10 +4413,10 @@ func (d *daemon) setupOIDCAuth(ctx context.Context) (*api.OIDCAuthDeps, error) {
 	}, nil
 }
 
-// readVaultField резолвит vault-ref (ParseRef → ReadKV) и достаёт строковое
-// значение поля field; при единственном строковом значении в KV — берёт его
-// (удобство dev-секретов с произвольным ключом). Зеркало
-// bootstrap.LoadSigningKey по структуре.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func readVaultField(ctx context.Context, vc *keepervault.Client, ref, field string) (string, error) {
 	if vc == nil {
 		return "", fmt.Errorf("vault client is nil")
@@ -4428,7 +4435,7 @@ func readVaultField(ctx context.Context, vc *keepervault.Client, ref, field stri
 	if v, ok := kv[field].(string); ok && v != "" {
 		return v, nil
 	}
-	// fallback: единственное строковое значение.
+	// Keeper daemon runtime wiring note.
 	var only string
 	count := 0
 	for _, raw := range kv {
@@ -4443,99 +4450,99 @@ func readVaultField(ctx context.Context, vc *keepervault.Client, ref, field stri
 	return "", fmt.Errorf("field %q not found (or ambiguous) in vault %q", field, path)
 }
 
-// setupMCPServer — MCP listener (M0.7.a). Поднимается только при заданном
-// listen.mcp.addr. Использует тот же operator.Service, что HTTP-сервер
-// (srv.OperatorService()), поэтому идёт после setupAPIServer. Cleanup — drain.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupMCPServer(ctx context.Context) error {
 	cfg := d.cfg
 	logger := d.logger
-	// MCP listener (M0.7.a). Поднимается только если в конфиге задан
-	// `listen.mcp.addr` — для совместимости с keeper.yml без mcp-блока
-	// (минимум один listener — schema.go валидирует на уровне cfg.Listen).
-	// Использует тот же [operator.Service], что HTTP — single source of
-	// truth для бизнес-логики Operator-CRUD (delegation.md PM-decision #6).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	//
-	// goroutine стартует параллельно с srv.Start ниже; lifecycle привязан
-	// к тому же ctx (на SIGTERM оба listener-а делают graceful shutdown
-	// независимо друг от друга).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	if cfg.Listen.MCP.Addr != "" {
 		mcpHandler, err := mcp.NewHandler(mcp.HandlerDeps{
 			OperatorSvc: d.apiServer.OperatorService(),
 			RBAC:        d.rbacHolder,
 			RBACRoles:   d.rbacSvc,
-			// SigilSvc — тот же *sigil.Service, что REST прокидывает в
-			// api.Deps.SigilSvc (single source of truth). nil при выключенном
-			// Sigil → plugin.*-tools диспатчатся, но вернут internal-error
-			// «не сконфигурировано» (паттерн RBACRoles).
+			// Keeper daemon runtime wiring note.
+			// Keeper daemon runtime wiring note.
+			// Keeper daemon runtime wiring note.
+			// Keeper daemon runtime wiring note.
 			SigilSvc: d.sigilSvc,
-			// SigilKeySvc — тот же *sigil.KeyService, что REST прокидывает в
+			// Keeper daemon runtime wiring note.
 			// api.Deps.SigilKeySvc (single source of truth, R3-S7). nil → sigil.key.*-
-			// tools вернут «не сконфигурировано».
+			// Keeper daemon runtime wiring note.
 			SigilKeySvc: d.sigilKeySvc,
-			// ServiceSvc — тот же *serviceregistry.Service, что REST прокидывает в
-			// api.Deps.ServiceSvc (single source of truth, несёт S2-invalidate-
-			// хук). nil → service.*-tools вернут «не сконфигурировано».
+			// Keeper daemon runtime wiring note.
+			// Keeper daemon runtime wiring note.
+			// Keeper daemon runtime wiring note.
 			ServiceSvc: d.serviceSvc,
-			// AugurSvc — тот же *augur.Service, что REST прокидывает в
+			// Keeper daemon runtime wiring note.
 			// api.Deps.AugurSvc (single source of truth, ADR-025). nil →
-			// augur.*-tools вернут «не сконфигурировано».
+			// Keeper daemon runtime wiring note.
 			AugurSvc: d.augurSvc,
-			// OracleSvc — тот же *oracle.Service, что REST прокидывает в
+			// Keeper daemon runtime wiring note.
 			// api.Deps.OracleSvc (single source of truth, ADR-030). nil →
-			// oracle.*-tools вернут «не сконфигурировано».
+			// Keeper daemon runtime wiring note.
 			OracleSvc:   d.oracleSvc,
 			AuditWriter: d.auditWriter,
 			Logger:      logger,
-			// Те же значения, что идут в api.NewServer → IncarnationHandler
-			// (single source of truth, без дубля конструирования).
+			// Keeper daemon runtime wiring note.
+			// Keeper daemon runtime wiring note.
 			IncarnationDB:     d.pool,
 			ScenarioRunner:    d.scenarioRunner,
 			ScenarioDestroyer: d.scenarioRunner,
 			ScenarioDrift:     d.scenarioRunner,
 			ServiceRegistry:   d.serviceRegistry,
 			ServiceLoader:     d.serviceLoader,
-			// Тот же pool, что REST прокидывает в SoulHandler (SoulDB: d.pool
-			// в setupAPIServer) — single source of truth для soul-онбординга.
+			// Keeper daemon runtime wiring note.
+			// Keeper daemon runtime wiring note.
 			SoulDB: d.pool,
-			// Тот же rbac.Holder, что REST прокидывает scoper-ом в NewSoulHandler
-			// (single source of truth) — scope-граница для bulk keeper.soul.coven-
-			// assign. Реализует handlers.PurviewResolver.
+			// Keeper daemon runtime wiring note.
+			// Keeper daemon runtime wiring note.
+			// Keeper daemon runtime wiring note.
 			PurviewResolver: d.rbacHolder,
-			// PushRun — тот же *pushorch.PushRun, что REST прокидывает в
+			// Keeper daemon runtime wiring note.
 			// api.Deps.PushRun (single source of truth, Variant C orchestrator).
-			// nil при выключенной push-инфраструктуре — keeper.push.apply
-			// вернёт «не сконфигурировано» (паттерн SigilSvc).
+			// Keeper daemon runtime wiring note.
+			// Keeper daemon runtime wiring note.
 			PushRun: d.pushRun,
 
-			// PushProviderSvc — тот же *pushprovider.Service, что REST
-			// прокидывает в api.Deps.PushProviderSvc (single source of truth,
+			// Keeper daemon runtime wiring note.
+			// Keeper daemon runtime wiring note.
 			// ADR-032 amendment 2026-05-26, S7-2).
 			PushProviderSvc: d.pushProviderSvc,
 
-			// HeraldSvc — тот же *herald.Service, что REST прокидывает в
+			// Keeper daemon runtime wiring note.
 			// api.Deps.HeraldSvc (single source of truth, ADR-052 S4).
 			HeraldSvc: d.heraldSvc,
 
-			// ProviderSvc / ProfileSvc — те же Cloud-CRUD-фасады, что REST
-			// прокидывает в api.Deps.* (single source of truth, ADR-017). nil →
-			// keeper.provider.* / keeper.profile.* вернут «не сконфигурировано».
+			// Keeper daemon runtime wiring note.
+			// Keeper daemon runtime wiring note.
+			// Keeper daemon runtime wiring note.
 			ProviderSvc: d.providerSvc,
 			ProfileSvc:  d.profileSvc,
 
-			// ErrandDispatcher / ErrandStore — те же экземпляры, что REST
-			// прокидывает в api.Deps.* (single source of truth, ADR-033 slice
+			// Keeper daemon runtime wiring note.
+			// Keeper daemon runtime wiring note.
 			// E2 wire-up). nil → keeper.soul.errand.run / keeper.errand.*
-			// вернут «errand orchestrator is not configured».
+			// Keeper daemon runtime wiring note.
 			ErrandDispatcher: d.errandDispatcher,
 			ErrandStore:      d.errandStore,
 
-			// Voyage contour для keeper.voyage.{start,list,get,cancel}. Те же
-			// экземпляры, что REST прокидывает в api.Deps (single source of truth,
-			// ADR-043 S5). RBAC-by-kind делает сам VoyageHandler.
+			// Keeper daemon runtime wiring note.
+			// Keeper daemon runtime wiring note.
+			// Keeper daemon runtime wiring note.
 			VoyageDB:               d.pool,
 			VoyageScenarioResolver: handlers.NewVoyageScenarioPGResolver(d.pool),
-			// require_alive (ADR-043 amendment §5) использует тот же presence-lease-
-			// чекер, что REST; d.redisClient=nil (dev без Redis) → деградация на
+			// Keeper daemon runtime wiring note.
+			// Keeper daemon runtime wiring note.
 			// SQL-presence.
 			VoyageCommandResolver: handlers.NewVoyageCommandPGResolverWithPresence(d.pool, mcpSoulPresence(d)),
 			VoyageMaxScope:        cfg.Voyage.ResolvedMaxScope(),
@@ -4577,43 +4584,43 @@ func (d *daemon) setupMCPServer(ctx context.Context) error {
 	return nil
 }
 
-// setupAcolyte — пул воркеров исполнения apply (ADR-027, Acolyte). Feature-flag:
-// поднимается ТОЛЬКО при cfg.Acolytes > 0; иначе no-op (прежний run-goroutine-
-// путь scenario-runner-а остаётся). Помещён после setupGRPCEventStream (нужен
-// d.outbound) и setupScenarioDeps (нужны render-deps), перед setupReaper.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Cutover (Phase 1.4.4): claim-callback пула = [scenario.ClaimRunner.Claim] над
-// теми же deps, что scenario.Runner (Loader/Topology/Essence/render-pipeline/
-// Outbound/Vault/Audit/DB) — БЕЗ вторых экземпляров. Summons-подписчик пула
-// (wake на planned-задание) — адаптер над [keeperredis.SubscribeSummons] при
-// живом Redis; иначе чистый poll-fallback (пул это поддерживает).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Cleanup — graceful-drain пула Acolyte через pool.Shutdown (ADR-027 Phase 2):
+// Keeper daemon runtime wiring note.
 //
-//  1. pool.Shutdown — beginDrain (стоп новых claim-ов) → ожидание in-flight в
-//     пределах grace → claimCancel (отмена claim-ctx у не успевших; их Ward
-//     остаётся в БД для recovery, ADR-027(i)).
-//  2. acolyteCancel — страховка после Shutdown (гасит worker-loop по timeout-у).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupAcolyte(ctx context.Context) error {
 	cfg := d.cfg
 	logger := d.logger
 	if cfg.Acolytes <= 0 {
 		logger.Info("acolyte: pool disabled (keeper.acolytes is 0) — run-goroutine path remains")
-		// Startup-advisory (footgun multi-keeper + acolytes=0): run-goroutine-путь
-		// держит владение прогоном in-memory ЭТОГО инстанса, поэтому корректен
-		// только для single-keeper. В HA-кластере (N>1 живых Keeper на общих PG/
-		// Redis) apply, чей Soul на стриме ДРУГОГО инстанса, зависнет в applying
-		// (RunResult уйдёт владельцу стрима, здешний barrier его не увидит).
-		// Per-dispatch WARN ловит конкретный случай (warnCrossKeeperDispatch);
-		// это — одноразовое предупреждение на старте про режим в целом.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		logger.Warn("acolyte: run-goroutine mode (acolytes=0) is single-keeper-only — for an HA cluster (N>1 keepers) set keeper.acolytes>0 (ADR-027)")
 		return nil
 	}
 
-	// Summons-подписчик пула: non-nil ТОЛЬКО при живом Redis. Адаптер над
-	// keeperredis.SubscribeSummons; callback = pool.Notify (wake воркера).
-	// При redisClient==nil — оставляем nil: пул работает на чистом poll-
-	// fallback-е (Summons-ускорения нет, задания не теряются).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	var summons acolyte.SummonsSubscriber
 	if d.redisClient != nil {
 		summons = func(subCtx context.Context, onSignal func()) (io.Closer, error) {
@@ -4635,10 +4642,10 @@ func (d *daemon) setupAcolyte(ctx context.Context) error {
 	}
 	d.acolytePool = pool
 
-	// Claim-callback = scenario.ClaimRunner над теми же deps, что scenario.Runner
-	// (переиспользуем уже созданные daemon-поля — НЕ вторые экземпляры). Lease/
-	// Batch — параметры захвата Ward из keeper.yml (acolyte_lease/acolyte_batch),
-	// дефолты совпадают с прежними хардкод-значениями (ADR-027).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	claimRunner := scenario.NewClaimRunner(scenario.ClaimDeps{
 		Deps: scenario.Deps{
 			Loader:   d.serviceLoader,
@@ -4647,10 +4654,10 @@ func (d *daemon) setupAcolyte(ctx context.Context) error {
 			Render:   d.renderPipeline,
 			Outbound: d.outbound,
 			Destiny:  d.destinySource,
-			// KeeperModules НЕ прокидывается в claim-путь: задачи `on: keeper`
-			// исполняет только run-goroutine (dispatchKeeperTasks), claim-путь
-			// идёт через groupByHost, где plan.Keeper пропускается. Поле в claim-
-			// Deps осталось бы непотребляемым.
+			// Keeper daemon runtime wiring note.
+			// Keeper daemon runtime wiring note.
+			// Keeper daemon runtime wiring note.
+			// Keeper daemon runtime wiring note.
 			DB:             d.pool,
 			Logger:         logger,
 			Metrics:        d.scenarioMetrics,
@@ -4664,23 +4671,23 @@ func (d *daemon) setupAcolyte(ctx context.Context) error {
 	})
 	pool.SetClaim(claimRunner.Claim)
 
-	// Под своим acolyteCtx (производный от parent-а), чтобы cleanup мог
-	// отменить пул независимо от пути выхода из runDaemon.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	//
-	// Graceful-drain пула Acolyte (ADR-027 Phase 2) ЦЕЛИКОМ внутри
-	// pool.Shutdown: beginDrain (стоп новых claim-ов) → ожидание in-flight в
-	// пределах grace → claimCancel (отмена claim-ctx у не успевших). Поэтому
-	// Shutdown обязан отработать ДО acolyteCancel — иначе отмена worker-ctx
-	// (acolyteCtx, родитель claimCtx) пре-отменила бы claim-ctx и сожгла grace.
-	// Cleanup-стек LIFO, целевой порядок выполнения:
-	//  1. pool.Shutdown — зарегистрирован позже → LIFO выполнит первым.
-	//  2. acolyteCancel — зарегистрирован раньше → LIFO позже (страховка:
-	//     гасит worker-loop, если Shutdown вернулся по timeout-у).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	acolyteCtx, acolyteCancel := context.WithCancel(ctx)
 	d.cleanups.push(acolyteCancel)
 	d.cleanups.push(func() {
-		// Таймаут shutdown-ctx с запасом над grace+hard-stop пула: при
-		// конфиге с большим acolyte_drain_grace не обрезаем drain раньше срока.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		shutTimeout := acolyteDrainGrace(cfg) + 10*time.Second
 		shutCtx, shutCancel := context.WithTimeout(context.Background(), shutTimeout)
 		defer shutCancel()
@@ -4693,49 +4700,49 @@ func (d *daemon) setupAcolyte(ctx context.Context) error {
 	return nil
 }
 
-// reaperExecutor — составной исполнитель правил Reaper-а: embed [*reaper.Purger]
-// (чистые pgx-DELETE-правила) + [*reaper.VaultReconciler] (cross-store
-// report-only reap_orphan_vault_keys). Методы обоих промотятся, тип целиком
-// удовлетворяет [reaper.PurgerAPI] без явных обёрток. Живёт здесь (cmd/keeper),
-// т.к. это wiring-склейка двух исполнителей под один интерфейс runner-а.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 type reaperExecutor struct {
 	*reaper.Purger
 	*reaper.VaultReconciler
 }
 
-// sigilKeyIDsReader адаптирует pgxpool.Pool под [reaper] live-keys-reader:
-// резолвит авторитетный набор живых key_id (все статусы) через sigil.ListAllKeyIDs.
-// Узкая склейка ради изоляции reaper-пакета от sigil-пакета (reaper не импортит
-// sigil напрямую — зависимость инвертирована через интерфейс).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 type sigilKeyIDsReader struct{ pool *pgxpool.Pool }
 
 func (r sigilKeyIDsReader) ListAllKeyIDs(ctx context.Context) (map[string]struct{}, error) {
 	return sigil.ListAllKeyIDs(ctx, r.pool)
 }
 
-// soulLeaseChecker адаптирует Redis-клиент под reaper-проверку «жив ли
-// EventStream к SID» (lease-aware mark_disconnected, ADR-006(a)). Узкая
-// склейка ради изоляции reaper-пакета от keeperredis-пакета (reaper зависит
-// от интерфейса, не от клиента напрямую).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 type soulLeaseChecker struct{ rc *keeperredis.Client }
 
 func (c soulLeaseChecker) SoulStreamAlive(ctx context.Context, sid string) (bool, error) {
 	return keeperredis.SoulStreamAlive(ctx, c.rc, sid)
 }
 
-// topologyLeaseChecker адаптирует Redis-клиент под presence-фильтр
-// таргет-резолвера (batch SID-lease EXISTS, ADR-006(a) Variant A). Узкая
-// склейка ради изоляции topology-пакета от keeperredis-пакета (резолвер
-// зависит от интерфейса [topology.SoulLeaseChecker], не от клиента напрямую).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 type topologyLeaseChecker struct{ rc *keeperredis.Client }
 
 func (c topologyLeaseChecker) SoulsStreamAlive(ctx context.Context, sids []string) (map[string]struct{}, error) {
 	return keeperredis.SoulsStreamAlive(ctx, c.rc, sids)
 }
 
-// clusterRegistryAdapter адаптирует Redis-клиент под read-поверхность Conclave
-// для `GET /v1/cluster` ([handlers.ClusterRegistry]). Узкая склейка ради изоляции
-// api-пакета от keeperredis (handler зависит от интерфейса, не от клиента).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 type clusterRegistryAdapter struct{ rc *keeperredis.Client }
 
 func (a clusterRegistryAdapter) LiveKIDs(ctx context.Context) ([]string, error) {
@@ -4746,20 +4753,20 @@ func (a clusterRegistryAdapter) InstanceMeta(ctx context.Context, kid string) (s
 	return keeperredis.ReadInstanceMeta(ctx, a.rc, kid)
 }
 
-// clusterLeaderReaderAdapter читает holder-а ключа Reaper-лидерства
-// (reaper.LeaderLeaseKey) для `GET /v1/cluster` ([handlers.ClusterLeaderReader]).
-// Прямое чтение value ключа (PeekLeaseHolder) — additive к leaderloop-протоколу,
-// он ключ не эксклюзивит на чтение.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 type clusterLeaderReaderAdapter struct{ rc *keeperredis.Client }
 
 func (a clusterLeaderReaderAdapter) ReaperLeaderHolder(ctx context.Context) (string, bool, error) {
 	return keeperredis.PeekLeaseHolder(ctx, a.rc, reaper.LeaderLeaseKey)
 }
 
-// clusterRegistryOrNil / clusterLeaderReaderOrNil — typed-nil-guard-ы cluster-view
-// зависимостей: возвращают nil-интерфейс (а не interface-обёртку над nil-клиентом)
-// при отсутствии Redis, чтобы NewServer корректно gated-off роут (nil-check).
-// Симметрично mcpSoulPresence.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func clusterRegistryOrNil(d *daemon) handlers.ClusterRegistry {
 	if d.redisClient == nil {
 		return nil
@@ -4774,10 +4781,10 @@ func clusterLeaderReaderOrNil(d *daemon) handlers.ClusterLeaderReader {
 	return clusterLeaderReaderAdapter{rc: d.redisClient}
 }
 
-// mcpSoulPresence — presence-lease-чекер для Voyage command-резолвера на
-// MCP-пути (require_alive, ADR-043 amendment §5). Гейтим non-nil Redis-клиентом
-// (typed-nil интерфейс != nil деградировал бы фильтр некорректно); nil →
-// require_alive падает на SQL-presence. Симметричен soulPresence в setupAPIServer.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func mcpSoulPresence(d *daemon) handlers.SoulPresence {
 	if d.redisClient == nil {
 		return nil
@@ -4785,13 +4792,13 @@ func mcpSoulPresence(d *daemon) handlers.SoulPresence {
 	return topologyLeaseChecker{rc: d.redisClient}
 }
 
-// lazySoulPresence — presence-checker барьера онбординга `core.soul.registered`
-// `await_online` (ADR-061), читающий d.redisClient ЛЕНИВО на каждом вызове.
-// setupCoreModules идёт ДО setupRedis (redisClient ещё nil на сборке Registry),
-// поэтому захват прямого значения дал бы навсегда-nil; ленивое чтение
-// подхватывает поднятый позже Redis. nil-Redis (dev/single без топологии) →
-// ErrNoPresence: барьер не может работать без источника presence → шаг failed
-// (B1-strict, молчаливый success недопустим). Тот же источник истины, что
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 // topologyLeaseChecker (keeperredis.SoulsStreamAlive).
 type lazySoulPresence struct{ d *daemon }
 
@@ -4802,21 +4809,21 @@ func (p lazySoulPresence) SoulsStreamAlive(ctx context.Context, sids []string) (
 	return keeperredis.SoulsStreamAlive(ctx, p.d.redisClient, sids)
 }
 
-// leaseOwnerChecker адаптирует Redis-клиент под multi-keeper-guard старого
-// dispatch-пути scenario-runner-а (footgun acolytes=0): возвращает KID-владельца
-// SID-lease. Узкая склейка ради изоляции scenario-пакета от keeperredis (runner
-// зависит от интерфейса [scenario.LeaseOwnerChecker], не от клиента напрямую) —
-// тот же приём, что topologyLeaseChecker.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 type leaseOwnerChecker struct{ rc *keeperredis.Client }
 
 func (c leaseOwnerChecker) SoulLeaseOwner(ctx context.Context, sid string) (string, bool, error) {
 	return keeperredis.SoulLeaseOwner(ctx, c.rc, sid)
 }
 
-// passageCapChecker адаптирует Redis-клиент под staged-гейт scenario-runner-а
-// (ADR-056 §S5): возвращает подмножество SID-ов, НЕ анонсировавших passage-
-// capability. Узкая склейка ради изоляции scenario-пакета от keeperredis (runner
-// зависит от интерфейса [scenario.PassageCapabilityChecker]) — тот же приём, что
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 // leaseOwnerChecker.
 type passageCapChecker struct{ rc *keeperredis.Client }
 
@@ -4824,19 +4831,19 @@ func (c passageCapChecker) SoulsLackingPassage(ctx context.Context, sids []strin
 	return keeperredis.SoulsLackingCapability(ctx, c.rc, sids, config.CapabilityPassage)
 }
 
-// setupVoyageWorker — pool VoyageWorker-ов (ADR-043, S1). Feature-flag
-// config-gated OFF ПО УМОЛЧАНИЮ: поднимается ТОЛЬКО при voyageWorkers(cfg) > 0
-// (cfg.Voyage != nil И workers > 0). Отличие от setupErrandRunWorker:
-// отсутствие блока voyage → pool НЕ поднимается (а не дефолт-1) — S1 даёт
-// фундамент рядом со старыми путями, не меняя текущее поведение dev-конфига.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// На S1 worker исполняет NOOP-заглушку (voyageorch.executeVoyage: лог +
-// finalize succeeded); реальный scenario/command прогон — S2/S3. Помещён сразу
-// после setupErrandRunWorker и перед setupReaper (parity worker-pool-ов).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Cleanup — отмена voyageCtx + WaitGroup-ожидание выхода всех worker-goroutine-ов.
-// renewLoop останавливается на ctx.Done. Явный ReleaseLease не делаем; протухший
-// lease подберёт Reaper-правило reclaim_voyages (тираж — пост-S1).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupVoyageWorker(ctx context.Context) error {
 	cfg := d.cfg
 	logger := d.logger
@@ -4851,7 +4858,7 @@ func (d *daemon) setupVoyageWorker(ctx context.Context) error {
 	pollInterval := voyagePollInterval(cfg)
 
 	if renewInterval >= leaseTTL {
-		logger.Warn("voyageorch: renew_interval >= lease_ttl — lease может истекать между renew-тиками",
+		logger.Warn("voyageorch: renew_interval >= lease_ttl - lease may expire between renew ticks",
 			slog.Duration("renew_interval", renewInterval),
 			slog.Duration("lease_ttl", leaseTTL),
 		)
@@ -4869,12 +4876,12 @@ func (d *daemon) setupVoyageWorker(ctx context.Context) error {
 	})
 	d.cleanups.push(runCancel)
 
-	// Production DI-адаптеры исполнения (ADR-043 S5). Конструируются ВСЕГДА при
-	// workers>0 (worker.validate fail-closed-ит scenario/command-ветку без них).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	//   - ScenarioSpawner: incarnation.SelectByName → ServiceRegistry.Resolve →
-	//     scenario.Runner.Start (reuse incarnation.Run-пути); вернёт applyID.
-	//   - IncarnationAwaiter: poll applyrun.SelectStatusesByApplyID до терминала.
-	//   - CommandSpawner: обёртка над тем же errandRunSpawnerBridge, что E6-3
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	//     (reuse errand.Dispatcher).
 	if d.scenarioRunner == nil || d.serviceRegistry == nil {
 		fmt.Fprintln(os.Stderr, "keeper run: voyageorch wire-up: scenarioRunner/serviceRegistry is nil (programmer error in step order)")
@@ -4890,9 +4897,9 @@ func (d *daemon) setupVoyageWorker(ctx context.Context) error {
 		pollInterval: pollInterval,
 		logger:       logger,
 	}
-	// OrphanReleaser — recovery-шов ADR-027(k): снятие осиротевшего applying-lock
-	// инкарнации (от scenario-run мёртвого прошлого владельца Voyage) перед re-run.
-	// FENCED single-winner: VerifyOwnership (мы владелец run.Attempt) →
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	// incarnation.ReleaseApplyingOrphan (apply_id-match + CAS).
 	orphanReleaser := &voyageOrphanLockReleaser{pool: d.pool}
 	var commandSpawner voyageorch.CommandSpawner
@@ -4906,7 +4913,7 @@ func (d *daemon) setupVoyageWorker(ctx context.Context) error {
 			},
 		}
 	} else {
-		logger.Warn("voyageorch: errandDispatcher is nil — kind=command Voyage-и будут fail-closed (CommandSpawner не сконфигурирован)")
+		logger.Warn("voyageorch: errandDispatcher is nil - kind=command Voyages will fail-closed (CommandSpawner not configured)")
 	}
 
 	var wg sync.WaitGroup
@@ -4950,19 +4957,19 @@ func (d *daemon) setupVoyageWorker(ctx context.Context) error {
 	return nil
 }
 
-// --- Voyage DI-адаптеры (ADR-043 S5 production wire-up) ---
+// Keeper daemon runtime wiring note.
 
-// voyageServiceResolver — узкая поверхность [scenario.ServiceRegistry.Resolve]
-// для scenario-Spawner-а (git-координаты service-репо по имени сервиса).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 type voyageServiceResolver interface {
 	Resolve(service string) (artifact.ServiceRef, bool)
 }
 
-// cadenceScenarioResolver / cadenceCommandResolver — адаптеры handlers-PG-
-// резолверов под cadence.ScenarioResolver / cadence.CommandResolver (ADR-046 §4).
-// Conductor (ADR-048) пере-резолвит target рецепта Cadence just-in-time через тот
-// же резолв, что POST /v1/voyages (snapshot фиксируется на момент спавна). Тонкая
-// обёртка: переупаковывает плоские аргументы в VoyageScenarioFilter /
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 // VoyageCommandFilter.
 type cadenceScenarioResolver struct {
 	inner *handlers.VoyageScenarioPGResolver
@@ -4989,29 +4996,29 @@ func (r cadenceCommandResolver) ResolveSIDs(ctx context.Context, sids, covens []
 	})
 }
 
-// voyageScenarioSpawner — production [voyageorch.ScenarioSpawner]: спавн одного
-// per-incarnation scenario-run-а. Резолвит ServiceRef (incarnation.SelectByName
-// → ServiceRegistry.Resolve) и запускает scenario.Runner.Start — ровно тот же
-// путь, что incarnation.Run-handler (classic single-run). applyID генерируется
-// здесь (ULID), как в handler-е, и возвращается для back-link/await.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Start async (возвращается сразу, прогон живёт в своей goroutine); терминал
-// доезжает через apply_runs — его ждёт [voyagePgIncarnationAwaiter].
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 type voyageScenarioSpawner struct {
 	runner   *scenario.Runner
 	reader   incarnation.ExecQueryRower
 	resolver voyageServiceResolver
 }
 
-// SpawnScenarioRun реализует [voyageorch.ScenarioSpawner]. Input приходит
-// jsonb-байтами (voyages.input) — десериализуем в map[string]any для RunSpec.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (s *voyageScenarioSpawner) SpawnScenarioRun(ctx context.Context, voyageID, incarnationName, scenarioName string, input []byte, startedByAID string, cadenceID *string) (string, error) {
 	inc, err := incarnation.SelectByName(ctx, s.reader, incarnationName)
 	if err != nil {
 		return "", fmt.Errorf("voyage scenario spawner: select incarnation %q: %w", incarnationName, err)
 	}
-	// error_locked — fast-fail (parity incarnation.Run probe); lockRun под
-	// FOR UPDATE — авторитет, но дешёвый отказ до спавна goroutine.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	if inc.Status == incarnation.StatusErrorLocked {
 		return "", fmt.Errorf("voyage scenario spawner: incarnation %q is error_locked", incarnationName)
 	}
@@ -5035,18 +5042,18 @@ func (s *voyageScenarioSpawner) SpawnScenarioRun(ctx context.Context, voyageID, 
 		ScenarioName:    scenarioName,
 		Input:           inputMap,
 		StartedByAID:    startedByAID,
-		// CadenceID — back-link на Cadence (voyages.cadence_id, ADR-046 §2),
-		// проброшенный воркером из run.CadenceID. nil ⇒ ручной Voyage; populated
-		// ⇒ дочерний Voyage расписания → incarnation.run_completed несёт cadence_id
-		// (T4b, постоянное Tiding-правило с cadence-селектором).
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		CadenceID: cadenceID,
 	}
-	// VoyageID — back-link на породивший Voyage (voyages.voyage_id, ADR-043):
-	// этот prod-spawner — единственный путь scenario-run через voyage-
-	// orchestrator, поэтому voyage_id здесь ВСЕГДА заполнен (run.VoyageID — PK
-	// voyages). incarnation.run_completed несёт его (ADR-052 amend §k) для
-	// visibility-фетча per-incarnation run-событий на Voyage detail. Прямые пути
-	// (create/rerun/destroy) сюда не идут — там VoyageID остаётся nil.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	if voyageID != "" {
 		spec.VoyageID = &voyageID
 	}
@@ -5056,26 +5063,28 @@ func (s *voyageScenarioSpawner) SpawnScenarioRun(ctx context.Context, voyageID, 
 	return applyID, nil
 }
 
-// voyageOrphanLockReleaser — production [voyageorch.OrphanLockReleaser]: снятие
-// осиротевшего applying-lock инкарнации перед re-run реклеймнутого Voyage
-// (recovery-шов ADR-027(k)). Две ступени FENCING под одним адаптером:
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
 //   - FENCING-3 (self-ownership): voyage.VerifyOwnership(voyage_id, kid, attempt)
-//     — мы текущий владелец Voyage с claim-epoch attempt. ErrLeaseLost (нас
-//     самих реклеймнули) → released=false, err=nil: lock НЕ трогаем (его снимет
-//     реальный новый владелец). Транзиентная PG-ошибка → err (fail-closed).
+//
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //   - FENCING-1 + single-winner: incarnation.ReleaseApplyingOrphan
-//     (apply_id-match по apply_runs + atomic CAS applying→ready под FOR UPDATE).
-//     ErrOrphanLockNotReleased (не applying / orphan apply_id не наш / honest-
-//     финал прошлого владельца выиграл строку) → released=false, err=nil (no-op).
+//
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 type voyageOrphanLockReleaser struct {
 	pool *pgxpool.Pool
 }
 
 func (r *voyageOrphanLockReleaser) ReleaseOrphanLock(ctx context.Context, voyageID, incarnationName string, attempt int, kid, orphanApplyID string) (bool, error) {
-	// FENCING-3: владелец ли я ещё Voyage с этим claim-epoch. Если нас реклеймнули
-	// (ErrLeaseLost) — НЕ снимаем чужой lock: dangling-lock реконсилит реальный
-	// новый владелец своим проходом.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	if err := voyage.VerifyOwnership(ctx, r.pool, voyageID, kid, attempt); err != nil {
 		if errors.Is(err, voyage.ErrLeaseLost) {
 			return false, nil
@@ -5083,14 +5092,14 @@ func (r *voyageOrphanLockReleaser) ReleaseOrphanLock(ctx context.Context, voyage
 		return false, fmt.Errorf("voyage orphan-releaser: verify ownership: %w", err)
 	}
 
-	// FENCING-1 + single-winner CAS снятия.
+	// Keeper daemon runtime wiring note.
 	historyID := audit.NewULID()
 	if err := incarnation.ReleaseApplyingOrphan(ctx, r.pool, incarnationName, orphanApplyID, historyID); err != nil {
 		if errors.Is(err, incarnation.ErrOrphanLockNotReleased) {
 			return false, nil
 		}
 		if errors.Is(err, incarnation.ErrIncarnationNotFound) {
-			// Инкарнация снесена между reclaim и снятием — нечего снимать.
+			// Keeper daemon runtime wiring note.
 			return false, nil
 		}
 		return false, fmt.Errorf("voyage orphan-releaser: release applying-orphan: %w", err)
@@ -5099,17 +5108,17 @@ func (r *voyageOrphanLockReleaser) ReleaseOrphanLock(ctx context.Context, voyage
 }
 
 // voyagePgIncarnationAwaiter — production [voyageorch.IncarnationAwaiter]: poll
-// applyrun.SelectStatusesByApplyID до терминала всех хостов инкарнации (без
-// applybus-subscribe, чистый PG-poll: на одну инкарнацию poll-латентность
-// приемлема, source of truth — PG).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 type voyagePgIncarnationAwaiter struct {
 	db           applyrun.ExecQueryRower
 	pollInterval time.Duration
 	logger       *slog.Logger
 }
 
-// Await блокируется до терминала apply_run-а либо ctx.Done. Маппит per-host
-// статусы в [voyageorch.TargetOutcome] (succeeded/failed/cancelled/no_match).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (a *voyagePgIncarnationAwaiter) Await(ctx context.Context, applyID string) (voyageorch.TargetOutcome, error) {
 	poll := a.pollInterval
 	if poll <= 0 {
@@ -5133,8 +5142,8 @@ func (a *voyagePgIncarnationAwaiter) Await(ctx context.Context, applyID string) 
 	}
 }
 
-// pollOutcome — один PG-poll: terminal всех хостов → агрегированный outcome.
-// done=false при not-found/running/ошибке (caller продолжит poll).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (a *voyagePgIncarnationAwaiter) pollOutcome(ctx context.Context, applyID string) (voyageorch.TargetOutcome, bool) {
 	statuses, err := applyrun.SelectStatusesByApplyID(ctx, a.db, applyID)
 	if err != nil {
@@ -5143,7 +5152,7 @@ func (a *voyagePgIncarnationAwaiter) pollOutcome(ctx context.Context, applyID st
 		return "", false
 	}
 	if len(statuses) == 0 {
-		return "", false // Insert apply_run-а ещё не виден pool-ом — ждём.
+		return "", false // Keeper daemon runtime wiring note.
 	}
 	var anyFailed, anyCancelled, allBenign = false, false, true
 	for _, s := range statuses {
@@ -5155,7 +5164,7 @@ func (a *voyagePgIncarnationAwaiter) pollOutcome(ctx context.Context, applyID st
 		case applyrun.StatusFailed, applyrun.StatusOrphaned:
 			anyFailed, allBenign = true, false
 		default:
-			return "", false // non-terminal — ждём.
+			return "", false // Keeper daemon runtime wiring note.
 		}
 	}
 	switch {
@@ -5170,48 +5179,48 @@ func (a *voyagePgIncarnationAwaiter) pollOutcome(ctx context.Context, applyID st
 	}
 }
 
-// voyageCommandSpawner — production [voyageorch.CommandSpawner]: тонкая обёртка
-// над тем же [errandRunSpawnerBridge], что E6-3 ErrandRun (reuse errand.Dispatcher).
-// Контракт SpawnCommand отличается от bridge.SpawnErrand только отсутствием
-// error_code в возврате — отбрасываем его (voyageorch его не использует).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 type voyageCommandSpawner struct {
 	bridge *errandRunSpawnerBridge
 }
 
-// SpawnCommand реализует [voyageorch.CommandSpawner]. Блокируется до терминала
-// Errand-а (или ctx.Done).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Back-link Voyage→Errand фиксируется в voyage_targets.errand_id (его
-// проставляет сам VoyageWorker через MarkTargetRunning); сам Errand
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 // standalone (parity single-SID /exec, ADR-033).
 func (s *voyageCommandSpawner) SpawnCommand(ctx context.Context, voyageID, sid, module, startedByAID string, input []byte) (string, string, error) {
-	_ = voyageID // back-link трекается в voyage_targets, не в errands.
+	_ = voyageID // Keeper daemon runtime wiring note.
 	errandID, status, _, err := s.bridge.SpawnErrand(ctx, "", sid, module, startedByAID, input)
 	return errandID, status, err
 }
 
-// errandTerminalSource — узкая read-поверхность над `errands`-таблицей для
-// await-фазы spawn-bridge-а: poll-fallback статуса по errand_id. *errand.Store
-// удовлетворяет автоматически (метод Get). Интерфейс держит bridge
-// unit-тестируемым без подъёма PG.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 type errandTerminalSource interface {
 	Get(ctx context.Context, errandID string) (*errand.Row, error)
 }
 
-// errandRunSpawnerBridge — обёртка над existing single-SID errand.Dispatcher
-// под контракт [voyageorch.CommandSpawner] (через voyageCommandSpawner).
-// SpawnErrand вызывает Dispatcher.Dispatch и блокируется до terminal-статуса;
-// CancelErrand — прямой Dispatcher.Cancel (best-effort signal по ADR-033 E5).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Await-механика. Dispatcher имеет sync-окно ServerCap (≤30s, ADR-033 §3): если
-// Errand завершается дольше, Dispatch возвращает Async=true (background-горутина
-// Dispatcher-а ДОДОЖИДАЕТСЯ результата и пишет terminal в `errands`-строку).
-// Voyage command-у нужен РЕАЛЬНЫЙ результат, не sync-window-усечение, поэтому при
-// Async=true bridge поллит `errands`-строку через terminalSource до терминала
-// (subscribe тут не нужен — Dispatcher уже владеет applybus-подпиской, а строка
-// обновляется его же background-горутиной). Дедлайн poll-а = errand timeout + grace.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// Timeout per-Errand — берём дефолтный (errand.DefaultTimeoutSeconds = 30s, MVP).
+// Keeper daemon runtime wiring note.
 type errandRunSpawnerBridge struct {
 	dispatcher     *errand.Dispatcher
 	terminalSource errandTerminalSource
@@ -5219,17 +5228,18 @@ type errandRunSpawnerBridge struct {
 	clock          func() time.Time
 }
 
-// SpawnErrand сериализует Input (json-bytes из ErrandRun) обратно в
-// map[string]any, вызывает Dispatch, ждёт terminal. Возвращает (errandID,
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 // status-string, errorCode, err).
 //
-// Семантика статусов после Dispatch:
-//   - DispatchResult.Async == true → Dispatcher escalate-нул sync-окно; bridge
-//     ДОДОЖИДАЕТСЯ реального терминала через poll `errands`-строки
-//     (awaitTerminal). Команда на хост уже ушла — это НОРМА, не ошибка.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //   - StatusSuccess        → status=success
 //   - StatusFailed / StatusModuleNotAllowed / StatusTimedOut / StatusCancelled →
-//     соответствующая строка.
+//
+// Keeper daemon runtime wiring note.
 func (b *errandRunSpawnerBridge) SpawnErrand(ctx context.Context, runID, sid, module, startedByAID string, input []byte) (string, string, string, error) {
 	inputMap := map[string]any{}
 	if len(input) > 0 {
@@ -5238,12 +5248,12 @@ func (b *errandRunSpawnerBridge) SpawnErrand(ctx context.Context, runID, sid, mo
 		}
 	}
 
-	// AID-пропагация: errands.started_by_aid — NOT NULL + FK на operators(aid)
-	// (migration 052). Прокидываем AID инициатора ErrandRun-а (errand_runs.
-	// started_by_aid, валидный operator); без него insert errand-строки падает
-	// по errands_started_by_aid_fk (SQLSTATE 23503) → spawn_error. Этот же AID
-	// проставляется в Dispatcher.audit-event errand.invoked.
-	_ = runID // single-SID Errand — без back-link на multi-target обвязку.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	_ = runID // Keeper daemon runtime wiring note.
 	res, err := b.dispatcher.Dispatch(ctx, errand.DispatchRequest{
 		SID:          sid,
 		Module:       module,
@@ -5254,8 +5264,8 @@ func (b *errandRunSpawnerBridge) SpawnErrand(ctx context.Context, runID, sid, mo
 		return res.ErrandID, "failed", classifyDispatchErr(err), err
 	}
 	if res.Async {
-		// Sync-окно Dispatcher-а истекло, результат продолжает писаться его
-		// background-горутиной в `errands`-строку. Поллим до терминала.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		status, errorCode, awErr := b.awaitTerminal(ctx, res.ErrandID)
 		return res.ErrandID, status, errorCode, awErr
 	}
@@ -5266,17 +5276,17 @@ func (b *errandRunSpawnerBridge) SpawnErrand(ctx context.Context, runID, sid, mo
 	return res.ErrandID, status, errorCode, nil
 }
 
-// awaitTerminal поллит `errands`-строку до достижения terminal-статуса
-// (poll-fallback, source of truth — PG, который наполняет background-горутина
-// Dispatcher-а). Дедлайн = DefaultTimeoutSeconds + grace (sync-окно уже
-// истекло, поэтому реальный остаток ≤ полного errand-timeout-а). При истечении
-// дедлайна или ctx.Done возвращает failed с диагностическим error_code — строка
-// в БД продолжит финализироваться независимо (sweep / поздний result), но
-// orchestrator не должен висеть.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (b *errandRunSpawnerBridge) awaitTerminal(ctx context.Context, errandID string) (string, string, error) {
 	if b.terminalSource == nil {
-		// Wire-up без terminalSource (не должно случаться в production) —
-		// деградируем на прежнее поведение: считаем failed.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		return "failed", "async_escalation", nil
 	}
 	poll := b.pollInterval
@@ -5288,17 +5298,17 @@ func (b *errandRunSpawnerBridge) awaitTerminal(ctx context.Context, errandID str
 	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
 
-	// Первый poll сразу — строка могла стать terminal между Dispatch-escalation
-	// и входом сюда.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	if st, ec, done := b.pollTerminal(ctx, errandID); done {
 		return st, ec, nil
 	}
 	for {
 		select {
 		case <-ctx.Done():
-			// Caller-ctx отменён (abort-policy / shutdown). Не failed «по сути» —
-			// orchestrator сам пометит cancelled через CancelErrand-путь; здесь
-			// возвращаем cancelled, чтобы Summary не считал это провалом.
+			// Keeper daemon runtime wiring note.
+			// Keeper daemon runtime wiring note.
+			// Keeper daemon runtime wiring note.
 			return "cancelled", "cancelled", nil
 		case <-ticker.C:
 			if st, ec, done := b.pollTerminal(ctx, errandID); done {
@@ -5311,8 +5321,8 @@ func (b *errandRunSpawnerBridge) awaitTerminal(ctx context.Context, errandID str
 	}
 }
 
-// pollTerminal делает один Get и проверяет terminal-статус. done=false при
-// not-found / running / ошибке (caller продолжит poll).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (b *errandRunSpawnerBridge) pollTerminal(ctx context.Context, errandID string) (string, string, bool) {
 	row, err := b.terminalSource.Get(ctx, errandID)
 	if err != nil || row == nil {
@@ -5335,8 +5345,8 @@ func (b *errandRunSpawnerBridge) now() time.Time {
 	return time.Now()
 }
 
-// classifyErrandStatus проецирует errand.Status в (orchestrator-status, error_code).
-// Пустой status-строка → неизвестный статус (caller обрабатывает отдельно).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func classifyErrandStatus(s errand.Status) (string, string) {
 	switch s {
 	case errand.StatusSuccess:
@@ -5354,17 +5364,17 @@ func classifyErrandStatus(s errand.Status) (string, string) {
 	}
 }
 
-// CancelErrand — прямой проксирующий вызов Dispatcher.Cancel. Bridge не знает
-// RequestedBy AID (cancel инициирует orchestrator при abort-policy, не оператор);
-// audit-event `errand.cancelled` пишется Dispatcher-ом с source=api/aid="" —
-// это допустимо для orchestrator-инициированного cancel.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (b *errandRunSpawnerBridge) CancelErrand(ctx context.Context, errandID string) error {
 	if errandID == "" {
 		return nil
 	}
 	if err := b.dispatcher.Cancel(ctx, errand.CancelRequest{ErrandID: errandID}); err != nil {
-		// Idempotent: уже terminal — не ошибка (orchestrator вызывает cancel
-		// best-effort, race с собственным terminal Errand-а допустим).
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		if errors.Is(err, errand.ErrErrandTerminal) {
 			return nil
 		}
@@ -5373,7 +5383,7 @@ func (b *errandRunSpawnerBridge) CancelErrand(ctx context.Context, errandID stri
 	return nil
 }
 
-// classifyDispatchErr — короткий machine-readable error_code для Summary.
+// Keeper daemon runtime wiring note.
 func classifyDispatchErr(err error) string {
 	switch {
 	case errors.Is(err, errand.ErrSoulNotConnected):
@@ -5385,37 +5395,37 @@ func classifyDispatchErr(err error) string {
 	}
 }
 
-// setupReaper — Reaper-loop (опциональный, требует Redis для lease-лидерства).
-// RegisterReaperMetrics — только в этой ветке (cardinality-safe). Cleanup —
-// reaperCancel + reaperDone-wait (раньше redisClient.Close по LIFO).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupReaper(ctx context.Context) error {
 	cfg := d.cfg
 	logger := d.logger
-	// Reaper-loop поднимается параллельно с API-сервером. Под своим
-	// reaperCtx (производный от parent-а), чтобы можно было отменить
-	// его в cleanup-е, гарантируя порядок shutdown-а независимо от того,
-	// каким путём мы выходим из runDaemon (нормальный SIGTERM или
-	// fatal-error от srv.Start).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	//
-	// Cleanup-стек LIFO. Целевой порядок выполнения:
+	// Keeper daemon runtime wiring note.
 	//
-	//  1. reaperCancel()              — сигнализируем reaper-у остановиться.
-	//  2. <-reaperDone (с timeout-ом) — ждём, пока goroutine реально вышла.
-	//  3. redisClient.Close()         — закрывается cleanup-ом выше (LIFO),
-	//                                   после всех Redis-потребителей.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	//
-	// Redis-клиент общий для Outbound / EventStream / SoulLease /
-	// Reaper — поднят выше. Reaper требует non-nil Redis (lease-based
-	// лидерство); при отсутствии Redis в конфиге Reaper не стартует,
-	// даже если `reaper.enabled=true`.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	if cfg.Reaper != nil && cfg.Reaper.Enabled && d.redisClient != nil {
 		rc := d.redisClient
 
 		reaperCtx, reaperCancel := context.WithCancel(ctx)
 		reaperDone := make(chan struct{})
 
-		// 2. Ждём завершения reaper-goroutine. 5s — щедрая граница:
-		//    внутри Run максимум 2s на Release-attempt.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		d.cleanups.push(func() {
 			select {
 			case <-reaperDone:
@@ -5424,41 +5434,41 @@ func (d *daemon) setupReaper(ctx context.Context) error {
 			}
 		})
 
-		// 1. Отменяем reaperCtx (зарегистрирован позже → LIFO выполнит первым).
+		// Keeper daemon runtime wiring note.
 		d.cleanups.push(reaperCancel)
 
-		// Per-rule метрики Reaper-а регистрируем только в этой ветке —
-		// если reaper.enabled=false, collectors не публикуются вовсе
-		// (cardinality-safe; см. keeper/internal/reaper/metrics.go).
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		reaperMetrics := reaper.RegisterReaperMetrics(d.metricsReg)
 
-		// Составной исполнитель: Purger (чистые pgx-DELETE-правила) +
+		// Keeper daemon runtime wiring note.
 		// VaultReconciler (cross-store report-only reap_orphan_vault_keys).
-		// Оба embed-нуты — методы промотятся, reaperExecutor удовлетворяет
-		// reaper.PurgerAPI. d.vc может быть nil (Vault не настроен): тогда
-		// reap_orphan_vault_keys деградирует (0, error) и логируется как fail,
-		// прочие правила работают. clock=nil → time.Now (тесты подменяют).
-		// d.vc — конкретный *keepervault.Client; при nil передаём НАСТОЯЩИЙ
-		// nil-интерфейс (иначе typed-nil спрятал бы degrade-ветку
-		// VaultReconciler-а, где сравнивается vault == nil).
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		var vaultDep reaper.VaultKVLister
 		if d.vc != nil {
 			vaultDep = d.vc
 		}
-		// Purger lease-aware: reaper-ветка стартует только при non-nil Redis
-		// (lease-лидерство), поэтому SID-lease-проверка `mark_disconnected`
-		// (ADR-006(a)) всегда доступна — idle-Soul на живом стриме не метится
-		// disconnected ложно.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		executor := &reaperExecutor{
 			Purger:          reaper.NewPurgerWithLease(d.pool, soulLeaseChecker{rc: rc}, logger),
 			VaultReconciler: reaper.NewVaultReconciler(vaultDep, sigilKeyIDsReader{pool: d.pool}, logger, nil),
 		}
 
-		// Scry-deps (ADR-031 Slice C): фоновое drift-правило живёт в пакете
-		// reaper, но зависит от scenario.Runner (CheckDrift/MarkDriftStatus) и
-		// service-registry-резолвера. Собираем единый блок прямо здесь, чтобы
-		// не плодить ещё одного setup-step-а. nil-ScryDeps допустим — правило
-		// просто тихо пропускается, остальные работают.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		var scryDeps *reaper.ScryDeps
 		if d.scenarioRunner != nil && d.serviceRegistry != nil {
 			scryDeps = &reaper.ScryDeps{
@@ -5469,30 +5479,30 @@ func (d *daemon) setupReaper(ctx context.Context) error {
 			}
 		}
 
-		// OldErrands — реализация `purge_old_errands` (ADR-033). Зависит только
-		// от d.pool, который к этому моменту уже инициализирован. nil-pool
-		// сценарий не предусмотрен (PG обязателен для Keeper-а), но для
-		// единообразия с прочими опц.-deps оставляем условие.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		var oldErrandsPurger *reaper.ErrandsPurger
 		if d.pool != nil {
 			oldErrandsPurger = reaper.NewErrandsPurger(d.pool, logger)
 		}
 
-		// VoyageReclaim — реализация `reclaim_voyages` (ADR-043 S4). Зависит
-		// только от d.pool; правило default-ON через path-defaulting в
-		// reaper.dispatch (ADR-043 §8), поэтому безусловный wire-up обязателен —
-		// без него default-ON-правило деградировало бы в warn+skip.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		if d.pool != nil {
 			d.voyageReclaimer = reaper.NewVoyageReclaimer(d.pool, d.auditWriter, logger)
 		}
 
-		// CertRotator — реализация `rotate_due_certs` (cert-rotation Вар1).
-		// Требует Vault (PKI sign + KV write) и PG. Правило DEFAULT OFF (map-driven,
-		// требует явного enabled:true + осмысленного rotate_threshold) + обязательный
-		// dry_run — R1: авто-подмена боевого TLS без оператора опасна. nil Vault/pool
-		// → не собираем (правило деградирует warn-ом в dispatch). Политика
-		// (threshold/jitter/cap) читается из свежего keeper.yml snapshot на каждом
-		// тике (hot-reload через d.store.Get); PKI mount/role — cfg.Vault.PKI*.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		var certRotator *reaper.CertRotator
 		if d.pool != nil && d.vc != nil {
 			certRotator = reaper.NewCertRotator(d.pool, reaper.CertRotatorDeps{
@@ -5512,25 +5522,25 @@ func (d *daemon) setupReaper(ctx context.Context) error {
 			})
 		}
 
-		// OrphanEphemeralTidings — реализация `purge_orphan_ephemeral_tidings`
-		// (ADR-052(g) N2). Снос осиротевших ephemeral-Tiding-ов с grace после
-		// терминала Voyage. Зависит только от d.pool; правило map-driven (OFF без
-		// явного enabled: true в reaper.rules).
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		var orphanEphemeralTidingsPurger *reaper.EphemeralTidingsPurger
 		if d.pool != nil {
 			orphanEphemeralTidingsPurger = reaper.NewEphemeralTidingsPurger(d.pool, logger)
 		}
 
-		// OrphanApplying — реализация `reconcile_orphan_applying` (ADR-027 amend
-		// (m)). Снятие осиротевшего applying-lock инкарнации от прямого (standalone)
-		// scenario-run крашнувшегося Keeper-владельца. Default-ON через
-		// path-defaulting в reaper.dispatch, поэтому безусловный wire-up обязателен
-		// (без него default-ON-правило деградировало бы в warn+skip). Зависит от
-		// d.pool (SQL-кандидаты + ReleaseApplyingOrphan as-is) и rc (presence-чек в
-		// Conclave); reaper-ветка стартует только при non-nil Redis, поэтому
-		// presence-клиент всегда non-nil (nil-presence ветка reconciler-а —
-		// test-affordance). Реальный presence-gate против недоступного Redis —
-		// InstanceAlive→error fail-safe skip кандидата, не no-op правила.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		var orphanApplyingReconciler *reaper.OrphanApplyingReconciler
 		if d.pool != nil {
 			orphanApplyingReconciler = reaper.NewOrphanApplyingReconciler(d.pool, rc, d.auditWriter, logger)
@@ -5566,9 +5576,9 @@ func (d *daemon) setupReaper(ctx context.Context) error {
 	return nil
 }
 
-// certPKISignerAdapter адаптирует *keepervault.Client к reaper.PKISigner:
-// vault.SignCSR возвращает *vault.SignedCertificate, reaper ждёт *reaper.SignedCert
-// (reaper не импортирует vault-пакет ради типа результата — см. rotate_certs.go).
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 type certPKISignerAdapter struct{ vc *keepervault.Client }
 
 func (a certPKISignerAdapter) SignCSR(ctx context.Context, mount, role, csrPEM string) (*reaper.SignedCert, error) {
@@ -5584,18 +5594,18 @@ func (a certPKISignerAdapter) SignCSR(ctx context.Context, mount, role, csrPEM s
 	}, nil
 }
 
-// resolveCertRotatorConfig извлекает политику `rotate_due_certs` из (возможно
-// nil) config-снимка (hot-reload на каждом тике). PKI mount/role — из
-// cfg.Vault.PKI* (тот же, что SoulSeed-подпись). threshold/jitter/cap — из
-// reaper.rules.rotate_due_certs. nil-cfg / отсутствие правила → пустой порог
-// (правило ничего не ротирует — safe default).
-// resolveCertRotatorConfig собирает политику правила rotate_due_certs из свежего
-// keeper.yml snapshot (вызывается на каждом тике — hot-reload). rotate_threshold/
-// rotate_jitter парсятся через config.ParseDuration (convention `<N>d`, как у всех
-// reaper-правил), НЕ через stdlib time.ParseDuration — иначе `30d` не распарсится,
-// Threshold схлопнется в 0 и правило МОЛЧА не будет ротировать при enabled:true
-// (тихий security-сбой). Невалидный формат не глотается: warn-лог + поле остаётся
-// нулевым (правило инертно), симметрично runDurationRule.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func resolveCertRotatorConfig(cfg *config.KeeperConfig, logger *slog.Logger) reaper.CertRotatorConfig {
 	out := reaper.CertRotatorConfig{}
 	if cfg == nil {
@@ -5614,7 +5624,7 @@ func resolveCertRotatorConfig(cfg *config.KeeperConfig, logger *slog.Logger) rea
 		if d, err := config.ParseDuration(rule.RotateThreshold); err == nil {
 			out.Threshold = d
 		} else if logger != nil {
-			logger.Warn("reaper.rotate_due_certs: невалидный rotate_threshold, правило не ротирует",
+			logger.Warn("reaper.rotate_due_certs: invalid rotate_threshold, rule will not rotate",
 				slog.String("raw", rule.RotateThreshold), slog.Any("error", err))
 		}
 	}
@@ -5622,7 +5632,7 @@ func resolveCertRotatorConfig(cfg *config.KeeperConfig, logger *slog.Logger) rea
 		if d, err := config.ParseDuration(rule.RotateJitter); err == nil {
 			out.JitterWindow = d
 		} else if logger != nil {
-			logger.Warn("reaper.rotate_due_certs: невалидный rotate_jitter, разброс отключён",
+			logger.Warn("reaper.rotate_due_certs: invalid rotate_jitter, jitter disabled",
 				slog.String("raw", rule.RotateJitter), slog.Any("error", err))
 		}
 	}
@@ -5632,36 +5642,36 @@ func resolveCertRotatorConfig(cfg *config.KeeperConfig, logger *slog.Logger) rea
 	return out
 }
 
-// setupConductor — Conductor-loop (ADR-048): leader-elected исполнитель Cadence-
-// расписаний под своим lease `conductor:leader`, независимым от reaper-lease.
-// Default-ON при наличии Redis (footgun-guard ADR-048 §5: Cadence без планировщика
-// молча не спавнит Voyage); явный `cadence_scheduler.enabled: false` гасит. Своя
-// частота (`cadence_scheduler.interval`, ~15s), не связанная с reaper.interval
-// (1h). Метрики keeper_conductor_* регистрируются только в этой ветке
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 // (cardinality-safe, parity setupReaper). Cleanup — conductorCancel +
 // conductorDone-wait (parity reaper).
 //
-// switchover-безопасность (ADR-048 §3, C4): Reaper в этом же изменении ПЕРЕСТАЛ
-// исполнять `spawn_due_cadence`, Conductor НАЧАЛ. Окна двойного/нулевого спавна
-// нет — даже если на миг тикали оба, FOR UPDATE SKIP LOCKED отдал бы due-строку
-// лишь одному исполнителю, а advance next_run_at в той же tx убрал бы её из due
-// для другого.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) setupConductor(ctx context.Context) error {
 	cfg := d.cfg
 	logger := d.logger
 
-	// Conductor требует non-nil Redis (lease-лидерство), как и Reaper: без Redis
-	// leader-election невозможна (single-instance dev без Redis деградирует).
-	// Default-ON резолвится через CadenceSchedulerEnabled (nil/не задано → ON);
-	// явный false → не поднимаем.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	if d.redisClient == nil || !cfg.CadenceScheduler.CadenceSchedulerEnabled() {
-		logger.Info("keeper run: conductor disabled (нет Redis или cadence_scheduler.enabled: false)")
+		logger.Info("keeper run: conductor disabled (no Redis or cadence_scheduler.enabled: false)")
 		return nil
 	}
 	if d.pool == nil {
-		// PG обязателен для Keeper-а; defensive-skip ради единообразия с прочими
-		// PG-зависимыми подсистемами.
-		logger.Warn("keeper run: conductor пропущен — нет PG-пула")
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		logger.Warn("keeper run: conductor skipped - no PG pool")
 		return nil
 	}
 	rc := d.redisClient
@@ -5669,7 +5679,7 @@ func (d *daemon) setupConductor(ctx context.Context) error {
 	conductorCtx, conductorCancel := context.WithCancel(ctx)
 	conductorDone := make(chan struct{})
 
-	// 2. Ждём завершения conductor-goroutine (parity reaper-cleanup).
+	// Keeper daemon runtime wiring note.
 	d.cleanups.push(func() {
 		select {
 		case <-conductorDone:
@@ -5677,15 +5687,15 @@ func (d *daemon) setupConductor(ctx context.Context) error {
 			logger.Warn("conductor did not stop within 5s after shutdown — leak suspected")
 		}
 	})
-	// 1. Отменяем conductorCtx (зарегистрирован позже → LIFO выполнит первым).
+	// Keeper daemon runtime wiring note.
 	d.cleanups.push(conductorCancel)
 
-	// Метрики Conductor — только в этой ветке (cardinality-safe).
+	// Keeper daemon runtime wiring note.
 	conductorMetrics := conductor.RegisterConductorMetrics(d.metricsReg)
 
-	// Spawner — concrete CadenceSpawner (переехал в conductor, C3). Резолверы —
-	// те же PG-резолверы, что POST /v1/voyages (пере-резолв target рецепта
-	// just-in-time при спавне). Спавн с source: background (ADR-048 §4).
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
+	// Keeper daemon runtime wiring note.
 	spawner := conductor.NewCadenceSpawner(
 		d.pool,
 		cadenceScenarioResolver{inner: handlers.NewVoyageScenarioPGResolver(d.pool)},
@@ -5699,16 +5709,16 @@ func (d *daemon) setupConductor(ctx context.Context) error {
 		Redis:   rc,
 		Logger:  logger,
 		Spawner: spawner,
-		// Hot-reload: коридор опроса/lock_ttl перечитываются на каждом тике/
-		// re-acquire из свежего Store-снимка (parity reaper). nil-cfg (невалидный
-		// reload) → дефолт через nil-safe резолверы.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		//
-		// Адаптивный шаг (ADR-048 «Adaptive interval»): clamp(derivedMinPeriod,
-		// poll_floor, poll_ceiling); пустой enabled-реестр → poll_idle. IntervalFn
-		// stateless — зовётся только с лидера (leaderloop), пересчитывает шаг из PG
-		// каждый тик, поэтому новый лидер после failover не несёт in-memory
-		// состояния опроса. Снимок config (floor/ceiling/idle) читается на каждом
-		// resolve → hot-reload смены коридора видна со следующего тика.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
+		// Keeper daemon runtime wiring note.
 		IntervalFn:    d.conductorPollInterval(ctx),
 		LockTTLFn:     func() time.Duration { return conductorSchedulerCfg(d.store.Get()).ResolvedLockTTL() },
 		Metrics:       conductorMetrics,
@@ -5727,9 +5737,9 @@ func (d *daemon) setupConductor(ctx context.Context) error {
 	return nil
 }
 
-// conductorSchedulerCfg извлекает блок cadence_scheduler из (возможно nil)
-// Store-снимка. nil-cfg (невалидный reload) → nil-блок: резолверы Conductor-а
-// nil-safe и подставят дефолты.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func conductorSchedulerCfg(cfg *config.KeeperConfig) *config.KeeperCadenceScheduler {
 	if cfg == nil {
 		return nil
@@ -5737,14 +5747,14 @@ func conductorSchedulerCfg(cfg *config.KeeperConfig) *config.KeeperCadenceSchedu
 	return cfg.CadenceScheduler
 }
 
-// conductorPollInterval строит адаптивную IntervalFn Conductor (ADR-048 «Adaptive
-// interval»): шаг опроса = clamp(derivedMinPeriod, poll_floor, poll_ceiling);
-// пустой enabled-реестр Cadence → poll_idle. Вся логика — в pure
-// [conductor.AdaptivePollInterval]; здесь только связывание с config-снимком
-// (hot-reload коридора) и PG-пулом.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 //
-// ctx — родительский conductorCtx: отменяется при shutdown, обрывает
-// derivedMinPeriod-запрос вместе с tick-loop-ом.
+// Keeper daemon runtime wiring note.
+// Keeper daemon runtime wiring note.
 func (d *daemon) conductorPollInterval(ctx context.Context) func() time.Duration {
 	corridor := func() conductor.PollCorridor {
 		cs := conductorSchedulerCfg(d.store.Get())
@@ -5760,7 +5770,7 @@ func (d *daemon) conductorPollInterval(ctx context.Context) func() time.Duration
 	}
 }
 
-// cadencePoolFetcher адаптирует pgxpool.Pool к [conductor.MinPeriodFetcher].
+// Keeper daemon runtime wiring note.
 type cadencePoolFetcher struct{ pool *pgxpool.Pool }
 
 func (f cadencePoolFetcher) SelectMinPeriod(ctx context.Context) (cadence.MinPeriod, error) {

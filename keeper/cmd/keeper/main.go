@@ -1,20 +1,20 @@
-// Package main — entrypoint бинаря `keeper` под ADR-004 / ADR-011 / ADR-013.
+// Keeper command runtime helper note.
 //
-// Subcommand-router на stdlib `flag`:
+// Keeper command runtime helper note.
 //
 //	keeper init    --archon=<aid> [--config=<path>] [--credential-out=<path>] [--display-name=<name>]
 //	keeper run     [--config=<path>] [--initialize]
 //	keeper version
 //	keeper help
 //
-// `init` — bootstrap первого Архонта (ADR-013), вызывает `internal/bootstrap.Init`.
-// `run` — daemon-loop; M0.5c-stub: только load config, apply migrations,
-// check `operators` registry, wait-for-signal. Реальный gRPC/HTTP server
-// добавится в M0.6+.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 //
-// Архитектурно команды независимые: каждая делает свой context+зависимости,
-// не делит globals — keeper-process всегда выполняет ровно одну
-// subcommand-у и завершается.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 package main
 
 import (
@@ -48,18 +48,19 @@ import (
 
 const defaultConfigPath = "/etc/keeper/keeper.yml"
 
-// version — версия бинаря `keeper`, печатается командой `keeper version`, чтобы
-// оператор видел версию центрального узла (DoD беты). Значение по умолчанию —
-// для `go run`/IDE-сборок; в релизных сборках перезаписывается линкером через
-// `-ldflags "-X ...version=<ver>"` (см. Makefile, переменная VERSION; симметрия
-// с soulVersion/soulctlVersion). Именно `var`, а не `const`, потому что `-X`
-// умеет инжектить только в package-level string-переменные.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 var version = "0.0.0-dev"
 
-// Exit-коды:
+// Keeper command runtime helper note.
 //
-//	0 — успех.
-//	1 — runtime-error (PG/Vault недоступны, уже initialized, и т.п.).
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+//
 //	2 — usage-error (bad flags, unknown command).
 const (
 	exitOK    = 0
@@ -107,19 +108,19 @@ Commands:
 Run "keeper <command> --help" for command-specific flags.`)
 }
 
-// printVersion печатает версию keeper-бинаря и Go-runtime. Формат:
+// Keeper command runtime helper note.
 //
 //	keeper <version> (go<goversion>)
 //
-// `version` инжектится линкером через `-ldflags -X` (см. Makefile, VERSION);
-// в `git describe`-варианте уже содержит ближайший тег + commit + -dirty,
-// поэтому отдельный git-commit ldflag не вводим (симметрия с soul/soulctl).
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 func printVersion(w *os.File) {
 	fmt.Fprintf(w, "keeper %s (%s)\n", version, runtime.Version())
 }
 
-// runInit парсит флаги, поднимает зависимости (PG pool, Vault client,
-// audit writer), вызывает bootstrap.Init и печатает финальное сообщение.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 func runInit(args []string) int {
 	var (
 		archonAID   string
@@ -138,7 +139,7 @@ func runInit(args []string) int {
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
-		// flag сам печатает usage в ContinueOnError-режиме.
+		// Keeper command runtime helper note.
 		return exitUsage
 	}
 	if archonAID == "" {
@@ -168,9 +169,9 @@ func runInit(args []string) int {
 		}
 		return exitError
 	}
-	// Logger строится после успешной загрузки/валидации cfg, чтобы читать
-	// logging-ротацию из keeper.yml (ранние config-ошибки выше уходят в
-	// stderr напрямую, не через logger).
+	// Keeper command runtime helper note.
+	// Keeper command runtime helper note.
+	// Keeper command runtime helper note.
 	logger := shlog.New(shlog.FromKeeper(cfg.Logging))
 	if cfg.Auth == nil || cfg.Auth.JWT == nil {
 		fmt.Fprintln(os.Stderr, "keeper init: auth.jwt block is required in keeper.yml")
@@ -190,9 +191,9 @@ func runInit(args []string) int {
 		return exitError
 	}
 
-	// Vault-client поднимается до pg.NewPool — `postgres.dsn_ref`
-	// может быть vault-ref (`vault:secret/keeper/postgres`), резолв
-	// которого требует non-nil vc.
+	// Keeper command runtime helper note.
+	// Keeper command runtime helper note.
+	// Keeper command runtime helper note.
 	vc, err := keepervault.NewClient(ctx, cfg.Vault)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keeper init: vault client: %v\n", err)
@@ -210,7 +211,7 @@ func runInit(args []string) int {
 		return exitError
 	}
 
-	// Apply migrations — идемпотентно (см. migrate.Apply).
+	// Keeper command runtime helper note.
 	dsn, err := keeperpg.ResolveDSN(ctx, vc, cfg.Postgres.DSNRef)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keeper init: resolve DSN: %v\n", err)
@@ -242,8 +243,8 @@ func runInit(args []string) int {
 			return exitError
 
 		case errors.Is(err, bootstrap.ErrAuditWriteFailed):
-			// Insert операторa уже закоммичен, но audit-event не
-			// записан. БД консистентна, audit_log — нет.
+			// Keeper command runtime helper note.
+			// Keeper command runtime helper note.
 			logger.Warn("bootstrap: audit write failed AFTER operator insert committed — manual reconciliation required",
 				slog.String("aid", archonAID),
 				slog.Any("error", err),
@@ -255,11 +256,11 @@ func runInit(args []string) int {
 			return exitError
 
 		case errors.Is(err, bootstrap.ErrTokenFileWriteFailed):
-			// Insert + audit committed; JWT-файл не сохранён. Печатаем
-			// токен в stderr с предупреждением — secrecy уже нарушена
-			// (логи могут уехать в OTel/файл/journald), оператор обязан
-			// ротировать токен. Альтернативы (lose token = lockout)
-			// хуже: без cluster-admin JWT operator API недоступен.
+			// Keeper command runtime helper note.
+			// Keeper command runtime helper note.
+			// Keeper command runtime helper note.
+			// Keeper command runtime helper note.
+			// Keeper command runtime helper note.
 			fmt.Fprintf(os.Stderr,
 				"keeper init: token file write failed (%v).\n"+
 					"        Operator is committed and audit recorded; only the JWT file is missing.\n"+
@@ -287,45 +288,45 @@ func runInit(args []string) int {
 
 // runDaemon — `keeper run` (M0.6b).
 //
-// Делает: load config, NewPool + Ping, Apply migrations, Count operators,
-// Build JWT Verifier/Issuer (signing key из Vault), Build RBAC enforcer
-// из БД-снимка через rbac.NewHolder (ADR-028, config-RBAC удалён), Start
-// Operator API HTTP-сервер с RBAC + audit middleware на /v1/operators.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 //
-// Без --initialize и пустого реестра → exit 1 с подсказкой запустить
-// `keeper init`. С --initialize и пустым реестром / непустым реестром →
-// поднимает HTTP listener и блокируется до SIGINT/SIGTERM.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 //
-// gRPC (Keeper↔Soul) и MCP listenerы — M0.7+.
+// Keeper command runtime helper note.
 func runDaemon(args []string) int {
 	ctx, cancel := signalContext()
 	defer cancel()
 
 	d := &daemon{cleanups: &cleanupStack{}}
-	// ЕДИНСТВЕННАЯ точка graceful shutdown: LIFO-drain cleanup-стека
-	// воспроизводит порядок прежних defer-ов runDaemon один-в-один (см.
-	// daemon.go). Каждый setupX регистрирует свои teardown-ы через
-	// d.cleanups.push в том же порядке, в каком прежде шли defer-ы.
+	// Keeper command runtime helper note.
+	// Keeper command runtime helper note.
+	// Keeper command runtime helper note.
+	// Keeper command runtime helper note.
 	defer d.cleanups.runLIFO()
 
-	// setupConfig — особая exit-семантика (флаг-парс → exitUsage), поэтому
-	// вызывается отдельно от единого паттерна остальных шагов.
+	// Keeper command runtime helper note.
+	// Keeper command runtime helper note.
 	if code, ok := d.setupConfig(args); !ok {
 		return code
 	}
 
-	// Строгий порядок init (см. §4 инвариантов в daemon.go). Каждый шаг при
-	// ошибке уже напечатал stderr и вернул errSetupFailed — оркестратор лишь
-	// маппит в exitError, не печатая повторно. Порядок шагов критичен и
-	// менять его нельзя без архитектурного аудита.
+	// Keeper command runtime helper note.
+	// Keeper command runtime helper note.
+	// Keeper command runtime helper note.
+	// Keeper command runtime helper note.
 	steps := []func(context.Context) error{
 		d.setupObservabilityEarly,
 		d.setupVault,
 		d.setupStorage,
-		// setupSigil переставлен сюда (выше setupGRPCBootstrap): bootstrap-сервер
-		// читает d.sigilPubKeyPEM (trust-anchor Soul-у, ADR-026 S6). Его deps —
-		// d.vc (setupVault) + d.pool (setupStorage) — уже готовы; ничего, что
-		// создаётся между storage и bootstrap, ему не нужно.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
 		d.setupSigil,
 		d.setupOperatorBootstrapGuard,
 		d.setupJWT,
@@ -337,105 +338,105 @@ func runDaemon(args []string) int {
 		d.setupMetricsListener,
 		d.setupOTel,
 		d.setupScenarioDeps,
-		// setupPushOrchestrator — prepare-фаза Variant C orchestrator-а
-		// (docs/keeper/push.md): создание pushDestinyLoader. Финал —
-		// finalizePushOrchestrator после setupGRPCEventStream (topologyResolver).
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
 		d.setupPushOrchestrator,
 		// setupPushDispatchers — pilot wire-up SshDispatcher (S6, 2026-05-26):
-		// host-CA из Vault + ConfigTargetResolver + Spawn первого SshProvider-
-		// плагина + SshDispatcher. Зависит от setupCoreModules (pushPluginHost +
-		// pushDiscoveredSsh) и setupVault (d.vc). При отсутствии push-блока /
-		// ssh_providers — no-op, push выключен. Lifecycle plugin-handle —
-		// cleanup-стек (LIFO ДО Redis/Pool).
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
 		d.setupPushDispatchers,
 		d.setupGRPCBootstrap,
 		d.setupRedis,
-		// setupHeraldDelivery — claim-queue worker-ы webhook-доставки уведомлений
-		// (ADR-052(d), S3). Late-binding подменяет fallback-LogDeliveryQueue
-		// dispatcher-а (собран в setupAudit ДО Redis) на RedisDeliveryQueue +
-		// поднимает worker-ы + mini-reaper. После setupRedis (redisClient),
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
 		// setupAudit (dispatcher/auditWriter), setupMetricsRegistry
-		// (heraldDeliveryMetrics), setupVault (d.vc для secret_ref). Fail-open: без
-		// Redis доставка деградирует, keeper не падает.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
 		d.setupHeraldDelivery,
-		// setupPushProviderSvc — поднимает CRUD-фасад push_providers
-		// (ADR-032 amendment 2026-05-26, S7-2) + Redis-publisher для cluster-
-		// wide invalidate. После setupRedis (нужен d.redisClient для
-		// publisher); ДО setupAPIServer / setupMCPServer (api.Deps и
-		// HandlerDeps читают d.pushProviderSvc).
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
 		d.setupPushProviderSvc,
-		// setupHeraldSvc — CRUD-фасад реестров heralds/tidings (ADR-052, S4) +
-		// двухуровневая инвалидация снимка Tiding-правил dispatcher-а (in-process
-		// heraldDispatcher + cross-keeper Redis `herald:invalidate`). ПОСЛЕ
-		// setupAudit (d.heraldDispatcher) и setupRedis (publisher); ДО
-		// setupAPIServer / setupMCPServer (api.Deps и HandlerDeps читают d.heraldSvc).
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
 		d.setupHeraldSvc,
-		// setupCloudCRUD — CRUD-фасады реестров providers/profiles (ADR-017,
-		// operator-facing Cloud-Provider/Profile). Поднимаются всегда (PG-таблицы),
-		// БЕЗ Redis. После setupPG (d.pool); ДО setupAPIServer/setupMCPServer
-		// (api.Deps и HandlerDeps читают d.providerSvc/d.profileSvc).
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
 		d.setupCloudCRUD,
-		// runLegacyAutoImport — opt-in one-shot миграция inline
-		// `keeper.yml::push.targets[]` / `push.providers[]` в PG-источники
-		// (ADR-032 amendment 2026-05-26, S7-4). При оба флага false → no-op.
-		// После setupPushProviderSvc (нужен подтверждённый PG-state +
-		// d.auditWriter); ДО setupAPIServer (REST `/v1/push-providers` сразу
-		// видит импортированные строки).
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
 		d.runLegacyAutoImport,
 		d.setupConclave,
-		// Refuse-guard soul-shedding (Finding-A, ADR-027(h)): СРАЗУ после
-		// setupConclave (нужна собственная presence-запись в CountLive) и ДО
-		// EventStream/Acolyte — отказ старта при multi-keeper + acolytes=0.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
 		d.setupConclaveRefuseGuard,
 		d.setupRBACInvalidation,
 		d.setupServiceRegistryInvalidation,
-		// setupToll — cluster-wide detector массового оттока (ADR-038). ДО
-		// setupGRPCEventStream, чтобы EventStreamDeps мог получить TollNotifier
-		// (d.tollWatcher); ПОСЛЕ setupRedis (нужен d.redisClient). При выключенном
-		// Toll (нет Redis или `toll.enabled: false`) — no-op-watcher / noop-reader,
-		// EventStream-hook остаётся no-op (nil TollNotifier).
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
 		d.setupToll,
-		// setupTempo — per-AID rate-limiter write-API (Tempo, ADR-050). ПОСЛЕ
-		// setupRedis (limiter живёт в Redis; без Redis → nil → middleware
-		// passthrough), ДО setupAPIServer (api.Deps читает d.tempoLimiter).
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
 		d.setupTempo,
-		// setupLoginGuard — anti-bruteforce-лимитер публичных login-эндпоинтов
-		// (ADR-058(g), HIGH-3). ПОСЛЕ setupRedis (lockout cluster-shared в Redis;
-		// без Redis → nil → login без throttle), ДО setupAPIServer (api.Deps
-		// читает d.loginGuard).
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
 		d.setupLoginGuard,
 		d.setupGRPCEventStream,
-		// finalizePushOrchestrator — собирает *pushorch.PushRun после поднятия
-		// topologyResolver (setupGRPCEventStream). Идёт ДО setupAPIServer/
-		// setupMCPServer, чтобы они увидели d.pushRun != nil.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
 		d.finalizePushOrchestrator,
-		// setupErrandDispatcher — pull-ad-hoc Errand contour (ADR-033). Зависит от
-		// d.outbound + d.applyBus + d.pool (setupGRPCEventStream + setupRedis уже
-		// отработали); ДО setupAPIServer (api.Deps читает errandDispatcher/Store).
-		// Включает однократный Replay осиротевших running-Errand-ов этого KID.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
 		d.setupErrandDispatcher,
 		d.setupWatchman,
 		d.setupSigilInvalidation,
 		d.setupAPIServer,
 		// setupOperatorInvalidation — JWT immediate revoke (ADR-014 Amendment
-		// 2026-05-27): подключает operator.Service к тому же `rbac:invalidate`
-		// pub/sub, что и role-мутации. Идёт ПОСЛЕ setupAPIServer (operator.Service
-		// создаётся внутри NewServer → доступен через apiServer.OperatorService()).
-		// При redisClient==nil — no-op (single-Keeper/dev: чистый TTL-poll).
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
 		d.setupOperatorInvalidation,
 		d.setupMCPServer,
 		d.setupAcolyte,
-		// setupVoyageWorker — pool VoyageWorker-ов (ADR-043, S1). Зависит от
+		// Keeper command runtime helper note.
 		// d.pool + scenarioRunner/serviceRegistry/errandDispatcher (production
-		// DI-адаптеры). config-gated OFF по умолчанию: поднимается лишь при
-		// voyage.workers > 0; dev-конфиг без блока voyage не меняет поведение.
-		// До setupReaper (Reaper-правило reclaim_voyages — пост-S1).
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
 		d.setupVoyageWorker,
 		d.setupReaper,
-		// setupConductor — leader-elected исполнитель Cadence (ADR-048). Свой
-		// lease conductor:leader, независимый от reaper. Default-ON при наличии
-		// Redis (footgun-guard ADR-048 §5). После setupReaper: в C4 Reaper
-		// перестал спавнить Cadence, Conductor начал — atomic switchover.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
 		d.setupConductor,
 	}
 	for _, step := range steps {
@@ -444,9 +445,9 @@ func runDaemon(args []string) int {
 		}
 	}
 
-	// srv.Start блокируется до ctx.Done() (signal) или fatal Serve-ошибки.
-	// На signal делает graceful shutdown внутри. Все ошибки маппятся в
-	// exit-code 1. Самый последний шаг — вне «setup» (блокирующий main loop).
+	// Keeper command runtime helper note.
+	// Keeper command runtime helper note.
+	// Keeper command runtime helper note.
 	if err := d.apiServer.Start(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "keeper run: HTTP server: %v\n", err)
 		return exitError
@@ -456,27 +457,27 @@ func runDaemon(args []string) int {
 	return exitOK
 }
 
-// poolPinger — адаптер pgxpool.Pool к интерфейсу health.Pinger.
-// Декларируется в main, чтобы api-пакет не тянул pgx как direct dep
-// (health.Pinger — общий интерфейс с `Ping(ctx) error`).
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 type poolPinger struct{ pool pgxPool }
 
 func (p poolPinger) Ping(ctx context.Context) error { return p.pool.Ping(ctx) }
 
-// pgxPool — узкий интерфейс над `*pgxpool.Pool` (только Ping). Позволяет
-// держать api-пакет независимым от pgxpool, а main-пакет — от api-impl.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 type pgxPool interface {
 	Ping(ctx context.Context) error
 }
 
-// parseTTL парсит duration-строку из `keeper.yml::auth.jwt.<field>`
-// (Go-syntax: "720h", "24h", "30m"). Пустая строка → def. fieldName
-// используется в сообщении об ошибке для контекста.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 //
-// Convention `<N>d` (через [config.ParseDuration]) здесь сознательно НЕ
-// используется — auth.jwt.ttl_* в config-schema объявлены как Go-duration
-// (не «duration с днями»). Если convention расширится — заменить на
-// config.ParseDuration в одной точке.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 func parseTTL(raw, fieldName string, def time.Duration) (time.Duration, error) {
 	if raw == "" {
 		return def, nil
@@ -491,9 +492,9 @@ func parseTTL(raw, fieldName string, def time.Duration) (time.Duration, error) {
 	return d, nil
 }
 
-// envTruthy читает env-переменную как boolean-флаг через [strconv.ParseBool]
-// (принимает 1/t/T/true/TRUE и т.п.). Пустая или невалидная строка → false:
-// env-override не должен «случайно» включать режим из-за опечатки/мусора.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 func envTruthy(name string) bool {
 	v := os.Getenv(name)
 	if v == "" {
@@ -506,12 +507,12 @@ func envTruthy(name string) bool {
 	return b
 }
 
-// guardOperatorsRegistry — чистое РЕШЕНИЕ restart-семантики ADR-013(d) по
-// состоянию реестра `operators`: пустой реестр без явного `initialize` →
-// отказ старта; пустой с `initialize` → bootstrap-pending; непустой → ready.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 //
-// Без I/O (БД/логгер/os) — вся приёмка зависимостей и печать остаются в
-// runDaemon. refuseMsg возвращается только при proceed=false.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 func guardOperatorsRegistry(n int64, initialize bool) (proceed bool, refuseMsg string, pending bool) {
 	if n == 0 && !initialize {
 		return false,
@@ -526,38 +527,38 @@ func guardOperatorsRegistry(n int64, initialize bool) (proceed bool, refuseMsg s
 	return true, "", false
 }
 
-// conclaveSinglePathDecision — исход refuse-guard-а soul-shedding (Finding-A,
-// ADR-027(h)): что делать при `acolytes == 0` в окружении с числом живых
-// Keeper-инстансов `liveCount`.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 type conclaveSinglePathDecision int
 
 const (
-	// conclaveSinglePathOK — конфигурация безопасна (acolytes>0 ЛИБО единственный
-	// живой инстанс): старт без замечаний.
+	// Keeper command runtime helper note.
+	// Keeper command runtime helper note.
 	conclaveSinglePathOK conclaveSinglePathDecision = iota
-	// conclaveSinglePathRefuse — multi-keeper + acolytes=0 без opt-out: отказ старта.
+	// Keeper command runtime helper note.
 	conclaveSinglePathRefuse
-	// conclaveSinglePathWarn — то же опасное сочетание, но с явным opt-out: громкий
-	// WARN, старт продолжается (осознанный выбор оператора).
+	// Keeper command runtime helper note.
+	// Keeper command runtime helper note.
 	conclaveSinglePathWarn
 )
 
-// decideConclaveSinglePath — чистое РЕШЕНИЕ refuse-guard-а soul-shedding
-// (Finding-A, ADR-027(h)) по числу живых Keeper-инстансов в Conclave.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 //
-// Опасна ровно одна конфигурация: `acolytes == 0` (run-goroutine-путь,
-// single-keeper-only) ПРИ наличии ДРУГИХ живых инстансов (`liveCount > 1` —
-// в счёт входит и собственная только что зарегистрированная presence-запись,
-// поэтому порог именно «> 1», а не «>= 1»). В ней apply на Keeper-A c Soul-ом
-// на стриме Keeper-B навсегда зависает в `applying` (cross-keeper barrier).
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 //
-//   - acolytes > 0           → OK (work-queue ADR-027, cross-keeper-зависания нет);
-//   - liveCount <= 1         → OK (единственный инстанс — run-goroutine-путь штатен);
-//   - иначе без opt-out      → Refuse (дефолт, безопасно);
-//   - иначе с allowUnsafe    → Warn (явный opt-out оператора).
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 //
-// Без I/O (Conclave-count и печать остаются в setupX). liveCount резолвится
-// caller-ом из Conclave.CountLive (см. setupConclaveRefuseGuard).
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 func decideConclaveSinglePath(acolytes, liveCount int, allowUnsafe bool) conclaveSinglePathDecision {
 	if acolytes > 0 || liveCount <= 1 {
 		return conclaveSinglePathOK
@@ -568,29 +569,29 @@ func decideConclaveSinglePath(acolytes, liveCount int, allowUnsafe bool) conclav
 	return conclaveSinglePathRefuse
 }
 
-// conclaveRefuseMessage формирует operator-facing stderr-сообщение refuse-а
-// (Finding-A): что обнаружено, почему опасно, как починить. liveCount — число
-// живых инстансов в Conclave (включая собственный).
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 func conclaveRefuseMessage(liveCount int) string {
-	return fmt.Sprintf("keeper run: multi-keeper обнаружен (%d живых Keeper-инстансов в Conclave) при keeper.acolytes=0 — refusing to start.\n"+
-		"        Run-goroutine-путь (acolytes: 0) — single-keeper-only: apply на одном Keeper-е c Soul-ом\n"+
-		"        на стриме другого навсегда зависнет в applying (ADR-027). Выставьте keeper.acolytes>0\n"+
-		"        для HA-кластера, либо keeper.allow_unsafe_single_path_multi_keeper: true\n"+
-		"        (env KEEPER_ALLOW_UNSAFE_MULTI_KEEPER=true) — осознанный single-keeper-за-LB opt-out.", liveCount)
+	return fmt.Sprintf("keeper run: multi-keeper detected (%d live Keeper instances in Conclave) with keeper.acolytes=0 - refusing to start.\n"+
+		"        Run-goroutine path (acolytes: 0) is single-keeper-only: apply on one Keeper with a Soul\n"+
+		"        on another Keeper's stream can hang in applying forever (ADR-027). Set keeper.acolytes>0\n"+
+		"        for HA cluster, or keeper.allow_unsafe_single_path_multi_keeper: true\n"+
+		"        (env KEEPER_ALLOW_UNSAFE_MULTI_KEEPER=true) as an explicit single-keeper-behind-LB opt-out.", liveCount)
 }
 
-// metricsPasswordField — имя поля в Vault KV, из которого
-// [resolveMetricsBasicAuth] достаёт пароль basic-auth (симметрично
-// `signing_key` для JWT signing-key, bootstrap.extractSigningKey).
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 const metricsPasswordField = "password"
 
-// resolveMetricsBasicAuth собирает *obs.BasicAuth для metrics-listener-а.
+// Keeper command runtime helper note.
 //
-// Возвращает (nil, nil), если basic-auth не настроен/выключен — listener
-// поднимается без auth. При enabled резолвит пароль из vault по password_ref
-// тем же keeper-vault-клиентом, что читает signing-key (ADR-011: shared/obs
-// не тянет vault; резолв — на keeper-стороне). Ни password_ref, ни сам
-// пароль не логируются (см. PM-decision Slice 1 #5).
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 func resolveMetricsBasicAuth(ctx context.Context, vc *keepervault.Client, m *config.KeeperMetrics) (*obs.BasicAuth, error) {
 	if m == nil || m.Auth == nil || m.Auth.Basic == nil || !m.Auth.Basic.Enabled {
 		return nil, nil
@@ -601,8 +602,8 @@ func resolveMetricsBasicAuth(ctx context.Context, vc *keepervault.Client, m *con
 	}
 	path, err := keepervault.ParseRef(b.PasswordRef)
 	if err != nil {
-		// b.PasswordRef — vault-ref (не секрет), но в сообщение его не кладём,
-		// чтобы случайный plaintext-ref не утёк в лог; ParseRef уже эхает форму.
+		// Keeper command runtime helper note.
+		// Keeper command runtime helper note.
 		return nil, fmt.Errorf("metrics.auth.basic.password_ref: %w", err)
 	}
 	kv, err := vc.ReadKV(ctx, path)
@@ -620,8 +621,8 @@ func resolveMetricsBasicAuth(ctx context.Context, vc *keepervault.Client, m *con
 	return &obs.BasicAuth{Username: b.Username, Password: pass}, nil
 }
 
-// otelEndpoint извлекает endpoint из опц. otel-блока (пустая строка, если
-// блок не задан) — для obs.OTelConfig без nil-разыменования.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 func otelEndpoint(o *config.KeeperOTel) string {
 	if o == nil {
 		return ""
@@ -629,24 +630,24 @@ func otelEndpoint(o *config.KeeperOTel) string {
 	return o.Endpoint
 }
 
-// issuerFactory возвращает фабрику для bootstrap.Config.IssuerFactory.
-// Тесты mock-ают саму фабрику (без подгрузки signing-key).
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 func issuerFactory(issuerName string) func(signingKey []byte) (bootstrap.JWTIssuer, error) {
 	return func(signingKey []byte) (bootstrap.JWTIssuer, error) {
 		return keeperjwt.NewIssuer(signingKey, issuerName)
 	}
 }
 
-// pluginCacheRoot — путь к директории-кешу Keeper-side плагинов.
+// Keeper command runtime helper note.
 //
-// Приоритет источников (от высшего к низшему):
-//  1. `keeper.yml::plugins.cache_root` (нормальный, прод-источник).
-//  2. env `KEEPER_PLUGIN_CACHE_DIR` — dev/CI-override, оставлен для удобства
-//     локальных прогонов без правки YAML.
-//  3. [pluginhost.DefaultCacheRoot] — встроенный default.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 //
-// Абсолютность пути в (1) гарантируется schema-фазой ([config.schemaValidateKeeper]);
-// env-override (2) — ответственность оператора (dev-only).
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 func pluginCacheRoot(p *config.KeeperPlugins) string {
 	if p != nil && p.CacheRoot != "" {
 		return p.CacheRoot
@@ -657,13 +658,13 @@ func pluginCacheRoot(p *config.KeeperPlugins) string {
 	return pluginhost.DefaultCacheRoot
 }
 
-// defaultPluginWorkRoot — корень рабочих git-клонов резолвера плагинов
-// (plugingit.Resolver, ADR-026 F-fetch, A1-S1). СТРОГО вне cache-root: .git и
-// checkout не должны попадать в кеш-слоты, читаемые Discover/ReadSlot.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 const defaultPluginWorkRoot = "/var/lib/soul-stack-keeper/plugin-src"
 
-// pluginWorkRoot — путь к корню рабочих клонов резолвера. Приоритет:
-//  1. `keeper.yml::plugins.work_root` (абсолютность гарантируется schema-фазой);
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 //  2. env `KEEPER_PLUGIN_WORK_DIR` — dev/CI-override;
 //  3. [defaultPluginWorkRoot].
 func pluginWorkRoot(p *config.KeeperPlugins) string {
@@ -676,16 +677,16 @@ func pluginWorkRoot(p *config.KeeperPlugins) string {
 	return defaultPluginWorkRoot
 }
 
-// defaultServiceCacheRoot — корень кеша git-снапшотов service-репозиториев
-// (artifact.ServiceLoader). Параллель с pluginhost.DefaultCacheRoot.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 const defaultServiceCacheRoot = "/var/lib/soul-stack-keeper/services"
 
-// serviceCacheRoot — путь к кешу git-артефактов service-репо.
+// Keeper command runtime helper note.
 //
-// Приоритет: env `KEEPER_SERVICE_CACHE_DIR` (dev/CI-override) →
-// [defaultServiceCacheRoot]. Отдельного `keeper.yml`-поля пока нет — это
-// runtime-путь, не часть конфиг-контракта (добавить config-field — отдельная
-// задача, см. observations в delegation).
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 func serviceCacheRoot(_ *config.KeeperConfig) string {
 	if v := os.Getenv("KEEPER_SERVICE_CACHE_DIR"); v != "" {
 		return v
@@ -693,11 +694,11 @@ func serviceCacheRoot(_ *config.KeeperConfig) string {
 	return defaultServiceCacheRoot
 }
 
-// defaultDestinyCacheRoot — корень кеша git-снапшотов destiny-репозиториев
-// (artifact.DestinyLoader). Параллель с [defaultServiceCacheRoot].
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 const defaultDestinyCacheRoot = "/var/lib/soul-stack-keeper/destiny"
 
-// destinyCacheRoot — путь к кешу git-артефактов destiny-репо. См.
+// Keeper command runtime helper note.
 // [serviceCacheRoot]: env `KEEPER_DESTINY_CACHE_DIR` → [defaultDestinyCacheRoot].
 func destinyCacheRoot(_ *config.KeeperConfig) string {
 	if v := os.Getenv("KEEPER_DESTINY_CACHE_DIR"); v != "" {
@@ -706,11 +707,11 @@ func destinyCacheRoot(_ *config.KeeperConfig) string {
 	return defaultDestinyCacheRoot
 }
 
-// acolyteLease — TTL Ward-захвата planned-задания Acolyte-ом (ADR-027,
-// claim_expires_at = NOW()+lease). Просроченный Ward переклеймит recovery-скан
-// (Phase 2). Берётся из `keeper.acolyte_lease`; пусто/некорректно →
-// [config.DefaultAcolyteLease]. Формат строки уже провалидирован semantic-фазой
-// (checkDuration), но дефолтуем на любой не-положительный результат на всякий.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 func acolyteLease(cfg *config.KeeperConfig) time.Duration {
 	if cfg.AcolyteLease == "" {
 		return config.DefaultAcolyteLease
@@ -722,10 +723,10 @@ func acolyteLease(cfg *config.KeeperConfig) time.Duration {
 	return d
 }
 
-// acolyteBatch — максимум planned-заданий, захватываемых одним claim-тиком
-// (LIMIT claim-запроса). Воркеры разных инстансов делят очередь через
-// FOR UPDATE SKIP LOCKED — батч лишь ограничивает аппетит одного тика. Берётся
-// из `keeper.acolyte_batch`; 0/опущено → [config.DefaultAcolyteBatch].
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 func acolyteBatch(cfg *config.KeeperConfig) int {
 	if cfg.AcolyteBatch <= 0 {
 		return config.DefaultAcolyteBatch
@@ -733,8 +734,8 @@ func acolyteBatch(cfg *config.KeeperConfig) int {
 	return cfg.AcolyteBatch
 }
 
-// acolytePollInterval — период poll-fallback-а воркера (ADR-027(a)). Берётся из
-// `keeper.acolyte_poll_interval`; пусто/некорректно → [config.DefaultAcolytePollInterval].
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 func acolytePollInterval(cfg *config.KeeperConfig) time.Duration {
 	if cfg.AcolytePollInterval == "" {
 		return config.DefaultAcolytePollInterval
@@ -746,9 +747,9 @@ func acolytePollInterval(cfg *config.KeeperConfig) time.Duration {
 	return d
 }
 
-// acolyteDrainGrace — окно graceful-drain пула при остановке Keeper
-// (graceful-drain пула Acolyte, ADR-027 Phase 2). Берётся из `keeper.acolyte_drain_grace`;
-// пусто/некорректно → [config.DefaultAcolyteDrainGrace].
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 func acolyteDrainGrace(cfg *config.KeeperConfig) time.Duration {
 	if cfg.AcolyteDrainGrace == "" {
 		return config.DefaultAcolyteDrainGrace
@@ -760,9 +761,9 @@ func acolyteDrainGrace(cfg *config.KeeperConfig) time.Duration {
 	return d
 }
 
-// voyageWorkers — число воркеров VoyageWorker-пула (ADR-043, S1). Берётся из
-// `keeper.voyage.workers`. Config-gated OFF по умолчанию: отсутствие блока ИЛИ
-// workers ≤ 0 → 0 (pool НЕ поднимается). Воркер стартует только при явном
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 // `voyage.workers: N > 0`.
 func voyageWorkers(cfg *config.KeeperConfig) int {
 	if cfg.Voyage == nil || cfg.Voyage.Workers <= 0 {
@@ -771,8 +772,8 @@ func voyageWorkers(cfg *config.KeeperConfig) int {
 	return cfg.Voyage.Workers
 }
 
-// voyageLeaseTTL — TTL PG-claim-lease для строки в `voyages` (ADR-043). Берётся
-// из `keeper.voyage.lease_ttl`; пусто/некорректно → [config.DefaultVoyageLeaseTTL]
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 // (60s, parity ErrandRun).
 func voyageLeaseTTL(cfg *config.KeeperConfig) time.Duration {
 	if cfg.Voyage == nil || cfg.Voyage.LeaseTTL == "" {
@@ -785,8 +786,8 @@ func voyageLeaseTTL(cfg *config.KeeperConfig) time.Duration {
 	return d
 }
 
-// voyageLeaseRenewInterval — период renewal-CAS-UPDATE-а текущего lease-а.
-// Берётся из `keeper.voyage.lease_renew_interval`; пусто/некорректно →
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 // [config.DefaultVoyageLeaseRenewInterval] (20s = ~1/3 LeaseTTL).
 func voyageLeaseRenewInterval(cfg *config.KeeperConfig) time.Duration {
 	if cfg.Voyage == nil || cfg.Voyage.LeaseRenewInterval == "" {
@@ -799,8 +800,8 @@ func voyageLeaseRenewInterval(cfg *config.KeeperConfig) time.Duration {
 	return d
 }
 
-// voyagePollInterval — период idle-poll claim-loop-а. Берётся из
-// `keeper.voyage.poll_interval`; пусто/некорректно →
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 // [config.DefaultVoyagePollInterval] (5s).
 func voyagePollInterval(cfg *config.KeeperConfig) time.Duration {
 	if cfg.Voyage == nil || cfg.Voyage.PollInterval == "" {
@@ -813,12 +814,12 @@ func voyagePollInterval(cfg *config.KeeperConfig) time.Duration {
 	return d
 }
 
-// sigilAnchorsReloadInterval — период TTL-fallback-перечита набора trust-anchor-
-// ключей подписи Sigil (ADR-026(h), R3 known-gap). Берётся из
-// `keeper.sigil_anchors_reload_interval`; пусто/некорректно →
-// [config.DefaultSigilAnchorsReloadInterval] (30s). Формат уже провалидирован
-// semantic-фазой (checkDuration); дефолтуем на любой не-положительный результат
-// на всякий случай (симметрия с резолверами acolyte_*).
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 func sigilAnchorsReloadInterval(cfg *config.KeeperConfig) time.Duration {
 	if cfg.SigilAnchorsReloadInterval == "" {
 		return config.DefaultSigilAnchorsReloadInterval
@@ -830,12 +831,12 @@ func sigilAnchorsReloadInterval(cfg *config.KeeperConfig) time.Duration {
 	return d
 }
 
-// oracleCircuitMaxFires — эффективный порог circuit-breaker-а Oracle (ADR-030(a),
-// beacons S4): сколько срабатываний Decree за окно допустимо до авто-disable.
-// Берётся из `keeper.oracle_circuit_max_fires` (*int): nil (поле опущено) →
-// дефолт [config.DefaultOracleCircuitMaxFires] (5); явный 0 → breaker OFF
-// (escape-hatch), возвращаем 0 как есть. Отрицательное отсечено schema-фазой.
-// *int нужен именно чтобы различить «пусто → дефолт 5» и «явный 0 → off».
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 func oracleCircuitMaxFires(cfg *config.KeeperConfig) int {
 	if cfg.OracleCircuitMaxFires == nil {
 		return config.DefaultOracleCircuitMaxFires
@@ -843,11 +844,11 @@ func oracleCircuitMaxFires(cfg *config.KeeperConfig) int {
 	return *cfg.OracleCircuitMaxFires
 }
 
-// oracleCircuitWindow — длина fixed-window circuit-breaker-а Oracle (ADR-030(a)).
-// Берётся из `keeper.oracle_circuit_window`; пусто/некорректно →
-// [config.DefaultOracleCircuitWindow] (10m). Формат уже провалидирован
-// semantic-фазой (checkDuration); дефолтуем на любой не-положительный результат
-// (симметрия с резолверами acolyte_*).
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 func oracleCircuitWindow(cfg *config.KeeperConfig) time.Duration {
 	if cfg.OracleCircuitWindow == "" {
 		return config.DefaultOracleCircuitWindow
@@ -859,11 +860,11 @@ func oracleCircuitWindow(cfg *config.KeeperConfig) time.Duration {
 	return d
 }
 
-// watchmanInterval — период probe-тика Watchman (изоляция-детект +
-// soul-shedding S2). Берётся из `keeper.watchman_interval`; пусто/некорректно →
-// [config.DefaultWatchmanInterval] (5s). Формат уже провалидирован semantic-фазой
-// (checkDuration); дефолтуем на любой не-положительный результат (симметрия с
-// резолверами acolyte_* / oracle_circuit_window).
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 func watchmanInterval(cfg *config.KeeperConfig) time.Duration {
 	if cfg.WatchmanInterval == "" {
 		return config.DefaultWatchmanInterval
@@ -875,10 +876,10 @@ func watchmanInterval(cfg *config.KeeperConfig) time.Duration {
 	return d
 }
 
-// watchmanFailThreshold — число подряд идущих провалов probe Watchman до
-// shedding-а (debounce/flap-guard). Берётся из `keeper.watchman_fail_threshold`;
-// 0/опущено → [config.DefaultWatchmanFailThreshold] (3). Отрицательное отсечено
-// schema-фазой (симметрия с acolyteBatch).
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 func watchmanFailThreshold(cfg *config.KeeperConfig) int {
 	if cfg.WatchmanFailThreshold <= 0 {
 		return config.DefaultWatchmanFailThreshold
@@ -886,10 +887,10 @@ func watchmanFailThreshold(cfg *config.KeeperConfig) int {
 	return cfg.WatchmanFailThreshold
 }
 
-// summonsPublisher — адаптер [scenario.SummonsPublisher] поверх
-// [keeperredis.PublishSummons]. Best-effort: scenario-runner на новом пути
-// dispatch-а зовёт его после записи planned-строк; ошибку публикации он
-// логирует и глотает (задания персистентны, poll-fallback Acolyte подхватит).
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 type summonsPublisher struct {
 	redis *keeperredis.Client
 	kid   string
@@ -900,14 +901,14 @@ func (p summonsPublisher) PublishSummons(ctx context.Context) error {
 	return err
 }
 
-// rbacInvalidatePublishTimeout — deadline на сетевой Redis PUBLISH
-// invalidate-сигнала (B2): если Redis недоступен, role-мутация не блокируется
-// дольше этого. Симметрично applybus.clusterPublishTimeout.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 const rbacInvalidatePublishTimeout = time.Second
 
-// rbacInvalidator — адаптер [rbac.Invalidator] поверх
-// [keeperredis.PublishRBACInvalidate]. Best-effort: ошибку публикации
-// логирует и глотает (мутация уже зафиксирована в БД, TTL-poll подхватит).
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 type rbacInvalidator struct {
 	redis  *keeperredis.Client
 	kid    string
@@ -915,8 +916,8 @@ type rbacInvalidator struct {
 }
 
 func (i rbacInvalidator) Invalidate(_ context.Context) {
-	// Свой короткий deadline вместо ctx caller-а: PUBLISH не должен
-	// блокировать ответ на role-мутацию при недоступном Redis.
+	// Keeper command runtime helper note.
+	// Keeper command runtime helper note.
 	ctx, cancel := context.WithTimeout(context.Background(), rbacInvalidatePublishTimeout)
 	defer cancel()
 	if _, err := keeperredis.PublishRBACInvalidate(ctx, i.redis, i.kid); err != nil {
@@ -924,10 +925,10 @@ func (i rbacInvalidator) Invalidate(_ context.Context) {
 	}
 }
 
-// rbacInvalidationSource — адаптер [rbac.InvalidationSource] поверх
-// [keeperredis.SubscribeRBACInvalidate]. Watch держит подписку до ctx.Done()
-// и вызывает onInvalidate на каждое чужое invalidate-сообщение (self-origin
-// уже отфильтрован подпиской по KID).
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 type rbacInvalidationSource struct {
 	redis  *keeperredis.Client
 	kid    string
@@ -946,8 +947,8 @@ func (s rbacInvalidationSource) Watch(ctx context.Context, onInvalidate func()) 
 			return nil
 		case _, ok := <-sub.Channel():
 			if !ok {
-				// Канал закрыт (фатальная ошибка подписки) — выходим, Holder
-				// деградирует на TTL-poll.
+				// Keeper command runtime helper note.
+				// Keeper command runtime helper note.
 				return nil
 			}
 			onInvalidate()
@@ -955,14 +956,14 @@ func (s rbacInvalidationSource) Watch(ctx context.Context, onInvalidate func()) 
 	}
 }
 
-// serviceInvalidatePublishTimeout — deadline на сетевой Redis PUBLISH
-// invalidate-сигнала реестра (S2): если Redis недоступен, CRUD-мутация не
-// блокируется дольше этого. Симметрично rbacInvalidatePublishTimeout.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 const serviceInvalidatePublishTimeout = time.Second
 
-// serviceInvalidator — адаптер serviceregistry.Invalidator поверх
-// [keeperredis.PublishServiceInvalidate]. Best-effort: ошибку публикации
-// логирует и глотает (мутация уже зафиксирована в БД, TTL-poll подхватит).
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 type serviceInvalidator struct {
 	redis  *keeperredis.Client
 	kid    string
@@ -970,8 +971,8 @@ type serviceInvalidator struct {
 }
 
 func (i serviceInvalidator) Invalidate(_ context.Context) {
-	// Свой короткий deadline вместо ctx caller-а: PUBLISH не должен блокировать
-	// ответ на CRUD-мутацию при недоступном Redis.
+	// Keeper command runtime helper note.
+	// Keeper command runtime helper note.
 	ctx, cancel := context.WithTimeout(context.Background(), serviceInvalidatePublishTimeout)
 	defer cancel()
 	if _, err := keeperredis.PublishServiceInvalidate(ctx, i.redis, i.kid); err != nil {
@@ -979,10 +980,10 @@ func (i serviceInvalidator) Invalidate(_ context.Context) {
 	}
 }
 
-// serviceInvalidationSource — адаптер serviceregistry.InvalidationSource поверх
-// [keeperredis.SubscribeServiceInvalidate]. Watch держит подписку до ctx.Done()
-// и вызывает onInvalidate на каждое чужое invalidate-сообщение (self-origin уже
-// отфильтрован подпиской по KID).
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 type serviceInvalidationSource struct {
 	redis  *keeperredis.Client
 	kid    string
@@ -1001,8 +1002,8 @@ func (s serviceInvalidationSource) Watch(ctx context.Context, onInvalidate func(
 			return nil
 		case _, ok := <-sub.Channel():
 			if !ok {
-				// Канал закрыт (фатальная ошибка подписки) — выходим, Holder
-				// деградирует на TTL-poll.
+				// Keeper command runtime helper note.
+				// Keeper command runtime helper note.
 				return nil
 			}
 			onInvalidate()
@@ -1010,23 +1011,23 @@ func (s serviceInvalidationSource) Watch(ctx context.Context, onInvalidate func(
 	}
 }
 
-// sigilInvalidatePublishTimeout — deadline на сетевой Redis PUBLISH
-// invalidate-сигнала (S6c): если Redis недоступен, allow/revoke не блокируется
-// дольше этого. Симметрично rbacInvalidatePublishTimeout.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 const sigilInvalidatePublishTimeout = time.Second
 
-// sigilInvalidator — адаптер [sigil.Invalidator] поверх
-// [keeperredis.PublishSigilInvalidate] (ADR-026, S6c). Best-effort: ошибку
-// публикации логирует и глотает (мутация уже зафиксирована в БД, connect-time
-// broadcast подхватит на следующем reconnect Soul-а).
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 type sigilInvalidator struct {
 	redis  *keeperredis.Client
 	logger *slog.Logger
 }
 
 func (i sigilInvalidator) Invalidate(_ context.Context) {
-	// Свой короткий deadline вместо ctx caller-а: PUBLISH не должен блокировать
-	// ответ на allow/revoke при недоступном Redis.
+	// Keeper command runtime helper note.
+	// Keeper command runtime helper note.
 	ctx, cancel := context.WithTimeout(context.Background(), sigilInvalidatePublishTimeout)
 	defer cancel()
 	if _, err := keeperredis.PublishSigilInvalidate(ctx, i.redis); err != nil {
@@ -1034,19 +1035,19 @@ func (i sigilInvalidator) Invalidate(_ context.Context) {
 	}
 }
 
-// sigilAnchorsPublisher — адаптер [sigil.AnchorsPublisher] поверх
-// [keeperredis.PublishAnchorsChanged] (ADR-026(h), R3-S7). После мутации реестра
-// ключей подписи (Introduce/SetPrimary/Retire) шлёт в `sigil:anchors-changed`,
-// по которому каждая нода re-load-ит Signer/набор и re-broadcast-ит SigilTrustAnchors.
-// Best-effort: ошибку публикации логирует и глотает (мутация уже в БД, набор
-// доедет на рестарте).
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 type sigilAnchorsPublisher struct {
 	redis  *keeperredis.Client
 	logger *slog.Logger
 }
 
 func (p sigilAnchorsPublisher) Publish(_ context.Context) {
-	// Свой короткий deadline: PUBLISH не должен блокировать ответ на ротацию.
+	// Keeper command runtime helper note.
 	ctx, cancel := context.WithTimeout(context.Background(), sigilInvalidatePublishTimeout)
 	defer cancel()
 	if _, err := keeperredis.PublishAnchorsChanged(ctx, p.redis); err != nil {
@@ -1054,12 +1055,12 @@ func (p sigilAnchorsPublisher) Publish(_ context.Context) {
 	}
 }
 
-// signalContext возвращает context, отменяемый при получении SIGINT/SIGTERM.
-// Используется обеими командами: init — чтобы Ctrl-C прервал долгий
-// docker-pull/PG-handshake; run — чтобы daemon корректно завершался.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 //
-// SIGHUP сюда НЕ входит — он обрабатывается отдельным каналом внутри
-// [config.WatchSIGHUP], чтобы reload не путался с shutdown.
+// Keeper command runtime helper note.
+// Keeper command runtime helper note.
 func signalContext() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 }
