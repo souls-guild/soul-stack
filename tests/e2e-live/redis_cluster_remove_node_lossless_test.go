@@ -1,52 +1,52 @@
 //go:build e2e_live
 
-// L3c live-verification: remove-node слот-миграция ЛОССЛЕСС на РЕАЛЬНОМ Redis
-// Cluster (НЕ L0-fake). Закрывает trust-gap MAJOR-фикса 2026-06-22:
-// community.redis remove-node переносил ключи слота через CLUSTER GETKEYSINSLOT →
-// стрингификация (join пробелом) → strings.Fields. Ключ Redis — произвольная
-// байт-строка и может содержать пробел/\t/\n; "user 42" рвался на два токена →
-// MIGRATE по несуществующим ключам → ключ НЕ переносился, а SETSLOT NODE всё
-// равно отдавал слот → ПОТЕРЯ ДАННЫХ. Фикс — типизированный
-// redisConn.GetKeysInSlot ([]string) поверх go-redis ClusterGetKeysInSlot.
+// L3c live verification: remove-node slot migration is LOSSLESS on REAL Redis
+// Cluster (NOT L0 fake). Closes trust gap of MAJOR fix from 2026-06-22:
+// community.redis remove-node moved slot keys through CLUSTER GETKEYSINSLOT ->
+// stringification (join with space) -> strings.Fields. Redis key is arbitrary
+// byte string and may contain space/\t/\n; "user 42" was split into two tokens ->
+// MIGRATE over nonexistent keys -> key was NOT moved, while SETSLOT NODE still
+// handed off the slot -> DATA LOSS. Fix is typed redisConn.GetKeysInSlot ([]string)
+// over go-redis ClusterGetKeysInSlot.
 //
 // L0-fake (cluster_test.go::TestApplyClusterRemoveNode_WhitespaceKeysLossless)
-// доказывает ТОЛЬКО последовательность команд: что "user 42" уходит в MIGRATE
-// одним KEYS-аргументом. Он НЕ доказывает лосслесс РЕАЛЬНЫХ данных — что после
-// remove-node ключ физически доступен на новом владельце и DBSIZE сходится. Это
-// — задача L3c (живой Redis Cluster, independent verify через redis-cli).
+// proves ONLY command sequence: that "user 42" goes into MIGRATE as a single KEYS
+// argument. It does NOT prove losslessness of REAL data - that after remove-node,
+// the key is physically available on the new owner and DBSIZE matches. That is
+// L3c's job (live Redis Cluster, independent verify through redis-cli).
 //
-// ★ ИНВАРИАНТ (что обязан проверить разблокированный тест):
-//  1. Поднять РЕАЛЬНЫЙ Redis Cluster через community.redis scenario `create`
-//     (examples/service/redis, redis_type=cluster) на soul-контейнерах —
-//     ≥3 master со слотами + ≥1 удаляемый master со слотами.
-//  2. Записать N ключей в слоты УДАЛЯЕМОГО master-а, ОБЯЗАТЕЛЬНО включая:
-//     - ключ с ПРОБЕЛОМ в имени ("user 42") — ровно дефектный кейс;
-//     - ключ с TTL (PSETEX) — MIGRATE обязан перенести и оставшийся TTL;
-//     - обычный ключ для контраста.
-//     Зафиксировать DBSIZE по всему кластеру (сумма по master-ам) ДО.
-//  3. Выполнить scenario `remove_node` (remove_node_sid = удаляемый master,
-//     seed_sid = любой оставшийся). WaitApplySuccess.
-//  4. ★ ASSERT лосслесс (independent redis-cli, НЕ через плагин):
-//     - КАЖДЫЙ записанный ключ доступен (GET / EXISTS) на НОВОМ владельце слота
-//       (redis-cli -c автоматически следует MOVED), включая "user 42";
-//     - ключ с TTL сохранил TTL (> 0, в разумном окне);
-//     - суммарный DBSIZE кластера ПОСЛЕ == ДО (ни одного потерянного ключа);
-//     - удаляемый master отсутствует в CLUSTER NODES (FORGET сошёлся).
+// INVARIANT (what unblocked test must check):
+//  1. Start REAL Redis Cluster through community.redis scenario `create`
+//     (examples/service/redis, redis_type=cluster) on soul containers: >=3 masters
+//     with slots + >=1 removable master with slots.
+//  2. Write N keys into slots of the REMOVED master, MUST include:
+//     - key with SPACE in name ("user 42") - exactly the defective case;
+//     - key with TTL (PSETEX) - MIGRATE must carry remaining TTL too;
+//     - normal key for contrast.
+//     Record cluster-wide DBSIZE (sum over masters) BEFORE.
+//  3. Run scenario `remove_node` (remove_node_sid = removed master,
+//     seed_sid = any remaining one). WaitApplySuccess.
+//  4. ASSERT lossless (independent redis-cli, NOT through plugin):
+//     - EVERY written key is available (GET / EXISTS) on NEW slot owner
+//     (redis-cli -c follows MOVED automatically), including "user 42";
+//     - key with TTL preserved TTL (> 0, in a reasonable window);
+//     - cluster total DBSIZE AFTER == BEFORE (no lost keys);
+//     - removed master is absent from CLUSTER NODES (FORGET converged).
 //
-// Pre-requisites (почему пока t.Skip):
-//   - examples/service/redis scenario `create` для redis_type=cluster в L3b-live
-//     ещё не доказан end-to-end (см. redis_cluster_create_test.go::t.Skip —
-//     host-вариативный flow-control в destiny блокирует cluster-create live, а
-//     community.redis cluster-bootstrap поверх soul-контейнеров harness-ом ещё не
-//     обвязан: нет helper-а поднять cluster-mode redis на N контейнерах + дождаться
-//     cluster_state:ok через плагин).
-//   - harness не несёт helper-а записи ключей с whitespace/TTL в конкретный слот
-//     и кластер-aware DBSIZE-агрегатора (redis-cli -c GET по MOVED).
+// Pre-requisites (why t.Skip remains):
+//   - examples/service/redis scenario `create` for redis_type=cluster in L3b-live
+//     is not yet proven end-to-end (see redis_cluster_create_test.go::t.Skip:
+//     host-variable flow-control in destiny blocks cluster-create live, and
+//     community.redis cluster-bootstrap over soul containers is not wrapped by
+//     harness yet: no helper starts cluster-mode redis on N containers and waits
+//     for cluster_state:ok through plugin).
+//   - harness has no helper for writing whitespace/TTL keys into specific slot
+//     and no cluster-aware DBSIZE aggregator (redis-cli -c GET following MOVED).
 //
-// L3c НЕ закрывает этот harness-инфра-пробел — это каркас с t.Skip и понятной
-// диагностикой; реальный прогон — отдельный slice, когда (a) cluster-create live
-// разблокирован (per-роль scenario-steps ЛИБО per-host destiny-dispatch) и
-// (b) harness обзаведётся cluster-aware write/verify helper-ами.
+// L3c does NOT close this harness infrastructure gap; this is a skeleton with
+// t.Skip and clear diagnostics. Real run is a separate slice once (a)
+// cluster-create live is unblocked (per-role scenario steps OR per-host
+// destiny-dispatch) and (b) harness gets cluster-aware write/verify helpers.
 package e2e_live_test
 
 import (
@@ -58,31 +58,31 @@ import (
 	"github.com/souls-guild/soul-stack/tests/e2e-live/harness"
 )
 
-// remRedisPassword — requirepass redis для remove-node lossless-прогона
-// (засевается в Vault scoped vault:-ref, как redis_cluster_create_test.go).
+// remRedisPassword is requirepass redis for remove-node lossless run
+// (seeded into Vault scoped vault:-ref, as in redis_cluster_create_test.go).
 const remRedisPassword = "remove-node-redis-secret-32b"
 
-// losslessKeys — ключи, записываемые в слоты удаляемого master-а ДО remove-node.
-// "user 42" — РОВНО дефектный кейс (пробел в имени). Каждый обязан пережить
-// миграцию слота лосслесс.
+// losslessKeys are keys written into slots of removed master BEFORE remove-node.
+// "user 42" is EXACTLY the defective case (space in name). Each key must survive
+// slot migration losslessly.
 var losslessKeys = []string{
-	"user 42",  // ★ пробел в имени — дефектный кейс key-loss
-	"a\tb",     // таб
-	"plain-key", // обычный — контраст
+	"user 42",   // space in name - defective key-loss case
+	"a\tb",      // tab
+	"plain-key", // normal - contrast
 }
 
 func TestL3cRedisClusterRemoveNode_SlotMigrationLossless(t *testing.T) {
-	t.Skip("L3c заблокирован (harness-инфра): community.redis cluster-create live ещё не доказан end-to-end (см. redis_cluster_create_test.go::t.Skip — host-вариативный flow-control в cluster-create destiny) + нет harness-helper-ов записи ключей с whitespace/TTL в конкретный слот и кластер-aware DBSIZE-сверки. Разблокировать вместе с cluster-create live (per-роль scenario-steps ЛИБО per-host destiny-dispatch) + cluster-aware write/verify helper-ы в harness. L0-fake (TestApplyClusterRemoveNode_WhitespaceKeysLossless) доказывает порядок команд; этот тест — лосслесс реальных данных.")
+	t.Skip("L3c blocked (harness infra): community.redis cluster-create live is not yet proven end-to-end (see redis_cluster_create_test.go::t.Skip - host-variable flow-control in cluster-create destiny) + no harness helpers to write whitespace/TTL keys into specific slot and compare cluster-aware DBSIZE. Unblock together with cluster-create live (per-role scenario steps OR per-host destiny-dispatch) + cluster-aware write/verify helpers in harness. L0 fake (TestApplyClusterRemoveNode_WhitespaceKeysLossless) proves command order; this test proves real data losslessness.")
 
-	// ── Каркас остаётся для будущей разблокировки ──────────────────────────────
-	// Когда cluster-create станет применим live и harness обзаведётся
-	// cluster-aware helper-ами, тело ниже станет boilerplate.
+	// Skeleton remains for future unblocking.
+	// When cluster-create becomes applicable live and harness gets cluster-aware
+	// helpers, body below becomes boilerplate.
 	const (
-		incName    = "redis-remove-node-lossless"
-		rcService  = "redis"
-		rcExample  = "examples/service/redis"
-		removeSID  = "soul-live-c.example.com" // удаляемый master со слотами
-		seedSID    = "soul-live-a.example.com" // оставшийся master (контакт seed)
+		incName   = "redis-remove-node-lossless"
+		rcService = "redis"
+		rcExample = "examples/service/redis"
+		removeSID = "soul-live-c.example.com" // removed master with slots
+		seedSID   = "soul-live-a.example.com" // remaining master (contact seed)
 	)
 
 	stack := harness.NewStack(t, harness.Config{
@@ -99,9 +99,9 @@ func TestL3cRedisClusterRemoveNode_SlotMigrationLossless(t *testing.T) {
 	stack.MaterializeDestinies(t, "v1.0.0", "redis")
 	harness.SeedVaultKV(t, stack, "redis/"+incName, map[string]any{"password": remRedisPassword})
 
-	// (1) bootstrap cluster-mode redis через scenario create (redis_type=cluster).
-	//     TODO(L3c-future): нужен helper, гарантирующий cluster_state:ok через
-	//     community.redis (плагинный cluster-bootstrap, не redis-cli --cluster create).
+	// (1) bootstrap cluster-mode redis through scenario create (redis_type=cluster).
+	//     TODO(L3c-future): need helper guaranteeing cluster_state:ok through
+	//     community.redis (plugin cluster bootstrap, not redis-cli --cluster create).
 	createID := stack.RunScenario(t, incName, "create", map[string]any{
 		"redis_type":     "cluster",
 		"redis_password": "vault:secret/redis/" + incName + "#password",
@@ -109,18 +109,18 @@ func TestL3cRedisClusterRemoveNode_SlotMigrationLossless(t *testing.T) {
 	stack.WaitApplySuccess(t, createID, 600)
 	stack.WaitIncarnationReady(t, incName, 60)
 
-	// (2) записать ключи (вкл. "user 42" + TTL-ключ) в слоты УДАЛЯЕМОГО master-а и
-	//     зафиксировать суммарный DBSIZE кластера ДО.
+	// (2) write keys (including "user 42" + TTL key) into slots of REMOVED master
+	//     and record total cluster DBSIZE BEFORE.
 	//     TODO(L3c-future): cluster-aware write-helper — redis-cli -c -a <pw> SET,
-	//     PSETEX для TTL-ключа; адресовать слоты именно removeSID.
+	//     PSETEX for TTL key; address slots specifically on removeSID.
 	for _, k := range losslessKeys {
 		writeClusterKey(t, stack, seedSID, k, "v-"+k)
 	}
-	const ttlKey = "session ttl-key" // пробел + TTL одновременно
+	const ttlKey = "session ttl-key" // space + TTL together
 	writeClusterKeyWithTTL(t, stack, seedSID, ttlKey, "v-ttl", 600_000)
 	dbsizeBefore := clusterDBSize(t, stack)
 
-	// (3) remove_node удаляемого master-а.
+	// (3) remove_node of removed master.
 	removeID := stack.RunScenario(t, incName, "remove_node", map[string]any{
 		"remove_node_sid": removeSID,
 		"seed_sid":        seedSID,
@@ -128,55 +128,55 @@ func TestL3cRedisClusterRemoveNode_SlotMigrationLossless(t *testing.T) {
 	stack.WaitApplySuccess(t, removeID, 300)
 	stack.WaitIncarnationReady(t, incName, 60)
 
-	// (4) ★ лосслесс independent verify (redis-cli -c, следует MOVED):
-	//     каждый ключ доступен на новом владельце; TTL-ключ сохранил TTL; DBSIZE
-	//     сошёлся; удаляемый master forgotten.
+	// (4) lossless independent verify (redis-cli -c, follows MOVED):
+	//     each key is available on new owner; TTL key preserved TTL; DBSIZE
+	//     matches; removed master forgotten.
 	for _, k := range append(append([]string(nil), losslessKeys...), ttlKey) {
 		if !clusterKeyExists(t, stack, seedSID, k) {
-			t.Fatalf("★ ключ %q ПОТЕРЯН после remove-node (slot-migration не лосслесс)", k)
+			t.Fatalf("key %q LOST after remove-node (slot migration is not lossless)", k)
 		}
 	}
 	assertClusterKeyTTLPositive(t, stack, seedSID, ttlKey)
 	if after := clusterDBSize(t, stack); after != dbsizeBefore {
-		t.Fatalf("★ DBSIZE не сошёлся: до=%d после=%d (потеря/дублирование ключей)", dbsizeBefore, after)
+		t.Fatalf("DBSIZE mismatch: before=%d after=%d (lost/duplicated keys)", dbsizeBefore, after)
 	}
 	assertNodeForgotten(t, stack, seedSID, removeSID)
 }
 
-// --- TODO(L3c-future) harness cluster-aware helper-ы (заглушки каркаса) -------
-// Реальные реализации появятся при разблокировке: redis-cli -c -a <pw> внутри
-// soul-контейнера seedSID (-c → follow MOVED по всему кластеру).
+// --- TODO(L3c-future) harness cluster-aware helpers (skeleton stubs) ----------
+// Real implementations will appear when unblocked: redis-cli -c -a <pw> inside
+// soul container seedSID (-c follows MOVED across whole cluster).
 
 func writeClusterKey(t *testing.T, _ *harness.Stack, _ /*seedSID*/, key, _ /*val*/ string) {
 	t.Helper()
-	t.Fatalf("TODO(L3c-future): cluster-aware SET helper для ключа %q (redis-cli -c -a <pw> SET)", key)
+	t.Fatalf("TODO(L3c-future): cluster-aware SET helper for key %q (redis-cli -c -a <pw> SET)", key)
 }
 
 func writeClusterKeyWithTTL(t *testing.T, _ *harness.Stack, _ /*seedSID*/, key, _ /*val*/ string, _ /*ttlMs*/ int) {
 	t.Helper()
-	t.Fatalf("TODO(L3c-future): cluster-aware PSETEX helper для TTL-ключа %q", key)
+	t.Fatalf("TODO(L3c-future): cluster-aware PSETEX helper for TTL key %q", key)
 }
 
 func clusterDBSize(t *testing.T, _ *harness.Stack) int {
 	t.Helper()
-	t.Fatalf("TODO(L3c-future): cluster-aware DBSIZE-агрегатор (сумма DBSIZE по master-ам)")
+	t.Fatalf("TODO(L3c-future): cluster-aware DBSIZE aggregator (sum DBSIZE over masters)")
 	return 0
 }
 
 func clusterKeyExists(t *testing.T, _ *harness.Stack, _ /*seedSID*/, key string) bool {
 	t.Helper()
-	t.Fatalf("TODO(L3c-future): cluster-aware EXISTS helper для ключа %q (redis-cli -c)", key)
+	t.Fatalf("TODO(L3c-future): cluster-aware EXISTS helper for key %q (redis-cli -c)", key)
 	return false
 }
 
 func assertClusterKeyTTLPositive(t *testing.T, _ *harness.Stack, _ /*seedSID*/, key string) {
 	t.Helper()
-	t.Fatalf("TODO(L3c-future): cluster-aware PTTL>0 verify для ключа %q", key)
+	t.Fatalf("TODO(L3c-future): cluster-aware PTTL>0 verify for key %q", key)
 }
 
-// assertNodeForgotten — удаляемый SID отсутствует в CLUSTER NODES seed-а (FORGET
-// сошёлся). Реализуемо уже сейчас (redis-cli cluster nodes), но завязано на живой
-// cluster из шага (1) — остаётся каркасом до разблокировки create.
+// assertNodeForgotten checks removed SID is absent from seed CLUSTER NODES (FORGET
+// converged). Implementable now (redis-cli cluster nodes), but tied to live
+// cluster from step (1), so it remains skeleton until create is unblocked.
 func assertNodeForgotten(t *testing.T, stack *harness.Stack, seedSID, removeSID string) {
 	t.Helper()
 	idx := -1
@@ -187,18 +187,18 @@ func assertNodeForgotten(t *testing.T, stack *harness.Stack, seedSID, removeSID 
 		}
 	}
 	if idx < 0 {
-		t.Fatalf("seed SID %q не найден среди soul-контейнеров", seedSID)
+		t.Fatalf("seed SID %q not found among soul containers", seedSID)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	out, code, err := stack.SoulContainers[idx].Exec(ctx,
 		[]string{"redis-cli", "-a", remRedisPassword, "cluster", "nodes"})
 	if err != nil || code != 0 {
-		t.Fatalf("cluster nodes на seed: code=%d err=%v out=%s", code, err, out)
+		t.Fatalf("cluster nodes on seed: code=%d err=%v out=%s", code, err, out)
 	}
-	// removeSID → ip:port. TODO(L3c-future): резолв SID→ip из soulprint; пока
-	// проверяем, что удаляемый адрес физически исчез из топологии.
+	// removeSID -> ip:port. TODO(L3c-future): resolve SID->ip from soulprint; for
+	// now verify that removed address physically disappeared from topology.
 	if strings.Contains(out, removeSID) {
-		t.Fatalf("★ удаляемый узел %q всё ещё в CLUSTER NODES (FORGET не сошёлся):\n%s", removeSID, out)
+		t.Fatalf("removed node %q is still in CLUSTER NODES (FORGET did not converge):\n%s", removeSID, out)
 	}
 }

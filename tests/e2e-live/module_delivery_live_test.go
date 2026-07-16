@@ -211,8 +211,8 @@ func taskStatusByPlan(t *testing.T, s *harness.Stack, applyID, sid string, planI
 	return status
 }
 
-// taskErrorByPlan — error.code/module/message задачи по plan_index (fail-closed
-// негатив). Пустые поля → маркеры "<no-error>"/"<no-module>"/"".
+// taskErrorByPlan returns task error.code/module/message by plan_index
+// (fail-closed negative). Empty fields become "<no-error>"/"<no-module>"/"" markers.
 func taskErrorByPlan(t *testing.T, s *harness.Stack, applyID, sid string, planIdx int) (code, module, message string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -228,13 +228,14 @@ func taskErrorByPlan(t *testing.T, s *harness.Stack, applyID, sid string, planId
 		ORDER BY created_at DESC LIMIT 1
 	`, applyID, sid, planIdx).Scan(&code, &module, &message)
 	if err != nil {
-		t.Fatalf("taskErrorByPlan(apply=%s sid=%s plan_index=%d): нет task.executed-строки: %v", applyID, sid, planIdx, err)
+		t.Fatalf("taskErrorByPlan(apply=%s sid=%s plan_index=%d): no task.executed row: %v", applyID, sid, planIdx, err)
 	}
 	return code, module, message
 }
 
-// assertHostFileExecutable — файл существует и имеет x-бит (host-слот бинаря
-// soul-mod-redis, ADR-065(g)). Реюз assertHostFileAbsent недостаточно — нужен `test -x`.
+// assertHostFileExecutable checks file exists and has x bit (host binary slot for
+// soul-mod-redis, ADR-065(g)). Reusing assertHostFileAbsent is not enough:
+// `test -x` is required.
 func assertHostFileExecutable(t *testing.T, s *harness.Stack, soulIdx int, path string) {
 	t.Helper()
 	sc := s.SoulContainers[soulIdx]
@@ -245,6 +246,6 @@ func assertHostFileExecutable(t *testing.T, s *harness.Stack, soulIdx int, path 
 		t.Fatalf("assertHostFileExecutable(%s): exec: %v\noutput=%s", path, err, out)
 	}
 	if code != 0 {
-		t.Fatalf("assertHostFileExecutable(%s): не исполняемый (test -x exit=%d)", path, code)
+		t.Fatalf("assertHostFileExecutable(%s): not executable (test -x exit=%d)", path, code)
 	}
 }

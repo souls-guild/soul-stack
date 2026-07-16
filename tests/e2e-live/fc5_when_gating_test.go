@@ -9,13 +9,13 @@
 // not proven on real register. FC-1 (redis_cluster_update_acl_test.go) proved the
 // SYMMETRIC but DIFFERENT path - `where:` targeting:
 //
-//   where = Keeper-side targeting. A host with where:false gets NO task at all:
-//           at the apply_runs level it either has no passage row,
-//           or no_match. The task doesn't exist on it.
-//   when  = Soul-side per-task gating. A task WITHOUT where: goes to ALL hosts
-//           of the run; Soul evaluates when via the sandboxed-cel engine and on
-//           when:false emits skippedTaskEvent -> TASK_STATUS_SKIPPED (mod.Apply is not called),
-//           as a separate task.executed row in audit_log.
+//	where = Keeper-side targeting. A host with where:false gets NO task at all:
+//	        at the apply_runs level it either has no passage row,
+//	        or no_match. The task doesn't exist on it.
+//	when  = Soul-side per-task gating. A task WITHOUT where: goes to ALL hosts
+//	        of the run; Soul evaluates when via the sandboxed-cel engine and on
+//	        when:false emits skippedTaskEvent -> TASK_STATUS_SKIPPED (mod.Apply is not called),
+//	        as a separate task.executed row in audit_log.
 //
 // This is exactly the observable difference the test proves on real-apply:
 // register-gated when produces a per-task SKIPPED EVENT (audit_log), NOT no_match at
@@ -23,17 +23,18 @@
 //
 // SCENARIO (tests/e2e-live/when-gate-live, a local fixture in the test's own scope, does NOT
 // touch committed examples/):
-//   probe   - `redis-cli role | head -1 | tr -d '\n'` -> register: redis_role
-//             (LIVE redis: host-0 master, host-1/2 REPLICAOF host-0 -> role
-//             master vs slave). tr -d '\n' - register.stdout without a trailing \n.
-//   action  - a task WITHOUT where:, `when: register.redis_role.stdout == 'master'`,
-//             core.cmd.shell writes a marker file, changed_when: false. BOTH steps in
-//             ONE Passage 0: register-dependent `when:` does NOT split the Passage
-//             (FC-5 narrow-fix, ADR-056:85 - flow-control is NOT passage-defining;
-//             soul-lint passage_plan = single-passage, NOT [1 1] as before the fix).
-//             keeper carries when AS A CEL STRING in RenderedTask.when (does NOT
-//             evaluate it - register is known only to Soul), Soul sees the register
-//             same-passage in its ApplyRequest. Soul: master -> OK, replicas -> SKIPPED.
+//
+//	probe   - `redis-cli role | head -1 | tr -d '\n'` -> register: redis_role
+//	          (LIVE redis: host-0 master, host-1/2 REPLICAOF host-0 -> role
+//	          master vs slave). tr -d '\n' - register.stdout without a trailing \n.
+//	action  - a task WITHOUT where:, `when: register.redis_role.stdout == 'master'`,
+//	          core.cmd.shell writes a marker file, changed_when: false. BOTH steps in
+//	          ONE Passage 0: register-dependent `when:` does NOT split the Passage
+//	          (FC-5 narrow-fix, ADR-056:85 - flow-control is NOT passage-defining;
+//	          soul-lint passage_plan = single-passage, NOT [1 1] as before the fix).
+//	          keeper carries when AS A CEL STRING in RenderedTask.when (does NOT
+//	          evaluate it - register is known only to Soul), Soul sees the register
+//	          same-passage in its ApplyRequest. Soul: master -> OK, replicas -> SKIPPED.
 //
 // * trim: the probe-cmd carries `tr -d '\n'` (the cmd module does NOT trim stdout - the same
 // finding as FC-1 update_acl). Without it register.redis_role.stdout = "master\n"
@@ -149,34 +150,34 @@ func TestFC5WhenGating_LiveRegister(t *testing.T) {
 	stack.AssertTaskRegisterField(t, applyID, replica1SID, wgProbePlanIdx, "stdout", "slave")
 	stack.AssertTaskRegisterField(t, applyID, replica2SID, wgProbePlanIdx, "stdout", "slave")
 
-	// ── (2) ★ КЛЮЧ FC-5: per-task when-gating Soul-side по реальному register ───
-	// Действие БЕЗ where: дошло до ВСЕХ трёх хостов (apply_runs success у каждого —
-	// WaitApplySuccess это уже доказал). Soul-side when:
-	//   master  → when:true  → задача исполнилась → TASK_STATUS_OK (changed_when: false).
-	//   реплики → when:false → Soul эмитит TASK_STATUS_SKIPPED ДО Apply.
-	// AssertTaskStatus читает per-task task.executed-строку audit_log (FC-0):
-	// SKIPPED-событие ПЕРСИСТИТСЯ как отдельная строка — это и есть отличие от
-	// where (где на реплике задачи нет вовсе).
+	// (2) FC-5 key check: per-task Soul-side when-gating by real register.
+	// Action WITHOUT where reached ALL three hosts (apply_runs success for each;
+	// WaitApplySuccess already proved this). Soul-side when:
+	//   master   -> when:true  -> task executed -> TASK_STATUS_OK (changed_when: false).
+	//   replicas -> when:false -> Soul emits TASK_STATUS_SKIPPED BEFORE Apply.
+	// AssertTaskStatus reads per-task task.executed audit_log row (FC-0):
+	// SKIPPED event is PERSISTED as a separate row; this is the difference from
+	// where (where the replica has no such task at all).
 	stack.AssertTaskStatus(t, applyID, masterSID, wgActionPlanIdx, wgActionPassage, "TASK_STATUS_OK")
 	stack.AssertTaskStatus(t, applyID, replica1SID, wgActionPlanIdx, wgActionPassage, "TASK_STATUS_SKIPPED")
 	stack.AssertTaskStatus(t, applyID, replica2SID, wgActionPlanIdx, wgActionPassage, "TASK_STATUS_SKIPPED")
 
-	// ── (3) ★ Отличие when от where ДОКАЗАНО на персистентности ────────────────
-	// when даёт SKIPPED-СОБЫТИЕ (task.executed-строка существует) на репликах, а НЕ
-	// no_match/отсутствие apply_runs-строки. Прямой контр-ассерт: у where (FC-1
-	// update_acl) реплика на where-задаче имеет apply_runs(passage=1)=no_match ЛИБО
-	// строки нет; у when реплика имеет apply_runs success (задача дошла), а per-task
-	// SKIPPED живёт в audit_log. Доказываем обе грани:
-	//   3a. apply_runs реплики = success (НЕ no_match) — задача дошла до хоста.
+	// (3) when vs where difference is proven by persistence.
+	// when produces a SKIPPED EVENT (task.executed row exists) on replicas, not
+	// no_match or missing apply_runs row. Direct counter-assert: with where (FC-1
+	// update_acl), a replica on a where task has apply_runs(passage=1)=no_match OR
+	// no row; with when, the replica has apply_runs success (task was delivered),
+	// and per-task SKIPPED lives in audit_log. Prove both sides:
+	//   3a. replica apply_runs = success (NOT no_match) - task reached the host.
 	assertWhenReplicaApplyRunSucceeded(t, stack, applyID, replica1SID, replica2SID)
-	//   3b. task.executed-строка для SKIPPED-действия реплики РЕАЛЬНО есть (персист).
+	//   3b. task.executed row for replica SKIPPED action really exists (persistence).
 	assertTaskEventPersisted(t, stack, applyID, replica1SID, wgActionPlanIdx, wgActionPassage)
 	assertTaskEventPersisted(t, stack, applyID, replica2SID, wgActionPlanIdx, wgActionPassage)
 
-	// ── (4) Independent verify на ЖИВЫХ контейнерах: маркер-файл ───────────────
-	// when-gated cmd писал /tmp/when-gated-acted. master выполнил → файл есть;
-	// реплики SKIPPED (mod.Apply не зван) → файла НЕТ. Доказывает, что SKIPPED —
-	// настоящий skip Apply, а не «выполнилась, но статус занижен».
+	// (4) Independent verify on LIVE containers: marker file.
+	// when-gated cmd wrote /tmp/when-gated-acted. master executed -> file exists;
+	// replicas were SKIPPED (mod.Apply not called) -> file is ABSENT. Proves
+	// SKIPPED is a real Apply skip, not "executed but status was downgraded".
 	stack.AssertHostFileExists(t, 0, wgActionFilePath)
 	assertHostFileAbsent(t, stack, 1, wgActionFilePath)
 	assertHostFileAbsent(t, stack, 2, wgActionFilePath)
@@ -188,11 +189,11 @@ func TestFC5WhenGating_LiveRegister(t *testing.T) {
 	stack.AssertMetricGE(t, `keeper_scenario_runs_total{result="ok"}`, 1)
 }
 
-// assertWhenReplicaApplyRunSucceeded проверяет, что реплики получили apply_runs со
-// статусом success (НЕ no_match) — то есть when-gated задача ДОШЛА до хоста (в
-// отличие от where, отфильтровавшего бы хост из таргета). per-task SKIPPED не
-// меняет терминал apply_runs хоста: SKIPPED — нейтральный исход (не fail, не
-// no_match), хост штатно завершает прогон success.
+// assertWhenReplicaApplyRunSucceeded checks that replicas received apply_runs
+// with status success (NOT no_match), meaning the when-gated task reached the
+// host (unlike where, which would filter the host out of target). per-task
+// SKIPPED does not change host apply_runs terminal: SKIPPED is a neutral
+// outcome (not fail, not no_match), and the host completes the run as success.
 func assertWhenReplicaApplyRunSucceeded(t *testing.T, stack *harness.Stack, applyID string, replicaSIDs ...string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -202,22 +203,22 @@ func assertWhenReplicaApplyRunSucceeded(t *testing.T, stack *harness.Stack, appl
 		err := stack.DB().QueryRow(ctx,
 			`SELECT status FROM apply_runs WHERE apply_id = $1 AND sid = $2`, applyID, sid).Scan(&status)
 		if err != nil {
-			t.Fatalf("★ when≠where: реплика %s НЕ имеет apply_runs-строки — задача не дошла до хоста (это поведение where, не when): %v", sid, err)
+			t.Fatalf("when vs where: replica %s has NO apply_runs row - task did not reach the host (where behavior, not when): %v", sid, err)
 		}
 		if status == "no_match" {
-			t.Fatalf("★ when≠where: реплика %s apply_runs status=no_match — хост отфильтрован из таргета (where-семантика); when обязан ДОСТАВИТЬ задачу и скипнуть её Soul-side, а не отсеять хост", sid)
+			t.Fatalf("when vs where: replica %s apply_runs status=no_match - host was filtered from target (where semantics); when must DELIVER the task and skip it Soul-side, not filter out the host", sid)
 		}
 		if status != "success" {
-			t.Fatalf("★ реплика %s apply_runs status=%q, ожидался success (per-task SKIPPED — нейтральный исход, хост должен завершить прогон success)", sid, status)
+			t.Fatalf("replica %s apply_runs status=%q, expected success (per-task SKIPPED is a neutral outcome, host must finish the run as success)", sid, status)
 		}
 	}
 }
 
-// assertTaskEventPersisted проверяет, что per-task task.executed-строка для задачи
-// (apply_id, sid, plan_index, passage) РЕАЛЬНО есть в audit_log — это и есть
-// материальное отличие when от where: SKIPPED-событие персистится отдельной
-// строкой (соул эмитит skippedTaskEvent), тогда как where-отфильтрованный хост
-// task.executed-строки этой задачи не имеет вовсе.
+// assertTaskEventPersisted checks that the per-task task.executed row for task
+// (apply_id, sid, plan_index, passage) really exists in audit_log. This is the
+// material difference between when and where: SKIPPED event is persisted as a
+// separate row (Soul emits skippedTaskEvent), while a where-filtered host has
+// no task.executed row for this task at all.
 func assertTaskEventPersisted(t *testing.T, stack *harness.Stack, applyID, sid string, planIdx, passage int) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -235,6 +236,6 @@ func assertTaskEventPersisted(t *testing.T, stack *harness.Stack, applyID, sid s
 		t.Fatalf("assertTaskEventPersisted(sid=%s plan_index=%d passage=%d): query: %v", sid, planIdx, passage, err)
 	}
 	if n == 0 {
-		t.Fatalf("★ when≠where: для реплики %s НЕТ task.executed-строки when-gated задачи (plan_index=%d passage=%d) — SKIPPED-событие не персистнуто; when обязан эмитить per-task SKIPPED-событие, а не молча выкинуть задачу как where", sid, planIdx, passage)
+		t.Fatalf("when vs where: replica %s has NO task.executed row for when-gated task (plan_index=%d passage=%d) - SKIPPED event was not persisted; when must emit per-task SKIPPED event, not silently drop the task like where", sid, planIdx, passage)
 	}
 }

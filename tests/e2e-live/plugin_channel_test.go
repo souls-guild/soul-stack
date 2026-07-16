@@ -1,11 +1,13 @@
 //go:build e2e_live
 
-// L3b S1 plugin-канал SoulModule (NIM-32, ADR-065(b)/(f)/(g)): каталог
-// `plugins.soul_modules[]` keeper.yml → plugingit-резолв слота в cache_root
-// на старте `keeper run` → Sigil-allow через Operator API (keeper-side seal).
+// L3b S1 SoulModule plugin channel (NIM-32, ADR-065(b)/(f)/(g)): catalog
+// `plugins.soul_modules[]` in keeper.yml -> plugingit slot resolve into
+// cache_root on `keeper run` startup -> Sigil allow through Operator API
+// (keeper-side seal).
 //
-// Лёгкий стенд: keeper + PG + Redis + Vault, БЕЗ soul-контейнера (Souls: 0) —
-// доставка байтов на живой soul (FetchModule + core.module.installed) — S2+.
+// Lightweight stand: keeper + PG + Redis + Vault, WITHOUT soul container
+// (Souls: 0). Byte delivery to live soul (FetchModule + core.module.installed)
+// is S2+.
 package e2e_live_test
 
 import (
@@ -18,14 +20,14 @@ import (
 	"github.com/souls-guild/soul-stack/tests/e2e-live/harness"
 )
 
-// TestL3bPluginChannel_CatalogAndAllow — smoke S1:
-//  1. harness собирает soul-mod-community-redis и публикует его в per-test
-//     git-репо (manifest.yaml + dist/soul-mod-redis, тег v1.0.0);
-//  2. keeper стартует с `plugins.soul_modules[]` на этот file://-репо и при
-//     старте материализует слот `<cache_root>/community-redis/current/`;
-//  3. AllowSoulModule (POST /v1/plugins/sigils) допускает community/redis;
-//  4. ASSERT: допуск виден в GET /v1/plugins/sigils; слот на ФС несёт
-//     manifest + исполняемый бинарь; sha256 байтов слота == sha256 допуска
+// TestL3bPluginChannel_CatalogAndAllow - smoke S1:
+//  1. harness builds soul-mod-community-redis and publishes it into per-test
+//     git repo (manifest.yaml + dist/soul-mod-redis, tag v1.0.0);
+//  2. keeper starts with `plugins.soul_modules[]` pointing to this file:// repo and
+//     materializes slot `<cache_root>/community-redis/current/` on startup;
+//  3. AllowSoulModule (POST /v1/plugins/sigils) allows community/redis;
+//  4. ASSERT: allow entry is visible in GET /v1/plugins/sigils; FS slot carries
+//     manifest + executable binary; slot byte sha256 == allow sha256
 //     (content-addressed authority ADR-065(b)).
 func TestL3bPluginChannel_CatalogAndAllow(t *testing.T) {
 	repoURL := harness.BuildCommunityRedisPlugin(t)
@@ -40,43 +42,43 @@ func TestL3bPluginChannel_CatalogAndAllow(t *testing.T) {
 
 	sha := stack.AllowSoulModule(t, "community", "redis", harness.CommunityRedisPluginRef)
 
-	// (а) допуск виден через Operator API.
+	// (a) Allow entry is visible through Operator API.
 	items := stack.ListPluginSigils(t)
 	found := false
 	for _, it := range items {
 		if it.Namespace == "community" && it.Name == "redis" && it.Ref == harness.CommunityRedisPluginRef {
 			found = true
 			if it.SHA256 != sha {
-				t.Errorf("list sha256 = %q, allow вернул %q", it.SHA256, sha)
+				t.Errorf("list sha256 = %q, allow returned %q", it.SHA256, sha)
 			}
 		}
 	}
 	if !found {
-		t.Fatalf("допуск community/redis/%s не виден в GET /v1/plugins/sigils: %+v",
+		t.Fatalf("allow entry community/redis/%s is not visible in GET /v1/plugins/sigils: %+v",
 			harness.CommunityRedisPluginRef, items)
 	}
 
-	// (б) слот материализован в cache_root (ADR-065(b)/(g), R-nested layout).
+	// (b) Slot is materialized in cache_root (ADR-065(b)/(g), R-nested layout).
 	slotDir := filepath.Join(stack.PluginCacheRoot, "community-redis", "current")
 	if _, err := os.Stat(filepath.Join(slotDir, "manifest.yaml")); err != nil {
-		t.Fatalf("manifest.yaml в слоте отсутствует: %v", err)
+		t.Fatalf("manifest.yaml is missing from slot: %v", err)
 	}
 	binPath := filepath.Join(slotDir, "soul-mod-redis")
 	st, err := os.Stat(binPath)
 	if err != nil {
-		t.Fatalf("бинарь в слоте отсутствует: %v", err)
+		t.Fatalf("binary is missing from slot: %v", err)
 	}
 	if st.Mode().Perm()&0o111 == 0 {
-		t.Errorf("бинарь слота не исполняемый: %v", st.Mode())
+		t.Errorf("slot binary is not executable: %v", st.Mode())
 	}
 
-	// Content-addressed цепочка: байты слота == sha256 активного допуска.
+	// Content-addressed chain: slot bytes == active allow sha256.
 	b, err := os.ReadFile(binPath)
 	if err != nil {
-		t.Fatalf("read слот-бинаря: %v", err)
+		t.Fatalf("read slot binary: %v", err)
 	}
 	digest := sha256.Sum256(b)
 	if got := hex.EncodeToString(digest[:]); got != sha {
-		t.Errorf("sha256(слот-бинаря) = %s, допуск = %s", got, sha)
+		t.Errorf("sha256(slot binary) = %s, allow = %s", got, sha)
 	}
 }
