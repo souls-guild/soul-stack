@@ -6,58 +6,58 @@ import (
 	"github.com/souls-guild/soul-stack/shared/obs"
 )
 
-// OracleMetrics — набор Prometheus-collector-ов Oracle reactor-роутера (ADR-030
-// S4: safety + observability). Регистрируется helper-ом поверх компонент-
-// агностичного [obs.Registry] (ADR-024 §4.0) — тем же паттерном, что
-// [augur.RegisterBrokerMetrics] / [reaper.RegisterReaperMetrics]: registry-core
-// не знает про конкретные метрики, keeper_oracle_*-метрики — частность Oracle.
+// OracleMetrics is the set of Prometheus collectors for the Oracle reactor router (ADR-030
+// S4: safety + observability). Registered by a helper on top of the component-
+// agnostic [obs.Registry] (ADR-024 §4.0) — the same pattern as
+// [augur.RegisterBrokerMetrics] / [reaper.RegisterReaperMetrics]: the registry core
+// doesn't know about specific metrics, keeper_oracle_* metrics are Oracle's own concern.
 //
-// Метрики живут здесь (keeper/internal/oracle), а не в shared/obs: они привязаны
-// к keeper-внутреннему reactor-у Portent→Decree и не переиспользуются Soul-ом
-// (ADR-011: shared/ — действительно поперечный код; Oracle — Keeper-side).
+// The metrics live here (keeper/internal/oracle), not in shared/obs: they're tied
+// to the keeper-internal Portent→Decree reactor and aren't reused by the Soul
+// (ADR-011: shared/ is truly cross-cutting code; Oracle is Keeper-side).
 //
-// БЕЗОПАСНОСТЬ + кардинальность (ADR-024 §2.2): в label-ы НЕ кладём decree-name,
-// sid, apply_id, beacon-name, payload — это high-cardinality (десятки тысяч
-// хостов × правил) и/или недоверенный вход. Кто именно сработал — в audit-log
-// (`oracle.fired` / `decree.circuit_tripped`) и trace, не в метрику. Все
-// collector-ы — без label-ов (closed-enum-разреза тут нет: один Oracle-поток).
+// SECURITY + cardinality (ADR-024 §2.2): we do NOT put decree-name,
+// sid, apply_id, beacon-name, or payload in labels — that's high-cardinality (tens of
+// thousands of hosts × rules) and/or untrusted input. Who exactly fired is in the audit log
+// (`oracle.fired` / `decree.circuit_tripped`) and trace, not in the metric. All
+// collectors are label-free (there's no closed-enum split here: a single Oracle stream).
 //
-// Имена — Prometheus convention (snake_case, _total для counter; ADR-024 §2.1),
-// префикс keeper_ (роль компонента).
+// Names follow Prometheus convention (snake_case, _total for counters; ADR-024 §2.1),
+// prefix keeper_ (component role).
 type OracleMetrics struct {
-	// portentsReceived — счётчик принятых PortentEvent-ов (на вход
-	// handlePortentEvent с непустым beacon_name). Знаменатель для остальных:
-	// сколько beacon-событий вообще дошло до reactor-а.
+	// portentsReceived is the counter of accepted PortentEvents (input to
+	// handlePortentEvent with a non-empty beacon_name). The denominator for the rest:
+	// how many beacon events reached the reactor at all.
 	portentsReceived prometheus.Counter
 
-	// decreesMatched — счётчик Decree-срабатываний, прошедших весь фильтр
-	// (subject-match + membership + where-CEL + НЕ в cooldown) и дошедших до
-	// постановки. Инкрементируется per-Decree (один Portent может сматчить
-	// несколько Decree-ов). Меньше portentsReceived из-за default-deny.
+	// decreesMatched is the counter of Decree fires that passed the entire filter
+	// (subject-match + membership + where-CEL + NOT in cooldown) and reached
+	// enqueuing. Incremented per-Decree (one Portent can match
+	// multiple Decrees). Lower than portentsReceived due to default-deny.
 	decreesMatched prometheus.Counter
 
-	// scenariosEnqueued — счётчик named-scenario, успешно поставленных в
-	// work-queue (ADR-027) Oracle-реакцией. Равно числу записанных fire-ов;
-	// расхождение с decreesMatched — сбои enqueue (см. лог).
+	// scenariosEnqueued is the counter of named scenarios successfully enqueued
+	// to the work-queue (ADR-027) by the Oracle reaction. Equal to the number of recorded fires;
+	// a discrepancy with decreesMatched means enqueue failures (see the log).
 	scenariosEnqueued prometheus.Counter
 
-	// cooldownBlocked — счётчик Decree-срабатываний, отсечённых cooldown-ом
-	// per-(decree, subject) (loop-prevention, ADR-030(a)). Рост — частые
-	// edge-события на одном правиле; первый барьер против шторма работает.
+	// cooldownBlocked is the counter of Decree fires cut off by the cooldown
+	// per-(decree, subject) (loop-prevention, ADR-030(a)). Growth means frequent
+	// edge events on one rule; the first barrier against a storm is working.
 	cooldownBlocked prometheus.Counter
 
-	// circuitTripped — счётчик авто-disable Decree circuit-breaker-ом (ADR-030(a):
-	// N срабатываний за окно → enabled=false + alert). Любой ненулевой прирост —
-	// нештатная ситуация (правило сорвалось в петлю и было заглушено),
-	// alert-кандидат.
+	// circuitTripped is the counter of auto-disables of a Decree by the circuit breaker (ADR-030(a):
+	// N fires within a window → enabled=false + alert). Any nonzero increase is
+	// an abnormal situation (a rule went into a loop and was suppressed),
+	// an alert candidate.
 	circuitTripped prometheus.Counter
 }
 
-// RegisterOracleMetrics создаёт keeper_oracle_*-collectors и регистрирует их в
-// [obs.Registry]. Возвращает дескриптор для wire-up через [grpc.OracleDeps].
+// RegisterOracleMetrics creates the keeper_oracle_* collectors and registers them in
+// [obs.Registry]. Returns the descriptor for wire-up through [grpc.OracleDeps].
 //
-// MustRegister: дубликат-регистрация — programmer error (вызвали дважды на одном
-// Registry); падать сразу удобнее ленивой инициализации (паттерн идентичен
+// MustRegister: duplicate registration is a programmer error (called twice on the same
+// Registry); failing fast is more convenient than lazy initialization (the pattern is identical to
 // [augur.RegisterBrokerMetrics] / [reaper.RegisterReaperMetrics]).
 func RegisterOracleMetrics(reg *obs.Registry) *OracleMetrics {
 	m := &OracleMetrics{
@@ -89,9 +89,9 @@ func RegisterOracleMetrics(reg *obs.Registry) *OracleMetrics {
 	return m
 }
 
-// ObservePortentReceived инкрементирует счётчик принятых Portent-ов.
-// nil-получатель — no-op: Oracle-handler может подниматься без obs-стека
-// (unit-тесты, сборки без metrics-listener-а), caller не проверяет nil.
+// ObservePortentReceived increments the counter of accepted Portents.
+// A nil receiver is a no-op: the Oracle handler can come up without the obs stack
+// (unit tests, builds without a metrics listener), the caller doesn't check for nil.
 func (m *OracleMetrics) ObservePortentReceived() {
 	if m == nil {
 		return
@@ -99,8 +99,8 @@ func (m *OracleMetrics) ObservePortentReceived() {
 	m.portentsReceived.Inc()
 }
 
-// ObserveDecreeMatched инкрементирует счётчик Decree, дошедших до постановки.
-// nil-получатель — no-op.
+// ObserveDecreeMatched increments the counter of Decrees that reached enqueuing.
+// A nil receiver is a no-op.
 func (m *OracleMetrics) ObserveDecreeMatched() {
 	if m == nil {
 		return
@@ -108,8 +108,8 @@ func (m *OracleMetrics) ObserveDecreeMatched() {
 	m.decreesMatched.Inc()
 }
 
-// ObserveScenarioEnqueued инкрементирует счётчик успешно поставленных scenario.
-// nil-получатель — no-op.
+// ObserveScenarioEnqueued increments the counter of successfully enqueued scenarios.
+// A nil receiver is a no-op.
 func (m *OracleMetrics) ObserveScenarioEnqueued() {
 	if m == nil {
 		return
@@ -117,8 +117,8 @@ func (m *OracleMetrics) ObserveScenarioEnqueued() {
 	m.scenariosEnqueued.Inc()
 }
 
-// ObserveCooldownBlocked инкрементирует счётчик срабатываний, отсечённых
-// cooldown-ом. nil-получатель — no-op.
+// ObserveCooldownBlocked increments the counter of fires cut off by the
+// cooldown. A nil receiver is a no-op.
 func (m *OracleMetrics) ObserveCooldownBlocked() {
 	if m == nil {
 		return
@@ -126,8 +126,8 @@ func (m *OracleMetrics) ObserveCooldownBlocked() {
 	m.cooldownBlocked.Inc()
 }
 
-// ObserveCircuitTripped инкрементирует счётчик авто-disable Decree circuit-
-// breaker-ом. nil-получатель — no-op.
+// ObserveCircuitTripped increments the counter of auto-disables of a Decree by the circuit
+// breaker. A nil receiver is a no-op.
 func (m *OracleMetrics) ObserveCircuitTripped() {
 	if m == nil {
 		return

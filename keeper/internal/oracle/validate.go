@@ -9,21 +9,22 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// Sentinel-ошибки service-валидации Vigil / Decree (S3). Management-Service
-// маппит их в 422 через errors.Is (не по строковому префиксу текста —
-// переименование диагностики не должно молча сломать маппинг 422→500).
-// Конкретный диагностический текст несёт обёрнутая ошибка (уже public —
-// формируется здесь, без internal SQL/stack).
+// Sentinel errors for Vigil / Decree service validation (S3). The
+// management-Service maps them to 422 via errors.Is (not by string prefix —
+// renaming a diagnostic must not silently break the 422→500 mapping). The
+// concrete diagnostic text comes from the wrapped error (already public —
+// built here, with no internal SQL/stack).
 var ErrValidation = errors.New("oracle: validation failed")
 
-// Паттерны форм, дублирующие CHECK-и миграции 041 (отбить bad value до
-// round-trip-а — лучшая диагностика, нет лишнего обращения на битом вводе).
+// Form patterns duplicating migration 041's CHECKs (reject a bad value
+// before the round-trip — better diagnostics, no wasted call on bad input).
 //
 //   - NamePattern        — vigils_name_format / decrees_name_format (kebab 1..63).
-//   - CovenPattern       — формат элемента coven-метки субъекта (kebab; per-element
-//     CHECK для text[] декларативно без триггера не выразить — миграция 041).
+//   - CovenPattern       — the format of one coven label element of the
+//     subject (kebab; a per-element CHECK for text[] can't be expressed
+//     declaratively without a trigger — migration 041).
 //   - IncarnationPattern — decrees_incarnation_name_format (= incarnation.name,
-//     корневая Coven-метка, ADR-008).
+//     the root Coven label, ADR-008).
 //   - ScenarioPattern    — decrees_scenario_format (snake_case named scenario).
 const (
 	NamePattern        = `^[a-z0-9-]{1,63}$`
@@ -39,28 +40,29 @@ var (
 	scenarioRe    = regexp.MustCompile(ScenarioPattern)
 )
 
-// ValidName проверяет имя Vigil / Decree на каноническую форму (kebab 1..63).
+// ValidName checks a Vigil / Decree name against the canonical form (kebab 1..63).
 func ValidName(name string) bool { return nameRe.MatchString(name) }
 
-// ValidCoven проверяет одну Coven-метку субъекта.
+// ValidCoven checks a single subject Coven label.
 func ValidCoven(coven string) bool { return covenRe.MatchString(coven) }
 
-// ValidIncarnationName проверяет таргет-incarnation Decree-а (формат
-// incarnation.name).
+// ValidIncarnationName checks a Decree's target incarnation (the
+// incarnation.name format).
 func ValidIncarnationName(name string) bool { return incarnationRe.MatchString(name) }
 
-// ValidScenario проверяет имя named scenario (action_scenario Decree-а).
+// ValidScenario checks a named scenario's name (a Decree's action_scenario).
 func ValidScenario(name string) bool { return scenarioRe.MatchString(name) }
 
-// knownBeaconAddrs — closed enum адресов встроенных core-beacon (ADR-030,
-// VigilDef.check). Строится из канонического списка [beaconaddr.All] — единого
-// источника истины, общего с soul-side реестром `beacon.Default()`
-// (`soul/internal/beacon`). keeper НЕ импортирует soul (compiler-изоляция,
-// ADR-011), поэтому общий список живёт в нейтральном `shared/beaconaddr`: это
-// убирает прежний дубль keeper↔soul (S3-баг: рассинхрон давал ложный 422 на
-// валидном Vigil). Plugin-kind `soul_beacon` (community-проверки, S5) ещё не
-// введён — до того check_addr ограничен этим набором (неизвестный check —
-// ошибка валидации, а не молча неисполнимый Vigil).
+// knownBeaconAddrs — a closed enum of built-in core-beacon addresses
+// (ADR-030, VigilDef.check). Built from the canonical [beaconaddr.All] list
+// — a single source of truth shared with the soul-side registry
+// `beacon.Default()` (`soul/internal/beacon`). keeper does NOT import soul
+// (compiler isolation, ADR-011), so the shared list lives in the neutral
+// `shared/beaconaddr`: this removes the old keeper↔soul duplication (an S3
+// bug: drift produced a false 422 on a valid Vigil). The `soul_beacon`
+// plugin-kind (community checks, S5) isn't introduced yet — until then
+// check_addr is restricted to this set (an unknown check is a validation
+// error, not a silently unexecutable Vigil).
 var knownBeaconAddrs = buildKnownBeaconAddrs()
 
 func buildKnownBeaconAddrs() map[string]struct{} {
@@ -72,15 +74,16 @@ func buildKnownBeaconAddrs() map[string]struct{} {
 	return m
 }
 
-// ValidCheckAddr — членство check_addr в [knownBeaconAddrs].
+// ValidCheckAddr — membership of check_addr in [knownBeaconAddrs].
 func ValidCheckAddr(addr string) bool {
 	_, ok := knownBeaconAddrs[addr]
 	return ok
 }
 
-// validateCovenList проверяет per-element формат coven-меток субъекта. Пустой
-// список допустим у вызывающего (XOR-проверка решает, задан ли субъект);
-// здесь — только формат непустых элементов.
+// validateCovenList checks the per-element format of the subject's coven
+// labels. An empty list is fine at the caller (the XOR check decides
+// whether a subject is set); here it's only the format of non-empty
+// elements.
 func validateCovenList(coven []string) error {
 	for _, c := range coven {
 		if !ValidCoven(c) {
@@ -90,11 +93,11 @@ func validateCovenList(coven []string) error {
 	return nil
 }
 
-// validateSubjectXOR проверяет XOR-инвариант субъекта (coven-список XOR sid):
-// ровно одно из непустого coven-списка / непустого sid задано. Симметрично
-// CHECK vigils_subject_xor / decrees_subject_xor (defence in depth) и
-// [augur.ValidateSubjectXOR]. SID-формат на этом слое не нормируется
-// (FQDN-семантика — registry-сторона).
+// validateSubjectXOR checks the subject's XOR invariant (coven-list XOR
+// sid): exactly one of a non-empty coven list / a non-empty sid is set.
+// Symmetric with the vigils_subject_xor / decrees_subject_xor CHECKs
+// (defence in depth) and [augur.ValidateSubjectXOR]. SID format isn't
+// normalized at this layer (FQDN semantics are the registry's side).
 func validateSubjectXOR(coven []string, sid *string) error {
 	hasCoven := len(coven) > 0
 	hasSID := sid != nil && *sid != ""
@@ -107,8 +110,8 @@ func validateSubjectXOR(coven []string, sid *string) error {
 	return nil
 }
 
-// validateInterval проверяет формат duration-строки interval Vigil-а через
-// тот же парсер, что и прочие duration-поля keeper.yml ([config.ParseDuration]).
+// validateInterval checks a Vigil's interval duration-string format through
+// the same parser as other keeper.yml duration fields ([config.ParseDuration]).
 func validateInterval(spec string) error {
 	if spec == "" {
 		return fmt.Errorf("%w: interval is empty", ErrValidation)
@@ -119,8 +122,8 @@ func validateInterval(spec string) error {
 	return nil
 }
 
-// validateCooldown проверяет формат cooldown Decree-а. Пустая строка допустима
-// (репозиторий подставит DEFAULT '0s' — cooldown выключен).
+// validateCooldown checks a Decree's cooldown format. An empty string is
+// fine (the repository fills in DEFAULT '0s' — cooldown disabled).
 func validateCooldown(spec string) error {
 	if spec == "" {
 		return nil

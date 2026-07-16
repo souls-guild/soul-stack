@@ -15,8 +15,8 @@ func TestRegisterOracleMetrics_RegistersFamilies(t *testing.T) {
 		t.Fatal("RegisterOracleMetrics returned nil")
 	}
 
-	// Counter без первого Inc семейство не публикует — прогоняем каждый Observe,
-	// затем сверяем присутствие семейств.
+	// A Counter doesn't publish its family before the first Inc — run every Observe,
+	// then check for the families' presence.
 	m.ObservePortentReceived()
 	m.ObserveDecreeMatched()
 	m.ObserveScenarioEnqueued()
@@ -55,8 +55,8 @@ func TestRegisterOracleMetrics_PanicsOnDoubleRegister(t *testing.T) {
 	RegisterOracleMetrics(reg)
 }
 
-// TestOracleMetrics_Increments — каждый Observe инкрементирует свой счётчик на
-// нужную величину.
+// TestOracleMetrics_Increments — every Observe increments its counter by
+// the expected amount.
 func TestOracleMetrics_Increments(t *testing.T) {
 	reg := obs.NewRegistry()
 	m := RegisterOracleMetrics(reg)
@@ -84,9 +84,9 @@ func TestOracleMetrics_Increments(t *testing.T) {
 	}
 }
 
-// TestOracleMetrics_NoHighCardinalityLabels — метрики Oracle без label-ов:
-// decree/sid/apply_id/beacon в exposition отсутствуют (cardinality + недоверенный
-// вход, ADR-024 §2.2).
+// TestOracleMetrics_NoHighCardinalityLabels — Oracle metrics have no labels:
+// decree/sid/apply_id/beacon are absent from the exposition (cardinality + untrusted
+// input, ADR-024 §2.2).
 func TestOracleMetrics_NoHighCardinalityLabels(t *testing.T) {
 	reg := obs.NewRegistry()
 	m := RegisterOracleMetrics(reg)
@@ -102,8 +102,8 @@ func TestOracleMetrics_NoHighCardinalityLabels(t *testing.T) {
 }
 
 func TestOracleMetrics_NilReceiver_NoOp(t *testing.T) {
-	// Oracle-handler может подниматься без obs-стека (unit-тесты, сборки без
-	// wire-up). Методы на nil-получателе — no-op без паники.
+	// The Oracle handler can come up without the obs stack (unit tests, builds without
+	// wire-up). Methods on a nil receiver are a no-op without panicking.
 	var m *OracleMetrics
 	m.ObservePortentReceived()
 	m.ObserveDecreeMatched()

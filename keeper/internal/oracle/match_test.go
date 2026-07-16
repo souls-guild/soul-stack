@@ -33,8 +33,8 @@ func TestSubjectMatches_Coven(t *testing.T) {
 }
 
 func TestSubjectMatches_EmptySubjectFailSafe(t *testing.T) {
-	// XOR-инвариант схемы не допустит такой строки, но fail-safe на программную
-	// ошибку: пустой субъект → нет match (default-deny).
+	// The schema's XOR invariant won't allow such a row, but this is a fail-safe for a
+	// programming error: empty subject → no match (default-deny).
 	d := &Decree{Name: "d"}
 	if SubjectMatches(d, "host-a", []string{"web"}) {
 		t.Error("Decree без субъекта должен давать no-match (fail-safe default-deny)")

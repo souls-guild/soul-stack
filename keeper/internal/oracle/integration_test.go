@@ -1,7 +1,7 @@
 //go:build integration
 
-// Integration-тесты реестров Oracle (vigils / decrees / oracle_fires) через
-// testcontainers-go. Паттерн совпадает с keeper/internal/augur/integration_test.go.
+// Integration tests for the Oracle registries (vigils / decrees / oracle_fires) via
+// testcontainers-go. The pattern matches keeper/internal/augur/integration_test.go.
 
 package oracle
 
@@ -94,8 +94,8 @@ func TestIntegration_SelectActiveVigilsForSubject(t *testing.T) {
 	seedOperator(t, "archon-test")
 	aid := "archon-test"
 
-	// coven-Vigil (web), sid-Vigil (host-a), disabled-Vigil (web), и
-	// несвязанный coven-Vigil (db).
+	// coven-Vigil (web), sid-Vigil (host-a), disabled-Vigil (web), and an
+	// unrelated coven-Vigil (db).
 	mustInsertVigil(t, &Vigil{Name: "web-watch", Coven: []string{"web"}, IntervalSpec: "30s", CheckAddr: "core.beacon.service_down", Enabled: true, CreatedByAID: &aid})
 	mustInsertVigil(t, &Vigil{Name: "host-watch", SID: strptr("host-a.example.com"), IntervalSpec: "1m", CheckAddr: "core.beacon.file_changed", Enabled: true, CreatedByAID: &aid})
 	mustInsertVigil(t, &Vigil{Name: "web-disabled", Coven: []string{"web"}, IntervalSpec: "30s", CheckAddr: "core.beacon.service_down", Enabled: false, CreatedByAID: &aid})
@@ -109,7 +109,7 @@ func TestIntegration_SelectActiveVigilsForSubject(t *testing.T) {
 	for _, v := range got {
 		gotNames[v.Name] = true
 	}
-	// host-watch (sid) + web-watch (coven), не db-watch, не web-disabled.
+	// host-watch (sid) + web-watch (coven), not db-watch, not web-disabled.
 	if !gotNames["host-watch"] || !gotNames["web-watch"] {
 		t.Errorf("ожидали host-watch + web-watch, got %v", gotNames)
 	}
@@ -156,7 +156,7 @@ func TestIntegration_CooldownUpsert(t *testing.T) {
 	mustInsertVigil(t, &Vigil{Name: "svc-down", Coven: []string{"web"}, IntervalSpec: "30s", CheckAddr: "core.beacon.service_down", Enabled: true, CreatedByAID: &aid})
 	mustInsertDecree(t, &Decree{Name: "restart-web", OnBeacon: "svc-down", SubjectCoven: []string{"web"}, IncarnationName: "web-app", ActionScenario: "restart", Cooldown: "5m", Enabled: true, CreatedByAID: &aid})
 
-	// До первого fire — пары нет.
+	// Before the first fire — the pair doesn't exist.
 	_, has, err := LastFiredAt(ctx, integrationPool, "restart-web", "host-a")
 	if err != nil {
 		t.Fatalf("LastFiredAt: %v", err)
@@ -177,7 +177,7 @@ func TestIntegration_CooldownUpsert(t *testing.T) {
 		t.Errorf("fired_at = %v, want %v", got, t1)
 	}
 
-	// UPSERT: повторный RecordFire обновляет, не плодит строки.
+	// UPSERT: a repeated RecordFire updates, it doesn't multiply rows.
 	t2 := t1.Add(10 * time.Minute)
 	if err := RecordFire(ctx, integrationPool, "restart-web", "host-a", t2); err != nil {
 		t.Fatalf("RecordFire #2: %v", err)
@@ -202,7 +202,7 @@ func TestIntegration_DecreeSubjectXOR(t *testing.T) {
 	aid := "archon-test"
 	mustInsertVigil(t, &Vigil{Name: "svc-down", Coven: []string{"web"}, IntervalSpec: "30s", CheckAddr: "core.beacon.service_down", Enabled: true, CreatedByAID: &aid})
 
-	// Оба субъекта заданы → CHECK decrees_subject_xor.
+	// Both subjects are set → CHECK decrees_subject_xor.
 	err := InsertDecree(ctx, integrationPool, &Decree{
 		Name: "bad", OnBeacon: "svc-down",
 		SubjectCoven: []string{"web"}, SubjectSID: strptr("host-a"),
@@ -221,7 +221,7 @@ func TestIntegration_DecreeIncarnationNameFormat(t *testing.T) {
 	aid := "archon-test"
 	mustInsertVigil(t, &Vigil{Name: "svc-down", Coven: []string{"web"}, IntervalSpec: "30s", CheckAddr: "core.beacon.service_down", Enabled: true, CreatedByAID: &aid})
 
-	// incarnation_name не по формату (Upper) → CHECK decrees_incarnation_name_format.
+	// incarnation_name not matching the format (Upper) → CHECK decrees_incarnation_name_format.
 	err := InsertDecree(ctx, integrationPool, &Decree{
 		Name: "bad-inc", OnBeacon: "svc-down", SubjectCoven: []string{"web"},
 		IncarnationName: "Web_App", ActionScenario: "restart", Enabled: true, CreatedByAID: &aid,
@@ -230,8 +230,8 @@ func TestIntegration_DecreeIncarnationNameFormat(t *testing.T) {
 		t.Fatal("ожидали CHECK-violation на incarnation_name format")
 	}
 
-	// Пустой incarnation_name → NOT NULL (Go-строка "" пишется как ''; CHECK
-	// формата требует ≥1 символ) → отказ.
+	// Empty incarnation_name → NOT NULL (a Go string "" is written as ''; the CHECK
+	// format requires ≥1 character) → rejected.
 	err = InsertDecree(ctx, integrationPool, &Decree{
 		Name: "empty-inc", OnBeacon: "svc-down", SubjectCoven: []string{"web"},
 		IncarnationName: "", ActionScenario: "restart", Enabled: true, CreatedByAID: &aid,
@@ -252,7 +252,7 @@ func TestIntegration_OracleFireCascade(t *testing.T) {
 		t.Fatalf("RecordFire: %v", err)
 	}
 
-	// Удаление Decree-а каскадом чистит oracle_fires.
+	// Deleting a Decree cleans up oracle_fires by cascade.
 	if _, err := integrationPool.Exec(ctx, `DELETE FROM decrees WHERE name='restart-web'`); err != nil {
 		t.Fatalf("delete decree: %v", err)
 	}
@@ -279,7 +279,7 @@ func newIntegrationService(t *testing.T) *Service {
 }
 
 // TestIntegration_VigilCRUD — Service create → get → list → delete round-trip
-// против реального PG (S3 CRUD).
+// against a real PG (S3 CRUD).
 func TestIntegration_VigilCRUD(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -321,7 +321,7 @@ func TestIntegration_VigilCRUD(t *testing.T) {
 		t.Errorf("после delete: %v, want ErrVigilNotFound", err)
 	}
 
-	// Дубликат → ErrVigilAlreadyExists.
+	// Duplicate → ErrVigilAlreadyExists.
 	if _, err := svc.CreateVigil(ctx, CreateVigilInput{Name: "dup", Coven: []string{"web"}, Interval: "30s", Check: "core.beacon.file_changed", CallerAID: &aid}); err != nil {
 		t.Fatalf("CreateVigil(dup #1): %v", err)
 	}
@@ -330,8 +330,8 @@ func TestIntegration_VigilCRUD(t *testing.T) {
 	}
 }
 
-// TestIntegration_DecreeCRUD — Service create (с where-CEL) → get → list →
-// delete round-trip против реального PG.
+// TestIntegration_DecreeCRUD — Service create (with where-CEL) → get → list →
+// delete round-trip against a real PG.
 func TestIntegration_DecreeCRUD(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -377,8 +377,8 @@ func TestIntegration_DecreeCRUD(t *testing.T) {
 	}
 }
 
-// seedCircuitDecree сеет vigil + один enabled coven-Decree под circuit-breaker-
-// тесты и возвращает его имя.
+// seedCircuitDecree seeds a vigil + one enabled coven-Decree for the circuit-breaker
+// tests and returns its name.
 func seedCircuitDecree(t *testing.T) string {
 	t.Helper()
 	seedOperator(t, "archon-test")
@@ -402,8 +402,8 @@ func circuitFireCount(t *testing.T, decree string) (int, bool) {
 	return cnt, true
 }
 
-// TestIntegration_BumpCircuitFixedWindow — инкремент в пределах окна и ресет на
-// границе (window_start ≤ now - window) (ADR-030(a), circuit-breaker S4).
+// TestIntegration_BumpCircuitFixedWindow — increment within the window and reset at
+// the boundary (window_start ≤ now - window) (ADR-030(a), circuit-breaker S4).
 func TestIntegration_BumpCircuitFixedWindow(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -411,7 +411,7 @@ func TestIntegration_BumpCircuitFixedWindow(t *testing.T) {
 	window := 10 * time.Minute
 
 	t0 := time.Now().UTC().Truncate(time.Second)
-	// Три bump-а в пределах окна — счётчик растёт 1→2→3.
+	// Three bumps within the window — the counter grows 1→2→3.
 	for i, want := range []int{1, 2, 3} {
 		cnt, err := BumpCircuit(ctx, integrationPool, decree, t0.Add(time.Duration(i)*time.Minute), window)
 		if err != nil {
@@ -422,9 +422,9 @@ func TestIntegration_BumpCircuitFixedWindow(t *testing.T) {
 		}
 	}
 
-	// Bump за границей окна (now строго позже window_start + window) — ресет в 1.
-	// window_start остался t0 (первый bump в этом окне), порог сравнения
-	// window_start <= now - window выполнен ровно на границе при now = t0+window.
+	// Bump past the window boundary (now strictly later than window_start + window) — reset to 1.
+	// window_start stayed at t0 (the first bump in this window), the comparison threshold
+	// window_start <= now - window is met exactly at the boundary when now = t0+window.
 	afterWindow := t0.Add(window + time.Second)
 	cnt, err := BumpCircuit(ctx, integrationPool, decree, afterWindow, window)
 	if err != nil {
@@ -433,7 +433,7 @@ func TestIntegration_BumpCircuitFixedWindow(t *testing.T) {
 	if cnt != 1 {
 		t.Errorf("после истечения окна fire_count должен сброситься в 1, got %d", cnt)
 	}
-	// window_start переехал на afterWindow → следующий bump снова растит.
+	// window_start moved to afterWindow → the next bump grows again.
 	cnt, err = BumpCircuit(ctx, integrationPool, decree, afterWindow.Add(time.Minute), window)
 	if err != nil {
 		t.Fatalf("BumpCircuit in new window: %v", err)
@@ -443,8 +443,8 @@ func TestIntegration_BumpCircuitFixedWindow(t *testing.T) {
 	}
 }
 
-// TestIntegration_BumpCircuitWindowBoundary — ресет ровно на границе
-// (window_start == now - window, условие `<=`): окно считается истёкшим.
+// TestIntegration_BumpCircuitWindowBoundary — reset exactly at the boundary
+// (window_start == now - window, the `<=` condition): the window is considered expired.
 func TestIntegration_BumpCircuitWindowBoundary(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -455,7 +455,7 @@ func TestIntegration_BumpCircuitWindowBoundary(t *testing.T) {
 	if _, err := BumpCircuit(ctx, integrationPool, decree, t0, window); err != nil {
 		t.Fatalf("BumpCircuit #1: %v", err)
 	}
-	// now == window_start + window: window_start <= now - window выполняется → ресет.
+	// now == window_start + window: window_start <= now - window holds → reset.
 	cnt, err := BumpCircuit(ctx, integrationPool, decree, t0.Add(window), window)
 	if err != nil {
 		t.Fatalf("BumpCircuit at boundary: %v", err)
@@ -465,8 +465,8 @@ func TestIntegration_BumpCircuitWindowBoundary(t *testing.T) {
 	}
 }
 
-// TestIntegration_TripDecreeSingleWinner — enabled true→false ровно раз; второй
-// TripDecree → RowsAffected==0 (tripped=false). single-winner-инвариант.
+// TestIntegration_TripDecreeSingleWinner — enabled true→false exactly once; the second
+// TripDecree → RowsAffected==0 (tripped=false). single-winner invariant.
 func TestIntegration_TripDecreeSingleWinner(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -480,7 +480,7 @@ func TestIntegration_TripDecreeSingleWinner(t *testing.T) {
 	if !tripped {
 		t.Fatal("первый TripDecree должен выиграть (enabled true→false)")
 	}
-	// Decree теперь disabled.
+	// Decree is now disabled.
 	d, err := SelectDecreeByName(ctx, integrationPool, decree)
 	if err != nil {
 		t.Fatalf("SelectDecreeByName: %v", err)
@@ -489,7 +489,7 @@ func TestIntegration_TripDecreeSingleWinner(t *testing.T) {
 		t.Error("после TripDecree Decree должен быть disabled")
 	}
 
-	// Повторный TripDecree — уже disabled, RowsAffected==0.
+	// A repeated TripDecree — already disabled, RowsAffected==0.
 	tripped2, err := TripDecree(ctx, integrationPool, decree, now)
 	if err != nil {
 		t.Fatalf("TripDecree #2: %v", err)
@@ -499,9 +499,9 @@ func TestIntegration_TripDecreeSingleWinner(t *testing.T) {
 	}
 }
 
-// TestIntegration_BumpCircuitConcurrent — cluster-гонка: две конкурентные
-// BumpCircuit на один Decree (live PG) не теряют инкремент (итог fire_count==2).
-// Атомарность UPSERT под row-lock-ом сериализует read-modify-write.
+// TestIntegration_BumpCircuitConcurrent — cluster race: two concurrent
+// BumpCircuit calls on one Decree (live PG) don't lose increments (final fire_count==2).
+// Atomicity of the UPSERT under a row lock serializes read-modify-write.
 func TestIntegration_BumpCircuitConcurrent(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -517,7 +517,7 @@ func TestIntegration_BumpCircuitConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			<-start // синхронный старт обеих goroutine для максимума гонки
+			<-start // synchronous start of both goroutines to maximize the race
 			results[idx], errs[idx] = BumpCircuit(ctx, integrationPool, decree, now, window)
 		}(i)
 	}
@@ -529,7 +529,7 @@ func TestIntegration_BumpCircuitConcurrent(t *testing.T) {
 			t.Fatalf("BumpCircuit goroutine #%d: %v", i, err)
 		}
 	}
-	// Конкурентные RETURNING-значения — {1,2} в каком-то порядке, инкремент не теряется.
+	// Concurrent RETURNING values — {1,2} in some order, no increment is lost.
 	if results[0]+results[1] != 3 {
 		t.Errorf("конкурентные RETURNING fire_count = %v (сумма %d), want {1,2}", results, results[0]+results[1])
 	}
@@ -539,8 +539,8 @@ func TestIntegration_BumpCircuitConcurrent(t *testing.T) {
 	}
 }
 
-// TestIntegration_CircuitRecreateCascade — recreate Decree (delete+insert) чистит
-// oracle_circuit каскадом (re-enable MVP = чистое окно).
+// TestIntegration_CircuitRecreateCascade — recreating a Decree (delete+insert) cleans up
+// oracle_circuit by cascade (re-enable MVP = a clean window).
 func TestIntegration_CircuitRecreateCascade(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -552,7 +552,7 @@ func TestIntegration_CircuitRecreateCascade(t *testing.T) {
 		t.Fatal("после bump oracle_circuit-строка должна существовать")
 	}
 
-	// Delete Decree → каскад чистит oracle_circuit.
+	// Delete Decree → cascade cleans up oracle_circuit.
 	if err := DeleteDecree(ctx, integrationPool, decree); err != nil {
 		t.Fatalf("DeleteDecree: %v", err)
 	}
@@ -567,7 +567,7 @@ func TestIntegration_CircuitRecreateCascade(t *testing.T) {
 		t.Errorf("oracle_circuit должна быть пуста после delete, got %d", total)
 	}
 
-	// Recreate (тот же name) → новый Decree стартует с чистого окна.
+	// Recreate (same name) → the new Decree starts with a clean window.
 	aid := "archon-test"
 	mustInsertDecree(t, &Decree{Name: decree, OnBeacon: "svc-down", SubjectCoven: []string{"web"}, IncarnationName: "web-app", ActionScenario: "restart", Cooldown: "5m", Enabled: true, CreatedByAID: &aid})
 	cnt, err := BumpCircuit(ctx, integrationPool, decree, time.Now().UTC(), 10*time.Minute)

@@ -8,21 +8,21 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// Sentinel-ошибки сидинга.
+// Sentinel errors for seeding.
 var (
 	ErrVigilAlreadyExists  = errors.New("oracle: vigil already exists")
 	ErrDecreeAlreadyExists = errors.New("oracle: decree already exists")
 )
 
-// InsertVigil вставляет строку реестра `vigils`. Используется management-Service
-// (S3 CRUD) и сидингом в тестах/dev-провижене (S2). Params nil → пишется '{}'
-// (DEFAULT колонки). created_at/updated_at заполняются обратно в v через
-// RETURNING (create-ответ OpenAPI/MCP несёт реальные timestamp-ы).
+// InsertVigil inserts a row into the `vigils` registry. Used by the management Service
+// (S3 CRUD) and by seeding in tests/dev provisioning (S2). Params nil → writes '{}'
+// (the column's DEFAULT). created_at/updated_at are filled back into v via
+// RETURNING (the create response of OpenAPI/MCP carries real timestamps).
 //
-// Возврат:
-//   - [ErrVigilAlreadyExists] на UNIQUE по PK (name);
-//   - wrapped fmt.Errorf на CHECK-violation (subject_xor / name_format) и
-//     FK-violation (created_by_aid).
+// Return:
+//   - [ErrVigilAlreadyExists] on a UNIQUE violation on the PK (name);
+//   - a wrapped fmt.Errorf on a CHECK violation (subject_xor / name_format) and
+//     an FK violation (created_by_aid).
 func InsertVigil(ctx context.Context, db ExecQueryRower, v *Vigil) error {
 	if v == nil {
 		return fmt.Errorf("oracle: nil vigil")
@@ -45,17 +45,17 @@ RETURNING created_at, updated_at`
 	return nil
 }
 
-// InsertDecree вставляет строку реестра `decrees`. Используется
-// management-Service (S3 CRUD) и сидингом в тестах/dev-провижене (S2).
-// ActionInput nil → пишется '{}'. Cooldown пустой → пишется '0s' (DEFAULT,
-// cooldown выключен). created_at/updated_at + нормализованный cooldown
-// заполняются обратно в d через RETURNING (create-ответ OpenAPI/MCP несёт
-// реальные значения).
+// InsertDecree inserts a row into the `decrees` registry. Used by the
+// management Service (S3 CRUD) and by seeding in tests/dev provisioning (S2).
+// ActionInput nil → writes '{}'. An empty Cooldown → writes '0s' (the DEFAULT,
+// cooldown disabled). created_at/updated_at + the normalized cooldown
+// are filled back into d via RETURNING (the create response of OpenAPI/MCP carries
+// real values).
 //
-// Возврат:
-//   - [ErrDecreeAlreadyExists] на UNIQUE по PK (name);
-//   - wrapped fmt.Errorf на CHECK-violation (subject_xor / name_format /
-//     scenario_format) и FK-violation (created_by_aid).
+// Return:
+//   - [ErrDecreeAlreadyExists] on a UNIQUE violation on the PK (name);
+//   - a wrapped fmt.Errorf on a CHECK violation (subject_xor / name_format /
+//     scenario_format) and an FK violation (created_by_aid).
 func InsertDecree(ctx context.Context, db ExecQueryRower, d *Decree) error {
 	if d == nil {
 		return fmt.Errorf("oracle: nil decree")

@@ -50,7 +50,7 @@ func TestWhereEvaluator_CompileError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWhereEvaluator: %v", err)
 	}
-	// Синтаксически невалидное выражение → compile-ошибка (битый Decree).
+	// Syntactically invalid expression → compile error (malformed Decree).
 	if _, err := w.Eval(`event.data.x ==`, map[string]any{}); err == nil {
 		t.Error("ожидали compile-ошибку на невалидном where_cel")
 	}
@@ -61,8 +61,8 @@ func TestWhereEvaluator_NilData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWhereEvaluator: %v", err)
 	}
-	// nil-payload: обращение к ключу → no-such-key → no-match (default-deny),
-	// без ошибки.
+	// nil-payload: access to key → no-such-key → no-match (default-deny),
+	// without error.
 	got, err := w.Eval(`event.data.severity == "critical"`, nil)
 	if err != nil {
 		t.Fatalf("Eval с nil-data: %v", err)
@@ -84,9 +84,9 @@ func mustStructPB(t *testing.T, fields map[string]any) *structpb.Struct {
 	return s
 }
 
-// TestEvalEvent_TypedAccess — where-CEL читает typed payload через
+// TestEvalEvent_TypedAccess — where-CEL reads typed payload via
 // `event.<branch>.<field>` (file_changed / service_down / disk_full / ...).
-// Это первый стиль where-CEL, который должен работать после V5-1.
+// This is the first where-CEL style that should work after V5-1.
 func TestEvalEvent_TypedAccess(t *testing.T) {
 	w, err := NewWhereEvaluator()
 	if err != nil {
@@ -180,15 +180,15 @@ func TestEvalEvent_TypedAccess(t *testing.T) {
 }
 
 // TestEvalEvent_LegacyDataAccess — backward-compat: where-CEL `event.data.*`
-// продолжает работать в hand-off-период, когда Soul шлёт ОБЕ ветки (data +
-// typed) одновременно.
+// continues to work during the hand-off period when Soul sends BOTH branches (data +
+// typed) simultaneously.
 func TestEvalEvent_LegacyDataAccess(t *testing.T) {
 	w, err := NewWhereEvaluator()
 	if err != nil {
 		t.Fatalf("NewWhereEvaluator: %v", err)
 	}
 
-	// Soul шлёт обе ветки: legacy data + typed file_changed.
+	// Soul sends both branches: legacy data + typed file_changed.
 	evt := &keeperv1.PortentEvent{
 		BeaconName: "v",
 		Data: mustStructPB(t, map[string]any{
@@ -217,8 +217,8 @@ func TestEvalEvent_LegacyDataAccess(t *testing.T) {
 	}
 }
 
-// TestEvalEvent_TypeMismatchFailSafe — CEL ожидает file_changed, прилетел
-// service_down → отсутствующая ветка `event.file_changed.path` даёт no-such-key
+// TestEvalEvent_TypeMismatchFailSafe — CEL expects file_changed, gets
+// service_down → missing branch `event.file_changed.path` gives no-such-key
 // → cel runtime-error → false (default-deny, fail-safe).
 func TestEvalEvent_TypeMismatchFailSafe(t *testing.T) {
 	w, err := NewWhereEvaluator()
@@ -240,7 +240,7 @@ func TestEvalEvent_TypeMismatchFailSafe(t *testing.T) {
 	}
 }
 
-// TestEvalEvent_NilEvent — nil-event → false (default-deny на пустой вход).
+// TestEvalEvent_NilEvent — nil-event → false (default-deny on empty input).
 func TestEvalEvent_NilEvent(t *testing.T) {
 	w, err := NewWhereEvaluator()
 	if err != nil {
@@ -255,8 +255,8 @@ func TestEvalEvent_NilEvent(t *testing.T) {
 	}
 }
 
-// TestEvalEvent_CustomPayload — V5-2 plugin-beacon: where-CEL читает
-// `event.custom.<field>` из произвольного Struct.
+// TestEvalEvent_CustomPayload — V5-2 plugin-beacon: where-CEL reads
+// `event.custom.<field>` from an arbitrary Struct.
 func TestEvalEvent_CustomPayload(t *testing.T) {
 	w, err := NewWhereEvaluator()
 	if err != nil {

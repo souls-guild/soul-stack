@@ -45,8 +45,8 @@ func TestService_CreateVigil_OK(t *testing.T) {
 }
 
 func TestService_CreateVigil_ValidationBeforeDB(t *testing.T) {
-	// insertErr выставлен, но валидация должна отбить до round-trip-а — ошибка =
-	// ErrValidation, не инфра.
+	// insertErr is set, but validation must reject before the round-trip —
+	// the error is ErrValidation, not infra.
 	db := &fakeDB{insertErr: errors.New("должен быть недостижим")}
 	svc := newTestService(t, db)
 	cases := []struct {

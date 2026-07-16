@@ -18,7 +18,7 @@ const (
 	pgErrCodeCheckViolation      = "23514"
 )
 
-// Sentinel-ошибки реестра.
+// Sentinel errors for the registry.
 var (
 	ErrVigilNotFound  = errors.New("oracle: vigil not found")
 	ErrDecreeNotFound = errors.New("oracle: decree not found")
@@ -26,13 +26,13 @@ var (
 
 const vigilColumns = `name, coven, sid, interval_spec, check_addr, params, enabled, created_at, updated_at, created_by_aid`
 
-// SelectActiveVigilsForSubject возвращает enabled-Vigil-ы, активные для
-// субъекта (sid-Vigil с vigils.sid == sid ИЛИ coven-Vigil с пересечением
-// vigils.coven ∩ covens). Резолв набора для VigilSnapshot на connect.
+// SelectActiveVigilsForSubject returns enabled Vigils active for the
+// subject (sid-Vigil with vigils.sid == sid OR coven-Vigil with an
+// intersection of vigils.coven ∩ covens). Resolves the set for VigilSnapshot on connect.
 //
-// Пустой covens допустим (тогда только sid-Vigil-ы). Сортировка `name ASC` —
-// детерминированный порядок snapshot-а (ReplaceAll на Soul-е не зависит от
-// порядка, но стабильность упрощает тесты/диагностику).
+// An empty covens is allowed (then only sid-Vigils). Sorting by `name ASC` is
+// a deterministic snapshot order (ReplaceAll on the Soul doesn't depend on
+// the order, but stability simplifies tests/diagnostics).
 func SelectActiveVigilsForSubject(ctx context.Context, db ExecQueryRower, sid string, covens []string) ([]*Vigil, error) {
 	const sql = `SELECT ` + vigilColumns + `
 FROM vigils
@@ -76,7 +76,7 @@ func scanVigil(row pgx.Row) (*Vigil, error) {
 	return v, nil
 }
 
-// SelectVigilByName читает Vigil по PK. [ErrVigilNotFound] при pgx.ErrNoRows.
+// SelectVigilByName reads a Vigil by PK. [ErrVigilNotFound] on pgx.ErrNoRows.
 func SelectVigilByName(ctx context.Context, db ExecQueryRower, name string) (*Vigil, error) {
 	const sql = `SELECT ` + vigilColumns + `
 FROM vigils
@@ -84,9 +84,9 @@ WHERE name = $1`
 	return scanVigil(db.QueryRow(ctx, sql, name))
 }
 
-// SelectAllVigils возвращает страницу Vigil-ов и общее количество (sort
-// created_at DESC, name ASC — симметрично [augur.SelectAllOmens]). Total и
-// items — двумя запросами вне общей транзакции (eventually consistent).
+// SelectAllVigils returns a page of Vigils and the total count (sort
+// created_at DESC, name ASC — symmetric with [augur.SelectAllOmens]). Total and
+// items — two queries outside a shared transaction (eventually consistent).
 func SelectAllVigils(ctx context.Context, db ExecQueryRower, offset, limit int) ([]*Vigil, int, error) {
 	if offset < 0 {
 		return nil, 0, fmt.Errorf("oracle: offset must be >= 0, got %d", offset)
@@ -115,10 +115,10 @@ OFFSET $1 LIMIT $2`
 	return out, total, nil
 }
 
-// DeleteVigil удаляет Vigil по PK. [ErrVigilNotFound] если строки не было.
-// Decree-ы НЕ каскадятся: decrees.on_beacon — text-ссылка без FK (Decree
-// managed-реестр, переживает пересоздание Vigil-а), удаление Vigil-а лишь
-// перестаёт раздавать его в VigilSnapshot.
+// DeleteVigil deletes a Vigil by PK. [ErrVigilNotFound] if the row didn't exist.
+// Decrees are NOT cascaded: decrees.on_beacon is a text reference without an FK
+// (Decree is a managed registry, it survives Vigil recreation); deleting a Vigil
+// merely stops handing it out in VigilSnapshot.
 func DeleteVigil(ctx context.Context, db ExecQueryRower, name string) error {
 	tag, err := db.Exec(ctx, "DELETE FROM vigils WHERE name = $1", name)
 	if err != nil {
@@ -132,13 +132,13 @@ func DeleteVigil(ctx context.Context, db ExecQueryRower, name string) error {
 
 const decreeColumns = `name, on_beacon, where_cel, subject_coven, subject_sid, incarnation_name, action_scenario, action_input, cooldown, enabled, created_at, updated_at, created_by_aid`
 
-// SelectDecreesByBeacon возвращает enabled-Decree-ы, реагирующие на указанный
-// Vigil (decrees.on_beacon == beacon). Горячий путь match-флоу: Oracle на
-// каждый Portent делает этот SELECT, далее фильтрует субъектом + where-CEL +
-// cooldown (см. [Match]). Default-deny: пустой результат → событие игнорируется.
+// SelectDecreesByBeacon returns enabled Decrees reacting to the given
+// Vigil (decrees.on_beacon == beacon). Hot path of the match flow: for every
+// Portent, Oracle runs this SELECT, then filters by subject + where-CEL +
+// cooldown (see [Match]). Default-deny: an empty result → the event is ignored.
 //
-// Сортировка `name ASC` — детерминированный порядок обработки нескольких
-// матчащих Decree-ов на одно событие.
+// Sorting by `name ASC` is a deterministic processing order for multiple
+// matching Decrees on one event.
 func SelectDecreesByBeacon(ctx context.Context, db ExecQueryRower, beacon string) ([]*Decree, error) {
 	const sql = `SELECT ` + decreeColumns + `
 FROM decrees
@@ -183,7 +183,7 @@ func scanDecree(row pgx.Row) (*Decree, error) {
 	return d, nil
 }
 
-// SelectDecreeByName читает Decree по PK. [ErrDecreeNotFound] при pgx.ErrNoRows.
+// SelectDecreeByName reads a Decree by PK. [ErrDecreeNotFound] on pgx.ErrNoRows.
 func SelectDecreeByName(ctx context.Context, db ExecQueryRower, name string) (*Decree, error) {
 	const sql = `SELECT ` + decreeColumns + `
 FROM decrees
@@ -191,9 +191,9 @@ WHERE name = $1`
 	return scanDecree(db.QueryRow(ctx, sql, name))
 }
 
-// SelectAllDecrees возвращает страницу Decree-ов и общее количество (sort
-// created_at DESC, name ASC). Total и items — двумя запросами вне общей
-// транзакции (eventually consistent).
+// SelectAllDecrees returns a page of Decrees and the total count (sort
+// created_at DESC, name ASC). Total and items — two queries outside a shared
+// transaction (eventually consistent).
 func SelectAllDecrees(ctx context.Context, db ExecQueryRower, offset, limit int) ([]*Decree, int, error) {
 	if offset < 0 {
 		return nil, 0, fmt.Errorf("oracle: offset must be >= 0, got %d", offset)
@@ -222,9 +222,9 @@ OFFSET $1 LIMIT $2`
 	return out, total, nil
 }
 
-// DeleteDecree удаляет Decree по PK. Его cooldown-state в `oracle_fires` уходит
-// каскадом (ON DELETE CASCADE, миграция 041). [ErrDecreeNotFound] если строки
-// не было.
+// DeleteDecree deletes a Decree by PK. Its cooldown state in `oracle_fires` is
+// removed by cascade (ON DELETE CASCADE, migration 041). [ErrDecreeNotFound] if
+// the row didn't exist.
 func DeleteDecree(ctx context.Context, db ExecQueryRower, name string) error {
 	tag, err := db.Exec(ctx, "DELETE FROM decrees WHERE name = $1", name)
 	if err != nil {
@@ -236,9 +236,9 @@ func DeleteDecree(ctx context.Context, db ExecQueryRower, name string) error {
 	return nil
 }
 
-// LastFiredAt возвращает время последнего срабатывания пары (decree, subject)
-// из `oracle_fires` (cooldown-state, ADR-030(a)). (zero, false, nil) — пара
-// ещё не срабатывала (строки нет): cooldown не активен. Используется
+// LastFiredAt returns the time of the last fire for the (decree, subject) pair
+// from `oracle_fires` (cooldown state, ADR-030(a)). (zero, false, nil) means the
+// pair hasn't fired yet (no row): cooldown is not active. Used by
 // [WithinCooldown].
 func LastFiredAt(ctx context.Context, db ExecQueryRower, decree, subject string) (time.Time, bool, error) {
 	const sql = `SELECT fired_at FROM oracle_fires WHERE decree = $1 AND subject = $2`
@@ -253,15 +253,15 @@ func LastFiredAt(ctx context.Context, db ExecQueryRower, decree, subject string)
 	return firedAt, true, nil
 }
 
-// RecordFire фиксирует срабатывание пары (decree, subject) в `oracle_fires`
-// (cooldown-state, ADR-030(a)). UPSERT: одна строка на пару, fired_at
-// обновляется на now (НЕ append-only — таблица остаётся ограниченной размером
-// числа уникальных пар). Вызывается ПОСЛЕ успешной постановки scenario.
+// RecordFire records the fire of the (decree, subject) pair in `oracle_fires`
+// (cooldown state, ADR-030(a)). UPSERT: one row per pair, fired_at
+// is updated to now (NOT append-only — the table stays bounded by the
+// number of unique pairs). Called AFTER successfully enqueuing the scenario.
 //
-// firedAt — момент срабатывания (caller передаёт единое время, согласованное
-// с cooldown-check-ом и audit-ом). FK-violation на отсутствующий decree
-// маппится в обёрнутую ошибку (программная ошибка caller-а: Decree был прочитан
-// match-ем, но удалён до record).
+// firedAt is the moment of firing (the caller passes a single timestamp,
+// consistent with the cooldown check and the audit). An FK violation on a
+// missing decree is mapped to a wrapped error (a caller programming error:
+// the Decree was read by match but deleted before record).
 func RecordFire(ctx context.Context, db ExecQueryRower, decree, subject string, firedAt time.Time) error {
 	const sql = `
 INSERT INTO oracle_fires (decree, subject, fired_at)
@@ -277,21 +277,21 @@ ON CONFLICT (decree, subject) DO UPDATE SET fired_at = EXCLUDED.fired_at`
 	return nil
 }
 
-// BumpCircuit атомарно инкрементирует per-decree fixed-window счётчик
-// срабатываний в `oracle_circuit` (circuit-breaker, ADR-030(a), beacons S4) и
-// возвращает счётчик ПОСЛЕ инкремента. window — длина окна; now — момент
-// срабатывания (тот же, что cooldown/audit).
+// BumpCircuit atomically increments the per-decree fixed-window fire
+// counter in `oracle_circuit` (circuit breaker, ADR-030(a), beacons S4) and
+// returns the counter AFTER the increment. window is the window length; now is
+// the moment of firing (the same one as cooldown/audit).
 //
-// Семантика fixed-window: если окно текущей строки истекло
-// (window_start ≤ now - window), оно сбрасывается (window_start = now,
-// fire_count = 1); иначе fire_count += 1. Первое срабатывание (строки нет) —
-// INSERT с fire_count = 1.
+// Fixed-window semantics: if the current row's window has expired
+// (window_start ≤ now - window), it is reset (window_start = now,
+// fire_count = 1); otherwise fire_count += 1. The first fire (no row) is an
+// INSERT with fire_count = 1.
 //
-// Cluster-safe: один statement INSERT … ON CONFLICT DO UPDATE … RETURNING под
-// row-lock-ом одной строки сериализует read-modify-write — конкурентные
-// BumpCircuit с разных Keeper-инстансов на один Decree не теряют инкремент.
-// FK-violation на отсутствующий Decree — программная ошибка caller-а (Decree
-// прочитан match-ем, но удалён до bump-а): обёрнутая ошибка.
+// Cluster-safe: a single INSERT … ON CONFLICT DO UPDATE … RETURNING statement
+// under a single row lock serializes read-modify-write — concurrent
+// BumpCircuit calls from different Keeper instances on the same Decree don't lose increments.
+// An FK violation on a missing Decree is a caller programming error (the Decree
+// was read by match but deleted before the bump): a wrapped error.
 func BumpCircuit(ctx context.Context, db ExecQueryRower, decree string, now time.Time, window time.Duration) (int, error) {
 	const sql = `
 INSERT INTO oracle_circuit (decree, window_start, fire_count)
@@ -312,12 +312,12 @@ RETURNING fire_count`
 	return fireCount, nil
 }
 
-// TripDecree авто-disable-ит Decree circuit-breaker-ом: переводит enabled
-// true→false (ADR-030(a)). Возвращает tripped=true, если эта операция фактически
-// выключила правило (RowsAffected==1) — single-winner: при конкурентном trip-е
-// с нескольких Keeper-инстансов ровно один выигрывает (`WHERE enabled=true`
-// сериализует через row-lock), остальные получают RowsAffected==0 и НЕ дублируют
-// alert/audit/metric. now пишется в updated_at (мутация Decree).
+// TripDecree auto-disables a Decree via the circuit breaker: flips enabled
+// true→false (ADR-030(a)). Returns tripped=true if this operation actually
+// disabled the rule (RowsAffected==1) — single-winner: on a concurrent trip
+// from multiple Keeper instances exactly one wins (`WHERE enabled=true`
+// serializes via row lock), the rest get RowsAffected==0 and do NOT duplicate
+// alert/audit/metric. now is written to updated_at (a Decree mutation).
 func TripDecree(ctx context.Context, db ExecQueryRower, decree string, now time.Time) (bool, error) {
 	const sql = `UPDATE decrees SET enabled = false, updated_at = $2 WHERE name = $1 AND enabled = true`
 	tag, err := db.Exec(ctx, sql, decree, now)

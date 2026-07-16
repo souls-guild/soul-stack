@@ -10,13 +10,13 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// fakeDB — минимальный ExecQueryRower-stub для unit-проверки пламбинга
-// (без подъёма PG; полное поведение SQL — в integration_test.go).
+// fakeDB is a minimal ExecQueryRower stub for unit-testing the plumbing
+// (without spinning up PG; full SQL behavior is covered in integration_test.go).
 //
-// insertErr — исход RETURNING-scan-а INSERT-ов (vigils/decrees идут через
-// QueryRow … RETURNING): nil → отдаётся row с timestamp-ами (имитация успешной
-// вставки), иначе ошибка (pgErr 23505 → дубликат). execSQL/execArgs фиксируют
-// последний Exec (DELETE).
+// insertErr is the outcome of the RETURNING scan for INSERTs (vigils/decrees go
+// through QueryRow … RETURNING): nil → a row with timestamps is returned (simulating
+// a successful insert), otherwise an error (pgErr 23505 → duplicate). execSQL/execArgs
+// record the last Exec (DELETE).
 type fakeDB struct {
 	queryRowRow pgx.Row
 	insertErr   error
@@ -37,9 +37,9 @@ func (f *fakeDB) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
 		if f.insertErr != nil {
 			return errRow{err: f.insertErr}
 		}
-		// RETURNING cooldown?, created_at, updated_at — отдаём универсальный
-		// набор; лишние/недостающие dest staticRow проигнорирует/упадёт. Для
-		// vigils (2 dest) и decrees (3 dest) даём 3 значения, первое — cooldown.
+		// RETURNING cooldown?, created_at, updated_at — we return a universal
+		// set; staticRow will ignore extra dest or panic on missing ones. For
+		// vigils (2 dest) and decrees (3 dest) we give 3 values, the first being cooldown.
 		return insertRow{}
 	}
 	if f.queryRowRow != nil {
@@ -50,9 +50,9 @@ func (f *fakeDB) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
 
 func contains(s, sub string) bool { return strings.Contains(s, sub) }
 
-// insertRow — RETURNING-строка INSERT-а: cooldown (string) + created_at +
-// updated_at (time). vigils-INSERT сканирует 2 (created_at, updated_at),
-// decrees — 3 (cooldown, created_at, updated_at); раздаём по типу dest.
+// insertRow is the RETURNING row for an INSERT: cooldown (string) + created_at +
+// updated_at (time). vigils-INSERT scans 2 (created_at, updated_at),
+// decrees — 3 (cooldown, created_at, updated_at); we dispatch by dest type.
 type insertRow struct{}
 
 func (insertRow) Scan(dest ...any) error {

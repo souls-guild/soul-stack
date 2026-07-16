@@ -1,25 +1,25 @@
-// Package oracle — Keeper-side reactor-роутер beacons-контура (ADR-030, срез
-// S2). Принимает Portent (beacon-событие от Soul-а), матчит его с реестром
-// Decree и ставит named-scenario в work-queue (ADR-027). Сам apply не
-// исполняет — только маршрутизирует.
+// Package oracle is the Keeper-side reactor router for the beacons contour (ADR-030, slice
+// S2). Accepts a Portent (a beacon event from the Soul), matches it against the
+// Decree registry, and enqueues a named scenario in the work-queue (ADR-027). It doesn't
+// execute apply itself — only routes.
 //
-// Состав среза S2:
-//   - Vigil / Decree / Fire — runtime-типы реестров `vigils` / `decrees` /
-//     `oracle_fires` (миграция 041);
-//   - repository (crud.go): SelectActiveVigilsForSubject (резолв VigilSnapshot),
-//     SelectDecreesByBeacon (горячий путь match), cooldown read/record;
-//   - match-логика (match.go): subject-match + where-CEL + cooldown-check,
+// Contents of slice S2:
+//   - Vigil / Decree / Fire — runtime types for the `vigils` / `decrees` /
+//     `oracle_fires` registries (migration 041);
+//   - repository (crud.go): SelectActiveVigilsForSubject (VigilSnapshot resolve),
+//     SelectDecreesByBeacon (hot path of match), cooldown read/record;
+//   - match logic (match.go): subject-match + where-CEL + cooldown-check,
 //     default-deny.
 //
-// Безопасность (ADR-030(b)): Portent — недоверенный вход (Soul может быть
-// скомпрометирован). Защита слоями: default-deny Decree + субъектная привязка
-// (coven XOR sid) + action = ТОЛЬКО named scenario (whitelist) + cooldown
-// (loop-prevention). SID субъекта — авторитетно из mTLS peer cert, НЕ из
+// Security (ADR-030(b)): Portent is untrusted input (the Soul could be
+// compromised). Defense in layers: default-deny Decree + subject binding
+// (coven XOR sid) + action = ONLY named scenario (whitelist) + cooldown
+// (loop-prevention). The subject's SID is authoritative from the mTLS peer cert, NOT from
 // PortentEvent.sid (echo).
 //
-// Что НЕ в S2 (последующие срезы): OpenAPI/MCP CRUD Vigil/Decree + RBAC-perms
-// (S3); circuit-breaker + метрики (S4); inotify / soul_beacon-плагины /
-// typed-payload (S5).
+// What's NOT in S2 (later slices): OpenAPI/MCP CRUD for Vigil/Decree + RBAC perms
+// (S3); circuit breaker + metrics (S4); inotify / soul_beacon plugins /
+// typed payload (S5).
 package oracle
 
 import (
@@ -32,9 +32,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// ExecQueryRower — узкое подмножество pgxpool.Pool, нужное репозиторию oracle.
-// Симметрично [augur.ExecQueryRower] / [applyrun.ExecQueryRower]: unit-тесты
-// ходят через fake без подъёма PG, production даёт реальный pool / Conn / Tx.
+// ExecQueryRower is a narrow subset of pgxpool.Pool needed by the oracle repository.
+// Symmetric with [augur.ExecQueryRower] / [applyrun.ExecQueryRower]: unit tests
+// go through a fake without spinning up PG, production supplies a real pool / Conn / Tx.
 type ExecQueryRower interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
@@ -48,11 +48,11 @@ var (
 	_ ExecQueryRower = (pgx.Tx)(nil)
 )
 
-// Vigil — runtime-представление строки реестра `vigils` (Soul-side проверка,
-// ADR-030). Субъект — строго XOR: ровно одно из Coven / SID непусто (CHECK
-// vigils_subject_xor). Params — сырой JSONB (форма зависит от CheckAddr,
-// валидируется на service-слое S3). Read-only по конструкции Vigil-а
-// гарантируется Soul-стороной (S1), не этим типом.
+// Vigil is the runtime representation of a row in the `vigils` registry (Soul-side check,
+// ADR-030). Subject is strictly XOR: exactly one of Coven / SID is non-empty (CHECK
+// vigils_subject_xor). Params is raw JSONB (its shape depends on CheckAddr,
+// validated at the service layer S3). Read-only-by-construction of the Vigil
+// is guaranteed by the Soul side (S1), not by this type.
 type Vigil struct {
 	Name         string          `json:"name"`
 	Coven        []string        `json:"coven,omitempty"`
@@ -66,17 +66,17 @@ type Vigil struct {
 	CreatedByAID *string         `json:"created_by_aid,omitempty"`
 }
 
-// Decree — runtime-представление строки реестра `decrees` (правило reactor,
-// ADR-030). Default-deny: нет матчащего Decree → событие не вызывает действия.
-// Субъект — строго XOR (как Rite): SubjectCoven ИЛИ SubjectSID непусто.
-// WhereCEL — опц. предикат над payload события (event.data); nil/пустой →
-// всегда match (субъект уже отфильтровал). IncarnationName — таргет-incarnation
-// реакции (РЕШЕНИЕ #1, вариант b): ServiceRef сценария резолвится ИЗ неё на
-// enqueue-е, а не дублируется в Decree; оно же — корневая Coven-метка субъекта
-// (ADR-008), по которой делается membership-проверка. ActionScenario — named
-// scenario (whitelist; raw-команда отвергнута, ADR-030(b)). Cooldown —
-// duration-строка (config.ParseDuration), минимальный интервал между
-// срабатываниями per-(decree, subject).
+// Decree is the runtime representation of a row in the `decrees` registry (a reactor rule,
+// ADR-030). Default-deny: no matching Decree → the event triggers no action.
+// Subject is strictly XOR (like Rite): SubjectCoven OR SubjectSID is non-empty.
+// WhereCEL is an optional predicate over the event payload (event.data); nil/empty →
+// always match (the subject already filtered). IncarnationName is the target incarnation
+// of the reaction (DECISION #1, option b): the scenario's ServiceRef is resolved FROM it
+// at enqueue time, rather than being duplicated in the Decree; it's also the subject's
+// root Coven label (ADR-008), used for the membership check. ActionScenario is a named
+// scenario (whitelist; a raw command was rejected, ADR-030(b)). Cooldown is
+// a duration string (config.ParseDuration), the minimum interval between
+// fires per-(decree, subject).
 type Decree struct {
 	Name            string          `json:"name"`
 	OnBeacon        string          `json:"on_beacon"`

@@ -25,12 +25,13 @@ func TestValidName(t *testing.T) {
 	}
 }
 
-// TestValidCheckAddr проверяет инвариант (часть инварианта «keeper-enum ==
-// soul-registry == shared»): keeper-enum знает РОВНО канонический набор
-// [beaconaddr.All]. Soul-side половина (registry == beaconaddr.All) проверяется
-// в soul/internal/beacon (ADR-011 запрещает keeper→soul import, поэтому общий
-// источник — shared/beaconaddr, и обе стороны сверяются с ним). Транзитивно это
-// даёт keeper-enum == soul-registry — корень устранённого S3-бага.
+// TestValidCheckAddr checks the invariant (part of the "keeper-enum ==
+// soul-registry == shared" invariant): keeper-enum knows EXACTLY the
+// canonical [beaconaddr.All] set. The soul-side half (registry ==
+// beaconaddr.All) is checked in soul/internal/beacon (ADR-011 forbids a
+// keeper→soul import, so the shared source is shared/beaconaddr, and both
+// sides check against it). Transitively this gives keeper-enum ==
+// soul-registry — the root of the fixed S3 bug.
 func TestValidCheckAddr(t *testing.T) {
 	canonical := beaconaddr.All()
 	for _, addr := range canonical {

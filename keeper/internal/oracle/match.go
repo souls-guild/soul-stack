@@ -6,22 +6,22 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// SubjectMatches проверяет субъектную привязку Decree против хоста-отправителя
-// (ADR-030(b)). Субъект Decree — строго XOR (схема CHECK decrees_subject_xor):
-//   - SubjectSID задан → match, если subjectSID == *d.SubjectSID;
-//   - SubjectCoven задан → match, если есть пересечение SubjectCoven ∩ covens.
+// SubjectMatches checks the Decree's subject binding against the sending host
+// (ADR-030(b)). A Decree's subject is strictly XOR (schema CHECK decrees_subject_xor):
+//   - SubjectSID is set → match if subjectSID == *d.SubjectSID;
+//   - SubjectCoven is set → match if there's an intersection of SubjectCoven ∩ covens.
 //
-// subjectSID — авторитетный SID хоста (из mTLS peer cert, НЕ PortentEvent.sid).
-// covens — covens хоста из реестра souls (авторитетные, НЕ из payload).
-// Субъектная привязка — слой защиты: ограничивает, какие хосты вообще могут
-// триггерить правило (недоверенный вход, ADR-030(b)).
+// subjectSID is the authoritative host SID (from the mTLS peer cert, NOT PortentEvent.sid).
+// covens are the host's covens from the souls registry (authoritative, NOT from the payload).
+// The subject binding is a defense layer: it restricts which hosts can even
+// trigger the rule (untrusted input, ADR-030(b)).
 func SubjectMatches(d *Decree, subjectSID string, covens []string) bool {
 	if d.SubjectSID != nil {
 		return *d.SubjectSID == subjectSID
 	}
 	if len(d.SubjectCoven) == 0 {
-		// XOR-инвариант схемы гарантирует, что сюда не дойдём (один из субъектов
-		// непуст). Fail-safe: нет субъекта → нет match (default-deny).
+		// The schema's XOR invariant guarantees we never reach here (one of the
+		// subjects is non-empty). Fail-safe: no subject → no match (default-deny).
 		return false
 	}
 	want := make(map[string]struct{}, len(d.SubjectCoven))
@@ -36,19 +36,19 @@ func SubjectMatches(d *Decree, subjectSID string, covens []string) bool {
 	return false
 }
 
-// WithinCooldown сообщает, находится ли пара (decree, subject) в окне cooldown-а:
-// прошло ли с момента lastFired меньше, чем cooldown Decree-а (ADR-030(a),
-// loop-prevention). now — единое опорное время срабатывания.
+// WithinCooldown reports whether the (decree, subject) pair is within the cooldown
+// window: whether less time has passed since lastFired than the Decree's cooldown
+// (ADR-030(a), loop-prevention). now is the single reference time of firing.
 //
-//   - hasFired=false (пара ещё не срабатывала) → false (cooldown не активен);
-//   - cooldown <= 0 (выключен, дефолт "0s") → false;
-//   - now - lastFired < cooldown → true (заблокировано, skip);
-//   - иначе → false (можно срабатывать).
+//   - hasFired=false (the pair hasn't fired yet) → false (cooldown is not active);
+//   - cooldown <= 0 (disabled, default "0s") → false;
+//   - now - lastFired < cooldown → true (blocked, skip);
+//   - otherwise → false (can fire).
 //
-// Невалидный cooldown-формат трактуется как 0 (cooldown выключен): валидация
-// формата — на service-слое (S3), здесь fail-open по cooldown НЕ ослабляет
-// безопасность (cooldown — loop-prevention, не authz; subject + default-deny
-// уже отработали).
+// An invalid cooldown format is treated as 0 (cooldown disabled): format
+// validation happens at the service layer (S3); fail-open on cooldown here does NOT
+// weaken security (cooldown is loop-prevention, not authz; subject + default-deny
+// have already run).
 func WithinCooldown(cooldown string, lastFired time.Time, hasFired bool, now time.Time) bool {
 	if !hasFired {
 		return false
