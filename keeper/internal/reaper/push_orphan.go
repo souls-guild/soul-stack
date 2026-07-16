@@ -7,50 +7,50 @@ import (
 	"time"
 )
 
-// PushRunCanceller — узкая поверхность [pushorch.Store] для reaper-purger-а.
-// Сужено до двух методов (ListOrphans/CancelOrphan), нужных правилу
-// `purge_orphan_push_runs`. Реальная реализация — *pushorch.Store; fake в
-// unit-тестах. Имена и сигнатуры — те же, что в pushorch.Store, чтобы wire-up
-// в daemon.setupReaper передавал её напрямую без адаптера.
+// PushRunCanceller — narrow interface to [pushorch.Store] for reaper-purger.
+// Narrowed to two methods (ListOrphans/CancelOrphan) needed for the
+// `purge_orphan_push_runs` rule. Real implementation is *pushorch.Store; fake in
+// unit tests. Names and signatures are the same as in pushorch.Store so wire-up
+// in daemon.setupReaper can pass it directly without an adapter.
 //
-// Вынесено в reaper-пакет (а НЕ pushorch), чтобы reaper не получал
-// перекрёстный импорт pushorch (drift-vector через сlojure-связь модулей).
+// Placed in reaper package (not pushorch) so reaper doesn't get
+// cross import from pushorch (drift vector through closure connection of modules).
 type PushRunCanceller interface {
 	ListOrphans(ctx context.Context, maxAge time.Duration, batchSize int) ([]string, error)
 	CancelOrphan(ctx context.Context, applyID, reason string) (bool, error)
 }
 
-// purgeOrphanPushRunsReason — фиксированная причина, попадающая в
-// push_runs.summary.reason для всех осиротевших прогонов. Reaper не имеет
-// контекста почему именно Keeper-инстанс умер (KID погас, ctx отменён, OOM);
-// важно лишь то, что прогон находился в in-flight-статусе дольше TTL.
+// purgeOrphanPushRunsReason — fixed reason recorded in
+// push_runs.summary.reason for all orphaned runs. Reaper doesn't have
+// context for why exactly the Keeper instance died (KID went down, ctx cancelled, OOM);
+// what matters is that the run was in an in-flight status longer than TTL.
 const purgeOrphanPushRunsReason = "orphan_purged_by_reaper"
 
-// PurgeOrphanPushRuns — реализация правила `purge_orphan_push_runs`
-// (docs/keeper/reaper.md, registered в Runner.dispatch). Находит in-flight
-// push-прогоны (status IN pending/running) старше `maxAge` (Keeper, начавший
-// прогон, либо умер, либо застрял), переводит каждый в `cancelled` с пометкой
-// `orphan_purged: true` в summary.
+// PurgeOrphanPushRuns — implementation of rule `purge_orphan_push_runs`
+// (docs/keeper/reaper.md, registered in Runner.dispatch). Finds in-flight
+// push runs (status IN pending/running) older than `maxAge` (Keeper that started
+// the run either died or is stuck), transitions each to `cancelled` with
+// `orphan_purged: true` mark in summary.
 //
-// Один batch == один LIST + per-row UPDATE. Каждый UPDATE — guard по
-// status IN (pending,running): single-winner-гонка с реальным MarkTerminal
-// проигрывает (RowsAffected==0, считается не-purged).
+// One batch == one LIST + per-row UPDATE. Each UPDATE is guarded by
+// status IN (pending,running): single-winner race with real MarkTerminal
+// loses (RowsAffected==0, counted as not-purged).
 //
-// Возвращает (affected, err): affected — число фактически переведённых
-// записей. callers (Runner.runDurationRule) сложат это в keeper_reaper_*-метрики.
+// Returns (affected, err): affected — number of actually transitioned
+// records. callers (Runner.runDurationRule) will sum this into keeper_reaper_* metrics.
 type orphanPurger struct {
 	store  PushRunCanceller
 	logger *slog.Logger
 }
 
-// NewOrphanPushRunsPurger конструирует purger. logger nil-safe (warn-ы
-// подавляются).
+// NewOrphanPushRunsPurger constructs a purger. logger is nil-safe (warnings
+// are suppressed).
 func NewOrphanPushRunsPurger(store PushRunCanceller, logger *slog.Logger) *orphanPurger {
 	return &orphanPurger{store: store, logger: logger}
 }
 
-// Run выполняет одну итерацию правила. Сигнатура совместима с
-// runDurationRule-вызовом (Runner.dispatch::case "purge_orphan_push_runs").
+// Run executes one iteration of the rule. Signature is compatible with
+// runDurationRule call (Runner.dispatch::case "purge_orphan_push_runs").
 func (p *orphanPurger) Run(ctx context.Context, maxAge time.Duration, batchSize int) (int64, error) {
 	ids, err := p.store.ListOrphans(ctx, maxAge, batchSize)
 	if err != nil {
@@ -64,9 +64,9 @@ func (p *orphanPurger) Run(ctx context.Context, maxAge time.Duration, batchSize 
 	for _, id := range ids {
 		ok, cerr := p.store.CancelOrphan(ctx, id, purgeOrphanPushRunsReason)
 		if cerr != nil {
-			// Сбой одного per-row UPDATE-а: продолжаем по списку (best-effort,
-			// как в Purger.PurgeApplyRuns batch-цикле). Каждый сбой логируем —
-			// агрегация ошибок в одно сообщение запутывает наблюдаемость.
+			// Failure of one per-row UPDATE: continue through the list (best-effort,
+			// like in Purger.PurgeApplyRuns batch loop). Log each failure —
+			// aggregating errors into one message muddies observability.
 			if p.logger != nil {
 				p.logger.Warn("reaper: purge_orphan_push_runs cancel failed",
 					slog.String("apply_id", id),
@@ -77,9 +77,9 @@ func (p *orphanPurger) Run(ctx context.Context, maxAge time.Duration, batchSize 
 		if ok {
 			affected++
 		}
-		// ok=false — single-winner-гонка с реальным MarkTerminal (orchestrator
-		// успел финализировать запись между ListOrphans и CancelOrphan).
-		// Это норма, не ошибка.
+		// ok=false — single-winner race with real MarkTerminal (orchestrator
+		// managed to finalize the record between ListOrphans and CancelOrphan).
+		// This is normal, not an error.
 	}
 	return affected, nil
 }

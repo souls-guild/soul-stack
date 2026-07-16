@@ -10,33 +10,33 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// ephemeralTidingsExecer — узкая поверхность pgxpool.Pool, нужная правилу
-// `purge_orphan_ephemeral_tidings`. Сужение позволяет fake в unit-тестах без
-// поднятия Postgres; реальный *pgxpool.Pool удовлетворяет автоматически
-// (паттерн errandsExecer / orphanPurger).
+// ephemeralTidingsExecer — narrow interface to pgxpool.Pool needed for the
+// `purge_orphan_ephemeral_tidings` rule. Narrowing allows faking in unit tests
+// without standing up Postgres; real *pgxpool.Pool satisfies automatically
+// (pattern of errandsExecer / orphanPurger).
 type ephemeralTidingsExecer interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
-// purgeOrphanEphemeralTidingsSQL — снос осиротевших ephemeral-Tiding-ов
-// (ADR-052(g) amendment N2, очистка). Ephemeral-правило привязано к одному
-// Voyage; терминал прогона должен унести его подписку. Это правило — СТРАХОВКА:
-// сносит ephemeral-строку, если её прогон либо
-//   - не существует (строка voyages была удалена / прогон так и не создался —
-//     откат tx исключает осиротелость by construction, но защита от ручного
-//     вмешательства / будущих путей);
-//   - в ТЕРМИНАЛЕ дольше grace-периода ($1) — за grace tap гарантированно успел
-//     сматчить терминальное событие против правила и заэнкьюить уведомление
-//     (dispatcher работает асинхронно через bounded-канал; синхронный снос в
-//     момент finalize опередил бы доставку — см. ADR-052(g) «Очистка»).
+// purgeOrphanEphemeralTidingsSQL — cleanup of orphaned ephemeral Tidings
+// (ADR-052(g) amendment N2, cleanup). Ephemeral rule is tied to one Voyage;
+// the terminal of the run should remove its subscription. This rule is a SAFEGUARD:
+// removes an ephemeral row if its run either
+//   - does not exist (voyages row was deleted / run was never created —
+//     tx rollback excludes orphaning by construction, but protection against manual
+//     interference / future paths);
+//   - is in TERMINAL longer than grace period ($1) — by grace time tap is guaranteed to have
+//     matched the terminal event against the rule and enqueued a notification
+//     (dispatcher works asynchronously through bounded channel; synchronous removal at
+//     finalize time would race delivery — see ADR-052(g) "Cleanup").
 //
-// Grace — обязательное условие корректности, а не косметика: без него правило,
-// сработав ровно на терминал, удалило бы Tiding ДО того, как tap-consumer
-// дочитает событие из буфера → уведомление о завершении не ушло бы.
+// Grace is a mandatory correctness condition, not cosmetics: without it the rule,
+// firing exactly on terminal, would delete Tiding BEFORE tap-consumer
+// finishes reading the event from the buffer → completion notification would not be sent.
 //
-// Использует partial-индекс `tidings_ephemeral_voyage_idx` (миграция 072,
-// WHERE ephemeral): постоянные правила в скан не попадают. Один DELETE одним
-// statement-ом (ephemeral-правил мало — десятки на in-flight прогоны).
+// Uses partial index `tidings_ephemeral_voyage_idx` (migration 072,
+// WHERE ephemeral): permanent rules don't appear in scan. One DELETE in one
+// statement (ephemeral rules are few — tens per in-flight runs).
 const purgeOrphanEphemeralTidingsSQL = `
 DELETE FROM tidings t
 WHERE t.ephemeral
@@ -52,42 +52,42 @@ WHERE t.ephemeral
         )
       )`
 
-// EphemeralTidingsPurger — реализация правила `purge_orphan_ephemeral_tidings`
-// (ADR-052(g) amendment N2, docs/keeper/reaper.md). Один батч-проход = один
-// DELETE по partial-индексу `tidings_ephemeral_voyage_idx`. Сигнатура Run
-// совместима с runDurationRule-вызовом Runner-а (parity ErrandsPurger /
+// EphemeralTidingsPurger — implementation of rule `purge_orphan_ephemeral_tidings`
+// (ADR-052(g) amendment N2, docs/keeper/reaper.md). One batch pass = one
+// DELETE via partial index `tidings_ephemeral_voyage_idx`. Run signature
+// compatible with runDurationRule invocation by Runner (parity ErrandsPurger /
 // orphanPurger).
 //
-// В отличие от `purge_old_errands` (TTL зашит в строку), здесь `maxAge` правила
-// — это GRACE после терминала Voyage, ВХОДЯЩИЙ в предикат как интервал (parity
-// `purge_apply_task_register`: max_age-as-grace). batchSize не используется
-// (один DELETE-statement; ephemeral-правил мало).
+// Unlike `purge_old_errands` (TTL baked into the row), here the rule's `maxAge`
+// is GRACE after Voyage terminal, ENTERING the predicate as an interval (parity
+// `purge_apply_task_register`: max_age-as-grace). batchSize is not used
+// (one DELETE statement; ephemeral rules are few).
 type EphemeralTidingsPurger struct {
 	pool   ephemeralTidingsExecer
 	logger *slog.Logger
 }
 
-// NewEphemeralTidingsPurger конструирует purger. logger nil-safe.
+// NewEphemeralTidingsPurger constructs a purger. logger is nil-safe.
 func NewEphemeralTidingsPurger(pool *pgxpool.Pool, logger *slog.Logger) *EphemeralTidingsPurger {
 	return &EphemeralTidingsPurger{pool: pool, logger: logger}
 }
 
-// newEphemeralTidingsPurgerFromExecer — внутренний конструктор для unit-тестов.
-// Публичный [NewEphemeralTidingsPurger] фиксирует *pgxpool.Pool, чтобы caller-ы
-// не цеплялись за расширение интерфейса.
+// newEphemeralTidingsPurgerFromExecer — internal constructor for unit tests.
+// Public [NewEphemeralTidingsPurger] fixes *pgxpool.Pool so callers
+// don't depend on interface extension.
 func newEphemeralTidingsPurgerFromExecer(pool ephemeralTidingsExecer, logger *slog.Logger) *EphemeralTidingsPurger {
 	return &EphemeralTidingsPurger{pool: pool, logger: logger}
 }
 
-// Run выполняет одну итерацию правила: снос осиротевших ephemeral-Tiding-ов
-// (прогон не существует ИЛИ в терминале > grace). grace передаётся как интервал
-// в предикат. Возвращает (affected, err): affected — число удалённых строк
-// (Runner.runDurationRule сложит в keeper_reaper_*-метрики).
+// Run executes one rule iteration: cleanup of orphaned ephemeral Tidings
+// (run does not exist OR in terminal > grace). grace is passed as an interval
+// to the predicate. Returns (affected, err): affected — number of deleted rows
+// (Runner.runDurationRule will sum into keeper_reaper_* metrics).
 //
-// Сигнатура совместима с runDurationRule (`(ctx, duration, batch) → (int64, error)`);
-// аргумент batchSize игнорируется (см. doc-comment типа).
+// Signature compatible with runDurationRule (`(ctx, duration, batch) → (int64, error)`);
+// batchSize argument is ignored (see type doc-comment).
 func (p *EphemeralTidingsPurger) Run(ctx context.Context, grace time.Duration, _ int) (int64, error) {
-	// pgx принимает time.Duration как Postgres-interval напрямую (microsecond-точность).
+	// pgx accepts time.Duration as Postgres interval directly (microsecond precision).
 	tag, err := p.pool.Exec(ctx, purgeOrphanEphemeralTidingsSQL, grace)
 	if err != nil {
 		return 0, fmt.Errorf("reaper.purge_orphan_ephemeral_tidings: %w", err)

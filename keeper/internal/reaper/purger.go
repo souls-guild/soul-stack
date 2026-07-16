@@ -1,12 +1,12 @@
-// Package reaper — Go-обёртки для Reaper-правил Keeper-а
-// (см. docs/keeper/reaper.md, ADR-022(d)). Reaper-loop (cron-driver,
-// leader-election через Redis-lease — ADR-006) появится в M0.6;
-// в M0.4.1c фиксируется только per-rule SQL-вызов с unit-coverage,
-// чтобы loop-driver мог использовать готовый блок.
+// Package reaper — Go wrappers for Reaper rules of Keeper
+// (see docs/keeper/reaper.md, ADR-022(d)). Reaper loop (cron driver,
+// leader election via Redis lease — ADR-006) will arrive in M0.6;
+// in M0.4.1c only per-rule SQL call is fixed with unit coverage,
+// so loop driver can use the ready block.
 //
-// Пакет — pgx-aware (тянет `pgx/v5`-типы для row-scan), живёт в
-// `keeper/internal/`, не в `shared/` — по той же причине, что
-// `keeper/internal/auditpg` (изоляция Soul-бинаря от pgx, ADR-011).
+// Package is pgx-aware (pulls `pgx/v5` types for row scan), lives in
+// `keeper/internal/`, not `shared/` — for the same reason as
+// `keeper/internal/auditpg` (Soul binary isolation from pgx, ADR-011).
 package reaper
 
 import (
@@ -19,152 +19,152 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// queryRower — узкое подмножество интерфейса pgxpool.Pool, нужное для
-// SELECT purge_audit_old(...). Сужение позволяет unit-тестировать
-// Purger fake-реализацией без поднятия Postgres-а; реальный pool из
-// keeper/internal/pg удовлетворяет интерфейсу автоматически.
+// queryRower — narrow subset of pgxpool.Pool interface needed for
+// SELECT purge_audit_old(...). Narrowing allows unit testing
+// Purger with a fake implementation without standing up Postgres; real pool from
+// keeper/internal/pg satisfies the interface automatically.
 //
-// Query (а не только QueryRow) нужен lease-aware `mark_disconnected`:
-// select_disconnect_candidates возвращает SETOF text (много строк).
+// Query (not just QueryRow) is needed for lease-aware `mark_disconnected`:
+// select_disconnect_candidates returns SETOF text (many rows).
 type queryRower interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
-// soulLeaseChecker — узкая поверхность Redis-проверки «жив ли EventStream к
-// SID», нужная lease-aware `mark_disconnected`. Сужение до одного метода
-// изолирует reaper-пакет от полного keeperredis.Client и допускает fake в
-// unit-тестах. Реальная реализация — [keeperredis.SoulStreamAlive]-обёртка,
-// собранная в cmd/keeper (см. daemon.setupReaper).
+// soulLeaseChecker — narrow interface for Redis check "is EventStream to
+// SID alive", needed for lease-aware `mark_disconnected`. Narrowing to one method
+// isolates the reaper package from full keeperredis.Client and allows faking in
+// unit tests. Real implementation is [keeperredis.SoulStreamAlive] wrapper,
+// assembled in cmd/keeper (see daemon.setupReaper).
 type soulLeaseChecker interface {
 	SoulStreamAlive(ctx context.Context, sid string) (bool, error)
 }
 
-// Purger — Go-обёртка для SQL-функции `purge_audit_old`. Один экземпляр
-// на Keeper-процесс; safe for concurrent use — pool сам обеспечивает
-// потокобезопасность. Каждый вызов [PurgeAuditOld] — ровно один batch
-// (по умолчанию 1000 записей); loop-логика (drain до 0, retry, cron,
-// leader-election) — out of scope M0.4.1c, появится в M0.6
-// reaper-runner.
+// Purger — Go wrapper for SQL function `purge_audit_old`. One instance
+// per Keeper process; safe for concurrent use — pool itself provides
+// thread safety. Each call to [PurgeAuditOld] is exactly one batch
+// (default 1000 records); loop logic (drain to 0, retry, cron,
+// leader election) is out of scope for M0.4.1c, will appear in M0.6
+// reaper runner.
 type Purger struct {
 	pool queryRower
 
-	// lease — опциональная Redis-проверка живого EventStream к SID для
-	// lease-aware `mark_disconnected` (ADR-006(a)). nil → правило деградирует
-	// в прежний чисто-SQL путь (миграция 014, mark_disconnected): single-
-	// instance dev / unit-режим без координации. Production wire-up
-	// (cmd/keeper) передаёт обёртку над общим Redis-клиентом.
+	// lease — optional Redis check of live EventStream to SID for
+	// lease-aware `mark_disconnected` (ADR-006(a)). nil → rule degrades
+	// to previous pure-SQL path (migration 014, mark_disconnected): single-
+	// instance dev / unit mode without coordination. Production wire-up
+	// (cmd/keeper) passes wrapper over shared Redis client.
 	lease soulLeaseChecker
 
-	// logger — для warn-а при недоступности Redis в lease-aware ветке
-	// (см. MarkDisconnected). nil-safe: при nil лог подавляется.
+	// logger — for warn when Redis is unavailable in lease-aware branch
+	// (see MarkDisconnected). nil-safe: when nil, log is suppressed.
 	logger *slog.Logger
 }
 
-// NewPurger оборачивает уже инициализированный pgxpool.Pool. Owner-ship
-// пула остаётся у caller-а: Purger не закрывает пул, lifecycle —
+// NewPurger wraps already initialized pgxpool.Pool. Ownership
+// of pool remains with caller: Purger does not close pool, lifecycle —
 // keeper/internal/pg → keeper/cmd/keeper.
 //
-// Без Redis-проверки: `mark_disconnected` работает в чисто-SQL режиме
-// (миграция 014). Для lease-aware режима — [NewPurgerWithLease].
+// Without Redis check: `mark_disconnected` works in pure-SQL mode
+// (migration 014). For lease-aware mode — [NewPurgerWithLease].
 func NewPurger(pool *pgxpool.Pool) *Purger {
 	return &Purger{pool: pool}
 }
 
-// NewPurgerWithLease — конструктор lease-aware Purger-а: `mark_disconnected`
-// сверяется с Redis (живой SID-lease ⇒ Soul НЕ метится disconnected даже при
-// stale PG `last_seen_at`). Прочие правила работают как в [NewPurger].
+// NewPurgerWithLease — constructor of lease-aware Purger: `mark_disconnected`
+// cross-checks with Redis (live SID-lease ⇒ Soul is NOT marked disconnected even if
+// stale PG `last_seen_at`). Other rules work as in [NewPurger].
 //
-// `lease` может быть nil — тогда поведение идентично [NewPurger] (чисто-SQL
-// fallback). `logger` опционален (nil → warn-ы подавляются).
+// `lease` can be nil — then behavior is identical to [NewPurger] (pure-SQL
+// fallback). `logger` is optional (nil → warns are suppressed).
 func NewPurgerWithLease(pool *pgxpool.Pool, lease soulLeaseChecker, logger *slog.Logger) *Purger {
 	return &Purger{pool: pool, lease: lease, logger: logger}
 }
 
-// newPurgerFromQueryRower — внутренний конструктор для unit-тестов,
-// принимающий узкий интерфейс. Публичный [NewPurger] фиксирует тип
-// `*pgxpool.Pool`, чтобы caller-ы не цеплялись за расширение интерфейса
-// в будущем.
+// newPurgerFromQueryRower — internal constructor for unit tests,
+// accepting narrow interface. Public [NewPurger] fixes type
+// `*pgxpool.Pool` so callers don't depend on interface expansion
+// in the future.
 func newPurgerFromQueryRower(pool queryRower) *Purger {
 	return &Purger{pool: pool}
 }
 
-// newPurgerWithLeaseFromQueryRower — внутренний конструктор для unit-тестов
-// lease-aware ветки: узкий queryRower + fake lease-checker.
+// newPurgerWithLeaseFromQueryRower — internal constructor for unit tests
+// of lease-aware branch: narrow queryRower + fake lease-checker.
 func newPurgerWithLeaseFromQueryRower(pool queryRower, lease soulLeaseChecker, logger *slog.Logger) *Purger {
 	return &Purger{pool: pool, lease: lease, logger: logger}
 }
 
-// defaultBatchSize — фоллбэк batch-size, если caller передал <= 0.
-// Совпадает с DEFAULT в SQL-функции (миграция 002); продублирован
-// здесь, чтобы caller с batchSize=0 получал предсказуемое значение в
-// логах/метриках до вызова PG.
+// defaultBatchSize — fallback batch-size if caller passed <= 0.
+// Matches DEFAULT in SQL function (migration 002); duplicated
+// here so caller with batchSize=0 gets predictable value in
+// logs/metrics before PG call.
 const defaultBatchSize = 1000
 
-// PurgeAuditOld удаляет один batch expired audit_log-записей старше
-// `maxAge`. Возвращает количество удалённых записей за этот batch.
-// Loop-логика (drain до 0, cron, leader-election, retry) — out of scope
-// M0.4.1c, появится в M0.6 reaper-runner.
+// PurgeAuditOld removes one batch of expired audit_log records older than
+// `maxAge`. Returns count of deleted records in this batch.
+// Loop logic (drain to 0, cron, leader-election, retry) — out of scope
+// M0.4.1c, will appear in M0.6 reaper-runner.
 //
-// `maxAge` должен быть positive; ≤0 возвращает error без обращения к PG
-// (отрицательная duration → PG-interval вида `-3600 seconds` синтаксически
-// валиден, но семантика `NOW() - (-1h) = NOW()+1h` приведёт к удалению
-// 0 строк и молчаливому проглатыванию ошибки конфигурации; явный отказ
-// — единственный безопасный режим).
+// `maxAge` must be positive; ≤0 returns error without PG call
+// (negative duration → PG-interval like `-3600 seconds` syntactically
+// valid, but semantics of `NOW() - (-1h) = NOW()+1h` will result in deletion
+// of 0 rows and silent config error swallowing; explicit rejection
+// — is the only safe mode).
 //
-// `batchSize <= 0` → используется [defaultBatchSize] (1000), без ошибки.
-// `maxAge` конвертируется в Postgres-interval-литерал через
-// [durationToPGInterval]; caller (reaper-runner) читает значение из
-// `keeper.yml → reaper.rules.purge_audit_old.max_age`, alias на
-// `audit.retention_days` (проверка совпадения — в shared/config parser,
+// `batchSize <= 0` → [defaultBatchSize] is used (1000), without error.
+// `maxAge` is converted to Postgres interval literal via
+// [durationToPGInterval]; caller (reaper-runner) reads value from
+// `keeper.yml → reaper.rules.purge_audit_old.max_age`, alias for
+// `audit.retention_days` (consistency check — in shared/config parser,
 // M0/M1.thin).
 func (p *Purger) PurgeAuditOld(ctx context.Context, maxAge time.Duration, batchSize int) (int64, error) {
 	return p.callIntervalBatch(ctx, "purge_audit_old", maxAge, batchSize)
 }
 
-// PurgeExpiredPendingTokens удаляет batch неиспользованных bootstrap-токенов,
-// у которых истёк `expires_at` (старше на `maxAge` сверх expiry). Имя правила в
-// конфиге — `expire_pending_seeds`; PM-решение Reaper.b: семантика —
-// DELETE (а не UPDATE-with-status), т.к. таблица `bootstrap_tokens` не имеет
-// колонки status, а истёкший pending-токен не может быть использован.
-// Аудит создания живёт в `audit_log` под своим retention-ом (ADR-022).
+// PurgeExpiredPendingTokens removes batch of unused bootstrap tokens,
+// whose `expires_at` has expired (older by `maxAge` beyond expiry). Rule name in
+// config — `expire_pending_seeds`; PM decision Reaper.b: semantics —
+// DELETE (not UPDATE-with-status), because `bootstrap_tokens` table does not have
+// status column, and expired pending token cannot be used.
+// Audit of creation lives in `audit_log` under its own retention (ADR-022).
 //
-// `maxAge` обычно = 0 (удалять сразу после истечения) или небольшой
-// grace-period. Передача `0` запрещена через тот же inv, что у
-// PurgeAuditOld — иначе caller с дефолтом будет случайно удалять
-// активные токены (NOW() - 0 = NOW() — все expired-токены попадают
-// под предикат, что собственно и нужно; но `-1h` приведёт к удалению
-// токенов, ещё не истёкших).
+// `maxAge` usually = 0 (delete immediately after expiration) or small
+// grace period. Passing `0` is forbidden by the same invariant as
+// PurgeAuditOld — otherwise caller with default will accidentally delete
+// active tokens (NOW() - 0 = NOW() — all expired tokens fall into
+// the predicate, which is what's needed; but `-1h` will result in deletion
+// of tokens not yet expired).
 //
-// На практике `expire_pending_seeds` в keeper.yml имеет `max_age: 24h`,
-// что соответствует Bootstrap-policy TTL; см. docs/keeper/reaper.md.
+// In practice, `expire_pending_seeds` in keeper.yml has `max_age: 24h`,
+// which corresponds to Bootstrap-policy TTL; see docs/keeper/reaper.md.
 func (p *Purger) PurgeExpiredPendingTokens(ctx context.Context, maxAge time.Duration, batchSize int) (int64, error) {
 	return p.callIntervalBatch(ctx, "expire_pending_seeds", maxAge, batchSize)
 }
 
-// PurgeUsedTokens удаляет batch использованных bootstrap-токенов
-// (`used_at IS NOT NULL`) старше `maxAge` от `used_at`. Default
+// PurgeUsedTokens removes batch of used bootstrap tokens
+// (`used_at IS NOT NULL`) older than `maxAge` from `used_at`. Default
 // `maxAge` = 90d (docs/keeper/reaper.md).
 func (p *Purger) PurgeUsedTokens(ctx context.Context, maxAge time.Duration, batchSize int) (int64, error) {
 	return p.callIntervalBatch(ctx, "purge_used_tokens", maxAge, batchSize)
 }
 
-// PurgeSouls удаляет batch записей `souls` в указанных `statuses`
-// (например `[disconnected, expired]`) с возрастом старше `maxAge`.
-// Возраст считается от `COALESCE(last_seen_at, registered_at)` — для
-// никогда не подключавшихся Soul-ов используется `registered_at`.
+// PurgeSouls removes batch of `souls` records in specified `statuses`
+// (e.g., `[disconnected, expired]`) older than `maxAge`.
+// Age is calculated from `COALESCE(last_seen_at, registered_at)` — for
+// Souls that never connected, `registered_at` is used.
 //
-// `statuses` обязательно непустой: без фильтра по статусу `DELETE`
-// снёс бы живые `connected`-записи (docs/keeper/reaper.md). Пустой
-// или nil — возвращает error без обращения к PG.
+// `statuses` must be non-empty: without status filter, `DELETE`
+// would remove live `connected` records (docs/keeper/reaper.md). Empty
+// or nil — returns error without PG call.
 //
-// Допустимые значения — узкий MVP-enum souls.status (`pending` |
-// `connected` | `disconnected` | `revoked` | `expired`); валидация
-// значений делается на стороне semantic-фазы keeper.yml парсера, не
-// здесь.
+// Valid values — narrow MVP enum souls.status (`pending` |
+// `connected` | `disconnected` | `revoked` | `expired`); validation
+// is done on semantic phase side of keeper.yml parser, not
+// here.
 //
-// CASCADE: ON DELETE bootstrap_tokens/soul_seeds (CASCADE) автоматически
-// чистит связанные записи (см. 008/009 миграции).
+// CASCADE: ON DELETE bootstrap_tokens/soul_seeds (CASCADE) automatically
+// cleans related records (see migrations 008/009).
 func (p *Purger) PurgeSouls(ctx context.Context, statuses []string, maxAge time.Duration, batchSize int) (int64, error) {
 	if len(statuses) == 0 {
 		return 0, fmt.Errorf("reaper.purge_souls: statuses must be non-empty")
@@ -172,13 +172,13 @@ func (p *Purger) PurgeSouls(ctx context.Context, statuses []string, maxAge time.
 	return p.callStatusesIntervalBatch(ctx, "purge_souls", statuses, maxAge, batchSize)
 }
 
-// PurgeOldSeeds удаляет batch записей `soul_seeds` в указанных
-// `statuses` (default `[superseded, expired, revoked]`) с
-// `issued_at` старше `maxAge`. Active-seed-ы исключены через
-// statuses-фильтр.
+// PurgeOldSeeds removes batch of `soul_seeds` records in specified
+// `statuses` (default `[superseded, expired, revoked]`) with
+// `issued_at` older than `maxAge`. Active seeds are excluded via
+// status filter.
 //
-// `statuses` обязательно непустой — без фильтра DELETE снёс бы
-// активные сертификаты.
+// `statuses` must be non-empty — without filter DELETE would remove
+// active certificates.
 func (p *Purger) PurgeOldSeeds(ctx context.Context, statuses []string, maxAge time.Duration, batchSize int) (int64, error) {
 	if len(statuses) == 0 {
 		return 0, fmt.Errorf("reaper.purge_old_seeds: statuses must be non-empty")
@@ -186,14 +186,14 @@ func (p *Purger) PurgeOldSeeds(ctx context.Context, statuses []string, maxAge ti
 	return p.callStatusesIntervalBatch(ctx, "purge_old_seeds", statuses, maxAge, batchSize)
 }
 
-// PurgeOldCerts удаляет batch строк реестра `warrant` (миграция 092) в
-// указанных `statuses` (default `[superseded, expired, failed]`) с `issued_at`
-// старше `maxAge`. Retention растущей истории ротаций сервисных сертов (R4,
-// cert-rotation Вар1). Active/rotating исключены через statuses-фильтр (живой
-// материал / серт в процессе ротации).
+// PurgeOldCerts removes batch of `warrant` registry records (migration 092) in
+// specified `statuses` (default `[superseded, expired, failed]`) with `issued_at`
+// older than `maxAge`. Retention of growing history of service cert rotations (R4,
+// cert-rotation Var1). Active/rotating are excluded via status filter (live
+// material / cert in rotation process).
 //
-// `statuses` обязательно непустой — без фильтра DELETE снёс бы активные серты.
-// Parity PurgeOldSeeds; SQL-функция `purge_old_certs` (093).
+// `statuses` must be non-empty — without filter DELETE would remove active certs.
+// Parity with PurgeOldSeeds; SQL function `purge_old_certs` (093).
 func (p *Purger) PurgeOldCerts(ctx context.Context, statuses []string, maxAge time.Duration, batchSize int) (int64, error) {
 	if len(statuses) == 0 {
 		return 0, fmt.Errorf("reaper.purge_old_certs: statuses must be non-empty")
@@ -201,164 +201,164 @@ func (p *Purger) PurgeOldCerts(ctx context.Context, statuses []string, maxAge ti
 	return p.callStatusesIntervalBatch(ctx, "purge_old_certs", statuses, maxAge, batchSize)
 }
 
-// PurgeApplyRuns удаляет batch завершённых apply-прогонов из реестра
-// `apply_runs` (миграция 018) с `finished_at` старше `maxAge`. Default
+// PurgeApplyRuns removes batch of completed apply-runs from registry
+// `apply_runs` (migration 018) with `finished_at` older than `maxAge`. Default
 // `maxAge` = 30d (docs/keeper/reaper.md).
 //
-// Удаляются только finished-записи (`success`/`failed`/`cancelled` с
-// `finished_at IS NOT NULL`); `running` SQL-функция не трогает — фильтр
-// зашит в `purge_apply_runs` (021), здесь дополнительной проверки не
-// требуется. Возраст считается от `finished_at`.
+// Only finished records are deleted (`success`/`failed`/`cancelled` with
+// `finished_at IS NOT NULL`); `running` SQL function does not touch — filter
+// is embedded in `purge_apply_runs` (021), no additional check
+// is required. Age is calculated from `finished_at`.
 func (p *Purger) PurgeApplyRuns(ctx context.Context, maxAge time.Duration, batchSize int) (int64, error) {
 	return p.callIntervalBatch(ctx, "purge_apply_runs", maxAge, batchSize)
 }
 
-// PurgeApplyRunPlan удаляет batch строк «плана задач прогона» (`apply_run_plan`,
-// миграция 096, NIM-37) прогонов, завершённых и старше `gracePeriod` (по
-// `created_at`). Default grace = 30d (align на `purge_apply_runs`).
+// PurgeApplyRunPlan removes batch of "run task plan" records (`apply_run_plan`,
+// migration 096, NIM-37) of runs, completed and older than `gracePeriod` (by
+// `created_at`). Default grace = 30d (align with `purge_apply_runs`).
 //
-// FK-каскада у плана нет (apply_id не PK ни в одной таблице), поэтому без этого
-// правила строки плана росли бы orphan-ами после сноса `apply_runs`. План
-// АКТИВНОГО прогона (нетерминальный apply_run) SQL-функция не трогает — фильтр
-// зашит в `purge_apply_run_plan` (097). Зеркало PurgeApplyTaskRegister, но по
-// apply_id (план host-инвариантен, sid у него нет).
+// FK cascade for plan does not exist (apply_id is not PK in any table), so without this
+// rule, plan rows would grow as orphans after deletion of `apply_runs`. Plan
+// of ACTIVE run (non-terminal apply_run) SQL function does not touch — filter
+// is embedded in `purge_apply_run_plan` (097). Mirror of PurgeApplyTaskRegister, but by
+// apply_id (plan is host-invariant, has no sid).
 func (p *Purger) PurgeApplyRunPlan(ctx context.Context, gracePeriod time.Duration, batchSize int) (int64, error) {
 	return p.callIntervalBatch(ctx, "purge_apply_run_plan", gracePeriod, batchSize)
 }
 
-// PurgeVoyages удаляет batch завершённых Voyage-прогонов из реестра `voyages`
-// (миграция 059) с `finished_at` старше `maxAge`. Retention растущей истории
-// прогонов (реализация отложенного `purge_voyages`, ADR-046 §79). Default
+// PurgeVoyages removes batch of completed Voyage-runs from `voyages` registry
+// (migration 059) with `finished_at` older than `maxAge`. Retention of growing history
+// of runs (implementation of deferred `purge_voyages`, ADR-046 §79). Default
 // `maxAge` = 30d (docs/keeper/reaper.md).
 //
-// Удаляются только finished-записи (`succeeded`/`failed`/`partial_failed`/
-// `cancelled` с `finished_at IS NOT NULL`); `scheduled`/`pending`/`running`
-// SQL-функция не трогает — фильтр зашит в `purge_voyages` (075). Возраст
-// считается от `finished_at` (parity PurgeApplyRuns).
+// Only finished records are deleted (`succeeded`/`failed`/`partial_failed`/
+// `cancelled` with `finished_at IS NOT NULL`); `scheduled`/`pending`/`running`
+// SQL function does not touch — filter is embedded in `purge_voyages` (075). Age
+// is calculated from `finished_at` (parity with PurgeApplyRuns).
 //
-// Каскад: `voyage_targets` уносятся `ON DELETE CASCADE` (059). soft-link-и
-// `voyage_targets.apply_id`/`errand_id` (на apply_runs/errands) и
-// `tidings.voyage_id` (ephemeral) НЕ являются FK на voyages — purge их не
-// удаляет и не оставляет битых ссылок (ephemeral-Tiding-и снимаются раньше
-// правилом `purge_orphan_ephemeral_tidings`). Корреляционный инвариант: окно
-// по умолчанию выровнено на `purge_apply_runs` (30d), чтобы drill «voyage →
-// apply_runs» не терял одну из сторон (см. миграцию 075).
+// Cascade: `voyage_targets` are removed by `ON DELETE CASCADE` (059). soft-links
+// `voyage_targets.apply_id`/`errand_id` (to apply_runs/errands) and
+// `tidings.voyage_id` (ephemeral) are NOT FK to voyages — purge does not
+// delete them and does not leave broken references (ephemeral-Tidings are removed earlier
+// by rule `purge_orphan_ephemeral_tidings`). Correlation invariant: window
+// by default aligned with `purge_apply_runs` (30d), so drill "voyage →
+// apply_runs" does not lose one side (see migration 075).
 func (p *Purger) PurgeVoyages(ctx context.Context, maxAge time.Duration, batchSize int) (int64, error) {
 	return p.callIntervalBatch(ctx, "purge_voyages", maxAge, batchSize)
 }
 
-// PurgePushRuns удаляет batch завершённых push-прогонов из реестра
-// `push_runs` (миграция 051) с `finished_at` старше `maxAge`. Retention
-// растущей run-history push-стороны (default `maxAge` = 30d,
-// docs/keeper/reaper.md). Зеркало PurgeApplyRuns / PurgeVoyages.
+// PurgePushRuns removes batch of completed push-runs from registry
+// `push_runs` (migration 051) with `finished_at` older than `maxAge`. Retention
+// of growing run-history on push side (default `maxAge` = 30d,
+// docs/keeper/reaper.md). Mirror of PurgeApplyRuns / PurgeVoyages.
 //
-// Удаляются только finished-записи (`success`/`partial_failed`/`failed`/
-// `cancelled` с `finished_at IS NOT NULL`); `pending`/`running` SQL-функция
-// не трогает — фильтр зашит в `purge_push_runs` (076). Возраст считается от
+// Only finished records are deleted (`success`/`partial_failed`/`failed`/
+// `cancelled` with `finished_at IS NOT NULL`); `pending`/`running` SQL function
+// does not touch — filter is embedded in `purge_push_runs` (076). Age is calculated from
 // `finished_at`.
 //
-// НЕ путать с правилом `purge_orphan_push_runs` (push_orphan.go): то
-// терминализирует in-flight зомби (pending/running старше TTL → cancelled),
-// а это удаляет уже завершённые записи. Каскад отсутствует — per-host
-// результаты хранятся inline в `push_runs.summary` (jsonb), дочерних FK на
-// `push_runs` нет (051).
+// Do NOT confuse with rule `purge_orphan_push_runs` (push_orphan.go): that
+// terminates in-flight zombies (pending/running older than TTL → cancelled),
+// while this deletes already completed records. Cascade does not exist — per-host
+// results are stored inline in `push_runs.summary` (jsonb), no child FK to
+// `push_runs` (051).
 func (p *Purger) PurgePushRuns(ctx context.Context, maxAge time.Duration, batchSize int) (int64, error) {
 	return p.callIntervalBatch(ctx, "purge_push_runs", maxAge, batchSize)
 }
 
-// PurgeIncarnationArchive удаляет batch строк архива снесённых incarnation
-// (`incarnation_archive`, миграция 039) с `archived_at` старше `maxAge`.
-// Retention compliance-класса — данные историко-аудитные, поэтому окно
-// консервативное (default 365d, docs/keeper/reaper.md). Возраст считается от
-// `archived_at` (момент записи в архив при destroy); фильтр зашит в
+// PurgeIncarnationArchive removes batch of archive records of deleted incarnations
+// (`incarnation_archive`, migration 039) with `archived_at` older than `maxAge`.
+// Retention compliance-class — historical-audit data, so window
+// is conservative (default 365d, docs/keeper/reaper.md). Age is calculated from
+// `archived_at` (moment of archiving at destroy); filter is embedded in
 // `purge_incarnation_archive` (077).
 //
-// Каскад отсутствует — у `incarnation_archive` нет дочерних FK-таблиц (039:
-// архив намеренно без ссылочной целостности к live-реестру). DELETE битых
-// ссылок не создаёт.
+// Cascade does not exist — `incarnation_archive` has no child FK tables (039:
+// archive intentionally has no referential integrity to live registry). DELETE of broken
+// references does not occur.
 func (p *Purger) PurgeIncarnationArchive(ctx context.Context, maxAge time.Duration, batchSize int) (int64, error) {
 	return p.callIntervalBatch(ctx, "purge_incarnation_archive", maxAge, batchSize)
 }
 
-// PurgeStateHistoryArchive удаляет batch строк архива журнала state_history
-// снесённых incarnation (`state_history_archive`, миграция 039) с `archived_at`
-// старше `maxAge`. Retention compliance-класса (default 365d,
-// docs/keeper/reaper.md), parity PurgeIncarnationArchive. Возраст считается от
-// `archived_at`; фильтр зашит в `purge_state_history_archive` (077).
+// PurgeStateHistoryArchive removes batch of state_history log archive records
+// of deleted incarnations (`state_history_archive`, migration 039) with `archived_at`
+// older than `maxAge`. Retention compliance-class (default 365d,
+// docs/keeper/reaper.md), parity with PurgeIncarnationArchive. Age is calculated from
+// `archived_at`; filter is embedded in `purge_state_history_archive` (077).
 //
-// Каскад отсутствует — дочерних FK на `state_history_archive` нет (039).
+// Cascade does not exist — no child FK to `state_history_archive` (039).
 func (p *Purger) PurgeStateHistoryArchive(ctx context.Context, maxAge time.Duration, batchSize int) (int64, error) {
 	return p.callIntervalBatch(ctx, "purge_state_history_archive", maxAge, batchSize)
 }
 
-// PurgeArchivedStateHistory физически удаляет batch soft-deleted-снимков
-// (`archived_at IS NOT NULL`) из ЖИВОЙ таблицы `state_history` (миграция 048) с
-// `archived_at` старше `maxAge`. Retention compliance-класса (default 365d,
-// docs/keeper/reaper.md), parity PurgeIncarnationArchive.
+// PurgeArchivedStateHistory physically removes batch of soft-deleted snapshots
+// (`archived_at IS NOT NULL`) from LIVE table `state_history` (migration 048) with
+// `archived_at` older than `maxAge`. Retention compliance-class (default 365d,
+// docs/keeper/reaper.md), parity with PurgeIncarnationArchive.
 //
-// НЕ путать с `archive_state_history` (049 / [Purger.ArchiveStateHistory]): то
-// ТОЛЬКО проставляет soft-delete-флаг `archived_at = NOW()` активным снимкам
-// сверх N последних, а это правило физически сносит уже soft-deleted строки по
-// истечении окна. Активные снимки (`archived_at IS NULL`) НЕ трогаются — фильтр
-// зашит в `purge_archived_state_history` (077). Возраст считается от `archived_at`
-// (момент soft-delete), не от `at`.
+// Do NOT confuse with `archive_state_history` (049 / [Purger.ArchiveStateHistory]): that
+// ONLY sets soft-delete flag `archived_at = NOW()` for active snapshots
+// beyond last N, while this rule physically removes already soft-deleted rows after
+// window expiration. Active snapshots (`archived_at IS NULL`) are NOT touched — filter
+// is embedded in `purge_archived_state_history` (077). Age is calculated from `archived_at`
+// (moment of soft-delete), not from `at`.
 func (p *Purger) PurgeArchivedStateHistory(ctx context.Context, maxAge time.Duration, batchSize int) (int64, error) {
 	return p.callIntervalBatch(ctx, "purge_archived_state_history", maxAge, batchSize)
 }
 
-// PurgeApplyTaskRegister удаляет batch register-строк из накопителя
-// `apply_task_register` (миграция 022) тех прогонов, чей `apply_runs` уже в
-// терминальном статусе (`success`/`failed`/`cancelled`) и завершился
-// (`finished_at`) старше `gracePeriod`. Default `gracePeriod` = 1h
+// PurgeApplyTaskRegister removes batch of register rows from accumulator
+// `apply_task_register` (migration 022) for runs whose `apply_runs` already in
+// terminal status (`success`/`failed`/`cancelled`) and completed
+// (`finished_at`) older than `gracePeriod`. Default `gracePeriod` = 1h
 // (docs/keeper/reaper.md).
 //
-// Назначение — защитная гигиена транзиентного run-state: register_data —
-// plaintext-JSONB probe-результатов (потенциально с секретами), нужный
-// scenario-runner-у ровно один раз после cross-host barrier-а для рендера
-// state_changes.sets. FK `ON DELETE CASCADE` чистит его каскадом вместе с
-// apply_run (правило `purge_apply_runs`, 30d), но это правило снимает register
-// раньше — сразу через grace после терминала, сокращая окно plaintext-хранения.
+// Purpose — protective hygiene of transient run-state: register_data —
+// plaintext-JSONB of probe results (potentially with secrets), needed
+// by scenario-runner exactly once after cross-host barrier for rendering
+// state_changes.sets. FK `ON DELETE CASCADE` cleans it cascadingly with
+// apply_run (rule `purge_apply_runs`, 30d), but this rule removes register
+// earlier — immediately through grace after terminal, reducing plaintext-storage window.
 //
-// Критерий «терминальный статус + grace» (а НЕ TTL по created_at): register
-// АКТИВНОГО (`running`) прогона не удаляется НИКОГДА, независимо от его
-// длительности — фильтр по `apply_runs.status`/`finished_at` зашит в
-// `purge_apply_task_register` (023). Возраст считается от `finished_at`.
+// Criterion "terminal status + grace" (not TTL by created_at): register
+// of ACTIVE (`running`) run is NEVER deleted, regardless of its
+// duration — filter by `apply_runs.status`/`finished_at` is embedded in
+// `purge_apply_task_register` (023). Age is calculated from `finished_at`.
 func (p *Purger) PurgeApplyTaskRegister(ctx context.Context, gracePeriod time.Duration, batchSize int) (int64, error) {
 	return p.callIntervalBatch(ctx, "purge_apply_task_register", gracePeriod, batchSize)
 }
 
-// reclaimApplyRunsSQL — recovery-скан недо-доставленных Ward (ADR-027 amend, S4).
-// Возвращает в `planned` ТОЛЬКО задания, умершие ДО отдачи Soul-у:
-// заклеймленные мёртвым Acolyte-ом (`status = 'claimed'` с истёкшим lease
-// `claim_expires_at < NOW()`), сбрасывая владельца и lease
+// reclaimApplyRunsSQL — recovery-scan of under-delivered Ward (ADR-027 amend, S4).
+// Returns to `planned` ONLY jobs that died BEFORE delivery to Soul:
+// claimed by dead Acolyte (`status = 'claimed'` with expired lease
+// `claim_expires_at < NOW()`), resetting owner and lease
 // (`claim_by_kid`/`claim_at`/`claim_expires_at` → NULL).
 //
-// `dispatched` НЕ реклеймится (смена природы правила, GATE-1 передизайн): после
-// MarkDispatched задание отдано Soul-у, и прогоном владеет Soul — пере-claim
-// dispatched = ВТОРОЙ SendApply = двойной apply. `running` (vestigial) тоже вне
-// предиката: Acolyte-флоу его больше не пишет, а пере-claim условного running
-// был бы тем же двойным apply. Правило теперь «добить недо-доставленное»
-// (claimed, умер до отдачи), а не «реклеймить зомби-running».
+// `dispatched` is NOT reclaimed (change of rule nature, GATE-1 redesign): after
+// MarkDispatched, job is delivered to Soul, and run is owned by Soul — re-claim
+// dispatched = SECOND SendApply = double apply. `running` (vestigial) also outside
+// predicate: Acolyte-flow no longer writes it, and re-claim of hypothetical running
+// would be the same double apply. Rule now "finish under-delivered"
+// (claimed, died before delivery), not "reclaim zombie-running".
 //
-// `attempt` НЕ сбрасывается: следующий [applyrun.ClaimNext] инкрементит его
-// (fencing-epoch растёт), и Keeper-guard на приёме RunResult (S1/S5) отсекает
-// stale-результат прежней попытки по `attempt`. Без этого пере-claim протухшего
-// claimed мог бы конфликтовать с поздним RunResult — поэтому правило
-// `reclaim_apply_runs` включается ТОЛЬКО при раскатанном attempt-fencing
-// (см. docs/keeper/reaper.md).
+// `attempt` is NOT reset: next [applyrun.ClaimNext] increments it
+// (fencing-epoch grows), and Keeper-guard on RunResult receipt (S1/S5) cuts off
+// stale result of previous attempt by `attempt`. Without this, re-claim of stale
+// claimed could conflict with late RunResult — therefore rule
+// `reclaim_apply_runs` is enabled ONLY with rolled-out attempt-fencing
+// (see docs/keeper/reaper.md).
 //
-// Идиома `WITH … SELECT count(*)`: UPDATE с подзапросом по `apply_runs_claim_scan_idx`
-// (миграция 025, partial-индекс на `status IN ('planned','claimed','running')` —
-// покрывает `claimed`) + LIMIT $1 батча; внешний SELECT отдаёт affected как
-// BIGINT — сохраняет общий `queryRower`-путь Purger-а (`QueryRow`), без отдельной
-// SQL-функции и миграции.
+// Idiom `WITH … SELECT count(*)`: UPDATE with subquery over `apply_runs_claim_scan_idx`
+// (migration 025, partial-index on `status IN ('planned','claimed','running')` —
+// covers `claimed`) + LIMIT $1 batch; outer SELECT returns affected as
+// BIGINT — preserves common `queryRower` path of Purger (`QueryRow`), without separate
+// SQL function and migration.
 //
-// Параметр один — `$1 batch` (LIMIT). lease в SQL НЕ передаётся: предикат
-// сравнивает `claim_expires_at < NOW()` напрямую (фактический lease зашит в
-// claim_expires_at при захвате Ward-а), поэтому interval-аргумента нет — иначе
-// PG не вывел бы тип неиспользуемого параметра (42P18).
+// One parameter — `$1 batch` (LIMIT). lease is NOT passed in SQL: predicate
+// compares `claim_expires_at < NOW()` directly (actual lease embedded in
+// claim_expires_at when capturing Ward), therefore no interval argument — otherwise
+// PG would not infer unused parameter type (42P18).
 //
-//	$1 batch  — LIMIT возвращаемой за прогон пачки
+//	$1 batch  — LIMIT of batch returned per run
 const reclaimApplyRunsSQL = `
 WITH reclaimed AS (
     UPDATE apply_runs
@@ -379,23 +379,23 @@ WITH reclaimed AS (
 SELECT count(*) FROM reclaimed
 `
 
-// ReclaimApplyRuns возвращает batch недо-доставленных Ward (умерших ДО отдачи
-// Soul-у: `status = 'claimed'` с `claim_expires_at < NOW()`) в `planned` для
-// пере-claim, сбрасывая `claim_by_kid`/`claim_at`/`claim_expires_at`.
-// `dispatched`/`running` НЕ реклеймятся — после отдачи прогоном владеет Soul,
-// пере-claim = двойной apply (ADR-027 amend, S4). `attempt` СОХРАНЯЕТСЯ —
-// fencing-epoch инкрементит следующий claim, Keeper-guard на приёме RunResult
-// отсекает stale-результат прежней попытки.
-// Возвращает число возвращённых заданий за batch.
+// ReclaimApplyRuns returns batch of under-delivered Ward (died BEFORE delivery
+// to Soul: `status = 'claimed'` with `claim_expires_at < NOW()`) to `planned` for
+// re-claim, resetting `claim_by_kid`/`claim_at`/`claim_expires_at`.
+// `dispatched`/`running` are NOT reclaimed — after delivery run is owned by Soul,
+// re-claim = double apply (ADR-027 amend, S4). `attempt` is PRESERVED —
+// fencing-epoch is incremented by next claim, Keeper-guard on RunResult receipt
+// cuts off stale result of previous attempt.
+// Returns count of returned jobs in batch.
 //
-// `lease` здесь — формальный аргумент сигнатуры duration-правила (recovery
-// сравнивает `claim_expires_at < NOW()` напрямую, без offset); значение
-// валидируется (>0) для единообразия с прочими правилами, но в предикат не входит.
+// `lease` here — formal argument of duration-rule signature (recovery
+// compares `claim_expires_at < NOW()` directly, without offset); value
+// is validated (>0) for consistency with other rules, but does not enter predicate.
 // `batchSize <= 0` → [defaultBatchSize].
 //
-// Правило `reclaim_apply_runs` по дефолту ВЫКЛЮЧЕНО — включать только при
-// раскатанном attempt-fencing (приём RunResult), иначе recovery может конфликтовать
-// со stale-результатом.
+// Rule `reclaim_apply_runs` is DISABLED by default — enable only when
+// rolled-out attempt-fencing (RunResult receipt), else recovery may conflict
+// with stale result.
 func (p *Purger) ReclaimApplyRuns(ctx context.Context, lease time.Duration, batchSize int) (int64, error) {
 	if lease <= 0 {
 		return 0, fmt.Errorf("reaper.reclaim_apply_runs: lease must be > 0, got %v", lease)
@@ -411,24 +411,24 @@ func (p *Purger) ReclaimApplyRuns(ctx context.Context, lease time.Duration, batc
 	return count, nil
 }
 
-// ArchiveStateHistory soft-deletes (`archived_at = NOW()`) активные снимки
-// `state_history` сверх `keepLastN` последних на incarnation (по `at DESC`),
-// опционально исключая снимки шагов state_schema-миграции
-// (`scenario = 'migration'`, см. ADR-019). Реализация — SQL-функция
-// `archive_state_history(integer, boolean, integer)` из миграции 049.
-// Возвращает число помеченных снимков за этот батч.
+// ArchiveStateHistory soft-deletes (`archived_at = NOW()`) active snapshots
+// of `state_history` beyond last `keepLastN` per incarnation (by `at DESC`),
+// optionally excluding snapshots of state_schema migration steps
+// (`scenario = 'migration'`, see ADR-019). Implementation — SQL function
+// `archive_state_history(integer, boolean, integer)` from migration 049.
+// Returns count of marked snapshots in this batch.
 //
-// `keepLastN <= 0` отвергается без обращения к PG: нулевой keep означал бы
-// «архивировать всё», что почти наверняка ошибка конфигурации (`enabled:
-// true` без сознательного выбора политики). Caller (Reaper-runner) подставляет
-// дефолт 50 при пустом cfg-значении.
+// `keepLastN <= 0` is rejected without PG call: zero keep would mean
+// "archive everything", which is almost certainly config error (`enabled:
+// true` without conscious policy choice). Caller (Reaper-runner) substitutes
+// default 50 for empty cfg value.
 //
-// `batchSize <= 0` → [defaultBatchSize]: соответствует общему контракту
-// Purger-правил.
+// `batchSize <= 0` → [defaultBatchSize]: matches common contract
+// of Purger rules.
 //
 // `keepVersionBump = true` — version-bump-snapshots (scenario='migration')
-// никогда не архивируются; restorable anchor для миграций ADR-019 (recovery
-// схемы при rollback). false — правило архивирует их наравне с обычными.
+// are never archived; restorable anchor for migrations ADR-019 (recovery
+// of schema on rollback). false — rule archives them equally with regular ones.
 func (p *Purger) ArchiveStateHistory(ctx context.Context, keepLastN int, keepVersionBump bool, batchSize int) (int64, error) {
 	if keepLastN <= 0 {
 		return 0, fmt.Errorf("reaper.archive_state_history: keep_last_n must be > 0, got %d", keepLastN)
@@ -444,40 +444,40 @@ func (p *Purger) ArchiveStateHistory(ctx context.Context, keepLastN int, keepVer
 	return count, nil
 }
 
-// MarkDisconnected согласует снимок `souls.status` с фактом Redis SID-lease в
-// ОБЕ стороны (ленивый reconcile, ADR-006(a)). Action `set_status` в reaper.md.
-// Возвращает суммарное число обновлённых строк (disconnect + reconnect).
+// MarkDisconnected reconciles snapshot `souls.status` with fact of Redis SID-lease in
+// BOTH directions (lazy reconcile, ADR-006(a)). Action `set_status` in reaper.md.
+// Returns total count of updated rows (disconnect + reconnect).
 //
-// `souls.status` — «последнее известное» для Operator API, НЕ источник presence
-// (online/offline решает lease). Reconcile приводит снимок к факту фоном:
+// `souls.status` — "last known" for Operator API, NOT source of presence
+// (online/offline is decided by lease). Reconcile brings snapshot to fact in background:
 //
-//   - connected → disconnected: `last_seen_at` старше `staleAfter` И нет живого
-//     SID-lease (реально протух);
-//   - disconnected → connected: жив SID-lease (Soul online; реконнект уже-
-//     онбордированного Soul-а Bootstrap-RPC не трогает, eventstream presence в
-//     PG на hot-path не пишет — снимок чинит только этот reconcile).
+//   - connected → disconnected: `last_seen_at` older than `staleAfter` AND no live
+//     SID-lease (really dead);
+//   - disconnected → connected: alive SID-lease (Soul online; reconnect of already-
+//     onboarded Soul does not touch Bootstrap-RPC, eventstream presence in
+//     PG is not written on hot-path — snapshot is fixed only by this reconcile).
 //
-// Без обратного направления снимок латчился в `disconnected` навсегда после
-// первого «обрыв+sweep» (Operator API отдавал status=disconnected при свежем
-// last_seen_at и живом lease).
+// Without reverse direction, snapshot latched in `disconnected` forever after
+// first "break+sweep" (Operator API returned status=disconnected with fresh
+// last_seen_at and live lease).
 //
-// `staleAfter` обычно = 90s (docs/keeper/reaper.md), что соответствует
-// нескольким heartbeat-интервалам. Слишком короткое значение чревато
-// flapping-ом (connected ↔ disconnected) при сетевых джиттерах;
-// валидация значения — на стороне operator-а через semantic-фазу,
-// здесь только формальный sanity (>0).
+// `staleAfter` usually = 90s (docs/keeper/reaper.md), corresponding to
+// several heartbeat intervals. Too short value risks
+// flapping (connected ↔ disconnected) on network jitter;
+// validation — on operator side via semantic phase,
+// here only formal sanity (>0).
 //
-// Lease-aware (Purger собран через [NewPurgerWithLease]): правило двухфазное в
-// каждом направлении — (1) выбрать PG-кандидатов
-// (select_disconnect_candidates / select_reconnect_candidates), (2) сверить с
-// Redis SID-lease, (3) применить (mark_disconnected_sids / mark_connected_sids).
-// Это закрывает и ложный disconnect idle-Soul-а (PG `last_seen_at` stale, но
-// стрим жив), и латч `disconnected` после реконнекта.
+// Lease-aware (Purger built via [NewPurgerWithLease]): rule is two-phase in
+// each direction — (1) select PG candidates
+// (select_disconnect_candidates / select_reconnect_candidates), (2) verify with
+// Redis SID-lease, (3) apply (mark_disconnected_sids / mark_connected_sids).
+// This closes both false disconnect of idle Soul (PG `last_seen_at` stale, but
+// stream is live), and latch of `disconnected` after reconnect.
 //
-// Без lease-checker-а (Purger из [NewPurger], single-instance dev / unit без
-// Redis) — fallback на прежнее ОДНОСТОРОННЕЕ чисто-SQL правило mark_disconnected
-// (миграция 014): там stale `last_seen_at` ⇔ нет стрима по построению (один
-// инстанс), и латча нет — реконнект сразу делает `last_seen_at` свежим.
+// Without lease-checker (Purger from [NewPurger], single-instance dev / unit without
+// Redis) — fallback to old ONE-WAY pure-SQL rule mark_disconnected
+// (migration 014): there stale `last_seen_at` ⇔ no stream by construction (one
+// instance), and no latch — reconnect immediately makes `last_seen_at` fresh.
 func (p *Purger) MarkDisconnected(ctx context.Context, staleAfter time.Duration, batchSize int) (int64, error) {
 	if p.lease == nil {
 		return p.callIntervalBatch(ctx, "mark_disconnected", staleAfter, batchSize)
@@ -485,11 +485,11 @@ func (p *Purger) MarkDisconnected(ctx context.Context, staleAfter time.Duration,
 	return p.reconcileLeaseAware(ctx, staleAfter, batchSize)
 }
 
-// reconcileLeaseAware — двунаправленный lease-aware reconcile (см.
-// [MarkDisconnected]). Оба направления выполняются за один прогон; возвращает
-// сумму обновлённых строк. Ошибка любой PG-фазы прерывает прогон (возврат err) —
-// следующий тик повторит; ошибка Redis-проверки конкретного SID fail-safe
-// пропускает его (см. filterByLease).
+// reconcileLeaseAware — bidirectional lease-aware reconcile (see
+// [MarkDisconnected]). Both directions executed in one run; returns
+// sum of updated rows. Error in any PG phase interrupts run (return err) —
+// next tick will retry; error of Redis-check for specific SID is fail-safe
+// skips it (see filterByLease).
 func (p *Purger) reconcileLeaseAware(ctx context.Context, staleAfter time.Duration, batchSize int) (int64, error) {
 	if staleAfter <= 0 {
 		return 0, fmt.Errorf("reaper.mark_disconnected: duration must be > 0, got %v", staleAfter)
@@ -509,8 +509,8 @@ func (p *Purger) reconcileLeaseAware(ctx context.Context, staleAfter time.Durati
 	return disconnected + reconnected, nil
 }
 
-// reconcileDisconnect — направление connected → disconnected: кандидаты по stale
-// `last_seen_at`, оставляем тех, у кого lease МЁРТВ (реально протухли), метим.
+// reconcileDisconnect — direction connected → disconnected: candidates by stale
+// `last_seen_at`, keep those whose lease is DEAD (really dead), mark.
 func (p *Purger) reconcileDisconnect(ctx context.Context, staleAfter time.Duration, batchSize int) (int64, error) {
 	candidates, err := p.selectDisconnectCandidates(ctx, staleAfter, batchSize)
 	if err != nil {
@@ -523,9 +523,9 @@ func (p *Purger) reconcileDisconnect(ctx context.Context, staleAfter time.Durati
 	return p.markDisconnectedSIDs(ctx, stale)
 }
 
-// reconcileReconnect — направление disconnected → connected: кандидаты —
-// disconnected-souls (любой last_seen), оставляем тех, у кого lease ЖИВ (Soul
-// online), метим обратно connected. Закрывает латч снимка.
+// reconcileReconnect — direction disconnected → connected: candidates —
+// disconnected-souls (any last_seen), keep those whose lease is ALIVE (Soul
+// online), mark back to connected. Closes latch of snapshot.
 func (p *Purger) reconcileReconnect(ctx context.Context, batchSize int) (int64, error) {
 	candidates, err := p.selectReconnectCandidates(ctx, batchSize)
 	if err != nil {
@@ -538,11 +538,11 @@ func (p *Purger) reconcileReconnect(ctx context.Context, batchSize int) (int64, 
 	return p.markConnectedSIDs(ctx, online)
 }
 
-// filterByLease сверяет каждого кандидата с Redis SID-lease и возвращает SID-ы,
-// чей lease совпал с `wantAlive` (true → online-кандидаты на reconnect, false →
-// мёртвые на disconnect). Ошибка Redis-проверки конкретного SID — fail-safe:
-// SID пропускается (не метится ни в одну сторону; следующий прогон повторит),
-// warn в лог. Живой стрим важнее своевременности снимка в обе стороны.
+// filterByLease checks each candidate against Redis SID-lease and returns SIDs
+// whose lease matches `wantAlive` (true → online candidates for reconnect, false →
+// dead for disconnect). Error of Redis-check for specific SID — fail-safe:
+// SID is skipped (not marked either way; next run will retry),
+// warn in log. Live stream is more important than timeliness of snapshot in both directions.
 func (p *Purger) filterByLease(ctx context.Context, candidates []string, wantAlive bool) []string {
 	if len(candidates) == 0 {
 		return nil
@@ -567,8 +567,8 @@ func (p *Purger) filterByLease(ctx context.Context, candidates []string, wantAli
 	return out
 }
 
-// selectDisconnectCandidates — фаза 1: SID-ы connected-souls со stale
-// `last_seen_at` (SQL-функция select_disconnect_candidates, миграция 043).
+// selectDisconnectCandidates — phase 1: SIDs of connected-souls with stale
+// `last_seen_at` (SQL function select_disconnect_candidates, migration 043).
 func (p *Purger) selectDisconnectCandidates(ctx context.Context, staleAfter time.Duration, batchSize int) ([]string, error) {
 	pgInterval := durationToPGInterval(staleAfter)
 	rows, err := p.pool.Query(ctx, "SELECT select_disconnect_candidates($1::interval, $2)", pgInterval, batchSize)
@@ -591,8 +591,8 @@ func (p *Purger) selectDisconnectCandidates(ctx context.Context, staleAfter time
 	return sids, nil
 }
 
-// markDisconnectedSIDs — фаза 3: пометить отфильтрованные SID-ы (SQL-функция
-// mark_disconnected_sids, миграция 043). Возвращает число обновлённых строк.
+// markDisconnectedSIDs — phase 3: mark filtered SIDs (SQL function
+// mark_disconnected_sids, migration 043). Returns count of updated rows.
 func (p *Purger) markDisconnectedSIDs(ctx context.Context, sids []string) (int64, error) {
 	var count int64
 	row := p.pool.QueryRow(ctx, "SELECT mark_disconnected_sids($1::text[])", sids)
@@ -602,9 +602,9 @@ func (p *Purger) markDisconnectedSIDs(ctx context.Context, sids []string) (int64
 	return count, nil
 }
 
-// selectReconnectCandidates — фаза 1 обратного направления: SID-ы disconnected-
-// souls любого `last_seen_at` (SQL-функция select_reconnect_candidates, миграция
-// 043). Без duration-предиката — онлайновость решает lease, не свежесть снимка.
+// selectReconnectCandidates — phase 1 of reverse direction: SIDs of disconnected-
+// souls with any `last_seen_at` (SQL function select_reconnect_candidates, migration
+// 043). Without duration predicate — online status is decided by lease, not snapshot freshness.
 func (p *Purger) selectReconnectCandidates(ctx context.Context, batchSize int) ([]string, error) {
 	rows, err := p.pool.Query(ctx, "SELECT select_reconnect_candidates($1)", batchSize)
 	if err != nil {
@@ -626,9 +626,9 @@ func (p *Purger) selectReconnectCandidates(ctx context.Context, batchSize int) (
 	return sids, nil
 }
 
-// markConnectedSIDs — фаза 3 обратного направления: вернуть disconnected → connected
-// для online-SID-ов (SQL-функция mark_connected_sids, миграция 043). Возвращает
-// число обновлённых строк.
+// markConnectedSIDs — phase 3 of reverse direction: return disconnected → connected
+// for online-SIDs (SQL function mark_connected_sids, migration 043). Returns
+// count of updated rows.
 func (p *Purger) markConnectedSIDs(ctx context.Context, sids []string) (int64, error) {
 	var count int64
 	row := p.pool.QueryRow(ctx, "SELECT mark_connected_sids($1::text[])", sids)
@@ -638,13 +638,13 @@ func (p *Purger) markConnectedSIDs(ctx context.Context, sids []string) (int64, e
 	return count, nil
 }
 
-// callIntervalBatch — общий вызов SQL-функции с сигнатурой
-// `(interval, integer) → BIGINT`. Используется для всех правил,
-// у которых нет statuses[]-параметра.
+// callIntervalBatch — common SQL function call with signature
+// `(interval, integer) → BIGINT`. Used for all rules
+// that do not have statuses[] parameter.
 //
-// Семантика валидации (`maxAge <= 0` → error без PG, `batchSize <= 0`
-// → defaultBatchSize) совпадает с docstring-ом PurgeAuditOld и
-// зафиксирована тестами per-method.
+// Validation semantics (`maxAge <= 0` → error without PG, `batchSize <= 0`
+// → defaultBatchSize) matches docstring of PurgeAuditOld and
+// is fixed by tests per-method.
 func (p *Purger) callIntervalBatch(ctx context.Context, fnName string, duration time.Duration, batchSize int) (int64, error) {
 	if duration <= 0 {
 		return 0, fmt.Errorf("reaper.%s: duration must be > 0, got %v", fnName, duration)
@@ -662,9 +662,9 @@ func (p *Purger) callIntervalBatch(ctx context.Context, fnName string, duration 
 	return count, nil
 }
 
-// callStatusesIntervalBatch — общий вызов SQL-функции с сигнатурой
-// `(text[], interval, integer) → BIGINT`. Caller гарантирует, что
-// `statuses` непустой (см. PurgeSouls / PurgeOldSeeds).
+// callStatusesIntervalBatch — common SQL function call with signature
+// `(text[], interval, integer) → BIGINT`. Caller guarantees that
+// `statuses` is non-empty (see PurgeSouls / PurgeOldSeeds).
 func (p *Purger) callStatusesIntervalBatch(ctx context.Context, fnName string, statuses []string, duration time.Duration, batchSize int) (int64, error) {
 	if duration <= 0 {
 		return 0, fmt.Errorf("reaper.%s: duration must be > 0, got %v", fnName, duration)
@@ -682,12 +682,12 @@ func (p *Purger) callStatusesIntervalBatch(ctx context.Context, fnName string, s
 	return count, nil
 }
 
-// durationToPGInterval конвертирует time.Duration в Postgres
-// interval-литерал в секундах. Секунды выбраны как универсальный
-// формат: устраняют day-precision-аномалии Postgres-а
-// (`'1 day'::interval` ≠ `'24 hours'::interval` при переходах летнего
-// времени, см. PG docs «9.9.4 Interval Input»), и любая duration
-// (включая sub-second в тестах) представима без потери.
+// durationToPGInterval converts time.Duration to Postgres
+// interval literal in seconds. Seconds chosen as universal
+// format: eliminate Postgres day-precision anomalies
+// (`'1 day'::interval` ≠ `'24 hours'::interval` on daylight
+// time transitions, see PG docs "9.9.4 Interval Input"), and any duration
+// (including sub-second in tests) representable without loss.
 func durationToPGInterval(d time.Duration) string {
 	return fmt.Sprintf("%d seconds", int64(d.Seconds()))
 }

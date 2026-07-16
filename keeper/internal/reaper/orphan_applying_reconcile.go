@@ -15,21 +15,19 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// orphanApplyingCandidatesSQL — фаза 1 правила `reconcile_orphan_applying`
-// (ADR-027 amend (m)): stale-кандидаты на снятие осиротевшего applying-lock.
+// orphanApplyingCandidatesSQL — phase 1 of `reconcile_orphan_applying` rule
+// (ADR-027 amend (m)): stale candidates for releasing orphaned applying lock.
 //
-// Предикат (использует partial-индекс `incarnation_applying_scan_idx`, миграция
-// 082):
-//   - `status='applying'`        — lock держится;
-//   - `applying_since < cutoff`  — lock взят дольше stale_after назад (cutoff =
-//     NOW()-stale_after передаётся параметром $1 для тестируемости clock-а);
-//   - `applying_by_kid IS NOT NULL` — epoch ИЗВЕСТЕН. NULL-epoch (legacy/pre-082
-//     либо applying не через S1-lockRun) НЕ реклеймится — без applying_by_kid нет
-//     presence-свидетеля смерти владельца (документированный known-gap, чинится
-//     ручным Unlock оператором).
+// Predicate (uses partial index `incarnation_applying_scan_idx`, migration 082):
+//   - `status='applying'`        — lock is held;
+//   - `applying_since < cutoff`  — lock acquired longer than stale_after ago (cutoff =
+//     NOW()-stale_after passed as parameter $1 for clock testability);
+//   - `applying_by_kid IS NOT NULL` — epoch is KNOWN. NULL-epoch (legacy/pre-082
+//     or applying not via S1-lockRun) is NOT reclaimed — without applying_by_kid there is no
+//     presence witness of owner death (documented known-gap, fixed by manual Unlock by operator).
 //
-// Возвращает (name, applying_by_kid, applying_apply_id) — фаза 2 спрашивает
-// Conclave про applying_by_kid, фаза 3 снимает по applying_apply_id.
+// Returns (name, applying_by_kid, applying_apply_id) — phase 2 queries
+// Conclave about applying_by_kid, phase 3 releases via applying_apply_id.
 const orphanApplyingCandidatesSQL = `
 SELECT name, applying_by_kid, applying_apply_id
 FROM incarnation
@@ -38,56 +36,56 @@ WHERE status = 'applying'
   AND applying_by_kid IS NOT NULL
 `
 
-// orphanApplyingReleaser — узкая поверхность снятия осиротевшего applying-lock
-// (incarnation.ReleaseApplyingOrphan). Интерфейс, а не прямой вызов package-
-// функции, держит правило unit-тестируемым без поднятия Postgres: fake фиксирует
-// аргументы и программирует исход (снят / no-op / ошибка). Реальный wire-up —
-// тонкая обёртка над incarnation.ReleaseApplyingOrphan (без изменения её
-// сигнатуры — реюз as-is, ADR-027 amend (m-S1)).
+// orphanApplyingReleaser — narrow surface for releasing orphaned applying lock
+// (incarnation.ReleaseApplyingOrphan). Interface instead of direct package-
+// function call keeps rule unit-testable without raising Postgres: fake captures
+// arguments and programs outcome (released / no-op / error). Real wire-up —
+// thin wrapper over incarnation.ReleaseApplyingOrphan (without changing its
+// signature — reuse as-is, ADR-027 amend (m-S1)).
 type orphanApplyingReleaser interface {
 	ReleaseApplyingOrphan(ctx context.Context, name, orphanApplyID, historyID string) error
 }
 
-// orphanApplyingPresence — узкая поверхность presence-чека keeper-инстанса в
-// Conclave (redis.InstanceAlive). Интерфейс держит правило тестируемым без
-// поднятия Redis. Реальный wire-up — обёртка над redis.InstanceAlive поверх
-// общего redis.Client.
+// orphanApplyingPresence — narrow surface for presence check of keeper instance in
+// Conclave (redis.InstanceAlive). Interface keeps rule testable without
+// raising Redis. Real wire-up — wrapper over redis.InstanceAlive on top of
+// shared redis.Client.
 type orphanApplyingPresence interface {
 	InstanceAlive(ctx context.Context, kid string) (bool, error)
 }
 
-// orphanApplyingQuerier — узкая поверхность pgxpool.Pool для фазы 1 (SELECT
-// кандидатов). Сужение позволяет fake в unit-тестах (паттерн voyagesQuerier).
+// orphanApplyingQuerier — narrow surface of pgxpool.Pool for phase 1 (SELECT
+// candidates). Narrowing allows fake in unit tests (pattern voyagesQuerier).
 type orphanApplyingQuerier interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
-// OrphanApplyingReconciler — реализация Reaper-правила `reconcile_orphan_applying`
-// (ADR-027 amend (m)): снимает осиротевший applying-lock инкарнации, оставшийся
-// от ПРЯМОГО (standalone, не под Voyage) scenario-run крашнувшегося Keeper-
-// владельца. Voyage-путь закрыт amend (l) через back-link voyage_targets; у
-// прямого run-а back-link нет — этот шов закрывает его симметрично, но детектит
-// orphan по epoch-колонкам incarnation (applying_by_kid/applying_since/
-// applying_apply_id, миграция 082).
+// OrphanApplyingReconciler — implementation of `reconcile_orphan_applying` Reaper rule
+// (ADR-027 amend (m)): releases orphaned applying lock of incarnation left
+// from DIRECT (standalone, not under Voyage) scenario-run of crashed Keeper
+// owner. Voyage path is closed by amend (l) via back-link voyage_targets; direct
+// run has no back-link — this seam closes it symmetrically, but detects
+// orphan via epoch columns of incarnation (applying_by_kid/applying_since/
+// applying_apply_id, migration 082).
 //
-// Трёхфазно за один Run:
-//   - (1) SQL-кандидаты — stale applying-строки с НЕпустым epoch
+// Three phases in one Run:
+//   - (1) SQL candidates — stale applying rows with NON-empty epoch
 //     (orphanApplyingCandidatesSQL);
-//   - (2) presence — для каждого кандидата InstanceAlive(applying_by_kid). Жив →
-//     skip (прогон реально идёт). Мёртв → фаза 3. Ошибка presence-чека →
-//     fail-safe skip (неизвестно ⇒ НЕ реклеймить, чтобы не сорвать живой прогон
-//     при флапе Redis);
-//   - (3) снятие — ReleaseApplyingOrphan as-is (FENCING-1 no-live-rival +
-//     single-winner CAS applying→ready внутри). ErrOrphanLockNotReleased /
-//     ErrIncarnationNotFound → no-op (гонка с честным финалом / снос инкарнации).
+//   - (2) presence — for each candidate InstanceAlive(applying_by_kid). Alive →
+//     skip (run is actually going). Dead → phase 3. Presence-check error →
+//     fail-safe skip (unknown ⇒ do NOT reclaim to avoid breaking live run
+//     on Redis flap);
+//   - (3) release — ReleaseApplyingOrphan as-is (FENCING-1 no-live-rival +
+//     single-winner CAS applying→ready inside). ErrOrphanLockNotReleased /
+//     ErrIncarnationNotFound → no-op (race with honest finalize / incarnation destruction).
 //
-// presence-death (фаза 2) — прямое доказательство смерти владельца в Conclave,
-// замена Voyage-FENCING-3 VerifyOwnership (у standalone нет Voyage-claim,
-// voyage.VerifyOwnership НЕ зовётся).
+// presence-death (phase 2) — direct proof of owner death in Conclave,
+// replacement for Voyage-FENCING-3 VerifyOwnership (standalone has no Voyage-claim,
+// voyage.VerifyOwnership is NOT called).
 //
-// Per-row audit (reaper.reconcile_orphan_applying.executed) на КАЖДОЕ успешное
-// снятие. audit nil-safe (dev-без-audit живёт). Сигнатура Run совместима с
-// runDurationRule-вызовом Runner-а.
+// Per-row audit (reaper.reconcile_orphan_applying.executed) on EACH successful
+// release. audit is nil-safe (dev without audit works). Run signature is compatible with
+// runDurationRule call from Runner.
 type OrphanApplyingReconciler struct {
 	pool     orphanApplyingQuerier
 	presence orphanApplyingPresence
@@ -96,8 +94,8 @@ type OrphanApplyingReconciler struct {
 	logger   *slog.Logger
 }
 
-// poolReleaser — production-обёртка incarnation.ReleaseApplyingOrphan поверх
-// *pgxpool.Pool. Реюз as-is — сигнатура package-функции НЕ меняется.
+// poolReleaser — production wrapper for incarnation.ReleaseApplyingOrphan on top of
+// *pgxpool.Pool. Reuse as-is — package function signature is NOT changed.
 type poolReleaser struct {
 	pool *pgxpool.Pool
 }
@@ -106,7 +104,7 @@ func (r poolReleaser) ReleaseApplyingOrphan(ctx context.Context, name, orphanApp
 	return incarnation.ReleaseApplyingOrphan(ctx, r.pool, name, orphanApplyID, historyID)
 }
 
-// clientPresence — production-обёртка redis.InstanceAlive поверх redis.Client.
+// clientPresence — production wrapper for redis.InstanceAlive on top of redis.Client.
 type clientPresence struct {
 	client *redis.Client
 }
@@ -115,11 +113,11 @@ func (p clientPresence) InstanceAlive(ctx context.Context, kid string) (bool, er
 	return redis.InstanceAlive(ctx, p.client, kid)
 }
 
-// NewOrphanApplyingReconciler конструирует правило для production-wire-up-а
-// (daemon.setupReaper). pool/client обязательны; audit nil-safe (эмит skip-ается),
-// logger nil-safe (warn-ы подавляются). Презенс и releaser оборачивают общие
-// redis.Client / *pgxpool.Pool — incarnation.ReleaseApplyingOrphan реюзится без
-// изменения сигнатуры.
+// NewOrphanApplyingReconciler constructs rule for production wire-up
+// (daemon.setupReaper). pool/client are required; audit is nil-safe (emit is skipped),
+// logger is nil-safe (warns are suppressed). Presence and releaser wrap shared
+// redis.Client / *pgxpool.Pool — incarnation.ReleaseApplyingOrphan is reused
+// without signature changes.
 func NewOrphanApplyingReconciler(pool *pgxpool.Pool, client *redis.Client, aud audit.Writer, logger *slog.Logger) *OrphanApplyingReconciler {
 	return &OrphanApplyingReconciler{
 		pool:     pool,
@@ -130,8 +128,8 @@ func NewOrphanApplyingReconciler(pool *pgxpool.Pool, client *redis.Client, aud a
 	}
 }
 
-// newOrphanApplyingReconcilerForTest — внутренний конструктор для unit-тестов
-// (fake presence / releaser / querier без поднятия PG+Redis).
+// newOrphanApplyingReconcilerForTest — internal constructor for unit tests
+// (fake presence / releaser / querier without raising PG+Redis).
 func newOrphanApplyingReconcilerForTest(pool orphanApplyingQuerier, presence orphanApplyingPresence, releaser orphanApplyingReleaser, aud audit.Writer, logger *slog.Logger) *OrphanApplyingReconciler {
 	return &OrphanApplyingReconciler{
 		pool:     pool,
@@ -142,40 +140,40 @@ func newOrphanApplyingReconcilerForTest(pool orphanApplyingQuerier, presence orp
 	}
 }
 
-// orphanApplyingCandidate — снимок одной stale applying-строки (фаза 1).
+// orphanApplyingCandidate — snapshot of one stale applying row (phase 1).
 type orphanApplyingCandidate struct {
 	name    string
 	prevKID string
 	applyID string
 }
 
-// Run выполняет одну итерацию правила: собирает stale-кандидатов, для мёртвых
-// (presence) владельцев снимает applying-lock и эмитит per-row audit. Возвращает
-// (affected, err): affected — число РЕАЛЬНО снятых lock-ов (presence-skip /
-// defensive-skip / honest-terminal-гонка в счёт не идут; callers сложат в
-// keeper_reaper_*-метрики).
+// Run executes one iteration of the rule: collects stale candidates, releases
+// applying lock for dead (presence) owners and emits per-row audit. Returns
+// (affected, err): affected — number of ACTUALLY released locks (presence-skip /
+// defensive-skip / honest-terminal race not counted; callers add to
+// keeper_reaper_* metrics).
 //
-// Сигнатура совместима с runDurationRule (`(ctx, duration, batch) → (int64, error)`):
-// staleAfter — `stale_after` правила (cutoff = NOW()-staleAfter), batchSize
-// игнорируется (число applying-строк на кластер — единицы/десятки, режем не
-// батчем, а partial-индексом).
+// Signature is compatible with runDurationRule (`(ctx, duration, batch) → (int64, error)`):
+// staleAfter — `stale_after` of rule (cutoff = NOW()-staleAfter), batchSize
+// is ignored (number of applying rows per cluster — units/tens, we cut not
+// by batch but by partial index).
 //
-// nil-presence — test-affordance: в prod NewOrphanApplyingReconciler ВСЕГДА
-// оборачивает non-nil clientPresence (reaper-ветка гейтится non-nil Redis в
-// daemon.go), поэтому эта ветка недостижима в проде. Реальный presence-gate
-// против недоступного Redis — на уровне InstanceAlive: ошибка presence-чека ⇒
-// fail-safe skip кандидата (reconcileOne), а не no-op всего правила.
+// nil-presence — test affordance: in prod NewOrphanApplyingReconciler ALWAYS
+// wraps non-nil clientPresence (reaper branch is gated on non-nil Redis in
+// daemon.go), so this branch is unreachable in prod. Real presence gate
+// against unavailable Redis — at InstanceAlive level: presence-check error ⇒
+// fail-safe skip of candidate (reconcileOne), not no-op of whole rule.
 func (r *OrphanApplyingReconciler) Run(ctx context.Context, staleAfter time.Duration, _ int) (int64, error) {
 	if r.pool == nil {
 		return 0, fmt.Errorf("reaper.reconcile_orphan_applying: pool is nil")
 	}
 	if r.presence == nil {
-		// Test-affordance: недостижимо в проде (см. docstring Run). Реальный
-		// presence-gate — InstanceAlive→error fail-safe skip в reconcileOne, не
-		// эта ветка. Без presence-клиента правило не может доказать смерть
-		// владельца — graceful no-op (НЕ ошибка).
+		// Test affordance: unreachable in prod (see docstring Run). Real
+		// presence gate — InstanceAlive→error fail-safe skip in reconcileOne, not
+		// this branch. Without presence client, rule cannot prove owner
+		// death — graceful no-op (NOT an error).
 		if r.logger != nil {
-			r.logger.Info("reaper.reconcile_orphan_applying: пропущено — presence-клиент не задан (test-affordance)")
+			r.logger.Info("reaper.reconcile_orphan_applying: skipped — presence client not set (test-affordance)")
 		}
 		return 0, nil
 	}
@@ -186,8 +184,8 @@ func (r *OrphanApplyingReconciler) Run(ctx context.Context, staleAfter time.Dura
 		return 0, fmt.Errorf("reaper.reconcile_orphan_applying: query candidates: %w", err)
 	}
 
-	// Считываем кандидатов ДО presence/release I/O — не держим курсор открытым во
-	// время EXISTS-чека Redis и CAS-tx PG (паттерн VoyageReclaimer).
+	// Read candidates BEFORE presence/release I/O — don't keep cursor open during
+	// Redis EXISTS check and CAS tx in PG (pattern VoyageReclaimer).
 	var candidates []orphanApplyingCandidate
 	for rows.Next() {
 		var (
@@ -223,15 +221,15 @@ func (r *OrphanApplyingReconciler) Run(ctx context.Context, staleAfter time.Dura
 	return affected, nil
 }
 
-// reconcileOne обрабатывает одного кандидата: presence-чек → (мёртв) снятие.
-// Возвращает true ТОЛЬКО при реальном снятии lock-а (для affected-счётчика).
+// reconcileOne processes one candidate: presence check → (dead) release.
+// Returns true ONLY on actual lock release (for affected counter).
 func (r *OrphanApplyingReconciler) reconcileOne(ctx context.Context, c orphanApplyingCandidate) bool {
-	// defensive-skip: пустой epoch недостижим при корректном lockRun (фильтр SQL
-	// уже отсёк applying_by_kid IS NULL; applying_apply_id пишется атомарно с ним),
-	// но fail-safe от legacy / ручных правок строки — НЕ снимаем без полного epoch.
+	// defensive-skip: empty epoch is unreachable with correct lockRun (SQL filter
+	// already filtered applying_by_kid IS NULL; applying_apply_id is written atomically with it),
+	// but fail-safe from legacy / manual row edits — we do NOT release without full epoch.
 	if c.prevKID == "" || c.applyID == "" {
 		if r.logger != nil {
-			r.logger.Warn("reaper.reconcile_orphan_applying: defensive-skip — неполный epoch",
+			r.logger.Warn("reaper.reconcile_orphan_applying: defensive-skip — incomplete epoch",
 				slog.String("incarnation", c.name),
 				slog.String("prev_kid", c.prevKID),
 				slog.String("apply_id", c.applyID))
@@ -239,13 +237,13 @@ func (r *OrphanApplyingReconciler) reconcileOne(ctx context.Context, c orphanApp
 		return false
 	}
 
-	// Фаза 2 — presence: жив ли владелец lock-а в Conclave.
+	// Phase 2 — presence: is the lock owner alive in Conclave.
 	alive, err := r.presence.InstanceAlive(ctx, c.prevKID)
 	if err != nil {
-		// fail-safe: presence неизвестен (флап Redis) → НЕ объявляем мёртвым, НЕ
-		// реклеймим (живой прогон может идти). Warn для триажа.
+		// fail-safe: presence unknown (Redis flap) → do NOT declare dead, do NOT
+		// reclaim (live run may be in progress). Warn for triage.
 		if r.logger != nil {
-			r.logger.Warn("reaper.reconcile_orphan_applying: presence-чек провален — skip (fail-safe)",
+			r.logger.Warn("reaper.reconcile_orphan_applying: presence check failed — skip (fail-safe)",
 				slog.String("incarnation", c.name),
 				slog.String("prev_kid", c.prevKID),
 				slog.Any("error", err))
@@ -253,26 +251,26 @@ func (r *OrphanApplyingReconciler) reconcileOne(ctx context.Context, c orphanApp
 		return false
 	}
 	if alive {
-		// Владелец жив — прогон реально идёт, lock НЕ осиротел.
+		// Owner is alive — run is actually going, lock is NOT orphaned.
 		return false
 	}
 
-	// Фаза 3 — снятие: владелец мёртв в Conclave. ReleaseApplyingOrphan as-is
-	// (FENCING-1 no-live-rival + single-winner CAS внутри). historyID генерим
-	// здесь (идентично Voyage-адаптеру).
+	// Phase 3 — release: owner is dead in Conclave. ReleaseApplyingOrphan as-is
+	// (FENCING-1 no-live-rival + single-winner CAS inside). historyID generated
+	// here (identical to Voyage adapter).
 	historyID := audit.NewULID()
 	if relErr := r.releaser.ReleaseApplyingOrphan(ctx, c.name, c.applyID, historyID); relErr != nil {
 		switch {
 		case errors.Is(relErr, incarnation.ErrOrphanLockNotReleased):
-			// no-op: честный финал прошлого владельца уже вывел строку из applying
-			// (single-winner) ЛИБО живой rival держит чужой apply_id (FENCING-1).
+			// no-op: honest finalize of previous owner already moved row out of applying
+			// (single-winner) OR live rival holds foreign apply_id (FENCING-1).
 			return false
 		case errors.Is(relErr, incarnation.ErrIncarnationNotFound):
-			// Инкарнация снесена между фазой 1 и снятием — нечего снимать.
+			// Incarnation destroyed between phase 1 and release — nothing to release.
 			return false
 		default:
 			if r.logger != nil {
-				r.logger.Error("reaper.reconcile_orphan_applying: снятие lock-а провалено",
+				r.logger.Error("reaper.reconcile_orphan_applying: lock release failed",
 					slog.String("incarnation", c.name),
 					slog.String("prev_kid", c.prevKID),
 					slog.Any("error", relErr))
@@ -283,7 +281,7 @@ func (r *OrphanApplyingReconciler) reconcileOne(ctx context.Context, c orphanApp
 
 	r.emitExecuted(ctx, c)
 	if r.logger != nil {
-		r.logger.Info("reaper.reconcile_orphan_applying: осиротевший applying-lock снят",
+		r.logger.Info("reaper.reconcile_orphan_applying: orphaned applying lock released",
 			slog.String("incarnation", c.name),
 			slog.String("prev_kid", c.prevKID),
 			slog.String("apply_id", c.applyID))
@@ -291,8 +289,8 @@ func (r *OrphanApplyingReconciler) reconcileOne(ctx context.Context, c orphanApp
 	return true
 }
 
-// emitExecuted пишет reaper.reconcile_orphan_applying.executed (ADR-027 amend (m),
-// область reaper.*). source=keeper_internal, archon_aid="" (NULL). nil-safe.
+// emitExecuted writes reaper.reconcile_orphan_applying.executed (ADR-027 amend (m),
+// area reaper.*). source=keeper_internal, archon_aid="" (NULL). nil-safe.
 func (r *OrphanApplyingReconciler) emitExecuted(ctx context.Context, c orphanApplyingCandidate) {
 	if r.audit == nil {
 		return
