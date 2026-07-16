@@ -1,6 +1,6 @@
 # ADR-057. `state_changes` — an ordered list of CRUD verbs (`set`/`add`/`modify`/`remove`)
 
-- **Context.** The `state_changes` grammar from [ADR-009 §7.1](0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) defined three keys: `sets` (a map `<field>: <CEL>`, implemented) and `appends`/`modifies` (lists of field-paths). The latter two were a **placeholder declaration with no value source** — they were not applied by the engine (see [orchestration.md §7.1 «`appends`/`modifies` — future»](../scenario/orchestration.md#71-грамматика-state_changes--список-crud-операций)). This is a latent bug: a scenario with `appends: [redis_hosts]` (`add_replica`, `add_replicas`, `add_user`) passed successfully, but `incarnation.state` **did not grow** — the added host/user did not settle into the state. `modifies` (`update_acl`) likewise — the collection patch was not applied. The root cause is that `appends`/`modifies` carried only a **field-path** (what to touch), without a **value source** (what to write) and without a **predicate** (which element). And `sets` can only overwrite a field wholesale — it is not enough for growing collections and pointwise patching of elements.
+- **Context.** The `state_changes` grammar from [ADR-009 §7.1](0009-scenario-dsl.md#adr-009-scenario--the-full-destiny-task-dsl-the-boundary-with-destiny-is-a-recommendation) defined three keys: `sets` (a map `<field>: <CEL>`, implemented) and `appends`/`modifies` (lists of field-paths). The latter two were a **placeholder declaration with no value source** — they were not applied by the engine (see [orchestration.md §7.1 «`appends`/`modifies` — future»](../scenario/orchestration.md#71-grammar-state_changes---list-of-crud-operations)). This is a latent bug: a scenario with `appends: [redis_hosts]` (`add_replica`, `add_replicas`, `add_user`) passed successfully, but `incarnation.state` **did not grow** — the added host/user did not settle into the state. `modifies` (`update_acl`) likewise — the collection patch was not applied. The root cause is that `appends`/`modifies` carried only a **field-path** (what to touch), without a **value source** (what to write) and without a **predicate** (which element). And `sets` can only overwrite a field wholesale — it is not enough for growing collections and pointwise patching of elements.
 
   In parallel, `sets` is a map, i.e. **unordered**: as the grammar grows (several order-dependent mutations of one collection) a map does not define a deterministic application sequence.
 
@@ -19,7 +19,7 @@
 
   ### (b) CEL bindings in `match`/`patch`/`value`
 
-  On top of the full sets context (`input.*` / `incarnation.*` / `soulprint.self.*` / `register.*` / `vars.*` / `essence.*` — the same CEL env as for task `params:`, [ADR-010](0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов)) **local bindings of the current collection element** are introduced:
+  On top of the full sets context (`input.*` / `incarnation.*` / `soulprint.self.*` / `register.*` / `vars.*` / `essence.*` — the same CEL env as for task `params:`, [ADR-010](0010-templating.md#adr-010-templating-engine-cel-for-yaml-expressions-go-texttemplate-for-files)) **local bindings of the current collection element** are introduced:
 
   - **`elem`** — the current element of a list collection (or a scalar, if the collection is a list of scalars).
   - **`key`** / **`value`** — the key and value of the current entry of a map collection.
@@ -38,7 +38,7 @@
   ### (e) Order and atomicity
 
   - Operations are applied **in declaration order**, sequentially, to the **intermediate** state (each sees the result of the previous ones — a deterministic chain).
-  - The entire chain is **one PG transaction**, **one `state_history` snapshot** (as in [ADR-009 §7](0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация)). A failure of any operation (a CEL eval error, a violated `expect`, `on_conflict: error`) → `error_locked`, the state is **not committed** (the §7 barrier/state-commit invariant is not weakened — operations are applied AFTER the cross-host barrier).
+  - The entire chain is **one PG transaction**, **one `state_history` snapshot** (as in [ADR-009 §7](0009-scenario-dsl.md#adr-009-scenario--the-full-destiny-task-dsl-the-boundary-with-destiny-is-a-recommendation)). A failure of any operation (a CEL eval error, a violated `expect`, `on_conflict: error`) → `error_locked`, the state is **not committed** (the §7 barrier/state-commit invariant is not weakened — operations are applied AFTER the cross-host barrier).
 
   ### (f) Collection type — from state_schema
 
@@ -46,7 +46,7 @@
 
   ### (g) Per-RUN semantics
 
-  Values are taken from the run's `input.* / vars.* / incarnation.* / register.*`. This is **per-RUN**, NOT a per-host union. If an expression yields different per-host values (`${ soulprint.self.* }` / `${ register.* }`) — **last-wins by SID sort order** applies (as for `sets` in [ADR-009 §7.1](0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация); a per-host fold of collections into a union is NOT introduced).
+  Values are taken from the run's `input.* / vars.* / incarnation.* / register.*`. This is **per-RUN**, NOT a per-host union. If an expression yields different per-host values (`${ soulprint.self.* }` / `${ register.* }`) — **last-wins by SID sort order** applies (as for `sets` in [ADR-009 §7.1](0009-scenario-dsl.md#adr-009-scenario--the-full-destiny-task-dsl-the-boundary-with-destiny-is-a-recommendation); a per-host fold of collections into a union is NOT introduced).
 
 - **The form of each verb on real scenarios.**
 
@@ -129,8 +129,8 @@
   - **`upsert`** — a merged "add-or-modify". Hides the author's intent (creating something new vs patching an existing one — different audit semantics). Covered by an explicit `add` + `on_conflict: replace`, where the intent is visible.
 
 - **Consequences.**
-  - [orchestration.md §7.1](../scenario/orchestration.md#71-грамматика-state_changes--список-crud-операций) is rewritten for list-of-verbs (the normative spec); the paragraphs about `appends`/`modifies` move to the "deprecated, transition period" section.
-  - [ADR-009](0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) receives an amendment (the `state_changes` grammar is extended; status `amended`).
+  - [orchestration.md §7.1](../scenario/orchestration.md#71-grammar-state_changes---list-of-crud-operations) is rewritten for list-of-verbs (the normative spec); the paragraphs about `appends`/`modifies` move to the "deprecated, transition period" section.
+  - [ADR-009](0009-scenario-dsl.md#adr-009-scenario--the-full-destiny-task-dsl-the-boundary-with-destiny-is-a-recommendation) receives an amendment (the `state_changes` grammar is extended; status `amended`).
   - [naming-rules.md](../naming-rules.md) is augmented with the state_changes verbs and keys.
   - The latent bug "`appends`/`modifies` do not grow the state" is closed by the implementation of `add`/`modify`.
   - The implementation (keeper-side render/apply of state_changes) is a parallel developer slice, outside this ADR.

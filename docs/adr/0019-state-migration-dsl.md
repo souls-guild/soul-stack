@@ -1,6 +1,6 @@
 # ADR-019. State_schema migration DSL
 
-- **Context.** [ADR-009](0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) mentions a "flat DSL: `rename`/`set`/`delete`/`move`" as the format of `migrations/<NNN>_to_<MMM>.yml`. But the previous redis-service migration-file example used `{% for %}` (a Jinja2 style from the era before ADR-010) — which **doesn't fit into a flat DSL**. This example was deliberately left untouched during the mass migration under ADR-010 (marked "out of scope, open Q No. 18"). Real state_schema-migration scenarios include collection transforms, computations from old fields, structure splits/merges — a flat DSL isn't enough.
+- **Context.** [ADR-009](0009-scenario-dsl.md#adr-009-scenario--the-full-destiny-task-dsl-the-boundary-with-destiny-is-a-recommendation) mentions a "flat DSL: `rename`/`set`/`delete`/`move`" as the format of `migrations/<NNN>_to_<MMM>.yml`. But the previous redis-service migration-file example used `{% for %}` (a Jinja2 style from the era before ADR-010) — which **doesn't fit into a flat DSL**. This example was deliberately left untouched during the mass migration under ADR-010 (marked "out of scope, open Q No. 18"). Real state_schema-migration scenarios include collection transforms, computations from old fields, structure splits/merges — a flat DSL isn't enough.
 - **Decision.**
 
   **(a) DSL grammar — flat + CEL expressions + a structural `foreach` (MVP).**
@@ -11,7 +11,7 @@
 
   The full grammar, test convention, examples — in [`docs/migrations.md`](../migrations.md).
 
-  **(b) CEL — the unified expression engine (like all of Soul Stack per [ADR-010](0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов)).** In the migration-CEL context:
+  **(b) CEL — the unified expression engine (like all of Soul Stack per [ADR-010](0010-templating.md#adr-010-templating-engine-cel-for-yaml-expressions-go-texttemplate-for-files)).** In the migration-CEL context:
   - **Available:** `state.*` (the current mutable version), `<as-name>` inside `foreach.do[*]`, standard CEL functions (`int`/`string`/`size`/`has`/`keys`/`values`, comprehensions `map`/`filter`/`all`/`exists`).
   - **Forbidden:** `vault(...)` (don't pull secrets), `now()` (test reproducibility), `register.*` / `soulprint.*` / `essence.*` / `input.*` (a migration is a pure function of the old state, with no host context and no operator parameters), user-defined CEL functions.
 
@@ -25,13 +25,13 @@
   5. `UPDATE incarnation SET state, state_schema_version, service_version`.
   6. `COMMIT`.
 
-  On failure — `ROLLBACK`, `incarnation.status: migration_failed` ([§"Versioning and state_schema migrations"](../architecture.md#versioning-и-миграции-state_schema)).
+  On failure — `ROLLBACK`, `incarnation.status: migration_failed` ([§"Versioning and state_schema migrations"](../architecture.md#versioning-and-migrations-state_schema)).
 
-  The final status on a successful upgrade is **`drift`, not `ready`** (see the [amendment below](#amendment-upgrade--drift-финальный-статус-2026-06-27); the migration changes the DB state, but not the hosts' rollout).
+  The final status on a successful upgrade is **`drift`, not `ready`** (see the [amendment below](#amendment-upgrade--drift-the-final-status-2026-06-27); the migration changes the DB state, but not the hosts' rollout).
 
   **(d) Reverse — forward-only in the MVP.** A `down:` block is not supported. Recovery in an incident goes through a `state_history` snapshot. Extending to an optional `down:` post-MVP — with no breaking change (a new optional top-level file key).
 
-  **(e) An escape module (`state.migrate` / `core.incarnation.state-migrate`) — not introduced in the MVP.** The old reference in [§"Versioning and state_schema migrations"](../architecture.md#versioning-и-миграции-state_schema) to a "destiny module `state.migrate`" is rejected: the name is outside the dictionary (not in [naming-rules.md](../naming-rules.md)), and the real complex cases (which per the exploration make up <10%) are covered by grammar (a). If it's ever needed — a separate ADR with a propose-and-wait on the name (`core.incarnation.state-migrate` — a candidate modeled on `core.soul.registered`).
+  **(e) An escape module (`state.migrate` / `core.incarnation.state-migrate`) — not introduced in the MVP.** The old reference in [§"Versioning and state_schema migrations"](../architecture.md#versioning-and-migrations-state_schema) to a "destiny module `state.migrate`" is rejected: the name is outside the dictionary (not in [naming-rules.md](../naming-rules.md)), and the real complex cases (which per the exploration make up <10%) are covered by grammar (a). If it's ever needed — a separate ADR with a propose-and-wait on the name (`core.incarnation.state-migrate` — a candidate modeled on `core.soul.registered`).
 
   **(f) Migration tests — in `migrations/<NNN_to_MMM>/tests/<case>.yml`.** Format: `state_before` → migration → assert `state_after`. Symmetric to the destiny/scenario convention (tests next to the artifact under test). The full format — in [`docs/migrations.md`](../migrations.md).
 
