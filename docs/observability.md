@@ -1,317 +1,317 @@
-# Observability: метрики и OpenTelemetry
+# Observability: metrics and OpenTelemetry
 
-Нормативная спека сквозного слоя observability Soul Stack — публикации метрик и трейсинга. Фиксирует **конвенции и архитектуру**, общие для всех бинарей (`keeper` / `soul` / `soul-lint`), но не перечисляет конкретные метрики по списку — этот каталог наполняется при имплементации соответствующих подсистем.
+Regulatory spec of the end-to-end observability Soul Stack layer - publishing metrics and tracing. Fixes **conventions and architecture** common to all binaries (`keeper` / `soul` / `soul-lint`), but does not list specific metrics - this catalog is filled in when the corresponding subsystems are implemented.
 
-Источник решения — [ADR-024](adr/0024-observability.md#adr-024-observability-prometheus-primary--otel-bridge). Сквозное требование, под которое это приземляется, — «у всех публикация метрик» + «поддержка OpenTelemetry из коробки» ([requirements.md](requirements.md), раздел «Общие требования»). Код observability-стека живёт в [`shared/obs/`](adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам) ([ADR-011](adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам)) — единый модуль для обоих server-бинарей, чтобы метрики и трейсы собирались одним стеком без дублирования.
+Solution source - [ADR-024](adr/0024-observability.md#adr-024-observability-prometheus-primary--otel-bridge). The end-to-end requirement that this lands under is "everyone publishes metrics" + "OpenTelemetry support out of the box" ([requirements.md](requirements.md), section "General Requirements"). The observability stack code lives in [`shared/obs/`](adr/0011-go-layout.md) ([ADR-011](adr/0011-go-layout.md)) - a single module for both server binaries, so that metrics and traces are collected in one stack without duplication.
 
-> **Почему cross-cutting (один файл), а не per-binary.** В таблице [«Сквозные требования»](architecture.md#сквозные-требования-и-где-они-приземляются) метрики и OTel помечены «Все три бинаря». Конвенции (namespace, единицы, суффиксы, resource-attrs) — общие; различение между Keeper и Soul делается **префиксом метрики** и значением `service.name`, а не отдельной спекой на каждый бинарь. Поэтому спека одна, как у `shared/obs` — один Go-модуль на оба бинаря.
+> **Why cross-cutting (one file) and not per-binary.** In the table ["Cross-cutting requirements"](architecture.md#end-to-end-requirements-and-where-they-land) metrics and OTel are marked "All three binaries". Conventions (namespace, units, suffixes, resource-attrs) - general; the distinction between Keeper and Soul is made by the **metric prefix** and the `service.name` value, and not by a separate spec for each binary. Therefore, there is only one spec, like `shared/obs` - one Go module for both binaries.
 
-## 1. Архитектура: Prometheus-primary + OTel-bridge
+## 1. Architecture: Prometheus-primary + OTel-bridge
 
-Два канала телеметрии с чётко разделёнными ролями:
+Two telemetry channels with clearly separated roles:
 
-| Канал | Что несёт | Модель | Роль |
+| Channel | What does it carry | Model | Role |
 |---|---|---|---|
-| **Prometheus** | Метрики (counters / gauges / histograms). | **Pull** (scrape `/metrics`). | **Первичный** канал метрик. De-facto-стандарт мониторинга; у Keeper уже есть Prometheus-registry в [`shared/obs`](adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам). |
-| **OpenTelemetry** | Трейсы (spans) + опционально push метрик. | **Push** (OTLP в коллектор). | **Мост**: сквозной трейсинг (оператор → Keeper → Soul через propagation в gRPC-метаданных) + опциональный экспорт метрик в OTLP-коллектор для инсталляций без Prometheus-scrape. |
+| **Prometheus** | Metrics (counters / gauges / histograms). | **Pull** (scrape `/metrics`). | **Primary** metrics channel. De-facto monitoring standard; Keeper already has a Prometheus-registry in [`shared/obs`](adr/0011-go-layout.md). |
+| **OpenTelemetry** | Trace (spans) + optional push metrics. | **Push** (OTLP to collector). | **Bridge**: end-to-end tracing (operator → Keeper → Soul via propagation in gRPC metadata) + optional export of metrics to an OTLP collector for installations without Prometheus-scrape. |
 
-**Не «OTel-primary».** Метрики первично экспонируются Prometheus-эндпоинтом; OTLP-push метрик — опциональный мост, не замена scrape-канала. Трейсы — всегда через OTel (у Prometheus нет трейс-модели).
+**Not "OTel-primary".** Metrics are exposed primarily by the Prometheus endpoint; OTLP-push metrics is an optional bridge, not a replacement for the scrape channel. Traces are always via OTel (Prometheus does not have a trace model).
 
-### 1.1. Prometheus — что экспонируется
+### 1.1. Prometheus - what is on display
 
-- **Эндпоинт `/metrics`** на server-бинарях (`keeper`, `soul`), на **выделенном listener-е** (отдельный порт), не на openapi-роутере. Exposition-format — `text/plain; version=0.0.4` (Prometheus 2.x scrape-compatible), OpenMetrics-format пока не включён.
-  - **Keeper:** `listen.metrics.addr` (обычно `0.0.0.0:9090`). Эндпоинт снят с openapi-роутера — scrape идёт на отдельный порт без auth-chain Operator API. keeper_http_*-метрики при этом по-прежнему собираются middleware на `/v1/*` и экспонируются здесь же (тот же registry). Опц. защита — HTTP Basic-auth (`metrics.auth.basic`, пароль из vault-ref, constant-time сравнение; [keeper/config.md](keeper/config.md#metrics)).
-  - **Soul:** `metrics.listen` (default loopback `127.0.0.1:9091`). Опц. защита — HTTP Basic-auth (`metrics.basic_auth`, [soul/config.md](soul/config.md#metrics)), но **источник пароля — файл на диске** (`password_file`), а не vault-ref: у Soul нет vault-клиента ([ADR-012](adr/0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add)) для резолва. Сама constant-time проверка — тот же `obs.ServeMetrics`-хелпер, что у Keeper (helper источник-агностичен, §1.1 выше). При выключенном basic-auth (default) защита `/metrics` — loopback-bind.
-- **Dedicated registry** ([`prometheus.NewRegistry()`](adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам)), не глобальный `DefaultRegisterer` — чтобы две инстанции в одном процессе (например, в тесте) не делили состояние и не падали на re-register. На обоих бинарях один registry шарится между инструментацией (middleware / apply-цикл) и exposition-handler-ом metrics-listener-а.
-- **Helper `obs.ServeMetrics(addr, reg, auth)`** ([`shared/obs`](adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам)) — переиспользуемый обоими бинарями: поднимает выделенный listener для `GET /metrics`, опц. basic-auth (`auth=nil` → открыт). Helper **источник-агностичен**: caller передаёт уже зарезолвленный пароль (`BasicAuth{Username, Password}`); сам helper vault не резолвит ([ADR-011](adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам): `shared/obs` не тянет vault-client). Graceful Shutdown в defer-цепочке main.
-- **Базовые collectors** регистрируются явно: go-runtime (memory / goroutines / gc) и process (fds / cpu). Без них scrape бесполезен в production: одни application-метрики не отвечают на вопрос «кто течёт».
-- `soul-lint` — офлайн-инструмент, `/metrics`-эндпоинта не имеет (нет долгоживущего процесса).
+- **Endpoint `/metrics`** on server binaries (`keeper`, `soul`), on a **dedicated listener** (separate port), not on an openapi router. Exposition-format - `text/plain; version=0.0.4` (Prometheus 2.x scrape-compatible), OpenMetrics-format not yet enabled.
+  - **Keeper:** `listen.metrics.addr` (usually `0.0.0.0:9090`). The endpoint was removed from the openapi router - scrape goes to a separate port without the auth-chain Operator API. keeper_http_* metrics are still collected by middleware on `/v1/*` and displayed here (the same registry). Opt. protection - HTTP Basic-auth (`metrics.auth.basic`, password from vault-ref, constant-time comparison; [keeper/config.md](keeper/config.md#metrics)).
+  - **Soul:** `metrics.listen` (default loopback `127.0.0.1:9091`). Opt. protection - HTTP Basic-auth (`metrics.basic_auth`, [soul/config.md](soul/config.md#metrics)), but **password source is a file on disk** (`password_file`), and not vault-ref: Soul does not have a vault client ([ADR-012](adr/0012-keeper-soul-grpc.md)) for resolution. The constant-time check itself is the same `obs.ServeMetrics` helper as in Keeper (helper source-agnostic, §1.1 above). When basic-auth is disabled (default), the protection `/metrics` is loopback-bind.
+- **Dedicated registry** ([`prometheus.NewRegistry()`](adr/0011-go-layout.md)), not global `DefaultRegisterer` - so that two instances in the same process (for example, in a test) do not share the state and do not fall into re-register. On both binaries, one registry shuffles between the instrumentation (middleware / apply-loop) and the metrics-listener's exposition-handler.
+- **Helper `obs.ServeMetrics(addr, reg, auth)`** ([`shared/obs`](adr/0011-go-layout.md)) - reused by both binaries: raises a dedicated listener for `GET /metrics`, opt. basic-auth (`auth=nil` → open). Helper **source-agnostic**: caller passes the already resolved password (`BasicAuth{Username, Password}`); helper vault itself does not resolve ([ADR-011](adr/0011-go-layout.md): `shared/obs` does not support vault-client). Graceful Shutdown in the main defer chain.
+- **Basic collectors** are registered explicitly: go-runtime (memory / goroutines / gc) and process (fds / cpu). Without them, scrape is useless in production: application metrics alone do not answer the question "who is leaking".
+- `soul-lint` is an offline tool, `/metrics` does not have an endpoint (no long-lived process).
 
-### 1.2. OTel — что экспортируется
+### 1.2. OTel - what is exported
 
-- **Трейсы** — всегда, если включён `otel:`-блок конфига. Сквозная propagation trace-context через gRPC-метаданные EventStream-а: span Архонт-вызова на Keeper связывается со span-ом apply на Soul.
-- **Метрики по OTLP** — **опционально**. Включается отдельным флагом в `otel:`-блоке конфига (нормативная типизация блока — в config.md каждого бинаря, отдельной задачей). По умолчанию метрики идут только через Prometheus-scrape; OTLP-метрики — для инсталляций, где нет Prometheus.
-- **Endpoint OTLP-коллектора** задаётся в `otel:`-блоке конфига; локально поднимается через docker-compose ([dev-инфра](adr/0002-transport-grpc-ha.md#adr-002-транспорт-keeper--souls--grpc-bidirectional-stream-поверх-mtls-ha-кластер-keeper), см. §1.3 ниже).
+- **Traces** - always if the `otel:` config block is enabled. End-to-end propagation trace-context via gRPC metadata of the EventStream: the archon-call span on Keeper is associated with the apply span on Soul.
+- **OTLP metrics** - **optional**. It is enabled by a separate flag in the `otel:` block of the config (standard typing of the block is in the config.md of each binary, a separate task). By default, metrics go only through Prometheus-scrape; OTLP metrics - for installations without Prometheus.
+- **Endpoint of the OTLP collector** is set in the `otel:` config block; locally raised via docker-compose ([dev-infra](adr/0002-transport-grpc-ha.md#adr-002-transport-keeper--souls--grpc-bidirectional-stream-over-mtls-ha-keeper-cluster), see §1.3 below).
 
-### 1.3. OTel в dev-стеке (otel-collector + Jaeger)
+### 1.3. OTel in the dev stack (otel-collector + Jaeger)
 
-Локальный dev-стек ([`dev/docker-compose.yml`](dev/local-setup.md)) поднимает приёмник трейсов из двух сервисов:
+Local dev stack ([`dev/docker-compose.yml`](dev/local-setup.md)) picks up a trace receiver from two services:
 
-| Сервис | Образ | Роль | Порт (host) |
+| Service | Image | Role | Port (host) |
 |---|---|---|---|
-| **otel-collector** | `otel/opentelemetry-collector-contrib` | Принимает OTLP gRPC от keeper/soul, batch → экспорт в Jaeger + debug-лог. Конфиг pipeline-а — [`dev/otel-collector.yaml`](dev/local-setup.md). | `4317` (OTLP gRPC) |
-| **jaeger** | `jaegertracing/all-in-one` | Хранилище + UI трейсов (in-memory storage, теряется при restart). Принимает от коллектора OTLP внутри docker-сети. | `16686` (UI) |
+| **otel-collector** | `otel/opentelemetry-collector-contrib` | Accepts OTLP gRPC from keeper/soul, batch → export to Jaeger + debug log. The pipeline config is [`dev/otel-collector.yaml`](dev/local-setup.md). | `4317` (OTLP gRPC) |
+| **jaeger** | `jaegertracing/all-in-one` | Storage + UI traces (in-memory storage, lost upon restart). Receives from the OTLP collector inside the docker network. | `16686` (UI) |
 
-- **keeper / soul → collector** — insecure-gRPC на `127.0.0.1:4317`. И dev-конфиг keeper-а ([`dev/keeper.dev.yml`](dev/local-setup.md): `otel.enabled: true`, `endpoint: 127.0.0.1:4317`), и dev-конфиг soul-а ([`dev/soul.dev.yml`](dev/local-setup.md)) указывают на этот эндпоинт. Insecure — потому что dev-collector поднят без TLS (`SetupOTel` всегда `WithInsecure`, см. [`shared/obs/otel.go`](adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам)).
-- **Смотреть трейсы** — Jaeger UI http://127.0.0.1:16686, service `keeper` / `soul`. Альтернатива без UI: `docker compose -f dev/docker-compose.yml logs -f otel-collector` (debug-exporter печатает принятые спаны).
-- **Прод — НЕ этот стек.** `examples/keeper/keeper.yml` оставляет `otel:`-блок конфигурируемым (endpoint реального коллектора, TLS), без dev-hardcode. all-in-one Jaeger с in-memory storage — только для локальной отладки.
+- **keeper / soul → collector** - insecure-gRPC on `127.0.0.1:4317`. Both the keeper dev config ([`dev/keeper.dev.yml`](dev/local-setup.md): `otel.enabled: true`, `endpoint: 127.0.0.1:4317`) and the soul dev config ([`dev/soul.dev.yml`](dev/local-setup.md)) point to this endpoint. Insecure - because dev-collector is raised without TLS (`SetupOTel` is always `WithInsecure`, see [`shared/obs/otel.go`](adr/0011-go-layout.md)).
+- **See traces** - Jaeger UI http://127.0.0.1:16686, service `keeper` / `soul`. Alternative without UI: `docker compose -f dev/docker-compose.yml logs -f otel-collector` (debug-exporter prints accepted spans).
+- **Cont - NOT this stack.** `examples/keeper/keeper.yml` leaves the `otel:` block configurable (real collector endpoint, TLS), without dev-hardcode. all-in-one Jaeger with in-memory storage - for local debugging only.
 
-## 2. Namespace метрик: `soul_*` / `keeper_*`
+## 2. Namespace of metrics: `soul_*` / `keeper_*`
 
-Раздельные префиксы по компоненту:
+Separate prefixes by component:
 
-| Префикс | Кто экспонирует | Пример |
+| Prefix | Who is exhibiting | Example |
 |---|---|---|
-| **`keeper_*`** | Keeper-side метрики. | `keeper_grpc_streams_active`, `keeper_http_requests_total` |
-| **`soul_*`** | Soul-side метрики. | `soul_apply_tasks_total` |
+| **`keeper_*`** | Keeper-side metrics. | `keeper_grpc_streams_active`, `keeper_http_requests_total` |
+| **`soul_*`** | Soul-side metrics. | `soul_apply_tasks_total` |
 
-**Различение по префиксу, а не по label.** Не вводим общий префикс с label `component="keeper|soul"` — отдельные префиксы короче, греппабельнее (`grep '^keeper_'`), и совпадают со стандартом Prometheus (per-exporter namespace). Один scrape-таргет = один компонент, смешения метрик в одном process-е нет.
+**Differentiation by prefix, not by label.** We do not enter a common prefix with label `component="keeper|soul"` - individual prefixes are shorter, more catchy (`grep '^keeper_'`), and coincide with the Prometheus standard (per-exporter namespace). One scrape target = one component, there is no mixing of metrics in one process.
 
-> **Soul-side metric-naming замечание.** Префикс `soul_` относится к **роли компонента** (Soul-агент), не к namespace-словарю модулей (`core` / `wb` / …). Это разные пространства: `soul_apply_tasks_total` — метрика агента; `core.pkg.installed` — адрес модуля. Пересечения нет.
+> **Soul-side metric-naming note.** The `soul_` prefix refers to the **component role** (Soul agent), not to the module namespace dictionary (`core` / `wb` / ...). These are different spaces: `soul_apply_tasks_total` - agent metric; `core.pkg.installed` — module address. There is no intersection.
 
-### 2.1. Конвенция именования
+### 2.1. Naming convention
 
-Стандарт Prometheus naming (он же — то, как уже названы метрики в [`shared/obs`](adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам)):
+Prometheus naming standard (aka the way the metrics are already named in [`shared/obs`](adr/0011-go-layout.md)):
 
-- **`snake_case`**, ASCII, lowercase. Имя = `<prefix>_<subsystem>_<name>_<unit>[_suffix]`.
-- **Суффикс единицы** обязателен там, где есть единица: `_seconds` (длительности — **всегда секунды**, не миллисекунды), `_bytes` (размеры — **всегда байты**). Не `_ms`, не `_mb` в имени метрики (внутренние МБ-поля Soulprint — это данные, не метрики).
-- **Суффикс типа:**
-  - `_total` — для counters (монотонно растущих): `keeper_http_requests_total`.
-  - `_seconds` / `_bytes` без `_total` — для gauges/histograms.
-  - Histogram-метрика именуется по измеряемой величине + единица: `keeper_http_request_duration_seconds` (Prometheus сам добавляет `_bucket` / `_sum` / `_count`).
-- **Gauge мгновенного состояния** — без `_total`: `keeper_http_in_flight_requests`, `keeper_grpc_streams_active`.
+- **`snake_case`**, ASCII, lowercase. Name = `<prefix>_<subsystem>_<name>_<unit>[_suffix]`.
+- **Unit suffix** is required where there is a unit: `_seconds` (durations are **always seconds**, not milliseconds), `_bytes` (sizes are **always bytes**). Not `_ms`, not `_mb` in the metric name (Soulprint internal MB fields are data, not metrics).
+- **Type suffix:**
+  - `_total` — for counters (monotonically growing): `keeper_http_requests_total`.
+  - `_seconds` / `_bytes` without `_total` - for gauges/histograms.
+  - Histogram metric is named by the measured value + unit: `keeper_http_request_duration_seconds` (Prometheus itself adds `_bucket` / `_sum` / `_count`).
+- **Gauge instantaneous** - without `_total`: `keeper_http_in_flight_requests`, `keeper_grpc_streams_active`.
 
-### 2.2. Labels — кардинальность под контролем
+### 2.2. Labels - cardinality under control
 
-- Labels — для разрезов, по которым реально задают вопросы оператора (`method` / `status` / `coven` / …), не для уникальных идентификаторов.
-- **Нельзя класть в label** unbounded-значения: `sid` (FQDN, тысячи хостов), `aid`, `apply_id`, `audit_id`, raw URL-path. Это cardinality-blow-up — место для таких разрезов трейс/лог, не метрика.
-  - Пример из кода: HTTP-`path` берётся из route-pattern (`/v1/operators/{aid}/revoke`), не из raw URL — иначе каждый AID породит новую серию.
-- Доменная идентичность инстанса (`kid` / `sid`) живёт в **OTel resource-attributes** (см. §3), не в метрик-labels.
+- Labels - for sections for which operator questions are actually asked (`method` / `status` / `coven` / ...), not for unique identifiers.
+- **You cannot put unbounded values ​​in label**: `sid` (FQDN, thousands of hosts), `aid`, `apply_id`, `audit_id`, raw URL-path. This cardinality-blow-up is a place for such trace/log cuts, not a metric.
+  - Example from the code: HTTP-`path` is taken from route-pattern (`/v1/operators/{aid}/revoke`), not from raw URL - otherwise each AID will generate a new series.
+- The domain identity of the instance (`kid` / `sid`) lives in **OTel resource-attributes** (see §3), not in metrics-labels.
 
 ## 3. OTel resource-attributes
 
-Каждый span/metric-export несёт resource-attributes, идентифицирующие источник:
+Each span/metric-export carries resource-attributes identifying the source:
 
-| Attribute | Значение | Назначение |
+| Attribute | Meaning | Destination |
 |---|---|---|
-| **`service.name`** | `"keeper"` \| `"soul"` | Стандартный OTel semconv-атрибут. Имя сервиса = имя бинаря (по словарю Soul Stack). |
-| **`service.instance.id`** | generic instance-id | Стандартный OTel semconv-атрибут (если выставляется рантаймом). |
-| **`soulstack.kid`** | [KID](naming-rules.md#идентификаторы) (Keeper ID) | **Кастомный** атрибут: доменная идентичность Keeper-инстанса в HA-кластере. Только на `service.name="keeper"`. |
-| **`soulstack.sid`** | [SID](naming-rules.md#идентификаторы) (Soul ID = FQDN) | **Кастомный** атрибут: доменная идентичность Soul-агента. Только на `service.name="soul"`. |
+| **`service.name`** | `"keeper"` \| `"soul"` | Standard OTel semconv attribute. Service name = binary name (according to the Soul Stack dictionary). |
+| **`service.instance.id`** | generic instance-id | Standard OTel semconv attribute (if set by runtime). |
+| **`soulstack.kid`** | [KID](naming-rules.md#identifiers) (Keeper ID) | **Custom** attribute: domain identity of the Keeper instance in the HA cluster. Only on `service.name="keeper"`. |
+| **`soulstack.sid`** | [SID](naming-rules.md#identifiers) (Soul ID = FQDN) | **Custom** attribute: domain identity of the Soul agent. Only on `service.name="soul"`. |
 
-**Зачем кастомные `soulstack.kid` / `soulstack.sid`, а не только generic `service.instance.id`.** Доменная идентичность Soul Stack — это KID и SID (по ним строится lease, аудит, таргетинг). Generic `service.instance.id` не даёт фильтра «трейсы конкретного Soul-а по его FQDN» или «события одного Keeper-инстанса по его KID» в терминах словаря системы. Префикс `soulstack.` — namespace кастомных атрибутов проекта, чтобы не конфликтовать с OTel semconv-зарезервированными именами.
+**Why custom `soulstack.kid` / `soulstack.sid`, and not just generic `service.instance.id`.** Soul Stack domain identity is KID and SID (lease, audit, targeting are built on them). Generic `service.instance.id` does not provide a filter for "traces of a specific Soul by its FQDN" or "events of a single Keeper instance by its KID" in terms of the system dictionary. The prefix `soulstack.` is the namespace of custom project attributes, so as not to conflict with OTel semconv-reserved names.
 
-**Wired.** `SetupOTel(ctx, OTelConfig{...})` ([`shared/obs`](adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам)) собирает resource из `service.name` + кастомных `ResourceAttrs`. Keeper-main передаёт `ServiceName: "keeper"` + `{"soulstack.kid": cfg.KID}`; Soul-main — `ServiceName: "soul"` + `{"soulstack.sid": sid}`. `SetupOTel` вызывается **один раз за процесс** (ставит глобальный TracerProvider + propagator); `otel.*`-блок конфига — restart-required, hot-reload его не перечитывает.
+**Wired.** `SetupOTel(ctx, OTelConfig{...})` ([`shared/obs`](adr/0011-go-layout.md)) collects resource from `service.name` + custom `ResourceAttrs`. Keeper-main sends `ServiceName: "keeper"` + `{"soulstack.kid": cfg.KID}`; Soul-main - `ServiceName: "soul"` + `{"soulstack.sid": sid}`. `SetupOTel` is called **once per process** (sets global TracerProvider + propagator); `otel.*` config block - restart-required, hot-reload does not re-read it.
 
-> **Почему `soulstack.kid` / `soulstack.sid` — resource-attrs, а не metric-labels.** Высокая кардинальность (SID = FQDN, тысячи хостов): в Prometheus-labels это blow-up (§2.2). В OTel resource-attrs идентичность инстанса — штатное место, и трейсы по одному хосту фильтруются без раздувания метрик-серий.
+> **Why `soulstack.kid` / `soulstack.sid` are resource-attrs and not metric-labels.** High cardinality (SID = FQDN, thousands of hosts): in Prometheus-labels this is a blow-up (§2.2). In OTel resource-attrs, instance identity is a standard place, and traces for one host are filtered without inflating the metrics series.
 
-## 4. Связь с requirements и кодом
+## 4. Communication with requirements and code
 
-- **requirements.md** — «у всех публикация метрик» закрывается Prometheus-`/metrics` на server-бинарях; «поддержка OpenTelemetry из коробки» — OTel-трейсами + опциональным OTLP-метрик-мостом. Оба — сквозные, в [`shared/obs`](adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам).
-- **`shared/obs`** — единый Go-модуль observability-стека: `Registry` (+go/process-collectors), `MetricsHandler`, HTTP-middleware-инструментация, `ServeMetrics` (выделенный listener + опц. basic-auth), `SetupOTel` (trace-provider, OTLP-exporter, resource-attrs). Оба server-бинаря wire-up-ят его в `runDaemon` (keeper/soul `cmd`). OTLP-**метрик**-pipeline (push метрик) — ещё точка расширения, см. §5.
-- **Конкретный список метрик** (что именно меряет Keeper и Soul) — **не нормируется здесь**: наполняется при имплементации каждой подсистемы (gRPC-stream, apply-цикл, Reaper, RBAC, …), как и [каталог audit-events](naming-rules.md#audit-events). Каждая метрика следует конвенциям §2.
-- **Заведённые in-process spans** (через глобальный TracerProvider от `SetupOTel`; при OTel disabled — no-op, код не ветвится). Атрибуты span-ов несут доменные идентификаторы (`sid` / `apply_id` / incarnation/scenario name), которые в metric-labels запрещены (§2.2):
-  - **Keeper:** `scenario.run` и `scenario.destroy_teardown` (tracer `keeper/scenario`; второй — дочерний на teardown-финал destroy: archive + DELETE строки incarnation), `grpc.bootstrap` и `grpc.apply_dispatch` (tracer `keeper/grpc`, пилот), `augur.request` (tracer `keeper/augur`; резолв + fetch `AugurRequest`, атрибуты без секретов/query), `sigil.anchors_reload` (tracer `keeper/sigil`; runtime-ротация trust-anchor-ключей подписи — re-build Signer + re-broadcast).
+- **requirements.md** - "everyone publishes metrics" is closed by Prometheus-`/metrics` on server binaries; "OpenTelemetry support out of the box" - OTel traces + optional OTLP metrics bridge. Both are end-to-end, in [`shared/obs`](adr/0011-go-layout.md).
+- **`shared/obs`** - a single Go module of the observability stack: `Registry` (+go/process-collectors), `MetricsHandler`, HTTP-middleware instrumentation, `ServeMetrics` (dedicated listener + basic-auth option), `SetupOTel` (trace-provider, OTLP-exporter, resource-attrs). Both server binaries wire-up it to `runDaemon` (keeper/soul `cmd`). OTLP-**metrics**-pipeline (push metrics) is another extension point, see §5.
+- **A specific list of metrics** (what exactly Keeper and Soul measures) is **not standardized here**: it is filled in during the implementation of each subsystem (gRPC-stream, apply-cycle, Reaper, RBAC, ...), as well as the [audit-events directory](naming-rules.md#audit-events). Each metric follows the conventions of §2.
+- **Entered in-process spans** (via the global TracerProvider from `SetupOTel`; with OTel disabled - no-op, the code does not branch). Span attributes carry domain identifiers (`sid` / `apply_id` / incarnation/scenario name), which are prohibited in metric-labels (§2.2):
+  - **Keeper:** `scenario.run` and `scenario.destroy_teardown` (tracer `keeper/scenario`; the second is a child of the teardown-final destroy: archive + DELETE lines incarnation), `grpc.bootstrap` and `grpc.apply_dispatch` (tracer `keeper/grpc`, pilot), `augur.request` (tracer `keeper/augur`; resolve + fetch `AugurRequest`, attributes without secrets/query), `sigil.anchors_reload` (tracer `keeper/sigil`; runtime rotation of trust-anchor signature keys - re-build Signer + re-broadcast).
   - **Soul:** `apply.run` (tracer `soul/runtime`).
-  - **Cross-process trace-propagation Keeper→Soul** — **реализована** через only-add proto-поле `ApplyRequest.trace_context` (W3C traceparent, ADR-012(c) forward-compat). Keeper инжектит trace-context span-а `grpc.apply_dispatch` в `req.TraceContext` (`SendApply`); Soul извлекает его перед `runner.Run`, и `apply.run` поднимается как child — сквозная трасса оператор → Keeper → Soul (ADR-024). В cluster-mode поле едет внутри protobuf-байтов через Redis pub/sub без отдельной обработки. Пустой `trace_context` (старый Keeper) → Extract noop, `apply.run` остаётся корнем собственной трассы (forward-compat деградация). EventStream-метаданные для этого не используются — traceparent в payload.
+  - **Cross-process trace-propagation Keeper→Soul** - **implemented** via only-add proto-field `ApplyRequest.trace_context` (W3C traceparent, ADR-012(c) forward-compat). Keeper injects trace-context span `grpc.apply_dispatch` into `req.TraceContext` (`SendApply`); Soul retrieves it before `runner.Run`, and `apply.run` is raised as a child - through operator → Keeper → Soul (ADR-024) route. In cluster-mode, the field travels inside protobuf bytes via Redis pub/sub without separate processing. Empty `trace_context` (old Keeper) → Extract noop, `apply.run` remains the root of its own route (forward-compat degradation). EventStream metadata is not used for this - traceparent in payload.
 
-### 4.0. Где живёт Prometheus-collector подсистемы (правило размещения)
+### 4.0. Where does the Prometheus-collector subsystem live (placement rule)
 
-Нормативное правило, под которое инструментируются все подсистемы (тираж инструментации идёт строго по нему):
+The normative rule under which all subsystems are instrumented (the circulation of instrumentation is strictly according to it):
 
-- **Collector подсистемы живёт рядом с подсистемой**, в `<bin>/internal/<subsys>/metrics.go`, с регистратором сигнатуры `Register<Subsys>Metrics(reg *obs.Registry) *<Subsys>Metrics`, если он специфичен одному бинарю/подсистеме. Все `keeper_*` / `soul_*`-метрики подсистем приземляются здесь, а не в `shared/obs`. Пилот — [`keeper/internal/grpc/metrics.go`](adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам) (`RegisterGRPCMetrics`).
-- **В `shared/obs` остаётся только сквозной фундамент**, нужный обоим бинарям без привязки к их internal-типам: registry-core (go/process collectors + exposition handler), `ServeMetrics`, `SetupOTel`, и параметризуемая HTTP-middleware (`HTTPMetrics` через injected path-extractor).
-- **Критерий — НЕ префикс метрики, а зависимости collector-а:** тянет internal-типы / тяжёлый init подсистемы → subsystem-local (`<bin>/internal/<subsys>/metrics.go`); нейтрален и нужен обоим → `shared/obs`. Это та же граница, что между `shared/vault` (client-only) и `keeper/internal/vault` (server-side) по [ADR-011](adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам).
+- **The subsystem collector lives next to the subsystem**, in `<bin>/internal/<subsys>/metrics.go`, with a signature logger `Register<Subsys>Metrics(reg *obs.Registry) *<Subsys>Metrics` if it is specific to one binary/subsystem. All `keeper_*` / `soul_*` subsystem metrics land here, not in `shared/obs`. Pilot - [`keeper/internal/grpc/metrics.go`](adr/0011-go-layout.md) (`RegisterGRPCMetrics`).
+- **Only the end-to-end foundation** remains in `shared/obs`, needed by both binaries without reference to their internal types: registry-core (go/process collectors + exposition handler), `ServeMetrics`, `SetupOTel`, and parameterizable HTTP-middleware (`HTTPMetrics` via injected path-extractor).
+- **The criterion is NOT the metric prefix, but the collector's dependencies:** pulls internal types / heavy init subsystems → subsystem-local (`<bin>/internal/<subsys>/metrics.go`); neutral and needed by both → `shared/obs`. This is the same boundary as between `shared/vault` (client-only) and `keeper/internal/vault` (server-side) according to [ADR-011](adr/0011-go-layout.md).
 
-> **`HTTPMetrics` в `shared/obs` — корректное применение правила, НЕ исключение.** Middleware параметризована injected path-extractor-ом (`MiddlewareForPath(func(*http.Request) string)`) и не знает ни одного keeper-typed-а — она нейтральна и нужна обоим бинарям, поэтому её место в `shared/obs`. Тиражёр инструментации **не должен** «причёсывать» её в `<bin>/internal/...`: по критерию зависимостей она уже размещена правильно.
+> **`HTTPMetrics` in `shared/obs` is a correct application of the rule, NOT an exception.** Middleware is parameterized by an injected path-extractor (`MiddlewareForPath(func(*http.Request) string)`) and does not know any keeper-types - it is neutral and needed by both binaries, so its place is in `shared/obs`. The distributor of the instrumentation **should not** "comb" it into `<bin>/internal/...`: according to the dependency criterion, it is already placed correctly.
 
-> **`ReaperMetrics` живёт в `keeper/internal/reaper` — пример выполненного правила §4.0.** Reaper — keeper-only подсистема, тянущая internal-типы; её collector размещён рядом с подсистемой (`RegisterReaperMetrics` в [`keeper/internal/reaper/metrics.go`](adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам)), а не в `shared/obs`. Это образцовое применение критерия «collector рядом с подсистемой»: миграция из `shared/obs` выполнена, отдельной backlog-задачи больше нет.
+> **`ReaperMetrics` lives in `keeper/internal/reaper` - an example of the executed rule §4.0.** Reaper - a keeper-only subsystem that draws internal types; its collector is located next to the subsystem (`RegisterReaperMetrics` in [`keeper/internal/reaper/metrics.go`](adr/0011-go-layout.md)), and not in `shared/obs`. This is an exemplary application of the "collector next to subsystem" criterion: the migration from `shared/obs` is completed, there is no longer a separate backlog task.
 
-### 4.1. Каталог метрик (наполняется по подсистемам)
+### 4.1. Metrics catalog (filled by subsystems)
 
-Метрики приземляются при инструментации соответствующей подсистемы. Имя/тип/labels — по конвенциям §2. Подсистемы, ещё не инструментированные, в каталоге не перечислены.
+Metrics land when the corresponding subsystem is instrumented. Name/type/labels - according to the conventions of §2. Subsystems that have not yet been instrumented are not listed in the catalog.
 
 #### Keeper · EventStream (gRPC, ADR-012)
 
-Эталонная инструментация-пилот ([ADR-024](adr/0024-observability.md#adr-024-observability-prometheus-primary--otel-bridge)). Регистратор — `RegisterGRPCMetrics(reg *obs.Registry) *GRPCMetrics` в [`keeper/internal/grpc/metrics.go`](adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам); дескриптор шарится между EventStream-handler-ом (streams/messages) и Outbound (apply-dispatch).
+Reference Instrumentation-Pilot ([ADR-024](adr/0024-observability.md#adr-024-observability-prometheus-primary--otel-bridge)). Recorder - `RegisterGRPCMetrics(reg *obs.Registry) *GRPCMetrics` in [`keeper/internal/grpc/metrics.go`](adr/0011-go-layout.md); the descriptor is rummaged between EventStream-handler (streams/messages) and Outbound (apply-dispatch).
 
-| Метрика | Тип | Labels | Смысл |
+| Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `keeper_grpc_streams_active` | gauge | — | Число открытых EventStream-стримов Keeper↔Soul прямо сейчас. Inc после handshake (HelloReply доставлен), Dec в defer handler-а. Без label-ов: разрез по `sid` — cardinality-blow-up (§2.2); «сколько Soul-ов на инстансе» виден из метки `instance` Prometheus-target-а. |
-| `keeper_grpc_messages_total` | counter | `direction` (`from_soul` / `to_soul`) | App-сообщения стрима по направлению: `from_soul` — принятые в receive-loop-е (вкл. handshake-Hello), `to_soul` — отправленные (HelloReply + send-loop). Тип payload в label не выносится — это вопрос для trace, а не для метрики. |
-| `keeper_grpc_apply_dispatch_total` | counter | `result` (`ok` / `failed`) | Попытки отправить `ApplyRequest` в Soul (`Outbound.SendApply`): `ok` — enqueue/publish успешен, `failed` — `ErrSoulNotConnected` / `ErrOutboundQueueFull`. Рост `failed` — Soul-ы недоступны / очереди переполнены. |
-| `keeper_grpc_bootstrap_total` | counter | `result` (`ok` / `failed`) | Онбординг-попытки Soul через unary `Bootstrap` (отдельный listener, server-only TLS — **не** EventStream): `ok` — seed выпущен и Soul присоединился, `failed` — любой не-ok исход (токен / CSR / Vault / tx). Анти-enum онбординга: детализация причины — в trace/log, не в label. |
+| `keeper_grpc_streams_active` | gauge | — | Number of open EventStreams of Keeper↔Soul right now. Inc after handshake (HelloReply delivered), Dec in defer handler. Without labels: cut according to `sid` - cardinality-blow-up (§2.2); "how many Souls are on the instance" can be seen from the `instance` Prometheus-target label. |
+| `keeper_grpc_messages_total` | counter | `direction` (`from_soul` / `to_soul`) | App messages of the stream in the direction: `from_soul` - received in the receive-loop (incl. handshake-Hello), `to_soul` - sent (HelloReply + send-loop). The payload type is not included in the label - this is a question for trace, not for metrics. |
+| `keeper_grpc_apply_dispatch_total` | counter | `result` (`ok` / `failed`) | Attempts to send `ApplyRequest` to Soul (`Outbound.SendApply`): `ok` - enqueue/publish successful, `failed` - `ErrSoulNotConnected` / `ErrOutboundQueueFull`. Growth `failed` — Souls are unavailable / queues are full. |
+| `keeper_grpc_bootstrap_total` | counter | `result` (`ok` / `failed`) | Soul onboarding attempts via unary `Bootstrap` (separate listener, server-only TLS - **not** EventStream): `ok` - seed released and Soul joined, `failed` - any non-ok outcome (token/CSR/Vault/tx). Anti-enum of onboarding: detailing the reason - in trace/log, not in label. |
 
-**Spans (in-process).** Dispatch `ApplyRequest` оборачивается span-ом `grpc.apply_dispatch`; онбординг через `Bootstrap`-RPC — span-ом `grpc.bootstrap` (оба через глобальный tracer `otel.Tracer("keeper/grpc")`, провайдер поднят `SetupOTel`). Атрибуты span-а — `sid` / `apply_id` (доменные идентификаторы, в metric-labels запрещены §2.2, в trace-атрибутах — штатно); секретов не несёт. Span — на единицу dispatch-а / онбординга, не на весь long-lived стрим. При OTel disabled глобальный tracer no-op — span-ы бесплатны, код не ветвится. Cross-process trace-propagation Keeper→Soul (через gRPC-метаданные, §1.2) — отдельная задача (нужно proto-поле `traceparent`), в этот slice не входит.
+**Spans (in-process).** Dispatch `ApplyRequest` is wrapped in span `grpc.apply_dispatch`; onboarding via `Bootstrap`-RPC - span `grpc.bootstrap` (both via global tracer `otel.Tracer("keeper/grpc")`, provider raised `SetupOTel`). The span attributes are `sid` / `apply_id` (domain identifiers, prohibited in metric-labels §2.2, in trace attributes - normally); carries no secrets. Span - per unit of dispatch/onboarding, not for the entire long-lived stream. When OTel is disabled, the global tracer is no-op - spans are free, the code does not branch. Cross-process trace-propagation Keeper→Soul (via gRPC metadata, §1.2) is a separate task (proto-field `traceparent` is required), not included in this slice.
 
 #### Keeper · scenario (runner, ADR-009)
 
-Регистратор — `RegisterScenarioMetrics(reg *obs.Registry) *ScenarioMetrics` в [`keeper/internal/scenario/metrics.go`](adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам). Инструментирует Keeper-side прогон scenario (run-goroutine).
+Registrar - `RegisterScenarioMetrics(reg *obs.Registry) *ScenarioMetrics` in [`keeper/internal/scenario/metrics.go`](adr/0011-go-layout.md). Instruments the Keeper-side scenario run (run-goroutine).
 
-| Метрика | Тип | Labels | Смысл |
+| Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `keeper_scenario_runs_total` | counter | `result` (`ok` / `failed` / `locked`) | Завершённые прогоны scenario по терминалу: `ok` — state закоммичен; `failed` — прогон провалился, incarnation переведена в `error_locked`; `locked` — прогон отклонён до старта (incarnation уже `applying` / `error_locked`). Имена incarnation/scenario в label НЕ кладём (cardinality-blow-up по числу инкарнаций/сценариев) — их разрез несёт span `scenario.run`. |
-| `keeper_scenario_run_duration_seconds` | histogram (`DefBuckets`) | — | Длительность прогона scenario (от старта run-goroutine до терминала). Наполняется только реально стартовавшими прогонами; `locked` (отклонён до старта) в histogram не попадает. Разрез по результату не нужен — для p99 хватает общей серии. |
+| `keeper_scenario_runs_total` | counter | `result` (`ok` / `failed` / `locked`) | Completed scenario runs on the terminal: `ok` — state is committed; `failed` - run failed, incarnation transferred to `error_locked`; `locked` — run rejected before start (incarnation already `applying` / `error_locked`). We DO NOT put the names of incarnation/scenario in the label (cardinality-blow-up according to the number of incarnations/scenarios) - their section carries span `scenario.run`. |
+| `keeper_scenario_run_duration_seconds` | histogram(`DefBuckets`) | — | Duration of the scenario run (from the start of run-goroutine to the terminal). Filled only with actually started runs; `locked` (rejected before start) does not appear in the histogram. A section based on the result is not needed - for p99 the general series is enough. |
 
-**Spans (in-process).** Прогон оборачивается span-ом `scenario.run` через tracer `otel.Tracer("keeper/scenario")`. Атрибуты — доменные идентификаторы прогона (incarnation/scenario name), запрещённые в metric-labels (§2.2).
+**Spans (in-process).** The run is wrapped in span `scenario.run` via tracer `otel.Tracer("keeper/scenario")`. Attributes are domain identifiers of the run (incarnation/scenario name), prohibited in metric-labels (§2.2).
 
 #### Keeper · RBAC (ADR-028)
 
-Регистратор — `RegisterRBACMetrics(reg *obs.Registry) *RBACMetrics` в [`keeper/internal/rbac/metrics.go`](adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам). Инструментирует RBAC-подсистему: пересборку снимка каталога (`Holder.Refresh`), permission-проверки (`Holder.Check` — единственная точка проверки, через неё идут и api-middleware, и MCP) и cluster-инвалидацию (`Holder.WatchInvalidations`). Дескриптор инжектится сеттером `Holder.SetMetrics` в `setupMetricsRegistry` daemon-а (после создания registry, который поднимается позже `NewHolder` — init-order, паттерн `vault.Client.SetMetrics`).
+Registrar - `RegisterRBACMetrics(reg *obs.Registry) *RBACMetrics` in [`keeper/internal/rbac/metrics.go`](adr/0011-go-layout.md). Instruments the RBAC subsystem: directory snapshot rebuild (`Holder.Refresh`), permission checks (`Holder.Check` is the only check point, both api-middleware and MCP go through it) and cluster invalidation (`Holder.WatchInvalidations`). The descriptor is injected by the setter `Holder.SetMetrics` into the `setupMetricsRegistry` daemon (after creating the registry, which is raised later `NewHolder` - init-order, pattern `vault.Client.SetMetrics`).
 
-**Кардинальность (инвариант).** Ни одного label с `aid` / `permission` / `role_name` / `resource` / `action` — только closed-enum (`kind`: `load`/`parse`; `result`: `allow`/`deny`). Кто и что проверял — в audit-log, не в метрику.
+**Cardinality (invariant).** Not a single label with `aid` / `permission` / `role_name` / `resource` / `action` - only closed-enum (`kind`: `load`/`parse`; `result`: `allow`/`deny`). Who checked what and what - in the audit-log, not in the metric.
 
-| Метрика | Тип | Labels | Смысл |
+| Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `keeper_rbac_snapshot_rebuild_duration_seconds` | histogram (`DefBuckets`) | — | Длительность одной пересборки снимка (`Holder.Refresh`: `src.Load` из БД → `NewEnforcerFromSnapshot`). Засекается на успехе и на отказе. |
-| `keeper_rbac_snapshot_rebuild_errors_total` | counter | `kind` (`load` / `parse`) | Неуспешные пересборки: `load` — `src.Load` (БД недоступна / ошибка SELECT-ов), `parse` — `NewEnforcerFromSnapshot` (невалидная permission после рассинхрона версий каталога). Фаза известна caller-у точно — не угадывается по типу ошибки. |
-| `keeper_rbac_snapshot_last_success_timestamp_seconds` | gauge (Unix-time) | — | Время последней УСПЕШНОЙ пересборки. **Возраст снимка считается в PromQL как `time() - keeper_rbac_snapshot_last_success_timestamp_seconds`** — отдельную `_age_seconds`-метрику сознательно не заводим (gauge-возраст «протух» бы между scrape-ами). |
-| `keeper_rbac_snapshot_roles` | gauge | — | Число ролей в актуальном снимке (на каждый успешный `Holder.Refresh`). |
-| `keeper_rbac_snapshot_operators` | gauge | — | Число операторов с ≥1 ролевой привязкой в актуальном снимке. AID без привязок = default-deny, в счёт не идёт. |
-| `keeper_rbac_checks_total` | counter | `result` (`allow` / `deny`) | Permission-проверки `Holder.Check`: `allow` — `err==nil`; `deny` — любой не-nil error (явный `ErrPermissionDenied` и misconfigured-call сводятся к `deny`, наружу оба = 403). Горячий путь admin-API/MCP — инкремент только один nil-safe `Inc`. |
-| `keeper_rbac_invalidations_received_total` | counter | — | Принятые cluster-wide RBAC-инвалидации (pub/sub-сигналы в `Holder.WatchInvalidations`, до запуска перечита). Self-origin отфильтрован источником. |
+| `keeper_rbac_snapshot_rebuild_duration_seconds` | histogram(`DefBuckets`) | — | The duration of one snapshot rebuild (`Holder.Refresh`: `src.Load` from the database → `NewEnforcerFromSnapshot`). It detects success and failure. |
+| `keeper_rbac_snapshot_rebuild_errors_total` | counter | `kind` (`load` / `parse`) | Unsuccessful rebuilds: `load` - `src.Load` (database unavailable / SELECT error), `parse` - `NewEnforcerFromSnapshot` (invalid permission after directory versions were out of sync). The phase is known to the caller exactly - it is not guessed by the type of error. |
+| `keeper_rbac_snapshot_last_success_timestamp_seconds` | gauge (Unix-time) | — | Time of the last SUCCESSFUL rebuild. **The age of a photo is calculated in PromQL as `time() - keeper_rbac_snapshot_last_success_timestamp_seconds`** - we deliberately do not create a separate `_age_seconds` metric (the gauge age would "rotate" between scrapes). |
+| `keeper_rbac_snapshot_roles` | gauge | — | Number of roles in the current snapshot (per successful `Holder.Refresh`). |
+| `keeper_rbac_snapshot_operators` | gauge | — | Number of agents with ≥1 role assignment in the current snapshot. AID without bindings = default-deny, does not count. |
+| `keeper_rbac_checks_total` | counter | `result` (`allow` / `deny`) | Permission checks `Holder.Check`: `allow` - `err==nil`; `deny` - any non-nil error (explicit `ErrPermissionDenied` and misconfigured-call are reduced to `deny`, both outside = 403). Hot path admin-API/MCP - increment only one nil-safe `Inc`. |
+| `keeper_rbac_invalidations_received_total` | counter | — | Accepted cluster-wide RBAC validations (pub/sub-signals in `Holder.WatchInvalidations`, before re-reading starts). Self-origin is filtered by source. |
 
-#### Keeper · service-registry (реестр Service-ов/keeper_settings, ADR-029)
+#### Keeper service-registry (Service registry/keeper_settings, ADR-029)
 
-Регистратор — `RegisterRegistryMetrics(reg *obs.Registry) *RegistryMetrics` в [`keeper/internal/serviceregistry/metrics.go`](adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам). Зеркало RBAC-Holder-метрик для снимка реестра Service-ов: пересборка снимка (`Holder.Refresh`: `ListServices` + `GetSetting` из БД) и cluster-инвалидация (`Holder.WatchInvalidations`). Дескриптор инжектится сеттером `Holder.SetMetrics` в `setupMetricsRegistry` daemon-а (init-order, паттерн `rbac.Holder.SetMetrics`). Геттер `Holder.Resolve` — синхронный горячий путь потребителей scenario; per-`Resolve` метрику/span сознательно НЕ заводим (overhead на каждый резолв; снимок-метрики на rebuild достаточны).
+Registrar - `RegisterRegistryMetrics(reg *obs.Registry) *RegistryMetrics` in [`keeper/internal/serviceregistry/metrics.go`](adr/0011-go-layout.md). Mirror of RBAC-Holder metrics for a snapshot of the Service registry: snapshot rebuild (`Holder.Refresh`: `ListServices` + `GetSetting` from the database) and cluster invalidation (`Holder.WatchInvalidations`). The descriptor is injected by the setter `Holder.SetMetrics` into the `setupMetricsRegistry` daemon (init-order, pattern `rbac.Holder.SetMetrics`). Getter `Holder.Resolve` - synchronous hot path consumers scenario; per-`Resolve` we do NOT deliberately create a metric/span (overhead for each resolve; snapshot metrics for rebuild are sufficient).
 
-**Кардинальность (инвариант).** В label-ы НЕ кладём имя Service-а / git / ref / значение настройки — только closed-enum `kind` (`load`/`parse`). Снимок реестра — публичный каталог, не секрет, но cardinality по числу Service-ов в метриках недопустима.
+**Cardinality (invariant).** In the labels we DO NOT put the name of the Service / git / ref / setting value - only closed-enum `kind` (`load`/`parse`). The registry snapshot is a public directory, it's not a secret, but cardinality in terms of the number of Services in the metrics is unacceptable.
 
-| Метрика | Тип | Labels | Смысл |
+| Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `keeper_serviceregistry_snapshot_rebuild_duration_seconds` | histogram (`DefBuckets`) | — | Длительность одной пересборки снимка реестра (`Holder.Refresh`: `src.Load` из БД). Засекается на успехе и на отказе. |
-| `keeper_serviceregistry_snapshot_rebuild_errors_total` | counter | `kind` (`load` / `parse`) | Неуспешные пересборки: `load` — `src.Load` (БД недоступна / ошибка SELECT-ов); `parse` зарезервирован под будущий типизированный декодер строк (текущий `PoolSource.Load` отдельной parse-фазы не имеет). |
-| `keeper_serviceregistry_snapshot_last_success_timestamp_seconds` | gauge (Unix-time) | — | Время последней УСПЕШНОЙ пересборки. Возраст снимка — `time() - keeper_serviceregistry_snapshot_last_success_timestamp_seconds` в PromQL (симметрия с RBAC). |
-| `keeper_serviceregistry_snapshot_services` | gauge | — | Число Service-ов в актуальном снимке (на каждый успешный `Holder.Refresh`). |
-| `keeper_serviceregistry_invalidations_received_total` | counter | — | Принятые cluster-wide инвалидации реестра (pub/sub-сигналы в `Holder.WatchInvalidations`, до запуска перечита). Self-origin отфильтрован источником. |
+| `keeper_serviceregistry_snapshot_rebuild_duration_seconds` | histogram(`DefBuckets`) | — | Duration of one rebuild of the registry snapshot (`Holder.Refresh`: `src.Load` from the database). It detects success and failure. |
+| `keeper_serviceregistry_snapshot_rebuild_errors_total` | counter | `kind` (`load` / `parse`) | Unsuccessful rebuilds: `load` - `src.Load` (DB unavailable / SELECT error); `parse` is reserved for a future typed string decoder (the current `PoolSource.Load` does not have a separate parse phase). |
+| `keeper_serviceregistry_snapshot_last_success_timestamp_seconds` | gauge (Unix-time) | — | Time of the last SUCCESSFUL rebuild. The snapshot age is `time() - keeper_serviceregistry_snapshot_last_success_timestamp_seconds` in PromQL (symmetry with RBAC). |
+| `keeper_serviceregistry_snapshot_services` | gauge | — | Number of Services in the current snapshot (for each successful `Holder.Refresh`). |
+| `keeper_serviceregistry_invalidations_received_total` | counter | — | Accepted cluster-wide registry invalidations (pub/sub-signals in `Holder.WatchInvalidations`, before rereading starts). Self-origin is filtered by source. |
 
-#### Keeper · render (CEL+text/template-пайплайн, ADR-010)
+#### Keeper · render (CEL+text/template-pipeline, ADR-010)
 
-Регистратор — `RegisterRenderMetrics(reg *obs.Registry) *RenderMetrics` в [`keeper/internal/render/metrics.go`](adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам). Инструментирует Keeper-side render-пайплайн scenario (vault-resolve → CEL-render → резолв `on`/`where` → сборка плана). Дескриптор инжектится конструктор-параметром `NewPipeline` (один Pipeline на keeper-инстанс).
+Registrar - `RegisterRenderMetrics(reg *obs.Registry) *RenderMetrics` in [`keeper/internal/render/metrics.go`](adr/0011-go-layout.md). Instruments the Keeper-side render pipeline scenario (vault-resolve → CEL-render → resolve `on`/`where` → plan assembly). The descriptor is injected with the constructor parameter `NewPipeline` (one Pipeline per keeper instance).
 
-| Метрика | Тип | Labels | Смысл |
+| Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `keeper_render_duration_seconds` | histogram (`DefBuckets`) | — | Длительность одного прохода `Pipeline.Render` в секундах (vault-resolve → CEL-render → резолв `on`/`where` → сборка плана) — самая тяжёлая Keeper-side фаза прогона (тот же горизонт, что у span-а `render.pipeline`). Разрез по результату не нужен — для p99 хватает общей серии; имена incarnation/scenario в label НЕ кладём (cardinality-blow-up) — их разрез несёт span. |
-| `keeper_render_errors_total` | counter | — | Неуспешные проходы `Pipeline.Render` (любой не-nil error: `ErrUnsupportedDSL` / vault-resolve-fail / CEL-fail / host-инвариант-fail). Без label-а причины — детализация уходит в trace/log (span `render.pipeline` ставит `codes.Error`); counter держим для алерта на rate ошибок рендера. |
+| `keeper_render_duration_seconds` | histogram(`DefBuckets`) | — | The duration of one pass `Pipeline.Render` in seconds (vault-resolve → CEL-render → resolve `on`/`where` → plan assembly) is the heaviest Keeper-side phase of the run (the same horizon as the span `render.pipeline`). A section based on the result is not needed - for p99 the general series is sufficient; We do NOT put the names incarnation/scenario in the label (cardinality-blow-up) - their section is carried by the span. |
+| `keeper_render_errors_total` | counter | — | Failed passes `Pipeline.Render` (any non-nil error: `ErrUnsupportedDSL`/vault-resolve-fail/CEL-fail/host-invariant-fail). Without a label for a reason - the detail goes to trace/log (span `render.pipeline` sets `codes.Error`); We hold counter for an alert on the rate of rendering errors. |
 
-#### Keeper · vault (чтение KV v1/v2, ADR-017)
+#### Keeper · vault (reading KV v1/v2, ADR-017)
 
-Регистратор — `RegisterVaultMetrics(reg *obs.Registry) *VaultMetrics` в [`keeper/internal/vault/metrics.go`](adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам). Инструментирует keeper-side Vault-клиент (чтение KV v1/v2, версия mount-а определяется автоматически: CEL `vault()`, `vault:`-ref, `core.vault.kv-read`, чтение JWT-signing-key). Дескриптор инжектится сеттером `Client.SetMetrics` (init-order: registry поднимается позже клиента, тот же паттерн, что `Holder.SetMetrics`).
+Registrar - `RegisterVaultMetrics(reg *obs.Registry) *VaultMetrics` in [`keeper/internal/vault/metrics.go`](adr/0011-go-layout.md). Instruments the keeper-side Vault client (reading KV v1/v2, mount version is determined automatically: CEL `vault()`, `vault:`-ref, `core.vault.kv-read`, reading JWT-signing-key). The descriptor is injected by the `Client.SetMetrics` setter (init-order: registry is raised later than the client, the same pattern as `Holder.SetMetrics`).
 
-**Кардинальность (инвариант, ADR-024 §2.2 + «безопасность на первом месте»).** В label-ы НЕ кладём ни значение секрета, ни логический KV-путь (путь часто несёт имя секрета и высокую кардинальность). Разрез — только `mount` (closed enum, 1-2 значения на keeper: `secret`-default) и `kind` ошибки (closed enum `notfound`/`error`).
+**Cardinality (invariant, ADR-024 §2.2 + "security comes first")** We DO NOT put either the secret value or the logical KV path in the labels (the path often carries the name of the secret and a high cardinality). Section - only `mount` (closed enum, 1-2 values ​​on keeper: `secret`-default) and `kind` errors (closed enum `notfound`/`error`).
 
-| Метрика | Тип | Labels | Смысл |
+| Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `keeper_vault_read_duration_seconds` | histogram (`DefBuckets`) | `mount` | Латентность одного `Client.ReadKV` в секундах (round-trip до Vault), разрезанная по `mount`. Горячий путь резолва секретов. |
-| `keeper_vault_read_errors_total` | counter | `mount`, `kind` (`notfound` / `error`) | Неуспешные `Client.ReadKV`: `notfound` — `ErrVaultKVNotFound` (путь отсутствует/удалён, штатный исход), `error` — транспортная/прочая ошибка чтения. Деталь причины (сам путь) — в log/trace caller-а, не в метрику; алертить на `notfound` и `error` надо по-разному. |
+| `keeper_vault_read_duration_seconds` | histogram(`DefBuckets`) | `mount` | Latency of one `Client.ReadKV` in seconds (round-trip to Vault), divided by `mount`. The hot way to resolve secrets. |
+| `keeper_vault_read_errors_total` | counter | `mount`, `kind` (`notfound` / `error`) | Unsuccessful `Client.ReadKV`: `notfound` - `ErrVaultKVNotFound` (path missing/deleted, normal outcome), `error` - transport/other read error. The detail of the reason (the path itself) is in the caller's log/trace, not in the metric; You need to alert to `notfound` and `error` differently. |
 
-#### Keeper · Augur (брокер AugurRequest, ADR-025)
+#### Keeper · Augur (broker AugurRequest, ADR-025)
 
-Регистратор — `RegisterBrokerMetrics(reg *obs.Registry) *BrokerMetrics` в [`keeper/internal/augur/metrics.go`](adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам). Инструментирует Keeper-side брокер `AugurRequest` от Soul-а (EventStream-handler `handleAugurRequest`: авторизационный резолв + fetch из vault/prometheus/elk). Дескриптор регистрируется в `setupMetricsRegistry`, инжектится в `keepergrpc.AugurDeps.Metrics` в `setupGRPCEventStream` (паттерн `grpcMetrics`/`scenarioMetrics`).
+Registrar - `RegisterBrokerMetrics(reg *obs.Registry) *BrokerMetrics` in [`keeper/internal/augur/metrics.go`](adr/0011-go-layout.md). Instruments the Keeper-side broker `AugurRequest` from Soul (EventStream-handler `handleAugurRequest`: authorization resolve + fetch from vault/prometheus/elk). The descriptor is registered in `setupMetricsRegistry`, injected into `keepergrpc.AugurDeps.Metrics` into `setupGRPCEventStream` (pattern `grpcMetrics`/`scenarioMetrics`).
 
-**Кардинальность + безопасность (инвариант, augur.md §8).** В label-ы НЕ кладём `omen_name` / `query` / `sid` / `apply_id` / `request_id` / значение секрета — только closed-enum `source` (`vault`/`prometheus`/`elk`/`unknown`) и `decision` (`ok`/`denied`/`error`). Кто и что запрашивал — в audit-log/trace.
+**Cardinality + security (invariant, augur.md §8).** In labels we DO NOT put `omen_name` / `query` / `sid` / `apply_id` / `request_id` / secret value - only closed-enum `source` (`vault`/`prometheus`/`elk`/`unknown`) and `decision` (`ok`/`denied`/`error`). Who requested what - in audit-log/trace.
 
-| Метрика | Тип | Labels | Смысл |
+| Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `keeper_augur_fetch_total` | counter | `source` (`vault` / `prometheus` / `elk` / `unknown`), `decision` (`ok` / `denied` / `error`) | Обработанные `AugurRequest`-ы: `ok` — доступ разрешён И fetch успешен; `denied` — резолв отклонил доступ; `error` — инфраструктурный сбой (резолв/fetch упал, concurrency-limit). `source=unknown` — тип Omen-а ещё не определён в момент учёта (Omen не найден / семафор переполнен до резолва). |
-| `keeper_augur_fetch_duration_seconds` | histogram (`DefBuckets`) | `source` | Длительность обработки одного `AugurRequest` (резолв + fetch), по `source` (vault-KV дёшев, prom/elk — внешний HTTP). Разрез по decision не нужен — для p99 хватает per-source серии. |
+| `keeper_augur_fetch_total` | counter | `source` (`vault` / `prometheus` / `elk` / `unknown`), `decision` (`ok` / `denied` / `error`) | Processed `AugurRequest`s: `ok` - access allowed AND fetch successful; `denied` - resolver denied access; `error` - infrastructure failure (resolve/fetch has fallen, concurrency-limit). `source=unknown` — the type of Omen is not yet defined at the time of registration (Omen was not found / the semaphore is full before resolution). |
+| `keeper_augur_fetch_duration_seconds` | histogram(`DefBuckets`) | `source` | Duration of processing one `AugurRequest` (resolve + fetch), according to `source` (vault-KV is cheap, prom/elk is external HTTP). The decision section is not needed - for p99 the per-source series is enough. |
 
-**Spans (in-process).** Обработка `AugurRequest` оборачивается span-ом `augur.request` через tracer `otel.Tracer("keeper/augur")`. Атрибуты — `sid` + closed-enum `source_type` / `decision`; `omen_name` / `query` / значение секрета в span НЕ кладутся (augur.md §8, ADR-024 §2.2).
+**Spans (in-process).** Processing `AugurRequest` is wrapped in span `augur.request` via tracer `otel.Tracer("keeper/augur")`. Attributes - `sid` + closed-enum `source_type` / `decision`; `omen_name` / `query` / secret value is NOT placed in span (augur.md §8, ADR-024 §2.2).
 
-#### Keeper · Oracle (reactor-роутер beacons, ADR-030)
+#### Keeper · Oracle (reactor-router beacons, ADR-030)
 
-Регистратор — `RegisterOracleMetrics(reg *obs.Registry) *OracleMetrics` в [`keeper/internal/oracle/metrics.go`](adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам). Инструментирует Keeper-side reactor-роутер Oracle (EventStream-handler `handlePortentEvent`: приём `PortentEvent` → match по реестру Decree → постановка named-scenario в work-queue, ADR-030 S2/S4). Дескриптор регистрируется в `setupMetricsRegistry`, инжектится в `keepergrpc.OracleDeps.Metrics` в `setupGRPCEventStream` (паттерн `augurMetrics`).
+Recorder - `RegisterOracleMetrics(reg *obs.Registry) *OracleMetrics` in [`keeper/internal/oracle/metrics.go`](adr/0011-go-layout.md). Instruments the Keeper-side reactor-router Oracle (EventStream-handler `handlePortentEvent`: receiving `PortentEvent` → match according to the Decree registry → setting named-scenario to work-queue, ADR-030 S2/S4). The descriptor is registered in `setupMetricsRegistry`, injected into `keepergrpc.OracleDeps.Metrics` into `setupGRPCEventStream` (pattern `augurMetrics`).
 
-**Кардинальность + безопасность (ADR-024 §2.2).** В label-ы НЕ кладём `decree` / `sid` / `apply_id` / `beacon` / payload — это high-cardinality (десятки тысяч хостов × правил) и/или недоверенный вход (Soul может быть скомпрометирован). Все collector-ы — без label-ов (один Oracle-поток). Кто именно сработал — в audit-log (`oracle.fired` / `decree.circuit_tripped`) и trace.
+**Cardinality + security (ADR-024 §2.2).** We DO NOT put `decree` / `sid` / `apply_id` / `beacon` / payload in the labels - this is high-cardinality (tens of thousands of hosts × rules) and/or untrusted input (Soul can be compromised). All collectors are without labels (one Oracle stream). Who exactly worked - in audit-log (`oracle.fired` / `decree.circuit_tripped`) and trace.
 
-| Метрика | Тип | Labels | Смысл |
+| Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `keeper_oracle_portents_received_total` | counter | — | Принятые `PortentEvent`-ы (с непустым `beacon_name`). Знаменатель прочих: сколько beacon-событий вообще дошло до reactor-а. |
-| `keeper_oracle_decrees_matched_total` | counter | — | Decree-срабатывания, прошедшие весь фильтр (subject-match + membership + where-CEL + НЕ в cooldown) и дошедшие до постановки. Инкрементируется per-Decree (один Portent может сматчить несколько). Меньше `portents_received` из-за default-deny. |
-| `keeper_oracle_scenarios_enqueued_total` | counter | — | Named-scenario, успешно поставленные в work-queue (ADR-027) Oracle-реакцией. Равно числу записанных fire-ов; расхождение с `decrees_matched` — сбои enqueue. |
-| `keeper_oracle_cooldown_blocked_total` | counter | — | Decree-срабатывания, отсечённые cooldown-ом per-(decree, subject) (loop-prevention, ADR-030(a)). Рост — частые edge-события на одном правиле. |
-| `keeper_oracle_circuit_tripped_total` | counter | — | Авто-disable Decree circuit-breaker-ом (ADR-030(a): N срабатываний за окно → `enabled=false` + alert). Любой ненулевой прирост — нештатная ситуация (правило сорвалось в петлю), alert-кандидат. |
+| `keeper_oracle_portents_received_total` | counter | — | Accepted `PortentEvent`s (with non-empty `beacon_name`). The denominator of others: how many beacon events actually reached the reactor. |
+| `keeper_oracle_decrees_matched_total` | counter | — | Decree triggers that have passed the entire filter (subject-match + membership + where-CEL + NOT in cooldown) and reached the stage. Per-Decree is incremented (one Portent can match several). Less `portents_received` due to default-deny. |
+| `keeper_oracle_scenarios_enqueued_total` | counter | — | Named-scenario, successfully delivered to work-queue (ADR-027) by Oracle reaction. Equal to the number of recorded fires; discrepancy with `decrees_matched` - enqueue failures. |
+| `keeper_oracle_cooldown_blocked_total` | counter | — | Decree triggers cut off by cooldown per-(decree, subject) (loop-prevention, ADR-030(a)). Growth - frequent edge events on one rule. |
+| `keeper_oracle_circuit_tripped_total` | counter | — | Auto-disable Decree circuit-breaker (ADR-030(a): N operations per window → `enabled=false` + alert). Any non-zero increase is an abnormal situation (the rule has fallen into a loop), an alert candidate. |
 
-#### Keeper · Sigil (ключи подписи + ротация, ADR-026(h))
+#### Keeper · Sigil (signing keys + rotation, ADR-026(h))
 
-Регистратор — `RegisterKeyMetrics(reg *obs.Registry) *KeyMetrics` в [`keeper/internal/sigil/keymetrics.go`](adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам). Инструментирует реестр trust-anchor-ключей подписи Sigil (R3 multi-anchor ротация). Дескриптор регистрируется в `setupMetricsRegistry` (nil при выключенном Sigil — collectors не публикуются), один экземпляр шарится: gauge active-ключей обновляет `KeyService` (после мутации реестра), re-broadcast-наблюдаемость — daemon из `reloadAnchors` (pub/sub-сигнал И TTL-fallback-тик).
+Registrar - `RegisterKeyMetrics(reg *obs.Registry) *KeyMetrics` in [`keeper/internal/sigil/keymetrics.go`](adr/0011-go-layout.md). Instruments the registry of Sigil signature trust-anchor keys (R3 multi-anchor rotation). The descriptor is registered in `setupMetricsRegistry` (nil when Sigil is disabled - collectors are not published), one instance is rummaged: gauge active keys are updated by `KeyService` (after registry mutation), re-broadcast observability is daemon from `reloadAnchors` (pub/sub-signal AND TTL-fallback-tick).
 
-| Метрика | Тип | Labels | Смысл |
+| Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `keeper_sigil_signing_keys_active` | gauge | — | Текущее число active trust-anchor-ключей подписи (`status='active'`). Closed-набор (единицы ключей на кластер), без разреза по label-ам. |
-| `keeper_sigil_anchors_rebroadcast_total` | counter | — | Проходы re-broadcast-а набора якорей подключённым Soul-ам — на **каждый** `reloadAnchors` (pub/sub-сигнал `sigil:anchors-changed` + TTL-fallback-тик), независимо от того, скольким Soul-ам набор реально доехал. Сигнал «нода перечитала набор и разослала». |
-| `keeper_sigil_anchors_last_delivered` | gauge | — | Число Soul-ов, которым **последний** re-broadcast набора якорей ушёл успешно (`Outbound.RebroadcastTrustAnchors` delivered). Операционный сигнал «новый набор разошёлся подключённым Soul-ам, **ПЕРЕД** Retire старого ключа» (Retire-инвариант ADR-026(h), R3-S7). |
+| `keeper_sigil_signing_keys_active` | gauge | — | The current number of active trust-anchor signing keys (`status='active'`). Closed set (units of keys per cluster), without label cuts. |
+| `keeper_sigil_anchors_rebroadcast_total` | counter | — | Re-broadcast passes of a set of anchors to connected Souls - for **every** `reloadAnchors` (pub/sub-signal `sigil:anchors-changed` + TTL-fallback tick), regardless of how many Souls the set actually reached. The signal "the node re-read the set and sent it out." |
+| `keeper_sigil_anchors_last_delivered` | gauge | — | Number of Souls to which the **last** re-broadcast of the anchor set was successfully delivered (`Outbound.RebroadcastTrustAnchors` delivered). Operational signal "a new set has been sent to connected Souls, **BEFORE** Retire the old key" (Retire-invariant ADR-026(h), R3-S7). |
 
-**Spans (in-process).** Runtime-ротация (re-build Signer + обновление verify-наборов + re-broadcast) оборачивается span-ом `sigil.anchors_reload` через tracer `otel.Tracer("keeper/sigil")`. Атрибуты `active_anchors` / `rebroadcast_souls` — операционные counts (не label-cardinality, не материал ключа).
+**Spans (in-process).** Runtime rotation (re-build Signer + update verify sets + re-broadcast) is wrapped in span `sigil.anchors_reload` via tracer `otel.Tracer("keeper/sigil")`. Attributes `active_anchors` / `rebroadcast_souls` are operational counts (not label-cardinality, not key material).
 
-#### Keeper · Toll (cluster-wide отток-detector, [ADR-038](adr/0038-toll.md#adr-038-toll--cluster-wide-detector-массового-оттока-souls))
+#### Keeper · Toll (cluster-wide outflow-detector, [ADR-038](adr/0038-toll.md))
 
-Имплементация — отдельным slice-ом (ADR зафиксирован 2026-05-26, код вне этого ADR). Метрики зарезервированы здесь для согласованности каталога.
+Implementation - a separate slice (ADR fixed 2026-05-26, code outside this ADR). Metrics are reserved here for directory consistency.
 
-| Метрика | Тип | Labels | Смысл |
+| Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `keeper_cluster_degraded` | gauge (0/1) | — | `1` — Toll-leader взвёл флаг `cluster:degraded` (rate disconnect > threshold за 60s окно); `0` — нормальное состояние. Set ТОЛЬКО leader-ом (Redis-lease `cluster:toll:leader` гарантирует exclusive setter; non-leader инстансы не публикуют этот gauge). Не fanout-метрика — closed-набор по cluster-уровню. |
-| `keeper_toll_disconnects_total` | counter | `coven` | Не-graceful EventStream-disconnect-ы, наблюдённые tollwatcher-ом (post-filter graceful-shutdown / warmup-immunity). Per-coven cardinality безопасна на counter — это не fanout-флага cluster:degraded, а наблюдательный rate-источник Toll-окна. |
+| `keeper_cluster_degraded` | gauge (0/1) | — | `1` — Toll-leader activated the `cluster:degraded` flag (rate disconnect > threshold for 60s window); `0` - normal state. Set ONLY by the leader (Redis-lease `cluster:toll:leader` guarantees an exclusive setter; non-leader instances do not publish this gauge). Not a fanout metric - closed recruitment by cluster level. |
+| `keeper_toll_disconnects_total` | counter | `coven` | Non-graceful EventStream-disconnects observed by tollwatcher (post-filter graceful-shutdown / warmup-immunity). Per-coven cardinality is safe on counter - this is not the fanout flag of cluster:degraded, but the observation rate source of the Toll window. |
 
-**Spans (in-process).** Fire-event (взвод флага `cluster:degraded`) оборачивается span-ом `toll.degraded_fired` через tracer `otel.Tracer("keeper/toll")` — дёшево, единичные срабатывания. Атрибуты `rate` / `baseline_connected` / `window_seconds` — операционные числа Toll-окна.
+**Spans (in-process).** Fire-event (flag `cluster:degraded` platoon) is wrapped in span `toll.degraded_fired` via tracer `otel.Tracer("keeper/toll")` - cheap, single triggers. Attributes `rate` / `baseline_connected` / `window_seconds` are Toll window operational numbers.
 
-#### Keeper · Conductor (исполнитель Cadence, [ADR-048](adr/0048-conductor.md#adr-048-conductor--leader-elected-исполнитель-cadence-расписаний))
+#### Keeper · Conductor (performer Cadence, [ADR-048](adr/0048-conductor.md))
 
-Регистратор — `RegisterConductorMetrics(r *obs.Registry) *ConductorMetrics` в [`keeper/internal/conductor/metrics.go`](adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам). Инструментирует leader-elected исполнитель Cadence-расписаний ([conductor.md](keeper/conductor.md)): тик спавна созревших Cadence → Voyage. Collectors регистрируются **только в ветке поднятого Conductor** (default-ON при Redis и не `cadence_scheduler.enabled: false`) — при не-поднятом Conductor не публикуются вовсе (cardinality-safe, parity Reaper). Без label-ов (один Conductor-поток на инстанс; разрез по инстансу — Prometheus-метка `instance`).
+Registrar - `RegisterConductorMetrics(r *obs.Registry) *ConductorMetrics` in [`keeper/internal/conductor/metrics.go`](adr/0011-go-layout.md). Instruments the leader-elected executor of Cadence schedules ([conductor.md](keeper/conductor.md)): spawn tick of mature Cadence → Voyage. Collectors are registered **only in the branch of the raised Conductor** (default-ON for Redis and not `cadence_scheduler.enabled: false`) - when the Conductor is not raised, they are not published at all (cardinality-safe, parity Reaper). Without labels (one Conductor thread per instance; section by instance - Prometheus label `instance`).
 
-| Метрика | Тип | Labels | Смысл |
+| Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `keeper_conductor_lease_held` | gauge | — | `1` если этот инстанс держит Redis-lease `conductor:leader`, иначе `0`. Cluster-wide инвариант: `sum(keeper_conductor_lease_held) == 1` (при ровно одном лидере). Set ТОЛЬКО при смене лидерства (OnLeaseChange). Независим от `keeper_reaper_lease_held` — держатели lease-ов могут различаться. |
-| `keeper_conductor_spawn_executions_total` | counter | — | Тики спавна Conductor-лидера за uptime инстанса. Инкрементируется на **каждый** тик, независимо от наличия due-расписаний. Знаменатель «эффективности»: много тиков при нулевом `spawned_total` = расписаний нет либо все `skip`/`queue`. |
-| `keeper_conductor_spawned_total` | counter | — | Voyage, **реально заспавненные** из созревших Cadence (`skip`/`queue`-тики не считаются — affected = «сколько прогонов создано»). |
-| `keeper_conductor_spawn_errors_total` | counter | — | Ошибки тика спавна (`Spawner.Run` вернул error: PG-сбой / резолв target). Выделено из `spawn_executions_total`, чтобы алертилось без histogram-а. Любой ненулевой прирост — alert-кандидат. |
-| `keeper_conductor_spawn_duration_seconds` | histogram (`0.005…30s`) | — | Длительность тика спавна (`Spawner.Run`): SELECT due + per-row insert — единицы-десятки ms; верх 30s ловит аномально долгий тик. `_count` совпадает с `spawn_executions_total`. |
+| `keeper_conductor_lease_held` | gauge | — | `1` if this instance runs Redis-lease `conductor:leader`, otherwise `0`. Cluster-wide invariant: `sum(keeper_conductor_lease_held) == 1` (with exactly one leader). Set ONLY when leadership changes (OnLeaseChange). Independent of `keeper_reaper_lease_held` - lease holders may vary. |
+| `keeper_conductor_spawn_executions_total` | counter | — | Conductor leader spawn ticks for instance uptime. Increments by **every** tick, regardless of the presence of due schedules. "Efficiency" denominator: many ticks with zero `spawned_total` = no schedules or all `skip`/`queue`. |
+| `keeper_conductor_spawned_total` | counter | — | Voyage, **actually spawned** from matured Cadence (`skip`/`queue` ticks are not counted - affected = "how many runs created"). |
+| `keeper_conductor_spawn_errors_total` | counter | — | Spawn tick errors (`Spawner.Run` returned error: PG failure / resolve target). Selected from `spawn_executions_total` to alert without a histogram. Any non-zero increase is an alert candidate. |
+| `keeper_conductor_spawn_duration_seconds` | histogram(`0.005…30s`) | — | Spawn tick duration (`Spawner.Run`): SELECT due + per-row insert — units or tens of ms; The top 30s catches an abnormally long tick. `_count` is the same as `spawn_executions_total`. |
 
 #### Keeper · Tempo (per-AID rate-limiter write-API, [ADR-050](adr/0050-tempo.md#adr-050-tempo--per-aid-rate-limiting-write-api))
 
-Регистратор — `RegisterTempoMetrics(reg *obs.Registry) *TempoMetrics` в [`keeper/internal/api/tempo_metrics.go`](adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам). Counters инкрементируются middleware на каждом разрешённом / отклонённом запросе resolver-тяжёлого write-эндпоинта (конфиг — [config.md → tempo](keeper/config.md#tempo)). Регистрируются **безусловно** (registry всегда поднят): при выключенном Tempo (нет Redis / `tempo.enabled: false`) counters остаются на 0 — валидный сигнал «лимитер не активен».
+Registrar - `RegisterTempoMetrics(reg *obs.Registry) *TempoMetrics` in [`keeper/internal/api/tempo_metrics.go`](adr/0011-go-layout.md). Counters are incremented by middleware on each resolved/rejected request of the resolver-heavy write endpoint (config - [config.md → tempo](keeper/config.md#tempo)). Registered **unconditionally** (registry is always raised): with Tempo turned off (no Redis / `tempo.enabled: false`) counters remain at 0 - a valid signal "limiter is not active".
 
-Лейбл `endpoint` = логическое bucket-имя (`voyage_create`); **AID-лейбла НЕТ** — число операторов не ограничено, AID в лейбле взорвал бы кардинальность time-series. Кто именно превышает — видно в audit/логах по `claims.Subject`, не в метриках.
+Label `endpoint` = boolean bucket-name(`voyage_create`); **NO AID label** - the number of operators is not limited, AID in the label would explode the cardinality of time-series. Who exactly exceeds is visible in the audit/logs for `claims.Subject`, not in the metrics.
 
-| Метрика | Тип | Labels | Смысл |
+| Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `keeper_tempo_allowed_total` | counter | `endpoint` | Запросы, пропущенные Tempo-лимитером (токен взят из per-AID-бакета). `endpoint` = bucket-имя (`voyage_create` обслуживает `POST /v1/voyages` + `/v1/voyages/preview`). |
-| `keeper_tempo_rejected_total` | counter | `endpoint` | Запросы, отклонённые Tempo-лимитером (бакет пуст → `429 tempo-exceeded` + `Retry-After`). Рост — оператор бьёт API чаще `rate`+`burst`. Fail-open-проходы при Redis-сбое НЕ считаются rejected (passthrough) и НЕ увеличивают ни один из двух counter-ов. |
+| `keeper_tempo_allowed_total` | counter | `endpoint` | Requests missed by the Tempo limiter (token taken from the per-AID bucket). `endpoint` = bucket name (`voyage_create` serves `POST /v1/voyages` + `/v1/voyages/preview`). |
+| `keeper_tempo_rejected_total` | counter | `endpoint` | Requests rejected by the Tempo limiter (bucket empty → `429 tempo-exceeded` + `Retry-After`). Growth - the operator hits the API more often `rate`+`burst`. Fail-open passes during a Redis failure are NOT considered rejected (passthrough) and do NOT increase either of the two counters. |
 
-#### Soul · apply (apply-цикл, ADR-012/ADR-015)
+#### Soul · apply (apply-cycle, ADR-012/ADR-015)
 
-Регистратор — `RegisterApplyMetrics(reg *obs.Registry) *ApplyMetrics` в [`soul/internal/runtime/metrics.go`](adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам). Инструментирует apply-цикл Soul-демона.
+Registrar - `RegisterApplyMetrics(reg *obs.Registry) *ApplyMetrics` in [`soul/internal/runtime/metrics.go`](adr/0011-go-layout.md). Instruments the soul demon's apply loop.
 
-| Метрика | Тип | Labels | Смысл |
+| Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `soul_apply_tasks_total` | counter | `result` (`ok` / `changed` / `failed`) | Завершённые задачи прогона: `changed` — задача внесла изменения; `failed` — упала / timeout / cancelled (терминальные не-успехи сводятся к `failed`); `ok` — без изменений. `apply_id` / `sid` в label НЕ кладём (cardinality §2.2) — их разрез несёт span `apply.run`. |
-| `soul_apply_duration_seconds` | histogram (`0.05…300s`) | — | Длительность одного прогона (`Run` целиком). Buckets шире `keeper_http` — apply тяжелее HTTP-запроса (пакеты / файлы / сервисы), верх до 300s ловит хвост (компиляция / большой архив). |
-| `soul_apply_task_retries_total` | counter | — | Повторные попытки `runTask` (DSL-ядро `retry:` / `until:`, [tasks.md §9](destiny/tasks.md)), без учёта первой попытки. Рост — нестабильные задачи / flaky-хосты. Без label-ов: разрез по task/apply_id — cardinality (§2.2). |
-| `soul_apply_task_skipped_total` | counter | `reason` (`when` / `requisite` / `failed_run`) | Задачи, пропущенные gating-ом flow-control (`mod.Apply` не вызывался): `when` — `when:` дал false; `requisite` — `onchanges:` / `onfail:` не сработал; `failed_run` — прогон уже провален, не-`onfail`-задача пропущена fail-stop-ом. Closed enum — gating-цепочка Soul-а. |
-| `soul_apply_task_timed_out_total` | counter | — | Задачи, завершившиеся таймаутом (`TASK_STATUS_TIMED_OUT`), по ФИНАЛЬНОМУ исходу (после исчерпания retry, не на каждую попытку). Выделена из общего `failed`-результата `soul_apply_tasks_total`: таймаут = особый сигнал «висит», отдельная серия удобна для алертов. |
+| `soul_apply_tasks_total` | counter | `result` (`ok` / `changed` / `failed`) | Completed run tasks: `changed` - the task made changes; `failed` - crashed / timeout / canceled (terminal failures result in `failed`); `ok` - no changes. We DO NOT put `apply_id` / `sid` in the label (cardinality §2.2) - their section carries the span `apply.run`. |
+| `soul_apply_duration_seconds` | histogram(`0.05…300s`) | — | Duration of one run (`Run` entire). Buckets are wider `keeper_http` - apply is heavier than an HTTP request (packets / files / services), the top up to 300s catches the tail (compilation / large archive). |
+| `soul_apply_task_retries_total` | counter | — | Repeated attempts `runTask` (DSL core `retry:` / `until:`, [tasks.md §9](destiny/tasks.md)), without taking into account the first attempt. Growth - unstable tasks / flaky hosts. Without labels: cut by task/apply_id - cardinality (§2.2). |
+| `soul_apply_task_skipped_total` | counter | `reason` (`when` / `requisite` / `failed_run`) | Tasks skipped by gating flow-control (`mod.Apply` was not called): `when` — `when:` gave false; `requisite` - `onchanges:` / `onfail:` did not work; `failed_run` - the run has already failed, the non-`onfail` task was skipped by a fail-stop. Closed enum - Soul's gating chain. |
+| `soul_apply_task_timed_out_total` | counter | — | Tasks that ended with a timeout (`TASK_STATUS_TIMED_OUT`), according to the FINAL outcome (after exhaustion of retry, not for each attempt). Isolated from the general `failed`-result `soul_apply_tasks_total`: timeout = a special "hanging" signal, a separate series is convenient for alerts. |
 
-**Spans (in-process).** Прогон оборачивается span-ом `apply.run` через tracer `otel.Tracer("soul/runtime")`. Атрибуты — `apply_id` / `sid` (в metric-labels запрещены §2.2).
+**Spans (in-process).** The run is wrapped in span `apply.run` via tracer `otel.Tracer("soul/runtime")`. Attributes - `apply_id` / `sid` (not allowed in metric-labels §2.2).
 
-#### Soul · EventStream (gRPC-клиент, ADR-002/ADR-012)
+#### Soul · EventStream (gRPC client, ADR-002/ADR-012)
 
-Регистратор — `RegisterEventStreamMetrics(reg *obs.Registry) *EventStreamMetrics` в [`soul/internal/grpc/metrics.go`](adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам). Инструментирует Soul-side EventStream-клиент (connection-state).
+Registrar - `RegisterEventStreamMetrics(reg *obs.Registry) *EventStreamMetrics` in [`soul/internal/grpc/metrics.go`](adr/0011-go-layout.md). Instruments the Soul-side EventStream client (connection-state).
 
-| Метрика | Тип | Labels | Смысл |
+| Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `soul_eventstream_connected` | gauge (0/1) | — | `1` — EventStream-сессия Soul↔Keeper установлена (handshake завершён); `0` — разрыв / реконнект. Connection-state Soul-агента одномерен (один Keeper-стрим за раз) — label-ов нет, разрез по KID/session уходит в trace/log. |
-| `soul_eventstream_reconnects_total` | counter | — | Попытки реконнекта после первичного подключения (каждый `Dial` reconnect-loop-а). Рост — сигнал нестабильного канала / недоступности Keeper-кластера. |
+| `soul_eventstream_connected` | gauge (0/1) | — | `1` — Soul↔Keeper EventStream session established (handshake completed); `0` - break / reconnect. The connection-state of the Soul agent is one-dimensional (one Keeper stream at a time) - there are no labels, the KID/session section goes to trace/log. |
+| `soul_eventstream_reconnects_total` | counter | — | Attempts to reconnect after the initial connection (every `Dial` reconnect-loop). Growth is a signal of an unstable channel / unavailability of the Keeper cluster. |
 
-#### Soul · soulprint (сбор фактов, ADR-018)
+#### Soul · soulprint (fact collection, ADR-018)
 
-Регистратор — `RegisterSoulprintMetrics(reg *obs.Registry) *SoulprintMetrics` в [`soul/internal/soulprint/metrics.go`](adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам). Инструментирует сбор фактов о хосте.
+Registrar - `RegisterSoulprintMetrics(reg *obs.Registry) *SoulprintMetrics` in [`soul/internal/soulprint/metrics.go`](adr/0011-go-layout.md). Instruments the collection of facts about the host.
 
-| Метрика | Тип | Labels | Смысл |
+| Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `soul_soulprint_collections_total` | counter | `result` (`ok` / `failed`) | Снимки фактов о хосте. `Collect` best-effort и error не возвращает (ADR-018) → сейчас инкрементируется только `ok`; `failed` зарезервирован под будущие fatal-сценарии сбора (closed enum). `sid` в label НЕ кладём — разрез по хосту в OTel resource-attrs (§3). |
-| `soul_soulprint_collect_duration_seconds` | histogram (`0.001…5s`) | — | Длительность одного снимка фактов (`Collect`). Сбор лёгкий (чтение `/proc`, `/etc/os-release`, `net.*`) — узкие buckets внизу ловят норму; верх до 5s — на случай медленного FQDN/DNS-резолва на проблемном хосте. |
+| `soul_soulprint_collections_total` | counter | `result` (`ok` / `failed`) | Snapshots of facts about the host. `Collect` best-effort and error does not return (ADR-018) → now only `ok` is incremented; `failed` is reserved for future fatal collection scenarios (closed enum). We do NOT put `sid` in the label - a cut to the host in OTel resource-attrs (§3). |
+| `soul_soulprint_collect_duration_seconds` | histogram(`0.001…5s`) | — | Duration of one fact snapshot (`Collect`). Collection is easy (reading `/proc`, `/etc/os-release`, `net.*`) - narrow buckets at the bottom catch the norm; top to 5s - in case of slow FQDN/DNS resolution on a problematic host. |
 
 #### Soul · beacon (scheduler beacons, ADR-030)
 
-Регистратор — `RegisterBeaconMetrics(reg *obs.Registry) *BeaconMetrics` в [`soul/internal/beacon/metrics.go`](adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам). Инструментирует per-process beacon-scheduler Soul-демона (Vigil-проверки → edge-triggered `PortentEvent` в канал, ADR-030 S1/S4). Дескриптор регистрируется на soul-registry в `main`, инжектится в `beacon.SchedulerConfig.Metrics`.
+Registrar - `RegisterBeaconMetrics(reg *obs.Registry) *BeaconMetrics` in [`soul/internal/beacon/metrics.go`](adr/0011-go-layout.md). Instruments per-process beacon-scheduler Soul-demon (Vigil-checks → edge-triggered `PortentEvent` into channel, ADR-030 S1/S4). The descriptor is registered on the soul-registry in `main`, injected into `beacon.SchedulerConfig.Metrics`.
 
-| Метрика | Тип | Labels | Смысл |
+| Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `soul_beacon_portents_dropped_total` | counter | — | `PortentEvent`-ы, отброшенные при переполнении буфера канала (`Scheduler.emit` drop-ветка): writer-loop EventStream-а отстаёт либо нет активной сессии надолго. Дроп edge-triggered события — потеря одного перехода (следующая смена State снова поднимет Portent); ненулевой рост — сигнал «реакции теряются», alert-кандидат. Без label-ов: разрез по vigil-name — high-cardinality (§2.2). |
+| `soul_beacon_portents_dropped_total` | counter | — | `PortentEvent`s discarded when the channel buffer overflows (`Scheduler.emit` drop-branch): writer-loop EventStream lags or there is no active session for a long time. Drop of edge-triggered events - loss of one transition (the next State shift will raise Portent again); non-zero growth - signal "reactions are lost", alert candidate. Without labels: cut by vigil-name - high-cardinality (§2.2). |
 
-## 5. Что отложено
+## 5. What's on hold
 
-- **Конкретный каталог метрик** по подсистемам — по факту имплементации (см. §4).
-- **OpenMetrics exposition-format** — не включён; включится при понятном triple-test от пользователя.
-- **OTLP-push метрик** (`otel.export_metrics: bool`) — поле конфига заведено в обоих бинарях ([keeper/config.md](keeper/config.md#otel) / [soul/config.md](soul/config.md)), но **OTLP-метрик-pipeline ещё не поднимается**: в текущем slice через OTel экспортируются только трейсы, метрики — только через Prometheus-scrape. Реальный push метрик — отдельной задачей.
-- **Sampling-конфиг** (`otel.sampler`) — поле не введено; дефолт зашит в коде (`ParentBased(AlwaysSample)` в [`shared/obs`](adr/0011-go-layout.md#adr-011-раскладка-go-кода-gowork-с-модулями-по-сторонам)). Конфигурируемый сэмплер — при первом реальном запросе.
-- **Exemplars** (связка histogram-bucket ↔ trace-id) — post-MVP, не блокирует MVP.
+- **Specific catalog of metrics** for subsystems - upon implementation (see §4).
+- **OpenMetrics exposition-format** - not enabled; will turn on with an understandable triple-test from the user.
+- **OTLP-push metrics** (`otel.export_metrics: bool`) - the config field is set up in both binaries ([keeper/config.md](keeper/config.md#otel) / [soul/config.md](soul/config.md)), but **OTLP-metrics-pipeline is not raised yet**: in the current slice only traces are exported via OTel metrics - only through Prometheus-scrape. Real push metrics are a separate task.
+- **Sampling-config** (`otel.sampler`) - field not entered; the default is hardwired into the code (`ParentBased(AlwaysSample)` in [`shared/obs`](adr/0011-go-layout.md)). Configurable sampler - on the first real request.
+- **Exemplars** (histogram-bucket ↔ trace-id) - post-MVP, does not block MVP.

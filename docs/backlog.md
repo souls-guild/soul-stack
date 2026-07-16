@@ -1,37 +1,37 @@
-# Бэклог отложенных эпиков
+# Backlog of deferred epics
 
-Крупные эпики, по которым принято **решение отложить** (не «open Q», а сознательная пауза с зафиксированным импактом). Здесь — не дизайн и не ADR, а краткая запись: что хотели, почему отложили, какой принят прагматичный обход, и что потребуется при возобновлении.
+Large epics for which a **decision to postpone** was made (not "open Q", but a conscious pause with a recorded impact). Here is not a design or an ADR, but a brief note: what they wanted, why they postponed it, what pragmatic workaround was adopted, and what will be required when resuming.
 
-Возобновление любого эпика отсюда — **отдельным эпиком** с консультацией architect и `propose-and-wait` для всего, что трогает ADR / словарь имён / контракты. Эта страница не отменяет правило «документация впереди кода».
+Resumption of any epic from here - **separate epic** with consultation from architect and `propose-and-wait` for everything that touches ADR / name dictionary / contracts. This page does not change the "documentation before code" rule.
 
-Связанные источники границ беты и GA — [known-limitations.md](known-limitations.md) (что НЕ входит в бету) и [prod-readiness.md](prod-readiness.md) (GA-gap роадмап). Backlog вокруг коллекций модулей живёт отдельно — [module-collections.md](module-collections.md).
+Related sources of beta and GA limits are [known-limitations.md](known-limitations.md) (which is NOT in beta) and [prod-readiness.md](prod-readiness.md) (GA-gap roadmap). The backlog around module collections lives separately - [module-collections.md](module-collections.md).
 
 ---
 
-## Per-service уникальность имени инкарнации (отвязка `incarnation.name` от Coven-метки)
+## Per-service uniqueness of the incarnation name (decoupling `incarnation.name` from the Coven label)
 
-**Статус:** BACKLOG — отложено по решению пользователя 2026-06-25.
+**Status:** BACKLOG - postponed by user decision 2026-06-25.
 
-**Что хотели.** Разрешить **одинаковые имена инкарнаций для разных сервисов** (per-service уникальность): инкарнация `prod` сервиса `redis` и инкарнация `prod` сервиса `postgres` должны сосуществовать. Сейчас это запрещено.
+**What they wanted.** Allow **the same incarnation names for different services** (per-service uniqueness): the `prod` incarnation of the `redis` service and the `prod` incarnation of the `postgres` service must coexist. Now this is prohibited.
 
-**Почему сейчас нельзя (by-design).** `incarnation.name` — глобальный PRIMARY KEY (PG-миграция 005), и это намеренно: имя одновременно служит **корневой Coven-меткой** всех хостов инкарнации ([ADR-008](adr/0008-coven-stable-tags.md)). Следствие, если разрешить дубли имён без отвязки:
+**Why not now (by-design).** `incarnation.name` is a global PRIMARY KEY (PG migration 005), and this is intentional: the name simultaneously serves as the **root Coven label** of all incarnation hosts ([ADR-008](adr/0008-coven-stable-tags.md)). Consequence, if you allow duplicate names without decoupling:
 
-- инкарнация `prod` сервиса `redis` и инкарнация `prod` сервиса `postgres` дают хостам обоих `coven=[prod]`;
-- roster резолвится предикатом `WHERE 'prod' = ANY(coven)` **без разделения по сервису**;
-- таргетинг и `destroy` одной инкарнации зацепят чужие хосты (cross-service) — опасно.
+- incarnation `prod` of service `redis` and incarnation `prod` of service `postgres` give hosts of both `coven=[prod]`;
+- roster is resolved by the predicate `WHERE 'prod' = ANY(coven)` **without separation by service**;
+- targeting and `destroy` of one incarnation will hook other hosts (cross-service) - dangerous.
 
-Поэтому имя обязано быть глобально-уникальным, пока оно одновременно является Coven-меткой.
+Therefore, the name must be globally unique as long as it is also a Coven label.
 
-**Импакт при реализации (оценка architect):**
+**Impact during implementation (architect assessment):**
 
-- amend [ADR-008](adr/0008-coven-stable-tags.md) — отвязать `incarnation.name` от Coven-метки (корневая метка перестаёт совпадать с PK);
-- ввести синтетический incarnation-id (PK), а `(service, name)` сделать composite-уникальностью;
-- composite-FK `(service, name)` на >5 таблицах: `state_history` (006), `apply_runs` (018), `incarnation_choirs` + `incarnation_voices` (060), плюс soft-links `decrees` (041), `tides` (055), `voyages` (059), `incarnation_archive` (039);
-- breaking change Operator API: путь `/v1/incarnations/{name}` → `/v1/incarnations/{service}/{name}` — ломает UI-роутинг, `soulctl` и `types.gen.ts`;
-- ревизия RBAC [Purview](adr/0047-purview.md): `IncarnationScopeSelector` расширяется до `covens ∪ {name}` (а имя больше не уникально глобально).
+- amend [ADR-008](adr/0008-coven-stable-tags.md) - unbind `incarnation.name` from the Coven label (the root label no longer matches the PK);
+- enter a synthetic incarnation-id (PK), and make `(service, name)` composite-unique;
+- composite-FK `(service, name)` on >5 tables: `state_history` (006), `apply_runs` (018), `incarnation_choirs` + `incarnation_voices` (060), plus soft-links `decrees` (041), `tides` (055), `voyages` (059), `incarnation_archive` (039);
+- breaking change Operator API: path `/v1/incarnations/{name}` → `/v1/incarnations/{service}/{name}` - breaks UI routing, `soulctl` and `types.gen.ts`;
+- RBAC revision [Purview](adr/0047-purview.md): `IncarnationScopeSelector` is expanded to `covens ∪ {name}` (and name is no longer globally unique).
 
-**Связанное желаемое end-state (учесть при проработке эпика).** Пользователь хочет иерархию прав вида `<services>.<incarnations>.<other>`; метки [Trait](naming-rules.md) работают по правам **только в рамках своих сервисов** и **сужают** область видимости (сначала «показать инкарнации сервиса», затем сверху ограничить traits). Это пересекается с отложенным slice-ом «RBAC-scope по traits» ([ADR-0060](adr/0060-traits.md): RBAC-scope по traits — пилот включает только таргетинг + метаданные, scope отложен).
+**Related desired end-state (take into account when developing the epic).** The user wants a hierarchy of rights like `<services>.<incarnations>.<other>`; [Trait](naming-rules.md) tags work according to rights **only within the framework of their services** and **narrow** the scope of visibility (first "show service incarnations", then limit traits from above). This intersects with the deferred slice "RBAC-scope by traits" ([ADR-0060](adr/0060-traits.md): RBAC-scope by traits - pilot includes only targeting + metadata, scope is deferred).
 
-**Прагматичный обход (принят сейчас, Вариант A).** Имя инкарнации остаётся глобально-уникальным; уникальность достигается namespace внутри самого имени по схеме `<NS>-<uniq_name>-redis-<cl|s>` — собирается на стороне SD / при `create`. Дубль ловится **существующим** ответом `409 incarnation-exists` ДО провижена VM, то есть до необратимых cloud-операций.
+**Pragmatic workaround (accepted now, Option A).** The incarnation name remains globally unique; uniqueness is achieved by namespace within the name itself according to the scheme `<NS>-<uniq_name>-redis-<cl|s>` - collected on the SD side / at `create`. The duplicate is caught by the **existing** response `409 incarnation-exists` BEFORE the VM is promoted, that is, before irreversible cloud operations.
 
-**При возобновлении:** отдельный эпик + amend [ADR-008](adr/0008-coven-stable-tags.md), `propose-and-wait` (отвязка имени от Coven — смена инварианта словаря и API-контракта).
+**When resuming:** separate epic + amend [ADR-008](adr/0008-coven-stable-tags.md), `propose-and-wait` (unlinking the name from Coven - changing the dictionary invariant and API contract).

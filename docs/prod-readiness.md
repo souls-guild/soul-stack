@@ -1,129 +1,129 @@
-# Prod-readiness — GA-gap роадмап
+# Prod-readiness — GA-gap roadmap
 
-Что **не готово** для продакшена / GA. Бета `v0.1.0-beta.1` выпущена и feature-complete; этот документ — список разрывов между бетой и GA, по результатам по-коду аудита GA-готовности (2026-06-17).
+Which is **not ready** for production/GA. Beta `v0.1.0-beta.1` released and feature-complete; This document is a list of gaps between beta and GA, based on the results of the GA-readiness audit code (2026-06-17).
 
-Двойной источник правды по границам:
+Double source of truth along the boundaries:
 
-- [known-limitations.md](known-limitations.md) — что НЕ входит в **бету** (граница со стороны пользователя беты).
-- **этот файл** — что нужно закрыть до **GA** (граница со стороны прод-готовности).
+- [known-limitations.md](known-limitations.md) - what is NOT included in **beta** (limitation from the beta user side).
+- **this file** - what needs to be closed before **GA** (border on the food-readiness side).
 
-> **Не путать с [roadmap.md](roadmap.md).** `roadmap.md` дрейфует относительно фактического кода и не является источником правды по GA-границам — он будет актуализирован отдельно. При расхождении верить known-limitations.md + этому файлу (оба сверены с кодом).
+> **Not to be confused with [roadmap.md](roadmap.md).** `roadmap.md` drifts relative to the actual code and is not a source of truth along GA boundaries - it will be updated separately. If there is a discrepancy, trust known-limitations.md + this file (both are checked with the code).
 
-## GA-scope решения (зафиксированы 2026-06-17)
+## GA-scope solutions (committed 2026-06-17)
 
-Эти три решения задают рамку: что входит в GA, а что остаётся пост-GA. Они меняют приоритеты пунктов ниже.
+These three decisions set the framework for what goes into GA and what remains post-GA. They re-prioritize the items below.
 
-| Решение | Значение | Следствие для роадмапа |
+| Solution | Meaning | Corollary for roadmap |
 |---|---|---|
-| **Топология кластера** | Эластичный (autoscaling) | Балансировка scale-out (**Shepherd**) поднимается в P0: без неё autoscale бессмыслен (новый инстанс простаивает). |
-| **Cloud-provisioning** | **Пост-GA** (не в GA-scope) | Cloud-CRUD остаётся явным known-limitation, не блокер GA. |
-| **Целевой флот** | **Тысячи** хостов | Audit-партиционирование и готовый мониторинг — P1 (тысячи → ощутимый PG INSERT-rate); полный 100k-ramp — P2. |
+| **Cluster topology** | Elastic (autoscaling) | Balancing scale-out (**Shepherd**) is raised in P0: without it, autoscale is meaningless (the new instance is idle). |
+| **Cloud-provisioning** | **Post-GA** (not in GA-scope) | Cloud-CRUD remains an explicit known-limitation, not a GA blocker. |
+| **Target Fleet** | **Thousands** of hosts | Audit partitioning and ready-made monitoring - P1 (thousands → tangible PG INSERT-rate); full 100k-ramp - P2. |
 
 ---
 
-## P0 — prod-блокеры GA
+## P0 - GA prod-blockers
 
-Без закрытия этих семи пунктов GA выпускать нельзя.
+GA cannot be released without closing these seven points.
 
-### 1. e2e-live (L3b): доказать зелёным + сделать blocking
+### 1. e2e-live (L3b): prove with green + do blocking
 
-Nightly-job `e2e-live` гоняет **реальный `soul`-бинарь в privileged-контейнере** (полный apply/Scry-pipeline), но стоит с `continue-on-error: true` ([.github/workflows/nightly.yml](../.github/workflows/nightly.yml)). Реальный apply может быть сломан незаметно — job не блокирует. Нужно: добиться стабильно зелёного прогона и снять `continue-on-error`, сделав его blocking-гейтом.
+Nightly-job `e2e-live` runs a **real `soul` binary in a privileged container** (full apply/Scry-pipeline), but costs with `continue-on-error: true` ([.github/workflows/nightly.yml](../.github/workflows/nightly.yml)). A real apply can be broken unnoticed - job does not block. You need to: achieve a stable green run and remove `continue-on-error`, making it a blocking gate.
 
 ### 2. Clean-room getting-started (DoD-1)
 
-Живой человек поднимает кластер «с нуля» на **чистой машине** строго по [getting-started.md](getting-started.md) / [operations/deb-onboarding.md](operations/deb-onboarding.md), без подсказок из головы автора. Цель — поймать скрытые предусловия и разрывы в онбординг-доке. Оценка: ~1 человеко-день.
+A living person builds a cluster "from scratch" on a **clean machine** strictly according to [getting-started.md](getting-started.md) / [operations/deb-onboarding.md](operations/deb-onboarding.md), without any hints from the author's head. The goal is to catch hidden preconditions and gaps in the onboarding doc. Estimate: ~1 person-day.
 
-### 3. Release-дистрибуция (supply-chain)
+### 3. Release-distribution (supply-chain)
 
-Релиз сейчас — **ручные `make`-таргеты**; автоматизированного `release.yml` в `.github/workflows/` нет (есть только `ci.yml` / `nightly.yml`).
+Release now - **manual `make`-targets**; there is no automated `release.yml` in `.github/workflows/` (there is only `ci.yml` / `nightly.yml`).
 
-- registry-образы не публикуются;
-- `make sign` — **заглушка** (печатает причину, `exit 0` — [Makefile](../Makefile), [known-limitations.md → Supply-chain](known-limitations.md#supply-chain-подпись-образов-отложена)): реальной cosign/sigstore-подписи нет.
+- registry images are not published;
+- `make sign` - **stub** (prints the reason, `exit 0` - [Makefile](../Makefile), [known-limitations.md → Supply-chain](known-limitations.md#supply-chain-image-signing-delayed)): there is no real cosign/sigstore signature.
 
-Нужен воспроизводимый релиз-pipeline: сборка артефактов → публикация образов в registry → реальная cosign-подпись.
+We need a reproducible release pipeline: assembly of artifacts → publication of images in the registry → real cosign signature.
 
-### 4. Shepherd — балансировка нагрузки при scale-out
+### 4. Shepherd - load balancing with scale-out
 
-Не реализован (**0 кода**, греп по `shepherd` пуст; описан как PLANNED в [operations/scaling.md → Shepherd](operations/scaling.md#shepherd--балансировка-нагрузки-при-scale-out)). При **эластичном кластере** (GA-scope) это P0: новый инстанс после scale-out простаивает до естественного churn-а стримов — autoscale без активного rebalance бессмыслен.
+Not implemented (**0 code**, grep on `shepherd` is empty; described as PLANNED in [operations/scaling.md → Shepherd](operations/scaling.md)). With an **elastic cluster** (GA-scope) this is P0: the new instance after scale-out is idle until the natural churn of streams - autoscale without active rebalance is meaningless.
 
-### 5. recovery-lease (`reclaim_apply_runs`) live под крашем инстанса
+### 5. recovery-lease (`reclaim_apply_runs`) live under instance crash
 
-Правило `reclaim_apply_runs` (Reaper подбирает зависшие после краша Keeper-инстанса прогоны) реализовано ([keeper/internal/reaper/](../keeper/internal/reaper/voyage_reclaim.go)), но **disabled-by-default**, и его поведение под реальным крашем инстанса **не доказано live** (runbook есть — [operations/recovery-reclaim-apply-runs.md](operations/recovery-reclaim-apply-runs.md), [known-limitations.md → Recovery](known-limitations.md#recovery-прерванных-прогонов--выключено-по-умолчанию)). На multi-keeper GA-кластере правило **обязательно ON**: иначе при краше инстанса прогоны зависают в `applying`. Нужно: live-валидация под убийством инстанса + перевод в ON для multi-keeper.
+Rule `reclaim_apply_runs` (Reaper picks up runs stuck after a Keeper instance crash) is implemented ([keeper/internal/reaper/](../keeper/internal/reaper/voyage_reclaim.go)), but **disabled-by-default**, and its behavior under a real instance crash **has not been proven live** (there is a runbook - [operations/recovery-reclaim-apply-runs.md](operations/recovery-reclaim-apply-runs.md), [known-limitations.md → Recovery](known-limitations.md#recovery-of-interrupted-runs---disabled-by-default)). On a multi-keeper GA cluster, the rule **must be ON**: otherwise, if the instance crashes, runs hang in `applying`. Needed: live validation after killing an instance + switching to ON for multi-keeper.
 
-### 6. Внешний pentest + identity-пробелы
+### 6. External pentest + identity spaces
 
-- Независимый **внешний pentest** не проводился ([known-limitations.md → pentest](known-limitations.md#внешний-pentest--не-проводился-внутренний-gate-достаточен-для-беты)); для GA — обязателен.
-- **Нет немедленного отзыва JWT** до `exp`: после `revoke` Архонта его токены живут до истечения, аварийный отзыв — только ротацией signing-key ([known-limitations.md → Identity](known-limitations.md#identity-оператора-только-jwt)).
-- **mTLS-cert identity оператора** — пост-MVP ([ADR-014](adr/0014-operator-identity.md)); для GA закрыть либо немедленный revoke, либо machine-identity.
+- Independent **external pentest** was not performed ([known-limitations.md → pentest](known-limitations.md#external-pentest---not-carried-out-internal-gate-is-sufficient-for-beta)); for GA - required.
+- **No immediate JWT revocation** before `exp`: after `revoke` Archon its tokens live until expiration, emergency revocation - only by signing-key rotation ([known-limitations.md → Identity](known-limitations.md#operator-identity-jwt-only)).
+- **mTLS-cert identity operator** - post-MVP ([ADR-014](adr/0014-operator-identity.md)); for GA close either immediate revoke or machine-identity.
 
-### 7. Снять `continue-on-error: true` с трёх классов проверок в CI
+### 7. Remove `continue-on-error: true` from three check classes in CI
 
-Сейчас informational (не блокируют merge) — структурный риск, тихий регресс не остановит PR:
+Now informational (merge is not blocked) - structural risk, quiet regression will not stop PR:
 
-| Job | Файл | Что не блокирует |
+| Job | File | What doesn't block |
 |---|---|---|
-| `integration` (testcontainers) | [ci.yml](../.github/workflows/ci.yml) | Интеграционные тесты |
-| `govulncheck` | [ci.yml](../.github/workflows/ci.yml) | Сканер уязвимостей Go-модулей |
-| `e2e-live` | [nightly.yml](../.github/workflows/nightly.yml) | Реальный apply/Scry (см. P0-1) |
+| `integration` (testcontainers) | [ci.yml](../.github/workflows/ci.yml) | Integration tests |
+| `govulncheck` | [ci.yml](../.github/workflows/ci.yml) | Go Module Vulnerability Scanner |
+| `e2e-live` | [nightly.yml](../.github/workflows/nightly.yml) | Real apply/Scry (see P0-1) |
 
-Для GA эти три класса должны быть blocking (с предварительной стабилизацией flaky — см. P1).
-
----
-
-## P1 — hardening (до GA, после P0)
-
-- **Audit-партиционирование** `audit_log` по `created_at` (declarative partitioning / BRIN — [ADR-022](adr/0022-audit-pipeline.md)). Флот «тысячи» → ощутимый PG INSERT-rate (нагрузка показала ≈2 INSERT/хост на Voyage — [load-testing.md §8.3](testing/load-testing.md#83-ось-c--voyage-по-флоту)).
-- **Готовые Grafana-дашборды + Prometheus-алерты** — в репо отсутствуют; метрики/OTel публикуются ([observability.md](observability.md)), но out-of-box наблюдаемости нет.
-- **MCP-полнота** — Cadence и Audit-read без MCP-tool-ов; `keeper.soul.list` / `keeper.push.cleanup` — `not_implemented`-stub ([known-limitations.md → MCP](known-limitations.md#mcp-не-покрывает-все-домены)).
-- **Multi-keeper нагруз-прогон shard-буфера `applybus`** — фикс maxclients-cliff (sharded-каналы) не проверен на cross-keeper-пути под нагрузкой.
-- **Стабилизация flaky integration-тестов** (≈6 в `keeper/internal/api`, order-dependent / auth-race) — сейчас не карантинены; нужны до того, как `integration` станет blocking (P0-7).
-- **Voyage presence-резолв → Redis-lease** вместо PG `souls.status` (инвариант «горячее → Redis», не синхронный PG-write на горячем пути).
-- **Push: Teleport `proxy_jump`** — не доделан (узкий профиль push — [known-limitations.md → Push](known-limitations.md#push-agentless-по-ssh--узкий-профиль)).
-- **SoulBeacon live-loop e2e** + UI `/oracle/fires` — backend `GET /v1/oracle/fires` не реализован, страница-заглушка ([known-limitations.md → /oracle/fires](known-limitations.md#ui-oraclefires--заглушка)).
-- **DR**: отработать `restore` на staging + CLI-команды `keeper --check-config` / `conclave-evict` / `issue-token` (в `soulctl` сейчас нет — [soulctl/](../soulctl/README.md)).
-- **Cloud-CRUD → явный known-limitation** (пост-GA): 6 CloudDriver-плагинов есть, но нет REST `/v1/providers` — операционально недоступен ([known-limitations.md → Cloud-provisioning](known-limitations.md#cloud-provisioning--не-в-бете)).
-- **Coverage-report** в CI (видимость покрытия; жёсткий gate — P2).
+For GA, these three classes must be blocking (with preliminary stabilization by flaky - see P1).
 
 ---
 
-## P2 — nice-to-have (можно пост-GA)
+## P1 — hardening (before GA, after P0)
 
-- **100k-нагруз-прогон** (Ф2: распределённый harness) — для целевых «тысяч» 25k стримов покрыты с запасом расчётом ([load-testing.md §6](testing/load-testing.md), Ф2 — бэклог).
-- **Conclave-метрики** (`keeper_conclave_*`).
+- **Audit partitioning** `audit_log` by `created_at` (declarative partitioning / BRIN - [ADR-022](adr/0022-audit-pipeline.md)). Fleet of "thousands" → noticeable PG INSERT-rate (load showed ≈2 INSERT/host on Voyage - [load-testing.md §8.3](testing/load-testing.md)).
+- **Ready-made Grafana dashboards + Prometheus alerts** - not available in the repo; metrics/OTel are published ([observability.md](observability.md)), but there is no out-of-box observability.
+- **MCP-completeness** - Cadence and Audit-read without MCP tools; `keeper.soul.list` / `keeper.push.cleanup` - `not_implemented`-stub ([known-limitations.md → MCP](known-limitations.md#mcp-does-not-cover-all-domains)).
+- **Multi-keeper load-run shard buffer `applybus`** - fix maxclients-cliff (sharded channels) is not checked for cross-keeper paths under load.
+- **Stabilization of flaky integration tests** (≈6 in `keeper/internal/api`, order-dependent / auth-race) - not currently quarantined; needed before `integration` becomes blocking (P0-7).
+- **Voyage presence-resolve → Redis-lease** instead of PG `souls.status` (hot → Redis invariant, non-synchronous PG-write on hot path).
+- **Push: Teleport `proxy_jump`** - not completed (narrow push profile - [known-limitations.md → Push](known-limitations.md#push-agentless-via-ssh---narrow-profile)).
+- **SoulBeacon live-loop e2e** + UI `/oracle/fires` - backend `GET /v1/oracle/fires` not implemented, stub page ([known-limitations.md → /oracle/fires](known-limitations.md#ui-oraclefires---stub)).
+- **DR**: work on `restore` for staging + CLI commands `keeper --check-config` / `conclave-evict` / `issue-token` (not in `soulctl` now - [soulctl/](../soulctl/README.md)).
+- **Cloud-CRUD → explicit known-limitation** (post-GA): 6 CloudDriver plugins are available, but not REST `/v1/providers` - operationally unavailable ([known-limitations.md → Cloud-provisioning](known-limitations.md#cloud-provisioning---not-in-beta)).
+- **Coverage-report** in CI (coverage visibility; hard gate - P2).
+
+---
+
+## P2 - nice-to-have (possible post-GA)
+
+- **100k-load-run** (F2: distributed harness) - for the target "thousands" 25k streams are covered with a reserve calculation ([load-testing.md §6](testing/load-testing.md), F2 - backlog).
+- **Conclave-metrics** (`keeper_conclave_*`).
 - **Reproducible builds** (`SOURCE_DATE_EPOCH`).
-- **Hard coverage-gate** (порог покрытия блокирует merge).
-- **Soul auto-upgrade флота** — уточнить механизм самообновления `soul`-агентов.
+- **Hard coverage-gate** (the coverage threshold blocks merge).
+- **Soul auto-upgrade fleet** - clarify the self-upgrade mechanism for `soul` agents.
 
 ---
 
-## Сильные места (готово, не стабы)
+## Strong points (ready, not stubs)
 
-Чтобы роадмап не читался как «ничего не готово» — это уже работает реально, не заглушки:
+So that the roadmap does not read as "nothing is ready" - this already works for real, not stubs:
 
-- **Сквозные возможности** — метрики, OTel, hot-reload + writeback конфига, ротация логов, Vault-интеграция, RBAC, OpenAPI — реализованы и работают ([requirements.md](requirements.md), [observability.md](observability.md)).
-- **Ядро** — pull-режим (агент-демон `soul`), scenario-DSL, Voyage (батч по флоту), Scry (probe), RBAC — готовы и доказаны на живом стенде.
-- **SBOM** (CycloneDX, `make sbom` — [Makefile](../Makefile)) — готов (в отличие от подписи).
-- **Module-path rename** на `github.com/souls-guild/soul-stack` — выполнен.
-
----
-
-## Доказанная нагрузка
-
-Источник правды — [testing/load-testing.md](testing/load-testing.md) (Ф0 + Ф1 **измерены до N=25000** на живом стенде 2026-06-17, 24 vCPU/30 GiB, 1 keeper-инстанс; полный 100k-ramp — расчётный, Ф2).
-
-- **Keeper линеен по стримам** до измеренного N=25000 коннектов (connect p99 ≤ 185 ms, 0 ошибок); per-soul прирост RSS ≈ **0.12 MiB/душу** на N=10k–25k (приростной коэффициент, не абсолют — [§8.1](testing/load-testing.md#8-измеренные-результаты-ф0--ф1-2026-06-17)).
-- **Экстраполяция на 100k по коэффициенту** ≈ 11–12 GiB RSS → **3–4 инстанса** на 100k по модели (в бюджете [scaling.md → Sizing](operations/scaling.md#sizing-infrastructure-под-100k-vm-приблизительно)); cliff на ≤ 25k **не достигнут**, точный per-soul под 100k остаётся задачей Ф2.
-- **Предел single-host** — зонд 50k упёрся в ≈ 28222 стрима (исчерпание эфемерных портов loopback на стороне harness-а, **не Keeper**); истинный 50k+ → распределённый генератор (Ф2).
-- **Read-API** держит с запасом: `GET /v1/souls` 3476→1488 rps по росту флота, p99 < 140 ms; каталоги p99 < 5 ms. **Write-ось** ≈ 234 rps p99 5–7 ms под 25k-флотом.
-- **applybus maxclients-fix** (holder-skip + sharded-каналы, `fec7e02`) устранил cliff на ~10k command-Voyage (до фикса 10k не финализировал вовсе); cross-keeper-проверка под нагрузкой — P1.
-- **Tempo-preview rate-limit развязан** (`34d85a9`, bucket `voyage_preview` 30/60) — preview ≈ 10 → 33 rps.
+- **End-to-end capabilities** - metrics, OTel, hot-reload + writeback config, log rotation, Vault integration, RBAC, OpenAPI - implemented and working ([requirements.md](requirements.md), [observability.md](observability.md)).
+- **Core** - pull mode (daemon agent `soul`), scenario-DSL, Voyage (fleet batch), Scry (probe), RBAC - ready and proven on a live stand.
+- **SBOM** (CycloneDX, `make sbom` - [Makefile](../Makefile)) - ready (as opposed to signature).
+- **Module-path rename** to `github.com/souls-guild/soul-stack` - done.
 
 ---
 
-## См. также
+## Proven load
 
-- [known-limitations.md](known-limitations.md) — границы беты (со стороны пользователя).
-- [testing/load-testing.md](testing/load-testing.md) — измеренная нагрузка + план Ф2.
-- [operations/scaling.md](operations/scaling.md) — sizing, узкие места, Shepherd / Conclave / Acolyte.
-- [security/threat-model.md](security/threat-model.md) — статус внутреннего security-gate и внешнего pentest.
-- [RELEASING.md](../RELEASING.md) — процедура релиза (docs-currency gate, теги).
+Source of truth - [testing/load-testing.md](testing/load-testing.md) (F0 + F1 **measured up to N=25000** on a live test bench 2026-06-17, 24 vCPU/30 GiB, 1 keeper instance; full 100k-ramp - calculated, F2).
+
+- **Keeper is linear in streams** up to a measured N=25000 connections (connect p99 ≤ 185 ms, 0 errors); per-soul RSS increase ≈ **0.12 MiB/soul** for N=10k–25k (increase coefficient, not absolute - [§8.1](testing/load-testing.md)).
+- **Extrapolation to 100k by factor** ≈ 11–12 GiB RSS → **3–4 instances** per 100k by model (in the budget [scaling.md → Sizing](operations/scaling.md)); cliff at ≤ 25k **not achieved**, exact per-soul under 100k remains an F2 task.
+- **Single-host limit** — the 50k probe reached ≈ 28222 streams (exhaustion of ephemeral loopback ports on the harness side, **not Keeper**); true 50k+ → distributed generator (F2).
+- **Read-API** holds with a reserve: `GET /v1/souls` 3476→1488 rps for fleet growth, p99 < 140 ms; directories p99 < 5 ms. **Write-axis** ≈ 234 rps p99 5–7 ms under 25k fleet.
+- **applybus maxclients-fix** (holder-skip + sharded channels, `fec7e02`) eliminated cliff on ~10k command-Voyage (did not finalize 10k at all before the fix); cross-keeper test under load - P1.
+- **Tempo-preview rate-limit untied** (`34d85a9`, bucket `voyage_preview` 30/60) — preview ≈ 10 → 33 rps.
+
+---
+
+## See also
+
+- [known-limitations.md](known-limitations.md) - beta limits (from the user side).
+- [testing/load-testing.md](testing/load-testing.md) - measured load + F2 plan.
+- [operations/scaling.md](operations/scaling.md) - sizing, bottlenecks, Shepherd / Conclave / Acolyte.
+- [security/threat-model.md](security/threat-model.md) — status of internal security-gate and external pentest.
+- [RELEASING.md](../RELEASING.md) - release procedure (docs-currency gate, tags).

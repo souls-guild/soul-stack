@@ -1,31 +1,31 @@
-Требования проекта:
-- МОДУЛЬНАЯ ИНФРАСТРУКТУРА
-Это значит, что надо стараться разделять какие-то глобальные вещи на отдельные папки и сущности, в финале возможно даже бинаре
+Project requirements:
+- MODULAR INFRASTRUCTURE
+This means that you need to try to separate some global things into separate folders and entities, in the end perhaps even a binary
 
 
-Общие требования:
-- У всех публикация метрик
-- Поддержка OpenTelemetry из коробки
-- Поддержка HotRealod config
-- Горячее изменение конфигурации
-- Перезапись конфигурации на диске после применения
-- Встроеная ротация логов по умолчанию
-- БЕЗОПАСТНОСТЬ на первом месте
-- Интеграция с Vault (обязательная инфраструктурная зависимость наравне с PostgreSQL/Redis — [ADR-053](adr/0053-dependency-tiers.md#adr-053-tier-ы-инфраструктурных-зависимостей); интеграция из коробки)
-- Встроенная поддержка RBAC
-- Встроенная поддеркжа MCP
-- Встроенная поддержка OpenAPI
-- Backend-driven dynamic data в UI: companion-web не хардкодит динамические каталоги (permissions, модули, статусы, ключи селекторов) — backend отдаёт их каталог-эндпоинтами OpenAPI, UI фетчит. См. [ADR-042](adr/0042-backend-driven-ui.md#adr-042-backend-driven-dynamic-data-в-ui--ui-не-хардкодит-динамические-каталоги).
-- Защита от resolver-DoS со стороны оператора: per-AID rate-limit (**Tempo**) на resolver-тяжёлые write-эндпоинты — **третий anti-DoS-слой** после body-limit и [Toll](adr/0038-toll.md#adr-038-toll--cluster-wide-detector-массового-оттока-souls). Redis token-bucket per-AID, fail-OPEN при недоступном Redis (availability > перестраховка). См. [ADR-050](adr/0050-tempo.md#adr-050-tempo--per-aid-rate-limiting-write-api).
+General requirements:
+- Everyone publishes metrics
+- OpenTelemetry support out of the box
+- HotRealod config support
+- Hot configuration change
+- Overwriting configuration on disk after application
+- Built-in log rotation by default
+- SAFETY FIRST
+- Integration with Vault (mandatory infrastructure dependency along with PostgreSQL/Redis - [ADR-053](adr/0053-dependency-tiers.md); integration out of the box)
+- Built-in RBAC support
+- Built-in MCP support
+- Built-in OpenAPI support
+- Backend-driven dynamic data in the UI: companion-web does not hardcode dynamic directories (permissions, modules, statuses, selector keys) - the backend gives them to OpenAPI directory endpoints, the UI fetches them. See [ADR-042](adr/0042-backend-driven-ui.md).
+- Protection against resolver-DoS from the operator: per-AID rate-limit (**Tempo**) for resolver-heavy write endpoints - **third anti-DoS layer** after body-limit and [Toll](adr/0038-toll.md). Redis token-bucket per-AID, fail-OPEN when Redis is unavailable (availability > reinsurance). See [ADR-050](adr/0050-tempo.md#adr-050-tempo--per-aid-rate-limiting-write-api).
 
-Security-предпосылки (модель угроз):
-- Vault — внешний доверенный secret-store; Keeper хранит только клиентский доступ к нему, секреты на диск Keeper-кластера не материализуются.
-- Транспорт Keeper↔Soul — mTLS; авторитет идентичности Soul — peer-cert, не payload (ADR-012).
-- RBAC — авторитетный источник прав; JWT-roles informational, authz перепроверяется по БД-снимку при каждом запросе (ADR-028).
-- Redis — ДОВЕРЕННЫЙ внутрикластерный канал. На нём держатся RBAC-инвалидация (топик `rbac:invalidate`, B2) и SSE cluster-bridge (forward apply-событий между Keeper-инстансами). Envelope этих сообщений НЕ аутентифицируется: подделка сообщения в худшем случае форсирует лишний перечит из БД (инвалидация) или доставку apply-события, которое всё равно проходит RBAC-проверку подписки на приёмном инстансе, — инъекция прав через Redis невозможна. Предпосылка: Redis находится внутри доверенного периметра (private network, mTLS/ACL на стороне Redis-деплоя). При выходе Redis за доверенный периметр — обязателен HMAC-подписанный envelope для обоих каналов (отложено до появления такого требования).
+Security prerequisites (threat model):
+- Vault - external trusted secret-store; Keeper stores only client access to it; secrets are not materialized on the Keeper cluster disk.
+- Transport Keeper↔Soul - mTLS; Soul identity authority - peer-cert, not payload (ADR-012).
+- RBAC is an authoritative source of rights; JWT-roles informational, authz is rechecked against a DB snapshot with each request (ADR-028).
+- Redis is a TRUSTED intra-cluster channel. It supports RBAC invalidation (topic `rbac:invalidate`, B2) and SSE cluster-bridge (forward apply events between Keeper instances). The envelope of these messages is NOT authenticated: falsifying a message in the worst case forces an unnecessary reread from the database (invalidation) or the delivery of an apply event, which still passes the RBAC subscription check on the receiving instance - injection of rights through Redis is impossible. Prerequisite: Redis is located inside a trusted perimeter (private network, mTLS/ACL on the Redis deployment side). When Redis leaves the trusted perimeter, an HMAC-signed envelope is required for both channels (postponed until such a requirement becomes available).
 
-Требования Keeper:
+Keeper Requirements:
 - 
 
-Требования Souls:
+Souls Requirements:
 - 

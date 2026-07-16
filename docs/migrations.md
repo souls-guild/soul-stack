@@ -1,21 +1,21 @@
 # State_schema migration DSL
 
-Нормативная спецификация формата `migrations/<NNN>_to_<MMM>.yml` в service-репозитории. Источник правды по решению — [ADR-019](adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl). Этот документ — грамматика, разрешённые CEL-функции в migration-контексте, конвенция тестов, примеры.
+Normative specification of the `migrations/<NNN>_to_<MMM>.yml` format in the service repository. The source of truth for the solution is [ADR-019](adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl). This document contains a grammar, allowed CEL functions in a migration context, test convention, examples.
 
-## Назначение
+## Purpose
 
-State_schema-миграция преобразует `incarnation.state` (jsonb в Postgres) с версии N на N+1 при upgrade сервиса (`keeper.incarnation.upgrade name=X to_version=v...`). Миграция — это **чистая функция `state_v<N> → state_v<M>`** без хостовых side-effects, выполняется на keeper-стороне в одной PG-транзакции (см. [ADR-019](adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl) разделы (c) атомарность и (e) безопасность).
+State_schema migration converts `incarnation.state` (jsonb in Postgres) from version N to N+1 when upgrading the service (`keeper.incarnation.upgrade name=X to_version=v...`). Migration is a **pure function `state_v<N> → state_v<M>`** without host side-effects, performed on the keeper side in a single PG transaction (see [ADR-019](adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl) sections (c) atomicity and (e) security).
 
-## Раскладка файла
+## File layout
 
-`<service-repo>/migrations/<NNN>_to_<MMM>.yml` — один файл = один шаг миграции. Цепочка `001 → 002 → 003 → ...` прогоняется keeper-ом последовательно при upgrade.
+`<service-repo>/migrations/<NNN>_to_<MMM>.yml` - one file = one migration step. The `001 → 002 → 003 → ...` chain is run sequentially by the keeper during upgrade.
 
 ```
 redis/
 ├── service.yml                            # state_schema_version: 2
 ├── migrations/
-│   ├── 001_to_002.yml                     # описанный ниже формат
-│   └── 001_to_002/                        # тесты этой миграции
+│   ├── 001_to_002.yml                     # format described below
+│   └── 001_to_002/                        # tests this migration
 │       └── tests/
 │           ├── users-list-to-map.yml
 │           ├── single-user.yml
@@ -24,32 +24,32 @@ redis/
 └── ...
 ```
 
-Имя файла: `NNN_to_MMM.yml` — три цифры с ведущими нулями, разделитель `_to_`.
+File name: `NNN_to_MMM.yml` - three digits with leading zeros, delimiter `_to_`.
 
-## Структура файла
+## File structure
 
 ```yaml
 from_version: 1
 to_version: 2
 
 description: >
-  Переход с массива redis_users[] на map redis_users{name: {acl, state}}
-  для поддержки per-user ACL и enabled/disabled-флага.
+Transition from redis_users[] array to map redis_users{name: {acl, state}}
+to support per-user ACL and enabled/disabled flag.
 
-# Список операций. Применяются в порядке. Каждая операция видит state,
-# мутированный предыдущими операциями той же миграции.
+# List of operations. Apply in order. Each operation sees state,
+# mutated by previous operations of the same migration.
 transform:
-  # Атомарные операции:
+  # Atomic operations:
   - rename: { from: state.redis_users, to: state.redis_users_legacy_v1 }
 
-  # CEL-выражения в значениях set:
+  # CEL expressions in set values:
   - set:
       path: state.maxmemory_bytes
       value: "${ int(state.maxmemory_mb) * 1048576 }"
 
   - delete: { path: state.maxmemory_mb }
 
-  # Итерация по коллекции через структурный foreach.
+  # Iterate through a collection using a structured foreach.
   - foreach: "${ state.redis_users_legacy_v1 }"
     as: user_name
     do:
@@ -62,89 +62,89 @@ transform:
   - delete: { path: state.redis_users_legacy_v1 }
 ```
 
-## Операции `transform:`
+## Operations `transform:`
 
-| Операция | Параметры | Семантика |
+| Operation | Options | Semantics |
 |---|---|---|
-| **`rename`** | `from: <path>`, `to: <path>` | Переместить значение из `from` в `to`. Если `to` уже существует — ошибка (явный `delete` перед rename). |
-| **`set`** | `path: <path>`, `value: <yaml>` либо `<CEL-выражение>` | Записать `value` в `path`. Если ключ существует — перезаписывается. `value` может быть литералом YAML (map/list/scalar) либо CEL-выражением через `${ … }` либо вложенной структурой со встроенными `${ … }`-интерполяциями. |
-| **`delete`** | `path: <path>` | Удалить значение по `path`. Если не существует — no-op (не ошибка). |
-| **`move`** | `from: <path>`, `to: <path>` | Алиас для `rename` (исторический; одинаковая семантика). |
-| **`foreach`** | `in: <CEL-выражение>` (либо краткая форма `foreach: <CEL-выражение>`), `as: <var-name>`, `do: [<operation>, ...]` | Структурный цикл: итерация по списку/значениям map-а, на каждом шаге `<var-name>` биндится к текущему элементу. `do:` — вложенный transform-список. Внутри `do:` доступны `<var-name>` и весь текущий `state.*`. |
+| **`rename`** | `from: <path>`, `to: <path>` | Move the value from `from` to `to`. If `to` already exists, an error occurs (explicit `delete` before rename). |
+| **`set`** | `path: <path>`, `value: <yaml>` or `<CEL expression>` | Write `value` to `path`. If the key exists, it is overwritten. `value` can be a YAML literal (map/list/scalar) or a CEL expression via `${ … }` or a nested structure with built-in `${ … }` interpolations. |
+| **`delete`** | `path: <path>` | Remove value by `path`. If it does not exist, no-op (not an error). |
+| **`move`** | `from: <path>`, `to: <path>` | Alias ​​for `rename` (historical; same semantics). |
+| **`foreach`** | `in: <CEL expression>` (or short form `foreach: <CEL expression>`), `as: <var-name>`, `do: [<operation>, ...]` | Structural loop: iteration through the list/map values, at each step `<var-name>` is bound to the current element. `do:` - nested transform list. Inside `do:`, `<var-name>` and the entire current `state.*` are available. |
 
-**Список операций сейчас закрыт** (`rename`/`set`/`delete`/`move`/`foreach`). Условный `if:`-ключ — на post-MVP (см. [ADR-019](adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl), вариант (c) target).
+**Transaction list is now closed** (`rename`/`set`/`delete`/`move`/`foreach`). Conditional `if:` key - on post-MVP (see [ADR-019](adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl), option (c) target).
 
-## Адресация — `path:`
+## Addressing - `path:`
 
-Точечная нотация от корня state-объекта: `state.foo`, `state.bar.baz`, `state.users.${ name }.acl`.
+Dot notation from the root of the state object: `state.foo`, `state.bar.baz`, `state.users.${ name }.acl`.
 
-- Префикс `state.` обязателен (явное указание области).
-- Сегменты пути — буквы/цифры/`_`/`-` или `${ <CEL> }`-интерполяция.
-- Доступ к элементу массива по индексу: `state.hosts.0.ip` (в MVP не используется в примерах — добавится при необходимости).
+- The `state.` prefix is ​​required (explicit scope).
+- Path segments are letters/numbers/`_`/`-` or `${ <CEL> }`-interpolation.
+- Access to an array element by index: `state.hosts.0.ip` (in MVP it is not used in the examples - it will be added if necessary).
 
-## CEL в migration-контексте
+## CEL in the migration context
 
-Любое значение в `set.value`, `foreach.in`, `path:` поддерживает CEL-выражения через маркер `${ … }` ([ADR-010](adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов)).
+Any value in `set.value`, `foreach.in`, `path:` supports CEL expressions through the `${ … }` marker ([ADR-010](adr/0010-templating.md)).
 
-### Доступные переменные
+### Available variables
 
-| Имя | Тип | Семантика |
+| Name | Type | Semantics |
 |---|---|---|
-| `state` | object | Текущий state (мутируемый по ходу операций). Корневое значение `incarnation.state`. |
+| `state` | object | Current state (mutated during operations). The root value is `incarnation.state`. |
 
-Внутри `foreach.do[*]` дополнительно:
+Inside `foreach.do[*]` additionally:
 
-| Имя | Тип | Семантика |
+| Name | Type | Semantics |
 |---|---|---|
-| `<as-name>` | dyn | Текущий элемент итерации (значение, если `in` — map; элемент списка, если `in` — list). |
+| `<as-name>` | dyn | The current element of the iteration (value if `in` is map; list element if `in` is list). |
 
-### Доступные CEL-функции
+### Available CEL functions
 
-Стандартные CEL-функции (`int`, `string`, `bool`, `size`, `has`, comprehensions `map`/`filter`/`all`/`exists`/`exists_one`) + операторы (`+`/`-`/`*`/`/`/`==`/`!=`/`<`/`>`/`<=`/`>=`/`&&`/`||`/`!`/`in`/`?:`).
+Standard CEL functions (`int`, `string`, `bool`, `size`, `has`, comprehensions `map`/`filter`/`all`/`exists`/`exists_one`) + operators (`+`/`-`/`*`/`/`/`==`/`!=`/`<`/`>`/`<=`/`>=`/`&&`/`||`/`!`/`in`/`?:`).
 
-migration-CEL — sandbox с минимальной surface area: только stdlib (объявлена лишь переменная `state`). `glob()`/`merge()`/`default()` и любые pure-расширения обычного CEL здесь **не** зарегистрированы (расширение требует отдельного ADR). `keys()`/`values()` в этом списке **нет** — их в migration-CEL нет, `${ keys(...) }` падает на компиляции (`undeclared reference`).
+migration-CEL - sandbox with minimal surface area: stdlib only (only the variable `state` is declared). `glob()`/`merge()`/`default()` and any pure extensions of regular CEL are **not** registered here (the extension requires a separate ADR). `keys()`/`values()` is **not in this list** - they are not in migration-CEL, `${ keys(...) }` crashes during compilation (`undeclared reference`).
 
-Для итерации по map используется нативный макрос `.map()` **над самим map-ом**: он обходит **ключи** (элемент итерации = ключ), значение достаётся индексом `m[k]`. Так свёртывается `map → array` без `keys()` — см. миграцию [`examples/service/redis/migrations/005_to_006.yml`](../examples/service/redis/migrations/005_to_006.yml) (`state.redis_users.map(n, {'name': n, 'perms': state.redis_users[n].perms, ...})`).
+To iterate through the map, the native macro `.map()` **above the map itself** is used: it bypasses the **keys** (iteration element = key), the value is obtained by the index `m[k]`. This is how `map → array` is collapsed without `keys()` - see migration [`examples/service/redis/migrations/005_to_006.yml`](../examples/service/redis/migrations/005_to_006.yml) (`state.redis_users.map(n, {'name': n, 'perms': state.redis_users[n].perms, ...})`).
 
-### Запрещено в migration-CEL
+### Not allowed in migration-CEL
 
-| Имя | Почему |
+| Name | Why |
 |---|---|
-| `vault(...)` | Миграция не должна тянуть секреты. |
-| `now()` | Для воспроизводимости тестов. |
-| `register.*` | Нет хост-контекста (миграция — keeper-side). |
-| `soulprint.*` | Аналогично. |
-| `essence.*` | Миграция должна быть чистой функцией от старого state, не зависеть от текущего essence. |
-| `input.*` | Миграция не принимает оператор-параметров (только `state`). |
-| Любые user-defined CEL-функции | Sandbox by design. |
+| `vault(...)` | Migration should not involve secrets. |
+| `now()` | For test reproducibility. |
+| `register.*` | There is no host context (migration - keeper-side). |
+| `soulprint.*` | Likewise. |
+| `essence.*` | Migration should be a pure function of the old state, not dependent on the current essence. |
+| `input.*` | Migration does not accept operator-parameters (only `state`). |
+| Any user-defined CEL functions | Sandbox by design. |
 
 ## Reverse / downgrade
 
-В MVP — **только forward**. Восстановление при инциденте — через `state_history` snapshot (см. [`docs/architecture.md → state_history`](architecture.md#state_history--журнал-изменений-state)).
+In MVP - **forward only**. Incident recovery is via `state_history` snapshot (see [`docs/architecture.md → state_history`](architecture.md#state_history--state-change-log)).
 
-Optional `down:` блок в migration-файле может быть добавлен post-MVP без breaking change. Текущая грамматика этот блок не поддерживает.
+Optional `down:` block in the migration file can be added post-MVP without breaking change. The current grammar does not support this block.
 
-## Атомарность
+## Atomicity
 
-Цепочка миграций `<from_version>` → `<to_version>` keeper выполняет в **одной PG-транзакции**:
+The migration chain `<from_version>` → `<to_version>` keeper executes in **one PG transaction**:
 
 1. `BEGIN`.
 2. `SELECT state, state_schema_version FROM incarnation WHERE name = ? FOR UPDATE`.
-3. Применить миграции последовательно в памяти (Go): `state_v1 → state_v2 → state_v3 → ...`.
-4. На каждом шаге `INSERT INTO state_history (state_before, state_after, scenario, changed_by_aid, ...)` с `scenario: "migration"`.
+3. Apply migrations sequentially in memory (Go): `state_v1 → state_v2 → state_v3 → ...`.
+4. At each step `INSERT INTO state_history (state_before, state_after, scenario, changed_by_aid, ...)` with `scenario: "migration"`.
 5. `UPDATE incarnation SET state = ?, state_schema_version = ?, service_version = ?`.
 6. `COMMIT`.
 
-При фейле любого шага — `ROLLBACK`, incarnation помечается `status: migration_failed` ([architecture.md → §«Versioning и миграции state_schema»](architecture.md#versioning-и-миграции-state_schema)).
+If any step fails - `ROLLBACK`, the incarnation is marked `status: migration_failed` ([architecture.md → §"Versioning and migration state_schema"](architecture.md#versioning-and-state_schema-migrations)).
 
-## Тестирование
+## Testing
 
-Тесты миграции живут в `migrations/<NNN_to_MMM>/tests/<case>.yml`. Формат:
+Migration tests live in `migrations/<NNN_to_MMM>/tests/<case>.yml`. Format:
 
 ```yaml
 name: redis-users-array-to-map
 description: >
-  Базовый случай: массив имён переходит в map с per-user ACL.
+Base case: an array of names goes into a map with a per-user ACL.
 
 state_before:
   redis_users: ["app", "monitor"]
@@ -157,19 +157,19 @@ state_after:
   maxmemory_bytes: 536870912
 ```
 
-Тест:
-1. Загружает `state_before` как `state`.
-2. Применяет операции миграции.
-3. Сверяет получившийся `state` с `state_after` (deep-equal).
+Test:
+1. Loads `state_before` as `state`.
+2. Applies migration operations.
+3. Checks the resulting `state` against `state_after` (deep-equal).
 
-Запускается через `soul-trial <service-repo>/migrations/<NNN_to_MMM>/` ([ADR-023](adr/0023-trial-test-runner.md#adr-023-тест-раннер-trial-soul-trial-и-dsl-coverage): «исполняет → soul-trial», в отличие от чисто статического `soul-lint`). Механика раннера — отдельная задача после spec'и.
+Triggered via `soul-trial <service-repo>/migrations/<NNN_to_MMM>/` ([ADR-023](adr/0023-trial-test-runner.md): "executes → soul-trial", as opposed to the purely static `soul-lint`). The runner mechanics are a separate task after the spec.
 
-## Связанные документы
+## Related Documents
 
-- [ADR-019 в `docs/architecture.md`](adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl) — фиксация решения.
-- [ADR-009 в `docs/architecture.md`](adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация) — старое упоминание плоского DSL (теперь заменено ADR-019).
-- [ADR-010 в `docs/architecture.md`](adr/0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов) — CEL как единый движок выражений.
-- [`docs/architecture.md` → §«Versioning и миграции state_schema»](architecture.md#versioning-и-миграции-state_schema) — высокоуровневое описание (`state_schema_version`, upgrade-механизм, atomicity).
-- [`docs/architecture.md` → §«`state_history`»](architecture.md#state_history--журнал-изменений-state) — журнал, через который доступно восстановление при инциденте.
-- [`docs/templating.md`](templating.md) — CEL общая спека.
-- [`examples/service/redis/migrations/`](../examples/service/redis/migrations/) — пример (миграция `001_to_002`: `redis_users` из списка имён в map `name → {perms, state}` через `foreach`).
+- [ADR-019 in `docs/architecture.md`](adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl) - committing the solution.
+- [ADR-009 in `docs/architecture.md`](adr/0009-scenario-dsl.md) - old mention of flat DSL (now replaced by ADR-019).
+- [ADR-010 in `docs/architecture.md`](adr/0010-templating.md) - CEL as a single expression engine.
+- [`docs/architecture.md` → §"Versioning and migrations state_schema"](architecture.md#versioning-and-state_schema-migrations) - high-level description (`state_schema_version`, upgrade mechanism, atomicity).
+- [`docs/architecture.md` → §"`state_history`"](architecture.md#state_history--state-change-log) - a log through which recovery in the event of an incident is available.
+- [`docs/templating.md`](templating.md) — CEL general spec.
+- [`examples/service/redis/migrations/`](../examples/service/redis/migrations/) - example (migration of `001_to_002`: `redis_users` from the list of names to map `name → {perms, state}` via `foreach`).

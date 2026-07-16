@@ -1,87 +1,87 @@
-# Known limitations — что не входит в бету
+# Known limitations - what is not included in beta
 
-Закрытая малая бета рассчитана на единицы операторов и флот до сотен хостов. Этот документ честно перечисляет, чего в бете **нет** или что работает с ограничениями, — чтобы бета-тестер не упёрся в это молча и не принял отсутствие фичи за баг.
+The closed small beta is designed for a few operators and a fleet of up to hundreds of hosts. This document honestly lists what is **not** in the beta or what works with limitations - so that the beta tester does not silently rest on this and mistake the absence of a feature for a bug.
 
-Каждый пункт — со ссылкой на канон (ADR / runbook), где описано «как будет» или «почему отложено». Дизайн фиксируется в ADR раньше кода; «отложено» означает «решение принято, кода в бете нет».
+Each item is with a link to the canon (ADR / runbook), which describes "how it will be" or "why it's postponed." The design is captured in ADR before the code; "postponed" means "the decision has been made, the code is not in beta."
 
-## Cloud-provisioning — НЕ в бете
+## Cloud-provisioning - NOT in beta
 
-Бета работает с **существующими хостами**: оператор сам поднимает VM/железо и онбордит Soul ([getting-started.md → Шаг 6](getting-started.md#шаг-6-онбордить-один-soul)). Динамическое создание VM из Soul Stack в бету не входит.
+Beta works with **existing hosts**: the operator himself picks up the VM/hardware and onboards Soul ([getting-started.md → Step 6](getting-started.md#step-6-onboard-one-soul)). Dynamic creation of VMs from Soul Stack is not included in the beta.
 
-- **Provider и Profile** (учётка облака + шаблон VM) — концепция есть, хранятся в Postgres, но **REST-роуты `POST /v1/providers` / `POST /v1/profiles` отложены** — cloud-CRUD не реализован ([keeper/cloud.md → Provider и Profile](keeper/cloud.md#provider-и-profile-в-postgres), [operator-api.md → Cloud](keeper/operator-api.md)). Управления Provider/Profile через REST / MCP / UI в бете **нет**.
-- Шаг сценария `core.cloud.provisioned` (`on: keeper`, вызов CloudDriver-плагина) спроектирован ([ADR-017](adr/0017-keeper-side-core.md)), но без сконфигурированных Provider/Profile использовать его в бете нельзя.
+- **Provider and Profile** (cloud account + VM template) - the concept is there, stored in Postgres, but **REST routes `POST /v1/providers` / `POST /v1/profiles` are postponed** - cloud-CRUD is not implemented ([keeper/cloud.md → Provider and Profile](keeper/cloud.md), [operator-api.md → Cloud](keeper/operator-api.md)). Provider/Profile management via REST / MCP / UI in beta **no**.
+- Script step `core.cloud.provisioned` (`on: keeper`, calling the CloudDriver plugin) was designed ([ADR-017](adr/0017-keeper-side-core.md)), but without a configured Provider/Profile it cannot be used in beta.
 
-Хотите динамический provisioning — это пост-бета. Сейчас: создайте хост вне Soul Stack, затем `POST /v1/souls` + `soul init`.
+If you want dynamic provisioning, this is post-beta. Now: Create a host outside of Soul Stack, then `POST /v1/souls` + `soul init`.
 
-## MCP не покрывает все домены
+## MCP does not cover all domains
 
-Первичный интерфейс оператора — REST (OpenAPI) и MCP. Но MCP-симметрия с REST неполная — часть доменов доступна **только через REST/UI**:
+The primary operator interface is REST (OpenAPI) and MCP. But MCP symmetry with REST is incomplete - some domains are accessible **only through REST/UI**:
 
-- **Cadence** (расписания регулярных прогонов, [ADR-046](adr/0046-cadence.md)) — **MCP-tool-ов нет** ([operator-api/cadences.md](keeper/operator-api/cadences.md)). Создание/изменение расписаний — только через REST `/v1/cadences*` или Web-UI.
-- **Audit-чтение** (`GET /v1/audit`) — MCP-симметрия отложена ([operator-api/audit.md](keeper/operator-api/audit.md)).
-- **Choir** (топология хостов внутри incarnation) и **Module-catalog** (`/v1/modules`) — REST-only по дизайну ([operator-api.md → Choir / Module-catalog](keeper/operator-api.md)).
+- **Cadence** (schedules of regular runs, [ADR-046](adr/0046-cadence.md)) - **MCP tools are not available** ([operator-api/cadences.md](keeper/operator-api/cadences.md)). Creating/changing schedules - only via REST `/v1/cadences*` or Web-UI.
+- **Audit-read** (`GET /v1/audit`) - MCP symmetry deferred ([operator-api/audit.md](keeper/operator-api/audit.md)).
+- **Choir** (host topology inside incarnation) and **Module-catalog** (`/v1/modules`) are REST-only by design ([operator-api.md → Choir / Module-catalog](keeper/operator-api.md)).
 
-Часть MCP-tool-ов заведена как **stub**: они помечены `status=stub` в манифесте и возвращают честный `not_implemented` (не падают, не делают вид, что отработали). В бете-stub:
+Some MCP-tools are set up as **stub**: they are marked `status=stub` in the manifest and return an honest `not_implemented` (they don't crash, they don't pretend to have worked). In beta stub:
 
-- **`keeper.soul.list`** — `not_implemented`. Для списка Souls в бете используйте REST `GET /v1/souls` (фильтры `coven` / `status` / `transport` + pagination). Полное MCP-покрытие — пост-бета (M2).
-- **`keeper.push.cleanup`** — `not_implemented`. REST-аналога в бете нет (push выполняется через `keeper.push.apply`). Отложено пост-бета.
+- **`keeper.soul.list`** — `not_implemented`. For the Souls list in beta, use REST `GET /v1/souls` (filters `coven` / `status` / `transport` + pagination). Full MCP coverage - post-beta (M2).
+- **`keeper.push.cleanup`** — `not_implemented`. There is no REST analogue in beta (push is performed via `keeper.push.apply`). Post-beta delayed.
 
-Если автоматизируете через MCP — сверяйтесь с [keeper/mcp-tools.md](keeper/mcp-tools.md): там перечислены реально заведённые MCP-tool-ы. Отсутствие tool-а или его `stub`-статус — не баг, а граница покрытия беты.
+If you automate via MCP, check [keeper/mcp-tools.md](keeper/mcp-tools.md): the actually installed MCP tools are listed there. The absence of a tool or its `stub` status is not a bug, but a beta coverage limit.
 
-## Audit-scaling — рассчитан на малую бету
+## Audit-scaling - designed for small beta
 
-`audit_log` — главный потребитель объёма Postgres при росте флота: на целевом масштабе 100k VM объём прогонов упирается в INSERT-rate и размер таблицы. Для **малой беты** (до сотен хостов) это не проблема, штатной retention хватает (`purge_audit_old`, default 365 дней, [operations/infra.md → Retention](operations/infra.md#retention-и-housekeeping)).
+`audit_log` is the main consumer of Postgres volume when the fleet grows: at the target scale of 100k VM, the volume of runs depends on the INSERT-rate and the table size. For **small beta** (up to hundreds of hosts) this is not a problem, standard retention is enough (`purge_audit_old`, default 365 days, [operations/infra.md → Retention](operations/infra.md)).
 
-Что отложено до пост-беты (не нужно для малого флота):
+What is postponed until post-beta (not needed for a small fleet):
 
-- **Партиционирование `audit_log`** по `created_at` (declarative partitioning / BRIN) — расширение, не breaking ([ADR-022](adr/0022-audit-pipeline.md)).
-- **Pluggable audit-sink (Kafka-выгрузка)** — **спроектирован, в бете не реализован** ([ADR-059](adr/0059-audit-sink-pluggable.md), proposed / deferred). На целевом масштабе backend audit-выгрузки становится выбираемым (`audit.sink: pg | kafka | off`, default `pg`); Kafka-sink (at-least-once `acks=all`, fail-closed, дедуп downstream по `audit_id`) снимает PG-write-нагрузку, остаётся строго опциональным (обязательный контур PG+Redis+Vault не меняется, [ADR-053](adr/0053-dependency-tiers.md)). **Вытесняет вариант Redis-Stream-буферизации** (Kafka покрывает ту же ось write-throughput полноценнее; Redis — hot-слой, не долговременный audit-буфер). Перед реализацией требует развязки зависимости: `changed_tasks`/`GET /v1/audit` сегодня деривят данные из `audit_log` в PG ([ADR-059](adr/0059-audit-sink-pluggable.md) open question).
-- **Hot-cold / batched-INSERT** аудита для крупных флотов — backlog следующих релизов. **batched-INSERT остаётся** более дешёвой альтернативой на оси write-throughput (батч-flush PG-sink-а без новой инфраструктуры), не вытесняется Kafka-sink-ом.
+- **Partitioning `audit_log`** by `created_at` (declarative partitioning / BRIN) - extension, not breaking ([ADR-022](adr/0022-audit-pipeline.md)).
+- **Pluggable audit-sink (Kafka upload)** - **designed, not implemented in beta** ([ADR-059](adr/0059-audit-sink-pluggable.md), proposed / deferred). At the target scale, backend audit upload becomes selectable (`audit.sink: pg | kafka | off`, default `pg`); Kafka-sink (at-least-once `acks=all`, fail-closed, downstream deduced by `audit_id`) removes the PG-write load, remains strictly optional (the mandatory PG+Redis+Vault loop does not change, [ADR-053](adr/0053-dependency-tiers.md)). **Replaces the Redis-Stream-buffering option** (Kafka covers the same write-throughput axis more fully; Redis is a hot layer, not a long-term audit buffer). Requires dependency decoupling before implementation: `changed_tasks`/`GET /v1/audit` today derives data from `audit_log` into PG ([ADR-059](adr/0059-audit-sink-pluggable.md) open question).
+- **Hot-cold / batched-INSERT** audit for large fleets - backlog of the next releases. **batched-INSERT remains** a cheaper alternative on the write-throughput axis (batch-flush PG-sink without new infrastructure), and is not supplanted by Kafka-sink.
 
-Если планируете флот в тысячи+ хостов — это вне профиля беты; следите за размером `audit_log` и `apply_runs` ([operations/infra.md → Размер таблиц](operations/infra.md#размер-таблиц-приблизительная-оценка)).
+If you are planning a fleet of thousands+ hosts, this is outside the beta profile; keep an eye on the size of `audit_log` and `apply_runs` ([operations/infra.md → Table size](operations/infra.md)).
 
-## Прочие границы беты
+## Other beta boundaries
 
-### Supply-chain: подпись образов отложена
+### Supply-chain: image signing delayed
 
-`make sign` — documented stub (печатает причину и завершается успешно). Реальная cosign/sigstore-подпись Docker-образов требует registry + OIDC-identity из CI, которых у локального репозитория нет ([deploy/README.md → Подпись образов](../deploy/README.md)). SBOM (`make sbom`) при этом работает.
+`make sign` - documented stub (prints the reason and succeeds). The real cosign/sigstore signing of Docker images requires registry + OIDC-identity from CI, which the local repository does not have ([deploy/README.md → Signing images](../deploy/README.md)). SBOM (`make sbom`) works.
 
-### Внешний pentest — не проводился (внутренний gate достаточен для беты)
+### External pentest - not carried out (internal gate is sufficient for beta)
 
-Независимый внешний pentest на момент беты **не выполнялся**. Граница гарантий держится на внутреннем security-gate: deep ИБ-аудит 2026-06-12 (0 critical/high), threat-model, чистый `govulncheck` по всем модулям и security-ревалидация OpenAPI-пивота (PASS) — состав и обоснование в [security/threat-model.md → Статус внешнего аудита / pentest](security/threat-model.md#статус-внешнего-аудита--pentest). Решение от 2026-06-15: для закрытой малой беты этого достаточно; внешний независимый pentest запланирован пост-бета / перед GA.
+Independent external pentest was **not running** at the time of beta. The limit of guarantees rests on the internal security gate: deep information security audit 2026-06-12 (0 critical/high), threat-model, clean `govulncheck` for all modules and security-revalidation of the OpenAPI pivot (PASS) - composition and justification in [security/threat-model.md → External audit status / pentest](security/threat-model.md). Decision from 2026-06-15: for closed beta this is enough; external independent pentest planned post-beta/pre-GA.
 
-### Identity оператора: только JWT
+### Operator Identity: JWT only
 
-Форма credential Архонта в бете — **JWT** (HS256, signing-key из Vault). mTLS-cert-форма и transit-подпись JWT — пост-MVP, расширение через `auth_method` enum без breaking changes ([ADR-014](adr/0014-operator-identity.md), [operations/bootstrap-rbac.md → Machine-identity](operations/bootstrap-rbac.md#machine-identity-ci--scripts)).
+The Archon credential form in beta is **JWT** (HS256, signing-key from Vault). mTLS-cert form and transit signature JWT - post-MVP, extension via `auth_method` enum without breaking changes ([ADR-014](adr/0014-operator-identity.md), [operations/bootstrap-rbac.md → Machine-identity](operations/bootstrap-rbac.md#machine-identity-ci--scripts)).
 
-**Немедленный отзыв всех живых JWT** в бете отсутствует: после `revoke` Архонта его активные токены работают до `exp`. Аварийный отзыв — только через ротацию signing-key ([operations/bootstrap-rbac.md → Аварийный отзыв](operations/bootstrap-rbac.md#аварийный-отзыв-всех-jwt--ротация-signing-key)). Защита — короткий `ttl_default`.
+**Immediate recall of all living JWTs** is missing in beta: after `revoke` Archon, his active tokens work until `exp`. Emergency revocation - only through signing-key rotation ([operations/bootstrap-rbac.md → Emergency revocation](operations/bootstrap-rbac.md)). Protection - short `ttl_default`.
 
-### Push (agentless по SSH) — узкий профиль
+### Push (agentless via SSH) - narrow profile
 
-`keeper.push` (доставка Destiny по SSH без агента) работает, но без host-CA / `ssh_providers` это no-op ([ADR-053 → optional-with-degradation](adr/0053-dependency-tiers.md)). Профиль беты — pull (агент-демон `soul`), push используйте только при настроенном SSH-provider-е.
+`keeper.push` (Destiny delivery over SSH without agent) works, but without host-CA / `ssh_providers` is a no-op ([ADR-053 → optional-with-degradation](adr/0053-dependency-tiers.md)). Beta profile - pull (daemon agent `soul`), use push only when SSH provider is configured.
 
-### Served OpenAPI описывает полную поверхность продукта
+### Served OpenAPI describes the full surface of the product
 
-Часть ручек относится к опциональным доменам, которые монтируются только при включении соответствующей фичи в конфиге Keeper (например push/SSH-доставка — при настроенных `plugins.ssh_providers` + `push.host_ca_ref`; Sigil/sigil-keys — при включённом allow-list плагинов). Если фича не включена на конкретном инстансе, ручка вернёт `404 "no such endpoint"` — в том числе при попытке вызвать её из /docs (RapiDoc «Try It»). Это ожидаемо: спека = стабильный контракт всего продукта, доступность ручки зависит от конфигурации деплоя (pull-only инсталляция без push/Sigil — штатный режим). Авторитетный список опциональных/feature-gated доменов — `pathAllowlist` в `keeper/internal/api/openapi_drift_test.go` (защищён guard-тестом `TestFullSpec_CoversAllRoutes`).
+Some of the handles relate to optional domains, which are mounted only when the corresponding feature is enabled in the Keeper config (for example, push/SSH delivery - with `plugins.ssh_providers` + `push.host_ca_ref` configured; Sigil/sigil-keys - with allow-list plugins enabled). If the feature is not enabled on a specific instance, the handle will return `404 "no such endpoint"` - including when trying to call it from /docs (RapiDoc "Try It"). This is expected: spec = stable contract for the entire product, handle availability depends on the deployment configuration (pull-only installation without push/Sigil - standard mode). The authoritative list of optional/feature-gated domains is `pathAllowlist` in `keeper/internal/api/openapi_drift_test.go` (protected by the `TestFullSpec_CoversAllRoutes` guard test).
 
-### Recovery прерванных прогонов — выключено по умолчанию
+### Recovery of interrupted runs - disabled by default
 
-`reclaim_apply_runs` (Reaper подбирает зависшие после краша Keeper-инстанса прогоны) **выключен** в конфиге по умолчанию — включается только после раскатки fencing-Soul + `acolytes>0` ([operations/deployment.md → keeper.yml](operations/deployment.md#конфиг-keeperyml--обязательный-минимум), [keeper/reaper.md](keeper/reaper.md)). Для малой single-keeper-беты это не требуется; зависший прогон оператор перезапускает вручную.
+`reclaim_apply_runs` (Reaper picks up runs stuck after a Keeper instance crash) **disabled** in the default config - enabled only after rolling out fencing-Soul + `acolytes>0` ([operations/deployment.md → keeper.yml](operations/deployment.md), [keeper/reaper.md](keeper/reaper.md)). For a small single-keeper beta this is not required; The operator restarts a frozen run manually.
 
-### UI `/oracle/fires` — заглушка
+### UI `/oracle/fires` - stub
 
-Страница `/oracle/fires` в Web-UI — placeholder с явным WIP-сообщением: backend `GET /v1/oracle/fires` не реализован (таблица `oracle_fires` уже есть, query-фаза отложена). Просмотр срабатываний Decree в бете — через **Audit Log** с фильтром `type=decree.fired`. Отложено пост-бета (Oracle query-phase).
+The `/oracle/fires` page in the Web-UI is a placeholder with an explicit WIP message: backend `GET /v1/oracle/fires` is not implemented (the table `oracle_fires` already exists, the query phase is postponed). Viewing Decree triggers in beta - via **Audit Log** with filter `type=decree.fired`. Post-beta (Oracle query-phase) is delayed.
 
-### Sentinel-Redis: без нативного master-discovery
+### Sentinel-Redis: without native master-discovery
 
-`redis.addr` принимает один TCP-адрес. Redis Sentinel с автоматическим master-discovery нативно не поддержан — раскатка через TCP-прокси на динамический master ([operations/infra.md → HA Redis](operations/infra.md#ha-redis)). Single-instance и Redis Cluster поддержаны. Для малой беты — single-instance + AOF.
+`redis.addr` accepts one TCP address. Redis Sentinel with automatic master-discovery is not natively supported - rolling out via a TCP proxy to a dynamic master ([operations/infra.md → HA Redis](operations/infra.md#ha-redis)). Single-instance and Redis Cluster are supported. For small beta - single-instance + AOF.
 
-### Semantic-breaking: `create_scenario` (пустое значение БОЛЬШЕ не значит авто-`create`)
+### Semantic-breaking: `create_scenario` (empty NO MORE does not mean auto-`create`)
 
-Семантика поля `create_scenario` (`POST /v1/incarnations`, MCP `keeper.incarnation.create`) **изменилась**: пустой `create_scenario` **БОЛЬШЕ НЕ означает** авто-запуск зарезервированного сценария `create` ([ADR-009 amendment 2026-06-29](adr/0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация)). Теперь при пустом значении: если сервис предлагает create-сценарии (хотя бы один `create: true`) → **422 `create_scenario_required`** (выбор обязателен, перечислены годные имена); если ни одного `create: true` → **bare-инкарнация** (`StatusReady` без прогона, `created_scenario = NULL`). Wire-схема additive (поле существовало и раньше), breaking только смысл. **Затронуты** внешние API/MCP-клиенты, славшие `create` без `create_scenario` в расчёте на авто-`create` — им нужно явно передать `create_scenario`.
+Semantics of the field `create_scenario` (`POST /v1/incarnations`, MCP `keeper.incarnation.create`) **changed**: empty `create_scenario` **NO LONGER means** auto-run reserved script `create` ([ADR-009 amendment 2026-06-29](adr/0009-scenario-dsl.md)). Now with an empty value: if the service offers create scripts (at least one `create: true`) → **422 `create_scenario_required`** (selection is required, valid names are listed); if none `create: true` → **bare-incarnation** (`StatusReady` without run, `created_scenario = NULL`). Wire circuit is additive (the field existed before), breaking only the meaning. **Affected** are external API/MCP clients that used `create` without `create_scenario` when calculating auto-`create` - they need to explicitly pass `create_scenario`.
 
-## См. также
+## See also
 
-- [getting-started.md](getting-started.md) — quickstart, путь онбординга существующего хоста.
-- [operations/](operations/README.md) — прод-runbook (deployment / infra / scaling / disaster-recovery).
-- [architecture.md → Открытые вопросы](architecture.md#открытые-вопросы) — развилки, ещё не закрытые ADR.
+- [getting-started.md](getting-started.md) - quickstart, onboarding path for an existing host.
+- [operations/](operations/README.md) - prod-runbook (deployment / infra / scaling / disaster-recovery).
+- [architecture.md → Open questions](architecture.md#open-questions) - forks not yet closed by ADR.

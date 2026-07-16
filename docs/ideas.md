@@ -1,26 +1,26 @@
-# Ящик идей Soul Stack
+# Soul Stack Idea Box
 
-Отложенные идеи для будущих релизов — **не текущий scope**. Каждая фиксируется с обоснованием и наброском дизайна, чтобы вернуться к ней без потери контекста. Перенос идеи в работу — отдельное решение пользователя (не вводить молча).
+Shelved ideas for future releases - **not current scope**. Each is captured with a rationale and design sketch so you can return to it without losing context. Transferring an idea into work is a separate decision of the user (do not enter silently).
 
-Связанные «копилки идей» в открытых вопросах — [architecture.md → Открытые вопросы](architecture.md#открытые-вопросы) (Q11, Q21 и др.); по мере созревания такие пункты могут переезжать сюда отдельными секциями.
+Related "idea banks" in open questions - [architecture.md → Open questions](architecture.md#open-questions) (Q11, Q21, etc.); as they mature, such points can move here in separate sections.
 
 ---
 
-## Shepherd — балансировка нагрузки Souls при scale-out
+## Shepherd - Souls load balancing when scale-out
 
-**Статус:** отложено до будущих релизов (решение пользователя 2026-05-25). Имя `Shepherd` зафиксировано в [naming-rules.md](naming-rules.md) (propose-and-wait пройден).
+**Status:** deferred to future releases (user decision 2026-05-25). The name `Shepherd` is committed to [naming-rules.md](naming-rules.md) (propose-and-wait passed).
 
-**Проблема.** При добавлении нового Keeper-инстанса за LB существующие долгоживущие EventStream-стримы **залипают** на старых инстансах: LB балансирует только новые соединения, Soul сам не реконнектится пока стрим не оборвётся, а failback срабатывает лишь при `priority>1`. Новый Keeper простаивает до естественного churn (часы-дни).
+**Problem.** When adding a new Keeper instance behind LB, existing long-lived EventStream streams **stick** on old instances: LB balances only new connections, Soul itself does not reconnect until the stream ends, and failback is triggered only at `priority>1`. The new Keeper is idle until the natural churn (hours or days).
 
-**Набросок дизайна.**
-- Инстансы публикуют **снимок нагрузки** (число активных стримов; опц. глубина Acolyte-очереди) в [Conclave](naming-rules.md#модули-и-подсистемы-внутри-keeper)-записи `keeper:instance:<kid>`, тем же renew-тиком (10s).
-- Инстанс, видящий перекос своей нагрузки выше справедливой доли (`сумма стримов / Conclave.CountLive`), сбрасывает **излишек** своих стримов — частичный `StreamManager.CloseAll` (не все, в отличие от Watchman при изоляции) с jitter/cap против стадности.
-- Сброшенные Souls реконнектятся и раскидываются: в priority-группе — через in-group shuffle ([connection.md](soul/connection.md)), за одним VIP — через HAProxy least-conn.
-- **Домен балансировки = priority-группа / один VIP** (разные priority = failover-иерархия, не баланс).
-- **drain-режим** (авто-по-порогу / полу-авто / ручной) — TBD.
+**Design sketch.**
+- Instances publish a **load snapshot** (number of active streams; optional Acolyte queue depth) to the [Conclave](naming-rules.md#modules-and-subsystems-inside-keeper)-record `keeper:instance:<kid>`, with the same renew tick (10s).
+- An instance that sees its load skewed above its fair share (`sum of streams / Conclave.CountLive`) dumps **excess** of its streams - partial `StreamManager.CloseAll` (not all, unlike Watchman in isolation) with jitter/cap against herding.
+- Reset Souls are reconnected and scattered: in the priority group - via in-group shuffle ([connection.md](soul/connection.md)), behind one VIP - via HAProxy least-conn.
+- **Balancing domain = priority group / one VIP** (different priorities = failover hierarchy, not balance).
+- **drain mode** (auto-by-threshold / semi-auto / manual) - TBD.
 
-**Дешёвая альтернатива / возможный первый шаг.** Пассивный max-connection-age рециклинг стримов (gRPC server `MaxConnectionAge` / soul `max_stream_age` + spray) — фон без участия оператора, но «тупой» (рециклит и при идеальном балансе) и с постоянной handshake-ценой. Watchman/CloseAll уже даёт половину механизма (полный сброс при изоляции) — Shepherd добавляет частичный сброс ради равномерности.
+**Cheap alternative / possible first step.** Passive max-connection-age stream recycling (gRPC server `MaxConnectionAge` / soul `max_stream_age` + spray) - background without operator participation, but "dumb" (recycling and with perfect balance) and with a constant handshake price. Watchman/CloseAll already gives half the mechanism (full reset when isolated) - Shepherd adds a partial reset for the sake of uniformity.
 
-**Что потребует реализация:** amend [ADR-006](adr/0006-cache-redis.md#adr-006-кэш-и-координация--redis) (Conclave-запись несёт load-snapshot), architect-дизайн drain-режима, проверку взаимодействия с in-flight apply ([ADR-027](architecture.md) Ward/recovery — переживёт ли долгий apply закрытие стрима).
+**What the implementation will require:** amend [ADR-006](adr/0006-cache-redis.md) (Conclave recording carries a load-snapshot), architect-design of the drain mode, checking interaction with in-flight apply ([ADR-027](architecture.md) Ward/recovery - will the long apply survive the closure of the stream).
 
-**Связано:** Conclave, Watchman (soul-shedding), [ADR-002](adr/0002-transport-grpc-ha.md#adr-002-транспорт-keeper--souls--grpc-bidirectional-stream-поверх-mtls-ha-кластер-keeper) failback-модель.
+**Related:** Conclave, Watchman (soul-shedding), [ADR-002](adr/0002-transport-grpc-ha.md#adr-002-transport-keeper--souls--grpc-bidirectional-stream-over-mtls-ha-keeper-cluster) failback model.
