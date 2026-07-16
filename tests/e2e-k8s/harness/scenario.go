@@ -14,20 +14,21 @@ import (
 	"time"
 )
 
-// scenario.go — Operator-API HTTP-клиент для L3c-5: создание incarnation,
-// запуск scenario, raw-response для Toll-degraded assert-а (нужны HTTP-status
-// + Retry-After header). Симметрично L3b harness/operator.go +
-// harness/stack.go::CreateIncarnation/RunScenario/WaitApplySuccess, но
-// port-forward к keeper:8080 + JWT из [Stack.JWT].
+// scenario.go — Operator API HTTP client for L3c-5: create an incarnation,
+// run a scenario, raw response for the Toll-degraded assert (needs the HTTP
+// status + Retry-After header). Symmetric to L3b harness/operator.go +
+// harness/stack.go::CreateIncarnation/RunScenario/WaitApplySuccess, but with
+// port-forward to keeper:8080 + JWT from [Stack.JWT].
 
 const opHTTPTimeout = 30 * time.Second
 
-// CreateIncarnation — POST /v1/incarnations. Возвращает имя incarnation из
-// 202-ответа. serviceRef формата `<service>@<ref>` — `@<ref>` отрезаем (ADR-029).
+// CreateIncarnation — POST /v1/incarnations. Returns the incarnation name
+// from the 202 response. serviceRef has the form `<service>@<ref>` -- we
+// strip `@<ref>` (ADR-029).
 func (s *Stack) CreateIncarnation(t *testing.T, name, serviceRef string, spec map[string]any) string {
 	t.Helper()
 	if s.JWT == "" {
-		t.Fatal("CreateIncarnation: Stack.JWT пуст; нужно сначала Stack.BootstrapArchon(t)")
+		t.Fatal("CreateIncarnation: Stack.JWT is empty; call Stack.BootstrapArchon(t) first")
 	}
 	service := stripServiceRef(serviceRef)
 	body := map[string]any{
@@ -56,12 +57,12 @@ func (s *Stack) CreateIncarnation(t *testing.T, name, serviceRef string, spec ma
 	return out.Incarnation
 }
 
-// RunScenario — POST /v1/incarnations/{name}/scenarios/{scenario}. Возвращает
-// apply_id из 202-ответа.
+// RunScenario — POST /v1/incarnations/{name}/scenarios/{scenario}. Returns
+// apply_id from the 202 response.
 func (s *Stack) RunScenario(t *testing.T, incName, scenarioName string, input map[string]any) string {
 	t.Helper()
 	if s.JWT == "" {
-		t.Fatal("RunScenario: Stack.JWT пуст")
+		t.Fatal("RunScenario: Stack.JWT is empty")
 	}
 	body := map[string]any{}
 	if input != nil {
@@ -82,22 +83,22 @@ func (s *Stack) RunScenario(t *testing.T, incName, scenarioName string, input ma
 		t.Fatalf("RunScenario %s/%s: decode: %v (body=%s)", incName, scenarioName, err, string(resp))
 	}
 	if out.ApplyID == "" {
-		t.Fatalf("RunScenario %s/%s: пустой apply_id в 202 body=%s", incName, scenarioName, string(resp))
+		t.Fatalf("RunScenario %s/%s: empty apply_id in 202 body=%s", incName, scenarioName, string(resp))
 	}
 	return out.ApplyID
 }
 
-// PostScenarioRaw — низкоуровневый POST /v1/incarnations/{name}/scenarios/{scenario}
-// без проверки статуса. Возвращает (response, statusCode, error). Нужен для
-// Toll-degraded assert-а: тест ожидает 503 + Retry-After (RunScenario рухнул
-// бы t.Fatal на не-202).
+// PostScenarioRaw — low-level POST /v1/incarnations/{name}/scenarios/{scenario}
+// without a status check. Returns (response, statusCode, error). Needed for
+// the Toll-degraded assert: the test expects 503 + Retry-After (RunScenario
+// would t.Fatal on a non-202).
 //
-// Возвращаемый response уже прочитан и закрыт; headers сохранены в response.Header
-// для assert-а Retry-After.
+// The returned response has already been read and closed; headers are
+// preserved in response.Header for the Retry-After assert.
 func (s *Stack) PostScenarioRaw(t *testing.T, incName, scenarioName string, input map[string]any) (*http.Response, int, error) {
 	t.Helper()
 	if s.JWT == "" {
-		t.Fatal("PostScenarioRaw: Stack.JWT пуст")
+		t.Fatal("PostScenarioRaw: Stack.JWT is empty")
 	}
 	body := map[string]any{}
 	if input != nil {
@@ -124,16 +125,16 @@ func (s *Stack) PostScenarioRaw(t *testing.T, incName, scenarioName string, inpu
 	if err != nil {
 		return nil, 0, fmt.Errorf("http: %w", err)
 	}
-	// Тело прочитываем сразу, body-close-ить тоже сразу — caller получает уже
-	// прочитанный response.
+	// Read the body right away and close it right away -- the caller gets
+	// an already-read response.
 	_, _ = io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
 	return resp, resp.StatusCode, nil
 }
 
-// opPostJSON — внутренний helper для POST с JSON-body + JWT. Возвращает
-// (body, status, err). Открывает port-forward на keeper:8080 и закрывает
-// через t.Cleanup-цепочку (см. PortForward).
+// opPostJSON — internal helper for a POST with a JSON body + JWT. Returns
+// (body, status, err). Opens a port-forward to keeper:8080 and closes it via
+// the t.Cleanup chain (see PortForward).
 func (s *Stack) opPostJSON(t *testing.T, path string, body any) ([]byte, int, error) {
 	t.Helper()
 	payload, err := json.Marshal(body)
@@ -166,8 +167,8 @@ func (s *Stack) opPostJSON(t *testing.T, path string, body any) ([]byte, int, er
 	return b, resp.StatusCode, nil
 }
 
-// stripServiceRef отрезает `@<ref>` (если есть). Operator API создаёт
-// incarnation по bare service-name (ADR-029).
+// stripServiceRef strips `@<ref>` (if present). The Operator API creates an
+// incarnation from a bare service name (ADR-029).
 func stripServiceRef(ref string) string {
 	if i := strings.IndexByte(ref, '@'); i >= 0 {
 		return ref[:i]
@@ -175,10 +176,9 @@ func stripServiceRef(ref string) string {
 	return ref
 }
 
-// WaitApplySuccess блокируется до перехода всех строк `apply_runs` с
-// apply_id=applyID в статус `success`. Терминальный ≠ success → t.Fatal с
-// дампом статусов. Симметрично L3b Stack.WaitApplySuccess; читает PG через
-// port-forward.
+// WaitApplySuccess blocks until all `apply_runs` rows with apply_id=applyID
+// reach `success`. A terminal status != success -> t.Fatal with a status
+// dump. Symmetric to L3b Stack.WaitApplySuccess; reads PG via port-forward.
 func (s *Stack) WaitApplySuccess(t *testing.T, applyID string, timeoutSec int) {
 	t.Helper()
 
@@ -224,5 +224,5 @@ func (s *Stack) WaitApplySuccess(t *testing.T, applyID string, timeoutSec int) {
 		}
 		time.Sleep(1 * time.Second)
 	}
-	t.Fatalf("WaitApplySuccess %s: success не достигнут за %ds", applyID, timeoutSec)
+	t.Fatalf("WaitApplySuccess %s: success not reached within %ds", applyID, timeoutSec)
 }

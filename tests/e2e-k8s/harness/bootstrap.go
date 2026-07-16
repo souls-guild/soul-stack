@@ -16,28 +16,30 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// bootstrap.go — harness-помощник L3c-3 для выдачи bootstrap-токена через
-// прямой SQL к Postgres-у в kind-cluster. Симметрично L3b harness/bootstrap.go,
-// но доступ к PG идёт через `kubectl port-forward` (PG-сервис ClusterIP-only,
-// host-side доступ только через forward).
+// bootstrap.go — L3c-3 harness helper that issues a bootstrap token via
+// direct SQL to Postgres in the kind cluster. Symmetric to L3b
+// harness/bootstrap.go, but PG access goes through `kubectl port-forward`
+// (the PG service is ClusterIP-only, host-side access only via forward).
 //
-// Почему direct SQL, а не POST /v1/souls/{sid}/issue-token: тестируется именно
-// gRPC Bootstrap-flow (CSR → Keeper.Bootstrap → leaf-cert + audit
-// `soul.bootstrapped`); RBAC/admin-API проверяется L2/L3b-тестами. Сам keeper-
-// handler читает `bootstrap_tokens` + апгрейдит `souls.status pending →
-// connected` — это и есть тестируемое поведение.
+// Why direct SQL and not POST /v1/souls/{sid}/issue-token: this specifically
+// exercises the gRPC Bootstrap flow (CSR -> Keeper.Bootstrap -> leaf cert +
+// `soul.bootstrapped` audit event); the RBAC/admin API is covered by
+// L2/L3b tests. The keeper handler itself reads `bootstrap_tokens` and
+// upgrades `souls.status pending -> connected` -- that is the behavior
+// under test.
 //
-// `created_by_aid = NULL` (FK на operators(aid) ON DELETE SET NULL) —
-// валидное состояние: keeper-bootstrap-mode стартует с пустым operators-
-// registry, тестового Архонта не заводим.
+// `created_by_aid = NULL` (FK to operators(aid) ON DELETE SET NULL) is a
+// valid state: keeper-bootstrap-mode starts with an empty operators
+// registry, so we don't set up a test Archon.
 
-// IssueBootstrapToken заводит запись в `souls` (status='pending',
-// transport='agent') + `bootstrap_tokens` (active) через port-forward к
-// postgres-сервису. Возвращает plain-token; в БД хранится только SHA-256 hex.
+// IssueBootstrapToken inserts a `souls` row (status='pending',
+// transport='agent') plus an active `bootstrap_tokens` row via port-forward
+// to the postgres service. Returns the plain token; only the SHA-256 hex is
+// stored in the DB.
 //
-// Формат plain-token — base64-url-no-padding от 32 случайных байт (симметрично
-// keeper-side bootstraptoken.Generate). hash — SHA-256 lower-hex (симметрично
-// bootstraptoken.HashToken и L3b sha256HexLower).
+// Plain-token format: base64-url-no-padding of 32 random bytes (symmetric
+// with keeper-side bootstraptoken.Generate). Hash: SHA-256 lower-hex
+// (symmetric with bootstraptoken.HashToken and L3b sha256HexLower).
 func IssueBootstrapToken(t *testing.T, stack *Stack, sid string) string {
 	t.Helper()
 
@@ -50,8 +52,8 @@ func IssueBootstrapToken(t *testing.T, stack *Stack, sid string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// souls (pending). bootstrap_tokens.sid → souls.sid (FK), souls-строка
-	// должна существовать до INSERT в bootstrap_tokens.
+	// souls (pending). bootstrap_tokens.sid -> souls.sid (FK), the souls row
+	// must exist before the INSERT into bootstrap_tokens.
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO souls (sid, transport, status, requested_at, registered_at)
 		VALUES ($1, 'agent', 'pending', NOW(), NOW())
@@ -73,16 +75,16 @@ func IssueBootstrapToken(t *testing.T, stack *Stack, sid string) string {
 	return plain
 }
 
-// WaitForSoulConnected — метод-обёртка для удобства каллеров, у которых уже
-// есть *Stack (failover-тест и т.п.). Делегирует package-level функцию.
+// WaitForSoulConnected — method wrapper for callers that already hold a
+// *Stack (failover test etc). Delegates to the package-level function.
 func (s *Stack) WaitForSoulConnected(t *testing.T, sid string, timeout time.Duration) {
 	t.Helper()
 	WaitForSoulConnected(t, s, sid, timeout)
 }
 
-// WaitForSoulConnected поллит `souls.status` для sid через port-forward к PG,
-// возвращает nil при первом 'connected'. Терминальные статусы
-// (revoked/expired/destroyed) — немедленный fail без ожидания timeout.
+// WaitForSoulConnected polls `souls.status` for sid via port-forward to PG,
+// returns on the first 'connected'. Terminal statuses (revoked/expired/
+// destroyed) fail immediately without waiting for the timeout.
 func WaitForSoulConnected(t *testing.T, stack *Stack, sid string, timeout time.Duration) {
 	t.Helper()
 
@@ -113,9 +115,10 @@ func WaitForSoulConnected(t *testing.T, stack *Stack, sid string, timeout time.D
 		sid, timeout, lastStatus)
 }
 
-// AssertAuditEvent ищет в audit_log хотя бы одну строку с event_type=eventType
-// и payload, содержащим subset. На fail печатает last-N payload-ов того же
-// event_type для диагностики. Симметрично L3b Stack.AssertAuditEvent.
+// AssertAuditEvent looks in audit_log for at least one row with
+// event_type=eventType whose payload contains subset. On failure, prints the
+// last-N payloads of the same event_type for diagnostics. Symmetric to L3b
+// Stack.AssertAuditEvent.
 func (s *Stack) AssertAuditEvent(t *testing.T, eventType string, expectedSubset map[string]any) {
 	t.Helper()
 
@@ -154,18 +157,18 @@ func (s *Stack) AssertAuditEvent(t *testing.T, eventType string, expectedSubset 
 			}
 		}
 	}
-	t.Fatalf("AssertAuditEvent %s: payload subset не найден\nexpected=%s\nrecent_events=%v",
+	t.Fatalf("AssertAuditEvent %s: payload subset not found\nexpected=%s\nrecent_events=%v",
 		eventType, string(subsetJSON), dumps)
 }
 
-// openPGPool открывает pgxpool через port-forward к postgres-сервису. Caller
-// обязан Close() pool после использования; port-forward закрывается через
-// t.Cleanup (внутри PortForward).
+// openPGPool opens a pgxpool via port-forward to the postgres service. The
+// caller must Close() the pool after use; the port-forward is closed via
+// t.Cleanup (inside PortForward).
 //
-// Per-call open: kubectl port-forward — дешёвый subprocess (~100ms), а
-// шерить pool через все harness-вызовы потребовало бы lifecycle-привязки к
-// Stack, что усложнит teardown. L3c-3 делает 3-4 SQL-операции на тест —
-// разница в ms незаметна.
+// Per-call open: kubectl port-forward is a cheap subprocess (~100ms), while
+// sharing a pool across all harness calls would require tying its lifecycle
+// to Stack, complicating teardown. L3c-3 does 3-4 SQL operations per test --
+// the ms-scale difference is negligible.
 func openPGPool(t *testing.T, stack *Stack) *pgxpool.Pool {
 	t.Helper()
 	pf := stack.Cluster.PortForward(t, "svc/postgres-postgresql", 5432, 60*time.Second)
@@ -187,8 +190,8 @@ func openPGPool(t *testing.T, stack *Stack) *pgxpool.Pool {
 	return pool
 }
 
-// generatePlainToken возвращает 32 байта crypto-random в base64url-no-padding.
-// Формат идентичен keeper-side bootstraptoken.Generate.
+// generatePlainToken returns 32 crypto-random bytes in base64url-no-padding.
+// Format identical to keeper-side bootstraptoken.Generate.
 func generatePlainToken(t *testing.T) string {
 	t.Helper()
 	buf := make([]byte, 32)
@@ -198,7 +201,7 @@ func generatePlainToken(t *testing.T) string {
 	return base64.RawURLEncoding.EncodeToString(buf)
 }
 
-// sha256HexLower — SHA-256(plain) в lower-hex (64 символа). Симметрично
+// sha256HexLower — SHA-256(plain) in lower-hex (64 chars). Symmetric with
 // keeper-side bootstraptoken.HashToken.
 func sha256HexLower(plain string) string {
 	sum := sha256.Sum256([]byte(plain))

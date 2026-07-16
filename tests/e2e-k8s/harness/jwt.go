@@ -16,35 +16,38 @@ import (
 	"k8s.io/client-go/tools/remotecommand"
 )
 
-// jwt.go — выпуск bootstrap-JWT первого Архонта через `keeper init` в одном из
-// running keeper-pod-ов. Симметрично L3b runKeeperInit, но keeper-binary в L3c
-// крутится внутри pod-а, а не host-side; exec-им через k8s remotecommand API.
+// jwt.go — issues the first Archon's bootstrap JWT via `keeper init` in one
+// of the running keeper pods. Symmetric to L3b runKeeperInit, but in L3c the
+// keeper binary runs inside a pod, not host-side; we exec via the k8s
+// remotecommand API.
 //
-// Почему через exec в running pod, а не отдельный Job: keeper-pod-ы уже
-// запущены с `--initialize` (bootstrap-pending mode), все зависимости (PG/
-// Vault/Redis) доступны через service-DNS внутри cluster-сети — самый дешёвый
-// путь. PG advisory lock в keeper init гарантирует idempotency, даже если
-// случайно вызвать на разных pod-ах одновременно.
+// Why exec into a running pod rather than a separate Job: keeper pods are
+// already started with `--initialize` (bootstrap-pending mode), and all
+// dependencies (PG/Vault/Redis) are reachable via service DNS inside the
+// cluster network -- the cheapest path. The PG advisory lock in keeper init
+// guarantees idempotency even if it's accidentally called on different pods
+// at the same time.
 //
-// Возвращает plain JWT — caller (тест) кладёт в Authorization Bearer.
+// Returns a plain JWT -- the caller (test) puts it in the Authorization
+// Bearer header.
 
-// BootstrapArchon — wrapper, заполняющий Stack.JWT через IssueBootstrapArchon.
-// Идемпотентен: повторный вызов на уже инициализированном keeper падёт на
-// keeper init exit 1 ("already initialized"). В L3c-5 каждый тест поднимает
-// свой kind-cluster (per-test isolation), повторного вызова не бывает.
+// BootstrapArchon — wrapper that fills Stack.JWT via IssueBootstrapArchon.
+// Idempotent: a repeat call on an already-initialized keeper fails with
+// keeper init exit 1 ("already initialized"). In L3c-5 each test spins up
+// its own kind cluster (per-test isolation), so a repeat call never happens.
 func (s *Stack) BootstrapArchon(t *testing.T) {
 	t.Helper()
 	s.JWT = IssueBootstrapArchon(t, s)
 }
 
-// IssueBootstrapArchon выполняет `keeper init --archon=archon-test
-// --credential-out=/tmp/archon.token` в первом running keeper-pod-е и читает
-// результат через `cat`. Возвращает plain-JWT (без trailing newline).
+// IssueBootstrapArchon runs `keeper init --archon=archon-test
+// --credential-out=/tmp/archon.token` in the first running keeper pod and
+// reads the result via `cat`. Returns the plain JWT (no trailing newline).
 //
-// Требует: keeper-deployment Ready (ReadyReplicas>=1) до вызова.
+// Requires: keeper deployment Ready (ReadyReplicas>=1) before calling.
 //
-// archonAID валидируется на стороне keeper (regex), здесь жёстко
-// `archon-test` — единое имя на все L3c-тесты, не требующее настройки.
+// archonAID is validated keeper-side (regex); here it's hardcoded to
+// `archon-test` -- a single name shared by all L3c tests, no config needed.
 func IssueBootstrapArchon(t *testing.T, s *Stack) string {
 	t.Helper()
 
@@ -58,9 +61,9 @@ func IssueBootstrapArchon(t *testing.T, s *Stack) string {
 
 	podName := firstReadyKeeperPod(t, s, ctx)
 
-	// `keeper init` — exit 0 при успехе. На повторный вызов (operators
-	// non-empty) вернёт exit 1 с сообщением «already initialized» — для теста
-	// это всё ещё ошибка, тест ожидает чистый keeper-startup.
+	// `keeper init` -- exit 0 on success. A repeat call (operators
+	// non-empty) returns exit 1 with "already initialized" -- for this test
+	// that's still an error, since the test expects a clean keeper startup.
 	out, code, err := s.execInKeeperPod(ctx, podName, []string{
 		"/usr/local/bin/keeper", "init",
 		"--archon=" + archonAID,
@@ -71,8 +74,8 @@ func IssueBootstrapArchon(t *testing.T, s *Stack) string {
 		t.Fatalf("IssueBootstrapArchon: keeper init: code=%d err=%v output=%s", code, err, out)
 	}
 
-	// Прочитать credential-файл через cat. Permission 0400 — keeper-uid-у
-	// доступен; pod бежит как root.
+	// Read the credential file via cat. Permission 0400 -- accessible to
+	// the keeper uid; the pod runs as root.
 	credOut, credCode, credErr := s.execInKeeperPod(ctx, podName, []string{
 		"cat", credPath,
 	})
@@ -87,9 +90,9 @@ func IssueBootstrapArchon(t *testing.T, s *Stack) string {
 	return jwt
 }
 
-// firstReadyKeeperPod возвращает имя первого pod-а с label app=keeper и
-// PodRunning + Ready. Опрашивает до 60s — keeper-deployment-у нужно время на
-// readiness (миграции PG).
+// firstReadyKeeperPod returns the name of the first pod with label
+// app=keeper that is PodRunning + Ready. Polls for up to 60s -- the keeper
+// deployment needs time to become ready (PG migrations).
 func firstReadyKeeperPod(t *testing.T, s *Stack, ctx context.Context) string {
 	t.Helper()
 	deadline := time.Now().Add(60 * time.Second)
@@ -115,15 +118,16 @@ func firstReadyKeeperPod(t *testing.T, s *Stack, ctx context.Context) string {
 		case <-time.After(2 * time.Second):
 		}
 	}
-	t.Fatalf("firstReadyKeeperPod: ни одного Ready pod app=keeper за 60s")
+	t.Fatalf("firstReadyKeeperPod: no Ready pod with app=keeper within 60s")
 	return ""
 }
 
-// execInKeeperPod — exec в container=keeper. Симметричен Stack.execInPod, но
-// container-name "keeper" вместо "soul" (statefulset.yaml::containers[0].name
-// для soul-pod = "soul", deployment.yaml::containers[0].name для keeper-pod
-// = "keeper"). DRY-объединение через параметр container — over-engineering
-// для двух call-сайтов.
+// execInKeeperPod — exec into container=keeper. Symmetric to
+// Stack.execInPod, but with container name "keeper" instead of "soul"
+// (statefulset.yaml::containers[0].name for a soul pod = "soul",
+// deployment.yaml::containers[0].name for a keeper pod = "keeper"). A DRY
+// merge via a container parameter would be over-engineering for two call
+// sites.
 func (s *Stack) execInKeeperPod(ctx context.Context, podName string, cmd []string) (string, int, error) {
 	req := s.Clientset.CoreV1().RESTClient().
 		Post().

@@ -15,22 +15,22 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// TestL3cToll_DegradedMode — L3c-5 part A: массовый отток Soul-pod-ов взводит
-// `cluster:degraded` в Redis, POST scenario возвращает 503 + Retry-After,
-// audit-event `cluster.degraded_set` записан.
+// TestL3cToll_DegradedMode - L3c-5 part A: a mass exodus of Soul pods trips
+// `cluster:degraded` in Redis, POST scenario returns 503 + Retry-After,
+// audit event `cluster.degraded_set` is recorded.
 //
-// Сценарий (~10-15 мин):
-//  1. kind + bitnami infra + 3 keeper-pod + 5 Soul-pod (DeployMultiSoul) +
+// Scenario (~10-15 min):
+//  1. kind + bitnami infra + 3 keeper pods + 5 Soul pods (DeployMultiSoul) +
 //     Bootstrap-Archon JWT.
-//  2. Warmup-wait 70s — Toll warmup_delay=60s (config.DefaultTollWarmup), до
-//     этого disconnect-ы не публикуются. +10s запас.
-//  3. Массовый delete 3 из 5 Soul-pod-ов (GracePeriodSeconds=0 → SIGKILL →
-//     TCP reset → eventstream-handler регистрирует non-graceful disconnect →
-//     Toll.NotifyDisconnect → ZADD `toll:disconnects`).
+//  2. Warmup-wait 70s - Toll warmup_delay=60s (config.DefaultTollWarmup), before
+//     that disconnects are not published. +10s buffer.
+//  3. Mass delete 3 of 5 Soul pods (GracePeriodSeconds=0 -> SIGKILL ->
+//     TCP reset -> eventstream handler registers a non-graceful disconnect ->
+//     Toll.NotifyDisconnect -> ZADD `toll:disconnects`).
 //  4. WaitForTollDegraded (90s). Rate = 3/5 = 0.60 > threshold 0.20.
-//  5. PostScenarioRaw на произвольное incarnation/scenario → 503 + Retry-After
-//     header. Toll-middleware — outermost в chain, 503 возвращается ДО проверки
-//     existence incarnation/permission (см. router.go::POST scenarios chain).
+//  5. PostScenarioRaw against an arbitrary incarnation/scenario -> 503 + Retry-After
+//     header. Toll middleware is outermost in the chain, 503 is returned BEFORE checking
+//     incarnation/permission existence (see router.go::POST scenarios chain).
 //  6. AssertAuditEvent `cluster.degraded_set`.
 func TestL3cToll_DegradedMode(t *testing.T) {
 	const (
@@ -38,8 +38,8 @@ func TestL3cToll_DegradedMode(t *testing.T) {
 		killCount       = 3 // 3/5 = 60% > threshold 20%
 		warmupWait      = 70 * time.Second
 		degradedTimeout = 90 * time.Second
-		incarnationName = "any-name"     // не существует, Toll отдаёт 503 раньше
-		scenarioName    = "any-scenario" // тот же инвариант
+		incarnationName = "any-name"     // does not exist, Toll returns 503 first
+		scenarioName    = "any-scenario" // same invariant
 	)
 
 	stack := harness.NewStack(t, harness.Config{})
@@ -49,19 +49,19 @@ func TestL3cToll_DegradedMode(t *testing.T) {
 
 	sids := stack.DeployMultiSoul(t, soulCount)
 	if len(sids) != soulCount {
-		t.Fatalf("DeployMultiSoul: ожидалось %d SID, получено %d", soulCount, len(sids))
+		t.Fatalf("DeployMultiSoul: expected %d SID, got %d", soulCount, len(sids))
 	}
 
 	t.Logf("waiting Toll warmup window (%v)…", warmupWait)
 	time.Sleep(warmupWait)
 
-	// Массовый kill. GracePeriodSeconds=0 → SIGKILL → non-graceful (TCP reset)
-	// → eventstream registers disconnect → Toll publishes.
+	// Mass kill. GracePeriodSeconds=0 -> SIGKILL -> non-graceful (TCP reset)
+	// -> eventstream registers disconnect -> Toll publishes.
 	killPods := make([]string, 0, killCount)
 	for i := 0; i < killCount; i++ {
 		killPods = append(killPods, "soul-"+strconv.Itoa(i))
 	}
-	t.Logf("killing %d Soul-pod-ов (grace=0): %v", killCount, killPods)
+	t.Logf("killing %d Soul pods (grace=0): %v", killCount, killPods)
 
 	zero := int64(0)
 	for _, name := range killPods {
@@ -75,34 +75,34 @@ func TestL3cToll_DegradedMode(t *testing.T) {
 		}
 	}
 
-	// Ожидание Toll-флага. detection cycle: ZADD на disconnect → следующий
-	// TickInterval (5s) → leader Aggregation Tick → SET cluster:degraded.
+	// Wait for the Toll flag. detection cycle: ZADD on disconnect -> next
+	// TickInterval (5s) -> leader Aggregation Tick -> SET cluster:degraded.
 	t.Logf("waiting cluster:degraded (max %v)…", degradedTimeout)
 	stack.WaitForTollDegraded(t, degradedTimeout)
 
-	// POST scenario → 503 + Retry-After.
+	// POST scenario -> 503 + Retry-After.
 	resp, status, err := stack.PostScenarioRaw(t, incarnationName, scenarioName, nil)
 	if err != nil {
 		t.Fatalf("PostScenarioRaw: %v", err)
 	}
 	if status != http.StatusServiceUnavailable {
-		t.Fatalf("PostScenarioRaw: ожидался 503, получено %d (headers=%v)", status, resp.Header)
+		t.Fatalf("PostScenarioRaw: expected 503, got %d (headers=%v)", status, resp.Header)
 	}
 	retryAfter := resp.Header.Get("Retry-After")
 	if retryAfter == "" {
-		t.Fatalf("PostScenarioRaw: Retry-After header пуст (headers=%v)", resp.Header)
+		t.Fatalf("PostScenarioRaw: Retry-After header is empty (headers=%v)", resp.Header)
 	}
 	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/problem+json") {
-		t.Fatalf("PostScenarioRaw: Content-Type = %q, ожидался application/problem+json", ct)
+		t.Fatalf("PostScenarioRaw: Content-Type = %q, expected application/problem+json", ct)
 	}
 
-	// Audit-event cluster.degraded_set. Payload subset пуст — проверяем сам
-	// факт записи (полные поля payload — rate/baseline_connected/threshold/
-	// window_seconds — могут флуктуировать, не assert-аем точные значения).
+	// Audit event cluster.degraded_set. Payload subset is empty - we only check the
+	// fact of the write (full payload fields - rate/baseline_connected/threshold/
+	// window_seconds - can fluctuate, not asserting exact values).
 	stack.AssertAuditEvent(t, "cluster.degraded_set", nil)
 
-	// NB: Clear cluster:degraded out-of-scope: требует grace-window (60s) +
-	// восстановления pod-ов + waiting + re-assert на 200 OK. На тест-end ок
-	// держать кластер в degraded — kind-cluster одноразовый, t.Cleanup
-	// удалит весь стенд.
+	// NB: Clearing cluster:degraded is out-of-scope: requires a grace-window (60s) +
+	// pod recovery + waiting + re-assert on 200 OK. It's fine to leave the
+	// cluster degraded at test end - the kind cluster is one-shot, t.Cleanup
+	// tears down the whole stand.
 }

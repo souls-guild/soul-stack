@@ -15,28 +15,30 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// leader.go — harness-помощник L3c-4 для интроспекции Redis lease-ключей
-// в kind-cluster: `reaper:leader` (Reaper-leadership KID) и `soul:<sid>:lock`
-// (SID-lease KID-holder). Используется failover-тестом для определения, какой
-// keeper-pod держит leadership на момент kill-pod, и для верификации, что
-// после kill оставшиеся pod подхватили работу.
+// leader.go — L3c-4 harness helper for introspecting Redis lease keys in the
+// kind cluster: `reaper:leader` (Reaper leadership KID) and
+// `soul:<sid>:lock` (SID-lease KID holder). Used by the failover test to
+// determine which keeper pod holds leadership at the moment of kill-pod,
+// and to verify that the remaining pods picked up the work after the kill.
 //
-// Реализация: `kubectl exec -it redis-master-0 -- redis-cli GET <key>`.
-// Per-вызов exec — дороже long-lived клиента, но в failover-тесте мы делаем
-// ≤10 GET-операций, разница в ms незаметна. Альтернатива (port-forward +
-// go-redis в go.mod tests/e2e-k8s/) тянет лишнюю зависимость, redis-cli уже
-// есть в bitnami/redis-image.
+// Implementation: `kubectl exec -it redis-master-0 -- redis-cli GET <key>`.
+// A per-call exec is more expensive than a long-lived client, but the
+// failover test does <=10 GET operations, so the ms-scale difference is
+// negligible. The alternative (port-forward + go-redis in go.mod
+// tests/e2e-k8s/) pulls in an extra dependency; redis-cli is already in the
+// bitnami/redis image.
 
-// redisMasterPod — имя single-replica master pod-а bitnami/redis-чарта
-// (standalone-режим). Совпадает с redis.yaml::architecture: standalone.
+// redisMasterPod — the name of the single-replica master pod of the
+// bitnami/redis chart (standalone mode). Matches redis.yaml::architecture:
+// standalone.
 const redisMasterPod = "redis-master-0"
 
-// redisGet выполняет `redis-cli -t <timeout> GET <key>` внутри redis-master
-// pod-а и возвращает строковое значение (без трейлинг \n). Пустая строка —
-// `(nil)` в redis-cli, что означает «ключ отсутствует или истёк».
+// redisGet runs `redis-cli -t <timeout> GET <key>` inside the redis-master
+// pod and returns the string value (no trailing \n). An empty string means
+// `(nil)` in redis-cli, i.e. the key is missing or expired.
 //
-// Возвращает (value, err) где err — non-nil только на инфраструктурных
-// ошибках kubectl/exec, не на отсутствии ключа.
+// Returns (value, err) where err is non-nil only for infrastructure-level
+// kubectl/exec errors, not for a missing key.
 func (s *Stack) redisGet(ctx context.Context, key string) (string, error) {
 	cmd := exec.CommandContext(ctx, "kubectl",
 		"exec",
@@ -55,37 +57,38 @@ func (s *Stack) redisGet(ctx context.Context, key string) (string, error) {
 			key, err, stderr.String())
 	}
 
-	// redis-cli печатает значение + \n; на nil возвращает пустую строку.
+	// redis-cli prints the value + \n; returns an empty string on nil.
 	return strings.TrimRight(stdout.String(), "\n"), nil
 }
 
-// GetReaperLeaderKID читает Redis-ключ `reaper:leader` и возвращает KID
-// текущего Reaper-лидера. Пустая строка — нет лидера (lease истёк или
-// reaper.enabled=false во всех pod-ах). Ключ зафиксирован константой
-// `leaseKey` в keeper/internal/reaper/runner.go.
+// GetReaperLeaderKID reads the Redis key `reaper:leader` and returns the KID
+// of the current Reaper leader. An empty string means no leader (lease
+// expired, or reaper.enabled=false on all pods). The key is fixed by the
+// `leaseKey` constant in keeper/internal/reaper/runner.go.
 func (s *Stack) GetReaperLeaderKID(ctx context.Context) (string, error) {
 	return s.redisGet(ctx, "reaper:leader")
 }
 
-// GetSoulLeaseHolder читает Redis-ключ `soul:<sid>:lock` и возвращает KID
-// keeper-pod-а, который держит EventStream к данному Soul-у. Пустая строка —
-// lease истёк / нет активного стрима. Ключ зафиксирован в
+// GetSoulLeaseHolder reads the Redis key `soul:<sid>:lock` and returns the
+// KID of the keeper pod holding the EventStream to this Soul. An empty
+// string means the lease expired / no active stream. The key is fixed in
 // keeper/internal/redis/soullease.go::SoulLeaseKey.
 //
-// Failover-тест использует значение ДО kill-pod для понимания, надо ли
-// проверять реконнект (если holder == killed-leader-KID).
+// The failover test uses the value BEFORE kill-pod to determine whether a
+// reconnect check is needed (i.e. if holder == killed-leader-KID).
 func (s *Stack) GetSoulLeaseHolder(ctx context.Context, sid string) (string, error) {
 	return s.redisGet(ctx, "soul:"+sid+":lock")
 }
 
-// FindKeeperPodByKID ищет pod с label `app=keeper`, имя которого совпадает с
-// KID. Convention `KID = pod-name` обеспечена init-container-ом `kid-render`
-// (см. manifests/keeper/deployment.yaml): он подставляет `$POD_NAME` в
-// литерал `__KID__` в шаблоне keeper.yml.
+// FindKeeperPodByKID looks up the pod with label `app=keeper` whose name
+// matches KID. The `KID = pod-name` convention is enforced by the
+// `kid-render` init container (see manifests/keeper/deployment.yaml): it
+// substitutes `$POD_NAME` for the `__KID__` literal in the keeper.yml
+// template.
 //
-// Возвращает err, если pod с таким именем не найден среди label=app=keeper —
-// failover-тест должен фейлить explicitly, а не угадывать неверный pod
-// для kill.
+// Returns err if no pod with that name is found among label=app=keeper --
+// the failover test must fail explicitly rather than guess the wrong pod
+// to kill.
 func (s *Stack) FindKeeperPodByKID(ctx context.Context, kid string) (string, error) {
 	pods, err := s.Clientset.CoreV1().Pods("default").List(ctx, metav1.ListOptions{
 		LabelSelector: "app=keeper",
@@ -106,13 +109,13 @@ func (s *Stack) FindKeeperPodByKID(ctx context.Context, kid string) (string, err
 		kid, available)
 }
 
-// WaitForDeploymentReady блокируется до тех пор, пока Deployment не достигнет
-// readyReplicas == spec.replicas. Используется L3c-4 для подтверждения, что
-// после kill-pod self-heal восстановил 3 ready replicas (новый pod создан
-// ReplicaSet-ом + прошёл readiness probe).
+// WaitForDeploymentReady blocks until the Deployment reaches
+// readyReplicas == spec.replicas. Used by L3c-4 to confirm that after
+// kill-pod, self-heal restored 3 ready replicas (a new pod created by the
+// ReplicaSet + passed its readiness probe).
 //
-// Симметрично waitDeploymentReady (внутренний helper в DeployKeeper-flow),
-// но публично-экспортируемый.
+// Symmetric to waitDeploymentReady (internal helper in the DeployKeeper
+// flow), but publicly exported.
 func (s *Stack) WaitForDeploymentReady(t *testing.T, name string, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -138,14 +141,15 @@ func (s *Stack) WaitForDeploymentReady(t *testing.T, name string, timeout time.D
 	t.Fatalf("deployment %s did not become Ready within %v", name, timeout)
 }
 
-// DeleteKeeperPod удаляет pod kubectl-эквивалентом через client-go.
-// Возвращает err — caller (failover-тест) обязан проверить.
+// DeleteKeeperPod deletes a pod, the client-go equivalent of kubectl delete.
+// Returns err — the caller (failover test) must check it.
 //
-// graceful: grace-period 0 — нам нужна симуляция жёсткого сбоя (lease должен
-// остаться удерживаемым killed-KID-ом до истечения TTL). graceful shutdown
-// вызвал бы корректный Release lease через defer-цепочку в Reaper, что
-// сделало бы failover-окно нулевым (новый лидер моментально захватил бы) —
-// тест валидировал бы happy path, а не реальный crash-сценарий.
+// graceful: grace-period 0 -- we need to simulate a hard failure (the lease
+// must remain held by the killed KID until the TTL expires). A graceful
+// shutdown would trigger a proper Release lease via the Reaper's defer
+// chain, making the failover window zero (the new leader would take over
+// instantly) -- the test would validate the happy path, not a real crash
+// scenario.
 func (s *Stack) DeleteKeeperPod(ctx context.Context, podName string) error {
 	zero := int64(0)
 	return s.Clientset.CoreV1().Pods("default").Delete(ctx, podName, metav1.DeleteOptions{
@@ -153,12 +157,12 @@ func (s *Stack) DeleteKeeperPod(ctx context.Context, podName string) error {
 	})
 }
 
-// keeperPodList возвращает имена всех pod с label `app=keeper`. Используется
-// для логирования диагностики failover (какой pod удалён, какие остались).
+// keeperPodList returns the names of all pods with label `app=keeper`. Used
+// for logging failover diagnostics (which pod was removed, which remain).
 //
-// Возвращает только Running-pod-ы — kubectl delete pod создаёт нового
-// (Terminating-старый + Pending-новый); caller обычно хочет видеть только
-// активные.
+// Returns only Running pods -- kubectl delete pod creates a new one
+// (old Terminating + new Pending); the caller usually only wants to see the
+// active ones.
 func (s *Stack) keeperPodList(ctx context.Context) ([]string, error) {
 	pods, err := s.Clientset.CoreV1().Pods("default").List(ctx, metav1.ListOptions{
 		LabelSelector: "app=keeper",

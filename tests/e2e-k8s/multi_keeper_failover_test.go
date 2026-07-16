@@ -10,32 +10,32 @@ import (
 	"github.com/souls-guild/soul-stack/tests/e2e-k8s/harness"
 )
 
-// TestL3cMultiKeeper_KillLeader — L3c-4 HA-failover-сценарий: 3 Keeper-pod в
-// Deployment (replicas=3) + 1 Soul-pod. Один из keeper-pod-ов (выбранный
-// Reaper-лидер) убивается через `kubectl delete pod --grace-period=0`;
-// валидируется, что:
+// TestL3cMultiKeeper_KillLeader - L3c-4 HA failover scenario: 3 Keeper pods in
+// a Deployment (replicas=3) + 1 Soul pod. One of the keeper pods (the elected
+// Reaper leader) is killed via `kubectl delete pod --grace-period=0`;
+// validates that:
 //
-//  1. оставшиеся 2 keeper подбирают Reaper-leadership через истечение Redis
-//     lease (lock_ttl=15s, см. harness/keeperyml.go::reaperBlock) — новый
-//     лидер появляется в `GET reaper:leader` с KID, отличным от killed;
-//  2. Deployment self-healing восстанавливает 3 ready replica (ReplicaSet
-//     создаёт новый pod + он проходит /readyz);
-//  3. Soul-pod остаётся в `souls.status='connected'` (если он держался не
-//     на killed-Keeper) или реконнектится через failback-цепочку endpoints
-//     (если держался — fallback-list keeper:9095 ClusterIP направит на
-//     живой pod через kube-proxy round-robin).
+//  1. the remaining 2 keepers pick up Reaper leadership once the Redis
+//     lease expires (lock_ttl=15s, see harness/keeperyml.go::reaperBlock) - the new
+//     leader shows up in `GET reaper:leader` with a KID different from the killed one;
+//  2. Deployment self-healing restores 3 ready replicas (ReplicaSet
+//     creates a new pod and it passes /readyz);
+//  3. the Soul pod stays `souls.status='connected'` (if it wasn't held
+//     by the killed Keeper) or reconnects through the failback endpoint
+//     chain (if it was held there - the fallback-list keeper:9095 ClusterIP will route
+//     to a live pod via kube-proxy round-robin).
 //
-// Pre-requisites: docker + kind + kubectl + helm + образы `keeper:e2e-k8s` и
-// `soul:e2e-k8s`. Без любого — t.Skip.
+// Pre-requisites: docker + kind + kubectl + helm + images `keeper:e2e-k8s` and
+// `soul:e2e-k8s`. Missing any of these - t.Skip.
 //
-// ReaperEnabled=true в Config — иначе lease `reaper:leader` не пишется,
-// failover-механика не валидируется. Дефолт false для L3c-2/3 сохранён.
+// ReaperEnabled=true in Config - otherwise the `reaper:leader` lease isn't written and
+// the failover mechanics aren't validated. Default false for L3c-2/3 is preserved.
 //
-// Per-pod KID — за счёт init-container `kid-render` (см.
-// manifests/keeper/deployment.yaml): подставляет $POD_NAME в литерал
-// `__KID__` шаблона keeper.yml. Без этого все 3 pod имели бы одинаковый
-// KID и failover-механика была бы не различима (lease holder всегда тот же
-// KID, новый pod захватил бы тот же ключ моментально без видимой смены).
+// Per-pod KID - via the init container `kid-render` (see
+// manifests/keeper/deployment.yaml): substitutes $POD_NAME into the
+// `__KID__` literal of the keeper.yml template. Without this all 3 pods would have the same
+// KID and the failover mechanics would be indistinguishable (the lease holder would always be the same
+// KID, a new pod would grab the same key instantly with no visible change).
 func TestL3cMultiKeeper_KillLeader(t *testing.T) {
 	stack := harness.NewStack(t, harness.Config{
 		ReaperEnabled: true,
@@ -46,14 +46,14 @@ func TestL3cMultiKeeper_KillLeader(t *testing.T) {
 
 	sid := stack.DeploySoul(t)
 
-	// 1. Дожидаемся выбора первого Reaper-лидера. lock_ttl=15s — лидер
-	//    появляется на первом успешном Acquire. Запас 60s покрывает
-	//    cold-start race (3 pod стартуют почти одновременно).
+	// 1. Wait for the first Reaper leader to be elected. lock_ttl=15s - the leader
+	//    shows up on the first successful Acquire. A 60s buffer covers the
+	//    cold-start race (3 pods starting nearly simultaneously).
 	leaderKID := waitForReaperLeader(t, stack, "", 60*time.Second)
 	t.Logf("L3c-4 initial Reaper leader: %s", leaderKID)
 
-	// 2. Находим pod по KID — convention KID=pod-name держится init-
-	//    container-ом.
+	// 2. Find the pod by KID - convention KID=pod-name is maintained by the init
+	//    container.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	leaderPod, err := stack.FindKeeperPodByKID(ctx, leaderKID)
 	cancel()
@@ -61,8 +61,8 @@ func TestL3cMultiKeeper_KillLeader(t *testing.T) {
 		t.Fatalf("FindKeeperPodByKID(%s): %v", leaderKID, err)
 	}
 
-	// 3. Snapshot SID-lease holder до failover. Если соул держится на
-	//    killed-leader — после kill будет реконнект на другой keeper.
+	// 3. Snapshot the SID-lease holder before failover. If the soul is held on
+	//    the killed leader, it will reconnect to another keeper after the kill.
 	ctxLease, cancelLease := context.WithTimeout(context.Background(), 10*time.Second)
 	soulHolderBefore, err := stack.GetSoulLeaseHolder(ctxLease, sid)
 	cancelLease()
@@ -72,8 +72,8 @@ func TestL3cMultiKeeper_KillLeader(t *testing.T) {
 	t.Logf("L3c-4 SID-lease holder before kill: %q (killing leader %q)",
 		soulHolderBefore, leaderKID)
 
-	// 4. Kill leader pod (grace-period=0 — симулируем crash, не graceful
-	//    Release-lease через defer; failover должен полагаться на TTL).
+	// 4. Kill the leader pod (grace-period=0 - simulate a crash, not a graceful
+	//    Release-lease via defer; failover must rely on TTL).
 	ctxKill, cancelKill := context.WithTimeout(context.Background(), 30*time.Second)
 	if err := stack.DeleteKeeperPod(ctxKill, leaderPod); err != nil {
 		cancelKill()
@@ -81,19 +81,19 @@ func TestL3cMultiKeeper_KillLeader(t *testing.T) {
 	}
 	cancelKill()
 
-	// 5. Дожидаемся НОВОГО лидера (KID != убитый). Lease TTL=15s + acquire
-	//    backoff 5s → typical 15-20s; ставим 90s запас на CI-нагрузку.
+	// 5. Wait for the NEW leader (KID != killed one). Lease TTL=15s + acquire
+	//    backoff 5s -> typically 15-20s; use a 90s buffer for CI load.
 	newLeaderKID := waitForReaperLeader(t, stack, leaderKID, 90*time.Second)
 	t.Logf("L3c-4 new Reaper leader: %s (was %s)", newLeaderKID, leaderKID)
 
-	// 6. Deployment self-heals — ReplicaSet поднимает новый pod взамен
-	//    удалённого, к Ready=3 возвращается в течение 60s (image-load уже
-	//    был, остаётся только init-container + readiness).
+	// 6. Deployment self-heals - ReplicaSet spins up a new pod to replace
+	//    the deleted one, returns to Ready=3 within 60s (image load already
+	//    happened, only the init container + readiness remain).
 	stack.WaitForDeploymentReady(t, "keeper", 120*time.Second)
 
-	// 7. Soul-pod должен оставаться connected (либо реконнект прошёл через
-	//    fallback ClusterIP к живому keeper-у). 120s — щедрый запас на
-	//    timeout reconnect-flow в Soul.
+	// 7. The Soul pod should stay connected (or reconnect through the
+	//    fallback ClusterIP to a live keeper). 120s - a generous buffer for
+	//    the reconnect-flow timeout in Soul.
 	stack.WaitForSoulConnected(t, sid, 2*time.Minute)
 
 	if soulHolderBefore == leaderKID {
@@ -102,13 +102,13 @@ func TestL3cMultiKeeper_KillLeader(t *testing.T) {
 	}
 }
 
-// waitForReaperLeader поллит `reaper:leader` до появления KID, отличного от
-// excludeKID (для пустой строки — любого KID). Возвращает наблюдаемый KID
-// или фейлит t при timeout.
+// waitForReaperLeader polls `reaper:leader` until a KID different from
+// excludeKID shows up (for an empty string - any KID). Returns the observed KID
+// or fails t on timeout.
 //
-// Используется два раза в failover-тесте: (a) до kill — `excludeKID=""`,
-// нам нужен любой лидер; (b) после kill — `excludeKID=<old>`, нам нужен
-// именно НОВЫЙ.
+// Used twice in the failover test: (a) before kill - `excludeKID=""`,
+// any leader will do; (b) after kill - `excludeKID=<old>`, we specifically need
+// the NEW one.
 func waitForReaperLeader(t *testing.T, stack *harness.Stack, excludeKID string, timeout time.Duration) string {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

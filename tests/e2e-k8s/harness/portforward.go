@@ -15,21 +15,21 @@ import (
 	"time"
 )
 
-// portforward.go — обёртка над `kubectl port-forward` для host-side доступа к
-// ClusterIP-сервисам в kind-кластере.
+// portforward.go — a wrapper over `kubectl port-forward` for host-side
+// access to ClusterIP services in the kind cluster.
 //
-// Реализация: спавним long-running subprocess `kubectl port-forward
-// <target> :<remotePort>` (local-port=0 → kubectl выбирает свободный),
-// парсим stdout первой строкой `Forwarding from 127.0.0.1:<port> -> ...`,
-// возвращаем PortForward с LocalPort. Close() — kill процесса.
+// Implementation: spawn a long-running subprocess `kubectl port-forward
+// <target> :<remotePort>` (local-port=0 -> kubectl picks a free one), parse
+// the first stdout line `Forwarding from 127.0.0.1:<port> -> ...`, return a
+// PortForward with LocalPort. Close() kills the process.
 
-// PortForward — handle к live `kubectl port-forward`-туннелю.
+// PortForward — a handle to a live `kubectl port-forward` tunnel.
 type PortForward struct {
 	LocalPort int
 	cmd       *exec.Cmd
 }
 
-// Close завершает port-forward-подпроцесс. Идемпотентен.
+// Close terminates the port-forward subprocess. Idempotent.
 func (pf *PortForward) Close() {
 	if pf == nil || pf.cmd == nil || pf.cmd.Process == nil {
 		return
@@ -38,25 +38,26 @@ func (pf *PortForward) Close() {
 	_ = pf.cmd.Wait()
 }
 
-// portForwardLineRE — формат первой строки stdout `kubectl port-forward`:
+// portForwardLineRE — the format of the first stdout line of
+// `kubectl port-forward`:
 //
 //	Forwarding from 127.0.0.1:54321 -> 8200
 //
-// На IPv6-окружениях может быть `[::1]:` — игнорируем, ловим только 127.0.0.1
-// (мы запрашиваем `--address 127.0.0.1` явно).
+// On IPv6 environments this may be `[::1]:` -- we ignore that and only
+// match 127.0.0.1 (we explicitly request `--address 127.0.0.1`).
 var portForwardLineRE = regexp.MustCompile(`Forwarding from 127\.0\.0\.1:(\d+) ->`)
 
-// PortForward спавнит `kubectl port-forward <target> :<remotePort>` и
-// блокируется до первой строки stdout с локальным портом. timeout — deadline
-// на готовность туннеля. t.Cleanup регистрирует Close.
+// PortForward spawns `kubectl port-forward <target> :<remotePort>` and
+// blocks until the first stdout line with the local port. timeout is the
+// deadline for the tunnel to become ready. t.Cleanup registers Close.
 //
-// target — k8s-форма ресурса (`svc/vault`, `service/postgres-postgresql`,
-// `pod/keeper-xxx`).
+// target — a k8s resource reference (`svc/vault`,
+// `service/postgres-postgresql`, `pod/keeper-xxx`).
 func (c *Cluster) PortForward(t *testing.T, target string, remotePort int, timeout time.Duration) *PortForward {
 	t.Helper()
 
 	if _, err := exec.LookPath("kubectl"); err != nil {
-		t.Skipf("L3c: kubectl не найден в PATH: %v", err)
+		t.Skipf("L3c: kubectl not found in PATH: %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -84,10 +85,10 @@ func (c *Cluster) PortForward(t *testing.T, target string, remotePort int, timeo
 		t.Fatalf("port-forward %s start: %v", target, err)
 	}
 
-	// Stderr форвардим в t.Log (kubectl на ошибках пишет туда).
+	// Forward stderr to t.Log (kubectl writes errors there).
 	go drainToTestLog(t, "pf-stderr:"+target, stderr)
 
-	// Stdout — ловим первую строку с локальным портом; остаток дренируем.
+	// Stdout — capture the first line with the local port; drain the rest.
 	portCh := make(chan int, 1)
 	errCh := make(chan error, 1)
 	go func() {
@@ -101,8 +102,9 @@ func (c *Cluster) PortForward(t *testing.T, target string, remotePort int, timeo
 					return
 				}
 				portCh <- p
-				// Дренируем остаток — иначе kubectl заблокируется на pipe write.
-				// scanner-буфер уже потреблён, читаем напрямую с stdout pipe.
+				// Drain the rest -- otherwise kubectl blocks on the pipe write.
+				// The scanner buffer is already consumed, so read directly
+				// from the stdout pipe.
 				_, _ = io.Copy(io.Discard, stdout)
 				return
 			}
@@ -128,7 +130,7 @@ func (c *Cluster) PortForward(t *testing.T, target string, remotePort int, timeo
 	case <-deadline.C:
 		cancel()
 		_ = cmd.Wait()
-		t.Fatalf("port-forward %s: timeout %v без Forwarding-line", target, timeout)
+		t.Fatalf("port-forward %s: timeout %v without a Forwarding line", target, timeout)
 	}
 
 	t.Cleanup(func() {
@@ -138,8 +140,8 @@ func (c *Cluster) PortForward(t *testing.T, target string, remotePort int, timeo
 	return pf
 }
 
-// drainToTestLog читает r построчно и форвардит в t.Logf. Используется для
-// stderr/stdout-tail port-forward subprocess.
+// drainToTestLog reads r line by line and forwards to t.Logf. Used for
+// stderr/stdout tailing of the port-forward subprocess.
 func drainToTestLog(t *testing.T, prefix string, r io.Reader) {
 	t.Helper()
 	scanner := bufio.NewScanner(r)

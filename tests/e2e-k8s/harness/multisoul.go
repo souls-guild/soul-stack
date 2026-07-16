@@ -12,36 +12,38 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// multisoul.go — DeployMultiSoul для L3c-5 (TestL3cToll_DegradedMode и
+// multisoul.go — DeployMultiSoul for L3c-5 (TestL3cToll_DegradedMode and
 // TestL3cRedisCluster_Resharding).
 //
-// Архитектурное отличие от [Stack.DeploySoul] (L3c-3, single-pod StatefulSet):
-// поднимаем N независимых Pod-ов (kind=Pod) через client-go, не StatefulSet.
-// Причина — каждый Soul-pod нуждается в собственном bootstrap-token (per-SID
-// уникальном), а template StatefulSet-а не умеет в per-replica Secret-ы без
-// initContainer-magic. Прямые Pod-ы дают одну логическую единицу = одна
-// уникальная конфигурация без YAML-шаблонов.
+// Architectural difference from [Stack.DeploySoul] (L3c-3, single-pod
+// StatefulSet): here we spin up N independent Pods (kind=Pod) via
+// client-go, not a StatefulSet. Reason: each Soul pod needs its own
+// bootstrap token (unique per SID), and a StatefulSet template can't do
+// per-replica Secrets without initContainer magic. Plain Pods give one
+// logical unit = one unique config, no YAML templating.
 //
-// Pod-ы создаются с labels `app=soul-multi` (отличить от L3c-3 StatefulSet-а
-// app=soul); pod-имена — `soul-0..soul-{N-1}`; SID-ы — `soul-<i>.example.com`.
+// Pods are created with labels `app=soul-multi` (to distinguish from the
+// L3c-3 StatefulSet's app=soul); pod names are `soul-0..soul-{N-1}`; SIDs
+// are `soul-<i>.example.com`.
 
-// DeployMultiSoul поднимает N независимых Pod-ов Soul. Симметрично DeploySoul,
-// но без StatefulSet (per-pod Secret/ConfigMap). Каждый Pod проходит реальный
-// CSR Bootstrap-flow и устанавливает EventStream-соединение.
+// DeployMultiSoul spins up N independent Soul Pods. Symmetric to
+// DeploySoul, but without a StatefulSet (per-pod Secret/ConfigMap). Each
+// Pod goes through the real CSR bootstrap flow and establishes an
+// EventStream connection.
 //
-// SID-схема: `soul-<i>.example.com` для i=[0..count-1].
+// SID scheme: `soul-<i>.example.com` for i=[0..count-1].
 //
-// Блокируется до `souls.status='connected'` у всех N. timeout-окно широкое —
-// systemd-boot + soul init + EventStream-attach на 5 pod-ах под Kind/Linux
-// занимает 1-3 мин.
+// Blocks until `souls.status='connected'` for all N. The timeout window is
+// wide -- systemd-boot + soul init + EventStream-attach on 5 pods under
+// Kind/Linux takes 1-3 min.
 func (s *Stack) DeployMultiSoul(t *testing.T, count int) []string {
 	t.Helper()
 	if count < 1 {
 		t.Fatalf("DeployMultiSoul: count must be >= 1, got %d", count)
 	}
 
-	// 1. Load image один раз. kind load — idempotent (повторный load на тот же
-	//    tag — no-op).
+	// 1. Load the image once. kind load is idempotent (a repeat load of the
+	//    same tag is a no-op).
 	s.Cluster.LoadDockerImage(t, "soul:e2e-k8s")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -51,7 +53,7 @@ func (s *Stack) DeployMultiSoul(t *testing.T, count int) []string {
 	tokens := make([]string, count)
 	podNames := make([]string, count)
 
-	// 2. Issue bootstrap-token per soul + создать Secret/ConfigMap per pod.
+	// 2. Issue a bootstrap token per soul + create a Secret/ConfigMap per pod.
 	for i := 0; i < count; i++ {
 		sid := fmt.Sprintf("soul-%d.example.com", i)
 		podName := fmt.Sprintf("soul-%d", i)
@@ -91,8 +93,8 @@ func (s *Stack) DeployMultiSoul(t *testing.T, count int) []string {
 		}
 	}
 
-	// 3. Создать Pod-ы. Параллельно для скорости (5 pod-ов × 30s sequential
-	//    create — это лишние 2 мин). Apply через client-go (без YAML).
+	// 3. Create the Pods. In parallel for speed (5 pods x 30s sequential
+	//    create is an extra 2 min). Apply via client-go (no YAML).
 	for i := 0; i < count; i++ {
 		pod := buildSoulPod(i)
 		if _, err := s.Clientset.CoreV1().Pods("default").Create(ctx, pod, metav1.CreateOptions{}); err != nil {
@@ -103,8 +105,8 @@ func (s *Stack) DeployMultiSoul(t *testing.T, count int) []string {
 	// 4. Wait All N pod Ready.
 	waitMultiSoulReady(t, s, podNames, 4*time.Minute)
 
-	// 5. `soul init` + `systemctl start soul.service` per-pod. Sequential —
-	//    параллель тут не критична (init быстрый ~1-2s).
+	// 5. `soul init` + `systemctl start soul.service` per pod. Sequential --
+	//    parallelism doesn't matter here (init is fast, ~1-2s).
 	for i, podName := range podNames {
 		initCtx, initCancel := context.WithTimeout(context.Background(), 60*time.Second)
 		out, code, err := s.execInPod(initCtx, podName, []string{
@@ -130,7 +132,7 @@ func (s *Stack) DeployMultiSoul(t *testing.T, count int) []string {
 		}
 	}
 
-	// 6. Wait souls.status='connected' для всех.
+	// 6. Wait for souls.status='connected' for all.
 	for _, sid := range sids {
 		WaitForSoulConnected(t, s, sid, 2*time.Minute)
 	}
@@ -138,8 +140,8 @@ func (s *Stack) DeployMultiSoul(t *testing.T, count int) []string {
 	return sids
 }
 
-// buildSoulPod собирает Pod-spec для i-го Soul-агента. Симметрично
-// statefulset.yaml::template, но как Go-структура.
+// buildSoulPod builds the Pod spec for the i-th Soul agent. Symmetric to
+// statefulset.yaml::template, but as a Go struct.
 func buildSoulPod(i int) *corev1.Pod {
 	podName := fmt.Sprintf("soul-%d", i)
 	return &corev1.Pod{
@@ -224,8 +226,8 @@ func buildSoulPod(i int) *corev1.Pod {
 	}
 }
 
-// waitMultiSoulReady блокируется до тех пор, пока все pod-ы podNames не дойдут
-// до PodRunning + Ready=true. Поллинг 2s.
+// waitMultiSoulReady blocks until all pods in podNames reach
+// PodRunning + Ready=true. Polls every 2s.
 func waitMultiSoulReady(t *testing.T, s *Stack, podNames []string, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -266,7 +268,7 @@ func waitMultiSoulReady(t *testing.T, s *Stack, podNames []string, timeout time.
 		for n := range remaining {
 			left = append(left, n)
 		}
-		t.Fatalf("waitMultiSoulReady: pods не достигли Ready за %v: %v", timeout, left)
+		t.Fatalf("waitMultiSoulReady: pods did not reach Ready within %v: %v", timeout, left)
 	}
 }
 

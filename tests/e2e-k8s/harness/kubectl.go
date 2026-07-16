@@ -8,8 +8,8 @@ import (
 	"testing"
 )
 
-// KubectlApply — subprocess `kubectl apply -f <path>` с KUBECONFIG из Cluster.
-// Используется L3c-2+ для применения raw YAML manifest-ов keeper/soul.
+// KubectlApply — subprocess `kubectl apply -f <path>` with KUBECONFIG from
+// Cluster. Used by L3c-2+ to apply raw keeper/soul YAML manifests.
 func (c *Cluster) KubectlApply(t *testing.T, manifestPath string) {
 	t.Helper()
 	cmd := exec.Command("kubectl", "apply", "-f", manifestPath)
@@ -21,11 +21,12 @@ func (c *Cluster) KubectlApply(t *testing.T, manifestPath string) {
 }
 
 // LoadDockerImage — subprocess `kind load docker-image <image> --name <cluster>`.
-// Образ должен быть уже built (присутствует в `docker images`) до вызова —
-// kind load копирует tarball из docker-daemon хоста внутрь node-контейнера.
+// The image must already be built (present in `docker images`) before
+// calling -- kind load copies the tarball from the host's docker daemon
+// into the node container.
 //
-// Используется L3c-3+ для загрузки локально собранных keeper / soul-live image
-// в kind-cluster без push в registry.
+// Used by L3c-3+ to load locally built keeper / soul-live images into the
+// kind cluster without a registry push.
 func (c *Cluster) LoadDockerImage(t *testing.T, image string) {
 	t.Helper()
 	cmd := exec.Command("kind", "load", "docker-image", image, "--name", c.Name)

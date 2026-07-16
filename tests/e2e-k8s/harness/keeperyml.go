@@ -4,63 +4,66 @@ package harness
 
 import "fmt"
 
-// keeperyml.go — рендер keeper.yml для k8s-deployment-а в L3c. Симметрично
-// tests/e2e-live/harness/config_builder.go::buildKeeperYAML, но:
-//   - listener-ы биндят на `0.0.0.0:<port>` (внутри pod-а нет other-network);
-//   - адреса PG/Redis/Vault — in-cluster service-DNS, не testcontainers
-//     mapped-port-ы;
-//   - TLS-пути — `/etc/keeper-tls/keeper.crt|.key|/vault-ca.crt` (Secret mount);
-//   - reaper.enabled=false (минимизация side-effects для L3c-2 smoke).
+// keeperyml.go — renders keeper.yml for the k8s deployment in L3c. Symmetric
+// to tests/e2e-live/harness/config_builder.go::buildKeeperYAML, but:
+//   - listeners bind to `0.0.0.0:<port>` (no other network inside the pod);
+//   - PG/Redis/Vault addresses are in-cluster service DNS, not testcontainers
+//     mapped ports;
+//   - TLS paths are `/etc/keeper-tls/keeper.crt|.key|/vault-ca.crt` (Secret mount);
+//   - reaper.enabled=false (minimizes side effects for the L3c-2 smoke test).
 //
-// Формат и грамматика keeper.yml — `shared/config/keeper.go` (KeeperConfig).
-// Не используется templating-движок: значения подставляются `fmt.Sprintf`,
-// CEL/Go-template здесь были бы over-engineering (как в L3b config_builder.go).
+// keeper.yml format and grammar — `shared/config/keeper.go` (KeeperConfig).
+// No templating engine is used: values are substituted via `fmt.Sprintf`;
+// CEL/Go-template would be over-engineering here (same as in L3b
+// config_builder.go).
 
-// keeperYAMLInputs — динамические поля рендера. Все остальные настройки
-// (audit/logging/plugin_runtime) фиксированы константами в шаблоне.
+// keeperYAMLInputs — the dynamic render fields. All other settings
+// (audit/logging/plugin_runtime) are fixed constants in the template.
 //
-// KID в шаблоне — литерал `__KID__`, который init-container `kid-render`
-// (см. manifests/keeper/deployment.yaml) подставляет на pod-name. Этот
-// шаблонный механизм позволяет multi-replica Deployment-у разворачивать
-// 3 keeper-pod с разными KID из одного ConfigMap.
+// KID in the template is the literal `__KID__`, which the init container
+// `kid-render` (see manifests/keeper/deployment.yaml) substitutes with the
+// pod name. This templating mechanism lets a multi-replica Deployment run
+// 3 keeper pods with different KIDs from a single ConfigMap.
 type keeperYAMLInputs struct {
 	VaultAddr           string // `http://vault.default.svc.cluster.local:8200`
 	VaultToken          string // dev-mode root-token
-	RedisAddr           string // `redis-master.default.svc.cluster.local:6379` (host:port без схемы)
+	RedisAddr           string // `redis-master.default.svc.cluster.local:6379` (host:port, no scheme)
 	OpenAPIPort         int
 	MCPPort             int
 	MetricsPort         int
 	BootstrapGRPCPort   int
 	EventStreamGRPCPort int
 
-	// ReaperEnabled — true для тестов, которым нужен live leader-election
-	// (L3c-4 failover). Дефолт false: для L3c-2/3 reaper выключен ради
-	// минимизации side-effects.
+	// ReaperEnabled — true for tests that need live leader election
+	// (L3c-4 failover). Default false: for L3c-2/3 the reaper is disabled
+	// to minimize side effects.
 	//
-	// При ReaperEnabled=true в конфиг добавляется блок `reaper:` с короткими
-	// interval/lock_ttl (15s/15s) — failover-тест должен видеть выбор нового
-	// лидера за разумное время (< 60s). Правила оставлены дефолтными.
+	// When ReaperEnabled=true, a `reaper:` block is added to the config with
+	// short interval/lock_ttl (15s/15s) -- the failover test must observe a
+	// new leader elected within a reasonable time (< 60s). Rules are left
+	// at their defaults.
 	ReaperEnabled bool
 }
 
-// renderKeeperYAML возвращает строку keeper.yml для записи в ConfigMap.
+// renderKeeperYAML returns the keeper.yml string to write into the
+// ConfigMap.
 //
-// TLS-сертификаты ожидаются по фиксированным путям в pod-е:
+// TLS certificates are expected at fixed paths in the pod:
 //
 //	/etc/keeper-tls/keeper.crt
 //	/etc/keeper-tls/keeper.key
 //	/etc/keeper-tls/vault-ca.crt
 //
-// — то же что mount-ит manifests/keeper/deployment.yaml::volumes.keeper-tls.
+// -- the same paths mounted by manifests/keeper/deployment.yaml::volumes.keeper-tls.
 //
-// `acolytes: 2` — same value как dev/keeper.dev.yml; стандарт multi-keeper.
+// `acolytes: 2` — same value as dev/keeper.dev.yml; the multi-keeper standard.
 //
-// `allow_unsafe_single_path_multi_keeper: false` — L3c-3 multi-replica, флаг
-// «один путь к Vault на много keeper-ов» противоречит HA-режиму; конфигурация
-// читает Vault через kubernetes-DNS, путь общий → флаг отключён.
+// `allow_unsafe_single_path_multi_keeper: false` — L3c-3 is multi-replica,
+// and the "single Vault path shared by many keepers" flag conflicts with HA
+// mode; the config reads Vault via kubernetes DNS, path shared -> flag off.
 //
-// `reaper.enabled: false` — для L3c smoke не нужны background job-ы.
-// L3c-4 failover включает reaper через in.ReaperEnabled.
+// `reaper.enabled: false` — background jobs aren't needed for the L3c smoke
+// test. L3c-4 failover enables the reaper via in.ReaperEnabled.
 func renderKeeperYAML(in keeperYAMLInputs) string {
 	const tmpl = `kid: __KID__
 
@@ -155,19 +158,21 @@ acolytes: 2
 	)
 }
 
-// reaperBlock возвращает YAML-блок `reaper:` под флагом ReaperEnabled.
+// reaperBlock returns the YAML `reaper:` block gated by the ReaperEnabled
+// flag.
 //
-// Disabled (default L3c-2/3): один key `enabled: false` — без правил, без
-// leader-election, без background SQL.
+// Disabled (default L3c-2/3): a single `enabled: false` key -- no rules, no
+// leader election, no background SQL.
 //
-// Enabled (L3c-4 failover): короткий lock_ttl=15s — после kill-leader-pod
-// оставшиеся 2 keeper увидят истёкший lease максимум за TTL и переберут
-// leadership. interval=15s минимизирует idle-окно между tick-ами; правила
-// оставлены дефолтными (см. defaults в keeper/internal/reaper/runner.go).
+// Enabled (L3c-4 failover): short lock_ttl=15s -- after kill-leader-pod the
+// remaining 2 keepers will see the expired lease within at most the TTL and
+// take over leadership. interval=15s minimizes the idle window between
+// ticks; rules are left at their defaults (see the defaults in
+// keeper/internal/reaper/runner.go).
 //
-// Этот блок выделен отдельной функцией, потому что валидный YAML с минимум
-// `enabled: true` требует хотя бы пары полей; смешивать в одной строке
-// fmt.Sprintf трудно читать.
+// This block is factored into its own function because valid YAML with a
+// minimal `enabled: true` needs at least a couple of fields; mixing it into
+// a single fmt.Sprintf string would be hard to read.
 func reaperBlock(enabled bool) string {
 	if !enabled {
 		return `

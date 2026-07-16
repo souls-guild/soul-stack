@@ -11,32 +11,34 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// toll.go — read-доступ к Toll cluster-degraded флагу в Redis (ADR-038). Helper
-// нужен L3c-5 TestL3cToll_DegradedMode для assert-а, что Toll-leader взвёл
-// `cluster:degraded` после массового оттока Soul-pod-ов.
+// toll.go — read access to the Toll cluster-degraded flag in Redis
+// (ADR-038). This helper is needed by L3c-5 TestL3cToll_DegradedMode to
+// assert that the Toll leader raised `cluster:degraded` after a mass
+// exodus of Soul pods.
 //
-// Ключ `cluster:degraded` — единое место (keeper/internal/redis/tolldetector.go
-// const tollDegradedKey). Строка дублируется здесь сознательно: harness не
-// импортирует keeper/internal/* (Go-internal-rules + L3c module isolation).
+// The `cluster:degraded` key has a single source of truth
+// (keeper/internal/redis/tolldetector.go const tollDegradedKey). The string
+// is duplicated here deliberately: the harness does not import
+// keeper/internal/* (Go internal rules + L3c module isolation).
 
-// tollDegradedKey — Redis-ключ Toll cluster-флага. Должен совпадать с
+// tollDegradedKey — the Redis key of the Toll cluster flag. Must match
 // keeper/internal/redis/tolldetector.go::tollDegradedKey.
 const tollDegradedKey = "cluster:degraded"
 
-// IsTollDegraded возвращает true, если в Redis выставлен флаг cluster:degraded.
-// Использует EXISTS (не GET) — value-холдер для assert-а не нужен, флаг
-// бинарный.
+// IsTollDegraded returns true if the cluster:degraded flag is set in Redis.
+// Uses EXISTS (not GET) -- no value holder needed for the assert, the flag
+// is binary.
 //
-// Per-call port-forward + redis.Client: тест опрашивает в polling-loop-е, но
-// каждый poll создаёт свежий PortForward — это надёжнее, чем shared-handle
-// (kubectl port-forward может умереть, t.Cleanup закроет).
+// Per-call port-forward + redis.Client: the test polls in a loop, but each
+// poll creates a fresh PortForward -- this is more reliable than a shared
+// handle (kubectl port-forward can die; t.Cleanup will close it).
 func (s *Stack) IsTollDegraded(t *testing.T) bool {
 	t.Helper()
 	pf := s.Cluster.PortForward(t, "svc/redis-master", 6379, 30*time.Second)
 
-	// Bitnami Redis в helm-values по умолчанию без auth (см.
-	// helm-values/redis.yaml: auth.enabled=false). Если поднимут — добавить
-	// password из RedisAuthSecret.
+	// Bitnami Redis in helm-values has no auth by default (see
+	// helm-values/redis.yaml: auth.enabled=false). If that's enabled later,
+	// add the password from RedisAuthSecret.
 	rc := redis.NewClient(&redis.Options{
 		Addr: fmt.Sprintf("127.0.0.1:%d", pf.LocalPort),
 	})
@@ -53,9 +55,10 @@ func (s *Stack) IsTollDegraded(t *testing.T) bool {
 	return n == 1
 }
 
-// WaitForTollDegraded поллит cluster:degraded флаг до true или timeout.
-// На fail печатает baseline-snapshot из PG (souls.status='connected') для
-// диагностики (false-positive могут быть из-за пустого baseline).
+// WaitForTollDegraded polls the cluster:degraded flag until true or
+// timeout. On failure prints a baseline snapshot from PG
+// (souls.status='connected') for diagnostics (false positives can happen
+// due to an empty baseline).
 func (s *Stack) WaitForTollDegraded(t *testing.T, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -65,5 +68,5 @@ func (s *Stack) WaitForTollDegraded(t *testing.T, timeout time.Duration) {
 		}
 		time.Sleep(2 * time.Second)
 	}
-	t.Fatalf("WaitForTollDegraded: cluster:degraded не взведён за %v", timeout)
+	t.Fatalf("WaitForTollDegraded: cluster:degraded not set within %v", timeout)
 }

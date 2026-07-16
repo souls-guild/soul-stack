@@ -15,16 +15,16 @@ import (
 	"time"
 )
 
-// vault.go — minimal HTTP-client для seed Vault (PKI mount + JWT signing-key +
-// PG DSN) и выпуска keeper-server TLS-cert. Симметрично tests/e2e-live/harness/
-// vault.go — harness не может импортировать `keeper/internal/vault` (Go internal-
-// rules), direct HTTP к Vault dev-API.
+// vault.go - minimal HTTP client for seeding Vault (PKI mount + JWT signing key +
+// PG DSN) and issuing the keeper-server TLS cert. Symmetric to tests/e2e-live/harness/
+// vault.go - the harness cannot import `keeper/internal/vault` (Go internal
+// rules), so it talks to the Vault dev API over plain HTTP.
 //
-// Доступ к Vault в kind осуществляется через port-forward (`kubectl port-forward
-// svc/vault 0:8200`) — Vault service внутрикластерный, host-side seed снаружи.
+// Vault access in kind goes through port-forward (`kubectl port-forward
+// svc/vault 0:8200`) - the Vault service is in-cluster, seeding happens host-side.
 
 const (
-	vaultRootToken        = "roottoken" // совпадает с helm-values/vault.yaml::server.dev.devRootToken
+	vaultRootToken        = "roottoken" // matches helm-values/vault.yaml::server.dev.devRootToken
 	vaultPKIMountPath     = "sys/mounts/pki"
 	vaultPKIRootGenPath   = "pki/root/generate/internal"
 	vaultPKIRoleSoulSeed  = "pki/roles/soul-seed"
@@ -35,7 +35,7 @@ const (
 	hs256MinBytes         = 32
 )
 
-// vaultClient — обёртка HTTP-клиента над Vault dev-API.
+// vaultClient - HTTP client wrapper over the Vault dev API.
 type vaultClient struct {
 	addr  string
 	token string
@@ -50,8 +50,8 @@ func newVaultClient(addr, token string) *vaultClient {
 	}
 }
 
-// write — POST `<addr>/v1/<path>` с JSON-body. 204 (config-mutate) → nil/nil.
-// 4xx/5xx → ошибка с body. Иначе декодирует `data`-поле ответа.
+// write - POST `<addr>/v1/<path>` with a JSON body. 204 (config-mutate) -> nil/nil.
+// 4xx/5xx -> error with body. Otherwise decodes the `data` field of the response.
 func (vc *vaultClient) write(ctx context.Context, path string, body map[string]any) (map[string]any, error) {
 	payload, err := json.Marshal(body)
 	if err != nil {
@@ -89,10 +89,10 @@ func (vc *vaultClient) write(ctx context.Context, path string, body map[string]a
 	return out, nil
 }
 
-// waitVaultReady пингует Vault `/v1/sys/health` до 200 (или 429 для standby/
-// uninitialized — в dev-mode не возникает, но включаем для робастности).
-// Таймаут 60s — Vault dev-mode стартует обычно <5s, но первый пакет после
-// port-forward-а может потеряться.
+// waitVaultReady polls Vault `/v1/sys/health` until 200 (or 429 for standby/
+// uninitialized - doesn't happen in dev-mode, but included for robustness).
+// Timeout 60s - Vault dev-mode usually starts in <5s, but the first packet
+// after port-forward can get dropped.
 func waitVaultReady(t *testing.T, addr string, deadline time.Duration) {
 	t.Helper()
 	limit := time.Now().Add(deadline)
@@ -113,11 +113,11 @@ func waitVaultReady(t *testing.T, addr string, deadline time.Duration) {
 	t.Fatalf("vault not ready at %s within %v: %v", addr, deadline, lastErr)
 }
 
-// seedVaultSecrets поднимает PKI + JWT signing-key + Postgres DSN в Vault,
-// выпускает keeper-server TLS-cert для in-cluster DNS-имени.
+// seedVaultSecrets sets up PKI + JWT signing key + Postgres DSN in Vault,
+// issues the keeper-server TLS cert for the in-cluster DNS name.
 //
-// Возвращает PEM-байты cert / key / CA — caller-уровень кладёт их в k8s Secret,
-// который mount-ится в keeper-pod.
+// Returns cert / key / CA PEM bytes - the caller puts them into a k8s Secret
+// mounted into the keeper-pod.
 func seedVaultSecrets(t *testing.T, vaultAddr, pgDSN string) (certPEM, keyPEM, caPEM []byte) {
 	t.Helper()
 	vc := newVaultClient(vaultAddr, vaultRootToken)
@@ -142,8 +142,8 @@ func seedVaultSecrets(t *testing.T, vaultAddr, pgDSN string) (certPEM, keyPEM, c
 		t.Fatalf("vault: generate root CA: %v", err)
 	}
 
-	// Role soul-seed: allow_any_name для test-окружения (CN=keeper, alt-имена
-	// in-cluster service-DNS).
+	// Role soul-seed: allow_any_name for the test environment (CN=keeper, alt names
+	// on in-cluster service DNS).
 	if _, err := vc.write(ctx, vaultPKIRoleSoulSeed, map[string]any{
 		"allowed_domains":  "cluster.local,svc,default,localhost,example.com",
 		"allow_subdomains": true,
@@ -155,7 +155,7 @@ func seedVaultSecrets(t *testing.T, vaultAddr, pgDSN string) (certPEM, keyPEM, c
 		t.Fatalf("vault: create role soul-seed: %v", err)
 	}
 
-	// JWT signing-key (HS256 32B base64, симметрично provision.sh).
+	// JWT signing key (HS256 32B base64, symmetric to provision.sh).
 	jwtKey, err := generateHS256Key()
 	if err != nil {
 		t.Fatalf("vault: generate HS256 key: %v", err)
@@ -168,7 +168,7 @@ func seedVaultSecrets(t *testing.T, vaultAddr, pgDSN string) (certPEM, keyPEM, c
 		t.Fatalf("vault: write JWT signing-key: %v", err)
 	}
 
-	// PG DSN — keeper.yml::postgres.dsn_ref ссылается на этот KV.
+	// PG DSN - keeper.yml::postgres.dsn_ref refers to this KV.
 	if _, err := vc.write(ctx, vaultPostgresDSNPath, map[string]any{
 		"data": map[string]any{
 			"dsn": pgDSN,
@@ -177,9 +177,9 @@ func seedVaultSecrets(t *testing.T, vaultAddr, pgDSN string) (certPEM, keyPEM, c
 		t.Fatalf("vault: write postgres DSN: %v", err)
 	}
 
-	// Issue keeper-server TLS leaf-cert. CN=keeper + alt-names на in-cluster
-	// service-DNS (`keeper`, `keeper.default.svc.cluster.local`). IP-SAN:
-	// 127.0.0.1 (host-side port-forward хвост) + 10.0.0.0/8 покрывается
+	// Issue the keeper-server TLS leaf cert. CN=keeper + alt names on in-cluster
+	// service DNS (`keeper`, `keeper.default.svc.cluster.local`). IP-SAN:
+	// 127.0.0.1 (host-side port-forward tail) + 10.0.0.0/8 is covered by
 	// allow_any_name=true / allow_ip_sans=true.
 	data, err := vc.write(ctx, vaultPKIIssueSoulSeed, map[string]any{
 		"common_name": "keeper",

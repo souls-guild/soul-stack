@@ -11,38 +11,38 @@ import (
 	"github.com/souls-guild/soul-stack/tests/e2e-k8s/harness"
 )
 
-// TestL3cRedisCluster_Resharding — L3c-5 part B: портирование мега-теста
-// 2026-05-25 (project_megatest_ha_scale_2026_05_25.md) в kind. 3 Soul-pod →
-// scenario `create` консолидированного redis (redis_type=cluster, 3-master
-// cluster, replicas_per_shard=0) → assert `cluster_state:ok` через `redis-cli
-// cluster info` в одном из pod-ов.
+// TestL3cRedisCluster_Resharding - L3c-5 part B: porting the megatest from
+// 2026-05-25 (project_megatest_ha_scale_2026_05_25.md) to kind. 3 Soul pods ->
+// scenario `create` for the consolidated redis (redis_type=cluster, 3-master
+// cluster, replicas_per_shard=0) -> assert `cluster_state:ok` via `redis-cli
+// cluster info` in one of the pods.
 //
-// Прежний самодостаточный cluster-сервис удалён (redis-консолидация): cluster-флоу
-// поглощён режимом cluster консолидированного redis.
+// The former standalone cluster service was removed (redis consolidation): the cluster flow
+// was absorbed into the cluster mode of the consolidated redis.
 //
 // Pre-requisites:
-//   - service-catalog c записью `redis` (POST /v1/services).
-//   - keeper-pod ДОЛЖЕН видеть git-repo `redis`. В L3b это file://-URL на
-//     host-side bare-repo (см. tests/e2e-live/harness/git.go); в kind-cluster
-//     file:// из pod-а недоступен — host-FS отсутствует. Нужен либо in-cluster
-//     git-server pod (sidecar/standalone), либо mount/projected-volume с
-//     пред-сделанным bare-repo.
+//   - a service catalog entry for `redis` (POST /v1/services).
+//   - the keeper pod MUST see the git repo `redis`. In L3b this is a file:// URL to a
+//     host-side bare repo (see tests/e2e-live/harness/git.go); in a kind cluster
+//     file:// from a pod is unreachable - there's no host FS. Need either an in-cluster
+//     git-server pod (sidecar/standalone), or a mount/projected volume with
+//     a pre-built bare repo.
 //
-// L3c-5 НЕ закрывает git-server infra для kind. Тест в текущем виде —
-// каркас с t.Skip и понятной диагностикой; реальный прогон — L3c-future
-// (отдельный slice по architect-вердикту, новая сущность `git-server-pod` в
-// harness требует propose-and-wait).
+// L3c-5 does NOT close the git-server infra gap for kind. The test as it stands is
+// a t.Skip scaffold with a clear diagnostic; the real run is L3c-future
+// (a separate slice per architect verdict - the new `git-server-pod` entity in
+// the harness needs propose-and-wait).
 //
-// Длительность при включении: ~15 мин (apt-get install redis × 3 pod +
+// Duration if enabled: ~15 min (apt-get install redis x 3 pods +
 // cluster-create).
 func TestL3cRedisCluster_Resharding(t *testing.T) {
-	t.Skip("L3c-5 part B заблокирован: нет git-server-pod infra для service-loader-а в kind. " +
-		"Требуется отдельный slice (propose-and-wait по имени `git-server-pod` + " +
-		"alpine/git или nginx-git-http-backend deployment).")
+	t.Skip("L3c-5 part B blocked: no git-server-pod infra for the service-loader in kind. " +
+		"Needs a separate slice (propose-and-wait for the name `git-server-pod` + " +
+		"an alpine/git or nginx-git-http-backend deployment).")
 
-	// Каркас остаётся для будущей разблокировки (L3c-future): когда появится
-	// harness.DeployGitServerPod + Stack.RegisterService с in-cluster URL,
-	// этот код станет boilerplate.
+	// Scaffold remains for future unblocking (L3c-future): once
+	// harness.DeployGitServerPod + Stack.RegisterService with an in-cluster URL exist,
+	// this code becomes boilerplate.
 	stack := harness.NewStack(t, harness.Config{
 		ExamplePath: "examples/service/redis",
 		ServiceName: "redis",
@@ -54,7 +54,7 @@ func TestL3cRedisCluster_Resharding(t *testing.T) {
 
 	sids := stack.DeployMultiSoul(t, 3)
 	if len(sids) != 3 {
-		t.Fatalf("DeployMultiSoul: ожидалось 3 SID, получено %d", len(sids))
+		t.Fatalf("DeployMultiSoul: expected 3 SID, got %d", len(sids))
 	}
 
 	incName := stack.CreateIncarnation(t, "test-redis-resharding", "redis@main", map[string]any{
@@ -71,7 +71,7 @@ func TestL3cRedisCluster_Resharding(t *testing.T) {
 	})
 	stack.WaitApplySuccess(t, applyID, 600)
 
-	// Independent verify: cluster_state:ok через exec в soul-0.
+	// Independent verify: cluster_state:ok via exec in soul-0.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	deadline := time.Now().Add(30 * time.Second)
@@ -93,7 +93,7 @@ func TestL3cRedisCluster_Resharding(t *testing.T) {
 		time.Sleep(2 * time.Second)
 	}
 	if !ok {
-		t.Fatalf("redis cluster не достиг cluster_state:ok (last_exit=%d) output:\n%s",
+		t.Fatalf("redis cluster did not reach cluster_state:ok (last_exit=%d) output:\n%s",
 			lastExit, lastOutput)
 	}
 }

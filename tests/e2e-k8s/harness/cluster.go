@@ -1,10 +1,12 @@
 //go:build e2e_k8s
 
-// Package harness — L3c kind-cluster lifecycle и kubectl/kind subprocess-обёртки.
+// Package harness — L3c kind cluster lifecycle and kubectl/kind subprocess
+// wrappers.
 //
-// В L3c-1 (pilot) реализуется только Cluster (spin-up/teardown kind через
-// sigs.k8s.io/kind/pkg/cluster) и базовые subprocess-wrapper-ы. Высокоуровневый
-// Stack.DeployInfra / Stack.DeployKeeper наполняются в L3c-2 / L3c-3.
+// L3c-1 (pilot) implements only Cluster (spin-up/teardown of kind via
+// sigs.k8s.io/kind/pkg/cluster) and the basic subprocess wrappers. The
+// higher-level Stack.DeployInfra / Stack.DeployKeeper are filled in by
+// L3c-2 / L3c-3.
 package harness
 
 import (
@@ -19,13 +21,13 @@ import (
 	"sigs.k8s.io/kind/pkg/cmd"
 )
 
-// Cluster — обёртка kind-cluster с автоматическим teardown через t.Cleanup (LIFO).
+// Cluster — kind cluster wrapper with automatic teardown via t.Cleanup (LIFO).
 //
-// Имя кластера per-test (soul-stack-e2e-<sanitized-test-name>-<unix-nanos>) —
-// PM-decision L3c-cluster-name. Изолирует параллельные прогоны в CI и не
-// конфликтует с другими kind-кластерами на хосте.
+// Cluster name is per-test (soul-stack-e2e-<sanitized-test-name>-<unix-nanos>)
+// — PM decision L3c-cluster-name. Isolates parallel runs in CI and avoids
+// conflicting with other kind clusters on the host.
 //
-// Kubeconfig пишется в t.TempDir() — автоматически удаляется test-harness-ом.
+// Kubeconfig is written to t.TempDir() — auto-removed by the test harness.
 type Cluster struct {
 	Name       string
 	Kubeconfig string
@@ -33,20 +35,22 @@ type Cluster struct {
 	provider *cluster.Provider
 }
 
-// NewCluster spins up свежий kind-cluster и регистрирует teardown в t.Cleanup.
-// Pre-flight: skip если docker или kind CLI не найдены в PATH.
+// NewCluster spins up a fresh kind cluster and registers teardown in
+// t.Cleanup. Pre-flight: skips if docker or the kind CLI are not found in
+// PATH.
 //
-// kind CLI нужен помимо Go-API: load-image (см. Cluster.LoadDockerImage)
-// надёжно работает только через CLI (Go-API экспериментальный). Проверяем оба
-// требования на старте, чтобы тест скипался единообразно.
+// The kind CLI is needed in addition to the Go API: load-image (see
+// Cluster.LoadDockerImage) only works reliably via the CLI (the Go API is
+// experimental). Both requirements are checked upfront so the test skips
+// consistently.
 func NewCluster(t *testing.T) *Cluster {
 	t.Helper()
 
 	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skipf("L3c: docker не найден в PATH: %v", err)
+		t.Skipf("L3c: docker not found in PATH: %v", err)
 	}
 	if _, err := exec.LookPath("kind"); err != nil {
-		t.Skipf("L3c: kind CLI не найден в PATH (нужен для load-image): %v", err)
+		t.Skipf("L3c: kind CLI not found in PATH (needed for load-image): %v", err)
 	}
 
 	name := fmt.Sprintf("soul-stack-e2e-%s-%d", sanitizeTestName(t.Name()), time.Now().UnixNano())
@@ -54,9 +58,10 @@ func NewCluster(t *testing.T) *Cluster {
 
 	provider := cluster.NewProvider(cluster.ProviderWithLogger(cmd.NewLogger()))
 
-	// CreateWithWaitForReady=120s — kind по умолчанию НЕ ждёт control-plane;
-	// без ожидания List Nodes сразу после Create может вернуть пустой список.
-	// 120s — запас для macOS docker-desktop (медленнее Linux dev-машины).
+	// CreateWithWaitForReady=120s — kind does NOT wait for the control plane
+	// by default; without waiting, List Nodes right after Create can return
+	// an empty list. 120s gives headroom for macOS docker-desktop (slower
+	// than a Linux dev machine).
 	err := provider.Create(name,
 		cluster.CreateWithKubeconfigPath(kubeconfig),
 		cluster.CreateWithWaitForReady(120*time.Second),
@@ -76,14 +81,14 @@ func NewCluster(t *testing.T) *Cluster {
 	return c
 }
 
-// sanitizeTestName — kind cluster name должен быть DNS-friendly (RFC 1123:
-// lowercase alphanumerics + '-'). Go-тесты имеют форму TestName_SubName/Case,
-// что не подходит как есть.
+// sanitizeTestName — the kind cluster name must be DNS-friendly (RFC 1123:
+// lowercase alphanumerics + '-'). Go test names have the form
+// TestName_SubName/Case, which doesn't fit as-is.
 //
-// Максимальная длина — 30, чтобы остался запас под unix-nanos suffix
-// (~19 символов) в пределах 63-char DNS-label лимита (kind ещё префиксует
-// container "kind-<name>-control-plane" — итого ~80, контейнер-имя длиннее
-// label, но kind терпит до своего внутреннего лимита).
+// Max length is 30, leaving headroom for the unix-nanos suffix (~19 chars)
+// within the 63-char DNS-label limit (kind also prefixes the container name
+// "kind-<name>-control-plane" -- ~80 total; the container name exceeds the
+// label limit, but kind tolerates it up to its own internal limit).
 func sanitizeTestName(name string) string {
 	result := strings.ToLower(name)
 	result = strings.ReplaceAll(result, "_", "-")

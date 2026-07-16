@@ -15,11 +15,11 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-// TestL3cKindUp_Empty — pilot smoke L3c-1: kind-cluster поднимается, в нём
-// есть как минимум один node со статусом Ready. Ничего не деплоит (PG/Redis/
-// Vault → L3c-2, Keeper/Soul → L3c-3).
+// TestL3cKindUp_Empty - pilot smoke L3c-1: the kind cluster comes up and has
+// at least one node with status Ready. Deploys nothing (PG/Redis/
+// Vault -> L3c-2, Keeper/Soul -> L3c-3).
 //
-// При отсутствии docker/kind в PATH — t.Skip (см. harness.NewCluster).
+// If docker/kind is missing from PATH - t.Skip (see harness.NewCluster).
 func TestL3cKindUp_Empty(t *testing.T) {
 	stack := harness.NewStack(t, harness.Config{})
 
@@ -41,7 +41,7 @@ func TestL3cKindUp_Empty(t *testing.T) {
 		t.Fatalf("list nodes: %v", err)
 	}
 	if len(nodes.Items) == 0 {
-		t.Fatalf("ожидался минимум 1 node в kind-кластере, получено 0")
+		t.Fatalf("expected at least 1 node in the kind cluster, got 0")
 	}
 
 	for _, node := range nodes.Items {
@@ -57,7 +57,7 @@ func TestL3cKindUp_Empty(t *testing.T) {
 			}
 		}
 		if !ready {
-			t.Errorf("node %s не Ready: %s", node.Name, lastMsg)
+			t.Errorf("node %s is not Ready: %s", node.Name, lastMsg)
 		}
 	}
 }
