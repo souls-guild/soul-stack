@@ -6,9 +6,9 @@ The document covers **all three kinds of plugins** (manifest format is the same,
 
 | Kind | Host | Binar | Destination |
 |---|---|---|---|
-| `soul_module` | `soul` (agent or push) | `soul-mod-<name>` | Implements Destiny steps: `SoulModule`. Also see [`../soul/modules.md`](../soul/modules.md). |
-| `cloud_driver` | `keeper` (module `keeper.cloud`) | `soul-cloud-<provider>` | Creating/deleting a VM in the cloud: `CloudDriver`. |
-| `ssh_provider` | `keeper` (module `keeper.push`) | `soul-ssh-<provider>` | SSH credentials for push run: `SshProvider`. |
+| `soul_module` | `soul` (agent or push) | `soul-mod-<name>` | Implements Destiny steps: [`SoulModule`](#service-contract-soulmodule). Also see [`../soul/modules.md`](../soul/modules.md). |
+| `cloud_driver` | `keeper` (module `keeper.cloud`) | `soul-cloud-<provider>` | Creating/deleting a VM in the cloud: [`CloudDriver`](#service-contract-clouddriver). |
+| `ssh_provider` | `keeper` (module `keeper.push`) | `soul-ssh-<provider>` | SSH credentials for push run: [`SshProvider`](#service-contract-sshprovider). |
 
 ## Type conventions
 
@@ -41,8 +41,8 @@ Operator command: `soul-lint validate-manifest <path> [--json]`. Does: parse YAM
 | `protocol_version` | `int32` | — | Version `proto/plugin/vN/`. Duplicated in the handshake line; cross-check inside the plugin and vs `SupportedProtocolVersions` host ([ADR-020(c)](../adr/0020-plugin-infrastructure.md)). **Not artifact version** is an API compat flag, an exception to [ADR-007](../adr/0007-versioning-git-ref.md). `int32` (and not `int`) is a deliberate exception from the type dictionary: the protocol version will not grow beyond 2³¹, at the wire level the type is fixed in `proto/plugin/v1/manifest.proto`. |
 | `namespace` | `string` (kebab-case) | — | Plugin collection. For core: `core`. For third-party: `wb` / `community` / organization name. |
 | `name` | `string` (kebab-case) | — | The name of the plugin inside the collection. Addressing is `<namespace>.<name>.<state>` for modules. |
-| `required_capabilities` | `list<enum>` | `[]` | Closed enum, see capabilities table. `soul-lint` checks with `plugin_runtime.allowed_capabilities` host. |
-| `side_effects` | `list<map<enum,value>>` | `[]` | Strict contract of touched resources, see side_effects table. Runtime violation (the plugin touches a resource not declared in `side_effects`) → the step is marked `failed`, the reason `policy_violation` is reflected in the diagnostic channel `TaskEvent` / `RunResult` (the exact form of the field is a separate audit-pipeline standardization task for `side_effects`, see backlog). |
+| `required_capabilities` | `list<enum>` | `[]` | Closed enum, see [capabilities table](#required_capabilities-table). `soul-lint` checks with `plugin_runtime.allowed_capabilities` host. |
+| `side_effects` | `list<map<enum,value>>` | `[]` | Strict contract of touched resources, see [side_effects table](#side_effects-table). Runtime violation (the plugin touches a resource not declared in `side_effects`) → the step is marked `failed`, the reason `policy_violation` is reflected in the diagnostic channel `TaskEvent` / `RunResult` (the exact form of the field is a separate audit-pipeline standardization task for `side_effects`, see backlog). |
 | `spec` | kind-specific block | — | Kind-specific fields; the form depends on `kind:` (see below). |
 | `binary_sha256` | `string` (hex64) | `""` (optional) | SHA-256 fingerprint of the plugin binary (hex lowercase, exactly 64 characters). Optional - empty until signature **Sigil** ([ADR-026](../adr/0026-sigil.md)); used to verify-against-Sigil before `exec` (see [Integrity-model](#integrity-model)). Type `string` (hex), not `bytes` - consistent with `plugin_sigils.sha256` (TEXT CHECK hex64). |
 
@@ -60,7 +60,7 @@ The input schema format inside `spec:` depends on `kind:`. For `soul_module` - S
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `spec.profile_schema` | `JSON Schema` | — | VM profile parameters diagram. Used when creating a Profile via OpenAPI/MCP for validation (see [`cloud.md`](cloud.md)). |
+| `spec.profile_schema` | `JSON Schema` | — | Schema of VM profile parameters. Used when creating a Profile via OpenAPI/MCP for validation (see [`cloud.md`](cloud.md)). |
 | `spec.provider_kind` | `string` (optional) | — | Cloud provider family (`aws` / `gcp` / `yandex-cloud` / `openstack`). Information field. |
 
 ### `spec` for `kind: ssh_provider`
@@ -68,7 +68,7 @@ The input schema format inside `spec:` depends on `kind:`. For `soul_module` - S
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `spec.provider_kind` | `string` (convention: `vault_ssh_ca` / `static_key` / `teleport`; extension via PR without proto editing) | — | SSH provider type; affects the UI/documentation, but **not** the contract `Sign`/`Authorize`. At the proto level - an open line for forward-compat (without editing `proto/plugin/vN/`). |
-| `spec.params_schema` | `JSON Schema` (optional) | `{}` | Diagram of provider parameters specified in `keeper.yml` (for example, `vault_mount` for `vault_ssh_ca`). |
+| `spec.params_schema` | `JSON Schema` (optional) | `{}` | Schema of provider parameters specified in `keeper.yml` (for example, `vault_mount` for `vault_ssh_ca`). |
 
 ### `spec` for `kind: soul_beacon`
 
@@ -76,7 +76,7 @@ Soul-side event-driven monitoring plugin ([ADR-030 V5-2](../adr/0030-vigil-oracl
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `spec.params_schema` | `JSON Schema` (optional) | `{}` | Scheme `params` Vigil, specified by the operator via OpenAPI/MCP. Runtime checks (what is not expressed by JSON Schema) - via `SoulBeacon.Validate`. |
+| `spec.params_schema` | `JSON Schema` (optional) | `{}` | Schema of Vigil `params`, specified by the operator via OpenAPI/MCP. Runtime checks (what is not expressed by JSON Schema) - via `SoulBeacon.Validate`. |
 
 Not allowed: `spec.states` (one operation type - `Check`, no SoulModule state semantics), `spec.provider_kind` (only for `ssh_provider`), `spec.profile_schema` (only for `cloud_driver`).
 
@@ -178,7 +178,7 @@ Block `plugin_runtime:` in [`keeper.yml`](config.md) / [`soul.yml`](../soul/conf
 |---|---|---|
 | `startup_timeout` | `10s` | Time from fork to the appearance of the handshake line. Excess → SIGTERM. |
 | `shutdown_grace` | `10s` | Time from SIGTERM to SIGKILL. |
-| `allowed_capabilities` | all 6 capabilities from table | List of capabilities allowed on this host; `soul-lint` checks against `manifest.required_capabilities`. |
+| `allowed_capabilities` | all 6 capabilities from the [table](#required_capabilities-table) | List of capabilities allowed on this host; `soul-lint` checks against `manifest.required_capabilities`. |
 | `conflict_policy` | `warn` | What to do if there is a conflict between `side_effects` two plugins: `warn` / `fail`. |
 | `enable_tls` | `false` | Post-MVP option: enable mTLS on the plugin socket ([ADR-020(h)](../adr/0020-plugin-infrastructure.md)). |
 
@@ -197,7 +197,7 @@ The socket file name is `<namespace>-<name>-<pid>.sock` (the dot from the plugin
 
 The plugin binary in the host cache is forked with service-user rights (`keeper` plugins have access to Vault / PG / PKI). Substitution of the binary in `/var/lib/soul-stack-keeper/plugins/` (or in artifact-source / with Keeper-checkout git-ref **before** the first appearance on the host) → RCE. Protection - **Sigil** ([ADR-026](../adr/0026-sigil.md)): Keeper-signed digest index (**Option A**). SHA-256 reconciliation (invariant [CLAUDE.md](../../CLAUDE.md) "SHA-256 cache") is saved as defense-in-depth before each `exec`; "trust as is" with first-load **replaced** by Sigil verification.
 
-> **Sigil replaces the previous TOFU model** (trust-on-first-use). TOFU described first-load as "the host itself considers SHA-256 and trusts the binary as is" - this did not close the substitution of the binary **until** its first appearance on the host (see "Closed gap - first-load" below). With Sigil, the authority over which binary is allowed belongs to the Keeper, not the host.
+> **Sigil replaces the previous TOFU model** (trust-on-first-use). TOFU described first-load as "the host itself considers SHA-256 and trusts the binary as is" - this did not close the substitution of the binary **until** its first appearance on the host (see ["Closed gap - first-load"](#closed-gap--first-load) below). With Sigil, the authority over which binary is allowed belongs to the Keeper, not the host.
 
 ### Root of Trust
 
@@ -205,7 +205,7 @@ The plugin binary in the host cache is forked with service-user rights (`keeper`
 |---|---|
 | **Allow-list** `(namespace, name, ref) → sha256` | PG table `plugin_sigils` (Keeper-state). The entry is added **only when the Archon explicitly allows** the plugin via OpenAPI (`POST /v1/plugins/sigils`, S4a) / MCP (S4b) - permission `plugin.allow`, [rbac.md → Plugin Sigil](rbac.md#plugin-sigil-3). `ref` - **git-verified** (Keeper resolves `source`+`ref` into `commit_sha` cache slot via go-git, [ADR-026(g)](../adr/0026-sigil.md)); chain of trust `ref` → `commit_sha` → `binary_sha256` → Keeper signature. |
 | **Keeper signing key** (private) | Vault KV - according to the pattern `secret/keeper/jwt-signing-key` ([ADR-014](../adr/0014-operator-identity.md)). |
-| **Keeper public key** (trust-anchor host) | Soul arrives in **bootstrap** along with a CA-chain (the same channel `BootstrapReply` as mTLS CA, [ADR-012(f)](../adr/0012-keeper-soul-grpc.md)): single `sigil_pubkey_pem` or multi-anchor `sigil_pubkey_pem_set` (priority set > single). The runtime set of anchors is delivered to `SigilTrustAnchors` and **completely replaces** bootstrap-anchors (replace, not merge; R3 rotation) - see Active set and replace semantics. |
+| **Keeper public key** (trust-anchor host) | Soul arrives in **bootstrap** along with a CA-chain (the same channel `BootstrapReply` as mTLS CA, [ADR-012(f)](../adr/0012-keeper-soul-grpc.md#adr-012-keepersoul-grpc-contract-one-eventstream-with-oneof-keeper-side-render-forward-compat-only-add)): single `sigil_pubkey_pem` or multi-anchor `sigil_pubkey_pem_set` (priority set > single). The runtime set of anchors is delivered to `SigilTrustAnchors` and **completely replaces** bootstrap-anchors (replace, not merge; R3 rotation) - see [Active set and replace semantics](#active-set-and-replace-semantics). |
 
 **Sigil** = `sign_keeper(block)`, where the block being signed carries `(namespace, name, ref, binary_sha256, manifest)`. The signature **covers the manifest** with the attached `binary_sha256` ([ADR-026(c)](../adr/0026-sigil.md)) → declared `side_effects` / `required_capabilities` / `protocol_version` cease to be forged (you cannot replace the manifest without breaking the signature).
 
@@ -238,7 +238,7 @@ block = DST || LP(namespace) || LP(name) || LP(ref) || LP(binary_sha256) || LP(m
 | Step | Host behavior |
 |---|---|
 | Discover | Counts SHA-256 binaries streamwise; puts in `Discovered.Digest` for logs / OTel attributes. Error reading binary for digest → plugin skipped with warning. |
-| Obtaining a Sigil | **Push** (Keeper transfers plugins FROM Keeper via mTLS - Keeper is already a trust-anchor): Sigil travels with the binary. **Pull** (Soul-demon): Sigil comes only-add proto-message in `EventStream` ([ADR-026(e)](../adr/0026-sigil.md)). |
+| Obtaining a Sigil | **Push** (Keeper transfers plugins FROM Keeper via mTLS - Keeper is already a trust-anchor): Sigil travels with the binary. **Pull** (Soul daemon): Sigil comes only-add proto-message in `EventStream` ([ADR-026(e)](../adr/0026-sigil.md)). |
 | Verify (before seal/exec) | (1) SHA-256 of actual binary == `binary_sha256` in Sigil; (2) Sigil's signature is valid with Keeper's public key (from bootstrap). Both checks passed → seal + exec. Any discrepancy → failure, **binary does not start**, event `plugin.verify_failed`. |
 | Re-exec from cache | SHA-256 verification before each subsequent `exec` (defense-in-depth for shared cache). Discrepancy → failure, the binary does not start. |
 
@@ -300,7 +300,7 @@ Evolution: adding `proto/plugin/v2/` → the next version of the host binary con
 
 ### Cross-check matrix
 
-Summary list of cross-checks between manifest, handshake string and host constant `SupportedProtocolVersions`. Duplicates runtime rows from the table "Host behavior during handshake" in formal notation + adds static check `soul-lint`.
+Summary list of cross-checks between manifest, handshake string and host constant `SupportedProtocolVersions`. Duplicates runtime rows from the table ["Host behavior during handshake"](#host-behavior-during-handshake) in formal notation + adds static check `soul-lint`.
 
 | fail condition | Where | Behavior |
 |---|---|---|
@@ -371,7 +371,7 @@ Host is a `soul` binary. Binary - `soul-mod-<name>` (for example, `soul-mod-hapr
 
 | Method | Destination |
 |---|---|
-| `Validate(ValidateRequest) → ValidateReply` | Runtime parameter checks (the full scheme in `manifest.spec.states.<state>.input` has already been checked by `soul-lint`; here are additional semantic checks that require access to the host system). |
+| `Validate(ValidateRequest) → ValidateReply` | Runtime parameter checks (the full schema in `manifest.spec.states.<state>.input` has already been checked by `soul-lint`; here are additional semantic checks that require access to the host system). |
 | `Plan(PlanRequest) → stream PlanEvent` | Dry-run: the module calculates changes without applying them. Returns the progress event stream. |
 | `Apply(ApplyRequest) → stream ApplyEvent` | Applies the changes. Stream events for long-running operations (see the clause about MVP in [ADR-012](../adr/0012-keeper-soul-grpc.md) - progress is aggregated on Soul, only the final result goes out through `TaskEvent`). |
 
@@ -392,7 +392,7 @@ Host - `keeper` (module `keeper.cloud`, see [`cloud.md`](cloud.md)). Binary - `s
 | `Status(StatusRequest) → StatusReply` | Poll the status of a specific VM. `StatusRequest.credentials` carries the plain-secret of the provider (A-flow, symmetrically `CreateRequest`/`DestroyRequest`) - without credentials the driver will not be able to access the provider API. |
 | `List(ListRequest) → stream VmInfo` | Enumeration of VMs known to the provider. `ListRequest.credentials` - A-flow (symmetrical `Create`/`Destroy`/`Status`); `ListRequest.filter` - provider-specific filter (tags/region), credentials CANNOT be placed in filter. |
 
-Usage - in [`cloud.md`](cloud.md). Cloud-create is built into scripts as a step with `on: keeper` (module `core.cloud.provisioned`, [ADR-017](../adr/0017-keeper-side-core.md)).
+Usage - in [`cloud.md`](cloud.md). Cloud-create is built into scenarios as a step with `on: keeper` (module `core.cloud.provisioned`, [ADR-017](../adr/0017-keeper-side-core.md)).
 
 ## Service contract `SshProvider`
 
@@ -491,7 +491,7 @@ The actual implementation is [`examples/module/soul-ssh-vault/`](../../examples/
 3. Returns `SignReply{certificate=<signed_key>, private_key=""}` - the private NEVER leaves Keeper.
 4. `keeper.push` collects [`ssh.NewCertSigner`](https://pkg.go.dev/golang.org/x/crypto/ssh#NewCertSigner) from ephemeral signer + cert and opens an SSH session. After the session is closed, the private person goes to the GC.
 
-**Creds-flow - variant B** (the plugin itself runs in Vault, [`vault_access` capability](#required_capabilities)): for `ssh/sign` this is more natural than A-flow (Keeper does not act as a proxy to the Vault engine, does not parse the response). Symmetrically for `auth_method: approle` the plugin does `auth/<mount>/login` itself.
+**Creds-flow - variant B** (the plugin itself runs in Vault, [`vault_access` capability](#required_capabilities-table)): for `ssh/sign` this is more natural than A-flow (Keeper does not act as a proxy to the Vault engine, does not parse the response). Symmetrically for `auth_method: approle` the plugin does `auth/<mount>/login` itself.
 
 **Params** come via env `SOUL_SSH_VAULT_PARAMS` (JSON by `schema.json`, symmetrically by `SOUL_SSH_STATIC_PARAMS`). The SshProvider contract does not carry per-request provider parameters, so the config is sent at the start of the process, like the path to the socket (`SOUL_PLUGIN_SOCKET`).
 
