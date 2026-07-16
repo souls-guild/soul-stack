@@ -8,13 +8,14 @@ import (
 	"github.com/souls-guild/soul-stack/shared/cel"
 )
 
-// Слайс S1 (фильтр→Run + RBAC Purview S2c + Cadence-state): единый
-// statepredicate.Resolver — CEL-предикат по incarnation.state. TDD-first:
-// тесты фиксируют контракт ДО реализации (red), затем зеленеют.
+// Slice S1 (filter -> Run + RBAC Purview S2c + Cadence state): unified
+// statepredicate.Resolver, a CEL predicate over incarnation.state. TDD-first:
+// tests pin the contract BEFORE implementation (red), then go green.
 //
-// Объём S1 — Compile (валидация + кэш program) + Matches (single-incarnation
-// проверка против state-map). ResolveIncarnations (list + SQL-pushdown) —
-// следующий слайс (нужен incarnation-репозиторий + DB-доступ), сюда не тянем.
+// S1 scope is Compile (validation + program cache) + Matches
+// (single-incarnation check against state map). ResolveIncarnations (list + SQL
+// pushdown) is the next slice (requires incarnation repository + DB access), so
+// do not pull it here.
 
 func newResolver(t *testing.T) Resolver {
 	t.Helper()
@@ -25,35 +26,35 @@ func newResolver(t *testing.T) Resolver {
 	return r
 }
 
-// --- Matches: равенство по строковому state-полю ---
+// --- Matches: equality by string state field ---
 
 func TestMatches_StringEquality(t *testing.T) {
 	r := newResolver(t)
 	state := map[string]any{"redis_version": "8.0"}
 
 	if ok, err := r.Matches(`state.redis_version == "8.0"`, state); err != nil || !ok {
-		t.Errorf(`redis_version=="8.0" на {8.0}: ok=%v err=%v, want true,nil`, ok, err)
+		t.Errorf(`redis_version=="8.0" on {8.0}: ok=%v err=%v, want true,nil`, ok, err)
 	}
 	if ok, err := r.Matches(`state.redis_version == "8.1"`, state); err != nil || ok {
-		t.Errorf(`redis_version=="8.1" на {8.0}: ok=%v err=%v, want false,nil`, ok, err)
+		t.Errorf(`redis_version=="8.1" on {8.0}: ok=%v err=%v, want false,nil`, ok, err)
 	}
 }
 
-// --- numeric: jsonb-числа (float64 после decode) корректно сравниваются ---
+// --- numeric: jsonb numbers (float64 after decode) compare correctly ---
 
 func TestMatches_Numeric(t *testing.T) {
 	r := newResolver(t)
 
-	// int (как из CEL-литерала / Go-int).
+	// int (as from CEL literal / Go int).
 	if ok, err := r.Matches(`state.memory_mb > 1000`, map[string]any{"memory_mb": 2000}); err != nil || !ok {
-		t.Errorf("memory_mb>1000 на int(2000): ok=%v err=%v, want true,nil", ok, err)
+		t.Errorf("memory_mb>1000 on int(2000): ok=%v err=%v, want true,nil", ok, err)
 	}
-	// float64 — форма чисел после json/jsonb-decode.
+	// float64 is number shape after json/jsonb decode.
 	if ok, err := r.Matches(`state.memory_mb > 1000`, map[string]any{"memory_mb": float64(2000)}); err != nil || !ok {
-		t.Errorf("memory_mb>1000 на float64(2000): ok=%v err=%v, want true,nil (jsonb coercion)", ok, err)
+		t.Errorf("memory_mb>1000 on float64(2000): ok=%v err=%v, want true,nil (jsonb coercion)", ok, err)
 	}
 	if ok, err := r.Matches(`state.memory_mb > 1000`, map[string]any{"memory_mb": float64(500)}); err != nil || ok {
-		t.Errorf("memory_mb>1000 на float64(500): ok=%v err=%v, want false,nil", ok, err)
+		t.Errorf("memory_mb>1000 on float64(500): ok=%v err=%v, want false,nil", ok, err)
 	}
 }
 
@@ -62,14 +63,14 @@ func TestMatches_Numeric(t *testing.T) {
 func TestMatches_InList(t *testing.T) {
 	r := newResolver(t)
 	if ok, err := r.Matches(`state.redis_version in ["8.0","8.1"]`, map[string]any{"redis_version": "8.0"}); err != nil || !ok {
-		t.Errorf("in-list на 8.0: ok=%v err=%v, want true,nil", ok, err)
+		t.Errorf("in-list on 8.0: ok=%v err=%v, want true,nil", ok, err)
 	}
 	if ok, err := r.Matches(`state.redis_version in ["8.0","8.1"]`, map[string]any{"redis_version": "7.4"}); err != nil || ok {
-		t.Errorf("in-list на 7.4: ok=%v err=%v, want false,nil", ok, err)
+		t.Errorf("in-list on 7.4: ok=%v err=%v, want false,nil", ok, err)
 	}
 }
 
-// --- вложенное поле ---
+// --- nested field ---
 
 func TestMatches_Nested(t *testing.T) {
 	r := newResolver(t)
@@ -79,29 +80,29 @@ func TestMatches_Nested(t *testing.T) {
 	}
 }
 
-// --- no-such-key: предикат по отсутствующему state-полю → (false, nil) ---
+// --- no-such-key: predicate by missing state field -> (false, nil) ---
 //
-// Семантика fail-closed, консистентно с rbac.EvalSoulprintExpr (S2b) и
-// oracle.WhereEvaluator: недоверенный/неполный state-снимок не должен ронять
-// резолвер, отсутствие нужного факта = «не сматчило».
+// Fail-closed semantics, consistent with rbac.EvalSoulprintExpr (S2b) and
+// oracle.WhereEvaluator: untrusted/incomplete state snapshot must not break
+// resolver; absence of required fact = did not match.
 func TestMatches_NoSuchKey(t *testing.T) {
 	r := newResolver(t)
 	if ok, err := r.Matches(`state.absent == "x"`, map[string]any{"redis_version": "8.0"}); err != nil || ok {
-		t.Errorf("отсутствующее поле: ok=%v err=%v, want false,nil (no-such-key → no-match)", ok, err)
+		t.Errorf("missing field: ok=%v err=%v, want false,nil (no-such-key -> no-match)", ok, err)
 	}
 	if ok, err := r.Matches(`state.absent > 1`, map[string]any{}); err != nil || ok {
-		t.Errorf("отсутствующее numeric-поле: ok=%v err=%v, want false,nil", ok, err)
+		t.Errorf("missing numeric field: ok=%v err=%v, want false,nil", ok, err)
 	}
-	// nil-state → no-match (не паника).
+	// nil state -> no-match (not panic).
 	if ok, err := r.Matches(`state.redis_version == "8.0"`, nil); err != nil || ok {
 		t.Errorf("nil-state: ok=%v err=%v, want false,nil", ok, err)
 	}
 }
 
-// --- sandbox: предикат с vault()/now()/register/... → ошибка Compile ---
+// --- sandbox: predicate with vault()/now()/register/... -> Compile error ---
 //
-// state-предикат = чистая функция от state (как migration-CEL ADR-019):
-// vault()/now() отсекаются guard-ом, прочие корни — необъявленностью env.
+// State predicate is a pure function of state (like migration-CEL ADR-019):
+// vault()/now() are cut by guard, other roots by env undeclared-ness.
 func TestCompile_SandboxRejected(t *testing.T) {
 	r := newResolver(t)
 	cases := []string{
@@ -122,17 +123,17 @@ func TestCompile_SandboxRejected(t *testing.T) {
 	}
 }
 
-// --- битый CEL → ошибка Compile ---
+// --- broken CEL -> Compile error ---
 
 func TestCompile_BrokenRejected(t *testing.T) {
 	r := newResolver(t)
 	cases := []string{
-		`state.redis_version ==`,    // незавершённое выражение
-		`state.redis_version && `,   // висящий оператор
-		`(`,                         // несбалансированная скобка
-		`state.redis_version + "x"`, // не-bool результат отсекается на Matches, но синтаксис ок — см. отдельный тест
+		`state.redis_version ==`,    // incomplete expression
+		`state.redis_version && `,   // dangling operator
+		`(`,                         // unbalanced parenthesis
+		`state.redis_version + "x"`, // non-bool result is cut on Matches, but syntax is ok; see separate test
 	}
-	// Только синтаксически битые (первые три) фейлят Compile.
+	// Only syntactically broken ones (first three) fail Compile.
 	for _, expr := range cases[:3] {
 		t.Run(expr, func(t *testing.T) {
 			if err := r.Compile(expr); err == nil {
@@ -142,44 +143,45 @@ func TestCompile_BrokenRejected(t *testing.T) {
 	}
 }
 
-// Не-bool результат предиката → ошибка Matches (предикат обязан быть булевым),
-// а НЕ fail-closed (false, nil). Различение не-bool от runtime-no-such-key —
-// через типизированный sentinel [cel.ErrPredicateNotBool], не по тексту.
+// Non-bool predicate result -> Matches error (predicate must be boolean), NOT
+// fail-closed (false, nil). Distinguish non-bool from runtime no-such-key
+// through typed sentinel [cel.ErrPredicateNotBool], not by text.
 func TestMatches_NonBoolRejected(t *testing.T) {
 	r := newResolver(t)
 	ok, err := r.Matches(`state.redis_version`, map[string]any{"redis_version": "8.0"})
 	if err == nil {
-		t.Fatalf("не-bool предикат: ok=%v err=nil, want error (не fail-closed)", ok)
+		t.Fatalf("non-bool predicate: ok=%v err=nil, want error (not fail-closed)", ok)
 	}
 	if !errors.Is(err, cel.ErrPredicateNotBool) {
-		t.Fatalf("не-bool предикат: errors.Is(err, cel.ErrPredicateNotBool)=false, err=%v", err)
+		t.Fatalf("non-bool predicate: errors.Is(err, cel.ErrPredicateNotBool)=false, err=%v", err)
 	}
 }
 
-// --- пустой предикат → ошибка Compile (fail-closed, без случайного match-all) ---
+// --- blank predicate -> Compile error (fail-closed, no accidental match-all) ---
 //
-// Пустой state-предикат двусмыслен (match-all опасен для фильтра/RBAC-селектора),
-// поэтому отвергается явно: caller, которому нужен «все инкарнации», просто не
-// зовёт резолвер. Симметрично rbac-отклонению пустого soulprint-селектора.
+// Blank state predicate is ambiguous (match-all is dangerous for filter/RBAC
+// selector), so it is rejected explicitly: caller needing "all incarnations"
+// simply does not call resolver. Symmetric to rbac rejecting blank soulprint
+// selector.
 func TestCompile_EmptyRejected(t *testing.T) {
 	r := newResolver(t)
 	if err := r.Compile(""); err == nil {
 		t.Fatal("Compile(\"\"): want error for empty predicate, got nil")
 	}
 	if err := r.Compile("   "); err == nil {
-		t.Fatal("Compile(пробелы): want error for blank predicate, got nil")
+		t.Fatal("Compile(spaces): want error for blank predicate, got nil")
 	}
 	if _, err := r.Matches("", map[string]any{}); err == nil {
 		t.Fatal("Matches(\"\", …): want error for empty predicate, got nil")
 	}
 }
 
-// --- кэш: повторная компиляция одного выражения переиспользует program ---
+// --- cache: repeated compile of one expression reuses program ---
 //
-// Косвенная проверка: Matches многократно не падает и даёт стабильный результат
-// (program кэшируется в shared/cel.Engine; прямой счётчик компиляций тут не
-// инспектируем — это деталь Engine). Гарантия «не перекомпилируем на каждый
-// Matches» обеспечивается переиспользованием единого Engine под sync.Once.
+// Indirect check: Matches does not fail across repeated calls and gives stable
+// result (program is cached in shared/cel.Engine; direct compilation counter is
+// not inspected here, that is Engine detail). Guarantee "do not recompile on
+// every Matches" is provided by reusing one Engine under sync.Once.
 func TestMatches_Repeatable(t *testing.T) {
 	r := newResolver(t)
 	state := map[string]any{"redis_version": "8.0"}
@@ -191,26 +193,26 @@ func TestMatches_Repeatable(t *testing.T) {
 	}
 }
 
-// Compile валидного выражения — без ошибки (нормальный путь caller-валидации
-// на load: фильтр/RBAC-селектор/Cadence-target компилируют предикат заранее).
+// Compile of valid expression returns no error (normal caller validation path
+// on load: filter/RBAC selector/Cadence target compile predicate in advance).
 func TestCompile_ValidOK(t *testing.T) {
 	r := newResolver(t)
 	if err := r.Compile(`state.redis_version == "8.0" && state.memory_mb > 1000`); err != nil {
-		t.Fatalf("Compile(валидный): %v", err)
+		t.Fatalf("Compile(valid): %v", err)
 	}
 }
 
-// Sandbox-ошибка Compile несёт упоминание о state-предикате/sandbox (для
-// внятной диагностики оператору).
+// Sandbox Compile error mentions state predicate/sandbox (clear diagnostics for
+// operator).
 func TestCompile_SandboxErrorMessage(t *testing.T) {
 	r := newResolver(t)
 	err := r.Compile(`register.foo == 1`)
 	if err == nil {
 		t.Fatal("want error")
 	}
-	// Сообщение должно отличать sandbox/compile от пустого/прочего; не привязываемся
-	// к точному тексту cel-go, проверяем лишь непустоту.
+	// Message should distinguish sandbox/compile from blank/other; do not bind
+	// to exact cel-go text, only check non-emptiness.
 	if strings.TrimSpace(err.Error()) == "" {
-		t.Fatal("пустое сообщение ошибки")
+		t.Fatal("empty error message")
 	}
 }
