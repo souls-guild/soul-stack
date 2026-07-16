@@ -71,7 +71,7 @@ func TestIntegration_ListRuns_AcrossIncarnations(t *testing.T) {
 	for _, r := range runs {
 		w, ok := want[r.ApplyID]
 		if !ok {
-			t.Errorf("неожиданный apply_id %q", r.ApplyID)
+			t.Errorf("unexpected apply_id %q", r.ApplyID)
 			continue
 		}
 		if r.Incarnation != w.inc {
@@ -84,17 +84,17 @@ func TestIntegration_ListRuns_AcrossIncarnations(t *testing.T) {
 			t.Errorf("%s: StartedAt zero", r.ApplyID)
 		}
 	}
-	// Новейшие сверху: started_at неубывающе сверху вниз.
+	// Newest first: started_at is non-increasing from top to bottom.
 	for i := 1; i < len(runs); i++ {
 		if runs[i].StartedAt.After(runs[i-1].StartedAt) {
-			t.Errorf("порядок нарушен: runs[%d].StartedAt (%v) позже runs[%d] (%v)",
+			t.Errorf("order violated: runs[%d].StartedAt (%v) is after runs[%d] (%v)",
 				i, runs[i].StartedAt, i-1, runs[i-1].StartedAt)
 		}
 	}
 }
 
-// TestIntegration_ListRuns_StatusFilter — фильтр по агрегатному статусу прогона:
-// total/страница когерентны фильтру (SQL-фильтр, не Go-постфильтр).
+// TestIntegration_ListRuns_StatusFilter - filter by aggregate run status:
+// total/page are coherent with the filter (SQL filter, not Go post-filter).
 func TestIntegration_ListRuns_StatusFilter(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -110,7 +110,7 @@ func TestIntegration_ListRuns_StatusFilter(t *testing.T) {
 		t.Fatalf("ListRuns(status=failed): %v", err)
 	}
 	if total != 2 || len(runs) != 2 {
-		t.Fatalf("total=%d len=%d, want 2/2 (failed + orphaned-прогон)", total, len(runs))
+		t.Fatalf("total=%d len=%d, want 2/2 (failed + orphaned run)", total, len(runs))
 	}
 	for _, r := range runs {
 		if r.Status != RunStatusFailed {
@@ -119,7 +119,7 @@ func TestIntegration_ListRuns_StatusFilter(t *testing.T) {
 	}
 }
 
-// TestIntegration_ListRuns_IncarnationFilter — фильтр по имени инкарнации.
+// TestIntegration_ListRuns_IncarnationFilter - filter by incarnation name.
 func TestIntegration_ListRuns_IncarnationFilter(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -135,11 +135,11 @@ func TestIntegration_ListRuns_IncarnationFilter(t *testing.T) {
 		t.Fatalf("ListRuns(incarnation=redis-staging): %v", err)
 	}
 	if total != 1 || len(runs) != 1 || runs[0].ApplyID != "01HIF02" {
-		t.Fatalf("got total=%d runs=%+v, want только 01HIF02", total, runs)
+		t.Fatalf("got total=%d runs=%+v, want only 01HIF02", total, runs)
 	}
 }
 
-// TestIntegration_ListRuns_Paging — total считает ВСЕ прогоны, страница — limit/offset.
+// TestIntegration_ListRuns_Paging - total counts ALL runs, page uses limit/offset.
 func TestIntegration_ListRuns_Paging(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -158,9 +158,9 @@ func TestIntegration_ListRuns_Paging(t *testing.T) {
 	}
 }
 
-// TestIntegration_ListRuns_Scope — Purview-scope-подзапрос: coven∪{name}-измерение
-// сужает выборку видимыми инкарнациями; пустой scope (не Unrestricted) — fail-closed
-// пусто; covens[]-метка тоже матчится.
+// TestIntegration_ListRuns_Scope - Purview-scope subquery: the coven union {name}
+// dimension narrows the result to visible incarnations; empty scope (not
+// Unrestricted) fails closed to empty; covens[] labels also match.
 func TestIntegration_ListRuns_Scope(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -168,7 +168,7 @@ func TestIntegration_ListRuns_Scope(t *testing.T) {
 	seedIncarnation(t, "redis-staging", "archon-alice")
 	ctx := context.Background()
 
-	// redis-staging получает env-тег team-x (covens[]-плечо scope).
+	// redis-staging receives env tag team-x (covens[] side of scope).
 	if _, err := integrationPool.Exec(ctx,
 		`UPDATE incarnation SET covens = ARRAY['team-x'] WHERE name = 'redis-staging'`); err != nil {
 		t.Fatalf("UPDATE covens: %v", err)
@@ -177,27 +177,27 @@ func TestIntegration_ListRuns_Scope(t *testing.T) {
 	seedRun(t, ctx, "01HSC01", "redis-prod", "create", StatusSuccess)
 	seedRun(t, ctx, "01HSC02", "redis-staging", "create", StatusSuccess)
 
-	// scope по ИМЕНИ инкарнации (coven∪{name}): видна только redis-prod.
+	// scope by incarnation NAME (coven union {name}): only redis-prod is visible.
 	runs, total, err := ListRuns(ctx, integrationPool,
 		RunsFilter{}, incarnation.ListScope{Covens: []string{"redis-prod"}}, 0, 50)
 	if err != nil {
 		t.Fatalf("ListRuns(scope name): %v", err)
 	}
 	if total != 1 || len(runs) != 1 || runs[0].Incarnation != "redis-prod" {
-		t.Fatalf("scope name: total=%d runs=%+v, want только redis-prod", total, runs)
+		t.Fatalf("scope name: total=%d runs=%+v, want only redis-prod", total, runs)
 	}
 
-	// scope по covens[]-метке: видна только redis-staging.
+	// scope by covens[] label: only redis-staging is visible.
 	runs, total, err = ListRuns(ctx, integrationPool,
 		RunsFilter{}, incarnation.ListScope{Covens: []string{"team-x"}}, 0, 50)
 	if err != nil {
 		t.Fatalf("ListRuns(scope coven): %v", err)
 	}
 	if total != 1 || len(runs) != 1 || runs[0].Incarnation != "redis-staging" {
-		t.Fatalf("scope coven: total=%d runs=%+v, want только redis-staging", total, runs)
+		t.Fatalf("scope coven: total=%d runs=%+v, want only redis-staging", total, runs)
 	}
 
-	// fail-closed: пустой scope (не Unrestricted) → ни одного прогона.
+	// fail-closed: empty scope (not Unrestricted) -> no runs.
 	runs, total, err = ListRuns(ctx, integrationPool, RunsFilter{}, incarnation.ListScope{}, 0, 50)
 	if err != nil {
 		t.Fatalf("ListRuns(empty scope): %v", err)
@@ -207,8 +207,8 @@ func TestIntegration_ListRuns_Scope(t *testing.T) {
 	}
 }
 
-// TestIntegration_SelectRunsStats — сводные счётчики: total + по каждому агрегатному
-// статусу, за всё время и за последние 24 часа (старый прогон выпадает из 24h-корзины).
+// TestIntegration_SelectRunsStats - summary counters: total + each aggregate
+// status, across all time and the last 24 hours (old run falls out of the 24h bucket).
 func TestIntegration_SelectRunsStats(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -222,7 +222,7 @@ func TestIntegration_SelectRunsStats(t *testing.T) {
 	seedRun(t, ctx, "01HST04", "redis-staging", "restart", StatusRunning)
 	seedRun(t, ctx, "01HST05", "redis-prod", "scale", StatusCancelled)
 
-	// 01HST02 — старше 24 часов: в All есть, в Last24h нет.
+	// 01HST02 - older than 24 hours: present in All, absent from Last24h.
 	if _, err := integrationPool.Exec(ctx,
 		`UPDATE apply_runs SET started_at = now() - interval '2 days' WHERE apply_id = '01HST02'`); err != nil {
 		t.Fatalf("UPDATE started_at: %v", err)
@@ -242,10 +242,10 @@ func TestIntegration_SelectRunsStats(t *testing.T) {
 	}
 }
 
-// TestIntegration_ListRuns_Sort — сортировка по whitelist-колонке на реальном PG
-// (ADR-068 §B1): порядок по колонке в обоих направлениях, стабильный tie-break
-// apply_id DESC при равных значениях, NULLS LAST для finished_at (applying-прогон
-// в конец), total не зависит от sort.
+// TestIntegration_ListRuns_Sort - sorting by a whitelisted column on real PG
+// (ADR-068 §B1): column order in both directions, stable tie-break by apply_id DESC
+// for equal values, NULLS LAST for finished_at (applying run at the end), total is
+// independent of sort.
 func TestIntegration_ListRuns_Sort(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -253,9 +253,9 @@ func TestIntegration_ListRuns_Sort(t *testing.T) {
 	seedIncarnation(t, "redis-staging", "archon-alice")
 	ctx := context.Background()
 
-	// apply_id лексикографически возрастают A<B<C<D → tie-break apply_id DESC даёт
-	// D,C,B,A. Два прогона в redis-prod (A,B) и redis-staging (C,D); D — applying
-	// (running-хост, finished_at IS NULL).
+	// apply_id values increase lexicographically A<B<C<D -> tie-break apply_id DESC gives
+	// D,C,B,A. Two runs in redis-prod (A,B) and redis-staging (C,D); D is applying
+	// (running host, finished_at IS NULL).
 	seedRun(t, ctx, "01HSORTA", "redis-prod", "create", StatusSuccess)
 	seedRun(t, ctx, "01HSORTB", "redis-prod", "restart", StatusSuccess)
 	seedRun(t, ctx, "01HSORTC", "redis-staging", "create", StatusSuccess)
@@ -280,8 +280,8 @@ func TestIntegration_ListRuns_Sort(t *testing.T) {
 		return true
 	}
 
-	// incarnation ASC: redis-prod < redis-staging; внутри группы tie-break
-	// apply_id DESC → [B,A, D,C].
+	// incarnation ASC: redis-prod < redis-staging; inside the group tie-break is
+	// apply_id DESC -> [B,A, D,C].
 	runs, total, err := ListRuns(ctx, integrationPool,
 		RunsFilter{Sort: "incarnation", SortDir: "asc"}, unrestrictedScope, 0, 50)
 	if err != nil {
@@ -291,25 +291,25 @@ func TestIntegration_ListRuns_Sort(t *testing.T) {
 		t.Errorf("incarnation asc: total=%d, want 4", total)
 	}
 	if want := []string{"01HSORTB", "01HSORTA", "01HSORTD", "01HSORTC"}; !eq(ids(runs), want) {
-		t.Errorf("incarnation asc: порядок %v, want %v", ids(runs), want)
+		t.Errorf("incarnation asc: order %v, want %v", ids(runs), want)
 	}
 
-	// incarnation DESC: redis-staging первой → [D,C, B,A].
+	// incarnation DESC: redis-staging first -> [D,C, B,A].
 	runs, totalDesc, err := ListRuns(ctx, integrationPool,
 		RunsFilter{Sort: "incarnation", SortDir: "desc"}, unrestrictedScope, 0, 50)
 	if err != nil {
 		t.Fatalf("ListRuns(incarnation desc): %v", err)
 	}
 	if want := []string{"01HSORTD", "01HSORTC", "01HSORTB", "01HSORTA"}; !eq(ids(runs), want) {
-		t.Errorf("incarnation desc: порядок %v, want %v", ids(runs), want)
+		t.Errorf("incarnation desc: order %v, want %v", ids(runs), want)
 	}
-	// total не зависит от направления сортировки (guard 4).
+	// total does not depend on sort direction (guard 4).
 	if totalDesc != total {
-		t.Errorf("total разошёлся при смене sort_dir: asc=%d desc=%d", total, totalDesc)
+		t.Errorf("total diverged when changing sort_dir: asc=%d desc=%d", total, totalDesc)
 	}
 
-	// finished_at: applying-прогон (01HSORTD, finished_at IS NULL) — в конце при
-	// ОБОИХ направлениях (NULLS LAST).
+	// finished_at: applying run (01HSORTD, finished_at IS NULL) is last in
+	// BOTH directions (NULLS LAST).
 	for _, dir := range []string{"asc", "desc"} {
 		runs, _, err = ListRuns(ctx, integrationPool,
 			RunsFilter{Sort: "finished_at", SortDir: dir}, unrestrictedScope, 0, 50)
@@ -317,13 +317,13 @@ func TestIntegration_ListRuns_Sort(t *testing.T) {
 			t.Fatalf("ListRuns(finished_at %s): %v", dir, err)
 		}
 		if got := ids(runs); len(got) != 4 || got[len(got)-1] != "01HSORTD" {
-			t.Errorf("finished_at %s: applying-прогон не в конце (NULLS LAST): %v", dir, got)
+			t.Errorf("finished_at %s: applying run is not last (NULLS LAST): %v", dir, got)
 		}
 	}
 }
 
-// TestIntegration_SelectRunsStats_Scoped — счётчики в границах Purview-scope:
-// только прогоны видимых инкарнаций.
+// TestIntegration_SelectRunsStats_Scoped - counters within Purview-scope:
+// only runs from visible incarnations.
 func TestIntegration_SelectRunsStats_Scoped(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -341,11 +341,11 @@ func TestIntegration_SelectRunsStats_Scoped(t *testing.T) {
 	}
 	want := RunsStatusCounts{Total: 1, Success: 1}
 	if stats.All != want {
-		t.Errorf("All = %+v, want %+v (чужая инкарнация вне scope)", stats.All, want)
+		t.Errorf("All = %+v, want %+v (other incarnation outside scope)", stats.All, want)
 	}
 }
 
-// runIDs — apply_id-ы страницы в порядке выдачи (helper сравнения порядка).
+// runIDs returns page apply_ids in output order (order comparison helper).
 func runIDs(runs []RunSummary) []string {
 	out := make([]string, len(runs))
 	for i, r := range runs {
@@ -354,7 +354,7 @@ func runIDs(runs []RunSummary) []string {
 	return out
 }
 
-// eqIDs — поэлементное сравнение порядка apply_id.
+// eqIDs compares apply_id order element by element.
 func eqIDs(got, want []string) bool {
 	if len(got) != len(want) {
 		return false
@@ -367,17 +367,17 @@ func eqIDs(got, want []string) bool {
 	return true
 }
 
-// TestIntegration_ListRuns_ServiceFilter — фильтр по сервису инкарнации-владельца
-// (JOIN incarnation): list и total сужаются ОДИНАКОВО (общий подзапрос sub у count
-// и list); проекция несёт service; несуществующий сервис → пусто.
+// TestIntegration_ListRuns_ServiceFilter - filter by owner incarnation service
+// (JOIN incarnation): list and total are narrowed IDENTICALLY (shared subquery for
+// count and list); projection carries service; nonexistent service -> empty.
 func TestIntegration_ListRuns_ServiceFilter(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
-	seedIncarnation(t, "redis-prod", "archon-alice") // service redis (дефолт seed)
+	seedIncarnation(t, "redis-prod", "archon-alice") // service redis (seed default)
 	seedIncarnation(t, "pg-main", "archon-alice")
 	ctx := context.Background()
 
-	// pg-main → сервис postgres (seedIncarnation ставит redis по умолчанию).
+	// pg-main -> service postgres (seedIncarnation sets redis by default).
 	if _, err := integrationPool.Exec(ctx,
 		`UPDATE incarnation SET service = 'postgres' WHERE name = 'pg-main'`); err != nil {
 		t.Fatalf("UPDATE service: %v", err)
@@ -391,10 +391,10 @@ func TestIntegration_ListRuns_ServiceFilter(t *testing.T) {
 		t.Fatalf("ListRuns(service=redis): %v", err)
 	}
 	if total != 1 || len(runs) != 1 || runs[0].ApplyID != "01HSVC01" {
-		t.Fatalf("service=redis: total=%d runs=%+v, want только 01HSVC01", total, runs)
+		t.Fatalf("service=redis: total=%d runs=%+v, want only 01HSVC01", total, runs)
 	}
 	if runs[0].Service != "redis" {
-		t.Errorf("Service = %q, want redis (проекция service)", runs[0].Service)
+		t.Errorf("Service = %q, want redis (service projection)", runs[0].Service)
 	}
 
 	runs, total, err = ListRuns(ctx, integrationPool, RunsFilter{Service: "postgres"}, unrestrictedScope, 0, 50)
@@ -402,10 +402,10 @@ func TestIntegration_ListRuns_ServiceFilter(t *testing.T) {
 		t.Fatalf("ListRuns(service=postgres): %v", err)
 	}
 	if total != 1 || len(runs) != 1 || runs[0].ApplyID != "01HSVC02" || runs[0].Service != "postgres" {
-		t.Fatalf("service=postgres: total=%d runs=%+v, want только 01HSVC02/postgres", total, runs)
+		t.Fatalf("service=postgres: total=%d runs=%+v, want only 01HSVC02/postgres", total, runs)
 	}
 
-	// Несуществующий сервис — list и total оба 0.
+	// Nonexistent service - list and total are both 0.
 	runs, total, err = ListRuns(ctx, integrationPool, RunsFilter{Service: "mongo"}, unrestrictedScope, 0, 50)
 	if err != nil {
 		t.Fatalf("ListRuns(service=mongo): %v", err)
@@ -415,9 +415,9 @@ func TestIntegration_ListRuns_ServiceFilter(t *testing.T) {
 	}
 }
 
-// TestIntegration_ListRuns_QFilter — свободный поиск q матчит по 4 полям
-// (incarnation/scenario/service/started_by), регистронезависимо (ILIKE); list и
-// total консистентны; LIKE-метасимвол '%' экранирован (литеральный, не wildcard).
+// TestIntegration_ListRuns_QFilter - free-text search q matches 4 fields
+// (incarnation/scenario/service/started_by), case-insensitively (ILIKE); list and
+// total are consistent; LIKE metacharacter '%' is escaped (literal, not wildcard).
 func TestIntegration_ListRuns_QFilter(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -428,24 +428,24 @@ func TestIntegration_ListRuns_QFilter(t *testing.T) {
 	seedIncarnation(t, "delta-inc", "archon-alice")
 	ctx := context.Background()
 
-	// gamma-inc → уникальный сервис mysvc (у остальных service='redis').
+	// gamma-inc -> unique service mysvc (others have service='redis').
 	if _, err := integrationPool.Exec(ctx,
 		`UPDATE incarnation SET service = 'mysvc' WHERE name = 'gamma-inc'`); err != nil {
 		t.Fatalf("UPDATE service: %v", err)
 	}
 
-	seedRun(t, ctx, "01HQAAA", "alpha-inc", "create", StatusSuccess)    // токен в incarnation
-	seedRun(t, ctx, "01HQBBB", "beta-inc", "restartxyz", StatusSuccess) // токен в scenario
-	seedRun(t, ctx, "01HQCCC", "gamma-inc", "create", StatusSuccess)    // токен в service
+	seedRun(t, ctx, "01HQAAA", "alpha-inc", "create", StatusSuccess)    // token in incarnation
+	seedRun(t, ctx, "01HQBBB", "beta-inc", "restartxyz", StatusSuccess) // token in scenario
+	seedRun(t, ctx, "01HQCCC", "gamma-inc", "create", StatusSuccess)    // token in service
 	aidZ := "archon-zephyr"
-	mustInsertRun(t, ctx, "01HQDDD", "host-z", "delta-inc", "create", StatusRunning, &aidZ) // токен в started_by
+	mustInsertRun(t, ctx, "01HQDDD", "host-z", "delta-inc", "create", StatusRunning, &aidZ) // token in started_by
 
 	cases := []struct{ q, want string }{
 		{"alpha", "01HQAAA"},      // incarnation
 		{"restartxyz", "01HQBBB"}, // scenario
 		{"mysvc", "01HQCCC"},      // service
 		{"zephyr", "01HQDDD"},     // started_by
-		{"ALPHA", "01HQAAA"},      // регистронезависимо (ILIKE)
+		{"ALPHA", "01HQAAA"},      // case-insensitive (ILIKE)
 	}
 	for _, c := range cases {
 		runs, total, err := ListRuns(ctx, integrationPool, RunsFilter{Q: c.q}, unrestrictedScope, 0, 50)
@@ -457,25 +457,25 @@ func TestIntegration_ListRuns_QFilter(t *testing.T) {
 			got = runs[0].ApplyID
 		}
 		if total != 1 || len(runs) != 1 || got != c.want {
-			t.Errorf("q=%q: total=%d len=%d got=%q, want ровно %s", c.q, total, len(runs), got, c.want)
+			t.Errorf("q=%q: total=%d len=%d got=%q, want exactly %s", c.q, total, len(runs), got, c.want)
 		}
 	}
 
-	// '%' в q — литеральный (экранирован), не wildcard «матчит всё».
+	// '%' in q is literal (escaped), not a wildcard that matches everything.
 	runs, total, err := ListRuns(ctx, integrationPool, RunsFilter{Q: "%"}, unrestrictedScope, 0, 50)
 	if err != nil {
 		t.Fatalf("ListRuns(q=%%): %v", err)
 	}
 	if total != 0 || len(runs) != 0 {
-		t.Errorf("q=%%: total=%d len=%d, want 0/0 (метасимвол экранирован)", total, len(runs))
+		t.Errorf("q=%%: total=%d len=%d, want 0/0 (metacharacter is escaped)", total, len(runs))
 	}
 }
 
-// TestIntegration_ListRuns_QScopeBinding — РЕГРЕСС (security): свободный поиск q
-// AND-связан с Purview-scope (скобочная OR-группа). Две инкарнации с прогонами,
-// чей scenario матчит ОДИН q-терм; scope ограничен одной. q=<терм> под scope →
-// виден ТОЛЬКО in-scope прогон, out-of-scope НЕ утекает, total считает только
-// in-scope. Ловит потерю скобок: `scope AND a OR b OR c OR d` = утечка мимо scope.
+// TestIntegration_ListRuns_QScopeBinding - REGRESSION (security): free-text search q
+// is AND-bound to Purview-scope (parenthesized OR group). Two incarnations have runs
+// whose scenario matches ONE q term; scope is limited to one. q=<term> under scope ->
+// ONLY the in-scope run is visible, out-of-scope does NOT leak, total counts only
+// in-scope. Catches lost parentheses: `scope AND a OR b OR c OR d` = leak around scope.
 func TestIntegration_ListRuns_QScopeBinding(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -483,30 +483,30 @@ func TestIntegration_ListRuns_QScopeBinding(t *testing.T) {
 	seedIncarnation(t, "out-scope-inc", "archon-alice")
 	ctx := context.Background()
 
-	// Обе инкарнации: прогон со scenario, матчащим один и тот же q-терм.
+	// Both incarnations: run with scenario matching the same q term.
 	seedRun(t, ctx, "01HQBIN", "in-scope-inc", "sharedterm", StatusSuccess)
 	seedRun(t, ctx, "01HQBOUT", "out-scope-inc", "sharedterm", StatusSuccess)
 
-	// Ограниченный scope (coven∪{name}) — видна только in-scope-inc.
+	// Limited scope (coven union {name}) - only in-scope-inc is visible.
 	scope := incarnation.ListScope{Covens: []string{"in-scope-inc"}}
 	runs, total, err := ListRuns(ctx, integrationPool, RunsFilter{Q: "sharedterm"}, scope, 0, 50)
 	if err != nil {
-		t.Fatalf("ListRuns(q под ограниченным scope): %v", err)
+		t.Fatalf("ListRuns(q under limited scope): %v", err)
 	}
-	// q-матч out-of-scope прогона НЕ должен обойти scope: ровно один in-scope.
+	// q match of an out-of-scope run must NOT bypass scope: exactly one in-scope run.
 	if total != 1 || len(runs) != 1 || runs[0].ApplyID != "01HQBIN" {
-		t.Fatalf("q под scope: total=%d runs=%v, want ровно 01HQBIN (out-of-scope утёк мимо Purview?)",
+		t.Fatalf("q under scope: total=%d runs=%v, want exactly 01HQBIN (out-of-scope leaked past Purview?)",
 			total, runIDs(runs))
 	}
 	if runs[0].Incarnation != "in-scope-inc" {
-		t.Errorf("утечка прогона вне Purview-scope: %+v", runs[0])
+		t.Errorf("run leaked outside Purview-scope: %+v", runs[0])
 	}
 }
 
-// TestIntegration_ListRuns_TimeRange — фильтр по диапазону времени СТАРТА прогона
-// (агрегат MIN(started_at)) в outerWhere: границы inclusive, list и total сужаются
-// ОДИНАКОВО (общий sub+outerWhere), стабильный tie-break apply_id DESC при равном
-// started_at.
+// TestIntegration_ListRuns_TimeRange - filter by run START time range
+// (aggregate MIN(started_at)) in outerWhere: boundaries are inclusive, list and total
+// narrow IDENTICALLY (shared sub+outerWhere), stable tie-break by apply_id DESC for
+// equal started_at.
 func TestIntegration_ListRuns_TimeRange(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -520,7 +520,7 @@ func TestIntegration_ListRuns_TimeRange(t *testing.T) {
 		}
 		return tm
 	}
-	// 4 прогона; started_at выставляем явно. B и C — на одно время t2 (tie-break).
+	// 4 runs; set started_at explicitly. B and C share time t2 (tie-break).
 	seedRun(t, ctx, "01HTMA", "redis-prod", "create", StatusSuccess)
 	seedRun(t, ctx, "01HTMB", "redis-prod", "create", StatusSuccess)
 	seedRun(t, ctx, "01HTMC", "redis-prod", "create", StatusSuccess)
@@ -537,17 +537,17 @@ func TestIntegration_ListRuns_TimeRange(t *testing.T) {
 	setStart("01HTMC", tt2)
 	setStart("01HTMD", tt3)
 
-	// started_after=t2 (inclusive): {t2,t2,t3} = B,C,D. Дефолт-сорт started_at DESC,
-	// tie-break apply_id DESC внутри t2 → [D, C, B].
+	// started_after=t2 (inclusive): {t2,t2,t3} = B,C,D. Default sort started_at DESC,
+	// tie-break apply_id DESC inside t2 -> [D, C, B].
 	runs, total, err := ListRuns(ctx, integrationPool, RunsFilter{StartedAfter: &tt2}, unrestrictedScope, 0, 50)
 	if err != nil {
 		t.Fatalf("ListRuns(after=t2): %v", err)
 	}
 	if total != 3 || len(runs) != 3 {
-		t.Fatalf("after=t2: total=%d len=%d, want 3/3 (граница inclusive)", total, len(runs))
+		t.Fatalf("after=t2: total=%d len=%d, want 3/3 (inclusive boundary)", total, len(runs))
 	}
 	if want := []string{"01HTMD", "01HTMC", "01HTMB"}; !eqIDs(runIDs(runs), want) {
-		t.Errorf("after=t2: порядок %v, want %v (tie-break apply_id DESC при равном started_at)", runIDs(runs), want)
+		t.Errorf("after=t2: order %v, want %v (tie-break apply_id DESC for equal started_at)", runIDs(runs), want)
 	}
 
 	// started_before=t2 (inclusive): {t1,t2,t2} = A,B,C; total=3.
@@ -556,46 +556,46 @@ func TestIntegration_ListRuns_TimeRange(t *testing.T) {
 		t.Fatalf("ListRuns(before=t2): %v", err)
 	}
 	if total != 3 || len(runs) != 3 {
-		t.Fatalf("before=t2: total=%d len=%d, want 3/3 (граница inclusive)", total, len(runs))
+		t.Fatalf("before=t2: total=%d len=%d, want 3/3 (inclusive boundary)", total, len(runs))
 	}
 
-	// Диапазон [t2,t2] — ровно прогоны со started_at == t2 (обе границы inclusive):
-	// C,B; list и total одинаковы.
+	// Range [t2,t2] - exactly runs with started_at == t2 (both boundaries inclusive):
+	// C,B; list and total are identical.
 	runs, total, err = ListRuns(ctx, integrationPool,
 		RunsFilter{StartedAfter: &tt2, StartedBefore: &tt2}, unrestrictedScope, 0, 50)
 	if err != nil {
 		t.Fatalf("ListRuns([t2,t2]): %v", err)
 	}
 	if total != 2 || len(runs) != 2 {
-		t.Fatalf("[t2,t2]: total=%d len=%d, want 2/2 (обе границы inclusive)", total, len(runs))
+		t.Fatalf("[t2,t2]: total=%d len=%d, want 2/2 (both boundaries inclusive)", total, len(runs))
 	}
 	if want := []string{"01HTMC", "01HTMB"}; !eqIDs(runIDs(runs), want) {
-		t.Errorf("[t2,t2]: порядок %v, want %v", runIDs(runs), want)
+		t.Errorf("[t2,t2]: order %v, want %v", runIDs(runs), want)
 	}
 
-	// Пустой диапазон (after позже before) — безвредно пусто (after>before не
-	// валидируется жёстко на handler-е).
+	// Empty range (after later than before) - harmlessly empty (after>before is not
+	// strictly validated at handler level).
 	runs, total, err = ListRuns(ctx, integrationPool,
 		RunsFilter{StartedAfter: &tt3, StartedBefore: &tt1}, unrestrictedScope, 0, 50)
 	if err != nil {
 		t.Fatalf("ListRuns(after>before): %v", err)
 	}
 	if total != 0 || len(runs) != 0 {
-		t.Errorf("after>before: total=%d len=%d, want 0/0 (пустая выдача безвредна)", total, len(runs))
+		t.Errorf("after>before: total=%d len=%d, want 0/0 (empty output is harmless)", total, len(runs))
 	}
 }
 
-// TestIntegration_ListRuns_TimeScopeBinding — РЕГРЕСС (security): фильтр по времени
-// AND-связан с Purview-scope и не обходит его. Симметричен
-// [TestIntegration_ListRuns_QScopeBinding], но пользовательский фильтр — диапазон
-// времени, а не q. Ключевое отличие раскладки bind-параметров: scope сидит в
-// подзапросе `sub` (ДО GROUP BY, $1), а время — в `outerWhere` (ПОСЛЕ GROUP BY, $2).
-// Пинним, что позиции не разъезжаются и время не «протаскивает» out-of-scope прогон
-// мимо scope. Три прогона под ограниченным scope в разных точках времени:
-//   - in-scope + в окне     → единственный видимый;
-//   - out-of-scope + в окне → отсечён scope ($1), НЕ утечка через время;
-//   - in-scope + до окна    → отсечён нижней границей времени ($2), — доказывает,
-//     что предикат времени реально активен, а не no-op под scope.
+// TestIntegration_ListRuns_TimeScopeBinding - REGRESSION (security): time filter
+// is AND-bound to Purview-scope and does not bypass it. Symmetric to
+// [TestIntegration_ListRuns_QScopeBinding], but the user filter is a time range,
+// not q. The key bind-parameter layout difference: scope lives in subquery `sub`
+// (BEFORE GROUP BY, $1), while time is in `outerWhere` (AFTER GROUP BY, $2).
+// Pins that positions do not drift and time does not carry an out-of-scope run
+// past scope. Three runs under limited scope at different times:
+//   - in-scope + in window     -> only visible one;
+//   - out-of-scope + in window -> cut off by scope ($1), NOT a time-filter leak;
+//   - in-scope + before window -> cut off by lower time bound ($2), proving
+//     the time predicate is actually active, not a no-op under scope.
 func TestIntegration_ListRuns_TimeScopeBinding(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -616,38 +616,39 @@ func TestIntegration_ListRuns_TimeScopeBinding(t *testing.T) {
 			t.Fatalf("UPDATE started_at %s: %v", applyID, err)
 		}
 	}
-	// Окно — StartedAfter=tWindow (inclusive); tBefore заведомо раньше окна.
+	// Window is StartedAfter=tWindow (inclusive); tBefore is safely before the window.
 	tBefore, tWindow := mustTime("2026-01-01T00:00:00Z"), mustTime("2026-06-01T00:00:00Z")
 
-	seedRun(t, ctx, "01HTSIN", "in-scope-inc", "create", StatusSuccess)   // in-scope, в окне
-	seedRun(t, ctx, "01HTSOUT", "out-scope-inc", "create", StatusSuccess) // out-of-scope, в окне
-	seedRun(t, ctx, "01HTSOLD", "in-scope-inc", "create", StatusSuccess)  // in-scope, ДО окна
+	seedRun(t, ctx, "01HTSIN", "in-scope-inc", "create", StatusSuccess)   // in-scope, in window
+	seedRun(t, ctx, "01HTSOUT", "out-scope-inc", "create", StatusSuccess) // out-of-scope, in window
+	seedRun(t, ctx, "01HTSOLD", "in-scope-inc", "create", StatusSuccess)  // in-scope, before window
 	setStart("01HTSIN", tWindow)
 	setStart("01HTSOUT", tWindow)
 	setStart("01HTSOLD", tBefore)
 
-	// Ограниченный scope (coven∪{name}) — видна только in-scope-inc; окно отсекает
-	// всё раньше tWindow.
+	// Limited scope (coven union {name}) - only in-scope-inc is visible; the window
+	// cuts off everything before tWindow.
 	scope := incarnation.ListScope{Covens: []string{"in-scope-inc"}}
 	runs, total, err := ListRuns(ctx, integrationPool,
 		RunsFilter{StartedAfter: &tWindow}, scope, 0, 50)
 	if err != nil {
-		t.Fatalf("ListRuns(время под ограниченным scope): %v", err)
+		t.Fatalf("ListRuns(time under limited scope): %v", err)
 	}
-	// (1) out-of-scope прогон в окне НЕ обходит scope через время; (2) total считает
-	// ТОЛЬКО in-scope прогоны в окне (out-of-scope и in-scope-до-окна не в счёте).
+	// (1) out-of-scope run in the window does NOT bypass scope through time;
+	// (2) total counts ONLY in-scope runs in the window (out-of-scope and
+	// in-scope-before-window are not counted).
 	if total != 1 || len(runs) != 1 || runs[0].ApplyID != "01HTSIN" {
-		t.Fatalf("время под scope: total=%d runs=%v, want ровно 01HTSIN (out-of-scope утёк мимо Purview через время?)",
+		t.Fatalf("time under scope: total=%d runs=%v, want exactly 01HTSIN (out-of-scope leaked past Purview through time?)",
 			total, runIDs(runs))
 	}
 	if runs[0].Incarnation != "in-scope-inc" {
-		t.Errorf("утечка прогона вне Purview-scope через фильтр времени: %+v", runs[0])
+		t.Errorf("run leaked outside Purview-scope through time filter: %+v", runs[0])
 	}
 }
 
-// TestIntegration_ListRuns_SortService — сортировка по service (ADR-068 whitelist):
-// порядок по сервису в обоих направлениях, стабильный tie-break apply_id DESC при
-// равном сервисе; total не зависит от направления.
+// TestIntegration_ListRuns_SortService - sorting by service (ADR-068 whitelist):
+// service order in both directions, stable tie-break by apply_id DESC for equal
+// service; total does not depend on direction.
 func TestIntegration_ListRuns_SortService(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -656,7 +657,7 @@ func TestIntegration_ListRuns_SortService(t *testing.T) {
 	seedIncarnation(t, "inc-c", "archon-alice")
 	ctx := context.Background()
 
-	// inc-a,inc-b → service 'aaa' (равные → tie-break apply_id DESC); inc-c → 'bbb'.
+	// inc-a,inc-b -> service 'aaa' (equal -> tie-break apply_id DESC); inc-c -> 'bbb'.
 	if _, err := integrationPool.Exec(ctx, `
 		UPDATE incarnation SET service = CASE name
 			WHEN 'inc-c' THEN 'bbb' ELSE 'aaa' END
@@ -664,12 +665,12 @@ func TestIntegration_ListRuns_SortService(t *testing.T) {
 		t.Fatalf("UPDATE service: %v", err)
 	}
 
-	// apply_id AA<AB<AC → tie-break apply_id DESC внутри service='aaa' даёт AB,AA.
+	// apply_id AA<AB<AC -> tie-break apply_id DESC inside service='aaa' gives AB,AA.
 	seedRun(t, ctx, "01HSVAA", "inc-a", "create", StatusSuccess) // service aaa
 	seedRun(t, ctx, "01HSVAB", "inc-b", "create", StatusSuccess) // service aaa
 	seedRun(t, ctx, "01HSVAC", "inc-c", "create", StatusSuccess) // service bbb
 
-	// service ASC: aaa (tie-break AB,AA), затем bbb (AC).
+	// service ASC: aaa (tie-break AB,AA), then bbb (AC).
 	runs, total, err := ListRuns(ctx, integrationPool,
 		RunsFilter{Sort: "service", SortDir: "asc"}, unrestrictedScope, 0, 50)
 	if err != nil {
@@ -679,19 +680,19 @@ func TestIntegration_ListRuns_SortService(t *testing.T) {
 		t.Errorf("service asc: total=%d, want 3", total)
 	}
 	if want := []string{"01HSVAB", "01HSVAA", "01HSVAC"}; !eqIDs(runIDs(runs), want) {
-		t.Errorf("service asc: порядок %v, want %v", runIDs(runs), want)
+		t.Errorf("service asc: order %v, want %v", runIDs(runs), want)
 	}
 
-	// service DESC: bbb (AC) первым, затем aaa (tie-break AB,AA).
+	// service DESC: bbb (AC) first, then aaa (tie-break AB,AA).
 	runs, totalDesc, err := ListRuns(ctx, integrationPool,
 		RunsFilter{Sort: "service", SortDir: "desc"}, unrestrictedScope, 0, 50)
 	if err != nil {
 		t.Fatalf("ListRuns(service desc): %v", err)
 	}
 	if want := []string{"01HSVAC", "01HSVAB", "01HSVAA"}; !eqIDs(runIDs(runs), want) {
-		t.Errorf("service desc: порядок %v, want %v", runIDs(runs), want)
+		t.Errorf("service desc: order %v, want %v", runIDs(runs), want)
 	}
 	if totalDesc != total {
-		t.Errorf("total разошёлся при смене sort_dir: asc=%d desc=%d", total, totalDesc)
+		t.Errorf("total diverged when changing sort_dir: asc=%d desc=%d", total, totalDesc)
 	}
 }

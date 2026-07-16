@@ -108,7 +108,7 @@ func AggregateRunStatus(statuses []Status) RunStatus {
 		case StatusCancelled:
 			hasCancelled = true
 		default:
-			// planned/claimed/running/dispatched — не терминал: прогон идёт.
+			// planned/claimed/running/dispatched are non-terminal: run is in progress.
 			return RunStatusApplying
 		}
 	}
@@ -205,8 +205,8 @@ func SelectRunDetail(ctx context.Context, db ExecQueryRower, applyID, incarnatio
 	var (
 		detail   RunDetail
 		statuses []Status
-		// финальность прогона: FinishedAt отдаём только когда каждая строка
-		// финишировала (max по non-nil; nil если хоть одна ещё running).
+		// Run finality: expose FinishedAt only when every row has finished (max of
+		// non-nil; nil if at least one row is still running).
 		allFinished = true
 		maxFinished time.Time
 	)

@@ -903,16 +903,16 @@ func TestOrphanDispatched_SweepSQL(t *testing.T) {
 		t.Errorf("RowsAffected = %d, want 2", n)
 	}
 	if !strings.Contains(f.execSQL, "status        = 'orphaned'") {
-		t.Errorf("SQL не ставит status=orphaned: %q", f.execSQL)
+		t.Errorf("SQL does not set status=orphaned: %q", f.execSQL)
 	}
 	if !strings.Contains(f.execSQL, "status = 'dispatched'") {
-		t.Errorf("SQL без single-winner-фильтра status='dispatched': %q", f.execSQL)
+		t.Errorf("SQL lacks single-winner filter status='dispatched': %q", f.execSQL)
 	}
 	if !strings.Contains(f.execSQL, "apply_id != ALL($2)") {
-		t.Errorf("SQL без epoch-fenced-фильтра known-набора: %q", f.execSQL)
+		t.Errorf("SQL lacks epoch-fenced known-set filter: %q", f.execSQL)
 	}
 	if !strings.Contains(f.execSQL, "finished_at   = NOW()") {
-		t.Errorf("SQL не проставляет finished_at: %q", f.execSQL)
+		t.Errorf("SQL does not set finished_at: %q", f.execSQL)
 	}
 	// args: $1=sid, $2=known apply_ids, $3=error_summary.
 	if len(f.execArgs) != 3 {
@@ -926,7 +926,7 @@ func TestOrphanDispatched_SweepSQL(t *testing.T) {
 		t.Errorf("$2 = %v, want [apply-live]", f.execArgs[1])
 	}
 	if f.execArgs[2] != orphanDispatchedErrorSummary {
-		t.Errorf("$3 = %v, want фиксированный error_summary", f.execArgs[2])
+		t.Errorf("$3 = %v, want fixed error_summary", f.execArgs[2])
 	}
 }
 
@@ -940,11 +940,11 @@ func TestOrphanDispatched_EmptyKnown_OrphansAll(t *testing.T) {
 		t.Fatalf("OrphanDispatched(nil): %v", err)
 	}
 	if n != 5 {
-		t.Errorf("RowsAffected = %d, want 5 (осиротили все)", n)
+		t.Errorf("RowsAffected = %d, want 5 (orphaned all)", n)
 	}
 	known, ok := f.execArgs[1].([]string)
 	if !ok || len(known) != 0 {
-		t.Errorf("$2 = %v, want пустой []string (не nil-маркер)", f.execArgs[1])
+		t.Errorf("$2 = %v, want empty []string (not nil marker)", f.execArgs[1])
 	}
 }
 
@@ -962,7 +962,7 @@ func TestOrphanDispatched_KnownFiltersEmptyIDs(t *testing.T) {
 	}
 	known := f.execArgs[1].([]string)
 	if len(known) != 1 || known[0] != "apply-real" {
-		t.Errorf("known = %v, want [apply-real] (мусор отфильтрован)", known)
+		t.Errorf("known = %v, want [apply-real] (noise filtered out)", known)
 	}
 }
 

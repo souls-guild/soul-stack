@@ -23,7 +23,7 @@ func TestUpsertTaskRegister_HappyPath(t *testing.T) {
 		t.Fatalf("execCalls = %d, want 1", f.execCalls)
 	}
 	if !strings.Contains(f.execSQL, "INSERT INTO apply_task_register") || !strings.Contains(f.execSQL, "ON CONFLICT") {
-		t.Errorf("SQL не upsert: %q", f.execSQL)
+		t.Errorf("SQL is not upsert: %q", f.execSQL)
 	}
 	// args: apply_id($1), sid($2), plan_index($3), task_idx($4), register_data($5),
 	// passage($6) — plan_index correlation key (migration 079).
@@ -33,11 +33,11 @@ func TestUpsertTaskRegister_HappyPath(t *testing.T) {
 	if f.execArgs[0] != "01HAPPLY" || f.execArgs[1] != "host.example.com" || f.execArgs[2] != 5 || f.execArgs[3] != 2 {
 		t.Errorf("args[0..3] = %v / %v / %v / %v", f.execArgs[0], f.execArgs[1], f.execArgs[2], f.execArgs[3])
 	}
-	// register_data сериализуется в jsonb-байты.
+	// register_data is serialized into jsonb bytes.
 	if _, ok := f.execArgs[4].([]byte); !ok {
 		t.Errorf("args[4] register_data = %T, want []byte (jsonb)", f.execArgs[4])
 	}
-	// passage (ADR-056) — компонент FK на apply_runs(apply_id, sid, passage).
+	// passage (ADR-056) is the FK component for apply_runs(apply_id, sid, passage).
 	if f.execArgs[5] != 1 {
 		t.Errorf("args[5] passage = %v, want 1", f.execArgs[5])
 	}

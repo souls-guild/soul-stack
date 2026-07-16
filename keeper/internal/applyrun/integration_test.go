@@ -319,7 +319,7 @@ func TestIntegration_UpdateStatus_ErrorSummaryCoalesce(t *testing.T) {
 		t.Errorf("error_summary = %v, want preserved \"boom\"", got.ErrorSummary)
 	}
 	if got.Status != StatusFailed {
-		t.Errorf("status = %q, want failed (первый терминал зафиксирован)", got.Status)
+		t.Errorf("status = %q, want failed (first terminal fixed)", got.Status)
 	}
 }
 
@@ -352,7 +352,7 @@ func TestIntegration_SelectIncarnationByApplyID(t *testing.T) {
 		t.Errorf("got (%q, %q), want (redis-prod, scale)", name, scenario)
 	}
 	if attempt != 0 {
-		t.Errorf("attempt = %d, want 0 (свежий Insert без claim, DEFAULT 0)", attempt)
+		t.Errorf("attempt = %d, want 0 (fresh Insert without claim, DEFAULT 0)", attempt)
 	}
 }
 
@@ -524,7 +524,7 @@ func TestIntegration_RequestCancel_FlagsRunningHosts(t *testing.T) {
 	}
 	for _, hs := range before {
 		if hs.CancelRequested {
-			t.Fatalf("host %s: cancel_requested=true до RequestCancel", hs.SID)
+			t.Fatalf("host %s: cancel_requested=true before RequestCancel", hs.SID)
 		}
 	}
 
@@ -533,7 +533,7 @@ func TestIntegration_RequestCancel_FlagsRunningHosts(t *testing.T) {
 		t.Fatalf("RequestCancel: %v", err)
 	}
 	if affected != 2 {
-		t.Errorf("affected = %d, want 2 (оба running-хоста прогона)", affected)
+		t.Errorf("affected = %d, want 2 (both running hosts of the run)", affected)
 	}
 
 	after, err := SelectStatusesByApplyID(ctx, integrationPool, "01HCANCEL")
@@ -545,7 +545,7 @@ func TestIntegration_RequestCancel_FlagsRunningHosts(t *testing.T) {
 	}
 	for _, hs := range after {
 		if !hs.CancelRequested {
-			t.Errorf("host %s: cancel_requested=false после RequestCancel", hs.SID)
+			t.Errorf("host %s: cancel_requested=false after RequestCancel", hs.SID)
 		}
 	}
 
@@ -555,7 +555,7 @@ func TestIntegration_RequestCancel_FlagsRunningHosts(t *testing.T) {
 		t.Fatalf("SelectStatuses noise: %v", err)
 	}
 	if len(noise) != 1 || noise[0].CancelRequested {
-		t.Errorf("шумовой прогон затронут RequestCancel: %+v", noise)
+		t.Errorf("noise run was touched by RequestCancel: %+v", noise)
 	}
 }
 
@@ -582,14 +582,14 @@ func TestIntegration_RequestCancel_TerminalNoOp(t *testing.T) {
 		t.Fatalf("RequestCancel: %v", err)
 	}
 	if affected != 0 {
-		t.Errorf("affected = %d, want 0 (терминальный прогон — no-op)", affected)
+		t.Errorf("affected = %d, want 0 (terminal run is no-op)", affected)
 	}
 	got, err := SelectStatusesByApplyID(ctx, integrationPool, "01HDONE")
 	if err != nil {
 		t.Fatalf("SelectStatuses: %v", err)
 	}
 	if len(got) != 1 || got[0].CancelRequested {
-		t.Errorf("терминальный прогон получил cancel_requested: %+v", got)
+		t.Errorf("terminal run got cancel_requested: %+v", got)
 	}
 }
 
@@ -612,7 +612,7 @@ func TestIntegration_RequestCancel_Idempotent(t *testing.T) {
 		t.Fatalf("RequestCancel second: %v", err)
 	}
 	if first != 1 || second != 1 {
-		t.Errorf("affected first=%d second=%d, want 1 и 1 (идемпотентно)", first, second)
+		t.Errorf("affected first=%d second=%d, want 1 and 1 (idempotent)", first, second)
 	}
 }
 
@@ -626,7 +626,7 @@ func TestIntegration_RequestCancel_UnknownApplyID(t *testing.T) {
 		t.Fatalf("RequestCancel: %v", err)
 	}
 	if affected != 0 {
-		t.Errorf("affected = %d, want 0 для неизвестного apply_id", affected)
+		t.Errorf("affected = %d, want 0 for unknown apply_id", affected)
 	}
 }
 
@@ -661,7 +661,7 @@ func TestIntegration_RequestCancel_PartialRunning(t *testing.T) {
 		t.Fatalf("RequestCancel: %v", err)
 	}
 	if affected != 1 {
-		t.Errorf("affected = %d, want 1 (только ещё-running host-b)", affected)
+		t.Errorf("affected = %d, want 1 (only still-running host-b)", affected)
 	}
 
 	got, err := SelectStatusesByApplyID(ctx, integrationPool, "01HMIXED")
@@ -673,14 +673,14 @@ func TestIntegration_RequestCancel_PartialRunning(t *testing.T) {
 	}
 	byID := map[string]HostStatus{got[0].SID: got[0], got[1].SID: got[1]}
 	if byID["host-a"].CancelRequested {
-		t.Error("host-a (success-терминал) получил cancel_requested — фильтр status='running' нарушен")
+		t.Error("host-a (success terminal) got cancel_requested: status='running' filter is broken")
 	}
 	if !byID["host-b"].CancelRequested {
-		t.Error("host-b (running) не получил cancel_requested")
+		t.Error("host-b (running) did not get cancel_requested")
 	}
 	// The barrier will see the flag on any row of the run — a partial flag is enough.
 	if !cancelRequestedAny(got) {
-		t.Error("ни одна строка не несёт cancel_requested — barrier не отменит прогон")
+		t.Error("no row carries cancel_requested: barrier will not cancel the run")
 	}
 }
 
@@ -721,14 +721,14 @@ func TestIntegration_RecordTaskFailure_FirstFailureWins(t *testing.T) {
 		t.Fatalf("SelectByApplyID: %v", err)
 	}
 	if got.TaskIdx == nil || *got.TaskIdx != 1 {
-		t.Errorf("task_idx = %v, want 1 (первая упавшая задача, локальный)", got.TaskIdx)
+		t.Errorf("task_idx = %v, want 1 (first failed task, local)", got.TaskIdx)
 	}
 	if got.ErrorSummary == nil || *got.ErrorSummary != "task 4 core.pkg.installed: E: Version '7.2.4' not found" {
-		t.Errorf("error_summary = %v, want первой задачи", got.ErrorSummary)
+		t.Errorf("error_summary = %v, want first task", got.ErrorSummary)
 	}
 	// The status stays running until RunResult.
 	if got.Status != StatusRunning {
-		t.Errorf("status = %q, want running (RecordTaskFailure не трогает статус)", got.Status)
+		t.Errorf("status = %q, want running (RecordTaskFailure does not touch status)", got.Status)
 	}
 
 	// failed_plan_index is read via the HostStatus projection (SelectByApplyID doesn't
@@ -742,10 +742,10 @@ func TestIntegration_RecordTaskFailure_FirstFailureWins(t *testing.T) {
 	}
 	hs := statuses[0]
 	if hs.FailedPlanIndex == nil || *hs.FailedPlanIndex != 4 {
-		t.Errorf("★ failed_plan_index = %v, want 4 (глобальный, первая упавшая задача — не затёрт второй с 9)", hs.FailedPlanIndex)
+		t.Errorf("failed_plan_index = %v, want 4 (global, first failed task not overwritten by second with 9)", hs.FailedPlanIndex)
 	}
 	if hs.TaskIdx == nil || *hs.TaskIdx != 1 {
-		t.Errorf("HostStatus.TaskIdx = %v, want 1 (локальный)", hs.TaskIdx)
+		t.Errorf("HostStatus.TaskIdx = %v, want 1 (local)", hs.TaskIdx)
 	}
 }
 
@@ -795,10 +795,10 @@ func TestIntegration_WardClaimColumns_Phase0(t *testing.T) {
 		t.Fatalf("select ward-claim columns: %v", err)
 	}
 	if attempt != 0 {
-		t.Errorf("attempt = %d, want 0 (DEFAULT для строки старого пути)", attempt)
+		t.Errorf("attempt = %d, want 0 (DEFAULT for old-path row)", attempt)
 	}
 	if claimByKID != nil || claimAt != nil || claimExpiresAt != nil {
-		t.Errorf("claim_* должны быть NULL у строки старого пути: %v / %v / %v",
+		t.Errorf("claim_* must be NULL on old-path row: %v / %v / %v",
 			claimByKID, claimAt, claimExpiresAt)
 	}
 
@@ -809,17 +809,17 @@ func TestIntegration_WardClaimColumns_Phase0(t *testing.T) {
 			INSERT INTO apply_runs (apply_id, sid, incarnation_name, scenario, status)
 			VALUES ($1, 'host-x', 'redis-prod', 'create', $2)
 		`, "01HWARD-"+st, st); err != nil {
-			t.Errorf("status %q отвергнут CHECK-ом после 025: %v", st, err)
+			t.Errorf("status %q rejected by CHECK after 025: %v", st, err)
 		}
 	}
-	// Сохранены старые значения: cancelled (024-эра) по-прежнему валиден.
+	// Old values are preserved: cancelled (024 era) is still valid.
 	if _, err := integrationPool.Exec(ctx, `
 		INSERT INTO apply_runs (apply_id, sid, incarnation_name, scenario, status)
 		VALUES ('01HWARD-cancelled', 'host-y', 'redis-prod', 'create', 'cancelled')
 	`); err != nil {
-		t.Errorf("status 'cancelled' отвергнут после 025 (регрессия): %v", err)
+		t.Errorf("status 'cancelled' rejected after 025 (regression): %v", err)
 	}
-	// Невалидный статус по-прежнему отвергается.
+	// Invalid status is still rejected.
 	if _, err := integrationPool.Exec(ctx, `
 		INSERT INTO apply_runs (apply_id, sid, incarnation_name, scenario, status)
 		VALUES ('01HWARD-bad', 'host-z', 'redis-prod', 'create', 'bogus')
@@ -827,7 +827,7 @@ func TestIntegration_WardClaimColumns_Phase0(t *testing.T) {
 		t.Error("status 'bogus' accepted, expected CHECK violation")
 	}
 
-	// Partial-индекс под claim-скан создан.
+	// Partial index for claim scan exists.
 	var idxExists bool
 	if err := integrationPool.QueryRow(ctx, `
 		SELECT EXISTS (
@@ -838,22 +838,21 @@ func TestIntegration_WardClaimColumns_Phase0(t *testing.T) {
 		t.Fatalf("pg_indexes claim_scan: %v", err)
 	}
 	if !idxExists {
-		t.Error("apply_runs_claim_scan_idx отсутствует после 025")
+		t.Error("apply_runs_claim_scan_idx is absent after 025")
 	}
 
-	// Текущий путь не сломан: Insert/SelectByApplyID работают как раньше,
-	// существующая строка не затронута Ward-claim колонками.
+	// Current path is intact: Insert/SelectByApplyID work as before, and the
+	// existing row is not affected by Ward-claim columns.
 	got, err := SelectByApplyID(ctx, integrationPool, "01HWARD", "host-a")
 	if err != nil {
-		t.Fatalf("SelectByApplyID после 025: %v", err)
+		t.Fatalf("SelectByApplyID after 025: %v", err)
 	}
 	if got.Status != StatusRunning {
-		t.Errorf("status = %q, want running (текущий путь не изменился)", got.Status)
+		t.Errorf("status = %q, want running (current path unchanged)", got.Status)
 	}
 }
 
-// seedApplyRun вставляет минимальную apply_runs-строку (FK-родитель для
-// apply_task_register).
+// seedApplyRun inserts a minimal apply_runs row (FK parent for apply_task_register).
 func seedApplyRun(t *testing.T, applyID, sid string) {
 	t.Helper()
 	if err := Insert(context.Background(), integrationPool, &ApplyRun{
@@ -873,7 +872,7 @@ func TestIntegration_TaskRegister_UpsertAndSelect(t *testing.T) {
 	seedApplyRun(t, "01HREG", "host-a")
 	seedApplyRun(t, "01HREG", "host-b")
 
-	// PlanIndex — ключ корреляции (PK-компонент, миграция 079); N=1 → ==TaskIdx.
+	// PlanIndex is the correlation key (PK component, migration 079); N=1 -> ==TaskIdx.
 	rows := []*TaskRegister{
 		{ApplyID: "01HREG", SID: "host-a", PlanIndex: 0, TaskIdx: 0, RegisterData: map[string]any{"stdout": "a0", "rc": float64(0)}},
 		{ApplyID: "01HREG", SID: "host-a", PlanIndex: 2, TaskIdx: 2, RegisterData: map[string]any{"stdout": "a2"}},
@@ -892,7 +891,7 @@ func TestIntegration_TaskRegister_UpsertAndSelect(t *testing.T) {
 	if len(got) != 3 {
 		t.Fatalf("len = %d, want 3", len(got))
 	}
-	// Сортировка (sid, plan_index): host-a/0, host-a/2, host-b/0.
+	// Sort order (sid, plan_index): host-a/0, host-a/2, host-b/0.
 	if got[0].SID != "host-a" || got[0].PlanIndex != 0 {
 		t.Errorf("got[0] = %s/%d, want host-a/0", got[0].SID, got[0].PlanIndex)
 	}
@@ -905,7 +904,7 @@ func TestIntegration_TaskRegister_UpsertAndSelect(t *testing.T) {
 	if got[0].RegisterData["stdout"] != "a0" {
 		t.Errorf("got[0].stdout = %v, want a0", got[0].RegisterData["stdout"])
 	}
-	// jsonb-число читается как float64.
+	// jsonb number is read as float64.
 	if got[0].RegisterData["rc"] != float64(0) {
 		t.Errorf("got[0].rc = %T(%v), want float64(0)", got[0].RegisterData["rc"], got[0].RegisterData["rc"])
 	}
@@ -936,10 +935,10 @@ func TestIntegration_TaskRegister_UpsertOverwrites(t *testing.T) {
 		t.Fatalf("Select: %v", err)
 	}
 	if len(got) != 1 {
-		t.Fatalf("len = %d, want 1 (upsert по PK)", len(got))
+		t.Fatalf("len = %d, want 1 (upsert by PK)", len(got))
 	}
 	if got[0].RegisterData["stdout"] != "second" {
-		t.Errorf("stdout = %v, want second (последний побеждает)", got[0].RegisterData["stdout"])
+		t.Errorf("stdout = %v, want second (last wins)", got[0].RegisterData["stdout"])
 	}
 }
 
@@ -957,7 +956,7 @@ func TestIntegration_TaskRegister_FKCascadeOnApplyRunDelete(t *testing.T) {
 		t.Fatalf("Upsert: %v", err)
 	}
 
-	// Удаление родительской apply_runs-строки → CASCADE чистит register.
+	// Deleting the parent apply_runs row cascades and clears register.
 	if _, err := integrationPool.Exec(ctx,
 		`DELETE FROM apply_runs WHERE apply_id = '01HREG' AND sid = 'host-a'`); err != nil {
 		t.Fatalf("DELETE apply_runs: %v", err)
@@ -967,26 +966,26 @@ func TestIntegration_TaskRegister_FKCascadeOnApplyRunDelete(t *testing.T) {
 		t.Fatalf("Select: %v", err)
 	}
 	if len(got) != 0 {
-		t.Errorf("len = %d, want 0 после CASCADE-удаления родителя", len(got))
+		t.Errorf("len = %d, want 0 after parent CASCADE delete", len(got))
 	}
 }
 
 func TestIntegration_TaskRegister_FKViolation_NoApplyRun(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
-	// Нет apply_runs-родителя → FK violation.
+	// No apply_runs parent: FK violation.
 	err := UpsertTaskRegister(ctx, integrationPool, &TaskRegister{
 		ApplyID: "01HGHOST", SID: "host-a", TaskIdx: 0,
 		RegisterData: map[string]any{"stdout": "x"},
 	})
 	if err == nil {
-		t.Fatal("UpsertTaskRegister без apply_runs-родителя: expected FK violation")
+		t.Fatal("UpsertTaskRegister without apply_runs parent: expected FK violation")
 	}
 }
 
-// seedPlanned вставляет apply_runs-строку в статус planned (work-queue вход,
-// ADR-027): scenario-runner на dispatch-е пишет именно planned, Acolyte клеймит
-// её через ClaimNext.
+// seedPlanned inserts an apply_runs row in planned status (work-queue input,
+// ADR-027): scenario-runner writes planned on dispatch, and Acolyte claims it via
+// ClaimNext.
 func seedPlanned(t *testing.T, applyID, sid string) {
 	t.Helper()
 	if err := Insert(context.Background(), integrationPool, &ApplyRun{
@@ -999,14 +998,14 @@ func seedPlanned(t *testing.T, applyID, sid string) {
 
 // TestIntegration_ValidStatus_PlannedClaimedNowValid — Phase 1: planned/claimed
 // became valid for the CRUD layer ([Insert]/[UpdateStatus]); however the old path
-// (прямой Insert(running)) не сломан.
+// (direct Insert(running)) is not broken.
 func TestIntegration_ValidStatus_PlannedClaimedNowValid(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "redis-prod", "archon-alice")
 	ctx := context.Background()
 
-	// planned теперь проходит Go-validation Insert-а.
+	// planned now passes Insert Go validation.
 	if err := Insert(ctx, integrationPool, &ApplyRun{
 		ApplyID: "01HVS", SID: "host-a", IncarnationName: "redis-prod",
 		Scenario: "create", Status: StatusPlanned,
@@ -1021,12 +1020,12 @@ func TestIntegration_ValidStatus_PlannedClaimedNowValid(t *testing.T) {
 		t.Errorf("status = %q, want planned", got.Status)
 	}
 
-	// Старый путь не тронут: Insert(running) по-прежнему работает.
+	// Old path is untouched: Insert(running) still works.
 	if err := Insert(ctx, integrationPool, &ApplyRun{
 		ApplyID: "01HVS", SID: "host-b", IncarnationName: "redis-prod",
 		Scenario: "create", Status: StatusRunning,
 	}); err != nil {
-		t.Fatalf("Insert(running) legacy path сломан: %v", err)
+		t.Fatalf("Insert(running) legacy path broken: %v", err)
 	}
 	gotB, err := SelectByApplyID(ctx, integrationPool, "01HVS", "host-b")
 	if err != nil {
@@ -1037,8 +1036,8 @@ func TestIntegration_ValidStatus_PlannedClaimedNowValid(t *testing.T) {
 	}
 }
 
-// TestIntegration_ClaimNext_PlannedToClaimed — базовый claim: planned → claimed,
-// выставлены claim_by_kid/claim_at/claim_expires_at, attempt 0→1.
+// TestIntegration_ClaimNext_PlannedToClaimed verifies basic claim: planned ->
+// claimed, claim_by_kid/claim_at/claim_expires_at set, attempt 0->1.
 func TestIntegration_ClaimNext_PlannedToClaimed(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1068,13 +1067,13 @@ func TestIntegration_ClaimNext_PlannedToClaimed(t *testing.T) {
 		t.Errorf("claim_expires_at nil, want set")
 	}
 	if c.ClaimAt != nil && c.ClaimExpiresAt != nil && !c.ClaimExpiresAt.After(*c.ClaimAt) {
-		t.Errorf("claim_expires_at %v не позже claim_at %v", c.ClaimExpiresAt, c.ClaimAt)
+		t.Errorf("claim_expires_at %v is not after claim_at %v", c.ClaimExpiresAt, c.ClaimAt)
 	}
 	if c.Attempt != 1 {
 		t.Errorf("attempt = %d, want 1 (0→1)", c.Attempt)
 	}
 
-	// Персистентность: повторный SELECT видит claimed.
+	// Persistence: repeat SELECT sees claimed.
 	got, err := SelectByApplyID(ctx, integrationPool, "01HCLAIM", "host-a")
 	if err != nil {
 		t.Fatalf("SelectByApplyID: %v", err)
@@ -1084,14 +1083,14 @@ func TestIntegration_ClaimNext_PlannedToClaimed(t *testing.T) {
 	}
 }
 
-// TestIntegration_ClaimNext_NoPlanned — нет planned-заданий → пустой срез, не ошибка.
+// TestIntegration_ClaimNext_NoPlanned verifies no planned jobs -> empty slice, no error.
 func TestIntegration_ClaimNext_NoPlanned(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "redis-prod", "archon-alice")
 	ctx := context.Background()
 
-	// Шумовая running-строка не должна клеймиться (только planned).
+	// Noise running row must not be claimed (planned only).
 	seedApplyRun(t, "01HRUN", "host-a")
 
 	claimed, err := ClaimNext(ctx, integrationPool, "keeper-1", 30*time.Second, 10)
@@ -1099,11 +1098,11 @@ func TestIntegration_ClaimNext_NoPlanned(t *testing.T) {
 		t.Fatalf("ClaimNext: %v", err)
 	}
 	if len(claimed) != 0 {
-		t.Errorf("claimed len = %d, want 0 (нет planned)", len(claimed))
+		t.Errorf("claimed len = %d, want 0 (no planned)", len(claimed))
 	}
 }
 
-// TestIntegration_ClaimNext_BatchLimit — захватывается не больше batch-строк.
+// TestIntegration_ClaimNext_BatchLimit verifies claiming no more than batch rows.
 func TestIntegration_ClaimNext_BatchLimit(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1122,7 +1121,7 @@ func TestIntegration_ClaimNext_BatchLimit(t *testing.T) {
 		t.Fatalf("first batch len = %d, want 2 (limit)", len(first))
 	}
 
-	// Остаток (3 planned) — следующим claim-ом, тем же limit-ом 2 → 2, потом 1.
+	// Remainder (3 planned) is claimed by next claims with the same limit 2: 2, then 1.
 	second, err := ClaimNext(ctx, integrationPool, "keeper-1", 30*time.Second, 2)
 	if err != nil {
 		t.Fatalf("ClaimNext#2: %v", err)
@@ -1135,14 +1134,14 @@ func TestIntegration_ClaimNext_BatchLimit(t *testing.T) {
 		t.Fatalf("ClaimNext#3: %v", err)
 	}
 	if len(third) != 1 {
-		t.Fatalf("third batch len = %d, want 1 (остаток)", len(third))
+		t.Fatalf("third batch len = %d, want 1 (remainder)", len(third))
 	}
 }
 
-// TestIntegration_ClaimNext_Concurrent — ключевой тест корректности: два
-// параллельных ClaimNext (разные Acolyte-ы / KID) над общим набором planned НЕ
-// получают одну и ту же строку. Гарантирует это FOR UPDATE SKIP LOCKED.
-// Объединение захваченных множеств == полный набор, пересечение пусто.
+// TestIntegration_ClaimNext_Concurrent is the key correctness test: two parallel
+// ClaimNext calls (different Acolytes / KIDs) over a shared planned set must not
+// receive the same row. FOR UPDATE SKIP LOCKED guarantees this. Union of claimed
+// sets equals the full set, intersection is empty.
 func TestIntegration_ClaimNext_Concurrent(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1167,7 +1166,7 @@ func TestIntegration_ClaimNext_Concurrent(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			// Каждый воркер клеймит пачками, пока planned не кончатся.
+			// Each worker claims in batches until planned rows run out.
 			for {
 				batch, err := ClaimNext(ctx, integrationPool, kids[idx], 60*time.Second, 5)
 				if err != nil {
@@ -1189,18 +1188,18 @@ func TestIntegration_ClaimNext_Concurrent(t *testing.T) {
 		}
 	}
 
-	// Ни одна строка не захвачена дважды; объединение покрывает весь набор.
-	seen := make(map[string]string) // sid → kid, захвативший её
+	// No row is claimed twice; union covers the whole set.
+	seen := make(map[string]string) // sid -> kid that claimed it
 	total := 0
 	for i, r := range results {
 		for _, run := range r.runs {
 			total++
 			if prev, dup := seen[run.SID]; dup {
-				t.Fatalf("строка sid=%s захвачена дважды: kid=%s и kid=%s (FOR UPDATE SKIP LOCKED нарушен)",
+				t.Fatalf("row sid=%s claimed twice: kid=%s and kid=%s (FOR UPDATE SKIP LOCKED broken)",
 					run.SID, prev, kids[i])
 			}
 			seen[run.SID] = kids[i]
-			// Захватившая строку — её KID и attempt=1.
+			// Claimed row carries its KID and attempt=1.
 			if run.ClaimByKID == nil || *run.ClaimByKID != kids[i] {
 				t.Errorf("sid=%s claim_by_kid=%v, want %s", run.SID, run.ClaimByKID, kids[i])
 			}
@@ -1210,16 +1209,16 @@ func TestIntegration_ClaimNext_Concurrent(t *testing.T) {
 		}
 	}
 	if total != n {
-		t.Errorf("суммарно захвачено %d, want %d (часть planned потеряна)", total, n)
+		t.Errorf("total claimed %d, want %d (some planned rows lost)", total, n)
 	}
 	if len(seen) != n {
-		t.Errorf("уникальных захваченных строк %d, want %d", len(seen), n)
+		t.Errorf("unique claimed rows %d, want %d", len(seen), n)
 	}
 }
 
 // TestIntegration_ClaimNext_AttemptIncrements tests that attempt increments on
-// повторном claim. Эмулируем recovery вручную: claimed → planned reset, затем
-// claim снова → attempt 1→2.
+// repeat claim. Emulate recovery manually: claimed -> planned reset, then claim
+// again -> attempt 1->2.
 func TestIntegration_ClaimNext_AttemptIncrements(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1236,8 +1235,8 @@ func TestIntegration_ClaimNext_AttemptIncrements(t *testing.T) {
 		t.Fatalf("first claim attempt = %v, want 1", first)
 	}
 
-	// Recovery-эмуляция: протухший Ward возвращён в planned (claim_* сброшены,
-	// attempt СОХРАНЁН — recovery-скан Reaper attempt не трогает, ADR-027(i)).
+	// Recovery emulation: expired Ward is returned to planned (claim_* reset,
+	// attempt preserved; Reaper recovery scan does not touch attempt, ADR-027(i)).
 	if _, err := integrationPool.Exec(ctx, `
 		UPDATE apply_runs
 		SET status='planned', claim_by_kid=NULL, claim_at=NULL, claim_expires_at=NULL
@@ -1256,11 +1255,11 @@ func TestIntegration_ClaimNext_AttemptIncrements(t *testing.T) {
 		t.Errorf("attempt = %d, want 2 (1→2 on reclaim)", second[0].Attempt)
 	}
 	if second[0].ClaimByKID == nil || *second[0].ClaimByKID != "keeper-2" {
-		t.Errorf("claim_by_kid = %v, want keeper-2 (новый владелец после recovery)", second[0].ClaimByKID)
+		t.Errorf("claim_by_kid = %v, want keeper-2 (new owner after recovery)", second[0].ClaimByKID)
 	}
 }
 
-// TestIntegration_ClaimNext_Validation — пустой kid / неположительные lease/batch
+// TestIntegration_ClaimNext_Validation verifies empty kid / non-positive lease/batch
 // are rejected before going to DB.
 func TestIntegration_ClaimNext_Validation(t *testing.T) {
 	ctx := context.Background()
@@ -1275,7 +1274,7 @@ func TestIntegration_ClaimNext_Validation(t *testing.T) {
 	}
 }
 
-// TestIntegration_MarkDispatched_Ok — claimed → dispatched проходит.
+// TestIntegration_MarkDispatched_Ok verifies claimed -> dispatched succeeds.
 func TestIntegration_MarkDispatched_Ok(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1299,17 +1298,18 @@ func TestIntegration_MarkDispatched_Ok(t *testing.T) {
 	}
 }
 
-// TestIntegration_MarkDispatched_GuardRejectsNonClaimed — guard: переход
-// возможен ТОЛЬКО из claimed. running→dispatched и planned→dispatched отвергаются
-// (ErrApplyRunNotClaimed), отсутствующая строка → ErrApplyRunNotFound.
+// TestIntegration_MarkDispatched_GuardRejectsNonClaimed verifies the guard:
+// transition is possible only from claimed. running->dispatched and
+// planned->dispatched are rejected (ErrApplyRunNotClaimed), absent row ->
+// ErrApplyRunNotFound.
 func TestIntegration_MarkDispatched_GuardRejectsNonClaimed(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "redis-prod", "archon-alice")
 	ctx := context.Background()
 
-	// running → dispatched: guard (running вне claimed).
-	seedApplyRun(t, "01HG", "host-running") // вставляет StatusRunning
+	// running -> dispatched: guard (running outside claimed).
+	seedApplyRun(t, "01HG", "host-running") // Inserts StatusRunning.
 	if err := MarkDispatched(ctx, integrationPool, "01HG", "host-running"); !errors.Is(err, ErrApplyRunNotClaimed) {
 		t.Errorf("running→dispatched: err = %v, want ErrApplyRunNotClaimed", err)
 	}
@@ -1320,13 +1320,13 @@ func TestIntegration_MarkDispatched_GuardRejectsNonClaimed(t *testing.T) {
 		t.Errorf("planned→dispatched: err = %v, want ErrApplyRunNotClaimed", err)
 	}
 
-	// Отсутствующая строка → NotFound.
+	// Absent row -> NotFound.
 	if err := MarkDispatched(ctx, integrationPool, "01HG", "ghost"); !errors.Is(err, ErrApplyRunNotFound) {
 		t.Errorf("ghost: err = %v, want ErrApplyRunNotFound", err)
 	}
 
-	// Повторный MarkDispatched после успешного перехода (dispatched уже) —
-	// тоже guard (idempotency: второй вызов не «переподтверждает»).
+	// Repeated MarkDispatched after a successful transition (already dispatched)
+	// is also guarded: idempotency means the second call does not reconfirm it.
 	seedPlanned(t, "01HG", "host-twice")
 	if _, err := ClaimNext(ctx, integrationPool, "keeper-1", 30*time.Second, 10); err != nil {
 		t.Fatalf("ClaimNext: %v", err)
@@ -1335,13 +1335,13 @@ func TestIntegration_MarkDispatched_GuardRejectsNonClaimed(t *testing.T) {
 		t.Fatalf("MarkDispatched#1: %v", err)
 	}
 	if err := MarkDispatched(ctx, integrationPool, "01HG", "host-twice"); !errors.Is(err, ErrApplyRunNotClaimed) {
-		t.Errorf("повторный MarkDispatched: err = %v, want ErrApplyRunNotClaimed", err)
+		t.Errorf("repeated MarkDispatched: err = %v, want ErrApplyRunNotClaimed", err)
 	}
 }
 
-// TestIntegration_InsertPlanned_WithRecipe — Phase 1.4.2: InsertPlanned пишет
-// строку status=planned с persisted recipe (колонка 029), attempt=0 DEFAULT,
-// Ward-колонки NULL. Инвариант A: recipe.Input несёт vault-ref СТРОКОЙ.
+// TestIntegration_InsertPlanned_WithRecipe verifies Phase 1.4.2: InsertPlanned
+// writes a status=planned row with persisted recipe (column 029), attempt=0
+// DEFAULT, Ward columns NULL. Invariant A: recipe.Input carries vault-ref as string.
 func TestIntegration_InsertPlanned_WithRecipe(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1366,7 +1366,7 @@ func TestIntegration_InsertPlanned_WithRecipe(t *testing.T) {
 		t.Errorf("run.Status = %q, want planned", run.Status)
 	}
 	if run.StartedAt.IsZero() {
-		t.Errorf("StartedAt не заполнен RETURNING-ом")
+		t.Errorf("StartedAt not filled by RETURNING")
 	}
 
 	got, err := SelectByApplyID(ctx, integrationPool, "01HPLAN", "host-a")
@@ -1377,13 +1377,13 @@ func TestIntegration_InsertPlanned_WithRecipe(t *testing.T) {
 		t.Errorf("persisted status = %q, want planned", got.Status)
 	}
 	if got.Attempt != 0 {
-		t.Errorf("attempt = %d, want 0 (DEFAULT, инкрементит claim)", got.Attempt)
+		t.Errorf("attempt = %d, want 0 (DEFAULT, incremented by claim)", got.Attempt)
 	}
 	if got.ClaimByKID != nil {
-		t.Errorf("claim_by_kid = %v, want NULL до claim", got.ClaimByKID)
+		t.Errorf("claim_by_kid = %v, want NULL before claim", got.ClaimByKID)
 	}
 
-	// recipe доезжает через claim: ClaimNext.RETURNING несёт recipe → run.Recipe.
+	// recipe travels through claim: ClaimNext.RETURNING carries recipe -> run.Recipe.
 	claimed, err := ClaimNext(ctx, integrationPool, "keeper-1", 30*time.Second, 10)
 	if err != nil {
 		t.Fatalf("ClaimNext: %v", err)
@@ -1393,22 +1393,22 @@ func TestIntegration_InsertPlanned_WithRecipe(t *testing.T) {
 	}
 	c := claimed[0]
 	if c.Recipe == nil {
-		t.Fatalf("claimed.Recipe nil — recipe не доехал через ClaimNext")
+		t.Fatalf("claimed.Recipe nil: recipe did not travel through ClaimNext")
 	}
 	if c.Recipe.ScenarioName != "create" {
 		t.Errorf("recipe.ScenarioName = %q, want create", c.Recipe.ScenarioName)
 	}
-	// Инвариант A: vault-ref в персисте — СТРОКОЙ, секрет не раскрыт.
+	// Invariant A: vault-ref in persisted data is a string; secret is not revealed.
 	if c.Recipe.Input["db_password"] != "vault:secret/db-creds#password" {
-		t.Errorf("recipe.Input db_password = %v, want vault-ref как есть", c.Recipe.Input["db_password"])
+		t.Errorf("recipe.Input db_password = %v, want vault-ref as-is", c.Recipe.Input["db_password"])
 	}
 	if c.Recipe.StartedByAID == nil || *c.Recipe.StartedByAID != aid {
 		t.Errorf("recipe.StartedByAID = %v, want %q", c.Recipe.StartedByAID, aid)
 	}
 }
 
-// TestIntegration_InsertPlanned_RejectsNilRecipe — planned-задание без рецепта
-// Acolyte отрендерить не может → InsertPlanned отвергает nil-recipe.
+// TestIntegration_InsertPlanned_RejectsNilRecipe verifies that a planned job
+// without recipe cannot be rendered by Acolyte, so InsertPlanned rejects nil recipe.
 func TestIntegration_InsertPlanned_RejectsNilRecipe(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1417,15 +1417,15 @@ func TestIntegration_InsertPlanned_RejectsNilRecipe(t *testing.T) {
 
 	err := InsertPlanned(ctx, integrationPool, &ApplyRun{
 		ApplyID: "01HNIL", SID: "host-a", IncarnationName: "redis-prod",
-		Scenario: "create", // Recipe не задан
+		Scenario: "create", // Recipe is not set.
 	})
 	if err == nil {
-		t.Fatalf("InsertPlanned с nil-recipe прошёл, want ошибку")
+		t.Fatalf("InsertPlanned with nil recipe succeeded, want error")
 	}
 }
 
-// dispatchRow помощник: planned → claimed → dispatched для (applyID, sid).
-// Возвращает attempt захваченной строки (fencing-epoch после ClaimNext).
+// dispatchRow is a helper: planned -> claimed -> dispatched for (applyID, sid).
+// Returns the claimed row attempt (fencing epoch after ClaimNext).
 func dispatchRow(t *testing.T, applyID, sid string) int {
 	t.Helper()
 	ctx := context.Background()
@@ -1443,26 +1443,26 @@ func dispatchRow(t *testing.T, applyID, sid string) int {
 	return got.Attempt
 }
 
-// TestIntegration_OrphanDispatched_SweepsAbsent — Soul-reconcile (ADR-027(g),
-// S6) на реальной PG: dispatched-строка SID-а, чей apply_id НЕ в наборе WardRoster,
-// терминалится в orphaned (с finished_at + error_summary); строка из набора — НЕ
-// тронута; строка ДРУГОГО SID-а — не тронута (sweep per-SID).
+// TestIntegration_OrphanDispatched_SweepsAbsent - Soul-reconcile (ADR-027(g),
+// S6) on real PG: a dispatched row for a SID whose apply_id is NOT in WardRoster
+// becomes orphaned (with finished_at + error_summary); an in-set row is NOT
+// touched; a row for another SID is not touched (per-SID sweep).
 func TestIntegration_OrphanDispatched_SweepsAbsent(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "redis-prod", "archon-alice")
 	ctx := context.Background()
 
-	dispatchRow(t, "01HLIVE", "host-a")  // объявим живым → не трогать
-	dispatchRow(t, "01HDEAD", "host-a")  // вне набора → orphaned
-	dispatchRow(t, "01HOTHER", "host-b") // другой SID → не трогать
+	dispatchRow(t, "01HLIVE", "host-a")  // declared live -> leave untouched
+	dispatchRow(t, "01HDEAD", "host-a")  // outside the set -> orphaned
+	dispatchRow(t, "01HOTHER", "host-b") // another SID -> leave untouched
 
 	n, err := OrphanDispatched(ctx, integrationPool, "host-a", []*ActiveApply{{ApplyID: "01HLIVE"}})
 	if err != nil {
 		t.Fatalf("OrphanDispatched: %v", err)
 	}
 	if n != 1 {
-		t.Fatalf("orphaned count = %d, want 1 (только 01HDEAD/host-a)", n)
+		t.Fatalf("orphaned count = %d, want 1 (only 01HDEAD/host-a)", n)
 	}
 
 	dead, err := SelectByApplyID(ctx, integrationPool, "01HDEAD", "host-a")
@@ -1473,35 +1473,35 @@ func TestIntegration_OrphanDispatched_SweepsAbsent(t *testing.T) {
 		t.Errorf("01HDEAD status = %q, want orphaned", dead.Status)
 	}
 	if dead.FinishedAt == nil {
-		t.Error("01HDEAD finished_at не проставлен")
+		t.Error("01HDEAD finished_at not set")
 	}
 	if dead.ErrorSummary == nil || *dead.ErrorSummary != orphanDispatchedErrorSummary {
-		t.Errorf("01HDEAD error_summary = %v, want фиксированный orphaned-маркер", dead.ErrorSummary)
+		t.Errorf("01HDEAD error_summary = %v, want fixed orphaned marker", dead.ErrorSummary)
 	}
 
-	// Объявленный живым — остался dispatched.
+	// Declared live - stays dispatched.
 	live, err := SelectByApplyID(ctx, integrationPool, "01HLIVE", "host-a")
 	if err != nil {
 		t.Fatalf("SelectByApplyID live: %v", err)
 	}
 	if live.Status != StatusDispatched {
-		t.Errorf("01HLIVE status = %q, want dispatched (в наборе)", live.Status)
+		t.Errorf("01HLIVE status = %q, want dispatched (in the set)", live.Status)
 	}
 
-	// Другой SID — не затронут (sweep per-SID).
+	// Another SID - not touched (per-SID sweep).
 	other, err := SelectByApplyID(ctx, integrationPool, "01HOTHER", "host-b")
 	if err != nil {
 		t.Fatalf("SelectByApplyID other: %v", err)
 	}
 	if other.Status != StatusDispatched {
-		t.Errorf("01HOTHER status = %q, want dispatched (другой SID)", other.Status)
+		t.Errorf("01HOTHER status = %q, want dispatched (another SID)", other.Status)
 	}
 }
 
-// TestIntegration_OrphanDispatched_EpochDivergence_NotOrphaned — attempt-разъезд:
-// набор несёт тот же apply_id, что и dispatched-строка, но с ДРУГИМ attempt (идёт
-// reclaim). The row is NOT terminalized — presence of apply_id in the set (with any
-// attempt) защищает её от orphan (epoch-fenced: orphan безопаснее НЕ делать).
+// TestIntegration_OrphanDispatched_EpochDivergence_NotOrphaned - attempt divergence:
+// the set carries the same apply_id as the dispatched row, but with a DIFFERENT
+// attempt (reclaim in flight). The row is NOT terminalized - presence of apply_id
+// in the set (with any attempt) protects it from orphan (epoch-fenced: safer not to orphan).
 func TestIntegration_OrphanDispatched_EpochDivergence_NotOrphaned(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1510,7 +1510,7 @@ func TestIntegration_OrphanDispatched_EpochDivergence_NotOrphaned(t *testing.T) 
 
 	attempt := dispatchRow(t, "01HEPOCH", "host-a")
 
-	// Soul объявил тот же apply_id, но с бОльшим attempt (пере-claim в полёте).
+	// Soul reported the same apply_id, but with a higher attempt (re-claim in flight).
 	n, err := OrphanDispatched(ctx, integrationPool, "host-a", []*ActiveApply{
 		{ApplyID: "01HEPOCH", Attempt: int32(attempt + 5)},
 	})
@@ -1518,19 +1518,19 @@ func TestIntegration_OrphanDispatched_EpochDivergence_NotOrphaned(t *testing.T) 
 		t.Fatalf("OrphanDispatched: %v", err)
 	}
 	if n != 0 {
-		t.Fatalf("orphaned count = %d, want 0 (apply_id в наборе защищает от orphan)", n)
+		t.Fatalf("orphaned count = %d, want 0 (apply_id in the set protects from orphan)", n)
 	}
 	got, err := SelectByApplyID(ctx, integrationPool, "01HEPOCH", "host-a")
 	if err != nil {
 		t.Fatalf("SelectByApplyID: %v", err)
 	}
 	if got.Status != StatusDispatched {
-		t.Errorf("status = %q, want dispatched (attempt-разъезд не терминалит)", got.Status)
+		t.Errorf("status = %q, want dispatched (attempt divergence does not terminalize)", got.Status)
 	}
 }
 
-// TestIntegration_OrphanDispatched_EmptySet_OrphansAll — пустой WardRoster
-// (рестарт Soul): все dispatched-строки SID-а терминалятся.
+// TestIntegration_OrphanDispatched_EmptySet_OrphansAll - empty WardRoster
+// (Soul restart): all dispatched rows for the SID are terminalized.
 func TestIntegration_OrphanDispatched_EmptySet_OrphansAll(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1545,7 +1545,7 @@ func TestIntegration_OrphanDispatched_EmptySet_OrphansAll(t *testing.T) {
 		t.Fatalf("OrphanDispatched(nil): %v", err)
 	}
 	if n != 2 {
-		t.Fatalf("orphaned count = %d, want 2 (пустой набор → все dispatched)", n)
+		t.Fatalf("orphaned count = %d, want 2 (empty set -> all dispatched)", n)
 	}
 	for _, id := range []string{"01HA", "01HB"} {
 		got, err := SelectByApplyID(ctx, integrationPool, id, "host-a")
@@ -1558,9 +1558,9 @@ func TestIntegration_OrphanDispatched_EmptySet_OrphansAll(t *testing.T) {
 	}
 }
 
-// TestIntegration_OrphanDispatched_SingleWinnerVsRunResult — гонка sweep ↔ RunResult
-// через single-winner: терминал из RunResult (UpdateStatus dispatched→success)
-// победил → последующий sweep той же строки даёт 0 (она уже не dispatched).
+// TestIntegration_OrphanDispatched_SingleWinnerVsRunResult - sweep <-> RunResult race
+// through single-winner: terminal result from RunResult (UpdateStatus dispatched->success)
+// won -> subsequent sweep for the same row returns 0 (it is no longer dispatched).
 func TestIntegration_OrphanDispatched_SingleWinnerVsRunResult(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1574,27 +1574,27 @@ func TestIntegration_OrphanDispatched_SingleWinnerVsRunResult(t *testing.T) {
 		t.Fatalf("UpdateStatus(success): %v", err)
 	}
 
-	// sweep с пустым набором НЕ перезаписывает уже терминальную строку (фильтр
-	// status='dispatched' отсёк её) — 0 затронутых.
+	// Sweep with an empty set does NOT overwrite an already-terminal row (the
+	// status='dispatched' filter excludes it) - 0 affected.
 	n, err := OrphanDispatched(ctx, integrationPool, "host-a", nil)
 	if err != nil {
 		t.Fatalf("OrphanDispatched: %v", err)
 	}
 	if n != 0 {
-		t.Fatalf("orphaned count = %d, want 0 (RunResult-терминал победил, single-winner)", n)
+		t.Fatalf("orphaned count = %d, want 0 (RunResult terminal won, single-winner)", n)
 	}
 	got, err := SelectByApplyID(ctx, integrationPool, "01HRACE", "host-a")
 	if err != nil {
 		t.Fatalf("SelectByApplyID: %v", err)
 	}
 	if got.Status != StatusSuccess {
-		t.Errorf("status = %q, want success (не перезаписан orphaned-ом)", got.Status)
+		t.Errorf("status = %q, want success (not overwritten by orphaned)", got.Status)
 	}
 }
 
-// TestIntegration_OrphanedStatus_CHECKAllows — миграция 044: CHECK-constraint
-// apply_runs_status_valid допускает orphaned (прямой Insert проходит). Симметрично
-// TestIntegration_ValidStatus_PlannedClaimedNowValid для 040.
+// TestIntegration_OrphanedStatus_CHECKAllows - migration 044: CHECK constraint
+// apply_runs_status_valid allows orphaned (direct Insert succeeds). Symmetric to
+// TestIntegration_ValidStatus_PlannedClaimedNowValid for 040.
 func TestIntegration_OrphanedStatus_CHECKAllows(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1605,7 +1605,7 @@ func TestIntegration_OrphanedStatus_CHECKAllows(t *testing.T) {
 		ApplyID: "01HORPH", SID: "host-a", IncarnationName: "redis-prod",
 		Scenario: "create", Status: StatusOrphaned,
 	}); err != nil {
-		t.Fatalf("Insert(orphaned) — CHECK не допускает orphaned после 044: %v", err)
+		t.Fatalf("Insert(orphaned) - CHECK does not allow orphaned after 044: %v", err)
 	}
 	got, err := SelectByApplyID(ctx, integrationPool, "01HORPH", "host-a")
 	if err != nil {
@@ -1616,9 +1616,9 @@ func TestIntegration_OrphanedStatus_CHECKAllows(t *testing.T) {
 	}
 }
 
-// TestIntegration_NoMatchStatus_CHECKAllows — миграция 045 (FINDING-01 вариант
-// (б)): apply_runs_status_valid допускает no_match (прямой Insert проходит).
-// Симметрично TestIntegration_OrphanedStatus_CHECKAllows для 044.
+// TestIntegration_NoMatchStatus_CHECKAllows - migration 045 (FINDING-01 variant
+// (b)): apply_runs_status_valid allows no_match (direct Insert succeeds).
+// Symmetric to TestIntegration_OrphanedStatus_CHECKAllows for 044.
 func TestIntegration_NoMatchStatus_CHECKAllows(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1629,7 +1629,7 @@ func TestIntegration_NoMatchStatus_CHECKAllows(t *testing.T) {
 		ApplyID: "01HNOMATCH", SID: "host-a", IncarnationName: "redis-prod",
 		Scenario: "create", Status: StatusNoMatch,
 	}); err != nil {
-		t.Fatalf("Insert(no_match) — CHECK не допускает no_match после 045: %v", err)
+		t.Fatalf("Insert(no_match) - CHECK does not allow no_match after 045: %v", err)
 	}
 	got, err := SelectByApplyID(ctx, integrationPool, "01HNOMATCH", "host-a")
 	if err != nil {
@@ -1640,25 +1640,25 @@ func TestIntegration_NoMatchStatus_CHECKAllows(t *testing.T) {
 	}
 }
 
-// TestIntegration_UpdateStatus_NoMatchSetsFinishedAt — claim no-op путь FINDING-01
-// (вариант (б)): нецелевой roster-хост переводится planned/claimed → no_match
-// через UpdateStatus, который проставляет finished_at (no_match — терминал, не
-// running). Без finished_at no_match-строки не попадали бы под purge_apply_runs
-// и копились бы вечно.
+// TestIntegration_UpdateStatus_NoMatchSetsFinishedAt - claim no-op path for FINDING-01
+// (variant (b)): a non-target roster host is moved planned/claimed -> no_match
+// through UpdateStatus, which sets finished_at (no_match is terminal, not
+// running). Without finished_at, no_match rows would not match purge_apply_runs
+// and would accumulate forever.
 func TestIntegration_UpdateStatus_NoMatchSetsFinishedAt(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "redis-prod", "archon-alice")
 	ctx := context.Background()
 
-	// planned-строка (как её пишет dispatchPlanned на КАЖДЫЙ roster-хост).
+	// planned row (as dispatchPlanned writes it for EACH roster host).
 	if err := Insert(ctx, integrationPool, &ApplyRun{
 		ApplyID: "01HNM", SID: "host-x", IncarnationName: "redis-prod",
 		Scenario: "create", Status: StatusPlanned,
 	}); err != nil {
 		t.Fatalf("Insert(planned): %v", err)
 	}
-	// claim no-op: on:/where: отфильтровал всё → no_match (НЕ success).
+	// claim no-op: on:/where: filtered everything -> no_match (NOT success).
 	if err := UpdateStatus(ctx, integrationPool, "01HNM", "host-x", 0, StatusNoMatch, nil); err != nil {
 		t.Fatalf("UpdateStatus(no_match): %v", err)
 	}
@@ -1670,15 +1670,15 @@ func TestIntegration_UpdateStatus_NoMatchSetsFinishedAt(t *testing.T) {
 		t.Errorf("status = %q, want no_match", got.Status)
 	}
 	if got.FinishedAt == nil {
-		t.Error("finished_at nil после перехода в no_match; want set (иначе строка не purge-ится)")
+		t.Error("finished_at nil after transition to no_match; want set (otherwise the row is not purged)")
 	}
 }
 
-// --- read-view прогонов (GET /v1/incarnations/{name}/runs[/{apply_id}]) ---
+// --- run read-view (GET /v1/incarnations/{name}/runs[/{apply_id}]) ---
 
-// TestIntegration_ListRunsByIncarnation — свёртка apply_runs по apply_id: список
-// прогонов инкарнации с агрегатным статусом, границами времени и исключением
-// прогонов ЧУЖОЙ инкарнации.
+// TestIntegration_ListRunsByIncarnation - folds apply_runs by apply_id: list of
+// incarnation runs with aggregate status, time bounds, and exclusion of runs from
+// ANOTHER incarnation.
 func TestIntegration_ListRunsByIncarnation(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1687,20 +1687,20 @@ func TestIntegration_ListRunsByIncarnation(t *testing.T) {
 	ctx := context.Background()
 	aid := "archon-alice"
 
-	// Прогон A: два хоста, оба success → success, finished_at set.
+	// Run A: two hosts, both success -> success, finished_at set.
 	for _, sid := range []string{"host-a", "host-b"} {
 		mustInsertRun(t, ctx, "01HRUNA", sid, "redis-prod", "create", StatusPlanned, &aid)
 		if err := UpdateStatus(ctx, integrationPool, "01HRUNA", sid, 0, StatusSuccess, nil); err != nil {
 			t.Fatalf("UpdateStatus A/%s: %v", sid, err)
 		}
 	}
-	// Прогон B: один хост success, второй ещё running → applying, finished_at NULL.
+	// Run B: one host success, the other still running -> applying, finished_at NULL.
 	mustInsertRun(t, ctx, "01HRUNB", "host-a", "redis-prod", "restart", StatusRunning, &aid)
 	mustInsertRun(t, ctx, "01HRUNB", "host-b", "redis-prod", "restart", StatusRunning, &aid)
 	if err := UpdateStatus(ctx, integrationPool, "01HRUNB", "host-a", 0, StatusSuccess, nil); err != nil {
 		t.Fatalf("UpdateStatus B/host-a: %v", err)
 	}
-	// Прогон C: чужая инкарнация — в выборку redis-prod не попадает.
+	// Run C: another incarnation - excluded from the redis-prod selection.
 	mustInsertRun(t, ctx, "01HRUNC", "host-z", "redis-staging", "create", StatusSuccess, &aid)
 
 	runs, total, err := ListRunsByIncarnation(ctx, integrationPool, "redis-prod", 0, 50)
@@ -1708,17 +1708,17 @@ func TestIntegration_ListRunsByIncarnation(t *testing.T) {
 		t.Fatalf("ListRunsByIncarnation: %v", err)
 	}
 	if total != 2 {
-		t.Fatalf("total = %d, want 2 (чужая инкарнация исключена)", total)
+		t.Fatalf("total = %d, want 2 (other incarnation excluded)", total)
 	}
 	if len(runs) != 2 {
 		t.Fatalf("len(runs) = %d, want 2", len(runs))
 	}
-	// ORDER BY MIN(started_at) DESC — B (позже вставлен) первым.
+	// ORDER BY MIN(started_at) DESC - B (inserted later) first.
 	byID := map[string]RunSummary{runs[0].ApplyID: runs[0], runs[1].ApplyID: runs[1]}
 	a, okA := byID["01HRUNA"]
 	b, okB := byID["01HRUNB"]
 	if !okA || !okB {
-		t.Fatalf("ожидались apply_id 01HRUNA и 01HRUNB; got %+v", runs)
+		t.Fatalf("expected apply_id 01HRUNA and 01HRUNB; got %+v", runs)
 	}
 	if a.Status != RunStatusSuccess {
 		t.Errorf("A.Status = %q, want success", a.Status)
@@ -1727,20 +1727,20 @@ func TestIntegration_ListRunsByIncarnation(t *testing.T) {
 		t.Errorf("A.Scenario = %q, want create", a.Scenario)
 	}
 	if a.FinishedAt == nil {
-		t.Error("A.FinishedAt nil, want set (все хосты финишировали)")
+		t.Error("A.FinishedAt nil, want set (all hosts finished)")
 	}
 	if a.StartedByAID == nil || *a.StartedByAID != aid {
 		t.Errorf("A.StartedByAID = %v, want %q", a.StartedByAID, aid)
 	}
 	if b.Status != RunStatusApplying {
-		t.Errorf("B.Status = %q, want applying (host-b ещё running)", b.Status)
+		t.Errorf("B.Status = %q, want applying (host-b is still running)", b.Status)
 	}
 	if b.FinishedAt != nil {
-		t.Errorf("B.FinishedAt = %v, want nil (не все хосты финишировали)", b.FinishedAt)
+		t.Errorf("B.FinishedAt = %v, want nil (not all hosts finished)", b.FinishedAt)
 	}
 }
 
-// TestIntegration_ListRunsByIncarnation_Empty — инкарнация без прогонов.
+// TestIntegration_ListRunsByIncarnation_Empty - incarnation without runs.
 func TestIntegration_ListRunsByIncarnation_Empty(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1756,8 +1756,8 @@ func TestIntegration_ListRunsByIncarnation_Empty(t *testing.T) {
 	}
 }
 
-// TestIntegration_ListRunsByIncarnation_Paging — total считает ВСЕ прогоны,
-// страница ограничена limit/offset.
+// TestIntegration_ListRunsByIncarnation_Paging - total counts ALL runs,
+// page is limited by limit/offset.
 func TestIntegration_ListRunsByIncarnation_Paging(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1780,8 +1780,8 @@ func TestIntegration_ListRunsByIncarnation_Paging(t *testing.T) {
 	}
 }
 
-// TestIntegration_SelectRunDetail — детали одного прогона: per-host строки,
-// адрес упавшей задачи, агрегатный статус failed.
+// TestIntegration_SelectRunDetail - details of a single run: per-host rows,
+// failed task address, aggregate failed status.
 func TestIntegration_SelectRunDetail(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1791,7 +1791,7 @@ func TestIntegration_SelectRunDetail(t *testing.T) {
 
 	mustInsertRun(t, ctx, "01HDET", "host-a", "redis-prod", "scale", StatusRunning, &aid)
 	mustInsertRun(t, ctx, "01HDET", "host-b", "redis-prod", "scale", StatusRunning, &aid)
-	// host-a: упавшая задача (task_idx=2 локально, plan_index=5 глобально).
+	// host-a: failed task (task_idx=2 locally, plan_index=5 globally).
 	if err := RecordTaskFailure(ctx, integrationPool, "01HDET", "host-a", 0, 2, 5, "task 2 core.pkg.installed: boom"); err != nil {
 		t.Fatalf("RecordTaskFailure: %v", err)
 	}
@@ -1813,12 +1813,12 @@ func TestIntegration_SelectRunDetail(t *testing.T) {
 		t.Errorf("d.Status = %q, want failed", d.Status)
 	}
 	if d.FinishedAt == nil {
-		t.Error("d.FinishedAt nil, want set (оба хоста терминальны)")
+		t.Error("d.FinishedAt nil, want set (both hosts are terminal)")
 	}
 	if len(d.Hosts) != 2 {
 		t.Fatalf("len(Hosts) = %d, want 2", len(d.Hosts))
 	}
-	// ORDER BY sid ASC → host-a первым.
+	// ORDER BY sid ASC -> host-a first.
 	ha := d.Hosts[0]
 	if ha.SID != "host-a" || ha.Status != StatusFailed {
 		t.Errorf("Hosts[0] = {%q, %q}, want {host-a, failed}", ha.SID, ha.Status)
@@ -1841,9 +1841,9 @@ func TestIntegration_SelectRunDetail(t *testing.T) {
 	}
 }
 
-// TestIntegration_SelectRunDetail_CrossIncarnationIsolation — apply_id, живущий в
-// ДРУГОЙ инкарнации, недоступен через detail первой (scope-инвариант: apply_id
-// не резолвится в обход incarnation-предиката).
+// TestIntegration_SelectRunDetail_CrossIncarnationIsolation - apply_id that lives in
+// ANOTHER incarnation is unavailable through the first one's detail (scope invariant:
+// apply_id is not resolved around the incarnation predicate).
 func TestIntegration_SelectRunDetail_CrossIncarnationIsolation(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
@@ -1859,13 +1859,13 @@ func TestIntegration_SelectRunDetail_CrossIncarnationIsolation(t *testing.T) {
 	if !errors.Is(err, ErrApplyRunNotFound) {
 		t.Fatalf("err = %v, want ErrApplyRunNotFound (cross-incarnation)", err)
 	}
-	// Из своей инкарнации — доступен.
+	// Available from its own incarnation.
 	if _, err := SelectRunDetail(ctx, integrationPool, "01HXINC", "redis-staging"); err != nil {
 		t.Fatalf("SelectRunDetail(own): %v", err)
 	}
 }
 
-// TestIntegration_SelectRunDetail_NotFound — неизвестный apply_id.
+// TestIntegration_SelectRunDetail_NotFound - unknown apply_id.
 func TestIntegration_SelectRunDetail_NotFound(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")

@@ -53,9 +53,9 @@ func (r *planRowsStub) Values() ([]any, error) { return nil, nil }
 func (r *planRowsStub) RawValues() [][]byte    { return nil }
 func (r *planRowsStub) Conn() *pgx.Conn        { return nil }
 
-// TestInsertRunPlan_BulkArrays — план из двух Passage кладётся ОДНИМ bulk-upsert-ом:
-// apply_id общий $1, остальные колонки — параллельные типизированные массивы в том
-// же порядке, что задачи. Ловит рассинхрон порядка колонок и потерю no_log/passage.
+// TestInsertRunPlan_BulkArrays verifies that a two-Passage plan is written by one
+// bulk upsert: common apply_id is $1, other columns are parallel typed arrays in
+// the same order as tasks. It catches column order drift and lost no_log/passage.
 func TestInsertRunPlan_BulkArrays(t *testing.T) {
 	f := &fakeDB{}
 	tasks := []RunPlanTask{
@@ -67,16 +67,16 @@ func TestInsertRunPlan_BulkArrays(t *testing.T) {
 		t.Fatalf("InsertRunPlan: %v", err)
 	}
 	if f.execCalls != 1 {
-		t.Fatalf("execCalls = %d, want 1 (единственный bulk-upsert)", f.execCalls)
+		t.Fatalf("execCalls = %d, want 1 (single bulk upsert)", f.execCalls)
 	}
 	if !strings.Contains(f.execSQL, "INSERT INTO apply_run_plan") {
-		t.Errorf("SQL не INSERT INTO apply_run_plan: %q", f.execSQL)
+		t.Errorf("SQL is not INSERT INTO apply_run_plan: %q", f.execSQL)
 	}
 	if !strings.Contains(f.execSQL, "ON CONFLICT (apply_id, plan_index)") {
-		t.Errorf("SQL без идемпотентного ON CONFLICT (apply_id, plan_index): %q", f.execSQL)
+		t.Errorf("SQL lacks idempotent ON CONFLICT (apply_id, plan_index): %q", f.execSQL)
 	}
 	if !strings.Contains(f.execSQL, "params") || !strings.Contains(f.execSQL, "::jsonb") {
-		t.Errorf("SQL без params::jsonb: %q", f.execSQL)
+		t.Errorf("SQL lacks params::jsonb: %q", f.execSQL)
 	}
 	// args: $1 apply_id, $2 plan_index[], $3 name[], $4 module[], $5 no_log[], $6 passage[], $7 params[].
 	if len(f.execArgs) != 7 {
@@ -105,7 +105,7 @@ func TestInsertRunPlan_BulkArrays(t *testing.T) {
 	if !ok || passages[2] != 1 {
 		t.Errorf("args[5] passage[] = %v, want [0 0 1]", f.execArgs[5])
 	}
-	// params[] — параллельный *string-массив: JSON или nil (NULL) на позицию.
+	// params[] is a parallel *string array: JSON or nil (NULL) per position.
 	params, ok := f.execArgs[6].([]*string)
 	if !ok || len(params) != 3 {
 		t.Fatalf("args[6] params[] = %v, want []*string len 3", f.execArgs[6])
@@ -126,28 +126,29 @@ func TestInsertRunPlan_EmptyApplyID(t *testing.T) {
 	f := &fakeDB{}
 	err := InsertRunPlan(context.Background(), f, "", []RunPlanTask{{PlanIndex: 0, Name: "x"}})
 	if err == nil {
-		t.Fatal("empty apply_id: ожидалась ошибка")
+		t.Fatal("empty apply_id: expected error")
 	}
 	if f.execCalls != 0 {
 		t.Errorf("execCalls = %d, want 0 (don't go to DB)", f.execCalls)
 	}
 }
 
-// TestInsertRunPlan_EmptyTasks_Noop — пустой план = no-op (nil error, ноль Exec):
-// прогон упал до render / keeper-only без задач не должен ронять InsertRunPlan.
+// TestInsertRunPlan_EmptyTasks_Noop verifies that an empty plan is no-op (nil
+// error, zero Exec): a run that failed before render / keeper-only with no tasks
+// must not make InsertRunPlan fail.
 func TestInsertRunPlan_EmptyTasks_Noop(t *testing.T) {
 	f := &fakeDB{}
 	if err := InsertRunPlan(context.Background(), f, "AP", nil); err != nil {
 		t.Fatalf("empty tasks: want nil, got %v", err)
 	}
 	if f.execCalls != 0 {
-		t.Errorf("execCalls = %d, want 0 (нечего писать)", f.execCalls)
+		t.Errorf("execCalls = %d, want 0 (nothing to write)", f.execCalls)
 	}
 }
 
-// TestSelectRunPlanByApplyID_Scan — маппинг колонок plan_index/name/module/no_log/
-// passage/params → RunPlanTask (ApplyID проставляется caller-ом из аргумента).
-// params: строка 0 несёт jsonb → []byte, строка 1 (no_log) — NULL → nil.
+// TestSelectRunPlanByApplyID_Scan covers mapping columns plan_index/name/module/
+// no_log/passage/params -> RunPlanTask. ApplyID is set by caller from the
+// argument. params: row 0 carries jsonb -> []byte, row 1 (no_log) is NULL -> nil.
 func TestSelectRunPlanByApplyID_Scan(t *testing.T) {
 	f := &fakeDB{
 		queryFunc: func(_ string) (pgx.Rows, error) {
@@ -178,17 +179,17 @@ func TestSelectRunPlanByApplyID_Scan(t *testing.T) {
 	}
 }
 
-// TestSelectRunPlanByApplyID_QueryShape — стабильный ORDER BY plan_index + bind $1.
+// TestSelectRunPlanByApplyID_QueryShape verifies stable ORDER BY plan_index + bind $1.
 func TestSelectRunPlanByApplyID_QueryShape(t *testing.T) {
 	f := &fakeDB{
 		queryFunc: func(_ string) (pgx.Rows, error) { return nil, errors.New("stop after capture") },
 	}
 	_, _ = SelectRunPlanByApplyID(context.Background(), f, "AP")
 	if !strings.Contains(f.querySQL, "FROM apply_run_plan") {
-		t.Errorf("SQL не из apply_run_plan: %q", f.querySQL)
+		t.Errorf("SQL is not from apply_run_plan: %q", f.querySQL)
 	}
 	if !strings.Contains(f.querySQL, "ORDER BY plan_index ASC") {
-		t.Errorf("SQL без ORDER BY plan_index ASC: %q", f.querySQL)
+		t.Errorf("SQL lacks ORDER BY plan_index ASC: %q", f.querySQL)
 	}
 	if len(f.queryArgs) != 1 || f.queryArgs[0] != "AP" {
 		t.Errorf("queryArgs = %v, want [AP]", f.queryArgs)
@@ -196,7 +197,7 @@ func TestSelectRunPlanByApplyID_QueryShape(t *testing.T) {
 }
 
 // TestRunExistsForIncarnation tests scope-probe of run ownership to incarnation:
-// EXISTS true/false пробрасывается; ErrNoRows → (false, nil) (не ошибка).
+// EXISTS true/false is passed through; ErrNoRows -> (false, nil), not an error.
 func TestRunExistsForIncarnation(t *testing.T) {
 	cases := []struct {
 		name string
@@ -215,7 +216,7 @@ func TestRunExistsForIncarnation(t *testing.T) {
 			got, err := RunExistsForIncarnation(context.Background(), f, "AP", "redis-prod")
 			if tc.err {
 				if err == nil {
-					t.Fatal("ожидалась ошибка")
+					t.Fatal("expected error")
 				}
 				return
 			}
