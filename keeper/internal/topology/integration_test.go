@@ -1,7 +1,7 @@
 //go:build integration
 
-// Integration-тесты topology-резолвера через testcontainers-go
-// (postgres:16-alpine). Паттерн совпадает с
+// Integration tests for topology resolver via testcontainers-go
+// (postgres:16-alpine). Pattern matches
 // keeper/internal/soul/integration_test.go.
 
 package topology
@@ -131,9 +131,9 @@ func TestIntegration_LoadIncarnationHosts_ByCovenAndStatus(t *testing.T) {
 		},
 	})
 
-	// nil-lease резолвер → SQL-presence fallback: connected — попадают;
-	// pending/destroyed отсекает SQL-фаза, disconnected — fallback-фильтр
-	// (status='connected'). Lease-aware presence — в TestIntegration_LeaseAware_*.
+	// nil-lease resolver → SQL-presence fallback: connected — pass through;
+	// pending/destroyed cut by SQL phase, disconnected — fallback filter
+	// (status='connected'). Lease-aware presence — in TestIntegration_LeaseAware_*.
 	seedSoul(t, "a.example.com", []string{"redis-prod", "db"}, soul.StatusConnected)
 	seedSoul(t, "b.example.com", []string{"redis-prod"}, soul.StatusConnected)
 	seedSoul(t, "pending.example.com", []string{"redis-prod"}, soul.StatusPending)
@@ -169,17 +169,17 @@ func TestIntegration_LoadIncarnationHosts_ByCovenAndStatus(t *testing.T) {
 	}
 }
 
-// TestIntegration_LoadIncarnationHosts_Traits — GUARD (ADR-060): резолвер
-// тащит operator-set traits (scalar + list) из `souls.traits` в HostFacts.Traits
-// через rosterSQL SELECT+scan, симметрично coven. Это и есть источник проекции
-// `soulprint.self.traits` для таргетинга `where:`.
+// TestIntegration_LoadIncarnationHosts_Traits — GUARD (ADR-060): resolver
+// pulls operator-set traits (scalar + list) from `souls.traits` into HostFacts.Traits
+// via rosterSQL SELECT+scan, symmetric to coven. This is the source of projection
+// `soulprint.self.traits` for `where:` targeting.
 func TestIntegration_LoadIncarnationHosts_Traits(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
 
 	seedIncarnation(t, "redis-prod", map[string]any{})
 
-	// Сеем soul с traits напрямую через soul.Insert (write-путь пилота).
+	// Seed soul with traits directly via soul.Insert (pilot write path).
 	s := &soul.Soul{
 		SID:    "a.example.com",
 		Coven:  []string{"redis-prod"},
@@ -192,7 +192,7 @@ func TestIntegration_LoadIncarnationHosts_Traits(t *testing.T) {
 	if err := soul.Insert(ctx, integrationPool, s); err != nil {
 		t.Fatalf("seedSoul with traits: %v", err)
 	}
-	// Хост без traits — Traits читается пустым map (jsonb '{}').
+	// Host without traits — Traits read as empty map (jsonb '{}').
 	seedSoul(t, "b.example.com", []string{"redis-prod"}, soul.StatusConnected)
 
 	r := NewResolver(integrationPool, nil, nil)
@@ -212,12 +212,12 @@ func TestIntegration_LoadIncarnationHosts_Traits(t *testing.T) {
 		t.Errorf("a.Traits[owners] = %v, want [alice bob]", hosts[0].Traits["owners"])
 	}
 	if hosts[1].Traits == nil || len(hosts[1].Traits) != 0 {
-		t.Errorf("b.Traits = %v, want пустой map (нет traits)", hosts[1].Traits)
+		t.Errorf("b.Traits = %v, want empty map (no traits)", hosts[1].Traits)
 	}
 }
 
 func TestIntegration_LoadIncarnationHosts_CrossIncarnationIsolation(t *testing.T) {
-	// ADR-008 / PM-decision #4: хосты другой incarnation НЕ читаются.
+	// ADR-008 / PM-decision #4: hosts of another incarnation are NOT read.
 	resetAll(t)
 	ctx := context.Background()
 
@@ -238,7 +238,7 @@ func TestIntegration_LoadIncarnationHosts_CrossIncarnationIsolation(t *testing.T
 }
 
 func TestIntegration_LoadIncarnationHosts_MissingIncarnation_Empty(t *testing.T) {
-	// PM-decision #3: несуществующая incarnation → пустой slice, не ошибка.
+	// PM-decision #3: nonexistent incarnation → empty slice, not error.
 	resetAll(t)
 	r := NewResolver(integrationPool, nil, nil)
 	hosts, err := r.LoadIncarnationHosts(context.Background(), "ghost")
@@ -251,7 +251,7 @@ func TestIntegration_LoadIncarnationHosts_MissingIncarnation_Empty(t *testing.T)
 }
 
 func TestIntegration_LoadIncarnationHosts_UndeclaredHostRoleEmpty(t *testing.T) {
-	// ADR-008: хост вне declared-spec → role "".
+	// ADR-008: host outside declared-spec → role "".
 	resetAll(t)
 	ctx := context.Background()
 
@@ -343,17 +343,17 @@ func TestIntegration_FilterByCovens_MultiLabelAND(t *testing.T) {
 
 // --- lease-aware presence (PG + Redis) --------------------------------
 
-// integrationLeaseChecker — обёртка над real keeperredis.Client под
-// [SoulLeaseChecker] (batch SID-lease EXISTS). Зеркало topologyLeaseChecker из
-// cmd/keeper, локально в тесте — топология не импортит cmd/keeper.
+// integrationLeaseChecker — wrapper over real keeperredis.Client for
+// [SoulLeaseChecker] (batch SID-lease EXISTS). Mirror of topologyLeaseChecker from
+// cmd/keeper, locally in test — topology doesn't import cmd/keeper.
 type integrationLeaseChecker struct{ rc *keeperredis.Client }
 
 func (c integrationLeaseChecker) SoulsStreamAlive(ctx context.Context, sids []string) (map[string]struct{}, error) {
 	return keeperredis.SoulsStreamAlive(ctx, c.rc, sids)
 }
 
-// newLeaseChecker поднимает miniredis + keeperredis.Client и возвращает
-// checker + mr (для прямой постановки/снятия lease-ключей) + cleanup.
+// newLeaseChecker spins up miniredis + keeperredis.Client and returns
+// checker + mr (for direct setting/clearing of lease keys) + cleanup.
 func newLeaseChecker(t *testing.T) (integrationLeaseChecker, *miniredis.Miniredis) {
 	t.Helper()
 	mr := miniredis.RunT(t)
@@ -365,8 +365,8 @@ func newLeaseChecker(t *testing.T) (integrationLeaseChecker, *miniredis.Miniredi
 	return integrationLeaseChecker{rc: rc}, mr
 }
 
-// setLease/clearLease — постановка/снятие SID-lease-ключа `soul:<sid>:lock`
-// напрямую в miniredis (эмуляция живого/мёртвого EventStream-а).
+// setLease/clearLease — setting/clearing SID-lease key `soul:<sid>:lock`
+// directly in miniredis (emulation of live/dead EventStream).
 func setLease(t *testing.T, mr *miniredis.Miniredis, sid string) {
 	t.Helper()
 	if err := mr.Set(keeperredis.SoulLeaseKey(sid), "kid-test"); err != nil {
@@ -378,10 +378,10 @@ func clearLease(mr *miniredis.Miniredis, sid string) {
 	mr.Del(keeperredis.SoulLeaseKey(sid))
 }
 
-// TestIntegration_LeaseAware_PresenceFromLeaseNotStatus — presence-инвариант:
-// online ⇔ живой SID-lease, НЕ снимок `souls.status`. disconnected-снимок с
-// живым lease (idle-Soul, reconnect не отразился в PG) таргетируется;
-// connected-снимок без lease (stale) — нет.
+// TestIntegration_LeaseAware_PresenceFromLeaseNotStatus — presence invariant:
+// online ⇔ live SID-lease, NOT snapshot `souls.status`. disconnected snapshot with
+// live lease (idle Soul, reconnect not reflected in PG) is targeted;
+// connected snapshot without lease (stale) — is not.
 func TestIntegration_LeaseAware_PresenceFromLeaseNotStatus(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
@@ -390,7 +390,7 @@ func TestIntegration_LeaseAware_PresenceFromLeaseNotStatus(t *testing.T) {
 	seedIncarnation(t, "redis-prod", map[string]any{})
 	seedSoul(t, "idle.example.com", []string{"redis-prod"}, soul.StatusDisconnected)
 	seedSoul(t, "stale.example.com", []string{"redis-prod"}, soul.StatusConnected)
-	setLease(t, mr, "idle.example.com") // живой стрим, но PG-снимок disconnected
+	setLease(t, mr, "idle.example.com") // live stream, but PG snapshot is disconnected
 
 	r := NewResolver(integrationPool, lease, nil)
 	hosts, err := r.LoadIncarnationHosts(ctx, "redis-prod")
@@ -402,8 +402,8 @@ func TestIntegration_LeaseAware_PresenceFromLeaseNotStatus(t *testing.T) {
 	}
 }
 
-// TestIntegration_LeaseAware_ReconnectRetargets — reconnect: lease снят
-// (Soul offline) → не таргетируется; lease перевзят → снова таргетируется.
+// TestIntegration_LeaseAware_ReconnectRetargets — reconnect: lease dropped
+// (Soul offline) → not targeted; lease retaken → targeted again.
 func TestIntegration_LeaseAware_ReconnectRetargets(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()

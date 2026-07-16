@@ -1,16 +1,16 @@
-// Package topology резолвит «какие хосты участвуют в прогоне scenario»:
-// roster хостов incarnation по Coven-меткам (ADR-008: `incarnation.name` —
-// корневая Coven-метка) + last-reported soulprint-факты из
-// `souls.soulprint_facts` (миграция 015, ADR-018).
+// Package topology resolves "which hosts participate in a scenario run":
+// roster of incarnation hosts by Coven labels (ADR-008: `incarnation.name` —
+// root Coven label) + last-reported soulprint facts from
+// `souls.soulprint_facts` (migration 015, ADR-018).
 //
-// Слой read-only: только SELECT-ы. Запись soulprint делает
-// keeper/internal/grpc (handler SoulprintReport), запись roster/coven —
-// keeper/internal/soul. topology потребляет результат для scenario-резолвера
+// Read-only layer: SELECT-only. Soulprint writes are done by
+// keeper/internal/grpc (SoulprintReport handler), roster/coven writes are done by
+// keeper/internal/soul. topology consumes the result for scenario resolver
 // (M2.x scenario-runner).
 //
-// Cross-incarnation isolation (ADR-008): резолвер читает хосты строго одной
-// incarnation — souls, у которых `incarnation.name` присутствует в `coven[]`.
-// Чужие incarnation в результат не попадают.
+// Cross-incarnation isolation (ADR-008): resolver reads hosts strictly of one
+// incarnation — souls where `incarnation.name` is present in `coven[]`.
+// Other incarnations do not appear in the result.
 package topology
 
 import (
@@ -18,43 +18,43 @@ import (
 	"time"
 )
 
-// stalenessThreshold — порог «устаревшего» soulprint. Если
-// `received_at < now - threshold`, резолвер логирует warn (ADR-018:
-// "warn в OTel при skew > 10 мин"). Stale-факты НЕ блокируют прогон —
-// scenario работает на last-reported (PM-decision: last-reported + OTel warn).
+// stalenessThreshold — threshold for "stale" soulprint. If
+// `received_at < now - threshold`, resolver logs warning (ADR-018:
+// "warn in OTel when skew > 10 min"). Stale facts DO NOT block the run —
+// scenario operates on last-reported (PM-decision: last-reported + OTel warn).
 const stalenessThreshold = 10 * time.Minute
 
-// HostFacts — логическая view хоста прогона: registry-данные `souls`
-// (SID, Coven, last-reported soulprint) + declared-роль (источник — Choir
-// Voice, fallback — `incarnation.spec.hosts[].role`; ADR-044 п.2, ADR-008,
+// HostFacts — logical view of a run host: registry data from `souls`
+// (SID, Coven, last-reported soulprint) + declared role (source — Choir
+// Voice, fallback — `incarnation.spec.hosts[].role`; ADR-044 p.2, ADR-008,
 // scenario/orchestration.md §4.1).
 //
-// Soulprint — десериализованный JSONB `souls.soulprint_facts` (map, не typed:
-// scenario-резолвер обращается к произвольным путям `soulprint.self.<path>`
-// через CEL, типизация — на слое proto SoulprintFacts, не здесь).
+// Soulprint — deserialized JSONB `souls.soulprint_facts` (map, not typed:
+// scenario resolver accesses arbitrary paths `soulprint.self.<path>`
+// via CEL, typing — at proto SoulprintFacts layer, not here).
 //
-// Role — declared, НЕ actual. Источник по precedence (ADR-044 п.2): role
-// Voice-а из `incarnation_choir_voices` (Choir поглотил declared-роль) >
-// `spec.hosts[].role` (fallback для хостов БЕЗ Voice и для bootstrap-create,
-// wire-совместимость). Может быть пустой ("") для хостов вне declared-spec без
-// Voice (ADR-008). Actual-роль — только probe + `where:` на стороне scenario,
-// не здесь.
+// Role — declared, NOT actual. Source by precedence (ADR-044 p.2): role
+// of Voice from `incarnation_choir_voices` (Choir absorbed declared role) >
+// `spec.hosts[].role` (fallback for hosts WITHOUT Voice and for bootstrap-create,
+// wire-compatibility). Can be empty ("") for hosts outside declared-spec without
+// Voice (ADR-008). Actual role — only probe + `where:` on scenario side,
+// not here.
 //
-// Choirs — имена Choir-ов (ADR-044), в которых SID является Voice (членства из
-// `incarnation_choir_voices`, 060_create_choirs.up.sql). Стабильный per-host факт для
-// таргетинга `where:` по группе (`X in soulprint.self.choirs`); проецируется в
-// `soulprint.self.choirs` и `soulprint.hosts[].choirs` (S-T4, симметрия с Role).
-// nil/пустой — хост не состоит ни в одном Choir-е инкарнации (либо push-прогон,
-// где Choir-ы неприменимы). Отсортированы лексикографически (детерминизм).
+// Choirs — names of Choirs (ADR-044) where SID is a Voice (memberships from
+// `incarnation_choir_voices`, 060_create_choirs.up.sql). Stable per-host fact for
+// `where:` targeting by group (`X in soulprint.self.choirs`); projected into
+// `soulprint.self.choirs` and `soulprint.hosts[].choirs` (S-T4, symmetry with Role).
+// nil/empty — host does not belong to any Choir of the incarnation (or push run,
+// where Choirs don't apply). Sorted lexicographically (determinism).
 //
-// CollectedAt — Soul-side timestamp сбора фактов; ReceivedAt — Keeper-side
-// timestamp прихода SoulprintReport. Оба нулевые (time.Time{}), если Soul
-// ещё не присылал SoulprintReport (свежеподключённый хост).
+// CollectedAt — Soul-side timestamp of fact collection; ReceivedAt — Keeper-side
+// timestamp of SoulprintReport arrival. Both zero (time.Time{}), if Soul
+// has not yet sent SoulprintReport (freshly connected host).
 //
-// Status — legacy lifecycle-снимок `souls.status` (НЕ presence: авторитет
-// online — Redis SID-lease, ADR-006(a)). Используется ТОЛЬКО SQL-presence
-// fallback-ом резолвера (lease==nil / Redis-сбой); в lease-aware пути presence
-// решает lease, status не читается для отбора.
+// Status — legacy lifecycle snapshot of `souls.status` (NOT presence: authority
+// is online — Redis SID-lease, ADR-006(a)). Used ONLY by SQL-presence
+// fallback of resolver (lease==nil / Redis failure); in lease-aware path, presence
+// is decided by lease, status is not read for filtering.
 type HostFacts struct {
 	SID   string
 	Coven []string
@@ -71,9 +71,9 @@ type HostFacts struct {
 	ReceivedAt  time.Time
 }
 
-// stale сообщает, устарел ли soulprint хоста относительно now.
-// Нулевой ReceivedAt (Soul ещё не присылал отчёт) — НЕ stale: хост свежий,
-// фактов просто ещё нет, отдельный путь, не повод для warn-а здесь.
+// stale reports whether the host's soulprint is stale relative to now.
+// Zero ReceivedAt (Soul has not yet sent report) — NOT stale: host is fresh,
+// facts simply haven't arrived yet, separate path, not reason for warn here.
 func (h *HostFacts) stale(now time.Time) bool {
 	if h.ReceivedAt.IsZero() {
 		return false
@@ -81,7 +81,7 @@ func (h *HostFacts) stale(now time.Time) bool {
 	return h.ReceivedAt.Before(now.Add(-stalenessThreshold))
 }
 
-// logAttrs — атрибуты для structured-warn-а о stale soulprint.
+// logAttrs — attributes for structured warning about stale soulprint.
 func (h *HostFacts) logAttrs() []slog.Attr {
 	return []slog.Attr{
 		slog.String("sid", h.SID),

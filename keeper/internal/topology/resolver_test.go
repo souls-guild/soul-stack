@@ -14,9 +14,9 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// fakePool — Querier-stub. Маршрутизирует QueryRow/Query по содержимому SQL:
+// fakePool — Querier stub. Routes QueryRow/Query by SQL content:
 // `incarnation` → spec, `souls` → roster, `incarnation_choir_voices` →
-// choir-membership (ADR-044, S-T4). Чужой SQL — паника (тест-баг).
+// choir-membership (ADR-044, S-T4). Unknown SQL — panic (test bug).
 type fakePool struct {
 	specJSON []byte
 	specErr  error // напр. pgx.ErrNoRows для несуществующей incarnation
@@ -28,22 +28,22 @@ type fakePool struct {
 	choirErr  error // ошибка Query choir-voices
 }
 
-// choirVoiceRow — одна строка `incarnation_choir_voices` в порядке
-// choirVoicesSQL (sid, choir_name, role). role — *string: nil эмулирует SQL NULL
-// (role nullable, миграция 060), отличая «нет роли» от Go-строки "". Это ловит
-// баг скана NULL в plain string (pgx «cannot scan NULL into *string»).
+// choirVoiceRow — one row of `incarnation_choir_voices` in order
+// of choirVoicesSQL (sid, choir_name, role). role — *string: nil emulates SQL NULL
+// (role is nullable, migration 060), distinguishing "no role" from Go string "". This catches
+// bug of scanning NULL into plain string (pgx "cannot scan NULL into *string").
 type choirVoiceRow struct {
 	sid       string
 	choirName string
 	role      *string
 }
 
-// rosterRow — одна строка `souls`-roster-а: ровно поля rosterSQL по порядку.
+// rosterRow — one row of `souls` roster: exactly fields of rosterSQL in order.
 type rosterRow struct {
 	sid         string
 	coven       []string
-	traitsJSON  []byte     // nil = '{}' (jsonb NOT NULL DEFAULT) → пустой map; ADR-060
-	status      string     // "" → дефолт "connected" в Scan (SQL-presence fallback)
+	traitsJSON  []byte     // nil = '{}' (jsonb NOT NULL DEFAULT) → empty map; ADR-060
+	status      string     // "" → default "connected" in Scan (SQL-presence fallback)
 	factsJSON   []byte     // nil = NULL soulprint
 	collectedAt *time.Time // nil = NULL
 	receivedAt  *time.Time // nil = NULL
@@ -80,7 +80,7 @@ type errRow struct{ err error }
 
 func (r errRow) Scan(_ ...any) error { return r.err }
 
-// specRow возвращает spec в единственный *[]byte-dest (incarnationSpecSQL).
+// specRow returns spec to single *[]byte destination (incarnationSpecSQL).
 type specRow struct{ spec []byte }
 
 func (r specRow) Scan(dest ...any) error {
@@ -88,7 +88,7 @@ func (r specRow) Scan(dest ...any) error {
 	return nil
 }
 
-// rosterRows прогоняет rosterRow за rosterRow, скан в порядке rosterSQL.
+// rosterRows iterates rosterRow by rosterRow, scan in order of rosterSQL.
 type rosterRows struct {
 	rows []rosterRow
 	idx  int
@@ -107,8 +107,8 @@ func (r *rosterRows) Scan(dest ...any) error {
 	row := r.rows[r.idx-1]
 	status := row.status
 	if status == "" {
-		// Большинство кейсов не интересуются presence-снимком — дефолт
-		// "connected", чтобы nil-lease SQL-fallback резолвера их пропускал.
+		// Most test cases don't care about presence snapshot — default
+		// "connected" so nil-lease SQL fallback of resolver passes them.
 		status = "connected"
 	}
 	*(dest[0].(*string)) = row.sid
@@ -129,8 +129,8 @@ func (r *rosterRows) Values() ([]any, error)                       { return nil,
 func (r *rosterRows) RawValues() [][]byte                          { return nil }
 func (r *rosterRows) Conn() *pgx.Conn                              { return nil }
 
-// choirVoiceRows прогоняет choirVoiceRow за choirVoiceRow, скан в порядке
-// choirVoicesSQL (sid, choir_name).
+// choirVoiceRows iterates choirVoiceRow by choirVoiceRow, scan in order
+// of choirVoicesSQL (sid, choir_name).
 type choirVoiceRows struct {
 	rows []choirVoiceRow
 	idx  int
@@ -149,8 +149,8 @@ func (r *choirVoiceRows) Scan(dest ...any) error {
 	row := r.rows[r.idx-1]
 	*(dest[0].(*string)) = row.sid
 	*(dest[1].(*string)) = row.choirName
-	// role сканится в *string (nullable): nil-row.role → dest остаётся nil,
-	// эмулируя SQL NULL без падения pgx (паритет с реальным skan-ом резолвера).
+	// role scans into *string (nullable): nil row.role → dest remains nil,
+	// emulating SQL NULL without pgx panic (parity with resolver's real scan).
 	*(dest[2].(**string)) = row.role
 	return nil
 }
@@ -167,14 +167,14 @@ func newResolver(p *fakePool, logger *slog.Logger) *Resolver {
 	return &Resolver{pool: p, logger: logger}
 }
 
-// newResolverWithLease — Resolver с fake lease-checker для presence-фазы
-// (Variant A). lease-aware путь резолвера (фаза 2) тестируется без Redis.
+// newResolverWithLease — Resolver with fake lease-checker for presence phase
+// (Variant A). lease-aware path of resolver (phase 2) is tested without Redis.
 func newResolverWithLease(p *fakePool, lease SoulLeaseChecker, logger *slog.Logger) *Resolver {
 	return &Resolver{pool: p, lease: lease, logger: logger}
 }
 
-// fakeLease — SoulLeaseChecker-stub: alive — множество online-SID-ов, err —
-// принудительная ошибка Redis (тест fail-safe-деградации на SQL-presence).
+// fakeLease — SoulLeaseChecker stub: alive — set of online SIDs, err —
+// forced Redis error (test fail-safe degradation to SQL-presence).
 type fakeLease struct {
 	alive    map[string]struct{}
 	err      error
@@ -276,7 +276,7 @@ func TestLoadIncarnationHosts_HappyPath(t *testing.T) {
 }
 
 func TestLoadIncarnationHosts_MissingIncarnation_EmptySlice(t *testing.T) {
-	// PM-decision #3: несуществующая incarnation → пустой slice, НЕ ошибка.
+	// PM-decision #3: nonexistent incarnation → empty slice, NOT error.
 	p := &fakePool{specErr: pgx.ErrNoRows, rosterRows: nil}
 	r := newResolver(p, nil)
 
@@ -290,8 +290,8 @@ func TestLoadIncarnationHosts_MissingIncarnation_EmptySlice(t *testing.T) {
 }
 
 func TestLoadIncarnationHosts_NoCandidates_EmptySlice(t *testing.T) {
-	// Incarnation существует, но не-terminal/не-онбординг кандидатов нет
-	// (фаза-1 SQL вернула пусто). → пустой slice, не ошибка.
+	// Incarnation exists, but there are no non-terminal/non-onboarding candidates
+	// (phase-1 SQL returned empty). → empty slice, not error.
 	p := &fakePool{specJSON: mustJSON(t, map[string]any{}), rosterRows: nil}
 	r := newResolver(p, nil)
 
@@ -304,10 +304,10 @@ func TestLoadIncarnationHosts_NoCandidates_EmptySlice(t *testing.T) {
 	}
 }
 
-// --- presence-фаза (lease-aware, Variant A) ---------------------------
+// --- presence phase (lease-aware, Variant A) ---------------------------
 
 func TestLoadIncarnationHosts_LeaseAware_FiltersByLiveLease(t *testing.T) {
-	// Фаза 2: кандидат с живым lease таргетится; без lease — отсеивается.
+	// Phase 2: candidate with live lease is targeted; without lease — filtered.
 	p := &fakePool{
 		specJSON: mustJSON(t, map[string]any{}),
 		rosterRows: []rosterRow{
@@ -331,9 +331,9 @@ func TestLoadIncarnationHosts_LeaseAware_FiltersByLiveLease(t *testing.T) {
 }
 
 func TestLoadIncarnationHosts_LeaseAware_PresenceNotFromStatus(t *testing.T) {
-	// Ключевой инвариант: presence решает lease, НЕ снимок souls.status.
-	// disconnected-снимок с живым lease (idle-Soul, reconnect не отразился в PG)
-	// → таргетируется; connected-снимок без lease (stale) → НЕ таргетируется.
+	// Key invariant: presence is decided by lease, NOT snapshot souls.status.
+	// disconnected snapshot with live lease (idle Soul, reconnect not reflected in PG)
+	// → is targeted; connected snapshot without lease (stale) → NOT targeted.
 	p := &fakePool{
 		specJSON: mustJSON(t, map[string]any{}),
 		rosterRows: []rosterRow{
@@ -354,8 +354,8 @@ func TestLoadIncarnationHosts_LeaseAware_PresenceNotFromStatus(t *testing.T) {
 }
 
 func TestLoadIncarnationHosts_LeaseAware_RedisError_FallsBackToSQLSnapshot(t *testing.T) {
-	// Fail-safe: ошибка Redis-проверки → деградация на SQL-presence-снимок
-	// (status='connected'), а не падение прогона (no_hosts → error_locked).
+	// Fail-safe: Redis check error → degradation to SQL-presence snapshot
+	// (status='connected'), not run failure (no_hosts → error_locked).
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	p := &fakePool{
@@ -376,12 +376,12 @@ func TestLoadIncarnationHosts_LeaseAware_RedisError_FallsBackToSQLSnapshot(t *te
 		t.Fatalf("got %v, want [conn.example.com] (SQL snapshot fallback)", sids(hosts))
 	}
 	if !strings.Contains(buf.String(), "fail-safe") {
-		t.Errorf("warn-лог без fail-safe-сообщения: %q", buf.String())
+		t.Errorf("warn-log missing fail-safe message: %q", buf.String())
 	}
 }
 
 func TestLoadIncarnationHosts_NilLease_FallsBackToSQLSnapshot(t *testing.T) {
-	// lease==nil (single-instance dev / unit) → SQL-presence-снимок.
+	// lease==nil (single-instance dev / unit) → SQL-presence snapshot.
 	p := &fakePool{
 		specJSON: mustJSON(t, map[string]any{}),
 		rosterRows: []rosterRow{
@@ -401,8 +401,8 @@ func TestLoadIncarnationHosts_NilLease_FallsBackToSQLSnapshot(t *testing.T) {
 }
 
 func TestLoadIncarnationHosts_RoleEmptyForUndeclaredHost(t *testing.T) {
-	// ADR-008: хост, привязанный к incarnation вне declared-spec, имеет
-	// declared-роль "". Резолвер не выдумывает роль из факта привязки.
+	// ADR-008: host tied to incarnation outside declared-spec has
+	// declared role "". Resolver does not invent role from binding fact.
 	p := &fakePool{
 		specJSON: mustJSON(t, map[string]any{
 			"hosts": []map[string]any{{"sid": "declared.example.com", "role": "master"}},
@@ -427,9 +427,9 @@ func TestLoadIncarnationHosts_RoleEmptyForUndeclaredHost(t *testing.T) {
 }
 
 func TestLoadIncarnationHosts_ChoirMemberships(t *testing.T) {
-	// ADR-044, S-T4: choir-членства хоста — стабильный per-host факт. Хост в
-	// нескольких Choir-ах → несколько имён (детерминированный порядок из SQL);
-	// хост без Voice-ов → nil Choirs (симметрия с пустой declared-ролью).
+	// ADR-044, S-T4: host choir memberships — stable per-host fact. Host in
+	// multiple Choirs → multiple names (deterministic order from SQL);
+	// host without Voices → nil Choirs (symmetry with empty declared role).
 	p := &fakePool{
 		specJSON: mustJSON(t, map[string]any{}),
 		rosterRows: []rosterRow{
@@ -441,7 +441,7 @@ func TestLoadIncarnationHosts_ChoirMemberships(t *testing.T) {
 			{sid: "a.example.com", choirName: "primaries"},
 			{sid: "a.example.com", choirName: "voters"},
 			{sid: "b.example.com", choirName: "replicas"},
-			// c.example.com — без Voice-ов.
+			// c.example.com — without Voices.
 		},
 	}
 	r := newResolver(p, nil)
@@ -457,13 +457,13 @@ func TestLoadIncarnationHosts_ChoirMemberships(t *testing.T) {
 		t.Errorf("host[1].Choirs = %v, want [replicas]", got)
 	}
 	if hosts[2].Choirs != nil {
-		t.Errorf("host[2].Choirs = %v, want nil (no Voice-ов)", hosts[2].Choirs)
+		t.Errorf("host[2].Choirs = %v, want nil (no Voices)", hosts[2].Choirs)
 	}
 }
 
 func TestLoadIncarnationHosts_VoiceRoleOverridesSpec(t *testing.T) {
-	// ADR-044 п.2: Choir поглощает declared-роль. voice.role (из
-	// incarnation_choir_voices) побеждает spec.hosts[].role.
+	// ADR-044 p.2: Choir absorbs declared role. voice.role (from
+	// incarnation_choir_voices) overrides spec.hosts[].role.
 	p := &fakePool{
 		specJSON: mustJSON(t, map[string]any{
 			"hosts": []map[string]any{
@@ -484,17 +484,17 @@ func TestLoadIncarnationHosts_VoiceRoleOverridesSpec(t *testing.T) {
 		t.Fatalf("LoadIncarnationHosts: %v", err)
 	}
 	if hosts[0].Role != "voice-master" {
-		t.Errorf("role = %q, want voice-master (Voice побеждает spec)", hosts[0].Role)
+		t.Errorf("role = %q, want voice-master (Voice overrides spec)", hosts[0].Role)
 	}
 }
 
 func TestLoadIncarnationHosts_SpecRoleFallbackWhenNoVoice(t *testing.T) {
-	// ADR-044 п.2: spec.hosts[].role остаётся fallback-ом для хостов БЕЗ Voice
-	// (bootstrap-create, wire-совместимость). Также fallback при Voice без role:
-	//   - nullrole — Voice с SQL NULL role (AddVoice пишет NULL при опущенной
-	//     роли, миграция 060). Это путь, на котором резолвер падал «cannot scan
-	//     NULL into *string»; без фикса скана тест валится здесь, а не в assert-е.
-	//   - emptyrole — Voice с role="" (Go-строка) → тоже fallback на spec.
+	// ADR-044 p.2: spec.hosts[].role remains fallback for hosts WITHOUT Voice
+	// (bootstrap-create, wire-compatibility). Also fallback when Voice has no role:
+	//   - nullrole — Voice with SQL NULL role (AddVoice writes NULL when role is omitted,
+	//     migration 060). This is the path where resolver failed "cannot scan
+	//     NULL into *string"; without scan fix, test fails here, not in assertion.
+	//   - emptyrole — Voice with role="" (Go string) → also fallback to spec.
 	p := &fakePool{
 		specJSON: mustJSON(t, map[string]any{
 			"hosts": []map[string]any{
@@ -509,10 +509,10 @@ func TestLoadIncarnationHosts_SpecRoleFallbackWhenNoVoice(t *testing.T) {
 			{sid: "emptyrole.example.com", coven: []string{"redis-prod"}},
 		},
 		choirRows: []choirVoiceRow{
-			// novoice.example.com — без Voice-ов вообще.
-			// nullrole.example.com — Voice с SQL NULL role (role: nil) → fallback.
+			// novoice.example.com — without Voices at all.
+			// nullrole.example.com — Voice with SQL NULL role (role: nil) → fallback.
 			{sid: "nullrole.example.com", choirName: "voters", role: nil},
-			// emptyrole.example.com — Voice с role="" → fallback на spec.
+			// emptyrole.example.com — Voice with role="" → fallback to spec.
 			{sid: "emptyrole.example.com", choirName: "voters", role: strPtr("")},
 		},
 	}
@@ -523,21 +523,21 @@ func TestLoadIncarnationHosts_SpecRoleFallbackWhenNoVoice(t *testing.T) {
 		t.Fatalf("LoadIncarnationHosts: %v", err)
 	}
 	if hosts[0].Role != "spec-master" {
-		t.Errorf("host[0] role = %q, want spec-master (нет Voice → fallback на spec)", hosts[0].Role)
+		t.Errorf("host[0] role = %q, want spec-master (no Voice → fallback to spec)", hosts[0].Role)
 	}
 	if hosts[1].Role != "spec-replica" {
-		t.Errorf("host[1] role = %q, want spec-replica (NULL voice.role → fallback на spec)", hosts[1].Role)
+		t.Errorf("host[1] role = %q, want spec-replica (NULL voice.role → fallback to spec)", hosts[1].Role)
 	}
 	if hosts[2].Role != "spec-arbiter" {
-		t.Errorf("host[2] role = %q, want spec-arbiter (пустой voice.role → fallback на spec)", hosts[2].Role)
+		t.Errorf("host[2] role = %q, want spec-arbiter (empty voice.role → fallback to spec)", hosts[2].Role)
 	}
 }
 
 func TestLoadIncarnationHosts_MultiChoirRoleConflict_FirstBySortNameWins(t *testing.T) {
-	// ADR-044 п.2: SID — Voice в нескольких Choir-ах с РАЗНЫМИ непустыми role.
-	// HostFacts.Role — скаляр → детерминированно берём role из ПЕРВОГО Choir-а
-	// по сортировке choir_name + WARN о конфликте. SQL отдаёт ORDER BY choir_name
-	// ASC, поэтому fake подаёт строки уже в этом порядке.
+	// ADR-044 p.2: SID — Voice in multiple Choirs with DIFFERENT non-empty roles.
+	// HostFacts.Role — scalar → deterministically take role from FIRST Choir
+	// by choir_name sort + WARN about conflict. SQL returns ORDER BY choir_name
+	// ASC, so fake provides rows in this order.
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	p := &fakePool{
@@ -550,7 +550,7 @@ func TestLoadIncarnationHosts_MultiChoirRoleConflict_FirstBySortNameWins(t *test
 			{sid: "a.example.com", coven: []string{"redis-prod"}},
 		},
 		choirRows: []choirVoiceRow{
-			// "alpha" < "beta" лексикографически → побеждает alpha-role.
+			// "alpha" < "beta" lexicographically → alpha-role wins.
 			{sid: "a.example.com", choirName: "alpha", role: strPtr("alpha-role")},
 			{sid: "a.example.com", choirName: "beta", role: strPtr("beta-role")},
 		},
@@ -562,22 +562,22 @@ func TestLoadIncarnationHosts_MultiChoirRoleConflict_FirstBySortNameWins(t *test
 		t.Fatalf("LoadIncarnationHosts: %v", err)
 	}
 	if hosts[0].Role != "alpha-role" {
-		t.Errorf("role = %q, want alpha-role (первый Choir по сорт. имени)", hosts[0].Role)
+		t.Errorf("role = %q, want alpha-role (first Choir by sort order)", hosts[0].Role)
 	}
 	out := buf.String()
 	if !strings.Contains(out, "conflict") {
-		t.Errorf("warn-лог без сообщения о конфликте: %q", out)
+		t.Errorf("warn-log missing conflict message: %q", out)
 	}
 	if !strings.Contains(out, "a.example.com") {
-		t.Errorf("warn-лог без SID конфликтующего хоста: %q", out)
+		t.Errorf("warn-log missing SID of conflicting host: %q", out)
 	}
 	if !strings.Contains(out, "beta-role") {
-		t.Errorf("warn-лог без конфликтующей role: %q", out)
+		t.Errorf("warn-log missing conflicting role: %q", out)
 	}
 }
 
 func TestLoadIncarnationHosts_StaleSoulprintWarns(t *testing.T) {
-	// PM-decision #2: received_at < now-10m → warn, прогон НЕ блокируется.
+	// PM-decision #2: received_at < now-10m → warn, run NOT blocked.
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	old := time.Now().UTC().Add(-30 * time.Minute)
@@ -594,13 +594,13 @@ func TestLoadIncarnationHosts_StaleSoulprintWarns(t *testing.T) {
 		t.Fatalf("LoadIncarnationHosts: %v", err)
 	}
 	if len(hosts) != 1 {
-		t.Fatalf("len(hosts) = %d, want 1 (stale НЕ блокирует)", len(hosts))
+		t.Fatalf("len(hosts) = %d, want 1 (stale NOT blocking)", len(hosts))
 	}
 	if !strings.Contains(buf.String(), "stale.example.com") {
-		t.Errorf("warn-лог не содержит SID устаревшего хоста: %q", buf.String())
+		t.Errorf("warn-log missing SID of stale host: %q", buf.String())
 	}
-	if !strings.Contains(buf.String(), "устарел") {
-		t.Errorf("warn-лог без ожидаемого сообщения: %q", buf.String())
+	if !strings.Contains(buf.String(), "stale") {
+		t.Errorf("warn-log missing expected message: %q", buf.String())
 	}
 }
 
@@ -621,12 +621,12 @@ func TestLoadIncarnationHosts_FreshSoulprintNoWarn(t *testing.T) {
 		t.Fatalf("LoadIncarnationHosts: %v", err)
 	}
 	if buf.Len() != 0 {
-		t.Errorf("неожиданный warn для свежих/неотчитавшихся хостов: %q", buf.String())
+		t.Errorf("unexpected warn for fresh/unreported hosts: %q", buf.String())
 	}
 }
 
 func TestLoadIncarnationHosts_MalformedSpecRolesIgnored(t *testing.T) {
-	// spec freeform: битый/неожиданный hosts → роли "", не ошибка.
+	// spec is freeform: broken/unexpected hosts → roles "", not error.
 	p := &fakePool{
 		specJSON:   []byte(`{"hosts": "not-an-array"}`),
 		rosterRows: []rosterRow{{sid: "a.example.com", coven: []string{"redis-prod"}}},
@@ -643,8 +643,8 @@ func TestLoadIncarnationHosts_MalformedSpecRolesIgnored(t *testing.T) {
 }
 
 func TestLoadIncarnationHosts_BadSoulprintJSONErrors(t *testing.T) {
-	// Битый soulprint_facts JSONB — это data-corruption, не штатный случай:
-	// резолвер обязан вернуть ошибку, а не молча отдать пустой soulprint.
+	// Broken soulprint_facts JSONB — data corruption, not normal case:
+	// resolver must return error, not silently return empty soulprint.
 	p := &fakePool{
 		specJSON:   mustJSON(t, map[string]any{}),
 		rosterRows: []rosterRow{{sid: "a.example.com", coven: []string{"redis-prod"}, factsJSON: []byte(`{bad`)}},
@@ -653,7 +653,7 @@ func TestLoadIncarnationHosts_BadSoulprintJSONErrors(t *testing.T) {
 
 	_, err := r.LoadIncarnationHosts(context.Background(), "redis-prod")
 	if err == nil {
-		t.Fatal("LoadIncarnationHosts вернул nil err на битом soulprint JSON")
+		t.Fatal("LoadIncarnationHosts returned nil err on broken soulprint JSON")
 	}
 }
 
@@ -692,10 +692,10 @@ func TestParseDeclaredRoles(t *testing.T) {
 
 // --- FilterByCovens ---------------------------------------------------
 
-// TestFilterByCovens проверяет AND-семантику фильтра (ADR-040 amendment
-// 2026-05-27 «Multi-label семантика внутри одного списка»; orchestration.md §3).
-// Хост попадает в результат тогда и только тогда, когда у него присутствуют ВСЕ
-// перечисленные метки фильтра.
+// TestFilterByCovens checks AND semantics of filter (ADR-040 amendment
+// 2026-05-27 "Multi-label semantics within one list"; orchestration.md §3).
+// Host appears in result if and only if it has ALL
+// of the filter labels listed.
 func TestFilterByCovens(t *testing.T) {
 	hosts := []*HostFacts{
 		{SID: "a", Coven: []string{"redis-prod", "db", "eu"}},          // db + eu
@@ -714,7 +714,7 @@ func TestFilterByCovens(t *testing.T) {
 	})
 
 	t.Run("single-coven", func(t *testing.T) {
-		// Single-label AND тривиально совпадает с любой формой фильтра.
+		// Single-label AND trivially matches any filter form.
 		got := r.FilterByCovens(hosts, []string{"db"})
 		want := []string{"a", "d", "e"}
 		if !equalSIDs(sids(got), want) {
@@ -723,17 +723,17 @@ func TestFilterByCovens(t *testing.T) {
 	})
 
 	t.Run("multi-coven-AND", func(t *testing.T) {
-		// AND-пересечение: db + cache → только хосты, у которых ОБЕ метки.
-		// Раньше (OR) возвращало бы {a, b, d, e}; теперь — только {d, e}.
+		// AND intersection: db + cache → only hosts with BOTH labels.
+		// Previously (OR) would return {a, b, d, e}; now — only {d, e}.
 		got := r.FilterByCovens(hosts, []string{"db", "cache"})
 		want := []string{"d", "e"}
 		if !equalSIDs(sids(got), want) {
-			t.Errorf("got = %v, want %v (AND-пересечение)", sids(got), want)
+			t.Errorf("got = %v, want %v (AND intersection)", sids(got), want)
 		}
 	})
 
 	t.Run("multi-coven-AND-three-labels", func(t *testing.T) {
-		// Тройной AND: db + cache + eu → только хост со всеми тремя метками.
+		// Triple AND: db + cache + eu → only host with all three labels.
 		got := r.FilterByCovens(hosts, []string{"db", "cache", "eu"})
 		want := []string{"e"}
 		if !equalSIDs(sids(got), want) {
@@ -742,8 +742,8 @@ func TestFilterByCovens(t *testing.T) {
 	})
 
 	t.Run("multi-coven-AND-no-host-has-all", func(t *testing.T) {
-		// Хост {db} + хост {cache} + фильтр [db, cache]: ни один по отдельности
-		// не несёт обеих меток → пустой результат (раньше OR давал {a, b}).
+		// Host {db} + host {cache} + filter [db, cache]: neither individually
+		// carries both labels → empty result (previously OR would return {a, b}).
 		isolated := []*HostFacts{
 			{SID: "only-db", Coven: []string{"db"}},
 			{SID: "only-cache", Coven: []string{"cache"}},
@@ -770,16 +770,16 @@ func TestFilterByCovens(t *testing.T) {
 	})
 
 	t.Run("multi-coven-one-missing", func(t *testing.T) {
-		// Все хосты несут redis-prod, но nonexistent — никто; AND даёт пусто.
+		// All hosts carry redis-prod, but nonexistent — no one; AND gives empty.
 		got := r.FilterByCovens(hosts, []string{"redis-prod", "nonexistent"})
 		if len(got) != 0 {
-			t.Errorf("got = %v, want empty (одна метка отсутствует у всех)", sids(got))
+			t.Errorf("got = %v, want empty (one label missing from all)", sids(got))
 		}
 	})
 }
 
-// equalSIDs — упорядоченное сравнение SID-списков (резолвер возвращает в порядке
-// исходного roster-а, поэтому порядок детерминирован).
+// equalSIDs — ordered comparison of SID lists (resolver returns in order
+// of original roster, so order is deterministic).
 func equalSIDs(got, want []string) bool {
 	if len(got) != len(want) {
 		return false

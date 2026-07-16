@@ -12,9 +12,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Querier — узкое подмножество pgxpool.Pool, нужное резолверу (только чтение).
-// Симметрично [soul.ExecQueryRower] / [incarnation.ExecQueryRower]: unit-тесты
-// ходят через fake без подъёма PG, production — через реальный pool/Conn/Tx.
+// Querier — narrow subset of pgxpool.Pool needed by resolver (read-only).
+// Symmetric to [soul.ExecQueryRower] / [incarnation.ExecQueryRower]: unit tests
+// use fake without spinning up PG, production uses real pool/Conn/Tx.
 type Querier interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
@@ -26,51 +26,51 @@ var (
 	_ Querier = (pgx.Tx)(nil)
 )
 
-// SoulLeaseChecker — узкая поверхность batch-проверки «жив ли Redis SID-lease»
-// (живой EventStream), нужная presence-фазе резолвера (Variant A, ADR-006(a)).
-// Сужение до одного метода изолирует topology-пакет от полного keeperredis.Client
-// и допускает fake в unit-тестах. Реальная реализация — обёртка над
-// [keeperredis.SoulsStreamAlive], собранная в cmd/keeper (см. daemon.setupScenarioDeps).
+// SoulLeaseChecker — narrow surface for batch checking "is Redis SID-lease alive"
+// (live EventStream), needed by resolver's presence phase (Variant A, ADR-006(a)).
+// Narrowing to one method isolates topology package from full keeperredis.Client
+// and allows fake in unit tests. Real implementation — wrapper over
+// [keeperredis.SoulsStreamAlive], assembled in cmd/keeper (see daemon.setupScenarioDeps).
 //
-// Возвращает множество SID-ов с живым lease (presence=online). nil-checker
-// (unit-тесты / single-instance dev без Redis) → резолвер деградирует на
-// SQL-presence (status='connected'), симметрично reaper-у.
+// Returns set of SIDs with live lease (presence=online). nil-checker
+// (unit tests / single-instance dev without Redis) → resolver degrades to
+// SQL-presence (status='connected'), symmetric to reaper.
 type SoulLeaseChecker interface {
 	SoulsStreamAlive(ctx context.Context, sids []string) (map[string]struct{}, error)
 }
 
-// Resolver резолвит roster хостов incarnation и их last-reported soulprint.
+// Resolver resolves the roster of incarnation hosts and their last-reported soulprint.
 //
-// pool — read-only доступ к Postgres (`souls` + `incarnation`). lease —
-// Redis-проверка живого SID-lease (presence-источник, ADR-006(a)); nil →
-// SQL-presence fallback. logger — для warn-а об устаревшем soulprint (ADR-018,
-// не блокирует прогон) и о fail-safe-деградации presence на Redis-сбое.
+// pool — read-only access to Postgres (`souls` + `incarnation`). lease —
+// Redis check of live SID-lease (presence source, ADR-006(a)); nil →
+// SQL-presence fallback. logger — for warning about stale soulprint (ADR-018,
+// does not block run) and fail-safe degradation on Redis failure.
 type Resolver struct {
 	pool   Querier
 	lease  SoulLeaseChecker
 	logger *slog.Logger
 }
 
-// NewResolver конструирует Resolver. pool обязателен; lease опционален (nil →
-// SQL-presence fallback, см. [Resolver]); logger допускает nil (warn-ы тогда
-// подавляются).
+// NewResolver constructs Resolver. pool is required; lease is optional (nil →
+// SQL-presence fallback, see [Resolver]); logger can be nil (warnings are then
+// suppressed).
 func NewResolver(pool *pgxpool.Pool, lease SoulLeaseChecker, logger *slog.Logger) *Resolver {
 	return &Resolver{pool: pool, lease: lease, logger: logger}
 }
 
-// rosterSQL — фаза 1 (SQL): кандидаты на таргетинг — souls, у которых
-// `incarnation.name` присутствует в `coven[]` (ADR-008: корневая Coven-метка) и
-// чей status НЕ terminal/онбординг.
+// rosterSQL — phase 1 (SQL): targeting candidates — souls where
+// `incarnation.name` is present in `coven[]` (ADR-008: root Coven label) and
+// whose status is NOT terminal/onboarding.
 //
-// Presence (online/offline) здесь НЕ фильтруется: авторитет «Soul online» —
-// живой Redis SID-lease, его проверяет фаза 2 ([Resolver.filterAlive]). Status
-// в `souls` несёт только lifecycle-снимок; кандидаты отсекаются лишь по terminal
-// (`revoked`/`expired`/`destroyed`) и онбординг (`pending`) — их таргетить нельзя
-// независимо от lease. `connected`/`disconnected` (legacy presence-снимок для
-// Operator API) в фильтр НЕ входят — presence решает lease.
+// Presence (online/offline) is NOT filtered here: authority for "Soul online" —
+// live Redis SID-lease, checked by phase 2 ([Resolver.filterAlive]). Status
+// in `souls` carries only lifecycle snapshot; candidates are cut only by terminal
+// (`revoked`/`expired`/`destroyed`) and onboarding (`pending`) — targeting them is impossible
+// regardless of lease. `connected`/`disconnected` (legacy presence snapshot for
+// Operator API) are NOT in the filter — presence is decided by lease.
 //
-// ORDER BY sid — детерминированный порядок (scenario/orchestration.md §:
-// лексикографически по SID; иначе разрушительные операции невоспроизводимы).
+// ORDER BY sid — deterministic order (scenario/orchestration.md §:
+// lexicographically by SID; otherwise destructive operations are not reproducible).
 const rosterSQL = `
 SELECT sid, coven, traits, status,
        soulprint_facts, soulprint_collected_at, soulprint_received_at
@@ -80,23 +80,23 @@ WHERE $1 = ANY(coven)
 ORDER BY sid ASC
 `
 
-// incarnationSpecSQL читает spec одной incarnation для извлечения declared-ролей
-// (`spec.hosts[].role`). Cross-incarnation isolation: ровно одна строка по PK.
+// incarnationSpecSQL reads spec of one incarnation to extract declared roles
+// (`spec.hosts[].role`). Cross-incarnation isolation: exactly one row by PK.
 const incarnationSpecSQL = `
 SELECT spec
 FROM incarnation
 WHERE name = $1
 `
 
-// choirVoicesSQL читает Choir-членства всех хостов одной incarnation одним
-// запросом (ADR-044, S-T4/S-T6): SID → имена Choir-ов, где он Voice, + role
-// Voice-а в каждом Choir-е. Cross-incarnation isolation — фильтр по
-// `incarnation_name` (PK включает его, ADR-044 пункт 3). Один round-trip на
-// roster (симметрия с loadDeclaredRoles, без N+1); join по
+// choirVoicesSQL reads Choir memberships of all hosts of one incarnation in one
+// query (ADR-044, S-T4/S-T6): SID → names of Choirs where it is a Voice, + role
+// of Voice in each Choir. Cross-incarnation isolation — filter by
+// `incarnation_name` (PK includes it, ADR-044 section 3). One round-trip per
+// roster (symmetric to loadDeclaredRoles, no N+1); join by
 // `incarnation_choir_voices_sid_idx` (060_create_choirs.up.sql). ORDER BY choir_name —
-// детерминированный порядок имён внутри `choirs[]` каждого хоста и
-// детерминированный выбор role при multi-choir-конфликте (ADR-044 п.2:
-// поглощение declared-роли Choir-ом, см. loadChoirMemberships).
+// deterministic order of names inside `choirs[]` of each host and
+// deterministic role selection on multi-choir conflict (ADR-044 p.2:
+// absorption of declared role by Choir, see loadChoirMemberships).
 const choirVoicesSQL = `
 SELECT sid, choir_name, role
 FROM incarnation_choir_voices
@@ -104,24 +104,24 @@ WHERE incarnation_name = $1
 ORDER BY sid ASC, choir_name ASC
 `
 
-// LoadIncarnationHosts резолвит хосты прогона scenario для incarnation
-// `incarnationName`: online-souls с этой Coven-меткой + last-reported
-// soulprint + declared-роль из `incarnation.spec.hosts[].role`.
+// LoadIncarnationHosts resolves scenario run hosts for incarnation
+// `incarnationName`: online-souls with this Coven label + last-reported
+// soulprint + declared role from `incarnation.spec.hosts[].role`.
 //
-// Двухфазно (ADR-006(a)):
-//   - Фаза 1 (SQL, [rosterSQL]): кандидаты по Coven-членству + не-terminal/
-//     не-онбординг status. Presence здесь НЕ решается.
-//   - Фаза 2 (Redis, [Resolver.filterAlive]): отсев кандидатов без живого
-//     SID-lease (presence = online ⇔ lease жив). nil-lease (unit / single-
-//     instance dev) → fallback на SQL-presence (status='connected').
+// Two-phase (ADR-006(a)):
+//   - Phase 1 (SQL, [rosterSQL]): candidates by Coven membership + non-terminal/
+//     non-onboarding status. Presence is NOT decided here.
+//   - Phase 2 (Redis, [Resolver.filterAlive]): filtering candidates without live
+//     SID-lease (presence = online ⇔ lease is alive). nil-lease (unit / single-
+//     instance dev) → fallback to SQL-presence (status='connected').
 //
-// Семантика:
-//   - Несуществующая incarnation / нет online-хостов → пустой slice, НЕ
-//     ошибка (PM-decision #3).
-//   - Cross-incarnation isolation: читаются только souls с Coven-меткой
-//     `incarnationName` и spec ровно этой incarnation (ADR-008, PM-decision #4).
-//   - Устаревший soulprint (`received_at < now - 10m`) → warn в логгер,
-//     прогон не блокируется (ADR-018, PM-decision #2).
+// Semantics:
+//   - Nonexistent incarnation / no online hosts → empty slice, NOT
+//     error (PM-decision #3).
+//   - Cross-incarnation isolation: only souls with Coven label
+//     `incarnationName` and spec of exactly this incarnation are read (ADR-008, PM-decision #4).
+//   - Stale soulprint (`received_at < now - 10m`) → warn to logger,
+//     run is not blocked (ADR-018, PM-decision #2).
 func (r *Resolver) LoadIncarnationHosts(ctx context.Context, incarnationName string) ([]*HostFacts, error) {
 	specRoles, err := r.loadDeclaredRoles(ctx, incarnationName)
 	if err != nil {
@@ -144,10 +144,10 @@ func (r *Resolver) LoadIncarnationHosts(ctx context.Context, incarnationName str
 		if err != nil {
 			return nil, err
 		}
-		// Precedence role (ADR-044 п.2): Choir поглощает declared-роль.
-		// voice.role (из incarnation_choir_voices) > spec.hosts[].role.
-		// spec.hosts[].role остаётся fallback-ом для хостов БЕЗ Voice (и для
-		// bootstrap-create, где Choir-членств ещё нет, wire-совместимость).
+		// Precedence role (ADR-044 p.2): Choir absorbs declared role.
+		// voice.role (from incarnation_choir_voices) > spec.hosts[].role.
+		// spec.hosts[].role remains fallback for hosts WITHOUT Voice (and for
+		// bootstrap-create, where Choir memberships don't exist yet, wire-compatibility).
 		if voiceRole, ok := choirRoles[h.SID]; ok {
 			h.Role = voiceRole
 		} else {
@@ -169,18 +169,18 @@ func (r *Resolver) LoadIncarnationHosts(ctx context.Context, incarnationName str
 	return hosts, nil
 }
 
-// filterAlive — фаза 2: presence-фильтр кандидатов по живому Redis SID-lease
-// (ADR-006(a), Variant A). Online ⇔ lease-ключ `soul:<sid>:lock` существует.
+// filterAlive — phase 2: presence filter of candidates by live Redis SID-lease
+// (ADR-006(a), Variant A). Online ⇔ lease key `soul:<sid>:lock` exists.
 //
-// lease==nil (unit-тесты / single-instance dev без Redis) → fallback на
-// SQL-presence: оставляем только status='connected' кандидатов (legacy-снимок
-// в PG в single-instance режиме когерентен с фактом стрима по построению).
-// Симметрично reaper-у (`mark_disconnected`, lease==nil → чисто-SQL).
+// lease==nil (unit tests / single-instance dev without Redis) → fallback to
+// SQL-presence: keep only status='connected' candidates (legacy snapshot
+// in PG in single-instance mode is coherent with stream fact by construction).
+// Symmetric to reaper (`mark_disconnected`, lease==nil → pure-SQL).
 //
-// Ошибка Redis-проверки → fail-safe: чтобы сетевой сбой Redis не «погасил»
-// весь incarnation (no_hosts → error_locked), деградируем на тот же
-// SQL-presence fallback (status='connected') с warn-ом, а не возвращаем ошибку
-// прогону. Прогон таргетит последний известный снимок до восстановления Redis.
+// Redis check error → fail-safe: to prevent Redis network failure from "killing"
+// the entire incarnation (no_hosts → error_locked), degrade to the same
+// SQL-presence fallback (status='connected') with warning, not returning error
+// to run. Run targets the last known snapshot until Redis recovers.
 func (r *Resolver) filterAlive(ctx context.Context, candidates []*HostFacts) ([]*HostFacts, error) {
 	if len(candidates) == 0 {
 		return candidates, nil
@@ -211,9 +211,9 @@ func (r *Resolver) filterAlive(ctx context.Context, candidates []*HostFacts) ([]
 	return out, nil
 }
 
-// filterConnectedSnapshot — SQL-presence fallback: оставляет кандидатов с
-// legacy-снимком status='connected' в PG. Используется при lease==nil либо на
-// Redis-сбое (fail-safe). Status кандидата читается из scan-а ([HostFacts.Status]).
+// filterConnectedSnapshot — SQL-presence fallback: keeps candidates with
+// legacy snapshot status='connected' in PG. Used when lease==nil or on
+// Redis failure (fail-safe). Candidate Status is read from scan ([HostFacts.Status]).
 func filterConnectedSnapshot(candidates []*HostFacts) []*HostFacts {
 	out := make([]*HostFacts, 0, len(candidates))
 	for _, h := range candidates {
@@ -224,10 +224,10 @@ func filterConnectedSnapshot(candidates []*HostFacts) []*HostFacts {
 	return out
 }
 
-// loadDeclaredRoles читает `incarnation.spec.hosts[].role` и строит map
-// SID → declared-роль. Несуществующая incarnation → пустой map (роли всех
-// хостов будут "" — допустимо, ADR-008: declared-роль может быть null для
-// хостов вне declared-spec).
+// loadDeclaredRoles reads `incarnation.spec.hosts[].role` and builds a map
+// SID → declared role. Nonexistent incarnation → empty map (roles of all
+// hosts will be "" — allowed, ADR-008: declared role can be null for
+// hosts outside declared-spec).
 func (r *Resolver) loadDeclaredRoles(ctx context.Context, incarnationName string) (map[string]string, error) {
 	var specJSON []byte
 	err := r.pool.QueryRow(ctx, incarnationSpecSQL, incarnationName).Scan(&specJSON)
@@ -240,26 +240,26 @@ func (r *Resolver) loadDeclaredRoles(ctx context.Context, incarnationName string
 	return parseDeclaredRoles(specJSON), nil
 }
 
-// loadChoirMemberships читает `incarnation_choir_voices` и строит две map-ы:
-//   - choirs: SID → имена Choir-ов, где этот SID — Voice (ADR-044, S-T4);
-//   - roles:  SID → role Voice-а (ADR-044, S-T6/п.2: Choir поглощает declared-
-//     роль, role хоста теперь приходит из Voice, а не из spec.hosts[].role).
+// loadChoirMemberships reads `incarnation_choir_voices` and builds two maps:
+//   - choirs: SID → names of Choirs where this SID is a Voice (ADR-044, S-T4);
+//   - roles:  SID → role of Voice (ADR-044, S-T6/p.2: Choir absorbs declared
+//     role, host role now comes from Voice, not from spec.hosts[].role).
 //
-// Один запрос на весь roster (симметрия с loadDeclaredRoles, без N+1); каждый
-// SID может присутствовать в нескольких Choir-ах → slice имён. Хосты без
-// Voice-ов в обеих map-ах отсутствуют (Choirs останется nil, role — fallback
-// на spec в LoadIncarnationHosts).
+// One query for entire roster (symmetric to loadDeclaredRoles, no N+1); each
+// SID can be present in multiple Choirs → slice of names. Hosts without
+// Voices are absent from both maps (Choirs remains nil, role — fallback
+// to spec in LoadIncarnationHosts).
 //
-// Multi-choir-конфликт role (зафиксировано ADR-044 amendment): HostFacts.Role —
-// скаляр, но SID может быть Voice-ом в нескольких Choir-ах одной инкарнации с
-// разными непустыми role. Детерминированное правило — берём role из ПЕРВОГО по
-// сортировке choir_name Choir-а С НЕПУСТОЙ role (SQL уже ORDER BY ... choir_name
-// ASC, Choir-ы с пустой/NULL role пропускаются, поэтому первый встреченный
-// непустой role и есть искомый) + WARN-лог о конфликте. Если role пусты во всех
-// Choir-ах — SID в map roles не попадает → fallback на spec.
+// Multi-choir role conflict (fixed by ADR-044 amendment): HostFacts.Role —
+// scalar, but SID can be a Voice in multiple Choirs of one incarnation with
+// different non-empty roles. Deterministic rule — take role from FIRST by
+// choir_name sort order Choir WITH NON-EMPTY role (SQL already ORDER BY ... choir_name
+// ASC, Choirs with empty/NULL role are skipped, so first encountered
+// non-empty role is the result) + WARN log about conflict. If roles are empty in all
+// Choirs — SID is not added to map roles → fallback to spec.
 //
-// Cross-incarnation isolation — фильтр choirVoicesSQL по `incarnation_name`.
-// Порядок имён внутри slice choirs детерминирован (ORDER BY choir_name в SQL).
+// Cross-incarnation isolation — filter choirVoicesSQL by `incarnation_name`.
+// Order of names inside choirs slice is deterministic (ORDER BY choir_name in SQL).
 func (r *Resolver) loadChoirMemberships(ctx context.Context, incarnationName string) (choirs map[string][]string, roles map[string]string, err error) {
 	rows, err := r.pool.Query(ctx, choirVoicesSQL, incarnationName)
 	if err != nil {
@@ -269,14 +269,14 @@ func (r *Resolver) loadChoirMemberships(ctx context.Context, incarnationName str
 
 	choirs = map[string][]string{}
 	roles = map[string]string{}
-	// roleChoir[sid] — имя Choir-а, из которого взята role (для WARN-а о конфликте).
+	// roleChoir[sid] — name of Choir from which role was taken (for WARN about conflict).
 	roleChoir := map[string]string{}
 	for rows.Next() {
-		// role nullable (060_create_choirs.up.sql — TEXT без NOT NULL): AddVoice пишет SQL
-		// NULL при опущенной роли (ADR-044 п.2/п.4 — role опциональна). Сканим в
-		// *string (паттерн crud.go scanVoice / scanHost для nullable), иначе pgx
-		// падает «cannot scan NULL into *string» и валит весь roster. nil/пустой
-		// role → нет роли → fallback на spec.hosts[].role в LoadIncarnationHosts.
+		// role is nullable (060_create_choirs.up.sql — TEXT without NOT NULL): AddVoice writes SQL
+		// NULL when role is omitted (ADR-044 p.2/p.4 — role is optional). Scan into
+		// *string (pattern from crud.go scanVoice / scanHost for nullable), otherwise pgx
+		// fails with "cannot scan NULL into *string" and breaks entire roster. nil/empty
+		// role → no role → fallback to spec.hosts[].role in LoadIncarnationHosts.
 		var sid, choirName string
 		var role *string
 		if err := rows.Scan(&sid, &choirName, &role); err != nil {
@@ -290,7 +290,7 @@ func (r *Resolver) loadChoirMemberships(ctx context.Context, incarnationName str
 			roles[sid] = *role
 			roleChoir[sid] = choirName
 		} else if existing != *role && r.logger != nil {
-			r.logger.Warn("topology: multi-choir role conflict — берём первый Choir по сорт. имени",
+			r.logger.Warn("topology: multi-choir role conflict — taking first Choir by sort order",
 				slog.String("sid", sid),
 				slog.String("resolved_choir", roleChoir[sid]),
 				slog.String("resolved_role", existing),
@@ -304,11 +304,11 @@ func (r *Resolver) loadChoirMemberships(ctx context.Context, incarnationName str
 	return choirs, roles, nil
 }
 
-// parseDeclaredRoles извлекает SID → role из freeform-spec incarnation.
-// Ожидаемая форма: `spec.hosts` — список объектов с `sid` и `role`
-// (scenario/orchestration.md §4.1). spec freeform (jsonb): любое отклонение
-// формы — пропуск элемента, НЕ ошибка (резолвер read-only, не валидатор spec;
-// валидация формы spec — на слое создания incarnation).
+// parseDeclaredRoles extracts SID → role from freeform incarnation spec.
+// Expected form: `spec.hosts` — list of objects with `sid` and `role`
+// (scenario/orchestration.md §4.1). spec is freeform (jsonb): any deviation
+// from form — skip element, NOT error (resolver is read-only, not spec validator;
+// spec form validation — at incarnation creation layer).
 func parseDeclaredRoles(specJSON []byte) map[string]string {
 	roles := map[string]string{}
 	if len(specJSON) == 0 {
@@ -332,8 +332,8 @@ func parseDeclaredRoles(specJSON []byte) map[string]string {
 	return roles
 }
 
-// scanHost разбирает одну строку roster-а. soulprint_facts (JSONB) → map;
-// NULL-колонка (Soul ещё не присылал SoulprintReport) → nil-map.
+// scanHost parses one row of roster. soulprint_facts (JSONB) → map;
+// NULL column (Soul has not yet sent SoulprintReport) → nil map.
 func scanHost(row pgx.Row) (*HostFacts, error) {
 	var (
 		h           HostFacts
@@ -346,7 +346,7 @@ func scanHost(row pgx.Row) (*HostFacts, error) {
 		return nil, fmt.Errorf("topology: scan host: %w", err)
 	}
 
-	// traits jsonb (ADR-060): '{}' (NOT NULL DEFAULT) → пустой map, не nil.
+	// traits jsonb (ADR-060): '{}' (NOT NULL DEFAULT) → empty map, not nil.
 	if len(traitsJSON) > 0 {
 		if err := json.Unmarshal(traitsJSON, &h.Traits); err != nil {
 			return nil, fmt.Errorf("topology: unmarshal traits for %q: %w", h.SID, err)
@@ -366,18 +366,18 @@ func scanHost(row pgx.Row) (*HostFacts, error) {
 	return &h, nil
 }
 
-// inventorySQL — read-only выборка souls по списку SID-ов для push-прогона
-// (Variant C, [keeper/internal/pushorch]). По форме поля совпадает с [rosterSQL]
-// (один scanHost обрабатывает оба пути): SID, coven, status, soulprint-факты
+// inventorySQL — read-only selection of souls by SID list for push run
+// (Variant C, [keeper/internal/pushorch]). Field form matches [rosterSQL]
+// (one scanHost handles both paths): SID, coven, status, soulprint facts
 // + timestamps.
 //
-// Отличие от rosterSQL — фильтр НЕ по Coven-членству, а по точному списку SID;
-// incarnation-spec-фазы здесь нет (push-прогон не привязан к incarnation,
-// declared-роли неприменимы — Role="" для всех). Status-фильтр такой же:
-// исключаем terminal (`revoked`/`expired`/`destroyed`) и онбординг (`pending`) —
-// SshDispatcher не имеет смысла на «не-готовых» хостах независимо от lease.
+// Difference from rosterSQL — filter is NOT by Coven membership, but by exact SID list;
+// incarnation-spec phase is not here (push run is not tied to incarnation,
+// declared roles don't apply — Role="" for all). Status filter is the same:
+// exclude terminal (`revoked`/`expired`/`destroyed`) and onboarding (`pending`) —
+// SshDispatcher makes no sense on "not-ready" hosts regardless of lease.
 //
-// ORDER BY sid — детерминизм per-host dispatch-а.
+// ORDER BY sid — determinism for per-host dispatch.
 const inventorySQL = `
 SELECT sid, coven, traits, status,
        soulprint_facts, soulprint_collected_at, soulprint_received_at
@@ -387,25 +387,25 @@ WHERE sid = ANY($1)
 ORDER BY sid ASC
 `
 
-// LoadByInventory резолвит хосты push-прогона по точному списку SID-ов
-// (`POST /v1/push/apply::inventory`, Variant C). Симметрично
-// [Resolver.LoadIncarnationHosts], но:
+// LoadByInventory resolves push run hosts by exact SID list
+// (`POST /v1/push/apply::inventory`, Variant C). Symmetric to
+// [Resolver.LoadIncarnationHosts], but:
 //
-//   - входной фильтр — список SID, а не Coven-метка;
-//   - declared-роли НЕТ (Role="" для всех — push-хосты не привязаны к
+//   - input filter — SID list, not Coven label;
+//   - declared roles are absent (Role="" for all — push hosts are not tied to
 //     incarnation.spec);
-//   - вторая фаза (filterAlive) применяется так же: lease-presence для
-//     fail-safe-фильтра «живых» хостов; lease==nil → SQL-snapshot fallback.
+//   - second phase (filterAlive) applies the same: lease-presence for
+//     fail-safe filter of "live" hosts; lease==nil → SQL-snapshot fallback.
 //
-// Семантика:
-//   - не-найденный SID / hard-terminal status / онбординг → молча отсутствует
-//     в результате (caller получает len(out) < len(sids));
-//   - пустой sids → пустой результат, не ошибка;
-//   - устаревший soulprint (`received_at < now - 10m`) → warn в логгер,
-//     прогон не блокируется (паритет с LoadIncarnationHosts).
+// Semantics:
+//   - not-found SID / hard-terminal status / onboarding → silently absent
+//     from result (caller gets len(out) < len(sids));
+//   - empty sids → empty result, not error;
+//   - stale soulprint (`received_at < now - 10m`) → warn to logger,
+//     run is not blocked (parity with LoadIncarnationHosts).
 //
-// FK на operators / cross-incarnation isolation НЕ применимы: push-инвентарь —
-// плоский список, без incarnation-границы.
+// FK to operators / cross-incarnation isolation do NOT apply: push inventory —
+// flat list, without incarnation boundary.
 func (r *Resolver) LoadByInventory(ctx context.Context, sids []string) ([]*HostFacts, error) {
 	if len(sids) == 0 {
 		return nil, nil
@@ -439,18 +439,18 @@ func (r *Resolver) LoadByInventory(ctx context.Context, sids []string) ([]*HostF
 	return hosts, nil
 }
 
-// FilterByCovens оставляет хосты, у которых присутствуют ВСЕ requiredCovens —
-// AND-пересечение по меткам (scenario/orchestration.md §3; [ADR-040] amendment
-// 2026-05-27 «Multi-label семантика внутри одного списка»). Хост попадает в
-// результат, только если каждая метка из requiredCovens есть в `h.Coven`.
-// Пустой requiredCovens → исходный slice без изменений (нет фильтра = весь
+// FilterByCovens keeps hosts that have ALL of requiredCovens —
+// AND intersection by labels (scenario/orchestration.md §3; [ADR-040] amendment
+// 2026-05-27 "Multi-label semantics within one list"). Host appears in
+// result only if each label from requiredCovens is in `h.Coven`.
+// Empty requiredCovens → original slice unchanged (no filter = entire
 // incarnation, ADR-009).
 //
-// Security-инвариант: AND-семантика fail-closed — перечисление меток не
-// расширяет scope. Для OR-кейса оператор использует `target.where: CEL` с явным
+// Security invariant: AND semantics fail-closed — enumerating labels does not
+// expand scope. For OR case, operator uses `target.where: CEL` with explicit
 // predicate.
 //
-// Чистая функция над уже загруженным roster-ом — никаких round-trip-ов в PG.
+// Pure function over already-loaded roster — no round-trips to PG.
 func (r *Resolver) FilterByCovens(hosts []*HostFacts, requiredCovens []string) []*HostFacts {
 	if len(requiredCovens) == 0 {
 		return hosts
@@ -465,9 +465,9 @@ func (r *Resolver) FilterByCovens(hosts []*HostFacts, requiredCovens []string) [
 	return out
 }
 
-// hostHasAllCovens — AND-предикат: все метки required присутствуют в h.Coven.
-// Линейное сканирование оптимально на типичных размерах (Coven у хоста единицы
-// меток, required — единицы-десятки): map-аллокация дороже двойного цикла.
+// hostHasAllCovens — AND predicate: all required labels are present in h.Coven.
+// Linear scan is optimal for typical sizes (host has tens of labels,
+// required — tens): map allocation is more expensive than double loop.
 func hostHasAllCovens(h *HostFacts, required []string) bool {
 	for _, want := range required {
 		found := false
