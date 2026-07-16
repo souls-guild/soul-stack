@@ -52,7 +52,7 @@ func TestResolve_ReadsFromEssenceSubdir(t *testing.T) {
 		t.Fatalf("Resolve: %v", err)
 	}
 	if got["key"] != "from_essence" {
-		t.Fatalf("essence читается не из essence/: got=%#v (root-файл не должен учитываться)", got["key"])
+		t.Fatalf("essence is not read from essence/: got=%#v (root file must be ignored)", got["key"])
 	}
 }
 
@@ -100,7 +100,7 @@ func TestResolve_DeepMergeMaps(t *testing.T) {
 
 	redis, ok := got["redis"].(map[string]any)
 	if !ok {
-		t.Fatalf("redis не map: %#v", got["redis"])
+		t.Fatalf("redis is not a map: %#v", got["redis"])
 	}
 	want := map[string]any{
 		"maxmemory":  "200mb", // override
@@ -126,11 +126,11 @@ func TestResolve_ListsReplaceNotAppend(t *testing.T) {
 
 	ports, ok := got["ports"].([]any)
 	if !ok {
-		t.Fatalf("ports не список: %#v", got["ports"])
+		t.Fatalf("ports is not a list: %#v", got["ports"])
 	}
 	want := []any{uint64(7000)}
 	if !reflect.DeepEqual(ports, want) {
-		t.Fatalf("список должен заменяться, а не дополняться:\n got=%#v\nwant=%#v", ports, want)
+		t.Fatalf("list must be replaced, not appended:\n got=%#v\nwant=%#v", ports, want)
 	}
 }
 
@@ -146,11 +146,11 @@ func TestResolve_ScalarOverMapAndViceVersa(t *testing.T) {
 		t.Fatalf("Resolve: %v", err)
 	}
 	if got["a"] != "now_scalar" {
-		t.Fatalf("map должен замениться скаляром: %#v", got["a"])
+		t.Fatalf("map must be replaced by scalar: %#v", got["a"])
 	}
 	bm, ok := got["b"].(map[string]any)
 	if !ok || bm["now"] != "map" {
-		t.Fatalf("скаляр должен замениться map: %#v", got["b"])
+		t.Fatalf("scalar must be replaced by map: %#v", got["b"])
 	}
 }
 
@@ -170,10 +170,10 @@ func TestResolve_MultipleCovensDeterministicOrder(t *testing.T) {
 	}
 	// zzz sorts after aaa → zzz wins.
 	if got["tier"] != "zzz" {
-		t.Fatalf("ожидался zzz (последний по сортировке), got=%#v", got["tier"])
+		t.Fatalf("expected zzz (last by sort order), got=%#v", got["tier"])
 	}
 	if got["from_aaa"] != uint64(1) || got["from_zzz"] != uint64(1) {
-		t.Fatalf("оба coven-слоя должны примениться: %#v", got)
+		t.Fatalf("both coven layers must apply: %#v", got)
 	}
 }
 
@@ -189,7 +189,7 @@ func TestResolve_MissingLayersOK(t *testing.T) {
 		IncarnationSpec: map[string]any{"only": "spec"},
 	})
 	if err != nil {
-		t.Fatalf("отсутствие слоёв не должно быть ошибкой: %v", err)
+		t.Fatalf("missing layers must not be an error: %v", err)
 	}
 	want := map[string]any{"only": "spec"}
 	if !reflect.DeepEqual(got, want) {
@@ -205,7 +205,7 @@ func TestResolve_EmptyEverything(t *testing.T) {
 		t.Fatalf("Resolve: %v", err)
 	}
 	if len(got) != 0 {
-		t.Fatalf("ожидался пустой essence, got=%#v", got)
+		t.Fatalf("expected empty essence, got=%#v", got)
 	}
 }
 
@@ -231,7 +231,7 @@ func TestResolve_InvalidYAMLErrors(t *testing.T) {
 	})
 	r := NewResolver(nil)
 	if _, err := r.Resolve(ResolveInput{ServiceDir: dir}); err == nil {
-		t.Fatal("ожидалась ошибка парсинга невалидного YAML")
+		t.Fatal("expected parse error for invalid YAML")
 	}
 }
 
@@ -246,7 +246,7 @@ func TestResolve_EmptyOSFamilySkipsOSLayer(t *testing.T) {
 		t.Fatalf("Resolve: %v", err)
 	}
 	if got["key"] != "default" {
-		t.Fatalf("пустой OSFamily должен пропускать os-слой, got=%#v", got["key"])
+		t.Fatalf("empty OSFamily must skip os layer, got=%#v", got["key"])
 	}
 }
 
@@ -269,7 +269,7 @@ func TestResolve_SecureJoinClampsTraversal(t *testing.T) {
 		t.Fatalf("Resolve: %v", err)
 	}
 	if _, leaked := got["leaked"]; leaked {
-		t.Fatal("securejoin не сдержал traversal: прочитан файл вне serviceDir")
+		t.Fatal("securejoin did not clamp traversal: file outside serviceDir was read")
 	}
 	if got["key"] != "default" {
 		t.Fatalf("got=%#v", got)
@@ -291,9 +291,9 @@ func TestResolve_DoesNotMutateIncarnationSpecNested(t *testing.T) {
 
 	nested := spec["redis"].(map[string]any)
 	if _, polluted := nested["bind"]; polluted {
-		t.Fatalf("Resolve протёк base-ключ в IncarnationSpec: %#v", spec)
+		t.Fatalf("Resolve leaked base key into IncarnationSpec: %#v", spec)
 	}
 	if len(nested) != 1 || nested["maxmemory"] != "500mb" {
-		t.Fatalf("IncarnationSpec изменён: %#v", spec)
+		t.Fatalf("IncarnationSpec mutated: %#v", spec)
 	}
 }

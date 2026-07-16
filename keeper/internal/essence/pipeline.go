@@ -65,21 +65,21 @@ func (r *Resolver) Resolve(in ResolveInput) (map[string]any, error) {
 func (r *Resolver) readLayer(serviceDir, rel string) (map[string]any, error) {
 	full, err := securejoin.SecureJoin(serviceDir, rel)
 	if err != nil {
-		return nil, fmt.Errorf("essence: небезопасный путь слоя %q: %w", rel, err)
+		return nil, fmt.Errorf("essence: unsafe layer path %q: %w", rel, err)
 	}
 
 	data, err := os.ReadFile(full)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			r.logger.Debug("essence: слой отсутствует, пропуск", "layer", rel)
+			r.logger.Debug("essence: layer missing, skipping", "layer", rel)
 			return nil, nil
 		}
-		return nil, fmt.Errorf("essence: чтение слоя %q: %w", rel, err)
+		return nil, fmt.Errorf("essence: read layer %q: %w", rel, err)
 	}
 
 	var layer map[string]any
 	if err := yaml.Unmarshal(data, &layer); err != nil {
-		return nil, fmt.Errorf("essence: парсинг слоя %q: %w", rel, err)
+		return nil, fmt.Errorf("essence: parse layer %q: %w", rel, err)
 	}
 	return layer, nil
 }
