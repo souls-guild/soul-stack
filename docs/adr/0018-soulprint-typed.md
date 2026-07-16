@@ -1,27 +1,27 @@
-# ADR-018. Soulprint typed-схема MVP
+# ADR-018. Soulprint typed-schema MVP
 
-- **Контекст.** [ADR-012(g)](0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add) зафиксировал stub: `SoulprintReport.facts` = `google.protobuf.Struct` до закрытия [open Q №6](../architecture.md#открытые-вопросы). Сейчас Soulprint используется в существующих docs/examples минимум в шести местах (essence pipeline `os/<soulprint.self.os.family>.yaml` — [ADR-009](0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация); CEL-аксессоры `soulprint.self.<path>` / `soulprint.hosts.where(<predicate>)` / `soulprint.where(<predicate>)` — [ADR-010](0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов); inline в `_stack.yaml` `int(soulprint.self.memory.total_mb * 0.6)`; text/template-контекст `.tmpl` — `self.network.primary_ip` / `self.os.*` / `self.sid`; probe `where:` в scenario; core-модули `core.pkg`/`core.service` для абстракции через native pkg-mgr/init-system) — но typed-схемы у Soulprint нет. Этот ADR закрывает №6: typed `SoulprintFacts` message + sub-messages, минимальный набор полей под первый E2E-сервис, и фиксация канонической CEL-формы. №22 (`soulprint.collectors` в `soul.yml`, user-collectors) **остаётся открытым** — требует отдельного решения по формату коллектора / sandbox / правам запуска / валидации output (не только schema-вопрос).
-- **Решение.**
+- **Context.** [ADR-012(g)](0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add) fixed a stub: `SoulprintReport.facts` = `google.protobuf.Struct` until the closure of [open Q №6](../architecture.md#открытые-вопросы). Currently Soulprint is used in the existing docs/examples in at least six places (essence pipeline `os/<soulprint.self.os.family>.yaml` — [ADR-009](0009-scenario-dsl.md#adr-009-scenario--полная-dsl-задач-destiny-граница-с-destiny--рекомендация); CEL accessors `soulprint.self.<path>` / `soulprint.hosts.where(<predicate>)` / `soulprint.where(<predicate>)` — [ADR-010](0010-templating.md#adr-010-шаблонизатор-cel-для-yaml-выражений-go-texttemplate-для-файлов); inline in `_stack.yaml` `int(soulprint.self.memory.total_mb * 0.6)`; the text/template context `.tmpl` — `self.network.primary_ip` / `self.os.*` / `self.sid`; a probe `where:` in a scenario; the core modules `core.pkg`/`core.service` for abstraction via the native pkg-mgr/init-system) — but Soulprint has no typed schema. This ADR closes #6: a typed `SoulprintFacts` message + sub-messages, a minimal set of fields for the first E2E service, and fixing the canonical CEL form. #22 (`soulprint.collectors` in `soul.yml`, user-collectors) **remains open** — it requires a separate decision on the collector format / sandbox / execution rights / output validation (not merely a schema question).
+- **Decision.**
 
-  **(a) Typed-схема в `proto/keeper/v1/soulprint.proto`.** Добавляется новое поле `typed_facts` (field 3); старое `facts: google.protobuf.Struct` (field 2) помечается `deprecated`, но физически остаётся для wire-compat ([ADR-012(c)](0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add) forward-compat only-add). Soul-side новых версий заполняет только `typed_facts`; Keeper толерантен к обоим.
+  **(a) The typed schema in `proto/keeper/v1/soulprint.proto`.** A new field `typed_facts` (field 3) is added; the old `facts: google.protobuf.Struct` (field 2) is marked `deprecated`, but physically remains for wire-compat ([ADR-012(c)](0012-keeper-soul-grpc.md#adr-012-контракт-keepersoul-grpc-один-eventstream-с-oneof-keeper-side-рендер-forward-compat-only-add) forward-compat only-add). Soul-side of new versions fills only `typed_facts`; Keeper is tolerant to both.
 
   ```protobuf
   message SoulprintReport {
     google.protobuf.Timestamp collected_at = 1;
-    google.protobuf.Struct    facts        = 2 [deprecated = true]; // stub, see ADR-012(g); удалить нельзя — only-add
+    google.protobuf.Struct    facts        = 2 [deprecated = true]; // stub, see ADR-012(g); cannot be removed — only-add
     SoulprintFacts            typed_facts  = 3;
   }
 
   message SoulprintFacts {
-    string         sid              = 1;  // echo для логов; authority — mTLS peer cert
-    string         hostname         = 2;  // короткое имя (без домена)
+    string         sid              = 1;  // echo for logs; authority — mTLS peer cert
+    string         hostname         = 2;  // short name (without domain)
     OsFacts        os               = 3;
     KernelFacts    kernel           = 4;
     CpuFacts       cpu              = 5;
     MemoryFacts    memory           = 6;
     NetworkFacts   network          = 7;
-    // field-номера 8..14 reserved под пост-MVP (uptime/timezone/virtualization/cloud_provider/disks/bios)
-    // 15 reserved под опциональный `extra: google.protobuf.Struct` для user-collectors (ADR-кандидат, см. (h))
+    // field numbers 8..14 reserved for post-MVP (uptime/timezone/virtualization/cloud_provider/disks/bios)
+    // 15 reserved for an optional `extra: google.protobuf.Struct` for user-collectors (an ADR candidate, see (h))
   }
 
   message OsFacts {
@@ -30,8 +30,8 @@
     string version     = 3;  // "22.04" / "9.3" / "3.19"
     string codename    = 4;  // "jammy" / ""
     string arch        = 5;  // amd64 / arm64
-    string pkg_mgr     = 6;  // apt / dnf / apk — для core.pkg.installed
-    string init_system = 7;  // systemd / openrc / sysv — для core.service.*
+    string pkg_mgr     = 6;  // apt / dnf / apk — for core.pkg.installed
+    string init_system = 7;  // systemd / openrc / sysv — for core.service.*
   }
 
   message KernelFacts { string version = 1; string release = 2; }
@@ -39,8 +39,8 @@
   message MemoryFacts { int64  total_mb = 1; int64 available_mb = 2; int64 swap_mb = 3; }
 
   message NetworkFacts {
-    string   primary_ip = 1;  // основной IPv4, тот, что bind по умолчанию (90% use-cases)
-    string   fqdn       = 2;  // FQDN (== SID, но факт о системе)
+    string   primary_ip = 1;  // primary IPv4, the one bound by default (90% of use-cases)
+    string   fqdn       = 2;  // FQDN (== SID, but a fact about the system)
     repeated NetworkInterface interfaces = 3;
   }
 
@@ -53,40 +53,40 @@
   }
   ```
 
-  Точные семантические описания, валидация, примеры use-cases — в [`docs/soul/soulprint.md`](../soul/soulprint.md).
+  Precise semantic descriptions, validation, use-case examples — in [`docs/soul/soulprint.md`](../soul/soulprint.md).
 
-  **(b) `os.pkg_mgr` и `os.init_system` собираются Soul-агентом.** Один раз в коде агента (таблица маппинга `family+distro → pkg_mgr/init_system`), не в каждом core-модуле. `core.pkg.installed` и `core.service.*` читают эти поля напрямую из `SoulprintFacts.os` — не дублируют detection. Преимущество: при появлении новой OS-family таблица правится в одном месте.
-  - **Amendment (2026-05-25, гибрид + механизм доставки).** Реализовано как **гибрид**: soulprint-факт (`os.pkg_mgr`/`os.init_system`) — **primary** источник правды для выбора backend-а в `core.pkg`/`core.service`; рантайм-детект (`util.ResolvePkgMgr`/`ResolveInitSystem` → `DetectPkgMgr`/`DetectInitSystem`) — **fallback** при пустом/`unknown` факте (не дубль-источник, а аварийный путь). Убирает падение «no supported init system» на хостах/контейнерах, где tools не на месте, и гарантирует, что модуль и CEL `soulprint.self.os.*` (в `where:`/шаблонах) видят ОДИН источник — иначе тихий класс багов (найден приёмочным nginx-прогоном, BUG-B 2026-05-25). **Доставка факта в модуль — Вариант A (in-process):** Soul инжектит локальный snapshot (`util.HostFacts`) в core-модули через опциональный internal-интерфейс `util.SoulprintAware` (НЕ публичный `sdk/module`-контракт) перед `Apply`. Out-of-process custom-плагины факт пока НЕ получают — Вариант B (soulprint в `ApplyRequest` proto, only-add) зарезервирован до первого custom-плагина, которому нужен `pkg_mgr`/`init_system`.
+  **(b) `os.pkg_mgr` and `os.init_system` are collected by the Soul agent.** Once in the agent's code (a mapping table `family+distro → pkg_mgr/init_system`), not in every core module. `core.pkg.installed` and `core.service.*` read these fields directly from `SoulprintFacts.os` — they do not duplicate the detection. Advantage: when a new OS family appears, the table is edited in one place.
+  - **Amendment (2026-05-25, hybrid + a delivery mechanism).** Implemented as a **hybrid**: the soulprint fact (`os.pkg_mgr`/`os.init_system`) — the **primary** source of truth for choosing the backend in `core.pkg`/`core.service`; the runtime detection (`util.ResolvePkgMgr`/`ResolveInitSystem` → `DetectPkgMgr`/`DetectInitSystem`) — a **fallback** on an empty/`unknown` fact (not a duplicate source, but an emergency path). Removes the "no supported init system" failure on hosts/containers where the tools are not in place, and guarantees that the module and CEL `soulprint.self.os.*` (in `where:`/templates) see ONE source — otherwise a silent class of bugs (found by the acceptance nginx run, BUG-B 2026-05-25). **Delivery of the fact into the module — Variant A (in-process):** Soul injects a local snapshot (`util.HostFacts`) into the core modules via an optional internal interface `util.SoulprintAware` (NOT the public `sdk/module` contract) before `Apply`. Out-of-process custom plugins do NOT get the fact yet — Variant B (soulprint in the `ApplyRequest` proto, only-add) is reserved until the first custom plugin that needs `pkg_mgr`/`init_system`.
 
-  **(c) `network.primary_ip` + `interfaces[]`.** Convenience-string на корне `NetworkFacts` (используется 90% случаев, в т.ч. `self.network.primary_ip` в `redis.conf.tmpl`); `interfaces[]` — для multi-homed/VLAN-aware случаев. Алгоритм определения `primary_ip` — Soul-side, MVP-эвристика: интерфейс с default-route → его primary IPv4.
+  **(c) `network.primary_ip` + `interfaces[]`.** A convenience string at the root of `NetworkFacts` (used in 90% of cases, including `self.network.primary_ip` in `redis.conf.tmpl`); `interfaces[]` — for multi-homed/VLAN-aware cases. The algorithm for determining `primary_ip` — Soul-side, an MVP heuristic: the interface with the default route → its primary IPv4.
 
-  **(d) Каноническая CEL-форма — `soulprint.self.<path>`.** Голая форма `soulprint.<path>` (без `.self`) — **ошибка валидации** в `soul-lint`. Симметрия с `register.self.*` ([destiny/tasks.md §10](../destiny/tasks.md#10-шаблонный-контекст)). Существующие примеры (`examples/destiny/redis/tasks/` и т.п.) переписываются батч-задачей под канон.
+  **(d) The canonical CEL form — `soulprint.self.<path>`.** The bare form `soulprint.<path>` (without `.self`) — a **validation error** in `soul-lint`. Symmetric to `register.self.*` ([destiny/tasks.md §10](../destiny/tasks.md#10-шаблонный-контекст)). The existing examples (`examples/destiny/redis/tasks/` etc.) are rewritten by a batch task to match the canon.
 
-  **(e) `covens` НЕ в `SoulprintFacts`.** Это **Keeper-registry-данные** (`souls.coven[]` в Postgres, назначает оператор через API или `core.soul.registered` — см. [`docs/keeper/modules.md`](../keeper/modules.md)), а не факты, собираемые Soul-агентом. `soulprint.self.covens` и `soulprint.hosts[].covens` в CEL — **проекция** Keeper-side данных в Soulprint-namespace: Keeper при резолве CEL-выражения склеивает `SoulprintFacts` (от Soul) + `souls.coven[]` (из Postgres) в логическую view `HostFacts`. Soul ничего про covens не знает.
+  **(e) `covens` is NOT in `SoulprintFacts`.** This is **Keeper-registry data** (`souls.coven[]` in Postgres, assigned by the operator via the API or `core.soul.registered` — see [`docs/keeper/modules.md`](../keeper/modules.md)), not facts collected by the Soul agent. `soulprint.self.covens` and `soulprint.hosts[].covens` in CEL — a **projection** of the Keeper-side data into the Soulprint namespace: Keeper, when resolving a CEL expression, joins `SoulprintFacts` (from Soul) + `souls.coven[]` (from Postgres) into the logical view `HostFacts`. Soul knows nothing about covens.
 
-  **(f) `collected_at` — Soul-side, без жёсткой валидации.** Soul заполняет timestamp момента сбора фактов. Keeper при unmarshal дополнительно ставит `received_at` в Postgres-storage (не часть wire-format, не часть `SoulprintReport` proto). При расхождении `received_at - collected_at > 10 min` — warn в OTel-trace. Жёсткой валидации (drop stale, отказ при future) в MVP нет — Soul в private network без NTP не должен ломаться.
+  **(f) `collected_at` — Soul-side, without hard validation.** Soul fills the timestamp of the moment the facts were collected. Keeper, on unmarshal, additionally sets `received_at` in the Postgres storage (not part of the wire-format, not part of the `SoulprintReport` proto). On a discrepancy `received_at - collected_at > 10 min` — a warn in the OTel trace. There is no hard validation (drop stale, reject on future) in MVP — a Soul in a private network without NTP must not break.
 
-  **(g) Минимальный набор для первого E2E.** Все поля выше — нужны для существующих use-cases (см. inventory в [`docs/soul/soulprint.md → раздел «Inventory использования»`](../soul/soulprint.md)). Если первая попытка реального сервиса упрётся в недостающее поле — добавим только-add (новое field-номер 8+ в `SoulprintFacts`).
+  **(g) The minimal set for the first E2E.** All the fields above — are needed for the existing use-cases (see the inventory in [`docs/soul/soulprint.md → section "Inventory of usage"`](../soul/soulprint.md)). If the first attempt of a real service hits a missing field — we will add it only-add (a new field number 8+ in `SoulprintFacts`).
 
-  **(h) `extra: google.protobuf.Struct` отложен.** field-номер 15 в `SoulprintFacts` **зарезервирован** под опциональный `extra` для user-collectors, но в MVP НЕ объявлен. Открытие — отдельный ADR при закрытии №22 (требует решений по: формат коллектора `/etc/soul/soulprint.d/*` — бинарь/скрипт; права запуска — Soul под root исполняет чужой код; sandbox; collect-time vs lazy; валидация/санитайз вывода). Закрытие №22 одной строкой `extra: Struct` — недо-решение, не закрытие.
+  **(h) `extra: google.protobuf.Struct` deferred.** Field number 15 in `SoulprintFacts` is **reserved** for an optional `extra` for user-collectors, but in MVP it is NOT declared. The opening — a separate ADR upon the closure of #22 (requires decisions on: the collector format `/etc/soul/soulprint.d/*` — a binary/script; execution rights — Soul under root executes foreign code; sandbox; collect-time vs lazy; validation/sanitization of the output). Closing #22 with a single line `extra: Struct` is an under-solution, not a closure.
 
-  **(i) Сопровождающий документ.** Детальная спека всех полей с примерами, описание алгоритмов сбора, тейбл маппинга `family→pkg_mgr/init_system` — в [`docs/soul/soulprint.md`](../soul/soulprint.md) (как `docs/templating.md` для ADR-010, как `docs/destiny/output.md` для ADR-009).
+  **(i) The accompanying document.** The detailed spec of all fields with examples, a description of the collection algorithms, the mapping table `family→pkg_mgr/init_system` — in [`docs/soul/soulprint.md`](../soul/soulprint.md) (like `docs/templating.md` for ADR-010, like `docs/destiny/output.md` for ADR-009).
 
 - **Consequences.**
-  - `proto/keeper/v1/soulprint.proto` дополняется новыми messages; `make gen` пересобирает `proto/gen/go/keeper/v1/soulprint.pb.go`.
-  - `docs/soul/soulprint.md` — новый файл (детальная спека).
-  - `docs/naming-rules.md` дополняется разделом про Soulprint-поля.
-  - Существующие примеры переписываются под `soulprint.self.<path>` отдельной батч-задачей (`examples/destiny/redis/`, `essence/_stack.yaml` и т.п.).
-  - `soul-lint` получает static-checkable Soulprint-схему (`docs/templating.md:97` — теперь `soulprint.self.*` имеет конкретные типы из proto, а не `dyn`).
-  - **Open Q №6 закрыт.** Open Q №22 (user-collectors) — остаётся открытым.
-  - ADR-012(g) обновляется: stub `facts: Struct` помечен `deprecated`, ссылается на `typed_facts`.
+  - `proto/keeper/v1/soulprint.proto` is augmented with new messages; `make gen` regenerates `proto/gen/go/keeper/v1/soulprint.pb.go`.
+  - `docs/soul/soulprint.md` — a new file (the detailed spec).
+  - `docs/naming-rules.md` is augmented with a section about the Soulprint fields.
+  - The existing examples are rewritten to match `soulprint.self.<path>` by a separate batch task (`examples/destiny/redis/`, `essence/_stack.yaml` etc.).
+  - `soul-lint` gets a static-checkable Soulprint schema (`docs/templating.md:97` — now `soulprint.self.*` has concrete types from the proto, not `dyn`).
+  - **Open Q №6 closed.** Open Q №22 (user-collectors) — remains open.
+  - ADR-012(g) is updated: the stub `facts: Struct` is marked `deprecated`, references `typed_facts`.
 
 - **Trade-offs.**
-  - `facts: google.protobuf.Struct deprecated` остаётся в proto навсегда (forward-compat only-add). Cruft, но плата за wire-compat.
-  - Soul-агент должен поддерживать таблицу маппинга `family+distro → pkg_mgr/init_system` для самых популярных дистрибутивов. Новая ОС → правка таблицы в Soul, релиз новой версии Soul. Альтернатива (derived в каждом модуле) — хуже (дублирование).
-  - `primary_ip` как эвристика default-route может быть неточной в редких сценариях (multi-homed с равными метриками, IPv6-only). Принимаем: 90% случаев — типовой сервер, остальные пусть итерируют `interfaces[]`.
-  - `covens` через CEL-проекцию означает, что Keeper при резолве должен join-ить `SoulprintFacts` + `souls.coven[]`. Незначительный compute-overhead per-resolve; кэш в Redis ([ADR-006](0006-cache-redis.md#adr-006-кэш-и-координация--redis)) покрывает.
+  - `facts: google.protobuf.Struct deprecated` remains in the proto forever (forward-compat only-add). Cruft, but the price for wire-compat.
+  - The Soul agent must maintain a mapping table `family+distro → pkg_mgr/init_system` for the most popular distributions. A new OS → editing the table in Soul, releasing a new version of Soul. The alternative (derived in each module) — is worse (duplication).
+  - `primary_ip` as a default-route heuristic may be inaccurate in rare scenarios (multi-homed with equal metrics, IPv6-only). Accepted: 90% of cases — a typical server, the rest let them iterate `interfaces[]`.
+  - `covens` via a CEL projection means that Keeper on resolve must join `SoulprintFacts` + `souls.coven[]`. An insignificant compute overhead per-resolve; the cache in Redis ([ADR-006](0006-cache-redis.md#adr-006-кэш-и-координация--redis)) covers it.
 
-- **Amendment (2026-05-29, `choirs` как стабильный soulprint-факт — Keeper-проекция).** [ADR-044](0044-choir.md#adr-044-choir--именованная-топология-хостов-внутри-инкарнации) (Choir) добавляет стабильный факт `choirs[]` — список имён Choir-ов хоста в текущей инкарнации, доступный в CEL как `soulprint.self.choirs` (и `soulprint.hosts[].choirs`). Симметрично `covens` (пункт (e) выше): это **Keeper-registry-данные** (таблицы `incarnation_choirs` / `incarnation_choir_voices`, [ADR-044](0044-choir.md#adr-044-choir--именованная-топология-хостов-внутри-инкарнации) пункт 4), **НЕ** факты, собираемые Soul-агентом — `SoulprintFacts` proto **не дополняется** под Choir. `soulprint.self.choirs` — **виртуальная проекция** при резолве CEL: Keeper join-ит per-host Voice-записи в Soulprint-namespace. Choir — стабильный (declared, не волатильный) факт, поэтому доступен в `where:` без probe (граница «стабильное в Soulprint, волатильное — probe» из [ADR-008](0008-coven-stable-tags.md#adr-008-coven--только-стабильные-логические-теги) соблюдена: declared-топология стабильна, actual-роль после failover — нет). Соответствующая правка `docs/soul/soulprint.md` — слайсом S-T4.
+- **Amendment (2026-05-29, `choirs` as a stable soulprint fact — a Keeper projection).** [ADR-044](0044-choir.md#adr-044-choir--именованная-топология-хостов-внутри-инкарнации) (Choir) adds a stable fact `choirs[]` — the list of the names of the host's Choirs in the current incarnation, available in CEL as `soulprint.self.choirs` (and `soulprint.hosts[].choirs`). Symmetric to `covens` (point (e) above): this is **Keeper-registry data** (tables `incarnation_choirs` / `incarnation_choir_voices`, [ADR-044](0044-choir.md#adr-044-choir--именованная-топология-хостов-внутри-инкарнации) point 4), **NOT** facts collected by the Soul agent — the `SoulprintFacts` proto is **not augmented** for Choir. `soulprint.self.choirs` — a **virtual projection** on CEL resolve: Keeper joins the per-host Voice records into the Soulprint namespace. Choir is a stable (declared, not volatile) fact, so it is available in `where:` without a probe (the boundary "stable in Soulprint, volatile — a probe" from [ADR-008](0008-coven-stable-tags.md#adr-008-coven--только-стабильные-логические-теги) is respected: the declared topology is stable, the actual role after failover — is not). The corresponding edit of `docs/soul/soulprint.md` — as slice S-T4.
 
-- **Amendment (2026-06-09, `typed_facts` на REST — byte-passthrough категории D).** `GET /v1/souls/{sid}/soulprint` отдаёт `typed_facts` как **byte-passthrough JSONB** (категория D, симметрично Augur `allow` — [ADR-051](0051-operator-api-codegen.md#adr-051-operator-api-codegen-openapi--go-типы-oapi-codegen-types-only--strict)): Keeper читает сырые байты колонки `souls.soulprint_facts` (записанные eventstream-ом через `protojson.Marshal(SoulprintFacts)` с `UseProtoNames`) и отдаёт их на wire **AS-IS**, без `unmarshal→map→re-marshal`. Прежний путь (`map[string]any` с re-marshal) сортировал ключи лексикографически на каждом уровне; byte-passthrough отдаёт **PG-jsonb-нормализованный** порядок ключей — это намеренный одноразовый wire-change порядка ключей (значения идентичны; UI парсит typed_facts по proto-схеме `SoulprintFacts`, порядок ключей для него нерелевантен). **Forward-compat ГАРАНТИРОВАН by design:** новые proto-поля `SoulprintFacts`, добавленные Soul-агентом, доезжают на wire **без рекомпиляции Keeper-а** — Keeper не парсит и не фильтрует содержимое (раньше это было «обещание» через untyped `map`; теперь — прямое следствие byte-passthrough, не зависящее от Go-типа на Keeper-стороне). OpenAPI: `SoulprintReadReply.typed_facts` — `x-go-type: json.RawMessage` (`type: object` в схеме для документации формы). Storage-инвариант (jsonb-колонка отвергает невалидный JSON на записи) делает прежнюю handler-side `unmarshal`-валидацию (и её ветку HTTP 500 на «битый JSONB») избыточной — она снята. Guard-тесты: byte-exact passthrough (неалфавитный порядок ключей сохраняется) + forward-compat (extension-ключ вне `SoulprintFacts`-proto присутствует на wire).
+- **Amendment (2026-06-09, `typed_facts` on REST — byte-passthrough category D).** `GET /v1/souls/{sid}/soulprint` returns `typed_facts` as **byte-passthrough JSONB** (category D, symmetric to Augur `allow` — [ADR-051](0051-operator-api-codegen.md#adr-051-operator-api-codegen-openapi--go-типы-oapi-codegen-types-only--strict)): Keeper reads the raw bytes of the `souls.soulprint_facts` column (written by the eventstream via `protojson.Marshal(SoulprintFacts)` with `UseProtoNames`) and returns them on the wire **AS-IS**, without `unmarshal→map→re-marshal`. The previous path (`map[string]any` with a re-marshal) sorted the keys lexicographically at each level; byte-passthrough returns the **PG-jsonb-normalized** key order — this is a deliberate one-time wire-change of the key order (the values are identical; the UI parses typed_facts by the proto schema `SoulprintFacts`, the key order is irrelevant to it). **Forward-compat is GUARANTEED by design:** new proto fields of `SoulprintFacts`, added by the Soul agent, reach the wire **without recompiling the Keeper** — Keeper does not parse or filter the content (previously this was a "promise" via an untyped `map`; now — a direct consequence of byte-passthrough, independent of the Go type on the Keeper side). OpenAPI: `SoulprintReadReply.typed_facts` — `x-go-type: json.RawMessage` (`type: object` in the schema for documenting the shape). The storage invariant (the jsonb column rejects invalid JSON on write) makes the previous handler-side `unmarshal` validation (and its HTTP 500 branch on "broken JSONB") redundant — it is removed. Guard-tests: byte-exact passthrough (a non-alphabetical key order is preserved) + forward-compat (an extension key outside the `SoulprintFacts` proto is present on the wire).
