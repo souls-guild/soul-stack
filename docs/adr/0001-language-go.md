@@ -1,6 +1,6 @@
-# ADR-001. Язык реализации — Go
+# ADR-001. Implementation Language — Go
 
-- **Контекст.** Нужен язык для бинарей системы, которые должны легко собираться в статические артефакты, иметь зрелые SDK для Vault, OpenTelemetry, gRPC, MCP, k8s, и при этом давать быстрый MVP.
-- **Решение.** Go.
-- **Обоснование.** Готовая экосистема под весь требуемый стек, статическая компиляция, простое распространение Soul-агента, низкий порог входа для контрибьюторов.
-- **Trade-off.** GC и runtime-вес выше, чем у Rust; на edge-хостах с жёстким ограничением по памяти Soul будет крупнее. Принимаем как плату за скорость доставки и зрелость библиотек.
+- **Context.** We need a language for the system's binaries that can be built easily into static artifacts, has mature SDKs for Vault, OpenTelemetry, gRPC, MCP, k8s, while still enabling a fast MVP.
+- **Decision.** Go.
+- **Rationale.** A ready-made ecosystem covering the entire required stack, static compilation, simple distribution of the Soul agent, low entry barrier for contributors.
+- **Trade-off.** Higher GC and runtime overhead than Rust; on edge hosts with tight memory limits, Soul will be larger. We accept this as the price for delivery speed and library maturity.

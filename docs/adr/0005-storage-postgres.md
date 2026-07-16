@@ -1,6 +1,6 @@
-# ADR-005. Хранилище состояния Keeper — Postgres
+# ADR-005. Keeper State Storage — Postgres
 
-- **Контекст.** Keeper-кластер stateless по дизайну (ADR-002): любой инстанс может обслужить любой запрос. Это требует общей БД, в которой живёт реестр Souls, история их сертификатов, Destiny-каталог, журналы прогонов и операторские артефакты (токены, RBAC-политики). Embedded KV (BoltDB/BadgerDB) с такой моделью несовместим.
-- **Решение.** Postgres как единственное хранилище холодного состояния Keeper-кластера.
-- **Обоснование.** Зрелая модель транзакций, понятные процедуры HA/бэкапа/восстановления, индустриально проверенные операционные практики, богатые ограничения целостности (`UNIQUE WHERE`, FK, CHECK), аудит-friendly. Никаких собственных консенсусов и raft-лесов.
-- **Trade-off.** Внешняя жирная зависимость — Postgres надо эксплуатировать (бэкапы, WAL, vacuum, версии, репликация). Для очень мелких установок это оверкилл; целевой масштаб — **от десятков до тысяч Souls**, под который PG-overhead оправдан. Альтернативу для совсем мелких инсталляций (single-binary Keeper с SQLite) рассматриваем как **возможный** будущий вариант через интерфейс хранилища; на данный момент не обязательство.
+- **Context.** The Keeper cluster is stateless by design (ADR-002): any instance can serve any request. This requires a shared DB holding the Souls registry, their certificate history, the Destiny catalog, run logs, and operator artifacts (tokens, RBAC policies). An embedded KV (BoltDB/BadgerDB) is incompatible with this model.
+- **Decision.** Postgres as the sole cold-state storage for the Keeper cluster.
+- **Rationale.** A mature transaction model, well-understood HA/backup/restore procedures, industry-proven operational practices, rich integrity constraints (`UNIQUE WHERE`, FK, CHECK), audit-friendly. No custom consensus and no raft forests.
+- **Trade-off.** A heavyweight external dependency — Postgres has to be operated (backups, WAL, vacuum, versions, replication). For very small installations this is overkill; the target scale is **from dozens to thousands of Souls**, for which the PG overhead is justified. An alternative for very small installations (a single-binary Keeper with SQLite) is considered a **possible** future option via a storage interface; it is not a commitment at this time.

@@ -1,18 +1,18 @@
-# ADR — индекс архитектурных решений Soul Stack
+# ADR — Soul Stack Architecture Decision Index
 
-Каталог ADR (Architecture Decision Records). Источник правды по верхнеуровневой архитектуре — [`docs/architecture.md`](../architecture.md); ADR постепенно выносятся из него в отдельные файлы (один ADR — один файл, `NNNN-<slug>.md`). Пока вынесены не все — для невынесенных ссылка ведёт на якорь внутри `architecture.md`.
+The ADR (Architecture Decision Records) catalog. The source of truth for high-level architecture is [`docs/architecture.md`](../architecture.md); ADRs are gradually being split out of it into separate files (one ADR = one file, `NNNN-<slug>.md`). Not all of them have been split out yet — for the ones that haven't, the link points to an anchor inside `architecture.md`.
 
-Статусы: **active** — действующее решение; **amended** — действует, но дополнено Amendment-блоком(ами); **superseded** — заменено более новым ADR.
+Statuses: **active** — a decision in effect; **amended** — in effect, but supplemented by Amendment block(s); **superseded** — replaced by a newer ADR.
 
-Всего **67 файлов** `NNNN-<slug>.md`, максимальный номер — **0070**. Нумерация **с пропусками**: номера 0034, 0036, 0037 не использованы (см. примечание в конце индекса). То есть «0001…0070» — не сплошной диапазон.
+**67 files** `NNNN-<slug>.md` in total, the highest number is **0070**. Numbering **has gaps**: numbers 0034, 0036, 0037 are unused (see the note at the end of the index). In other words, "0001...0070" is not a contiguous range.
 
-| ADR | Заголовок | Статус | Сводка |
+| ADR | Title | Status | Summary |
 |---|---|---|---|
-| [001](0001-language-go.md#adr-001-язык-реализации--go) | Язык реализации — Go | active | Go как язык всех бинарей системы. **Вынесен в отдельный файл.** |
-| [002](0002-transport-grpc-ha.md#adr-002-транспорт-keeper--souls--grpc-bidirectional-stream-поверх-mtls-ha-кластер-keeper) | Транспорт Keeper ↔ Souls — gRPC bidi поверх mTLS, HA-кластер | amended | Bidirectional stream поверх mTLS, инициирует Soul; Keeper — stateless-кластер (presence/shedding — amendments). **Вынесен в отдельный файл.** |
-| [003](0003-destiny-format.md#adr-003-формат-destiny--yaml-с-типизированной-схемой-cuejson-schema) | Формат Destiny — YAML с типизированной схемой | active | YAML + JSON Schema/CUE, шаблонизатор отдельной фазой. **Вынесен в отдельный файл.** |
-| [004](0004-binaries.md#adr-004-раскладка-бинарей--keeper-soul-soul-lint-push-режим--модуль-внутри-keeper) | Раскладка бинарей — keeper / soul / soul-lint | active | Три (затем четыре) артефакта; push — модуль внутри keeper. **Вынесен в отдельный файл.** |
-| [005](0005-storage-postgres.md#adr-005-хранилище-состояния-keeper--postgres) | Хранилище состояния Keeper — Postgres | active | Postgres — единственное холодное хранилище состояния. **Вынесен в отдельный файл.** |
+| [001](0001-language-go.md#adr-001-implementation-language--go) | Implementation Language — Go | active | Go as the language for all binaries of the system. **Split into its own file.** |
+| [002](0002-transport-grpc-ha.md#adr-002-transport-keeper--souls--grpc-bidirectional-stream-over-mtls-ha-keeper-cluster) | Transport Keeper ↔ Souls — gRPC bidi over mTLS, HA cluster | amended | Bidirectional stream over mTLS, initiated by Soul; Keeper is a stateless cluster (presence/shedding are amendments). **Split into its own file.** |
+| [003](0003-destiny-format.md#adr-003-destiny-format--yaml-with-a-typed-schema-cuejson-schema) | Destiny Format — YAML with a typed schema | active | YAML + JSON Schema/CUE, templating as a separate phase. **Split into its own file.** |
+| [004](0004-binaries.md#adr-004-binary-layout--keeper-soul-soul-lint-push-mode-as-a-module-inside-keeper) | Binary Layout — keeper / soul / soul-lint | active | Three (later four) artifacts; push is a module inside keeper. **Split into its own file.** |
+| [005](0005-storage-postgres.md#adr-005-keeper-state-storage--postgres) | Keeper State Storage — Postgres | active | Postgres — the sole cold-state storage. **Split into its own file.** |
 | [006](0006-cache-redis.md#adr-006-кэш-и-координация--redis) | Кэш и координация — Redis | amended | Redis — heartbeat, lease, pub/sub, лидер Reaper; presence Souls + Conclave; cluster-mode SSE/apply-events routing с шардированным каналом `events:shard:<n>` K=256 (amendments). **Вынесен в отдельный файл.** |
 | [007](0007-versioning-git-ref.md#adr-007-версионирование-артефактов--через-git-ref-а-не-через-поле-в-манифесте) | Версионирование артефактов — через git ref | active | Версия артефакта = git ref, не поле в манифесте. **Вынесен в отдельный файл.** |
 | [008](0008-coven-stable-tags.md#adr-008-coven--только-стабильные-логические-теги) | Coven — только стабильные логические теги | amended | Coven = стабильные метки; роль НЕ coven; окружение = частный случай coven (amendments). **Вынесен в отдельный файл.** |
