@@ -1,5 +1,5 @@
-// Package pgutil — мелкие keeper-side helper-ы для работы с Postgres, общие для
-// нескольких CRUD-слоёв (applyrun / oracle / …).
+// Package pgutil contains small keeper-side helpers for working with Postgres,
+// shared by several CRUD layers (applyrun / oracle / ...).
 package pgutil
 
 import (
@@ -7,10 +7,10 @@ import (
 	"time"
 )
 
-// Interval форматирует Go-длительность как PG-interval-литерал в секундах,
-// пригодный как text-аргумент к параметру `$N::interval`. Единый источник для
-// applyrun (Ward-claim lease) и oracle (circuit-breaker window) — раньше каждый
-// держал свою копию.
+// Interval formats a Go duration as a PG interval literal in seconds, suitable
+// as the text argument for a `$N::interval` parameter. Single source for
+// applyrun (Ward-claim lease) and oracle (circuit-breaker window); previously
+// each kept its own copy.
 func Interval(d time.Duration) string {
 	return fmt.Sprintf("%f seconds", d.Seconds())
 }
