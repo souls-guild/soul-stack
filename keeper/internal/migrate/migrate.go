@@ -16,25 +16,25 @@ import (
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 )
 
-// Apply прогоняет все up-миграции из `fs` (sub-path `subdir`, например
-// `"."`) поверх Postgres-а по `dsn`. Идемпотентно — если все миграции
-// уже применены, возвращает nil (golang-migrate в этом случае отдаёт
-// `migrate.ErrNoChange`, мы его глотаем).
+// Apply runs all up migrations from `fs` (sub-path `subdir`, e.g. `"."`) over
+// Postgres by `dsn`. It is idempotent: if all migrations are already applied,
+// it returns nil (golang-migrate returns `migrate.ErrNoChange` in that case,
+// and we swallow it).
 //
-// `migrate` использует свой собственный sql.DB (через registered driver
-// `pgx5`), отдельный от `keeper/internal/pg.NewPool`. Это by design —
-// migrate-tool требует exclusive lock через `pg_advisory_lock` на время
-// прогона; смешивать pool и migrate-conn опасно (deadlock потенциал).
-// Apply открывает свой conn, закрывает после Up.
+// `migrate` uses its own sql.DB (through registered driver `pgx5`), separate
+// from `keeper/internal/pg.NewPool`. This is by design: migrate tool requires
+// an exclusive lock through `pg_advisory_lock` while running; mixing pool and
+// migrate connection is dangerous (deadlock potential). Apply opens its own
+// conn and closes it after Up.
 func Apply(ctx context.Context, dsn string, fs embed.FS, subdir string) error {
 	src, err := iofs.New(fs, subdir)
 	if err != nil {
 		return fmt.Errorf("migrate: iofs source: %w", err)
 	}
 
-	// golang-migrate ожидает URL вида `pgx5://...`. DSN может прийти как
-	// `postgres://...` (стандарт) — заменяем scheme; ParseConfig pgx-а
-	// уже принял такой DSN в NewPool.
+	// golang-migrate expects URL like `pgx5://...`. DSN may arrive as
+	// `postgres://...` (standard), so replace scheme; pgx ParseConfig already
+	// accepted such DSN in NewPool.
 	migrateURL, err := toMigrateURL(dsn)
 	if err != nil {
 		return err
@@ -44,20 +44,20 @@ func Apply(ctx context.Context, dsn string, fs embed.FS, subdir string) error {
 	if err != nil {
 		return fmt.Errorf("migrate: new instance: %w", err)
 	}
-	defer m.Close() //nolint:errcheck // close errors не критичны после успешного Up
+	defer m.Close() //nolint:errcheck // close errors are not critical after successful Up
 
-	// ctx-cancellation: golang-migrate/v4 API не принимает context;
-	// единственный способ прервать долгий Up — сигнал на канал
-	// m.GracefulStop (chan bool, signal-only). Goroutine ждёт ctx.Done и
-	// шлёт сигнал; локальный done-канал глушит её после успешного Up,
-	// чтобы не висеть на родительском ctx после возврата.
+	// ctx-cancellation: golang-migrate/v4 API does not accept context; the only
+	// way to interrupt a long Up is a signal to m.GracefulStop (chan bool,
+	// signal-only). Goroutine waits for ctx.Done and sends signal; local done
+	// channel silences it after successful Up so it does not hang on parent ctx
+	// after return.
 	done := make(chan struct{})
 	defer close(done)
 	go func() {
 		select {
 		case <-ctx.Done():
-			// non-blocking: GracefulStop — буферизованный chan bool(1),
-			// повторный сигнал не нужен.
+			// non-blocking: GracefulStop is buffered chan bool(1), repeat signal
+			// is not needed.
 			select {
 			case m.GracefulStop <- true:
 			default:
@@ -72,10 +72,9 @@ func Apply(ctx context.Context, dsn string, fs embed.FS, subdir string) error {
 	return nil
 }
 
-// toMigrateURL заменяет scheme `postgres://` / `postgresql://` на
-// `pgx5://` (имя зарегистрированного database/pgx/v5 driver-а).
-// Прочие схемы (включая keyvalue-формат) отвергаются — keeper.yml
-// канонизирует URL-форму.
+// toMigrateURL replaces scheme `postgres://` / `postgresql://` with
+// `pgx5://` (name of registered database/pgx/v5 driver). Other schemes
+// (including keyvalue format) are rejected; keeper.yml canonicalizes URL form.
 func toMigrateURL(dsn string) (string, error) {
 	switch {
 	case strings.HasPrefix(dsn, "postgres://"):

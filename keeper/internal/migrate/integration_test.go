@@ -1,16 +1,16 @@
 //go:build integration
 
-// Integration-тесты Apply через testcontainers-go.
+// Integration tests for Apply through testcontainers-go.
 //
-// Поднимают postgres:16-alpine, гоняют Apply на чистой БД и проверяют
-// идемпотентность + down/up cycle. Один контейнер per-package; между
-// тестами state схемы дропается через resetSchema (DROP TABLE audit_log +
-// DROP TABLE schema_migrations).
+// They start postgres:16-alpine, run Apply on a clean DB, and verify
+// idempotency + down/up cycle. One container per package; between tests schema
+// state is dropped through resetSchema (DROP TABLE audit_log + DROP TABLE
+// schema_migrations).
 //
-// Запуск:
+// Run:
 //
 //	make test-integration
-//	# или
+//	# or
 //	cd keeper && go test -tags=integration -race -count=1 ./internal/migrate/
 package migrate_test
 
@@ -39,20 +39,19 @@ var (
 	integrationPool *pgxpool.Pool
 )
 
-// TestMain делегирует setup/teardown в run(), потому что os.Exit
-// обходит defer-ы — context, контейнер и pool остались бы висеть.
+// TestMain delegates setup/teardown to run(), because os.Exit bypasses defers;
+// context, container, and pool would otherwise keep hanging.
 func TestMain(m *testing.M) {
 	os.Exit(run(m))
 }
 
-// run поднимает Postgres-контейнер, кладёт DSN/pool в package-vars,
-// отдаёт m.Run(). Возвращает exit-code; defer-ы внутри функции корректно
-// отрабатывают, потому что os.Exit вызывается уже в TestMain поверх
-// возвращённого кода.
+// run starts a Postgres container, puts DSN/pool into package vars, and calls
+// m.Run(). It returns exit code; defers inside the function run correctly
+// because os.Exit is called later in TestMain over the returned code.
 //
-// SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1|true делает testcontainers
-// обязательным (CI-режим): любой setup-fail → log.Fatalf. Без флага
-// (локальный режим) — тесты skip-ятся при недоступном docker.
+// SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1|true makes testcontainers mandatory
+// (CI mode): any setup failure -> log.Fatalf. Without the flag (local mode),
+// tests are skipped when docker is unavailable.
 func run(m *testing.M) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -95,16 +94,16 @@ func run(m *testing.M) int {
 	return m.Run()
 }
 
-// resetSchema приводит БД в исходное состояние «чистая, без миграций».
-// Тесты пакета шарят один контейнер (один per-package), поэтому между
-// прогонами схема должна сбрасываться полностью.
+// resetSchema returns DB to the initial "clean, no migrations" state. Package
+// tests share one container (one per package), so schema must be fully reset
+// between runs.
 //
-// `DROP SCHEMA public CASCADE` + recreate сносит всё разом — все таблицы
-// (audit_log/operators/incarnation/souls/apply_runs/providers/profiles/…),
-// функции (purge_*/expire_*/mark_disconnected/…), типы, индексы и служебную
-// schema_migrations golang-migrate-а — независимо от числа миграций. Это
-// устойчиво к появлению новых миграций: не нужно перечислять объекты руками
-// и держать список в синхроне с migrations/*.up.sql.
+// `DROP SCHEMA public CASCADE` + recreate removes everything at once: all
+// tables (audit_log/operators/incarnation/souls/apply_runs/providers/profiles/...),
+// functions (purge_*/expire_*/mark_disconnected/...), types, indexes, and
+// golang-migrate service schema_migrations, regardless of migration count. This
+// is robust to new migrations: no need to list objects manually and keep the
+// list in sync with migrations/*.up.sql.
 func resetSchema(t *testing.T) {
 	t.Helper()
 	ctx := context.Background()
@@ -132,10 +131,10 @@ func TestIntegration_MigrateApply_FromScratch(t *testing.T) {
 	assertRBACSchema(t, ctx)
 }
 
-// assertAuditLogSchema проверяет, что audit_log существует, три ожидаемых
-// индекса присутствуют, и два из них (archon_aid, correlation_id) —
-// partial (`WHERE … IS NOT NULL`). Вынесено для переиспользования между
-// FromScratch и DownThenUp (gap-1/gap-3 из qa.A).
+// assertAuditLogSchema verifies that audit_log exists, three expected indexes
+// are present, and two of them (archon_aid, correlation_id) are partial
+// (`WHERE ... IS NOT NULL`). Extracted for reuse between FromScratch and
+// DownThenUp (gap-1/gap-3 from qa.A).
 func assertAuditLogSchema(t *testing.T, ctx context.Context) {
 	t.Helper()
 
@@ -153,7 +152,7 @@ func assertAuditLogSchema(t *testing.T, ctx context.Context) {
 		t.Fatal("audit_log table missing")
 	}
 
-	// Три индекса из 001_create_audit_log.up.sql.
+	// Three indexes from 001_create_audit_log.up.sql.
 	wantIndexes := []string{
 		"audit_log_event_type_created_at_idx",
 		"audit_log_archon_aid_created_at_idx",
@@ -175,9 +174,9 @@ func assertAuditLogSchema(t *testing.T, ctx context.Context) {
 		}
 	}
 
-	// Partial-индексы (`WHERE … IS NOT NULL`) — pg_index.indpred != NULL.
-	// Если кто-то снимет `WHERE`-clause в up.sql, индекс станет full и
-	// перестанет соответствовать схеме ADR-022.
+	// Partial indexes (`WHERE ... IS NOT NULL`) have pg_index.indpred != NULL.
+	// If someone removes the `WHERE` clause in up.sql, index becomes full and
+	// stops matching ADR-022 schema.
 	partialIndexes := []string{
 		"audit_log_archon_aid_created_at_idx",
 		"audit_log_correlation_id_idx",
@@ -207,8 +206,8 @@ func TestIntegration_MigrateApply_Idempotent(t *testing.T) {
 	if err := keepermigrate.Apply(ctx, integrationDSN, migrations.FS, "."); err != nil {
 		t.Fatalf("Apply #1: %v", err)
 	}
-	// Второй вызов на той же БД — должен не вернуть ошибку
-	// (golang-migrate в этом случае отдаёт ErrNoChange, Apply его глотает).
+	// Second call on the same DB should not return error (golang-migrate returns
+	// ErrNoChange in this case, and Apply swallows it).
 	if err := keepermigrate.Apply(ctx, integrationDSN, migrations.FS, "."); err != nil {
 		t.Fatalf("Apply #2 (idempotent): %v", err)
 	}
@@ -222,17 +221,17 @@ func TestIntegration_MigrateApply_DownThenUp(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 
-	// Steps(-1) и Steps(1) не выносим в публичный Apply-API (down не
-	// поддерживается из cmd/keeper, ADR-022 forward-only). Здесь вызываем
-	// migrate напрямую, чтобы проверить, что .down.sql валиден и схема
-	// действительно реконструируется обратно.
+	// Steps(-1) and Steps(1) are not exposed through public Apply API (down is
+	// unsupported from cmd/keeper, ADR-022 forward-only). Here we call migrate
+	// directly to verify that .down.sql is valid and schema is actually
+	// reconstructed back.
 	src, err := iofs.New(migrations.FS, ".")
 	if err != nil {
 		t.Fatalf("iofs.New: %v", err)
 	}
-	// Дублируем scheme-rewrite Apply (`postgres://` → `pgx5://`); тянуть
-	// внутренний toMigrateURL не хочется — тест не должен зависеть от
-	// внутренней реализации пакета.
+	// Duplicate Apply scheme rewrite (`postgres://` -> `pgx5://`); pulling the
+	// internal toMigrateURL is undesirable because the test should not depend on
+	// package internals.
 	migrateURL := strings.Replace(integrationDSN, "postgres://", "pgx5://", 1)
 	mm, err := migrate.NewWithSourceInstance("iofs", src, migrateURL)
 	if err != nil {
@@ -240,16 +239,16 @@ func TestIntegration_MigrateApply_DownThenUp(t *testing.T) {
 	}
 	defer mm.Close()
 
-	// Полный rollback всех применённых миграций (down). С появлением
-	// миграций 003/004 (operators + FK) один-степовый откат больше не
-	// дропает audit_log — он живёт в 001 и слетает только когда все
-	// последующие миграции откачены. mm.Down() симметричен Apply (up to
-	// latest) и не зависит от числа миграций.
+	// Full rollback of all applied migrations (down). With migrations 003/004
+	// (operators + FK), one-step rollback no longer drops audit_log; it lives in
+	// 001 and disappears only when all later migrations are rolled back.
+	// mm.Down() is symmetric to Apply (up to latest) and does not depend on
+	// migration count.
 	if err := mm.Down(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		t.Fatalf("Down: %v", err)
 	}
 
-	// После down — ни audit_log, ни operators, ни rbac_* не должны существовать.
+	// After down, neither audit_log nor operators nor rbac_* should exist.
 	for _, tbl := range []string{
 		"audit_log", "operators",
 		"rbac_roles", "rbac_role_permissions", "rbac_role_operators",
@@ -273,18 +272,18 @@ func TestIntegration_MigrateApply_DownThenUp(t *testing.T) {
 		t.Fatalf("Up: %v", err)
 	}
 
-	// После up — таблица и три индекса (включая partial-clause) должны
-	// быть восстановлены полностью, симметрично FromScratch.
+	// After up, table and three indexes (including partial clause) should be
+	// fully restored, symmetric to FromScratch.
 	assertAuditLogSchema(t, ctx)
 	assertOperatorsSchema(t, ctx)
 	assertAuditLogOperatorFK(t, ctx)
 	assertRBACSchema(t, ctx)
 }
 
-// assertRBACSchema проверяет ADR-028 Фаза 1: три таблицы rbac_* существуют,
-// seed-роль cluster-admin (builtin=true) с permission `*` присутствует
-// (миграция 027 E1), и ON DELETE CASCADE с rbac_roles работает (удаление
-// кастомной роли уносит её permissions и membership).
+// assertRBACSchema verifies ADR-028 Phase 1: three rbac_* tables exist, seed
+// role cluster-admin (builtin=true) with permission `*` is present (migration
+// 027 E1), and ON DELETE CASCADE with rbac_roles works (deleting a custom role
+// removes its permissions and membership).
 func assertRBACSchema(t *testing.T, ctx context.Context) {
 	t.Helper()
 
@@ -322,8 +321,8 @@ func assertRBACSchema(t *testing.T, ctx context.Context) {
 		t.Errorf("cluster-admin permission = %q, want *", seedPerm)
 	}
 
-	// CHECK rbac_roles_name_format: валидное kebab-case имя проходит,
-	// невалидное (Uppercase) отвергается.
+	// CHECK rbac_roles_name_format: valid kebab-case name passes, invalid
+	// (Uppercase) is rejected.
 	if _, err := integrationPool.Exec(ctx,
 		`INSERT INTO rbac_roles (name) VALUES ('cascade-probe')`); err != nil {
 		t.Errorf("valid role name rejected: %v", err)
@@ -333,7 +332,7 @@ func assertRBACSchema(t *testing.T, ctx context.Context) {
 		t.Error("invalid role name accepted, expected CHECK violation")
 	}
 
-	// ON DELETE CASCADE: permission кастомной роли уходит вместе с ролью.
+	// ON DELETE CASCADE: custom role permission is removed with the role.
 	if _, err := integrationPool.Exec(ctx,
 		`INSERT INTO rbac_role_permissions (role_name, permission) VALUES ('cascade-probe', 'soul.list')`); err != nil {
 		t.Fatalf("insert cascade-probe perm: %v", err)
@@ -352,10 +351,10 @@ func assertRBACSchema(t *testing.T, ctx context.Context) {
 	}
 }
 
-// assertOperatorsSchema проверяет, что operators существует, partial
-// unique index по `created_by_aid IS NULL` навешан (инвариант
-// единственного bootstrap-Archon-а из ADR-013/014), и CHECK-constraints
-// по AID-формату + auth_method enum валидируют ожидаемые значения.
+// assertOperatorsSchema verifies that operators exists, partial unique index on
+// `created_by_aid IS NULL` is attached (single bootstrap Archon invariant from
+// ADR-013/014), and CHECK constraints for AID format + auth_method enum
+// validate expected values.
 func assertOperatorsSchema(t *testing.T, ctx context.Context) {
 	t.Helper()
 
@@ -373,9 +372,9 @@ func assertOperatorsSchema(t *testing.T, ctx context.Context) {
 		t.Fatal("operators table missing")
 	}
 
-	// Partial unique index — без него нарушится инвариант единственного
-	// bootstrap-Archon-а. ADR-058(d): предикат перенесён с created_by_aid IS NULL
-	// на created_via='bootstrap' (миграция 085), но индекс остаётся UNIQUE+partial.
+	// Partial unique index: without it the single bootstrap Archon invariant
+	// would be broken. ADR-058(d): predicate moved from created_by_aid IS NULL to
+	// created_via='bootstrap' (migration 085), but index remains UNIQUE+partial.
 	var isUniquePartial bool
 	err = integrationPool.QueryRow(ctx, `
 		SELECT i.indisunique AND i.indpred IS NOT NULL
@@ -388,11 +387,11 @@ func assertOperatorsSchema(t *testing.T, ctx context.Context) {
 		t.Fatalf("pg_index operators_first_archon_idx: %v", err)
 	}
 	if !isUniquePartial {
-		t.Error("operators_first_archon_idx должен быть UNIQUE + partial (WHERE created_via = 'bootstrap')")
+		t.Error("operators_first_archon_idx should be UNIQUE + partial (WHERE created_via = 'bootstrap')")
 	}
 
-	// ADR-058(d) guard (кейс 4): миграция 086 посеяла системного оператора
-	// archon-system с created_via='system' и created_by_aid=NULL.
+	// ADR-058(d) guard (case 4): migration 086 seeded system operator
+	// archon-system with created_via='system' and created_by_aid=NULL.
 	var (
 		sysVia       string
 		sysCreatedBy *string
@@ -401,7 +400,7 @@ func assertOperatorsSchema(t *testing.T, ctx context.Context) {
 		`SELECT created_via, created_by_aid FROM operators WHERE aid = 'archon-system'`,
 	).Scan(&sysVia, &sysCreatedBy)
 	if err != nil {
-		t.Fatalf("archon-system seed missing (миграция 086): %v", err)
+		t.Fatalf("archon-system seed missing (migration 086): %v", err)
 	}
 	if sysVia != "system" {
 		t.Errorf("archon-system created_via = %q, want \"system\"", sysVia)
@@ -410,7 +409,7 @@ func assertOperatorsSchema(t *testing.T, ctx context.Context) {
 		t.Errorf("archon-system created_by_aid = %v, want NULL", *sysCreatedBy)
 	}
 
-	// CHECK aid_format: валидный AID проходит, невалидный отвергается.
+	// CHECK aid_format: valid AID passes, invalid one is rejected.
 	if _, err := integrationPool.Exec(ctx, `
 		INSERT INTO operators (aid, display_name, auth_method)
 		VALUES ('archon-test-ok', 'OK', 'jwt')
@@ -429,7 +428,7 @@ func assertOperatorsSchema(t *testing.T, ctx context.Context) {
 	`); err == nil {
 		t.Error("invalid auth_method accepted, expected CHECK violation")
 	}
-	// CHECK created_via_valid: значение вне домена отвергается.
+	// CHECK created_via_valid: value outside the domain is rejected.
 	if _, err := integrationPool.Exec(ctx, `
 		INSERT INTO operators (aid, display_name, auth_method, created_via)
 		VALUES ('archon-test-bad-via', 'Bad', 'jwt', 'wormhole')
@@ -437,24 +436,25 @@ func assertOperatorsSchema(t *testing.T, ctx context.Context) {
 		t.Error("invalid created_via accepted, expected CHECK violation")
 	}
 
-	// ADR-058(d) инвариант (кейс 1 на уровне БД): второй INSERT с
-	// created_via='bootstrap' — нарушение partial unique (первый bootstrap-«слот»
-	// уже занят archon-test-boot). Наличие НЕ-bootstrap-строк с created_by_aid IS NULL
-	// (archon-system, archon-test-ok) инвариант НЕ нарушает.
+	// ADR-058(d) invariant (case 1 at DB level): second INSERT with
+	// created_via='bootstrap' violates partial unique (first bootstrap slot is
+	// already occupied by archon-test-boot). Presence of NON-bootstrap rows with
+	// created_by_aid IS NULL (archon-system, archon-test-ok) does NOT break the
+	// invariant.
 	if _, err := integrationPool.Exec(ctx, `
 		INSERT INTO operators (aid, display_name, auth_method, created_via)
 		VALUES ('archon-test-boot', 'Boot', 'jwt', 'bootstrap')
 	`); err != nil {
-		t.Errorf("первый bootstrap-operator отвергнут: %v", err)
+		t.Errorf("first bootstrap operator rejected: %v", err)
 	}
 	if _, err := integrationPool.Exec(ctx, `
 		INSERT INTO operators (aid, display_name, auth_method, created_via)
 		VALUES ('archon-second-bootstrap', 'Bootstrap?', 'jwt', 'bootstrap')
 	`); err == nil {
-		t.Error("второй operator с created_via='bootstrap' принят, ожидали unique violation")
+		t.Error("second operator with created_via='bootstrap' accepted, want unique violation")
 	}
 
-	// Cleanup, чтобы не мешать DownThenUp / последующим TestIntegration_*.
+	// Cleanup to avoid interfering with DownThenUp / later TestIntegration_*.
 	if _, err := integrationPool.Exec(ctx,
 		`DELETE FROM operators WHERE aid IN ('archon-test-ok', 'archon-test-boot')`,
 	); err != nil {
@@ -462,14 +462,14 @@ func assertOperatorsSchema(t *testing.T, ctx context.Context) {
 	}
 }
 
-// assertAuditLogOperatorFK проверяет, что миграция 004 действительно
-// создала FK `audit_log.archon_aid → operators(aid)` с ON DELETE SET NULL.
+// assertAuditLogOperatorFK verifies that migration 004 really created FK
+// `audit_log.archon_aid -> operators(aid)` with ON DELETE SET NULL.
 func assertAuditLogOperatorFK(t *testing.T, ctx context.Context) {
 	t.Helper()
 
-	// confdeltype — PostgreSQL `"char"` (1 byte, OID 18); pgx в бинарном
-	// протоколе не маппит его в обычные Go-типы. Кастуем в text прямо в
-	// SQL — тривиально и читаемо.
+	// confdeltype is PostgreSQL `"char"` (1 byte, OID 18); pgx in binary
+	// protocol does not map it to regular Go types. Cast to text directly in SQL;
+	// trivial and readable.
 	var deleteAction string
 	err := integrationPool.QueryRow(ctx, `
 		SELECT confdeltype::text
@@ -479,29 +479,29 @@ func assertAuditLogOperatorFK(t *testing.T, ctx context.Context) {
 	if err != nil {
 		t.Fatalf("pg_constraint audit_log_archon_aid_fk: %v", err)
 	}
-	// 'n' = SET NULL в pg_constraint.confdeltype.
+	// 'n' = SET NULL in pg_constraint.confdeltype.
 	if deleteAction != "n" {
 		t.Errorf("FK ON DELETE = %q (pg_constraint.confdeltype), want 'n' (SET NULL)", deleteAction)
 	}
 }
 
-// TestIntegration_MigrateApply_DirtyState проверяет, что после неуспешной
-// миграции (битый SQL) golang-migrate помечает версию dirty, и повторный
-// up вернёт migrate.ErrDirty. Это защищает keeper-startup от тихого
-// ре-старта на полу-применённой схеме.
+// TestIntegration_MigrateApply_DirtyState verifies that after a failed
+// migration (broken SQL), golang-migrate marks the version dirty and repeated
+// up returns migrate.ErrDirty. This protects keeper startup from silently
+// restarting on a half-applied schema.
 //
-// Apply (продовый) принимает `embed.FS` — подменить его in-memory нельзя
-// без `//go:embed`-конкретики. Поэтому тест использует golang-migrate
-// напрямую с in-memory source (httpfs), симулируя то, что произошло бы
-// внутри Apply при битой up.sql. Покрытие достаточное: dirty-state живёт
-// в БД (schema_migrations.dirty), а не в Go-логике Apply.
+// Production Apply accepts `embed.FS`; it cannot be replaced in-memory without
+// `//go:embed` specifics. Therefore the test uses golang-migrate directly with
+// in-memory source (httpfs), simulating what would happen inside Apply with a
+// broken up.sql. Coverage is sufficient: dirty state lives in DB
+// (schema_migrations.dirty), not in Go Apply logic.
 func TestIntegration_MigrateApply_DirtyState(t *testing.T) {
 	resetSchema(t)
 
-	// Битая миграция: CREATE TABLE, потом синтаксически некорректный SQL.
-	// pgx5 driver выполняет up в транзакции; SQL-ошибка обнуляет changes,
-	// но schema_migrations.dirty при этом всё равно ставится — это
-	// инвариант golang-migrate-а независимо от атомарности самого DDL.
+	// Broken migration: CREATE TABLE, then syntactically invalid SQL. pgx5
+	// driver runs up in a transaction; SQL error zeros changes, but
+	// schema_migrations.dirty is still set. This is a golang-migrate invariant
+	// independent of DDL atomicity itself.
 	brokenFS := fstest.MapFS{
 		"001_dirty.up.sql":   {Data: []byte("CREATE TABLE dirty_test (id INT); SELECT broken syntax here;")},
 		"001_dirty.down.sql": {Data: []byte("DROP TABLE IF EXISTS dirty_test;")},
@@ -518,13 +518,13 @@ func TestIntegration_MigrateApply_DirtyState(t *testing.T) {
 	}
 	if err := mm1.Up(); err == nil {
 		mm1.Close()
-		t.Fatal("Up on broken migration: ожидали ошибку, получили nil")
+		t.Fatal("Up on broken migration: want error, got nil")
 	}
 	mm1.Close()
 
-	// Повторный Up — должен увидеть dirty=true и вернуть migrate.ErrDirty.
-	// New driver instance + новый source: предыдущий mm1.Close() закрыл
-	// и source, и database connection.
+	// Repeated Up should see dirty=true and return migrate.ErrDirty. New driver
+	// instance + new source: previous mm1.Close() closed both source and database
+	// connection.
 	src2, err := iofs.New(brokenFS, ".")
 	if err != nil {
 		t.Fatalf("iofs.New #2: %v", err)
@@ -536,17 +536,17 @@ func TestIntegration_MigrateApply_DirtyState(t *testing.T) {
 	defer mm2.Close()
 	err = mm2.Up()
 	if err == nil {
-		t.Fatal("Up on dirty state: ожидали ошибку, получили nil")
+		t.Fatal("Up on dirty state: want error, got nil")
 	}
 	var dirtyErr migrate.ErrDirty
 	if !errors.As(err, &dirtyErr) {
-		t.Fatalf("Up on dirty state: ожидали migrate.ErrDirty, получили %T: %v", err, err)
+		t.Fatalf("Up on dirty state: want migrate.ErrDirty, got %T: %v", err, err)
 	}
 
-	// schema_migrations с dirty=true и custom-таблицей dirty_test (если
-	// частично создалась) останутся между тестами; следующий resetSchema
-	// в начале другого Test* уберёт audit_log + schema_migrations, но не
-	// dirty_test — поэтому чистим тут руками.
+	// schema_migrations with dirty=true and custom table dirty_test (if partially
+	// created) remain between tests; next resetSchema at the beginning of another
+	// Test* removes audit_log + schema_migrations, but not dirty_test, so clean
+	// it manually here.
 	cleanCtx := context.Background()
 	for _, stmt := range []string{
 		`DROP TABLE IF EXISTS dirty_test`,
@@ -558,40 +558,41 @@ func TestIntegration_MigrateApply_DirtyState(t *testing.T) {
 	}
 }
 
-// TestIntegration_MigrateApply_CtxCanceled моделирует SIGTERM, прилетевший в
-// момент старта Apply (pre-cancelled ctx). Прерывание миграций через
-// GracefulStop — best-effort, а не гарантия: ctx-bridge-горутина конкурирует с
-// m.Up(), и на свежей схеме миграции буферизуются быстрее, чем bridge успевает
-// послать stop. Поэтому оба исхода допустимы: Apply либо прервался (err != nil),
-// либо успел домигрировать (err == nil). Что тест ОБЯЗАН гарантировать — pre-cancel
-// не оставляет схему в битом/dirty состоянии: повторный Apply на чистом ctx
-// должен пройти идемпотентно.
+// TestIntegration_MigrateApply_CtxCanceled models SIGTERM arriving at Apply
+// start (pre-cancelled ctx). Interrupting migrations through GracefulStop is
+// best-effort, not a guarantee: ctx-bridge goroutine races with m.Up(), and on a
+// fresh schema migrations may buffer faster than bridge sends stop. Therefore
+// both outcomes are valid: Apply either interrupted (err != nil) or finished
+// migrating (err == nil). What the test MUST guarantee: pre-cancel does not
+// leave schema in broken/dirty state; repeated Apply on a clean ctx should pass
+// idempotently.
 func TestIntegration_MigrateApply_CtxCanceled(t *testing.T) {
 	resetSchema(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // отменяем до запуска
+	cancel() // cancel before start
 
-	// Не паникует; ошибка прерывания допустима, но не требуется (best-effort).
+	// Does not panic; interruption error is allowed but not required (best-effort).
 	_ = keepermigrate.Apply(ctx, integrationDSN, migrations.FS, ".")
 
-	// Состояние согласовано: повторный Apply на живом ctx доводит схему до
-	// конца без dirty-ошибки — pre-cancel не порвал миграцию на полпути.
+	// State is consistent: repeated Apply on a live ctx brings schema to the end
+	// without dirty error; pre-cancel did not tear migration halfway.
 	if err := keepermigrate.Apply(context.Background(), integrationDSN, migrations.FS, "."); err != nil {
-		t.Fatalf("повторный Apply после pre-cancel: %v (схема осталась в несогласованном состоянии)", err)
+		t.Fatalf("repeated Apply after pre-cancel: %v (schema remained inconsistent)", err)
 	}
 }
 
-// TestIntegration_Migrate082_OverPopulated — guard на forward-миграцию 082
-// (ADR-027 amend (m), S0) поверх НЕПУСТОЙ incarnation: до 082 уже существует
-// строка в status='applying' (epoch-колонок ещё нет). После 082 epoch-колонки
-// аддитивны и NULL (без backfill) → эта legacy-строка структурно ИСКЛЮЧАЕТСЯ
-// кандидат-фильтром reconcile_orphan_applying (applying_by_kid IS NOT NULL),
-// поэтому Reaper её НЕ реклеймит (документированный known-gap legacy/pre-082).
+// TestIntegration_Migrate082_OverPopulated is a guard for forward migration 082
+// (ADR-027 amend (m), S0) over NON-EMPTY incarnation: before 082 there is
+// already a row in status='applying' (epoch columns do not exist yet). After
+// 082, epoch columns are additive and NULL (no backfill), so this legacy row is
+// structurally EXCLUDED by reconcile_orphan_applying candidate filter
+// (applying_by_kid IS NOT NULL), and Reaper does NOT reclaim it (documented
+// known-gap legacy/pre-082).
 //
-// applyUpTo(81)→insert→applyUpTo(82) на одном источнике iofs: golang-migrate
-// Migrate(version) гонит миграции до точной версии, что даёт точку вставки
-// данных МЕЖДУ шагами (резюз харнесса DownThenUp).
+// applyUpTo(81)->insert->applyUpTo(82) on one iofs source: golang-migrate
+// Migrate(version) runs migrations up to the exact version, giving a data
+// insertion point BETWEEN steps (reuse of DownThenUp harness).
 func TestIntegration_Migrate082_OverPopulated(t *testing.T) {
 	resetSchema(t)
 	ctx := context.Background()
@@ -607,27 +608,27 @@ func TestIntegration_Migrate082_OverPopulated(t *testing.T) {
 	}
 	defer mm.Close()
 
-	// Шаг 1: до 081 включительно — incarnation существует, applying-epoch колонок
-	// (082) ещё НЕТ.
+	// Step 1: up to 081 inclusive; incarnation exists, applying-epoch columns
+	// (082) do NOT exist yet.
 	if err := mm.Migrate(81); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		t.Fatalf("Migrate(81): %v", err)
 	}
 
-	// Шаг 2: вставляем applying-строку ДО 082 (epoch-колонки физически не
-	// существуют — INSERT их не упоминает). applying — валидный enum с 005.
+	// Step 2: insert applying row BEFORE 082 (epoch columns physically do not
+	// exist, so INSERT does not mention them). applying is a valid enum since 005.
 	const name = "legacy-applying-082"
 	if _, err := integrationPool.Exec(ctx, `
 INSERT INTO incarnation (name, service, service_version, state_schema_version, state, status)
 VALUES ($1, 'redis', 'v1', 1, '{"primary":"p"}'::jsonb, 'applying')`, name); err != nil {
-		t.Fatalf("insert legacy applying row (до 082): %v", err)
+		t.Fatalf("insert legacy applying row (before 082): %v", err)
 	}
 
-	// Шаг 3: форвард 082 на НЕПУСТОЙ таблице.
+	// Step 3: forward 082 on NON-EMPTY table.
 	if err := mm.Migrate(82); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		t.Fatalf("Migrate(82): %v", err)
 	}
 
-	// Ассерт A: новые колонки у legacy-строки = NULL (аддитивно, без backfill).
+	// Assert A: new columns on legacy row = NULL (additive, no backfill).
 	var epochAllNull bool
 	if err := integrationPool.QueryRow(ctx, `
 SELECT applying_apply_id IS NULL
@@ -635,17 +636,17 @@ SELECT applying_apply_id IS NULL
    AND applying_by_kid   IS NULL
    AND applying_since    IS NULL
 FROM incarnation WHERE name = $1`, name).Scan(&epochAllNull); err != nil {
-		t.Fatalf("read epoch-колонок после 082: %v", err)
+		t.Fatalf("read epoch columns after 082: %v", err)
 	}
 	if !epochAllNull {
-		t.Errorf("epoch-колонки legacy-строки не все NULL после 082 (ожидался отсутствующий backfill)")
+		t.Errorf("epoch columns of legacy row are not all NULL after 082 (expected no backfill)")
 	}
 
-	// Ассерт B: кандидат-фильтр правила reconcile_orphan_applying ИСКЛЮЧАЕТ
-	// legacy-строку. Воспроизводим предикат orphanApplyingCandidatesSQL
-	// (status='applying' AND applying_since < cutoff AND applying_by_kid IS NOT
-	// NULL) — пакет reaper здесь не импортируем (это и есть смысл guard-а: NULL
-	// applying_by_kid структурно вырезает строку из кандидатов).
+	// Assert B: candidate filter of reconcile_orphan_applying EXCLUDES the legacy
+	// row. Reproduce orphanApplyingCandidatesSQL predicate (status='applying' AND
+	// applying_since < cutoff AND applying_by_kid IS NOT NULL); do not import
+	// reaper package here (that is the point of the guard: NULL applying_by_kid
+	// structurally cuts the row out of candidates).
 	var candidateCount int
 	if err := integrationPool.QueryRow(ctx, `
 SELECT count(*)
@@ -657,16 +658,16 @@ WHERE status = 'applying'
 		t.Fatalf("candidate-filter query: %v", err)
 	}
 	if candidateCount != 0 {
-		t.Errorf("legacy applying-строка попала в кандидаты reconcile (%d), want 0 (NULL applying_by_kid — known-gap, не реклеймится)", candidateCount)
+		t.Errorf("legacy applying row entered reconcile candidates (%d), want 0 (NULL applying_by_kid is known-gap, not reclaimed)", candidateCount)
 	}
 
-	// Sanity: строка действительно есть и осталась в applying (миграция не
-	// тронула данные, только схему) — иначе ассерт B был бы ложно-зелёным.
+	// Sanity: row really exists and remained applying (migration touched schema,
+	// not data), otherwise assert B would be falsely green.
 	var status string
 	if err := integrationPool.QueryRow(ctx, `SELECT status FROM incarnation WHERE name = $1`, name).Scan(&status); err != nil {
 		t.Fatalf("read status: %v", err)
 	}
 	if status != "applying" {
-		t.Errorf("status legacy-строки = %q, want applying (082 не должна менять данные)", status)
+		t.Errorf("status of legacy row = %q, want applying (082 must not change data)", status)
 	}
 }

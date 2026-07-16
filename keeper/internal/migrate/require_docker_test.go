@@ -5,19 +5,19 @@ import (
 	"testing"
 )
 
-// requireDocker — true, если CI требует обязательного docker-а
-// (SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1|true). Используется TestMain
-// в integration_test.go под `//go:build integration`; здесь живёт без
-// build-tag, чтобы unit-тест ниже мог проверить env-разбор без
-// поднятия testcontainers.
+// requireDocker is true when CI requires mandatory docker
+// (SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1|true). Used by TestMain in
+// integration_test.go under `//go:build integration`; it lives here without a
+// build tag so the unit test below can verify env parsing without starting
+// testcontainers.
 func requireDocker() bool {
 	v := os.Getenv("SOUL_STACK_INTEGRATION_REQUIRE_DOCKER")
 	return v == "1" || v == "true"
 }
 
-// TestRequireDocker — case-sensitivity и допустимые токены env-флага.
-// Регрессионная защита: «1» и «true» — единственные truthy-значения;
-// прочее (включая «TRUE»/«yes»/произвольное) — falsy.
+// TestRequireDocker verifies case sensitivity and accepted env flag tokens.
+// Regression guard: "1" and "true" are the only truthy values; everything else
+// (including "TRUE"/"yes"/arbitrary) is falsy.
 func TestRequireDocker(t *testing.T) {
 	tests := []struct {
 		env  string

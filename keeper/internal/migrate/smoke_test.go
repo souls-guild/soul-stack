@@ -2,20 +2,20 @@
 
 package migrate_test
 
-// Ad-hoc smoke-test для M0.4.0: поднять локальный postgres (через
-// `make dev-up` или `docker run`), запустить
+// Ad-hoc smoke test for M0.4.0: start local postgres (through `make dev-up` or
+// `docker run`), then run
 //
 //   SOUL_STACK_SMOKE_DSN="postgres://keeper:keeper@localhost:55432/keeper?sslmode=disable" \
 //     go test -tags=smoke ./internal/migrate/ -run TestSmoke
 //
-// Тест:
-//   1. NewPool на DSN.
+// Test:
+//   1. NewPool on DSN.
 //   2. Ping.
-//   3. migrate.Apply (миграция 001_create_audit_log).
-//   4. auditpg.NewWriter + Write одного config.reload_succeeded.
-//   5. SELECT obratno и проверка masking-а.
+//   3. migrate.Apply (migration 001_create_audit_log).
+//   4. auditpg.NewWriter + Write one config.reload_succeeded.
+//   5. SELECT back and verify masking.
 //
-// Полноценные integration-тесты под testcontainers — M0.4.1.
+// Full integration tests under testcontainers are M0.4.1.
 
 import (
 	"context"
@@ -43,7 +43,7 @@ func TestSmoke_EndToEnd(t *testing.T) {
 	pool, err := keeperpg.NewPool(ctx, config.KeeperPostgres{
 		DSNRef: dsn,
 		Pool:   config.KeeperPostgresPool{Min: 1, Max: 4},
-	}, nil) // plain DSN — vc не требуется
+	}, nil) // plain DSN; vc is not required
 	if err != nil {
 		t.Fatalf("NewPool: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestSmoke_EndToEnd(t *testing.T) {
 		t.Fatalf("Write: %v", err)
 	}
 
-	// SELECT obratno — проверяем масштабирование payload и колонок.
+	// SELECT back: verify payload and column scaling.
 	row := pool.QueryRow(ctx, `
 		SELECT audit_id, event_type, source, archon_aid, correlation_id, payload
 		FROM audit_log
