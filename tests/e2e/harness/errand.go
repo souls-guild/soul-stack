@@ -10,8 +10,9 @@ import (
 	"time"
 )
 
-// ErrandResult — read-проекция ErrandResult (POST /v1/souls/{sid}/exec, ADR-033)
-// для e2e-ассертов single-Errand. Поля — публичный JSON-контракт handler-а.
+// ErrandResult — read projection of ErrandResult (POST /v1/souls/{sid}/exec,
+// ADR-033) for single-Errand e2e asserts. Fields form the handler's public
+// JSON contract.
 type ErrandResult struct {
 	ErrandID string `json:"errand_id"`
 	SID      string `json:"sid"`
@@ -19,9 +20,9 @@ type ErrandResult struct {
 	Status   string `json:"status"`
 }
 
-// errandTerminalStatuses — терминальные статусы single-Errand (ADR-033).
-// Дублируется литералом (tests/e2e — отдельный go-модуль без зависимости на
-// keeper/internal).
+// errandTerminalStatuses — terminal statuses of a single Errand (ADR-033).
+// Duplicated as a literal (tests/e2e is a separate go module without a
+// dependency on keeper/internal).
 var errandTerminalStatuses = map[string]struct{}{
 	"success":            {},
 	"failed":             {},
@@ -30,11 +31,11 @@ var errandTerminalStatuses = map[string]struct{}{
 	"module_not_allowed": {},
 }
 
-// ExecErrand отправляет POST /v1/souls/{sid}/exec (single-Errand ad-hoc exec,
-// ADR-033) и возвращает терминальный ErrandResult. При 200 — sync-результат; при
-// 202 (async-эскалация) — поллит GET /v1/errands/{errand_id} до терминала.
-// module — fully-qualified (whitelist Errand-а: core.cmd.shell / core.exec.run).
-// Любой иной статус — t.Fatal с телом ответа.
+// ExecErrand sends POST /v1/souls/{sid}/exec (single-Errand ad-hoc exec,
+// ADR-033) and returns a terminal ErrandResult. On 200 — a sync result; on
+// 202 (async escalation) — polls GET /v1/errands/{errand_id} until terminal.
+// module — fully-qualified (Errand whitelist: core.cmd.shell / core.exec.run).
+// Any other status — t.Fatal with the response body.
 func (s *Stack) ExecErrand(t *testing.T, sid, module string, input map[string]any) ErrandResult {
 	t.Helper()
 	c := s.opClient(t)
@@ -58,7 +59,7 @@ func (s *Stack) ExecErrand(t *testing.T, sid, module string, input map[string]an
 			ErrandID string `json:"errand_id"`
 		}
 		if jerr := json.Unmarshal(resp, &acc); jerr != nil || acc.ErrandID == "" {
-			t.Fatalf("ExecErrand %s/%s: 202 без errand_id (body=%s)", sid, module, string(resp))
+			t.Fatalf("ExecErrand %s/%s: 202 without errand_id (body=%s)", sid, module, string(resp))
 		}
 		return s.waitErrandTerminal(t, acc.ErrandID, 60)
 	default:
@@ -67,7 +68,7 @@ func (s *Stack) ExecErrand(t *testing.T, sid, module string, input map[string]an
 	}
 }
 
-// waitErrandTerminal поллит GET /v1/errands/{id} до терминала single-Errand.
+// waitErrandTerminal polls GET /v1/errands/{id} until a single-Errand terminal.
 func (s *Stack) waitErrandTerminal(t *testing.T, errandID string, timeoutSec int) ErrandResult {
 	t.Helper()
 	c := s.opClient(t)
@@ -88,6 +89,6 @@ func (s *Stack) waitErrandTerminal(t *testing.T, errandID string, timeoutSec int
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
-	t.Fatalf("waitErrandTerminal %s: терминал не достигнут за %ds (status=%q)", errandID, timeoutSec, last.Status)
+	t.Fatalf("waitErrandTerminal %s: terminal not reached within %ds (status=%q)", errandID, timeoutSec, last.Status)
 	return last
 }

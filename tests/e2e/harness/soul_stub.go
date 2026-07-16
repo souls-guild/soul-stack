@@ -11,26 +11,30 @@ import (
 	"github.com/souls-guild/soul-stack/tests/e2e/internal/soulstub"
 )
 
-// TaskResponse — scripted ответ soul-stub-а на одну задачу ApplyRequest по
-// task_name (success-only хелпер; harness-обёртка над soulstub.ScriptEntry, чтобы
-// тест не импортировал internal/soulstub и keeperv1-enum напрямую).
+// TaskResponse — soul-stub's scripted response to one ApplyRequest task by
+// task_name (success-only helper; a harness wrapper over
+// soulstub.ScriptEntry so the test doesn't import internal/soulstub and the
+// keeperv1 enum directly).
 //
-// StateChanges уходит в RunResult.state_changes (per-task артефакт для register/
-// drift); incarnation.state мутируется отдельно — keeper-side рендером
-// scenario.state_changes.sets ПОСЛЕ барьера (run.go §8), НЕ из RunResult. Поэтому
-// StateChanges здесь документирует ожидаемый эффект задачи на хосте, но на assert
-// incarnation_state не влияет.
+// StateChanges goes into RunResult.state_changes (a per-task artifact for
+// register/drift); incarnation.state is mutated separately — by the
+// keeper-side render of scenario.state_changes.sets AFTER the barrier
+// (run.go section 8), NOT from RunResult. So StateChanges here documents
+// the task's expected effect on the host but does not affect the
+// incarnation_state assert.
 type TaskResponse struct {
 	TaskName     string
 	StateChanges map[string]any
 }
 
-// LoadApplyScript заряжает stub scripted-success-ответами на перечисленные задачи
-// (matching по task_name). Задачи, не покрытые скриптом (например collectors.yml-
-// шаги под when:, которые на L3a реально не выполняются), ловит
-// SetApplyDefaultSuccess — иначе unscripted-задача дала бы FAILED. Симметрично
-// stub-responses.yaml::scenarios.<name>.apply_responses, но загружается inline
-// (YAML-loader fixtures не реализован — pilot-паттерн, как hello-world).
+// LoadApplyScript loads the stub with scripted-success responses for the
+// listed tasks (matched by task_name). Tasks not covered by the script
+// (e.g. collectors.yml steps under when:, which are not actually executed
+// at L3a) are caught by SetApplyDefaultSuccess — otherwise an unscripted
+// task would produce FAILED. Mirrors
+// stub-responses.yaml::scenarios.<name>.apply_responses, but loaded inline
+// (a YAML-loader for fixtures is not implemented — the pilot pattern, as
+// with hello-world).
 func LoadApplyScript(stub *soulstub.Stub, scenario string, tasks []TaskResponse) {
 	entries := make([]soulstub.ScriptEntry, 0, len(tasks))
 	for _, t := range tasks {
@@ -41,28 +45,29 @@ func LoadApplyScript(stub *soulstub.Stub, scenario string, tasks []TaskResponse)
 		})
 	}
 	stub.LoadScript(map[string][]soulstub.ScriptEntry{scenario: entries})
-	// Покрываем when:-задачи (collectors.yml), не вошедшие в scripted-таблицу:
-	// на L3a реализм per-task не проверяется, важен lifecycle apply_runs.
+	// Covers when:-tasks (collectors.yml) not in the scripted table: L3a
+	// does not check per-task realism, only the apply_runs lifecycle matters.
 	stub.SetApplyDefaultSuccess(true)
 }
 
-// ConnectSoulStub открывает live EventStream-стрим soul-stub-а к Keeper-у для
-// i-го pre-auth Soul-а (см. Config.Souls / SoulSID). Это превращает «строку в
-// souls со status=connected» в реальный gRPC-mTLS-стрим: на session-open Keeper
-// захватывает Redis SID-lease, и dispatch (Errand/Apply) маршрутизируется в
-// локальный Outbound этого SID-а. Без открытого стрима dispatch вернёт
-// ErrSoulNotConnected (errand → spawn_error, apply → orphaned).
+// ConnectSoulStub opens a live EventStream from soul-stub to the Keeper for
+// the i-th pre-auth Soul (see Config.Souls / SoulSID). This turns a "row in
+// souls with status=connected" into a real gRPC mTLS stream: on session-open
+// the Keeper acquires the Redis SID lease, and dispatch (Errand/Apply) is
+// routed to this SID's local Outbound. Without an open stream, dispatch
+// returns ErrSoulNotConnected (errand -> spawn_error, apply -> orphaned).
 //
-// Stub отвечает на ApplyRequest scripted-RunResult-ом и на ErrandRequest —
-// ErrandResult-ом со статусом SUCCESS (см. soulstub.SetErrandStatus для иных
-// веток). Закрытие стрима регистрируется в Stack.Cleanup (LIFO).
+// The stub responds to ApplyRequest with a scripted RunResult and to
+// ErrandRequest with an ErrandResult of status SUCCESS (see
+// soulstub.SetErrandStatus for other branches). Stream closure is
+// registered in Stack.Cleanup (LIFO).
 //
-// Возвращает *soulstub.Stub — caller может читать Messages() / менять
-// errand-статус до диспетча.
+// Returns *soulstub.Stub — the caller can read Messages() / change the
+// errand status before dispatch.
 func (s *Stack) ConnectSoulStub(t *testing.T, soulIndex int) *soulstub.Stub {
 	t.Helper()
 	if soulIndex < 0 || soulIndex >= len(s.souls) {
-		t.Fatalf("ConnectSoulStub(%d): out of range (создано %d soul-ов)", soulIndex, len(s.souls))
+		t.Fatalf("ConnectSoulStub(%d): out of range (%d souls created)", soulIndex, len(s.souls))
 	}
 	id := s.souls[soulIndex]
 
@@ -78,10 +83,10 @@ func (s *Stack) ConnectSoulStub(t *testing.T, soulIndex int) *soulstub.Stub {
 		cancel()
 	})
 
-	// Дожидаемся HelloReply: Keeper отправляет его ПОСЛЕ захвата Redis SID-lease
-	// (eventstream.go: presence online = живой lease, захваченный до HelloReply).
-	// Значит, появление HelloReply в Messages() гарантирует, что dispatch уже
-	// сможет смаршрутизировать Errand/Apply в локальный Outbound этого SID-а.
+	// Wait for HelloReply: the Keeper sends it AFTER acquiring the Redis
+	// SID lease (eventstream.go: presence online = live lease acquired
+	// before HelloReply). So seeing HelloReply in Messages() guarantees
+	// dispatch can already route Errand/Apply to this SID's local Outbound.
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		for _, m := range stub.Messages() {
@@ -91,6 +96,6 @@ func (s *Stack) ConnectSoulStub(t *testing.T, soulIndex int) *soulstub.Stub {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("ConnectSoulStub(%s): HelloReply не получен за 10s (lease/handshake не завершён)", id.SID)
+	t.Fatalf("ConnectSoulStub(%s): HelloReply not received within 10s (lease/handshake incomplete)", id.SID)
 	return nil
 }

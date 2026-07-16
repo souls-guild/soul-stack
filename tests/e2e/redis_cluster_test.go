@@ -1,32 +1,36 @@
 //go:build e2e
 
-// L3a контракт-e2e: examples/service/redis::create в режиме cluster
-// (redis-консолидация концепции Ansible-роли, ADR-039 /
+// L3a contract-e2e: examples/service/redis::create in cluster mode
+// (redis consolidation of the Ansible-role concept, ADR-039 /
 // .pm/tasks/2026-06-22-redis-consolidation).
 //
-// cluster — honest hash-slot Redis Cluster: диспетчер create инклудит ветку
-// create/cluster.yml (standalone/sentinel/sentinel_only гасятся static-when
-// placeholder-skip-ом). Multi-host roster (3 хоста): shards=3, replicas_per_shard=0
-// → топология ровно 3*(1+0)=3 (size-guard проходит). Контракт проверяет keeper-side
-// цепочку render→dispatch→RunResult→state для cluster-ветки на 3-узловой фикстуре,
-// НЕ реальную gossip-топологию (это L3b-live, tests/e2e-live).
+// cluster -- honest hash-slot Redis Cluster: the create dispatcher includes
+// the create/cluster.yml branch (standalone/sentinel/sentinel_only are
+// suppressed by the static-when placeholder-skip). Multi-host roster (3
+// hosts): shards=3, replicas_per_shard=0 -> topology exactly 3*(1+0)=3
+// (size-guard passes). The contract checks the keeper-side
+// render->dispatch->RunResult->state chain for the cluster branch on a
+// 3-node fixture, NOT the real gossip topology (that's L3b-live,
+// tests/e2e-live).
 //
-// Прежние отдельные сервисы redis-cluster / redis-cluster-live удалены: их
-// cluster-флоу поглощён режимом cluster консолидированного redis (диспетчер по
-// redis_type + day-2 scenarios add_node/remove_node/reshard). Probe→where
-// (оригинальный redis-cluster update_acl) перенесён на rolling-restart сценарий
-// стадии A (scenario/restart) — здесь не дублируется.
+// The previous separate redis-cluster / redis-cluster-live services were
+// removed: their cluster flow was absorbed into the cluster mode of the
+// consolidated redis (dispatcher by redis_type + day-2 scenarios
+// add_node/remove_node/reshard). Probe->where (the original redis-cluster
+// update_acl) was moved to the stage-A rolling-restart scenario
+// (scenario/restart) -- not duplicated here.
 //
 // Flow:
-//  1. NewStack: PG+Redis+Vault testcontainers + Keeper + 3 soul-stub.
-//  2. Seed Vault (requirepass) + soulprint(os/net) + Coven на каждом из трёх.
+//  1. NewStack: PG+Redis+Vault testcontainers + Keeper + 3 soul-stubs.
+//  2. Seed Vault (requirepass) + soulprint(os/net) + Coven on each of the three.
 //  3. MaterializeDestinies(redis) + RegisterService(redis).
-//  4. ConnectSoulStub + LoadApplyScript на каждом хосте (default-success покрывает
-//     все задачи cluster-ветки; cluster-build run_once приходит на бутстрап-ноду).
-//  5. CreateIncarnationWithApply(redis_type=cluster, shards=3) → авто-create →
-//     WaitApplySuccess → WaitIncarnationReady.
+//  4. ConnectSoulStub + LoadApplyScript on each host (default-success covers
+//     all tasks of the cluster branch; cluster-build run_once lands on the
+//     bootstrap node).
+//  5. CreateIncarnationWithApply(redis_type=cluster, shards=3) -> auto-create
+//     -> WaitApplySuccess -> WaitIncarnationReady.
 //  6. Asserts: apply_runs success / incarnation.state{redis_type=cluster,
-//     cluster-директивы в redis_config} / audit / metric.
+//     cluster directives in redis_config} / audit / metric.
 package e2e_test
 
 import (
@@ -44,17 +48,19 @@ func TestE2EServiceRedis_CreateCluster(t *testing.T) {
 
 	const incName = "redis-clstr"
 
-	// requirepass читается keeper-side через
+	// requirepass is read keeper-side via
 	// vault('secret/redis/'+incarnation.name+'#password') (cluster.yml apply.input
-	// + cluster-build password). Без секрета render-фаза падает «vault-ref: KV path
-	// not found». rel БЕЗ mount/`data/`-префикса — SeedVaultKV добавляет их (KV v2).
+	// + cluster-build password). Without the secret, the render phase fails
+	// with "vault-ref: KV path not found". rel WITHOUT the mount/`data/`
+	// prefix -- SeedVaultKV adds them (KV v2).
 	harness.SeedVaultKV(t, stack, "redis/"+incName, map[string]any{
 		"password": "e2e-cluster-secret",
 	})
 
-	// soulprint + Coven-членство (roster по incarnation.name, ADR-008) для всех трёх.
-	// network.primary_ip нужен render redis.conf.tmpl (cluster-announce-ip per-host)
-	// и cluster nodes-MAP (soulprint.hosts.map по SID). pkg_mgr/init_system —
+	// soulprint + Coven membership (roster by incarnation.name, ADR-008) for
+	// all three. network.primary_ip is needed to render redis.conf.tmpl
+	// (cluster-announce-ip per-host) and the cluster nodes-MAP
+	// (soulprint.hosts.map by SID). pkg_mgr/init_system --
 	// core.pkg/core.service keeper-side (ADR-018).
 	ips := []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"}
 	for i := 0; i < 3; i++ {
@@ -72,22 +78,24 @@ func TestE2EServiceRedis_CreateCluster(t *testing.T) {
 		stack.AddSoulToCoven(t, i, incName)
 	}
 
-	// Материализуем режим-агностичный destiny `redis` (cluster-ветка зовёт
-	// apply: destiny: redis) + ставим default_destiny_source. ДО RegisterService.
+	// Materialize the mode-agnostic destiny `redis` (the cluster branch
+	// calls apply: destiny: redis) + set default_destiny_source. BEFORE
+	// RegisterService.
 	stack.MaterializeDestinies(t, "v1.0.0", "redis")
 	stack.RegisterService(t, "redis", "examples/service/redis")
 
-	// Три live-стрима. Все задачи cluster-ветки приходят по wire; cluster-build
-	// (community.redis.cluster, run_once) приезжает на бутстрап-ноду. default-success
-	// (LoadApplyScript) покрывает все задачи каждого стрима — на L3a реализм
-	// per-task не проверяется, важен lifecycle apply_runs success.
+	// Three live streams. All tasks of the cluster branch arrive over the
+	// wire; cluster-build (community.redis.cluster, run_once) lands on the
+	// bootstrap node. default-success (LoadApplyScript) covers all tasks of
+	// each stream -- at L3a per-task realism is not checked, what matters is
+	// the apply_runs success lifecycle.
 	for i := 0; i < 3; i++ {
 		stub := stack.ConnectSoulStub(t, i)
 		harness.LoadApplyScript(stub, "create", redisClusterCreateTasks())
 	}
 
-	// Простой типизированный ввод режима cluster: shards=3, replicas_per_shard=0 →
-	// топология 3*(1+0)=3, ровно совпадает с roster-ом (size-guard PASS).
+	// Simple typed input for cluster mode: shards=3, replicas_per_shard=0 ->
+	// topology 3*(1+0)=3, exactly matches the roster (size-guard PASS).
 	inc, applyID := stack.CreateIncarnationWithApply(t, incName, "redis@main", map[string]any{
 		"redis_type":           "cluster",
 		"version":              "7.2.4",
@@ -98,11 +106,12 @@ func TestE2EServiceRedis_CreateCluster(t *testing.T) {
 
 	stack.WaitApplySuccess(t, applyID, 60)
 	stack.AssertApplyRunsStatus(t, applyID, "success")
-	// apply_runs success ≠ incarnation.state закоммичен: ждём ready перед чтением.
+	// apply_runs success != incarnation.state committed: wait for ready before reading.
 	stack.WaitIncarnationReady(t, inc, 30)
-	// cluster-факты: redis_type + cluster-директивы в redis_config (host-инвариантные:
-	// cluster-enabled/cluster-config-file/cluster-node-timeout). announce-ip per-host
-	// в state НЕ пишется. users/hosts пусты (точные роли раскладывает плагин).
+	// cluster facts: redis_type + cluster directives in redis_config
+	// (host-invariant: cluster-enabled/cluster-config-file/cluster-node-timeout).
+	// announce-ip per-host is NOT written to state. users/hosts are empty
+	// (the exact roles are laid out by the plugin).
 	stack.AssertIncarnationState(t, inc, map[string]any{
 		"redis_type": "cluster",
 		"redis_config": map[string]any{
@@ -117,11 +126,12 @@ func TestE2EServiceRedis_CreateCluster(t *testing.T) {
 	stack.AssertMetricGE(t, `keeper_scenario_runs_total{result="ok"}`, 1)
 }
 
-// redisClusterCreateTasks — scripted success по task-name ключевых задач
-// cluster-ветки create: install redis (destiny redis), render redis.conf
-// (cluster-директивы), health-gate PING, cluster-build (community.redis.cluster).
-// default-success (LoadApplyScript) покрывает остальные задачи destiny и
-// when:-погашенные ветки standalone/sentinel/sentinel_only.
+// redisClusterCreateTasks -- scripted success by task-name for the key tasks
+// of the cluster create branch: install redis (destiny redis), render
+// redis.conf (cluster directives), health-gate PING, cluster-build
+// (community.redis.cluster). default-success (LoadApplyScript) covers the
+// remaining destiny tasks and the when:-suppressed standalone/sentinel/
+// sentinel_only branches.
 func redisClusterCreateTasks() []harness.TaskResponse {
 	return []harness.TaskResponse{
 		{TaskName: "Install redis-server package", StateChanges: map[string]any{"packages": []any{map[string]any{"redis-server": "installed"}}}},

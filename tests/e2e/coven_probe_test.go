@@ -2,10 +2,10 @@
 
 // L3a E2E: service-coven-probe::create (ADR-039).
 //
-// Проверяем init-сценарий: core.file.present на весь incarnation + двойная
-// мутация incarnation.state (marker_file, last_target). Coven-таргетинг как
-// таковой проверяется отдельными scenarios (mark_a/mark_ab/mark_where) —
-// для них нужны N souls с разными covens; вынесено в отдельный slice.
+// Verifies the init scenario: core.file.present across the whole incarnation +
+// a double mutation of incarnation.state (marker_file, last_target). Coven
+// targeting itself is verified by separate scenarios (mark_a/mark_ab/mark_where) —
+// they need N souls with different covens; deferred to a separate slice.
 package e2e_test
 
 import (

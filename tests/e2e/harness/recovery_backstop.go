@@ -2,17 +2,18 @@
 
 package harness
 
-// Helper-ы для live-crash доказательства двух recovery-backstop находок (ADR-027
+// Helpers for live-crash proof of two recovery-backstop findings (ADR-027
 // amend (m)/(n), slice S3):
 //
-//   - reconcile_orphan_applying — снятие осиротевшего applying-lock standalone-
-//     прогона крашнувшегося keeper-владельца (Reaper-правило, presence-gated);
-//   - eventstream.lease_force_released — presence-gated перехват SID-lease у
-//     доказанно-мёртвого holder-а при reconnect-е того же SID к живому keeper-у.
+//   - reconcile_orphan_applying — releases an orphaned applying-lock from a
+//     standalone run whose owning keeper crashed (Reaper rule, presence-gated);
+//   - eventstream.lease_force_released — presence-gated takeover of a SID
+//     lease from a provably dead holder when the same SID reconnects to a
+//     live keeper.
 //
-// Все read-helper-ы — узкие SQL-проекции (status / epoch-колонки / audit-rows),
-// поверх общего s.db. Поллинг-обёртки используют Eventually-паттерн (deadline +
-// короткий poll-tick), не фиксированный sleep на полный TTL.
+// All read-helpers are narrow SQL projections (status / epoch columns /
+// audit rows) over the shared s.db. Polling wrappers use the Eventually
+// pattern (deadline + short poll tick), not a fixed sleep for the full TTL.
 
 import (
 	"context"
@@ -20,9 +21,9 @@ import (
 	"time"
 )
 
-// Eventually поллит cond до true либо до таймаута (poll-tick 100ms). Fatal с
-// msg при таймауте. Общий Eventually-паттерн для ассертов, которым нужен лишь
-// предикат «состояние достигнуто», без специализированного read-helper-а.
+// Eventually polls cond until true or until timeout (poll tick 100ms).
+// Fatal with msg on timeout. A generic Eventually pattern for asserts that
+// just need a "state reached" predicate, without a dedicated read helper.
 func (s *Stack) Eventually(t *testing.T, timeout time.Duration, cond func() bool, msg string) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -32,23 +33,24 @@ func (s *Stack) Eventually(t *testing.T, timeout time.Duration, cond func() bool
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	t.Fatalf("Eventually: %s (не выполнено за %s)", msg, timeout)
+	t.Fatalf("Eventually: %s (not satisfied within %s)", msg, timeout)
 }
 
-// IncarnationApplyingEpoch — снимок epoch-колонок applying-lock инкарнации
-// (миграция 082). nil-указатель = колонка NULL в PG (epoch очищен либо никогда
-// не писался). Для ассерта «после снятия orphan-lock epoch обнулён в NULL».
+// IncarnationApplyingEpoch — snapshot of the applying-lock epoch columns of
+// an incarnation (migration 082). A nil pointer means the column is NULL in
+// PG (epoch cleared or never written). For asserting "after releasing the
+// orphan lock, the epoch is nulled out".
 type IncarnationApplyingEpoch struct {
 	ApplyID *string
 	Attempt *int
 	ByKID   *string
-	// SinceSet — true, если applying_since НЕ NULL (точное время не важно ассерту,
-	// важен лишь факт «epoch присутствует / очищен»).
+	// SinceSet — true if applying_since is NOT NULL (the exact time does not
+	// matter to the assert, only the fact "epoch present / cleared" does).
 	SinceSet bool
 }
 
-// IncarnationApplyingEpochSnapshot читает epoch-колонки applying-lock инкарнации
-// из PG. Fatal, если строки нет.
+// IncarnationApplyingEpochSnapshot reads the applying-lock epoch columns of
+// an incarnation from PG. Fatal if the row does not exist.
 func (s *Stack) IncarnationApplyingEpochSnapshot(t *testing.T, name string) IncarnationApplyingEpoch {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -67,17 +69,19 @@ func (s *Stack) IncarnationApplyingEpochSnapshot(t *testing.T, name string) Inca
 	return ep
 }
 
-// EpochCleared — true, если ВСЕ epoch-колонки applying-lock обнулены в NULL
+// EpochCleared — true if ALL applying-lock epoch columns are nulled out
 // (applying_apply_id / applying_attempt / applying_by_kid / applying_since).
-// Признак, что reconcile_orphan_applying ИЛИ честный финал снял lock полностью
-// (ReleaseApplyingOrphan чистит epoch в той же tx, что и status→ready).
+// A sign that reconcile_orphan_applying OR an honest terminal state fully
+// released the lock (ReleaseApplyingOrphan clears the epoch in the same tx
+// as status->ready).
 func (ep IncarnationApplyingEpoch) EpochCleared() bool {
 	return ep.ApplyID == nil && ep.Attempt == nil && ep.ByKID == nil && !ep.SinceSet
 }
 
-// WaitIncarnationStatus поллит incarnation.status до одного из want-статусов либо
-// до таймаута. Возвращает достигнутый статус. Fatal при таймауте с последним
-// наблюдённым статусом. Eventually-обёртка для recovery-переходов applying→ready.
+// WaitIncarnationStatus polls incarnation.status until it reaches one of
+// the want statuses, or until timeout. Returns the reached status. Fatal on
+// timeout with the last observed status. An Eventually wrapper for
+// recovery transitions applying->ready.
 func (s *Stack) WaitIncarnationStatus(t *testing.T, name string, want []string, timeout time.Duration) string {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -95,15 +99,16 @@ func (s *Stack) WaitIncarnationStatus(t *testing.T, name string, want []string, 
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	t.Fatalf("WaitIncarnationStatus(%s): статус %v не достигнут за %s (последний=%q)", name, want, timeout, last)
+	t.Fatalf("WaitIncarnationStatus(%s): status %v not reached within %s (last=%q)", name, want, timeout, last)
 	return ""
 }
 
-// CountAuditEventsByPayload возвращает число audit_log-записей с заданным
-// event_type, у которых payload->>field = value. Для reconcile_orphan_applying
-// .executed (field="incarnation") и eventstream.lease_force_released
-// (field="sid") — оба ключуются не по voyage_id, поэтому CountAuditEvents
-// (voyage_id-only) им не подходит.
+// CountAuditEventsByPayload returns the number of audit_log entries with a
+// given event_type where payload->>field = value. For
+// reconcile_orphan_applying.executed (field="incarnation") and
+// eventstream.lease_force_released (field="sid") — both are keyed by
+// something other than voyage_id, so CountAuditEvents (voyage_id-only)
+// doesn't fit them.
 func (s *Stack) CountAuditEventsByPayload(t *testing.T, eventType, field, value string) int {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -118,9 +123,10 @@ func (s *Stack) CountAuditEventsByPayload(t *testing.T, eventType, field, value 
 	return n
 }
 
-// WaitAuditEventByPayload поллит audit_log до появления ≥1 записи (event_type +
-// payload->>field=value) либо таймаута. Возвращает true при появлении. Fatal при
-// таймауте. Eventually-обёртка вокруг CountAuditEventsByPayload.
+// WaitAuditEventByPayload polls audit_log until at least 1 entry appears
+// (event_type + payload->>field=value), or until timeout. Returns true when
+// it appears. Fatal on timeout. An Eventually wrapper around
+// CountAuditEventsByPayload.
 func (s *Stack) WaitAuditEventByPayload(t *testing.T, eventType, field, value string, timeout time.Duration) bool {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -130,14 +136,15 @@ func (s *Stack) WaitAuditEventByPayload(t *testing.T, eventType, field, value st
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	t.Fatalf("WaitAuditEventByPayload(%s, %s=%s): не появилось за %s", eventType, field, value, timeout)
+	t.Fatalf("WaitAuditEventByPayload(%s, %s=%s): did not appear within %s", eventType, field, value, timeout)
 	return false
 }
 
-// AuditPayloadField возвращает значение payload->>outField из самой свежей
-// audit-записи (event_type + payload->>selField=selValue), либо пустую строку,
-// если записи нет. Для ассерта конкретных полей payload (prev_kid в reconcile_
-// orphan_applying.executed, new_kid в lease_force_released).
+// AuditPayloadField returns the value of payload->>outField from the most
+// recent audit entry (event_type + payload->>selField=selValue), or an
+// empty string if no entry exists. For asserting specific payload fields
+// (prev_kid in reconcile_orphan_applying.executed, new_kid in
+// lease_force_released).
 func (s *Stack) AuditPayloadField(t *testing.T, eventType, selField, selValue, outField string) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -154,12 +161,14 @@ func (s *Stack) AuditPayloadField(t *testing.T, eventType, selField, selValue, o
 	return out
 }
 
-// LeaseForceReleasedNewKID возвращает new_kid из payload audit-события
-// eventstream.lease_force_released для данного SID (KID живого keeper-а, который
-// presence-gated перехватил lease у мёртвого holder-а), либо пустую строку, если
-// события ещё нет. Это авторитетный признак, на какой keeper переехал SID-lease
-// после force-release — payload пишется ТОЙ ЖЕ tx, что ForceAcquireSoulLease
-// (eventstream.auditLeaseForceReleased), поэтому событие = состоявшийся перехват.
+// LeaseForceReleasedNewKID returns new_kid from the payload of the
+// eventstream.lease_force_released audit event for a given SID (the KID of
+// the live keeper that presence-gated the lease takeover from the dead
+// holder), or an empty string if no event exists yet. This is the
+// authoritative signal of which keeper the SID lease moved to after a
+// force-release — the payload is written in the SAME tx as
+// ForceAcquireSoulLease (eventstream.auditLeaseForceReleased), so the event
+// means the takeover actually happened.
 func (s *Stack) LeaseForceReleasedNewKID(t *testing.T, sid string) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -176,10 +185,11 @@ func (s *Stack) LeaseForceReleasedNewKID(t *testing.T, sid string) string {
 	return newKID
 }
 
-// WaitLeaseForceReleased поллит audit_log до появления события
-// eventstream.lease_force_released для SID с new_kid ∈ wantNewKIDs, либо до
-// таймаута. Возвращает наблюдённый new_kid. Fatal при таймауте. Eventually-
-// обёртка вокруг LeaseForceReleasedNewKID (lease переехал killed→live keeper).
+// WaitLeaseForceReleased polls audit_log until an
+// eventstream.lease_force_released event appears for SID with new_kid in
+// wantNewKIDs, or until timeout. Returns the observed new_kid. Fatal on
+// timeout. An Eventually wrapper around LeaseForceReleasedNewKID (lease
+// moved killed->live keeper).
 func (s *Stack) WaitLeaseForceReleased(t *testing.T, sid string, wantNewKIDs []string, timeout time.Duration) string {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -193,6 +203,6 @@ func (s *Stack) WaitLeaseForceReleased(t *testing.T, sid string, wantNewKIDs []s
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	t.Fatalf("WaitLeaseForceReleased(%s): new_kid %v не достигнут за %s (последний=%q)", sid, wantNewKIDs, timeout, last)
+	t.Fatalf("WaitLeaseForceReleased(%s): new_kid %v not reached within %s (last=%q)", sid, wantNewKIDs, timeout, last)
 	return ""
 }

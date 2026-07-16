@@ -2,32 +2,32 @@
 
 package harness
 
-// L3b harness extension для Vigil/Oracle/Decree (ADR-030). Три helper-а
+// L3b harness extension for Vigil/Oracle/Decree (ADR-030). Three helpers
 // (CreateVigil / CreateDecree / WaitForOracleFires) + stub-emit EmitPortent —
-// минимальный набор, через который тест прокатывает full path реестр →
-// match-state, БЕЗ реального mTLS-EventStream-emit-а от soul-stub-а (тот —
-// отдельный slice harness-расширения, см. tests/e2e/oracle_typed_portent_test.go).
+// the minimal set through which the test drives the full path registry ->
+// match-state, WITHOUT a real mTLS EventStream emit from soul-stub (that is
+// a separate harness-extension slice, see tests/e2e/oracle_typed_portent_test.go).
 //
-// Контракт по слоям:
-//   - CreateVigil / CreateDecree — REST POST /v1/vigils, /v1/decrees через
-//     JWT первого Архонта (cluster-admin, permission `vigil.create` /
-//     `decree.create` входят в `*`-набор по ADR-013). Real handler-stack
-//     (validate.go + InsertVigil/InsertDecree), без обхода схемы.
-//   - WaitForOracleFires — поллинг таблицы `oracle_fires` (cooldown-state per
-//     (decree, subject), миграция 041). UPSERT на ON CONFLICT → одна строка на
-//     уникальную пару (decree, subject); count(rows) == «было ли хоть одно
-//     срабатывание для каждой пары», НЕ кумулятивный счётчик fire-ов одного
-//     subject-а (повторные fire-ы того же subject-а обновляют fired_at той же
-//     строки). Для подсчёта суммарных срабатываний используйте
-//     audit_log.event_type='oracle.fired' (out of scope этого helper-а).
-//   - EmitPortent — stub: прямой INSERT в `oracle_fires` (PG-only path).
-//     НЕ проходит через handlePortentEvent → НЕ ставит scenario в work-queue,
-//     НЕ пишет audit `oracle.fired`. Назначение — прокатить через 3 helper-а
-//     end-to-end в smoke-тесте (TestL3b_VigilDecreeOracleFlow_Smoke). Реальный
-//     путь (soul-stub.SendPortent → mTLS EventStream → handlePortentEvent →
-//     SubjectMatches → where-CEL → EnqueueScenario → RecordFire → audit) покрыт
-//     execution-e2e TestOracle_FileChanged_FiresScenario (vigil_oracle_test.go),
-//     там же — WaitForOracleReaction (assert поставленного реактором apply_run-а).
+// Layer-by-layer contract:
+//   - CreateVigil / CreateDecree — REST POST /v1/vigils, /v1/decrees via the
+//     first Archon's JWT (cluster-admin, permission `vigil.create` /
+//     `decree.create` are part of the `*` set per ADR-013). Real handler
+//     stack (validate.go + InsertVigil/InsertDecree), no schema bypass.
+//   - WaitForOracleFires — polls the `oracle_fires` table (cooldown state per
+//     (decree, subject), migration 041). UPSERT on ON CONFLICT -> one row per
+//     unique (decree, subject) pair; count(rows) == "was there at least one
+//     fire for each pair", NOT a cumulative fire counter for one subject
+//     (repeated fires for the same subject update fired_at on the same row).
+//     To count total fires, use audit_log.event_type='oracle.fired' (out of
+//     scope for this helper).
+//   - EmitPortent — stub: direct INSERT into `oracle_fires` (PG-only path).
+//     Does NOT go through handlePortentEvent -> does NOT enqueue a scenario,
+//     does NOT write audit `oracle.fired`. Purpose: drive the 3 helpers
+//     end-to-end in the smoke test (TestL3b_VigilDecreeOracleFlow_Smoke). The
+//     real path (soul-stub.SendPortent -> mTLS EventStream -> handlePortentEvent ->
+//     SubjectMatches -> where-CEL -> EnqueueScenario -> RecordFire -> audit) is
+//     covered by execution-e2e TestOracle_FileChanged_FiresScenario (vigil_oracle_test.go),
+//     which also exercises WaitForOracleReaction (asserting the apply_run enqueued by the reactor).
 
 import (
 	"context"
@@ -43,17 +43,17 @@ import (
 
 // --- CreateVigil ------------------------------------------------------
 
-// CreateVigilOpts — параметры [Stack.CreateVigil]. Субъект — XOR Coven/SID
-// (CHECK vigils_subject_xor, миграция 041); валидируется на service-слое
-// keeper-а, harness ничего не проверяет до round-trip-а (тестируем публичный
-// контракт OpenAPI как чёрный ящик).
+// CreateVigilOpts — parameters for [Stack.CreateVigil]. The subject is XOR
+// Coven/SID (CHECK vigils_subject_xor, migration 041); validated at the
+// keeper's service layer, the harness checks nothing before the round trip
+// (we test the public OpenAPI contract as a black box).
 //
 //   - Name — vigils.name (kebab-case 1..63).
-//   - Interval — duration-конвенция Soul Stack ("30s"/"5m"; config.ParseDuration).
-//   - Check — адрес core-beacon (`core.beacon.<name>`; shared/beaconaddr.All).
-//   - Coven / SID — XOR-субъект.
-//   - Params — opaque JSON-параметры проверки; форма зависит от Check.
-//   - Enabled — по умолчанию true (как и REST с пустым enabled-полем).
+//   - Interval — Soul Stack duration convention ("30s"/"5m"; config.ParseDuration).
+//   - Check — core-beacon address (`core.beacon.<name>`; shared/beaconaddr.All).
+//   - Coven / SID — XOR subject.
+//   - Params — opaque JSON check parameters; shape depends on Check.
+//   - Enabled — defaults to true (same as REST with an empty enabled field).
 type CreateVigilOpts struct {
 	Name     string
 	Interval string
@@ -64,12 +64,12 @@ type CreateVigilOpts struct {
 	Enabled  *bool
 }
 
-// CreateVigil создаёт Vigil через Operator-API (POST /v1/vigils) и возвращает
-// vigils.name. Любой не-201 → t.Fatal с телом ответа (диагностика 4xx без
-// догадок, как [Stack.CreateIncarnation]).
+// CreateVigil creates a Vigil via the Operator-API (POST /v1/vigils) and
+// returns vigils.name. Any non-201 -> t.Fatal with the response body (4xx
+// diagnosis without guessing, like [Stack.CreateIncarnation]).
 //
-// IncarnationName опциональный аргумент сюда НЕ передаётся (Vigil не привязан
-// к incarnation в ADR-030; incarnation_name — поле Decree).
+// The optional IncarnationName argument is NOT passed here (a Vigil is not
+// bound to an incarnation in ADR-030; incarnation_name is a Decree field).
 func (s *Stack) CreateVigil(ctx context.Context, t *testing.T, opts CreateVigilOpts) string {
 	t.Helper()
 
@@ -116,27 +116,29 @@ func (s *Stack) CreateVigil(ctx context.Context, t *testing.T, opts CreateVigilO
 
 // --- CreateDecree -----------------------------------------------------
 
-// CreateDecreeOpts — параметры [Stack.CreateDecree].
+// CreateDecreeOpts — parameters for [Stack.CreateDecree].
 //
 //   - Name — decrees.name (kebab-case 1..63).
-//   - OnBeacon — имя Vigil-а (decrees.on_beacon), на чей Portent правило
-//     реагирует. БЕЗ FK на vigils в схеме (Decree managed-реестр, переживает
-//     пересоздание Vigil-а), но грамматически имя должно совпадать с реальным
-//     Vigil, иначе никогда не сматчит.
-//   - WhereCEL — опц. предикат над event-payload-ом (typed-payload V5-1 или
-//     legacy event.data); пустой → всегда match (субъект уже отфильтровал).
-//     Компилируется на create через WhereCompiler (битый CEL → 422).
-//   - Coven / SID — XOR-субъект Decree-а (independent от субъекта Vigil-а).
-//   - IncarnationName — таргет-incarnation реакции (decrees.incarnation_name,
-//     обязательно). На enqueue-е сверяется membership: incarnation_name ∈
-//     covens отправителя (ADR-030(b) защита от cross-incarnation-эскалации).
-//   - ActionScenario — имя named scenario (whitelist; raw-команда отвергнута,
-//     ADR-030(b)). Snake_case паттерн (`^[a-z][a-z0-9_]*$`).
-//   - ActionInput — opaque JSON-вход сценария (vault-ref КАК ЕСТЬ, инвариант A
-//     ADR-027).
-//   - Cooldown — duration-конвенция, минимальный интервал между срабатываниями
-//     per-(decree, subject). Пустая строка → DEFAULT '0s' (cooldown OFF).
-//   - Enabled — по умолчанию true.
+//   - OnBeacon — name of the Vigil (decrees.on_beacon) whose Portent this
+//     rule reacts to. No FK to vigils in the schema (Decree is a managed
+//     registry that survives Vigil recreation), but the name must match a
+//     real Vigil grammatically, otherwise it will never match.
+//   - WhereCEL — optional predicate over the event payload (typed payload
+//     V5-1 or legacy event.data); empty -> always matches (subject already
+//     filtered). Compiled on create via WhereCompiler (broken CEL -> 422).
+//   - Coven / SID — XOR subject of the Decree (independent of the Vigil's
+//     subject).
+//   - IncarnationName — target incarnation of the reaction
+//     (decrees.incarnation_name, required). On enqueue, membership is
+//     checked: incarnation_name in the sender's covens (ADR-030(b) protects
+//     against cross-incarnation escalation).
+//   - ActionScenario — named scenario name (whitelist; raw command rejected,
+//     ADR-030(b)). Snake_case pattern (`^[a-z][a-z0-9_]*$`).
+//   - ActionInput — opaque JSON scenario input (vault-ref AS-IS, invariant A
+//     of ADR-027).
+//   - Cooldown — duration convention, minimum interval between fires
+//     per-(decree, subject). Empty string -> DEFAULT '0s' (cooldown OFF).
+//   - Enabled — defaults to true.
 type CreateDecreeOpts struct {
 	Name            string
 	OnBeacon        string
@@ -150,8 +152,8 @@ type CreateDecreeOpts struct {
 	Enabled         *bool
 }
 
-// CreateDecree создаёт Decree через Operator-API (POST /v1/decrees) и
-// возвращает decrees.name. Любой не-201 → t.Fatal.
+// CreateDecree creates a Decree via the Operator-API (POST /v1/decrees) and
+// returns decrees.name. Any non-201 -> t.Fatal.
 func (s *Stack) CreateDecree(ctx context.Context, t *testing.T, opts CreateDecreeOpts) string {
 	t.Helper()
 
@@ -205,29 +207,30 @@ func (s *Stack) CreateDecree(ctx context.Context, t *testing.T, opts CreateDecre
 
 // --- WaitForOracleFires -----------------------------------------------
 
-// OracleFire — одна строка таблицы `oracle_fires` (миграция 041, cooldown-state
-// per-(decree, subject)). Авторитетная схема — PRIMARY KEY (decree, subject):
-// одна строка на уникальную пару, UPSERT на ON CONFLICT обновляет fired_at,
-// а НЕ добавляет вторую строку. Соответственно, len([]OracleFire) — число
-// уникальных subject-ов, по которым Decree уже стрелял, а не суммарный
-// fire-counter (см. ограничения в шапке файла).
+// OracleFire — one row of the `oracle_fires` table (migration 041, cooldown
+// state per-(decree, subject)). Authoritative schema is PRIMARY KEY (decree,
+// subject): one row per unique pair, UPSERT on ON CONFLICT updates fired_at
+// instead of adding a second row. Accordingly, len([]OracleFire) is the
+// number of unique subjects a Decree has already fired for, not a
+// cumulative fire counter (see the caveats in the file header).
 type OracleFire struct {
 	Decree  string
 	Subject string
 	FiredAt time.Time
 }
 
-// WaitForOracleFires блокируется до того, как для Decree-а decreeName в таблице
-// `oracle_fires` появится не меньше expectedCount строк, либо до истечения
-// timeout. Возвращает фактический список строк (отсортирован по subject ASC
-// для детерминированных assert-ов вызывающим).
+// WaitForOracleFires blocks until the `oracle_fires` table has at least
+// expectedCount rows for Decree decreeName, or until timeout. Returns the
+// actual list of rows (sorted by subject ASC for deterministic asserts by
+// the caller).
 //
-// Семантика expectedCount — число УНИКАЛЬНЫХ subject-ов в (decree=decreeName,
-// subject=*), а НЕ кумулятивный fire-counter (см. OracleFire shape).
+// expectedCount semantics: the number of UNIQUE subjects in
+// (decree=decreeName, subject=*), NOT a cumulative fire counter (see the
+// OracleFire shape).
 //
-// Поллинг 250 мс, как в [Stack.WaitApplySuccess]; жесткий ceil — timeout.
-// Истечение timeout → t.Fatal с дампом текущего набора строк (без надежды,
-// что «само пройдёт»).
+// Polls every 250ms, like [Stack.WaitApplySuccess]; hard ceiling is
+// timeout. Timeout expiry -> t.Fatal with a dump of the current row set (no
+// hoping it "resolves itself").
 func (s *Stack) WaitForOracleFires(ctx context.Context, t *testing.T, decreeName string, expectedCount int, timeout time.Duration) []OracleFire {
 	t.Helper()
 	if expectedCount < 1 {
@@ -252,21 +255,22 @@ func (s *Stack) WaitForOracleFires(ctx context.Context, t *testing.T, decreeName
 		case <-time.After(250 * time.Millisecond):
 		}
 	}
-	t.Fatalf("WaitForOracleFires(%s): не достиг %d fire-ов за %s (текущий набор: %+v)",
+	t.Fatalf("WaitForOracleFires(%s): did not reach %d fires within %s (current set: %+v)",
 		decreeName, expectedCount, timeout, last)
-	return nil // unreachable: t.Fatalf не возвращает.
+	return nil // unreachable: t.Fatalf does not return.
 }
 
-// WaitForOracleReaction блокируется до появления (или истечения timeout) хотя бы
-// одной строки apply_runs, поставленной Oracle-реактором: scenario=scenarioName,
-// incarnation_name=incarnationName, started_by_aid IS NULL (Soul-инициированная
-// реакция без identity Архонта, см. oracle_enqueuer.go) и started_at >= since
-// (отсекает авто-create-прогон incarnation-а). Возвращает apply_id первого такого
-// прогона (для дальнейших assert-ов вызывающим). timeout → t.Fatal.
+// WaitForOracleReaction blocks until at least one apply_runs row enqueued by
+// the Oracle reactor appears (or until timeout): scenario=scenarioName,
+// incarnation_name=incarnationName, started_by_aid IS NULL (a Soul-initiated
+// reaction without an Archon identity, see oracle_enqueuer.go), and
+// started_at >= since (excludes the incarnation's auto-create run). Returns
+// the apply_id of the first such run (for further asserts by the caller).
+// timeout -> t.Fatal.
 //
-// scenarioName ОБЯЗАН отличаться от scenario авто-create incarnation-а, иначе
-// фильтр scenario+started_by_aid+since недостаточен для различения. Поллинг 250 мс
-// (как WaitForOracleFires).
+// scenarioName MUST differ from the incarnation's auto-create scenario,
+// otherwise the scenario+started_by_aid+since filter can't distinguish
+// them. Polls every 250ms (same as WaitForOracleFires).
 func (s *Stack) WaitForOracleReaction(ctx context.Context, t *testing.T, incarnationName, scenarioName string, since time.Time, timeout time.Duration) string {
 	t.Helper()
 
@@ -281,14 +285,14 @@ func (s *Stack) WaitForOracleReaction(ctx context.Context, t *testing.T, incarna
 		}
 		select {
 		case <-ctx.Done():
-			t.Fatalf("WaitForOracleReaction(%s/%s): ctx done до появления apply_run-а: %v",
+			t.Fatalf("WaitForOracleReaction(%s/%s): ctx done before an apply_run appeared: %v",
 				incarnationName, scenarioName, ctx.Err())
 		case <-time.After(250 * time.Millisecond):
 		}
 	}
-	t.Fatalf("WaitForOracleReaction(%s/%s): apply_run от реактора не появился за %s",
+	t.Fatalf("WaitForOracleReaction(%s/%s): no apply_run from the reactor appeared within %s",
 		incarnationName, scenarioName, timeout)
-	return "" // unreachable: t.Fatalf не возвращает.
+	return "" // unreachable: t.Fatalf does not return.
 }
 
 func (s *Stack) findOracleReaction(ctx context.Context, incarnationName, scenarioName string, since time.Time) (string, bool, error) {
@@ -339,22 +343,24 @@ ORDER BY subject ASC`
 
 // --- EmitPortent (stub) -----------------------------------------------
 
-// EmitPortent — STUB-эмуляция срабатывания Vigil-Decree-пары: прямой UPSERT в
-// `oracle_fires` (decree, subject, fired_at=NOW). НЕ проходит через
-// handlePortentEvent — НЕ ставит scenario в work-queue, НЕ пишет
-// audit `oracle.fired`, НЕ инкрементирует circuit-breaker.
+// EmitPortent — STUB emulation of a Vigil-Decree pair firing: direct UPSERT
+// into `oracle_fires` (decree, subject, fired_at=NOW). Does NOT go through
+// handlePortentEvent — does NOT enqueue a scenario, does NOT write audit
+// `oracle.fired`, does NOT increment the circuit breaker.
 //
-// Назначение: smoke-тестирование 3 helper-ов (CreateVigil / CreateDecree /
-// WaitForOracleFires) end-to-end без зависимости от mTLS-EventStream-emit-а от
-// soul-stub-а (отдельный slice harness-расширения; пока соул-стрим эмулировать
-// не умеем — `tests/e2e/oracle_typed_portent_test.go` Skip-ит full-loop).
+// Purpose: smoke-test the 3 helpers (CreateVigil / CreateDecree /
+// WaitForOracleFires) end-to-end without depending on a mTLS EventStream
+// emit from soul-stub (a separate harness-extension slice; we can't yet
+// emulate the soul stream, so `tests/e2e/oracle_typed_portent_test.go`
+// skips the full loop).
 //
-// Subject — авторитетный SID хоста-отправителя (в реальном пути — из mTLS peer
-// cert, harness даёт его явно). DecreeName должен существовать в `decrees`
-// (FK oracle_fires.decree → decrees(name)) — иначе INSERT даст FK-violation.
+// Subject is the authoritative SID of the sending host (in the real path —
+// from the mTLS peer cert, the harness supplies it explicitly). DecreeName
+// must exist in `decrees` (FK oracle_fires.decree -> decrees(name)) —
+// otherwise the INSERT fails with an FK violation.
 //
-// При появлении полноценного soul-stub-emit (`SoulStub.SendPortent`) этот
-// helper удаляется в пользу настоящего пути.
+// Once a full soul-stub emit (`SoulStub.SendPortent`) exists, this helper
+// is removed in favor of the real path.
 func (s *Stack) EmitPortent(ctx context.Context, t *testing.T, decreeName, subjectSID string) {
 	t.Helper()
 

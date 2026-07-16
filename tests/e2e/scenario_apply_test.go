@@ -1,23 +1,24 @@
 //go:build e2e
 
-// L3a E2E: scenario-apply execution-путь (ADR-039) — фундамент per-section
-// e2e-покрытия (Tide / push / drift / …). Доказывает, что apply-цепочка
-// RegisterService → CreateIncarnation → ConnectSoulStub → apply_runs success →
-// incarnation `ready` + state-commit работает end-to-end на реальном стеке
-// (PG+Redis+Vault testcontainers + keeper-процесс + connected soul-stub).
+// L3a E2E: scenario-apply execution path (ADR-039) -- the foundation of the
+// per-section e2e coverage (Tide / push / drift / ...). Proves that the
+// apply chain RegisterService -> CreateIncarnation -> ConnectSoulStub ->
+// apply_runs success -> incarnation `ready` + state-commit works end-to-end
+// on the real stack (PG+Redis+Vault testcontainers + keeper process +
+// connected soul-stub).
 //
-// Почему он ловит регрессии (зеркало errand_run_test.go для apply-пути):
-//   - service-registration отсутствует → CreateIncarnation 422 «not registered»;
-//   - acolyte pool disabled → apply_runs навсегда planned → WaitApplySuccess
-//     timeout;
-//   - dispatch не доходит до Soul-а (нет live-стрима / lease) → orphaned;
-//   - state-commit сломан (render state_changes.sets / commitSuccess) → state
-//     не совпадает с scenario `state_changes.sets`.
+// Why it catches regressions (mirrors errand_run_test.go for the apply path):
+//   - missing service-registration -> CreateIncarnation 422 "not registered";
+//   - acolyte pool disabled -> apply_runs stuck planned forever ->
+//     WaitApplySuccess timeout;
+//   - dispatch never reaches the Soul (no live stream / lease) -> orphaned;
+//   - state-commit broken (render state_changes.sets / commitSuccess) ->
+//     state does not match the scenario `state_changes.sets`.
 //
-// Ограничение (документированное): soul-stub НЕ исполняет реальные модули —
-// SetApplyDefaultSuccess делает его отвечающим RunResult{SUCCESS} на любую
-// задачу ApplyRequest (L3a-контракт: проверяем keeper-side lifecycle apply_runs +
-// state-commit, а не реализм исполнения core-модуля; реальный exec — L3b).
+// Documented limitation: soul-stub does NOT execute real modules --
+// SetApplyDefaultSuccess makes it answer RunResult{SUCCESS} to any
+// ApplyRequest task (L3a contract: we check the keeper-side apply_runs
+// lifecycle + state-commit, not core-module execution realism; real exec is L3b).
 package e2e_test
 
 import (
@@ -28,10 +29,10 @@ import (
 	"github.com/souls-guild/soul-stack/tests/e2e/harness"
 )
 
-// TestScenarioApply_NoopCreate_Succeeds — минимальный self-contained
-// scenario-apply: noop-service (один core.exec.run-шаг, без required-input).
-// CreateIncarnation авто-запускает scenario `create` и возвращает apply_id;
-// ждём success + incarnation `ready`.
+// TestScenarioApply_NoopCreate_Succeeds -- minimal self-contained
+// scenario-apply: the noop service (a single core.exec.run step, no
+// required input). CreateIncarnation auto-runs the scenario `create` and
+// returns an apply_id; we wait for success + incarnation `ready`.
 func TestScenarioApply_NoopCreate_Succeeds(t *testing.T) {
 	stack := harness.NewStack(t, harness.Config{
 		ExamplePath: "examples/service/noop",
@@ -39,37 +40,39 @@ func TestScenarioApply_NoopCreate_Succeeds(t *testing.T) {
 	})
 	defer stack.Cleanup()
 
-	// Reusable helper №1: материализация example → file://-git-репо + POST
-	// /v1/services. Без неё CreateIncarnation отвечает 422.
+	// Reusable helper #1: materializing the example -> a file:// git repo +
+	// POST /v1/services. Without it CreateIncarnation answers 422.
 	stack.RegisterService(t, "noop", "examples/service/noop")
 
-	// Reusable helper №2: live EventStream-стрим (Redis SID-lease → dispatch
-	// маршрутизируется в локальный Outbound). SetApplyDefaultSuccess — SUCCESS
-	// на любую задачу без per-task script.
+	// Reusable helper #2: live EventStream (Redis SID-lease -> dispatch is
+	// routed to the local Outbound). SetApplyDefaultSuccess -- SUCCESS for
+	// any task without a per-task script.
 	stub := stack.ConnectSoulStub(t, 0)
 	stub.SetApplyDefaultSuccess(true)
 
-	// Coven-членство: roster прогона резолвится по `incarnation.name ∈ coven[]`
-	// (ADR-008). Без него scenario видит no_hosts → error_locked.
+	// Coven membership: the run's roster resolves via
+	// `incarnation.name in coven[]` (ADR-008). Without it the scenario sees
+	// no_hosts -> error_locked.
 	stack.AddSoulToCoven(t, 0, "test-noop")
 
-	// CreateIncarnation авто-запускает scenario `create` (incarnation.go) и
-	// возвращает apply_id этого прогона. noop-create без required-input.
-	// Используем apply_id авто-create — отдельный RunScenario(create) был бы
-	// отвергнут («incarnation уже applying»).
+	// CreateIncarnation auto-runs the scenario `create` (incarnation.go) and
+	// returns that run's apply_id. noop-create has no required input. We use
+	// the auto-create's apply_id -- a separate RunScenario(create) would be
+	// rejected ("incarnation already applying").
 	_, applyID := stack.CreateIncarnationWithApply(t, "test-noop", "noop@main", nil)
 
-	// Reusable helper №3: блокирующее ожидание apply_runs.status=success у всех
-	// строк прогона (planned→claimed→dispatched→success).
+	// Reusable helper #3: blocking wait for apply_runs.status=success across
+	// all rows of the run (planned->claimed->dispatched->success).
 	stack.WaitApplySuccess(t, applyID, 60)
 	stack.AssertApplyRunsStatus(t, applyID, "success")
 }
 
-// TestScenarioApply_SmokeNginx_StateCommit — apply-цепочка с непустым
-// state-commit: smoke-nginx-create декларирует state_changes.sets {nginx_package,
-// nginx_service}, рендерится keeper-side и коммитится в incarnation.state.
-// Доказывает, что state-commit-ветка (RenderStateChanges → mergeStateChanges →
-// commitSuccess) работает в реальном прогоне, не только в unit-тестах.
+// TestScenarioApply_SmokeNginx_StateCommit -- an apply chain with a
+// non-empty state-commit: smoke-nginx-create declares state_changes.sets
+// {nginx_package, nginx_service}, rendered keeper-side and committed into
+// incarnation.state. Proves that the state-commit branch
+// (RenderStateChanges -> mergeStateChanges -> commitSuccess) works in a real
+// run, not just in unit tests.
 func TestScenarioApply_SmokeNginx_StateCommit(t *testing.T) {
 	stack := harness.NewStack(t, harness.Config{
 		ExamplePath: "examples/service/smoke-nginx",
@@ -95,11 +98,12 @@ func TestScenarioApply_SmokeNginx_StateCommit(t *testing.T) {
 	})
 }
 
-// TestIncarnationCreate_MissingRequiredInput_422 — regression-guard синхронной
-// валидации required-input (фикс 6ce69ce: дыра, где create без обязательного
-// input создавал incarnation и падал уже в async-apply). smoke-nginx-create
-// объявляет input.hostname required → CreateIncarnation БЕЗ input обязан
-// ответить 422 ДО старта прогона (sync-валидация), а не 202.
+// TestIncarnationCreate_MissingRequiredInput_422 -- regression guard for
+// synchronous required-input validation (fix 6ce69ce: a hole where create
+// without required input created the incarnation and only failed later in
+// async-apply). smoke-nginx-create declares input.hostname required ->
+// CreateIncarnation WITHOUT input must respond 422 BEFORE the run starts
+// (sync validation), not 202.
 func TestIncarnationCreate_MissingRequiredInput_422(t *testing.T) {
 	stack := harness.NewStack(t, harness.Config{
 		ExamplePath: "examples/service/smoke-nginx",
@@ -109,16 +113,16 @@ func TestIncarnationCreate_MissingRequiredInput_422(t *testing.T) {
 
 	stack.RegisterService(t, "smoke-nginx", "examples/service/smoke-nginx")
 
-	// Без input.hostname (required) — sync-валидация обязана вернуть 422.
+	// Without input.hostname (required) -- sync validation must return 422.
 	body, status := stack.CreateIncarnationRaw(t, "test-nginx-missing", "smoke-nginx@main", nil)
 	if status != http.StatusUnprocessableEntity {
-		t.Fatalf("CreateIncarnation без required-input: status=%d, ожидался 422 (sync-валидация, фикс 6ce69ce); body=%s",
+		t.Fatalf("CreateIncarnation without required input: status=%d, expected 422 (sync validation, fix 6ce69ce); body=%s",
 			status, string(body))
 	}
-	// Sanity: problem-detail упоминает валидацию (а не «not registered» —
-	// тот был бы 422 другой природы, ловим подмену причины).
+	// Sanity: the problem-detail mentions validation (not "not registered" --
+	// that would be a 422 of a different nature, catching a swapped cause).
 	if !strings.Contains(string(body), "validation") && !strings.Contains(string(body), "hostname") &&
 		!strings.Contains(string(body), "required") && !strings.Contains(string(body), "input") {
-		t.Fatalf("CreateIncarnation 422 body не похоже на input-валидацию: %s", string(body))
+		t.Fatalf("CreateIncarnation 422 body does not look like an input validation error: %s", string(body))
 	}
 }

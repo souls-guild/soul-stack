@@ -1,27 +1,30 @@
 //go:build e2e
 
-// L3a E2E: examples/service/redis::create (режим standalone, redis-консолидация
-// концепции Ansible-роли, ADR-039 / .pm/tasks/2026-06-22-redis-consolidation).
+// L3a E2E: examples/service/redis::create (standalone mode, redis
+// consolidation of the Ansible-role concept, ADR-039 /
+// .pm/tasks/2026-06-22-redis-consolidation).
 //
-// Сервис redis свёрнут в ОДИН режим-агностичный destiny `redis` (per-host install
-// + render redis.conf + systemd) + плагин community.redis для живого Redis-рантайма.
-// scenario create (standalone) — ПРОСТОЙ типизированный ввод → трансляция:
-//  1. apply destiny `redis` — install redis-server + render redis.conf (из merged
-//     redis_config) + render users.acl + systemd.
-//  2. community.redis.command PING — health-gate после старта.
+// The redis service is collapsed into ONE mode-agnostic destiny `redis`
+// (per-host install + render redis.conf + systemd) + the community.redis
+// plugin for the live Redis runtime. scenario create (standalone) -- SIMPLE
+// typed input -> translation:
+//  1. apply destiny `redis` -- install redis-server + render redis.conf
+//     (from the merged redis_config) + render users.acl + systemd.
+//  2. community.redis.command PING -- health-gate after startup.
 //
-// Простой ввод оператора (memory_mb / persistence / maxmemory_policy / users)
-// сценарий ТРАНСЛИРУЕТ через merge() в детальный redis_config (см.
-// scenario/create/main.yml). Перевод pilot-входа в простой стиль — redis-
-// консолидация 2026-06-22 (.pm/tasks/2026-06-22-redis-consolidation).
+// The operator's simple input (memory_mb / persistence / maxmemory_policy /
+// users) is TRANSLATED via merge() into the detailed redis_config (see
+// scenario/create/main.yml). Translating the pilot input into a simple style
+// is the 2026-06-22 redis consolidation
+// (.pm/tasks/2026-06-22-redis-consolidation).
 //
 // Flow:
 //  1. NewStack: PG+Redis+Vault testcontainers + Keeper + 1 soul-stub.
-//  2. Seed Vault (requirepass + per-user пароль) + soulprint(os/net) + Coven.
+//  2. Seed Vault (requirepass + per-user password) + soulprint(os/net) + Coven.
 //  3. MaterializeDestinies(redis) + RegisterService(redis).
-//  4. ConnectSoulStub + LoadApplyScript (scripted success по task-name, incl.
-//     задача community.redis.command — soul-stub матчит по task_name, не по модулю).
-//  5. CreateIncarnationWithApply → авто-create-прогон → WaitApplySuccess.
+//  4. ConnectSoulStub + LoadApplyScript (scripted success by task-name, incl.
+//     the community.redis.command task -- soul-stub matches by task_name, not by module).
+//  5. CreateIncarnationWithApply -> auto-create run -> WaitApplySuccess.
 //  6. Asserts: apply_runs success / incarnation.state (type/version/merged-config/
 //     users/hosts) / audit incarnation.created / metric keeper_scenario_runs_total.
 package e2e_test
@@ -41,11 +44,12 @@ func TestE2EServiceRedis_Create(t *testing.T) {
 
 	const incName = "redis"
 
-	// Vault-seed: requirepass читается keeper-side через
-	// vault('secret/redis/'+incarnation.name+'#password'); per-user пароль — через
-	// vault('secret/redis/'+incarnation.name+'/users/<name>#password'). rel БЕЗ
-	// mount/`data/`-префикса — SeedVaultKV добавляет их (KV v2). Без секрета
-	// render-фаза падает «vault-ref: KV path not found».
+	// Vault seed: requirepass is read keeper-side via
+	// vault('secret/redis/'+incarnation.name+'#password'); per-user password
+	// via vault('secret/redis/'+incarnation.name+'/users/<name>#password').
+	// rel WITHOUT the mount/`data/` prefix -- SeedVaultKV adds them (KV v2).
+	// Without the secret the render phase fails with "vault-ref: KV path not
+	// found".
 	harness.SeedVaultKV(t, stack, "redis/"+incName, map[string]any{
 		"password": "e2e-redis-secret",
 	})
@@ -53,8 +57,8 @@ func TestE2EServiceRedis_Create(t *testing.T) {
 		"password": "e2e-app-user-secret",
 	})
 
-	// soulprint-seed: redis.conf.tmpl биндит на soulprint.self.network.primary_ip;
-	// pkg_mgr/init_system нужны core.pkg/core.service (ADR-018, soulprint.md §3).
+	// soulprint seed: redis.conf.tmpl binds to soulprint.self.network.primary_ip;
+	// pkg_mgr/init_system are needed by core.pkg/core.service (ADR-018, soulprint.md §3).
 	stack.SeedSoulprint(t, 0, map[string]any{
 		"os": map[string]any{
 			"family":      "debian",
@@ -70,25 +74,29 @@ func TestE2EServiceRedis_Create(t *testing.T) {
 		"hostname": "soul-a",
 	})
 
-	// Coven-членство ДО Create: roster резолвится по `incarnation.name ∈ coven[]`
-	// (ADR-008). Без него scenario видит no_hosts → error_locked.
+	// Coven membership BEFORE Create: the roster resolves via
+	// `incarnation.name in coven[]` (ADR-008). Without it the scenario sees
+	// no_hosts -> error_locked.
 	stack.AddSoulToCoven(t, 0, incName)
 
-	// Материализуем режим-агностичный destiny `redis` в file://-репо + ставим
-	// keeper_settings[default_destiny_source]. ДО RegisterService: invalidate от
-	// POST /v1/services подтянет настройку в Holder без ожидания TTL-poll-а.
+	// Materialize the mode-agnostic destiny `redis` into a file:// repo +
+	// set keeper_settings[default_destiny_source]. BEFORE RegisterService:
+	// the invalidate from POST /v1/services will pull the setting into the
+	// Holder without waiting for a TTL poll.
 	stack.MaterializeDestinies(t, "v1.0.0", "redis")
 	stack.RegisterService(t, "redis", "examples/service/redis")
 
-	// Live EventStream: захват SID-lease → ApplyRequest в локальный Outbound.
-	// LoadApplyScript — scripted success по task-name (+ default-success для
-	// when:-collector-задач). Задача community.redis.config матчится по task_name.
+	// Live EventStream: capture the SID-lease -> ApplyRequest into the local
+	// Outbound. LoadApplyScript -- scripted success by task-name (+
+	// default-success for when:-collector tasks). The community.redis.config
+	// task is matched by task_name.
 	stub := stack.ConnectSoulStub(t, 0)
 	harness.LoadApplyScript(stub, "create", redisCreateTasks())
 
-	// Простой типизированный ввод оператора. version — distro-native пин (для
-	// непустого state.redis_version); memory_mb+persistence+policy транслируются в
-	// merged redis_config; users — typed-map с полной ACL-строкой.
+	// Simple typed operator input. version -- distro-native pin (for a
+	// non-empty state.redis_version); memory_mb+persistence+policy are
+	// translated into the merged redis_config; users -- typed map with a
+	// full ACL string.
 	inc, applyID := stack.CreateIncarnationWithApply(t, incName, "redis@main", map[string]any{
 		"version":          "5:7.0.15-1~deb12u7",
 		"memory_mb":        1024,
@@ -104,12 +112,14 @@ func TestE2EServiceRedis_Create(t *testing.T) {
 
 	stack.WaitApplySuccess(t, applyID, 60)
 	stack.AssertApplyRunsStatus(t, applyID, "success")
-	// apply_runs success ≠ incarnation.state закоммичен: state_changes пишутся
-	// отдельной транзакцией ПОСЛЕ барьера (run.go §8). Ждём ready перед чтением.
+	// apply_runs success != incarnation.state committed: state_changes are
+	// written in a separate transaction AFTER the barrier (run.go §8). Wait
+	// for ready before reading.
 	stack.WaitIncarnationReady(t, inc, 30)
-	// redis_config — ИТОГ трансляции merge() (тот же, что ушёл в render redis.conf):
-	// maxmemory=1024*75/100=768mb (essence.memory_reserve_percent=75), policy/save/
-	// appendonly из input+persistence-пресета, maxclients/timeout из essence-подложки.
+	// redis_config -- the RESULT of the merge() translation (the same one
+	// that went into rendering redis.conf): maxmemory=1024*75/100=768mb
+	// (essence.memory_reserve_percent=75), policy/save/appendonly from
+	// input+persistence preset, maxclients/timeout from the essence baseline.
 	stack.AssertIncarnationState(t, inc, map[string]any{
 		"redis_type":    "standalone",
 		"redis_version": "5:7.0.15-1~deb12u7",
@@ -129,51 +139,52 @@ func TestE2EServiceRedis_Create(t *testing.T) {
 		},
 		"redis_hosts": []any{},
 	})
-	// POST /v1/incarnations авто-запускает create-scenario и пишет
-	// incarnation.created с apply_id авто-прогона в payload.
+	// POST /v1/incarnations auto-runs the create scenario and writes
+	// incarnation.created with the auto-run's apply_id in the payload.
 	stack.AssertAuditEvent(t, "incarnation.created", map[string]any{
 		"apply_id": applyID,
 	})
 	stack.AssertMetricGE(t, `keeper_scenario_runs_total{result="ok"}`, 1)
 }
 
-// TestE2EServiceRedis_AddAclUser — СКИП: сценарий add_acl_user переезжает на
-// community.redis.acl (state acl ещё не реализован — следующий батч). См. result.md.
+// TestE2EServiceRedis_AddAclUser -- SKIP: the add_acl_user scenario is moving
+// to community.redis.acl (state acl not yet implemented -- next batch). See result.md.
 func TestE2EServiceRedis_AddAclUser(t *testing.T) {
-	t.Skip("WIP redis-consolidation 2026-06-22: add_acl_user переезжает на community.redis.acl (state acl — следующий батч) — .pm/tasks/2026-06-22-redis-consolidation")
+	t.Skip("WIP redis-consolidation 2026-06-22: add_acl_user is moving to community.redis.acl (state acl -- next batch) -- .pm/tasks/2026-06-22-redis-consolidation")
 }
 
-// TestE2EServiceRedis_UpdateConfig — СКИП: сценарий update_config переезжает на
-// community.redis.config + re-apply destiny redis (следующий батч). См. result.md.
+// TestE2EServiceRedis_UpdateConfig -- SKIP: the update_config scenario is moving
+// to community.redis.config + re-apply destiny redis (next batch). See result.md.
 func TestE2EServiceRedis_UpdateConfig(t *testing.T) {
-	t.Skip("WIP redis-consolidation 2026-06-22: update_config переезжает на community.redis.config + re-apply destiny redis (следующий батч) — .pm/tasks/2026-06-22-redis-consolidation")
+	t.Skip("WIP redis-consolidation 2026-06-22: update_config is moving to community.redis.config + re-apply destiny redis (next batch) -- .pm/tasks/2026-06-22-redis-consolidation")
 }
 
-// TestE2EServiceRedis_UpdateNodeExporter — СКИП: exporter — отдельная сущность
-// (мониторинг), из service/redis вынесен (концепция роли: только ACL-юзер
-// monitoring, без экспортеров). См. brief.md → «Мониторинг».
+// TestE2EServiceRedis_UpdateNodeExporter -- SKIP: the exporter is a separate
+// entity (monitoring), moved out of service/redis (role concept: only the
+// ACL user monitoring, no exporters). See brief.md -> "Monitoring".
 func TestE2EServiceRedis_UpdateNodeExporter(t *testing.T) {
-	t.Skip("WIP redis-consolidation 2026-06-22: exporter вынесен из service/redis (мониторинг — отдельная сущность) — .pm/tasks/2026-06-22-redis-consolidation")
+	t.Skip("WIP redis-consolidation 2026-06-22: exporter moved out of service/redis (monitoring is a separate entity) -- .pm/tasks/2026-06-22-redis-consolidation")
 }
 
-// TestE2EServiceRedis_RestartNodeExporter — СКИП: см. UpdateNodeExporter (exporter
-// вынесен из service/redis).
+// TestE2EServiceRedis_RestartNodeExporter -- SKIP: see UpdateNodeExporter
+// (exporter moved out of service/redis).
 func TestE2EServiceRedis_RestartNodeExporter(t *testing.T) {
-	t.Skip("WIP redis-consolidation 2026-06-22: exporter вынесен из service/redis (мониторинг — отдельная сущность) — .pm/tasks/2026-06-22-redis-consolidation")
+	t.Skip("WIP redis-consolidation 2026-06-22: exporter moved out of service/redis (monitoring is a separate entity) -- .pm/tasks/2026-06-22-redis-consolidation")
 }
 
-// TestE2EServiceRedis_AddReplicas — СКИП: реплики/топология переезжают на режим
-// sentinel + community.redis.replica (следующий батч). Инвариант probe→where +
-// cross-host register перенесётся туда. См. brief.md → «Перенос guard-инвариантов».
+// TestE2EServiceRedis_AddReplicas -- SKIP: replicas/topology are moving to
+// sentinel mode + community.redis.replica (next batch). The probe->where +
+// cross-host register invariant will move there too. See brief.md -> "Guard invariant migration".
 func TestE2EServiceRedis_AddReplicas(t *testing.T) {
-	t.Skip("WIP redis-consolidation 2026-06-22: add_replicas переезжает на режим sentinel + community.redis.replica (probe→where инвариант — следующий батч) — .pm/tasks/2026-06-22-redis-consolidation")
+	t.Skip("WIP redis-consolidation 2026-06-22: add_replicas is moving to sentinel mode + community.redis.replica (probe->where invariant -- next batch) -- .pm/tasks/2026-06-22-redis-consolidation")
 }
 
-// redisCreateTasks — scripted success-ответы по task-name задач create режима
-// standalone: задачи destiny `redis` (install + render redis.conf/users.acl +
-// systemd) + задача community.redis.command (PING health-gate). soul-stub матчит
-// по task_name (default-success покрывает when:-collector-задачи и всё, что не в
-// скрипте — socket-dir гасится static-when, т.к. unixsocket в конфиге нет).
+// redisCreateTasks -- scripted success responses by task-name for the create
+// tasks of standalone mode: destiny `redis` tasks (install + render
+// redis.conf/users.acl + systemd) + the community.redis.command task (PING
+// health-gate). soul-stub matches by task_name (default-success covers
+// when:-collector tasks and everything not in the script -- socket-dir is
+// suppressed by static-when since there is no unixsocket in the config).
 func redisCreateTasks() []harness.TaskResponse {
 	return []harness.TaskResponse{
 		// destiny redis (standalone).
@@ -186,8 +197,8 @@ func redisCreateTasks() []harness.TaskResponse {
 		{TaskName: "Reload systemd because the hardening drop-in changed"},
 		{TaskName: "Ensure redis-server is running and enabled at boot", StateChanges: map[string]any{"services": []any{map[string]any{"redis-server": "running"}}}},
 		{TaskName: "Restart redis-server because config or hardening changed"},
-		// community.redis.command PING (живой Redis health-gate). soul-stub success
-		// по task_name; changed-семантика плагина покрыта L0 (impl_test.go).
+		// community.redis.command PING (live Redis health-gate). soul-stub success
+		// by task_name; the plugin's changed semantics are covered by L0 (impl_test.go).
 		{TaskName: "Wait for redis to answer PING"},
 	}
 }

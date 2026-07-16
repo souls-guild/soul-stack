@@ -1,25 +1,30 @@
 //go:build e2e
 
-// L3a-MK: WardRoster dispatched-orphan reconcile на НАСТОЯЩЕМ краше keeper.
+// L3a-MK: WardRoster dispatched-orphan reconcile on a REAL keeper crash.
 //
-// Доказывает END-TO-END закрытие dispatched-orphan дыры (ADR-027(g), S6) на
-// реальном SIGKILL процесса keeper-холдера стрима — не unit-моке handleWardRoster:
+// Proves END-TO-END closure of the dispatched-orphan hole (ADR-027(g), S6) on
+// a real SIGKILL of the stream-holder keeper process -- not a unit mock of
+// handleWardRoster:
 //
-//  1. Кластер из 2 keeper поверх ОБЩИХ PG/Redis/Vault, acolytes>0 (dispatched
-//     пишется Acolyte-путём claimed→dispatched→SendApply).
-//  2. soul-stub в режиме hold-apply подключён к primary keeper-A (= холдер стрима:
-//     SendApply маршрутизируется в его EventStream по SID-lease). На ApplyRequest
-//     стаб НЕ отвечает RunResult → строка apply_runs зависает `dispatched`.
-//  3. incarnation.run(create) → дожидаемся apply_runs.status='dispatched' для SID.
-//  4. Стаб «рестартует» (ClearActiveWard) — после рестарта Soul in-flight нет,
-//     WardRoster объявит пустой набор.
-//  5. ★ SIGKILL keeper-A (холдер стрима + потенциальный владелец dispatched-строки).
-//  6. ★ Стаб детектит разрыв → reconnect к живому keeper-B (fallback-список) →
-//     шлёт WardRoster(пустой набор).
-//  7. ★ ASSERT: keeper-B по WardRoster терминалит осиротевшую dispatched-строку в
-//     `orphaned` (OrphanDispatched). Прогон НЕ висит dispatched навсегда;
-//     incarnation консистентна (НЕ остаётся applying бесконечно — orphaned-терминал
-//     ведёт барьер/recovery к error_locked, не к вечному висяку).
+//  1. Cluster of 2 keepers over SHARED PG/Redis/Vault, acolytes>0 (dispatched
+//     is written via the Acolyte path claimed->dispatched->SendApply).
+//  2. soul-stub in hold-apply mode connected to primary keeper-A (= stream
+//     holder: SendApply is routed to its EventStream via SID-lease). The stub
+//     does NOT reply with RunResult to ApplyRequest -> the apply_runs row
+//     hangs `dispatched`.
+//  3. incarnation.run(create) -> wait for apply_runs.status='dispatched' for
+//     SID.
+//  4. Stub "restarts" (ClearActiveWard) -- after the restart there is no
+//     in-flight Soul work, WardRoster will declare an empty set.
+//  5. star SIGKILL keeper-A (stream holder + potential owner of the
+//     dispatched row).
+//  6. star Stub detects the disconnect -> reconnects to a live keeper-B
+//     (fallback list) -> sends WardRoster(empty set).
+//  7. star ASSERT: keeper-B, via WardRoster, terminalizes the orphaned
+//     dispatched row into `orphaned` (OrphanDispatched). The run does NOT
+//     hang dispatched forever; the incarnation is consistent (does NOT stay
+//     applying indefinitely -- the orphaned terminal drives barrier/recovery
+//     to error_locked, not an eternal hang).
 package e2e_test
 
 import (
@@ -30,9 +35,9 @@ import (
 	"github.com/souls-guild/soul-stack/tests/e2e/internal/soulstub"
 )
 
-// stub_receivedApplyRequest сообщает, получил ли стаб хотя бы один ApplyRequest от
-// keeper-а (подтверждение, что dispatched проставлен Acolyte-путём и SendApply
-// физически дошёл до стрима стаба).
+// stub_receivedApplyRequest reports whether the stub received at least one
+// ApplyRequest from the keeper (confirms dispatched was set via the Acolyte
+// path and SendApply physically reached the stub's stream).
 func stub_receivedApplyRequest(s *soulstub.Stub) bool {
 	for _, m := range s.Messages() {
 		if m.Kind == "ApplyRequest" {
@@ -60,93 +65,103 @@ func TestE2E_MultiKeeper_WardRosterDispatchedOrphanAfterCrash(t *testing.T) {
 
 	stack.RegisterService(t, serviceName, examplePath)
 
-	// Стаб в режиме hold-apply + reconnect+WardRoster. Подключён к primary
-	// (keeper-A) — он и есть холдер стрима (SendApply придёт в его EventStream).
+	// Stub in hold-apply mode + reconnect+WardRoster. Connected to primary
+	// (keeper-A) -- it is the stream holder (SendApply will arrive at its
+	// EventStream).
 	soulStub := stack.ConnectSoulStubReconnect(t, 0, true)
 	sid := stack.SoulSID(0)
 	holderKID := stack.StreamHolderKID(t)
-	t.Logf("WR-orphan: soul-stub %s держит стрим к %s (holder), endpoints=%v", sid, holderKID, stack.AllKeeperGRPCAddrs())
+	t.Logf("WR-orphan: soul-stub %s holds stream to %s (holder), endpoints=%v", sid, holderKID, stack.AllKeeperGRPCAddrs())
 
-	// Ready-инкарнация с единственным connected-хостом в её coven.
+	// Ready incarnation with a single connected host in its coven.
 	stack.SeedIncarnationReady(t, incarnation, serviceName, "main", map[string]any{})
 	stack.AddSoulToCoven(t, 0, incarnation)
 
-	// incarnation.run(create): noop несёт host-задачу core.exec.run (echo hello).
-	// Acolyte клеймит planned → dispatched → SendApply в стрим holder-а. Стаб
-	// держит ApplyRequest (RunResult не шлёт) → строка зависает dispatched.
+	// incarnation.run(create): noop carries a host task core.exec.run (echo
+	// hello). Acolyte claims planned -> dispatched -> SendApply into the
+	// holder's stream. Stub holds ApplyRequest (does not send RunResult) ->
+	// the row hangs dispatched.
 	applyID := stack.RunScenario(t, incarnation, scenario, nil)
 	t.Logf("WR-orphan: incarnation.run(%s) apply_id=%s", scenario, applyID)
 
-	// (1) Дожидаемся dispatched — задание физически отдано стабу, RunResult не придёт.
+	// (1) Wait for dispatched -- the job is physically handed to the stub,
+	// RunResult won't arrive.
 	got := stack.WaitApplyRunStatusForSID(t, applyID, sid, []string{"dispatched"}, 30*time.Second)
-	t.Logf("WR-orphan: apply_runs(%s,%s).status=%q — задание отдано, RunResult удержан", applyID, sid, got)
+	t.Logf("WR-orphan: apply_runs(%s,%s).status=%q -- job dispatched, RunResult withheld", applyID, sid, got)
 
-	// Стаб действительно получил ApplyRequest (а не упал на что-то иное).
+	// The stub actually received an ApplyRequest (didn't fail on something
+	// else).
 	if !stub_receivedApplyRequest(soulStub) {
-		t.Fatalf("WR-orphan: стаб НЕ получил ApplyRequest — dispatched проставлен не Acolyte-путём (топология неверна)")
+		t.Fatalf("WR-orphan: stub did NOT receive ApplyRequest -- dispatched was not set via the Acolyte path (wrong topology)")
 	}
 
-	// (2) «Рестарт» Soul-процесса: in-flight физически нет → WardRoster на reconnect
-	// объявит пустой набор, и keeper осиротит ВСЕ dispatched-строки SID-а. Без
-	// этого стаб объявил бы apply_id ведомым и epoch-fenced защита НЕ дала бы
-	// осиротить (Soul декларирует «прогон ведётся») — проверяем именно дыру
-	// «Soul не отслеживает apply_id после рестарта».
+	// (2) Soul process "restart": in-flight work is physically gone ->
+	// WardRoster on reconnect will declare an empty set, and keeper will
+	// orphan ALL dispatched rows for the SID. Without this the stub would
+	// declare the apply_id in-flight and epoch-fenced protection would NOT
+	// allow orphaning (Soul declares "run is in progress") -- we're testing
+	// exactly the hole "Soul does not track apply_id after a restart".
 	soulStub.ClearActiveWard()
 
-	// (3) ★ НАСТОЯЩИЙ SIGKILL keeper-холдера стрима. Стаб теряет стрим к мёртвому
-	// keeper-у; dispatched-строка остаётся в PG (reclaim_apply_runs её НЕ трогает —
-	// сужен до claimed). Это та самая дыра: ни Keeper, ни (после рестарта) Soul её
-	// не закроют без WardRoster-реконсайла.
+	// (3) star REAL SIGKILL of the stream-holder keeper. The stub loses its
+	// stream to the dead keeper; the dispatched row stays in PG
+	// (reclaim_apply_runs does NOT touch it -- scoped to claimed only). This
+	// is exactly the hole: neither Keeper nor (after restart) Soul close it
+	// without a WardRoster reconcile.
 	stack.KillKeeperByKID(t, holderKID)
-	t.Logf("WR-orphan: SIGKILL %s (holder) отправлен — стаб должен reconnect к живому keeper-у", holderKID)
+	t.Logf("WR-orphan: SIGKILL %s (holder) sent -- stub should reconnect to a live keeper", holderKID)
 
 	live := stack.LiveKeeperKIDs()
 	if len(live) == 0 {
-		t.Fatalf("WR-orphan: после kill не осталось живых keeper-ов (нужен ≥1 для reconnect+WardRoster)")
+		t.Fatalf("WR-orphan: no live keepers left after kill (need >=1 for reconnect+WardRoster)")
 	}
-	t.Logf("WR-orphan: живые keeper-ы для reconnect: %v", live)
+	t.Logf("WR-orphan: live keepers for reconnect: %v", live)
 
-	// (4) ★ ASSERT END-TO-END: после reconnect стаб шлёт WardRoster(пустой) живому
-	// keeper-у, тот по OrphanDispatched терминалит dispatched-строку в `orphaned`.
-	// Это доказывает сквозной путь крах→reconnect→roster→terminal — НЕ unit-мок.
+	// (4) star ASSERT END-TO-END: after reconnect the stub sends
+	// WardRoster(empty) to a live keeper, which terminalizes the dispatched
+	// row into `orphaned` via OrphanDispatched. This proves the full
+	// path crash->reconnect->roster->terminal -- NOT a unit mock.
 	//
-	// ★ Окно ожидания > defaultSoulLeaseTTL (60s): после SIGKILL keeper-холдера
-	// его Redis SID-lease НЕ освобождается (Release только на graceful-stop) и
-	// живёт до TTL-истечения (~60s, eventstream.go::defaultSoulLeaseTTL, инвариант
-	// координации, в keeper.yml не выносится). Пока lease держит мёртвый mk-00,
-	// reconnect стаба к mk-01 отвергается на acquireSoulLease (codes.AlreadyExists)
-	// — сессия не встаёт, handleWardRoster недостижим. WardRoster-реконсайл
-	// фактически отложен на время протухания stale-lease. Ждём 90s (60s lease +
-	// запас на reconnect-backoff + sweep).
+	// star Wait window > defaultSoulLeaseTTL (60s): after SIGKILL of the
+	// holder keeper its Redis SID-lease is NOT released (Release only on
+	// graceful-stop) and lives until TTL expiry (~60s,
+	// eventstream.go::defaultSoulLeaseTTL, a coordination invariant, not
+	// exposed in keeper.yml). While the lease is held by the dead mk-00, the
+	// stub's reconnect to mk-01 is rejected at acquireSoulLease
+	// (codes.AlreadyExists) -- the session doesn't come up, handleWardRoster
+	// is unreachable. The WardRoster reconcile is effectively deferred until
+	// the stale lease expires. Wait 90s (60s lease + margin for
+	// reconnect-backoff + sweep).
 	final := stack.WaitApplyRunStatusForSID(t, applyID, sid,
 		[]string{"orphaned"}, 90*time.Second)
-	t.Logf("WR-orphan: ★ apply_runs(%s,%s).status=%q — dispatched-строка реконсилена WardRoster-ом (END-TO-END)", applyID, sid, final)
+	t.Logf("WR-orphan: star apply_runs(%s,%s).status=%q -- dispatched row reconciled by WardRoster (END-TO-END)", applyID, sid, final)
 
-	// (5) Прогон НЕ висит dispatched навсегда: статус строки — терминал, и он
-	// ДУРАБЕЛЬНЫЙ (single-winner append-only, ADR-027(j) — orphaned не
-	// перезаписывается обратно в dispatched). Добираем дважды с паузой, чтобы
-	// поймать гипотетический откат.
+	// (5) The run does NOT hang dispatched forever: the row status is
+	// terminal, and it is DURABLE (single-winner append-only, ADR-027(j) --
+	// orphaned is not overwritten back to dispatched). Check twice with a
+	// pause to catch a hypothetical rollback.
 	if cur := stack.ApplyRunStatusForSID(t, applyID, sid); cur != "orphaned" {
-		t.Fatalf("WR-orphan: финальный статус строки = %q, ожидался терминал `orphaned` (прогон не должен висеть dispatched)", cur)
+		t.Fatalf("WR-orphan: final row status = %q, expected terminal `orphaned` (the run must not hang dispatched)", cur)
 	}
 	time.Sleep(2 * time.Second)
 	if cur := stack.ApplyRunStatusForSID(t, applyID, sid); cur != "orphaned" {
-		t.Fatalf("WR-orphan: статус строки откатился в %q после orphaned — нарушен single-winner append-only терминал", cur)
+		t.Fatalf("WR-orphan: row status rolled back to %q after orphaned -- single-winner append-only terminal violated", cur)
 	}
-	t.Logf("WR-orphan: ★ dispatched-orphan reconcile ДОКАЗАН live: строка терминализована в `orphaned` и держится (append-only)")
+	t.Logf("WR-orphan: star dispatched-orphan reconcile PROVEN live: row terminalized to `orphaned` and holds (append-only)")
 
-	// (6) incarnation-консистентность. ОБСЕРВАЦИЯ, не hard-fail: для standalone
-	// incarnation.run барьер (run-goroutine), классифицирующий orphaned →
-	// error_locked, ЖИЛ на убитом keeper-холдере. У standalone-run НЕТ
-	// reclaim-механизма (reclaim_voyages — только для Voyage), поэтому incarnation
-	// может остаться в `applying` до тех пор, пока её не подберёт recovery-скан
-	// или повторный прогон. Это свойство ВЕХИКЛА (standalone run без reclaim), а
-	// НЕ дефект WardRoster: ТЗ явно допускает «orphan-терминал корректен» как
-	// валидный исход консистентности, и он достигнут (п.5). Логируем наблюдаемый
-	// статус как находку для architect-аудита recovery standalone-run-ов.
+	// (6) incarnation consistency. OBSERVATION, not a hard-fail: for a
+	// standalone incarnation.run, the barrier (run-goroutine) that classifies
+	// orphaned -> error_locked LIVED on the killed holder keeper. A
+	// standalone run has NO reclaim mechanism (reclaim_voyages is Voyage-only),
+	// so the incarnation may stay `applying` until picked up by a recovery
+	// scan or a repeat run. This is a property of the VEHICLE (standalone run
+	// without reclaim), NOT a WardRoster defect: the spec explicitly allows
+	// "orphan-terminal is correct" as a valid consistency outcome, and it is
+	// achieved (item 5). Log the observed status as a finding for the
+	// architect audit of standalone-run recovery.
 	incStatus, _ := stack.IncarnationStatusDetails(t, incarnation)
-	t.Logf("WR-orphan: incarnation %s наблюдаемый статус после краша holder-а=%q "+
-		"(standalone incarnation.run без reclaim — барьер умер вместе с keeper-холдером; "+
-		"row-терминал orphaned достигнут, incarnation-status-реконсайл требует живого барьера/recovery)",
+	t.Logf("WR-orphan: incarnation %s observed status after holder crash=%q "+
+		"(standalone incarnation.run without reclaim -- barrier died with the holder keeper; "+
+		"row-terminal orphaned achieved, incarnation-status reconcile requires a live barrier/recovery)",
 		incarnation, incStatus)
 }

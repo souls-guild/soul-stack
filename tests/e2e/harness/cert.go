@@ -13,17 +13,18 @@ import (
 	"time"
 )
 
-// RegisterSoulPreAuth — pre-auth-регистрация soul-stub-а в БД.
+// RegisterSoulPreAuth — pre-auth registration of a soul-stub in the DB.
 //
-// Не идёт через `bootstrap.Bootstrap` (это L3b territory): harness прямо
-// вставляет строки в `souls`/`soul_seeds` через pgx, минуя audit-event
-// `soul.bootstrapped` (его пишет keeper при настоящем mTLS handshake-е через
-// gRPC Bootstrap-RPC, см. ADR-039 Amendment §6).
+// Doesn't go through `bootstrap.Bootstrap` (that's L3b territory): the
+// harness inserts rows directly into `souls`/`soul_seeds` via pgx, bypassing
+// the `soul.bootstrapped` audit event (written by keeper on a real mTLS
+// handshake through the gRPC Bootstrap RPC, see ADR-039 Amendment §6).
 //
-// Возвращает client cert+key, которые soul-stub использует для mTLS handshake-а
-// к EventStream-listener-у. Drift с keeper/migrations синхронизировать вручную:
-// набор колонок ниже зафиксирован для текущей schema; при schema-change harness
-// фейлится на INSERT, и владелец миграции обновляет CRUD здесь.
+// Returns the client cert+key that the soul-stub uses for the mTLS handshake
+// to the EventStream listener. Drift with keeper/migrations must be
+// reconciled manually: the column set below is pinned to the current schema;
+// on a schema change the harness fails on INSERT and the migration owner
+// updates the CRUD here.
 func RegisterSoulPreAuth(t *testing.T, stack *Stack, sid string) (cert, key []byte) {
 	t.Helper()
 
@@ -39,11 +40,12 @@ func RegisterSoulPreAuth(t *testing.T, stack *Stack, sid string) (cert, key []by
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// souls ПЕРВЫМ: soul_seeds.sid — FK на souls(sid) (soul_seeds_sid_fk), поэтому
-	// родительская строка обязана существовать до seed-а. Колонки по migration
-	// 007_create_souls (registered_at, не created_at; transport enum = {agent,ssh},
-	// gRPC-Soul = 'agent'). Реальная presence-метка (Redis SID-lease) захватывается
-	// при открытии EventStream-стрима soul-stub-ом (ConnectSoulStub).
+	// souls FIRST: soul_seeds.sid is an FK to souls(sid) (soul_seeds_sid_fk), so
+	// the parent row must exist before the seed. Columns follow migration
+	// 007_create_souls (registered_at, not created_at; transport enum =
+	// {agent,ssh}, a gRPC Soul is 'agent'). The real presence marker (Redis
+	// SID lease) is acquired when the soul-stub opens the EventStream stream
+	// (ConnectSoulStub).
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO souls (sid, status, transport, registered_at, last_seen_at)
 		VALUES ($1, 'connected', 'agent', NOW(), NOW())
@@ -52,11 +54,12 @@ func RegisterSoulPreAuth(t *testing.T, stack *Stack, sid string) (cert, key []by
 		t.Fatalf("RegisterSoulPreAuth(%s): insert souls: %v", sid, err)
 	}
 
-	// soul_seeds: история сертификатов; уникальность по (sid) WHERE status='active'.
-	// На pre-auth кладём один active-seed. Колонки соответствуют migration
-	// 009_create_soul_seeds (NOT NULL: serial_number / expires_at; нет created_at).
-	// serial_number должен быть глобально-уникален (soul_seeds_serial_number_idx) —
-	// берём fingerprint-hex как детерминированный уникальный per-cert серийник.
+	// soul_seeds: certificate history; unique on (sid) WHERE status='active'.
+	// On pre-auth we insert one active seed. Columns match migration
+	// 009_create_soul_seeds (NOT NULL: serial_number / expires_at; no
+	// created_at). serial_number must be globally unique
+	// (soul_seeds_serial_number_idx) — we use the fingerprint hex as a
+	// deterministic unique per-cert serial number.
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO soul_seeds (sid, fingerprint, serial_number, status, issued_at, expires_at)
 		VALUES ($1, $2, $3, 'active', NOW(), NOW() + INTERVAL '365 days')
@@ -71,17 +74,18 @@ func RegisterSoulPreAuth(t *testing.T, stack *Stack, sid string) (cert, key []by
 	return cert, key
 }
 
-// AddSoulToCoven добавляет coven-метку в souls.coven i-го pre-auth Soul-а.
-// Нужно для scenario-apply: roster прогона резолвится по Coven-членству
-// (`WHERE <incarnation.name> = ANY(coven)`, ADR-008 — incarnation.name есть
-// корневая Coven-метка, topology/resolver.go::rosterSQL). Без этого incarnation
-// «не имеет connected-хостов» → no_hosts → error_locked.
+// AddSoulToCoven adds a coven label to souls.coven of the i-th pre-auth Soul.
+// Needed for scenario-apply: the run's roster is resolved by Coven membership
+// (`WHERE <incarnation.name> = ANY(coven)`, ADR-008 — incarnation.name is the
+// root Coven label, topology/resolver.go::rosterSQL). Without this, an
+// incarnation "has no connected hosts" → no_hosts → error_locked.
 //
-// Идемпотентно (array_append только если метки ещё нет). Fatal при ошибке.
+// Idempotent (array_append only if the label is not already there). Fatal on
+// error.
 func (s *Stack) AddSoulToCoven(t *testing.T, soulIndex int, coven string) {
 	t.Helper()
 	if soulIndex < 0 || soulIndex >= len(s.souls) {
-		t.Fatalf("AddSoulToCoven(%d): out of range (создано %d soul-ов)", soulIndex, len(s.souls))
+		t.Fatalf("AddSoulToCoven(%d): out of range (created %d souls)", soulIndex, len(s.souls))
 	}
 	sid := s.souls[soulIndex].SID
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -95,20 +99,23 @@ func (s *Stack) AddSoulToCoven(t *testing.T, soulIndex int, coven string) {
 	}
 }
 
-// SeedSoulprint записывает souls.soulprint_facts (JSONB) для i-го pre-auth
-// Soul-а. Нужно сервисам, чей render читает soulprint keeper-side: redis-exporter
-// берёт `arch: soulprint.self.os.arch`, node-exporter — `soulprint.self.os.arch`
-// в URL tarball-а (ADR-018). RegisterSoulPreAuth строку soulprint НЕ заполняет
-// (NULL), и без seed render-фаза падает на nil-доступе к `os.arch`. smoke-nginx
-// soulprint не читает keeper-side и работает без seed-а — для redis он обязателен.
+// SeedSoulprint writes souls.soulprint_facts (JSONB) for the i-th pre-auth
+// Soul. Needed by services whose render reads soulprint keeper-side:
+// redis-exporter takes `arch: soulprint.self.os.arch`, node-exporter uses
+// `soulprint.self.os.arch` in the tarball URL (ADR-018).
+// RegisterSoulPreAuth does NOT populate the soulprint row (NULL), and without
+// a seed the render phase fails on a nil access to `os.arch`. smoke-nginx
+// doesn't read soulprint keeper-side and works without a seed — for redis it
+// is required.
 //
-// facts — форма `SoulprintFacts`-JSON (resolver scanHost → map[string]any,
-// CEL `soulprint.self.<path>`): верхнеуровневый ключ `os` с подполями
-// arch/family/distro/version/pkg_mgr/init_system. Симметрично fixtures/souls.yaml.
+// facts — the `SoulprintFacts` JSON shape (resolver scanHost -> map[string]any,
+// CEL `soulprint.self.<path>`): a top-level `os` key with subfields
+// arch/family/distro/version/pkg_mgr/init_system. Symmetric with
+// fixtures/souls.yaml.
 func (s *Stack) SeedSoulprint(t *testing.T, soulIndex int, facts map[string]any) {
 	t.Helper()
 	if soulIndex < 0 || soulIndex >= len(s.souls) {
-		t.Fatalf("SeedSoulprint(%d): out of range (создано %d soul-ов)", soulIndex, len(s.souls))
+		t.Fatalf("SeedSoulprint(%d): out of range (created %d souls)", soulIndex, len(s.souls))
 	}
 	sid := s.souls[soulIndex].SID
 	factsJSON, err := json.Marshal(facts)
@@ -128,15 +135,16 @@ func (s *Stack) SeedSoulprint(t *testing.T, soulIndex int, facts map[string]any)
 	}
 }
 
-// fingerprintSHA256Hex вычисляет fingerprint ТОЧНО как keeper-side
-// soulseed.FingerprintFromCert: SHA-256 над cert.RawSubjectPublicKeyInfo (НЕ над
-// PEM-байтами). mTLS-auth Keeper-а (grpc/auth.go::peerFingerprint) ищет seed по
-// этому значению; расхождение → "unknown peer fingerprint" → стрим отвергается.
+// fingerprintSHA256Hex computes the fingerprint EXACTLY like the keeper-side
+// soulseed.FingerprintFromCert: SHA-256 over cert.RawSubjectPublicKeyInfo (NOT
+// over the PEM bytes). The Keeper's mTLS auth (grpc/auth.go::peerFingerprint)
+// looks up the seed by this value; a mismatch causes "unknown peer
+// fingerprint" and the stream is rejected.
 func fingerprintSHA256Hex(t *testing.T, certPEM []byte) string {
 	t.Helper()
 	block, _ := pem.Decode(certPEM)
 	if block == nil {
-		t.Fatalf("fingerprintSHA256Hex: cert не является PEM-блоком")
+		t.Fatalf("fingerprintSHA256Hex: cert is not a PEM block")
 	}
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {

@@ -2,9 +2,9 @@
 
 // L3a E2E: service-noop happy-path (ADR-039).
 //
-// Минимальный no-op scenario без input и без мутации incarnation.state —
-// проверяем чистый apply_runs lifecycle + audit + metrics. Это «нижняя граница»
-// L3a-теста: меньше уже не имеет смысла.
+// Minimal no-op scenario without input and without incarnation.state mutation --
+// verifies the plain apply_runs lifecycle + audit + metrics. This is the
+// "lower bound" of an L3a test: less than this has no point.
 package e2e_test
 
 import (

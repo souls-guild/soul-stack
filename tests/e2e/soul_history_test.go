@@ -1,22 +1,22 @@
 //go:build e2e
 
-// Per-section E2E: GET /v1/souls/{sid}/history агрегирует per-host timeline из
-// двух источников — scenario-прогоны (apply_runs) и ad-hoc exec (errands). Тест
-// гоняет на ОДНОМ connected-SID сначала scenario-apply (incarnation create),
-// затем single-Errand /exec (ADR-033), после чего ассертит, что /history отдаёт
-// обе записи с корректной дискриминацией (type=scenario несёт
-// incarnation/scenario, type=errand несёт module), сортировкой started_at DESC и
-// работающим query-фильтром ?type=.
+// Per-section E2E: GET /v1/souls/{sid}/history aggregates a per-host
+// timeline from two sources -- scenario runs (apply_runs) and ad-hoc exec
+// (errands). The test runs, on ONE connected SID, first a scenario-apply
+// (incarnation create), then a single Errand /exec (ADR-033), and then
+// asserts that /history returns both records with correct discrimination
+// (type=scenario carries incarnation/scenario, type=errand carries module),
+// started_at DESC sorting, and a working ?type= query filter.
 //
-// Почему ловит регрессии:
-//   - merge-запрос soul.SelectHistory сломан / не объединяет источники → total<2
-//     или один из типов отсутствует;
-//   - фильтр ?type= игнорируется → лишние/недостающие записи;
-//   - сортировка started_at DESC потеряна → порядок нарушен.
+// Why it catches regressions:
+//   - the merge query soul.SelectHistory is broken / does not merge sources
+//     -> total<2 or one of the types is missing;
+//   - the ?type= filter is ignored -> extra/missing records;
+//   - started_at DESC sorting is lost -> order violated.
 //
-// Ограничение (как у scenario_apply): soul-stub не исполняет реальные модули
-// (SetApplyDefaultSuccess + errand SUCCESS-эхо) — проверяем keeper-side
-// агрегацию history, не реализм apply/exec (L3a-контракт).
+// Limitation (same as scenario_apply): soul-stub does not execute real
+// modules (SetApplyDefaultSuccess + errand SUCCESS echo) -- we check the
+// keeper-side history aggregation, not apply/exec execution realism (L3a contract).
 package e2e_test
 
 import (
@@ -40,24 +40,24 @@ func TestSoulHistory_AggregatesScenarioAndErrand(t *testing.T) {
 
 	stack.AddSoulToCoven(t, 0, "test-history")
 
-	// Источник №1 — scenario: incarnation create авто-запускает scenario `create`
-	// → apply_runs-строка под этим SID-ом.
+	// Source #1 -- scenario: incarnation create auto-runs the scenario
+	// `create` -> an apply_runs row under this SID.
 	_, applyID := stack.CreateIncarnationWithApply(t, "test-history", "noop@main", nil)
 	stack.WaitApplySuccess(t, applyID, 60)
 
-	// Источник №2 — single-Errand: ad-hoc /exec на том же SID-е → errands-строка.
+	// Source #2 -- single Errand: an ad-hoc /exec on the same SID -> an errands row.
 	res := stack.ExecErrand(t, sid, "core.cmd.shell", map[string]any{"cmd": "echo ok"})
 	if res.Status != "success" {
-		t.Fatalf("ExecErrand: status=%q, ожидался success", res.Status)
+		t.Fatalf("ExecErrand: status=%q, expected success", res.Status)
 	}
 
-	// /history без фильтра — обе записи.
+	// /history without a filter -- both records.
 	reply := stack.SoulHistory(t, sid, "")
 	if reply.SID != sid {
-		t.Fatalf("/history: sid echo=%q, ожидался %q", reply.SID, sid)
+		t.Fatalf("/history: sid echo=%q, expected %q", reply.SID, sid)
 	}
 	if reply.Total < 2 {
-		t.Fatalf("/history: total=%d, ожидалось >=2 (scenario+errand); items=%+v", reply.Total, reply.Items)
+		t.Fatalf("/history: total=%d, expected >=2 (scenario+errand); items=%+v", reply.Total, reply.Items)
 	}
 
 	var scen, errItem *harness.SoulHistoryItem
@@ -69,64 +69,64 @@ func TestSoulHistory_AggregatesScenarioAndErrand(t *testing.T) {
 		case "errand":
 			errItem = it
 		default:
-			t.Fatalf("/history: неизвестный type=%q в item=%+v", it.Type, it)
+			t.Fatalf("/history: unknown type=%q in item=%+v", it.Type, it)
 		}
 	}
 	if scen == nil {
-		t.Fatalf("/history: нет записи type=scenario; items=%+v", reply.Items)
+		t.Fatalf("/history: no type=scenario record; items=%+v", reply.Items)
 	}
 	if errItem == nil {
-		t.Fatalf("/history: нет записи type=errand; items=%+v", reply.Items)
+		t.Fatalf("/history: no type=errand record; items=%+v", reply.Items)
 	}
 
-	// type=scenario несёт incarnation/scenario, НЕ несёт module.
+	// type=scenario carries incarnation/scenario, does NOT carry module.
 	if scen.Incarnation != "test-history" {
-		t.Fatalf("scenario-item.incarnation=%q, ожидался test-history (%+v)", scen.Incarnation, scen)
+		t.Fatalf("scenario-item.incarnation=%q, expected test-history (%+v)", scen.Incarnation, scen)
 	}
 	if scen.Scenario == "" {
-		t.Fatalf("scenario-item.scenario пуст (%+v)", scen)
+		t.Fatalf("scenario-item.scenario is empty (%+v)", scen)
 	}
 	if scen.Module != "" {
-		t.Fatalf("scenario-item несёт errand-поле module=%q (%+v)", scen.Module, scen)
+		t.Fatalf("scenario-item carries the errand field module=%q (%+v)", scen.Module, scen)
 	}
 
-	// type=errand несёт module, НЕ несёт incarnation.
+	// type=errand carries module, does NOT carry incarnation.
 	if errItem.Module != "core.cmd.shell" {
-		t.Fatalf("errand-item.module=%q, ожидался core.cmd.shell (%+v)", errItem.Module, errItem)
+		t.Fatalf("errand-item.module=%q, expected core.cmd.shell (%+v)", errItem.Module, errItem)
 	}
 	if errItem.Incarnation != "" {
-		t.Fatalf("errand-item несёт scenario-поле incarnation=%q (%+v)", errItem.Incarnation, errItem)
+		t.Fatalf("errand-item carries the scenario field incarnation=%q (%+v)", errItem.Incarnation, errItem)
 	}
 
-	// Сортировка started_at DESC: errand стартовал ПОСЛЕ scenario → должен идти
-	// первым (или раньше) в items. Сравниваем по RFC3339-строкам (лексикографика
-	// = хронология для UTC RFC3339).
+	// started_at DESC sorting: the errand started AFTER the scenario -> it
+	// must come first (or earlier) in items. We compare RFC3339 strings
+	// (lexicographic order = chronological order for UTC RFC3339).
 	for i := 1; i < len(reply.Items); i++ {
 		if reply.Items[i-1].StartedAt < reply.Items[i].StartedAt {
-			t.Fatalf("/history: сортировка не DESC по started_at: items[%d]=%q < items[%d]=%q",
+			t.Fatalf("/history: sorting is not DESC by started_at: items[%d]=%q < items[%d]=%q",
 				i-1, reply.Items[i-1].StartedAt, i, reply.Items[i].StartedAt)
 		}
 	}
 
-	// Фильтр ?type=errand — только errand.
+	// Filter ?type=errand -- errand only.
 	onlyErrand := stack.SoulHistory(t, sid, "errand")
 	if len(onlyErrand.Items) == 0 {
-		t.Fatalf("/history?type=errand: пусто, ожидалась >=1 errand-запись")
+		t.Fatalf("/history?type=errand: empty, expected >=1 errand record")
 	}
 	for _, it := range onlyErrand.Items {
 		if it.Type != "errand" {
-			t.Fatalf("/history?type=errand вернул type=%q (%+v)", it.Type, it)
+			t.Fatalf("/history?type=errand returned type=%q (%+v)", it.Type, it)
 		}
 	}
 
-	// Фильтр ?type=scenario — только scenario.
+	// Filter ?type=scenario -- scenario only.
 	onlyScenario := stack.SoulHistory(t, sid, "scenario")
 	if len(onlyScenario.Items) == 0 {
-		t.Fatalf("/history?type=scenario: пусто, ожидалась >=1 scenario-запись")
+		t.Fatalf("/history?type=scenario: empty, expected >=1 scenario record")
 	}
 	for _, it := range onlyScenario.Items {
 		if it.Type != "scenario" {
-			t.Fatalf("/history?type=scenario вернул type=%q (%+v)", it.Type, it)
+			t.Fatalf("/history?type=scenario returned type=%q (%+v)", it.Type, it)
 		}
 	}
 }

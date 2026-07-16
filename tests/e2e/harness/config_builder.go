@@ -10,22 +10,23 @@ import (
 	"time"
 )
 
-// buildKeeperYAML рендерит keeper.yml для test-сценария: подставляет адреса
-// testcontainer-ов (PG/Redis/Vault), пути к TLS-материалу и канонический
-// signing_key_ref.
+// buildKeeperYAML renders keeper.yml for the test scenario: substitutes
+// testcontainer addresses (PG/Redis/Vault), TLS material paths and the
+// canonical signing_key_ref.
 //
-// Не используется templating-движок — keeper.yml фиксирован по форме (см.
-// dev/keeper.dev.yml), все динамические значения — fmt.Sprintf. CEL/Go-template
-// здесь были бы over-engineering.
+// No templating engine is used — keeper.yml has a fixed shape (see
+// dev/keeper.dev.yml), all dynamic values go through fmt.Sprintf. CEL/Go
+// templates here would be over-engineering.
 //
-// Side effect: после рендера YAML caller обязан запушить PG DSN в Vault
-// (`secret/keeper/postgres`, поле `dsn`). Делаем это здесь же — buildKeeperYAML
-// логически фиксирует контракт `dsn_ref: vault:secret/keeper/postgres`, и
-// держать соответствующий secret-write в этой же точке проще, чем разводить.
+// Side effect: after rendering the YAML the caller must push the PG DSN to
+// Vault (`secret/keeper/postgres`, field `dsn`). We do it right here —
+// buildKeeperYAML logically pins the `dsn_ref: vault:secret/keeper/postgres`
+// contract, and keeping the matching secret write at the same point is
+// simpler than splitting it out.
 func (s *Stack) buildKeeperYAML(certPath, keyPath, caPath string) string {
-	// Динамические адреса listener-ов: выделяем свободные TCP-порты заранее,
-	// чтобы Stack-поля и YAML согласованно указывали на одни и те же номера
-	// (probeReady ходит на KeeperHTTPURL).
+	// Dynamic listener addresses: reserve free TCP ports up front so Stack
+	// fields and the YAML consistently point at the same port numbers
+	// (probeReady hits KeeperHTTPURL).
 	bootstrapAddr := allocLoopback(s.t)
 	eventStreamAddr := allocLoopback(s.t)
 	httpAddr := allocLoopback(s.t)
@@ -136,8 +137,8 @@ reaper:
 	return yaml
 }
 
-// seedPostgresDSN кладёт PG DSN в Vault KV `secret/keeper/postgres` (поле `dsn`).
-// keeper.yml::postgres.dsn_ref ссылается именно сюда.
+// seedPostgresDSN writes the PG DSN into Vault KV `secret/keeper/postgres`
+// (field `dsn`). keeper.yml::postgres.dsn_ref points right here.
 func (s *Stack) seedPostgresDSN() {
 	vc := newVaultClient(s.VaultAddr, s.vaultToken)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -149,10 +150,10 @@ func (s *Stack) seedPostgresDSN() {
 	}
 }
 
-// allocLoopback резервирует свободный TCP-порт на 127.0.0.1 и возвращает
-// `127.0.0.1:<port>`. Listener закрывается сразу — есть малый race (порт
-// может быть занят между alloc и фактическим bind), для test-окружения
-// приемлемо.
+// allocLoopback reserves a free TCP port on 127.0.0.1 and returns
+// `127.0.0.1:<port>`. The listener is closed immediately — there's a small
+// race (the port may be taken between alloc and the actual bind), which is
+// acceptable for a test environment.
 func allocLoopback(t interface {
 	Fatalf(format string, args ...any)
 }) string {

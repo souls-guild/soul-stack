@@ -2,9 +2,9 @@
 
 // L3a E2E: service-long-runner::create (ADR-039).
 //
-// Простой init scenario; «длинные прогоны» (staggered, serial_waves) — отдельные
-// сценарии этого же сервиса, для них нужны multi-host + поллинг mid-run.
-// Здесь покрываем только happy-path create + двойную мутацию state.
+// Simple init scenario; "long runs" (staggered, serial_waves) are separate
+// scenarios of the same service that need multi-host + mid-run polling.
+// Here we only cover the happy-path create + double state mutation.
 package e2e_test
 
 import (

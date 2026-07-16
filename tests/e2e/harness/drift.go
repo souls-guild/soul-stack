@@ -10,9 +10,10 @@ import (
 	"time"
 )
 
-// DriftReport — read-проекция 200-body POST /v1/incarnations/{name}/check-drift
-// (scenario.DriftReport, ADR-031 Slice B). Поля — публичный JSON-контракт; типы
-// keeper-side не импортируем (E2E тестирует OpenAPI как чёрный ящик).
+// DriftReport — read projection of the 200 body of POST
+// /v1/incarnations/{name}/check-drift (scenario.DriftReport, ADR-031 Slice B).
+// Fields form the public JSON contract; keeper-side types are not imported
+// (E2E tests OpenAPI as a black box).
 type DriftReport struct {
 	CheckedAt   time.Time         `json:"checked_at"`
 	Incarnation string            `json:"incarnation"`
@@ -21,14 +22,14 @@ type DriftReport struct {
 	Summary     DriftSummary      `json:"summary"`
 }
 
-// DriftHostReport — per-host агрегат DriftReport.Hosts[].
+// DriftHostReport — per-host aggregate of DriftReport.Hosts[].
 type DriftHostReport struct {
 	SID    string            `json:"sid"`
 	Status string            `json:"status"` // drifted | clean | unsupported | failed.
 	Tasks  []DriftTaskResult `json:"tasks"`
 }
 
-// DriftTaskResult — per-task результат внутри DriftHostReport.Tasks[].
+// DriftTaskResult — per-task result within DriftHostReport.Tasks[].
 type DriftTaskResult struct {
 	Idx     int    `json:"idx"`
 	Module  string `json:"module"`
@@ -37,7 +38,7 @@ type DriftTaskResult struct {
 	Message string `json:"message,omitempty"`
 }
 
-// DriftSummary — counts-агрегат DriftReport.Summary.
+// DriftSummary — counts aggregate of DriftReport.Summary.
 type DriftSummary struct {
 	HostsDrifted     int `json:"hosts_drifted"`
 	HostsClean       int `json:"hosts_clean"`
@@ -45,9 +46,9 @@ type DriftSummary struct {
 	HostsFailed      int `json:"hosts_failed"`
 }
 
-// CheckDrift вызывает POST /v1/incarnations/{name}/check-drift (sync, ADR-031
-// Slice B) и возвращает разобранный DriftReport. input — converge-input-override
-// (nil = auto-from-state). Любой не-200 — t.Fatal с телом ответа.
+// CheckDrift calls POST /v1/incarnations/{name}/check-drift (sync, ADR-031
+// Slice B) and returns the parsed DriftReport. input — converge input override
+// (nil = auto-from-state). Any non-200 — t.Fatal with the response body.
 func (s *Stack) CheckDrift(t *testing.T, incarnationName string, input map[string]any) DriftReport {
 	t.Helper()
 	c := s.opClient(t)
@@ -61,7 +62,7 @@ func (s *Stack) CheckDrift(t *testing.T, incarnationName string, input map[strin
 		t.Fatalf("CheckDrift %s: http: %v", incarnationName, err)
 	}
 	if status != http.StatusOK {
-		t.Fatalf("CheckDrift %s: status %d, ожидался 200; body=%s", incarnationName, status, string(resp))
+		t.Fatalf("CheckDrift %s: status %d, expected 200; body=%s", incarnationName, status, string(resp))
 	}
 	var rep DriftReport
 	if err := json.Unmarshal(resp, &rep); err != nil {
@@ -70,8 +71,8 @@ func (s *Stack) CheckDrift(t *testing.T, incarnationName string, input map[strin
 	return rep
 }
 
-// SoulHistoryItem — read-проекция одного элемента items[] из
-// GET /v1/souls/{sid}/history. Поля — публичный JSON-контракт handler-а.
+// SoulHistoryItem — read projection of one items[] element from
+// GET /v1/souls/{sid}/history. Fields form the handler's public JSON contract.
 type SoulHistoryItem struct {
 	Type        string `json:"type"` // scenario | errand.
 	ID          string `json:"id"`
@@ -83,7 +84,7 @@ type SoulHistoryItem struct {
 	FinishedAt  string `json:"finished_at,omitempty"`
 }
 
-// SoulHistoryReply — 200-body GET /v1/souls/{sid}/history.
+// SoulHistoryReply — the 200 body of GET /v1/souls/{sid}/history.
 type SoulHistoryReply struct {
 	SID    string            `json:"sid"`
 	Items  []SoulHistoryItem `json:"items"`
@@ -92,9 +93,9 @@ type SoulHistoryReply struct {
 	Total  int               `json:"total"`
 }
 
-// SoulHistory вызывает GET /v1/souls/{sid}/history с опциональным query-фильтром
-// type (scenario|errand; пусто = оба источника) и возвращает разобранный ответ.
-// Любой не-200 — t.Fatal с телом.
+// SoulHistory calls GET /v1/souls/{sid}/history with an optional type query
+// filter (scenario|errand; empty = both sources) and returns the parsed
+// response. Any non-200 — t.Fatal with the body.
 func (s *Stack) SoulHistory(t *testing.T, sid, typeFilter string) SoulHistoryReply {
 	t.Helper()
 	c := s.opClient(t)
@@ -107,7 +108,7 @@ func (s *Stack) SoulHistory(t *testing.T, sid, typeFilter string) SoulHistoryRep
 		t.Fatalf("SoulHistory %s: http: %v", sid, err)
 	}
 	if status != http.StatusOK {
-		t.Fatalf("SoulHistory %s: status %d, ожидался 200; body=%s", sid, status, string(resp))
+		t.Fatalf("SoulHistory %s: status %d, expected 200; body=%s", sid, status, string(resp))
 	}
 	var reply SoulHistoryReply
 	if err := json.Unmarshal(resp, &reply); err != nil {

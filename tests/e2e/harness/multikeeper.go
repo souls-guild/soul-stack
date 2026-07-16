@@ -2,17 +2,17 @@
 
 package harness
 
-// Multi-keeper crash-harness (GA recovery-доказательство). Расширяет
-// single-keeper Stack до N keeper-субпроцессов поверх ОБЩИХ PG / Redis / Vault:
-// каждый со своим KID + своими listener-портами + включённым VoyageWorker-pool
-// и reaper-правилом reclaim_voyages. Presence keeper-инстансов — через общий
-// Redis Conclave (как в prod-HA-кластере).
+// Multi-keeper crash harness (GA recovery proof). Extends the single-keeper
+// Stack to N keeper subprocesses on top of SHARED PG / Redis / Vault: each
+// with its own KID + its own listener ports + an enabled VoyageWorker pool
+// and the reclaim_voyages reaper rule. Presence of keeper instances — via the
+// shared Redis Conclave (as in a prod HA cluster).
 //
-// Цель: убить ПРОЦЕСС keeper-владельца Voyage mid-run (настоящий SIGKILL, не
-// SQL-эмуляция) и доказать end-to-end recovery — другой живой keeper
-// подхватывает (reclaim_voyages → re-claim) и доводит прогон до терминала.
+// Goal: kill the keeper PROCESS that owns a Voyage mid-run (a real SIGKILL,
+// not a SQL emulation) and prove end-to-end recovery — another live keeper
+// picks it up (reclaim_voyages -> re-claim) and drives the run to a terminal.
 //
-// Single-keeper тесты (NewStack) этот файл НЕ затрагивает: всё аддитивно.
+// Single-keeper tests (NewStack) are NOT touched by this file: everything is additive.
 
 import (
 	"context"
@@ -29,47 +29,48 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// keeperProc — один живой keeper-субпроцесс мульти-кластера.
+// keeperProc — one live keeper subprocess of the multi-keeper cluster.
 type keeperProc struct {
 	kid      string
 	cmd      *exec.Cmd
 	httpURL  string
 	grpcAddr string
-	// killed — флаг, что процесс уже убит тестом (cleanup тогда не шлёт сигнал
-	// мёртвому процессу повторно).
+	// killed — flag that the process has already been killed by the test
+	// (cleanup then doesn't send a signal to a dead process again).
 	killed bool
 }
 
-// MultiKeeperConfig — параметры мульти-keeper crash-стенда.
+// MultiKeeperConfig — parameters for the multi-keeper crash stand.
 type MultiKeeperConfig struct {
-	// Keepers — число keeper-субпроцессов (≥2 для crash-сценария).
+	// Keepers — number of keeper subprocesses (>=2 for a crash scenario).
 	Keepers int
-	// Souls — число pre-auth soul-stub-ов (общих для всего кластера).
+	// Souls — number of pre-auth soul stubs (shared across the whole cluster).
 	Souls int
-	// VoyageLeaseTTL — TTL PG-claim-lease строки voyages. Короткий (3-5s),
-	// чтобы после SIGKILL владельца протухший claim быстро попал под
-	// reclaim_voyages. Пустой → дефолт 4s.
+	// VoyageLeaseTTL — TTL of the PG claim lease on a voyages row. Short (3-5s)
+	// so that after SIGKILLing the owner, the stale claim quickly falls under
+	// reclaim_voyages. Empty -> default 4s.
 	VoyageLeaseTTL time.Duration
 
-	// ReconcileOrphanStaleAfter — `stale_after` Reaper-правила
-	// reconcile_orphan_applying (ADR-027 amend (m)). applying-строка считается
-	// осиротевшей, если applying_since < NOW()-stale_after И presence владельца
-	// мёртв. Дефолт правила — 90s; для standalone-orphan crash-теста ставим
-	// короткий порог (2-5s), чтобы правило сработало вскоре после истечения
-	// Conclave-presence убитого владельца, не ожидая by-design 90s. Пустой →
-	// 3s (короткий тестовый порог, НЕ prod-дефолт правила).
+	// ReconcileOrphanStaleAfter — `stale_after` of the reconcile_orphan_applying
+	// reaper rule (ADR-027 amend (m)). An applying row is considered orphaned
+	// if applying_since < NOW()-stale_after AND the owner's presence is dead.
+	// The rule's default is 90s; for the standalone-orphan crash test we set a
+	// short threshold (2-5s) so the rule fires shortly after the killed
+	// owner's Conclave presence expires, instead of waiting the by-design
+	// 90s. Empty -> 3s (a short test threshold, NOT the rule's prod default).
 	ReconcileOrphanStaleAfter time.Duration
 }
 
-// NewMultiKeeperStack поднимает общий PG/Redis/Vault + N keeper-субпроцессов и
-// блокируется до готовности каждого (/readyz). Возвращает Stack, у которого
-// Stack.KeeperHTTPURL / KeeperGRPCAddr указывают на keeper[0] (primary —
-// точка входа Operator-API и EventStream soul-stub-ов); reclaim, однако,
-// исполняет ЛЮБОЙ живой keeper кластера через общий Reaper-leader.
+// NewMultiKeeperStack brings up shared PG/Redis/Vault + N keeper subprocesses
+// and blocks until each is ready (/readyz). Returns a Stack whose
+// Stack.KeeperHTTPURL / KeeperGRPCAddr point at keeper[0] (the primary — the
+// entry point for the Operator API and soul-stub EventStreams); reclaim,
+// however, is executed by ANY live cluster keeper via the shared
+// Reaper leader.
 func NewMultiKeeperStack(t *testing.T, cfg MultiKeeperConfig) *Stack {
 	t.Helper()
 	if cfg.Keepers < 2 {
-		t.Fatalf("NewMultiKeeperStack: нужно ≥2 keeper-а для crash-сценария, задано %d", cfg.Keepers)
+		t.Fatalf("NewMultiKeeperStack: need >=2 keepers for a crash scenario, got %d", cfg.Keepers)
 	}
 	if cfg.Souls <= 0 {
 		cfg.Souls = 1
@@ -82,7 +83,7 @@ func NewMultiKeeperStack(t *testing.T, cfg MultiKeeperConfig) *Stack {
 	}
 
 	if _, err := locateKeeperBinary(); err != nil {
-		t.Skipf("multi-keeper: keeper-бинарь не найден (%v); экспортируй KEEPER_BIN или сделай `make build`", err)
+		t.Skipf("multi-keeper: keeper binary not found (%v); export KEEPER_BIN or run `make build`", err)
 	}
 
 	s := &Stack{
@@ -94,7 +95,7 @@ func NewMultiKeeperStack(t *testing.T, cfg MultiKeeperConfig) *Stack {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	// Общая инфра (как в NewStack).
+	// Shared infra (as in NewStack).
 	if err := s.startPostgres(ctx); err != nil {
 		s.runCleanups()
 		t.Fatalf("multi-keeper: postgres: %v", err)
@@ -109,9 +110,9 @@ func NewMultiKeeperStack(t *testing.T, cfg MultiKeeperConfig) *Stack {
 	}
 	InitVaultTestSecrets(t, s)
 
-	// Общий server-cert для всех keeper-ов (один CA — soul-stub верифицирует
-	// server-cert любого keeper-а по нему). SAN включает 127.0.0.1, поэтому
-	// один cert годится всем loopback-listener-ам.
+	// A shared server cert for all keepers (one CA — the soul-stub verifies
+	// any keeper's server cert against it). SAN includes 127.0.0.1, so one
+	// cert works for all loopback listeners.
 	keeperCertPEM, keeperKeyPEM, caPEM := IssueKeeperServerCert(t, s)
 	s.caBundle = caPEM
 	tlsDir := filepath.Join(s.tmpDir, "tls")
@@ -125,7 +126,7 @@ func NewMultiKeeperStack(t *testing.T, cfg MultiKeeperConfig) *Stack {
 	mustWrite(t, keyPath, keeperKeyPEM, 0o600)
 	mustWrite(t, caPath, caPEM, 0o644)
 
-	// PG pool для direct SQL (assert claimed_by_kid / status).
+	// PG pool for direct SQL (assert claimed_by_kid / status).
 	pool, err := pgxpool.New(ctx, s.PGURL)
 	if err != nil {
 		s.runCleanups()
@@ -134,32 +135,35 @@ func NewMultiKeeperStack(t *testing.T, cfg MultiKeeperConfig) *Stack {
 	s.db = pool
 	s.cleanups = append(s.cleanups, func() { pool.Close() })
 
-	// PG DSN в Vault (keeper.yml::postgres.dsn_ref ссылается сюда).
+	// PG DSN into Vault (keeper.yml::postgres.dsn_ref points here).
 	s.seedPostgresDSN()
 
-	// Рендер per-keeper YAML + аллокация портов. Первый keeper (i==0) —
-	// soul-holder primary: его HTTP/gRPC-адреса проставляются в Stack (опорные
-	// для opClient и ConnectSoulStub), и он НЕ запускает VoyageWorker-pool
-	// (voyage.workers: 0) — значит, никогда не становится владельцем Voyage.
-	// Остальные keeper-ы (i>=1) — VoyageWorker-ы без подключённых soul-ов.
+	// Render per-keeper YAML + allocate ports. The first keeper (i==0) is the
+	// soul-holder primary: its HTTP/gRPC addresses are set on the Stack
+	// (anchors for opClient and ConnectSoulStub), and it does NOT run a
+	// VoyageWorker pool (voyage.workers: 0) — so it never becomes a Voyage
+	// owner. The remaining keepers (i>=1) are VoyageWorkers with no connected
+	// souls.
 	//
-	// Зачем разделять: soul-stub-ы подключаются стримом к primary; убийство
-	// Voyage-владельца (всегда i>=1) НЕ роняет soul-стримы. Apply-шаги
-	// per-incarnation scenario-run-а Voyage-владельца маршрутизируются на
-	// soul-holder через cluster-routing (Redis applybus, cluster_routing=true).
-	// Так crash Voyage-владельца оставляет флот живым, и reclaim-keeper
-	// доисполняет прогон против всё ещё подключённых soul-ов.
+	// Why separate: soul stubs connect their stream to the primary; killing
+	// the Voyage owner (always i>=1) does NOT bring down the soul streams.
+	// Apply steps of the Voyage owner's per-incarnation scenario run are
+	// routed to the soul-holder via cluster routing (Redis applybus,
+	// cluster_routing=true). This way a Voyage-owner crash leaves the fleet
+	// alive, and the reclaim-keeper finishes the run against the still
+	// connected souls.
 	for i := 0; i < cfg.Keepers; i++ {
 		kid := fmt.Sprintf("keeper-mk-%02d", i)
 		voyageWorkers := 2
 		if i == 0 {
-			voyageWorkers = 0 // soul-holder не претендует на Voyage
+			voyageWorkers = 0 // the soul-holder never claims a Voyage
 		}
 		yamlPath, httpURL, grpcAddr := s.buildMultiKeeperYAML(kid, certPath, keyPath, caPath, cfg.VoyageLeaseTTL, voyageWorkers, cfg.ReconcileOrphanStaleAfter)
 
 		if i == 0 {
-			// Bootstrap первого Архонта — единожды, на primary-конфиге (трогает
-			// только PG/Vault, не listener-ы). JWT общий для всего кластера.
+			// Bootstrap the first Archon — once, on the primary config
+			// (touches only PG/Vault, not the listeners). JWT is shared
+			// across the whole cluster.
 			credPath := s.runKeeperInit(yamlPath)
 			jwtBytes, rerr := os.ReadFile(credPath)
 			if rerr != nil {
@@ -179,7 +183,7 @@ func NewMultiKeeperStack(t *testing.T, cfg MultiKeeperConfig) *Stack {
 		s.keepers = append(s.keepers, kp)
 	}
 
-	// Pre-auth soul-stub-ы (общие; ConnectSoulStub откроет стрим к primary).
+	// Pre-auth soul stubs (shared; ConnectSoulStub opens a stream to the primary).
 	for i := 0; i < cfg.Souls; i++ {
 		sid := fmt.Sprintf("soul-mk-%d.example.com", i)
 		cert, key := RegisterSoulPreAuth(t, s, sid)
@@ -189,10 +193,11 @@ func NewMultiKeeperStack(t *testing.T, cfg MultiKeeperConfig) *Stack {
 	return s
 }
 
-// buildMultiKeeperYAML рендерит keeper.yml для одного keeper-а мульти-кластера:
-// уникальный KID + свои listener-порты, общий PG/Redis/Vault, включённые
-// VoyageWorker-pool (короткий lease) и reaper-правило reclaim_voyages. Пишет
-// YAML в tmpDir/<kid>.yml. Возвращает (yamlPath, httpURL, grpcEventStreamAddr).
+// buildMultiKeeperYAML renders keeper.yml for one keeper of the multi-keeper
+// cluster: a unique KID + its own listener ports, shared PG/Redis/Vault, an
+// enabled VoyageWorker pool (short lease) and the reclaim_voyages reaper
+// rule. Writes the YAML to tmpDir/<kid>.yml. Returns (yamlPath, httpURL,
+// grpcEventStreamAddr).
 func (s *Stack) buildMultiKeeperYAML(kid, certPath, keyPath, caPath string, leaseTTL time.Duration, voyageWorkers int, reconcileStaleAfter time.Duration) (string, string, string) {
 	bootstrapAddr := allocLoopback(s.t)
 	eventStreamAddr := allocLoopback(s.t)
@@ -203,8 +208,8 @@ func (s *Stack) buildMultiKeeperYAML(kid, certPath, keyPath, caPath string, leas
 	pluginsCacheDir := filepath.Join(s.tmpDir, kid, "plugins")
 	socketsDir := filepath.Join(s.tmpDir, kid, "plugin-sockets")
 
-	// Renew ~1/3 TTL; reaper-интервал и reclaim-stale короткие, чтобы reclaim
-	// сработал в пределах секунд после протухания lease убитого владельца.
+	// Renew ~1/3 TTL; the reaper interval and reclaim-stale are short so
+	// reclaim fires within seconds of the killed owner's lease expiring.
 	leaseRenew := leaseTTL / 3
 	if leaseRenew < time.Second {
 		leaseRenew = time.Second
@@ -328,8 +333,8 @@ reaper:
 	return yamlPath, "http://" + httpAddr, eventStreamAddr
 }
 
-// spawnKeeperProc запускает `keeper run` для одного KID и блокируется до
-// готовности (/readyz). Cleanup-handler шлёт SIGINT (если процесс ещё жив).
+// spawnKeeperProc launches `keeper run` for one KID and blocks until ready
+// (/readyz). The cleanup handler sends SIGINT (if the process is still alive).
 func (s *Stack) spawnKeeperProc(kid, yamlPath, httpURL, grpcAddr string) (*keeperProc, error) {
 	binaryPath := keeperBinaryPath(s.t)
 	serviceCacheDir := filepath.Join(s.tmpDir, kid, "service-cache")
@@ -375,10 +380,10 @@ func (s *Stack) spawnKeeperProc(kid, yamlPath, httpURL, grpcAddr string) (*keepe
 	return nil, errors.New("/readyz did not become healthy in 60s")
 }
 
-// KillKeeperByKID шлёт SIGKILL keeper-процессу с заданным KID (настоящий kill
-// процесса — не SQL-эмуляция). Fatal, если KID неизвестен или уже убит. После
-// kill блокируется до фактического выхода процесса (cmd.Wait), чтобы порты
-// освободились и тест не ловил зомби-listener.
+// KillKeeperByKID sends SIGKILL to the keeper process with the given KID (a
+// real process kill — not a SQL emulation). Fatal if the KID is unknown or
+// already killed. After the kill it blocks until the process actually exits
+// (cmd.Wait), so ports are freed and the test doesn't hit a zombie listener.
 func (s *Stack) KillKeeperByKID(t *testing.T, kid string) {
 	t.Helper()
 	for _, kp := range s.keepers {
@@ -386,23 +391,23 @@ func (s *Stack) KillKeeperByKID(t *testing.T, kid string) {
 			continue
 		}
 		if kp.killed {
-			t.Fatalf("KillKeeperByKID(%s): процесс уже убит", kid)
+			t.Fatalf("KillKeeperByKID(%s): process already killed", kid)
 		}
 		if kp.cmd.Process == nil {
-			t.Fatalf("KillKeeperByKID(%s): процесс не запущен", kid)
+			t.Fatalf("KillKeeperByKID(%s): process not started", kid)
 		}
 		if err := kp.cmd.Process.Signal(syscall.SIGKILL); err != nil {
 			t.Fatalf("KillKeeperByKID(%s): SIGKILL: %v", kid, err)
 		}
 		kp.killed = true
-		_ = kp.cmd.Wait() // снимаем зомби; код выхода нерелевантен (SIGKILL)
-		t.Logf("multi-keeper: SIGKILL отправлен и подтверждён для %s", kid)
+		_ = kp.cmd.Wait() // reap the zombie; exit code is irrelevant (SIGKILL)
+		t.Logf("multi-keeper: SIGKILL sent and confirmed for %s", kid)
 		return
 	}
-	t.Fatalf("KillKeeperByKID(%s): KID не найден среди %d keeper-ов", kid, len(s.keepers))
+	t.Fatalf("KillKeeperByKID(%s): KID not found among %d keepers", kid, len(s.keepers))
 }
 
-// LiveKeeperKIDs возвращает KID-ы ещё живых (не убитых) keeper-ов.
+// LiveKeeperKIDs returns the KIDs of still-live (not killed) keepers.
 func (s *Stack) LiveKeeperKIDs() []string {
 	var out []string
 	for _, kp := range s.keepers {
@@ -413,9 +418,10 @@ func (s *Stack) LiveKeeperKIDs() []string {
 	return out
 }
 
-// AllKeeperGRPCAddrs возвращает EventStream-gRPC-адреса всех keeper-ов кластера в
-// порядке spawn-а (mk-00 первым). Зеркало soul.yml::keeper.endpoints — soul-stub
-// использует список для reconnect-fallback при смерти keeper-холдера стрима.
+// AllKeeperGRPCAddrs returns the EventStream gRPC addresses of all cluster
+// keepers in spawn order (mk-00 first). Mirrors soul.yml::keeper.endpoints —
+// the soul-stub uses the list for reconnect fallback when the stream-holder
+// keeper dies.
 func (s *Stack) AllKeeperGRPCAddrs() []string {
 	out := make([]string, 0, len(s.keepers))
 	for _, kp := range s.keepers {
@@ -424,8 +430,9 @@ func (s *Stack) AllKeeperGRPCAddrs() []string {
 	return out
 }
 
-// LiveKeeperGRPCAddrs возвращает EventStream-gRPC-адреса ещё живых keeper-ов
-// (исключая убитых SIGKILL-ом). Для reconnect-fallback стаба после краша holder-а.
+// LiveKeeperGRPCAddrs returns the EventStream gRPC addresses of still-live
+// keepers (excluding those killed with SIGKILL). For the stub's reconnect
+// fallback after the holder crashes.
 func (s *Stack) LiveKeeperGRPCAddrs() []string {
 	out := make([]string, 0, len(s.keepers))
 	for _, kp := range s.keepers {
@@ -436,9 +443,10 @@ func (s *Stack) LiveKeeperGRPCAddrs() []string {
 	return out
 }
 
-// KeeperKIDForGRPCAddr резолвит EventStream-gRPC-адрес → KID keeper-а (обратный
-// маппинг к AllKeeperGRPCAddrs). Нужен тесту, чтобы по адресу keeper-холдера
-// стрима стаба узнать, какой KID убивать. Пустая строка, если адрес неизвестен.
+// KeeperKIDForGRPCAddr resolves an EventStream gRPC address -> keeper KID
+// (the reverse mapping of AllKeeperGRPCAddrs). Needed by the test to figure
+// out, from the stub's stream-holder keeper address, which KID to kill.
+// Empty string if the address is unknown.
 func (s *Stack) KeeperKIDForGRPCAddr(addr string) string {
 	for _, kp := range s.keepers {
 		if kp.grpcAddr == addr {
@@ -448,7 +456,7 @@ func (s *Stack) KeeperKIDForGRPCAddr(addr string) string {
 	return ""
 }
 
-// mustWrite пишет файл, fatal при ошибке.
+// mustWrite writes a file, fatal on error.
 func mustWrite(t *testing.T, path string, data []byte, mode os.FileMode) {
 	t.Helper()
 	if err := os.WriteFile(path, data, mode); err != nil {
@@ -456,8 +464,9 @@ func mustWrite(t *testing.T, path string, data []byte, mode os.FileMode) {
 	}
 }
 
-// durationYAML форматирует time.Duration в Go-duration-строку для keeper.yml
-// (config-парсер принимает "4s"/"1s" формат time.ParseDuration).
+// durationYAML formats a time.Duration as a Go duration string for
+// keeper.yml (the config parser accepts the "4s"/"1s" time.ParseDuration
+// format).
 func durationYAML(d time.Duration) string {
 	return d.String()
 }

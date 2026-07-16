@@ -1,18 +1,19 @@
 //go:build e2e
 
-// Package harness — reusable test-helpers для L3a E2E-тестирования (ADR-039).
+// Package harness — reusable test helpers for L3a E2E testing (ADR-039).
 //
-// Stack — единица изоляции теста: один тест = один Stack = свой PG / Redis /
-// Vault через testcontainers + свой Keeper-процесс (sub-process реального
-// бинаря) + N soul-stub-ов, открывающих bidi-стрим к Keeper-у. NewStack
-// блокируется до полной готовности инфры (PG healthy + keeper run отвечает
-// на /readyz + все soul-stub-ы зарегистрированы).
+// Stack — the unit of test isolation: one test = one Stack = its own PG /
+// Redis / Vault via testcontainers + its own Keeper process (a sub-process
+// of the real binary) + N soul-stubs opening a bidi stream to the Keeper.
+// NewStack blocks until the infra is fully ready (PG healthy + keeper run
+// responds on /readyz + all soul-stubs registered).
 //
-// Архитектурные инварианты (см. ADR-039 Amendment 2026-05-26):
-//   - harness НЕ импортирует `keeper/internal/*` (Go internal-rules);
-//   - все DB-операции — direct SQL через pgx;
-//   - все Vault-операции — direct HTTP API (см. vault.go);
-//   - Keeper-процесс — sub-process реального бинаря, не in-process импорт.
+// Architectural invariants (see ADR-039 Amendment 2026-05-26):
+//   - the harness does NOT import `keeper/internal/*` (Go internal rules);
+//   - all DB operations are direct SQL via pgx;
+//   - all Vault operations are direct HTTP API (see vault.go);
+//   - the Keeper process is a sub-process of the real binary, not an
+//     in-process import.
 package harness
 
 import (
@@ -35,38 +36,38 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// Config — параметры конструирования Stack-а.
+// Config — parameters for constructing a Stack.
 //
-// ExamplePath — относительный путь к каталогу service-а в репо (например
-// "examples/service/smoke-nginx"). Harness читает его, делает snapshot и
-// заводит per-test bare git-repo в $TMP (см. git.go).
+// ExamplePath — relative path to the service directory in the repo (e.g.
+// "examples/service/smoke-nginx"). The harness reads it, takes a snapshot,
+// and sets up a per-test bare git repo in $TMP (see git.go).
 //
-// Souls — количество soul-stub-ов, открывающих стрим к Keeper-у. На каждый
-// stub harness генерирует свой SID (например "soul-test-0.example.com") и
-// minimal soulprint, если в fixtures/souls.yaml не задано иное.
+// Souls — number of soul-stubs opening a stream to the Keeper. For each
+// stub the harness generates its own SID (e.g. "soul-test-0.example.com")
+// and a minimal soulprint, unless fixtures/souls.yaml specifies otherwise.
 type Config struct {
 	ExamplePath string
 	Souls       int
 }
 
-// Stack — изолированный E2E-стенд одного теста.
+// Stack — isolated E2E stand for one test.
 type Stack struct {
 	t *testing.T
 
 	cfg Config
 
-	// Resolved endpoints (заполняются NewStack-ом после spawn-а).
+	// Resolved endpoints (filled in by NewStack after spawn).
 	PGURL               string
 	RedisAddr           string
 	VaultAddr           string
 	KeeperHTTPURL       string
 	KeeperGRPCAddr      string
 	KeeperBootstrapGRPC string
-	// MetricsURL — Prometheus-эндпоинт keeper-а (отдельный listener,
-	// ADR-024). Используется AssertMetricGE.
+	// MetricsURL — the keeper's Prometheus endpoint (separate listener,
+	// ADR-024). Used by AssertMetricGE.
 	MetricsURL string
 
-	// JWT — credential первого Архонта, прочитанный из credential-файла
+	// JWT — the first Archon's credential, read from the credential file
 	// `keeper init --credential-out=...`.
 	JWT string
 
@@ -78,44 +79,46 @@ type Stack struct {
 
 	keeperCmd *exec.Cmd
 
-	// keepers — keeper-субпроцессы мульти-кластера (NewMultiKeeperStack).
-	// Пуст для single-keeper Stack (keeperCmd выше). См. multikeeper.go.
+	// keepers — multi-cluster keeper sub-processes (NewMultiKeeperStack).
+	// Empty for a single-keeper Stack (keeperCmd above). See multikeeper.go.
 	keepers []*keeperProc
 
-	// souls — pre-auth-зарегистрированные soul-stub-ы (SID + mTLS client-cert),
-	// заполняется NewStack-ом. caBundle — root CA keeper-server-cert-а, общий
-	// для всех (ConnectSoulStub верифицирует server-cert по нему). Используется
-	// ConnectSoulStub для открытия live EventStream-стрима к Keeper-у.
+	// souls — pre-auth-registered soul-stubs (SID + mTLS client cert),
+	// filled in by NewStack. caBundle — root CA of the keeper server cert,
+	// shared by all (ConnectSoulStub verifies the server cert against it).
+	// Used by ConnectSoulStub to open a live EventStream to the Keeper.
 	souls    []soulIdentity
 	caBundle []byte
 
 	containers []testcontainers.Container
 
-	// Cleanup-shutdown order: LIFO через cleanups (как defer-ы); NewStack
-	// аккумулирует teardown-handler-ы по мере поднятия зависимостей, Cleanup
-	// сливает в обратном порядке.
+	// Cleanup-shutdown order: LIFO via cleanups (like defers); NewStack
+	// accumulates teardown handlers as dependencies come up, Cleanup runs
+	// them in reverse order.
 	cleanups []func()
 }
 
-// NewStack поднимает изолированный стенд и блокируется до готовности.
+// NewStack brings up an isolated stand and blocks until it is ready.
 //
-// Pilot-фаза (до v3): t.Skip без spawn-а. Сейчас (v3) — реальный spawn инфры.
+// Pilot phase (before v3): t.Skip without spawning. Now (v3) — a real infra
+// spawn.
 //
-// Pre-flight: harness требует наличия keeper-бинаря (env `KEEPER_BIN` или
-// дефолтная сборка `make build`); без него тест Skip-ается ДО spawn-а
-// testcontainers (иначе разработчик без сборки получает 5-минутный таймаут).
-// Симметрично — без docker testcontainers вернёт ошибку spawn-а, и тест
-// зафейлится явно: разработчик явно запросил E2E, отсутствие docker — fail,
-// не skip.
+// Pre-flight: the harness requires a keeper binary (env `KEEPER_BIN` or the
+// default `make build` output); without it the test is Skipped BEFORE
+// spawning testcontainers (otherwise a developer without a build gets a
+// 5-minute timeout). Symmetrically — without docker, testcontainers returns
+// a spawn error and the test fails explicitly: the developer explicitly
+// requested E2E, so missing docker is a fail, not a skip.
 func NewStack(t *testing.T, cfg Config) *Stack {
 	t.Helper()
 	if cfg.Souls <= 0 {
 		cfg.Souls = 1
 	}
 
-	// Pre-flight: keeper-бинарь. Skip — фактически «E2E невозможен в этой среде».
+	// Pre-flight: keeper binary. Skip effectively means "E2E is impossible
+	// in this environment".
 	if _, err := locateKeeperBinary(); err != nil {
-		t.Skipf("L3a: keeper-бинарь не найден (%v); экспортируй KEEPER_BIN или сделай `make build`", err)
+		t.Skipf("L3a: keeper binary not found (%v); export KEEPER_BIN or run `make build`", err)
 	}
 
 	s := &Stack{
@@ -140,12 +143,12 @@ func NewStack(t *testing.T, cfg Config) *Stack {
 		t.Fatalf("NewStack: vault: %v", err)
 	}
 
-	// Vault test-secrets: PKI + JWT signing-key. Симметрично provision.sh.
+	// Vault test-secrets: PKI + JWT signing-key. Mirrors provision.sh.
 	InitVaultTestSecrets(t, s)
 
-	// Outgoing-TLS material для keeper-server listener-ов.
+	// Outgoing-TLS material for keeper-server listeners.
 	keeperCertPEM, keeperKeyPEM, caPEM := IssueKeeperServerCert(t, s)
-	// Сохраняем CA для ConnectSoulStub (верификация server-cert-а soul-stub-ом).
+	// Save the CA for ConnectSoulStub (soul-stub verifies the server cert against it).
 	s.caBundle = caPEM
 	tlsDir := filepath.Join(s.tmpDir, "tls")
 	if err := os.MkdirAll(tlsDir, 0o755); err != nil {
@@ -164,14 +167,14 @@ func NewStack(t *testing.T, cfg Config) *Stack {
 		t.Fatalf("NewStack: write vault-ca.crt: %v", err)
 	}
 
-	// keeper.yml — рендерится в tmpDir.
+	// keeper.yml — rendered into tmpDir.
 	keeperYAML := s.buildKeeperYAML(certPath, keyPath, caPath)
 	keeperYAMLPath := filepath.Join(s.tmpDir, "keeper.yml")
 	if err := os.WriteFile(keeperYAMLPath, []byte(keeperYAML), 0o600); err != nil {
 		t.Fatalf("NewStack: write keeper.yml: %v", err)
 	}
 
-	// PG connection pool — для direct SQL после bootstrap.
+	// PG connection pool — for direct SQL after bootstrap.
 	pool, err := pgxpool.New(ctx, s.PGURL)
 	if err != nil {
 		s.runCleanups()
@@ -195,10 +198,10 @@ func NewStack(t *testing.T, cfg Config) *Stack {
 		t.Fatalf("NewStack: keeper run: %v", err)
 	}
 
-	// Pre-auth регистрация soul-stub-ов в БД. Сохраняем mTLS client-cert каждого
-	// SID-а — ConnectSoulStub откроет по нему live EventStream-стрим к Keeper-у
-	// (нужно для dispatch-маршрутизации: Errand/Apply уходят в локальный Outbound
-	// только при наличии живого стрима + захваченного Redis SID-lease).
+	// Pre-auth registration of soul-stubs in the DB. Save each SID's mTLS
+	// client cert — ConnectSoulStub will use it to open a live EventStream
+	// to the Keeper (needed for dispatch routing: Errand/Apply go to the
+	// local Outbound only with a live stream + acquired Redis SID lease).
 	for i := 0; i < cfg.Souls; i++ {
 		sid := fmt.Sprintf("soul-test-%d.example.com", i)
 		cert, key := RegisterSoulPreAuth(t, s, sid)
@@ -208,23 +211,23 @@ func NewStack(t *testing.T, cfg Config) *Stack {
 	return s
 }
 
-// soulIdentity — pre-auth-зарегистрированный soul-stub: SID + mTLS client-cert.
+// soulIdentity — a pre-auth-registered soul-stub: SID + mTLS client cert.
 type soulIdentity struct {
 	SID  string
 	Cert []byte
 	Key  []byte
 }
 
-// SoulSID возвращает SID i-го pre-auth soul-а (0-based). Fatal при выходе за
-// границы (тест запросил больше Soul-ов, чем создал Config.Souls).
+// SoulSID returns the SID of the i-th pre-auth soul (0-based). Fatal if out
+// of range (the test requested more Souls than Config.Souls created).
 func (s *Stack) SoulSID(i int) string {
 	if i < 0 || i >= len(s.souls) {
-		s.t.Fatalf("SoulSID(%d): out of range (создано %d soul-ов)", i, len(s.souls))
+		s.t.Fatalf("SoulSID(%d): out of range (%d souls created)", i, len(s.souls))
 	}
 	return s.souls[i].SID
 }
 
-// Cleanup гасит весь стенд. Безопасен к повторному вызову.
+// Cleanup tears down the whole stand. Safe to call more than once.
 func (s *Stack) Cleanup() {
 	if s == nil {
 		return
@@ -246,7 +249,7 @@ func (s *Stack) runCleanups() {
 	s.cleanups = nil
 }
 
-// startPostgres поднимает PG-контейнер через testcontainers-go/modules/postgres.
+// startPostgres brings up a PG container via testcontainers-go/modules/postgres.
 func (s *Stack) startPostgres(ctx context.Context) error {
 	pgC, err := tcpostgres.RunContainer(ctx,
 		testcontainers.WithImage("postgres:16-alpine"),
@@ -295,8 +298,8 @@ func (s *Stack) startRedis(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("redis addr: %w", err)
 	}
-	// ConnectionString отдаёт `redis://host:port`. Для keeper.yml::redis.addr
-	// нужен host:port без схемы.
+	// ConnectionString returns `redis://host:port`. keeper.yml::redis.addr
+	// needs host:port without the scheme.
 	addr = strings.TrimPrefix(addr, "redis://")
 	s.RedisAddr = addr
 	return nil
@@ -312,8 +315,8 @@ func (s *Stack) startVault(ctx context.Context) error {
 			"VAULT_DEV_LISTEN_ADDRESS": "0.0.0.0:8200",
 		},
 		WaitingFor: wait.ForLog("Root Token:").WithStartupTimeout(45 * time.Second),
-		// vault dev-mode требует IPC_LOCK / cap_add, иначе ругается warning-ом,
-		// но стартует. В test-окружении игнорируем.
+		// vault dev-mode wants IPC_LOCK / cap_add, otherwise it logs a
+		// warning but still starts. Ignored in the test environment.
 	}
 	vc, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
@@ -342,8 +345,8 @@ func (s *Stack) startVault(ctx context.Context) error {
 	return nil
 }
 
-// runKeeperInit вызывает `keeper init` с каноническими флагами и возвращает
-// путь к credential-файлу (JWT первого Архонта).
+// runKeeperInit calls `keeper init` with the canonical flags and returns
+// the path to the credential file (the first Archon's JWT).
 func (s *Stack) runKeeperInit(keeperYAMLPath string) string {
 	s.t.Helper()
 	binaryPath := keeperBinaryPath(s.t)
@@ -363,16 +366,17 @@ func (s *Stack) runKeeperInit(keeperYAMLPath string) string {
 	return credentialPath
 }
 
-// startKeeperRun спавнит `keeper run` как sub-process. Блокируется до того,
-// как HTTP-listener начнёт отвечать (поллинг /readyz).
+// startKeeperRun spawns `keeper run` as a sub-process. Blocks until the
+// HTTP listener starts responding (polling /readyz).
 func (s *Stack) startKeeperRun(keeperYAMLPath string) error {
 	binaryPath := keeperBinaryPath(s.t)
-	// Service/destiny git-снапшоты artifact-loader-а кешируются в каталоге,
-	// дефолт которого `/var/lib/soul-stack-keeper/...` (не writable в test-env).
-	// Перенаправляем в tmpDir через env-override (KEEPER_SERVICE_CACHE_DIR /
-	// KEEPER_DESTINY_CACHE_DIR / KEEPER_PLUGIN_WORK_DIR — см. cmd/keeper/main.go).
-	// Без этого incarnation-create падает 500 «mkdir /var/lib/...: permission
-	// denied» на материализации service-снапшота из file://-репо.
+	// The artifact loader caches service/destiny git snapshots in a
+	// directory that defaults to `/var/lib/soul-stack-keeper/...` (not
+	// writable in the test env). Redirect to tmpDir via env overrides
+	// (KEEPER_SERVICE_CACHE_DIR / KEEPER_DESTINY_CACHE_DIR /
+	// KEEPER_PLUGIN_WORK_DIR — see cmd/keeper/main.go). Without this,
+	// incarnation-create fails with 500 "mkdir /var/lib/...: permission
+	// denied" while materializing the service snapshot from a file:// repo.
 	serviceCacheDir := filepath.Join(s.tmpDir, "service-cache")
 	destinyCacheDir := filepath.Join(s.tmpDir, "destiny-cache")
 	pluginWorkDir := filepath.Join(s.tmpDir, "plugin-src")
@@ -415,8 +419,8 @@ func (s *Stack) startKeeperRun(keeperYAMLPath string) error {
 	return errors.New("keeper run: /readyz did not become healthy in 60s")
 }
 
-// keeperBinaryPath — путь к keeper-бинарю для exec-вызова. Fatal-fail при
-// отсутствии (pre-flight в NewStack уже сделал Skip раньше).
+// keeperBinaryPath — path to the keeper binary for exec calls. Fatal-fails
+// if missing (pre-flight in NewStack already Skipped earlier).
 func keeperBinaryPath(t *testing.T) string {
 	t.Helper()
 	path, err := locateKeeperBinary()
@@ -426,9 +430,9 @@ func keeperBinaryPath(t *testing.T) string {
 	return path
 }
 
-// locateKeeperBinary возвращает путь к keeper-бинарю без testing.TB-зависимости.
-// Источник: env KEEPER_BIN (приоритет), иначе `$REPO/keeper/bin/keeper`
-// (Makefile-таргет `make build`).
+// locateKeeperBinary returns the path to the keeper binary without a
+// testing.TB dependency. Source: env KEEPER_BIN (priority), otherwise
+// `$REPO/keeper/bin/keeper` (Makefile target `make build`).
 func locateKeeperBinary() (string, error) {
 	if v := os.Getenv("KEEPER_BIN"); v != "" {
 		if _, err := os.Stat(v); err != nil {
@@ -449,7 +453,7 @@ func locateKeeperBinary() (string, error) {
 	return candidate, nil
 }
 
-// testLogWriter форвардит stdout/stderr keeper-процесса в t.Log.
+// testLogWriter forwards the keeper process's stdout/stderr to t.Log.
 type testLogWriter struct {
 	t      *testing.T
 	prefix string
@@ -465,20 +469,24 @@ func (w *testLogWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// SeedIncarnationReady вставляет incarnation-строку напрямую в Postgres со
-// status=ready и заданным baseline state, минуя scenario `create`.
+// SeedIncarnationReady inserts an incarnation row directly into Postgres
+// with status=ready and a given baseline state, bypassing the `create`
+// scenario.
 //
-// Нужно для e2e мутирующих сценариев сервисов, у которых `create` недоступен в
-// L3a-фикстуре (cloud-spawn / declared-role / probe на ещё-не-запущенном хосте —
-// напр. redis-cluster): такой сценарий требует предсуществующей ready-incarnation,
-// но прогнать её create нельзя. Прямой seed даёт нужную точку входа.
+// Needed for e2e mutating scenarios of services where `create` is not
+// available in the L3a fixture (cloud-spawn / declared-role / probe on a
+// not-yet-running host — e.g. redis-cluster): such a scenario requires a
+// pre-existing ready incarnation, but its create cannot be run. A direct
+// seed provides the needed entry point.
 //
-// serviceVersion — git-ref сервиса (обычно "main"); state — baseline
-// incarnation.state (JSONB). covens НЕ выставляются (declared env-теги не нужны:
-// roster резолвится по `incarnation.name ∈ souls.coven[]`, см. AddSoulToCoven).
-// created_by_aid = NULL (seed без оператора; FK ON DELETE SET NULL это допускает).
-// state_schema_version по умолчанию из DDL (DEFAULT 1) не задаём явно — мутирующий
-// сценарий читает state по полям, не по версии.
+// serviceVersion — the service's git ref (usually "main"); state — the
+// baseline incarnation.state (JSONB). covens are NOT set (declared env
+// tags aren't needed: the roster resolves via
+// `incarnation.name in souls.coven[]`, see AddSoulToCoven).
+// created_by_aid = NULL (seed without an operator; FK ON DELETE SET NULL
+// allows this). state_schema_version is not set explicitly, defaulting
+// from DDL (DEFAULT 1) — the mutating scenario reads state by field, not
+// by version.
 func (s *Stack) SeedIncarnationReady(t *testing.T, name, service, serviceVersion string, state map[string]any) {
 	t.Helper()
 	stateJSON, err := json.Marshal(state)
@@ -495,14 +503,15 @@ func (s *Stack) SeedIncarnationReady(t *testing.T, name, service, serviceVersion
 	}
 }
 
-// CreateIncarnation создаёт incarnation через Operator API Keeper-а.
+// CreateIncarnation creates an incarnation via the Keeper's Operator API.
 //
-// serviceRef — `<service>@<ref>` по контракту ТЗ; harness отрезает суффикс
-// `@<ref>` (POST /v1/incarnations принимает только bare service-name, версия
-// разрешается через service registry, ADR-029). spec — `input` body request-а.
+// serviceRef — `<service>@<ref>` per the spec contract; the harness strips
+// the `@<ref>` suffix (POST /v1/incarnations only accepts a bare
+// service-name, the version is resolved via the service registry,
+// ADR-029). spec — the request's `input` body.
 //
-// 202 → возвращает имя incarnation. Любая другая статус-страница — t.Fatal с
-// телом ответа (диагностика 4xx без догадок).
+// 202 -> returns the incarnation name. Any other status -> t.Fatal with the
+// response body (4xx diagnosis without guessing).
 func (s *Stack) CreateIncarnation(t *testing.T, name string, serviceRef string, spec map[string]any) string {
 	t.Helper()
 	c := s.opClient(t)
@@ -515,13 +524,14 @@ func (s *Stack) CreateIncarnation(t *testing.T, name string, serviceRef string, 
 		body["input"] = spec
 	}
 
-	// service-registry propagation: RegisterService коммитит запись в БД и
-	// PUBLISH-ит `service:invalidate`, но serviceregistry.Holder обновляет снимок
-	// в фоновой goroutine (pub/sub near-instant + 10s TTL-fallback). Между 201
-	// RegisterService и тёплым снимком есть короткое окно, в котором
-	// incarnation-create видит «service is not registered». Поллим ТОЛЬКО этот
-	// транзиентный 422 (по detail-маркеру «not registered»); любой другой статус
-	// или 422 иной природы (required-input) — немедленный fatal, без маскировки.
+	// service-registry propagation: RegisterService commits a DB row and
+	// PUBLISHes `service:invalidate`, but serviceregistry.Holder updates
+	// its snapshot in a background goroutine (near-instant pub/sub + 10s
+	// TTL fallback). Between the 201 from RegisterService and the warm
+	// snapshot there is a short window where incarnation-create sees
+	// "service is not registered". We poll ONLY this transient 422 (by the
+	// "not registered" detail marker); any other status or a 422 of a
+	// different nature (required-input) is an immediate fatal, no masking.
 	var resp []byte
 	var status int
 	var err error
@@ -552,16 +562,17 @@ func (s *Stack) CreateIncarnation(t *testing.T, name string, serviceRef string, 
 	return out.Incarnation
 }
 
-// CreateIncarnationWithApply — как CreateIncarnation, но возвращает и apply_id
-// авто-запущенного scenario `create` (incarnation.go запускает его сразу,
-// переводя incarnation в `applying`). Использовать вместо отдельного
-// RunScenario(create) сразу после Create: второй параллельный create-прогон
-// отвергается («incarnation уже в статусе applying»), и ожидание его apply_id
-// зависнет. Возвращает (incarnationName, applyID).
+// CreateIncarnationWithApply — like CreateIncarnation, but also returns the
+// apply_id of the auto-started `create` scenario (incarnation.go starts it
+// immediately, moving the incarnation to `applying`). Use instead of a
+// separate RunScenario(create) right after Create: a second, parallel
+// create run is rejected ("incarnation already in status applying"), and
+// waiting on its apply_id would hang. Returns (incarnationName, applyID).
 //
-// create_scenario=`create` — Фаза-2 контракт (2026-06-29): выбор стартового
-// сценария обязателен при непустом create-наборе сервиса; scenario обязан нести
-// `create: true`. Bare-путь (без прогона) — CreateIncarnation.
+// create_scenario=`create` — the Phase-2 contract (2026-06-29): choosing a
+// starting scenario is mandatory when the service has a non-empty create
+// set; the scenario must carry `create: true`. The bare path (no run) is
+// CreateIncarnation.
 func (s *Stack) CreateIncarnationWithApply(t *testing.T, name, serviceRef string, spec map[string]any) (string, string) {
 	t.Helper()
 	c := s.opClient(t)
@@ -601,15 +612,16 @@ func (s *Stack) CreateIncarnationWithApply(t *testing.T, name, serviceRef string
 		t.Fatalf("CreateIncarnationWithApply %s: decode: %v (body=%s)", name, err, string(resp))
 	}
 	if out.ApplyID == "" {
-		t.Fatalf("CreateIncarnationWithApply %s: пустой apply_id в 202 body=%s (create-scenario не запущен?)", name, string(resp))
+		t.Fatalf("CreateIncarnationWithApply %s: empty apply_id in 202 body=%s (create-scenario not started?)", name, string(resp))
 	}
 	return out.Incarnation, out.ApplyID
 }
 
-// CreateIncarnationRaw — низкоуровневый POST /v1/incarnations: возвращает
-// (responseBody, statusCode) без проверки статуса. Для негативных тестов
-// (например 422 sync-валидации required-input — фикс 6ce69ce), где сам код
-// ответа — предмет ассерта. Happy-path используйте CreateIncarnation.
+// CreateIncarnationRaw — low-level POST /v1/incarnations: returns
+// (responseBody, statusCode) without checking the status. For negative
+// tests (e.g. 422 sync-validation of required-input — fix 6ce69ce), where
+// the response code itself is the subject of the assert. Use
+// CreateIncarnation for the happy path.
 func (s *Stack) CreateIncarnationRaw(t *testing.T, name, serviceRef string, spec map[string]any) ([]byte, int) {
 	t.Helper()
 	c := s.opClient(t)
@@ -627,9 +639,9 @@ func (s *Stack) CreateIncarnationRaw(t *testing.T, name, serviceRef string, spec
 	return resp, status
 }
 
-// RunScenario запускает scenario на существующей incarnation.
+// RunScenario runs a scenario on an existing incarnation.
 //
-// 202 → возвращает apply_id из тела ответа. Другая статус-страница — t.Fatal.
+// 202 -> returns apply_id from the response body. Any other status -> t.Fatal.
 func (s *Stack) RunScenario(t *testing.T, incarnationName string, scenarioName string, input map[string]any) string {
 	t.Helper()
 	c := s.opClient(t)
@@ -638,11 +650,13 @@ func (s *Stack) RunScenario(t *testing.T, incarnationName string, scenarioName s
 		body["input"] = input
 	}
 	path := fmt.Sprintf("/v1/incarnations/%s/scenarios/%s", incarnationName, scenarioName)
-	// Тот же транзиентный 422 «service ... not registered», что в CreateIncarnation:
-	// serviceregistry.Holder подтягивает снимок асинхронно (pub/sub + 10s TTL).
-	// Прямой seed incarnation (SeedIncarnationReady) минует CreateIncarnation-поллинг,
-	// поэтому первый RunScenario может попасть в холодное окно снимка. Поллим ТОЛЬКО
-	// этот маркер; любой иной 422 (input/required) — немедленный fatal без маскировки.
+	// The same transient 422 "service ... not registered" as in
+	// CreateIncarnation: serviceregistry.Holder refreshes its snapshot
+	// asynchronously (pub/sub + 10s TTL). A direct incarnation seed
+	// (SeedIncarnationReady) bypasses CreateIncarnation's polling, so the
+	// first RunScenario can hit the cold snapshot window. We poll ONLY
+	// this marker; any other 422 (input/required) is an immediate fatal,
+	// no masking.
 	var resp []byte
 	var status int
 	var err error
@@ -675,14 +689,15 @@ func (s *Stack) RunScenario(t *testing.T, incarnationName string, scenarioName s
 	return out.ApplyID
 }
 
-// WaitApplySuccess блокируется до перехода apply_runs.status в success у всех
-// строк прогона. PK apply_runs = (apply_id, sid) → один прогон даёт N строк
-// (по числу Soul-хостов). Условие success: все строки в success; любая в
-// failed/cancelled/orphaned/no_match — fatal до достижения success.
+// WaitApplySuccess blocks until apply_runs.status becomes success for all
+// rows of the run. PK apply_runs = (apply_id, sid) -> one run produces N
+// rows (one per Soul host). Success condition: all rows are success; any
+// row in failed/cancelled/orphaned/no_match -> fatal before success is
+// reached.
 //
-// pre-running статусы (planned/claimed/dispatched/running) считаются
-// «в работе», ожидание продолжается. Терминальные ≠ success — немедленный
-// t.Fatal с дампом матрицы статусов (без надежды, что «само пройдёт»).
+// pre-running statuses (planned/claimed/dispatched/running) count as
+// "in progress", waiting continues. Terminal != success -> immediate
+// t.Fatal with a dump of the status matrix (no hoping it "resolves itself").
 func (s *Stack) WaitApplySuccess(t *testing.T, applyID string, timeoutSec int) {
 	t.Helper()
 	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
@@ -712,7 +727,7 @@ func (s *Stack) WaitApplySuccess(t *testing.T, applyID string, timeoutSec int) {
 			case "success":
 				continue
 			case "failed", "cancelled", "orphaned", "no_match":
-				t.Fatalf("WaitApplySuccess %s: sid=%s reached terminal %q (статусы=%v)", applyID, sid, st, statuses)
+				t.Fatalf("WaitApplySuccess %s: sid=%s reached terminal %q (statuses=%v)", applyID, sid, st, statuses)
 			default:
 				allSuccess = false
 			}
@@ -722,22 +737,24 @@ func (s *Stack) WaitApplySuccess(t *testing.T, applyID string, timeoutSec int) {
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	t.Fatalf("WaitApplySuccess %s: success не достигнут за %ds", applyID, timeoutSec)
+	t.Fatalf("WaitApplySuccess %s: success not reached within %ds", applyID, timeoutSec)
 }
 
-// WaitIncarnationReady блокируется до перехода incarnation.status в `ready`.
+// WaitIncarnationReady blocks until incarnation.status becomes `ready`.
 //
-// Зачем отдельно от WaitApplySuccess: apply_runs.status=success (per-host барьер
-// задач) выставляется РАНЬШЕ, чем коммит state_changes в incarnation.state —
-// commitSuccess (run.go §8) пишет state+status='ready' одной PG-транзакцией ПОСЛЕ
-// барьера всех хостов. На smoke-nginx (2 задачи) окно микроскопическое и
-// AssertIncarnationState сразу после WaitApplySuccess проходит; на сервисе с
-// десятками задач (redis::create — 3 destiny) окно шире, и чтение state ловит
-// пустой `{}`. Ждём именно status='ready' — единственная точка, гарантирующая,
-// что state_changes уже в БД. Параллель с L3b-harness (tests/e2e-live).
+// Why separate from WaitApplySuccess: apply_runs.status=success (per-host
+// task barrier) is set EARLIER than the state_changes commit into
+// incarnation.state — commitSuccess (run.go section 8) writes
+// state+status='ready' in one PG transaction AFTER the barrier over all
+// hosts. On smoke-nginx (2 tasks) the window is microscopic and
+// AssertIncarnationState right after WaitApplySuccess passes; on a service
+// with dozens of tasks (redis::create — 3 destinies) the window is wider,
+// and reading state catches an empty `{}`. We wait specifically for
+// status='ready' — the only point that guarantees state_changes is already
+// in the DB. Mirrors the L3b harness (tests/e2e-live).
 //
-// Терминальный ≠ ready (error_locked / migration_failed / destroyed) —
-// немедленный t.Fatal с текущим статусом.
+// Terminal != ready (error_locked / migration_failed / destroyed) ->
+// immediate t.Fatal with the current status.
 func (s *Stack) WaitIncarnationReady(t *testing.T, incarnationName string, timeoutSec int) {
 	t.Helper()
 	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
@@ -754,18 +771,19 @@ func (s *Stack) WaitIncarnationReady(t *testing.T, incarnationName string, timeo
 		case "ready":
 			return
 		case "error_locked", "migration_failed", "destroy_failed", "destroyed":
-			t.Fatalf("WaitIncarnationReady %s: достигнут терминальный статус %q вместо ready", incarnationName, status)
+			t.Fatalf("WaitIncarnationReady %s: reached terminal status %q instead of ready", incarnationName, status)
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
-	t.Fatalf("WaitIncarnationReady %s: status=ready не достигнут за %ds (последний статус=%q)",
+	t.Fatalf("WaitIncarnationReady %s: status=ready not reached within %ds (last status=%q)",
 		incarnationName, timeoutSec, last)
 }
 
-// stripServiceRef отрезает `@<ref>` (если есть). Operator API создаёт
-// incarnation по bare service-name; ref разрешается через service registry
-// (ADR-029). ТЗ harness-у даёт `smoke-nginx@main` — для совместимости с
-// `examples/service/<name>` (имя пакета совпадает со «service-name»).
+// stripServiceRef strips `@<ref>` (if present). The Operator API creates an
+// incarnation by bare service-name; the ref is resolved via the service
+// registry (ADR-029). The harness spec passes `smoke-nginx@main` — for
+// compatibility with `examples/service/<name>` (the package name matches
+// the "service-name").
 func stripServiceRef(ref string) string {
 	if i := strings.IndexByte(ref, '@'); i >= 0 {
 		return ref[:i]
@@ -773,8 +791,8 @@ func stripServiceRef(ref string) string {
 	return ref
 }
 
-// DB возвращает pool для теста (read-only для assert-ов). Не Closeit-ить
-// caller-у: pool управляется Cleanup-ом.
+// DB returns the pool for the test (read-only for asserts). The caller must
+// not Close it: the pool is managed by Cleanup.
 func (s *Stack) DB() *pgxpool.Pool {
 	return s.db
 }

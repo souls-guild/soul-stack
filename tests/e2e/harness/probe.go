@@ -7,11 +7,11 @@ import (
 	"time"
 )
 
-// probeReady бьёт GET по probeURL и возвращает true на 2xx. Используется
-// startKeeperRun-ом для поллинга /readyz keeper-процесса.
+// probeReady sends a GET to probeURL and returns true on 2xx. Used by
+// startKeeperRun to poll the keeper process's /readyz.
 //
-// Один short-timeout client на вызов — не shared (тест-окружение, частота
-// низкая, лишняя глобальная state не нужна).
+// One short-timeout client per call — not shared (test environment, low
+// frequency, no need for extra global state).
 func probeReady(probeURL string) bool {
 	cl := &http.Client{Timeout: 1 * time.Second}
 	resp, err := cl.Get(probeURL)

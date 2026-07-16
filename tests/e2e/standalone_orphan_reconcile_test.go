@@ -1,36 +1,42 @@
 //go:build e2e
 
-// L3a-MK: standalone-orphan applying-reconcile на НАСТОЯЩЕМ краше keeper.
+// L3a-MK: standalone-orphan applying-reconcile on a REAL keeper crash.
 //
-// Доказывает END-TO-END закрытие находки #1 (reconcile_orphan_applying, ADR-027
-// amend (m)) на реальном SIGKILL процесса keeper-владельца ПРЯМОГО (standalone,
-// НЕ через Voyage) incarnation.run — не unit-моке reconciler-а:
+// Proves END-TO-END closure of finding #1 (reconcile_orphan_applying, ADR-027
+// amend (m)) on a real SIGKILL of the keeper-owner process for a DIRECT
+// (standalone, NOT through Voyage) incarnation.run -- not a unit-mocked
+// reconciler:
 //
-//  1. Кластер из 2 keeper поверх ОБЩИХ PG/Redis/Vault, acolytes>0 (apply пишется
-//     Acolyte-путём claimed→dispatched→SendApply), reconcile_orphan_applying с
-//     КОРОТКИМ stale_after (3s по умолчанию harness-а, НЕ prod-90s).
-//  2. soul-stub в режиме hold-apply подключён к primary keeper-A (= владелец
-//     standalone-прогона: HTTP incarnation.run приходит к нему, lockRun пишет
-//     applying_by_kid=A; SendApply маршрутизируется в его EventStream).
-//  3. incarnation.run(create) → дожидаемся apply_runs.status='dispatched' для SID
-//     (стаб держит ApplyRequest, RunResult не шлёт). incarnation зависает
-//     `applying` с epoch (applying_by_kid=A, applying_apply_id=run, applying_since).
-//  4. ★ SIGKILL keeper-A (владелец applying-lock + run-barrier). Барьер умирает,
-//     standalone-run НЕ имеет reclaim (reclaim_voyages только для Voyage) — без
-//     находки #1 incarnation осталась бы `applying` НАВСЕГДА.
-//  5. Дожидаемся истечения Conclave-presence A (~30s DefaultConclaveTTL) — тогда
-//     InstanceAlive(applying_by_kid=A)=false.
-//  6. ★ ASSERT: reconcile_orphan_applying на живом keeper-B снимает осиротевший
-//     applying-lock (applying→ready), epoch-колонки очищены в NULL, audit-event
-//     reaper.reconcile_orphan_applying.executed записан {incarnation, prev_kid=A,
-//     apply_id}. incarnation перестаёт быть «навсегда applying».
+//  1. Cluster of 2 keepers over SHARED PG/Redis/Vault, acolytes>0 (apply is
+//     written via the Acolyte path claimed->dispatched->SendApply),
+//     reconcile_orphan_applying with a SHORT stale_after (3s by default in
+//     the harness, NOT prod-90s).
+//  2. soul-stub in hold-apply mode connected to primary keeper-A (= owner of
+//     the standalone run: HTTP incarnation.run arrives at it, lockRun writes
+//     applying_by_kid=A; SendApply is routed to its EventStream).
+//  3. incarnation.run(create) -> wait for apply_runs.status='dispatched' for
+//     SID (stub holds ApplyRequest, does not send RunResult). incarnation
+//     hangs `applying` with an epoch (applying_by_kid=A, applying_apply_id=run,
+//     applying_since).
+//  4. star SIGKILL keeper-A (owner of the applying-lock + run-barrier). The
+//     barrier dies, the standalone-run has NO reclaim (reclaim_voyages is
+//     Voyage-only) -- without finding #1 the incarnation would stay `applying`
+//     FOREVER.
+//  5. Wait for expiry of Conclave-presence A (~30s DefaultConclaveTTL) --
+//     then InstanceAlive(applying_by_kid=A)=false.
+//  6. star ASSERT: reconcile_orphan_applying on live keeper-B releases the
+//     orphaned applying-lock (applying->ready), epoch columns cleared to
+//     NULL, audit-event reaper.reconcile_orphan_applying.executed recorded
+//     {incarnation, prev_kid=A, apply_id}. incarnation stops being "forever
+//     applying".
 //
-// FENCING-1 (presence-мёртвый владелец, но live-rival apply_run с другим apply_id
-// → правило НЕ снимает) ЗДЕСЬ не дублируется: он уже доказан integration-тестом
-// orphan_applying_reconcile_integration_test.go (ReleaseApplyingOrphan FENCING-1
-// внутри). Live-rival на crash-стенде потребовал бы второй конкурирующий прогон
-// той же инкарнации — несоразмерно сложно для аддитивной ценности над уже
-// существующим integration-покрытием. См. отчёт slice S3.
+// FENCING-1 (presence-dead owner, but live-rival apply_run with a different
+// apply_id -> rule does NOT release) is NOT duplicated here: it is already
+// proven by the integration test orphan_applying_reconcile_integration_test.go
+// (ReleaseApplyingOrphan FENCING-1 inside). A live-rival on the crash stand
+// would require a second concurrent run of the same incarnation --
+// disproportionately complex for the marginal value over the existing
+// integration coverage. See slice S3 report.
 package e2e_test
 
 import (
@@ -47,8 +53,8 @@ func TestE2E_MultiKeeper_StandaloneOrphanReconcileAfterCrash(t *testing.T) {
 		examplePath = "examples/service/noop"
 		incarnation = "so-orphan-inc"
 		scenario    = "create"
-		// staleAfter КОРОТКИЙ — правило должно сработать вскоре после истечения
-		// presence убитого владельца, а не ждать by-design 90s prod-дефолта.
+		// staleAfter is SHORT -- the rule should fire soon after the killed
+		// owner's presence expires, not wait for the by-design 90s prod default.
 		staleAfter = 3 * time.Second
 	)
 
@@ -62,37 +68,41 @@ func TestE2E_MultiKeeper_StandaloneOrphanReconcileAfterCrash(t *testing.T) {
 
 	stack.RegisterService(t, serviceName, examplePath)
 
-	// Стаб в режиме hold-apply (RunResult не шлёт → строка зависает dispatched,
-	// incarnation остаётся applying). reconnect здесь НЕ нужен: цель — реконсиляция
-	// applying-lock Reaper-ом, а не reconnect-стрима стаба. Стаб подключён к primary
-	// (keeper-A) — он и есть владелец standalone-прогона.
+	// Stub in hold-apply mode (does not send RunResult -> the row hangs
+	// dispatched, incarnation stays applying). reconnect is NOT needed here:
+	// the goal is reconciliation of the applying-lock by the Reaper, not stub
+	// stream reconnect. The stub is connected to primary (keeper-A) -- it is
+	// the owner of the standalone run.
 	soulStub := stack.ConnectSoulStub(t, 0)
 	soulStub.SetHoldApply(true)
 	sid := stack.SoulSID(0)
 	ownerKID := stack.StreamHolderKID(t)
-	t.Logf("SO-orphan: soul-stub %s держит стрим к %s (= владелец standalone-run-а)", sid, ownerKID)
+	t.Logf("SO-orphan: soul-stub %s holds stream to %s (= owner of the standalone run)", sid, ownerKID)
 
-	// Ready-инкарнация с единственным connected-хостом в её coven.
+	// Ready incarnation with a single connected host in its coven.
 	stack.SeedIncarnationReady(t, incarnation, serviceName, "main", map[string]any{})
 	stack.AddSoulToCoven(t, 0, incarnation)
 
-	// ★ ПРЯМОЙ incarnation.run(create) — standalone-путь (НЕ Voyage; back-link
-	// voyage_targets отсутствует). lockRun на keeper-A пишет applying + epoch
-	// (applying_by_kid=A). Acolyte клеймит planned→dispatched→SendApply в стрим A.
-	// Стаб держит ApplyRequest → строка зависает dispatched, incarnation — applying.
+	// star DIRECT incarnation.run(create) -- standalone path (NOT Voyage; no
+	// voyage_targets back-link). lockRun on keeper-A writes applying + epoch
+	// (applying_by_kid=A). Acolyte claims planned->dispatched->SendApply into
+	// A's stream. Stub holds ApplyRequest -> the row hangs dispatched,
+	// incarnation is applying.
 	applyID := stack.RunScenario(t, incarnation, scenario, nil)
 	t.Logf("SO-orphan: standalone incarnation.run(%s) apply_id=%s", scenario, applyID)
 
-	// (1) Дожидаемся dispatched — задание физически отдано стабу, RunResult удержан.
+	// (1) Wait for dispatched -- the job is physically handed to the stub,
+	// RunResult withheld.
 	got := stack.WaitApplyRunStatusForSID(t, applyID, sid, []string{"dispatched"}, 30*time.Second)
-	t.Logf("SO-orphan: apply_runs(%s,%s).status=%q — задание отдано, RunResult удержан", applyID, sid, got)
+	t.Logf("SO-orphan: apply_runs(%s,%s).status=%q -- job dispatched, RunResult withheld", applyID, sid, got)
 
-	// (2) incarnation в applying с заполненным epoch владельца A — точка, из которой
-	// краш владельца оставит осиротевший lock. Проверяем epoch ДО краша: правило
-	// детектит orphan именно по applying_by_kid (presence-свидетель смерти).
+	// (2) incarnation is applying with owner A's epoch filled in -- the point
+	// from which the owner's crash will leave an orphaned lock. Check the
+	// epoch BEFORE the crash: the rule detects the orphan exactly via
+	// applying_by_kid (presence witness of death).
 	incStatus, _ := stack.IncarnationStatusDetails(t, incarnation)
 	if incStatus != "applying" {
-		t.Fatalf("SO-orphan: incarnation %s status=%q до краша, ожидался applying (lockRun не взял lock?)", incarnation, incStatus)
+		t.Fatalf("SO-orphan: incarnation %s status=%q before crash, expected applying (lockRun did not take the lock?)", incarnation, incStatus)
 	}
 	epoch := stack.IncarnationApplyingEpochSnapshot(t, incarnation)
 	if epoch.ByKID == nil || *epoch.ByKID != ownerKID {
@@ -100,66 +110,70 @@ func TestE2E_MultiKeeper_StandaloneOrphanReconcileAfterCrash(t *testing.T) {
 		if epoch.ByKID != nil {
 			gotKID = *epoch.ByKID
 		}
-		t.Fatalf("SO-orphan: applying_by_kid=%q до краша, ожидался %q (epoch не выставлен lockRun-ом)", gotKID, ownerKID)
+		t.Fatalf("SO-orphan: applying_by_kid=%q before crash, expected %q (epoch not set by lockRun)", gotKID, ownerKID)
 	}
 	if epoch.ApplyID == nil || *epoch.ApplyID == "" || !epoch.SinceSet {
-		t.Fatalf("SO-orphan: неполный epoch до краша (apply_id=%v since_set=%v) — reconcile-предикат не сработает",
+		t.Fatalf("SO-orphan: incomplete epoch before crash (apply_id=%v since_set=%v) -- reconcile predicate won't fire",
 			epoch.ApplyID, epoch.SinceSet)
 	}
-	t.Logf("SO-orphan: incarnation %s applying с epoch{by_kid=%s, apply_id=%s, since_set=%v} — owner-lock заряжен",
+	t.Logf("SO-orphan: incarnation %s applying with epoch{by_kid=%s, apply_id=%s, since_set=%v} -- owner-lock armed",
 		incarnation, *epoch.ByKID, *epoch.ApplyID, epoch.SinceSet)
 
-	// (3) ★ НАСТОЯЩИЙ SIGKILL владельца standalone-прогона. Барьер run-goroutine на A
-	// умирает; applying-lock остаётся в PG с applying_by_kid=A. reclaim_voyages его
-	// НЕ трогает (нет voyage_targets back-link — это standalone). Без находки #1
-	// incarnation висела бы applying навсегда.
+	// (3) star REAL SIGKILL of the standalone run's owner. The run-goroutine
+	// barrier on A dies; the applying-lock stays in PG with
+	// applying_by_kid=A. reclaim_voyages does NOT touch it (no
+	// voyage_targets back-link -- this is standalone). Without finding #1 the
+	// incarnation would hang applying forever.
 	stack.KillKeeperByKID(t, ownerKID)
-	t.Logf("SO-orphan: SIGKILL %s (владелец applying-lock) отправлен", ownerKID)
+	t.Logf("SO-orphan: SIGKILL %s (owner of the applying-lock) sent", ownerKID)
 
 	live := stack.LiveKeeperKIDs()
 	if len(live) == 0 {
-		t.Fatalf("SO-orphan: после kill не осталось живых keeper-ов (нужен ≥1 для reconcile-Reaper-а)")
+		t.Fatalf("SO-orphan: no live keepers left after kill (need >=1 for the reconcile Reaper)")
 	}
-	t.Logf("SO-orphan: живые keeper-ы (исполняют reconcile_orphan_applying): %v", live)
+	t.Logf("SO-orphan: live keepers (running reconcile_orphan_applying): %v", live)
 
-	// (4) ★ ASSERT END-TO-END: после истечения Conclave-presence убитого A
-	// (~30s DefaultConclaveTTL — by-design, не конфигурируемо) reconcile_orphan_
-	// applying на живом keeper-B детектит presence-мёртвого владельца и снимает
-	// осиротевший lock applying→ready. Окно: presence-TTL (~30s) + stale_after (3s)
-	// + reaper-interval (500ms) + запас. Ждём до 70s — presence-TTL обязателен,
-	// stale_after КОРОТКИЙ (правило сработает почти сразу после presence-истечения).
+	// (4) star ASSERT END-TO-END: after the killed A's Conclave-presence
+	// expires (~30s DefaultConclaveTTL -- by-design, not configurable),
+	// reconcile_orphan_applying on live keeper-B detects the presence-dead
+	// owner and releases the orphaned lock applying->ready. Window:
+	// presence-TTL (~30s) + stale_after (3s) + reaper-interval (500ms) +
+	// margin. Wait up to 70s -- presence-TTL is mandatory, stale_after is
+	// SHORT (the rule fires almost immediately after presence expiry).
 	finalStatus := stack.WaitIncarnationStatus(t, incarnation, []string{"ready"}, 70*time.Second)
-	t.Logf("SO-orphan: ★ incarnation %s.status=%q — осиротевший applying-lock снят reconcile_orphan_applying (END-TO-END)", incarnation, finalStatus)
+	t.Logf("SO-orphan: star incarnation %s.status=%q -- orphaned applying-lock released by reconcile_orphan_applying (END-TO-END)", incarnation, finalStatus)
 
-	// (5) epoch-колонки очищены в NULL — ReleaseApplyingOrphan чистит их той же tx,
-	// что status→ready (иначе протухший applying_by_kid дал бы повторный orphan-
-	// детект на следующем тике).
+	// (5) epoch columns cleared to NULL -- ReleaseApplyingOrphan clears them
+	// in the same tx as status->ready (otherwise a stale applying_by_kid
+	// would trigger a repeat orphan detection on the next tick).
 	epochAfter := stack.IncarnationApplyingEpochSnapshot(t, incarnation)
 	if !epochAfter.EpochCleared() {
-		t.Fatalf("SO-orphan: epoch НЕ очищен после снятия orphan-lock: by_kid=%v apply_id=%v attempt=%v since_set=%v",
+		t.Fatalf("SO-orphan: epoch NOT cleared after orphan-lock release: by_kid=%v apply_id=%v attempt=%v since_set=%v",
 			epochAfter.ByKID, epochAfter.ApplyID, epochAfter.Attempt, epochAfter.SinceSet)
 	}
-	t.Logf("SO-orphan: epoch-колонки обнулены в NULL — lock снят чисто")
+	t.Logf("SO-orphan: epoch columns zeroed to NULL -- lock released cleanly")
 
-	// (6) audit-event reaper.reconcile_orphan_applying.executed записан с правильным
-	// payload {incarnation, prev_kid=убитый владелец}. Доказывает, что снятие
-	// прошло именно reconcile-правилом (а не побочным путём), и несёт security-trail.
+	// (6) audit-event reaper.reconcile_orphan_applying.executed recorded with
+	// the correct payload {incarnation, prev_kid=killed owner}. Proves the
+	// release happened via the reconcile rule (not a side path), and carries
+	// a security trail.
 	if !stack.WaitAuditEventByPayload(t, "reaper.reconcile_orphan_applying.executed",
 		"incarnation", incarnation, 10*time.Second) {
-		t.Fatalf("SO-orphan: audit reaper.reconcile_orphan_applying.executed для %s НЕ записан", incarnation)
+		t.Fatalf("SO-orphan: audit reaper.reconcile_orphan_applying.executed for %s NOT recorded", incarnation)
 	}
 	prevKIDinAudit := stack.AuditPayloadField(t, "reaper.reconcile_orphan_applying.executed", "incarnation", incarnation, "prev_kid")
 	if prevKIDinAudit != ownerKID {
-		t.Fatalf("SO-orphan: audit prev_kid=%q, ожидался убитый владелец %q (reconcile приписан не тому KID)", prevKIDinAudit, ownerKID)
+		t.Fatalf("SO-orphan: audit prev_kid=%q, expected killed owner %q (reconcile attributed to the wrong KID)", prevKIDinAudit, ownerKID)
 	}
-	t.Logf("SO-orphan: ★ audit reaper.reconcile_orphan_applying.executed{incarnation=%s, prev_kid=%s} записан — находка #1 ДОКАЗАНА live",
+	t.Logf("SO-orphan: star audit reaper.reconcile_orphan_applying.executed{incarnation=%s, prev_kid=%s} recorded -- finding #1 PROVEN live",
 		incarnation, prevKIDinAudit)
 
-	// (7) Дурабельность: incarnation НЕ откатывается обратно в applying (single-
-	// winner CAS applying→ready). Добираем с паузой, чтобы поймать гипотетический
-	// повторный orphan-детект (был бы багом: epoch уже NULL → кандидатом не станет).
+	// (7) Durability: incarnation does NOT roll back into applying (single-
+	// winner CAS applying->ready). Wait with a pause to catch a hypothetical
+	// repeat orphan detection (would be a bug: epoch is already NULL -> won't
+	// become a candidate).
 	time.Sleep(2 * time.Second)
 	if st, _ := stack.IncarnationStatusDetails(t, incarnation); st != "ready" {
-		t.Fatalf("SO-orphan: incarnation откатилась в %q после ready — нарушена дурабельность снятия orphan-lock", st)
+		t.Fatalf("SO-orphan: incarnation rolled back to %q after ready -- orphan-lock release durability violated", st)
 	}
 }

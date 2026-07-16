@@ -2,24 +2,26 @@
 
 package harness
 
-// YAML loader для fixtures/<*>.yaml и expectations/<*>.yaml — типизированные
-// структуры, отражающие формат spec-а (см. docs/testing/e2e.md).
+// YAML loader for fixtures/<*>.yaml and expectations/<*>.yaml — typed
+// structures reflecting the spec format (see docs/testing/e2e.md).
 //
-// На pilot-фазе типы определены, чтение из YAML — не реализовано
-// (L3a-implementation slice). Согласованность типов с docs/testing/e2e.md
-// ловится статически: правка spec-а без правки типов поймается smoke-тестом
-// (loader зафейлит ParseError на расхождении).
+// In the pilot phase the types are defined, reading from YAML is not
+// implemented (L3a-implementation slice). Consistency of the types with
+// docs/testing/e2e.md is caught statically: editing the spec without editing
+// the types is caught by a smoke test (the loader fails a ParseError on
+// mismatch).
 
-// SoulsFixture — `tests/e2e/<name>/fixtures/souls.yaml`. Описывает множество
-// soul-stub-ов, которые harness регистрирует в Keeper-е перед прогоном.
+// SoulsFixture — `tests/e2e/<name>/fixtures/souls.yaml`. Describes the set of
+// soul stubs the harness registers with the Keeper before a run.
 type SoulsFixture []SoulFixtureEntry
 
-// SoulFixtureEntry — одна строка SoulsFixture.
+// SoulFixtureEntry — one row of SoulsFixture.
 //
-// Status — желаемый статус souls.<sid>.status на момент готовности Stack-а
-// ("connected" — стандартный happy-path). Covens — членство в Coven для
-// `where:`-таргетинга. Soulprint — содержимое soulprint_facts, кладётся в
-// БД через тот же путь, что Soul-side SoulprintReport (но без gRPC, прямой INSERT).
+// Status — the desired souls.<sid>.status once the Stack is ready
+// ("connected" is the standard happy path). Covens — Coven membership for
+// `where:` targeting. Soulprint — soulprint_facts contents, written to the DB
+// via the same path as the Soul-side SoulprintReport (but without gRPC, a
+// direct INSERT).
 type SoulFixtureEntry struct {
 	SID       string         `yaml:"sid"`
 	Status    string         `yaml:"status"`
@@ -28,29 +30,29 @@ type SoulFixtureEntry struct {
 }
 
 // StubResponsesFixture — `tests/e2e/<name>/fixtures/stub-responses.yaml`.
-// Скрипт ответов soul-stub-а: per scenario-name → список scripted RunResult-ов
-// на каждый ApplyRequest, который придёт от Keeper-а.
+// A script of soul-stub responses: per scenario name -> a list of scripted
+// RunResults for each ApplyRequest coming from the Keeper.
 type StubResponsesFixture struct {
 	Scenarios map[string]ScenarioScript `yaml:"scenarios"`
 }
 
-// ScenarioScript — скрипт ответов soul-stub-а на конкретный scenario-name.
+// ScenarioScript — the soul-stub's response script for a particular scenario name.
 type ScenarioScript struct {
 	ApplyResponses []ApplyResponseScript `yaml:"apply_responses"`
 }
 
-// ApplyResponseScript — один scripted ответ soul-stub-а.
+// ApplyResponseScript — one scripted soul-stub response.
 //
-// TaskName — имя задачи (для matching: stub отвечает на ApplyRequest с этим
-// task_name выбранным RunResult-ом). RunResult — payload, который stub
-// упакует в FromSoul.RunResult и отправит Keeper-у.
+// TaskName — the task name (for matching: the stub responds to an
+// ApplyRequest with this task_name using the chosen RunResult). RunResult —
+// the payload the stub packs into FromSoul.RunResult and sends to the Keeper.
 type ApplyResponseScript struct {
 	TaskName  string         `yaml:"task_name"`
 	RunResult map[string]any `yaml:"run_result"`
 }
 
 // ExpectationsAfter — `tests/e2e/<name>/expectations/after-<scenario>.yaml`.
-// Post-apply ожидания: apply_runs / incarnation.state / audit / metrics.
+// Post-apply expectations: apply_runs / incarnation.state / audit / metrics.
 type ExpectationsAfter struct {
 	ApplyRuns        ApplyRunsExpectation    `yaml:"apply_runs"`
 	IncarnationState map[string]any          `yaml:"incarnation_state"`
@@ -58,13 +60,13 @@ type ExpectationsAfter struct {
 	Metrics          map[string]string       `yaml:"metrics"`
 }
 
-// ApplyRunsExpectation — ожидаемая форма строки apply_runs (status — обязательно).
+// ApplyRunsExpectation — expected shape of an apply_runs row (status is required).
 type ApplyRunsExpectation struct {
 	Status string `yaml:"status"`
 }
 
-// AuditEventExpectation — ожидание по строке audit_log (type обязательно,
-// Payload — deep-subset).
+// AuditEventExpectation — expectation for an audit_log row (type is required,
+// Payload is a deep subset).
 type AuditEventExpectation struct {
 	Type    string         `yaml:"type"`
 	Payload map[string]any `yaml:"payload"`

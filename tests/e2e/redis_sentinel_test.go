@@ -1,28 +1,31 @@
 //go:build e2e
 
-// L3a contract-E2E: examples/service/redis::create в режиме sentinel_only
-// (redis-консолидация концепции Ansible-роли, ADR-039 /
+// L3a contract-E2E: examples/service/redis::create in sentinel_only mode
+// (redis consolidation of the Ansible-role concept, ADR-039 /
 // .pm/tasks/2026-06-22-redis-consolidation).
 //
-// sentinel_only — тонкий sentinel-слой: разворачивается ТОЛЬКО sentinel-демон
-// (data-плоскость redis-server НЕ ставится как сервис), мониторящий ВНЕШНИЙ
-// master из input.master_ip. Этот контракт проверяет keeper-side цепочку
-// render→dispatch→RunResult→state именно для sentinel_only-ветки диспетчера
-// create (на standalone/cluster/sentinel ветки гасятся static-when placeholder-
-// skip-ом). Соль контракта — что redis_sentinel.master_ip/master_name доходят до
-// incarnation.state из input, а apply_runs всех хостов доходят до success.
+// sentinel_only -- a thin sentinel layer: deploys ONLY the sentinel daemon
+// (the data-plane redis-server is NOT installed as a service), monitoring an
+// EXTERNAL master from input.master_ip. This contract checks the keeper-side
+// render->dispatch->RunResult->state chain specifically for the
+// sentinel_only branch of the create dispatcher (the standalone/cluster/
+// sentinel branches are suppressed by the static-when placeholder-skip). The
+// point of the contract is that redis_sentinel.master_ip/master_name make it
+// into incarnation.state from input, and apply_runs for all hosts reach
+// success.
 //
-// Прежний отдельный сервис redis-sentinel удалён: его сценарий create целиком
-// поглощён режимом sentinel_only консолидированного redis (диспетчер по
-// redis_type, scenario/create/sentinel-only.yml).
+// The previous separate redis-sentinel service was removed: its create
+// scenario was fully absorbed into the sentinel_only mode of the
+// consolidated redis (dispatcher by redis_type,
+// scenario/create/sentinel-only.yml).
 //
 // Flow:
-//  1. NewStack: PG+Redis+Vault testcontainers + Keeper-процесс + 1 soul-stub.
-//  2. Seed Vault (auth_pass для sentinel monitor) + soulprint(os/net) + Coven.
+//  1. NewStack: PG+Redis+Vault testcontainers + Keeper process + 1 soul-stub.
+//  2. Seed Vault (auth_pass for the sentinel monitor) + soulprint(os/net) + Coven.
 //  3. MaterializeDestinies(redis) + RegisterService(redis).
-//  4. ConnectSoulStub + LoadApplyScript (scripted success по task-name).
-//  5. CreateIncarnationWithApply(redis_type=sentinel_only + master_ip) →
-//     авто-create-прогон → WaitApplySuccess → WaitIncarnationReady.
+//  4. ConnectSoulStub + LoadApplyScript (scripted success by task-name).
+//  5. CreateIncarnationWithApply(redis_type=sentinel_only + master_ip) ->
+//     auto-create run -> WaitApplySuccess -> WaitIncarnationReady.
 //  6. Asserts: apply_runs success / incarnation.state{redis_type,redis_sentinel} /
 //     audit incarnation.created{apply_id} / metric keeper_scenario_runs_total.
 package e2e_test
@@ -42,16 +45,16 @@ func TestE2EServiceRedis_CreateSentinelOnly(t *testing.T) {
 
 	const incName = "redis-sntnl-only"
 
-	// Vault-seed: sentinel-демон аутентифицируется к ВНЕШНЕМУ master-у
-	// auth_pass-ом, который create-ветка резолвит keeper-side через
-	// vault('secret/redis/'+incarnation.name+'#password'). rel БЕЗ mount/`data/`-
-	// префикса — SeedVaultKV добавляет их (KV v2).
+	// Vault seed: the sentinel daemon authenticates to the EXTERNAL master
+	// with auth_pass, which the create branch resolves keeper-side via
+	// vault('secret/redis/'+incarnation.name+'#password'). rel WITHOUT the
+	// mount/`data/` prefix -- SeedVaultKV adds them (KV v2).
 	harness.SeedVaultKV(t, stack, "redis/"+incName, map[string]any{
 		"password": "e2e-sentinel-secret",
 	})
 
-	// soulprint-seed: sentinel.conf.tmpl биндит на soulprint.self.network.primary_ip;
-	// pkg_mgr/init_system нужны core.pkg/core.service keeper-side (ADR-018).
+	// soulprint seed: sentinel.conf.tmpl binds to soulprint.self.network.primary_ip;
+	// pkg_mgr/init_system are needed by core.pkg/core.service keeper-side (ADR-018).
 	stack.SeedSoulprint(t, 0, map[string]any{
 		"os": map[string]any{
 			"family":      "debian",
@@ -67,24 +70,27 @@ func TestE2EServiceRedis_CreateSentinelOnly(t *testing.T) {
 		"hostname": "soul-a",
 	})
 
-	// Coven-членство ДО Create: roster резолвится по `incarnation.name ∈ coven[]`
-	// (ADR-008). Без него scenario видит no_hosts → error_locked.
+	// Coven membership BEFORE Create: the roster resolves via
+	// `incarnation.name in coven[]` (ADR-008). Without it the scenario sees
+	// no_hosts -> error_locked.
 	stack.AddSoulToCoven(t, 0, incName)
 
-	// Материализуем режим-агностичный destiny `redis` (create-ветки зовут
-	// apply: destiny: redis) + ставим default_destiny_source. ДО RegisterService:
-	// invalidate от POST /v1/services подтянет настройку в Holder без TTL-poll-а.
+	// Materialize the mode-agnostic destiny `redis` (the create branches
+	// call apply: destiny: redis) + set default_destiny_source. BEFORE
+	// RegisterService: the invalidate from POST /v1/services will pull the
+	// setting into the Holder without a TTL poll.
 	stack.MaterializeDestinies(t, "v1.0.0", "redis")
 	stack.RegisterService(t, "redis", "examples/service/redis")
 
-	// Live EventStream: захват SID-lease → ApplyRequest в локальный Outbound.
-	// LoadApplyScript — scripted success по task-name (+ default-success для
-	// when:-погашенных веток диспетчера и плагинных задач).
+	// Live EventStream: capture the SID-lease -> ApplyRequest into the local
+	// Outbound. LoadApplyScript -- scripted success by task-name (+
+	// default-success for the when:-suppressed dispatcher branches and
+	// plugin tasks).
 	stub := stack.ConnectSoulStub(t, 0)
 	harness.LoadApplyScript(stub, "create", redisSentinelOnlyTasks())
 
-	// Простой типизированный ввод: redis_type=sentinel_only + version (distro-native
-	// пин) + master_ip (REQUIRED при sentinel_only — required_when в main.yml).
+	// Simple typed input: redis_type=sentinel_only + version (distro-native
+	// pin) + master_ip (REQUIRED with sentinel_only -- required_when in main.yml).
 	inc, applyID := stack.CreateIncarnationWithApply(t, incName, "redis@main", map[string]any{
 		"redis_type":  "sentinel_only",
 		"version":     "5:7.0.15-1~deb12u7",
@@ -94,11 +100,12 @@ func TestE2EServiceRedis_CreateSentinelOnly(t *testing.T) {
 
 	stack.WaitApplySuccess(t, applyID, 60)
 	stack.AssertApplyRunsStatus(t, applyID, "success")
-	// apply_runs success ≠ incarnation.state закоммичен: state_changes пишутся
-	// отдельной транзакцией ПОСЛЕ барьера (run.go §8). Ждём ready перед чтением.
+	// apply_runs success != incarnation.state committed: state_changes are
+	// written in a separate transaction AFTER the barrier (run.go §8). Wait
+	// for ready before reading.
 	stack.WaitIncarnationReady(t, inc, 30)
-	// sentinel_only-факты: redis_type + redis_sentinel{master_name(default mymaster),
-	// master_ip из input}. redis_config пуст (data-плоскости нет); users/hosts пусты.
+	// sentinel_only facts: redis_type + redis_sentinel{master_name(default mymaster),
+	// master_ip from input}. redis_config is empty (no data plane); users/hosts are empty.
 	stack.AssertIncarnationState(t, inc, map[string]any{
 		"redis_type": "sentinel_only",
 		"redis_sentinel": map[string]any{
@@ -106,19 +113,20 @@ func TestE2EServiceRedis_CreateSentinelOnly(t *testing.T) {
 			"master_ip":   "10.9.9.9",
 		},
 	})
-	// POST /v1/incarnations авто-запускает create-scenario и пишет
-	// incarnation.created с apply_id авто-прогона в payload.
+	// POST /v1/incarnations auto-runs the create scenario and writes
+	// incarnation.created with the auto-run's apply_id in the payload.
 	stack.AssertAuditEvent(t, "incarnation.created", map[string]any{
 		"apply_id": applyID,
 	})
 	stack.AssertMetricGE(t, `keeper_scenario_runs_total{result="ok"}`, 1)
 }
 
-// redisSentinelOnlyTasks — scripted success-ответы по task-name ключевых задач
-// sentinel_only-ветки create: mode-guard диспетчера, install redis (несёт
-// sentinel-демон), render sentinel.conf, SENTINEL MONITOR + PONG-gate.
-// soul-stub матчит по task_name; default-success (LoadApplyScript) покрывает
-// when:-погашенные ветки standalone/cluster/sentinel и прочие задачи destiny.
+// redisSentinelOnlyTasks -- scripted success responses by task-name for the
+// key tasks of the sentinel_only create branch: dispatcher mode-guard,
+// install redis (carries the sentinel daemon), render sentinel.conf,
+// SENTINEL MONITOR + PONG-gate. soul-stub matches by task_name;
+// default-success (LoadApplyScript) covers the when:-suppressed
+// standalone/cluster/sentinel branches and other destiny tasks.
 func redisSentinelOnlyTasks() []harness.TaskResponse {
 	return []harness.TaskResponse{
 		{TaskName: "Install redis-server package", StateChanges: map[string]any{"packages": []any{map[string]any{"redis-server": "installed"}}}},
