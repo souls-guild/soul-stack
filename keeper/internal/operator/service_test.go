@@ -15,20 +15,20 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 )
 
-// discardLogger — non-nil slog.Logger в /dev/null. Нужен, чтобы покрыть
-// logger-ветки Create (s.logger != nil), не засоряя вывод теста.
+// discardLogger — non-nil slog.Logger to /dev/null. Needed to cover
+// logger branches in Create (s.logger != nil), not cluttering test output.
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// --- test harness для Service -----------------------------------------
+// --- test harness for Service -----------------------------------------
 //
-// Service-у нужны ServicePool (ExecQueryRower + BeginTx), JWTIssuer и
-// RBACSource. crud_test.go уже даёт staticRow / errRow / fakeRows / assign;
-// здесь добавляется только то, чего там нет: SQL-маршрутизирующий pool с
-// BeginTx, fake-tx, fake-issuer и fake-rbac.
+// Service needs ServicePool (ExecQueryRower + BeginTx), JWTIssuer and
+// RBACSource. crud_test.go already provides staticRow / errRow / fakeRows / assign;
+// here we add only what's missing: SQL-routing pool with
+// BeginTx, fake-tx, fake-issuer and fake-rbac.
 
-// fakeIssuer — JWTIssuer-mock. Возвращает фиксированный токен либо ошибку.
+// fakeIssuer — JWTIssuer mock. Returns fixed token or error.
 type fakeIssuer struct {
 	calls    int
 	lastAID  string
@@ -46,18 +46,18 @@ func (f *fakeIssuer) Issue(aid string, roles []string, _ time.Duration, _ bool) 
 	return "fake-jwt-" + aid, nil
 }
 
-// fakeRBAC — RBACSource-mock. roles возвращается RolesOf (одинаковый для всех
-// AID в тесте достаточно). Lockout-probe (Slice 3) admin-set из RBAC не берёт —
-// он читается из БД (svcPool.effectiveAdmins), поэтому ClusterAdmins-поля нет.
+// fakeRBAC — RBACSource mock. roles returned by RolesOf (same for all
+// AIDs sufficient in test). Lockout-probe (Slice 3) doesn't take admin-set from RBAC —
+// it's read from DB (svcPool.effectiveAdmins), so no ClusterAdmins field.
 type fakeRBAC struct {
 	roles []string
 }
 
 func (f *fakeRBAC) RolesOf(_ string) []string { return f.roles }
 
-// svcTx — pgx.Tx-stub для Revoke. Делегирует Exec/Query/QueryRow обратно в
-// svcPool (маршрутизация по SQL общая), считает Commit/Rollback. Методы вне
-// scope-а Revoke — panic (не должны вызываться).
+// svcTx — pgx.Tx stub for Revoke. Delegates Exec/Query/QueryRow back to
+// svcPool (common SQL routing), counts Commit/Rollback. Methods outside
+// Revoke scope — panic (shouldn't be called).
 type svcTx struct {
 	pool      *svcPool
 	committed bool
@@ -96,33 +96,33 @@ func (t *svcTx) Prepare(context.Context, string, string) (*pgconn.StatementDescr
 }
 func (t *svcTx) Conn() *pgx.Conn { return nil }
 
-// svcPool — ServicePool-mock с SQL-маршрутизацией. Каждое поле управляет
-// поведением соответствующего CRUD-вызова, чтобы тесты Service лепили только
-// нужный сценарий.
+// svcPool — ServicePool mock with SQL routing. Each field controls
+// behavior of corresponding CRUD call so Service tests create only
+// needed scenario.
 type svcPool struct {
 	insertCalls int
 	insertErr   error
 
-	// selectFn — ответ SelectByAID; nil → ErrNoRows (not found).
+	// selectFn — response for SelectByAID; nil → ErrNoRows (not found).
 	selectFn func(aid string) (*Operator, error)
 
-	// revokeTag — RowsAffected для UPDATE operators; по умолчанию "UPDATE 1".
+	// revokeTag — RowsAffected for UPDATE operators; default "UPDATE 1".
 	revokeTag pgconn.CommandTag
 	revokeErr error
 
-	// effectiveAdmins — активные cluster-admin-ы, которые вернёт
-	// rbac.LockEffectiveClusterAdmins (FOR UPDATE-Query по БД-источнику,
-	// Slice 3). Раньше lockout-probe брал admin-set из ClusterAdmins()-снимка
-	// и пересекал с active-AID-ами; теперь весь admin-set приходит из БД.
+	// effectiveAdmins — active cluster-admins that
+	// rbac.LockEffectiveClusterAdmins will return (FOR UPDATE query from DB source,
+	// Slice 3). Previously lockout-probe took admin-set from ClusterAdmins() snapshot
+	// and intersected with active AIDs; now full admin-set comes from DB.
 	effectiveAdmins []string
 	queryErr        error
 
-	// roleGrants — лог успешно вставленных membership-строк (role, aid)
-	// для atomic create+grant пути. Тесты валидируют, что все запрошенные
-	// роли прошли через tx (или ни одной при rollback).
+	// roleGrants — log of successfully inserted membership rows (role, aid)
+	// for atomic create+grant path. Tests validate all requested
+	// roles went through tx (or none on rollback).
 	roleGrants []roleGrantArgs
-	// grantErrFor — если ключ role совпадает — INSERT membership-а вернёт
-	// эту ошибку (FK-violation эмуляция для несуществующей роли/aid).
+	// grantErrFor — if role key matches — INSERT membership will return
+	// this error (FK-violation emulation for nonexistent role/aid).
 	grantErrFor map[string]error
 
 	beginErr  error
@@ -130,8 +130,8 @@ type svcPool struct {
 	tx        *svcTx
 }
 
-// roleGrantArgs — лог-запись о вставленной membership-строке. Используется
-// тестами atomic create+grant.
+// roleGrantArgs — log entry for inserted membership row. Used by
+// atomic create+grant tests.
 type roleGrantArgs struct {
 	role, aid, by string
 }
@@ -198,13 +198,13 @@ func (p *svcPool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 }
 
 func (p *svcPool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
-	// Synod-эпик S2 (ADR-049(f)): rbac.LockEffectiveClusterAdmins теперь шлёт ДВА
-	// locking-запроса — прямую ветку (FROM rbac_role_operators) и Synod-ветку
-	// (FROM synod_operators). Synod-ветку этот mock возвращает пустой: operator-
-	// unit-сценарии задают admin-set через effectiveAdmins (прямой путь) и
-	// групповых админов не моделируют (их покрывают integration-guard-тесты
-	// rbac.synod_security_integration_test.go). Порядок веток проверяется в
-	// rbac-пакете; здесь важна лишь корректная маршрутизация по таблице.
+	// Synod epic S2 (ADR-049(f)): rbac.LockEffectiveClusterAdmins now sends TWO
+	// locking queries — direct branch (FROM rbac_role_operators) and Synod branch
+	// (FROM synod_operators). Synod branch this mock returns empty: operator
+	// unit scenarios set admin-set via effectiveAdmins (direct path) and
+	// don't model group admins (covered by integration-guard tests
+	// rbac.synod_security_integration_test.go). Branch order checked in
+	// rbac package; here only correct table routing matters.
 	switch {
 	case strings.Contains(sql, "FROM synod_operators"):
 		if p.queryErr != nil {
@@ -228,11 +228,11 @@ func (p *svcPool) BeginTx(_ context.Context, _ pgx.TxOptions) (pgx.Tx, error) {
 	return p.tx, nil
 }
 
-// compile-time check: svcPool удовлетворяет ServicePool.
+// compile-time check: svcPool satisfies ServicePool.
 var _ ServicePool = (*svcPool)(nil)
 
-// newService собирает Service с тестовыми deps. TTL фиксирован, logger nil
-// (Service nil-логгер терпит — см. NewService).
+// newService assembles Service with test deps. TTL fixed, logger nil
+// (Service tolerates nil logger — see NewService).
 func newService(t *testing.T, pool ServicePool, iss JWTIssuer, rb RBACSource) *Service {
 	t.Helper()
 	s, err := NewService(ServiceDeps{
@@ -247,7 +247,7 @@ func newService(t *testing.T, pool ServicePool, iss JWTIssuer, rb RBACSource) *S
 	return s
 }
 
-// newServiceLogged — Service с non-nil логгером (для покрытия logger-веток).
+// newServiceLogged — Service with non-nil logger (to cover logger branches).
 func newServiceLogged(t *testing.T, pool ServicePool, iss JWTIssuer, rb RBACSource) *Service {
 	t.Helper()
 	s, err := NewService(ServiceDeps{
@@ -361,7 +361,7 @@ func TestCreate_HappyPath(t *testing.T) {
 	if res.CreatedByAID != "archon-alice" {
 		t.Errorf("CreatedByAID = %q, want archon-alice", res.CreatedByAID)
 	}
-	// created_at должен прийти из БД (SelectByAID), а не локальный «сейчас».
+	// created_at should come from DB (SelectByAID), not local "now".
 	if !res.CreatedAt.Equal(createdAt) {
 		t.Errorf("CreatedAt = %v, want %v (из БД)", res.CreatedAt, createdAt)
 	}
@@ -373,7 +373,7 @@ func TestCreate_HappyPath(t *testing.T) {
 func TestCreate_DefaultDisplayNameFromAID(t *testing.T) {
 	pool := &svcPool{
 		selectFn: func(aid string) (*Operator, error) {
-			// SelectByAID вернёт то, что записано в БД (display_name = AID).
+			// SelectByAID will return what's in DB (display_name = AID).
 			return &Operator{AID: aid, DisplayName: aid, AuthMethod: AuthMethodJWT}, nil
 		},
 	}
@@ -382,7 +382,7 @@ func TestCreate_DefaultDisplayNameFromAID(t *testing.T) {
 	res, err := s.Create(context.Background(), CreateInput{
 		AID:       "archon-bob",
 		CallerAID: "archon-alice",
-		// DisplayName пуст → default = AID.
+		// DisplayName empty → default = AID.
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -403,7 +403,7 @@ func TestCreate_RejectsInvalidAID(t *testing.T) {
 		t.Errorf("err = %q, want substring invalid AID", err)
 	}
 	if pool.insertCalls != 0 {
-		t.Errorf("insertCalls = %d, want 0 — нет round-trip на невалидном AID", pool.insertCalls)
+		t.Errorf("insertCalls = %d, want 0 — no round-trip on invalid AID", pool.insertCalls)
 	}
 }
 
@@ -418,7 +418,7 @@ func TestCreate_RejectsEmptyCallerAID(t *testing.T) {
 		t.Errorf("err = %q", err)
 	}
 	if pool.insertCalls != 0 {
-		t.Errorf("insertCalls = %d, want 0 — нет insert без CallerAID", pool.insertCalls)
+		t.Errorf("insertCalls = %d, want 0 — no insert without CallerAID", pool.insertCalls)
 	}
 }
 
@@ -437,13 +437,13 @@ func TestCreate_AlreadyExistsPropagated(t *testing.T) {
 		t.Fatalf("err = %v, want errors.Is ErrOperatorAlreadyExists", err)
 	}
 	if iss.calls != 0 {
-		t.Errorf("issuer.calls = %d, want 0 — JWT не выпускается при отказе Insert", iss.calls)
+		t.Errorf("issuer.calls = %d, want 0 — JWT not issued on Insert refusal", iss.calls)
 	}
 }
 
-// TestCreate_IssueFailsAfterInsert фиксирует error-recovery: Insert committed,
-// но Issue упал. Caller получает обёрнутую ошибку; operator остаётся в БД
-// (orphaned), JWT не выдан — manual reconciliation (документировано в Create).
+// TestCreate_IssueFailsAfterInsert captures error recovery: Insert committed,
+// but Issue failed. Caller gets wrapped error; operator remains in DB
+// (orphaned), JWT not issued — manual reconciliation (documented in Create).
 func TestCreate_IssueFailsAfterInsert(t *testing.T) {
 	pool := &svcPool{
 		selectFn: func(aid string) (*Operator, error) {
@@ -463,19 +463,19 @@ func TestCreate_IssueFailsAfterInsert(t *testing.T) {
 	if !strings.Contains(err.Error(), "issue JWT failed") {
 		t.Errorf("err = %q, want substring issue JWT failed", err)
 	}
-	// Insert уже произошёл — операторо-строка осталась в БД (orphaned).
+	// Insert already happened — operator row remains in DB (orphaned).
 	if pool.insertCalls != 1 {
 		t.Errorf("insertCalls = %d, want 1 — Insert committed до провала Issue", pool.insertCalls)
 	}
-	// Caller должен иметь возможность развернуть оригинальную причину.
+	// Caller should be able to unwrap original cause.
 	if !strings.Contains(err.Error(), "vault signing key unavailable") {
-		t.Errorf("err = %q, want wrap оригинальной причины Issue", err)
+		t.Errorf("err = %q, want wrap of original Issue cause", err)
 	}
 }
 
-// TestCreate_FallsBackOnPostInsertSelectFailure — SelectByAID после Insert
-// упал (не ErrNoRows, а транспортная ошибка). Create НЕ проваливается: Insert
-// + JWT успешны, created_at падает back на локальное «сейчас».
+// TestCreate_FallsBackOnPostInsertSelectFailure — SelectByAID after Insert
+// failed (not ErrNoRows, but transport error). Create does NOT fail: Insert
+// + JWT succeeded, created_at falls back to local "now".
 func TestCreate_FallsBackOnPostInsertSelectFailure(t *testing.T) {
 	before := time.Now().UTC()
 	pool := &svcPool{
@@ -492,24 +492,24 @@ func TestCreate_FallsBackOnPostInsertSelectFailure(t *testing.T) {
 		CallerAID:   "archon-alice",
 	})
 	if err != nil {
-		t.Fatalf("Create: ожидался успех с fallback, got %v", err)
+		t.Fatalf("Create: expected success with fallback, got %v", err)
 	}
 	if res.JWT != "fake-jwt-archon-bob" {
 		t.Errorf("JWT = %q", res.JWT)
 	}
-	// CreatedAt — локальный fallback, не из БД.
+	// CreatedAt — local fallback, not from DB.
 	if res.CreatedAt.Before(before) {
-		t.Errorf("CreatedAt = %v, want >= %v (локальный fallback)", res.CreatedAt, before)
+		t.Errorf("CreatedAt = %v, want >= %v (local fallback)", res.CreatedAt, before)
 	}
-	// DisplayName взят из локального op (Insert-аргумент), не из БД.
+	// DisplayName taken from local op (Insert argument), not from DB.
 	if res.DisplayName != "Bob" {
-		t.Errorf("DisplayName = %q, want Bob (локальный fallback)", res.DisplayName)
+		t.Errorf("DisplayName = %q, want Bob (local fallback)", res.DisplayName)
 	}
 }
 
-// TestCreate_IssueFailsAfterInsert_LogsError — то же, что
-// TestCreate_IssueFailsAfterInsert, но с non-nil логгером: покрывает
-// logger.Error-ветку (s.logger != nil) при провале Issue после Insert.
+// TestCreate_IssueFailsAfterInsert_LogsError — same as
+// TestCreate_IssueFailsAfterInsert, but with non-nil logger: covers
+// logger.Error branch (s.logger != nil) when Issue fails after Insert.
 func TestCreate_IssueFailsAfterInsert_LogsError(t *testing.T) {
 	pool := &svcPool{
 		selectFn: func(aid string) (*Operator, error) {
@@ -528,9 +528,9 @@ func TestCreate_IssueFailsAfterInsert_LogsError(t *testing.T) {
 	}
 }
 
-// TestCreate_PostInsertSelectFails_LogsWarn — non-nil логгер при провале
-// post-insert SelectByAID: покрывает logger.Warn-ветку и fallback на
-// локальный created_at.
+// TestCreate_PostInsertSelectFails_LogsWarn — non-nil logger on failure
+// post-insert SelectByAID: covers logger.Warn branch and fallback to
+// local created_at.
 func TestCreate_PostInsertSelectFails_LogsWarn(t *testing.T) {
 	pool := &svcPool{
 		selectFn: func(_ string) (*Operator, error) {
@@ -545,7 +545,7 @@ func TestCreate_PostInsertSelectFails_LogsWarn(t *testing.T) {
 		CallerAID:   "archon-alice",
 	})
 	if err != nil {
-		t.Fatalf("Create: ожидался успех с fallback, got %v", err)
+		t.Fatalf("Create: expected success with fallback, got %v", err)
 	}
 	if res.DisplayName != "Bob" {
 		t.Errorf("DisplayName = %q, want Bob (fallback)", res.DisplayName)
@@ -644,12 +644,12 @@ func TestIssueToken_IssueFails(t *testing.T) {
 	}
 }
 
-// --- Revoke (unit, через fakeTx) -------------------------------------
+// --- Revoke (unit, via fakeTx) -------------------------------------
 
 func TestRevoke_HappyPath_Service(t *testing.T) {
 	pool := &svcPool{
-		// target (archon-bob) не входит в admin-set → exclusion ничего не
-		// меняет, lockout невозможен.
+		// target (archon-bob) not in admin-set → exclusion does nothing
+		// changes, lockout impossible.
 		effectiveAdmins: []string{"archon-alice"},
 	}
 	s := newService(t, pool, &fakeIssuer{}, &fakeRBAC{})
@@ -659,7 +659,7 @@ func TestRevoke_HappyPath_Service(t *testing.T) {
 		t.Fatalf("Revoke: %v", err)
 	}
 	if pool.tx == nil || !pool.tx.committed {
-		t.Errorf("tx не закоммичена: tx=%v", pool.tx)
+		t.Errorf("tx not committed: tx=%v", pool.tx)
 	}
 }
 
@@ -674,16 +674,16 @@ func TestRevoke_RejectsInvalidAID_Service(t *testing.T) {
 		t.Errorf("err = %q", err)
 	}
 	if pool.tx != nil {
-		t.Errorf("tx открыта на невалидном AID, want нет round-trip")
+		t.Errorf("tx opened on invalid AID, want no round-trip")
 	}
 }
 
-// TestRevoke_WouldLockOutCluster — target — единственный активный
-// cluster-admin. Service возвращает ErrWouldLockOutCluster, UPDATE не идёт,
-// tx откатывается.
+// TestRevoke_WouldLockOutCluster — target — only active
+// cluster-admin. Service returns ErrWouldLockOutCluster, UPDATE doesn't go,
+// tx rolls back.
 func TestRevoke_WouldLockOutCluster(t *testing.T) {
 	pool := &svcPool{
-		effectiveAdmins: []string{"archon-alice"}, // только сам target активен
+		effectiveAdmins: []string{"archon-alice"}, // only target is active
 	}
 	s := newService(t, pool, &fakeIssuer{}, &fakeRBAC{})
 
@@ -692,12 +692,12 @@ func TestRevoke_WouldLockOutCluster(t *testing.T) {
 		t.Fatalf("err = %v, want ErrWouldLockOutCluster", err)
 	}
 	if pool.tx != nil && pool.tx.committed {
-		t.Errorf("tx закоммичена при lockout — want rollback")
+		t.Errorf("tx committed on lockout — want rollback")
 	}
 }
 
-// TestRevoke_AdminButNotLast — target в admin-set, но активных admin-ов
-// больше одного → revoke проходит (lockout-инвариант не нарушается).
+// TestRevoke_AdminButNotLast — target in admin-set, but active admins
+// more than one → revoke succeeds (lockout invariant not violated).
 func TestRevoke_AdminButNotLast(t *testing.T) {
 	pool := &svcPool{
 		effectiveAdmins: []string{"archon-alice", "archon-bob"},
@@ -709,7 +709,7 @@ func TestRevoke_AdminButNotLast(t *testing.T) {
 		t.Fatalf("Revoke: %v", err)
 	}
 	if pool.tx == nil || !pool.tx.committed {
-		t.Errorf("tx не закоммичена")
+		t.Errorf("tx not committed")
 	}
 }
 
@@ -718,7 +718,7 @@ func TestRevoke_NotFound_Service(t *testing.T) {
 		effectiveAdmins: nil,
 		// UPDATE 0 rows + SelectByAID → ErrNoRows → ErrOperatorNotFound.
 		revokeTag: pgconn.NewCommandTag("UPDATE 0"),
-		// selectFn nil → QueryRow вернёт ErrNoRows.
+		// selectFn nil → QueryRow will return ErrNoRows.
 	}
 	s := newService(t, pool, &fakeIssuer{}, &fakeRBAC{})
 
@@ -768,14 +768,14 @@ func TestRevoke_LockQueryFails(t *testing.T) {
 		t.Fatal("Revoke with lock-query-failure returned nil err")
 	}
 	if pool.tx != nil && pool.tx.committed {
-		t.Errorf("tx закоммичена при провале lock-query")
+		t.Errorf("tx committed on lock-query failure")
 	}
 }
 
-// TestRevoke_EmptyAdminSet — RBAC-таблицы не содержат ни одного эффективного
-// `*`-admin-а (Slice 3: lockout-probe ВСЕГДА бьёт в БД, ветки «admin-set пуст,
-// пропускаем Query» больше нет). Query вернул пустой набор → target не в
-// admin-set → lockout невозможен, revoke проходит.
+// TestRevoke_EmptyAdminSet — RBAC tables contain no effective
+// `*`-admin (Slice 3: lockout-probe ALWAYS hits DB, branches "admin-set empty,
+// skip Query" no more). Query returned empty set → target not in
+// admin-set → lockout impossible, revoke succeeds.
 func TestRevoke_EmptyAdminSet(t *testing.T) {
 	pool := &svcPool{
 		effectiveAdmins: nil,
@@ -787,12 +787,12 @@ func TestRevoke_EmptyAdminSet(t *testing.T) {
 		t.Fatalf("Revoke: %v", err)
 	}
 	if pool.tx == nil || !pool.tx.committed {
-		t.Errorf("tx не закоммичена")
+		t.Errorf("tx not committed")
 	}
 }
 
-// TestRevoke_CommitFails — UPDATE прошёл, но COMMIT упал. Service оборачивает
-// в "commit tx"-ошибку (caller маппит в 500).
+// TestRevoke_CommitFails — UPDATE succeeded, but COMMIT failed. Service wraps
+// in "commit tx" error (caller maps to 500).
 func TestRevoke_CommitFails(t *testing.T) {
 	pool := &svcPool{
 		effectiveAdmins: []string{"archon-alice"},
@@ -811,9 +811,9 @@ func TestRevoke_CommitFails(t *testing.T) {
 
 // --- Create with roles (atomic create+grant) -------------------------
 
-// TestCreate_WithRoles_GrantsAtomically — happy path UX-fix: Create принимает
-// roles[], INSERT operator-а + GrantOperator-ы для всех ролей идут одной tx,
-// commit успешен → возвращён список granted-ролей.
+// TestCreate_WithRoles_GrantsAtomically — happy path UX-fix: Create accepts
+// roles[], INSERT operator + GrantOperators for all roles go in one tx,
+// commit succeeds → returned list of granted roles.
 func TestCreate_WithRoles_GrantsAtomically(t *testing.T) {
 	createdAt := time.Date(2026, 5, 27, 10, 0, 0, 0, time.UTC)
 	parent := "archon-alice"
@@ -850,17 +850,17 @@ func TestCreate_WithRoles_GrantsAtomically(t *testing.T) {
 		t.Errorf("grant[1] = %+v", pool.roleGrants[1])
 	}
 	if pool.tx == nil || !pool.tx.committed {
-		t.Errorf("tx не закоммичена: tx=%v", pool.tx)
+		t.Errorf("tx not committed: tx=%v", pool.tx)
 	}
 	if len(res.GrantedRoles) != 2 || res.GrantedRoles[0] != "cluster-readonly" {
 		t.Errorf("GrantedRoles = %v, want [cluster-readonly, incarnation-operator]", res.GrantedRoles)
 	}
 }
 
-// TestCreate_WithRoles_UnknownRole_Rollback — FK-violation на role_name →
-// rbac.ErrRoleNotFound пробрасывается caller-у, tx откатывается, оператор
-// НЕ создан (insertCalls=1 в моке — Insert прошёл, но Commit не было),
-// roleGrants пуст для проваленной роли.
+// TestCreate_WithRoles_UnknownRole_Rollback — FK-violation on role_name →
+// rbac.ErrRoleNotFound passed to caller, tx rolls back, operator
+// NOT created (insertCalls=1 in mock — Insert succeeded, but Commit didn't),
+// roleGrants empty for failed role.
 func TestCreate_WithRoles_UnknownRole_Rollback(t *testing.T) {
 	pool := &svcPool{
 		grantErrFor: map[string]error{
@@ -893,8 +893,8 @@ func TestCreate_WithRoles_UnknownRole_Rollback(t *testing.T) {
 	}
 }
 
-// TestCreate_WithRoles_InvalidRoleName_Pre — pre-валидация role-имени до tx:
-// мусорное имя ловится regex-ом, tx не открывается.
+// TestCreate_WithRoles_InvalidRoleName_Pre — pre-validation of role name before tx:
+// garbage name caught by regex, tx not opened.
 func TestCreate_WithRoles_InvalidRoleName_Pre(t *testing.T) {
 	pool := &svcPool{}
 	s := newService(t, pool, &fakeIssuer{}, &fakeRBAC{})
@@ -917,10 +917,10 @@ func TestCreate_WithRoles_InvalidRoleName_Pre(t *testing.T) {
 	}
 }
 
-// TestCreate_WithRoles_PublishesInvalidate — после успешного atomic create+grant
-// service дёргает Invalidator (cluster-wide RBAC-инвалидация — parity с
-// rbac.Service.GrantOperator). Без ролей publish НЕ ходит (нет membership-
-// изменения).
+// TestCreate_WithRoles_PublishesInvalidate — after successful atomic create+grant
+// service calls Invalidator (cluster-wide RBAC invalidation — parity with
+// rbac.Service.GrantOperator). Without roles publish does NOT go (no membership
+// changes).
 func TestCreate_WithRoles_PublishesInvalidate(t *testing.T) {
 	pool := &svcPool{
 		selectFn: func(aid string) (*Operator, error) {
@@ -943,8 +943,8 @@ func TestCreate_WithRoles_PublishesInvalidate(t *testing.T) {
 	}
 }
 
-// TestCreate_WithoutRoles_NoInvalidate — обратная сторона: без ролей в
-// запросе publish не дёргается (нет membership-изменения, экономим трафик).
+// TestCreate_WithoutRoles_NoInvalidate — flip side: without roles in
+// request publish not called (no membership changes, save traffic).
 func TestCreate_WithoutRoles_NoInvalidate(t *testing.T) {
 	pool := &svcPool{
 		selectFn: func(aid string) (*Operator, error) {
@@ -966,7 +966,7 @@ func TestCreate_WithoutRoles_NoInvalidate(t *testing.T) {
 }
 
 // TestCreate_WithRoles_DoesNotPublishOnRollback — FK-violation → rollback →
-// Invalidate НЕ вызывается (membership не зафиксирован, нет смысла шуметь).
+// Invalidate NOT called (membership not committed, no point noise).
 func TestCreate_WithRoles_DoesNotPublishOnRollback(t *testing.T) {
 	pool := &svcPool{
 		grantErrFor: map[string]error{
@@ -992,8 +992,8 @@ func TestCreate_WithRoles_DoesNotPublishOnRollback(t *testing.T) {
 	}
 }
 
-// TestCreate_WithRoles_BeginTxFails — провал BeginTx на atomic-пути:
-// возвращается обёрнутая ошибка, insert не происходит.
+// TestCreate_WithRoles_BeginTxFails — BeginTx failure on atomic path:
+// wrapped error returned, insert does not happen.
 func TestCreate_WithRoles_BeginTxFails(t *testing.T) {
 	pool := &svcPool{beginErr: errors.New("pool exhausted")}
 	s := newService(t, pool, &fakeIssuer{}, &fakeRBAC{})

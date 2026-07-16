@@ -12,73 +12,73 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// ErrOperatorAlreadyExists — UNIQUE-violation (`23505`) при Insert: AID
-// уже занят либо повторно вставляется bootstrap (partial unique index
-// `operators_first_archon_idx WHERE created_via='bootstrap'` — миграции
-// 084/085, ADR-058(d): инвариант перенесён с `created_by_aid IS NULL`).
+// ErrOperatorAlreadyExists — UNIQUE-violation (`23505`) on Insert: AID
+// already taken or bootstrap is being inserted again (partial unique index
+// `operators_first_archon_idx WHERE created_via='bootstrap'` — migrations
+// 084/085, ADR-058(d): invariant moved from `created_by_aid IS NULL`).
 var ErrOperatorAlreadyExists = errors.New("operator: AID already exists")
 
-// ErrOperatorNotFound — SELECT не нашёл строку по AID. Возвращается
-// SelectByAID — отдельный sentinel, чтобы вызывающий мог отличить
-// «не существует» от транспортной ошибки.
+// ErrOperatorNotFound — SELECT did not find a row by AID. Returned by
+// SelectByAID — a separate sentinel so the caller can distinguish
+// "does not exist" from a transport error.
 var ErrOperatorNotFound = errors.New("operator: AID not found")
 
-// ErrOperatorAlreadyRevoked — Revoke вызван для уже ревокнутого AID
-// (revoked_at != NULL). Sentinel выделен, чтобы handler возвращал
-// 409, а не 404.
+// ErrOperatorAlreadyRevoked — Revoke was called for an already revoked AID
+// (revoked_at != NULL). Sentinel is separated so handler returns
+// 409 instead of 404.
 var ErrOperatorAlreadyRevoked = errors.New("operator: AID already revoked")
 
-// pgErrCodeUniqueViolation — SQLSTATE для UNIQUE-нарушения, в т.ч. PK и
-// partial unique index. Документировано в pgerrcode, но в keeper/go.sum
-// есть только indirect-зависимость; держим constant локально, чтобы не
-// тянуть пакет в API.
+// pgErrCodeUniqueViolation — SQLSTATE for UNIQUE violation, including PK and
+// partial unique index. Documented in pgerrcode, but in keeper/go.sum
+// there is only an indirect dependency; we keep the constant locally to avoid
+// pulling the package into the API.
 const pgErrCodeUniqueViolation = "23505"
 
-// pgErrCodeForeignKeyViolation — SQLSTATE для FK-нарушения. Для
-// operators возникает на `created_by_aid` (insert ссылается на
-// несуществующий AID).
+// pgErrCodeForeignKeyViolation — SQLSTATE for FK violation. For
+// operators it occurs on `created_by_aid` (insert references a
+// non-existent AID).
 const pgErrCodeForeignKeyViolation = "23503"
 
-// ExecQueryRower — узкое подмножество интерфейса pgxpool.Pool, нужное
-// CRUD-у. Сужение позволяет unit-тестировать функции через fake-pool без
-// поднятия Postgres-а; реальный pool из keeper/internal/pg удовлетворяет
-// интерфейсу автоматически.
+// ExecQueryRower — a narrow subset of the pgxpool.Pool interface needed
+// by CRUD. The narrowing allows unit-testing functions via a fake pool without
+// spinning up Postgres; the real pool from keeper/internal/pg satisfies
+// the interface automatically.
 //
-// Query — часть подмножества для функций, читающих несколько строк;
-// pgxpool.Pool/Conn/Tx удовлетворяют автоматически.
+// Query — part of the subset for functions reading multiple rows;
+// pgxpool.Pool/Conn/Tx satisfy it automatically.
 //
-// Тип экспортирован, чтобы handlers/operator.go мог типизировать pool
-// в OperatorHandler без зависимости от pgxpool в API-слое.
+// The type is exported so handlers/operator.go can type the pool
+// in OperatorHandler without a dependency on pgxpool in the API layer.
 type ExecQueryRower interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
-// execQueryRower — backwards-совместимый alias (package-internal usage в
-// crud.go и crud_test.go).
+// execQueryRower — backwards-compatible alias (package-internal usage in
+// crud.go and crud_test.go).
 type execQueryRower = ExecQueryRower
 
-// Compile-time check: pgxpool.Pool / pgx.Conn / pgx.Tx удовлетворяют
-// execQueryRower. Все три фактически используются (Pool в `keeper run`,
-// Tx в bootstrap.Init, Conn — теоретически для пользовательских snippet-ов).
-// pgx.Tx — интерфейс, потому `(pgx.Tx)(nil)`-форма без указателя.
+// Compile-time check: pgxpool.Pool / pgx.Conn / pgx.Tx satisfy
+// execQueryRower. All three are actually used (Pool in `keeper run`,
+// Tx in bootstrap.Init, Conn — theoretically for custom snippets).
+// pgx.Tx — interface, so `(pgx.Tx)(nil)` form without pointer.
 var (
 	_ execQueryRower = (*pgx.Conn)(nil)
 	_ execQueryRower = (*pgxpool.Pool)(nil)
 	_ execQueryRower = (pgx.Tx)(nil)
 )
 
-// insertOperatorSQL — INSERT с явным маппингом всех колонок таблицы
-// `operators` (003_create_operators.up.sql). `created_at` берётся из
-// DEFAULT NOW(), если caller не задал значение — поведение симметрично
-// audit_log в `keeper/internal/auditpg`.
+// insertOperatorSQL — INSERT with explicit mapping of all columns of the
+// `operators` table (003_create_operators.up.sql). `created_at` is taken from
+// DEFAULT NOW() if the caller did not set a value — behavior is symmetric with
+// audit_log in `keeper/internal/auditpg`.
 const insertOperatorSQL = `
 INSERT INTO operators (aid, display_name, auth_method, created_at, created_by_aid, created_via, revoked_at, metadata)
 VALUES ($1, $2, $3, COALESCE($4, NOW()), $5, $6, $7, $8)
 `
 
-// selectOperatorByAIDSQL — SELECT всех колонок operators по PK.
+// selectOperatorByAIDSQL — SELECT all columns of operators by PK.
 const selectOperatorByAIDSQL = `
 SELECT aid, display_name, auth_method, created_at, created_by_aid, created_via, revoked_at, metadata
 FROM operators
@@ -87,36 +87,36 @@ WHERE aid = $1
 
 const countOperatorsSQL = `SELECT COUNT(*) FROM operators`
 
-// Исключает системный archon-system (ADR-013 amendment 2026-07-01).
+// Excludes the system archon-system (ADR-013 amendment 2026-07-01).
 const countNonSystemOperatorsSQL = `SELECT COUNT(*) FROM operators WHERE created_via <> 'system'`
 
-// ListFilter — параметры `GET /v1/operators`. Пустые поля = «без фильтра».
-// IncludeRevoked=false → SQL добавляет `revoked_at IS NULL` (отдаём только
-// активных; default-поведение UI). IncludeRevoked=true → без фильтра по
+// ListFilter — parameters for `GET /v1/operators`. Empty fields = "no filter".
+// IncludeRevoked=false → SQL adds `revoked_at IS NULL` (returns only
+// active; default UI behavior). IncludeRevoked=true → no filter on
 // revoked_at (admin-view).
 type ListFilter struct {
 	AuthMethod     AuthMethod
 	IncludeRevoked bool
-	// Q — свободный substring-поиск (ILIKE) по display_name/aid; "" = без фильтра.
+	// Q — free substring search (ILIKE) by display_name/aid; "" = no filter.
 	Q string
 }
 
-// Insert вставляет нового Архонта в реестр.
+// Insert inserts a new Archon into the registry.
 //
 // Pre-conditions:
-//   - op.AID соответствует [AIDPattern] (валидируется до round-trip).
-//   - op.AuthMethod — один из enum-ов (jwt / mtls / combined / ldap / oidc;
-//     ldap/oidc — федеративная аутентификация, ADR-058).
-//   - op.DisplayName — непустой (NOT NULL без DEFAULT в схеме).
+//   - op.AID matches [AIDPattern] (validated before round-trip).
+//   - op.AuthMethod — one of the enums (jwt / mtls / combined / ldap / oidc;
+//     ldap/oidc — federated authentication, ADR-058).
+//   - op.DisplayName — non-empty (NOT NULL without DEFAULT in schema).
 //
-// Возврат:
-//   - [ErrOperatorAlreadyExists] на UNIQUE-violation (PK или
+// Returns:
+//   - [ErrOperatorAlreadyExists] on UNIQUE-violation (PK or
 //     partial unique index `operators_first_archon_idx WHERE
-//     created_via='bootstrap'` — миграции 084/085, ADR-058(d)).
-//   - wrapped fmt.Errorf на FK-violation (`created_by_aid` ссылается на
-//     несуществующий AID) с упоминанием SQLSTATE — caller может
-//     различить случай через сообщение.
-//   - прочие ошибки pgx — без обёртки, пробрасываются как есть.
+//     created_via='bootstrap'` — migrations 084/085, ADR-058(d)).
+//   - wrapped fmt.Errorf on FK-violation (`created_by_aid` references a
+//     non-existent AID) with SQLSTATE mention — caller can
+//     distinguish the case through the message.
+//   - other pgx errors — unwrapped, passed as is.
 func Insert(ctx context.Context, db execQueryRower, op *Operator) error {
 	if op == nil {
 		return fmt.Errorf("operator: nil operator")
@@ -133,11 +133,11 @@ func Insert(ctx context.Context, db execQueryRower, op *Operator) error {
 		return fmt.Errorf("operator: invalid auth_method %q", op.AuthMethod)
 	}
 
-	// created_via по умолчанию 'user' (ADR-058(d)): Operator API
-	// (Service.Create) и legacy-вызовы не задают поле — оператор, заведённый
-	// через POST /v1/operators, по определению user. Bootstrap/system/ldap/oidc
-	// проставляют значение явно. Дефолт ставится здесь (а не COALESCE в SQL),
-	// чтобы прикладная валидация ниже всегда видела канонизированное значение.
+	// created_via defaults to 'user' (ADR-058(d)): Operator API
+	// (Service.Create) and legacy calls do not set the field — an operator created
+	// via POST /v1/operators is by definition user. Bootstrap/system/ldap/oidc
+	// set the value explicitly. Default is set here (not COALESCE in SQL)
+	// so application validation below always sees the canonical value.
 	createdVia := op.CreatedVia
 	if createdVia == "" {
 		createdVia = CreatedViaUser
@@ -184,16 +184,16 @@ func Insert(ctx context.Context, db execQueryRower, op *Operator) error {
 	return nil
 }
 
-// mapInsertError маппит pgx-ошибки в sentinel-ы пакета. UNIQUE — общий
-// ErrOperatorAlreadyExists (вызывающий по контексту знает, был ли это
-// PK-конфликт по AID или partial unique по bootstrap-инварианту).
+// mapInsertError maps pgx errors to package sentinels. UNIQUE → general
+// ErrOperatorAlreadyExists (caller knows from context whether this was
+// a PK conflict on AID or partial unique on bootstrap invariant).
 func mapInsertError(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
 		switch pgErr.Code {
 		case pgErrCodeUniqueViolation:
-			// Multi-wrap (Go 1.20+): и sentinel, и оригинал доступны
-			// через errors.Is. Имя constraint-а — в сообщении для логов.
+			// Multi-wrap (Go 1.20+): both sentinel and original accessible
+			// via errors.Is. Constraint name is in message for logs.
 			return fmt.Errorf("%w (constraint %s): %w",
 				ErrOperatorAlreadyExists, pgErr.ConstraintName, err)
 		case pgErrCodeForeignKeyViolation:
@@ -203,15 +203,15 @@ func mapInsertError(err error) error {
 	return fmt.Errorf("operator: insert: %w", err)
 }
 
-// SelectByAID читает Operator по PK. Возвращает [ErrOperatorNotFound]
-// при pgx.ErrNoRows.
+// SelectByAID reads an Operator by PK. Returns [ErrOperatorNotFound]
+// on pgx.ErrNoRows.
 func SelectByAID(ctx context.Context, db execQueryRower, aid string) (*Operator, error) {
 	row := db.QueryRow(ctx, selectOperatorByAIDSQL, aid)
 	return scanOperator(row)
 }
 
-// scanOperator — общий Scan для одной строки operators. Вынесен, чтобы
-// SelectByAID и будущие List-функции читали колонки одинаково.
+// scanOperator — common Scan for a single operators row. Extracted so
+// SelectByAID and future List functions read columns consistently.
 func scanOperator(row pgx.Row) (*Operator, error) {
 	var (
 		op            Operator
@@ -245,8 +245,8 @@ func scanOperator(row pgx.Row) (*Operator, error) {
 	return &op, nil
 }
 
-// Count — суммарное число operators (включая revoked и системных).
-// Для bootstrap-инварианта используй [CountNonSystem].
+// Count — total number of operators (including revoked and system).
+// For bootstrap invariant, use [CountNonSystem].
 func Count(ctx context.Context, db execQueryRower) (int64, error) {
 	var n int64
 	if err := db.QueryRow(ctx, countOperatorsSQL).Scan(&n); err != nil {
@@ -255,8 +255,8 @@ func Count(ctx context.Context, db execQueryRower) (int64, error) {
 	return n, nil
 }
 
-// CountNonSystem — число НЕ-системных операторов (включая revoked); основа
-// bootstrap-инварианта «реестр пуст» (ADR-013 amendment 2026-07-01).
+// CountNonSystem — count of non-system operators (including revoked); basis
+// for bootstrap invariant "registry is empty" (ADR-013 amendment 2026-07-01).
 func CountNonSystem(ctx context.Context, db execQueryRower) (int64, error) {
 	var n int64
 	if err := db.QueryRow(ctx, countNonSystemOperatorsSQL).Scan(&n); err != nil {
@@ -265,12 +265,12 @@ func CountNonSystem(ctx context.Context, db execQueryRower) (int64, error) {
 	return n, nil
 }
 
-// List возвращает страницу строк operators под фильтром, отсортированную по
-// created_at DESC (свежие сверху, паритет push_runs/incarnations/errands).
-// total — COUNT(*) под тем же фильтром без LIMIT/OFFSET (для UI-пагинации).
+// List returns a page of operators rows under filter, sorted by
+// created_at DESC (newest first, parity with push_runs/incarnations/errands).
+// total — COUNT(*) under the same filter without LIMIT/OFFSET (for UI pagination).
 //
-// Запросы простые без подготовленных выражений — фильтр маленький, prepared
-// statement переиспользуется драйвером.
+// Queries are simple without prepared statements — filter is small, prepared
+// statements are reused by the driver.
 func List(ctx context.Context, db execQueryRower, f ListFilter, offset, limit int) ([]*Operator, int, error) {
 	whereSQL, args := buildOperatorWhere(f)
 
@@ -305,8 +305,8 @@ LIMIT $` + intToString(len(args)+1) + ` OFFSET $` + intToString(len(args)+2)
 	return out, total, nil
 }
 
-// buildOperatorWhere собирает WHERE-предикат под ListFilter. Возвращает
-// строку с ведущим " WHERE …" либо "" если фильтр пуст.
+// buildOperatorWhere builds WHERE predicate for ListFilter. Returns
+// string with leading " WHERE …" or "" if filter is empty.
 func buildOperatorWhere(f ListFilter) (string, []any) {
 	var (
 		conds []string
@@ -337,17 +337,17 @@ func buildOperatorWhere(f ListFilter) (string, []any) {
 	return out, args
 }
 
-// likeEscaper экранирует ILIKE-метасимволы (%/_/\) в свободном поиске Q —
-// backslash-escape (PG-дефолт); backslash первым, чтобы не удвоить экранирование.
+// likeEscaper escapes ILIKE metacharacters (%/_/\) in free search Q —
+// backslash-escape (PG default); backslash first to avoid double-escaping.
 var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 
-// escapeLike готовит Q к подстановке в `%…%` ILIKE-паттерн.
+// escapeLike prepares Q for substitution in `%…%` ILIKE pattern.
 func escapeLike(s string) string { return likeEscaper.Replace(s) }
 
-// intToString — мелкий helper для построения $N плейсхолдеров. Симметрично
-// errand.Store::itoa (там inline strconv-free для одного места); operator-
-// crud SCAN-функцию использует трижды, держим inline-impl ради нулевой
-// зависимости от strconv в hot-path-е list-а.
+// intToString — small helper for building $N placeholders. Symmetric to
+// errand.Store::itoa (inline strconv-free there for one place); operator-
+// crud uses SCAN function three times, keep inline-impl for zero
+// strconv dependency in list hot-path.
 func intToString(n int) string {
 	if n == 0 {
 		return "0"
@@ -370,8 +370,8 @@ func intToString(n int) string {
 	return string(buf[i:])
 }
 
-// marshalMetadata сериализует metadata в JSON-bytes для прямой подстановки
-// в JSONB-колонку (pgx умеет). nil → `{}`, симметрично audit-payload.
+// marshalMetadata serializes metadata to JSON bytes for direct substitution
+// into JSONB column (pgx supports this). nil → `{}`, symmetric with audit-payload.
 func marshalMetadata(metadata map[string]any) ([]byte, error) {
 	if metadata == nil {
 		return []byte("{}"), nil
@@ -379,10 +379,10 @@ func marshalMetadata(metadata map[string]any) ([]byte, error) {
 	return json.Marshal(metadata)
 }
 
-// revokeOperatorSQL — UPDATE active-operator-а: ставим revoked_at=NOW() +
-// дописываем `revoke_reason` в metadata. WHERE revoked_at IS NULL —
-// атомарная защита от повторного revoke (rows-affected = 0 → уже revoked
-// или не существует, дифференцируем через SELECT в Revoke).
+// revokeOperatorSQL — UPDATE active operator: set revoked_at=NOW() +
+// write `revoke_reason` to metadata. WHERE revoked_at IS NULL —
+// atomic protection against repeated revoke (rows-affected = 0 → already revoked
+// or does not exist, differentiate via SELECT in Revoke).
 const revokeOperatorSQL = `
 UPDATE operators
 SET revoked_at = NOW(),
@@ -390,26 +390,26 @@ SET revoked_at = NOW(),
 WHERE aid = $1 AND revoked_at IS NULL
 `
 
-// revokeOperatorNoReasonSQL — то же без записи в metadata. Используется,
-// когда caller не передал reason — иначе jsonb_set добавил бы
-// `"revoke_reason":""`, что засоряет metadata пустыми ключами.
+// revokeOperatorNoReasonSQL — same without writing to metadata. Used
+// when caller did not pass reason — otherwise jsonb_set would add
+// `"revoke_reason":""`, cluttering metadata with empty keys.
 const revokeOperatorNoReasonSQL = `
 UPDATE operators
 SET revoked_at = NOW()
 WHERE aid = $1 AND revoked_at IS NULL
 `
 
-// Revoke ставит revoked_at для активного оператора и сохраняет reason в
-// metadata.revoke_reason (только при непустом reason — см.
+// Revoke sets revoked_at for active operator and saves reason to
+// metadata.revoke_reason (only when reason is non-empty — see
 // revokeOperatorNoReasonSQL).
 //
-// Семантика:
-//   - aid не существует в реестре → [ErrOperatorNotFound].
-//   - aid уже ревокнут (revoked_at != NULL) → [ErrOperatorAlreadyRevoked].
-//   - reason пуст — допустимо (поле опциональное), metadata не меняется.
+// Semantics:
+//   - aid does not exist in registry → [ErrOperatorNotFound].
+//   - aid already revoked (revoked_at != NULL) → [ErrOperatorAlreadyRevoked].
+//   - reason is empty — allowed (field is optional), metadata unchanged.
 //
-// Активные JWT ревокнутого Архонта продолжают работать до `exp`
-// (ADR-014(d), PM-decision M0.6b #3 — JWT verify revoked_at не читает).
+// Active JWTs of a revoked Archon continue to work until `exp`
+// (ADR-014(d), PM-decision M0.6b #3 — JWT verify does not check revoked_at).
 func Revoke(ctx context.Context, db execQueryRower, aid string, reason string) error {
 	if !ValidAID(aid) {
 		return fmt.Errorf("operator: invalid AID %q (must match %s)", aid, AIDPattern)
@@ -429,8 +429,8 @@ func Revoke(ctx context.Context, db execQueryRower, aid string, reason string) e
 	if tag.RowsAffected() == 1 {
 		return nil
 	}
-	// 0 rows — либо AID нет вовсе, либо уже revoked. Дифференцируем через
-	// SelectByAID: для UX-handler-а важно различить 404 vs 409.
+	// 0 rows — either AID does not exist or already revoked. Differentiate via
+	// SelectByAID: important for UX handler to distinguish 404 vs 409.
 	op, selErr := SelectByAID(ctx, db, aid)
 	if errors.Is(selErr, ErrOperatorNotFound) {
 		return ErrOperatorNotFound
@@ -441,8 +441,8 @@ func Revoke(ctx context.Context, db execQueryRower, aid string, reason string) e
 	if op.RevokedAt != nil {
 		return ErrOperatorAlreadyRevoked
 	}
-	// Не должно случиться: WHERE-clause или rows-affected дали 0, но
-	// строка активна. Возвращаем generic-error как симптом потенциального
-	// race-condition (например, параллельный revoke).
+	// Should not happen: WHERE-clause or rows-affected returned 0, but
+	// row is active. Return generic error as symptom of potential
+	// race-condition (e.g., concurrent revoke).
 	return fmt.Errorf("operator: revoke: 0 rows affected, but %q is active (concurrent revoke?)", aid)
 }

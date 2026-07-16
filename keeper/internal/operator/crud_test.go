@@ -12,9 +12,9 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// fakeDB — мок execQueryRower для unit-тестов. Захватывает аргументы
-// последнего Exec и QueryRow-а. Возврат подменяется через поля execErr /
-// rowFunc.
+// fakeDB — mock execQueryRower for unit tests. Captures arguments
+// of last Exec and QueryRow. Return substituted via execErr /
+// rowFunc fields.
 type fakeDB struct {
 	execCalls    int
 	lastExecSQL  string
@@ -26,8 +26,8 @@ type fakeDB struct {
 	lastQuerySQL string
 	rowFunc      func() pgx.Row
 
-	// queryFunc — реализация Query (multi-row). По умолчанию возвращает
-	// rows-stub с одним проходом и пустым результатом (Next() → false).
+	// queryFunc — implementation of Query (multi-row). By default returns
+	// rows-stub with single pass and empty result (Next() → false).
 	queryFunc func() (pgx.Rows, error)
 }
 
@@ -55,9 +55,8 @@ func (f *fakeDB) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error
 	return &fakeRows{}, nil
 }
 
-// fakeRows — pgx.Rows-stub для Query-метода fakeDB (execQueryRower требует
-// Query). Прогоняет values по одному в Scan; Next() возвращает false после
-// исчерпания.
+// fakeRows — pgx.Rows stub for fakeDB's Query method (execQueryRower requires
+// Query). Feeds values one by one to Scan; Next() returns false when exhausted.
 type fakeRows struct {
 	values []string
 	idx    int
@@ -95,12 +94,12 @@ func (r *fakeRows) Values() ([]any, error)                       { return nil, n
 func (r *fakeRows) RawValues() [][]byte                          { return nil }
 func (r *fakeRows) Conn() *pgx.Conn                              { return nil }
 
-// errRow — pgx.Row, всегда возвращающий заранее заданный err при Scan.
+// errRow — pgx.Row that always returns preset error on Scan.
 type errRow struct{ err error }
 
 func (r errRow) Scan(_ ...any) error { return r.err }
 
-// staticRow — pgx.Row, копирующий значения из values в Scan-аргументы.
+// staticRow — pgx.Row that copies values from values into Scan arguments.
 type staticRow struct {
 	values []any
 	err    error
@@ -119,10 +118,10 @@ func (r staticRow) Scan(dest ...any) error {
 	return nil
 }
 
-// assign — упрощённый Scan: подставляет значение в указатель. Поддерживает
-// только типы, реально используемые операторами (string, time.Time, int64,
-// *string, *time.Time, []byte). Не пытается универсализировать; добавится
-// тип — добавится case.
+// assign — simplified Scan: assigns value to pointer. Supports
+// only types actually used by operators (string, time.Time, int64,
+// *string, *time.Time, []byte). Not attempting to generalize; add
+// type — add case.
 func assign(dest, src any) {
 	switch d := dest.(type) {
 	case *string:
@@ -163,7 +162,7 @@ func TestInsert_HappyPath_Bootstrap(t *testing.T) {
 		DisplayName: "Alice Admin",
 		AuthMethod:  AuthMethodJWT,
 		CreatedVia:  CreatedViaBootstrap,
-		// CreatedByAID = nil → bootstrap, NULL в БД.
+		// CreatedByAID = nil → bootstrap, NULL in DB.
 		// CreatedAt zero → DEFAULT NOW().
 	}
 	if err := Insert(context.Background(), f, op); err != nil {
@@ -193,7 +192,7 @@ func TestInsert_HappyPath_Bootstrap(t *testing.T) {
 	if f.lastExecArgs[4] != nil {
 		t.Errorf("args[4] created_by_aid = %v, want nil for bootstrap", f.lastExecArgs[4])
 	}
-	// created_via явно передан bootstrap (этот тест эмулирует bootstrap-вставку).
+	// created_via explicitly passed bootstrap (this test emulates bootstrap insert).
 	if f.lastExecArgs[5] != CreatedViaBootstrap {
 		t.Errorf("args[5] created_via = %v, want %q", f.lastExecArgs[5], CreatedViaBootstrap)
 	}
@@ -225,7 +224,7 @@ func TestInsert_PassesCreatedByAIDAndMetadata(t *testing.T) {
 	if f.lastExecArgs[4] != "archon-alice" {
 		t.Errorf("args[4] created_by_aid = %v, want \"archon-alice\"", f.lastExecArgs[4])
 	}
-	// CreatedVia не задан в Operator-е → default 'user' (ADR-058(d)).
+	// CreatedVia not set in Operator → default 'user' (ADR-058(d)).
 	if f.lastExecArgs[5] != CreatedViaUser {
 		t.Errorf("args[5] created_via = %v, want %q (default)", f.lastExecArgs[5], CreatedViaUser)
 	}
@@ -269,9 +268,9 @@ func TestInsert_RejectsInvalidAuthMethod(t *testing.T) {
 	}
 }
 
-// TestInsert_DefaultsCreatedViaToUser — ADR-058(d) guard (кейс 2): Insert без
-// явного created_via (как из Service.Create / POST /v1/operators) подставляет
-// 'user'. Это легализует существующий путь без правок Service.Create.
+// TestInsert_DefaultsCreatedViaToUser — ADR-058(d) guard (case 2): Insert without
+// explicit created_via (as from Service.Create / POST /v1/operators) substitutes
+// 'user'. This legalizes existing path without Service.Create changes.
 func TestInsert_DefaultsCreatedViaToUser(t *testing.T) {
 	f := &fakeDB{}
 	parent := "archon-alice"
@@ -280,7 +279,7 @@ func TestInsert_DefaultsCreatedViaToUser(t *testing.T) {
 		DisplayName:  "Bob",
 		AuthMethod:   AuthMethodJWT,
 		CreatedByAID: &parent,
-		// CreatedVia не задан → default 'user'.
+		// CreatedVia not set → default 'user'.
 	}
 	if err := Insert(context.Background(), f, op); err != nil {
 		t.Fatalf("Insert: %v", err)
@@ -290,8 +289,8 @@ func TestInsert_DefaultsCreatedViaToUser(t *testing.T) {
 	}
 }
 
-// TestInsert_PassesExplicitCreatedVia — ADR-058(d) guard: явно заданный
-// created_via (ldap/system) пробрасывается в Exec как есть.
+// TestInsert_PassesExplicitCreatedVia — ADR-058(d) guard: explicitly set
+// created_via (ldap/system) is passed to Exec as is.
 func TestInsert_PassesExplicitCreatedVia(t *testing.T) {
 	for _, via := range []CreatedVia{CreatedViaLDAP, CreatedViaOIDC, CreatedViaSystem, CreatedViaBootstrap} {
 		f := &fakeDB{}
@@ -305,8 +304,8 @@ func TestInsert_PassesExplicitCreatedVia(t *testing.T) {
 	}
 }
 
-// TestInsert_RejectsInvalidCreatedVia — ADR-058(d) guard: значение вне домена
-// отвергается прикладной валидацией до round-trip-а (parity с auth_method).
+// TestInsert_RejectsInvalidCreatedVia — ADR-058(d) guard: value outside domain
+// is rejected by application validation before round-trip (parity with auth_method).
 func TestInsert_RejectsInvalidCreatedVia(t *testing.T) {
 	f := &fakeDB{}
 	op := &Operator{AID: "archon-alice", DisplayName: "x", AuthMethod: AuthMethodJWT, CreatedVia: "wormhole"}
@@ -356,9 +355,9 @@ func TestInsert_MapsUniqueViolationToErrOperatorAlreadyExists(t *testing.T) {
 }
 
 func TestInsert_MapsPartialUniqueViolationToErrOperatorAlreadyExists(t *testing.T) {
-	// Повторный bootstrap-insert: AID отличается, но партиальный unique
-	// index `operators_first_archon_idx` ловит второго с
-	// `created_by_aid IS NULL`. Тот же sentinel.
+	// Repeated bootstrap insert: AID differs, but partial unique
+	// index `operators_first_archon_idx` catches second with
+	// `created_by_aid IS NULL`. Same sentinel.
 	f := &fakeDB{
 		execErr: &pgconn.PgError{
 			Code:           pgErrCodeUniqueViolation,
@@ -478,7 +477,7 @@ func TestCountNonSystem_HappyPath(t *testing.T) {
 	if n != 2 {
 		t.Errorf("CountNonSystem = %d, want 2", n)
 	}
-	// Guard: SQL обязан фильтровать по created_via, иначе archon-system снова блокирует bootstrap.
+	// Guard: SQL must filter by created_via, otherwise archon-system blocks bootstrap again.
 	if !strings.Contains(f.lastQuerySQL, "created_via") {
 		t.Errorf("SQL = %q, want фильтр по created_via", f.lastQuerySQL)
 	}
@@ -528,7 +527,7 @@ func TestRevoke_InvalidAID(t *testing.T) {
 func TestRevoke_NotFound(t *testing.T) {
 	f := &fakeDB{
 		execTag: pgconn.NewCommandTag("UPDATE 0"),
-		// SelectByAID после Update → возвращаем ErrNoRows.
+		// SelectByAID after Update → return ErrNoRows.
 	}
 	err := Revoke(context.Background(), f, "archon-ghost", "")
 	if !errors.Is(err, ErrOperatorNotFound) {
@@ -541,7 +540,7 @@ func TestRevoke_AlreadyRevoked(t *testing.T) {
 	f := &fakeDB{
 		execTag: pgconn.NewCommandTag("UPDATE 0"),
 		rowFunc: func() pgx.Row {
-			// SelectByAID видит уже-revoked-оператора.
+			// SelectByAID sees already-revoked operator.
 			return staticRow{values: []any{
 				"archon-bob", "Bob", "jwt", now, any(nil), "user", any(now), []byte("{}"),
 			}}
@@ -553,8 +552,8 @@ func TestRevoke_AlreadyRevoked(t *testing.T) {
 	}
 }
 
-// scanOperator-unit покрыт через SelectByAID; отдельный тест выделен только
-// для assign-helper-а, гарантирующего корректный mapping типов.
+// scanOperator unit covered via SelectByAID; separate test extracted only
+// for assign-helper guaranteeing correct type mapping.
 func TestAssign_NilPointerColumns(t *testing.T) {
 	var sp *string
 	assign(&sp, any(nil))
@@ -568,9 +567,9 @@ func TestAssign_NilPointerColumns(t *testing.T) {
 	}
 }
 
-// TestBuildOperatorWhere_Q — guard: свободный поиск Q даёт ILIKE по display_name/aid,
-// экранирует LIKE-метасимволы (%/_/\) в аргументе и корректно нумерует $N вместе с
-// другими фильтрами (auth_method/revoked).
+// TestBuildOperatorWhere_Q — guard: free search Q gives ILIKE on display_name/aid,
+// escapes LIKE metacharacters (%/_/\) in argument and correctly numbers $N with
+// other filters (auth_method/revoked).
 func TestBuildOperatorWhere_Q(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -606,7 +605,7 @@ func TestBuildOperatorWhere_Q(t *testing.T) {
 			where, args := buildOperatorWhere(tt.filter)
 			for _, c := range tt.wantConds {
 				if !strings.Contains(where, c) {
-					t.Errorf("WHERE %q не содержит %q", where, c)
+					t.Errorf("WHERE %q does not contain %q", where, c)
 				}
 			}
 			if len(args) != len(tt.wantArgs) {

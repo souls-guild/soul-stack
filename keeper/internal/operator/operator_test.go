@@ -13,8 +13,8 @@ func TestValidAID(t *testing.T) {
 		aid  string
 		want bool
 	}{
-		// Положительные: legacy archon-форма + новые внешние имена
-		// (ADR-014 amendment 2026-05-29 — префикс снят, charset a-z0-9._@-).
+		// Positive: legacy archon form + new external names
+		// (ADR-014 amendment 2026-05-29 — prefix dropped, charset a-z0-9._@-).
 		{"legacy-archon", "archon-alice", true},
 		{"legacy-with-digits", "archon-ops-01", true},
 		{"multi-dash", "archon-team-db-prod", true},
@@ -26,7 +26,7 @@ func TestValidAID(t *testing.T) {
 		{"two-chars-min", "ab", true},
 		{"max-length-128", "a" + repeat("b", 127), true},
 
-		// Отрицательные.
+		// Negative.
 		{"empty", "", false},
 		{"single-char-too-short", "a", false},
 		{"uppercase", "archon-Alice", false},
@@ -62,20 +62,20 @@ func TestOperator_IsRevoked(t *testing.T) {
 }
 
 func TestOperator_IsBootstrap(t *testing.T) {
-	// ADR-058(d): IsBootstrap определяется по created_via='bootstrap', НЕ по
-	// created_by_aid==nil. Первый Архонт.
+	// ADR-058(d): IsBootstrap determined by created_via='bootstrap', NOT by
+	// created_by_aid==nil. First Archon.
 	first := &Operator{AID: "archon-alice", CreatedVia: CreatedViaBootstrap}
 	if !first.IsBootstrap() {
 		t.Error("first operator: IsBootstrap() = false, want true")
 	}
-	// Оператор, созданный другим Архонтом (created_via='user').
+	// Operator created by another Archon (created_via='user').
 	parent := "archon-alice"
 	derived := &Operator{AID: "archon-bob", CreatedByAID: &parent, CreatedVia: CreatedViaUser}
 	if derived.IsBootstrap() {
 		t.Error("derived operator: IsBootstrap() = true, want false")
 	}
-	// ADR-058(d) guard: archon-system / federated-операторы тоже имеют
-	// created_by_aid=nil, но НЕ являются bootstrap — created_via это различает.
+	// ADR-058(d) guard: archon-system / federated operators also have
+	// created_by_aid=nil, but are NOT bootstrap — created_via distinguishes.
 	sys := &Operator{AID: "archon-system", CreatedVia: CreatedViaSystem}
 	if sys.IsBootstrap() {
 		t.Error("system operator (created_by_aid=nil, created_via=system): IsBootstrap() = true, want false")
@@ -86,10 +86,10 @@ func TestOperator_IsBootstrap(t *testing.T) {
 	}
 }
 
-// TestOperator_JSONMarshal — JSON-теги пригодятся в Operator API (M0.6).
-// Проверка минимальная: nil-указатели и nil-map не должны рендериться
-// (omitempty), чтобы payload-ы audit-событий и API-ответов оставались
-// компактными.
+// TestOperator_JSONMarshal — JSON tags will be useful in Operator API (M0.6).
+// Minimal check: nil pointers and nil maps must not render
+// (omitempty), so payloads of audit events and API responses remain
+// compact.
 func TestOperator_JSONMarshal(t *testing.T) {
 	op := &Operator{
 		AID:         "archon-alice",
@@ -113,7 +113,7 @@ func TestOperator_JSONMarshal(t *testing.T) {
 	}
 	for _, banned := range []string{"created_by_aid", "revoked_at", "metadata"} {
 		if strings.Contains(s, banned) {
-			t.Errorf("Marshal output должен опустить %q (omitempty)\n got: %s", banned, s)
+			t.Errorf("Marshal output must omit %q (omitempty)\n got: %s", banned, s)
 		}
 	}
 }

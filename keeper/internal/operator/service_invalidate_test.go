@@ -6,36 +6,36 @@ import (
 	"testing"
 )
 
-// countingInvalidator — тестовый [Invalidator], считающий вызовы Invalidate.
+// countingInvalidator — test [Invalidator] counting Invalidate calls.
 type countingInvalidator struct {
 	calls atomic.Int64
 }
 
 func (c *countingInvalidator) Invalidate(_ context.Context) { c.calls.Add(1) }
 
-// TestService_Invalidate_NilSafe — без подключённого invalidator-а Revoke
-// проходит без panic-а (single-Keeper/dev: чистый TTL-poll).
+// TestService_Invalidate_NilSafe — without connected invalidator Revoke
+// succeeds without panic (single-Keeper/dev: pure TTL-poll).
 func TestService_Invalidate_NilSafe(t *testing.T) {
 	pool := &svcPool{effectiveAdmins: []string{"archon-alice"}}
 	s := newService(t, pool, &fakeIssuer{}, &fakeRBAC{})
 
-	// invalidate без SetInvalidator — тихо ничего не делает.
+	// invalidate without SetInvalidator — silently does nothing.
 	s.invalidate(context.Background())
 
-	// SetInvalidator(nil) тоже не должен ломать последующий invalidate.
+	// SetInvalidator(nil) also shouldn't break subsequent invalidate.
 	s.SetInvalidator(nil)
 	s.invalidate(context.Background())
 
-	// Сквозной Revoke без invalidator-а — успешный commit, нет paniс-а на
-	// финальном s.invalidate(ctx).
+	// Full Revoke without invalidator — successful commit, no panic
+	// at final s.invalidate(ctx).
 	if err := s.Revoke(context.Background(), RevokeInput{AID: "archon-bob", CallerAID: "archon-alice"}); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
 }
 
-// TestRevoke_PublishesInvalidate — ADR-014 Amendment 2026-05-27: после
-// успешного Revoke service дёргает подключённый Invalidator (cluster-wide
-// `rbac:invalidate`), чтобы остальные ноды near-instant перечитали снимок.
+// TestRevoke_PublishesInvalidate — ADR-014 Amendment 2026-05-27: after
+// successful Revoke service calls connected Invalidator (cluster-wide
+// `rbac:invalidate`) so other nodes near-instantly re-read snapshot.
 func TestRevoke_PublishesInvalidate(t *testing.T) {
 	pool := &svcPool{effectiveAdmins: []string{"archon-alice"}}
 	s := newService(t, pool, &fakeIssuer{}, &fakeRBAC{})
@@ -50,15 +50,15 @@ func TestRevoke_PublishesInvalidate(t *testing.T) {
 		t.Fatalf("Revoke: %v", err)
 	}
 	if got := inv.calls.Load(); got != 1 {
-		t.Fatalf("Invalidate calls = %d, want 1 после успешного Revoke", got)
+		t.Fatalf("Invalidate calls = %d, want 1 after successful Revoke", got)
 	}
 }
 
-// TestRevoke_DoesNotPublishOnLockout — self-lockout-инвариант сработал,
-// commit не произошёл → Invalidate тоже НЕ должен вызываться (паттерн rbac.Service).
+// TestRevoke_DoesNotPublishOnLockout — self-lockout invariant triggered,
+// commit didn't happen → Invalidate also should NOT be called (rbac.Service pattern).
 func TestRevoke_DoesNotPublishOnLockout(t *testing.T) {
 	pool := &svcPool{
-		// target — единственный активный admin → ErrWouldLockOutCluster.
+		// target — only active admin → ErrWouldLockOutCluster.
 		effectiveAdmins: []string{"archon-alice"},
 	}
 	s := newService(t, pool, &fakeIssuer{}, &fakeRBAC{})
@@ -70,12 +70,12 @@ func TestRevoke_DoesNotPublishOnLockout(t *testing.T) {
 		t.Fatal("Revoke: err = nil, want ErrWouldLockOutCluster")
 	}
 	if got := inv.calls.Load(); got != 0 {
-		t.Errorf("Invalidate calls = %d, want 0 при lockout (commit не прошёл)", got)
+		t.Errorf("Invalidate calls = %d, want 0 on lockout (commit failed)", got)
 	}
 }
 
-// TestRevoke_DoesNotPublishOnCommitFailure — UPDATE прошёл, но Commit упал →
-// Invalidate тоже НЕ вызывается (хук строго после успешного commit-а).
+// TestRevoke_DoesNotPublishOnCommitFailure — UPDATE succeeded, but Commit failed →
+// Invalidate also NOT called (hook strictly after successful commit).
 func TestRevoke_DoesNotPublishOnCommitFailure(t *testing.T) {
 	pool := &svcPool{
 		effectiveAdmins: []string{"archon-alice"},
@@ -89,11 +89,11 @@ func TestRevoke_DoesNotPublishOnCommitFailure(t *testing.T) {
 		t.Fatal("Revoke: err = nil, want commit-failure")
 	}
 	if got := inv.calls.Load(); got != 0 {
-		t.Errorf("Invalidate calls = %d, want 0 при commit-fail", got)
+		t.Errorf("Invalidate calls = %d, want 0 on commit-fail", got)
 	}
 }
 
-// errCommit — sentinel-error для commit-failure-сценария.
+// errCommit — sentinel error for commit-failure scenario.
 type errCommit struct{}
 
 func (errCommit) Error() string { return "fake commit failure" }

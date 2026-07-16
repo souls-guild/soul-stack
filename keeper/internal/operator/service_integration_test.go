@@ -1,20 +1,20 @@
 //go:build integration
 
-// Integration-тесты Service.Revoke против реального Postgres: проверяют, что
-// self-lockout-инвариант держится под конкурентными revoke-ами благодаря
-// SELECT … FOR UPDATE (architect-verdict M0.6b §1, Slice 3). Unit-моки
-// (service_test.go) сериализацию не доказывают — нужен настоящий row-level lock.
+// Integration tests for Service.Revoke against real Postgres: verify that
+// self-lockout invariant holds under concurrent revokes thanks to
+// SELECT … FOR UPDATE (architect-verdict M0.6b §1, Slice 3). Unit mocks
+// (service_test.go) don't prove serialization — need real row-level lock.
 //
-// Slice 3: lockout-probe берёт admin-set из БД (rbac.LockEffectiveClusterAdmins
-// — JOIN rbac_role_operators × rbac_role_permissions × operators под
-// FOR UPDATE OF ro,rp,o), НЕ из in-memory ClusterAdmins()-снимка. Поэтому
-// seed создаёт реальную membership-строку (cluster-admin, <aid>), а не передаёт
-// admin-set через fakeRBAC. Роль cluster-admin с permission `*` уже seed-нута
-// миграцией 027.
+// Slice 3: lockout-probe takes admin-set from DB (rbac.LockEffectiveClusterAdmins
+// — JOIN rbac_role_operators × rbac_role_permissions × operators under
+// FOR UPDATE OF ro,rp,o), NOT from in-memory ClusterAdmins() snapshot. Therefore
+// seed creates real membership row (cluster-admin, <aid>), doesn't pass
+// admin-set via fakeRBAC. Role cluster-admin with permission `*` already seeded
+// by migration 027.
 //
-// Issuer/RBAC здесь — fake (определены в service_test.go, общий пакет);
-// fakeRBAC.admins больше НЕ участвует в lockout (БД-источник) — оставлен
-// нулевым, чтобы доказать независимость инварианта от снимка.
+// Issuer/RBAC here — fake (defined in service_test.go, shared package);
+// fakeRBAC.admins no longer participates in lockout (DB source) — left
+// zero to prove invariant independence from snapshot.
 
 package operator
 
@@ -26,8 +26,8 @@ import (
 	"time"
 )
 
-// seedActiveOperator вставляет активного оператора. bootstrap=true → CreatedByAID
-// nil (первый Архонт); иначе created_by_aid ссылается на parent.
+// seedActiveOperator inserts active operator. bootstrap=true → CreatedByAID
+// nil (first Archon); otherwise created_by_aid references parent.
 func seedActiveOperator(t *testing.T, aid string, parent *string) {
 	t.Helper()
 	op := &Operator{
@@ -41,18 +41,18 @@ func seedActiveOperator(t *testing.T, aid string, parent *string) {
 	}
 }
 
-// seedClusterAdmin вставляет активного оператора И membership-строку
-// (cluster-admin, aid) — делает его эффективным `*`-admin-ом в БД-источнике
-// lockout-probe (Slice 3). Роль cluster-admin (+permission `*`) уже есть
-// в схеме из миграции 027.
+// seedClusterAdmin inserts active operator AND membership row
+// (cluster-admin, aid) — makes him effective `*`-admin in DB source
+// of lockout-probe (Slice 3). Role cluster-admin (+permission `*`) already
+// in schema from migration 027.
 func seedClusterAdmin(t *testing.T, aid string, parent *string) {
 	t.Helper()
 	seedActiveOperator(t, aid, parent)
 	grantClusterAdmin(t, aid)
 }
 
-// grantClusterAdmin добавляет membership (cluster-admin, aid). granted_by_aid
-// = NULL (seed-membership без инициатора, как bootstrap).
+// grantClusterAdmin adds membership (cluster-admin, aid). granted_by_aid
+// = NULL (seed-membership without initiator, like bootstrap).
 func grantClusterAdmin(t *testing.T, aid string) {
 	t.Helper()
 	_, err := integrationPool.Exec(context.Background(),
@@ -68,8 +68,8 @@ func newIntegrationService(t *testing.T) *Service {
 	s, err := NewService(ServiceDeps{
 		Pool:   integrationPool,
 		Issuer: &fakeIssuer{},
-		// admins пуст намеренно: lockout-инвариант Slice 3 не должен от
-		// ClusterAdmins()-снимка зависеть.
+		// admins intentionally empty: lockout invariant Slice 3 should not depend
+		// on ClusterAdmins() snapshot.
 		RBAC:       &fakeRBAC{},
 		TTLDefault: time.Hour,
 	})
@@ -98,15 +98,15 @@ func TestIntegration_ServiceRevoke_HappyPath(t *testing.T) {
 		t.Fatalf("SelectByAID: %v", err)
 	}
 	if !got.IsRevoked() {
-		t.Errorf("archon-bob не revoked после Revoke")
+		t.Errorf("archon-bob not revoked after Revoke")
 	}
 	if got.Metadata["revoke_reason"] != "left team" {
 		t.Errorf("revoke_reason = %v, want \"left team\"", got.Metadata["revoke_reason"])
 	}
 }
 
-// TestIntegration_ServiceRevoke_WouldLockOutCluster — единственный активный
-// эффективный `*`-admin снимается → lockout (через БД-admin-set, не снимок).
+// TestIntegration_ServiceRevoke_WouldLockOutCluster — only active
+// effective `*`-admin removed → lockout (via DB admin-set, not snapshot).
 func TestIntegration_ServiceRevoke_WouldLockOutCluster(t *testing.T) {
 	resetOperators(t)
 	seedClusterAdmin(t, "archon-alice", nil)
@@ -117,7 +117,7 @@ func TestIntegration_ServiceRevoke_WouldLockOutCluster(t *testing.T) {
 		t.Fatalf("err = %v, want ErrWouldLockOutCluster", err)
 	}
 
-	// Оператор остался активным — UPDATE откатился вместе с tx.
+	// Operator remained active — UPDATE rolled back with tx.
 	got, err := SelectByAID(context.Background(), integrationPool, "archon-alice")
 	if err != nil {
 		t.Fatalf("SelectByAID: %v", err)
@@ -127,8 +127,8 @@ func TestIntegration_ServiceRevoke_WouldLockOutCluster(t *testing.T) {
 	}
 }
 
-// TestIntegration_ServiceRevoke_NotLastAdmin — revoke НЕ-последнего admin-а
-// проходит: остаётся второй активный эффективный `*`-admin.
+// TestIntegration_ServiceRevoke_NotLastAdmin — revoke of non-last admin
+// succeeds: second active effective `*`-admin remains.
 func TestIntegration_ServiceRevoke_NotLastAdmin(t *testing.T) {
 	resetOperators(t)
 	seedClusterAdmin(t, "archon-alice", nil)
@@ -145,16 +145,16 @@ func TestIntegration_ServiceRevoke_NotLastAdmin(t *testing.T) {
 		t.Fatalf("SelectByAID: %v", err)
 	}
 	if !got.IsRevoked() {
-		t.Errorf("archon-alice не revoked после Revoke")
+		t.Errorf("archon-alice not revoked after Revoke")
 	}
 }
 
-// TestIntegration_ServiceRevoke_RevokedSecondAdminStillLocks — ЦЕНТРАЛЬНЫЙ
-// кейс Slice 3 (закрывает пробел qa Slice 1). Второй cluster-admin уже
-// ревокнут (revoked_at != NULL). Снимаем единственного активного → lockout:
-// revoked НЕ считается «выжившим». Снимок ClusterAdmins() мог бы «помнить»
-// второго как admin-а (staleness) и ошибочно пропустить revoke; БД-предикат
-// `operators.revoked_at IS NULL` отсекает его жёстко.
+// TestIntegration_ServiceRevoke_RevokedSecondAdminStillLocks — CENTRAL
+// case of Slice 3 (closes qa gap in Slice 1). Second cluster-admin already
+// revoked (revoked_at != NULL). Remove only active → lockout:
+// revoked NOT counted as "survivor". ClusterAdmins() snapshot could "remember"
+// second as admin (staleness) and wrongly allow revoke; DB predicate
+// `operators.revoked_at IS NULL` cuts it strictly.
 func TestIntegration_ServiceRevoke_RevokedSecondAdminStillLocks(t *testing.T) {
 	resetOperators(t)
 	seedClusterAdmin(t, "archon-alice", nil)
@@ -164,7 +164,7 @@ func TestIntegration_ServiceRevoke_RevokedSecondAdminStillLocks(t *testing.T) {
 	s := newIntegrationService(t)
 	ctx := context.Background()
 
-	// Сначала легально снимаем bob (alice ещё активна — lockout не сработает).
+	// First legally remove bob (alice still active — lockout won't trigger).
 	if err := s.Revoke(ctx, RevokeInput{AID: "archon-bob", CallerAID: "archon-alice"}); err != nil {
 		t.Fatalf("Revoke bob: %v", err)
 	}
@@ -173,14 +173,14 @@ func TestIntegration_ServiceRevoke_RevokedSecondAdminStillLocks(t *testing.T) {
 		t.Fatalf("SelectByAID bob: %v", err)
 	}
 	if !bobGot.IsRevoked() {
-		t.Fatalf("предусловие: archon-bob должен быть revoked")
+		t.Fatalf("precondition: archon-bob must be revoked")
 	}
 
-	// Теперь alice — единственный АКТИВНЫЙ эффективный `*`-admin (bob revoked,
-	// но его membership-строка всё ещё есть). Снятие alice → lockout.
+	// Now alice — only ACTIVE effective `*`-admin (bob revoked,
+	// but his membership row still exists). Removing alice → lockout.
 	err = s.Revoke(ctx, RevokeInput{AID: "archon-alice", CallerAID: "archon-alice"})
 	if !errors.Is(err, ErrWouldLockOutCluster) {
-		t.Fatalf("err = %v, want ErrWouldLockOutCluster (revoked bob не должен считаться выжившим)", err)
+		t.Fatalf("err = %v, want ErrWouldLockOutCluster (revoked bob should not count as survivor)", err)
 	}
 
 	got, err := SelectByAID(ctx, integrationPool, "archon-alice")
@@ -218,15 +218,15 @@ func TestIntegration_ServiceRevoke_AlreadyRevoked(t *testing.T) {
 	}
 }
 
-// TestIntegration_ServiceRevoke_ConcurrentLastAdmins — два активных
-// cluster-admin-а, два параллельных Revoke (каждый ревокает другого). Без
-// SELECT … FOR UPDATE оба могли бы пройти probe «admin-set ещё ≥ 2» и
-// закоммитить → self-lockout. С сериализацией FOR UPDATE OF ro,rp,o ровно один
-// преуспевает, второй видит, что остался последний активный admin, и получает
-// ErrWouldLockOutCluster. Минимум один активный admin обязан остаться.
+// TestIntegration_ServiceRevoke_ConcurrentLastAdmins — two active
+// cluster-admins, two concurrent Revokes (each revokes the other). Without
+// SELECT … FOR UPDATE both could pass probe "admin-set still ≥ 2" and
+// commit → self-lockout. With FOR UPDATE OF ro,rp,o serialization exactly one
+// succeeds, second sees only last active admin remains, gets
+// ErrWouldLockOutCluster. At least one active admin must remain.
 //
-// Slice 3: admin-set приходит из БД, а не из снимка, поэтому гонка revoke ‖
-// revoke (и revoke ‖ role-мутация — единое FOR UPDATE-ядро) сериализуется.
+// Slice 3: admin-set comes from DB, not snapshot, so race revoke ‖
+// revoke (and revoke ‖ role-mutation — single FOR UPDATE core) serializes.
 func TestIntegration_ServiceRevoke_ConcurrentLastAdmins(t *testing.T) {
 	resetOperators(t)
 	seedClusterAdmin(t, "archon-alice", nil)
@@ -261,22 +261,22 @@ func TestIntegration_ServiceRevoke_ConcurrentLastAdmins(t *testing.T) {
 		case errors.Is(e, ErrWouldLockOutCluster):
 			lockouts++
 		default:
-			t.Fatalf("неожиданная ошибка от Revoke: %v", e)
+			t.Fatalf("unexpected error from Revoke: %v", e)
 		}
 	}
 	if successes != 1 || lockouts != 1 {
-		t.Fatalf("successes=%d lockouts=%d, want 1/1 (сериализация FOR UPDATE)", successes, lockouts)
+		t.Fatalf("successes=%d lockouts=%d, want 1/1 (FOR UPDATE serialization)", successes, lockouts)
 	}
 
-	// Инвариант: хотя бы один активный эффективный `*`-admin остался в БД.
+	// Invariant: at least one active effective `*`-admin remains in DB.
 	remaining := effectiveAdminCount(t)
 	if remaining < 1 {
-		t.Fatalf("активных admin-ов осталось %d, want >= 1 (кластер не должен залочиться)", remaining)
+		t.Fatalf("active admins remaining %d, want >= 1 (cluster must not lock)", remaining)
 	}
 }
 
-// effectiveAdminCount — число активных операторов с эффективным `*` в БД.
-// Считаем напрямую (read-only, без lock-а) для пост-проверки инварианта.
+// effectiveAdminCount — count of active operators with effective `*` in DB.
+// Count directly (read-only, no lock) for post-check of invariant.
 func effectiveAdminCount(t *testing.T) int {
 	t.Helper()
 	var n int

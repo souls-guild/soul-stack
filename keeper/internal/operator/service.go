@@ -15,22 +15,22 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 )
 
-// ErrWouldLockOutCluster — попытка ревокнуть последнего активного
-// cluster-admin-а. Sentinel выделен для маппинга HTTP/MCP-сторонами в
-// `would-lock-out-cluster` (409 / MCP-error code) без шарения strings.
+// ErrWouldLockOutCluster — attempt to revoke last active
+// cluster-admin. Sentinel isolated for mapping by HTTP/MCP sides to
+// `would-lock-out-cluster` (409 / MCP error code) without string sharing.
 //
-// rbac.md → § Инвариант self-lockout: «нельзя ревокнуть последнего AID с
-// активным wildcard `*`-permission».
+// rbac.md → § Self-lockout invariant: "cannot revoke last AID with
+// active wildcard `*`-permission".
 var ErrWouldLockOutCluster = errors.New("operator: would lock out cluster (target is the last active cluster-admin)")
 
-// ServiceDeps — зависимости [Service]. Все поля immutable после конструктора.
+// ServiceDeps — dependencies of [Service]. All fields immutable after constructor.
 //
-// Pool — узкий ExecQueryRower + BeginTx (для атомарной Revoke).
-// Issuer — выпуск JWT.
-// RBAC — read-only поверхность для RolesOf (выпуск токена с current ролями
-// из БД-снимка RBAC, ADR-028). Lockout-probe для Revoke с ClusterAdmins()-снимка НЕ зависит
-// (Slice 3): admin-set берётся из БД под FOR UPDATE (rbac.LockEffectiveClusterAdmins).
-// TTLDefault — TTL JWT, выпускаемых Create/IssueToken.
+// Pool — narrow ExecQueryRower + BeginTx (for atomic Revoke).
+// Issuer — JWT issuance.
+// RBAC — read-only interface for RolesOf (token issuance with current roles
+// from RBAC DB snapshot, ADR-028). Lockout-probe for Revoke does NOT depend on ClusterAdmins() snapshot
+// (Slice 3): admin-set taken from DB under FOR UPDATE (rbac.LockEffectiveClusterAdmins).
+// TTLDefault — TTL of JWTs issued by Create/IssueToken.
 type ServiceDeps struct {
 	Pool       ServicePool
 	Issuer     JWTIssuer
@@ -39,52 +39,52 @@ type ServiceDeps struct {
 	Logger     *slog.Logger
 }
 
-// ServicePool — узкое подмножество pgxpool.Pool, нужное service-у.
-// Реальный `*pgxpool.Pool` удовлетворяет автоматически.
+// ServicePool — narrow subset of pgxpool.Pool needed by service.
+// Real `*pgxpool.Pool` satisfies automatically.
 type ServicePool interface {
 	ExecQueryRower
 	BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, error)
 }
 
-// JWTIssuer — узкая поверхность над `*keeper/internal/jwt.Issuer`,
-// нужная service-у. Совпадает с поверхностью HTTP-handler-а (handlers.JWTIssuer);
-// объявляется здесь, чтобы service не тянул handlers-пакет.
+// JWTIssuer — narrow interface over `*keeper/internal/jwt.Issuer`,
+// needed by service. Matches HTTP-handler interface (handlers.JWTIssuer);
+// declared here so service doesn't depend on handlers package.
 type JWTIssuer interface {
 	Issue(aid string, roles []string, ttl time.Duration, bootstrapInitial bool) (string, error)
 }
 
-// RBACSource — read-only поверхность над RBAC enforcer-ом. Реализуется и
-// [rbac.Enforcer], и [rbac.Holder] (с hot-reload). Нужен только RolesOf
-// (выпуск JWT с current-ролями из БД-снимка RBAC, ADR-028): lockout-probe
-// берёт admin-set из БД под FOR UPDATE (rbac.LockEffectiveClusterAdmins,
-// Slice 3), не из снимка.
+// RBACSource — read-only interface over RBAC enforcer. Implemented by both
+// [rbac.Enforcer] and [rbac.Holder] (with hot-reload). Needed only for RolesOf
+// (token issuance with current roles from RBAC DB snapshot, ADR-028): lockout-probe
+// takes admin-set from DB under FOR UPDATE (rbac.LockEffectiveClusterAdmins,
+// Slice 3), not from snapshot.
 type RBACSource interface {
 	RolesOf(aid string) []string
 }
 
-// Invalidator — поверхность cluster-wide RBAC-инвалидации (ADR-014 Amendment
-// 2026-05-27, JWT immediate revoke). После успешного commit-а Revoke
-// [Service] вызывает Invalidate, чтобы остальные Keeper-ноды near-instant
-// перечитали RBAC-снимок (и подхватили `operators.revoked_at` свежей строки)
-// вместо ожидания TTL-poll-а. Реализуется в `keeper run` адаптером поверх
-// [keeperredis.PublishRBACInvalidate] — тот же топик `rbac:invalidate`, что
-// и role-мутации (ADR-028(d)).
+// Invalidator — interface for cluster-wide RBAC invalidation (ADR-014 Amendment
+// 2026-05-27, JWT immediate revoke). After successful Revoke commit,
+// [Service] calls Invalidate so other Keeper nodes near-instantly
+// re-read RBAC snapshot (and pick up `operators.revoked_at` of fresh row)
+// instead of waiting for TTL poll. Implemented in `keeper run` via adapter over
+// [keeperredis.PublishRBACInvalidate] — same topic `rbac:invalidate` as
+// role mutations (ADR-028(d)).
 //
-// Контракт совпадает с [rbac.Invalidator]; локальное определение нужно, чтобы
-// пакет operator не тянул rbac.Service-зависимость. Best-effort: ошибку
-// публикации НЕ возвращает (Revoke уже зафиксирован в БД), реализация
-// логирует и глотает.
+// Contract matches [rbac.Invalidator]; local definition needed so
+// operator package doesn't depend on rbac.Service. Best-effort: does not
+// return publish errors (Revoke already committed to DB), implementation
+// logs and swallows.
 type Invalidator interface {
 	Invalidate(ctx context.Context)
 }
 
-// Service — бизнес-логика Operator-CRUD под Operator API (ADR-014) +
-// MCP-tools (M0.7). Один источник правды для HTTP-handler-ов и
-// MCP-tool-handler-ов; transport-фасад (HTTP/MCP) только декодирует input
-// и кодирует output, бизнес-инварианты живут здесь.
+// Service — business logic for Operator-CRUD per Operator API (ADR-014) +
+// MCP-tools (M0.7). Single source of truth for HTTP handlers and
+// MCP tool handlers; transport facade (HTTP/MCP) only decodes input
+// and encodes output, business invariants live here.
 //
-// Безопасен для конкурентного использования: deps immutable, состояние не
-// держится; cluster-wide-инвалидация — через atomic-late-binding
+// Safe for concurrent use: deps immutable, no state held;
+// cluster-wide invalidation — via atomic late-binding
 // [SetInvalidator].
 type Service struct {
 	pool       ServicePool
@@ -93,18 +93,18 @@ type Service struct {
 	ttlDefault time.Duration
 	logger     *slog.Logger
 
-	// inv — опциональный cluster-wide invalidator (ADR-014 Amendment
-	// 2026-05-27). Late-binding через [Service.SetInvalidator]: Redis-клиент
-	// в `keeper run` поднимается ПОСЛЕ NewService, поэтому инъекция отложена
-	// (паттерн rbac.Service.SetInvalidator / serviceregistry.Service.SetInvalidator).
-	// atomic.Pointer — конкурентная запись сеттером vs. чтение из Revoke без
-	// отдельного mutex-а.
+	// inv — optional cluster-wide invalidator (ADR-014 Amendment
+	// 2026-05-27). Late-binding via [Service.SetInvalidator]: Redis client
+	// in `keeper run` brought up AFTER NewService, so injection deferred
+	// (pattern rbac.Service.SetInvalidator / serviceregistry.Service.SetInvalidator).
+	// atomic.Pointer — concurrent write by setter vs. read from Revoke without
+	// separate mutex.
 	inv atomic.Pointer[Invalidator]
 }
 
-// NewService собирает service. nil-логгер допустим — caller, не пишущий
-// логи (MCP), просто передаёт нулевой; внутри будем no-op-ить через nil-check
-// (slog v0.0+: nil-logger panic-ит, поэтому подменяем на discard в caller-е).
+// NewService assembles service. nil logger allowed — caller not writing
+// logs (MCP) can pass zero value; internally we no-op via nil check
+// (slog v0.0+: nil logger panics, so we substitute with discard in caller).
 func NewService(d ServiceDeps) (*Service, error) {
 	if d.Pool == nil {
 		return nil, errors.New("operator: ServiceDeps.Pool is nil")
@@ -127,10 +127,10 @@ func NewService(d ServiceDeps) (*Service, error) {
 	}, nil
 }
 
-// SetInvalidator late-binding-ом подключает cluster-wide invalidator (ADR-014
-// Amendment 2026-05-27). Вызывается из `keeper run` после подъёма Redis-
-// клиента. nil — снять invalidator (вернуться к чистому TTL-poll-у).
-// Идемпотентен, потокобезопасен.
+// SetInvalidator late-binds cluster-wide invalidator (ADR-014
+// Amendment 2026-05-27). Called from `keeper run` after Redis
+// client startup. nil — detach invalidator (return to pure TTL-poll).
+// Idempotent, thread-safe.
 func (s *Service) SetInvalidator(inv Invalidator) {
 	if inv == nil {
 		s.inv.Store(nil)
@@ -139,26 +139,26 @@ func (s *Service) SetInvalidator(inv Invalidator) {
 	s.inv.Store(&inv)
 }
 
-// invalidate шлёт cluster-wide invalidate-сигнал после успешного commit-а
-// Revoke (ADR-014 Amendment 2026-05-27). No-op, если invalidator не подключён
-// (single-Keeper/dev). Best-effort: реализация Invalidate сама логирует и
-// глотает ошибку publish-а — Revoke уже зафиксирован, потеря сигнала
-// компенсируется TTL-poll-ом ([rbac.DefaultRefreshInterval]).
+// invalidate sends cluster-wide invalidate signal after successful Revoke
+// commit (ADR-014 Amendment 2026-05-27). No-op if invalidator not connected
+// (single-Keeper/dev). Best-effort: Invalidate implementation logs and
+// swallows publish errors — Revoke already committed, signal loss
+// compensated by TTL poll ([rbac.DefaultRefreshInterval]).
 func (s *Service) invalidate(ctx context.Context) {
 	if p := s.inv.Load(); p != nil {
 		(*p).Invalidate(ctx)
 	}
 }
 
-// CreateInput — параметры Create. Поля валидируются service-ом: AID по
-// AIDPattern, DisplayName — non-empty (default = AID, если пуст), CallerAID —
-// non-empty (контракт transport-а: middleware гарантирует non-empty Subject).
+// CreateInput — parameters for Create. Fields validated by service: AID by
+// AIDPattern, DisplayName — non-empty (default = AID if empty), CallerAID —
+// non-empty (transport contract: middleware guarantees non-empty Subject).
 //
-// Roles — опциональный список ролей, которые надо приатачить новому Архонту
-// в той же транзакции, что INSERT operator-а. Любая ошибка (несуществующая
-// роль, FK-violation, дубль grant) → rollback, оператор НЕ создаётся
-// (atomic create+grant, UX-fix: оператор делает один API-вызов вместо
-// двух-трёх). Пустой/nil — старый path без tx (backward-compat).
+// Roles — optional list of roles to attach to new Archon
+// in same transaction as INSERT operator. Any error (nonexistent
+// role, FK-violation, duplicate grant) → rollback, operator NOT created
+// (atomic create+grant, UX-fix: operator makes one API call instead of
+// two-three). Empty/nil — old path without tx (backward-compat).
 type CreateInput struct {
 	AID         string
 	DisplayName string
@@ -166,14 +166,14 @@ type CreateInput struct {
 	Roles       []string
 }
 
-// CreateResult — результат Create. JWT и ExpiresAt — выпущенный токен, который
-// возвращается caller-у ровно один раз (нет re-issue path-а без явного
-// issue-token-вызова).
+// CreateResult — result of Create. JWT and ExpiresAt — issued token returned
+// to caller exactly once (no re-issue path without explicit
+// issue-token call).
 //
-// GrantedRoles — детерминированный (порядок входа) список ролей, прикреплённых
-// в той же транзакции, что INSERT (CreateInput.Roles). Пустой/nil, если caller
-// не передал Roles. JWT в этом ответе выпускается ПОСЛЕ commit-а tx — токен
-// уже несёт granted-роли (RolesOf после commit видит свежий membership).
+// GrantedRoles — deterministic (input order) list of roles attached
+// in same transaction as INSERT (CreateInput.Roles). Empty/nil if caller
+// did not pass Roles. JWT in this response issued AFTER tx commit — token
+// already carries granted roles (RolesOf after commit sees fresh membership).
 type CreateResult struct {
 	AID          string
 	DisplayName  string
@@ -185,19 +185,19 @@ type CreateResult struct {
 	ExpiresAt    time.Time
 }
 
-// Create вставляет нового Архонта и выпускает JWT.
+// Create inserts new Archon and issues JWT.
 //
-// Возврат sentinel-ошибок (transport маппит в HTTP 4xx / MCP-error code):
-//   - [ErrOperatorAlreadyExists] — AID занят (409 / `operator-already-exists`).
-//   - fmt.Errorf("invalid AID …") — AID не проходит regex (422).
-//   - JWT-issue-failure после успешного Insert — fmt.Errorf-обёртка, manual
-//     reconciliation (operator в БД, audit_log пишет transport-сторона).
+// Returns sentinel errors (transport maps to HTTP 4xx / MCP error code):
+//   - [ErrOperatorAlreadyExists] — AID taken (409 / `operator-already-exists`).
+//   - fmt.Errorf("invalid AID …") — AID fails regex (422).
+//   - JWT-issue-failure after successful Insert — fmt.Errorf wrapper, manual
+//     reconciliation (operator in DB, audit_log written by transport side).
 //
-// Если in.Roles непуст — atomic create+grant (UX-fix): Insert operator-а
-// и все GrantOperator-ы идут одной PostgreSQL-tx. Любая ошибка
-// (несуществующая роль/AID, дубль) → rollback, оператор НЕ создаётся.
-// Сентинелы [rbac.ErrRoleNotFound] / [rbac.ErrOperatorNotFound] прокидываются
-// как есть для маппинга в transport-слое (422 / 404).
+// If in.Roles non-empty — atomic create+grant (UX-fix): Insert operator
+// and all GrantOperator calls go in one PostgreSQL tx. Any error
+// (nonexistent role/AID, duplicate) → rollback, operator NOT created.
+// Sentinels [rbac.ErrRoleNotFound] / [rbac.ErrOperatorNotFound] passed
+// as-is for mapping in transport layer (422 / 404).
 func (s *Service) Create(ctx context.Context, in CreateInput) (*CreateResult, error) {
 	if !ValidAID(in.AID) {
 		return nil, fmt.Errorf("operator: invalid AID %q (must match %s)", in.AID, AIDPattern)
@@ -205,9 +205,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*CreateResult, er
 	if in.CallerAID == "" {
 		return nil, errors.New("operator: CallerAID is empty (transport must populate)")
 	}
-	// Pre-валидация имён ролей до round-trip-а (better error, без tx-hold-а).
-	// SQL CHECK rbac_roles_name_format всё равно поймает мусор, но прикладная
-	// проверка даёт чистую validation-failed-ошибку, а не FK/CHECK-violation.
+	// Pre-validation of role names before round-trip (better error, no tx hold).
+	// SQL CHECK rbac_roles_name_format will catch garbage anyway, but application
+	// check gives clean validation-failed error, not FK/CHECK-violation.
 	for _, r := range in.Roles {
 		if !rbac.ValidRoleName(r) {
 			return nil, fmt.Errorf("operator: invalid role name %q (must match %s)", r, rbac.RoleNamePattern)
@@ -232,30 +232,30 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*CreateResult, er
 		return nil, err
 	}
 
-	// Cluster-wide RBAC-инвалидация после atomic create+grant (parity с
-	// rbac.Service.GrantOperator): остальные Keeper-ноды near-instant
-	// перечитают снимок RBAC и подхватят новый membership. No-op без ролей
-	// (без membership-изменений снимок RBAC не меняется — TTL-poll увидит
-	// нового AID самостоятельно через `loadRevoked` / нет, через обычное
-	// чтение operators не нужно). Зовём только когда были grants — иначе
-	// лишний трафик publish-а.
+	// Cluster-wide RBAC invalidation after atomic create+grant (parity with
+	// rbac.Service.GrantOperator): other Keeper nodes near-instantly
+	// re-read RBAC snapshot and pick up new membership. No-op without roles
+	// (without membership changes RBAC snapshot doesn't change — TTL poll sees
+	// new AID independently via `loadRevoked` / no, via regular
+	// operators read not needed). Call only when grants happened — otherwise
+	// unnecessary publish traffic.
 	if len(grantedRoles) > 0 {
 		s.invalidate(ctx)
 	}
 
-	// JWT выпускается ПОСЛЕ commit-а tx — RolesOf видит свежий membership
-	// (с задержкой TTL-poll, но invalidate выше ускоряет распространение).
-	// Берём текущий снимок: при atomic create+grant локальный enforcer
-	// первого Keeper-а уже подхватит обновление при следующем reload (best-
-	// effort; токен всё равно несёт roles только для информации, authz
-	// проверяется по свежему БД-снимку при каждом запросе — ADR-028).
+	// JWT issued AFTER tx commit — RolesOf sees fresh membership
+	// (with TTL-poll delay, but invalidate above accelerates propagation).
+	// Take current snapshot: with atomic create+grant local enforcer
+	// of first Keeper already picks up update on next reload (best-
+	// effort; token carries roles only for information anyway, authz
+	// checked against fresh DB snapshot on each request — ADR-028).
 	roles := s.rbac.RolesOf(in.AID)
 	expiresAt := time.Now().UTC().Add(s.ttlDefault)
 	token, err := s.issuer.Issue(in.AID, roles, s.ttlDefault, false)
 	if err != nil {
-		// Insert уже committed. Caller (transport-сторона) логирует
-		// «manual reconciliation may be needed». Сам service логирует
-		// тоже, чтобы трасса была независимой от transport-а.
+		// Insert already committed. Caller (transport side) logs
+		// "manual reconciliation may be needed". Service also logs
+		// so trace is independent of transport.
 		if s.logger != nil {
 			s.logger.Error("operator.Create: issue JWT failed AFTER insert committed; manual reconciliation may be needed",
 				slog.String("aid", in.AID),
@@ -266,10 +266,10 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*CreateResult, er
 		return nil, fmt.Errorf("operator: issue JWT failed: %w", err)
 	}
 
-	// SelectByAID после Insert — чтобы вернуть created_at из БД
-	// (DEFAULT NOW()), а не локальное «сейчас». При ошибке Select-а не
-	// проваливаем Create — Insert + JWT уже успешны; падаём back на
-	// локальное время. Симметрично HTTP-handler-у (M0.6b).
+	// SelectByAID after Insert — to return created_at from DB
+	// (DEFAULT NOW()), not local "now". On Select error don't fail
+	// Create — Insert + JWT already successful; fall back to
+	// local time. Symmetric with HTTP-handler (M0.6b).
 	saved, err := SelectByAID(ctx, s.pool, in.AID)
 	if err != nil {
 		if s.logger != nil {
@@ -295,15 +295,15 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*CreateResult, er
 	}, nil
 }
 
-// insertWithOptionalRoles — внутренний путь Create-а. Если roles пуст —
-// fast-path без tx (Insert через s.pool, нулевой риск регрессии для
-// существующих вызовов без Roles). Иначе — atomic-tx: BeginTx → Insert →
-// rbac.GrantOperator x N → Commit; любая ошибка → rollback, оператор не
-// создаётся.
+// insertWithOptionalRoles — internal path of Create. If roles empty —
+// fast-path without tx (Insert via s.pool, zero regression risk for
+// existing calls without Roles). Otherwise — atomic tx: BeginTx → Insert →
+// rbac.GrantOperator x N → Commit; any error → rollback, operator not
+// created.
 //
-// Возвращает actually-granted-роли (порядок входа). Сентинел-ошибки
+// Returns actually-granted roles (input order). Sentinel errors
 // (ErrOperatorAlreadyExists / rbac.ErrRoleNotFound / rbac.ErrOperatorNotFound)
-// прокидываются как есть для маппинга в transport-слое.
+// passed as-is for mapping in transport layer.
 func (s *Service) insertWithOptionalRoles(ctx context.Context, op *Operator, roles []string) ([]string, error) {
 	if len(roles) == 0 {
 		if err := Insert(ctx, s.pool, op); err != nil {
@@ -322,13 +322,13 @@ func (s *Service) insertWithOptionalRoles(ctx context.Context, op *Operator, rol
 		return nil, err
 	}
 
-	// GrantOperator идёт repository-функцией (rbac.GrantOperator), а не
-	// rbac.Service.GrantOperator-фасадом: последний открывает свою tx и
-	// делает least-privilege-check, что нам не нужно (Create — privileged
-	// path `operator.create`-permission; оператор, который смог создать
-	// Архонта, может и атачить ему роли).
+	// GrantOperator called as repository function (rbac.GrantOperator), not
+	// rbac.Service.GrantOperator facade: latter opens its own tx and
+	// does least-privilege check we don't need (Create — privileged
+	// path `operator.create` permission; operator who could create
+	// Archon can also attach roles).
 	//
-	// granted_by_aid = CallerAID — отслеживаем инициатора в audit-trail.
+	// granted_by_aid = CallerAID — track initiator in audit trail.
 	creator := op.CreatedByAID
 	for _, role := range roles {
 		if err := rbac.GrantOperator(ctx, tx, role, op.AID, creator); err != nil {
@@ -342,28 +342,28 @@ func (s *Service) insertWithOptionalRoles(ctx context.Context, op *Operator, rol
 	return append([]string(nil), roles...), nil
 }
 
-// mapGrantRoleError превращает rbac-repository-ошибку GrantOperator в
-// прикладные sentinel-ы: FK-violation на role_name → [rbac.ErrRoleNotFound],
-// FK на aid → [rbac.ErrOperatorNotFound] (последний здесь невозможен —
-// operator только что вставлен в той же tx, но защищаемся явно для
-// диагностики). repository-функция уже маппит через [rbac.wrapPgErr], но
-// конкретный sentinel `role-not-found` не выделяет; матчим SQLSTATE 23503
-// и имя constraint-а в тексте сообщения.
+// mapGrantRoleError converts rbac-repository error from GrantOperator to
+// application sentinels: FK-violation on role_name → [rbac.ErrRoleNotFound],
+// FK on aid → [rbac.ErrOperatorNotFound] (latter impossible here —
+// operator just inserted in same tx, but we defend explicitly for
+// diagnostics). Repository function already maps via [rbac.wrapPgErr], but
+// specific sentinel `role-not-found` not extracted; we match SQLSTATE 23503
+// and constraint name in message text.
 //
-// role-параметр идёт в сообщение для UX («роль X не найдена»), это не
-// машинно-парсимое поле — transport-слой берёт sentinel.
+// role parameter goes in message for UX ("role X not found"), this is not
+// machine-parseable — transport layer takes sentinel.
 func mapGrantRoleError(err error, role string) error {
 	if err == nil {
 		return nil
 	}
-	// rbac.GrantOperator оборачивает оригинал через wrapPgErr — pg-код
-	// доступен внутри. Дёргаем pgconn.PgError напрямую, как mapInsertError.
+	// rbac.GrantOperator wraps original via wrapPgErr — pg code
+	// accessible inside. Pull pgconn.PgError directly, like mapInsertError.
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgErrCodeForeignKeyViolation {
-		// Constraint-name содержит ссылку на родительскую таблицу:
-		// `rbac_role_operators_role_name_fkey` → rbac_roles (роль),
-		// `rbac_role_operators_aid_fkey` → operators (AID). Различаем
-		// по подстроке — имена constraint-ов фиксированы миграцией.
+		// Constraint name contains reference to parent table:
+		// `rbac_role_operators_role_name_fkey` → rbac_roles (role),
+		// `rbac_role_operators_aid_fkey` → operators (AID). Distinguish
+		// by substring — constraint names fixed by migration.
 		if strings.Contains(pgErr.ConstraintName, "role_name") {
 			return fmt.Errorf("%w: %q: %w", rbac.ErrRoleNotFound, role, err)
 		}
@@ -372,27 +372,27 @@ func mapGrantRoleError(err error, role string) error {
 	return fmt.Errorf("operator: grant role %q: %w", role, err)
 }
 
-// RevokeInput — параметры Revoke.
+// RevokeInput — parameters for Revoke.
 type RevokeInput struct {
 	AID       string
 	Reason    string
 	CallerAID string
 }
 
-// Revoke снимает active-флаг с оператора (RevokedAt=NOW), сохраняя reason
-// в metadata.revoke_reason (если непустой).
+// Revoke clears active flag on operator (RevokedAt=NOW), saving reason
+// in metadata.revoke_reason (if non-empty).
 //
-// Атомарность (architect-verdict M0.6b §1): self-lockout probe и UPDATE
-// идут в одной транзакции с SELECT … FOR UPDATE на admin-set. Это
-// сериализует конкурентные revoke-вызовы.
+// Atomicity (architect-verdict M0.6b §1): self-lockout probe and UPDATE
+// go in one transaction with SELECT … FOR UPDATE on admin-set. This
+// serializes concurrent revoke calls.
 //
-// Возврат sentinel-ошибок:
-//   - [ErrOperatorNotFound] — AID не существует (404).
-//   - [ErrOperatorAlreadyRevoked] — уже ревокнут (409 / `operator-revoked`).
-//   - [ErrWouldLockOutCluster] — target — единственный активный
+// Returns sentinel errors:
+//   - [ErrOperatorNotFound] — AID does not exist (404).
+//   - [ErrOperatorAlreadyRevoked] — already revoked (409 / `operator-revoked`).
+//   - [ErrWouldLockOutCluster] — target is only active
 //     cluster-admin (409 / `would-lock-out-cluster`).
-//   - fmt.Errorf("invalid AID …") — AID не проходит regex (422).
-//   - прочие — wrap pgx-ошибок (500).
+//   - fmt.Errorf("invalid AID …") — AID fails regex (422).
+//   - others — wrap pgx errors (500).
 func (s *Service) Revoke(ctx context.Context, in RevokeInput) error {
 	if !ValidAID(in.AID) {
 		return fmt.Errorf("operator: invalid AID %q (must match %s)", in.AID, AIDPattern)
@@ -404,71 +404,71 @@ func (s *Service) Revoke(ctx context.Context, in RevokeInput) error {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// Источник admin-set — БД под FOR UPDATE (rbac.LockEffectiveClusterAdmins),
-	// НЕ in-memory ClusterAdmins()-снимок (Slice 3, architect-verdict §2).
-	// Развёрнутое «почему БД, а не снимок» (staleness-дыра + сериализация с
-	// role-мутациями) — в [rbac.directClusterAdminsForUpdateSQL]; не дублируем.
+	// Admin-set source — DB under FOR UPDATE (rbac.LockEffectiveClusterAdmins),
+	// NOT in-memory ClusterAdmins() snapshot (Slice 3, architect-verdict §2).
+	// Detailed "why DB not snapshot" (staleness gap + serialization with
+	// role mutations) — in [rbac.directClusterAdminsForUpdateSQL]; don't duplicate.
 	//
-	// Lock-порядок (детерминированный, против deadlock с role-мутациями):
-	// сначала ro/rp/o (FOR UPDATE OF в LockEffectiveClusterAdmins), затем
-	// UPDATE operators-строки target в Revoke. Единое ядро = единый порядок.
+	// Lock order (deterministic, against deadlock with role mutations):
+	// first ro/rp/o (FOR UPDATE OF in LockEffectiveClusterAdmins), then
+	// UPDATE operators row of target in Revoke. Single core = single order.
 	admins, err := rbac.LockEffectiveClusterAdmins(ctx, tx)
 	if err != nil {
 		return fmt.Errorf("operator: lock effective cluster-admins: %w", err)
 	}
 
-	// Инвариант: после ревокации target останется ≥1 активный оператор с
-	// эффективным `*`. target после revoke перестаёт быть активным admin-ом
-	// (revoked_at != NULL), поэтому исключаем его из admin-set фильтром по AID;
-	// если target вообще не admin — фильтр ничего не меняет и lockout невозможен.
+	// Invariant: after revocation target will have ≥1 active operator with
+	// effective `*`. Target after revoke stops being active admin
+	// (revoked_at != NULL), so we exclude it from admin-set by AID filter;
+	// if target is not admin at all — filter changes nothing and lockout impossible.
 	survivors := excludeAID(admins, in.AID)
 	if isInSet(admins, in.AID) && len(survivors) == 0 {
 		return ErrWouldLockOutCluster
 	}
 
 	if err := Revoke(ctx, tx, in.AID, in.Reason); err != nil {
-		// ErrOperatorNotFound / ErrOperatorAlreadyRevoked — прокидываем как
-		// есть для маппинга в transport-слое.
+		// ErrOperatorNotFound / ErrOperatorAlreadyRevoked — pass as-is
+		// for mapping in transport layer.
 		return err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("operator: commit tx: %w", err)
 	}
-	// Cluster-wide RBAC-инвалидация (ADR-014 Amendment 2026-05-27): publish
-	// `rbac:invalidate` после успешного commit-а — остальные Keeper-ноды
-	// near-instant перечитают RBAC-снимок и подхватят `operators.revoked_at`
-	// этой строки (Snapshot.Revoked). Best-effort, ошибку publish-а
-	// проглатывает реализация Invalidate.
+	// Cluster-wide RBAC invalidation (ADR-014 Amendment 2026-05-27): publish
+	// `rbac:invalidate` after successful commit — other Keeper nodes
+	// near-instantly re-read RBAC snapshot and pick up `operators.revoked_at`
+	// of this row (Snapshot.Revoked). Best-effort, Invalidate implementation
+	// swallows publish errors.
 	s.invalidate(ctx)
 	return nil
 }
 
-// IssueTokenInput — параметры IssueToken.
+// IssueTokenInput — parameters for IssueToken.
 type IssueTokenInput struct {
 	AID       string
 	CallerAID string
 }
 
-// IssueTokenResult — выпущенный токен.
+// IssueTokenResult — issued token.
 type IssueTokenResult struct {
 	AID       string
 	JWT       string
 	ExpiresAt time.Time
 }
 
-// IssueToken выпускает новый JWT для существующего активного Архонта.
-// Roles резолвятся из БД-снимка RBAC на момент выпуска (s.rbac.RolesOf,
-// ADR-028). JWT-roles — informational и НЕ авторитетны для authz: при
-// каждом запросе Keeper перепроверяет права по актуальному БД-снимку.
+// IssueToken issues new JWT for existing active Archon.
+// Roles resolved from RBAC DB snapshot at time of issuance (s.rbac.RolesOf,
+// ADR-028). JWT-roles — informational and NOT authoritative for authz: on
+// each request Keeper re-checks rights against current DB snapshot.
 //
-// Возврат:
-//   - [ErrOperatorNotFound] — AID не существует (404).
-//   - [ErrOperatorRevoked-sentinel] — оператор ревокнут (409).
-//   - fmt.Errorf("invalid AID …") — AID не проходит regex (422).
+// Returns:
+//   - [ErrOperatorNotFound] — AID does not exist (404).
+//   - [ErrOperatorRevoked-sentinel] — operator revoked (409).
+//   - fmt.Errorf("invalid AID …") — AID fails regex (422).
 //
-// ErrOperatorRevoked здесь — re-use [ErrOperatorAlreadyRevoked] для маппинга
-// в `operator-revoked`-error (transport).
+// ErrOperatorRevoked here — re-use [ErrOperatorAlreadyRevoked] for mapping
+// to `operator-revoked` error (transport).
 func (s *Service) IssueToken(ctx context.Context, in IssueTokenInput) (*IssueTokenResult, error) {
 	if !ValidAID(in.AID) {
 		return nil, fmt.Errorf("operator: invalid AID %q (must match %s)", in.AID, AIDPattern)
@@ -493,15 +493,15 @@ func (s *Service) IssueToken(ctx context.Context, in IssueTokenInput) (*IssueTok
 	}, nil
 }
 
-// List возвращает страницу Архонтов под фильтром. Тонкая обёртка над [List];
-// service-слой нужен для симметрии с Create/Revoke/IssueToken (один источник
-// правды для HTTP/MCP, M0.7 #6).
+// List returns page of Archons under filter. Thin wrapper over [List];
+// service layer needed for symmetry with Create/Revoke/IssueToken (single
+// source of truth for HTTP/MCP, M0.7 #6).
 func (s *Service) List(ctx context.Context, f ListFilter, offset, limit int) ([]*Operator, int, error) {
 	return List(ctx, s.pool, f, offset, limit)
 }
 
-// Get читает Архонта по AID. Тонкая обёртка над [SelectByAID]; sentinel-
-// ошибки прокидываются как есть для маппинга в transport-слое.
+// Get reads Archon by AID. Thin wrapper over [SelectByAID]; sentinel
+// errors passed as-is for mapping in transport layer.
 func (s *Service) Get(ctx context.Context, aid string) (*Operator, error) {
 	if !ValidAID(aid) {
 		return nil, fmt.Errorf("operator: invalid AID %q (must match %s)", aid, AIDPattern)
@@ -509,7 +509,7 @@ func (s *Service) Get(ctx context.Context, aid string) (*Operator, error) {
 	return SelectByAID(ctx, s.pool, aid)
 }
 
-// isInSet — линейная проверка вхождения (admin-set десятки AID-ов).
+// isInSet — linear membership check (admin-set tens of AIDs).
 func isInSet(set []string, target string) bool {
 	for _, a := range set {
 		if a == target {
@@ -519,9 +519,9 @@ func isInSet(set []string, target string) bool {
 	return false
 }
 
-// excludeAID возвращает копию set без вхождений target. Используется
-// Revoke-lockout-probe: target после ревокации перестаёт быть активным
-// admin-ом, оставшийся набор — «выжившие» эффективные `*`-admin-ы.
+// excludeAID returns copy of set without occurrences of target. Used by
+// Revoke lockout-probe: target after revocation stops being active
+// admin, remaining set — "surviving" effective `*`-admins.
 func excludeAID(set []string, target string) []string {
 	out := make([]string, 0, len(set))
 	for _, a := range set {

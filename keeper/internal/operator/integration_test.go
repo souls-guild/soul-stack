@@ -1,7 +1,7 @@
 //go:build integration
 
-// Integration-тесты operator-CRUD через testcontainers-go (postgres:16-alpine).
-// Паттерн совпадает с keeper/internal/auditpg/integration_test.go.
+// Integration tests for operator-CRUD via testcontainers-go (postgres:16-alpine).
+// Pattern matches keeper/internal/auditpg/integration_test.go.
 
 package operator
 
@@ -70,19 +70,19 @@ func run(m *testing.M) int {
 
 func resetOperators(t *testing.T) {
 	t.Helper()
-	// TRUNCATE с CASCADE снимает FK-зависимость audit_log → operators
-	// (если предыдущие тесты вписали audit-записи). CASCADE транзитивно
-	// усекает и rbac-таблицы (rbac_roles.created_by_aid / rbac_role_operators.aid
-	// — FK на operators), поэтому seed-роль cluster-admin (миграция 027) тоже
-	// стирается — её нужно пере-засеять для Slice 3 lockout-тестов.
+	// TRUNCATE with CASCADE removes FK dependency audit_log → operators
+	// (if previous tests wrote audit records). CASCADE transitively
+	// truncates rbac tables (rbac_roles.created_by_aid / rbac_role_operators.aid
+	// — FK to operators), so seed role cluster-admin (migration 027) is also
+	// erased — must be re-seeded for Slice 3 lockout tests.
 	_, err := integrationPool.Exec(context.Background(),
 		`TRUNCATE TABLE operators, audit_log CASCADE`)
 	if err != nil {
 		t.Fatalf("TRUNCATE operators: %v", err)
 	}
-	// Идемпотентный re-seed встроенной роли cluster-admin (+permission `*`),
-	// симметрично миграции 027 — БД-источник lockout-probe (Slice 3) JOIN-ит
-	// rbac_role_permissions, роль обязана существовать.
+	// Idempotent re-seed of built-in role cluster-admin (+permission `*`),
+	// symmetric to migration 027 — DB source of lockout-probe (Slice 3) JOINs
+	// rbac_role_permissions, role must exist.
 	_, err = integrationPool.Exec(context.Background(),
 		`INSERT INTO rbac_roles (name, description, builtin, created_by_aid)
 		 VALUES ('cluster-admin', 'Встроенная роль полного доступа (permissions: *)', true, NULL)
@@ -126,8 +126,8 @@ func TestIntegration_Insert_Bootstrap_AndSelect(t *testing.T) {
 	if got.AuthMethod != AuthMethodJWT {
 		t.Errorf("AuthMethod = %q", got.AuthMethod)
 	}
-	// Bootstrap-оператор определяется через created_via='bootstrap'
-	// (ADR-058(d) / ADR-013-amendment), а не через created_by_aid IS NULL.
+	// Bootstrap operator determined by created_via='bootstrap'
+	// (ADR-058(d) / ADR-013-amendment), not by created_by_aid IS NULL.
 	if got.CreatedVia != CreatedViaBootstrap {
 		t.Errorf("CreatedVia = %q, want %q (bootstrap)", got.CreatedVia, CreatedViaBootstrap)
 	}
@@ -157,11 +157,11 @@ func TestIntegration_Insert_DuplicateAID(t *testing.T) {
 }
 
 func TestIntegration_Insert_SecondBootstrapBlocked(t *testing.T) {
-	// Партиальный unique index `operators_first_archon_idx` запрещает
-	// второго оператора с `created_via='bootstrap'` (миграции 084/085,
-	// ADR-058(d) / ADR-013-amendment). Инвариант перенесён с
-	// `created_by_aid IS NULL` на `created_via='bootstrap'`: оба оператора
-	// должны быть явно помечены bootstrap, иначе индекс не задействуется.
+	// Partial unique index `operators_first_archon_idx` forbids
+	// second operator with `created_via='bootstrap'` (migrations 084/085,
+	// ADR-058(d) / ADR-013-amendment). Invariant moved from
+	// `created_by_aid IS NULL` to `created_via='bootstrap'`: both operators
+	// must be explicitly marked bootstrap, otherwise index not triggered.
 	resetOperators(t)
 	ctx := context.Background()
 
@@ -181,7 +181,7 @@ func TestIntegration_Insert_SecondBootstrapBlocked(t *testing.T) {
 func TestIntegration_Insert_FKViolation(t *testing.T) {
 	resetOperators(t)
 	ctx := context.Background()
-	parent := "archon-ghost" // не существует
+	parent := "archon-ghost" // does not exist
 	op := &Operator{
 		AID:          "archon-bob",
 		DisplayName:  "Bob",

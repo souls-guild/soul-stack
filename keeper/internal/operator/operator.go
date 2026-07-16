@@ -1,9 +1,9 @@
-// Package operator — типы реестра Архонтов (operators) под ADR-014.
+// Package operator — types of Archon registry (operators) per ADR-014.
 //
-// M0.5a: только Go-struct + helper-методы + AID-regex для применения вне
-// SQL CHECK. CRUD (Insert / SelectByAID / Revoke / List) и self-lockout
-// инвариант (ADR-013 + rbac.md) добавляются в M0.5c вместе с bootstrap-логикой
-// и Operator API в M0.6.
+// M0.5a: Go-struct only + helper methods + AID-regex for use outside
+// SQL CHECK. CRUD (Insert / SelectByAID / Revoke / List) and self-lockout
+// invariant (ADR-013 + rbac.md) added in M0.5c with bootstrap logic
+// and Operator API in M0.6.
 package operator
 
 import (
@@ -11,11 +11,11 @@ import (
 	"time"
 )
 
-// AuthMethod — форма credential Архонта.
+// AuthMethod — form of Archon credential.
 //
-// MVP по ADR-014: только AuthMethodJWT. AuthMethodMTLS и
-// AuthMethodCombined зарезервированы как enum-расширения post-MVP
-// (через `auth_method` колонку, без breaking changes схемы).
+// MVP per ADR-014: AuthMethodJWT only. AuthMethodMTLS and
+// AuthMethodCombined reserved as enum extensions post-MVP
+// (via `auth_method` column, without breaking schema changes).
 type AuthMethod string
 
 const (
@@ -23,25 +23,25 @@ const (
 	AuthMethodMTLS     AuthMethod = "mtls"
 	AuthMethodCombined AuthMethod = "combined"
 
-	// Федеративная аутентификация (ADR-058, accepted). Only-add расширение enum
-	// (как mTLS/combined post-MVP в ADR-014): фиксирует, каким внешним способом
-	// оператор пришёл. Сам внутренний JWT после выпуска одинаков. SQL CHECK
-	// `auth_method_valid` расширен миграцией 083 (only-add, forward-only).
-	AuthMethodLDAP AuthMethod = "ldap" // ADR-058 стадия 1
-	AuthMethodOIDC AuthMethod = "oidc" // ADR-058 стадия 2
+	// Federated authentication (ADR-058, accepted). Only-add enum extension
+	// (like mTLS/combined post-MVP in ADR-014): captures how externally
+	// operator arrived. Internal JWT after issuance is identical. SQL CHECK
+	// `auth_method_valid` extended by migration 083 (only-add, forward-only).
+	AuthMethodLDAP AuthMethod = "ldap" // ADR-058 stage 1
+	AuthMethodOIDC AuthMethod = "oidc" // ADR-058 stage 2
 )
 
-// CreatedVia — источник заведения оператора (ADR-058(d)). Отличается от
-// [AuthMethod]: auth_method отвечает «чем оператор логинится», created_via —
-// «откуда он вообще появился в реестре». Bootstrap-Архонт заведён через
-// `keeper init` (created_via=bootstrap), но логинится по jwt; federated-оператор
-// заведён auto-provision-ом (created_via=ldap/oidc); `archon-system` —
-// system-якорь для FK-атрибуции system-инициированных вставок.
+// CreatedVia — source of operator creation (ADR-058(d)). Differs from
+// [AuthMethod]: auth_method answers "how operator logs in", created_via —
+// "where it came from in registry". Bootstrap Archon created via
+// `keeper init` (created_via=bootstrap), but logs in via jwt; federated operator
+// created via auto-provision (created_via=ldap/oidc); `archon-system` —
+// system anchor for FK attribution of system-initiated inserts.
 //
-// Тип — string-alias (а не отдельный enum-тип), потому что значение хранится в
-// общем поле Operator.CreatedVia рядом с другими строковыми колонками и не
-// требует методов; домен валидируется в [Insert] и SQL CHECK `created_via_valid`
-// (миграция 084).
+// Type — string alias (not separate enum type), because value stored in
+// common field Operator.CreatedVia alongside other string columns and doesn't
+// require methods; domain validated in [Insert] and SQL CHECK `created_via_valid`
+// (migration 084).
 type CreatedVia = string
 
 const (
@@ -52,34 +52,34 @@ const (
 	CreatedViaSystem    CreatedVia = "system"
 )
 
-// AIDPattern — форма Archon ID (ADR-014 amendment 2026-05-29): первый
-// символ — строчная ASCII-буква или цифра, далее 1..127 символов из
-// `[a-z0-9._@-]`. Суммарная длина AID — 2..128 символов. Префикс
-// `archon-` больше не обязателен.
+// AIDPattern — form of Archon ID (ADR-014 amendment 2026-05-29): first
+// character is lowercase ASCII letter or digit, then 1..127 characters from
+// `[a-z0-9._@-]`. Total length of AID is 2..128 characters. Prefix
+// `archon-` no longer required.
 //
-// Charset намеренно узкий и безопасный: нет `/`/`\` (path-traversal),
-// только ASCII-lowercase (нет unicode-двойников и регистра), нет
-// управляющих/кавычек (нет инъекций). `@` и `.` разрешены для
-// email-подобных внешних имён (LDAP/Keycloak auto-provision).
+// Charset intentionally narrow and safe: no `/`/`\` (path-traversal),
+// only ASCII lowercase (no unicode lookalikes and case), no
+// control/quote characters (no injections). `@` and `.` allowed for
+// email-like external names (LDAP/Keycloak auto-provision).
 //
-// Дублирует SQL CHECK `aid_format` (миграция 058) — нужно для прикладной
-// валидации на стороне API-handler-ов до того, как запрос дойдёт до БД
-// (better error messages, нет лишнего round-trip).
+// Duplicates SQL CHECK `aid_format` (migration 058) — needed for application
+// validation on API handler side before request reaches DB
+// (better error messages, no unnecessary round-trip).
 const AIDPattern = `^[a-z0-9][a-z0-9._@-]{1,127}$`
 
 var aidRe = regexp.MustCompile(AIDPattern)
 
-// ValidAID проверяет соответствие AID канонической форме.
+// ValidAID checks AID compliance with canonical form.
 func ValidAID(aid string) bool { return aidRe.MatchString(aid) }
 
-// Operator — runtime-представление строки реестра operators
-// (ADR-014, docs/keeper/storage.md → таблица operators).
+// Operator — runtime representation of operators registry row
+// (ADR-014, docs/keeper/storage.md → operators table).
 //
-// JSON-теги — для будущего Operator API (M0.6). NULL-семантика SQL
-// маппится в указатели: CreatedByAID = nil у первого bootstrap-Archon-а
-// и у прочих строк без родителя (archon-system, федеративные — ADR-058(d)
-// легализовал NULL для не-bootstrap), RevokedAt = nil у активного.
-// «Это первый Архонт» определяется через CreatedVia, не через nil-родителя.
+// JSON tags — for future Operator API (M0.6). SQL NULL semantics
+// mapped to pointers: CreatedByAID = nil for first bootstrap Archon
+// and for other rows without parent (archon-system, federated — ADR-058(d)
+// legalized NULL for non-bootstrap), RevokedAt = nil for active.
+// "This is the first Archon" determined via CreatedVia, not via nil parent.
 type Operator struct {
 	AID          string         `json:"aid"`
 	DisplayName  string         `json:"display_name"`
@@ -91,18 +91,18 @@ type Operator struct {
 	Metadata     map[string]any `json:"metadata,omitempty"`
 }
 
-// IsRevoked — у Operator установлен RevokedAt (non-nil). Активные JWT
-// существующих сессий по ADR-014(d) продолжают работать до `exp`;
-// проверка IsRevoked нужна на write-path-операциях и для UI.
+// IsRevoked — Operator has RevokedAt set (non-nil). Active JWTs
+// of existing sessions per ADR-014(d) continue to work until `exp`;
+// IsRevoked check needed on write-path operations and for UI.
 func (o *Operator) IsRevoked() bool { return o.RevokedAt != nil }
 
-// IsBootstrap — Operator создан через `keeper init` (created_via='bootstrap').
-// Полезно для audit / RBAC-проверок «нельзя удалить bootstrap-Archon-а,
-// если он последний с *-permission» (self-lockout, ADR-014 + rbac.md).
+// IsBootstrap — Operator created via `keeper init` (created_via='bootstrap').
+// Useful for audit / RBAC checks "cannot delete bootstrap Archon
+// if it is the last with *-permission" (self-lockout, ADR-014 + rbac.md).
 //
-// ADR-058(d): признак перенесён с `CreatedByAID == nil` на
-// `CreatedVia == CreatedViaBootstrap`. После легализации NULL у created_by_aid
-// для не-bootstrap-строк (archon-system, federated-операторы) проверка по
-// created_by_aid дала бы ложноположительный bootstrap-флаг — единственный
-// авторитет «это первый Архонт» теперь created_via.
+// ADR-058(d): indicator moved from `CreatedByAID == nil` to
+// `CreatedVia == CreatedViaBootstrap`. After legalizing NULL in created_by_aid
+// for non-bootstrap rows (archon-system, federated operators), check on
+// created_by_aid would give false-positive bootstrap flag — only
+// authority "this is the first Archon" is now created_via.
 func (o *Operator) IsBootstrap() bool { return o.CreatedVia == CreatedViaBootstrap }
