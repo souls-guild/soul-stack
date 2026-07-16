@@ -39,7 +39,7 @@ func TestMapper_OIDCDisabled_ProvisionRejected(t *testing.T) {
 		t.Fatalf("Map err=%v, want ErrProvisioningDisabled", err)
 	}
 	if len(db.inserts) != 0 {
-		t.Errorf("Insert вызван %d раз, want 0 (provision отвергнут ДО Insert)", len(db.inserts))
+		t.Errorf("Insert called %d times, want 0 (provision rejected BEFORE Insert)", len(db.inserts))
 	}
 }
 
@@ -76,10 +76,10 @@ func TestMapper_LdapDisabled_ProvisionRejected(t *testing.T) {
 		t.Fatalf("Map err=%v, want ErrProvisioningDisabled", err)
 	}
 	if len(db.inserts) != 0 {
-		t.Errorf("Insert вызван %d раз, want 0 (provision отвергнут ДО Insert)", len(db.inserts))
+		t.Errorf("Insert called %d times, want 0 (provision rejected BEFORE Insert)", len(db.inserts))
 	}
 	if db.grants != 0 {
-		t.Errorf("role grant вызван %d раз, want 0 (оператор не создан)", db.grants)
+		t.Errorf("role grant called %d times, want 0 (operator not created)", db.grants)
 	}
 }
 
@@ -102,7 +102,7 @@ func TestMapper_LdapAllowed_ProvisionSucceeds(t *testing.T) {
 		t.Errorf("Provisioned=false, want true")
 	}
 	if len(db.inserts) != 1 {
-		t.Errorf("Insert вызван %d раз, want 1", len(db.inserts))
+		t.Errorf("Insert called %d times, want 1", len(db.inserts))
 	}
 }
 
@@ -123,12 +123,12 @@ func TestMapper_ExistingLoginNotGated_WhenLdapDisabled(t *testing.T) {
 
 	got, err := m.Map(context.Background(), ExternalIdentity{AID: "dave", Groups: []string{"ops"}})
 	if err != nil {
-		t.Fatalf("Map существующего оператора при ldap-disabled err=%v, want nil (гейт только на создании)", err)
+		t.Fatalf("Map existing operator with ldap disabled err=%v, want nil (gate only on creation)", err)
 	}
 	if got.Provisioned {
-		t.Errorf("Provisioned=true, want false (оператор уже существовал)")
+		t.Errorf("Provisioned=true, want false (operator already existed)")
 	}
 	if len(db.inserts) != 0 {
-		t.Errorf("Insert вызван %d раз, want 0 (существующий не создаётся)", len(db.inserts))
+		t.Errorf("Insert called %d times, want 0 (existing operator is not created)", len(db.inserts))
 	}
 }
