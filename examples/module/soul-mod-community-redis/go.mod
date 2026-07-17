@@ -6,7 +6,7 @@ require (
 	github.com/redis/go-redis/v9 v9.20.1
 	github.com/souls-guild/soul-stack/proto/plugin v0.0.0
 	github.com/souls-guild/soul-stack/sdk v0.0.0
-	google.golang.org/grpc v1.81.1
+	google.golang.org/grpc v1.82.0
 	google.golang.org/protobuf v1.36.11
 )
 

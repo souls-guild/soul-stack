@@ -23,9 +23,9 @@ const (
 )
 
 // HostUtilization — a snapshot of live host resource utilization (CPU%/load/mem/disk/uptime),
-// a lightweight periodic Soul→Keeper pulse over the presence channel (ADR-072). A separate layer
+// a lightweight periodic pulse Soul→Keeper over the presence channel (ADR-072). A layer separate
 // from SoulprintFacts (static grains, ADR-018): utilization is volatile, not a targeting fact,
-// with its own cadence (~30s). Stored in Redis (hot, not PG). only-add per ADR-012(c).
+// with its own cadence (~30s). Stored in Redis only (hot, not PG). only-add per ADR-012(c).
 type HostUtilization struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Soul-side collection moment; Keeper-side received_at is stored separately (freshness).
@@ -37,10 +37,10 @@ type HostUtilization struct {
 	MemUsedMb   int64                  `protobuf:"varint,6,opt,name=mem_used_mb,json=memUsedMb,proto3" json:"mem_used_mb,omitempty"` // used = total - available
 	MemTotalMb  int64                  `protobuf:"varint,7,opt,name=mem_total_mb,json=memTotalMb,proto3" json:"mem_total_mb,omitempty"`
 	SwapUsedMb  int64                  `protobuf:"varint,8,opt,name=swap_used_mb,json=swapUsedMb,proto3" json:"swap_used_mb,omitempty"`
-	// Utilization of non-virtual mount points (tmpfs/proc/sys/cgroup filtered out).
+	// Utilization of non-virtual mount points (tmpfs/proc/sys/cgroup are filtered out).
 	Disks     []*DiskUtilization `protobuf:"bytes,9,rep,name=disks,proto3" json:"disks,omitempty"`
 	UptimeSec int64              `protobuf:"varint,10,opt,name=uptime_sec,json=uptimeSec,proto3" json:"uptime_sec,omitempty"`
-	// Effective pulse cadence; Keeper scales Redis key TTLs by it (ADR-072, NIM-87).
+	// Effective pulse cadence; the Keeper scales Redis key TTLs by it (ADR-072, NIM-87).
 	IntervalSec   int32 `protobuf:"varint,11,opt,name=interval_sec,json=intervalSec,proto3" json:"interval_sec,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -153,7 +153,7 @@ func (x *HostUtilization) GetIntervalSec() int32 {
 	return 0
 }
 
-// DiskUtilization — usage of a single mount point. Volumes in MB (like MemoryFacts).
+// DiskUtilization — the usage of a single mount point. Sizes in MB (like MemoryFacts).
 type DiskUtilization struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Mount         string                 `protobuf:"bytes,1,opt,name=mount,proto3" json:"mount,omitempty"`
@@ -214,9 +214,9 @@ func (x *DiskUtilization) GetTotalMb() int64 {
 	return 0
 }
 
-// TelemetryConfig — the effective host-vitals collection config, resolved by Keeper
-// (manifest telemetry: + essence-override) and delivered to Soul via FromKeeper
-// for hot-reload of cadence/collectors without a restart (ADR-072, NIM-87).
+// TelemetryConfig — the effective host-vitals collection config, resolved by
+// the Keeper (manifest telemetry: + essence override) and delivered to Soul via
+// FromKeeper for hot-reload of cadence/collectors without a restart (ADR-072, NIM-87).
 type TelemetryConfig struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Enabled       bool                   `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
