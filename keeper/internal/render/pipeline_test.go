@@ -500,7 +500,7 @@ func TestRender_FlowControlSoulprintMultiHost_Error(t *testing.T) {
 			if err == nil {
 				t.Fatalf("Render: expected an error for host-variant %s on multi-host", name)
 			}
-			if !strings.Contains(err.Error(), "per-host dispatch deferred") {
+			if !strings.Contains(err.Error(), "per-host dispatch is deferred") {
 				t.Errorf("error text is not about the pilot horizon: %q", err.Error())
 			}
 		})
@@ -601,7 +601,7 @@ func TestRender_FlowContextVarsLaundering_Error(t *testing.T) {
 	if !strings.Contains(err.Error(), "host-variant flow_context") {
 		t.Errorf("error text is not about vars-laundering flow_context: %q", err.Error())
 	}
-	if !strings.Contains(err.Error(), "per-host dispatch deferred") {
+	if !strings.Contains(err.Error(), "per-host dispatch is deferred") {
 		t.Errorf("error text is not about the pilot horizon: %q", err.Error())
 	}
 }

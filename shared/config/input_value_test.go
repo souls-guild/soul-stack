@@ -730,7 +730,7 @@ func TestResolveInputValues_RequiredWhenTruePredicateMissing(t *testing.T) {
 	}
 	// A recognizable required-error form — downstream detection (checkdrift) catches
 	// both unconditional and conditional required with a single substring match.
-	if !strings.Contains(err.Error(), "not passed and has no default") {
+	if !strings.Contains(err.Error(), "was not provided and has no default") {
 		t.Errorf("error doesn't carry the recognizable required form: %v", err)
 	}
 }
