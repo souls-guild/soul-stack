@@ -1,43 +1,22 @@
 {{/*
-  systemd drop-in hardening for redis-server (Go text/template strict, ADR-010). Context:
-  .vars.data_dir/run_dir/log_dir/conf_dir - actual redis write directories under
-  ReadWritePaths.
+  systemd drop-in hardening для redis-server (ADR-010). Контекст: .vars.data_dir/
+  run_dir/log_dir/conf_dir. Набор УНИФИЦИРОВАН с redis-sentinel.service.tmpl (NIM-97);
+  guard — TestRedisServerHardening_CanonDirectives.
 
-  conf_dir in the RW paths is REQUIRED (day-2): the update_config scenario does CONFIG
-  REWRITE (community.redis.config with rewrite:true) - redis-server rewrites redis.conf to
-  persist applied directives. Without conf_dir, ProtectSystem=strict keeps /etc read-only,
-  so CONFIG REWRITE fails ("Read-only file system") on the first directive that actually
-  changed. On create, redis-server does not rewrite the config (starts from a ready-made
-  file), but the drop-in is one for the whole lifecycle - conf_dir is needed for day-2.
+  Drop-in (не свой unit): distro-юнит redis-server.service заменять нельзя (несёт
+  ExecStart/Type=notify, обновляется с пакетом) → hardening доезжает override-ом в
+  .service.d/. User/Group НЕ задаём (stateful redis требует стабильного uid data-dir;
+  аккаунт redis:redis заводит пакет).
 
-  WHY a drop-in and not our own unit. Redis is installed by the distro package together
-  with its systemd unit redis-server.service. The distro unit cannot be replaced wholesale -
-  it carries ExecStart/Type=notify/RuntimeDirectory and is updated together with the package.
-  So hardening arrives as an override: /etc/systemd/system/redis-server.service.d/hardening.conf
-  on top of the distro unit ([Service] directives are merged, ours take priority).
-
-  SERVICE ACCOUNT. We deliberately do NOT set User/Group in the drop-in. redis is a
-  stateful service (prod convention §2/§3): the owned data-dir /var/lib/redis (RDB/AOF)
-  requires a stable file-owner uid across restarts/upgrades. The distro package already
-  creates the system account redis:redis (stable uid) and the distro unit already runs
-  under it. DynamicUser is unsuitable here: files under one run's transient uid would
-  belong to a "foreign" uid on the next run. The account comes from the package, manual
-  core.user/core.group are not needed.
-
-  HARDENING (prod convention §3, "security first", requirements.md). Stateful variant:
-  ProtectSystem=strict + ReadWritePaths under the actual redis write directories
-  (data-dir/log/pidfile/socket + conf-dir for day-2 CONFIG REWRITE, see above). WITHOUT
-  ReadWritePaths, strict makes all of / read-only and redis would be unable to write
-  RDB/AOF/socket/pid/log/redis.conf - a prod incident.
-
-  We deliberately do NOT set MemoryDenyWriteExecute (unlike the Go binaries of exporters).
-  redis is written in C, uses jemalloc, and supports loadable modules; MDWE forbids W+X
-  mappings and can break the allocator/JIT pages of modules. For stateful redis it is
-  safer not to enable MDWE.
-
-  RestrictAddressFamilies carries AF_UNIX: redis listens on BOTH TCP (:6379, redis.conf.tmpl)
-  AND can listen on a unix socket. CapabilityBoundingSet= is empty: :6379 (>1024) and the
-  socket require no privileges, CAP_NET_BIND_SERVICE is not needed.
+  conf_dir в ReadWritePaths ОБЯЗАТЕЛЕН: update_config → CONFIG REWRITE переписывает
+  redis.conf; без conf_dir ProtectSystem=strict держит /etc R/O → REWRITE падает.
+  MemoryDenyWriteExecute=yes — эталон redis.io-deb 8.8.0-1rl1; модули (bloom/json/
+  search/timeseries) — AOT-.so через dlopen (R+X, не W+X), jemalloc/Lua тоже без W+X,
+  JIT у Redis нет → не ломает (live-verified NIM-97).
+  UMask=007 — RDB/AOF/лог 0660 (данные от others закрыты). CapabilityBoundingSet= пуст —
+  строже эталона redis.io-deb (тот держит CAP_SYS_RESOURCE); rlimit покрыт статическим
+  LimitNOFILE=65535 (redis сам rlimit не поднимет без CAP_SYS_RESOURCE). AF_UNIX в
+  RestrictAddressFamilies — redis unix-сокет + sd_notify Type=notify.
 */}}
 [Service]
 NoNewPrivileges=yes
@@ -45,9 +24,16 @@ ProtectSystem=strict
 ReadWritePaths={{ .vars.data_dir }} {{ .vars.run_dir }} {{ .vars.log_dir }} {{ .vars.conf_dir }}
 ProtectHome=yes
 PrivateTmp=yes
+PrivateDevices=yes
 ProtectKernelTunables=yes
+ProtectKernelModules=yes
 ProtectControlGroups=yes
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-LockPersonality=yes
 RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+UMask=007
 CapabilityBoundingSet=
+LimitNOFILE=65535
