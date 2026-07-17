@@ -181,14 +181,14 @@ func TestValidateInput_AclUserPerms_GarbageRejected(t *testing.T) {
 	loader := &dirInputLoader{root: root}
 
 	cases := map[string]string{
-		"arbitrary text":            "arbitrary text",
-		"shell injection via ;":     "~* +@all; rm -rf /",
-		"newline":                   "~app:* +@read\n~evil:* +@all",
-		"unknown sigil =":           "~* =foo",
-		"pipe outside subcommand":   "~* +@all | cat",
-		"backtick":                  "~* `whoami`",
-		"command substitution":      "~* $(id)",
-		"keyword without sigil":     "hello",
+		"arbitrary text":          "arbitrary text",
+		"shell injection via ;":   "~* +@all; rm -rf /",
+		"newline":                 "~app:* +@read\n~evil:* +@all",
+		"unknown sigil =":         "~* =foo",
+		"pipe outside subcommand": "~* +@all | cat",
+		"backtick":                "~* `whoami`",
+		"command substitution":    "~* $(id)",
+		"keyword without sigil":   "hello",
 	}
 	for name, perms := range cases {
 		t.Run(name, func(t *testing.T) {
