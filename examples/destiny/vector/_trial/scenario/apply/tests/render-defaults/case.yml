@@ -68,7 +68,7 @@ assert:
 
     # data_dir 0700 — persistent disk-buffer, owner is the service account (stateful branch
     # §2, unlike stateless redis-exporter). Disambiguator vs config_dir is path.
-    - module: core.file.directory
+    - module: core.directory.present
       params_subset:
         path: /var/lib/vector
         owner: vector
@@ -76,7 +76,7 @@ assert:
         mode: "0700"
 
     # config_dir 0750 owner root group vector (root writes the config, the service reads via group).
-    - module: core.file.directory
+    - module: core.directory.present
       params_subset:
         path: /etc/vector
         owner: root

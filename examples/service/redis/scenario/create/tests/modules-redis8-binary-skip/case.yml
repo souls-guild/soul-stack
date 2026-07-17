@@ -118,14 +118,14 @@ assert:
     # carry them -> create explicitly BEFORE redis-server starts (otherwise redis-server
     # on a binary install can't find the data dir). owner redis, parents:true.
     # Disambiguator from socket/modules/tls-dir - path.
-    - module: core.file.directory
+    - module: core.directory.present
       params_subset:
         path: /var/lib/redis
         owner: redis
         group: redis
         mode: "0750"
         parents: true
-    - module: core.file.directory
+    - module: core.directory.present
       params_subset:
         path: /var/log/redis
         owner: redis
@@ -188,7 +188,7 @@ assert:
     # VERSION-GATE Redis 8+ (by effective version = input.version 8.0.3): the
     # modules.yml include is gated on deploy_redis && !redis8 -> group-drop (modules-dir
     # is absent from the plan). Regression "version-guard didn't fire on 8.x" = modules-dir leaked.
-    - module: core.file.directory
+    - module: core.directory.present
       params_subset:
         path: /var/lib/redis/modules
     # .so fetch: modules.yml include group-dropped -> fetch-loop is absent.

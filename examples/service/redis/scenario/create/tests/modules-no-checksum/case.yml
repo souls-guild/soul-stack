@@ -149,7 +149,7 @@ assert:
 
     # modules-dir directory - gated-include on deploy_redis && !redis8, ACTIVE here.
     # Disambiguator from systemd-dropin-dir - path.
-    - module: core.file.directory
+    - module: core.directory.present
       params_subset:
         path: /var/lib/redis/modules
         owner: redis

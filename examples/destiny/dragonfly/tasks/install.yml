@@ -167,7 +167,7 @@
 # ── conf-dir, data-dir and log-dir (BOTH branches, UNCONDITIONALLY) ─────────────
 # The configuration directory (/etc/dragonfly: dragonfly.conf, users.acl, tls/) MUST exist
 # BEFORE the first render of any of these files (server.yml runs AFTER this include). The
-# package branch (distro-deb) creates /etc/dragonfly itself — idempotent core.file.directory
+# package branch (distro-deb) creates /etc/dragonfly itself — idempotent core.directory.present
 # = no-op/fixes drift. binary branch: there's no deb, so nobody creates it → rendering
 # users.acl/dragonfly.conf would fail with "open .../.users.acl.tmp-…: no such file or
 # directory" (the same bug class as the redis conf-dir, caught live 2026-06-29). Hence
@@ -177,7 +177,7 @@
 # have no access. parents:true — the operator can override conf_dir (input.conf_dir may be a
 # deep path with a nonexistent parent; the default parents:false would fail on it).
 - name: Ensure the dragonfly configuration directory exists
-  module: core.file.directory
+  module: core.directory.present
   params:
     path: "${ vars.dragonfly_conf_dir_eff }"
     owner: "${ vars.dragonfly_user }"
@@ -189,12 +189,12 @@
 # files) directories MUST exist BEFORE dragonfly's first start. The binary branch doesn't
 # carry a package → nobody creates them (systemd RuntimeDirectory covers only the run dir, not
 # stateful data/log); the package branch (distro-deb) usually creates them — idempotent
-# core.file.directory = no-op/fixes drift. Hence UNCONDITIONALLY (NOT gated on install.method
+# core.directory.present = no-op/fixes drift. Hence UNCONDITIONALLY (NOT gated on install.method
 # and NOT on deploy_dragonfly). owner/group dragonfly (either the deb or the binary branch
 # created them — top-level tasks AFTER both install blocks). mode 0750: the owner
 # reads/writes.
 - name: Ensure the dragonfly data directory exists
-  module: core.file.directory
+  module: core.directory.present
   params:
     path: "${ vars.dragonfly_data_dir_eff }"
     owner: "${ vars.dragonfly_user }"
@@ -203,7 +203,7 @@
     parents: true
 
 - name: Ensure the dragonfly log directory exists
-  module: core.file.directory
+  module: core.directory.present
   params:
     path: "${ vars.log_dir }"
     owner: "${ vars.dragonfly_user }"

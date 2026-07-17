@@ -115,8 +115,8 @@ fixtures:
 
 assert:
   task_present:
-    # TLS dir (core.file.directory, when tls.enable → ACTIVE): /etc/redis/tls.
-    - module: core.file.directory
+    # TLS dir (core.directory.present, when tls.enable → ACTIVE): /etc/redis/tls.
+    - module: core.directory.present
       params_subset:
         path: /etc/redis/tls
         owner: redis

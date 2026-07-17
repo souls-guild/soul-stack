@@ -68,7 +68,7 @@ assert:
         path: /etc/systemd/system/mongod.service
 
     # 3. Directories + render mongod.conf + sysctl.
-    - module: core.file.directory
+    - module: core.directory.present
       params_subset:
         path: /var/lib/mongodb
     - module: core.file.rendered

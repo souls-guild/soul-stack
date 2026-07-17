@@ -161,8 +161,8 @@ assert:
 
   task_absent:
     # ── modules-dir is NOT created (include modules.yml group-drop with empty base_url) ──
-    # Disambiguator from the active systemd-dropin-dir (the same core.file.directory) — path.
-    - module: core.file.directory
+    # Disambiguator from the active systemd-dropin-dir (the same core.directory.present) — path.
+    - module: core.directory.present
       params_subset:
         path: /var/lib/redis/modules
     # ── .so files are NOT downloaded (the whole fetch group is group-dropped) — each of the four is absent.

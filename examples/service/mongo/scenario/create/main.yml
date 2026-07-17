@@ -189,7 +189,7 @@ tasks:
   # 0750: mongodb owner reads/writes. parents:true — conf_dir/data_dir are overridable by the
   # operator (a deep path with a nonexistent parent).
   - name: Ensure the mongo configuration directory exists
-    module: core.file.directory
+    module: core.directory.present
     params:
       path: "${ compute.conf_dir }"
       owner: mongodb
@@ -198,7 +198,7 @@ tasks:
       parents: true
 
   - name: Ensure the mongo data directory exists
-    module: core.file.directory
+    module: core.directory.present
     params:
       path: "${ compute.data_dir }"
       owner: mongodb
@@ -207,7 +207,7 @@ tasks:
       parents: true
 
   - name: Ensure the mongo log directory exists
-    module: core.file.directory
+    module: core.directory.present
     params:
       path: "${ compute.log_dir }"
       owner: mongodb

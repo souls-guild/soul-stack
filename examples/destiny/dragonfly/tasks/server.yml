@@ -42,7 +42,7 @@
     # The tls/ directory under conf_dir — idempotent on mode/owner/group, fixes drift, dry-run.
     # mode 0750 owner dragonfly: only the service can read PEM (incl. the private key).
     - name: Ensure the dragonfly TLS directory exists
-      module: core.file.directory
+      module: core.directory.present
       params:
         path: "${ vars.dragonfly_conf_dir_eff + '/tls' }"
         owner: "${ vars.dragonfly_user }"

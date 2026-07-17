@@ -7,7 +7,7 @@
 #
 # Task layout (include files expanded inline BEFORE render):
 #   install.yml    → 0 fetch, 1 extract
-#   account.yml    → 2 group, 3 user, 4 directory (core.file.directory)
+#   account.yml    → 2 group, 3 user, 4 directory (core.directory.present)
 #   service.yml    → 5 install binary, 6 unit, 7 running, 8 restarted
 #   collectors.yml → smartmon 9..15, nvme 16..23, ipmi 24..32
 #                    (each collector: pkg(+jq)/script/unit/timer/running/restarted/
@@ -78,9 +78,9 @@ assert:
         group: node_exporter
         shell: /usr/sbin/nologin
 
-    # textfile directory via declarative core.file.directory (NOT core.exec.run
+    # textfile directory via declarative core.directory.present (NOT core.exec.run
     # install -d): idempotent on mode/owner/group, fixes drift, supports dry-run.
-    - module: core.file.directory
+    - module: core.directory.present
       params_subset:
         path: /var/lib/node_exporter
         owner: node_exporter

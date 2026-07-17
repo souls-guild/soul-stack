@@ -146,8 +146,8 @@ assert:
           essence: {}
 
     # -- modules-dir is created (include modules.yml active) --
-    # Disambiguator from systemd-dropin-dir (same core.file.directory) - path.
-    - module: core.file.directory
+    # Disambiguator from systemd-dropin-dir (same core.directory.present) - path.
+    - module: core.directory.present
       params_subset:
         path: /var/lib/redis/modules
         owner: redis

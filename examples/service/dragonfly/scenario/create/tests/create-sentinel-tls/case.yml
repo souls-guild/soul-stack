@@ -86,7 +86,7 @@ assert:
     #    create conf-dir" = rendering dragonfly.conf fails with "open .../.dragonfly.conf.tmp-…: no
     #    such file or directory" (same class as the redis conf-dir issue, caught live 2026-06-29).
     #    Disambiguator from redis sentinel_only conf-dir (/etc/redis, owner redis) — path /etc/dragonfly. ──
-    - module: core.file.directory
+    - module: core.directory.present
       params_subset:
         path: /etc/dragonfly
         owner: dragonfly

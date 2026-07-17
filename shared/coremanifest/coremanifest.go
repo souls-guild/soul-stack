@@ -46,6 +46,7 @@ var coreFiles = []string{
 	// Soul-side core (ADR-015) — statically compiled into the `soul` binary.
 	"exec.yaml",
 	"file.yaml",
+	"directory.yaml",
 	"pkg.yaml",
 	"service.yaml",
 	"user.yaml",

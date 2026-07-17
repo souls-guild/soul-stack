@@ -45,7 +45,7 @@
     # mode 0750 owner redis: PEM (incl. the private key) is readable only by the service. The path
     # is derived from input.conf_dir (directive B: conf-dir overridable by the operator).
     - name: Ensure the redis TLS directory exists
-      module: core.file.directory
+      module: core.directory.present
       params:
         path: "${ vars.redis_conf_dir_eff + '/tls' }"
         owner: "${ vars.redis_user }"
@@ -152,10 +152,10 @@
 
 # systemd drop-in directory. core.file.rendered creates only the file, the parent
 # directory .service.d/ — no, and the distro redis-server package doesn't create it either.
-# Create it explicitly BEFORE the declarative core.file.directory render. The unit drop-in path
+# Create it explicitly BEFORE the declarative core.directory.present render. The unit drop-in path
 # is assembled from vars.systemd_dir + the service name (directive A: service-name from vars).
 - name: Ensure the redis-server systemd drop-in directory exists
-  module: core.file.directory
+  module: core.directory.present
   params:
     path: "${ vars.systemd_dir + '/' + vars.redis_service_name + '.service.d' }"
     owner: "${ vars.root_owner }"

@@ -50,7 +50,8 @@ Statically built into the `soul` binary. Apply the same in pull (daemon) and pus
 |---|---|---|
 | [`core.pkg`](core/pkg/README.md) | `installed` / `absent` / `latest` | OS packages via native pkg-mgr (apt/dnf/yum/apk). |
 | [`core.file`](core/file/README.md) | `present` / `absent` / `rendered` | File with literal-content / missing / rendered from `.tmpl`. |
-| [`core.service`](core/service/README.md) | `running` / `stopped` / `restarted` / `enabled` | Service via systemd/openrc/sysv. |
+| [`core.directory`](core/directory/README.md) | `present` / `absent` | Directory exists with owner/group/mode (`parents` = `mkdir -p`) / removed (a non-empty one only with `recursive: true`). Split out of the former `core.file.directory`. |
+| [`core.service`](core/service/README.md) | `running` / `stopped` / `restarted` / `enabled` / `disabled` / `masked` | Service via systemd/openrc/sysv (`masked` is systemd-only). |
 | [`core.user`](core/user/README.md) | `present` / `absent` | Local OS users. |
 | [`core.group`](core/group/README.md) | `present` / `absent` | OS local groups. |
 | [`core.exec`](core/exec/README.md) | `run` (verb) | Arbitrary command via exec() (without shell). |
@@ -105,10 +106,12 @@ gRPC-over-stdio). Each namespace has its own per-module directory:
 The catalog is complete. What we think (the source of truth is the registry in the code,
 `soul/internal/coremod/registry.go` and `keeper/internal/coremod/registry.go`):
 
-- **18 Soul-side core** - 17 by [ADR-015](../adr/0015-core-modules-mvp.md)
+- **19 Soul-side core** - 18 by [ADR-015](../adr/0015-core-modules-mvp.md)
 (12 original MVPs + post-MVP `url` / `line` / `repo` / `firewall` / `http`,
-accepted based on real requests) + `augur` by [ADR-025](../adr/0025-augur.md)
-(read-probe via Augur broker). Table "Soul-side core modules" above.
+accepted based on real requests, + `directory` split out of `core.file` by
+[Amendment 2026-07-17](../adr/0015-core-modules-mvp.md)) + `augur` by
+[ADR-025](../adr/0025-augur.md) (read-probe via Augur broker). Table "Soul-side
+core modules" above.
 - **4 Keeper-side core** - `core.soul` / `core.cloud` / `core.vault` by
 [ADR-017](../adr/0017-keeper-side-core.md)
   + `core.choir` by [ADR-044](../adr/0044-choir.md) (registered if available
@@ -116,8 +119,8 @@ accepted based on real requests) + `augur` by [ADR-025](../adr/0025-augur.md)
 `kv-present`, generate-if-absent by [ADR-017 amend 2026-06-28](../adr/0017-keeper-side-core.md)).
 "Keeper-side core modules" table above.
 
-Total **22 apply modules** (18 + 4). In `docs/module/core/` - **23 directories**: these
-22 modules plus `core-beacon` (Vigil body, read-only observer - not apply module,
+Total **23 apply modules** (19 + 4). In `docs/module/core/` - **24 directories**: these
+23 modules plus `core-beacon` (Vigil body, read-only observer - not apply module,
 removed from tables, see "core-beacon" section).
 
 Standards (pilot) - [`core/pkg/README.md`](core/pkg/README.md) and

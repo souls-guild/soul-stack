@@ -166,8 +166,8 @@ assert:
     # VERSION-GATE Redis 8+: the modules.yml include is gated on deploy_redis && !redis8
     # → group-drop (modules-dir is absent from the plan). Guard "Redis 8 does NOT create
     # modules-dir". Disambiguator from the active systemd-dropin-dir (same
-    # core.file.directory) — path.
-    - module: core.file.directory
+    # core.directory.present) — path.
+    - module: core.directory.present
       params_subset:
         path: /var/lib/redis/modules
     # .so fetch: modules.yml include group-dropped → fetch-loop is absent from the plan.

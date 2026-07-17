@@ -1,0 +1,23 @@
+kind: soul_module
+protocol_version: 1
+namespace: core
+name: directory
+
+required_capabilities:
+  - fs_write_root
+
+spec:
+  states:
+    present:
+      description: Directory exists with the given owner/group/mode (replacement for `core.exec.run install -d`, ADR-015).
+      input:
+        path:    { type: string, required: true, description: "Target directory path." }
+        mode:    { type: string, description: "Permissions in octal form, e.g. \"0755\"." }
+        owner:   { type: string, description: "Owner (username)." }
+        group:   { type: string, description: "Owning group (group name)." }
+        parents: { type: bool,   description: "Create intermediate directories (mkdir -p semantics). Default false." }
+    absent:
+      description: Directory is removed. An empty directory is always removed; a non-empty one only with recursive:true, otherwise an error (deliberate divergence from Salt/Ansible silent rm -rf).
+      input:
+        path:      { type: string, required: true, description: "Path of the directory to remove." }
+        recursive: { type: bool,   description: "Remove a non-empty directory's contents (rm -r semantics). Default false: a non-empty directory errors." }

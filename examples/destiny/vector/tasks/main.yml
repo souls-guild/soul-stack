@@ -5,7 +5,7 @@
 # Pipeline overview (clone of node-exporter):
 #   install.yml - fetch Vector tarball -> extract (prepare the artifact in /tmp);
 #   account.yml - group + user vector + data_dir (persistent buffer) + config_dir
-#                 (core.file.directory);
+#                 (core.directory.present);
 #   service.yml - install the vector binary (core.file.present src:) + render vector.yaml
 #                 (sources/sinks) + render hardened-unit + core.service.running +
 #                 restarted onchanges on config/unit/binary. The binary install step is here,

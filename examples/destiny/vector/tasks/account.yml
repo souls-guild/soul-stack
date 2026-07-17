@@ -26,12 +26,12 @@
     shell: /usr/sbin/nologin
 
 # data_dir — Vector's persistent disk buffer (global data_dir): checkpoint offsets of
-# tracked files + the sink queue. Declarative state via core.file.directory:
+# tracked files + the sink queue. Declarative state via core.directory.present:
 # idempotent on mode/owner/group, fixes drift. owner/group — the service account (Vector
 # reads/writes the buffer under its own uid). mode 0700: the buffer may contain unprocessed
 # log entries — access restricted to the owner only.
 - name: Ensure vector data directory exists
-  module: core.file.directory
+  module: core.directory.present
   params:
     path:  "${ input.data_dir }"
     owner: "${ input.user }"
@@ -42,7 +42,7 @@
 # root, read by the service account via group/other-read on the unit). mode 0755: vector.yaml
 # itself is rendered with mode 0640 (see service.yml).
 - name: Ensure vector config directory exists
-  module: core.file.directory
+  module: core.directory.present
   params:
     path:  "${ vars.config_dir }"
     owner: root

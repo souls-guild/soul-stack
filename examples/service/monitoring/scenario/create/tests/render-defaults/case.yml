@@ -95,8 +95,8 @@ assert:
         group: node_exporter
         shell: /usr/sbin/nologin
 
-    # textfile directory via declarative core.file.directory. The only one.
-    - module: core.file.directory
+    # textfile directory via declarative core.directory.present. The only one.
+    - module: core.directory.present
       params_subset:
         path: /var/lib/node_exporter
         owner: node_exporter
