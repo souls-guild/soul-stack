@@ -119,7 +119,7 @@ func TestFixtureDestinyResolver_RejectsPlaceholderNotInLeaf(t *testing.T) {
 	if err == nil {
 		t.Fatal("want error: {name} not in last segment")
 	}
-	if !strings.Contains(err.Error(), "last segment") {
+	if !strings.Contains(err.Error(), "last path segment") {
 		t.Fatalf("want error about last segment, got: %v", err)
 	}
 }

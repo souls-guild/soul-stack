@@ -239,7 +239,7 @@ func TestErrandCancel_EmptyID(t *testing.T) {
 	_, cl := fakeServer(t, map[string]http.HandlerFunc{})
 	if err := cl.Errand.Cancel(context.Background(), ""); err == nil {
 		t.Fatal("expected an error")
-	} else if !strings.Contains(err.Error(), "errand_id empty") {
+	} else if !strings.Contains(err.Error(), "errand_id is empty") {
 		t.Errorf("err = %v, want errand_id-empty", err)
 	}
 }
