@@ -128,6 +128,39 @@ func (l *ServiceLoader) ListUpgrades(art *ServiceArtifact) ([]Scenario, error) {
 	return ListUpgrades(art.LocalDir, l.snap.logger)
 }
 
+// CertPolicyInfo — проекция cert-rotation-политики снапшота Service-репо (NIM-99):
+// секция `certificate_rotation:` манифеста (nil = ротация не задекларирована) +
+// имена scenario/ снапшота (для валидации Rotation.Scenario резолвером/UI) + SHA1
+// снапшота (диагностика «какой commit»).
+type CertPolicyInfo struct {
+	Rotation  *config.CertificateRotationConfig
+	Scenarios []string
+	SHA1      string
+}
+
+// LoadCertPolicy материализует снапшот сервиса ref и извлекает cert-rotation-
+// секцию манифеста + имена scenario/. Паттерн — [ListUpgrades]: делегирует скан в
+// пакетную [ListScenarios] с localDir снапшота и логгером загрузчика.
+func (l *ServiceLoader) LoadCertPolicy(ctx context.Context, ref ServiceRef) (*CertPolicyInfo, error) {
+	art, err := l.Load(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	scns, err := ListScenarios(art.LocalDir, l.snap.logger)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(scns))
+	for i := range scns {
+		names = append(names, scns[i].Name)
+	}
+	return &CertPolicyInfo{
+		Rotation:  art.Manifest.CertificateRotation,
+		Scenarios: names,
+		SHA1:      art.SHA1,
+	}, nil
+}
+
 // ReadSnapshotFile reads a file from snapshot by absolute localDir (root of
 // materialized service/destiny snapshot) and relative path. Exported wrapper over
 // common securejoin-reader for out-of-package callers (render-wiring builds

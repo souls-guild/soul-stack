@@ -2,9 +2,7 @@ package reaper
 
 import (
 	"context"
-	"crypto/x509"
 	"encoding/json"
-	"encoding/pem"
 	"fmt"
 	"hash/fnv"
 	"log/slog"
@@ -14,6 +12,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	keepercert "github.com/souls-guild/soul-stack/keeper/internal/cert"
+	"github.com/souls-guild/soul-stack/keeper/internal/certissue"
+	"github.com/souls-guild/soul-stack/keeper/internal/certpolicy"
 	"github.com/souls-guild/soul-stack/keeper/internal/voyage"
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
@@ -24,38 +24,29 @@ import (
 // need to pull the push package for one identifier.
 const rotateCertsSystemAID = "archon-system"
 
-// rotateTLSScenario — name of the day-2 scenario that delivers new TLS material to
-// incarnation hosts (examples/service/redis/scenario/rotate_tls). Voyage
-// kind=scenario with this name targets the entire incarnation (rotate_tls: `on`
-// omitted → entire incarnation).
+// rotateTLSScenario — дефолтное имя сценария доставки TLS-материала. Источник
+// имени теперь манифест (certpolicy.Policy.Scenario); const остаётся якорем
+// контрактного теста, что имя сценария не переименовано.
 const rotateTLSScenario = "rotate_tls"
 
 // defaultMaxRotationsPerTick — maximum rotations per tick by default (anti-thundering-herd
 // when certificates expire in bulk).
 const defaultMaxRotationsPerTick = 20
 
-// PKISigner — narrow interface to vault.Client.SignCSR (Vault PKI sign-RPC),
-// needed by rotator. Narrowing allows fake without Vault in unit tests.
-type PKISigner interface {
-	SignCSR(ctx context.Context, mount, role, csrPEM string) (*SignedCert, error)
-}
-
-// SignedCert — result of PKI signing (mirror of vault.SignedCertificate; reaper does not
-// import vault package for the type, adapter in wire-up converts it).
-type SignedCert struct {
-	CertificatePEM []byte
-	CAChainPEM     []byte
-	SerialNumber   string
-	NotAfter       time.Time
-}
-
-// CertVaultWriter — narrow interface to vault.Client.WriteKV, needed by rotator.
+// CertVaultWriter — узкая поверхность vault.Client.WriteKV, нужная ротатору
+// (совпадает с certissue.KVWriter — r.vault проходит как KVWriter).
 type CertVaultWriter interface {
 	WriteKV(ctx context.Context, path string, data map[string]any) error
 }
 
-// certRotatorDB — narrow subset of pgxpool.Pool: begin tx where
-// due certs are taken FOR UPDATE SKIP LOCKED and rotated atomically.
+// certPolicyResolver — резолвер эффективной cert-rotation-политики инкарнации
+// (certpolicy.Resolver). Узкий интерфейс — fake без БД в unit-тестах.
+type certPolicyResolver interface {
+	Resolve(ctx context.Context, incarnationName string) (certpolicy.Policy, error)
+}
+
+// certRotatorDB — узкое подмножество pgxpool.Pool: открыть tx, в которой
+// due-серты берутся FOR UPDATE SKIP LOCKED и ротируются атомарно.
 type certRotatorDB interface {
 	BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, error)
 }
@@ -73,50 +64,51 @@ type CertRotatorConfig struct {
 	JitterWindow time.Duration
 	// MaxRotationsPerTick — cap of rotations per tick. <=0 → defaultMaxRotationsPerTick.
 	MaxRotationsPerTick int
-	// DefaultPKIMount / DefaultPKIRole — PKI mount/role for SignCSR, if
-	// warrant row doesn't have its own pki_mount/pki_role. Both empty (in row and in
-	// config) → cert rotation fails (nothing to sign) with failed mark.
+	// DefaultPKIMount — PKI mount для SignCSR, если у warrant-строки не задан свой
+	// pki_mount. PKI role приходит из манифеста (certpolicy.Policy.PKIRole), не из config.
 	DefaultPKIMount string
-	DefaultPKIRole  string
 }
 
 // CertRotatorDeps — constructor dependencies.
 type CertRotatorDeps struct {
-	Signer PKISigner
+	Signer certissue.Signer
 	Vault  CertVaultWriter
 	// CSRGen generates keypair+CSR (keeper-side, R2). Prod — wrapper over
 	// vault.GenerateServiceCSR. Separate field (not hard dependency on
 	// vault package) so unit tests can provide deterministic fake.
 	CSRGen func(commonName string, dnsNames []string) (privateKeyPEM, csrPEM []byte, err error)
-	// Cfg — policy provider (hot-reload: read on each Run).
-	Cfg    func() CertRotatorConfig
+	// Cfg — провайдер политики (hot-reload: читается на каждом Run).
+	Cfg func() CertRotatorConfig
+	// Policy — резолвер cert-rotation-политики инкарнации из манифеста сервиса.
+	Policy certPolicyResolver
 	Audit  audit.Writer
 	Logger *slog.Logger
 	KID    string
 }
 
-// CertRotator — implementation of `rotate_due_certs` rule (cert-rotation Var1).
-// Scan of expiring active certs (`not_after` with jitter) → per-cert rotation chain
-// (CAS active→rotating single-winner → csrgen → SignCSR → WriteKV →
-// supersede+insert warrant → spawn Voyage(rotate_tls)) → audit.
+// CertRotator — реализация правила `rotate_due_certs` (cert-rotation Вар1).
+// Скан истекающих active-сертов (`not_after` с jitter) → per-cert цепочка
+// ротации (резолв политики манифеста → CAS active→rotating → certissue.Issue →
+// supersede+insert warrant → спавн Voyage(<scenario>)) → audit.
 //
 // Run signature is compatible with runDurationRule call of Runner. Default OFF +
 // mandatory dry_run — at dispatch level (rule is map-driven, requires explicit
 // enabled:true; dry_run by default — see Runner branch).
 type CertRotator struct {
 	pool    certRotatorDB
-	signer  PKISigner
+	signer  certissue.Signer
 	vault   CertVaultWriter
 	csrgen  func(commonName string, dnsNames []string) (privateKeyPEM, csrPEM []byte, err error)
 	cfg     func() CertRotatorConfig
+	policy  certPolicyResolver
 	audit   audit.Writer
 	logger  *slog.Logger
 	kid     string
 	nowFunc func() time.Time
 }
 
-// NewCertRotator constructs rotator. signer/vault/csrgen/cfg are required (without
-// them rotation is impossible — Run will return error). audit/logger are nil-safe.
+// NewCertRotator конструирует ротатор. signer/vault/csrgen/cfg/policy обязательны
+// (без них ротация невозможна — Run вернёт ошибку). audit/logger nil-safe.
 func NewCertRotator(pool *pgxpool.Pool, d CertRotatorDeps) *CertRotator {
 	return &CertRotator{
 		pool:   pool,
@@ -124,6 +116,7 @@ func NewCertRotator(pool *pgxpool.Pool, d CertRotatorDeps) *CertRotator {
 		vault:  d.Vault,
 		csrgen: d.CSRGen,
 		cfg:    d.Cfg,
+		policy: d.Policy,
 		audit:  d.Audit,
 		logger: d.Logger,
 		kid:    d.KID,
@@ -138,6 +131,7 @@ func newCertRotatorFromDB(pool certRotatorDB, d CertRotatorDeps) *CertRotator {
 		vault:  d.Vault,
 		csrgen: d.CSRGen,
 		cfg:    d.Cfg,
+		policy: d.Policy,
 		audit:  d.Audit,
 		logger: d.Logger,
 		kid:    d.KID,
@@ -166,7 +160,7 @@ func newCertRotatorFromDB(pool certRotatorDB, d CertRotatorDeps) *CertRotator {
 // $1 = NOW()+threshold+jitter_window (upper bound-superset). LIMIT $2 — cap.
 const selectDueCertsSQL = `
 SELECT cert_id, incarnation_id, kind, vault_ref, serial_number, fingerprint,
-       not_after, pki_mount, pki_role
+       not_after, pki_mount
 FROM warrant
 WHERE status = 'active'
   AND auto_rotate = true
@@ -187,7 +181,6 @@ type dueCert struct {
 	fingerprint   string
 	notAfter      time.Time
 	pkiMount      *string
-	pkiRole       *string
 }
 
 // Run executes one iteration of the rule. Returns count of actually spawned
@@ -200,8 +193,8 @@ func (r *CertRotator) Run(ctx context.Context, _ time.Duration, _ int) (int64, e
 	if r.pool == nil {
 		return 0, fmt.Errorf("reaper.rotate_due_certs: pool is nil")
 	}
-	if r.signer == nil || r.vault == nil || r.csrgen == nil || r.cfg == nil {
-		return 0, fmt.Errorf("reaper.rotate_due_certs: signer/vault/csrgen/cfg are required")
+	if r.signer == nil || r.vault == nil || r.csrgen == nil || r.cfg == nil || r.policy == nil {
+		return 0, fmt.Errorf("reaper.rotate_due_certs: signer/vault/csrgen/cfg/policy are required")
 	}
 
 	cfg := r.cfg()
@@ -276,7 +269,7 @@ func (r *CertRotator) selectDue(ctx context.Context, upper time.Time, limit int)
 		var c dueCert
 		var kindStr string
 		if serr := rows.Scan(&c.certID, &c.incarnationID, &kindStr, &c.vaultRef,
-			&c.serialNumber, &c.fingerprint, &c.notAfter, &c.pkiMount, &c.pkiRole); serr != nil {
+			&c.serialNumber, &c.fingerprint, &c.notAfter, &c.pkiMount); serr != nil {
 			return nil, fmt.Errorf("reaper.rotate_due_certs: scan row: %w", serr)
 		}
 		c.kind = keepercert.Kind(kindStr)
@@ -319,24 +312,48 @@ func (r *CertRotator) now() time.Time {
 
 // rotateOne conducts one server cert rotation. Returns (spawn-was, err).
 //
-// Chain (design.md):
-//  1. CAS active→rotating (single-winner barrier: exactly one tick/instance
-//     captures row; loser gets rows=0 and exits without work — against
-//     double Voyage spawn). Didn't pass CAS → (false, nil): idempotency.
-//  2. External I/O OUTSIDE tx (long round-trips don't hold PG-lock): csrgen (R2) →
-//     SignCSR (Vault PKI) → WriteKV cert+key to Vault (E3-paths secret/redis/<inc>/
-//     tls/{cert,key}). Any fail → CAS rotating→failed (row doesn't return to
-//     active, next tick doesn't count it due and doesn't loop) + return err.
-//  3. PG-tx: supersede rotating-row cert + insert new active cert +
-//     supersede/insert active key + insert Voyage(rotate_tls)+targets. All in one
-//     tx (canonical conductor.processOne): if crash before commit, nothing fixed,
-//     cert stays rotating. commit.
-//  4. Audit cert.rotated AFTER commit (best-effort).
+// Резолв политики манифеста идёт ДО CAS: транзиент-ошибка резолва / выключенная
+// секция / неизвестный сценарий / пустой pki_role → серт остаётся active БЕЗ
+// markFailed (следующий тик повторит либо корректно пропустит). Только после
+// захвата single-winner (CAS active→rotating) внешние фейлы (issue/commit) ведут
+// к CAS rotating→failed (серт не возвращается в active, тик не зациклится).
 func (r *CertRotator) rotateOne(ctx context.Context, c dueCert, cfg CertRotatorConfig) (bool, error) {
-	mount, role := r.resolvePKI(c, cfg)
-	if mount == "" || role == "" {
-		r.markFailed(ctx, c.certID)
-		return false, fmt.Errorf("no PKI mount/role for cert %s (warrant + config both empty)", c.certID)
+	pol, perr := r.policy.Resolve(ctx, c.incarnationID)
+	if perr != nil {
+		// Транзиент (git/PG): серт остаётся active, БЕЗ markFailed — retry на след. тик.
+		if r.logger != nil {
+			r.logger.Warn("reaper.rotate_due_certs: резолв политики провален, серт остаётся active",
+				slog.String("cert_id", c.certID),
+				slog.String("incarnation", c.incarnationID),
+				slog.Any("error", perr))
+		}
+		return false, nil
+	}
+	if !pol.Enabled {
+		return false, nil // нет секции / enable:false — авто-ротация выключена
+	}
+	scenarioOK := false
+	for _, s := range pol.KnownScenarios {
+		if s == pol.Scenario {
+			scenarioOK = true
+			break
+		}
+	}
+	if !scenarioOK {
+		if r.logger != nil {
+			r.logger.Warn("reaper.rotate_due_certs: сценарий ротации не найден в сервисе, спавн пропущен",
+				slog.String("incarnation", c.incarnationID),
+				slog.String("scenario", pol.Scenario))
+		}
+		return false, nil
+	}
+	mount, role := r.resolvePKI(c, cfg, pol)
+	if role == "" {
+		if r.logger != nil {
+			r.logger.Warn("reaper.rotate_due_certs: пустой pki_role (manifest-drift), серт пропущен",
+				slog.String("incarnation", c.incarnationID))
+		}
+		return false, nil
 	}
 
 	// (1) Capture single-winner.
@@ -350,15 +367,15 @@ func (r *CertRotator) rotateOne(ctx context.Context, c dueCert, cfg CertRotatorC
 		return false, nil
 	}
 
-	// (2) External I/O outside tx. Any fail → failed + err.
-	material, ierr := r.issueMaterial(ctx, c, mount, role)
+	// (2) Внешние I/O вне tx. Любой фейл → failed + err.
+	material, ierr := r.issueMaterial(ctx, c, pol.Service, mount, role)
 	if ierr != nil {
 		r.markFailed(ctx, c.certID)
 		return false, ierr
 	}
 
-	// (3) Atomically: supersede+insert warrant (cert+key) + spawn Voyage.
-	voyageID, cerr := r.commitRotation(ctx, c, material)
+	// (3) Атомарно: supersede+insert warrant (cert+key) + спавн Voyage.
+	voyageID, cerr := r.commitRotation(ctx, c, material, pol.Scenario, role)
 	if cerr != nil {
 		r.markFailed(ctx, c.certID)
 		return false, cerr
@@ -369,14 +386,12 @@ func (r *CertRotator) rotateOne(ctx context.Context, c dueCert, cfg CertRotatorC
 	return true, nil
 }
 
-// resolvePKI selects mount/role: warrant-row beats config default.
-func (r *CertRotator) resolvePKI(c dueCert, cfg CertRotatorConfig) (mount, role string) {
-	mount, role = cfg.DefaultPKIMount, cfg.DefaultPKIRole
+// resolvePKI выбирает mount/role: role — из манифеста (pol.PKIRole, обязателен);
+// mount — config-дефолт с warrant-override (c.pkiMount бьёт cfg.DefaultPKIMount).
+func (r *CertRotator) resolvePKI(c dueCert, cfg CertRotatorConfig, pol certpolicy.Policy) (mount, role string) {
+	mount, role = cfg.DefaultPKIMount, pol.PKIRole
 	if c.pkiMount != nil && *c.pkiMount != "" {
 		mount = *c.pkiMount
-	}
-	if c.pkiRole != nil && *c.pkiRole != "" {
-		role = *c.pkiRole
 	}
 	return mount, role
 }
@@ -419,69 +434,27 @@ func (r *CertRotator) markFailed(ctx context.Context, certID string) {
 	_ = tx.Commit(ctx)
 }
 
-// rotatedMaterial — result of issueMaterial: new server cert+key + refs.
-type rotatedMaterial struct {
-	certPEM      []byte
-	keyPEM       []byte
-	serialNumber string
-	fingerprint  string
-	notAfter     time.Time
-	certRef      string // E3-path+field of new cert (secret/redis/<inc>/tls/cert#cert)
-	keyRef       string
-}
-
-// issueMaterial generates keypair+CSR (R2), signs via Vault PKI and puts
-// cert+key in Vault by E3-paths. Returns material for commitRotation.
+// issueMaterial выпускает новый cert+key через certissue.Issue (csrgen → SignCSR
+// → WriteKV cert+key по service-scoped E3-путям secret/<service>/<inc>/tls/{cert,key}).
 //
-// ★ R2: private key (privPEM) is generated by Keeper and written to Vault. It is NEVER
-// logged / placed in audit / returned outside reaper — only in
-// Vault (conscious exception from identity invariant, see vault/csrgen.go).
-func (r *CertRotator) issueMaterial(ctx context.Context, c dueCert, mount, role string) (*rotatedMaterial, error) {
+// ★ R2: приватник генерится Keeper-ом и пишется только в Vault — он НИКОГДА не
+// логируется / не кладётся в audit / не попадает в текст ошибки (см. certissue).
+func (r *CertRotator) issueMaterial(ctx context.Context, c dueCert, service, mount, role string) (*certissue.Material, error) {
 	cn := c.incarnationID + ".tls"
-	privPEM, csrPEM, err := r.csrgen(cn, []string{cn, c.incarnationID})
-	if err != nil {
-		return nil, fmt.Errorf("csrgen: %w", err)
-	}
-
-	signed, err := r.signer.SignCSR(ctx, mount, role, string(csrPEM))
-	if err != nil {
-		return nil, fmt.Errorf("sign csr: %w", err)
-	}
-	// signed.CAChainPEM is intentionally discarded: CA is not rotated here, hosts
-	// continue to trust current root from state.tls.ca_ref (see buildRotateTLSVoyage).
-
-	certPath := certVaultPath(c.incarnationID, keepercert.KindCert)
-	keyPath := certVaultPath(c.incarnationID, keepercert.KindKey)
-
-	// cert-PEM in field `cert`, key-PEM in field `key` (parity with essence convention
-	// tls_cert_ref "<path>#cert"). WriteKV doesn't put values in error text
-	// (vault.Client invariant).
-	if werr := r.vault.WriteKV(ctx, certPath, map[string]any{"cert": string(signed.CertificatePEM)}); werr != nil {
-		return nil, fmt.Errorf("write cert to vault: %w", werr)
-	}
-	if werr := r.vault.WriteKV(ctx, keyPath, map[string]any{"key": string(privPEM)}); werr != nil {
-		return nil, fmt.Errorf("write key to vault: %w", werr)
-	}
-
-	fingerprint, err := fingerprintFromPEM(signed.CertificatePEM)
-	if err != nil {
-		return nil, fmt.Errorf("fingerprint new cert: %w", err)
-	}
-
-	return &rotatedMaterial{
-		certPEM:      signed.CertificatePEM,
-		keyPEM:       privPEM,
-		serialNumber: signed.SerialNumber,
-		fingerprint:  fingerprint,
-		notAfter:     signed.NotAfter.UTC(),
-		certRef:      certPath + "#cert",
-		keyRef:       keyPath + "#key",
-	}, nil
+	return certissue.Issue(ctx, r.signer, r.vault, r.csrgen, certissue.Params{
+		CommonName: cn,
+		DNSNames:   []string{cn, c.incarnationID},
+		Mount:      mount,
+		Role:       role,
+		CertPath:   certissue.VaultPath(service, c.incarnationID, keepercert.KindCert),
+		KeyPath:    certissue.VaultPath(service, c.incarnationID, keepercert.KindKey),
+	})
 }
 
-// commitRotation in one tx: supersede old active cert+key + insert new +
-// spawn Voyage(rotate_tls). Returns voyage_id.
-func (r *CertRotator) commitRotation(ctx context.Context, c dueCert, m *rotatedMaterial) (string, error) {
+// commitRotation в одной tx: supersede старых active cert+key + insert новых +
+// спавн Voyage(<scenario>). Возвращает voyage_id. role пишется в PKIRole нового
+// cert (выравнивание записи с манифестом), scenario — имя спавнимого сценария.
+func (r *CertRotator) commitRotation(ctx context.Context, c dueCert, m *certissue.Material, scenario, role string) (string, error) {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return "", fmt.Errorf("begin rotation tx: %w", err)
@@ -504,19 +477,17 @@ func (r *CertRotator) commitRotation(ctx context.Context, c dueCert, m *rotatedM
 	newCert := &keepercert.Warrant{
 		IncarnationID:        c.incarnationID,
 		Kind:                 keepercert.KindCert,
-		VaultRef:             m.certRef,
-		SerialNumber:         m.serialNumber,
-		Fingerprint:          m.fingerprint,
-		NotAfter:             m.notAfter,
+		VaultRef:             m.CertRef,
+		SerialNumber:         m.SerialNumber,
+		Fingerprint:          m.Fingerprint,
+		NotAfter:             m.NotAfter,
 		Status:               keepercert.StatusActive,
 		AutoRotate:           true,
 		LastRotationVoyageID: &voyageID,
+		PKIRole:              &role, // из манифеста (certpolicy.Policy.PKIRole)
 	}
 	if c.pkiMount != nil {
 		newCert.PKIMount = c.pkiMount
-	}
-	if c.pkiRole != nil {
-		newCert.PKIRole = c.pkiRole
 	}
 	if r.kid != "" {
 		newCert.IssuedByKID = &r.kid
@@ -527,20 +498,20 @@ func (r *CertRotator) commitRotation(ctx context.Context, c dueCert, m *rotatedM
 		return "", fmt.Errorf("insert new active cert: %w", ierr)
 	}
 
-	// Companion key: private key is updated together with cert. Supersede of previous active
-	// key-row (if was) + insert new with same not_after. fingerprint =
-	// SHA-256(SubjectPublicKeyInfo) of pair — public key of cert and key is same,
-	// so we take already calculated m.fingerprint (second PEM parse unnecessary).
+	// Спутник key: приватник обновился вместе с cert. Supersede прежней active
+	// key-строки (если была) + insert новой с тем же not_after. fingerprint =
+	// SHA-256(SubjectPublicKeyInfo) пары — публичный ключ у cert и key один и тот
+	// же, поэтому берём уже посчитанный m.Fingerprint (второй parse PEM излишен).
 	if serr := keepercert.SupersedeActive(ctx, tx, c.incarnationID, keepercert.KindKey); serr != nil {
 		return "", fmt.Errorf("supersede key: %w", serr)
 	}
 	newKey := &keepercert.Warrant{
 		IncarnationID:        c.incarnationID,
 		Kind:                 keepercert.KindKey,
-		VaultRef:             m.keyRef,
-		SerialNumber:         m.serialNumber,
-		Fingerprint:          m.fingerprint,
-		NotAfter:             m.notAfter,
+		VaultRef:             m.KeyRef,
+		SerialNumber:         m.SerialNumber,
+		Fingerprint:          m.Fingerprint,
+		NotAfter:             m.NotAfter,
 		Status:               keepercert.StatusActive,
 		AutoRotate:           false, // key rotates as satellite of cert, is not driver itself
 		LastRotationVoyageID: &voyageID,
@@ -552,8 +523,8 @@ func (r *CertRotator) commitRotation(ctx context.Context, c dueCert, m *rotatedM
 		return "", fmt.Errorf("insert new active key: %w", ierr)
 	}
 
-	// Voyage(rotate_tls) — delivery of new PEM to incarnation hosts.
-	v, targets := buildRotateTLSVoyage(voyageID, c.incarnationID, m)
+	// Voyage(<scenario>) — доставка нового PEM на хосты инкарнации.
+	v, targets := buildRotateTLSVoyage(voyageID, c.incarnationID, m, scenario)
 	if ierr := voyage.Insert(ctx, tx, v); ierr != nil {
 		return "", fmt.Errorf("insert voyage: %w", ierr)
 	}
@@ -568,14 +539,14 @@ func (r *CertRotator) commitRotation(ctx context.Context, c dueCert, m *rotatedM
 	return voyageID, nil
 }
 
-// buildRotateTLSVoyage assembles Voyage kind=scenario (rotate_tls) for incarnation
-// + one target (incarnation-name). Input carries new cert_ref/key_ref
-// (ca_ref rotate_tls takes from state.tls.ca_ref — CA is not rotated here).
-func buildRotateTLSVoyage(voyageID, incarnation string, m *rotatedMaterial) (*voyage.Voyage, []voyage.VoyageTarget) {
-	scenario := rotateTLSScenario
+// buildRotateTLSVoyage собирает Voyage kind=scenario (имя из scenario) для
+// инкарнации + один target (incarnation-name → вся инкарнация целиком). Input
+// несёт новые cert_ref/key_ref (ca_ref сценарий возьмёт из state.tls.ca_ref — CA
+// здесь не ротируется).
+func buildRotateTLSVoyage(voyageID, incarnation string, m *certissue.Material, scenario string) (*voyage.Voyage, []voyage.VoyageTarget) {
 	input, _ := json.Marshal(map[string]any{
-		"cert_ref": m.certRef,
-		"key_ref":  m.keyRef,
+		"cert_ref": m.CertRef,
+		"key_ref":  m.KeyRef,
 	})
 	resolved, _ := json.Marshal([]string{incarnation})
 
@@ -598,9 +569,9 @@ func buildRotateTLSVoyage(voyageID, incarnation string, m *rotatedMaterial) (*vo
 	return v, targets
 }
 
-// emitRotated writes cert.rotated (best-effort, nil-safe). source=keeper_internal,
-// correlation_id=voyage_id. Secrets (PEM/private key) are NOT placed in payload.
-func (r *CertRotator) emitRotated(ctx context.Context, c dueCert, m *rotatedMaterial, voyageID string) {
+// emitRotated пишет cert.rotated (best-effort, nil-safe). source=keeper_internal,
+// correlation_id=voyage_id. Секреты (PEM/приватник) в payload НЕ кладутся.
+func (r *CertRotator) emitRotated(ctx context.Context, c dueCert, m *certissue.Material, voyageID string) {
 	if r.audit == nil {
 		return
 	}
@@ -612,9 +583,9 @@ func (r *CertRotator) emitRotated(ctx context.Context, c dueCert, m *rotatedMate
 			"incarnation":        c.incarnationID,
 			"kind":               string(keepercert.KindCert),
 			"voyage_id":          voyageID,
-			"fingerprint":        m.fingerprint,
-			"serial_number":      m.serialNumber,
-			"not_after":          m.notAfter.Format(time.RFC3339),
+			"fingerprint":        m.Fingerprint,
+			"serial_number":      m.SerialNumber,
+			"not_after":          m.NotAfter.Format(time.RFC3339),
 			"superseded_cert_id": c.certID,
 			"superseded_serial":  c.serialNumber,
 		},
@@ -622,34 +593,5 @@ func (r *CertRotator) emitRotated(ctx context.Context, c dueCert, m *rotatedMate
 	if err := r.audit.Write(ctx, ev); err != nil && r.logger != nil {
 		r.logger.Warn("reaper.rotate_due_certs: audit write failed",
 			slog.String("cert_id", c.certID), slog.Any("error", err))
-	}
-}
-
-// certVaultPath builds E3-path of material: secret/redis/<inc>/tls/<kind>.
-// Synchronization with rotate_tls is required (scenario reads vault(cert_ref) from same
-// branch). ★ Convention is fixed as E3 default in ADR cert-rotation; when
-// supporting non-redis services, path will become service-parametrized.
-func certVaultPath(incarnation string, kind keepercert.Kind) string {
-	return "secret/redis/" + incarnation + "/tls/" + string(kind)
-}
-
-// fingerprintFromPEM parses the first CERTIFICATE block of PEM and calculates fingerprint
-// SHA-256(SubjectPublicKeyInfo) — same method as keepercert.FingerprintFromCert
-// / E1-module (fingerprint is tied to key).
-func fingerprintFromPEM(pemBytes []byte) (string, error) {
-	rest := pemBytes
-	for {
-		var block *pem.Block
-		block, rest = pem.Decode(rest)
-		if block == nil {
-			return "", fmt.Errorf("no CERTIFICATE block in PEM")
-		}
-		if block.Type == "CERTIFICATE" {
-			cert, err := x509.ParseCertificate(block.Bytes)
-			if err != nil {
-				return "", fmt.Errorf("parse certificate: %w", err)
-			}
-			return keepercert.FingerprintFromCert(cert), nil
-		}
 	}
 }

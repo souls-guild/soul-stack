@@ -40,8 +40,8 @@ func TestResolveCertRotatorConfig_DayDurations(t *testing.T) {
 	if out.MaxRotationsPerTick != 7 {
 		t.Errorf("MaxRotationsPerTick = %d, want 7", out.MaxRotationsPerTick)
 	}
-	if out.DefaultPKIMount != "pki/soulstack" || out.DefaultPKIRole != "service-tls" {
-		t.Errorf("PKI mount/role = %q/%q, want pki/soulstack/service-tls", out.DefaultPKIMount, out.DefaultPKIRole)
+	if out.DefaultPKIMount != "pki/soulstack" {
+		t.Errorf("PKI mount = %q, want pki/soulstack", out.DefaultPKIMount)
 	}
 }
 

@@ -15,7 +15,7 @@ Launching Soul-side core module with `on: keeper` - validation error; and vice v
 
 ## Registration and dispatch at (`base` + `state`)
 
-Keeper-side core modules are registered in the keeper-side Registry (`keeper/internal/coremod/registry.go`) by **base name** - `<namespace>.<module>` without state suffix: `core.soul`, `core.cloud`, `core.bootstrap`, `core.choir`, `core.vault`. State comes from the last segment of the task address.
+Keeper-side core modules are registered in the keeper-side Registry (`keeper/internal/coremod/registry.go`) by **base name** - `<namespace>.<module>` without state suffix: `core.soul`, `core.cloud`, `core.bootstrap`, `core.choir`, `core.vault`, `core.cert`. State comes from the last segment of the task address.
 
 When executing a keeper-side task (`keeper/internal/scenario/keeper_dispatch.go`), the address `module: <namespace>.<module>.<state>` is divided by the function `config.SplitModuleAddr` (a single parser for both sides, the same as the Soul-side runtime) into a pair `(base, state)`:
 
@@ -31,6 +31,7 @@ Author-form examples → parsing:
 | `core.bootstrap.delivered` | `core.bootstrap` | `delivered` |
 | `core.choir.present` / `core.choir.absent` | `core.choir` | `present` / `absent` |
 | `core.vault.kv-read` / `core.vault.kv-present` | `core.vault` | `kv-read` / `kv-present` |
+| `core.cert.registered` / `core.cert.issued` | `core.cert` | `registered` / `issued` |
 
 Defective address (`SplitModuleAddr` returned `ok=false`: empty, `.state`, `core.`) or `base`, which is not in the Registry - the keeper-task crashes (`failed`-event "unknown keeper-side module"), like Soul-side on an unknown module. Registration of a module in the Registry is conditional based on the presence of its dependency in `coremod.Deps`: `core.choir` is connected only when `ChoirStore` is specified, `core.bootstrap` - only with a full set of SSH-deps (provider card + host-CA + dialer), otherwise the assembly does not carry them, and the step with this module will fall "unknown".
 
@@ -302,6 +303,40 @@ Explicit reading of the secret from Vault KV (v1/v2, mount version is determined
 Generate-if-absent for Vault KV secrets on the keeper side ([ADR-017 amendment 2026-06-28](../adr/0017-keeper-side-core.md)). **Keeper-side**, dispatcher `on: keeper`. The same module as `kv-read`: Registry key - base `core.vault`; state `kv-present` comes from the address suffix. For each target, it guarantees the existence of a non-empty secret field: absent (no field / `null` / empty string) generates a crypto-random value (`crypto/rand`, bias-free) according to the **password-policy** described by the author (length in characters + alphabet `charset`/`allowed_chars`), present - no-op (does not overwrite). `changed=true` only during real generation; idempotent (rerun/re-create are safe). `destroy` does not clear secrets → re-create reuses the same passwords. Purpose - the service itself generates missing passwords when `create`, the operator does not need to manually pre-seed secrets `vault kv put`.
 
 **Security-invariant (ADR-010):** the generated **value** never goes into register-output / audit-payload / log / OTel / error text - only `path` + names of generated fields come out. register-output - `generated` (map path → \[fields]); audit-event `vault.kv-present` (`source: keeper_internal`) is written only with `changed=true`, payload `{paths}` - without values. Complete per-module reference with params (`targets` / `policy`) / output / security - [docs/module/core/vault/README.md](../module/core/vault/README.md#corevaultkv-present).
+
+## `core.cert.registered` / `core.cert.issued`
+
+Учёт сервисных TLS-сертов инкарнации в реестре **Warrant** ([ADR-017 amendment 2026-07-01/2026-07-09](../adr/0017-keeper-side-core.md), [naming-rules.md → Warrant](../naming-rules.md#сущности-предметной-области)) — основа авто-ротации Reaper-ом. **Keeper-side**, диспетчер `on: keeper`. Registry-ключ — base `core.cert`; state (`registered` / `issued`) приходит из суффикса адреса через `SplitModuleAddr`. Регистрация в `coremod` условна при заданном `CertStore` (паттерн `core.choir`/`core.vault`) — иначе шаг падает «unknown keeper-side module». Речь про **сервисный** серт (напр. серверный TLS Redis), а не про identity-серт Soul-агента ([SoulSeed](../soul/identity.md), ротируется отдельно).
+
+Два state — по источнику серта:
+
+| State | Что делает | Приватник |
+|---|---|---|
+| `registered` | Заносит **уже выпущенный** серт(ы) в Warrant: читает PEM из Vault по `vault_ref`, извлекает `serial`/`fingerprint`/`not_after` из самого x509. Для сертов, выпущенных вне модуля (напр. первичный `rotate_tls`, уже положивший материал в Vault). | Модуль его не трогает (читает только cert-PEM). |
+| `issued` | **Mint+enroll**: Keeper генерит keypair+CSR → подписывает через Vault PKI → пишет cert+key в Vault (`secret/<service>/<incarnation>/tls/<kind>`) → заносит в Warrant. Один шаг «выпустить и учесть». | Генерится keeper-side, пишется в Vault, **наружу не идёт** (R2-инвариант [ADR-017](../adr/0017-keeper-side-core.md)). |
+
+Без учёта в Warrant Reaper **слеп к сертам** — шаг (`registered` или `issued`) обязан присутствовать в create/`rotate_tls`-сценариях сервиса. Оба идемпотентны (тот же fingerprint → no-op); output/audit несут только несекретные метаданные (`kind`/`serial`/`fingerprint`/`not_after`), не PEM и не приватник.
+
+### Адресация и сторона
+
+- Namespace `core`, module `cert`, state `registered` / `issued`.
+- Полное имя задачи: `module: core.cert.registered` / `module: core.cert.issued`.
+- Сторона: **Keeper-side**. Шаг **обязан** нести `on: keeper`.
+
+### Параметры (`params:`)
+
+| Параметр | Тип | Обязательность | Default | Описание |
+|---|---|---|---|---|
+| `incarnation` | string | required | — | Имя инкарнации, которой принадлежат серты (FK Warrant → `incarnation`). |
+| `auto_rotate` | bool | optional | `true` | Пер-серт флаг авто-ротации (пишется в `warrant.auto_rotate`). `true` = Reaper вправе ротировать серт (при `certificate_rotation.enable` сервиса — это и есть «default да»); `false` = серт учтён, но не ротируется. |
+| `certs` | array of object `{kind, vault_ref}` | **только `registered`** | — | Список уже выпущенных сертов для учёта. `kind` ∈ `cert`/`key`/`ca`; `vault_ref` — путь материала в Vault. |
+| `kind` | string | **только `issued`** | — | Тип выпускаемого TLS-материала; определяет путь записи `secret/<service>/<incarnation>/tls/<kind>`. |
+
+**★ `pki_role` и `scenario` — НЕ params.** Роль подписи Vault PKI (для `issued`) и имя ротационного сценария (для Reaper) берутся из манифеста сервиса `service.yml::certificate_rotation` ([service/manifest.md → Секция `certificate_rotation`](../service/manifest.md#секция-certificate_rotation)), а **не** из `params` шага. Автор сценария не выбирает произвольную PKI-роль: `pki_role` — из git-reviewed манифеста, mount PKI-engine — из `keeper.yml::vault.pki_mount` ([config.md → `vault`](config.md#vault)). Причина — blast-radius ([ADR-017 amendment 2026-07-09](../adr/0017-keeper-side-core.md)).
+
+### Связь с Reaper-правилом `rotate_due_certs`
+
+`core.cert.*` только **заносит** серты в Warrant; авто-ротацию просроченных ведёт Reaper-правило **`rotate_due_certs`** (Reaper-лидер, [ADR-017 amendment 2026-07-01](../adr/0017-keeper-side-core.md)): скан `not_after < NOW()+threshold` → CAS `active→rotating` → keeper-side re-sign (Vault PKI ролью `pki_role` из манифеста) → `WriteKV` → спавн ротационного сценария (`certificate_rotation.scenario`) **на всю инкарнацию сразу**. Три гейта ротации — сервис `certificate_rotation.enable` × пер-серт `auto_rotate` × кластер `keeper.yml::reaper.rules.rotate_due_certs.enabled` (default OFF+dry_run); config-driven источник `scenario`/`pki_role` (Path B, кэш ~60s по пиновой `service_version`) — [ADR-017 amendment 2026-07-09](../adr/0017-keeper-side-core.md). Retention снятых сертов — Reaper-правило `purge_old_certs`.
 
 ## Auto-synthesis of `core.module.installed` from `service.yml::modules[]`
 

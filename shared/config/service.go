@@ -50,6 +50,10 @@ type ServiceManifest struct {
 	// [LifecycleConfig.AutoDestroyEnabled] (nil-safe: both a nil block and a nil
 	// flag are treated as true).
 	Lifecycle *LifecycleConfig `yaml:"lifecycle,omitempty"`
+
+	// CertificateRotation — опц. политика авто-ротации TLS-сертов сервиса
+	// (NIM-99). nil = ротация выкл; enable:false/опущен = секция инертна.
+	CertificateRotation *CertificateRotationConfig `yaml:"certificate_rotation,omitempty"`
 }
 
 // LifecycleConfig — the `lifecycle:` block of the service manifest. Both flags
@@ -83,6 +87,17 @@ func (l *LifecycleConfig) AutoDestroyEnabled() bool {
 		return true
 	}
 	return *l.AutoDestroy
+}
+
+// CertificateRotationConfig — блок `certificate_rotation:` манифеста (NIM-99):
+// поддерживает ли сервис авто-ротацию TLS-сертов, каким операционным сценарием и
+// какой Vault PKI-ролью. Нет секции (nil) → ротация выкл. `enable:false`/опущен →
+// секция инертна (явный opt-in, security-first).
+type CertificateRotationConfig struct {
+	Enable    bool   `yaml:"enable"`              // включает авто-ротацию сертов сервиса
+	Scenario  string `yaml:"scenario,omitempty"`  // сценарий ротации; обязателен при enable:true
+	Threshold string `yaml:"threshold,omitempty"` // запас до истечения (`30d`); дефолт, пока информативен
+	PKIRole   string `yaml:"pki_role,omitempty"`  // Vault PKI-role подписи; обязателен при enable:true
 }
 
 // DependencyRef — an entry in `destiny[]` / `modules[]`: `{name, ref}` + optional `git`.
@@ -273,6 +288,57 @@ func schemaValidateService(path string, root *ast.MappingNode, m *ServiceManifes
 		out = append(out, validateRevealableSecret(root, i, rs, seenRevealIDs)...)
 	}
 
+	// 7) certificate_rotation — опц. политика ротации (NIM-99).
+	out = append(out, validateCertificateRotation(root, m.CertificateRotation)...)
+
+	return out
+}
+
+// validateCertificateRotation — проверка опц. секции `certificate_rotation:`
+// (NIM-99): при enable:true обязательны scenario (snake/kebab, папка
+// scenario/<name>/) и pki_role; threshold — по convention `duration`. nil-секция
+// = ротация выкл, валидно.
+func validateCertificateRotation(root *ast.MappingNode, crt *CertificateRotationConfig) []diag.Diagnostic {
+	if crt == nil {
+		return nil
+	}
+	var out []diag.Diagnostic
+	base := "$.certificate_rotation"
+
+	if crt.Enable && crt.Scenario == "" {
+		out = append(out, atPath(root, base+".scenario", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:    "missing_required_field",
+			Message: "certificate_rotation.scenario is required when enable: true",
+			Hint:    "declare scenario: <name> matching scenario/<name>/main.yml",
+		}))
+	}
+	if crt.Enable && crt.PKIRole == "" {
+		out = append(out, atPath(root, base+".pki_role", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:    "missing_required_field",
+			Message: "certificate_rotation.pki_role is required when enable: true",
+			Hint:    "declare pki_role: <vault-pki-role> used to sign this service's certs",
+		}))
+	}
+	if crt.Scenario != "" && !reScenarioName.MatchString(crt.Scenario) {
+		out = append(out, atPath(root, base+".scenario", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:    "name_invalid_format",
+			Message: fmt.Sprintf("certificate_rotation.scenario %q does not match %s", crt.Scenario, reScenarioName),
+			Hint:    "snake_case or kebab-case: lowercase letters/digits with _/- separators; must start with letter",
+		}))
+	}
+	if crt.Threshold != "" {
+		if _, err := ParseDuration(crt.Threshold); err != nil {
+			out = append(out, atPath(root, base+".threshold", diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+				Code:    "duration_invalid",
+				Message: fmt.Sprintf("certificate_rotation.threshold %q is not a valid duration: %v", crt.Threshold, err),
+				Hint:    "use convention like 30d, 720h",
+			}))
+		}
+	}
 	return out
 }
 

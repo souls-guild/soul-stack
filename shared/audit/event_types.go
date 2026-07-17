@@ -317,6 +317,15 @@ const (
 	// fields only (the private key/PEM is never included).
 	EventCertRotated EventType = "cert.rotated"
 
+	// EventCertIssued — keeper-side core-модуль `core.cert.issued` (NIM-99) сам
+	// ВЫПУСТИЛ серверный TLS-серт инкарнации: сгенерил keypair+CSR (R2), подписал
+	// через Vault PKI ролью из манифеста, положил cert/key в Vault и вписал
+	// active-строки Warrant (cert + key-спутник). Область `cert.*` (keeper-side
+	// lifecycle). `source: keeper_internal`, `archon_aid: NULL`, `correlation_id =
+	// incarnation`. Payload: `{incarnation, kind, fingerprint, serial_number,
+	// not_after}` — НЕ-секретные метаданные (приватник/PEM никогда не кладутся).
+	EventCertIssued EventType = "cert.issued"
+
 	// EventSoulCovenChanged — the set of Coven labels of a Soul changed. Two
 	// write paths differ by the `source` field:
 	//   - scenario path: the keeper-side core module `core.soul.registered`

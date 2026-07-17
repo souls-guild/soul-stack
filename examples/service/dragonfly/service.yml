@@ -221,3 +221,11 @@ destiny:
 # compatible: PING/REPLICAOF/SENTINEL work; examples/module/soul-mod-community-redis/).
 modules:
   - { name: community.redis, ref: v1.0.0 }
+
+# Авто-ротация серверного TLS (NIM-99): Reaper ротирует истекающие серты сценарием
+# rotate_tls Vault-ролью dragonfly-server. Нет секции → ротация выкл.
+certificate_rotation:
+  enable: true
+  scenario: rotate_tls
+  threshold: 30d
+  pki_role: dragonfly-server

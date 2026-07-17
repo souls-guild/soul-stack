@@ -15,6 +15,7 @@
 package coremod
 
 import (
+	"github.com/souls-guild/soul-stack/keeper/internal/certissue"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/bootstrap"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/cert"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/choir"
@@ -108,6 +109,15 @@ type Deps struct {
 	// `core.cert.registered` (warrant.issued_by_kid). Empty → NULL in registry.
 	KID string
 
+	// Cert* — зависимости state `core.cert.issued` (NIM-99): Keeper САМ выпускает
+	// серт. Выставляются в cert.Module после cert.New; nil любого → issued вернёт
+	// failed («не сконфигурирован»), registered от них не зависит.
+	CertSigner      certissue.Signer         // Vault PKI sign CSR
+	CertVaultWriter certissue.KVWriter       // запись cert/key в Vault
+	CertPolicy      cert.IssuePolicyResolver // резолвер политики ротации из манифеста
+	CertCSRGen      certissue.CSRGenFunc     // генерация keypair+CSR (keeper-side, R2)
+	CertPKIMount    func() string            // hot-reload keeper.yml Vault.PKIMount
+
 	// BootstrapTransport is token delivery mode for `core.bootstrap.delivered`
 	// (ADR-063 amendment): bootstrap.TransportDirect ("" → direct) or
 	// bootstrap.TransportTeleport. Source is keeper.yml::push.transport.
@@ -190,7 +200,10 @@ func Default(d Deps) *Registry {
 	// that address fails with "unknown keeper-side module". Symmetric to
 	// conditional core.choir registration.
 	if d.CertStore != nil && d.Vault != nil {
-		mods[cert.Name] = cert.New(d.Vault, d.CertStore, d.Audit, d.KID)
+		m := cert.New(d.Vault, d.CertStore, d.Audit, d.KID)
+		m.Signer, m.VaultWriter, m.Policy = d.CertSigner, d.CertVaultWriter, d.CertPolicy
+		m.CSRGen, m.PKIMount = d.CertCSRGen, d.CertPKIMount
+		mods[cert.Name] = m
 	}
 	// `core.bootstrap.delivered` (ADR-063) registered when required dependency
 	// set present; set depends on transport (ADR-063 amendment):

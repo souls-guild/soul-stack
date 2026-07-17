@@ -37,6 +37,8 @@ import (
 	"time"
 
 	keepercert "github.com/souls-guild/soul-stack/keeper/internal/cert"
+	"github.com/souls-guild/soul-stack/keeper/internal/certissue"
+	"github.com/souls-guild/soul-stack/keeper/internal/certpolicy"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/util"
 	"github.com/souls-guild/soul-stack/shared/audit"
 
@@ -50,12 +52,15 @@ import (
 // keeper-side core modules); state `registered` arrives in pluginv1.ApplyRequest.state.
 const Name = "core.cert"
 
-// StateRegistered is the only state of the module.
+// StateRegistered — регистрация уже существующего серта в реестре Warrant.
 const StateRegistered = "registered"
 
-// VaultReader is a narrow surface of vault.Client needed by the module: reading
-// KV paths to extract PEM certificates. Narrowing simplifies unit testing
-// (fake without HTTP).
+// StateIssued — Keeper САМ выпускает серт: keypair+CSR → подпись Vault PKI ролью
+// из манифеста → запись cert/key в Vault → регистрация в Warrant (NIM-99 Slice C).
+const StateIssued = "issued"
+
+// VaultReader — узкая поверхность vault.Client, нужная модулю: чтение KV-пути
+// для извлечения PEM серта. Сужение упрощает unit-тест (fake без HTTP).
 type VaultReader interface {
 	ReadKV(ctx context.Context, path string) (map[string]any, error)
 }
@@ -73,7 +78,14 @@ type AuditWriter interface {
 	Write(ctx context.Context, event *audit.Event) error
 }
 
-// Module implements sdk/module.SoulModule. One module per base name `core.cert`.
+// IssuePolicyResolver резолвит cert-rotation-политику инкарнации из её манифеста
+// (certpolicy.Resolver его удовлетворяет). Для state `issued` роль PKI-подписи и
+// имя сервиса берутся ОТСЮДА, а не из params.
+type IssuePolicyResolver interface {
+	Resolve(ctx context.Context, incarnationName string) (certpolicy.Policy, error)
+}
+
+// Module — реализация sdk/module.SoulModule. Один модуль на base-имя `core.cert`.
 type Module struct {
 	Vault VaultReader
 	Store Store
@@ -81,24 +93,39 @@ type Module struct {
 	// KID is the Keeper instance identifier, written to warrant.issued_by_kid
 	// (audit: "which instance registered the cert"). Empty → NULL.
 	KID string
+
+	// Зависимости state `issued` (NIM-99 Slice C). Выставляются wire-up-слайсом в
+	// registry.go ПОСЛЕ New; nil любого из них → issued вернёт failed (не
+	// сконфигурирован). state `registered` от них не зависит.
+	Signer      certissue.Signer     // PKI-подпись CSR
+	VaultWriter certissue.KVWriter   // запись cert/key в Vault
+	Policy      IssuePolicyResolver  // резолвер политики ротации из манифеста
+	CSRGen      certissue.CSRGenFunc // генерация keypair+CSR (keeper-side, R2)
+	PKIMount    func() string        // hot-reload keeper.yml Vault.PKIMount
 }
 
-// New — wire-helper.
+// New — wire-helper. issued-зависимости (Signer/VaultWriter/Policy/CSRGen/
+// PKIMount) выставляются отдельно после конструктора.
 func New(v VaultReader, s Store, a AuditWriter, kid string) *Module {
 	return &Module{Vault: v, Store: s, Audit: a, KID: kid}
 }
 
 func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
 	var errs []string
-	if req.State != StateRegistered {
-		errs = append(errs, fmt.Sprintf("unknown state %q (want %s)", req.State, StateRegistered))
-		return &pluginv1.ValidateReply{Ok: false, Errors: errs}, nil
-	}
-	if _, err := util.StringParam(req.Params, "incarnation"); err != nil {
-		errs = append(errs, err.Error())
-	}
-	if _, err := parseCertTargets(req); err != nil {
-		errs = append(errs, err.Error())
+	switch req.State {
+	case StateRegistered:
+		if _, err := util.StringParam(req.Params, "incarnation"); err != nil {
+			errs = append(errs, err.Error())
+		}
+		if _, err := parseCertTargets(req); err != nil {
+			errs = append(errs, err.Error())
+		}
+	case StateIssued:
+		if _, err := util.StringParam(req.Params, "incarnation"); err != nil {
+			errs = append(errs, err.Error())
+		}
+	default:
+		errs = append(errs, fmt.Sprintf("unknown state %q (want %s or %s)", req.State, StateRegistered, StateIssued))
 	}
 	return &pluginv1.ValidateReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
@@ -156,14 +183,25 @@ func parseCertTargetsFromStruct(params *structpb.Struct) ([]certTarget, error) {
 	return out, nil
 }
 
-// Apply reads PEM of each cert from Vault, extracts metadata and registers an
-// active-row in Warrant (idempotent by fingerprint). changed=true if at least
-// one cert was written (new / changed fingerprint).
+// Apply диспетчеризует по req.State: `registered` — регистрация уже
+// существующего серта; `issued` — Keeper сам выпускает серт (applyIssued в
+// issued.go).
 func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
-	ctx := stream.Context()
-	if req.State != StateRegistered {
-		return util.SendFailed(stream, fmt.Sprintf("unknown state %q", req.State))
+	switch req.State {
+	case StateRegistered:
+		return m.applyRegistered(req, stream)
+	case StateIssued:
+		return applyIssued(m, req, stream)
+	default:
+		return util.SendFailed(stream, fmt.Sprintf("unknown state %q (want %s or %s)", req.State, StateRegistered, StateIssued))
 	}
+}
+
+// applyRegistered читает PEM каждого cert из Vault, извлекает метаданные и
+// регистрирует active-строку Warrant (idempotent по fingerprint). changed=true
+// если хотя бы один серт был вписан (новый / сменившийся fingerprint).
+func (m *Module) applyRegistered(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
+	ctx := stream.Context()
 
 	incarnation, err := util.StringParam(req.Params, "incarnation")
 	if err != nil {
