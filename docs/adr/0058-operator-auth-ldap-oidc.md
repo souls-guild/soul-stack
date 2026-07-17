@@ -158,16 +158,16 @@
   - **AID-claim immutability (OIDC, security-fix 2026-06-24):** the default `aid_claim` is **`sub`** (the IdP's immutable opaque subject). Semantic validation (`checkAuthOIDC`) issues a **WARN** (`oidc_aid_claim_mutable`) if `aid_claim` in {`email`, `preferred_username`}: these claims are user/admin-mutable at the IdP, and reassigning them would let a different human log in under an existing AID (identity-spoofing). WARN, not ERROR - the operator can make a deliberate choice (e.g. a stable corporate email), security = quality of the hint, not a ban.
   - **Refresh (RESOLVED - none, fork #5):** there is no refresh mechanism; once the short internal JWT expires - a repeat federated login.
 
-- **(h) Libraries and licenses (project is Apache-2.0, [ADR-016](0016-parity-license.md)).**
+- **(h) Libraries and licenses (core is BSL 1.1, [ADR-016](0016-parity-license.md); dependencies are permissive, includable into the core distribution).**
 
-  | library | purpose | license | compatible with Apache-2.0 |
+  | library | purpose | license | includable into the core |
   |---|---|---|---|
   | `github.com/coreos/go-oidc/v3` | OIDC discovery / JWKS / id_token verify | Apache-2.0 | yes |
   | `golang.org/x/oauth2` | OAuth2 code-exchange | BSD-3-Clause | yes |
   | `github.com/go-ldap/ldap/v3` | LDAP bind / search | MIT | yes |
   | `github.com/golang-jwt/jwt/v5` | internal JWT (already in the project, ADR-014) | MIT | yes |
 
-  All are compatible with Apache-2.0; a CLA is not yet required (ADR-016). `go-ldap/v3` **has been added** to `keeper/go.mod` (stage 1). `go-oidc/v3` + `x/oauth2` **have been added** to `keeper/go.mod` (stage 2). Tests use `github.com/go-jose/go-jose/v4` (a transitive dependency of go-oidc, Apache-2.0) to sign id_tokens for the mock IdP.
+  All are under permissive licenses (Apache-2.0 / BSD-3 / MIT) - includable into the core distribution under BSL 1.1; CLA - per [ADR-016](0016-parity-license.md) (set up before the first external contributor). `go-ldap/v3` **has been added** to `keeper/go.mod` (stage 1). `go-oidc/v3` + `x/oauth2` **have been added** to `keeper/go.mod` (stage 2). Tests use `github.com/go-jose/go-jose/v4` (a transitive dependency of go-oidc, Apache-2.0) to sign id_tokens for the mock IdP.
 
 - **(i) Operator provisioning policy (IMPLEMENTED, Part B).** A cluster-level gate on "which methods are even allowed to CREATE an operator" - separate from which login methods are configured.
 

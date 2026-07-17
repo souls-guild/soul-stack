@@ -19,7 +19,7 @@ description: |
   Keeper over mTLS, applies Destiny via core modules.
 vendor: Soul Stack
 homepage: https://github.com/souls-guild/soul-stack
-license: Apache-2.0
+license: BUSL-1.1
 
 contents:
   - src: ./soul/bin/soul

@@ -113,7 +113,7 @@ Moved to [`docs/adr/0015-core-modules-mvp.md`](adr/0015-core-modules-mvp.md). 17
 
 ### [ADR-016. Parity strategy with SaltStack/Ansible and Soul Stack license](adr/0016-parity-license.md)
 
-Moved to [`docs/adr/0016-parity-license.md`](adr/0016-parity-license.md). License - Apache 2.0 (open core / freemium: enterprise features in separate repo). The parity strategy is a hybrid without a wrapper: core MVP is our Go rewrite, exotic is community plugins via SDK; wrapper Ansible is prohibited (GPLv3 + Python-runtime). Amendments: Plugin SDK Phase 2 (10 official `soul-mod-*`, namespace `official`, template mechanism).
+Moved to [`docs/adr/0016-parity-license.md`](adr/0016-parity-license.md). License - **BSL 1.1** for the core (this repo) and frontend (`soul-stack-web`): fair-code, Change License Apache 2.0, Change Date 2 years (Amendment 2026-07-09); SDK/examples/plugins - Apache 2.0; enterprise features - separate commercial license. The parity strategy is a hybrid without a wrapper: core MVP is our Go rewrite, exotic is community plugins via SDK; wrapper Ansible is prohibited (GPLv3 + Python-runtime). Amendments: Plugin SDK Phase 2 (10 official `soul-mod-*`, namespace `official`, template mechanism); fair-code/BSL (license).
 
 ### [ADR-017. Keeper-side core modules expanded: `core.cloud.provisioned`, `core.vault.kv-read`](adr/0017-keeper-side-core.md)
 

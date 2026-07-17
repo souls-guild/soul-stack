@@ -14,7 +14,7 @@ Project status is **closed small beta**. At this stage, contributions are accept
 
 ## CLA
 
-Contributor License Agreement is not yet **established**. According to [ADR-016](docs/adr/0016-parity-license.md) the CLA starts when the first external contributor appears; Since external code contributions are not accepted in the closed beta, there is no need for a CLA yet. The CLA will appear simultaneously with the opening of indemnities - PRs with the code will still not be accepted until signing.
+Contributor License Agreement is not yet **established**. According to [ADR-016](docs/adr/0016-parity-license.md) (Amendment 2026-07-09, fair-code/BSL) the CLA is set up **before the first external contributor appears**: under fair-code it is not "just in case" — it is needed to hold the right to the Additional Use Grant, Change License and future license amendments. Since external code contributions are not accepted in the closed beta, there is no need for a CLA yet. The CLA will appear simultaneously with the opening of contributions - PRs with the code will still not be accepted until signing.
 
 ## Build from source to check the bug
 
